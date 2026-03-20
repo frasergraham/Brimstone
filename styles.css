@@ -1,0 +1,331 @@
+/* ── Brimstone — Salem Hex Game ─────────────────────────────────────────── */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:           #0d0f16;
+  --bg-panel:     #111520;
+  --bg-section:   #161b28;
+  --border:       #2a2040;
+  --text:         #d4c9b0;
+  --text-dim:     #7a7060;
+  --text-bright:  #f0e8d0;
+  --hero:         #d4a72c;
+  --witch:        #9b59b6;
+  --day:          #f5c842;
+  --night:        #7b4fbb;
+  --green:        #4caf7d;
+  --red:          #c0392b;
+  --font-serif:   "Georgia", "Times New Roman", serif;
+  --font-mono:    "Courier New", monospace;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-serif);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow: hidden;
+}
+
+/* ── Setup screen ──────────────────────────────────────────────────────── */
+
+#setup-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  background: radial-gradient(ellipse at 50% 60%, #1a0e2a 0%, #0d0f16 70%);
+}
+
+.setup-card {
+  width: 440px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2rem 2.5rem;
+  text-align: center;
+  box-shadow: 0 0 60px rgba(100, 50, 160, 0.25);
+}
+
+.title {
+  font-size: 2.8rem;
+  letter-spacing: 0.25em;
+  color: var(--day);
+  text-shadow: 0 0 20px rgba(245, 200, 66, 0.4);
+  margin-bottom: 0.25rem;
+}
+
+.subtitle {
+  color: var(--text-dim);
+  font-style: italic;
+  margin-bottom: 1.5rem;
+  letter-spacing: 0.08em;
+}
+
+.setup-lore {
+  color: var(--text-dim);
+  font-style: italic;
+  font-size: 0.9rem;
+  margin-bottom: 1.5rem;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 0.75rem 0;
+}
+
+.setup-buttons {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+  margin-bottom: 1.5rem;
+}
+
+.setup-btn {
+  padding: 0.6rem 1.4rem;
+  background: var(--bg-section);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--font-serif);
+  font-size: 0.95rem;
+  cursor: pointer;
+  border-radius: 2px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.setup-btn:hover       { background: #1e2438; border-color: #4a3870; }
+.setup-btn.primary     { border-color: var(--day); color: var(--day); }
+.setup-btn.primary:hover { background: #1e1a10; }
+
+.setup-rules {
+  text-align: left;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+.setup-rules strong { color: var(--text); display: block; margin-bottom: 0.4rem; }
+.setup-rules ul { padding-left: 1.2rem; margin-bottom: 0.75rem; }
+.setup-rules li { margin-bottom: 0.2rem; }
+.setup-rules p  { font-style: italic; }
+
+/* ── Game screen ───────────────────────────────────────────────────────── */
+
+#game-screen {
+  display: none;
+  flex-direction: column;
+  height: 100vh;
+}
+
+#game-header {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 0.5rem 1rem;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.header-title {
+  font-size: 1.2rem;
+  letter-spacing: 0.2em;
+  color: var(--day);
+  opacity: 0.8;
+}
+
+#turn-info {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 1;
+}
+
+.phase-badge {
+  font-size: 0.8rem;
+  font-weight: bold;
+  letter-spacing: 0.1em;
+  padding: 0.15rem 0.5rem;
+  border-radius: 2px;
+}
+.phase-badge.phase-day   { background: rgba(245,200,66,0.15); color: var(--day);   border: 1px solid var(--day); }
+.phase-badge.phase-night { background: rgba(123,79,187,0.20); color: var(--night); border: 1px solid var(--night); }
+
+.turn-line { font-size: 0.85rem; color: var(--text-dim); }
+
+.player-hero  { color: var(--hero) !important; }
+.player-witch { color: var(--witch) !important; }
+
+.ai-badge {
+  font-size: 0.7rem;
+  background: rgba(155,89,182,0.25);
+  color: var(--witch);
+  border: 1px solid var(--witch);
+  padding: 0 0.3rem;
+  border-radius: 2px;
+  vertical-align: middle;
+}
+
+.actions-remaining {
+  font-size: 1rem;
+  color: var(--day);
+  letter-spacing: 0.1em;
+}
+.actions-remaining .bonus { color: var(--green); font-size: 0.8rem; margin-left: 4px; }
+
+#game-main {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ── Canvas wrapper ────────────────────────────────────────────────────── */
+
+#canvas-wrapper {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  align-items: flex-start;
+  padding: 0.5rem;
+  background: var(--bg);
+}
+
+#game-canvas {
+  display: block;
+  cursor: pointer;
+  image-rendering: pixelated;
+}
+
+/* ── Sidebar ───────────────────────────────────────────────────────────── */
+
+#sidebar {
+  width: 240px;
+  min-width: 240px;
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.sidebar-section {
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.section-title {
+  font-size: 0.7rem;
+  letter-spacing: 0.15em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  margin-bottom: 0.5rem;
+}
+
+.action-title {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-bottom: 0.5rem;
+  font-style: italic;
+}
+
+.hint {
+  color: var(--text-dim);
+  font-style: italic;
+  font-size: 0.85rem;
+}
+
+/* Action buttons */
+.action-btn {
+  display: block;
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.3rem;
+  background: var(--bg-section);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--font-serif);
+  font-size: 0.82rem;
+  cursor: pointer;
+  text-align: left;
+  border-radius: 2px;
+  transition: background 0.1s, border-color 0.1s;
+}
+.action-btn:hover:not(:disabled) { background: #1e2438; border-color: #5a4890; }
+.action-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.action-btn.move    { border-left: 2px solid var(--green); }
+.action-btn.explore { border-left: 2px solid #7eccd6; }
+.action-btn.battle  { border-left: 2px solid var(--red); }
+.action-btn.fortify { border-left: 2px solid var(--day); }
+.action-btn.summon  { border-left: 2px solid var(--witch); }
+.action-btn.item    { border-left: 2px solid #b0b0b0; }
+.action-btn.end-turn {
+  margin-top: 0.5rem;
+  border-color: #3a3050;
+  color: var(--text-dim);
+  text-align: center;
+}
+.action-btn.end-turn:hover:not(:disabled) { color: var(--text); border-color: #6a5090; }
+
+/* Selected entity info */
+.entity-name  { font-size: 1rem; font-weight: bold; margin-bottom: 0.3rem; }
+.entity-stats { font-size: 0.82rem; color: var(--text-dim); margin-bottom: 0.25rem; line-height: 1.7; }
+.entity-pos   { font-size: 0.75rem; color: #4a4060; }
+.tile-type    { font-size: 0.85rem; text-transform: capitalize; color: var(--text); margin-bottom: 0.2rem; }
+.resource     { font-size: 0.82rem; color: var(--green); }
+.fortified    { font-size: 0.82rem; color: var(--day); }
+.unexplored   { font-size: 0.8rem; color: var(--text-dim); font-style: italic; }
+
+/* Inventory */
+.inv-title { font-size: 0.7rem; letter-spacing: 0.12em; color: var(--text-dim); text-transform: uppercase; margin-bottom: 0.4rem; }
+.inv-row   { font-size: 0.8rem; margin-bottom: 0.2rem; }
+.inv-label { color: var(--text-dim); margin-right: 0.3rem; }
+
+/* Event log */
+.log-section { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+#event-log {
+  flex: 1;
+  overflow-y: auto;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  max-height: 260px;
+}
+.log-entry {
+  padding: 0.15rem 0;
+  border-bottom: 1px solid #1a1a22;
+  line-height: 1.4;
+}
+.log-entry:last-child { color: var(--text); }
+
+/* Scrollbar */
+#event-log::-webkit-scrollbar, #sidebar::-webkit-scrollbar { width: 4px; }
+#event-log::-webkit-scrollbar-track, #sidebar::-webkit-scrollbar-track { background: transparent; }
+#event-log::-webkit-scrollbar-thumb, #sidebar::-webkit-scrollbar-thumb { background: #2a2040; border-radius: 2px; }
+
+/* ── Game-over overlay ─────────────────────────────────────────────────── */
+
+#game-over {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.75);
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.game-over-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  padding: 2.5rem 3rem;
+  text-align: center;
+  border-radius: 4px;
+  box-shadow: 0 0 60px rgba(100, 50, 160, 0.35);
+}
+
+.winner-text {
+  font-size: 1.3rem;
+  color: var(--day);
+  margin-bottom: 1.5rem;
+  max-width: 340px;
+}

@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Brimstone — Salem Hex</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- ── Setup screen ──────────────────────────────────────────────── -->
+  <div id="setup-screen">
+    <div class="setup-card">
+      <h1 class="title">BRIMSTONE</h1>
+      <p class="subtitle">A Salem Hex Game</p>
+      <div class="setup-lore">
+        <p>
+          A hero rides into a cursed New England town. The witch who haunts its
+          graveyard stirs. One will prevail before the dawn.
+        </p>
+      </div>
+      <div class="setup-buttons">
+        <button id="btn-vs-ai" class="setup-btn primary">Play vs AI Witch</button>
+        <button id="btn-vs-human" class="setup-btn">Two Players</button>
+      </div>
+      <div class="setup-rules">
+        <strong>Rules at a glance</strong>
+        <ul>
+          <li><b>Move</b> — step to an adjacent hex</li>
+          <li><b>Explore</b> — uncover resources or survivors</li>
+          <li><b>Battle</b> — attack an adjacent enemy</li>
+          <li><b>Fortify</b> — spend Wood to defend a building (+1 defense)</li>
+        </ul>
+        <p>☀ Day: Hero gets 4 actions, Witch gets 3.<br>
+           🌙 Night: Witch gets 4, Hero gets 3.<br>
+           Phase changes every 3 rounds.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Game screen ───────────────────────────────────────────────── -->
+  <div id="game-screen">
+
+    <header id="game-header">
+      <span class="header-title">BRIMSTONE</span>
+      <div id="turn-info"></div>
+    </header>
+
+    <main id="game-main">
+
+      <!-- Map canvas -->
+      <div id="canvas-wrapper">
+        <canvas id="game-canvas"></canvas>
+      </div>
+
+      <!-- Sidebar -->
+      <aside id="sidebar">
+        <section id="action-panel" class="sidebar-section">
+          <p class="hint">Select one of your units.</p>
+        </section>
+
+        <section id="selected-info" class="sidebar-section"></section>
+
+        <section id="inventory" class="sidebar-section"></section>
+
+        <section class="sidebar-section log-section">
+          <div class="section-title">Chronicle</div>
+          <div id="event-log"></div>
+        </section>
+      </aside>
+
+    </main>
+
+  </div>
+
+  <!-- ── Game-over overlay ─────────────────────────────────────────── -->
+  <div id="game-over">
+    <div class="game-over-card">
+      <div class="winner-text"></div>
+      <button id="btn-restart" class="setup-btn primary">Play Again</button>
+    </div>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
