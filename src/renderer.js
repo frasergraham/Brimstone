@@ -2,12 +2,12 @@
 import {
   MAP_COLS, MAP_ROWS, SQRT3,
   getNeighbors,
-  hexToPixel, pixelToHex as _pixelToHex, hexKey,
+  hexToPixel, pixelToHex as _pixelToHex, hexKey, hexDistance,
 } from './hex.js';
 import {
   TileType, TILE_COLOR, BUILDING_COLOR, BUILDING_LABEL, BUILDING_ICON,
 } from './tiles.js';
-import { ENTITY_COLOR, EntityType } from './entities.js';
+import { ENTITY_COLOR, EntityType, SurvivorAbility } from './entities.js';
 import { getVisibleEnemyHexes } from './actions.js';
 
 export const PAD_X = 40;
@@ -93,6 +93,11 @@ export class Renderer {
     // Objective symbols
     for (const obj of state.witchObjectives) {
       this._drawObjectiveSymbol(obj.col, obj.row, obj.label, state);
+    }
+
+    // Hero visibility range overlay
+    if (state.fogOfWar) {
+      this._drawVisibilityLayer();
     }
 
     // Highlights
@@ -212,6 +217,85 @@ export class Renderer {
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(BUILDING_LABEL[tile.building] || tile.building, x, y + hs * 0.58);
+    }
+  }
+
+  // Draw a subtle sight-range overlay around every hero-side unit.
+  // Each hex within range gets a faint blue fill; the outermost ring
+  // (exactly at max range) gets a slightly brighter outline so the
+  // boundary is easy to read.
+  _drawVisibilityLayer() {
+    const ctx   = this.ctx;
+    const state = this.state;
+    const hs    = this.hexSize;
+
+    // Collect all hero units and their ranges
+    const watchers = state.entities
+      .filter(e => e.alive && e.owner === 'hero')
+      .map(e => ({
+        col: e.col, row: e.row,
+        range: e.ability === SurvivorAbility.SCOUT ? 3 : 2,
+      }));
+
+    if (!watchers.length) return;
+
+    // Build a map: hexKey -> max range distance from nearest watcher
+    // We want to know for each hex: is it in range, and is it on the boundary?
+    const inRange = new Map(); // hexKey -> minDist across all watchers
+
+    for (let row = 0; row < MAP_ROWS; row++) {
+      for (let col = 0; col < MAP_COLS; col++) {
+        let closest = Infinity;
+        for (const w of watchers) {
+          const d = hexDistance(col, row, w.col, w.row);
+          if (d <= w.range) closest = Math.min(closest, d / w.range);
+        }
+        if (closest < Infinity) {
+          inRange.set(hexKey(col, row), closest); // 0..1, lower = closer to watcher
+        }
+      }
+    }
+
+    // Collect boundary hexes: in range but have at least one neighbour out of range
+    const boundary = new Set();
+    for (const [k] of inRange) {
+      const [col, row] = k.split(',').map(Number);
+      for (const n of getNeighbors(col, row)) {
+        if (!inRange.has(hexKey(n.col, n.row))) {
+          boundary.add(k);
+          break;
+        }
+      }
+    }
+
+    // Draw fill for all in-range hexes (skip the watcher's own hex — it's obvious)
+    for (const [k, normDist] of inRange) {
+      const [col, row] = k.split(',').map(Number);
+      const { x, y } = this._toCanvas(col, row);
+      const corners = hexCorners(x, y, hs - 1);
+
+      // Fade from centre outward: inner hexes slightly brighter
+      const alpha = 0.04 + (1 - normDist) * 0.06;
+      ctx.beginPath();
+      ctx.moveTo(corners[0].x, corners[0].y);
+      for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
+      ctx.closePath();
+      ctx.fillStyle = `rgba(100,200,255,${alpha.toFixed(3)})`;
+      ctx.fill();
+    }
+
+    // Draw outline on boundary hexes
+    ctx.lineWidth = 1.2;
+    for (const k of boundary) {
+      const [col, row] = k.split(',').map(Number);
+      const { x, y } = this._toCanvas(col, row);
+      const corners = hexCorners(x, y, hs - 1);
+      ctx.beginPath();
+      ctx.moveTo(corners[0].x, corners[0].y);
+      for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
+      ctx.closePath();
+      ctx.strokeStyle = 'rgba(100,200,255,0.30)';
+      ctx.stroke();
     }
   }
 
