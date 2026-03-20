@@ -146,10 +146,13 @@ html, body {
   padding: 0.15rem 0.5rem;
   border-radius: 2px;
 }
-.phase-badge.phase-day   { background: rgba(245,200,66,0.15); color: var(--day);   border: 1px solid var(--day); }
-.phase-badge.phase-night { background: rgba(123,79,187,0.20); color: var(--night); border: 1px solid var(--night); }
+.phase-badge.phase-dawn  { background: rgba(255,140,0,0.15);  color: #ffaa44;        border: 1px solid #ff8c00; }
+.phase-badge.phase-day   { background: rgba(245,200,66,0.15); color: var(--day);     border: 1px solid var(--day); }
+.phase-badge.phase-dusk  { background: rgba(180,60,0,0.20);   color: #ff7744;        border: 1px solid #c04020; }
+.phase-badge.phase-night { background: rgba(123,79,187,0.20); color: var(--night);   border: 1px solid var(--night); }
 
 .turn-line { font-size: 0.85rem; color: var(--text-dim); }
+.phase-hint { font-size: 0.75rem; color: #7a6a50; font-style: italic; margin-bottom: 0.2rem; }
 
 .player-hero  { color: var(--hero) !important; }
 .player-witch { color: var(--witch) !important; }
@@ -267,10 +270,17 @@ html, body {
 .action-btn.end-turn:hover:not(:disabled) { color: var(--text); border-color: #6a5090; }
 
 /* Selected entity info */
-.entity-name  { font-size: 1rem; font-weight: bold; margin-bottom: 0.3rem; }
-.entity-stats { font-size: 0.82rem; color: var(--text-dim); margin-bottom: 0.25rem; line-height: 1.7; }
-.entity-pos   { font-size: 0.75rem; color: #4a4060; }
-.tile-type    { font-size: 0.85rem; text-transform: capitalize; color: var(--text); margin-bottom: 0.2rem; }
+.entity-name    { font-size: 1rem; font-weight: bold; margin-bottom: 0.3rem; }
+.entity-stats   { font-size: 0.82rem; color: var(--text-dim); margin-bottom: 0.25rem; line-height: 1.7; }
+.entity-pos     { font-size: 0.75rem; color: #4a4060; }
+.entity-weapon  { font-size: 0.8rem; color: #c8b450; margin-bottom: 0.2rem; }
+.tile-type      { font-size: 0.85rem; text-transform: capitalize; color: var(--text); margin-bottom: 0.2rem; }
+
+/* Survivor personality card */
+.survivor-name    { font-size: 0.95rem; font-weight: bold; color: var(--green); }
+.survivor-title   { font-size: 0.75rem; color: #4a8a6a; font-style: italic; margin-bottom: 0.3rem; }
+.survivor-bio     { font-size: 0.78rem; color: var(--text-dim); line-height: 1.4; margin-bottom: 0.3rem; border-left: 2px solid #2a3a2a; padding-left: 0.4rem; }
+.survivor-ability { font-size: 0.78rem; color: #88eeff; margin-bottom: 0.3rem; }
 .resource     { font-size: 0.82rem; color: var(--green); }
 .fortified    { font-size: 0.82rem; color: var(--day); }
 .unexplored   { font-size: 0.8rem; color: var(--text-dim); font-style: italic; }
