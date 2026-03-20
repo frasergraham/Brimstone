@@ -26,6 +26,28 @@ function tile(state, col, row) {
   return state.tiles.get(hexKey(col, row));
 }
 
+function getReachableHexes(state, actor, range) {
+  const visited = new Set([hexKey(actor.col, actor.row)]);
+  const reachable = [];
+  let frontier = [{ col: actor.col, row: actor.row }];
+  for (let step = 0; step < range; step++) {
+    const next = [];
+    for (const pos of frontier) {
+      for (const n of getNeighbors(pos.col, pos.row)) {
+        const k = hexKey(n.col, n.row);
+        if (visited.has(k)) continue;
+        const nt = tile(state, n.col, n.row);
+        if (!nt || nt.type === TileType.RIVER) continue;
+        visited.add(k);
+        reachable.push({ col: n.col, row: n.row });
+        next.push({ col: n.col, row: n.row });
+      }
+    }
+    frontier = next;
+  }
+  return reachable;
+}
+
 function entitiesAt(state, col, row) {
   return state.entities.filter(e => e.alive && e.col === col && e.row === row);
 }
@@ -49,11 +71,9 @@ export function getValidActions(state, actor) {
   const t = tile(state, actor.col, actor.row);
   const actorIsHero = actor.owner === 'hero';
 
-  // Move
-  const moveTargets = getNeighbors(actor.col, actor.row).filter(n => {
-    const nt = tile(state, n.col, n.row);
-    return nt && nt.type !== TileType.RIVER;
-  });
+  // Move — range 2 if hero has a horse, otherwise 1
+  const hasHorse = actorIsHero && (state.inventory.hero['horse'] || 0) > 0;
+  const moveTargets = getReachableHexes(state, actor, hasHorse ? 2 : 1);
   if (moveTargets.length) actions.push({ type: ActionType.MOVE, targets: moveTargets });
 
   // Explore
@@ -167,11 +187,11 @@ export function executeMove(state, actor, targetCol, targetRow) {
 
   actor.col = targetCol;
   actor.row = targetRow;
-  log.push(`${actor.displayName} moves to (${targetCol},${targetRow}).`);
 
-  if (t.type === TileType.BUILDING && !t.explored) {
-    t.explored = true;
-    log.push(`${actor.displayName} enters the ${t.building}.`);
+  if (t.type === TileType.BUILDING) {
+    log.push(`${actor.displayName} enters the ${t.building || 'building'}.`);
+  } else {
+    log.push(`${actor.displayName} moves to (${targetCol},${targetRow}).`);
   }
 
   return { success: true, log, cost: 1 };
@@ -214,6 +234,14 @@ export function executeExplore(state, actor) {
 function _applyLoot(state, actor, lootType, log) {
   if (lootType === 'nothing') {
     log.push(`${actor.displayName} searches carefully… nothing useful found.`);
+    return;
+  }
+
+  if (lootType === 'horse') {
+    if (actor.owner === 'hero') {
+      state.inventory.hero['horse'] = 1;
+      log.push(`Found a horse at the Stables! The hero's movement range increases to 2.`);
+    }
     return;
   }
 

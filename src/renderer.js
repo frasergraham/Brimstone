@@ -215,6 +215,28 @@ export class Renderer {
       ctx.fill();
       ctx.globalAlpha = 1;
     }
+
+    // Explored marker — small dot in the top-right corner so the player
+    // can see at a glance which terrain they have already scouted.
+    // Buildings already show their name label; non-passable tiles are skipped.
+    if (tile.explored && tile.type !== TileType.BUILDING && tile.type !== TileType.RIVER) {
+      ctx.fillStyle   = 'rgba(255,255,255,0.35)';
+      ctx.beginPath();
+      ctx.arc(x + HEX_SIZE * 0.55, y - HEX_SIZE * 0.52, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Explored building: thin warm border (name label also shows, but border
+    // is visible even when an entity is standing on the hex)
+    if (tile.explored && tile.type === TileType.BUILDING) {
+      ctx.beginPath();
+      ctx.moveTo(corners[0].x, corners[0].y);
+      for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
+      ctx.closePath();
+      ctx.strokeStyle = 'rgba(245,200,66,0.45)';
+      ctx.lineWidth   = 1.5;
+      ctx.stroke();
+    }
   }
 
   _drawObjectiveGlow(col, row) {
@@ -258,6 +280,10 @@ export class Renderer {
     ctx.closePath();
     ctx.fillStyle = color;
     ctx.fill();
+    // Bright border so highlights are visible even on dark unexplored tiles
+    ctx.strokeStyle = color.replace(/,\s*[\d.]+\)$/, ', 0.9)');
+    ctx.lineWidth   = 2;
+    ctx.stroke();
   }
 
   _drawOutline(col, row, color, lineWidth = 2) {

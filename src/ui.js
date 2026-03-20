@@ -130,14 +130,14 @@ export class UIController {
       const moveAction = this._validActions.find(a => a.type === ActionType.MOVE);
       if (moveAction) {
         renderer.highlightHexes = moveAction.targets.map(t => ({
-          ...t, color: 'rgba(80,180,80,0.30)',
+          ...t, color: 'rgba(60,220,80,0.55)',
         }));
       }
     } else if (actionType === ActionType.BATTLE) {
       const battleAction = this._validActions.find(a => a.type === ActionType.BATTLE);
       if (battleAction) {
         renderer.highlightHexes = battleAction.targets.map(t => ({
-          col: t.col, row: t.row, color: 'rgba(200,60,60,0.35)',
+          col: t.col, row: t.row, color: 'rgba(220,60,60,0.55)',
         }));
       }
     }
