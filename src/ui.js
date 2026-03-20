@@ -1,11 +1,11 @@
 // UI controller: handles canvas clicks, sidepanel updates, action buttons
-import { pixelToHex, hexKey } from './hex.js';
+import { hexKey } from './hex.js';
 import { TileType, BUILDING_LABEL, RESOURCE_LABEL, WEAPON_LABEL } from './tiles.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
 import { Phase, Player, PHASE_ICON } from './game.js';
 import { PAD_X, PAD_Y } from './renderer.js';
 import {
-  ActionType, getValidActions,
+  ActionType, getValidActions, getVisibleEnemyHexes,
   executeMove, executeExplore, executeBattle,
   executeFortify, executeSummon, executeUseItem, executeUseAbility,
 } from './actions.js';
@@ -21,6 +21,7 @@ export class UIController {
     this._selectedEntity = null;
     this._validActions   = [];
     this._awaitingTarget = null;
+    this._pendingUnitPick = null; // { units: [...] } when multiple units on a hex
 
     this._bindEvents();
   }
@@ -31,20 +32,16 @@ export class UIController {
     this.canvas.addEventListener('mouseleave', () => {
       this.renderer.hoveredHex = null;
       this.onRedraw();
+      if (!this._selectedEntity) this._updateSidebar();
     });
 
-    // Touch support:
-    // - touchstart is passive so the parent wrapper can still scroll on swipes
-    // - touchend calls preventDefault() to block the browser's synthetic click
-    //   (avoids double-firing our own _onClick)
-    // - movement > 10 px is treated as a scroll, not a tap
     this.canvas.addEventListener('touchstart', e => {
       const t = e.touches[0];
       this._touchStart = { clientX: t.clientX, clientY: t.clientY };
-    });  // passive by default — allows parent to scroll
+    });
 
     this.canvas.addEventListener('touchend', e => {
-      e.preventDefault();  // block synthetic click that follows touch
+      e.preventDefault();
       if (!this._touchStart) return;
       const t = e.changedTouches[0];
       const dx = t.clientX - this._touchStart.clientX;
@@ -64,16 +61,21 @@ export class UIController {
     };
   }
 
+  _canvasToHex(x, y) {
+    return this.renderer.canvasToHex(x, y);
+  }
+
   _onMouseMove(e) {
     const { x, y } = this._canvasPos(e);
-    const hex = pixelToHex(x - PAD_X, y - PAD_Y);
+    const hex = this._canvasToHex(x, y);
     if (hex.col < 0 || hex.col >= 13 || hex.row < 0 || hex.row >= 11) {
       this.renderer.hoveredHex = null;
     } else {
       this.renderer.hoveredHex = hex;
     }
     this.onRedraw();
-    if (!this._selectedEntity) this._renderSelectedInfo();
+    // Always refresh info panel when hovering (shows hovered hex info if nothing selected)
+    this._renderSelectedInfo();
   }
 
   _onClick(e) {
@@ -81,7 +83,7 @@ export class UIController {
     if (this.state.activePlayer === Player.WITCH && this.state.witchIsAI) return;
 
     const { x, y } = this._canvasPos(e);
-    const hex = pixelToHex(x - PAD_X, y - PAD_Y);
+    const hex = this._canvasToHex(x, y);
     if (hex.col < 0 || hex.col >= 13 || hex.row < 0 || hex.row >= 11) return;
 
     if (this._awaitingTarget) {
@@ -96,17 +98,28 @@ export class UIController {
     const clickedEntities = state.entities.filter(
       e => e.alive && e.col === hex.col && e.row === hex.row && e.owner === state.activePlayer
     );
-    if (clickedEntities.length) {
-      this._selectEntity(clickedEntities[0]);
-    } else {
+
+    if (clickedEntities.length === 0) {
       this._clearSelection();
+    } else if (clickedEntities.length === 1) {
+      this._selectEntity(clickedEntities[0]);
+      this._pendingUnitPick = null;
+    } else {
+      // Multiple units on same hex — show picker
+      this._pendingUnitPick = { units: clickedEntities };
+      this._selectedEntity = null;
+      this._validActions   = [];
+      this.renderer.selectedHex  = { col: hex.col, row: hex.row };
+      this.renderer.highlightHexes = [];
     }
+
     this._updateSidebar();
     this.onRedraw();
   }
 
   _selectEntity(entity) {
-    this._selectedEntity = entity;
+    this._selectedEntity  = entity;
+    this._pendingUnitPick = null;
     this.renderer.selectedHex = { col: entity.col, row: entity.row };
     this._validActions = getValidActions(this.state, entity);
     this._updateHighlights();
@@ -116,6 +129,7 @@ export class UIController {
     this._selectedEntity       = null;
     this._awaitingTarget       = null;
     this._validActions         = [];
+    this._pendingUnitPick      = null;
     this.renderer.selectedHex  = null;
     this.renderer.highlightHexes = [];
   }
@@ -207,6 +221,14 @@ export class UIController {
       [Phase.NIGHT]: 'Witch +1 ATK · Unfortified heroes suffer',
     };
 
+    // Survivor bonus info
+    const survivorCount = state.entities.filter(
+      e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR
+    ).length;
+    const survivorNote = survivorCount > 0
+      ? `<span style="color:#4caf7d;font-size:0.75rem"> +${survivorCount} from survivors</span>`
+      : '';
+
     el.innerHTML = `
       <div class="phase-badge phase-${phase}">
         ${PHASE_ICON[phase]} ${phase.toUpperCase()}
@@ -218,6 +240,7 @@ export class UIController {
       </div>
       <div class="actions-remaining">
         ${'◆'.repeat(state.actionsLeft)}${'◇'.repeat(Math.max(0, 4 - state.actionsLeft))}
+        ${survivorNote}
         ${state.bonusActions > 0 ? `<span class="bonus">+${state.bonusActions}</span>` : ''}
       </div>
     `;
@@ -241,7 +264,7 @@ export class UIController {
       state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
     );
     if (allHeld) {
-      html += `<div class="inv-row" style="color:#ff4444;font-weight:bold">⚠ ALL NODES SEIZED!</div>`;
+      html += `<div class="inv-row" style="color:#ff4444;font-weight:bold">⚠ ALL NODES SEIZED! (wins at dawn)</div>`;
     }
     el.innerHTML = html;
   }
@@ -252,13 +275,47 @@ export class UIController {
 
     const state  = this.state;
     const entity = this._selectedEntity;
-    const isPlayerTurn = entity && entity.owner === state.activePlayer;
-    const hasActions   = state.actionsAvailable > 0;
+    const hasActions = state.actionsAvailable > 0;
 
-    if (!entity || !isPlayerTurn || state.gameOver) {
-      el.innerHTML = entity
+    // ── Unit picker (multiple units on same hex) ───────────────────────────
+    if (this._pendingUnitPick) {
+      let html = `<div class="action-title">Choose a unit:</div>`;
+      for (const u of this._pendingUnitPick.units) {
+        const color = ENTITY_COLOR[u.type] || '#888';
+        html += `<button class="action-btn pick-unit" data-action="pick_unit" data-unit-id="${u.id}"
+          style="border-left: 3px solid ${color}">
+          ${u.displayName} — HP: ${u.hp}/${u.maxHp}
+        </button>`;
+      }
+      html += btn('End Turn', 'end-turn', '', `data-action="end_turn"`);
+      el.innerHTML = html;
+      el.querySelectorAll('button[data-action]').forEach(b => {
+        b.addEventListener('click', () => this._handleActionButton(b));
+      });
+      return;
+    }
+
+    // ── End Turn always visible ───────────────────────────────────────────
+    let endTurnHtml = btn('End Turn', 'end-turn', state.gameOver ? 'disabled' : '', `data-action="end_turn"`);
+
+    if (state.gameOver) {
+      el.innerHTML = endTurnHtml;
+      el.querySelectorAll('button[data-action]').forEach(b => {
+        b.addEventListener('click', () => this._handleActionButton(b));
+      });
+      return;
+    }
+
+    const isPlayerTurn = entity && entity.owner === state.activePlayer;
+
+    if (!entity || !isPlayerTurn) {
+      el.innerHTML = (entity
         ? `<p class="hint">Not your turn.</p>`
-        : `<p class="hint">Select one of your units.</p>`;
+        : `<p class="hint">Select one of your units.</p>`)
+        + endTurnHtml;
+      el.querySelectorAll('button[data-action]').forEach(b => {
+        b.addEventListener('click', () => this._handleActionButton(b));
+      });
       return;
     }
 
@@ -279,15 +336,17 @@ export class UIController {
           html += btn('Battle (1)', 'battle', dis, `data-action="battle"`);
           break;
         case ActionType.FORTIFY: {
-          const inv = state.inventory.hero;
-          const hasMetal = (inv.metal || 0) > 0;
+          const shared    = state.inventory.shared;
+          const hasMetal  = (shared.metal || 0) > 0;
           const hasDoubler = entity.type === EntityType.SURVIVOR &&
             entity.ability === SurvivorAbility.FORTIFY_DOUBLE;
+          const tile = state.tiles.get(hexKey(entity.col, entity.row));
+          const curLevel = tile ? tile.fortifyLevel : 0;
           const lbl = hasMetal
-            ? 'Reinforce (1 Metal, +2 DEF)'
+            ? `Reinforce (Metal, +2 DEF → ${Math.min(4, curLevel + 2)})`
             : hasDoubler
-              ? 'Fortify (1 Wood, +2 DEF ★)'
-              : 'Fortify (1 Wood, +1 DEF)';
+              ? `Fortify (Wood, +2 DEF ★ → ${Math.min(4, curLevel + 2)})`
+              : `Fortify (Wood, +1 DEF → ${Math.min(4, curLevel + 1)})`;
           html += btn(lbl, 'fortify', dis, `data-action="fortify"`);
           break;
         }
@@ -316,14 +375,13 @@ export class UIController {
           };
           const lbl = abilityLabels[action.ability] || 'Use Ability';
           const costDis = action.ability === SurvivorAbility.HEAL && !hasActions ? 'disabled' : '';
-          html += btn(lbl, 'item ability', costDis,
-            `data-action="use_ability"`);
+          html += btn(lbl, 'item ability', costDis, `data-action="use_ability"`);
           break;
         }
       }
     }
 
-    html += btn('End Turn', 'end-turn', '', `data-action="end_turn"`);
+    html += endTurnHtml;
     el.innerHTML = html;
 
     el.querySelectorAll('button[data-action]').forEach(b => {
@@ -344,6 +402,15 @@ export class UIController {
       if (state.activePlayer === Player.WITCH && state.witchIsAI && !state.gameOver) {
         setTimeout(() => this._runAI(), 400);
       }
+      return;
+    }
+
+    if (action === 'pick_unit') {
+      const unitId = button.dataset.unitId;
+      const unit = state.entities.find(e => e.id === unitId);
+      if (unit) this._selectEntity(unit);
+      this._updateSidebar();
+      this.onRedraw();
       return;
     }
 
@@ -428,22 +495,36 @@ export class UIController {
     if (!entity) {
       const h = this.renderer.hoveredHex;
       if (h) {
-        const tile = this.state.tiles.get(hexKey(h.col, h.row));
+        const tile  = this.state.tiles.get(hexKey(h.col, h.row));
+        const state = this.state;
         if (tile) {
-          const obj = this.state.witchObjectives.find(o => o.col === h.col && o.row === h.row);
+          const obj = state.witchObjectives.find(o => o.col === h.col && o.row === h.row);
           let info = `<div class="tile-type">${tile.type}`;
           if (tile.building) info += ` — ${BUILDING_LABEL[tile.building]}`;
           info += `</div>`;
           if (obj) info += `<div style="color:#cc88ff">⛧ Power Node: ${obj.label}</div>`;
-          if (tile.explored) {
-            if (tile.resource) info += `<div class="resource">Resource: ${RESOURCE_LABEL[tile.resource]}</div>`;
-            if (tile.fortifyLevel) {
-              const fl = tile.fortifyLevel >= 2 ? '⚙ Metal Reinforced (+2 DEF)' : '🪵 Fortified (+1 DEF)';
-              info += `<div class="fortified">${fl}</div>`;
-            }
-          } else {
-            info += `<div class="unexplored">Unexplored</div>`;
+          if (tile.explored && tile.fortifyLevel) {
+            const fl = tile.fortifyLevel >= 3
+              ? `⚙⚙ Heavily Reinforced (+${tile.fortifyLevel} DEF)`
+              : tile.fortifyLevel >= 2
+                ? `⚙ Metal Reinforced (+${tile.fortifyLevel} DEF)`
+                : `🪵 Fortified (+${tile.fortifyLevel} DEF)`;
+            info += `<div class="fortified">${fl}</div>`;
           }
+          if (!tile.explored) info += `<div class="unexplored">Unexplored</div>`;
+
+          // Show visible units on hovered hex
+          const visible = _visibleUnitsAt(state, h.col, h.row);
+          if (visible.length) {
+            info += `<div style="margin-top:0.3rem;font-size:0.8rem;color:#ccc">Units here:</div>`;
+            for (const u of visible) {
+              const col = ENTITY_COLOR[u.type] || '#888';
+              info += `<div style="color:${col};font-size:0.78rem">
+                ${u.displayName} — HP ${u.hp}/${u.maxHp}
+              </div>`;
+            }
+          }
+
           el.innerHTML = info;
           return;
         }
@@ -452,12 +533,22 @@ export class UIController {
       return;
     }
 
-    // Entity info
     const weaponLine = entity.weapon
       ? `<div class="entity-weapon">🗡 ${WEAPON_LABEL[entity.weapon] || entity.weapon}</div>`
       : '';
 
-    // Survivor personality block
+    // Personal backpack
+    const myItems = entity.items || {};
+    const itemEntries = Object.entries(myItems).filter(([, v]) => v > 0);
+    let packLine = '';
+    if (itemEntries.length) {
+      const itemStr = itemEntries.map(([k, v]) => {
+        if (k.startsWith('weapon:')) return `${WEAPON_LABEL[k.replace('weapon:', '')] || k}×${v}`;
+        return `${RESOURCE_LABEL[k] || k}×${v}`;
+      }).join(', ');
+      packLine = `<div class="entity-weapon" style="color:#88eeff">🎒 ${itemStr}</div>`;
+    }
+
     let survivorBlock = '';
     if (entity.type === EntityType.SURVIVOR && entity.name) {
       survivorBlock = `
@@ -481,6 +572,7 @@ export class UIController {
         DEF: ${entity.defense}${entity.defenseBonus ? ` +${entity.defenseBonus}` : ''}
       </div>
       ${weaponLine}
+      ${packLine}
       <div class="entity-pos">Position: (${entity.col}, ${entity.row})</div>
     `;
   }
@@ -490,23 +582,21 @@ export class UIController {
     if (!el) return;
 
     const inv = this.state.inventory;
-    let html = '<div class="inv-title">Supplies</div>';
+    let html = '<div class="inv-title">Shared Supplies</div>';
 
-    html += '<div class="inv-row"><span class="inv-label">Hero:</span> ';
-    const heroItems = Object.entries(inv.hero).filter(([, v]) => v > 0);
-    html += heroItems.length
-      ? heroItems.map(([k, v]) => {
-          if (k.startsWith('weapon:')) return `${WEAPON_LABEL[k.replace('weapon:', '')] || k}×${v}`;
-          return `${RESOURCE_LABEL[k] || k}×${v}`;
-        }).join(', ')
-      : 'none';
+    const sharedItems = Object.entries(inv.shared).filter(([, v]) => v > 0);
+    html += '<div class="inv-row">';
+    html += sharedItems.length
+      ? sharedItems.map(([k, v]) => `${RESOURCE_LABEL[k] || k}×${v}`).join(', ')
+      : '<span style="color:#4a4060">none</span>';
     html += '</div>';
 
-    html += '<div class="inv-row"><span class="inv-label">Witch:</span> ';
+    html += '<div class="inv-title" style="margin-top:0.4rem">Witch Stores</div>';
     const witchItems = Object.entries(inv.witch).filter(([, v]) => v > 0);
+    html += '<div class="inv-row">';
     html += witchItems.length
       ? witchItems.map(([k, v]) => `${RESOURCE_LABEL[k] || k}×${v}`).join(', ')
-      : 'none';
+      : '<span style="color:#4a4060">none</span>';
     html += '</div>';
 
     el.innerHTML = html;
@@ -526,6 +616,8 @@ export class UIController {
   }
 }
 
+// ── Helpers ────────────────────────────────────────────────────────────────
+
 function btn(label, cls, disabled = '', extra = '') {
   return `<button class="action-btn ${cls}" ${disabled} ${extra}>${label}</button>`;
 }
@@ -535,4 +627,17 @@ function _summonLabel(witchInv) {
   if ((witchInv.wood  || 0) > 0) return 'Raise Wood Golem (1 Wood)';
   const res = Object.keys(witchInv).find(k => witchInv[k] > 0);
   return res ? `Summon Minion (1 ${res})` : 'Summon Minion';
+}
+
+// Returns units at a hex that are currently visible (respects fog of war)
+function _visibleUnitsAt(state, col, row) {
+  if (!state.fogOfWar) {
+    return state.entities.filter(e => e.alive && e.col === col && e.row === row);
+  }
+  const revealed = getVisibleEnemyHexes(state);
+  return state.entities.filter(e => {
+    if (!e.alive || e.col !== col || e.row !== row) return false;
+    if (e.owner === 'witch') return revealed.has(hexKey(col, row));
+    return true;
+  });
 }

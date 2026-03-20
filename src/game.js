@@ -58,7 +58,7 @@ export class GameState {
     this.witch = createWitch(witchPos.col, witchPos.row);
     this.entities.push(this.hero, this.witch);
 
-    this.inventory = { hero: {}, witch: {} };
+    this.inventory = { shared: {}, witch: {} };
 
     this.witchObjectives = WITCH_OBJECTIVES;
 
@@ -111,7 +111,11 @@ export class GameState {
       const prevPhase = this.phase;
       this.phase = phaseForRound(this.round);
 
-      this.actionsLeft  = ACTIONS[this.phase].hero;
+      // Each living hero survivor grants +1 action to the hero turn
+      const survivorBonus = this.entities.filter(
+        e => e.alive && e.owner === 'hero' && e.type === 'survivor'
+      ).length;
+      this.actionsLeft  = ACTIONS[this.phase].hero + survivorBonus;
       this.bonusActions = 0;
 
       // Announce phase transitions
@@ -127,6 +131,11 @@ export class GameState {
       // Night hazard: hero units in unfortified locations take 1 damage
       if (this.phase === Phase.NIGHT) {
         this._applyNightHazard();
+      }
+
+      // Dawn: check if witch holds all objectives (only at dawn start)
+      if (this.phase === Phase.DAWN) {
+        this._checkDawnObjectives();
       }
     }
 
@@ -184,9 +193,10 @@ export class GameState {
     if (!this.hero.alive) {
       this.winner = 'witch';
       this.addLog('🌙 The hero has fallen. Darkness descends on Salem forever…');
-      return;
     }
+  }
 
+  _checkDawnObjectives() {
     const allHeld = this.witchObjectives.every(obj =>
       this.entities.some(
         e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row
@@ -194,7 +204,7 @@ export class GameState {
     );
     if (allHeld) {
       this.winner = 'witch';
-      this.addLog('🌙 The witch has claimed all three Power Nodes! Salem is lost…');
+      this.addLog('🌙 As dawn breaks, the witch holds all three Power Nodes! Salem is lost…');
     }
   }
 

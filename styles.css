@@ -189,10 +189,10 @@ canvas { touch-action: pan-x pan-y; }
 
 #canvas-wrapper {
   flex: 1;
-  overflow: auto;
+  overflow: hidden;
   display: flex;
-  align-items: flex-start;
-  padding: 0.5rem;
+  align-items: center;
+  justify-content: center;
   background: var(--bg);
 }
 
@@ -368,10 +368,9 @@ canvas { touch-action: pan-x pan-y; }
   #canvas-wrapper {
     flex: 0 0 60%;
     width: 100%;
-    overflow: auto;
-    padding: 0;
-    align-items: flex-start;
-    justify-content: flex-start;
+    overflow: hidden;
+    align-items: center;
+    justify-content: center;
   }
 
   /* Sidebar: bottom 40% — always on screen, scrollable */

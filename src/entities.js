@@ -179,6 +179,9 @@ export class Entity {
     this.abilityLabel = null;
 
     this.actedThisTurn = false;
+
+    // Personal backpack: herbs, weapons (key = 'weapon:sword' etc), horse
+    this.items = {};
   }
 
   get alive() { return this.hp > 0; }

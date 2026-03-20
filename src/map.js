@@ -144,12 +144,16 @@ export function generateMap(seed = Date.now()) {
     [5, 6], // Mill <-> Dock
   ];
 
+  let bridgesPlaced = 0;
   const placeRoad = path => {
     for (const { col, row } of path) {
       const t = tiles.get(hexKey(col, row));
       if (!t) continue;
       if (t.type === TileType.GRASS)  t.type = TileType.ROAD;
-      else if (t.type === TileType.RIVER) t.type = TileType.BRIDGE;
+      else if (t.type === TileType.RIVER && bridgesPlaced < 2) {
+        t.type = TileType.BRIDGE;
+        bridgesPlaced++;
+      }
       // Leave BUILDING, ROAD, BRIDGE, FOREST tiles unchanged
     }
   };

@@ -1,5 +1,5 @@
 // Action system: definitions, validation, and execution
-import { getNeighbors, hexKey } from './hex.js';
+import { getNeighbors, hexKey, hexDistance } from './hex.js';
 import { TileType, ResourceType, WEAPON_LABEL, BUILDING_LOOT, TERRAIN_LOOT, rollLoot } from './tiles.js';
 import {
   EntityType, SurvivorAbility, Entity,
@@ -64,6 +64,26 @@ function sameHexEnemies(state, entity) {
     .filter(e => e.id !== entity.id && e.owner !== entity.owner && e.alive);
 }
 
+// ── Visibility ─────────────────────────────────────────────────────────────
+
+// Returns a Set of hexKeys where witch-side entities are visible to hero units.
+// Baseline: any hero-side unit reveals enemies within 2 hexes.
+// SCOUT survivors extend their personal range to 3 hexes.
+export function getVisibleEnemyHexes(state) {
+  const revealed = new Set();
+  for (const e of state.entities) {
+    if (!e.alive || e.owner !== 'hero') continue;
+    const range = e.ability === SurvivorAbility.SCOUT ? 3 : 2;
+    for (const we of state.entities) {
+      if (!we.alive || we.owner !== 'witch') continue;
+      if (hexDistance(e.col, e.row, we.col, we.row) <= range) {
+        revealed.add(hexKey(we.col, we.row));
+      }
+    }
+  }
+  return revealed;
+}
+
 // ── Validation ─────────────────────────────────────────────────────────────
 
 export function getValidActions(state, actor) {
@@ -71,13 +91,12 @@ export function getValidActions(state, actor) {
   const t = tile(state, actor.col, actor.row);
   const actorIsHero = actor.owner === 'hero';
 
-  // Move — range 2 if hero has a horse, otherwise 1
-  const hasHorse = actorIsHero && (state.inventory.hero['horse'] || 0) > 0;
+  // Move — range 2 if actor has a horse in personal items, otherwise 1
+  const hasHorse = actorIsHero && (actor.items?.['horse'] || 0) > 0;
   const moveTargets = getReachableHexes(state, actor, hasHorse ? 2 : 1);
   if (moveTargets.length) actions.push({ type: ActionType.MOVE, targets: moveTargets });
 
-  // Explore — available on any unexplored tile (terrain always yields ~95%).
-  // Inn and Town Hall are pre-explored; everywhere else is fair game.
+  // Explore — available on any unexplored tile
   if (t && !t.explored) {
     actions.push({ type: ActionType.EXPLORE, targets: [{ col: actor.col, row: actor.row }] });
   }
@@ -89,10 +108,11 @@ export function getValidActions(state, actor) {
   ];
   if (battleTargets.length) actions.push({ type: ActionType.BATTLE, targets: battleTargets });
 
-  // Fortify — hero or survivor in a building with wood/metal
-  if (t && t.type === TileType.BUILDING && t.fortifyLevel < 2 && actorIsHero) {
-    const woodCount  = (state.inventory.hero[ResourceType.WOOD]  || 0);
-    const metalCount = (state.inventory.hero[ResourceType.METAL] || 0);
+  // Fortify — hero or survivor in a building, cap at 4, uses shared inventory
+  if (t && t.type === TileType.BUILDING && t.fortifyLevel < 4 && actorIsHero) {
+    const shared     = state.inventory.shared;
+    const woodCount  = (shared[ResourceType.WOOD]  || 0);
+    const metalCount = (shared[ResourceType.METAL] || 0);
     if (woodCount > 0 || metalCount > 0) {
       actions.push({ type: ActionType.FORTIFY, targets: [{ col: actor.col, row: actor.row }] });
     }
@@ -117,22 +137,26 @@ export function getValidActions(state, actor) {
   // Use item (hero-side)
   if (actorIsHero) {
     const usable = [];
-    const inv = state.inventory.hero;
+    const shared  = state.inventory.shared;
+    const myItems = actor.items || {};
 
-    if ((inv[ResourceType.HERBS] || 0) > 0 && actor.hp < actor.maxHp)
-      usable.push({ item: ResourceType.HERBS, label: 'Use Herbs (heal 1 HP)' });
-    if ((inv[ResourceType.FOOD] || 0) > 0)
-      usable.push({ item: ResourceType.FOOD, label: 'Eat Food (+1 action)' });
-    if ((inv[ResourceType.SILVER] || 0) > 0)
-      usable.push({ item: ResourceType.SILVER, label: 'Silver (+1 ATK this battle)' });
-    if ((inv[ResourceType.SCRIPTURE] || 0) > 0 && battleTargets.length)
-      usable.push({ item: ResourceType.SCRIPTURE, label: 'Scripture (ward enemy)' });
+    // Per-unit items: herbs, weapons
+    if ((myItems[ResourceType.HERBS] || 0) > 0 && actor.hp < actor.maxHp)
+      usable.push({ item: ResourceType.HERBS, label: 'Use Herbs (heal 1 HP)', source: 'items' });
+
+    // Shared resources
+    if ((shared[ResourceType.FOOD] || 0) > 0)
+      usable.push({ item: ResourceType.FOOD, label: 'Eat Food (+1 action)', source: 'shared' });
+    if ((shared[ResourceType.SILVER] || 0) > 0)
+      usable.push({ item: ResourceType.SILVER, label: 'Silver (+1 ATK this battle)', source: 'shared' });
+    if ((shared[ResourceType.SCRIPTURE] || 0) > 0 && battleTargets.length)
+      usable.push({ item: ResourceType.SCRIPTURE, label: 'Scripture (ward enemy)', source: 'shared' });
 
     if (usable.length) actions.push({ type: ActionType.USE_ITEM, usable });
 
-    // Equip weapon from inventory
-    const weapons = Object.keys(inv)
-      .filter(k => k.startsWith('weapon:') && (inv[k] || 0) > 0);
+    // Equip weapon from actor's personal items
+    const weapons = Object.keys(myItems)
+      .filter(k => k.startsWith('weapon:') && (myItems[k] || 0) > 0);
     if (weapons.length) {
       actions.push({
         type: ActionType.EQUIP_WEAPON,
@@ -156,7 +180,6 @@ export function getValidActions(state, actor) {
 function _buildAbilityAction(state, actor) {
   switch (actor.ability) {
     case SurvivorAbility.HEAL: {
-      // Hero must be on same hex and not at full HP
       const heroHere = state.hero.alive &&
         state.hero.col === actor.col && state.hero.row === actor.row &&
         state.hero.hp < state.hero.maxHp;
@@ -205,7 +228,7 @@ export function executeExplore(state, actor) {
 
   t.explored = true;
 
-  // HERBALIST ability: also yield 1 herbs on any explore
+  // HERBALIST ability: also yield 1 herbs on any explore (goes to actor's items)
   const isHerbalist = actor.type === EntityType.SURVIVOR &&
     actor.ability === SurvivorAbility.HERBALIST;
 
@@ -213,15 +236,13 @@ export function executeExplore(state, actor) {
     const lootType = rollLoot(BUILDING_LOOT[t.building]);
     _applyLoot(state, actor, lootType, log);
   } else {
-    // Terrain: roll per-tile-type table from loot.config.js (falls back to grass)
     const terrainTable = TERRAIN_LOOT[t.type] || TERRAIN_LOOT['grass'];
     const lootType = rollLoot(terrainTable);
     _applyLoot(state, actor, lootType, log);
   }
 
   if (isHerbalist && actor.owner === 'hero') {
-    state.inventory.hero[ResourceType.HERBS] =
-      (state.inventory.hero[ResourceType.HERBS] || 0) + 1;
+    actor.items[ResourceType.HERBS] = (actor.items[ResourceType.HERBS] || 0) + 1;
     log.push(`${actor.displayName}'s keen eye also finds Herbs!`);
   }
 
@@ -236,8 +257,8 @@ function _applyLoot(state, actor, lootType, log) {
 
   if (lootType === 'horse') {
     if (actor.owner === 'hero') {
-      state.inventory.hero['horse'] = 1;
-      log.push(`Found a horse at the Stables! The hero's movement range increases to 2.`);
+      actor.items['horse'] = 1;
+      log.push(`Found a horse! ${actor.displayName}'s movement range increases to 2.`);
     }
     return;
   }
@@ -257,20 +278,29 @@ function _applyLoot(state, actor, lootType, log) {
   }
 
   if (lootType.startsWith('weapon:')) {
-    const weaponKey = lootType.replace('weapon:', '');
     if (actor.owner === 'hero') {
-      state.inventory.hero[lootType] = (state.inventory.hero[lootType] || 0) + 1;
-      log.push(`Found a ${WEAPON_LABEL[weaponKey] || weaponKey}! Added to inventory.`);
+      actor.items[lootType] = (actor.items[lootType] || 0) + 1;
+      const weaponKey = lootType.replace('weapon:', '');
+      log.push(`Found a ${WEAPON_LABEL[weaponKey] || weaponKey}! Added to ${actor.displayName}'s pack.`);
     } else {
       log.push(`The witch finds a weapon but has no use for it.`);
     }
     return;
   }
 
-  // Resource
+  if (lootType === ResourceType.HERBS) {
+    // Herbs are per-unit (potions)
+    if (actor.owner === 'hero') {
+      actor.items[lootType] = (actor.items[lootType] || 0) + 1;
+      log.push(`Found Herbs! Added to ${actor.displayName}'s pack.`);
+    }
+    return;
+  }
+
+  // All other resources are shared
   if (actor.owner === 'hero') {
-    state.inventory.hero[lootType] = (state.inventory.hero[lootType] || 0) + 1;
-    log.push(`Found ${lootType}! Added to supplies.`);
+    state.inventory.shared[lootType] = (state.inventory.shared[lootType] || 0) + 1;
+    log.push(`Found ${lootType}! Added to shared supplies.`);
   } else {
     state.inventory.witch[lootType] = (state.inventory.witch[lootType] || 0) + 1;
     log.push(`The witch secures ${lootType} for dark rituals.`);
@@ -280,14 +310,12 @@ function _applyLoot(state, actor, lootType, log) {
 export function executeBattle(state, actor, target) {
   const log = [];
 
-  // Phase combat bonus: +1 ATK for hero-side during DAY, witch-side during NIGHT
   let phaseBonus = 0;
   if (state.phase === Phase.DAY   && actor.owner === 'hero')  phaseBonus = 1;
   if (state.phase === Phase.NIGHT && actor.owner === 'witch') phaseBonus = 1;
 
   const { attackRoll, defenseRoll, hit } = Entity.resolveCombat(actor, target, phaseBonus);
 
-  // Fortification bonus
   const defTile = tile(state, target.col, target.row);
   if (defTile?.fortifyLevel) target.defenseBonus += defTile.fortifyLevel;
 
@@ -318,32 +346,29 @@ export function executeBattle(state, actor, target) {
 export function executeFortify(state, actor) {
   const t = tile(state, actor.col, actor.row);
   if (!t || t.type !== TileType.BUILDING) return { success: false, log: ['Not in a building.'] };
-  if (t.fortifyLevel >= 2) return { success: false, log: ['Already fully reinforced.'] };
+  if (t.fortifyLevel >= 4) return { success: false, log: ['Cannot fortify further.'] };
 
-  const inv = state.inventory.hero;
-  const metalCount = (inv[ResourceType.METAL] || 0);
-  const woodCount  = (inv[ResourceType.WOOD]  || 0);
+  const shared     = state.inventory.shared;
+  const metalCount = (shared[ResourceType.METAL] || 0);
+  const woodCount  = (shared[ResourceType.WOOD]  || 0);
 
-  // FORTIFY_DOUBLE: this survivor's ability makes wood act like metal
+  // FORTIFY_DOUBLE: this survivor's ability makes wood give +2
   const hasDoubler = actor.type === EntityType.SURVIVOR &&
     actor.ability === SurvivorAbility.FORTIFY_DOUBLE;
 
   if (metalCount > 0) {
-    inv[ResourceType.METAL]--;
-    t.fortifyLevel = 2;
-    return { success: true, log: [`${actor.displayName} reinforces the building with metal! (+2 DEF)`], cost: 1 };
+    shared[ResourceType.METAL]--;
+    t.fortifyLevel = Math.min(4, t.fortifyLevel + 2);
+    return { success: true, log: [`${actor.displayName} reinforces with metal! (now +${t.fortifyLevel} DEF)`], cost: 1 };
   } else if (woodCount > 0) {
-    inv[ResourceType.WOOD]--;
-    if (hasDoubler) {
-      t.fortifyLevel = 2;
-      return { success: true, log: [`${actor.displayName} fortifies to full strength with wood! (+2 DEF)`], cost: 1 };
-    } else {
-      t.fortifyLevel = Math.min(t.fortifyLevel + 1, 1);
-      return { success: true, log: [`${actor.displayName} fortifies the building with wood! (+1 DEF)`], cost: 1 };
-    }
+    shared[ResourceType.WOOD]--;
+    const gain = hasDoubler ? 2 : 1;
+    t.fortifyLevel = Math.min(4, t.fortifyLevel + gain);
+    const star = hasDoubler ? ' ★' : '';
+    return { success: true, log: [`${actor.displayName} fortifies with wood!${star} (now +${t.fortifyLevel} DEF)`], cost: 1 };
   }
 
-  return { success: false, log: ['No wood or metal to fortify with.'] };
+  return { success: false, log: ['No wood or metal in shared supplies.'] };
 }
 
 export function executeSummon(state, actor, targetCol, targetRow) {
@@ -375,27 +400,33 @@ export function executeSummon(state, actor, targetCol, targetRow) {
 }
 
 export function executeUseItem(state, actor, item) {
-  const inv = state.inventory.hero;
-
-  // Weapon equip
+  // Weapon equip — from actor's personal items
   if (item.startsWith('weapon:')) {
-    if ((inv[item] || 0) < 1) return { success: false, log: ['Item not available.'] };
-    inv[item]--;
+    const myItems = actor.items || {};
+    if ((myItems[item] || 0) < 1) return { success: false, log: ['Item not available.'] };
+    myItems[item]--;
     const weaponType = item.replace('weapon:', '');
     actor.equipWeapon(weaponType);
     const label = WEAPON_LABEL[weaponType] || weaponType;
     return { success: true, log: [`${actor.displayName} equips ${label}!`], cost: 0 };
   }
 
-  if ((inv[item] || 0) < 1) return { success: false, log: ['Item not available.'] };
-  inv[item]--;
+  // Herbs — from actor's personal items
+  if (item === ResourceType.HERBS) {
+    const myItems = actor.items || {};
+    if ((myItems[item] || 0) < 1) return { success: false, log: ['No herbs.'] };
+    myItems[item]--;
+    actor.heal(1);
+    return { success: true, log: [`${actor.displayName} uses herbs. Healed to ${actor.hp}/${actor.maxHp} HP.`], cost: 0 };
+  }
+
+  // Shared resources
+  const shared = state.inventory.shared;
+  if ((shared[item] || 0) < 1) return { success: false, log: ['Item not available.'] };
+  shared[item]--;
   const log = [];
 
   switch (item) {
-    case ResourceType.HERBS:
-      actor.heal(1);
-      log.push(`${actor.displayName} uses herbs. Healed to ${actor.hp}/${actor.maxHp} HP.`);
-      break;
     case ResourceType.FOOD:
       state.bonusActions += 1;
       log.push(`${actor.displayName} eats food. Gains 1 extra action!`);
