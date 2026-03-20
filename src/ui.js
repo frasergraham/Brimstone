@@ -32,6 +32,26 @@ export class UIController {
       this.renderer.hoveredHex = null;
       this.onRedraw();
     });
+
+    // Touch support — treat a tap as a click
+    this.canvas.addEventListener('touchstart', e => {
+      e.preventDefault();  // prevent scroll & delayed mouse events
+      const t = e.touches[0];
+      this._touchStart = { clientX: t.clientX, clientY: t.clientY };
+    }, { passive: false });
+
+    this.canvas.addEventListener('touchend', e => {
+      e.preventDefault();
+      if (!this._touchStart) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - this._touchStart.clientX;
+      const dy = t.clientY - this._touchStart.clientY;
+      // Only fire as tap if finger didn't drag (< 10px)
+      if (Math.sqrt(dx * dx + dy * dy) < 10) {
+        this._onClick({ clientX: t.clientX, clientY: t.clientY });
+      }
+      this._touchStart = null;
+    }, { passive: false });
   }
 
   _canvasPos(e) {

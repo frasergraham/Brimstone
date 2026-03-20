@@ -30,6 +30,10 @@ html, body {
   overflow: hidden;
 }
 
+/* Prevent tap highlight flash and double-tap zoom on interactive elements */
+button, canvas { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+canvas { touch-action: none; }
+
 /* ── Setup screen ──────────────────────────────────────────────────────── */
 
 #setup-screen {
@@ -41,7 +45,7 @@ html, body {
 }
 
 .setup-card {
-  width: 440px;
+  width: min(440px, 92vw);
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -338,4 +342,68 @@ html, body {
   color: var(--day);
   margin-bottom: 1.5rem;
   max-width: 340px;
+}
+
+/* ── Mobile / touch layout ─────────────────────────────────────────────── */
+
+@media (max-width: 700px) {
+  html, body { overflow: auto; font-size: 15px; }
+
+  /* Game screen: stack vertically */
+  #game-screen { height: auto; min-height: 100dvh; }
+  #game-main   { flex-direction: column; overflow: visible; }
+
+  /* Header: tighter, drop the title */
+  #game-header { padding: 0.4rem 0.75rem; gap: 0.5rem; }
+  .header-title { display: none; }
+  #turn-info { flex-wrap: wrap; gap: 0.4rem 0.75rem; }
+  .phase-hint { display: none; }  /* save space — hint is in the log */
+
+  /* Canvas: full width, scroll horizontally inside wrapper */
+  #canvas-wrapper {
+    width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0.4rem;
+    /* Let the canvas be as wide as it needs; user swipes to pan */
+    align-items: flex-start;
+  }
+
+  /* Sidebar: horizontal strip below the map */
+  #sidebar {
+    width: 100%;
+    min-width: 0;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    flex-direction: column;
+    overflow-y: visible;
+    /* Collapsible sections handled by letting user scroll */
+  }
+
+  /* Action buttons — big enough to tap */
+  .action-btn {
+    padding: 0.65rem 0.75rem;
+    font-size: 0.92rem;
+    min-height: 44px;
+    margin-bottom: 0.4rem;
+  }
+
+  /* Setup card */
+  .setup-card { padding: 1.4rem 1.2rem; }
+  .setup-rules { font-size: 0.84rem; }
+  .title { font-size: 2.2rem; }
+
+  /* Bigger setup buttons */
+  .setup-btn { padding: 0.75rem 1.2rem; font-size: 1rem; min-height: 44px; }
+
+  /* Entity info — readable on small screen */
+  .entity-stats { font-size: 0.88rem; line-height: 1.8; }
+  .survivor-bio { font-size: 0.83rem; }
+
+  /* Log: shorter so it doesn't dominate */
+  #event-log { max-height: 130px; }
+
+  /* Game-over card */
+  .game-over-card { padding: 2rem 1.5rem; margin: 1rem; }
+  .winner-text { font-size: 1.1rem; }
 }
