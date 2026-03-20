@@ -4,18 +4,33 @@ import { Tile, TileType, BuildingType, ResourceType } from './tiles.js';
 
 // Fixed building positions (col, row) for a 13×11 grid
 const BUILDING_PLACEMENTS = [
-  { col: 6,  row: 5,  building: BuildingType.TOWN_HALL  },
-  { col: 6,  row: 1,  building: BuildingType.CHURCH     },
-  { col: 10, row: 5,  building: BuildingType.INN        },
-  { col: 2,  row: 5,  building: BuildingType.BLACKSMITH },
-  { col: 10, row: 9,  building: BuildingType.GRAVEYARD  },
-  { col: 3,  row: 2,  building: BuildingType.MILL       },
-  { col: 5,  row: 9,  building: BuildingType.DOCK       },
-  { col: 2,  row: 2,  building: BuildingType.HOUSE      },
-  { col: 10, row: 2,  building: BuildingType.HOUSE      },
-  { col: 9,  row: 7,  building: BuildingType.HOUSE      },
-  { col: 4,  row: 7,  building: BuildingType.HOUSE      },
-  { col: 11, row: 3,  building: BuildingType.HOUSE      },
+  // Core named buildings
+  { col: 6,  row: 5,  building: BuildingType.TOWN_HALL   },
+  { col: 6,  row: 1,  building: BuildingType.CHURCH      },
+  { col: 10, row: 5,  building: BuildingType.INN         },
+  { col: 2,  row: 5,  building: BuildingType.BLACKSMITH  },
+  { col: 10, row: 9,  building: BuildingType.GRAVEYARD   },
+  { col: 3,  row: 2,  building: BuildingType.MILL        },
+  { col: 5,  row: 9,  building: BuildingType.DOCK        },
+  // Speciality buildings
+  { col: 7,  row: 8,  building: BuildingType.BARN        },
+  { col: 1,  row: 7,  building: BuildingType.BARN        },
+  { col: 8,  row: 2,  building: BuildingType.WATCHTOWER  },
+  { col: 1,  row: 3,  building: BuildingType.APOTHECARY  },
+  { col: 11, row: 7,  building: BuildingType.STOREHOUSE  },
+  { col: 8,  row: 0,  building: BuildingType.STABLE      },
+  // Houses
+  { col: 2,  row: 2,  building: BuildingType.HOUSE       },
+  { col: 10, row: 2,  building: BuildingType.HOUSE       },
+  { col: 9,  row: 7,  building: BuildingType.HOUSE       },
+  { col: 4,  row: 7,  building: BuildingType.HOUSE       },
+  { col: 11, row: 3,  building: BuildingType.HOUSE       },
+  { col: 12, row: 6,  building: BuildingType.HOUSE       },
+  { col: 3,  row: 8,  building: BuildingType.HOUSE       },
+  { col: 8,  row: 6,  building: BuildingType.HOUSE       },
+  { col: 6,  row: 3,  building: BuildingType.HOUSE       },
+  { col: 9,  row: 4,  building: BuildingType.HOUSE       },
+  { col: 0,  row: 5,  building: BuildingType.HOUSE       },
 ];
 
 // River meanders roughly down the left-center of the map
@@ -31,6 +46,13 @@ const FOREST_SEEDS = [
   {col:0,row:0},{col:1,row:1},{col:11,row:1},{col:12,row:0},
   {col:12,row:4},{col:0,row:6},{col:1,row:9},{col:12,row:8},
   {col:7,row:3},{col:8,row:8},{col:0,row:4},{col:6,row:9},
+];
+
+// Three strategic locations the witch is trying to dominate
+export const WITCH_OBJECTIVES = [
+  { col: 8,  row: 1,  label: 'Ancient Altar'    },
+  { col: 1,  row: 9,  label: 'Dark Grove'        },
+  { col: 11, row: 5,  label: 'Cursed Crossroads' },
 ];
 
 function rng(seed) {
@@ -106,9 +128,9 @@ export function generateMap(seed = Date.now()) {
     if (!t) continue;
     t.type = TileType.BUILDING;
     t.building = building;
+    // Town Hall and Inn pre-explored; all others are hidden
     t.explored = building === BuildingType.TOWN_HALL ||
-                 building === BuildingType.INN ||
-                 building === BuildingType.CHURCH;
+                 building === BuildingType.INN;
   }
 
   // 4. Build roads between buildings and Town Hall (hub-and-spoke + a few extras)
@@ -156,15 +178,16 @@ export function generateMap(seed = Date.now()) {
     }
   }
 
-  // 6. Place hidden resources on grass/forest tiles (not buildings or river)
-  const resourcePool = [
+  // 6. Place a modest number of open-world resources (wood and metal mostly)
+  //    Buildings have their own loot rolled at explore time.
+  const openResourcePool = [
     ...Array(4).fill(ResourceType.WOOD),
-    ...Array(3).fill(ResourceType.HERBS),
-    ...Array(3).fill(ResourceType.FOOD),
-    ...Array(2).fill(ResourceType.SILVER),
-    ...Array(2).fill(ResourceType.SCRIPTURE),
+    ...Array(3).fill(ResourceType.METAL),
+    ...Array(2).fill(ResourceType.HERBS),
+    ...Array(2).fill(ResourceType.FOOD),
+    ...Array(1).fill(ResourceType.SILVER),
   ];
-  shuffleArray(resourcePool, rand);
+  shuffleArray(openResourcePool, rand);
 
   const candidateTiles = [...tiles.values()].filter(
     t => (t.type === TileType.GRASS || t.type === TileType.FOREST) &&
@@ -172,14 +195,14 @@ export function generateMap(seed = Date.now()) {
   );
   shuffleArray(candidateTiles, rand);
 
-  for (let i = 0; i < resourcePool.length && i < candidateTiles.length; i++) {
-    candidateTiles[i].resource = resourcePool[i];
+  for (let i = 0; i < openResourcePool.length && i < candidateTiles.length; i++) {
+    candidateTiles[i].resource = openResourcePool[i];
   }
 
-  // 7. Place hidden survivors on unexplored grass/forest (5 survivors)
+  // 7. Place hidden survivors on unexplored grass/forest (6 survivors)
   const survivorTiles = candidateTiles
     .filter(t => !t.resource)
-    .slice(0, 5);
+    .slice(0, 6);
   for (const t of survivorTiles) {
     t.hasSurvivor = true;
   }

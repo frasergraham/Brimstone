@@ -1,8 +1,9 @@
-// Simple witch AI
-// Priority: attack hero if adjacent → attack survivors → zombify survivors → move toward hero
+// Witch AI — objective-based strategy
+// Priority: hold/claim 3 power nodes → build an army → pressure hero
 import { getNeighbors, hexDistance, hexKey } from './hex.js';
-import { TileType } from './tiles.js';
+import { TileType, ResourceType } from './tiles.js';
 import { EntityType } from './entities.js';
+import { WITCH_OBJECTIVES } from './map.js';
 import {
   ActionType,
   executeMove, executeExplore, executeBattle, executeSummon,
@@ -37,28 +38,42 @@ export class WitchAI {
   }
 
   _chooseAction() {
-    const state  = this.state;
-    const witch  = state.witch;
+    const state = this.state;
+    const witch = state.witch;
 
-    // 1. Battle: attack hero if adjacent or co-located
-    const heroAdj = isAdjacent(witch, state.hero) || colocated(witch, state.hero);
-    if (heroAdj && state.hero.alive) {
-      const result = executeBattle(state, witch, state.hero);
+    // 1. If witch is in combat (hero or hero units co-located), fight
+    const colocatedEnemy = state.entities.find(
+      e => e.alive && e.owner === 'hero' && e.col === witch.col && e.row === witch.row
+    );
+    if (colocatedEnemy) {
+      const result = executeBattle(state, witch, colocatedEnemy);
       logResult(state, result);
       state.spendAction(result.cost);
       return true;
     }
 
-    // 2. Battle: attack any hero-owned survivors nearby
-    const nearSurvivor = nearbyEnemy(state, witch, 'hero');
-    if (nearSurvivor) {
-      const result = executeBattle(state, witch, nearSurvivor);
-      logResult(state, result);
-      state.spendAction(result.cost);
-      return true;
+    // 2. Summon if resources are available and adjacent empty hex exists
+    const inv = state.inventory.witch;
+    const totalRes = Object.values(inv).reduce((s, v) => s + v, 0);
+    const witchMinions = state.entities.filter(
+      e => e.alive && e.owner === 'witch' && e.type !== EntityType.WITCH
+    );
+    // Summon if we have resources and could use more troops
+    if (totalRes > 0 && witchMinions.length < 4) {
+      const spawnAdj = getNeighbors(witch.col, witch.row).find(n => {
+        const t = state.tiles.get(hexKey(n.col, n.row));
+        return t && t.type !== TileType.RIVER &&
+               state.entities.filter(e => e.alive && e.col === n.col && e.row === n.row).length === 0;
+      });
+      if (spawnAdj) {
+        const result = executeSummon(state, witch, spawnAdj.col, spawnAdj.row);
+        logResult(state, result);
+        state.spendAction(result.cost);
+        return true;
+      }
     }
 
-    // 3. Explore current tile if unexplored (might find survivors to zombify)
+    // 3. Explore current tile if unexplored (gather resources)
     const tile = state.tiles.get(hexKey(witch.col, witch.row));
     if (tile && !tile.explored) {
       const result = executeExplore(state, witch);
@@ -67,10 +82,10 @@ export class WitchAI {
       return true;
     }
 
-    // 4. Explore an adjacent unexplored tile (move there first if possible)
+    // 4. Explore adjacent unexplored tile (move to it)
     const unexploredAdj = getNeighbors(witch.col, witch.row).find(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && !t.explored && (t.hasSurvivor || t.resource) &&
+      return t && !t.explored && (t.hasSurvivor || t.resource || t.building) &&
              t.type !== TileType.RIVER;
     });
     if (unexploredAdj) {
@@ -80,24 +95,40 @@ export class WitchAI {
       return true;
     }
 
-    // 5. Move minion/zombie toward hero (give each one action)
+    // 5. Move minions/golems toward unclaimed objectives or hero
     const minions = state.entities.filter(
-      e => e.alive && (e.type === EntityType.MINION || e.type === EntityType.ZOMBIE)
+      e => e.alive && e.owner === 'witch' && e.type !== EntityType.WITCH
     );
     for (const minion of minions) {
-      if (colocated(minion, state.hero)) {
+      // If minion is co-located with a hero unit, fight
+      const minionEnemy = state.entities.find(
+        e => e.alive && e.owner === 'hero' && e.col === minion.col && e.row === minion.row
+      );
+      if (minionEnemy) {
+        const result = executeBattle(state, minion, minionEnemy);
+        logResult(state, result);
+        state.spendAction(result.cost);
+        return true;
+      }
+      // If adjacent to hero unit, fight
+      if (isAdjacent(minion, state.hero) && state.hero.alive) {
         const result = executeBattle(state, minion, state.hero);
         logResult(state, result);
         state.spendAction(result.cost);
         return true;
       }
-      if (isAdjacent(minion, state.hero)) {
-        const result = executeBattle(state, minion, state.hero);
-        logResult(state, result);
-        state.spendAction(result.cost);
-        return true;
+      // If this minion is not yet at an objective, direct it to one
+      const targetObj = _unoccupiedObjective(state, minion);
+      if (targetObj) {
+        const step = stepToward(state, minion, targetObj);
+        if (step) {
+          const result = executeMove(state, minion, step.col, step.row);
+          logResult(state, result);
+          state.spendAction(result.cost);
+          return true;
+        }
       }
-      // Move minion toward hero
+      // Otherwise converge on hero
       const step = stepToward(state, minion, state.hero);
       if (step) {
         const result = executeMove(state, minion, step.col, step.row);
@@ -107,8 +138,9 @@ export class WitchAI {
       }
     }
 
-    // 6. Move witch toward hero
-    const step = stepToward(state, witch, state.hero);
+    // 6. Move witch toward nearest unclaimed objective; otherwise toward hero
+    const witchTarget = _unoccupiedObjective(state, witch) || state.hero;
+    const step = stepToward(state, witch, witchTarget);
     if (step) {
       const result = executeMove(state, witch, step.col, step.row);
       logResult(state, result);
@@ -125,25 +157,33 @@ export class WitchAI {
   }
 }
 
+// Return the nearest WITCH_OBJECTIVE not already occupied by a witch-side entity,
+// biased toward objectives not occupied by anyone.
+function _unoccupiedObjective(state, actor) {
+  const objectives = WITCH_OBJECTIVES.map(obj => {
+    const occupants = state.entities.filter(
+      e => e.alive && e.col === obj.col && e.row === obj.row
+    );
+    const witchHeld = occupants.some(e => e.owner === 'witch');
+    return { ...obj, witchHeld, empty: occupants.length === 0 };
+  });
+
+  // Prefer objectives not yet held by witch, nearest first
+  const unclaimed = objectives.filter(o => !o.witchHeld);
+  if (!unclaimed.length) return null;
+
+  unclaimed.sort(
+    (a, b) =>
+      hexDistance(actor.col, actor.row, a.col, a.row) -
+      hexDistance(actor.col, actor.row, b.col, b.row)
+  );
+  return unclaimed[0];
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function isAdjacent(a, b) {
   return hexDistance(a.col, a.row, b.col, b.row) === 1;
-}
-
-function colocated(a, b) {
-  return a.col === b.col && a.row === b.row;
-}
-
-function nearbyEnemy(state, actor, targetOwner) {
-  const adj = getNeighbors(actor.col, actor.row);
-  for (const n of adj) {
-    const enemies = state.entities.filter(
-      e => e.alive && e.col === n.col && e.row === n.row && e.owner === targetOwner
-    );
-    if (enemies.length) return enemies[0];
-  }
-  return null;
 }
 
 function stepToward(state, actor, target) {

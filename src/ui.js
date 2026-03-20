@@ -1,6 +1,6 @@
 // UI controller: handles canvas clicks, sidepanel updates, action buttons
 import { pixelToHex, hexKey } from './hex.js';
-import { TileType, BUILDING_LABEL, RESOURCE_LABEL } from './tiles.js';
+import { TileType, BUILDING_LABEL, RESOURCE_LABEL, WEAPON_LABEL } from './tiles.js';
 import { EntityType, ENTITY_COLOR } from './entities.js';
 import { Phase, Player } from './game.js';
 import { PAD_X, PAD_Y } from './renderer.js';
@@ -171,6 +171,7 @@ export class UIController {
 
   _updateSidebar() {
     this._renderTurnInfo();
+    this._renderObjectives();
     this._renderActionPanel();
     this._renderSelectedInfo();
     this._renderInventory();
@@ -197,6 +198,32 @@ export class UIController {
         ${state.bonusActions > 0 ? `<span class="bonus">+${state.bonusActions}</span>` : ''}
       </div>
     `;
+  }
+
+  _renderObjectives() {
+    const el = document.getElementById('objectives');
+    if (!el) return;
+
+    const state = this.state;
+    let html = '<div class="inv-title">⛧ Power Nodes</div>';
+
+    for (const obj of state.witchObjectives) {
+      const held = state.entities.find(
+        e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row
+      );
+      const icon  = held ? '🔴' : '⭕';
+      const style = held ? 'color:#ff6666' : 'color:#aaaaaa';
+      html += `<div class="inv-row" style="${style}">${icon} ${obj.label}</div>`;
+    }
+
+    const allHeld = state.witchObjectives.every(obj =>
+      state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
+    );
+    if (allHeld) {
+      html += `<div class="inv-row" style="color:#ff4444;font-weight:bold">⚠ ALL NODES SEIZED!</div>`;
+    }
+
+    el.innerHTML = html;
   }
 
   _renderActionPanel() {
@@ -232,16 +259,28 @@ export class UIController {
         case ActionType.BATTLE:
           html += btn('Battle (1)', 'battle', disabled, `data-action="battle"`);
           break;
-        case ActionType.FORTIFY:
-          html += btn('Fortify (1 Wood)', 'fortify', disabled, `data-action="fortify"`);
+        case ActionType.FORTIFY: {
+          const inv = state.inventory.hero;
+          const hasMetal = (inv.metal || 0) > 0;
+          const label = hasMetal ? 'Reinforce (1 Metal, +2 DEF)' : 'Fortify (1 Wood, +1 DEF)';
+          html += btn(label, 'fortify', disabled, `data-action="fortify"`);
           break;
-        case ActionType.SUMMON:
-          html += btn('Summon Minion', 'summon', disabled, `data-action="summon"`);
+        }
+        case ActionType.SUMMON: {
+          const summonLabel = _summonLabel(state.inventory.witch);
+          html += btn(summonLabel, 'summon', disabled, `data-action="summon"`);
           break;
+        }
         case ActionType.USE_ITEM:
           for (const item of action.usable) {
             html += btn(item.label, 'item', disabled,
               `data-action="use_item" data-item="${item.item}"`);
+          }
+          break;
+        case ActionType.EQUIP_WEAPON:
+          for (const w of action.weapons) {
+            html += btn(`Equip ${w.label}`, 'item', disabled,
+              `data-action="use_item" data-item="${w.key}"`);
           }
           break;
       }
@@ -310,7 +349,7 @@ export class UIController {
       case 'summon':
         this._awaitingTarget = { actionType: ActionType.SUMMON, actor: entity };
         this._updateHighlights();
-        state.addLog('Click an adjacent empty hex to summon.');
+        state.addLog('Click an adjacent empty hex to raise a unit.');
         // Override highlights for summon
         {
           const summonAction = this._validActions.find(a => a.type === ActionType.SUMMON);
@@ -327,6 +366,8 @@ export class UIController {
         const result = executeUseItem(state, entity, item);
         for (const msg of result.log) state.addLog(msg);
         if (result.success) state.spendAction(result.cost);
+        if (this._selectedEntity?.alive) this._selectEntity(this._selectedEntity);
+        else this._clearSelection();
         break;
       }
     }
@@ -353,12 +394,19 @@ export class UIController {
       if (h) {
         const tile = this.state.tiles.get(hexKey(h.col, h.row));
         if (tile) {
+          // Check if this is a witch objective
+          const obj = this.state.witchObjectives.find(o => o.col === h.col && o.row === h.row);
+
           let info = `<div class="tile-type">${tile.type}`;
           if (tile.building) info += ` — ${BUILDING_LABEL[tile.building]}`;
           info += `</div>`;
+          if (obj) info += `<div style="color:#cc88ff">⛧ Power Node: ${obj.label}</div>`;
           if (tile.explored) {
             if (tile.resource) info += `<div class="resource">Resource: ${RESOURCE_LABEL[tile.resource]}</div>`;
-            if (tile.fortified) info += `<div class="fortified">🛡 Fortified</div>`;
+            if (tile.fortifyLevel) {
+              const fortLabel = tile.fortifyLevel >= 2 ? '⚙ Metal Reinforced (+2 DEF)' : '🪵 Fortified (+1 DEF)';
+              info += `<div class="fortified">${fortLabel}</div>`;
+            }
           } else {
             info += `<div class="unexplored">Unexplored</div>`;
           }
@@ -370,6 +418,10 @@ export class UIController {
       return;
     }
 
+    const weaponLine = entity.weapon
+      ? `<div class="entity-weapon">🗡 ${WEAPON_LABEL[entity.weapon] || entity.weapon}</div>`
+      : '';
+
     el.innerHTML = `
       <div class="entity-name" style="color:${ENTITY_COLOR[entity.type]}">
         ${entity.displayName}
@@ -379,6 +431,7 @@ export class UIController {
         ATK: ${entity.attack}${entity.attackBonus ? ` +${entity.attackBonus}` : ''}
         DEF: ${entity.defense}${entity.defenseBonus ? ` +${entity.defenseBonus}` : ''}
       </div>
+      ${weaponLine}
       <div class="entity-pos">Position: (${entity.col}, ${entity.row})</div>
     `;
   }
@@ -392,15 +445,23 @@ export class UIController {
 
     html += '<div class="inv-row"><span class="inv-label">Hero:</span> ';
     const heroItems = Object.entries(inv.hero).filter(([, v]) => v > 0);
-    html += heroItems.length
-      ? heroItems.map(([k, v]) => `${RESOURCE_LABEL[k]}×${v}`).join(', ')
-      : 'none';
+    if (heroItems.length) {
+      html += heroItems.map(([k, v]) => {
+        if (k.startsWith('weapon:')) {
+          const wKey = k.replace('weapon:', '');
+          return `${WEAPON_LABEL[wKey] || k}×${v}`;
+        }
+        return `${RESOURCE_LABEL[k] || k}×${v}`;
+      }).join(', ');
+    } else {
+      html += 'none';
+    }
     html += '</div>';
 
     html += '<div class="inv-row"><span class="inv-label">Witch:</span> ';
     const witchItems = Object.entries(inv.witch).filter(([, v]) => v > 0);
     html += witchItems.length
-      ? witchItems.map(([k, v]) => `${k}×${v}`).join(', ')
+      ? witchItems.map(([k, v]) => `${RESOURCE_LABEL[k] || k}×${v}`).join(', ')
       : 'none';
     html += '</div>';
 
@@ -430,4 +491,12 @@ export class UIController {
 
 function btn(label, cls, disabled = '', extra = '') {
   return `<button class="action-btn ${cls}" ${disabled} ${extra}>${label}</button>`;
+}
+
+function _summonLabel(witchInv) {
+  if ((witchInv.metal || 0) > 0) return 'Raise Iron Golem (1 Metal)';
+  if ((witchInv.wood  || 0) > 0) return 'Raise Wood Golem (1 Wood)';
+  // Find any resource
+  const res = Object.keys(witchInv).find(k => witchInv[k] > 0);
+  return res ? `Summon Minion (1 ${res})` : 'Summon Minion';
 }

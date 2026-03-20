@@ -1,5 +1,5 @@
 // Central game state and turn management
-import { generateMap, getStartPosition } from './map.js';
+import { generateMap, getStartPosition, WITCH_OBJECTIVES } from './map.js';
 import { createHero, createWitch, EntityType } from './entities.js';
 import { ResourceType } from './tiles.js';
 
@@ -34,6 +34,9 @@ export class GameState {
       witch: {},
     };
 
+    // Witch's strategic objectives (imported from map)
+    this.witchObjectives = WITCH_OBJECTIVES;
+
     // Turn tracking
     this.round         = 1;   // round number (increments after both players act)
     this.phase         = Phase.DAY;
@@ -43,6 +46,10 @@ export class GameState {
 
     // Log
     this.log = [`Day 1 begins. The hero arrives at the Inn.`];
+    this.log.push(
+      `The witch has three Power Nodes she is trying to seize: ` +
+      WITCH_OBJECTIVES.map(o => o.label).join(', ') + `.`
+    );
 
     // UI state (managed externally but kept here for serialisation)
     this.selectedEntity = null;
@@ -91,7 +98,6 @@ export class GameState {
       this.actionsLeft  = ACTIONS[this.phase].hero;
       this.bonusActions = 0;
 
-      const dayNum = Math.ceil(this.round / (ROUNDS_PER_PHASE * 2));
       this.addLog(
         `Round ${this.round} — ${this.phase === Phase.DAY ? '☀ Day' : '🌙 Night'}` +
         ` (Hero: ${this.actionsLeft} actions, Witch: ${ACTIONS[this.phase].witch} actions)`
@@ -115,6 +121,20 @@ export class GameState {
     if (!this.hero.alive) {
       this.winner = 'witch';
       this.addLog('🌙 The hero has fallen. Darkness descends on Salem forever…');
+      return;
+    }
+
+    // Witch wins if all 3 objectives are held by witch-side entities
+    const allHeld = this.witchObjectives.every(obj =>
+      this.entities.some(
+        e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row
+      )
+    );
+    if (allHeld) {
+      this.winner = 'witch';
+      this.addLog(
+        '🌙 The witch has claimed all three Power Nodes! Salem is lost to darkness…'
+      );
     }
   }
 

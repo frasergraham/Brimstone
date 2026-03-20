@@ -3,12 +3,22 @@ import {
   MAP_COLS, MAP_ROWS, HEX_SIZE, SQRT3,
   hexToPixel, pixelToHex as _pixelToHex, hexKey,
 } from './hex.js';
-import { TileType, TILE_COLOR, BUILDING_COLOR, BUILDING_LABEL } from './tiles.js';
+import { TileType, TILE_COLOR, BUILDING_COLOR, BUILDING_LABEL, ResourceType } from './tiles.js';
 import { ENTITY_COLOR, EntityType } from './entities.js';
 import { Phase } from './game.js';
 
 const PAD_X = 40;
 const PAD_Y = 30;
+
+// Resource dot colors and symbols for unexplored open tiles
+const RESOURCE_DOT = {
+  [ResourceType.WOOD]:      { color: '#8B5E3C', symbol: '🪵' },
+  [ResourceType.METAL]:     { color: '#9E9E9E', symbol: '⚙' },
+  [ResourceType.HERBS]:     { color: '#4CAF50', symbol: '🌿' },
+  [ResourceType.FOOD]:      { color: '#FF9800', symbol: '🍞' },
+  [ResourceType.SILVER]:    { color: '#CFD8DC', symbol: '✦' },
+  [ResourceType.SCRIPTURE]: { color: '#FFF176', symbol: '📜' },
+};
 
 // Precompute hex corner offsets for pointy-top
 function hexCorners(cx, cy, size) {
@@ -59,11 +69,21 @@ export class Renderer {
     ctx.fillStyle = isNight ? '#07090f' : '#0d1117';
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
+    // Draw witch objective markers (behind tiles so they blend in subtly)
+    for (const obj of state.witchObjectives) {
+      this._drawObjectiveGlow(obj.col, obj.row);
+    }
+
     // Draw all tiles
     for (let row = 0; row < MAP_ROWS; row++) {
       for (let col = 0; col < MAP_COLS; col++) {
         this._drawTile(col, row, isNight);
       }
+    }
+
+    // Draw objective symbols on top of tiles
+    for (const obj of state.witchObjectives) {
+      this._drawObjectiveSymbol(obj.col, obj.row, obj.label, state);
     }
 
     // Highlights (move range, attack range)
@@ -95,9 +115,9 @@ export class Renderer {
       }
     }
 
-    // Day/night overlay tint
+    // Subtle night overlay — reduced so tile colors remain recognizable
     if (isNight) {
-      ctx.fillStyle = 'rgba(10,5,30,0.18)';
+      ctx.fillStyle = 'rgba(10,5,30,0.10)';
       ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     }
   }
@@ -123,9 +143,9 @@ export class Renderer {
       color = blendHex(color, '#000000', 0.5);
     }
 
-    // Night tint
+    // Night tint — subtle blue-grey shift instead of heavy darkening
     if (isNight) {
-      color = blendHex(color, '#0a0520', 0.3);
+      color = blendHex(color, '#1a1a3a', 0.15);
     }
 
     // Draw hex
@@ -141,14 +161,15 @@ export class Renderer {
     ctx.lineWidth   = 0.8;
     ctx.stroke();
 
-    // Fortified shimmer
-    if (tile.fortified) {
+    // Fortification shimmer
+    if (tile.fortifyLevel > 0) {
       ctx.beginPath();
       ctx.moveTo(corners[0].x, corners[0].y);
       for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
       ctx.closePath();
-      ctx.strokeStyle = '#f5c84266';
-      ctx.lineWidth   = 2;
+      // Gold = wood (level 1), Cyan = metal (level 2)
+      ctx.strokeStyle = tile.fortifyLevel >= 2 ? '#00e5ff99' : '#f5c84266';
+      ctx.lineWidth   = tile.fortifyLevel >= 2 ? 3 : 2;
       ctx.stroke();
     }
 
@@ -162,13 +183,61 @@ export class Renderer {
       ctx.fillText(label, x, y + HEX_SIZE * 0.55);
     }
 
-    // Resource indicator (unexplored tile with resource)
+    // Resource indicator on unexplored open tiles — colored dot + small emoji
     if (!tile.explored && tile.resource) {
-      ctx.fillStyle = 'rgba(200,180,80,0.4)';
+      const dotInfo = RESOURCE_DOT[tile.resource] || { color: 'rgba(200,180,80,0.6)', symbol: '?' };
+      ctx.fillStyle = dotInfo.color;
+      ctx.globalAlpha = 0.7;
       ctx.beginPath();
-      ctx.arc(x, y, 4, 0, Math.PI * 2);
+      ctx.arc(x, y, 5, 0, Math.PI * 2);
       ctx.fill();
+      ctx.globalAlpha = 1;
     }
+
+    // Survivor indicator on unexplored open tiles
+    if (!tile.explored && tile.hasSurvivor) {
+      ctx.fillStyle = '#4caf7d';
+      ctx.globalAlpha = 0.6;
+      ctx.beginPath();
+      ctx.arc(x, y, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  _drawObjectiveGlow(col, row) {
+    const ctx = this.ctx;
+    const { x, y } = this._toCanvas(col, row);
+    // Pulsing glow effect — draw a large colored circle behind the hex
+    const gradient = ctx.createRadialGradient(x, y, 0, x, y, HEX_SIZE * 1.5);
+    gradient.addColorStop(0, 'rgba(160,0,220,0.25)');
+    gradient.addColorStop(1, 'rgba(160,0,220,0)');
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(x, y, HEX_SIZE * 1.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  _drawObjectiveSymbol(col, row, label, state) {
+    const ctx = this.ctx;
+    const { x, y } = this._toCanvas(col, row);
+
+    // Check if any witch entity is here
+    const witchHeld = state.entities.some(
+      e => e.alive && e.owner === 'witch' && e.col === col && e.row === row
+    );
+
+    // Draw pentagram/eye symbol
+    ctx.fillStyle   = witchHeld ? '#ff4444' : 'rgba(180,0,255,0.7)';
+    ctx.font        = `bold ${Math.floor(HEX_SIZE * 0.5)}px serif`;
+    ctx.textAlign   = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('⛧', x, y - HEX_SIZE * 0.15);
+
+    // Small label below
+    ctx.fillStyle = witchHeld ? '#ff8888' : 'rgba(220,160,255,0.85)';
+    ctx.font      = `6px sans-serif`;
+    ctx.fillText(label, x, y + HEX_SIZE * 0.35);
   }
 
   _drawHighlight(col, row, color) {
@@ -233,9 +302,10 @@ export class Renderer {
       ctx.textBaseline = 'middle';
       ctx.fillText(entityGlyph(entity.type), ex, ey + 1);
 
-      // HP bar (only for hero/witch, or survivors)
+      // HP bar (hero, witch, survivors, golems)
       if (entity.type === EntityType.HERO || entity.type === EntityType.WITCH ||
-          entity.type === EntityType.SURVIVOR) {
+          entity.type === EntityType.SURVIVOR || entity.type === EntityType.WOOD_GOLEM ||
+          entity.type === EntityType.IRON_GOLEM) {
         const barW = r * 2;
         const barH = 3;
         const bx   = ex - r;
@@ -245,6 +315,14 @@ export class Renderer {
         const pct = entity.hp / entity.maxHp;
         ctx.fillStyle = pct > 0.5 ? '#4caf50' : pct > 0.25 ? '#ff9800' : '#f44336';
         ctx.fillRect(bx, by, barW * pct, barH);
+      }
+
+      // Weapon indicator dot on hero/survivor
+      if (entity.weapon && (entity.owner === 'hero')) {
+        ctx.fillStyle = '#f5c842';
+        ctx.beginPath();
+        ctx.arc(ex + r - 2, ey - r + 2, 3, 0, Math.PI * 2);
+        ctx.fill();
       }
     }
 
@@ -271,11 +349,13 @@ export class Renderer {
 
 function entityGlyph(type) {
   switch (type) {
-    case EntityType.HERO:     return '⚔';
-    case EntityType.WITCH:    return '✦';
-    case EntityType.SURVIVOR: return '☺';
-    case EntityType.ZOMBIE:   return '†';
-    case EntityType.MINION:   return '☠';
+    case EntityType.HERO:       return '⚔';
+    case EntityType.WITCH:      return '✦';
+    case EntityType.SURVIVOR:   return '☺';
+    case EntityType.ZOMBIE:     return '†';
+    case EntityType.MINION:     return '☠';
+    case EntityType.WOOD_GOLEM: return '🪵';
+    case EntityType.IRON_GOLEM: return '⚙';
     default: return '?';
   }
 }
