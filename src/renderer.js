@@ -1,38 +1,17 @@
 // Canvas renderer for the hex map
 import {
   MAP_COLS, MAP_ROWS, HEX_SIZE, SQRT3,
+  getNeighbors,
   hexToPixel, pixelToHex as _pixelToHex, hexKey, hexDistance,
 } from './hex.js';
-import { TileType, TILE_COLOR, BUILDING_COLOR, BUILDING_LABEL, ResourceType } from './tiles.js';
+import {
+  TileType, TILE_COLOR, BUILDING_COLOR, BUILDING_LABEL, BUILDING_ICON,
+} from './tiles.js';
 import { ENTITY_COLOR, EntityType, SurvivorAbility } from './entities.js';
-import { Phase } from './game.js';
 
 const PAD_X = 40;
 const PAD_Y = 30;
-
-// Phase-specific background and tile tint
-const PHASE_BG = {
-  [Phase.DAWN]:  '#100e18',
-  [Phase.DAY]:   '#0d1117',
-  [Phase.DUSK]:  '#120a08',
-  [Phase.NIGHT]: '#07090f',
-};
-
-const PHASE_TINT = {
-  [Phase.DAWN]:  { color: '#ff8c00', strength: 0.08 },  // warm orange hint
-  [Phase.DAY]:   null,                                    // no tint
-  [Phase.DUSK]:  { color: '#8b1a00', strength: 0.10 },  // deep red
-  [Phase.NIGHT]: { color: '#1a1a3a', strength: 0.15 },  // blue-grey
-};
-
-const RESOURCE_DOT = {
-  [ResourceType.WOOD]:      '#8B5E3C',
-  [ResourceType.METAL]:     '#9E9E9E',
-  [ResourceType.HERBS]:     '#4CAF50',
-  [ResourceType.FOOD]:      '#FF9800',
-  [ResourceType.SILVER]:    '#CFD8DC',
-  [ResourceType.SCRIPTURE]: '#FFF176',
-};
+const BG_COLOR = '#0d1117';
 
 function hexCorners(cx, cy, size) {
   const pts = [];
@@ -71,10 +50,9 @@ export class Renderer {
   draw() {
     const ctx   = this.ctx;
     const state = this.state;
-    const phase = state.phase;
 
     // Background
-    ctx.fillStyle = PHASE_BG[phase] || '#0d1117';
+    ctx.fillStyle = BG_COLOR;
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
     // Objective glows
@@ -85,9 +63,13 @@ export class Renderer {
     // Tiles
     for (let row = 0; row < MAP_ROWS; row++) {
       for (let col = 0; col < MAP_COLS; col++) {
-        this._drawTile(col, row, phase);
+        this._drawTile(col, row);
       }
     }
+
+    // River connection layer — thick lines connecting adjacent river hexes
+    // so the river looks like a ribbon rather than isolated hexes
+    this._drawRiverLayer();
 
     // Objective symbols
     for (const obj of state.witchObjectives) {
@@ -134,16 +116,9 @@ export class Renderer {
       drawn.add(key);
       this._drawEntityStack(entity.col, entity.row, stack);
     }
-
-    // Phase overlay tint (applied last so it's subtle)
-    const tint = PHASE_TINT[phase];
-    if (tint) {
-      ctx.fillStyle = hexToRgba(tint.color, tint.strength);
-      ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-    }
   }
 
-  _drawTile(col, row, phase) {
+  _drawTile(col, row) {
     const ctx  = this.ctx;
     const tile = this.state.tiles.get(hexKey(col, row));
     if (!tile) return;
@@ -151,23 +126,11 @@ export class Renderer {
     const { x, y } = this._toCanvas(col, row);
     const corners   = hexCorners(x, y, HEX_SIZE - 1);
 
-    let color;
-    if (tile.type === TileType.BUILDING && tile.building) {
-      color = BUILDING_COLOR[tile.building];
-    } else {
-      color = TILE_COLOR[tile.type] || TILE_COLOR[TileType.GRASS];
-    }
-
-    // Darken unexplored terrain; buildings stay bright so the town is readable
-    if (!tile.explored) {
-      if (tile.type === TileType.BUILDING) color = blendHex(color, '#000000', 0.15);
-      else color = blendHex(color, '#000000', 0.5);
-    }
-
-    // Phase tint — subtle, keeps colors recognizable
-    if (phase === Phase.NIGHT) color = blendHex(color, '#1a1a3a', 0.15);
-    if (phase === Phase.DAWN)  color = blendHex(color, '#3a2000', 0.08);
-    if (phase === Phase.DUSK)  color = blendHex(color, '#3a0a00', 0.12);
+    // ── Hex fill ──────────────────────────────────────────────────────────
+    // Buildings are always stone grey; terrain uses flat type color, no tinting.
+    const color = tile.type === TileType.BUILDING
+      ? BUILDING_COLOR
+      : (TILE_COLOR[tile.type] || TILE_COLOR[TileType.GRASS]);
 
     ctx.beginPath();
     ctx.moveTo(corners[0].x, corners[0].y);
@@ -176,11 +139,35 @@ export class Renderer {
     ctx.fillStyle = color;
     ctx.fill();
 
-    ctx.strokeStyle = (phase === Phase.NIGHT || phase === Phase.DUSK) ? '#1a1a2e' : '#151a14';
+    // Grid border
+    ctx.strokeStyle = '#111418';
     ctx.lineWidth   = 0.8;
     ctx.stroke();
 
-    // Fortification shimmer: gold = wood (1), cyan = metal (2)
+    // ── Bridge deck ───────────────────────────────────────────────────────
+    // Draw a road-coloured band across the hex to represent the bridge deck.
+    if (tile.type === TileType.BRIDGE) {
+      const deckH = HEX_SIZE * 0.38;
+      ctx.fillStyle = TILE_COLOR[TileType.ROAD];
+      ctx.fillRect(x - HEX_SIZE * SQRT3 * 0.5, y - deckH * 0.5, HEX_SIZE * SQRT3, deckH);
+      // Railings
+      ctx.strokeStyle = '#8a7a5a';
+      ctx.lineWidth   = 1;
+      ctx.beginPath();
+      ctx.moveTo(x - HEX_SIZE * SQRT3 * 0.5, y - deckH * 0.5);
+      ctx.lineTo(x + HEX_SIZE * SQRT3 * 0.5, y - deckH * 0.5);
+      ctx.moveTo(x - HEX_SIZE * SQRT3 * 0.5, y + deckH * 0.5);
+      ctx.lineTo(x + HEX_SIZE * SQRT3 * 0.5, y + deckH * 0.5);
+      ctx.stroke();
+      // Icon
+      ctx.font         = `${Math.floor(HEX_SIZE * 0.55)}px serif`;
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('🌉', x, y);
+      return; // no further overlays on bridge
+    }
+
+    // ── Fortification shimmer ─────────────────────────────────────────────
     if (tile.fortifyLevel > 0) {
       ctx.beginPath();
       ctx.moveTo(corners[0].x, corners[0].y);
@@ -191,37 +178,63 @@ export class Renderer {
       ctx.stroke();
     }
 
-    // Building label — always visible so the player can see the town layout
+    // ── Building: icon + name + border ───────────────────────────────────
     if (tile.type === TileType.BUILDING && tile.building) {
-      ctx.fillStyle    = tile.explored ? '#fff8e8' : 'rgba(255,240,200,0.70)';
-      ctx.font         = `bold 8px "Georgia", serif`;
-      ctx.textAlign    = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(BUILDING_LABEL[tile.building] || tile.building, x, y + HEX_SIZE * 0.55);
-    }
-
-    // Explored marker — small dot in the top-right corner so the player
-    // can see at a glance which terrain they have already scouted.
-    // Buildings already show their name label; non-passable tiles are skipped.
-    if (tile.explored && tile.type !== TileType.BUILDING && tile.type !== TileType.RIVER) {
-      ctx.fillStyle   = 'rgba(255,255,255,0.35)';
-      ctx.beginPath();
-      ctx.arc(x + HEX_SIZE * 0.55, y - HEX_SIZE * 0.52, 2.5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // Building border — always visible; brighter once explored
-    if (tile.type === TileType.BUILDING) {
+      // Gold border (brighter once explored)
       ctx.beginPath();
       ctx.moveTo(corners[0].x, corners[0].y);
       for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
       ctx.closePath();
-      ctx.strokeStyle = tile.explored
-        ? 'rgba(245,200,66,0.75)'
-        : 'rgba(245,200,66,0.35)';
+      ctx.strokeStyle = tile.explored ? 'rgba(245,200,66,0.80)' : 'rgba(245,200,66,0.40)';
       ctx.lineWidth   = tile.explored ? 2 : 1.5;
       ctx.stroke();
+
+      // Icon (center of hex)
+      ctx.font         = `${Math.floor(HEX_SIZE * 0.55)}px serif`;
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(BUILDING_ICON[tile.building] || '?', x, y - HEX_SIZE * 0.10);
+
+      // Name label (bottom of hex)
+      ctx.fillStyle    = 'rgba(255,248,230,0.92)';
+      ctx.font         = `bold 8px "Georgia", serif`;
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(BUILDING_LABEL[tile.building] || tile.building, x, y + HEX_SIZE * 0.58);
     }
+  }
+
+  // Draw thick lines between adjacent RIVER tiles so the river reads as a
+  // continuous ribbon rather than isolated hexes separated by grid lines.
+  _drawRiverLayer() {
+    const ctx   = this.ctx;
+    const tiles = this.state.tiles;
+
+    ctx.strokeStyle = TILE_COLOR[TileType.RIVER];
+    ctx.lineWidth   = HEX_SIZE * 0.65;
+    ctx.lineCap     = 'round';
+    ctx.beginPath();
+
+    for (let row = 0; row < MAP_ROWS; row++) {
+      for (let col = 0; col < MAP_COLS; col++) {
+        const tile = tiles.get(hexKey(col, row));
+        if (!tile || tile.type !== TileType.RIVER) continue;
+
+        const { x, y } = this._toCanvas(col, row);
+        for (const n of getNeighbors(col, row)) {
+          // Draw each connection only once
+          if (n.col < col || (n.col === col && n.row < row)) continue;
+          const nt = tiles.get(hexKey(n.col, n.row));
+          if (!nt || nt.type !== TileType.RIVER) continue;
+          const { x: nx, y: ny } = this._toCanvas(n.col, n.row);
+          ctx.moveTo(x, y);
+          ctx.lineTo(nx, ny);
+        }
+      }
+    }
+
+    ctx.stroke();
+    ctx.lineCap = 'butt'; // reset
   }
 
   _drawObjectiveGlow(col, row) {
@@ -404,20 +417,5 @@ function stackOffset(index, total) {
   return offsets[index] || { x: 0, y: 0 };
 }
 
-function blendHex(a, b, t) {
-  const ra = parseInt(a.slice(1, 3), 16), ga = parseInt(a.slice(3, 5), 16), ba = parseInt(a.slice(5, 7), 16);
-  const rb = parseInt(b.slice(1, 3), 16), gb = parseInt(b.slice(3, 5), 16), bb = parseInt(b.slice(5, 7), 16);
-  const r  = Math.round(ra + (rb - ra) * t);
-  const g  = Math.round(ga + (gb - ga) * t);
-  const bv = Math.round(ba + (bb - ba) * t);
-  return `rgb(${r},${g},${bv})`;
-}
-
-function hexToRgba(hex, alpha) {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
-}
 
 export { PAD_X, PAD_Y };

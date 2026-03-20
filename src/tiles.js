@@ -6,6 +6,7 @@ export const TileType = Object.freeze({
   FOREST:   'forest',
   ROAD:     'road',
   RIVER:    'river',
+  BRIDGE:   'bridge',   // road crossing over a river
   BUILDING: 'building',
 });
 
@@ -66,7 +67,8 @@ export const TILE_PASSABLE = {
   [TileType.GRASS]:    true,
   [TileType.FOREST]:   true,
   [TileType.ROAD]:     true,
-  [TileType.RIVER]:    false,  // requires bridge / dock adjacency
+  [TileType.RIVER]:    false,
+  [TileType.BRIDGE]:   true,   // passable crossing
   [TileType.BUILDING]: true,
 };
 
@@ -75,24 +77,29 @@ export const TILE_COLOR = {
   [TileType.GRASS]:    '#3a5430',
   [TileType.FOREST]:   '#1b2e1a',
   [TileType.ROAD]:     '#5e4e34',
-  [TileType.RIVER]:    '#16304f',
+  [TileType.RIVER]:    '#1a3d5c',
+  [TileType.BRIDGE]:   '#1a3d5c',   // water base; road deck drawn on top
   [TileType.BUILDING]: '#4a3c2c',
 };
 
-export const BUILDING_COLOR = {
-  [BuildingType.TOWN_HALL]:  '#b89a18',  // civic gold
-  [BuildingType.CHURCH]:     '#b0b0c8',  // pale stone
-  [BuildingType.INN]:        '#c07840',  // warm amber
-  [BuildingType.BLACKSMITH]: '#787878',  // iron grey
-  [BuildingType.GRAVEYARD]:  '#606070',  // dark slate
-  [BuildingType.MILL]:       '#a87830',  // golden brown
-  [BuildingType.DOCK]:       '#2e7898',  // harbour blue
-  [BuildingType.HOUSE]:      '#a86848',  // brick red
-  [BuildingType.BARN]:       '#b88040',  // hay gold
-  [BuildingType.WATCHTOWER]: '#8888a8',  // tower grey-blue
-  [BuildingType.APOTHECARY]: '#6aaa58',  // herbal green
-  [BuildingType.STOREHOUSE]: '#9a8068',  // dusty brown
-  [BuildingType.STABLE]:     '#c09860',  // sandy tan
+// All buildings render as the same stone grey — icons + names distinguish them
+export const BUILDING_COLOR = '#6e6e6e';
+
+// Icons shown on every building tile, always visible
+export const BUILDING_ICON = {
+  [BuildingType.TOWN_HALL]:  '🏛',
+  [BuildingType.CHURCH]:     '⛪',
+  [BuildingType.INN]:        '🏨',
+  [BuildingType.BLACKSMITH]: '⚒',
+  [BuildingType.GRAVEYARD]:  '🪦',
+  [BuildingType.MILL]:       '⚙',
+  [BuildingType.DOCK]:       '⚓',
+  [BuildingType.HOUSE]:      '🏠',
+  [BuildingType.BARN]:       '🌾',
+  [BuildingType.WATCHTOWER]: '🗼',
+  [BuildingType.APOTHECARY]: '⚗',
+  [BuildingType.STOREHOUSE]: '📦',
+  [BuildingType.STABLE]:     '🐎',
 };
 
 export const BUILDING_LABEL = {

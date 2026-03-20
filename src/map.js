@@ -86,7 +86,8 @@ function bfsPath(tiles, startCol, startRow, endCol, endRow, rand) {
       const nk = key(n.col, n.row);
       if (prev.has(nk)) continue;
       const tile = tiles.get(nk);
-      if (!tile || tile.type === TileType.RIVER) continue;
+      if (!tile) continue;
+      // Allow crossing rivers — they become BRIDGE tiles during road placement
       prev.set(nk, { col, row });
       queue.push(n);
     }
@@ -143,20 +144,22 @@ export function generateMap(seed = Date.now()) {
     [5, 6], // Mill <-> Dock
   ];
 
-  for (const target of roadTargets) {
-    const path = bfsPath(tiles, hub.col, hub.row, target.col, target.row, rand);
+  const placeRoad = path => {
     for (const { col, row } of path) {
       const t = tiles.get(hexKey(col, row));
-      if (t && t.type === TileType.GRASS) t.type = TileType.ROAD;
+      if (!t) continue;
+      if (t.type === TileType.GRASS)  t.type = TileType.ROAD;
+      else if (t.type === TileType.RIVER) t.type = TileType.BRIDGE;
+      // Leave BUILDING, ROAD, BRIDGE, FOREST tiles unchanged
     }
+  };
+
+  for (const target of roadTargets) {
+    placeRoad(bfsPath(tiles, hub.col, hub.row, target.col, target.row, rand));
   }
   for (const [i, j] of extraPairs) {
     const a = BUILDING_PLACEMENTS[i], b = BUILDING_PLACEMENTS[j];
-    const path = bfsPath(tiles, a.col, a.row, b.col, b.row, rand);
-    for (const { col, row } of path) {
-      const t = tiles.get(hexKey(col, row));
-      if (t && t.type === TileType.GRASS) t.type = TileType.ROAD;
-    }
+    placeRoad(bfsPath(tiles, a.col, a.row, b.col, b.row, rand));
   }
 
   // 5. Grow forest clusters from seeds

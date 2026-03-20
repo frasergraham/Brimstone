@@ -76,8 +76,9 @@ export function getValidActions(state, actor) {
   const moveTargets = getReachableHexes(state, actor, hasHorse ? 2 : 1);
   if (moveTargets.length) actions.push({ type: ActionType.MOVE, targets: moveTargets });
 
-  // Explore — available on any unexplored tile (terrain always yields ~95%)
-  if (!t.explored) {
+  // Explore — available on any unexplored tile (terrain always yields ~95%).
+  // Inn and Town Hall are pre-explored; everywhere else is fair game.
+  if (t && !t.explored) {
     actions.push({ type: ActionType.EXPLORE, targets: [{ col: actor.col, row: actor.row }] });
   }
 
