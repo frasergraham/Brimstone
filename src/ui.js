@@ -33,20 +33,22 @@ export class UIController {
       this.onRedraw();
     });
 
-    // Touch support — treat a tap as a click
+    // Touch support:
+    // - touchstart is passive so the parent wrapper can still scroll on swipes
+    // - touchend calls preventDefault() to block the browser's synthetic click
+    //   (avoids double-firing our own _onClick)
+    // - movement > 10 px is treated as a scroll, not a tap
     this.canvas.addEventListener('touchstart', e => {
-      e.preventDefault();  // prevent scroll & delayed mouse events
       const t = e.touches[0];
       this._touchStart = { clientX: t.clientX, clientY: t.clientY };
-    }, { passive: false });
+    });  // passive by default — allows parent to scroll
 
     this.canvas.addEventListener('touchend', e => {
-      e.preventDefault();
+      e.preventDefault();  // block synthetic click that follows touch
       if (!this._touchStart) return;
       const t = e.changedTouches[0];
       const dx = t.clientX - this._touchStart.clientX;
       const dy = t.clientY - this._touchStart.clientY;
-      // Only fire as tap if finger didn't drag (< 10px)
       if (Math.sqrt(dx * dx + dy * dy) < 10) {
         this._onClick({ clientX: t.clientX, clientY: t.clientY });
       }

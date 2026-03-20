@@ -32,7 +32,8 @@ html, body {
 
 /* Prevent tap highlight flash and double-tap zoom on interactive elements */
 button, canvas { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
-canvas { touch-action: none; }
+/* pan-x pan-y: browser handles scroll gestures; JS handles taps */
+canvas { touch-action: pan-x pan-y; }
 
 /* ── Setup screen ──────────────────────────────────────────────────────── */
 
@@ -349,7 +350,7 @@ canvas { touch-action: none; }
 @media (max-width: 700px) {
   html, body { overflow: hidden; font-size: 15px; }
 
-  /* Whole game screen stays at exactly one viewport height — no page scroll */
+  /* Whole game fits in one viewport — no page-level scroll */
   #game-screen { height: 100dvh; }
 
   /* Header: tighter */
@@ -358,33 +359,22 @@ canvas { touch-action: none; }
   #turn-info { flex-wrap: wrap; gap: 0.3rem 0.6rem; }
   .phase-hint { display: none; }
 
-  /* game-main fills the remaining height and stacks vertically */
-  #game-main {
-    flex-direction: column;
-    overflow: hidden;
-    min-height: 0;
-  }
+  /* Stack vertically; game-main fills remaining height */
+  #game-main { flex-direction: column; overflow: hidden; min-height: 0; }
 
-  /* Canvas: top 55% — shrinks to fit the phone width, keeps proportions.
-     _canvasPos() already divides by getBoundingClientRect().width so
-     CSS scaling is automatically compensated in coordinate math. */
+  /* Canvas pane: top 60% of game-main, scrollable so user can pan the map.
+     Canvas stays at native resolution — hexes remain large enough to tap.
+     JS touch handlers detect tap vs. swipe, so both work simultaneously. */
   #canvas-wrapper {
-    flex: 0 0 55%;
+    flex: 0 0 60%;
     width: 100%;
-    overflow: hidden;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0.2rem;
+    overflow: auto;
+    padding: 0;
+    align-items: flex-start;
+    justify-content: flex-start;
   }
 
-  #game-canvas {
-    max-width: 100%;
-    max-height: 100%;
-    height: auto;
-  }
-
-  /* Sidebar: bottom 45% — always visible, scrollable internally */
+  /* Sidebar: bottom 40% — always on screen, scrollable */
   #sidebar {
     flex: 1;
     min-height: 0;

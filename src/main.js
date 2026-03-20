@@ -3,6 +3,8 @@ import { GameState, Player } from './game.js';
 import { Renderer }          from './renderer.js';
 import { UIController }      from './ui.js';
 import { WitchAI }           from './ai.js';
+import { hexToPixel }        from './hex.js';
+import { PAD_X, PAD_Y }      from './renderer.js';
 
 let state, renderer, ui, ai;
 
@@ -21,6 +23,18 @@ function init(witchIsAI) {
   // Hide setup, show game
   document.getElementById('setup-screen').style.display = 'none';
   document.getElementById('game-screen').style.display  = 'flex';
+
+  // Scroll canvas wrapper to put the hero near the centre of the viewport
+  requestAnimationFrame(() => {
+    const wrapper = document.getElementById('canvas-wrapper');
+    if (!wrapper) return;
+    const hero = state.hero;
+    const { x, y } = hexToPixel(hero.col, hero.row);
+    const cx = x + PAD_X;
+    const cy = y + PAD_Y;
+    wrapper.scrollLeft = cx - wrapper.clientWidth  / 2;
+    wrapper.scrollTop  = cy - wrapper.clientHeight / 2;
+  });
 }
 
 function redraw() {
