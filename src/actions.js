@@ -76,8 +76,9 @@ export function getValidActions(state, actor) {
   const moveTargets = getReachableHexes(state, actor, hasHorse ? 2 : 1);
   if (moveTargets.length) actions.push({ type: ActionType.MOVE, targets: moveTargets });
 
-  // Explore
-  if (!t.explored) {
+  // Explore — only show when there is actually something to find here
+  const hasLoot = (t.type === TileType.BUILDING && t.building) || t.resource || t.hasSurvivor;
+  if (!t.explored && hasLoot) {
     actions.push({ type: ActionType.EXPLORE, targets: [{ col: actor.col, row: actor.row }] });
   }
 
