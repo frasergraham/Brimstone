@@ -275,7 +275,7 @@ export class Renderer {
       const corners = hexCorners(x, y, hs - 1);
 
       // Fade from centre outward: inner hexes slightly brighter
-      const alpha = 0.04 + (1 - normDist) * 0.06;
+      const alpha = 0.24 + (1 - normDist) * 0.06;
       ctx.beginPath();
       ctx.moveTo(corners[0].x, corners[0].y);
       for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
@@ -285,7 +285,7 @@ export class Renderer {
     }
 
     // Draw outline on boundary hexes
-    ctx.lineWidth = 1.2;
+    ctx.lineWidth = 3.2;
     for (const k of boundary) {
       const [col, row] = k.split(',').map(Number);
       const { x, y } = this._toCanvas(col, row);
