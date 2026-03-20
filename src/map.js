@@ -1,6 +1,6 @@
 // Procedural map generator for the Salem hex map
 import { MAP_COLS, MAP_ROWS, getNeighbors, hexKey } from './hex.js';
-import { Tile, TileType, BuildingType, ResourceType } from './tiles.js';
+import { Tile, TileType, BuildingType } from './tiles.js';
 
 // Fixed building positions (col, row) for a 13×11 grid
 const BUILDING_PLACEMENTS = [
@@ -178,48 +178,9 @@ export function generateMap(seed = Date.now()) {
     }
   }
 
-  // 6. Place a modest number of open-world resources (wood and metal mostly)
-  //    Buildings have their own loot rolled at explore time.
-  const openResourcePool = [
-    ...Array(4).fill(ResourceType.WOOD),
-    ...Array(3).fill(ResourceType.METAL),
-    ...Array(2).fill(ResourceType.HERBS),
-    ...Array(2).fill(ResourceType.FOOD),
-    ...Array(1).fill(ResourceType.SILVER),
-  ];
-  shuffleArray(openResourcePool, rand);
-
-  const candidateTiles = [...tiles.values()].filter(
-    t => (t.type === TileType.GRASS || t.type === TileType.FOREST) &&
-         !buildingAt(t.col, t.row)
-  );
-  shuffleArray(candidateTiles, rand);
-
-  for (let i = 0; i < openResourcePool.length && i < candidateTiles.length; i++) {
-    candidateTiles[i].resource = openResourcePool[i];
-  }
-
-  // 7. Place hidden survivors on unexplored grass/forest (6 survivors)
-  const survivorTiles = candidateTiles
-    .filter(t => !t.resource)
-    .slice(0, 6);
-  for (const t of survivorTiles) {
-    t.hasSurvivor = true;
-  }
-
   return tiles;
 }
 
-function buildingAt(col, row) {
-  return BUILDING_PLACEMENTS.some(b => b.col === col && b.row === row);
-}
-
-function shuffleArray(arr, rand = Math.random) {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(rand() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-}
 
 // Accessor helpers used by other modules
 export function getStartPosition(role) {

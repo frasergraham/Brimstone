@@ -1,4 +1,5 @@
 // Tile types, building types, resources, weapons, and their visual properties
+import { LOOT_CONFIG } from './loot.config.js';
 
 export const TileType = Object.freeze({
   GRASS:    'grass',
@@ -79,19 +80,19 @@ export const TILE_COLOR = {
 };
 
 export const BUILDING_COLOR = {
-  [BuildingType.TOWN_HALL]:  '#7a5c10',
-  [BuildingType.CHURCH]:     '#8a8a8a',
-  [BuildingType.INN]:        '#7a4a20',
-  [BuildingType.BLACKSMITH]: '#484848',
-  [BuildingType.GRAVEYARD]:  '#2c2c2c',
-  [BuildingType.MILL]:       '#6a5020',
-  [BuildingType.DOCK]:       '#1e4f6a',
-  [BuildingType.HOUSE]:      '#6a4a2c',
-  [BuildingType.BARN]:       '#7a5c30',
-  [BuildingType.WATCHTOWER]: '#5a5a6a',
-  [BuildingType.APOTHECARY]: '#4a6a3a',
-  [BuildingType.STOREHOUSE]: '#5a4a3a',
-  [BuildingType.STABLE]:     '#7a6040',
+  [BuildingType.TOWN_HALL]:  '#b89a18',  // civic gold
+  [BuildingType.CHURCH]:     '#b0b0c8',  // pale stone
+  [BuildingType.INN]:        '#c07840',  // warm amber
+  [BuildingType.BLACKSMITH]: '#787878',  // iron grey
+  [BuildingType.GRAVEYARD]:  '#606070',  // dark slate
+  [BuildingType.MILL]:       '#a87830',  // golden brown
+  [BuildingType.DOCK]:       '#2e7898',  // harbour blue
+  [BuildingType.HOUSE]:      '#a86848',  // brick red
+  [BuildingType.BARN]:       '#b88040',  // hay gold
+  [BuildingType.WATCHTOWER]: '#8888a8',  // tower grey-blue
+  [BuildingType.APOTHECARY]: '#6aaa58',  // herbal green
+  [BuildingType.STOREHOUSE]: '#9a8068',  // dusty brown
+  [BuildingType.STABLE]:     '#c09860',  // sandy tan
 };
 
 export const BUILDING_LABEL = {
@@ -120,95 +121,11 @@ export const RESOURCE_LABEL = {
   'horse':                  '🐴 Horse',
 };
 
-// Weighted loot tables per building type.
-// type: ResourceType | 'weapon:X' | 'survivor' | 'nothing'
-// Weights sum to 100; 'nothing' is intentionally rare.
-export const BUILDING_LOOT = {
-  [BuildingType.BLACKSMITH]: [
-    { type: 'weapon:sword',      weight: 22 },
-    { type: 'weapon:axe',        weight: 22 },
-    { type: 'weapon:shield',     weight: 18 },
-    { type: ResourceType.METAL,  weight: 23 },
-    { type: ResourceType.WOOD,   weight: 10 },
-    { type: 'nothing',           weight:  5 },
-  ],
-  [BuildingType.INN]: [
-    { type: ResourceType.FOOD,   weight: 35 },
-    { type: ResourceType.HERBS,  weight: 30 },
-    { type: 'survivor',          weight: 30 },
-    { type: 'nothing',           weight:  5 },
-  ],
-  [BuildingType.CHURCH]: [
-    { type: ResourceType.SCRIPTURE, weight: 35 },
-    { type: ResourceType.SILVER,    weight: 30 },
-    { type: 'weapon:staff',         weight: 30 },
-    { type: 'nothing',              weight:  5 },
-  ],
-  [BuildingType.MILL]: [
-    { type: ResourceType.WOOD,  weight: 50 },
-    { type: ResourceType.FOOD,  weight: 30 },
-    { type: 'survivor',         weight: 15 },
-    { type: 'nothing',          weight:  5 },
-  ],
-  [BuildingType.BARN]: [
-    { type: ResourceType.FOOD,  weight: 45 },
-    { type: ResourceType.WOOD,  weight: 25 },
-    { type: 'survivor',         weight: 25 },
-    { type: 'nothing',          weight:  5 },
-  ],
-  [BuildingType.APOTHECARY]: [
-    { type: ResourceType.HERBS,  weight: 60 },
-    { type: ResourceType.FOOD,   weight: 20 },
-    { type: ResourceType.SILVER, weight: 15 },
-    { type: 'nothing',           weight:  5 },
-  ],
-  [BuildingType.WATCHTOWER]: [
-    { type: 'weapon:bow',        weight: 38 },
-    { type: ResourceType.SILVER, weight: 32 },
-    { type: 'survivor',          weight: 25 },
-    { type: 'nothing',           weight:  5 },
-  ],
-  [BuildingType.STOREHOUSE]: [
-    { type: ResourceType.WOOD,   weight: 37 },
-    { type: ResourceType.METAL,  weight: 33 },
-    { type: ResourceType.FOOD,   weight: 25 },
-    { type: 'nothing',           weight:  5 },
-  ],
-  // Stable: primary find is a horse that doubles movement range
-  [BuildingType.STABLE]: [
-    { type: 'horse',             weight: 55 },
-    { type: ResourceType.FOOD,   weight: 25 },
-    { type: ResourceType.WOOD,   weight: 15 },
-    { type: 'nothing',           weight:  5 },
-  ],
-  [BuildingType.DOCK]: [
-    { type: ResourceType.WOOD,   weight: 35 },
-    { type: ResourceType.FOOD,   weight: 35 },
-    { type: 'survivor',          weight: 25 },
-    { type: 'nothing',           weight:  5 },
-  ],
-  [BuildingType.HOUSE]: [
-    { type: ResourceType.FOOD,   weight: 28 },
-    { type: ResourceType.HERBS,  weight: 22 },
-    { type: 'weapon:dagger',     weight: 18 },
-    { type: ResourceType.WOOD,   weight: 20 },
-    { type: 'survivor',          weight: 10 },
-    { type: 'nothing',           weight:  2 },
-  ],
-  [BuildingType.GRAVEYARD]: [
-    { type: ResourceType.SCRIPTURE, weight: 45 },
-    { type: ResourceType.HERBS,     weight: 30 },
-    { type: ResourceType.SILVER,    weight: 20 },
-    { type: 'nothing',              weight:  5 },
-  ],
-  [BuildingType.TOWN_HALL]: [
-    { type: ResourceType.SILVER, weight: 22 },
-    { type: ResourceType.WOOD,   weight: 27 },
-    { type: ResourceType.FOOD,   weight: 27 },
-    { type: 'survivor',          weight: 19 },
-    { type: 'nothing',           weight:  5 },
-  ],
-};
+// Loot tables — sourced from loot.config.js (edit that file to tune rates).
+// BUILDING_LOOT is keyed by BuildingType string (e.g. 'inn', 'blacksmith').
+// TERRAIN_LOOT  is keyed by TileType  string (e.g. 'grass', 'forest', 'road').
+export const BUILDING_LOOT = LOOT_CONFIG.buildings;
+export const TERRAIN_LOOT  = LOOT_CONFIG.terrain;
 
 // Roll a loot result from a weighted table using Math.random
 export function rollLoot(table) {

@@ -158,7 +158,11 @@ export class Renderer {
       color = TILE_COLOR[tile.type] || TILE_COLOR[TileType.GRASS];
     }
 
-    if (!tile.explored) color = blendHex(color, '#000000', 0.5);
+    // Darken unexplored terrain; buildings stay bright so the town is readable
+    if (!tile.explored) {
+      if (tile.type === TileType.BUILDING) color = blendHex(color, '#000000', 0.15);
+      else color = blendHex(color, '#000000', 0.5);
+    }
 
     // Phase tint — subtle, keeps colors recognizable
     if (phase === Phase.NIGHT) color = blendHex(color, '#1a1a3a', 0.15);
@@ -187,33 +191,13 @@ export class Renderer {
       ctx.stroke();
     }
 
-    // Building label
-    if (tile.type === TileType.BUILDING && tile.building && tile.explored) {
-      ctx.fillStyle    = '#e8dcc8cc';
-      ctx.font         = `bold 7px "Georgia", serif`;
+    // Building label — always visible so the player can see the town layout
+    if (tile.type === TileType.BUILDING && tile.building) {
+      ctx.fillStyle    = tile.explored ? '#fff8e8' : 'rgba(255,240,200,0.70)';
+      ctx.font         = `bold 8px "Georgia", serif`;
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(BUILDING_LABEL[tile.building] || tile.building, x, y + HEX_SIZE * 0.55);
-    }
-
-    // Resource dot (colored by type)
-    if (!tile.explored && tile.resource) {
-      ctx.fillStyle  = RESOURCE_DOT[tile.resource] || '#c8b450';
-      ctx.globalAlpha = 0.75;
-      ctx.beginPath();
-      ctx.arc(x, y, 5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.globalAlpha = 1;
-    }
-
-    // Survivor dot (green)
-    if (!tile.explored && tile.hasSurvivor) {
-      ctx.fillStyle  = '#4caf7d';
-      ctx.globalAlpha = 0.65;
-      ctx.beginPath();
-      ctx.arc(x, y, 5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.globalAlpha = 1;
     }
 
     // Explored marker — small dot in the top-right corner so the player
@@ -226,15 +210,16 @@ export class Renderer {
       ctx.fill();
     }
 
-    // Explored building: thin warm border (name label also shows, but border
-    // is visible even when an entity is standing on the hex)
-    if (tile.explored && tile.type === TileType.BUILDING) {
+    // Building border — always visible; brighter once explored
+    if (tile.type === TileType.BUILDING) {
       ctx.beginPath();
       ctx.moveTo(corners[0].x, corners[0].y);
       for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
       ctx.closePath();
-      ctx.strokeStyle = 'rgba(245,200,66,0.45)';
-      ctx.lineWidth   = 1.5;
+      ctx.strokeStyle = tile.explored
+        ? 'rgba(245,200,66,0.75)'
+        : 'rgba(245,200,66,0.35)';
+      ctx.lineWidth   = tile.explored ? 2 : 1.5;
       ctx.stroke();
     }
   }

@@ -1,6 +1,6 @@
 // Action system: definitions, validation, and execution
 import { getNeighbors, hexKey } from './hex.js';
-import { TileType, ResourceType, WEAPON_LABEL, BUILDING_LOOT, rollLoot } from './tiles.js';
+import { TileType, ResourceType, WEAPON_LABEL, BUILDING_LOOT, TERRAIN_LOOT, rollLoot } from './tiles.js';
 import {
   EntityType, SurvivorAbility, Entity,
   createZombie, createMinion, createSurvivor,
@@ -76,9 +76,8 @@ export function getValidActions(state, actor) {
   const moveTargets = getReachableHexes(state, actor, hasHorse ? 2 : 1);
   if (moveTargets.length) actions.push({ type: ActionType.MOVE, targets: moveTargets });
 
-  // Explore — only show when there is actually something to find here
-  const hasLoot = (t.type === TileType.BUILDING && t.building) || t.resource || t.hasSurvivor;
-  if (!t.explored && hasLoot) {
+  // Explore — available on any unexplored tile (terrain always yields ~95%)
+  if (!t.explored) {
     actions.push({ type: ActionType.EXPLORE, targets: [{ col: actor.col, row: actor.row }] });
   }
 
@@ -212,15 +211,11 @@ export function executeExplore(state, actor) {
   if (t.type === TileType.BUILDING && t.building && BUILDING_LOOT[t.building]) {
     const lootType = rollLoot(BUILDING_LOOT[t.building]);
     _applyLoot(state, actor, lootType, log);
-  } else if (t.hasSurvivor) {
-    t.hasSurvivor = false;
-    _applyLoot(state, actor, 'survivor', log);
-  } else if (t.resource) {
-    const res = t.resource;
-    t.resource = null;
-    _applyLoot(state, actor, res, log);
   } else {
-    log.push(`${actor.displayName} searches carefully… nothing useful found.`);
+    // Terrain: roll per-tile-type table from loot.config.js (falls back to grass)
+    const terrainTable = TERRAIN_LOOT[t.type] || TERRAIN_LOOT['grass'];
+    const lootType = rollLoot(terrainTable);
+    _applyLoot(state, actor, lootType, log);
   }
 
   if (isHerbalist && actor.owner === 'hero') {
