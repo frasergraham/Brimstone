@@ -100,7 +100,7 @@ export class GameState {
     if (this.activePlayer === Player.HERO) {
       this.activePlayer = Player.WITCH;
       this.actionsLeft  = computeActions(Player.WITCH, this.phase, this.entities);
-      if (!this.fogOfWar) this.addLog(`The witch stirs…`);
+      this.addLog(`The witch stirs… (${this.actionsLeft} actions)`);
     } else {
       // End of full round — advance round and check phase
       this.activePlayer = Player.HERO;
