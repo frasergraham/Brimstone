@@ -6,10 +6,12 @@ import { hexKey } from './hex.js';
 
 // Win reason strings (shown in game-over overlay)
 export const WIN_REASON = {
-  WITCH_SLAIN:    'The hero hunted down the witch and ended the curse!',
-  HERO_SLAIN:     'The hero fell in battle. Salem is lost to darkness.',
-  NODES_WITCH:    'The witch seized all three Power Nodes at dawn — the ritual is complete!',
-  NODES_HERO:     'The hero held all three Power Nodes at dawn — the witch\'s ritual is broken!',
+  WITCH_SLAIN:      'The hero hunted down the witch and ended the curse!',
+  HERO_SLAIN:       'The hero fell in battle. Salem is lost to darkness.',
+  NODES_WITCH:      'The witch seized all three Power Nodes at dawn — the ritual is complete!',
+  NODES_HERO:       'The hero held all three Power Nodes at dawn — the witch\'s ritual is broken!',
+  NODES_WITCH_DUSK: 'As dusk falls, the witch holds all three Power Nodes — the ritual advances!',
+  NODES_HERO_DUSK:  'As dusk falls, the hero holds all three Power Nodes — the witch\'s ritual is disrupted!',
 };
 
 // ── Phase cycle ─────────────────────────────────────────────────────────────
@@ -26,16 +28,16 @@ export const Phase = Object.freeze({
 export const Player = Object.freeze({ HERO: 'hero', WITCH: 'witch' });
 
 // Calculate actions for a player at the start of their turn.
-// Base: 3 (hero) / 4 (witch) + 1 for their favoured time of day
-// + 1 per additional living unit they control beyond their leader.
+// Base: 3 (both sides) + 1 for their favoured time of day
+// + 1 per additional living unit they control beyond their leader (capped at +2).
 function computeActions(player, phase, entities) {
   const isHero    = player === Player.HERO;
-  const base      = isHero ? 3 : 4;
+  const base      = 3;
   const timeBonus = (isHero && phase === Phase.DAY) || (!isHero && phase === Phase.NIGHT) ? 1 : 0;
   const owner     = isHero ? 'hero' : 'witch';
   const leaderType = isHero ? 'hero' : 'witch';
   const extras    = entities.filter(e => e.alive && e.owner === owner && e.type !== leaderType).length;
-  return base + timeBonus + extras;
+  return base + timeBonus + Math.min(extras, 2);
 }
 
 function phaseForRound(round) {
@@ -80,6 +82,7 @@ export class GameState {
     this.phase        = Phase.DAWN;
     this.activePlayer = Player.HERO;
     this.actionsLeft  = computeActions(Player.HERO, Phase.DAWN, []);
+    this.witchSummonsThisTurn = 0;
 
     this.log = [
       `🌅 Dawn breaks over Salem. The hero stirs at the Inn.`,
@@ -111,11 +114,20 @@ export class GameState {
     this.addLog(`${playerLabel} turn ends.`);
 
     if (this.activePlayer === Player.HERO) {
+      // Rest heal: hero recovers 1 HP when ending their turn inside a building
+      const heroTile = this.tiles.get(hexKey(this.hero.col, this.hero.row));
+      if (this.hero.alive && heroTile?.type === TileType.BUILDING && this.hero.hp < this.hero.maxHp) {
+        this.hero.heal(1);
+        this.addLog(`🏠 The hero rests in shelter. (+1 HP, now ${this.hero.hp}/${this.hero.maxHp})`);
+      }
+
       this.activePlayer = Player.WITCH;
       this.actionsLeft  = computeActions(Player.WITCH, this.phase, this.entities);
+      this.witchSummonsThisTurn = 0;
       this.addLog(`The witch stirs… (${this.actionsLeft} actions)`);
     } else {
       // End of full round — advance round and check phase
+      this.witchSummonsThisTurn = 0;
       this.activePlayer = Player.HERO;
       this.round++;
 
@@ -148,9 +160,12 @@ export class GameState {
         this._applyDayHazard();
       }
 
-      // Dawn: check if witch holds all objectives (only at dawn start)
+      // Dawn/Dusk: check if either side holds all Power Nodes
       if (this.phase === Phase.DAWN) {
-        this._checkDawnObjectives();
+        this._checkNodeObjectives(Phase.DAWN);
+      }
+      if (this.phase === Phase.DUSK) {
+        this._checkNodeObjectives(Phase.DUSK);
       }
     }
 
@@ -237,14 +252,17 @@ export class GameState {
     }
   }
 
-  _checkDawnObjectives() {
+  _checkNodeObjectives(phase) {
+    const isDawn = phase === Phase.DAWN;
     const witchHoldsAll = this.witchObjectives.every(obj =>
       this.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
     );
     if (witchHoldsAll) {
       this.winner    = 'witch';
-      this.winReason = WIN_REASON.NODES_WITCH;
-      this.addLog('🌙 As dawn breaks, the witch holds all three Power Nodes! Salem is lost…');
+      this.winReason = isDawn ? WIN_REASON.NODES_WITCH : WIN_REASON.NODES_WITCH_DUSK;
+      this.addLog(isDawn
+        ? '🌙 As dawn breaks, the witch holds all three Power Nodes! Salem is lost…'
+        : '🌙 As dusk falls, the witch holds all three Power Nodes! The ritual advances!');
       return;
     }
 
@@ -253,8 +271,10 @@ export class GameState {
     );
     if (heroHoldsAll) {
       this.winner    = 'hero';
-      this.winReason = WIN_REASON.NODES_HERO;
-      this.addLog('☀ At dawn, the hero holds all three Power Nodes! The witch\'s ritual is broken!');
+      this.winReason = isDawn ? WIN_REASON.NODES_HERO : WIN_REASON.NODES_HERO_DUSK;
+      this.addLog(isDawn
+        ? '☀ At dawn, the hero holds all three Power Nodes! The witch\'s ritual is broken!'
+        : '☀ As dusk falls, the hero holds all three Power Nodes! The ritual is disrupted!');
     }
   }
 

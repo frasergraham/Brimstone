@@ -352,7 +352,7 @@ export function executeBattle(state, actor, target) {
   const defTile        = tile(state, target.col, target.row);
   const fortBonus      = defTile?.fortifyLevel || 0;
 
-  const extraAtkBonus = attackerAllies > 0 ? 1 : 0;
+  const extraAtkBonus = attackerAllies >= 2 ? 1 : 0;
   const extraDefBonus = fortBonus + (defenderAllies > 0 ? 1 : 0);
 
   const { attackRoll, defenseRoll, hit, margin } =
@@ -361,7 +361,7 @@ export function executeBattle(state, actor, target) {
   const phaseNote  = phaseBonus > 0
     ? ` (${state.phase === Phase.DAY ? '☀ day bonus' : '🌙 night bonus'})`
     : '';
-  const gangNote   = attackerAllies > 0 ? ' [gang-up +1]' : '';
+  const gangNote   = attackerAllies >= 2 ? ' [gang-up +1]' : '';
   const allyDefNote = defenderAllies > 0 ? ' [allies +1]' : '';
 
   log.push(
@@ -454,6 +454,9 @@ export function executeFortify(state, actor) {
 }
 
 export function executeSummon(state, actor, targetCol, targetRow) {
+  if ((state.witchSummonsThisTurn || 0) >= 1) {
+    return { success: false, log: ['The witch can only summon once per turn.'] };
+  }
   const inv = state.inventory.witch;
   let summonedUnit, res, unitName;
 
@@ -474,6 +477,7 @@ export function executeSummon(state, actor, targetCol, targetRow) {
 
   inv[res]--;
   state.entities.push(summonedUnit);
+  state.witchSummonsThisTurn = (state.witchSummonsThisTurn || 0) + 1;
   return {
     success: true,
     log: [`The witch raises a ${unitName} from ${res}!`],
