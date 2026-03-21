@@ -86,11 +86,10 @@ export class GameState {
   }
 
   spendAction(cost = 1) {
-    if (this.bonusActions > 0) {
-      this.bonusActions = Math.max(0, this.bonusActions - cost);
-    } else {
-      this.actionsLeft = Math.max(0, this.actionsLeft - cost);
-    }
+    // Drain regular actions first; bonus actions are the true extras
+    const fromLeft = Math.min(cost, this.actionsLeft);
+    this.actionsLeft -= fromLeft;
+    this.bonusActions = Math.max(0, this.bonusActions - (cost - fromLeft));
   }
 
   endTurn() {
