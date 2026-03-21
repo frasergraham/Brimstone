@@ -70,18 +70,9 @@ function showGameOver() {
         ? 'The hero has vanquished the witch! Salem is saved!'
         : 'The witch has won. Darkness falls over Salem forever…');
 
-  if (_autoplay) {
-    // In autoplay mode: show result briefly in the header, then restart
-    document.getElementById('turn-info').textContent = `${banner} — restarting…`;
-    setTimeout(() => {
-      delete el.dataset.shown;
-      init(true, true, true);
-    }, 1500);
-  } else {
-    el.style.display = 'flex';
-    el.querySelector('.winner-text').innerHTML =
-      `<div class="winner-banner">${banner}</div><div class="winner-reason">${reason}</div>`;
-  }
+  el.style.display = 'flex';
+  el.querySelector('.winner-text').innerHTML =
+    `<div class="winner-banner">${banner}</div><div class="winner-reason">${reason}</div>`;
 }
 
 // ── Window resize ────────────────────────────────────────────────────────────
@@ -113,7 +104,12 @@ document.getElementById('btn-play-witch').addEventListener('click', () => init(f
 document.getElementById('btn-restart').addEventListener('click', () => {
   const el = document.getElementById('game-over');
   if (el) { el.style.display = 'none'; delete el.dataset.shown; }
-  showStep('mode');
-  document.getElementById('setup-screen').style.display = 'flex';
-  document.getElementById('game-screen').style.display  = 'none';
+  if (_autoplay) {
+    // Stay in autoplay — start the next game immediately
+    init(true, true, true);
+  } else {
+    showStep('mode');
+    document.getElementById('setup-screen').style.display = 'flex';
+    document.getElementById('game-screen').style.display  = 'none';
+  }
 });
