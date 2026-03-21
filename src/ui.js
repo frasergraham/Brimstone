@@ -103,7 +103,7 @@ export class UIController {
       this._validActions    = [];
       this.renderer.selectedHex    = { col: hex.col, row: hex.row };
       this.renderer.highlightHexes = [];
-      _hideActionPopup();
+      this._showActionPopup(null); // picker popup
     }
 
     this._updateSidebar();
@@ -201,20 +201,12 @@ export class UIController {
 
   _showActionPopup(entity) {
     const state = this.state;
-    if (!entity || entity.owner !== state.activePlayer || state.gameOver) {
-      _hideActionPopup();
-      return;
-    }
+    const popup = document.getElementById('action-popup');
 
-    const popup   = document.getElementById('action-popup');
-    const actions = getValidActions(state, entity);
-    const hasAct  = state.actionsAvailable > 0;
-
-    let html = `<div class="popup-unit-name">${entity.displayName}</div>`;
-
-    // Unit picker mode
+    // Unit picker mode — show before entity guard so it works even when
+    // no single entity is selected yet
     if (this._pendingUnitPick) {
-      html = `<div class="popup-unit-name">Choose a unit:</div>`;
+      let html = `<div class="popup-unit-name">Choose a unit:</div>`;
       for (const u of this._pendingUnitPick.units) {
         const col = ENTITY_COLOR[u.type] || '#888';
         html += `<button class="action-btn pick-unit" data-action="pick_unit" data-unit-id="${u.id}"
@@ -226,6 +218,16 @@ export class UIController {
       popup.style.display = 'block';
       return;
     }
+
+    if (!entity || entity.owner !== state.activePlayer || state.gameOver) {
+      _hideActionPopup();
+      return;
+    }
+
+    const actions = getValidActions(state, entity);
+    const hasAct  = state.actionsAvailable > 0;
+
+    let html = `<div class="popup-unit-name">${entity.displayName}</div>`;
 
     for (const action of actions) {
       const dis = !hasAct ? 'disabled' : '';
@@ -364,20 +366,6 @@ export class UIController {
     const noActs   = state.actionsAvailable === 0;
     const endClass = noActs ? 'end-turn urgent' : 'end-turn';
     const endLabel = noActs ? 'End Turn ◀' : 'End Turn';
-
-    // Unit picker in sidebar (fallback for when popup isn't usable)
-    if (this._pendingUnitPick) {
-      let html = `<div class="action-title">Choose a unit:</div>`;
-      for (const u of this._pendingUnitPick.units) {
-        const col = ENTITY_COLOR[u.type] || '#888';
-        html += `<button class="action-btn pick-unit" data-action="pick_unit" data-unit-id="${u.id}"
-          style="border-left:3px solid ${col}">${u.displayName} — HP ${u.hp}/${u.maxHp}</button>`;
-      }
-      html += btn(endLabel, endClass, state.gameOver ? 'disabled' : '', `data-action="end_turn"`);
-      el.innerHTML = html;
-      el.querySelectorAll('button[data-action]').forEach(b => b.addEventListener('click', () => this._handleActionButton(b)));
-      return;
-    }
 
     let hint = '';
     if (this._awaitingTarget) {
@@ -784,11 +772,28 @@ function _positionPopup(popup, ui) {
   const scale       = canvasRect.width / ui.canvas.width;
   const screenX     = canvasRect.left + x * scale;
   const screenY     = canvasRect.top  + y * scale;
+  const hs          = ui.renderer.hexSize * scale;
 
   const POPUP_W = 210;
-  const clampedLeft = Math.max(8, Math.min(screenX - POPUP_W / 2, window.innerWidth - POPUP_W - 8));
-  popup.style.left = clampedLeft + 'px';
-  popup.style.top  = screenY + 'px';
+  const GAP     = 12;
+
+  // Horizontal: clamp within viewport
+  const left = Math.max(8, Math.min(screenX - POPUP_W / 2, window.innerWidth - POPUP_W - 8));
+  popup.style.left = left + 'px';
+
+  // Vertical: prefer above the unit, but flip below if near the top of the screen
+  const anchorY    = screenY - hs * 0.55;  // approximate top edge of the hex
+  const showBelow  = anchorY < 150;         // not enough room above
+
+  if (showBelow) {
+    popup.classList.add('flipped');
+    popup.style.top       = (screenY + hs * 0.55 + GAP) + 'px';
+    popup.style.transform = 'translateX(-50%)';
+  } else {
+    popup.classList.remove('flipped');
+    popup.style.top       = (anchorY - GAP) + 'px';
+    popup.style.transform = 'translateX(-50%) translateY(-100%)';
+  }
 }
 
 function _attachPopupListeners(popup, ui) {

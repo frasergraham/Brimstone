@@ -330,20 +330,29 @@ canvas { touch-action: pan-x pan-y; }
   border-radius: 6px;
   padding: 0.4rem 0.5rem 0.5rem;
   box-shadow: 0 6px 24px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.04);
-  /* anchor point is the hex centre; CSS lifts it above via transform */
-  transform: translateX(-50%) translateY(calc(-100% - 14px));
+  /* transform is set entirely from JS (above or below the unit) */
 }
 
-/* downward caret / arrow */
+/* downward caret (normal: popup is above the unit) */
 #action-popup::after {
   content: '';
   position: absolute;
   bottom: -7px;
+  top: auto;
   left: 50%;
   transform: translateX(-50%);
   border: 7px solid transparent;
   border-bottom: none;
   border-top-color: #3a2d58;
+}
+
+/* upward caret (flipped: popup is below the unit) */
+#action-popup.flipped::after {
+  top: -7px;
+  bottom: auto;
+  border-top: none;
+  border-bottom: 7px solid #3a2d58;
+  border-top-color: transparent;
 }
 
 .popup-unit-name {
