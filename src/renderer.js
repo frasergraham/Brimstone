@@ -40,7 +40,15 @@ export class Renderer {
     this._panX     = 0;
     this._panY     = 0;
 
+    // Damage flash overlays: [{col, row, text, color, endTime}]
+    this._flashes = [];
+
     this._resize();
+  }
+
+  // Add a brief flash overlay on a hex (e.g. damage numbers)
+  addFlash(col, row, text, color = 'rgba(220,40,40,0.7)', durationMs = 1800) {
+    this._flashes.push({ col, row, text, color, startTime: Date.now(), endTime: Date.now() + durationMs });
   }
 
   _resize() {
@@ -191,7 +199,42 @@ export class Renderer {
       this._drawEntityStack(entity.col, entity.row, stack);
     }
 
+    // Damage flash overlays (night/day hazard animations)
+    this._drawFlashes();
+
     ctx.restore(); // end zoom/pan transform
+  }
+
+  _drawFlashes() {
+    const ctx = this.ctx;
+    const hs  = this.hexSize;
+    const now = Date.now();
+    this._flashes = this._flashes.filter(f => now < f.endTime);
+
+    for (const f of this._flashes) {
+      const total = f.endTime - f.startTime;
+      const remaining = f.endTime - now;
+      const t = remaining / total; // 1.0 = just started, 0.0 = expired
+
+      const { x, y } = this._toCanvas(f.col, f.row);
+      const corners   = hexCorners(x, y, hs - 1);
+
+      // Red hex overlay (fades out)
+      ctx.beginPath();
+      ctx.moveTo(corners[0].x, corners[0].y);
+      for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
+      ctx.closePath();
+      ctx.fillStyle = f.color.replace(/[\d.]+\)$/, `${(t * 0.55).toFixed(2)})`);
+      ctx.fill();
+
+      // Floating damage text (rises upward as it fades)
+      const rise = (1 - t) * hs * 1.2;
+      ctx.fillStyle = `rgba(255,80,80,${t.toFixed(2)})`;
+      ctx.font      = `bold ${Math.floor(hs * 0.85)}px sans-serif`;
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(f.text, x, y - rise);
+    }
   }
 
   _drawTile(col, row) {
@@ -238,15 +281,27 @@ export class Renderer {
       return;
     }
 
-    // ── Fortification shimmer ─────────────────────────────────────────────
+    // ── Fortification outline (thickness scales with fortifyLevel) ────────
     if (tile.fortifyLevel > 0) {
+      const isMetal = tile.fortifyLevel >= 3;
+      // Outer glow (thick, semi-transparent)
       ctx.beginPath();
       ctx.moveTo(corners[0].x, corners[0].y);
       for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
       ctx.closePath();
-      const isMetal = tile.fortifyLevel >= 3;
-      ctx.strokeStyle = isMetal ? `rgba(0,229,255,${0.4 + tile.fortifyLevel * 0.1})` : `rgba(245,200,66,${0.3 + tile.fortifyLevel * 0.1})`;
-      ctx.lineWidth   = 1 + tile.fortifyLevel * 0.5;
+      ctx.strokeStyle = isMetal
+        ? `rgba(0,229,255,${0.25 + tile.fortifyLevel * 0.08})`
+        : `rgba(245,200,66,${0.2 + tile.fortifyLevel * 0.08})`;
+      ctx.lineWidth = 2 + tile.fortifyLevel * 2.5; // level 1: 4.5, level 4: 12
+      ctx.stroke();
+      // Inner crisp line
+      ctx.beginPath();
+      const inner = hexCorners(x, y, hs - 2 - tile.fortifyLevel);
+      ctx.moveTo(inner[0].x, inner[0].y);
+      for (let i = 1; i < 6; i++) ctx.lineTo(inner[i].x, inner[i].y);
+      ctx.closePath();
+      ctx.strokeStyle = isMetal ? `rgba(120,240,255,0.9)` : `rgba(255,215,80,0.9)`;
+      ctx.lineWidth   = 1.5;
       ctx.stroke();
     }
 

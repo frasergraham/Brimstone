@@ -327,43 +327,53 @@ export class UIController {
 
     } else if (actionType === ActionType.BATTLE) {
       const battleAction = this._validActions.find(a => a.type === ActionType.BATTLE);
-      const target = battleAction?.targets.find(t => t.col === hex.col && t.row === hex.row);
-      if (!target) return;
+      // All valid targets on the clicked hex
+      const targetsAtHex = battleAction?.targets.filter(t => t.col === hex.col && t.row === hex.row) || [];
+      if (!targetsAtHex.length) return;
 
       this._awaitingTarget = null;
       this.renderer.highlightHexes = [];
 
-      const afterBattle = () => {
-        state.checkVictory();
-        if (actor.alive) { this._selectEntity(actor); }
-        else this._clearSelection();
-        this._updateSidebar();
-        this.onRedraw();
-        this._maybeShowNoActionsDialog();
+      const executeFight = (target) => {
+        const afterBattle = () => {
+          state.checkVictory();
+          if (actor.alive) { this._selectEntity(actor); }
+          else this._clearSelection();
+          this._updateSidebar();
+          this.onRedraw();
+          this._maybeShowNoActionsDialog();
+        };
+
+        const doRematch = () => {
+          if (!actor.alive || !target.alive || state.actionsAvailable === 0) {
+            afterBattle();
+            return;
+          }
+          const snap1 = _snapEntity(actor);
+          const snap2 = _snapEntity(target);
+          const r2 = executeBattle(state, actor, target);
+          for (const msg of r2.log) state.addLog(msg);
+          if (r2.success) state.spendAction(r2.cost);
+          const canRematchAgain = !r2.killed && actor.alive && target.alive;
+          this._showBattleDialog(snap1, snap2, r2, afterBattle, canRematchAgain ? doRematch : null);
+        };
+
+        const actorSnap  = _snapEntity(actor);
+        const targetSnap = _snapEntity(target);
+        const result = executeBattle(state, actor, target);
+        for (const msg of result.log) state.addLog(msg);
+        if (result.success) state.spendAction(result.cost);
+
+        const canRematch = !result.killed && actor.alive && target.alive;
+        this._showBattleDialog(actorSnap, targetSnap, result, afterBattle, canRematch ? doRematch : null);
       };
 
-      const doRematch = () => {
-        if (!actor.alive || !target.alive || state.actionsAvailable === 0) {
-          afterBattle();
-          return;
-        }
-        const snap1 = _snapEntity(actor);
-        const snap2 = _snapEntity(target);
-        const r2 = executeBattle(state, actor, target);
-        for (const msg of r2.log) state.addLog(msg);
-        if (r2.success) state.spendAction(r2.cost);
-        const canRematchAgain = !r2.killed && actor.alive && target.alive;
-        this._showBattleDialog(snap1, snap2, r2, afterBattle, canRematchAgain ? doRematch : null);
-      };
-
-      const actorSnap  = _snapEntity(actor);
-      const targetSnap = _snapEntity(target);
-      const result = executeBattle(state, actor, target);
-      for (const msg of result.log) state.addLog(msg);
-      if (result.success) state.spendAction(result.cost);
-
-      const canRematch = !result.killed && actor.alive && target.alive;
-      this._showBattleDialog(actorSnap, targetSnap, result, afterBattle, canRematch ? doRematch : null);
+      // If multiple defenders on the hex, show a picker dialog
+      if (targetsAtHex.length > 1) {
+        this._showDefenderPickerDialog(targetsAtHex, executeFight);
+      } else {
+        executeFight(targetsAtHex[0]);
+      }
 
     } else if (actionType === ActionType.SUMMON) {
       const result = executeSummon(state, actor, hex.col, hex.row);
@@ -505,10 +515,10 @@ export class UIController {
                    (state.activePlayer === Player.HERO  && state.heroIsAI);
 
     const phaseDesc = {
-      [Phase.DAWN]:  'No bonuses — find shelter',
-      [Phase.DAY]:   'Hero +1 ATK in combat',
+      [Phase.DAWN]:  'No bonuses — transition phase',
+      [Phase.DAY]:   'Hero +1 ATK · Witch minions in the open suffer',
       [Phase.DUSK]:  'No bonuses — seek cover',
-      [Phase.NIGHT]: 'Witch +1 ATK · Heroes in the open suffer',
+      [Phase.NIGHT]: 'Witch +1 ATK · Survivors in the open suffer',
     };
 
     const diamonds = state.actionsLeft > 0
@@ -590,6 +600,7 @@ export class UIController {
     if (action === 'end_turn') {
       this._clearSelection();
       state.endTurn();
+      this._triggerHazardFlashes();
       this._updateSidebar();
       this.onRedraw();
       this._maybeRunAI();
@@ -710,6 +721,30 @@ export class UIController {
     }
   }
 
+  // ── Hazard flash animations ───────────────────────────────────────────────
+
+  _triggerHazardFlashes() {
+    const state = this.state;
+    const nightPositions = state.lastNightDamage || [];
+    const dayPositions   = state.lastDayDamage   || [];
+    if (!nightPositions.length && !dayPositions.length) return;
+
+    for (const pos of nightPositions) {
+      this.renderer.addFlash(pos.col, pos.row, '-1', 'rgba(80,0,160,0.8)', 2000);
+    }
+    for (const pos of dayPositions) {
+      this.renderer.addFlash(pos.col, pos.row, '-1', 'rgba(255,180,0,0.8)', 2000);
+    }
+
+    // Animate for 2 seconds
+    const endTime = Date.now() + 2200;
+    const loop = () => {
+      this.onRedraw();
+      if (Date.now() < endTime) requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+  }
+
   // ── Dialogs ───────────────────────────────────────────────────────────────
 
   _showResultDialog(messages, onDismiss) {
@@ -787,6 +822,7 @@ export class UIController {
       btns.innerHTML = '';
       this._clearSelection();
       state.endTurn();
+      this._triggerHazardFlashes();
       this._updateSidebar();
       this.onRedraw();
       this._maybeRunAI();
@@ -795,6 +831,35 @@ export class UIController {
 
     dialog.style.display = 'flex';
     // No click-to-dismiss on the backdrop for this dialog
+  }
+
+  _showDefenderPickerDialog(defenders, onPick) {
+    const dialog = document.getElementById('result-dialog');
+    const hint   = document.getElementById('result-dismiss-hint');
+    const btns   = document.getElementById('result-buttons');
+
+    document.getElementById('result-messages').textContent = 'Multiple enemies here — choose your target:';
+    hint.style.display = 'none';
+    btns.style.display = 'flex';
+    btns.innerHTML = '';
+
+    for (const def of defenders) {
+      const btn = document.createElement('button');
+      const col  = ENTITY_COLOR[def.type] || '#888';
+      btn.style.borderLeft = `3px solid ${col}`;
+      btn.textContent = `${def.displayName}  HP ${def.hp}/${def.maxHp}`;
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        dialog.style.display = 'none';
+        hint.style.display = '';
+        btns.style.display = 'none';
+        btns.innerHTML = '';
+        onPick(def);
+      });
+      btns.appendChild(btn);
+    }
+
+    dialog.style.display = 'flex';
   }
 
   _showBattleDialog(actorSnap, targetSnap, result, onDismiss, onRematch = null) {
@@ -833,12 +898,27 @@ export class UIController {
         atkDie.className = 'die-display' + (result.hit ? ' atk-win' : '');
         defDie.className = 'die-display' + (!result.hit ? ' def-win' : '');
 
+        // Build outcome text accounting for fort absorption, multi-damage, counter
         if (result.killed) {
           outcome.textContent = `💀 ${targetSnap.name} is slain!`;
           outcome.className   = 'battle-outcome kill';
         } else if (result.hit) {
-          outcome.textContent = `💥 Hit! ${targetSnap.name} takes 1 damage`;
-          outcome.className   = 'battle-outcome hit';
+          if (result.fortAbsorbed > 0 && result.damage === 0) {
+            outcome.textContent = `🏰 Fortifications absorb the blow!`;
+            outcome.className   = 'battle-outcome miss';
+          } else if (result.damage >= 2) {
+            outcome.textContent = `💥💥 Crushing hit! ${targetSnap.name} takes ${result.damage} damage!`;
+            outcome.className   = 'battle-outcome kill';
+          } else if (result.fortAbsorbed > 0) {
+            outcome.textContent = `🏰 Fort weakened! ${targetSnap.name} takes ${result.damage} damage`;
+            outcome.className   = 'battle-outcome hit';
+          } else {
+            outcome.textContent = `💥 Hit! ${targetSnap.name} takes 1 damage`;
+            outcome.className   = 'battle-outcome hit';
+          }
+        } else if (result.counterDmg > 0) {
+          outcome.textContent = `⚔ Counter! ${actorSnap.name} takes 1 damage!`;
+          outcome.className   = 'battle-outcome kill';
         } else {
           outcome.textContent = `🛡 ${targetSnap.name} defends!`;
           outcome.className   = 'battle-outcome miss';
@@ -847,8 +927,28 @@ export class UIController {
         // Update defender HP bar to reflect post-battle state
         const fill = dialog.querySelector('.combatant-panel:last-of-type .combatant-hp-fill');
         if (fill) {
-          const newHp = result.killed ? 0 : targetSnap.hp - 1;
+          const newHp = result.killed ? 0 : Math.max(0, targetSnap.hp - (result.damage || 0));
           fill.style.width = `${Math.max(0, (newHp / targetSnap.maxHp) * 100)}%`;
+        }
+
+        // Update attacker HP bar if counter-attacked
+        if (result.counterDmg > 0) {
+          const atkFill = dialog.querySelector('.combatant-panel:first-of-type .combatant-hp-fill');
+          if (atkFill) {
+            const newHp = Math.max(0, actorSnap.hp - result.counterDmg);
+            atkFill.style.width = `${Math.max(0, (newHp / actorSnap.maxHp) * 100)}%`;
+          }
+        }
+
+        // Gang-up indicator
+        if ((result.attackerAllies || 0) > 0 || (result.defenderAllies || 0) > 0) {
+          const noteEl = document.createElement('div');
+          noteEl.className = 'battle-gang-note';
+          const parts = [];
+          if (result.attackerAllies > 0) parts.push(`Attacker has ${result.attackerAllies} ally (+1 ATK)`);
+          if (result.defenderAllies  > 0) parts.push(`Defender has ${result.defenderAllies} ally (+1 DEF)`);
+          noteEl.textContent = parts.join(' · ');
+          outcome.after(noteEl);
         }
 
         // Actions remaining indicator

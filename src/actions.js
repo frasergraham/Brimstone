@@ -317,41 +317,109 @@ function _applyLoot(state, actor, lootType, log) {
   }
 }
 
+// Count how many allies (same owner, excluding self) are on the same or adjacent hexes
+function allyCount(state, entity) {
+  const neighbors = getNeighbors(entity.col, entity.row);
+  const friendlyHexes = new Set([hexKey(entity.col, entity.row)]);
+  for (const n of neighbors) friendlyHexes.add(hexKey(n.col, n.row));
+  return state.entities.filter(e =>
+    e.alive && e.id !== entity.id && e.owner === entity.owner &&
+    friendlyHexes.has(hexKey(e.col, e.row))
+  ).length;
+}
+
 export function executeBattle(state, actor, target) {
   const log = [];
 
+  // Phase bonus
   let phaseBonus = 0;
   if (state.phase === Phase.DAY   && actor.owner === 'hero')  phaseBonus = 1;
   if (state.phase === Phase.NIGHT && actor.owner === 'witch') phaseBonus = 1;
 
-  const { attackRoll, defenseRoll, hit } = Entity.resolveCombat(actor, target, phaseBonus);
+  // Gang-up bonus: +1 ATK if attacker has any allies nearby
+  const attackerAllies = allyCount(state, actor);
+  if (attackerAllies > 0) actor.attackBonus += 1;
 
+  // Fortification defense bonus for defender
   const defTile = tile(state, target.col, target.row);
   if (defTile?.fortifyLevel) target.defenseBonus += defTile.fortifyLevel;
 
-  const phaseNote = phaseBonus > 0
+  // Defender gang-up bonus: +1 DEF if defender has any allies nearby
+  const defenderAllies = allyCount(state, target);
+  if (defenderAllies > 0) target.defenseBonus += 1;
+
+  const { attackRoll, defenseRoll, hit, margin } = Entity.resolveCombat(actor, target, phaseBonus);
+
+  // Clean up temporary bonuses added above (they're baked into the roll)
+  if (attackerAllies > 0) actor.attackBonus  -= 1;
+  if (defenderAllies > 0) target.defenseBonus -= 1;
+  if (defTile?.fortifyLevel) target.defenseBonus -= defTile.fortifyLevel;
+
+  const phaseNote  = phaseBonus > 0
     ? ` (${state.phase === Phase.DAY ? '☀ day bonus' : '🌙 night bonus'})`
     : '';
+  const gangNote   = attackerAllies > 0 ? ' [gang-up +1]' : '';
+  const allyDefNote = defenderAllies > 0 ? ' [allies +1]' : '';
 
   log.push(
     `${actor.displayName} attacks ${target.displayName}! ` +
-    `[${attackRoll} vs ${defenseRoll}]${phaseNote}`
+    `[${attackRoll}${gangNote} vs ${defenseRoll}${allyDefNote}]${phaseNote}`
   );
 
-  let killed = false;
+  let killed     = false;
+  let damage     = 0;          // damage dealt to target
+  let counterDmg = 0;          // damage dealt to attacker (counter)
+  let fortAbsorbed = 0;        // how many fortify levels were consumed
+
   if (hit) {
-    killed = target.takeDamage(1);
+    // Great roll (margin >= 4) deals 2 damage instead of 1
+    const totalDmg = margin >= 4 ? 2 : 1;
+
+    for (let d = 0; d < totalDmg; d++) {
+      if (defTile && defTile.fortifyLevel > 0) {
+        // Fortification absorbs this point of damage
+        defTile.fortifyLevel -= 1;
+        fortAbsorbed += 1;
+        log.push(`🏰 The fortifications take the blow! (now +${defTile.fortifyLevel} DEF)`);
+      } else {
+        // Damage goes to the entity
+        damage += 1;
+        const wasKilled = target.takeDamage(1);
+        if (wasKilled) { killed = true; break; }
+      }
+    }
+
     if (killed) {
       log.push(`${target.displayName} is slain!`);
       state.entities = state.entities.filter(e => e.id !== target.id);
-    } else {
-      log.push(`${target.displayName} takes 1 damage. (${target.hp}/${target.maxHp} HP)`);
+    } else if (damage > 0) {
+      const label = damage >= 2 ? `${damage} damage (crushing blow!)` : `${damage} damage`;
+      log.push(`${target.displayName} takes ${label}. (${target.hp}/${target.maxHp} HP)`);
     }
+    if (margin >= 4) log.push(`💥 Crushing blow! (margin +${margin})`);
   } else {
     log.push(`${target.displayName} defends successfully.`);
+
+    // Great defense (margin <= -4): defender counter-attacks the attacker
+    if (margin <= -4 && actor.alive) {
+      const counterKilled = actor.takeDamage(1);
+      counterDmg = 1;
+      log.push(`⚔ ${target.displayName} counter-attacks! ${actor.displayName} takes 1 damage.`);
+      if (counterKilled) {
+        log.push(`${actor.displayName} is slain by the counter!`);
+        state.entities = state.entities.filter(e => e.id !== actor.id);
+      } else {
+        log.push(`${actor.displayName} is at ${actor.hp}/${actor.maxHp} HP.`);
+      }
+    }
   }
 
-  return { success: true, log, cost: 1, attackRoll, defenseRoll, hit, killed };
+  return {
+    success: true, log, cost: 1,
+    attackRoll, defenseRoll, hit, killed,
+    margin, damage, counterDmg, fortAbsorbed,
+    attackerAllies, defenderAllies,
+  };
 }
 
 export function executeFortify(state, actor) {

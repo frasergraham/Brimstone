@@ -58,10 +58,17 @@ function showGameOver() {
   if (!el || el.dataset.shown) return;
   el.dataset.shown = '1';
   el.style.display = 'flex';
-  el.querySelector('.winner-text').textContent =
-    state.winner === 'hero'
-      ? '☀ The Hero has vanquished the witch! Salem is saved!'
-      : '🌙 The witch has won. Darkness falls over Salem forever…';
+
+  const banner = state.winner === 'hero'
+    ? '☀ The Hero Triumphs!'
+    : '🌙 The Witch Prevails!';
+  const reason = state.winReason
+    || (state.winner === 'hero'
+        ? 'The hero has vanquished the witch! Salem is saved!'
+        : 'The witch has won. Darkness falls over Salem forever…');
+
+  el.querySelector('.winner-text').innerHTML =
+    `<div class="winner-banner">${banner}</div><div class="winner-reason">${reason}</div>`;
 }
 
 // ── Window resize ────────────────────────────────────────────────────────────

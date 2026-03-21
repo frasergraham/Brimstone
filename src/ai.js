@@ -1,4 +1,5 @@
 // AI controllers — WitchAI and HeroAI
+// Both use a weight-based priority system that shifts based on the day/night phase.
 import { getNeighbors, hexDistance, hexKey } from './hex.js';
 import { TileType, ResourceType } from './tiles.js';
 import { EntityType } from './entities.js';
@@ -29,18 +30,77 @@ function fogLog(state) {
 
 function logResult(state, result) {
   if (state.fogOfWar) {
-    // Only log fog message for meaningful actions (not failed ones)
     if (result.success) fogLog(state);
   } else {
     for (const msg of result.log) state.addLog(msg);
   }
 }
 
+// ── Shared helpers ────────────────────────────────────────────────────────────
+
+function _snapEntity(e) {
+  return { id: e.id, name: e.displayName, hp: e.hp, maxHp: e.maxHp, attack: e.attack, defense: e.defense, type: e.type };
+}
+
+function _unoccupiedObjective(state, actor, owner = 'witch') {
+  const unclaimed = state.witchObjectives.filter(obj =>
+    !state.entities.some(e => e.alive && e.owner === owner && e.col === obj.col && e.row === obj.row)
+  );
+  if (!unclaimed.length) return null;
+  unclaimed.sort((a, b) =>
+    hexDistance(actor.col, actor.row, a.col, a.row) -
+    hexDistance(actor.col, actor.row, b.col, b.row)
+  );
+  return unclaimed[0];
+}
+
+function stepToward(state, actor, target) {
+  if (!target) return null;
+  const visited = new Set([hexKey(actor.col, actor.row)]);
+  const queue   = [{ col: actor.col, row: actor.row, first: null }];
+
+  while (queue.length) {
+    const { col, row, first } = queue.shift();
+    if (col === target.col && row === target.row) return first;
+
+    for (const n of getNeighbors(col, row)) {
+      const k = hexKey(n.col, n.row);
+      if (visited.has(k)) continue;
+      const t = state.tiles.get(k);
+      if (!t || t.type === TileType.RIVER) continue;
+      visited.add(k);
+      queue.push({ col: n.col, row: n.row, first: first || n });
+    }
+  }
+  return null;
+}
+
+function nearestBuilding(state, actor) {
+  let best = null, bestDist = Infinity;
+  for (const [, t] of state.tiles) {
+    if (t.type !== TileType.BUILDING) continue;
+    const d = hexDistance(actor.col, actor.row, t.col, t.row);
+    if (d < bestDist) { bestDist = d; best = t; }
+  }
+  return best;
+}
+
+function inBuilding(state, entity) {
+  const t = state.tiles.get(hexKey(entity.col, entity.row));
+  return t && t.type === TileType.BUILDING;
+}
+
+// ── WitchAI ───────────────────────────────────────────────────────────────────
+// Strategy shifts with the day/night cycle:
+//   DAWN/DAY : Seek buildings to shelter minions; amass army; stealth toward nodes
+//   DUSK     : Begin mobilising; move toward nodes stealthily
+//   NIGHT    : Strike hard — hunt hero units; seize nodes; summon more troops
+
 export class WitchAI {
   constructor(state, onStateChange) {
     this.state         = state;
     this.onStateChange = onStateChange;
-    this.onBattleResult = null; // set by UI: async (actorSnap, targetSnap, result) => void
+    this.onBattleResult = null;
     this._running      = false;
   }
 
@@ -76,37 +136,112 @@ export class WitchAI {
 
   async _chooseAction() {
     const state = this.state;
+    const phase = state.phase;
     const witch = state.witch;
+    const isDay   = phase === Phase.DAY  || phase === Phase.DAWN;
+    const isNight = phase === Phase.NIGHT || phase === Phase.DUSK;
 
-    // 1. Fight any hero unit co-located
-    const colocatedEnemy = state.entities.find(
-      e => e.alive && e.owner === 'hero' && e.col === witch.col && e.row === witch.row
-    );
-    if (colocatedEnemy) {
-      return this._executeBattleWithUI(witch, colocatedEnemy);
-    }
-
-    // 2. Summon if resources available and army is small
-    const inv = state.inventory.witch;
-    const totalRes = Object.values(inv).reduce((s, v) => s + v, 0);
-    const witchMinions = state.entities.filter(
+    const minions = state.entities.filter(
       e => e.alive && e.owner === 'witch' && e.type !== EntityType.WITCH
     );
-    if (totalRes > 0 && witchMinions.length < 4) {
-      const spawnAdj = getNeighbors(witch.col, witch.row).find(n => {
-        const t = state.tiles.get(hexKey(n.col, n.row));
-        return t && t.type !== TileType.RIVER &&
-          state.entities.filter(e => e.alive && e.col === n.col && e.row === n.row).length === 0;
-      });
-      if (spawnAdj) {
-        const result = executeSummon(state, witch, spawnAdj.col, spawnAdj.row);
+
+    // ── NIGHT STRATEGY ─────────────────────────────────────────────────────
+    // Priority: attack, seize objectives, summon reinforcements
+    if (isNight) {
+      // 1. Witch fights any co-located hero unit
+      const witchColocated = state.entities.find(
+        e => e.alive && e.owner === 'hero' && e.col === witch.col && e.row === witch.row
+      );
+      if (witchColocated) return this._executeBattleWithUI(witch, witchColocated);
+
+      // 2. Fight adjacent hero units if witch is strong or it's a good fight
+      const adjHero = state.entities.find(
+        e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1
+      );
+      if (adjHero) return this._executeBattleWithUI(witch, adjHero);
+
+      // 3. Each minion attacks if it can
+      for (const m of minions) {
+        const colocated = state.entities.find(
+          e => e.alive && e.owner === 'hero' && e.col === m.col && e.row === m.row
+        );
+        if (colocated) return this._executeBattleWithUI(m, colocated);
+
+        const adjEnemy = state.entities.find(
+          e => e.alive && e.owner === 'hero' && hexDistance(m.col, m.row, e.col, e.row) === 1
+        );
+        if (adjEnemy) return this._executeBattleWithUI(m, adjEnemy);
+      }
+
+      // 4. Summon more troops if resources available and army is small
+      if (await this._trySummon(witch, minions.length)) return true;
+
+      // 5. Move minions toward hero units aggressively
+      for (const m of minions) {
+        const heroUnits = state.entities.filter(e => e.alive && e.owner === 'hero');
+        if (heroUnits.length) {
+          heroUnits.sort((a, b) =>
+            hexDistance(m.col, m.row, a.col, a.row) -
+            hexDistance(m.col, m.row, b.col, b.row)
+          );
+          const step = stepToward(state, m, heroUnits[0]);
+          if (step) {
+            const result = executeMove(state, m, step.col, step.row);
+            logResult(state, result);
+            state.spendAction(result.cost);
+            return true;
+          }
+        }
+        // Fallback: move toward unclaimed objective
+        const obj = _unoccupiedObjective(state, m, 'witch');
+        if (obj) {
+          const step = stepToward(state, m, obj);
+          if (step) {
+            const result = executeMove(state, m, step.col, step.row);
+            logResult(state, result);
+            state.spendAction(result.cost);
+            return true;
+          }
+        }
+      }
+
+      // 6. Move witch toward unclaimed objective or hero
+      const witchTarget = _unoccupiedObjective(state, witch, 'witch') || state.hero;
+      const step = stepToward(state, witch, witchTarget);
+      if (step) {
+        const result = executeMove(state, witch, step.col, step.row);
         logResult(state, result);
         state.spendAction(result.cost);
         return true;
       }
+
+      return false;
     }
 
-    // 3. Explore current tile if unexplored
+    // ── DAY STRATEGY ──────────────────────────────────────────────────────
+    // Priority: shelter minions from sunlight; explore for resources; build army;
+    //           creep toward objectives without exposing minions
+
+    // 1. Move exposed minions into buildings (to avoid day damage)
+    for (const m of minions) {
+      if (!inBuilding(state, m)) {
+        const shelter = nearestBuilding(state, m);
+        if (shelter) {
+          const step = stepToward(state, m, shelter);
+          if (step && !state.entities.some(e => e.alive && e.owner === 'hero' && e.col === step.col && e.row === step.row)) {
+            const result = executeMove(state, m, step.col, step.row);
+            logResult(state, result);
+            state.spendAction(result.cost);
+            return true;
+          }
+        }
+      }
+    }
+
+    // 2. Summon if resources allow (build the army during daytime)
+    if (await this._trySummon(witch, minions.length)) return true;
+
+    // 3. Witch explores current tile if unexplored (gather resources safely)
     const witchTile = state.tiles.get(hexKey(witch.col, witch.row));
     if (witchTile && !witchTile.explored) {
       const result = executeExplore(state, witch);
@@ -115,7 +250,7 @@ export class WitchAI {
       return true;
     }
 
-    // 4. Move to adjacent unexplored building/resource tile
+    // 4. Move to adjacent unexplored building/resource tile (stay stealthy)
     const unexploredAdj = getNeighbors(witch.col, witch.row).find(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
       return t && !t.explored && (t.hiddenSurvivor || t.resource || t.building) &&
@@ -128,64 +263,40 @@ export class WitchAI {
       return true;
     }
 
-    // 5. Activate each minion/golem — primary goal: hunt hero-side units
-    const minions = state.entities.filter(
-      e => e.alive && e.owner === 'witch' && e.type !== EntityType.WITCH
-    );
-    for (const minion of minions) {
-      // Fight co-located hero-side unit
-      const colocated = state.entities.find(
-        e => e.alive && e.owner === 'hero' && e.col === minion.col && e.row === minion.row
-      );
-      if (colocated) {
-        return this._executeBattleWithUI(minion, colocated);
+    // 5. Witch moves toward an unclaimed objective via buildings (safe path)
+    const obj = _unoccupiedObjective(state, witch, 'witch');
+    if (obj) {
+      const step = stepToward(state, witch, obj);
+      if (step) {
+        const result = executeMove(state, witch, step.col, step.row);
+        logResult(state, result);
+        state.spendAction(result.cost);
+        return true;
       }
-      // Fight any adjacent hero-side unit
-      const adjHeroUnit = state.entities.find(
-        e => e.alive && e.owner === 'hero' && hexDistance(minion.col, minion.row, e.col, e.row) === 1
-      );
-      if (adjHeroUnit) {
-        return this._executeBattleWithUI(minion, adjHeroUnit);
-      }
-      // Move toward nearest hero-side unit
-      const heroUnits = state.entities.filter(e => e.alive && e.owner === 'hero');
-      if (heroUnits.length) {
-        heroUnits.sort((a, b) =>
-          hexDistance(minion.col, minion.row, a.col, a.row) -
-          hexDistance(minion.col, minion.row, b.col, b.row)
-        );
-        const step = stepToward(state, minion, heroUnits[0]);
-        if (step) {
-          const result = executeMove(state, minion, step.col, step.row);
-          logResult(state, result);
-          state.spendAction(result.cost);
-          return true;
-        }
-      }
-      // Fallback: move toward nearest unclaimed objective
-      const targetObj = _unoccupiedObjective(state, minion);
-      if (targetObj) {
-        const step = stepToward(state, minion, targetObj);
-        if (step) {
-          const result = executeMove(state, minion, step.col, step.row);
-          logResult(state, result);
-          state.spendAction(result.cost);
-          return true;
-        }
-      }
-    }
-
-    // 6. Move witch toward nearest unclaimed objective or hero
-    const witchTarget = _unoccupiedObjective(state, witch) || state.hero;
-    const step = stepToward(state, witch, witchTarget);
-    if (step) {
-      const result = executeMove(state, witch, step.col, step.row);
-      logResult(state, result);
-      state.spendAction(result.cost);
-      return true;
     }
 
     return false;
+  }
+
+  async _trySummon(witch, minionCount) {
+    const state = this.state;
+    const inv = state.inventory.witch;
+    const totalRes = Object.values(inv).reduce((s, v) => s + v, 0);
+    // Limit army size more conservatively during day, more aggressively at night
+    const cap = (state.phase === Phase.NIGHT || state.phase === Phase.DUSK) ? 6 : 4;
+    if (totalRes <= 0 || minionCount >= cap) return false;
+
+    const spawnAdj = getNeighbors(witch.col, witch.row).find(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && t.type !== TileType.RIVER &&
+        state.entities.filter(e => e.alive && e.col === n.col && e.row === n.row).length === 0;
+    });
+    if (!spawnAdj) return false;
+
+    const result = executeSummon(state, witch, spawnAdj.col, spawnAdj.row);
+    logResult(state, result);
+    state.spendAction(result.cost);
+    return true;
   }
 
   async _think() {
@@ -193,48 +304,11 @@ export class WitchAI {
   }
 }
 
-function _snapEntity(e) {
-  return { id: e.id, name: e.displayName, hp: e.hp, maxHp: e.maxHp, attack: e.attack, defense: e.defense, type: e.type };
-}
-
-function _unoccupiedObjective(state, actor) {
-  const unclaimed = state.witchObjectives.filter(obj =>
-    !state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
-  );
-  if (!unclaimed.length) return null;
-  unclaimed.sort(
-    (a, b) =>
-      hexDistance(actor.col, actor.row, a.col, a.row) -
-      hexDistance(actor.col, actor.row, b.col, b.row)
-  );
-  return unclaimed[0];
-}
-
-function isAdjacent(a, b) {
-  return hexDistance(a.col, a.row, b.col, b.row) === 1;
-}
-
-function stepToward(state, actor, target) {
-  const visited = new Set([hexKey(actor.col, actor.row)]);
-  const queue   = [{ col: actor.col, row: actor.row, first: null }];
-
-  while (queue.length) {
-    const { col, row, first } = queue.shift();
-    if (col === target.col && row === target.row) return first;
-
-    for (const n of getNeighbors(col, row)) {
-      const k = hexKey(n.col, n.row);
-      if (visited.has(k)) continue;
-      const t = state.tiles.get(k);
-      if (!t || t.type === TileType.RIVER) continue;
-      visited.add(k);
-      queue.push({ col: n.col, row: n.row, first: first || n });
-    }
-  }
-  return null;
-}
-
-// ── Hero AI ──────────────────────────────────────────────────────────────────
+// ── HeroAI ────────────────────────────────────────────────────────────────────
+// Strategy shifts with the day/night cycle:
+//   DAWN/DAY  : Hunt aggressively — find survivors fast, then pursue witch/nodes
+//   DUSK      : Seek shelter while still fighting if opportunity arises
+//   NIGHT     : Hunker down — shelter all units in buildings; avoid open combat
 
 export class HeroAI {
   constructor(state, onStateChange) {
@@ -275,35 +349,25 @@ export class HeroAI {
   }
 
   async _chooseAction() {
-    const state = this.state;
-    const hero  = state.hero;
+    const state  = this.state;
+    const hero   = state.hero;
+    const phase  = state.phase;
+    const isDay  = phase === Phase.DAY || phase === Phase.DAWN;
+    const isNight = phase === Phase.NIGHT || phase === Phase.DUSK;
 
-    // 1. Fight co-located witch units
-    const colocated = state.entities.find(
-      e => e.alive && e.owner === 'witch' && e.col === hero.col && e.row === hero.row
+    const survivors = state.entities.filter(
+      e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR
     );
-    if (colocated) return this._executeBattleWithUI(hero, colocated);
 
-    // 2. Fight adjacent witch units
-    const adjWitch = state.entities.find(
-      e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1
-    );
-    if (adjWitch) return this._executeBattleWithUI(hero, adjWitch);
+    // ── NIGHT STRATEGY ─────────────────────────────────────────────────────
+    // Get all units into buildings. Only fight if cornered.
+    if (isNight) {
+      // 1. Heal if badly hurt
+      if (await this._tryHeal(hero)) return true;
 
-    // 3. Use herbs if injured
-    const herbs = (hero.items && hero.items[ResourceType.HERBS]) || 0;
-    if (herbs > 0 && hero.hp < hero.maxHp) {
-      const result = executeUseItem(state, hero, ResourceType.HERBS);
-      for (const msg of result.log) state.addLog(msg);
-      if (result.success) state.spendAction(result.cost);
-      return result.success;
-    }
-
-    // 4. At night, seek shelter if in the open
-    if (state.phase === Phase.NIGHT) {
-      const curTile = state.tiles.get(hexKey(hero.col, hero.row));
-      if (!curTile || curTile.type !== TileType.BUILDING) {
-        const shelter = _nearestBuilding(state, hero);
+      // 2. Hero seeks shelter
+      if (!inBuilding(state, hero)) {
+        const shelter = nearestBuilding(state, hero);
         if (shelter) {
           const step = stepToward(state, hero, shelter);
           if (step) {
@@ -314,24 +378,95 @@ export class HeroAI {
           }
         }
       }
+
+      // 3. Survivors shelter too (survivors take night damage in the open)
+      for (const s of survivors) {
+        if (!inBuilding(state, s)) {
+          const shelter = nearestBuilding(state, s);
+          if (shelter) {
+            const step = stepToward(state, s, shelter);
+            if (step && !state.entities.some(e => e.alive && e.owner === 'witch' && e.col === step.col && e.row === step.row)) {
+              const result = executeMove(state, s, step.col, step.row);
+              for (const msg of result.log) state.addLog(msg);
+              state.spendAction(result.cost);
+              return true;
+            }
+          }
+        }
+      }
+
+      // 4. Fight co-located enemies only if sheltered and forced to
+      const colocated = state.entities.find(
+        e => e.alive && e.owner === 'witch' && e.col === hero.col && e.row === hero.row
+      );
+      if (colocated) return this._executeBattleWithUI(hero, colocated);
+
+      // 5. Explore current building if sheltered and unexplored
+      const heroTile = state.tiles.get(hexKey(hero.col, hero.row));
+      if (heroTile && heroTile.type === TileType.BUILDING && !heroTile.explored) {
+        const result = executeExplore(state, hero);
+        for (const msg of result.log) state.addLog(msg);
+        state.spendAction(result.cost);
+        return result.success;
+      }
+
+      return false;
     }
 
-    // 5. Move survivors toward power nodes or have them fight
-    const survivors = state.entities.filter(
-      e => e.alive && e.owner === 'hero' && e.type === 'survivor'
+    // ── DAY STRATEGY ──────────────────────────────────────────────────────
+    // Aggressive exploration, survivor recruitment, node contesting, witch hunting
+
+    // 1. Heal if injured
+    if (await this._tryHeal(hero)) return true;
+
+    // 2. Fight co-located witch units (free attacks when co-located)
+    const colocated = state.entities.find(
+      e => e.alive && e.owner === 'witch' && e.col === hero.col && e.row === hero.row
     );
+    if (colocated) return this._executeBattleWithUI(hero, colocated);
+
+    // 3. Fight adjacent witch units — prioritise the witch herself
+    const adjWitchFirst = [
+      state.entities.find(e => e.alive && e.type === EntityType.WITCH && hexDistance(hero.col, hero.row, e.col, e.row) === 1),
+      state.entities.find(e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1),
+    ].find(Boolean);
+    if (adjWitchFirst) return this._executeBattleWithUI(hero, adjWitchFirst);
+
+    // 4. Survivors fight if they can
     for (const s of survivors) {
-      // Fight co-located witch unit
       const sc = state.entities.find(
         e => e.alive && e.owner === 'witch' && e.col === s.col && e.row === s.row
       );
       if (sc) return this._executeBattleWithUI(s, sc);
-      // Fight adjacent witch unit
       const sa = state.entities.find(
         e => e.alive && e.owner === 'witch' && hexDistance(s.col, s.row, e.col, e.row) === 1
       );
       if (sa) return this._executeBattleWithUI(s, sa);
-      // Move toward nearest unclaimed node
+    }
+
+    // 5. Explore current building for loot
+    const heroTile = state.tiles.get(hexKey(hero.col, hero.row));
+    if (heroTile && heroTile.type === TileType.BUILDING && !heroTile.explored) {
+      const result = executeExplore(state, hero);
+      for (const msg of result.log) state.addLog(msg);
+      state.spendAction(result.cost);
+      return result.success;
+    }
+
+    // 6. Move toward nearest unexplored building (find survivors + loot fast)
+    const unxBuilding = _nearestUnexploredBuilding(state, hero);
+    if (unxBuilding) {
+      const step = stepToward(state, hero, unxBuilding);
+      if (step) {
+        const result = executeMove(state, hero, step.col, step.row);
+        for (const msg of result.log) state.addLog(msg);
+        state.spendAction(result.cost);
+        return true;
+      }
+    }
+
+    // 7. Move survivors toward unclaimed nodes
+    for (const s of survivors) {
       const nodeTarget = _unclaimedNodeForHero(state, s);
       if (nodeTarget) {
         const step = stepToward(state, s, nodeTarget);
@@ -341,27 +476,6 @@ export class HeroAI {
           state.spendAction(result.cost);
           return true;
         }
-      }
-    }
-
-    // 6. Explore current tile if it's an unexplored building
-    const heroTile = state.tiles.get(hexKey(hero.col, hero.row));
-    if (heroTile && heroTile.type === TileType.BUILDING && !heroTile.explored) {
-      const result = executeExplore(state, hero);
-      for (const msg of result.log) state.addLog(msg);
-      state.spendAction(result.cost);
-      return result.success;
-    }
-
-    // 7. Move to nearest unexplored building
-    const unxBuilding = _nearestUnexploredBuilding(state, hero);
-    if (unxBuilding) {
-      const step = stepToward(state, hero, unxBuilding);
-      if (step) {
-        const result = executeMove(state, hero, step.col, step.row);
-        for (const msg of result.log) state.addLog(msg);
-        state.spendAction(result.cost);
-        return true;
       }
     }
 
@@ -388,17 +502,20 @@ export class HeroAI {
 
     return false;
   }
+
+  async _tryHeal(hero) {
+    const herbs = (hero.items && hero.items[ResourceType.HERBS]) || 0;
+    if (herbs > 0 && hero.hp < hero.maxHp) {
+      const result = executeUseItem(this.state, hero, ResourceType.HERBS);
+      for (const msg of result.log) this.state.addLog(msg);
+      if (result.success) this.state.spendAction(result.cost);
+      return result.success;
+    }
+    return false;
+  }
 }
 
-function _nearestBuilding(state, actor) {
-  let best = null, bestDist = Infinity;
-  for (const [, t] of state.tiles) {
-    if (t.type !== TileType.BUILDING) continue;
-    const d = hexDistance(actor.col, actor.row, t.col, t.row);
-    if (d < bestDist) { bestDist = d; best = t; }
-  }
-  return best;
-}
+// ── Private helpers ───────────────────────────────────────────────────────────
 
 function _nearestUnexploredBuilding(state, actor) {
   let best = null, bestDist = Infinity;

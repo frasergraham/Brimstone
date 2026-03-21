@@ -241,7 +241,8 @@ export class Entity {
     }
     const attackRoll  = Math.ceil(Math.random() * 6) + attacker.attack  + attacker.attackBonus + extraAtk;
     const defenseRoll = Math.ceil(Math.random() * 6) + defender.defense + defender.defenseBonus;
-    return { attackRoll, defenseRoll, hit: attackRoll > defenseRoll };
+    const margin = attackRoll - defenseRoll; // positive = attacker wins, negative = defender wins
+    return { attackRoll, defenseRoll, hit: margin > 0, margin };
   }
 }
 

@@ -4,6 +4,14 @@ import { createHero, createWitch, resetRoster, EntityType } from './entities.js'
 import { ResourceType, TileType } from './tiles.js';
 import { hexKey } from './hex.js';
 
+// Win reason strings (shown in game-over overlay)
+export const WIN_REASON = {
+  WITCH_SLAIN:    'The hero hunted down the witch and ended the curse!',
+  HERO_SLAIN:     'The hero fell in battle. Salem is lost to darkness.',
+  NODES_WITCH:    'The witch seized all three Power Nodes at dawn — the ritual is complete!',
+  NODES_HERO:     'The hero held all three Power Nodes at dawn — the witch\'s ritual is broken!',
+};
+
 // ── Phase cycle ─────────────────────────────────────────────────────────────
 // One full cycle = 8 rounds: DAWN(1) → DAY(3) → DUSK(1) → NIGHT(3)
 const CYCLE_LENGTH = 8;
@@ -79,9 +87,12 @@ export class GameState {
       `⚔ Control all three at dawn to win. Any building shelters against the night.`,
     ];
 
-    this.selectedEntity = null;
-    this.pendingAction  = null;
-    this.winner         = null;
+    this.selectedEntity    = null;
+    this.pendingAction     = null;
+    this.winner            = null;
+    this.winReason         = null;
+    this.lastNightDamage   = []; // positions damaged last night hazard (for flash animation)
+    this.lastDayDamage     = []; // positions damaged last day hazard
   }
 
   // ── Turn management ────────────────────────────────────────────────────
@@ -122,9 +133,16 @@ export class GameState {
         );
       }
 
-      // Night hazard: hero units in unfortified locations take 1 damage
+      // Night hazard: survivors in the open take 1 damage
       if (this.phase === Phase.NIGHT) {
+        this.lastNightDamage = [];
         this._applyNightHazard();
+      }
+
+      // Day hazard: witch minions/zombies/golems in the open take 1 damage
+      if (this.phase === Phase.DAY) {
+        this.lastDayDamage = [];
+        this._applyDayHazard();
       }
 
       // Dawn: check if witch holds all objectives (only at dawn start)
@@ -144,7 +162,7 @@ export class GameState {
       [`${Phase.DAY}->${Phase.DUSK}`]:
         `🌇 Dusk falls. Seek shelter before night. Neither side has advantage.`,
       [`${Phase.DUSK}->${Phase.NIGHT}`]:
-        `🌙 Night descends! The witch grows powerful. Heroes in the open will suffer!`,
+        `🌙 Night descends! The witch grows powerful. Survivors in the open will suffer!`,
       [`${Phase.NIGHT}->${Phase.DAWN}`]:
         `🌅 Dawn breaks. The darkness retreats. Find cover for the coming night.`,
     };
@@ -157,23 +175,47 @@ export class GameState {
   }
 
   _applyNightHazard() {
-    // Any building (even unfortified) gives shelter against the night
+    // Only SURVIVORS in the open take night damage — the hero is hardened against it
     const endangered = this.entities.filter(e => {
-      if (!e.alive || e.owner !== 'hero') return false;
+      if (!e.alive || e.type !== EntityType.SURVIVOR) return false;
       const t = this.tiles.get(hexKey(e.col, e.row));
       return !(t && t.type === TileType.BUILDING);
     });
 
     for (const e of endangered) {
+      this.lastNightDamage.push({ col: e.col, row: e.row });
       const killed = e.takeDamage(1);
-      this.addLog(`🌙 The darkness presses in on ${e.displayName}! (-1 HP)`);
+      this.addLog(`🌙 The darkness claims ${e.displayName}! (-1 HP)`);
       if (killed) {
         this.entities = this.entities.filter(x => x.id !== e.id);
         this.addLog(`${e.displayName} is consumed by the night!`);
       }
     }
     if (endangered.length === 0) {
-      this.addLog(`🌙 Night falls. The party rests safely, sheltered from the dark.`);
+      this.addLog(`🌙 Night falls. Survivors rest safely, sheltered from the dark.`);
+    }
+  }
+
+  _applyDayHazard() {
+    // Witch minions, zombies, and golems caught in the open during daylight take 1 damage
+    const sunburned = this.entities.filter(e => {
+      if (!e.alive || e.owner !== 'witch') return false;
+      if (e.type === EntityType.WITCH) return false; // the witch herself is unaffected
+      const t = this.tiles.get(hexKey(e.col, e.row));
+      return !(t && t.type === TileType.BUILDING);
+    });
+
+    for (const e of sunburned) {
+      this.lastDayDamage.push({ col: e.col, row: e.row });
+      const killed = e.takeDamage(1);
+      this.addLog(`☀ Sunlight scorches ${e.displayName} in the open! (-1 HP)`);
+      if (killed) {
+        this.entities = this.entities.filter(x => x.id !== e.id);
+        this.addLog(`${e.displayName} is destroyed by the light!`);
+      }
+    }
+    if (sunburned.length > 0) {
+      this.addLog(`☀ Dawn's light punishes those who lurk in the open!`);
     }
   }
 
@@ -181,33 +223,35 @@ export class GameState {
 
   checkVictory() {
     if (!this.witch.alive) {
-      this.winner = 'hero';
+      this.winner    = 'hero';
+      this.winReason = WIN_REASON.WITCH_SLAIN;
       this.addLog('☀ The witch has been defeated! Salem is saved!');
       return;
     }
     if (!this.hero.alive) {
-      this.winner = 'witch';
+      this.winner    = 'witch';
+      this.winReason = WIN_REASON.HERO_SLAIN;
       this.addLog('🌙 The hero has fallen. Darkness descends on Salem forever…');
     }
   }
 
   _checkDawnObjectives() {
-    // Witch wins by holding all power nodes at dawn
     const witchHoldsAll = this.witchObjectives.every(obj =>
       this.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
     );
     if (witchHoldsAll) {
-      this.winner = 'witch';
+      this.winner    = 'witch';
+      this.winReason = WIN_REASON.NODES_WITCH;
       this.addLog('🌙 As dawn breaks, the witch holds all three Power Nodes! Salem is lost…');
       return;
     }
 
-    // Hero wins by controlling all power nodes at dawn
     const heroHoldsAll = this.witchObjectives.every(obj =>
       this.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row)
     );
     if (heroHoldsAll) {
-      this.winner = 'hero';
+      this.winner    = 'hero';
+      this.winReason = WIN_REASON.NODES_HERO;
       this.addLog('☀ At dawn, the hero holds all three Power Nodes! The witch\'s ritual is broken!');
     }
   }
