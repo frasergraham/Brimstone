@@ -13,6 +13,7 @@ function init(witchIsAI, heroIsAI) {
 
   // Show game screen before constructing renderer so the wrapper has real dimensions
   document.getElementById('setup-screen').style.display = 'none';
+  document.getElementById('side-screen').style.display  = 'none';
   document.getElementById('game-screen').style.display  = 'flex';
 
   state    = new GameState(witchIsAI, heroIsAI);

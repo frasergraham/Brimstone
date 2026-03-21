@@ -549,7 +549,15 @@ export class UIController {
     const el = document.getElementById('action-panel');
     if (!el) return;
 
-    const state    = this.state;
+    const state = this.state;
+    const isAI  = (state.activePlayer === Player.WITCH && state.witchIsAI) ||
+                  (state.activePlayer === Player.HERO  && state.heroIsAI);
+
+    if (isAI) {
+      el.innerHTML = `<p class="hint" style="opacity:0.7">AI is thinking…</p>`;
+      return;
+    }
+
     const noActs   = state.actionsAvailable === 0;
     const endClass = noActs ? 'end-turn urgent' : 'end-turn';
     const endLabel = noActs ? 'End Turn ◀' : 'End Turn';
@@ -582,13 +590,7 @@ export class UIController {
       state.endTurn();
       this._updateSidebar();
       this.onRedraw();
-      if (!state.gameOver) {
-        if (state.activePlayer === Player.WITCH && state.witchIsAI) {
-          setTimeout(() => this._runAI(), 400);
-        } else if (state.activePlayer === Player.HERO && state.heroIsAI) {
-          setTimeout(() => this._runHeroAI(), 400);
-        }
-      }
+      this._maybeRunAI();
       return;
     }
 
@@ -810,23 +812,31 @@ export class UIController {
     }, maxTicks * 55 + 200);
   }
 
+  // Single entry point for all AI turns — safe to call anytime
+  _maybeRunAI(delayMs = 400) {
+    if (this.state.gameOver) return;
+    const ap = this.state.activePlayer;
+    if (ap === Player.WITCH && this.state.witchIsAI && this.ai) {
+      setTimeout(() => this._runAI(), delayMs);
+    } else if (ap === Player.HERO && this.state.heroIsAI && this.heroAI) {
+      setTimeout(() => this._runHeroAI(), delayMs);
+    }
+  }
+
   async _runHeroAI() {
     if (!this.heroAI) return;
     await this.heroAI.takeTurn();
     this._updateSidebar();
     this.onRedraw();
-    if (!this.state.gameOver && this.state.activePlayer === Player.WITCH && this.state.witchIsAI) {
-      setTimeout(() => this._runAI(), 400);
-    }
+    this._maybeRunAI();
   }
 
   async _runAI() {
+    if (!this.ai) return;
     await this.ai.takeTurn();
     this._updateSidebar();
     this.onRedraw();
-    if (!this.state.gameOver && this.state.activePlayer === Player.HERO && this.state.heroIsAI) {
-      setTimeout(() => this._runHeroAI(), 400);
-    }
+    this._maybeRunAI();
   }
 
   _renderSelectedInfo() {
@@ -933,10 +943,7 @@ export class UIController {
   refresh() {
     this._updateSidebar();
     this.onRedraw();
-    // If hero starts as AI (playing as witch), kick off the first AI turn
-    if (this.state.activePlayer === Player.HERO && this.state.heroIsAI && !this.state.gameOver) {
-      setTimeout(() => this._runHeroAI(), 800);
-    }
+    this._maybeRunAI(800); // kick off first AI turn if applicable
   }
 }
 
