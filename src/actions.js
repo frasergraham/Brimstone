@@ -123,8 +123,8 @@ export function getValidActions(state, actor) {
   ];
   if (battleTargets.length) actions.push({ type: ActionType.BATTLE, targets: battleTargets });
 
-  // Fortify — hero or survivor in a building, cap at 4, uses shared inventory
-  if (t && t.type === TileType.BUILDING && t.fortifyLevel < 4 && actorIsHero) {
+  // Fortify — hero on any tile (not river), cap at 4, uses shared inventory
+  if (t && t.type !== TileType.RIVER && t.fortifyLevel < 4 && actorIsHero) {
     const shared     = state.inventory.shared;
     const woodCount  = (shared[ResourceType.WOOD]  || 0);
     const metalCount = (shared[ResourceType.METAL] || 0);
@@ -352,7 +352,7 @@ export function executeBattle(state, actor, target) {
   const defTile        = tile(state, target.col, target.row);
   const fortBonus      = defTile?.fortifyLevel || 0;
 
-  const extraAtkBonus = attackerAllies >= 2 ? 1 : 0;
+  const extraAtkBonus = attackerAllies >= 3 ? 1 : 0;
   const extraDefBonus = fortBonus + (defenderAllies > 0 ? 1 : 0);
 
   const { attackRoll, defenseRoll, hit, margin } =
@@ -361,7 +361,7 @@ export function executeBattle(state, actor, target) {
   const phaseNote  = phaseBonus > 0
     ? ` (${state.phase === Phase.DAY ? '☀ day bonus' : '🌙 night bonus'})`
     : '';
-  const gangNote   = attackerAllies >= 2 ? ' [gang-up +1]' : '';
+  const gangNote   = attackerAllies >= 3 ? ' [gang-up +1]' : '';
   const allyDefNote = defenderAllies > 0 ? ' [allies +1]' : '';
 
   log.push(
@@ -427,7 +427,7 @@ export function executeBattle(state, actor, target) {
 
 export function executeFortify(state, actor) {
   const t = tile(state, actor.col, actor.row);
-  if (!t || t.type !== TileType.BUILDING) return { success: false, log: ['Not in a building.'] };
+  if (!t || t.type === TileType.RIVER) return { success: false, log: ['Cannot fortify here.'] };
   if (t.fortifyLevel >= 4) return { success: false, log: ['Cannot fortify further.'] };
 
   const shared     = state.inventory.shared;

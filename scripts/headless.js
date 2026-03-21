@@ -41,7 +41,7 @@ async function runGame() {
   let winReason = state.winReason;
 
   if (!winner) {
-    // Tiebreaker: most nodes held wins; HP breaks ties; otherwise true draw
+    // Tiebreaker: most nodes held wins; tied nodes = draw (no HP tiebreaker)
     const witchNodes = state.witchObjectives.filter(obj =>
       state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
     ).length;
@@ -52,12 +52,9 @@ async function runGame() {
     if (witchNodes !== heroNodes) {
       winner    = witchNodes > heroNodes ? 'witch' : 'hero';
       winReason = `node majority at cap (${witchNodes}–${heroNodes})`;
-    } else if (state.witch.hp !== state.hero.hp) {
-      winner    = state.witch.hp > state.hero.hp ? 'witch' : 'hero';
-      winReason = `HP majority at cap (witch ${state.witch.hp} / hero ${state.hero.hp})`;
     } else {
       winner    = 'draw';
-      winReason = 'true draw at cap';
+      winReason = `draw at cap (${witchNodes} nodes each)`;
     }
   }
 

@@ -278,7 +278,7 @@ export class WitchAI {
     }
 
     // ── DAY STRATEGY ──────────────────────────────────────────────────────
-    // Priority: survive; shelter minions; explore for resources; seize nodes
+    // Priority: flee → summon (army-build) → explore → seize nodes → shelter
 
     // 0. Flee if hero is close and witch HP is low
     const distToHero = hexDistance(witch.col, witch.row, state.hero.col, state.hero.row);
@@ -292,9 +292,46 @@ export class WitchAI {
       }
     }
 
-    // 1. Move exposed minions into buildings to avoid day damage (skip minions holding nodes)
+    // 1. Summon if resources allow — army-building is the top daytime priority
+    if (await this._trySummon(witch, minions.length)) return true;
+
+    // 2. Witch explores current tile if unexplored (gather resources for more summons)
+    const witchTile = state.tiles.get(hexKey(witch.col, witch.row));
+    if (witchTile && !witchTile.explored) {
+      const result = executeExplore(state, witch);
+      logResult(state, result);
+      state.spendAction(result.cost);
+      return true;
+    }
+
+    // 3. Move to adjacent unexplored building/resource tile to gather
+    const unexploredAdj = getNeighbors(witch.col, witch.row).find(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && !t.explored && (t.hiddenSurvivor || t.resource || t.building) &&
+        t.type !== TileType.RIVER;
+    });
+    if (unexploredAdj) {
+      const result = executeMove(state, witch, unexploredAdj.col, unexploredAdj.row);
+      logResult(state, result);
+      state.spendAction(result.cost);
+      return true;
+    }
+
+    // 4. Witch moves toward best objective to start the node-spawn engine
+    const obj = _bestWitchObjective(state, witch);
+    if (obj) {
+      const step = stepToward(state, witch, obj);
+      if (step) {
+        const result = executeMove(state, witch, step.col, step.row);
+        logResult(state, result);
+        state.spendAction(result.cost);
+        return true;
+      }
+    }
+
+    // 5. Shelter exposed minions not on nodes (lower priority — nodes > shelter)
     for (const m of minions) {
-      if (_isOnNode(state, m)) continue; // stay on the node even if exposed
+      if (_isOnNode(state, m)) continue;
       if (!inBuilding(state, m)) {
         const shelter = nearestBuilding(state, m);
         if (shelter) {
@@ -309,43 +346,6 @@ export class WitchAI {
       }
     }
 
-    // 2. Witch moves toward best objective (unclaimed first, then hero-held to contest)
-    const obj = _bestWitchObjective(state, witch);
-    if (obj) {
-      const step = stepToward(state, witch, obj);
-      if (step) {
-        const result = executeMove(state, witch, step.col, step.row);
-        logResult(state, result);
-        state.spendAction(result.cost);
-        return true;
-      }
-    }
-
-    // 3. Summon if resources allow (build the army during daytime)
-    if (await this._trySummon(witch, minions.length)) return true;
-
-    // 4. Witch explores current tile if unexplored (gather resources safely)
-    const witchTile = state.tiles.get(hexKey(witch.col, witch.row));
-    if (witchTile && !witchTile.explored) {
-      const result = executeExplore(state, witch);
-      logResult(state, result);
-      state.spendAction(result.cost);
-      return true;
-    }
-
-    // 5. Move to adjacent unexplored building/resource tile (stay stealthy)
-    const unexploredAdj = getNeighbors(witch.col, witch.row).find(n => {
-      const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && !t.explored && (t.hiddenSurvivor || t.resource || t.building) &&
-        t.type !== TileType.RIVER;
-    });
-    if (unexploredAdj) {
-      const result = executeMove(state, witch, unexploredAdj.col, unexploredAdj.row);
-      logResult(state, result);
-      state.spendAction(result.cost);
-      return true;
-    }
-
     return false;
   }
 
@@ -353,8 +353,8 @@ export class WitchAI {
     const state = this.state;
     const inv = state.inventory.witch;
     const totalRes = Object.values(inv).reduce((s, v) => s + v, 0);
-    // Limit army size more conservatively during day, more aggressively at night
-    const cap = (state.phase === Phase.NIGHT || state.phase === Phase.DUSK) ? 6 : 4;
+    // Build a large horde — cap is generous since minions are cheap/weak
+    const cap = (state.phase === Phase.NIGHT || state.phase === Phase.DUSK) ? 12 : 8;
     if (totalRes <= 0 || minionCount >= cap) return false;
 
     const spawnAdj = getNeighbors(witch.col, witch.row).find(n => {

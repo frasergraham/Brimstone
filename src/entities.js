@@ -133,7 +133,7 @@ const BASE_STATS = {
   [EntityType.WITCH]:      { maxHp: 8, attack: 2, defense: 1 },
   [EntityType.SURVIVOR]:   { maxHp: 2, attack: 1, defense: 1 },
   [EntityType.ZOMBIE]:     { maxHp: 2, attack: 2, defense: 0 },
-  [EntityType.MINION]:     { maxHp: 3, attack: 2, defense: 1 },
+  [EntityType.MINION]:     { maxHp: 2, attack: 1, defense: 0 },
   [EntityType.WOOD_GOLEM]: { maxHp: 4, attack: 2, defense: 3 },
   [EntityType.IRON_GOLEM]: { maxHp: 6, attack: 3, defense: 4 },
 };

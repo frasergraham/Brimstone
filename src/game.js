@@ -1,8 +1,8 @@
 // Central game state and turn management
 import { generateMap } from './map.js';
-import { createHero, createWitch, resetRoster, EntityType } from './entities.js';
+import { createHero, createWitch, createMinion, resetRoster, EntityType } from './entities.js';
 import { BuildingType, ResourceType, TileType } from './tiles.js';
-import { hexKey } from './hex.js';
+import { hexKey, getNeighbors } from './hex.js';
 
 // Win reason strings (shown in game-over overlay)
 export const WIN_REASON = {
@@ -28,16 +28,23 @@ export const Phase = Object.freeze({
 export const Player = Object.freeze({ HERO: 'hero', WITCH: 'witch' });
 
 // Calculate actions for a player at the start of their turn.
-// Base: 3 (both sides) + 1 for their favoured time of day
-// + 1 per additional living unit they control beyond their leader (capped at +2).
+// Hero  — base 3 + 1 in DAY  + 1 per extra unit (cap +2)
+// Witch — base 5 + 1 in NIGHT + 1 per 2 extra units (cap +4, so needs 8 minions for full bonus)
 function computeActions(player, phase, entities) {
-  const isHero    = player === Player.HERO;
-  const base      = 3;
-  const timeBonus = (isHero && phase === Phase.DAY) || (!isHero && phase === Phase.NIGHT) ? 1 : 0;
-  const owner     = isHero ? 'hero' : 'witch';
+  const isHero     = player === Player.HERO;
+  const owner      = isHero ? 'hero' : 'witch';
   const leaderType = isHero ? 'hero' : 'witch';
-  const extras    = entities.filter(e => e.alive && e.owner === owner && e.type !== leaderType).length;
-  return base + timeBonus + Math.min(extras, 2);
+  const extras     = entities.filter(e => e.alive && e.owner === owner && e.type !== leaderType).length;
+
+  if (isHero) {
+    const timeBonus = phase === Phase.DAY ? 1 : 0;
+    return 3 + timeBonus + Math.min(extras, 2);
+  } else {
+    const timeBonus = phase === Phase.NIGHT ? 1 : 0;
+    // Each pair of minions earns +1 action, up to +4 (needs 8 minions for max)
+    const unitBonus = Math.min(Math.floor(extras / 2), 4);
+    return 5 + timeBonus + unitBonus;
+  }
 }
 
 function phaseForRound(round) {
@@ -130,11 +137,40 @@ export class GameState {
         }
       }
 
+      // Node blessing: hero standing on a Power Node heals 1 HP
+      if (this.hero.alive && this.hero.hp < this.hero.maxHp) {
+        const onNode = this.witchObjectives.some(
+          obj => obj.col === this.hero.col && obj.row === this.hero.row
+        );
+        if (onNode) {
+          this.hero.heal(1);
+          this.addLog(`✨ The hero draws power from the node. (+1 HP, now ${this.hero.hp}/${this.hero.maxHp})`);
+        }
+      }
+
       this.activePlayer = Player.WITCH;
       this.actionsLeft  = computeActions(Player.WITCH, this.phase, this.entities);
       this.witchSummonsThisTurn = 0;
       this.addLog(`The witch stirs… (${this.actionsLeft} actions)`);
     } else {
+      // Node spawning: each Power Node held by a witch entity raises a free minion
+      for (const obj of this.witchObjectives) {
+        const holder = this.entities.find(
+          e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row
+        );
+        if (!holder) continue;
+        const spawnHex = getNeighbors(obj.col, obj.row).find(n => {
+          const t = this.tiles.get(hexKey(n.col, n.row));
+          return t && t.type !== TileType.RIVER &&
+            !this.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
+        });
+        if (spawnHex) {
+          const newMinion = createMinion(spawnHex.col, spawnHex.row);
+          this.entities.push(newMinion);
+          this.addLog(`🌑 The node at (${obj.col},${obj.row}) stirs — a new minion rises!`);
+        }
+      }
+
       // End of full round — advance round and check phase
       this.witchSummonsThisTurn = 0;
       this.activePlayer = Player.HERO;
