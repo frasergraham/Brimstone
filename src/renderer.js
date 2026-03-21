@@ -8,7 +8,7 @@ import {
   TileType, TILE_COLOR, BUILDING_COLOR, BUILDING_LABEL, BUILDING_ICON,
 } from './tiles.js';
 import { ENTITY_COLOR, EntityType, SurvivorAbility } from './entities.js';
-import { getVisibleEnemyHexes } from './actions.js';
+import { getVisibleEnemyHexes, sightRange } from './actions.js';
 
 export const PAD_X = 40;
 export const PAD_Y = 30;
@@ -348,7 +348,7 @@ export class Renderer {
     const visibleSet = new Set();
     for (const e of state.entities) {
       if (!e.alive || e.owner !== 'hero') continue;
-      const range = e.ability === SurvivorAbility.SCOUT ? 3 : 2;
+      const range = sightRange(state.phase, e.ability === SurvivorAbility.SCOUT);
       for (let row = 0; row < MAP_ROWS; row++) {
         for (let col = 0; col < MAP_COLS; col++) {
           if (hexDistance(col, row, e.col, e.row) <= range) {

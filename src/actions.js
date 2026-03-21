@@ -71,14 +71,24 @@ function sameHexEnemies(state, entity) {
 
 // ── Visibility ─────────────────────────────────────────────────────────────
 
+// Base sight range varies by phase: Day=3, Dawn/Dusk=2, Night=1.
+// SCOUT survivors add +1 to their personal range.
+export function sightRange(phase, isScout = false) {
+  let base;
+  switch (phase) {
+    case Phase.DAY:   base = 3; break;
+    case Phase.NIGHT: base = 1; break;
+    default:          base = 2; break; // DAWN, DUSK
+  }
+  return base + (isScout ? 1 : 0);
+}
+
 // Returns a Set of hexKeys where witch-side entities are visible to hero units.
-// Baseline: any hero-side unit reveals enemies within 2 hexes.
-// SCOUT survivors extend their personal range to 3 hexes.
 export function getVisibleEnemyHexes(state) {
   const revealed = new Set();
   for (const e of state.entities) {
     if (!e.alive || e.owner !== 'hero') continue;
-    const range = e.ability === SurvivorAbility.SCOUT ? 3 : 2;
+    const range = sightRange(state.phase, e.ability === SurvivorAbility.SCOUT);
     for (const we of state.entities) {
       if (!we.alive || we.owner !== 'witch') continue;
       if (hexDistance(e.col, e.row, we.col, we.row) <= range) {
