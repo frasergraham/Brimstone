@@ -500,18 +500,9 @@ export class UIController {
       [Phase.NIGHT]: 'Witch +1 ATK · Heroes in the open suffer',
     };
 
-    const survivorCount = state.entities.filter(
-      e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR
-    ).length;
-
-    // Regular actions as gold diamonds, bonus actions as green diamonds
-    const regDiamonds = '◆'.repeat(state.actionsLeft) + '◇'.repeat(Math.max(0, 4 - state.actionsLeft));
-    const bonusDiamonds = state.bonusActions > 0
-      ? `<span style="color:#4caf7d">${'◆'.repeat(state.bonusActions)}</span>`
-      : '';
-    const survivorNote = survivorCount > 0
-      ? `<span style="color:#4caf7d;font-size:0.72rem"> +${survivorCount} surv.</span>`
-      : '';
+    const diamonds = state.actionsLeft > 0
+      ? '◆'.repeat(state.actionsLeft)
+      : '◇';
 
     el.innerHTML = `
       <div class="phase-badge phase-${phase}">${PHASE_ICON[phase]} ${phase.toUpperCase()}</div>
@@ -520,7 +511,7 @@ export class UIController {
       <div class="turn-line player-${state.activePlayer}">
         ${player}'s Turn ${isAI ? '<span class="ai-badge">AI</span>' : ''}
       </div>
-      <div class="actions-remaining">${regDiamonds}${bonusDiamonds}${survivorNote}</div>
+      <div class="actions-remaining">${diamonds}</div>
     `;
   }
 
@@ -779,13 +770,10 @@ export class UIController {
         }
 
         // Actions remaining indicator
-        const left  = this.state.actionsLeft;
-        const bonus = this.state.bonusActions;
-        const regPips   = '◆'.repeat(left)  + '◇'.repeat(Math.max(0, 4 - left));
-        const bonusPips = bonus > 0 ? `<span style="color:#4caf7d">${'◆'.repeat(bonus)}</span>` : '';
+        const left = this.state.actionsLeft;
         const actsEl = document.createElement('div');
         actsEl.className = 'battle-actions-left';
-        actsEl.innerHTML = `${regPips}${bonusPips}`;
+        actsEl.innerHTML = left > 0 ? '◆'.repeat(left) : '◇';
         footer.insertBefore(actsEl, footer.firstChild);
 
         // Battle Again button (player battles only, when neither died)

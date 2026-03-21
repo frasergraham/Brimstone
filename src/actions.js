@@ -26,6 +26,10 @@ function tile(state, col, row) {
   return state.tiles.get(hexKey(col, row));
 }
 
+function hasEnemy(state, actor, col, row) {
+  return state.entities.some(e => e.alive && e.owner !== actor.owner && e.col === col && e.row === row);
+}
+
 function getReachableHexes(state, actor, range) {
   const visited = new Set([hexKey(actor.col, actor.row)]);
   const reachable = [];
@@ -38,6 +42,7 @@ function getReachableHexes(state, actor, range) {
         if (visited.has(k)) continue;
         const nt = tile(state, n.col, n.row);
         if (!nt || nt.type === TileType.RIVER) continue;
+        if (hasEnemy(state, actor, n.col, n.row)) continue;
         visited.add(k);
         reachable.push({ col: n.col, row: n.row });
         next.push({ col: n.col, row: n.row });
@@ -208,6 +213,8 @@ export function executeMove(state, actor, targetCol, targetRow) {
   const t = tile(state, targetCol, targetRow);
   if (!t || t.type === TileType.RIVER)
     return { success: false, log: ['Cannot move there.'] };
+  if (hasEnemy(state, actor, targetCol, targetRow))
+    return { success: false, log: ['An enemy blocks the way.'] };
 
   actor.col = targetCol;
   actor.row = targetRow;
@@ -393,8 +400,6 @@ export function executeSummon(state, actor, targetCol, targetRow) {
 
   inv[res]--;
   state.entities.push(summonedUnit);
-  // Each summon grants the witch one bonus action (more powerful witch)
-  state.bonusActions = (state.bonusActions || 0) + 1;
   return {
     success: true,
     log: [`The witch raises a ${unitName} from ${res}!`],
@@ -431,7 +436,8 @@ export function executeUseItem(state, actor, item) {
 
   switch (item) {
     case ResourceType.FOOD:
-      state.bonusActions += 1;
+      if (actor.type !== 'hero') return { success: false, log: ['Only the hero can eat food.'] };
+      state.actionsLeft += 1;
       log.push(`${actor.displayName} eats food. Gains 1 extra action!`);
       break;
     case ResourceType.SILVER:
@@ -466,8 +472,8 @@ export function executeUseAbility(state, actor) {
       return { success: true, log, cost: 0 };
 
     case SurvivorAbility.RALLY:
-      state.bonusActions += 1;
-      log.push(`${actor.displayName}'s words fortify the hero's spirit! (+1 bonus action)`);
+      state.actionsLeft += 1;
+      log.push(`${actor.displayName}'s words fortify the hero's spirit! (+1 action)`);
       return { success: true, log, cost: 0 };
 
     default:

@@ -17,13 +17,18 @@ export const Phase = Object.freeze({
 
 export const Player = Object.freeze({ HERO: 'hero', WITCH: 'witch' });
 
-// Actions per turn per phase
-const ACTIONS = {
-  [Phase.DAWN]:  { hero: 3, witch: 3 },
-  [Phase.DAY]:   { hero: 4, witch: 3 },
-  [Phase.DUSK]:  { hero: 3, witch: 3 },
-  [Phase.NIGHT]: { hero: 3, witch: 4 },
-};
+// Calculate actions for a player at the start of their turn.
+// Base: 3 (hero) / 4 (witch) + 1 for their favoured time of day
+// + 1 per additional living unit they control beyond their leader.
+function computeActions(player, phase, entities) {
+  const isHero    = player === Player.HERO;
+  const base      = isHero ? 3 : 4;
+  const timeBonus = (isHero && phase === Phase.DAY) || (!isHero && phase === Phase.NIGHT) ? 1 : 0;
+  const owner     = isHero ? 'hero' : 'witch';
+  const leaderType = isHero ? 'hero' : 'witch';
+  const extras    = entities.filter(e => e.alive && e.owner === owner && e.type !== leaderType).length;
+  return base + timeBonus + extras;
+}
 
 function phaseForRound(round) {
   const r = (round - 1) % CYCLE_LENGTH;
@@ -65,8 +70,7 @@ export class GameState {
     this.round        = 1;
     this.phase        = Phase.DAWN;
     this.activePlayer = Player.HERO;
-    this.actionsLeft  = ACTIONS[Phase.DAWN].hero;
-    this.bonusActions = 0;
+    this.actionsLeft  = computeActions(Player.HERO, Phase.DAWN, []);
 
     this.log = [
       `🌅 Dawn breaks over Salem. The hero stirs at the Inn.`,
@@ -82,14 +86,11 @@ export class GameState {
   // ── Turn management ────────────────────────────────────────────────────
 
   get actionsAvailable() {
-    return this.actionsLeft + this.bonusActions;
+    return this.actionsLeft;
   }
 
   spendAction(cost = 1) {
-    // Drain regular actions first; bonus actions are the true extras
-    const fromLeft = Math.min(cost, this.actionsLeft);
-    this.actionsLeft -= fromLeft;
-    this.bonusActions = Math.max(0, this.bonusActions - (cost - fromLeft));
+    this.actionsLeft = Math.max(0, this.actionsLeft - cost);
   }
 
   endTurn() {
@@ -98,8 +99,7 @@ export class GameState {
 
     if (this.activePlayer === Player.HERO) {
       this.activePlayer = Player.WITCH;
-      this.actionsLeft  = ACTIONS[this.phase].witch;
-      this.bonusActions = 0;
+      this.actionsLeft  = computeActions(Player.WITCH, this.phase, this.entities);
       if (!this.fogOfWar) this.addLog(`The witch stirs…`);
     } else {
       // End of full round — advance round and check phase
@@ -109,12 +109,7 @@ export class GameState {
       const prevPhase = this.phase;
       this.phase = phaseForRound(this.round);
 
-      // Each living hero survivor grants +1 action to the hero turn
-      const survivorBonus = this.entities.filter(
-        e => e.alive && e.owner === 'hero' && e.type === 'survivor'
-      ).length;
-      this.actionsLeft  = ACTIONS[this.phase].hero + survivorBonus;
-      this.bonusActions = 0;
+      this.actionsLeft = computeActions(Player.HERO, this.phase, this.entities);
 
       // Announce phase transitions
       if (this.phase !== prevPhase) {
@@ -122,7 +117,7 @@ export class GameState {
       } else {
         this.addLog(
           `Round ${this.round} — ${PHASE_ICON[this.phase]} ${this.phase.toUpperCase()}` +
-          ` (Hero: ${this.actionsLeft} actions, Witch: ${ACTIONS[this.phase].witch} actions)`
+          ` (Hero: ${this.actionsLeft} actions)`
         );
       }
 
@@ -156,7 +151,7 @@ export class GameState {
     this.addLog(messages[key] || `Phase changed: ${to.toUpperCase()}`);
     this.addLog(
       `Round ${this.round} — ${PHASE_ICON[to]} ${to.toUpperCase()}` +
-      ` (Hero: ${this.actionsLeft} actions, Witch: ${ACTIONS[to].witch} actions)`
+      ` (Hero: ${this.actionsLeft} actions)`
     );
   }
 
