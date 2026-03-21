@@ -207,14 +207,26 @@ export class UIController {
         this._pendingUnitPick = null;
       }
     } else {
-      // Multiple units — show unit-picker popup directly
-      this._pendingUnitPick = { units: clickedEntities };
-      this._selectedEntity  = null;
-      this._popupVisible    = true;
-      this._validActions    = [];
-      this.renderer.selectedHex    = { col: hex.col, row: hex.row };
-      this.renderer.highlightHexes = [];
-      this._showActionPopup(null);
+      // Multiple units on this hex.
+      // If one of them is already selected, follow the normal tap cycle for it.
+      if (this._selectedEntity && clickedEntities.includes(this._selectedEntity)) {
+        if (this._popupVisible) {
+          this._popupVisible = false;
+          _hideActionPopup();
+        } else {
+          this._showActionPopup(this._selectedEntity);
+          this._popupVisible = true;
+        }
+      } else {
+        // Nothing selected yet (or a different unit selected) — show the picker.
+        this._pendingUnitPick = { units: clickedEntities };
+        this._selectedEntity  = null;
+        this._popupVisible    = true;
+        this._validActions    = [];
+        this.renderer.selectedHex    = { col: hex.col, row: hex.row };
+        this.renderer.highlightHexes = [];
+        this._showActionPopup(null);
+      }
     }
 
     this._updateSidebar();
