@@ -70,7 +70,7 @@ export class GameState {
     this.log = [
       `🌅 Dawn breaks over Salem. The hero stirs at the Inn.`,
       `The witch has three Power Nodes to seize: ` +
-        WITCH_OBJECTIVES.map(o => o.label).join(', ') + `.`,
+        this.witchObjectives.map(o => o.label).join(', ') + `.`,
       `⚠ Stay in a fortified building when night falls or suffer in the darkness.`,
     ];
 
