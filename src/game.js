@@ -169,6 +169,12 @@ export class GameState {
         this._applyDayHazard();
       }
 
+      // Dawn: reset explored flag on all tiles so resources can be gathered again
+      if (this.phase === Phase.DAWN) {
+        for (const [, t] of this.tiles) t.explored = false;
+        this.addLog('🌅 A new dawn — the land stirs and its secrets are renewed.');
+      }
+
       // Dawn/Dusk: check if either side holds all Power Nodes
       if (this.phase === Phase.DAWN) {
         this._checkNodeObjectives(Phase.DAWN);

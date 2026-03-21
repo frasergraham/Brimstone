@@ -42,17 +42,6 @@ function _snapEntity(e) {
   return { id: e.id, name: e.displayName, hp: e.hp, maxHp: e.maxHp, attack: e.attack, defense: e.defense, type: e.type };
 }
 
-function _unoccupiedObjective(state, actor, owner = 'witch') {
-  const unclaimed = state.witchObjectives.filter(obj =>
-    !state.entities.some(e => e.alive && e.owner === owner && e.col === obj.col && e.row === obj.row)
-  );
-  if (!unclaimed.length) return null;
-  unclaimed.sort((a, b) =>
-    hexDistance(actor.col, actor.row, a.col, a.row) -
-    hexDistance(actor.col, actor.row, b.col, b.row)
-  );
-  return unclaimed[0];
-}
 
 function stepToward(state, actor, target) {
   if (!target) return null;
@@ -83,6 +72,50 @@ function nearestBuilding(state, actor) {
     if (d < bestDist) { bestDist = d; best = t; }
   }
   return best;
+}
+
+function stepAwayFrom(state, actor, threat) {
+  const neighbors = getNeighbors(actor.col, actor.row).filter(n => {
+    const t = state.tiles.get(hexKey(n.col, n.row));
+    return t && t.type !== TileType.RIVER &&
+      !state.entities.some(e => e.alive && e.owner === 'hero' && e.col === n.col && e.row === n.row);
+  });
+  if (!neighbors.length) return null;
+  neighbors.sort((a, b) =>
+    hexDistance(b.col, b.row, threat.col, threat.row) -
+    hexDistance(a.col, a.row, threat.col, threat.row)
+  );
+  return neighbors[0];
+}
+
+function _isOnNode(state, entity) {
+  return state.witchObjectives.some(obj => obj.col === entity.col && obj.row === entity.row);
+}
+
+// Returns the best node target for the witch: unclaimed first, then hero-held nodes to contest.
+function _bestWitchObjective(state, actor) {
+  const unclaimed = state.witchObjectives.filter(obj =>
+    !state.entities.some(e => e.alive && e.col === obj.col && e.row === obj.row)
+  );
+  if (unclaimed.length) {
+    unclaimed.sort((a, b) =>
+      hexDistance(actor.col, actor.row, a.col, a.row) -
+      hexDistance(actor.col, actor.row, b.col, b.row)
+    );
+    return unclaimed[0];
+  }
+  const heroHeld = state.witchObjectives.filter(obj =>
+    state.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row) &&
+    !state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
+  );
+  if (heroHeld.length) {
+    heroHeld.sort((a, b) =>
+      hexDistance(actor.col, actor.row, a.col, a.row) -
+      hexDistance(actor.col, actor.row, b.col, b.row)
+    );
+    return heroHeld[0];
+  }
+  return null;
 }
 
 function inBuilding(state, entity) {
@@ -149,6 +182,19 @@ export class WitchAI {
     // ── NIGHT STRATEGY ─────────────────────────────────────────────────────
     // Priority: attack, seize objectives, summon reinforcements
     if (isNight) {
+      // 0. Flee if witch HP is critical and hero is close with no minion cover
+      const hasAdjacentMinion = minions.some(m => hexDistance(witch.col, witch.row, m.col, m.row) <= 1);
+      const distToHeroNight   = hexDistance(witch.col, witch.row, state.hero.col, state.hero.row);
+      if (witch.hp <= Math.ceil(witch.maxHp * 0.3) && distToHeroNight <= 2 && !hasAdjacentMinion) {
+        const fleeStep = stepAwayFrom(state, witch, state.hero);
+        if (fleeStep) {
+          const result = executeMove(state, witch, fleeStep.col, fleeStep.row);
+          logResult(state, result);
+          state.spendAction(result.cost);
+          return true;
+        }
+      }
+
       // 1. Witch fights any co-located hero unit
       const witchColocated = state.entities.find(
         e => e.alive && e.owner === 'hero' && e.col === witch.col && e.row === witch.row
@@ -177,8 +223,8 @@ export class WitchAI {
       // 4. Summon more troops if resources available and army is small
       if (await this._trySummon(witch, minions.length)) return true;
 
-      // 5. Witch moves toward unclaimed objective (node victory is the primary win condition)
-      const witchNodeTarget = _unoccupiedObjective(state, witch, 'witch');
+      // 5. Witch moves toward best objective (unclaimed first, then hero-held to contest)
+      const witchNodeTarget = _bestWitchObjective(state, witch);
       if (witchNodeTarget) {
         const nodeStep = stepToward(state, witch, witchNodeTarget);
         if (nodeStep) {
@@ -189,9 +235,10 @@ export class WitchAI {
         }
       }
 
-      // 6. Move minions toward unclaimed objectives first, then hero
+      // 6. Move minions toward objectives; minions already on a node hold position
       for (const m of minions) {
-        const obj = _unoccupiedObjective(state, m, 'witch');
+        if (_isOnNode(state, m)) continue; // hold the node
+        const obj = _bestWitchObjective(state, m);
         if (obj) {
           const step = stepToward(state, m, obj);
           if (step) {
@@ -231,11 +278,23 @@ export class WitchAI {
     }
 
     // ── DAY STRATEGY ──────────────────────────────────────────────────────
-    // Priority: shelter minions from sunlight; explore for resources; build army;
-    //           creep toward objectives without exposing minions
+    // Priority: survive; shelter minions; explore for resources; seize nodes
 
-    // 1. Move exposed minions into buildings (to avoid day damage)
+    // 0. Flee if hero is close and witch HP is low
+    const distToHero = hexDistance(witch.col, witch.row, state.hero.col, state.hero.row);
+    if (distToHero <= 2 && witch.hp <= Math.ceil(witch.maxHp * 0.6)) {
+      const fleeStep = stepAwayFrom(state, witch, state.hero);
+      if (fleeStep) {
+        const result = executeMove(state, witch, fleeStep.col, fleeStep.row);
+        logResult(state, result);
+        state.spendAction(result.cost);
+        return true;
+      }
+    }
+
+    // 1. Move exposed minions into buildings to avoid day damage (skip minions holding nodes)
     for (const m of minions) {
+      if (_isOnNode(state, m)) continue; // stay on the node even if exposed
       if (!inBuilding(state, m)) {
         const shelter = nearestBuilding(state, m);
         if (shelter) {
@@ -250,8 +309,8 @@ export class WitchAI {
       }
     }
 
-    // 2. Witch moves toward an unclaimed objective (node victory is top priority)
-    const obj = _unoccupiedObjective(state, witch, 'witch');
+    // 2. Witch moves toward best objective (unclaimed first, then hero-held to contest)
+    const obj = _bestWitchObjective(state, witch);
     if (obj) {
       const step = stepToward(state, witch, obj);
       if (step) {
@@ -540,16 +599,30 @@ function _nearestUnexploredBuilding(state, actor) {
   return best;
 }
 
+// Returns the best node target for the hero: unclaimed first, then witch-held nodes to contest.
 function _unclaimedNodeForHero(state, actor) {
   const unclaimed = state.witchObjectives.filter(obj =>
+    !state.entities.some(e => e.alive && e.col === obj.col && e.row === obj.row)
+  );
+  if (unclaimed.length) {
+    unclaimed.sort((a, b) =>
+      hexDistance(actor.col, actor.row, a.col, a.row) -
+      hexDistance(actor.col, actor.row, b.col, b.row)
+    );
+    return unclaimed[0];
+  }
+  const witchHeld = state.witchObjectives.filter(obj =>
+    state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row) &&
     !state.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row)
   );
-  if (!unclaimed.length) return null;
-  unclaimed.sort((a, b) =>
-    hexDistance(actor.col, actor.row, a.col, a.row) -
-    hexDistance(actor.col, actor.row, b.col, b.row)
-  );
-  return unclaimed[0];
+  if (witchHeld.length) {
+    witchHeld.sort((a, b) =>
+      hexDistance(actor.col, actor.row, a.col, a.row) -
+      hexDistance(actor.col, actor.row, b.col, b.row)
+    );
+    return witchHeld[0];
+  }
+  return null;
 }
 
 function delay(ms) {

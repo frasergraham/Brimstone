@@ -37,11 +37,35 @@ async function runGame() {
     }
   }
 
+  let winner    = state.winner;
+  let winReason = state.winReason;
+
+  if (!winner) {
+    // Tiebreaker: most nodes held wins; HP breaks ties; otherwise true draw
+    const witchNodes = state.witchObjectives.filter(obj =>
+      state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
+    ).length;
+    const heroNodes = state.witchObjectives.filter(obj =>
+      state.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row)
+    ).length;
+
+    if (witchNodes !== heroNodes) {
+      winner    = witchNodes > heroNodes ? 'witch' : 'hero';
+      winReason = `node majority at cap (${witchNodes}–${heroNodes})`;
+    } else if (state.witch.hp !== state.hero.hp) {
+      winner    = state.witch.hp > state.hero.hp ? 'witch' : 'hero';
+      winReason = `HP majority at cap (witch ${state.witch.hp} / hero ${state.hero.hp})`;
+    } else {
+      winner    = 'draw';
+      winReason = 'true draw at cap';
+    }
+  }
+
   return {
-    winner:    state.winner ?? 'draw',
-    winReason: state.winReason ?? 'exceeded max rounds',
-    rounds:    state.round,
-    phase:     state.phase,
+    winner,
+    winReason,
+    rounds: state.round,
+    phase:  state.phase,
   };
 }
 
