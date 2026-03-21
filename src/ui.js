@@ -1,6 +1,6 @@
 // UI controller: handles canvas clicks, sidepanel updates, action buttons
 import { hexKey, hexToPixel } from './hex.js';
-import { TileType, BUILDING_LABEL, RESOURCE_LABEL, WEAPON_LABEL } from './tiles.js';
+import { TileType, BUILDING_LABEL, RESOURCE_LABEL, WEAPON_LABEL, ResourceType } from './tiles.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
 import { Phase, Player, PHASE_ICON } from './game.js';
 import { PAD_X, PAD_Y } from './renderer.js';
@@ -319,7 +319,10 @@ export class UIController {
         this._showResultDialog(result.encounterLog, () => {
           this._updateSidebar();
           this.onRedraw();
+          this._maybeShowNoActionsDialog();
         });
+      } else {
+        this._maybeShowNoActionsDialog();
       }
 
     } else if (actionType === ActionType.BATTLE) {
@@ -336,6 +339,7 @@ export class UIController {
         else this._clearSelection();
         this._updateSidebar();
         this.onRedraw();
+        this._maybeShowNoActionsDialog();
       };
 
       const doRematch = () => {
@@ -372,6 +376,7 @@ export class UIController {
       else this._clearSelection();
       this._updateSidebar();
       this.onRedraw();
+      this._maybeShowNoActionsDialog();
     }
   }
 
@@ -629,6 +634,7 @@ export class UIController {
           else this._clearSelection();
           this._updateSidebar();
           this.onRedraw();
+          this._maybeShowNoActionsDialog();
         });
         break;
       }
@@ -652,6 +658,7 @@ export class UIController {
           else this._clearSelection();
           this._updateSidebar();
           this.onRedraw();
+          this._maybeShowNoActionsDialog();
         });
         break;
       }
@@ -681,6 +688,7 @@ export class UIController {
           else this._clearSelection();
           this._updateSidebar();
           this.onRedraw();
+          this._maybeShowNoActionsDialog();
         });
         break;
       }
@@ -695,6 +703,7 @@ export class UIController {
           else this._clearSelection();
           this._updateSidebar();
           this.onRedraw();
+          this._maybeShowNoActionsDialog();
         });
         break;
       }
@@ -706,6 +715,10 @@ export class UIController {
   _showResultDialog(messages, onDismiss) {
     const dialog = document.getElementById('result-dialog');
     document.getElementById('result-messages').textContent = messages.join('\n');
+    document.getElementById('result-dismiss-hint').style.display = '';
+    const btns = document.getElementById('result-buttons');
+    btns.style.display = 'none';
+    btns.innerHTML = '';
     dialog.style.display = 'flex';
 
     const dismiss = () => {
@@ -719,6 +732,69 @@ export class UIController {
     };
     dialog.addEventListener('click', dismiss);
     document.addEventListener('keydown', keyDismiss);
+  }
+
+  _maybeShowNoActionsDialog() {
+    const state = this.state;
+    if (state.gameOver) return;
+    if (state.actionsAvailable > 0) return;
+    // Only show for human-controlled players
+    const isHumanTurn =
+      (state.activePlayer === Player.WITCH && !state.witchIsAI) ||
+      (state.activePlayer === Player.HERO  && !state.heroIsAI);
+    if (!isHumanTurn) return;
+    this._showNoActionsDialog();
+  }
+
+  _showNoActionsDialog() {
+    const state  = this.state;
+    const dialog = document.getElementById('result-dialog');
+    const hint   = document.getElementById('result-dismiss-hint');
+    const btns   = document.getElementById('result-buttons');
+
+    document.getElementById('result-messages').textContent = 'No more actions!';
+    hint.style.display = 'none';
+    btns.style.display = 'flex';
+    btns.innerHTML = '';
+
+    const food = (state.inventory.shared[ResourceType.FOOD] || 0);
+    if (state.activePlayer === Player.HERO && food > 0) {
+      const eatBtn = document.createElement('button');
+      eatBtn.textContent = `🍞 Eat Food (+1 action)  [${food} left]`;
+      eatBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        const result = executeUseItem(state, state.hero, ResourceType.FOOD);
+        for (const msg of result.log) state.addLog(msg);
+        dialog.style.display = 'none';
+        hint.style.display = '';
+        btns.style.display = 'none';
+        btns.innerHTML = '';
+        this._updateSidebar();
+        this.onRedraw();
+        // Don't chain another no-actions dialog here; player now has actions
+      });
+      btns.appendChild(eatBtn);
+    }
+
+    const endBtn = document.createElement('button');
+    endBtn.textContent = 'End Turn ◀';
+    endBtn.className = 'btn-end-turn';
+    endBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      dialog.style.display = 'none';
+      hint.style.display = '';
+      btns.style.display = 'none';
+      btns.innerHTML = '';
+      this._clearSelection();
+      state.endTurn();
+      this._updateSidebar();
+      this.onRedraw();
+      this._maybeRunAI();
+    });
+    btns.appendChild(endBtn);
+
+    dialog.style.display = 'flex';
+    // No click-to-dismiss on the backdrop for this dialog
   }
 
   _showBattleDialog(actorSnap, targetSnap, result, onDismiss, onRematch = null) {

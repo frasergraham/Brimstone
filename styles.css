@@ -431,6 +431,38 @@ canvas { touch-action: pan-x pan-y; }
   font-style: italic;
 }
 
+.result-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  width: 100%;
+}
+
+.result-buttons button {
+  background: var(--accent-dim, #3a3a5c);
+  color: var(--text-bright);
+  border: 1px solid var(--border, #555);
+  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.result-buttons button:hover {
+  background: var(--accent, #5a5a8c);
+}
+
+.result-buttons button.btn-end-turn {
+  background: var(--danger-dim, #5c2a2a);
+  border-color: var(--danger, #aa4444);
+}
+
+.result-buttons button.btn-end-turn:hover {
+  background: var(--danger, #aa4444);
+}
+
 /* ── Battle dialog ─────────────────────────────────────────────────────── */
 
 #battle-dialog {
