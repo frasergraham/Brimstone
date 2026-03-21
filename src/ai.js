@@ -5,6 +5,7 @@ import { EntityType } from './entities.js';
 import { WITCH_OBJECTIVES } from './map.js';
 import {
   executeMove, executeExplore, executeBattle, executeSummon,
+  executeAttackFortification,
 } from './actions.js';
 
 const THINK_DELAY_MS = 600;
@@ -65,7 +66,7 @@ export class WitchAI {
     const state = this.state;
     const witch = state.witch;
 
-    // 1. Fight any hero unit co-located
+    // 1. Fight any hero unit co-located with the witch
     const colocatedEnemy = state.entities.find(
       e => e.alive && e.owner === 'hero' && e.col === witch.col && e.row === witch.row
     );
@@ -76,13 +77,30 @@ export class WitchAI {
       return true;
     }
 
-    // 2. Summon if resources available and army is small
+    // 2. Attack adjacent fortification that contains hero units (break it open)
+    const fortifiedWithHero = getNeighbors(witch.col, witch.row).find(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      if (!t || t.fortifyLevel <= 0) return false;
+      return state.entities.some(
+        e => e.alive && e.owner === 'hero' && e.col === n.col && e.row === n.row
+      );
+    });
+    if (fortifiedWithHero) {
+      const result = executeAttackFortification(
+        state, witch, fortifiedWithHero.col, fortifiedWithHero.row
+      );
+      logResult(state, result);
+      if (result.success) state.spendAction(result.cost);
+      return result.success;
+    }
+
+    // 3. Summon if resources available and army is still small
     const inv = state.inventory.witch;
     const totalRes = Object.values(inv).reduce((s, v) => s + v, 0);
     const witchMinions = state.entities.filter(
       e => e.alive && e.owner === 'witch' && e.type !== EntityType.WITCH
     );
-    if (totalRes > 0 && witchMinions.length < 4) {
+    if (totalRes > 0 && witchMinions.length < 8) {
       const spawnAdj = getNeighbors(witch.col, witch.row).find(n => {
         const t = state.tiles.get(hexKey(n.col, n.row));
         return t && t.type !== TileType.RIVER &&
@@ -96,23 +114,10 @@ export class WitchAI {
       }
     }
 
-    // 3. Explore current tile if unexplored
+    // 4. Explore current tile if unexplored
     const witchTile = state.tiles.get(hexKey(witch.col, witch.row));
     if (witchTile && !witchTile.explored) {
       const result = executeExplore(state, witch);
-      logResult(state, result);
-      state.spendAction(result.cost);
-      return true;
-    }
-
-    // 4. Move to adjacent unexplored building/resource tile
-    const unexploredAdj = getNeighbors(witch.col, witch.row).find(n => {
-      const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && !t.explored && (t.hasSurvivor || t.resource || t.building) &&
-        t.type !== TileType.RIVER;
-    });
-    if (unexploredAdj) {
-      const result = executeMove(state, witch, unexploredAdj.col, unexploredAdj.row);
       logResult(state, result);
       state.spendAction(result.cost);
       return true;
@@ -140,6 +145,24 @@ export class WitchAI {
         state.spendAction(result.cost);
         return true;
       }
+      // Attack adjacent fortification blocking progress toward hero/objectives
+      const minionFortTarget = getNeighbors(minion.col, minion.row).find(n => {
+        const t = state.tiles.get(hexKey(n.col, n.row));
+        if (!t || t.fortifyLevel <= 0) return false;
+        return state.entities.some(
+          e => e.alive && e.owner === 'hero' && e.col === n.col && e.row === n.row
+        );
+      });
+      if (minionFortTarget) {
+        const result = executeAttackFortification(
+          state, minion, minionFortTarget.col, minionFortTarget.row
+        );
+        logResult(state, result);
+        if (result.success) {
+          state.spendAction(result.cost);
+          return true;
+        }
+      }
       // Move toward nearest unclaimed objective
       const targetObj = _unoccupiedObjective(state, minion);
       if (targetObj) {
@@ -150,6 +173,21 @@ export class WitchAI {
           state.spendAction(result.cost);
           return true;
         }
+        // Blocked by fortification — attack it to clear the way
+        const blockingFort = getNeighbors(minion.col, minion.row).find(n => {
+          const t = state.tiles.get(hexKey(n.col, n.row));
+          return t && t.fortifyLevel > 0;
+        });
+        if (blockingFort) {
+          const result = executeAttackFortification(
+            state, minion, blockingFort.col, blockingFort.row
+          );
+          logResult(state, result);
+          if (result.success) {
+            state.spendAction(result.cost);
+            return true;
+          }
+        }
       }
       // Otherwise close on hero
       const step = stepToward(state, minion, state.hero);
@@ -159,6 +197,21 @@ export class WitchAI {
         state.spendAction(result.cost);
         return true;
       }
+      // Hero path is blocked — tear at nearest fortification
+      const anyFort = getNeighbors(minion.col, minion.row).find(n => {
+        const t = state.tiles.get(hexKey(n.col, n.row));
+        return t && t.fortifyLevel > 0;
+      });
+      if (anyFort) {
+        const result = executeAttackFortification(
+          state, minion, anyFort.col, anyFort.row
+        );
+        logResult(state, result);
+        if (result.success) {
+          state.spendAction(result.cost);
+          return true;
+        }
+      }
     }
 
     // 6. Move witch toward nearest unclaimed objective or hero
@@ -166,6 +219,35 @@ export class WitchAI {
     const step = stepToward(state, witch, witchTarget);
     if (step) {
       const result = executeMove(state, witch, step.col, step.row);
+      logResult(state, result);
+      state.spendAction(result.cost);
+      return true;
+    }
+
+    // 7. If witch path is blocked, attack an adjacent fortification to clear it
+    const blockingFort = getNeighbors(witch.col, witch.row).find(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && t.fortifyLevel > 0;
+    });
+    if (blockingFort) {
+      const result = executeAttackFortification(
+        state, witch, blockingFort.col, blockingFort.row
+      );
+      logResult(state, result);
+      if (result.success) {
+        state.spendAction(result.cost);
+        return true;
+      }
+    }
+
+    // 8. Move to adjacent unexplored building/resource tile
+    const unexploredAdj = getNeighbors(witch.col, witch.row).find(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && !t.explored && (t.hasSurvivor || t.resource || t.building) &&
+        t.type !== TileType.RIVER && t.fortifyLevel === 0;
+    });
+    if (unexploredAdj) {
+      const result = executeMove(state, witch, unexploredAdj.col, unexploredAdj.row);
       logResult(state, result);
       state.spendAction(result.cost);
       return true;
@@ -196,7 +278,9 @@ function isAdjacent(a, b) {
   return hexDistance(a.col, a.row, b.col, b.row) === 1;
 }
 
+// BFS pathfinding — witch units skip fortified tiles
 function stepToward(state, actor, target) {
+  const isWitch = actor.owner === 'witch';
   const visited = new Set([hexKey(actor.col, actor.row)]);
   const queue   = [{ col: actor.col, row: actor.row, first: null }];
 
@@ -209,6 +293,7 @@ function stepToward(state, actor, target) {
       if (visited.has(k)) continue;
       const t = state.tiles.get(k);
       if (!t || t.type === TileType.RIVER) continue;
+      if (isWitch && t.fortifyLevel > 0) continue; // blocked by fortification
       visited.add(k);
       queue.push({ col: n.col, row: n.row, first: first || n });
     }

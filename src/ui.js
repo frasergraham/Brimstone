@@ -1,6 +1,6 @@
 // UI controller: handles canvas clicks, sidepanel updates, action buttons
 import { hexKey } from './hex.js';
-import { TileType, BUILDING_LABEL, RESOURCE_LABEL, WEAPON_LABEL } from './tiles.js';
+import { TileType, BUILDING_LABEL, RESOURCE_LABEL, WEAPON_LABEL, WEAPON_STATS } from './tiles.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
 import { Phase, Player, PHASE_ICON } from './game.js';
 import { PAD_X, PAD_Y } from './renderer.js';
@@ -8,6 +8,7 @@ import {
   ActionType, getValidActions, getVisibleEnemyHexes,
   executeMove, executeExplore, executeBattle,
   executeFortify, executeSummon, executeUseItem, executeUseAbility,
+  executeGiveWeapon, executeAttackFortification, executePlaceTrap,
 } from './actions.js';
 
 export class UIController {
@@ -179,6 +180,13 @@ export class UIController {
     } else if (actionType === ActionType.SUMMON) {
       result = executeSummon(state, actor, hex.col, hex.row);
       if (result.success) state.spendAction(result.cost);
+    } else if (actionType === ActionType.ATTACK_FORTIFICATION) {
+      const attackFortAction = this._validActions.find(a => a.type === ActionType.ATTACK_FORTIFICATION);
+      const validTarget = attackFortAction?.targets.find(t => t.col === hex.col && t.row === hex.row);
+      if (validTarget) {
+        result = executeAttackFortification(state, actor, hex.col, hex.row);
+        if (result.success) state.spendAction(result.cost);
+      }
     }
 
     if (result) for (const msg of result.log) state.addLog(msg);
@@ -340,13 +348,14 @@ export class UIController {
           const hasMetal  = (shared.metal || 0) > 0;
           const hasDoubler = entity.type === EntityType.SURVIVOR &&
             entity.ability === SurvivorAbility.FORTIFY_DOUBLE;
-          const tile = state.tiles.get(hexKey(entity.col, entity.row));
-          const curLevel = tile ? tile.fortifyLevel : 0;
+          const tileFort = state.tiles.get(hexKey(entity.col, entity.row));
+          const curLevel = tileFort ? tileFort.fortifyLevel : 0;
+          const maxLevel = (tileFort && tileFort.type === TileType.BUILDING) ? 8 : 4;
           const lbl = hasMetal
-            ? `Reinforce (Metal, +2 DEF → ${Math.min(4, curLevel + 2)})`
+            ? `Reinforce (Metal, +2 DEF → ${Math.min(maxLevel, curLevel + 2)})`
             : hasDoubler
-              ? `Fortify (Wood, +2 DEF ★ → ${Math.min(4, curLevel + 2)})`
-              : `Fortify (Wood, +1 DEF → ${Math.min(4, curLevel + 1)})`;
+              ? `Fortify (Wood, +2 DEF ★ → ${Math.min(maxLevel, curLevel + 2)})`
+              : `Fortify (Wood, +1 DEF → ${Math.min(maxLevel, curLevel + 1)})`;
           html += btn(lbl, 'fortify', dis, `data-action="fortify"`);
           break;
         }
@@ -366,6 +375,23 @@ export class UIController {
             html += btn(`Equip ${w.label}`, 'item', dis,
               `data-action="use_item" data-item="${w.key}"`);
           }
+          break;
+        case ActionType.GIVE_WEAPON:
+          for (const gift of action.gifts) {
+            const wLabel = WEAPON_LABEL[gift.weaponKey.replace('weapon:', '')] || gift.weaponKey;
+            html += btn(
+              `Give ${wLabel} → ${gift.survivorName} (1)`,
+              'item',
+              dis,
+              `data-action="give_weapon" data-weapon="${gift.weaponKey}" data-survivor="${gift.survivorId}"`
+            );
+          }
+          break;
+        case ActionType.ATTACK_FORTIFICATION:
+          html += btn('Attack Fortification (1)', 'battle', dis, `data-action="attack_fortification"`);
+          break;
+        case ActionType.PLACE_TRAP:
+          html += btn('Set Trap — 2 Wood + 1 Metal (1)', 'fortify', dis, `data-action="place_trap"`);
           break;
         case ActionType.USE_ABILITY: {
           const abilityLabels = {
@@ -473,6 +499,36 @@ export class UIController {
         if (result.success) state.spendAction(result.cost);
         break;
       }
+
+      case 'give_weapon': {
+        const survivorId = button.dataset.survivor;
+        const weaponKey  = button.dataset.weapon;
+        const result = executeGiveWeapon(state, entity, survivorId, weaponKey);
+        for (const msg of result.log) state.addLog(msg);
+        if (result.success) state.spendAction(result.cost);
+        if (this._selectedEntity?.alive) this._selectEntity(this._selectedEntity);
+        else this._clearSelection();
+        break;
+      }
+
+      case 'attack_fortification': {
+        this._awaitingTarget = { actionType: ActionType.ATTACK_FORTIFICATION, actor: entity };
+        const attackFortAction = this._validActions.find(a => a.type === ActionType.ATTACK_FORTIFICATION);
+        if (attackFortAction) {
+          this.renderer.highlightHexes = attackFortAction.targets.map(t => ({
+            ...t, color: 'rgba(220,60,60,0.55)',
+          }));
+        }
+        state.addLog('Click an adjacent fortified area to attack it.');
+        break;
+      }
+
+      case 'place_trap': {
+        const result = executePlaceTrap(state, entity);
+        for (const msg of result.log) state.addLog(msg);
+        if (result.success) state.spendAction(result.cost);
+        break;
+      }
     }
 
     state.checkVictory();
@@ -511,6 +567,7 @@ export class UIController {
                 : `🪵 Fortified (+${tile.fortifyLevel} DEF)`;
             info += `<div class="fortified">${fl}</div>`;
           }
+          if (tile.hasTrap) info += `<div class="fortified" style="color:#ff8800">⚠ Trap Set (${tile.trapDamage} dmg on attack)</div>`;
           if (!tile.explored) info += `<div class="unexplored">Unexplored</div>`;
 
           // Show visible units on hovered hex
@@ -623,10 +680,10 @@ function btn(label, cls, disabled = '', extra = '') {
 }
 
 function _summonLabel(witchInv) {
-  if ((witchInv.metal || 0) > 0) return 'Raise Iron Golem (1 Metal)';
-  if ((witchInv.wood  || 0) > 0) return 'Raise Wood Golem (1 Wood)';
+  if ((witchInv.metal || 0) > 0) return 'Raise Iron Golem + Minion (1 Metal)';
+  if ((witchInv.wood  || 0) > 0) return 'Raise Wood Golem + Minion (1 Wood)';
   const res = Object.keys(witchInv).find(k => witchInv[k] > 0);
-  return res ? `Summon Minion (1 ${res})` : 'Summon Minion';
+  return res ? `Summon 2 Minions (1 ${res})` : 'Summon Minion';
 }
 
 // Returns units at a hex that are currently visible (respects fog of war)

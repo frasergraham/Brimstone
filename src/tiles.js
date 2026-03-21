@@ -134,15 +134,17 @@ export const RESOURCE_LABEL = {
 export const BUILDING_LOOT = LOOT_CONFIG.buildings;
 export const TERRAIN_LOOT  = LOOT_CONFIG.terrain;
 
-// Roll a loot result from a weighted table using Math.random
+// Roll a loot result from a weighted table using Math.random.
+// Returns { type, qty } where qty defaults to 1.
 export function rollLoot(table) {
   const total = table.reduce((s, e) => s + e.weight, 0);
   let r = Math.random() * total;
   for (const entry of table) {
     r -= entry.weight;
-    if (r <= 0) return entry.type;
+    if (r <= 0) return { type: entry.type, qty: entry.qty || 1 };
   }
-  return table[table.length - 1].type;
+  const last = table[table.length - 1];
+  return { type: last.type, qty: last.qty || 1 };
 }
 
 export class Tile {
@@ -153,6 +155,8 @@ export class Tile {
     this.building = null;   // BuildingType or null
     this.explored = false;
     this.resource = null;   // ResourceType or null (on open tiles)
-    this.fortifyLevel = 0;  // 0=none, 1=wood (+1 def), 2=metal (+2 def)
+    this.fortifyLevel = 0;  // 0=none; each point adds +1 DEF and blocks witch entry
+    this.hasTrap    = false; // trap placed by the hero
+    this.trapDamage = 0;     // damage dealt when trap springs
   }
 }

@@ -166,7 +166,7 @@ export class GameState {
     const endangered = this.entities.filter(e => {
       if (!e.alive || e.owner !== 'hero') return false;
       const t = this.tiles.get(hexKey(e.col, e.row));
-      return !(t && t.type === TileType.BUILDING && t.fortifyLevel > 0);
+      return !(t && t.fortifyLevel > 0);
     });
 
     for (const e of endangered) {

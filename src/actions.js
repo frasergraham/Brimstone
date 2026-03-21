@@ -9,15 +9,18 @@ import {
 import { Phase } from './game.js';
 
 export const ActionType = Object.freeze({
-  MOVE:         'move',
-  EXPLORE:      'explore',
-  BATTLE:       'battle',
-  FORTIFY:      'fortify',
-  SUMMON:       'summon',
-  USE_ITEM:     'use_item',
-  EQUIP_WEAPON: 'equip_weapon',
-  USE_ABILITY:  'use_ability',
-  END_TURN:     'end_turn',
+  MOVE:                 'move',
+  EXPLORE:              'explore',
+  BATTLE:               'battle',
+  FORTIFY:              'fortify',
+  SUMMON:               'summon',
+  USE_ITEM:             'use_item',
+  EQUIP_WEAPON:         'equip_weapon',
+  USE_ABILITY:          'use_ability',
+  GIVE_WEAPON:          'give_weapon',
+  ATTACK_FORTIFICATION: 'attack_fortification',
+  PLACE_TRAP:           'place_trap',
+  END_TURN:             'end_turn',
 });
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -27,6 +30,7 @@ function tile(state, col, row) {
 }
 
 function getReachableHexes(state, actor, range) {
+  const isWitch = actor.owner === 'witch';
   const visited = new Set([hexKey(actor.col, actor.row)]);
   const reachable = [];
   let frontier = [{ col: actor.col, row: actor.row }];
@@ -38,6 +42,8 @@ function getReachableHexes(state, actor, range) {
         if (visited.has(k)) continue;
         const nt = tile(state, n.col, n.row);
         if (!nt || nt.type === TileType.RIVER) continue;
+        // Witch units cannot enter fortified tiles
+        if (isWitch && nt.fortifyLevel > 0) continue;
         visited.add(k);
         reachable.push({ col: n.col, row: n.row });
         next.push({ col: n.col, row: n.row });
@@ -108,13 +114,16 @@ export function getValidActions(state, actor) {
   ];
   if (battleTargets.length) actions.push({ type: ActionType.BATTLE, targets: battleTargets });
 
-  // Fortify — hero or survivor in a building, cap at 4, uses shared inventory
-  if (t && t.type === TileType.BUILDING && t.fortifyLevel < 4 && actorIsHero) {
-    const shared     = state.inventory.shared;
-    const woodCount  = (shared[ResourceType.WOOD]  || 0);
-    const metalCount = (shared[ResourceType.METAL] || 0);
-    if (woodCount > 0 || metalCount > 0) {
-      actions.push({ type: ActionType.FORTIFY, targets: [{ col: actor.col, row: actor.row }] });
+  // Fortify — hero-side on any tile, cap depends on tile type
+  if (t && actorIsHero) {
+    const maxFortify = t.type === TileType.BUILDING ? 8 : 4;
+    if (t.fortifyLevel < maxFortify) {
+      const shared     = state.inventory.shared;
+      const woodCount  = (shared[ResourceType.WOOD]  || 0);
+      const metalCount = (shared[ResourceType.METAL] || 0);
+      if (woodCount > 0 || metalCount > 0) {
+        actions.push({ type: ActionType.FORTIFY, targets: [{ col: actor.col, row: actor.row }] });
+      }
     }
   }
 
@@ -131,6 +140,17 @@ export function getValidActions(state, actor) {
         const summonType = pickSummonType(inv);
         actions.push({ type: ActionType.SUMMON, targets: spawnTargets, summonType });
       }
+    }
+  }
+
+  // Attack fortification — witch-side, adjacent to any tile with fortifyLevel > 0
+  if (!actorIsHero) {
+    const fortTargets = getNeighbors(actor.col, actor.row).filter(n => {
+      const nt = tile(state, n.col, n.row);
+      return nt && nt.fortifyLevel > 0;
+    });
+    if (fortTargets.length) {
+      actions.push({ type: ActionType.ATTACK_FORTIFICATION, targets: fortTargets });
     }
   }
 
@@ -165,6 +185,31 @@ export function getValidActions(state, actor) {
           label: WEAPON_LABEL[k.replace('weapon:', '')] || k,
         })),
       });
+    }
+
+    // Give weapon to survivor on same hex (hero only)
+    if (actor.type === EntityType.HERO) {
+      const survivorsHere = entitiesAt(state, actor.col, actor.row)
+        .filter(e => e.owner === 'hero' && e.type === EntityType.SURVIVOR);
+      const myWeapons = Object.keys(myItems)
+        .filter(k => k.startsWith('weapon:') && (myItems[k] || 0) > 0);
+      if (survivorsHere.length > 0 && myWeapons.length > 0) {
+        const gifts = [];
+        for (const wKey of myWeapons) {
+          for (const s of survivorsHere) {
+            gifts.push({ weaponKey: wKey, survivorId: s.id, survivorName: s.displayName });
+          }
+        }
+        actions.push({ type: ActionType.GIVE_WEAPON, gifts });
+      }
+    }
+
+    // Place trap — costs 2 Wood + 1 Metal, no existing trap on this tile
+    if (t && !t.hasTrap) {
+      const shared = state.inventory.shared;
+      if ((shared[ResourceType.WOOD] || 0) >= 2 && (shared[ResourceType.METAL] || 0) >= 1) {
+        actions.push({ type: ActionType.PLACE_TRAP, targets: [{ col: actor.col, row: actor.row }] });
+      }
     }
 
     // Survivor special abilities
@@ -209,6 +254,10 @@ export function executeMove(state, actor, targetCol, targetRow) {
   if (!t || t.type === TileType.RIVER)
     return { success: false, log: ['Cannot move there.'] };
 
+  // Witch units blocked by fortified tiles
+  if (actor.owner === 'witch' && t.fortifyLevel > 0)
+    return { success: false, log: ['That position is fortified. Destroy the fortification first.'] };
+
   actor.col = targetCol;
   actor.row = targetRow;
 
@@ -233,12 +282,12 @@ export function executeExplore(state, actor) {
     actor.ability === SurvivorAbility.HERBALIST;
 
   if (t.type === TileType.BUILDING && t.building && BUILDING_LOOT[t.building]) {
-    const lootType = rollLoot(BUILDING_LOOT[t.building]);
-    _applyLoot(state, actor, lootType, log);
+    const loot = rollLoot(BUILDING_LOOT[t.building]);
+    _applyLoot(state, actor, loot.type, log, loot.qty);
   } else {
     const terrainTable = TERRAIN_LOOT[t.type] || TERRAIN_LOOT['grass'];
-    const lootType = rollLoot(terrainTable);
-    _applyLoot(state, actor, lootType, log);
+    const loot = rollLoot(terrainTable);
+    _applyLoot(state, actor, loot.type, log, loot.qty);
   }
 
   if (isHerbalist && actor.owner === 'hero') {
@@ -249,7 +298,7 @@ export function executeExplore(state, actor) {
   return { success: true, log, cost: 1 };
 }
 
-function _applyLoot(state, actor, lootType, log) {
+function _applyLoot(state, actor, lootType, log, qty = 1) {
   if (lootType === 'nothing') {
     log.push(`${actor.displayName} searches carefully… nothing useful found.`);
     return;
@@ -291,19 +340,22 @@ function _applyLoot(state, actor, lootType, log) {
   if (lootType === ResourceType.HERBS) {
     // Herbs are per-unit (potions)
     if (actor.owner === 'hero') {
-      actor.items[lootType] = (actor.items[lootType] || 0) + 1;
-      log.push(`Found Herbs! Added to ${actor.displayName}'s pack.`);
+      actor.items[lootType] = (actor.items[lootType] || 0) + qty;
+      const qtyStr = qty > 1 ? ` ×${qty}` : '';
+      log.push(`Found Herbs${qtyStr}! Added to ${actor.displayName}'s pack.`);
     }
     return;
   }
 
   // All other resources are shared
   if (actor.owner === 'hero') {
-    state.inventory.shared[lootType] = (state.inventory.shared[lootType] || 0) + 1;
-    log.push(`Found ${lootType}! Added to shared supplies.`);
+    state.inventory.shared[lootType] = (state.inventory.shared[lootType] || 0) + qty;
+    const qtyStr = qty > 1 ? ` ×${qty}` : '';
+    log.push(`Found ${lootType}${qtyStr}! Added to shared supplies.`);
   } else {
-    state.inventory.witch[lootType] = (state.inventory.witch[lootType] || 0) + 1;
-    log.push(`The witch secures ${lootType} for dark rituals.`);
+    state.inventory.witch[lootType] = (state.inventory.witch[lootType] || 0) + qty;
+    const qtyStr = qty > 1 ? ` ×${qty}` : '';
+    log.push(`The witch secures ${qtyStr}${lootType} for dark rituals.`);
   }
 }
 
@@ -314,10 +366,10 @@ export function executeBattle(state, actor, target) {
   if (state.phase === Phase.DAY   && actor.owner === 'hero')  phaseBonus = 1;
   if (state.phase === Phase.NIGHT && actor.owner === 'witch') phaseBonus = 1;
 
-  const { attackRoll, defenseRoll, hit } = Entity.resolveCombat(actor, target, phaseBonus);
-
   const defTile = tile(state, target.col, target.row);
   if (defTile?.fortifyLevel) target.defenseBonus += defTile.fortifyLevel;
+
+  const { attackRoll, defenseRoll, hit } = Entity.resolveCombat(actor, target, phaseBonus);
 
   const phaseNote = phaseBonus > 0
     ? ` (${state.phase === Phase.DAY ? '☀ day bonus' : '🌙 night bonus'})`
@@ -333,6 +385,12 @@ export function executeBattle(state, actor, target) {
     if (killed) {
       log.push(`${target.displayName} is slain!`);
       state.entities = state.entities.filter(e => e.id !== target.id);
+      // When the witch kills a survivor, raise them as a zombie
+      if (actor.owner === 'witch' && target.type === EntityType.SURVIVOR) {
+        const z = createZombie(target.col, target.row);
+        state.entities.push(z);
+        log.push(`${target.displayName} rises from the dead as a zombie!`);
+      }
     } else {
       log.push(`${target.displayName} takes 1 damage. (${target.hp}/${target.maxHp} HP)`);
     }
@@ -345,8 +403,10 @@ export function executeBattle(state, actor, target) {
 
 export function executeFortify(state, actor) {
   const t = tile(state, actor.col, actor.row);
-  if (!t || t.type !== TileType.BUILDING) return { success: false, log: ['Not in a building.'] };
-  if (t.fortifyLevel >= 4) return { success: false, log: ['Cannot fortify further.'] };
+  if (!t) return { success: false, log: ['No tile here.'] };
+
+  const maxFortify = t.type === TileType.BUILDING ? 8 : 4;
+  if (t.fortifyLevel >= maxFortify) return { success: false, log: ['Cannot fortify further.'] };
 
   const shared     = state.inventory.shared;
   const metalCount = (shared[ResourceType.METAL] || 0);
@@ -358,12 +418,12 @@ export function executeFortify(state, actor) {
 
   if (metalCount > 0) {
     shared[ResourceType.METAL]--;
-    t.fortifyLevel = Math.min(4, t.fortifyLevel + 2);
+    t.fortifyLevel = Math.min(maxFortify, t.fortifyLevel + 2);
     return { success: true, log: [`${actor.displayName} reinforces with metal! (now +${t.fortifyLevel} DEF)`], cost: 1 };
   } else if (woodCount > 0) {
     shared[ResourceType.WOOD]--;
     const gain = hasDoubler ? 2 : 1;
-    t.fortifyLevel = Math.min(4, t.fortifyLevel + gain);
+    t.fortifyLevel = Math.min(maxFortify, t.fortifyLevel + gain);
     const star = hasDoubler ? ' ★' : '';
     return { success: true, log: [`${actor.displayName} fortifies with wood!${star} (now +${t.fortifyLevel} DEF)`], cost: 1 };
   }
@@ -373,30 +433,40 @@ export function executeFortify(state, actor) {
 
 export function executeSummon(state, actor, targetCol, targetRow) {
   const inv = state.inventory.witch;
-  let summonedUnit, res, unitName;
+  let primaryUnit, extraUnit, res, unitName;
 
   if ((inv[ResourceType.METAL] || 0) > 0) {
     res = ResourceType.METAL;
-    summonedUnit = createIronGolem(targetCol, targetRow);
+    primaryUnit = createIronGolem(targetCol, targetRow);
     unitName = 'Iron Golem';
   } else if ((inv[ResourceType.WOOD] || 0) > 0) {
     res = ResourceType.WOOD;
-    summonedUnit = createWoodGolem(targetCol, targetRow);
+    primaryUnit = createWoodGolem(targetCol, targetRow);
     unitName = 'Wood Golem';
   } else {
     res = Object.keys(inv).find(k => inv[k] > 0);
     if (!res) return { success: false, log: ['No resources to summon.'] };
-    summonedUnit = createMinion(targetCol, targetRow);
+    primaryUnit = createMinion(targetCol, targetRow);
     unitName = 'Minion';
   }
 
   inv[res]--;
-  state.entities.push(summonedUnit);
-  return {
-    success: true,
-    log: [`The witch raises a ${unitName} from ${res}!`],
-    cost: 1,
-  };
+  state.entities.push(primaryUnit);
+
+  const log = [`The witch raises a ${unitName} from ${res}!`];
+
+  // Horde: always summon an extra minion on another adjacent empty hex
+  const extraHex = getNeighbors(actor.col, actor.row).find(n => {
+    const nt = tile(state, n.col, n.row);
+    return nt && nt.type !== TileType.RIVER && entitiesAt(state, n.col, n.row).length === 0;
+  });
+  if (extraHex) {
+    extraUnit = createMinion(extraHex.col, extraHex.row);
+    state.entities.push(extraUnit);
+    log.push(`The horde swells — a Minion surges forth alongside!`);
+  }
+
+  return { success: true, log, cost: 1 };
 }
 
 export function executeUseItem(state, actor, item) {
@@ -470,4 +540,71 @@ export function executeUseAbility(state, actor) {
     default:
       return { success: false, log: ['No active ability.'] };
   }
+}
+
+export function executeGiveWeapon(state, actor, survivorId, weaponKey) {
+  const survivor = state.entities.find(e => e.id === survivorId && e.alive);
+  if (!survivor) return { success: false, log: ['Survivor not found.'] };
+  const myItems = actor.items || {};
+  if ((myItems[weaponKey] || 0) < 1) return { success: false, log: ['Weapon not available.'] };
+
+  myItems[weaponKey]--;
+  const weaponType = weaponKey.replace('weapon:', '');
+  survivor.equipWeapon(weaponType);
+  const label = WEAPON_LABEL[weaponType] || weaponType;
+  return {
+    success: true,
+    log: [`${actor.displayName} gives ${label} to ${survivor.displayName}! They arm themselves immediately.`],
+    cost: 1,
+  };
+}
+
+export function executeAttackFortification(state, actor, targetCol, targetRow) {
+  const t = tile(state, targetCol, targetRow);
+  if (!t || t.fortifyLevel <= 0) return { success: false, log: ['No fortification to attack.'] };
+
+  const log = [];
+  t.fortifyLevel--;
+  log.push(`${actor.displayName} tears at the fortification at (${targetCol},${targetRow})! (now +${t.fortifyLevel} DEF)`);
+
+  // Trap triggers on attack
+  if (t.hasTrap) {
+    const dmg = t.trapDamage || 2;
+    t.hasTrap    = false;
+    t.trapDamage = 0;
+    const killed = actor.takeDamage(dmg);
+    log.push(`⚠ A trap springs! ${actor.displayName} takes ${dmg} damage!`);
+    if (killed) {
+      state.entities = state.entities.filter(e => e.id !== actor.id);
+      log.push(`${actor.displayName} is destroyed by the trap!`);
+    }
+  }
+
+  if (t.fortifyLevel === 0) {
+    log.push(`The fortification crumbles! The path is open.`);
+  }
+
+  return { success: true, log, cost: 1 };
+}
+
+export function executePlaceTrap(state, actor) {
+  const t = tile(state, actor.col, actor.row);
+  if (!t) return { success: false, log: ['No tile here.'] };
+  if (t.hasTrap) return { success: false, log: ['A trap is already set here.'] };
+
+  const shared = state.inventory.shared;
+  if ((shared[ResourceType.WOOD] || 0) < 2 || (shared[ResourceType.METAL] || 0) < 1) {
+    return { success: false, log: ['Requires 2 Wood and 1 Metal.'] };
+  }
+
+  shared[ResourceType.WOOD]  -= 2;
+  shared[ResourceType.METAL] -= 1;
+  t.hasTrap    = true;
+  t.trapDamage = 2;
+
+  return {
+    success: true,
+    log: [`${actor.displayName} sets a hidden trap! Any witch unit that attacks this position will suffer for it.`],
+    cost: 1,
+  };
 }
