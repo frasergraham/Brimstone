@@ -118,7 +118,7 @@ export class WitchAI {
     // 4. Move to adjacent unexplored building/resource tile
     const unexploredAdj = getNeighbors(witch.col, witch.row).find(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && !t.explored && (t.hasSurvivor || t.resource || t.building) &&
+      return t && !t.explored && (t.hiddenSurvivor || t.resource || t.building) &&
         t.type !== TileType.RIVER;
     });
     if (unexploredAdj) {

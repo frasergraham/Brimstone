@@ -315,6 +315,12 @@ export class UIController {
       else this._clearSelection();
       this._updateSidebar();
       this.onRedraw();
+      if (result.encounterLog?.length) {
+        this._showResultDialog(result.encounterLog, () => {
+          this._updateSidebar();
+          this.onRedraw();
+        });
+      }
 
     } else if (actionType === ActionType.BATTLE) {
       const battleAction = this._validActions.find(a => a.type === ActionType.BATTLE);

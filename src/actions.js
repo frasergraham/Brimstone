@@ -226,21 +226,23 @@ export function executeMove(state, actor, targetCol, targetRow) {
   }
 
   // Hidden survivor encounter — triggers once per tile for any unit that steps on it
+  const encounterLog = [];
   if (t.hiddenSurvivor) {
     t.hiddenSurvivor = false;
     if (actor.owner === 'hero') {
       const s = createSurvivor(targetCol, targetRow);
       s.owner = 'hero';
       state.entities.push(s);
-      log.push(`A survivor steps out of hiding — ${s.name}, the ${s.title}! They join the party.`);
+      encounterLog.push(`A survivor steps out of hiding — ${s.name}, the ${s.title}! They join the party.`);
     } else {
       const z = createZombie(targetCol, targetRow);
       state.entities.push(z);
-      log.push(`A cowering survivor is found… raised as a zombie by the witch!`);
+      encounterLog.push(`A cowering survivor is found… raised as a zombie by the witch!`);
     }
+    log.push(...encounterLog);
   }
 
-  return { success: true, log, cost: 1 };
+  return { success: true, log, cost: 1, encounterLog };
 }
 
 export function executeExplore(state, actor) {
