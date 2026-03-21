@@ -165,6 +165,29 @@ export class UIController {
     const hex = this._canvasToHex(x, y);
     if (hex.col < 0 || hex.col >= 13 || hex.row < 0 || hex.row >= 11) return;
 
+    // Tapping the selected unit's hex always toggles the action popup — this
+    // check happens before the _awaitingTarget routing so it works whether the
+    // default-MOVE awaiting is set or not, and regardless of how many units
+    // share that hex.
+    if (
+      this._selectedEntity &&
+      hex.col === this._selectedEntity.col &&
+      hex.row === this._selectedEntity.row
+    ) {
+      if (this._popupVisible) {
+        this._popupVisible = false;
+        _hideActionPopup();
+        // Restore move highlights after dismissing popup
+        this._updateHighlights();
+      } else {
+        this._showActionPopup(this._selectedEntity);
+        this._popupVisible = true;
+      }
+      this._updateSidebar();
+      this.onRedraw();
+      return;
+    }
+
     if (this._awaitingTarget) {
       this._handleTargetClick(hex);
     } else {
@@ -207,26 +230,16 @@ export class UIController {
         this._pendingUnitPick = null;
       }
     } else {
-      // Multiple units on this hex.
-      // If one of them is already selected, follow the normal tap cycle for it.
-      if (this._selectedEntity && clickedEntities.includes(this._selectedEntity)) {
-        if (this._popupVisible) {
-          this._popupVisible = false;
-          _hideActionPopup();
-        } else {
-          this._showActionPopup(this._selectedEntity);
-          this._popupVisible = true;
-        }
-      } else {
-        // Nothing selected yet (or a different unit selected) — show the picker.
-        this._pendingUnitPick = { units: clickedEntities };
-        this._selectedEntity  = null;
-        this._popupVisible    = true;
-        this._validActions    = [];
-        this.renderer.selectedHex    = { col: hex.col, row: hex.row };
-        this.renderer.highlightHexes = [];
-        this._showActionPopup(null);
-      }
+      // Multiple units on this hex — always show the picker to choose which unit.
+      // (If the user tapped the already-selected unit, _onClick handles it before
+      // we ever reach _handleSelection, so no extra check needed here.)
+      this._pendingUnitPick = { units: clickedEntities };
+      this._selectedEntity  = null;
+      this._popupVisible    = true;
+      this._validActions    = [];
+      this.renderer.selectedHex    = { col: hex.col, row: hex.row };
+      this.renderer.highlightHexes = [];
+      this._showActionPopup(null);
     }
 
     this._updateSidebar();
@@ -286,9 +299,7 @@ export class UIController {
       const moveAction = this._validActions.find(a => a.type === ActionType.MOVE);
       const isValidTarget = moveAction && moveAction.targets.some(t => t.col === hex.col && t.row === hex.row);
       if (!isValidTarget) {
-        // Not a valid move target — treat as a new selection click
-        this._awaitingTarget = null;
-        this.renderer.highlightHexes = [];
+        // Not a highlighted move hex — try re-selecting whatever is there
         this._handleSelection(hex);
         return;
       }
