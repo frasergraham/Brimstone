@@ -547,6 +547,13 @@ canvas { touch-action: pan-x pan-y; }
   gap: 0.45rem;
   pointer-events: all;
 }
+.battle-actions-left {
+  font-size: 0.85rem;
+  letter-spacing: 0.1em;
+  color: var(--day);
+  text-align: center;
+  margin-bottom: 0.3rem;
+}
 .rematch-btn {
   width: 100%;
   font-size: 0.82rem;

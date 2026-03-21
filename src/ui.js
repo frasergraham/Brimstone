@@ -778,6 +778,16 @@ export class UIController {
           fill.style.width = `${Math.max(0, (newHp / targetSnap.maxHp) * 100)}%`;
         }
 
+        // Actions remaining indicator
+        const left  = this.state.actionsLeft;
+        const bonus = this.state.bonusActions;
+        const regPips   = '◆'.repeat(left)  + '◇'.repeat(Math.max(0, 4 - left));
+        const bonusPips = bonus > 0 ? `<span style="color:#4caf7d">${'◆'.repeat(bonus)}</span>` : '';
+        const actsEl = document.createElement('div');
+        actsEl.className = 'battle-actions-left';
+        actsEl.innerHTML = `${regPips}${bonusPips}`;
+        footer.insertBefore(actsEl, footer.firstChild);
+
         // Battle Again button (player battles only, when neither died)
         if (onRematch) {
           const hasActs = this.state.actionsAvailable > 0;
