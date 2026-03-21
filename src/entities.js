@@ -228,9 +228,11 @@ export class Entity {
     this.hp = Math.min(this.maxHp, this.hp + amount);
   }
 
-  // phaseBonus: extra attack from day/night combat advantage
-  static resolveCombat(attacker, defender, phaseBonus = 0) {
-    let extraAtk = phaseBonus;
+  // phaseBonus:    extra attack from day/night advantage
+  // extraAtkBonus: caller-supplied bonus (gang-up etc.) — NOT stored on the entity
+  // extraDefBonus: caller-supplied bonus (fortify, gang-up etc.) — NOT stored on the entity
+  static resolveCombat(attacker, defender, phaseBonus = 0, extraAtkBonus = 0, extraDefBonus = 0) {
+    let extraAtk = phaseBonus + extraAtkBonus;
     // Staff is +2 attack vs undead/golem types
     if (attacker.weapon === 'staff' &&
         (defender.type === EntityType.ZOMBIE ||
@@ -240,8 +242,8 @@ export class Entity {
       extraAtk += 2;
     }
     const attackRoll  = Math.ceil(Math.random() * 6) + attacker.attack  + attacker.attackBonus + extraAtk;
-    const defenseRoll = Math.ceil(Math.random() * 6) + defender.defense + defender.defenseBonus;
-    const margin = attackRoll - defenseRoll; // positive = attacker wins, negative = defender wins
+    const defenseRoll = Math.ceil(Math.random() * 6) + defender.defense + defender.defenseBonus + extraDefBonus;
+    const margin = attackRoll - defenseRoll;
     return { attackRoll, defenseRoll, hit: margin > 0, margin };
   }
 }

@@ -346,24 +346,17 @@ export function executeBattle(state, actor, target) {
   if (state.phase === Phase.DAY   && actor.owner === 'hero')  phaseBonus = 1;
   if (state.phase === Phase.NIGHT && actor.owner === 'witch') phaseBonus = 1;
 
-  // Gang-up bonus: +1 ATK if attacker has any allies nearby
+  // Compute situational bonuses without touching entity fields
   const attackerAllies = allyCount(state, actor);
-  if (attackerAllies > 0) actor.attackBonus += 1;
-
-  // Fortification defense bonus for defender
-  const defTile = tile(state, target.col, target.row);
-  if (defTile?.fortifyLevel) target.defenseBonus += defTile.fortifyLevel;
-
-  // Defender gang-up bonus: +1 DEF if defender has any allies nearby
   const defenderAllies = allyCount(state, target);
-  if (defenderAllies > 0) target.defenseBonus += 1;
+  const defTile        = tile(state, target.col, target.row);
+  const fortBonus      = defTile?.fortifyLevel || 0;
 
-  const { attackRoll, defenseRoll, hit, margin } = Entity.resolveCombat(actor, target, phaseBonus);
+  const extraAtkBonus = attackerAllies > 0 ? 1 : 0;
+  const extraDefBonus = fortBonus + (defenderAllies > 0 ? 1 : 0);
 
-  // Clean up temporary bonuses added above (they're baked into the roll)
-  if (attackerAllies > 0) actor.attackBonus  -= 1;
-  if (defenderAllies > 0) target.defenseBonus -= 1;
-  if (defTile?.fortifyLevel) target.defenseBonus -= defTile.fortifyLevel;
+  const { attackRoll, defenseRoll, hit, margin } =
+    Entity.resolveCombat(actor, target, phaseBonus, extraAtkBonus, extraDefBonus);
 
   const phaseNote  = phaseBonus > 0
     ? ` (${state.phase === Phase.DAY ? '☀ day bonus' : '🌙 night bonus'})`

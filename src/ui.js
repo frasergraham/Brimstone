@@ -727,6 +727,8 @@ export class UIController {
     const state = this.state;
     const nightPositions = state.lastNightDamage || [];
     const dayPositions   = state.lastDayDamage   || [];
+    const hazardLog      = state.lastHazardLog    || [];
+
     if (!nightPositions.length && !dayPositions.length) return;
 
     for (const pos of nightPositions) {
@@ -736,13 +738,25 @@ export class UIController {
       this.renderer.addFlash(pos.col, pos.row, '-1', 'rgba(255,180,0,0.8)', 2000);
     }
 
-    // Animate for 2 seconds
+    // Animate flashes while showing the dialog
     const endTime = Date.now() + 2200;
     const loop = () => {
       this.onRedraw();
       if (Date.now() < endTime) requestAnimationFrame(loop);
     };
     requestAnimationFrame(loop);
+
+    // Show a dialog summarising what happened
+    if (hazardLog.length) {
+      const isNight = nightPositions.length > 0;
+      const header  = isNight
+        ? '🌙 Night falls — unprotected survivors suffer!'
+        : '☀ Dawn breaks — witch minions caught in the open suffer!';
+      this._showResultDialog([header, ...hazardLog], () => {
+        this._updateSidebar();
+        this.onRedraw();
+      });
+    }
   }
 
   // ── Dialogs ───────────────────────────────────────────────────────────────

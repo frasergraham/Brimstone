@@ -93,6 +93,7 @@ export class GameState {
     this.winReason         = null;
     this.lastNightDamage   = []; // positions damaged last night hazard (for flash animation)
     this.lastDayDamage     = []; // positions damaged last day hazard
+    this.lastHazardLog     = []; // human-readable lines describing hazard events this phase
   }
 
   // ── Turn management ────────────────────────────────────────────────────
@@ -136,12 +137,14 @@ export class GameState {
       // Night hazard: survivors in the open take 1 damage
       if (this.phase === Phase.NIGHT) {
         this.lastNightDamage = [];
+        this.lastHazardLog   = [];
         this._applyNightHazard();
       }
 
       // Day hazard: witch minions/zombies/golems in the open take 1 damage
       if (this.phase === Phase.DAY) {
         this.lastDayDamage = [];
+        this.lastHazardLog = [];
         this._applyDayHazard();
       }
 
@@ -185,11 +188,12 @@ export class GameState {
     for (const e of endangered) {
       this.lastNightDamage.push({ col: e.col, row: e.row });
       const killed = e.takeDamage(1);
-      this.addLog(`🌙 The darkness claims ${e.displayName}! (-1 HP)`);
-      if (killed) {
-        this.entities = this.entities.filter(x => x.id !== e.id);
-        this.addLog(`${e.displayName} is consumed by the night!`);
-      }
+      const line = killed
+        ? `💀 ${e.displayName} is consumed by the night!`
+        : `🌙 ${e.displayName} suffers in the open! (${e.hp}/${e.maxHp} HP remaining)`;
+      this.addLog(line);
+      this.lastHazardLog.push(line);
+      if (killed) this.entities = this.entities.filter(x => x.id !== e.id);
     }
     if (endangered.length === 0) {
       this.addLog(`🌙 Night falls. Survivors rest safely, sheltered from the dark.`);
@@ -200,7 +204,7 @@ export class GameState {
     // Witch minions, zombies, and golems caught in the open during daylight take 1 damage
     const sunburned = this.entities.filter(e => {
       if (!e.alive || e.owner !== 'witch') return false;
-      if (e.type === EntityType.WITCH) return false; // the witch herself is unaffected
+      if (e.type === EntityType.WITCH) return false;
       const t = this.tiles.get(hexKey(e.col, e.row));
       return !(t && t.type === TileType.BUILDING);
     });
@@ -208,14 +212,12 @@ export class GameState {
     for (const e of sunburned) {
       this.lastDayDamage.push({ col: e.col, row: e.row });
       const killed = e.takeDamage(1);
-      this.addLog(`☀ Sunlight scorches ${e.displayName} in the open! (-1 HP)`);
-      if (killed) {
-        this.entities = this.entities.filter(x => x.id !== e.id);
-        this.addLog(`${e.displayName} is destroyed by the light!`);
-      }
-    }
-    if (sunburned.length > 0) {
-      this.addLog(`☀ Dawn's light punishes those who lurk in the open!`);
+      const line = killed
+        ? `💀 ${e.displayName} is destroyed by the light!`
+        : `☀ ${e.displayName} is scorched in the open! (${e.hp}/${e.maxHp} HP remaining)`;
+      this.addLog(line);
+      this.lastHazardLog.push(line);
+      if (killed) this.entities = this.entities.filter(x => x.id !== e.id);
     }
   }
 
