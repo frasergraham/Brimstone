@@ -954,7 +954,8 @@ export class UIController {
           }
         }
 
-        // Gang-up indicator
+        // Gang-up indicator — remove any note left from a previous battle first
+        dialog.querySelectorAll('.battle-gang-note').forEach(el => el.remove());
         if ((result.attackerAllies || 0) > 0 || (result.defenderAllies || 0) > 0) {
           const noteEl = document.createElement('div');
           noteEl.className = 'battle-gang-note';
