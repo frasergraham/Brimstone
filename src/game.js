@@ -153,7 +153,8 @@ export class GameState {
       this.witchSummonsThisTurn = 0;
       this.addLog(`The witch stirs… (${this.actionsLeft} actions)`);
     } else {
-      // Node spawning: each Power Node held by a witch entity raises a free minion
+      // Node spawning: only during NIGHT — each held node raises a free minion
+      if (this.phase === Phase.NIGHT)
       for (const obj of this.witchObjectives) {
         const holder = this.entities.find(
           e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row
