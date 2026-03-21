@@ -23,32 +23,102 @@ export class UIController {
     this._awaitingTarget  = null;
     this._pendingUnitPick = null;
 
+    this._touchStart  = null;
+    this._pinchDist   = null;
+    this._isDragging  = false;
+    this._mouseDown   = null;
+    this._didDragPan  = false;
+
     this._bindEvents();
   }
 
   _bindEvents() {
     this.canvas.addEventListener('mousemove', e => this._onMouseMove(e));
     this.canvas.addEventListener('click',     e => this._onClick(e));
+    this.canvas.addEventListener('dblclick',  () => {
+      this.renderer.resetView();
+      this.onRedraw();
+    });
     this.canvas.addEventListener('mouseleave', () => {
       this.renderer.hoveredHex = null;
+      this._mouseDown = null;
+      this._didDragPan = false;
       this.onRedraw();
       if (!this._selectedEntity) this._updateSidebar();
     });
 
-    this.canvas.addEventListener('touchstart', e => {
-      const t = e.touches[0];
-      this._touchStart = { clientX: t.clientX, clientY: t.clientY };
+    // Scroll-to-zoom (desktop)
+    this.canvas.addEventListener('wheel', e => {
+      e.preventDefault();
+      const { x, y } = this._canvasPos(e);
+      const delta = e.deltaY > 0 ? 0.9 : 1.1;
+      this.renderer.setZoom(this.renderer.zoomLevel * delta, x, y);
+      this.onRedraw();
+    }, { passive: false });
+
+    // Mouse drag-to-pan (desktop)
+    this.canvas.addEventListener('mousedown', e => {
+      this._mouseDown  = { clientX: e.clientX, clientY: e.clientY };
+      this._didDragPan = false;
     });
+    this.canvas.addEventListener('mouseup', () => {
+      this._mouseDown = null;
+    });
+
+    // Touch: tap, drag-to-pan, pinch-to-zoom (mobile)
+    this.canvas.addEventListener('touchstart', e => {
+      if (e.touches.length === 2) {
+        this._pinchDist  = _touchDist(e.touches[0], e.touches[1]);
+        this._touchStart = null;
+        this._isDragging = false;
+        e.preventDefault();
+      } else {
+        const t = e.touches[0];
+        this._touchStart = { clientX: t.clientX, clientY: t.clientY, lastX: t.clientX, lastY: t.clientY };
+        this._pinchDist  = null;
+        this._isDragging = false;
+      }
+    }, { passive: false });
+
+    this.canvas.addEventListener('touchmove', e => {
+      e.preventDefault();
+      if (e.touches.length === 2 && this._pinchDist !== null) {
+        const newDist = _touchDist(e.touches[0], e.touches[1]);
+        const midCX  = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+        const midCY  = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+        const { x, y } = this._canvasPos({ clientX: midCX, clientY: midCY });
+        this.renderer.setZoom(this.renderer.zoomLevel * (newDist / this._pinchDist), x, y);
+        this._pinchDist = newDist;
+        this.onRedraw();
+      } else if (e.touches.length === 1 && this._touchStart) {
+        const t  = e.touches[0];
+        const dx = t.clientX - this._touchStart.lastX;
+        const dy = t.clientY - this._touchStart.lastY;
+        const total = Math.hypot(
+          t.clientX - this._touchStart.clientX,
+          t.clientY - this._touchStart.clientY
+        );
+        if (total > 10) this._isDragging = true;
+        if (this._isDragging) {
+          this.renderer._panX += dx;
+          this.renderer._panY += dy;
+          this.renderer._clampPan();
+          this._touchStart.lastX = t.clientX;
+          this._touchStart.lastY = t.clientY;
+          this.onRedraw();
+        }
+      }
+    }, { passive: false });
+
     this.canvas.addEventListener('touchend', e => {
       e.preventDefault();
-      if (!this._touchStart) return;
-      const t = e.changedTouches[0];
-      const dx = t.clientX - this._touchStart.clientX;
-      const dy = t.clientY - this._touchStart.clientY;
-      if (Math.sqrt(dx * dx + dy * dy) < 10) {
+      if (this._touchStart && !this._isDragging) {
+        const t = e.changedTouches[0];
         this._onClick({ clientX: t.clientX, clientY: t.clientY });
       }
       this._touchStart = null;
+      this._pinchDist  = null;
+      this._isDragging = false;
     }, { passive: false });
   }
 
@@ -63,6 +133,24 @@ export class UIController {
   _canvasToHex(x, y) { return this.renderer.canvasToHex(x, y); }
 
   _onMouseMove(e) {
+    // Drag-to-pan when mouse button held
+    if (this._mouseDown) {
+      const dx = e.clientX - this._mouseDown.clientX;
+      const dy = e.clientY - this._mouseDown.clientY;
+      if (Math.hypot(dx, dy) > 5) {
+        this._didDragPan = true;
+        const rect   = this.canvas.getBoundingClientRect();
+        const scaleX = this.canvas.width  / rect.width;
+        const scaleY = this.canvas.height / rect.height;
+        this.renderer._panX += dx * scaleX;
+        this.renderer._panY += dy * scaleY;
+        this.renderer._clampPan();
+        this._mouseDown = { clientX: e.clientX, clientY: e.clientY };
+        this.onRedraw();
+        return;
+      }
+    }
+
     const { x, y } = this._canvasPos(e);
     const hex = this._canvasToHex(x, y);
     this.renderer.hoveredHex = (hex.col >= 0 && hex.col < 13 && hex.row >= 0 && hex.row < 11)
@@ -72,6 +160,7 @@ export class UIController {
   }
 
   _onClick(e) {
+    if (this._didDragPan) { this._didDragPan = false; return; }
     if (this.state.gameOver) return;
     if (this.state.activePlayer === Player.WITCH && this.state.witchIsAI) return;
 
@@ -115,6 +204,13 @@ export class UIController {
     this._pendingUnitPick = null;
     this.renderer.selectedHex = { col: entity.col, row: entity.row };
     this._validActions = getValidActions(this.state, entity);
+    // Move is always the default awaiting action — clicking a green hex moves.
+    const hasMoveAction = this._validActions.some(a => a.type === ActionType.MOVE);
+    if (hasMoveAction && this.state.actionsAvailable > 0) {
+      this._awaitingTarget = { actionType: ActionType.MOVE, actor: entity, isDefault: true };
+    } else {
+      this._awaitingTarget = null;
+    }
     this._updateHighlights();
     this._showActionPopup(entity);
   }
@@ -132,10 +228,10 @@ export class UIController {
   _updateHighlights() {
     const renderer = this.renderer;
     renderer.highlightHexes = [];
-    if (!this._awaitingTarget || !this._selectedEntity) return;
+    if (!this._selectedEntity) return;
 
-    const { actionType } = this._awaitingTarget;
-    if (actionType === ActionType.MOVE) {
+    const { actionType } = this._awaitingTarget || {};
+    if (!actionType || actionType === ActionType.MOVE) {
       const a = this._validActions.find(a => a.type === ActionType.MOVE);
       if (a) renderer.highlightHexes = a.targets.map(t => ({ ...t, color: 'rgba(60,220,80,0.55)' }));
     } else if (actionType === ActionType.BATTLE) {
@@ -150,6 +246,15 @@ export class UIController {
     const state = this.state;
 
     if (actionType === ActionType.MOVE) {
+      const moveAction = this._validActions.find(a => a.type === ActionType.MOVE);
+      const isValidTarget = moveAction && moveAction.targets.some(t => t.col === hex.col && t.row === hex.row);
+      if (!isValidTarget) {
+        // Not a valid move target — treat as a new selection click
+        this._awaitingTarget = null;
+        this.renderer.highlightHexes = [];
+        this._handleSelection(hex);
+        return;
+      }
       const result = executeMove(state, actor, hex.col, hex.row);
       for (const msg of result.log) state.addLog(msg);
       if (result.success) state.spendAction(result.cost);
@@ -250,7 +355,7 @@ export class UIController {
       const dis = !hasAct ? 'disabled' : '';
       switch (action.type) {
         case ActionType.MOVE:
-          regularHtml += btn('⬡ Move (1)', 'move', dis, `data-action="move"`);
+          // Move is the default click action — no button needed
           break;
         case ActionType.EXPLORE:
           regularHtml += btn('🔍 Explore (1)', 'explore', dis, `data-action="explore"`);
@@ -340,7 +445,7 @@ export class UIController {
       [Phase.DAWN]:  'No bonuses — find shelter',
       [Phase.DAY]:   'Hero +1 ATK in combat',
       [Phase.DUSK]:  'No bonuses — seek cover',
-      [Phase.NIGHT]: 'Witch +1 ATK · Unfortified heroes suffer',
+      [Phase.NIGHT]: 'Witch +1 ATK · Heroes in the open suffer',
     };
 
     const survivorCount = state.entities.filter(
@@ -372,17 +477,19 @@ export class UIController {
     if (!el) return;
     const state = this.state;
 
-    let html = '<div class="inv-title">⛧ Power Nodes</div>';
+    let html = '<div class="inv-title">⚔ Power Nodes</div>';
+    let witchCount = 0, heroCount = 0;
     for (const obj of state.witchObjectives) {
-      const held  = state.entities.find(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row);
-      const icon  = held ? '🔴' : '⭕';
-      const style = held ? 'color:#ff6666' : 'color:#aaaaaa';
+      const witchHere = state.entities.find(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row);
+      const heroHere  = state.entities.find(e => e.alive && e.owner === 'hero'  && e.col === obj.col && e.row === obj.row);
+      let icon, style;
+      if (witchHere)      { icon = '🔴'; style = 'color:#ff6666'; witchCount++; }
+      else if (heroHere)  { icon = '🔵'; style = 'color:#66aaff'; heroCount++; }
+      else                { icon = '⭕'; style = 'color:#aaaaaa'; }
       html += `<div class="inv-row" style="${style}">${icon} ${obj.label}</div>`;
     }
-    const allHeld = state.witchObjectives.every(obj =>
-      state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
-    );
-    if (allHeld) html += `<div class="inv-row" style="color:#ff4444;font-weight:bold">⚠ ALL NODES SEIZED! (wins at dawn)</div>`;
+    if (witchCount === 3) html += `<div class="inv-row" style="color:#ff4444;font-weight:bold">⚠ Witch holds all! (wins at dawn)</div>`;
+    if (heroCount  === 3) html += `<div class="inv-row" style="color:#66aaff;font-weight:bold">★ Hero holds all! (wins at dawn)</div>`;
     el.innerHTML = html;
   }
 
@@ -396,15 +503,16 @@ export class UIController {
     const endLabel = noActs ? 'End Turn ◀' : 'End Turn';
 
     let hint = '';
-    if (this._awaitingTarget) {
+    if (this._awaitingTarget && !this._awaitingTarget.isDefault) {
       const labels = {
-        [ActionType.MOVE]:   'Click a highlighted hex to move.',
         [ActionType.BATTLE]: 'Click an enemy to attack.',
         [ActionType.SUMMON]: 'Click an adjacent empty hex.',
       };
       hint = `<p class="hint" style="margin-bottom:0.4rem">${labels[this._awaitingTarget.actionType] || ''}</p>
         ${btn('✕ Cancel', 'end-turn', '', `data-action="cancel"`)}`;
-    } else if (!this._selectedEntity) {
+    } else if (this._selectedEntity) {
+      hint = `<p class="hint">Click a green hex to move, or choose an action.</p>`;
+    } else {
       hint = `<p class="hint">Click a unit to act.</p>`;
     }
 
@@ -429,9 +537,13 @@ export class UIController {
     }
 
     if (action === 'cancel') {
-      this._awaitingTarget = null;
-      this.renderer.highlightHexes = [];
-      if (entity) this._showActionPopup(entity);
+      if (entity) {
+        // Reselect to restore the default move-target state
+        this._selectEntity(entity);
+      } else {
+        this._awaitingTarget = null;
+        this.renderer.highlightHexes = [];
+      }
       this._updateSidebar();
       this.onRedraw();
       return;
@@ -448,15 +560,6 @@ export class UIController {
     if (!entity || entity.owner !== state.activePlayer) return;
 
     switch (action) {
-      case 'move':
-        _hideActionPopup();
-        this._awaitingTarget = { actionType: ActionType.MOVE, actor: entity };
-        this._updateHighlights();
-        state.addLog('Click a highlighted hex to move.');
-        this._updateSidebar();
-        this.onRedraw();
-        break;
-
       case 'explore': {
         _hideActionPopup();
         const result = executeExplore(state, entity);
@@ -670,7 +773,7 @@ export class UIController {
           let info = `<div class="tile-type">${tile.type}`;
           if (tile.building) info += ` — ${BUILDING_LABEL[tile.building]}`;
           info += `</div>`;
-          if (obj) info += `<div style="color:#cc88ff">⛧ Power Node: ${obj.label}</div>`;
+          if (obj) info += `<div style="color:#cc88ff">⚔ Power Node: ${obj.label} — control at dawn to win</div>`;
           if (tile.explored && tile.fortifyLevel) {
             const fl = tile.fortifyLevel >= 3 ? `⚙⚙ Heavily Reinforced (+${tile.fortifyLevel} DEF)`
               : tile.fortifyLevel >= 2 ? `⚙ Metal Reinforced (+${tile.fortifyLevel} DEF)`
@@ -855,4 +958,8 @@ function _attachPopupListeners(popup, ui) {
   popup.querySelectorAll('button[data-action]').forEach(b => {
     b.addEventListener('click', () => ui._handleActionButton(b));
   });
+}
+
+function _touchDist(t1, t2) {
+  return Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
 }

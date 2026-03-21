@@ -69,9 +69,8 @@ export class GameState {
 
     this.log = [
       `🌅 Dawn breaks over Salem. The hero stirs at the Inn.`,
-      `The witch has three Power Nodes to seize: ` +
-        this.witchObjectives.map(o => o.label).join(', ') + `.`,
-      `⚠ Stay in a fortified building when night falls or suffer in the darkness.`,
+      `Three Power Nodes: ${this.witchObjectives.map(o => o.label).join(', ')}.`,
+      `⚔ Control all three at dawn to win. Any building shelters against the night.`,
     ];
 
     this.selectedEntity = null;
@@ -149,7 +148,7 @@ export class GameState {
       [`${Phase.DAY}->${Phase.DUSK}`]:
         `🌇 Dusk falls. Seek shelter before night. Neither side has advantage.`,
       [`${Phase.DUSK}->${Phase.NIGHT}`]:
-        `🌙 Night descends! The witch grows powerful. Unfortified heroes will suffer!`,
+        `🌙 Night descends! The witch grows powerful. Heroes in the open will suffer!`,
       [`${Phase.NIGHT}->${Phase.DAWN}`]:
         `🌅 Dawn breaks. The darkness retreats. Find cover for the coming night.`,
     };
@@ -162,10 +161,11 @@ export class GameState {
   }
 
   _applyNightHazard() {
+    // Any building (even unfortified) gives shelter against the night
     const endangered = this.entities.filter(e => {
       if (!e.alive || e.owner !== 'hero') return false;
       const t = this.tiles.get(hexKey(e.col, e.row));
-      return !(t && t.type === TileType.BUILDING && t.fortifyLevel > 0);
+      return !(t && t.type === TileType.BUILDING);
     });
 
     for (const e of endangered) {
@@ -196,14 +196,23 @@ export class GameState {
   }
 
   _checkDawnObjectives() {
-    const allHeld = this.witchObjectives.every(obj =>
-      this.entities.some(
-        e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row
-      )
+    // Witch wins by holding all power nodes at dawn
+    const witchHoldsAll = this.witchObjectives.every(obj =>
+      this.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
     );
-    if (allHeld) {
+    if (witchHoldsAll) {
       this.winner = 'witch';
       this.addLog('🌙 As dawn breaks, the witch holds all three Power Nodes! Salem is lost…');
+      return;
+    }
+
+    // Hero wins by controlling all power nodes at dawn
+    const heroHoldsAll = this.witchObjectives.every(obj =>
+      this.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row)
+    );
+    if (heroHoldsAll) {
+      this.winner = 'hero';
+      this.addLog('☀ At dawn, the hero holds all three Power Nodes! The witch\'s ritual is broken!');
     }
   }
 

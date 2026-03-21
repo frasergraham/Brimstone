@@ -35,6 +35,11 @@ export class Renderer {
     this.highlightHexes = [];
     this.hoveredHex     = null;
 
+    // Zoom & pan
+    this.zoomLevel = 1.0;
+    this._panX     = 0;
+    this._panY     = 0;
+
     this._resize();
   }
 
@@ -63,22 +68,62 @@ export class Renderer {
     return { x: x + PAD_X, y: y + PAD_Y };
   }
 
-  // Convert canvas pixel coordinates back to hex grid coordinates
+  // Convert canvas pixel coordinates back to hex grid coordinates (accounts for zoom/pan)
   canvasToHex(canvasX, canvasY) {
-    return _pixelToHex(canvasX - PAD_X, canvasY - PAD_Y, this.hexSize);
+    const x = (canvasX - this._panX) / this.zoomLevel;
+    const y = (canvasY - this._panY) / this.zoomLevel;
+    return _pixelToHex(x - PAD_X, y - PAD_Y, this.hexSize);
   }
 
-  // Return the canvas-pixel centre of a hex (for overlay positioning)
+  // Return the canvas-pixel centre of a hex (for overlay positioning, accounts for zoom/pan)
   hexToCanvasPos(col, row) {
-    return this._toCanvas(col, row);
+    const { x, y } = this._toCanvas(col, row);
+    return {
+      x: x * this.zoomLevel + this._panX,
+      y: y * this.zoomLevel + this._panY,
+    };
+  }
+
+  // Zoom toward a focal point (canvas pixel coordinates)
+  setZoom(newZoom, focalX, focalY) {
+    newZoom = Math.max(0.5, Math.min(4.0, newZoom));
+    const ratio  = newZoom / this.zoomLevel;
+    this._panX   = focalX - ratio * (focalX - this._panX);
+    this._panY   = focalY - ratio * (focalY - this._panY);
+    this.zoomLevel = newZoom;
+    this._clampPan();
+  }
+
+  resetView() {
+    this.zoomLevel = 1.0;
+    this._panX = 0;
+    this._panY = 0;
+  }
+
+  _clampPan() {
+    if (this.zoomLevel <= 1) {
+      this._panX = 0;
+      this._panY = 0;
+      return;
+    }
+    const overW = this.canvas.width  * (this.zoomLevel - 1);
+    const overH = this.canvas.height * (this.zoomLevel - 1);
+    this._panX = Math.max(-overW, Math.min(0, this._panX));
+    this._panY = Math.max(-overH, Math.min(0, this._panY));
   }
 
   draw() {
     const ctx   = this.ctx;
     const state = this.state;
 
+    // Background covers the full canvas regardless of zoom/pan
     ctx.fillStyle = BG_COLOR;
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+    // Apply zoom and pan transform for all map content
+    ctx.save();
+    ctx.translate(this._panX, this._panY);
+    ctx.scale(this.zoomLevel, this.zoomLevel);
 
     // Objective glows
     for (const obj of state.witchObjectives) {
@@ -147,6 +192,8 @@ export class Renderer {
       drawn.add(key);
       this._drawEntityStack(entity.col, entity.row, stack);
     }
+
+    ctx.restore(); // end zoom/pan transform
   }
 
   _drawTile(col, row) {

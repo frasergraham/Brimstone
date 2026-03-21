@@ -127,23 +127,41 @@ export class WitchAI {
       return true;
     }
 
-    // 5. Activate each minion/golem
+    // 5. Activate each minion/golem — primary goal: hunt hero-side units
     const minions = state.entities.filter(
       e => e.alive && e.owner === 'witch' && e.type !== EntityType.WITCH
     );
     for (const minion of minions) {
-      // Fight co-located enemy
-      const minionEnemy = state.entities.find(
+      // Fight co-located hero-side unit
+      const colocated = state.entities.find(
         e => e.alive && e.owner === 'hero' && e.col === minion.col && e.row === minion.row
       );
-      if (minionEnemy) {
-        return this._executeBattleWithUI(minion, minionEnemy);
+      if (colocated) {
+        return this._executeBattleWithUI(minion, colocated);
       }
-      // Fight adjacent hero
-      if (isAdjacent(minion, state.hero) && state.hero.alive) {
-        return this._executeBattleWithUI(minion, state.hero);
+      // Fight any adjacent hero-side unit
+      const adjHeroUnit = state.entities.find(
+        e => e.alive && e.owner === 'hero' && hexDistance(minion.col, minion.row, e.col, e.row) === 1
+      );
+      if (adjHeroUnit) {
+        return this._executeBattleWithUI(minion, adjHeroUnit);
       }
-      // Move toward nearest unclaimed objective
+      // Move toward nearest hero-side unit
+      const heroUnits = state.entities.filter(e => e.alive && e.owner === 'hero');
+      if (heroUnits.length) {
+        heroUnits.sort((a, b) =>
+          hexDistance(minion.col, minion.row, a.col, a.row) -
+          hexDistance(minion.col, minion.row, b.col, b.row)
+        );
+        const step = stepToward(state, minion, heroUnits[0]);
+        if (step) {
+          const result = executeMove(state, minion, step.col, step.row);
+          logResult(state, result);
+          state.spendAction(result.cost);
+          return true;
+        }
+      }
+      // Fallback: move toward nearest unclaimed objective
       const targetObj = _unoccupiedObjective(state, minion);
       if (targetObj) {
         const step = stepToward(state, minion, targetObj);
@@ -153,14 +171,6 @@ export class WitchAI {
           state.spendAction(result.cost);
           return true;
         }
-      }
-      // Otherwise close on hero
-      const step = stepToward(state, minion, state.hero);
-      if (step) {
-        const result = executeMove(state, minion, step.col, step.row);
-        logResult(state, result);
-        state.spendAction(result.cost);
-        return true;
       }
     }
 

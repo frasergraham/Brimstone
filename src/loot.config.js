@@ -34,9 +34,9 @@ export const LOOT_CONFIG = {
     ],
 
     inn: [
-      { type: 'food',          weight: 35 },
-      { type: 'herbs',         weight: 30 },
-      { type: 'survivor',      weight: 30 },
+      { type: 'food',          weight: 45 },
+      { type: 'herbs',         weight: 12 },
+      { type: 'survivor',      weight: 38 },
       { type: 'nothing',       weight:  5 },
     ],
 
@@ -62,9 +62,10 @@ export const LOOT_CONFIG = {
     ],
 
     apothecary: [
-      { type: 'herbs',         weight: 60 },
-      { type: 'food',          weight: 20 },
-      { type: 'silver',        weight: 15 },
+      { type: 'herbs',         weight: 35 },
+      { type: 'food',          weight: 25 },
+      { type: 'silver',        weight: 20 },
+      { type: 'metal',         weight: 15 },
       { type: 'nothing',       weight:  5 },
     ],
 
@@ -99,17 +100,19 @@ export const LOOT_CONFIG = {
 
     house: [
       { type: 'food',          weight: 28 },
-      { type: 'herbs',         weight: 22 },
-      { type: 'weapon:dagger', weight: 18 },
-      { type: 'wood',          weight: 20 },
-      { type: 'survivor',      weight: 10 },
+      { type: 'wood',          weight: 25 },
+      { type: 'weapon:dagger', weight: 20 },
+      { type: 'metal',         weight: 12 },
+      { type: 'herbs',         weight:  8 },
+      { type: 'survivor',      weight:  5 },
       { type: 'nothing',       weight:  2 },
     ],
 
     graveyard: [
       { type: 'scripture',     weight: 45 },
-      { type: 'herbs',         weight: 30 },
-      { type: 'silver',        weight: 20 },
+      { type: 'silver',        weight: 30 },
+      { type: 'metal',         weight: 15 },
+      { type: 'herbs',         weight:  5 },
       { type: 'nothing',       weight:  5 },
     ],
 
@@ -130,30 +133,31 @@ export const LOOT_CONFIG = {
   terrain: {
 
     grass: [
-      { type: 'wood',          weight: 30 },
+      { type: 'wood',          weight: 35 },
       { type: 'food',          weight: 28 },
-      { type: 'herbs',         weight: 22 },
-      { type: 'metal',         weight: 10 },
+      { type: 'metal',         weight: 20 },
+      { type: 'herbs',         weight:  8 },
       { type: 'silver',        weight:  5 },
-      { type: 'survivor',      weight:  3 },
+      { type: 'survivor',      weight:  2 },
       { type: 'nothing',       weight:  2 },
     ],
 
     forest: [
-      { type: 'wood',          weight: 52 },
-      { type: 'herbs',         weight: 28 },
-      { type: 'food',          weight: 10 },
-      { type: 'silver',        weight:  5 },
-      { type: 'survivor',      weight:  3 },
+      { type: 'wood',          weight: 62 },
+      { type: 'food',          weight: 15 },
+      { type: 'metal',         weight: 10 },
+      { type: 'herbs',         weight:  8 },
+      { type: 'silver',        weight:  3 },
       { type: 'nothing',       weight:  2 },
     ],
 
     road: [
-      { type: 'food',          weight: 30 },
+      { type: 'food',          weight: 32 },
       { type: 'silver',        weight: 28 },
-      { type: 'herbs',         weight: 18 },
+      { type: 'metal',         weight: 18 },
       { type: 'wood',          weight: 12 },
-      { type: 'survivor',      weight: 10 },
+      { type: 'herbs',         weight:  5 },
+      { type: 'survivor',      weight:  3 },
       { type: 'nothing',       weight:  2 },
     ],
 

@@ -393,6 +393,8 @@ export function executeSummon(state, actor, targetCol, targetRow) {
 
   inv[res]--;
   state.entities.push(summonedUnit);
+  // Each summon grants the witch one bonus action (more powerful witch)
+  state.bonusActions = (state.bonusActions || 0) + 1;
   return {
     success: true,
     log: [`The witch raises a ${unitName} from ${res}!`],
