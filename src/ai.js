@@ -97,11 +97,12 @@ function inBuilding(state, entity) {
 //   NIGHT    : Strike hard — hunt hero units; seize nodes; summon more troops
 
 export class WitchAI {
-  constructor(state, onStateChange) {
+  constructor(state, onStateChange, thinkDelay = THINK_DELAY_MS) {
     this.state         = state;
     this.onStateChange = onStateChange;
     this.onBattleResult = null;
     this._running      = false;
+    this.thinkDelay    = thinkDelay;
   }
 
   async takeTurn() {
@@ -114,7 +115,7 @@ export class WitchAI {
       const acted = await this._chooseAction();
       if (!acted) break;
       this.onStateChange();
-      await delay(THINK_DELAY_MS);
+      await delay(this.thinkDelay);
     }
 
     state.endTurn();
@@ -300,7 +301,7 @@ export class WitchAI {
   }
 
   async _think() {
-    await delay(THINK_DELAY_MS * 0.5);
+    await delay(this.thinkDelay * 0.5);
   }
 }
 
@@ -311,11 +312,12 @@ export class WitchAI {
 //   NIGHT     : Hunker down — shelter all units in buildings; avoid open combat
 
 export class HeroAI {
-  constructor(state, onStateChange) {
+  constructor(state, onStateChange, thinkDelay = THINK_DELAY_MS) {
     this.state         = state;
     this.onStateChange = onStateChange;
     this.onBattleResult = null;
     this._running       = false;
+    this.thinkDelay     = thinkDelay;
   }
 
   async takeTurn() {
@@ -324,11 +326,11 @@ export class HeroAI {
     const state = this.state;
 
     while (state.actionsAvailable > 0 && !state.gameOver) {
-      await delay(THINK_DELAY_MS * 0.5);
+      await delay(this.thinkDelay * 0.5);
       const acted = await this._chooseAction();
       if (!acted) break;
       this.onStateChange();
-      await delay(THINK_DELAY_MS);
+      await delay(this.thinkDelay);
     }
 
     state.endTurn();

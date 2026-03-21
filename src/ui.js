@@ -11,13 +11,14 @@ import {
 } from './actions.js';
 
 export class UIController {
-  constructor(canvas, state, renderer, witchAI, onRedraw, heroAI = null) {
-    this.canvas   = canvas;
-    this.state    = state;
-    this.renderer = renderer;
-    this.ai       = witchAI;
-    this.heroAI   = heroAI;
-    this.onRedraw = onRedraw;
+  constructor(canvas, state, renderer, witchAI, onRedraw, heroAI = null, autoplay = false) {
+    this.canvas    = canvas;
+    this.state     = state;
+    this.renderer  = renderer;
+    this.ai        = witchAI;
+    this.heroAI    = heroAI;
+    this.onRedraw  = onRedraw;
+    this.autoplay  = autoplay;
 
     this._selectedEntity  = null;
     this._validActions    = [];
@@ -738,13 +739,15 @@ export class UIController {
       this.renderer.addFlash(pos.col, pos.row, '-1', 'rgba(255,180,0,0.8)', 2000);
     }
 
-    // Animate flashes while showing the dialog
-    const endTime = Date.now() + 2200;
-    const loop = () => {
-      this.onRedraw();
-      if (Date.now() < endTime) requestAnimationFrame(loop);
-    };
-    requestAnimationFrame(loop);
+    // Animate flashes while showing the dialog (skip in autoplay)
+    if (!this.autoplay) {
+      const endTime = Date.now() + 2200;
+      const loop = () => {
+        this.onRedraw();
+        if (Date.now() < endTime) requestAnimationFrame(loop);
+      };
+      requestAnimationFrame(loop);
+    }
 
     // Show a dialog summarising what happened
     if (hazardLog.length) {
@@ -764,7 +767,7 @@ export class UIController {
   _showResultDialog(messages, onDismiss) {
     const dialog = document.getElementById('result-dialog');
     document.getElementById('result-messages').textContent = messages.join('\n');
-    document.getElementById('result-dismiss-hint').style.display = '';
+    document.getElementById('result-dismiss-hint').style.display = this.autoplay ? 'none' : '';
     const btns = document.getElementById('result-buttons');
     btns.style.display = 'none';
     btns.innerHTML = '';
@@ -779,8 +782,13 @@ export class UIController {
     const keyDismiss = e => {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') dismiss();
     };
-    dialog.addEventListener('click', dismiss);
-    document.addEventListener('keydown', keyDismiss);
+
+    if (this.autoplay) {
+      setTimeout(dismiss, 500);
+    } else {
+      dialog.addEventListener('click', dismiss);
+      document.addEventListener('keydown', keyDismiss);
+    }
   }
 
   _maybeShowNoActionsDialog() {
@@ -884,112 +892,14 @@ export class UIController {
     document.getElementById('battle-attacker').innerHTML = _combatantHTML(actorSnap, 'atk');
     document.getElementById('battle-defender').innerHTML = _combatantHTML(targetSnap, 'def');
 
-    // Reset dice and footer
-    const atkDie = document.getElementById('battle-atk-die');
-    const defDie = document.getElementById('battle-def-die');
+    const atkDie  = document.getElementById('battle-atk-die');
+    const defDie  = document.getElementById('battle-def-die');
     const outcome = document.getElementById('battle-outcome');
-    atkDie.textContent = '?';
-    defDie.textContent = '?';
-    atkDie.className   = 'die-display rolling';
-    defDie.className   = 'die-display rolling';
     outcome.textContent = '';
     outcome.className   = 'battle-outcome';
-    footer.innerHTML   = '<div class="result-dismiss">— click to continue —</div>';
+    footer.innerHTML    = this.autoplay ? '' : '<div class="result-dismiss">— click to continue —</div>';
 
     dialog.style.display = 'flex';
-
-    // Animate dice then reveal result
-    let ticks = 0;
-    const maxTicks = 14;
-    const interval = setInterval(() => {
-      ticks++;
-      atkDie.textContent = Math.ceil(Math.random() * 20);
-      defDie.textContent = Math.ceil(Math.random() * 20);
-      if (ticks >= maxTicks) {
-        clearInterval(interval);
-        atkDie.textContent = result.attackRoll;
-        defDie.textContent = result.defenseRoll;
-        atkDie.className = 'die-display' + (result.hit ? ' atk-win' : '');
-        defDie.className = 'die-display' + (!result.hit ? ' def-win' : '');
-
-        // Build outcome text accounting for fort absorption, multi-damage, counter
-        if (result.killed) {
-          outcome.textContent = `💀 ${targetSnap.name} is slain!`;
-          outcome.className   = 'battle-outcome kill';
-        } else if (result.hit) {
-          if (result.fortAbsorbed > 0 && result.damage === 0) {
-            outcome.textContent = `🏰 Fortifications absorb the blow!`;
-            outcome.className   = 'battle-outcome miss';
-          } else if (result.damage >= 2) {
-            outcome.textContent = `💥💥 Crushing hit! ${targetSnap.name} takes ${result.damage} damage!`;
-            outcome.className   = 'battle-outcome kill';
-          } else if (result.fortAbsorbed > 0) {
-            outcome.textContent = `🏰 Fort weakened! ${targetSnap.name} takes ${result.damage} damage`;
-            outcome.className   = 'battle-outcome hit';
-          } else {
-            outcome.textContent = `💥 Hit! ${targetSnap.name} takes 1 damage`;
-            outcome.className   = 'battle-outcome hit';
-          }
-        } else if (result.counterDmg > 0) {
-          outcome.textContent = `⚔ Counter! ${actorSnap.name} takes 1 damage!`;
-          outcome.className   = 'battle-outcome kill';
-        } else {
-          outcome.textContent = `🛡 ${targetSnap.name} defends!`;
-          outcome.className   = 'battle-outcome miss';
-        }
-
-        // Update defender HP bar to reflect post-battle state
-        const fill = dialog.querySelector('.combatant-panel:last-of-type .combatant-hp-fill');
-        if (fill) {
-          const newHp = result.killed ? 0 : Math.max(0, targetSnap.hp - (result.damage || 0));
-          fill.style.width = `${Math.max(0, (newHp / targetSnap.maxHp) * 100)}%`;
-        }
-
-        // Update attacker HP bar if counter-attacked
-        if (result.counterDmg > 0) {
-          const atkFill = dialog.querySelector('.combatant-panel:first-of-type .combatant-hp-fill');
-          if (atkFill) {
-            const newHp = Math.max(0, actorSnap.hp - result.counterDmg);
-            atkFill.style.width = `${Math.max(0, (newHp / actorSnap.maxHp) * 100)}%`;
-          }
-        }
-
-        // Gang-up indicator — remove any note left from a previous battle first
-        dialog.querySelectorAll('.battle-gang-note').forEach(el => el.remove());
-        if ((result.attackerAllies || 0) > 0 || (result.defenderAllies || 0) > 0) {
-          const noteEl = document.createElement('div');
-          noteEl.className = 'battle-gang-note';
-          const parts = [];
-          if (result.attackerAllies > 0) parts.push(`Attacker has ${result.attackerAllies} ally (+1 ATK)`);
-          if (result.defenderAllies  > 0) parts.push(`Defender has ${result.defenderAllies} ally (+1 DEF)`);
-          noteEl.textContent = parts.join(' · ');
-          outcome.after(noteEl);
-        }
-
-        // Actions remaining indicator
-        const left = this.state.actionsLeft;
-        const actsEl = document.createElement('div');
-        actsEl.className = 'battle-actions-left';
-        actsEl.innerHTML = left > 0 ? '◆'.repeat(left) : '◇';
-        footer.insertBefore(actsEl, footer.firstChild);
-
-        // Battle Again button (player battles only, when neither died)
-        if (onRematch) {
-          const hasActs = this.state.actionsAvailable > 0;
-          const rematchBtn = document.createElement('button');
-          rematchBtn.className = 'action-btn battle rematch-btn';
-          rematchBtn.textContent = '⚔ Battle Again';
-          rematchBtn.disabled = !hasActs;
-          rematchBtn.addEventListener('click', e => {
-            e.stopPropagation();
-            dialog.style.display = 'none';
-            document.removeEventListener('keydown', keyDismiss);
-            onRematch();
-          });
-          footer.insertBefore(rematchBtn, footer.firstChild);
-        }
-      }
-    }, 55);
 
     const dismiss = () => {
       dialog.style.display = 'none';
@@ -1000,21 +910,127 @@ export class UIController {
     const keyDismiss = e => {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') dismiss();
     };
-    // Only allow dismiss after dice settle
-    setTimeout(() => {
-      dialog.addEventListener('click', dismiss);
-      document.addEventListener('keydown', keyDismiss);
-    }, maxTicks * 55 + 200);
+
+    // Shared: populate result into the dialog once dice are "settled"
+    const revealResult = () => {
+      atkDie.textContent = result.attackRoll;
+      defDie.textContent = result.defenseRoll;
+      atkDie.className = 'die-display' + (result.hit ? ' atk-win' : '');
+      defDie.className = 'die-display' + (!result.hit ? ' def-win' : '');
+
+      if (result.killed) {
+        outcome.textContent = `💀 ${targetSnap.name} is slain!`;
+        outcome.className   = 'battle-outcome kill';
+      } else if (result.hit) {
+        if (result.fortAbsorbed > 0 && result.damage === 0) {
+          outcome.textContent = `🏰 Fortifications absorb the blow!`;
+          outcome.className   = 'battle-outcome miss';
+        } else if (result.damage >= 2) {
+          outcome.textContent = `💥💥 Crushing hit! ${targetSnap.name} takes ${result.damage} damage!`;
+          outcome.className   = 'battle-outcome kill';
+        } else if (result.fortAbsorbed > 0) {
+          outcome.textContent = `🏰 Fort weakened! ${targetSnap.name} takes ${result.damage} damage`;
+          outcome.className   = 'battle-outcome hit';
+        } else {
+          outcome.textContent = `💥 Hit! ${targetSnap.name} takes 1 damage`;
+          outcome.className   = 'battle-outcome hit';
+        }
+      } else if (result.counterDmg > 0) {
+        outcome.textContent = `⚔ Counter! ${actorSnap.name} takes 1 damage!`;
+        outcome.className   = 'battle-outcome kill';
+      } else {
+        outcome.textContent = `🛡 ${targetSnap.name} defends!`;
+        outcome.className   = 'battle-outcome miss';
+      }
+
+      const fill = dialog.querySelector('.combatant-panel:last-of-type .combatant-hp-fill');
+      if (fill) {
+        const newHp = result.killed ? 0 : Math.max(0, targetSnap.hp - (result.damage || 0));
+        fill.style.width = `${Math.max(0, (newHp / targetSnap.maxHp) * 100)}%`;
+      }
+      if (result.counterDmg > 0) {
+        const atkFill = dialog.querySelector('.combatant-panel:first-of-type .combatant-hp-fill');
+        if (atkFill) {
+          const newHp = Math.max(0, actorSnap.hp - result.counterDmg);
+          atkFill.style.width = `${Math.max(0, (newHp / actorSnap.maxHp) * 100)}%`;
+        }
+      }
+
+      dialog.querySelectorAll('.battle-gang-note').forEach(el => el.remove());
+      if ((result.attackerAllies || 0) > 0 || (result.defenderAllies || 0) > 0) {
+        const noteEl = document.createElement('div');
+        noteEl.className = 'battle-gang-note';
+        const parts = [];
+        if (result.attackerAllies > 0) parts.push(`Attacker has ${result.attackerAllies} ally (+1 ATK)`);
+        if (result.defenderAllies  > 0) parts.push(`Defender has ${result.defenderAllies} ally (+1 DEF)`);
+        noteEl.textContent = parts.join(' · ');
+        outcome.after(noteEl);
+      }
+
+      const left = this.state.actionsLeft;
+      const actsEl = document.createElement('div');
+      actsEl.className = 'battle-actions-left';
+      actsEl.innerHTML = left > 0 ? '◆'.repeat(left) : '◇';
+      footer.insertBefore(actsEl, footer.firstChild);
+
+      if (onRematch && !this.autoplay) {
+        const hasActs = this.state.actionsAvailable > 0;
+        const rematchBtn = document.createElement('button');
+        rematchBtn.className = 'action-btn battle rematch-btn';
+        rematchBtn.textContent = '⚔ Battle Again';
+        rematchBtn.disabled = !hasActs;
+        rematchBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          dialog.style.display = 'none';
+          document.removeEventListener('keydown', keyDismiss);
+          onRematch();
+        });
+        footer.insertBefore(rematchBtn, footer.firstChild);
+      }
+    };
+
+    if (this.autoplay) {
+      // Skip animation — show result immediately, auto-dismiss after 500ms
+      atkDie.textContent = result.attackRoll;
+      defDie.textContent = result.defenseRoll;
+      atkDie.className = 'die-display' + (result.hit ? ' atk-win' : '');
+      defDie.className = 'die-display' + (!result.hit ? ' def-win' : '');
+      revealResult();
+      setTimeout(dismiss, 500);
+    } else {
+      // Animated dice roll
+      atkDie.textContent = '?';
+      defDie.textContent = '?';
+      atkDie.className   = 'die-display rolling';
+      defDie.className   = 'die-display rolling';
+      let ticks = 0;
+      const maxTicks = 14;
+      const interval = setInterval(() => {
+        ticks++;
+        atkDie.textContent = Math.ceil(Math.random() * 20);
+        defDie.textContent = Math.ceil(Math.random() * 20);
+        if (ticks >= maxTicks) {
+          clearInterval(interval);
+          revealResult();
+        }
+      }, 55);
+      // Allow dismiss only after dice settle
+      setTimeout(() => {
+        dialog.addEventListener('click', dismiss);
+        document.addEventListener('keydown', keyDismiss);
+      }, maxTicks * 55 + 200);
+    }
   }
 
   // Single entry point for all AI turns — safe to call anytime
   _maybeRunAI(delayMs = 400) {
     if (this.state.gameOver) return;
+    const ms = this.autoplay ? 50 : delayMs;
     const ap = this.state.activePlayer;
     if (ap === Player.WITCH && this.state.witchIsAI && this.ai) {
-      setTimeout(() => this._runAI(), delayMs);
+      setTimeout(() => this._runAI(), ms);
     } else if (ap === Player.HERO && this.state.heroIsAI && this.heroAI) {
-      setTimeout(() => this._runHeroAI(), delayMs);
+      setTimeout(() => this._runHeroAI(), ms);
     }
   }
 

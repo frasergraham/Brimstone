@@ -7,8 +7,11 @@ import { hexToPixel }        from './hex.js';
 import { PAD_X, PAD_Y }      from './renderer.js';
 
 let state, renderer, ui, witchAI, heroAI;
+let _autoplay = false;
 
-function init(witchIsAI, heroIsAI) {
+// autoplay: both AIs, fast timing, auto-restart on game over
+function init(witchIsAI, heroIsAI, autoplay = false) {
+  _autoplay = autoplay;
   const canvas = document.getElementById('game-canvas');
 
   // Show game screen before constructing renderer so the wrapper has real dimensions
@@ -19,10 +22,11 @@ function init(witchIsAI, heroIsAI) {
   renderer = new Renderer(canvas, state);
   renderer.resize();
 
-  witchAI = witchIsAI ? new WitchAI(state, redraw) : null;
-  heroAI  = heroIsAI  ? new HeroAI(state, redraw)  : null;
+  const thinkDelay = autoplay ? 0 : undefined;
+  witchAI = witchIsAI ? new WitchAI(state, redraw, thinkDelay) : null;
+  heroAI  = heroIsAI  ? new HeroAI(state, redraw, thinkDelay)  : null;
 
-  ui = new UIController(canvas, state, renderer, witchAI, redraw, heroAI);
+  ui = new UIController(canvas, state, renderer, witchAI, redraw, heroAI, autoplay);
 
   // Show battle dialog for AI-initiated attacks
   const battleCallback = (actorSnap, targetSnap, result) =>
@@ -57,7 +61,6 @@ function showGameOver() {
   const el = document.getElementById('game-over');
   if (!el || el.dataset.shown) return;
   el.dataset.shown = '1';
-  el.style.display = 'flex';
 
   const banner = state.winner === 'hero'
     ? '☀ The Hero Triumphs!'
@@ -67,8 +70,18 @@ function showGameOver() {
         ? 'The hero has vanquished the witch! Salem is saved!'
         : 'The witch has won. Darkness falls over Salem forever…');
 
-  el.querySelector('.winner-text').innerHTML =
-    `<div class="winner-banner">${banner}</div><div class="winner-reason">${reason}</div>`;
+  if (_autoplay) {
+    // In autoplay mode: show result briefly in the header, then restart
+    document.getElementById('turn-info').textContent = `${banner} — restarting…`;
+    setTimeout(() => {
+      delete el.dataset.shown;
+      init(true, true, true);
+    }, 1500);
+  } else {
+    el.style.display = 'flex';
+    el.querySelector('.winner-text').innerHTML =
+      `<div class="winner-banner">${banner}</div><div class="winner-reason">${reason}</div>`;
+  }
 }
 
 // ── Window resize ────────────────────────────────────────────────────────────
@@ -89,8 +102,9 @@ function showStep(step) {
   stepSide.style.display = step === 'side' ? '' : 'none';
 }
 
-document.getElementById('btn-vs-ai').addEventListener('click',    () => showStep('side'));
-document.getElementById('btn-vs-human').addEventListener('click', () => init(false, false));
+document.getElementById('btn-vs-ai').addEventListener('click',       () => showStep('side'));
+document.getElementById('btn-vs-human').addEventListener('click',    () => init(false, false));
+document.getElementById('btn-autoplay').addEventListener('click',    () => init(true, true, true));
 document.getElementById('btn-back').addEventListener('click',     () => showStep('mode'));
 
 document.getElementById('btn-play-hero').addEventListener('click',  () => init(true,  false));
