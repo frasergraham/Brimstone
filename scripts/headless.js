@@ -26,8 +26,8 @@ async function runGame() {
   witchAI.onBattleResult = noop;
   heroAI.onBattleResult  = noop;
 
-  // Safety cap: after 30 rounds declare a draw (tie).
-  const MAX_ROUNDS = 30;
+  // Safety cap: after 80 rounds declare a draw (tie).
+  const MAX_ROUNDS = 80;
 
   while (!state.gameOver && state.round <= MAX_ROUNDS) {
     if (state.activePlayer === 'witch') {
