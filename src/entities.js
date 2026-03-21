@@ -129,8 +129,8 @@ export const SURVIVOR_ROSTER = [
 const _usedRosterIndices = new Set();
 
 const BASE_STATS = {
-  [EntityType.HERO]:       { maxHp: 5, attack: 3, defense: 2 },
-  [EntityType.WITCH]:      { maxHp: 4, attack: 2, defense: 1 },
+  [EntityType.HERO]:       { maxHp: 20, attack: 3, defense: 2 },
+  [EntityType.WITCH]:      { maxHp: 16, attack: 2, defense: 1 },
   [EntityType.SURVIVOR]:   { maxHp: 2, attack: 1, defense: 1 },
   [EntityType.ZOMBIE]:     { maxHp: 2, attack: 2, defense: 0 },
   [EntityType.MINION]:     { maxHp: 3, attack: 2, defense: 1 },

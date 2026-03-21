@@ -177,8 +177,30 @@ export class WitchAI {
       // 4. Summon more troops if resources available and army is small
       if (await this._trySummon(witch, minions.length)) return true;
 
-      // 5. Move minions toward hero units aggressively
+      // 5. Witch moves toward unclaimed objective (node victory is the primary win condition)
+      const witchNodeTarget = _unoccupiedObjective(state, witch, 'witch');
+      if (witchNodeTarget) {
+        const nodeStep = stepToward(state, witch, witchNodeTarget);
+        if (nodeStep) {
+          const result = executeMove(state, witch, nodeStep.col, nodeStep.row);
+          logResult(state, result);
+          state.spendAction(result.cost);
+          return true;
+        }
+      }
+
+      // 6. Move minions toward unclaimed objectives first, then hero
       for (const m of minions) {
+        const obj = _unoccupiedObjective(state, m, 'witch');
+        if (obj) {
+          const step = stepToward(state, m, obj);
+          if (step) {
+            const result = executeMove(state, m, step.col, step.row);
+            logResult(state, result);
+            state.spendAction(result.cost);
+            return true;
+          }
+        }
         const heroUnits = state.entities.filter(e => e.alive && e.owner === 'hero');
         if (heroUnits.length) {
           heroUnits.sort((a, b) =>
@@ -193,21 +215,10 @@ export class WitchAI {
             return true;
           }
         }
-        // Fallback: move toward unclaimed objective
-        const obj = _unoccupiedObjective(state, m, 'witch');
-        if (obj) {
-          const step = stepToward(state, m, obj);
-          if (step) {
-            const result = executeMove(state, m, step.col, step.row);
-            logResult(state, result);
-            state.spendAction(result.cost);
-            return true;
-          }
-        }
       }
 
-      // 6. Move witch toward unclaimed objective or hero
-      const witchTarget = _unoccupiedObjective(state, witch, 'witch') || state.hero;
+      // 7. Move witch toward hero if no unclaimed objective
+      const witchTarget = state.hero;
       const step = stepToward(state, witch, witchTarget);
       if (step) {
         const result = executeMove(state, witch, step.col, step.row);
@@ -239,10 +250,22 @@ export class WitchAI {
       }
     }
 
-    // 2. Summon if resources allow (build the army during daytime)
+    // 2. Witch moves toward an unclaimed objective (node victory is top priority)
+    const obj = _unoccupiedObjective(state, witch, 'witch');
+    if (obj) {
+      const step = stepToward(state, witch, obj);
+      if (step) {
+        const result = executeMove(state, witch, step.col, step.row);
+        logResult(state, result);
+        state.spendAction(result.cost);
+        return true;
+      }
+    }
+
+    // 3. Summon if resources allow (build the army during daytime)
     if (await this._trySummon(witch, minions.length)) return true;
 
-    // 3. Witch explores current tile if unexplored (gather resources safely)
+    // 4. Witch explores current tile if unexplored (gather resources safely)
     const witchTile = state.tiles.get(hexKey(witch.col, witch.row));
     if (witchTile && !witchTile.explored) {
       const result = executeExplore(state, witch);
@@ -251,7 +274,7 @@ export class WitchAI {
       return true;
     }
 
-    // 4. Move to adjacent unexplored building/resource tile (stay stealthy)
+    // 5. Move to adjacent unexplored building/resource tile (stay stealthy)
     const unexploredAdj = getNeighbors(witch.col, witch.row).find(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
       return t && !t.explored && (t.hiddenSurvivor || t.resource || t.building) &&
@@ -262,18 +285,6 @@ export class WitchAI {
       logResult(state, result);
       state.spendAction(result.cost);
       return true;
-    }
-
-    // 5. Witch moves toward an unclaimed objective via buildings (safe path)
-    const obj = _unoccupiedObjective(state, witch, 'witch');
-    if (obj) {
-      const step = stepToward(state, witch, obj);
-      if (step) {
-        const result = executeMove(state, witch, step.col, step.row);
-        logResult(state, result);
-        state.spendAction(result.cost);
-        return true;
-      }
     }
 
     return false;
@@ -446,19 +457,10 @@ export class HeroAI {
       if (sa) return this._executeBattleWithUI(s, sa);
     }
 
-    // 5. Explore current building for loot
-    const heroTile = state.tiles.get(hexKey(hero.col, hero.row));
-    if (heroTile && heroTile.type === TileType.BUILDING && !heroTile.explored) {
-      const result = executeExplore(state, hero);
-      for (const msg of result.log) state.addLog(msg);
-      state.spendAction(result.cost);
-      return result.success;
-    }
-
-    // 6. Move toward nearest unexplored building (find survivors + loot fast)
-    const unxBuilding = _nearestUnexploredBuilding(state, hero);
-    if (unxBuilding) {
-      const step = stepToward(state, hero, unxBuilding);
+    // 5. Contest unclaimed power node (node victory is the primary win condition)
+    const nodeTarget = _unclaimedNodeForHero(state, hero);
+    if (nodeTarget) {
+      const step = stepToward(state, hero, nodeTarget);
       if (step) {
         const result = executeMove(state, hero, step.col, step.row);
         for (const msg of result.log) state.addLog(msg);
@@ -467,11 +469,11 @@ export class HeroAI {
       }
     }
 
-    // 7. Move survivors toward unclaimed nodes
+    // 6. Move survivors toward unclaimed nodes
     for (const s of survivors) {
-      const nodeTarget = _unclaimedNodeForHero(state, s);
-      if (nodeTarget) {
-        const step = stepToward(state, s, nodeTarget);
+      const sNodeTarget = _unclaimedNodeForHero(state, s);
+      if (sNodeTarget) {
+        const step = stepToward(state, s, sNodeTarget);
         if (step) {
           const result = executeMove(state, s, step.col, step.row);
           for (const msg of result.log) state.addLog(msg);
@@ -481,10 +483,19 @@ export class HeroAI {
       }
     }
 
-    // 8. Contest unclaimed power node
-    const nodeTarget = _unclaimedNodeForHero(state, hero);
-    if (nodeTarget) {
-      const step = stepToward(state, hero, nodeTarget);
+    // 7. Explore current building for loot
+    const heroTile = state.tiles.get(hexKey(hero.col, hero.row));
+    if (heroTile && heroTile.type === TileType.BUILDING && !heroTile.explored) {
+      const result = executeExplore(state, hero);
+      for (const msg of result.log) state.addLog(msg);
+      state.spendAction(result.cost);
+      return result.success;
+    }
+
+    // 8. Move toward nearest unexplored building (find survivors + loot)
+    const unxBuilding = _nearestUnexploredBuilding(state, hero);
+    if (unxBuilding) {
+      const step = stepToward(state, hero, unxBuilding);
       if (step) {
         const result = executeMove(state, hero, step.col, step.row);
         for (const msg of result.log) state.addLog(msg);

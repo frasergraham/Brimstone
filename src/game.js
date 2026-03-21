@@ -1,7 +1,7 @@
 // Central game state and turn management
 import { generateMap } from './map.js';
 import { createHero, createWitch, resetRoster, EntityType } from './entities.js';
-import { ResourceType, TileType } from './tiles.js';
+import { BuildingType, ResourceType, TileType } from './tiles.js';
 import { hexKey } from './hex.js';
 
 // Win reason strings (shown in game-over overlay)
@@ -114,11 +114,20 @@ export class GameState {
     this.addLog(`${playerLabel} turn ends.`);
 
     if (this.activePlayer === Player.HERO) {
-      // Rest heal: hero recovers 1 HP when ending their turn inside a building
+      // Rest heal: hero recovers HP when ending their turn inside a building
       const heroTile = this.tiles.get(hexKey(this.hero.col, this.hero.row));
       if (this.hero.alive && heroTile?.type === TileType.BUILDING && this.hero.hp < this.hero.maxHp) {
-        this.hero.heal(1);
-        this.addLog(`🏠 The hero rests in shelter. (+1 HP, now ${this.hero.hp}/${this.hero.maxHp})`);
+        const b = heroTile.building;
+        if (b === BuildingType.INN) {
+          this.hero.heal(3);
+          this.addLog(`🏨 The hero rests at the inn. (+3 HP, now ${this.hero.hp}/${this.hero.maxHp})`);
+        } else if (b === BuildingType.CHURCH) {
+          this.hero.heal(3);
+          this.addLog(`⛪ The hero prays at the chapel. (+3 HP, now ${this.hero.hp}/${this.hero.maxHp})`);
+        } else {
+          this.hero.heal(1);
+          this.addLog(`🏠 The hero rests in shelter. (+1 HP, now ${this.hero.hp}/${this.hero.maxHp})`);
+        }
       }
 
       this.activePlayer = Player.WITCH;

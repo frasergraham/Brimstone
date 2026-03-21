@@ -6,7 +6,7 @@
 //    Resources : 'wood' | 'metal' | 'herbs' | 'food' | 'silver' | 'scripture'
 //    Weapons   : 'weapon:sword' | 'weapon:axe' | 'weapon:shield' |
 //                'weapon:bow'   | 'weapon:staff' | 'weapon:dagger'
-//    Special   : 'horse'     — found only in the Stable
+//    Special   : 'horse'     — found in the Stable (most likely), Inn, and some Houses
 //                'nothing'   — empty result
 //
 //  Survivors are NOT found via loot — they are pre-placed on the map
@@ -35,9 +35,10 @@ export const LOOT_CONFIG = {
     ],
 
     inn: [
-      { type: 'food',          weight: 55 },
-      { type: 'herbs',         weight: 25 },
+      { type: 'food',          weight: 45 },
+      { type: 'herbs',         weight: 20 },
       { type: 'silver',        weight: 15 },
+      { type: 'horse',         weight: 15 },
       { type: 'nothing',       weight:  5 },
     ],
 
@@ -81,7 +82,7 @@ export const LOOT_CONFIG = {
       { type: 'nothing',       weight:  5 },
     ],
 
-    // Primary find is a horse that doubles movement range
+    // Best chance for a horse (also found at inn and houses)
     stable: [
       { type: 'horse',         weight: 55 },
       { type: 'food',          weight: 25 },
@@ -96,11 +97,12 @@ export const LOOT_CONFIG = {
     ],
 
     house: [
-      { type: 'food',          weight: 30 },
-      { type: 'wood',          weight: 28 },
-      { type: 'weapon:dagger', weight: 20 },
+      { type: 'food',          weight: 28 },
+      { type: 'wood',          weight: 26 },
+      { type: 'weapon:dagger', weight: 18 },
       { type: 'metal',         weight: 14 },
       { type: 'herbs',         weight:  8 },
+      { type: 'horse',         weight:  6 },
     ],
 
     graveyard: [
