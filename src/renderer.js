@@ -13,7 +13,7 @@ import { getVisibleEnemyHexes } from './actions.js';
 export const PAD_X = 40;
 export const PAD_Y = 30;
 const BG_COLOR = '#0d1117';
-const MIN_HEX_SIZE = 20;
+const MIN_HEX_SIZE = 10;
 
 function hexCorners(cx, cy, size) {
   const pts = [];
@@ -125,11 +125,6 @@ export class Renderer {
     ctx.translate(this._panX, this._panY);
     ctx.scale(this.zoomLevel, this.zoomLevel);
 
-    // Objective glows
-    for (const obj of state.witchObjectives) {
-      this._drawObjectiveGlow(obj.col, obj.row);
-    }
-
     // Tiles
     for (let row = 0; row < MAP_ROWS; row++) {
       for (let col = 0; col < MAP_COLS; col++) {
@@ -140,17 +135,20 @@ export class Renderer {
     // River connection ribbon
     this._drawRiverLayer();
 
-    // Objective symbols
-    for (const obj of state.witchObjectives) {
-      this._drawObjectiveSymbol(obj.col, obj.row, obj.label, state);
-    }
-
     // Visibility: compute once for fog layer + entity pass + outlines
     const revealedHexes = state.fogOfWar ? getVisibleEnemyHexes(state) : null;
 
     // Fog of war: grey overlay on all hexes outside hero vision
     if (state.fogOfWar) {
       this._drawFogLayer(revealedHexes);
+    }
+
+    // Objective glows and symbols always drawn on top of fog — always visible
+    for (const obj of state.witchObjectives) {
+      this._drawObjectiveGlow(obj.col, obj.row);
+    }
+    for (const obj of state.witchObjectives) {
+      this._drawObjectiveSymbol(obj.col, obj.row, obj.label, state);
     }
 
     // Thick outlines on hexes occupied by units

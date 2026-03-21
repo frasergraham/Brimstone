@@ -192,8 +192,8 @@ canvas { touch-action: pan-x pan-y; }
   overflow: hidden;
   position: relative;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: flex-start;
+  justify-content: flex-start;
   background: var(--bg);
 }
 
