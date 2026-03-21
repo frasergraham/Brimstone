@@ -73,11 +73,10 @@ const startMs = Date.now();
 
 // Run games sequentially (simplest; avoids shared-state issues)
 for (let i = 0; i < N; i++) {
-  if (i > 0 && i % 100 === 0) {
-    const pct = ((i / N) * 100).toFixed(0);
-    process.stdout.write(`\r  ${pct}% (${i}/${N}) …`);
-  }
-  results.push(await runGame());
+  const r = await runGame();
+  results.push(r);
+  const winnerLabel = r.winner === 'draw' ? 'draw ' : r.winner.padEnd(5);
+  console.log(`  game ${String(i + 1).padStart(4)}  ${winnerLabel}  rounds=${String(r.rounds).padStart(3)}  ${r.winReason}`);
 }
 process.stdout.write('\r' + ' '.repeat(40) + '\r'); // clear progress line
 
