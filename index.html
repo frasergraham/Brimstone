@@ -77,6 +77,35 @@
 
   </div>
 
+  <!-- ── Action popup (positioned over unit on canvas) ────────────── -->
+  <div id="action-popup"></div>
+
+  <!-- ── Result dialog (non-battle action feedback) ────────────────── -->
+  <div id="result-dialog">
+    <div class="result-card">
+      <div id="result-messages" class="result-messages"></div>
+      <div class="result-dismiss">— click anywhere to continue —</div>
+    </div>
+  </div>
+
+  <!-- ── Battle dialog ─────────────────────────────────────────────── -->
+  <div id="battle-dialog">
+    <div class="battle-card">
+      <div class="battle-combatants">
+        <div id="battle-attacker" class="combatant-panel"></div>
+        <div class="battle-versus">⚔</div>
+        <div id="battle-defender" class="combatant-panel"></div>
+      </div>
+      <div class="battle-dice-row">
+        <div id="battle-atk-die" class="die-display">?</div>
+        <span class="dice-vs">vs</span>
+        <div id="battle-def-die" class="die-display">?</div>
+      </div>
+      <div id="battle-outcome" class="battle-outcome"></div>
+      <div class="result-dismiss">— click to continue —</div>
+    </div>
+  </div>
+
   <!-- ── Game-over overlay ─────────────────────────────────────────── -->
   <div id="game-over">
     <div class="game-over-card">

@@ -190,6 +190,7 @@ canvas { touch-action: pan-x pan-y; }
 #canvas-wrapper {
   flex: 1;
   overflow: hidden;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -316,6 +317,205 @@ canvas { touch-action: pan-x pan-y; }
 #event-log::-webkit-scrollbar, #sidebar::-webkit-scrollbar { width: 4px; }
 #event-log::-webkit-scrollbar-track, #sidebar::-webkit-scrollbar-track { background: transparent; }
 #event-log::-webkit-scrollbar-thumb, #sidebar::-webkit-scrollbar-thumb { background: #2a2040; border-radius: 2px; }
+
+/* ── Action popup (floating above selected unit) ───────────────────────── */
+
+#action-popup {
+  display: none;
+  position: fixed;
+  z-index: 60;
+  width: 210px;
+  background: var(--bg-panel);
+  border: 1px solid #3a2d58;
+  border-radius: 6px;
+  padding: 0.4rem 0.5rem 0.5rem;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.04);
+  /* anchor point is the hex centre; CSS lifts it above via transform */
+  transform: translateX(-50%) translateY(calc(-100% - 14px));
+}
+
+/* downward caret / arrow */
+#action-popup::after {
+  content: '';
+  position: absolute;
+  bottom: -7px;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 7px solid transparent;
+  border-bottom: none;
+  border-top-color: #3a2d58;
+}
+
+.popup-unit-name {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  text-align: center;
+  margin-bottom: 0.35rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--border);
+  letter-spacing: 0.05em;
+}
+
+/* ── Result dialog ─────────────────────────────────────────────────────── */
+
+#result-dialog {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.55);
+  cursor: pointer;
+}
+
+.result-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1.5rem 2rem;
+  max-width: min(420px, 90vw);
+  text-align: center;
+  box-shadow: 0 0 40px rgba(0,0,0,0.7);
+  pointer-events: none;
+}
+
+.result-messages {
+  font-size: 1rem;
+  color: var(--text-bright);
+  line-height: 1.65;
+  margin-bottom: 1rem;
+  white-space: pre-line;
+}
+
+.result-dismiss {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  letter-spacing: 0.08em;
+  font-style: italic;
+}
+
+/* ── Battle dialog ─────────────────────────────────────────────────────── */
+
+#battle-dialog {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.65);
+  cursor: pointer;
+}
+
+.battle-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1.5rem 2rem;
+  width: min(480px, 92vw);
+  text-align: center;
+  box-shadow: 0 0 50px rgba(0,0,0,0.8);
+  pointer-events: none;
+}
+
+.battle-combatants {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+  justify-content: center;
+}
+
+.combatant-panel {
+  flex: 1;
+  background: var(--bg-section);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.82rem;
+}
+
+.combatant-name  { font-size: 0.95rem; font-weight: bold; margin-bottom: 0.3rem; }
+.combatant-stats { font-size: 0.78rem; color: var(--text-dim); line-height: 1.5; }
+.combatant-hp-bar {
+  height: 5px;
+  background: #333;
+  border-radius: 2px;
+  margin-top: 0.4rem;
+  overflow: hidden;
+}
+.combatant-hp-fill { height: 100%; border-radius: 2px; transition: width 0.3s; }
+
+.battle-versus {
+  font-size: 1.5rem;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.battle-dice-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.die-display {
+  width: 56px;
+  height: 56px;
+  background: var(--bg-section);
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: var(--day);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  transition: border-color 0.2s;
+}
+.die-display.rolling { animation: die-shake 0.08s infinite; }
+.die-display.atk-win { border-color: #4caf50; color: #4caf50; }
+.die-display.def-win { border-color: #f44336; color: #f44336; }
+
+@keyframes die-shake {
+  0%   { transform: translate(-1px,  1px) rotate(-1deg); }
+  25%  { transform: translate( 1px, -1px) rotate( 1deg); }
+  50%  { transform: translate(-1px, -1px) rotate( 0deg); }
+  75%  { transform: translate( 1px,  1px) rotate(-1deg); }
+  100% { transform: translate(-1px,  1px) rotate( 1deg); }
+}
+
+.dice-vs {
+  font-size: 0.9rem;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.battle-outcome {
+  font-size: 1.1rem;
+  font-weight: bold;
+  min-height: 1.4em;
+  margin-bottom: 0.75rem;
+  letter-spacing: 0.04em;
+}
+.battle-outcome.hit  { color: #ff6b6b; }
+.battle-outcome.miss { color: var(--text-dim); }
+.battle-outcome.kill { color: #ff3333; }
+
+/* ── End Turn urgent highlight ─────────────────────────────────────────── */
+
+.action-btn.end-turn.urgent {
+  border-color: var(--day);
+  color: var(--day);
+  animation: pulse-gold 1.4s ease-in-out infinite;
+}
+@keyframes pulse-gold {
+  0%, 100% { box-shadow: none; }
+  50%       { box-shadow: 0 0 8px rgba(245,200,66,0.5); }
+}
 
 /* ── Game-over overlay ─────────────────────────────────────────────────── */
 

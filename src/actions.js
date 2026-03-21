@@ -328,8 +328,9 @@ export function executeBattle(state, actor, target) {
     `[${attackRoll} vs ${defenseRoll}]${phaseNote}`
   );
 
+  let killed = false;
   if (hit) {
-    const killed = target.takeDamage(1);
+    killed = target.takeDamage(1);
     if (killed) {
       log.push(`${target.displayName} is slain!`);
       state.entities = state.entities.filter(e => e.id !== target.id);
@@ -340,7 +341,7 @@ export function executeBattle(state, actor, target) {
     log.push(`${target.displayName} defends successfully.`);
   }
 
-  return { success: true, log, cost: 1 };
+  return { success: true, log, cost: 1, attackRoll, defenseRoll, hit, killed };
 }
 
 export function executeFortify(state, actor) {
