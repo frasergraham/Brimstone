@@ -21,6 +21,10 @@ function init(witchIsAI) {
   ai       = new WitchAI(state, redraw);
   ui       = new UIController(canvas, state, renderer, ai, redraw);
 
+  // Show battle dialog for AI-initiated attacks
+  ai.onBattleResult = (actorSnap, targetSnap, result) =>
+    new Promise(resolve => ui._showBattleDialog(actorSnap, targetSnap, result, resolve));
+
   redraw();
   ui.refresh();
 

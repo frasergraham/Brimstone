@@ -1,37 +1,29 @@
 // Procedural map generator for the Salem hex map
-import { MAP_COLS, MAP_ROWS, getNeighbors, hexKey } from './hex.js';
+import { MAP_COLS, MAP_ROWS, getNeighbors, hexKey, hexDistance } from './hex.js';
 import { Tile, TileType, BuildingType } from './tiles.js';
 
-// Fixed building positions (col, row) for a 13×11 grid
-const BUILDING_PLACEMENTS = [
-  // Core named buildings
-  { col: 6,  row: 5,  building: BuildingType.TOWN_HALL   },
-  { col: 6,  row: 1,  building: BuildingType.CHURCH      },
-  { col: 10, row: 5,  building: BuildingType.INN         },
-  { col: 2,  row: 5,  building: BuildingType.BLACKSMITH  },
-  { col: 10, row: 9,  building: BuildingType.GRAVEYARD   },
-  { col: 3,  row: 2,  building: BuildingType.MILL        },
-  { col: 5,  row: 9,  building: BuildingType.DOCK        },
-  // Speciality buildings
-  { col: 7,  row: 8,  building: BuildingType.BARN        },
-  { col: 1,  row: 7,  building: BuildingType.BARN        },
-  { col: 8,  row: 2,  building: BuildingType.WATCHTOWER  },
-  { col: 1,  row: 3,  building: BuildingType.APOTHECARY  },
-  { col: 11, row: 7,  building: BuildingType.STOREHOUSE  },
-  { col: 8,  row: 0,  building: BuildingType.STABLE      },
-  // Houses
-  { col: 2,  row: 2,  building: BuildingType.HOUSE       },
-  { col: 10, row: 2,  building: BuildingType.HOUSE       },
-  { col: 9,  row: 7,  building: BuildingType.HOUSE       },
-  { col: 4,  row: 7,  building: BuildingType.HOUSE       },
-  { col: 11, row: 3,  building: BuildingType.HOUSE       },
-  { col: 12, row: 6,  building: BuildingType.HOUSE       },
-  { col: 3,  row: 8,  building: BuildingType.HOUSE       },
-  { col: 8,  row: 6,  building: BuildingType.HOUSE       },
-  { col: 6,  row: 3,  building: BuildingType.HOUSE       },
-  { col: 9,  row: 4,  building: BuildingType.HOUSE       },
-  { col: 0,  row: 5,  building: BuildingType.HOUSE       },
+// Building types to scatter across the map each game
+const BUILDING_TYPES = [
+  BuildingType.TOWN_HALL,
+  BuildingType.CHURCH,
+  BuildingType.INN,
+  BuildingType.BLACKSMITH,
+  BuildingType.GRAVEYARD,
+  BuildingType.MILL,
+  BuildingType.DOCK,
+  BuildingType.BARN, BuildingType.BARN,
+  BuildingType.WATCHTOWER,
+  BuildingType.APOTHECARY,
+  BuildingType.STOREHOUSE,
+  BuildingType.STABLE,
+  BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
+  BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
+  BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
+  BuildingType.HOUSE, BuildingType.HOUSE,
 ];
+
+// Flavor labels for the three witch power nodes
+const WITCH_OBJECTIVE_LABELS = ['Ancient Altar', 'Dark Grove', 'Cursed Crossroads'];
 
 // River meanders roughly down the left-center of the map
 const RIVER_PATH = [
@@ -48,15 +40,7 @@ const FOREST_SEEDS = [
   {col:7,row:3},{col:8,row:8},{col:0,row:4},{col:6,row:9},
 ];
 
-// Three strategic locations the witch is trying to dominate
-export const WITCH_OBJECTIVES = [
-  { col: 8,  row: 1,  label: 'Ancient Altar'    },
-  { col: 1,  row: 9,  label: 'Dark Grove'        },
-  { col: 11, row: 5,  label: 'Cursed Crossroads' },
-];
-
 function rng(seed) {
-  // Simple seeded LCG so the map is reproducible per session
   let s = seed | 0;
   return () => {
     s = (Math.imul(1664525, s) + 1013904223) | 0;
@@ -64,8 +48,15 @@ function rng(seed) {
   };
 }
 
+function _shuffle(arr, rand) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
 // BFS pathfinding returning array of {col,row} cells between start and end
-// Prefers road/grass over river/buildings; used for road placement
 function bfsPath(tiles, startCol, startRow, endCol, endRow, rand) {
   const key = (c, r) => `${c},${r}`;
   const start = key(startCol, startRow);
@@ -76,7 +67,6 @@ function bfsPath(tiles, startCol, startRow, endCol, endRow, rand) {
   const queue = [{ col: startCol, row: startRow }];
 
   while (queue.length) {
-    // Shuffle neighbors slightly for organic paths
     const { col, row } = queue.shift();
     const k = key(col, row);
     if (k === end) break;
@@ -87,13 +77,11 @@ function bfsPath(tiles, startCol, startRow, endCol, endRow, rand) {
       if (prev.has(nk)) continue;
       const tile = tiles.get(nk);
       if (!tile) continue;
-      // Allow crossing rivers — they become BRIDGE tiles during road placement
       prev.set(nk, { col, row });
       queue.push(n);
     }
   }
 
-  // Reconstruct path
   const path = [];
   let cur = key(endCol, endRow);
   while (cur && prev.get(cur) !== null) {
@@ -104,6 +92,55 @@ function bfsPath(tiles, startCol, startRow, endCol, endRow, rand) {
   }
   path.push({ col: endCol, row: endRow });
   return path;
+}
+
+// Pick N positions from available grass tiles with a minimum hex-distance between them.
+// Avoids forbidden keys and a 1-tile border around the map.
+function _pickSpread(rand, tiles, count, minDist, forbiddenKeys = new Set()) {
+  const candidates = [];
+  for (const [k, t] of tiles) {
+    if (t.type !== TileType.GRASS) continue;
+    if (forbiddenKeys.has(k)) continue;
+    if (t.col < 1 || t.col > MAP_COLS - 2 || t.row < 1 || t.row > MAP_ROWS - 2) continue;
+    candidates.push({ col: t.col, row: t.row });
+  }
+  _shuffle(candidates, rand);
+
+  const placed = [];
+  for (const c of candidates) {
+    if (placed.length >= count) break;
+    const tooClose = placed.some(p => hexDistance(p.col, p.row, c.col, c.row) < minDist);
+    if (!tooClose) placed.push(c);
+  }
+  return placed;
+}
+
+// Randomly scatter buildings with a minimum separation heuristic.
+function _randomBuildingPlacements(rand, tiles) {
+  const MIN_DIST = 2; // minimum hexes between any two buildings
+  const placements = [];
+  const usedKeys = new Set();
+
+  for (const building of BUILDING_TYPES) {
+    const candidates = [];
+    for (const [k, t] of tiles) {
+      if (t.type !== TileType.GRASS) continue;
+      if (usedKeys.has(k)) continue;
+      if (t.col < 1 || t.col > MAP_COLS - 2 || t.row < 1 || t.row > MAP_ROWS - 2) continue;
+      candidates.push({ col: t.col, row: t.row });
+    }
+    _shuffle(candidates, rand);
+
+    for (const c of candidates) {
+      const tooClose = placements.some(p => hexDistance(p.col, p.row, c.col, c.row) < MIN_DIST);
+      if (!tooClose) {
+        placements.push({ col: c.col, row: c.row, building });
+        usedKeys.add(hexKey(c.col, c.row));
+        break;
+      }
+    }
+  }
+  return placements;
 }
 
 export function generateMap(seed = Date.now()) {
@@ -123,26 +160,20 @@ export function generateMap(seed = Date.now()) {
     if (t) t.type = TileType.RIVER;
   }
 
-  // 3. Place buildings
-  for (const { col, row, building } of BUILDING_PLACEMENTS) {
+  // 3. Place buildings randomly with spread heuristic
+  const buildingPlacements = _randomBuildingPlacements(rand, tiles);
+  for (const { col, row, building } of buildingPlacements) {
     const t = tiles.get(hexKey(col, row));
     if (!t) continue;
     t.type = TileType.BUILDING;
     t.building = building;
-    // Town Hall and Inn pre-explored; all others are hidden
-    t.explored = building === BuildingType.TOWN_HALL ||
-                 building === BuildingType.INN;
+    // No tiles are pre-explored — player must discover everything
   }
 
-  // 4. Build roads between buildings and Town Hall (hub-and-spoke + a few extras)
-  const hub = BUILDING_PLACEMENTS[0]; // Town Hall
-  const roadTargets = BUILDING_PLACEMENTS.slice(1);
-  // Also connect some pairs for a ring feel
-  const extraPairs = [
-    [1, 2], // Church <-> Inn
-    [2, 3], // Inn <-> Blacksmith
-    [5, 6], // Mill <-> Dock
-  ];
+  // 4. Build roads between buildings and Town Hall (hub-and-spoke)
+  const hub = buildingPlacements.find(b => b.building === BuildingType.TOWN_HALL)
+           || buildingPlacements[0];
+  const roadTargets = buildingPlacements.filter(b => b !== hub);
 
   let bridgesPlaced = 0;
   const placeRoad = path => {
@@ -154,16 +185,11 @@ export function generateMap(seed = Date.now()) {
         t.type = TileType.BRIDGE;
         bridgesPlaced++;
       }
-      // Leave BUILDING, ROAD, BRIDGE, FOREST tiles unchanged
     }
   };
 
   for (const target of roadTargets) {
     placeRoad(bfsPath(tiles, hub.col, hub.row, target.col, target.row, rand));
-  }
-  for (const [i, j] of extraPairs) {
-    const a = BUILDING_PLACEMENTS[i], b = BUILDING_PLACEMENTS[j];
-    placeRoad(bfsPath(tiles, a.col, a.row, b.col, b.row, rand));
   }
 
   // 5. Grow forest clusters from seeds
@@ -174,7 +200,6 @@ export function generateMap(seed = Date.now()) {
       const t = tiles.get(hexKey(col, row));
       if (t && t.type === TileType.GRASS && rand() < 0.70) {
         t.type = TileType.FOREST;
-        // Second ring, sparser
         for (const n of getNeighbors(col, row)) {
           const t2 = tiles.get(hexKey(n.col, n.row));
           if (t2 && t2.type === TileType.GRASS && rand() < 0.40) {
@@ -185,16 +210,20 @@ export function generateMap(seed = Date.now()) {
     }
   }
 
-  return tiles;
-}
+  // 6. Place witch objectives — 3 well-spread positions not overlapping buildings
+  const buildingKeys = new Set(buildingPlacements.map(b => hexKey(b.col, b.row)));
+  const objPositions = _pickSpread(rand, tiles, 3, 4, buildingKeys);
+  // Pad if not enough positions found
+  while (objPositions.length < 3) objPositions.push({ col: 1, row: 1 });
+  const witchObjectives = objPositions.map((pos, i) => ({
+    col: pos.col, row: pos.row, label: WITCH_OBJECTIVE_LABELS[i],
+  }));
 
+  // 7. Determine start positions
+  const heroStart  = buildingPlacements.find(b => b.building === BuildingType.INN)
+                  || buildingPlacements[0];
+  const witchStart = buildingPlacements.find(b => b.building === BuildingType.GRAVEYARD)
+                  || buildingPlacements[buildingPlacements.length - 1];
 
-// Accessor helpers used by other modules
-export function getStartPosition(role) {
-  if (role === 'hero') {
-    const inn = BUILDING_PLACEMENTS.find(b => b.building === BuildingType.INN);
-    return { col: inn.col, row: inn.row };
-  }
-  const grave = BUILDING_PLACEMENTS.find(b => b.building === BuildingType.GRAVEYARD);
-  return { col: grave.col, row: grave.row };
+  return { tiles, witchObjectives, heroStart, witchStart };
 }

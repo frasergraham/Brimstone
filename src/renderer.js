@@ -205,6 +205,14 @@ export class Renderer {
       ctx.stroke();
     }
 
+    // ── Explored dot (non-building tiles) ────────────────────────────────
+    if (tile.explored && tile.type !== TileType.BUILDING) {
+      ctx.fillStyle = 'rgba(245,200,66,0.70)';
+      ctx.beginPath();
+      ctx.arc(x + hs * 0.42, y + hs * 0.48, Math.max(2, hs * 0.11), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     // ── Building: icon + name + border ───────────────────────────────────
     if (tile.type === TileType.BUILDING && tile.building) {
       ctx.beginPath();

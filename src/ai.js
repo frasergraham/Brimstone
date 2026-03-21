@@ -2,7 +2,6 @@
 import { getNeighbors, hexDistance, hexKey } from './hex.js';
 import { TileType, ResourceType } from './tiles.js';
 import { EntityType } from './entities.js';
-import { WITCH_OBJECTIVES } from './map.js';
 import {
   executeMove, executeExplore, executeBattle, executeSummon,
 } from './actions.js';
@@ -40,6 +39,7 @@ export class WitchAI {
   constructor(state, onStateChange) {
     this.state         = state;
     this.onStateChange = onStateChange;
+    this.onBattleResult = null; // set by UI: async (actorSnap, targetSnap, result) => void
     this._running      = false;
   }
 
@@ -50,7 +50,7 @@ export class WitchAI {
 
     while (state.actionsAvailable > 0 && !state.gameOver) {
       await this._think();
-      const acted = this._chooseAction();
+      const acted = await this._chooseAction();
       if (!acted) break;
       this.onStateChange();
       await delay(THINK_DELAY_MS);
@@ -61,7 +61,19 @@ export class WitchAI {
     this._running = false;
   }
 
-  _chooseAction() {
+  async _executeBattleWithUI(actor, target) {
+    const actorSnap  = _snapEntity(actor);
+    const targetSnap = _snapEntity(target);
+    const result = executeBattle(this.state, actor, target);
+    logResult(this.state, result);
+    this.state.spendAction(result.cost);
+    if (this.onBattleResult) {
+      await this.onBattleResult(actorSnap, targetSnap, result);
+    }
+    return true;
+  }
+
+  async _chooseAction() {
     const state = this.state;
     const witch = state.witch;
 
@@ -70,10 +82,7 @@ export class WitchAI {
       e => e.alive && e.owner === 'hero' && e.col === witch.col && e.row === witch.row
     );
     if (colocatedEnemy) {
-      const result = executeBattle(state, witch, colocatedEnemy);
-      logResult(state, result);
-      state.spendAction(result.cost);
-      return true;
+      return this._executeBattleWithUI(witch, colocatedEnemy);
     }
 
     // 2. Summon if resources available and army is small
@@ -128,17 +137,11 @@ export class WitchAI {
         e => e.alive && e.owner === 'hero' && e.col === minion.col && e.row === minion.row
       );
       if (minionEnemy) {
-        const result = executeBattle(state, minion, minionEnemy);
-        logResult(state, result);
-        state.spendAction(result.cost);
-        return true;
+        return this._executeBattleWithUI(minion, minionEnemy);
       }
       // Fight adjacent hero
       if (isAdjacent(minion, state.hero) && state.hero.alive) {
-        const result = executeBattle(state, minion, state.hero);
-        logResult(state, result);
-        state.spendAction(result.cost);
-        return true;
+        return this._executeBattleWithUI(minion, state.hero);
       }
       // Move toward nearest unclaimed objective
       const targetObj = _unoccupiedObjective(state, minion);
@@ -179,8 +182,12 @@ export class WitchAI {
   }
 }
 
+function _snapEntity(e) {
+  return { id: e.id, name: e.displayName, hp: e.hp, maxHp: e.maxHp, attack: e.attack, defense: e.defense, type: e.type };
+}
+
 function _unoccupiedObjective(state, actor) {
-  const unclaimed = WITCH_OBJECTIVES.filter(obj =>
+  const unclaimed = state.witchObjectives.filter(obj =>
     !state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
   );
   if (!unclaimed.length) return null;

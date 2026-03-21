@@ -1,5 +1,5 @@
 // Central game state and turn management
-import { generateMap, getStartPosition, WITCH_OBJECTIVES } from './map.js';
+import { generateMap } from './map.js';
 import { createHero, createWitch, resetRoster, EntityType } from './entities.js';
 import { ResourceType, TileType } from './tiles.js';
 import { hexKey } from './hex.js';
@@ -45,22 +45,21 @@ export { PHASE_ICON };
 export class GameState {
   constructor(witchIsAI = true) {
     resetRoster();
-    this.tiles     = generateMap();
+    const mapData  = generateMap();
+    this.tiles     = mapData.tiles;
     this.entities  = [];
     this.witchIsAI = witchIsAI;
 
     // Fog of war: hide witch movements and positions in AI mode
     this.fogOfWar = witchIsAI;
 
-    const heroPos  = getStartPosition('hero');
-    const witchPos = getStartPosition('witch');
-    this.hero  = createHero(heroPos.col, heroPos.row);
-    this.witch = createWitch(witchPos.col, witchPos.row);
+    this.hero  = createHero(mapData.heroStart.col,  mapData.heroStart.row);
+    this.witch = createWitch(mapData.witchStart.col, mapData.witchStart.row);
     this.entities.push(this.hero, this.witch);
 
     this.inventory = { shared: {}, witch: {} };
 
-    this.witchObjectives = WITCH_OBJECTIVES;
+    this.witchObjectives = mapData.witchObjectives;
 
     this.round        = 1;
     this.phase        = Phase.DAWN;

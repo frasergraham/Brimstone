@@ -166,22 +166,39 @@ export class UIController {
       const target = battleAction?.targets.find(t => t.col === hex.col && t.row === hex.row);
       if (!target) return;
 
+      this._awaitingTarget = null;
+      this.renderer.highlightHexes = [];
+
+      const afterBattle = () => {
+        state.checkVictory();
+        if (actor.alive) { this._selectEntity(actor); }
+        else this._clearSelection();
+        this._updateSidebar();
+        this.onRedraw();
+      };
+
+      const doRematch = () => {
+        if (!actor.alive || !target.alive || state.actionsAvailable === 0) {
+          afterBattle();
+          return;
+        }
+        const snap1 = _snapEntity(actor);
+        const snap2 = _snapEntity(target);
+        const r2 = executeBattle(state, actor, target);
+        for (const msg of r2.log) state.addLog(msg);
+        if (r2.success) state.spendAction(r2.cost);
+        const canRematchAgain = !r2.killed && actor.alive && target.alive;
+        this._showBattleDialog(snap1, snap2, r2, afterBattle, canRematchAgain ? doRematch : null);
+      };
+
       const actorSnap  = _snapEntity(actor);
       const targetSnap = _snapEntity(target);
       const result = executeBattle(state, actor, target);
       for (const msg of result.log) state.addLog(msg);
       if (result.success) state.spendAction(result.cost);
 
-      this._awaitingTarget = null;
-      this.renderer.highlightHexes = [];
-
-      this._showBattleDialog(actorSnap, targetSnap, result, () => {
-        state.checkVictory();
-        if (actor.alive) { this._selectEntity(actor); }
-        else this._clearSelection();
-        this._updateSidebar();
-        this.onRedraw();
-      });
+      const canRematch = !result.killed && actor.alive && target.alive;
+      this._showBattleDialog(actorSnap, targetSnap, result, afterBattle, canRematch ? doRematch : null);
 
     } else if (actionType === ActionType.SUMMON) {
       const result = executeSummon(state, actor, hex.col, hex.row);
@@ -203,8 +220,7 @@ export class UIController {
     const state = this.state;
     const popup = document.getElementById('action-popup');
 
-    // Unit picker mode — show before entity guard so it works even when
-    // no single entity is selected yet
+    // Unit picker mode
     if (this._pendingUnitPick) {
       let html = `<div class="popup-unit-name">Choose a unit:</div>`;
       for (const u of this._pendingUnitPick.units) {
@@ -227,19 +243,20 @@ export class UIController {
     const actions = getValidActions(state, entity);
     const hasAct  = state.actionsAvailable > 0;
 
-    let html = `<div class="popup-unit-name">${entity.displayName}</div>`;
+    let regularHtml = '';
+    let freeHtml    = '';
 
     for (const action of actions) {
       const dis = !hasAct ? 'disabled' : '';
       switch (action.type) {
         case ActionType.MOVE:
-          html += btn('⬡ Move (1)', 'move', dis, `data-action="move"`);
+          regularHtml += btn('⬡ Move (1)', 'move', dis, `data-action="move"`);
           break;
         case ActionType.EXPLORE:
-          html += btn('🔍 Explore (1)', 'explore', dis, `data-action="explore"`);
+          regularHtml += btn('🔍 Explore (1)', 'explore', dis, `data-action="explore"`);
           break;
         case ActionType.BATTLE:
-          html += btn('⚔ Battle (1)', 'battle', dis, `data-action="battle"`);
+          regularHtml += btn('⚔ Battle (1)', 'battle', dis, `data-action="battle"`);
           break;
         case ActionType.FORTIFY: {
           const shared     = state.inventory.shared;
@@ -252,34 +269,45 @@ export class UIController {
             : hasDoubler
               ? `🪵 Fortify (Wood → +${Math.min(4, cur + 2)} DEF ★)`
               : `🪵 Fortify (Wood → +${Math.min(4, cur + 1)} DEF)`;
-          html += btn(lbl, 'fortify', dis, `data-action="fortify"`);
+          regularHtml += btn(lbl, 'fortify', dis, `data-action="fortify"`);
           break;
         }
         case ActionType.SUMMON:
-          html += btn(_summonLabel(state.inventory.witch), 'summon', dis, `data-action="summon"`);
+          regularHtml += btn(_summonLabel(state.inventory.witch), 'summon', dis, `data-action="summon"`);
           break;
         case ActionType.USE_ITEM:
           for (const item of action.usable) {
-            html += btn(item.label, 'item', dis, `data-action="use_item" data-item="${item.item}"`);
+            regularHtml += btn(item.label, 'item', dis, `data-action="use_item" data-item="${item.item}"`);
           }
           break;
         case ActionType.EQUIP_WEAPON:
           for (const w of action.weapons) {
-            html += btn(`Equip ${w.label}`, 'item', dis, `data-action="use_item" data-item="${w.key}"`);
+            regularHtml += btn(`Equip ${w.label}`, 'item', dis, `data-action="use_item" data-item="${w.key}"`);
           }
           break;
         case ActionType.USE_ABILITY: {
           const abilityLabels = {
             [SurvivorAbility.HEAL]:    'Tend Wounds — heal hero 1 HP (1)',
-            [SurvivorAbility.INSPIRE]: 'Battle Cry — hero +1 ATK (free)',
-            [SurvivorAbility.RALLY]:   'Holy Sermon — +1 action (free)',
+            [SurvivorAbility.INSPIRE]: '✦ Battle Cry — hero +1 ATK',
+            [SurvivorAbility.RALLY]:   '✦ Holy Sermon — +1 action',
           };
-          const lbl     = abilityLabels[action.ability] || 'Use Ability';
-          const costDis = action.ability === SurvivorAbility.HEAL && !hasAct ? 'disabled' : '';
-          html += btn(lbl, 'item ability', costDis, `data-action="use_ability"`);
+          const lbl    = abilityLabels[action.ability] || 'Use Ability';
+          const isFree = action.ability !== SurvivorAbility.HEAL;
+          if (isFree) {
+            freeHtml += btn(lbl, 'item ability free', '', `data-action="use_ability"`);
+          } else {
+            regularHtml += btn(lbl, 'item ability', !hasAct ? 'disabled' : '', `data-action="use_ability"`);
+          }
           break;
         }
       }
+    }
+
+    let html = `<div class="popup-unit-name">${entity.displayName}</div>`;
+    html += regularHtml;
+    if (freeHtml) {
+      html += `<div class="popup-section-label">Free Actions</div>`;
+      html += freeHtml;
     }
 
     popup.innerHTML = html;
@@ -532,14 +560,15 @@ export class UIController {
     document.addEventListener('keydown', keyDismiss);
   }
 
-  _showBattleDialog(actorSnap, targetSnap, result, onDismiss) {
+  _showBattleDialog(actorSnap, targetSnap, result, onDismiss, onRematch = null) {
     const dialog = document.getElementById('battle-dialog');
+    const footer = document.getElementById('battle-footer');
 
     // Populate combatant panels
     document.getElementById('battle-attacker').innerHTML = _combatantHTML(actorSnap, 'atk');
     document.getElementById('battle-defender').innerHTML = _combatantHTML(targetSnap, 'def');
 
-    // Reset dice
+    // Reset dice and footer
     const atkDie = document.getElementById('battle-atk-die');
     const defDie = document.getElementById('battle-def-die');
     const outcome = document.getElementById('battle-outcome');
@@ -549,6 +578,7 @@ export class UIController {
     defDie.className   = 'die-display rolling';
     outcome.textContent = '';
     outcome.className   = 'battle-outcome';
+    footer.innerHTML   = '<div class="result-dismiss">— click to continue —</div>';
 
     dialog.style.display = 'flex';
 
@@ -582,6 +612,22 @@ export class UIController {
         if (fill) {
           const newHp = result.killed ? 0 : targetSnap.hp - 1;
           fill.style.width = `${Math.max(0, (newHp / targetSnap.maxHp) * 100)}%`;
+        }
+
+        // Battle Again button (player battles only, when neither died)
+        if (onRematch) {
+          const hasActs = this.state.actionsAvailable > 0;
+          const rematchBtn = document.createElement('button');
+          rematchBtn.className = 'action-btn battle rematch-btn';
+          rematchBtn.textContent = '⚔ Battle Again';
+          rematchBtn.disabled = !hasActs;
+          rematchBtn.addEventListener('click', e => {
+            e.stopPropagation();
+            dialog.style.display = 'none';
+            document.removeEventListener('keydown', keyDismiss);
+            onRematch();
+          });
+          footer.insertBefore(rematchBtn, footer.firstChild);
         }
       }
     }, 55);
@@ -767,6 +813,16 @@ function _positionPopup(popup, ui) {
   const target = ui._selectedEntity || (ui._pendingUnitPick?.units[0]);
   if (!target) return;
 
+  // Measure popup height while invisible so we can fit it in the viewport
+  popup.style.visibility = 'hidden';
+  popup.style.display    = 'block';
+  const popupH = popup.offsetHeight || 180;
+  popup.style.display    = 'none';
+  popup.style.visibility = '';
+
+  const POPUP_W = 210;
+  const GAP     = 10;
+
   const canvasRect = ui.canvas.getBoundingClientRect();
   const { x, y }   = ui.renderer.hexToCanvasPos(target.col, target.row);
   const scale       = canvasRect.width / ui.canvas.width;
@@ -774,25 +830,24 @@ function _positionPopup(popup, ui) {
   const screenY     = canvasRect.top  + y * scale;
   const hs          = ui.renderer.hexSize * scale;
 
-  const POPUP_W = 210;
-  const GAP     = 12;
+  // Horizontal: centre on unit, clamped within viewport
+  popup.style.left      = Math.max(8, Math.min(screenX - POPUP_W / 2, window.innerWidth  - POPUP_W - 8)) + 'px';
+  popup.style.transform = 'none';
 
-  // Horizontal: clamp within viewport
-  const left = Math.max(8, Math.min(screenX - POPUP_W / 2, window.innerWidth - POPUP_W - 8));
-  popup.style.left = left + 'px';
-
-  // Vertical: prefer above the unit, but flip below if near the top of the screen
-  const anchorY    = screenY - hs * 0.55;  // approximate top edge of the hex
-  const showBelow  = anchorY < 150;         // not enough room above
+  // Vertical: prefer above the hex, flip below when there isn't enough room
+  const hexTop     = screenY - hs * 0.55;
+  const hexBot     = screenY + hs * 0.55;
+  const spaceAbove = hexTop - GAP;
+  const showBelow  = spaceAbove < popupH + 8;
 
   if (showBelow) {
     popup.classList.add('flipped');
-    popup.style.top       = (screenY + hs * 0.55 + GAP) + 'px';
-    popup.style.transform = 'translateX(-50%)';
+    // Clamp so it doesn't run off the bottom
+    popup.style.top = Math.min(hexBot + GAP, window.innerHeight - popupH - 8) + 'px';
   } else {
     popup.classList.remove('flipped');
-    popup.style.top       = (anchorY - GAP) + 'px';
-    popup.style.transform = 'translateX(-50%) translateY(-100%)';
+    // Clamp so it doesn't run off the top
+    popup.style.top = Math.max(8, hexTop - GAP - popupH) + 'px';
   }
 }
 
