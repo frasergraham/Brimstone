@@ -12,9 +12,8 @@ function init(witchIsAI, heroIsAI) {
   const canvas = document.getElementById('game-canvas');
 
   // Show game screen before constructing renderer so the wrapper has real dimensions
-  document.getElementById('setup-screen').style.display = 'none';
-  document.getElementById('side-screen').style.display  = 'none';
-  document.getElementById('game-screen').style.display  = 'flex';
+  document.getElementById('setup-screen').style.display  = 'none';
+  document.getElementById('game-screen').style.display   = 'flex';
 
   state    = new GameState(witchIsAI, heroIsAI);
   renderer = new Renderer(canvas, state);
@@ -75,16 +74,17 @@ window.addEventListener('resize', () => {
 
 // ── Setup screen ─────────────────────────────────────────────────────────────
 
-const setupScreen    = document.getElementById('setup-screen');
-const sideScreen     = document.getElementById('side-screen');
+const stepMode = document.getElementById('setup-step-mode');
+const stepSide = document.getElementById('setup-step-side');
 
-document.getElementById('btn-vs-ai').addEventListener('click', () => {
-  // Show side-selection step
-  setupScreen.style.display = 'none';
-  sideScreen.style.display  = 'flex';
-});
+function showStep(step) {
+  stepMode.style.display = step === 'mode' ? '' : 'none';
+  stepSide.style.display = step === 'side' ? '' : 'none';
+}
 
+document.getElementById('btn-vs-ai').addEventListener('click',    () => showStep('side'));
 document.getElementById('btn-vs-human').addEventListener('click', () => init(false, false));
+document.getElementById('btn-back').addEventListener('click',     () => showStep('mode'));
 
 document.getElementById('btn-play-hero').addEventListener('click',  () => init(true,  false));
 document.getElementById('btn-play-witch').addEventListener('click', () => init(false, true));
@@ -92,6 +92,7 @@ document.getElementById('btn-play-witch').addEventListener('click', () => init(f
 document.getElementById('btn-restart').addEventListener('click', () => {
   const el = document.getElementById('game-over');
   if (el) { el.style.display = 'none'; delete el.dataset.shown; }
-  sideScreen.style.display  = 'none';
-  setupScreen.style.display = 'flex';
+  showStep('mode');
+  document.getElementById('setup-screen').style.display = 'flex';
+  document.getElementById('game-screen').style.display  = 'none';
 });

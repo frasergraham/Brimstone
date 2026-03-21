@@ -10,7 +10,9 @@
 
   <!-- ── Setup screen ──────────────────────────────────────────────── -->
   <div id="setup-screen">
-    <div class="setup-card">
+
+    <!-- Step 1: choose mode -->
+    <div id="setup-step-mode" class="setup-card">
       <h1 class="title">BRIMSTONE</h1>
       <p class="subtitle">A Salem Hex Game</p>
       <div class="setup-lore">
@@ -38,11 +40,9 @@
            Witch wins by seizing 3 ⛧ Power Nodes, or killing the hero.</p>
       </div>
     </div>
-  </div>
 
-  <!-- ── Side-selection screen ──────────────────────────────────────── -->
-  <div id="side-screen" style="display:none">
-    <div class="setup-card">
+    <!-- Step 2: choose side (vs AI only) -->
+    <div id="setup-step-side" class="setup-card" style="display:none">
       <h1 class="title">CHOOSE YOUR SIDE</h1>
       <p class="subtitle">The AI will control your opponent</p>
       <div class="setup-buttons">
@@ -53,7 +53,11 @@
         <p><b>⚔ Hero</b> — explore Salem, recruit survivors, contest the power nodes, and destroy the witch before dawn.</p>
         <p><b>🕯 Witch</b> — summon minions, seize the three Power Nodes before dawn, or slay the hero.</p>
       </div>
+      <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
+        <button id="btn-back" class="setup-btn">← Back</button>
+      </div>
     </div>
+
   </div>
 
   <!-- ── Game screen ───────────────────────────────────────────────── -->
