@@ -68,6 +68,11 @@ export class Renderer {
     return _pixelToHex(canvasX - PAD_X, canvasY - PAD_Y, this.hexSize);
   }
 
+  // Return the canvas-pixel centre of a hex (for overlay positioning)
+  hexToCanvasPos(col, row) {
+    return this._toCanvas(col, row);
+  }
+
   draw() {
     const ctx   = this.ctx;
     const state = this.state;
@@ -95,10 +100,16 @@ export class Renderer {
       this._drawObjectiveSymbol(obj.col, obj.row, obj.label, state);
     }
 
-    // Hero visibility range overlay
+    // Visibility: compute once for fog layer + entity pass + outlines
+    const revealedHexes = state.fogOfWar ? getVisibleEnemyHexes(state) : null;
+
+    // Fog of war: grey overlay on all hexes outside hero vision
     if (state.fogOfWar) {
-      this._drawVisibilityLayer();
+      this._drawFogLayer(revealedHexes);
     }
+
+    // Thick outlines on hexes occupied by units
+    this._drawUnitPresenceOutlines(revealedHexes);
 
     // Highlights
     for (const h of this.highlightHexes) {
@@ -111,9 +122,6 @@ export class Renderer {
     if (this.hoveredHex) {
       this._drawOutline(this.hoveredHex.col, this.hoveredHex.row, 'rgba(255,255,255,0.3)', 1);
     }
-
-    // Visibility: baseline 2 hexes from any hero unit; SCOUT extends to 3
-    const revealedHexes = state.fogOfWar ? getVisibleEnemyHexes(state) : null;
 
     // Entities
     const drawn = new Set();
@@ -220,82 +228,78 @@ export class Renderer {
     }
   }
 
-  // Draw a subtle sight-range overlay around every hero-side unit.
-  // Each hex within range gets a faint blue fill; the outermost ring
-  // (exactly at max range) gets a slightly brighter outline so the
-  // boundary is easy to read.
-  _drawVisibilityLayer() {
+  // Fog of war: draw a dark grey overlay on every hex NOT within any hero unit's
+  // sight range. Visible hexes remain unobscured. The boundary gets a soft
+  // transitional opacity so the edge isn't a harsh cut.
+  _drawFogLayer(revealedEnemyHexes) {
     const ctx   = this.ctx;
     const state = this.state;
     const hs    = this.hexSize;
 
-    // Collect all hero units and their ranges
-    const watchers = state.entities
-      .filter(e => e.alive && e.owner === 'hero')
-      .map(e => ({
-        col: e.col, row: e.row,
-        range: e.ability === SurvivorAbility.SCOUT ? 3 : 2,
-      }));
-
-    if (!watchers.length) return;
-
-    // Build a map: hexKey -> max range distance from nearest watcher
-    // We want to know for each hex: is it in range, and is it on the boundary?
-    const inRange = new Map(); // hexKey -> minDist across all watchers
+    // Build the visible hex set (hero sight ranges)
+    const visibleSet = new Set();
+    for (const e of state.entities) {
+      if (!e.alive || e.owner !== 'hero') continue;
+      const range = e.ability === SurvivorAbility.SCOUT ? 3 : 2;
+      for (let row = 0; row < MAP_ROWS; row++) {
+        for (let col = 0; col < MAP_COLS; col++) {
+          if (hexDistance(col, row, e.col, e.row) <= range) {
+            visibleSet.add(hexKey(col, row));
+          }
+        }
+      }
+    }
 
     for (let row = 0; row < MAP_ROWS; row++) {
       for (let col = 0; col < MAP_COLS; col++) {
-        let closest = Infinity;
-        for (const w of watchers) {
-          const d = hexDistance(col, row, w.col, w.row);
-          if (d <= w.range) closest = Math.min(closest, d / w.range);
+        const k = hexKey(col, row);
+        if (visibleSet.has(k)) continue; // visible — no fog
+
+        const { x, y } = this._toCanvas(col, row);
+        const corners = hexCorners(x, y, hs);
+
+        // Hexes adjacent to the visibility edge get a lighter fog for a soft border
+        let isEdge = false;
+        for (const n of getNeighbors(col, row)) {
+          if (visibleSet.has(hexKey(n.col, n.row))) { isEdge = true; break; }
         }
-        if (closest < Infinity) {
-          inRange.set(hexKey(col, row), closest); // 0..1, lower = closer to watcher
+
+        ctx.beginPath();
+        ctx.moveTo(corners[0].x, corners[0].y);
+        for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
+        ctx.closePath();
+        ctx.fillStyle = isEdge ? 'rgba(0,0,0,0.45)' : 'rgba(0,0,0,0.68)';
+        ctx.fill();
+      }
+    }
+  }
+
+  // Thick coloured outlines on hexes occupied by units so they read clearly
+  // even on a busy map. Orange for hero-side, purple for witch-side.
+  _drawUnitPresenceOutlines(revealedHexes) {
+    const state = this.state;
+    const heroHexes  = new Set();
+    const witchHexes = new Set();
+
+    for (const e of state.entities) {
+      if (!e.alive) continue;
+      if (e.owner === 'hero') {
+        heroHexes.add(hexKey(e.col, e.row));
+      } else if (e.owner === 'witch') {
+        // Only show witch outlines for revealed hexes in fog-of-war mode
+        if (!state.fogOfWar || (revealedHexes && revealedHexes.has(hexKey(e.col, e.row)))) {
+          witchHexes.add(hexKey(e.col, e.row));
         }
       }
     }
 
-    // Collect boundary hexes: in range but have at least one neighbour out of range
-    const boundary = new Set();
-    for (const [k] of inRange) {
+    for (const k of heroHexes) {
       const [col, row] = k.split(',').map(Number);
-      for (const n of getNeighbors(col, row)) {
-        if (!inRange.has(hexKey(n.col, n.row))) {
-          boundary.add(k);
-          break;
-        }
-      }
+      this._drawOutline(col, row, 'rgba(255,140,0,0.85)', 3);
     }
-
-    // Draw fill for all in-range hexes (skip the watcher's own hex — it's obvious)
-    for (const [k, normDist] of inRange) {
+    for (const k of witchHexes) {
       const [col, row] = k.split(',').map(Number);
-      const { x, y } = this._toCanvas(col, row);
-      const corners = hexCorners(x, y, hs - 1);
-
-      // Fade from centre outward: inner hexes slightly brighter
-      const alpha = 0.24 + (1 - normDist) * 0.06;
-      ctx.beginPath();
-      ctx.moveTo(corners[0].x, corners[0].y);
-      for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
-      ctx.closePath();
-      ctx.fillStyle = `rgba(100,200,255,${alpha.toFixed(3)})`;
-      ctx.fill();
-    }
-
-    // Draw outline on boundary hexes
-    ctx.lineWidth = 3.2;
-    for (const k of boundary) {
-      const [col, row] = k.split(',').map(Number);
-      const { x, y } = this._toCanvas(col, row);
-      const corners = hexCorners(x, y, hs - 1);
-      ctx.beginPath();
-      ctx.moveTo(corners[0].x, corners[0].y);
-      for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
-      ctx.closePath();
-      ctx.strokeStyle = 'rgba(100,200,255,0.30)';
-      ctx.stroke();
+      this._drawOutline(col, row, 'rgba(160,80,220,0.85)', 3);
     }
   }
 
