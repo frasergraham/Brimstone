@@ -1,9 +1,10 @@
-// Witch AI — objective-based strategy with fog-of-war log masking
+// AI controllers — WitchAI and HeroAI
 import { getNeighbors, hexDistance, hexKey } from './hex.js';
 import { TileType, ResourceType } from './tiles.js';
 import { EntityType } from './entities.js';
+import { Phase } from './game.js';
 import {
-  executeMove, executeExplore, executeBattle, executeSummon,
+  executeMove, executeExplore, executeBattle, executeSummon, executeUseItem,
 } from './actions.js';
 
 const THINK_DELAY_MS = 600;
@@ -231,6 +232,194 @@ function stepToward(state, actor, target) {
     }
   }
   return null;
+}
+
+// ── Hero AI ──────────────────────────────────────────────────────────────────
+
+export class HeroAI {
+  constructor(state, onStateChange) {
+    this.state         = state;
+    this.onStateChange = onStateChange;
+    this.onBattleResult = null;
+    this._running       = false;
+  }
+
+  async takeTurn() {
+    if (this._running) return;
+    this._running = true;
+    const state = this.state;
+
+    while (state.actionsAvailable > 0 && !state.gameOver) {
+      await delay(THINK_DELAY_MS * 0.5);
+      const acted = await this._chooseAction();
+      if (!acted) break;
+      this.onStateChange();
+      await delay(THINK_DELAY_MS);
+    }
+
+    state.endTurn();
+    this.onStateChange();
+    this._running = false;
+  }
+
+  async _executeBattleWithUI(actor, target) {
+    const actorSnap  = _snapEntity(actor);
+    const targetSnap = _snapEntity(target);
+    const result = executeBattle(this.state, actor, target);
+    for (const msg of result.log) this.state.addLog(msg);
+    this.state.spendAction(result.cost);
+    if (this.onBattleResult) {
+      await this.onBattleResult(actorSnap, targetSnap, result);
+    }
+    return true;
+  }
+
+  async _chooseAction() {
+    const state = this.state;
+    const hero  = state.hero;
+
+    // 1. Fight co-located witch units
+    const colocated = state.entities.find(
+      e => e.alive && e.owner === 'witch' && e.col === hero.col && e.row === hero.row
+    );
+    if (colocated) return this._executeBattleWithUI(hero, colocated);
+
+    // 2. Fight adjacent witch units
+    const adjWitch = state.entities.find(
+      e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1
+    );
+    if (adjWitch) return this._executeBattleWithUI(hero, adjWitch);
+
+    // 3. Use herbs if injured
+    const herbs = (hero.items && hero.items[ResourceType.HERBS]) || 0;
+    if (herbs > 0 && hero.hp < hero.maxHp) {
+      const result = executeUseItem(state, hero, ResourceType.HERBS);
+      for (const msg of result.log) state.addLog(msg);
+      if (result.success) state.spendAction(result.cost);
+      return result.success;
+    }
+
+    // 4. At night, seek shelter if in the open
+    if (state.phase === Phase.NIGHT) {
+      const curTile = state.tiles.get(hexKey(hero.col, hero.row));
+      if (!curTile || curTile.type !== TileType.BUILDING) {
+        const shelter = _nearestBuilding(state, hero);
+        if (shelter) {
+          const step = stepToward(state, hero, shelter);
+          if (step) {
+            const result = executeMove(state, hero, step.col, step.row);
+            for (const msg of result.log) state.addLog(msg);
+            state.spendAction(result.cost);
+            return true;
+          }
+        }
+      }
+    }
+
+    // 5. Move survivors toward power nodes or have them fight
+    const survivors = state.entities.filter(
+      e => e.alive && e.owner === 'hero' && e.type === 'survivor'
+    );
+    for (const s of survivors) {
+      // Fight co-located witch unit
+      const sc = state.entities.find(
+        e => e.alive && e.owner === 'witch' && e.col === s.col && e.row === s.row
+      );
+      if (sc) return this._executeBattleWithUI(s, sc);
+      // Fight adjacent witch unit
+      const sa = state.entities.find(
+        e => e.alive && e.owner === 'witch' && hexDistance(s.col, s.row, e.col, e.row) === 1
+      );
+      if (sa) return this._executeBattleWithUI(s, sa);
+      // Move toward nearest unclaimed node
+      const nodeTarget = _unclaimedNodeForHero(state, s);
+      if (nodeTarget) {
+        const step = stepToward(state, s, nodeTarget);
+        if (step) {
+          const result = executeMove(state, s, step.col, step.row);
+          for (const msg of result.log) state.addLog(msg);
+          state.spendAction(result.cost);
+          return true;
+        }
+      }
+    }
+
+    // 6. Explore current tile if it's an unexplored building
+    const heroTile = state.tiles.get(hexKey(hero.col, hero.row));
+    if (heroTile && heroTile.type === TileType.BUILDING && !heroTile.explored) {
+      const result = executeExplore(state, hero);
+      for (const msg of result.log) state.addLog(msg);
+      state.spendAction(result.cost);
+      return result.success;
+    }
+
+    // 7. Move to nearest unexplored building
+    const unxBuilding = _nearestUnexploredBuilding(state, hero);
+    if (unxBuilding) {
+      const step = stepToward(state, hero, unxBuilding);
+      if (step) {
+        const result = executeMove(state, hero, step.col, step.row);
+        for (const msg of result.log) state.addLog(msg);
+        state.spendAction(result.cost);
+        return true;
+      }
+    }
+
+    // 8. Contest unclaimed power node
+    const nodeTarget = _unclaimedNodeForHero(state, hero);
+    if (nodeTarget) {
+      const step = stepToward(state, hero, nodeTarget);
+      if (step) {
+        const result = executeMove(state, hero, step.col, step.row);
+        for (const msg of result.log) state.addLog(msg);
+        state.spendAction(result.cost);
+        return true;
+      }
+    }
+
+    // 9. Hunt the witch
+    const step = stepToward(state, hero, state.witch);
+    if (step) {
+      const result = executeMove(state, hero, step.col, step.row);
+      for (const msg of result.log) state.addLog(msg);
+      state.spendAction(result.cost);
+      return true;
+    }
+
+    return false;
+  }
+}
+
+function _nearestBuilding(state, actor) {
+  let best = null, bestDist = Infinity;
+  for (const [, t] of state.tiles) {
+    if (t.type !== TileType.BUILDING) continue;
+    const d = hexDistance(actor.col, actor.row, t.col, t.row);
+    if (d < bestDist) { bestDist = d; best = t; }
+  }
+  return best;
+}
+
+function _nearestUnexploredBuilding(state, actor) {
+  let best = null, bestDist = Infinity;
+  for (const [, t] of state.tiles) {
+    if (t.type !== TileType.BUILDING || t.explored) continue;
+    const d = hexDistance(actor.col, actor.row, t.col, t.row);
+    if (d < bestDist) { bestDist = d; best = t; }
+  }
+  return best;
+}
+
+function _unclaimedNodeForHero(state, actor) {
+  const unclaimed = state.witchObjectives.filter(obj =>
+    !state.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row)
+  );
+  if (!unclaimed.length) return null;
+  unclaimed.sort((a, b) =>
+    hexDistance(actor.col, actor.row, a.col, a.row) -
+    hexDistance(actor.col, actor.row, b.col, b.row)
+  );
+  return unclaimed[0];
 }
 
 function delay(ms) {

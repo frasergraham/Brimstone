@@ -43,14 +43,15 @@ const PHASE_ICON = {
 export { PHASE_ICON };
 
 export class GameState {
-  constructor(witchIsAI = true) {
+  constructor(witchIsAI = true, heroIsAI = false) {
     resetRoster();
     const mapData  = generateMap();
     this.tiles     = mapData.tiles;
     this.entities  = [];
     this.witchIsAI = witchIsAI;
+    this.heroIsAI  = heroIsAI;
 
-    // Fog of war: hide witch movements and positions in AI mode
+    // Fog of war: hide witch movements and positions when witch is AI
     this.fogOfWar = witchIsAI;
 
     this.hero  = createHero(mapData.heroStart.col,  mapData.heroStart.row);

@@ -2,28 +2,34 @@
 import { GameState, Player } from './game.js';
 import { Renderer }          from './renderer.js';
 import { UIController }      from './ui.js';
-import { WitchAI }           from './ai.js';
+import { WitchAI, HeroAI }   from './ai.js';
 import { hexToPixel }        from './hex.js';
 import { PAD_X, PAD_Y }      from './renderer.js';
 
-let state, renderer, ui, ai;
+let state, renderer, ui, witchAI, heroAI;
 
-function init(witchIsAI) {
+function init(witchIsAI, heroIsAI) {
   const canvas = document.getElementById('game-canvas');
 
   // Show game screen before constructing renderer so the wrapper has real dimensions
   document.getElementById('setup-screen').style.display = 'none';
   document.getElementById('game-screen').style.display  = 'flex';
 
-  state    = new GameState(witchIsAI);
+  state    = new GameState(witchIsAI, heroIsAI);
   renderer = new Renderer(canvas, state);
-  renderer.resize(); // fit to now-visible container
-  ai       = new WitchAI(state, redraw);
-  ui       = new UIController(canvas, state, renderer, ai, redraw);
+  renderer.resize();
+
+  witchAI = witchIsAI ? new WitchAI(state, redraw) : null;
+  heroAI  = heroIsAI  ? new HeroAI(state, redraw)  : null;
+
+  ui = new UIController(canvas, state, renderer, witchAI, redraw, heroAI);
 
   // Show battle dialog for AI-initiated attacks
-  ai.onBattleResult = (actorSnap, targetSnap, result) =>
+  const battleCallback = (actorSnap, targetSnap, result) =>
     new Promise(resolve => ui._showBattleDialog(actorSnap, targetSnap, result, resolve));
+
+  if (witchAI) witchAI.onBattleResult = battleCallback;
+  if (heroAI)  heroAI.onBattleResult  = battleCallback;
 
   redraw();
   ui.refresh();
@@ -66,13 +72,25 @@ window.addEventListener('resize', () => {
   redraw();
 });
 
-// ── Setup screen ────────────────────────────────────────────────────────────
+// ── Setup screen ─────────────────────────────────────────────────────────────
 
-document.getElementById('btn-vs-ai').addEventListener('click', () => init(true));
-document.getElementById('btn-vs-human').addEventListener('click', () => init(false));
+const setupScreen    = document.getElementById('setup-screen');
+const sideScreen     = document.getElementById('side-screen');
+
+document.getElementById('btn-vs-ai').addEventListener('click', () => {
+  // Show side-selection step
+  setupScreen.style.display = 'none';
+  sideScreen.style.display  = 'flex';
+});
+
+document.getElementById('btn-vs-human').addEventListener('click', () => init(false, false));
+
+document.getElementById('btn-play-hero').addEventListener('click',  () => init(true,  false));
+document.getElementById('btn-play-witch').addEventListener('click', () => init(false, true));
+
 document.getElementById('btn-restart').addEventListener('click', () => {
   const el = document.getElementById('game-over');
   if (el) { el.style.display = 'none'; delete el.dataset.shown; }
-  document.getElementById('setup-screen').style.display = 'flex';
-  document.getElementById('game-screen').style.display  = 'none';
+  sideScreen.style.display  = 'none';
+  setupScreen.style.display = 'flex';
 });
