@@ -142,15 +142,15 @@ export function getValidActions(state, actor) {
 
     // Per-unit items: herbs, weapons
     if ((myItems[ResourceType.HERBS] || 0) > 0 && actor.hp < actor.maxHp)
-      usable.push({ item: ResourceType.HERBS, label: 'Use Herbs (heal 1 HP)', source: 'items' });
+      usable.push({ item: ResourceType.HERBS, label: '🌿 Herbs (heal 1)', source: 'items' });
 
     // Shared resources
     if ((shared[ResourceType.FOOD] || 0) > 0)
-      usable.push({ item: ResourceType.FOOD, label: 'Eat Food (+1 action)', source: 'shared' });
+      usable.push({ item: ResourceType.FOOD, label: '🍞 Food (+1 action)', source: 'shared' });
     if ((shared[ResourceType.SILVER] || 0) > 0)
-      usable.push({ item: ResourceType.SILVER, label: 'Silver (+1 ATK this battle)', source: 'shared' });
+      usable.push({ item: ResourceType.SILVER, label: '🪙 Silver (+1 ATK)', source: 'shared' });
     if ((shared[ResourceType.SCRIPTURE] || 0) > 0 && battleTargets.length)
-      usable.push({ item: ResourceType.SCRIPTURE, label: 'Scripture (ward enemy)', source: 'shared' });
+      usable.push({ item: ResourceType.SCRIPTURE, label: '📜 Scripture (ward)', source: 'shared' });
 
     if (usable.length) actions.push({ type: ActionType.USE_ITEM, usable });
 

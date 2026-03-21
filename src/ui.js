@@ -22,6 +22,7 @@ export class UIController {
     this._validActions    = [];
     this._awaitingTarget  = null;
     this._pendingUnitPick = null;
+    this._popupVisible    = false;   // tracks whether the action popup is shown
 
     this._touchStart  = null;
     this._pinchDist   = null;
@@ -35,10 +36,6 @@ export class UIController {
   _bindEvents() {
     this.canvas.addEventListener('mousemove', e => this._onMouseMove(e));
     this.canvas.addEventListener('click',     e => this._onClick(e));
-    this.canvas.addEventListener('dblclick',  () => {
-      this.renderer.resetView();
-      this.onRedraw();
-    });
     this.canvas.addEventListener('mouseleave', () => {
       this.renderer.hoveredHex = null;
       this._mouseDown = null;
@@ -182,17 +179,42 @@ export class UIController {
     );
 
     if (clickedEntities.length === 0) {
-      this._clearSelection();
+      // Tapping empty space while popup is open: close popup first, then deselect
+      if (this._popupVisible) {
+        this._popupVisible = false;
+        _hideActionPopup();
+        if (this._awaitingTarget?.isDefault) {
+          // re-arm default move awaiting after closing popup
+          this._updateHighlights();
+        }
+      } else {
+        this._clearSelection();
+      }
     } else if (clickedEntities.length === 1) {
-      this._selectEntity(clickedEntities[0]);
-      this._pendingUnitPick = null;
+      const entity = clickedEntities[0];
+      if (entity === this._selectedEntity) {
+        // Second tap → show popup; third tap → dismiss popup
+        if (this._popupVisible) {
+          this._popupVisible = false;
+          _hideActionPopup();
+        } else {
+          this._showActionPopup(entity);
+          this._popupVisible = true;
+        }
+      } else {
+        // New unit — just select (no popup yet)
+        this._selectEntity(entity);
+        this._pendingUnitPick = null;
+      }
     } else {
+      // Multiple units — show unit-picker popup directly
       this._pendingUnitPick = { units: clickedEntities };
       this._selectedEntity  = null;
+      this._popupVisible    = true;
       this._validActions    = [];
       this.renderer.selectedHex    = { col: hex.col, row: hex.row };
       this.renderer.highlightHexes = [];
-      this._showActionPopup(null); // picker popup
+      this._showActionPopup(null);
     }
 
     this._updateSidebar();
@@ -202,6 +224,8 @@ export class UIController {
   _selectEntity(entity) {
     this._selectedEntity  = entity;
     this._pendingUnitPick = null;
+    this._popupVisible    = false;
+    _hideActionPopup();
     this.renderer.selectedHex = { col: entity.col, row: entity.row };
     this._validActions = getValidActions(this.state, entity);
     // Move is always the default awaiting action — clicking a green hex moves.
@@ -212,7 +236,7 @@ export class UIController {
       this._awaitingTarget = null;
     }
     this._updateHighlights();
-    this._showActionPopup(entity);
+    // Popup is NOT shown here — user taps the unit a second time to open it
   }
 
   _clearSelection() {
@@ -220,6 +244,7 @@ export class UIController {
     this._awaitingTarget       = null;
     this._validActions         = [];
     this._pendingUnitPick      = null;
+    this._popupVisible         = false;
     this.renderer.selectedHex  = null;
     this.renderer.highlightHexes = [];
     _hideActionPopup();
@@ -358,10 +383,10 @@ export class UIController {
           // Move is the default click action — no button needed
           break;
         case ActionType.EXPLORE:
-          regularHtml += btn('🔍 Explore (1)', 'explore', dis, `data-action="explore"`);
+          regularHtml += btn('🔍 Explore', 'explore', dis, `data-action="explore"`);
           break;
         case ActionType.BATTLE:
-          regularHtml += btn('⚔ Battle (1)', 'battle', dis, `data-action="battle"`);
+          regularHtml += btn('⚔ Attack', 'battle', dis, `data-action="battle"`);
           break;
         case ActionType.FORTIFY: {
           const shared     = state.inventory.shared;
@@ -370,10 +395,10 @@ export class UIController {
           const tileData   = state.tiles.get(hexKey(entity.col, entity.row));
           const cur        = tileData ? tileData.fortifyLevel : 0;
           const lbl = hasMetal
-            ? `⚙ Reinforce (Metal → +${Math.min(4, cur + 2)} DEF)`
+            ? `⚙ Reinforce +${Math.min(4, cur + 2)} DEF`
             : hasDoubler
-              ? `🪵 Fortify (Wood → +${Math.min(4, cur + 2)} DEF ★)`
-              : `🪵 Fortify (Wood → +${Math.min(4, cur + 1)} DEF)`;
+              ? `🪵 Fortify +${Math.min(4, cur + 2)} DEF ★`
+              : `🪵 Fortify +${Math.min(4, cur + 1)} DEF`;
           regularHtml += btn(lbl, 'fortify', dis, `data-action="fortify"`);
           break;
         }
@@ -387,14 +412,14 @@ export class UIController {
           break;
         case ActionType.EQUIP_WEAPON:
           for (const w of action.weapons) {
-            regularHtml += btn(`Equip ${w.label}`, 'item', dis, `data-action="use_item" data-item="${w.key}"`);
+            regularHtml += btn(`⚔ Equip ${w.label}`, 'item', dis, `data-action="use_item" data-item="${w.key}"`);
           }
           break;
         case ActionType.USE_ABILITY: {
           const abilityLabels = {
-            [SurvivorAbility.HEAL]:    'Tend Wounds — heal hero 1 HP (1)',
-            [SurvivorAbility.INSPIRE]: '✦ Battle Cry — hero +1 ATK',
-            [SurvivorAbility.RALLY]:   '✦ Holy Sermon — +1 action',
+            [SurvivorAbility.HEAL]:    '❤ Tend Wounds',
+            [SurvivorAbility.INSPIRE]: '✦ Battle Cry',
+            [SurvivorAbility.RALLY]:   '✦ Holy Sermon',
           };
           const lbl    = abilityLabels[action.ability] || 'Use Ability';
           const isFree = action.ability !== SurvivorAbility.HEAL;
@@ -408,12 +433,13 @@ export class UIController {
       }
     }
 
-    let html = `<div class="popup-unit-name">${entity.displayName}</div>`;
-    html += regularHtml;
+    let html = regularHtml;
     if (freeHtml) {
-      html += `<div class="popup-section-label">Free Actions</div>`;
+      html += `<div class="popup-section-label">Free</div>`;
       html += freeHtml;
     }
+    // Show a no-op message if there's genuinely nothing to do
+    if (!html) html = `<div class="popup-unit-name">No actions available</div>`;
 
     popup.innerHTML = html;
     _attachPopupListeners(popup, this);
@@ -511,9 +537,9 @@ export class UIController {
       hint = `<p class="hint" style="margin-bottom:0.4rem">${labels[this._awaitingTarget.actionType] || ''}</p>
         ${btn('✕ Cancel', 'end-turn', '', `data-action="cancel"`)}`;
     } else if (this._selectedEntity) {
-      hint = `<p class="hint">Click a green hex to move, or choose an action.</p>`;
+      hint = `<p class="hint">Green hex to move · tap unit again for actions.</p>`;
     } else {
-      hint = `<p class="hint">Click a unit to act.</p>`;
+      hint = `<p class="hint">Tap a unit to select.</p>`;
     }
 
     el.innerHTML = hint + btn(endLabel, endClass, state.gameOver ? 'disabled' : '', `data-action="end_turn"`);
@@ -558,6 +584,9 @@ export class UIController {
     }
 
     if (!entity || entity.owner !== state.activePlayer) return;
+
+    // Any action button click closes the popup
+    this._popupVisible = false;
 
     switch (action) {
       case 'explore': {
@@ -871,10 +900,10 @@ function btn(label, cls, disabled = '', extra = '') {
 }
 
 function _summonLabel(witchInv) {
-  if ((witchInv.metal || 0) > 0) return 'Raise Iron Golem (1 Metal)';
-  if ((witchInv.wood  || 0) > 0) return 'Raise Wood Golem (1 Wood)';
+  if ((witchInv.metal || 0) > 0) return '🔩 Iron Golem';
+  if ((witchInv.wood  || 0) > 0) return '🪵 Wood Golem';
   const res = Object.keys(witchInv).find(k => witchInv[k] > 0);
-  return res ? `Summon Minion (1 ${res})` : 'Summon Minion';
+  return res ? `🌑 Summon Minion` : '🌑 Summon';
 }
 
 function _visibleUnitsAt(state, col, row) {

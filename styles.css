@@ -258,6 +258,18 @@ canvas { touch-action: pan-x pan-y; }
   border-radius: 2px;
   transition: background 0.1s, border-color 0.1s;
 }
+
+/* Compact variant used inside the floating popup */
+#action-popup .action-btn {
+  padding: 0.28rem 0.45rem;
+  margin-bottom: 0.2rem;
+  font-size: 0.76rem;
+}
+#action-popup .popup-section-label {
+  font-size: 0.6rem;
+  margin: 0.25rem 0 0.15rem;
+  padding-top: 0.2rem;
+}
 .action-btn:hover:not(:disabled) { background: #1e2438; border-color: #5a4890; }
 .action-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
@@ -339,12 +351,12 @@ canvas { touch-action: pan-x pan-y; }
   display: none;
   position: fixed;
   z-index: 60;
-  width: 210px;
+  width: 172px;
   background: var(--bg-panel);
   border: 1px solid #3a2d58;
-  border-radius: 6px;
-  padding: 0.4rem 0.5rem 0.5rem;
-  box-shadow: 0 6px 24px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.04);
+  border-radius: 5px;
+  padding: 0.3rem 0.4rem 0.35rem;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.75), 0 0 0 1px rgba(255,255,255,0.04);
   /* transform is set entirely from JS (above or below the unit) */
 }
 
@@ -371,11 +383,11 @@ canvas { touch-action: pan-x pan-y; }
 }
 
 .popup-unit-name {
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   color: var(--text-dim);
   text-align: center;
-  margin-bottom: 0.35rem;
-  padding-bottom: 0.3rem;
+  margin-bottom: 0.25rem;
+  padding-bottom: 0.2rem;
   border-bottom: 1px solid var(--border);
   letter-spacing: 0.05em;
 }
