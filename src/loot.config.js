@@ -7,8 +7,10 @@
 //    Weapons   : 'weapon:sword' | 'weapon:axe' | 'weapon:shield' |
 //                'weapon:bow'   | 'weapon:staff' | 'weapon:dagger'
 //    Special   : 'horse'     — found only in the Stable
-//                'survivor'  — recruits a survivor to the party
 //                'nothing'   — empty result
+//
+//  Survivors are NOT found via loot — they are pre-placed on the map
+//  and encountered by stepping onto their tile.
 //
 //  Buildings (explored once, then exhausted):
 //    Each key matches BuildingType values from tiles.js.
@@ -28,15 +30,14 @@ export const LOOT_CONFIG = {
       { type: 'weapon:sword',  weight: 22 },
       { type: 'weapon:axe',    weight: 22 },
       { type: 'weapon:shield', weight: 18 },
-      { type: 'metal',         weight: 23 },
+      { type: 'metal',         weight: 28 },
       { type: 'wood',          weight: 10 },
-      { type: 'nothing',       weight:  5 },
     ],
 
     inn: [
-      { type: 'food',          weight: 45 },
-      { type: 'herbs',         weight: 12 },
-      { type: 'survivor',      weight: 38 },
+      { type: 'food',          weight: 55 },
+      { type: 'herbs',         weight: 25 },
+      { type: 'silver',        weight: 15 },
       { type: 'nothing',       weight:  5 },
     ],
 
@@ -48,17 +49,15 @@ export const LOOT_CONFIG = {
     ],
 
     mill: [
-      { type: 'wood',          weight: 50 },
-      { type: 'food',          weight: 30 },
-      { type: 'survivor',      weight: 15 },
-      { type: 'nothing',       weight:  5 },
+      { type: 'wood',          weight: 55 },
+      { type: 'food',          weight: 35 },
+      { type: 'nothing',       weight: 10 },
     ],
 
     barn: [
-      { type: 'food',          weight: 45 },
-      { type: 'wood',          weight: 25 },
-      { type: 'survivor',      weight: 25 },
-      { type: 'nothing',       weight:  5 },
+      { type: 'food',          weight: 55 },
+      { type: 'wood',          weight: 35 },
+      { type: 'nothing',       weight: 10 },
     ],
 
     apothecary: [
@@ -70,10 +69,9 @@ export const LOOT_CONFIG = {
     ],
 
     watchtower: [
-      { type: 'weapon:bow',    weight: 38 },
-      { type: 'silver',        weight: 32 },
-      { type: 'survivor',      weight: 25 },
-      { type: 'nothing',       weight:  5 },
+      { type: 'weapon:bow',    weight: 45 },
+      { type: 'silver',        weight: 40 },
+      { type: 'nothing',       weight: 15 },
     ],
 
     storehouse: [
@@ -92,20 +90,17 @@ export const LOOT_CONFIG = {
     ],
 
     dock: [
-      { type: 'wood',          weight: 35 },
-      { type: 'food',          weight: 35 },
-      { type: 'survivor',      weight: 25 },
-      { type: 'nothing',       weight:  5 },
+      { type: 'wood',          weight: 45 },
+      { type: 'food',          weight: 45 },
+      { type: 'nothing',       weight: 10 },
     ],
 
     house: [
-      { type: 'food',          weight: 28 },
-      { type: 'wood',          weight: 25 },
+      { type: 'food',          weight: 30 },
+      { type: 'wood',          weight: 28 },
       { type: 'weapon:dagger', weight: 20 },
-      { type: 'metal',         weight: 12 },
+      { type: 'metal',         weight: 14 },
       { type: 'herbs',         weight:  8 },
-      { type: 'survivor',      weight:  5 },
-      { type: 'nothing',       weight:  2 },
     ],
 
     graveyard: [
@@ -117,10 +112,9 @@ export const LOOT_CONFIG = {
     ],
 
     town_hall: [
-      { type: 'silver',        weight: 22 },
-      { type: 'wood',          weight: 27 },
-      { type: 'food',          weight: 27 },
-      { type: 'survivor',      weight: 19 },
+      { type: 'silver',        weight: 28 },
+      { type: 'wood',          weight: 34 },
+      { type: 'food',          weight: 33 },
       { type: 'nothing',       weight:  5 },
     ],
 
@@ -128,18 +122,15 @@ export const LOOT_CONFIG = {
 
   // ----------------------------------------------------------
   //  TERRAIN  (applies to any unexplored non-building tile)
-  //  Survivors are rare here — they mostly hide in buildings.
   // ----------------------------------------------------------
   terrain: {
 
     grass: [
-      { type: 'wood',          weight: 35 },
-      { type: 'food',          weight: 28 },
-      { type: 'metal',         weight: 20 },
+      { type: 'wood',          weight: 38 },
+      { type: 'food',          weight: 30 },
+      { type: 'metal',         weight: 22 },
       { type: 'herbs',         weight:  8 },
-      { type: 'silver',        weight:  5 },
-      { type: 'survivor',      weight:  2 },
-      { type: 'nothing',       weight:  2 },
+      { type: 'silver',        weight:  2 },
     ],
 
     forest: [
@@ -152,13 +143,11 @@ export const LOOT_CONFIG = {
     ],
 
     road: [
-      { type: 'food',          weight: 32 },
-      { type: 'silver',        weight: 28 },
-      { type: 'metal',         weight: 18 },
+      { type: 'food',          weight: 35 },
+      { type: 'silver',        weight: 30 },
+      { type: 'metal',         weight: 20 },
       { type: 'wood',          weight: 12 },
-      { type: 'herbs',         weight:  5 },
-      { type: 'survivor',      weight:  3 },
-      { type: 'nothing',       weight:  2 },
+      { type: 'herbs',         weight:  3 },
     ],
 
   },

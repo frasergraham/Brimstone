@@ -225,6 +225,21 @@ export function executeMove(state, actor, targetCol, targetRow) {
     log.push(`${actor.displayName} moves to (${targetCol},${targetRow}).`);
   }
 
+  // Hidden survivor encounter — triggers once per tile for any unit that steps on it
+  if (t.hiddenSurvivor) {
+    t.hiddenSurvivor = false;
+    if (actor.owner === 'hero') {
+      const s = createSurvivor(targetCol, targetRow);
+      s.owner = 'hero';
+      state.entities.push(s);
+      log.push(`A survivor steps out of hiding — ${s.name}, the ${s.title}! They join the party.`);
+    } else {
+      const z = createZombie(targetCol, targetRow);
+      state.entities.push(z);
+      log.push(`A cowering survivor is found… raised as a zombie by the witch!`);
+    }
+  }
+
   return { success: true, log, cost: 1 };
 }
 
@@ -266,20 +281,6 @@ function _applyLoot(state, actor, lootType, log) {
     if (actor.owner === 'hero') {
       actor.items['horse'] = 1;
       log.push(`Found a horse! ${actor.displayName}'s movement range increases to 2.`);
-    }
-    return;
-  }
-
-  if (lootType === 'survivor') {
-    if (actor.owner === 'hero') {
-      const s = createSurvivor(actor.col, actor.row);
-      s.owner = 'hero';
-      state.entities.push(s);
-      log.push(`A survivor emerges — ${s.name}, the ${s.title}! They join the party.`);
-    } else {
-      const z = createZombie(actor.col, actor.row);
-      state.entities.push(z);
-      log.push(`The witch finds a cowering survivor… and raises them as a zombie!`);
     }
     return;
   }

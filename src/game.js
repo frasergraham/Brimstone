@@ -66,6 +66,7 @@ export class GameState {
     this.inventory = { shared: {}, witch: {} };
 
     this.witchObjectives = mapData.witchObjectives;
+    this._placeHiddenSurvivors();
 
     this.round        = 1;
     this.phase        = Phase.DAWN;
@@ -220,6 +221,29 @@ export class GameState {
 
   playerEntities(player) {
     return this.entities.filter(e => e.owner === player && e.alive);
+  }
+
+  // Scatter 12 hidden survivors across the map: 10 in buildings, 2 on terrain.
+  // Each tile can hold at most one; they reveal when any unit steps onto the tile.
+  _placeHiddenSurvivors() {
+    const buildings = [];
+    const terrain   = [];
+    for (const t of this.tiles.values()) {
+      if (t.type === TileType.RIVER) continue;
+      if (t.type === TileType.BUILDING) buildings.push(t);
+      else terrain.push(t);
+    }
+
+    const shuffle = arr => {
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
+    };
+
+    shuffle(buildings).slice(0, 10).forEach(t => { t.hiddenSurvivor = true; });
+    shuffle(terrain).slice(0, 2).forEach(t => { t.hiddenSurvivor = true; });
   }
 
   toJSON() {
