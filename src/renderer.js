@@ -276,7 +276,7 @@ export class Renderer {
     // water ribbons are drawn in dedicated layers on top.
     const color = tile.type === TileType.BUILDING
       ? BUILDING_COLOR
-      : (tile.type === TileType.ROAD || tile.type === TileType.RIVER)
+      : (tile.type === TileType.ROAD || tile.type === TileType.RIVER || tile.type === TileType.BRIDGE)
         ? TILE_COLOR[TileType.GRASS]
         : (TILE_COLOR[tile.type] || TILE_COLOR[TileType.GRASS]);
 

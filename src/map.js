@@ -255,26 +255,52 @@ export function generateMap(seed = Date.now()) {
     t.fortifyLevel = 1; // all buildings start with minimal fortification
   }
 
-  // 4. Build roads between buildings and Town Hall (hub-and-spoke)
-  const hub = buildingPlacements.find(b => b.building === BuildingType.TOWN_HALL)
-           || buildingPlacements[0];
-  const roadTargets = buildingPlacements.filter(b => b !== hub);
+  // 4. Build a minimum spanning tree of roads connecting all buildings.
+  // Kruskal's algorithm on hex-distance edges gives a natural organic network
+  // where most buildings have 1–2 connections rather than all roads radiating
+  // from a single hub.
+  const n = buildingPlacements.length;
+  const mstEdges = [];
+  if (n > 1) {
+    const allEdges = [];
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const d = hexDistance(
+          buildingPlacements[i].col, buildingPlacements[i].row,
+          buildingPlacements[j].col, buildingPlacements[j].row,
+        );
+        allEdges.push({ i, j, d });
+      }
+    }
+    allEdges.sort((a, b) => a.d - b.d);
+
+    const parent = Array.from({ length: n }, (_, i) => i);
+    const find = i => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+
+    for (const { i, j } of allEdges) {
+      if (find(i) !== find(j)) {
+        parent[find(i)] = find(j);
+        mstEdges.push({ from: buildingPlacements[i], to: buildingPlacements[j] });
+        if (mstEdges.length === n - 1) break;
+      }
+    }
+  }
 
   let bridgesPlaced = 0;
   const placeRoad = path => {
     for (const { col, row } of path) {
       const t = tiles.get(hexKey(col, row));
       if (!t) continue;
-      if (t.type === TileType.GRASS || t.type === TileType.DIRT) t.type = TileType.ROAD;
-      else if (t.type === TileType.RIVER && bridgesPlaced < 2) {
+      if (t.type === TileType.GRASS || t.type === TileType.DIRT || t.type === TileType.FOREST) t.type = TileType.ROAD;
+      else if (t.type === TileType.RIVER && bridgesPlaced < 4) {
         t.type = TileType.BRIDGE;
         bridgesPlaced++;
       }
     }
   };
 
-  for (const target of roadTargets) {
-    placeRoad(bfsPath(tiles, hub.col, hub.row, target.col, target.row, rand));
+  for (const { from, to } of mstEdges) {
+    placeRoad(bfsPath(tiles, from.col, from.row, to.col, to.row, rand));
   }
 
   // 5. Grow forest clusters from seeds
