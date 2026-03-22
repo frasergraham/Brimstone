@@ -38,7 +38,7 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
   redraw();
   ui.refresh();
 
-  // Scroll canvas wrapper to centre on the hero
+  // Pan to centre on the hero (wrapper is overflow:hidden so scroll doesn't work — use renderer pan)
   requestAnimationFrame(() => {
     const wrapper = document.getElementById('canvas-wrapper');
     if (!wrapper) return;
@@ -46,8 +46,11 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
     const { x, y } = hexToPixel(hero.col, hero.row, renderer.hexSize);
     const cx = x + PAD_X;
     const cy = y + PAD_Y;
-    wrapper.scrollLeft = cx - wrapper.clientWidth  / 2;
-    wrapper.scrollTop  = cy - wrapper.clientHeight / 2;
+    // Pan so hero is centred: translate(panX, panY) means content at cx appears at cx+panX
+    renderer._panX = wrapper.clientWidth  / 2 - cx;
+    renderer._panY = wrapper.clientHeight / 2 - cy;
+    renderer._clampPan();
+    redraw();
   });
 }
 

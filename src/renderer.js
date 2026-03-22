@@ -58,13 +58,17 @@ export class Renderer {
       const availH = wrapper.clientHeight - PAD_Y * 2;
       const sizeByW = availW  / (SQRT3 * (MAP_COLS + 0.5));
       const sizeByH = availH  / (1.5 * MAP_ROWS + 0.5);
-      this.hexSize = Math.max(MIN_HEX_SIZE, Math.floor(Math.min(sizeByW, sizeByH)));
+      // Portrait: fill height so the map uses the full screen; user pans horizontally.
+      // Landscape / desktop: fit both dimensions so no overflow.
+      const portrait = wrapper.clientHeight > wrapper.clientWidth;
+      this.hexSize = Math.max(MIN_HEX_SIZE, Math.floor(portrait ? sizeByH : Math.min(sizeByW, sizeByH)));
     }
 
     const w = Math.ceil(SQRT3 * this.hexSize * (MAP_COLS + 0.5)) + PAD_X * 2;
     const h = Math.ceil(1.5  * this.hexSize * MAP_ROWS + this.hexSize * 0.5) + PAD_Y * 2;
     this.canvas.width  = w;
     this.canvas.height = h;
+    this._clampPan();
   }
 
   resize() {
@@ -109,15 +113,17 @@ export class Renderer {
   }
 
   _clampPan() {
-    if (this.zoomLevel <= 1) {
-      this._panX = 0;
-      this._panY = 0;
-      return;
-    }
-    const overW = this.canvas.width  * (this.zoomLevel - 1);
-    const overH = this.canvas.height * (this.zoomLevel - 1);
-    this._panX = Math.max(-overW, Math.min(0, this._panX));
-    this._panY = Math.max(-overH, Math.min(0, this._panY));
+    const wrapper = this.canvas.parentElement;
+    const wrapW = wrapper?.clientWidth  ?? this.canvas.width;
+    const wrapH = wrapper?.clientHeight ?? this.canvas.height;
+    // Content dimensions at current zoom
+    const contentW = this.canvas.width  * this.zoomLevel;
+    const contentH = this.canvas.height * this.zoomLevel;
+    // Allow pan up to the overflow in each axis; clamp to [overflow, 0]
+    const minX = Math.min(0, wrapW - contentW);
+    const minY = Math.min(0, wrapH - contentH);
+    this._panX = Math.max(minX, Math.min(0, this._panX));
+    this._panY = Math.max(minY, Math.min(0, this._panY));
   }
 
   draw() {
