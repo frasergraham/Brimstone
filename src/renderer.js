@@ -275,7 +275,7 @@ export class Renderer {
     // Road and river tiles use a grass background — the actual road strips and
     // water ribbons are drawn in dedicated layers on top.
     const color = tile.type === TileType.BUILDING
-      ? BUILDING_COLOR
+      ? (BUILDING_COLOR[tile.building] || '#8a7a5a')
       : (tile.type === TileType.ROAD || tile.type === TileType.RIVER || tile.type === TileType.BRIDGE)
         ? TILE_COLOR[TileType.GRASS]
         : (TILE_COLOR[tile.type] || TILE_COLOR[TileType.GRASS]);
@@ -475,13 +475,16 @@ export class Renderer {
       t.type === TileType.ROAD || t.type === TileType.BRIDGE || t.type === TileType.BUILDING
     );
 
-    ctx.lineWidth = hs * 0.42;
-    ctx.lineCap   = 'round';
+    ctx.lineCap = 'round';
 
     for (let row = 0; row < MAP_ROWS; row++) {
       for (let col = 0; col < MAP_COLS; col++) {
         const tile = tiles.get(hexKey(col, row));
         if (!tile || (tile.type !== TileType.ROAD && tile.type !== TileType.BRIDGE)) continue;
+
+        // Reset per-tile so bridge water/railing state changes never bleed through
+        ctx.lineWidth   = hs * 0.42;
+        ctx.strokeStyle = TILE_COLOR[TileType.ROAD];
 
         const { x, y } = this._toCanvas(col, row);
         const roadNbrs = getNeighbors(col, row).filter(n => isRoadLike(tiles.get(hexKey(n.col, n.row))));
@@ -523,8 +526,6 @@ export class Renderer {
         }
 
         // ── Road strip ────────────────────────────────────────────────────
-        ctx.strokeStyle = TILE_COLOR[TileType.ROAD];
-
         if (roadNbrs.length === 2) {
           // Smooth bezier through-road
           ctx.beginPath();

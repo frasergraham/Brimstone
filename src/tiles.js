@@ -85,8 +85,22 @@ export const TILE_COLOR = {
   [TileType.BUILDING]: '#4a3c2c',
 };
 
-// All buildings render as warm ochre/timber-plaster — icons + names distinguish them
-export const BUILDING_COLOR = '#c9a96e';
+// Per-building colours — distinct but cohesive with the dark medieval palette
+export const BUILDING_COLOR = {
+  [BuildingType.TOWN_HALL]:  '#8a7a5a', // dressed limestone
+  [BuildingType.CHURCH]:     '#9aacaa', // pale cold stone
+  [BuildingType.INN]:        '#a07050', // warm timber
+  [BuildingType.BLACKSMITH]: '#7a5540', // sooty iron-brown
+  [BuildingType.GRAVEYARD]:  '#4a5c4a', // dark mossy stone
+  [BuildingType.MILL]:       '#c4a44a', // golden straw/wheat
+  [BuildingType.DOCK]:       '#3a7080', // sea-grey blue
+  [BuildingType.HOUSE]:      '#9a7060', // terracotta plaster
+  [BuildingType.BARN]:       '#8a6030', // weathered timber
+  [BuildingType.WATCHTOWER]: '#707060', // dark ashlar stone
+  [BuildingType.APOTHECARY]: '#7a6080', // herb-jar purple-grey
+  [BuildingType.STOREHOUSE]: '#907860', // dusty tan
+  [BuildingType.STABLE]:     '#7a5c38', // saddle brown
+};
 
 // Icons shown on every building tile, always visible
 export const BUILDING_ICON = {
