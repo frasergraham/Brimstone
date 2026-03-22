@@ -123,26 +123,69 @@ canvas { touch-action: pan-x pan-y; }
 #game-header {
   display: flex;
   align-items: center;
-  gap: 1.5rem;
-  padding: 0.5rem 1rem;
+  gap: 0.75rem;
+  padding: 0.4rem 0.75rem;
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 
 .header-title {
-  font-size: 1.2rem;
+  font-size: 1.1rem;
   letter-spacing: 0.2em;
   color: var(--day);
   opacity: 0.8;
+  flex-shrink: 0;
 }
 
 #turn-info {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.6rem;
   flex: 1;
+  min-width: 0;
 }
+
+/* ── Node status dots ──────────────────────────────────────────────────── */
+
+#node-status {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.node-dot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255,255,255,0.15);
+  display: inline-block;
+  transition: box-shadow 0.2s;
+}
+.node-dot.hero    { background: #4488ff; border-color: #66aaff; box-shadow: 0 0 5px rgba(68,136,255,0.5); }
+.node-dot.witch   { background: #cc3333; border-color: #ff5555; box-shadow: 0 0 5px rgba(200,50,50,0.5); }
+.node-dot.neutral { background: transparent; border-color: #554433; }
+
+/* ── Chronicle icon button ─────────────────────────────────────────────── */
+
+#chronicle-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 1rem;
+  line-height: 1;
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: border-color 0.15s, color 0.15s;
+}
+#chronicle-btn:hover { border-color: var(--text); color: var(--text-bright); }
 
 .phase-badge {
   font-size: 0.8rem;
@@ -203,11 +246,162 @@ canvas { touch-action: pan-x pan-y; }
   image-rendering: pixelated;
 }
 
+/* ── Chronicle overlay ─────────────────────────────────────────────────── */
+
+#chronicle-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(0,0,0,0.55);
+}
+#chronicle-overlay.visible { display: block; }
+
+#chronicle-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 320px;
+  max-width: 92vw;
+  height: 100%;
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 0.75rem;
+  box-shadow: -6px 0 24px rgba(0,0,0,0.6);
+}
+
+.chronicle-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.chronicle-title { color: var(--text-bright); font-size: 0.85rem; letter-spacing: 0.12em; text-transform: uppercase; }
+#chronicle-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 0.15rem 0.4rem;
+  line-height: 1;
+}
+#chronicle-close:hover { color: var(--text-bright); }
+
+#event-log {
+  flex: 1;
+  overflow-y: auto;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+
+/* ── Tile detail bottom sheet ──────────────────────────────────────────── */
+
+#tile-detail {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 70;
+  pointer-events: none;
+}
+#tile-detail.visible { pointer-events: all; }
+
+#tile-detail-inner {
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  border-radius: 10px 10px 0 0;
+  padding: 0.8rem 1rem 1.2rem;
+  max-height: 46vh;
+  overflow-y: auto;
+  transform: translateY(100%);
+  transition: transform 0.22s ease;
+  box-shadow: 0 -4px 20px rgba(0,0,0,0.5);
+}
+#tile-detail.visible #tile-detail-inner { transform: translateY(0); }
+
+#tile-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.55rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+#tile-detail-title {
+  font-size: 0.9rem;
+  color: var(--text-bright);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+#tile-detail-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 0.15rem 0.4rem;
+  line-height: 1;
+}
+#tile-detail-close:hover { color: var(--text-bright); }
+
+.tile-detail-info {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  margin-bottom: 0.3rem;
+  line-height: 1.5;
+}
+.tile-detail-info.node { color: #cc88ff; }
+.tile-detail-info.fortified { color: #88cc88; }
+
+.tile-units-heading {
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  margin: 0.55rem 0 0.3rem;
+}
+
+.tile-unit-card {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.55rem;
+  border-radius: 4px;
+  margin-bottom: 0.2rem;
+  border: 1px solid transparent;
+}
+.tile-unit-card.selectable {
+  cursor: pointer;
+  border-color: var(--border);
+}
+.tile-unit-card.selectable:hover { background: var(--bg-section); border-color: #4a3a60; }
+.tile-unit-card-name { font-size: 0.85rem; flex: 1; }
+.tile-unit-card-stats { font-size: 0.75rem; color: var(--text-dim); white-space: nowrap; }
+
+/* Compact unit header inside action-panel when a unit is selected */
+.unit-mini-header {
+  font-size: 0.82rem;
+  font-weight: bold;
+  margin-bottom: 0.15rem;
+}
+.unit-mini-stats {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-bottom: 0.5rem;
+  line-height: 1.4;
+}
+
 /* ── Sidebar ───────────────────────────────────────────────────────────── */
 
 #sidebar {
-  width: 240px;
-  min-width: 240px;
+  width: 200px;
+  min-width: 200px;
   background: var(--bg-panel);
   border-left: 1px solid var(--border);
   display: flex;
@@ -323,16 +517,7 @@ canvas { touch-action: pan-x pan-y; }
 .inv-row   { font-size: 0.8rem; margin-bottom: 0.2rem; }
 .inv-label { color: var(--text-dim); margin-right: 0.3rem; }
 
-/* Event log */
-.log-section { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-#event-log {
-  flex: 1;
-  overflow-y: auto;
-  font-size: 0.78rem;
-  color: var(--text-dim);
-  font-family: var(--font-mono);
-  max-height: 260px;
-}
+/* Log entries (inside chronicle overlay) */
 .log-entry {
   padding: 0.15rem 0;
   border-bottom: 1px solid #1a1a22;
@@ -341,9 +526,9 @@ canvas { touch-action: pan-x pan-y; }
 .log-entry:last-child { color: var(--text); }
 
 /* Scrollbar */
-#event-log::-webkit-scrollbar, #sidebar::-webkit-scrollbar { width: 4px; }
-#event-log::-webkit-scrollbar-track, #sidebar::-webkit-scrollbar-track { background: transparent; }
-#event-log::-webkit-scrollbar-thumb, #sidebar::-webkit-scrollbar-thumb { background: #2a2040; border-radius: 2px; }
+#event-log::-webkit-scrollbar, #sidebar::-webkit-scrollbar, #tile-detail-inner::-webkit-scrollbar { width: 4px; }
+#event-log::-webkit-scrollbar-track, #sidebar::-webkit-scrollbar-track, #tile-detail-inner::-webkit-scrollbar-track { background: transparent; }
+#event-log::-webkit-scrollbar-thumb, #sidebar::-webkit-scrollbar-thumb, #tile-detail-inner::-webkit-scrollbar-thumb { background: #2a2040; border-radius: 2px; }
 
 /* ── Action popup (floating above selected unit) ───────────────────────── */
 
@@ -710,10 +895,15 @@ canvas { touch-action: pan-x pan-y; }
   .title { font-size: 2.2rem; }
   .setup-btn { padding: 0.75rem 1.2rem; font-size: 1rem; min-height: 44px; }
 
-  .entity-stats { font-size: 0.88rem; line-height: 1.8; }
-  .survivor-bio { font-size: 0.83rem; }
-  #event-log { max-height: 90px; }
-
   .game-over-card { padding: 2rem 1.5rem; margin: 1rem; }
   .winner-text { font-size: 1.1rem; }
+
+  /* Tile detail covers more screen on mobile */
+  #tile-detail-inner { max-height: 55vh; }
+
+  /* Chronicle panel full-width on mobile */
+  #chronicle-panel { width: 100%; border-left: none; }
+
+  /* Node dots slightly larger for touch */
+  .node-dot { width: 15px; height: 15px; }
 }

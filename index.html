@@ -69,6 +69,8 @@
     <header id="game-header">
       <span class="header-title">BRIMSTONE</span>
       <div id="turn-info"></div>
+      <div id="node-status"></div>
+      <button id="chronicle-btn" title="Chronicle">📜</button>
     </header>
 
     <main id="game-main">
@@ -78,26 +80,38 @@
         <canvas id="game-canvas"></canvas>
       </div>
 
-      <!-- Sidebar -->
+      <!-- Slim sidebar: action buttons + inventory only -->
       <aside id="sidebar">
         <section id="action-panel" class="sidebar-section">
           <p class="hint">Select one of your units.</p>
         </section>
-
-        <section id="selected-info" class="sidebar-section"></section>
-
-        <section id="objectives" class="sidebar-section"></section>
-
         <section id="inventory" class="sidebar-section"></section>
-
-        <section class="sidebar-section log-section">
-          <div class="section-title">Chronicle</div>
-          <div id="event-log"></div>
-        </section>
       </aside>
 
     </main>
 
+  </div>
+
+  <!-- ── Chronicle overlay (toggled by header icon) ────────────────── -->
+  <div id="chronicle-overlay">
+    <div id="chronicle-panel">
+      <div class="chronicle-header">
+        <span class="chronicle-title">📜 Chronicle</span>
+        <button id="chronicle-close">✕</button>
+      </div>
+      <div id="event-log"></div>
+    </div>
+  </div>
+
+  <!-- ── Tile detail bottom sheet ──────────────────────────────────── -->
+  <div id="tile-detail">
+    <div id="tile-detail-inner">
+      <div id="tile-detail-header">
+        <span id="tile-detail-title"></span>
+        <button id="tile-detail-close">✕</button>
+      </div>
+      <div id="tile-detail-body"></div>
+    </div>
   </div>
 
   <!-- ── Action popup (positioned over unit on canvas) ────────────── -->

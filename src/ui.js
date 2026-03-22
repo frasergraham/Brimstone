@@ -119,6 +119,16 @@ export class UIController {
       this._pinchDist  = null;
       this._isDragging = false;
     }, { passive: false });
+
+    // Chronicle overlay toggle
+    document.getElementById('chronicle-btn')?.addEventListener('click', () => this._toggleChronicle());
+    document.getElementById('chronicle-close')?.addEventListener('click', () => this._toggleChronicle());
+    document.getElementById('chronicle-overlay')?.addEventListener('click', e => {
+      if (e.target === document.getElementById('chronicle-overlay')) this._toggleChronicle();
+    });
+
+    // Tile detail close
+    document.getElementById('tile-detail-close')?.addEventListener('click', () => this._hideTileDetail());
   }
 
   _canvasPos(e) {
@@ -155,7 +165,6 @@ export class UIController {
     this.renderer.hoveredHex = (hex.col >= 0 && hex.col < 13 && hex.row >= 0 && hex.row < 11)
       ? hex : null;
     this.onRedraw();
-    this._renderSelectedInfo();
   }
 
   _onClick(e) {
@@ -205,17 +214,17 @@ export class UIController {
     );
 
     if (clickedEntities.length === 0) {
-      // Tapping empty space while popup is open: close popup first, then deselect
+      // Close popup if open; otherwise deselect, then show tile detail
       if (this._popupVisible) {
         this._popupVisible = false;
         _hideActionPopup();
         if (this._awaitingTarget?.isDefault) {
-          // re-arm default move awaiting after closing popup
           this._updateHighlights();
         }
       } else {
         this._clearSelection();
       }
+      this._showTileDetail(hex);
     } else if (clickedEntities.length === 1) {
       const entity = clickedEntities[0];
       if (entity === this._selectedEntity) {
@@ -228,21 +237,21 @@ export class UIController {
           this._popupVisible = true;
         }
       } else {
-        // New unit — just select (no popup yet)
+        // New unit — select it, hide any open tile detail
+        this._hideTileDetail();
         this._selectEntity(entity);
         this._pendingUnitPick = null;
       }
     } else {
-      // Multiple units on this hex — always show the picker to choose which unit.
-      // (If the user tapped the already-selected unit, _onClick handles it before
-      // we ever reach _handleSelection, so no extra check needed here.)
-      this._pendingUnitPick = { units: clickedEntities };
+      // Multiple units on hex — show tile-detail picker instead of popup
+      this._pendingUnitPick = null;
       this._selectedEntity  = null;
-      this._popupVisible    = true;
+      this._popupVisible    = false;
       this._validActions    = [];
+      _hideActionPopup();
       this.renderer.selectedHex    = { col: hex.col, row: hex.row };
       this.renderer.highlightHexes = [];
-      this._showActionPopup(null);
+      this._showTileDetail(hex);
     }
 
     this._updateSidebar();
@@ -276,6 +285,7 @@ export class UIController {
     this.renderer.selectedHex  = null;
     this.renderer.highlightHexes = [];
     _hideActionPopup();
+    this._hideTileDetail();
   }
 
   _updateHighlights() {
@@ -500,7 +510,6 @@ export class UIController {
     this._renderTurnInfo();
     this._renderObjectives();
     this._renderActionPanel();
-    this._renderSelectedInfo();
     this._renderInventory();
     this._renderLog();
   }
@@ -538,24 +547,26 @@ export class UIController {
   }
 
   _renderObjectives() {
-    const el = document.getElementById('objectives');
+    const el = document.getElementById('node-status');
     if (!el) return;
     const state = this.state;
 
-    let html = '<div class="inv-title">⚔ Power Nodes</div>';
+    let html = '';
     let witchCount = 0, heroCount = 0;
     for (const obj of state.witchObjectives) {
       const witchHere = state.entities.find(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row);
       const heroHere  = state.entities.find(e => e.alive && e.owner === 'hero'  && e.col === obj.col && e.row === obj.row);
-      let icon, style;
-      if (witchHere)      { icon = '🔴'; style = 'color:#ff6666'; witchCount++; }
-      else if (heroHere)  { icon = '🔵'; style = 'color:#66aaff'; heroCount++; }
-      else                { icon = '⭕'; style = 'color:#aaaaaa'; }
-      html += `<div class="inv-row" style="${style}">${icon} ${obj.label}</div>`;
+      let cls;
+      if (witchHere)      { cls = 'witch'; witchCount++; }
+      else if (heroHere)  { cls = 'hero';  heroCount++;  }
+      else                { cls = 'neutral'; }
+      html += `<span class="node-dot ${cls}" title="${obj.label}"></span>`;
     }
-    if (witchCount === 3) html += `<div class="inv-row" style="color:#ff4444;font-weight:bold">⚠ Witch holds all! (wins at dawn)</div>`;
-    if (heroCount  === 3) html += `<div class="inv-row" style="color:#66aaff;font-weight:bold">★ Hero holds all! (wins at dawn)</div>`;
     el.innerHTML = html;
+    // Flash a subtle warning when one side holds all nodes
+    el.title = witchCount === 3 ? '⚠ Witch holds all nodes!'
+             : heroCount  === 3 ? '★ Hero holds all nodes!'
+             : 'Power Nodes';
   }
 
   _renderActionPanel() {
@@ -584,7 +595,13 @@ export class UIController {
       hint = `<p class="hint" style="margin-bottom:0.4rem">${labels[this._awaitingTarget.actionType] || ''}</p>
         ${btn('✕ Cancel', 'end-turn', '', `data-action="cancel"`)}`;
     } else if (this._selectedEntity) {
-      hint = `<p class="hint">Green hex to move · tap unit again for actions.</p>`;
+      const e = this._selectedEntity;
+      const hearts = '♥'.repeat(e.hp) + '♡'.repeat(Math.max(0, e.maxHp - e.hp));
+      const atkStr = `${e.attack}${e.attackBonus ? `+${e.attackBonus}` : ''}`;
+      const defStr = `${e.defense}${e.defenseBonus ? `+${e.defenseBonus}` : ''}`;
+      hint = `<div class="unit-mini-header" style="color:${ENTITY_COLOR[e.type]}">${e.displayName}</div>
+        <div class="unit-mini-stats">${hearts} &nbsp;·&nbsp; ATK ${atkStr} &nbsp;·&nbsp; DEF ${defStr}</div>
+        <p class="hint" style="margin-top:0">Green hex to move · tap unit again for actions.</p>`;
     } else {
       hint = `<p class="hint">Tap a unit to select.</p>`;
     }
@@ -1050,79 +1067,103 @@ export class UIController {
     this._maybeRunAI();
   }
 
-  _renderSelectedInfo() {
-    const el = document.getElementById('selected-info');
-    if (!el) return;
+  _showTileDetail(hex) {
+    const state = this.state;
+    const tile  = state.tiles.get(hexKey(hex.col, hex.row));
+    const panel = document.getElementById('tile-detail');
+    const titleEl = document.getElementById('tile-detail-title');
+    const body    = document.getElementById('tile-detail-body');
+    if (!panel || !tile) return;
 
-    const entity = this._selectedEntity;
+    // Title
+    let title = tile.type;
+    if (tile.building) title += ` — ${BUILDING_LABEL[tile.building]}`;
+    titleEl.textContent = title;
 
-    if (!entity) {
-      const h = this.renderer.hoveredHex;
-      if (h) {
-        const tile  = this.state.tiles.get(hexKey(h.col, h.row));
-        const state = this.state;
-        if (tile) {
-          const obj = state.witchObjectives.find(o => o.col === h.col && o.row === h.row);
-          let info = `<div class="tile-type">${tile.type}`;
-          if (tile.building) info += ` — ${BUILDING_LABEL[tile.building]}`;
-          info += `</div>`;
-          if (obj) info += `<div style="color:#cc88ff">⚔ Power Node: ${obj.label} — control at dawn to win</div>`;
-          if (tile.explored && tile.fortifyLevel) {
-            const fl = tile.fortifyLevel >= 3 ? `⚙⚙ Heavily Reinforced (+${tile.fortifyLevel} DEF)`
-              : tile.fortifyLevel >= 2 ? `⚙ Metal Reinforced (+${tile.fortifyLevel} DEF)`
-              : `🪵 Fortified (+${tile.fortifyLevel} DEF)`;
-            info += `<div class="fortified">${fl}</div>`;
-          }
-          if (!tile.explored) info += `<div class="unexplored">Unexplored</div>`;
+    // Body
+    let html = '';
 
-          const visible = _visibleUnitsAt(state, h.col, h.row);
-          if (visible.length) {
-            info += `<div style="margin-top:0.3rem;font-size:0.8rem;color:#ccc">Units here:</div>`;
-            for (const u of visible) {
-              const col = ENTITY_COLOR[u.type] || '#888';
-              info += `<div style="color:${col};font-size:0.78rem">${u.displayName} — HP ${u.hp}/${u.maxHp}</div>`;
-            }
-          }
-          el.innerHTML = info;
-          return;
-        }
+    // Power node info
+    const obj = state.witchObjectives.find(o => o.col === hex.col && o.row === hex.row);
+    if (obj) {
+      const witchHere = state.entities.find(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row);
+      const heroHere  = state.entities.find(e => e.alive && e.owner === 'hero'  && e.col === obj.col && e.row === obj.row);
+      const nodeStatus = witchHere ? '🔴 Witch-controlled' : heroHere ? '🔵 Hero-controlled' : '⭕ Contested';
+      html += `<div class="tile-detail-info node">⚔ Power Node: ${obj.label} — ${nodeStatus}</div>`;
+    }
+
+    // Fortification
+    if (tile.explored && tile.fortifyLevel) {
+      const fl = tile.fortifyLevel >= 3 ? `⚙⚙ Heavily Reinforced (+${tile.fortifyLevel} DEF)`
+        : tile.fortifyLevel >= 2 ? `⚙ Metal Reinforced (+${tile.fortifyLevel} DEF)`
+        : `🪵 Fortified (+${tile.fortifyLevel} DEF)`;
+      html += `<div class="tile-detail-info fortified">${fl}</div>`;
+    }
+
+    if (!tile.explored) {
+      html += `<div class="tile-detail-info">— unexplored —</div>`;
+    }
+
+    // Units
+    const visible   = _visibleUnitsAt(state, hex.col, hex.row);
+    const myUnits   = visible.filter(u => u.owner === state.activePlayer);
+    const foeUnits  = visible.filter(u => u.owner !== state.activePlayer);
+
+    if (visible.length) {
+      html += `<div class="tile-units-heading">Units</div>`;
+      for (const u of myUnits) {
+        const col     = ENTITY_COLOR[u.type] || '#888';
+        const hearts  = '♥'.repeat(u.hp) + '♡'.repeat(Math.max(0, u.maxHp - u.hp));
+        const atkStr  = `${u.attack}${u.attackBonus ? `+${u.attackBonus}` : ''}`;
+        const defStr  = `${u.defense}${u.defenseBonus ? `+${u.defenseBonus}` : ''}`;
+        const details = `${hearts} · ATK ${atkStr} · DEF ${defStr}`;
+        const survivor = u.type === EntityType.SURVIVOR && u.name
+          ? `<span style="font-size:0.72rem;color:#aaa;margin-left:0.3rem">${u.name}</span>` : '';
+        html += `<div class="tile-unit-card selectable" data-unit-id="${u.id}">
+          <span class="tile-unit-card-name" style="color:${col}">${u.displayName}${survivor}</span>
+          <span class="tile-unit-card-stats">${details}</span>
+        </div>`;
       }
-      el.innerHTML = '';
-      return;
+      for (const u of foeUnits) {
+        const col    = ENTITY_COLOR[u.type] || '#888';
+        const hearts = '♥'.repeat(u.hp) + '♡'.repeat(Math.max(0, u.maxHp - u.hp));
+        html += `<div class="tile-unit-card">
+          <span class="tile-unit-card-name" style="color:${col}">${u.displayName}</span>
+          <span class="tile-unit-card-stats">${hearts}</span>
+        </div>`;
+      }
     }
 
-    const weaponLine = entity.weapon
-      ? `<div class="entity-weapon">🗡 ${WEAPON_LABEL[entity.weapon] || entity.weapon}</div>` : '';
+    body.innerHTML = html;
 
-    const myItems    = entity.items || {};
-    const itemEntries = Object.entries(myItems).filter(([, v]) => v > 0);
-    const packLine   = itemEntries.length
-      ? `<div class="entity-weapon" style="color:#88eeff">🎒 ${itemEntries.map(([k, v]) => {
-          if (k.startsWith('weapon:')) return `${WEAPON_LABEL[k.replace('weapon:', '')] || k}×${v}`;
-          return `${RESOURCE_LABEL[k] || k}×${v}`;
-        }).join(', ')}</div>` : '';
+    // Wire selectable unit cards
+    body.querySelectorAll('.tile-unit-card.selectable').forEach(card => {
+      card.addEventListener('click', () => {
+        const unit = state.entities.find(e => e.id === card.dataset.unitId);
+        if (unit) {
+          this._hideTileDetail();
+          this._selectEntity(unit);
+          this._updateSidebar();
+          this.onRedraw();
+        }
+      });
+    });
 
-    let survivorBlock = '';
-    if (entity.type === EntityType.SURVIVOR && entity.name) {
-      survivorBlock = `
-        <div class="survivor-name">${entity.name}</div>
-        <div class="survivor-title">${entity.title}</div>
-        <div class="survivor-bio">${entity.bio}</div>
-        ${entity.abilityLabel ? `<div class="survivor-ability">★ ${entity.abilityLabel}</div>` : ''}
-      `;
+    panel.classList.add('visible');
+  }
+
+  _hideTileDetail() {
+    document.getElementById('tile-detail')?.classList.remove('visible');
+  }
+
+  _toggleChronicle() {
+    const overlay = document.getElementById('chronicle-overlay');
+    if (!overlay) return;
+    overlay.classList.toggle('visible');
+    if (overlay.classList.contains('visible')) {
+      const log = document.getElementById('event-log');
+      if (log) log.scrollTop = log.scrollHeight;
     }
-
-    el.innerHTML = `
-      <div class="entity-name" style="color:${ENTITY_COLOR[entity.type]}">${entity.displayName}</div>
-      ${survivorBlock}
-      <div class="entity-stats">
-        HP: ${'♥'.repeat(entity.hp)}${'♡'.repeat(entity.maxHp - entity.hp)} (${entity.hp}/${entity.maxHp})<br>
-        ATK: ${entity.attack}${entity.attackBonus ? ` +${entity.attackBonus}` : ''}
-        DEF: ${entity.defense}${entity.defenseBonus ? ` +${entity.defenseBonus}` : ''}
-      </div>
-      ${weaponLine}${packLine}
-      <div class="entity-pos">Position: (${entity.col}, ${entity.row})</div>
-    `;
   }
 
   _renderInventory() {
