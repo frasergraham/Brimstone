@@ -3,12 +3,11 @@ import { MAP_COLS, MAP_ROWS, getNeighbors, hexKey, hexDistance } from './hex.js'
 import { Tile, TileType, BuildingType } from './tiles.js';
 
 // Building types to scatter across the map each game
+// INN and GRAVEYARD are excluded — they are placed in opposite corners by _pickCornerBuildings
 const BUILDING_TYPES = [
   BuildingType.TOWN_HALL,
   BuildingType.CHURCH,
-  BuildingType.INN,
   BuildingType.BLACKSMITH,
-  BuildingType.GRAVEYARD,
   BuildingType.MILL,
   BuildingType.DOCK,
   BuildingType.BARN, BuildingType.BARN,
@@ -115,11 +114,47 @@ function _pickSpread(rand, tiles, count, minDist, forbiddenKeys = new Set()) {
   return placed;
 }
 
+// Corner zones: [topLeft, topRight, bottomLeft, bottomRight]
+// River runs ~col 3-5, so left corners use cols 1-2 to stay clear of it
+const CORNER_ZONES = [
+  { minCol: 1, maxCol: 2, minRow: 1, maxRow: 3 },              // top-left
+  { minCol: MAP_COLS - 4, maxCol: MAP_COLS - 2, minRow: 1, maxRow: 3 },  // top-right
+  { minCol: 1, maxCol: 2, minRow: MAP_ROWS - 4, maxRow: MAP_ROWS - 2 }, // bottom-left
+  { minCol: MAP_COLS - 4, maxCol: MAP_COLS - 2, minRow: MAP_ROWS - 4, maxRow: MAP_ROWS - 2 }, // bottom-right
+];
+
+// Place INN and GRAVEYARD in opposite corners (TL+BR or TR+BL, randomly assigned).
+function _pickCornerBuildings(rand, tiles) {
+  const useTLBR   = rand() < 0.5;
+  const [zA, zB]  = useTLBR ? [CORNER_ZONES[0], CORNER_ZONES[3]] : [CORNER_ZONES[1], CORNER_ZONES[2]];
+  const innZone   = rand() < 0.5 ? zA : zB;
+  const gravZone  = innZone === zA ? zB : zA;
+
+  const pickFrom = zone => {
+    const cs = [];
+    for (const [, t] of tiles) {
+      if (t.type !== TileType.GRASS) continue;
+      if (t.col < zone.minCol || t.col > zone.maxCol) continue;
+      if (t.row < zone.minRow || t.row > zone.maxRow) continue;
+      cs.push(t);
+    }
+    _shuffle(cs, rand);
+    return cs[0] || null;
+  };
+
+  const inn  = pickFrom(innZone);
+  const grav = pickFrom(gravZone);
+  const result = [];
+  if (inn)  result.push({ col: inn.col,  row: inn.row,  building: BuildingType.INN });
+  if (grav) result.push({ col: grav.col, row: grav.row, building: BuildingType.GRAVEYARD });
+  return result;
+}
+
 // Randomly scatter buildings with a minimum separation heuristic.
-function _randomBuildingPlacements(rand, tiles) {
+function _randomBuildingPlacements(rand, tiles, reservedKeys = new Set()) {
   const MIN_DIST = 2; // minimum hexes between any two buildings
   const placements = [];
-  const usedKeys = new Set();
+  const usedKeys = new Set(reservedKeys);
 
   for (const building of BUILDING_TYPES) {
     const candidates = [];
@@ -160,8 +195,10 @@ export function generateMap(seed = Date.now()) {
     if (t) t.type = TileType.RIVER;
   }
 
-  // 3. Place buildings randomly with spread heuristic
-  const buildingPlacements = _randomBuildingPlacements(rand, tiles);
+  // 3. Place INN and GRAVEYARD in opposite corners, then scatter remaining buildings
+  const cornerPlacements   = _pickCornerBuildings(rand, tiles);
+  const cornerKeys         = new Set(cornerPlacements.map(b => hexKey(b.col, b.row)));
+  const buildingPlacements = [...cornerPlacements, ..._randomBuildingPlacements(rand, tiles, cornerKeys)];
   for (const { col, row, building } of buildingPlacements) {
     const t = tiles.get(hexKey(col, row));
     if (!t) continue;
