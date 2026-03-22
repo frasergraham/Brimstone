@@ -578,6 +578,8 @@ export class Renderer {
             ctx.lineTo(em1.x + perpX * sign, em1.y + perpY * sign);
             ctx.stroke();
           }
+          // Restore road lineWidth for subsequent tiles
+          ctx.lineWidth = hs * 0.42;
         }
       }
     }

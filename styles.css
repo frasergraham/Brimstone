@@ -203,20 +203,46 @@ canvas { touch-action: pan-x pan-y; }
   animation: pulse-gold 1.4s ease-in-out infinite;
 }
 
-.phase-badge {
-  font-size: 0.8rem;
-  font-weight: bold;
-  letter-spacing: 0.1em;
-  padding: 0.15rem 0.5rem;
-  border-radius: 2px;
+/* ── Day cycle strip ──────────────────────────────────────────────────── */
+.cycle-strip {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  margin-bottom: 0.25rem;
 }
-.phase-badge.phase-dawn  { background: rgba(255,140,0,0.15);  color: #ffaa44;        border: 1px solid #ff8c00; }
-.phase-badge.phase-day   { background: rgba(245,200,66,0.15); color: var(--day);     border: 1px solid var(--day); }
-.phase-badge.phase-dusk  { background: rgba(180,60,0,0.20);   color: #ff7744;        border: 1px solid #c04020; }
-.phase-badge.phase-night { background: rgba(123,79,187,0.20); color: var(--night);   border: 1px solid var(--night); }
+
+.cycle-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  cursor: default;
+  padding: 0.1rem 0.2rem;
+  border-radius: 3px;
+  border: 1px solid transparent;
+  font-size: 0.95rem;
+  line-height: 1.2;
+  transition: opacity 0.2s;
+  user-select: none;
+}
+
+.cycle-dim  { opacity: 0.28; }
+.cycle-active { opacity: 1; padding: 0.1rem 0.3rem; }
+
+.cycle-active.phase-dawn  { background: rgba(255,140,0,0.15);  color: #ffaa44;      border-color: #ff8c00; }
+.cycle-active.phase-day   { background: rgba(245,200,66,0.15); color: var(--day);   border-color: var(--day); }
+.cycle-active.phase-dusk  { background: rgba(180,60,0,0.20);   color: #ff7744;      border-color: #c04020; }
+.cycle-active.phase-night { background: rgba(123,79,187,0.20); color: var(--night); border-color: var(--night); }
+
+.cycle-name {
+  font-size: 0.6rem;
+  font-weight: bold;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-top: 0.05rem;
+  white-space: nowrap;
+}
 
 .turn-line { font-size: 0.85rem; color: var(--text-dim); }
-.phase-hint { font-size: 0.75rem; color: #7a6a50; font-style: italic; margin-bottom: 0.2rem; }
 
 .player-hero  { color: var(--hero) !important; }
 .player-witch { color: var(--witch) !important; }

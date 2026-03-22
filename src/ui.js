@@ -551,25 +551,36 @@ export class UIController {
     const el    = document.getElementById('turn-info');
     if (!el) return;
 
-    const phase  = state.phase;
     const player = state.activePlayer === Player.HERO ? 'Hero' : 'Witch';
     const isAI   = (state.activePlayer === Player.WITCH && state.witchIsAI) ||
                    (state.activePlayer === Player.HERO  && state.heroIsAI);
 
-    const phaseDesc = {
-      [Phase.DAWN]:  'No bonuses — transition phase',
-      [Phase.DAY]:   'Hero +1 ATK · Witch minions in the open suffer',
-      [Phase.DUSK]:  'No bonuses — seek cover',
-      [Phase.NIGHT]: 'Witch +1 ATK · Survivors in the open suffer',
-    };
+    // 8-step cycle matching game.js: DAWN(1) DAY(3) DUSK(1) NIGHT(3)
+    const CYCLE_STEPS = [
+      { phase: Phase.DAWN,  icon: '🌅', label: 'Dawn',  desc: 'No bonuses — transition phase' },
+      { phase: Phase.DAY,   icon: '☀️',  label: 'Day',   desc: 'Hero +1 ATK · Witch minions in the open suffer' },
+      { phase: Phase.DAY,   icon: '☀️',  label: 'Day',   desc: 'Hero +1 ATK · Witch minions in the open suffer' },
+      { phase: Phase.DAY,   icon: '☀️',  label: 'Day',   desc: 'Hero +1 ATK · Witch minions in the open suffer' },
+      { phase: Phase.DUSK,  icon: '🌇', label: 'Dusk',  desc: 'No bonuses — seek cover before night' },
+      { phase: Phase.NIGHT, icon: '🌙', label: 'Night', desc: 'Witch +1 ATK · Survivors in the open suffer' },
+      { phase: Phase.NIGHT, icon: '🌙', label: 'Night', desc: 'Witch +1 ATK · Survivors in the open suffer' },
+      { phase: Phase.NIGHT, icon: '🌙', label: 'Night', desc: 'Witch +1 ATK · Survivors in the open suffer' },
+    ];
+
+    const roundInCycle = (state.round - 1) % 8; // 0-indexed position in current cycle
+
+    const cycleHTML = CYCLE_STEPS.map((step, i) => {
+      const active = i === roundInCycle;
+      return `<div class="cycle-step phase-${step.phase} ${active ? 'cycle-active' : 'cycle-dim'}"
+                   title="${step.desc}">${step.icon}${active ? `<span class="cycle-name">${step.label}</span>` : ''}</div>`;
+    }).join('');
 
     const diamonds = state.actionsLeft > 0
       ? '◆'.repeat(state.actionsLeft)
       : '◇';
 
     el.innerHTML = `
-      <div class="phase-badge phase-${phase}">${PHASE_ICON[phase]} ${phase.toUpperCase()}</div>
-      <div class="turn-line phase-hint">${phaseDesc[phase]}</div>
+      <div class="cycle-strip">${cycleHTML}</div>
       <div class="turn-line">Round ${state.round}</div>
       <div class="turn-line player-${state.activePlayer}">
         ${player}'s Turn ${isAI ? '<span class="ai-badge">AI</span>' : ''}
