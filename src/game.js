@@ -192,8 +192,12 @@ export class GameState {
           if (heroHere) {
             const hex = freeHex();
             if (hex) {
-              this.entities.push(createSurvivor(hex.col, hex.row));
-              this.addLog(`✨ The node calls to the living — a survivor emerges to join the hero!`);
+              const s = createSurvivor(hex.col, hex.row);
+              s.owner = 'hero';
+              if (Math.random() < 0.5) s.items['horse'] = 1;
+              this.entities.push(s);
+              const horseNote = s.items['horse'] ? ' (arrives on horseback!)' : '';
+              this.addLog(`✨ The node calls to the living — a survivor emerges to join the hero!${horseNote}`);
             }
           }
         }

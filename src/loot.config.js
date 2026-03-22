@@ -35,10 +35,10 @@ export const LOOT_CONFIG = {
     ],
 
     inn: [
-      { type: 'food',          weight: 45 },
-      { type: 'herbs',         weight: 20 },
-      { type: 'silver',        weight: 15 },
-      { type: 'horse',         weight: 15 },
+      { type: 'food',          weight: 35 },
+      { type: 'herbs',         weight: 18 },
+      { type: 'silver',        weight: 12 },
+      { type: 'horse',         weight: 30 },
       { type: 'nothing',       weight:  5 },
     ],
 
@@ -56,9 +56,10 @@ export const LOOT_CONFIG = {
     ],
 
     barn: [
-      { type: 'food',          weight: 55 },
-      { type: 'wood',          weight: 35 },
-      { type: 'nothing',       weight: 10 },
+      { type: 'food',          weight: 40 },
+      { type: 'wood',          weight: 28 },
+      { type: 'horse',         weight: 25 },
+      { type: 'nothing',       weight:  7 },
     ],
 
     apothecary: [
@@ -82,12 +83,12 @@ export const LOOT_CONFIG = {
       { type: 'nothing',       weight:  5 },
     ],
 
-    // Best chance for a horse (also found at inn and houses)
+    // Best chance for a horse (also found at inn, barn, and houses)
     stable: [
-      { type: 'horse',         weight: 55 },
-      { type: 'food',          weight: 25 },
-      { type: 'wood',          weight: 15 },
-      { type: 'nothing',       weight:  5 },
+      { type: 'horse',         weight: 75 },
+      { type: 'food',          weight: 15 },
+      { type: 'wood',          weight:  8 },
+      { type: 'nothing',       weight:  2 },
     ],
 
     dock: [
@@ -97,12 +98,12 @@ export const LOOT_CONFIG = {
     ],
 
     house: [
-      { type: 'food',          weight: 28 },
-      { type: 'wood',          weight: 26 },
-      { type: 'weapon:dagger', weight: 18 },
-      { type: 'metal',         weight: 14 },
-      { type: 'herbs',         weight:  8 },
-      { type: 'horse',         weight:  6 },
+      { type: 'food',          weight: 25 },
+      { type: 'wood',          weight: 22 },
+      { type: 'weapon:dagger', weight: 16 },
+      { type: 'metal',         weight: 12 },
+      { type: 'herbs',         weight:  7 },
+      { type: 'horse',         weight: 18 },
     ],
 
     graveyard: [
@@ -145,11 +146,12 @@ export const LOOT_CONFIG = {
     ],
 
     road: [
-      { type: 'food',          weight: 35 },
-      { type: 'silver',        weight: 30 },
-      { type: 'metal',         weight: 20 },
-      { type: 'wood',          weight: 12 },
+      { type: 'food',          weight: 32 },
+      { type: 'silver',        weight: 27 },
+      { type: 'metal',         weight: 18 },
+      { type: 'wood',          weight: 10 },
       { type: 'herbs',         weight:  3 },
+      { type: 'horse',         weight: 10 },
     ],
 
   },

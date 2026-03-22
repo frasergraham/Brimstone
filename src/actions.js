@@ -107,7 +107,7 @@ export function getValidActions(state, actor) {
   const actorIsHero = actor.owner === 'hero';
 
   // Move — range 2 if actor has a horse in personal items, otherwise 1
-  const hasHorse = actorIsHero && (actor.items?.['horse'] || 0) > 0;
+  const hasHorse = actor.owner === 'hero' && (actor.items?.['horse'] || 0) > 0;
   const moveTargets = getReachableHexes(state, actor, hasHorse ? 2 : 1);
   if (moveTargets.length) actions.push({ type: ActionType.MOVE, targets: moveTargets });
 
@@ -157,7 +157,7 @@ export function getValidActions(state, actor) {
 
     // Per-unit items: herbs, weapons
     if ((myItems[ResourceType.HERBS] || 0) > 0 && actor.hp < actor.maxHp)
-      usable.push({ item: ResourceType.HERBS, label: '🌿 Herbs (heal 1)', source: 'items' });
+      usable.push({ item: ResourceType.HERBS, label: '🌿 Herbs (heal 2)', source: 'items' });
 
     // Shared resources
     if ((shared[ResourceType.FOOD] || 0) > 0)
@@ -502,7 +502,7 @@ export function executeUseItem(state, actor, item) {
     const myItems = actor.items || {};
     if ((myItems[item] || 0) < 1) return { success: false, log: ['No herbs.'] };
     myItems[item]--;
-    actor.heal(1);
+    actor.heal(2);
     return { success: true, log: [`${actor.displayName} uses herbs. Healed to ${actor.hp}/${actor.maxHp} HP.`], cost: 0 };
   }
 
