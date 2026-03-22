@@ -232,8 +232,6 @@ export class Renderer {
 
     ctx.restore(); // end zoom/pan transform
 
-    // Decorative map border (outside zoom/pan transform — always in canvas space)
-    this._drawMapBorder();
   }
 
   _drawFlashes() {
@@ -601,52 +599,6 @@ export class Renderer {
   }
 
   // Decorative border frame drawn in canvas coordinates (outside the zoom transform).
-  _drawMapBorder() {
-    const ctx = this.ctx;
-    const hs  = this.hexSize;
-    const z   = this.zoomLevel;
-    const px  = this._panX;
-    const py  = this._panY;
-
-    // Compute the map content bounding box in canvas space
-    const gridW = SQRT3 * hs * (MAP_COLS + 0.5);
-    const gridH = 1.5   * hs * MAP_ROWS + hs * 0.5;
-    const pad   = hs * 0.6;
-
-    const x0 = (this._padX - pad) * z + px;
-    const y0 = (this._padY - pad) * z + py;
-    const bw  = (gridW + pad * 2) * z;
-    const bh  = (gridH + pad * 2) * z;
-
-    // Outer dark frame
-    ctx.strokeStyle = '#1a110a';
-    ctx.lineWidth   = 5 * z;
-    ctx.strokeRect(x0 - 4 * z, y0 - 4 * z, bw + 8 * z, bh + 8 * z);
-
-    // Aged wood inner frame
-    ctx.strokeStyle = '#5a3f20';
-    ctx.lineWidth   = 3 * z;
-    ctx.strokeRect(x0, y0, bw, bh);
-
-    // Thin inner highlight
-    ctx.strokeStyle = 'rgba(160,120,60,0.5)';
-    ctx.lineWidth   = 1.5 * z;
-    ctx.strokeRect(x0 + 4 * z, y0 + 4 * z, bw - 8 * z, bh - 8 * z);
-
-    // Corner rivets
-    const corners = [
-      [x0, y0], [x0 + bw, y0], [x0, y0 + bh], [x0 + bw, y0 + bh],
-    ];
-    ctx.fillStyle = '#7a5530';
-    for (const [cx, cy] of corners) {
-      ctx.beginPath();
-      ctx.arc(cx, cy, 5 * z, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = '#2a1a08';
-      ctx.lineWidth   = 1 * z;
-      ctx.stroke();
-    }
-  }
 
   _drawObjectiveGlow(col, row) {
     const ctx = this.ctx;
