@@ -139,18 +139,25 @@ export class Renderer {
     ctx.translate(this._panX, this._panY);
     ctx.scale(this.zoomLevel, this.zoomLevel);
 
-    // Tiles
+    // Pass 1: terrain tiles (grass, forest, dirt, road bg, river bg, bridges)
     for (let row = 0; row < MAP_ROWS; row++) {
       for (let col = 0; col < MAP_COLS; col++) {
-        this._drawTile(col, row);
+        const t = state.tiles.get(hexKey(col, row));
+        if (t && t.type !== TileType.BUILDING) this._drawTile(col, row);
       }
     }
 
-    // Road strips (directional paths on top of grass backgrounds)
+    // Road strips and river flow (on top of terrain backgrounds)
     this._drawRoadLayer();
-
-    // River flow ribbons (bezier curves on top of grass backgrounds)
     this._drawRiverLayer();
+
+    // Pass 2: building tiles drawn over roads/rivers so no bleed-through
+    for (let row = 0; row < MAP_ROWS; row++) {
+      for (let col = 0; col < MAP_COLS; col++) {
+        const t = state.tiles.get(hexKey(col, row));
+        if (t && t.type === TileType.BUILDING) this._drawTile(col, row);
+      }
+    }
 
     // Visibility: compute once for fog layer + entity pass + outlines.
     // Fog is shown from the human player's perspective only (not AI vs AI).
@@ -284,25 +291,9 @@ export class Renderer {
     ctx.lineWidth   = 0.8;
     ctx.stroke();
 
-    // ── Bridge deck ───────────────────────────────────────────────────────
-    if (tile.type === TileType.BRIDGE) {
-      const deckH = hs * 0.38;
-      ctx.fillStyle = TILE_COLOR[TileType.ROAD];
-      ctx.fillRect(x - hs * SQRT3 * 0.5, y - deckH * 0.5, hs * SQRT3, deckH);
-      ctx.strokeStyle = '#8a7a5a';
-      ctx.lineWidth   = 1;
-      ctx.beginPath();
-      ctx.moveTo(x - hs * SQRT3 * 0.5, y - deckH * 0.5);
-      ctx.lineTo(x + hs * SQRT3 * 0.5, y - deckH * 0.5);
-      ctx.moveTo(x - hs * SQRT3 * 0.5, y + deckH * 0.5);
-      ctx.lineTo(x + hs * SQRT3 * 0.5, y + deckH * 0.5);
-      ctx.stroke();
-      ctx.font         = `${Math.floor(hs * 0.55)}px serif`;
-      ctx.textAlign    = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('🌉', x, y);
-      return;
-    }
+    // Bridge tiles: only the water background is drawn here.
+    // The water bezier and road strip are layered on top in _drawRiverLayer / _drawRoadLayer.
+    if (tile.type === TileType.BRIDGE) return;
 
     // ── Fortification outline — grey, thickness scales with fortifyLevel ──
     if (tile.fortifyLevel > 0) {
@@ -412,13 +403,14 @@ export class Renderer {
     }
   }
 
-  // Draw the river as smooth bezier flows through each hex — entry edge to exit edge.
-  // Bridge tiles are treated as river connectors (water flows beneath the bridge deck).
+  // Draw the river as smooth bezier flows through each RIVER and BRIDGE tile.
+  // Endpoints (row 0 / row MAP_ROWS-1) extend their bezier off-screen so the
+  // river appears to flow in from and out to the edge of the map.
   _drawRiverLayer() {
-    const ctx   = this.ctx;
-    const tiles = this.state.tiles;
-    const hs    = this.hexSize;
-    const apothem = hs * SQRT3 / 2; // center → edge-midpoint distance
+    const ctx     = this.ctx;
+    const tiles   = this.state.tiles;
+    const hs      = this.hexSize;
+    const apothem = hs * SQRT3 / 2;
 
     const isWater = t => t && (t.type === TileType.RIVER || t.type === TileType.BRIDGE);
 
@@ -430,14 +422,12 @@ export class Renderer {
     for (let row = 0; row < MAP_ROWS; row++) {
       for (let col = 0; col < MAP_COLS; col++) {
         const tile = tiles.get(hexKey(col, row));
-        if (!tile || tile.type !== TileType.RIVER) continue;
+        if (!isWater(tile)) continue;
 
         const { x, y } = this._toCanvas(col, row);
-
-        // Edge midpoints for each river/bridge neighbor
         const riverNbrs = getNeighbors(col, row).filter(n => isWater(tiles.get(hexKey(n.col, n.row))));
-        if (riverNbrs.length === 0) continue;
 
+        // Build edge midpoints toward each river/bridge neighbour
         const edgeMids = riverNbrs.map(n => {
           const { x: nx, y: ny } = this._toCanvas(n.col, n.row);
           const dx = nx - x, dy = ny - y;
@@ -447,18 +437,21 @@ export class Renderer {
 
         ctx.beginPath();
         if (riverNbrs.length >= 2) {
-          // Smooth bezier from entry edge → center → exit edge
+          // Two river neighbours: smooth bezier entry → center → exit
           ctx.moveTo(edgeMids[0].x, edgeMids[0].y);
           ctx.quadraticCurveTo(x, y, edgeMids[1].x, edgeMids[1].y);
-          // If there's a third connection (junction) draw it as a spoke
-          for (let i = 2; i < edgeMids.length; i++) {
-            ctx.moveTo(x, y);
-            ctx.lineTo(edgeMids[i].x, edgeMids[i].y);
-          }
+        } else if (riverNbrs.length === 1) {
+          // Endpoint tile: extend bezier off-screen in the upstream/downstream direction
+          const { x: nx, y: ny } = this._toCanvas(riverNbrs[0].col, riverNbrs[0].row);
+          const dx = nx - x, dy = ny - y;
+          const d  = Math.sqrt(dx * dx + dy * dy);
+          // Point beyond this hex in the opposite direction (off the map edge)
+          const offX = x - (dx / d) * apothem * 2;
+          const offY = y - (dy / d) * apothem * 2;
+          ctx.moveTo(offX, offY);
+          ctx.quadraticCurveTo(x, y, edgeMids[0].x, edgeMids[0].y);
         } else {
-          // River start/end — draw from center to the single edge
-          ctx.moveTo(x, y);
-          ctx.lineTo(edgeMids[0].x, edgeMids[0].y);
+          continue; // isolated water tile — skip
         }
         ctx.stroke();
       }
@@ -468,29 +461,65 @@ export class Renderer {
     ctx.lineJoin = 'miter';
   }
 
-  // Draw road tiles as directional earth-brown strips connecting to road/building neighbours,
-  // leaving the grass base visible and making paths look like they cut through terrain.
+  // Draw road strips as directional paths on ROAD and BRIDGE tiles.
+  // Roads connect to road/bridge/building neighbours, capped at 3 connections
+  // (T-junction max).  Bridges additionally draw railing lines over the water.
   _drawRoadLayer() {
-    const ctx   = this.ctx;
-    const tiles = this.state.tiles;
-    const hs    = this.hexSize;
+    const ctx     = this.ctx;
+    const tiles   = this.state.tiles;
+    const hs      = this.hexSize;
     const apothem = hs * SQRT3 / 2;
 
     const isRoadLike = t => t && (
       t.type === TileType.ROAD || t.type === TileType.BRIDGE || t.type === TileType.BUILDING
     );
 
-    ctx.strokeStyle = TILE_COLOR[TileType.ROAD];
-    ctx.lineWidth   = hs * 0.42;
-    ctx.lineCap     = 'round';
+    // Helper: pick up to `max` road neighbours, preferring the pair that forms the
+    // straightest through-road (most opposing directions) then adding the best branch.
+    const pickConnections = (center, nbrs, max) => {
+      if (nbrs.length <= max) return nbrs;
+      const dirs = nbrs.map(n => {
+        const { x: nx, y: ny } = this._toCanvas(n.col, n.row);
+        const dx = nx - center.x, dy = ny - center.y;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        return { n, dx: dx / d, dy: dy / d };
+      });
+      // Find the most opposing pair
+      let pairA = 0, pairB = 1, minDot = Infinity;
+      for (let i = 0; i < dirs.length; i++) {
+        for (let j = i + 1; j < dirs.length; j++) {
+          const dot = dirs[i].dx * dirs[j].dx + dirs[i].dy * dirs[j].dy;
+          if (dot < minDot) { minDot = dot; pairA = i; pairB = j; }
+        }
+      }
+      const chosen = new Set([pairA, pairB]);
+      // Add the best remaining branch (closest to 90° from the axis midpoint)
+      if (max >= 3) {
+        let bestIdx = -1, bestScore = -Infinity;
+        for (let i = 0; i < dirs.length; i++) {
+          if (chosen.has(i)) continue;
+          // Prefer directions that differ from both chosen by ~90°
+          const dotA = Math.abs(dirs[i].dx * dirs[pairA].dx + dirs[i].dy * dirs[pairA].dy);
+          const dotB = Math.abs(dirs[i].dx * dirs[pairB].dx + dirs[i].dy * dirs[pairB].dy);
+          const score = -(dotA + dotB);
+          if (score > bestScore) { bestScore = score; bestIdx = i; }
+        }
+        if (bestIdx >= 0) chosen.add(bestIdx);
+      }
+      return [...chosen].map(i => dirs[i].n);
+    };
+
+    ctx.lineWidth = hs * 0.42;
+    ctx.lineCap   = 'round';
 
     for (let row = 0; row < MAP_ROWS; row++) {
       for (let col = 0; col < MAP_COLS; col++) {
         const tile = tiles.get(hexKey(col, row));
-        if (!tile || tile.type !== TileType.ROAD) continue;
+        if (!tile || (tile.type !== TileType.ROAD && tile.type !== TileType.BRIDGE)) continue;
 
         const { x, y } = this._toCanvas(col, row);
-        const roadNbrs  = getNeighbors(col, row).filter(n => isRoadLike(tiles.get(hexKey(n.col, n.row))));
+        const allNbrs  = getNeighbors(col, row).filter(n => isRoadLike(tiles.get(hexKey(n.col, n.row))));
+        const roadNbrs = pickConnections({ x, y }, allNbrs, 3);
         if (roadNbrs.length === 0) continue;
 
         const edgeMids = roadNbrs.map(n => {
@@ -500,25 +529,43 @@ export class Renderer {
           return { x: x + dx / d * apothem, y: y + dy / d * apothem };
         });
 
+        ctx.strokeStyle = TILE_COLOR[TileType.ROAD];
+
         if (roadNbrs.length === 2) {
-          // Straight or curved through-road — draw as one connected stroke
           ctx.beginPath();
           ctx.moveTo(edgeMids[0].x, edgeMids[0].y);
           ctx.quadraticCurveTo(x, y, edgeMids[1].x, edgeMids[1].y);
           ctx.stroke();
         } else {
-          // T-junction, dead-end, or 4+ way — draw spokes from center
+          // T-junction or dead-end: spokes + filled centre dot
           for (const em of edgeMids) {
             ctx.beginPath();
             ctx.moveTo(x, y);
             ctx.lineTo(em.x, em.y);
             ctx.stroke();
           }
-          // Small center fill to round off junction
           ctx.beginPath();
           ctx.arc(x, y, hs * 0.21, 0, Math.PI * 2);
           ctx.fillStyle = TILE_COLOR[TileType.ROAD];
           ctx.fill();
+        }
+
+        // ── Bridge railings on top of the road strip ──────────────────────
+        if (tile.type === TileType.BRIDGE && roadNbrs.length === 2) {
+          const [em0, em1] = edgeMids;
+          const dx = em1.x - em0.x, dy = em1.y - em0.y;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          const perpX = (-dy / len) * hs * 0.18;
+          const perpY = ( dx / len) * hs * 0.18;
+
+          ctx.strokeStyle = '#8a7a5a';
+          ctx.lineWidth   = Math.max(1, hs * 0.06);
+          for (const sign of [-1, 1]) {
+            ctx.beginPath();
+            ctx.moveTo(em0.x + perpX * sign, em0.y + perpY * sign);
+            ctx.lineTo(em1.x + perpX * sign, em1.y + perpY * sign);
+            ctx.stroke();
+          }
         }
       }
     }

@@ -197,41 +197,29 @@ function _clusteredBuildingPlacements(rand, tiles, reservedKeys = new Set()) {
   return placements;
 }
 
-// Generate a meandering river path from the top row to the bottom row.
-// Stays contiguous by following valid hex adjacency at each step.
-// Prefers moving downward (65% chance) over sideways to ensure it reaches the bottom.
+// Generate a meandering river path: exactly one tile per row (row 0 → MAP_ROWS-1).
+// This guarantees every interior tile has exactly 2 river neighbours (no clusters),
+// and the two endpoints each have exactly 1 (so the bezier can extend off-screen).
+//
+// Hex adjacency in odd-r offset means from an even row you can step to (col, row+1)
+// or (col-1, row+1); from an odd row to (col+1, row+1) or (col, row+1).
 function _generateRiver(rand) {
   const path = [];
-  const used = new Set();
-
   const startCol = 3 + Math.floor(rand() * 7); // cols 3–9
-  let cur = { col: startCol, row: 0 };
-  path.push(cur);
-  used.add(hexKey(cur.col, cur.row));
+  let col = startCol;
 
-  while (cur.row < MAP_ROWS - 1) {
-    const nbrs = getNeighbors(cur.col, cur.row).filter(n =>
-      n.col >= 2 && n.col <= MAP_COLS - 3 && !used.has(hexKey(n.col, n.row))
-    );
+  for (let row = 0; row < MAP_ROWS; row++) {
+    path.push({ col, row });
 
-    const downward  = nbrs.filter(n => n.row > cur.row);
-    const sideways  = nbrs.filter(n => n.row === cur.row);
-
-    let next;
-    if (downward.length > 0 && (sideways.length === 0 || rand() < 0.65)) {
-      next = downward[Math.floor(rand() * downward.length)];
-    } else if (sideways.length > 0) {
-      next = sideways[Math.floor(rand() * sideways.length)];
-    } else {
-      // No valid constrained move — step straight down ignoring col bounds
-      const anyDown = getNeighbors(cur.col, cur.row).filter(n => n.row > cur.row && !used.has(hexKey(n.col, n.row)));
-      next = anyDown[0] || { col: cur.col, row: cur.row + 1 };
-    }
-
-    cur = next;
-    if (!used.has(hexKey(cur.col, cur.row))) {
-      path.push(cur);
-      used.add(hexKey(cur.col, cur.row));
+    if (row < MAP_ROWS - 1) {
+      const isEven = row % 2 === 0;
+      // Two possible next columns based on offset parity
+      const optA = isEven ? col     : col + 1; // "straight"
+      const optB = isEven ? col - 1 : col;     // "drift"
+      // Clamp both to safe range and pick randomly
+      const a = Math.max(2, Math.min(MAP_COLS - 3, optA));
+      const b = Math.max(2, Math.min(MAP_COLS - 3, optB));
+      col = (rand() < 0.5) ? a : b;
     }
   }
 
