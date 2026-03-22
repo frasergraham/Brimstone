@@ -225,10 +225,8 @@ export class UIController {
       hex.row === this._selectedEntity.row
     ) {
       if (this._popupVisible) {
-        this._popupVisible = false;
-        _hideActionPopup();
-        // Restore move highlights after dismissing popup
-        this._updateHighlights();
+        // Third click — deselect entirely
+        this._clearSelection();
       } else {
         this._showActionPopup(this._selectedEntity);
         this._popupVisible = true;
@@ -252,16 +250,8 @@ export class UIController {
     );
 
     if (clickedEntities.length === 0) {
-      // Close popup if open; otherwise deselect, then show tile detail
-      if (this._popupVisible) {
-        this._popupVisible = false;
-        _hideActionPopup();
-        if (this._awaitingTarget?.isDefault) {
-          this._updateHighlights();
-        }
-      } else {
-        this._clearSelection();
-      }
+      // Always deselect and show tile detail immediately (single click)
+      this._clearSelection();
       this._showTileDetail(hex);
     } else if (clickedEntities.length === 1) {
       const entity = clickedEntities[0];
@@ -366,6 +356,8 @@ export class UIController {
       this.onRedraw();
       if (result.encounterLog?.length) {
         this._showResultDialog(result.encounterLog, () => {
+          // A unit just spawned on actor's hex — deselect so the player can pick it
+          this._clearSelection();
           this._updateSidebar();
           this.onRedraw();
           this._maybeShowNoActionsDialog();
