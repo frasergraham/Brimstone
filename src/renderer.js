@@ -147,9 +147,9 @@ export class Renderer {
       }
     }
 
-    // Road strips and river flow (on top of terrain backgrounds)
-    this._drawRoadLayer();
+    // River first (water), then roads on top (bridge deck above the water)
     this._drawRiverLayer();
+    this._drawRoadLayer();
 
     // Pass 2: building tiles drawn over roads/rivers so no bleed-through
     for (let row = 0; row < MAP_ROWS; row++) {
@@ -474,41 +474,6 @@ export class Renderer {
       t.type === TileType.ROAD || t.type === TileType.BRIDGE || t.type === TileType.BUILDING
     );
 
-    // Helper: pick up to `max` road neighbours, preferring the pair that forms the
-    // straightest through-road (most opposing directions) then adding the best branch.
-    const pickConnections = (center, nbrs, max) => {
-      if (nbrs.length <= max) return nbrs;
-      const dirs = nbrs.map(n => {
-        const { x: nx, y: ny } = this._toCanvas(n.col, n.row);
-        const dx = nx - center.x, dy = ny - center.y;
-        const d = Math.sqrt(dx * dx + dy * dy);
-        return { n, dx: dx / d, dy: dy / d };
-      });
-      // Find the most opposing pair
-      let pairA = 0, pairB = 1, minDot = Infinity;
-      for (let i = 0; i < dirs.length; i++) {
-        for (let j = i + 1; j < dirs.length; j++) {
-          const dot = dirs[i].dx * dirs[j].dx + dirs[i].dy * dirs[j].dy;
-          if (dot < minDot) { minDot = dot; pairA = i; pairB = j; }
-        }
-      }
-      const chosen = new Set([pairA, pairB]);
-      // Add the best remaining branch (closest to 90° from the axis midpoint)
-      if (max >= 3) {
-        let bestIdx = -1, bestScore = -Infinity;
-        for (let i = 0; i < dirs.length; i++) {
-          if (chosen.has(i)) continue;
-          // Prefer directions that differ from both chosen by ~90°
-          const dotA = Math.abs(dirs[i].dx * dirs[pairA].dx + dirs[i].dy * dirs[pairA].dy);
-          const dotB = Math.abs(dirs[i].dx * dirs[pairB].dx + dirs[i].dy * dirs[pairB].dy);
-          const score = -(dotA + dotB);
-          if (score > bestScore) { bestScore = score; bestIdx = i; }
-        }
-        if (bestIdx >= 0) chosen.add(bestIdx);
-      }
-      return [...chosen].map(i => dirs[i].n);
-    };
-
     ctx.lineWidth = hs * 0.42;
     ctx.lineCap   = 'round';
 
@@ -518,8 +483,7 @@ export class Renderer {
         if (!tile || (tile.type !== TileType.ROAD && tile.type !== TileType.BRIDGE)) continue;
 
         const { x, y } = this._toCanvas(col, row);
-        const allNbrs  = getNeighbors(col, row).filter(n => isRoadLike(tiles.get(hexKey(n.col, n.row))));
-        const roadNbrs = pickConnections({ x, y }, allNbrs, 3);
+        const roadNbrs = getNeighbors(col, row).filter(n => isRoadLike(tiles.get(hexKey(n.col, n.row))));
         if (roadNbrs.length === 0) continue;
 
         const edgeMids = roadNbrs.map(n => {
