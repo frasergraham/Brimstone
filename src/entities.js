@@ -246,8 +246,8 @@ export class Entity {
     }
     let attackRoll  = Math.ceil(Math.random() * 6) + attacker.attack  + attacker.attackBonus + extraAtk;
     let defenseRoll = Math.ceil(Math.random() * 6) + defender.defense + defender.defenseBonus + extraDefBonus;
-    for (let i = 0; i < extraAtkDice; i++) attackRoll  += Math.ceil(Math.random() * 6);
-    for (let i = 0; i < extraDefDice; i++) defenseRoll += Math.ceil(Math.random() * 6);
+    for (let i = 0; i < extraAtkDice; i++) attackRoll  += Math.ceil(Math.random() * 3);
+    for (let i = 0; i < extraDefDice; i++) defenseRoll += Math.ceil(Math.random() * 3);
     const margin = attackRoll - defenseRoll;
     return { attackRoll, defenseRoll, hit: margin > 0, margin };
   }

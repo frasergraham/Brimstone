@@ -155,12 +155,12 @@ const SCENARIOS = [
   { label: 'Hero vs Witch           (fort 2)',       att: HERO,       def: WITCH,      ctx: { extraDef: 2 }, defFort: 2 },
   { label: 'Hero vs Iron Golem      (fort 2)',       att: HERO,       def: IRON_GOLEM, ctx: { extraDef: 2 }, defFort: 2 },
 
-  // ── Gang-up bonus (now extra d6 instead of flat +1) ──────────────────────
-  { label: 'Hero vs Witch           (gang-up +d6)',  att: HERO,       def: WITCH,      ctx: { extraAtkDice: 1 } },
+  // ── Gang-up bonus: 2+ on attacker side → +d3 ────────────────────────────
+  { label: 'Hero vs Witch           (gang-up +d3)',  att: HERO,       def: WITCH,      ctx: { extraAtkDice: 1 } },
   { label: 'Hero vs Witch           (day+gang-up)',  att: HERO,       def: WITCH,      ctx: { phaseBonus: 1, extraAtkDice: 1 } },
   { label: 'Witch vs Hero           (night+gang)',   att: WITCH,      def: HERO,       ctx: { phaseBonus: 1, extraAtkDice: 1 } },
 
-  // ── Ally defence (now extra d6 instead of flat +1) ───────────────────────
+  // ── Ally defence: 2+ on defender side → +d3 ─────────────────────────────
   { label: 'Hero vs Witch           (defender ally)',att: HERO,       def: WITCH,      ctx: { extraDefDice: 1 } },
   { label: 'Witch vs Hero           (hero has ally)',att: WITCH,      def: HERO,       ctx: { extraDefDice: 1 } },
 
@@ -230,7 +230,7 @@ const DUELS = [
   { label: 'Witch vs Hero           (night)',  att: WITCH,      def: HERO,       ctx: { phaseBonus: 1 } },
   { label: 'Witch vs Hero+Shield    (night)',  att: WITCH,      def: HERO_SHIELD,ctx: { phaseBonus: 1 } },
   { label: 'Iron Golem vs Hero      (night)',  att: IRON_GOLEM, def: HERO,       ctx: {} },
-  { label: 'Hero vs Witch   (day+gang-up+d6)', att:HERO,       def: WITCH,      ctx: { phaseBonus:1, extraAtkDice:1 } },
+  { label: 'Hero vs Witch   (day+gang-up+d3)', att:HERO,       def: WITCH,      ctx: { phaseBonus:1, extraAtkDice:1 } },
   { label: 'Hero vs Witch   (night, fort 2)', att: HERO,       def: WITCH,      ctx: {}, defFort: 2 },
   { label: 'Witch vs Hero   (night+gang-up)', att: WITCH,      def: HERO,       ctx: { phaseBonus:1, extraAtkDice:1 } },
 ];

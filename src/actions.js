@@ -369,8 +369,8 @@ export function executeBattle(state, actor, target) {
   const fortBonus      = defTile?.fortifyLevel || 0;
 
   // Allies give an extra d6 rather than a flat +1 — more variance, bigger swings
-  const extraAtkDice = attackerAllies >= 3 ? 1 : 0;
-  const extraDefDice = defenderAllies > 0  ? 1 : 0;
+  const extraAtkDice = attackerAllies >= 1 ? 1 : 0;  // 2+ combatants on attacker side
+  const extraDefDice = defenderAllies >= 1 ? 1 : 0;  // 2+ combatants on defender side
 
   const { attackRoll, defenseRoll, hit, margin } =
     Entity.resolveCombat(actor, target, phaseBonus, 0, fortBonus, extraAtkDice, extraDefDice);
@@ -378,8 +378,8 @@ export function executeBattle(state, actor, target) {
   const phaseNote  = phaseBonus > 0
     ? ` (${state.phase === Phase.DAY ? '☀ day bonus' : '🌙 night bonus'})`
     : '';
-  const gangNote    = attackerAllies >= 3 ? ' [gang-up +d6]' : '';
-  const allyDefNote = defenderAllies > 0  ? ' [allies +d6]'  : '';
+  const gangNote    = attackerAllies >= 1 ? ' [gang-up +d3]' : '';
+  const allyDefNote = defenderAllies >= 1 ? ' [allies +d3]'  : '';
 
   log.push(
     `${actor.displayName} attacks ${target.displayName}! ` +
