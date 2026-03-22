@@ -350,14 +350,12 @@ export class UIController {
       this._awaitingTarget = null;
       this.renderer.highlightHexes = [];
       state.checkVictory();
-      if (actor.alive) { this._selectEntity(actor); }
+      if (actor.alive && !result.encounterLog?.length) { this._selectEntity(actor); }
       else this._clearSelection();
       this._updateSidebar();
       this.onRedraw();
       if (result.encounterLog?.length) {
         this._showResultDialog(result.encounterLog, () => {
-          // A unit just spawned on actor's hex — deselect so the player can pick it
-          this._clearSelection();
           this._updateSidebar();
           this.onRedraw();
           this._maybeShowNoActionsDialog();
