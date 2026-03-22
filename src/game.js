@@ -75,8 +75,8 @@ export class GameState {
     this.witchIsAI = witchIsAI;
     this.heroIsAI  = heroIsAI;
 
-    // Fog of war: hide witch movements and positions when witch is AI
-    this.fogOfWar = witchIsAI;
+    // Fog of war: hide opponent from the human player's view when any side is AI
+    this.fogOfWar = witchIsAI || heroIsAI;
 
     this.hero  = createHero(mapData.heroStart.col,  mapData.heroStart.row);
     this.witch = createWitch(mapData.witchStart.col, mapData.witchStart.row);

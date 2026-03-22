@@ -99,6 +99,22 @@ export function getVisibleEnemyHexes(state) {
   return revealed;
 }
 
+// Returns a Set of hexKeys where hero-side entities are visible to witch units.
+export function getVisibleHeroHexes(state) {
+  const revealed = new Set();
+  for (const we of state.entities) {
+    if (!we.alive || we.owner !== 'witch') continue;
+    const range = sightRange(state.phase, false);
+    for (const he of state.entities) {
+      if (!he.alive || he.owner !== 'hero') continue;
+      if (hexDistance(we.col, we.row, he.col, he.row) <= range) {
+        revealed.add(hexKey(he.col, he.row));
+      }
+    }
+  }
+  return revealed;
+}
+
 // ── Validation ─────────────────────────────────────────────────────────────
 
 export function getValidActions(state, actor) {

@@ -6,6 +6,7 @@ import { EntityType } from './entities.js';
 import { Phase } from './game.js';
 import {
   executeMove, executeExplore, executeBattle, executeSummon, executeUseItem,
+  getVisibleEnemyHexes, getVisibleHeroHexes,
 } from './actions.js';
 
 const THINK_DELAY_MS = 600;
@@ -295,6 +296,7 @@ export class WitchAI {
       }
 
       // 8. Move minions toward objectives; minions on a node hold position
+      const nightVisibleHeroHexes = getVisibleHeroHexes(state);
       for (const m of minions) {
         if (_isOnNode(state, m)) continue;
         const obj = _bestWitchObjective(state, m);
@@ -307,7 +309,10 @@ export class WitchAI {
             return true;
           }
         }
-        const heroUnits = state.entities.filter(e => e.alive && e.owner === 'hero');
+        // Only pursue visible hero units
+        const heroUnits = state.entities.filter(
+          e => e.alive && e.owner === 'hero' && nightVisibleHeroHexes.has(hexKey(e.col, e.row))
+        );
         if (heroUnits.length) {
           heroUnits.sort((a, b) =>
             hexDistance(m.col, m.row, a.col, a.row) -
@@ -323,13 +328,15 @@ export class WitchAI {
         }
       }
 
-      // 9. Hunt the hero
-      const step = stepToward(state, witch, state.hero);
-      if (step) {
-        const result = executeMove(state, witch, step.col, step.row);
-        logResult(state, result);
-        state.spendAction(result.cost);
-        return true;
+      // 9. Hunt the hero — only if visible
+      if (nightVisibleHeroHexes.has(hexKey(state.hero.col, state.hero.row))) {
+        const step = stepToward(state, witch, state.hero);
+        if (step) {
+          const result = executeMove(state, witch, step.col, step.row);
+          logResult(state, result);
+          state.spendAction(result.cost);
+          return true;
+        }
       }
 
       return false;
@@ -540,7 +547,7 @@ export class HeroAI {
     const actorSnap  = _snapEntity(actor);
     const targetSnap = _snapEntity(target);
     const result = executeBattle(this.state, actor, target);
-    for (const msg of result.log) this.state.addLog(msg);
+    logResult(this.state, result);
     this.state.spendAction(result.cost);
     if (this.onBattleResult) {
       await this.onBattleResult(actorSnap, targetSnap, result);
@@ -594,7 +601,7 @@ export class HeroAI {
             const step = stepToward(state, s, undefended[0]);
             if (step) {
               const result = executeMove(state, s, step.col, step.row);
-              for (const msg of result.log) state.addLog(msg);
+              logResult(state, result);
               state.spendAction(result.cost);
               return true;
             }
@@ -610,7 +617,7 @@ export class HeroAI {
           const step = stepToward(state, hero, urgentNode);
           if (step) {
             const result = executeMove(state, hero, step.col, step.row);
-            for (const msg of result.log) state.addLog(msg);
+            logResult(state, result);
             state.spendAction(result.cost);
             return true;
           }
@@ -624,7 +631,7 @@ export class HeroAI {
           const step = stepToward(state, hero, shelter);
           if (step) {
             const result = executeMove(state, hero, step.col, step.row);
-            for (const msg of result.log) state.addLog(msg);
+            logResult(state, result);
             state.spendAction(result.cost);
             return true;
           }
@@ -640,7 +647,7 @@ export class HeroAI {
             const step = stepToward(state, s, shelter);
             if (step && !state.entities.some(e => e.alive && e.owner === 'witch' && e.col === step.col && e.row === step.row)) {
               const result = executeMove(state, s, step.col, step.row);
-              for (const msg of result.log) state.addLog(msg);
+              logResult(state, result);
               state.spendAction(result.cost);
               return true;
             }
@@ -652,7 +659,7 @@ export class HeroAI {
       const heroTileN = state.tiles.get(hexKey(hero.col, hero.row));
       if (heroTileN && heroTileN.type === TileType.BUILDING && !heroTileN.explored) {
         const result = executeExplore(state, hero);
-        for (const msg of result.log) state.addLog(msg);
+        logResult(state, result);
         state.spendAction(result.cost);
         return result.success;
       }
@@ -713,7 +720,7 @@ export class HeroAI {
           const step = stepToward(state, s, undefended[0]);
           if (step) {
             const result = executeMove(state, s, step.col, step.row);
-            for (const msg of result.log) state.addLog(msg);
+            logResult(state, result);
             state.spendAction(result.cost);
             return true;
           }
@@ -736,7 +743,7 @@ export class HeroAI {
         const step = stepToward(state, hero, urgentNode);
         if (step) {
           const result = executeMove(state, hero, step.col, step.row);
-          for (const msg of result.log) state.addLog(msg);
+          logResult(state, result);
           state.spendAction(result.cost);
           return true;
         }
@@ -749,7 +756,7 @@ export class HeroAI {
           const step = stepToward(state, s, ct);
           if (step) {
             const result = executeMove(state, s, step.col, step.row);
-            for (const msg of result.log) state.addLog(msg);
+            logResult(state, result);
             state.spendAction(result.cost);
             return true;
           }
@@ -763,7 +770,7 @@ export class HeroAI {
       const step = stepToward(state, hero, nodeTarget);
       if (step) {
         const result = executeMove(state, hero, step.col, step.row);
-        for (const msg of result.log) state.addLog(msg);
+        logResult(state, result);
         state.spendAction(result.cost);
         return true;
       }
@@ -777,7 +784,7 @@ export class HeroAI {
         const step = stepToward(state, s, sNode);
         if (step) {
           const result = executeMove(state, s, step.col, step.row);
-          for (const msg of result.log) state.addLog(msg);
+          logResult(state, result);
           state.spendAction(result.cost);
           return true;
         }
@@ -788,7 +795,7 @@ export class HeroAI {
     const heroTile = state.tiles.get(hexKey(hero.col, hero.row));
     if (heroTile && heroTile.type === TileType.BUILDING && !heroTile.explored) {
       const result = executeExplore(state, hero);
-      for (const msg of result.log) state.addLog(msg);
+      logResult(state, result);
       state.spendAction(result.cost);
       return result.success;
     }
@@ -800,20 +807,23 @@ export class HeroAI {
         const step = stepToward(state, hero, unxBuilding);
         if (step) {
           const result = executeMove(state, hero, step.col, step.row);
-          for (const msg of result.log) state.addLog(msg);
+          logResult(state, result);
           state.spendAction(result.cost);
           return true;
         }
       }
     }
 
-    // 11. Hunt the witch
-    const step = stepToward(state, hero, state.witch);
-    if (step) {
-      const result = executeMove(state, hero, step.col, step.row);
-      for (const msg of result.log) state.addLog(msg);
-      state.spendAction(result.cost);
-      return true;
+    // 11. Hunt the witch — only if visible
+    const visibleWitchHexes = getVisibleEnemyHexes(state);
+    if (visibleWitchHexes.has(hexKey(state.witch.col, state.witch.row))) {
+      const step = stepToward(state, hero, state.witch);
+      if (step) {
+        const result = executeMove(state, hero, step.col, step.row);
+        logResult(state, result);
+        state.spendAction(result.cost);
+        return true;
+      }
     }
 
     return false;

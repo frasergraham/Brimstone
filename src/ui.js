@@ -5,7 +5,7 @@ import { EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
 import { Phase, Player, PHASE_ICON } from './game.js';
 import { PAD_X, PAD_Y } from './renderer.js';
 import {
-  ActionType, getValidActions, getVisibleEnemyHexes,
+  ActionType, getValidActions, getVisibleEnemyHexes, getVisibleHeroHexes,
   executeMove, executeExplore, executeBattle,
   executeFortify, executeSummon, executeUseItem, executeUseAbility,
 } from './actions.js';
@@ -1301,10 +1301,17 @@ function _summonLabel(witchInv) {
 
 function _visibleUnitsAt(state, col, row) {
   if (!state.fogOfWar) return state.entities.filter(e => e.alive && e.col === col && e.row === row);
-  const revealed = getVisibleEnemyHexes(state);
+  const humanIsHero  = state.witchIsAI && !state.heroIsAI;
+  const humanIsWitch = state.heroIsAI  && !state.witchIsAI;
+  const revealed = humanIsHero  ? getVisibleEnemyHexes(state)
+                 : humanIsWitch ? getVisibleHeroHexes(state)
+                 : null;
   return state.entities.filter(e => {
     if (!e.alive || e.col !== col || e.row !== row) return false;
-    if (e.owner === 'witch') return revealed.has(hexKey(col, row));
+    if (revealed) {
+      const hiddenOwner = humanIsHero ? 'witch' : 'hero';
+      if (e.owner === hiddenOwner) return revealed.has(hexKey(col, row));
+    }
     return true;
   });
 }

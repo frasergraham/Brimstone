@@ -8,7 +8,7 @@ import {
   TileType, TILE_COLOR, BUILDING_COLOR, BUILDING_LABEL, BUILDING_ICON,
 } from './tiles.js';
 import { ENTITY_COLOR, EntityType, SurvivorAbility } from './entities.js';
-import { getVisibleEnemyHexes, sightRange } from './actions.js';
+import { getVisibleEnemyHexes, getVisibleHeroHexes, sightRange } from './actions.js';
 
 export const PAD_X = 40;
 export const PAD_Y = 30;
@@ -149,13 +149,19 @@ export class Renderer {
     // River connection ribbon
     this._drawRiverLayer();
 
-    // Visibility: compute once for fog layer + entity pass + outlines
-    const revealedHexes = state.fogOfWar ? getVisibleEnemyHexes(state) : null;
-
-    // Fog of war: grey overlay on all hexes outside hero vision
+    // Visibility: compute once for fog layer + entity pass + outlines.
+    // Fog is shown from the human player's perspective only (not AI vs AI).
+    const humanIsHero  = state.witchIsAI && !state.heroIsAI;
+    const humanIsWitch = state.heroIsAI  && !state.witchIsAI;
+    let revealedHexes = null;
     if (state.fogOfWar) {
-      this._drawFogLayer(revealedHexes);
+      if (humanIsHero)  revealedHexes = getVisibleEnemyHexes(state); // hero sees witch
+      if (humanIsWitch) revealedHexes = getVisibleHeroHexes(state);  // witch sees hero
     }
+
+    // Fog of war: grey overlay on all hexes outside the human player's vision
+    if (humanIsHero)  this._drawFogLayer('hero');
+    if (humanIsWitch) this._drawFogLayer('witch');
 
     // Objective glows and symbols always drawn on top of fog — always visible
     for (const obj of state.witchObjectives) {
@@ -185,9 +191,9 @@ export class Renderer {
     for (const entity of state.entities) {
       if (!entity.alive) continue;
 
-      if (state.fogOfWar && entity.owner === 'witch') {
-        const k = hexKey(entity.col, entity.row);
-        if (!revealedHexes || !revealedHexes.has(k)) continue;
+      if (revealedHexes !== null) {
+        const hiddenOwner = humanIsHero ? 'witch' : 'hero';
+        if (entity.owner === hiddenOwner && !revealedHexes.has(hexKey(entity.col, entity.row))) continue;
       }
 
       const key = hexKey(entity.col, entity.row);
@@ -195,8 +201,9 @@ export class Renderer {
 
       const stack = state.entities.filter(e => {
         if (!e.alive || e.col !== entity.col || e.row !== entity.row) return false;
-        if (state.fogOfWar && e.owner === 'witch') {
-          return revealedHexes && revealedHexes.has(hexKey(e.col, e.row));
+        if (revealedHexes !== null) {
+          const hiddenOwner = humanIsHero ? 'witch' : 'hero';
+          if (e.owner === hiddenOwner) return revealedHexes.has(hexKey(e.col, e.row));
         }
         return true;
       });
@@ -342,18 +349,17 @@ export class Renderer {
     }
   }
 
-  // Fog of war: draw a dark grey overlay on every hex NOT within any hero unit's
-  // sight range. Visible hexes remain unobscured. The boundary gets a soft
-  // transitional opacity so the edge isn't a harsh cut.
-  _drawFogLayer(revealedEnemyHexes) {
+  // Fog of war: draw a dark grey overlay on every hex NOT within the observer's
+  // sight range. observerOwner is 'hero' or 'witch'.
+  _drawFogLayer(observerOwner) {
     const ctx   = this.ctx;
     const state = this.state;
     const hs    = this.hexSize;
 
-    // Build the visible hex set (hero sight ranges)
+    // Build the visible hex set from observerOwner's units
     const visibleSet = new Set();
     for (const e of state.entities) {
-      if (!e.alive || e.owner !== 'hero') continue;
+      if (!e.alive || e.owner !== observerOwner) continue;
       const range = sightRange(state.phase, e.ability === SurvivorAbility.SCOUT);
       for (let row = 0; row < MAP_ROWS; row++) {
         for (let col = 0; col < MAP_COLS; col++) {
@@ -395,15 +401,19 @@ export class Renderer {
     const heroHexes  = new Set();
     const witchHexes = new Set();
 
+    const humanIsHero  = state.witchIsAI && !state.heroIsAI;
+    const humanIsWitch = state.heroIsAI  && !state.witchIsAI;
+
     for (const e of state.entities) {
       if (!e.alive) continue;
       if (e.owner === 'hero') {
+        // Hide hero outlines when human is playing witch and hero is in fog
+        if (humanIsWitch && revealedHexes && !revealedHexes.has(hexKey(e.col, e.row))) continue;
         heroHexes.add(hexKey(e.col, e.row));
       } else if (e.owner === 'witch') {
-        // Only show witch outlines for revealed hexes in fog-of-war mode
-        if (!state.fogOfWar || (revealedHexes && revealedHexes.has(hexKey(e.col, e.row)))) {
-          witchHexes.add(hexKey(e.col, e.row));
-        }
+        // Hide witch outlines when human is playing hero and witch is in fog
+        if (humanIsHero && revealedHexes && !revealedHexes.has(hexKey(e.col, e.row))) continue;
+        witchHexes.add(hexKey(e.col, e.row));
       }
     }
 
