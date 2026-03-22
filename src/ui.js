@@ -536,6 +536,9 @@ export class UIController {
     // Show a no-op message if there's genuinely nothing to do
     if (!html) html = `<div class="popup-unit-name">No actions available</div>`;
 
+    // Tile info always available — lets user inspect the current hex
+    html += btn('🗺 Tile Info', 'tile-info', '', `data-action="tile_info"`);
+
     popup.innerHTML = html;
     _attachPopupListeners(popup, this);
     _positionPopup(popup, this);
@@ -671,6 +674,13 @@ export class UIController {
       if (unit) this._selectEntity(unit);
       this._updateSidebar();
       this.onRedraw();
+      return;
+    }
+
+    if (action === 'tile_info') {
+      _hideActionPopup();
+      this._popupVisible = false;
+      if (entity) this._showTileDetail({ col: entity.col, row: entity.row });
       return;
     }
 
