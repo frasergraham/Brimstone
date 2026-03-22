@@ -24,14 +24,6 @@ const BUILDING_TYPES = [
 // Flavor labels for the three witch power nodes
 const WITCH_OBJECTIVE_LABELS = ['Ancient Altar', 'Dark Grove', 'Cursed Crossroads'];
 
-// River meanders roughly down the left-center of the map
-const RIVER_PATH = [
-  {col:4,row:0},{col:4,row:1},{col:4,row:2},
-  {col:3,row:3},{col:3,row:4},{col:4,row:5},
-  {col:4,row:6},{col:4,row:7},{col:5,row:8},
-  {col:5,row:9},{col:5,row:10},
-];
-
 // Forest seed positions; clusters grown from each
 const FOREST_SEEDS = [
   {col:0,row:0},{col:1,row:1},{col:11,row:1},{col:12,row:0},
@@ -114,13 +106,12 @@ function _pickSpread(rand, tiles, count, minDist, forbiddenKeys = new Set()) {
   return placed;
 }
 
-// Corner zones: [topLeft, topRight, bottomLeft, bottomRight]
-// River runs ~col 3-5, so left corners use cols 1-2 to stay clear of it
+// Corner zones — wide enough to stay clear of the river regardless of where it runs
 const CORNER_ZONES = [
-  { minCol: 1, maxCol: 2, minRow: 1, maxRow: 3 },              // top-left
-  { minCol: MAP_COLS - 4, maxCol: MAP_COLS - 2, minRow: 1, maxRow: 3 },  // top-right
-  { minCol: 1, maxCol: 2, minRow: MAP_ROWS - 4, maxRow: MAP_ROWS - 2 }, // bottom-left
-  { minCol: MAP_COLS - 4, maxCol: MAP_COLS - 2, minRow: MAP_ROWS - 4, maxRow: MAP_ROWS - 2 }, // bottom-right
+  { minCol: 0, maxCol: 2,          minRow: 0, maxRow: 3 },               // top-left
+  { minCol: MAP_COLS - 3, maxCol: MAP_COLS - 1, minRow: 0, maxRow: 3 },  // top-right
+  { minCol: 0, maxCol: 2,          minRow: MAP_ROWS - 4, maxRow: MAP_ROWS - 1 }, // bottom-left
+  { minCol: MAP_COLS - 3, maxCol: MAP_COLS - 1, minRow: MAP_ROWS - 4, maxRow: MAP_ROWS - 1 }, // bottom-right
 ];
 
 // Place INN and GRAVEYARD in opposite corners (TL+BR or TR+BL, randomly assigned).
@@ -150,32 +141,101 @@ function _pickCornerBuildings(rand, tiles) {
   return result;
 }
 
-// Randomly scatter buildings with a minimum separation heuristic.
-function _randomBuildingPlacements(rand, tiles, reservedKeys = new Set()) {
-  const MIN_DIST = 2; // minimum hexes between any two buildings
+// Clustered building placement: buildings tend to group into hamlets of 2–5.
+// CLUSTER_CHANCE controls how often a new building tries to settle near an
+// existing one; MIN_CLUSTER_DIST prevents adjacent stacking within a cluster;
+// MIN_SPREAD_DIST ensures isolated buildings aren't too close to anything.
+function _clusteredBuildingPlacements(rand, tiles, reservedKeys = new Set()) {
+  const CLUSTER_CHANCE    = 0.65; // probability of trying to cluster near existing
+  const CLUSTER_RADIUS    = 3;    // max hexes away to consider "same cluster"
+  const MIN_CLUSTER_DIST  = 2;    // min separation within a cluster
+  const MIN_SPREAD_DIST   = 4;    // min separation for isolated placement
+
   const placements = [];
   const usedKeys = new Set(reservedKeys);
 
-  for (const building of BUILDING_TYPES) {
-    const candidates = [];
+  const grassCandidates = () => {
+    const out = [];
     for (const [k, t] of tiles) {
       if (t.type !== TileType.GRASS) continue;
       if (usedKeys.has(k)) continue;
       if (t.col < 1 || t.col > MAP_COLS - 2 || t.row < 1 || t.row > MAP_ROWS - 2) continue;
-      candidates.push({ col: t.col, row: t.row });
+      out.push({ col: t.col, row: t.row });
     }
-    _shuffle(candidates, rand);
+    return _shuffle(out, rand);
+  };
 
-    for (const c of candidates) {
-      const tooClose = placements.some(p => hexDistance(p.col, p.row, c.col, c.row) < MIN_DIST);
-      if (!tooClose) {
-        placements.push({ col: c.col, row: c.row, building });
-        usedKeys.add(hexKey(c.col, c.row));
-        break;
+  for (const building of BUILDING_TYPES) {
+    const candidates = grassCandidates();
+
+    let placed = false;
+
+    // Try to cluster near an existing building
+    if (placements.length > 0 && rand() < CLUSTER_CHANCE) {
+      const near = candidates.filter(c =>
+        placements.some(p => hexDistance(p.col, p.row, c.col, c.row) <= CLUSTER_RADIUS) &&
+        !placements.some(p => hexDistance(p.col, p.row, c.col, c.row) < MIN_CLUSTER_DIST)
+      );
+      if (near.length > 0) {
+        placements.push({ col: near[0].col, row: near[0].row, building });
+        usedKeys.add(hexKey(near[0].col, near[0].row));
+        placed = true;
+      }
+    }
+
+    // Fall back to spread placement
+    if (!placed) {
+      for (const c of candidates) {
+        if (!placements.some(p => hexDistance(p.col, p.row, c.col, c.row) < MIN_SPREAD_DIST)) {
+          placements.push({ col: c.col, row: c.row, building });
+          usedKeys.add(hexKey(c.col, c.row));
+          break;
+        }
       }
     }
   }
   return placements;
+}
+
+// Generate a meandering river path from the top row to the bottom row.
+// Stays contiguous by following valid hex adjacency at each step.
+// Prefers moving downward (65% chance) over sideways to ensure it reaches the bottom.
+function _generateRiver(rand) {
+  const path = [];
+  const used = new Set();
+
+  const startCol = 3 + Math.floor(rand() * 7); // cols 3–9
+  let cur = { col: startCol, row: 0 };
+  path.push(cur);
+  used.add(hexKey(cur.col, cur.row));
+
+  while (cur.row < MAP_ROWS - 1) {
+    const nbrs = getNeighbors(cur.col, cur.row).filter(n =>
+      n.col >= 2 && n.col <= MAP_COLS - 3 && !used.has(hexKey(n.col, n.row))
+    );
+
+    const downward  = nbrs.filter(n => n.row > cur.row);
+    const sideways  = nbrs.filter(n => n.row === cur.row);
+
+    let next;
+    if (downward.length > 0 && (sideways.length === 0 || rand() < 0.65)) {
+      next = downward[Math.floor(rand() * downward.length)];
+    } else if (sideways.length > 0) {
+      next = sideways[Math.floor(rand() * sideways.length)];
+    } else {
+      // No valid constrained move — step straight down ignoring col bounds
+      const anyDown = getNeighbors(cur.col, cur.row).filter(n => n.row > cur.row && !used.has(hexKey(n.col, n.row)));
+      next = anyDown[0] || { col: cur.col, row: cur.row + 1 };
+    }
+
+    cur = next;
+    if (!used.has(hexKey(cur.col, cur.row))) {
+      path.push(cur);
+      used.add(hexKey(cur.col, cur.row));
+    }
+  }
+
+  return path;
 }
 
 export function generateMap(seed = Date.now()) {
@@ -189,8 +249,8 @@ export function generateMap(seed = Date.now()) {
     }
   }
 
-  // 2. Carve river
-  for (const { col, row } of RIVER_PATH) {
+  // 2. Carve meandering river
+  for (const { col, row } of _generateRiver(rand)) {
     const t = tiles.get(hexKey(col, row));
     if (t) t.type = TileType.RIVER;
   }
@@ -198,13 +258,13 @@ export function generateMap(seed = Date.now()) {
   // 3. Place INN and GRAVEYARD in opposite corners, then scatter remaining buildings
   const cornerPlacements   = _pickCornerBuildings(rand, tiles);
   const cornerKeys         = new Set(cornerPlacements.map(b => hexKey(b.col, b.row)));
-  const buildingPlacements = [...cornerPlacements, ..._randomBuildingPlacements(rand, tiles, cornerKeys)];
+  const buildingPlacements = [...cornerPlacements, ..._clusteredBuildingPlacements(rand, tiles, cornerKeys)];
   for (const { col, row, building } of buildingPlacements) {
     const t = tiles.get(hexKey(col, row));
     if (!t) continue;
     t.type = TileType.BUILDING;
     t.building = building;
-    // No tiles are pre-explored — player must discover everything
+    t.fortifyLevel = 1; // all buildings start with minimal fortification
   }
 
   // 4. Build roads between buildings and Town Hall (hub-and-spoke)
@@ -217,7 +277,7 @@ export function generateMap(seed = Date.now()) {
     for (const { col, row } of path) {
       const t = tiles.get(hexKey(col, row));
       if (!t) continue;
-      if (t.type === TileType.GRASS)  t.type = TileType.ROAD;
+      if (t.type === TileType.GRASS || t.type === TileType.DIRT) t.type = TileType.ROAD;
       else if (t.type === TileType.RIVER && bridgesPlaced < 2) {
         t.type = TileType.BRIDGE;
         bridgesPlaced++;
@@ -244,6 +304,27 @@ export function generateMap(seed = Date.now()) {
           }
         }
       }
+    }
+  }
+
+  // 5.5 Scatter small dirt/gravel patches for visual texture
+  for (let i = 0; i < 10; i++) {
+    const grassTiles = [];
+    for (const [, t] of tiles) {
+      if (t.type === TileType.GRASS && t.col >= 1 && t.col <= MAP_COLS - 2) grassTiles.push(t);
+    }
+    _shuffle(grassTiles, rand);
+    if (grassTiles.length === 0) break;
+    const seedTile = grassTiles[0];
+    seedTile.type = TileType.DIRT;
+    const spreadNeighbors = _shuffle(
+      getNeighbors(seedTile.col, seedTile.row)
+        .map(n => tiles.get(hexKey(n.col, n.row)))
+        .filter(t => t && t.type === TileType.GRASS),
+      rand
+    );
+    for (const n of spreadNeighbors.slice(0, Math.floor(rand() * 3))) {
+      n.type = TileType.DIRT;
     }
   }
 

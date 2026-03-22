@@ -1116,7 +1116,8 @@ export class UIController {
     const TILE_COLOR_MAP = {
       [TileType.GRASS]:    '#3a5430',
       [TileType.FOREST]:   '#1b2e1a',
-      [TileType.ROAD]:     '#5e4e34',
+      [TileType.DIRT]:     '#7a6a48',
+      [TileType.ROAD]:     '#6b5a3e',
       [TileType.RIVER]:    '#1a3d5c',
       [TileType.BRIDGE]:   '#1a3d5c',
       [TileType.BUILDING]: '#6e6e6e',
@@ -1124,6 +1125,7 @@ export class UIController {
     const TERRAIN_ICON = {
       [TileType.GRASS]:  '🌿',
       [TileType.FOREST]: '🌲',
+      [TileType.DIRT]:   '🪨',
       [TileType.ROAD]:   '🛤',
       [TileType.RIVER]:  '💧',
       [TileType.BRIDGE]: '🌉',

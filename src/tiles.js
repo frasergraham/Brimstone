@@ -4,6 +4,7 @@ import { LOOT_CONFIG } from './loot.config.js';
 export const TileType = Object.freeze({
   GRASS:    'grass',
   FOREST:   'forest',
+  DIRT:     'dirt',     // bare earth / gravel patches
   ROAD:     'road',
   RIVER:    'river',
   BRIDGE:   'bridge',   // road crossing over a river
@@ -66,6 +67,7 @@ export const WEAPON_LABEL = {
 export const TILE_PASSABLE = {
   [TileType.GRASS]:    true,
   [TileType.FOREST]:   true,
+  [TileType.DIRT]:     true,
   [TileType.ROAD]:     true,
   [TileType.RIVER]:    false,
   [TileType.BRIDGE]:   true,   // passable crossing
@@ -76,8 +78,9 @@ export const TILE_PASSABLE = {
 export const TILE_COLOR = {
   [TileType.GRASS]:    '#3a5430',
   [TileType.FOREST]:   '#1b2e1a',
-  [TileType.ROAD]:     '#5e4e34',
-  [TileType.RIVER]:    '#1a3d5c',
+  [TileType.DIRT]:     '#7a6a48',   // bare earth / gravel
+  [TileType.ROAD]:     '#6b5a3e',   // road strip color (base hex drawn as grass)
+  [TileType.RIVER]:    '#1a3d5c',   // water ribbon color (base hex drawn as grass)
   [TileType.BRIDGE]:   '#1a3d5c',   // water base; road deck drawn on top
   [TileType.BUILDING]: '#4a3c2c',
 };

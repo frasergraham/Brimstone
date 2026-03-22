@@ -146,7 +146,10 @@ export class Renderer {
       }
     }
 
-    // River connection ribbon
+    // Road strips (directional paths on top of grass backgrounds)
+    this._drawRoadLayer();
+
+    // River flow ribbons (bezier curves on top of grass backgrounds)
     this._drawRiverLayer();
 
     // Visibility: compute once for fog layer + entity pass + outlines.
@@ -216,6 +219,9 @@ export class Renderer {
     this._drawFlashes();
 
     ctx.restore(); // end zoom/pan transform
+
+    // Decorative map border (outside zoom/pan transform — always in canvas space)
+    this._drawMapBorder();
   }
 
   _drawFlashes() {
@@ -259,9 +265,13 @@ export class Renderer {
     const { x, y } = this._toCanvas(col, row);
     const corners   = hexCorners(x, y, hs - 1);
 
+    // Road and river tiles use a grass background — the actual road strips and
+    // water ribbons are drawn in dedicated layers on top.
     const color = tile.type === TileType.BUILDING
       ? BUILDING_COLOR
-      : (TILE_COLOR[tile.type] || TILE_COLOR[TileType.GRASS]);
+      : (tile.type === TileType.ROAD || tile.type === TileType.RIVER)
+        ? TILE_COLOR[TileType.GRASS]
+        : (TILE_COLOR[tile.type] || TILE_COLOR[TileType.GRASS]);
 
     ctx.beginPath();
     ctx.moveTo(corners[0].x, corners[0].y);
@@ -294,47 +304,28 @@ export class Renderer {
       return;
     }
 
-    // ── Fortification outline (thickness scales with fortifyLevel) ────────
+    // ── Fortification outline — grey, thickness scales with fortifyLevel ──
     if (tile.fortifyLevel > 0) {
-      const isMetal = tile.fortifyLevel >= 3;
-      // Outer glow (thick, semi-transparent)
       ctx.beginPath();
       ctx.moveTo(corners[0].x, corners[0].y);
       for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
       ctx.closePath();
-      ctx.strokeStyle = isMetal
-        ? `rgba(0,229,255,${0.25 + tile.fortifyLevel * 0.08})`
-        : `rgba(245,200,66,${0.2 + tile.fortifyLevel * 0.08})`;
-      ctx.lineWidth = 2 + tile.fortifyLevel * 2.5; // level 1: 4.5, level 4: 12
-      ctx.stroke();
-      // Inner crisp line
-      ctx.beginPath();
-      const inner = hexCorners(x, y, hs - 2 - tile.fortifyLevel);
-      ctx.moveTo(inner[0].x, inner[0].y);
-      for (let i = 1; i < 6; i++) ctx.lineTo(inner[i].x, inner[i].y);
-      ctx.closePath();
-      ctx.strokeStyle = isMetal ? `rgba(120,240,255,0.9)` : `rgba(255,215,80,0.9)`;
-      ctx.lineWidth   = 1.5;
+      const alpha = Math.min(0.9, 0.4 + tile.fortifyLevel * 0.12);
+      ctx.strokeStyle = `rgba(190,190,190,${alpha})`;
+      ctx.lineWidth   = tile.fortifyLevel * 2; // level 1: 2px, level 4: 8px
       ctx.stroke();
     }
 
-    // ── Explored dot (non-building tiles) ────────────────────────────────
-    if (tile.explored && tile.type !== TileType.BUILDING) {
+    // ── Explored dot (all tile types, including buildings) ────────────────
+    if (tile.explored) {
       ctx.fillStyle = 'rgba(245,200,66,0.70)';
       ctx.beginPath();
       ctx.arc(x + hs * 0.42, y + hs * 0.48, Math.max(2, hs * 0.11), 0, Math.PI * 2);
       ctx.fill();
     }
 
-    // ── Building: icon + name + border ───────────────────────────────────
+    // ── Building: icon + name ─────────────────────────────────────────────
     if (tile.type === TileType.BUILDING && tile.building) {
-      ctx.beginPath();
-      ctx.moveTo(corners[0].x, corners[0].y);
-      for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
-      ctx.closePath();
-      ctx.strokeStyle = tile.explored ? 'rgba(245,200,66,0.80)' : 'rgba(245,200,66,0.40)';
-      ctx.lineWidth   = tile.explored ? 2 : 1.5;
-      ctx.stroke();
 
       ctx.font         = `${Math.floor(hs * 0.55)}px serif`;
       ctx.textAlign    = 'center';
@@ -378,17 +369,11 @@ export class Renderer {
         const { x, y } = this._toCanvas(col, row);
         const corners = hexCorners(x, y, hs);
 
-        // Hexes adjacent to the visibility edge get a lighter fog for a soft border
-        let isEdge = false;
-        for (const n of getNeighbors(col, row)) {
-          if (visibleSet.has(hexKey(n.col, n.row))) { isEdge = true; break; }
-        }
-
         ctx.beginPath();
         ctx.moveTo(corners[0].x, corners[0].y);
         for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
         ctx.closePath();
-        ctx.fillStyle = isEdge ? 'rgba(0,0,0,0.45)' : 'rgba(0,0,0,0.68)';
+        ctx.fillStyle = 'rgba(0,0,0,0.70)';
         ctx.fill();
       }
     }
@@ -427,15 +412,20 @@ export class Renderer {
     }
   }
 
+  // Draw the river as smooth bezier flows through each hex — entry edge to exit edge.
+  // Bridge tiles are treated as river connectors (water flows beneath the bridge deck).
   _drawRiverLayer() {
     const ctx   = this.ctx;
     const tiles = this.state.tiles;
     const hs    = this.hexSize;
+    const apothem = hs * SQRT3 / 2; // center → edge-midpoint distance
+
+    const isWater = t => t && (t.type === TileType.RIVER || t.type === TileType.BRIDGE);
 
     ctx.strokeStyle = TILE_COLOR[TileType.RIVER];
-    ctx.lineWidth   = hs * 0.65;
+    ctx.lineWidth   = hs * 0.52;
     ctx.lineCap     = 'round';
-    ctx.beginPath();
+    ctx.lineJoin    = 'round';
 
     for (let row = 0; row < MAP_ROWS; row++) {
       for (let col = 0; col < MAP_COLS; col++) {
@@ -443,19 +433,145 @@ export class Renderer {
         if (!tile || tile.type !== TileType.RIVER) continue;
 
         const { x, y } = this._toCanvas(col, row);
-        for (const n of getNeighbors(col, row)) {
-          if (n.col < col || (n.col === col && n.row < row)) continue;
-          const nt = tiles.get(hexKey(n.col, n.row));
-          if (!nt || nt.type !== TileType.RIVER) continue;
+
+        // Edge midpoints for each river/bridge neighbor
+        const riverNbrs = getNeighbors(col, row).filter(n => isWater(tiles.get(hexKey(n.col, n.row))));
+        if (riverNbrs.length === 0) continue;
+
+        const edgeMids = riverNbrs.map(n => {
           const { x: nx, y: ny } = this._toCanvas(n.col, n.row);
+          const dx = nx - x, dy = ny - y;
+          const d  = Math.sqrt(dx * dx + dy * dy);
+          return { x: x + dx / d * apothem, y: y + dy / d * apothem };
+        });
+
+        ctx.beginPath();
+        if (riverNbrs.length >= 2) {
+          // Smooth bezier from entry edge → center → exit edge
+          ctx.moveTo(edgeMids[0].x, edgeMids[0].y);
+          ctx.quadraticCurveTo(x, y, edgeMids[1].x, edgeMids[1].y);
+          // If there's a third connection (junction) draw it as a spoke
+          for (let i = 2; i < edgeMids.length; i++) {
+            ctx.moveTo(x, y);
+            ctx.lineTo(edgeMids[i].x, edgeMids[i].y);
+          }
+        } else {
+          // River start/end — draw from center to the single edge
           ctx.moveTo(x, y);
-          ctx.lineTo(nx, ny);
+          ctx.lineTo(edgeMids[0].x, edgeMids[0].y);
+        }
+        ctx.stroke();
+      }
+    }
+
+    ctx.lineCap  = 'butt';
+    ctx.lineJoin = 'miter';
+  }
+
+  // Draw road tiles as directional earth-brown strips connecting to road/building neighbours,
+  // leaving the grass base visible and making paths look like they cut through terrain.
+  _drawRoadLayer() {
+    const ctx   = this.ctx;
+    const tiles = this.state.tiles;
+    const hs    = this.hexSize;
+    const apothem = hs * SQRT3 / 2;
+
+    const isRoadLike = t => t && (
+      t.type === TileType.ROAD || t.type === TileType.BRIDGE || t.type === TileType.BUILDING
+    );
+
+    ctx.strokeStyle = TILE_COLOR[TileType.ROAD];
+    ctx.lineWidth   = hs * 0.42;
+    ctx.lineCap     = 'round';
+
+    for (let row = 0; row < MAP_ROWS; row++) {
+      for (let col = 0; col < MAP_COLS; col++) {
+        const tile = tiles.get(hexKey(col, row));
+        if (!tile || tile.type !== TileType.ROAD) continue;
+
+        const { x, y } = this._toCanvas(col, row);
+        const roadNbrs  = getNeighbors(col, row).filter(n => isRoadLike(tiles.get(hexKey(n.col, n.row))));
+        if (roadNbrs.length === 0) continue;
+
+        const edgeMids = roadNbrs.map(n => {
+          const { x: nx, y: ny } = this._toCanvas(n.col, n.row);
+          const dx = nx - x, dy = ny - y;
+          const d  = Math.sqrt(dx * dx + dy * dy);
+          return { x: x + dx / d * apothem, y: y + dy / d * apothem };
+        });
+
+        if (roadNbrs.length === 2) {
+          // Straight or curved through-road — draw as one connected stroke
+          ctx.beginPath();
+          ctx.moveTo(edgeMids[0].x, edgeMids[0].y);
+          ctx.quadraticCurveTo(x, y, edgeMids[1].x, edgeMids[1].y);
+          ctx.stroke();
+        } else {
+          // T-junction, dead-end, or 4+ way — draw spokes from center
+          for (const em of edgeMids) {
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(em.x, em.y);
+            ctx.stroke();
+          }
+          // Small center fill to round off junction
+          ctx.beginPath();
+          ctx.arc(x, y, hs * 0.21, 0, Math.PI * 2);
+          ctx.fillStyle = TILE_COLOR[TileType.ROAD];
+          ctx.fill();
         }
       }
     }
 
-    ctx.stroke();
     ctx.lineCap = 'butt';
+  }
+
+  // Decorative border frame drawn in canvas coordinates (outside the zoom transform).
+  _drawMapBorder() {
+    const ctx = this.ctx;
+    const hs  = this.hexSize;
+    const z   = this.zoomLevel;
+    const px  = this._panX;
+    const py  = this._panY;
+
+    // Compute the map content bounding box in canvas space
+    const gridW = SQRT3 * hs * (MAP_COLS + 0.5);
+    const gridH = 1.5   * hs * MAP_ROWS + hs * 0.5;
+    const pad   = hs * 0.6;
+
+    const x0 = (PAD_X - pad) * z + px;
+    const y0 = (PAD_Y - pad) * z + py;
+    const bw  = (gridW + pad * 2) * z;
+    const bh  = (gridH + pad * 2) * z;
+
+    // Outer dark frame
+    ctx.strokeStyle = '#1a110a';
+    ctx.lineWidth   = 5 * z;
+    ctx.strokeRect(x0 - 4 * z, y0 - 4 * z, bw + 8 * z, bh + 8 * z);
+
+    // Aged wood inner frame
+    ctx.strokeStyle = '#5a3f20';
+    ctx.lineWidth   = 3 * z;
+    ctx.strokeRect(x0, y0, bw, bh);
+
+    // Thin inner highlight
+    ctx.strokeStyle = 'rgba(160,120,60,0.5)';
+    ctx.lineWidth   = 1.5 * z;
+    ctx.strokeRect(x0 + 4 * z, y0 + 4 * z, bw - 8 * z, bh - 8 * z);
+
+    // Corner rivets
+    const corners = [
+      [x0, y0], [x0 + bw, y0], [x0, y0 + bh], [x0 + bw, y0 + bh],
+    ];
+    ctx.fillStyle = '#7a5530';
+    for (const [cx, cy] of corners) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, 5 * z, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#2a1a08';
+      ctx.lineWidth   = 1 * z;
+      ctx.stroke();
+    }
   }
 
   _drawObjectiveGlow(col, row) {
