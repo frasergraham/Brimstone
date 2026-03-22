@@ -4,7 +4,6 @@ import { Renderer }          from './renderer.js';
 import { UIController }      from './ui.js';
 import { WitchAI, HeroAI }   from './ai.js';
 import { hexToPixel }        from './hex.js';
-import { PAD_X, PAD_Y }      from './renderer.js';
 
 let state, renderer, ui, witchAI, heroAI;
 let _autoplay = false;
@@ -44,8 +43,8 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
     if (!wrapper) return;
     const hero = state.hero;
     const { x, y } = hexToPixel(hero.col, hero.row, renderer.hexSize);
-    const cx = x + PAD_X;
-    const cy = y + PAD_Y;
+    const cx = x + renderer._padX;
+    const cy = y + renderer._padY;
     // Pan so hero is centred: translate(panX, panY) means content at cx appears at cx+panX
     renderer._panX = wrapper.clientWidth  / 2 - cx;
     renderer._panY = wrapper.clientHeight / 2 - cy;

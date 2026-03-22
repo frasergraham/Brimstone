@@ -10,6 +10,8 @@ import {
 import { ENTITY_COLOR, EntityType, SurvivorAbility } from './entities.js';
 import { getVisibleEnemyHexes, getVisibleHeroHexes, sightRange } from './actions.js';
 
+// PAD_X/PAD_Y are now computed dynamically in _resize() as this._padX / this._padY.
+// These constants are kept for backward-compat imports but should not be used internally.
 export const PAD_X = 40;
 export const PAD_Y = 30;
 const BG_COLOR = '#0d1117';
@@ -53,21 +55,24 @@ export class Renderer {
 
   _resize() {
     const wrapper = this.canvas.parentElement;
-    if (wrapper && wrapper.clientWidth > 0 && wrapper.clientHeight > 0) {
-      const availW = wrapper.clientWidth  - PAD_X * 2;
-      const availH = wrapper.clientHeight - PAD_Y * 2;
-      const sizeByW = availW  / (SQRT3 * (MAP_COLS + 0.5));
-      const sizeByH = availH  / (1.5 * MAP_ROWS + 0.5);
-      // Portrait: fill height so the map uses the full screen; user pans horizontally.
-      // Landscape / desktop: fit both dimensions so no overflow.
-      const portrait = wrapper.clientHeight > wrapper.clientWidth;
-      this.hexSize = Math.max(MIN_HEX_SIZE, Math.floor(portrait ? sizeByH : Math.min(sizeByW, sizeByH)));
-    }
+    const W = (wrapper && wrapper.clientWidth  > 0) ? wrapper.clientWidth  : this.canvas.width;
+    const H = (wrapper && wrapper.clientHeight > 0) ? wrapper.clientHeight : this.canvas.height;
 
-    const w = Math.ceil(SQRT3 * this.hexSize * (MAP_COLS + 0.5)) + PAD_X * 2;
-    const h = Math.ceil(1.5  * this.hexSize * MAP_ROWS + this.hexSize * 0.5) + PAD_Y * 2;
-    this.canvas.width  = w;
-    this.canvas.height = h;
+    // Compute hex size to fit grid within the full wrapper (no padding subtracted here —
+    // padding is derived from hexSize afterward and used to center the grid).
+    const sizeByW = W / (SQRT3 * (MAP_COLS + 0.5));
+    const sizeByH = H / (1.5 * MAP_ROWS + 0.5);
+    this.hexSize = Math.max(MIN_HEX_SIZE, Math.floor(Math.min(sizeByW, sizeByH)));
+
+    // Canvas fills the wrapper exactly so no gaps appear on any edge
+    this.canvas.width  = W;
+    this.canvas.height = H;
+
+    // Center the hex grid within the canvas
+    const hs = this.hexSize;
+    this._padX = Math.round((W - SQRT3 * hs * (MAP_COLS + 0.5)) / 2 + SQRT3 * hs * 0.5);
+    this._padY = Math.round((H - (1.5 * MAP_ROWS + 0.5) * hs) / 2 + hs);
+
     this._clampPan();
   }
 
@@ -77,14 +82,14 @@ export class Renderer {
 
   _toCanvas(col, row) {
     const { x, y } = hexToPixel(col, row, this.hexSize);
-    return { x: x + PAD_X, y: y + PAD_Y };
+    return { x: x + this._padX, y: y + this._padY };
   }
 
   // Convert canvas pixel coordinates back to hex grid coordinates (accounts for zoom/pan)
   canvasToHex(canvasX, canvasY) {
     const x = (canvasX - this._panX) / this.zoomLevel;
     const y = (canvasY - this._panY) / this.zoomLevel;
-    return _pixelToHex(x - PAD_X, y - PAD_Y, this.hexSize);
+    return _pixelToHex(x - this._padX, y - this._padY, this.hexSize);
   }
 
   // Return the canvas-pixel centre of a hex (for overlay positioning, accounts for zoom/pan)
@@ -608,8 +613,8 @@ export class Renderer {
     const gridH = 1.5   * hs * MAP_ROWS + hs * 0.5;
     const pad   = hs * 0.6;
 
-    const x0 = (PAD_X - pad) * z + px;
-    const y0 = (PAD_Y - pad) * z + py;
+    const x0 = (this._padX - pad) * z + px;
+    const y0 = (this._padY - pad) * z + py;
     const bw  = (gridW + pad * 2) * z;
     const bh  = (gridH + pad * 2) * z;
 
