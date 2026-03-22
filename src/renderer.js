@@ -522,7 +522,9 @@ export class Renderer {
             }
             ctx.stroke();
           }
-          ctx.lineWidth = hs * 0.42; // restore road width
+          // Restore road colour + width after the water bezier
+          ctx.strokeStyle = TILE_COLOR[TileType.ROAD];
+          ctx.lineWidth   = hs * 0.42;
         }
 
         // ── Road strip ────────────────────────────────────────────────────
@@ -564,9 +566,10 @@ export class Renderer {
           }
         }
 
-        // ── Bridge railings ────────────────────────────────────────────────
+        // ── Bridge railings (bezier curves matching the road curve) ───────
         if (tile.type === TileType.BRIDGE && roadNbrs.length >= 2) {
           const em0 = edgeMids[0], em1 = edgeMids[1];
+          // Perpendicular offset based on overall road direction
           const dx = em1.x - em0.x, dy = em1.y - em0.y;
           const len = Math.sqrt(dx * dx + dy * dy);
           const perpX = (-dy / len) * hs * 0.18;
@@ -575,8 +578,12 @@ export class Renderer {
           ctx.lineWidth   = Math.max(1, hs * 0.06);
           for (const sign of [-1, 1]) {
             ctx.beginPath();
+            // Offset start, control (hex centre), and end by the same perp vector
             ctx.moveTo(em0.x + perpX * sign, em0.y + perpY * sign);
-            ctx.lineTo(em1.x + perpX * sign, em1.y + perpY * sign);
+            ctx.quadraticCurveTo(
+              x   + perpX * sign, y   + perpY * sign,
+              em1.x + perpX * sign, em1.y + perpY * sign,
+            );
             ctx.stroke();
           }
           // Restore road lineWidth for subsequent tiles
