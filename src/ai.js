@@ -421,23 +421,75 @@ export class HeroAI {
   }
 
   async _chooseAction() {
-    const state  = this.state;
-    const hero   = state.hero;
-    const phase  = state.phase;
-    const isDay  = phase === Phase.DAY || phase === Phase.DAWN;
+    const state   = this.state;
+    const hero    = state.hero;
+    const phase   = state.phase;
     const isNight = phase === Phase.NIGHT || phase === Phase.DUSK;
 
     const survivors = state.entities.filter(
       e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR
     );
 
+    const heroOnNode = _isOnNode(state, hero);
+    const witchNodeCount = state.witchObjectives.filter(obj =>
+      state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
+    ).length;
+
     // ── NIGHT STRATEGY ─────────────────────────────────────────────────────
-    // Get all units into buildings. Only fight if cornered.
+    // Hold nodes; only shelter if not on one. Urgently contest if witch is about to win.
     if (isNight) {
       // 1. Heal if badly hurt
       if (await this._tryHeal(hero)) return true;
 
-      // 2. Hero seeks shelter
+      // 2. Fight any co-located witch unit (happens on nodes too)
+      const colocatedN = state.entities.find(
+        e => e.alive && e.owner === 'witch' && e.col === hero.col && e.row === hero.row
+      );
+      if (colocatedN) return this._executeBattleWithUI(hero, colocatedN);
+
+      // 3. Hold current node — the node heals +1 HP/turn and holding it matters for scoring.
+      //    Fight adjacent threats, then stand firm.
+      if (heroOnNode) {
+        const adjThreat = state.entities.find(
+          e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1
+        );
+        if (adjThreat) return this._executeBattleWithUI(hero, adjThreat);
+
+        // Use spare action to move a survivor toward an undefended node
+        const undefended = _undefendedNodes(state, hero);
+        for (const s of survivors) {
+          if (_isOnNode(state, s)) continue;
+          if (undefended.length) {
+            undefended.sort((a, b) =>
+              hexDistance(s.col, s.row, a.col, a.row) - hexDistance(s.col, s.row, b.col, b.row)
+            );
+            const step = stepToward(state, s, undefended[0]);
+            if (step) {
+              const result = executeMove(state, s, step.col, step.row);
+              for (const msg of result.log) state.addLog(msg);
+              state.spendAction(result.cost);
+              return true;
+            }
+          }
+        }
+        return false; // hold position
+      }
+
+      // 4. URGENT: witch holds 2+ nodes — race to contest the remaining one even at night
+      if (witchNodeCount >= 2) {
+        const urgentNode = _bestNodeForHero(state, hero);
+        if (urgentNode) {
+          const step = stepToward(state, hero, urgentNode);
+          if (step) {
+            const result = executeMove(state, hero, step.col, step.row);
+            for (const msg of result.log) state.addLog(msg);
+            state.spendAction(result.cost);
+            return true;
+          }
+        }
+      }
+
+      // 5. Hero seeks shelter
       if (!inBuilding(state, hero)) {
         const shelter = nearestBuilding(state, hero);
         if (shelter) {
@@ -451,8 +503,9 @@ export class HeroAI {
         }
       }
 
-      // 3. Survivors shelter too (survivors take night damage in the open)
+      // 6. Survivors: hold their nodes; otherwise shelter
       for (const s of survivors) {
+        if (_isOnNode(state, s)) continue; // hold position
         if (!inBuilding(state, s)) {
           const shelter = nearestBuilding(state, s);
           if (shelter) {
@@ -467,15 +520,9 @@ export class HeroAI {
         }
       }
 
-      // 4. Fight co-located enemies only if sheltered and forced to
-      const colocated = state.entities.find(
-        e => e.alive && e.owner === 'witch' && e.col === hero.col && e.row === hero.row
-      );
-      if (colocated) return this._executeBattleWithUI(hero, colocated);
-
-      // 5. Explore current building if sheltered and unexplored
-      const heroTile = state.tiles.get(hexKey(hero.col, hero.row));
-      if (heroTile && heroTile.type === TileType.BUILDING && !heroTile.explored) {
+      // 7. Explore current building if sheltered and unexplored
+      const heroTileN = state.tiles.get(hexKey(hero.col, hero.row));
+      if (heroTileN && heroTileN.type === TileType.BUILDING && !heroTileN.explored) {
         const result = executeExplore(state, hero);
         for (const msg of result.log) state.addLog(msg);
         state.spendAction(result.cost);
@@ -486,23 +533,24 @@ export class HeroAI {
     }
 
     // ── DAY STRATEGY ──────────────────────────────────────────────────────
-    // Aggressive exploration, survivor recruitment, node contesting, witch hunting
+    // Priority: heal → fight → HOLD NODE → urgent contest → contest nodes →
+    //           anchor survivors → explore → hunt witch
 
     // 1. Heal if injured
     if (await this._tryHeal(hero)) return true;
 
-    // 2. Fight co-located witch units (free attacks when co-located)
+    // 2. Fight co-located witch units
     const colocated = state.entities.find(
       e => e.alive && e.owner === 'witch' && e.col === hero.col && e.row === hero.row
     );
     if (colocated) return this._executeBattleWithUI(hero, colocated);
 
     // 3. Fight adjacent witch units — prioritise the witch herself
-    const adjWitchFirst = [
+    const adjWitch = [
       state.entities.find(e => e.alive && e.type === EntityType.WITCH && hexDistance(hero.col, hero.row, e.col, e.row) === 1),
       state.entities.find(e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1),
     ].find(Boolean);
-    if (adjWitchFirst) return this._executeBattleWithUI(hero, adjWitchFirst);
+    if (adjWitch) return this._executeBattleWithUI(hero, adjWitch);
 
     // 4. Survivors fight if they can
     for (const s of survivors) {
@@ -516,8 +564,65 @@ export class HeroAI {
       if (sa) return this._executeBattleWithUI(s, sa);
     }
 
-    // 5. Contest unclaimed power node (node victory is the primary win condition)
-    const nodeTarget = _unclaimedNodeForHero(state, hero);
+    // 5. HOLD NODE: hero is already on a node — defend it and anchor survivors to others.
+    //    Don't leave unless there is truly nothing useful to do here.
+    if (heroOnNode) {
+      // Fight adjacent threats to the node
+      const adjThreat = state.entities.find(
+        e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1
+      );
+      if (adjThreat) return this._executeBattleWithUI(hero, adjThreat);
+
+      // Send survivors toward undefended nodes while hero holds this one
+      const undefended = _undefendedNodes(state, hero);
+      for (const s of survivors) {
+        if (_isOnNode(state, s)) continue;
+        if (undefended.length) {
+          undefended.sort((a, b) =>
+            hexDistance(s.col, s.row, a.col, a.row) - hexDistance(s.col, s.row, b.col, b.row)
+          );
+          const step = stepToward(state, s, undefended[0]);
+          if (step) {
+            const result = executeMove(state, s, step.col, step.row);
+            for (const msg of result.log) state.addLog(msg);
+            state.spendAction(result.cost);
+            return true;
+          }
+        }
+      }
+      return false; // hold position — all actions beyond fighting are spent here
+    }
+
+    // 6. URGENT: witch holds 2+ nodes — drop everything and race to contest
+    if (witchNodeCount >= 2) {
+      const urgentNode = _bestNodeForHero(state, hero);
+      if (urgentNode) {
+        const step = stepToward(state, hero, urgentNode);
+        if (step) {
+          const result = executeMove(state, hero, step.col, step.row);
+          for (const msg of result.log) state.addLog(msg);
+          state.spendAction(result.cost);
+          return true;
+        }
+      }
+      // Also rush survivors
+      for (const s of survivors) {
+        if (_isOnNode(state, s)) continue;
+        const ct = _bestNodeForHero(state, s);
+        if (ct) {
+          const step = stepToward(state, s, ct);
+          if (step) {
+            const result = executeMove(state, s, step.col, step.row);
+            for (const msg of result.log) state.addLog(msg);
+            state.spendAction(result.cost);
+            return true;
+          }
+        }
+      }
+    }
+
+    // 7. Move toward the nearest unclaimed or witch-held node
+    const nodeTarget = _bestNodeForHero(state, hero);
     if (nodeTarget) {
       const step = stepToward(state, hero, nodeTarget);
       if (step) {
@@ -528,11 +633,12 @@ export class HeroAI {
       }
     }
 
-    // 6. Move survivors toward unclaimed nodes
+    // 8. Anchor survivors to undefended nodes
     for (const s of survivors) {
-      const sNodeTarget = _unclaimedNodeForHero(state, s);
-      if (sNodeTarget) {
-        const step = stepToward(state, s, sNodeTarget);
+      if (_isOnNode(state, s)) continue;
+      const sNode = _bestNodeForHero(state, s);
+      if (sNode) {
+        const step = stepToward(state, s, sNode);
         if (step) {
           const result = executeMove(state, s, step.col, step.row);
           for (const msg of result.log) state.addLog(msg);
@@ -542,7 +648,7 @@ export class HeroAI {
       }
     }
 
-    // 7. Explore current building for loot
+    // 9. Explore current building for loot
     const heroTile = state.tiles.get(hexKey(hero.col, hero.row));
     if (heroTile && heroTile.type === TileType.BUILDING && !heroTile.explored) {
       const result = executeExplore(state, hero);
@@ -551,19 +657,21 @@ export class HeroAI {
       return result.success;
     }
 
-    // 8. Move toward nearest unexplored building (find survivors + loot)
-    const unxBuilding = _nearestUnexploredBuilding(state, hero);
-    if (unxBuilding) {
-      const step = stepToward(state, hero, unxBuilding);
-      if (step) {
-        const result = executeMove(state, hero, step.col, step.row);
-        for (const msg of result.log) state.addLog(msg);
-        state.spendAction(result.cost);
-        return true;
+    // 10. Move toward nearest unexplored building (find survivors + loot) — skip if witch is ahead on nodes
+    if (witchNodeCount < 2) {
+      const unxBuilding = _nearestUnexploredBuilding(state, hero);
+      if (unxBuilding) {
+        const step = stepToward(state, hero, unxBuilding);
+        if (step) {
+          const result = executeMove(state, hero, step.col, step.row);
+          for (const msg of result.log) state.addLog(msg);
+          state.spendAction(result.cost);
+          return true;
+        }
       }
     }
 
-    // 9. Hunt the witch
+    // 11. Hunt the witch
     const step = stepToward(state, hero, state.witch);
     if (step) {
       const result = executeMove(state, hero, step.col, step.row);
@@ -599,8 +707,17 @@ function _nearestUnexploredBuilding(state, actor) {
   return best;
 }
 
-// Returns the best node target for the hero: unclaimed first, then witch-held nodes to contest.
-function _unclaimedNodeForHero(state, actor) {
+// Nodes not currently defended by any hero unit (excluding the holding actor itself).
+function _undefendedNodes(state, holder) {
+  return state.witchObjectives.filter(obj =>
+    !(obj.col === holder.col && obj.row === holder.row) &&
+    !state.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row)
+  );
+}
+
+// Best node target for a hero unit: unclaimed first, then witch-held nodes to contest.
+// Excludes nodes already occupied by the actor (no need to move there).
+function _bestNodeForHero(state, actor) {
   const unclaimed = state.witchObjectives.filter(obj =>
     !state.entities.some(e => e.alive && e.col === obj.col && e.row === obj.row)
   );
