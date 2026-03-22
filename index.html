@@ -11,7 +11,6 @@
   <!-- ── Setup screen ──────────────────────────────────────────────── -->
   <div id="setup-screen">
 
-    <!-- Step 1: choose mode -->
     <div id="setup-step-mode" class="setup-card">
       <h1 class="title">BRIMSTONE</h1>
       <p class="subtitle">A Salem Hex Game</p>
@@ -44,7 +43,6 @@
       </div>
     </div>
 
-    <!-- Step 2: choose side (vs AI only) -->
     <div id="setup-step-side" class="setup-card" style="display:none">
       <h1 class="title">CHOOSE YOUR SIDE</h1>
       <p class="subtitle">The AI will control your opponent</p>
@@ -69,30 +67,28 @@
     <header id="game-header">
       <span class="header-title">BRIMSTONE</span>
       <div id="turn-info"></div>
+      <!-- End Turn lives in the header, next to the action diamonds -->
+      <button id="end-turn-btn" class="header-icon-btn end-turn-header" title="End Turn">↩</button>
       <div id="node-status"></div>
-      <button id="chronicle-btn" title="Chronicle">📜</button>
+      <button id="inventory-btn"  class="header-icon-btn" title="Supplies">🎒</button>
+      <button id="chronicle-btn"  class="header-icon-btn" title="Chronicle">📜</button>
     </header>
 
     <main id="game-main">
-
-      <!-- Map canvas -->
       <div id="canvas-wrapper">
         <canvas id="game-canvas"></canvas>
       </div>
-
-      <!-- Slim sidebar: action buttons + inventory only -->
+      <!-- Slim sidebar: action hints + cancel only -->
       <aside id="sidebar">
         <section id="action-panel" class="sidebar-section">
           <p class="hint">Select one of your units.</p>
         </section>
-        <section id="inventory" class="sidebar-section"></section>
       </aside>
-
     </main>
 
   </div>
 
-  <!-- ── Chronicle overlay (toggled by header icon) ────────────────── -->
+  <!-- ── Chronicle overlay ─────────────────────────────────────────── -->
   <div id="chronicle-overlay">
     <div id="chronicle-panel">
       <div class="chronicle-header">
@@ -103,21 +99,52 @@
     </div>
   </div>
 
-  <!-- ── Tile detail bottom sheet ──────────────────────────────────── -->
-  <div id="tile-detail">
-    <div id="tile-detail-inner">
-      <div id="tile-detail-header">
-        <span id="tile-detail-title"></span>
-        <button id="tile-detail-close">✕</button>
+  <!-- ── Inventory overlay ─────────────────────────────────────────── -->
+  <div id="inventory-overlay">
+    <div id="inventory-panel">
+      <div class="chronicle-header">
+        <span class="chronicle-title" id="inventory-title">🎒 Supplies</span>
+        <button id="inventory-close">✕</button>
       </div>
-      <div id="tile-detail-body"></div>
+      <div id="inventory-content"></div>
+    </div>
+  </div>
+
+  <!-- ── Tile zoom overlay (click-any-hex detail view) ─────────────── -->
+  <div id="tile-zoom-overlay">
+    <div id="tile-zoom-card">
+      <button id="tile-zoom-close">✕</button>
+      <div id="tile-zoom-hex-wrap">
+        <!-- SVG hex rendered at ~3× game size (R≈100 vs game R≈30) -->
+        <svg id="tile-zoom-svg" viewBox="-112 -112 224 224" xmlns="http://www.w3.org/2000/svg">
+          <!-- pointy-top hex polygon at R=100 -->
+          <polygon id="tile-zoom-poly"
+            points="87,-50 87,50 0,100 -87,50 -87,-50 0,-100"
+            stroke="#111418" stroke-width="1.5"/>
+          <!-- fortification ring (toggled by JS) -->
+          <polygon id="tile-zoom-fort"
+            points="87,-50 87,50 0,100 -87,50 -87,-50 0,-100"
+            fill="none" stroke-width="6" style="display:none"/>
+          <!-- terrain / building icon -->
+          <text id="tile-zoom-icon" x="0" y="0"
+            text-anchor="middle" dominant-baseline="middle"
+            font-size="58" style="user-select:none"></text>
+        </svg>
+        <!-- info box overlaid on lower portion of the hex -->
+        <div id="tile-zoom-label-box">
+          <div id="tile-zoom-tile-name" class="tile-zoom-name"></div>
+          <div id="tile-zoom-info-lines"></div>
+        </div>
+      </div>
+      <!-- units listed below the hex -->
+      <div id="tile-zoom-units"></div>
     </div>
   </div>
 
   <!-- ── Action popup (positioned over unit on canvas) ────────────── -->
   <div id="action-popup"></div>
 
-  <!-- ── Result dialog (non-battle action feedback) ────────────────── -->
+  <!-- ── Result dialog ─────────────────────────────────────────────── -->
   <div id="result-dialog">
     <div class="result-card">
       <div id="result-messages" class="result-messages"></div>

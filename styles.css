@@ -167,9 +167,9 @@ canvas { touch-action: pan-x pan-y; }
 .node-dot.witch   { background: #cc3333; border-color: #ff5555; box-shadow: 0 0 5px rgba(200,50,50,0.5); }
 .node-dot.neutral { background: transparent; border-color: #554433; }
 
-/* ── Chronicle icon button ─────────────────────────────────────────────── */
+/* ── Header icon buttons (chronicle, inventory, end-turn) ──────────────── */
 
-#chronicle-btn {
+.header-icon-btn {
   background: none;
   border: 1px solid var(--border);
   color: var(--text-dim);
@@ -184,8 +184,24 @@ canvas { touch-action: pan-x pan-y; }
   justify-content: center;
   flex-shrink: 0;
   transition: border-color 0.15s, color 0.15s;
+  padding: 0;
 }
-#chronicle-btn:hover { border-color: var(--text); color: var(--text-bright); }
+.header-icon-btn:hover { border-color: var(--text); color: var(--text-bright); }
+.header-icon-btn:disabled { opacity: 0.3; cursor: default; }
+
+/* End Turn: slightly wider to fit text, urgent pulse when no actions left */
+.end-turn-header {
+  font-size: 0.82rem;
+  width: auto;
+  padding: 0 0.5rem;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+.end-turn-header.urgent {
+  color: var(--day);
+  border-color: var(--day);
+  animation: pulse-gold 1.4s ease-in-out infinite;
+}
 
 .phase-badge {
   font-size: 0.8rem;
@@ -300,46 +316,32 @@ canvas { touch-action: pan-x pan-y; }
   font-family: var(--font-mono);
 }
 
-/* ── Tile detail bottom sheet ──────────────────────────────────────────── */
+/* ── Inventory overlay (same structure as chronicle) ───────────────────── */
 
-#tile-detail {
+#inventory-overlay {
+  display: none;
   position: fixed;
-  left: 0;
+  inset: 0;
+  z-index: 80;
+  background: rgba(0,0,0,0.55);
+}
+#inventory-overlay.visible { display: block; }
+
+#inventory-panel {
+  position: absolute;
+  top: 0;
   right: 0;
-  bottom: 0;
-  z-index: 70;
-  pointer-events: none;
-}
-#tile-detail.visible { pointer-events: all; }
-
-#tile-detail-inner {
+  width: 300px;
+  max-width: 92vw;
+  height: 100%;
   background: var(--bg-panel);
-  border-top: 1px solid var(--border);
-  border-radius: 10px 10px 0 0;
-  padding: 0.8rem 1rem 1.2rem;
-  max-height: 46vh;
-  overflow-y: auto;
-  transform: translateY(100%);
-  transition: transform 0.22s ease;
-  box-shadow: 0 -4px 20px rgba(0,0,0,0.5);
-}
-#tile-detail.visible #tile-detail-inner { transform: translateY(0); }
-
-#tile-detail-header {
+  border-left: 1px solid var(--border);
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 0.55rem;
-  padding-bottom: 0.4rem;
-  border-bottom: 1px solid var(--border);
+  flex-direction: column;
+  padding: 0.75rem;
+  box-shadow: -6px 0 24px rgba(0,0,0,0.6);
 }
-#tile-detail-title {
-  font-size: 0.9rem;
-  color: var(--text-bright);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-#tile-detail-close {
+#inventory-close {
   background: none;
   border: none;
   color: var(--text-dim);
@@ -348,16 +350,102 @@ canvas { touch-action: pan-x pan-y; }
   padding: 0.15rem 0.4rem;
   line-height: 1;
 }
-#tile-detail-close:hover { color: var(--text-bright); }
+#inventory-close:hover { color: var(--text-bright); }
 
-.tile-detail-info {
+#inventory-content {
+  flex: 1;
+  overflow-y: auto;
   font-size: 0.82rem;
+}
+.inv-resource-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid #1a1a22;
+  font-size: 0.84rem;
+}
+.inv-resource-label { color: var(--text); }
+.inv-resource-val   { color: var(--day); font-variant-numeric: tabular-nums; }
+.inv-empty { color: var(--text-dim); font-size: 0.8rem; padding: 0.4rem 0; }
+
+/* ── Tile zoom overlay (hex detail view) ───────────────────────────────── */
+
+#tile-zoom-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 75;
+  background: rgba(0,0,0,0.72);
+  align-items: center;
+  justify-content: center;
+}
+#tile-zoom-overlay.visible { display: flex; }
+
+#tile-zoom-card {
+  position: relative;
+  width: 280px;
+  max-width: 88vw;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.6rem 0.75rem 0.85rem;
+  box-shadow: 0 10px 48px rgba(0,0,0,0.75);
+}
+
+#tile-zoom-close {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.5rem;
+  background: none;
+  border: none;
   color: var(--text-dim);
-  margin-bottom: 0.3rem;
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 0.15rem 0.4rem;
+  line-height: 1;
+  z-index: 2;
+}
+#tile-zoom-close:hover { color: var(--text-bright); }
+
+#tile-zoom-hex-wrap {
+  position: relative;
+  width: 100%;
+}
+
+#tile-zoom-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* Info box floats over the lower 35% of the SVG area */
+#tile-zoom-label-box {
+  position: absolute;
+  left: 12%;
+  right: 12%;
+  bottom: 6%;
+  background: rgba(13,15,22,0.90);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 5px;
+  padding: 0.4rem 0.6rem;
+  pointer-events: none;
+}
+.tile-zoom-name {
+  font-size: 0.8rem;
+  color: var(--text-bright);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 0.15rem;
+  font-weight: bold;
+}
+.tile-zoom-info-line {
+  font-size: 0.75rem;
+  color: var(--text-dim);
   line-height: 1.5;
 }
-.tile-detail-info.node { color: #cc88ff; }
-.tile-detail-info.fortified { color: #88cc88; }
+.tile-zoom-info-line.node { color: #cc88ff; }
+.tile-zoom-info-line.fortified { color: #88cc88; }
 
 .tile-units-heading {
   font-size: 0.7rem;
@@ -898,12 +986,19 @@ canvas { touch-action: pan-x pan-y; }
   .game-over-card { padding: 2rem 1.5rem; margin: 1rem; }
   .winner-text { font-size: 1.1rem; }
 
-  /* Tile detail covers more screen on mobile */
-  #tile-detail-inner { max-height: 55vh; }
+  /* Chronicle + Inventory panels full-width on mobile */
+  #chronicle-panel, #inventory-panel { width: 100%; border-left: none; }
 
-  /* Chronicle panel full-width on mobile */
-  #chronicle-panel { width: 100%; border-left: none; }
+  /* Tile zoom: smaller on mobile but still prominent */
+  #tile-zoom-card { width: 260px; }
 
   /* Node dots slightly larger for touch */
   .node-dot { width: 15px; height: 15px; }
+
+  /* End turn button slightly larger tap target */
+  .end-turn-header { padding: 0 0.65rem; height: 36px; }
+
+  /* Sidebar minimal on mobile — just a thin strip */
+  #sidebar { flex: 0; min-height: 0; }
+  #action-panel { padding: 0.5rem 0.75rem; }
 }

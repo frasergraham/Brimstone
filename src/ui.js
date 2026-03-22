@@ -1,6 +1,6 @@
 // UI controller: handles canvas clicks, sidepanel updates, action buttons
 import { hexKey, hexToPixel } from './hex.js';
-import { TileType, BUILDING_LABEL, RESOURCE_LABEL, WEAPON_LABEL, ResourceType } from './tiles.js';
+import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType } from './tiles.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
 import { Phase, Player, PHASE_ICON } from './game.js';
 import { PAD_X, PAD_Y } from './renderer.js';
@@ -127,8 +127,33 @@ export class UIController {
       if (e.target === document.getElementById('chronicle-overlay')) this._toggleChronicle();
     });
 
-    // Tile detail close
-    document.getElementById('tile-detail-close')?.addEventListener('click', () => this._hideTileDetail());
+    // Inventory overlay toggle
+    document.getElementById('inventory-btn')?.addEventListener('click', () => this._toggleInventory());
+    document.getElementById('inventory-close')?.addEventListener('click', () => this._toggleInventory());
+    document.getElementById('inventory-overlay')?.addEventListener('click', e => {
+      if (e.target === document.getElementById('inventory-overlay')) this._toggleInventory();
+    });
+
+    // Tile zoom close
+    document.getElementById('tile-zoom-close')?.addEventListener('click', () => this._hideTileDetail());
+    document.getElementById('tile-zoom-overlay')?.addEventListener('click', e => {
+      if (e.target === document.getElementById('tile-zoom-overlay')) this._hideTileDetail();
+    });
+
+    // End Turn in header
+    document.getElementById('end-turn-btn')?.addEventListener('click', () => {
+      const state = this.state;
+      if (state.gameOver) return;
+      const isAI = (state.activePlayer === Player.WITCH && state.witchIsAI) ||
+                   (state.activePlayer === Player.HERO  && state.heroIsAI);
+      if (isAI) return;
+      this._clearSelection();
+      state.endTurn();
+      this._triggerHazardFlashes();
+      this._updateSidebar();
+      this.onRedraw();
+      this._maybeRunAI();
+    });
   }
 
   _canvasPos(e) {
@@ -510,6 +535,7 @@ export class UIController {
     this._renderTurnInfo();
     this._renderObjectives();
     this._renderActionPanel();
+    this._renderEndTurnBtn();
     this._renderInventory();
     this._renderLog();
   }
@@ -582,32 +608,40 @@ export class UIController {
       return;
     }
 
-    const noActs   = state.actionsAvailable === 0;
-    const endClass = noActs ? 'end-turn urgent' : 'end-turn';
-    const endLabel = noActs ? 'End Turn ◀' : 'End Turn';
-
-    let hint = '';
+    let html = '';
     if (this._awaitingTarget && !this._awaitingTarget.isDefault) {
       const labels = {
-        [ActionType.BATTLE]: 'Click an enemy to attack.',
-        [ActionType.SUMMON]: 'Click an adjacent empty hex.',
+        [ActionType.BATTLE]: 'Tap an enemy to attack.',
+        [ActionType.SUMMON]: 'Tap an adjacent empty hex.',
       };
-      hint = `<p class="hint" style="margin-bottom:0.4rem">${labels[this._awaitingTarget.actionType] || ''}</p>
+      html = `<p class="hint" style="margin-bottom:0.4rem">${labels[this._awaitingTarget.actionType] || ''}</p>
         ${btn('✕ Cancel', 'end-turn', '', `data-action="cancel"`)}`;
     } else if (this._selectedEntity) {
       const e = this._selectedEntity;
       const hearts = '♥'.repeat(e.hp) + '♡'.repeat(Math.max(0, e.maxHp - e.hp));
       const atkStr = `${e.attack}${e.attackBonus ? `+${e.attackBonus}` : ''}`;
       const defStr = `${e.defense}${e.defenseBonus ? `+${e.defenseBonus}` : ''}`;
-      hint = `<div class="unit-mini-header" style="color:${ENTITY_COLOR[e.type]}">${e.displayName}</div>
+      html = `<div class="unit-mini-header" style="color:${ENTITY_COLOR[e.type]}">${e.displayName}</div>
         <div class="unit-mini-stats">${hearts} &nbsp;·&nbsp; ATK ${atkStr} &nbsp;·&nbsp; DEF ${defStr}</div>
-        <p class="hint" style="margin-top:0">Green hex to move · tap unit again for actions.</p>`;
+        <p class="hint" style="margin-top:0">Green hex to move · tap again for actions.</p>`;
     } else {
-      hint = `<p class="hint">Tap a unit to select.</p>`;
+      html = `<p class="hint">Tap a unit to select.</p>`;
     }
 
-    el.innerHTML = hint + btn(endLabel, endClass, state.gameOver ? 'disabled' : '', `data-action="end_turn"`);
+    el.innerHTML = html;
     el.querySelectorAll('button[data-action]').forEach(b => b.addEventListener('click', () => this._handleActionButton(b)));
+  }
+
+  _renderEndTurnBtn() {
+    const btn = document.getElementById('end-turn-btn');
+    if (!btn) return;
+    const state = this.state;
+    const isAI  = (state.activePlayer === Player.WITCH && state.witchIsAI) ||
+                  (state.activePlayer === Player.HERO  && state.heroIsAI);
+    const noActs = state.actionsAvailable === 0;
+    btn.disabled = state.gameOver || isAI;
+    btn.classList.toggle('urgent', noActs && !isAI && !state.gameOver);
+    btn.title = noActs ? 'End Turn (no actions left)' : 'End Turn Early';
   }
 
   _handleActionButton(button) {
@@ -1068,60 +1102,99 @@ export class UIController {
   }
 
   _showTileDetail(hex) {
-    const state = this.state;
-    const tile  = state.tiles.get(hexKey(hex.col, hex.row));
-    const panel = document.getElementById('tile-detail');
-    const titleEl = document.getElementById('tile-detail-title');
-    const body    = document.getElementById('tile-detail-body');
-    if (!panel || !tile) return;
+    const state   = this.state;
+    const tile    = state.tiles.get(hexKey(hex.col, hex.row));
+    const overlay = document.getElementById('tile-zoom-overlay');
+    if (!overlay || !tile) return;
 
-    // Title
-    let title = tile.type;
-    if (tile.building) title += ` — ${BUILDING_LABEL[tile.building]}`;
-    titleEl.textContent = title;
+    // ── Tile color map matching renderer ──
+    const TILE_COLOR_MAP = {
+      [TileType.GRASS]:    '#3a5430',
+      [TileType.FOREST]:   '#1b2e1a',
+      [TileType.ROAD]:     '#5e4e34',
+      [TileType.RIVER]:    '#1a3d5c',
+      [TileType.BRIDGE]:   '#1a3d5c',
+      [TileType.BUILDING]: '#6e6e6e',
+    };
+    const TERRAIN_ICON = {
+      [TileType.GRASS]:  '🌿',
+      [TileType.FOREST]: '🌲',
+      [TileType.ROAD]:   '🛤',
+      [TileType.RIVER]:  '💧',
+      [TileType.BRIDGE]: '🌉',
+    };
 
-    // Body
-    let html = '';
+    // ── SVG hex elements ──
+    const polyEl = document.getElementById('tile-zoom-poly');
+    const fortEl = document.getElementById('tile-zoom-fort');
+    const iconEl = document.getElementById('tile-zoom-icon');
 
-    // Power node info
-    const obj = state.witchObjectives.find(o => o.col === hex.col && o.row === hex.row);
+    const fillColor = TILE_COLOR_MAP[tile.type] ?? '#3a5430';
+    if (polyEl) polyEl.setAttribute('fill', fillColor);
+
+    // Icon: building emoji or terrain fallback
+    const icon = tile.building ? (BUILDING_ICON[tile.building] ?? '🏠')
+                                : (TERRAIN_ICON[tile.type] ?? '');
+    if (iconEl) iconEl.textContent = icon;
+
+    // Fortification glow ring
+    if (fortEl) {
+      if (tile.explored && tile.fortifyLevel) {
+        const isMetal = tile.fortifyLevel >= 2;
+        fortEl.setAttribute('stroke', isMetal ? 'rgba(120,240,255,0.85)' : 'rgba(255,215,80,0.85)');
+        fortEl.style.display = '';
+      } else {
+        fortEl.style.display = 'none';
+      }
+    }
+
+    // ── Label box ──
+    const nameEl  = document.getElementById('tile-zoom-tile-name');
+    const linesEl = document.getElementById('tile-zoom-info-lines');
+
+    if (nameEl) {
+      nameEl.textContent = tile.building ? (BUILDING_LABEL[tile.building] ?? tile.type)
+                                         : tile.type;
+    }
+
+    const obj       = state.witchObjectives.find(o => o.col === hex.col && o.row === hex.row);
+    let linesHtml   = '';
+
     if (obj) {
       const witchHere = state.entities.find(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row);
       const heroHere  = state.entities.find(e => e.alive && e.owner === 'hero'  && e.col === obj.col && e.row === obj.row);
-      const nodeStatus = witchHere ? '🔴 Witch-controlled' : heroHere ? '🔵 Hero-controlled' : '⭕ Contested';
-      html += `<div class="tile-detail-info node">⚔ Power Node: ${obj.label} — ${nodeStatus}</div>`;
+      const ctrl = witchHere ? '🔴 Witch' : heroHere ? '🔵 Hero' : '⭕ Contested';
+      linesHtml += `<div class="tile-zoom-info-line node">⚔ Power Node — ${ctrl}</div>`;
     }
-
-    // Fortification
     if (tile.explored && tile.fortifyLevel) {
       const fl = tile.fortifyLevel >= 3 ? `⚙⚙ Heavily Reinforced (+${tile.fortifyLevel} DEF)`
-        : tile.fortifyLevel >= 2 ? `⚙ Metal Reinforced (+${tile.fortifyLevel} DEF)`
-        : `🪵 Fortified (+${tile.fortifyLevel} DEF)`;
-      html += `<div class="tile-detail-info fortified">${fl}</div>`;
+               : tile.fortifyLevel >= 2 ? `⚙ Metal Reinforced (+${tile.fortifyLevel} DEF)`
+               : `🪵 Fortified (+${tile.fortifyLevel} DEF)`;
+      linesHtml += `<div class="tile-zoom-info-line fortified">${fl}</div>`;
     }
+    if (!tile.explored) linesHtml += `<div class="tile-zoom-info-line">— unexplored —</div>`;
+    if (!linesHtml) linesHtml = `<div class="tile-zoom-info-line" style="color:#554">(no special properties)</div>`;
 
-    if (!tile.explored) {
-      html += `<div class="tile-detail-info">— unexplored —</div>`;
-    }
+    if (linesEl) linesEl.innerHTML = linesHtml;
 
-    // Units
-    const visible   = _visibleUnitsAt(state, hex.col, hex.row);
-    const myUnits   = visible.filter(u => u.owner === state.activePlayer);
-    const foeUnits  = visible.filter(u => u.owner !== state.activePlayer);
+    // ── Units ──
+    const visible  = _visibleUnitsAt(state, hex.col, hex.row);
+    const myUnits  = visible.filter(u => u.owner === state.activePlayer);
+    const foeUnits = visible.filter(u => u.owner !== state.activePlayer);
+    const unitsEl  = document.getElementById('tile-zoom-units');
 
-    if (visible.length) {
-      html += `<div class="tile-units-heading">Units</div>`;
+    if (unitsEl) {
+      let html = '';
+      if (visible.length) html += `<div class="tile-units-heading">Units</div>`;
       for (const u of myUnits) {
-        const col     = ENTITY_COLOR[u.type] || '#888';
-        const hearts  = '♥'.repeat(u.hp) + '♡'.repeat(Math.max(0, u.maxHp - u.hp));
-        const atkStr  = `${u.attack}${u.attackBonus ? `+${u.attackBonus}` : ''}`;
-        const defStr  = `${u.defense}${u.defenseBonus ? `+${u.defenseBonus}` : ''}`;
-        const details = `${hearts} · ATK ${atkStr} · DEF ${defStr}`;
-        const survivor = u.type === EntityType.SURVIVOR && u.name
-          ? `<span style="font-size:0.72rem;color:#aaa;margin-left:0.3rem">${u.name}</span>` : '';
+        const col    = ENTITY_COLOR[u.type] || '#888';
+        const hearts = '♥'.repeat(u.hp) + '♡'.repeat(Math.max(0, u.maxHp - u.hp));
+        const atkStr = `${u.attack}${u.attackBonus ? `+${u.attackBonus}` : ''}`;
+        const defStr = `${u.defense}${u.defenseBonus ? `+${u.defenseBonus}` : ''}`;
+        const label  = u.type === EntityType.SURVIVOR && u.name ? u.name : u.displayName;
         html += `<div class="tile-unit-card selectable" data-unit-id="${u.id}">
-          <span class="tile-unit-card-name" style="color:${col}">${u.displayName}${survivor}</span>
-          <span class="tile-unit-card-stats">${details}</span>
+          <span class="tile-unit-card-name" style="color:${col}">${label}</span>
+          <span class="tile-unit-card-stats">${hearts} · ATK ${atkStr} · DEF ${defStr}</span>
         </div>`;
       }
       for (const u of foeUnits) {
@@ -1132,28 +1205,25 @@ export class UIController {
           <span class="tile-unit-card-stats">${hearts}</span>
         </div>`;
       }
+      unitsEl.innerHTML = html;
+      unitsEl.querySelectorAll('.tile-unit-card.selectable').forEach(card => {
+        card.addEventListener('click', () => {
+          const unit = state.entities.find(e => e.id === card.dataset.unitId);
+          if (unit) {
+            this._hideTileDetail();
+            this._selectEntity(unit);
+            this._updateSidebar();
+            this.onRedraw();
+          }
+        });
+      });
     }
 
-    body.innerHTML = html;
-
-    // Wire selectable unit cards
-    body.querySelectorAll('.tile-unit-card.selectable').forEach(card => {
-      card.addEventListener('click', () => {
-        const unit = state.entities.find(e => e.id === card.dataset.unitId);
-        if (unit) {
-          this._hideTileDetail();
-          this._selectEntity(unit);
-          this._updateSidebar();
-          this.onRedraw();
-        }
-      });
-    });
-
-    panel.classList.add('visible');
+    overlay.classList.add('visible');
   }
 
   _hideTileDetail() {
-    document.getElementById('tile-detail')?.classList.remove('visible');
+    document.getElementById('tile-zoom-overlay')?.classList.remove('visible');
   }
 
   _toggleChronicle() {
@@ -1167,22 +1237,35 @@ export class UIController {
   }
 
   _renderInventory() {
-    const el = document.getElementById('inventory');
+    const el    = document.getElementById('inventory-content');
+    const title = document.getElementById('inventory-title');
     if (!el) return;
-    const inv = this.state.inventory;
-    let html = '<div class="inv-title">Shared Supplies</div><div class="inv-row">';
-    const shared = Object.entries(inv.shared).filter(([, v]) => v > 0);
-    html += shared.length
-      ? shared.map(([k, v]) => `${RESOURCE_LABEL[k] || k}×${v}`).join(', ')
-      : '<span style="color:#4a4060">none</span>';
-    html += '</div>';
-    html += '<div class="inv-title" style="margin-top:0.4rem">Witch Stores</div><div class="inv-row">';
-    const witch = Object.entries(inv.witch).filter(([, v]) => v > 0);
-    html += witch.length
-      ? witch.map(([k, v]) => `${RESOURCE_LABEL[k] || k}×${v}`).join(', ')
-      : '<span style="color:#4a4060">none</span>';
-    html += '</div>';
-    el.innerHTML = html;
+
+    const state  = this.state;
+    const isHero = state.activePlayer === Player.HERO;
+    const inv    = state.inventory;
+    const stash  = isHero ? inv.shared : inv.witch;
+
+    if (title) title.textContent = isHero ? '⚔ Hero Supplies' : '🕯 Witch Stores';
+
+    const entries = Object.entries(stash).filter(([, v]) => v > 0);
+    if (!entries.length) {
+      el.innerHTML = `<div class="inv-empty">Nothing held.</div>`;
+      return;
+    }
+    el.innerHTML = entries.map(([k, v]) =>
+      `<div class="inv-resource-row">
+        <span class="inv-resource-label">${RESOURCE_LABEL[k] || k}</span>
+        <span class="inv-resource-val">×${v}</span>
+      </div>`
+    ).join('');
+  }
+
+  _toggleInventory() {
+    const overlay = document.getElementById('inventory-overlay');
+    if (!overlay) return;
+    overlay.classList.toggle('visible');
+    if (overlay.classList.contains('visible')) this._renderInventory();
   }
 
   _renderLog() {
