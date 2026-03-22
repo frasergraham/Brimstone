@@ -422,7 +422,8 @@ export class Renderer {
     for (let row = 0; row < MAP_ROWS; row++) {
       for (let col = 0; col < MAP_COLS; col++) {
         const tile = tiles.get(hexKey(col, row));
-        if (!isWater(tile)) continue;
+        // Bridges handle their own water+road layering in _drawRoadLayer
+        if (!tile || tile.type !== TileType.RIVER) continue;
 
         const { x, y } = this._toCanvas(col, row);
         const riverNbrs = getNeighbors(col, row).filter(n => isWater(tiles.get(hexKey(n.col, n.row))));
@@ -493,35 +494,82 @@ export class Renderer {
           return { x: x + dx / d * apothem, y: y + dy / d * apothem };
         });
 
+        // ── Bridge: draw water bezier first, then road on top ─────────────
+        if (tile.type === TileType.BRIDGE) {
+          const isWater = t => t && (t.type === TileType.RIVER || t.type === TileType.BRIDGE);
+          const waterNbrs = getNeighbors(col, row).filter(n => isWater(tiles.get(hexKey(n.col, n.row))));
+          if (waterNbrs.length >= 1) {
+            const wEdge = waterNbrs.map(n => {
+              const { x: nx, y: ny } = this._toCanvas(n.col, n.row);
+              const dx = nx - x, dy = ny - y, d = Math.sqrt(dx * dx + dy * dy);
+              return { x: x + dx / d * apothem, y: y + dy / d * apothem };
+            });
+            ctx.strokeStyle = TILE_COLOR[TileType.RIVER];
+            ctx.lineWidth   = hs * 0.52;
+            ctx.beginPath();
+            if (wEdge.length >= 2) {
+              ctx.moveTo(wEdge[0].x, wEdge[0].y);
+              ctx.quadraticCurveTo(x, y, wEdge[1].x, wEdge[1].y);
+            } else {
+              // single water neighbour — extend bezier off-screen on the other side
+              const { x: nx, y: ny } = this._toCanvas(waterNbrs[0].col, waterNbrs[0].row);
+              const dx = nx - x, dy = ny - y, d = Math.sqrt(dx * dx + dy * dy);
+              ctx.moveTo(x - (dx / d) * apothem * 2, y - (dy / d) * apothem * 2);
+              ctx.quadraticCurveTo(x, y, wEdge[0].x, wEdge[0].y);
+            }
+            ctx.stroke();
+          }
+          ctx.lineWidth = hs * 0.42; // restore road width
+        }
+
+        // ── Road strip ────────────────────────────────────────────────────
         ctx.strokeStyle = TILE_COLOR[TileType.ROAD];
 
         if (roadNbrs.length === 2) {
+          // Smooth bezier through-road
           ctx.beginPath();
           ctx.moveTo(edgeMids[0].x, edgeMids[0].y);
           ctx.quadraticCurveTo(x, y, edgeMids[1].x, edgeMids[1].y);
           ctx.stroke();
+        } else if (roadNbrs.length === 1) {
+          // Dead-end stub toward building entrance
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.lineTo(edgeMids[0].x, edgeMids[0].y);
+          ctx.stroke();
         } else {
-          // T-junction or dead-end: spokes + filled centre dot
-          for (const em of edgeMids) {
-            ctx.beginPath();
-            ctx.moveTo(x, y);
-            ctx.lineTo(em.x, em.y);
-            ctx.stroke();
+          // Junction (3+): bezier for the most-opposing pair, spokes for branches
+          const dirs = edgeMids.map(em => {
+            const dx = em.x - x, dy = em.y - y, d = Math.sqrt(dx * dx + dy * dy);
+            return { dx: dx / d, dy: dy / d };
+          });
+          let pA = 0, pB = 1, minDot = Infinity;
+          for (let i = 0; i < dirs.length; i++) {
+            for (let j = i + 1; j < dirs.length; j++) {
+              const dot = dirs[i].dx * dirs[j].dx + dirs[i].dy * dirs[j].dy;
+              if (dot < minDot) { minDot = dot; pA = i; pB = j; }
+            }
           }
           ctx.beginPath();
-          ctx.arc(x, y, hs * 0.21, 0, Math.PI * 2);
-          ctx.fillStyle = TILE_COLOR[TileType.ROAD];
-          ctx.fill();
+          ctx.moveTo(edgeMids[pA].x, edgeMids[pA].y);
+          ctx.quadraticCurveTo(x, y, edgeMids[pB].x, edgeMids[pB].y);
+          ctx.stroke();
+          for (let i = 0; i < edgeMids.length; i++) {
+            if (i === pA || i === pB) continue;
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(edgeMids[i].x, edgeMids[i].y);
+            ctx.stroke();
+          }
         }
 
-        // ── Bridge railings on top of the road strip ──────────────────────
-        if (tile.type === TileType.BRIDGE && roadNbrs.length === 2) {
-          const [em0, em1] = edgeMids;
+        // ── Bridge railings ────────────────────────────────────────────────
+        if (tile.type === TileType.BRIDGE && roadNbrs.length >= 2) {
+          const em0 = edgeMids[0], em1 = edgeMids[1];
           const dx = em1.x - em0.x, dy = em1.y - em0.y;
           const len = Math.sqrt(dx * dx + dy * dy);
           const perpX = (-dy / len) * hs * 0.18;
           const perpY = ( dx / len) * hs * 0.18;
-
           ctx.strokeStyle = '#8a7a5a';
           ctx.lineWidth   = Math.max(1, hs * 0.06);
           for (const sign of [-1, 1]) {

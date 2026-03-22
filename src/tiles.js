@@ -85,8 +85,8 @@ export const TILE_COLOR = {
   [TileType.BUILDING]: '#4a3c2c',
 };
 
-// All buildings render as the same stone grey — icons + names distinguish them
-export const BUILDING_COLOR = '#6e6e6e';
+// All buildings render as warm ochre/timber-plaster — icons + names distinguish them
+export const BUILDING_COLOR = '#c9a96e';
 
 // Icons shown on every building tile, always visible
 export const BUILDING_ICON = {
