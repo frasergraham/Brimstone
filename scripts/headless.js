@@ -26,8 +26,8 @@ async function runGame() {
   witchAI.onBattleResult = noop;
   heroAI.onBattleResult  = noop;
 
-  // Safety cap: after 80 rounds declare a draw (tie).
-  const MAX_ROUNDS = 80;
+  // Hard cap: 3 full cycles (24 rounds). Scoring should normally decide before this.
+  const MAX_ROUNDS = 24;
 
   while (!state.gameOver && state.round <= MAX_ROUNDS) {
     if (state.activePlayer === 'witch') {
@@ -41,20 +41,28 @@ async function runGame() {
   let winReason = state.winReason;
 
   if (!winner) {
-    // Tiebreaker: most nodes held wins; tied nodes = draw (no HP tiebreaker)
-    const witchNodes = state.witchObjectives.filter(obj =>
-      state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
-    ).length;
-    const heroNodes = state.witchObjectives.filter(obj =>
-      state.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row)
-    ).length;
-
-    if (witchNodes !== heroNodes) {
-      winner    = witchNodes > heroNodes ? 'witch' : 'hero';
-      winReason = `node majority at cap (${witchNodes}–${heroNodes})`;
+    // Tiebreaker 1: node score accumulated over dawn/dusk checks
+    const ws = state.nodeScore.witch;
+    const hs = state.nodeScore.hero;
+    if (ws !== hs) {
+      winner    = ws > hs ? 'witch' : 'hero';
+      winReason = `score tiebreak at cap (Witch ${ws}–Hero ${hs})`;
     } else {
-      winner    = 'draw';
-      winReason = `draw at cap (${witchNodes} nodes each)`;
+      // Tiebreaker 2: current node count
+      const witchNodes = state.witchObjectives.filter(obj =>
+        state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
+      ).length;
+      const heroNodes = state.witchObjectives.filter(obj =>
+        state.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row)
+      ).length;
+
+      if (witchNodes !== heroNodes) {
+        winner    = witchNodes > heroNodes ? 'witch' : 'hero';
+        winReason = `node majority at cap (W${witchNodes}–H${heroNodes}, score tied ${ws}–${hs})`;
+      } else {
+        winner    = 'draw';
+        winReason = `draw at cap (nodes ${witchNodes}–${heroNodes}, score ${ws}–${hs})`;
+      }
     }
   }
 

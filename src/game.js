@@ -12,6 +12,8 @@ export const WIN_REASON = {
   NODES_HERO:       'The hero held all three Power Nodes at dawn — the witch\'s ritual is broken!',
   NODES_WITCH_DUSK: 'As dusk falls, the witch holds all three Power Nodes — the ritual advances!',
   NODES_HERO_DUSK:  'As dusk falls, the hero holds all three Power Nodes — the witch\'s ritual is disrupted!',
+  SCORE_WITCH:      'The witch dominates the Power Nodes across three cycles — the ritual is complete!',
+  SCORE_HERO:       'The hero holds the Power Nodes through the darkness — the curse is broken!',
 };
 
 // ── Phase cycle ─────────────────────────────────────────────────────────────
@@ -94,7 +96,7 @@ export class GameState {
     this.log = [
       `🌅 Dawn breaks over Salem. The hero stirs at the Inn.`,
       `Three Power Nodes: ${this.witchObjectives.map(o => o.label).join(', ')}.`,
-      `⚔ Control all three at dawn to win. Any building shelters against the night.`,
+      `⚔ Hold 2+ nodes at each dawn/dusk to score. First to 3 points wins. Three cycles — then darkness claims Salem.`,
     ];
 
     this.selectedEntity    = null;
@@ -104,6 +106,13 @@ export class GameState {
     this.lastNightDamage   = []; // positions damaged last night hazard (for flash animation)
     this.lastDayDamage     = []; // positions damaged last day hazard
     this.lastHazardLog     = []; // human-readable lines describing hazard events this phase
+
+    // Cumulative node scoring: each dawn/dusk majority scores 1 point; first to 3 wins.
+    this.nodeScore = { hero: 0, witch: 0 };
+
+    // Attrition level: hazard damage dealt to exposed units. Ramps up each dawn.
+    // Cycle 1: 1 dmg, Cycle 2: 2 dmg, Cycle 3: 3 dmg.
+    this.attritionLevel = 1;
   }
 
   // ── Turn management ────────────────────────────────────────────────────
@@ -192,30 +201,29 @@ export class GameState {
         );
       }
 
-      // Night hazard: survivors in the open take 1 damage
+      // Night hazard: survivors in the open take attritionLevel damage
       if (this.phase === Phase.NIGHT) {
         this.lastNightDamage = [];
         this.lastHazardLog   = [];
-        this._applyNightHazard();
+        this._applyNightHazard(this.attritionLevel);
       }
 
-      // Day hazard: witch minions/zombies/golems in the open take 1 damage
+      // Day hazard: witch minions/zombies/golems in the open take attritionLevel damage
       if (this.phase === Phase.DAY) {
         this.lastDayDamage = [];
         this.lastHazardLog = [];
-        this._applyDayHazard();
+        this._applyDayHazard(this.attritionLevel);
       }
 
-      // Dawn: reset explored flag on all tiles so resources can be gathered again
+      // Dawn: ramp attrition, reset explored tiles, check nodes
       if (this.phase === Phase.DAWN) {
+        this.attritionLevel = Math.min(3, this.attritionLevel + 1);
+        this.addLog(`🌅 A new dawn — cycle ${Math.ceil(this.round / CYCLE_LENGTH)}. Attrition rises to ${this.attritionLevel}!`);
         for (const [, t] of this.tiles) t.explored = false;
-        this.addLog('🌅 A new dawn — the land stirs and its secrets are renewed.');
-      }
-
-      // Dawn/Dusk: check if either side holds all Power Nodes
-      if (this.phase === Phase.DAWN) {
         this._checkNodeObjectives(Phase.DAWN);
       }
+
+      // Dusk: score nodes
       if (this.phase === Phase.DUSK) {
         this._checkNodeObjectives(Phase.DUSK);
       }
@@ -244,7 +252,7 @@ export class GameState {
     );
   }
 
-  _applyNightHazard() {
+  _applyNightHazard(dmg = 1) {
     // Only SURVIVORS in the open take night damage — the hero is hardened against it
     const endangered = this.entities.filter(e => {
       if (!e.alive || e.type !== EntityType.SURVIVOR) return false;
@@ -254,10 +262,10 @@ export class GameState {
 
     for (const e of endangered) {
       this.lastNightDamage.push({ col: e.col, row: e.row });
-      const killed = e.takeDamage(1);
+      const killed = e.takeDamage(dmg);
       const line = killed
         ? `💀 ${e.displayName} is consumed by the night!`
-        : `🌙 ${e.displayName} suffers in the open! (${e.hp}/${e.maxHp} HP remaining)`;
+        : `🌙 ${e.displayName} suffers in the open! (-${dmg} HP, ${e.hp}/${e.maxHp} remaining)`;
       this.addLog(line);
       this.lastHazardLog.push(line);
       if (killed) this.entities = this.entities.filter(x => x.id !== e.id);
@@ -267,8 +275,8 @@ export class GameState {
     }
   }
 
-  _applyDayHazard() {
-    // Witch minions, zombies, and golems caught in the open during daylight take 1 damage
+  _applyDayHazard(dmg = 1) {
+    // Witch minions, zombies, and golems caught in the open during daylight take dmg damage
     const sunburned = this.entities.filter(e => {
       if (!e.alive || e.owner !== 'witch') return false;
       if (e.type === EntityType.WITCH) return false;
@@ -278,10 +286,10 @@ export class GameState {
 
     for (const e of sunburned) {
       this.lastDayDamage.push({ col: e.col, row: e.row });
-      const killed = e.takeDamage(1);
+      const killed = e.takeDamage(dmg);
       const line = killed
         ? `💀 ${e.displayName} is destroyed by the light!`
-        : `☀ ${e.displayName} is scorched in the open! (${e.hp}/${e.maxHp} HP remaining)`;
+        : `☀ ${e.displayName} is scorched in the open! (-${dmg} HP, ${e.hp}/${e.maxHp} remaining)`;
       this.addLog(line);
       this.lastHazardLog.push(line);
       if (killed) this.entities = this.entities.filter(x => x.id !== e.id);
@@ -305,11 +313,18 @@ export class GameState {
   }
 
   _checkNodeObjectives(phase) {
-    const isDawn = phase === Phase.DAWN;
-    const witchHoldsAll = this.witchObjectives.every(obj =>
+    const isDawn     = phase === Phase.DAWN;
+    const phaseLabel = isDawn ? 'dawn' : 'dusk';
+
+    const witchCount = this.witchObjectives.filter(obj =>
       this.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
-    );
-    if (witchHoldsAll) {
+    ).length;
+    const heroCount = this.witchObjectives.filter(obj =>
+      this.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row)
+    ).length;
+
+    // Instant win: sweep all three nodes
+    if (witchCount === 3) {
       this.winner    = 'witch';
       this.winReason = isDawn ? WIN_REASON.NODES_WITCH : WIN_REASON.NODES_WITCH_DUSK;
       this.addLog(isDawn
@@ -317,16 +332,34 @@ export class GameState {
         : '🌙 As dusk falls, the witch holds all three Power Nodes! The ritual advances!');
       return;
     }
-
-    const heroHoldsAll = this.witchObjectives.every(obj =>
-      this.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row)
-    );
-    if (heroHoldsAll) {
+    if (heroCount === 3) {
       this.winner    = 'hero';
       this.winReason = isDawn ? WIN_REASON.NODES_HERO : WIN_REASON.NODES_HERO_DUSK;
       this.addLog(isDawn
         ? '☀ At dawn, the hero holds all three Power Nodes! The witch\'s ritual is broken!'
         : '☀ As dusk falls, the hero holds all three Power Nodes! The ritual is disrupted!');
+      return;
+    }
+
+    // Scoring: whoever holds more nodes scores 1 point (even 1–0 counts)
+    if (witchCount > heroCount) {
+      this.nodeScore.witch++;
+      this.addLog(`🌙 At ${phaseLabel}: witch leads ${witchCount}–${heroCount}. Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);
+      if (this.nodeScore.witch >= 3) {
+        this.winner    = 'witch';
+        this.winReason = WIN_REASON.SCORE_WITCH;
+        this.addLog('🌙 The witch has claimed three ritual moments — Salem falls to darkness!');
+      }
+    } else if (heroCount > witchCount) {
+      this.nodeScore.hero++;
+      this.addLog(`☀ At ${phaseLabel}: hero leads ${heroCount}–${witchCount}. Score — Hero ${this.nodeScore.hero} / Witch ${this.nodeScore.witch}`);
+      if (this.nodeScore.hero >= 3) {
+        this.winner    = 'hero';
+        this.winReason = WIN_REASON.SCORE_HERO;
+        this.addLog('☀ The hero has broken the ritual three times — Salem is saved!');
+      }
+    } else {
+      this.addLog(`⚖ At ${phaseLabel}: nodes tied (${witchCount}–${heroCount}). Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);
     }
   }
 
@@ -371,6 +404,8 @@ export class GameState {
       activePlayer: this.activePlayer,
       actionsLeft: this.actionsLeft,
       inventory: this.inventory,
+      nodeScore: this.nodeScore,
+      attritionLevel: this.attritionLevel,
       log: this.log.slice(-20),
     });
   }
