@@ -368,8 +368,14 @@ export function executeBattle(state, actor, target) {
   if (state.phase === Phase.NIGHT && actor.owner === 'witch') phaseBonus = 1;
 
   // Compute situational bonuses without touching entity fields
-  const atkAllies      = allyList(state, actor);
-  const defAllies      = allyList(state, target);
+  // Ally bonus only applies if the ally is also adjacent to the enemy
+  const enemyHexesForAtk = new Set([hexKey(target.col, target.row)]);
+  for (const n of getNeighbors(target.col, target.row)) enemyHexesForAtk.add(hexKey(n.col, n.row));
+  const atkAllies = allyList(state, actor).filter(a => enemyHexesForAtk.has(hexKey(a.col, a.row)));
+
+  const enemyHexesForDef = new Set([hexKey(actor.col, actor.row)]);
+  for (const n of getNeighbors(actor.col, actor.row)) enemyHexesForDef.add(hexKey(n.col, n.row));
+  const defAllies = allyList(state, target).filter(a => enemyHexesForDef.has(hexKey(a.col, a.row)));
   const attackerAllies = atkAllies.length;
   const defenderAllies = defAllies.length;
   const defTile        = tile(state, target.col, target.row);

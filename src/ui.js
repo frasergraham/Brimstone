@@ -995,7 +995,8 @@ export class UIController {
       }
 
       if (result.killed) {
-        outcome.textContent = `💀 ${targetSnap.name} is slain!`;
+        const dmgNote = result.damage > 0 ? ` (${result.damage} damage)` : '';
+        outcome.textContent = `💀 ${targetSnap.name} is slain!${dmgNote}`;
         outcome.className   = 'battle-outcome kill';
       } else if (result.hit) {
         if (result.fortAbsorbed > 0 && result.damage === 0) {
@@ -1362,14 +1363,14 @@ function _buildBreakdownHTML(snap, bd, side, total) {
     if (bd.phaseBonus)    parts.push(row('☀ Day', bd.phaseBonus));
     if (bd.atkStaffBonus) parts.push(row('⚕ Staff (undead)', bd.atkStaffBonus));
     bd.atkExtraDice.forEach((r, i) => {
-      parts.push(row(bd.atkAllyNames[i] ?? 'Ally (d3)', r, true));
+      parts.push(row(`${bd.atkAllyNames[i] ?? 'Ally'} (D3)`, r, true));
     });
   } else {
     parts.push(row('Base d6', bd.defBaseDie, true));
     parts.push(row(`${snap.name} DEF`, snap.defense));
     if (bd.fortBonus) parts.push(row(`🏰 Fort ×${bd.fortBonus}`, bd.fortBonus));
     bd.defExtraDice.forEach((r, i) => {
-      parts.push(row(bd.defAllyNames[i] ?? 'Ally (d3)', r, true));
+      parts.push(row(`${bd.defAllyNames[i] ?? 'Ally'} (D3)`, r, true));
     });
   }
 
