@@ -172,15 +172,22 @@ export class WitchAI {
     const state = this.state;
     const phase = state.phase;
     const witch = state.witch;
-    const isDay   = phase === Phase.DAY  || phase === Phase.DAWN;
     const isNight = phase === Phase.NIGHT || phase === Phase.DUSK;
 
     const minions = state.entities.filter(
       e => e.alive && e.owner === 'witch' && e.type !== EntityType.WITCH
     );
 
+    const witchOnNode  = _isOnNode(state, witch);
+    const heroScore    = state.nodeScore.hero;
+    // Nodes not currently held by any witch unit (witch or minion)
+    const uncoveredNodes = state.witchObjectives.filter(obj =>
+      !state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
+    );
+
     // ── NIGHT STRATEGY ─────────────────────────────────────────────────────
-    // Priority: attack, seize objectives, summon reinforcements
+    // Priority: flee → fight → urgent contest → HOLD node → summon →
+    //           advance witch → advance minions → hunt hero
     if (isNight) {
       // 0. Flee if witch HP is critical and hero is close with no minion cover
       const hasAdjacentMinion = minions.some(m => hexDistance(witch.col, witch.row, m.col, m.row) <= 1);
@@ -201,7 +208,7 @@ export class WitchAI {
       );
       if (witchColocated) return this._executeBattleWithUI(witch, witchColocated);
 
-      // 2. Fight adjacent hero units if witch is strong or it's a good fight
+      // 2. Fight adjacent hero units
       const adjHero = state.entities.find(
         e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1
       );
@@ -220,10 +227,62 @@ export class WitchAI {
         if (adjEnemy) return this._executeBattleWithUI(m, adjEnemy);
       }
 
-      // 4. Summon more troops if resources available and army is small
+      // 4. URGENT: hero has 2 score points — race every free unit to uncovered nodes
+      if (heroScore >= 2) {
+        const urgentNode = _bestWitchObjective(state, witch);
+        if (urgentNode && !witchOnNode) {
+          const step = stepToward(state, witch, urgentNode);
+          if (step) {
+            const result = executeMove(state, witch, step.col, step.row);
+            logResult(state, result);
+            state.spendAction(result.cost);
+            return true;
+          }
+        }
+        for (const m of minions) {
+          if (_isOnNode(state, m)) continue;
+          const mn = _bestWitchObjective(state, m);
+          if (mn) {
+            const step = stepToward(state, m, mn);
+            if (step) {
+              const result = executeMove(state, m, step.col, step.row);
+              logResult(state, result);
+              state.spendAction(result.cost);
+              return true;
+            }
+          }
+        }
+      }
+
+      // 5. HOLD: witch is on a node — fight adjacent threats; dispatch minions to other nodes
+      if (witchOnNode) {
+        const adjThreat = state.entities.find(
+          e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1
+        );
+        if (adjThreat) return this._executeBattleWithUI(witch, adjThreat);
+
+        for (const m of minions) {
+          if (_isOnNode(state, m)) continue;
+          if (uncoveredNodes.length) {
+            uncoveredNodes.sort((a, b) =>
+              hexDistance(m.col, m.row, a.col, a.row) - hexDistance(m.col, m.row, b.col, b.row)
+            );
+            const step = stepToward(state, m, uncoveredNodes[0]);
+            if (step) {
+              const result = executeMove(state, m, step.col, step.row);
+              logResult(state, result);
+              state.spendAction(result.cost);
+              return true;
+            }
+          }
+        }
+        return false; // hold position
+      }
+
+      // 6. Summon more troops if resources available and army is small
       if (await this._trySummon(witch, minions.length)) return true;
 
-      // 5. Witch moves toward best objective (unclaimed first, then hero-held to contest)
+      // 7. Witch moves toward best objective
       const witchNodeTarget = _bestWitchObjective(state, witch);
       if (witchNodeTarget) {
         const nodeStep = stepToward(state, witch, witchNodeTarget);
@@ -235,9 +294,9 @@ export class WitchAI {
         }
       }
 
-      // 6. Move minions toward objectives; minions already on a node hold position
+      // 8. Move minions toward objectives; minions on a node hold position
       for (const m of minions) {
-        if (_isOnNode(state, m)) continue; // hold the node
+        if (_isOnNode(state, m)) continue;
         const obj = _bestWitchObjective(state, m);
         if (obj) {
           const step = stepToward(state, m, obj);
@@ -264,9 +323,8 @@ export class WitchAI {
         }
       }
 
-      // 7. Move witch toward hero if no unclaimed objective
-      const witchTarget = state.hero;
-      const step = stepToward(state, witch, witchTarget);
+      // 9. Hunt the hero
+      const step = stepToward(state, witch, state.hero);
       if (step) {
         const result = executeMove(state, witch, step.col, step.row);
         logResult(state, result);
@@ -278,7 +336,8 @@ export class WitchAI {
     }
 
     // ── DAY STRATEGY ──────────────────────────────────────────────────────
-    // Priority: flee → summon (army-build) → explore → seize nodes → shelter
+    // Priority: flee → urgent contest → HOLD node → dispatch minions to nodes →
+    //           summon → explore → advance witch → shelter stray minions
 
     // 0. Flee if hero is close and witch HP is low
     const distToHero = hexDistance(witch.col, witch.row, state.hero.col, state.hero.row);
@@ -292,10 +351,79 @@ export class WitchAI {
       }
     }
 
-    // 1. Summon if resources allow — army-building is the top daytime priority
-    if (await this._trySummon(witch, minions.length)) return true;
+    // 1. URGENT: hero has 2 score points — drop everything and contest remaining nodes
+    if (heroScore >= 2) {
+      const urgentNode = _bestWitchObjective(state, witch);
+      if (urgentNode && !witchOnNode) {
+        const step = stepToward(state, witch, urgentNode);
+        if (step) {
+          const result = executeMove(state, witch, step.col, step.row);
+          logResult(state, result);
+          state.spendAction(result.cost);
+          return true;
+        }
+      }
+      for (const m of minions) {
+        if (_isOnNode(state, m)) continue;
+        const mn = _bestWitchObjective(state, m);
+        if (mn) {
+          const step = stepToward(state, m, mn);
+          if (step) {
+            const result = executeMove(state, m, step.col, step.row);
+            logResult(state, result);
+            state.spendAction(result.cost);
+            return true;
+          }
+        }
+      }
+    }
 
-    // 2. Witch explores current tile if unexplored (gather resources for more summons)
+    // 2. HOLD: witch is on a node — defend it; dispatch minions to uncover other nodes
+    if (witchOnNode) {
+      const adjThreat = state.entities.find(
+        e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1
+      );
+      if (adjThreat) return this._executeBattleWithUI(witch, adjThreat);
+
+      for (const m of minions) {
+        if (_isOnNode(state, m)) continue;
+        if (uncoveredNodes.length) {
+          uncoveredNodes.sort((a, b) =>
+            hexDistance(m.col, m.row, a.col, a.row) - hexDistance(m.col, m.row, b.col, b.row)
+          );
+          const step = stepToward(state, m, uncoveredNodes[0]);
+          if (step) {
+            const result = executeMove(state, m, step.col, step.row);
+            logResult(state, result);
+            state.spendAction(result.cost);
+            return true;
+          }
+        }
+      }
+      return false; // hold position
+    }
+
+    // 3. Dispatch minions toward uncovered nodes (before summoning more)
+    for (const m of minions) {
+      if (_isOnNode(state, m)) continue;
+      const nodeTarget = _bestWitchObjective(state, m);
+      if (nodeTarget) {
+        const step = stepToward(state, m, nodeTarget);
+        if (step) {
+          const result = executeMove(state, m, step.col, step.row);
+          logResult(state, result);
+          state.spendAction(result.cost);
+          return true;
+        }
+      }
+    }
+
+    // 4. Summon if nodes are covered or army is depleted (resources permitting)
+    if (uncoveredNodes.length === 0 || minions.length === 0) {
+      if (await this._trySummon(witch, minions.length)) return true;
+    }
+
+    // 5. Witch explores current tile (gather resources)
     const witchTile = state.tiles.get(hexKey(witch.col, witch.row));
     if (witchTile && !witchTile.explored) {
       const result = executeExplore(state, witch);
@@ -304,7 +432,7 @@ export class WitchAI {
       return true;
     }
 
-    // 3. Move to adjacent unexplored building/resource tile to gather
+    // 6. Move to adjacent unexplored resource tile
     const unexploredAdj = getNeighbors(witch.col, witch.row).find(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
       return t && !t.explored && (t.hiddenSurvivor || t.resource || t.building) &&
@@ -317,7 +445,7 @@ export class WitchAI {
       return true;
     }
 
-    // 4. Witch moves toward best objective to start the node-spawn engine
+    // 7. Witch moves toward best objective
     const obj = _bestWitchObjective(state, witch);
     if (obj) {
       const step = stepToward(state, witch, obj);
@@ -329,7 +457,7 @@ export class WitchAI {
       }
     }
 
-    // 5. Shelter exposed minions not on nodes (lower priority — nodes > shelter)
+    // 8. Shelter stray minions not on nodes (low priority — nodes always beat shelter)
     for (const m of minions) {
       if (_isOnNode(state, m)) continue;
       if (!inBuilding(state, m)) {
@@ -565,7 +693,8 @@ export class HeroAI {
     }
 
     // 5. HOLD NODE: hero is already on a node — defend it and anchor survivors to others.
-    //    Don't leave unless there is truly nothing useful to do here.
+    //    Hold firmly only if survivors are covering other nodes OR witch is threatening.
+    //    Otherwise fall through to building exploration to recruit those survivors first.
     if (heroOnNode) {
       // Fight adjacent threats to the node
       const adjThreat = state.entities.find(
@@ -590,7 +719,14 @@ export class HeroAI {
           }
         }
       }
-      return false; // hold position — all actions beyond fighting are spent here
+
+      // Hold firmly if we have node support from survivors OR witch is already contesting
+      const hasSurvivorOnNode = survivors.some(s => _isOnNode(state, s));
+      const witchPressingUs   = witchNodeCount >= 1 || state.nodeScore.witch >= 1;
+      if (hasSurvivorOnNode || witchPressingUs) {
+        return false; // hold position
+      }
+      // No support and no immediate threat: fall through to recruit survivors from buildings
     }
 
     // 6. URGENT: witch holds 2+ nodes — drop everything and race to contest
