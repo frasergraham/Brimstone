@@ -986,10 +986,12 @@ export class UIController {
           _buildBreakdownHTML(actorSnap, bd, 'atk', result.attackRoll);
         document.getElementById('battle-def-breakdown').innerHTML =
           _buildBreakdownHTML(targetSnap, bd, 'def', result.defenseRoll);
-        requestAnimationFrame(() => {
+        // Double-rAF ensures a paint happens before adding visible,
+        // so the opacity 0→1 transition fires reliably.
+        requestAnimationFrame(() => requestAnimationFrame(() => {
           document.getElementById('battle-atk-breakdown').classList.add('visible');
           document.getElementById('battle-def-breakdown').classList.add('visible');
-        });
+        }));
       }
 
       if (result.killed) {
