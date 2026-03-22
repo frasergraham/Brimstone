@@ -140,6 +140,19 @@ export class UIController {
       if (e.target === document.getElementById('tile-zoom-overlay')) this._hideTileDetail();
     });
 
+    // Cancel-action pill (floating over canvas during battle/summon targeting)
+    document.getElementById('cancel-action-btn')?.addEventListener('click', () => {
+      const entity = this._selectedEntity;
+      if (entity) {
+        this._selectEntity(entity);
+      } else {
+        this._awaitingTarget = null;
+        this.renderer.highlightHexes = [];
+      }
+      this._updateSidebar();
+      this.onRedraw();
+    });
+
     // End Turn in header
     document.getElementById('end-turn-btn')?.addEventListener('click', () => {
       const state = this.state;
@@ -596,40 +609,21 @@ export class UIController {
   }
 
   _renderActionPanel() {
-    const el = document.getElementById('action-panel');
-    if (!el) return;
+    // Show/hide the floating cancel pill and update its hint text
+    const wrap = document.getElementById('cancel-wrap');
+    const hint = document.getElementById('target-hint');
+    if (!wrap) return;
 
-    const state = this.state;
-    const isAI  = (state.activePlayer === Player.WITCH && state.witchIsAI) ||
-                  (state.activePlayer === Player.HERO  && state.heroIsAI);
+    const targeting = this._awaitingTarget && !this._awaitingTarget.isDefault;
+    wrap.classList.toggle('visible', !!targeting);
 
-    if (isAI) {
-      el.innerHTML = `<p class="hint" style="opacity:0.7">AI is thinking…</p>`;
-      return;
-    }
-
-    let html = '';
-    if (this._awaitingTarget && !this._awaitingTarget.isDefault) {
+    if (targeting && hint) {
       const labels = {
-        [ActionType.BATTLE]: 'Tap an enemy to attack.',
-        [ActionType.SUMMON]: 'Tap an adjacent empty hex.',
+        [ActionType.BATTLE]: 'Tap an enemy to attack',
+        [ActionType.SUMMON]: 'Tap an adjacent empty hex',
       };
-      html = `<p class="hint" style="margin-bottom:0.4rem">${labels[this._awaitingTarget.actionType] || ''}</p>
-        ${btn('✕ Cancel', 'end-turn', '', `data-action="cancel"`)}`;
-    } else if (this._selectedEntity) {
-      const e = this._selectedEntity;
-      const hearts = '♥'.repeat(e.hp) + '♡'.repeat(Math.max(0, e.maxHp - e.hp));
-      const atkStr = `${e.attack}${e.attackBonus ? `+${e.attackBonus}` : ''}`;
-      const defStr = `${e.defense}${e.defenseBonus ? `+${e.defenseBonus}` : ''}`;
-      html = `<div class="unit-mini-header" style="color:${ENTITY_COLOR[e.type]}">${e.displayName}</div>
-        <div class="unit-mini-stats">${hearts} &nbsp;·&nbsp; ATK ${atkStr} &nbsp;·&nbsp; DEF ${defStr}</div>
-        <p class="hint" style="margin-top:0">Green hex to move · tap again for actions.</p>`;
-    } else {
-      html = `<p class="hint">Tap a unit to select.</p>`;
+      hint.textContent = labels[this._awaitingTarget.actionType] ?? '';
     }
-
-    el.innerHTML = html;
-    el.querySelectorAll('button[data-action]').forEach(b => b.addEventListener('click', () => this._handleActionButton(b)));
   }
 
   _renderEndTurnBtn() {

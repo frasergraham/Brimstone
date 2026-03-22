@@ -485,31 +485,43 @@ canvas { touch-action: pan-x pan-y; }
   line-height: 1.4;
 }
 
-/* ── Sidebar ───────────────────────────────────────────────────────────── */
+/* ── Floating cancel pill (during battle/summon targeting) ─────────────── */
 
-#sidebar {
-  width: 200px;
-  min-width: 200px;
-  background: var(--bg-panel);
-  border-left: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  overflow-y: auto;
-  flex-shrink: 0;
+#cancel-wrap {
+  display: none;
+  position: fixed;
+  bottom: 1.75rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 65;
+  align-items: center;
+  gap: 0.65rem;
+  background: rgba(13,15,22,0.92);
+  border: 1px solid #5a3a3a;
+  border-radius: 24px;
+  padding: 0.45rem 0.75rem 0.45rem 1rem;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+  white-space: nowrap;
 }
+#cancel-wrap.visible { display: flex; }
 
-.sidebar-section {
-  padding: 0.75rem;
-  border-bottom: 1px solid var(--border);
-}
-
-.section-title {
-  font-size: 0.7rem;
-  letter-spacing: 0.15em;
+#target-hint {
+  font-size: 0.8rem;
   color: var(--text-dim);
-  text-transform: uppercase;
-  margin-bottom: 0.5rem;
+  font-style: italic;
 }
+
+#cancel-action-btn {
+  background: none;
+  border: 1px solid #aa4433;
+  color: #ff7755;
+  font-size: 0.8rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+#cancel-action-btn:hover { background: rgba(170,68,51,0.25); }
 
 .action-title {
   font-size: 0.75rem;
@@ -614,9 +626,9 @@ canvas { touch-action: pan-x pan-y; }
 .log-entry:last-child { color: var(--text); }
 
 /* Scrollbar */
-#event-log::-webkit-scrollbar, #sidebar::-webkit-scrollbar, #tile-detail-inner::-webkit-scrollbar { width: 4px; }
-#event-log::-webkit-scrollbar-track, #sidebar::-webkit-scrollbar-track, #tile-detail-inner::-webkit-scrollbar-track { background: transparent; }
-#event-log::-webkit-scrollbar-thumb, #sidebar::-webkit-scrollbar-thumb, #tile-detail-inner::-webkit-scrollbar-thumb { background: #2a2040; border-radius: 2px; }
+#event-log::-webkit-scrollbar, #inventory-content::-webkit-scrollbar { width: 4px; }
+#event-log::-webkit-scrollbar-track, #inventory-content::-webkit-scrollbar-track { background: transparent; }
+#event-log::-webkit-scrollbar-thumb, #inventory-content::-webkit-scrollbar-thumb { background: #2a2040; border-radius: 2px; }
 
 /* ── Action popup (floating above selected unit) ───────────────────────── */
 
@@ -943,29 +955,14 @@ canvas { touch-action: pan-x pan-y; }
   #turn-info { flex-wrap: wrap; gap: 0.3rem 0.6rem; }
   .phase-hint { display: none; }
 
-  /* Stack vertically; game-main fills remaining height */
-  #game-main { flex-direction: column; overflow: hidden; min-height: 0; }
+  /* game-main fills all remaining height; canvas is the only child */
+  #game-main { overflow: hidden; min-height: 0; }
 
-  /* Canvas pane: top 60% of game-main, scrollable so user can pan the map.
-     Canvas stays at native resolution — hexes remain large enough to tap.
-     JS touch handlers detect tap vs. swipe, so both work simultaneously. */
+  /* Canvas fills the full remaining screen — map is navigated by pan/zoom */
   #canvas-wrapper {
-    flex: 0 0 60%;
+    flex: 1;
     width: 100%;
     overflow: hidden;
-    align-items: center;
-    justify-content: center;
-  }
-
-  /* Sidebar: bottom 40% — always on screen, scrollable */
-  #sidebar {
-    flex: 1;
-    min-height: 0;
-    width: 100%;
-    min-width: 0;
-    border-left: none;
-    border-top: 1px solid var(--border);
-    overflow-y: auto;
   }
 
   /* Action buttons — 44 px minimum tap target, full row width */
@@ -976,6 +973,10 @@ canvas { touch-action: pan-x pan-y; }
     min-height: 44px;
     margin-bottom: 0.35rem;
   }
+
+  /* Cancel pill: slightly larger on touch */
+  #cancel-wrap { bottom: 2.5rem; padding: 0.55rem 0.85rem 0.55rem 1.1rem; }
+  #cancel-action-btn { padding: 0.35rem 0.8rem; font-size: 0.88rem; }
 
   /* Setup card */
   .setup-card { padding: 1.4rem 1.2rem; }
@@ -998,7 +999,4 @@ canvas { touch-action: pan-x pan-y; }
   /* End turn button slightly larger tap target */
   .end-turn-header { padding: 0 0.65rem; height: 36px; }
 
-  /* Sidebar minimal on mobile — just a thin strip */
-  #sidebar { flex: 0; min-height: 0; }
-  #action-panel { padding: 0.5rem 0.75rem; }
 }
