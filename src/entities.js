@@ -231,25 +231,38 @@ export class Entity {
   // phaseBonus:    extra attack from day/night advantage
   // extraAtkBonus: caller-supplied bonus (gang-up etc.) — NOT stored on the entity
   // extraDefBonus: caller-supplied bonus (fortify, gang-up etc.) — NOT stored on the entity
-  // extraAtkDice / extraDefDice: number of additional d6s rolled for that side
-  // (used for ally gang-up and defender ally support — gives variance instead of flat +1)
+  // extraAtkDice / extraDefDice: number of additional d3s rolled for that side
+  // (ally gang-up / defender ally support — gives variance instead of flat +1)
+  // Returns full breakdown for UI rendering alongside the totals.
   static resolveCombat(attacker, defender, phaseBonus = 0, extraAtkBonus = 0, extraDefBonus = 0,
                        extraAtkDice = 0, extraDefDice = 0) {
     let extraAtk = phaseBonus + extraAtkBonus;
-    // Staff is +2 attack vs undead/golem types
+    let atkStaffBonus = 0;
     if (attacker.weapon === 'staff' &&
         (defender.type === EntityType.ZOMBIE ||
          defender.type === EntityType.MINION ||
          defender.type === EntityType.WOOD_GOLEM ||
          defender.type === EntityType.IRON_GOLEM)) {
+      atkStaffBonus = 2;
       extraAtk += 2;
     }
-    let attackRoll  = Math.ceil(Math.random() * 6) + attacker.attack  + attacker.attackBonus + extraAtk;
-    let defenseRoll = Math.ceil(Math.random() * 6) + defender.defense + defender.defenseBonus + extraDefBonus;
-    for (let i = 0; i < extraAtkDice; i++) attackRoll  += Math.ceil(Math.random() * 3);
-    for (let i = 0; i < extraDefDice; i++) defenseRoll += Math.ceil(Math.random() * 3);
+
+    const atkBaseDie  = Math.ceil(Math.random() * 6);
+    const defBaseDie  = Math.ceil(Math.random() * 6);
+    const atkExtraDice = [];
+    const defExtraDice = [];
+    for (let i = 0; i < extraAtkDice; i++) atkExtraDice.push(Math.ceil(Math.random() * 3));
+    for (let i = 0; i < extraDefDice; i++) defExtraDice.push(Math.ceil(Math.random() * 3));
+
+    const attackRoll  = atkBaseDie + attacker.attack  + attacker.attackBonus + extraAtk
+                        + atkExtraDice.reduce((s, r) => s + r, 0);
+    const defenseRoll = defBaseDie + defender.defense + defender.defenseBonus + extraDefBonus
+                        + defExtraDice.reduce((s, r) => s + r, 0);
     const margin = attackRoll - defenseRoll;
-    return { attackRoll, defenseRoll, hit: margin > 0, margin };
+    return {
+      attackRoll, defenseRoll, hit: margin > 0, margin,
+      atkBaseDie, defBaseDie, atkExtraDice, defExtraDice, atkStaffBonus,
+    };
   }
 }
 

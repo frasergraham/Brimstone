@@ -954,6 +954,12 @@ export class UIController {
     outcome.className   = 'battle-outcome';
     footer.innerHTML    = this.autoplay ? '' : '<div class="result-dismiss">— click to continue —</div>';
 
+    // Reset breakdown columns (hidden until dice settle)
+    const atkBkd = document.getElementById('battle-atk-breakdown');
+    const defBkd = document.getElementById('battle-def-breakdown');
+    if (atkBkd) { atkBkd.innerHTML = ''; atkBkd.classList.remove('visible'); }
+    if (defBkd) { defBkd.innerHTML = ''; defBkd.classList.remove('visible'); }
+
     dialog.style.display = 'flex';
 
     const dismiss = () => {
@@ -972,6 +978,19 @@ export class UIController {
       defDie.textContent = result.defenseRoll;
       atkDie.className = 'die-display' + (result.hit ? ' atk-win' : '');
       defDie.className = 'die-display' + (!result.hit ? ' def-win' : '');
+
+      // Populate and fade-in breakdown columns
+      const bd = result.breakdown;
+      if (bd) {
+        document.getElementById('battle-atk-breakdown').innerHTML =
+          _buildBreakdownHTML(actorSnap, bd, 'atk', result.attackRoll);
+        document.getElementById('battle-def-breakdown').innerHTML =
+          _buildBreakdownHTML(targetSnap, bd, 'def', result.defenseRoll);
+        requestAnimationFrame(() => {
+          document.getElementById('battle-atk-breakdown').classList.add('visible');
+          document.getElementById('battle-def-breakdown').classList.add('visible');
+        });
+      }
 
       if (result.killed) {
         outcome.textContent = `💀 ${targetSnap.name} is slain!`;
@@ -1009,17 +1028,6 @@ export class UIController {
           const newHp = Math.max(0, actorSnap.hp - result.counterDmg);
           atkFill.style.width = `${Math.max(0, (newHp / actorSnap.maxHp) * 100)}%`;
         }
-      }
-
-      dialog.querySelectorAll('.battle-gang-note').forEach(el => el.remove());
-      if ((result.attackerAllies || 0) > 0 || (result.defenderAllies || 0) > 0) {
-        const noteEl = document.createElement('div');
-        noteEl.className = 'battle-gang-note';
-        const parts = [];
-        if (result.attackerAllies > 0) parts.push(`Attacker has ${result.attackerAllies} ally (+1 ATK)`);
-        if (result.defenderAllies  > 0) parts.push(`Defender has ${result.defenderAllies} ally (+1 DEF)`);
-        noteEl.textContent = parts.join(' · ');
-        outcome.after(noteEl);
       }
 
       const left = this.state.actionsLeft;
@@ -1333,6 +1341,39 @@ function _combatantHTML(snap, role) {
       <div class="combatant-hp-fill" style="width:${hpPct}%;background:${hpColor}"></div>
     </div>
   `;
+}
+
+// Build the per-side roll breakdown HTML for the battle dialog.
+// side: 'atk' | 'def'   total: the final roll total shown in the die box
+function _buildBreakdownHTML(snap, bd, side, total) {
+  const row = (label, val, isDie = false) => {
+    const valHtml = isDie
+      ? `<span class="bkd-val bkd-die">${val}</span>`
+      : `<span class="bkd-val">${val >= 0 ? '+' + val : val}</span>`;
+    return `<div class="bkd-row"><span class="bkd-label">${label}</span>${valHtml}</div>`;
+  };
+
+  const parts = [];
+  if (side === 'atk') {
+    parts.push(row('Base d6', bd.atkBaseDie, true));
+    parts.push(row(`${snap.name} ATK`, snap.attack));
+    if (bd.phaseBonus)    parts.push(row('☀ Day', bd.phaseBonus));
+    if (bd.atkStaffBonus) parts.push(row('⚕ Staff (undead)', bd.atkStaffBonus));
+    bd.atkExtraDice.forEach((r, i) => {
+      parts.push(row(bd.atkAllyNames[i] ?? 'Ally (d3)', r, true));
+    });
+  } else {
+    parts.push(row('Base d6', bd.defBaseDie, true));
+    parts.push(row(`${snap.name} DEF`, snap.defense));
+    if (bd.fortBonus) parts.push(row(`🏰 Fort ×${bd.fortBonus}`, bd.fortBonus));
+    bd.defExtraDice.forEach((r, i) => {
+      parts.push(row(bd.defAllyNames[i] ?? 'Ally (d3)', r, true));
+    });
+  }
+
+  parts.push(`<hr class="bkd-divider">`);
+  parts.push(`<div class="bkd-total-row"><span class="bkd-label">Total</span><span class="bkd-val">${total}</span></div>`);
+  return parts.join('');
 }
 
 function _hideActionPopup() {

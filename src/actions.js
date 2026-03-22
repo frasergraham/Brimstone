@@ -345,13 +345,18 @@ function _applyLoot(state, actor, lootType, log) {
 
 // Count how many allies (same owner, excluding self) are on the same or adjacent hexes
 function allyCount(state, entity) {
+  return allyList(state, entity).length;
+}
+
+// Return the actual ally entities (same owner, excluding self, on same or adjacent hexes)
+function allyList(state, entity) {
   const neighbors = getNeighbors(entity.col, entity.row);
   const friendlyHexes = new Set([hexKey(entity.col, entity.row)]);
   for (const n of neighbors) friendlyHexes.add(hexKey(n.col, n.row));
   return state.entities.filter(e =>
     e.alive && e.id !== entity.id && e.owner === entity.owner &&
     friendlyHexes.has(hexKey(e.col, e.row))
-  ).length;
+  );
 }
 
 export function executeBattle(state, actor, target) {
@@ -363,16 +368,19 @@ export function executeBattle(state, actor, target) {
   if (state.phase === Phase.NIGHT && actor.owner === 'witch') phaseBonus = 1;
 
   // Compute situational bonuses without touching entity fields
-  const attackerAllies = allyCount(state, actor);
-  const defenderAllies = allyCount(state, target);
+  const atkAllies      = allyList(state, actor);
+  const defAllies      = allyList(state, target);
+  const attackerAllies = atkAllies.length;
+  const defenderAllies = defAllies.length;
   const defTile        = tile(state, target.col, target.row);
   const fortBonus      = defTile?.fortifyLevel || 0;
 
-  // Allies give an extra d6 rather than a flat +1 — more variance, bigger swings
+  // Allies give an extra d3 rather than a flat +1 — more variance, bigger swings
   const extraAtkDice = attackerAllies >= 1 ? 1 : 0;  // 2+ combatants on attacker side
   const extraDefDice = defenderAllies >= 1 ? 1 : 0;  // 2+ combatants on defender side
 
-  const { attackRoll, defenseRoll, hit, margin } =
+  const { attackRoll, defenseRoll, hit, margin,
+          atkBaseDie, defBaseDie, atkExtraDice, defExtraDice, atkStaffBonus } =
     Entity.resolveCombat(actor, target, phaseBonus, 0, fortBonus, extraAtkDice, extraDefDice);
 
   const phaseNote  = phaseBonus > 0
@@ -446,6 +454,14 @@ export function executeBattle(state, actor, target) {
     attackRoll, defenseRoll, hit, killed,
     margin, damage, counterDmg, fortAbsorbed,
     attackerAllies, defenderAllies,
+    breakdown: {
+      atkBaseDie, defBaseDie,
+      atkExtraDice, defExtraDice,
+      atkStaffBonus,
+      phaseBonus, fortBonus,
+      atkAllyNames: atkAllies.map(e => e.displayName),
+      defAllyNames: defAllies.map(e => e.displayName),
+    },
   };
 }
 

@@ -161,10 +161,15 @@
         <div class="battle-versus">⚔</div>
         <div id="battle-defender" class="combatant-panel"></div>
       </div>
-      <div class="battle-dice-row">
-        <div id="battle-atk-die" class="die-display">?</div>
-        <span class="dice-vs">vs</span>
-        <div id="battle-def-die" class="die-display">?</div>
+      <!-- Roll breakdown: atk details | totals (die boxes) | def details -->
+      <div class="battle-breakdown">
+        <div id="battle-atk-breakdown" class="breakdown-col atk-col"></div>
+        <div class="breakdown-totals">
+          <div id="battle-atk-die" class="die-display">?</div>
+          <span class="dice-vs">vs</span>
+          <div id="battle-def-die" class="die-display">?</div>
+        </div>
+        <div id="battle-def-breakdown" class="breakdown-col def-col"></div>
       </div>
       <div id="battle-outcome" class="battle-outcome"></div>
       <div id="battle-footer" class="battle-footer">
