@@ -1,6 +1,6 @@
 // Central game state and turn management
 import { generateMap } from './map.js';
-import { createHero, createWitch, createMinion, resetRoster, EntityType } from './entities.js';
+import { createHero, createWitch, createMinion, createSurvivor, resetRoster, EntityType } from './entities.js';
 import { BuildingType, ResourceType, TileType } from './tiles.js';
 import { hexKey, getNeighbors } from './hex.js';
 
@@ -162,22 +162,40 @@ export class GameState {
       this.witchSummonsThisTurn = 0;
       this.addLog(`The witch stirs… (${this.actionsLeft} actions)`);
     } else {
-      // Node spawning: only during NIGHT — each held node raises a free minion
-      if (this.phase === Phase.NIGHT)
-      for (const obj of this.witchObjectives) {
-        const holder = this.entities.find(
-          e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row
-        );
-        if (!holder) continue;
-        const spawnHex = getNeighbors(obj.col, obj.row).find(n => {
-          const t = this.tiles.get(hexKey(n.col, n.row));
-          return t && t.type !== TileType.RIVER &&
-            !this.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
-        });
-        if (spawnHex) {
-          const newMinion = createMinion(spawnHex.col, spawnHex.row);
-          this.entities.push(newMinion);
-          this.addLog(`🌑 The node at (${obj.col},${obj.row}) stirs — a new minion rises!`);
+      // Node effects: only during NIGHT
+      // • Witch standing on a node raises a free minion each night round.
+      // • Hero standing on a node attracts a free survivor each night round.
+      // Minions held by a minion (not the witch) no longer spawn — the witch
+      // must commit herself to a node to fuel her army.
+      if (this.phase === Phase.NIGHT) {
+        for (const obj of this.witchObjectives) {
+          const freeHex = () => getNeighbors(obj.col, obj.row).find(n => {
+            const t = this.tiles.get(hexKey(n.col, n.row));
+            return t && t.type !== TileType.RIVER &&
+              !this.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
+          });
+
+          // Witch herself on the node → spawn minion
+          const witchHere = this.witch.alive &&
+            this.witch.col === obj.col && this.witch.row === obj.row;
+          if (witchHere) {
+            const hex = freeHex();
+            if (hex) {
+              this.entities.push(createMinion(hex.col, hex.row));
+              this.addLog(`🌑 The witch channels the node — a minion rises from the dark!`);
+            }
+          }
+
+          // Hero on the node → attract a survivor
+          const heroHere = this.hero.alive &&
+            this.hero.col === obj.col && this.hero.row === obj.row;
+          if (heroHere) {
+            const hex = freeHex();
+            if (hex) {
+              this.entities.push(createSurvivor(hex.col, hex.row));
+              this.addLog(`✨ The node calls to the living — a survivor emerges to join the hero!`);
+            }
+          }
         }
       }
 
