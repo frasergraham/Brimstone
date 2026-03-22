@@ -368,17 +368,18 @@ export function executeBattle(state, actor, target) {
   const defTile        = tile(state, target.col, target.row);
   const fortBonus      = defTile?.fortifyLevel || 0;
 
-  const extraAtkBonus = attackerAllies >= 3 ? 1 : 0;
-  const extraDefBonus = fortBonus + (defenderAllies > 0 ? 1 : 0);
+  // Allies give an extra d6 rather than a flat +1 — more variance, bigger swings
+  const extraAtkDice = attackerAllies >= 3 ? 1 : 0;
+  const extraDefDice = defenderAllies > 0  ? 1 : 0;
 
   const { attackRoll, defenseRoll, hit, margin } =
-    Entity.resolveCombat(actor, target, phaseBonus, extraAtkBonus, extraDefBonus);
+    Entity.resolveCombat(actor, target, phaseBonus, 0, fortBonus, extraAtkDice, extraDefDice);
 
   const phaseNote  = phaseBonus > 0
     ? ` (${state.phase === Phase.DAY ? '☀ day bonus' : '🌙 night bonus'})`
     : '';
-  const gangNote   = attackerAllies >= 3 ? ' [gang-up +1]' : '';
-  const allyDefNote = defenderAllies > 0 ? ' [allies +1]' : '';
+  const gangNote    = attackerAllies >= 3 ? ' [gang-up +d6]' : '';
+  const allyDefNote = defenderAllies > 0  ? ' [allies +d6]'  : '';
 
   log.push(
     `${actor.displayName} attacks ${target.displayName}! ` +
@@ -391,8 +392,8 @@ export function executeBattle(state, actor, target) {
   let fortAbsorbed = 0;        // how many fortify levels were consumed
 
   if (hit) {
-    // Great roll (margin >= 4) deals 2 damage instead of 1
-    const totalDmg = margin >= 4 ? 2 : 1;
+    // Crushing blow: attacker's roll is at least double the defender's roll
+    const totalDmg = attackRoll >= 2 * defenseRoll ? 2 : 1;
 
     for (let d = 0; d < totalDmg; d++) {
       if (defTile && defTile.fortifyLevel > 0) {
@@ -415,12 +416,19 @@ export function executeBattle(state, actor, target) {
       const label = damage >= 2 ? `${damage} damage (crushing blow!)` : `${damage} damage`;
       log.push(`${target.displayName} takes ${label}. (${target.hp}/${target.maxHp} HP)`);
     }
-    if (margin >= 4) log.push(`💥 Crushing blow! (margin +${margin})`);
+    if (attackRoll >= 2 * defenseRoll) log.push(`💥 Crushing blow! (${attackRoll} vs ${defenseRoll})`);
   } else {
     log.push(`${target.displayName} defends successfully.`);
 
-    // Great defense (margin <= -4): defender counter-attacks the attacker
-    if (margin <= -4 && actor.alive) {
+    // Tie (margin === 0) chips fortification by 1 — close call, cracks the walls
+    if (margin === 0 && defTile && defTile.fortifyLevel > 0) {
+      defTile.fortifyLevel -= 1;
+      fortAbsorbed += 1;
+      log.push(`🏰 The blow chips the fortifications! (now +${defTile.fortifyLevel} DEF)`);
+    }
+
+    // Counter-attack: defender's roll is at least double the attacker's roll
+    if (defenseRoll >= 2 * attackRoll && actor.alive) {
       const counterKilled = actor.takeDamage(1);
       counterDmg = 1;
       log.push(`⚔ ${target.displayName} counter-attacks! ${actor.displayName} takes 1 damage.`);

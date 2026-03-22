@@ -33,17 +33,17 @@ function clone(e) {
 }
 
 // ── Single-swing analysis ──────────────────────────────────────────────────
-function analyseSwing(attDef, defDef, { phaseBonus = 0, extraAtk = 0, extraDef = 0 } = {}, n = N) {
+function analyseSwing(attDef, defDef, { phaseBonus = 0, extraAtk = 0, extraDef = 0, extraAtkDice = 0, extraDefDice = 0 } = {}, n = N) {
   let hits = 0, crushes = 0, counters = 0;
   const margins = [];
 
   for (let i = 0; i < n; i++) {
     const att = clone(attDef);
     const def = clone(defDef);
-    const { margin } = Entity.resolveCombat(att, def, phaseBonus, extraAtk, extraDef);
+    const { attackRoll, defenseRoll, margin } = Entity.resolveCombat(att, def, phaseBonus, extraAtk, extraDef, extraAtkDice, extraDefDice);
     margins.push(margin);
-    if (margin > 0)  { hits++; if (margin >= 4) crushes++; }
-    if (margin <= -4) counters++;
+    if (margin > 0)  { hits++; if (attackRoll >= 2 * defenseRoll) crushes++; }
+    if (defenseRoll >= 2 * attackRoll) counters++;
   }
 
   const hitRate     = hits / n;
@@ -59,7 +59,7 @@ function analyseSwing(attDef, defDef, { phaseBonus = 0, extraAtk = 0, extraDef =
 // Models an extended fight: attacker and defender take turns attacking each other.
 // Fort on the defender side is consumed per hit.
 function simulateDuel(attDef, defDef, {
-  phaseBonus = 0, extraAtk = 0, extraDef = 0, defFort = 0,
+  phaseBonus = 0, extraAtk = 0, extraDef = 0, defFort = 0, extraAtkDice = 0, extraDefDice = 0,
 } = {}, n = N) {
   let attWins = 0;
   const totalSwings = [];
@@ -77,26 +77,28 @@ function simulateDuel(attDef, defDef, {
       swings++;
       const att = clone(attDef);
       const def = clone(defDef);
-      const { margin: am } = Entity.resolveCombat(att, def, phaseBonus, extraAtk, extraDef + dFort);
+      const { attackRoll: ar, defenseRoll: dr, margin: am } = Entity.resolveCombat(att, def, phaseBonus, extraAtk, extraDef + dFort, extraAtkDice, extraDefDice);
 
       if (am > 0) {
-        const dmg = am >= 4 ? 2 : 1;
+        const dmg = ar >= 2 * dr ? 2 : 1;
         const fortAbsorb = Math.min(dFort, dmg);
         dFort  -= fortAbsorb;
         dHp    -= (dmg - fortAbsorb);
-      } else if (am <= -4) {
-        aHp -= 1; // counter-attack
+      } else if (am === 0 && dFort > 0) {
+        dFort -= 1; // tie chips fortification by 1
+      } else if (dr >= 2 * ar) {
+        aHp -= 1; // counter-attack (defender doubled attacker's roll)
       }
 
       if (aHp <= 0 || dHp <= 0) break;
 
       // ── Defender's swing (same stats but roles reversed, no phase/extra bonuses) ──
       swings++;
-      const { margin: dm } = Entity.resolveCombat(clone(defDef), clone(attDef), 0, 0, 0);
+      const { attackRoll: dr2, defenseRoll: ar2, margin: dm } = Entity.resolveCombat(clone(defDef), clone(attDef), 0, 0, 0);
       if (dm > 0) {
-        const dmg = dm >= 4 ? 2 : 1;
+        const dmg = dr2 >= 2 * ar2 ? 2 : 1;
         aHp -= dmg;
-      } else if (dm <= -4) {
+      } else if (ar2 >= 2 * dr2) {
         dHp -= 1;
       }
     }
@@ -153,14 +155,14 @@ const SCENARIOS = [
   { label: 'Hero vs Witch           (fort 2)',       att: HERO,       def: WITCH,      ctx: { extraDef: 2 }, defFort: 2 },
   { label: 'Hero vs Iron Golem      (fort 2)',       att: HERO,       def: IRON_GOLEM, ctx: { extraDef: 2 }, defFort: 2 },
 
-  // ── Gang-up bonus ────────────────────────────────────────────────────────
-  { label: 'Hero vs Witch           (gang-up +1)',   att: HERO,       def: WITCH,      ctx: { extraAtk: 1 } },
-  { label: 'Hero vs Witch           (day+gang-up)',  att: HERO,       def: WITCH,      ctx: { phaseBonus: 1, extraAtk: 1 } },
-  { label: 'Witch vs Hero           (night+gang)',   att: WITCH,      def: HERO,       ctx: { phaseBonus: 1, extraAtk: 1 } },
+  // ── Gang-up bonus (now extra d6 instead of flat +1) ──────────────────────
+  { label: 'Hero vs Witch           (gang-up +d6)',  att: HERO,       def: WITCH,      ctx: { extraAtkDice: 1 } },
+  { label: 'Hero vs Witch           (day+gang-up)',  att: HERO,       def: WITCH,      ctx: { phaseBonus: 1, extraAtkDice: 1 } },
+  { label: 'Witch vs Hero           (night+gang)',   att: WITCH,      def: HERO,       ctx: { phaseBonus: 1, extraAtkDice: 1 } },
 
-  // ── Ally defence ────────────────────────────────────────────────────────
-  { label: 'Hero vs Witch           (defender ally)',att: HERO,       def: WITCH,      ctx: { extraDef: 1 } },
-  { label: 'Witch vs Hero           (hero has ally)',att: WITCH,      def: HERO,       ctx: { extraDef: 1 } },
+  // ── Ally defence (now extra d6 instead of flat +1) ───────────────────────
+  { label: 'Hero vs Witch           (defender ally)',att: HERO,       def: WITCH,      ctx: { extraDefDice: 1 } },
+  { label: 'Witch vs Hero           (hero has ally)',att: WITCH,      def: HERO,       ctx: { extraDefDice: 1 } },
 
   // ── Survivor combat ──────────────────────────────────────────────────────
   { label: 'Mid Surv vs Zombie      (neutral)',      att: SURV_MID,   def: ZOMBIE,     ctx: {} },
@@ -228,9 +230,9 @@ const DUELS = [
   { label: 'Witch vs Hero           (night)',  att: WITCH,      def: HERO,       ctx: { phaseBonus: 1 } },
   { label: 'Witch vs Hero+Shield    (night)',  att: WITCH,      def: HERO_SHIELD,ctx: { phaseBonus: 1 } },
   { label: 'Iron Golem vs Hero      (night)',  att: IRON_GOLEM, def: HERO,       ctx: {} },
-  { label: 'Hero vs Witch   (day+gang-up+ally)',att:HERO,       def: WITCH,      ctx: { phaseBonus:1, extraAtk:1 } },
+  { label: 'Hero vs Witch   (day+gang-up+d6)', att:HERO,       def: WITCH,      ctx: { phaseBonus:1, extraAtkDice:1 } },
   { label: 'Hero vs Witch   (night, fort 2)', att: HERO,       def: WITCH,      ctx: {}, defFort: 2 },
-  { label: 'Witch vs Hero   (night+gang-up)', att: WITCH,      def: HERO,       ctx: { phaseBonus:1, extraAtk:1 } },
+  { label: 'Witch vs Hero   (night+gang-up)', att: WITCH,      def: HERO,       ctx: { phaseBonus:1, extraAtkDice:1 } },
 ];
 
 console.log(`\n${'DUEL SIMULATION'.padEnd(45)} ${'ATT WIN%'.padStart(9)} ${'AVG SWINGS'.padStart(11)} ${'ATT HP LEFT'.padStart(12)}`);

@@ -231,7 +231,10 @@ export class Entity {
   // phaseBonus:    extra attack from day/night advantage
   // extraAtkBonus: caller-supplied bonus (gang-up etc.) — NOT stored on the entity
   // extraDefBonus: caller-supplied bonus (fortify, gang-up etc.) — NOT stored on the entity
-  static resolveCombat(attacker, defender, phaseBonus = 0, extraAtkBonus = 0, extraDefBonus = 0) {
+  // extraAtkDice / extraDefDice: number of additional d6s rolled for that side
+  // (used for ally gang-up and defender ally support — gives variance instead of flat +1)
+  static resolveCombat(attacker, defender, phaseBonus = 0, extraAtkBonus = 0, extraDefBonus = 0,
+                       extraAtkDice = 0, extraDefDice = 0) {
     let extraAtk = phaseBonus + extraAtkBonus;
     // Staff is +2 attack vs undead/golem types
     if (attacker.weapon === 'staff' &&
@@ -241,8 +244,10 @@ export class Entity {
          defender.type === EntityType.IRON_GOLEM)) {
       extraAtk += 2;
     }
-    const attackRoll  = Math.ceil(Math.random() * 6) + attacker.attack  + attacker.attackBonus + extraAtk;
-    const defenseRoll = Math.ceil(Math.random() * 6) + defender.defense + defender.defenseBonus + extraDefBonus;
+    let attackRoll  = Math.ceil(Math.random() * 6) + attacker.attack  + attacker.attackBonus + extraAtk;
+    let defenseRoll = Math.ceil(Math.random() * 6) + defender.defense + defender.defenseBonus + extraDefBonus;
+    for (let i = 0; i < extraAtkDice; i++) attackRoll  += Math.ceil(Math.random() * 6);
+    for (let i = 0; i < extraDefDice; i++) defenseRoll += Math.ceil(Math.random() * 6);
     const margin = attackRoll - defenseRoll;
     return { attackRoll, defenseRoll, hit: margin > 0, margin };
   }
