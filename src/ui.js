@@ -19,6 +19,7 @@ export class UIController {
     this.heroAI    = heroAI;
     this.onRedraw  = onRedraw;
     this.autoplay  = autoplay;
+    this.mp        = null;  // set externally when in online mode
 
     this._selectedEntity  = null;
     this._validActions    = [];
@@ -155,17 +156,9 @@ export class UIController {
 
     // End Turn in header
     document.getElementById('end-turn-btn')?.addEventListener('click', () => {
-      const state = this.state;
-      if (state.gameOver) return;
-      const isAI = (state.activePlayer === Player.WITCH && state.witchIsAI) ||
-                   (state.activePlayer === Player.HERO  && state.heroIsAI);
-      if (isAI) return;
-      this._clearSelection();
-      state.endTurn();
-      this._triggerHazardFlashes();
-      this._updateSidebar();
-      this.onRedraw();
-      this._maybeRunAI();
+      if (this.state.gameOver) return;
+      if (this._isOpponentTurn()) return;
+      this._doEndTurn();
     });
   }
 
@@ -205,11 +198,35 @@ export class UIController {
     this.onRedraw();
   }
 
+  // ── Online-mode helpers ───────────────────────────────────────────────────
+
+  /** True when the current turn belongs to the remote opponent (not us). */
+  _isOpponentTurn() {
+    if (this.mp?.active) return this.state.activePlayer !== this.mp.myFaction;
+    return (this.state.activePlayer === Player.WITCH && this.state.witchIsAI) ||
+           (this.state.activePlayer === Player.HERO  && this.state.heroIsAI);
+  }
+
+  /** End the current turn — sends to server in online mode, executes locally otherwise. */
+  _doEndTurn() {
+    if (this.mp?.active) {
+      this.mp.sendEndTurn();
+      this._clearSelection();
+      this._updateSidebar();
+      return;
+    }
+    this._clearSelection();
+    this.state.endTurn();
+    this._triggerHazardFlashes();
+    this._updateSidebar();
+    this.onRedraw();
+    this._maybeRunAI();
+  }
+
   _onClick(e) {
     if (this._didDragPan) { this._didDragPan = false; return; }
     if (this.state.gameOver) return;
-    if (this.state.activePlayer === Player.WITCH && this.state.witchIsAI) return;
-    if (this.state.activePlayer === Player.HERO  && this.state.heroIsAI)  return;
+    if (this._isOpponentTurn()) return;
 
     const { x, y } = this._canvasPos(e);
     const hex = this._canvasToHex(x, y);
@@ -344,11 +361,18 @@ export class UIController {
         this._handleSelection(hex);
         return;
       }
+      this._awaitingTarget = null;
+      this.renderer.highlightHexes = [];
+      if (this.mp?.active) {
+        this.mp.sendAction('move', { entityId: actor.id, col: hex.col, row: hex.row });
+        this._clearSelection();
+        this._updateSidebar();
+        this.onRedraw();
+        return;
+      }
       const result = executeMove(state, actor, hex.col, hex.row);
       for (const msg of result.log) state.addLog(msg);
       if (result.success) state.spendAction(result.cost);
-      this._awaitingTarget = null;
-      this.renderer.highlightHexes = [];
       state.checkVictory();
       if (actor.alive && !result.encounterLog?.length) { this._selectEntity(actor); }
       else this._clearSelection();
@@ -374,6 +398,15 @@ export class UIController {
       this.renderer.highlightHexes = [];
 
       const executeFight = (target) => {
+        // Online mode: send to server and let stateUpdate drive the result
+        if (this.mp?.active) {
+          this.mp.sendAction('battle', { entityId: actor.id, targetId: target.id });
+          this._clearSelection();
+          this._updateSidebar();
+          this.onRedraw();
+          return;
+        }
+
         const afterBattle = () => {
           state.checkVictory();
           if (actor.alive) { this._selectEntity(actor); }
@@ -415,11 +448,18 @@ export class UIController {
       }
 
     } else if (actionType === ActionType.SUMMON) {
+      this._awaitingTarget = null;
+      this.renderer.highlightHexes = [];
+      if (this.mp?.active) {
+        this.mp.sendAction('summon', { entityId: actor.id, col: hex.col, row: hex.row });
+        this._clearSelection();
+        this._updateSidebar();
+        this.onRedraw();
+        return;
+      }
       const result = executeSummon(state, actor, hex.col, hex.row);
       for (const msg of result.log) state.addLog(msg);
       if (result.success) state.spendAction(result.cost);
-      this._awaitingTarget = null;
-      this.renderer.highlightHexes = [];
       state.checkVictory();
       if (actor.alive) { this._selectEntity(actor); }
       else this._clearSelection();
@@ -633,12 +673,11 @@ export class UIController {
   _renderEndTurnBtn() {
     const btn = document.getElementById('end-turn-btn');
     if (!btn) return;
-    const state = this.state;
-    const isAI  = (state.activePlayer === Player.WITCH && state.witchIsAI) ||
-                  (state.activePlayer === Player.HERO  && state.heroIsAI);
-    const noActs = state.actionsAvailable === 0;
-    btn.disabled = state.gameOver || isAI;
-    btn.classList.toggle('urgent', noActs && !isAI && !state.gameOver);
+    const state     = this.state;
+    const isOpponent = this._isOpponentTurn();
+    const noActs    = state.actionsAvailable === 0;
+    btn.disabled = state.gameOver || isOpponent;
+    btn.classList.toggle('urgent', noActs && !isOpponent && !state.gameOver);
     btn.title = noActs ? 'End Turn (no actions left)' : 'End Turn Early';
   }
 
@@ -648,12 +687,7 @@ export class UIController {
     const entity = this._selectedEntity;
 
     if (action === 'end_turn') {
-      this._clearSelection();
-      state.endTurn();
-      this._triggerHazardFlashes();
-      this._updateSidebar();
-      this.onRedraw();
-      this._maybeRunAI();
+      this._doEndTurn();
       return;
     }
 
@@ -693,6 +727,10 @@ export class UIController {
     switch (action) {
       case 'explore': {
         _hideActionPopup();
+        if (this.mp?.active) {
+          this.mp.sendAction('explore', { entityId: entity.id });
+          this._clearSelection(); this._updateSidebar(); this.onRedraw(); break;
+        }
         const result = executeExplore(state, entity);
         for (const msg of result.log) state.addLog(msg);
         if (result.success) state.spendAction(result.cost);
@@ -718,6 +756,10 @@ export class UIController {
 
       case 'fortify': {
         _hideActionPopup();
+        if (this.mp?.active) {
+          this.mp.sendAction('fortify', { entityId: entity.id });
+          this._clearSelection(); this._updateSidebar(); this.onRedraw(); break;
+        }
         const result = executeFortify(state, entity);
         for (const msg of result.log) state.addLog(msg);
         if (result.success) state.spendAction(result.cost);
@@ -746,7 +788,11 @@ export class UIController {
 
       case 'use_item': {
         _hideActionPopup();
-        const item   = button.dataset.item;
+        const item = button.dataset.item;
+        if (this.mp?.active) {
+          this.mp.sendAction('use_item', { entityId: entity.id, item });
+          this._clearSelection(); this._updateSidebar(); this.onRedraw(); break;
+        }
         const result = executeUseItem(state, entity, item);
         for (const msg of result.log) state.addLog(msg);
         if (result.success) state.spendAction(result.cost);
@@ -763,6 +809,10 @@ export class UIController {
 
       case 'use_ability': {
         _hideActionPopup();
+        if (this.mp?.active) {
+          this.mp.sendAction('use_ability', { entityId: entity.id });
+          this._clearSelection(); this._updateSidebar(); this.onRedraw(); break;
+        }
         const result = executeUseAbility(state, entity);
         for (const msg of result.log) state.addLog(msg);
         if (result.success) state.spendAction(result.cost);
@@ -851,11 +901,7 @@ export class UIController {
     const state = this.state;
     if (state.gameOver) return;
     if (state.actionsAvailable > 0) return;
-    // Only show for human-controlled players
-    const isHumanTurn =
-      (state.activePlayer === Player.WITCH && !state.witchIsAI) ||
-      (state.activePlayer === Player.HERO  && !state.heroIsAI);
-    if (!isHumanTurn) return;
+    if (this._isOpponentTurn()) return;
     this._showNoActionsDialog();
   }
 
@@ -876,15 +922,18 @@ export class UIController {
       eatBtn.textContent = `🍞 Eat Food (+1 action)  [${food} left]`;
       eatBtn.addEventListener('click', e => {
         e.stopPropagation();
-        const result = executeUseItem(state, state.hero, ResourceType.FOOD);
-        for (const msg of result.log) state.addLog(msg);
         dialog.style.display = 'none';
         hint.style.display = '';
         btns.style.display = 'none';
         btns.innerHTML = '';
+        if (this.mp?.active) {
+          this.mp.sendAction('use_item', { entityId: state.hero.id, item: ResourceType.FOOD });
+        } else {
+          const result = executeUseItem(state, state.hero, ResourceType.FOOD);
+          for (const msg of result.log) state.addLog(msg);
+        }
         this._updateSidebar();
         this.onRedraw();
-        // Don't chain another no-actions dialog here; player now has actions
       });
       btns.appendChild(eatBtn);
     }
@@ -898,12 +947,7 @@ export class UIController {
       hint.style.display = '';
       btns.style.display = 'none';
       btns.innerHTML = '';
-      this._clearSelection();
-      state.endTurn();
-      this._triggerHazardFlashes();
-      this._updateSidebar();
-      this.onRedraw();
-      this._maybeRunAI();
+      this._doEndTurn();
     });
     btns.appendChild(endBtn);
 
