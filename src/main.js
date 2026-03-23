@@ -78,6 +78,7 @@ function showGameOver() {
 // ── Online game init ──────────────────────────────────────────────────────────
 
 let mp = null; // MultiplayerClient instance
+let _pendingOnlineInit = null; // { faction } — set by matchFound, consumed by stateUpdate(start)
 
 function initOnline(mirrorState, myFaction, mpClient) {
   state    = mirrorState;
@@ -263,9 +264,19 @@ document.getElementById('btn-quick-match').addEventListener('click', () => {
   _ensureAuthed(() => {
     showStep('waiting');
     document.getElementById('waiting-subtitle').textContent = 'Searching for an opponent…';
-    document.getElementById('waiting-message').textContent  = 'Searching for a worthy opponent in Salem…';
+    document.getElementById('waiting-message').textContent  = 'Searching for a worthy opponent in Salem… (AI fills in after 30s)';
     document.getElementById('waiting-room-code').style.display = 'none';
     mp.joinQueue();
+  });
+});
+
+document.getElementById('btn-play-ai-online').addEventListener('click', () => {
+  _ensureAuthed(() => {
+    showStep('waiting');
+    document.getElementById('waiting-subtitle').textContent = 'Starting game vs AI…';
+    document.getElementById('waiting-message').textContent  = 'Summoning your opponent from the dark…';
+    document.getElementById('waiting-room-code').style.display = 'none';
+    mp.playAI();
   });
 });
 
@@ -387,12 +398,8 @@ function _createMpClient() {
       document.getElementById('waiting-message').textContent =
         `Opponent: ${opponentName}${aiOpponent ? ' (AI)' : ''}. Starting game…`;
 
-      // Give the state update message a moment to arrive, then start
-      setTimeout(() => {
-        // State will have been set by the onState callback already
-        if (!state) return;
-        initOnline(state, faction, mp);
-      }, 300);
+      // Store faction — initOnline is triggered when the stateUpdate(start) arrives
+      _pendingOnlineInit = { faction };
     },
 
     onLeaderboard(entries) {
@@ -446,7 +453,12 @@ MultiplayerClient.prototype._route = function(msg) {
     cb();
   }
   if (msg.type === 'stateUpdate' && msg.reason === 'start') {
-    // Store initial mirror state for initOnline to pick up
-    state = MirrorState.fromSnapshot(msg.state);
+    const mirror = MirrorState.fromSnapshot(msg.state);
+    state = mirror;
+    if (_pendingOnlineInit && mp) {
+      const { faction } = _pendingOnlineInit;
+      _pendingOnlineInit = null;
+      initOnline(mirror, faction, mp);
+    }
   }
 };

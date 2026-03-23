@@ -10,6 +10,7 @@ import { getLeaderboard }                    from './server/leaderboard.js';
 import {
   joinQueue, leaveQueue,
   createPrivateRoom, joinPrivateRoom,
+  joinAIGame,
   handleAction, handleEndTurn,
   handleDisconnect, handleReconnect,
   getRoom,
@@ -115,6 +116,12 @@ function route(ws, cs, msg) {
     case 'leaveQueue': {
       if (cs.cancelQueue) { cs.cancelQueue(); cs.cancelQueue = null; }
       leaveQueue(cs.player?.id);
+      break;
+    }
+
+    case 'playAI': {
+      if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
+      joinAIGame(cs.player.id, cs.player.username, ws);
       break;
     }
 

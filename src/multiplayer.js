@@ -136,6 +136,7 @@ export class MultiplayerClient {
 
   joinQueue()  { this._send({ type: 'joinQueue'  }); }
   leaveQueue() { this._send({ type: 'leaveQueue' }); }
+  playAI()     { this._send({ type: 'playAI'     }); }
 
   createRoom() { this._send({ type: 'createRoom' }); }
   joinRoom(code) { this._send({ type: 'joinRoom', code }); }

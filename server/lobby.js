@@ -277,6 +277,34 @@ export function createPrivateRoom(playerId, playerName, ws) {
   }, AI_FILL_DELAY_MS);
 }
 
+/** Immediately start a game against a server AI (no queue wait). */
+export function joinAIGame(playerId, playerName, ws) {
+  const humanFaction = Math.random() < 0.5 ? 'hero' : 'witch';
+  const aiFaction    = humanFaction === 'hero' ? 'witch' : 'hero';
+
+  const room = humanFaction === 'hero'
+    ? createRoom(playerId, ws, playerName, null, null, '')
+    : createRoom(null, null, '', playerId, ws, playerName);
+
+  attachAI(room, aiFaction);
+
+  send(ws, {
+    type:         'matchFound',
+    roomId:       room.id,
+    faction:      humanFaction,
+    opponentName: aiFaction === 'witch' ? 'The AI Witch' : 'The AI Hero',
+    aiOpponent:   true,
+  });
+
+  broadcastState(room, 'start');
+
+  // If AI takes the first turn, kick it off after the client has the initial state
+  setTimeout(() => {
+    if (room.state.activePlayer === Player.WITCH && room.witchAI) runAITurn(room);
+    if (room.state.activePlayer === Player.HERO  && room.heroAI)  runAITurn(room);
+  }, 100);
+}
+
 /** Second player joins a private room by code. */
 export function joinPrivateRoom(playerId, playerName, ws, code) {
   const roomId = codeToRoom.get(code.toUpperCase());
