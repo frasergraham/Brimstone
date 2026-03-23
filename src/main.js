@@ -212,6 +212,12 @@ async function _animateResolutionSteps(steps, prePos, redrawFn, humanFaction = n
           curPos.set(action.entityId, { col: action.toCol, row: action.toRow });
           hadAnim = true;
         }
+        if (result?.encounterLog?.length && (!humanFaction || ev.faction === humanFaction)) {
+          redrawFn();
+          await new Promise(resolve => {
+            ui._showResultDialog(result.encounterLog, resolve);
+          });
+        }
       } else if (
         action.type === PlanActionType.BATTLE_UNIT ||
         action.type === PlanActionType.BATTLE_HEX

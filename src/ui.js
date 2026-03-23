@@ -267,6 +267,12 @@ export class UIController {
       panel.style.display = '';
       panel.classList.remove('plan-submitted');
       panel.dataset.witchMode = faction === 'witch' ? '1' : '';
+      // Default to collapsed on narrow (phone) screens
+      if (window.innerWidth <= 700) {
+        panel.classList.add('collapsed');
+      } else {
+        panel.classList.remove('collapsed');
+      }
     }
 
     this._clearSelection();
