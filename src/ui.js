@@ -602,7 +602,9 @@ export class UIController {
     const hasMoveAction = this._validActions.some(a => a.type === ActionType.MOVE);
     const actionsOk = this._planMode || this.state.actionsAvailable > 0;
     if (hasMoveAction && actionsOk) {
-      this._awaitingTarget = { actionType: ActionType.MOVE, actor: effectiveEntity, isDefault: true };
+      // Store the real entity in actor so that actor.alive (a prototype getter) works correctly.
+      // effectiveEntity is a plain spread-copy used only for position; it loses prototype methods.
+      this._awaitingTarget = { actionType: ActionType.MOVE, actor: entity, isDefault: true };
     } else {
       this._awaitingTarget = null;
     }
@@ -716,7 +718,8 @@ export class UIController {
           const hasBattle = this._validActions.some(a => a.type === ActionType.BATTLE);
           if (actor.alive && hasBattle) {
             // Keep attack mode active — next tap on same target stacks an attack.
-            this._awaitingTarget = { actionType: ActionType.BATTLE, actor: eff };
+            // Use real entity (actor) not the spread copy (eff); eff lacks prototype getters.
+            this._awaitingTarget = { actionType: ActionType.BATTLE, actor: actor };
             this._updateHighlights();
           } else {
             if (actor.alive) this._selectEntity(actor);
