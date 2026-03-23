@@ -1092,6 +1092,22 @@ canvas { touch-action: pan-x pan-y; }
 
 /* ── Mobile / touch layout ─────────────────────────────────────────────── */
 
+/* ── Cycle strip visibility: show dedicated bar, hide inline strip ─────── */
+/* Applies on tablet/iPad (≤1024px) so the header isn't cramped             */
+@media (max-width: 1024px) {
+  .cycle-strip-header { display: none; }
+  #cycle-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 0.2rem 0.5rem;
+    background: rgba(13,17,23,0.92);
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+    flex-shrink: 0;
+  }
+}
+
 @media (max-width: 700px) {
   html, body { overflow: hidden; font-size: 15px; }
 
@@ -1103,19 +1119,6 @@ canvas { touch-action: pan-x pan-y; }
   .header-title { display: none; }
   #turn-info { flex-wrap: wrap; gap: 0.3rem 0.6rem; }
   .phase-hint { display: none; }
-  /* Hide the in-header cycle strip on mobile — the dedicated #cycle-bar takes over */
-  .cycle-strip-header { display: none; }
-  /* Show cycle bar between header and game canvas */
-  #cycle-bar {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    padding: 0.2rem 0.5rem;
-    background: rgba(13,17,23,0.92);
-    border-bottom: 1px solid rgba(255,255,255,0.07);
-    flex-shrink: 0;
-  }
 
   /* game-main fills all remaining height; canvas is the only child */
   #game-main { overflow: hidden; min-height: 0; }
