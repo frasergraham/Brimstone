@@ -71,14 +71,14 @@ function factionFor(room, playerId) {
  * }} Room
  */
 
-function createRoom(heroPlayerId, heroWs, heroName, witchPlayerId, witchWs, witchName) {
+function createRoom(heroPlayerId, heroWs, heroName, witchPlayerId, witchWs, witchName, fog = true) {
   const id    = randomUUID();
   let   code;
   do { code = randomCode(); } while (codeToRoom.has(code));
 
   // Both sides human-controlled from the server's perspective; AI is driven externally
   const state = new GameState(false, false);
-  state.fogOfWar = true;
+  state.fogOfWar = fog;
 
   /** @type {Room} */
   const room = {
@@ -314,9 +314,12 @@ function tryMatch() {
   // Randomly assign factions
   const [hero, witch] = Math.random() < 0.5 ? [a, b] : [b, a];
 
+  // Use fog setting from whichever player joined the queue first (host decides)
+  const fog = hero.fog ?? witch.fog ?? true;
   const room = createRoom(
     hero.playerId,  hero.ws,  hero.playerName,
     witch.playerId, witch.ws, witch.playerName,
+    fog,
   );
 
   send(hero.ws,  { type: 'matchFound', roomId: room.id, faction: 'hero',  opponentName: witch.playerName, aiOpponent: false });
@@ -329,11 +332,11 @@ function tryMatch() {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /** Player joins the matchmaking queue. Returns a cleanup fn. */
-export function joinQueue(playerId, playerName, ws) {
+export function joinQueue(playerId, playerName, ws, fog = true) {
   // Remove any existing queue entry for this player
   leaveQueue(playerId);
 
-  const entry = { playerId, playerName, ws, joinedAt: Date.now() };
+  const entry = { playerId, playerName, ws, joinedAt: Date.now(), fog };
   queue.push(entry);
 
   send(ws, { type: 'inQueue', position: queue.length });
@@ -351,9 +354,9 @@ export function joinQueue(playerId, playerName, ws) {
 
     let room;
     if (humanFaction === 'hero') {
-      room = createRoom(playerId, ws, playerName, null, null, 'AI Witch');
+      room = createRoom(playerId, ws, playerName, null, null, 'AI Witch', fog);
     } else {
-      room = createRoom(null, null, 'AI Hero', playerId, ws, playerName);
+      room = createRoom(null, null, 'AI Hero', playerId, ws, playerName, fog);
     }
 
     attachAI(room, aiFaction);
@@ -383,9 +386,9 @@ export function leaveQueue(playerId) {
 }
 
 /** Create a private room and return the code. */
-export function createPrivateRoom(playerId, playerName, ws) {
+export function createPrivateRoom(playerId, playerName, ws, fog = true) {
   // First player becomes hero by default; second player gets witch when joining
-  const room = createRoom(playerId, ws, playerName, null, null, '');
+  const room = createRoom(playerId, ws, playerName, null, null, '', fog);
   send(ws, { type: 'roomCode', code: room.code, roomId: room.id });
 
   // Set up AI fill-in timer (if second player never joins)
@@ -400,13 +403,13 @@ export function createPrivateRoom(playerId, playerName, ws) {
 }
 
 /** Immediately start a game against a server AI (no queue wait). */
-export function joinAIGame(playerId, playerName, ws) {
+export function joinAIGame(playerId, playerName, ws, fog = true) {
   const humanFaction = Math.random() < 0.5 ? 'hero' : 'witch';
   const aiFaction    = humanFaction === 'hero' ? 'witch' : 'hero';
 
   const room = humanFaction === 'hero'
-    ? createRoom(playerId, ws, playerName, null, null, '')
-    : createRoom(null, null, '', playerId, ws, playerName);
+    ? createRoom(playerId, ws, playerName, null, null, '', fog)
+    : createRoom(null, null, '', playerId, ws, playerName, fog);
 
   attachAI(room, aiFaction);
 

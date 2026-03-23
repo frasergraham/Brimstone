@@ -143,12 +143,12 @@ export class MultiplayerClient {
     this._send({ type: 'auth', username, token, roomId });
   }
 
-  joinQueue()  { this._send({ type: 'joinQueue'  }); }
-  leaveQueue() { this._send({ type: 'leaveQueue' }); }
-  playAI()     { this._send({ type: 'playAI'     }); }
+  joinQueue(fog = true)  { this._send({ type: 'joinQueue',   fog }); }
+  leaveQueue()           { this._send({ type: 'leaveQueue'         }); }
+  playAI(fog = true)     { this._send({ type: 'playAI',     fog }); }
 
-  createRoom() { this._send({ type: 'createRoom' }); }
-  joinRoom(code) { this._send({ type: 'joinRoom', code }); }
+  createRoom(fog = true) { this._send({ type: 'createRoom', fog }); }
+  joinRoom(code)         { this._send({ type: 'joinRoom',   code }); }
 
   requestLeaderboard() { this._send({ type: 'requestLeaderboard' }); }
 

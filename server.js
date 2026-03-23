@@ -116,11 +116,7 @@ function route(ws, cs, msg) {
     case 'joinQueue': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
       if (cs.cancelQueue) cs.cancelQueue();
-      cs.cancelQueue = joinQueue(cs.player.id, cs.player.username, ws);
-
-      // Update roomId when match is found — intercept the matchFound send via a proxy
-      // Actually we hook into it by watching for matchFound in a wrapper
-      // Simpler: client sends roomId back on first action; we set it then.
+      cs.cancelQueue = joinQueue(cs.player.id, cs.player.username, ws, msg.fog ?? true);
       break;
     }
 
@@ -132,13 +128,13 @@ function route(ws, cs, msg) {
 
     case 'playAI': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
-      joinAIGame(cs.player.id, cs.player.username, ws);
+      joinAIGame(cs.player.id, cs.player.username, ws, msg.fog ?? true);
       break;
     }
 
     case 'createRoom': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
-      createPrivateRoom(cs.player.id, cs.player.username, ws);
+      createPrivateRoom(cs.player.id, cs.player.username, ws, msg.fog ?? true);
       break;
     }
 

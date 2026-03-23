@@ -171,6 +171,7 @@ async function _runLocalResolution() {
   await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction);
 
   state.endRound();
+  if (ui) ui._triggerHazardFlashes();
   redraw();
 
   if (state.gameOver) { showGameOver(); return; }
@@ -493,13 +494,17 @@ document.getElementById('btn-join-room-confirm').addEventListener('click', () =>
   _ensureAuthed(() => mp.joinRoom(code));
 });
 
+function _fogChecked() {
+  return document.getElementById('chk-fog-of-war')?.checked ?? true;
+}
+
 document.getElementById('btn-quick-match').addEventListener('click', () => {
   _ensureAuthed(() => {
     showStep('waiting');
     document.getElementById('waiting-subtitle').textContent = 'Searching for an opponent…';
     document.getElementById('waiting-message').textContent  = 'Searching for a worthy opponent in Salem… (AI fills in after 5s)';
     document.getElementById('waiting-room-code').style.display = 'none';
-    mp.joinQueue();
+    mp.joinQueue(_fogChecked());
   });
 });
 
@@ -509,7 +514,7 @@ document.getElementById('btn-play-ai-online').addEventListener('click', () => {
     document.getElementById('waiting-subtitle').textContent = 'Starting game vs AI…';
     document.getElementById('waiting-message').textContent  = 'Summoning your opponent from the dark…';
     document.getElementById('waiting-room-code').style.display = 'none';
-    mp.playAI();
+    mp.playAI(_fogChecked());
   });
 });
 
@@ -519,7 +524,7 @@ document.getElementById('btn-create-room').addEventListener('click', () => {
     document.getElementById('waiting-subtitle').textContent = 'Creating private room…';
     document.getElementById('waiting-message').textContent  = 'Waiting for your opponent to join…';
     document.getElementById('waiting-room-code').style.display = 'none';
-    mp.createRoom();
+    mp.createRoom(_fogChecked());
   });
 });
 
@@ -762,8 +767,8 @@ function _createMpClient() {
         if (state.gameOver) {
           showGameOver();
         } else {
-          ui._maybeShowNoActionsDialog();
-          // If onPlanningPhase already arrived while we were animating, apply it now.
+          // Planning mode: never show "no actions" dialog here — a new planning
+          // phase is always imminent. Apply any buffered planning phase immediately.
           if (_pendingPlanningPhase) {
             const payload = _pendingPlanningPhase;
             _pendingPlanningPhase = null;
