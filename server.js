@@ -25,6 +25,15 @@ const app = express();
 app.use(express.json());
 app.use(express.static(join(__dirname)));   // serve game files from repo root
 
+// Health check — Railway pings this to confirm the service is up
+app.get('/health', (_req, res) => {
+  res.json({
+    status:      'ok',
+    uptime:      Math.floor(process.uptime()),
+    connections: clients.size,
+  });
+});
+
 // REST: leaderboard (also exposed over WS, but handy for embedding)
 app.get('/api/leaderboard', (_req, res) => {
   res.json(getLeaderboard(20));
