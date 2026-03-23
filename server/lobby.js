@@ -208,15 +208,19 @@ function _executeResolution(room) {
 
   // Serialize steps — convert any entity objects to plain data
   const serializedSteps = steps.map(step => ({
-    stepIndex:   step.stepIndex,
-    heroEvents:  _serializeEvents(step.heroEvents),
-    witchEvents: _serializeEvents(step.witchEvents),
+    stepIndex:      step.stepIndex,
+    heroEvents:     _serializeEvents(step.heroEvents),
+    witchEvents:    _serializeEvents(step.witchEvents),
+    entitySnapshot: step.entitySnapshot ?? [],   // pre-step entity state for client animation
   }));
 
   broadcast(room, { type: 'resolutionComplete', steps: serializedSteps, finalState });
 
   if (!state.gameOver) {
-    setTimeout(() => _startPlanningPhase(room), 100);
+    // Give clients enough time to finish animating the resolution before starting the
+    // next planning phase.  The client buffers the planningPhase message anyway, but
+    // a longer delay avoids unnecessary buffering for short plans.
+    setTimeout(() => _startPlanningPhase(room), 4000);
   }
 }
 

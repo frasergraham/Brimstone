@@ -14,7 +14,9 @@ document.getElementById('version-badge').textContent = `v${VERSION}`;
 document.getElementById('game-version').textContent  = `v${VERSION}`;
 
 let state, renderer, ui, witchAI, heroAI;
-let _autoplay = false;
+let _autoplay  = false;
+let _resolving = false;           // true while _animateResolutionSteps is running
+let _pendingPlanningPhase = null; // buffered onPlanningPhase payload received during animation
 
 // ── Local game init ───────────────────────────────────────────────────────────
 
@@ -197,6 +199,7 @@ async function _runLocalResolution() {
  * humanFaction:  if set, suppress opponent-only battle/explore dialogs.
  */
 async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFaction = null) {
+  _resolving = true;
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     // Post-step entities: what the world looks like AFTER this step resolves.
@@ -293,6 +296,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   // Restore the authoritative final state and do one last draw.
   state.entities = finalEntities;
   redrawFn();
+  _resolving = false;
 }
 
 function _delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
@@ -594,6 +598,14 @@ function _ensureAuthed(cb) {
   }
 }
 
+function _applyOnlinePlanningPhase({ heroActionsLeft, witchActionsLeft }) {
+  if (!ui || !mp) return;
+  const budget = mp.myFaction === 'hero' ? heroActionsLeft : witchActionsLeft;
+  ui.exitPlanningMode();
+  ui.enterPlanningMode(mp.myFaction, budget);
+  ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
+}
+
 function _serverWsUrl() {
   // Allow override via global (set by server when serving the page, for production)
   if (window.BRIMSTONE_WS) return window.BRIMSTONE_WS;
@@ -618,6 +630,10 @@ function _createMpClient() {
         }
         return;
       }
+
+      // Suppress mid-resolution state pushes — the animation owns state.entities right now.
+      if (_resolving) return;
+
       // Already in game — update in-place (keeps renderer pan/zoom)
 
       // Snapshot entity positions before update so we can animate moves
@@ -709,12 +725,14 @@ function _createMpClient() {
       if (mp) _updateOnlineStatus(mp);
     },
 
-    onPlanningPhase({ heroActionsLeft, witchActionsLeft }) {
+    onPlanningPhase(payload) {
       if (!ui || !mp) return;
-      const budget = mp.myFaction === 'hero' ? heroActionsLeft : witchActionsLeft;
-      ui.exitPlanningMode();
-      ui.enterPlanningMode(mp.myFaction, budget);
-      ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
+      // If the resolution animation is still running, defer until it finishes.
+      if (_resolving) {
+        _pendingPlanningPhase = payload;
+        return;
+      }
+      _applyOnlinePlanningPhase(payload);
     },
 
     onOpponentReady() {
@@ -726,16 +744,32 @@ function _createMpClient() {
       if (!ui || !renderer) return;
       ui.exitPlanningMode();
 
-      const currentEntities = state.entities; // restored by animation; then overwritten by finalState
-      _animateResolutionSteps(steps, currentEntities, redrawOnline, mp?.myFaction).then(() => {
-        // Apply final state (next stateUpdate from server will match, so no double anim)
+      // Use the server's final entity list as the landing state for the animation.
+      // This ensures state.entities is already correct when the last slide lands.
+      const finalEntities = finalState.entities ?? state.entities;
+
+      _animateResolutionSteps(steps, finalEntities, redrawOnline, mp?.myFaction).then(() => {
+        // Apply full final state (phase, round, score, tiles, etc.)
         Object.assign(state, finalState);
         state.hero      = finalState.hero;
         state.witch     = finalState.witch;
         state.myFaction = mp?.myFaction;
 
+        // Mirror the same post-resolution side effects as the local path.
+        ui._triggerHazardFlashes();
         redrawOnline();
-        if (state.gameOver) showGameOver();
+
+        if (state.gameOver) {
+          showGameOver();
+        } else {
+          ui._maybeShowNoActionsDialog();
+          // If onPlanningPhase already arrived while we were animating, apply it now.
+          if (_pendingPlanningPhase) {
+            const payload = _pendingPlanningPhase;
+            _pendingPlanningPhase = null;
+            _applyOnlinePlanningPhase(payload);
+          }
+        }
       });
     },
 
