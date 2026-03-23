@@ -1,6 +1,7 @@
 // Simultaneous-turn planning: action types, ghost-state projection, and entity snap.
 import { hexKey, getNeighbors, hexDistance } from './hex.js';
-import { TileType } from './tiles.js';
+import { TileType, ResourceType } from './tiles.js';
+import { EntityType } from './entities.js';
 
 // ── Plan action types ────────────────────────────────────────────────────────
 //
@@ -66,6 +67,8 @@ export function snapEntity(entity) {
 //     positions,        // Map<entityId, {col,row}> after this step
 //     arrow,            // {entityId, fromCol, fromRow, toCol, toRow} | null
 //     stepNumber,       // 1-based index among MOVE steps only (for rendering)
+//     attackArrow,      // {fromCol, fromRow, toCol, toRow} | null  (for BATTLE_* steps)
+//     summonInfo,       // {col, row, type: EntityType} | null      (for SUMMON steps)
 //   }
 
 export function computeGhostState(state, plan) {
@@ -81,6 +84,8 @@ export function computeGhostState(state, plan) {
   for (const action of plan) {
     let arrow = null;
     let stepNumber = null;
+    let attackArrow = null;
+    let summonInfo = null;
 
     if (action.type === PlanActionType.MOVE) {
       const pos = positions.get(action.entityId);
@@ -97,7 +102,24 @@ export function computeGhostState(state, plan) {
         // Advance the projected position.
         positions.set(action.entityId, { col: action.toCol, row: action.toRow });
       }
+    } else if (action.type === PlanActionType.BATTLE_UNIT) {
+      const fromPos = positions.get(action.entityId);
+      const toPos   = positions.get(action.targetId);
+      if (fromPos && toPos) {
+        attackArrow = { fromCol: fromPos.col, fromRow: fromPos.row, toCol: toPos.col, toRow: toPos.row };
+      }
+    } else if (action.type === PlanActionType.BATTLE_HEX) {
+      const fromPos = positions.get(action.entityId);
+      if (fromPos && action.targetCol != null) {
+        attackArrow = { fromCol: fromPos.col, fromRow: fromPos.row, toCol: action.targetCol, toRow: action.targetRow };
+      }
     } else if (action.type === PlanActionType.SUMMON) {
+      // Determine summon type from witch inventory.
+      const inv = state.inventory?.witch ?? {};
+      const summonType = (inv[ResourceType.METAL] || 0) > 0 ? EntityType.IRON_GOLEM
+                       : (inv[ResourceType.WOOD]  || 0) > 0 ? EntityType.WOOD_GOLEM
+                       : EntityType.MINION;
+      summonInfo = { col: action.toCol, row: action.toRow, type: summonType };
       // Give the new unit a temporary id for ghost rendering.
       const ghostId = `ghost-summon-${steps.length}`;
       positions.set(ghostId, { col: action.toCol, row: action.toRow });
@@ -108,6 +130,8 @@ export function computeGhostState(state, plan) {
       positions: new Map(positions),
       arrow,
       stepNumber,
+      attackArrow,
+      summonInfo,
     });
   }
 

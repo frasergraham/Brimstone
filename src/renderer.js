@@ -807,27 +807,88 @@ export class Renderer {
     }
   }
 
-  /** Draw plan ghost overlay: arrows from start to projected positions for each move step. */
+  /** Draw plan ghost overlay: ghost entities, summon icons, move arrows, attack arrows. */
   _drawPlanOverlay(ghostSteps) {
     const ctx = this.ctx;
     const hs  = this.hexSize;
-
-    // Collect move steps (with their full step record for overBudget flag)
-    const moveSteps = ghostSteps.filter(s => s.arrow !== null);
-    if (!moveSteps.length) return;
 
     ctx.save();
     ctx.lineCap  = 'round';
     ctx.lineJoin = 'round';
 
+    // ── Layer 1: Ghost entity circles at move destinations ───────────────────
+    const moveSteps = ghostSteps.filter(s => s.arrow !== null);
+    for (const step of moveSteps) {
+      const arrow = step.arrow;
+      const to    = this._toCanvas(arrow.toCol, arrow.toRow);
+      const r     = hs * 0.32;
+
+      // Find entity type/owner for color
+      const entityId = arrow.entityId;
+      // Look up entity from last step positions where it was moved
+      let entityType  = null;
+      let entityOwner = null;
+      for (const e of (this.state?.entities ?? [])) {
+        if (e.id === entityId) { entityType = e.type; entityOwner = e.owner; break; }
+      }
+      const color = ENTITY_COLOR[entityType] ?? (entityOwner === 'witch' ? '#9b59b6' : '#d4a72c');
+
+      ctx.globalAlpha = 0.4;
+      ctx.beginPath();
+      ctx.arc(to.x, to.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      if (entityType) {
+        ctx.globalAlpha = 0.55;
+        ctx.fillStyle   = '#fff';
+        ctx.font        = `${Math.floor(r * 1.1)}px sans-serif`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(entityGlyph(entityType), to.x, to.y + 1);
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // ── Layer 2: Translucent summon icons at summon hexes ────────────────────
+    for (const step of ghostSteps) {
+      if (!step.summonInfo) continue;
+      const { col, row, type } = step.summonInfo;
+      const center = this._toCanvas(col, row);
+      const r      = hs * 0.32;
+      const color  = ENTITY_COLOR[type] ?? '#c0392b';
+
+      ctx.globalAlpha = 0.45;
+      ctx.beginPath();
+      ctx.arc(center.x, center.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([3, 3]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.globalAlpha = 0.6;
+      ctx.fillStyle   = '#fff';
+      ctx.font        = `${Math.floor(r * 1.1)}px sans-serif`;
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(entityGlyph(type), center.x, center.y + 1);
+      ctx.globalAlpha = 1;
+    }
+
+    // ── Layer 3: Yellow move arrows with step badges ─────────────────────────
     moveSteps.forEach((step, i) => {
       const arrow = step.arrow;
-      const ob    = step.overBudget;   // true = beyond action budget
+      const ob    = step.overBudget;
 
       const from = this._toCanvas(arrow.fromCol, arrow.fromRow);
       const to   = this._toCanvas(arrow.toCol,   arrow.toRow);
 
-      // Draw dashed line from → to
       const dx = to.x - from.x;
       const dy = to.y - from.y;
       const len = Math.hypot(dx, dy);
@@ -849,7 +910,6 @@ export class Renderer {
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // Arrow head
       const headLen = hs * 0.22;
       const angle   = Math.atan2(dy, dx);
       ctx.strokeStyle = ob ? 'rgba(140,140,140,0.55)' : 'rgba(245,200,66,0.9)';
@@ -861,19 +921,87 @@ export class Renderer {
       ctx.lineTo(endX - headLen * Math.cos(angle + 0.4), endY - headLen * Math.sin(angle + 0.4));
       ctx.stroke();
 
-      // Badge on destination hex: gold number (in-budget) or grey ✕ (over-budget)
       const num    = arrow.stepNumber ?? (i + 1);
       const badgeR = hs * 0.22;
       ctx.beginPath();
       ctx.arc(to.x, to.y, badgeR, 0, Math.PI * 2);
       ctx.fillStyle = ob ? 'rgba(60,60,60,0.80)' : 'rgba(245,200,66,0.85)';
       ctx.fill();
-      ctx.fillStyle = ob ? 'rgba(180,80,80,0.95)' : '#1a1108';
-      ctx.font      = `bold ${Math.floor(badgeR * 1.1)}px sans-serif`;
+      ctx.fillStyle    = ob ? 'rgba(180,80,80,0.95)' : '#1a1108';
+      ctx.font         = `bold ${Math.floor(badgeR * 1.1)}px sans-serif`;
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(ob ? '✕' : String(num), to.x, to.y + 0.5);
     });
+
+    // ── Layer 4: Red attack arrows with ×N badge ─────────────────────────────
+    // Count attacks per target hex key for badge.
+    const attackCounts = new Map(); // "col,row" → count
+    for (const step of ghostSteps) {
+      if (!step.attackArrow) continue;
+      const key = `${step.attackArrow.toCol},${step.attackArrow.toRow}`;
+      attackCounts.set(key, (attackCounts.get(key) ?? 0) + 1);
+    }
+
+    const drawnBadges = new Set();
+    for (const step of ghostSteps) {
+      if (!step.attackArrow) continue;
+      const aa   = step.attackArrow;
+      const from = this._toCanvas(aa.fromCol, aa.fromRow);
+      const to   = this._toCanvas(aa.toCol,   aa.toRow);
+
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 1) continue;
+      const ux = dx / len;
+      const uy = dy / len;
+
+      const startX = from.x + ux * hs * 0.38;
+      const startY = from.y + uy * hs * 0.38;
+      const endX   = to.x   - ux * hs * 0.45;
+      const endY   = to.y   - uy * hs * 0.45;
+
+      ctx.strokeStyle = 'rgba(220,60,60,0.80)';
+      ctx.lineWidth   = 2;
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath();
+      ctx.moveTo(startX, startY);
+      ctx.lineTo(endX,   endY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      const headLen = hs * 0.20;
+      const angle   = Math.atan2(dy, dx);
+      ctx.strokeStyle = 'rgba(220,60,60,0.90)';
+      ctx.lineWidth   = 2;
+      ctx.beginPath();
+      ctx.moveTo(endX, endY);
+      ctx.lineTo(endX - headLen * Math.cos(angle - 0.4), endY - headLen * Math.sin(angle - 0.4));
+      ctx.moveTo(endX, endY);
+      ctx.lineTo(endX - headLen * Math.cos(angle + 0.4), endY - headLen * Math.sin(angle + 0.4));
+      ctx.stroke();
+
+      // Badge at target hex (draw once per unique target)
+      const badgeKey = `${aa.toCol},${aa.toRow}`;
+      if (!drawnBadges.has(badgeKey)) {
+        drawnBadges.add(badgeKey);
+        const count  = attackCounts.get(badgeKey) ?? 1;
+        const label  = count > 1 ? `×${count}` : '⚔';
+        const badgeR = hs * 0.24;
+        const bx     = to.x + hs * 0.28;
+        const by     = to.y - hs * 0.28;
+        ctx.beginPath();
+        ctx.arc(bx, by, badgeR, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(180,30,30,0.85)';
+        ctx.fill();
+        ctx.fillStyle    = '#fff';
+        ctx.font         = `bold ${Math.floor(badgeR * (count > 1 ? 0.9 : 1.1))}px sans-serif`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, bx, by + 0.5);
+      }
+    }
 
     ctx.restore();
   }

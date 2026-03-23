@@ -812,7 +812,15 @@ export class UIController {
       return;
     }
 
-    const actions = getValidActions(state, entity);
+    // In planning mode use projected position so attack is available after a planned move
+    let effectiveEntity = entity;
+    if (this._planMode) {
+      const proj = this._getProjectedPos(entity.id);
+      if (proj && (proj.col !== entity.col || proj.row !== entity.row)) {
+        effectiveEntity = { ...entity, col: proj.col, row: proj.row };
+      }
+    }
+    const actions = getValidActions(state, effectiveEntity);
     // In planning mode, always show actions (budget tracked separately)
     const hasAct  = this._planMode || state.actionsAvailable > 0;
 
