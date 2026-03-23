@@ -402,7 +402,7 @@ export class UIController {
     // Track running cost to identify over-budget steps.
     // Over-budget steps are powered by food (yellow) up to the food count,
     // then truly over-budget (red/strikethrough) when food is exhausted.
-    const foodAvailable = (state.inventory?.shared?.food || 0);
+    const foodAvailable = (this.state.inventory?.shared?.food || 0);
     let runningCost = 0;
     let foodUsed = 0;
     let html = '';
@@ -1923,8 +1923,16 @@ function _positionPopup(popup, ui) {
   const POPUP_W = 210;
   const GAP     = 10;
 
+  // In planning mode, show popup at the entity's projected (ghost) position
+  let displayCol = target.col;
+  let displayRow = target.row;
+  if (ui._planMode && ui._selectedEntity) {
+    const proj = ui._getProjectedPos(ui._selectedEntity.id);
+    if (proj) { displayCol = proj.col; displayRow = proj.row; }
+  }
+
   const canvasRect = ui.canvas.getBoundingClientRect();
-  const { x, y }   = ui.renderer.hexToCanvasPos(target.col, target.row);
+  const { x, y }   = ui.renderer.hexToCanvasPos(displayCol, displayRow);
   const scale       = canvasRect.width / ui.canvas.width;
   const screenX     = canvasRect.left + x * scale;
   const screenY     = canvasRect.top  + y * scale;

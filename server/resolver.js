@@ -34,11 +34,11 @@ function budgetFor(state, faction) {
 
   if (isHero) {
     const timeBonus = (state.phase === Phase.DAY || state.phase === Phase.DAWN) ? 1 : 0;
-    return 3 + timeBonus + Math.min(extras, 2);
+    return 3 + timeBonus + Math.min(extras, 5);
   } else {
     const timeBonus = state.phase === Phase.NIGHT ? 1 : 0;
     const unitBonus = Math.min(Math.floor(extras / 2), 4);
-    return 4 + timeBonus + unitBonus;
+    return 3 + timeBonus + unitBonus;
   }
 }
 
