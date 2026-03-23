@@ -1642,8 +1642,9 @@ export class UIController {
 
     // ── Units ──
     const visible  = _visibleUnitsAt(state, hex.col, hex.row);
-    const myUnits  = visible.filter(u => u.owner === state.activePlayer);
-    const foeUnits = visible.filter(u => u.owner !== state.activePlayer);
+    const planOwner = this._planMode ? this._planFaction : state.activePlayer;
+    const myUnits  = visible.filter(u => u.owner === planOwner);
+    const foeUnits = visible.filter(u => u.owner !== planOwner);
     const unitsEl  = document.getElementById('tile-zoom-units');
 
     if (unitsEl) {
