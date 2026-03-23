@@ -181,6 +181,8 @@ export class UIController {
       this._plan = [];
       this._refreshPlanOverlay();
       this._renderPlanPanel();
+      if (this._selectedEntity) this._selectEntity(this._selectedEntity);
+      this.onRedraw();
     });
     document.getElementById('plan-toggle-btn')?.addEventListener('click', () => this._togglePlanPanel());
     document.getElementById('plan-tab')?.addEventListener('click',        () => this._togglePlanPanel());
@@ -491,8 +493,8 @@ export class UIController {
       : this._selectedEntity;
     if (
       this._selectedEntity &&
-      hex.col === _selDisplayHex.col &&
-      hex.row === _selDisplayHex.row
+      ((hex.col === _selDisplayHex.col && hex.row === _selDisplayHex.row) ||
+       (hex.col === this._selectedEntity.col && hex.row === this._selectedEntity.row))
     ) {
       if (this._popupVisible) {
         // Third click — deselect entirely
@@ -525,8 +527,9 @@ export class UIController {
       : null;
     const clickedEntities = state.entities.filter(e => {
       if (!e.alive || e.owner !== ownerFilter) return false;
-      const pos = lastGhostPos?.get(e.id) ?? { col: e.col, row: e.row };
-      return pos.col === hex.col && pos.row === hex.row;
+      const ghostPos = lastGhostPos?.get(e.id);
+      return (ghostPos && ghostPos.col === hex.col && ghostPos.row === hex.row)
+          || (e.col === hex.col && e.row === hex.row);
     });
 
     if (clickedEntities.length === 0) {

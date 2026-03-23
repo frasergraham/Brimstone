@@ -26,6 +26,9 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
   document.getElementById('game-screen').style.display   = 'flex';
 
   state    = new GameState(witchIsAI, heroIsAI);
+  // Allow global fog-of-war override from the setup screen checkbox.
+  const fogChk = document.getElementById('chk-fog-of-war');
+  if (fogChk && !fogChk.checked) state.fogOfWar = false;
   renderer = new Renderer(canvas, state);
   renderer.resize();
 
@@ -206,7 +209,10 @@ async function _animateResolutionSteps(steps, prePos, redrawFn, humanFaction = n
 
       const from = curPos.get(action.entityId);
       const info = prePos.get(action.entityId);
-      if (from && info) {
+      // Skip move animations for opponent units when fog of war is active —
+      // their positions will be revealed only at their final resting hex.
+      const isOpponent = humanFaction && ev.faction !== humanFaction;
+      if (from && info && !(isOpponent && state.fogOfWar)) {
         renderer.addMoveAnim(
           action.entityId,
           from.col, from.row,
