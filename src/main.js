@@ -417,7 +417,7 @@ function _createMpClient() {
         for (const e of state.entities) {
           const old = oldPos.get(e.id);
           if (old && (old.col !== e.col || old.row !== e.row)) {
-            renderer.addMoveAnim(old.col, old.row, e.col, e.row, e.type, e.owner);
+            renderer.addMoveAnim(e.id, old.col, old.row, e.col, e.row, e.type, e.owner);
           }
         }
       }
@@ -438,8 +438,23 @@ function _createMpClient() {
           renderer.addAttackAnim(actor.col, actor.row, target.col, target.row);
         }
       }
+
+      // Show "Battle Again" when it's our battle, the target survived, and
+      // we have enough actions remaining after spending 1 on this battle.
+      let onRematch = null;
+      if (actorSnap.owner === mp?.myFaction && !result.killed) {
+        const actorHpAfter   = actorSnap.hp - (result.counterDmg || 0);
+        const actionsAfter   = (state?.actionsLeft ?? 0) - (result.cost ?? 1);
+        if (actorHpAfter > 0 && actionsAfter > 0) {
+          onRematch = () => {
+            afterDismiss?.();   // apply state update first
+            mp.sendAction('battle', { entityId: actorSnap.id, targetId: targetSnap.id });
+          };
+        }
+      }
+
       if (ui) {
-        ui._showBattleDialog(actorSnap, targetSnap, result, afterDismiss);
+        ui._showBattleDialog(actorSnap, targetSnap, result, afterDismiss, onRematch);
       } else {
         afterDismiss?.();
       }

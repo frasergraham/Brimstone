@@ -59,14 +59,13 @@ export class Renderer {
   }
 
   /** Slide an entity icon from one hex to another (opponent move feedback). */
-  addMoveAnim(fromCol, fromRow, toCol, toRow, entityType, owner) {
+  addMoveAnim(entityId, fromCol, fromRow, toCol, toRow, entityType, owner) {
     const from = this._toCanvas(fromCol, fromRow);
     const to   = this._toCanvas(toCol,   toRow);
-    // Remove any previous anim for the same path
-    this._moveAnims = this._moveAnims.filter(
-      a => !(a.fromX === from.x && a.fromY === from.y)
-    );
+    // Replace any previous anim for this entity
+    this._moveAnims = this._moveAnims.filter(a => a.entityId !== entityId);
     this._moveAnims.push({
+      entityId,
       fromX: from.x, fromY: from.y,
       toX:   to.x,   toY:   to.y,
       glyph: entityGlyph(entityType),
@@ -251,10 +250,18 @@ export class Renderer {
       this._drawOutline(this.hoveredHex.col, this.hoveredHex.row, 'rgba(255,255,255,0.3)', 1);
     }
 
-    // Entities
+    // Entities — skip any entity whose move animation is still in flight
+    const now = Date.now();
+    const animatingIds = new Set(
+      this._moveAnims
+        .filter(a => now < a.startTime + a.duration)
+        .map(a => a.entityId)
+    );
+
     const drawn = new Set();
     for (const entity of state.entities) {
       if (!entity.alive) continue;
+      if (animatingIds.has(entity.id)) continue; // drawn by _drawMoveAnims instead
 
       if (revealedHexes !== null) {
         const hiddenOwner = humanIsHero ? 'witch' : 'hero';
@@ -266,6 +273,7 @@ export class Renderer {
 
       const stack = state.entities.filter(e => {
         if (!e.alive || e.col !== entity.col || e.row !== entity.row) return false;
+        if (animatingIds.has(e.id)) return false;
         if (revealedHexes !== null) {
           const hiddenOwner = humanIsHero ? 'witch' : 'hero';
           if (e.owner === hiddenOwner) return revealedHexes.has(hexKey(e.col, e.row));
@@ -273,6 +281,7 @@ export class Renderer {
         return true;
       });
 
+      if (!stack.length) continue;
       drawn.add(key);
       this._drawEntityStack(entity.col, entity.row, stack);
     }
