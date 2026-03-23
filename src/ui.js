@@ -1926,11 +1926,13 @@ function _positionPopup(popup, ui) {
   const POPUP_W = 210;
   const GAP     = 10;
 
-  // Always position popup at the entity's real (current) position — this is where
-  // the entity icon is drawn, which is where the user clicked. Valid actions are
-  // computed from the ghost/projected position separately.
-  const displayCol = target.col;
-  const displayRow = target.row;
+  // In planning mode, show popup at the entity's projected (ghost) position
+  let displayCol = target.col;
+  let displayRow = target.row;
+  if (ui._planMode && ui._selectedEntity) {
+    const proj = ui._getProjectedPos(ui._selectedEntity.id);
+    if (proj) { displayCol = proj.col; displayRow = proj.row; }
+  }
 
   const canvasRect = ui.canvas.getBoundingClientRect();
   const { x, y }   = ui.renderer.hexToCanvasPos(displayCol, displayRow);
