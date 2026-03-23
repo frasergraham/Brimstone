@@ -38,7 +38,7 @@ export function serializeState(state) {
     abilityLabel:  e.abilityLabel  ?? null,
     actedThisTurn: e.actedThisTurn ?? false,
     items:         { ...e.items },
-    alive:         e.alive,
+    // alive is omitted — MirrorEntity derives it from hp via getter
   }));
 
   return {
