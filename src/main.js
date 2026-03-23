@@ -78,7 +78,6 @@ function showGameOver() {
 // ── Online game init ──────────────────────────────────────────────────────────
 
 let mp = null; // MultiplayerClient instance
-let _pendingOnlineInit = null; // { faction } — set by matchFound, consumed by stateUpdate(start)
 
 function initOnline(mirrorState, myFaction, mpClient) {
   state    = mirrorState;
@@ -264,7 +263,7 @@ document.getElementById('btn-quick-match').addEventListener('click', () => {
   _ensureAuthed(() => {
     showStep('waiting');
     document.getElementById('waiting-subtitle').textContent = 'Searching for an opponent…';
-    document.getElementById('waiting-message').textContent  = 'Searching for a worthy opponent in Salem… (AI fills in after 30s)';
+    document.getElementById('waiting-message').textContent  = 'Searching for a worthy opponent in Salem… (AI fills in after 5s)';
     document.getElementById('waiting-room-code').style.display = 'none';
     mp.joinQueue();
   });
@@ -370,18 +369,21 @@ function _serverWsUrl() {
 function _createMpClient() {
   return new MultiplayerClient({
     onState(mirrorState) {
-      if (state && renderer && ui) {
-        // Update existing mirror in-place (keeps renderer pan/zoom)
-        Object.assign(state, mirrorState);
-        // Re-link entity references
-        state.hero  = mirrorState.hero;
-        state.witch = mirrorState.witch;
-        ui._clearSelection();
-        ui._triggerHazardFlashes();
-        redrawOnline();
-        // Check if it's now an AI opponent's turn (server handles it, but refresh UI)
-        if (state.gameOver) showGameOver();
+      if (!renderer || !ui) {
+        // Game not started yet — any state update while active should start it
+        if (mp?.active) {
+          initOnline(mirrorState, mp.myFaction, mp);
+        }
+        return;
       }
+      // Already in game — update in-place (keeps renderer pan/zoom)
+      Object.assign(state, mirrorState);
+      state.hero  = mirrorState.hero;
+      state.witch = mirrorState.witch;
+      ui._clearSelection();
+      ui._triggerHazardFlashes();
+      redrawOnline();
+      if (state.gameOver) showGameOver();
     },
 
     onBattle(actorSnap, targetSnap, result, afterDismiss) {
@@ -397,9 +399,7 @@ function _createMpClient() {
         `Matched! You play ${faction === 'hero' ? 'Hero ⚔' : 'Witch ✦'}`;
       document.getElementById('waiting-message').textContent =
         `Opponent: ${opponentName}${aiOpponent ? ' (AI)' : ''}. Starting game…`;
-
-      // Store faction — initOnline is triggered when the stateUpdate(start) arrives
-      _pendingOnlineInit = { faction };
+      // Game starts when first stateUpdate arrives → onState handles initOnline
     },
 
     onLeaderboard(entries) {
@@ -408,7 +408,7 @@ function _createMpClient() {
 
     onInQueue(position) {
       document.getElementById('waiting-message').textContent =
-        `In queue (position ${position}). An AI will fill in after 30 seconds if no one is found.`;
+        `In queue (position ${position}). An AI will fill in after 5 seconds if no one is found.`;
     },
 
     onOpponentJoined(name) {
@@ -451,14 +451,5 @@ MultiplayerClient.prototype._route = function(msg) {
     const cb = this._opts._onAuthOk;
     this._opts._onAuthOk = null;
     cb();
-  }
-  if (msg.type === 'stateUpdate' && msg.reason === 'start') {
-    const mirror = MirrorState.fromSnapshot(msg.state);
-    state = mirror;
-    if (_pendingOnlineInit && mp) {
-      const { faction } = _pendingOnlineInit;
-      _pendingOnlineInit = null;
-      initOnline(mirror, faction, mp);
-    }
   }
 };

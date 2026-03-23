@@ -10,7 +10,7 @@ import { serializeState }     from './state-sync.js';
 import { recordResult }       from './leaderboard.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
-const AI_FILL_DELAY_MS   = 30_000; // wait this long before filling with AI
+const AI_FILL_DELAY_MS   = 5_000;  // wait this long before filling with AI
 const RECONNECT_GRACE_MS = 60_000; // time to reconnect before forfeit
 
 // ── State ────────────────────────────────────────────────────────────────────
