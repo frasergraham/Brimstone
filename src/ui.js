@@ -385,14 +385,19 @@ export class UIController {
       }
     };
 
+    // Track running cost to identify over-budget steps
+    let runningCost = 0;
     let html = '';
     this._plan.forEach((a, i) => {
+      const isFree = a.type === PlanActionType.EQUIP_WEAPON || a.type === PlanActionType.USE_ITEM;
+      if (!isFree) runningCost++;
+      const overBudget = !isFree && runningCost > this._planBudget;
       const icon = ICONS[a.type] || '•';
       const desc = describeAction(a, i);
       const rmBtn = this._planSubmitted
         ? ''
         : `<button class="plan-step-remove" data-plan-idx="${i}" title="Remove">✕</button>`;
-      html += `<div class="plan-step">
+      html += `<div class="plan-step${overBudget ? ' over-budget' : ''}">
         <span class="plan-step-num">${i + 1}</span>
         <span class="plan-step-icon">${icon}</span>
         <span class="plan-step-desc" title="${desc}">${desc}</span>
@@ -410,6 +415,9 @@ export class UIController {
         this._plan.splice(idx, 1);
         this._refreshPlanOverlay();
         this._renderPlanPanel();
+        // Refresh highlights for the selected entity after plan changes
+        if (this._selectedEntity) this._selectEntity(this._selectedEntity);
+        this.onRedraw();
       });
     });
 
@@ -1344,6 +1352,26 @@ export class UIController {
 
     const dialog = document.getElementById('battle-dialog');
     const footer = document.getElementById('battle-footer');
+
+    // Summary line: "[Actor] attacks [Target], aided by …"
+    const summaryEl = document.getElementById('battle-summary');
+    if (summaryEl) {
+      let summary = `${actorSnap.name} attacks ${targetSnap.name}`;
+      const bd = result?.breakdown;
+      if (bd?.atkAllyNames?.length) {
+        const allies = bd.atkAllyNames.length === 1
+          ? bd.atkAllyNames[0]
+          : `${bd.atkAllyNames.length} allies`;
+        summary += `, aided by ${allies}`;
+      }
+      if (bd?.defAllyNames?.length) {
+        const allies = bd.defAllyNames.length === 1
+          ? bd.defAllyNames[0]
+          : `${bd.defAllyNames.length} allies`;
+        summary += `; ${targetSnap.name} defended by ${allies}`;
+      }
+      summaryEl.textContent = summary;
+    }
 
     // Populate combatant panels
     document.getElementById('battle-attacker').innerHTML = _combatantHTML(actorSnap, 'atk');

@@ -183,6 +183,9 @@ async function _runLocalResolution() {
  * prePos:       Map<entityId, {col,row,type,owner}> — positions before resolution ran.
  * redrawFn:     function to call after each visual change.
  * humanFaction: if set, only show explore/misc result dialogs for this faction.
+ *
+ * Within each step we process in three phases so both factions' moves play
+ * simultaneously, then battles are shown, then explore results.
  */
 async function _animateResolutionSteps(steps, prePos, redrawFn, humanFaction = null) {
   const curPos = new Map(prePos);
@@ -191,61 +194,93 @@ async function _animateResolutionSteps(steps, prePos, redrawFn, humanFaction = n
     const events = [
       ...(step.heroEvents  ?? []),
       ...(step.witchEvents ?? []),
-    ];
+    ].filter(ev => ev.type === ResEventType.ACTION_OK);
 
-    let hadAnim = false;
+    // ── Phase 1: animate all moves for both factions simultaneously ──────────
+    let hadMove = false;
+    const pendingDialogs = []; // deferred dialogs from move results
 
     for (const ev of events) {
-      if (ev.type !== ResEventType.ACTION_OK) continue;
-      const { action, result, battleSnaps } = ev;
+      const { action, result } = ev;
+      if (action.type !== PlanActionType.MOVE) continue;
 
-      if (action.type === PlanActionType.MOVE) {
-        const from = curPos.get(action.entityId);
-        const info = prePos.get(action.entityId);
-        if (from && info) {
-          renderer.addMoveAnim(
-            action.entityId,
-            from.col, from.row,
-            action.toCol, action.toRow,
-            info.type, info.owner
+      const from = curPos.get(action.entityId);
+      const info = prePos.get(action.entityId);
+      if (from && info) {
+        renderer.addMoveAnim(
+          action.entityId,
+          from.col, from.row,
+          action.toCol, action.toRow,
+          info.type, info.owner
+        );
+        hadMove = true;
+      }
+      curPos.set(action.entityId, { col: action.toCol, row: action.toRow });
+
+      // Collect dialogs only for the human faction
+      if (!humanFaction || ev.faction === humanFaction) {
+        if (result?.encounterLog?.length) {
+          pendingDialogs.push(result.encounterLog);
+        }
+        // Detect enemy units now sharing the destination hex
+        const enemiesAtDest = [];
+        for (const [otherId, otherPos] of curPos) {
+          if (otherId === action.entityId) continue;
+          if (otherPos.col !== action.toCol || otherPos.row !== action.toRow) continue;
+          const otherInfo = prePos.get(otherId);
+          if (otherInfo && otherInfo.owner !== ev.faction) {
+            enemiesAtDest.push(
+              state.entities.find(e => e.id === otherId)?.displayName ?? otherInfo.type
+            );
+          }
+        }
+        if (enemiesAtDest.length > 0) {
+          const moverName = state.entities.find(e => e.id === action.entityId)?.displayName
+                         ?? prePos.get(action.entityId)?.type ?? 'Unit';
+          pendingDialogs.push(
+            [`${moverName} moves onto a hex occupied by ${[...new Set(enemiesAtDest)].join(', ')}!`]
           );
-          curPos.set(action.entityId, { col: action.toCol, row: action.toRow });
-          hadAnim = true;
         }
-        if (result?.encounterLog?.length && (!humanFaction || ev.faction === humanFaction)) {
-          redrawFn();
-          await new Promise(resolve => {
-            ui._showResultDialog(result.encounterLog, resolve);
-          });
-        }
-      } else if (
-        action.type === PlanActionType.BATTLE_UNIT ||
-        action.type === PlanActionType.BATTLE_HEX
-      ) {
-        if (battleSnaps) {
-          const { actorSnap, targetSnap } = battleSnaps;
-          renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
-          redrawFn();
-          await new Promise(resolve => {
-            ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
-          });
-          hadAnim = true;
-        }
-      } else if (
-        action.type === PlanActionType.EXPLORE &&
-        result?.log?.length &&
-        (!humanFaction || ev.faction === humanFaction)
-      ) {
-        // Show what was found during exploration
-        redrawFn();
-        await new Promise(resolve => {
-          ui._showResultDialog(result.log, resolve);
-        });
-        hadAnim = true;
       }
     }
 
-    if (hadAnim) {
+    if (hadMove) {
+      redrawFn();
+      if (!_autoplay) await _delay(400);
+    }
+    for (const log of pendingDialogs) {
+      redrawFn();
+      await new Promise(resolve => ui._showResultDialog(log, resolve));
+    }
+
+    // ── Phase 2: battles (both factions visible) ─────────────────────────────
+    let hadBattle = false;
+    for (const ev of events) {
+      const { action, result, battleSnaps } = ev;
+      if (action.type !== PlanActionType.BATTLE_UNIT && action.type !== PlanActionType.BATTLE_HEX) continue;
+      if (battleSnaps) {
+        const { actorSnap, targetSnap } = battleSnaps;
+        renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
+        redrawFn();
+        await new Promise(resolve => {
+          ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
+        });
+        hadBattle = true;
+      }
+    }
+
+    // ── Phase 3: explore results (human faction only) ────────────────────────
+    for (const ev of events) {
+      const { action, result } = ev;
+      if (action.type !== PlanActionType.EXPLORE) continue;
+      if (result?.log?.length && (!humanFaction || ev.faction === humanFaction)) {
+        redrawFn();
+        await new Promise(resolve => ui._showResultDialog(result.log, resolve));
+        hadBattle = true;
+      }
+    }
+
+    if (hadMove || hadBattle) {
       redrawFn();
       if (!_autoplay) await _delay(300);
     }

@@ -795,6 +795,15 @@ canvas { touch-action: pan-x pan-y; }
   cursor: pointer;
 }
 
+.battle-summary {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  text-align: center;
+  padding: 0.35rem 0.5rem 0;
+  font-style: italic;
+  min-height: 1.2rem;
+}
+
 .battle-card {
   background: var(--bg-panel);
   border: 1px solid var(--border);
@@ -1419,6 +1428,7 @@ canvas { touch-action: pan-x pan-y; }
 .plan-panel[data-witch-mode] .plan-panel-title { color: var(--witch); }
 .plan-submitted .plan-step-remove { display: none; }
 .plan-submitted .plan-btn { opacity: 0.5; pointer-events: none; }
+.plan-step.over-budget { opacity: 0.38; text-decoration: line-through; }
 
 /* Resolution overlay */
 #resolution-overlay {

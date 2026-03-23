@@ -48,7 +48,7 @@ export function snapEntity(entity) {
     attack:      entity.attack,
     defense:     entity.defense,
     weapon:      entity.weapon,
-    name:        entity.name,
+    name:        entity.displayName,
     title:       entity.title,
     displayName: entity.displayName,
   };
