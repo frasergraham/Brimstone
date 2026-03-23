@@ -151,9 +151,14 @@
 
       <!-- Plan panel — slides in during planning phase -->
       <div id="plan-panel" class="plan-panel" style="display:none">
+        <!-- Collapse tab — always visible so the panel can be reopened -->
+        <button id="plan-tab" class="plan-tab" title="Toggle plan panel">
+          📋<span id="plan-tab-count" class="plan-tab-count"></span>
+        </button>
         <div class="plan-panel-header">
           <span class="plan-panel-title">📋 Your Plan</span>
           <span id="plan-budget-badge" class="plan-budget-badge"></span>
+          <button id="plan-toggle-btn" class="plan-toggle-btn" title="Hide panel">◀</button>
         </div>
         <div id="plan-steps" class="plan-steps"></div>
         <div class="plan-panel-footer">

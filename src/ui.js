@@ -182,6 +182,8 @@ export class UIController {
       this._refreshPlanOverlay();
       this._renderPlanPanel();
     });
+    document.getElementById('plan-toggle-btn')?.addEventListener('click', () => this._togglePlanPanel());
+    document.getElementById('plan-tab')?.addEventListener('click',        () => this._togglePlanPanel());
   }
 
   _canvasPos(e) {
@@ -282,7 +284,7 @@ export class UIController {
     this._planFaction   = null;
 
     const panel = document.getElementById('plan-panel');
-    if (panel) panel.style.display = 'none';
+    if (panel) { panel.style.display = 'none'; panel.classList.remove('collapsed'); }
 
     if (this.renderer) this.renderer.planGhostSteps = null;
     this._clearSelection();
@@ -406,6 +408,27 @@ export class UIController {
     });
 
     if (statusEl && !this._planSubmitted) statusEl.textContent = '';
+
+    // Keep the collapse-tab count badge in sync
+    const tabCount = document.getElementById('plan-tab-count');
+    if (tabCount) tabCount.textContent = this._plan.length > 0 ? this._plan.length : '';
+
+    // Update collapse-button arrow direction
+    const panel = document.getElementById('plan-panel');
+    const toggleBtn = document.getElementById('plan-toggle-btn');
+    if (toggleBtn && panel) {
+      toggleBtn.textContent = panel.classList.contains('collapsed') ? '▶' : '◀';
+    }
+  }
+
+  /** Toggle the plan panel between expanded and collapsed. */
+  _togglePlanPanel() {
+    const panel = document.getElementById('plan-panel');
+    if (!panel) return;
+    panel.classList.toggle('collapsed');
+    const isCollapsed = panel.classList.contains('collapsed');
+    const toggleBtn = document.getElementById('plan-toggle-btn');
+    if (toggleBtn) toggleBtn.textContent = isCollapsed ? '▶' : '◀';
   }
 
   _onClick(e) {

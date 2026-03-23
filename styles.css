@@ -1267,7 +1267,53 @@ canvas { touch-action: pan-x pan-y; }
   flex-direction: column;
   z-index: 30;
   font-size: 0.8rem;
+  transition: width 0.2s ease;
 }
+
+/* Collapsed: only the tab is visible */
+.plan-panel.collapsed {
+  width: 0;
+  border-left: none;
+  overflow: visible;
+}
+.plan-panel.collapsed .plan-panel-header,
+.plan-panel.collapsed .plan-steps,
+.plan-panel.collapsed .plan-panel-footer,
+.plan-panel.collapsed .plan-status {
+  display: none;
+}
+
+/* Tab — the protruding button that's always clickable */
+.plan-tab {
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(13,17,23,0.95);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-right: none;
+  border-radius: 6px 0 0 6px;
+  color: #ccc;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.5rem;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  line-height: 1;
+  transition: background 0.15s;
+}
+.plan-tab:hover { background: rgba(40,50,60,0.97); color: #fff; }
+.plan-tab-count {
+  font-size: 0.65rem;
+  color: var(--hero);
+  font-weight: 700;
+  min-width: 0.9rem;
+  text-align: center;
+}
+.plan-panel[data-witch-mode] .plan-tab-count { color: var(--witch); }
+
 .plan-panel-header {
   padding: 0.5rem 0.75rem;
   border-bottom: 1px solid rgba(255,255,255,0.1);
@@ -1278,8 +1324,20 @@ canvas { touch-action: pan-x pan-y; }
 .plan-panel-title {
   font-weight: 600;
   font-size: 0.85rem;
+  flex: 1;
   color: var(--hero);
 }
+.plan-toggle-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0.1rem 0.2rem;
+  border-radius: 3px;
+  line-height: 1;
+}
+.plan-toggle-btn:hover { color: #fff; background: rgba(255,255,255,0.08); }
 .plan-budget-badge {
   font-size: 0.7rem;
   background: rgba(255,255,255,0.08);
