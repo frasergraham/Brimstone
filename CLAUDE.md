@@ -46,10 +46,18 @@ src/
   map.js            # Procedural map generator (river, buildings, roads, MST, forests)
   renderer.js       # Canvas 2D renderer — multi-pass, zoom/pan, fog, animations
   ui.js             # UIController — DOM events, click routing, popups, dialogs
-  ai.js             # WitchAI and HeroAI — async turn-taking with BFS pathfinding
+  ai.js             # WitchAI and HeroAI — plan generation + BFS pathfinding
   tiles.js          # Tile/Building/Resource/Weapon enums, colors, icons, rollLoot()
   hex.js            # Pure hex math: offset↔axial, neighbors, distance, range, pixel
   loot.config.js    # Externalized weighted loot tables (primary tuning file)
+  planner.js        # PlanActionType enum, computeGhostState(), validatePlanAction()
+server/
+  resolver.js       # resolvePlans() — lockstep resolution engine (no DOM/WebSocket)
+  lobby.js          # Matchmaking, room lifecycle, server-side AI, plan submission
+  state-sync.js     # serializeState() — snapshot for network transmission
+  auth.js           # Player auth / session tokens
+  db.js             # SQLite persistence
+  leaderboard.js    # Win/loss recording and ranking
 scripts/
   headless.js       # Headless AI-vs-AI runner (imports src/ directly, no DOM)
   combat-sim.js     # Scenario matrix: hit rates, crush rates, expected damage
@@ -64,15 +72,121 @@ scripts/
 - `renderer.js` — reads state, draws canvas; zero state mutations.
 - `actions.js` — all game-logic mutations as pure functions `(state, actor, ...)`. Both UI and AI call these same functions.
 - `ui.js` — sole file touching DOM; bridges user input → actions.
-- `ai.js` — calls the same `execute*` functions from `actions.js` as the UI.
+- `ai.js` — calls the same `execute*` functions from `actions.js` as the UI; also generates synchronous `PlanAction[]` arrays via `generatePlan()`.
+- `server/resolver.js` — imported by both `server/lobby.js` (online) and `src/main.js` (local) — no DOM dependency.
 
 **Key patterns:**
 - All type constants use `Object.freeze()` enums.
 - `state.tiles` is a `Map<"col,row", Tile>` — O(1) lookup by hex key via `hexKey(col, row)`.
 - Dead entities removed by filter: `state.entities = state.entities.filter(e => e.id !== dead.id)`.
 - Execute functions return `{ success, log, cost }`; caller calls `state.spendAction(result.cost)`.
-- AI turns are `async/await` with `THINK_DELAY_MS = 600` (0 in autoplay).
 - Headless scripts import `src/` directly — all game logic is DOM/Canvas-free.
+
+---
+
+## Simultaneous-Turn Planning System
+
+The game uses a **simultaneous planning model** instead of sequential alternating turns. Each round:
+
+1. **Planning phase** — both factions independently build an ordered action queue (a `PlanAction[]`).
+2. **Submission** — each side submits their plan; the server (or local `main.js`) waits for both.
+3. **Resolution** — `resolvePlans(state, heroPlan, witchPlan)` in `server/resolver.js` executes the plans in **paired lockstep steps** (one hero action, one witch action per step), applying skip/fail logic and budget enforcement.
+4. **End of round** — `state.endRound()` advances phase, applies hazards, scores nodes.
+
+### Key files
+
+| File | Role |
+|------|------|
+| `src/planner.js` | `PlanActionType` enum, `computeGhostState()`, `validatePlanAction()`, `snapEntity()` |
+| `server/resolver.js` | `resolvePlans(state, heroPlan, witchPlan)` → `StepRecord[]`; `ResEventType` enum |
+| `src/game.js` | `state.startPlanning()`, `state.submitPlan(faction, plan)`, `state.endRound()` |
+| `src/ai.js` | `WitchAI.generatePlan()`, `HeroAI.generatePlan()`, `PlanSimState` |
+| `src/ui.js` | `enterPlanningMode()`, `exitPlanningMode()`, plan panel, ghost overlay |
+| `src/main.js` | Local resolution loop (`_startLocalPlanningPhase` → `_runLocalResolution`); online callbacks |
+| `server/lobby.js` | `_startPlanningPhase()`, `handlePlanSubmit()`, `_executeResolution()` |
+
+### PlanAction shape
+
+```js
+{ type: PlanActionType, entityId: string, ...typeSpecificFields }
+// MOVE:        toCol, toRow
+// BATTLE_UNIT: targetId
+// BATTLE_HEX:  targetCol, targetRow
+// SUMMON:      toCol, toRow
+// USE_ITEM:    item
+// EQUIP_WEAPON: weapon
+// EXPLORE / FORTIFY / USE_ABILITY: no extra fields
+```
+
+### Resolution event types (`ResEventType`)
+
+| Value | Meaning |
+|-------|---------|
+| `action_ok` | Executed; `result` + optional `battleSnaps` attached |
+| `action_skip` | Battle target gone/dead — free skip, next step runs immediately |
+| `action_fail` | Hard failure (entity gone, wrong faction) — faction plan halts |
+| `budget_cap` | Budget exhausted; remaining plan dropped |
+
+### Ghost overlay
+
+`computeGhostState(state, plan)` projects entity positions through all MOVE/SUMMON steps in the plan and returns a `StepDescriptor[]`:
+```js
+{ action, positions: Map<id,{col,row}>, arrow: {entityId,fromCol,fromRow,toCol,toRow}|null, stepNumber }
+```
+The renderer reads `renderer.planGhostSteps` and draws dashed arrows with numbered badges via `_drawPlanOverlay()`.
+
+`_selectEntity()` in `ui.js` calls `_getProjectedPos(entityId)` to look up the latest ghost position and passes a position-proxy to `getValidActions()`, enabling multi-move chaining within a single plan.
+
+### Planning state fields on `GameState`
+
+```js
+planningPhase:    bool    // true while both sides are building plans
+resolving:        bool    // true while resolver is running
+heroPlan / witchPlan: PlanAction[] | null
+heroReady / witchReady: bool
+heroActionsLeft / witchActionsLeft: number  // budgets computed at startPlanning()
+```
+
+### Local mode flow (`src/main.js`)
+
+```
+init()
+  └─ _startLocalPlanningPhase()
+       ├─ state.startPlanning()
+       ├─ ui.enterPlanningMode(faction, budget)       [human vs AI]
+       │    ui.onPlanSubmit = _onLocalHumanPlanSubmit
+       └─ setTimeout(_runLocalAutoResolution)          [autoplay]
+
+_onLocalHumanPlanSubmit(faction, plan)
+  ├─ state.submitPlan(faction, plan)
+  ├─ AI generates opponent plan via generatePlan()
+  ├─ state.submitPlan(aiFaction, aiPlan)
+  └─ _runLocalResolution()
+
+_runLocalResolution()
+  ├─ snapshot prePos
+  ├─ resolvePlans(state, heroPlan, witchPlan) → steps
+  ├─ _animateResolutionSteps(steps, prePos, redraw, humanFaction)
+  ├─ state.endRound()
+  └─ _startLocalPlanningPhase()   (or showGameOver)
+```
+
+### Online mode flow
+
+Server: `_startPlanningPhase(room)` → broadcasts `stateUpdate` + `planningPhase` message → AI submits immediately → waits for human → `_executeResolution()` → broadcasts `resolutionComplete { steps, finalState }` → 100 ms → next `_startPlanningPhase`.
+
+Client callbacks in `_createMpClient()`:
+- `onPlanningPhase({ heroActionsLeft, witchActionsLeft })` → `ui.enterPlanningMode(myFaction, budget)`
+- `onOpponentReady()` → update plan status text
+- `onResolutionComplete({ steps, finalState })` → animate steps → apply `finalState`
+
+### Plan panel UI
+
+The collapsible right-side panel (`#plan-panel`) shows the queued action list.
+
+- **Toggle:** `◀/▶` button in header or the always-visible left-edge tab (`#plan-tab`) with a live step-count badge.
+- **Collapsed state:** `.collapsed` class — panel width transitions to 0; only the tab protrudes. Reset to expanded each new planning phase (`exitPlanningMode` removes `.collapsed`).
+- `.plan-submitted` class disables clear/submit buttons and hides remove buttons when plan is locked.
 
 ---
 
@@ -98,7 +212,8 @@ scripts/
 13. Hovered hex: white semi-transparent outline
 14. Entity stacks: colored circles with glyph, HP bar, weapon dot, ability dot; `+N` badge for overflow
 15. Damage flash: fading red hex overlay + rising damage text
-16. `ctx.restore()`
+16. Plan ghost overlay: dashed yellow arrows with numbered step badges (`_drawPlanOverlay`, reads `renderer.planGhostSteps`)
+17. `ctx.restore()`
 
 **Entity glyphs/colors:** ⚔ Hero (gold), ✦ Witch (purple), ☺ Survivor (green), † Zombie (olive), ☠ Minion (red), 🪵 Wood Golem (brown), ⚙ Iron Golem (blue-grey).
 
@@ -186,8 +301,9 @@ Seeded, procedural. Sequence:
 | `MAP_COLS`, `MAP_ROWS` | `hex.js` | 13, 11 | Grid dimensions |
 | `HEX_SIZE` | `hex.js` | 30 | Base hex radius (px) |
 | `CYCLE_LENGTH` | `game.js` | 8 | Rounds per day/night cycle |
-| `THINK_DELAY_MS` | `ai.js` | 600 | AI action delay (ms) |
+| `THINK_DELAY_MS` | `ai.js` | 600 | AI action delay (ms) — unused in planning model |
 | `CLUSTER_CHANCE` | `map.js` | 0.65 | Building clustering probability |
+| `TURN_TIMEOUT_MS` | `server/lobby.js` | 90 000 | Auto-submit empty plan if human times out |
 
 Loot tables: edit `src/loot.config.js` — weights are relative integers; valid types: `wood`, `metal`, `herbs`, `food`, `silver`, `scripture`, `weapon:sword/axe/shield/bow/staff/dagger`, `horse`, `nothing`.
 
