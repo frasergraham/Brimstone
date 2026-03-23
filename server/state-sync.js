@@ -48,6 +48,13 @@ export function serializeState(state) {
     actionsLeft:          state.actionsLeft,
     witchIsAI:            state.witchIsAI,
     heroIsAI:             state.heroIsAI,
+    // Simultaneous-turn planning fields
+    planningPhase:        state.planningPhase   ?? false,
+    resolving:            state.resolving       ?? false,
+    heroReady:            state.heroReady        ?? false,
+    witchReady:           state.witchReady       ?? false,
+    heroActionsLeft:      state.heroActionsLeft  ?? 0,
+    witchActionsLeft:     state.witchActionsLeft ?? 0,
     fogOfWar:             state.fogOfWar,
     winner:               state.winner,
     winReason:            state.winReason,

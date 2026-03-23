@@ -9,6 +9,7 @@ import {
   executeMove, executeExplore, executeBattle,
   executeFortify, executeSummon, executeUseItem, executeUseAbility,
 } from './actions.js';
+import { PlanActionType, computeGhostState } from './planner.js';
 
 export class UIController {
   constructor(canvas, state, renderer, witchAI, onRedraw, heroAI = null, autoplay = false) {
@@ -35,6 +36,14 @@ export class UIController {
 
     this._lastHazardKey    = '';   // deduplicates hazard popups across state updates
     this._battleInterval   = null; // dice animation interval — cleared on new dialog
+
+    // ── Planning mode state ──────────────────────────────────────────────────
+    this._planMode      = false;   // true during simultaneous planning phase
+    this._plan          = [];      // queued PlanActions for this round
+    this._planFaction   = null;    // 'hero' or 'witch' — which faction we're planning for
+    this._planBudget    = 0;       // total action budget for this round
+    this._planSubmitted = false;   // true after plan is locked in
+    this.onPlanSubmit   = null;    // callback(plan) — set by main.js
 
     this._bindEvents();
   }
@@ -157,11 +166,21 @@ export class UIController {
       this.onRedraw();
     });
 
-    // End Turn in header
+    // End Turn / Submit Plan in header
     document.getElementById('end-turn-btn')?.addEventListener('click', () => {
       if (this.state.gameOver) return;
+      if (this._planMode) { this._doSubmitPlan(); return; }
       if (this._isOpponentTurn()) return;
       this._doEndTurn();
+    });
+
+    // Plan panel buttons
+    document.getElementById('plan-submit-btn')?.addEventListener('click', () => this._doSubmitPlan());
+    document.getElementById('plan-clear-btn')?.addEventListener('click',  () => {
+      if (this._planSubmitted) return;
+      this._plan = [];
+      this._refreshPlanOverlay();
+      this._renderPlanPanel();
     });
   }
 
@@ -205,6 +224,7 @@ export class UIController {
 
   /** True when the current turn belongs to the remote opponent (not us). */
   _isOpponentTurn() {
+    if (this._planMode) return false; // during planning, we're always active
     if (this.mp?.active) return this.state.activePlayer !== this.mp.myFaction;
     return (this.state.activePlayer === Player.WITCH && this.state.witchIsAI) ||
            (this.state.activePlayer === Player.HERO  && this.state.heroIsAI);
@@ -226,6 +246,168 @@ export class UIController {
     this._maybeRunAI();
   }
 
+  // ── Planning mode ─────────────────────────────────────────────────────────
+
+  /**
+   * Enter planning mode.
+   * @param {'hero'|'witch'} faction  Which faction the human controls.
+   * @param {number} budget           Action budget for this round.
+   */
+  enterPlanningMode(faction, budget) {
+    this._planMode      = true;
+    this._planFaction   = faction;
+    this._planBudget    = budget;
+    this._plan          = [];
+    this._planSubmitted = false;
+
+    const panel = document.getElementById('plan-panel');
+    if (panel) {
+      panel.style.display = '';
+      panel.classList.remove('plan-submitted');
+      panel.dataset.witchMode = faction === 'witch' ? '1' : '';
+    }
+
+    this._clearSelection();
+    this._refreshPlanOverlay();
+    this._renderPlanPanel();
+    this._updateSidebar();
+    this.onRedraw();
+  }
+
+  /** Exit planning mode (called after resolution completes). */
+  exitPlanningMode() {
+    this._planMode      = false;
+    this._planSubmitted = false;
+    this._plan          = [];
+    this._planFaction   = null;
+
+    const panel = document.getElementById('plan-panel');
+    if (panel) panel.style.display = 'none';
+
+    if (this.renderer) this.renderer.planGhostSteps = null;
+    this._clearSelection();
+    this._updateSidebar();
+    this.onRedraw();
+  }
+
+  /** Add one action to the plan queue. */
+  _addToPlan(action) {
+    if (this._planSubmitted) return;
+    this._plan.push(action);
+    this._refreshPlanOverlay();
+    this._renderPlanPanel();
+  }
+
+  /** Recompute ghost overlay from the current plan and push to renderer. */
+  _refreshPlanOverlay() {
+    if (!this.renderer) return;
+    this.renderer.planGhostSteps = computeGhostState(this.state, this._plan);
+  }
+
+  /** Submit the current plan. */
+  _doSubmitPlan() {
+    if (this._planSubmitted) return;
+    this._planSubmitted = true;
+
+    const panel = document.getElementById('plan-panel');
+    if (panel) panel.classList.add('plan-submitted');
+
+    const status = document.getElementById('plan-status');
+    if (status) status.textContent = 'Waiting for opponent…';
+
+    this._updateSidebar();
+    this.onRedraw();
+
+    if (this.onPlanSubmit) this.onPlanSubmit([...this._plan]);
+  }
+
+  /** Render the plan panel steps list. */
+  _renderPlanPanel() {
+    const stepsEl  = document.getElementById('plan-steps');
+    const budgeEl  = document.getElementById('plan-budget-badge');
+    const statusEl = document.getElementById('plan-status');
+    if (!stepsEl) return;
+
+    // Count budget-consuming actions
+    const budgetCost = this._plan.filter(a =>
+      a.type !== PlanActionType.EQUIP_WEAPON && a.type !== PlanActionType.USE_ITEM
+    ).length;
+    const remaining = this._planBudget - budgetCost;
+
+    if (budgeEl) budgeEl.textContent = `${Math.max(0, remaining)} left`;
+
+    const ICONS = {
+      [PlanActionType.MOVE]:        '↗',
+      [PlanActionType.BATTLE_UNIT]: '⚔',
+      [PlanActionType.BATTLE_HEX]:  '⚔',
+      [PlanActionType.EXPLORE]:     '🔍',
+      [PlanActionType.FORTIFY]:     '🪵',
+      [PlanActionType.SUMMON]:      '☠',
+      [PlanActionType.USE_ITEM]:    '🧪',
+      [PlanActionType.EQUIP_WEAPON]:'⚔',
+      [PlanActionType.USE_ABILITY]: '✦',
+    };
+
+    const describeAction = (a, i) => {
+      const entity = this.state.entities.find(e => e.id === a.entityId);
+      const who    = entity?.displayName ?? 'Unit';
+      switch (a.type) {
+        case PlanActionType.MOVE:
+          return `${who} → (${a.toCol},${a.toRow})`;
+        case PlanActionType.BATTLE_UNIT: {
+          const target = this.state.entities.find(e => e.id === a.targetId);
+          return `${who} attacks ${target?.displayName ?? '?'}`;
+        }
+        case PlanActionType.BATTLE_HEX:
+          return `${who} attacks (${a.targetCol},${a.targetRow})`;
+        case PlanActionType.EXPLORE:
+          return `${who} explores`;
+        case PlanActionType.FORTIFY:
+          return `${who} fortifies`;
+        case PlanActionType.SUMMON:
+          return `${who} summons at (${a.toCol},${a.toRow})`;
+        case PlanActionType.USE_ITEM:
+          return `${who} uses ${a.item}`;
+        case PlanActionType.EQUIP_WEAPON:
+          return `${who} equips ${a.weapon}`;
+        case PlanActionType.USE_ABILITY:
+          return `${who} uses ability`;
+        default:
+          return `Step ${i + 1}`;
+      }
+    };
+
+    let html = '';
+    this._plan.forEach((a, i) => {
+      const icon = ICONS[a.type] || '•';
+      const desc = describeAction(a, i);
+      const rmBtn = this._planSubmitted
+        ? ''
+        : `<button class="plan-step-remove" data-plan-idx="${i}" title="Remove">✕</button>`;
+      html += `<div class="plan-step">
+        <span class="plan-step-num">${i + 1}</span>
+        <span class="plan-step-icon">${icon}</span>
+        <span class="plan-step-desc" title="${desc}">${desc}</span>
+        ${rmBtn}
+      </div>`;
+    });
+    if (!html) html = `<div class="plan-step"><span class="plan-step-desc" style="color:var(--muted)">No actions queued — click units to add</span></div>`;
+    stepsEl.innerHTML = html;
+
+    // Attach remove listeners
+    stepsEl.querySelectorAll('.plan-step-remove').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.planIdx);
+        this._plan.splice(idx, 1);
+        this._refreshPlanOverlay();
+        this._renderPlanPanel();
+      });
+    });
+
+    if (statusEl && !this._planSubmitted) statusEl.textContent = '';
+  }
+
   _onClick(e) {
     if (this._didDragPan) { this._didDragPan = false; return; }
     if (this.state.gameOver) return;
@@ -235,7 +417,17 @@ export class UIController {
     if (hex.col < 0 || hex.col >= 13 || hex.row < 0 || hex.row >= 11) return;
 
     // On opponent's turn, allow viewing tiles/units but block all actions
-    if (this._isOpponentTurn()) {
+    if (!this._planMode && this._isOpponentTurn()) {
+      this._clearSelection();
+      this._showTileDetail(hex);
+      this._updateSidebar();
+      this.onRedraw();
+      return;
+    }
+
+    // During planning, same click-to-select/target flow — but actions go to plan queue
+    if (this._planMode && this._planSubmitted) {
+      // Plan locked — read-only view
       this._clearSelection();
       this._showTileDetail(hex);
       this._updateSidebar();
@@ -273,8 +465,10 @@ export class UIController {
 
   _handleSelection(hex) {
     const state = this.state;
+    // In planning mode, filter by plan faction; otherwise by active player
+    const ownerFilter = this._planMode ? this._planFaction : state.activePlayer;
     const clickedEntities = state.entities.filter(
-      e => e.alive && e.col === hex.col && e.row === hex.row && e.owner === state.activePlayer
+      e => e.alive && e.col === hex.col && e.row === hex.row && e.owner === ownerFilter
     );
 
     if (clickedEntities.length === 0) {
@@ -323,7 +517,8 @@ export class UIController {
     this._validActions = getValidActions(this.state, entity);
     // Move is always the default awaiting action — clicking a green hex moves.
     const hasMoveAction = this._validActions.some(a => a.type === ActionType.MOVE);
-    if (hasMoveAction && this.state.actionsAvailable > 0) {
+    const actionsOk = this._planMode || this.state.actionsAvailable > 0;
+    if (hasMoveAction && actionsOk) {
       this._awaitingTarget = { actionType: ActionType.MOVE, actor: entity, isDefault: true };
     } else {
       this._awaitingTarget = null;
@@ -374,6 +569,17 @@ export class UIController {
       }
       this._awaitingTarget = null;
       this.renderer.highlightHexes = [];
+
+      // Planning mode: add to plan queue
+      if (this._planMode) {
+        this._addToPlan({ type: PlanActionType.MOVE, entityId: actor.id, toCol: hex.col, toRow: hex.row });
+        if (actor.alive) this._selectEntity(actor);
+        else this._clearSelection();
+        this._updateSidebar();
+        this.onRedraw();
+        return;
+      }
+
       if (this.mp?.active) {
         this.mp.sendAction('move', { entityId: actor.id, col: hex.col, row: hex.row });
         this._clearSelection();
@@ -409,6 +615,16 @@ export class UIController {
       this.renderer.highlightHexes = [];
 
       const executeFight = (target) => {
+        // Planning mode: add battle to plan
+        if (this._planMode) {
+          this._addToPlan({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id });
+          if (actor.alive) this._selectEntity(actor);
+          else this._clearSelection();
+          this._updateSidebar();
+          this.onRedraw();
+          return;
+        }
+
         // Online mode: send to server and let stateUpdate drive the result
         if (this.mp?.active) {
           this.mp.sendAction('battle', { entityId: actor.id, targetId: target.id });
@@ -461,6 +677,16 @@ export class UIController {
     } else if (actionType === ActionType.SUMMON) {
       this._awaitingTarget = null;
       this.renderer.highlightHexes = [];
+
+      if (this._planMode) {
+        this._addToPlan({ type: PlanActionType.SUMMON, entityId: actor.id, toCol: hex.col, toRow: hex.row });
+        if (actor.alive) this._selectEntity(actor);
+        else this._clearSelection();
+        this._updateSidebar();
+        this.onRedraw();
+        return;
+      }
+
       if (this.mp?.active) {
         this.mp.sendAction('summon', { entityId: actor.id, col: hex.col, row: hex.row });
         this._clearSelection();
@@ -501,13 +727,15 @@ export class UIController {
       return;
     }
 
-    if (!entity || entity.owner !== state.activePlayer || state.gameOver) {
+    const ownerCheck = this._planMode ? this._planFaction : state.activePlayer;
+    if (!entity || entity.owner !== ownerCheck || state.gameOver) {
       _hideActionPopup();
       return;
     }
 
     const actions = getValidActions(state, entity);
-    const hasAct  = state.actionsAvailable > 0;
+    // In planning mode, always show actions (budget tracked separately)
+    const hasAct  = this._planMode || state.actionsAvailable > 0;
 
     let regularHtml = '';
     let freeHtml    = '';
@@ -602,6 +830,21 @@ export class UIController {
     const el    = document.getElementById('turn-info');
     if (!el) return;
 
+    // During planning phase, show planning info instead of active-player info
+    if (this._planMode) {
+      const faction = this._planFaction;
+      const budget  = this._planBudget;
+      const used    = this._plan.filter(a => a.type !== PlanActionType.EQUIP_WEAPON && a.type !== PlanActionType.USE_ITEM).length;
+      const diamonds = '◆'.repeat(Math.max(0, budget - used)) + '◇'.repeat(Math.max(0, used));
+      const status  = this._planSubmitted ? '✓ Plan Submitted — Waiting…' : `📋 Planning Phase`;
+      el.innerHTML = `
+        <div class="turn-line">Round ${state.round}</div>
+        <div class="turn-line player-${faction}">${status}</div>
+        <div class="actions-remaining" title="Actions budget">${diamonds}</div>
+      `;
+      return;
+    }
+
     const player = state.activePlayer === Player.HERO ? 'Hero' : 'Witch';
     const isAI   = (state.activePlayer === Player.WITCH && state.witchIsAI) ||
                    (state.activePlayer === Player.HERO  && state.heroIsAI);
@@ -684,7 +927,17 @@ export class UIController {
   _renderEndTurnBtn() {
     const btn = document.getElementById('end-turn-btn');
     if (!btn) return;
-    const state     = this.state;
+    const state = this.state;
+
+    if (this._planMode) {
+      btn.disabled = this._planSubmitted || state.gameOver;
+      btn.classList.toggle('urgent', !this._planSubmitted && !state.gameOver);
+      btn.title = this._planSubmitted ? 'Plan submitted' : 'Submit Plan';
+      btn.textContent = this._planSubmitted ? '✓' : '✓ Submit';
+      return;
+    }
+
+    btn.textContent = '↩';
     const isOpponent = this._isOpponentTurn();
     const noActs    = state.actionsAvailable === 0;
     btn.disabled = state.gameOver || isOpponent;
@@ -738,6 +991,12 @@ export class UIController {
     switch (action) {
       case 'explore': {
         _hideActionPopup();
+        if (this._planMode) {
+          this._addToPlan({ type: PlanActionType.EXPLORE, entityId: entity.id });
+          if (entity.alive) this._selectEntity(entity);
+          else this._clearSelection();
+          this._updateSidebar(); this.onRedraw(); break;
+        }
         if (this.mp?.active) {
           this.mp.sendAction('explore', { entityId: entity.id });
           this._clearSelection(); this._updateSidebar(); this.onRedraw(); break;
@@ -767,6 +1026,12 @@ export class UIController {
 
       case 'fortify': {
         _hideActionPopup();
+        if (this._planMode) {
+          this._addToPlan({ type: PlanActionType.FORTIFY, entityId: entity.id });
+          if (entity.alive) this._selectEntity(entity);
+          else this._clearSelection();
+          this._updateSidebar(); this.onRedraw(); break;
+        }
         if (this.mp?.active) {
           this.mp.sendAction('fortify', { entityId: entity.id });
           this._clearSelection(); this._updateSidebar(); this.onRedraw(); break;
@@ -800,6 +1065,12 @@ export class UIController {
       case 'use_item': {
         _hideActionPopup();
         const item = button.dataset.item;
+        if (this._planMode) {
+          this._addToPlan({ type: PlanActionType.USE_ITEM, entityId: entity.id, item });
+          if (entity.alive) this._selectEntity(entity);
+          else this._clearSelection();
+          this._updateSidebar(); this.onRedraw(); break;
+        }
         if (this.mp?.active) {
           this.mp.sendAction('use_item', { entityId: entity.id, item });
           this._clearSelection(); this._updateSidebar(); this.onRedraw(); break;
@@ -820,6 +1091,12 @@ export class UIController {
 
       case 'use_ability': {
         _hideActionPopup();
+        if (this._planMode) {
+          this._addToPlan({ type: PlanActionType.USE_ABILITY, entityId: entity.id });
+          if (entity.alive) this._selectEntity(entity);
+          else this._clearSelection();
+          this._updateSidebar(); this.onRedraw(); break;
+        }
         if (this.mp?.active) {
           this.mp.sendAction('use_ability', { entityId: entity.id });
           this._clearSelection(); this._updateSidebar(); this.onRedraw(); break;
@@ -917,6 +1194,7 @@ export class UIController {
   _maybeShowNoActionsDialog() {
     const state = this.state;
     if (state.gameOver) return;
+    if (this._planMode) return; // planning phase handles its own budget UI
     if (state.actionsAvailable > 0) return;
     if (this._isOpponentTurn()) return;
     this._showNoActionsDialog();

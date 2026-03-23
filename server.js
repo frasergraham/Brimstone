@@ -12,7 +12,7 @@ import {
   joinQueue, leaveQueue,
   createPrivateRoom, joinPrivateRoom,
   joinAIGame,
-  handleAction, handleEndTurn,
+  handleAction, handleEndTurn, handlePlanSubmit,
   handleDisconnect, handleReconnect,
   getRoom,
 } from './server/lobby.js';
@@ -170,6 +170,12 @@ function route(ws, cs, msg) {
     case 'endTurn': {
       if (!cs.player || !cs.roomId) return;
       handleEndTurn(cs.player.id, cs.roomId);
+      break;
+    }
+
+    case 'submitPlan': {
+      if (!cs.player || !cs.roomId) return;
+      handlePlanSubmit(cs.player.id, cs.roomId, msg.plan ?? []);
       break;
     }
 

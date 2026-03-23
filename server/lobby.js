@@ -8,6 +8,7 @@ import {
 } from '../src/actions.js';
 import { serializeState }     from './state-sync.js';
 import { recordResult }       from './leaderboard.js';
+import { resolvePlans }       from './resolver.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const AI_FILL_DELAY_MS   = 5_000;  // wait this long before filling with AI
@@ -109,32 +110,26 @@ function destroyRoom(room) {
   codeToRoom.delete(room.code);
 }
 
-// ── Turn timer helpers ────────────────────────────────────────────────────────
+// ── Planning timer helpers ────────────────────────────────────────────────────
 
-/** Start (or restart) the turn clock for the current human player's turn. */
-function _startTurnTimer(room) {
+/** Start the planning countdown; auto-submit empty plan for any human who times out. */
+function _startPlanningTimer(room) {
   _clearTurnTimer(room);
   if (room.state.gameOver) return;
 
-  const faction = room.state.activePlayer;
-  const isHumanTurn =
-    (faction === Player.HERO  && room.heroPlayerId  !== 'ai') ||
-    (faction === Player.WITCH && room.witchPlayerId !== 'ai');
-  if (!isHumanTurn) return;
-
   room.turnTimer = setTimeout(() => {
     room.turnTimer = null;
-    if (room.state.gameOver) return;
-    if (room.state.activePlayer !== faction) return; // already changed
-    console.log(`[room ${room.id}] Turn timeout for ${faction} — auto-ending turn.`);
-    const ws = faction === Player.HERO ? room.heroWs : room.witchWs;
-    send(ws, { type: 'error', message: 'Turn time expired — your turn was ended automatically.' });
-    room.state.endTurn();
-    broadcastState(room, 'endTurn');
-    checkAndHandleGameOver(room);
-    if (!room.state.gameOver) {
-      _startTurnTimer(room);
-      setTimeout(() => runAITurn(room), 100);
+    if (room.state.gameOver || !room.state.planningPhase) return;
+    // Auto-submit empty plans for any human faction that hasn't submitted yet
+    if (!room.state.heroReady && room.heroPlayerId !== 'ai') {
+      const ws = room.heroWs;
+      send(ws, { type: 'error', message: 'Planning time expired — an empty plan was submitted.' });
+      _submitFactionPlan(room, 'hero', []);
+    }
+    if (!room.state.witchReady && room.witchPlayerId !== 'ai') {
+      const ws = room.witchWs;
+      send(ws, { type: 'error', message: 'Planning time expired — an empty plan was submitted.' });
+      _submitFactionPlan(room, 'witch', []);
     }
   }, TURN_TIMEOUT_MS);
 }
@@ -143,59 +138,130 @@ function _clearTurnTimer(room) {
   if (room.turnTimer) { clearTimeout(room.turnTimer); room.turnTimer = null; }
 }
 
+// ── Simultaneous planning helpers ─────────────────────────────────────────────
+
+/** Begin a new planning phase: reset plans, compute budgets, broadcast, kick AI. */
+function _startPlanningPhase(room) {
+  if (room.state.gameOver) return;
+  room.state.startPlanning();
+  broadcastState(room, 'planningPhase');
+  broadcast(room, {
+    type:             'planningPhase',
+    heroActionsLeft:  room.state.heroActionsLeft,
+    witchActionsLeft: room.state.witchActionsLeft,
+    timeoutMs:        TURN_TIMEOUT_MS,
+  });
+  _startPlanningTimer(room);
+  _runAIPlanSubmission(room);
+}
+
+/** Generate and submit AI plans immediately (synchronous). */
+function _runAIPlanSubmission(room) {
+  if (room.state.gameOver) return;
+  if (room.witchAI) {
+    const plan = room.witchAI.generatePlan();
+    _submitFactionPlan(room, 'witch', plan);
+  }
+  if (room.heroAI && !room.state.gameOver) {
+    const plan = room.heroAI.generatePlan();
+    _submitFactionPlan(room, 'hero', plan);
+  }
+}
+
+/** Submit one faction's plan. When both are ready, trigger resolution. */
+function _submitFactionPlan(room, faction, plan) {
+  if (!room.state.planningPhase) return;
+  let bothReady;
+  try {
+    bothReady = room.state.submitPlan(faction, plan);
+  } catch (err) {
+    console.error(`[room ${room.id}] submitPlan error:`, err);
+    return;
+  }
+
+  // Notify the other side that this faction has locked in their plan
+  const otherWs = faction === 'hero' ? room.witchWs : room.heroWs;
+  send(otherWs, { type: 'opponentReady' });
+
+  if (bothReady) {
+    _executeResolution(room);
+  }
+}
+
+/** Run the resolver, advance state, and broadcast the full resolution to clients. */
+function _executeResolution(room) {
+  _clearTurnTimer(room);
+  const state = room.state;
+  let steps;
+  try {
+    steps = resolvePlans(state, state.heroPlan, state.witchPlan);
+  } catch (err) {
+    console.error(`[room ${room.id}] resolvePlans error:`, err);
+    steps = [];
+  }
+
+  state.endRound();
+  checkAndHandleGameOver(room);
+
+  // Serialize the final state (post-endRound)
+  const finalState = serializeState(state);
+
+  // Serialize steps — convert any entity objects to plain data
+  const serializedSteps = steps.map(step => ({
+    stepIndex:   step.stepIndex,
+    heroEvents:  _serializeEvents(step.heroEvents),
+    witchEvents: _serializeEvents(step.witchEvents),
+  }));
+
+  broadcast(room, { type: 'resolutionComplete', steps: serializedSteps, finalState });
+
+  if (!state.gameOver) {
+    setTimeout(() => _startPlanningPhase(room), 100);
+  }
+}
+
+function _serializeEvents(events) {
+  return events.map(ev => {
+    const out = {
+      type:    ev.type,
+      faction: ev.faction,
+      action:  ev.action,
+      reason:  ev.reason ?? null,
+    };
+    if (ev.result) {
+      out.result = {
+        success:    ev.result.success,
+        log:        ev.result.log ?? [],
+        cost:       ev.result.cost ?? 1,
+        killed:     ev.result.killed   ?? false,
+        damage:     ev.result.damage   ?? 0,
+        counterDmg: ev.result.counterDmg ?? 0,
+        crush:      ev.result.crush    ?? false,
+        counter:    ev.result.counter  ?? false,
+        attackRoll: ev.result.attackRoll  ?? 0,
+        defenseRoll:ev.result.defenseRoll ?? 0,
+      };
+    }
+    if (ev.battleSnaps) {
+      out.battleSnaps = ev.battleSnaps;
+    }
+    return out;
+  });
+}
+
 // ── AI helpers ───────────────────────────────────────────────────────────────
 
 function attachAI(room, faction) {
-  const noop = () => Promise.resolve();
   if (faction === 'witch') {
     room.witchPlayerId = 'ai';
     room.witchName     = 'The AI Witch';
-    room.witchAI = new WitchAI(room.state, () => broadcastState(room), 0);
-    room.witchAI.onBattleResult = (actorSnap, targetSnap, result) => {
-      broadcastBattleResult(room, actorSnap, targetSnap, result);
-      return noop();
-    };
+    room.witchAI       = new WitchAI(room.state, () => {}, 0);
     room.state.witchIsAI = true;
   } else {
     room.heroPlayerId = 'ai';
     room.heroName     = 'The AI Hero';
-    room.heroAI = new HeroAI(room.state, () => broadcastState(room), 0);
-    room.heroAI.onBattleResult = (actorSnap, targetSnap, result) => {
-      broadcastBattleResult(room, actorSnap, targetSnap, result);
-      return noop();
-    };
+    room.heroAI       = new HeroAI(room.state, () => {}, 0);
     room.state.heroIsAI = true;
-  }
-}
-
-async function runAITurn(room) {
-  if (room.state.gameOver) return;
-  const ai = room.state.activePlayer === Player.WITCH ? room.witchAI
-           : room.state.activePlayer === Player.HERO  ? room.heroAI
-           : null;
-  if (!ai) return;
-
-  try {
-    await ai.takeTurn();
-  } catch (err) {
-    console.error(`[room ${room.id}] AI takeTurn error:`, err);
-    // Force end the turn so the game doesn't freeze
-    if (!room.state.gameOver) {
-      try { room.state.endTurn(); } catch {}
-    }
-  }
-
-  broadcastState(room, 'endTurn');
-  checkAndHandleGameOver(room);
-  if (!room.state.gameOver) {
-    _startTurnTimer(room);
-    // If the next turn is also AI (e.g. both sides AI), keep going
-    if (
-      (room.state.activePlayer === Player.WITCH && room.witchAI) ||
-      (room.state.activePlayer === Player.HERO  && room.heroAI)
-    ) {
-      setTimeout(() => runAITurn(room), 50);
-    }
   }
 }
 
@@ -204,10 +270,6 @@ async function runAITurn(room) {
 function broadcastState(room, reason = 'update') {
   const snap = serializeState(room.state);
   broadcast(room, { type: 'stateUpdate', reason, state: snap });
-}
-
-function broadcastBattleResult(room, actorSnap, targetSnap, result) {
-  broadcast(room, { type: 'battleResult', actorSnap, targetSnap, result });
 }
 
 function checkAndHandleGameOver(room) {
@@ -257,7 +319,7 @@ function tryMatch() {
   send(witch.ws, { type: 'matchFound', roomId: room.id, faction: 'witch', opponentName: hero.playerName,  aiOpponent: false });
 
   broadcastState(room, 'start');
-  _startTurnTimer(room);
+  _startPlanningPhase(room);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -301,13 +363,7 @@ export function joinQueue(playerId, playerName, ws) {
     });
 
     broadcastState(room, 'start');
-    _startTurnTimer(room);
-
-    // If it's the AI's turn first, kick it off
-    setTimeout(() => {
-      if (room.state.activePlayer === Player.WITCH && room.witchAI) runAITurn(room);
-      else if (room.state.activePlayer === Player.HERO && room.heroAI) runAITurn(room);
-    }, 100);
+    _startPlanningPhase(room);
 
   }, AI_FILL_DELAY_MS);
 
@@ -335,13 +391,7 @@ export function createPrivateRoom(playerId, playerName, ws) {
     attachAI(room, 'witch');
     send(room.heroWs, { type: 'opponentJoined', opponentName: 'The AI Witch', aiOpponent: true });
     broadcastState(room, 'start');
-    _startTurnTimer(room);
-    // Hero always goes first; witch AI would only need to go first if we
-    // randomise faction, but currently hero is always the human here.
-    setTimeout(() => {
-      if (room.state.activePlayer === Player.WITCH && room.witchAI) runAITurn(room);
-      else if (room.state.activePlayer === Player.HERO && room.heroAI) runAITurn(room);
-    }, 100);
+    _startPlanningPhase(room);
   }, AI_FILL_DELAY_MS);
 }
 
@@ -365,13 +415,7 @@ export function joinAIGame(playerId, playerName, ws) {
   });
 
   broadcastState(room, 'start');
-  _startTurnTimer(room);
-
-  // If AI takes the first turn, kick it off after the client has the initial state
-  setTimeout(() => {
-    if (room.state.activePlayer === Player.WITCH && room.witchAI) runAITurn(room);
-    else if (room.state.activePlayer === Player.HERO && room.heroAI) runAITurn(room);
-  }, 100);
+  _startPlanningPhase(room);
 }
 
 /** Second player joins a private room by code. */
@@ -394,11 +438,28 @@ export function joinPrivateRoom(playerId, playerName, ws, code) {
   send(ws,          { type: 'matchFound', roomId: room.id, faction: 'witch', opponentName: room.heroName, aiOpponent: false });
 
   broadcastState(room, 'start');
-  _startTurnTimer(room);
+  _startPlanningPhase(room);
 }
 
-/** Handle an incoming action from a player. */
+/** Handle an incoming action from a player (legacy sequential mode — kept for fallback). */
 export function handleAction(playerId, roomId, actionType, params) {
+  // In simultaneous planning mode, individual actions are not used.
+  // Clients should use submitPlan instead.
+  const room = rooms.get(roomId);
+  if (!room) return;
+  const faction = factionFor(room, playerId);
+  const ws = faction === 'hero' ? room.heroWs : room.witchWs;
+  send(ws, { type: 'error', message: 'Use submitPlan — simultaneous planning is active.' });
+}
+
+/** Handle end-of-turn from a player (legacy — redirects to empty plan submit). */
+export function handleEndTurn(playerId, roomId) {
+  // Treat as submitting an empty plan
+  handlePlanSubmit(playerId, roomId, []);
+}
+
+/** Handle a plan submission from a player. */
+export function handlePlanSubmit(playerId, roomId, plan) {
   const room = rooms.get(roomId);
   if (!room) return;
 
@@ -409,60 +470,19 @@ export function handleAction(playerId, roomId, actionType, params) {
   const state = room.state;
 
   if (state.gameOver) { send(ws, { type: 'error', message: 'Game is over.' }); return; }
-  if (state.activePlayer !== faction) {
-    send(ws, { type: 'error', message: "It's not your turn." }); return;
-  }
+  if (!state.planningPhase) { send(ws, { type: 'error', message: 'Not in planning phase.' }); return; }
 
-  // Player is active — reset the inactivity clock
-  _startTurnTimer(room);
+  // Check not already submitted
+  if (faction === 'hero'  && state.heroReady)  { send(ws, { type: 'error', message: 'Plan already submitted.' }); return; }
+  if (faction === 'witch' && state.witchReady) { send(ws, { type: 'error', message: 'Plan already submitted.' }); return; }
 
-  let result;
-  try {
-    result = _executeAction(state, actionType, params);
-  } catch (err) {
-    send(ws, { type: 'error', message: 'Invalid action.' });
-    return;
-  }
+  // Validate plan is an array
+  if (!Array.isArray(plan)) { send(ws, { type: 'error', message: 'Invalid plan format.' }); return; }
 
-  if (!result.success) {
-    send(ws, { type: 'actionError', message: result.log?.[0] ?? 'Action failed.' });
-    return;
-  }
+  // Reset planning timer when a plan comes in
+  _startPlanningTimer(room);
 
-  for (const msg of result.log) state.addLog(msg);
-  state.spendAction(result.cost);
-  state.checkVictory();
-
-  // For battle, send the breakdown before the state update
-  if (actionType === 'battle' && result.battleResult) {
-    broadcastBattleResult(room, result.battleResult.actorSnap, result.battleResult.targetSnap, result.battleResult);
-  }
-
-  broadcastState(room, actionType);
-  checkAndHandleGameOver(room);
-}
-
-/** Handle end-of-turn from a player. */
-export function handleEndTurn(playerId, roomId) {
-  const room = rooms.get(roomId);
-  if (!room) return;
-
-  const faction = factionFor(room, playerId);
-  if (!faction) return;
-
-  const state = room.state;
-  if (state.gameOver) return;
-  if (state.activePlayer !== faction) return;
-
-  _clearTurnTimer(room);
-  state.endTurn();
-  broadcastState(room, 'endTurn');
-  checkAndHandleGameOver(room);
-
-  if (!state.gameOver) {
-    _startTurnTimer(room);
-    setTimeout(() => runAITurn(room), 100);
-  }
+  _submitFactionPlan(room, faction, plan);
 }
 
 /** Handle a player disconnecting mid-game. */
@@ -487,9 +507,9 @@ export function handleDisconnect(playerId, roomId) {
       const aiName = faction === 'hero' ? 'The AI Hero' : 'The AI Witch';
       send(opponentWs, { type: 'opponentJoined', opponentName: `${aiName} (took over)`, aiOpponent: true });
       broadcastState(r, 'update');
-      // If it's now the AI's turn, run it
-      if (r.state.activePlayer === faction) {
-        setTimeout(() => runAITurn(r), 100);
+      // In planning phase, AI immediately submits its plan
+      if (r.state.planningPhase) {
+        _runAIPlanSubmission(r);
       }
     }
   }, AI_TAKEOVER_MS);

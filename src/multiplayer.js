@@ -57,6 +57,12 @@ export class MirrorState {
     s.lastNightDamage      = snap.lastNightDamage || [];
     s.lastDayDamage        = snap.lastDayDamage   || [];
     s.lastHazardLog        = snap.lastHazardLog   || [];
+    s.planningPhase        = snap.planningPhase   ?? false;
+    s.resolving            = snap.resolving       ?? false;
+    s.heroReady            = snap.heroReady       ?? false;
+    s.witchReady           = snap.witchReady      ?? false;
+    s.heroActionsLeft      = snap.heroActionsLeft  ?? 0;
+    s.witchActionsLeft     = snap.witchActionsLeft ?? 0;
 
     // Reconstruct tiles as a Map keyed by "col,row"
     s.tiles = new Map();
@@ -97,6 +103,9 @@ export class MultiplayerClient {
    * @param {Function} opts.onOpponentJoined  Called with (opponentName)
    * @param {Function} opts.onOpponentForfeited
    * @param {Function} opts.onInQueue   Called with (position)
+   * @param {Function} opts.onPlanningPhase Called with ({heroActionsLeft, witchActionsLeft, timeoutMs})
+   * @param {Function} opts.onOpponentReady   Called with no args — opponent locked in their plan
+   * @param {Function} opts.onResolutionComplete  Called with ({steps, finalState: MirrorState})
    */
   constructor(opts) {
     this._opts     = opts;
@@ -149,6 +158,11 @@ export class MultiplayerClient {
 
   sendEndTurn() {
     this._send({ type: 'endTurn' });
+  }
+
+  /** Submit the player's plan for the current round. */
+  submitPlan(plan) {
+    this._send({ type: 'submitPlan', plan });
   }
 
   // ── Internal ───────────────────────────────────────────────────────────────
@@ -283,6 +297,20 @@ export class MultiplayerClient {
         this._opts.onError?.('Your opponent forfeited. You win!');
         this.active = false;
         break;
+
+      case 'planningPhase':
+        this._opts.onPlanningPhase?.(msg);
+        break;
+
+      case 'opponentReady':
+        this._opts.onOpponentReady?.();
+        break;
+
+      case 'resolutionComplete': {
+        const mirror = MirrorState.fromSnapshot(msg.finalState);
+        this._opts.onResolutionComplete?.({ steps: msg.steps, finalState: mirror });
+        break;
+      }
 
       case 'error':
       case 'actionError':

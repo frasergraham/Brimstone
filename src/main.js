@@ -6,6 +6,8 @@ import { WitchAI, HeroAI }   from './ai.js';
 import { hexToPixel }        from './hex.js';
 import { MultiplayerClient, MirrorState, loadSession, clearSession } from './multiplayer.js';
 import { VERSION }           from './version.js';
+import { resolvePlans, ResEventType } from '../server/resolver.js';
+import { PlanActionType }    from './planner.js';
 
 // Stamp version into both badges
 document.getElementById('version-badge').textContent = `v${VERSION}`;
@@ -40,7 +42,6 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
   if (heroAI)  heroAI.onBattleResult  = battleCallback;
 
   redraw();
-  ui.refresh();
 
   requestAnimationFrame(() => {
     const wrapper = document.getElementById('canvas-wrapper');
@@ -54,6 +55,8 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
     renderer._clampPan();
     redraw();
   });
+
+  _startLocalPlanningPhase();
 }
 
 function redraw() {
@@ -79,6 +82,158 @@ function showGameOver() {
   el.querySelector('.winner-text').innerHTML =
     `<div class="winner-banner">${banner}</div><div class="winner-reason">${reason}</div>`;
 }
+
+// ── Local planning lifecycle ──────────────────────────────────────────────────
+
+function _startLocalPlanningPhase() {
+  if (!state || state.gameOver) return;
+  state.startPlanning();
+
+  if (_autoplay) {
+    // AI vs AI: generate both plans immediately then resolve
+    setTimeout(() => _runLocalAutoResolution(), 0);
+    return;
+  }
+
+  const humanFaction = !state.heroIsAI ? 'hero' : 'witch';
+  const budget = humanFaction === 'hero' ? state.heroActionsLeft : state.witchActionsLeft;
+
+  if (!state.heroIsAI && !state.witchIsAI) {
+    // Human vs Human: hero plans first, then witch
+    ui.enterPlanningMode('hero', state.heroActionsLeft);
+    ui.onPlanSubmit = (heroPlan) => _onLocalHvHHeroPlan(heroPlan);
+  } else {
+    // One human vs AI
+    ui.enterPlanningMode(humanFaction, budget);
+    ui.onPlanSubmit = (plan) => _onLocalHumanPlanSubmit(humanFaction, plan);
+  }
+}
+
+/** Human vs Human: hero submitted, now show witch planning. */
+async function _onLocalHvHHeroPlan(heroPlan) {
+  ui.exitPlanningMode();
+  state.submitPlan('hero', heroPlan); // witchPlan not set yet → not both ready
+
+  ui.enterPlanningMode('witch', state.witchActionsLeft);
+  ui.onPlanSubmit = async (witchPlan) => {
+    ui.exitPlanningMode();
+    state.submitPlan('witch', witchPlan); // both ready → resolving = true
+    await _runLocalResolution();
+  };
+}
+
+/** Human submitted their plan; generate AI plan then resolve. */
+async function _onLocalHumanPlanSubmit(faction, plan) {
+  ui.exitPlanningMode();
+
+  let bothReady = state.submitPlan(faction, plan);
+  if (!bothReady) {
+    const aiPlan = faction === 'hero'
+      ? (witchAI ? witchAI.generatePlan() : [])
+      : (heroAI  ? heroAI.generatePlan()  : []);
+    const aiFaction = faction === 'hero' ? 'witch' : 'hero';
+    bothReady = state.submitPlan(aiFaction, aiPlan);
+  }
+
+  if (bothReady) await _runLocalResolution();
+}
+
+async function _runLocalAutoResolution() {
+  if (!state || state.gameOver) return;
+  const heroPlan  = heroAI  ? heroAI.generatePlan()  : [];
+  const witchPlan = witchAI ? witchAI.generatePlan() : [];
+  state.submitPlan('hero',  heroPlan);
+  state.submitPlan('witch', witchPlan);
+  await _runLocalResolution();
+}
+
+async function _runLocalResolution() {
+  if (!state || state.gameOver) { showGameOver(); return; }
+
+  // Snapshot positions before resolution mutates state
+  const prePos = new Map();
+  for (const e of state.entities) {
+    if (e.alive) prePos.set(e.id, { col: e.col, row: e.row, type: e.type, owner: e.owner });
+  }
+
+  let steps;
+  try {
+    steps = resolvePlans(state, state.heroPlan, state.witchPlan);
+  } catch (err) {
+    console.error('resolvePlans error:', err);
+    steps = [];
+  }
+
+  await _animateResolutionSteps(steps, prePos, redraw);
+
+  state.endRound();
+  redraw();
+
+  if (state.gameOver) { showGameOver(); return; }
+
+  if (_autoplay) {
+    await _delay(300);
+  }
+  _startLocalPlanningPhase();
+}
+
+/**
+ * Animate a resolution step array.
+ * prePos: Map<entityId, {col,row,type,owner}> — positions before resolution ran.
+ * redrawFn: function to call after each visual change.
+ */
+async function _animateResolutionSteps(steps, prePos, redrawFn) {
+  const curPos = new Map(prePos);
+
+  for (const step of steps) {
+    const events = [
+      ...(step.heroEvents  ?? []),
+      ...(step.witchEvents ?? []),
+    ];
+
+    let hadAnim = false;
+
+    for (const ev of events) {
+      if (ev.type !== ResEventType.ACTION_OK) continue;
+      const { action, result, battleSnaps } = ev;
+
+      if (action.type === PlanActionType.MOVE) {
+        const from = curPos.get(action.entityId);
+        const info = prePos.get(action.entityId);
+        if (from && info) {
+          renderer.addMoveAnim(
+            action.entityId,
+            from.col, from.row,
+            action.toCol, action.toRow,
+            info.type, info.owner
+          );
+          curPos.set(action.entityId, { col: action.toCol, row: action.toRow });
+          hadAnim = true;
+        }
+      } else if (
+        action.type === PlanActionType.BATTLE_UNIT ||
+        action.type === PlanActionType.BATTLE_HEX
+      ) {
+        if (battleSnaps) {
+          const { actorSnap, targetSnap } = battleSnaps;
+          renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
+          redrawFn();
+          await new Promise(resolve => {
+            ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
+          });
+          hadAnim = true;
+        }
+      }
+    }
+
+    if (hadAnim) {
+      redrawFn();
+      if (!_autoplay) await _delay(300);
+    }
+  }
+}
+
+function _delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
 // ── Online game init ──────────────────────────────────────────────────────────
 
@@ -490,6 +645,41 @@ function _createMpClient() {
 
     onOpponentReconnected() {
       if (mp) _updateOnlineStatus(mp);
+    },
+
+    onPlanningPhase({ heroActionsLeft, witchActionsLeft }) {
+      if (!ui || !mp) return;
+      const budget = mp.myFaction === 'hero' ? heroActionsLeft : witchActionsLeft;
+      ui.exitPlanningMode();
+      ui.enterPlanningMode(mp.myFaction, budget);
+      ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
+    },
+
+    onOpponentReady() {
+      const statusEl = document.getElementById('plan-status');
+      if (statusEl) statusEl.textContent = 'Opponent ready — waiting for resolution…';
+    },
+
+    onResolutionComplete({ steps, finalState }) {
+      if (!ui || !renderer) return;
+      ui.exitPlanningMode();
+
+      // Snapshot current entity positions (pre-resolution) for animation
+      const prePos = new Map();
+      for (const e of state.entities) {
+        prePos.set(e.id, { col: e.col, row: e.row, type: e.type, owner: e.owner });
+      }
+
+      _animateResolutionSteps(steps, prePos, redrawOnline).then(() => {
+        // Apply final state (next stateUpdate from server will match, so no double anim)
+        Object.assign(state, finalState);
+        state.hero      = finalState.hero;
+        state.witch     = finalState.witch;
+        state.myFaction = mp?.myFaction;
+
+        redrawOnline();
+        if (state.gameOver) showGameOver();
+      });
     },
 
     onError(msg) {

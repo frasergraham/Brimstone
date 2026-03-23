@@ -1241,3 +1241,144 @@ canvas { touch-action: pan-x pan-y; }
   align-self: center;
   user-select: none;
 }
+
+/* ── Plan panel ────────────────────────────────────────────────── */
+#game-main {
+  position: relative;
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+#canvas-wrapper {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+.plan-panel {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 220px;
+  background: rgba(13, 17, 23, 0.95);
+  border-left: 1px solid rgba(255,255,255,0.1);
+  display: flex;
+  flex-direction: column;
+  z-index: 30;
+  font-size: 0.8rem;
+}
+.plan-panel-header {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.plan-panel-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--hero);
+}
+.plan-budget-badge {
+  font-size: 0.7rem;
+  background: rgba(255,255,255,0.08);
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+  color: var(--muted);
+}
+.plan-steps {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.4rem 0;
+}
+.plan-step {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.75rem;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  cursor: default;
+}
+.plan-step:hover { background: rgba(255,255,255,0.04); }
+.plan-step-num {
+  min-width: 1.2rem;
+  font-size: 0.65rem;
+  color: var(--muted);
+  text-align: right;
+}
+.plan-step-icon { font-size: 0.9rem; }
+.plan-step-desc {
+  flex: 1;
+  font-size: 0.75rem;
+  color: rgba(255,255,255,0.8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plan-step-remove {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.3);
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0 0.2rem;
+  line-height: 1;
+}
+.plan-step-remove:hover { color: #e05050; }
+.plan-panel-footer {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.5rem 0.6rem;
+  border-top: 1px solid rgba(255,255,255,0.1);
+}
+.plan-btn {
+  flex: 1;
+  padding: 0.4rem 0.3rem;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.plan-btn.primary {
+  background: var(--hero);
+  color: #000;
+}
+.plan-btn.primary:hover { background: #e8c84e; }
+.plan-btn.secondary {
+  background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.6);
+}
+.plan-btn.secondary:hover { background: rgba(255,255,255,0.15); }
+.plan-status {
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-align: center;
+  padding: 0.3rem 0.5rem;
+  min-height: 1.4rem;
+}
+.plan-panel[data-witch-mode] .plan-panel-title { color: var(--witch); }
+.plan-submitted .plan-step-remove { display: none; }
+.plan-submitted .plan-btn { opacity: 0.5; pointer-events: none; }
+
+/* Resolution overlay */
+#resolution-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  pointer-events: none;
+}
+#resolution-banner {
+  background: rgba(13,17,23,0.95);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 8px;
+  padding: 0.8rem 1.5rem;
+  font-size: 0.9rem;
+  color: rgba(255,255,255,0.9);
+  text-align: center;
+}

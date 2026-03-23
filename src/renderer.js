@@ -37,6 +37,9 @@ export class Renderer {
     this.highlightHexes = [];
     this.hoveredHex     = null;
 
+    /** Ghost overlay steps from computeGhostState(). null = no overlay. */
+    this.planGhostSteps = null;
+
     // Zoom & pan
     this.zoomLevel = 1.0;
     this._panX     = 0;
@@ -291,6 +294,11 @@ export class Renderer {
 
     // Sliding entity icons for move animations (opponent moves / own moves)
     this._drawMoveAnims();
+
+    // Plan ghost overlay — numbered arrows for move steps
+    if (this.planGhostSteps?.length) {
+      this._drawPlanOverlay(this.planGhostSteps);
+    }
 
     ctx.restore(); // end zoom/pan transform
 
@@ -797,6 +805,74 @@ export class Renderer {
       ctx.textBaseline = 'middle';
       ctx.fillText(`+${stack.length - 3}`, bx + 7, by + 5);
     }
+  }
+
+  /** Draw plan ghost overlay: arrows from start to projected positions for each move step. */
+  _drawPlanOverlay(ghostSteps) {
+    const ctx = this.ctx;
+    const hs  = this.hexSize;
+
+    // Collect arrows from move steps only
+    const arrows = ghostSteps.filter(s => s.arrow !== null).map(s => s.arrow);
+    if (!arrows.length) return;
+
+    ctx.save();
+    ctx.lineCap  = 'round';
+    ctx.lineJoin = 'round';
+
+    arrows.forEach((arrow, i) => {
+      const from = this._toCanvas(arrow.fromCol, arrow.fromRow);
+      const to   = this._toCanvas(arrow.toCol,   arrow.toRow);
+
+      // Draw dashed line from → to
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 1) return;
+      const ux = dx / len;
+      const uy = dy / len;
+
+      const startX = from.x + ux * hs * 0.35;
+      const startY = from.y + uy * hs * 0.35;
+      const endX   = to.x   - ux * hs * 0.45;
+      const endY   = to.y   - uy * hs * 0.45;
+
+      ctx.strokeStyle = 'rgba(245,200,66,0.75)';
+      ctx.lineWidth   = 2;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(startX, startY);
+      ctx.lineTo(endX,   endY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Arrow head
+      const headLen = hs * 0.22;
+      const angle   = Math.atan2(dy, dx);
+      ctx.strokeStyle = 'rgba(245,200,66,0.9)';
+      ctx.lineWidth   = 2;
+      ctx.beginPath();
+      ctx.moveTo(endX, endY);
+      ctx.lineTo(endX - headLen * Math.cos(angle - 0.4), endY - headLen * Math.sin(angle - 0.4));
+      ctx.moveTo(endX, endY);
+      ctx.lineTo(endX - headLen * Math.cos(angle + 0.4), endY - headLen * Math.sin(angle + 0.4));
+      ctx.stroke();
+
+      // Step number badge on the destination hex
+      const num = arrow.stepNumber ?? (i + 1);
+      const badgeR = hs * 0.22;
+      ctx.beginPath();
+      ctx.arc(to.x, to.y, badgeR, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(245,200,66,0.85)';
+      ctx.fill();
+      ctx.fillStyle = '#1a1108';
+      ctx.font      = `bold ${Math.floor(badgeR * 1.1)}px sans-serif`;
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(num), to.x, to.y + 0.5);
+    });
+
+    ctx.restore();
   }
 
   _drawMoveAnims() {
