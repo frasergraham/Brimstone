@@ -32,7 +32,7 @@ export const Player = Object.freeze({ HERO: 'hero', WITCH: 'witch' });
 // Calculate actions for a player at the start of their turn.
 // Hero  — base 3 + 1 in DAWN (prep bonus) + 1 in DAY + 1 per extra unit (cap +2)
 // Witch — base 4 + 1 in NIGHT + 1 per 2 extra units (cap +4, so needs 8 minions for full bonus)
-function computeActions(player, phase, entities) {
+export function computeActions(player, phase, entities) {
   const isHero     = player === Player.HERO;
   const owner      = isHero ? 'hero' : 'witch';
   const leaderType = isHero ? 'hero' : 'witch';
@@ -113,6 +113,21 @@ export class GameState {
     // Attrition level: hazard damage dealt to exposed units. Ramps up each dawn.
     // Cycle 1: 1 dmg, Cycle 2: 2 dmg, Cycle 3: 3 dmg.
     this.attritionLevel = 1;
+
+    // ── Simultaneous-turn planning state ──────────────────────────────────
+    // planningPhase: true while both sides are building their action plans.
+    // resolving:     true while the resolver is executing paired steps.
+    // heroPlan / witchPlan: submitted PlanAction[] arrays (null = not yet submitted).
+    // heroReady / witchReady: submission flags.
+    this.planningPhase  = false;
+    this.resolving      = false;
+    this.heroPlan       = null;
+    this.witchPlan      = null;
+    this.heroReady      = false;
+    this.witchReady     = false;
+    // Per-faction action budgets computed at planning start (mirrors old actionsLeft).
+    this.heroActionsLeft  = 0;
+    this.witchActionsLeft = 0;
   }
 
   // ── Turn management ────────────────────────────────────────────────────
@@ -123,6 +138,150 @@ export class GameState {
 
   spendAction(cost = 1) {
     this.actionsLeft = Math.max(0, this.actionsLeft - cost);
+  }
+
+  // ── Simultaneous-turn planning API ─────────────────────────────────────
+
+  /** Begin a new planning phase: reset plans and compute per-faction budgets. */
+  startPlanning() {
+    this.planningPhase    = true;
+    this.resolving        = false;
+    this.heroPlan         = null;
+    this.witchPlan        = null;
+    this.heroReady        = false;
+    this.witchReady       = false;
+    this.heroActionsLeft  = computeActions(Player.HERO,  this.phase, this.entities);
+    this.witchActionsLeft = computeActions(Player.WITCH, this.phase, this.entities);
+    this.addLog(
+      `📋 Planning phase — Hero: ${this.heroActionsLeft} actions, ` +
+      `Witch: ${this.witchActionsLeft} actions.`
+    );
+  }
+
+  /**
+   * Submit a faction's plan.
+   * @param {'hero'|'witch'} faction
+   * @param {import('./planner.js').PlanAction[]} plan
+   * @returns {boolean} true when both factions have submitted (resolution can begin)
+   */
+  submitPlan(faction, plan) {
+    if (!this.planningPhase) throw new Error('Not in planning phase.');
+    if (faction === Player.HERO) {
+      this.heroPlan  = plan;
+      this.heroReady = true;
+      this.addLog(`⚔ Hero submits their plan (${plan.length} step${plan.length !== 1 ? 's' : ''}).`);
+    } else {
+      this.witchPlan  = plan;
+      this.witchReady = true;
+      this.addLog(`✦ Witch submits their plan (${plan.length} step${plan.length !== 1 ? 's' : ''}).`);
+    }
+    if (this.heroReady && this.witchReady) {
+      this.planningPhase = false;
+      this.resolving     = true;
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Apply end-of-round effects after resolution: rest healing, night/day node
+   * spawns, phase advance, hazards, attrition, and node scoring.
+   * Replaces the two sequential endTurn() calls used in the old alternating model.
+   */
+  endRound() {
+    this.resolving = false;
+    this.witchSummonsThisTurn = 0;
+
+    // Hero rest heal: resting inside a building or on a Power Node.
+    const heroTile = this.tiles.get(hexKey(this.hero.col, this.hero.row));
+    if (this.hero.alive && heroTile?.type === TileType.BUILDING && this.hero.hp < this.hero.maxHp) {
+      const b = heroTile.building;
+      if (b === BuildingType.INN) {
+        this.hero.heal(3);
+        this.addLog(`🏨 The hero rests at the inn. (+3 HP, now ${this.hero.hp}/${this.hero.maxHp})`);
+      } else if (b === BuildingType.CHURCH) {
+        this.hero.heal(3);
+        this.addLog(`⛪ The hero prays at the chapel. (+3 HP, now ${this.hero.hp}/${this.hero.maxHp})`);
+      } else {
+        this.hero.heal(1);
+        this.addLog(`🏠 The hero rests in shelter. (+1 HP, now ${this.hero.hp}/${this.hero.maxHp})`);
+      }
+    }
+    if (this.hero.alive && this.hero.hp < this.hero.maxHp) {
+      const onNode = this.witchObjectives.some(
+        obj => obj.col === this.hero.col && obj.row === this.hero.row
+      );
+      if (onNode) {
+        this.hero.heal(1);
+        this.addLog(`✨ The hero draws power from the node. (+1 HP, now ${this.hero.hp}/${this.hero.maxHp})`);
+      }
+    }
+
+    // Night: node spawns (witch → minion, hero → survivor).
+    if (this.phase === Phase.NIGHT) {
+      for (const obj of this.witchObjectives) {
+        const freeHex = () => getNeighbors(obj.col, obj.row).find(n => {
+          const t = this.tiles.get(hexKey(n.col, n.row));
+          return t && t.type !== TileType.RIVER &&
+            !this.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
+        });
+        if (this.witch.alive && this.witch.col === obj.col && this.witch.row === obj.row) {
+          const hex = freeHex();
+          if (hex) {
+            this.entities.push(createMinion(hex.col, hex.row));
+            this.addLog(`🌑 The witch channels the node — a minion rises from the dark!`);
+          }
+        }
+        if (this.hero.alive && this.hero.col === obj.col && this.hero.row === obj.row) {
+          const hex = freeHex();
+          if (hex) {
+            const s = createSurvivor(hex.col, hex.row);
+            s.owner = 'hero';
+            if (Math.random() < 0.5) s.items['horse'] = 1;
+            this.entities.push(s);
+            const horseNote = s.items['horse'] ? ' (arrives on horseback!)' : '';
+            this.addLog(`✨ The node calls to the living — a survivor emerges!${horseNote}`);
+          }
+        }
+      }
+    }
+
+    // Advance round and phase.
+    this.entities.forEach(e => e.resetTurn());
+    this.round++;
+    const prevPhase = this.phase;
+    this.phase = phaseForRound(this.round);
+
+    if (this.phase !== prevPhase) {
+      this._announcePhaseChange(prevPhase, this.phase);
+    } else {
+      this.addLog(
+        `Round ${this.round} — ${PHASE_ICON[this.phase]} ${this.phase.toUpperCase()}`
+      );
+    }
+
+    // Hazards on the new phase.
+    if (this.phase === Phase.NIGHT) {
+      this.lastNightDamage = [];
+      this.lastHazardLog   = [];
+      this._applyNightHazard(this.attritionLevel);
+    }
+    if (this.phase === Phase.DAY) {
+      this.lastDayDamage = [];
+      this.lastHazardLog = [];
+      this._applyDayHazard(this.attritionLevel);
+    }
+    if (this.phase === Phase.DAWN) {
+      this.attritionLevel = Math.min(3, this.attritionLevel + 1);
+      this.addLog(`🌅 A new dawn — cycle ${Math.ceil(this.round / CYCLE_LENGTH)}. Attrition rises to ${this.attritionLevel}!`);
+      for (const [, t] of this.tiles) t.explored = false;
+      this._checkNodeObjectives(Phase.DAWN);
+    }
+    if (this.phase === Phase.DUSK) {
+      this._checkNodeObjectives(Phase.DUSK);
+    }
+
+    this.checkVictory();
   }
 
   endTurn() {
