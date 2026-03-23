@@ -164,7 +164,8 @@ async function _runLocalResolution() {
     steps = [];
   }
 
-  await _animateResolutionSteps(steps, prePos, redraw);
+  const humanFaction = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : null;
+  await _animateResolutionSteps(steps, prePos, redraw, humanFaction);
 
   state.endRound();
   redraw();
@@ -179,10 +180,11 @@ async function _runLocalResolution() {
 
 /**
  * Animate a resolution step array.
- * prePos: Map<entityId, {col,row,type,owner}> — positions before resolution ran.
- * redrawFn: function to call after each visual change.
+ * prePos:       Map<entityId, {col,row,type,owner}> — positions before resolution ran.
+ * redrawFn:     function to call after each visual change.
+ * humanFaction: if set, only show explore/misc result dialogs for this faction.
  */
-async function _animateResolutionSteps(steps, prePos, redrawFn) {
+async function _animateResolutionSteps(steps, prePos, redrawFn, humanFaction = null) {
   const curPos = new Map(prePos);
 
   for (const step of steps) {
@@ -223,6 +225,17 @@ async function _animateResolutionSteps(steps, prePos, redrawFn) {
           });
           hadAnim = true;
         }
+      } else if (
+        action.type === PlanActionType.EXPLORE &&
+        result?.log?.length &&
+        (!humanFaction || ev.faction === humanFaction)
+      ) {
+        // Show what was found during exploration
+        redrawFn();
+        await new Promise(resolve => {
+          ui._showResultDialog(result.log, resolve);
+        });
+        hadAnim = true;
       }
     }
 
@@ -670,7 +683,7 @@ function _createMpClient() {
         prePos.set(e.id, { col: e.col, row: e.row, type: e.type, owner: e.owner });
       }
 
-      _animateResolutionSteps(steps, prePos, redrawOnline).then(() => {
+      _animateResolutionSteps(steps, prePos, redrawOnline, mp?.myFaction).then(() => {
         // Apply final state (next stateUpdate from server will match, so no double anim)
         Object.assign(state, finalState);
         state.hero      = finalState.hero;

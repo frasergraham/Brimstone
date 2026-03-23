@@ -439,10 +439,14 @@ export class UIController {
     // check happens before the _awaitingTarget routing so it works whether the
     // default-MOVE awaiting is set or not, and regardless of how many units
     // share that hex.
+    // In planning mode, use the projected (ghost) position rather than the real one.
+    const _selDisplayHex = this._planMode && this._selectedEntity
+      ? (this._getProjectedPos(this._selectedEntity.id) ?? this._selectedEntity)
+      : this._selectedEntity;
     if (
       this._selectedEntity &&
-      hex.col === this._selectedEntity.col &&
-      hex.row === this._selectedEntity.row
+      hex.col === _selDisplayHex.col &&
+      hex.row === _selDisplayHex.row
     ) {
       if (this._popupVisible) {
         // Third click — deselect entirely
@@ -467,9 +471,17 @@ export class UIController {
     const state = this.state;
     // In planning mode, filter by plan faction; otherwise by active player
     const ownerFilter = this._planMode ? this._planFaction : state.activePlayer;
-    const clickedEntities = state.entities.filter(
-      e => e.alive && e.col === hex.col && e.row === hex.row && e.owner === ownerFilter
-    );
+
+    // In planning mode, entities may have a different projected (ghost) position
+    // from their real position; use ghost positions for click detection.
+    const lastGhostPos = this._planMode
+      ? this.renderer?.planGhostSteps?.at(-1)?.positions
+      : null;
+    const clickedEntities = state.entities.filter(e => {
+      if (!e.alive || e.owner !== ownerFilter) return false;
+      const pos = lastGhostPos?.get(e.id) ?? { col: e.col, row: e.row };
+      return pos.col === hex.col && pos.row === hex.row;
+    });
 
     if (clickedEntities.length === 0) {
       // Always deselect and show tile detail immediately (single click)
@@ -513,18 +525,36 @@ export class UIController {
     this._pendingUnitPick = null;
     this._popupVisible    = false;
     _hideActionPopup();
-    this.renderer.selectedHex = { col: entity.col, row: entity.row };
-    this._validActions = getValidActions(this.state, entity);
+
+    // In planning mode, valid actions and highlights must use the entity's
+    // projected position (after earlier MOVE steps in the plan), not the real one.
+    let effectiveEntity = entity;
+    if (this._planMode) {
+      const proj = this._getProjectedPos(entity.id);
+      if (proj && (proj.col !== entity.col || proj.row !== entity.row)) {
+        effectiveEntity = { ...entity, col: proj.col, row: proj.row };
+      }
+    }
+
+    this.renderer.selectedHex = { col: effectiveEntity.col, row: effectiveEntity.row };
+    this._validActions = getValidActions(this.state, effectiveEntity);
     // Move is always the default awaiting action — clicking a green hex moves.
     const hasMoveAction = this._validActions.some(a => a.type === ActionType.MOVE);
     const actionsOk = this._planMode || this.state.actionsAvailable > 0;
     if (hasMoveAction && actionsOk) {
-      this._awaitingTarget = { actionType: ActionType.MOVE, actor: entity, isDefault: true };
+      this._awaitingTarget = { actionType: ActionType.MOVE, actor: effectiveEntity, isDefault: true };
     } else {
       this._awaitingTarget = null;
     }
     this._updateHighlights();
     // Popup is NOT shown here — user taps the unit a second time to open it
+  }
+
+  /** Return the latest projected position for an entity from the ghost overlay, or null. */
+  _getProjectedPos(entityId) {
+    const steps = this.renderer?.planGhostSteps;
+    if (!steps || steps.length === 0) return null;
+    return steps[steps.length - 1].positions.get(entityId) ?? null;
   }
 
   _clearSelection() {
