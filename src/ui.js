@@ -462,15 +462,16 @@ export class UIController {
     // check happens before the _awaitingTarget routing so it works whether the
     // default-MOVE awaiting is set or not, and regardless of how many units
     // share that hex.
-    // In planning mode, use the projected (ghost) position rather than the real one.
+    // In planning mode, use the projected (ghost) position rather than the real one,
+    // but also accept clicks on the entity's real (drawn) position.
     const _selDisplayHex = this._planMode && this._selectedEntity
       ? (this._getProjectedPos(this._selectedEntity.id) ?? this._selectedEntity)
       : this._selectedEntity;
-    if (
-      this._selectedEntity &&
-      hex.col === _selDisplayHex.col &&
-      hex.row === _selDisplayHex.row
-    ) {
+    const _selMatchesClick = this._selectedEntity && (
+      (hex.col === _selDisplayHex?.col && hex.row === _selDisplayHex?.row) ||
+      (this._planMode && hex.col === this._selectedEntity.col && hex.row === this._selectedEntity.row)
+    );
+    if (_selMatchesClick) {
       if (this._popupVisible) {
         // Third click — deselect entirely
         this._clearSelection();
@@ -500,11 +501,21 @@ export class UIController {
     const lastGhostPos = this._planMode
       ? this.renderer?.planGhostSteps?.at(-1)?.positions
       : null;
-    const clickedEntities = state.entities.filter(e => {
+    let clickedEntities = state.entities.filter(e => {
       if (!e.alive || e.owner !== ownerFilter) return false;
       const pos = lastGhostPos?.get(e.id) ?? { col: e.col, row: e.row };
       return pos.col === hex.col && pos.row === hex.row;
     });
+
+    // In planning mode, if nothing found at ghost positions, fall back to real
+    // positions — the entity may have planned moves that shifted its ghost away
+    // from where it's actually drawn on screen.
+    if (this._planMode && clickedEntities.length === 0 && lastGhostPos) {
+      clickedEntities = state.entities.filter(e =>
+        e.alive && e.owner === ownerFilter &&
+        e.col === hex.col && e.row === hex.row
+      );
+    }
 
     if (clickedEntities.length === 0) {
       // Always deselect and show tile detail immediately (single click)

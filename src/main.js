@@ -124,18 +124,23 @@ async function _onLocalHvHHeroPlan(heroPlan) {
 
 /** Human submitted their plan; generate AI plan then resolve. */
 async function _onLocalHumanPlanSubmit(faction, plan) {
-  ui.exitPlanningMode();
+  try {
+    ui.exitPlanningMode();
 
-  let bothReady = state.submitPlan(faction, plan);
-  if (!bothReady) {
-    const aiPlan = faction === 'hero'
-      ? (witchAI ? witchAI.generatePlan() : [])
-      : (heroAI  ? heroAI.generatePlan()  : []);
-    const aiFaction = faction === 'hero' ? 'witch' : 'hero';
-    bothReady = state.submitPlan(aiFaction, aiPlan);
+    let bothReady = state.submitPlan(faction, plan);
+    if (!bothReady) {
+      const aiPlan = faction === 'hero'
+        ? (witchAI ? witchAI.generatePlan() : [])
+        : (heroAI  ? heroAI.generatePlan()  : []);
+      const aiFaction = faction === 'hero' ? 'witch' : 'hero';
+      bothReady = state.submitPlan(aiFaction, aiPlan);
+    }
+
+    if (bothReady) await _runLocalResolution();
+  } catch (err) {
+    console.error('Plan submission/resolution error:', err);
+    _startLocalPlanningPhase();
   }
-
-  if (bothReady) await _runLocalResolution();
 }
 
 async function _runLocalAutoResolution() {
@@ -674,7 +679,7 @@ function _createMpClient() {
     },
 
     onResolutionComplete({ steps, finalState }) {
-      if (!ui || !renderer) return;
+      if (!ui || !renderer || !state) return;
       ui.exitPlanningMode();
 
       // Snapshot current entity positions (pre-resolution) for animation
