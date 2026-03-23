@@ -669,12 +669,22 @@ export class WitchAI {
     // ── DAY strategy ──────────────────────────────────────────────────────────
     const distToHero = hero ? hexDistance(witch.col, witch.row, hero.col, hero.row) : Infinity;
 
-    // 0. Flee
+    // 0. Flee if injured and hero nearby
     if (hero && distToHero <= 2 && witch.hp <= Math.ceil(witch.maxHp * 0.6)) {
       const a = tryFlee(witch, hero); if (a) return a;
     }
 
-    // 1. Urgent
+    // 1. Witch fights co-located hero unit (always — can't share a hex peacefully)
+    const colD = sim.entities.find(e => e.alive && e.owner === 'hero' && e.col === witch.col && e.row === witch.row);
+    if (colD) return tryBattle(witch, colD);
+
+    // 2. Minion co-location attacks (enemies on the same hex must be engaged)
+    for (const m of minions) {
+      const mc = sim.entities.find(e => e.alive && e.owner === 'hero' && e.col === m.col && e.row === m.row);
+      if (mc) return tryBattle(m, mc);
+    }
+
+    // 3. Urgent node race
     if (heroScore >= 2) {
       if (!witchOnNode) { const a = tryMove(witch, _bestWitchObjective(sim, witch)); if (a) return a; }
       for (const m of realMinions) {
@@ -683,7 +693,7 @@ export class WitchAI {
       }
     }
 
-    // 2. Hold node
+    // 4. Hold node
     if (witchOnNode) {
       const thr = sim.entities.find(e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1);
       if (thr) return tryBattle(witch, thr);
@@ -706,18 +716,26 @@ export class WitchAI {
       }
       const wtn = sim.tiles.get(hexKey(witch.col, witch.row));
       if (wtn && !sim.isExplored(witch.col, witch.row)) return { type: PlanActionType.EXPLORE, entityId: witch.id };
-      // All nodes covered + spare budget — pursue hero to force combat
+      // All nodes covered + spare budget — fight adjacent hero or pursue
+      const adjD = sim.entities.find(e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1);
+      if (adjD) return tryBattle(witch, adjD);
       if (hero) { const a = tryMove(witch, hero); if (a) return a; }
       return null; // hold the node
     }
 
-    // 3. Minions toward nodes
+    // 5. Witch fights adjacent hero (day ATK penalty accepted — keeps hero honest)
+    const adjD2 = sim.entities.find(e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1);
+    if (adjD2) return tryBattle(witch, adjD2);
+
+    // 6. Minions toward nodes, plus adjacent attacks for node-bound minions
     for (const m of realMinions) {
+      const ma = sim.entities.find(e => e.alive && e.owner === 'hero' && hexDistance(m.col, m.row, e.col, e.row) === 1);
+      if (ma) return tryBattle(m, ma);
       if (_isOnNode(sim, m)) continue;
       const a = tryMove(m, _bestWitchObjective(sim, m)); if (a) return a;
     }
 
-    // 4. Summon
+    // 7. Summon
     if (uncoveredNodes.length === 0 || minions.length === 0) {
       if (sim.witchSummonsThisTurn === 0) {
         const inv = sim.inventory.witch;
@@ -732,31 +750,22 @@ export class WitchAI {
       }
     }
 
-    // 5. Explore current tile
+    // 8. Explore current tile
     const wt = sim.tiles.get(hexKey(witch.col, witch.row));
     if (wt && !sim.isExplored(witch.col, witch.row)) return { type: PlanActionType.EXPLORE, entityId: witch.id };
 
-    // 6. Move to adjacent unexplored resource tile
+    // 9. Move to adjacent unexplored resource tile
     const unexpAdj = getNeighbors(witch.col, witch.row).find(n => {
       const t = sim.tiles.get(hexKey(n.col, n.row));
       return t && !sim.isExplored(t.col, t.row) && (t.hiddenSurvivor || t.resource || t.building) && t.type !== TileType.RIVER;
     });
     if (unexpAdj) return { type: PlanActionType.MOVE, entityId: witch.id, toCol: unexpAdj.col, toRow: unexpAdj.row };
 
-    // 7. Move toward objective
+    // 10. Move toward objective
     { const a = tryMove(witch, _bestWitchObjective(sim, witch)); if (a) return a; }
 
-    // 8. Pursue hero to force combat (unconditional — nodes are now covered)
+    // 11. Pursue hero to force combat
     if (hero) { const a = tryMove(witch, hero); if (a) return a; }
-
-    // 9. Shelter stray minions
-    for (const m of realMinions) {
-      if (_isOnNode(sim, m)) continue;
-      const mt = sim.tiles.get(hexKey(m.col, m.row));
-      if (!mt || mt.type !== TileType.BUILDING) {
-        const a = tryMove(m, nearestBuilding(sim, m)); if (a) return a;
-      }
-    }
 
     return null;
   }
