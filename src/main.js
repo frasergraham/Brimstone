@@ -253,18 +253,23 @@ async function _animateResolutionSteps(steps, prePos, redrawFn, humanFaction = n
       await new Promise(resolve => ui._showResultDialog(log, resolve));
     }
 
-    // ── Phase 2: battles (both factions visible) ─────────────────────────────
+    // ── Phase 2: battles and summons (both factions visible) ────────────────
     let hadBattle = false;
     for (const ev of events) {
       const { action, result, battleSnaps } = ev;
-      if (action.type !== PlanActionType.BATTLE_UNIT && action.type !== PlanActionType.BATTLE_HEX) continue;
-      if (battleSnaps) {
-        const { actorSnap, targetSnap } = battleSnaps;
-        renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
-        redrawFn();
-        await new Promise(resolve => {
-          ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
-        });
+      if (action.type === PlanActionType.BATTLE_UNIT || action.type === PlanActionType.BATTLE_HEX) {
+        if (battleSnaps) {
+          const { actorSnap, targetSnap } = battleSnaps;
+          renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
+          redrawFn();
+          await new Promise(resolve => {
+            ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
+          });
+          hadBattle = true;
+        }
+      } else if (action.type === PlanActionType.SUMMON) {
+        // Flash the spawn hex so the player can see a unit was summoned
+        renderer.addFlash(action.toCol, action.toRow, '☠', 'rgba(155,89,182,0.85)', 1200);
         hadBattle = true;
       }
     }
@@ -282,7 +287,12 @@ async function _animateResolutionSteps(steps, prePos, redrawFn, humanFaction = n
 
     if (hadMove || hadBattle) {
       redrawFn();
-      if (!_autoplay) await _delay(300);
+      if (!_autoplay) await _delay(hadMove ? 400 : 300);
+    } else if (events.length > 0 && !_autoplay) {
+      // Steps with only non-visual actions (fortify, use_item, etc.) — brief pause
+      // so the resolution doesn't feel instant.
+      redrawFn();
+      await _delay(150);
     }
   }
 }
