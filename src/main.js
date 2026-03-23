@@ -167,6 +167,13 @@ document.getElementById('btn-restart').addEventListener('click', () => {
   if (mp) { mp.disconnect(); mp = null; }
   document.getElementById('online-status').style.display = 'none';
 
+  // Reset game objects so initOnline / init start fresh
+  renderer = null;
+  ui       = null;
+  state    = null;
+  witchAI  = null;
+  heroAI   = null;
+
   if (_autoplay) {
     init(true, true, true);
   } else {
@@ -240,6 +247,7 @@ document.getElementById('btn-online').addEventListener('click', () => {
 
 document.getElementById('btn-online-back').addEventListener('click', () => {
   if (mp) { mp.disconnect(); mp = null; }
+  renderer = null; ui = null; state = null;
   showStep('mode');
 });
 
@@ -335,15 +343,19 @@ function _onlineError(msg) {
 function _ensureAuthed(cb) {
   const nameInput = document.getElementById('online-username');
   const session   = loadSession();
+  const wsUrl     = _serverWsUrl();
 
+  // Create fresh client if needed, or reconnect a dropped one
   if (!mp) {
     mp = _createMpClient();
-    const wsUrl = _serverWsUrl();
+    mp.connect(wsUrl);
+  } else if (!mp.connected) {
+    // Stale connection — reconnect
     mp.connect(wsUrl);
   }
 
-  if (session && mp.player?.id === session.id) {
-    // Already authenticated
+  if (session && mp.player?.id === session.id && mp.connected) {
+    // Already authenticated on a live connection
     cb();
     return;
   }
@@ -372,7 +384,13 @@ function _createMpClient() {
       if (!renderer || !ui) {
         // Game not started yet — any state update while active should start it
         if (mp?.active) {
-          initOnline(mirrorState, mp.myFaction, mp);
+          try {
+            initOnline(mirrorState, mp.myFaction, mp);
+          } catch (err) {
+            console.error('initOnline failed:', err);
+            _onlineError(`Failed to start game: ${err.message}`);
+            showStep('online');
+          }
         }
         return;
       }
