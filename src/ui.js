@@ -33,6 +33,9 @@ export class UIController {
     this._mouseDown   = null;
     this._didDragPan  = false;
 
+    this._lastHazardKey    = '';   // deduplicates hazard popups across state updates
+    this._battleInterval   = null; // dice animation interval — cleared on new dialog
+
     this._bindEvents();
   }
 
@@ -226,11 +229,19 @@ export class UIController {
   _onClick(e) {
     if (this._didDragPan) { this._didDragPan = false; return; }
     if (this.state.gameOver) return;
-    if (this._isOpponentTurn()) return;
 
     const { x, y } = this._canvasPos(e);
     const hex = this._canvasToHex(x, y);
     if (hex.col < 0 || hex.col >= 13 || hex.row < 0 || hex.row >= 11) return;
+
+    // On opponent's turn, allow viewing tiles/units but block all actions
+    if (this._isOpponentTurn()) {
+      this._clearSelection();
+      this._showTileDetail(hex);
+      this._updateSidebar();
+      this.onRedraw();
+      return;
+    }
 
     // Tapping the selected unit's hex always toggles the action popup — this
     // check happens before the _awaitingTarget routing so it works whether the
@@ -838,6 +849,12 @@ export class UIController {
 
     if (!nightPositions.length && !dayPositions.length) return;
 
+    // Deduplicate: in online mode each server action re-sends the same hazard
+    // arrays until the next turn, so we must not pop the dialog on every update.
+    const hazardKey = `${state.round}|${hazardLog.join('~')}`;
+    if (hazardKey === this._lastHazardKey) return;
+    this._lastHazardKey = hazardKey;
+
     for (const pos of nightPositions) {
       this.renderer.addFlash(pos.col, pos.row, '-1', 'rgba(80,0,160,0.8)', 2000);
     }
@@ -985,6 +1002,9 @@ export class UIController {
   }
 
   _showBattleDialog(actorSnap, targetSnap, result, onDismiss, onRematch = null) {
+    // Cancel any in-flight dice animation from a previous battle dialog
+    if (this._battleInterval) { clearInterval(this._battleInterval); this._battleInterval = null; }
+
     const dialog = document.getElementById('battle-dialog');
     const footer = document.getElementById('battle-footer');
 
@@ -1116,12 +1136,13 @@ export class UIController {
       defDie.className   = 'die-display rolling';
       let ticks = 0;
       const maxTicks = 14;
-      const interval = setInterval(() => {
+      this._battleInterval = setInterval(() => {
         ticks++;
         atkDie.textContent = Math.ceil(Math.random() * 20);
         defDie.textContent = Math.ceil(Math.random() * 20);
         if (ticks >= maxTicks) {
-          clearInterval(interval);
+          clearInterval(this._battleInterval);
+          this._battleInterval = null;
           revealResult();
         }
       }, 55);
@@ -1359,8 +1380,9 @@ function _summonLabel(witchInv) {
 
 function _visibleUnitsAt(state, col, row) {
   if (!state.fogOfWar) return state.entities.filter(e => e.alive && e.col === col && e.row === row);
-  const humanIsHero  = state.witchIsAI && !state.heroIsAI;
-  const humanIsWitch = state.heroIsAI  && !state.witchIsAI;
+  const myFaction    = state.myFaction;
+  const humanIsHero  = myFaction ? myFaction === 'hero'  : (state.witchIsAI && !state.heroIsAI);
+  const humanIsWitch = myFaction ? myFaction === 'witch' : (state.heroIsAI  && !state.witchIsAI);
   const revealed = humanIsHero  ? getVisibleEnemyHexes(state)
                  : humanIsWitch ? getVisibleHeroHexes(state)
                  : null;

@@ -614,7 +614,7 @@ function _snap(entity) {
     attack:   entity.attack,
     defense:  entity.defense,
     weapon:   entity.weapon,
-    name:     entity.name,
+    name:     entity.displayName,  // displayName always non-null; .name is null for hero/witch
     title:    entity.title,
     displayName: entity.displayName,
   };

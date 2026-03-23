@@ -45,12 +45,60 @@ export class Renderer {
     // Damage flash overlays: [{col, row, text, color, endTime}]
     this._flashes = [];
 
+    // Move animations: sliding entity icons
+    this._moveAnims = [];
+    this._animFramePending = false;
+
     this._resize();
   }
 
   // Add a brief flash overlay on a hex (e.g. damage numbers)
   addFlash(col, row, text, color = 'rgba(220,40,40,0.7)', durationMs = 1800) {
     this._flashes.push({ col, row, text, color, startTime: Date.now(), endTime: Date.now() + durationMs });
+    this._startAnimLoop();
+  }
+
+  /** Slide an entity icon from one hex to another (opponent move feedback). */
+  addMoveAnim(fromCol, fromRow, toCol, toRow, entityType, owner) {
+    const from = this._toCanvas(fromCol, fromRow);
+    const to   = this._toCanvas(toCol,   toRow);
+    // Remove any previous anim for the same path
+    this._moveAnims = this._moveAnims.filter(
+      a => !(a.fromX === from.x && a.fromY === from.y)
+    );
+    this._moveAnims.push({
+      fromX: from.x, fromY: from.y,
+      toX:   to.x,   toY:   to.y,
+      glyph: entityGlyph(entityType),
+      color: ENTITY_COLOR[entityType],
+      startTime: Date.now(),
+      duration:  480,
+    });
+    this._startAnimLoop();
+  }
+
+  /** Flash attacker (orange) and target (red) hexes during a battle. */
+  addAttackAnim(actorCol, actorRow, targetCol, targetRow) {
+    this.addFlash(actorCol,  actorRow,  '', 'rgba(255,140,0,0.75)', 700);
+    this.addFlash(targetCol, targetRow, '', 'rgba(220,40,40,0.75)',  700);
+  }
+
+  /** Keep calling draw() until all animations have expired. */
+  _startAnimLoop() {
+    if (this._animFramePending) return;
+    this._animFramePending = true;
+    const loop = () => {
+      const now = Date.now();
+      const alive = this._moveAnims.some(a => now < a.startTime + a.duration)
+                 || this._flashes.some(f => now < f.endTime);
+      this.draw();
+      if (alive) {
+        requestAnimationFrame(loop);
+      } else {
+        this._animFramePending = false;
+      }
+    };
+    requestAnimationFrame(loop);
   }
 
   _resize() {
@@ -165,9 +213,11 @@ export class Renderer {
     }
 
     // Visibility: compute once for fog layer + entity pass + outlines.
-    // Fog is shown from the human player's perspective only (not AI vs AI).
-    const humanIsHero  = state.witchIsAI && !state.heroIsAI;
-    const humanIsWitch = state.heroIsAI  && !state.witchIsAI;
+    // In local AI games, perspective is from the human side (witchIsAI / heroIsAI).
+    // In online PvP/AI games, state.myFaction is set by the client to their faction.
+    const myFaction    = state.myFaction;  // 'hero' | 'witch' | undefined
+    const humanIsHero  = myFaction ? myFaction === 'hero'  : (state.witchIsAI && !state.heroIsAI);
+    const humanIsWitch = myFaction ? myFaction === 'witch' : (state.heroIsAI  && !state.witchIsAI);
     let revealedHexes = null;
     if (state.fogOfWar) {
       if (humanIsHero)  revealedHexes = getVisibleEnemyHexes(state); // hero sees witch
@@ -175,8 +225,8 @@ export class Renderer {
     }
 
     // Fog of war: grey overlay on all hexes outside the human player's vision
-    if (humanIsHero)  this._drawFogLayer('hero');
-    if (humanIsWitch) this._drawFogLayer('witch');
+    if (state.fogOfWar && humanIsHero)  this._drawFogLayer('hero');
+    if (state.fogOfWar && humanIsWitch) this._drawFogLayer('witch');
 
     // Objective glows and symbols always drawn on top of fog — always visible
     for (const obj of state.witchObjectives) {
@@ -229,6 +279,9 @@ export class Renderer {
 
     // Damage flash overlays (night/day hazard animations)
     this._drawFlashes();
+
+    // Sliding entity icons for move animations (opponent moves / own moves)
+    this._drawMoveAnims();
 
     ctx.restore(); // end zoom/pan transform
 
@@ -734,6 +787,45 @@ export class Renderer {
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(`+${stack.length - 3}`, bx + 7, by + 5);
+    }
+  }
+
+  _drawMoveAnims() {
+    const ctx = this.ctx;
+    const now = Date.now();
+    const hs  = this.hexSize;
+    const r   = hs * 0.35;
+
+    this._moveAnims = this._moveAnims.filter(a => now < a.startTime + a.duration);
+    if (!this._moveAnims.length) return;
+
+    for (const a of this._moveAnims) {
+      const t    = Math.min(1, (now - a.startTime) / a.duration);
+      const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t; // ease in-out quad
+      const x    = a.fromX + (a.toX - a.fromX) * ease;
+      const y    = a.fromY + (a.toY - a.fromY) * ease;
+
+      // Shadow
+      ctx.beginPath();
+      ctx.arc(x + 1, y + 2, r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fill();
+
+      // Entity circle
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = a.color;
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+      ctx.lineWidth   = 2;
+      ctx.stroke();
+
+      // Glyph
+      ctx.fillStyle    = '#ffffffee';
+      ctx.font         = `bold ${Math.floor(r * 1.1)}px serif`;
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(a.glyph, x, y + 1);
     }
   }
 }

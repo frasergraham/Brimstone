@@ -391,6 +391,7 @@ function _createMpClient() {
         // Game not started yet — any state update while active should start it
         if (mp?.active) {
           try {
+            mirrorState.myFaction = mp.myFaction; // used by renderer for per-player fog
             initOnline(mirrorState, mp.myFaction, mp);
           } catch (err) {
             console.error('initOnline failed:', err);
@@ -401,16 +402,42 @@ function _createMpClient() {
         return;
       }
       // Already in game — update in-place (keeps renderer pan/zoom)
+
+      // Snapshot entity positions before update so we can animate moves
+      const oldPos = new Map();
+      for (const e of state.entities) oldPos.set(e.id, { col: e.col, row: e.row });
+
       Object.assign(state, mirrorState);
-      state.hero  = mirrorState.hero;
-      state.witch = mirrorState.witch;
+      state.hero      = mirrorState.hero;
+      state.witch     = mirrorState.witch;
+      state.myFaction = mp.myFaction; // persist faction for per-player fog of war
+
+      // Animate entities that changed hex position (opponent moves)
+      if (!state.gameOver && renderer) {
+        for (const e of state.entities) {
+          const old = oldPos.get(e.id);
+          if (old && (old.col !== e.col || old.row !== e.row)) {
+            renderer.addMoveAnim(old.col, old.row, e.col, e.row, e.type, e.owner);
+          }
+        }
+      }
+
       ui._clearSelection();
       ui._triggerHazardFlashes();
       redrawOnline();
       if (state.gameOver) showGameOver();
+      else ui._maybeShowNoActionsDialog();
     },
 
     onBattle(actorSnap, targetSnap, result, afterDismiss) {
+      // Flash attacker + defender hexes before showing the dialog
+      if (renderer && state) {
+        const actor  = state.entities.find(e => e.id === actorSnap.id);
+        const target = state.entities.find(e => e.id === targetSnap.id);
+        if (actor && target) {
+          renderer.addAttackAnim(actor.col, actor.row, target.col, target.row);
+        }
+      }
       if (ui) {
         ui._showBattleDialog(actorSnap, targetSnap, result, afterDismiss);
       } else {
