@@ -11,6 +11,7 @@ import {
 import { hexDistance } from '../src/hex.js';
 import { PlanActionType, snapEntity } from '../src/planner.js';
 import { Phase } from '../src/game.js';
+import { ResourceType } from '../src/tiles.js';
 
 // ── Event types ──────────────────────────────────────────────────────────────
 
@@ -200,14 +201,23 @@ function drainOneStep(state, queue, budget) {
     }
   }
 
-  // If the budget is exhausted but the queue is not empty, cap the rest.
+  // If the budget is exhausted but the queue is not empty, try to spend food
+  // from shared inventory to fund one more action before capping.
   if (budget.remaining <= 0 && queue.length > 0) {
-    subEvents.push({
-      type:    ResEventType.BUDGET_CAP,
-      faction: budget.faction,
-      action:  queue[0],
-    });
-    queue.length = 0;
+    const shared = state.inventory?.shared ?? {};
+    if ((shared[ResourceType.FOOD] || 0) > 0) {
+      shared[ResourceType.FOOD]--;
+      budget.remaining += 1;
+      state.addLog(`🍞 Rations consumed — pressing on beyond the action limit.`);
+      // Don't push BUDGET_CAP; the outer loop will call drainOneStep again.
+    } else {
+      subEvents.push({
+        type:    ResEventType.BUDGET_CAP,
+        faction: budget.faction,
+        action:  queue[0],
+      });
+      queue.length = 0;
+    }
   }
 
   return subEvents;

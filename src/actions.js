@@ -43,6 +43,10 @@ function getReachableHexes(state, actor, range) {
         const nt = tile(state, n.col, n.row);
         if (!nt || nt.type === TileType.RIVER) continue;
         if (hasEnemy(state, actor, n.col, n.row)) continue;
+        // Fortified hexes occupied by enemies cannot be entered or passed through.
+        if (nt.fortifyLevel > 0 && state.entities.some(
+          e => e.alive && e.owner !== actor.owner && e.col === n.col && e.row === n.row
+        )) continue;
         visited.add(k);
         reachable.push({ col: n.col, row: n.row });
         next.push({ col: n.col, row: n.row });

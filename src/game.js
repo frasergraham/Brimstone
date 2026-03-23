@@ -226,21 +226,29 @@ export class GameState {
             !this.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
         });
         if (this.witch.alive && this.witch.col === obj.col && this.witch.row === obj.row) {
-          const hex = freeHex();
-          if (hex) {
-            this.entities.push(createMinion(hex.col, hex.row));
-            this.addLog(`🌑 The witch channels the node — a minion rises from the dark!`);
+          if (Math.random() < 0.33) {
+            const hex = freeHex();
+            if (hex) {
+              this.entities.push(createMinion(hex.col, hex.row));
+              this.addLog(`🌑 The witch channels the node — a minion rises from the dark!`);
+            }
+          } else {
+            this.addLog(`🌑 The node stirs… but yields nothing this night.`);
           }
         }
         if (this.hero.alive && this.hero.col === obj.col && this.hero.row === obj.row) {
-          const hex = freeHex();
-          if (hex) {
-            const s = createSurvivor(hex.col, hex.row);
-            s.owner = 'hero';
-            if (Math.random() < 0.5) s.items['horse'] = 1;
-            this.entities.push(s);
-            const horseNote = s.items['horse'] ? ' (arrives on horseback!)' : '';
-            this.addLog(`✨ The node calls to the living — a survivor emerges!${horseNote}`);
+          if (Math.random() < 0.33) {
+            const hex = freeHex();
+            if (hex) {
+              const s = createSurvivor(hex.col, hex.row);
+              s.owner = 'hero';
+              if (Math.random() < 0.5) s.items['horse'] = 1;
+              this.entities.push(s);
+              const horseNote = s.items['horse'] ? ' (arrives on horseback!)' : '';
+              this.addLog(`✨ The node calls to the living — a survivor emerges!${horseNote}`);
+            }
+          } else {
+            this.addLog(`✨ The node pulses faintly… no one answers the call tonight.`);
           }
         }
       }
@@ -434,7 +442,20 @@ export class GameState {
   }
 
   _applyNightHazard(dmg = 1) {
-    // Only SURVIVORS in the open take night damage — the hero is hardened against it
+    // Fort degradation: open-field fortifications lose 1 level each night.
+    for (const [, t] of this.tiles) {
+      if (t.fortifyLevel > 0 && t.type !== TileType.BUILDING) {
+        t.fortifyLevel--;
+        if (t.fortifyLevel === 0) {
+          this.addLog(`🌑 A field fortification crumbles in the dark.`);
+        } else {
+          this.addLog(`🌑 The night weakens a field fort. (level ${t.fortifyLevel} remaining)`);
+        }
+      }
+    }
+
+    // Only SURVIVORS in the open take night damage — the hero is hardened against it.
+    // Fortified hexes shelter their occupants from hazard damage.
     const endangered = this.entities.filter(e => {
       if (!e.alive || e.type !== EntityType.SURVIVOR) return false;
       const t = this.tiles.get(hexKey(e.col, e.row));
@@ -442,6 +463,13 @@ export class GameState {
     });
 
     for (const e of endangered) {
+      const t = this.tiles.get(hexKey(e.col, e.row));
+      if (t && t.fortifyLevel > 0) {
+        const line = `🏰 ${e.displayName} is sheltered by the fort! (fort holds at level ${t.fortifyLevel})`;
+        this.addLog(line);
+        this.lastHazardLog.push(line);
+        continue;
+      }
       this.lastNightDamage.push({ col: e.col, row: e.row });
       const killed = e.takeDamage(dmg);
       const line = killed
@@ -457,7 +485,8 @@ export class GameState {
   }
 
   _applyDayHazard(dmg = 1) {
-    // Witch minions, zombies, and golems caught in the open during daylight take dmg damage
+    // Witch minions, zombies, and golems caught in the open during daylight take dmg damage.
+    // Fortified hexes shelter their occupants from hazard damage.
     const sunburned = this.entities.filter(e => {
       if (!e.alive || e.owner !== 'witch') return false;
       if (e.type === EntityType.WITCH) return false;
@@ -466,6 +495,13 @@ export class GameState {
     });
 
     for (const e of sunburned) {
+      const t = this.tiles.get(hexKey(e.col, e.row));
+      if (t && t.fortifyLevel > 0) {
+        const line = `🏰 ${e.displayName} is sheltered by the fort! (fort holds at level ${t.fortifyLevel})`;
+        this.addLog(line);
+        this.lastHazardLog.push(line);
+        continue;
+      }
       this.lastDayDamage.push({ col: e.col, row: e.row });
       const killed = e.takeDamage(dmg);
       const line = killed

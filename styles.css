@@ -233,6 +233,12 @@ canvas { touch-action: pan-x pan-y; }
   margin-bottom: 0.25rem;
 }
 
+/* Dedicated cycle bar: hidden on desktop (cycle-strip-header takes its place),
+   visible below the header on mobile so it's always accessible. */
+#cycle-bar {
+  display: none;
+}
+
 .cycle-step {
   display: flex;
   flex-direction: column;
@@ -1086,6 +1092,19 @@ canvas { touch-action: pan-x pan-y; }
   .header-title { display: none; }
   #turn-info { flex-wrap: wrap; gap: 0.3rem 0.6rem; }
   .phase-hint { display: none; }
+  /* Hide the in-header cycle strip on mobile — the dedicated #cycle-bar takes over */
+  .cycle-strip-header { display: none; }
+  /* Show cycle bar between header and game canvas */
+  #cycle-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 0.2rem 0.5rem;
+    background: rgba(13,17,23,0.92);
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+    flex-shrink: 0;
+  }
 
   /* game-main fills all remaining height; canvas is the only child */
   #game-main { overflow: hidden; min-height: 0; }
@@ -1454,6 +1473,40 @@ canvas { touch-action: pan-x pan-y; }
 .plan-step.over-budget .plan-step-num  { background: rgba(160,50,50,0.75); color: #faa; border-radius: 3px; padding: 0 2px; }
 .plan-step.over-budget .plan-step-desc { text-decoration: line-through; color: var(--text-dim); }
 .plan-step.over-budget .plan-step-icon { opacity: 0.4; }
+.plan-step.food-powered { opacity: 0.9; }
+.plan-step.food-powered .plan-step-num  { background: rgba(180,130,20,0.75); color: #ffd; border-radius: 3px; padding: 0 2px; }
+.plan-step.food-powered .plan-step-icon { opacity: 0.85; }
+.plan-food-tag { font-size: 0.65rem; color: #c8a030; margin-left: 0.3rem; white-space: nowrap; }
+
+/* ── Phase toast ─────────────────────────────────────────────────────── */
+.phase-toast {
+  position: absolute;
+  top: 4.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1.1rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(13,17,23,0.93);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  z-index: 60;
+  pointer-events: none;
+  animation: phase-toast-in 0.25s ease;
+  white-space: nowrap;
+}
+.phase-toast-hide { animation: phase-toast-out 0.45s ease forwards; }
+@keyframes phase-toast-in  { from { opacity:0; top:4rem; } to { opacity:1; top:4.5rem; } }
+@keyframes phase-toast-out { from { opacity:1; } to { opacity:0; } }
+.phase-toast-dawn  { border-color: rgba(255,140,0,0.4);  }
+.phase-toast-day   { border-color: rgba(245,200,66,0.4); }
+.phase-toast-dusk  { border-color: rgba(180,60,0,0.4);   }
+.phase-toast-night { border-color: rgba(123,79,187,0.4); }
+.phase-toast-icon  { font-size: 1.6rem; line-height: 1; }
+.phase-toast-title { font-weight: bold; font-size: 0.85rem; color: #e8dcc8; }
+.phase-toast-lines { font-size: 0.72rem; color: var(--text-dim); margin-top: 0.1rem; }
 
 /* Resolution overlay */
 #resolution-overlay {

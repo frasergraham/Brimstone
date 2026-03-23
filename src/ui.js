@@ -282,6 +282,9 @@ export class UIController {
     this._renderPlanPanel();
     this._updateSidebar();
     this.onRedraw();
+
+    // Show a brief phase-info toast so the player always knows current conditions.
+    this._showPhaseToast(faction);
   }
 
   /** Exit planning mode (called after resolution completes). */
@@ -396,22 +399,30 @@ export class UIController {
       }
     };
 
-    // Track running cost to identify over-budget steps
+    // Track running cost to identify over-budget steps.
+    // Over-budget steps are powered by food (yellow) up to the food count,
+    // then truly over-budget (red/strikethrough) when food is exhausted.
+    const foodAvailable = (state.inventory?.shared?.food || 0);
     let runningCost = 0;
+    let foodUsed = 0;
     let html = '';
     this._plan.forEach((a, i) => {
       const isFree = a.type === PlanActionType.EQUIP_WEAPON || a.type === PlanActionType.USE_ITEM;
       if (!isFree) runningCost++;
       const overBudget = !isFree && runningCost > this._planBudget;
+      const foodPowered = overBudget && foodUsed < foodAvailable;
+      if (foodPowered) foodUsed++;
       const icon = ICONS[a.type] || '•';
       const desc = describeAction(a, i);
+      const foodTag = foodPowered ? ` <span class="plan-food-tag">-1 🍞</span>` : '';
       const rmBtn = this._planSubmitted
         ? ''
         : `<button class="plan-step-remove" data-plan-idx="${i}" title="Remove">✕</button>`;
-      html += `<div class="plan-step${overBudget ? ' over-budget' : ''}">
+      const cls = foodPowered ? ' food-powered' : overBudget ? ' over-budget' : '';
+      html += `<div class="plan-step${cls}">
         <span class="plan-step-num">${i + 1}</span>
         <span class="plan-step-icon">${icon}</span>
-        <span class="plan-step-desc" title="${desc}">${desc}</span>
+        <span class="plan-step-desc" title="${desc}">${desc}${foodTag}</span>
         ${rmBtn}
       </div>`;
     });
@@ -694,11 +705,23 @@ export class UIController {
       this.renderer.highlightHexes = [];
 
       const executeFight = (target) => {
-        // Planning mode: add battle to plan
+        // Planning mode: add battle to plan, then keep battle highlights active
+        // so tapping the same target again immediately stacks another attack.
         if (this._planMode) {
           this._addToPlan({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id });
-          if (actor.alive) this._selectEntity(actor);
-          else this._clearSelection();
+          // Recompute valid actions using projected position.
+          const proj = this._getProjectedPos(actor.id);
+          const eff  = proj ? { ...actor, col: proj.col, row: proj.row } : actor;
+          this._validActions = getValidActions(this.state, eff);
+          const hasBattle = this._validActions.some(a => a.type === ActionType.BATTLE);
+          if (actor.alive && hasBattle) {
+            // Keep attack mode active — next tap on same target stacks an attack.
+            this._awaitingTarget = { actionType: ActionType.BATTLE, actor: eff };
+            this._updateHighlights();
+          } else {
+            if (actor.alive) this._selectEntity(actor);
+            else this._clearSelection();
+          }
           this._updateSidebar();
           this.onRedraw();
           return;
@@ -917,7 +940,31 @@ export class UIController {
     const el    = document.getElementById('turn-info');
     if (!el) return;
 
-    // During planning phase, show planning info instead of active-player info
+    // 8-step cycle — shared between header and cycle-bar
+    const CYCLE_STEPS = [
+      { phase: 'dawn',  icon: '🌅', label: 'Dawn',  desc: 'Hero +1 action · node scoring · attrition rises' },
+      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Hero +1 ATK · Witch undead in the open suffer' },
+      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Hero +1 ATK · Witch undead in the open suffer' },
+      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Hero +1 ATK · Witch undead in the open suffer' },
+      { phase: 'dusk',  icon: '🌇', label: 'Dusk',  desc: 'Node scoring · seek cover before night' },
+      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +1 ATK · Survivors in the open suffer' },
+      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +1 ATK · Survivors in the open suffer' },
+      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +1 ATK · Survivors in the open suffer' },
+    ];
+
+    const roundInCycle = (state.round - 1) % 8;
+
+    // Render always-visible cycle bar (compact icon row)
+    const cycleBar = document.getElementById('cycle-bar');
+    if (cycleBar) {
+      cycleBar.innerHTML = CYCLE_STEPS.map((step, i) => {
+        const active = i === roundInCycle;
+        return `<div class="cycle-step phase-${step.phase} ${active ? 'cycle-active' : 'cycle-dim'}"
+                     title="${step.desc}">${step.icon}${active ? `<span class="cycle-name">${step.label}</span>` : ''}</div>`;
+      }).join('');
+    }
+
+    // During planning phase, show planning info
     if (this._planMode) {
       const faction = this._planFaction;
       const budget  = this._planBudget;
@@ -932,36 +979,22 @@ export class UIController {
       return;
     }
 
-    const player = state.activePlayer === Player.HERO ? 'Hero' : 'Witch';
-    const isAI   = (state.activePlayer === Player.WITCH && state.witchIsAI) ||
-                   (state.activePlayer === Player.HERO  && state.heroIsAI);
-
-    // 8-step cycle matching game.js: DAWN(1) DAY(3) DUSK(1) NIGHT(3)
-    const CYCLE_STEPS = [
-      { phase: Phase.DAWN,  icon: '🌅', label: 'Dawn',  desc: 'No bonuses — transition phase' },
-      { phase: Phase.DAY,   icon: '☀️',  label: 'Day',   desc: 'Hero +1 ATK · Witch minions in the open suffer' },
-      { phase: Phase.DAY,   icon: '☀️',  label: 'Day',   desc: 'Hero +1 ATK · Witch minions in the open suffer' },
-      { phase: Phase.DAY,   icon: '☀️',  label: 'Day',   desc: 'Hero +1 ATK · Witch minions in the open suffer' },
-      { phase: Phase.DUSK,  icon: '🌇', label: 'Dusk',  desc: 'No bonuses — seek cover before night' },
-      { phase: Phase.NIGHT, icon: '🌙', label: 'Night', desc: 'Witch +1 ATK · Survivors in the open suffer' },
-      { phase: Phase.NIGHT, icon: '🌙', label: 'Night', desc: 'Witch +1 ATK · Survivors in the open suffer' },
-      { phase: Phase.NIGHT, icon: '🌙', label: 'Night', desc: 'Witch +1 ATK · Survivors in the open suffer' },
-    ];
-
-    const roundInCycle = (state.round - 1) % 8; // 0-indexed position in current cycle
-
-    const cycleHTML = CYCLE_STEPS.map((step, i) => {
-      const active = i === roundInCycle;
-      return `<div class="cycle-step phase-${step.phase} ${active ? 'cycle-active' : 'cycle-dim'}"
-                   title="${step.desc}">${step.icon}${active ? `<span class="cycle-name">${step.label}</span>` : ''}</div>`;
-    }).join('');
+    const player = state.activePlayer === 'hero' ? 'Hero' : 'Witch';
+    const isAI   = (state.activePlayer === 'witch' && state.witchIsAI) ||
+                   (state.activePlayer === 'hero'  && state.heroIsAI);
 
     const diamonds = state.actionsLeft > 0
       ? '◆'.repeat(state.actionsLeft)
       : '◇';
 
+    // On wider screens the cycle strip also lives in turn-info; on mobile it's
+    // only shown in #cycle-bar so we omit it here to avoid duplication.
     el.innerHTML = `
-      <div class="cycle-strip">${cycleHTML}</div>
+      <div class="cycle-strip cycle-strip-header">${CYCLE_STEPS.map((step, i) => {
+        const active = i === roundInCycle;
+        return `<div class="cycle-step phase-${step.phase} ${active ? 'cycle-active' : 'cycle-dim'}"
+                     title="${step.desc}">${step.icon}${active ? `<span class="cycle-name">${step.label}</span>` : ''}</div>`;
+      }).join('')}</div>
       <div class="turn-line">Round ${state.round}</div>
       <div class="turn-line player-${state.activePlayer}">
         ${player}'s Turn ${isAI ? '<span class="ai-badge">AI</span>' : ''}
@@ -1250,6 +1283,39 @@ export class UIController {
         this.onRedraw();
       });
     }
+  }
+
+  // ── Phase toast ──────────────────────────────────────────────────────────
+
+  _showPhaseToast(faction) {
+    const phase = this.state.phase;
+    const PHASE_INFO = {
+      dawn:  { icon: '🌅', label: 'Dawn',  lines: ['Hero gains +1 action · Attrition rises', 'Power Nodes scored · Tiles reset'] },
+      day:   { icon: '☀️',  label: 'Day',   lines: ['Hero +1 ATK · Build & fortify', 'Witch undead in the open suffer'] },
+      dusk:  { icon: '🌇', label: 'Dusk',  lines: ['Power Nodes scored · Seek shelter', 'Night approaches…'] },
+      night: { icon: '🌙', label: 'Night', lines: ['Witch +1 ATK · Raise undead', 'Survivors in the open suffer'] },
+    };
+    const info = PHASE_INFO[phase];
+    if (!info) return;
+
+    // Remove any existing toast first
+    document.getElementById('phase-toast')?.remove();
+
+    const toast = document.createElement('div');
+    toast.id = 'phase-toast';
+    toast.className = `phase-toast phase-toast-${phase}`;
+    toast.innerHTML = `
+      <span class="phase-toast-icon">${info.icon}</span>
+      <div class="phase-toast-body">
+        <div class="phase-toast-title">${info.label} — Round ${this.state.round}</div>
+        <div class="phase-toast-lines">${info.lines.join(' · ')}</div>
+      </div>
+    `;
+    document.getElementById('game-screen')?.appendChild(toast);
+
+    // Auto-dismiss after 3s
+    setTimeout(() => toast.classList.add('phase-toast-hide'), 2800);
+    setTimeout(() => toast.remove(), 3300);
   }
 
   // ── Dialogs ───────────────────────────────────────────────────────────────
