@@ -291,9 +291,6 @@ export function resolvePlans(state, heroPlan, witchPlan) {
 
     steps.push({ stepIndex, heroEvents, witchEvents, entitySnapshot });
     stepIndex++;
-
-    state.checkVictory();
-    if (state.gameOver) break;
   }
 
   return steps;

@@ -1042,6 +1042,11 @@ canvas { touch-action: pan-x pan-y; }
   align-items: center;
   justify-content: center;
   z-index: 100;
+  cursor: pointer;
+}
+
+#game-over .game-over-card {
+  cursor: default;
 }
 
 .game-over-card {
@@ -1051,6 +1056,12 @@ canvas { touch-action: pan-x pan-y; }
   text-align: center;
   border-radius: 4px;
   box-shadow: 0 0 60px rgba(100, 50, 160, 0.35);
+}
+
+.game-over-buttons {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
 }
 
 .winner-text {

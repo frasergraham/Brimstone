@@ -86,6 +86,16 @@ function showGameOver() {
   el.style.display = 'flex';
   el.querySelector('.winner-text').innerHTML =
     `<div class="winner-banner">${banner}</div><div class="winner-reason">${reason}</div>`;
+
+  // "View Map" dismisses the overlay so the player can inspect the final board.
+  el.querySelector('#btn-view-map')?.addEventListener('click', () => {
+    el.style.display = 'none';
+  }, { once: true });
+
+  // Clicking the backdrop (not the card) also dismisses.
+  el.addEventListener('click', (e) => {
+    if (e.target === el) el.style.display = 'none';
+  });
 }
 
 // ── Local planning lifecycle ──────────────────────────────────────────────────
