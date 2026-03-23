@@ -182,43 +182,74 @@ async function _runLocalResolution() {
 /**
  * Animate a resolution step array.
  *
- * Each step record now carries an `entitySnapshot` taken by the resolver
- * before that step executed.  We temporarily replace `state.entities` with
- * each snapshot so the renderer draws the world exactly as it looked at the
- * start of that step — no move-animation trickery required.
+ * Each step record carries an `entitySnapshot` taken before that step ran.
+ * For each step we:
+ *   1. Set state.entities to the POST-step snapshot (next step's pre-snapshot, or
+ *      finalEntities for the last step).  This is the "landing" state.
+ *   2. Fire addMoveAnim for every MOVE in this step, using the pre-step snapshot as
+ *      the FROM position and the action target as the TO position.
+ *      The entity is hidden from the static draw while animating; when the anim
+ *      expires it falls back to state.entities which is already at the destination.
+ *      → no more "flicker to final position" artefact.
+ *   3. Await the slide duration, then process dialogs.
  *
- * finalEntities: the real post-resolution entity array to restore afterwards.
- * humanFaction:  if set, suppress opponent battle/explore dialogs.
+ * finalEntities: real post-resolution entity array (restored after all steps).
+ * humanFaction:  if set, suppress opponent-only battle/explore dialogs.
  */
 async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFaction = null) {
-  for (const step of steps) {
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    // Post-step entities: what the world looks like AFTER this step resolves.
+    const postEntities = i + 1 < steps.length ? steps[i + 1].entitySnapshot : finalEntities;
+
     const events = [
       ...(step.heroEvents  ?? []),
       ...(step.witchEvents ?? []),
     ].filter(ev => ev.type === ResEventType.ACTION_OK);
 
-    // Display world state going into this step.
-    if (step.entitySnapshot) {
-      state.entities = step.entitySnapshot;
-      redrawFn();
-      if (!_autoplay) await _delay(350);
-    }
+    // ── Phase 1: animate moves for both factions simultaneously ──────────────
+    let hadMove = false;
+    const pendingDialogs = [];
 
-    // ── Encounter dialogs (survivor discovered on move) ──────────────────────
     for (const ev of events) {
       const { action, result } = ev;
       if (action.type !== PlanActionType.MOVE) continue;
+
+      // Look up pre-step position from this step's snapshot
+      const preSnap = step.entitySnapshot?.find(e => e.id === action.entityId);
+      const isOpponent = humanFaction && ev.faction !== humanFaction;
+      if (preSnap && !(isOpponent && state.fogOfWar)) {
+        renderer.addMoveAnim(
+          action.entityId,
+          preSnap.col, preSnap.row,
+          action.toCol, action.toRow,
+          preSnap.type, preSnap.owner,
+        );
+        hadMove = true;
+      }
+
       if ((!humanFaction || ev.faction === humanFaction) && result?.encounterLog?.length) {
-        redrawFn();
-        await new Promise(resolve => ui._showResultDialog(result.encounterLog, resolve));
+        pendingDialogs.push(result.encounterLog);
       }
     }
 
-    // ── Battles and summons ──────────────────────────────────────────────────
+    // Switch to post-step entity state — when move anims expire the entities
+    // are already at their destinations, so no position snap-back occurs.
+    state.entities = postEntities;
+    redrawFn();
+
+    if (!_autoplay && hadMove) await _delay(520); // slightly longer than anim duration (480ms)
+    for (const log of pendingDialogs) {
+      redrawFn();
+      await new Promise(resolve => ui._showResultDialog(log, resolve));
+    }
+
+    // ── Phase 2: battles and summons ──────────────────────────────────────────
+    let hadBattle = false;
     for (const ev of events) {
       const { action, result, battleSnaps } = ev;
       if (action.type === PlanActionType.BATTLE_UNIT || action.type === PlanActionType.BATTLE_HEX) {
-        // Show if no fog, or if this is human's attack, or if human's unit is the target.
+        // Show dialog if: no fog, human's own action, or human's unit is involved.
         const showDialog = !humanFaction || !state.fogOfWar || ev.faction === humanFaction
           || (battleSnaps && (
                battleSnaps.targetSnap?.owner === humanFaction ||
@@ -228,25 +259,38 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
           const { actorSnap, targetSnap } = battleSnaps;
           renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
           redrawFn();
-          await new Promise(resolve => ui._showBattleDialog(actorSnap, targetSnap, result, resolve));
+          await new Promise(resolve => {
+            ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
+          });
+          hadBattle = true;
         }
       } else if (action.type === PlanActionType.SUMMON) {
         renderer.addFlash(action.toCol, action.toRow, '☠', 'rgba(155,89,182,0.85)', 1200);
+        hadBattle = true;
       }
     }
 
-    // ── Explore results (human faction only) ────────────────────────────────
+    // ── Phase 3: explore results (human faction only) ─────────────────────────
     for (const ev of events) {
       const { action, result } = ev;
       if (action.type !== PlanActionType.EXPLORE) continue;
       if (result?.log?.length && (!humanFaction || ev.faction === humanFaction)) {
         redrawFn();
         await new Promise(resolve => ui._showResultDialog(result.log, resolve));
+        hadBattle = true;
       }
+    }
+
+    if (hadMove || hadBattle) {
+      redrawFn();
+      if (!_autoplay) await _delay(hadMove ? 300 : 250);
+    } else if (events.length > 0 && !_autoplay) {
+      // Non-visual actions (fortify, use_item, etc.) — brief pause so resolution feels deliberate.
+      await _delay(150);
     }
   }
 
-  // Restore the real final entity state and do one last draw.
+  // Restore the authoritative final state and do one last draw.
   state.entities = finalEntities;
   redrawFn();
 }

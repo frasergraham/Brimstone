@@ -1187,8 +1187,9 @@ export class HeroAI {
           const a = tryMove(s, sorted[0]); if (a) return a;
         }
       }
-      const hasSurvivorOnNode = survivors.some(s => _isOnNode(sim, s));
-      if (hasSurvivorOnNode || witchNodeCount >= 1 || sim.nodeScore.witch >= 1) return null;
+      // Hero stays put unless witch is dominating — no need to abandon a held node.
+      if (witchNodeCount < 2) return null;
+      // Witch holds 2+: hero must move to contest — fall through to step 6.
     }
 
     // 6. Urgent: witch holds 2+

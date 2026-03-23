@@ -1062,7 +1062,10 @@ export class UIController {
       return;
     }
 
-    if (!entity || entity.owner !== state.activePlayer) return;
+    // In planning mode the human controls their faction; outside it the active player
+    // is enforced by the turn system.
+    const allowedOwner = this._planMode ? this._planFaction : state.activePlayer;
+    if (!entity || entity.owner !== allowedOwner) return;
 
     // Any action button click closes the popup
     this._popupVisible = false;
