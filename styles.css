@@ -1093,8 +1093,8 @@ canvas { touch-action: pan-x pan-y; }
 /* ── Mobile / touch layout ─────────────────────────────────────────────── */
 
 /* ── Cycle strip visibility: show dedicated bar, hide inline strip ─────── */
-/* Applies on tablet/iPad (≤1024px) so the header isn't cramped             */
-@media (max-width: 1024px) {
+/* Applies on tablet/iPad (≤1400px) covers all iPad sizes incl. Pro landscape */
+@media (max-width: 1400px) {
   .cycle-strip-header { display: none; }
   #cycle-bar {
     display: flex;
