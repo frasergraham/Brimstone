@@ -812,15 +812,18 @@ export class Renderer {
     const ctx = this.ctx;
     const hs  = this.hexSize;
 
-    // Collect arrows from move steps only
-    const arrows = ghostSteps.filter(s => s.arrow !== null).map(s => s.arrow);
-    if (!arrows.length) return;
+    // Collect move steps (with their full step record for overBudget flag)
+    const moveSteps = ghostSteps.filter(s => s.arrow !== null);
+    if (!moveSteps.length) return;
 
     ctx.save();
     ctx.lineCap  = 'round';
     ctx.lineJoin = 'round';
 
-    arrows.forEach((arrow, i) => {
+    moveSteps.forEach((step, i) => {
+      const arrow = step.arrow;
+      const ob    = step.overBudget;   // true = beyond action budget
+
       const from = this._toCanvas(arrow.fromCol, arrow.fromRow);
       const to   = this._toCanvas(arrow.toCol,   arrow.toRow);
 
@@ -837,9 +840,9 @@ export class Renderer {
       const endX   = to.x   - ux * hs * 0.45;
       const endY   = to.y   - uy * hs * 0.45;
 
-      ctx.strokeStyle = 'rgba(245,200,66,0.75)';
-      ctx.lineWidth   = 2;
-      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = ob ? 'rgba(140,140,140,0.45)' : 'rgba(245,200,66,0.75)';
+      ctx.lineWidth   = ob ? 1.5 : 2;
+      ctx.setLineDash(ob ? [3, 6] : [4, 4]);
       ctx.beginPath();
       ctx.moveTo(startX, startY);
       ctx.lineTo(endX,   endY);
@@ -849,8 +852,8 @@ export class Renderer {
       // Arrow head
       const headLen = hs * 0.22;
       const angle   = Math.atan2(dy, dx);
-      ctx.strokeStyle = 'rgba(245,200,66,0.9)';
-      ctx.lineWidth   = 2;
+      ctx.strokeStyle = ob ? 'rgba(140,140,140,0.55)' : 'rgba(245,200,66,0.9)';
+      ctx.lineWidth   = ob ? 1.5 : 2;
       ctx.beginPath();
       ctx.moveTo(endX, endY);
       ctx.lineTo(endX - headLen * Math.cos(angle - 0.4), endY - headLen * Math.sin(angle - 0.4));
@@ -858,18 +861,18 @@ export class Renderer {
       ctx.lineTo(endX - headLen * Math.cos(angle + 0.4), endY - headLen * Math.sin(angle + 0.4));
       ctx.stroke();
 
-      // Step number badge on the destination hex
-      const num = arrow.stepNumber ?? (i + 1);
+      // Badge on destination hex: gold number (in-budget) or grey ✕ (over-budget)
+      const num    = arrow.stepNumber ?? (i + 1);
       const badgeR = hs * 0.22;
       ctx.beginPath();
       ctx.arc(to.x, to.y, badgeR, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(245,200,66,0.85)';
+      ctx.fillStyle = ob ? 'rgba(60,60,60,0.80)' : 'rgba(245,200,66,0.85)';
       ctx.fill();
-      ctx.fillStyle = '#1a1108';
+      ctx.fillStyle = ob ? 'rgba(180,80,80,0.95)' : '#1a1108';
       ctx.font      = `bold ${Math.floor(badgeR * 1.1)}px sans-serif`;
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(String(num), to.x, to.y + 0.5);
+      ctx.fillText(ob ? '✕' : String(num), to.x, to.y + 0.5);
     });
 
     ctx.restore();

@@ -1428,7 +1428,10 @@ canvas { touch-action: pan-x pan-y; }
 .plan-panel[data-witch-mode] .plan-panel-title { color: var(--witch); }
 .plan-submitted .plan-step-remove { display: none; }
 .plan-submitted .plan-btn { opacity: 0.5; pointer-events: none; }
-.plan-step.over-budget { opacity: 0.38; text-decoration: line-through; }
+.plan-step.over-budget { opacity: 0.5; }
+.plan-step.over-budget .plan-step-num  { background: rgba(160,50,50,0.75); color: #faa; border-radius: 3px; padding: 0 2px; }
+.plan-step.over-budget .plan-step-desc { text-decoration: line-through; color: var(--text-dim); }
+.plan-step.over-budget .plan-step-icon { opacity: 0.4; }
 
 /* Resolution overlay */
 #resolution-overlay {

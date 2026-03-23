@@ -309,7 +309,16 @@ export class UIController {
   /** Recompute ghost overlay from the current plan and push to renderer. */
   _refreshPlanOverlay() {
     if (!this.renderer) return;
-    this.renderer.planGhostSteps = computeGhostState(this.state, this._plan);
+    const steps = computeGhostState(this.state, this._plan);
+    // Annotate each step with whether it exceeds the action budget
+    let runningCost = 0;
+    for (const step of steps) {
+      const isFree = step.action.type === PlanActionType.EQUIP_WEAPON
+                  || step.action.type === PlanActionType.USE_ITEM;
+      if (!isFree) runningCost++;
+      step.overBudget = !isFree && runningCost > this._planBudget;
+    }
+    this.renderer.planGhostSteps = steps;
   }
 
   /** Submit the current plan. */
