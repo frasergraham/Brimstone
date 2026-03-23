@@ -5,6 +5,11 @@ import { UIController }      from './ui.js';
 import { WitchAI, HeroAI }   from './ai.js';
 import { hexToPixel }        from './hex.js';
 import { MultiplayerClient, MirrorState, loadSession, clearSession } from './multiplayer.js';
+import { VERSION }           from './version.js';
+
+// Stamp version into both badges
+document.getElementById('version-badge').textContent = `v${VERSION}`;
+document.getElementById('game-version').textContent  = `v${VERSION}`;
 
 let state, renderer, ui, witchAI, heroAI;
 let _autoplay = false;
