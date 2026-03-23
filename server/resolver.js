@@ -213,6 +213,31 @@ function drainOneStep(state, queue, budget) {
   return subEvents;
 }
 
+// ── Entity snapshot ──────────────────────────────────────────────────────────
+// Captures a lightweight copy of every entity's renderable + mutable fields.
+// Used so the animation layer can display the world state at each resolution
+// step without holding back the actual state mutation.
+
+function snapshotEntities(entities) {
+  return entities.map(e => ({
+    id:            e.id,
+    col:           e.col,
+    row:           e.row,
+    hp:            e.hp,
+    maxHp:         e.maxHp,
+    alive:         e.alive,
+    owner:         e.owner,
+    type:          e.type,
+    weapon:        e.weapon,
+    ability:       e.ability,
+    attack:        e.attack,
+    defense:       e.defense,
+    fortification: e.fortification,
+    displayName:   e.displayName,
+    title:         e.title,
+  }));
+}
+
 // ── Main entry point ─────────────────────────────────────────────────────────
 //
 // Executes both plans in paired steps.  Returns an ordered array of step
@@ -241,6 +266,10 @@ export function resolvePlans(state, heroPlan, witchPlan) {
     (heroQ.length > 0 && heroBudget.remaining  > 0) ||
     (witchQ.length > 0 && witchBudget.remaining > 0)
   ) {
+    // Snapshot entity state *before* this step executes so the animator can
+    // display the world as it looked going into each step.
+    const entitySnapshot = snapshotEntities(state.entities);
+
     const heroEvents  = heroQ.length  > 0 && heroBudget.remaining  > 0
       ? drainOneStep(state, heroQ,  heroBudget)
       : [];
@@ -250,7 +279,7 @@ export function resolvePlans(state, heroPlan, witchPlan) {
 
     if (heroEvents.length === 0 && witchEvents.length === 0) break;
 
-    steps.push({ stepIndex, heroEvents, witchEvents });
+    steps.push({ stepIndex, heroEvents, witchEvents, entitySnapshot });
     stepIndex++;
 
     state.checkVictory();

@@ -153,12 +153,6 @@ async function _runLocalAutoResolution() {
 async function _runLocalResolution() {
   if (!state || state.gameOver) { showGameOver(); return; }
 
-  // Snapshot positions before resolution mutates state
-  const prePos = new Map();
-  for (const e of state.entities) {
-    if (e.alive) prePos.set(e.id, { col: e.col, row: e.row, type: e.type, owner: e.owner });
-  }
-
   let steps;
   try {
     steps = resolvePlans(state, state.heroPlan, state.witchPlan);
@@ -167,8 +161,12 @@ async function _runLocalResolution() {
     steps = [];
   }
 
+  // resolvePlans has fully mutated state to its final configuration.
+  // Hold a reference to the final entity array so we can restore it after animation.
+  const finalEntities = state.entities;
+
   const humanFaction = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : null;
-  await _animateResolutionSteps(steps, prePos, redraw, humanFaction);
+  await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction);
 
   state.endRound();
   redraw();
@@ -183,124 +181,74 @@ async function _runLocalResolution() {
 
 /**
  * Animate a resolution step array.
- * prePos:       Map<entityId, {col,row,type,owner}> — positions before resolution ran.
- * redrawFn:     function to call after each visual change.
- * humanFaction: if set, only show explore/misc result dialogs for this faction.
  *
- * Within each step we process in three phases so both factions' moves play
- * simultaneously, then battles are shown, then explore results.
+ * Each step record now carries an `entitySnapshot` taken by the resolver
+ * before that step executed.  We temporarily replace `state.entities` with
+ * each snapshot so the renderer draws the world exactly as it looked at the
+ * start of that step — no move-animation trickery required.
+ *
+ * finalEntities: the real post-resolution entity array to restore afterwards.
+ * humanFaction:  if set, suppress opponent battle/explore dialogs.
  */
-async function _animateResolutionSteps(steps, prePos, redrawFn, humanFaction = null) {
-  const curPos = new Map(prePos);
-
+async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFaction = null) {
   for (const step of steps) {
     const events = [
       ...(step.heroEvents  ?? []),
       ...(step.witchEvents ?? []),
     ].filter(ev => ev.type === ResEventType.ACTION_OK);
 
-    // ── Phase 1: animate all moves for both factions simultaneously ──────────
-    let hadMove = false;
-    const pendingDialogs = []; // deferred dialogs from move results
+    // Display world state going into this step.
+    if (step.entitySnapshot) {
+      state.entities = step.entitySnapshot;
+      redrawFn();
+      if (!_autoplay) await _delay(350);
+    }
 
+    // ── Encounter dialogs (survivor discovered on move) ──────────────────────
     for (const ev of events) {
       const { action, result } = ev;
       if (action.type !== PlanActionType.MOVE) continue;
-
-      const from = curPos.get(action.entityId);
-      const info = prePos.get(action.entityId);
-      // Skip move animations for opponent units when fog of war is active —
-      // their positions will be revealed only at their final resting hex.
-      const isOpponent = humanFaction && ev.faction !== humanFaction;
-      if (from && info && !(isOpponent && state.fogOfWar)) {
-        renderer.addMoveAnim(
-          action.entityId,
-          from.col, from.row,
-          action.toCol, action.toRow,
-          info.type, info.owner
-        );
-        hadMove = true;
-      }
-      curPos.set(action.entityId, { col: action.toCol, row: action.toRow });
-
-      // Collect dialogs only for the human faction
-      if (!humanFaction || ev.faction === humanFaction) {
-        if (result?.encounterLog?.length) {
-          pendingDialogs.push(result.encounterLog);
-        }
-        // Detect enemy units now sharing the destination hex
-        const enemiesAtDest = [];
-        for (const [otherId, otherPos] of curPos) {
-          if (otherId === action.entityId) continue;
-          if (otherPos.col !== action.toCol || otherPos.row !== action.toRow) continue;
-          const otherInfo = prePos.get(otherId);
-          if (otherInfo && otherInfo.owner !== ev.faction) {
-            enemiesAtDest.push(
-              state.entities.find(e => e.id === otherId)?.displayName ?? otherInfo.type
-            );
-          }
-        }
-        if (enemiesAtDest.length > 0) {
-          const moverName = state.entities.find(e => e.id === action.entityId)?.displayName
-                         ?? prePos.get(action.entityId)?.type ?? 'Unit';
-          pendingDialogs.push(
-            [`${moverName} moves onto a hex occupied by ${[...new Set(enemiesAtDest)].join(', ')}!`]
-          );
-        }
+      if ((!humanFaction || ev.faction === humanFaction) && result?.encounterLog?.length) {
+        redrawFn();
+        await new Promise(resolve => ui._showResultDialog(result.encounterLog, resolve));
       }
     }
 
-    if (hadMove) {
-      redrawFn();
-      if (!_autoplay) await _delay(400);
-    }
-    for (const log of pendingDialogs) {
-      redrawFn();
-      await new Promise(resolve => ui._showResultDialog(log, resolve));
-    }
-
-    // ── Phase 2: battles and summons (both factions visible) ────────────────
-    let hadBattle = false;
+    // ── Battles and summons ──────────────────────────────────────────────────
     for (const ev of events) {
       const { action, result, battleSnaps } = ev;
       if (action.type === PlanActionType.BATTLE_UNIT || action.type === PlanActionType.BATTLE_HEX) {
-        if (battleSnaps) {
+        // Show if no fog, or if this is human's attack, or if human's unit is the target.
+        const showDialog = !humanFaction || !state.fogOfWar || ev.faction === humanFaction
+          || (battleSnaps && (
+               battleSnaps.targetSnap?.owner === humanFaction ||
+               battleSnaps.actorSnap?.owner  === humanFaction
+             ));
+        if (battleSnaps && showDialog) {
           const { actorSnap, targetSnap } = battleSnaps;
           renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
           redrawFn();
-          await new Promise(resolve => {
-            ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
-          });
-          hadBattle = true;
+          await new Promise(resolve => ui._showBattleDialog(actorSnap, targetSnap, result, resolve));
         }
       } else if (action.type === PlanActionType.SUMMON) {
-        // Flash the spawn hex so the player can see a unit was summoned
         renderer.addFlash(action.toCol, action.toRow, '☠', 'rgba(155,89,182,0.85)', 1200);
-        hadBattle = true;
       }
     }
 
-    // ── Phase 3: explore results (human faction only) ────────────────────────
+    // ── Explore results (human faction only) ────────────────────────────────
     for (const ev of events) {
       const { action, result } = ev;
       if (action.type !== PlanActionType.EXPLORE) continue;
       if (result?.log?.length && (!humanFaction || ev.faction === humanFaction)) {
         redrawFn();
         await new Promise(resolve => ui._showResultDialog(result.log, resolve));
-        hadBattle = true;
       }
     }
-
-    if (hadMove || hadBattle) {
-      redrawFn();
-      if (!_autoplay) await _delay(hadMove ? 400 : 300);
-    } else if (events.length > 0 && !_autoplay) {
-      // Steps with only non-visual actions (fortify, use_item, etc.) — brief pause
-      // so the resolution doesn't feel instant.
-      redrawFn();
-      await _delay(150);
-    }
   }
+
+  // Restore the real final entity state and do one last draw.
+  state.entities = finalEntities;
+  redrawFn();
 }
 
 function _delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
@@ -734,13 +682,8 @@ function _createMpClient() {
       if (!ui || !renderer) return;
       ui.exitPlanningMode();
 
-      // Snapshot current entity positions (pre-resolution) for animation
-      const prePos = new Map();
-      for (const e of state.entities) {
-        prePos.set(e.id, { col: e.col, row: e.row, type: e.type, owner: e.owner });
-      }
-
-      _animateResolutionSteps(steps, prePos, redrawOnline, mp?.myFaction).then(() => {
+      const currentEntities = state.entities; // restored by animation; then overwritten by finalState
+      _animateResolutionSteps(steps, currentEntities, redrawOnline, mp?.myFaction).then(() => {
         // Apply final state (next stateUpdate from server will match, so no double anim)
         Object.assign(state, finalState);
         state.hero      = finalState.hero;
