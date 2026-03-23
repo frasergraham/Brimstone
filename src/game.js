@@ -30,8 +30,8 @@ export const Phase = Object.freeze({
 export const Player = Object.freeze({ HERO: 'hero', WITCH: 'witch' });
 
 // Calculate actions for a player at the start of their turn.
-// Hero  — base 3 + 1 in DAWN (prep bonus) + 1 in DAY + 1 per extra unit (cap +2)
-// Witch — base 4 + 1 in NIGHT + 1 per 2 extra units (cap +4, so needs 8 minions for full bonus)
+// Hero  — base 3 + 1 in DAWN/DAY + 1 per survivor (cap +5, so needs 5 survivors for full bonus)
+// Witch — base 4 + 1 in NIGHT + 1 per 2 minions (cap +6, so needs 12 minions for full bonus)
 export function computeActions(player, phase, entities) {
   const isHero     = player === Player.HERO;
   const owner      = isHero ? 'hero' : 'witch';
@@ -40,11 +40,11 @@ export function computeActions(player, phase, entities) {
 
   if (isHero) {
     const timeBonus = (phase === Phase.DAY || phase === Phase.DAWN) ? 1 : 0;
-    return 3 + timeBonus + Math.min(extras, 2);
+    return 3 + timeBonus + Math.min(extras, 5);
   } else {
     const timeBonus = phase === Phase.NIGHT ? 1 : 0;
-    // Each pair of minions earns +1 action, up to +4 (needs 8 minions for max)
-    const unitBonus = Math.min(Math.floor(extras / 2), 4);
+    // Each pair of minions earns +1 action, up to +6 (needs 12 minions for full bonus)
+    const unitBonus = Math.min(Math.floor(extras / 2), 6);
     return 4 + timeBonus + unitBonus;
   }
 }
