@@ -188,7 +188,12 @@ export class MultiplayerClient {
   _onMessage(event) {
     let msg;
     try { msg = JSON.parse(event.data); } catch { return; }
-    this._route(msg);
+    try {
+      this._route(msg);
+    } catch (err) {
+      console.error('Multiplayer _route error:', err);
+      this._opts.onError?.(`Client error: ${err.message}`);
+    }
   }
 
   _route(msg) {

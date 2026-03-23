@@ -331,6 +331,7 @@ document.getElementById('btn-change-name').addEventListener('click', () => {
   document.getElementById('online-name-form').style.display    = '';
   document.getElementById('online-subtitle').textContent       = 'Choose a new name';
   if (mp) { mp.disconnect(); mp = null; }
+  renderer = null; ui = null; state = null;
 });
 
 function _onlineError(msg) {
@@ -461,13 +462,24 @@ function _createMpClient() {
   });
 }
 
-// Patch MultiplayerClient to call _onAuthOk after auth success
+// Patch MultiplayerClient to handle auth callbacks and surface auth errors
 const _origRoute = MultiplayerClient.prototype._route;
 MultiplayerClient.prototype._route = function(msg) {
   _origRoute.call(this, msg);
+
   if (msg.type === 'authOk' && this._opts._onAuthOk) {
     const cb = this._opts._onAuthOk;
     this._opts._onAuthOk = null;
     cb();
+  }
+
+  if (msg.type === 'authError') {
+    // Token no longer valid (e.g. server restarted) — clear session and
+    // show the name-entry form so the error label inside it is visible
+    clearSession();
+    if (mp) mp._player = null;
+    document.getElementById('online-session-info').style.display = 'none';
+    document.getElementById('online-name-form').style.display    = '';
+    showStep('online');
   }
 };
