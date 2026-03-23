@@ -51,7 +51,7 @@ function budgetFor(state, faction) {
 
 function runAction(state, action, faction) {
   const entity = state.entities.find(e => e.id === action.entityId && e.alive);
-  if (!entity) return { kind: 'fail', reason: 'Entity no longer exists.' };
+  if (!entity) return { kind: 'skip', reason: 'Entity no longer exists.' };
   if (entity.owner !== faction) return { kind: 'fail', reason: 'Wrong faction.' };
 
   switch (action.type) {

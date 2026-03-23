@@ -43,9 +43,9 @@ export function computeActions(player, phase, entities) {
     return 3 + timeBonus + Math.min(extras, 5);
   } else {
     const timeBonus = phase === Phase.NIGHT ? 1 : 0;
-    // Each pair of minions earns +1 action, up to +6 (needs 12 minions for full bonus)
-    const unitBonus = Math.min(Math.floor(extras / 2), 6);
-    return 4 + timeBonus + unitBonus;
+    // Each pair of minions earns +1 action, up to +4 (needs 8 minions for full bonus)
+    const unitBonus = Math.min(Math.floor(extras / 2), 4);
+    return 3 + timeBonus + unitBonus;
   }
 }
 
@@ -562,7 +562,7 @@ export class GameState {
     if (witchCount > heroCount) {
       this.nodeScore.witch++;
       this.addLog(`🌙 At ${phaseLabel}: witch leads ${witchCount}–${heroCount}. Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);
-      if (this.nodeScore.witch >= 3) {
+      if (this.nodeScore.witch >= 4) {
         this.winner    = 'witch';
         this.winReason = WIN_REASON.SCORE_WITCH;
         this.addLog('🌙 The witch has claimed three ritual moments — Salem falls to darkness!');
@@ -570,7 +570,7 @@ export class GameState {
     } else if (heroCount > witchCount) {
       this.nodeScore.hero++;
       this.addLog(`☀ At ${phaseLabel}: hero leads ${heroCount}–${witchCount}. Score — Hero ${this.nodeScore.hero} / Witch ${this.nodeScore.witch}`);
-      if (this.nodeScore.hero >= 3) {
+      if (this.nodeScore.hero >= 4) {
         this.winner    = 'hero';
         this.winReason = WIN_REASON.SCORE_HERO;
         this.addLog('☀ The hero has broken the ritual three times — Salem is saved!');
@@ -610,7 +610,7 @@ export class GameState {
       return arr;
     };
 
-    shuffle(buildings).slice(0, 10).forEach(t => { t.hiddenSurvivor = true; });
+    shuffle(buildings).slice(0, 13).forEach(t => { t.hiddenSurvivor = true; });
     shuffle(terrain).slice(0, 2).forEach(t => { t.hiddenSurvivor = true; });
   }
 

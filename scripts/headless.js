@@ -1,191 +1,453 @@
 #!/usr/bin/env node
-// Headless game runner — plays N AI vs AI games and reports stats.
-// Usage:  node scripts/headless.js [count]   (default 1000)
+// Headless game runner — plays N AI vs AI games and reports balance stats.
+// Usage:  node scripts/headless.js [count]   (default 200)
 //
-// No browser APIs needed: game.js, entities.js, tiles.js, hex.js, map.js,
-// actions.js, and ai.js are all pure JS and load fine in Node.
+// Uses the simultaneous planning model: generatePlan() + resolvePlans() + endRound(),
+// matching the actual local-vs-AI game loop exactly.
 
 import { GameState, WIN_REASON } from '../src/game.js';
-import { WitchAI, HeroAI }      from '../src/ai.js';
+import { WitchAI, HeroAI }       from '../src/ai.js';
+import { resolvePlans, ResEventType } from '../server/resolver.js';
+import { PlanActionType }         from '../src/planner.js';
 
-const N = parseInt(process.argv[2] ?? '1000', 10);
+const N = parseInt(process.argv[2] ?? '200', 10);
 if (isNaN(N) || N < 1) { console.error('Usage: node scripts/headless.js [count]'); process.exit(1); }
 
-// ── Per-game runner ───────────────────────────────────────────────────────────
+const MAX_ROUNDS = 48;   // hard cap (4 full cycles = 32 "natural" max with score-4 threshold; 48 gives wiggle room)
 
-async function runGame() {
+// ── Per-game runner ────────────────────────────────────────────────────────────
+
+function runGame() {
   const state   = new GameState(true, true);
-
-  // thinkDelay=0: AI still uses await delay(0) so the event loop stays alive,
-  // but there's no real wait between actions.
   const witchAI = new WitchAI(state, () => {}, 0);
   const heroAI  = new HeroAI(state,  () => {}, 0);
 
-  // Resolve battle dialogs immediately (no UI)
-  const noop = () => Promise.resolve();
-  witchAI.onBattleResult = noop;
-  heroAI.onBattleResult  = noop;
+  const metrics = {
+    // Action-type tallies
+    actionCounts: { hero: {}, witch: {} },
+    // Combat
+    battlesHero: 0, battlesWitch: 0,
+    killsByHero: 0, killsByWitch: 0,
+    // Exploration
+    exploresHero: 0, exploresWitch: 0,
+    hexesExplored: new Set(),
+    // Resources found (parsed from explore log lines)
+    found: { wood:0, metal:0, herbs:0, food:0, silver:0, scripture:0, weapons:0, horses:0, nothing:0 },
+    // Over-budget food consumed
+    foodConsumedHero: 0, foodConsumedWitch: 0,
+    // Summoning / fortification
+    summons: 0, fortifies: 0,
+    // Unit ecology — peak counts during the game
+    peakSurvivors: 0, peakMinions: 0,
+    // Node checkpoints where each side scored
+    nodeScoreEvents: [],  // { round, winner: 'hero'|'witch', score }
+    // Attrition
+    attritionFinal: 0,
+  };
 
-  // Hard cap: 3 full cycles (24 rounds). Scoring should normally decide before this.
-  const MAX_ROUNDS = 24;
+  // ── Event analyser ──────────────────────────────────────────────────────────
+  function analyseEvents(events) {
+    for (const ev of events) {
+      if (ev.type !== ResEventType.ACTION_OK) continue;
+      const { action, result, faction } = ev;
 
-  while (!state.gameOver && state.round <= MAX_ROUNDS) {
-    if (state.activePlayer === 'witch') {
-      await witchAI.takeTurn();
-    } else {
-      await heroAI.takeTurn();
+      // Action-type distribution
+      const tally = metrics.actionCounts[faction];
+      tally[action.type] = (tally[action.type] ?? 0) + 1;
+
+      switch (action.type) {
+        case PlanActionType.BATTLE_UNIT:
+        case PlanActionType.BATTLE_HEX:
+          if (faction === 'hero') metrics.battlesHero++; else metrics.battlesWitch++;
+          if (result?.killed) {
+            if (faction === 'hero') metrics.killsByHero++; else metrics.killsByWitch++;
+          }
+          break;
+
+        case PlanActionType.EXPLORE: {
+          if (faction === 'hero') metrics.exploresHero++; else metrics.exploresWitch++;
+          metrics.hexesExplored.add(`${action.entityId}@${action.col},${action.row}`);
+          // Resource detection from log text
+          const log = (result?.log ?? []).join(' ').toLowerCase();
+          const enc = (result?.encounterLog ?? []).join(' ').toLowerCase();
+          const txt = log + ' ' + enc;
+          if (txt.includes('nothing') || txt.includes('empty'))  metrics.found.nothing++;
+          else if (txt.includes('wood'))      metrics.found.wood++;
+          else if (txt.includes('metal'))     metrics.found.metal++;
+          else if (txt.includes('herbs'))     metrics.found.herbs++;
+          else if (txt.includes('food'))      metrics.found.food++;
+          else if (txt.includes('silver'))    metrics.found.silver++;
+          else if (txt.includes('scripture')) metrics.found.scripture++;
+          else if (txt.match(/sword|axe|bow|staff|dagger|shield/)) metrics.found.weapons++;
+          else if (txt.includes('horse'))     metrics.found.horses++;
+          break;
+        }
+
+        case PlanActionType.SUMMON:
+          metrics.summons++;
+          break;
+
+        case PlanActionType.FORTIFY:
+          metrics.fortifies++;
+          break;
+
+        default: break;
+      }
+
+      // Over-budget food consumption (logged by resolver)
+      const logTxt = (result?.log ?? []).join(' ');
+      if (logTxt.includes('Rations consumed')) {
+        if (faction === 'hero') metrics.foodConsumedHero++; else metrics.foodConsumedWitch++;
+      }
     }
   }
 
+  // ── Main game loop ──────────────────────────────────────────────────────────
+  const prevScore = { hero: 0, witch: 0 };
+
+  while (!state.gameOver && state.round <= MAX_ROUNDS) {
+    state.startPlanning();
+    const heroPlan  = heroAI.generatePlan();
+    const witchPlan = witchAI.generatePlan();
+    state.submitPlan('hero',  heroPlan);
+    state.submitPlan('witch', witchPlan);
+
+    const steps = resolvePlans(state, state.heroPlan, state.witchPlan);
+
+    for (const step of steps) {
+      analyseEvents(step.heroEvents  ?? []);
+      analyseEvents(step.witchEvents ?? []);
+    }
+
+    state.endRound();
+
+    // Sample ecology after each round
+    const surv = state.entities.filter(e => e.alive && e.type === 'survivor').length;
+    const mini = state.entities.filter(e => e.alive && e.owner === 'witch' && e.type !== 'witch').length;
+    if (surv > metrics.peakSurvivors) metrics.peakSurvivors = surv;
+    if (mini > metrics.peakMinions)   metrics.peakMinions   = mini;
+
+    // Record node-score events
+    if (state.nodeScore.hero > prevScore.hero) {
+      metrics.nodeScoreEvents.push({ round: state.round, side: 'hero', total: state.nodeScore.hero });
+      prevScore.hero = state.nodeScore.hero;
+    }
+    if (state.nodeScore.witch > prevScore.witch) {
+      metrics.nodeScoreEvents.push({ round: state.round, side: 'witch', total: state.nodeScore.witch });
+      prevScore.witch = state.nodeScore.witch;
+    }
+  }
+
+  metrics.attritionFinal = state.attritionLevel;
+
+  // ── Tiebreak (same as before) ──────────────────────────────────────────────
   let winner    = state.winner;
   let winReason = state.winReason;
 
   if (!winner) {
-    // Tiebreaker 1: node score accumulated over dawn/dusk checks
     const ws = state.nodeScore.witch;
     const hs = state.nodeScore.hero;
     if (ws !== hs) {
       winner    = ws > hs ? 'witch' : 'hero';
-      winReason = `score tiebreak at cap (Witch ${ws}–Hero ${hs})`;
+      winReason = `score tiebreak (Witch ${ws}–Hero ${hs})`;
     } else {
-      // Tiebreaker 2: current node count
-      const witchNodes = state.witchObjectives.filter(obj =>
-        state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
+      const wn = state.witchObjectives.filter(o =>
+        state.entities.some(e => e.alive && e.owner === 'witch' && e.col === o.col && e.row === o.row)
       ).length;
-      const heroNodes = state.witchObjectives.filter(obj =>
-        state.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row)
+      const hn = state.witchObjectives.filter(o =>
+        state.entities.some(e => e.alive && e.owner === 'hero'  && e.col === o.col && e.row === o.row)
       ).length;
-
-      if (witchNodes !== heroNodes) {
-        winner    = witchNodes > heroNodes ? 'witch' : 'hero';
-        winReason = `node majority at cap (W${witchNodes}–H${heroNodes}, score tied ${ws}–${hs})`;
+      if (wn !== hn) {
+        winner    = wn > hn ? 'witch' : 'hero';
+        winReason = `node majority tiebreak (W${wn}–H${hn})`;
       } else {
         winner    = 'draw';
-        winReason = `draw at cap (nodes ${witchNodes}–${heroNodes}, score ${ws}–${hs})`;
+        winReason = `draw at cap (nodes ${wn}–${hn}, score ${ws}–${hs})`;
       }
     }
   }
 
   return {
-    winner,
-    winReason,
+    winner, winReason,
     rounds: state.round,
-    phase:  state.phase,
+    heroHp: state.hero.hp,  witchHp: state.witch.hp,
+    nodeScore: { ...state.nodeScore },
+    metrics,
+    hitCap: state.round > MAX_ROUNDS,
   };
 }
 
-// ── Stat helpers ──────────────────────────────────────────────────────────────
+// ── Stat helpers ───────────────────────────────────────────────────────────────
 
+function avg(arr) { return arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : 0; }
 function median(sorted) {
   const m = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0
-    ? (sorted[m - 1] + sorted[m]) / 2
-    : sorted[m];
+  return sorted.length % 2 === 0 ? (sorted[m - 1] + sorted[m]) / 2 : sorted[m];
 }
-
-function percentile(sorted, p) {
-  const idx = Math.ceil(sorted.length * p / 100) - 1;
-  return sorted[Math.max(0, idx)];
-}
-
-function bar(count, total, width = 20) {
-  const filled = Math.round((count / total) * width);
+function pct(n, total) { return total ? (n / total * 100).toFixed(1) : '0.0'; }
+function fmt(n, dp = 1) { return typeof n === 'number' ? n.toFixed(dp) : String(n); }
+function bar(count, total, width = 22) {
+  const filled = total ? Math.round((count / total) * width) : 0;
   return '█'.repeat(filled) + '░'.repeat(width - filled);
 }
+function percentile(sorted, p) {
+  return sorted[Math.max(0, Math.ceil(sorted.length * p / 100) - 1)];
+}
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+// ── Main ───────────────────────────────────────────────────────────────────────
 
-console.log(`\nBrimstone headless runner — playing ${N} games…\n`);
+console.log(`\nBrimstone headless runner — ${N} games (planning model, cap=${MAX_ROUNDS} rounds)…\n`);
 
 const results = [];
 const startMs = Date.now();
 
-// Run games sequentially (simplest; avoids shared-state issues)
+process.stdout.write('  Running ');
 for (let i = 0; i < N; i++) {
-  const r = await runGame();
-  results.push(r);
-  const winnerLabel = r.winner === 'draw' ? 'draw ' : r.winner.padEnd(5);
-  console.log(`  game ${String(i + 1).padStart(4)}  ${winnerLabel}  rounds=${String(r.rounds).padStart(3)}  ${r.winReason}`);
+  results.push(runGame());
+  if ((i + 1) % Math.max(1, Math.floor(N / 40)) === 0) process.stdout.write('█');
 }
-process.stdout.write('\r' + ' '.repeat(40) + '\r'); // clear progress line
+process.stdout.write('\n\n');
 
 const elapsed = ((Date.now() - startMs) / 1000).toFixed(1);
 
-// ── Aggregate ─────────────────────────────────────────────────────────────────
+// ── Aggregate ──────────────────────────────────────────────────────────────────
 
 const heroWins  = results.filter(r => r.winner === 'hero').length;
 const witchWins = results.filter(r => r.winner === 'witch').length;
 const draws     = results.filter(r => r.winner === 'draw').length;
+const tiebreaks = results.filter(r => r.winReason?.includes('tiebreak') || r.winReason?.includes('draw')).length;
 
-// Win condition breakdown
+// Win condition categorisation
+function classify(r) {
+  const wr = r.winReason ?? '';
+  if (wr === WIN_REASON.WITCH_SLAIN || wr === WIN_REASON.HERO_SLAIN) return 'kill';
+  if (wr.includes('tiebreak') || wr.includes('draw') || wr.includes('majority')) return 'tiebreak';
+  return 'nodes';
+}
+const killWins  = results.filter(r => classify(r) === 'kill').length;
+const nodeWins  = results.filter(r => classify(r) === 'nodes').length;
+const tieWins   = results.filter(r => classify(r) === 'tiebreak').length;
+
+// Specific win-reason counts
 const conditionCounts = {};
 for (const r of results) {
-  conditionCounts[r.winReason] = (conditionCounts[r.winReason] ?? 0) + 1;
+  const key = r.winReason ?? 'unknown';
+  conditionCounts[key] = (conditionCounts[key] ?? 0) + 1;
 }
 
 // Game length
-const rounds = results.map(r => r.rounds).sort((a, b) => a - b);
-const minR   = rounds[0];
-const maxR   = rounds[rounds.length - 1];
-const meanR  = (rounds.reduce((s, v) => s + v, 0) / rounds.length).toFixed(1);
-const medR   = median(rounds);
-const p25    = percentile(rounds, 25);
-const p75    = percentile(rounds, 75);
-const p95    = percentile(rounds, 95);
+const roundArr = results.map(r => r.rounds).sort((a, b) => a - b);
+const meanRounds = avg(roundArr);
+const medRounds  = median(roundArr);
 
-// Round-length histogram (buckets of 5)
+// HP at game end
+const heroHpArr  = results.map(r => r.heroHp);
+const witchHpArr = results.map(r => r.witchHp);
+
+// Metric averages
+function avgM(fn) { return avg(results.map(fn)); }
+
+const avgExploresHero  = avgM(r => r.metrics.exploresHero);
+const avgExploresWitch = avgM(r => r.metrics.exploresWitch);
+const avgBattlesHero   = avgM(r => r.metrics.battlesHero);
+const avgBattlesWitch  = avgM(r => r.metrics.battlesWitch);
+const avgKillsHero     = avgM(r => r.metrics.killsByHero);
+const avgKillsWitch    = avgM(r => r.metrics.killsByWitch);
+const avgSummons       = avgM(r => r.metrics.summons);
+const avgFortifies     = avgM(r => r.metrics.fortifies);
+const avgPeakSurv      = avgM(r => r.metrics.peakSurvivors);
+const avgPeakMini      = avgM(r => r.metrics.peakMinions);
+const avgFoodH         = avgM(r => r.metrics.foodConsumedHero);
+const avgFoodW         = avgM(r => r.metrics.foodConsumedWitch);
+
+// Resource totals (per game)
+const resKeys = ['wood','metal','herbs','food','silver','scripture','weapons','horses','nothing'];
+const avgFound = {};
+for (const k of resKeys) avgFound[k] = avgM(r => r.metrics.found[k]);
+
+// Action distribution (fraction of total actions)
+const actTypeTotals = {};
+for (const r of results) {
+  for (const [side, counts] of Object.entries(r.metrics.actionCounts)) {
+    for (const [type, n] of Object.entries(counts)) {
+      actTypeTotals[type] = (actTypeTotals[type] ?? 0) + n;
+    }
+  }
+}
+const totalActions = Object.values(actTypeTotals).reduce((s, v) => s + v, 0);
+
+// Round length histogram
 const bucketSize = 5;
-const buckets    = {};
-for (const r of rounds) {
+const buckets = {};
+for (const r of roundArr) {
   const b = Math.floor(r / bucketSize) * bucketSize;
   buckets[b] = (buckets[b] ?? 0) + 1;
 }
 const bucketKeys = Object.keys(buckets).map(Number).sort((a, b) => a - b);
 
-// ── Report ────────────────────────────────────────────────────────────────────
+// ── Report ─────────────────────────────────────────────────────────────────────
 
-// Box is W chars wide between the ║ borders
-const W    = 62;
+const W    = 64;
 const line = '─'.repeat(W);
 const row  = s => `║ ${s.padEnd(W - 2)} ║`;
+const hdr  = s => { console.log(`╠${line}╣`); console.log(row(s)); };
 
 console.log(`╔${line}╗`);
-console.log(row(`BRIMSTONE HEADLESS REPORT — ${N} games in ${elapsed}s`));
-console.log(`╠${line}╣`);
+console.log(row(`BRIMSTONE BALANCE REPORT — ${N} games · ${elapsed}s · cap=${MAX_ROUNDS}r`));
 
-console.log(row('WINNERS'));
-console.log(row(` Hero  ${bar(heroWins,  N)}  ${heroWins.toString().padStart(5)}  (${(heroWins  / N * 100).toFixed(1)}%)`));
-console.log(row(` Witch ${bar(witchWins, N)}  ${witchWins.toString().padStart(5)}  (${(witchWins / N * 100).toFixed(1)}%)`));
+hdr('WIN RATES');
+console.log(row(` Hero  ${bar(heroWins,  N)}  ${String(heroWins).padStart(4)}  (${pct(heroWins,  N)}%)`));
+console.log(row(` Witch ${bar(witchWins, N)}  ${String(witchWins).padStart(4)}  (${pct(witchWins, N)}%)`));
 if (draws > 0)
-  console.log(row(` Draw  ${bar(draws, N)}  ${draws.toString().padStart(5)}  (${(draws / N * 100).toFixed(1)}%)`));
+  console.log(row(` Draw  ${bar(draws, N)}  ${String(draws).padStart(4)}  (${pct(draws, N)}%)`));
 
-console.log(`╠${line}╣`);
-console.log(row('WIN CONDITIONS'));
+hdr('WIN CONDITION MIX');
+console.log(row(` By kill  ${bar(killWins, N)}  ${String(killWins).padStart(4)}  (${pct(killWins, N)}%)`));
+console.log(row(` By nodes ${bar(nodeWins, N)}  ${String(nodeWins).padStart(4)}  (${pct(nodeWins, N)}%)`));
+console.log(row(` Tiebreak ${bar(tieWins,  N)}  ${String(tieWins).padStart(4)}  (${pct(tieWins,  N)}%)`));
 
+hdr('WIN REASON DETAIL');
 const winLabels = {
-  [WIN_REASON.WITCH_SLAIN]: 'Witch slain      ',
-  [WIN_REASON.HERO_SLAIN]:  'Hero slain       ',
-  [WIN_REASON.NODES_WITCH]: 'Witch holds nodes',
-  [WIN_REASON.NODES_HERO]:  'Hero holds nodes ',
+  [WIN_REASON.WITCH_SLAIN]:      'Hero kills witch         ',
+  [WIN_REASON.HERO_SLAIN]:       'Witch kills hero         ',
+  [WIN_REASON.NODES_WITCH]:      'Witch sweeps nodes (dawn)',
+  [WIN_REASON.NODES_HERO]:       'Hero sweeps nodes (dawn) ',
+  [WIN_REASON.NODES_WITCH_DUSK]: 'Witch sweeps nodes (dusk)',
+  [WIN_REASON.NODES_HERO_DUSK]:  'Hero sweeps nodes (dusk) ',
+  [WIN_REASON.SCORE_WITCH]:      'Witch 3-point score      ',
+  [WIN_REASON.SCORE_HERO]:       'Hero 3-point score       ',
 };
 for (const [reason, count] of Object.entries(conditionCounts).sort((a, b) => b[1] - a[1])) {
-  const label = winLabels[reason] ?? reason.slice(0, 17).padEnd(17);
-  console.log(row(` ${label}  ${bar(count, N)}  ${count.toString().padStart(5)}  (${(count / N * 100).toFixed(1)}%)`));
+  const label = winLabels[reason] ?? reason.slice(0, 25).padEnd(25);
+  console.log(row(` ${label}  ${bar(count, N, 16)}  ${String(count).padStart(4)}  (${pct(count, N)}%)`));
 }
 
-console.log(`╠${line}╣`);
-console.log(row('GAME LENGTH (rounds)'));
-console.log(row(`  Min ${minR}  /  Max ${maxR}  /  Mean ${meanR}  /  Median ${medR}`));
-console.log(row(`  p25=${p25}  p75=${p75}  p95=${p95}`));
+hdr('GAME LENGTH (rounds)');
+console.log(row(`  Mean ${fmt(meanRounds)}  /  Median ${medRounds}  /  Min ${roundArr[0]}  /  Max ${roundArr[roundArr.length-1]}`));
+console.log(row(`  p25=${percentile(roundArr,25)}  p50=${percentile(roundArr,50)}  p75=${percentile(roundArr,75)}  p95=${percentile(roundArr,95)}`));
+console.log(row(`  Games hitting round cap (${MAX_ROUNDS}): ${results.filter(r=>r.hitCap).length}  (${pct(results.filter(r=>r.hitCap).length, N)}%)`));
 
-console.log(`╠${line}╣`);
-console.log(row(`LENGTH HISTOGRAM (bucket = ${bucketSize} rounds)`));
+hdr(`LENGTH HISTOGRAM  (bucket=${bucketSize}r, target ≈25r)`);
 for (const b of bucketKeys) {
-  const count  = buckets[b];
-  const label  = `${String(b).padStart(3)}–${String(b + bucketSize - 1).padStart(3)}`;
-  const filled = Math.round((count / results.length) * 30);
-  const pct    = (count / results.length * 100).toFixed(1);
-  console.log(row(`  ${label}  ${'█'.repeat(filled)}${'░'.repeat(30 - filled)}  ${pct.padStart(5)}%`));
+  const count = buckets[b];
+  const label = `${String(b).padStart(3)}–${String(b + bucketSize - 1).padStart(3)}`;
+  const filled = Math.round((count / N) * 28);
+  console.log(row(`  ${label}  ${'█'.repeat(filled)}${'░'.repeat(28 - filled)}  ${pct(count, N).padStart(5)}%`));
+}
+
+hdr('COMBAT (avg per game)');
+console.log(row(`  Hero battles   ${fmt(avgBattlesHero)}   kills ${fmt(avgKillsHero)}`));
+console.log(row(`  Witch battles  ${fmt(avgBattlesWitch)}   kills ${fmt(avgKillsWitch)}`));
+console.log(row(`  Avg hero HP at end:   ${fmt(avg(heroHpArr))}`));
+console.log(row(`  Avg witch HP at end:  ${fmt(avg(witchHpArr))}`));
+
+hdr('EXPLORATION (avg per game)');
+console.log(row(`  Hero explores   ${fmt(avgExploresHero)}   Witch explores   ${fmt(avgExploresWitch)}`));
+
+hdr('RESOURCES FOUND (avg per game across all explores)');
+for (const k of resKeys.filter(k => k !== 'nothing')) {
+  const a = avgFound[k];
+  const filledN = Math.round(a * 3);
+  console.log(row(`  ${k.padEnd(10)}  ${'█'.repeat(Math.min(filledN,28))}  ${fmt(a)}`));
+}
+console.log(row(`  nothing     ${fmt(avgFound.nothing)} (empty explores)`));
+
+hdr('UNIT ECOLOGY (avg per game)');
+console.log(row(`  Peak hero survivors   ${fmt(avgPeakSurv)}`));
+console.log(row(`  Peak witch minions    ${fmt(avgPeakMini)}`));
+console.log(row(`  Witch summons         ${fmt(avgSummons)}`));
+console.log(row(`  Hero fortifies        ${fmt(avgFortifies)}`));
+
+hdr('FOOD & OVER-BUDGET ACTIONS (avg per game)');
+console.log(row(`  Hero food-powered extra actions   ${fmt(avgFoodH)}`));
+console.log(row(`  Witch food-powered extra actions  ${fmt(avgFoodW)}`));
+
+hdr('ACTION MIX (% of all actions across all games)');
+const actOrder = [
+  PlanActionType.MOVE, PlanActionType.BATTLE_UNIT, PlanActionType.BATTLE_HEX,
+  PlanActionType.EXPLORE, PlanActionType.FORTIFY, PlanActionType.SUMMON,
+  PlanActionType.USE_ITEM, PlanActionType.EQUIP_WEAPON, PlanActionType.USE_ABILITY,
+];
+for (const type of actOrder) {
+  const count = actTypeTotals[type] ?? 0;
+  if (!count) continue;
+  const filledN = Math.round((count / totalActions) * 28);
+  console.log(row(`  ${type.padEnd(14)}  ${'█'.repeat(filledN)}${'░'.repeat(28-filledN)}  ${pct(count, totalActions)}%`));
+}
+
+// ── Balance analysis ───────────────────────────────────────────────────────────
+
+hdr('BALANCE ANALYSIS');
+
+const issues = [];
+const suggestions = [];
+
+const heroPct  = heroWins / N;
+const witchPct = witchWins / N;
+const drawPct  = tieWins  / N;
+const tieRatio = (tieWins + draws) / N;
+
+if (Math.abs(heroPct - witchPct) > 0.12) {
+  const favoured = heroPct > witchPct ? 'Hero' : 'Witch';
+  const loser    = heroPct > witchPct ? 'Witch' : 'Hero';
+  issues.push(`⚠ Win rate imbalanced: ${favoured} wins ${pct(Math.max(heroPct,witchPct)*N,N)}% vs ${loser} ${pct(Math.min(heroPct,witchPct)*N,N)}%`);
+  if (heroPct > witchPct + 0.12) {
+    suggestions.push('• Hero too strong: reduce hero base ATK by 1, or reduce survivor action bonus rate');
+    suggestions.push('• Or buff witch: lower minion-per-action threshold from 2→1 minions, or raise minion HP to 3');
+  } else {
+    suggestions.push('• Witch too strong: reduce witch base actions (4→3), or make minion summoning cost 2 actions');
+    suggestions.push('• Or buff hero: increase hero base HP to 12, or give hero +1 ATK in DUSK as well');
+  }
+}
+
+if (tieRatio > 0.10) {
+  issues.push(`⚠ Too many tiebreaks: ${pct(tieRatio * N, N)}% (target <10%)`);
+  suggestions.push('• Reduce MAX_ROUNDS or make scoring checkpoints more decisive (require 2 nodes not just majority)');
+  suggestions.push('• Increase attrition damage to force earlier decisive combat');
+}
+
+if (killWins / N < 0.20) {
+  issues.push(`⚠ Too few kill victories: ${pct(killWins, N)}% (want ≥20%)`);
+  suggestions.push('• Lower hero/witch HP (10→8) to make combat more decisive');
+  suggestions.push('• Increase base attack stats or reduce defense');
+}
+if (nodeWins / N < 0.30) {
+  issues.push(`⚠ Too few node victories: ${pct(nodeWins, N)}% (want ≥30%)`);
+  suggestions.push('• Reduce score threshold from 3 to 2 cumulative points for faster node wins');
+  suggestions.push('• Make sweep-all-3-nodes victory more achievable (reduce node separation requirement)');
+}
+
+if (meanRounds < 15) {
+  issues.push(`⚠ Games too short: mean ${fmt(meanRounds)} rounds (target ≈25)`);
+  suggestions.push('• Increase hero and witch HP pools');
+  suggestions.push('• Reduce attrition rate or hazard damage');
+}
+if (meanRounds > 30) {
+  issues.push(`⚠ Games too long: mean ${fmt(meanRounds)} rounds (target ≈25)`);
+  suggestions.push('• Reduce MAX_ROUNDS, or increase attrition damage ceiling above 3');
+  suggestions.push('• Make scoring checkpoints require fewer points (3→2) for faster decisive wins');
+}
+
+if (avgPeakSurv < 1.5) {
+  issues.push(`⚠ Survivors rarely recruited: avg peak ${fmt(avgPeakSurv)} (want ≥2)`);
+  suggestions.push('• Increase hidden survivor count (12→15), or raise survivor spawn probability at nodes (33%→50%)');
+}
+if (avgPeakMini < 2.0) {
+  issues.push(`⚠ Witch rarely builds a minion army: avg peak ${fmt(avgPeakMini)} (want ≥3)`);
+  suggestions.push('• Raise node spawn chance back to 50%, or reduce summon cost to free in NIGHT');
+}
+if (avgFortifies < 1.0) {
+  issues.push(`⚠ Fortification barely used: avg ${fmt(avgFortifies)} per game`);
+  suggestions.push('• Increase wood loot weight, or make FORTIFY free during DAY');
+}
+
+if (issues.length === 0) {
+  console.log(row('  ✓ Balance looks healthy within all targets.'));
+} else {
+  for (const issue of issues) console.log(row(`  ${issue}`));
+  console.log(row(''));
+  console.log(row('  Suggestions:'));
+  for (const s of suggestions) console.log(row(`    ${s}`));
 }
 
 console.log(`╚${line}╝`);
