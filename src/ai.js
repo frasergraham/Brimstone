@@ -143,18 +143,22 @@ export class WitchAI {
     if (this._running) return;
     this._running = true;
     const state = this.state;
-
-    while (state.actionsAvailable > 0 && !state.gameOver) {
-      await this._think();
-      const acted = await this._chooseAction();
-      if (!acted) break;
+    try {
+      while (state.actionsAvailable > 0 && !state.gameOver) {
+        await this._think();
+        let acted = false;
+        try { acted = await this._chooseAction(); } catch (err) {
+          console.error('WitchAI _chooseAction error:', err);
+        }
+        if (!acted) break;
+        this.onStateChange();
+        await delay(this.thinkDelay);
+      }
+      if (!state.gameOver) state.endTurn();
       this.onStateChange();
-      await delay(this.thinkDelay);
+    } finally {
+      this._running = false;
     }
-
-    state.endTurn();
-    this.onStateChange();
-    this._running = false;
   }
 
   async _executeBattleWithUI(actor, target) {
@@ -529,18 +533,22 @@ export class HeroAI {
     if (this._running) return;
     this._running = true;
     const state = this.state;
-
-    while (state.actionsAvailable > 0 && !state.gameOver) {
-      await delay(this.thinkDelay * 0.5);
-      const acted = await this._chooseAction();
-      if (!acted) break;
+    try {
+      while (state.actionsAvailable > 0 && !state.gameOver) {
+        await delay(this.thinkDelay * 0.5);
+        let acted = false;
+        try { acted = await this._chooseAction(); } catch (err) {
+          console.error('HeroAI _chooseAction error:', err);
+        }
+        if (!acted) break;
+        this.onStateChange();
+        await delay(this.thinkDelay);
+      }
+      if (!state.gameOver) state.endTurn();
       this.onStateChange();
-      await delay(this.thinkDelay);
+    } finally {
+      this._running = false;
     }
-
-    state.endTurn();
-    this.onStateChange();
-    this._running = false;
   }
 
   async _executeBattleWithUI(actor, target) {

@@ -12,6 +12,8 @@ import { recordResult }       from './leaderboard.js';
 // ── Constants ────────────────────────────────────────────────────────────────
 const AI_FILL_DELAY_MS   = 5_000;  // wait this long before filling with AI
 const RECONNECT_GRACE_MS = 60_000; // time to reconnect before forfeit
+const AI_TAKEOVER_MS     = 12_000; // replace disconnected player with AI after 12s
+const TURN_TIMEOUT_MS    = 90_000; // auto-end a human turn after 90s of inactivity
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -89,6 +91,8 @@ function createRoom(heroPlayerId, heroWs, heroName, witchPlayerId, witchWs, witc
     witchAI:          null,
     heroAI:           null,
     disconnectTimers: new Map(),
+    turnTimer:        null,   // fires when a human takes too long
+    takeoverTimers:   new Map(), // fires to replace disconnected player with AI
   };
 
   rooms.set(id, room);
@@ -97,10 +101,46 @@ function createRoom(heroPlayerId, heroWs, heroName, witchPlayerId, witchWs, witc
 }
 
 function destroyRoom(room) {
-  if (room.aiTimer) clearTimeout(room.aiTimer);
+  if (room.aiTimer)   clearTimeout(room.aiTimer);
+  if (room.turnTimer) clearTimeout(room.turnTimer);
   for (const t of room.disconnectTimers.values()) clearTimeout(t);
+  for (const t of room.takeoverTimers.values())   clearTimeout(t);
   rooms.delete(room.id);
   codeToRoom.delete(room.code);
+}
+
+// ── Turn timer helpers ────────────────────────────────────────────────────────
+
+/** Start (or restart) the turn clock for the current human player's turn. */
+function _startTurnTimer(room) {
+  _clearTurnTimer(room);
+  if (room.state.gameOver) return;
+
+  const faction = room.state.activePlayer;
+  const isHumanTurn =
+    (faction === Player.HERO  && room.heroPlayerId  !== 'ai') ||
+    (faction === Player.WITCH && room.witchPlayerId !== 'ai');
+  if (!isHumanTurn) return;
+
+  room.turnTimer = setTimeout(() => {
+    room.turnTimer = null;
+    if (room.state.gameOver) return;
+    if (room.state.activePlayer !== faction) return; // already changed
+    console.log(`[room ${room.id}] Turn timeout for ${faction} — auto-ending turn.`);
+    const ws = faction === Player.HERO ? room.heroWs : room.witchWs;
+    send(ws, { type: 'error', message: 'Turn time expired — your turn was ended automatically.' });
+    room.state.endTurn();
+    broadcastState(room, 'endTurn');
+    checkAndHandleGameOver(room);
+    if (!room.state.gameOver) {
+      _startTurnTimer(room);
+      setTimeout(() => runAITurn(room), 100);
+    }
+  }, TURN_TIMEOUT_MS);
+}
+
+function _clearTurnTimer(room) {
+  if (room.turnTimer) { clearTimeout(room.turnTimer); room.turnTimer = null; }
 }
 
 // ── AI helpers ───────────────────────────────────────────────────────────────
@@ -130,14 +170,32 @@ function attachAI(room, faction) {
 
 async function runAITurn(room) {
   if (room.state.gameOver) return;
-  if (room.state.activePlayer === Player.WITCH && room.witchAI) {
-    await room.witchAI.takeTurn();
-    broadcastState(room, 'endTurn');
-    checkAndHandleGameOver(room);
-  } else if (room.state.activePlayer === Player.HERO && room.heroAI) {
-    await room.heroAI.takeTurn();
-    broadcastState(room, 'endTurn');
-    checkAndHandleGameOver(room);
+  const ai = room.state.activePlayer === Player.WITCH ? room.witchAI
+           : room.state.activePlayer === Player.HERO  ? room.heroAI
+           : null;
+  if (!ai) return;
+
+  try {
+    await ai.takeTurn();
+  } catch (err) {
+    console.error(`[room ${room.id}] AI takeTurn error:`, err);
+    // Force end the turn so the game doesn't freeze
+    if (!room.state.gameOver) {
+      try { room.state.endTurn(); } catch {}
+    }
+  }
+
+  broadcastState(room, 'endTurn');
+  checkAndHandleGameOver(room);
+  if (!room.state.gameOver) {
+    _startTurnTimer(room);
+    // If the next turn is also AI (e.g. both sides AI), keep going
+    if (
+      (room.state.activePlayer === Player.WITCH && room.witchAI) ||
+      (room.state.activePlayer === Player.HERO  && room.heroAI)
+    ) {
+      setTimeout(() => runAITurn(room), 50);
+    }
   }
 }
 
@@ -199,6 +257,7 @@ function tryMatch() {
   send(witch.ws, { type: 'matchFound', roomId: room.id, faction: 'witch', opponentName: hero.playerName,  aiOpponent: false });
 
   broadcastState(room, 'start');
+  _startTurnTimer(room);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -242,10 +301,13 @@ export function joinQueue(playerId, playerName, ws) {
     });
 
     broadcastState(room, 'start');
+    _startTurnTimer(room);
 
     // If it's the AI's turn first, kick it off
-    if (room.state.activePlayer === Player.WITCH && room.witchAI) runAITurn(room);
-    if (room.state.activePlayer === Player.HERO  && room.heroAI)  runAITurn(room);
+    setTimeout(() => {
+      if (room.state.activePlayer === Player.WITCH && room.witchAI) runAITurn(room);
+      else if (room.state.activePlayer === Player.HERO && room.heroAI) runAITurn(room);
+    }, 100);
 
   }, AI_FILL_DELAY_MS);
 
@@ -273,7 +335,13 @@ export function createPrivateRoom(playerId, playerName, ws) {
     attachAI(room, 'witch');
     send(room.heroWs, { type: 'opponentJoined', opponentName: 'The AI Witch', aiOpponent: true });
     broadcastState(room, 'start');
-    if (room.state.activePlayer === Player.WITCH && room.witchAI) runAITurn(room);
+    _startTurnTimer(room);
+    // Hero always goes first; witch AI would only need to go first if we
+    // randomise faction, but currently hero is always the human here.
+    setTimeout(() => {
+      if (room.state.activePlayer === Player.WITCH && room.witchAI) runAITurn(room);
+      else if (room.state.activePlayer === Player.HERO && room.heroAI) runAITurn(room);
+    }, 100);
   }, AI_FILL_DELAY_MS);
 }
 
@@ -297,11 +365,12 @@ export function joinAIGame(playerId, playerName, ws) {
   });
 
   broadcastState(room, 'start');
+  _startTurnTimer(room);
 
   // If AI takes the first turn, kick it off after the client has the initial state
   setTimeout(() => {
     if (room.state.activePlayer === Player.WITCH && room.witchAI) runAITurn(room);
-    if (room.state.activePlayer === Player.HERO  && room.heroAI)  runAITurn(room);
+    else if (room.state.activePlayer === Player.HERO && room.heroAI) runAITurn(room);
   }, 100);
 }
 
@@ -325,6 +394,7 @@ export function joinPrivateRoom(playerId, playerName, ws, code) {
   send(ws,          { type: 'matchFound', roomId: room.id, faction: 'witch', opponentName: room.heroName, aiOpponent: false });
 
   broadcastState(room, 'start');
+  _startTurnTimer(room);
 }
 
 /** Handle an incoming action from a player. */
@@ -342,6 +412,9 @@ export function handleAction(playerId, roomId, actionType, params) {
   if (state.activePlayer !== faction) {
     send(ws, { type: 'error', message: "It's not your turn." }); return;
   }
+
+  // Player is active — reset the inactivity clock
+  _startTurnTimer(room);
 
   let result;
   try {
@@ -381,12 +454,13 @@ export function handleEndTurn(playerId, roomId) {
   if (state.gameOver) return;
   if (state.activePlayer !== faction) return;
 
+  _clearTurnTimer(room);
   state.endTurn();
   broadcastState(room, 'endTurn');
   checkAndHandleGameOver(room);
 
-  // If next turn is AI, run it
   if (!state.gameOver) {
+    _startTurnTimer(room);
     setTimeout(() => runAITurn(room), 100);
   }
 }
@@ -396,23 +470,47 @@ export function handleDisconnect(playerId, roomId) {
   const room = rooms.get(roomId);
   if (!room) return;
 
-  const ws = factionFor(room, playerId) === 'hero' ? room.witchWs : room.heroWs;
-  send(ws, { type: 'opponentDisconnected', graceMs: RECONNECT_GRACE_MS });
+  const faction    = factionFor(room, playerId);
+  const opponentWs = faction === 'hero' ? room.witchWs : room.heroWs;
+  send(opponentWs, { type: 'opponentDisconnected', graceMs: RECONNECT_GRACE_MS });
 
-  const timer = setTimeout(() => {
-    // Forfeit the disconnected player
+  // ── AI takeover after short gap ───────────────────────────────────────────
+  // If the disconnected player is currently active, hand their turn to an AI
+  // quickly so the remaining player isn't stuck waiting.
+  const takeoverTimer = setTimeout(() => {
+    const r = rooms.get(roomId);
+    if (!r || r.state.gameOver) return;
+    if (faction === factionFor(r, playerId)) { // still their faction slot
+      console.log(`[room ${roomId}] ${faction} disconnected — attaching AI.`);
+      _clearTurnTimer(r);
+      attachAI(r, faction);
+      const aiName = faction === 'hero' ? 'The AI Hero' : 'The AI Witch';
+      send(opponentWs, { type: 'opponentJoined', opponentName: `${aiName} (took over)`, aiOpponent: true });
+      broadcastState(r, 'update');
+      // If it's now the AI's turn, run it
+      if (r.state.activePlayer === faction) {
+        setTimeout(() => runAITurn(r), 100);
+      }
+    }
+  }, AI_TAKEOVER_MS);
+  room.takeoverTimers.set(playerId, takeoverTimer);
+
+  // ── Forfeit after full grace period ──────────────────────────────────────
+  const forfeitTimer = setTimeout(() => {
     const room2 = rooms.get(roomId);
     if (!room2) return;
-    const faction = factionFor(room2, playerId);
-    if (!faction) return;
+    // If already replaced by AI, don't forfeit — just clean up timer
+    const currentId = faction === 'hero' ? room2.heroPlayerId : room2.witchPlayerId;
+    if (currentId === 'ai') { room2.disconnectTimers.delete(playerId); return; }
+
     recordResult(playerId, 'loss');
     const opponentId = faction === 'hero' ? room2.witchPlayerId : room2.heroPlayerId;
     if (opponentId && opponentId !== 'ai') recordResult(opponentId, 'win');
-    send(ws, { type: 'opponentForfeited' });
+    send(opponentWs, { type: 'opponentForfeited' });
     destroyRoom(room2);
   }, RECONNECT_GRACE_MS);
 
-  room.disconnectTimers.set(playerId, timer);
+  room.disconnectTimers.set(playerId, forfeitTimer);
 }
 
 /** Handle a player reconnecting. */
@@ -423,9 +521,18 @@ export function handleReconnect(playerId, roomId, ws) {
   const faction = factionFor(room, playerId);
   if (!faction) return false;
 
-  // Cancel forfeit timer
-  const timer = room.disconnectTimers.get(playerId);
-  if (timer) { clearTimeout(timer); room.disconnectTimers.delete(playerId); }
+  // Cancel takeover and forfeit timers
+  const takeover = room.takeoverTimers.get(playerId);
+  if (takeover) { clearTimeout(takeover); room.takeoverTimers.delete(playerId); }
+  const forfeit = room.disconnectTimers.get(playerId);
+  if (forfeit) { clearTimeout(forfeit); room.disconnectTimers.delete(playerId); }
+
+  // If an AI already took over this faction, don't restore — too late
+  const currentId = faction === 'hero' ? room.heroPlayerId : room.witchPlayerId;
+  if (currentId === 'ai') {
+    send(ws, { type: 'error', message: 'An AI took over your faction. The game continues without you.' });
+    return false;
+  }
 
   // Update websocket reference
   if (faction === 'hero')  room.heroWs  = ws;
