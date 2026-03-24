@@ -59,14 +59,8 @@ export class UIController {
       if (!this._selectedEntity) this._updateSidebar();
     });
 
-    // Scroll-to-zoom (desktop)
-    this.canvas.addEventListener('wheel', e => {
-      e.preventDefault();
-      const { x, y } = this._canvasPos(e);
-      const delta = e.deltaY > 0 ? 0.9 : 1.1;
-      this.renderer.setZoom(this.renderer.zoomLevel * delta, x, y);
-      this.onRedraw();
-    }, { passive: false });
+    // Scroll wheel is disabled over the canvas (zoom via buttons instead)
+    this.canvas.addEventListener('wheel', e => { e.preventDefault(); }, { passive: false });
 
     // Mouse drag-to-pan (desktop)
     this.canvas.addEventListener('mousedown', e => {
