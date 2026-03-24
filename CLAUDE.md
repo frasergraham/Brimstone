@@ -5,8 +5,8 @@
 Browser-based, turn-based hex-grid strategy game set in cursed colonial New England (Salem). Two asymmetric factions — **Hero** vs **Witch** — fight across a procedurally-generated map.
 
 **Win conditions:**
-- Hero: slay the Witch, or hold more Power Nodes at enough dawn/dusk scoring checkpoints (first to 3 cumulative score points).
-- Witch: slay the Hero, or seize all 3 Power Nodes, or accumulate 3 node-score points.
+- Hero: slay the Witch, or hold more Power Nodes at enough dawn/dusk scoring checkpoints (first to 4 cumulative score points).
+- Witch: slay the Hero, or seize all 3 Power Nodes, or accumulate 4 node-score points.
 
 **Game modes:** Human vs AI, Two Players, AI vs AI auto-play.
 
@@ -307,7 +307,7 @@ Active when any side is AI-controlled. Hero-side sight: 3 in DAY, 2 in DAWN/DUSK
 Hero ends turn in INN/CHURCH: +3 HP. Any other building: +1 HP. Power Node: +1 HP (including NIGHT).
 
 ### Node Scoring
-Each dawn and dusk: whoever holds more nodes scores 1 point. Sweep all 3 at any checkpoint = instant win. First to 3 cumulative points wins.
+Each dawn and dusk: whoever holds more nodes scores 1 point. Sweep all 3 at any checkpoint = instant win. First to 4 cumulative points wins.
 
 ---
 

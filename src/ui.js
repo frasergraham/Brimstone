@@ -1143,7 +1143,7 @@ export class UIController {
     if (!el) return;
     const state = this.state;
 
-    let html = '';
+    let nodeDots = '';
     let witchCount = 0, heroCount = 0;
     for (const obj of state.witchObjectives) {
       const witchHere = state.entities.find(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row);
@@ -1152,9 +1152,21 @@ export class UIController {
       if (witchHere)      { cls = 'witch'; witchCount++; }
       else if (heroHere)  { cls = 'hero';  heroCount++;  }
       else                { cls = 'neutral'; }
-      html += `<span class="node-dot ${cls}" title="${obj.label}"></span>`;
+      nodeDots += `<span class="node-dot ${cls}" title="${obj.label}"></span>`;
     }
-    el.innerHTML = html;
+
+    const score     = state.nodeScore ?? { hero: 0, witch: 0 };
+    const scoreMax  = 4;
+    const heroPips  = Array.from({ length: scoreMax }, (_, i) =>
+      `<span class="score-pip hero${i < score.hero ? ' filled' : ''}"></span>`).join('');
+    const witchPips = Array.from({ length: scoreMax }, (_, i) =>
+      `<span class="score-pip witch${i < score.witch ? ' filled' : ''}"></span>`).join('');
+
+    el.innerHTML =
+      `<span class="score-track hero-track" title="Hero score: ${score.hero}/4">${heroPips}</span>` +
+      `<span class="node-dots-group">${nodeDots}</span>` +
+      `<span class="score-track witch-track" title="Witch score: ${score.witch}/4">${witchPips}</span>`;
+
     // Flash a subtle warning when one side holds all nodes
     el.title = witchCount === 3 ? '⚠ Witch holds all nodes!'
              : heroCount  === 3 ? '★ Hero holds all nodes!'
