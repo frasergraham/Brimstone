@@ -49,6 +49,7 @@ export const MAP_SIZES = {
     nodeCount: 2,
     survivorCounts: { buildings: 9, terrain: 2 },
     bridgeMax: 2,
+    minBridges: 1,
   },
   standard: {
     label: 'Standard (13×11)',
@@ -63,6 +64,7 @@ export const MAP_SIZES = {
     nodeCount: 3,
     survivorCounts: { buildings: 13, terrain: 2 },
     bridgeMax: 4,
+    minBridges: 2,
   },
   regional: {
     label: 'Regional (17×13)',
@@ -78,6 +80,7 @@ export const MAP_SIZES = {
     nodeCount: 3,
     survivorCounts: { buildings: 16, terrain: 4 },
     bridgeMax: 5,
+    minBridges: 2,
   },
   campaign: {
     label: 'Campaign (21×15)',
@@ -94,6 +97,7 @@ export const MAP_SIZES = {
     nodeCount: 3,
     survivorCounts: { buildings: 20, terrain: 5 },
     bridgeMax: 6,
+    minBridges: 3,
   },
 };
 
@@ -204,6 +208,51 @@ function _pickCornerBuildings(rand, tiles) {
   if (inn)  result.push({ col: inn.col,  row: inn.row,  building: BuildingType.INN });
   if (grav) result.push({ col: grav.col, row: grav.row, building: BuildingType.GRAVEYARD });
   return result;
+}
+
+// Build a row→col map from the generated river path (captured before tiles are mutated).
+function _buildRiverMap(riverPath) {
+  const m = new Map();
+  for (const { col, row } of riverPath) m.set(row, col);
+  return m;
+}
+
+// Which side of the river is a hex on? 'left' (west) or 'right' (east).
+// Hexes that share the exact river column are treated as 'right' (consistent tiebreak).
+function _riverSide(col, row, riverMap) {
+  const rc = riverMap.get(row);
+  return (rc === undefined || col < rc) ? 'left' : 'right';
+}
+
+// Like _pickSpread but guarantees at least one node on each side of the river
+// when count >= 2 and both sides have valid candidates.
+function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, riverMap) {
+  const left = [], right = [];
+  for (const [k, t] of tiles) {
+    if (t.type !== TileType.GRASS) continue;
+    if (forbiddenKeys.has(k)) continue;
+    if (t.col < 1 || t.col > MAP_COLS - 2 || t.row < 1 || t.row > MAP_ROWS - 2) continue;
+    (_riverSide(t.col, t.row, riverMap) === 'left' ? left : right).push({ col: t.col, row: t.row });
+  }
+  _shuffle(left, rand);
+  _shuffle(right, rand);
+
+  const placed = [];
+  const ok = c => !placed.some(p => hexDistance(p.col, p.row, c.col, c.row) < minDist);
+
+  if (count >= 2 && left.length > 0 && right.length > 0) {
+    const l = left.find(ok);  if (l) placed.push(l);
+    const r = right.find(ok); if (r) placed.push(r);
+  }
+
+  const rest = _shuffle([...left, ...right], rand);
+  for (const c of rest) {
+    if (placed.length >= count) break;
+    if (!placed.some(p => p.col === c.col && p.row === c.row) && ok(c)) placed.push(c);
+  }
+
+  while (placed.length < count) placed.push({ col: 1, row: 1 });
+  return placed.slice(0, count);
 }
 
 // Place one village's buildings in a compact cluster around a center hex.
@@ -327,8 +376,10 @@ export function generateMap(seed = Date.now(), mapSize = 'standard') {
     }
   }
 
-  // 2. Carve meandering river
-  for (const { col, row } of _generateRiver(rand)) {
+  // 2. Carve meandering river; capture path to build a row→col lookup for later checks.
+  const riverPath = _generateRiver(rand);
+  const riverMap  = _buildRiverMap(riverPath);
+  for (const { col, row } of riverPath) {
     const t = tiles.get(hexKey(col, row));
     if (t) t.type = TileType.RIVER;
   }
@@ -375,6 +426,44 @@ export function generateMap(seed = Date.now(), mapSize = 'standard') {
         parent[find(i)] = find(j);
         mstEdges.push({ from: buildingPlacements[i], to: buildingPlacements[j] });
         if (mstEdges.length === n - 1) break;
+      }
+    }
+  }
+
+  // Guarantee minimum river crossings. The MST might route all buildings through a
+  // single crossing if they happen to cluster on one side. Count how many MST edges
+  // span opposite sides; if fewer than minBridges, inject the closest unused cross-
+  // river building pairs so their BFS roads will create additional bridge tiles.
+  {
+    const side = (col, row) => _riverSide(col, row, riverMap);
+    const crossCount = mstEdges.filter(e =>
+      side(e.from.col, e.from.row) !== side(e.to.col, e.to.row)
+    ).length;
+
+    if (crossCount < cfg.minBridges) {
+      const leftB  = buildingPlacements.filter(b => side(b.col, b.row) === 'left');
+      const rightB = buildingPlacements.filter(b => side(b.col, b.row) === 'right');
+      const extra  = [];
+      for (const l of leftB) {
+        for (const r of rightB) {
+          if (mstEdges.some(e => (e.from === l && e.to === r) || (e.from === r && e.to === l))) continue;
+          extra.push({ from: l, to: r, d: hexDistance(l.col, l.row, r.col, r.row) });
+        }
+      }
+      // Sort by distance and also spread crossing rows: prefer pairs whose mid-row
+      // differs from already-chosen crossings by at least 2 rows.
+      extra.sort((a, b) => a.d - b.d);
+      const chosen = [];
+      for (const e of extra) {
+        if (chosen.length >= cfg.minBridges - crossCount) break;
+        const midRow = (e.from.row + e.to.row) / 2;
+        const tooClose = chosen.some(c => Math.abs((c.from.row + c.to.row) / 2 - midRow) < 2);
+        if (!tooClose) { chosen.push(e); mstEdges.push(e); }
+      }
+      // If spread check blocked all, just add the closest remaining pairs
+      for (const e of extra) {
+        if (mstEdges.filter(me => side(me.from.col, me.from.row) !== side(me.to.col, me.to.row)).length >= cfg.minBridges) break;
+        if (!mstEdges.includes(e)) mstEdges.push(e);
       }
     }
   }
@@ -435,11 +524,9 @@ export function generateMap(seed = Date.now(), mapSize = 'standard') {
     }
   }
 
-  // 6. Place witch objectives — well-spread positions not overlapping buildings
+  // 6. Place witch objectives — well-spread, guaranteed across both sides of the river
   const buildingKeys = new Set(buildingPlacements.map(b => hexKey(b.col, b.row)));
-  const objPositions = _pickSpread(rand, tiles, cfg.nodeCount, 4, buildingKeys);
-  // Pad if not enough positions found
-  while (objPositions.length < cfg.nodeCount) objPositions.push({ col: 1, row: 1 });
+  const objPositions = _pickNodesAcrossRiver(rand, tiles, cfg.nodeCount, 4, buildingKeys, riverMap);
   const witchObjectives = objPositions.map((pos, i) => ({
     col: pos.col, row: pos.row, label: WITCH_OBJECTIVE_LABELS[i] ?? `Power Node ${i + 1}`,
   }));
