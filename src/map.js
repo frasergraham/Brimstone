@@ -7,57 +7,54 @@ const WITCH_OBJECTIVE_LABELS = [
   'Ancient Altar', 'Dark Grove', 'Cursed Crossroads', 'Forgotten Hollow',
 ];
 
+// ── Village archetypes ────────────────────────────────────────────────────────
+// Each entry defines a thematic cluster of buildings placed together.
+// INN and GRAVEYARD are always placed separately in spawn corners.
+// Building order matters: the first entry in each list is placed closest to the
+// village center, giving key buildings (town hall, church) prime position.
+const VILLAGE_TEMPLATES = {
+  market:    [BuildingType.TOWN_HALL,  BuildingType.BLACKSMITH, BuildingType.STABLE,
+              BuildingType.HOUSE,      BuildingType.HOUSE,      BuildingType.HOUSE],
+  parish:    [BuildingType.CHURCH,     BuildingType.APOTHECARY, BuildingType.HOUSE,
+              BuildingType.HOUSE,      BuildingType.HOUSE],
+  harbor:    [BuildingType.DOCK,       BuildingType.MILL,       BuildingType.STOREHOUSE,
+              BuildingType.HOUSE,      BuildingType.HOUSE],
+  garrison:  [BuildingType.WATCHTOWER, BuildingType.STOREHOUSE, BuildingType.HOUSE,
+              BuildingType.HOUSE],
+  farmstead: [BuildingType.BARN,       BuildingType.BARN,       BuildingType.STABLE,
+              BuildingType.HOUSE,      BuildingType.HOUSE],
+};
+
 // ── Map size presets ─────────────────────────────────────────────────────────
-// Each preset defines grid dimensions plus all size-dependent generation params.
-// buildingTypes: extra buildings placed by _clusteredBuildingPlacements
-//   (INN + GRAVEYARD are always placed separately in opposite corners)
-// forestSeeds: starting positions for cluster growth
-// nodeCount: number of witch power-node objectives
-// survivorCounts: { buildings, terrain } — tiles flagged hiddenSurvivor=true
-// clusterChance: probability of trying to cluster near an existing building
-// bridgeMax: max river-crossing bridges
+// villages: ordered list of VILLAGE_TEMPLATES keys to generate (shuffled per seed).
+//   'market' and 'parish' appear in every size — they hold the gameplay-critical
+//   CHURCH, APOTHECARY, TOWN_HALL, BLACKSMITH buildings.
+// minVillageDist: minimum hex distance between village centers.
+// forestSeeds: starting positions for cluster growth.
+// nodeCount: number of witch power-node objectives.
+// survivorCounts: { buildings, terrain } — tiles flagged hiddenSurvivor=true.
+// bridgeMax: max river-crossing bridges.
 
 export const MAP_SIZES = {
   skirmish: {
     label: 'Skirmish (9×9)',
     cols: 9, rows: 9,
-    buildingTypes: [
-      BuildingType.TOWN_HALL,
-      BuildingType.CHURCH,
-      BuildingType.BLACKSMITH,
-      BuildingType.APOTHECARY,
-      BuildingType.BARN,
-      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
-    ],
+    villages: ['market', 'parish'],
+    minVillageDist: 5,
     forestSeeds: [
       {col:0,row:0},{col:1,row:1},{col:7,row:1},{col:8,row:0},
       {col:8,row:3},{col:0,row:4},{col:1,row:7},{col:8,row:6},
       {col:4,row:2},{col:5,row:6},
     ],
     nodeCount: 2,
-    survivorCounts: { buildings: 5, terrain: 2 },
-    clusterChance: 0.55,
+    survivorCounts: { buildings: 9, terrain: 2 },
     bridgeMax: 2,
   },
   standard: {
     label: 'Standard (13×11)',
     cols: 13, rows: 11,
-    buildingTypes: [
-      BuildingType.TOWN_HALL,
-      BuildingType.CHURCH,
-      BuildingType.BLACKSMITH,
-      BuildingType.MILL,
-      BuildingType.DOCK,
-      BuildingType.BARN, BuildingType.BARN,
-      BuildingType.WATCHTOWER,
-      BuildingType.APOTHECARY,
-      BuildingType.STOREHOUSE,
-      BuildingType.STABLE,
-      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
-      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
-      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
-      BuildingType.HOUSE, BuildingType.HOUSE,
-    ],
+    villages: ['market', 'parish', 'harbor'],
+    minVillageDist: 6,
     forestSeeds: [
       {col:0,row:0},{col:1,row:1},{col:11,row:1},{col:12,row:0},
       {col:12,row:4},{col:0,row:6},{col:1,row:9},{col:12,row:8},
@@ -65,29 +62,13 @@ export const MAP_SIZES = {
     ],
     nodeCount: 3,
     survivorCounts: { buildings: 13, terrain: 2 },
-    clusterChance: 0.65,
     bridgeMax: 4,
   },
   regional: {
     label: 'Regional (17×13)',
     cols: 17, rows: 13,
-    buildingTypes: [
-      BuildingType.TOWN_HALL,
-      BuildingType.CHURCH,
-      BuildingType.BLACKSMITH,
-      BuildingType.MILL,
-      BuildingType.DOCK,
-      BuildingType.BARN, BuildingType.BARN, BuildingType.BARN,
-      BuildingType.WATCHTOWER, BuildingType.WATCHTOWER,
-      BuildingType.APOTHECARY,
-      BuildingType.STOREHOUSE,
-      BuildingType.STABLE, BuildingType.STABLE,
-      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
-      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
-      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
-      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
-      BuildingType.HOUSE, BuildingType.HOUSE,
-    ],
+    villages: ['market', 'parish', 'harbor', 'garrison'],
+    minVillageDist: 6,
     forestSeeds: [
       {col:0,row:0},{col:1,row:1},{col:15,row:1},{col:16,row:0},
       {col:16,row:4},{col:0,row:7},{col:1,row:11},{col:16,row:9},
@@ -96,28 +77,13 @@ export const MAP_SIZES = {
     ],
     nodeCount: 3,
     survivorCounts: { buildings: 16, terrain: 4 },
-    clusterChance: 0.80,
     bridgeMax: 5,
   },
   campaign: {
     label: 'Campaign (21×15)',
     cols: 21, rows: 15,
-    buildingTypes: [
-      BuildingType.TOWN_HALL, BuildingType.TOWN_HALL,
-      BuildingType.CHURCH, BuildingType.CHURCH,
-      BuildingType.BLACKSMITH, BuildingType.BLACKSMITH,
-      BuildingType.MILL,
-      BuildingType.DOCK, BuildingType.DOCK,
-      BuildingType.BARN, BuildingType.BARN, BuildingType.BARN, BuildingType.BARN,
-      BuildingType.WATCHTOWER, BuildingType.WATCHTOWER, BuildingType.WATCHTOWER,
-      BuildingType.APOTHECARY, BuildingType.APOTHECARY,
-      BuildingType.STOREHOUSE, BuildingType.STOREHOUSE,
-      BuildingType.STABLE, BuildingType.STABLE,
-      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
-      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
-      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
-      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
-    ],
+    villages: ['market', 'parish', 'harbor', 'garrison', 'farmstead'],
+    minVillageDist: 7,
     forestSeeds: [
       {col:0,row:0},{col:1,row:1},{col:19,row:1},{col:20,row:0},
       {col:20,row:5},{col:0,row:8},{col:1,row:13},{col:20,row:11},
@@ -127,7 +93,6 @@ export const MAP_SIZES = {
     ],
     nodeCount: 3,
     survivorCounts: { buildings: 20, terrain: 5 },
-    clusterChance: 0.85,
     bridgeMax: 6,
   },
 };
@@ -241,60 +206,79 @@ function _pickCornerBuildings(rand, tiles) {
   return result;
 }
 
-// Clustered building placement: buildings tend to group into hamlets of 2–5.
-// clusterChance controls how often a new building tries to settle near an
-// existing one; MIN_CLUSTER_DIST prevents adjacent stacking within a cluster;
-// MIN_SPREAD_DIST ensures isolated buildings aren't too close to anything.
-function _clusteredBuildingPlacements(rand, tiles, buildingTypes, clusterChance, reservedKeys = new Set()) {
-  const CLUSTER_CHANCE    = clusterChance; // probability of trying to cluster near existing
-  const CLUSTER_RADIUS    = 3;    // max hexes away to consider "same cluster"
-  const MIN_CLUSTER_DIST  = 2;    // min separation within a cluster
-  const MIN_SPREAD_DIST   = 4;    // min separation for isolated placement
+// Place one village's buildings in a compact cluster around a center hex.
+// Buildings are sorted closest-first (with seeded random tiebreaking) and
+// placed with MIN_SEP gaps so the result reads as a dense but walkable hamlet.
+function _placeVillageBuildings(rand, tiles, centerCol, centerRow, buildings, usedKeys) {
+  const RADIUS  = 3; // max hex distance from village center
+  const MIN_SEP = 2; // min separation between any two buildings in this village
 
-  const placements = [];
-  const usedKeys = new Set(reservedKeys);
+  const candidates = [];
+  for (const [, t] of tiles) {
+    if (t.type !== TileType.GRASS) continue;
+    const k = hexKey(t.col, t.row);
+    if (usedKeys.has(k)) continue;
+    const dist = hexDistance(centerCol, centerRow, t.col, t.row);
+    if (dist >= 0 && dist <= RADIUS) candidates.push({ col: t.col, row: t.row, dist });
+  }
+  // Shuffle first so equal-distance tiles are randomly ordered, then stable-sort by distance
+  _shuffle(candidates, rand);
+  candidates.sort((a, b) => a.dist - b.dist);
 
-  const grassCandidates = () => {
-    const out = [];
-    for (const [k, t] of tiles) {
-      if (t.type !== TileType.GRASS) continue;
+  const placed = [];
+  for (const building of buildings) {
+    for (const c of candidates) {
+      const k = hexKey(c.col, c.row);
       if (usedKeys.has(k)) continue;
-      if (t.col < 1 || t.col > MAP_COLS - 2 || t.row < 1 || t.row > MAP_ROWS - 2) continue;
-      out.push({ col: t.col, row: t.row });
-    }
-    return _shuffle(out, rand);
-  };
-
-  for (const building of buildingTypes) {
-    const candidates = grassCandidates();
-
-    let placed = false;
-
-    // Try to cluster near an existing building
-    if (placements.length > 0 && rand() < CLUSTER_CHANCE) {
-      const near = candidates.filter(c =>
-        placements.some(p => hexDistance(p.col, p.row, c.col, c.row) <= CLUSTER_RADIUS) &&
-        !placements.some(p => hexDistance(p.col, p.row, c.col, c.row) < MIN_CLUSTER_DIST)
-      );
-      if (near.length > 0) {
-        placements.push({ col: near[0].col, row: near[0].row, building });
-        usedKeys.add(hexKey(near[0].col, near[0].row));
-        placed = true;
-      }
-    }
-
-    // Fall back to spread placement
-    if (!placed) {
-      for (const c of candidates) {
-        if (!placements.some(p => hexDistance(p.col, p.row, c.col, c.row) < MIN_SPREAD_DIST)) {
-          placements.push({ col: c.col, row: c.row, building });
-          usedKeys.add(hexKey(c.col, c.row));
-          break;
-        }
-      }
+      if (placed.some(p => hexDistance(p.col, p.row, c.col, c.row) < MIN_SEP)) continue;
+      placed.push({ col: c.col, row: c.row, building });
+      usedKeys.add(k);
+      break;
     }
   }
-  return placements;
+  return placed;
+}
+
+// Pick N well-spread village center positions then fill each from its archetype.
+// Village centers are kept minVillageDist apart from each other and from the
+// reserved corner buildings (INN / GRAVEYARD).
+function _generateVillages(rand, tiles, villageNames, minVillageDist, reservedKeys) {
+  const usedKeys = new Set(reservedKeys);
+  const reservedPositions = [...reservedKeys].map(k => {
+    const [col, row] = k.split(',').map(Number);
+    return { col, row };
+  });
+
+  // Collect eligible center candidates away from map edges
+  const centerCandidates = [];
+  for (const [, t] of tiles) {
+    if (t.type !== TileType.GRASS) continue;
+    if (t.col < 2 || t.col > MAP_COLS - 3 || t.row < 2 || t.row > MAP_ROWS - 3) continue;
+    centerCandidates.push({ col: t.col, row: t.row });
+  }
+  _shuffle(centerCandidates, rand);
+
+  const minToCorner = Math.ceil(minVillageDist * 0.75); // slightly smaller buffer to corners
+  const centers = [];
+  for (const c of centerCandidates) {
+    if (centers.length >= villageNames.length) break;
+    const tooClose =
+      centers.some(p => hexDistance(p.col, p.row, c.col, c.row) < minVillageDist) ||
+      reservedPositions.some(p => hexDistance(p.col, p.row, c.col, c.row) < minToCorner);
+    if (!tooClose) centers.push(c);
+  }
+
+  // Shuffle template order per seed so village positions vary across seeds
+  const shuffledNames = _shuffle([...villageNames], rand);
+  const allPlacements = [];
+  for (let i = 0; i < centers.length; i++) {
+    const name = shuffledNames[i] ?? shuffledNames[0];
+    const buildings = VILLAGE_TEMPLATES[name];
+    if (!buildings) continue;
+    const placed = _placeVillageBuildings(rand, tiles, centers[i].col, centers[i].row, buildings, usedKeys);
+    allPlacements.push(...placed);
+  }
+  return allPlacements;
 }
 
 // Generate a meandering river path: exactly one tile per row (row 0 → MAP_ROWS-1).
@@ -354,7 +338,7 @@ export function generateMap(seed = Date.now(), mapSize = 'standard') {
   const cornerKeys         = new Set(cornerPlacements.map(b => hexKey(b.col, b.row)));
   const buildingPlacements = [
     ...cornerPlacements,
-    ..._clusteredBuildingPlacements(rand, tiles, cfg.buildingTypes, cfg.clusterChance, cornerKeys),
+    ..._generateVillages(rand, tiles, cfg.villages, cfg.minVillageDist, cornerKeys),
   ];
   for (const { col, row, building } of buildingPlacements) {
     const t = tiles.get(hexKey(col, row));
