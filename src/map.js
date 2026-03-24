@@ -259,8 +259,8 @@ function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, river
 // Buildings are sorted closest-first (with seeded random tiebreaking) and
 // placed with MIN_SEP gaps so the result reads as a dense but walkable hamlet.
 function _placeVillageBuildings(rand, tiles, centerCol, centerRow, buildings, usedKeys) {
-  const RADIUS  = 3; // max hex distance from village center
-  const MIN_SEP = 2; // min separation between any two buildings in this village
+  const RADIUS  = 4; // max hex distance from village center
+  const MIN_SEP = 3; // min separation between any two buildings in this village
 
   const candidates = [];
   for (const [, t] of tiles) {
