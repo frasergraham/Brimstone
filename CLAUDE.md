@@ -84,6 +84,38 @@ scripts/
 
 ---
 
+## Online vs Offline Modes
+
+The game runs in two distinct modes that share core logic but have separate orchestration layers. **Changes to one often require parallel changes in the other.**
+
+### Shared code (affects both modes equally)
+| File | What it governs |
+|------|----------------|
+| `src/game.js` | State lifecycle, phase cycle, scoring, `endRound()` |
+| `src/actions.js` | All action validation and execution — the single source of truth for rules |
+| `src/entities.js` | Entity stats, combat resolution |
+| `src/planner.js` | Plan validation, ghost-state projection |
+| `server/resolver.js` | Lockstep plan resolution — imported by both `src/main.js` and `server/lobby.js` |
+| `src/ai.js` | AI plan generation — imported by both `src/main.js` (offline) and `server/lobby.js` (online) |
+
+### Offline mode (`src/main.js` orchestrates)
+- Everything runs in the browser: state, AI, resolution, animation.
+- Flow: `_startLocalPlanningPhase` → human submits → AI generates → `_runLocalResolution` → `state.endRound()` → repeat.
+- No serialization — state object is passed directly to all functions.
+
+### Online mode (`server/lobby.js` orchestrates)
+- Server drives the planning phase, resolution, and AI; client renders and submits plans.
+- State is serialized for network transmission via `server/state-sync.js`.
+- Flow: `_startPlanningPhase` (server) → clients submit plans → `_executeResolution` (server) → broadcast `resolutionComplete { steps, finalState }` → clients animate and apply `finalState`.
+
+### Parity rules
+- **Rule changes** (combat formula, action costs, phase effects, scoring): edit `src/actions.js` or `src/game.js` — automatically applies to both modes. Verify `server/resolver.js` handles any new result shapes.
+- **New state fields**: must also be added to `server/state-sync.js` serialization, or online mode will silently drop them.
+- **Planning flow changes** (phase triggers, timeout behavior, budget logic): `src/main.js` (offline) and `server/lobby.js` (online) are the two orchestration layers — they must stay in sync manually.
+- **UI-only changes** (`src/ui.js`) affect both modes' client display but not server logic.
+
+---
+
 ## Simultaneous-Turn Planning System
 
 The game uses a **simultaneous planning model** instead of sequential alternating turns. Each round:
@@ -291,6 +323,39 @@ Seeded, procedural. Sequence:
 7. 3 Power Nodes (minimum separation, no buildings).
 8. Hero starts at INN, Witch at GRAVEYARD.
 9. 12 hidden survivors (10 in buildings, 2 on terrain) flagged as `tile.hiddenSurvivor = true`.
+
+---
+
+## Map Size, Balance & Game Length
+
+### Map size rationale
+The 13×11 grid (143 tiles) is intentionally compact. Design goals:
+
+- **Early contact:** factions start in opposite corners (~10–14 hex distance). With normal movement, they can reach mid-map by round 3–5, keeping early exploration meaningful without a long setup phase.
+- **Three contested zones:** the river acts as a soft dividing line; one node typically sits near each starting corner with a third in the mid-map, creating a natural three-way tug-of-war.
+- **Resource density:** 12 survivors + loot across 143 tiles keeps the economy active without making either side resource-starved or overwhelmed.
+
+If you resize the map, recalibrate: survivor count, node count, bridge count, and forest seed count proportionally. The river column range (`cols 2–10`) should also be adjusted to keep it centered.
+
+### Target game length
+A balanced game should last **15–25 rounds** (~2–3 full 8-round cycles). This gives:
+- 4–6 scoring checkpoints (dawn + dusk per cycle), making the node track meaningful.
+- Enough time for both sides to recruit survivors/minions and hit 2–3 resource runs before a decisive engagement.
+- Typical kill-win games end around round 10–18; node-score wins around round 16–24.
+
+Games consistently ending before round 10 suggest the map is too small, starting positions too close, or combat too lethal. Games running past round 30 suggest the map is too large, healing too strong, or win thresholds too high.
+
+### Balance targets (measured via `scripts/headless.js`)
+Run `node scripts/headless.js 1000` and check the output for:
+
+| Metric | Healthy range | Notes |
+|--------|---------------|-------|
+| Hero win rate | 45–55% | Kill + node wins combined |
+| Kill-win share | 40–60% of wins | Too high = map is a deathmatch; too low = node rushing dominant |
+| Average game length | 15–25 rounds | See above |
+| Witch node-sweep wins | < 20% of witch wins | Instant-sweep wins indicate node density is too easy to exploit |
+
+Use `node scripts/combat-sim.js` to verify hit/crush/counter rates after any stat or formula changes. Expected baseline: ~45–55% hit rate, ~10–15% crush rate, ~8–12% counter rate in an even matchup.
 
 ---
 
