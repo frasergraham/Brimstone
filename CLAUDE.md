@@ -14,13 +14,6 @@ No build step. No dependencies. Pure vanilla JS ES modules, HTML5 Canvas, plain 
 
 ---
 
-## Git
-
-**Active branch:** `claude/game-state-serialization-gOC2L`
-**Push command:** `git push -u origin claude/game-state-serialization-gOC2L`
-
----
-
 ## Run Commands
 
 ```bash
