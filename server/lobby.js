@@ -676,7 +676,7 @@ export function resumeGame(playerId, ws, roomId) {
   });
 
   broadcastState(room, 'resume');
-  setTimeout(() => _startPlanningPhase(room), 500);
+  _startPlanningPhase(room);
 }
 
 // ── Internal action dispatcher ────────────────────────────────────────────────
