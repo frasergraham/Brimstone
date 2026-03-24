@@ -50,15 +50,17 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
   redraw();
 
   requestAnimationFrame(() => {
-    const wrapper = document.getElementById('canvas-wrapper');
-    if (!wrapper) return;
-    const hero = state.hero;
-    const { x, y } = hexToPixel(hero.col, hero.row, renderer.hexSize);
-    const cx = x + renderer._padX;
-    const cy = y + renderer._padY;
-    renderer._panX = wrapper.clientWidth  / 2 - cx;
-    renderer._panY = wrapper.clientHeight / 2 - cy;
-    renderer._clampPan();
+    // Resize now that game-screen layout is complete and the canvas has real dimensions.
+    renderer.resize();
+    // Re-frame starting units with correct dimensions (overrides the one queued in
+    // enterPlanningMode which fired before layout was resolved).
+    if (!_autoplay) {
+      const humanFaction = !state.heroIsAI ? 'hero' : 'witch';
+      const startUnits = state.entities.filter(e => e.alive && e.owner === humanFaction);
+      if (startUnits.length > 0) {
+        renderer.frameHexes(startUnits, { maxZoom: 1.8, paddingHexes: 2.5, duration: 550 });
+      }
+    }
     redraw();
   });
 
