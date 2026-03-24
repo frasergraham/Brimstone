@@ -30,29 +30,48 @@ function hasEnemy(state, actor, col, row) {
   return state.entities.some(e => e.alive && e.owner !== actor.owner && e.col === col && e.row === row);
 }
 
-function getReachableHexes(state, actor, range) {
-  const visited = new Set([hexKey(actor.col, actor.row)]);
-  const reachable = [];
-  let frontier = [{ col: actor.col, row: actor.row }];
-  for (let step = 0; step < range; step++) {
-    const next = [];
-    for (const pos of frontier) {
-      for (const n of getNeighbors(pos.col, pos.row)) {
-        const k = hexKey(n.col, n.row);
-        if (visited.has(k)) continue;
-        const nt = tile(state, n.col, n.row);
-        if (!nt || nt.type === TileType.RIVER) continue;
-        if (hasEnemy(state, actor, n.col, n.row)) continue;
-        // Fortified hexes occupied by enemies cannot be entered or passed through.
-        if (nt.fortifyLevel > 0 && state.entities.some(
-          e => e.alive && e.owner !== actor.owner && e.col === n.col && e.row === n.row
-        )) continue;
-        visited.add(k);
-        reachable.push({ col: n.col, row: n.row });
-        next.push({ col: n.col, row: n.row });
+// Cost-based movement: road/bridge/building tiles cost 1, all other passable
+// tiles cost 2.  Budget = range * 2, so:
+//   range 1 (no horse) → 1 off-road tile  OR  2 road tiles per action
+//   range 2 (horse)    → 2 off-road tiles OR  4 road tiles per action
+// posOverride lets the planner query reachability from a projected position
+// rather than the entity's current position.
+export function getReachableHexes(state, actor, range, posOverride = null) {
+  const budget   = range * 2;
+  const startCol = posOverride?.col ?? actor.col;
+  const startRow = posOverride?.row ?? actor.row;
+  const startK   = hexKey(startCol, startRow);
+  const dist     = new Map([[startK, 0]]);
+  // Sorted-array Dijkstra — grid is tiny (≤143 tiles).
+  const queue    = [{ col: startCol, row: startRow, c: 0 }];
+
+  while (queue.length) {
+    queue.sort((a, b) => a.c - b.c);
+    const { col, row, c } = queue.shift();
+    if (c > (dist.get(hexKey(col, row)) ?? Infinity)) continue;
+    for (const n of getNeighbors(col, row)) {
+      const nk = hexKey(n.col, n.row);
+      const nt = tile(state, n.col, n.row);
+      if (!nt || nt.type === TileType.RIVER) continue;
+      if (hasEnemy(state, actor, n.col, n.row)) continue;
+      if (nt.fortifyLevel > 0 && state.entities.some(
+        e => e.alive && e.owner !== actor.owner && e.col === n.col && e.row === n.row
+      )) continue;
+      const isRoadLike = nt.type === TileType.ROAD || nt.type === TileType.BRIDGE ||
+                         nt.type === TileType.BUILDING;
+      const nc = c + (isRoadLike ? 1 : 2);
+      if (nc <= budget && nc < (dist.get(nk) ?? Infinity)) {
+        dist.set(nk, nc);
+        queue.push({ col: n.col, row: n.row, c: nc });
       }
     }
-    frontier = next;
+  }
+
+  const reachable = [];
+  for (const [k, d] of dist) {
+    if (k === startK || d > budget) continue;
+    const [col, row] = k.split(',').map(Number);
+    reachable.push({ col, row });
   }
   return reachable;
 }
@@ -241,10 +260,10 @@ function pickSummonType(inv) {
 export function executeMove(state, actor, targetCol, targetRow) {
   const log = [];
 
-  // Adjacency check — range 2 with horse, otherwise 1.
+  // Reachability check — road tiles cost half, so roads extend effective range.
   const hasHorse = actor.owner === 'hero' && (actor.items?.['horse'] || 0) > 0;
-  const maxRange = hasHorse ? 2 : 1;
-  if (hexDistance(actor.col, actor.row, targetCol, targetRow) > maxRange)
+  const reachable = getReachableHexes(state, actor, hasHorse ? 2 : 1);
+  if (!reachable.some(h => h.col === targetCol && h.row === targetRow))
     return { success: false, log: [`Cannot reach (${targetCol},${targetRow}) from current position.`] };
 
   const t = tile(state, targetCol, targetRow);
