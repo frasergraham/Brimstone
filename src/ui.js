@@ -94,6 +94,12 @@ export class UIController {
       this.renderer.resetView();
       this.onRedraw();
     });
+    document.getElementById('zoom-me')?.addEventListener('click', () => {
+      const faction = this._planFaction ?? (!this.state.heroIsAI ? 'hero' : 'witch');
+      const units   = this.state.entities.filter(e => e.alive && e.owner === faction);
+      if (units.length > 0) this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 400 });
+      this.onRedraw();
+    });
 
     // Touch: tap, drag-to-pan, pinch-to-zoom (mobile)
     this.canvas.addEventListener('touchstart', e => {
