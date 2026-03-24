@@ -16,8 +16,8 @@ No build step. No dependencies. Pure vanilla JS ES modules, HTML5 Canvas, plain 
 
 ## Git
 
-**Active branch:** `claude/hex-game-framework-3U13Q`
-**Push command:** `git push -u origin claude/hex-game-framework-3U13Q`
+**Active branch:** `claude/game-state-serialization-gOC2L`
+**Push command:** `git push -u origin claude/game-state-serialization-gOC2L`
 
 ---
 
@@ -53,10 +53,11 @@ src/
   planner.js        # PlanActionType enum, computeGhostState(), validatePlanAction()
 server/
   resolver.js       # resolvePlans() — lockstep resolution engine (no DOM/WebSocket)
-  lobby.js          # Matchmaking, room lifecycle, server-side AI, plan submission
-  state-sync.js     # serializeState() — snapshot for network transmission
+  lobby.js          # Matchmaking, room lifecycle, server-side AI, plan submission; resumeGame()
+  state-sync.js     # serializeState() + deserializeState() — snapshot for network/save
   auth.js           # Player auth / session tokens
-  db.js             # SQLite persistence
+  db.js             # SQLite persistence (players + game_saves tables)
+  saves.js          # upsertSave / deleteSave / getSave / getActiveSaves / pruneStaleAndIncompatibleSaves
   leaderboard.js    # Win/loss recording and ranking
 scripts/
   headless.js       # Headless AI-vs-AI runner (imports src/ directly, no DOM)
@@ -110,7 +111,7 @@ The game runs in two distinct modes that share core logic but have separate orch
 
 ### Parity rules
 - **Rule changes** (combat formula, action costs, phase effects, scoring): edit `src/actions.js` or `src/game.js` — automatically applies to both modes. Verify `server/resolver.js` handles any new result shapes.
-- **New state fields**: must also be added to `server/state-sync.js` serialization, or online mode will silently drop them.
+- **New state fields**: must also be added to `server/state-sync.js` serialization, or online mode will silently drop them. Also verify `deserializeState()` restores the field correctly, or resumed saves will lose it.
 - **Planning flow changes** (phase triggers, timeout behavior, budget logic): `src/main.js` (offline) and `server/lobby.js` (online) are the two orchestration layers — they must stay in sync manually.
 - **UI-only changes** (`src/ui.js`) affect both modes' client display but not server logic.
 
@@ -356,6 +357,65 @@ Run `node scripts/headless.js 1000` and check the output for:
 | Witch node-sweep wins | < 20% of witch wins | Instant-sweep wins indicate node density is too easy to exploit |
 
 Use `node scripts/combat-sim.js` to verify hit/crush/counter rates after any stat or formula changes. Expected baseline: ~45–55% hit rate, ~10–15% crush rate, ~8–12% counter rate in an even matchup.
+
+---
+
+## Save System (Online Mode)
+
+Online games are automatically persisted to SQLite after every round and can be resumed from the lobby.
+
+### Storage
+
+- **Database:** `data/brimstone.db` (override with `DB_PATH` env var)
+- **Table:** `game_saves`
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `room_id` | TEXT PK | UUID of the room |
+| `hero_player_id` | TEXT | Player UUID; `null` if AI-controlled |
+| `witch_player_id` | TEXT | Player UUID; `null` if AI-controlled |
+| `hero_name` / `witch_name` | TEXT | Display names |
+| `round` | INTEGER | Current round — shown in the resume UI |
+| `phase` | TEXT | `dawn` / `day` / `dusk` / `night` — shown in the resume UI |
+| `game_version` | TEXT | From `src/version.js` — used to reject incompatible saves |
+| `state_json` | TEXT | Full `serializeState()` snapshot as JSON |
+| `updated_at` | INTEGER | Unix timestamp — updated every round |
+| `created_at` | INTEGER | Unix timestamp — set on first insert |
+
+### Write / delete lifecycle
+
+- `upsertSave(roomId, heroPlayerId, witchPlayerId, heroName, witchName, serializedState)` — called in `server/lobby.js` after `_executeResolution()` each round.
+- `deleteSave(roomId)` — called when a game ends normally (`checkAndHandleGameOver`) or when a save is restored (`resumeGame` deletes the old row so the resumed game starts fresh under a new roomId).
+
+### Startup pruning
+
+`pruneStaleAndIncompatibleSaves(currentVersion)` runs once in `server.listen()` and deletes:
+- Any save with `updated_at` older than `SAVE_MAX_AGE_DAYS` (default **3 days**) — defined in `server/saves.js`.
+- Any save whose `game_version` does not match the running server version.
+
+### Serialization / deserialization
+
+`serializeState(state)` in `server/state-sync.js` produces a plain JSON-safe snapshot (tiles as array, `roadDirs` as array, entities as plain objects). Used for both network transmission and save storage.
+
+`deserializeState(snap)` reconstructs a live `GameState`:
+1. Calls `new GameState(witchIsAI, heroIsAI)` to get a properly-prototyped instance with all methods.
+2. Overwrites `state.tiles` (Map with `roadDirs` restored to Set), `state.entities` (real `Entity` instances via `Object.create(Entity.prototype)`), and all scalar fields from the snapshot.
+3. Calls `bumpEntityId(maxId)` (exported from `src/entities.js`) to advance the global ID counter past all restored entity IDs, preventing collisions with future summons/survivors.
+
+### Resume flow
+
+Client: **Play Online → Resume Game** fetches `GET /api/saves?token=<token>` and renders a card per save. Clicking **Resume** sends a `resumeSave { roomId }` WebSocket message.
+
+Server (`resumeGame` in `server/lobby.js`):
+1. Tries live reconnect first via `handleReconnect` (covers browser-refresh case where the room is still in memory).
+2. Loads the save row from DB; verifies the player is in it and the version matches.
+3. Calls `deserializeState(save.state)` to reconstruct the live `GameState`.
+4. Creates a new room via `createRoom`, injects the deserialized state, deletes the old save, attaches a fresh AI for the opponent faction.
+5. Sends `matchFound` (with `resumed: true`) then calls `_startPlanningPhase` — reusing the identical client flow as a normal game start, so no special client handling is needed.
+
+### Human-vs-human saves
+
+Not yet fully supported for two-player resumption. When a player resumes a save from a HvH game, the other slot is filled by a server AI. The resuming player's faction is preserved; the opponent becomes AI.
 
 ---
 
