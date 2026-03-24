@@ -165,6 +165,23 @@ export const ENTITY_COLOR = {
   [EntityType.IRON_GOLEM]: '#607D8B',
 };
 
+// Six shades per witch-unit type — cycled as units are created so each
+// individual unit gets a distinct arrow/circle colour on the plan overlay.
+const WITCH_UNIT_COLORS = {
+  [EntityType.ZOMBIE]: [
+    '#7c9a57', '#5c8a3c', '#91b268', '#4a7030', '#a8c97a', '#3d5c28',
+  ],
+  [EntityType.MINION]: [
+    '#c0392b', '#e74c3c', '#962419', '#ff6b5b', '#a93226', '#d45040',
+  ],
+  [EntityType.WOOD_GOLEM]: [
+    '#8B5E3C', '#a07248', '#6b4226', '#c49060', '#5c3317', '#b8804c',
+  ],
+  [EntityType.IRON_GOLEM]: [
+    '#607D8B', '#7a9bab', '#455a64', '#90a8b4', '#37474f', '#adc4cc',
+  ],
+};
+
 export class Entity {
   constructor(type, owner, col, row) {
     this.id    = `e${_nextId++}`;
@@ -328,18 +345,31 @@ export function resetRoster() {
   _usedRosterIndices.clear();
 }
 
+function _witchColor(type, entity) {
+  const palette = WITCH_UNIT_COLORS[type];
+  return palette[parseInt(entity.id.slice(1)) % palette.length];
+}
+
 export function createZombie(col, row) {
-  return new Entity(EntityType.ZOMBIE, 'witch', col, row);
+  const e = new Entity(EntityType.ZOMBIE, 'witch', col, row);
+  e.color = _witchColor(EntityType.ZOMBIE, e);
+  return e;
 }
 
 export function createMinion(col, row) {
-  return new Entity(EntityType.MINION, 'witch', col, row);
+  const e = new Entity(EntityType.MINION, 'witch', col, row);
+  e.color = _witchColor(EntityType.MINION, e);
+  return e;
 }
 
 export function createWoodGolem(col, row) {
-  return new Entity(EntityType.WOOD_GOLEM, 'witch', col, row);
+  const e = new Entity(EntityType.WOOD_GOLEM, 'witch', col, row);
+  e.color = _witchColor(EntityType.WOOD_GOLEM, e);
+  return e;
 }
 
 export function createIronGolem(col, row) {
-  return new Entity(EntityType.IRON_GOLEM, 'witch', col, row);
+  const e = new Entity(EntityType.IRON_GOLEM, 'witch', col, row);
+  e.color = _witchColor(EntityType.IRON_GOLEM, e);
+  return e;
 }
