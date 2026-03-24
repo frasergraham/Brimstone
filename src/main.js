@@ -290,6 +290,13 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         if (battleSnaps && showDialog) {
           const { actorSnap, targetSnap } = battleSnaps;
           renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
+          if (result?.killed) {
+            // Brief delay so the attack flash is visible before the death burst
+            setTimeout(() => {
+              const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
+              renderer.addDeathAnim(targetSnap.col, targetSnap.row, deadColor);
+            }, 350);
+          }
           redrawFn();
           await new Promise(resolve => {
             ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
@@ -297,7 +304,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
           hadBattle = true;
         }
       } else if (action.type === PlanActionType.SUMMON) {
-        renderer.addFlash(action.toCol, action.toRow, '☠', 'rgba(155,89,182,0.85)', 1200);
+        renderer.addSpawnAnim(action.toCol, action.toRow, '#b39ddb');
         hadBattle = true;
       }
     }

@@ -45,8 +45,11 @@ export class Renderer {
     this._panX     = 0;
     this._panY     = 0;
 
-    // Damage flash overlays: [{col, row, text, color, endTime}]
+    // Damage flash overlays: [{col, row, text, color, endTime, fontScale, textColor}]
     this._flashes = [];
+
+    // Death burst animations: [{col, row, color, startTime, duration}]
+    this._deathAnims = [];
 
     // Move animations: sliding entity icons
     this._moveAnims = [];
@@ -55,9 +58,25 @@ export class Renderer {
     this._resize();
   }
 
-  // Add a brief flash overlay on a hex (e.g. damage numbers)
-  addFlash(col, row, text, color = 'rgba(220,40,40,0.7)', durationMs = 1800) {
-    this._flashes.push({ col, row, text, color, startTime: Date.now(), endTime: Date.now() + durationMs });
+  // Add a brief flash overlay on a hex (e.g. damage numbers).
+  // fontScale: multiplier on hexSize for the text size (default 0.85).
+  // textColor: explicit rgba string for the rising number (defaults to a bright version of color).
+  addFlash(col, row, text, color = 'rgba(220,40,40,0.7)', durationMs = 1800, fontScale = 0.85, textColor = null) {
+    this._flashes.push({ col, row, text, color, startTime: Date.now(), endTime: Date.now() + durationMs, fontScale, textColor });
+    this._startAnimLoop();
+  }
+
+  /** Burst of expanding rings at a hex — used for unit death. */
+  addDeathAnim(col, row, color = '#ff4444') {
+    this._deathAnims.push({ col, row, color, startTime: Date.now(), duration: 600 });
+    this._startAnimLoop();
+  }
+
+  /** Sparkle animation at a hex — used for summon/spawn. */
+  addSpawnAnim(col, row, color = '#b39ddb') {
+    // Reuse flash with sparkle text and a short purple burst
+    this.addFlash(col, row, '✦', color, 900, 1.1, null);
+    this._deathAnims.push({ col, row, color, startTime: Date.now(), duration: 500, spawn: true });
     this._startAnimLoop();
   }
 
@@ -92,7 +111,8 @@ export class Renderer {
     const loop = () => {
       const now = Date.now();
       const alive = this._moveAnims.some(a => now < a.startTime + a.duration)
-                 || this._flashes.some(f => now < f.endTime);
+                 || this._flashes.some(f => now < f.endTime)
+                 || this._deathAnims.some(a => now < a.startTime + a.duration);
       this.draw();
       if (alive) {
         requestAnimationFrame(loop);
@@ -292,6 +312,9 @@ export class Renderer {
     // Damage flash overlays (night/day hazard animations)
     this._drawFlashes();
 
+    // Death burst / spawn sparkle rings
+    this._drawDeathAnims();
+
     // Sliding entity icons for move animations (opponent moves / own moves)
     this._drawMoveAnims();
 
@@ -327,12 +350,58 @@ export class Renderer {
       ctx.fill();
 
       // Floating damage text (rises upward as it fades)
-      const rise = (1 - t) * hs * 1.2;
-      ctx.fillStyle = `rgba(255,80,80,${t.toFixed(2)})`;
-      ctx.font      = `bold ${Math.floor(hs * 0.85)}px sans-serif`;
-      ctx.textAlign    = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(f.text, x, y - rise);
+      if (f.text) {
+        const rise = (1 - t) * hs * 1.4;
+        const tc = f.textColor ?? 'rgba(255,120,120,1)';
+        // Replace last alpha group in rgba(...) if present, otherwise append
+        ctx.fillStyle = tc.replace(/,\s*[\d.]+\)$/, `, ${t.toFixed(2)})`);
+        ctx.font         = `bold ${Math.floor(hs * (f.fontScale ?? 0.85))}px sans-serif`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(f.text, x, y - rise);
+      }
+    }
+  }
+
+  _drawDeathAnims() {
+    const ctx = this.ctx;
+    const hs  = this.hexSize;
+    const now = Date.now();
+    this._deathAnims = this._deathAnims.filter(a => now < a.startTime + a.duration);
+    for (const a of this._deathAnims) {
+      const t = (now - a.startTime) / a.duration; // 0→1
+      const { x, y } = this._toCanvas(a.col, a.row);
+
+      if (a.spawn) {
+        // Sparkle: 6 small dots radiating outward
+        const n = 6;
+        for (let i = 0; i < n; i++) {
+          const angle = (i / n) * Math.PI * 2;
+          const dist  = t * hs * 0.85;
+          const px    = x + Math.cos(angle) * dist;
+          const py    = y + Math.sin(angle) * dist;
+          const r     = hs * 0.08 * (1 - t);
+          ctx.globalAlpha = (1 - t) * 0.85;
+          ctx.beginPath();
+          ctx.arc(px, py, r, 0, Math.PI * 2);
+          ctx.fillStyle = a.color;
+          ctx.fill();
+        }
+      } else {
+        // Death burst: 2 expanding rings that fade out
+        for (let ring = 0; ring < 2; ring++) {
+          const rt = Math.min(1, t * 1.5 - ring * 0.3);
+          if (rt < 0) continue;
+          const radius = hs * 0.3 + rt * hs * 0.7;
+          ctx.globalAlpha = (1 - rt) * 0.7;
+          ctx.beginPath();
+          ctx.arc(x, y, radius, 0, Math.PI * 2);
+          ctx.strokeStyle = a.color;
+          ctx.lineWidth   = hs * 0.08 * (1 - rt);
+          ctx.stroke();
+        }
+      }
+      ctx.globalAlpha = 1;
     }
   }
 

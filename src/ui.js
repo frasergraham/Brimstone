@@ -286,6 +286,12 @@ export class UIController {
 
     // Show a brief phase-info toast so the player always knows current conditions.
     this._showPhaseToast(faction);
+
+    // If attrition just increased, show a blocking popup after the toast settles.
+    if (this.state.attritionChanged && this.state.attritionLevel > 0) {
+      this.state.attritionChanged = false; // consume the flag
+      setTimeout(() => this._showAttritionPopup(), 400);
+    }
   }
 
   /** Exit planning mode (called after resolution completes). */
@@ -365,7 +371,7 @@ export class UIController {
       [PlanActionType.BATTLE_HEX]:  '⚔',
       [PlanActionType.EXPLORE]:     '🔍',
       [PlanActionType.FORTIFY]:     '🪵',
-      [PlanActionType.SUMMON]:      '☠',
+      [PlanActionType.SUMMON]:      '✦',
       [PlanActionType.USE_ITEM]:    '🧪',
       [PlanActionType.EQUIP_WEAPON]:'⚔',
       [PlanActionType.USE_ABILITY]: '✦',
@@ -795,6 +801,14 @@ export class UIController {
         for (const msg of result.log) state.addLog(msg);
         if (result.success) state.spendAction(result.cost);
 
+        this.renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
+        if (result.killed) {
+          setTimeout(() => {
+            const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
+            this.renderer.addDeathAnim(targetSnap.col, targetSnap.row, deadColor);
+          }, 350);
+        }
+
         const canRematch = !result.killed && actor.alive && target.alive;
         this._showBattleDialog(actorSnap, targetSnap, result, afterBattle, canRematch ? doRematch : null);
       };
@@ -828,7 +842,10 @@ export class UIController {
       }
       const result = executeSummon(state, actor, hex.col, hex.row);
       for (const msg of result.log) state.addLog(msg);
-      if (result.success) state.spendAction(result.cost);
+      if (result.success) {
+        state.spendAction(result.cost);
+        this.renderer.addSpawnAnim(hex.col, hex.row, '#b39ddb');
+      }
       state.checkVictory();
       if (actor.alive) { this._selectEntity(actor); }
       else this._clearSelection();
@@ -1288,10 +1305,18 @@ export class UIController {
     this._lastHazardKey = hazardKey;
 
     for (const pos of nightPositions) {
-      this.renderer.addFlash(pos.col, pos.row, '-1', 'rgba(80,0,160,0.8)', 2000);
+      if (pos.isFort) {
+        // Fort degradation: subtle grey flash, small number
+        this.renderer.addFlash(pos.col, pos.row, '🏰-1', 'rgba(120,120,140,0.5)', 1600, 0.55, 'rgba(180,180,200,1)');
+      } else {
+        // Unit damage: big bold number
+        const dmg = pos.dmg || 1;
+        this.renderer.addFlash(pos.col, pos.row, `-${dmg}`, 'rgba(80,0,160,0.6)', 2200, 1.4, 'rgba(210,140,255,1)');
+      }
     }
     for (const pos of dayPositions) {
-      this.renderer.addFlash(pos.col, pos.row, '-1', 'rgba(255,180,0,0.8)', 2000);
+      const dmg = pos.dmg || 1;
+      this.renderer.addFlash(pos.col, pos.row, `-${dmg}`, 'rgba(255,180,0,0.6)', 2200, 1.4, 'rgba(255,230,80,1)');
     }
 
     // Animate flashes while showing the dialog (skip in autoplay)
@@ -1315,6 +1340,25 @@ export class UIController {
         this.onRedraw();
       });
     }
+  }
+
+  // ── Attrition popup ──────────────────────────────────────────────────────
+
+  _showAttritionPopup() {
+    const level = this.state.attritionLevel;
+    const desc  = level === 1
+      ? 'Exposed units suffer 1 damage each day and night.'
+      : level === 2
+        ? 'Exposed units now suffer 2 damage each day and night.'
+        : `Exposed units suffer ${level} damage each day and night.`;
+    this._showResultDialog([
+      `🌑 The curse deepens — Salem's mystical energy grows stronger!`,
+      ``,
+      desc,
+      `☀ Day: witch undead in the open take ${level} damage`,
+      `🌙 Night: survivors in the open take ${level} damage`,
+      `🏰 All fortifications degrade by 1 each night (minimum 1)`,
+    ], () => {});
   }
 
   // ── Phase toast ──────────────────────────────────────────────────────────
@@ -1801,8 +1845,7 @@ export class UIController {
     if (!overlay) return;
     overlay.classList.toggle('visible');
     if (overlay.classList.contains('visible')) {
-      const log = document.getElementById('event-log');
-      if (log) log.scrollTop = log.scrollHeight;
+      this._renderLog(); // rebuild full log before showing
     }
   }
 
@@ -1841,7 +1884,8 @@ export class UIController {
   _renderLog() {
     const el = document.getElementById('event-log');
     if (!el) return;
-    el.innerHTML = this.state.log.slice(-12).map(m => `<div class="log-entry">${m}</div>`).join('');
+    // Show full log — entries are added throughout the game so nothing is lost.
+    el.innerHTML = this.state.log.map(m => `<div class="log-entry">${m}</div>`).join('');
     el.scrollTop = el.scrollHeight;
   }
 

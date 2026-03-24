@@ -18,6 +18,18 @@ export const WIN_REASON = {
 
 // ── Phase cycle ─────────────────────────────────────────────────────────────
 // One full cycle = 8 rounds: DAWN(1) → DAY(3) → DUSK(1) → NIGHT(3)
+
+// Attrition schedule (damage per exposed unit per hazard phase):
+//   Cycle 1: 0  — no hazard, players learn the map
+//   Cycle 2: 1  — pressure begins
+//   Cycles 3-4: 2  — significant threat
+//   Cycle 5+: 3  — lethal for most minions/survivors in the open
+function attritionForCycle(cycle) {
+  if (cycle <= 1) return 0;
+  if (cycle === 2) return 1;
+  if (cycle <= 4) return 2;
+  return 3;
+}
 const CYCLE_LENGTH = 8;
 
 export const Phase = Object.freeze({
@@ -103,16 +115,16 @@ export class GameState {
     this.pendingAction     = null;
     this.winner            = null;
     this.winReason         = null;
-    this.lastNightDamage   = []; // positions damaged last night hazard (for flash animation)
-    this.lastDayDamage     = []; // positions damaged last day hazard
+    this.lastNightDamage   = []; // {col,row,dmg,isFort} entries for flash animation
+    this.lastDayDamage     = []; // {col,row,dmg} entries for flash animation
     this.lastHazardLog     = []; // human-readable lines describing hazard events this phase
 
     // Cumulative node scoring: each dawn/dusk majority scores 1 point; first to 3 wins.
     this.nodeScore = { hero: 0, witch: 0 };
 
-    // Attrition level: hazard damage dealt to exposed units. Ramps up each dawn.
-    // Cycle 1: 1 dmg, Cycle 2: 2 dmg, Cycle 3: 3 dmg.
-    this.attritionLevel = 1;
+    // Attrition level: hazard damage dealt to exposed units (see attritionForCycle).
+    this.attritionLevel    = 0;
+    this.attritionChanged  = false; // true for exactly one planning phase after a level-up
 
     // ── Simultaneous-turn planning state ──────────────────────────────────
     // planningPhase: true while both sides are building their action plans.
@@ -280,8 +292,15 @@ export class GameState {
       this._applyDayHazard(this.attritionLevel);
     }
     if (this.phase === Phase.DAWN) {
-      this.attritionLevel = Math.min(3, this.attritionLevel + 1);
-      this.addLog(`🌅 A new dawn — cycle ${Math.ceil(this.round / CYCLE_LENGTH)}. Attrition rises to ${this.attritionLevel}!`);
+      const cycle    = Math.ceil(this.round / CYCLE_LENGTH);
+      const newLevel = attritionForCycle(cycle);
+      this.attritionChanged = newLevel !== this.attritionLevel;
+      this.attritionLevel   = newLevel;
+      if (this.attritionChanged && newLevel > 0) {
+        this.addLog(`🌅 A new dawn — cycle ${cycle}. The curse deepens! Hazard damage rises to ${newLevel}.`);
+      } else {
+        this.addLog(`🌅 A new dawn — cycle ${cycle}.`);
+      }
       for (const [, t] of this.tiles) t.explored = false;
       this._checkNodeObjectives(Phase.DAWN);
     }
@@ -442,45 +461,46 @@ export class GameState {
   }
 
   _applyNightHazard(dmg = 1) {
-    // Fort degradation: open-field fortifications lose 1 level each night.
-    for (const [, t] of this.tiles) {
-      if (t.fortifyLevel > 0 && t.type !== TileType.BUILDING) {
+    // Fort degradation: ALL fortifications (including buildings) lose 1 level each
+    // night, but are floored at 1 — they never crumble completely from the dark.
+    for (const [key, t] of this.tiles) {
+      if (t.fortifyLevel > 1) {
         t.fortifyLevel--;
-        if (t.fortifyLevel === 0) {
-          this.addLog(`🌑 A field fortification crumbles in the dark.`);
-        } else {
-          this.addLog(`🌑 The night weakens a field fort. (level ${t.fortifyLevel} remaining)`);
-        }
+        const [col, row] = key.split(',').map(Number);
+        this.lastNightDamage.push({ col, row, dmg: 1, isFort: true });
+        this.addLog(`🌑 The dark erodes a fortification at (${col},${row}). (level ${t.fortifyLevel} remaining)`);
       }
     }
 
     // Only SURVIVORS in the open take night damage — the hero is hardened against it.
-    // Fortified hexes shelter their occupants from hazard damage.
+    // Fortified hexes shelter their occupants.
     const endangered = this.entities.filter(e => {
       if (!e.alive || e.type !== EntityType.SURVIVOR) return false;
       const t = this.tiles.get(hexKey(e.col, e.row));
       return !(t && t.type === TileType.BUILDING);
     });
 
-    for (const e of endangered) {
-      const t = this.tiles.get(hexKey(e.col, e.row));
-      if (t && t.fortifyLevel > 0) {
-        const line = `🏰 ${e.displayName} is sheltered by the fort! (fort holds at level ${t.fortifyLevel})`;
+    if (dmg > 0) {
+      for (const e of endangered) {
+        const t = this.tiles.get(hexKey(e.col, e.row));
+        if (t && t.fortifyLevel > 0) {
+          const line = `🏰 ${e.displayName} is sheltered by the fort! (level ${t.fortifyLevel})`;
+          this.addLog(line);
+          this.lastHazardLog.push(line);
+          continue;
+        }
+        this.lastNightDamage.push({ col: e.col, row: e.row, dmg });
+        const killed = e.takeDamage(dmg);
+        const line = killed
+          ? `💀 ${e.displayName} is consumed by the night!`
+          : `🌙 ${e.displayName} suffers in the open! (-${dmg} HP, ${e.hp}/${e.maxHp} remaining)`;
         this.addLog(line);
         this.lastHazardLog.push(line);
-        continue;
+        if (killed) this.entities = this.entities.filter(x => x.id !== e.id);
       }
-      this.lastNightDamage.push({ col: e.col, row: e.row });
-      const killed = e.takeDamage(dmg);
-      const line = killed
-        ? `💀 ${e.displayName} is consumed by the night!`
-        : `🌙 ${e.displayName} suffers in the open! (-${dmg} HP, ${e.hp}/${e.maxHp} remaining)`;
-      this.addLog(line);
-      this.lastHazardLog.push(line);
-      if (killed) this.entities = this.entities.filter(x => x.id !== e.id);
     }
-    if (endangered.length === 0) {
-      this.addLog(`🌙 Night falls. Survivors rest safely, sheltered from the dark.`);
+    if (endangered.length === 0 || dmg === 0) {
+      this.addLog(`🌙 Night falls. Survivors are safe for now.`);
     }
   }
 
@@ -494,22 +514,27 @@ export class GameState {
       return !(t && t.type === TileType.BUILDING);
     });
 
-    for (const e of sunburned) {
-      const t = this.tiles.get(hexKey(e.col, e.row));
-      if (t && t.fortifyLevel > 0) {
-        const line = `🏰 ${e.displayName} is sheltered by the fort! (fort holds at level ${t.fortifyLevel})`;
+    if (dmg > 0) {
+      for (const e of sunburned) {
+        const t = this.tiles.get(hexKey(e.col, e.row));
+        if (t && t.fortifyLevel > 0) {
+          const line = `🏰 ${e.displayName} is sheltered by the fort! (level ${t.fortifyLevel})`;
+          this.addLog(line);
+          this.lastHazardLog.push(line);
+          continue;
+        }
+        this.lastDayDamage.push({ col: e.col, row: e.row, dmg });
+        const killed = e.takeDamage(dmg);
+        const line = killed
+          ? `💀 ${e.displayName} is destroyed by the light!`
+          : `☀ ${e.displayName} is scorched in the open! (-${dmg} HP, ${e.hp}/${e.maxHp} remaining)`;
         this.addLog(line);
         this.lastHazardLog.push(line);
-        continue;
+        if (killed) this.entities = this.entities.filter(x => x.id !== e.id);
       }
-      this.lastDayDamage.push({ col: e.col, row: e.row });
-      const killed = e.takeDamage(dmg);
-      const line = killed
-        ? `💀 ${e.displayName} is destroyed by the light!`
-        : `☀ ${e.displayName} is scorched in the open! (-${dmg} HP, ${e.hp}/${e.maxHp} remaining)`;
-      this.addLog(line);
-      this.lastHazardLog.push(line);
-      if (killed) this.entities = this.entities.filter(x => x.id !== e.id);
+    }
+    if (sunburned.length === 0 || dmg === 0) {
+      this.addLog(`☀ Daylight. Witch units are sheltered or out of harm's way.`);
     }
   }
 
