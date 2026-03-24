@@ -373,6 +373,20 @@ canvas { touch-action: pan-x pan-y; }
   white-space: nowrap;
 }
 
+.usb-deselect-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+  background: none;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 3px;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  padding: 0.1rem 0.4rem;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.usb-deselect-btn:hover { border-color: rgba(255,255,255,0.4); color: var(--text-bright); }
+
 #game-main {
   display: flex;
   flex: 1;

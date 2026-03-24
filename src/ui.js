@@ -1061,7 +1061,13 @@ export class UIController {
       <span class="usb-stat">ATK <span class="usb-stat-val">${entity.attack}</span></span>
       <span class="usb-stat">DEF <span class="usb-stat-val">${entity.defense}</span></span>
       ${weaponLabel ? `<span class="usb-weapon">⚔ ${weaponLabel}</span>` : ''}
+      <button class="usb-deselect-btn" title="Deselect unit">✕</button>
     `;
+    bar.querySelector('.usb-deselect-btn').addEventListener('click', () => {
+      this._clearSelection();
+      this._updateSidebar();
+      this.onRedraw();
+    });
   }
 
   _renderTurnInfo() {
