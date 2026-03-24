@@ -22,6 +22,20 @@ db.exec(`
     draws      INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
+
+  CREATE TABLE IF NOT EXISTS game_saves (
+    room_id          TEXT PRIMARY KEY,
+    hero_player_id   TEXT,
+    witch_player_id  TEXT,
+    hero_name        TEXT NOT NULL DEFAULT '',
+    witch_name       TEXT NOT NULL DEFAULT '',
+    round            INTEGER NOT NULL DEFAULT 1,
+    phase            TEXT NOT NULL DEFAULT 'dawn',
+    game_version     TEXT NOT NULL,
+    state_json       TEXT NOT NULL,
+    updated_at       INTEGER NOT NULL DEFAULT (unixepoch()),
+    created_at       INTEGER NOT NULL DEFAULT (unixepoch())
+  );
 `);
 
 export default db;

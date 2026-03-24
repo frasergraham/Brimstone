@@ -373,3 +373,12 @@ export function createIronGolem(col, row) {
   e.color = _witchColor(EntityType.IRON_GOLEM, e);
   return e;
 }
+
+/**
+ * Advance the entity ID counter past `minNumericId` to prevent collisions
+ * when deserializing a saved game that already contains entities with IDs
+ * up to that value.  Call this after reconstructing saved entities.
+ */
+export function bumpEntityId(minNumericId) {
+  if (minNumericId >= _nextId) _nextId = minNumericId + 1;
+}

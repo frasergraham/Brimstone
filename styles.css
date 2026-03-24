@@ -1403,6 +1403,60 @@ canvas { touch-action: pan-x pan-y; }
   white-space: nowrap;
 }
 
+/* ── Saves list ──────────────────────────────────────────────────────────── */
+
+.saves-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-bottom: 1.5rem;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.saves-empty {
+  color: var(--text-dim);
+  font-style: italic;
+  text-align: center;
+  padding: 1.5rem 0;
+}
+
+.save-entry {
+  background: var(--bg-section);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 0.65rem 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  text-align: left;
+}
+
+.save-entry-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.save-entry-title {
+  color: var(--text-bright);
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.save-entry-meta {
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  margin-top: 0.15rem;
+}
+
+.save-entry .setup-btn {
+  flex-shrink: 0;
+  padding: 0.35rem 0.9rem;
+  font-size: 0.85rem;
+}
+
 /* ── Leaderboard overlay ─────────────────────────────────────────────────── */
 
 #leaderboard-overlay {
