@@ -1563,6 +1563,7 @@ canvas { touch-action: pan-x pan-y; }
 .plan-panel.collapsed .plan-panel-header,
 .plan-panel.collapsed .plan-steps,
 .plan-panel.collapsed .plan-panel-footer,
+.plan-panel.collapsed .plan-players,
 .plan-panel.collapsed .plan-status {
   display: none;
 }
@@ -1711,6 +1712,44 @@ canvas { touch-action: pan-x pan-y; }
 .plan-step.food-powered .plan-step-num  { background: rgba(180,130,20,0.75); color: #ffd; border-radius: 3px; padding: 0 2px; }
 .plan-step.food-powered .plan-step-icon { opacity: 0.85; }
 .plan-food-tag { font-size: 0.65rem; color: #c8a030; margin-left: 0.3rem; white-space: nowrap; }
+
+/* ── Plan countdown timer ────────────────────────────────────────────── */
+.plan-countdown {
+  font-size: 0.8rem;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  margin-left: auto;
+  padding: 0 0.2rem;
+  min-width: 2.5rem;
+  text-align: right;
+}
+.plan-countdown.countdown-urgent {
+  color: #e07050;
+  font-weight: bold;
+}
+
+/* ── Plan player status panel ─────────────────────────────────────────── */
+.plan-players {
+  border-top: 1px solid rgba(255,255,255,0.06);
+  padding: 0.35rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.plan-player-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+}
+.plan-player-icon { font-size: 0.75rem; }
+.plan-player-icon.faction-hero  { color: var(--hero); }
+.plan-player-icon.faction-witch { color: var(--witch); }
+.plan-player-name { flex: 1; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-player-status { font-size: 0.8rem; }
+.plan-player-row.player-ready  .plan-player-status { color: #4caf7d; }
+.plan-player-row.player-waiting .plan-player-status { color: var(--text-dim); }
+.plan-player-row.player-ready  .plan-player-name   { color: var(--text); }
 
 /* ── Plan food row ────────────────────────────────────────────────────── */
 .plan-food-row {

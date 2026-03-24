@@ -243,9 +243,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     // Post-step entities: what the world looks like AFTER this step resolves.
     const postEntities = i + 1 < steps.length ? steps[i + 1].entitySnapshot : finalEntities;
 
+    // Support both legacy {heroEvents, witchEvents} (offline) and
+    // new {playerEvents: [{playerId, faction, events}]} (online MP) step formats.
     const events = [
       ...(step.heroEvents  ?? []),
       ...(step.witchEvents ?? []),
+      ...(step.playerEvents ?? []).flatMap(pe => pe.events ?? []),
     ].filter(ev => ev.type === ResEventType.ACTION_OK);
 
     // ── Phase 1: animate moves for both factions simultaneously ──────────────
@@ -369,7 +372,9 @@ function initOnline(mirrorState, myFaction, mpClient) {
 
   // No local AI — all turns handled server-side
   ui = new UIController(canvas, state, renderer, null, redrawOnline, null, false);
-  ui.mp = mpClient;
+  ui.mp         = mpClient;
+  ui.myPlayerId = mpClient.myPlayerId ?? null;
+  ui._players   = state.players ?? [];
 
   // Show opponent name / online status
   _updateOnlineStatus(mpClient);
@@ -736,11 +741,14 @@ function _ensureAuthed(cb) {
   }
 }
 
-function _applyOnlinePlanningPhase({ heroActionsLeft, witchActionsLeft }) {
+function _applyOnlinePlanningPhase(payload) {
   if (!ui || !mp) return;
-  const budget = mp.myFaction === 'hero' ? heroActionsLeft : witchActionsLeft;
+  const { myActionsLeft, heroActionsLeft, witchActionsLeft, players, timeoutMs } = payload;
+  // Prefer per-player budget; fall back to legacy faction budget for old servers.
+  const budget = myActionsLeft ?? (mp.myFaction === 'hero' ? heroActionsLeft : witchActionsLeft);
   ui.exitPlanningMode();
-  ui.enterPlanningMode(mp.myFaction, budget);
+  if (players) ui._players = players;
+  ui.enterPlanningMode(mp.myFaction, budget, timeoutMs ?? 0);
   ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
 }
 
@@ -831,7 +839,7 @@ function _createMpClient() {
       }
     },
 
-    onMatchFound({ roomId, faction, opponentName, aiOpponent, resumed }) {
+    onMatchFound({ roomId, faction, opponentName, aiOpponent, resumed, myPlayerId, players }) {
       if (resumed) {
         document.getElementById('waiting-subtitle').textContent =
           `Resuming as ${faction === 'hero' ? 'Hero ⚔' : 'Witch ✦'}`;
@@ -843,7 +851,16 @@ function _createMpClient() {
         document.getElementById('waiting-message').textContent =
           `Opponent: ${opponentName}${aiOpponent ? ' (AI)' : ''}. Starting game…`;
       }
+      // Store player context so initOnline / enterPlanningMode can use it.
+      if (ui) {
+        if (myPlayerId) ui.myPlayerId = myPlayerId;
+        if (players)   ui._players   = players;
+      }
       // Game starts when first stateUpdate arrives → onState handles initOnline
+    },
+
+    onPlayerSubmitted({ playerId, name, faction }) {
+      if (ui) ui._onPlayerSubmitted(playerId, name, faction);
     },
 
     onLeaderboard(entries) {
