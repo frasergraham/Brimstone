@@ -6,9 +6,10 @@ import {
   executeMove, executeExplore, executeBattle,
   executeFortify, executeSummon, executeUseItem, executeUseAbility,
 } from '../src/actions.js';
-import { serializeState }     from './state-sync.js';
-import { recordResult }       from './leaderboard.js';
-import { resolvePlans }       from './resolver.js';
+import { serializeState }           from './state-sync.js';
+import { recordResult }             from './leaderboard.js';
+import { resolvePlans }             from './resolver.js';
+import { upsertSave, deleteSave }   from './saves.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const AI_FILL_DELAY_MS   = 5_000;  // wait this long before filling with AI
@@ -206,6 +207,15 @@ function _executeResolution(room) {
   // Serialize the final state (post-endRound)
   const finalState = serializeState(state);
 
+  // Persist save after every round; deleted when game ends in checkAndHandleGameOver.
+  if (!state.gameOver) {
+    try {
+      upsertSave(room.id, room.heroPlayerId, room.witchPlayerId, room.heroName, room.witchName, finalState);
+    } catch (err) {
+      console.error(`[room ${room.id}] upsertSave error:`, err);
+    }
+  }
+
   // Serialize steps — convert any entity objects to plain data
   const serializedSteps = steps.map(step => ({
     stepIndex:      step.stepIndex,
@@ -297,6 +307,9 @@ function checkAndHandleGameOver(room) {
     record(room.heroPlayerId,  'draw');
     record(room.witchPlayerId, 'draw');
   }
+
+  // Remove the in-progress save — game is over, nothing to resume.
+  try { deleteSave(room.id); } catch (err) { console.error(`[room ${room.id}] deleteSave error:`, err); }
 
   // Give clients a moment to process then clean up
   setTimeout(() => destroyRoom(room), 5_000);

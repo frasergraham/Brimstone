@@ -1,5 +1,7 @@
 // Serialize a live GameState instance into a plain JSON-safe snapshot.
 // The client uses this snapshot to construct a MirrorState for rendering.
+import { VERSION } from '../src/version.js';
+
 export function serializeState(state) {
   const tiles = [];
   let mapCols = 0, mapRows = 0;
@@ -46,6 +48,7 @@ export function serializeState(state) {
   }));
 
   return {
+    version:              VERSION,
     phase:                state.phase,
     round:                state.round,
     activePlayer:         state.activePlayer,
