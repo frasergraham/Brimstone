@@ -61,6 +61,28 @@ export function computeActions(player, phase, entities) {
   }
 }
 
+/**
+ * Compute the action budget for one specific player (multiplayer path).
+ * Counts only entities owned by that player (ownerId match), not the whole faction.
+ */
+export function computeActionsForPlayer(playerId, faction, phase, entities) {
+  const isHero     = faction === Player.HERO;
+  const leaderType = isHero ? EntityType.HERO : EntityType.WITCH;
+  // Count non-leader entities belonging to this player specifically
+  const extras = entities.filter(
+    e => e.alive && e.ownerId === playerId && e.type !== leaderType
+  ).length;
+
+  if (isHero) {
+    const timeBonus = (phase === Phase.DAY || phase === Phase.DAWN) ? 1 : 0;
+    return 3 + timeBonus + Math.min(extras, 5);
+  } else {
+    const timeBonus = phase === Phase.NIGHT ? 1 : 0;
+    const unitBonus = Math.min(Math.floor(extras / 2), 4);
+    return 4 + timeBonus + unitBonus;
+  }
+}
+
 function phaseForRound(round) {
   const r = (round - 1) % CYCLE_LENGTH;
   if (r === 0)            return Phase.DAWN;
@@ -90,9 +112,17 @@ export class GameState {
     // Fog of war: hide opponent from the human player's view when any side is AI
     this.fogOfWar = witchIsAI || heroIsAI;
 
-    this.hero  = createHero(mapData.heroStart.col,  mapData.heroStart.row);
-    this.witch = createWitch(mapData.witchStart.col, mapData.witchStart.row);
+    // ── Player registry (multiplayer) ──────────────────────────────────────
+    // Each entry: { id, name, faction, isAI, leaderId }
+    // Populated by addPlayer() for online games; pre-populated here for offline.
+    this.players = [];
+
+    // Offline / legacy path: create one hero and one witch with synthetic player IDs.
+    this.hero  = createHero(mapData.heroStart.col,  mapData.heroStart.row, 'hero');
+    this.witch = createWitch(mapData.witchStart.col, mapData.witchStart.row, 'witch');
     this.entities.push(this.hero, this.witch);
+    this.players.push({ id: 'hero',  name: 'Hero',  faction: 'hero',  isAI: heroIsAI,  leaderId: this.hero.id });
+    this.players.push({ id: 'witch', name: 'Witch', faction: 'witch', isAI: witchIsAI, leaderId: this.witch.id });
 
     this.inventory = { shared: {}, witch: {} };
 
@@ -131,17 +161,26 @@ export class GameState {
     // ── Simultaneous-turn planning state ──────────────────────────────────
     // planningPhase: true while both sides are building their action plans.
     // resolving:     true while the resolver is executing paired steps.
-    // heroPlan / witchPlan: submitted PlanAction[] arrays (null = not yet submitted).
-    // heroReady / witchReady: submission flags.
+    //
+    // Legacy 2-player fields (offline mode / backward compat):
     this.planningPhase  = false;
     this.resolving      = false;
     this.heroPlan       = null;
     this.witchPlan      = null;
     this.heroReady      = false;
     this.witchReady     = false;
-    // Per-faction action budgets computed at planning start (mirrors old actionsLeft).
     this.heroActionsLeft  = 0;
     this.witchActionsLeft = 0;
+    //
+    // Multiplayer per-player fields:
+    // playerPlans: Map<playerId, PlanAction[]>
+    // playerReady: Map<playerId, bool>
+    // playerActionsLeft: Map<playerId, number>
+    this.playerPlans        = new Map();
+    this.playerReady        = new Map();
+    this.playerActionsLeft  = new Map();
+    // Deadline timestamp for the current planning phase (ms since epoch, or null)
+    this.planningDeadline   = null;
   }
 
   // ── Turn management ────────────────────────────────────────────────────
@@ -154,9 +193,58 @@ export class GameState {
     this.actionsLeft = Math.max(0, this.actionsLeft - cost);
   }
 
+  // ── Player registry (multiplayer) ──────────────────────────────────────
+
+  /**
+   * Register a player and create their leader entity at the given position.
+   * Used by the multiplayer lobby when building a room with N players.
+   * Returns the created leader entity.
+   *
+   * @param {string} playerId  - UUID of the player
+   * @param {string} name      - Display name
+   * @param {'hero'|'witch'} faction
+   * @param {number} col
+   * @param {number} row
+   * @param {boolean} isAI
+   */
+  addPlayer(playerId, name, faction, col, row, isAI = false) {
+    const leader = faction === Player.HERO
+      ? createHero(col, row, playerId)
+      : createWitch(col, row, playerId);
+    this.entities.push(leader);
+    this.players.push({ id: playerId, name, faction, isAI, leaderId: leader.id });
+    // Keep legacy singleton refs pointing at the first hero/witch for offline compat
+    if (faction === Player.HERO  && !this.hero)  this.hero  = leader;
+    if (faction === Player.WITCH && !this.witch) this.witch = leader;
+    return leader;
+  }
+
+  /** Return the leader entity for a given playerId (or null if dead/missing). */
+  getLeader(playerId) {
+    const p = this.players.find(pl => pl.id === playerId);
+    if (!p) return null;
+    return this.entities.find(e => e.id === p.leaderId && e.alive) ?? null;
+  }
+
+  /** Return all entities owned by a given playerId. */
+  getPlayerEntities(playerId) {
+    return this.entities.filter(e => e.alive && e.ownerId === playerId);
+  }
+
+  /** Return true if every player on the given faction is eliminated. */
+  factionEliminated(faction) {
+    return this.players
+      .filter(p => p.faction === faction)
+      .every(p => !this.entities.some(e => e.id === p.leaderId && e.alive));
+  }
+
   // ── Simultaneous-turn planning API ─────────────────────────────────────
 
-  /** Begin a new planning phase: reset plans and compute per-faction budgets. */
+  /**
+   * Begin a new planning phase.
+   * Populates both the legacy 2-player fields (heroActionsLeft / witchActionsLeft)
+   * and the per-player maps used by the multiplayer resolver.
+   */
   startPlanning() {
     this.planningPhase    = true;
     this.resolving        = false;
@@ -164,8 +252,20 @@ export class GameState {
     this.witchPlan        = null;
     this.heroReady        = false;
     this.witchReady       = false;
+
+    // Legacy faction-level budgets (offline mode)
     this.heroActionsLeft  = computeActions(Player.HERO,  this.phase, this.entities);
     this.witchActionsLeft = computeActions(Player.WITCH, this.phase, this.entities);
+
+    // Per-player budgets (multiplayer)
+    this.playerPlans       = new Map();
+    this.playerReady       = new Map();
+    this.playerActionsLeft = new Map();
+    for (const p of this.players) {
+      this.playerReady.set(p.id, false);
+      this.playerActionsLeft.set(p.id, computeActionsForPlayer(p.id, p.faction, this.phase, this.entities));
+    }
+
     this.addLog(
       `📋 Planning phase — Hero: ${this.heroActionsLeft} actions, ` +
       `Witch: ${this.witchActionsLeft} actions.`
@@ -173,10 +273,10 @@ export class GameState {
   }
 
   /**
-   * Submit a faction's plan.
+   * Submit a faction's plan (legacy offline / 2-player path).
    * @param {'hero'|'witch'} faction
    * @param {import('./planner.js').PlanAction[]} plan
-   * @returns {boolean} true when both factions have submitted (resolution can begin)
+   * @returns {boolean} true when both factions have submitted
    */
   submitPlan(faction, plan) {
     if (!this.planningPhase) throw new Error('Not in planning phase.');
@@ -198,71 +298,112 @@ export class GameState {
   }
 
   /**
+   * Submit an individual player's plan (multiplayer path).
+   * @param {string} playerId
+   * @param {import('./planner.js').PlanAction[]} plan
+   * @returns {boolean} true when ALL players have submitted
+   */
+  submitPlayerPlan(playerId, plan) {
+    if (!this.planningPhase) throw new Error('Not in planning phase.');
+    const player = this.players.find(p => p.id === playerId);
+    if (!player) throw new Error(`Unknown player: ${playerId}`);
+    if (this.playerReady.get(playerId)) throw new Error('Plan already submitted.');
+
+    this.playerPlans.set(playerId, plan);
+    this.playerReady.set(playerId, true);
+
+    const icon = player.faction === 'hero' ? '⚔' : '✦';
+    this.addLog(`${icon} ${player.name} submits their plan (${plan.length} step${plan.length !== 1 ? 's' : ''}).`);
+
+    const allReady = [...this.playerReady.values()].every(Boolean);
+    if (allReady) {
+      this.planningPhase = false;
+      this.resolving     = true;
+    }
+    return allReady;
+  }
+
+  /** True if every registered player has submitted their plan. */
+  get allPlayersReady() {
+    return this.players.length > 0 && [...this.playerReady.values()].every(Boolean);
+  }
+
+  /**
    * Apply end-of-round effects after resolution: rest healing, night/day node
    * spawns, phase advance, hazards, attrition, and node scoring.
-   * Replaces the two sequential endTurn() calls used in the old alternating model.
+   * Works for both 1v1 (offline) and N-vs-N (online multiplayer).
    */
   endRound() {
     this.resolving = false;
     this.witchSummonsThisTurn = 0;
 
-    // Hero rest heal: resting inside a building or on a Power Node.
-    const heroTile = this.tiles.get(hexKey(this.hero.col, this.hero.row));
-    if (this.hero.alive && heroTile?.type === TileType.BUILDING && this.hero.hp < this.hero.maxHp) {
-      const b = heroTile.building;
-      if (b === BuildingType.INN) {
-        this.hero.heal(3);
-        this.addLog(`🏨 The hero rests at the inn. (+3 HP, now ${this.hero.hp}/${this.hero.maxHp})`);
-      } else if (b === BuildingType.CHURCH) {
-        this.hero.heal(3);
-        this.addLog(`⛪ The hero prays at the chapel. (+3 HP, now ${this.hero.hp}/${this.hero.maxHp})`);
-      } else {
-        this.hero.heal(1);
-        this.addLog(`🏠 The hero rests in shelter. (+1 HP, now ${this.hero.hp}/${this.hero.maxHp})`);
+    // Rest heal: every living hero-faction leader in a building or on a node.
+    const heroLeaders = this.entities.filter(
+      e => e.alive && e.type === EntityType.HERO
+    );
+    for (const hero of heroLeaders) {
+      const heroTile = this.tiles.get(hexKey(hero.col, hero.row));
+      if (heroTile?.type === TileType.BUILDING && hero.hp < hero.maxHp) {
+        const b = heroTile.building;
+        if (b === BuildingType.INN) {
+          hero.heal(3);
+          this.addLog(`🏨 ${hero.displayName} rests at the inn. (+3 HP, now ${hero.hp}/${hero.maxHp})`);
+        } else if (b === BuildingType.CHURCH) {
+          hero.heal(3);
+          this.addLog(`⛪ ${hero.displayName} prays at the chapel. (+3 HP, now ${hero.hp}/${hero.maxHp})`);
+        } else {
+          hero.heal(1);
+          this.addLog(`🏠 ${hero.displayName} rests in shelter. (+1 HP, now ${hero.hp}/${hero.maxHp})`);
+        }
       }
-    }
-    if (this.hero.alive && this.hero.hp < this.hero.maxHp) {
-      const onNode = this.witchObjectives.some(
-        obj => obj.col === this.hero.col && obj.row === this.hero.row
-      );
-      if (onNode) {
-        this.hero.heal(1);
-        this.addLog(`✨ The hero draws power from the node. (+1 HP, now ${this.hero.hp}/${this.hero.maxHp})`);
+      if (hero.hp < hero.maxHp) {
+        const onNode = this.witchObjectives.some(
+          obj => obj.col === hero.col && obj.row === hero.row
+        );
+        if (onNode) {
+          hero.heal(1);
+          this.addLog(`✨ ${hero.displayName} draws power from the node. (+1 HP, now ${hero.hp}/${hero.maxHp})`);
+        }
       }
     }
 
-    // Night: node spawns (witch → minion, hero → survivor).
+    // Night: node spawns — each witch/hero leader on a node may spawn a unit.
     if (this.phase === Phase.NIGHT) {
+      const witchLeaders = this.entities.filter(e => e.alive && e.type === EntityType.WITCH);
       for (const obj of this.witchObjectives) {
         const freeHex = () => getNeighbors(obj.col, obj.row).find(n => {
           const t = this.tiles.get(hexKey(n.col, n.row));
           return t && t.type !== TileType.RIVER &&
             !this.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
         });
-        if (this.witch.alive && this.witch.col === obj.col && this.witch.row === obj.row) {
-          if (Math.random() < 0.33) {
-            const hex = freeHex();
-            if (hex) {
-              this.entities.push(createMinion(hex.col, hex.row));
-              this.addLog(`🌑 The witch channels the node — a minion rises from the dark!`);
+        for (const witch of witchLeaders) {
+          if (witch.col === obj.col && witch.row === obj.row) {
+            if (Math.random() < 0.33) {
+              const hex = freeHex();
+              if (hex) {
+                this.entities.push(createMinion(hex.col, hex.row, witch.ownerId));
+                this.addLog(`🌑 ${witch.displayName} channels the node — a minion rises from the dark!`);
+              }
+            } else {
+              this.addLog(`🌑 The node stirs… but yields nothing this night.`);
             }
-          } else {
-            this.addLog(`🌑 The node stirs… but yields nothing this night.`);
           }
         }
-        if (this.hero.alive && this.hero.col === obj.col && this.hero.row === obj.row) {
-          if (Math.random() < 0.33) {
-            const hex = freeHex();
-            if (hex) {
-              const s = createSurvivor(hex.col, hex.row);
-              s.owner = 'hero';
-              if (Math.random() < 0.5) s.items['horse'] = 1;
-              this.entities.push(s);
-              const horseNote = s.items['horse'] ? ' (arrives on horseback!)' : '';
-              this.addLog(`✨ The node calls to the living — a survivor emerges!${horseNote}`);
+        for (const hero of heroLeaders) {
+          if (hero.col === obj.col && hero.row === obj.row) {
+            if (Math.random() < 0.33) {
+              const hex = freeHex();
+              if (hex) {
+                const s = createSurvivor(hex.col, hex.row, hero.ownerId);
+                s.owner = 'hero';
+                if (Math.random() < 0.5) s.items['horse'] = 1;
+                this.entities.push(s);
+                const horseNote = s.items['horse'] ? ' (arrives on horseback!)' : '';
+                this.addLog(`✨ The node calls to the living — a survivor emerges!${horseNote}`);
+              }
+            } else {
+              this.addLog(`✨ The node pulses faintly… no one answers the call tonight.`);
             }
-          } else {
-            this.addLog(`✨ The node pulses faintly… no one answers the call tonight.`);
           }
         }
       }
@@ -543,16 +684,45 @@ export class GameState {
   // ── Victory conditions ─────────────────────────────────────────────────
 
   checkVictory() {
-    if (!this.witch.alive) {
+    // All witch leaders eliminated → heroes win
+    if (this.factionEliminated('witch')) {
       this.winner    = 'hero';
       this.winReason = WIN_REASON.WITCH_SLAIN;
       this.addLog('☀ The witch has been defeated! Salem is saved!');
       return;
     }
-    if (!this.hero.alive) {
+    // All hero leaders eliminated → witches win
+    if (this.factionEliminated('hero')) {
       this.winner    = 'witch';
       this.winReason = WIN_REASON.HERO_SLAIN;
-      this.addLog('🌙 The hero has fallen. Darkness descends on Salem forever…');
+      this.addLog('🌙 The heroes have fallen. Darkness descends on Salem forever…');
+    }
+  }
+
+  /**
+   * Scatter all units owned by the given player when their leader is killed.
+   * Survivors are reset to hidden-survivor tiles; summons are removed.
+   * Called by the resolver immediately when a leader entity is slain.
+   */
+  scatterPlayerUnits(ownerId) {
+    const toScatter = this.entities.filter(
+      e => e.ownerId === ownerId && e.type !== EntityType.HERO && e.type !== EntityType.WITCH
+    );
+    for (const unit of toScatter) {
+      if (unit.type === EntityType.SURVIVOR) {
+        // Return to the map as a hidden survivor — discovered fresh by whoever steps on it next
+        const t = this.tiles.get(hexKey(unit.col, unit.row));
+        if (t) t.hiddenSurvivor = true;
+      }
+      // Remove all owned units (summons just disappear; survivors become hidden again)
+      this.entities = this.entities.filter(e => e.id !== unit.id);
+    }
+    const player = this.players.find(p => p.id === ownerId);
+    if (player) {
+      const label = player.name || (player.faction === 'hero' ? 'The Hero' : 'The Witch');
+      if (toScatter.length > 0) {
+        this.addLog(`💨 ${label}'s companions scatter into the wilderness…`);
+      }
     }
   }
 

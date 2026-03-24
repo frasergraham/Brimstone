@@ -183,10 +183,11 @@ const WITCH_UNIT_COLORS = {
 };
 
 export class Entity {
-  constructor(type, owner, col, row) {
-    this.id    = `e${_nextId++}`;
-    this.type  = type;
-    this.owner = owner;
+  constructor(type, owner, col, row, ownerId = null) {
+    this.id      = `e${_nextId++}`;
+    this.type    = type;
+    this.owner   = owner;   // faction: 'hero' | 'witch' | null
+    this.ownerId = ownerId; // player UUID (null for neutral/pre-multiplayer entities)
 
     this.col = col;
     this.row = row;
@@ -299,16 +300,16 @@ export class Entity {
   }
 }
 
-export function createHero(col, row) {
-  return new Entity(EntityType.HERO, 'hero', col, row);
+export function createHero(col, row, ownerId = null) {
+  return new Entity(EntityType.HERO, 'hero', col, row, ownerId);
 }
 
-export function createWitch(col, row) {
-  return new Entity(EntityType.WITCH, 'witch', col, row);
+export function createWitch(col, row, ownerId = null) {
+  return new Entity(EntityType.WITCH, 'witch', col, row, ownerId);
 }
 
-export function createSurvivor(col, row) {
-  const e = new Entity(EntityType.SURVIVOR, null, col, row);
+export function createSurvivor(col, row, ownerId = null) {
+  const e = new Entity(EntityType.SURVIVOR, null, col, row, ownerId);
 
   // Pick a random unused character from the roster
   const available = SURVIVOR_ROSTER
@@ -350,26 +351,26 @@ function _witchColor(type, entity) {
   return palette[parseInt(entity.id.slice(1)) % palette.length];
 }
 
-export function createZombie(col, row) {
-  const e = new Entity(EntityType.ZOMBIE, 'witch', col, row);
+export function createZombie(col, row, ownerId = null) {
+  const e = new Entity(EntityType.ZOMBIE, 'witch', col, row, ownerId);
   e.color = _witchColor(EntityType.ZOMBIE, e);
   return e;
 }
 
-export function createMinion(col, row) {
-  const e = new Entity(EntityType.MINION, 'witch', col, row);
+export function createMinion(col, row, ownerId = null) {
+  const e = new Entity(EntityType.MINION, 'witch', col, row, ownerId);
   e.color = _witchColor(EntityType.MINION, e);
   return e;
 }
 
-export function createWoodGolem(col, row) {
-  const e = new Entity(EntityType.WOOD_GOLEM, 'witch', col, row);
+export function createWoodGolem(col, row, ownerId = null) {
+  const e = new Entity(EntityType.WOOD_GOLEM, 'witch', col, row, ownerId);
   e.color = _witchColor(EntityType.WOOD_GOLEM, e);
   return e;
 }
 
-export function createIronGolem(col, row) {
-  const e = new Entity(EntityType.IRON_GOLEM, 'witch', col, row);
+export function createIronGolem(col, row, ownerId = null) {
+  const e = new Entity(EntityType.IRON_GOLEM, 'witch', col, row, ownerId);
   e.color = _witchColor(EntityType.IRON_GOLEM, e);
   return e;
 }
