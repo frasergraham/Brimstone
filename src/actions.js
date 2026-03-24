@@ -373,22 +373,6 @@ function _applyLoot(state, actor, lootType, log) {
   }
 }
 
-// Count how many allies (same owner, excluding self) are on the same or adjacent hexes
-function allyCount(state, entity) {
-  return allyList(state, entity).length;
-}
-
-// Return the actual ally entities (same owner, excluding self, on same or adjacent hexes)
-function allyList(state, entity) {
-  const neighbors = getNeighbors(entity.col, entity.row);
-  const friendlyHexes = new Set([hexKey(entity.col, entity.row)]);
-  for (const n of neighbors) friendlyHexes.add(hexKey(n.col, n.row));
-  return state.entities.filter(e =>
-    e.alive && e.id !== entity.id && e.owner === entity.owner &&
-    friendlyHexes.has(hexKey(e.col, e.row))
-  );
-}
-
 export function executeBattle(state, actor, target) {
   const log = [];
 
@@ -398,14 +382,17 @@ export function executeBattle(state, actor, target) {
   if (state.phase === Phase.NIGHT && actor.owner === 'witch') phaseBonus = 1;
 
   // Compute situational bonuses without touching entity fields
-  // Ally bonus only applies if the ally is also adjacent to the enemy
-  const enemyHexesForAtk = new Set([hexKey(target.col, target.row)]);
-  for (const n of getNeighbors(target.col, target.row)) enemyHexesForAtk.add(hexKey(n.col, n.row));
-  const atkAllies = allyList(state, actor).filter(a => enemyHexesForAtk.has(hexKey(a.col, a.row)));
+  // Gang-up: attacker allies adjacent to the TARGET (flanking/surrounding them)
+  // Ally-def: defender allies adjacent to the TARGET (defending their position)
+  const targetHexes = new Set([hexKey(target.col, target.row)]);
+  for (const n of getNeighbors(target.col, target.row)) targetHexes.add(hexKey(n.col, n.row));
 
-  const enemyHexesForDef = new Set([hexKey(actor.col, actor.row)]);
-  for (const n of getNeighbors(actor.col, actor.row)) enemyHexesForDef.add(hexKey(n.col, n.row));
-  const defAllies = allyList(state, target).filter(a => enemyHexesForDef.has(hexKey(a.col, a.row)));
+  const atkAllies = state.entities.filter(e =>
+    e.alive && e.owner === actor.owner && e.id !== actor.id && targetHexes.has(hexKey(e.col, e.row))
+  );
+  const defAllies = state.entities.filter(e =>
+    e.alive && e.owner === target.owner && e.id !== target.id && targetHexes.has(hexKey(e.col, e.row))
+  );
   const attackerAllies = atkAllies.length;
   const defenderAllies = defAllies.length;
   const defTile        = tile(state, target.col, target.row);
