@@ -209,12 +209,16 @@ function _pickCornerBuildings(rand, tiles) {
   const innZone   = rand() < 0.5 ? zA : zB;
   const gravZone  = innZone === zA ? zB : zA;
 
+  const hasRiverNeighbor = (col, row) =>
+    getNeighbors(col, row).some(n => tiles.get(hexKey(n.col, n.row))?.type === TileType.RIVER);
+
   const pickFrom = zone => {
     const cs = [];
     for (const [, t] of tiles) {
       if (t.type !== TileType.GRASS) continue;
       if (t.col < zone.minCol || t.col > zone.maxCol) continue;
       if (t.row < zone.minRow || t.row > zone.maxRow) continue;
+      if (hasRiverNeighbor(t.col, t.row)) continue;
       cs.push(t);
     }
     _shuffle(cs, rand);
@@ -281,11 +285,15 @@ function _placeVillageBuildings(rand, tiles, centerCol, centerRow, buildings, us
   const RADIUS  = 4; // max hex distance from village center
   const MIN_SEP = 3; // min separation between any two buildings in this village
 
+  const hasRiverNeighbor = (col, row) =>
+    getNeighbors(col, row).some(n => tiles.get(hexKey(n.col, n.row))?.type === TileType.RIVER);
+
   const candidates = [];
   for (const [, t] of tiles) {
     if (t.type !== TileType.GRASS) continue;
     const k = hexKey(t.col, t.row);
     if (usedKeys.has(k)) continue;
+    if (hasRiverNeighbor(t.col, t.row)) continue;
     const dist = hexDistance(centerCol, centerRow, t.col, t.row);
     if (dist >= 0 && dist <= RADIUS) candidates.push({ col: t.col, row: t.row, dist });
   }
