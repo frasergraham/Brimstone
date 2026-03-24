@@ -1,5 +1,5 @@
 // UI controller: handles canvas clicks, sidepanel updates, action buttons
-import { hexKey, hexToPixel } from './hex.js';
+import { hexKey, hexToPixel, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType } from './tiles.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
 import { Phase, Player, PHASE_ICON } from './game.js';
@@ -219,7 +219,7 @@ export class UIController {
 
     const { x, y } = this._canvasPos(e);
     const hex = this._canvasToHex(x, y);
-    this.renderer.hoveredHex = (hex.col >= 0 && hex.col < 13 && hex.row >= 0 && hex.row < 11)
+    this.renderer.hoveredHex = (hex.col >= 0 && hex.col < MAP_COLS && hex.row >= 0 && hex.row < MAP_ROWS)
       ? hex : null;
     this.onRedraw();
   }
@@ -505,7 +505,7 @@ export class UIController {
 
     const { x, y } = this._canvasPos(e);
     const hex = this._canvasToHex(x, y);
-    if (hex.col < 0 || hex.col >= 13 || hex.row < 0 || hex.row >= 11) return;
+    if (hex.col < 0 || hex.col >= MAP_COLS || hex.row < 0 || hex.row >= MAP_ROWS) return;
 
     // On opponent's turn, allow viewing tiles/units but block all actions
     if (!this._planMode && this._isOpponentTurn()) {
