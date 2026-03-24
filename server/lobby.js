@@ -234,16 +234,17 @@ function _serializeEvents(events) {
     };
     if (ev.result) {
       out.result = {
-        success:    ev.result.success,
-        log:        ev.result.log ?? [],
-        cost:       ev.result.cost ?? 1,
-        killed:     ev.result.killed   ?? false,
-        damage:     ev.result.damage   ?? 0,
-        counterDmg: ev.result.counterDmg ?? 0,
-        crush:      ev.result.crush    ?? false,
-        counter:    ev.result.counter  ?? false,
-        attackRoll: ev.result.attackRoll  ?? 0,
-        defenseRoll:ev.result.defenseRoll ?? 0,
+        success:      ev.result.success,
+        log:          ev.result.log          ?? [],
+        encounterLog: ev.result.encounterLog ?? [],
+        cost:         ev.result.cost         ?? 1,
+        killed:       ev.result.killed       ?? false,
+        damage:       ev.result.damage       ?? 0,
+        counterDmg:   ev.result.counterDmg   ?? 0,
+        crush:        ev.result.crush        ?? false,
+        counter:      ev.result.counter      ?? false,
+        attackRoll:   ev.result.attackRoll   ?? 0,
+        defenseRoll:  ev.result.defenseRoll  ?? 0,
       };
     }
     if (ev.battleSnaps) {
