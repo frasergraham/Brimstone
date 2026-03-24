@@ -292,7 +292,7 @@ Gang-up d3: attacker has ≥1 ally adjacent to defender. Ally-def d3: defender h
 ### Entity Stats
 | Type | HP | ATK | DEF |
 |------|----|-----|-----|
-| Hero | 10 | 3 | 2 |
+| Hero | 14 | 3 | 2 |
 | Witch | 10 | 2 | 2 |
 | Survivor | 2–4 | 1–3 | 2–3 |
 | Zombie | 2 | 2 | 0 |
@@ -322,7 +322,7 @@ Seeded, procedural. Sequence:
 6. 10 dirt patches for texture.
 7. 3 Power Nodes (minimum separation, no buildings).
 8. Hero starts at INN, Witch at GRAVEYARD.
-9. 12 hidden survivors (10 in buildings, 2 on terrain) flagged as `tile.hiddenSurvivor = true`.
+9. 15 hidden survivors (13 in buildings, 2 on terrain) flagged as `tile.hiddenSurvivor = true`.
 
 ---
 
@@ -333,7 +333,7 @@ The 13×11 grid (143 tiles) is intentionally compact. Design goals:
 
 - **Early contact:** factions start in opposite corners (~10–14 hex distance). With normal movement, they can reach mid-map by round 3–5, keeping early exploration meaningful without a long setup phase.
 - **Three contested zones:** the river acts as a soft dividing line; one node typically sits near each starting corner with a third in the mid-map, creating a natural three-way tug-of-war.
-- **Resource density:** 12 survivors + loot across 143 tiles keeps the economy active without making either side resource-starved or overwhelmed.
+- **Resource density:** 15 survivors + loot across 143 tiles keeps the economy active without making either side resource-starved or overwhelmed.
 
 If you resize the map, recalibrate: survivor count, node count, bridge count, and forest seed count proportionally. The river column range (`cols 2–10`) should also be adjusted to keep it centered.
 
