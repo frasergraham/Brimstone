@@ -1,6 +1,9 @@
-// Serialize a live GameState instance into a plain JSON-safe snapshot.
-// The client uses this snapshot to construct a MirrorState for rendering.
-import { VERSION } from '../src/version.js';
+// Serialize / deserialize a live GameState instance.
+// serializeState  → plain JSON-safe snapshot (network transmission, save storage)
+// deserializeState ← reconstruct a live GameState from a saved snapshot (resume)
+import { VERSION }           from '../src/version.js';
+import { Entity, bumpEntityId } from '../src/entities.js';
+import { GameState }         from '../src/game.js';
 
 export function serializeState(state) {
   const tiles = [];
@@ -81,4 +84,71 @@ export function serializeState(state) {
     tiles,
     entities,
   };
+}
+
+/**
+ * Reconstruct a live GameState from a serialized snapshot (e.g. loaded from DB).
+ * Calls the GameState constructor to get a proper instance with all methods,
+ * then overwrites all data fields from the snapshot.
+ */
+export function deserializeState(snap) {
+  // Construct a fresh GameState (generates a throw-away map + entities) just to
+  // get a properly-prototyped instance with all methods intact.
+  const state = new GameState(snap.witchIsAI ?? false, snap.heroIsAI ?? false);
+
+  // ── Tiles ─────────────────────────────────────────────────────────────────
+  state.tiles = new Map();
+  for (const t of snap.tiles) {
+    state.tiles.set(t.key, { ...t, roadDirs: new Set(t.roadDirs || []) });
+  }
+
+  // ── Entities — restore as real Entity instances so game-logic methods work ─
+  state.entities = snap.entities.map(data => {
+    const e = Object.create(Entity.prototype);
+    Object.assign(e, data, { items: { ...(data.items || {}) } });
+    return e;
+  });
+
+  // Advance the global ID counter past every restored ID to prevent collisions.
+  const maxId = snap.entities.reduce((max, e) => {
+    const n = parseInt(e.id?.slice(1) ?? '0', 10);
+    return isNaN(n) ? max : Math.max(max, n);
+  }, 0);
+  bumpEntityId(maxId);
+
+  // ── Leader references ─────────────────────────────────────────────────────
+  state.hero  = state.entities.find(e => e.id === snap.heroId)  ?? null;
+  state.witch = state.entities.find(e => e.id === snap.witchId) ?? null;
+
+  // ── Scalar game fields ───────────────────────────────────────────────────
+  state.phase                = snap.phase;
+  state.round                = snap.round;
+  state.activePlayer         = snap.activePlayer;
+  state.actionsLeft          = snap.actionsLeft;
+  state.witchSummonsThisTurn = snap.witchSummonsThisTurn ?? 0;
+  state.attritionLevel       = snap.attritionLevel       ?? 0;
+  state.nodeScore            = { ...snap.nodeScore };
+  state.log                  = [...snap.log];
+  state.witchObjectives      = snap.witchObjectives.map(o => ({ ...o }));
+  state.inventory            = JSON.parse(JSON.stringify(snap.inventory));
+  state.lastNightDamage      = [...(snap.lastNightDamage || [])];
+  state.lastDayDamage        = [...(snap.lastDayDamage   || [])];
+  state.lastHazardLog        = [...(snap.lastHazardLog   || [])];
+  state.fogOfWar             = snap.fogOfWar;
+  // winner / gameOver — saves only exist for in-progress games so these are null,
+  // but restore them defensively in case a partial save slips through.
+  state.winner               = snap.winner    ?? null;
+  state.winReason            = snap.winReason ?? null;
+
+  // ── Planning fields — reset to clean pre-planning state ──────────────────
+  state.planningPhase    = false;
+  state.resolving        = false;
+  state.heroPlan         = null;
+  state.witchPlan        = null;
+  state.heroReady        = false;
+  state.witchReady       = false;
+  state.heroActionsLeft  = snap.heroActionsLeft  ?? 0;
+  state.witchActionsLeft = snap.witchActionsLeft ?? 0;
+
+  return state;
 }

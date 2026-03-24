@@ -174,6 +174,11 @@ export class MultiplayerClient {
     this._send({ type: 'submitPlan', plan });
   }
 
+  /** Request the server to restore a saved game by its room ID. */
+  resumeSave(roomId) {
+    this._send({ type: 'resumeSave', roomId });
+  }
+
   // ── Internal ───────────────────────────────────────────────────────────────
 
   _send(obj) {

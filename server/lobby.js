@@ -6,10 +6,11 @@ import {
   executeMove, executeExplore, executeBattle,
   executeFortify, executeSummon, executeUseItem, executeUseAbility,
 } from '../src/actions.js';
-import { serializeState }           from './state-sync.js';
-import { recordResult }             from './leaderboard.js';
-import { resolvePlans }             from './resolver.js';
-import { upsertSave, deleteSave }   from './saves.js';
+import { serializeState, deserializeState } from './state-sync.js';
+import { recordResult }                    from './leaderboard.js';
+import { resolvePlans }                    from './resolver.js';
+import { upsertSave, deleteSave, getSave } from './saves.js';
+import { VERSION }                         from '../src/version.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const AI_FILL_DELAY_MS   = 5_000;  // wait this long before filling with AI
@@ -594,6 +595,88 @@ export function getRoomByCode(code) {
 
 export function getRoom(roomId) {
   return rooms.get(roomId) ?? null;
+}
+
+/**
+ * Resume a saved game for a reconnecting player.
+ *
+ * First tries to reconnect to a live in-memory room (e.g. browser refresh).
+ * If the room is gone (server restart, player quit to menu), reconstructs it
+ * from the DB save and starts a fresh planning phase against a new AI opponent.
+ *
+ * Human-vs-human saves are not yet supported for full two-player resumption;
+ * the resuming player is always placed against a server AI.
+ */
+export function resumeGame(playerId, ws, roomId) {
+  // 1. Try live reconnect first (covers the browser-refresh case).
+  if (rooms.has(roomId)) {
+    const rejoined = handleReconnect(playerId, roomId, ws);
+    if (rejoined) return;
+  }
+
+  // 2. Load from saved state.
+  const save = getSave(roomId);
+  if (!save) {
+    send(ws, { type: 'error', message: 'No save found for this game.' });
+    return;
+  }
+
+  const isHero  = save.hero_player_id  === playerId;
+  const isWitch = save.witch_player_id === playerId;
+  if (!isHero && !isWitch) {
+    send(ws, { type: 'error', message: 'You are not a player in this save.' });
+    return;
+  }
+
+  // 3. Version check — mismatched schemas would corrupt state.
+  if (save.game_version !== VERSION) {
+    send(ws, { type: 'error', message: `Save is from v${save.game_version}; server is v${VERSION}. Cannot resume.` });
+    return;
+  }
+
+  // 4. Reconstruct the live GameState.
+  let state;
+  try {
+    state = deserializeState(save.state);
+  } catch (err) {
+    console.error(`[resume ${roomId}] deserializeState error:`, err);
+    send(ws, { type: 'error', message: 'Failed to restore save.' });
+    return;
+  }
+
+  // 5. Create a new room and inject the restored state.
+  const humanFaction  = isHero ? 'hero' : 'witch';
+  const aiFaction     = humanFaction === 'hero' ? 'witch' : 'hero';
+  const heroPlayerId  = isHero  ? playerId : null;
+  const witchPlayerId = isWitch ? playerId : null;
+  const heroWs        = isHero  ? ws : null;
+  const witchWs       = isWitch ? ws : null;
+  const heroName      = save.hero_name  || (isHero  ? 'Hero'  : 'AI Hero');
+  const witchName     = save.witch_name || (isWitch ? 'Witch' : 'AI Witch');
+
+  const room  = createRoom(heroPlayerId, heroWs, heroName, witchPlayerId, witchWs, witchName, state.fogOfWar);
+  room.state  = state;
+
+  // Remove the old save; a new one will be created under the new roomId each round.
+  deleteSave(roomId);
+
+  // 6. Attach an AI for the opponent faction.
+  attachAI(room, aiFaction);
+
+  // 7. Inform the client — reuses the same matchFound / stateUpdate / planningPhase
+  //    flow as a normal game start so no special client handling is needed.
+  const opponentName = aiFaction === 'witch' ? 'The AI Witch' : 'The AI Hero';
+  send(ws, {
+    type:         'matchFound',
+    roomId:       room.id,
+    faction:      humanFaction,
+    opponentName,
+    aiOpponent:   true,
+    resumed:      true,
+  });
+
+  broadcastState(room, 'resume');
+  setTimeout(() => _startPlanningPhase(room), 500);
 }
 
 // ── Internal action dispatcher ────────────────────────────────────────────────

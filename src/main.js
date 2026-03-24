@@ -411,12 +411,14 @@ const stepMode    = document.getElementById('setup-step-mode');
 const stepSide    = document.getElementById('setup-step-side');
 const stepOnline  = document.getElementById('setup-step-online');
 const stepWaiting = document.getElementById('setup-step-waiting');
+const stepSaves   = document.getElementById('setup-step-saves');
 
 function showStep(step) {
   stepMode   .style.display = step === 'mode'    ? '' : 'none';
   stepSide   .style.display = step === 'side'    ? '' : 'none';
   stepOnline .style.display = step === 'online'  ? '' : 'none';
   stepWaiting.style.display = step === 'waiting' ? '' : 'none';
+  stepSaves  .style.display = step === 'saves'   ? '' : 'none';
 }
 
 // ── Local mode buttons ────────────────────────────────────────────────────────
@@ -508,6 +510,76 @@ function _esc(str) {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
+// ── Saves (resume) ────────────────────────────────────────────────────────────
+
+function _fetchSaves() {
+  const list = document.getElementById('saves-list');
+  list.innerHTML = '<p class="saves-empty">Loading…</p>';
+
+  const session = loadSession();
+  if (!session) {
+    list.innerHTML = '<p class="saves-empty">Sign in to see your saved games.</p>';
+    return;
+  }
+
+  const base = window.BRIMSTONE_SERVER || '';
+  fetch(`${base}/api/saves?token=${encodeURIComponent(session.token)}`)
+    .then(r => r.json())
+    .then(saves => _renderSaves(saves))
+    .catch(() => {
+      list.innerHTML = '<p class="saves-empty">Could not load saves (offline?).</p>';
+    });
+}
+
+function _renderSaves(saves) {
+  const list = document.getElementById('saves-list');
+  const session = loadSession();
+
+  if (!saves.length) {
+    list.innerHTML = '<p class="saves-empty">No games in progress.</p>';
+    return;
+  }
+
+  list.innerHTML = '';
+  for (const s of saves) {
+    const myFaction  = s.hero_player_id  === session?.id ? 'hero' : 'witch';
+    const oppName    = myFaction === 'hero' ? (s.witch_name || 'Witch') : (s.hero_name || 'Hero');
+    const factionSymbol = myFaction === 'hero' ? '⚔' : '✦';
+    const phaseLabel = { dawn: '🌅 Dawn', day: '☀ Day', dusk: '🌇 Dusk', night: '🌙 Night' }[s.phase] ?? s.phase;
+    const ago        = _timeAgo(s.updated_at);
+
+    const entry = document.createElement('div');
+    entry.className = 'save-entry';
+    entry.innerHTML = `
+      <div class="save-entry-info">
+        <div class="save-entry-title">${factionSymbol} vs ${_esc(oppName)}</div>
+        <div class="save-entry-meta">Round ${s.round} · ${phaseLabel} · saved ${ago}</div>
+      </div>
+      <button class="setup-btn primary">Resume</button>
+    `;
+    entry.querySelector('button').addEventListener('click', () => _resumeSave(s.room_id));
+    list.appendChild(entry);
+  }
+}
+
+function _resumeSave(roomId) {
+  _ensureAuthed(() => {
+    showStep('waiting');
+    document.getElementById('waiting-subtitle').textContent = 'Resuming game…';
+    document.getElementById('waiting-message').textContent  = 'Restoring your saved game…';
+    document.getElementById('waiting-room-code').style.display = 'none';
+    mp.resumeSave(roomId);
+  });
+}
+
+function _timeAgo(unixSecs) {
+  const diff = Math.floor(Date.now() / 1000) - unixSecs;
+  if (diff < 60)   return 'just now';
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
 // ── Online flow ───────────────────────────────────────────────────────────────
 
 document.getElementById('btn-online').addEventListener('click', () => {
@@ -519,6 +591,17 @@ document.getElementById('btn-online-back').addEventListener('click', () => {
   if (mp) { mp.disconnect(); mp = null; }
   renderer = null; ui = null; state = null;
   showStep('mode');
+});
+
+document.getElementById('btn-resume-game').addEventListener('click', () => {
+  _ensureAuthed(() => {
+    showStep('saves');
+    _fetchSaves();
+  });
+});
+
+document.getElementById('btn-saves-back').addEventListener('click', () => {
+  showStep('online');
 });
 
 document.getElementById('btn-cancel-wait').addEventListener('click', () => {
@@ -741,11 +824,18 @@ function _createMpClient() {
       }
     },
 
-    onMatchFound({ roomId, faction, opponentName, aiOpponent }) {
-      document.getElementById('waiting-subtitle').textContent =
-        `Matched! You play ${faction === 'hero' ? 'Hero ⚔' : 'Witch ✦'}`;
-      document.getElementById('waiting-message').textContent =
-        `Opponent: ${opponentName}${aiOpponent ? ' (AI)' : ''}. Starting game…`;
+    onMatchFound({ roomId, faction, opponentName, aiOpponent, resumed }) {
+      if (resumed) {
+        document.getElementById('waiting-subtitle').textContent =
+          `Resuming as ${faction === 'hero' ? 'Hero ⚔' : 'Witch ✦'}`;
+        document.getElementById('waiting-message').textContent =
+          `Restored! Opponent: ${opponentName}. Resuming…`;
+      } else {
+        document.getElementById('waiting-subtitle').textContent =
+          `Matched! You play ${faction === 'hero' ? 'Hero ⚔' : 'Witch ✦'}`;
+        document.getElementById('waiting-message').textContent =
+          `Opponent: ${opponentName}${aiOpponent ? ' (AI)' : ''}. Starting game…`;
+      }
       // Game starts when first stateUpdate arrives → onState handles initOnline
     },
 
