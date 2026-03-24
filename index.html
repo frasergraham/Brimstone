@@ -164,6 +164,12 @@
     <main id="game-main">
       <div id="canvas-wrapper">
         <canvas id="game-canvas"></canvas>
+        <!-- Zoom controls — always visible on desktop, hidden on touch-only devices -->
+        <div id="zoom-controls" class="zoom-controls">
+          <button id="zoom-in"  class="zoom-btn" title="Zoom in (+)">＋</button>
+          <button id="zoom-out" class="zoom-btn" title="Zoom out (−)">－</button>
+          <button id="zoom-fit" class="zoom-btn" title="Fit map">⛶</button>
+        </div>
       </div>
 
       <!-- Plan panel — slides in during planning phase -->

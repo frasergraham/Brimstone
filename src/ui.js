@@ -72,9 +72,33 @@ export class UIController {
     this.canvas.addEventListener('mousedown', e => {
       this._mouseDown  = { clientX: e.clientX, clientY: e.clientY };
       this._didDragPan = false;
+      this.canvas.style.cursor = 'grabbing';
     });
-    this.canvas.addEventListener('mouseup', () => {
-      this._mouseDown = null;
+    // Listen on document so releasing outside the canvas always clears drag state
+    document.addEventListener('mouseup', () => {
+      if (this._mouseDown) {
+        this._mouseDown = null;
+        this.canvas.style.cursor = '';
+      }
+    });
+
+    // Zoom control buttons (+, −, fit)
+    const zoomStep = 1.25;
+    document.getElementById('zoom-in')?.addEventListener('click', () => {
+      const cx = this.canvas.width  / 2;
+      const cy = this.canvas.height / 2;
+      this.renderer.setZoom(this.renderer.zoomLevel * zoomStep, cx, cy);
+      this.onRedraw();
+    });
+    document.getElementById('zoom-out')?.addEventListener('click', () => {
+      const cx = this.canvas.width  / 2;
+      const cy = this.canvas.height / 2;
+      this.renderer.setZoom(this.renderer.zoomLevel / zoomStep, cx, cy);
+      this.onRedraw();
+    });
+    document.getElementById('zoom-fit')?.addEventListener('click', () => {
+      this.renderer.resetView();
+      this.onRedraw();
     });
 
     // Touch: tap, drag-to-pan, pinch-to-zoom (mobile)
