@@ -505,7 +505,8 @@ export function generateMap(seed = Date.now(), mapSize = 'standard') {
   // penalise over-used hubs and route around them.
   const roadTiles = new Set();
   const placeRoad = path => {
-    for (const { col, row } of path) {
+    for (let i = 0; i < path.length; i++) {
+      const { col, row } = path[i];
       const t = tiles.get(hexKey(col, row));
       if (!t) continue;
       if (t.type === TileType.GRASS || t.type === TileType.DIRT || t.type === TileType.FOREST) {
@@ -516,10 +517,40 @@ export function generateMap(seed = Date.now(), mapSize = 'standard') {
         bridgesPlaced++;
         roadTiles.add(hexKey(col, row));
       }
+      // Record bidirectional connectivity so the renderer and floodConnected
+      // can use exact road topology rather than inferring from tile types.
+      if (i > 0) {
+        const prev = path[i - 1];
+        const prevTile = tiles.get(hexKey(prev.col, prev.row));
+        if (prevTile) {
+          t.roadDirs.add(hexKey(prev.col, prev.row));
+          prevTile.roadDirs.add(hexKey(col, row));
+        }
+      }
     }
   };
 
+  // Returns true if 'to' is already reachable from 'from' via roadDirs links.
+  // Used to skip edges that are already satisfied by previously-placed roads.
+  const floodConnected = (from, to) => {
+    const target = hexKey(to.col, to.row);
+    const start  = hexKey(from.col, from.row);
+    if (start === target) return true;
+    const visited = new Set();
+    const stack   = [start];
+    while (stack.length) {
+      const k = stack.pop();
+      if (k === target) return true;
+      if (visited.has(k)) continue;
+      visited.add(k);
+      const t = tiles.get(k);
+      if (t) for (const nk of t.roadDirs) stack.push(nk);
+    }
+    return false;
+  };
+
   for (const { from, to } of roadEdges) {
+    if (floodConnected(from, to)) continue;
     placeRoad(bfsPath(tiles, from.col, from.row, to.col, to.row, rand, roadTiles));
   }
 

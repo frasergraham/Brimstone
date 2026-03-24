@@ -716,7 +716,9 @@ export class Renderer {
         ctx.strokeStyle = TILE_COLOR[TileType.ROAD];
 
         const { x, y } = this._toCanvas(col, row);
-        const roadNbrs = getNeighbors(col, row).filter(n => isRoadLike(tiles.get(hexKey(n.col, n.row))));
+        // Use explicit roadDirs recorded at generation time rather than
+        // inferring from adjacent tile types — prevents phantom junctions.
+        const roadNbrs = [...tile.roadDirs].map(k => tiles.get(k)).filter(Boolean);
         if (roadNbrs.length === 0) continue;
 
         const edgeMids = roadNbrs.map(n => {
