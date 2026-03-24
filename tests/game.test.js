@@ -273,16 +273,13 @@ describe('Victory — node scoring', () => {
 });
 
 // ── Initial log message accuracy ──────────────────────────────────────────────
-// Bug candidate: constructor log says "First to 3 points wins" but code uses >= 4
-
 describe('Constructor log message', () => {
-  test('initial log states the correct win threshold (4 points, not 3)', () => {
+  test('initial log states the correct win threshold (4 points)', () => {
     const state = new GameState(true, true);
     const initLog = state.log.join(' ');
-    // The score win condition is >= 4, so the log should reflect that
     assert.ok(
-      !initLog.includes('First to 3 points'),
-      'BUG: log says "First to 3 points" but win condition is 4 — message is incorrect'
+      initLog.includes('First to 4 points'),
+      'Log message should say "First to 4 points" to match the actual win condition'
     );
   });
 });

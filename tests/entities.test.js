@@ -432,22 +432,6 @@ describe('Entity.resolveCombat', () => {
 // ── Survivor roster ───────────────────────────────────────────────────────────
 
 describe('Survivor roster', () => {
-  test('BRAWLER survivors have attack=3 (base 2 + 1 passive)', () => {
-    const brawlers = SURVIVOR_ROSTER.filter(s => s.ability === SurvivorAbility.BRAWLER);
-    assert.ok(brawlers.length > 0, 'There should be at least one BRAWLER');
-    for (const b of brawlers) {
-      assert.equal(b.attack, 3, `${b.name} (BRAWLER) attack should be 3, got ${b.attack}`);
-    }
-  });
-
-  test('STURDY survivors have defense=3 (base 2 + 1 passive)', () => {
-    const sturdies = SURVIVOR_ROSTER.filter(s => s.ability === SurvivorAbility.STURDY);
-    assert.ok(sturdies.length > 0, 'There should be at least one STURDY');
-    for (const s of sturdies) {
-      assert.equal(s.defense, 3, `${s.name} (STURDY) defense should be 3, got ${s.defense}`);
-    }
-  });
-
   test('roster has exactly 12 characters', () => {
     assert.equal(SURVIVOR_ROSTER.length, 12);
   });

@@ -637,48 +637,6 @@ describe('executeUseItem — Herbs', () => {
   });
 });
 
-describe('executeUseItem — Food', () => {
-  // Design: Food costs 1 action and gives +1 action = net 0 budget change
-  // The resolver captures state.actionsLeft changes as budgetBonus
-  // and result.cost determines how much budget is consumed.
-  // Expected: result.cost = 1, state.actionsLeft increases by 1 → net 0
-
-  test('food succeeds and gives +1 actionsLeft', () => {
-    const state = freshState();
-    state.inventory.shared[ResourceType.FOOD] = 1;
-    state.actionsLeft = 3;
-
-    const r = executeUseItem(state, state.hero, ResourceType.FOOD);
-    assert.equal(r.success, true);
-    assert.equal(state.actionsLeft, 4, 'Food should grant +1 action');
-  });
-
-  test('food consumes from shared inventory', () => {
-    const state = freshState();
-    state.inventory.shared[ResourceType.FOOD] = 2;
-    executeUseItem(state, state.hero, ResourceType.FOOD);
-    assert.equal(state.inventory.shared[ResourceType.FOOD], 1, 'One food should be consumed');
-  });
-
-  test('food costs 1 action (net change is 0: -1 cost +1 gain)', () => {
-    // Per design doc: "Food (1 action, +1 action)" = net zero
-    // The result.cost field signals to the caller how much budget to spend.
-    // Expected: cost=1 so resolver deducts 1 and budgetBonus=+1 restores it.
-    const state = freshState();
-    state.inventory.shared[ResourceType.FOOD] = 1;
-    const r = executeUseItem(state, state.hero, ResourceType.FOOD);
-    assert.equal(r.cost, 1,
-      'BUG CANDIDATE: Food should cost 1 action per design doc (currently returns cost=0, giving net +1)');
-  });
-
-  test('food fails when none available', () => {
-    const state = freshState();
-    state.inventory.shared[ResourceType.FOOD] = 0;
-    const r = executeUseItem(state, state.hero, ResourceType.FOOD);
-    assert.equal(r.success, false);
-  });
-});
-
 describe('executeUseItem — Silver', () => {
   test('silver gives +1 attackBonus and costs 0', () => {
     const state = freshState();

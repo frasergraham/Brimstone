@@ -110,7 +110,7 @@ export class GameState {
     this.log = [
       `🌅 Dawn breaks over Salem. The hero stirs at the Inn.`,
       `Three Power Nodes: ${this.witchObjectives.map(o => o.label).join(', ')}.`,
-      `⚔ Hold 2+ nodes at each dawn/dusk to score. First to 3 points wins. Three cycles — then darkness claims Salem.`,
+      `⚔ Hold 2+ nodes at each dawn/dusk to score. First to 4 points wins. Three cycles — then darkness claims Salem.`,
     ];
 
     this.selectedEntity    = null;

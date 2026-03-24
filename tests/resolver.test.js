@@ -240,31 +240,46 @@ describe('resolvePlans — budget cap', () => {
 });
 
 // ── Food budget extension ─────────────────────────────────────────────────────
+// Food is NOT a USE_ITEM action. The resolver auto-consumes food from the shared
+// inventory when budget is exhausted but the plan still has actions queued.
 
 describe('resolvePlans — food extends budget', () => {
-  test('consuming food from shared inventory extends budget by 1', () => {
+  test('food is auto-consumed at budget cap allowing one extra action', () => {
     const state = freshState();
     const hero = state.hero;
 
-    // Drain hero budget completely via explore actions, then use food
-    // Budget = computeActions (3-4 base). Give exact budget worth of explores,
-    // then food, then one more explore — food should fund that last explore.
+    const reachable = getReachableHexes(state, hero, 1);
+    if (!reachable.length) return;
 
-    // Just give food and check that a USE_ITEM food action succeeds mid-plan
+    const posA = { col: hero.col, row: hero.row };
+    const posB = reachable[0];
+
+    // With food: budget+1 MOVE actions should NOT produce BUDGET_CAP
+    // (food funds the one extra step). Without food it would cap.
     state.inventory.shared[ResourceType.FOOD] = 1;
+    const heroActionsLeft = state.actionsLeft; // base budget
 
-    const foodAction = {
-      type: PlanActionType.USE_ITEM,
+    // Build exactly budget+1 alternating moves
+    const planWithFood = Array.from({ length: heroActionsLeft + 1 }, (_, i) => ({
+      type: PlanActionType.MOVE,
       entityId: hero.id,
-      item: ResourceType.FOOD,
-    };
+      toCol: i % 2 === 0 ? posB.col : posA.col,
+      toRow: i % 2 === 0 ? posB.row : posA.row,
+    }));
 
-    const steps = resolvePlans(state, [foodAction], []);
-    const heroEvents = steps.flatMap(s => s.heroEvents);
-    const foodEvent = heroEvents.find(e =>
-      e.type === ResEventType.ACTION_OK && e.action?.item === ResourceType.FOOD
-    );
-    assert.ok(foodEvent, 'Food USE_ITEM action should execute successfully');
+    const steps = resolvePlans(state, planWithFood, []);
+    const allHeroEvents = steps.flatMap(s => s.heroEvents);
+
+    // All moves should succeed (food covers the extra step)
+    const okCount = allHeroEvents.filter(e => e.type === ResEventType.ACTION_OK).length;
+    assert.equal(okCount, heroActionsLeft + 1, 'Food should fund one extra action beyond base budget');
+
+    // No budget cap should fire
+    const hasCap = allHeroEvents.some(e => e.type === ResEventType.BUDGET_CAP);
+    assert.ok(!hasCap, 'BUDGET_CAP should not fire when food covers the extra action');
+
+    // Food should be consumed from shared inventory
+    assert.equal(state.inventory.shared[ResourceType.FOOD], 0, 'Food should be consumed');
   });
 });
 
