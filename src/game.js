@@ -57,7 +57,7 @@ export function computeActions(player, phase, entities) {
     const timeBonus = phase === Phase.NIGHT ? 1 : 0;
     // Each pair of minions earns +1 action, up to +4 (needs 8 minions for full bonus)
     const unitBonus = Math.min(Math.floor(extras / 2), 4);
-    return 3 + timeBonus + unitBonus;
+    return 4 + timeBonus + unitBonus;
   }
 }
 
