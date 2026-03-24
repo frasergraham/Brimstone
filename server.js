@@ -8,7 +8,7 @@ import { fileURLToPath }   from 'url';
 import { VERSION } from './src/version.js';
 import { registerOrLogin, getPlayerByToken } from './server/auth.js';
 import { getLeaderboard }                    from './server/leaderboard.js';
-import { getActiveSaves }                    from './server/saves.js';
+import { getActiveSaves, pruneStaleAndIncompatibleSaves } from './server/saves.js';
 import {
   joinQueue, leaveQueue,
   createPrivateRoom, joinPrivateRoom,
@@ -214,4 +214,6 @@ function _publicPlayer(p) {
 
 server.listen(PORT, () => {
   console.log(`Brimstone v${VERSION} listening on port ${PORT}`);
+  const pruned = pruneStaleAndIncompatibleSaves(VERSION);
+  if (pruned > 0) console.log(`Pruned ${pruned} stale/incompatible save(s).`);
 });

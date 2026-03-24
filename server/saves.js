@@ -1,6 +1,8 @@
 // Game save persistence — upsert/delete/list/get for in-progress game states.
 import db from './db.js';
 
+const SAVE_MAX_AGE_DAYS = 3;
+
 const _upsert = db.prepare(`
   INSERT INTO game_saves
     (room_id, hero_player_id, witch_player_id, hero_name, witch_name,
@@ -54,6 +56,22 @@ export function upsertSave(roomId, heroPlayerId, witchPlayerId, heroName, witchN
 /** Remove the save for a completed or abandoned room. */
 export function deleteSave(roomId) {
   _delete.run(roomId);
+}
+
+/**
+ * Remove stale saves on server startup:
+ *   - any save idle for more than SAVE_MAX_AGE_DAYS days
+ *   - any save from a different game version (schema may be incompatible)
+ *
+ * Returns the number of rows pruned.
+ */
+export function pruneStaleAndIncompatibleSaves(currentVersion) {
+  const cutoff = Math.floor(Date.now() / 1000) - SAVE_MAX_AGE_DAYS * 86400;
+  const { changes } = db.prepare(`
+    DELETE FROM game_saves
+    WHERE updated_at < ? OR game_version != ?
+  `).run(cutoff, currentVersion);
+  return changes;
 }
 
 /**
