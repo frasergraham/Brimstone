@@ -112,6 +112,7 @@ export class UIController {
         );
         if (total > 10) this._isDragging = true;
         if (this._isDragging) {
+          this.renderer._zoomAnim = null; // cancel auto-framing on manual pan
           this.renderer._panX += dx;
           this.renderer._panY += dy;
           this.renderer._clampPan();
@@ -205,6 +206,7 @@ export class UIController {
       const dy = e.clientY - this._mouseDown.clientY;
       if (Math.hypot(dx, dy) > 5) {
         this._didDragPan = true;
+        this.renderer._zoomAnim = null; // cancel auto-framing on manual pan
         const rect   = this.canvas.getBoundingClientRect();
         const scaleX = this.canvas.width  / rect.width;
         const scaleY = this.canvas.height / rect.height;
@@ -283,6 +285,15 @@ export class UIController {
     this._renderPlanPanel();
     this._updateSidebar();
     this.onRedraw();
+
+    // Zoom to frame the planning faction's units at the start of every turn
+    // (also serves as the initial "zoom in on player" at game start).
+    if (this.renderer) {
+      const units = this.state.entities.filter(e => e.alive && e.owner === faction);
+      if (units.length > 0) {
+        this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 550 });
+      }
+    }
 
     // Show a brief phase-info toast so the player always knows current conditions.
     this._showPhaseToast(faction);

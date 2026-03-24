@@ -290,6 +290,13 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
              ));
         if (battleSnaps && showDialog) {
           const { actorSnap, targetSnap } = battleSnaps;
+          // Zoom in on the combatants for the duration of the dialog
+          if (!_autoplay) {
+            renderer.frameHexes(
+              [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
+              { paddingHexes: 2.5, maxZoom: 2.0, duration: 350 },
+            );
+          }
           renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
           if (result?.killed) {
             // Brief delay so the attack flash is visible before the death burst
