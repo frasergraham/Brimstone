@@ -240,6 +240,13 @@ function pickSummonType(inv) {
 
 export function executeMove(state, actor, targetCol, targetRow) {
   const log = [];
+
+  // Adjacency check — range 2 with horse, otherwise 1.
+  const hasHorse = actor.owner === 'hero' && (actor.items?.['horse'] || 0) > 0;
+  const maxRange = hasHorse ? 2 : 1;
+  if (hexDistance(actor.col, actor.row, targetCol, targetRow) > maxRange)
+    return { success: false, log: [`Cannot reach (${targetCol},${targetRow}) from current position.`] };
+
   const t = tile(state, targetCol, targetRow);
   if (!t || t.type === TileType.RIVER)
     return { success: false, log: ['Cannot move there.'] };
