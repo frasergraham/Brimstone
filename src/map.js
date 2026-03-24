@@ -1,35 +1,136 @@
 // Procedural map generator for the Salem hex map
-import { MAP_COLS, MAP_ROWS, getNeighbors, hexKey, hexDistance } from './hex.js';
+import { MAP_COLS, MAP_ROWS, setMapDimensions, getNeighbors, hexKey, hexDistance } from './hex.js';
 import { Tile, TileType, BuildingType } from './tiles.js';
 
-// Building types to scatter across the map each game
-// INN and GRAVEYARD are excluded — they are placed in opposite corners by _pickCornerBuildings
-const BUILDING_TYPES = [
-  BuildingType.TOWN_HALL,
-  BuildingType.CHURCH,
-  BuildingType.BLACKSMITH,
-  BuildingType.MILL,
-  BuildingType.DOCK,
-  BuildingType.BARN, BuildingType.BARN,
-  BuildingType.WATCHTOWER,
-  BuildingType.APOTHECARY,
-  BuildingType.STOREHOUSE,
-  BuildingType.STABLE,
-  BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
-  BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
-  BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
-  BuildingType.HOUSE, BuildingType.HOUSE,
+// Flavor labels for the witch power nodes (extra labels for larger maps)
+const WITCH_OBJECTIVE_LABELS = [
+  'Ancient Altar', 'Dark Grove', 'Cursed Crossroads', 'Forgotten Hollow',
 ];
 
-// Flavor labels for the three witch power nodes
-const WITCH_OBJECTIVE_LABELS = ['Ancient Altar', 'Dark Grove', 'Cursed Crossroads'];
+// ── Map size presets ─────────────────────────────────────────────────────────
+// Each preset defines grid dimensions plus all size-dependent generation params.
+// buildingTypes: extra buildings placed by _clusteredBuildingPlacements
+//   (INN + GRAVEYARD are always placed separately in opposite corners)
+// forestSeeds: starting positions for cluster growth
+// nodeCount: number of witch power-node objectives
+// survivorCounts: { buildings, terrain } — tiles flagged hiddenSurvivor=true
+// clusterChance: probability of trying to cluster near an existing building
+// bridgeMax: max river-crossing bridges
 
-// Forest seed positions; clusters grown from each
-const FOREST_SEEDS = [
-  {col:0,row:0},{col:1,row:1},{col:11,row:1},{col:12,row:0},
-  {col:12,row:4},{col:0,row:6},{col:1,row:9},{col:12,row:8},
-  {col:7,row:3},{col:8,row:8},{col:0,row:4},{col:6,row:9},
-];
+export const MAP_SIZES = {
+  skirmish: {
+    label: 'Skirmish (9×9)',
+    cols: 9, rows: 9,
+    buildingTypes: [
+      BuildingType.TOWN_HALL,
+      BuildingType.CHURCH,
+      BuildingType.BLACKSMITH,
+      BuildingType.APOTHECARY,
+      BuildingType.BARN,
+      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
+    ],
+    forestSeeds: [
+      {col:0,row:0},{col:1,row:1},{col:7,row:1},{col:8,row:0},
+      {col:8,row:3},{col:0,row:4},{col:1,row:7},{col:8,row:6},
+      {col:4,row:2},{col:5,row:6},
+    ],
+    nodeCount: 2,
+    survivorCounts: { buildings: 5, terrain: 2 },
+    clusterChance: 0.55,
+    bridgeMax: 2,
+  },
+  standard: {
+    label: 'Standard (13×11)',
+    cols: 13, rows: 11,
+    buildingTypes: [
+      BuildingType.TOWN_HALL,
+      BuildingType.CHURCH,
+      BuildingType.BLACKSMITH,
+      BuildingType.MILL,
+      BuildingType.DOCK,
+      BuildingType.BARN, BuildingType.BARN,
+      BuildingType.WATCHTOWER,
+      BuildingType.APOTHECARY,
+      BuildingType.STOREHOUSE,
+      BuildingType.STABLE,
+      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
+      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
+      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
+      BuildingType.HOUSE, BuildingType.HOUSE,
+    ],
+    forestSeeds: [
+      {col:0,row:0},{col:1,row:1},{col:11,row:1},{col:12,row:0},
+      {col:12,row:4},{col:0,row:6},{col:1,row:9},{col:12,row:8},
+      {col:7,row:3},{col:8,row:8},{col:0,row:4},{col:6,row:9},
+    ],
+    nodeCount: 3,
+    survivorCounts: { buildings: 13, terrain: 2 },
+    clusterChance: 0.65,
+    bridgeMax: 4,
+  },
+  regional: {
+    label: 'Regional (17×13)',
+    cols: 17, rows: 13,
+    buildingTypes: [
+      BuildingType.TOWN_HALL,
+      BuildingType.CHURCH,
+      BuildingType.BLACKSMITH,
+      BuildingType.MILL,
+      BuildingType.DOCK,
+      BuildingType.BARN, BuildingType.BARN, BuildingType.BARN,
+      BuildingType.WATCHTOWER, BuildingType.WATCHTOWER,
+      BuildingType.APOTHECARY,
+      BuildingType.STOREHOUSE,
+      BuildingType.STABLE, BuildingType.STABLE,
+      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
+      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
+      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
+      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
+      BuildingType.HOUSE, BuildingType.HOUSE,
+    ],
+    forestSeeds: [
+      {col:0,row:0},{col:1,row:1},{col:15,row:1},{col:16,row:0},
+      {col:16,row:4},{col:0,row:7},{col:1,row:11},{col:16,row:9},
+      {col:9,row:3},{col:10,row:9},{col:0,row:4},{col:7,row:11},
+      {col:5,row:1},{col:12,row:6},{col:3,row:6},{col:14,row:11},
+    ],
+    nodeCount: 3,
+    survivorCounts: { buildings: 16, terrain: 4 },
+    clusterChance: 0.80,
+    bridgeMax: 5,
+  },
+  campaign: {
+    label: 'Campaign (21×15)',
+    cols: 21, rows: 15,
+    buildingTypes: [
+      BuildingType.TOWN_HALL, BuildingType.TOWN_HALL,
+      BuildingType.CHURCH, BuildingType.CHURCH,
+      BuildingType.BLACKSMITH, BuildingType.BLACKSMITH,
+      BuildingType.MILL,
+      BuildingType.DOCK, BuildingType.DOCK,
+      BuildingType.BARN, BuildingType.BARN, BuildingType.BARN, BuildingType.BARN,
+      BuildingType.WATCHTOWER, BuildingType.WATCHTOWER, BuildingType.WATCHTOWER,
+      BuildingType.APOTHECARY, BuildingType.APOTHECARY,
+      BuildingType.STOREHOUSE, BuildingType.STOREHOUSE,
+      BuildingType.STABLE, BuildingType.STABLE,
+      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
+      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
+      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
+      BuildingType.HOUSE, BuildingType.HOUSE, BuildingType.HOUSE,
+    ],
+    forestSeeds: [
+      {col:0,row:0},{col:1,row:1},{col:19,row:1},{col:20,row:0},
+      {col:20,row:5},{col:0,row:8},{col:1,row:13},{col:20,row:11},
+      {col:11,row:3},{col:12,row:11},{col:0,row:5},{col:8,row:13},
+      {col:5,row:1},{col:15,row:7},{col:3,row:7},{col:17,row:13},
+      {col:8,row:0},{col:14,row:0},{col:0,row:10},{col:20,row:7},
+    ],
+    nodeCount: 3,
+    survivorCounts: { buildings: 20, terrain: 5 },
+    clusterChance: 0.85,
+    bridgeMax: 6,
+  },
+};
 
 function rng(seed) {
   let s = seed | 0;
@@ -106,18 +207,17 @@ function _pickSpread(rand, tiles, count, minDist, forbiddenKeys = new Set()) {
   return placed;
 }
 
-// Corner zones — wide enough to stay clear of the river regardless of where it runs
-const CORNER_ZONES = [
-  { minCol: 0, maxCol: 2,          minRow: 0, maxRow: 3 },               // top-left
-  { minCol: MAP_COLS - 3, maxCol: MAP_COLS - 1, minRow: 0, maxRow: 3 },  // top-right
-  { minCol: 0, maxCol: 2,          minRow: MAP_ROWS - 4, maxRow: MAP_ROWS - 1 }, // bottom-left
-  { minCol: MAP_COLS - 3, maxCol: MAP_COLS - 1, minRow: MAP_ROWS - 4, maxRow: MAP_ROWS - 1 }, // bottom-right
-];
-
 // Place INN and GRAVEYARD in opposite corners (TL+BR or TR+BL, randomly assigned).
+// Corner zones are computed at call time from the current MAP_COLS/MAP_ROWS.
 function _pickCornerBuildings(rand, tiles) {
+  const cz = [
+    { minCol: 0,           maxCol: 2,           minRow: 0,           maxRow: 3           }, // TL
+    { minCol: MAP_COLS-3,  maxCol: MAP_COLS-1,  minRow: 0,           maxRow: 3           }, // TR
+    { minCol: 0,           maxCol: 2,           minRow: MAP_ROWS-4,  maxRow: MAP_ROWS-1  }, // BL
+    { minCol: MAP_COLS-3,  maxCol: MAP_COLS-1,  minRow: MAP_ROWS-4,  maxRow: MAP_ROWS-1  }, // BR
+  ];
   const useTLBR   = rand() < 0.5;
-  const [zA, zB]  = useTLBR ? [CORNER_ZONES[0], CORNER_ZONES[3]] : [CORNER_ZONES[1], CORNER_ZONES[2]];
+  const [zA, zB]  = useTLBR ? [cz[0], cz[3]] : [cz[1], cz[2]];
   const innZone   = rand() < 0.5 ? zA : zB;
   const gravZone  = innZone === zA ? zB : zA;
 
@@ -142,11 +242,11 @@ function _pickCornerBuildings(rand, tiles) {
 }
 
 // Clustered building placement: buildings tend to group into hamlets of 2–5.
-// CLUSTER_CHANCE controls how often a new building tries to settle near an
+// clusterChance controls how often a new building tries to settle near an
 // existing one; MIN_CLUSTER_DIST prevents adjacent stacking within a cluster;
 // MIN_SPREAD_DIST ensures isolated buildings aren't too close to anything.
-function _clusteredBuildingPlacements(rand, tiles, reservedKeys = new Set()) {
-  const CLUSTER_CHANCE    = 0.65; // probability of trying to cluster near existing
+function _clusteredBuildingPlacements(rand, tiles, buildingTypes, clusterChance, reservedKeys = new Set()) {
+  const CLUSTER_CHANCE    = clusterChance; // probability of trying to cluster near existing
   const CLUSTER_RADIUS    = 3;    // max hexes away to consider "same cluster"
   const MIN_CLUSTER_DIST  = 2;    // min separation within a cluster
   const MIN_SPREAD_DIST   = 4;    // min separation for isolated placement
@@ -165,7 +265,7 @@ function _clusteredBuildingPlacements(rand, tiles, reservedKeys = new Set()) {
     return _shuffle(out, rand);
   };
 
-  for (const building of BUILDING_TYPES) {
+  for (const building of buildingTypes) {
     const candidates = grassCandidates();
 
     let placed = false;
@@ -205,8 +305,11 @@ function _clusteredBuildingPlacements(rand, tiles, reservedKeys = new Set()) {
 // or (col-1, row+1); from an odd row to (col+1, row+1) or (col, row+1).
 function _generateRiver(rand) {
   const path = [];
-  const startCol = 3 + Math.floor(rand() * 7); // cols 3–9
-  let col = startCol;
+  // Start in the middle third of the map, clamped to the safe river range
+  const minStart = Math.max(2, Math.floor(MAP_COLS / 4));
+  const rangeLen  = Math.max(1, Math.floor(MAP_COLS / 2));
+  const startCol  = minStart + Math.floor(rand() * rangeLen);
+  let col = Math.min(startCol, MAP_COLS - 3);
 
   for (let row = 0; row < MAP_ROWS; row++) {
     path.push({ col, row });
@@ -226,7 +329,10 @@ function _generateRiver(rand) {
   return path;
 }
 
-export function generateMap(seed = Date.now()) {
+export function generateMap(seed = Date.now(), mapSize = 'standard') {
+  const cfg = MAP_SIZES[mapSize] ?? MAP_SIZES.standard;
+  setMapDimensions(cfg.cols, cfg.rows);
+
   const rand = rng(seed);
   const tiles = new Map();
 
@@ -246,7 +352,10 @@ export function generateMap(seed = Date.now()) {
   // 3. Place INN and GRAVEYARD in opposite corners, then scatter remaining buildings
   const cornerPlacements   = _pickCornerBuildings(rand, tiles);
   const cornerKeys         = new Set(cornerPlacements.map(b => hexKey(b.col, b.row)));
-  const buildingPlacements = [...cornerPlacements, ..._clusteredBuildingPlacements(rand, tiles, cornerKeys)];
+  const buildingPlacements = [
+    ...cornerPlacements,
+    ..._clusteredBuildingPlacements(rand, tiles, cfg.buildingTypes, cfg.clusterChance, cornerKeys),
+  ];
   for (const { col, row, building } of buildingPlacements) {
     const t = tiles.get(hexKey(col, row));
     if (!t) continue;
@@ -292,7 +401,7 @@ export function generateMap(seed = Date.now()) {
       const t = tiles.get(hexKey(col, row));
       if (!t) continue;
       if (t.type === TileType.GRASS || t.type === TileType.DIRT || t.type === TileType.FOREST) t.type = TileType.ROAD;
-      else if (t.type === TileType.RIVER && bridgesPlaced < 4) {
+      else if (t.type === TileType.RIVER && bridgesPlaced < cfg.bridgeMax) {
         t.type = TileType.BRIDGE;
         bridgesPlaced++;
       }
@@ -304,7 +413,7 @@ export function generateMap(seed = Date.now()) {
   }
 
   // 5. Grow forest clusters from seeds
-  for (const seed of FOREST_SEEDS) {
+  for (const seed of cfg.forestSeeds) {
     const neighbors = getNeighbors(seed.col, seed.row);
     const candidates = [seed, ...neighbors];
     for (const { col, row } of candidates) {
@@ -342,13 +451,13 @@ export function generateMap(seed = Date.now()) {
     }
   }
 
-  // 6. Place witch objectives — 3 well-spread positions not overlapping buildings
+  // 6. Place witch objectives — well-spread positions not overlapping buildings
   const buildingKeys = new Set(buildingPlacements.map(b => hexKey(b.col, b.row)));
-  const objPositions = _pickSpread(rand, tiles, 3, 4, buildingKeys);
+  const objPositions = _pickSpread(rand, tiles, cfg.nodeCount, 4, buildingKeys);
   // Pad if not enough positions found
-  while (objPositions.length < 3) objPositions.push({ col: 1, row: 1 });
+  while (objPositions.length < cfg.nodeCount) objPositions.push({ col: 1, row: 1 });
   const witchObjectives = objPositions.map((pos, i) => ({
-    col: pos.col, row: pos.row, label: WITCH_OBJECTIVE_LABELS[i],
+    col: pos.col, row: pos.row, label: WITCH_OBJECTIVE_LABELS[i] ?? `Power Node ${i + 1}`,
   }));
 
   // 7. Determine start positions
@@ -357,5 +466,5 @@ export function generateMap(seed = Date.now()) {
   const witchStart = buildingPlacements.find(b => b.building === BuildingType.GRAVEYARD)
                   || buildingPlacements[buildingPlacements.length - 1];
 
-  return { tiles, witchObjectives, heroStart, witchStart };
+  return { tiles, witchObjectives, heroStart, witchStart, mapSize, survivorCounts: cfg.survivorCounts };
 }

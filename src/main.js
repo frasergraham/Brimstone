@@ -27,7 +27,8 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
   document.getElementById('setup-screen').style.display  = 'none';
   document.getElementById('game-screen').style.display   = 'flex';
 
-  state    = new GameState(witchIsAI, heroIsAI);
+  const mapSize = document.getElementById('select-map-size')?.value ?? 'standard';
+  state    = new GameState(witchIsAI, heroIsAI, mapSize);
   // Allow global fog-of-war override from the setup screen checkbox.
   const fogChk = document.getElementById('chk-fog-of-war');
   if (fogChk && !fogChk.checked) state.fogOfWar = false;

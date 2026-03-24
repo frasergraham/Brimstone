@@ -1,9 +1,14 @@
 // Hex coordinate utilities — odd-r offset grid, pointy-top hexagons
 // Storage uses (col, row); math uses axial (q, r)
 
-export const MAP_COLS = 13;
-export const MAP_ROWS = 11;
+export let MAP_COLS = 13;
+export let MAP_ROWS = 11;
 export const HEX_SIZE = 30; // pixels from center to vertex
+
+export function setMapDimensions(cols, rows) {
+  MAP_COLS = cols;
+  MAP_ROWS = rows;
+}
 export const SQRT3 = Math.sqrt(3);
 
 // Neighbor direction deltas in offset coords (odd-r)

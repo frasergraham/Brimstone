@@ -123,6 +123,16 @@ canvas { touch-action: pan-x pan-y; }
   height: 14px;
   cursor: pointer;
 }
+.setup-select {
+  background: var(--bg);
+  color: var(--text-dim);
+  border: 1px solid var(--day);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.82rem;
+  padding: 1px 4px;
+  cursor: pointer;
+}
 
 .setup-rules {
   text-align: left;
