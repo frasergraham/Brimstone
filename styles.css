@@ -305,15 +305,23 @@ canvas { touch-action: pan-x pan-y; }
 /* ── Unit stats bar (planning phase) ──────────────────────────────────── */
 
 #unit-stats-bar {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  padding: 0.3rem 0.75rem;
-  background: rgba(13,17,23,0.95);
-  border-bottom: 1px solid rgba(255,255,255,0.08);
-  flex-shrink: 0;
+  gap: 0.55rem;
+  padding: 0.3rem 0.65rem;
+  background: rgba(13,17,23,0.92);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.6);
   font-size: 0.82rem;
-  overflow: hidden;
+  white-space: nowrap;
+  pointer-events: auto;
+  max-width: min(420px, 90vw);
 }
 
 .usb-glyph {
@@ -327,8 +335,7 @@ canvas { touch-action: pan-x pan-y; }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  min-width: 0;
-  flex: 1;
+  max-width: 120px;
 }
 
 .usb-hp-wrap {
@@ -374,7 +381,7 @@ canvas { touch-action: pan-x pan-y; }
 }
 
 .usb-deselect-btn {
-  margin-left: auto;
+  margin-left: 0.2rem;
   flex-shrink: 0;
   background: none;
   border: 1px solid rgba(255,255,255,0.15);
