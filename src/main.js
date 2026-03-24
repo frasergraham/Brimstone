@@ -200,9 +200,16 @@ async function _runLocalResolution() {
   const humanFaction = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : null;
   await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction);
 
+  const prevScore = { hero: state.nodeScore.hero, witch: state.nodeScore.witch };
+
   state.endRound();
   if (ui) ui._triggerHazardFlashes();
   redraw();
+
+  // Show a scoring toast whenever we land on a scoring checkpoint (dawn/dusk).
+  if ((state.phase === 'dawn' || state.phase === 'dusk') && ui) {
+    ui.showScoringToast(prevScore);
+  }
 
   if (state.gameOver) { showGameOver(); return; }
 

@@ -1143,7 +1143,7 @@ export class UIController {
     if (!el) return;
     const state = this.state;
 
-    let html = '';
+    let nodeDots = '';
     let witchCount = 0, heroCount = 0;
     for (const obj of state.witchObjectives) {
       const witchHere = state.entities.find(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row);
@@ -1152,9 +1152,21 @@ export class UIController {
       if (witchHere)      { cls = 'witch'; witchCount++; }
       else if (heroHere)  { cls = 'hero';  heroCount++;  }
       else                { cls = 'neutral'; }
-      html += `<span class="node-dot ${cls}" title="${obj.label}"></span>`;
+      nodeDots += `<span class="node-dot ${cls}" title="${obj.label}"></span>`;
     }
-    el.innerHTML = html;
+
+    const score     = state.nodeScore ?? { hero: 0, witch: 0 };
+    const scoreMax  = 4;
+    const heroPips  = Array.from({ length: scoreMax }, (_, i) =>
+      `<span class="score-pip hero${i < score.hero ? ' filled' : ''}"></span>`).join('');
+    const witchPips = Array.from({ length: scoreMax }, (_, i) =>
+      `<span class="score-pip witch${i < score.witch ? ' filled' : ''}"></span>`).join('');
+
+    el.innerHTML =
+      `<span class="score-track hero-track" title="Hero score: ${score.hero}/4">${heroPips}</span>` +
+      `<span class="node-dots-group">${nodeDots}</span>` +
+      `<span class="score-track witch-track" title="Witch score: ${score.witch}/4">${witchPips}</span>`;
+
     // Flash a subtle warning when one side holds all nodes
     el.title = witchCount === 3 ? '⚠ Witch holds all nodes!'
              : heroCount  === 3 ? '★ Hero holds all nodes!'
@@ -1478,6 +1490,60 @@ export class UIController {
     // Auto-dismiss after 3s
     setTimeout(() => toast.classList.add('phase-toast-hide'), 2800);
     setTimeout(() => toast.remove(), 3300);
+  }
+
+  // ── Scoring toast (dawn / dusk checkpoints) ──────────────────────────────
+
+  showScoringToast(prevScore) {
+    const state      = this.state;
+    const phase      = state.phase; // 'dawn' or 'dusk' — already advanced by endRound()
+    const phaseIcon  = phase === 'dawn' ? '🌅' : '🌇';
+    const phaseLabel = phase === 'dawn' ? 'Dawn Reckoning' : 'Dusk Reckoning';
+
+    // Count nodes held by each faction right now (same snapshot scoring used).
+    const witchCount = state.witchObjectives.filter(obj =>
+      state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
+    ).length;
+    const heroCount = state.witchObjectives.filter(obj =>
+      state.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row)
+    ).length;
+
+    const heroDelta  = state.nodeScore.hero  - prevScore.hero;
+    const witchDelta = state.nodeScore.witch - prevScore.witch;
+
+    let resultLine;
+    if (witchDelta > 0) {
+      resultLine = `Witch holds ${witchCount}–${heroCount} · Witch scores! (${state.nodeScore.witch}/4)`;
+    } else if (heroDelta > 0) {
+      resultLine = `Hero holds ${heroCount}–${witchCount} · Hero scores! (${state.nodeScore.hero}/4)`;
+    } else if (witchCount === 3 || heroCount === 3) {
+      resultLine = `All three nodes held — instant win!`;
+    } else {
+      resultLine = `Nodes tied ${heroCount}–${witchCount} · No score awarded`;
+    }
+
+    const pip = (filled, cls) =>
+      `<span class="score-pip ${cls}${filled ? ' filled' : ''}"></span>`;
+    const heroPips  = Array.from({ length: 4 }, (_, i) => pip(i < state.nodeScore.hero,  'hero')).join('');
+    const witchPips = Array.from({ length: 4 }, (_, i) => pip(i < state.nodeScore.witch, 'witch')).join('');
+
+    document.getElementById('score-toast')?.remove();
+
+    const toast = document.createElement('div');
+    toast.id        = 'score-toast';
+    toast.className = `phase-toast score-toast score-toast-${phase}`;
+    toast.innerHTML = `
+      <span class="phase-toast-icon">${phaseIcon}</span>
+      <div class="phase-toast-body">
+        <div class="phase-toast-title">${phaseLabel}</div>
+        <div class="phase-toast-lines">${resultLine}</div>
+        <div class="score-toast-track">⚔ ${heroPips}&nbsp;&nbsp;${witchPips} ✦</div>
+      </div>
+    `;
+    document.getElementById('game-screen')?.appendChild(toast);
+
+    setTimeout(() => toast.classList.add('phase-toast-hide'), 3800);
+    setTimeout(() => toast.remove(), 4300);
   }
 
   // ── Dialogs ───────────────────────────────────────────────────────────────

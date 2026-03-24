@@ -199,6 +199,25 @@ canvas { touch-action: pan-x pan-y; }
 .node-dot.witch   { background: #cc3333; border-color: #ff5555; box-shadow: 0 0 5px rgba(200,50,50,0.5); }
 .node-dot.neutral { background: transparent; border-color: #554433; }
 
+.node-dots-group { display: flex; align-items: center; gap: 0.35rem; }
+
+.score-track {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.score-pip {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.15);
+  transition: background 0.2s, box-shadow 0.2s;
+}
+.score-pip.hero           { background: transparent; border-color: #335588; }
+.score-pip.hero.filled    { background: #4488ff;     border-color: #66aaff; box-shadow: 0 0 4px rgba(68,136,255,0.6); }
+.score-pip.witch          { background: transparent; border-color: #551111; }
+.score-pip.witch.filled   { background: #cc3333;     border-color: #ff5555; box-shadow: 0 0 4px rgba(200,50,50,0.6); }
+
 /* ── Header icon buttons (chronicle, inventory, end-turn) ──────────────── */
 
 .header-icon-btn {
@@ -1700,6 +1719,19 @@ canvas { touch-action: pan-x pan-y; }
 .phase-toast-icon  { font-size: 1.6rem; line-height: 1; }
 .phase-toast-title { font-weight: bold; font-size: 0.85rem; color: #e8dcc8; }
 .phase-toast-lines { font-size: 0.72rem; color: var(--text-dim); margin-top: 0.1rem; }
+
+.score-toast { top: 8.5rem; animation: score-toast-in 0.25s ease; }
+@keyframes score-toast-in { from { opacity:0; top:8rem; } to { opacity:1; top:8.5rem; } }
+.score-toast-dawn  { border-color: rgba(255,140,0,0.4); }
+.score-toast-dusk  { border-color: rgba(180,60,0,0.4); }
+.score-toast-track {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 0.3rem;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
 
 /* Resolution overlay */
 #resolution-overlay {
