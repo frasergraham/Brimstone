@@ -320,14 +320,16 @@ function _generateVillages(rand, tiles, villageNames, minVillageDist, reservedKe
   // Shuffle template order per seed so village positions vary across seeds
   const shuffledNames = _shuffle([...villageNames], rand);
   const allPlacements = [];
+  const villageGroups = []; // [{ root, members }] — used for two-tier road building
   for (let i = 0; i < centers.length; i++) {
     const name = shuffledNames[i] ?? shuffledNames[0];
     const buildings = VILLAGE_TEMPLATES[name];
     if (!buildings) continue;
     const placed = _placeVillageBuildings(rand, tiles, centers[i].col, centers[i].row, buildings, usedKeys);
     allPlacements.push(...placed);
+    if (placed.length > 0) villageGroups.push({ root: placed[0], members: placed.slice(1) });
   }
-  return allPlacements;
+  return { allPlacements, villageGroups };
 }
 
 // Generate a meandering river path: exactly one tile per row (row 0 → MAP_ROWS-1).
@@ -385,88 +387,91 @@ export function generateMap(seed = Date.now(), mapSize = 'standard') {
   }
 
   // 3. Place INN and GRAVEYARD in opposite corners, then scatter remaining buildings
-  const cornerPlacements   = _pickCornerBuildings(rand, tiles);
-  const cornerKeys         = new Set(cornerPlacements.map(b => hexKey(b.col, b.row)));
-  const buildingPlacements = [
-    ...cornerPlacements,
-    ..._generateVillages(rand, tiles, cfg.villages, cfg.minVillageDist, cornerKeys),
-  ];
+  const cornerPlacements = _pickCornerBuildings(rand, tiles);
+  const cornerKeys       = new Set(cornerPlacements.map(b => hexKey(b.col, b.row)));
+  const { allPlacements: villagePlacements, villageGroups } =
+    _generateVillages(rand, tiles, cfg.villages, cfg.minVillageDist, cornerKeys);
+  const buildingPlacements = [...cornerPlacements, ...villagePlacements];
   for (const { col, row, building } of buildingPlacements) {
     const t = tiles.get(hexKey(col, row));
     if (!t) continue;
     t.type = TileType.BUILDING;
     t.building = building;
-    t.fortifyLevel = 1; // all buildings start with minimal fortification
+    t.fortifyLevel = 1;
   }
 
-  // 4. Build a minimum spanning tree of roads connecting all buildings.
-  // Kruskal's algorithm on hex-distance edges gives a natural organic network
-  // where most buildings have 1–2 connections rather than all roads radiating
-  // from a single hub.
-  const n = buildingPlacements.length;
-  const mstEdges = [];
-  if (n > 1) {
+  // 4. Two-tier road network — avoids the dense web produced by running MST on
+  //    every building when many are clustered tightly in the same village.
+  //
+  //    Tier 1 — intra-village spokes: each building connects to its village's root
+  //    (first-placed = closest to centre). Produces a clean star shape per village.
+  //
+  //    Tier 2 — inter-village trunk: Kruskal's MST on key points only
+  //    (INN, GRAVEYARD, one root per village).  Long roads between settlements,
+  //    none of the short overlapping paths within them.
+  const roadEdges = [];
+
+  // Tier 1: spoke per building → village root
+  for (const { root, members } of villageGroups) {
+    for (const m of members) roadEdges.push({ from: root, to: m });
+  }
+
+  // Tier 2: MST on key points
+  const keyPoints = [...cornerPlacements, ...villageGroups.map(v => v.root)];
+  const nk = keyPoints.length;
+  const interEdges = [];
+  if (nk > 1) {
     const allEdges = [];
-    for (let i = 0; i < n; i++) {
-      for (let j = i + 1; j < n; j++) {
-        const d = hexDistance(
-          buildingPlacements[i].col, buildingPlacements[i].row,
-          buildingPlacements[j].col, buildingPlacements[j].row,
-        );
-        allEdges.push({ i, j, d });
+    for (let i = 0; i < nk; i++) {
+      for (let j = i + 1; j < nk; j++) {
+        allEdges.push({ i, j, d: hexDistance(keyPoints[i].col, keyPoints[i].row, keyPoints[j].col, keyPoints[j].row) });
       }
     }
     allEdges.sort((a, b) => a.d - b.d);
-
-    const parent = Array.from({ length: n }, (_, i) => i);
+    const parent = Array.from({ length: nk }, (_, i) => i);
     const find = i => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
-
     for (const { i, j } of allEdges) {
       if (find(i) !== find(j)) {
         parent[find(i)] = find(j);
-        mstEdges.push({ from: buildingPlacements[i], to: buildingPlacements[j] });
-        if (mstEdges.length === n - 1) break;
+        interEdges.push({ from: keyPoints[i], to: keyPoints[j] });
+        if (interEdges.length === nk - 1) break;
       }
     }
   }
 
-  // Guarantee minimum river crossings. The MST might route all buildings through a
-  // single crossing if they happen to cluster on one side. Count how many MST edges
-  // span opposite sides; if fewer than minBridges, inject the closest unused cross-
-  // river building pairs so their BFS roads will create additional bridge tiles.
+  // Guarantee minimum river crossings on the inter-village trunk
   {
     const side = (col, row) => _riverSide(col, row, riverMap);
-    const crossCount = mstEdges.filter(e =>
+    const crossCount = interEdges.filter(e =>
       side(e.from.col, e.from.row) !== side(e.to.col, e.to.row)
     ).length;
-
     if (crossCount < cfg.minBridges) {
-      const leftB  = buildingPlacements.filter(b => side(b.col, b.row) === 'left');
-      const rightB = buildingPlacements.filter(b => side(b.col, b.row) === 'right');
+      const leftK  = keyPoints.filter(k => side(k.col, k.row) === 'left');
+      const rightK = keyPoints.filter(k => side(k.col, k.row) === 'right');
       const extra  = [];
-      for (const l of leftB) {
-        for (const r of rightB) {
-          if (mstEdges.some(e => (e.from === l && e.to === r) || (e.from === r && e.to === l))) continue;
+      for (const l of leftK) {
+        for (const r of rightK) {
+          if (interEdges.some(e => (e.from === l && e.to === r) || (e.from === r && e.to === l))) continue;
           extra.push({ from: l, to: r, d: hexDistance(l.col, l.row, r.col, r.row) });
         }
       }
-      // Sort by distance and also spread crossing rows: prefer pairs whose mid-row
-      // differs from already-chosen crossings by at least 2 rows.
       extra.sort((a, b) => a.d - b.d);
       const chosen = [];
       for (const e of extra) {
         if (chosen.length >= cfg.minBridges - crossCount) break;
         const midRow = (e.from.row + e.to.row) / 2;
-        const tooClose = chosen.some(c => Math.abs((c.from.row + c.to.row) / 2 - midRow) < 2);
-        if (!tooClose) { chosen.push(e); mstEdges.push(e); }
+        if (!chosen.some(c => Math.abs((c.from.row + c.to.row) / 2 - midRow) < 2)) {
+          chosen.push(e); interEdges.push(e);
+        }
       }
-      // If spread check blocked all, just add the closest remaining pairs
       for (const e of extra) {
-        if (mstEdges.filter(me => side(me.from.col, me.from.row) !== side(me.to.col, me.to.row)).length >= cfg.minBridges) break;
-        if (!mstEdges.includes(e)) mstEdges.push(e);
+        if (interEdges.filter(e2 => side(e2.from.col, e2.from.row) !== side(e2.to.col, e2.to.row)).length >= cfg.minBridges) break;
+        if (!interEdges.includes(e)) interEdges.push(e);
       }
     }
   }
+
+  roadEdges.push(...interEdges);
 
   let bridgesPlaced = 0;
   const placeRoad = path => {
@@ -481,7 +486,7 @@ export function generateMap(seed = Date.now(), mapSize = 'standard') {
     }
   };
 
-  for (const { from, to } of mstEdges) {
+  for (const { from, to } of roadEdges) {
     placeRoad(bfsPath(tiles, from.col, from.row, to.col, to.row, rand));
   }
 
