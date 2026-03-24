@@ -57,7 +57,7 @@ export function computeActions(player, phase, entities) {
     const timeBonus = phase === Phase.NIGHT ? 1 : 0;
     // Each pair of minions earns +1 action, up to +4 (needs 8 minions for full bonus)
     const unitBonus = Math.min(Math.floor(extras / 2), 4);
-    return 3 + timeBonus + unitBonus;
+    return 4 + timeBonus + unitBonus;
   }
 }
 
@@ -79,9 +79,9 @@ const PHASE_ICON = {
 export { PHASE_ICON };
 
 export class GameState {
-  constructor(witchIsAI = true, heroIsAI = false) {
+  constructor(witchIsAI = true, heroIsAI = false, mapSize = 'standard') {
     resetRoster();
-    const mapData  = generateMap();
+    const mapData  = generateMap(undefined, mapSize);
     this.tiles     = mapData.tiles;
     this.entities  = [];
     this.witchIsAI = witchIsAI;
@@ -96,6 +96,8 @@ export class GameState {
 
     this.inventory = { shared: {}, witch: {} };
 
+    this.mapSize       = mapData.mapSize;
+    this._survivorCounts = mapData.survivorCounts;
     this.witchObjectives = mapData.witchObjectives;
     this._placeHiddenSurvivors();
 
@@ -635,8 +637,9 @@ export class GameState {
       return arr;
     };
 
-    shuffle(buildings).slice(0, 13).forEach(t => { t.hiddenSurvivor = true; });
-    shuffle(terrain).slice(0, 2).forEach(t => { t.hiddenSurvivor = true; });
+    const sc = this._survivorCounts ?? { buildings: 13, terrain: 2 };
+    shuffle(buildings).slice(0, sc.buildings).forEach(t => { t.hiddenSurvivor = true; });
+    shuffle(terrain).slice(0, sc.terrain).forEach(t => { t.hiddenSurvivor = true; });
   }
 
   toJSON() {

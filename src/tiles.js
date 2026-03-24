@@ -171,5 +171,6 @@ export class Tile {
     this.explored = false;
     this.resource = null;   // ResourceType or null (on open tiles)
     this.fortifyLevel = 0;  // 0=none, 1=wood (+1 def), 2=metal (+2 def)
+    this.roadDirs = new Set(); // hexKeys of road-connected neighbours (set at map gen time)
   }
 }

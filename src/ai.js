@@ -1223,6 +1223,16 @@ export class HeroAI {
       if (heroTN && heroTN.type === TileType.BUILDING && !sim.isExplored(hero.col, hero.row)) {
         return { type: PlanActionType.EXPLORE, entityId: hero.id };
       }
+      // 7b. Fortify sheltered building (spare night budget — defensive investment)
+      if (heroTN && heroTN.type === TileType.BUILDING) {
+        const fortLevel = heroTN.fortifyLevel || 0;
+        const shared = sim.inventory.shared;
+        const hasWood  = (shared[ResourceType.WOOD]  || 0) > 0;
+        const hasMetal = (shared[ResourceType.METAL] || 0) > 0;
+        if (fortLevel < 2 && (hasWood || hasMetal)) {
+          return { type: PlanActionType.FORTIFY, entityId: hero.id };
+        }
+      }
       // 8. Hero can move at night without hazard — advance toward witch-held nodes
       { const a = tryMove(hero, _bestNodeForHero(sim, hero)); if (a) return a; }
       // 9. Or move toward witch if close enough
@@ -1257,6 +1267,17 @@ export class HeroAI {
     const heroTile = sim.tiles.get(hexKey(hero.col, hero.row));
     if (heroTile && heroTile.type === TileType.BUILDING && !sim.isExplored(hero.col, hero.row)) {
       return { type: PlanActionType.EXPLORE, entityId: hero.id };
+    }
+
+    // 5b. Fortify undefended building before moving out (quick one-time setup)
+    if (heroTile && heroTile.type === TileType.BUILDING) {
+      const fortLevel = heroTile.fortifyLevel || 0;
+      const shared = sim.inventory.shared;
+      const hasWood  = (shared[ResourceType.WOOD]  || 0) > 0;
+      const hasMetal = (shared[ResourceType.METAL] || 0) > 0;
+      if (fortLevel === 0 && (hasWood || hasMetal)) {
+        return { type: PlanActionType.FORTIFY, entityId: hero.id };
+      }
     }
 
     // 6. Hold node: fight threats, dispatch survivors to other nodes, then pursue witch

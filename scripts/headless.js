@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Headless game runner — plays N AI vs AI games and reports balance stats.
-// Usage:  node scripts/headless.js [count]   (default 200)
+// Usage:  node scripts/headless.js [count] [size]   (defaults: 200, standard)
+// Sizes:  skirmish | standard | regional | campaign
 //
 // Uses the simultaneous planning model: generatePlan() + resolvePlans() + endRound(),
 // matching the actual local-vs-AI game loop exactly.
@@ -9,16 +10,24 @@ import { GameState, WIN_REASON } from '../src/game.js';
 import { WitchAI, HeroAI }       from '../src/ai.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType }         from '../src/planner.js';
+import { MAP_SIZES }              from '../src/map.js';
 
-const N = parseInt(process.argv[2] ?? '200', 10);
-if (isNaN(N) || N < 1) { console.error('Usage: node scripts/headless.js [count]'); process.exit(1); }
+const N       = parseInt(process.argv[2] ?? '200', 10);
+const MAP_SIZE = process.argv[3] ?? 'standard';
+if (isNaN(N) || N < 1) { console.error('Usage: node scripts/headless.js [count] [size]'); process.exit(1); }
+if (!MAP_SIZES[MAP_SIZE]) {
+  console.error(`Unknown map size "${MAP_SIZE}". Valid: ${Object.keys(MAP_SIZES).join(', ')}`);
+  process.exit(1);
+}
 
-const MAX_ROUNDS = 48;   // hard cap (4 full cycles = 32 "natural" max with score-4 threshold; 48 gives wiggle room)
+// Round cap scales with map area relative to standard (13×11=143)
+const { cols, rows } = MAP_SIZES[MAP_SIZE];
+const MAX_ROUNDS = Math.ceil(48 * (cols * rows) / (13 * 11));
 
 // ── Per-game runner ────────────────────────────────────────────────────────────
 
 function runGame() {
-  const state   = new GameState(true, true);
+  const state   = new GameState(true, true, MAP_SIZE);
   const witchAI = new WitchAI(state, () => {}, 0);
   const heroAI  = new HeroAI(state,  () => {}, 0);
 
@@ -293,7 +302,7 @@ const row  = s => `║ ${s.padEnd(W - 2)} ║`;
 const hdr  = s => { console.log(`╠${line}╣`); console.log(row(s)); };
 
 console.log(`╔${line}╗`);
-console.log(row(`BRIMSTONE BALANCE REPORT — ${N} games · ${elapsed}s · cap=${MAX_ROUNDS}r`));
+console.log(row(`BRIMSTONE BALANCE REPORT — ${MAP_SIZES[MAP_SIZE].label} — ${N} games · ${elapsed}s · cap=${MAX_ROUNDS}r`));
 
 hdr('WIN RATES');
 console.log(row(` Hero  ${bar(heroWins,  N)}  ${String(heroWins).padStart(4)}  (${pct(heroWins,  N)}%)`));

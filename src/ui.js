@@ -1,5 +1,5 @@
 // UI controller: handles canvas clicks, sidepanel updates, action buttons
-import { hexKey, hexToPixel } from './hex.js';
+import { hexKey, hexToPixel, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType } from './tiles.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
 import { Phase, Player, PHASE_ICON } from './game.js';
@@ -59,22 +59,46 @@ export class UIController {
       if (!this._selectedEntity) this._updateSidebar();
     });
 
-    // Scroll-to-zoom (desktop)
-    this.canvas.addEventListener('wheel', e => {
-      e.preventDefault();
-      const { x, y } = this._canvasPos(e);
-      const delta = e.deltaY > 0 ? 0.9 : 1.1;
-      this.renderer.setZoom(this.renderer.zoomLevel * delta, x, y);
-      this.onRedraw();
-    }, { passive: false });
+    // Scroll wheel is disabled over the canvas (zoom via buttons instead)
+    this.canvas.addEventListener('wheel', e => { e.preventDefault(); }, { passive: false });
 
     // Mouse drag-to-pan (desktop)
     this.canvas.addEventListener('mousedown', e => {
       this._mouseDown  = { clientX: e.clientX, clientY: e.clientY };
       this._didDragPan = false;
+      this.canvas.style.cursor = 'grabbing';
     });
-    this.canvas.addEventListener('mouseup', () => {
-      this._mouseDown = null;
+    // Listen on document so releasing outside the canvas always clears drag state
+    document.addEventListener('mouseup', () => {
+      if (this._mouseDown) {
+        this._mouseDown = null;
+        this.canvas.style.cursor = '';
+      }
+    });
+
+    // Zoom control buttons (+, −, fit)
+    const zoomStep = 1.25;
+    document.getElementById('zoom-in')?.addEventListener('click', () => {
+      const cx = this.canvas.width  / 2;
+      const cy = this.canvas.height / 2;
+      this.renderer.setZoom(this.renderer.zoomLevel * zoomStep, cx, cy);
+      this.onRedraw();
+    });
+    document.getElementById('zoom-out')?.addEventListener('click', () => {
+      const cx = this.canvas.width  / 2;
+      const cy = this.canvas.height / 2;
+      this.renderer.setZoom(this.renderer.zoomLevel / zoomStep, cx, cy);
+      this.onRedraw();
+    });
+    document.getElementById('zoom-fit')?.addEventListener('click', () => {
+      this.renderer.resetView();
+      this.onRedraw();
+    });
+    document.getElementById('zoom-me')?.addEventListener('click', () => {
+      const faction = this._planFaction ?? (!this.state.heroIsAI ? 'hero' : 'witch');
+      const units   = this.state.entities.filter(e => e.alive && e.owner === faction);
+      if (units.length > 0) this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 400 });
+      this.onRedraw();
     });
 
     // Touch: tap, drag-to-pan, pinch-to-zoom (mobile)
@@ -112,6 +136,7 @@ export class UIController {
         );
         if (total > 10) this._isDragging = true;
         if (this._isDragging) {
+          this.renderer._zoomAnim = null; // cancel auto-framing on manual pan
           this.renderer._panX += dx;
           this.renderer._panY += dy;
           this.renderer._clampPan();
@@ -205,6 +230,7 @@ export class UIController {
       const dy = e.clientY - this._mouseDown.clientY;
       if (Math.hypot(dx, dy) > 5) {
         this._didDragPan = true;
+        this.renderer._zoomAnim = null; // cancel auto-framing on manual pan
         const rect   = this.canvas.getBoundingClientRect();
         const scaleX = this.canvas.width  / rect.width;
         const scaleY = this.canvas.height / rect.height;
@@ -219,7 +245,7 @@ export class UIController {
 
     const { x, y } = this._canvasPos(e);
     const hex = this._canvasToHex(x, y);
-    this.renderer.hoveredHex = (hex.col >= 0 && hex.col < 13 && hex.row >= 0 && hex.row < 11)
+    this.renderer.hoveredHex = (hex.col >= 0 && hex.col < MAP_COLS && hex.row >= 0 && hex.row < MAP_ROWS)
       ? hex : null;
     this.onRedraw();
   }
@@ -283,6 +309,15 @@ export class UIController {
     this._renderPlanPanel();
     this._updateSidebar();
     this.onRedraw();
+
+    // Zoom to frame the planning faction's units at the start of every turn
+    // (also serves as the initial "zoom in on player" at game start).
+    if (this.renderer) {
+      const units = this.state.entities.filter(e => e.alive && e.owner === faction);
+      if (units.length > 0) {
+        this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 550 });
+      }
+    }
 
     // Show a brief phase-info toast so the player always knows current conditions.
     this._showPhaseToast(faction);
@@ -505,7 +540,7 @@ export class UIController {
 
     const { x, y } = this._canvasPos(e);
     const hex = this._canvasToHex(x, y);
-    if (hex.col < 0 || hex.col >= 13 || hex.row < 0 || hex.row >= 11) return;
+    if (hex.col < 0 || hex.col >= MAP_COLS || hex.row < 0 || hex.row >= MAP_ROWS) return;
 
     // On opponent's turn, allow viewing tiles/units but block all actions
     if (!this._planMode && this._isOpponentTurn()) {
@@ -982,6 +1017,57 @@ export class UIController {
     this._renderEndTurnBtn();
     this._renderInventory();
     this._renderLog();
+    this._renderUnitStatsBar();
+  }
+
+  _renderUnitStatsBar() {
+    const bar = document.getElementById('unit-stats-bar');
+    if (!bar) return;
+
+    const entity = this._planMode ? this._selectedEntity : null;
+    if (!entity) {
+      bar.style.display = 'none';
+      return;
+    }
+
+    const GLYPHS = {
+      hero: '⚔', witch: '✦', survivor: '☺',
+      zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙',
+    };
+    const COLORS = {
+      hero: '#d4a72c', witch: '#9b59b6', survivor: '#4caf7d',
+      zombie: '#7c9a57', minion: '#c0392b', wood_golem: '#8B5E3C', iron_golem: '#607D8B',
+    };
+
+    const glyph = GLYPHS[entity.type] ?? '?';
+    const color = entity.color ?? COLORS[entity.type] ?? '#d4c9b0';
+    const hpPct = Math.max(0, Math.min(100, (entity.hp / entity.maxHp) * 100));
+    const hpColor = hpPct > 60 ? '#4caf7d' : hpPct > 30 ? '#f5c842' : '#c0392b';
+    const weaponLabel = entity.weapon
+      ? entity.weapon.charAt(0).toUpperCase() + entity.weapon.slice(1)
+      : null;
+
+    bar.style.display = 'flex';
+    bar.innerHTML = `
+      <span class="usb-glyph" style="color:${color}">${glyph}</span>
+      <span class="usb-name" style="color:${color}">${entity.displayName}</span>
+      <span class="usb-hp-wrap">
+        <span class="usb-stat">HP</span>
+        <span class="usb-hp-track">
+          <span class="usb-hp-fill" style="width:${hpPct}%;background:${hpColor}"></span>
+        </span>
+        <span class="usb-stat-val">${entity.hp}/${entity.maxHp}</span>
+      </span>
+      <span class="usb-stat">ATK <span class="usb-stat-val">${entity.attack}</span></span>
+      <span class="usb-stat">DEF <span class="usb-stat-val">${entity.defense}</span></span>
+      ${weaponLabel ? `<span class="usb-weapon">⚔ ${weaponLabel}</span>` : ''}
+      <button class="usb-deselect-btn" title="Deselect unit">✕</button>
+    `;
+    bar.querySelector('.usb-deselect-btn').addEventListener('click', () => {
+      this._clearSelection();
+      this._updateSidebar();
+      this.onRedraw();
+    });
   }
 
   _renderTurnInfo() {
@@ -1057,7 +1143,7 @@ export class UIController {
     if (!el) return;
     const state = this.state;
 
-    let html = '';
+    let nodeDots = '';
     let witchCount = 0, heroCount = 0;
     for (const obj of state.witchObjectives) {
       const witchHere = state.entities.find(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row);
@@ -1066,9 +1152,21 @@ export class UIController {
       if (witchHere)      { cls = 'witch'; witchCount++; }
       else if (heroHere)  { cls = 'hero';  heroCount++;  }
       else                { cls = 'neutral'; }
-      html += `<span class="node-dot ${cls}" title="${obj.label}"></span>`;
+      nodeDots += `<span class="node-dot ${cls}" title="${obj.label}"></span>`;
     }
-    el.innerHTML = html;
+
+    const score     = state.nodeScore ?? { hero: 0, witch: 0 };
+    const scoreMax  = 4;
+    const heroPips  = Array.from({ length: scoreMax }, (_, i) =>
+      `<span class="score-pip hero${i < score.hero ? ' filled' : ''}"></span>`).join('');
+    const witchPips = Array.from({ length: scoreMax }, (_, i) =>
+      `<span class="score-pip witch${i < score.witch ? ' filled' : ''}"></span>`).join('');
+
+    el.innerHTML =
+      `<span class="score-track hero-track" title="Hero score: ${score.hero}/4">${heroPips}</span>` +
+      `<span class="node-dots-group">${nodeDots}</span>` +
+      `<span class="score-track witch-track" title="Witch score: ${score.witch}/4">${witchPips}</span>`;
+
     // Flash a subtle warning when one side holds all nodes
     el.title = witchCount === 3 ? '⚠ Witch holds all nodes!'
              : heroCount  === 3 ? '★ Hero holds all nodes!'
@@ -1392,6 +1490,60 @@ export class UIController {
     // Auto-dismiss after 3s
     setTimeout(() => toast.classList.add('phase-toast-hide'), 2800);
     setTimeout(() => toast.remove(), 3300);
+  }
+
+  // ── Scoring toast (dawn / dusk checkpoints) ──────────────────────────────
+
+  showScoringToast(prevScore) {
+    const state      = this.state;
+    const phase      = state.phase; // 'dawn' or 'dusk' — already advanced by endRound()
+    const phaseIcon  = phase === 'dawn' ? '🌅' : '🌇';
+    const phaseLabel = phase === 'dawn' ? 'Dawn Reckoning' : 'Dusk Reckoning';
+
+    // Count nodes held by each faction right now (same snapshot scoring used).
+    const witchCount = state.witchObjectives.filter(obj =>
+      state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
+    ).length;
+    const heroCount = state.witchObjectives.filter(obj =>
+      state.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row)
+    ).length;
+
+    const heroDelta  = state.nodeScore.hero  - prevScore.hero;
+    const witchDelta = state.nodeScore.witch - prevScore.witch;
+
+    let resultLine;
+    if (witchDelta > 0) {
+      resultLine = `Witch holds ${witchCount}–${heroCount} · Witch scores! (${state.nodeScore.witch}/4)`;
+    } else if (heroDelta > 0) {
+      resultLine = `Hero holds ${heroCount}–${witchCount} · Hero scores! (${state.nodeScore.hero}/4)`;
+    } else if (witchCount === 3 || heroCount === 3) {
+      resultLine = `All three nodes held — instant win!`;
+    } else {
+      resultLine = `Nodes tied ${heroCount}–${witchCount} · No score awarded`;
+    }
+
+    const pip = (filled, cls) =>
+      `<span class="score-pip ${cls}${filled ? ' filled' : ''}"></span>`;
+    const heroPips  = Array.from({ length: 4 }, (_, i) => pip(i < state.nodeScore.hero,  'hero')).join('');
+    const witchPips = Array.from({ length: 4 }, (_, i) => pip(i < state.nodeScore.witch, 'witch')).join('');
+
+    document.getElementById('score-toast')?.remove();
+
+    const toast = document.createElement('div');
+    toast.id        = 'score-toast';
+    toast.className = `phase-toast score-toast score-toast-${phase}`;
+    toast.innerHTML = `
+      <span class="phase-toast-icon">${phaseIcon}</span>
+      <div class="phase-toast-body">
+        <div class="phase-toast-title">${phaseLabel}</div>
+        <div class="phase-toast-lines">${resultLine}</div>
+        <div class="score-toast-track">⚔ ${heroPips}&nbsp;&nbsp;${witchPips} ✦</div>
+      </div>
+    `;
+    document.getElementById('game-screen')?.appendChild(toast);
+
+    setTimeout(() => toast.classList.add('phase-toast-hide'), 3800);
+    setTimeout(() => toast.remove(), 4300);
   }
 
   // ── Dialogs ───────────────────────────────────────────────────────────────

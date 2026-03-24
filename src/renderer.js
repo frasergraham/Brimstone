@@ -55,6 +55,9 @@ export class Renderer {
     this._moveAnims = [];
     this._animFramePending = false;
 
+    // Smooth zoom/pan animation: null when idle
+    this._zoomAnim = null; // {startZoom,targetZoom,startPanX,targetPanX,startPanY,targetPanY,startTime,duration}
+
     this._resize();
   }
 
@@ -112,7 +115,8 @@ export class Renderer {
       const now = Date.now();
       const alive = this._moveAnims.some(a => now < a.startTime + a.duration)
                  || this._flashes.some(f => now < f.endTime)
-                 || this._deathAnims.some(a => now < a.startTime + a.duration);
+                 || this._deathAnims.some(a => now < a.startTime + a.duration)
+                 || !!this._zoomAnim;
       this.draw();
       if (alive) {
         requestAnimationFrame(loop);
@@ -121,6 +125,78 @@ export class Renderer {
       }
     };
     requestAnimationFrame(loop);
+  }
+
+  /**
+   * Compute a target {zoom, panX, panY} that frames the given hex positions
+   * with padding, clamped to [1.0, maxZoom].
+   */
+  _computeFrameView(positions, paddingHexes, maxZoom) {
+    if (!positions || positions.length === 0) return null;
+    const W  = this.canvas.width;
+    const H  = this.canvas.height;
+    const hs = this.hexSize;
+
+    const pts = positions.map(p => this._toCanvas(p.col, p.row));
+    let minX = pts[0].x, maxX = pts[0].x, minY = pts[0].y, maxY = pts[0].y;
+    for (const { x, y } of pts) {
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+
+    const pad = hs * paddingHexes;
+    minX -= pad; maxX += pad;
+    minY -= pad; maxY += pad;
+
+    // Zoom to fit the padded box, clamped to [1.0, maxZoom]
+    const z = Math.max(1.0, Math.min(maxZoom, Math.min(W / (maxX - minX), H / (maxY - minY))));
+
+    // Pan to center the box
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    let panX = W / 2 - cx * z;
+    let panY = H / 2 - cy * z;
+
+    // Clamp so the map doesn't drift off-screen
+    const minPanX = Math.min(0, W - W * z);
+    const minPanY = Math.min(0, H - H * z);
+    panX = Math.max(minPanX, Math.min(0, panX));
+    panY = Math.max(minPanY, Math.min(0, panY));
+
+    return { zoom: z, panX, panY };
+  }
+
+  /**
+   * Smoothly zoom/pan to frame a set of hex positions.
+   *
+   * @param {Array<{col,row}>} positions  Hexes to include in the frame.
+   * @param {{ paddingHexes?: number, maxZoom?: number, duration?: number }} [opts]
+   *   paddingHexes – extra space around the bounding box, in hex radii (default 2.0)
+   *   maxZoom      – hard cap so the view never gets too close (default 2.0)
+   *   duration     – animation length in ms; 0 = instant (default 500)
+   */
+  frameHexes(positions, { paddingHexes = 2.0, maxZoom = 2.0, duration = 500 } = {}) {
+    const target = this._computeFrameView(positions, paddingHexes, maxZoom);
+    if (!target) return;
+
+    if (duration <= 0) {
+      this.zoomLevel = target.zoom;
+      this._panX     = target.panX;
+      this._panY     = target.panY;
+      return;
+    }
+
+    this._zoomAnim = {
+      startZoom:  this.zoomLevel,
+      targetZoom: target.zoom,
+      startPanX:  this._panX,
+      targetPanX: target.panX,
+      startPanY:  this._panY,
+      targetPanY: target.panY,
+      startTime:  Date.now(),
+      duration,
+    };
+    this._startAnimLoop();
   }
 
   _resize() {
@@ -173,6 +249,7 @@ export class Renderer {
 
   // Zoom toward a focal point (canvas pixel coordinates)
   setZoom(newZoom, focalX, focalY) {
+    this._zoomAnim = null; // cancel any auto-framing animation on manual input
     newZoom = Math.max(0.5, Math.min(4.0, newZoom));
     const ratio  = newZoom / this.zoomLevel;
     this._panX   = focalX - ratio * (focalX - this._panX);
@@ -204,6 +281,16 @@ export class Renderer {
   draw() {
     const ctx   = this.ctx;
     const state = this.state;
+
+    // Tick smooth zoom/pan animation
+    if (this._zoomAnim) {
+      const t    = Math.min(1, (Date.now() - this._zoomAnim.startTime) / this._zoomAnim.duration);
+      const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t; // ease-in-out
+      this.zoomLevel = this._zoomAnim.startZoom  + (this._zoomAnim.targetZoom  - this._zoomAnim.startZoom)  * ease;
+      this._panX     = this._zoomAnim.startPanX  + (this._zoomAnim.targetPanX  - this._zoomAnim.startPanX)  * ease;
+      this._panY     = this._zoomAnim.startPanY  + (this._zoomAnim.targetPanY  - this._zoomAnim.startPanY)  * ease;
+      if (t >= 1) this._zoomAnim = null;
+    }
 
     // Background covers the full canvas regardless of zoom/pan
     ctx.fillStyle = BG_COLOR;
@@ -629,7 +716,9 @@ export class Renderer {
         ctx.strokeStyle = TILE_COLOR[TileType.ROAD];
 
         const { x, y } = this._toCanvas(col, row);
-        const roadNbrs = getNeighbors(col, row).filter(n => isRoadLike(tiles.get(hexKey(n.col, n.row))));
+        // Use explicit roadDirs recorded at generation time rather than
+        // inferring from adjacent tile types — prevents phantom junctions.
+        const roadNbrs = [...tile.roadDirs].map(k => tiles.get(k)).filter(Boolean);
         if (roadNbrs.length === 0) continue;
 
         const edgeMids = roadNbrs.map(n => {

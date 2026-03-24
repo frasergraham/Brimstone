@@ -31,6 +31,15 @@
           <input type="checkbox" id="chk-fog-of-war" checked>
           Fog of war
         </label>
+        <label class="setup-option-label">
+          Map size
+          <select id="select-map-size" class="setup-select">
+            <option value="skirmish">Skirmish (9×9)</option>
+            <option value="standard" selected>Standard (13×11)</option>
+            <option value="regional">Regional (17×13)</option>
+            <option value="campaign">Campaign (21×15)</option>
+          </select>
+        </label>
       </div>
       <div class="setup-buttons" style="margin-top:0.5rem;margin-bottom:0">
         <button id="btn-leaderboard" class="setup-btn secondary">🏆 Leaderboard</button>
@@ -89,6 +98,7 @@
       <button id="btn-play-ai-online" class="setup-btn">🤖 Play vs AI</button>
       <button id="btn-create-room" class="setup-btn">🔑 Create Private Room</button>
       <button id="btn-join-room"   class="setup-btn">🚪 Join with Code</button>
+      <button id="btn-resume-game" class="setup-btn">📂 Resume Game</button>
     </div>
     <div id="join-room-form" style="display:none;margin-top:0.75rem">
       <input id="room-code-input" class="setup-input" type="text"
@@ -98,6 +108,18 @@
     </div>
     <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
       <button id="btn-online-back" class="setup-btn">← Back</button>
+    </div>
+  </div>
+
+  <!-- ── Online: saved games ──────────────────────────────────────── -->
+  <div id="setup-step-saves" class="setup-card" style="display:none">
+    <h1 class="title">RESUME GAME</h1>
+    <p class="subtitle" id="saves-subtitle">Your in-progress games</p>
+    <div id="saves-list" class="saves-list">
+      <p class="saves-empty">Loading…</p>
+    </div>
+    <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
+      <button id="btn-saves-back" class="setup-btn">← Back</button>
     </div>
   </div>
 
@@ -155,6 +177,15 @@
     <main id="game-main">
       <div id="canvas-wrapper">
         <canvas id="game-canvas"></canvas>
+        <!-- Unit stats bar: shown during planning when a unit is selected -->
+        <div id="unit-stats-bar" style="display:none"></div>
+        <!-- Zoom controls — always visible on desktop, hidden on touch-only devices -->
+        <div id="zoom-controls" class="zoom-controls">
+          <button id="zoom-in"  class="zoom-btn" title="Zoom in (+)">＋</button>
+          <button id="zoom-out" class="zoom-btn" title="Zoom out (−)">－</button>
+          <button id="zoom-fit" class="zoom-btn" title="Fit map">⛶</button>
+          <button id="zoom-me"  class="zoom-btn" title="Focus on my units">⊙</button>
+        </div>
       </div>
 
       <!-- Plan panel — slides in during planning phase -->

@@ -8,12 +8,14 @@ import { fileURLToPath }   from 'url';
 import { VERSION } from './src/version.js';
 import { registerOrLogin, getPlayerByToken } from './server/auth.js';
 import { getLeaderboard }                    from './server/leaderboard.js';
+import { getActiveSaves, pruneStaleAndIncompatibleSaves } from './server/saves.js';
 import {
   joinQueue, leaveQueue,
   createPrivateRoom, joinPrivateRoom,
   joinAIGame,
   handleAction, handleEndTurn, handlePlanSubmit,
   handleDisconnect, handleReconnect,
+  resumeGame,
   getRoom,
 } from './server/lobby.js';
 
@@ -39,6 +41,15 @@ app.get('/health', (_req, res) => {
 // REST: leaderboard (also exposed over WS, but handy for embedding)
 app.get('/api/leaderboard', (_req, res) => {
   res.json(getLeaderboard(20));
+});
+
+// REST: saved games for a player (token passed as query param or header)
+app.get('/api/saves', (req, res) => {
+  const token = req.query.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
+  res.json(getActiveSaves(player.id));
 });
 
 // ── HTTP + WS server ─────────────────────────────────────────────────────────
@@ -175,6 +186,13 @@ function route(ws, cs, msg) {
       break;
     }
 
+    case 'resumeSave': {
+      if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
+      if (!msg.roomId) { send(ws, { type: 'error', message: 'roomId required.' }); return; }
+      resumeGame(cs.player.id, ws, msg.roomId);
+      break;
+    }
+
     default:
       break;
   }
@@ -196,4 +214,6 @@ function _publicPlayer(p) {
 
 server.listen(PORT, () => {
   console.log(`Brimstone v${VERSION} listening on port ${PORT}`);
+  const pruned = pruneStaleAndIncompatibleSaves(VERSION);
+  if (pruned > 0) console.log(`Pruned ${pruned} stale/incompatible save(s).`);
 });
