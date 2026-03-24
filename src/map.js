@@ -118,28 +118,47 @@ function _shuffle(arr, rand) {
 }
 
 // BFS pathfinding returning array of {col,row} cells between start and end
-function bfsPath(tiles, startCol, startRow, endCol, endRow, rand) {
+// Dijkstra road-path finder.  Tiles whose road-neighbour count already
+// reaches MAX_ROAD_DEG are penalised so subsequent roads route around them
+// rather than piling through the same hub.
+const MAX_ROAD_DEG = 3;
+const ROAD_DEG_PENALTY = 10; // extra cost per degree above the cap
+
+function bfsPath(tiles, startCol, startRow, endCol, endRow, rand, roadTiles = new Set()) {
   const key = (c, r) => `${c},${r}`;
   const start = key(startCol, startRow);
   const end   = key(endCol, endRow);
   if (start === end) return [];
 
+  const roadDeg = (col, row) => {
+    let n = 0;
+    for (const nb of getNeighbors(col, row)) if (roadTiles.has(key(nb.col, nb.row))) n++;
+    return n;
+  };
+
+  const dist = new Map([[start, 0]]);
   const prev = new Map([[start, null]]);
-  const queue = [{ col: startCol, row: startRow }];
+  // Simple sorted array as priority queue — grid is tiny (≤143 tiles)
+  const queue = [{ col: startCol, row: startRow, cost: 0 }];
 
   while (queue.length) {
-    const { col, row } = queue.shift();
+    queue.sort((a, b) => a.cost - b.cost);
+    const { col, row, cost } = queue.shift();
     const k = key(col, row);
     if (k === end) break;
+    if (cost > (dist.get(k) ?? Infinity)) continue;
 
-    const neighbors = getNeighbors(col, row).sort(() => rand() - 0.5);
-    for (const n of neighbors) {
+    for (const n of getNeighbors(col, row).sort(() => rand() - 0.5)) {
       const nk = key(n.col, n.row);
-      if (prev.has(nk)) continue;
-      const tile = tiles.get(nk);
-      if (!tile) continue;
-      prev.set(nk, { col, row });
-      queue.push(n);
+      if (!tiles.get(nk)) continue;
+      const deg = roadDeg(n.col, n.row);
+      const step = 1 + Math.max(0, deg - (MAX_ROAD_DEG - 1)) * ROAD_DEG_PENALTY;
+      const nc = cost + step;
+      if (nc < (dist.get(nk) ?? Infinity)) {
+        dist.set(nk, nc);
+        prev.set(nk, { col, row });
+        queue.push({ col: n.col, row: n.row, cost: nc });
+      }
     }
   }
 
@@ -474,20 +493,26 @@ export function generateMap(seed = Date.now(), mapSize = 'standard') {
   roadEdges.push(...interEdges);
 
   let bridgesPlaced = 0;
+  // Tracks which tiles are already road/bridge so the weighted BFS can
+  // penalise over-used hubs and route around them.
+  const roadTiles = new Set();
   const placeRoad = path => {
     for (const { col, row } of path) {
       const t = tiles.get(hexKey(col, row));
       if (!t) continue;
-      if (t.type === TileType.GRASS || t.type === TileType.DIRT || t.type === TileType.FOREST) t.type = TileType.ROAD;
-      else if (t.type === TileType.RIVER && bridgesPlaced < cfg.bridgeMax) {
+      if (t.type === TileType.GRASS || t.type === TileType.DIRT || t.type === TileType.FOREST) {
+        t.type = TileType.ROAD;
+        roadTiles.add(hexKey(col, row));
+      } else if (t.type === TileType.RIVER && bridgesPlaced < cfg.bridgeMax) {
         t.type = TileType.BRIDGE;
         bridgesPlaced++;
+        roadTiles.add(hexKey(col, row));
       }
     }
   };
 
   for (const { from, to } of roadEdges) {
-    placeRoad(bfsPath(tiles, from.col, from.row, to.col, to.row, rand));
+    placeRoad(bfsPath(tiles, from.col, from.row, to.col, to.row, rand, roadTiles));
   }
 
   // 5. Grow forest clusters from seeds
