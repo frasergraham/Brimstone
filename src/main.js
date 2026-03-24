@@ -165,12 +165,30 @@ async function _runLocalAutoResolution() {
 async function _runLocalResolution() {
   if (!state || state.gameOver) { showGameOver(); return; }
 
+  // Cap shared food to the human player's enabled food count so the resolver
+  // only auto-spends the rations the player actually chose to commit.
+  const shared = state.inventory?.shared;
+  if (shared && ui?._planFoodEnabled != null) {
+    const foodKey = 'food';
+    const orig = shared[foodKey] || 0;
+    const cap  = Math.min(ui._planFoodEnabled, orig);
+    shared[foodKey] = cap;
+    // Restore any uncapped food after resolution completes (handled below).
+    var _foodOverage = orig - cap;
+  }
+
   let steps;
   try {
     steps = resolvePlans(state, state.heroPlan, state.witchPlan);
   } catch (err) {
     console.error('resolvePlans error:', err);
     steps = [];
+  }
+
+  // Restore food that wasn't committed.
+  if (shared && _foodOverage > 0) {
+    const foodKey = 'food';
+    shared[foodKey] = (shared[foodKey] || 0) + _foodOverage;
   }
 
   // resolvePlans has fully mutated state to its final configuration.

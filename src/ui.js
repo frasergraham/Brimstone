@@ -258,11 +258,12 @@ export class UIController {
    * @param {number} budget           Action budget for this round.
    */
   enterPlanningMode(faction, budget) {
-    this._planMode      = true;
-    this._planFaction   = faction;
-    this._planBudget    = budget;
-    this._plan          = [];
-    this._planSubmitted = false;
+    this._planMode         = true;
+    this._planFaction      = faction;
+    this._planBudget       = budget;
+    this._plan             = [];
+    this._planSubmitted    = false;
+    this._planFoodEnabled  = this.state?.inventory?.shared?.[ResourceType.FOOD] || 0;
 
     const panel = document.getElementById('plan-panel');
     if (panel) {
@@ -400,9 +401,9 @@ export class UIController {
     };
 
     // Track running cost to identify over-budget steps.
-    // Over-budget steps are powered by food (yellow) up to the food count,
-    // then truly over-budget (red/strikethrough) when food is exhausted.
-    const foodAvailable = (this.state.inventory?.shared?.food || 0);
+    // Over-budget steps are food-powered up to _planFoodEnabled, then truly over-budget.
+    const foodAvailable = (this.state.inventory?.shared?.[ResourceType.FOOD] || 0);
+    const foodEnabled   = Math.min(this._planFoodEnabled ?? foodAvailable, foodAvailable);
     let runningCost = 0;
     let foodUsed = 0;
     let html = '';
@@ -410,7 +411,7 @@ export class UIController {
       const isFree = a.type === PlanActionType.EQUIP_WEAPON || a.type === PlanActionType.USE_ITEM;
       if (!isFree) runningCost++;
       const overBudget = !isFree && runningCost > this._planBudget;
-      const foodPowered = overBudget && foodUsed < foodAvailable;
+      const foodPowered = overBudget && foodUsed < foodEnabled;
       if (foodPowered) foodUsed++;
       const icon = ICONS[a.type] || '•';
       const desc = describeAction(a, i);
@@ -442,6 +443,31 @@ export class UIController {
         this.onRedraw();
       });
     });
+
+    // ── Food slots row ──────────────────────────────────────────────────────
+    const foodRowEl = document.getElementById('plan-food-row');
+    if (foodRowEl) {
+      if (foodAvailable > 0 && !this._planSubmitted) {
+        let slots = '';
+        for (let i = 0; i < foodAvailable; i++) {
+          const on = i < foodEnabled;
+          slots += `<button class="plan-food-slot${on ? ' on' : ''}" data-food-idx="${i}" title="${on ? 'Click to disable this food ration' : 'Click to enable this food ration'}">🍞</button>`;
+        }
+        foodRowEl.innerHTML = `<span class="plan-food-label">Extra actions:</span>${slots}`;
+        foodRowEl.querySelectorAll('.plan-food-slot').forEach(btn => {
+          btn.addEventListener('click', e => {
+            e.stopPropagation();
+            const idx = parseInt(btn.dataset.foodIdx);
+            // Toggle: if slot i is currently on, clicking it turns off i and above.
+            // If slot i is off, clicking turns on up to i.
+            this._planFoodEnabled = (idx < foodEnabled) ? idx : idx + 1;
+            this._renderPlanPanel();
+          });
+        });
+      } else {
+        foodRowEl.innerHTML = '';
+      }
+    }
 
     if (statusEl && !this._planSubmitted) statusEl.textContent = '';
 
@@ -504,8 +530,7 @@ export class UIController {
       : this._selectedEntity;
     if (
       this._selectedEntity &&
-      ((hex.col === _selDisplayHex.col && hex.row === _selDisplayHex.row) ||
-       (hex.col === this._selectedEntity.col && hex.row === this._selectedEntity.row))
+      hex.col === _selDisplayHex.col && hex.row === _selDisplayHex.row
     ) {
       if (this._popupVisible) {
         // Third click — deselect entirely
@@ -539,8 +564,10 @@ export class UIController {
     const clickedEntities = state.entities.filter(e => {
       if (!e.alive || e.owner !== ownerFilter) return false;
       const ghostPos = lastGhostPos?.get(e.id);
-      return (ghostPos && ghostPos.col === hex.col && ghostPos.row === hex.row)
-          || (e.col === hex.col && e.row === hex.row);
+      // In planning mode, if the entity has been moved in the plan, use ONLY the
+      // ghost position — it should no longer appear on its real tile.
+      const pos = (this._planMode && ghostPos) ? ghostPos : { col: e.col, row: e.row };
+      return pos.col === hex.col && pos.row === hex.row;
     });
 
     if (clickedEntities.length === 0) {
@@ -884,6 +911,8 @@ export class UIController {
           break;
         case ActionType.USE_ITEM:
           for (const item of action.usable) {
+            // Food is managed via the plan-panel food slots in planning mode.
+            if (this._planMode && item.item === ResourceType.FOOD) continue;
             regularHtml += btn(item.label, 'item', dis, `data-action="use_item" data-item="${item.item}"`);
           }
           break;

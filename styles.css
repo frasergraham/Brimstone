@@ -1492,6 +1492,38 @@ canvas { touch-action: pan-x pan-y; }
 .plan-step.food-powered .plan-step-icon { opacity: 0.85; }
 .plan-food-tag { font-size: 0.65rem; color: #c8a030; margin-left: 0.3rem; white-space: nowrap; }
 
+/* ── Plan food row ────────────────────────────────────────────────────── */
+.plan-food-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.4rem 0.75rem 0.2rem;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+.plan-food-label {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  margin-right: 0.2rem;
+}
+.plan-food-slot {
+  background: none;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0.15rem 0.25rem;
+  opacity: 0.28;
+  transition: opacity 0.15s, border-color 0.15s;
+}
+.plan-food-slot.on {
+  opacity: 1;
+  border-color: #c8a030;
+}
+.plan-food-slot:hover { opacity: 0.7; }
+.plan-food-slot.on:hover { opacity: 0.75; }
+
 /* ── Phase toast ─────────────────────────────────────────────────────── */
 .phase-toast {
   position: absolute;

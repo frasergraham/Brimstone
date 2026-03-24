@@ -753,7 +753,7 @@ export class Renderer {
 
       ctx.beginPath();
       ctx.arc(ex, ey, r, 0, Math.PI * 2);
-      ctx.fillStyle = ENTITY_COLOR[entity.type];
+      ctx.fillStyle = entity.color ?? ENTITY_COLOR[entity.type];
       ctx.fill();
       ctx.strokeStyle = '#ffffffaa';
       ctx.lineWidth   = 1;
@@ -831,7 +831,8 @@ export class Renderer {
       for (const e of (this.state?.entities ?? [])) {
         if (e.id === entityId) { entityType = e.type; entityOwner = e.owner; break; }
       }
-      const color = ENTITY_COLOR[entityType] ?? (entityOwner === 'witch' ? '#9b59b6' : '#d4a72c');
+      const entityObj = this.state?.entities.find(e => e.id === entityId);
+      const color = entityObj?.color ?? ENTITY_COLOR[entityType] ?? (entityOwner === 'witch' ? '#9b59b6' : '#d4a72c');
 
       ctx.globalAlpha = 0.4;
       ctx.beginPath();
@@ -881,10 +882,22 @@ export class Renderer {
       ctx.globalAlpha = 1;
     }
 
-    // ── Layer 3: Yellow move arrows with step badges ─────────────────────────
+    // ── Layer 3: Coloured move arrows with step badges ───────────────────────
     moveSteps.forEach((step, i) => {
-      const arrow = step.arrow;
-      const ob    = step.overBudget;
+      const arrow  = step.arrow;
+      const ob     = step.overBudget;
+
+      // Use the entity's own colour (survivors have distinct colours).
+      const arrowEntity = this.state?.entities.find(e => e.id === arrow.entityId);
+      const baseColor   = arrowEntity?.color ?? ENTITY_COLOR[arrowEntity?.type] ?? '#f5c842';
+
+      // Helper: parse a hex color and return rgba string with given alpha.
+      const rgba = (hex, a) => {
+        const r = parseInt(hex.slice(1,3),16);
+        const g = parseInt(hex.slice(3,5),16);
+        const b = parseInt(hex.slice(5,7),16);
+        return `rgba(${r},${g},${b},${a})`;
+      };
 
       const from = this._toCanvas(arrow.fromCol, arrow.fromRow);
       const to   = this._toCanvas(arrow.toCol,   arrow.toRow);
@@ -901,7 +914,7 @@ export class Renderer {
       const endX   = to.x   - ux * hs * 0.45;
       const endY   = to.y   - uy * hs * 0.45;
 
-      ctx.strokeStyle = ob ? 'rgba(140,140,140,0.45)' : 'rgba(245,200,66,0.75)';
+      ctx.strokeStyle = ob ? 'rgba(140,140,140,0.45)' : rgba(baseColor, 0.75);
       ctx.lineWidth   = ob ? 1.5 : 2;
       ctx.setLineDash(ob ? [3, 6] : [4, 4]);
       ctx.beginPath();
@@ -912,7 +925,7 @@ export class Renderer {
 
       const headLen = hs * 0.22;
       const angle   = Math.atan2(dy, dx);
-      ctx.strokeStyle = ob ? 'rgba(140,140,140,0.55)' : 'rgba(245,200,66,0.9)';
+      ctx.strokeStyle = ob ? 'rgba(140,140,140,0.55)' : rgba(baseColor, 0.9);
       ctx.lineWidth   = ob ? 1.5 : 2;
       ctx.beginPath();
       ctx.moveTo(endX, endY);
@@ -925,9 +938,9 @@ export class Renderer {
       const badgeR = hs * 0.22;
       ctx.beginPath();
       ctx.arc(to.x, to.y, badgeR, 0, Math.PI * 2);
-      ctx.fillStyle = ob ? 'rgba(60,60,60,0.80)' : 'rgba(245,200,66,0.85)';
+      ctx.fillStyle = ob ? 'rgba(60,60,60,0.80)' : rgba(baseColor, 0.85);
       ctx.fill();
-      ctx.fillStyle    = ob ? 'rgba(180,80,80,0.95)' : '#1a1108';
+      ctx.fillStyle    = ob ? 'rgba(180,80,80,0.95)' : '#111';
       ctx.font         = `bold ${Math.floor(badgeR * 1.1)}px sans-serif`;
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'middle';

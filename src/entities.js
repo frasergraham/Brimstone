@@ -25,6 +25,22 @@ export const SurvivorAbility = Object.freeze({
   SCOUT:          'scout',          // passive: reveals witch units within 3 hexes
 });
 
+// One distinct colour per roster slot — used for unit circles and plan arrows.
+const SURVIVOR_COLORS = [
+  '#e67e22',  // orange
+  '#1abc9c',  // teal
+  '#e74c3c',  // crimson
+  '#3498db',  // blue
+  '#f39c12',  // amber
+  '#a29bfe',  // lavender
+  '#00b894',  // mint
+  '#fd79a8',  // pink
+  '#74b9ff',  // sky blue
+  '#d63031',  // red
+  '#00cec9',  // cyan
+  '#e17055',  // salmon
+];
+
 // Named character pool — one is drawn at random when a survivor is discovered
 export const SURVIVOR_ROSTER = [
   {
@@ -294,6 +310,7 @@ export function createSurvivor(col, row) {
   e.bio          = char.bio;
   e.ability      = char.ability;
   e.abilityLabel = char.abilityLabel;
+  e.color        = pick.i >= 0 ? SURVIVOR_COLORS[pick.i % SURVIVOR_COLORS.length] : SURVIVOR_COLORS[0];
 
   // Apply base stats from the character definition
   e.maxHp  = char.maxHp;
