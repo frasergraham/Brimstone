@@ -1017,6 +1017,51 @@ export class UIController {
     this._renderEndTurnBtn();
     this._renderInventory();
     this._renderLog();
+    this._renderUnitStatsBar();
+  }
+
+  _renderUnitStatsBar() {
+    const bar = document.getElementById('unit-stats-bar');
+    if (!bar) return;
+
+    const entity = this._planMode ? this._selectedEntity : null;
+    if (!entity) {
+      bar.style.display = 'none';
+      return;
+    }
+
+    const GLYPHS = {
+      hero: '⚔', witch: '✦', survivor: '☺',
+      zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙',
+    };
+    const COLORS = {
+      hero: '#d4a72c', witch: '#9b59b6', survivor: '#4caf7d',
+      zombie: '#7c9a57', minion: '#c0392b', wood_golem: '#8B5E3C', iron_golem: '#607D8B',
+    };
+
+    const glyph = GLYPHS[entity.type] ?? '?';
+    const color = entity.color ?? COLORS[entity.type] ?? '#d4c9b0';
+    const hpPct = Math.max(0, Math.min(100, (entity.hp / entity.maxHp) * 100));
+    const hpColor = hpPct > 60 ? '#4caf7d' : hpPct > 30 ? '#f5c842' : '#c0392b';
+    const weaponLabel = entity.weapon
+      ? entity.weapon.charAt(0).toUpperCase() + entity.weapon.slice(1)
+      : null;
+
+    bar.style.display = 'flex';
+    bar.innerHTML = `
+      <span class="usb-glyph" style="color:${color}">${glyph}</span>
+      <span class="usb-name" style="color:${color}">${entity.displayName}</span>
+      <span class="usb-hp-wrap">
+        <span class="usb-stat">HP</span>
+        <span class="usb-hp-track">
+          <span class="usb-hp-fill" style="width:${hpPct}%;background:${hpColor}"></span>
+        </span>
+        <span class="usb-stat-val">${entity.hp}/${entity.maxHp}</span>
+      </span>
+      <span class="usb-stat">ATK <span class="usb-stat-val">${entity.attack}</span></span>
+      <span class="usb-stat">DEF <span class="usb-stat-val">${entity.defense}</span></span>
+      ${weaponLabel ? `<span class="usb-weapon">⚔ ${weaponLabel}</span>` : ''}
+    `;
   }
 
   _renderTurnInfo() {

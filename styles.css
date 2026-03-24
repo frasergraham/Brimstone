@@ -302,6 +302,77 @@ canvas { touch-action: pan-x pan-y; }
 }
 .actions-remaining .bonus { color: var(--green); font-size: 0.8rem; margin-left: 4px; }
 
+/* ── Unit stats bar (planning phase) ──────────────────────────────────── */
+
+#unit-stats-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.3rem 0.75rem;
+  background: rgba(13,17,23,0.95);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  flex-shrink: 0;
+  font-size: 0.82rem;
+  overflow: hidden;
+}
+
+.usb-glyph {
+  font-size: 1.1rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.usb-name {
+  font-weight: bold;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+}
+
+.usb-hp-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+
+.usb-hp-track {
+  width: 60px;
+  height: 6px;
+  background: rgba(255,255,255,0.1);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.usb-hp-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.2s;
+}
+
+.usb-stat {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.usb-stat-val {
+  color: var(--text-bright);
+  font-weight: bold;
+}
+
+.usb-weapon {
+  color: var(--day);
+  font-style: italic;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 #game-main {
   display: flex;
   flex: 1;
