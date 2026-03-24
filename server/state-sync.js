@@ -31,6 +31,7 @@ export function serializeState(state) {
     id:            e.id,
     type:          e.type,
     owner:         e.owner,
+    ownerId:       e.ownerId       ?? null,   // player UUID — new multiplayer field
     col:           e.col,
     row:           e.row,
     hp:            e.hp,
@@ -47,7 +48,7 @@ export function serializeState(state) {
     abilityLabel:  e.abilityLabel  ?? null,
     actedThisTurn: e.actedThisTurn ?? false,
     items:         { ...e.items },
-    // alive is omitted — MirrorEntity derives it from hp via getter
+    // alive is omitted — Entity derives it from hp via getter
   }));
 
   return {
@@ -58,6 +59,8 @@ export function serializeState(state) {
     actionsLeft:          state.actionsLeft,
     witchIsAI:            state.witchIsAI,
     heroIsAI:             state.heroIsAI,
+    // Players registry (multiplayer)
+    players:              (state.players ?? []).map(p => ({ ...p })),
     // Simultaneous-turn planning fields
     planningPhase:        state.planningPhase   ?? false,
     resolving:            state.resolving       ?? false,
@@ -70,6 +73,7 @@ export function serializeState(state) {
     winReason:            state.winReason,
     witchSummonsThisTurn: state.witchSummonsThisTurn,
     attritionLevel:       state.attritionLevel,
+    attritionChanged:     state.attritionChanged ?? false,
     nodeScore:            { ...state.nodeScore },
     log:                  [...state.log],
     witchObjectives:      state.witchObjectives.map(o => ({ ...o })),
@@ -87,13 +91,12 @@ export function serializeState(state) {
 }
 
 /**
- * Reconstruct a live GameState from a serialized snapshot (e.g. loaded from DB).
- * Calls the GameState constructor to get a proper instance with all methods,
+ * Reconstruct a live GameState from a serialized snapshot.
+ * Calls the GameState constructor to get a properly-prototyped instance,
  * then overwrites all data fields from the snapshot.
  */
 export function deserializeState(snap) {
-  // Construct a fresh GameState (generates a throw-away map + entities) just to
-  // get a properly-prototyped instance with all methods intact.
+  // Construct a throw-away GameState just to get a prototyped instance.
   const state = new GameState(snap.witchIsAI ?? false, snap.heroIsAI ?? false);
 
   // ── Tiles ─────────────────────────────────────────────────────────────────
@@ -106,6 +109,8 @@ export function deserializeState(snap) {
   state.entities = snap.entities.map(data => {
     const e = Object.create(Entity.prototype);
     Object.assign(e, data, { items: { ...(data.items || {}) } });
+    // Ensure ownerId is present even on saves from before the multiplayer update
+    if (e.ownerId === undefined) e.ownerId = null;
     return e;
   });
 
@@ -120,6 +125,17 @@ export function deserializeState(snap) {
   state.hero  = state.entities.find(e => e.id === snap.heroId)  ?? null;
   state.witch = state.entities.find(e => e.id === snap.witchId) ?? null;
 
+  // ── Players registry ──────────────────────────────────────────────────────
+  // Restore if present (multiplayer saves); synthesize 2-player entries otherwise.
+  if (snap.players && snap.players.length > 0) {
+    state.players = snap.players.map(p => ({ ...p }));
+  } else {
+    // Legacy 1v1 save: reconstruct synthetic player entries from hero/witch leaders.
+    state.players = [];
+    if (state.hero)  state.players.push({ id: 'hero',  name: 'Hero',  faction: 'hero',  isAI: snap.heroIsAI  ?? false, leaderId: state.hero.id  });
+    if (state.witch) state.players.push({ id: 'witch', name: 'Witch', faction: 'witch', isAI: snap.witchIsAI ?? false, leaderId: state.witch.id });
+  }
+
   // ── Scalar game fields ───────────────────────────────────────────────────
   state.phase                = snap.phase;
   state.round                = snap.round;
@@ -127,6 +143,7 @@ export function deserializeState(snap) {
   state.actionsLeft          = snap.actionsLeft;
   state.witchSummonsThisTurn = snap.witchSummonsThisTurn ?? 0;
   state.attritionLevel       = snap.attritionLevel       ?? 0;
+  state.attritionChanged     = snap.attritionChanged     ?? false;
   state.nodeScore            = { ...snap.nodeScore };
   state.log                  = [...snap.log];
   state.witchObjectives      = snap.witchObjectives.map(o => ({ ...o }));
@@ -135,8 +152,6 @@ export function deserializeState(snap) {
   state.lastDayDamage        = [...(snap.lastDayDamage   || [])];
   state.lastHazardLog        = [...(snap.lastHazardLog   || [])];
   state.fogOfWar             = snap.fogOfWar;
-  // winner / gameOver — saves only exist for in-progress games so these are null,
-  // but restore them defensively in case a partial save slips through.
   state.winner               = snap.winner    ?? null;
   state.winReason            = snap.winReason ?? null;
 
@@ -149,6 +164,10 @@ export function deserializeState(snap) {
   state.witchReady       = false;
   state.heroActionsLeft  = snap.heroActionsLeft  ?? 0;
   state.witchActionsLeft = snap.witchActionsLeft ?? 0;
+  state.playerPlans       = new Map();
+  state.playerReady       = new Map();
+  state.playerActionsLeft = new Map();
+  state.planningDeadline  = null;
 
   return state;
 }
