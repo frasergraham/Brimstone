@@ -3,7 +3,6 @@ import { GameState, Player } from './game.js';
 import { Renderer }          from './renderer.js';
 import { UIController }      from './ui.js';
 import { WitchAI, HeroAI }   from './ai.js';
-import { hexToPixel }        from './hex.js';
 import { MultiplayerClient, MirrorState, loadSession, clearSession } from './multiplayer.js';
 import { VERSION }           from './version.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
@@ -371,14 +370,13 @@ function initOnline(mirrorState, myFaction, mpClient) {
   redrawOnline();
 
   requestAnimationFrame(() => {
-    const wrapper = document.getElementById('canvas-wrapper');
-    if (!wrapper) return;
-    const hero = state.hero;
-    if (!hero) return;
-    const { x, y } = hexToPixel(hero.col, hero.row, renderer.hexSize);
-    renderer._panX = wrapper.clientWidth  / 2 - (x + renderer._padX);
-    renderer._panY = wrapper.clientHeight / 2 - (y + renderer._padY);
-    renderer._clampPan();
+    // Resize now that game-screen layout is complete and canvas has real dimensions.
+    renderer.resize();
+    // Frame the human player's starting units (matches local mode init behaviour).
+    const myUnits = state.entities.filter(e => e.alive && e.owner === mp.myFaction);
+    if (myUnits.length > 0) {
+      renderer.frameHexes(myUnits, { maxZoom: 1.8, paddingHexes: 2.5, duration: 0 });
+    }
     redrawOnline();
   });
 }

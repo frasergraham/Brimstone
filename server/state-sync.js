@@ -2,7 +2,10 @@
 // The client uses this snapshot to construct a MirrorState for rendering.
 export function serializeState(state) {
   const tiles = [];
+  let mapCols = 0, mapRows = 0;
   for (const [key, tile] of state.tiles) {
+    if (tile.col + 1 > mapCols) mapCols = tile.col + 1;
+    if (tile.row + 1 > mapRows) mapRows = tile.row + 1;
     tiles.push({
       key,
       col:            tile.col,
@@ -15,6 +18,7 @@ export function serializeState(state) {
       fortifyLevel:   tile.fortifyLevel   ?? 0,
       explored:       tile.explored       ?? false,
       hiddenSurvivor: tile.hiddenSurvivor ?? false,
+      roadDirs:       tile.roadDirs ? [...tile.roadDirs] : [],
     });
   }
 
@@ -69,6 +73,8 @@ export function serializeState(state) {
     lastHazardLog:        [...(state.lastHazardLog   || [])],
     heroId:               state.hero?.id  ?? null,
     witchId:              state.witch?.id ?? null,
+    mapCols,
+    mapRows,
     tiles,
     entities,
   };

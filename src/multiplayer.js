@@ -5,6 +5,7 @@
  * snapshot. It has the same properties and stub methods that UIController
  * and getValidActions() rely on, but all mutations go through the server.
  */
+import { setMapDimensions } from './hex.js';
 
 // ── MirrorEntity ─────────────────────────────────────────────────────────────
 
@@ -38,6 +39,9 @@ class MirrorEntity {
 
 export class MirrorState {
   static fromSnapshot(snap) {
+    // Restore global map dimensions so the renderer sizes correctly.
+    if (snap.mapCols && snap.mapRows) setMapDimensions(snap.mapCols, snap.mapRows);
+
     const s = new MirrorState();
     s.phase                = snap.phase;
     s.round                = snap.round;
@@ -66,7 +70,12 @@ export class MirrorState {
 
     // Reconstruct tiles as a Map keyed by "col,row"
     s.tiles = new Map();
-    for (const t of snap.tiles) s.tiles.set(t.key, t);
+    for (const t of snap.tiles) {
+      // roadDirs arrives as a plain array; restore it to a Set so the renderer
+      // can spread it with [...tile.roadDirs] without throwing.
+      t.roadDirs = new Set(t.roadDirs || []);
+      s.tiles.set(t.key, t);
+    }
 
     // Reconstruct entities with MirrorEntity methods
     s.entities = snap.entities.map(e => MirrorEntity.from(e));
