@@ -165,10 +165,12 @@ export const ENTITY_COLOR = {
   [EntityType.IRON_GOLEM]: '#607D8B',
 };
 
-// Per-player color palettes for multiplayer — indexed by faction slot (0–3)
-// Hero side: gold through amber/bronze; Witch side: purple through violet/indigo
-export const HERO_PLAYER_COLORS  = ['#d4a72c', '#e07020', '#b8860b', '#f0c030'];
-export const WITCH_PLAYER_COLORS = ['#9b59b6', '#5b2c6f', '#bf69c4', '#7d3c98'];
+// Per-player color palettes for multiplayer — indexed by faction slot (0–3).
+// Chosen for clear readability at small hex-circle size on a dark background.
+// Hero side: warm gold → vivid amber → bright yellow → deep bronze
+// Witch side: medium purple → bright orchid → deep violet → hot magenta
+export const HERO_PLAYER_COLORS  = ['#d4a72c', '#f07020', '#e8d040', '#8b6018'];
+export const WITCH_PLAYER_COLORS = ['#9b59b6', '#d980fa', '#6c3483', '#e040a0'];
 
 // Six shades per witch-unit type — cycled as units are created so each
 // individual unit gets a distinct arrow/circle colour on the plan overlay.

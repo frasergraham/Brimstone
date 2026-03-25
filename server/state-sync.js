@@ -32,6 +32,7 @@ export function serializeState(state) {
     type:          e.type,
     owner:         e.owner,
     ownerId:       e.ownerId       ?? null,   // player UUID — new multiplayer field
+    color:         e.color         ?? null,   // per-player color override
     col:           e.col,
     row:           e.row,
     hp:            e.hp,
