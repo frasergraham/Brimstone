@@ -198,7 +198,7 @@ async function _runLocalResolution() {
   const finalEntities = state.entities;
 
   const humanFaction = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : null;
-  await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction);
+  await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
 
   const prevScore = { hero: state.nodeScore.hero, witch: state.nodeScore.witch };
 
@@ -236,16 +236,19 @@ async function _runLocalResolution() {
  * finalEntities: real post-resolution entity array (restored after all steps).
  * humanFaction:  if set, suppress opponent-only battle/explore dialogs.
  */
-async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFaction = null) {
+async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFaction = null, myPlayerId = null) {
   _resolving = true;
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     // Post-step entities: what the world looks like AFTER this step resolves.
     const postEntities = i + 1 < steps.length ? steps[i + 1].entitySnapshot : finalEntities;
 
+    // Support both legacy {heroEvents, witchEvents} (offline) and
+    // new {playerEvents: [{playerId, faction, events}]} (online MP) step formats.
     const events = [
       ...(step.heroEvents  ?? []),
       ...(step.witchEvents ?? []),
+      ...(step.playerEvents ?? []).flatMap(pe => pe.events ?? []),
     ].filter(ev => ev.type === ResEventType.ACTION_OK);
 
     // ── Phase 1: animate moves for both factions simultaneously ──────────────
@@ -270,7 +273,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       }
 
       if ((!humanFaction || ev.faction === humanFaction) && result?.encounterLog?.length) {
-        pendingDialogs.push(result.encounterLog);
+        if (!myPlayerId || preSnap?.ownerId === myPlayerId) {
+          pendingDialogs.push(result.encounterLog);
+        }
       }
     }
 
@@ -290,12 +295,19 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     for (const ev of events) {
       const { action, result, battleSnaps } = ev;
       if (action.type === PlanActionType.BATTLE_UNIT || action.type === PlanActionType.BATTLE_HEX) {
-        // Show dialog if: no fog, human's own action, or human's unit is involved.
-        const showDialog = !humanFaction || !state.fogOfWar || ev.faction === humanFaction
-          || (battleSnaps && (
-               battleSnaps.targetSnap?.owner === humanFaction ||
-               battleSnaps.actorSnap?.owner  === humanFaction
-             ));
+        // Show dialog if one of my own units is involved (team MP), or falling back
+        // to faction-level logic (offline / fog-off / standard 1v1).
+        const myUnit = myPlayerId && battleSnaps && (
+          battleSnaps.actorSnap?.ownerId  === myPlayerId ||
+          battleSnaps.targetSnap?.ownerId === myPlayerId
+        );
+        const showDialog = myPlayerId
+          ? myUnit
+          : (!humanFaction || !state.fogOfWar || ev.faction === humanFaction
+              || (battleSnaps && (
+                   battleSnaps.targetSnap?.owner === humanFaction ||
+                   battleSnaps.actorSnap?.owner  === humanFaction
+                 )));
         if (battleSnaps && showDialog) {
           const { actorSnap, targetSnap } = battleSnaps;
           // Zoom in on the combatants for the duration of the dialog
@@ -325,15 +337,21 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       }
     }
 
-    // ── Phase 3: explore results (human faction only) ─────────────────────────
+    // ── Phase 3: explore results — only this player's own entities ───────────
+    // In team MP each player owns a subset of their faction's units via ownerId.
+    // Only show dialogs for entities this player directly controls; other players'
+    // units on the same team resolve silently.
+    // In offline/solo mode myPlayerId is null so we fall back to faction filtering.
     for (const ev of events) {
       const { action, result } = ev;
       if (action.type !== PlanActionType.EXPLORE) continue;
-      if (result?.log?.length && (!humanFaction || ev.faction === humanFaction)) {
-        redrawFn();
-        await new Promise(resolve => ui._showResultDialog(result.log, resolve));
-        hadBattle = true;
-      }
+      if (!result?.log?.length) continue;
+      if (humanFaction && ev.faction !== humanFaction) continue;
+      const actor = step.entitySnapshot?.find(e => e.id === action.entityId);
+      if (myPlayerId && actor?.ownerId !== myPlayerId) continue;
+      redrawFn();
+      await new Promise(resolve => ui._showResultDialog(result.log, resolve));
+      hadBattle = true;
     }
 
     if (hadMove || hadBattle) {
@@ -369,7 +387,9 @@ function initOnline(mirrorState, myFaction, mpClient) {
 
   // No local AI — all turns handled server-side
   ui = new UIController(canvas, state, renderer, null, redrawOnline, null, false);
-  ui.mp = mpClient;
+  ui.mp         = mpClient;
+  ui.myPlayerId = mpClient.myPlayerId ?? null;
+  ui._players   = state.players ?? [];
 
   // Show opponent name / online status
   _updateOnlineStatus(mpClient);
@@ -415,28 +435,74 @@ window.addEventListener('resize', () => {
 // ── Setup screen ──────────────────────────────────────────────────────────────
 
 const stepMode    = document.getElementById('setup-step-mode');
-const stepSide    = document.getElementById('setup-step-side');
-const stepOnline  = document.getElementById('setup-step-online');
+const stepNewgame = document.getElementById('setup-step-newgame');
+const stepHowto   = document.getElementById('setup-step-howtoplay');
+const stepOptions = document.getElementById('setup-step-options');
 const stepWaiting = document.getElementById('setup-step-waiting');
-const stepSaves   = document.getElementById('setup-step-saves');
 
 function showStep(step) {
-  stepMode   .style.display = step === 'mode'    ? '' : 'none';
-  stepSide   .style.display = step === 'side'    ? '' : 'none';
-  stepOnline .style.display = step === 'online'  ? '' : 'none';
-  stepWaiting.style.display = step === 'waiting' ? '' : 'none';
-  stepSaves  .style.display = step === 'saves'   ? '' : 'none';
+  stepMode   .style.display = step === 'mode'     ? '' : 'none';
+  stepNewgame.style.display = step === 'newgame'  ? '' : 'none';
+  stepHowto  .style.display = step === 'howtoplay'? '' : 'none';
+  stepOptions.style.display = step === 'options'  ? '' : 'none';
+  stepWaiting.style.display = step === 'waiting'  ? '' : 'none';
 }
 
-// ── Local mode buttons ────────────────────────────────────────────────────────
+// ── Welcome screen buttons ────────────────────────────────────────────────────
 
-document.getElementById('btn-vs-ai')    .addEventListener('click', () => showStep('side'));
-document.getElementById('btn-vs-human') .addEventListener('click', () => init(false, false));
-document.getElementById('btn-autoplay') .addEventListener('click', () => init(true, true, true));
-document.getElementById('btn-back')     .addEventListener('click', () => showStep('mode'));
+document.getElementById('btn-new-game')   .addEventListener('click', () => showStep('newgame'));
+document.getElementById('btn-how-to-play').addEventListener('click', () => showStep('howtoplay'));
+document.getElementById('btn-options')    .addEventListener('click', () => showStep('options'));
+document.getElementById('btn-howtoplay-back').addEventListener('click', () => showStep('mode'));
+document.getElementById('btn-options-back')  .addEventListener('click', () => showStep('mode'));
+
+// ── New Game screen ────────────────────────────────────────────────────────────
+
+document.getElementById('btn-newgame-back').addEventListener('click', () => {
+  if (mp) { mp.disconnect(); mp = null; }
+  renderer = null; ui = null; state = null;
+  showStep('mode');
+});
+
+// Local / Online mode toggle
+document.getElementById('btn-mode-local').addEventListener('click', () => _activateLocalMode());
+document.getElementById('btn-mode-online').addEventListener('click', () => _activateOnlineMode());
+
+function _activateLocalMode() {
+  document.getElementById('btn-mode-local') .classList.add('active');
+  document.getElementById('btn-mode-online').classList.remove('active');
+  document.getElementById('newgame-local-section') .style.display = '';
+  document.getElementById('newgame-online-section').style.display = 'none';
+}
+
+function _activateOnlineMode() {
+  document.getElementById('btn-mode-online').classList.add('active');
+  document.getElementById('btn-mode-local') .classList.remove('active');
+  document.getElementById('newgame-online-section').style.display = '';
+  document.getElementById('newgame-local-section') .style.display = 'none';
+  _initOnlineStep();
+  const session = loadSession();
+  if (session) _fetchActiveSaves();
+}
+
+// Player mode radio changes (vs AI / Two Players / AI vs AI)
+document.querySelectorAll('input[name="player-mode"]').forEach(r => {
+  r.addEventListener('change', _onPlayerModeChange);
+});
+function _onPlayerModeChange() {
+  const mode = document.querySelector('input[name="player-mode"]:checked')?.value;
+  document.getElementById('side-selection') .style.display = mode === 'vs-ai'      ? '' : 'none';
+  document.getElementById('btn-start-wrap') .style.display = mode !== 'vs-ai'      ? '' : 'none';
+}
 
 document.getElementById('btn-play-hero') .addEventListener('click', () => init(true,  false));
 document.getElementById('btn-play-witch').addEventListener('click', () => init(false, true));
+
+document.getElementById('btn-start-local').addEventListener('click', () => {
+  const mode = document.querySelector('input[name="player-mode"]:checked')?.value;
+  if (mode === 'two-players') init(false, false);
+  else if (mode === 'autoplay') init(true, true, true);
+});
 
 document.getElementById('btn-restart').addEventListener('click', () => {
   const el = document.getElementById('game-over');
@@ -462,70 +528,20 @@ document.getElementById('btn-restart').addEventListener('click', () => {
   }
 });
 
-// ── Leaderboard ───────────────────────────────────────────────────────────────
-
-document.getElementById('btn-leaderboard').addEventListener('click', () => {
-  document.getElementById('leaderboard-overlay').style.display = 'flex';
-  _fetchLeaderboard();
-});
-
-document.getElementById('leaderboard-close').addEventListener('click', () => {
-  document.getElementById('leaderboard-overlay').style.display = 'none';
-});
-
-document.getElementById('leaderboard-overlay').addEventListener('click', e => {
-  if (e.target === document.getElementById('leaderboard-overlay')) {
-    document.getElementById('leaderboard-overlay').style.display = 'none';
-  }
-});
-
-function _fetchLeaderboard() {
-  const content = document.getElementById('leaderboard-content');
-  content.innerHTML = '<p class="lb-loading">Loading…</p>';
-
-  // Use REST endpoint — works regardless of WS connection state
-  const base = window.BRIMSTONE_SERVER || '';
-  fetch(`${base}/api/leaderboard`)
-    .then(r => r.json())
-    .then(entries => _renderLeaderboard(entries))
-    .catch(() => { content.innerHTML = '<p class="lb-loading">Could not load (offline mode).</p>'; });
-}
-
-function _renderLeaderboard(entries) {
-  const content = document.getElementById('leaderboard-content');
-  if (!entries.length) {
-    content.innerHTML = '<p class="lb-loading">No games recorded yet.</p>';
-    return;
-  }
-  let html = `<table class="lb-table">
-    <thead><tr><th>#</th><th>Player</th><th>W</th><th>L</th><th>D</th><th>Win%</th></tr></thead><tbody>`;
-  entries.forEach((e, i) => {
-    html += `<tr>
-      <td class="lb-rank">${i + 1}</td>
-      <td class="lb-name">${_esc(e.username)}</td>
-      <td class="lb-w">${e.wins}</td>
-      <td class="lb-l">${e.losses}</td>
-      <td class="lb-d">${e.draws}</td>
-      <td class="lb-pct">${e.win_pct}%</td>
-    </tr>`;
-  });
-  html += '</tbody></table>';
-  content.innerHTML = html;
-}
-
 function _esc(str) {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-// ── Saves (resume) ────────────────────────────────────────────────────────────
+// ── Active games (inline in New Game screen) ──────────────────────────────────
 
-function _fetchSaves() {
-  const list = document.getElementById('saves-list');
+function _fetchActiveSaves() {
+  const list = document.getElementById('active-games-list');
+  if (!list) return;
   list.innerHTML = '<p class="saves-empty">Loading…</p>';
 
   const session = loadSession();
   if (!session) {
-    list.innerHTML = '<p class="saves-empty">Sign in to see your saved games.</p>';
+    list.innerHTML = '<p class="saves-empty">Sign in to see your active games.</p>';
     return;
   }
 
@@ -539,7 +555,7 @@ function _fetchSaves() {
 }
 
 function _renderSaves(saves) {
-  const list = document.getElementById('saves-list');
+  const list = document.getElementById('active-games-list');
   const session = loadSession();
 
   if (!saves.length) {
@@ -589,31 +605,10 @@ function _timeAgo(unixSecs) {
 
 // ── Online flow ───────────────────────────────────────────────────────────────
 
-document.getElementById('btn-online').addEventListener('click', () => {
-  showStep('online');
-  _initOnlineStep();
-});
-
-document.getElementById('btn-online-back').addEventListener('click', () => {
-  if (mp) { mp.disconnect(); mp = null; }
-  renderer = null; ui = null; state = null;
-  showStep('mode');
-});
-
-document.getElementById('btn-resume-game').addEventListener('click', () => {
-  _ensureAuthed(() => {
-    showStep('saves');
-    _fetchSaves();
-  });
-});
-
-document.getElementById('btn-saves-back').addEventListener('click', () => {
-  showStep('online');
-});
-
 document.getElementById('btn-cancel-wait').addEventListener('click', () => {
   if (mp) { mp.leaveQueue(); }
-  showStep('online');
+  showStep('newgame');
+  _activateOnlineMode();
 });
 
 document.getElementById('btn-join-room').addEventListener('click', () => {
@@ -631,33 +626,41 @@ function _fogChecked() {
   return document.getElementById('chk-fog-of-war')?.checked ?? true;
 }
 
+function _ppsSelected() {
+  const checked = document.querySelector('input[name="pps"]:checked');
+  return checked ? parseInt(checked.value, 10) : 1;
+}
+
 document.getElementById('btn-quick-match').addEventListener('click', () => {
   _ensureAuthed(() => {
     showStep('waiting');
+    const pps = _ppsSelected();
     document.getElementById('waiting-subtitle').textContent = 'Searching for an opponent…';
-    document.getElementById('waiting-message').textContent  = 'Searching for a worthy opponent in Salem… (AI fills in after 5s)';
+    document.getElementById('waiting-message').textContent  = `Searching for a worthy opponent in Salem… (AI fills in after 5s) [${pps}v${pps}]`;
     document.getElementById('waiting-room-code').style.display = 'none';
-    mp.joinQueue(_fogChecked());
+    mp.joinQueue(_fogChecked(), pps);
   });
 });
 
 document.getElementById('btn-play-ai-online').addEventListener('click', () => {
   _ensureAuthed(() => {
     showStep('waiting');
+    const pps = _ppsSelected();
     document.getElementById('waiting-subtitle').textContent = 'Starting game vs AI…';
-    document.getElementById('waiting-message').textContent  = 'Summoning your opponent from the dark…';
+    document.getElementById('waiting-message').textContent  = `Summoning your opponent from the dark… [${pps}v${pps}]`;
     document.getElementById('waiting-room-code').style.display = 'none';
-    mp.playAI(_fogChecked());
+    mp.playAI(_fogChecked(), pps);
   });
 });
 
 document.getElementById('btn-create-room').addEventListener('click', () => {
   _ensureAuthed(() => {
     showStep('waiting');
+    const pps = _ppsSelected();
     document.getElementById('waiting-subtitle').textContent = 'Creating private room…';
-    document.getElementById('waiting-message').textContent  = 'Waiting for your opponent to join…';
+    document.getElementById('waiting-message').textContent  = `Waiting for your opponent to join… [${pps}v${pps}]`;
     document.getElementById('waiting-room-code').style.display = 'none';
-    mp.createRoom(_fogChecked());
+    mp.createRoom(_fogChecked(), pps);
   });
 });
 
@@ -669,31 +672,35 @@ document.addEventListener('brimstone:roomCode', e => {
 });
 
 function _initOnlineStep() {
-  const session = loadSession();
+  const session     = loadSession();
   const sessionInfo = document.getElementById('online-session-info');
   const nameForm    = document.getElementById('online-name-form');
-  const subtitle    = document.getElementById('online-subtitle');
 
   if (session) {
     document.getElementById('online-session-name').textContent = session.username;
-    // Will be filled once we have stats from server
     sessionInfo.style.display = '';
     nameForm.style.display    = 'none';
-    subtitle.textContent      = 'Ready to play';
   } else {
     sessionInfo.style.display = 'none';
     nameForm.style.display    = '';
-    subtitle.textContent      = 'Choose your name to begin';
   }
 
   document.getElementById('online-name-error').style.display = 'none';
 }
 
+document.getElementById('btn-online-signin').addEventListener('click', () => {
+  _ensureAuthed(() => {
+    _initOnlineStep();    // switch from name form → session info
+    _fetchActiveSaves();
+  });
+});
+
 document.getElementById('btn-change-name').addEventListener('click', () => {
   clearSession();
   document.getElementById('online-session-info').style.display = 'none';
   document.getElementById('online-name-form').style.display    = '';
-  document.getElementById('online-subtitle').textContent       = 'Choose a new name';
+  document.getElementById('active-games-list').innerHTML =
+    '<p class="saves-empty">Sign in to see your active games.</p>';
   if (mp) { mp.disconnect(); mp = null; }
   renderer = null; ui = null; state = null;
 });
@@ -736,11 +743,14 @@ function _ensureAuthed(cb) {
   }
 }
 
-function _applyOnlinePlanningPhase({ heroActionsLeft, witchActionsLeft }) {
+function _applyOnlinePlanningPhase(payload) {
   if (!ui || !mp) return;
-  const budget = mp.myFaction === 'hero' ? heroActionsLeft : witchActionsLeft;
+  const { myActionsLeft, heroActionsLeft, witchActionsLeft, players, timeoutMs } = payload;
+  // Prefer per-player budget; fall back to legacy faction budget for old servers.
+  const budget = myActionsLeft ?? (mp.myFaction === 'hero' ? heroActionsLeft : witchActionsLeft);
   ui.exitPlanningMode();
-  ui.enterPlanningMode(mp.myFaction, budget);
+  if (players) ui._players = players;
+  ui.enterPlanningMode(mp.myFaction, budget, timeoutMs ?? 0);
   ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
 }
 
@@ -763,7 +773,8 @@ function _createMpClient() {
           } catch (err) {
             console.error('initOnline failed:', err);
             _onlineError(`Failed to start game: ${err.message}`);
-            showStep('online');
+            showStep('newgame');
+            _activateOnlineMode();
           }
         }
         return;
@@ -831,7 +842,7 @@ function _createMpClient() {
       }
     },
 
-    onMatchFound({ roomId, faction, opponentName, aiOpponent, resumed }) {
+    onMatchFound({ roomId, faction, opponentName, aiOpponent, resumed, myPlayerId, players }) {
       if (resumed) {
         document.getElementById('waiting-subtitle').textContent =
           `Resuming as ${faction === 'hero' ? 'Hero ⚔' : 'Witch ✦'}`;
@@ -843,11 +854,20 @@ function _createMpClient() {
         document.getElementById('waiting-message').textContent =
           `Opponent: ${opponentName}${aiOpponent ? ' (AI)' : ''}. Starting game…`;
       }
+      // Store player context so initOnline / enterPlanningMode can use it.
+      if (ui) {
+        if (myPlayerId) ui.myPlayerId = myPlayerId;
+        if (players)   ui._players   = players;
+      }
       // Game starts when first stateUpdate arrives → onState handles initOnline
     },
 
-    onLeaderboard(entries) {
-      _renderLeaderboard(entries);
+    onPlayerSubmitted({ playerId, name, faction }) {
+      if (ui) ui._onPlayerSubmitted(playerId, name, faction);
+    },
+
+    onLeaderboard(_entries) {
+      // Leaderboard removed — no-op
     },
 
     onInQueue(position) {
@@ -893,7 +913,7 @@ function _createMpClient() {
       // This ensures state.entities is already correct when the last slide lands.
       const finalEntities = finalState.entities ?? state.entities;
 
-      _animateResolutionSteps(steps, finalEntities, redrawOnline, mp?.myFaction).then(() => {
+      _animateResolutionSteps(steps, finalEntities, redrawOnline, mp?.myFaction, mp?.myPlayerId ?? null).then(() => {
         // Apply full final state (phase, round, score, tiles, etc.)
         Object.assign(state, finalState);
         state.hero      = finalState.hero;
@@ -922,7 +942,8 @@ function _createMpClient() {
       // During auth phase, show error in the lobby
       if (!state || document.getElementById('setup-screen').style.display !== 'none') {
         _onlineError(msg);
-        showStep('online');
+        showStep('newgame');
+        _activateOnlineMode();
       } else {
         // In-game error — flash in status bar
         const el = document.getElementById('online-status');
@@ -953,6 +974,7 @@ MultiplayerClient.prototype._route = function(msg) {
     if (mp) mp._player = null;
     document.getElementById('online-session-info').style.display = 'none';
     document.getElementById('online-name-form').style.display    = '';
-    showStep('online');
+    showStep('newgame');
+    _activateOnlineMode();
   }
 };

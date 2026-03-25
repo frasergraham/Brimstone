@@ -1,0 +1,325 @@
+{
+  "apiConfig": {
+    "baseUrl": "https://api.cloud.scenario.com/v1",
+    "modelId": "model_bytedance-seedream-4-5-editing",
+    "referenceAssetId": "asset_FdXJ97SKEfjh3BZU6Q9ySEWF",
+    "pollIntervalMs": 3000,
+    "defaultParameters": {
+      "type": "txt2img",
+      "numSamples": 1,
+      "width": 2048,
+      "height": 2048
+    }
+  },
+  "assets": [
+    {
+      "id": "grass",
+      "name": "Grass",
+      "category": "tile",
+      "parameters": {
+        "prompt": "A top-down single hex tile showing overgrown meadow grass, pale frost-touched blades, dark loamy earth between tufts, autumn yellows and deep greens. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "forest",
+      "name": "Forest",
+      "category": "tile",
+      "parameters": {
+        "prompt": "A top-down single hex tile showing dense dark forest, ancient gnarled oak and pine canopy seen from above, deep shadows, fallen leaves, foreboding. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "dirt",
+      "name": "Dirt",
+      "category": "tile",
+      "parameters": {
+        "prompt": "A top-down single hex tile showing bare earth, churned gravel and mud, wagon-rut impressions, scattered pebbles, cold grey-brown soil. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "road",
+      "name": "Road",
+      "category": "tile",
+      "parameters": {
+        "prompt": "A top-down single hex tile showing a narrow dirt road, rutted wagon tracks, compressed earth, loose stones along edges, muted ochre and brown. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "river",
+      "name": "River",
+      "category": "tile",
+      "parameters": {
+        "prompt": "A top-down single hex tile showing a dark cold river, black water reflecting pale sky, smooth current, mossy banks, reeds at edges, deep navy and teal tones. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "bridge",
+      "name": "Bridge",
+      "category": "tile",
+      "parameters": {
+        "prompt": "A top-down single hex tile showing a weathered wooden bridge crossing dark water, rough-hewn planks, rope and iron railings, aged timber over deep navy water. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "town_hall",
+      "name": "Town Hall",
+      "category": "building",
+      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "parameters": {
+        "prompt": "A top-down single hex tile showing a colonial New England town hall, imposing limestone facade, tall arched windows, worn steps, candle glow behind frosted glass. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "church",
+      "name": "Church",
+      "category": "building",
+      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "parameters": {
+        "prompt": "A top-down single hex tile showing a Puritan church, white clapboard darkened by age, tall narrow steeple, leaded windows, iron-hinged door, lantern at entrance. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "inn",
+      "name": "Inn",
+      "category": "building",
+      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "parameters": {
+        "prompt": "A top-down single hex tile showing a colonial inn and tavern, warm amber candlelight from small windows, timber-framed with a low thatched roof, wooden sign, firelight glow. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "blacksmith",
+      "name": "Blacksmith",
+      "category": "building",
+      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "parameters": {
+        "prompt": "A top-down single hex tile showing a colonial blacksmith forge, sooty stone walls, forge fire glowing orange within, iron tools hanging beside door, smoke from chimney. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "graveyard",
+      "name": "Graveyard",
+      "category": "building",
+      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "parameters": {
+        "prompt": "A top-down single hex tile showing a fog-shrouded colonial graveyard, crooked weathered headstones, half-collapsed iron fence, dark mossy stone, dead grass, freshly disturbed earth. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "mill",
+      "name": "Mill",
+      "category": "building",
+      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "parameters": {
+        "prompt": "A top-down single hex tile showing a colonial grain mill, large wooden water wheel, golden straw scattered around entrance, weathered timber structure. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "dock",
+      "name": "Dock",
+      "category": "building",
+      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "parameters": {
+        "prompt": "A top-down single hex tile showing a colonial river dock, rough-hewn wooden pier over dark water, rope coils, barrels and crates, moored flat-bottomed boat. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "house",
+      "name": "House",
+      "category": "building",
+      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "parameters": {
+        "prompt": "A top-down single hex tile showing a colonial New England dwelling, timber-frame construction, low shake-shingle roof, shuttered windows, stone chimney, modest and isolated. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "barn",
+      "name": "Barn",
+      "category": "building",
+      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "parameters": {
+        "prompt": "A top-down single hex tile showing a colonial barn, large weathered timber structure, red-brown paint peeling, hay visible through open loft doors, broken cart wheel. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "watchtower",
+      "name": "Watchtower",
+      "category": "building",
+      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "parameters": {
+        "prompt": "A top-down single hex tile showing a colonial stone watchtower, dark ashlar construction, torch burning at top, arrow slits in thick walls, military and foreboding. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "apothecary",
+      "name": "Apothecary",
+      "category": "building",
+      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "parameters": {
+        "prompt": "A top-down single hex tile showing a colonial apothecary, herb bundles hanging from eaves, small flasks visible through wavy glass windows, purple-grey stone walls, mortar and pestle by door. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "storehouse",
+      "name": "Storehouse",
+      "category": "building",
+      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "parameters": {
+        "prompt": "A top-down single hex tile showing a colonial storehouse, heavy wooden double doors padlocked shut, tan stone walls, supply barrels and crates stacked outside. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "stable",
+      "name": "Stable",
+      "category": "building",
+      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "parameters": {
+        "prompt": "A top-down single hex tile showing a colonial stable, low saddle-brown timber building, straw spilling from entrance, iron hitching post, horseshoe above door. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "hero",
+      "name": "The Hero",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A colonial New England hero warrior, rugged and weathered, layered leather and wool, battered sword at hip, resolute expression beneath wide-brimmed Puritan hat. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "witch",
+      "name": "The Witch",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A Salem witch, dark flowing robes, silver and bone jewellery, eyes glowing faintly with unnatural light, wisps of shadow and violet smoke. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "zombie",
+      "name": "Zombie",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A colonial-era zombie, tattered Puritan burial clothes, pale grey-green decomposing flesh, hollow milky eyes, earth clinging to its form, reaching clawed hands. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "minion",
+      "name": "Minion",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A witch's bound minion, hunched shadowy figure in tattered rags, face obscured beneath a hood, clutches crude iron blade, bound by dark sigil-marked ropes. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "wood_golem",
+      "name": "Wood Golem",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A massive wood golem, constructed from twisted oak, bark-covered limbs, glowing amber runes carved into chest, branches forming crude fingers, moss and vines through joints. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "iron_golem",
+      "name": "Iron Golem",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A towering iron golem, forged from salvaged colonial metalwork, dark corroded plates riveted together, sigils branded into iron, glowing violet cracks at joints. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "survivor_innkeeper",
+      "name": "John O'Connor — Innkeeper",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A stocky colonial innkeeper, heavy apron over coarse linen, sleeves rolled up, carries a wood-splitting axe, tired but defiant expression. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "survivor_nurse",
+      "name": "Mary Quinn — Nurse",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A colonial nurse, plain grey dress and white apron stained with salve, carries a medicine satchel, calm determined eyes, healing herbs tucked into belt. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "survivor_blacksmith",
+      "name": "Thomas Putnam — Blacksmith",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A massive colonial blacksmith, soot-darkened leather apron, enormous arms, carries a war hammer, scars from forge sparks, grim and resolute. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "survivor_herbalist",
+      "name": "Abigail Foster — Herbalist",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A young colonial herbalist, hooded cloak with dried herbs and wildflowers, wicker basket of plants, sharp intelligent eyes. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "survivor_militia",
+      "name": "Samuel Cooper — Militia Sergeant",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A weathered colonial militia sergeant, worn buff coat and leather crossbelt, carries musket and short sword, commanding posture, battle-hardened face beneath tricorn hat. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "survivor_priest",
+      "name": "Father Crane — Parish Priest",
+      "category": "unit",
+      "parameters": {
+        "prompt": "An aged Puritan parish priest, long black cassock, silver cross at chest, carries leather-bound Bible, iron resolve in tired eyes. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "survivor_baker",
+      "name": "Hannah Marsh — Baker",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A stout colonial baker, flour-dusted apron and rolled sleeves, carries a rolling pin repurposed as a club, cheerful but fierce expression. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "survivor_trapper",
+      "name": "Ezra Boone — Trapper",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A lean colonial trapper, fur-trimmed frontier coat, carries flintlock rifle, animal pelts at belt, sharp woodsman's eyes. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "survivor_schoolteacher",
+      "name": "Constance Bell — Schoolteacher",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A composed colonial schoolteacher, modest dark dress with white collar, carries journal, perceptive eyes behind small spectacles, ink-stained fingers. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "survivor_gravedigger",
+      "name": "Isaac Graves — Gravedigger",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A gaunt colonial gravedigger, mud-caked boots and worn overcoat, carries long-handled shovel, hollow eyes, unafraid and stoic. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "survivor_midwife",
+      "name": "Patience Cole — Midwife",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A capable colonial midwife, simple linen dress and cloak, carries satchel of medical supplies, warm steady hands, calm authority. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "survivor_farmhand",
+      "name": "Silas Holt — Farmhand",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A young colonial farmhand, rough spun shirt and suspenders, carries pitchfork, youthful face set with determination, broad shoulders. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    }
+  ]
+}

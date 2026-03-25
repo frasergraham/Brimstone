@@ -67,6 +67,7 @@ export class MirrorState {
     s.witchReady           = snap.witchReady      ?? false;
     s.heroActionsLeft      = snap.heroActionsLeft  ?? 0;
     s.witchActionsLeft     = snap.witchActionsLeft ?? 0;
+    s.players              = (snap.players ?? []).map(p => ({ ...p }));
 
     // Reconstruct tiles as a Map keyed by "col,row"
     s.tiles = new Map();
@@ -117,13 +118,14 @@ export class MultiplayerClient {
    * @param {Function} opts.onResolutionComplete  Called with ({steps, finalState: MirrorState})
    */
   constructor(opts) {
-    this._opts     = opts;
-    this._ws       = null;
-    this._player   = null;  // { id, username, token, wins, losses, draws }
-    this.myFaction = null;  // 'hero' | 'witch'
-    this.roomId    = null;
-    this.active    = false; // true once in a game room
-    this._queue    = [];    // buffered outgoing messages before connection
+    this._opts      = opts;
+    this._ws        = null;
+    this._player    = null;  // { id, username, token, wins, losses, draws }
+    this.myFaction  = null;  // 'hero' | 'witch'
+    this.myPlayerId = null;  // player UUID (from matchFound)
+    this.roomId     = null;
+    this.active     = false; // true once in a game room
+    this._queue     = [];    // buffered outgoing messages before connection
     this._pendingBattle = null; // battle result waiting to be shown after server state arrives
   }
 
@@ -152,12 +154,12 @@ export class MultiplayerClient {
     this._send({ type: 'auth', username, token, roomId });
   }
 
-  joinQueue(fog = true)  { this._send({ type: 'joinQueue',   fog }); }
-  leaveQueue()           { this._send({ type: 'leaveQueue'         }); }
-  playAI(fog = true)     { this._send({ type: 'playAI',     fog }); }
+  joinQueue(fog = true, playersPerSide = 1)  { this._send({ type: 'joinQueue',   fog, playersPerSide }); }
+  leaveQueue()                               { this._send({ type: 'leaveQueue'                        }); }
+  playAI(fog = true, playersPerSide = 1)     { this._send({ type: 'playAI',     fog, playersPerSide }); }
 
-  createRoom(fog = true) { this._send({ type: 'createRoom', fog }); }
-  joinRoom(code)         { this._send({ type: 'joinRoom',   code }); }
+  createRoom(fog = true, playersPerSide = 1) { this._send({ type: 'createRoom', fog, playersPerSide }); }
+  joinRoom(code)                             { this._send({ type: 'joinRoom',   code                }); }
 
   requestLeaderboard() { this._send({ type: 'requestLeaderboard' }); }
 
@@ -263,19 +265,25 @@ export class MultiplayerClient {
         break;
 
       case 'matchFound':
-        this.myFaction = msg.faction;
-        this.roomId    = msg.roomId;
-        this.active    = true;
+        this.myFaction  = msg.faction;
+        this.myPlayerId = msg.myPlayerId ?? null;
+        this.roomId     = msg.roomId;
+        this.active     = true;
         // Register roomId with server so it can route actions to us
         this._send({ type: 'setRoom', roomId: msg.roomId });
         this._opts.onMatchFound?.(msg);
         break;
 
       case 'reconnected':
-        this.myFaction = msg.faction;
-        this.roomId    = msg.roomId;
-        this.active    = true;
+        this.myFaction  = msg.faction;
+        this.myPlayerId = msg.myPlayerId ?? null;
+        this.roomId     = msg.roomId;
+        this.active     = true;
         this._send({ type: 'setRoom', roomId: msg.roomId });
+        break;
+
+      case 'playerSubmitted':
+        this._opts.onPlayerSubmitted?.(msg);
         break;
 
       case 'stateUpdate':

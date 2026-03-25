@@ -26,6 +26,17 @@ function hexCorners(cx, cy, size) {
   return pts;
 }
 
+/** Convert a 6-digit hex colour string to an rgba() string with the given alpha. */
+function _hexToRgba(hex, alpha) {
+  if (typeof hex === 'string' && hex.startsWith('#') && hex.length === 7) {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+  return hex; // already rgba / named — pass through unchanged
+}
+
 export class Renderer {
   constructor(canvas, state) {
     this.canvas  = canvas;
@@ -281,6 +292,15 @@ export class Renderer {
   draw() {
     const ctx   = this.ctx;
     const state = this.state;
+
+    // Build ownerId → playerColor from leader entities so hex outlines show
+    // the owning player's colour regardless of entity type.
+    this._playerColorMap = new Map();
+    for (const e of state.entities) {
+      if (e.color && e.ownerId && (e.type === EntityType.HERO || e.type === EntityType.WITCH)) {
+        this._playerColorMap.set(e.ownerId, e.color);
+      }
+    }
 
     // Tick smooth zoom/pan animation
     if (this._zoomAnim) {
@@ -599,36 +619,38 @@ export class Renderer {
     }
   }
 
-  // Thick coloured outlines on hexes occupied by units so they read clearly
-  // even on a busy map. Orange for hero-side, purple for witch-side.
+  // Thick coloured outlines on hexes occupied by units — colour matches the
+  // entity's per-player colour so each player's territory is visually distinct.
   _drawUnitPresenceOutlines(revealedHexes) {
     const state = this.state;
-    const heroHexes  = new Set();
-    const witchHexes = new Set();
-
     const humanIsHero  = state.witchIsAI && !state.heroIsAI;
     const humanIsWitch = state.heroIsAI  && !state.witchIsAI;
 
+    // Map hexKey → outline colour of the first (highest-priority) entity on that hex.
+    // Leaders are pushed to entities before followers so they win ties naturally.
+    const hexColors = new Map();
+
     for (const e of state.entities) {
       if (!e.alive) continue;
-      if (e.owner === 'hero') {
-        // Hide hero outlines when human is playing witch and hero is in fog
-        if (humanIsWitch && revealedHexes && !revealedHexes.has(hexKey(e.col, e.row))) continue;
-        heroHexes.add(hexKey(e.col, e.row));
-      } else if (e.owner === 'witch') {
-        // Hide witch outlines when human is playing hero and witch is in fog
-        if (humanIsHero && revealedHexes && !revealedHexes.has(hexKey(e.col, e.row))) continue;
-        witchHexes.add(hexKey(e.col, e.row));
+      const k = hexKey(e.col, e.row);
+
+      // Fog filtering — same rules as before
+      if (e.owner === 'hero'  && humanIsWitch && revealedHexes && !revealedHexes.has(k)) continue;
+      if (e.owner === 'witch' && humanIsHero  && revealedHexes && !revealedHexes.has(k)) continue;
+
+      if (!hexColors.has(k)) {
+        // Hex outline always shows the owning player's colour — so every unit on
+        // a hex reads as belonging to that player regardless of unit type.
+        // In offline mode ownerId is null and playerColor falls back to entity.color
+        // (which IS the player colour on leaders, or the type palette on followers).
+        const playerColor = e.ownerId ? this._playerColorMap.get(e.ownerId) : null;
+        hexColors.set(k, playerColor ?? e.color ?? ENTITY_COLOR[e.type] ?? '#ffffff');
       }
     }
 
-    for (const k of heroHexes) {
+    for (const [k, color] of hexColors) {
       const [col, row] = k.split(',').map(Number);
-      this._drawOutline(col, row, 'rgba(255,140,0,0.85)', 3);
-    }
-    for (const k of witchHexes) {
-      const [col, row] = k.split(',').map(Number);
-      this._drawOutline(col, row, 'rgba(160,80,220,0.85)', 3);
+      this._drawOutline(col, row, _hexToRgba(color, 0.85), 3);
     }
   }
 

@@ -608,3 +608,45 @@ export function generateMap(seed = Date.now(), mapSize = 'standard') {
 
   return { tiles, witchObjectives, heroStart, witchStart, mapSize, survivorCounts: cfg.survivorCounts };
 }
+
+// ── Multiple start positions (multiplayer) ───────────────────────────────────
+//
+// Returns an array of `count` distinct start positions for a faction.
+// The first position is always `primaryStart` (the INN or GRAVEYARD).
+// Additional positions fan out from the primary within `searchRadius` hexes,
+// preferring open tiles that are at least `minSep` hexes apart from each other.
+
+export function generateMultipleStarts(tiles, primaryStart, count, minSep = 2, searchRadius = 5) {
+  if (count <= 1) return [{ col: primaryStart.col, row: primaryStart.row }];
+
+  const placed = [{ col: primaryStart.col, row: primaryStart.row }];
+  const visited = new Set([`${primaryStart.col},${primaryStart.row}`]);
+  const queue = [{ col: primaryStart.col, row: primaryStart.row, dist: 0 }];
+  const candidates = [];
+
+  // BFS to collect tiles within searchRadius
+  while (queue.length) {
+    const cur = queue.shift();
+    if (cur.dist >= searchRadius) continue;
+    for (const n of getNeighbors(cur.col, cur.row)) {
+      const k = `${n.col},${n.row}`;
+      if (visited.has(k)) continue;
+      visited.add(k);
+      const t = tiles.get(k);
+      if (!t || t.type === TileType.RIVER) continue;
+      candidates.push({ col: n.col, row: n.row });
+      queue.push({ col: n.col, row: n.row, dist: cur.dist + 1 });
+    }
+  }
+
+  for (const cand of candidates) {
+    if (placed.length >= count) break;
+    const tooClose = placed.some(p => hexDistance(cand.col, cand.row, p.col, p.row) < minSep);
+    if (!tooClose) placed.push({ col: cand.col, row: cand.row });
+  }
+
+  // If we still don't have enough (map is tiny), repeat primary start for overflow
+  while (placed.length < count) placed.push({ col: primaryStart.col, row: primaryStart.row });
+
+  return placed;
+}

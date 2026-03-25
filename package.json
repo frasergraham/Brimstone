@@ -3,11 +3,24 @@
   "version": "0.1.0",
   "description": "Salem hex turn-based game with multiplayer",
   "type": "module",
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "dev:client": "npx serve . -p 3000"
+    "dev:client": "npx serve . -p 3000",
+    "test": "node --test tests/*.test.js",
+    "test:verbose": "node --test --test-reporter=spec tests/*.test.js",
+    "validate": "node scripts/validate.js",
+    "build": "npm test",
+    "assets:dry": "node scripts/generate-assets.js --dry-run",
+    "assets:test": "node scripts/generate-assets.js --test",
+    "assets:gen": "node scripts/generate-assets.js",
+    "assets:stitch": "node scripts/generate-assets.js --stitch-only"
+  },
+  "devDependencies": {
+    "sharp": "^0.33.5"
   },
   "dependencies": {
     "better-sqlite3": "^12.8.0",
