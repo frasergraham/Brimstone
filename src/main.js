@@ -972,11 +972,17 @@ MultiplayerClient.prototype._route = function(msg) {
 
   if (msg.type === 'authError') {
     // Token no longer valid (e.g. server restarted) — clear session and
-    // show the name-entry form so the error label inside it is visible
+    // show the name-entry form so the error label inside it is visible.
+    // Pre-fill the username from the expired session so the user can
+    // re-sign-in without retyping.
+    const expiredSession = loadSession();
     clearSession();
     if (mp) mp._player = null;
     document.getElementById('online-session-info').style.display = 'none';
     document.getElementById('online-name-form').style.display    = '';
+    if (expiredSession?.username) {
+      document.getElementById('online-username').value = expiredSession.username;
+    }
     showStep('newgame');
     _activateOnlineMode();
   }
