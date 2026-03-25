@@ -623,8 +623,9 @@ export class Renderer {
   // entity's per-player colour so each player's territory is visually distinct.
   _drawUnitPresenceOutlines(revealedHexes) {
     const state = this.state;
-    const humanIsHero  = state.witchIsAI && !state.heroIsAI;
-    const humanIsWitch = state.heroIsAI  && !state.witchIsAI;
+    const myFaction    = state.myFaction;
+    const humanIsHero  = myFaction ? myFaction === 'hero'  : (state.witchIsAI && !state.heroIsAI);
+    const humanIsWitch = myFaction ? myFaction === 'witch' : (state.heroIsAI  && !state.witchIsAI);
 
     // Map hexKey → outline colour of the first (highest-priority) entity on that hex.
     // Leaders are pushed to entities before followers so they win ties naturally.
