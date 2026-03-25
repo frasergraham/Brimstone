@@ -1545,6 +1545,20 @@ canvas { touch-action: pan-x pan-y; }
   /* End turn button slightly larger tap target */
   .end-turn-header { padding: 0 0.65rem; height: 36px; }
 
+  /* Phase/score toasts: center on the canvas rather than anchoring near the header */
+  .phase-toast {
+    top: 50%;
+    transform: translate(-50%, -50%);
+    animation: phase-toast-in-mobile 0.25s ease;
+  }
+  .score-toast {
+    top: calc(50% + 3.5rem);
+    transform: translate(-50%, -50%);
+    animation: score-toast-in-mobile 0.25s ease;
+  }
+  @keyframes phase-toast-in-mobile  { from { opacity:0; transform: translate(-50%, -48%); } to { opacity:1; transform: translate(-50%, -50%); } }
+  @keyframes score-toast-in-mobile  { from { opacity:0; transform: translate(-50%, -48%); } to { opacity:1; transform: translate(-50%, -50%); } }
+
 }
 
 /* ── Online / Multiplayer ─────────────────────────────────────────────────── */
