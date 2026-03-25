@@ -384,6 +384,60 @@ describe('resolvePlans — state integrity', () => {
   });
 });
 
+// ── Resolver tags log entries with faction (Bug #10) ─────────────────────────
+
+describe('resolvePlans — log entries tagged with faction', () => {
+  test('hero action logs are tagged with "hero" owner', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const reachable = getReachableHexes(state, hero, 1);
+    if (!reachable.length) return;
+
+    state.log = [];
+    resolvePlans(state, [{
+      type: PlanActionType.MOVE,
+      entityId: hero.id,
+      toCol: reachable[0].col,
+      toRow: reachable[0].row,
+    }], []);
+
+    // At least one log entry should be tagged with 'hero'
+    const tagged = state.log.filter(e => typeof e === 'object' && e.owner === 'hero');
+    assert.ok(tagged.length > 0, 'Hero action should produce log entries tagged with "hero"');
+  });
+
+  test('witch action logs are tagged with "witch" owner', () => {
+    const state = freshState();
+    const witch = state.witch;
+    const reachable = getReachableHexes(state, witch, 1);
+    if (!reachable.length) return;
+
+    state.log = [];
+    resolvePlans(state, [], [{
+      type: PlanActionType.MOVE,
+      entityId: witch.id,
+      toCol: reachable[0].col,
+      toRow: reachable[0].row,
+    }]);
+
+    const tagged = state.log.filter(e => typeof e === 'object' && e.owner === 'witch');
+    assert.ok(tagged.length > 0, 'Witch action should produce log entries tagged with "witch"');
+  });
+
+  test('untagged log entries remain plain strings', () => {
+    const state = freshState();
+    // Empty plans produce no action logs, but existing system logs should remain as strings
+    const initialLogCount = state.log.length;
+    resolvePlans(state, [], []);
+    // Initial logs (game setup) should all be plain strings
+    const initialLogs = state.log.slice(0, initialLogCount);
+    for (const entry of initialLogs) {
+      assert.equal(typeof entry, 'string', 'System log entries should remain plain strings');
+    }
+  });
+});
+
+
 // ── Battle results include required fields (Bugs #4 + #5) ───────────────────
 
 describe('resolvePlans — battle result fields', () => {

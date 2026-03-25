@@ -479,3 +479,41 @@ describe('endRound rest healing', () => {
     assert.equal(state.hero.hp, state.hero.maxHp, 'Should not exceed maxHp');
   });
 });
+
+// ── addLog owner tagging (Bug #10 — fog-of-war chronicle filtering) ─────────
+
+describe('addLog — owner tagging', () => {
+  test('plain string log entries are stored as-is', () => {
+    const state = new GameState(true, true);
+    state.addLog('Hello world');
+    const last = state.log[state.log.length - 1];
+    assert.equal(typeof last, 'string');
+    assert.equal(last, 'Hello world');
+  });
+
+  test('log entries with owner are stored as {text, owner} objects', () => {
+    const state = new GameState(true, true);
+    state.addLog('Witch moved', 'witch');
+    const last = state.log[state.log.length - 1];
+    assert.equal(typeof last, 'object');
+    assert.equal(last.text, 'Witch moved');
+    assert.equal(last.owner, 'witch');
+  });
+
+  test('log entries with null owner are stored as plain strings', () => {
+    const state = new GameState(true, true);
+    state.addLog('Phase changed', null);
+    const last = state.log[state.log.length - 1];
+    assert.equal(typeof last, 'string');
+    assert.equal(last, 'Phase changed');
+  });
+
+  test('log respects 100-entry cap', () => {
+    const state = new GameState(true, true);
+    state.log = [];
+    for (let i = 0; i < 110; i++) {
+      state.addLog(`msg ${i}`, i % 2 === 0 ? 'hero' : null);
+    }
+    assert.ok(state.log.length <= 100, 'Log should not exceed 100 entries');
+  });
+});
