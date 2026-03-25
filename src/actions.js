@@ -325,12 +325,12 @@ export function executeExplore(state, actor) {
     actor.ability === SurvivorAbility.HERBALIST;
 
   if (t.type === TileType.BUILDING && t.building && BUILDING_LOOT[t.building]) {
-    const lootType = rollLoot(BUILDING_LOOT[t.building]);
-    _applyLoot(state, actor, lootType, log);
+    _applyLoot(state, actor, rollLoot(BUILDING_LOOT[t.building]), log);
+    _applyLoot(state, actor, rollLoot(BUILDING_LOOT[t.building]), log);
   } else {
     const terrainTable = TERRAIN_LOOT[t.type] || TERRAIN_LOOT['grass'];
-    const lootType = rollLoot(terrainTable);
-    _applyLoot(state, actor, lootType, log);
+    _applyLoot(state, actor, rollLoot(terrainTable), log);
+    _applyLoot(state, actor, rollLoot(terrainTable), log);
   }
 
   if (isHerbalist && actor.owner === 'hero') {
