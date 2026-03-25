@@ -328,18 +328,18 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       }
     }
 
-    // ── Phase 3: explore results (human faction only, batched into one dialog) ─
-    const exploreLines = [];
+    // ── Phase 3: explore results — only the human player's own leader unit ─────
     for (const ev of events) {
       const { action, result } = ev;
       if (action.type !== PlanActionType.EXPLORE) continue;
-      if (result?.log?.length && (!humanFaction || ev.faction === humanFaction)) {
-        exploreLines.push(...result.log);
-      }
-    }
-    if (exploreLines.length) {
+      if (!result?.log?.length) continue;
+      if (humanFaction && ev.faction !== humanFaction) continue;
+      // Skip ally units (survivors / minions / golems) — only the leader explores
+      const actor = step.entitySnapshot?.find(e => e.id === action.entityId);
+      const isLeader = !actor || actor.type === 'hero' || actor.type === 'witch';
+      if (humanFaction && !isLeader) continue;
       redrawFn();
-      await new Promise(resolve => ui._showResultDialog(exploreLines, resolve));
+      await new Promise(resolve => ui._showResultDialog(result.log, resolve));
       hadBattle = true;
     }
 
