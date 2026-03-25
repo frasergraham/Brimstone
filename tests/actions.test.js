@@ -255,7 +255,7 @@ describe('executeExplore', () => {
     executeExplore(state, herbalist);
     const herbsAfter = herbalist.items[ResourceType.HERBS] ?? 0;
 
-    assert.equal(herbsAfter, herbsBefore + 1, 'HERBALIST should gain 1 herb on explore');
+    assert.ok(herbsAfter >= herbsBefore + 1, 'HERBALIST should gain at least 1 herb on explore (from HERBALIST bonus, possibly more from loot)');
   });
 
   test('non-HERBALIST survivor does NOT receive a bonus herb', () => {
@@ -722,7 +722,8 @@ describe('executeUseAbility — HEAL', () => {
 describe('executeUseAbility — INSPIRE', () => {
   test('gives hero +1 attackBonus, costs 0', () => {
     const state = freshState();
-    const inspirer = new Entity(EntityType.SURVIVOR, 'hero', 0, 0);
+    // Inspirer must be co-located with the hero (same as HEAL requirement)
+    const inspirer = new Entity(EntityType.SURVIVOR, 'hero', state.hero.col, state.hero.row);
     inspirer.ability = SurvivorAbility.INSPIRE;
     inspirer.items = {};
     state.entities.push(inspirer);
@@ -738,15 +739,16 @@ describe('executeUseAbility — INSPIRE', () => {
 describe('executeUseAbility — RALLY', () => {
   test('gives +1 actionsLeft, costs 0', () => {
     const state = freshState();
-    const rallier = new Entity(EntityType.SURVIVOR, 'hero', 0, 0);
+    const rallier = new Entity(EntityType.SURVIVOR, 'hero', state.hero.col, state.hero.row);
     rallier.ability = SurvivorAbility.RALLY;
     rallier.items = {};
     state.entities.push(rallier);
-    state.actionsLeft = 3;
 
     const r = executeUseAbility(state, rallier);
     assert.equal(r.success, true);
     assert.equal(r.cost, 0, 'RALLY should be free');
-    assert.equal(state.actionsLeft, 4, 'RALLY should give +1 action');
+    // RALLY returns budgetBonus for the resolver to apply (both offline and online
+    // use resolvePlans which handles budgetBonus; actionsLeft is not mutated directly)
+    assert.equal(r.budgetBonus, 1, 'RALLY should return budgetBonus of 1');
   });
 });
