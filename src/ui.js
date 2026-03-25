@@ -1659,7 +1659,15 @@ export class UIController {
 
   _showResultDialog(messages, onDismiss) {
     const dialog = document.getElementById('result-dialog');
-    document.getElementById('result-messages').textContent = messages.join('\n');
+    // Collapse consecutive duplicate lines into "message (×N)"
+    const collapsed = [];
+    for (const msg of messages) {
+      const last = collapsed[collapsed.length - 1];
+      if (last?.msg === msg) last.count++;
+      else collapsed.push({ msg, count: 1 });
+    }
+    document.getElementById('result-messages').textContent =
+      collapsed.map(({ msg, count }) => count > 1 ? `${msg} (×${count})` : msg).join('\n');
     document.getElementById('result-dismiss-hint').style.display = this.autoplay ? 'none' : '';
     const btns = document.getElementById('result-buttons');
     btns.style.display = 'none';
