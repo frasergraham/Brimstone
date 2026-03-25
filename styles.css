@@ -561,17 +561,21 @@ canvas { touch-action: pan-x pan-y; }
 }
 
 .usb-hp-track {
-  width: 60px;
-  height: 6px;
-  background: rgba(255,255,255,0.1);
-  border-radius: 3px;
+  display: inline-block;
+  width: 72px;
+  height: 8px;
+  background: rgba(255,255,255,0.15);
+  border-radius: 4px;
   overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.08);
+  vertical-align: middle;
 }
 
 .usb-hp-fill {
+  display: block;
   height: 100%;
-  border-radius: 3px;
-  transition: width 0.2s;
+  border-radius: 4px;
+  transition: width 0.3s, background 0.3s;
 }
 
 .usb-stat {

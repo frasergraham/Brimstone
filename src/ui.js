@@ -1123,7 +1123,7 @@ export class UIController {
     const bar = document.getElementById('unit-stats-bar');
     if (!bar) return;
 
-    const entity = this._planMode ? this._selectedEntity : null;
+    const entity = this._selectedEntity;
     if (!entity) {
       bar.style.display = 'none';
       return;
