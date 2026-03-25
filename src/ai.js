@@ -1473,3 +1473,379 @@ class PlanSimState {
     this.actionsLeft--;
   }
 }
+
+// ── AI Personality variants ────────────────────────────────────────────────────
+// Each subclass overrides only _decidePlanAction(sim); generatePlan() and all
+// async takeTurn() logic are inherited unchanged.
+//
+// Hero personalities
+//   Berserker  — ignore nodes, hunt the witch to the death
+//   Sentinel   — race to a node and never leave, dispatch survivors to others
+//   Scavenger  — loot all buildings first, fight only when healthy
+//
+// Witch personalities
+//   Berserker  — ignore nodes, kill the hero; tiny escort army only
+//   Hoarder    — build a 10-unit golem army before pushing any node
+//   Swarm      — flood all three nodes with disposable minions; witch never fights
+
+// ── Shared inline helpers (same logic as module-level helpers above) ──────────
+
+function _makeHelpers(sim) {
+  const tryMove = (entity, target) => {
+    if (!target) return null;
+    const step = stepToward(sim, entity, target);
+    if (step) return { type: PlanActionType.MOVE, entityId: entity.id, toCol: step.col, toRow: step.row };
+    return null;
+  };
+  const tryBattle = (actor, target) =>
+    ({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id });
+  const trySummon = (witch, minions, cap = 8) => {
+    if (minions.length >= cap || sim.witchSummonsThisTurn > 0) return null;
+    const inv = sim.inventory.witch;
+    if (Object.values(inv).reduce((s, v) => s + v, 0) <= 0) return null;
+    const hex = getNeighbors(witch.col, witch.row).find(n => {
+      const t = sim.tiles.get(hexKey(n.col, n.row));
+      return t && t.type !== TileType.RIVER &&
+        !sim.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
+    });
+    if (!hex) return null;
+    return { type: PlanActionType.SUMMON, entityId: witch.id, toCol: hex.col, toRow: hex.row };
+  };
+  return { tryMove, tryBattle, trySummon };
+}
+
+// ── Hero: Berserker ───────────────────────────────────────────────────────────
+// Chase the witch at all costs. Fight at every range, even at night.
+// Only cares about nodes when the hero faction is one checkpoint from losing.
+
+export class HeroBerserker extends HeroAI {
+  _decidePlanAction(sim) {
+    const hero = sim.hero;
+    if (!hero) return null;
+    const { tryMove, tryBattle } = _makeHelpers(sim);
+    const witch     = sim.witch;
+    const survivors = sim.entities.filter(e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR);
+    const witchNodeCount = sim.witchObjectives.filter(obj =>
+      sim.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
+    ).length;
+
+    // Herbs only when nearly dead (don't waste a free action on minor wounds)
+    const herbs = (hero.items?.[ResourceType.HERBS]) || 0;
+    if (herbs > 0 && hero.hp <= 3) return { type: PlanActionType.USE_ITEM, entityId: hero.id, item: ResourceType.HERBS };
+
+    // Fight co-located
+    const col = sim.entities.find(e => e.alive && e.owner === 'witch' && e.col === hero.col && e.row === hero.row);
+    if (col) return tryBattle(hero, col);
+
+    // Fight adjacent — witch first
+    const adj = [
+      sim.entities.find(e => e.alive && e.type === EntityType.WITCH && hexDistance(hero.col, hero.row, e.col, e.row) === 1),
+      sim.entities.find(e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1),
+    ].find(Boolean);
+    if (adj) return tryBattle(hero, adj);
+
+    // Survivors fight anything adjacent
+    for (const s of survivors) {
+      const sc = sim.entities.find(e => e.alive && e.owner === 'witch' && e.col === s.col && e.row === s.row);
+      if (sc) return tryBattle(s, sc);
+      const sa = sim.entities.find(e => e.alive && e.owner === 'witch' && hexDistance(s.col, s.row, e.col, e.row) === 1);
+      if (sa) return tryBattle(s, sa);
+    }
+
+    // Emergency node race (hero score almost lost)
+    if (witchNodeCount >= 2) { const a = tryMove(hero, _bestNodeForHero(sim, hero)); if (a) return a; }
+
+    // Always charge toward the witch — day AND night
+    if (witch) { const a = tryMove(hero, witch); if (a) return a; }
+
+    // Survivors anchor nodes passively
+    for (const s of survivors) {
+      if (_isOnNode(sim, s)) continue;
+      const a = tryMove(s, _bestNodeForHero(sim, s)); if (a) return a;
+    }
+    return null;
+  }
+}
+
+// ── Hero: Sentinel ────────────────────────────────────────────────────────────
+// Sprint to the nearest node and entrench. Never leave voluntarily.
+// Sends every survivor to defend a different node. Explore only on the node tile.
+
+export class HeroSentinel extends HeroAI {
+  _decidePlanAction(sim) {
+    const hero = sim.hero;
+    if (!hero) return null;
+    const { tryMove, tryBattle } = _makeHelpers(sim);
+    const survivors  = sim.entities.filter(e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR);
+    const heroOnNode = _isOnNode(sim, hero);
+
+    // Herbs always
+    const herbs = (hero.items?.[ResourceType.HERBS]) || 0;
+    if (herbs > 0 && hero.hp < hero.maxHp) return { type: PlanActionType.USE_ITEM, entityId: hero.id, item: ResourceType.HERBS };
+
+    // Fight co-located threats (can't share a hex)
+    const col = sim.entities.find(e => e.alive && e.owner === 'witch' && e.col === hero.col && e.row === hero.row);
+    if (col) return tryBattle(hero, col);
+    for (const s of survivors) {
+      const sc = sim.entities.find(e => e.alive && e.owner === 'witch' && e.col === s.col && e.row === s.row);
+      if (sc) return tryBattle(s, sc);
+    }
+
+    // Not on a node yet → race there
+    if (!heroOnNode) { const a = tryMove(hero, _bestNodeForHero(sim, hero)); if (a) return a; }
+
+    // On a node → defend it, dispatch survivors, explore, then hold
+    if (heroOnNode) {
+      const adj = sim.entities.find(e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1);
+      if (adj) return tryBattle(hero, adj);
+
+      const undefended = _undefendedNodes(sim, hero);
+      for (const s of survivors) {
+        if (_isOnNode(sim, s)) continue;
+        const sorted = [...undefended].sort((a, b) =>
+          hexDistance(s.col, s.row, a.col, a.row) - hexDistance(s.col, s.row, b.col, b.row));
+        if (sorted.length) { const a = tryMove(s, sorted[0]); if (a) return a; }
+      }
+      if (!sim.isExplored(hero.col, hero.row)) return { type: PlanActionType.EXPLORE, entityId: hero.id };
+      return null; // hold the node
+    }
+
+    // Survivors toward nodes
+    for (const s of survivors) {
+      if (_isOnNode(sim, s)) continue;
+      const a = tryMove(s, _bestNodeForHero(sim, s)); if (a) return a;
+    }
+    return null;
+  }
+}
+
+// ── Hero: Scavenger ───────────────────────────────────────────────────────────
+// Loot all buildings before engaging. Fights only when forced or fully healthy.
+// Builds a large survivor army, then pivots to nodes once resources are secured.
+
+export class HeroScavenger extends HeroAI {
+  _decidePlanAction(sim) {
+    const hero = sim.hero;
+    if (!hero) return null;
+    const { tryMove, tryBattle } = _makeHelpers(sim);
+    const survivors = sim.entities.filter(e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR);
+    const witchNodeCount = sim.witchObjectives.filter(obj =>
+      sim.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
+    ).length;
+
+    // Herbs — eagerly heal
+    const herbs = (hero.items?.[ResourceType.HERBS]) || 0;
+    if (herbs > 0 && hero.hp < hero.maxHp) return { type: PlanActionType.USE_ITEM, entityId: hero.id, item: ResourceType.HERBS };
+
+    // Must fight co-located
+    const col = sim.entities.find(e => e.alive && e.owner === 'witch' && e.col === hero.col && e.row === hero.row);
+    if (col) return tryBattle(hero, col);
+
+    // Fight adjacent only if above half HP
+    if (hero.hp > hero.maxHp * 0.5) {
+      const adj = [
+        sim.entities.find(e => e.alive && e.type === EntityType.WITCH && hexDistance(hero.col, hero.row, e.col, e.row) === 1),
+        sim.entities.find(e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1),
+      ].find(Boolean);
+      if (adj) return tryBattle(hero, adj);
+    }
+    for (const s of survivors) {
+      const sc = sim.entities.find(e => e.alive && e.owner === 'witch' && e.col === s.col && e.row === s.row);
+      if (sc) return tryBattle(s, sc);
+    }
+
+    // Emergency: witch about to win
+    if (witchNodeCount >= 2) { const a = tryMove(hero, _bestNodeForHero(sim, hero)); if (a) return a; }
+
+    // Explore current tile (buildings and terrain)
+    if (!sim.isExplored(hero.col, hero.row)) return { type: PlanActionType.EXPLORE, entityId: hero.id };
+
+    // Move toward nearest unexplored building
+    const bldg = _nearestUnexploredBuilding(sim, hero);
+    if (bldg) { const a = tryMove(hero, bldg); if (a) return a; }
+
+    // Buildings exhausted — pivot to nodes
+    { const a = tryMove(hero, _bestNodeForHero(sim, hero)); if (a) return a; }
+    for (const s of survivors) {
+      if (_isOnNode(sim, s)) continue;
+      const a = tryMove(s, _bestNodeForHero(sim, s)); if (a) return a;
+    }
+    return null;
+  }
+}
+
+// ── Witch: Berserker ──────────────────────────────────────────────────────────
+// Ignore nodes; hunt and kill the hero. Tiny 2-unit escort. No retreat.
+
+export class WitchBerserker extends WitchAI {
+  _decidePlanAction(sim) {
+    const witch = sim.witch;
+    if (!witch) return null;
+    const { tryMove, tryBattle, trySummon } = _makeHelpers(sim);
+    const hero    = sim.hero;
+    const minions = sim.entities.filter(e => e.alive && e.owner === 'witch' && e.type !== EntityType.WITCH);
+    const heroScore = sim.nodeScore.hero;
+
+    // Fight co-located
+    const col = sim.entities.find(e => e.alive && e.owner === 'hero' && e.col === witch.col && e.row === witch.row);
+    if (col) return tryBattle(witch, col);
+
+    // Fight adjacent — hero first
+    const adj = [
+      sim.entities.find(e => e.alive && e.type === EntityType.HERO && hexDistance(witch.col, witch.row, e.col, e.row) === 1),
+      sim.entities.find(e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1),
+    ].find(Boolean);
+    if (adj) return tryBattle(witch, adj);
+
+    // Minions fight anything within reach
+    for (const m of minions) {
+      const mc = sim.entities.find(e => e.alive && e.owner === 'hero' && e.col === m.col && e.row === m.row);
+      if (mc) return tryBattle(m, mc);
+      const ma = sim.entities.find(e => e.alive && e.owner === 'hero' && hexDistance(m.col, m.row, e.col, e.row) === 1);
+      if (ma) return tryBattle(m, ma);
+    }
+
+    // Tiny escort only (2 minions max)
+    const escort = trySummon(witch, minions, 2); if (escort) return escort;
+
+    // Emergency node only if hero is about to score-win
+    if (heroScore >= 2) {
+      if (!_isOnNode(sim, witch)) { const a = tryMove(witch, _bestWitchObjective(sim, witch)); if (a) return a; }
+    }
+
+    // Always charge toward hero (day and night)
+    if (hero) { const a = tryMove(witch, hero); if (a) return a; }
+    // Minions also charge hero
+    for (const m of minions) { if (hero) { const a = tryMove(m, hero); if (a) return a; } }
+    return null;
+  }
+}
+
+// ── Witch: Hoarder ────────────────────────────────────────────────────────────
+// Spend early rounds building a maximum army via exploration and summons.
+// Only pushes nodes once army reaches 5+ units. High flee threshold.
+
+export class WitchHoarder extends WitchAI {
+  _decidePlanAction(sim) {
+    const witch = sim.witch;
+    if (!witch) return null;
+    const { tryMove, tryBattle, trySummon } = _makeHelpers(sim);
+    const hero      = sim.hero;
+    const minions   = sim.entities.filter(e => e.alive && e.owner === 'witch' && e.type !== EntityType.WITCH);
+    const realMinions = minions.filter(m => !m.id.startsWith('sim-'));
+    const heroScore = sim.nodeScore.hero;
+
+    // Flee if low HP (more cautious than default)
+    if (hero && hexDistance(witch.col, witch.row, hero.col, hero.row) <= 2 &&
+        witch.hp <= Math.ceil(witch.maxHp * 0.4)) {
+      const step = stepAwayFrom(sim, witch, hero);
+      if (step) return { type: PlanActionType.MOVE, entityId: witch.id, toCol: step.col, toRow: step.row };
+    }
+
+    // Must fight co-located
+    const col = sim.entities.find(e => e.alive && e.owner === 'hero' && e.col === witch.col && e.row === witch.row);
+    if (col) return tryBattle(witch, col);
+
+    // Emergency: hero about to win
+    if (heroScore >= 2) {
+      if (!_isOnNode(sim, witch)) { const a = tryMove(witch, _bestWitchObjective(sim, witch)); if (a) return a; }
+    }
+
+    // Always try to summon if under army cap
+    const summon = trySummon(witch, minions, 10); if (summon) return summon;
+
+    // Explore to gather more resources for summons
+    if (minions.length < 5) {
+      if (!sim.isExplored(witch.col, witch.row)) return { type: PlanActionType.EXPLORE, entityId: witch.id };
+      const unexpAdj = getNeighbors(witch.col, witch.row).find(n => {
+        const t = sim.tiles.get(hexKey(n.col, n.row));
+        return t && !sim.isExplored(t.col, t.row) &&
+          (t.hiddenSurvivor || t.resource || t.building) && t.type !== TileType.RIVER;
+      });
+      if (unexpAdj) return { type: PlanActionType.MOVE, entityId: witch.id, toCol: unexpAdj.col, toRow: unexpAdj.row };
+    }
+
+    // Army ready — flood nodes
+    if (!_isOnNode(sim, witch)) { const a = tryMove(witch, _bestWitchObjective(sim, witch)); if (a) return a; }
+    for (const m of realMinions) {
+      if (_isOnNode(sim, m)) continue;
+      const a = tryMove(m, _bestWitchObjective(sim, m)); if (a) return a;
+    }
+    if (_isOnNode(sim, witch)) return null; // hold
+
+    // Fallback explore
+    if (!sim.isExplored(witch.col, witch.row)) return { type: PlanActionType.EXPLORE, entityId: witch.id };
+    { const a = tryMove(witch, _bestWitchObjective(sim, witch)); if (a) return a; }
+    return null;
+  }
+}
+
+// ── Witch: Swarm ──────────────────────────────────────────────────────────────
+// Flood all three nodes with disposable minions (cap 12).
+// The witch herself never fights — she stays back to summon and gather resources.
+
+export class WitchSwarm extends WitchAI {
+  _decidePlanAction(sim) {
+    const witch = sim.witch;
+    if (!witch) return null;
+    const { tryMove, tryBattle, trySummon } = _makeHelpers(sim);
+    const hero      = sim.hero;
+    const minions   = sim.entities.filter(e => e.alive && e.owner === 'witch' && e.type !== EntityType.WITCH);
+    const realMinions = minions.filter(m => !m.id.startsWith('sim-'));
+
+    // Witch always flees from hero to keep summoning
+    if (hero && hexDistance(witch.col, witch.row, hero.col, hero.row) <= 2) {
+      const step = stepAwayFrom(sim, witch, hero);
+      if (step) return { type: PlanActionType.MOVE, entityId: witch.id, toCol: step.col, toRow: step.row };
+    }
+
+    // Must fight co-located (no choice)
+    const col = sim.entities.find(e => e.alive && e.owner === 'hero' && e.col === witch.col && e.row === witch.row);
+    if (col) return tryBattle(witch, col);
+
+    // Minions fight anything they land on
+    for (const m of realMinions) {
+      const mc = sim.entities.find(e => e.alive && e.owner === 'hero' && e.col === m.col && e.row === m.row);
+      if (mc) return tryBattle(m, mc);
+    }
+
+    // Summon aggressively (high cap, witch never personally attacks)
+    const summon = trySummon(witch, minions, 12); if (summon) return summon;
+
+    // Flood all minions toward uncovered nodes
+    for (const m of realMinions) {
+      if (_isOnNode(sim, m)) continue;
+      const obj = _bestWitchObjective(sim, m);
+      if (obj) { const a = tryMove(m, obj); if (a) return a; }
+    }
+
+    // Witch gathers resources while staying back
+    if (!sim.isExplored(witch.col, witch.row)) return { type: PlanActionType.EXPLORE, entityId: witch.id };
+    const unexpAdj = getNeighbors(witch.col, witch.row).find(n => {
+      const t = sim.tiles.get(hexKey(n.col, n.row));
+      return t && !sim.isExplored(t.col, t.row) &&
+        (t.hiddenSurvivor || t.resource || t.building) && t.type !== TileType.RIVER;
+    });
+    if (unexpAdj) return { type: PlanActionType.MOVE, entityId: witch.id, toCol: unexpAdj.col, toRow: unexpAdj.row };
+
+    // Keep witch near a safe node (last resort movement)
+    { const a = tryMove(witch, _bestWitchObjective(sim, witch)); if (a) return a; }
+    return null;
+  }
+}
+
+// ── Personality registry ──────────────────────────────────────────────────────
+
+export const HERO_PERSONALITIES = {
+  balanced:   HeroAI,
+  berserker:  HeroBerserker,
+  sentinel:   HeroSentinel,
+  scavenger:  HeroScavenger,
+};
+
+export const WITCH_PERSONALITIES = {
+  balanced:  WitchAI,
+  berserker: WitchBerserker,
+  hoarder:   WitchHoarder,
+  swarm:     WitchSwarm,
+};
