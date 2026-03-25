@@ -639,10 +639,11 @@ export class Renderer {
       if (e.owner === 'witch' && humanIsHero  && revealedHexes && !revealedHexes.has(k)) continue;
 
       if (!hexColors.has(k)) {
-        // Outline uses the owning player's colour (via ownerId map for followers
-        // like minions/survivors, or entity.color directly for leaders).
+        // Entity's own colour wins (survivor roster colours, minion type colours,
+        // player colours on leaders). Only fall back to the owning player's colour
+        // for entities that have no colour of their own, then the type default.
         const playerColor = e.ownerId ? this._playerColorMap.get(e.ownerId) : null;
-        hexColors.set(k, playerColor ?? e.color ?? ENTITY_COLOR[e.type] ?? '#ffffff');
+        hexColors.set(k, e.color ?? playerColor ?? ENTITY_COLOR[e.type] ?? '#ffffff');
       }
     }
 
