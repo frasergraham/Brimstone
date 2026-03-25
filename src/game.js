@@ -629,7 +629,7 @@ export class GameState {
         if (t && t.fortifyLevel > 0) {
           const line = `🏰 ${e.displayName} is sheltered by the fort! (level ${t.fortifyLevel})`;
           this.addLog(line);
-          this.lastHazardLog.push(line);
+          this.lastHazardLog.push({ text: line, entityId: e.id, ownerId: e.ownerId ?? null });
           continue;
         }
         this.lastNightDamage.push({ col: e.col, row: e.row, dmg });
@@ -638,7 +638,7 @@ export class GameState {
           ? `💀 ${e.displayName} is consumed by the night!`
           : `🌙 ${e.displayName} suffers in the open! (-${dmg} HP, ${e.hp}/${e.maxHp} remaining)`;
         this.addLog(line);
-        this.lastHazardLog.push(line);
+        this.lastHazardLog.push({ text: line, entityId: e.id, ownerId: e.ownerId ?? null });
         if (killed) this.entities = this.entities.filter(x => x.id !== e.id);
       }
     }
@@ -663,7 +663,7 @@ export class GameState {
         if (t && t.fortifyLevel > 0) {
           const line = `🏰 ${e.displayName} is sheltered by the fort! (level ${t.fortifyLevel})`;
           this.addLog(line);
-          this.lastHazardLog.push(line);
+          this.lastHazardLog.push({ text: line, entityId: e.id, ownerId: e.ownerId ?? null });
           continue;
         }
         this.lastDayDamage.push({ col: e.col, row: e.row, dmg });
@@ -672,7 +672,7 @@ export class GameState {
           ? `💀 ${e.displayName} is destroyed by the light!`
           : `☀ ${e.displayName} is scorched in the open! (-${dmg} HP, ${e.hp}/${e.maxHp} remaining)`;
         this.addLog(line);
-        this.lastHazardLog.push(line);
+        this.lastHazardLog.push({ text: line, entityId: e.id, ownerId: e.ownerId ?? null });
         if (killed) this.entities = this.entities.filter(x => x.id !== e.id);
       }
     }

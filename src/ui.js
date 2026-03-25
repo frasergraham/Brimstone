@@ -1497,7 +1497,7 @@ export class UIController {
 
     // Deduplicate: in online mode each server action re-sends the same hazard
     // arrays until the next turn, so we must not pop the dialog on every update.
-    const hazardKey = `${state.round}|${hazardLog.join('~')}`;
+    const hazardKey = `${state.round}|${hazardLog.map(e => (e.text ?? e)).join('~')}`;
     if (hazardKey === this._lastHazardKey) return;
     this._lastHazardKey = hazardKey;
 
@@ -1526,16 +1526,22 @@ export class UIController {
       requestAnimationFrame(loop);
     }
 
-    // Show a dialog summarising what happened
+    // Show a dialog summarising what happened, filtered to this player's own units.
     if (hazardLog.length) {
-      const isNight = nightPositions.length > 0;
-      const header  = isNight
-        ? '🌙 Night falls — unprotected survivors suffer!'
-        : '☀ Dawn breaks — witch minions caught in the open suffer!';
-      this._showResultDialog([header, ...hazardLog], () => {
-        this._updateSidebar();
-        this.onRedraw();
-      });
+      const myId    = this.myPlayerId;
+      const myLines = hazardLog
+        .filter(e => !myId || !e.ownerId || e.ownerId === myId)
+        .map(e => e.text ?? e);
+      if (myLines.length) {
+        const isNight = nightPositions.length > 0;
+        const header  = isNight
+          ? '🌙 Night falls — unprotected survivors suffer!'
+          : '☀ Dawn breaks — witch minions caught in the open suffer!';
+        this._showResultDialog([header, ...myLines], () => {
+          this._updateSidebar();
+          this.onRedraw();
+        });
+      }
     }
   }
 

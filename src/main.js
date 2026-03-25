@@ -295,12 +295,19 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     for (const ev of events) {
       const { action, result, battleSnaps } = ev;
       if (action.type === PlanActionType.BATTLE_UNIT || action.type === PlanActionType.BATTLE_HEX) {
-        // Show dialog if: no fog, human's own action, or human's unit is involved.
-        const showDialog = !humanFaction || !state.fogOfWar || ev.faction === humanFaction
-          || (battleSnaps && (
-               battleSnaps.targetSnap?.owner === humanFaction ||
-               battleSnaps.actorSnap?.owner  === humanFaction
-             ));
+        // Show dialog if one of my own units is involved (team MP), or falling back
+        // to faction-level logic (offline / fog-off / standard 1v1).
+        const myUnit = myPlayerId && battleSnaps && (
+          battleSnaps.actorSnap?.ownerId  === myPlayerId ||
+          battleSnaps.targetSnap?.ownerId === myPlayerId
+        );
+        const showDialog = myPlayerId
+          ? myUnit
+          : (!humanFaction || !state.fogOfWar || ev.faction === humanFaction
+              || (battleSnaps && (
+                   battleSnaps.targetSnap?.owner === humanFaction ||
+                   battleSnaps.actorSnap?.owner  === humanFaction
+                 )));
         if (battleSnaps && showDialog) {
           const { actorSnap, targetSnap } = battleSnaps;
           // Zoom in on the combatants for the duration of the dialog
