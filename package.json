@@ -10,7 +10,8 @@
     "dev:client": "npx serve . -p 3000",
     "test": "node --test tests/*.test.js",
     "test:verbose": "node --test --test-reporter=spec tests/*.test.js",
-    "validate": "node scripts/validate.js"
+    "validate": "node scripts/validate.js",
+    "build": "npm test"
   },
   "dependencies": {
     "better-sqlite3": "^12.8.0",
