@@ -93,6 +93,15 @@
              placeholder="Enter a username…" maxlength="20" autocomplete="off">
       <p id="online-name-error" class="setup-error" style="display:none"></p>
     </div>
+    <div class="pps-selector">
+      <span class="pps-label">Players per side:</span>
+      <div class="pps-pills">
+        <label class="pps-pill"><input type="radio" name="pps" value="1" checked><span>1v1</span></label>
+        <label class="pps-pill"><input type="radio" name="pps" value="2"><span>2v2</span></label>
+        <label class="pps-pill"><input type="radio" name="pps" value="3"><span>3v3</span></label>
+        <label class="pps-pill"><input type="radio" name="pps" value="4"><span>4v4</span></label>
+      </div>
+    </div>
     <div class="setup-buttons">
       <button id="btn-quick-match" class="setup-btn primary">⚔ Quick Match</button>
       <button id="btn-play-ai-online" class="setup-btn">🤖 Play vs AI</button>
@@ -204,7 +213,9 @@
         <div class="plan-panel-footer">
           <button id="plan-clear-btn" class="plan-btn secondary">✕ Clear</button>
           <button id="plan-submit-btn" class="plan-btn primary">✓ Submit Plan</button>
+          <span id="plan-countdown" class="plan-countdown" style="display:none"></span>
         </div>
+        <div id="plan-players" class="plan-players" style="display:none"></div>
         <div id="plan-status" class="plan-status"></div>
       </div>
     </main>

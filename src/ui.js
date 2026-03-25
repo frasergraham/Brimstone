@@ -45,6 +45,11 @@ export class UIController {
     this._planSubmitted = false;   // true after plan is locked in
     this.onPlanSubmit   = null;    // callback(plan) — set by main.js
 
+    // ── Multiplayer ──────────────────────────────────────────────────────────
+    this.myPlayerId     = null;    // UUID of the local player (null in offline mode)
+    this._players       = [];      // full player roster [{id,name,faction,isAI}]
+    this._countdownTimer = null;   // setInterval handle for countdown display
+
     this._bindEvents();
   }
 
@@ -283,7 +288,7 @@ export class UIController {
    * @param {'hero'|'witch'} faction  Which faction the human controls.
    * @param {number} budget           Action budget for this round.
    */
-  enterPlanningMode(faction, budget) {
+  enterPlanningMode(faction, budget, timeoutMs = 0) {
     this._planMode         = true;
     this._planFaction      = faction;
     this._planBudget       = budget;
@@ -305,15 +310,28 @@ export class UIController {
     }
 
     this._clearSelection();
+
+    // Auto-select this player's own leader so they immediately know which
+    // hero/witch is theirs (especially important in team MP with 4 players).
+    const myLeader = this.state?.entities.find(e =>
+      e.alive && e.owner === faction &&
+      (e.type === 'hero' || e.type === 'witch') &&
+      (!this.myPlayerId || e.ownerId === this.myPlayerId)
+    );
+    if (myLeader) this._selectEntity(myLeader);
+
     this._refreshPlanOverlay();
     this._renderPlanPanel();
     this._updateSidebar();
     this.onRedraw();
 
-    // Zoom to frame the planning faction's units at the start of every turn
-    // (also serves as the initial "zoom in on player" at game start).
+    // Zoom to frame the planning faction's units at the start of every turn.
+    // In online MP, frame only the local player's units; offline: whole faction.
     if (this.renderer) {
-      const units = this.state.entities.filter(e => e.alive && e.owner === faction);
+      const units = this.state.entities.filter(e => {
+        if (!e.alive || e.owner !== faction) return false;
+        return !this.myPlayerId || !e.ownerId || e.ownerId === this.myPlayerId;
+      });
       if (units.length > 0) {
         this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 550 });
       }
@@ -327,6 +345,12 @@ export class UIController {
       this.state.attritionChanged = false; // consume the flag
       setTimeout(() => this._showAttritionPopup(), 400);
     }
+
+    // Multiplayer: reset submission status panel and start countdown.
+    // Clear previous-round submitted flags.
+    if (this._players) this._players.forEach(p => { p._submitted = false; });
+    this._renderPlayerStatus();
+    if (timeoutMs > 0) this._startCountdown(timeoutMs);
   }
 
   /** Exit planning mode (called after resolution completes). */
@@ -336,6 +360,8 @@ export class UIController {
     this._plan          = [];
     this._planFaction   = null;
 
+    this._stopCountdown();
+
     const panel = document.getElementById('plan-panel');
     if (panel) { panel.style.display = 'none'; panel.classList.remove('collapsed'); }
 
@@ -343,6 +369,72 @@ export class UIController {
     this._clearSelection();
     this._updateSidebar();
     this.onRedraw();
+  }
+
+  // ── Multiplayer player-status panel ────────────────────────────────────────
+
+  /** Render the list of players and their submission state into #plan-players. */
+  _renderPlayerStatus() {
+    const el = document.getElementById('plan-players');
+    if (!el) return;
+
+    const players = this._players ?? [];
+    if (players.length <= 1) {
+      el.style.display = 'none';
+      return;
+    }
+
+    el.style.display = '';
+    let html = '';
+    for (const p of players) {
+      const isMe      = p.id === this.myPlayerId;
+      const submitted = p._submitted ?? false;
+      const icon      = submitted ? '✓' : '⋯';
+      const cls       = submitted ? 'player-ready' : 'player-waiting';
+      const label     = isMe ? `${p.name} (you)` : p.name;
+      const fCls      = p.faction === 'hero' ? 'faction-hero' : 'faction-witch';
+      const safeName  = String(label).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      html += `<div class="plan-player-row ${cls}">
+        <span class="plan-player-icon ${fCls}">${p.faction === 'hero' ? '⚔' : '✦'}</span>
+        <span class="plan-player-name">${safeName}</span>
+        <span class="plan-player-status">${icon}</span>
+      </div>`;
+    }
+    el.innerHTML = html;
+  }
+
+  /** Called when the server notifies that another player has submitted. */
+  _onPlayerSubmitted(playerId, name, faction) {
+    const p = this._players?.find(p => p.id === playerId);
+    if (p) p._submitted = true;
+    this._renderPlayerStatus();
+  }
+
+  /** Start a countdown timer showing seconds remaining until auto-submit. */
+  _startCountdown(timeoutMs) {
+    this._stopCountdown();
+    const el    = document.getElementById('plan-countdown');
+    if (!el) return;
+    el.style.display = '';
+    const end = Date.now() + timeoutMs;
+    const tick = () => {
+      const secs = Math.max(0, Math.ceil((end - Date.now()) / 1000));
+      el.textContent = `${secs}s`;
+      el.classList.toggle('countdown-urgent', secs <= 10);
+      if (secs <= 0) this._stopCountdown();
+    };
+    tick();
+    this._countdownTimer = setInterval(tick, 500);
+  }
+
+  /** Stop the countdown timer. */
+  _stopCountdown() {
+    if (this._countdownTimer) {
+      clearInterval(this._countdownTimer);
+      this._countdownTimer = null;
+    }
+    const el = document.getElementById('plan-countdown');
+    if (el) { el.style.display = 'none'; el.textContent = ''; }
   }
 
   /** Add one action to the plan queue. */
@@ -377,7 +469,12 @@ export class UIController {
     if (panel) panel.classList.add('plan-submitted');
 
     const status = document.getElementById('plan-status');
-    if (status) status.textContent = 'Waiting for opponent…';
+    if (status) status.textContent = 'Waiting for opponents…';
+
+    // Mark ourselves as submitted in the player list so the status panel updates.
+    const me = this._players?.find(p => p.id === this.myPlayerId);
+    if (me) me._submitted = true;
+    this._renderPlayerStatus();
 
     this._updateSidebar();
     this.onRedraw();
@@ -604,6 +701,8 @@ export class UIController {
       : null;
     const clickedEntities = state.entities.filter(e => {
       if (!e.alive || e.owner !== ownerFilter) return false;
+      // In online MP, only allow selecting entities owned by the local player.
+      if (this.myPlayerId && e.ownerId && e.ownerId !== this.myPlayerId) return false;
       const ghostPos = lastGhostPos?.get(e.id);
       // In planning mode, if the entity has been moved in the plan, use ONLY the
       // ghost position — it should no longer appear on its real tile.
@@ -1398,7 +1497,7 @@ export class UIController {
 
     // Deduplicate: in online mode each server action re-sends the same hazard
     // arrays until the next turn, so we must not pop the dialog on every update.
-    const hazardKey = `${state.round}|${hazardLog.join('~')}`;
+    const hazardKey = `${state.round}|${hazardLog.map(e => (e.text ?? e)).join('~')}`;
     if (hazardKey === this._lastHazardKey) return;
     this._lastHazardKey = hazardKey;
 
@@ -1427,16 +1526,22 @@ export class UIController {
       requestAnimationFrame(loop);
     }
 
-    // Show a dialog summarising what happened
+    // Show a dialog summarising what happened, filtered to this player's own units.
     if (hazardLog.length) {
-      const isNight = nightPositions.length > 0;
-      const header  = isNight
-        ? '🌙 Night falls — unprotected survivors suffer!'
-        : '☀ Dawn breaks — witch minions caught in the open suffer!';
-      this._showResultDialog([header, ...hazardLog], () => {
-        this._updateSidebar();
-        this.onRedraw();
-      });
+      const myId    = this.myPlayerId;
+      const myLines = hazardLog
+        .filter(e => !myId || !e.ownerId || e.ownerId === myId)
+        .map(e => e.text ?? e);
+      if (myLines.length) {
+        const isNight = nightPositions.length > 0;
+        const header  = isNight
+          ? '🌙 Night falls — unprotected survivors suffer!'
+          : '☀ Dawn breaks — witch minions caught in the open suffer!';
+        this._showResultDialog([header, ...myLines], () => {
+          this._updateSidebar();
+          this.onRedraw();
+        });
+      }
     }
   }
 

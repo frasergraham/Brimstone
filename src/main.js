@@ -198,7 +198,7 @@ async function _runLocalResolution() {
   const finalEntities = state.entities;
 
   const humanFaction = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : null;
-  await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction);
+  await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
 
   const prevScore = { hero: state.nodeScore.hero, witch: state.nodeScore.witch };
 
@@ -236,16 +236,19 @@ async function _runLocalResolution() {
  * finalEntities: real post-resolution entity array (restored after all steps).
  * humanFaction:  if set, suppress opponent-only battle/explore dialogs.
  */
-async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFaction = null) {
+async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFaction = null, myPlayerId = null) {
   _resolving = true;
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     // Post-step entities: what the world looks like AFTER this step resolves.
     const postEntities = i + 1 < steps.length ? steps[i + 1].entitySnapshot : finalEntities;
 
+    // Support both legacy {heroEvents, witchEvents} (offline) and
+    // new {playerEvents: [{playerId, faction, events}]} (online MP) step formats.
     const events = [
       ...(step.heroEvents  ?? []),
       ...(step.witchEvents ?? []),
+      ...(step.playerEvents ?? []).flatMap(pe => pe.events ?? []),
     ].filter(ev => ev.type === ResEventType.ACTION_OK);
 
     // ── Phase 1: animate moves for both factions simultaneously ──────────────
@@ -270,7 +273,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       }
 
       if ((!humanFaction || ev.faction === humanFaction) && result?.encounterLog?.length) {
-        pendingDialogs.push(result.encounterLog);
+        if (!myPlayerId || preSnap?.ownerId === myPlayerId) {
+          pendingDialogs.push(result.encounterLog);
+        }
       }
     }
 
@@ -290,12 +295,19 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     for (const ev of events) {
       const { action, result, battleSnaps } = ev;
       if (action.type === PlanActionType.BATTLE_UNIT || action.type === PlanActionType.BATTLE_HEX) {
-        // Show dialog if: no fog, human's own action, or human's unit is involved.
-        const showDialog = !humanFaction || !state.fogOfWar || ev.faction === humanFaction
-          || (battleSnaps && (
-               battleSnaps.targetSnap?.owner === humanFaction ||
-               battleSnaps.actorSnap?.owner  === humanFaction
-             ));
+        // Show dialog if one of my own units is involved (team MP), or falling back
+        // to faction-level logic (offline / fog-off / standard 1v1).
+        const myUnit = myPlayerId && battleSnaps && (
+          battleSnaps.actorSnap?.ownerId  === myPlayerId ||
+          battleSnaps.targetSnap?.ownerId === myPlayerId
+        );
+        const showDialog = myPlayerId
+          ? myUnit
+          : (!humanFaction || !state.fogOfWar || ev.faction === humanFaction
+              || (battleSnaps && (
+                   battleSnaps.targetSnap?.owner === humanFaction ||
+                   battleSnaps.actorSnap?.owner  === humanFaction
+                 )));
         if (battleSnaps && showDialog) {
           const { actorSnap, targetSnap } = battleSnaps;
           // Zoom in on the combatants for the duration of the dialog
@@ -325,15 +337,21 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       }
     }
 
-    // ── Phase 3: explore results (human faction only) ─────────────────────────
+    // ── Phase 3: explore results — only this player's own entities ───────────
+    // In team MP each player owns a subset of their faction's units via ownerId.
+    // Only show dialogs for entities this player directly controls; other players'
+    // units on the same team resolve silently.
+    // In offline/solo mode myPlayerId is null so we fall back to faction filtering.
     for (const ev of events) {
       const { action, result } = ev;
       if (action.type !== PlanActionType.EXPLORE) continue;
-      if (result?.log?.length && (!humanFaction || ev.faction === humanFaction)) {
-        redrawFn();
-        await new Promise(resolve => ui._showResultDialog(result.log, resolve));
-        hadBattle = true;
-      }
+      if (!result?.log?.length) continue;
+      if (humanFaction && ev.faction !== humanFaction) continue;
+      const actor = step.entitySnapshot?.find(e => e.id === action.entityId);
+      if (myPlayerId && actor?.ownerId !== myPlayerId) continue;
+      redrawFn();
+      await new Promise(resolve => ui._showResultDialog(result.log, resolve));
+      hadBattle = true;
     }
 
     if (hadMove || hadBattle) {
@@ -369,7 +387,9 @@ function initOnline(mirrorState, myFaction, mpClient) {
 
   // No local AI — all turns handled server-side
   ui = new UIController(canvas, state, renderer, null, redrawOnline, null, false);
-  ui.mp = mpClient;
+  ui.mp         = mpClient;
+  ui.myPlayerId = mpClient.myPlayerId ?? null;
+  ui._players   = state.players ?? [];
 
   // Show opponent name / online status
   _updateOnlineStatus(mpClient);
@@ -631,33 +651,41 @@ function _fogChecked() {
   return document.getElementById('chk-fog-of-war')?.checked ?? true;
 }
 
+function _ppsSelected() {
+  const checked = document.querySelector('input[name="pps"]:checked');
+  return checked ? parseInt(checked.value, 10) : 1;
+}
+
 document.getElementById('btn-quick-match').addEventListener('click', () => {
   _ensureAuthed(() => {
     showStep('waiting');
+    const pps = _ppsSelected();
     document.getElementById('waiting-subtitle').textContent = 'Searching for an opponent…';
-    document.getElementById('waiting-message').textContent  = 'Searching for a worthy opponent in Salem… (AI fills in after 5s)';
+    document.getElementById('waiting-message').textContent  = `Searching for a worthy opponent in Salem… (AI fills in after 5s) [${pps}v${pps}]`;
     document.getElementById('waiting-room-code').style.display = 'none';
-    mp.joinQueue(_fogChecked());
+    mp.joinQueue(_fogChecked(), pps);
   });
 });
 
 document.getElementById('btn-play-ai-online').addEventListener('click', () => {
   _ensureAuthed(() => {
     showStep('waiting');
+    const pps = _ppsSelected();
     document.getElementById('waiting-subtitle').textContent = 'Starting game vs AI…';
-    document.getElementById('waiting-message').textContent  = 'Summoning your opponent from the dark…';
+    document.getElementById('waiting-message').textContent  = `Summoning your opponent from the dark… [${pps}v${pps}]`;
     document.getElementById('waiting-room-code').style.display = 'none';
-    mp.playAI(_fogChecked());
+    mp.playAI(_fogChecked(), pps);
   });
 });
 
 document.getElementById('btn-create-room').addEventListener('click', () => {
   _ensureAuthed(() => {
     showStep('waiting');
+    const pps = _ppsSelected();
     document.getElementById('waiting-subtitle').textContent = 'Creating private room…';
-    document.getElementById('waiting-message').textContent  = 'Waiting for your opponent to join…';
+    document.getElementById('waiting-message').textContent  = `Waiting for your opponent to join… [${pps}v${pps}]`;
     document.getElementById('waiting-room-code').style.display = 'none';
-    mp.createRoom(_fogChecked());
+    mp.createRoom(_fogChecked(), pps);
   });
 });
 
@@ -736,11 +764,14 @@ function _ensureAuthed(cb) {
   }
 }
 
-function _applyOnlinePlanningPhase({ heroActionsLeft, witchActionsLeft }) {
+function _applyOnlinePlanningPhase(payload) {
   if (!ui || !mp) return;
-  const budget = mp.myFaction === 'hero' ? heroActionsLeft : witchActionsLeft;
+  const { myActionsLeft, heroActionsLeft, witchActionsLeft, players, timeoutMs } = payload;
+  // Prefer per-player budget; fall back to legacy faction budget for old servers.
+  const budget = myActionsLeft ?? (mp.myFaction === 'hero' ? heroActionsLeft : witchActionsLeft);
   ui.exitPlanningMode();
-  ui.enterPlanningMode(mp.myFaction, budget);
+  if (players) ui._players = players;
+  ui.enterPlanningMode(mp.myFaction, budget, timeoutMs ?? 0);
   ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
 }
 
@@ -831,7 +862,7 @@ function _createMpClient() {
       }
     },
 
-    onMatchFound({ roomId, faction, opponentName, aiOpponent, resumed }) {
+    onMatchFound({ roomId, faction, opponentName, aiOpponent, resumed, myPlayerId, players }) {
       if (resumed) {
         document.getElementById('waiting-subtitle').textContent =
           `Resuming as ${faction === 'hero' ? 'Hero ⚔' : 'Witch ✦'}`;
@@ -843,7 +874,16 @@ function _createMpClient() {
         document.getElementById('waiting-message').textContent =
           `Opponent: ${opponentName}${aiOpponent ? ' (AI)' : ''}. Starting game…`;
       }
+      // Store player context so initOnline / enterPlanningMode can use it.
+      if (ui) {
+        if (myPlayerId) ui.myPlayerId = myPlayerId;
+        if (players)   ui._players   = players;
+      }
       // Game starts when first stateUpdate arrives → onState handles initOnline
+    },
+
+    onPlayerSubmitted({ playerId, name, faction }) {
+      if (ui) ui._onPlayerSubmitted(playerId, name, faction);
     },
 
     onLeaderboard(entries) {
@@ -893,7 +933,7 @@ function _createMpClient() {
       // This ensures state.entities is already correct when the last slide lands.
       const finalEntities = finalState.entities ?? state.entities;
 
-      _animateResolutionSteps(steps, finalEntities, redrawOnline, mp?.myFaction).then(() => {
+      _animateResolutionSteps(steps, finalEntities, redrawOnline, mp?.myFaction, mp?.myPlayerId ?? null).then(() => {
         // Apply full final state (phase, round, score, tiles, etc.)
         Object.assign(state, finalState);
         state.hero      = finalState.hero;

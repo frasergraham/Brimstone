@@ -8,6 +8,7 @@ import {
   executeMove, executeExplore, executeBattle,
   executeFortify, executeSummon, executeUseItem, executeUseAbility,
 } from '../src/actions.js';
+import { EntityType } from '../src/entities.js';
 import { hexDistance } from '../src/hex.js';
 import { PlanActionType, snapEntity } from '../src/planner.js';
 import { Phase } from '../src/game.js';
@@ -23,9 +24,10 @@ export const ResEventType = Object.freeze({
 });
 
 // ── Budget calculation ───────────────────────────────────────────────────────
-// Mirrors the computeActions logic in game.js without importing it, so the
-// resolver stays portable and doesn't create circular dependencies.
+// Mirrors computeActions / computeActionsForPlayer in game.js without importing
+// them directly (avoiding circular dependencies).
 
+/** Faction-level budget — used by the legacy 2-player resolvePlans wrapper. */
 function budgetFor(state, faction) {
   const isHero = faction === 'hero';
   const extras = state.entities.filter(
@@ -42,6 +44,38 @@ function budgetFor(state, faction) {
   }
 }
 
+/** Per-player budget — used by resolvePlansMP. */
+function budgetForPlayer(state, playerId, faction) {
+  const isHero     = faction === 'hero';
+  const leaderType = isHero ? 'hero' : 'witch';
+  const extras     = state.entities.filter(
+    e => e.alive && e.ownerId === playerId && e.type !== leaderType
+  ).length;
+
+  if (isHero) {
+    const timeBonus = (state.phase === Phase.DAY || state.phase === Phase.DAWN) ? 1 : 0;
+    return 3 + timeBonus + Math.min(extras, 5);
+  } else {
+    const timeBonus = state.phase === Phase.NIGHT ? 1 : 0;
+    const unitBonus = Math.min(Math.floor(extras / 2), 4);
+    return 4 + timeBonus + unitBonus;
+  }
+}
+
+// ── Leader-death scatter ─────────────────────────────────────────────────────
+// When a HERO or WITCH leader entity is killed in battle, scatter their
+// owned units back to the map as hidden survivors / remove summons.
+// Delegates to state.scatterPlayerUnits() which is defined in game.js.
+
+function _handleLeaderDeath(state, killedEntity) {
+  const isLeader = killedEntity.type === EntityType.HERO ||
+                   killedEntity.type === EntityType.WITCH;
+  if (!isLeader || !killedEntity.ownerId) return;
+  if (typeof state.scatterPlayerUnits === 'function') {
+    state.scatterPlayerUnits(killedEntity.ownerId);
+  }
+}
+
 // ── Single-action executor ───────────────────────────────────────────────────
 //
 // Returns one of:
@@ -49,10 +83,21 @@ function budgetFor(state, faction) {
 //   { kind: 'skip', reason }                  — battle target gone, free skip
 //   { kind: 'fail', reason }                  — hard failure, halt faction plan
 
-function runAction(state, action, faction) {
+/**
+ * @param {object} state
+ * @param {object} action
+ * @param {string} faction  - 'hero' | 'witch' (used for legacy 2-player path)
+ * @param {string|null} playerId - null in legacy path; UUID in multiplayer
+ */
+function runAction(state, action, faction, playerId = null) {
   const entity = state.entities.find(e => e.id === action.entityId && e.alive);
   if (!entity) return { kind: 'skip', reason: 'Entity no longer exists.' };
-  if (entity.owner !== faction) return { kind: 'fail', reason: 'Wrong faction.' };
+  // Multiplayer: validate by ownerId. Offline fallback: validate by faction.
+  if (playerId !== null) {
+    if (entity.ownerId !== playerId) return { kind: 'fail', reason: 'Entity belongs to another player.' };
+  } else {
+    if (entity.owner !== faction) return { kind: 'fail', reason: 'Wrong faction.' };
+  }
 
   switch (action.type) {
 
@@ -79,6 +124,10 @@ function runAction(state, action, faction) {
       const targetSnap = snapEntity(target);
       const r = executeBattle(state, entity, target);
       if (!r.success) return { kind: 'fail', reason: r.log[0] };
+      // Scatter units when a leader is slain (by hit or counter-attack)
+      if (r.killed)  _handleLeaderDeath(state, target);
+      if (r.counterDmg > 0 && !state.entities.some(e => e.id === entity.id))
+        _handleLeaderDeath(state, entity);
       return { kind: 'ok', result: r, battleSnaps: { actorSnap, targetSnap } };
     }
 
@@ -97,6 +146,9 @@ function runAction(state, action, faction) {
       const targetSnap = snapEntity(target);
       const r = executeBattle(state, entity, target);
       if (!r.success) return { kind: 'fail', reason: r.log[0] };
+      if (r.killed)  _handleLeaderDeath(state, target);
+      if (r.counterDmg > 0 && !state.entities.some(e => e.id === entity.id))
+        _handleLeaderDeath(state, entity);
       return { kind: 'ok', result: r, battleSnaps: { actorSnap, targetSnap } };
     }
 
@@ -113,13 +165,10 @@ function runAction(state, action, faction) {
     }
 
     case PlanActionType.USE_ITEM: {
-      // Snapshot actionsLeft so we can detect Food/Scripture bonus actions.
-      const before = state.actionsLeft;
       const r = executeUseItem(state, entity, action.item);
       if (!r.success) return { kind: 'fail', reason: r.log[0] };
-      // Carry any action bonus granted (Food gives +1 via state.actionsLeft).
-      const bonus = state.actionsLeft - before;
-      return { kind: 'ok', result: r, budgetBonus: bonus };
+      // budgetBonus is now returned directly by executeUseItem (e.g. Food → +1)
+      return { kind: 'ok', result: r, budgetBonus: r.budgetBonus ?? 0 };
     }
 
     case PlanActionType.EQUIP_WEAPON: {
@@ -130,12 +179,10 @@ function runAction(state, action, faction) {
     }
 
     case PlanActionType.USE_ABILITY: {
-      // Snapshot for Rally bonus detection.
-      const before = state.actionsLeft;
       const r = executeUseAbility(state, entity);
       if (!r.success) return { kind: 'fail', reason: r.log[0] };
-      const bonus = state.actionsLeft - before;
-      return { kind: 'ok', result: r, budgetBonus: bonus };
+      // budgetBonus returned directly by executeUseAbility (e.g. Rally → +1)
+      return { kind: 'ok', result: r, budgetBonus: r.budgetBonus ?? 0 };
     }
 
     default:
@@ -154,11 +201,10 @@ function runAction(state, action, faction) {
 
 function drainOneStep(state, queue, budget) {
   const subEvents = [];
-  let budgetConsumed = 0;
 
   while (queue.length > 0 && budget.remaining > 0) {
     const action = queue[0];
-    const out = runAction(state, action, budget.faction);
+    const out = runAction(state, action, budget.faction, budget.playerId ?? null);
 
     if (out.kind === 'ok') {
       const cost = out.result.cost ?? 1;
@@ -237,6 +283,7 @@ function snapshotEntities(entities) {
     maxHp:         e.maxHp,
     alive:         e.alive,
     owner:         e.owner,
+    ownerId:       e.ownerId ?? null,
     type:          e.type,
     weapon:        e.weapon,
     ability:       e.ability,
@@ -248,19 +295,69 @@ function snapshotEntities(entities) {
   }));
 }
 
-// ── Main entry point ─────────────────────────────────────────────────────────
+// ── Main entry point (N-player) ───────────────────────────────────────────────
 //
-// Executes both plans in paired steps.  Returns an ordered array of step
-// records for the server to stream to clients:
+// Executes plans from all players in paired lockstep steps.
+// Player order within each step: hero players first (by array order), then witch players.
 //
+// Input: playerEntries — array of { playerId, faction, plan: PlanAction[] }
+//        Built by the lobby from state.playerPlans.
+//
+// Returns StepRecord[]:
 //   [{
 //     stepIndex: number,
-//     heroEvents:  SubEvent[],   // sub-events for hero this step (0–N)
-//     witchEvents: SubEvent[],   // sub-events for witch this step (0–N)
+//     playerEvents: { playerId, faction, events: SubEvent[] }[],
+//     entitySnapshot: EntitySnap[],
 //   }, ...]
 //
-// The state object is mutated in-place.  Call state.endRound() afterwards
-// to apply phase transitions, hazards, and node scoring.
+// The state object is mutated in-place. Call state.endRound() afterwards.
+
+export function resolvePlansMP(state, playerEntries) {
+  // Build per-player queue + budget objects.
+  // Order: hero players first, then witch players (preserves join order within faction).
+  const heroEntries  = playerEntries.filter(e => e.faction === 'hero');
+  const witchEntries = playerEntries.filter(e => e.faction === 'witch');
+  const ordered      = [...heroEntries, ...witchEntries];
+
+  const budgets = ordered.map(entry => ({
+    playerId:  entry.playerId,
+    faction:   entry.faction,
+    remaining: budgetForPlayer(state, entry.playerId, entry.faction),
+  }));
+  const queues = ordered.map(entry => [...(entry.plan ?? [])]);
+
+  const steps = [];
+  let stepIndex = 0;
+
+  while (true) {
+    const entitySnapshot = snapshotEntities(state.entities);
+    const stepEvents = [];
+    let anyAction = false;
+
+    for (let i = 0; i < ordered.length; i++) {
+      const budget = budgets[i];
+      const queue  = queues[i];
+      if (queue.length === 0 || budget.remaining <= 0) continue;
+      const events = drainOneStep(state, queue, budget);
+      if (events.length > 0) {
+        stepEvents.push({ playerId: budget.playerId, faction: budget.faction, events });
+        anyAction = true;
+      }
+    }
+
+    if (!anyAction) break;
+    steps.push({ stepIndex, playerEvents: stepEvents, entitySnapshot });
+    stepIndex++;
+  }
+
+  return steps;
+}
+
+// ── Legacy 2-player entry point ───────────────────────────────────────────────
+//
+// Backward-compatible wrapper used by the offline mode (src/main.js) and any
+// code that hasn't migrated to resolvePlansMP yet.  Returns the old-style
+// step records with heroEvents / witchEvents arrays.
 
 export function resolvePlans(state, heroPlan, witchPlan) {
   const heroQ  = [...(heroPlan  ?? [])];
@@ -276,8 +373,6 @@ export function resolvePlans(state, heroPlan, witchPlan) {
     (heroQ.length > 0 && heroBudget.remaining  > 0) ||
     (witchQ.length > 0 && witchBudget.remaining > 0)
   ) {
-    // Snapshot entity state *before* this step executes so the animator can
-    // display the world as it looked going into each step.
     const entitySnapshot = snapshotEntities(state.entities);
 
     const heroEvents  = heroQ.length  > 0 && heroBudget.remaining  > 0

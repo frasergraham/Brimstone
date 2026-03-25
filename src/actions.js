@@ -234,14 +234,26 @@ export function getValidActions(state, actor) {
 function _buildAbilityAction(state, actor) {
   switch (actor.ability) {
     case SurvivorAbility.HEAL: {
-      const heroHere = state.hero.alive &&
-        state.hero.col === actor.col && state.hero.row === actor.row &&
-        state.hero.hp < state.hero.maxHp;
+      // Check for a co-located hero owned by the same player (or any hero-faction leader)
+      const heroHere = state.entities.find(e =>
+        e.alive && e.type === EntityType.HERO &&
+        e.col === actor.col && e.row === actor.row &&
+        (e.ownerId === actor.ownerId || e.owner === 'hero') &&
+        e.hp < e.maxHp
+      );
       if (!heroHere) return null;
       return { type: ActionType.USE_ABILITY, ability: SurvivorAbility.HEAL };
     }
-    case SurvivorAbility.INSPIRE:
+    case SurvivorAbility.INSPIRE: {
+      // Only available when a hero is on the same hex
+      const heroHere = state.entities.some(e =>
+        e.alive && e.type === EntityType.HERO &&
+        e.col === actor.col && e.row === actor.row &&
+        (e.ownerId === actor.ownerId || e.owner === 'hero')
+      );
+      if (!heroHere) return null;
       return { type: ActionType.USE_ABILITY, ability: SurvivorAbility.INSPIRE };
+    }
     case SurvivorAbility.RALLY:
       return { type: ActionType.USE_ABILITY, ability: SurvivorAbility.RALLY };
     default:
@@ -286,12 +298,12 @@ export function executeMove(state, actor, targetCol, targetRow) {
   if (t.hiddenSurvivor) {
     t.hiddenSurvivor = false;
     if (actor.owner === 'hero') {
-      const s = createSurvivor(targetCol, targetRow);
+      const s = createSurvivor(targetCol, targetRow, actor.ownerId);
       s.owner = 'hero';
       state.entities.push(s);
       encounterLog.push(`A survivor steps out of hiding — ${s.name}, the ${s.title}! They join the party.`);
     } else {
-      const z = createZombie(targetCol, targetRow);
+      const z = createZombie(targetCol, targetRow, actor.ownerId);
       state.entities.push(z);
       encounterLog.push(`A cowering survivor is found… raised as a zombie by the witch!`);
     }
@@ -313,12 +325,12 @@ export function executeExplore(state, actor) {
     actor.ability === SurvivorAbility.HERBALIST;
 
   if (t.type === TileType.BUILDING && t.building && BUILDING_LOOT[t.building]) {
-    const lootType = rollLoot(BUILDING_LOOT[t.building]);
-    _applyLoot(state, actor, lootType, log);
+    _applyLoot(state, actor, rollLoot(BUILDING_LOOT[t.building]), log);
+    _applyLoot(state, actor, rollLoot(BUILDING_LOOT[t.building]), log);
   } else {
     const terrainTable = TERRAIN_LOOT[t.type] || TERRAIN_LOOT['grass'];
-    const lootType = rollLoot(terrainTable);
-    _applyLoot(state, actor, lootType, log);
+    _applyLoot(state, actor, rollLoot(terrainTable), log);
+    _applyLoot(state, actor, rollLoot(terrainTable), log);
   }
 
   if (isHerbalist && actor.owner === 'hero') {
@@ -523,18 +535,19 @@ export function executeSummon(state, actor, targetCol, targetRow) {
   const inv = state.inventory.witch;
   let summonedUnit, res, unitName;
 
+  const ownerId = actor.ownerId;
   if ((inv[ResourceType.METAL] || 0) > 0) {
     res = ResourceType.METAL;
-    summonedUnit = createIronGolem(targetCol, targetRow);
+    summonedUnit = createIronGolem(targetCol, targetRow, ownerId);
     unitName = 'Iron Golem';
   } else if ((inv[ResourceType.WOOD] || 0) > 0) {
     res = ResourceType.WOOD;
-    summonedUnit = createWoodGolem(targetCol, targetRow);
+    summonedUnit = createWoodGolem(targetCol, targetRow, ownerId);
     unitName = 'Wood Golem';
   } else {
     res = Object.keys(inv).find(k => inv[k] > 0);
     if (!res) return { success: false, log: ['No resources to summon.'] };
-    summonedUnit = createMinion(targetCol, targetRow);
+    summonedUnit = createMinion(targetCol, targetRow, ownerId);
     unitName = 'Minion';
   }
 
@@ -578,9 +591,10 @@ export function executeUseItem(state, actor, item) {
   switch (item) {
     case ResourceType.FOOD:
       if (actor.type !== 'hero') return { success: false, log: ['Only the hero can eat food.'] };
-      state.actionsLeft += 1;
+      // Return budgetBonus instead of mutating state.actionsLeft so both the
+      // offline resolver and the multiplayer resolver can apply it per-player.
       log.push(`${actor.displayName} eats food. Gains 1 extra action!`);
-      break;
+      return { success: true, log, cost: 0, budgetBonus: 1 };
     case ResourceType.SILVER:
       actor.attackBonus += 1;
       log.push(`${actor.displayName} coats weapon in silver. +1 ATK this turn.`);
@@ -597,25 +611,41 @@ export function executeUseAbility(state, actor) {
 
   switch (actor.ability) {
     case SurvivorAbility.HEAL: {
-      const hero = state.hero;
-      if (!hero.alive || hero.col !== actor.col || hero.row !== actor.row)
-        return { success: false, log: ['Hero must be on the same hex.'] };
+      // Heal the hero-type entity owned by the same player on the same hex.
+      // Falls back to any hero-faction leader co-located (covers 1v1 offline).
+      const hero = state.entities.find(e =>
+        e.alive && e.type === EntityType.HERO &&
+        e.col === actor.col && e.row === actor.row &&
+        (e.ownerId === actor.ownerId || e.owner === 'hero')
+      );
+      if (!hero)
+        return { success: false, log: ['A hero must be on the same hex.'] };
       if (hero.hp >= hero.maxHp)
         return { success: false, log: ['Hero is already at full health.'] };
       hero.heal(1);
-      log.push(`${actor.displayName} tends the hero's wounds. (+1 HP, now ${hero.hp}/${hero.maxHp})`);
+      log.push(`${actor.displayName} tends ${hero.displayName}'s wounds. (+1 HP, now ${hero.hp}/${hero.maxHp})`);
       return { success: true, log, cost: 1 };
     }
 
-    case SurvivorAbility.INSPIRE:
-      state.hero.attackBonus += 1;
-      log.push(`${actor.displayName} rallies the hero! (+1 ATK this battle)`);
+    case SurvivorAbility.INSPIRE: {
+      // Inspire the hero-type entity owned by the same player on the same hex.
+      const hero = state.entities.find(e =>
+        e.alive && e.type === EntityType.HERO &&
+        e.col === actor.col && e.row === actor.row &&
+        (e.ownerId === actor.ownerId || e.owner === 'hero')
+      );
+      if (!hero)
+        return { success: false, log: ['A hero must be on the same hex.'] };
+      hero.attackBonus += 1;
+      log.push(`${actor.displayName} rallies ${hero.displayName}! (+1 ATK this battle)`);
       return { success: true, log, cost: 0 };
+    }
 
     case SurvivorAbility.RALLY:
-      state.actionsLeft += 1;
+      // Return budgetBonus so both offline and multiplayer resolvers can apply it
+      // per-player without touching the shared state.actionsLeft.
       log.push(`${actor.displayName}'s words fortify the hero's spirit! (+1 action)`);
-      return { success: true, log, cost: 0 };
+      return { success: true, log, cost: 0, budgetBonus: 1 };
 
     default:
       return { success: false, log: ['No active ability.'] };
