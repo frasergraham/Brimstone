@@ -328,15 +328,19 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       }
     }
 
-    // ── Phase 3: explore results (human faction only) ─────────────────────────
+    // ── Phase 3: explore results (human faction only, batched into one dialog) ─
+    const exploreLines = [];
     for (const ev of events) {
       const { action, result } = ev;
       if (action.type !== PlanActionType.EXPLORE) continue;
       if (result?.log?.length && (!humanFaction || ev.faction === humanFaction)) {
-        redrawFn();
-        await new Promise(resolve => ui._showResultDialog(result.log, resolve));
-        hadBattle = true;
+        exploreLines.push(...result.log);
       }
+    }
+    if (exploreLines.length) {
+      redrawFn();
+      await new Promise(resolve => ui._showResultDialog(exploreLines, resolve));
+      hadBattle = true;
     }
 
     if (hadMove || hadBattle) {
