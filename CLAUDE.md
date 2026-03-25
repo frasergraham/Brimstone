@@ -8,7 +8,7 @@ Browser-based, turn-based hex-grid strategy game set in cursed colonial New Engl
 - Hero: slay the Witch, or hold more Power Nodes at enough dawn/dusk scoring checkpoints (first to 4 cumulative score points).
 - Witch: slay the Hero, or seize all 3 Power Nodes, or accumulate 4 node-score points.
 
-**Game modes:** Human vs AI, Two Players, AI vs AI auto-play.
+**Game modes:** Human vs AI, Two Players, AI vs AI auto-play, **Online multiplayer (1–4 players per side).**
 
 No build step. No dependencies. Pure vanilla JS ES modules, HTML5 Canvas, plain CSS.
 
@@ -20,8 +20,10 @@ No build step. No dependencies. Pure vanilla JS ES modules, HTML5 Canvas, plain 
 npm run dev    # Dev server via npx serve (port 3000)
 npm start      # Python HTTP server fallback
 
-node scripts/headless.js [count]     # AI-vs-AI balance testing (default 1000 games)
-node scripts/combat-sim.js [rounds]  # Combat stats report (default 100 samples)
+node scripts/headless.js [count] [size]   # AI-vs-AI balance testing; size: skirmish|standard|regional|campaign
+node scripts/headless-mp.js [count]       # N-player (2v2) AI balance runner
+node scripts/combat-sim.js [rounds]       # Combat stats report (default 100 samples)
+node scripts/ai-matrix.js [count]         # Every hero personality vs every witch personality matrix
 ```
 
 ---
@@ -34,27 +36,31 @@ styles.css          # Dark gothic theme; CSS custom properties on :root
 src/
   main.js           # Entry point — wires all modules, setup screen flow, resize
   game.js           # GameState class: tiles, entities, phase cycle, turn/victory logic
-  entities.js       # Entity class + factory functions; static resolveCombat()
+  entities.js       # Entity class + factory functions; ownerId field; static resolveCombat()
   actions.js        # All action validation (getValidActions) and execution functions
-  map.js            # Procedural map generator (river, buildings, roads, MST, forests)
-  renderer.js       # Canvas 2D renderer — multi-pass, zoom/pan, fog, animations
-  ui.js             # UIController — DOM events, click routing, popups, dialogs
-  ai.js             # WitchAI and HeroAI — plan generation + BFS pathfinding
+  map.js            # Procedural map generator; MAP_SIZES export (4 sizes); generateMultipleStarts()
+  renderer.js       # Canvas 2D renderer — multi-pass, zoom/pan, fog, animations, per-player outlines
+  ui.js             # UIController — DOM events, click routing, popups, dialogs; player status panel
+  ai.js             # WitchAI and HeroAI — plan generation + BFS pathfinding;
+                    #   6 personality subclasses + HERO_PERSONALITIES / WITCH_PERSONALITIES registries
+  multiplayer.js    # MultiplayerClient — WebSocket client, MirrorState, MirrorEntity
   tiles.js          # Tile/Building/Resource/Weapon enums, colors, icons, rollLoot()
-  hex.js            # Pure hex math: offset↔axial, neighbors, distance, range, pixel
+  hex.js            # Pure hex math: offset↔axial, neighbors, distance, range, pixel; MAP_SIZES
   loot.config.js    # Externalized weighted loot tables (primary tuning file)
-  planner.js        # PlanActionType enum, computeGhostState(), validatePlanAction()
+  planner.js        # PlanActionType enum, computeGhostState(), validatePlanAction(), snapEntity()
 server/
-  resolver.js       # resolvePlans() — lockstep resolution engine (no DOM/WebSocket)
-  lobby.js          # Matchmaking, room lifecycle, server-side AI, plan submission; resumeGame()
+  resolver.js       # resolvePlans() (legacy 2P) + resolvePlansMP() (N-player); snapshotEntities()
+  lobby.js          # Matchmaking, room lifecycle, N-player team seats, AI fill-in; resumeGame()
   state-sync.js     # serializeState() + deserializeState() — snapshot for network/save
   auth.js           # Player auth / session tokens
   db.js             # SQLite persistence (players + game_saves tables)
   saves.js          # upsertSave / deleteSave / getSave / getActiveSaves / pruneStaleAndIncompatibleSaves
   leaderboard.js    # Win/loss recording and ranking
 scripts/
-  headless.js       # Headless AI-vs-AI runner (imports src/ directly, no DOM)
+  headless.js       # Headless AI-vs-AI runner; supports 4 map sizes via argv
+  headless-mp.js    # N-player (2v2) headless balance runner
   combat-sim.js     # Scenario matrix: hit rates, crush rates, expected damage
+  ai-matrix.js      # Runs every hero personality vs every witch personality; renders result matrix
 ```
 
 ---
@@ -75,6 +81,7 @@ scripts/
 - Dead entities removed by filter: `state.entities = state.entities.filter(e => e.id !== dead.id)`.
 - Execute functions return `{ success, log, cost }`; caller calls `state.spendAction(result.cost)`.
 - Headless scripts import `src/` directly — all game logic is DOM/Canvas-free.
+- Every entity has an `ownerId` (player UUID) linking it to a specific player in N-player games. `null` in offline/AI games. Used for dialog filtering, per-player fog, and plan scoping.
 
 ---
 
@@ -166,11 +173,17 @@ The renderer reads `renderer.planGhostSteps` and draws dashed arrows with number
 ### Planning state fields on `GameState`
 
 ```js
+// 2-player / offline:
 planningPhase:    bool    // true while both sides are building plans
 resolving:        bool    // true while resolver is running
 heroPlan / witchPlan: PlanAction[] | null
 heroReady / witchReady: bool
 heroActionsLeft / witchActionsLeft: number  // budgets computed at startPlanning()
+
+// N-player (online multiplayer):
+playerPlans:       Map<playerId, PlanAction[]>  // per-player submitted plans
+playerReady:       Map<playerId, bool>          // submission guard (prevents double-submit)
+playerActionsLeft: Map<playerId, number>        // per-player budgets at planning start
 ```
 
 ### Local mode flow (`src/main.js`)
@@ -199,10 +212,12 @@ _runLocalResolution()
 
 ### Online mode flow
 
-Server: `_startPlanningPhase(room)` → broadcasts `stateUpdate` + `planningPhase` message → AI submits immediately → waits for human → `_executeResolution()` → broadcasts `resolutionComplete { steps, finalState }` → 100 ms → next `_startPlanningPhase`.
+Server: `_startPlanningPhase(room)` → broadcasts `stateUpdate` + `planningPhase` message (with per-player budgets from `playerActionsLeft`) → AI players submit immediately → waits for all humans → `_executeResolution()` → broadcasts `resolutionComplete { steps, finalState }` → 100 ms → next `_startPlanningPhase`.
+
+In N-player rooms `handlePlanSubmit` guards against duplicates via `playerReady.get(playerId)`. When all human players are ready, `_executeResolution` calls `resolvePlansMP(state, playerEntries)` (N-player resolver) instead of the legacy `resolvePlans`.
 
 Client callbacks in `_createMpClient()`:
-- `onPlanningPhase({ heroActionsLeft, witchActionsLeft })` → `ui.enterPlanningMode(myFaction, budget)`
+- `onPlanningPhase({ playerActionsLeft })` → `ui.enterPlanningMode(myFaction, playerActionsLeft.get(myPlayerId))`
 - `onOpponentReady()` → update plan status text
 - `onResolutionComplete({ steps, finalState })` → animate steps → apply `finalState`
 
@@ -294,6 +309,21 @@ Gang-up d3: attacker has ≥1 ally adjacent to defender. Ally-def d3: defender h
 | Wood Golem | 4 | 2 | 3 |
 | Iron Golem | 6 | 3 | 4 |
 
+### AI Personalities
+
+`src/ai.js` exports 6 personality subclasses registered in `HERO_PERSONALITIES` and `WITCH_PERSONALITIES`. Each overrides action-scoring weights so the same base AI behaves differently across games:
+
+| Class | Side | Behaviour |
+|-------|------|-----------|
+| `HeroBerserker` | Hero | Prioritises attack; will close distance aggressively |
+| `HeroSentinel` | Hero | Prioritises fortify + defensive positioning |
+| `HeroScavenger` | Hero | Prioritises explore + loot before engaging |
+| `WitchBerserker` | Witch | Prioritises direct combat over summoning |
+| `WitchHoarder` | Witch | Prioritises resource gathering + high-tier summons |
+| `WitchSwarm` | Witch | Prioritises summoning cheap minions in bulk |
+
+In online games the server assigns a personality randomly per room. In headless runs `headless.js` samples personalities; `ai-matrix.js` exhaustively tests every combination.
+
 ### Fog of War
 Active when any side is AI-controlled. Hero-side sight: 3 in DAY, 2 in DAWN/DUSK, 1 in NIGHT. SCOUT survivors add +1. AI logs replaced with atmospheric fog messages when active.
 
@@ -322,8 +352,21 @@ Seeded, procedural. Sequence:
 
 ## Map Size, Balance & Game Length
 
+### Available map sizes
+
+Four preset sizes are defined in `src/hex.js` as `MAP_SIZES` and selectable from the setup screen or via the `size` CLI argument:
+
+| Name | Dimensions | Tiles | Survivors | Bridges |
+|------|-----------|-------|-----------|---------|
+| Skirmish | 9×9 | 81 | 10 | 3 |
+| Standard | 13×11 | 143 | 15 | 4 |
+| Regional | 17×13 | 221 | 20 | 5 |
+| Campaign | 21×15 | 315 | 26 | 6 |
+
+Pass a size to the headless runner: `node scripts/headless.js 1000 regional`
+
 ### Map size rationale
-The 13×11 grid (143 tiles) is intentionally compact. Design goals:
+The default 13×11 grid (143 tiles) is intentionally compact. Design goals:
 
 - **Early contact:** factions start in opposite corners (~10–14 hex distance). With normal movement, they can reach mid-map by round 3–5, keeping early exploration meaningful without a long setup phase.
 - **Three contested zones:** the river acts as a soft dividing line; one node typically sits near each starting corner with a third in the mid-map, creating a natural three-way tug-of-war.
@@ -340,7 +383,7 @@ A balanced game should last **15–25 rounds** (~2–3 full 8-round cycles). Thi
 Games consistently ending before round 10 suggest the map is too small, starting positions too close, or combat too lethal. Games running past round 30 suggest the map is too large, healing too strong, or win thresholds too high.
 
 ### Balance targets (measured via `scripts/headless.js`)
-Run `node scripts/headless.js 1000` and check the output for:
+Run `node scripts/headless.js 1000 standard` (substitute size) and check the output for:
 
 | Metric | Healthy range | Notes |
 |--------|---------------|-------|
@@ -350,6 +393,8 @@ Run `node scripts/headless.js 1000` and check the output for:
 | Witch node-sweep wins | < 20% of witch wins | Instant-sweep wins indicate node density is too easy to exploit |
 
 Use `node scripts/combat-sim.js` to verify hit/crush/counter rates after any stat or formula changes. Expected baseline: ~45–55% hit rate, ~10–15% crush rate, ~8–12% counter rate in an even matchup.
+
+Use `node scripts/ai-matrix.js 50` to check cross-personality balance — runs every hero personality vs every witch personality and prints a win-rate matrix. No single matchup should exceed ~65% for either side.
 
 ---
 
