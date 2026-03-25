@@ -2148,9 +2148,10 @@ export class UIController {
     const title = document.getElementById('inventory-title');
     if (!el) return;
 
-    const state  = this.state;
-    const isHero = state.activePlayer === Player.HERO;
-    const inv    = state.inventory;
+    const state   = this.state;
+    const faction = this._planFaction ?? (state.activePlayer === Player.HERO ? 'hero' : 'witch');
+    const isHero  = faction === 'hero';
+    const inv     = state.inventory;
     const stash  = isHero ? inv.shared : inv.witch;
 
     if (title) title.textContent = isHero ? '⚔ Hero Supplies' : '🕯 Witch Stores';
