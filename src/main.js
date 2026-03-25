@@ -636,33 +636,41 @@ function _fogChecked() {
   return document.getElementById('chk-fog-of-war')?.checked ?? true;
 }
 
+function _ppsSelected() {
+  const checked = document.querySelector('input[name="pps"]:checked');
+  return checked ? parseInt(checked.value, 10) : 1;
+}
+
 document.getElementById('btn-quick-match').addEventListener('click', () => {
   _ensureAuthed(() => {
     showStep('waiting');
+    const pps = _ppsSelected();
     document.getElementById('waiting-subtitle').textContent = 'Searching for an opponent…';
-    document.getElementById('waiting-message').textContent  = 'Searching for a worthy opponent in Salem… (AI fills in after 5s)';
+    document.getElementById('waiting-message').textContent  = `Searching for a worthy opponent in Salem… (AI fills in after 5s) [${pps}v${pps}]`;
     document.getElementById('waiting-room-code').style.display = 'none';
-    mp.joinQueue(_fogChecked());
+    mp.joinQueue(_fogChecked(), pps);
   });
 });
 
 document.getElementById('btn-play-ai-online').addEventListener('click', () => {
   _ensureAuthed(() => {
     showStep('waiting');
+    const pps = _ppsSelected();
     document.getElementById('waiting-subtitle').textContent = 'Starting game vs AI…';
-    document.getElementById('waiting-message').textContent  = 'Summoning your opponent from the dark…';
+    document.getElementById('waiting-message').textContent  = `Summoning your opponent from the dark… [${pps}v${pps}]`;
     document.getElementById('waiting-room-code').style.display = 'none';
-    mp.playAI(_fogChecked());
+    mp.playAI(_fogChecked(), pps);
   });
 });
 
 document.getElementById('btn-create-room').addEventListener('click', () => {
   _ensureAuthed(() => {
     showStep('waiting');
+    const pps = _ppsSelected();
     document.getElementById('waiting-subtitle').textContent = 'Creating private room…';
-    document.getElementById('waiting-message').textContent  = 'Waiting for your opponent to join…';
+    document.getElementById('waiting-message').textContent  = `Waiting for your opponent to join… [${pps}v${pps}]`;
     document.getElementById('waiting-room-code').style.display = 'none';
-    mp.createRoom(_fogChecked());
+    mp.createRoom(_fogChecked(), pps);
   });
 });
 

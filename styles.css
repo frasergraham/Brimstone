@@ -123,6 +123,55 @@ canvas { touch-action: pan-x pan-y; }
   height: 14px;
   cursor: pointer;
 }
+
+/* ── Players-per-side selector ───────────────────────────────────────── */
+.pps-selector {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin: 0.5rem 0 0.75rem;
+}
+.pps-label {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.pps-pills {
+  display: flex;
+  gap: 0.35rem;
+}
+.pps-pill {
+  position: relative;
+  cursor: pointer;
+}
+.pps-pill input[type="radio"] {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.pps-pill span {
+  display: inline-block;
+  padding: 0.25rem 0.7rem;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 4px;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  background: var(--bg-section);
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  user-select: none;
+}
+.pps-pill input[type="radio"]:checked + span {
+  border-color: var(--day);
+  color: var(--day);
+  background: rgba(180,140,60,0.12);
+}
+.pps-pill:hover span {
+  border-color: #4a3870;
+  color: var(--text);
+}
+
 .setup-select {
   background: var(--bg);
   color: var(--text-dim);

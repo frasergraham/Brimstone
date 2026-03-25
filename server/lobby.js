@@ -7,6 +7,7 @@ import { recordResult }                    from './leaderboard.js';
 import { resolvePlansMP }                  from './resolver.js';
 import { upsertSave, deleteSave, getSave } from './saves.js';
 import { VERSION }                         from '../src/version.js';
+import { generateMultipleStarts }          from '../src/map.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const AI_FILL_DELAY_MS   = 5_000;  // wait this long before filling with AI
@@ -394,6 +395,43 @@ function attachAI(room, faction, forPlayerId = null) {
   return seatFor(room, syntheticPlayerId);
 }
 
+/**
+ * Add extra AI seats on a faction side beyond the first player.
+ * Calls state.addPlayer() to create a new leader entity at a spawn point
+ * near the faction's existing leader (no synthetic-patching needed).
+ */
+function _addExtraAISeat(room, faction) {
+  const pid  = `ai-${faction}-${randomUUID().slice(0, 8)}`;
+  const name = faction === 'witch' ? 'Witch Ally' : 'Hero Ally';
+  const ai   = _makeAI(room, faction);
+
+  // Spawn near the faction's existing leaders, with enough separation
+  const existing = room.state.entities.filter(
+    e => e.alive && e.owner === faction && (e.type === 'hero' || e.type === 'witch')
+  );
+  const start = existing[0] ?? { col: 0, row: 0 };
+  const positions = generateMultipleStarts(room.state.tiles, start, existing.length + 1, 2, 6);
+  const pos = positions[existing.length] ?? start;
+
+  room.state.addPlayer(pid, name, faction, pos.col, pos.row, true);
+  const seat = { playerId: pid, ws: null, name, faction, isAI: true, ai };
+  room.players.push(seat);
+  if (faction === 'witch') room.state.witchIsAI = true;
+  else                     room.state.heroIsAI  = true;
+  return seat;
+}
+
+/**
+ * Fill both factions with AI so each side reaches `perSide` players total.
+ * Human players must already be seated before calling this.
+ */
+function _fillAISeats(room, heroPerSide, witchPerSide) {
+  const heroCount  = room.players.filter(s => s.faction === 'hero').length;
+  const witchCount = room.players.filter(s => s.faction === 'witch').length;
+  for (let i = heroCount;  i < heroPerSide;  i++) _addExtraAISeat(room, 'hero');
+  for (let i = witchCount; i < witchPerSide; i++) _addExtraAISeat(room, 'witch');
+}
+
 // ── Broadcast helpers ─────────────────────────────────────────────────────────
 
 function broadcastState(room, reason = 'update') {
@@ -439,6 +477,11 @@ function tryMatch() {
   _addSeat(room, heroEntry.playerId,  heroEntry.ws,  heroEntry.playerName,  'hero',  false);
   _addSeat(room, witchEntry.playerId, witchEntry.ws, witchEntry.playerName, 'witch', false);
 
+  // Each player's playersPerSide preference fills their own side with AI partners
+  const heroPPS  = heroEntry.playersPerSide  ?? 1;
+  const witchPPS = witchEntry.playersPerSide ?? 1;
+  _fillAISeats(room, heroPPS, witchPPS);
+
   // matchFound includes the full player roster so clients know who they're playing with
   const playerList = room.players.map(s => ({
     playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI,
@@ -453,10 +496,11 @@ function tryMatch() {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /** Player joins the matchmaking queue. Returns a cleanup fn. */
-export function joinQueue(playerId, playerName, ws, fog = true) {
+export function joinQueue(playerId, playerName, ws, fog = true, playersPerSide = 1) {
   leaveQueue(playerId);
 
-  const entry = { playerId, playerName, ws, joinedAt: Date.now(), fog };
+  const pps   = Math.max(1, Math.min(4, playersPerSide | 0));
+  const entry = { playerId, playerName, ws, joinedAt: Date.now(), fog, playersPerSide: pps };
   queue.push(entry);
   send(ws, { type: 'inQueue', position: queue.length });
   tryMatch();
@@ -472,7 +516,8 @@ export function joinQueue(playerId, playerName, ws, fog = true) {
 
     const room = createRoom(fog);
     _addSeat(room, playerId, ws, playerName, humanFaction, false);
-    const aiSeat = attachAI(room, aiFaction);
+    attachAI(room, aiFaction);
+    _fillAISeats(room, pps, pps); // fill remaining AI slots on both sides
 
     const playerList = room.players.map(s => ({ playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI }));
     send(ws, {
@@ -500,30 +545,38 @@ export function leaveQueue(playerId) {
 }
 
 /** Create a private room and return the join code. First player becomes hero. */
-export function createPrivateRoom(playerId, playerName, ws, fog = true) {
+export function createPrivateRoom(playerId, playerName, ws, fog = true, playersPerSide = 1) {
+  const pps  = Math.max(1, Math.min(4, playersPerSide | 0));
   const room = createRoom(fog);
+  room.playersPerSide = pps;
   _addSeat(room, playerId, ws, playerName, 'hero', false);
+  // Immediately fill hero's AI ally slots if pps > 1
+  _fillAISeats(room, pps, 0);
   send(ws, { type: 'roomCode', code: room.code, roomId: room.id });
 
   // AI fill-in if second player never arrives
   room.aiTimer = setTimeout(() => {
     if (room.players.some(s => s.faction === 'witch')) return; // already filled
-    const aiSeat = attachAI(room, 'witch');
+    attachAI(room, 'witch');
+    _fillAISeats(room, pps, pps); // fill witch AI allies too
     const playerList = room.players.map(s => ({ playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI }));
-    send(ws, { type: 'opponentJoined', opponentName: aiSeat.name, aiOpponent: true, players: playerList });
+    const witchSeat  = room.players.find(s => s.faction === 'witch' && s.isAI);
+    send(ws, { type: 'opponentJoined', opponentName: witchSeat?.name ?? 'AI Opponent', aiOpponent: true, players: playerList });
     broadcastState(room, 'start');
     _startPlanningPhase(room);
   }, AI_FILL_DELAY_MS);
 }
 
 /** Immediately start a solo game against a server AI (no queue wait). */
-export function joinAIGame(playerId, playerName, ws, fog = true) {
+export function joinAIGame(playerId, playerName, ws, fog = true, playersPerSide = 1) {
+  const pps          = Math.max(1, Math.min(4, playersPerSide | 0));
   const humanFaction = Math.random() < 0.5 ? 'hero' : 'witch';
   const aiFaction    = humanFaction === 'hero' ? 'witch' : 'hero';
 
   const room = createRoom(fog);
   _addSeat(room, playerId, ws, playerName, humanFaction, false);
-  const aiSeat = attachAI(room, aiFaction);
+  attachAI(room, aiFaction);
+  _fillAISeats(room, pps, pps); // add AI allies on both sides up to pps
 
   const playerList = room.players.map(s => ({ playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI }));
   send(ws, {
@@ -555,6 +608,8 @@ export function joinPrivateRoom(playerId, playerName, ws, code) {
   if (room.aiTimer) { clearTimeout(room.aiTimer); room.aiTimer = null; }
 
   _addSeat(room, playerId, ws, playerName, 'witch', false);
+  // Fill AI ally slots on both sides per the host's playersPerSide preference
+  _fillAISeats(room, room.playersPerSide ?? 1, room.playersPerSide ?? 1);
 
   const playerList = room.players.map(s => ({ playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI }));
   const heroSeat = room.players.find(s => s.faction === 'hero');

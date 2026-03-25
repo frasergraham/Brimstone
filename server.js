@@ -127,7 +127,7 @@ function route(ws, cs, msg) {
     case 'joinQueue': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
       if (cs.cancelQueue) cs.cancelQueue();
-      cs.cancelQueue = joinQueue(cs.player.id, cs.player.username, ws, msg.fog ?? true);
+      cs.cancelQueue = joinQueue(cs.player.id, cs.player.username, ws, msg.fog ?? true, msg.playersPerSide ?? 1);
       break;
     }
 
@@ -139,13 +139,13 @@ function route(ws, cs, msg) {
 
     case 'playAI': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
-      joinAIGame(cs.player.id, cs.player.username, ws, msg.fog ?? true);
+      joinAIGame(cs.player.id, cs.player.username, ws, msg.fog ?? true, msg.playersPerSide ?? 1);
       break;
     }
 
     case 'createRoom': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
-      createPrivateRoom(cs.player.id, cs.player.username, ws, msg.fog ?? true);
+      createPrivateRoom(cs.player.id, cs.player.username, ws, msg.fog ?? true, msg.playersPerSide ?? 1);
       break;
     }
 
