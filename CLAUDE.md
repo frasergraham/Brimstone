@@ -1,5 +1,37 @@
 # Brimstone — Claude Context
 
+## Development Guidelines
+
+These directives apply to all code changes — follow them without exception.
+
+### 1. Tests are mandatory
+- Every change must be accompanied by tests.
+- When fixing a bug: **write a failing test first**, then make it pass (red → green).
+- New features require tests covering the happy path and key edge cases.
+- Tests live in `tests/` and are run with `npm test`.
+
+### 2. Run tests before every push
+- Always run `npm test` before pushing. Do not push if tests fail.
+- If a pre-existing test breaks due to your change, fix it — don't skip or delete it.
+
+### 3. Gameplay changes require balance validation
+- After any change to combat, actions, phase effects, entity stats, or map generation, run simulations:
+  ```bash
+  node scripts/headless.js 500 standard    # check win rates and game length
+  node scripts/combat-sim.js 200           # verify hit/crush/counter rates
+  node scripts/ai-matrix.js 50             # check cross-personality balance
+  ```
+- Compare results against the balance targets in the **Balance targets** section below.
+- Document simulation results in the PR/commit message if they differ meaningfully from baseline.
+
+### 4. Online and offline parity
+- Offline mode (`src/main.js`) and online mode (`server/lobby.js`) must stay in sync.
+- Any change to game rules, state shape, planning flow, or AI behaviour needs to be applied to **both** orchestration layers.
+- New state fields must be added to `server/state-sync.js` serialization or online mode will silently drop them.
+- After parity-sensitive changes, verify with `node scripts/headless-mp.js 100` in addition to the standard headless runner.
+
+---
+
 ## Project Overview
 
 Browser-based, turn-based hex-grid strategy game set in cursed colonial New England (Salem). Two asymmetric factions — **Hero** vs **Witch** — fight across a procedurally-generated map.
