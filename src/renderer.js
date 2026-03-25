@@ -293,6 +293,15 @@ export class Renderer {
     const ctx   = this.ctx;
     const state = this.state;
 
+    // Build ownerId → playerColor from leader entities so hex outlines show
+    // the owning player's colour regardless of entity type.
+    this._playerColorMap = new Map();
+    for (const e of state.entities) {
+      if (e.color && e.ownerId && (e.type === EntityType.HERO || e.type === EntityType.WITCH)) {
+        this._playerColorMap.set(e.ownerId, e.color);
+      }
+    }
+
     // Tick smooth zoom/pan animation
     if (this._zoomAnim) {
       const t    = Math.min(1, (Date.now() - this._zoomAnim.startTime) / this._zoomAnim.duration);
@@ -630,7 +639,10 @@ export class Renderer {
       if (e.owner === 'witch' && humanIsHero  && revealedHexes && !revealedHexes.has(k)) continue;
 
       if (!hexColors.has(k)) {
-        hexColors.set(k, e.color ?? ENTITY_COLOR[e.type] ?? '#ffffff');
+        // Outline uses the owning player's colour (via ownerId map for followers
+        // like minions/survivors, or entity.color directly for leaders).
+        const playerColor = e.ownerId ? this._playerColorMap.get(e.ownerId) : null;
+        hexColors.set(k, playerColor ?? e.color ?? ENTITY_COLOR[e.type] ?? '#ffffff');
       }
     }
 
