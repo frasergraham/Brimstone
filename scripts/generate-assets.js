@@ -126,32 +126,48 @@ function selectAssets() {
 
 // ── Scenario API ──────────────────────────────────────────────────────────────
 
-async function submitInference(asset, auth) {
-  const params = {
+async function submitJob(asset, auth) {
+  const merged = {
     ...apiConfig.defaultParameters,
     ...asset.parameters,
   };
 
+  // Custom models (e.g. Seedream) use /generate/custom/{modelId} with flat body
+  const body = {
+    prompt:     merged.prompt,
+    width:      merged.width,
+    height:     merged.height,
+    numSamples: merged.numSamples ?? 1,
+  };
+  if (merged.negativePrompt) body.negativePrompt = merged.negativePrompt;
+
+  // Reference image: per-asset override > global config
+  const refId = asset.referenceAssetId ?? apiConfig.referenceAssetId;
+  if (refId) {
+    body.type = 'img2img';
+    body.referenceImages = [refId];
+  }
+
   const res = await fetch(
-    `${apiConfig.baseUrl}/models/${apiConfig.modelId}/inferences`,
+    `${apiConfig.baseUrl}/generate/custom/${apiConfig.modelId}`,
     {
       method:  'POST',
       headers: { Authorization: auth, 'Content-Type': 'application/json', Accept: 'application/json' },
-      body:    JSON.stringify({ parameters: params }),
+      body:    JSON.stringify(body),
     }
   );
 
   if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`Submit failed ${res.status}: ${body}`);
+    const text = await res.text().catch(() => '');
+    throw new Error(`Submit failed ${res.status}: ${text}`);
   }
 
   const data = await res.json();
-  return data.inference.id;
+  return data.job.jobId;
 }
 
-async function pollInference(inferenceId, auth) {
-  const url      = `${apiConfig.baseUrl}/models/${apiConfig.modelId}/inferences/${inferenceId}`;
+async function pollJob(jobId, auth) {
+  const url      = `${apiConfig.baseUrl}/jobs/${jobId}`;
   const interval = apiConfig.pollIntervalMs ?? 3000;
   const deadline = Date.now() + 10 * 60 * 1000; // 10 min ceiling
 
@@ -163,24 +179,35 @@ async function pollInference(inferenceId, auth) {
     });
 
     if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new Error(`Poll failed ${res.status}: ${body}`);
+      const text = await res.text().catch(() => '');
+      throw new Error(`Poll failed ${res.status}: ${text}`);
     }
 
-    const { inference } = await res.json();
-    process.stdout.write(`    polling… status=${inference.status}   \r`);
+    const { job } = await res.json();
+    process.stdout.write(`    polling… status=${job.status}   \r`);
 
-    if (inference.status === 'succeeded') {
+    if (job.status === 'success') {
       process.stdout.write('\n');
-      return inference;
+      return job;
     }
-    if (inference.status === 'failed' || inference.status === 'canceled') {
+    if (job.status === 'failure' || job.status === 'canceled') {
       process.stdout.write('\n');
-      throw new Error(`Inference ended with status "${inference.status}"`);
+      const err = job.metadata?.error ?? 'unknown error';
+      const hint = job.metadata?.hint ?? '';
+      throw new Error(`Job ${job.status}: ${err}${hint ? ' — ' + hint : ''}`);
     }
   }
 
-  throw new Error(`Inference ${inferenceId} timed out after 10 minutes`);
+  throw new Error(`Job ${jobId} timed out after 10 minutes`);
+}
+
+async function fetchAssetUrl(assetId, auth) {
+  const res = await fetch(`${apiConfig.baseUrl}/assets/${assetId}`, {
+    headers: { Authorization: auth, Accept: 'application/json' },
+  });
+  if (!res.ok) throw new Error(`Asset fetch failed ${res.status}`);
+  const { asset } = await res.json();
+  return asset.url;
 }
 
 async function downloadImage(url, destPath) {
@@ -197,14 +224,15 @@ async function generateAsset(asset, auth) {
     return dest;
   }
 
-  const inferenceId = await submitInference(asset, auth);
-  console.log(`  ✦ poll   ${asset.id}  →  ${inferenceId}`);
+  const jobId = await submitJob(asset, auth);
+  console.log(`  ✦ poll   ${asset.id}  →  ${jobId}`);
 
-  const inference = await pollInference(inferenceId, auth);
+  const job = await pollJob(jobId, auth);
 
-  const imageUrl = inference.images?.[0]?.url;
-  if (!imageUrl) throw new Error(`No image URL in result for ${asset.id}`);
+  const assetIds = job.metadata?.assetIds ?? [];
+  if (!assetIds.length) throw new Error(`No assets returned for ${asset.id}`);
 
+  const imageUrl = await fetchAssetUrl(assetIds[0], auth);
   await downloadImage(imageUrl, dest);
   console.log(`  ✔ saved  ${path.relative(ROOT, dest)}`);
   return dest;
@@ -310,8 +338,9 @@ async function main() {
     for (const a of assets) {
       const p = { ...apiConfig.defaultParameters, ...a.parameters };
       console.log(`[${a.category.padEnd(8)}] ${a.id}`);
-      console.log(`  POST ${apiConfig.baseUrl}/models/${apiConfig.modelId}/inferences`);
-      console.log(`  ${p.width}×${p.height}  steps=${p.numInferenceSteps}  guidance=${p.guidance}`);
+      const ref = a.referenceAssetId ?? apiConfig.referenceAssetId;
+      console.log(`  POST ${apiConfig.baseUrl}/generate/custom/${apiConfig.modelId}`);
+      console.log(`  ${p.width}×${p.height}${ref ? '  ref=' + ref : ''}`);
       console.log(`  prompt: ${p.prompt.slice(0, 100)}…`);
       console.log();
     }
