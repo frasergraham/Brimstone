@@ -1259,15 +1259,21 @@ export class UIController {
     const witchPips = Array.from({ length: scoreMax }, (_, i) =>
       `<span class="score-pip witch${i < score.witch ? ' filled' : ''}"></span>`).join('');
 
-    el.innerHTML =
+    const html =
       `<span class="score-track hero-track" title="Hero score: ${score.hero}/4">${heroPips}</span>` +
       `<span class="node-dots-group">${nodeDots}</span>` +
       `<span class="score-track witch-track" title="Witch score: ${score.witch}/4">${witchPips}</span>`;
 
-    // Flash a subtle warning when one side holds all nodes
-    el.title = witchCount === 3 ? '⚠ Witch holds all nodes!'
-             : heroCount  === 3 ? '★ Hero holds all nodes!'
-             : 'Power Nodes';
+    const title = witchCount === 3 ? '⚠ Witch holds all nodes!'
+                : heroCount  === 3 ? '★ Hero holds all nodes!'
+                : 'Power Nodes';
+
+    el.innerHTML = html;
+    el.title = title;
+
+    // Mirror to cycle-bar version shown on mobile
+    const elBar = document.getElementById('node-status-bar');
+    if (elBar) { elBar.innerHTML = html; elBar.title = title; }
   }
 
   _renderActionPanel() {

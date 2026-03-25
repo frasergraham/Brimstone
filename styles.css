@@ -383,6 +383,10 @@ canvas { touch-action: pan-x pan-y; }
   flex-shrink: 0;
 }
 
+#node-status-bar {
+  display: none;
+}
+
 .node-dot {
   width: 13px;
   height: 13px;
@@ -1526,6 +1530,17 @@ canvas { touch-action: pan-x pan-y; }
 
   /* Node dots slightly larger for touch */
   .node-dot { width: 15px; height: 15px; }
+
+  /* Move node progress out of the crowded header into the cycle bar */
+  #node-status { display: none; }
+  #node-status-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-left: auto;
+    padding-left: 0.5rem;
+    border-left: 1px solid rgba(255,255,255,0.1);
+  }
 
   /* End turn button slightly larger tap target */
   .end-turn-header { padding: 0 0.65rem; height: 36px; }
