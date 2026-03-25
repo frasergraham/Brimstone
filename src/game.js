@@ -779,8 +779,8 @@ export class GameState {
 
   get gameOver() { return this.winner !== null; }
 
-  addLog(msg) {
-    this.log.push(msg);
+  addLog(msg, owner = null) {
+    this.log.push(owner ? { text: msg, owner } : msg);
     if (this.log.length > 100) this.log.shift();
   }
 

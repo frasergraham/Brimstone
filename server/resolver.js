@@ -212,7 +212,7 @@ function drainOneStep(state, queue, budget) {
       budget.remaining += out.budgetBonus ?? 0;  // Food / Rally bonus
       queue.shift();
 
-      for (const msg of out.result.log ?? []) state.addLog(msg);
+      for (const msg of out.result.log ?? []) state.addLog(msg, budget.faction);
 
       subEvents.push({
         type:        ResEventType.ACTION_OK,
@@ -254,7 +254,7 @@ function drainOneStep(state, queue, budget) {
     if ((shared[ResourceType.FOOD] || 0) > 0) {
       shared[ResourceType.FOOD]--;
       budget.remaining += 1;
-      state.addLog(`🍞 Rations consumed — pressing on beyond the action limit.`);
+      state.addLog(`🍞 Rations consumed — pressing on beyond the action limit.`, budget.faction);
       // Don't push BUDGET_CAP; the outer loop will call drainOneStep again.
     } else {
       subEvents.push({
