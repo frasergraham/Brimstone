@@ -1259,15 +1259,21 @@ export class UIController {
     const witchPips = Array.from({ length: scoreMax }, (_, i) =>
       `<span class="score-pip witch${i < score.witch ? ' filled' : ''}"></span>`).join('');
 
-    el.innerHTML =
+    const html =
       `<span class="score-track hero-track" title="Hero score: ${score.hero}/4">${heroPips}</span>` +
       `<span class="node-dots-group">${nodeDots}</span>` +
       `<span class="score-track witch-track" title="Witch score: ${score.witch}/4">${witchPips}</span>`;
 
-    // Flash a subtle warning when one side holds all nodes
-    el.title = witchCount === 3 ? '⚠ Witch holds all nodes!'
-             : heroCount  === 3 ? '★ Hero holds all nodes!'
-             : 'Power Nodes';
+    const title = witchCount === 3 ? '⚠ Witch holds all nodes!'
+                : heroCount  === 3 ? '★ Hero holds all nodes!'
+                : 'Power Nodes';
+
+    el.innerHTML = html;
+    el.title = title;
+
+    // Mirror to cycle-bar version shown on mobile
+    const elBar = document.getElementById('node-status-bar');
+    if (elBar) { elBar.innerHTML = html; elBar.title = title; }
   }
 
   _renderActionPanel() {
@@ -1590,9 +1596,9 @@ export class UIController {
     `;
     document.getElementById('game-screen')?.appendChild(toast);
 
-    // Auto-dismiss after 3s
-    setTimeout(() => toast.classList.add('phase-toast-hide'), 2800);
-    setTimeout(() => toast.remove(), 3300);
+    // Auto-dismiss after 3.2s
+    setTimeout(() => toast.classList.add('phase-toast-hide'), 3200);
+    setTimeout(() => toast.remove(), 3700);
   }
 
   // ── Scoring toast (dawn / dusk checkpoints) ──────────────────────────────
@@ -1645,15 +1651,23 @@ export class UIController {
     `;
     document.getElementById('game-screen')?.appendChild(toast);
 
-    setTimeout(() => toast.classList.add('phase-toast-hide'), 3800);
-    setTimeout(() => toast.remove(), 4300);
+    setTimeout(() => toast.classList.add('phase-toast-hide'), 3200);
+    setTimeout(() => toast.remove(), 3700);
   }
 
   // ── Dialogs ───────────────────────────────────────────────────────────────
 
   _showResultDialog(messages, onDismiss) {
     const dialog = document.getElementById('result-dialog');
-    document.getElementById('result-messages').textContent = messages.join('\n');
+    // Collapse consecutive duplicate lines into "message (×N)"
+    const collapsed = [];
+    for (const msg of messages) {
+      const last = collapsed[collapsed.length - 1];
+      if (last?.msg === msg) last.count++;
+      else collapsed.push({ msg, count: 1 });
+    }
+    document.getElementById('result-messages').textContent =
+      collapsed.map(({ msg, count }) => count > 1 ? `${msg} (×${count})` : msg).join('\n');
     document.getElementById('result-dismiss-hint').style.display = this.autoplay ? 'none' : '';
     const btns = document.getElementById('result-buttons');
     btns.style.display = 'none';
