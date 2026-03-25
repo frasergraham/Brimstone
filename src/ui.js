@@ -310,6 +310,16 @@ export class UIController {
     }
 
     this._clearSelection();
+
+    // Auto-select this player's own leader so they immediately know which
+    // hero/witch is theirs (especially important in team MP with 4 players).
+    const myLeader = this.state?.entities.find(e =>
+      e.alive && e.owner === faction &&
+      (e.type === 'hero' || e.type === 'witch') &&
+      (!this.myPlayerId || e.ownerId === this.myPlayerId)
+    );
+    if (myLeader) this._selectEntity(myLeader);
+
     this._refreshPlanOverlay();
     this._renderPlanPanel();
     this._updateSidebar();
