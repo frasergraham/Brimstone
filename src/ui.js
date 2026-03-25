@@ -711,9 +711,8 @@ export class UIController {
     });
 
     if (clickedEntities.length === 0) {
-      // Always deselect and show tile detail immediately (single click)
+      // Nothing selectable here — just deselect
       this._clearSelection();
-      this._showTileDetail(hex);
     } else if (clickedEntities.length === 1) {
       const entity = clickedEntities[0];
       if (entity === this._selectedEntity) {
@@ -732,15 +731,14 @@ export class UIController {
         this._pendingUnitPick = null;
       }
     } else {
-      // Multiple units on hex — show tile-detail picker instead of popup
-      this._pendingUnitPick = null;
+      // Multiple units on hex — show simple picker popup
       this._selectedEntity  = null;
-      this._popupVisible    = false;
+      this._popupVisible    = true;
       this._validActions    = [];
-      _hideActionPopup();
       this.renderer.selectedHex    = { col: hex.col, row: hex.row };
       this.renderer.highlightHexes = [];
-      this._showTileDetail(hex);
+      this._pendingUnitPick = { units: clickedEntities };
+      this._showActionPopup(null);
     }
 
     this._updateSidebar();
@@ -997,7 +995,7 @@ export class UIController {
 
     // Unit picker mode
     if (this._pendingUnitPick) {
-      let html = `<div class="popup-unit-name">Choose a unit:</div>`;
+      let html = `<div class="popup-unit-name">Which unit to select?</div>`;
       for (const u of this._pendingUnitPick.units) {
         const col = ENTITY_COLOR[u.type] || '#888';
         html += `<button class="action-btn pick-unit" data-action="pick_unit" data-unit-id="${u.id}"
