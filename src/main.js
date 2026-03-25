@@ -328,16 +328,16 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       }
     }
 
-    // ── Phase 3: explore results — only the human player's own leader unit ─────
+    // ── Phase 3: explore results — leader + raised units, not survivors ─────────
+    // Survivors are autonomous allies; their loot is silent. The player's own
+    // leader and summoned units (minions, zombies, golems) do show a result.
     for (const ev of events) {
       const { action, result } = ev;
       if (action.type !== PlanActionType.EXPLORE) continue;
       if (!result?.log?.length) continue;
       if (humanFaction && ev.faction !== humanFaction) continue;
-      // Skip ally units (survivors / minions / golems) — only the leader explores
       const actor = step.entitySnapshot?.find(e => e.id === action.entityId);
-      const isLeader = !actor || actor.type === 'hero' || actor.type === 'witch';
-      if (humanFaction && !isLeader) continue;
+      if (humanFaction && actor?.type === 'survivor') continue;
       redrawFn();
       await new Promise(resolve => ui._showResultDialog(result.log, resolve));
       hadBattle = true;
