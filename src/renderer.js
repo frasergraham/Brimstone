@@ -614,24 +614,22 @@ export class Renderer {
     ctx.fillStyle = color;
     ctx.fill();
 
-    // ── Tile / building image from sprite sheet ────────────────────────────
-    // For road/river the image sits under the bezier overlay layers drawn later.
-    const imgKey = tile.type === TileType.BUILDING
-      ? tile.building   // e.g. 'inn', 'church'
-      : tile.type;      // e.g. 'grass', 'forest', 'road', 'river'
-
-    const rect = this._spriteRects?.get(imgKey);
-    if (rect && this._tilemapImg) {
-      ctx.save();
-      ctx.beginPath();
-      ctx.moveTo(corners[0].x, corners[0].y);
-      for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
-      ctx.closePath();
-      ctx.clip();
-      ctx.drawImage(this._tilemapImg,
-        rect.x, rect.y, rect.size, rect.size,   // source rect in tilemap
-        x - hs, y - hs, hs * 2, hs * 2);        // destination on canvas
-      ctx.restore();
+    // ── Building image from sprite sheet ──────────────────────────────────
+    // Terrain tile images are disabled for now (terrain uses colour fills).
+    if (tile.type === TileType.BUILDING) {
+      const rect = this._spriteRects?.get(tile.building);
+      if (rect && this._tilemapImg) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(corners[0].x, corners[0].y);
+        for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
+        ctx.closePath();
+        ctx.clip();
+        ctx.drawImage(this._tilemapImg,
+          rect.x, rect.y, rect.size, rect.size,  // source rect in tilemap
+          x - hs, y - hs, hs * 2, hs * 2);       // destination on canvas
+        ctx.restore();
+      }
     }
 
     ctx.strokeStyle = '#111418';
@@ -664,7 +662,7 @@ export class Renderer {
 
     // ── Building: icon + name ─────────────────────────────────────────────
     if (tile.type === TileType.BUILDING && tile.building) {
-      const hasBuildingImg = !!this._spriteRects?.has(tile.building) && !!this._tilemapImg;
+      const hasBuildingImg = !!this._spriteRects?.get(tile.building) && !!this._tilemapImg;
 
       // Show emoji icon only when there is no image (image provides the visual)
       if (!hasBuildingImg) {
@@ -1056,8 +1054,10 @@ export class Renderer {
         ctx.restore();
       }
 
-      ctx.strokeStyle = '#ffffffaa';
-      ctx.lineWidth   = 1;
+      // Circle border: use entity colour when portrait is shown, white otherwise
+      const entityCol = entity.color ?? ENTITY_COLOR[entity.type];
+      ctx.strokeStyle = portrait ? entityCol : '#ffffffaa';
+      ctx.lineWidth   = portrait ? 2 : 1;
       ctx.stroke();
 
       // Draw glyph only when no portrait image is available
