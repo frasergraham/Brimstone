@@ -681,9 +681,13 @@ canvas { touch-action: pan-x pan-y; }
   background: rgba(200, 168, 75, 0.18);
 }
 
-/* Touch-only devices don't need the buttons; hide them to save space */
+/* Touch devices: make zoom buttons slightly larger for finger tapping */
 @media (hover: none) and (pointer: coarse) {
-  .zoom-controls { display: none; }
+  .zoom-btn {
+    width: 42px;
+    height: 42px;
+    font-size: 20px;
+  }
 }
 
 /* ── Chronicle overlay ─────────────────────────────────────────────────── */
