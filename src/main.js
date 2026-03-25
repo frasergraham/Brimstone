@@ -33,6 +33,7 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
   if (fogChk && !fogChk.checked) state.fogOfWar = false;
   renderer = new Renderer(canvas, state);
   renderer.resize();
+  renderer.loadImages(); // async; redraws once images settle — no-op if assets absent
 
   const thinkDelay = autoplay ? 0 : undefined;
   witchAI = witchIsAI ? new WitchAI(state, redraw, thinkDelay) : null;
@@ -384,6 +385,7 @@ function initOnline(mirrorState, myFaction, mpClient) {
 
   renderer = new Renderer(canvas, state);
   renderer.resize();
+  renderer.loadImages();
 
   // No local AI — all turns handled server-side
   ui = new UIController(canvas, state, renderer, null, redrawOnline, null, false);

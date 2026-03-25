@@ -69,7 +69,60 @@ export class Renderer {
     // Smooth zoom/pan animation: null when idle
     this._zoomAnim = null; // {startZoom,targetZoom,startPanX,targetPanX,startPanY,targetPanY,startTime,duration}
 
+    // Loaded tile/building/unit images — populated by loadImages()
+    this._images = new Map(); // asset id → HTMLImageElement
+
     this._resize();
+  }
+
+  /**
+   * Load tile, building, and unit images from the generated assets directory.
+   * Missing images are silently skipped so the game works without any assets.
+   * Call once after constructing the renderer; resolves when all loads settle.
+   */
+  async loadImages(basePath = 'assets/generated') {
+    const ids = [
+      // Terrain tiles
+      'grass', 'forest', 'dirt', 'road', 'river', 'bridge',
+      // Buildings (ids match BuildingType values exactly)
+      'town_hall', 'church', 'inn', 'blacksmith', 'graveyard', 'mill',
+      'dock', 'house', 'barn', 'watchtower', 'apothecary', 'storehouse', 'stable',
+      // Units
+      'hero', 'witch', 'zombie', 'minion', 'wood_golem', 'iron_golem',
+      // Survivor portraits (keyed by title)
+      'survivor_innkeeper', 'survivor_nurse', 'survivor_blacksmith',
+      'survivor_herbalist', 'survivor_militia', 'survivor_priest',
+      'survivor_baker', 'survivor_trapper', 'survivor_schoolteacher',
+      'survivor_gravedigger', 'survivor_midwife', 'survivor_farmhand',
+    ];
+
+    await Promise.all(ids.map(id => new Promise(resolve => {
+      const img = new Image();
+      img.onload  = () => { this._images.set(id, img); resolve(); };
+      img.onerror = () => resolve(); // missing = silently skip, use colour fallback
+      img.src = `${basePath}/${id}.png`;
+    })));
+
+    this.draw(); // repaint once all images have settled
+  }
+
+  /** Map a survivor entity's title to its portrait asset id. */
+  static _survivorAssetId(title) {
+    const MAP = {
+      'Innkeeper':        'survivor_innkeeper',
+      'Nurse':            'survivor_nurse',
+      'Blacksmith':       'survivor_blacksmith',
+      'Herbalist':        'survivor_herbalist',
+      'Militia Sergeant': 'survivor_militia',
+      'Parish Priest':    'survivor_priest',
+      'Baker':            'survivor_baker',
+      'Trapper':          'survivor_trapper',
+      'Schoolteacher':    'survivor_schoolteacher',
+      'Gravedigger':      'survivor_gravedigger',
+      'Midwife':          'survivor_midwife',
+      'Farmhand':         'survivor_farmhand',
+    };
+    return MAP[title] ?? null;
   }
 
   // Add a brief flash overlay on a hex (e.g. damage numbers).
@@ -536,6 +589,24 @@ export class Renderer {
     ctx.fillStyle = color;
     ctx.fill();
 
+    // ── Tile / building image ──────────────────────────────────────────────
+    // For road/river the image sits under the bezier overlay layers drawn later.
+    const imgKey = tile.type === TileType.BUILDING
+      ? tile.building          // e.g. 'inn', 'church'
+      : tile.type;             // e.g. 'grass', 'forest', 'road', 'river'
+
+    const tileImg = this._images.get(imgKey);
+    if (tileImg) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(corners[0].x, corners[0].y);
+      for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
+      ctx.closePath();
+      ctx.clip();
+      ctx.drawImage(tileImg, x - hs, y - hs, hs * 2, hs * 2);
+      ctx.restore();
+    }
+
     ctx.strokeStyle = '#111418';
     ctx.lineWidth   = 0.8;
     ctx.stroke();
@@ -566,11 +637,15 @@ export class Renderer {
 
     // ── Building: icon + name ─────────────────────────────────────────────
     if (tile.type === TileType.BUILDING && tile.building) {
+      const hasBuildingImg = this._images.has(tile.building);
 
-      ctx.font         = `${Math.floor(hs * 0.55)}px serif`;
-      ctx.textAlign    = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(BUILDING_ICON[tile.building] || '?', x, y - hs * 0.10);
+      // Show emoji icon only when there is no image (image provides the visual)
+      if (!hasBuildingImg) {
+        ctx.font         = `${Math.floor(hs * 0.55)}px serif`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(BUILDING_ICON[tile.building] || '?', x, y - hs * 0.10);
+      }
 
       ctx.fillStyle    = 'rgba(255,248,230,0.92)';
       ctx.font         = `bold ${Math.max(7, Math.floor(hs * 0.25))}px "Georgia", serif`;
@@ -935,15 +1010,34 @@ export class Renderer {
       ctx.arc(ex, ey, r, 0, Math.PI * 2);
       ctx.fillStyle = entity.color ?? ENTITY_COLOR[entity.type];
       ctx.fill();
+
+      // ── Portrait image ─────────────────────────────────────────────────
+      const portraitKey = entity.type === EntityType.SURVIVOR
+        ? Renderer._survivorAssetId(entity.title)
+        : entity.type; // 'hero', 'witch', 'zombie', etc.
+
+      const portrait = portraitKey ? this._images.get(portraitKey) : null;
+      if (portrait) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(ex, ey, r, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.drawImage(portrait, ex - r, ey - r, r * 2, r * 2);
+        ctx.restore();
+      }
+
       ctx.strokeStyle = '#ffffffaa';
       ctx.lineWidth   = 1;
       ctx.stroke();
 
-      ctx.fillStyle    = '#ffffffdd';
-      ctx.font         = `bold ${Math.floor(r * 1.1)}px serif`;
-      ctx.textAlign    = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(entityGlyph(entity.type), ex, ey + 1);
+      // Draw glyph only when no portrait image is available
+      if (!portrait) {
+        ctx.fillStyle    = '#ffffffdd';
+        ctx.font         = `bold ${Math.floor(r * 1.1)}px serif`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(entityGlyph(entity.type), ex, ey + 1);
+      }
 
       if (entity.type === EntityType.HERO || entity.type === EntityType.WITCH ||
           entity.type === EntityType.SURVIVOR || entity.type === EntityType.WOOD_GOLEM ||
