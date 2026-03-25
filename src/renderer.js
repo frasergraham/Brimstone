@@ -128,7 +128,27 @@ export class Renderer {
 
     this._tilemapImg  = img;
     this._spriteRects = Renderer._buildSpriteRects();
+    this._portraitCache = new Map();
     this.draw();
+  }
+
+  /**
+   * Draw the named sprite to an offscreen canvas and return a cached data URL
+   * suitable for use as an <img src>.  Returns null if the tilemap isn't loaded
+   * or the asset id is unknown.
+   */
+  getPortraitDataURL(assetId, size = 128) {
+    if (!this._tilemapImg || !this._spriteRects) return null;
+    const rect = this._spriteRects.get(assetId);
+    if (!rect) return null;
+    const key = `${assetId}@${size}`;
+    if (this._portraitCache.has(key)) return this._portraitCache.get(key);
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    c.getContext('2d').drawImage(this._tilemapImg, rect.x, rect.y, rect.size, rect.size, 0, 0, size, size);
+    const url = c.toDataURL();
+    this._portraitCache.set(key, url);
+    return url;
   }
 
   /** Map a survivor entity's title to its sprite asset id. */
@@ -173,10 +193,12 @@ export class Renderer {
   }
 
   /** Slide an entity icon from one hex to another (opponent move feedback). */
-  addMoveAnim(entityId, fromCol, fromRow, toCol, toRow, entityType, owner) {
+  addMoveAnim(entityId, fromCol, fromRow, toCol, toRow, entityType, owner, title = null) {
     const from = this._toCanvas(fromCol, fromRow);
     const to   = this._toCanvas(toCol,   toRow);
-    // Replace any previous anim for this entity
+    const portraitId = entityType === EntityType.SURVIVOR
+      ? Renderer._survivorAssetId(title)
+      : entityType; // non-survivor type values match asset ids directly
     this._moveAnims = this._moveAnims.filter(a => a.entityId !== entityId);
     this._moveAnims.push({
       entityId,
@@ -184,6 +206,7 @@ export class Renderer {
       toX:   to.x,   toY:   to.y,
       glyph: entityGlyph(entityType),
       color: ENTITY_COLOR[entityType],
+      portraitId,
       startTime: Date.now(),
       duration:  480,
     });
@@ -1350,16 +1373,27 @@ export class Renderer {
       ctx.arc(x, y, r, 0, Math.PI * 2);
       ctx.fillStyle = a.color;
       ctx.fill();
-      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+
+      // Portrait image if available, otherwise glyph
+      const pRect = a.portraitId ? this._spriteRects?.get(a.portraitId) : null;
+      if (pRect && this._tilemapImg) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.drawImage(this._tilemapImg, pRect.x, pRect.y, pRect.size, pRect.size, x - r, y - r, r * 2, r * 2);
+        ctx.restore();
+      } else {
+        ctx.fillStyle    = '#ffffffee';
+        ctx.font         = `bold ${Math.floor(r * 1.1)}px serif`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(a.glyph, x, y + 1);
+      }
+
+      ctx.strokeStyle = a.color;
       ctx.lineWidth   = 2;
       ctx.stroke();
-
-      // Glyph
-      ctx.fillStyle    = '#ffffffee';
-      ctx.font         = `bold ${Math.floor(r * 1.1)}px serif`;
-      ctx.textAlign    = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(a.glyph, x, y + 1);
     }
   }
 }

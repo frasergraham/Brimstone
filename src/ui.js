@@ -997,9 +997,9 @@ export class UIController {
       for (const u of this._pendingUnitPick.units) {
         const col        = ENTITY_COLOR[u.type] || '#888';
         const portraitId = u.type === 'survivor' ? _SURVIVOR_TITLE_ASSET[u.title] : u.type;
-        const pStyle     = portraitId ? _spriteStyle(portraitId, 32) : '';
-        const portrait   = pStyle
-          ? `<span style="${pStyle};display:inline-block;width:32px;height:32px;border-radius:50%;border:1.5px solid ${col};vertical-align:middle;margin-right:0.4rem;flex-shrink:0;"></span>`
+        const src        = portraitId ? this.renderer.getPortraitDataURL(portraitId) : null;
+        const portrait   = src
+          ? `<img src="${src}" style="width:32px;height:32px;border-radius:50%;border:1.5px solid ${col};flex-shrink:0;margin-right:0.4rem;">`
           : '';
         html += `<button class="action-btn pick-unit" data-action="pick_unit" data-unit-id="${u.id}"
           style="border-left:3px solid ${col};display:flex;align-items:center;">${portrait}${u.displayName} — HP ${u.hp}/${u.maxHp}</button>`;
@@ -1682,12 +1682,13 @@ export class UIController {
     const portraitEl = document.getElementById('result-portrait');
     if (portraitEl) {
       const assetId = encounterSurvivor?.title ? _SURVIVOR_TITLE_ASSET[encounterSurvivor.title] : null;
-      const style   = assetId ? _spriteStyle(assetId, 80) : '';
-      if (style) {
-        portraitEl.setAttribute('style',
-          `${style};display:block;width:80px;height:80px;border-radius:50%;margin:0 auto 0.6rem;border:2px solid #c8a96e;`);
+      const src     = assetId ? this.renderer.getPortraitDataURL(assetId) : null;
+      if (src) {
+        portraitEl.style.display = 'block';
+        portraitEl.innerHTML = `<img src="${src}" style="width:80px;height:80px;border-radius:50%;border:2px solid #c8a96e;display:block;">`;
       } else {
         portraitEl.style.display = 'none';
+        portraitEl.innerHTML = '';
       }
     }
 
@@ -1827,8 +1828,10 @@ export class UIController {
     }
 
     // Populate combatant panels
-    document.getElementById('battle-attacker').innerHTML = _combatantHTML(actorSnap, 'atk');
-    document.getElementById('battle-defender').innerHTML = _combatantHTML(targetSnap, 'def');
+    const atkPortrait = this.renderer.getPortraitDataURL(_entityPortraitId(actorSnap));
+    const defPortrait = this.renderer.getPortraitDataURL(_entityPortraitId(targetSnap));
+    document.getElementById('battle-attacker').innerHTML = _combatantHTML(actorSnap, 'atk', atkPortrait);
+    document.getElementById('battle-defender').innerHTML = _combatantHTML(targetSnap, 'def', defPortrait);
 
     const atkDie  = document.getElementById('battle-atk-die');
     const defDie  = document.getElementById('battle-def-die');
@@ -2232,45 +2235,6 @@ const _SURVIVOR_TITLE_ASSET = {
   'Farmhand':         'survivor_farmhand',
 };
 
-/**
- * Return a CSS style string that renders the given sprite from assets/tilemap.png
- * as a background image scaled to sizePx × sizePx.
- * Mirrors the layout in Renderer._buildSpriteRects().
- */
-function _spriteStyle(assetId, sizePx) {
-  const CELL = 256, GAP = 6, COLS = 7, LABEL_H = 30;
-  const groups = [
-    ['grass','forest','dirt','road','river','bridge'],
-    ['town_hall','church','inn','blacksmith','graveyard','mill',
-     'dock','house','barn','watchtower','apothecary','storehouse','stable'],
-    ['hero','witch','zombie','minion','wood_golem','iron_golem',
-     'survivor_innkeeper','survivor_nurse','survivor_blacksmith',
-     'survivor_herbalist','survivor_militia','survivor_priest',
-     'survivor_baker','survivor_trapper','survivor_schoolteacher',
-     'survivor_gravedigger','survivor_midwife','survivor_farmhand'],
-  ];
-  const TW = 1840, TH = 1686;
-  let y = GAP;
-  for (const ids of groups) {
-    y += LABEL_H + GAP;
-    for (let i = 0; i < ids.length; i++) {
-      if (ids[i] !== assetId) continue;
-      const col   = i % COLS;
-      const row   = Math.floor(i / COLS);
-      const sx    = GAP + col * (CELL + GAP);
-      const sy    = y   + row * (CELL + GAP);
-      const scale = sizePx / CELL;
-      return [
-        `background-image:url('assets/tilemap.png')`,
-        `background-size:${Math.round(TW*scale)}px ${Math.round(TH*scale)}px`,
-        `background-position:${-Math.round(sx*scale)}px ${-Math.round(sy*scale)}px`,
-      ].join(';');
-    }
-    y += Math.ceil(ids.length / COLS) * (CELL + GAP);
-  }
-  return '';
-}
-
 /** Return the tilemap asset id for any entity snap (uses title for survivors). */
 function _entityPortraitId(snap) {
   if (snap.type === 'survivor') return _SURVIVOR_TITLE_ASSET[snap.title] ?? null;
@@ -2281,15 +2245,13 @@ function _snapEntity(e) {
   return { id: e.id, name: e.displayName, hp: e.hp, maxHp: e.maxHp, attack: e.attack, defense: e.defense, type: e.type, title: e.title ?? null };
 }
 
-function _combatantHTML(snap, role) {
+function _combatantHTML(snap, role, portraitSrc = null) {
   const label      = role === 'atk' ? '⚔ Attacker' : '🛡 Defender';
   const color      = ENTITY_COLOR[snap.type] || '#888';
   const hpPct      = (snap.hp / snap.maxHp) * 100;
   const hpColor    = hpPct > 50 ? '#4caf50' : hpPct > 25 ? '#ff9800' : '#f44336';
-  const portraitId = _entityPortraitId(snap);
-  const style      = portraitId ? _spriteStyle(portraitId, 56) : '';
-  const portraitHtml = style
-    ? `<div style="${style};width:56px;height:56px;border-radius:50%;border:2px solid ${color};margin:0 auto 0.35rem;"></div>`
+  const portraitHtml = portraitSrc
+    ? `<img src="${portraitSrc}" style="width:56px;height:56px;border-radius:50%;border:2px solid ${color};display:block;margin:0 auto 0.35rem;">`
     : '';
   return `
     ${portraitHtml}

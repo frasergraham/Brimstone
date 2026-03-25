@@ -269,6 +269,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
           preSnap.col, preSnap.row,
           action.toCol, action.toRow,
           preSnap.type, preSnap.owner,
+          preSnap.title ?? null,
         );
         hadMove = true;
       }
@@ -801,7 +802,7 @@ function _createMpClient() {
         for (const e of state.entities) {
           const old = oldPos.get(e.id);
           if (old && (old.col !== e.col || old.row !== e.row)) {
-            renderer.addMoveAnim(e.id, old.col, old.row, e.col, e.row, e.type, e.owner);
+            renderer.addMoveAnim(e.id, old.col, old.row, e.col, e.row, e.type, e.owner, e.title ?? null);
           }
         }
       }
