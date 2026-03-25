@@ -1148,6 +1148,24 @@ canvas { touch-action: pan-x pan-y; }
   letter-spacing: 0.05em;
 }
 
+/* ── Encounter dialog ──────────────────────────────────────────────────── */
+
+#encounter-dialog {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 85;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.6);
+  cursor: pointer;
+}
+
+#encounter-card {
+  text-align: left;
+  min-width: 260px;
+}
+
 /* ── Result dialog ─────────────────────────────────────────────────────── */
 
 #result-dialog {

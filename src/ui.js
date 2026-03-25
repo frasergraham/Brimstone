@@ -853,12 +853,12 @@ export class UIController {
       else this._clearSelection();
       this._updateSidebar();
       this.onRedraw();
-      if (result.encounterLog?.length) {
-        this._showResultDialog(result.encounterLog, () => {
+      if (result.encounterSurvivor) {
+        this._showEncounterDialog(result.encounterSurvivor, () => {
           this._updateSidebar();
           this.onRedraw();
           this._maybeShowNoActionsDialog();
-        }, result.encounterSurvivor);
+        });
       } else {
         this._maybeShowNoActionsDialog();
       }
@@ -1385,14 +1385,13 @@ export class UIController {
         const result = executeExplore(state, entity);
         for (const msg of result.log) state.addLog(msg);
         if (result.success) state.spendAction(result.cost);
-        this._showResultDialog(result.log, () => {
-          state.checkVictory();
-          if (entity.alive) this._selectEntity(entity);
-          else this._clearSelection();
-          this._updateSidebar();
-          this.onRedraw();
-          this._maybeShowNoActionsDialog();
-        });
+        this._showLootFlashes(entity, result.lootItems ?? []);
+        state.checkVictory();
+        if (entity.alive) this._selectEntity(entity);
+        else this._clearSelection();
+        this._updateSidebar();
+        this.onRedraw();
+        this._maybeShowNoActionsDialog();
         break;
       }
 
@@ -1664,6 +1663,90 @@ export class UIController {
   }
 
   // ── Dialogs ───────────────────────────────────────────────────────────────
+
+  /** Show floating "+Item" text over a hex for each loot item found. */
+  _showLootFlashes(entity, lootItems) {
+    if (!lootItems.length) {
+      this.renderer.addFlash(entity.col, entity.row, '—', 'rgba(120,110,90,0.15)', 1200, 0.6, 'rgba(160,148,124,0.9)');
+      return;
+    }
+    lootItems.forEach((label, i) => {
+      setTimeout(() => {
+        this.renderer.addFlash(entity.col, entity.row, label, 'rgba(200,170,60,0.1)', 1800, 0.72, '#e8d48a');
+        this.onRedraw();
+      }, i * 420);
+    });
+  }
+
+  /** Show a unit card popup for a newly-encountered survivor or zombie. */
+  _showEncounterDialog(encounterUnit, onDismiss) {
+    const dialog = document.getElementById('encounter-dialog');
+    const card   = document.getElementById('encounter-card');
+
+    const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
+    const glyph  = GLYPHS[encounterUnit.type] ?? '?';
+    const color  = encounterUnit.color || '#d4c9b0';
+
+    const assetId = encounterUnit.type === 'survivor'
+      ? (_SURVIVOR_TITLE_ASSET[encounterUnit.title] ?? null)
+      : encounterUnit.type;
+    const src = assetId ? this.renderer.getPortraitDataURL(assetId) : null;
+
+    const portraitHtml = src
+      ? `<img src="${src}" style="width:72px;height:72px;border-radius:50%;border:2px solid ${color};display:block;">`
+      : `<div style="font-size:2.8rem;line-height:1;color:${color};width:72px;text-align:center;">${glyph}</div>`;
+
+    const titleHtml = encounterUnit.title
+      ? `<div style="font-size:0.75rem;color:#9a8a7a;font-style:italic;margin-bottom:0.25rem;">${encounterUnit.title}</div>`
+      : '';
+
+    const abilityHtml = encounterUnit.abilityLabel
+      ? `<div style="font-size:0.72rem;color:#88eeff;margin-top:0.3rem;">✦ ${encounterUnit.abilityLabel}</div>`
+      : '';
+
+    const hpPct   = encounterUnit.maxHp > 0 ? (encounterUnit.hp / encounterUnit.maxHp) * 100 : 100;
+    const hpColor = hpPct > 60 ? '#4caf7d' : hpPct > 30 ? '#f5c842' : '#c0392b';
+
+    const message = encounterUnit.type === 'survivor'
+      ? `${encounterUnit.name} steps from the shadows and joins the party!`
+      : `A cowering survivor is found… raised as a zombie by the witch!`;
+
+    card.innerHTML = `
+      <div style="display:flex;align-items:center;gap:0.85rem;margin-bottom:0.75rem;">
+        <div style="flex-shrink:0;">${portraitHtml}</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:1rem;font-weight:bold;color:${color};margin-bottom:0.12rem;">${glyph} ${encounterUnit.name}</div>
+          ${titleHtml}
+          <div style="font-size:0.72rem;color:#c8b89a;">HP ${encounterUnit.hp}/${encounterUnit.maxHp} · ATK ${encounterUnit.attack} · DEF ${encounterUnit.defense}</div>
+          <div style="background:#1e1e2a;border-radius:3px;height:5px;margin-top:0.3rem;overflow:hidden;">
+            <div style="width:${hpPct}%;height:100%;background:${hpColor};border-radius:3px;"></div>
+          </div>
+          ${abilityHtml}
+        </div>
+      </div>
+      <div style="font-size:0.82rem;color:#b8a88a;text-align:center;margin-bottom:0.5rem;">${message}</div>
+      ${this.autoplay ? '' : '<div class="result-dismiss">— click anywhere to continue —</div>'}
+    `;
+
+    dialog.style.display = 'flex';
+
+    const dismiss = () => {
+      dialog.style.display = 'none';
+      dialog.removeEventListener('click', dismiss);
+      document.removeEventListener('keydown', keyDismiss);
+      if (onDismiss) onDismiss();
+    };
+    const keyDismiss = e => {
+      if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') dismiss();
+    };
+
+    if (this.autoplay) {
+      setTimeout(dismiss, 700);
+    } else {
+      dialog.addEventListener('click', dismiss);
+      document.addEventListener('keydown', keyDismiss);
+    }
+  }
 
   _showResultDialog(messages, onDismiss, encounterSurvivor = null) {
     const dialog = document.getElementById('result-dialog');

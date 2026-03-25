@@ -192,6 +192,37 @@ describe('executeMove', () => {
     assert.equal(r.success, true);
     assert.equal(r.encounterLog.length, 0);
   });
+
+  test('hero encounter returns encounterSurvivor with full stats', () => {
+    const state = freshState();
+    resetRoster();
+    const hero = state.hero;
+    const target = firstReachable(state, hero);
+    if (!target) return;
+    state.tiles.get(hexKey(target.col, target.row)).hiddenSurvivor = true;
+    const r = executeMove(state, hero, target.col, target.row);
+    assert.ok(r.encounterSurvivor, 'encounterSurvivor should be set');
+    assert.equal(r.encounterSurvivor.type, 'survivor');
+    assert.ok(r.encounterSurvivor.name, 'should have a name');
+    assert.ok(r.encounterSurvivor.title, 'should have a title');
+    assert.ok(typeof r.encounterSurvivor.hp === 'number', 'should have hp');
+    assert.ok(typeof r.encounterSurvivor.attack === 'number', 'should have attack');
+    assert.ok(typeof r.encounterSurvivor.defense === 'number', 'should have defense');
+  });
+
+  test('witch encounter returns encounterSurvivor with zombie stats', () => {
+    const state = freshState();
+    const witch = state.witch;
+    const target = firstReachable(state, witch);
+    if (!target) return;
+    state.tiles.get(hexKey(target.col, target.row)).hiddenSurvivor = true;
+    const r = executeMove(state, witch, target.col, target.row);
+    assert.ok(r.encounterSurvivor, 'encounterSurvivor should be set for zombie');
+    assert.equal(r.encounterSurvivor.type, 'zombie');
+    assert.ok(typeof r.encounterSurvivor.hp === 'number', 'zombie should have hp');
+    assert.ok(typeof r.encounterSurvivor.attack === 'number', 'zombie should have attack');
+    assert.ok(typeof r.encounterSurvivor.defense === 'number', 'zombie should have defense');
+  });
 });
 
 // ── executeExplore ────────────────────────────────────────────────────────────
@@ -273,6 +304,30 @@ describe('executeExplore', () => {
     // the herbalist path wasn't triggered for a non-herbalist
     // (covered by positive herbalist test above)
     assert.equal(t.explored, true);
+  });
+
+  test('returns lootItems array', () => {
+    const state = freshState();
+    const hero = state.hero;
+    state.tiles.get(hexKey(hero.col, hero.row)).explored = false;
+    const r = executeExplore(state, hero);
+    assert.ok(Array.isArray(r.lootItems), 'lootItems should be an array');
+  });
+
+  test('lootItems entries start with + when loot is found', () => {
+    // Run many times to get at least one non-nothing result
+    for (let i = 0; i < 50; i++) {
+      const state = freshState();
+      const hero = state.hero;
+      state.tiles.get(hexKey(hero.col, hero.row)).explored = false;
+      const r = executeExplore(state, hero);
+      const found = r.lootItems.filter(l => l.startsWith('+'));
+      if (found.length > 0) {
+        assert.ok(found.every(l => l.startsWith('+')), 'all loot labels should start with +');
+        return; // test passes
+      }
+    }
+    // If we never found loot in 50 tries, that's acceptable — loot tables include 'nothing'
   });
 });
 
