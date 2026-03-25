@@ -466,7 +466,10 @@ function checkAndHandleGameOver(room) {
   if (!room.state.gameOver) return;
 
   const winner = room.state.winner;
-  broadcastState(room, 'gameOver');
+  // Don't broadcast a stateUpdate here — the game-over state is already
+  // included in the resolutionComplete finalState, which the client displays
+  // after the resolution animation finishes.  Broadcasting early would show
+  // the victory screen before the final turn plays out.
 
   // Record results for human players
   const record = (playerId, outcome) => {
