@@ -273,7 +273,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       }
 
       if ((!humanFaction || ev.faction === humanFaction) && result?.encounterLog?.length) {
-        pendingDialogs.push(result.encounterLog);
+        if (!myPlayerId || preSnap?.ownerId === myPlayerId) {
+          pendingDialogs.push(result.encounterLog);
+        }
       }
     }
 
