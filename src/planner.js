@@ -43,6 +43,7 @@ export function snapEntity(entity) {
     id:          entity.id,
     type:        entity.type,
     owner:       entity.owner,
+    ownerId:     entity.ownerId ?? null,
     col:         entity.col,
     row:         entity.row,
     hp:          entity.hp,

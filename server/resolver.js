@@ -283,6 +283,7 @@ function snapshotEntities(entities) {
     maxHp:         e.maxHp,
     alive:         e.alive,
     owner:         e.owner,
+    ownerId:       e.ownerId ?? null,
     type:          e.type,
     weapon:        e.weapon,
     ability:       e.ability,
