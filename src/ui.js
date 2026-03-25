@@ -387,7 +387,7 @@ export class UIController {
     el.style.display = '';
     let html = '';
     for (const p of players) {
-      const isMe      = p.id === this.myPlayerId;
+      const isMe      = p.playerId === this.myPlayerId;
       const submitted = p._submitted ?? false;
       const icon      = submitted ? '✓' : '⋯';
       const cls       = submitted ? 'player-ready' : 'player-waiting';
@@ -405,7 +405,7 @@ export class UIController {
 
   /** Called when the server notifies that another player has submitted. */
   _onPlayerSubmitted(playerId, name, faction) {
-    const p = this._players?.find(p => p.id === playerId);
+    const p = this._players?.find(p => p.playerId === playerId);
     if (p) p._submitted = true;
     this._renderPlayerStatus();
   }
