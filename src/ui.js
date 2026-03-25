@@ -2175,12 +2175,43 @@ export class UIController {
     if (overlay.classList.contains('visible')) this._renderInventory();
   }
 
+  /** Return the text of a log entry, handling both string and {text,owner} formats. */
+  _logText(entry) {
+    return typeof entry === 'string' ? entry : entry.text;
+  }
+
+  /** Filter log entries to only those the current player can see. */
+  _visibleLog() {
+    const log = this.state?.log ?? [];
+    if (!this.state?.fogOfWar) return log;
+    const myFaction = this._planFaction
+      ?? (this.state.heroIsAI === false ? 'hero' : 'witch');
+    return log.filter(entry => {
+      if (typeof entry === 'string') return true; // untagged entries are always visible
+      return !entry.owner || entry.owner === myFaction;
+    });
+  }
+
   _renderLog() {
     const el = document.getElementById('event-log');
     if (!el) return;
-    // Show full log — entries are added throughout the game so nothing is lost.
-    el.innerHTML = this.state.log.map(m => `<div class="log-entry">${m}</div>`).join('');
+    const visible = this._visibleLog();
+    el.innerHTML = visible.map(m =>
+      `<div class="log-entry">${this._logText(m)}</div>`
+    ).join('');
     el.scrollTop = el.scrollHeight;
+
+    this._renderMiniChronicle();
+  }
+
+  _renderMiniChronicle() {
+    const el = document.getElementById('chronicle-mini');
+    if (!el) return;
+    const visible = this._visibleLog();
+    const last5 = visible.slice(-5);
+    el.innerHTML = last5
+      .map(m => `<div class="mini-log-entry">${this._logText(m)}</div>`)
+      .join('');
   }
 
   refresh() {
