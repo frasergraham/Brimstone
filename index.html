@@ -11,6 +11,7 @@
   <!-- ── Setup screen ──────────────────────────────────────────────── -->
   <div id="setup-screen">
 
+    <!-- Welcome screen -->
     <div id="setup-step-mode" class="setup-card">
       <h1 class="title">BRIMSTONE</h1>
       <p class="subtitle">A Salem Hex Game</p>
@@ -20,17 +21,85 @@
           graveyard stirs. One will prevail before the dawn.
         </p>
       </div>
-      <div class="setup-buttons">
-        <button id="btn-vs-ai" class="setup-btn primary">Play vs AI</button>
-        <button id="btn-online" class="setup-btn online-btn">⚔ Play Online</button>
-        <button id="btn-vs-human" class="setup-btn" style="display:none">Two Players (Local)</button>
-        <button id="btn-autoplay" class="setup-btn" style="display:none">⚙ AI vs AI (Auto-Play)</button>
+      <div class="setup-buttons" style="flex-direction:column;align-items:center">
+        <button id="btn-new-game"    class="setup-btn primary" style="width:200px">New Game</button>
+        <button id="btn-how-to-play" class="setup-btn"         style="width:200px">How to Play</button>
+        <button id="btn-options"     class="setup-btn"         style="width:200px">Options</button>
       </div>
+    </div>
+
+    <!-- How to Play -->
+    <div id="setup-step-howtoplay" class="setup-card setup-card-wide" style="display:none">
+      <h1 class="title" style="font-size:2rem">HOW TO PLAY</h1>
+      <div class="howtoplay-body">
+        <div class="htp-section">
+          <p class="htp-intro">A turn-based hex strategy game set in cursed colonial Salem. Two asymmetric factions fight across a procedurally-generated map. Plans are submitted simultaneously each round, then resolved together.</p>
+        </div>
+        <div class="htp-section">
+          <h3 class="htp-heading">Win Conditions</h3>
+          <div class="htp-two-col">
+            <div>
+              <div class="htp-faction hero-col">⚔ Hero wins by:</div>
+              <ul><li>Slaying the Witch</li><li>Holding more Power Nodes at 4 scoring checkpoints</li></ul>
+            </div>
+            <div>
+              <div class="htp-faction witch-col">✦ Witch wins by:</div>
+              <ul><li>Slaying the Hero</li><li>Seizing all 3 Power Nodes</li><li>Accumulating 4 node-score points</li></ul>
+            </div>
+          </div>
+        </div>
+        <div class="htp-section">
+          <h3 class="htp-heading">The Factions</h3>
+          <p><span class="htp-faction hero-col">⚔ Hero</span> — 14 HP · ATK 3 · DEF 2 · 3 base actions<br>
+          Explore buildings, recruit survivors, fortify positions. +1 action at Dawn &amp; Day. Survivors grant extra actions.</p>
+          <p><span class="htp-faction witch-col">✦ Witch</span> — 10 HP · ATK 2 · DEF 2 · 4 base actions<br>
+          Summon undead and golems, seize Power Nodes. +1 action at Night. Minions grant extra actions.</p>
+        </div>
+        <div class="htp-section">
+          <h3 class="htp-heading">Phase Cycle <span class="htp-dim">(8 rounds per cycle)</span></h3>
+          <table class="htp-table">
+            <tr><td>🌅 Dawn</td><td>Hero +1 action · attrition rises · Power Nodes scored</td></tr>
+            <tr><td>☀ Day</td><td>Hero +1 ATK · witch undead in the open take damage</td></tr>
+            <tr><td>🌇 Dusk</td><td>Power Nodes scored</td></tr>
+            <tr><td>🌙 Night</td><td>Witch +1 ATK · survivors in the open take damage</td></tr>
+          </table>
+        </div>
+        <div class="htp-section">
+          <h3 class="htp-heading">Actions</h3>
+          <table class="htp-table">
+            <tr><td>Move</td><td>Step to an adjacent hex (2 hexes with a horse)</td></tr>
+            <tr><td>Explore</td><td>Uncover loot, weapons, or survivors in buildings</td></tr>
+            <tr><td>Battle</td><td>Attack an adjacent or co-located enemy</td></tr>
+            <tr><td>Fortify</td><td>Hero: spend 🪵 Wood (+1 DEF) or ⚙ Metal (+2 DEF), max 4</td></tr>
+            <tr><td>Summon</td><td>Witch: spend resources to summon a minion or golem</td></tr>
+            <tr><td>Use Item</td><td>Herbs (free, +2 HP) · Food (+1 action) · Silver (+1 ATK) · Scripture (ward)</td></tr>
+            <tr><td>Equip</td><td>Free — equip a found weapon for permanent stat bonuses</td></tr>
+          </table>
+        </div>
+        <div class="htp-section">
+          <h3 class="htp-heading">Combat</h3>
+          <p>Both sides roll a d6 + stats. <b>Hit</b> if attack &gt; defense (1 damage). <b>Crush</b> if attack ≥ 2× defense (2 damage). <b>Counter</b> if defense ≥ 2× attack (1 damage to attacker). Having an ally adjacent adds a bonus d3 die.</p>
+        </div>
+        <div class="htp-section">
+          <h3 class="htp-heading">Power Nodes ⛧</h3>
+          <p>Three cursed nodes appear on the map. At each Dawn and Dusk, whoever holds more nodes scores 1 point. First to 4 cumulative points wins. The Witch instantly wins by holding all 3 nodes at any scoring checkpoint.</p>
+        </div>
+        <div class="htp-section">
+          <h3 class="htp-heading">Fog of War</h3>
+          <p>Active when any AI is present. Hero sight range varies by phase: Day (3), Dawn/Dusk (2), Night (1). SCOUT survivors extend sight by 1. Enemies outside your sight are hidden.</p>
+        </div>
+      </div>
+      <div class="setup-buttons" style="margin-top:1.5rem;margin-bottom:0">
+        <button id="btn-howtoplay-back" class="setup-btn">← Back</button>
+      </div>
+    </div>
+
+    <!-- New Game config -->
+    <div id="setup-step-newgame" class="setup-card" style="display:none">
+      <h1 class="title" style="font-size:2rem;margin-bottom:1rem">NEW GAME</h1>
+
+      <!-- Common options -->
       <div class="setup-options">
-        <label class="setup-option-label">
-          <input type="checkbox" id="chk-fog-of-war" checked>
-          Fog of war
-        </label>
         <label class="setup-option-label">
           Map size
           <select id="select-map-size" class="setup-select">
@@ -40,97 +109,104 @@
             <option value="campaign">Campaign (21×15)</option>
           </select>
         </label>
+        <label class="setup-option-label">
+          <input type="checkbox" id="chk-fog-of-war" checked>
+          Fog of war
+        </label>
       </div>
-      <div class="setup-buttons" style="margin-top:0.5rem;margin-bottom:0">
-        <button id="btn-leaderboard" class="setup-btn secondary">🏆 Leaderboard</button>
+
+      <!-- Local / Online toggle -->
+      <div class="mode-toggle">
+        <button id="btn-mode-local"  class="mode-toggle-btn active">Local</button>
+        <button id="btn-mode-online" class="mode-toggle-btn">Online</button>
       </div>
-      <div class="setup-rules">
-        <strong>Rules at a glance</strong>
-        <ul>
-          <li><b>Move</b> — step to an adjacent hex</li>
-          <li><b>Explore</b> — uncover loot, weapons, or survivors in buildings</li>
-          <li><b>Battle</b> — attack an adjacent enemy</li>
-          <li><b>Fortify</b> — spend 🪵 Wood (+1 DEF) or ⚙ Metal (+2 DEF) on a building</li>
-          <li><b>Equip</b> — use a found weapon for permanent stat bonuses</li>
-        </ul>
-        <p>🌅 <b>Dawn/Dusk</b>: balanced, no bonuses — transition phases.<br>
-           ☀ <b>Day</b>: Hero +1 ATK. Witch minions in the open take damage!<br>
-           🌙 <b>Night</b>: Witch +1 ATK. Survivors in the open take damage!<br>
-           🏰 <b>Fortifications</b> absorb hits before HP is lost — build them up!<br>
-           ⚔ <b>Gang-up</b>: +1 ATK or DEF when allies are nearby.<br>
-           Witch wins by seizing 3 ⛧ Power Nodes, or killing the hero.</p>
+
+      <!-- Local section -->
+      <div id="newgame-local-section">
+        <div class="player-mode-group">
+          <label class="player-mode-pill">
+            <input type="radio" name="player-mode" value="vs-ai" checked>
+            <span>vs AI</span>
+          </label>
+          <label class="player-mode-pill">
+            <input type="radio" name="player-mode" value="two-players">
+            <span>Two Players</span>
+          </label>
+          <label class="player-mode-pill">
+            <input type="radio" name="player-mode" value="autoplay">
+            <span>AI vs AI</span>
+          </label>
+        </div>
+        <!-- Side selection (vs AI only) -->
+        <div id="side-selection" class="setup-buttons" style="margin-bottom:0">
+          <button id="btn-play-hero"  class="setup-btn primary">⚔ Play as Hero</button>
+          <button id="btn-play-witch" class="setup-btn">✦ Play as Witch</button>
+        </div>
+        <!-- Start button (two players / AI vs AI) -->
+        <div id="btn-start-wrap" class="setup-buttons" style="display:none;margin-bottom:0">
+          <button id="btn-start-local" class="setup-btn primary">Start Game</button>
+        </div>
+      </div>
+
+      <!-- Online section -->
+      <div id="newgame-online-section" style="display:none">
+        <div id="online-session-info" style="display:none;margin-top:0.75rem" class="setup-lore">
+          <p>Playing as <strong id="online-session-name"></strong>
+             &nbsp;<span id="online-session-stats" class="stats-badge"></span></p>
+          <button id="btn-change-name" class="setup-btn secondary" style="margin-top:0.5rem">Change Name</button>
+        </div>
+        <div id="online-name-form" style="margin-top:0.5rem">
+          <input id="online-username" class="setup-input" type="text"
+                 placeholder="Enter a username…" maxlength="20" autocomplete="off">
+          <button id="btn-online-signin" class="setup-btn primary" style="margin-top:0.4rem">Sign In</button>
+          <p id="online-name-error" class="setup-error" style="display:none"></p>
+        </div>
+        <div class="pps-selector" style="margin-top:0.75rem">
+          <span class="pps-label">Players per side:</span>
+          <div class="pps-pills">
+            <label class="pps-pill"><input type="radio" name="pps" value="1" checked><span>1v1</span></label>
+            <label class="pps-pill"><input type="radio" name="pps" value="2"><span>2v2</span></label>
+            <label class="pps-pill"><input type="radio" name="pps" value="3"><span>3v3</span></label>
+            <label class="pps-pill"><input type="radio" name="pps" value="4"><span>4v4</span></label>
+          </div>
+        </div>
+        <!-- Active games -->
+        <div class="active-games-section">
+          <div class="active-games-label">Active Games</div>
+          <div id="active-games-list" class="saves-list">
+            <p class="saves-empty">Sign in to see your active games.</p>
+          </div>
+        </div>
+        <!-- Match buttons -->
+        <div class="setup-buttons online-match-buttons">
+          <button id="btn-quick-match"    class="setup-btn primary">⚔ Quick Match</button>
+          <button id="btn-play-ai-online" class="setup-btn">🤖 vs AI</button>
+          <button id="btn-create-room"    class="setup-btn">🔑 Create Room</button>
+          <button id="btn-join-room"      class="setup-btn">🚪 Join with Code</button>
+        </div>
+        <div id="join-room-form" style="display:none;margin-top:0.75rem">
+          <input id="room-code-input" class="setup-input" type="text"
+                 placeholder="Enter 6-letter room code…" maxlength="6"
+                 autocomplete="off" style="text-transform:uppercase">
+          <button id="btn-join-room-confirm" class="setup-btn primary" style="margin-top:0.5rem">Join Room</button>
+        </div>
+      </div>
+
+      <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
+        <button id="btn-newgame-back" class="setup-btn">← Back</button>
       </div>
     </div>
 
-    <div id="setup-step-side" class="setup-card" style="display:none">
-      <h1 class="title">CHOOSE YOUR SIDE</h1>
-      <p class="subtitle">The AI will control your opponent</p>
-      <div class="setup-buttons">
-        <button id="btn-play-hero"  class="setup-btn primary">⚔ Play as Hero</button>
-        <button id="btn-play-witch" class="setup-btn">🕯 Play as Witch</button>
-      </div>
+    <!-- Options -->
+    <div id="setup-step-options" class="setup-card" style="display:none">
+      <h1 class="title" style="font-size:2rem">OPTIONS</h1>
       <div class="setup-lore">
-        <p><b>⚔ Hero</b> — explore Salem, recruit survivors, contest the power nodes, and destroy the witch before dawn.</p>
-        <p><b>🕯 Witch</b> — summon minions, seize the three Power Nodes before dawn, or slay the hero.</p>
+        <p>No options are available yet.<br>Check back in a future update.</p>
       </div>
       <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
-        <button id="btn-back" class="setup-btn">← Back</button>
+        <button id="btn-options-back" class="setup-btn">← Back</button>
       </div>
     </div>
-
-
-  <!-- ── Online: username / auth step ─────────────────────────────── -->
-  <div id="setup-step-online" class="setup-card" style="display:none">
-    <h1 class="title">PLAY ONLINE</h1>
-    <p class="subtitle" id="online-subtitle">Choose your name to begin</p>
-    <div class="setup-lore" id="online-session-info" style="display:none">
-      <p>Returning as <strong id="online-session-name"></strong>
-         &nbsp;<span id="online-session-stats" class="stats-badge"></span></p>
-      <button id="btn-change-name" class="setup-btn secondary" style="margin-top:0.5rem">Change Name</button>
-    </div>
-    <div id="online-name-form">
-      <input id="online-username" class="setup-input" type="text"
-             placeholder="Enter a username…" maxlength="20" autocomplete="off">
-      <p id="online-name-error" class="setup-error" style="display:none"></p>
-    </div>
-    <div class="pps-selector">
-      <span class="pps-label">Players per side:</span>
-      <div class="pps-pills">
-        <label class="pps-pill"><input type="radio" name="pps" value="1" checked><span>1v1</span></label>
-        <label class="pps-pill"><input type="radio" name="pps" value="2"><span>2v2</span></label>
-        <label class="pps-pill"><input type="radio" name="pps" value="3"><span>3v3</span></label>
-        <label class="pps-pill"><input type="radio" name="pps" value="4"><span>4v4</span></label>
-      </div>
-    </div>
-    <div class="setup-buttons">
-      <button id="btn-quick-match" class="setup-btn primary">⚔ Quick Match</button>
-      <button id="btn-play-ai-online" class="setup-btn">🤖 Play vs AI</button>
-      <button id="btn-create-room" class="setup-btn">🔑 Create Private Room</button>
-      <button id="btn-join-room"   class="setup-btn">🚪 Join with Code</button>
-      <button id="btn-resume-game" class="setup-btn">📂 Resume Game</button>
-    </div>
-    <div id="join-room-form" style="display:none;margin-top:0.75rem">
-      <input id="room-code-input" class="setup-input" type="text"
-             placeholder="Enter 6-letter room code…" maxlength="6"
-             autocomplete="off" style="text-transform:uppercase">
-      <button id="btn-join-room-confirm" class="setup-btn primary" style="margin-top:0.5rem">Join Room</button>
-    </div>
-    <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
-      <button id="btn-online-back" class="setup-btn">← Back</button>
-    </div>
-  </div>
-
-  <!-- ── Online: saved games ──────────────────────────────────────── -->
-  <div id="setup-step-saves" class="setup-card" style="display:none">
-    <h1 class="title">RESUME GAME</h1>
-    <p class="subtitle" id="saves-subtitle">Your in-progress games</p>
-    <div id="saves-list" class="saves-list">
-      <p class="saves-empty">Loading…</p>
-    </div>
-    <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
-      <button id="btn-saves-back" class="setup-btn">← Back</button>
-    </div>
-  </div>
 
   <!-- ── Online: matchmaking / waiting ────────────────────────────── -->
   <div id="setup-step-waiting" class="setup-card" style="display:none">
@@ -152,19 +228,6 @@
   <div id="version-badge" class="version-badge"></div>
 
   </div><!-- /#setup-screen -->
-
-  <!-- ── Leaderboard overlay ───────────────────────────────────────── -->
-  <div id="leaderboard-overlay" style="display:none">
-    <div id="leaderboard-panel">
-      <div class="chronicle-header">
-        <span class="chronicle-title">🏆 Leaderboard</span>
-        <button id="leaderboard-close">✕</button>
-      </div>
-      <div id="leaderboard-content">
-        <p class="lb-loading">Loading…</p>
-      </div>
-    </div>
-  </div>
 
   <!-- ── Game screen ───────────────────────────────────────────────── -->
   <div id="game-screen">

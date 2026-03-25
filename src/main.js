@@ -435,28 +435,74 @@ window.addEventListener('resize', () => {
 // ── Setup screen ──────────────────────────────────────────────────────────────
 
 const stepMode    = document.getElementById('setup-step-mode');
-const stepSide    = document.getElementById('setup-step-side');
-const stepOnline  = document.getElementById('setup-step-online');
+const stepNewgame = document.getElementById('setup-step-newgame');
+const stepHowto   = document.getElementById('setup-step-howtoplay');
+const stepOptions = document.getElementById('setup-step-options');
 const stepWaiting = document.getElementById('setup-step-waiting');
-const stepSaves   = document.getElementById('setup-step-saves');
 
 function showStep(step) {
-  stepMode   .style.display = step === 'mode'    ? '' : 'none';
-  stepSide   .style.display = step === 'side'    ? '' : 'none';
-  stepOnline .style.display = step === 'online'  ? '' : 'none';
-  stepWaiting.style.display = step === 'waiting' ? '' : 'none';
-  stepSaves  .style.display = step === 'saves'   ? '' : 'none';
+  stepMode   .style.display = step === 'mode'     ? '' : 'none';
+  stepNewgame.style.display = step === 'newgame'  ? '' : 'none';
+  stepHowto  .style.display = step === 'howtoplay'? '' : 'none';
+  stepOptions.style.display = step === 'options'  ? '' : 'none';
+  stepWaiting.style.display = step === 'waiting'  ? '' : 'none';
 }
 
-// ── Local mode buttons ────────────────────────────────────────────────────────
+// ── Welcome screen buttons ────────────────────────────────────────────────────
 
-document.getElementById('btn-vs-ai')    .addEventListener('click', () => showStep('side'));
-document.getElementById('btn-vs-human') .addEventListener('click', () => init(false, false));
-document.getElementById('btn-autoplay') .addEventListener('click', () => init(true, true, true));
-document.getElementById('btn-back')     .addEventListener('click', () => showStep('mode'));
+document.getElementById('btn-new-game')   .addEventListener('click', () => showStep('newgame'));
+document.getElementById('btn-how-to-play').addEventListener('click', () => showStep('howtoplay'));
+document.getElementById('btn-options')    .addEventListener('click', () => showStep('options'));
+document.getElementById('btn-howtoplay-back').addEventListener('click', () => showStep('mode'));
+document.getElementById('btn-options-back')  .addEventListener('click', () => showStep('mode'));
+
+// ── New Game screen ────────────────────────────────────────────────────────────
+
+document.getElementById('btn-newgame-back').addEventListener('click', () => {
+  if (mp) { mp.disconnect(); mp = null; }
+  renderer = null; ui = null; state = null;
+  showStep('mode');
+});
+
+// Local / Online mode toggle
+document.getElementById('btn-mode-local').addEventListener('click', () => _activateLocalMode());
+document.getElementById('btn-mode-online').addEventListener('click', () => _activateOnlineMode());
+
+function _activateLocalMode() {
+  document.getElementById('btn-mode-local') .classList.add('active');
+  document.getElementById('btn-mode-online').classList.remove('active');
+  document.getElementById('newgame-local-section') .style.display = '';
+  document.getElementById('newgame-online-section').style.display = 'none';
+}
+
+function _activateOnlineMode() {
+  document.getElementById('btn-mode-online').classList.add('active');
+  document.getElementById('btn-mode-local') .classList.remove('active');
+  document.getElementById('newgame-online-section').style.display = '';
+  document.getElementById('newgame-local-section') .style.display = 'none';
+  _initOnlineStep();
+  const session = loadSession();
+  if (session) _fetchActiveSaves();
+}
+
+// Player mode radio changes (vs AI / Two Players / AI vs AI)
+document.querySelectorAll('input[name="player-mode"]').forEach(r => {
+  r.addEventListener('change', _onPlayerModeChange);
+});
+function _onPlayerModeChange() {
+  const mode = document.querySelector('input[name="player-mode"]:checked')?.value;
+  document.getElementById('side-selection') .style.display = mode === 'vs-ai'      ? '' : 'none';
+  document.getElementById('btn-start-wrap') .style.display = mode !== 'vs-ai'      ? '' : 'none';
+}
 
 document.getElementById('btn-play-hero') .addEventListener('click', () => init(true,  false));
 document.getElementById('btn-play-witch').addEventListener('click', () => init(false, true));
+
+document.getElementById('btn-start-local').addEventListener('click', () => {
+  const mode = document.querySelector('input[name="player-mode"]:checked')?.value;
+  if (mode === 'two-players') init(false, false);
+  else if (mode === 'autoplay') init(true, true, true);
+});
 
 document.getElementById('btn-restart').addEventListener('click', () => {
   const el = document.getElementById('game-over');
@@ -482,70 +528,20 @@ document.getElementById('btn-restart').addEventListener('click', () => {
   }
 });
 
-// ── Leaderboard ───────────────────────────────────────────────────────────────
-
-document.getElementById('btn-leaderboard').addEventListener('click', () => {
-  document.getElementById('leaderboard-overlay').style.display = 'flex';
-  _fetchLeaderboard();
-});
-
-document.getElementById('leaderboard-close').addEventListener('click', () => {
-  document.getElementById('leaderboard-overlay').style.display = 'none';
-});
-
-document.getElementById('leaderboard-overlay').addEventListener('click', e => {
-  if (e.target === document.getElementById('leaderboard-overlay')) {
-    document.getElementById('leaderboard-overlay').style.display = 'none';
-  }
-});
-
-function _fetchLeaderboard() {
-  const content = document.getElementById('leaderboard-content');
-  content.innerHTML = '<p class="lb-loading">Loading…</p>';
-
-  // Use REST endpoint — works regardless of WS connection state
-  const base = window.BRIMSTONE_SERVER || '';
-  fetch(`${base}/api/leaderboard`)
-    .then(r => r.json())
-    .then(entries => _renderLeaderboard(entries))
-    .catch(() => { content.innerHTML = '<p class="lb-loading">Could not load (offline mode).</p>'; });
-}
-
-function _renderLeaderboard(entries) {
-  const content = document.getElementById('leaderboard-content');
-  if (!entries.length) {
-    content.innerHTML = '<p class="lb-loading">No games recorded yet.</p>';
-    return;
-  }
-  let html = `<table class="lb-table">
-    <thead><tr><th>#</th><th>Player</th><th>W</th><th>L</th><th>D</th><th>Win%</th></tr></thead><tbody>`;
-  entries.forEach((e, i) => {
-    html += `<tr>
-      <td class="lb-rank">${i + 1}</td>
-      <td class="lb-name">${_esc(e.username)}</td>
-      <td class="lb-w">${e.wins}</td>
-      <td class="lb-l">${e.losses}</td>
-      <td class="lb-d">${e.draws}</td>
-      <td class="lb-pct">${e.win_pct}%</td>
-    </tr>`;
-  });
-  html += '</tbody></table>';
-  content.innerHTML = html;
-}
-
 function _esc(str) {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-// ── Saves (resume) ────────────────────────────────────────────────────────────
+// ── Active games (inline in New Game screen) ──────────────────────────────────
 
-function _fetchSaves() {
-  const list = document.getElementById('saves-list');
+function _fetchActiveSaves() {
+  const list = document.getElementById('active-games-list');
+  if (!list) return;
   list.innerHTML = '<p class="saves-empty">Loading…</p>';
 
   const session = loadSession();
   if (!session) {
-    list.innerHTML = '<p class="saves-empty">Sign in to see your saved games.</p>';
+    list.innerHTML = '<p class="saves-empty">Sign in to see your active games.</p>';
     return;
   }
 
@@ -559,7 +555,7 @@ function _fetchSaves() {
 }
 
 function _renderSaves(saves) {
-  const list = document.getElementById('saves-list');
+  const list = document.getElementById('active-games-list');
   const session = loadSession();
 
   if (!saves.length) {
@@ -609,31 +605,10 @@ function _timeAgo(unixSecs) {
 
 // ── Online flow ───────────────────────────────────────────────────────────────
 
-document.getElementById('btn-online').addEventListener('click', () => {
-  showStep('online');
-  _initOnlineStep();
-});
-
-document.getElementById('btn-online-back').addEventListener('click', () => {
-  if (mp) { mp.disconnect(); mp = null; }
-  renderer = null; ui = null; state = null;
-  showStep('mode');
-});
-
-document.getElementById('btn-resume-game').addEventListener('click', () => {
-  _ensureAuthed(() => {
-    showStep('saves');
-    _fetchSaves();
-  });
-});
-
-document.getElementById('btn-saves-back').addEventListener('click', () => {
-  showStep('online');
-});
-
 document.getElementById('btn-cancel-wait').addEventListener('click', () => {
   if (mp) { mp.leaveQueue(); }
-  showStep('online');
+  showStep('newgame');
+  _activateOnlineMode();
 });
 
 document.getElementById('btn-join-room').addEventListener('click', () => {
@@ -697,31 +672,35 @@ document.addEventListener('brimstone:roomCode', e => {
 });
 
 function _initOnlineStep() {
-  const session = loadSession();
+  const session     = loadSession();
   const sessionInfo = document.getElementById('online-session-info');
   const nameForm    = document.getElementById('online-name-form');
-  const subtitle    = document.getElementById('online-subtitle');
 
   if (session) {
     document.getElementById('online-session-name').textContent = session.username;
-    // Will be filled once we have stats from server
     sessionInfo.style.display = '';
     nameForm.style.display    = 'none';
-    subtitle.textContent      = 'Ready to play';
   } else {
     sessionInfo.style.display = 'none';
     nameForm.style.display    = '';
-    subtitle.textContent      = 'Choose your name to begin';
   }
 
   document.getElementById('online-name-error').style.display = 'none';
 }
 
+document.getElementById('btn-online-signin').addEventListener('click', () => {
+  _ensureAuthed(() => {
+    _initOnlineStep();    // switch from name form → session info
+    _fetchActiveSaves();
+  });
+});
+
 document.getElementById('btn-change-name').addEventListener('click', () => {
   clearSession();
   document.getElementById('online-session-info').style.display = 'none';
   document.getElementById('online-name-form').style.display    = '';
-  document.getElementById('online-subtitle').textContent       = 'Choose a new name';
+  document.getElementById('active-games-list').innerHTML =
+    '<p class="saves-empty">Sign in to see your active games.</p>';
   if (mp) { mp.disconnect(); mp = null; }
   renderer = null; ui = null; state = null;
 });
@@ -794,7 +773,8 @@ function _createMpClient() {
           } catch (err) {
             console.error('initOnline failed:', err);
             _onlineError(`Failed to start game: ${err.message}`);
-            showStep('online');
+            showStep('newgame');
+            _activateOnlineMode();
           }
         }
         return;
@@ -886,8 +866,8 @@ function _createMpClient() {
       if (ui) ui._onPlayerSubmitted(playerId, name, faction);
     },
 
-    onLeaderboard(entries) {
-      _renderLeaderboard(entries);
+    onLeaderboard(_entries) {
+      // Leaderboard removed — no-op
     },
 
     onInQueue(position) {
@@ -962,7 +942,8 @@ function _createMpClient() {
       // During auth phase, show error in the lobby
       if (!state || document.getElementById('setup-screen').style.display !== 'none') {
         _onlineError(msg);
-        showStep('online');
+        showStep('newgame');
+        _activateOnlineMode();
       } else {
         // In-game error — flash in status bar
         const el = document.getElementById('online-status');
@@ -993,6 +974,7 @@ MultiplayerClient.prototype._route = function(msg) {
     if (mp) mp._player = null;
     document.getElementById('online-session-info').style.display = 'none';
     document.getElementById('online-name-form').style.display    = '';
-    showStep('online');
+    showStep('newgame');
+    _activateOnlineMode();
   }
 };
