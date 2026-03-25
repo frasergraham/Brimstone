@@ -3,7 +3,7 @@
 import { getNeighbors, hexDistance, hexKey } from './hex.js';
 import { TileType, ResourceType } from './tiles.js';
 import { EntityType } from './entities.js';
-import { Phase, computeActions, Player } from './game.js';
+import { Phase, computeActions, computeActionsForPlayer, Player } from './game.js';
 import {
   executeMove, executeExplore, executeBattle, executeSummon, executeUseItem,
   getVisibleEnemyHexes, getVisibleHeroHexes,
@@ -138,12 +138,13 @@ function inBuilding(state, entity) {
 //   NIGHT    : Strike hard — hunt hero units; seize nodes; summon more troops
 
 export class WitchAI {
-  constructor(state, onStateChange, thinkDelay = THINK_DELAY_MS) {
+  constructor(state, onStateChange, thinkDelay = THINK_DELAY_MS, playerId = null) {
     this.state         = state;
     this.onStateChange = onStateChange;
     this.onBattleResult = null;
     this._running      = false;
     this.thinkDelay    = thinkDelay;
+    this.playerId      = playerId;  // null → offline/legacy; set → scoped MP plan
   }
 
   async takeTurn() {
@@ -522,7 +523,7 @@ export class WitchAI {
 
   /** Generate a complete plan synchronously for the simultaneous-turn system. */
   generatePlan() {
-    const sim = new PlanSimState(this.state, 'witch');
+    const sim = new PlanSimState(this.state, 'witch', this.playerId);
     const plan = [];
 
     while (sim.actionsLeft > 0 && plan.length < MAX_PLAN_LENGTH) {
@@ -778,12 +779,13 @@ export class WitchAI {
 //   NIGHT     : Hunker down — shelter all units in buildings; avoid open combat
 
 export class HeroAI {
-  constructor(state, onStateChange, thinkDelay = THINK_DELAY_MS) {
+  constructor(state, onStateChange, thinkDelay = THINK_DELAY_MS, playerId = null) {
     this.state         = state;
     this.onStateChange = onStateChange;
     this.onBattleResult = null;
     this._running       = false;
     this.thinkDelay     = thinkDelay;
+    this.playerId       = playerId;  // null → offline/legacy; set → scoped MP plan
   }
 
   async takeTurn() {
@@ -1113,7 +1115,7 @@ export class HeroAI {
 
   /** Generate a complete plan synchronously for the simultaneous-turn system. */
   generatePlan() {
-    const sim = new PlanSimState(this.state, 'hero');
+    const sim = new PlanSimState(this.state, 'hero', this.playerId);
     const plan = [];
 
     while (sim.actionsLeft > 0 && plan.length < MAX_PLAN_LENGTH) {
@@ -1402,7 +1404,7 @@ function delay(ms) {
 // not simulated (dice unknown) — battles simply consume one budget slot.
 
 class PlanSimState {
-  constructor(realState, faction) {
+  constructor(realState, faction, playerId = null) {
     this.tiles            = realState.tiles;          // read-only reference
     this.phase            = realState.phase;
     this.witchObjectives  = realState.witchObjectives;
@@ -1418,14 +1420,23 @@ class PlanSimState {
       .filter(e => e.alive)
       .map(e => ({ ...e, alive: true }));
 
-    this.hero  = this.entities.find(e => e.type === EntityType.HERO);
-    this.witch = this.entities.find(e => e.type === EntityType.WITCH);
-
-    this.actionsLeft = computeActions(
-      faction === 'hero' ? Player.HERO : Player.WITCH,
-      realState.phase,
-      this.entities,
-    );
+    if (playerId) {
+      // Multiplayer: scope leader ref and budget to this specific player
+      const leaderType = faction === 'hero' ? EntityType.HERO : EntityType.WITCH;
+      const leader = this.entities.find(e => e.type === leaderType && e.ownerId === playerId) ?? null;
+      this.hero  = faction === 'hero'  ? leader : null;
+      this.witch = faction === 'witch' ? leader : null;
+      this.actionsLeft = computeActionsForPlayer(playerId, faction, realState.phase, this.entities);
+    } else {
+      // Offline / legacy: use first entity of each type, faction-level budget
+      this.hero  = this.entities.find(e => e.type === EntityType.HERO)  ?? null;
+      this.witch = this.entities.find(e => e.type === EntityType.WITCH) ?? null;
+      this.actionsLeft = computeActions(
+        faction === 'hero' ? Player.HERO : Player.WITCH,
+        realState.phase,
+        this.entities,
+      );
+    }
     this._faction = faction;
 
     // Track hexes already planned for exploration this turn so we don't

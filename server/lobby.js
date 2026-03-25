@@ -8,6 +8,7 @@ import { resolvePlansMP }                  from './resolver.js';
 import { upsertSave, deleteSave, getSave } from './saves.js';
 import { VERSION }                         from '../src/version.js';
 import { generateMultipleStarts }          from '../src/map.js';
+import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS } from '../src/entities.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const AI_FILL_DELAY_MS   = 5_000;  // wait this long before filling with AI
@@ -126,6 +127,11 @@ function createRoom(fog = true) {
  * records to use the real player IDs so ownerId resolution works throughout the engine.
  */
 function _addSeat(room, playerId, ws, name, faction, isAI, ai = null) {
+  // Determine this player's color slot before pushing (0-based index in faction)
+  const factionIndex = room.players.filter(s => s.faction === faction).length;
+  const colors       = faction === 'hero' ? HERO_PLAYER_COLORS : WITCH_PLAYER_COLORS;
+  const playerColor  = colors[factionIndex % colors.length];
+
   const seat = { playerId, ws, name, faction, isAI, ai };
   room.players.push(seat);
 
@@ -136,9 +142,12 @@ function _addSeat(room, playerId, ws, name, faction, isAI, ai = null) {
     statePlayer.id   = playerId;
     statePlayer.name = name;
     statePlayer.isAI = isAI;
-    // Update the leader entity's ownerId to match the real player ID
+    // Update the leader entity's ownerId and color to match the real player
     const leader = room.state.entities.find(e => e.id === statePlayer.leaderId);
-    if (leader) leader.ownerId = playerId;
+    if (leader) {
+      leader.ownerId = playerId;
+      leader.color   = playerColor;
+    }
   }
 }
 
@@ -208,14 +217,21 @@ function _startPlanningPhase(room) {
   _runAIPlanSubmission(room);
 }
 
-/** Generate and submit plans for every AI seat immediately. */
+/** Generate and submit plans for every AI seat, staggered by a short random delay. */
 function _runAIPlanSubmission(room) {
   if (room.state.gameOver) return;
+  let offset = 0;
   for (const seat of room.players) {
     if (!seat.isAI || !seat.ai) continue;
-    if (room.state.gameOver) break;
-    const plan = seat.ai.generatePlan();
-    _submitPlayerPlan(room, seat.playerId, plan);
+    const delay = 300 + offset + Math.floor(Math.random() * 350);
+    offset += 400;
+    const { playerId, ai } = seat;
+    setTimeout(() => {
+      if (!rooms.has(room.id)) return;
+      if (room.state.gameOver || !room.state.planningPhase) return;
+      const plan = ai.generatePlan();
+      _submitPlayerPlan(room, playerId, plan);
+    }, delay);
   }
 }
 
@@ -348,10 +364,10 @@ function _serializeEvents(events) {
 
 // ── AI helpers ────────────────────────────────────────────────────────────────
 
-function _makeAI(room, faction) {
+function _makeAI(room, faction, playerId = null) {
   return faction === 'witch'
-    ? new WitchAI(room.state, () => {}, 0)
-    : new HeroAI(room.state, () => {}, 0);
+    ? new WitchAI(room.state, () => {}, 0, playerId)
+    : new HeroAI(room.state, () => {}, 0, playerId);
 }
 
 /**
@@ -360,7 +376,7 @@ function _makeAI(room, faction) {
  */
 function attachAI(room, faction, forPlayerId = null) {
   const syntheticPlayerId = `ai-${faction}-${randomUUID().slice(0, 8)}`;
-  const ai = _makeAI(room, faction);
+  const ai = _makeAI(room, faction, syntheticPlayerId);
 
   if (forPlayerId) {
     // Take over an existing human seat
@@ -403,7 +419,7 @@ function attachAI(room, faction, forPlayerId = null) {
 function _addExtraAISeat(room, faction) {
   const pid  = `ai-${faction}-${randomUUID().slice(0, 8)}`;
   const name = faction === 'witch' ? 'Witch Ally' : 'Hero Ally';
-  const ai   = _makeAI(room, faction);
+  const ai   = _makeAI(room, faction, pid); // pass pid so AI scopes plan to its own entities
 
   // Spawn near the faction's existing leaders, with enough separation
   const existing = room.state.entities.filter(
@@ -414,6 +430,13 @@ function _addExtraAISeat(room, faction) {
   const pos = positions[existing.length] ?? start;
 
   room.state.addPlayer(pid, name, faction, pos.col, pos.row, true);
+
+  // Assign per-player color to this AI's leader entity
+  const factionIndex = room.players.filter(s => s.faction === faction).length;
+  const colors       = faction === 'hero' ? HERO_PLAYER_COLORS : WITCH_PLAYER_COLORS;
+  const leader       = room.state.entities.find(e => e.ownerId === pid);
+  if (leader) leader.color = colors[factionIndex % colors.length];
+
   const seat = { playerId: pid, ws: null, name, faction, isAI: true, ai };
   room.players.push(seat);
   if (faction === 'witch') room.state.witchIsAI = true;

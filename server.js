@@ -159,10 +159,8 @@ function route(ws, cs, msg) {
     case 'setRoom': {
       if (!cs.player) return;
       const room = getRoom(msg.roomId);
-      if (room) {
-        const faction = room.heroPlayerId === cs.player.id ? 'hero'
-                      : room.witchPlayerId === cs.player.id ? 'witch' : null;
-        if (faction) cs.roomId = msg.roomId;
+      if (room && room.players.some(s => s.playerId === cs.player.id)) {
+        cs.roomId = msg.roomId;
       }
       break;
     }
