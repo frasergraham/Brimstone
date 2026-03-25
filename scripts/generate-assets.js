@@ -35,6 +35,17 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT        = path.resolve(__dirname, '..');
+
+// Load .env from project root if present
+const ENV_PATH = path.join(ROOT, '.env');
+if (fs.existsSync(ENV_PATH)) {
+  for (const line of fs.readFileSync(ENV_PATH, 'utf8').split('\n')) {
+    const match = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)$/);
+    if (match && !process.env[match[1]]) {
+      process.env[match[1]] = match[2].replace(/^(['"])(.*)\1$/, '$2');
+    }
+  }
+}
 const CONFIG_PATH = path.join(ROOT, 'assets', 'image-list.json');
 const OUT_DIR     = path.join(ROOT, 'assets', 'generated');
 
