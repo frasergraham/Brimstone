@@ -1,0 +1,221 @@
+{
+  "stylePrompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down hex tile perspective",
+
+  "notes": {
+    "perspective": "Top-down isometric or near-top-down view to fit a hex tile grid",
+    "resolution": "Suggest 256x256 or 512x512 per tile/unit; units should be centred on transparent background",
+    "naming": "Use the 'id' field as the output filename, e.g. grass.png, hero.png"
+  },
+
+  "tiles": [
+    {
+      "id": "grass",
+      "name": "Grass",
+      "prompt": "Top-down hex tile of overgrown colonial New England meadow grass, pale frost-touched blades, dark loamy earth visible between tufts, autumn yellows and deep greens, subtle mist clinging to the ground, painterly oil texture"
+    },
+    {
+      "id": "forest",
+      "name": "Forest",
+      "prompt": "Top-down hex tile of dense dark New England forest, ancient gnarled oak and pine canopy, deep shadow beneath the boughs, fallen leaves, roots breaking through soil, oppressive and foreboding, muted deep greens and near-blacks"
+    },
+    {
+      "id": "dirt",
+      "name": "Dirt",
+      "prompt": "Top-down hex tile of bare colonial earth, churned gravel and mud, wagon-rut impressions, scattered pebbles, cold grey-brown soil, desolate and worn, painterly texture"
+    },
+    {
+      "id": "road",
+      "name": "Road",
+      "prompt": "Top-down hex tile of a narrow colonial dirt road, rutted wagon tracks, compressed earth, loose stones along the edges, cutting through frost-dusted ground, muted ochre and brown tones"
+    },
+    {
+      "id": "river",
+      "name": "River",
+      "prompt": "Top-down hex tile of a dark cold New England river, black water reflecting pale sky, smooth current, mossy banks, reeds at the edges, ominous and still, deep navy and teal tones"
+    },
+    {
+      "id": "bridge",
+      "name": "Bridge",
+      "prompt": "Top-down hex tile of a weathered wooden colonial bridge crossing dark water, rough-hewn planks, rope and iron railings, damp and mossy, dark water flowing beneath, aged timber browns over deep navy water"
+    }
+  ],
+
+  "buildings": [
+    {
+      "id": "town_hall",
+      "name": "Town Hall",
+      "prompt": "Top-down hex tile of a colonial New England town hall, imposing dressed limestone façade, tall arched windows, worn steps, an American colonial flag limp in cold air, candle glow behind frosted glass, authority and decay combined"
+    },
+    {
+      "id": "church",
+      "name": "Church",
+      "prompt": "Top-down hex tile of a Puritan church, stark white clapboard darkened by age and damp, tall narrow steeple piercing fog, leaded windows, iron-hinged door, a single lantern burning at the entrance, cold pale stone tones"
+    },
+    {
+      "id": "inn",
+      "name": "Inn",
+      "prompt": "Top-down hex tile of a colonial inn and tavern, warm amber candlelight spilling from small windows, timber-framed with a low thatched roof, a wooden sign swaying in the wind, firelight glow against dark weathered walls"
+    },
+    {
+      "id": "blacksmith",
+      "name": "Blacksmith",
+      "prompt": "Top-down hex tile of a colonial blacksmith forge, sooty iron-brown stone walls, a forge fire glowing deep orange within, iron tools hanging beside the door, smoke rising from a low chimney, ember sparks on dark ground"
+    },
+    {
+      "id": "graveyard",
+      "name": "Graveyard",
+      "prompt": "Top-down hex tile of a fog-shrouded colonial graveyard, crooked weathered headstones, iron fence half-collapsed, dark mossy stone, dead grass, the earth freshly disturbed in places, oppressive and still, cold moonlight"
+    },
+    {
+      "id": "mill",
+      "name": "Mill",
+      "prompt": "Top-down hex tile of a colonial grain mill, large wooden water wheel partially submerged in dark water, golden straw scattered around the entrance, millstone visible through open doors, weathered timber, flour dust in dim light"
+    },
+    {
+      "id": "dock",
+      "name": "Dock",
+      "prompt": "Top-down hex tile of a colonial river dock, rough-hewn wooden pier extending over black water, rope coils, barrels and crates, a moored flat-bottomed boat, fog rolling off the water, lantern on a post, sea-grey blue tones"
+    },
+    {
+      "id": "house",
+      "name": "House",
+      "prompt": "Top-down hex tile of a colonial New England dwelling, terracotta plaster and timber-frame construction, a low thatched or shake-shingle roof, shuttered windows, a cold stone chimney, modest and isolated, autumnal earth tones"
+    },
+    {
+      "id": "barn",
+      "name": "Barn",
+      "prompt": "Top-down hex tile of a colonial barn, large weathered timber structure, red-brown paint peeling to raw wood, hay visible through open loft doors, a broken cart wheel against the wall, dark interior, worn and abandoned"
+    },
+    {
+      "id": "watchtower",
+      "name": "Watchtower",
+      "prompt": "Top-down hex tile of a colonial stone watchtower, dark ashlar construction, a torch burning at the top parapet, arrow slits in thick walls, commanding view implied by its height, shadow-heavy, military and foreboding"
+    },
+    {
+      "id": "apothecary",
+      "name": "Apothecary",
+      "prompt": "Top-down hex tile of a colonial apothecary shop, herb bundles hanging from low eaves, small bubbling flasks visible through wavy glass windows, purple-grey stone walls, a mortar and pestle by the door, dim occult warmth"
+    },
+    {
+      "id": "storehouse",
+      "name": "Storehouse",
+      "prompt": "Top-down hex tile of a colonial storehouse, heavy wooden double doors padlocked shut, dusty tan stone walls, supply barrels and crates stacked outside, thick walls, a utilitarian and imposing structure"
+    },
+    {
+      "id": "stable",
+      "name": "Stable",
+      "prompt": "Top-down hex tile of a colonial stable, low saddle-brown timber building, straw spilling from the entrance, iron hitching post, horseshoe nailed above the door, warm hay-scented glow from within, mud-churned ground outside"
+    }
+  ],
+
+  "units": [
+    {
+      "id": "hero",
+      "name": "The Hero",
+      "faction": "hero",
+      "prompt": "A colonial New England hero warrior, rugged and weathered, wearing layered leather and wool, a battered sword at his hip, resolute expression beneath a wide-brimmed Puritan hat, warm lantern-gold tones, fog at his boots, full-body portrait on transparent background, painterly oil style"
+    },
+    {
+      "id": "witch",
+      "name": "The Witch",
+      "faction": "witch",
+      "prompt": "A powerful Salem witch, dark flowing robes, silver and bone jewellery, eyes glowing faintly with unnatural light, surrounded by wisps of shadow and violet smoke, cold and commanding, deep purple and near-black tones, full-body portrait on transparent background, painterly oil style"
+    },
+    {
+      "id": "survivor_innkeeper",
+      "name": "John O'Connor — Innkeeper",
+      "faction": "hero",
+      "prompt": "A stocky colonial innkeeper survivor, heavy apron over coarse linen, sleeves rolled up revealing powerful forearms, carries a wood-splitting axe, tired but defiant expression, warm amber tones, full-body portrait on transparent background, painterly oil style"
+    },
+    {
+      "id": "survivor_nurse",
+      "name": "Mary Quinn — Nurse",
+      "faction": "hero",
+      "prompt": "A colonial nurse survivor, plain grey dress and white apron stained with salve and herb juice, carries a medicine satchel, calm determined eyes, healing herbs tucked into her belt, muted warm tones, full-body portrait on transparent background, painterly oil style"
+    },
+    {
+      "id": "survivor_blacksmith",
+      "name": "Thomas Putnam — Blacksmith",
+      "faction": "hero",
+      "prompt": "A massive colonial blacksmith survivor, soot-darkened leather apron, enormous arms, carries a war hammer, scars from forge sparks, grim and resolute, iron-brown and ember tones, full-body portrait on transparent background, painterly oil style"
+    },
+    {
+      "id": "survivor_herbalist",
+      "name": "Abigail Foster — Herbalist",
+      "faction": "hero",
+      "prompt": "A young colonial herbalist survivor, hooded cloak with dried herbs and wildflowers tied to it, carrying a wicker basket of plants, sharp intelligent eyes, knowledgeable and resourceful, muted greens and earthy tones, full-body portrait on transparent background, painterly oil style"
+    },
+    {
+      "id": "survivor_militia",
+      "name": "Samuel Cooper — Militia Sergeant",
+      "faction": "hero",
+      "prompt": "A weathered colonial militia sergeant survivor, worn buff coat and leather crossbelt, carries a musket and short sword, commanding posture, battle-hardened face beneath a tricorn hat, military grey and brown tones, full-body portrait on transparent background, painterly oil style"
+    },
+    {
+      "id": "survivor_priest",
+      "name": "Father Crane — Parish Priest",
+      "faction": "hero",
+      "prompt": "An aged Puritan parish priest survivor, long black cassock, silver cross at his chest, carries a leather-bound Bible, iron resolve in tired eyes, candlelight halo effect, pale stone and candlegold tones, full-body portrait on transparent background, painterly oil style"
+    },
+    {
+      "id": "survivor_baker",
+      "name": "Hannah Marsh — Baker",
+      "faction": "hero",
+      "prompt": "A stout colonial baker survivor, flour-dusted apron and rolled sleeves, carries a rolling pin repurposed as a club, cheerful but fierce expression, round-faced and resilient, warm bread-gold and cream tones, full-body portrait on transparent background, painterly oil style"
+    },
+    {
+      "id": "survivor_trapper",
+      "name": "Ezra Boone — Trapper",
+      "faction": "hero",
+      "prompt": "A lean colonial trapper survivor, fur-trimmed frontier coat, carries a flintlock rifle, animal pelts at his belt, sharp woodsman's eyes scanning the treeline, camouflaged earth and forest green tones, full-body portrait on transparent background, painterly oil style"
+    },
+    {
+      "id": "survivor_schoolteacher",
+      "name": "Constance Bell — Schoolteacher",
+      "faction": "hero",
+      "prompt": "A composed colonial schoolteacher survivor, modest dark dress with a white collar, carries a journal filled with observations about the witch's markings, perceptive eyes behind small spectacles, ink-stained fingers, grey and off-white tones, full-body portrait on transparent background, painterly oil style"
+    },
+    {
+      "id": "survivor_gravedigger",
+      "name": "Isaac Graves — Gravedigger",
+      "faction": "hero",
+      "prompt": "A gaunt colonial gravedigger survivor, mud-caked boots and worn overcoat, carries a long-handled shovel, hollow eyes that have seen too much death, unafraid and stoic, dark moss green and grey tones, full-body portrait on transparent background, painterly oil style"
+    },
+    {
+      "id": "survivor_midwife",
+      "name": "Patience Cole — Midwife",
+      "faction": "hero",
+      "prompt": "A capable colonial midwife survivor, simple linen dress and cloak, carries a satchel of medical supplies and salves, warm and steady hands, calm authority in her expression, muted earth and linen tones, full-body portrait on transparent background, painterly oil style"
+    },
+    {
+      "id": "survivor_farmhand",
+      "name": "Silas Holt — Farmhand",
+      "faction": "hero",
+      "prompt": "A young colonial farmhand survivor, rough spun shirt and suspenders, carries a pitchfork, youthful face set with righteous anger, broad shoulders from hard labour, straw-gold and earth tones, full-body portrait on transparent background, painterly oil style"
+    },
+    {
+      "id": "zombie",
+      "name": "Zombie",
+      "faction": "witch",
+      "prompt": "A shambling colonial-era zombie, tattered Puritan burial clothes, pale grey-green decomposing flesh, hollow milky eyes, earth still clinging to its form as if freshly exhumed from a graveyard, reaching clawed hands, desaturated olive and ash tones, full-body portrait on transparent background, painterly oil style"
+    },
+    {
+      "id": "minion",
+      "name": "Minion",
+      "faction": "witch",
+      "prompt": "A witch's bound minion, hunched shadowy figure in tattered rags, face obscured beneath a hood, clutches a crude iron blade, bound by dark sigil-marked ropes, unnatural posture, deep crimson and near-black shadow tones, full-body portrait on transparent background, painterly oil style"
+    },
+    {
+      "id": "wood_golem",
+      "name": "Wood Golem",
+      "faction": "witch",
+      "prompt": "A massive wood golem constructed from twisted New England oak, bark-covered limbs, glowing amber runes carved into its chest, mismatched branches forming crude fingers, moss and vines woven through its joints, looming and ancient, rich saddle-brown and dark forest tones, full-body portrait on transparent background, painterly oil style"
+    },
+    {
+      "id": "iron_golem",
+      "name": "Iron Golem",
+      "faction": "witch",
+      "prompt": "A towering iron golem forged from salvaged colonial metalwork, dark corroded plates riveted together, witch's sigils branded into the iron, glowing violet cracks at the joints, heavy and unstoppable, cold blue-grey and rust tones with purple energy, full-body portrait on transparent background, painterly oil style"
+    }
+  ]
+}
