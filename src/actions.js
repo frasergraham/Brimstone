@@ -295,6 +295,7 @@ export function executeMove(state, actor, targetCol, targetRow) {
 
   // Hidden survivor encounter — triggers once per tile for any unit that steps on it
   const encounterLog = [];
+  let encounterSurvivor = null;
   if (t.hiddenSurvivor) {
     t.hiddenSurvivor = false;
     if (actor.owner === 'hero') {
@@ -302,6 +303,7 @@ export function executeMove(state, actor, targetCol, targetRow) {
       s.owner = 'hero';
       state.entities.push(s);
       encounterLog.push(`A survivor steps out of hiding — ${s.name}, the ${s.title}! They join the party.`);
+      encounterSurvivor = { name: s.name, title: s.title };
     } else {
       const z = createZombie(targetCol, targetRow, actor.ownerId);
       state.entities.push(z);
@@ -310,7 +312,7 @@ export function executeMove(state, actor, targetCol, targetRow) {
     log.push(...encounterLog);
   }
 
-  return { success: true, log, cost: 1, encounterLog };
+  return { success: true, log, cost: 1, encounterLog, encounterSurvivor };
 }
 
 export function executeExplore(state, actor) {

@@ -1017,7 +1017,8 @@ export class Renderer {
     const ctx    = this.ctx;
     const hs     = this.hexSize;
     const { x, y } = this._toCanvas(col, row);
-    const r      = hs * 0.32;
+    // Larger portrait radius when a single unit occupies the hex
+    const r      = stack.length === 1 ? hs * 0.42 : hs * 0.32;
     const max    = Math.min(stack.length, 3);
 
     for (let i = 0; i < max; i++) {

@@ -551,7 +551,6 @@ export class UIController {
       const overBudget = !isFree && runningCost > this._planBudget;
       const foodPowered = overBudget && foodUsed < foodEnabled;
       if (foodPowered) foodUsed++;
-      const icon = ICONS[a.type] || '•';
       const desc = describeAction(a, i);
       const foodTag = foodPowered ? ` <span class="plan-food-tag">-1 🍞</span>` : '';
       const rmBtn = this._planSubmitted
@@ -560,7 +559,6 @@ export class UIController {
       const cls = foodPowered ? ' food-powered' : overBudget ? ' over-budget' : '';
       html += `<div class="plan-step${cls}">
         <span class="plan-step-num">${i + 1}</span>
-        <span class="plan-step-icon">${icon}</span>
         <span class="plan-step-desc" title="${desc}">${desc}${foodTag}</span>
         ${rmBtn}
       </div>`;
@@ -804,7 +802,7 @@ export class UIController {
     const { actionType } = this._awaitingTarget || {};
     if (!actionType || actionType === ActionType.MOVE) {
       const a = this._validActions.find(a => a.type === ActionType.MOVE);
-      if (a) renderer.highlightHexes = a.targets.map(t => ({ ...t, color: 'rgba(60,220,80,0.55)' }));
+      if (a) renderer.highlightHexes = a.targets.map(t => ({ ...t, color: 'rgba(60,220,80,0.22)' }));
     } else if (actionType === ActionType.BATTLE) {
       const a = this._validActions.find(a => a.type === ActionType.BATTLE);
       if (a) renderer.highlightHexes = a.targets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,60,60,0.55)' }));
@@ -857,7 +855,7 @@ export class UIController {
           this._updateSidebar();
           this.onRedraw();
           this._maybeShowNoActionsDialog();
-        });
+        }, result.encounterSurvivor);
       } else {
         this._maybeShowNoActionsDialog();
       }
@@ -997,9 +995,14 @@ export class UIController {
     if (this._pendingUnitPick) {
       let html = `<div class="popup-unit-name">Which unit to select?</div>`;
       for (const u of this._pendingUnitPick.units) {
-        const col = ENTITY_COLOR[u.type] || '#888';
+        const col        = ENTITY_COLOR[u.type] || '#888';
+        const portraitId = u.type === 'survivor' ? _SURVIVOR_TITLE_ASSET[u.title] : u.type;
+        const pStyle     = portraitId ? _spriteStyle(portraitId, 32) : '';
+        const portrait   = pStyle
+          ? `<span style="${pStyle};display:inline-block;width:32px;height:32px;border-radius:50%;border:1.5px solid ${col};vertical-align:middle;margin-right:0.4rem;flex-shrink:0;"></span>`
+          : '';
         html += `<button class="action-btn pick-unit" data-action="pick_unit" data-unit-id="${u.id}"
-          style="border-left:3px solid ${col}">${u.displayName} — HP ${u.hp}/${u.maxHp}</button>`;
+          style="border-left:3px solid ${col};display:flex;align-items:center;">${portrait}${u.displayName} — HP ${u.hp}/${u.maxHp}</button>`;
       }
       popup.innerHTML = html;
       _attachPopupListeners(popup, this);
@@ -1659,7 +1662,7 @@ export class UIController {
 
   // ── Dialogs ───────────────────────────────────────────────────────────────
 
-  _showResultDialog(messages, onDismiss) {
+  _showResultDialog(messages, onDismiss, encounterSurvivor = null) {
     const dialog = document.getElementById('result-dialog');
     // Collapse consecutive duplicate lines into "message (×N)"
     const collapsed = [];
@@ -1674,6 +1677,20 @@ export class UIController {
     const btns = document.getElementById('result-buttons');
     btns.style.display = 'none';
     btns.innerHTML = '';
+
+    // Survivor portrait
+    const portraitEl = document.getElementById('result-portrait');
+    if (portraitEl) {
+      const assetId = encounterSurvivor?.title ? _SURVIVOR_TITLE_ASSET[encounterSurvivor.title] : null;
+      const style   = assetId ? _spriteStyle(assetId, 80) : '';
+      if (style) {
+        portraitEl.setAttribute('style',
+          `${style};display:block;width:80px;height:80px;border-radius:50%;margin:0 auto 0.6rem;border:2px solid #c8a96e;`);
+      } else {
+        portraitEl.style.display = 'none';
+      }
+    }
+
     dialog.style.display = 'flex';
 
     const dismiss = () => {
@@ -2198,16 +2215,84 @@ function _visibleUnitsAt(state, col, row) {
   });
 }
 
+// ── Tilemap sprite helpers ────────────────────────────────────────────────────
+
+const _SURVIVOR_TITLE_ASSET = {
+  'Innkeeper':        'survivor_innkeeper',
+  'Nurse':            'survivor_nurse',
+  'Blacksmith':       'survivor_blacksmith',
+  'Herbalist':        'survivor_herbalist',
+  'Militia Sergeant': 'survivor_militia',
+  'Parish Priest':    'survivor_priest',
+  'Baker':            'survivor_baker',
+  'Trapper':          'survivor_trapper',
+  'Schoolteacher':    'survivor_schoolteacher',
+  'Gravedigger':      'survivor_gravedigger',
+  'Midwife':          'survivor_midwife',
+  'Farmhand':         'survivor_farmhand',
+};
+
+/**
+ * Return a CSS style string that renders the given sprite from assets/tilemap.png
+ * as a background image scaled to sizePx × sizePx.
+ * Mirrors the layout in Renderer._buildSpriteRects().
+ */
+function _spriteStyle(assetId, sizePx) {
+  const CELL = 256, GAP = 6, COLS = 7, LABEL_H = 30;
+  const groups = [
+    ['grass','forest','dirt','road','river','bridge'],
+    ['town_hall','church','inn','blacksmith','graveyard','mill',
+     'dock','house','barn','watchtower','apothecary','storehouse','stable'],
+    ['hero','witch','zombie','minion','wood_golem','iron_golem',
+     'survivor_innkeeper','survivor_nurse','survivor_blacksmith',
+     'survivor_herbalist','survivor_militia','survivor_priest',
+     'survivor_baker','survivor_trapper','survivor_schoolteacher',
+     'survivor_gravedigger','survivor_midwife','survivor_farmhand'],
+  ];
+  const TW = 1840, TH = 1686;
+  let y = GAP;
+  for (const ids of groups) {
+    y += LABEL_H + GAP;
+    for (let i = 0; i < ids.length; i++) {
+      if (ids[i] !== assetId) continue;
+      const col   = i % COLS;
+      const row   = Math.floor(i / COLS);
+      const sx    = GAP + col * (CELL + GAP);
+      const sy    = y   + row * (CELL + GAP);
+      const scale = sizePx / CELL;
+      return [
+        `background-image:url('assets/tilemap.png')`,
+        `background-size:${Math.round(TW*scale)}px ${Math.round(TH*scale)}px`,
+        `background-position:${-Math.round(sx*scale)}px ${-Math.round(sy*scale)}px`,
+      ].join(';');
+    }
+    y += Math.ceil(ids.length / COLS) * (CELL + GAP);
+  }
+  return '';
+}
+
+/** Return the tilemap asset id for any entity snap (uses title for survivors). */
+function _entityPortraitId(snap) {
+  if (snap.type === 'survivor') return _SURVIVOR_TITLE_ASSET[snap.title] ?? null;
+  return snap.type; // 'hero', 'witch', 'zombie', etc.
+}
+
 function _snapEntity(e) {
-  return { id: e.id, name: e.displayName, hp: e.hp, maxHp: e.maxHp, attack: e.attack, defense: e.defense, type: e.type };
+  return { id: e.id, name: e.displayName, hp: e.hp, maxHp: e.maxHp, attack: e.attack, defense: e.defense, type: e.type, title: e.title ?? null };
 }
 
 function _combatantHTML(snap, role) {
-  const label     = role === 'atk' ? '⚔ Attacker' : '🛡 Defender';
-  const color     = ENTITY_COLOR[snap.type] || '#888';
-  const hpPct     = (snap.hp / snap.maxHp) * 100;
-  const hpColor   = hpPct > 50 ? '#4caf50' : hpPct > 25 ? '#ff9800' : '#f44336';
+  const label      = role === 'atk' ? '⚔ Attacker' : '🛡 Defender';
+  const color      = ENTITY_COLOR[snap.type] || '#888';
+  const hpPct      = (snap.hp / snap.maxHp) * 100;
+  const hpColor    = hpPct > 50 ? '#4caf50' : hpPct > 25 ? '#ff9800' : '#f44336';
+  const portraitId = _entityPortraitId(snap);
+  const style      = portraitId ? _spriteStyle(portraitId, 56) : '';
+  const portraitHtml = style
+    ? `<div style="${style};width:56px;height:56px;border-radius:50%;border:2px solid ${color};margin:0 auto 0.35rem;"></div>`
+    : '';
   return `
+    ${portraitHtml}
     <div class="combatant-name" style="color:${color}">${snap.name}</div>
     <div style="font-size:0.68rem;color:#7a7060;margin-bottom:0.3rem">${label}</div>
     <div class="combatant-stats">HP: ${snap.hp}/${snap.maxHp} · ATK: ${snap.attack} · DEF: ${snap.defense}</div>
