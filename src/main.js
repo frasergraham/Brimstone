@@ -33,6 +33,7 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
   if (fogChk && !fogChk.checked) state.fogOfWar = false;
   renderer = new Renderer(canvas, state);
   renderer.resize();
+  renderer.loadImages(); // async; redraws once images settle — no-op if assets absent
 
   const thinkDelay = autoplay ? 0 : undefined;
   witchAI = witchIsAI ? new WitchAI(state, redraw, thinkDelay) : null;
@@ -268,6 +269,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
           preSnap.col, preSnap.row,
           action.toCol, action.toRow,
           preSnap.type, preSnap.owner,
+          preSnap.title ?? null,
         );
         hadMove = true;
       }
@@ -384,6 +386,7 @@ function initOnline(mirrorState, myFaction, mpClient) {
 
   renderer = new Renderer(canvas, state);
   renderer.resize();
+  renderer.loadImages();
 
   // No local AI — all turns handled server-side
   ui = new UIController(canvas, state, renderer, null, redrawOnline, null, false);
@@ -799,7 +802,7 @@ function _createMpClient() {
         for (const e of state.entities) {
           const old = oldPos.get(e.id);
           if (old && (old.col !== e.col || old.row !== e.row)) {
-            renderer.addMoveAnim(e.id, old.col, old.row, e.col, e.row, e.type, e.owner);
+            renderer.addMoveAnim(e.id, old.col, old.row, e.col, e.row, e.type, e.owner, e.title ?? null);
           }
         }
       }

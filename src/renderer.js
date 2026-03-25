@@ -69,7 +69,105 @@ export class Renderer {
     // Smooth zoom/pan animation: null when idle
     this._zoomAnim = null; // {startZoom,targetZoom,startPanX,targetPanX,startPanY,targetPanY,startTime,duration}
 
+    // Tilemap sprite sheet — populated by loadImages()
+    this._tilemapImg   = null;   // HTMLImageElement for assets/tilemap.png
+    this._spriteRects  = null;   // Map<id, {x,y,size}> — source rect in the tilemap
+
     this._resize();
+  }
+
+  /**
+   * Build a map of asset-id → source rect within assets/tilemap.png.
+   * The layout mirrors the stitchTilemap() function in scripts/generate-assets.js:
+   *   CELL=256, GAP=6, COLS=7, LABEL_H=30, groups: Tiles → Buildings → Units
+   */
+  static _buildSpriteRects() {
+    const CELL = 256, GAP = 6, COLS = 7, LABEL_H = 30;
+    const groups = [
+      ['grass','forest','dirt','road','river','bridge'],
+      ['town_hall','church','inn','blacksmith','graveyard','mill',
+       'dock','house','barn','watchtower','apothecary','storehouse','stable'],
+      ['hero','witch','zombie','minion','wood_golem','iron_golem',
+       'survivor_innkeeper','survivor_nurse','survivor_blacksmith',
+       'survivor_herbalist','survivor_militia','survivor_priest',
+       'survivor_baker','survivor_trapper','survivor_schoolteacher',
+       'survivor_gravedigger','survivor_midwife','survivor_farmhand'],
+    ];
+
+    const rects = new Map();
+    let y = GAP;
+
+    for (const ids of groups) {
+      y += LABEL_H + GAP; // skip the category label row
+      for (let i = 0; i < ids.length; i++) {
+        const col  = i % COLS;
+        const row  = Math.floor(i / COLS);
+        const sx   = GAP + col * (CELL + GAP);
+        const sy   = y   + row * (CELL + GAP);
+        rects.set(ids[i], { x: sx, y: sy, size: CELL });
+      }
+      y += Math.ceil(ids.length / COLS) * (CELL + GAP);
+    }
+
+    return rects;
+  }
+
+  /**
+   * Load assets/tilemap.png and compute per-sprite source rects.
+   * Falls back gracefully (colour fills) when the file is absent.
+   */
+  async loadImages(basePath = 'assets') {
+    const img = new Image();
+    await new Promise(resolve => {
+      img.onload  = resolve;
+      img.onerror = resolve; // absent tilemap → silent fallback
+      img.src = `${basePath}/tilemap.png`;
+    });
+
+    if (!img.naturalWidth) return; // failed to load — keep colour fallbacks
+
+    this._tilemapImg  = img;
+    this._spriteRects = Renderer._buildSpriteRects();
+    this._portraitCache = new Map();
+    this.draw();
+  }
+
+  /**
+   * Draw the named sprite to an offscreen canvas and return a cached data URL
+   * suitable for use as an <img src>.  Returns null if the tilemap isn't loaded
+   * or the asset id is unknown.
+   */
+  getPortraitDataURL(assetId, size = 128) {
+    if (!this._tilemapImg || !this._spriteRects) return null;
+    const rect = this._spriteRects.get(assetId);
+    if (!rect) return null;
+    const key = `${assetId}@${size}`;
+    if (this._portraitCache.has(key)) return this._portraitCache.get(key);
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    c.getContext('2d').drawImage(this._tilemapImg, rect.x, rect.y, rect.size, rect.size, 0, 0, size, size);
+    const url = c.toDataURL();
+    this._portraitCache.set(key, url);
+    return url;
+  }
+
+  /** Map a survivor entity's title to its sprite asset id. */
+  static _survivorAssetId(title) {
+    const MAP = {
+      'Innkeeper':        'survivor_innkeeper',
+      'Nurse':            'survivor_nurse',
+      'Blacksmith':       'survivor_blacksmith',
+      'Herbalist':        'survivor_herbalist',
+      'Militia Sergeant': 'survivor_militia',
+      'Parish Priest':    'survivor_priest',
+      'Baker':            'survivor_baker',
+      'Trapper':          'survivor_trapper',
+      'Schoolteacher':    'survivor_schoolteacher',
+      'Gravedigger':      'survivor_gravedigger',
+      'Midwife':          'survivor_midwife',
+      'Farmhand':         'survivor_farmhand',
+    };
+    return MAP[title] ?? null;
   }
 
   // Add a brief flash overlay on a hex (e.g. damage numbers).
@@ -95,10 +193,12 @@ export class Renderer {
   }
 
   /** Slide an entity icon from one hex to another (opponent move feedback). */
-  addMoveAnim(entityId, fromCol, fromRow, toCol, toRow, entityType, owner) {
+  addMoveAnim(entityId, fromCol, fromRow, toCol, toRow, entityType, owner, title = null) {
     const from = this._toCanvas(fromCol, fromRow);
     const to   = this._toCanvas(toCol,   toRow);
-    // Replace any previous anim for this entity
+    const portraitId = entityType === EntityType.SURVIVOR
+      ? Renderer._survivorAssetId(title)
+      : entityType; // non-survivor type values match asset ids directly
     this._moveAnims = this._moveAnims.filter(a => a.entityId !== entityId);
     this._moveAnims.push({
       entityId,
@@ -106,6 +206,7 @@ export class Renderer {
       toX:   to.x,   toY:   to.y,
       glyph: entityGlyph(entityType),
       color: ENTITY_COLOR[entityType],
+      portraitId,
       startTime: Date.now(),
       duration:  480,
     });
@@ -536,6 +637,24 @@ export class Renderer {
     ctx.fillStyle = color;
     ctx.fill();
 
+    // ── Building image from sprite sheet ──────────────────────────────────
+    // Terrain tile images are disabled for now (terrain uses colour fills).
+    if (tile.type === TileType.BUILDING) {
+      const rect = this._spriteRects?.get(tile.building);
+      if (rect && this._tilemapImg) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(corners[0].x, corners[0].y);
+        for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
+        ctx.closePath();
+        ctx.clip();
+        ctx.drawImage(this._tilemapImg,
+          rect.x, rect.y, rect.size, rect.size,  // source rect in tilemap
+          x - hs, y - hs, hs * 2, hs * 2);       // destination on canvas
+        ctx.restore();
+      }
+    }
+
     ctx.strokeStyle = '#111418';
     ctx.lineWidth   = 0.8;
     ctx.stroke();
@@ -566,11 +685,15 @@ export class Renderer {
 
     // ── Building: icon + name ─────────────────────────────────────────────
     if (tile.type === TileType.BUILDING && tile.building) {
+      const hasBuildingImg = !!this._spriteRects?.get(tile.building) && !!this._tilemapImg;
 
-      ctx.font         = `${Math.floor(hs * 0.55)}px serif`;
-      ctx.textAlign    = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(BUILDING_ICON[tile.building] || '?', x, y - hs * 0.10);
+      // Show emoji icon only when there is no image (image provides the visual)
+      if (!hasBuildingImg) {
+        ctx.font         = `${Math.floor(hs * 0.55)}px serif`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(BUILDING_ICON[tile.building] || '?', x, y - hs * 0.10);
+      }
 
       ctx.fillStyle    = 'rgba(255,248,230,0.92)';
       ctx.font         = `bold ${Math.max(7, Math.floor(hs * 0.25))}px "Georgia", serif`;
@@ -918,7 +1041,8 @@ export class Renderer {
     const ctx    = this.ctx;
     const hs     = this.hexSize;
     const { x, y } = this._toCanvas(col, row);
-    const r      = hs * 0.32;
+    // Larger portrait radius when a single unit occupies the hex
+    const r      = stack.length === 1 ? hs * 0.42 : hs * 0.32;
     const max    = Math.min(stack.length, 3);
 
     for (let i = 0; i < max; i++) {
@@ -936,15 +1060,39 @@ export class Renderer {
       ctx.arc(ex, ey, r, 0, Math.PI * 2);
       ctx.fillStyle = entity.color ?? ENTITY_COLOR[entity.type];
       ctx.fill();
-      ctx.strokeStyle = '#ffffffaa';
-      ctx.lineWidth   = 1;
+
+      // ── Portrait image from sprite sheet ───────────────────────────────
+      const portraitKey = entity.type === EntityType.SURVIVOR
+        ? Renderer._survivorAssetId(entity.title)
+        : entity.type; // 'hero', 'witch', 'zombie', etc.
+
+      const pRect = portraitKey ? this._spriteRects?.get(portraitKey) : null;
+      const portrait = pRect && this._tilemapImg;
+      if (portrait) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(ex, ey, r, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.drawImage(this._tilemapImg,
+          pRect.x, pRect.y, pRect.size, pRect.size,
+          ex - r, ey - r, r * 2, r * 2);
+        ctx.restore();
+      }
+
+      // Circle border: use entity colour when portrait is shown, white otherwise
+      const entityCol = entity.color ?? ENTITY_COLOR[entity.type];
+      ctx.strokeStyle = portrait ? entityCol : '#ffffffaa';
+      ctx.lineWidth   = portrait ? 2 : 1;
       ctx.stroke();
 
-      ctx.fillStyle    = '#ffffffdd';
-      ctx.font         = `bold ${Math.floor(r * 1.1)}px serif`;
-      ctx.textAlign    = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(entityGlyph(entity.type), ex, ey + 1);
+      // Draw glyph only when no portrait image is available
+      if (!portrait) {
+        ctx.fillStyle    = '#ffffffdd';
+        ctx.font         = `bold ${Math.floor(r * 1.1)}px serif`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(entityGlyph(entity.type), ex, ey + 1);
+      }
 
       if (entity.type === EntityType.HERO || entity.type === EntityType.WITCH ||
           entity.type === EntityType.SURVIVOR || entity.type === EntityType.WOOD_GOLEM ||
@@ -1226,16 +1374,27 @@ export class Renderer {
       ctx.arc(x, y, r, 0, Math.PI * 2);
       ctx.fillStyle = a.color;
       ctx.fill();
-      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+
+      // Portrait image if available, otherwise glyph
+      const pRect = a.portraitId ? this._spriteRects?.get(a.portraitId) : null;
+      if (pRect && this._tilemapImg) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.drawImage(this._tilemapImg, pRect.x, pRect.y, pRect.size, pRect.size, x - r, y - r, r * 2, r * 2);
+        ctx.restore();
+      } else {
+        ctx.fillStyle    = '#ffffffee';
+        ctx.font         = `bold ${Math.floor(r * 1.1)}px serif`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(a.glyph, x, y + 1);
+      }
+
+      ctx.strokeStyle = a.color;
       ctx.lineWidth   = 2;
       ctx.stroke();
-
-      // Glyph
-      ctx.fillStyle    = '#ffffffee';
-      ctx.font         = `bold ${Math.floor(r * 1.1)}px serif`;
-      ctx.textAlign    = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(a.glyph, x, y + 1);
     }
   }
 }
