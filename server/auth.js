@@ -16,6 +16,10 @@ export function registerOrLogin({ username, token } = {}) {
   if (token) {
     const player = _getByToken.get(token);
     if (player) return { ok: true, player };
+    // Token provided but not found — session expired / DB was reset
+    if (!username) {
+      return { ok: false, error: 'Session expired. Please sign in again.' };
+    }
   }
 
   // New registration
