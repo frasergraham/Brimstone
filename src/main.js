@@ -198,7 +198,7 @@ async function _runLocalResolution() {
   const finalEntities = state.entities;
 
   const humanFaction = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : null;
-  await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction);
+  await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
 
   const prevScore = { hero: state.nodeScore.hero, witch: state.nodeScore.witch };
 
@@ -236,7 +236,7 @@ async function _runLocalResolution() {
  * finalEntities: real post-resolution entity array (restored after all steps).
  * humanFaction:  if set, suppress opponent-only battle/explore dialogs.
  */
-async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFaction = null) {
+async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFaction = null, myPlayerId = null) {
   _resolving = true;
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
@@ -328,16 +328,18 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       }
     }
 
-    // ── Phase 3: explore results — leader + raised units, not survivors ─────────
-    // Survivors are autonomous allies; their loot is silent. The player's own
-    // leader and summoned units (minions, zombies, golems) do show a result.
+    // ── Phase 3: explore results — only this player's own entities ───────────
+    // In team MP each player owns a subset of their faction's units via ownerId.
+    // Only show dialogs for entities this player directly controls; other players'
+    // units on the same team resolve silently.
+    // In offline/solo mode myPlayerId is null so we fall back to faction filtering.
     for (const ev of events) {
       const { action, result } = ev;
       if (action.type !== PlanActionType.EXPLORE) continue;
       if (!result?.log?.length) continue;
       if (humanFaction && ev.faction !== humanFaction) continue;
       const actor = step.entitySnapshot?.find(e => e.id === action.entityId);
-      if (humanFaction && actor?.type === 'survivor') continue;
+      if (myPlayerId && actor?.ownerId !== myPlayerId) continue;
       redrawFn();
       await new Promise(resolve => ui._showResultDialog(result.log, resolve));
       hadBattle = true;
@@ -922,7 +924,7 @@ function _createMpClient() {
       // This ensures state.entities is already correct when the last slide lands.
       const finalEntities = finalState.entities ?? state.entities;
 
-      _animateResolutionSteps(steps, finalEntities, redrawOnline, mp?.myFaction).then(() => {
+      _animateResolutionSteps(steps, finalEntities, redrawOnline, mp?.myFaction, mp?.myPlayerId ?? null).then(() => {
         // Apply full final state (phase, round, score, tiles, etc.)
         Object.assign(state, finalState);
         state.hero      = finalState.hero;
