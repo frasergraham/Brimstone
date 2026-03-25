@@ -383,3 +383,76 @@ describe('resolvePlans — state integrity', () => {
     assert.ok(state.entities.length > countBefore, 'Summon should add entity to state');
   });
 });
+
+// ── Battle results include required fields (Bugs #4 + #5) ───────────────────
+
+describe('resolvePlans — battle result fields', () => {
+  test('BATTLE_UNIT result includes hit, margin, fortAbsorbed, and breakdown', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const minion = createMinion(hero.col, hero.row);
+    state.entities.push(minion);
+
+    const heroPlan = [{
+      type: PlanActionType.BATTLE_UNIT,
+      entityId: hero.id,
+      targetId: minion.id,
+    }];
+
+    const steps = resolvePlans(state, heroPlan, []);
+    assert.ok(steps.length > 0, 'Should produce at least one step');
+
+    const battleEvent = steps[0].heroEvents.find(e => e.type === ResEventType.ACTION_OK);
+    assert.ok(battleEvent, 'Should have an ACTION_OK event');
+    assert.ok('hit' in battleEvent.result, 'Result should include hit field');
+    assert.ok('margin' in battleEvent.result, 'Result should include margin field');
+    assert.ok('fortAbsorbed' in battleEvent.result, 'Result should include fortAbsorbed field');
+    assert.ok('breakdown' in battleEvent.result, 'Result should include breakdown field');
+    assert.equal(typeof battleEvent.result.hit, 'boolean', 'hit should be a boolean');
+    assert.equal(typeof battleEvent.result.margin, 'number', 'margin should be a number');
+    assert.equal(typeof battleEvent.result.breakdown, 'object', 'breakdown should be an object');
+  });
+
+  test('battle result breakdown contains dice and bonus details', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const minion = createMinion(hero.col, hero.row);
+    state.entities.push(minion);
+
+    const steps = resolvePlans(state, [{
+      type: PlanActionType.BATTLE_UNIT,
+      entityId: hero.id,
+      targetId: minion.id,
+    }], []);
+
+    const battleEvent = steps[0]?.heroEvents?.find(e => e.type === ResEventType.ACTION_OK);
+    if (!battleEvent) return;
+
+    const bd = battleEvent.result.breakdown;
+    assert.ok('atkBaseDie' in bd, 'breakdown should have atkBaseDie');
+    assert.ok('defBaseDie' in bd, 'breakdown should have defBaseDie');
+    assert.ok('phaseBonus' in bd, 'breakdown should have phaseBonus');
+    assert.ok('fortBonus' in bd, 'breakdown should have fortBonus');
+  });
+
+  test('battle result includes battleSnaps with actor and target snapshots', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const minion = createMinion(hero.col, hero.row);
+    state.entities.push(minion);
+
+    const steps = resolvePlans(state, [{
+      type: PlanActionType.BATTLE_UNIT,
+      entityId: hero.id,
+      targetId: minion.id,
+    }], []);
+
+    const battleEvent = steps[0]?.heroEvents?.find(e => e.type === ResEventType.ACTION_OK);
+    assert.ok(battleEvent, 'Should have a battle event');
+    assert.ok(battleEvent.battleSnaps, 'Battle event should include battleSnaps');
+    assert.ok(battleEvent.battleSnaps.actorSnap, 'Should have actorSnap');
+    assert.ok(battleEvent.battleSnaps.targetSnap, 'Should have targetSnap');
+    assert.equal(battleEvent.battleSnaps.actorSnap.id, hero.id, 'actorSnap should be the hero');
+    assert.equal(battleEvent.battleSnaps.targetSnap.id, minion.id, 'targetSnap should be the minion');
+  });
+});
