@@ -13,16 +13,14 @@
       "negativePrompt": "photorealistic, 3D render, cartoon, anime, watercolor, sketch, low quality, blurry, modern, futuristic, bright saturated colors"
     }
   },
-
-  "stylePrompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow",
-
+  "stylePrompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow",
   "assets": [
     {
       "id": "grass",
       "name": "Grass",
       "category": "tile",
       "parameters": {
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of overgrown colonial New England meadow grass hex tile, pale frost-touched blades, dark loamy earth visible between tufts, autumn yellows and deep greens, subtle mist clinging to the ground, seamless tileable texture"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of a pointy-top hexagonal tile showing overgrown colonial New England meadow grass hex tile, pale frost-touched blades, dark loamy earth visible between tufts, autumn yellows and deep greens, subtle mist clinging to the ground, contained within a pointy-top hexagon shape, hex border clearly defined"
       }
     },
     {
@@ -30,7 +28,7 @@
       "name": "Forest",
       "category": "tile",
       "parameters": {
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of dense dark New England forest hex tile, ancient gnarled oak and pine canopy, deep shadow beneath boughs, fallen leaves, roots breaking through soil, oppressive and foreboding, seamless tileable texture"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of a pointy-top hexagonal tile showing dense dark New England forest hex tile, ancient gnarled oak and pine canopy, deep shadow beneath boughs, fallen leaves, roots breaking through soil, oppressive and foreboding, contained within a pointy-top hexagon shape, hex border clearly defined"
       }
     },
     {
@@ -38,7 +36,7 @@
       "name": "Dirt",
       "category": "tile",
       "parameters": {
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of bare colonial earth hex tile, churned gravel and mud, wagon-rut impressions, scattered pebbles, cold grey-brown soil, desolate and worn, seamless tileable texture"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of a pointy-top hexagonal tile showing bare colonial earth hex tile, churned gravel and mud, wagon-rut impressions, scattered pebbles, cold grey-brown soil, desolate and worn, contained within a pointy-top hexagon shape, hex border clearly defined"
       }
     },
     {
@@ -46,7 +44,7 @@
       "name": "Road",
       "category": "tile",
       "parameters": {
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of narrow colonial dirt road hex tile, rutted wagon tracks, compressed earth, loose stones along edges, frost-dusted ground, muted ochre and brown tones, seamless tileable texture"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of a pointy-top hexagonal tile showing narrow colonial dirt road hex tile, rutted wagon tracks, compressed earth, loose stones along edges, frost-dusted ground, muted ochre and brown tones, contained within a pointy-top hexagon shape, hex border clearly defined"
       }
     },
     {
@@ -54,7 +52,7 @@
       "name": "River",
       "category": "tile",
       "parameters": {
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of dark cold New England river hex tile, black water reflecting pale sky, smooth current, mossy banks, reeds at edges, ominous and still, deep navy and teal tones, seamless tileable texture"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of a pointy-top hexagonal tile showing dark cold New England river hex tile, black water reflecting pale sky, smooth current, mossy banks, reeds at edges, ominous and still, deep navy and teal tones, contained within a pointy-top hexagon shape, hex border clearly defined"
       }
     },
     {
@@ -62,7 +60,7 @@
       "name": "Bridge",
       "category": "tile",
       "parameters": {
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of weathered wooden colonial bridge hex tile crossing dark water, rough-hewn planks, rope and iron railings, damp and mossy, aged timber browns over deep navy water, seamless tileable texture"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of a pointy-top hexagonal tile showing weathered wooden colonial bridge hex tile crossing dark water, rough-hewn planks, rope and iron railings, damp and mossy, aged timber browns over deep navy water, contained within a pointy-top hexagon shape, hex border clearly defined"
       }
     },
     {
@@ -70,7 +68,7 @@
       "name": "Town Hall",
       "category": "building",
       "parameters": {
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of colonial New England town hall hex tile, imposing dressed limestone façade, tall arched windows, worn steps, candle glow behind frosted glass, authority and decay combined"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of a pointy-top hexagonal tile showing colonial New England town hall hex tile, contained within a pointy-top hexagon shape, hex border clearly defined, imposing dressed limestone fa\u00e7ade, tall arched windows, worn steps, candle glow behind frosted glass, authority and decay combined"
       }
     },
     {
@@ -78,7 +76,7 @@
       "name": "Church",
       "category": "building",
       "parameters": {
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of Puritan church hex tile, stark white clapboard darkened by age and damp, tall narrow steeple, leaded windows, iron-hinged door, single lantern burning at entrance, cold pale stone tones"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of a pointy-top hexagonal tile showing Puritan church hex tile, contained within a pointy-top hexagon shape, hex border clearly defined, stark white clapboard darkened by age and damp, tall narrow steeple, leaded windows, iron-hinged door, single lantern burning at entrance, cold pale stone tones"
       }
     },
     {
@@ -86,7 +84,7 @@
       "name": "Inn",
       "category": "building",
       "parameters": {
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of colonial inn and tavern hex tile, warm amber candlelight spilling from small windows, timber-framed with a low thatched roof, wooden sign swaying in wind, firelight glow against dark weathered walls"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of a pointy-top hexagonal tile showing colonial inn and tavern hex tile, contained within a pointy-top hexagon shape, hex border clearly defined, warm amber candlelight spilling from small windows, timber-framed with a low thatched roof, wooden sign swaying in wind, firelight glow against dark weathered walls"
       }
     },
     {
@@ -94,7 +92,7 @@
       "name": "Blacksmith",
       "category": "building",
       "parameters": {
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of colonial blacksmith forge hex tile, sooty iron-brown stone walls, forge fire glowing deep orange within, iron tools hanging beside door, smoke rising from low chimney, ember sparks on dark ground"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of a pointy-top hexagonal tile showing colonial blacksmith forge hex tile, contained within a pointy-top hexagon shape, hex border clearly defined, sooty iron-brown stone walls, forge fire glowing deep orange within, iron tools hanging beside door, smoke rising from low chimney, ember sparks on dark ground"
       }
     },
     {
@@ -102,7 +100,7 @@
       "name": "Graveyard",
       "category": "building",
       "parameters": {
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of fog-shrouded colonial graveyard hex tile, crooked weathered headstones, iron fence half-collapsed, dark mossy stone, dead grass, earth freshly disturbed in places, cold moonlight"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of a pointy-top hexagonal tile showing fog-shrouded colonial graveyard hex tile, contained within a pointy-top hexagon shape, hex border clearly defined, crooked weathered headstones, iron fence half-collapsed, dark mossy stone, dead grass, earth freshly disturbed in places, cold moonlight"
       }
     },
     {
@@ -110,7 +108,7 @@
       "name": "Mill",
       "category": "building",
       "parameters": {
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of colonial grain mill hex tile, large wooden water wheel partially submerged in dark water, golden straw scattered around entrance, weathered timber, flour dust in dim light"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of a pointy-top hexagonal tile showing colonial grain mill hex tile, contained within a pointy-top hexagon shape, hex border clearly defined, large wooden water wheel partially submerged in dark water, golden straw scattered around entrance, weathered timber, flour dust in dim light"
       }
     },
     {
@@ -118,7 +116,7 @@
       "name": "Dock",
       "category": "building",
       "parameters": {
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of colonial river dock hex tile, rough-hewn wooden pier over black water, rope coils, barrels and crates, moored flat-bottomed boat, fog rolling off water, lantern on post, sea-grey blue tones"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of a pointy-top hexagonal tile showing colonial river dock hex tile, contained within a pointy-top hexagon shape, hex border clearly defined, rough-hewn wooden pier over black water, rope coils, barrels and crates, moored flat-bottomed boat, fog rolling off water, lantern on post, sea-grey blue tones"
       }
     },
     {
@@ -126,7 +124,7 @@
       "name": "House",
       "category": "building",
       "parameters": {
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of colonial New England dwelling hex tile, terracotta plaster and timber-frame, low shake-shingle roof, shuttered windows, cold stone chimney, modest and isolated"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of a pointy-top hexagonal tile showing colonial New England dwelling hex tile, contained within a pointy-top hexagon shape, hex border clearly defined, terracotta plaster and timber-frame, low shake-shingle roof, shuttered windows, cold stone chimney, modest and isolated"
       }
     },
     {
@@ -134,7 +132,7 @@
       "name": "Barn",
       "category": "building",
       "parameters": {
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of colonial barn hex tile, large weathered timber structure, red-brown paint peeling to raw wood, hay visible through open loft doors, broken cart wheel against wall, dark interior"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of a pointy-top hexagonal tile showing colonial barn hex tile, contained within a pointy-top hexagon shape, hex border clearly defined, large weathered timber structure, red-brown paint peeling to raw wood, hay visible through open loft doors, broken cart wheel against wall, dark interior"
       }
     },
     {
@@ -142,7 +140,7 @@
       "name": "Watchtower",
       "category": "building",
       "parameters": {
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of colonial stone watchtower hex tile, dark ashlar construction, torch burning at top parapet, arrow slits in thick walls, shadow-heavy, military and foreboding"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of a pointy-top hexagonal tile showing colonial stone watchtower hex tile, contained within a pointy-top hexagon shape, hex border clearly defined, dark ashlar construction, torch burning at top parapet, arrow slits in thick walls, shadow-heavy, military and foreboding"
       }
     },
     {
@@ -150,7 +148,7 @@
       "name": "Apothecary",
       "category": "building",
       "parameters": {
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of colonial apothecary hex tile, herb bundles hanging from low eaves, small bubbling flasks visible through wavy glass windows, purple-grey stone walls, mortar and pestle by door, dim occult warmth"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of a pointy-top hexagonal tile showing colonial apothecary hex tile, contained within a pointy-top hexagon shape, hex border clearly defined, herb bundles hanging from low eaves, small bubbling flasks visible through wavy glass windows, purple-grey stone walls, mortar and pestle by door, dim occult warmth"
       }
     },
     {
@@ -158,7 +156,7 @@
       "name": "Storehouse",
       "category": "building",
       "parameters": {
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of colonial storehouse hex tile, heavy wooden double doors padlocked shut, dusty tan stone walls, supply barrels and crates stacked outside, thick utilitarian walls"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of a pointy-top hexagonal tile showing colonial storehouse hex tile, contained within a pointy-top hexagon shape, hex border clearly defined, heavy wooden double doors padlocked shut, dusty tan stone walls, supply barrels and crates stacked outside, thick utilitarian walls"
       }
     },
     {
@@ -166,7 +164,7 @@
       "name": "Stable",
       "category": "building",
       "parameters": {
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of colonial stable hex tile, low saddle-brown timber building, straw spilling from entrance, iron hitching post, horseshoe above door, warm hay-scented glow from within, mud-churned ground outside"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, top-down view of a pointy-top hexagonal tile showing colonial stable hex tile, contained within a pointy-top hexagon shape, hex border clearly defined, low saddle-brown timber building, straw spilling from entrance, iron hitching post, horseshoe above door, warm hay-scented glow from within, mud-churned ground outside"
       }
     },
     {
@@ -176,7 +174,7 @@
       "parameters": {
         "width": 256,
         "height": 256,
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, colonial New England hero warrior viewed from above-front, rugged and weathered, layered leather and wool, battered sword at hip, resolute expression beneath wide-brimmed Puritan hat, warm lantern-gold tones, fog at boots, centred on transparent background"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, colonial New England hero warrior viewed from above-front, rugged and weathered, layered leather and wool, battered sword at hip, resolute expression beneath wide-brimmed Puritan hat, warm lantern-gold tones, fog at boots, circular portrait format with a thin decorative border, figure fills the circle, transparent background outside the circle"
       }
     },
     {
@@ -186,7 +184,7 @@
       "parameters": {
         "width": 256,
         "height": 256,
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, Salem witch viewed from above-front, dark flowing robes, silver and bone jewellery, eyes glowing faintly with unnatural light, surrounded by wisps of shadow and violet smoke, cold and commanding, centred on transparent background"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, Salem witch viewed from above-front, dark flowing robes, silver and bone jewellery, eyes glowing faintly with unnatural light, surrounded by wisps of shadow and violet smoke, cold and commanding, circular portrait format with a thin decorative border, figure fills the circle, transparent background outside the circle"
       }
     },
     {
@@ -196,7 +194,7 @@
       "parameters": {
         "width": 256,
         "height": 256,
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, colonial-era zombie viewed from above-front, tattered Puritan burial clothes, pale grey-green decomposing flesh, hollow milky eyes, earth clinging to its form as if freshly exhumed, reaching clawed hands, desaturated olive and ash tones, centred on transparent background"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, colonial-era zombie viewed from above-front, tattered Puritan burial clothes, pale grey-green decomposing flesh, hollow milky eyes, earth clinging to its form as if freshly exhumed, reaching clawed hands, desaturated olive and ash tones, circular portrait format with a thin decorative border, figure fills the circle, transparent background outside the circle"
       }
     },
     {
@@ -206,7 +204,7 @@
       "parameters": {
         "width": 256,
         "height": 256,
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, witch's bound minion viewed from above-front, hunched shadowy figure in tattered rags, face obscured beneath a hood, clutches crude iron blade, bound by dark sigil-marked ropes, unnatural posture, deep crimson and near-black shadow tones, centred on transparent background"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, witch's bound minion viewed from above-front, hunched shadowy figure in tattered rags, face obscured beneath a hood, clutches crude iron blade, bound by dark sigil-marked ropes, unnatural posture, deep crimson and near-black shadow tones, circular portrait format with a thin decorative border, figure fills the circle, transparent background outside the circle"
       }
     },
     {
@@ -216,7 +214,7 @@
       "parameters": {
         "width": 256,
         "height": 256,
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, massive wood golem viewed from above-front, constructed from twisted New England oak, bark-covered limbs, glowing amber runes carved into chest, mismatched branches forming crude fingers, moss and vines woven through joints, looming and ancient, rich saddle-brown and dark forest tones, centred on transparent background"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, massive wood golem viewed from above-front, constructed from twisted New England oak, bark-covered limbs, glowing amber runes carved into chest, mismatched branches forming crude fingers, moss and vines woven through joints, looming and ancient, rich saddle-brown and dark forest tones, circular portrait format with a thin decorative border, figure fills the circle, transparent background outside the circle"
       }
     },
     {
@@ -226,127 +224,127 @@
       "parameters": {
         "width": 256,
         "height": 256,
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, towering iron golem viewed from above-front, forged from salvaged colonial metalwork, dark corroded plates riveted together, witch's sigils branded into iron, glowing violet cracks at joints, heavy and unstoppable, cold blue-grey and rust tones with purple energy, centred on transparent background"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, towering iron golem viewed from above-front, forged from salvaged colonial metalwork, dark corroded plates riveted together, witch's sigils branded into iron, glowing violet cracks at joints, heavy and unstoppable, cold blue-grey and rust tones with purple energy, circular portrait format with a thin decorative border, figure fills the circle, transparent background outside the circle"
       }
     },
     {
       "id": "survivor_innkeeper",
-      "name": "John O'Connor — Innkeeper",
+      "name": "John O'Connor \u2014 Innkeeper",
       "category": "unit",
       "parameters": {
         "width": 256,
         "height": 256,
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, stocky colonial innkeeper viewed from above-front, heavy apron over coarse linen, sleeves rolled up revealing powerful forearms, carries a wood-splitting axe, tired but defiant expression, warm amber tones, centred on transparent background"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, stocky colonial innkeeper viewed from above-front, heavy apron over coarse linen, sleeves rolled up revealing powerful forearms, carries a wood-splitting axe, tired but defiant expression, warm amber tones, circular portrait format with a thin decorative border, figure fills the circle, transparent background outside the circle"
       }
     },
     {
       "id": "survivor_nurse",
-      "name": "Mary Quinn — Nurse",
+      "name": "Mary Quinn \u2014 Nurse",
       "category": "unit",
       "parameters": {
         "width": 256,
         "height": 256,
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, colonial nurse survivor viewed from above-front, plain grey dress and white apron stained with salve, carries a medicine satchel, calm determined eyes, healing herbs tucked into belt, muted warm tones, centred on transparent background"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, colonial nurse survivor viewed from above-front, plain grey dress and white apron stained with salve, carries a medicine satchel, calm determined eyes, healing herbs tucked into belt, muted warm tones, circular portrait format with a thin decorative border, figure fills the circle, transparent background outside the circle"
       }
     },
     {
       "id": "survivor_blacksmith",
-      "name": "Thomas Putnam — Blacksmith",
+      "name": "Thomas Putnam \u2014 Blacksmith",
       "category": "unit",
       "parameters": {
         "width": 256,
         "height": 256,
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, massive colonial blacksmith survivor viewed from above-front, soot-darkened leather apron, enormous arms, carries a war hammer, scars from forge sparks, grim and resolute, iron-brown and ember tones, centred on transparent background"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, massive colonial blacksmith survivor viewed from above-front, soot-darkened leather apron, enormous arms, carries a war hammer, scars from forge sparks, grim and resolute, iron-brown and ember tones, circular portrait format with a thin decorative border, figure fills the circle, transparent background outside the circle"
       }
     },
     {
       "id": "survivor_herbalist",
-      "name": "Abigail Foster — Herbalist",
+      "name": "Abigail Foster \u2014 Herbalist",
       "category": "unit",
       "parameters": {
         "width": 256,
         "height": 256,
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, young colonial herbalist survivor viewed from above-front, hooded cloak with dried herbs and wildflowers tied to it, wicker basket of plants, sharp intelligent eyes, muted greens and earthy tones, centred on transparent background"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, young colonial herbalist survivor viewed from above-front, hooded cloak with dried herbs and wildflowers tied to it, wicker basket of plants, sharp intelligent eyes, muted greens and earthy tones, circular portrait format with a thin decorative border, figure fills the circle, transparent background outside the circle"
       }
     },
     {
       "id": "survivor_militia",
-      "name": "Samuel Cooper — Militia Sergeant",
+      "name": "Samuel Cooper \u2014 Militia Sergeant",
       "category": "unit",
       "parameters": {
         "width": 256,
         "height": 256,
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, weathered colonial militia sergeant survivor viewed from above-front, worn buff coat and leather crossbelt, carries musket and short sword, commanding posture, battle-hardened face beneath tricorn hat, military grey and brown tones, centred on transparent background"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, weathered colonial militia sergeant survivor viewed from above-front, worn buff coat and leather crossbelt, carries musket and short sword, commanding posture, battle-hardened face beneath tricorn hat, military grey and brown tones, circular portrait format with a thin decorative border, figure fills the circle, transparent background outside the circle"
       }
     },
     {
       "id": "survivor_priest",
-      "name": "Father Crane — Parish Priest",
+      "name": "Father Crane \u2014 Parish Priest",
       "category": "unit",
       "parameters": {
         "width": 256,
         "height": 256,
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, aged Puritan parish priest survivor viewed from above-front, long black cassock, silver cross at chest, carries leather-bound Bible, iron resolve in tired eyes, candlelight halo effect, pale stone and candlegold tones, centred on transparent background"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, aged Puritan parish priest survivor viewed from above-front, long black cassock, silver cross at chest, carries leather-bound Bible, iron resolve in tired eyes, candlelight halo effect, pale stone and candlegold tones, circular portrait format with a thin decorative border, figure fills the circle, transparent background outside the circle"
       }
     },
     {
       "id": "survivor_baker",
-      "name": "Hannah Marsh — Baker",
+      "name": "Hannah Marsh \u2014 Baker",
       "category": "unit",
       "parameters": {
         "width": 256,
         "height": 256,
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, stout colonial baker survivor viewed from above-front, flour-dusted apron and rolled sleeves, carries a rolling pin repurposed as a club, cheerful but fierce expression, warm bread-gold and cream tones, centred on transparent background"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, stout colonial baker survivor viewed from above-front, flour-dusted apron and rolled sleeves, carries a rolling pin repurposed as a club, cheerful but fierce expression, warm bread-gold and cream tones, circular portrait format with a thin decorative border, figure fills the circle, transparent background outside the circle"
       }
     },
     {
       "id": "survivor_trapper",
-      "name": "Ezra Boone — Trapper",
+      "name": "Ezra Boone \u2014 Trapper",
       "category": "unit",
       "parameters": {
         "width": 256,
         "height": 256,
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, lean colonial trapper survivor viewed from above-front, fur-trimmed frontier coat, carries flintlock rifle, animal pelts at belt, sharp woodsman's eyes scanning treeline, earth and forest green tones, centred on transparent background"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, lean colonial trapper survivor viewed from above-front, fur-trimmed frontier coat, carries flintlock rifle, animal pelts at belt, sharp woodsman's eyes scanning treeline, earth and forest green tones, circular portrait format with a thin decorative border, figure fills the circle, transparent background outside the circle"
       }
     },
     {
       "id": "survivor_schoolteacher",
-      "name": "Constance Bell — Schoolteacher",
+      "name": "Constance Bell \u2014 Schoolteacher",
       "category": "unit",
       "parameters": {
         "width": 256,
         "height": 256,
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, composed colonial schoolteacher survivor viewed from above-front, modest dark dress with white collar, carries journal filled with observations, perceptive eyes behind small spectacles, ink-stained fingers, grey and off-white tones, centred on transparent background"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, composed colonial schoolteacher survivor viewed from above-front, modest dark dress with white collar, carries journal filled with observations, perceptive eyes behind small spectacles, ink-stained fingers, grey and off-white tones, circular portrait format with a thin decorative border, figure fills the circle, transparent background outside the circle"
       }
     },
     {
       "id": "survivor_gravedigger",
-      "name": "Isaac Graves — Gravedigger",
+      "name": "Isaac Graves \u2014 Gravedigger",
       "category": "unit",
       "parameters": {
         "width": 256,
         "height": 256,
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, gaunt colonial gravedigger survivor viewed from above-front, mud-caked boots and worn overcoat, carries long-handled shovel, hollow eyes that have seen too much death, unafraid and stoic, dark moss green and grey tones, centred on transparent background"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, gaunt colonial gravedigger survivor viewed from above-front, mud-caked boots and worn overcoat, carries long-handled shovel, hollow eyes that have seen too much death, unafraid and stoic, dark moss green and grey tones, circular portrait format with a thin decorative border, figure fills the circle, transparent background outside the circle"
       }
     },
     {
       "id": "survivor_midwife",
-      "name": "Patience Cole — Midwife",
+      "name": "Patience Cole \u2014 Midwife",
       "category": "unit",
       "parameters": {
         "width": 256,
         "height": 256,
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, capable colonial midwife survivor viewed from above-front, simple linen dress and cloak, carries satchel of medical supplies and salves, warm steady hands, calm authority in expression, muted earth and linen tones, centred on transparent background"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, capable colonial midwife survivor viewed from above-front, simple linen dress and cloak, carries satchel of medical supplies and salves, warm steady hands, calm authority in expression, muted earth and linen tones, circular portrait format with a thin decorative border, figure fills the circle, transparent background outside the circle"
       }
     },
     {
       "id": "survivor_farmhand",
-      "name": "Silas Holt — Farmhand",
+      "name": "Silas Holt \u2014 Farmhand",
       "category": "unit",
       "parameters": {
         "width": 256,
         "height": 256,
-        "prompt": "In the style of Jakub Rozalski — oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, young colonial farmhand survivor viewed from above-front, rough spun shirt and suspenders, carries pitchfork, youthful face set with righteous anger, broad shoulders from hard labour, straw-gold and earth tones, centred on transparent background"
+        "prompt": "In the style of Jakub Rozalski \u2014 oil painting aesthetic, rich earthy tones, dramatic chiaroscuro lighting, dark atmospheric mood, highly detailed painterly brushwork, folk horror sensibility, 17th-century colonial New England setting, muted palette of deep greens, ash greys, burnt umbers, and candlelight golds, ominous yet beautiful, fog and shadow, young colonial farmhand survivor viewed from above-front, rough spun shirt and suspenders, carries pitchfork, youthful face set with righteous anger, broad shoulders from hard labour, straw-gold and earth tones, circular portrait format with a thin decorative border, figure fills the circle, transparent background outside the circle"
       }
     }
   ]
