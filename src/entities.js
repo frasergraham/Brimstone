@@ -26,19 +26,20 @@ export const SurvivorAbility = Object.freeze({
 });
 
 // One distinct colour per roster slot — used for unit circles and plan arrows.
+// Friendly palette: greens, blues and yellows so survivors read as civilian/ally.
 const SURVIVOR_COLORS = [
-  '#e67e22',  // orange
-  '#1abc9c',  // teal
-  '#e74c3c',  // crimson
-  '#3498db',  // blue
-  '#f39c12',  // amber
-  '#a29bfe',  // lavender
-  '#00b894',  // mint
-  '#fd79a8',  // pink
-  '#74b9ff',  // sky blue
-  '#d63031',  // red
-  '#00cec9',  // cyan
-  '#e17055',  // salmon
+  '#5dbd72',  // forest green
+  '#4ab5d4',  // sky blue
+  '#d4c44a',  // wheat yellow
+  '#3ec98c',  // jade green
+  '#5fa8e8',  // cornflower blue
+  '#e8d454',  // sunflower yellow
+  '#7dd65e',  // lime green
+  '#3eb8c8',  // teal
+  '#c8d440',  // yellow-green
+  '#68c4e0',  // light blue
+  '#4cba5a',  // vivid green
+  '#f0e060',  // bright yellow
 ];
 
 // Named character pool — one is drawn at random when a survivor is discovered
@@ -176,7 +177,7 @@ export const WITCH_PLAYER_COLORS = ['#9b59b6', '#d980fa', '#6c3483', '#e040a0'];
 // individual unit gets a distinct arrow/circle colour on the plan overlay.
 const WITCH_UNIT_COLORS = {
   [EntityType.ZOMBIE]: [
-    '#7c9a57', '#5c8a3c', '#91b268', '#4a7030', '#a8c97a', '#3d5c28',
+    '#3a6b2a', '#2e5520', '#4a7a35', '#1f4418', '#527a3d', '#264d1a',
   ],
   [EntityType.MINION]: [
     '#c0392b', '#e74c3c', '#962419', '#ff6b5b', '#a93226', '#d45040',

@@ -639,11 +639,12 @@ export class Renderer {
       if (e.owner === 'witch' && humanIsHero  && revealedHexes && !revealedHexes.has(k)) continue;
 
       if (!hexColors.has(k)) {
-        // Entity's own colour wins (survivor roster colours, minion type colours,
-        // player colours on leaders). Only fall back to the owning player's colour
-        // for entities that have no colour of their own, then the type default.
+        // Hex outline always shows the owning player's colour — so every unit on
+        // a hex reads as belonging to that player regardless of unit type.
+        // In offline mode ownerId is null and playerColor falls back to entity.color
+        // (which IS the player colour on leaders, or the type palette on followers).
         const playerColor = e.ownerId ? this._playerColorMap.get(e.ownerId) : null;
-        hexColors.set(k, e.color ?? playerColor ?? ENTITY_COLOR[e.type] ?? '#ffffff');
+        hexColors.set(k, playerColor ?? e.color ?? ENTITY_COLOR[e.type] ?? '#ffffff');
       }
     }
 
