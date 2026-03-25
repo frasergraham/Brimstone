@@ -1189,11 +1189,13 @@ export class UIController {
     // Render always-visible cycle bar (compact icon row)
     const cycleBar = document.getElementById('cycle-bar');
     if (cycleBar) {
-      cycleBar.innerHTML = CYCLE_STEPS.map((step, i) => {
+      const stepsHtml = CYCLE_STEPS.map((step, i) => {
         const active = i === roundInCycle;
         return `<div class="cycle-step phase-${step.phase} ${active ? 'cycle-active' : 'cycle-dim'}"
                      title="${step.desc}">${step.icon}${active ? `<span class="cycle-name">${step.label}</span>` : ''}</div>`;
       }).join('');
+      // Preserve #node-status-bar (mobile node/score display) — re-inject after steps
+      cycleBar.innerHTML = stepsHtml + `<div id="node-status-bar"></div>`;
     }
 
     // During planning phase, show planning info
