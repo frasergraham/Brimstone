@@ -2178,6 +2178,19 @@ export class UIController {
     // Show full log — entries are added throughout the game so nothing is lost.
     el.innerHTML = this.state.log.map(m => `<div class="log-entry">${m}</div>`).join('');
     el.scrollTop = el.scrollHeight;
+
+    // Update mini chronicle overlay (last 5 messages)
+    this._renderMiniChronicle();
+  }
+
+  _renderMiniChronicle() {
+    const el = document.getElementById('chronicle-mini');
+    if (!el) return;
+    const log = this.state?.log ?? [];
+    const last5 = log.slice(-5);
+    el.innerHTML = last5
+      .map(m => `<div class="mini-log-entry">${m}</div>`)
+      .join('');
   }
 
   refresh() {
