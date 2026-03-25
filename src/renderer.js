@@ -69,44 +69,69 @@ export class Renderer {
     // Smooth zoom/pan animation: null when idle
     this._zoomAnim = null; // {startZoom,targetZoom,startPanX,targetPanX,startPanY,targetPanY,startTime,duration}
 
-    // Loaded tile/building/unit images — populated by loadImages()
-    this._images = new Map(); // asset id → HTMLImageElement
+    // Tilemap sprite sheet — populated by loadImages()
+    this._tilemapImg   = null;   // HTMLImageElement for assets/tilemap.png
+    this._spriteRects  = null;   // Map<id, {x,y,size}> — source rect in the tilemap
 
     this._resize();
   }
 
   /**
-   * Load tile, building, and unit images from the generated assets directory.
-   * Missing images are silently skipped so the game works without any assets.
-   * Call once after constructing the renderer; resolves when all loads settle.
+   * Build a map of asset-id → source rect within assets/tilemap.png.
+   * The layout mirrors the stitchTilemap() function in scripts/generate-assets.js:
+   *   CELL=256, GAP=6, COLS=7, LABEL_H=30, groups: Tiles → Buildings → Units
    */
-  async loadImages(basePath = 'assets/generated') {
-    const ids = [
-      // Terrain tiles
-      'grass', 'forest', 'dirt', 'road', 'river', 'bridge',
-      // Buildings (ids match BuildingType values exactly)
-      'town_hall', 'church', 'inn', 'blacksmith', 'graveyard', 'mill',
-      'dock', 'house', 'barn', 'watchtower', 'apothecary', 'storehouse', 'stable',
-      // Units
-      'hero', 'witch', 'zombie', 'minion', 'wood_golem', 'iron_golem',
-      // Survivor portraits (keyed by title)
-      'survivor_innkeeper', 'survivor_nurse', 'survivor_blacksmith',
-      'survivor_herbalist', 'survivor_militia', 'survivor_priest',
-      'survivor_baker', 'survivor_trapper', 'survivor_schoolteacher',
-      'survivor_gravedigger', 'survivor_midwife', 'survivor_farmhand',
+  static _buildSpriteRects() {
+    const CELL = 256, GAP = 6, COLS = 7, LABEL_H = 30;
+    const groups = [
+      ['grass','forest','dirt','road','river','bridge'],
+      ['town_hall','church','inn','blacksmith','graveyard','mill',
+       'dock','house','barn','watchtower','apothecary','storehouse','stable'],
+      ['hero','witch','zombie','minion','wood_golem','iron_golem',
+       'survivor_innkeeper','survivor_nurse','survivor_blacksmith',
+       'survivor_herbalist','survivor_militia','survivor_priest',
+       'survivor_baker','survivor_trapper','survivor_schoolteacher',
+       'survivor_gravedigger','survivor_midwife','survivor_farmhand'],
     ];
 
-    await Promise.all(ids.map(id => new Promise(resolve => {
-      const img = new Image();
-      img.onload  = () => { this._images.set(id, img); resolve(); };
-      img.onerror = () => resolve(); // missing = silently skip, use colour fallback
-      img.src = `${basePath}/${id}.png`;
-    })));
+    const rects = new Map();
+    let y = GAP;
 
-    this.draw(); // repaint once all images have settled
+    for (const ids of groups) {
+      y += LABEL_H + GAP; // skip the category label row
+      for (let i = 0; i < ids.length; i++) {
+        const col  = i % COLS;
+        const row  = Math.floor(i / COLS);
+        const sx   = GAP + col * (CELL + GAP);
+        const sy   = y   + row * (CELL + GAP);
+        rects.set(ids[i], { x: sx, y: sy, size: CELL });
+      }
+      y += Math.ceil(ids.length / COLS) * (CELL + GAP);
+    }
+
+    return rects;
   }
 
-  /** Map a survivor entity's title to its portrait asset id. */
+  /**
+   * Load assets/tilemap.png and compute per-sprite source rects.
+   * Falls back gracefully (colour fills) when the file is absent.
+   */
+  async loadImages(basePath = 'assets') {
+    const img = new Image();
+    await new Promise(resolve => {
+      img.onload  = resolve;
+      img.onerror = resolve; // absent tilemap → silent fallback
+      img.src = `${basePath}/tilemap.png`;
+    });
+
+    if (!img.naturalWidth) return; // failed to load — keep colour fallbacks
+
+    this._tilemapImg  = img;
+    this._spriteRects = Renderer._buildSpriteRects();
+    this.draw();
+  }
+
+  /** Map a survivor entity's title to its sprite asset id. */
   static _survivorAssetId(title) {
     const MAP = {
       'Innkeeper':        'survivor_innkeeper',
@@ -589,21 +614,23 @@ export class Renderer {
     ctx.fillStyle = color;
     ctx.fill();
 
-    // ── Tile / building image ──────────────────────────────────────────────
+    // ── Tile / building image from sprite sheet ────────────────────────────
     // For road/river the image sits under the bezier overlay layers drawn later.
     const imgKey = tile.type === TileType.BUILDING
-      ? tile.building          // e.g. 'inn', 'church'
-      : tile.type;             // e.g. 'grass', 'forest', 'road', 'river'
+      ? tile.building   // e.g. 'inn', 'church'
+      : tile.type;      // e.g. 'grass', 'forest', 'road', 'river'
 
-    const tileImg = this._images.get(imgKey);
-    if (tileImg) {
+    const rect = this._spriteRects?.get(imgKey);
+    if (rect && this._tilemapImg) {
       ctx.save();
       ctx.beginPath();
       ctx.moveTo(corners[0].x, corners[0].y);
       for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
       ctx.closePath();
       ctx.clip();
-      ctx.drawImage(tileImg, x - hs, y - hs, hs * 2, hs * 2);
+      ctx.drawImage(this._tilemapImg,
+        rect.x, rect.y, rect.size, rect.size,   // source rect in tilemap
+        x - hs, y - hs, hs * 2, hs * 2);        // destination on canvas
       ctx.restore();
     }
 
@@ -637,7 +664,7 @@ export class Renderer {
 
     // ── Building: icon + name ─────────────────────────────────────────────
     if (tile.type === TileType.BUILDING && tile.building) {
-      const hasBuildingImg = this._images.has(tile.building);
+      const hasBuildingImg = !!this._spriteRects?.has(tile.building) && !!this._tilemapImg;
 
       // Show emoji icon only when there is no image (image provides the visual)
       if (!hasBuildingImg) {
@@ -1011,18 +1038,21 @@ export class Renderer {
       ctx.fillStyle = entity.color ?? ENTITY_COLOR[entity.type];
       ctx.fill();
 
-      // ── Portrait image ─────────────────────────────────────────────────
+      // ── Portrait image from sprite sheet ───────────────────────────────
       const portraitKey = entity.type === EntityType.SURVIVOR
         ? Renderer._survivorAssetId(entity.title)
         : entity.type; // 'hero', 'witch', 'zombie', etc.
 
-      const portrait = portraitKey ? this._images.get(portraitKey) : null;
+      const pRect = portraitKey ? this._spriteRects?.get(portraitKey) : null;
+      const portrait = pRect && this._tilemapImg;
       if (portrait) {
         ctx.save();
         ctx.beginPath();
         ctx.arc(ex, ey, r, 0, Math.PI * 2);
         ctx.clip();
-        ctx.drawImage(portrait, ex - r, ey - r, r * 2, r * 2);
+        ctx.drawImage(this._tilemapImg,
+          pRect.x, pRect.y, pRect.size, pRect.size,
+          ex - r, ey - r, r * 2, r * 2);
         ctx.restore();
       }
 
