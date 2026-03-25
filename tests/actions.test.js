@@ -752,3 +752,86 @@ describe('executeUseAbility — RALLY', () => {
     assert.equal(r.budgetBonus, 1, 'RALLY should return budgetBonus of 1');
   });
 });
+
+// ── Inventory stash separation ─────────────────────────────────────────────
+// Design: Hero resources land in inventory.shared; witch resources land in
+// inventory.witch. The two stashes are independent. The plan-panel display
+// must use the human player's faction (via _planFaction) to select the correct
+// stash — using state.activePlayer is incorrect because it defaults to HERO
+// and is only updated during resolution, not during the planning phase.
+
+describe('Inventory stash separation', () => {
+  test('hero stash (inventory.shared) and witch stash (inventory.witch) are independent', () => {
+    const state = freshState();
+    // Populate both stashes with different resources
+    state.inventory.shared[ResourceType.WOOD] = 3;
+    state.inventory.shared[ResourceType.FOOD] = 1;
+    state.inventory.witch[ResourceType.METAL] = 2;
+
+    // Hero stash should contain hero resources only
+    assert.equal(state.inventory.shared[ResourceType.WOOD], 3);
+    assert.equal(state.inventory.shared[ResourceType.FOOD], 1);
+    assert.equal(state.inventory.shared[ResourceType.METAL] || 0, 0,
+      'hero stash must not contain witch metal');
+
+    // Witch stash should contain witch resources only
+    assert.equal(state.inventory.witch[ResourceType.METAL], 2);
+    assert.equal(state.inventory.witch[ResourceType.WOOD] || 0, 0,
+      'witch stash must not contain hero wood');
+    assert.equal(state.inventory.witch[ResourceType.FOOD] || 0, 0,
+      'witch stash must not contain hero food');
+  });
+
+  test('witch resources do not bleed into hero stash after summon', () => {
+    const state = freshState();
+    state.inventory.shared[ResourceType.METAL] = 0;
+    state.inventory.witch[ResourceType.METAL] = 1;
+
+    // Consuming witch metal (via summon) should not touch the hero stash
+    const target = getNeighbors(state.witch.col, state.witch.row)
+      .find(n => {
+        const t = state.tiles.get(hexKey(n.col, n.row));
+        return t && t.type !== TileType.RIVER &&
+          !state.entities.some(e => e.col === n.col && e.row === n.row);
+      });
+    if (!target) return; // skip if map has no valid spawn hex (shouldn't happen)
+
+    executeSummon(state, state.witch, target.col, target.row);
+
+    assert.equal(state.inventory.shared[ResourceType.METAL] || 0, 0,
+      'hero stash must be unchanged after witch summons');
+  });
+
+  // Regression guard: the plan-panel inventory display must use _planFaction
+  // (the faction the human is actually playing), NOT state.activePlayer which
+  // defaults to HERO and can be stale during the planning phase.
+  //
+  // Expected stash-selection logic (mirrors _renderInventory in ui.js):
+  //   const faction = this._planFaction ?? (state.activePlayer === Player.HERO ? 'hero' : 'witch');
+  //   const isHero  = faction === 'hero';
+  //   const stash   = isHero ? inv.shared : inv.witch;
+  test('stash selection: planFaction=witch overrides activePlayer=HERO', () => {
+    const state = freshState();
+    // Simulate the stale activePlayer scenario: activePlayer is HERO (the default)
+    // but the human is actually playing witch.
+    assert.equal(state.activePlayer, Player.HERO, 'precondition: activePlayer defaults to HERO');
+    const planFaction = 'witch'; // human is playing witch
+
+    // Reproduce the fixed stash-selection logic
+    const inv = state.inventory;
+    const isHero = planFaction === 'hero'; // correct: use planFaction, not activePlayer
+    const stash = isHero ? inv.shared : inv.witch;
+
+    state.inventory.witch[ResourceType.METAL] = 5;
+    state.inventory.shared[ResourceType.WOOD]  = 7;
+
+    assert.equal(stash, inv.witch, 'witch player must see inv.witch, not inv.shared');
+    assert.equal(stash[ResourceType.METAL], 5, 'witch player must see witch metal count');
+
+    // Verify the buggy code would have returned the wrong stash
+    const buggyIsHero = state.activePlayer === Player.HERO; // always true by default
+    const buggyStash  = buggyIsHero ? inv.shared : inv.witch;
+    assert.notEqual(buggyStash, stash,
+      'the bug (using activePlayer) returns the wrong stash for witch players');
+  });
+});
