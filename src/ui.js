@@ -1596,9 +1596,9 @@ export class UIController {
     `;
     document.getElementById('game-screen')?.appendChild(toast);
 
-    // Auto-dismiss after 3s
-    setTimeout(() => toast.classList.add('phase-toast-hide'), 2800);
-    setTimeout(() => toast.remove(), 3300);
+    // Auto-dismiss after 4.5s
+    setTimeout(() => toast.classList.add('phase-toast-hide'), 4500);
+    setTimeout(() => toast.remove(), 5000);
   }
 
   // ── Scoring toast (dawn / dusk checkpoints) ──────────────────────────────
@@ -1651,8 +1651,8 @@ export class UIController {
     `;
     document.getElementById('game-screen')?.appendChild(toast);
 
-    setTimeout(() => toast.classList.add('phase-toast-hide'), 3800);
-    setTimeout(() => toast.remove(), 4300);
+    setTimeout(() => toast.classList.add('phase-toast-hide'), 5500);
+    setTimeout(() => toast.remove(), 6000);
   }
 
   // ── Dialogs ───────────────────────────────────────────────────────────────
