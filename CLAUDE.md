@@ -534,3 +534,84 @@ All hex math (distance, range, neighbors) converts to/from **axial** internally.
 ## CSS Conventions
 
 All palette colors defined as CSS custom properties on `:root`: `--bg`, `--hero`, `--witch`, `--day`, `--night`, etc. Dark gothic theme: deep purples, aged golds, desaturated greens. Canvas colors in `tiles.js`/`entities.js` mirror these variables manually.
+
+---
+
+## UI Terminology
+
+Use these names consistently when discussing or modifying UI components.
+
+### Screens (full-page views)
+
+| Name | ID | Description |
+|---|---|---|
+| **Setup Screen** | `#setup-screen` | Root wrapper hosting all pre-game views |
+| **Mode Card** | `#setup-step-mode` | Opening "BRIMSTONE" welcome card — New Game / How to Play / Options |
+| **New Game Card** | `#setup-step-newgame` | Map size, fog, local/online, faction selection |
+| **How to Play Card** | `#setup-step-howtoplay` | Rules reference |
+| **Options Card** | `#setup-step-options` | Settings (currently placeholder) |
+| **Waiting Card** | `#setup-step-waiting` | Online matchmaking spinner |
+| **Game Over Screen** | `#game-over` | End-game result with Play Again / View Map |
+
+### Persistent Game HUD
+
+| Name | ID | Description |
+|---|---|---|
+| **Game Header** | `#game-header` | Top bar — title, turn info, action buttons |
+| **Turn Info** | `#turn-info` | Round number, phase name, faction, actions remaining |
+| **Node Status** | `#node-status` | Three node dots + score pips |
+| **Cycle Bar** | `#cycle-bar` | 8-step day/night cycle indicator beneath the header |
+| **Mini Chronicle** | `#chronicle-mini` | Fading last-5-log overlay, top-left of canvas |
+| **Zoom Controls** | `#zoom-controls` | ＋ / − / fit / focus / speed buttons, bottom-right of canvas |
+| **Unit Stats Bar** | `#unit-stats-bar` | Selected unit's HP bar and stats, shown above canvas during planning |
+
+### Plan Panel (right side, planning phase)
+
+| Name | ID | Description |
+|---|---|---|
+| **Plan Panel** | `#plan-panel` | Collapsible right-side panel showing queued actions |
+| **Plan Tab** | `#plan-tab` | Left-edge protrusion with step-count badge; click to expand collapsed panel |
+| **Plan Steps List** | `#plan-steps` | Ordered list of queued `PlanAction` rows |
+| **Budget Badge** | `#plan-budget-badge` | Actions-remaining counter in the panel header |
+| **Food Row** | `#plan-food-row` | Food-slot toggles for buying extra actions |
+| **Plan Status** | `#plan-status` | Inline error / confirmation text |
+| **Plan Players** | `#plan-players` | Per-player ready/waiting rows (online only) |
+| **Countdown** | `#plan-countdown` | Auto-submit timer shown when nearing timeout |
+
+### Overlays (full-canvas-dimming panels, manually dismissed)
+
+| Name | ID | Description |
+|---|---|---|
+| **Chronicle Overlay** | `#chronicle-overlay` | Full game log; opened by the 📜 header button |
+| **Inventory Overlay** | `#inventory-overlay` | Supplies/resources panel; opened by the 🎒 header button |
+| **Tile Detail Overlay** | `#tile-zoom-overlay` | Click-a-hex detail view with SVG hex, terrain info, and unit cards |
+
+### Popups & Dialogs (smaller, focused interactions)
+
+| Name | ID | Description |
+|---|---|---|
+| **Action Popup** | `#action-popup` | Context menu of valid actions for a selected unit, floats near clicked hex |
+| **Cancel Bar** | `#cancel-wrap` | Floating pill with targeting hint + Cancel button, shown during battle/summon targeting |
+| **Battle Dialog** | `#battle-dialog` | Animated dice roll, combatant panels, and outcome for a single combat |
+| **Encounter Dialog** | `#encounter-dialog` | Shown when a survivor or zombie is discovered |
+| **Result Dialog** | `#result-dialog` | Generic outcome card (explore loot, no-actions, ability results); also reused as the **Defender Picker** when multiple targets occupy a hex |
+
+### Toasts & Notifications (auto-dismissed)
+
+| Name | Class | Description |
+|---|---|---|
+| **Phase Toast** | `.phase-toast` | Phase-change announcement (🌅 Dawn / ☀ Day / 🌇 Dusk / 🌙 Night) with effect summary |
+| **Score Toast** | `.score-toast` | Node-scoring result at dawn/dusk checkpoints |
+| **Battle Toast** | `.battle-toast` | Quick floating battle result (hit / crush / kill); stacks in `#battle-toast-container` |
+
+### Key distinctions
+
+- **Overlay** — dims/covers the canvas; three exist: Chronicle, Inventory, Tile Detail.
+- **Dialog** — focused card requiring interaction (click to dismiss or choose). Includes Battle Dialog, Encounter Dialog, Result Dialog.
+- **Popup** — small context menu floating near a hex. Only one: the Action Popup.
+- **Toast** — auto-dismissed floating notification. Three types: Phase, Score, Battle.
+- **Plan Panel** vs **Plan Tab** — the panel is the full right-side container; the tab is the collapsed left-edge protrusion only.
+- **Cycle Bar** — the 8-segment phase indicator below the header (not "turn bar" or "phase bar").
+- **Node Status** — the node dots + score pip display in the header (not "score bar" or "objective tracker").
+- **Unit Stats Bar** — the selected-unit HP/stats strip above the canvas (not "entity panel" or "unit panel").
+- **Cancel Bar** — the targeting pill during battle/summon mode (not "cancel button" or "cancel popup").
