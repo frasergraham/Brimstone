@@ -302,12 +302,27 @@ export function executeMove(state, actor, targetCol, targetRow) {
       const s = createSurvivor(targetCol, targetRow, actor.ownerId);
       s.owner = 'hero';
       state.entities.push(s);
-      encounterLog.push(`A survivor steps out of hiding — ${s.name}, the ${s.title}! They join the party.`);
-      encounterSurvivor = { name: s.name, title: s.title };
+      const abilityNote = s.abilityLabel ? ` · ${s.abilityLabel}` : '';
+      encounterLog.push(`☺ ${s.name} the ${s.title} steps out of hiding and joins the party! (HP ${s.hp}/${s.maxHp} · ATK ${s.attack} · DEF ${s.defense}${abilityNote})`);
+      encounterSurvivor = {
+        type: 'survivor',
+        name: s.name, title: s.title,
+        hp: s.hp, maxHp: s.maxHp,
+        attack: s.attack, defense: s.defense,
+        abilityLabel: s.abilityLabel,
+        color: s.color,
+      };
     } else {
       const z = createZombie(targetCol, targetRow, actor.ownerId);
       state.entities.push(z);
-      encounterLog.push(`A cowering survivor is found… raised as a zombie by the witch!`);
+      encounterLog.push(`† A cowering survivor is found… raised as a zombie! (HP ${z.hp}/${z.maxHp} · ATK ${z.attack} · DEF ${z.defense})`);
+      encounterSurvivor = {
+        type: 'zombie',
+        name: 'Zombie',
+        hp: z.hp, maxHp: z.maxHp,
+        attack: z.attack, defense: z.defense,
+        color: z.color,
+      };
     }
     log.push(...encounterLog);
   }
@@ -317,8 +332,9 @@ export function executeMove(state, actor, targetCol, targetRow) {
 
 export function executeExplore(state, actor) {
   const log = [];
+  const lootItems = [];
   const t = tile(state, actor.col, actor.row);
-  if (t.explored) return { success: false, log: ['Already explored.'] };
+  if (t.explored) return { success: false, log: ['Already explored.'], lootItems };
 
   t.explored = true;
 
@@ -327,23 +343,24 @@ export function executeExplore(state, actor) {
     actor.ability === SurvivorAbility.HERBALIST;
 
   if (t.type === TileType.BUILDING && t.building && BUILDING_LOOT[t.building]) {
-    _applyLoot(state, actor, rollLoot(BUILDING_LOOT[t.building]), log);
-    _applyLoot(state, actor, rollLoot(BUILDING_LOOT[t.building]), log);
+    _applyLoot(state, actor, rollLoot(BUILDING_LOOT[t.building]), log, lootItems);
+    _applyLoot(state, actor, rollLoot(BUILDING_LOOT[t.building]), log, lootItems);
   } else {
     const terrainTable = TERRAIN_LOOT[t.type] || TERRAIN_LOOT['grass'];
-    _applyLoot(state, actor, rollLoot(terrainTable), log);
-    _applyLoot(state, actor, rollLoot(terrainTable), log);
+    _applyLoot(state, actor, rollLoot(terrainTable), log, lootItems);
+    _applyLoot(state, actor, rollLoot(terrainTable), log, lootItems);
   }
 
   if (isHerbalist && actor.owner === 'hero') {
     actor.items[ResourceType.HERBS] = (actor.items[ResourceType.HERBS] || 0) + 1;
     log.push(`${actor.displayName}'s keen eye also finds Herbs!`);
+    lootItems.push('+Herbs');
   }
 
-  return { success: true, log, cost: 1 };
+  return { success: true, log, cost: 1, lootItems };
 }
 
-function _applyLoot(state, actor, lootType, log) {
+function _applyLoot(state, actor, lootType, log, lootItems) {
   if (lootType === 'nothing') {
     log.push(`${actor.displayName} searches carefully… nothing useful found.`);
     return;
@@ -353,6 +370,7 @@ function _applyLoot(state, actor, lootType, log) {
     if (actor.owner === 'hero') {
       actor.items['horse'] = 1;
       log.push(`Found a horse! ${actor.displayName}'s movement range increases to 2.`);
+      lootItems?.push('+Horse');
     }
     return;
   }
@@ -361,7 +379,9 @@ function _applyLoot(state, actor, lootType, log) {
     if (actor.owner === 'hero') {
       actor.items[lootType] = (actor.items[lootType] || 0) + 1;
       const weaponKey = lootType.replace('weapon:', '');
-      log.push(`Found a ${WEAPON_LABEL[weaponKey] || weaponKey}! Added to ${actor.displayName}'s pack.`);
+      const label = WEAPON_LABEL[weaponKey] || weaponKey;
+      log.push(`Found a ${label}! Added to ${actor.displayName}'s pack.`);
+      lootItems?.push(`+${label}`);
     } else {
       log.push(`The witch finds a weapon but has no use for it.`);
     }
@@ -373,17 +393,21 @@ function _applyLoot(state, actor, lootType, log) {
     if (actor.owner === 'hero') {
       actor.items[lootType] = (actor.items[lootType] || 0) + 1;
       log.push(`Found Herbs! Added to ${actor.displayName}'s pack.`);
+      lootItems?.push('+Herbs');
     }
     return;
   }
 
   // All other resources are shared
+  const resLabel = lootType.charAt(0).toUpperCase() + lootType.slice(1);
   if (actor.owner === 'hero') {
     state.inventory.shared[lootType] = (state.inventory.shared[lootType] || 0) + 1;
     log.push(`Found ${lootType}! Added to shared supplies.`);
+    lootItems?.push(`+${resLabel}`);
   } else {
     state.inventory.witch[lootType] = (state.inventory.witch[lootType] || 0) + 1;
     log.push(`The witch secures ${lootType} for dark rituals.`);
+    lootItems?.push(`+${resLabel}`);
   }
 }
 

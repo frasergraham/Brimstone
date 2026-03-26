@@ -276,7 +276,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
       if ((!humanFaction || ev.faction === humanFaction) && result?.encounterLog?.length) {
         if (!myPlayerId || preSnap?.ownerId === myPlayerId) {
-          pendingDialogs.push(result.encounterLog);
+          pendingDialogs.push({ log: result.encounterLog, encounterUnit: result.encounterSurvivor ?? null });
         }
       }
     }
@@ -287,9 +287,13 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     redrawFn();
 
     if (!_autoplay && hadMove) await _delay(520); // slightly longer than anim duration (480ms)
-    for (const log of pendingDialogs) {
+    for (const entry of pendingDialogs) {
       redrawFn();
-      await new Promise(resolve => ui._showResultDialog(log, resolve));
+      if (entry.encounterUnit) {
+        await new Promise(resolve => ui._showEncounterDialog(entry.encounterUnit, resolve));
+      } else {
+        await new Promise(resolve => ui._showResultDialog(entry.log, resolve));
+      }
     }
 
     // ── Phase 2: battles and summons ──────────────────────────────────────────
@@ -351,9 +355,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (humanFaction && ev.faction !== humanFaction) continue;
       const actor = step.entitySnapshot?.find(e => e.id === action.entityId);
       if (myPlayerId && actor?.ownerId !== myPlayerId) continue;
+      if (actor) ui._showLootFlashes(actor, result.lootItems ?? []);
       redrawFn();
-      await new Promise(resolve => ui._showResultDialog(result.log, resolve));
-      hadBattle = true;
     }
 
     if (hadMove || hadBattle) {
