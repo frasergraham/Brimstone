@@ -41,6 +41,7 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
   heroAI  = heroIsAI  ? new HeroAI(state, redraw, thinkDelay)  : null;
 
   ui = new UIController(canvas, state, renderer, witchAI, redraw, heroAI, autoplay);
+  ui.onQuitToMenu = () => location.reload();
 
   const battleCallback = (actorSnap, targetSnap, result) =>
     new Promise(resolve => ui._showBattleDialog(actorSnap, targetSnap, result, resolve));

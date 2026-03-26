@@ -165,6 +165,23 @@ export class UIController {
       this._isDragging = false;
     }, { passive: false });
 
+    // In-game menu
+    document.getElementById('menu-btn')?.addEventListener('click', () => {
+      const popup = document.getElementById('game-menu-popup');
+      if (popup) popup.style.display = popup.style.display === 'none' ? 'block' : 'none';
+    });
+    document.getElementById('menu-quit-btn')?.addEventListener('click', () => {
+      const popup = document.getElementById('game-menu-popup');
+      if (popup) popup.style.display = 'none';
+      this.onQuitToMenu?.();
+    });
+    document.addEventListener('click', e => {
+      const popup = document.getElementById('game-menu-popup');
+      if (!popup || popup.style.display === 'none') return;
+      const btn = document.getElementById('menu-btn');
+      if (!popup.contains(e.target) && e.target !== btn) popup.style.display = 'none';
+    });
+
     // Chronicle overlay toggle
     document.getElementById('chronicle-btn')?.addEventListener('click', () => this._toggleChronicle());
     document.getElementById('chronicle-close')?.addEventListener('click', () => this._toggleChronicle());
