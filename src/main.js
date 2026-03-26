@@ -355,9 +355,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (humanFaction && ev.faction !== humanFaction) continue;
       const actor = step.entitySnapshot?.find(e => e.id === action.entityId);
       if (myPlayerId && actor?.ownerId !== myPlayerId) continue;
+      if (actor) ui._showLootFlashes(actor, result.lootItems ?? []);
       redrawFn();
-      await new Promise(resolve => ui._showResultDialog(result.log, resolve));
-      hadBattle = true;
     }
 
     if (hadMove || hadBattle) {
