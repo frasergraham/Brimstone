@@ -1302,6 +1302,15 @@ export class UIController {
       return;
     }
 
+    // During resolution, show neutral resolution label
+    if (state.resolving) {
+      el.innerHTML = `
+        <div class="turn-line">Round ${state.round}</div>
+        <div class="turn-line">⚙ Resolution Phase</div>
+      `;
+      return;
+    }
+
     const player = state.activePlayer === 'hero' ? 'Hero' : 'Witch';
     const isAI   = (state.activePlayer === 'witch' && state.witchIsAI) ||
                    (state.activePlayer === 'hero'  && state.heroIsAI);
@@ -1636,7 +1645,7 @@ export class UIController {
 
   // ── Speed popup ───────────────────────────────────────────────────────────
 
-  static SPEED_LABELS = { full: 'Full', basic: 'Basic', cinematic: 'Cinematic', fast: 'Fast', instant: 'Instant' };
+  static SPEED_LABELS = { cinematic: 'Cinematic', fast: 'Fast', instant: 'Instant' };
 
   _toggleSpeedPopup() {
     const popup = document.getElementById('speed-popup');
@@ -1734,6 +1743,9 @@ export class UIController {
   // ── Phase toast ──────────────────────────────────────────────────────────
 
   _showPhaseModal(faction, budget) {
+    // Instant mode skips all popups
+    if (this.speedMode === 'instant') return;
+
     const phase = this.state.phase;
     const PHASE_INFO = {
       dawn:  { icon: '🌅', label: 'Dawn',  lines: ['Hero gains +1 action · Attrition rises', 'Power Nodes scored · Tiles reset'] },
@@ -1747,6 +1759,28 @@ export class UIController {
     const el = document.getElementById('phase-modal');
     if (!el) return;
 
+    // Compute action breakdown for display
+    const actions  = budget ?? (faction === 'hero' ? this.state.heroActionsLeft : this.state.witchActionsLeft) ?? 0;
+    const entities = this.state.entities;
+    let breakdown  = '';
+    if (faction === 'hero') {
+      const timeBonus     = (phase === 'day' || phase === 'dawn') ? 1 : 0;
+      const survivorCount = entities.filter(e => e.alive && e.owner === 'hero' && e.type !== 'hero').length;
+      const survivorBonus = Math.min(survivorCount, 5);
+      const parts = ['3 base'];
+      if (timeBonus)     parts.push(`+1 ${phase}`);
+      if (survivorBonus) parts.push(`+${survivorBonus} survivor${survivorBonus !== 1 ? 's' : ''}`);
+      breakdown = parts.join(' · ');
+    } else {
+      const timeBonus = phase === 'night' ? 1 : 0;
+      const unitCount = entities.filter(e => e.alive && e.owner === 'witch' && e.type !== 'witch').length;
+      const unitBonus = Math.min(Math.floor(unitCount / 2), 4);
+      const parts = ['4 base'];
+      if (timeBonus) parts.push('+1 night');
+      if (unitBonus) parts.push(`+${unitBonus} units`);
+      breakdown = parts.join(' · ');
+    }
+
     // Set content
     const iconEl    = el.querySelector('.phase-modal-icon');
     const titleEl   = el.querySelector('.phase-modal-title');
@@ -1756,11 +1790,12 @@ export class UIController {
     if (titleEl)   titleEl.textContent  = `${info.label} — Round ${this.state.round}`;
     if (effectsEl) effectsEl.innerHTML  = info.lines.map(l => `<div>${l}</div>`).join('');
     if (budgetEl) {
-      const actions = budget ?? this.state.heroActionsLeft ?? 0;
       const pips = Array.from({ length: actions }, () =>
         `<span class="action-pip">●</span>`
       ).join('');
-      budgetEl.innerHTML = `<span class="action-pip-label">${actions} action${actions !== 1 ? 's' : ''}</span>${pips}`;
+      budgetEl.innerHTML =
+        `<span class="action-pip-label">${actions} action${actions !== 1 ? 's' : ''}</span>${pips}` +
+        `<div class="action-breakdown">${breakdown}</div>`;
     }
 
     // Set phase accent class
@@ -1778,6 +1813,7 @@ export class UIController {
   // ── Scoring toast (dawn / dusk checkpoints) ──────────────────────────────
 
   showScoringToast(prevScore) {
+    if (this.speedMode === 'instant') return;
     const state      = this.state;
     const phase      = state.phase; // 'dawn' or 'dusk' — already advanced by endRound()
     const phaseIcon  = phase === 'dawn' ? '🌅' : '🌇';
@@ -2495,8 +2531,10 @@ export class UIController {
       const el = document.getElementById('round-summary');
       if (!el) { resolve('next'); return; }
 
-      // Build summary events from steps
-      const kills = [];
+      // Collect kills, survivors found, and summons from steps
+      const kills     = [];
+      const survivors = [];
+      const summons   = [];
       for (const step of steps ?? []) {
         const allEvents = [
           ...(step.heroEvents  ?? []),
@@ -2509,6 +2547,13 @@ export class UIController {
             const name = snap?.title ?? snap?.name ?? snap?.type ?? 'Unit';
             kills.push(name);
           }
+          if (ev.result?.encounterSurvivor) {
+            survivors.push(ev.result.encounterSurvivor);
+          }
+          if (ev.action?.type === 'summon' && ev.result?.success) {
+            const logLine = ev.result?.log?.[0] ?? '';
+            summons.push(logLine || 'Unit summoned');
+          }
         }
       }
 
@@ -2516,13 +2561,40 @@ export class UIController {
       const eventsEl = document.getElementById('round-summary-events');
       if (titleEl)  titleEl.textContent = `Round ${roundNum ?? ''} complete`;
       if (eventsEl) {
-        if (kills.length) {
-          eventsEl.innerHTML = kills.map(n =>
-            `<div class="summary-kill">☠ ${n} slain</div>`
-          ).join('');
-        } else {
-          eventsEl.innerHTML = `<div class="summary-neutral">No units slain this round.</div>`;
+        let html = '';
+        for (const n of kills) {
+          html += `<div class="summary-kill">☠ ${n} slain</div>`;
         }
+        for (const s of survivors) {
+          if (s.type === 'zombie') {
+            html += `<div class="summary-summon">† Zombie raised</div>`;
+          } else {
+            const label = s.title ? `${s.name} the ${s.title}` : s.name;
+            html += `<div class="summary-survivor">☺ ${label} joined</div>`;
+          }
+        }
+        for (const s of summons) {
+          html += `<div class="summary-summon">✦ ${s}</div>`;
+        }
+        eventsEl.innerHTML = html || `<div class="summary-neutral">No notable events this round.</div>`;
+      }
+
+      // Render replay-speed mini-picker
+      const speedRowEl = document.getElementById('round-summary-speed-row');
+      if (speedRowEl) {
+        const modes = Object.entries(UIController.SPEED_LABELS);
+        speedRowEl.innerHTML = modes.map(([mode, label]) =>
+          `<button class="summary-speed-btn${this.speedMode === mode ? ' active' : ''}" data-mode="${mode}">${label}</button>`
+        ).join('');
+        speedRowEl.querySelectorAll('.summary-speed-btn').forEach(btn => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._setSpeed(btn.dataset.mode);
+            speedRowEl.querySelectorAll('.summary-speed-btn').forEach(b =>
+              b.classList.toggle('active', b.dataset.mode === this.speedMode)
+            );
+          });
+        });
       }
 
       el.classList.add('visible');

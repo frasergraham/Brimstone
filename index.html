@@ -344,20 +344,10 @@
           <button id="speed-toggle" class="zoom-btn" title="Battle speed">⚡</button>
           <!-- Speed mode picker popup -->
           <div id="speed-popup" class="speed-popup" style="display:none">
-            <button class="speed-option" data-mode="full">
-              <span class="speed-option-icon">🔍</span>
-              <span class="speed-option-label">Full</span>
-              <span class="speed-option-desc">Dialog + zoom for every action</span>
-            </button>
-            <button class="speed-option" data-mode="basic">
-              <span class="speed-option-icon">▶</span>
-              <span class="speed-option-label">Basic</span>
-              <span class="speed-option-desc">Focus on your own units</span>
-            </button>
             <button class="speed-option" data-mode="cinematic">
               <span class="speed-option-icon">🎬</span>
               <span class="speed-option-label">Cinematic</span>
-              <span class="speed-option-desc">Important battles only (default)</span>
+              <span class="speed-option-desc">Dialog for important battles (default)</span>
             </button>
             <button class="speed-option" data-mode="fast">
               <span class="speed-option-icon">⏩</span>
@@ -477,7 +467,10 @@
       <div class="round-summary-title"></div>
       <div id="round-summary-events" class="round-summary-events"></div>
       <div class="round-summary-actions">
-        <button id="round-summary-replay" class="plan-btn secondary">↺ Replay</button>
+        <div class="round-summary-replay-group">
+          <button id="round-summary-replay" class="plan-btn secondary">↺ Replay</button>
+          <div id="round-summary-speed-row" class="round-summary-speed-row"></div>
+        </div>
         <button id="round-summary-next"   class="plan-btn primary">Next Turn →</button>
       </div>
     </div>

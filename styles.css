@@ -1727,10 +1727,56 @@ canvas { touch-action: pan-x pan-y; }
   padding: 2px 0;
 }
 
+.round-summary-events .summary-survivor {
+  color: var(--green, #4caf7d);
+  padding: 2px 0;
+}
+
+.round-summary-events .summary-summon {
+  color: var(--witch, #9b59b6);
+  padding: 2px 0;
+}
+
 .round-summary-actions {
   display: flex;
   gap: 0.6rem;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: flex-end;
+}
+
+.round-summary-replay-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  align-items: flex-start;
+}
+
+.round-summary-speed-row {
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.summary-speed-btn {
+  background: var(--bg-input, #1e1e2a);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 3px;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.7rem;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.summary-speed-btn:hover { color: var(--text); border-color: var(--text-dim); }
+.summary-speed-btn.active { color: var(--gold, #c8a84b); border-color: var(--gold, #c8a84b); }
+
+/* Action breakdown below pips in phase modal */
+.action-breakdown {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  margin-top: 0.3rem;
+  letter-spacing: 0.03em;
 }
 
 /* ── Game over ───────────────────────────────────────────────────────────── */

@@ -401,26 +401,18 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
           if (!_autoplay) {
             const speed = ui?.speedMode ?? 'cinematic';
             // Decide display mode per speed setting:
-            //   full     — dialog for any hit; zoom to all battles
-            //   basic    — dialog for player's own significant battles only
-            //   cinematic— dialog for significant battles (default)
-            //   fast     — toast only; dialog on kill
-            //   instant  — no dialog/toast; skip pauses
+            //   cinematic — dialog for significant battles (default)
+            //   fast      — toast only; dialog on kill
+            //   instant   — no dialog/toast; skip pauses
             const isKill = !!result?.killed;
-            const showFullDialog = speed === 'full'
-              ? (result?.damage > 0 || result?.counterDmg > 0 || isKill)
-              : speed === 'basic'
-                ? (significant && ev.faction === humanFaction)
-                : speed === 'cinematic'
-                  ? significant
-                  : speed === 'fast'
-                    ? isKill
-                    : false; // instant: never
+            const showFullDialog = speed === 'cinematic'
+              ? significant
+              : speed === 'fast'
+                ? isKill
+                : false; // instant: never
 
-            // Zoom: full → always; basic/cinematic → significant; fast/instant → never
-            const shouldZoom = speed === 'full'
-              ? true
-              : (speed === 'basic' || speed === 'cinematic') && significant;
+            // Zoom: cinematic → significant battles only; fast/instant → never
+            const shouldZoom = speed === 'cinematic' && significant;
 
             if (shouldZoom) {
               renderer.frameHexes(
