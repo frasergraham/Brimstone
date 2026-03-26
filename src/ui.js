@@ -627,17 +627,9 @@ export class UIController {
           btn.addEventListener('click', e => {
             e.stopPropagation();
             const idx = parseInt(btn.dataset.foodIdx);
-            const wasOff = idx >= foodEnabled;
             // Toggle: if slot i is currently on, clicking it turns off i and above.
             // If slot i is off, clicking turns on up to i.
             this._planFoodEnabled = (idx < foodEnabled) ? idx : idx + 1;
-            if (wasOff) {
-              const hero = this.state?.entities?.find(en => en.type === 'hero' && en.alive);
-              if (hero) {
-                this.renderer.addFlash(hero.col, hero.row, '-1\u00a0🍞', 'rgba(200,140,40,0.1)', 1600, 0.72, '#e8c84a');
-                this.onRedraw?.();
-              }
-            }
             this._renderPlanPanel();
           });
         });

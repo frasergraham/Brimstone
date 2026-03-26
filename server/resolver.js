@@ -17,10 +17,11 @@ import { ResourceType } from '../src/tiles.js';
 // ── Event types ──────────────────────────────────────────────────────────────
 
 export const ResEventType = Object.freeze({
-  ACTION_OK:   'action_ok',   // executed successfully; result payload attached
-  ACTION_SKIP: 'action_skip', // battle target gone/dead — free skip, later steps run
-  ACTION_FAIL: 'action_fail', // hard failure — plan halts for this faction
-  BUDGET_CAP:  'budget_cap',  // budget exhausted; remaining plan ignored
+  ACTION_OK:      'action_ok',      // executed successfully; result payload attached
+  ACTION_SKIP:    'action_skip',    // battle target gone/dead — free skip, later steps run
+  ACTION_FAIL:    'action_fail',    // hard failure — plan halts for this faction
+  BUDGET_CAP:     'budget_cap',     // budget exhausted; remaining plan ignored
+  FOOD_CONSUMED:  'food_consumed',  // ration auto-consumed to fund one over-budget action
 });
 
 // ── Budget calculation ───────────────────────────────────────────────────────
@@ -202,6 +203,24 @@ function runAction(state, action, faction, playerId = null) {
 function drainOneStep(state, queue, budget) {
   const subEvents = [];
 
+  // If budget is exhausted but actions remain, try to spend a food ration to
+  // fund one more action.  Emit FOOD_CONSUMED in the SAME step as the
+  // food-powered action so the animation layer can show the floater at the
+  // right moment.
+  if (budget.remaining <= 0 && queue.length > 0) {
+    const shared = state.inventory?.shared ?? {};
+    if ((shared[ResourceType.FOOD] || 0) > 0) {
+      shared[ResourceType.FOOD]--;
+      budget.remaining += 1;
+      state.addLog(`🍞 Rations consumed — pressing on beyond the action limit.`, budget.faction);
+      subEvents.push({ type: ResEventType.FOOD_CONSUMED, faction: budget.faction });
+    } else {
+      subEvents.push({ type: ResEventType.BUDGET_CAP, faction: budget.faction, action: queue[0] });
+      queue.length = 0;
+      return subEvents;
+    }
+  }
+
   while (queue.length > 0 && budget.remaining > 0) {
     const action = queue[0];
     const out = runAction(state, action, budget.faction, budget.playerId ?? null);
@@ -244,25 +263,6 @@ function drainOneStep(state, queue, budget) {
         reason: out.reason,
       });
       break;
-    }
-  }
-
-  // If the budget is exhausted but the queue is not empty, try to spend food
-  // from shared inventory to fund one more action before capping.
-  if (budget.remaining <= 0 && queue.length > 0) {
-    const shared = state.inventory?.shared ?? {};
-    if ((shared[ResourceType.FOOD] || 0) > 0) {
-      shared[ResourceType.FOOD]--;
-      budget.remaining += 1;
-      state.addLog(`🍞 Rations consumed — pressing on beyond the action limit.`, budget.faction);
-      // Don't push BUDGET_CAP; the outer loop will call drainOneStep again.
-    } else {
-      subEvents.push({
-        type:    ResEventType.BUDGET_CAP,
-        faction: budget.faction,
-        action:  queue[0],
-      });
-      queue.length = 0;
     }
   }
 
@@ -337,7 +337,7 @@ export function resolvePlansMP(state, playerEntries) {
     for (let i = 0; i < ordered.length; i++) {
       const budget = budgets[i];
       const queue  = queues[i];
-      if (queue.length === 0 || budget.remaining <= 0) continue;
+      if (queue.length === 0) continue;
       const events = drainOneStep(state, queue, budget);
       if (events.length > 0) {
         stepEvents.push({ playerId: budget.playerId, faction: budget.faction, events });
@@ -369,16 +369,13 @@ export function resolvePlans(state, heroPlan, witchPlan) {
   const steps = [];
   let stepIndex = 0;
 
-  while (
-    (heroQ.length > 0 && heroBudget.remaining  > 0) ||
-    (witchQ.length > 0 && witchBudget.remaining > 0)
-  ) {
+  while (heroQ.length > 0 || witchQ.length > 0) {
     const entitySnapshot = snapshotEntities(state.entities);
 
-    const heroEvents  = heroQ.length  > 0 && heroBudget.remaining  > 0
+    const heroEvents  = heroQ.length  > 0
       ? drainOneStep(state, heroQ,  heroBudget)
       : [];
-    const witchEvents = witchQ.length > 0 && witchBudget.remaining > 0
+    const witchEvents = witchQ.length > 0
       ? drainOneStep(state, witchQ, witchBudget)
       : [];
 
