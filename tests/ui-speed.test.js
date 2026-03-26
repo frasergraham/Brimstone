@@ -1,4 +1,4 @@
-// Tests for isBattleSignificant (exported from src/main.js)
+// Tests for isBattleSignificant (exported from src/battle-utils.js)
 // and related speed-mode classification logic.
 
 import { describe, test } from 'node:test';
@@ -10,34 +10,59 @@ function snap(type, owner) {
   return { type, owner, name: type, col: 0, row: 0 };
 }
 
-// ── Hero / Witch involvement ───────────────────────────────────────────────
+// ── Hero / Witch with damage ───────────────────────────────────────────────
 
-describe('isBattleSignificant — hero/witch combatant', () => {
-  test('hero as attacker → significant', () => {
+describe('isBattleSignificant — hero/witch combatant with damage', () => {
+  test('hero attacks and deals damage → significant', () => {
     assert.equal(
-      isBattleSignificant(snap(EntityType.HERO, 'hero'), snap(EntityType.MINION, 'witch'), {}, null),
+      isBattleSignificant(snap(EntityType.HERO, 'hero'), snap(EntityType.MINION, 'witch'), { damage: 1 }, null),
       true,
     );
   });
 
-  test('witch as attacker → significant', () => {
+  test('witch attacks and deals damage → significant', () => {
     assert.equal(
-      isBattleSignificant(snap(EntityType.WITCH, 'witch'), snap(EntityType.SURVIVOR, 'hero'), {}, null),
+      isBattleSignificant(snap(EntityType.WITCH, 'witch'), snap(EntityType.SURVIVOR, 'hero'), { damage: 2 }, null),
       true,
     );
   });
 
-  test('hero as defender → significant', () => {
+  test('hero as defender takes damage → significant', () => {
     assert.equal(
-      isBattleSignificant(snap(EntityType.MINION, 'witch'), snap(EntityType.HERO, 'hero'), {}, null),
+      isBattleSignificant(snap(EntityType.MINION, 'witch'), snap(EntityType.HERO, 'hero'), { damage: 1 }, null),
       true,
     );
   });
 
-  test('witch as defender → significant', () => {
+  test('counter damage on witch attacker → significant', () => {
     assert.equal(
-      isBattleSignificant(snap(EntityType.ZOMBIE, 'witch'), snap(EntityType.WITCH, 'witch'), {}, null),
+      isBattleSignificant(snap(EntityType.WITCH, 'witch'), snap(EntityType.SURVIVOR, 'hero'), { damage: 0, counterDmg: 1 }, null),
       true,
+    );
+  });
+});
+
+// ── Hero / Witch with no damage (misses) ──────────────────────────────────
+
+describe('isBattleSignificant — hero/witch combatant, no damage', () => {
+  test('hero attacks but misses → NOT significant', () => {
+    assert.equal(
+      isBattleSignificant(snap(EntityType.HERO, 'hero'), snap(EntityType.MINION, 'witch'), { damage: 0, counterDmg: 0 }, null),
+      false,
+    );
+  });
+
+  test('witch attacks but misses → NOT significant', () => {
+    assert.equal(
+      isBattleSignificant(snap(EntityType.WITCH, 'witch'), snap(EntityType.SURVIVOR, 'hero'), { damage: 0, counterDmg: 0 }, null),
+      false,
+    );
+  });
+
+  test('minion attacks hero but misses → NOT significant (hero takes no damage)', () => {
+    assert.equal(
+      isBattleSignificant(snap(EntityType.MINION, 'witch'), snap(EntityType.HERO, 'hero'), { damage: 0, counterDmg: 0 }, null),
+      false,
     );
   });
 });
@@ -50,6 +75,18 @@ describe('isBattleSignificant — kill outcome', () => {
       isBattleSignificant(
         snap(EntityType.MINION, 'witch'),
         snap(EntityType.SURVIVOR, 'hero'),
+        { killed: true, damage: 2 },
+        null,
+      ),
+      true,
+    );
+  });
+
+  test('kill flag alone is sufficient even with zero explicit damage field', () => {
+    assert.equal(
+      isBattleSignificant(
+        snap(EntityType.ZOMBIE, 'witch'),
+        snap(EntityType.MINION, 'witch'),
         { killed: true },
         null,
       ),
@@ -57,12 +94,12 @@ describe('isBattleSignificant — kill outcome', () => {
     );
   });
 
-  test('zombie vs minion, no kill → not significant when no human faction', () => {
+  test('zombie vs minion, no kill, no damage → not significant', () => {
     assert.equal(
       isBattleSignificant(
         snap(EntityType.ZOMBIE, 'witch'),
         snap(EntityType.MINION, 'witch'),
-        { killed: false },
+        { killed: false, damage: 0, counterDmg: 0 },
         null,
       ),
       false,
@@ -73,24 +110,24 @@ describe('isBattleSignificant — kill outcome', () => {
 // ── Human faction defender ─────────────────────────────────────────────────
 
 describe('isBattleSignificant — human faction defender', () => {
-  test("enemy attacks human's survivor → significant", () => {
+  test("enemy attacks human's survivor (miss) → significant", () => {
     assert.equal(
       isBattleSignificant(
         snap(EntityType.ZOMBIE, 'witch'),
         snap(EntityType.SURVIVOR, 'hero'),
-        { killed: false },
+        { killed: false, damage: 0, counterDmg: 0 },
         'hero',
       ),
       true,
     );
   });
 
-  test("human attacks enemy minion → not significant (attacker is human but not hero/witch)", () => {
+  test("human's survivor attacks enemy minion (miss) → not significant", () => {
     assert.equal(
       isBattleSignificant(
         snap(EntityType.SURVIVOR, 'hero'),
         snap(EntityType.MINION, 'witch'),
-        { killed: false },
+        { killed: false, damage: 0, counterDmg: 0 },
         'hero',
       ),
       false,
@@ -106,44 +143,44 @@ describe('isBattleSignificant — minor skirmishes', () => {
       isBattleSignificant(
         snap(EntityType.MINION, 'witch'),
         snap(EntityType.ZOMBIE, 'witch'),
-        { killed: false },
+        { killed: false, damage: 0, counterDmg: 0 },
         null,
       ),
       false,
     );
   });
 
-  test('wood golem vs survivor, no kill, attacking human faction → significant', () => {
+  test('wood golem vs survivor, damage dealt, attacking human faction → significant', () => {
     assert.equal(
       isBattleSignificant(
         snap(EntityType.WOOD_GOLEM, 'witch'),
         snap(EntityType.SURVIVOR, 'hero'),
-        { killed: false },
+        { killed: false, damage: 1 },
         'hero',
       ),
       true,
     );
   });
 
-  test('iron golem vs iron golem, no kill, no human faction → not significant', () => {
+  test('iron golem vs iron golem, no kill, no damage, no human faction → not significant', () => {
     assert.equal(
       isBattleSignificant(
         snap(EntityType.IRON_GOLEM, 'witch'),
         snap(EntityType.IRON_GOLEM, 'hero'),
-        { killed: false },
+        { killed: false, damage: 0, counterDmg: 0 },
         null,
       ),
       false,
     );
   });
 
-  test('null/undefined result → only type/faction criteria apply', () => {
-    // No result.killed but hero is involved → still significant
+  test('null result → only kill/faction criteria apply (no damage assumed)', () => {
+    // Hero involved but null result → no damage known → not significant
     assert.equal(
       isBattleSignificant(snap(EntityType.HERO, 'hero'), snap(EntityType.MINION, 'witch'), null, null),
-      true,
+      false,
     );
-    // No result at all, minor units → not significant
+    // Minor units, null result → not significant
     assert.equal(
       isBattleSignificant(snap(EntityType.SURVIVOR, 'hero'), snap(EntityType.ZOMBIE, 'witch'), null, null),
       false,
