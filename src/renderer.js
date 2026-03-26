@@ -569,6 +569,16 @@ export class Renderer {
       this._drawPlanOverlay(this.planGhostSteps);
     }
 
+    // ⊕ indicator at ghost position (falls back to real position outside planning mode)
+    if (this.selectedEntityId) {
+      const lastStep  = this.planGhostSteps?.at(-1);
+      const ghostPos  = lastStep?.positions.get(this.selectedEntityId);
+      const selEntity = ghostPos ? null
+        : this.state.entities.find(e => e.id === this.selectedEntityId && e.alive);
+      const pos = ghostPos ?? (selEntity ? { col: selEntity.col, row: selEntity.row } : null);
+      if (pos) this._drawSelectionIndicator(pos.col, pos.row);
+    }
+
     ctx.restore(); // end zoom/pan transform
 
   }
@@ -1294,41 +1304,44 @@ export class Renderer {
       ctx.fillText(`+${stack.length - 3}`, bx + 7, by + 5);
     }
 
-    // ⊕ indicator: shown above the hex when this stack contains the selected entity.
-    // Hints the player that clicking again opens the action menu.
-    // Checks all entities in the stack regardless of owner so witch/survivors work too.
-    if (this.selectedEntityId && stack.some(e => e.id === this.selectedEntityId)) {
-      const ir = Math.max(5, hs * 0.17);
-      const ix = x + hs * 0.42;
-      const iy = y - hs * 0.58;
+    // ⊕ indicator is now drawn in draw() at the ghost position — removed from here.
+  }
 
-      // Semi-transparent disc
-      ctx.beginPath();
-      ctx.arc(ix, iy, ir, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.68)';
-      ctx.fill();
+  /** Draw the ⊕ action-hint indicator above a hex position. */
+  _drawSelectionIndicator(col, row) {
+    const ctx = this.ctx;
+    const hs  = this.hexSize;
+    const { x, y } = this._toCanvas(col, row);
+    const ir = Math.max(5, hs * 0.17);
+    const ix = x + hs * 0.42;
+    const iy = y - hs * 0.58;
 
-      // Thin border
-      ctx.strokeStyle = 'rgba(0,0,0,0.22)';
-      ctx.lineWidth   = 0.8;
-      ctx.stroke();
+    // Semi-transparent disc
+    ctx.beginPath();
+    ctx.arc(ix, iy, ir, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.42)';
+    ctx.fill();
 
-      // + glyph
-      ctx.fillStyle    = '#1a1a2e';
-      ctx.font         = `bold ${Math.floor(ir * 1.45)}px sans-serif`;
-      ctx.textAlign    = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('+', ix, iy + 0.5);
+    // Thin border
+    ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+    ctx.lineWidth   = 0.8;
+    ctx.stroke();
 
-      // Specular arc at top-left of disc
-      ctx.beginPath();
-      ctx.arc(ix, iy, ir * 0.72, Math.PI * 1.1, Math.PI * 1.65);
-      ctx.strokeStyle = 'rgba(255,255,255,0.6)';
-      ctx.lineWidth   = ir * 0.28;
-      ctx.lineCap     = 'round';
-      ctx.stroke();
-      ctx.lineCap     = 'butt';
-    }
+    // + glyph
+    ctx.fillStyle    = 'rgba(20,20,40,0.82)';
+    ctx.font         = `bold ${Math.floor(ir * 1.45)}px sans-serif`;
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('+', ix, iy + 0.5);
+
+    // Specular arc at top-left of disc
+    ctx.beginPath();
+    ctx.arc(ix, iy, ir * 0.72, Math.PI * 1.1, Math.PI * 1.65);
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.lineWidth   = ir * 0.28;
+    ctx.lineCap     = 'round';
+    ctx.stroke();
+    ctx.lineCap     = 'butt';
   }
 
   /** Draw plan ghost overlay: ghost entities, summon icons, move arrows, attack arrows. */
