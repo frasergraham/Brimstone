@@ -327,7 +327,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               { paddingHexes: 2.5, maxZoom: 2.0, duration: 350 },
             );
           }
-          renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row, result?.damage ?? 0);
+          renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
+          // HP-change floaters derived from pre/post snapshots (covers all damage sources)
+          for (const snap of [actorSnap, targetSnap]) {
+            const post = postEntities.find(e => e.id === snap.id);
+            if (post) renderer.addHpChangeFlash(post.col, post.row, post.hp - snap.hp);
+          }
           if (result?.killed) {
             // Brief delay so the attack flash is visible before the death burst
             setTimeout(() => {
@@ -834,7 +839,10 @@ function _createMpClient() {
         const actor  = state.entities.find(e => e.id === actorSnap.id);
         const target = state.entities.find(e => e.id === targetSnap.id);
         if (actor && target) {
-          renderer.addAttackAnim(actor.col, actor.row, target.col, target.row, result?.damage ?? 0);
+          renderer.addAttackAnim(actor.col, actor.row, target.col, target.row);
+          // HP-change floaters from pre/post snapshot comparison
+          renderer.addHpChangeFlash(actor.col,  actor.row,  actor.hp  - actorSnap.hp);
+          renderer.addHpChangeFlash(target.col, target.row, target.hp - targetSnap.hp);
         }
       }
 
