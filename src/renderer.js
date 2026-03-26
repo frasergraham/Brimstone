@@ -37,6 +37,25 @@ function _hexToRgba(hex, alpha) {
   return hex; // already rgba / named — pass through unchanged
 }
 
+/**
+ * Parse a '#rrggbb' or 'rgba(r,g,b,a)' / 'rgb(r,g,b)' string into [r,g,b,a].
+ * Returns null if the format is unrecognised.
+ */
+export function _parseColor(color) {
+  if (typeof color !== 'string') return null;
+  if (color.startsWith('#') && color.length === 7) {
+    return [
+      parseInt(color.slice(1, 3), 16),
+      parseInt(color.slice(3, 5), 16),
+      parseInt(color.slice(5, 7), 16),
+      1,
+    ];
+  }
+  const m = color.match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+))?\s*\)/);
+  if (m) return [+m[1], +m[2], +m[3], m[4] !== undefined ? +m[4] : 1];
+  return null;
+}
+
 export class Renderer {
   constructor(canvas, state) {
     this.canvas  = canvas;
@@ -488,7 +507,7 @@ export class Renderer {
     }
 
     if (this.selectedHex) {
-      this._drawOutline(this.selectedHex.col, this.selectedHex.row, '#f5c842', 2.5);
+      this._drawOutline(this.selectedHex.col, this.selectedHex.row, '#f5c842', 2.5, true);
     }
     if (this.hoveredHex) {
       this._drawOutline(this.hoveredHex.col, this.hoveredHex.row, 'rgba(255,255,255,0.3)', 1);
@@ -676,16 +695,47 @@ export class Renderer {
     // The water bezier and road strip are layered on top in _drawRiverLayer / _drawRoadLayer.
     if (tile.type === TileType.BRIDGE) return;
 
-    // ── Fortification outline — grey, thickness scales with fortifyLevel ──
+    // ── Fortification outline — tiered colour, outer glow, inner highlight ──
     if (tile.fortifyLevel > 0) {
+      const lvl = tile.fortifyLevel;
+      // Colour palette: level 1 = amber wood, 2 = stone grey, 3 = silver steel, 4 = iron-gilt
+      const fortPalette = [
+        null,
+        [160, 100,  55],   // 1 — amber/wood palisade
+        [120, 135, 148],   // 2 — rough stone
+        [180, 196, 210],   // 3 — dressed silver steel
+        [205, 165,  35],   // 4 — iron-gilt ramparts
+      ];
+      const [fr, fg, fb] = fortPalette[Math.min(lvl, 4)];
+      const alpha = Math.min(0.95, 0.5 + lvl * 0.12);
+      const lw    = lvl * 2; // level 1: 2px, level 4: 8px
+
       ctx.beginPath();
       ctx.moveTo(corners[0].x, corners[0].y);
       for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
       ctx.closePath();
-      const alpha = Math.min(0.9, 0.4 + tile.fortifyLevel * 0.12);
-      ctx.strokeStyle = `rgba(190,190,190,${alpha})`;
-      ctx.lineWidth   = tile.fortifyLevel * 2; // level 1: 2px, level 4: 8px
+
+      // Outer diffuse glow
+      ctx.strokeStyle = `rgba(${fr},${fg},${fb},0.18)`;
+      ctx.lineWidth   = lw + 5;
       ctx.stroke();
+
+      // Main fort ring
+      ctx.strokeStyle = `rgba(${fr},${fg},${fb},${alpha})`;
+      ctx.lineWidth   = lw;
+      ctx.stroke();
+
+      // Inner highlight rim for level 2+ (lighter edge for depth)
+      if (lvl >= 2) {
+        const innerCs = hexCorners(x, y, hs - 1 - lw * 0.6);
+        ctx.beginPath();
+        ctx.moveTo(innerCs[0].x, innerCs[0].y);
+        for (let i = 1; i < 6; i++) ctx.lineTo(innerCs[i].x, innerCs[i].y);
+        ctx.closePath();
+        ctx.strokeStyle = `rgba(${Math.min(255, fr + 65)},${Math.min(255, fg + 65)},${Math.min(255, fb + 65)},0.45)`;
+        ctx.lineWidth   = 1;
+        ctx.stroke();
+      }
     }
 
     // ── Explored dot (all tile types, including buildings) ────────────────
@@ -787,7 +837,7 @@ export class Renderer {
 
     for (const [k, color] of hexColors) {
       const [col, row] = k.split(',').map(Number);
-      this._drawOutline(col, row, _hexToRgba(color, 0.85), 3);
+      this._drawOutline(col, row, _hexToRgba(color, 0.85), 3, true);
     }
   }
 
@@ -1029,18 +1079,57 @@ export class Renderer {
     ctx.moveTo(corners[0].x, corners[0].y);
     for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
     ctx.closePath();
-    ctx.fillStyle = color;
+
+    // Radial gradient: bright glow at centre, fades toward edges
+    const rgba = _parseColor(color);
+    if (rgba) {
+      const [r, g, b, a] = rgba;
+      const grad = ctx.createRadialGradient(x, y, 0, x, y, hs * 0.92);
+      grad.addColorStop(0,    `rgba(${r},${g},${b},${Math.min(1, a * 3.2)})`);
+      grad.addColorStop(0.5,  `rgba(${r},${g},${b},${a})`);
+      grad.addColorStop(1,    `rgba(${r},${g},${b},${a * 0.15})`);
+      ctx.fillStyle = grad;
+    } else {
+      ctx.fillStyle = color;
+    }
     ctx.fill();
-    ctx.strokeStyle = color.replace(/,\s*[\d.]+\)$/, ', 0.9)');
-    ctx.lineWidth   = 2;
+
+    // Crisp border ring at full saturation
+    if (rgba) {
+      const [r, g, b, a] = rgba;
+      ctx.strokeStyle = `rgba(${r},${g},${b},${Math.min(1, a * 4)})`;
+    } else {
+      ctx.strokeStyle = color.replace(/,\s*[\d.]+\)$/, ', 0.9)');
+    }
+    ctx.lineWidth = 1.5;
     ctx.stroke();
   }
 
-  _drawOutline(col, row, color, lineWidth = 2) {
+  _drawOutline(col, row, color, lineWidth = 2, glow = false) {
     const ctx = this.ctx;
     const hs  = this.hexSize;
     const { x, y } = this._toCanvas(col, row);
     const corners   = hexCorners(x, y, hs - 1.5);
+
+    if (glow) {
+      const rgba = _parseColor(color);
+      if (rgba) {
+        const [r, g, b] = rgba;
+        ctx.beginPath();
+        ctx.moveTo(corners[0].x, corners[0].y);
+        for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
+        ctx.closePath();
+        // Outer soft halo
+        ctx.strokeStyle = `rgba(${r},${g},${b},0.12)`;
+        ctx.lineWidth   = lineWidth + 7;
+        ctx.stroke();
+        // Mid glow ring
+        ctx.strokeStyle = `rgba(${r},${g},${b},0.28)`;
+        ctx.lineWidth   = lineWidth + 3;
+        ctx.stroke();
+      }
+    }
+
     ctx.beginPath();
     ctx.moveTo(corners[0].x, corners[0].y);
     for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
@@ -1064,14 +1153,28 @@ export class Renderer {
       const ex = x + offsets.x * (hs / 30);
       const ey = y + offsets.y * (hs / 30);
 
+      // Drop shadow — offset slightly for lift effect
       ctx.beginPath();
-      ctx.arc(ex + 1, ey + 1, r, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.arc(ex + 2, ey + 2, r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
       ctx.fill();
 
+      // Base fill with radial gradient: highlight top-left, dark bottom-right
+      const baseCol  = entity.color ?? ENTITY_COLOR[entity.type];
+      const baseRgba = _parseColor(baseCol);
       ctx.beginPath();
       ctx.arc(ex, ey, r, 0, Math.PI * 2);
-      ctx.fillStyle = entity.color ?? ENTITY_COLOR[entity.type];
+      if (baseRgba) {
+        const [cr, cg, cb] = baseRgba;
+        const grad = ctx.createRadialGradient(ex - r * 0.3, ey - r * 0.35, r * 0.05,
+                                               ex + r * 0.1, ey + r * 0.15, r);
+        grad.addColorStop(0,    `rgb(${Math.min(255, cr + 70)},${Math.min(255, cg + 65)},${Math.min(255, cb + 55)})`);
+        grad.addColorStop(0.45, `rgb(${cr},${cg},${cb})`);
+        grad.addColorStop(1,    `rgb(${Math.max(0, cr - 45)},${Math.max(0, cg - 45)},${Math.max(0, cb - 45)})`);
+        ctx.fillStyle = grad;
+      } else {
+        ctx.fillStyle = baseCol;
+      }
       ctx.fill();
 
       // ── Portrait image from sprite sheet ───────────────────────────────
@@ -1089,14 +1192,39 @@ export class Renderer {
         ctx.drawImage(this._tilemapImg,
           pRect.x, pRect.y, pRect.size, pRect.size,
           ex - r, ey - r, r * 2, r * 2);
+        // Vignette overlay: darken portrait edges for depth
+        const vGrad = ctx.createRadialGradient(ex, ey, r * 0.4, ex, ey, r);
+        vGrad.addColorStop(0, 'rgba(0,0,0,0)');
+        vGrad.addColorStop(1, 'rgba(0,0,0,0.42)');
+        ctx.fillStyle = vGrad;
+        ctx.fill();
         ctx.restore();
       }
 
-      // Circle border: use entity colour when portrait is shown, white otherwise
-      const entityCol = entity.color ?? ENTITY_COLOR[entity.type];
-      ctx.strokeStyle = portrait ? entityCol : '#ffffffaa';
-      ctx.lineWidth   = portrait ? 2 : 1;
+      // Circle border: coloured glow ring + crisp inner border + specular arc
+      const entityCol  = entity.color ?? ENTITY_COLOR[entity.type];
+      const borderRgba = _parseColor(entityCol);
+      if (borderRgba) {
+        const [br, bg, bb] = borderRgba;
+        ctx.beginPath();
+        ctx.arc(ex, ey, r + 1.5, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(${br},${bg},${bb},0.4)`;
+        ctx.lineWidth   = 3;
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      ctx.arc(ex, ey, r, 0, Math.PI * 2);
+      ctx.strokeStyle = portrait ? _hexToRgba(entityCol, 0.9) : 'rgba(255,255,255,0.7)';
+      ctx.lineWidth   = portrait ? 2 : 1.5;
       ctx.stroke();
+      // Specular highlight arc — top-left quadrant
+      ctx.beginPath();
+      ctx.arc(ex, ey, r * 0.8, Math.PI * 1.1, Math.PI * 1.65);
+      ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+      ctx.lineWidth   = r * 0.22;
+      ctx.lineCap     = 'round';
+      ctx.stroke();
+      ctx.lineCap     = 'butt';
 
       // Draw glyph only when no portrait image is available
       if (!portrait) {
@@ -1114,11 +1242,22 @@ export class Renderer {
         const barH = Math.max(2, hs * 0.08);
         const bx   = ex - r;
         const by   = ey + r + 2;
-        ctx.fillStyle = '#333';
+        // Background trough with shadow
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.fillRect(bx - 1, by - 1, barW + 2, barH + 2);
+        ctx.fillStyle = '#1a1a1a';
         ctx.fillRect(bx, by, barW, barH);
+        // Gradient fill: lighter top edge, base colour bottom
         const pct = entity.hp / entity.maxHp;
-        ctx.fillStyle = pct > 0.5 ? '#4caf50' : pct > 0.25 ? '#ff9800' : '#f44336';
+        const hpRgb = pct > 0.5 ? [76, 175, 80] : pct > 0.25 ? [255, 152, 0] : [244, 67, 54];
+        const barFill = ctx.createLinearGradient(bx, by, bx, by + barH);
+        barFill.addColorStop(0, `rgba(${Math.min(255, hpRgb[0] + 45)},${Math.min(255, hpRgb[1] + 45)},${Math.min(255, hpRgb[2] + 45)},1)`);
+        barFill.addColorStop(1, `rgba(${hpRgb[0]},${hpRgb[1]},${hpRgb[2]},1)`);
+        ctx.fillStyle = barFill;
         ctx.fillRect(bx, by, barW * pct, barH);
+        // Shine stripe along the top
+        ctx.fillStyle = 'rgba(255,255,255,0.18)';
+        ctx.fillRect(bx, by, barW * pct, Math.max(1, barH * 0.4));
       }
 
       if (entity.weapon && entity.owner === 'hero') {
