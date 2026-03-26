@@ -51,6 +51,9 @@ export class Renderer {
     /** Ghost overlay steps from computeGhostState(). null = no overlay. */
     this.planGhostSteps = null;
 
+    /** ID of the currently selected entity; drives the ⊕ indicator drawn above its hex. */
+    this.selectedEntityId = null;
+
     // Zoom & pan
     this.zoomLevel = 1.0;
     this._panX     = 0;
@@ -1133,6 +1136,26 @@ export class Renderer {
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(`+${stack.length - 3}`, bx + 7, by + 5);
+    }
+
+    // ⊕ indicator: shown above the hex when this stack contains the selected entity.
+    // Hints to the player that clicking the unit again opens the action menu.
+    if (this.selectedEntityId && stack.some(e => e.id === this.selectedEntityId)) {
+      const ir = Math.max(6, hs * 0.22);
+      const ix = x + hs * 0.42;
+      const iy = y - hs * 0.58;
+      ctx.beginPath();
+      ctx.arc(ix, iy, ir, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+      ctx.lineWidth   = 1;
+      ctx.stroke();
+      ctx.fillStyle    = '#1a1a2e';
+      ctx.font         = `bold ${Math.floor(ir * 1.5)}px sans-serif`;
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('+', ix, iy + 0.5);
     }
   }
 

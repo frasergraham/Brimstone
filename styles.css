@@ -1886,7 +1886,12 @@ canvas { touch-action: pan-x pan-y; }
   color: var(--muted);
   text-align: right;
 }
-.plan-step-icon { font-size: 0.9rem; }
+.plan-step-icon {
+  font-size: 0.9rem;
+  flex-shrink: 0;
+  min-width: 1.1em;
+  text-align: center;
+}
 .plan-step-desc {
   flex: 1;
   font-size: 0.75rem;
@@ -1898,13 +1903,15 @@ canvas { touch-action: pan-x pan-y; }
 .plan-step-remove {
   background: none;
   border: none;
-  color: rgba(255,255,255,0.3);
+  color: rgba(210, 60, 60, 0.75);
   cursor: pointer;
-  font-size: 0.75rem;
-  padding: 0 0.2rem;
+  font-size: 1.1rem;
+  font-weight: bold;
+  padding: 0 0.25rem;
   line-height: 1;
+  flex-shrink: 0;
 }
-.plan-step-remove:hover { color: #e05050; }
+.plan-step-remove:hover { color: #ff3333; }
 .plan-panel-footer {
   display: flex;
   gap: 0.4rem;

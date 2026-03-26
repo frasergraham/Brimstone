@@ -514,6 +514,16 @@ export class UIController {
       [PlanActionType.USE_ABILITY]: '✦',
     };
 
+    const ENTITY_GLYPH = {
+      [EntityType.HERO]:       '⚔',
+      [EntityType.WITCH]:      '✦',
+      [EntityType.SURVIVOR]:   '☺',
+      [EntityType.ZOMBIE]:     '†',
+      [EntityType.MINION]:     '☠',
+      [EntityType.WOOD_GOLEM]: '🪵',
+      [EntityType.IRON_GOLEM]: '⚙',
+    };
+
     const describeAction = (a, i) => {
       const entity = this.state.entities.find(e => e.id === a.entityId);
       const who    = entity?.displayName ?? 'Unit';
@@ -556,14 +566,21 @@ export class UIController {
       const overBudget = !isFree && runningCost > this._planBudget;
       const foodPowered = overBudget && foodUsed < foodEnabled;
       if (foodPowered) foodUsed++;
-      const desc = describeAction(a, i);
-      const foodTag = foodPowered ? ` <span class="plan-food-tag">-1 🍞</span>` : '';
-      const rmBtn = this._planSubmitted
+      const desc       = describeAction(a, i);
+      const foodTag    = foodPowered ? ` <span class="plan-food-tag">-1 🍞</span>` : '';
+      const rmBtn      = this._planSubmitted
         ? ''
         : `<button class="plan-step-remove" data-plan-idx="${i}" title="Remove">✕</button>`;
-      const cls = foodPowered ? ' food-powered' : overBudget ? ' over-budget' : '';
+      const cls        = foodPowered ? ' food-powered' : overBudget ? ' over-budget' : '';
+      const stepEntity = this.state?.entities?.find(e => e.id === a.entityId);
+      const stepGlyph  = stepEntity ? (ENTITY_GLYPH[stepEntity.type] || '?') : '';
+      const stepColor  = stepEntity ? (ENTITY_COLOR[stepEntity.type]  || '#aaa') : '#aaa';
+      const iconSpan   = stepEntity
+        ? `<span class="plan-step-icon" style="color:${stepColor}">${stepGlyph}</span>`
+        : '';
       html += `<div class="plan-step${cls}">
         <span class="plan-step-num">${i + 1}</span>
+        ${iconSpan}
         <span class="plan-step-desc" title="${desc}">${desc}${foodTag}</span>
         ${rmBtn}
       </div>`;
@@ -764,7 +781,8 @@ export class UIController {
       }
     }
 
-    this.renderer.selectedHex = { col: effectiveEntity.col, row: effectiveEntity.row };
+    this.renderer.selectedHex      = { col: effectiveEntity.col, row: effectiveEntity.row };
+    this.renderer.selectedEntityId = entity.id;
     this._validActions = getValidActions(this.state, effectiveEntity);
     // Move is always the default awaiting action — clicking a green hex moves.
     const hasMoveAction = this._validActions.some(a => a.type === ActionType.MOVE);
@@ -793,8 +811,9 @@ export class UIController {
     this._validActions         = [];
     this._pendingUnitPick      = null;
     this._popupVisible         = false;
-    this.renderer.selectedHex  = null;
-    this.renderer.highlightHexes = [];
+    this.renderer.selectedHex      = null;
+    this.renderer.selectedEntityId = null;
+    this.renderer.highlightHexes   = [];
     _hideActionPopup();
     this._hideTileDetail();
   }
@@ -808,6 +827,11 @@ export class UIController {
     if (!actionType || actionType === ActionType.MOVE) {
       const a = this._validActions.find(a => a.type === ActionType.MOVE);
       if (a) renderer.highlightHexes = a.targets.map(t => ({ ...t, color: 'rgba(60,220,80,0.22)' }));
+      // Also highlight enemy hexes in red so clicking them directly queues an attack
+      const b = this._validActions.find(a => a.type === ActionType.BATTLE);
+      if (b) renderer.highlightHexes = renderer.highlightHexes.concat(
+        b.targets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,60,60,0.55)' }))
+      );
     } else if (actionType === ActionType.BATTLE) {
       const a = this._validActions.find(a => a.type === ActionType.BATTLE);
       if (a) renderer.highlightHexes = a.targets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,60,60,0.55)' }));
@@ -820,6 +844,16 @@ export class UIController {
     const state = this.state;
 
     if (actionType === ActionType.MOVE) {
+      // If the clicked hex has a valid battle target, route directly to battle
+      // without needing to open the action popup first.
+      const battleActionForMove = this._validActions.find(a => a.type === ActionType.BATTLE);
+      const battleTargetsAtHex  = battleActionForMove?.targets.filter(t => t.col === hex.col && t.row === hex.row) || [];
+      if (battleTargetsAtHex.length > 0) {
+        this._awaitingTarget = { actionType: ActionType.BATTLE, actor };
+        this._handleTargetClick(hex);
+        return;
+      }
+
       const moveAction = this._validActions.find(a => a.type === ActionType.MOVE);
       const isValidTarget = moveAction && moveAction.targets.some(t => t.col === hex.col && t.row === hex.row);
       if (!isValidTarget) {
@@ -875,24 +909,12 @@ export class UIController {
       this.renderer.highlightHexes = [];
 
       const executeFight = (target) => {
-        // Planning mode: add battle to plan, then keep battle highlights active
-        // so tapping the same target again immediately stacks another attack.
+        // Planning mode: add battle to plan, then re-select the actor so red
+        // battle highlights refresh naturally — clicking the same enemy again stacks another attack.
         if (this._planMode) {
           this._addToPlan({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id });
-          // Recompute valid actions using projected position.
-          const proj = this._getProjectedPos(actor.id);
-          const eff  = proj ? { ...actor, col: proj.col, row: proj.row } : actor;
-          this._validActions = getValidActions(this.state, eff);
-          const hasBattle = this._validActions.some(a => a.type === ActionType.BATTLE);
-          if (actor.alive && hasBattle) {
-            // Keep attack mode active — next tap on same target stacks an attack.
-            // Use real entity (actor) not the spread copy (eff); eff lacks prototype getters.
-            this._awaitingTarget = { actionType: ActionType.BATTLE, actor: actor };
-            this._updateHighlights();
-          } else {
-            if (actor.alive) this._selectEntity(actor);
-            else this._clearSelection();
-          }
+          if (actor.alive) this._selectEntity(actor);
+          else this._clearSelection();
           this._updateSidebar();
           this.onRedraw();
           return;
@@ -1047,7 +1069,7 @@ export class UIController {
           regularHtml += btn('🔍 Explore', 'explore', dis, `data-action="explore"`);
           break;
         case ActionType.BATTLE:
-          regularHtml += btn('⚔ Attack', 'battle', dis, `data-action="battle"`);
+          // Attack is now triggered directly by clicking a red-highlighted enemy hex — no popup button needed.
           break;
         case ActionType.FORTIFY: {
           const shared     = state.inventory.shared;
@@ -1398,12 +1420,7 @@ export class UIController {
       }
 
       case 'battle':
-        _hideActionPopup();
-        this._awaitingTarget = { actionType: ActionType.BATTLE, actor: entity };
-        this._updateHighlights();
-        state.addLog('Click an enemy to attack.');
-        this._updateSidebar();
-        this.onRedraw();
+        // Attack is triggered via red hex clicks — this case is no longer used.
         break;
 
       case 'fortify': {
