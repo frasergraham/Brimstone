@@ -25,6 +25,29 @@ function _genSaveId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
 
+/**
+ * Shared setup for all local (single-player) game starts.
+ * Creates the Renderer, UIController, and wires the callbacks that must be
+ * present regardless of whether the game is new or resumed:
+ *   - onQuitToMenu  → reload the page (returns to setup screen)
+ *   - AI battle callbacks → show animated battle dialog
+ *
+ * Called by both init() and _startFromState() so neither can forget a callback.
+ */
+function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
+  renderer = new Renderer(canvas, state);
+  renderer.resize();
+  renderer.loadImages();
+
+  ui = new UIController(canvas, state, renderer, localWitchAI, redraw, localHeroAI, autoplay);
+  ui.onQuitToMenu = () => location.reload();
+
+  const battleCallback = (actorSnap, targetSnap, result) =>
+    new Promise(resolve => ui._showBattleDialog(actorSnap, targetSnap, result, resolve));
+  if (localWitchAI) localWitchAI.onBattleResult = battleCallback;
+  if (localHeroAI)  localHeroAI.onBattleResult  = battleCallback;
+}
+
 function init(witchIsAI, heroIsAI, autoplay = false) {
   _autoplay = autoplay;
   // Assign a fresh save ID for this game (only used for single-player saves)
@@ -39,22 +62,12 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
   // Allow global fog-of-war override from the setup screen checkbox.
   const fogChk = document.getElementById('chk-fog-of-war');
   if (fogChk && !fogChk.checked) state.fogOfWar = false;
-  renderer = new Renderer(canvas, state);
-  renderer.resize();
-  renderer.loadImages(); // async; redraws once images settle — no-op if assets absent
 
   const thinkDelay = autoplay ? 0 : undefined;
   witchAI = witchIsAI ? new WitchAI(state, redraw, thinkDelay) : null;
   heroAI  = heroIsAI  ? new HeroAI(state, redraw, thinkDelay)  : null;
 
-  ui = new UIController(canvas, state, renderer, witchAI, redraw, heroAI, autoplay);
-  ui.onQuitToMenu = () => location.reload();
-
-  const battleCallback = (actorSnap, targetSnap, result) =>
-    new Promise(resolve => ui._showBattleDialog(actorSnap, targetSnap, result, resolve));
-
-  if (witchAI) witchAI.onBattleResult = battleCallback;
-  if (heroAI)  heroAI.onBattleResult  = battleCallback;
+  _setupLocalUI(canvas, witchAI, heroAI, autoplay);
 
   redraw();
 
@@ -435,6 +448,7 @@ function initOnline(mirrorState, myFaction, mpClient) {
 
   // No local AI — all turns handled server-side
   ui = new UIController(canvas, state, renderer, null, redrawOnline, null, false);
+  ui.onQuitToMenu = () => location.reload();
   ui.mp         = mpClient;
   ui.myPlayerId = mpClient.myPlayerId ?? null;
   ui._players   = state.players ?? [];
@@ -671,20 +685,11 @@ function _startFromState(existingState, mode) {
   document.getElementById('setup-screen').style.display = 'none';
   document.getElementById('game-screen').style.display  = 'flex';
 
-  state    = existingState;
-  renderer = new Renderer(canvas, state);
-  renderer.resize();
-  renderer.loadImages();
-
+  state   = existingState;
   witchAI = state.witchIsAI ? new WitchAI(state, redraw) : null;
   heroAI  = state.heroIsAI  ? new HeroAI(state, redraw)  : null;
 
-  ui = new UIController(canvas, state, renderer, witchAI, redraw, heroAI, false);
-
-  const battleCallback = (actorSnap, targetSnap, result) =>
-    new Promise(resolve => ui._showBattleDialog(actorSnap, targetSnap, result, resolve));
-  if (witchAI) witchAI.onBattleResult = battleCallback;
-  if (heroAI)  heroAI.onBattleResult  = battleCallback;
+  _setupLocalUI(canvas, witchAI, heroAI, false);
 
   redraw();
 
