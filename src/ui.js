@@ -181,6 +181,16 @@ export class UIController {
       const btn = document.getElementById('menu-btn');
       if (!popup.contains(e.target) && e.target !== btn) popup.style.display = 'none';
     });
+    // Mobile: canvas touchend calls e.preventDefault() which suppresses the
+    // synthesized click, so the click handler above never fires when tapping
+    // the canvas with the menu open. Use touchstart (fires before preventDefault)
+    // to close the popup on outside touches.
+    document.addEventListener('touchstart', e => {
+      const popup = document.getElementById('game-menu-popup');
+      if (!popup || popup.style.display === 'none') return;
+      const btn = document.getElementById('menu-btn');
+      if (!popup.contains(e.target) && e.target !== btn) popup.style.display = 'none';
+    }, { passive: true });
 
     // Chronicle overlay toggle (open button lives inside #chronicle-mini and is wired on each render)
     document.getElementById('chronicle-close')?.addEventListener('click', () => this._toggleChronicle());
@@ -704,9 +714,10 @@ export class UIController {
       hex.col === _selDisplayHex.col && hex.row === _selDisplayHex.row
     ) {
       if (this._popupVisible) {
-        // Third click — deselect entirely
+        // Second tap on already-selected unit — deselect entirely
         this._clearSelection();
       } else {
+        // Popup was dismissed; re-show it
         this._showActionPopup(this._selectedEntity);
         this._popupVisible = true;
       }
@@ -758,10 +769,12 @@ export class UIController {
           this._popupVisible = true;
         }
       } else {
-        // New unit — select it, hide any open tile detail
+        // New unit — select it and immediately show popup (single tap to act)
         this._hideTileDetail();
         this._selectEntity(entity);
         this._pendingUnitPick = null;
+        this._showActionPopup(entity);
+        this._popupVisible = true;
       }
     } else {
       // Multiple units on hex — show simple picker popup

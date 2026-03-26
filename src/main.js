@@ -680,6 +680,7 @@ function _startFromState(existingState, mode) {
   heroAI  = state.heroIsAI  ? new HeroAI(state, redraw)  : null;
 
   ui = new UIController(canvas, state, renderer, witchAI, redraw, heroAI, false);
+  ui.onQuitToMenu = () => location.reload();
 
   const battleCallback = (actorSnap, targetSnap, result) =>
     new Promise(resolve => ui._showBattleDialog(actorSnap, targetSnap, result, resolve));
