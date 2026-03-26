@@ -885,6 +885,44 @@ export function getRoomChronicle(roomId) {
 }
 
 /**
+ * Admin-initiated save activation — loads a save and starts it as an AI-vs-AI
+ * game that can be spectated from the admin panel.
+ * Returns { ok, roomId } on success, { ok: false, error, status } on failure.
+ */
+export function adminResumeGame(savedRoomId) {
+  const save = getSave(savedRoomId);
+  if (!save) return { ok: false, error: 'No save found.', status: 404 };
+
+  if (save.game_version !== VERSION) {
+    return { ok: false, error: `Save is from v${save.game_version}; server is v${VERSION}. Cannot resume.`, status: 400 };
+  }
+
+  let state;
+  try {
+    state = deserializeState(save.state);
+  } catch (err) {
+    console.error(`[adminResume ${savedRoomId}] deserializeState error:`, err);
+    return { ok: false, error: 'Failed to restore save.', status: 500 };
+  }
+
+  // Force both sides to AI
+  state.heroIsAI  = true;
+  state.witchIsAI = true;
+
+  const room = createRoom(state.fogOfWar);
+  room.state = state;
+
+  // Attach AI for both factions
+  attachAI(room, 'hero');
+  attachAI(room, 'witch');
+
+  deleteSave(savedRoomId);
+
+  _startPlanningPhase(room);
+  return { ok: true, roomId: room.id };
+}
+
+/**
  * Resume a saved game for a reconnecting player.
  *
  * First tries to reconnect to a live in-memory room (browser-refresh case).

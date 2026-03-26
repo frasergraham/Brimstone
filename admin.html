@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Brimstone — Admin Panel</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:          #0d0f16;
+      --bg-panel:    #111520;
+      --bg-section:  #161b28;
+      --border:      #2a2040;
+      --text:        #d4c9b0;
+      --text-dim:    #7a7060;
+      --text-bright: #f0e8d0;
+      --hero:        #d4a72c;
+      --witch:       #9b59b6;
+      --day:         #f5c842;
+      --night:       #7b4fbb;
+      --green:       #4caf7d;
+      --red:         #c0392b;
+      --font-serif:  "Georgia", "Times New Roman", serif;
+      --font-mono:   "Courier New", monospace;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-serif);
+      font-size: 14px;
+      line-height: 1.5;
+      overflow-y: auto;
+    }
+
+    .admin-wrap {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 1.5rem 2rem 3rem;
+    }
+
+    h1 {
+      font-size: 2rem;
+      letter-spacing: 0.2em;
+      color: var(--day);
+      text-shadow: 0 0 16px rgba(245,200,66,0.3);
+      margin-bottom: 0.25rem;
+    }
+
+    .subtitle {
+      color: var(--text-dim);
+      font-style: italic;
+      margin-bottom: 1.5rem;
+    }
+
+    /* ── Stats bar ──────────────────────────────── */
+    .stats-bar {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+      margin-bottom: 1.5rem;
+    }
+    .stat-box {
+      background: var(--bg-section);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.6rem 1.2rem;
+      min-width: 120px;
+      text-align: center;
+    }
+    .stat-box .label { font-size: 0.75rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.1em; }
+    .stat-box .value { font-size: 1.6rem; color: var(--text-bright); font-family: var(--font-mono); }
+
+    /* ── Tabs ───────────────────────────────────── */
+    .tabs {
+      display: flex;
+      gap: 0;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 1rem;
+    }
+    .tab-btn {
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      font-family: var(--font-serif);
+      font-size: 0.95rem;
+      padding: 0.6rem 1.25rem;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active {
+      color: var(--day);
+      border-bottom-color: var(--day);
+    }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* ── Tables ──────────────────────────────────── */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+    }
+    th {
+      color: var(--text-dim);
+      font-weight: normal;
+      text-transform: uppercase;
+      font-size: 0.7rem;
+      letter-spacing: 0.1em;
+    }
+    tr:hover td { background: rgba(255,255,255,0.02); }
+
+    .badge {
+      display: inline-block;
+      padding: 0.1rem 0.5rem;
+      border-radius: 3px;
+      font-size: 0.75rem;
+      font-family: var(--font-mono);
+    }
+    .badge-hero  { background: rgba(212,167,44,0.15); color: var(--hero); }
+    .badge-witch { background: rgba(155,89,182,0.15); color: var(--witch); }
+    .badge-phase { background: rgba(255,255,255,0.06); color: var(--text-dim); }
+    .badge-ai    { background: rgba(255,255,255,0.06); color: var(--text-dim); font-size: 0.7rem; }
+
+    .btn {
+      background: var(--bg-section);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--font-serif);
+      font-size: 0.8rem;
+      padding: 0.3rem 0.75rem;
+      border-radius: 3px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .btn:hover { background: var(--bg-panel); border-color: var(--text-dim); }
+    .btn-primary {
+      background: rgba(212,167,44,0.15);
+      border-color: var(--hero);
+      color: var(--hero);
+    }
+    .btn-primary:hover { background: rgba(212,167,44,0.25); }
+
+    .empty-msg {
+      color: var(--text-dim);
+      font-style: italic;
+      padding: 1rem 0;
+    }
+
+    .refresh-row {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 0.75rem;
+    }
+
+    .player-list-entry { display: flex; align-items: center; gap: 0.3rem; }
+
+    .id-short {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--text-dim);
+    }
+
+    .time-ago { color: var(--text-dim); font-size: 0.8rem; }
+  </style>
+</head>
+<body>
+  <div class="admin-wrap">
+    <h1>BRIMSTONE ADMIN</h1>
+    <p class="subtitle" id="version-line">Loading...</p>
+
+    <div class="stats-bar" id="stats-bar">
+      <div class="stat-box"><div class="label">Connections</div><div class="value" id="stat-connections">-</div></div>
+      <div class="stat-box"><div class="label">Active Games</div><div class="value" id="stat-rooms">-</div></div>
+      <div class="stat-box"><div class="label">Queue</div><div class="value" id="stat-queue">-</div></div>
+      <div class="stat-box"><div class="label">Uptime</div><div class="value" id="stat-uptime">-</div></div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="tab-games">Active Games</button>
+      <button class="tab-btn" data-tab="tab-saves">Saved Games</button>
+      <button class="tab-btn" data-tab="tab-players">Players</button>
+    </div>
+
+    <!-- ── Active Games tab ─────────────────────────── -->
+    <div id="tab-games" class="tab-content active">
+      <div class="refresh-row"><button class="btn" id="refresh-rooms">Refresh</button></div>
+      <table id="rooms-table">
+        <thead>
+          <tr>
+            <th>Room</th>
+            <th>Players</th>
+            <th>Round</th>
+            <th>Phase</th>
+            <th>Status</th>
+            <th>Spectators</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="rooms-body"></tbody>
+      </table>
+      <p class="empty-msg" id="rooms-empty" style="display:none">No active games.</p>
+    </div>
+
+    <!-- ── Saved Games tab ──────────────────────────── -->
+    <div id="tab-saves" class="tab-content">
+      <div class="refresh-row"><button class="btn" id="refresh-saves">Refresh</button></div>
+      <table id="saves-table">
+        <thead>
+          <tr>
+            <th>Save ID</th>
+            <th>Hero</th>
+            <th>Witch</th>
+            <th>Round</th>
+            <th>Phase</th>
+            <th>Version</th>
+            <th>Last Updated</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="saves-body"></tbody>
+      </table>
+      <p class="empty-msg" id="saves-empty" style="display:none">No saved games.</p>
+    </div>
+
+    <!-- ── Players tab ──────────────────────────────── -->
+    <div id="tab-players" class="tab-content">
+      <div class="refresh-row"><button class="btn" id="refresh-players">Refresh</button></div>
+      <table id="players-table">
+        <thead>
+          <tr>
+            <th>Username</th>
+            <th>Wins</th>
+            <th>Losses</th>
+            <th>Draws</th>
+            <th>Win %</th>
+            <th>Joined</th>
+          </tr>
+        </thead>
+        <tbody id="players-body"></tbody>
+      </table>
+      <p class="empty-msg" id="players-empty" style="display:none">No registered players.</p>
+    </div>
+  </div>
+
+  <script>
+    // ── Helpers ──────────────────────────────────────────────────────────────────
+
+    async function api(path) {
+      const res = await fetch(path);
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      return res.json();
+    }
+
+    function timeAgo(unixSeconds) {
+      const diff = Math.floor(Date.now() / 1000) - unixSeconds;
+      if (diff < 60)   return `${diff}s ago`;
+      if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+      if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+      return `${Math.floor(diff / 86400)}d ago`;
+    }
+
+    function formatUptime(seconds) {
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      const s = seconds % 60;
+      if (h > 0) return `${h}h ${m}m`;
+      if (m > 0) return `${m}m ${s}s`;
+      return `${s}s`;
+    }
+
+    function shortId(id) {
+      if (!id) return '-';
+      return id.slice(0, 8);
+    }
+
+    // ── Tabs ────────────────────────────────────────────────────────────────────
+
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById(btn.dataset.tab).classList.add('active');
+      });
+    });
+
+    // ── Stats ───────────────────────────────────────────────────────────────────
+
+    async function loadStats() {
+      try {
+        const stats = await api('/admin/api/stats');
+        document.getElementById('version-line').textContent = `v${stats.version}`;
+        document.getElementById('stat-connections').textContent = stats.connections;
+        document.getElementById('stat-rooms').textContent = stats.activeRooms;
+        document.getElementById('stat-queue').textContent = stats.queueSize;
+        document.getElementById('stat-uptime').textContent = formatUptime(stats.uptime);
+      } catch (e) {
+        document.getElementById('version-line').textContent = 'Failed to connect';
+      }
+    }
+
+    // ── Active Games ────────────────────────────────────────────────────────────
+
+    async function loadRooms() {
+      try {
+        const rooms = await api('/admin/api/rooms');
+        const tbody = document.getElementById('rooms-body');
+        const empty = document.getElementById('rooms-empty');
+
+        if (rooms.length === 0) {
+          tbody.innerHTML = '';
+          empty.style.display = '';
+          return;
+        }
+        empty.style.display = 'none';
+
+        tbody.innerHTML = rooms.map(r => {
+          const players = r.players.map(p => {
+            const factionClass = p.faction === 'hero' ? 'badge-hero' : 'badge-witch';
+            const aiTag = p.isAI ? ' <span class="badge badge-ai">AI</span>' : '';
+            return `<span class="badge ${factionClass}">${_esc(p.name)}${aiTag}</span>`;
+          }).join(' ');
+
+          const status = r.gameOver
+            ? `<span style="color:var(--red)">Game Over</span>`
+            : r.planningPhase
+              ? `<span style="color:var(--green)">Planning</span>`
+              : `<span style="color:var(--text-dim)">Resolving</span>`;
+
+          return `<tr>
+            <td><span class="id-short" title="${_esc(r.id)}">${shortId(r.id)}</span>
+                <span class="badge badge-phase">${_esc(r.code)}</span></td>
+            <td>${players}</td>
+            <td>${r.round}</td>
+            <td><span class="badge badge-phase">${_esc(r.phase)}</span></td>
+            <td>${status}</td>
+            <td>${r.spectatorCount}</td>
+            <td><button class="btn btn-primary" onclick="spectateRoom('${_esc(r.id)}')">Spectate</button></td>
+          </tr>`;
+        }).join('');
+      } catch (e) {
+        console.error('loadRooms error:', e);
+      }
+    }
+
+    // ── Saved Games ─────────────────────────────────────────────────────────────
+
+    async function loadSaves() {
+      try {
+        const saves = await api('/admin/api/saves');
+        const tbody = document.getElementById('saves-body');
+        const empty = document.getElementById('saves-empty');
+
+        if (saves.length === 0) {
+          tbody.innerHTML = '';
+          empty.style.display = '';
+          return;
+        }
+        empty.style.display = 'none';
+
+        tbody.innerHTML = saves.map(s => {
+          const heroName = s.hero_name || '-';
+          const witchName = s.witch_name || '-';
+          const updated = s.updated_at ? timeAgo(s.updated_at) : '-';
+
+          return `<tr>
+            <td><span class="id-short" title="${_esc(s.room_id)}">${shortId(s.room_id)}</span></td>
+            <td><span class="badge badge-hero">${_esc(heroName)}</span></td>
+            <td><span class="badge badge-witch">${_esc(witchName)}</span></td>
+            <td>${s.round}</td>
+            <td><span class="badge badge-phase">${_esc(s.phase)}</span></td>
+            <td>${_esc(s.game_version)}</td>
+            <td class="time-ago">${updated}</td>
+            <td><button class="btn btn-primary" onclick="activateSave('${_esc(s.room_id)}')">Activate</button></td>
+          </tr>`;
+        }).join('');
+      } catch (e) {
+        console.error('loadSaves error:', e);
+      }
+    }
+
+    async function activateSave(roomId) {
+      try {
+        const res = await fetch(`/admin/api/saves/${roomId}/activate`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) {
+          alert(data.error || 'Failed to activate save.');
+          return;
+        }
+        // Refresh both tabs — game moved from saves to active rooms
+        loadRooms();
+        loadSaves();
+        loadStats();
+        // Open spectator in new tab
+        spectateRoom(data.roomId);
+      } catch (e) {
+        alert('Network error activating save.');
+      }
+    }
+
+    // ── Players ─────────────────────────────────────────────────────────────────
+
+    async function loadPlayers() {
+      try {
+        const players = await api('/admin/api/players');
+        const tbody = document.getElementById('players-body');
+        const empty = document.getElementById('players-empty');
+
+        if (players.length === 0) {
+          tbody.innerHTML = '';
+          empty.style.display = '';
+          return;
+        }
+        empty.style.display = 'none';
+
+        tbody.innerHTML = players.map(p => {
+          const joined = p.created_at ? timeAgo(p.created_at) : '-';
+          return `<tr>
+            <td>${_esc(p.username)}</td>
+            <td>${p.wins}</td>
+            <td>${p.losses}</td>
+            <td>${p.draws}</td>
+            <td>${p.win_pct}%</td>
+            <td class="time-ago">${joined}</td>
+          </tr>`;
+        }).join('');
+      } catch (e) {
+        console.error('loadPlayers error:', e);
+      }
+    }
+
+    // ── Spectate ────────────────────────────────────────────────────────────────
+
+    function spectateRoom(roomId) {
+      window.open(`/spectate.html?room=${roomId}`, `spectate-${roomId}`);
+    }
+
+    // ── Escape helper ───────────────────────────────────────────────────────────
+
+    function _esc(str) {
+      if (!str) return '';
+      const el = document.createElement('span');
+      el.textContent = str;
+      return el.innerHTML;
+    }
+
+    // ── Init ────────────────────────────────────────────────────────────────────
+
+    document.getElementById('refresh-rooms').addEventListener('click', () => { loadRooms(); loadStats(); });
+    document.getElementById('refresh-saves').addEventListener('click', loadSaves);
+    document.getElementById('refresh-players').addEventListener('click', loadPlayers);
+
+    loadStats();
+    loadRooms();
+    loadSaves();
+    loadPlayers();
+
+    // Auto-refresh stats and rooms every 10 seconds
+    setInterval(() => { loadStats(); loadRooms(); }, 10000);
+  </script>
+</body>
+</html>

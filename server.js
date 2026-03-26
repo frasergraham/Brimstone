@@ -15,13 +15,12 @@ import {
   joinAIGame,
   handleAction, handleEndTurn, handlePlanSubmit,
   handleDisconnect, handleReconnect,
-  resumeGame,
+  resumeGame, adminResumeGame,
   getRoom,
   getRooms, getQueue,
   subscribeSpectator, unsubscribeSpectator, getRoomChronicle,
 } from './server/lobby.js';
 import {
-  requireAdmin, isValidAdminKey,
   getAllPlayers, getAllSaves, getSaveWithState,
 } from './server/admin.js';
 import { serializeState } from './server/state-sync.js';
@@ -60,10 +59,8 @@ app.get('/api/saves', (req, res) => {
 });
 
 // ── Admin REST API ────────────────────────────────────────────────────────────
-// All endpoints require ADMIN_KEY (via ?key= query param or X-Admin-Key header).
 
-app.get('/admin/api/stats', (req, res) => {
-  if (!requireAdmin(req, res)) return;
+app.get('/admin/api/stats', (_req, res) => {
   res.json({
     version:      VERSION,
     uptime:       Math.floor(process.uptime()),
@@ -73,13 +70,11 @@ app.get('/admin/api/stats', (req, res) => {
   });
 });
 
-app.get('/admin/api/rooms', (req, res) => {
-  if (!requireAdmin(req, res)) return;
+app.get('/admin/api/rooms', (_req, res) => {
   res.json(getRooms());
 });
 
 app.get('/admin/api/rooms/:id', (req, res) => {
-  if (!requireAdmin(req, res)) return;
   const room = getRoom(req.params.id);
   if (!room) { res.status(404).json({ error: 'Room not found.' }); return; }
   const summary = getRooms().find(r => r.id === req.params.id);
@@ -87,32 +82,37 @@ app.get('/admin/api/rooms/:id', (req, res) => {
 });
 
 app.get('/admin/api/rooms/:id/chronicle', (req, res) => {
-  if (!requireAdmin(req, res)) return;
   const chronicle = getRoomChronicle(req.params.id);
   if (chronicle === null) { res.status(404).json({ error: 'Room not found.' }); return; }
   res.json(chronicle);
 });
 
-app.get('/admin/api/queue', (req, res) => {
-  if (!requireAdmin(req, res)) return;
+app.get('/admin/api/queue', (_req, res) => {
   res.json(getQueue());
 });
 
-app.get('/admin/api/players', (req, res) => {
-  if (!requireAdmin(req, res)) return;
+app.get('/admin/api/players', (_req, res) => {
   res.json(getAllPlayers());
 });
 
-app.get('/admin/api/saves', (req, res) => {
-  if (!requireAdmin(req, res)) return;
+app.get('/admin/api/saves', (_req, res) => {
   res.json(getAllSaves());
 });
 
 app.get('/admin/api/saves/:roomId', (req, res) => {
-  if (!requireAdmin(req, res)) return;
   const save = getSaveWithState(req.params.roomId);
   if (!save) { res.status(404).json({ error: 'Save not found.' }); return; }
   res.json(save);
+});
+
+app.post('/admin/api/saves/:roomId/activate', (req, res) => {
+  const roomId = req.params.roomId;
+  const result = adminResumeGame(roomId);
+  if (!result.ok) {
+    res.status(result.status ?? 400).json({ error: result.error });
+    return;
+  }
+  res.json({ ok: true, roomId: result.roomId });
 });
 
 // ── HTTP + WS server ─────────────────────────────────────────────────────────
@@ -121,7 +121,7 @@ const server = createServer(app);
 const wss    = new WebSocketServer({ server });
 
 // Per-connection state
-const clients = new Map(); // ws → { player, roomId, cancelQueue?, isAdmin, spectatingRooms }
+const clients = new Map(); // ws → { player, roomId, cancelQueue?, spectatingRooms }
 
 function send(ws, obj) {
   if (ws.readyState === 1) ws.send(JSON.stringify(obj));
@@ -130,7 +130,7 @@ function send(ws, obj) {
 function clientState(ws) {
   if (!clients.has(ws)) clients.set(ws, {
     player: null, roomId: null, cancelQueue: null,
-    isAdmin: false, spectatingRooms: new Set(),
+    spectatingRooms: new Set(),
   });
   return clients.get(ws);
 }
@@ -151,8 +151,8 @@ wss.on('connection', ws => {
     if (cs.player && cs.roomId) {
       handleDisconnect(cs.player.id, cs.roomId);
     }
-    // Clean up any admin spectator subscriptions
-    if (cs.isAdmin && cs.spectatingRooms.size > 0) {
+    // Clean up any spectator subscriptions
+    if (cs.spectatingRooms.size > 0) {
       unsubscribeSpectator(ws);
     }
     clients.delete(ws);
@@ -262,30 +262,7 @@ function route(ws, cs, msg) {
     }
 
     // ── Admin / spectator ─────────────────────────────────────────────────
-    case 'adminAuth': {
-      if (!isValidAdminKey(msg.key)) {
-        send(ws, { type: 'adminAuthError', message: 'Invalid admin key.' });
-        return;
-      }
-      cs.isAdmin = true;
-      send(ws, { type: 'adminAuthOk' });
-      break;
-    }
-
-    case 'adminGetRooms': {
-      if (!cs.isAdmin) { send(ws, { type: 'error', message: 'Admin auth required.' }); return; }
-      send(ws, { type: 'adminRooms', rooms: getRooms() });
-      break;
-    }
-
-    case 'adminGetQueue': {
-      if (!cs.isAdmin) { send(ws, { type: 'error', message: 'Admin auth required.' }); return; }
-      send(ws, { type: 'adminQueue', queue: getQueue() });
-      break;
-    }
-
     case 'adminSpectateRoom': {
-      if (!cs.isAdmin) { send(ws, { type: 'error', message: 'Admin auth required.' }); return; }
       if (!msg.roomId) { send(ws, { type: 'error', message: 'roomId required.' }); return; }
       const joined = subscribeSpectator(msg.roomId, ws);
       if (!joined) {
@@ -297,7 +274,6 @@ function route(ws, cs, msg) {
     }
 
     case 'adminUnspectateRoom': {
-      if (!cs.isAdmin) return;
       const rid = msg.roomId;
       if (rid) {
         unsubscribeSpectator(ws, rid);

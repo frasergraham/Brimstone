@@ -1,32 +1,5 @@
-// Admin API helpers — protected by ADMIN_KEY environment variable.
-// Set ADMIN_KEY in your environment to enable the admin panel.
-// Leave unset to disable all admin endpoints.
+// Admin API helpers — open access (no authentication required).
 import db from './db.js';
-
-export const ADMIN_KEY = process.env.ADMIN_KEY ?? null;
-
-/** Returns true when the supplied key matches the configured ADMIN_KEY. */
-export function isValidAdminKey(key) {
-  return ADMIN_KEY !== null && typeof key === 'string' && key === ADMIN_KEY;
-}
-
-/**
- * Express middleware helper — call at the top of each admin route handler.
- * Writes the 401/403 response and returns false when auth fails;
- * returns true when the caller may proceed.
- */
-export function requireAdmin(req, res) {
-  if (!ADMIN_KEY) {
-    res.status(403).json({ error: 'Admin panel disabled (ADMIN_KEY not configured).' });
-    return false;
-  }
-  const key = req.query.key || req.headers['x-admin-key'];
-  if (!isValidAdminKey(key)) {
-    res.status(401).json({ error: 'Invalid admin key.' });
-    return false;
-  }
-  return true;
-}
 
 /** All registered players with full stats, newest first. */
 export function getAllPlayers(limit = 500) {
