@@ -124,6 +124,76 @@ canvas { touch-action: pan-x pan-y; }
   cursor: pointer;
 }
 
+/* ── Create Game option rows ─────────────────────────────────────────── */
+.cg-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: 100%;
+  max-width: 340px;
+  margin: 0 auto 1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.cg-option-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-section);
+}
+.cg-option-row:last-child { border-bottom: none; }
+.cg-option-label {
+  flex: 1;
+  font-size: 0.88rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.cg-option-hint {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  opacity: 0.6;
+}
+/* Toggle switch for checkboxes in create-game */
+.cg-toggle {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.cg-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+.cg-toggle-track {
+  display: block;
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.1);
+  border: 1px solid rgba(255,255,255,0.15);
+  transition: background 0.2s, border-color 0.2s;
+  position: relative;
+}
+.cg-toggle-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition: transform 0.2s, background 0.2s;
+}
+.cg-toggle input:checked + .cg-toggle-track {
+  background: rgba(180,140,60,0.25);
+  border-color: var(--day);
+}
+.cg-toggle input:checked + .cg-toggle-track::after {
+  transform: translateX(16px);
+  background: var(--day);
+}
+
 /* ── Players-per-side selector ───────────────────────────────────────── */
 .pps-selector {
   display: flex;
@@ -292,6 +362,59 @@ canvas { touch-action: pan-x pan-y; }
   grid-template-columns: 1fr 1fr;
   gap: 0.5rem;
   margin-bottom: 0.75rem;
+}
+
+/* ── Lobby slots grid ────────────────────────────────────────────────────── */
+.lobby-factions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  text-align: left;
+}
+.lobby-faction-col {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  padding: 0.6rem 0.7rem;
+}
+.lobby-faction-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin-bottom: 0.5rem;
+}
+.lobby-slot-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2rem;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  padding-bottom: 0.3rem;
+  margin-bottom: 0.3rem;
+}
+.lobby-slot-row:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+.lobby-slot-name {
+  flex: 1;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+.lobby-slot-name.empty-slot { color: var(--text-dim); font-style: italic; }
+.lobby-slot-name.ai-slot    { color: #b09050; }
+.lobby-slot-name em         { color: var(--text-dim); font-size: 0.78rem; }
+.lobby-slot-btn {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.4rem;
+  min-width: unset;
+}
+.lobby-personality-select {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.25rem;
+  max-width: 120px;
 }
 
 /* ── How to Play body ────────────────────────────────────────────────────── */
@@ -2171,3 +2294,14 @@ canvas { touch-action: pan-x pan-y; }
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+
+/* Admin link on welcome screen */
+.admin-link {
+  color: var(--text-dim, #7a7a8a);
+  font-size: 0.75rem;
+  text-decoration: none;
+  opacity: 0.55;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.admin-link:hover { opacity: 1; color: var(--text); text-decoration: underline; }

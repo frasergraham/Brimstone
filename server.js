@@ -10,9 +10,8 @@ import { registerOrLogin, getPlayerByToken } from './server/auth.js';
 import { getLeaderboard }                    from './server/leaderboard.js';
 import { getActiveSaves, pruneStaleAndIncompatibleSaves } from './server/saves.js';
 import {
-  joinQueue, leaveQueue,
-  createPrivateRoom, joinPrivateRoom,
-  joinAIGame,
+  createLobby, joinLobby, browseLobby,
+  setSlotAI, removeSlotAI, fillAllWithAI, startGame, leaveLobby,
   handleAction, handleEndTurn, handlePlanSubmit,
   handleDisconnect, handleReconnect,
   resumeGame, adminResumeGame,
@@ -126,7 +125,7 @@ const server = createServer(app);
 const wss    = new WebSocketServer({ server });
 
 // Per-connection state
-const clients = new Map(); // ws → { player, roomId, cancelQueue?, spectatingRooms }
+const clients = new Map(); // ws → { player, roomId, spectatingRooms }
 
 function send(ws, obj) {
   if (ws.readyState === 1) ws.send(JSON.stringify(obj));
@@ -134,7 +133,7 @@ function send(ws, obj) {
 
 function clientState(ws) {
   if (!clients.has(ws)) clients.set(ws, {
-    player: null, roomId: null, cancelQueue: null,
+    player: null, roomId: null,
     spectatingRooms: new Set(),
   });
   return clients.get(ws);
@@ -152,7 +151,6 @@ wss.on('connection', ws => {
   });
 
   ws.on('close', () => {
-    if (cs.cancelQueue) { cs.cancelQueue(); cs.cancelQueue = null; }
     if (cs.player && cs.roomId) {
       handleDisconnect(cs.player.id, cs.roomId);
     }
@@ -198,35 +196,52 @@ function route(ws, cs, msg) {
       break;
     }
 
-    // ── Matchmaking ───────────────────────────────────────────────────────
-    case 'joinQueue': {
+    // ── Lobby ─────────────────────────────────────────────────────────────
+    case 'createLobby': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
-      if (cs.cancelQueue) cs.cancelQueue();
-      cs.cancelQueue = joinQueue(cs.player.id, cs.player.username, ws, msg.fog ?? true, msg.playersPerSide ?? 1);
+      createLobby(cs.player.id, cs.player.username, ws, msg);
       break;
     }
 
-    case 'leaveQueue': {
-      if (cs.cancelQueue) { cs.cancelQueue(); cs.cancelQueue = null; }
-      leaveQueue(cs.player?.id);
+    case 'joinLobby': {
+      if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
+      joinLobby(cs.player.id, cs.player.username, ws, msg.codeOrId);
       break;
     }
 
-    case 'playAI': {
+    case 'browseLobby': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
-      joinAIGame(cs.player.id, cs.player.username, ws, msg.fog ?? true, msg.playersPerSide ?? 1);
+      send(ws, { type: 'lobbyList', rooms: browseLobby() });
       break;
     }
 
-    case 'createRoom': {
+    case 'setSlotAI': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
-      createPrivateRoom(cs.player.id, cs.player.username, ws, msg.fog ?? true, msg.playersPerSide ?? 1);
+      setSlotAI(cs.player.id, msg.roomId, msg.slotIndex, msg.personality);
       break;
     }
 
-    case 'joinRoom': {
+    case 'removeSlotAI': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
-      joinPrivateRoom(cs.player.id, cs.player.username, ws, msg.code);
+      removeSlotAI(cs.player.id, msg.roomId, msg.slotIndex);
+      break;
+    }
+
+    case 'fillAllWithAI': {
+      if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
+      fillAllWithAI(cs.player.id, msg.roomId, msg.personality);
+      break;
+    }
+
+    case 'startGame': {
+      if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
+      startGame(cs.player.id, msg.roomId);
+      break;
+    }
+
+    case 'leaveLobby': {
+      if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
+      leaveLobby(cs.player.id, msg.roomId);
       break;
     }
 
@@ -234,7 +249,10 @@ function route(ws, cs, msg) {
     case 'setRoom': {
       if (!cs.player) return;
       const room = getRoom(msg.roomId);
-      if (room && room.players.some(s => s.playerId === cs.player.id)) {
+      if (room && (
+        room.players.some(s => s.playerId === cs.player.id) ||
+        (room.status === 'lobby' && room.slots.some(s => s.playerId === cs.player.id))
+      )) {
         cs.roomId = msg.roomId;
       }
       break;
