@@ -13,6 +13,51 @@
     #end-turn-btn, #plan-panel, #cancel-wrap, #inventory-btn { display: none !important; }
     #game-over { display: none; }
 
+    /* Player ready panel (right side during planning) */
+    #sp-ready-panel {
+      width: 180px;
+      flex-shrink: 0;
+      background: var(--bg-panel);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .sp-ready-header {
+      padding: 0.5rem 0.75rem;
+      font-size: 0.78rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    #sp-ready-list {
+      padding: 0.4rem 0.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .sp-ready-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.78rem;
+      padding: 3px 4px;
+      border-radius: 3px;
+    }
+    .sp-ready-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: var(--text-dim);
+    }
+    .sp-ready-dot.submitted { background: var(--green); }
+    .sp-ready-name { color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sp-ready-faction-hero  { color: var(--hero); }
+    .sp-ready-faction-witch { color: var(--witch); }
+
     .spectator-banner {
       position: fixed;
       top: 0;
@@ -118,6 +163,14 @@
     <div id="cycle-bar"><div id="node-status-bar"></div></div>
 
     <main id="game-main">
+      <!-- Chronicle sidebar: left panel shown in 'full' chronicle mode -->
+      <div id="chronicle-sidebar" style="display:none">
+        <div class="chronicle-sidebar-header">
+          <span class="chronicle-title">📜 Chronicle</span>
+          <button id="chronicle-sidebar-close" title="Close chronicle">✕</button>
+        </div>
+        <div id="chronicle-sidebar-log"></div>
+      </div>
       <div id="canvas-wrapper">
         <canvas id="game-canvas"></canvas>
         <div id="unit-stats-bar" style="display:none"></div>
@@ -127,6 +180,12 @@
           <button id="zoom-fit" class="zoom-btn" title="Fit map">F</button>
         </div>
         <div id="chronicle-mini"></div>
+      </div>
+
+      <!-- Player ready list shown during planning phase -->
+      <div id="sp-ready-panel" style="display:none">
+        <div class="sp-ready-header">📋 Planning</div>
+        <div id="sp-ready-list"></div>
       </div>
 
       <div id="plan-panel" style="display:none"></div>
@@ -176,15 +235,16 @@
   </div>
 
   <script type="module">
-    import { Renderer }    from './src/renderer.js';
-    import { MirrorState } from './src/multiplayer.js';
-    import { VERSION }     from './src/version.js';
+    import { Renderer }      from './src/renderer.js';
+    import { MirrorState }   from './src/multiplayer.js';
+    import { VERSION }       from './src/version.js';
+    import { UIController }  from './src/ui.js';
 
     const versionEl = document.getElementById('game-version');
     if (versionEl) versionEl.textContent = `v${VERSION}`;
 
-    const params = new URLSearchParams(window.location.search);
-    const roomId = params.get('room');
+    const params   = new URLSearchParams(window.location.search);
+    const roomId   = params.get('room');
     const statusEl = document.getElementById('spectate-status');
 
     if (!roomId) {
@@ -193,8 +253,9 @@
       connectSpectator(roomId);
     }
 
-    let renderer = null;
-    let currentState = null;
+    let ui = null;
+    let planningPlayers = [];   // [{playerId, name, faction, isAI}]
+    let submittedIds    = new Set();
 
     function connectSpectator(roomId) {
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -227,27 +288,53 @@
           statusEl.style.display = 'none';
           document.getElementById('spectator-info').style.display = '';
           const state = MirrorState.fromSnapshot(msg.state);
-          initRenderer(state);
-          updateInfo(msg.players, state);
-          updateChronicle(state);
+          state.fogOfWar = false;
+          initUI(state);
+          updateInfoBar(msg.players, state);
           break;
         }
 
         case 'stateUpdate': {
           const state = MirrorState.fromSnapshot(msg.state);
-          updateState(state);
+          state.fogOfWar = false;
+          ui?.updateState(state);
+          updateRoundLabel(state);
+          checkGameOver(state);
           break;
         }
 
         case 'resolutionComplete': {
           const state = MirrorState.fromSnapshot(msg.finalState);
-          updateState(state);
+          state.fogOfWar = false;
+          ui?.updateState(state);
+          updateRoundLabel(state);
+          checkGameOver(state);
+          planningPlayers = [];
+          submittedIds = new Set();
+          renderReadyList();
           break;
         }
 
         case 'adminPlanningPhase': {
-          const roundEl = document.getElementById('sp-round');
-          roundEl.textContent = `Round ${msg.round} — ${msg.phase}`;
+          document.getElementById('sp-round').textContent = `Round ${msg.round} — ${msg.phase}`;
+          if (msg.players) {
+            planningPlayers = msg.players;
+            submittedIds = new Set();
+            renderReadyList();
+          }
+          break;
+        }
+
+        case 'playerSubmitted': {
+          submittedIds.add(msg.playerId);
+          renderReadyList();
+          break;
+        }
+
+        case 'resolutionStart': {
+          planningPlayers = [];
+          submittedIds = new Set();
+          renderReadyList();
           break;
         }
 
@@ -265,144 +352,71 @@
       }
     }
 
-    function initRenderer(state) {
-      currentState = state;
-      const canvas = document.getElementById('game-canvas');
-      renderer = new Renderer(canvas, state);
+    function initUI(state) {
+      const canvas   = document.getElementById('game-canvas');
+      const renderer = new Renderer(canvas, state);
       renderer.resize();
       renderer.loadImages();
 
-      // Wire up zoom controls
-      document.getElementById('zoom-in')?.addEventListener('click', () => {
-        renderer.zoomLevel = Math.min(4, renderer.zoomLevel * 1.3);
-        renderer.draw();
-      });
-      document.getElementById('zoom-out')?.addEventListener('click', () => {
-        renderer.zoomLevel = Math.max(0.5, renderer.zoomLevel / 1.3);
-        renderer.draw();
-      });
-      document.getElementById('zoom-fit')?.addEventListener('click', () => {
-        renderer.zoomLevel = 1;
-        renderer._panX = 0;
-        renderer._panY = 0;
-        renderer.draw();
-      });
+      const redraw = () => renderer.draw();
+      ui = new UIController(canvas, state, renderer, null, redraw, null, false);
+      ui.spectator = true;
 
-      // Handle canvas drag for panning
-      let dragging = false, lastX = 0, lastY = 0;
-      canvas.addEventListener('pointerdown', (e) => {
-        dragging = true;
-        lastX = e.clientX;
-        lastY = e.clientY;
-        canvas.setPointerCapture(e.pointerId);
-      });
-      canvas.addEventListener('pointermove', (e) => {
-        if (!dragging) return;
-        renderer._panX += e.clientX - lastX;
-        renderer._panY += e.clientY - lastY;
-        lastX = e.clientX;
-        lastY = e.clientY;
-        renderer.draw();
-      });
-      canvas.addEventListener('pointerup', () => { dragging = false; });
-      canvas.addEventListener('pointercancel', () => { dragging = false; });
-
-      // Scroll wheel zoom
-      canvas.addEventListener('wheel', (e) => {
-        e.preventDefault();
-        const factor = e.deltaY < 0 ? 1.1 : 0.9;
-        renderer.zoomLevel = Math.min(4, Math.max(0.5, renderer.zoomLevel * factor));
-        renderer.draw();
-      }, { passive: false });
-
-      // Window resize
       window.addEventListener('resize', () => {
         renderer.resize();
         renderer.draw();
       });
 
-      // Disable fog for spectators — show full map
-      state.fogOfWar = false;
       renderer.draw();
     }
 
-    function updateState(state) {
-      // Disable fog for spectators
-      state.fogOfWar = false;
-      currentState = state;
-
-      if (renderer) {
-        renderer.state = state;
-        renderer.draw();
-      }
-
-      updateChronicle(state);
-
-      // Update info bar
-      const roundEl = document.getElementById('sp-round');
-      roundEl.textContent = `Round ${state.round} — ${state.phase}`;
-
-      // Check game over
-      if (state.gameOver) {
-        const goEl = document.getElementById('spectate-game-over');
-        const winText = document.getElementById('sp-winner-text');
-        const reasonText = document.getElementById('sp-win-reason');
-        const winner = state.winner;
-        winText.textContent = winner === 'hero' ? 'Hero Wins!' : 'Witch Wins!';
-        winText.style.color = winner === 'hero' ? 'var(--hero)' : 'var(--witch)';
-        reasonText.textContent = state.winReason || '';
-        goEl.style.display = '';
-      }
-    }
-
-    function updateInfo(players, state) {
+    function updateInfoBar(players, state) {
       if (players) {
-        const heroPlayers = players.filter(p => p.faction === 'hero');
-        const witchPlayers = players.filter(p => p.faction === 'witch');
-
-        const heroNames = heroPlayers.map(p => p.name + (p.isAI ? ' (AI)' : '')).join(', ');
-        const witchNames = witchPlayers.map(p => p.name + (p.isAI ? ' (AI)' : '')).join(', ');
-
-        document.getElementById('sp-hero').textContent = `⚔ ${heroNames || 'Hero'}`;
+        const heroNames  = players.filter(p => p.faction === 'hero').map(p => p.name).join(', ');
+        const witchNames = players.filter(p => p.faction === 'witch').map(p => p.name).join(', ');
+        document.getElementById('sp-hero').textContent  = `⚔ ${heroNames  || 'Hero'}`;
         document.getElementById('sp-witch').textContent = `✦ ${witchNames || 'Witch'}`;
       }
+      updateRoundLabel(state);
+    }
+
+    function updateRoundLabel(state) {
       document.getElementById('sp-round').textContent = `Round ${state.round} — ${state.phase}`;
     }
 
-    function updateChronicle(state) {
-      // Update the mini chronicle with last few log entries
-      const mini = document.getElementById('chronicle-mini');
-      if (mini && state.log) {
-        const recent = state.log.slice(-5);
-        mini.innerHTML = recent.map(msg =>
-          `<div class="chronicle-mini-line">${escapeHtml(msg)}</div>`
-        ).join('');
-      }
-
-      // Update full chronicle overlay
-      const logEl = document.getElementById('event-log');
-      if (logEl && state.log) {
-        logEl.innerHTML = state.log.map(msg =>
-          `<div class="log-entry">${escapeHtml(msg)}</div>`
-        ).join('');
-        logEl.scrollTop = logEl.scrollHeight;
-      }
+    function checkGameOver(state) {
+      if (!state.gameOver) return;
+      const goEl = document.getElementById('spectate-game-over');
+      const winText   = document.getElementById('sp-winner-text');
+      const reasonEl  = document.getElementById('sp-win-reason');
+      winText.textContent = state.winner === 'hero' ? 'Hero Wins!' : 'Witch Wins!';
+      winText.style.color = state.winner === 'hero' ? 'var(--hero)' : 'var(--witch)';
+      reasonEl.textContent = state.winReason || '';
+      goEl.style.display = '';
     }
 
-    function escapeHtml(str) {
-      const el = document.createElement('span');
-      el.textContent = str;
-      return el.innerHTML;
+    function renderReadyList() {
+      const panel = document.getElementById('sp-ready-panel');
+      const list  = document.getElementById('sp-ready-list');
+      if (!panel || !list) return;
+      if (planningPlayers.length === 0) {
+        panel.style.display = 'none';
+        return;
+      }
+      panel.style.display = 'flex';
+      list.innerHTML = planningPlayers.map(p => {
+        const submitted  = submittedIds.has(p.playerId);
+        const fCls       = `sp-ready-faction-${p.faction}`;
+        const dotCls     = submitted ? 'sp-ready-dot submitted' : 'sp-ready-dot';
+        const status     = submitted ? '✓' : '…';
+        const safeName   = String(p.name).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return `<div class="sp-ready-row">
+          <span class="${dotCls}"></span>
+          <span class="sp-ready-name ${fCls}" title="${safeName}">${safeName}</span>
+          <span style="font-size:0.72rem;color:${submitted ? 'var(--green)' : 'var(--text-dim)'}">${status}</span>
+        </div>`;
+      }).join('');
     }
-
-    // Wire up chronicle overlay toggle
-    document.getElementById('chronicle-btn')?.addEventListener('click', () => {
-      const overlay = document.getElementById('chronicle-overlay');
-      overlay.style.display = overlay.style.display === 'flex' ? 'none' : 'flex';
-    });
-    document.getElementById('chronicle-close')?.addEventListener('click', () => {
-      document.getElementById('chronicle-overlay').style.display = 'none';
-    });
   </script>
 </body>
 </html>

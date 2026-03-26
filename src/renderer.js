@@ -74,9 +74,13 @@ export class Renderer {
     this.selectedEntityId = null;
 
     // Zoom & pan
-    this.zoomLevel = 1.0;
-    this._panX     = 0;
-    this._panY     = 0;
+    this.zoomLevel  = 1.0;
+    this._panX      = 0;
+    this._panY      = 0;
+    // Insets account for panels that overlay the canvas (plan panel right, chronicle sidebar left).
+    // Set by UIController when panels open/close so framing targets only the visible area.
+    this.insetLeft  = 0;
+    this.insetRight = 0;
 
     // Damage flash overlays: [{col, row, text, color, endTime, fontScale, textColor}]
     this._flashes = [];
@@ -277,9 +281,12 @@ export class Renderer {
    */
   _computeFrameView(positions, paddingHexes, maxZoom) {
     if (!positions || positions.length === 0) return null;
-    const W  = this.canvas.width;
-    const H  = this.canvas.height;
-    const hs = this.hexSize;
+    const fullW = this.canvas.width;
+    const H     = this.canvas.height;
+    const hs    = this.hexSize;
+    // Effective visible width excludes panels that overlay the canvas edges
+    const visW  = fullW - (this.insetLeft ?? 0) - (this.insetRight ?? 0);
+    const offX  = this.insetLeft ?? 0; // left offset of the visible area
 
     const pts = positions.map(p => this._toCanvas(p.col, p.row));
     let minX = pts[0].x, maxX = pts[0].x, minY = pts[0].y, maxY = pts[0].y;
@@ -292,17 +299,17 @@ export class Renderer {
     minX -= pad; maxX += pad;
     minY -= pad; maxY += pad;
 
-    // Zoom to fit the padded box, clamped to [1.0, maxZoom]
-    const z = Math.max(1.0, Math.min(maxZoom, Math.min(W / (maxX - minX), H / (maxY - minY))));
+    // Zoom to fit the padded box within the visible area, clamped to [1.0, maxZoom]
+    const z = Math.max(1.0, Math.min(maxZoom, Math.min(visW / (maxX - minX), H / (maxY - minY))));
 
-    // Pan to center the box
+    // Pan to center the box within the visible area (shifted by insetLeft)
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
-    let panX = W / 2 - cx * z;
+    let panX = offX + visW / 2 - cx * z;
     let panY = H / 2 - cy * z;
 
     // Clamp so the map doesn't drift off-screen
-    const minPanX = Math.min(0, W - W * z);
+    const minPanX = Math.min(0, fullW - fullW * z);
     const minPanY = Math.min(0, H - H * z);
     panX = Math.max(minPanX, Math.min(0, panX));
     panY = Math.max(minPanY, Math.min(0, panY));
@@ -404,7 +411,8 @@ export class Renderer {
 
   resetView() {
     this.zoomLevel = 1.0;
-    this._panX = 0;
+    // Offset pan so the map centers within the visible area (excluding side-panel insets)
+    this._panX = (this.insetLeft ?? 0) / 2 - (this.insetRight ?? 0) / 2;
     this._panY = 0;
   }
 

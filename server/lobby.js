@@ -318,6 +318,7 @@ function _startPlanningPhase(room) {
       name:         s.name,
       faction:      s.faction,
       isAI:         s.isAI,
+      personality:  s.personality ?? null,
       actionsLeft:  room.state.playerActionsLeft?.get(s.playerId) ?? 0,
     })),
   });
@@ -357,13 +358,15 @@ function _submitPlayerPlan(room, playerId, plan) {
     return;
   }
 
-  // Notify all other players that this player has locked in
-  broadcastExcept(room, playerId, {
+  // Notify all other players and spectators that this player has locked in
+  const submittedMsg = {
     type:     'playerSubmitted',
     playerId,
     name:     seatFor(room, playerId)?.name ?? playerId,
     faction:  factionFor(room, playerId),
-  });
+  };
+  broadcastExcept(room, playerId, submittedMsg);
+  broadcastToSpectators(room, submittedMsg);
 
   if (allReady) {
     _executeResolution(room);
@@ -464,21 +467,22 @@ function _serializeEvents(events) {
     };
     if (ev.result) {
       out.result = {
-        success:       ev.result.success,
-        log:           ev.result.log          ?? [],
-        encounterLog:  ev.result.encounterLog ?? [],
-        cost:          ev.result.cost         ?? 1,
-        killed:        ev.result.killed       ?? false,
-        damage:        ev.result.damage       ?? 0,
-        counterDmg:    ev.result.counterDmg   ?? 0,
-        crush:         ev.result.crush        ?? false,
-        counter:       ev.result.counter      ?? false,
-        attackRoll:    ev.result.attackRoll   ?? 0,
-        defenseRoll:   ev.result.defenseRoll  ?? 0,
-        hit:           ev.result.hit          ?? false,
-        margin:        ev.result.margin       ?? 0,
-        fortAbsorbed:  ev.result.fortAbsorbed ?? 0,
-        breakdown:     ev.result.breakdown    ?? null,
+        success:           ev.result.success,
+        log:               ev.result.log              ?? [],
+        encounterLog:      ev.result.encounterLog     ?? [],
+        encounterSurvivor: ev.result.encounterSurvivor ?? null,
+        cost:              ev.result.cost             ?? 1,
+        killed:            ev.result.killed           ?? false,
+        damage:            ev.result.damage           ?? 0,
+        counterDmg:        ev.result.counterDmg       ?? 0,
+        crush:             ev.result.crush            ?? false,
+        counter:           ev.result.counter          ?? false,
+        attackRoll:        ev.result.attackRoll       ?? 0,
+        defenseRoll:       ev.result.defenseRoll      ?? 0,
+        hit:               ev.result.hit              ?? false,
+        margin:            ev.result.margin           ?? 0,
+        fortAbsorbed:      ev.result.fortAbsorbed     ?? 0,
+        breakdown:         ev.result.breakdown        ?? null,
       };
     }
     if (ev.battleSnaps) {
@@ -533,6 +537,9 @@ function attachAI(room, faction, forPlayerId = null, personality = null) {
     ? `The AI Witch (${label})`
     : `The AI Hero (${label})`;
   _addSeat(room, syntheticPlayerId, null, name, faction, true, ai);
+  // Store personality on the seat for player-list broadcasts
+  const newSeat = seatFor(room, syntheticPlayerId);
+  if (newSeat) newSeat.personality = personality ?? 'balanced';
 
   // Also update AI flags on the state so fog-of-war works
   if (faction === 'witch') room.state.witchIsAI = true;
@@ -567,7 +574,7 @@ function _addExtraAISeat(room, faction, personality = null) {
   const leader       = room.state.entities.find(e => e.ownerId === pid);
   if (leader) leader.color = colors[factionIndex % colors.length];
 
-  const seat = { playerId: pid, ws: null, name, faction, isAI: true, ai };
+  const seat = { playerId: pid, ws: null, name, faction, isAI: true, ai, personality: personality ?? 'balanced' };
   room.players.push(seat);
   if (faction === 'witch') room.state.witchIsAI = true;
   else                     room.state.heroIsAI  = true;
@@ -798,7 +805,7 @@ export function startGame(playerId, roomId) {
 
   // Send matchFound to every human player
   const playerList = room.players.map(s => ({
-    playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI,
+    playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI, personality: s.personality ?? null,
   }));
   const aiOpponent = room.slots.some(s => s.status === 'ai');
   for (const slot of room.slots) {
@@ -952,6 +959,26 @@ export function handleReconnect(playerId, roomId, ws) {
 
   send(ws, { type: 'reconnected', faction: seat.faction, myPlayerId: playerId, roomId: room.id });
   send(ws, { type: 'stateUpdate', reason: 'reconnect', state: serializeState(room.state) });
+
+  // If the game is in planning phase, resend the planningPhase message so the
+  // client re-enters planning mode (no separate planningPhase is sent on reconnect otherwise).
+  if (room.state.planningPhase && !room.state.resolving) {
+    const budget = room.state.playerActionsLeft?.get(playerId)
+      ?? (seat.faction === 'hero' ? room.state.heroActionsLeft : room.state.witchActionsLeft);
+    const playerList = room.players.map(s => ({
+      playerId: s.playerId, name: s.name, faction: s.faction,
+      isAI: s.isAI, personality: s.personality ?? null,
+    }));
+    send(ws, {
+      type:            'planningPhase',
+      myActionsLeft:   budget,
+      heroActionsLeft:  room.state.heroActionsLeft,
+      witchActionsLeft: room.state.witchActionsLeft,
+      timeoutMs:        0,  // no countdown for reconnected players
+      players:          playerList,
+    });
+  }
+
   return true;
 }
 
@@ -980,7 +1007,7 @@ export function getRooms() {
     config:         room.config,
     slots:          room.slots.map(s => ({ faction: s.faction, status: s.status, name: s.name })),
     players:        room.players.map(s => ({
-      playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI,
+      playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI, personality: s.personality ?? null,
     })),
     spectatorCount: room.spectators.size,
     createdAt:      room.createdAt,
@@ -1007,7 +1034,7 @@ export function subscribeSpectator(roomId, ws) {
     roomId,
     state:     room.state ? serializeState(room.state) : null,
     players:   room.players.map(s => ({
-      playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI,
+      playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI, personality: s.personality ?? null,
     })),
     chronicle: room.chronicle,
   });
@@ -1127,7 +1154,7 @@ export function resumeGame(playerId, ws, roomId) {
 
   deleteSave(roomId);
 
-  const playerList = room.players.map(s => ({ playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI }));
+  const playerList = room.players.map(s => ({ playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI, personality: s.personality ?? null }));
   send(ws, {
     type:         'matchFound',
     roomId:       room.id,

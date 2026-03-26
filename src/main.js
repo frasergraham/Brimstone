@@ -222,7 +222,22 @@ async function _runLocalResolution() {
   const finalEntities = state.entities;
 
   const humanFaction = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : null;
+  const preReplayEntities = steps[0]?.entitySnapshot ?? finalEntities;
+
   await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+
+  // Show post-resolution summary modal (skip in autoplay mode)
+  if (!_autoplay && ui && humanFaction) {
+    let action;
+    do {
+      action = await ui._showResolutionSummary(steps, state.round);
+      if (action === 'replay') {
+        state.entities = preReplayEntities;
+        redraw();
+        await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+      }
+    } while (action === 'replay');
+  }
 
   const prevScore = { hero: state.nodeScore.hero, witch: state.nodeScore.witch };
 
@@ -328,7 +343,10 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     state.entities = postEntities;
     redrawFn();
 
-    if (!_autoplay && hadMove) await _delay(520); // slightly longer than anim duration (480ms)
+    if (!_autoplay && hadMove) {
+      const _spd = ui?.speedMode ?? 'cinematic';
+      if (_spd !== 'instant') await _delay(_spd === 'fast' ? 180 : 520);
+    }
     for (const entry of pendingDialogs) {
       redrawFn();
       if (entry.encounterUnit) {
@@ -380,14 +398,37 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             }, 350);
           }
           redrawFn();
-          if (significant && !_autoplay) {
-            await new Promise(resolve => {
-              ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
-            });
-          } else if (!_autoplay) {
-            ui._showBattleToast(actorSnap, targetSnap, result);
-            // Brief pause so map animation is visible before the next step
-            await _delay(ui.speedMode === 'instant' ? 150 : ui.speedMode === 'fast' ? 400 : 600);
+          if (!_autoplay) {
+            const speed = ui?.speedMode ?? 'cinematic';
+            // Decide display mode per speed setting:
+            //   cinematic — dialog for significant battles (default)
+            //   fast      — toast only; dialog on kill
+            //   instant   — no dialog/toast; skip pauses
+            const isKill = !!result?.killed;
+            const showFullDialog = speed === 'cinematic'
+              ? significant
+              : speed === 'fast'
+                ? isKill
+                : false; // instant: never
+
+            // Zoom: cinematic → significant battles only; fast/instant → never
+            const shouldZoom = speed === 'cinematic' && significant;
+
+            if (shouldZoom) {
+              renderer.frameHexes(
+                [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
+                { paddingHexes: 2.5, maxZoom: 2.0, duration: 350 },
+              );
+            }
+
+            if (showFullDialog) {
+              await new Promise(resolve => {
+                ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
+              });
+            } else if (speed !== 'instant') {
+              ui._showBattleToast(actorSnap, targetSnap, result);
+              await _delay(speed === 'fast' ? 300 : 600);
+            }
           }
           hadBattle = true;
         }
@@ -415,10 +456,14 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
     if (hadMove || hadBattle) {
       redrawFn();
-      if (!_autoplay) await _delay(hadMove ? 300 : 250);
+      if (!_autoplay) {
+        const _spd2 = ui?.speedMode ?? 'cinematic';
+        if (_spd2 !== 'instant') await _delay(_spd2 === 'fast' ? 80 : hadMove ? 300 : 250);
+      }
     } else if (events.length > 0 && !_autoplay) {
       // Non-visual actions (fortify, use_item, etc.) — brief pause so resolution feels deliberate.
-      await _delay(150);
+      const _spd3 = ui?.speedMode ?? 'cinematic';
+      if (_spd3 !== 'instant') await _delay(_spd3 === 'fast' ? 50 : 150);
     }
   }
 
@@ -1261,7 +1306,28 @@ function _createMpClient() {
       // This ensures state.entities is already correct when the last slide lands.
       const finalEntities = finalState.entities ?? state.entities;
 
-      _animateResolutionSteps(steps, finalEntities, redrawOnline, mp?.myFaction, mp?.myPlayerId ?? null).then(() => {
+      const _preReplayEntitiesOnline = steps[0]?.entitySnapshot ?? finalEntities;
+      _animateResolutionSteps(steps, finalEntities, redrawOnline, mp?.myFaction, mp?.myPlayerId ?? null).then(async () => {
+        // Show post-resolution summary modal for human players.
+        // Keep _resolving = true for the whole summary+replay block so that any
+        // incoming onPlanningPhase messages are buffered, not immediately applied.
+        if (ui && mp?.myFaction) {
+          _resolving = true;
+          let action;
+          do {
+            action = await ui._showResolutionSummary(steps, state.round);
+            if (action === 'replay') {
+              state.entities = _preReplayEntitiesOnline;
+              redrawOnline();
+              await _animateResolutionSteps(steps, finalEntities, redrawOnline, mp.myFaction, mp.myPlayerId ?? null);
+              // _animateResolutionSteps sets _resolving = false at end; re-engage
+              // the guard so onPlanningPhase stays buffered during the next summary show.
+              _resolving = true;
+            }
+          } while (action === 'replay');
+          _resolving = false;
+        }
+
         // Apply full final state (phase, round, score, tiles, etc.)
         Object.assign(state, finalState);
         state.hero      = finalState.hero;

@@ -37,6 +37,9 @@ export class UIController {
     this._lastHazardKey    = '';   // deduplicates hazard popups across state updates
     this._battleInterval   = null; // dice animation interval — cleared on new dialog
     this.speedMode         = 'cinematic'; // 'cinematic' | 'fast' | 'instant'
+    this._chronicleMode    = 'mini'; // 'none' | 'mini' | 'full'
+    // When true, disable all planning/action UI — used for spectator mode
+    this.spectator         = false;
 
     // ── Planning mode state ──────────────────────────────────────────────────
     this._planMode      = false;   // true during simultaneous planning phase
@@ -97,6 +100,7 @@ export class UIController {
       this.onRedraw();
     });
     document.getElementById('zoom-fit')?.addEventListener('click', () => {
+      this.renderer.resize(); // re-measure wrapper after any panel changes
       this.renderer.resetView();
       this.onRedraw();
     });
@@ -106,7 +110,17 @@ export class UIController {
       if (units.length > 0) this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 400 });
       this.onRedraw();
     });
-    document.getElementById('speed-toggle')?.addEventListener('click', () => this._toggleSpeed());
+    document.getElementById('speed-toggle')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._toggleSpeedPopup();
+    });
+    // Speed popup option clicks
+    document.getElementById('speed-popup')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.speed-option');
+      if (btn) this._setSpeed(btn.dataset.mode);
+    });
+    // Close speed popup on outside click
+    document.addEventListener('click', () => this._closeSpeedPopup());
 
     // Touch: tap, drag-to-pan, pinch-to-zoom (mobile)
     this.canvas.addEventListener('touchstart', e => {
@@ -192,10 +206,16 @@ export class UIController {
       if (!popup.contains(e.target) && e.target !== btn) popup.style.display = 'none';
     }, { passive: true });
 
-    // Chronicle overlay toggle (open button lives inside #chronicle-mini and is wired on each render)
-    document.getElementById('chronicle-close')?.addEventListener('click', () => this._toggleChronicle());
+    // Chronicle: three-state button lives inside #chronicle-mini (wired on each render).
+    // chronicle-close / chronicle-sidebar-close close back to 'none'.
+    document.getElementById('chronicle-close')?.addEventListener('click', () => {
+      this._setChronicleMode('none');
+    });
     document.getElementById('chronicle-overlay')?.addEventListener('click', e => {
-      if (e.target === document.getElementById('chronicle-overlay')) this._toggleChronicle();
+      if (e.target === document.getElementById('chronicle-overlay')) this._setChronicleMode('none');
+    });
+    document.getElementById('chronicle-sidebar-close')?.addEventListener('click', () => {
+      this._setChronicleMode('none');
     });
 
 
@@ -330,6 +350,8 @@ export class UIController {
         panel.classList.remove('collapsed');
       }
     }
+    // Plan panel overlays the right side of the canvas — bias framing away from it
+    if (this.renderer) this.renderer.insetRight = 220;
 
     this._clearSelection();
 
@@ -362,8 +384,8 @@ export class UIController {
       }
     }
 
-    // Show a brief phase-info toast so the player always knows current conditions.
-    this._showPhaseToast(faction);
+    // Show a dismissible phase-info modal so the player always knows current conditions.
+    this._showPhaseModal(faction, budget);
 
     // If attrition just increased, show a blocking popup after the toast settles.
     if (this.state.attritionChanged && this.state.attritionLevel > 0) {
@@ -390,7 +412,10 @@ export class UIController {
     const panel = document.getElementById('plan-panel');
     if (panel) { panel.style.display = 'none'; panel.classList.remove('collapsed'); }
 
-    if (this.renderer) this.renderer.planGhostSteps = null;
+    if (this.renderer) {
+      this.renderer.planGhostSteps = null;
+      this.renderer.insetRight = 0;
+    }
     this._clearSelection();
     this._updateSidebar();
     this.onRedraw();
@@ -681,6 +706,13 @@ export class UIController {
     const { x, y } = this._canvasPos(e);
     const hex = this._canvasToHex(x, y);
     if (hex.col < 0 || hex.col >= MAP_COLS || hex.row < 0 || hex.row >= MAP_ROWS) return;
+
+    // Spectators: view tile/unit info only — no actions or planning
+    if (this.spectator) {
+      this._showTileDetail(hex);
+      this.onRedraw();
+      return;
+    }
 
     // On opponent's turn, allow viewing tiles/units but block all actions
     if (!this._planMode && this._isOpponentTurn()) {
@@ -1270,6 +1302,15 @@ export class UIController {
       return;
     }
 
+    // During resolution, show neutral resolution label
+    if (state.resolving) {
+      el.innerHTML = `
+        <div class="turn-line">Round ${state.round}</div>
+        <div class="turn-line">⚙ Resolution Phase</div>
+      `;
+      return;
+    }
+
     const player = state.activePlayer === 'hero' ? 'Hero' : 'Witch';
     const isAI   = (state.activePlayer === 'witch' && state.witchIsAI) ||
                    (state.activePlayer === 'hero'  && state.heroIsAI);
@@ -1602,19 +1643,37 @@ export class UIController {
     }
   }
 
-  // ── Speed toggle ─────────────────────────────────────────────────────────
+  // ── Speed popup ───────────────────────────────────────────────────────────
 
-  _toggleSpeed() {
-    const modes  = ['cinematic', 'fast', 'instant'];
-    const labels = { cinematic: 'Cinematic', fast: 'Fast', instant: 'Instant' };
-    this.speedMode = modes[(modes.indexOf(this.speedMode) + 1) % modes.length];
+  static SPEED_LABELS = { cinematic: 'Cinematic', fast: 'Fast', instant: 'Instant' };
+
+  _toggleSpeedPopup() {
+    const popup = document.getElementById('speed-popup');
+    if (!popup) return;
+    const isOpen = popup.style.display !== 'none';
+    if (isOpen) { this._closeSpeedPopup(); return; }
+    // Mark active option
+    popup.querySelectorAll('.speed-option').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.mode === this.speedMode);
+    });
+    popup.style.display = 'flex';
+  }
+
+  _closeSpeedPopup() {
+    const popup = document.getElementById('speed-popup');
+    if (popup) popup.style.display = 'none';
+  }
+
+  _setSpeed(mode) {
+    if (!UIController.SPEED_LABELS[mode]) return;
+    this.speedMode = mode;
+    this._closeSpeedPopup();
     const btn = document.getElementById('speed-toggle');
     if (btn) {
-      btn.title = `Battle speed: ${labels[this.speedMode]}`;
-      btn.classList.toggle('speed-fast',    this.speedMode === 'fast');
-      btn.classList.toggle('speed-instant', this.speedMode === 'instant');
+      btn.title = `Battle speed: ${UIController.SPEED_LABELS[mode]}`;
+      btn.className = `zoom-btn speed-${mode}`;
     }
-    this._showSpeedToast(`⚡ Speed: ${labels[this.speedMode]}`);
+    this._showSpeedToast(`⚡ ${UIController.SPEED_LABELS[mode]}`);
   }
 
   _showSpeedToast(text) {
@@ -1683,7 +1742,10 @@ export class UIController {
 
   // ── Phase toast ──────────────────────────────────────────────────────────
 
-  _showPhaseToast(faction) {
+  _showPhaseModal(faction, budget) {
+    // Instant mode skips all popups
+    if (this.speedMode === 'instant') return;
+
     const phase = this.state.phase;
     const PHASE_INFO = {
       dawn:  { icon: '🌅', label: 'Dawn',  lines: ['Hero gains +1 action · Attrition rises', 'Power Nodes scored · Tiles reset'] },
@@ -1694,29 +1756,64 @@ export class UIController {
     const info = PHASE_INFO[phase];
     if (!info) return;
 
-    // Remove any existing toast first
-    document.getElementById('phase-toast')?.remove();
+    const el = document.getElementById('phase-modal');
+    if (!el) return;
 
-    const toast = document.createElement('div');
-    toast.id = 'phase-toast';
-    toast.className = `phase-toast phase-toast-${phase}`;
-    toast.innerHTML = `
-      <span class="phase-toast-icon">${info.icon}</span>
-      <div class="phase-toast-body">
-        <div class="phase-toast-title">${info.label} — Round ${this.state.round}</div>
-        <div class="phase-toast-lines">${info.lines.join(' · ')}</div>
-      </div>
-    `;
-    document.getElementById('game-screen')?.appendChild(toast);
+    // Compute action breakdown for display
+    const actions  = budget ?? (faction === 'hero' ? this.state.heroActionsLeft : this.state.witchActionsLeft) ?? 0;
+    const entities = this.state.entities;
+    let breakdown  = '';
+    if (faction === 'hero') {
+      const timeBonus     = (phase === 'day' || phase === 'dawn') ? 1 : 0;
+      const survivorCount = entities.filter(e => e.alive && e.owner === 'hero' && e.type !== 'hero').length;
+      const survivorBonus = Math.min(survivorCount, 5);
+      const parts = ['3 base'];
+      if (timeBonus)     parts.push(`+1 ${phase}`);
+      if (survivorBonus) parts.push(`+${survivorBonus} survivor${survivorBonus !== 1 ? 's' : ''}`);
+      breakdown = parts.join(' · ');
+    } else {
+      const timeBonus = phase === 'night' ? 1 : 0;
+      const unitCount = entities.filter(e => e.alive && e.owner === 'witch' && e.type !== 'witch').length;
+      const unitBonus = Math.min(Math.floor(unitCount / 2), 4);
+      const parts = ['4 base'];
+      if (timeBonus) parts.push('+1 night');
+      if (unitBonus) parts.push(`+${unitBonus} units`);
+      breakdown = parts.join(' · ');
+    }
 
-    // Auto-dismiss after 3.2s
-    setTimeout(() => toast.classList.add('phase-toast-hide'), 3200);
-    setTimeout(() => toast.remove(), 3700);
+    // Set content
+    const iconEl    = el.querySelector('.phase-modal-icon');
+    const titleEl   = el.querySelector('.phase-modal-title');
+    const effectsEl = el.querySelector('.phase-modal-effects');
+    const budgetEl  = el.querySelector('.phase-modal-budget');
+    if (iconEl)    iconEl.textContent   = info.icon;
+    if (titleEl)   titleEl.textContent  = `${info.label} — Round ${this.state.round}`;
+    if (effectsEl) effectsEl.innerHTML  = info.lines.map(l => `<div>${l}</div>`).join('');
+    if (budgetEl) {
+      const pips = Array.from({ length: actions }, () =>
+        `<span class="action-pip">●</span>`
+      ).join('');
+      budgetEl.innerHTML =
+        `<span class="action-pip-label">${actions} action${actions !== 1 ? 's' : ''}</span>${pips}` +
+        `<div class="action-breakdown">${breakdown}</div>`;
+    }
+
+    // Set phase accent class
+    el.className = `visible phase-${phase}`;
+
+    // Dismiss only on button click — no auto-dismiss, no backdrop click
+    const continueBtn = document.getElementById('phase-modal-continue');
+    const dismiss = () => {
+      el.classList.remove('visible');
+      continueBtn?.removeEventListener('click', dismiss);
+    };
+    continueBtn?.addEventListener('click', dismiss);
   }
 
   // ── Scoring toast (dawn / dusk checkpoints) ──────────────────────────────
 
   showScoringToast(prevScore) {
+    if (this.speedMode === 'instant') return;
     const state      = this.state;
     const phase      = state.phase; // 'dawn' or 'dusk' — already advanced by endRound()
     const phaseIcon  = phase === 'dawn' ? '🌅' : '🌇';
@@ -1846,8 +1943,12 @@ export class UIController {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') dismiss();
     };
 
-    if (this.autoplay) {
-      setTimeout(dismiss, 700);
+    if (this.autoplay || this.speedMode === 'instant') {
+      setTimeout(dismiss, this.autoplay ? 700 : 80);
+    } else if (this.speedMode === 'fast') {
+      setTimeout(dismiss, 600);
+      dialog.addEventListener('click', dismiss);
+      document.addEventListener('keydown', keyDismiss);
     } else {
       dialog.addEventListener('click', dismiss);
       document.addEventListener('keydown', keyDismiss);
@@ -2294,23 +2395,10 @@ export class UIController {
       let html = '';
       if (visible.length) html += `<div class="tile-units-heading">Units</div>`;
       for (const u of myUnits) {
-        const col    = ENTITY_COLOR[u.type] || '#888';
-        const hearts = '♥'.repeat(u.hp) + '♡'.repeat(Math.max(0, u.maxHp - u.hp));
-        const atkStr = `${u.attack}${u.attackBonus ? `+${u.attackBonus}` : ''}`;
-        const defStr = `${u.defense}${u.defenseBonus ? `+${u.defenseBonus}` : ''}`;
-        const label  = u.type === EntityType.SURVIVOR && u.name ? u.name : u.displayName;
-        html += `<div class="tile-unit-card selectable" data-unit-id="${u.id}">
-          <span class="tile-unit-card-name" style="color:${col}">${label}</span>
-          <span class="tile-unit-card-stats">${hearts} · ATK ${atkStr} · DEF ${defStr}</span>
-        </div>`;
+        html += _unitCardHTML(u, { renderer: this.renderer, selectable: true });
       }
       for (const u of foeUnits) {
-        const col    = ENTITY_COLOR[u.type] || '#888';
-        const hearts = '♥'.repeat(u.hp) + '♡'.repeat(Math.max(0, u.maxHp - u.hp));
-        html += `<div class="tile-unit-card">
-          <span class="tile-unit-card-name" style="color:${col}">${u.displayName}</span>
-          <span class="tile-unit-card-stats">${hearts}</span>
-        </div>`;
+        html += _unitCardHTML(u, { renderer: this.renderer, showStats: false });
       }
       unitsEl.innerHTML = html;
       unitsEl.querySelectorAll('.tile-unit-card.selectable').forEach(card => {
@@ -2333,13 +2421,32 @@ export class UIController {
     document.getElementById('tile-zoom-overlay')?.classList.remove('visible');
   }
 
-  _toggleChronicle() {
-    const overlay = document.getElementById('chronicle-overlay');
-    if (!overlay) return;
-    overlay.classList.toggle('visible');
-    if (overlay.classList.contains('visible')) {
-      this._renderLog(); // rebuild full log before showing
-    }
+  /** Cycle chronicle through: none → mini → full → none */
+  _cycleChronicle() {
+    const modes = ['none', 'mini', 'full'];
+    const next  = modes[(modes.indexOf(this._chronicleMode) + 1) % modes.length];
+    this._setChronicleMode(next);
+  }
+
+  _setChronicleMode(mode) {
+    this._chronicleMode = mode;
+    const sidebar = document.getElementById('chronicle-sidebar');
+    if (sidebar) sidebar.style.display = mode === 'full' ? 'flex' : 'none';
+    this._renderMiniChronicle();
+    if (mode === 'full') this._renderSidebarLog();
+    // Update renderer inset so framing avoids the sidebar area
+    if (this.renderer) this.renderer.insetLeft = mode === 'full' ? 240 : 0;
+    // Resize canvas to account for sidebar width change, then redraw
+    this.renderer?.resize();
+    this.onRedraw?.();
+  }
+
+  _renderSidebarLog() {
+    const el = document.getElementById('chronicle-sidebar-log');
+    if (!el) return;
+    const visible = this._visibleLog();
+    el.innerHTML = visible.map(m => `<div class="log-entry">${this._logText(m)}</div>`).join('');
+    el.scrollTop = el.scrollHeight;
   }
 
   _renderInventory() {
@@ -2393,18 +2500,131 @@ export class UIController {
     el.scrollTop = el.scrollHeight;
 
     this._renderMiniChronicle();
+    if (this._chronicleMode === 'full') this._renderSidebarLog();
   }
 
   _renderMiniChronicle() {
     const el = document.getElementById('chronicle-mini');
     if (!el) return;
-    const visible = this._visibleLog();
-    const last5 = visible.slice(-5);
-    const entries = last5
-      .map(m => `<div class="mini-log-entry">${this._logText(m)}</div>`)
-      .join('');
-    el.innerHTML = `<button id="chronicle-btn" class="chronicle-mini-btn" title="Chronicle">📜</button>${entries}`;
-    document.getElementById('chronicle-btn')?.addEventListener('click', () => this._toggleChronicle());
+    const mode       = this._chronicleMode ?? 'mini';
+    const activeClass = mode !== 'none' ? ' chronicle-mini-btn-active' : '';
+    const btnHtml    = `<button id="chronicle-btn" class="chronicle-mini-btn${activeClass}" title="Chronicle">📜</button>`;
+
+    if (mode === 'mini') {
+      const visible = this._visibleLog();
+      const last5   = visible.slice(-5);
+      const entries = last5.map(m => `<div class="mini-log-entry">${this._logText(m)}</div>`).join('');
+      el.innerHTML  = btnHtml + entries;
+    } else {
+      // 'none' or 'full': just the button (entries are in sidebar for full, hidden for none)
+      el.innerHTML = btnHtml;
+    }
+    document.getElementById('chronicle-btn')?.addEventListener('click', () => this._cycleChronicle());
+  }
+
+  /**
+   * Show the post-resolution round summary modal.
+   * Resolves with 'next' or 'replay'.
+   */
+  _showResolutionSummary(steps, roundNum) {
+    return new Promise(resolve => {
+      const el = document.getElementById('round-summary');
+      if (!el) { resolve('next'); return; }
+
+      // Collect kills, survivors found, and summons from steps
+      const kills     = [];
+      const survivors = [];
+      const summons   = [];
+      for (const step of steps ?? []) {
+        const allEvents = [
+          ...(step.heroEvents  ?? []),
+          ...(step.witchEvents ?? []),
+          ...(step.playerEvents ?? []).flatMap(pe => pe.events ?? []),
+        ];
+        for (const ev of allEvents) {
+          if (ev.result?.killed) {
+            const snap = ev.battleSnaps?.targetSnap ?? ev.result.killed;
+            const name = snap?.title ?? snap?.name ?? snap?.type ?? 'Unit';
+            kills.push(name);
+          }
+          if (ev.result?.encounterSurvivor) {
+            survivors.push(ev.result.encounterSurvivor);
+          }
+          if (ev.action?.type === 'summon' && ev.result?.success) {
+            const logLine = ev.result?.log?.[0] ?? '';
+            summons.push(logLine || 'Unit summoned');
+          }
+        }
+      }
+
+      const titleEl  = el.querySelector('.round-summary-title');
+      const eventsEl = document.getElementById('round-summary-events');
+      if (titleEl)  titleEl.textContent = `Round ${roundNum ?? ''} complete`;
+      if (eventsEl) {
+        let html = '';
+        for (const n of kills) {
+          html += `<div class="summary-kill">☠ ${n} slain</div>`;
+        }
+        for (const s of survivors) {
+          if (s.type === 'zombie') {
+            html += `<div class="summary-summon">† Zombie raised</div>`;
+          } else {
+            const label = s.title ? `${s.name} the ${s.title}` : s.name;
+            html += `<div class="summary-survivor">☺ ${label} joined</div>`;
+          }
+        }
+        for (const s of summons) {
+          html += `<div class="summary-summon">✦ ${s}</div>`;
+        }
+        eventsEl.innerHTML = html || `<div class="summary-neutral">No notable events this round.</div>`;
+      }
+
+      // Render replay-speed mini-picker
+      const speedRowEl = document.getElementById('round-summary-speed-row');
+      if (speedRowEl) {
+        const modes = Object.entries(UIController.SPEED_LABELS);
+        speedRowEl.innerHTML = modes.map(([mode, label]) =>
+          `<button class="summary-speed-btn${this.speedMode === mode ? ' active' : ''}" data-mode="${mode}">${label}</button>`
+        ).join('');
+        speedRowEl.querySelectorAll('.summary-speed-btn').forEach(btn => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._setSpeed(btn.dataset.mode);
+            speedRowEl.querySelectorAll('.summary-speed-btn').forEach(b =>
+              b.classList.toggle('active', b.dataset.mode === this.speedMode)
+            );
+          });
+        });
+      }
+
+      el.classList.add('visible');
+
+      const nextBtn   = document.getElementById('round-summary-next');
+      const replayBtn = document.getElementById('round-summary-replay');
+
+      const cleanup = () => {
+        el.classList.remove('visible');
+        nextBtn?.removeEventListener('click', onNext);
+        replayBtn?.removeEventListener('click', onReplay);
+      };
+      const onNext   = () => { cleanup(); resolve('next'); };
+      const onReplay = () => { cleanup(); resolve('replay'); };
+
+      nextBtn?.addEventListener('click', onNext);
+      replayBtn?.addEventListener('click', onReplay);
+    });
+  }
+
+  /**
+   * Update the live state reference (used by spectator mode and online reconnect).
+   * Refreshes the renderer, log, and sidebar without triggering AI.
+   */
+  updateState(newState) {
+    this.state = newState;
+    if (this.renderer) this.renderer.state = newState;
+    this._renderLog();
+    this._updateTurnInfo?.();
+    this.onRedraw?.();
   }
 
   refresh() {
@@ -2466,6 +2686,46 @@ const _SURVIVOR_TITLE_ASSET = {
 function _entityPortraitId(snap) {
   if (snap.type === 'survivor') return _SURVIVOR_TITLE_ASSET[snap.title] ?? null;
   return snap.type; // 'hero', 'witch', 'zombie', etc.
+}
+
+/**
+ * Render a unit card with circular portrait (or glyph fallback).
+ * Single shared implementation used by tile-detail, dialogs, etc.
+ *
+ * @param {object} entity   Entity or snap with type/name/title/hp/maxHp/attack/defense.
+ * @param {object} opts
+ * @param {Renderer} [opts.renderer]   For portrait lookup. If null, glyph only.
+ * @param {boolean} [opts.selectable]  Add `selectable` class + data-unit-id.
+ * @param {boolean} [opts.showStats]   Show ATK/DEF stats (default true).
+ * @param {number}  [opts.portraitSize] Portrait diameter in px (default 36).
+ */
+function _unitCardHTML(entity, { renderer = null, selectable = false, showStats = true, portraitSize = 36 } = {}) {
+  const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
+  const color  = ENTITY_COLOR[entity.type] || '#888';
+  const glyph  = GLYPHS[entity.type] ?? '?';
+  const label  = (entity.type === 'survivor' && entity.name) ? entity.name
+               : (entity.displayName ?? entity.name ?? entity.type);
+
+  // Portrait image (circular), falling back to text glyph
+  const assetId = _entityPortraitId(entity);
+  const src     = (renderer && assetId) ? renderer.getPortraitDataURL(assetId, portraitSize * 2) : null;
+  const portraitHtml = src
+    ? `<img class="tile-unit-card-portrait" src="${src}" style="width:${portraitSize}px;height:${portraitSize}px;border-color:${color};" alt="">`
+    : `<span class="tile-unit-card-icon" style="color:${color}">${glyph}</span>`;
+
+  // Stats line
+  const hearts = '♥'.repeat(entity.hp ?? 0) + '♡'.repeat(Math.max(0, (entity.maxHp ?? entity.hp ?? 0) - (entity.hp ?? 0)));
+  let statsHtml = hearts;
+  if (showStats && entity.attack !== undefined) {
+    const atkStr = `${entity.attack}${entity.attackBonus ? `+${entity.attackBonus}` : ''}`;
+    const defStr = `${entity.defense}${entity.defenseBonus ? `+${entity.defenseBonus}` : ''}`;
+    statsHtml = `${hearts} · ATK ${atkStr} · DEF ${defStr}`;
+  }
+
+  const cls    = selectable ? 'tile-unit-card selectable' : 'tile-unit-card';
+  const dataId = selectable ? ` data-unit-id="${entity.id}"` : '';
+
+  return `<div class="${cls}"${dataId}>${portraitHtml}<span class="tile-unit-card-name" style="color:${color}">${label}</span><span class="tile-unit-card-stats">${statsHtml}</span></div>`;
 }
 
 function _snapEntity(e) {
