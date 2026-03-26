@@ -302,7 +302,8 @@ export function executeMove(state, actor, targetCol, targetRow) {
       const s = createSurvivor(targetCol, targetRow, actor.ownerId);
       s.owner = 'hero';
       state.entities.push(s);
-      encounterLog.push(`A survivor steps out of hiding — ${s.name}, the ${s.title}! They join the party.`);
+      const abilityNote = s.abilityLabel ? ` · ${s.abilityLabel}` : '';
+      encounterLog.push(`☺ ${s.name} the ${s.title} steps out of hiding and joins the party! (HP ${s.hp}/${s.maxHp} · ATK ${s.attack} · DEF ${s.defense}${abilityNote})`);
       encounterSurvivor = {
         type: 'survivor',
         name: s.name, title: s.title,
@@ -314,7 +315,7 @@ export function executeMove(state, actor, targetCol, targetRow) {
     } else {
       const z = createZombie(targetCol, targetRow, actor.ownerId);
       state.entities.push(z);
-      encounterLog.push(`A cowering survivor is found… raised as a zombie by the witch!`);
+      encounterLog.push(`† A cowering survivor is found… raised as a zombie! (HP ${z.hp}/${z.maxHp} · ATK ${z.attack} · DEF ${z.defense})`);
       encounterSurvivor = {
         type: 'zombie',
         name: 'Zombie',
