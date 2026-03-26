@@ -1079,22 +1079,11 @@ export class Renderer {
     ctx.moveTo(corners[0].x, corners[0].y);
     for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
     ctx.closePath();
-
-    // Radial gradient: bright glow at centre, fades toward edges
-    const rgba = _parseColor(color);
-    if (rgba) {
-      const [r, g, b, a] = rgba;
-      const grad = ctx.createRadialGradient(x, y, 0, x, y, hs * 0.92);
-      grad.addColorStop(0,    `rgba(${r},${g},${b},${Math.min(1, a * 3.2)})`);
-      grad.addColorStop(0.5,  `rgba(${r},${g},${b},${a})`);
-      grad.addColorStop(1,    `rgba(${r},${g},${b},${a * 0.15})`);
-      ctx.fillStyle = grad;
-    } else {
-      ctx.fillStyle = color;
-    }
+    ctx.fillStyle = color;
     ctx.fill();
 
     // Crisp border ring at full saturation
+    const rgba = _parseColor(color);
     if (rgba) {
       const [r, g, b, a] = rgba;
       ctx.strokeStyle = `rgba(${r},${g},${b},${Math.min(1, a * 4)})`;
@@ -1137,6 +1126,18 @@ export class Renderer {
     ctx.strokeStyle = color;
     ctx.lineWidth   = lineWidth;
     ctx.stroke();
+
+    // Specular: thin bright stroke on the upper two edges (top-lit bevel)
+    // Corners 5→0→1 are the naturally lit faces of a pointy-top hex.
+    ctx.beginPath();
+    ctx.moveTo(corners[5].x, corners[5].y);
+    ctx.lineTo(corners[0].x, corners[0].y);
+    ctx.lineTo(corners[1].x, corners[1].y);
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth   = Math.max(0.5, lineWidth * 0.45);
+    ctx.lineCap     = 'round';
+    ctx.stroke();
+    ctx.lineCap     = 'butt';
   }
 
   _drawEntityStack(col, row, stack) {

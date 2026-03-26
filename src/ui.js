@@ -1210,7 +1210,7 @@ export class UIController {
       <span class="usb-hp-wrap">
         <span class="usb-stat">HP</span>
         <span class="usb-hp-track">
-          <span class="usb-hp-fill" style="width:${hpPct}%;background:${hpColor}"></span>
+          <span class="usb-hp-fill" style="width:${hpPct}%;background:linear-gradient(to bottom,rgba(255,255,255,0.28) 0%,rgba(255,255,255,0) 55%),${hpColor}"></span>
         </span>
         <span class="usb-stat-val">${entity.hp}/${entity.maxHp}</span>
       </span>
