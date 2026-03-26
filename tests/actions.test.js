@@ -13,7 +13,7 @@ import {
   Entity, EntityType, SurvivorAbility,
   createHero, createWitch, createMinion, createZombie, createSurvivor, resetRoster,
 } from '../src/entities.js';
-import { TileType, ResourceType, WeaponType } from '../src/tiles.js';
+import { TileType, BuildingType, ResourceType, WeaponType } from '../src/tiles.js';
 import { hexKey, getNeighbors } from '../src/hex.js';
 
 function freshState() {
@@ -726,6 +726,72 @@ describe('executeUseItem — weapon equip', () => {
     state.hero.items['weapon:sword'] = 0;
     const r = executeUseItem(state, state.hero, 'weapon:sword');
     assert.equal(r.success, false);
+  });
+});
+
+// ── auto-equip weapon on loot ─────────────────────────────────────────────────
+
+describe('auto-equip weapon on loot find', () => {
+  // Helper: place hero on a blacksmith tile and rig Math.random so rollLoot
+  // always picks the first entry (weapon:sword for blacksmith).
+  function blacksmithState() {
+    const state = freshState();
+    const hero = state.hero;
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.type = TileType.BUILDING;
+    t.building = BuildingType.BLACKSMITH;
+    t.explored = false;
+    return { state, hero, t };
+  }
+
+  // rollLoot is called twice per explore. We control both calls:
+  // call 1 (Math.random=0): blacksmith first entry → weapon:sword
+  // call 2 (Math.random=0.95): blacksmith last entry → wood (non-weapon)
+  function makeRandom(firstVal, secondVal) {
+    let calls = 0;
+    return () => calls++ === 0 ? firstVal : secondVal;
+  }
+
+  test('weapon auto-equipped when hero has no weapon', () => {
+    const { state, hero } = blacksmithState();
+    assert.equal(hero.weapon, null, 'precondition: no weapon');
+    const origRandom = Math.random;
+    Math.random = makeRandom(0, 0.95); // sword on first roll, wood on second
+    try {
+      executeExplore(state, hero);
+    } finally {
+      Math.random = origRandom;
+    }
+    assert.equal(hero.weapon, WeaponType.SWORD, 'sword should be auto-equipped');
+    assert.equal((hero.items['weapon:sword'] || 0), 0, 'should NOT be in items when auto-equipped');
+  });
+
+  test('weapon goes to items when hero already has a weapon', () => {
+    const { state, hero } = blacksmithState();
+    hero.equipWeapon(WeaponType.AXE); // already armed
+    const origRandom = Math.random;
+    Math.random = makeRandom(0, 0.95); // sword on first roll, wood on second
+    try {
+      executeExplore(state, hero);
+    } finally {
+      Math.random = origRandom;
+    }
+    assert.equal(hero.weapon, WeaponType.AXE, 'existing weapon should remain equipped');
+    assert.ok((hero.items['weapon:sword'] || 0) >= 1, 'new weapon should be in items');
+  });
+
+  test('auto-equip log message says equipped immediately', () => {
+    const { state, hero } = blacksmithState();
+    const origRandom = Math.random;
+    Math.random = makeRandom(0, 0.95); // sword on first roll, wood on second
+    let r;
+    try {
+      r = executeExplore(state, hero);
+    } finally {
+      Math.random = origRandom;
+    }
+    const combined = r.log.join(' ');
+    assert.ok(combined.includes('equips'), `log should mention equipping, got: "${combined}"`);
   });
 });
 

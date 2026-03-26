@@ -377,11 +377,17 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
 
   if (lootType.startsWith('weapon:')) {
     if (actor.owner === 'hero') {
-      actor.items[lootType] = (actor.items[lootType] || 0) + 1;
       const weaponKey = lootType.replace('weapon:', '');
       const label = WEAPON_LABEL[weaponKey] || weaponKey;
-      log.push(`Found a ${label}! Added to ${actor.displayName}'s pack.`);
-      lootItems?.push(`+${label}`);
+      if (!actor.weapon) {
+        actor.equipWeapon(weaponKey);
+        log.push(`Found a ${label}! ${actor.displayName} equips it immediately.`);
+        lootItems?.push(`+${label} (equipped)`);
+      } else {
+        actor.items[lootType] = (actor.items[lootType] || 0) + 1;
+        log.push(`Found a ${label}! Added to ${actor.displayName}'s pack.`);
+        lootItems?.push(`+${label}`);
+      }
     } else {
       log.push(`The witch finds a weapon but has no use for it.`);
     }
