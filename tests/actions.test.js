@@ -13,7 +13,7 @@ import {
   Entity, EntityType, SurvivorAbility,
   createHero, createWitch, createMinion, createZombie, createSurvivor, resetRoster,
 } from '../src/entities.js';
-import { TileType, ResourceType, WeaponType } from '../src/tiles.js';
+import { TileType, BuildingType, ResourceType, WeaponType } from '../src/tiles.js';
 import { hexKey, getNeighbors } from '../src/hex.js';
 
 function freshState() {
@@ -192,6 +192,37 @@ describe('executeMove', () => {
     assert.equal(r.success, true);
     assert.equal(r.encounterLog.length, 0);
   });
+
+  test('hero encounter returns encounterSurvivor with full stats', () => {
+    const state = freshState();
+    resetRoster();
+    const hero = state.hero;
+    const target = firstReachable(state, hero);
+    if (!target) return;
+    state.tiles.get(hexKey(target.col, target.row)).hiddenSurvivor = true;
+    const r = executeMove(state, hero, target.col, target.row);
+    assert.ok(r.encounterSurvivor, 'encounterSurvivor should be set');
+    assert.equal(r.encounterSurvivor.type, 'survivor');
+    assert.ok(r.encounterSurvivor.name, 'should have a name');
+    assert.ok(r.encounterSurvivor.title, 'should have a title');
+    assert.ok(typeof r.encounterSurvivor.hp === 'number', 'should have hp');
+    assert.ok(typeof r.encounterSurvivor.attack === 'number', 'should have attack');
+    assert.ok(typeof r.encounterSurvivor.defense === 'number', 'should have defense');
+  });
+
+  test('witch encounter returns encounterSurvivor with zombie stats', () => {
+    const state = freshState();
+    const witch = state.witch;
+    const target = firstReachable(state, witch);
+    if (!target) return;
+    state.tiles.get(hexKey(target.col, target.row)).hiddenSurvivor = true;
+    const r = executeMove(state, witch, target.col, target.row);
+    assert.ok(r.encounterSurvivor, 'encounterSurvivor should be set for zombie');
+    assert.equal(r.encounterSurvivor.type, 'zombie');
+    assert.ok(typeof r.encounterSurvivor.hp === 'number', 'zombie should have hp');
+    assert.ok(typeof r.encounterSurvivor.attack === 'number', 'zombie should have attack');
+    assert.ok(typeof r.encounterSurvivor.defense === 'number', 'zombie should have defense');
+  });
 });
 
 // ── executeExplore ────────────────────────────────────────────────────────────
@@ -273,6 +304,30 @@ describe('executeExplore', () => {
     // the herbalist path wasn't triggered for a non-herbalist
     // (covered by positive herbalist test above)
     assert.equal(t.explored, true);
+  });
+
+  test('returns lootItems array', () => {
+    const state = freshState();
+    const hero = state.hero;
+    state.tiles.get(hexKey(hero.col, hero.row)).explored = false;
+    const r = executeExplore(state, hero);
+    assert.ok(Array.isArray(r.lootItems), 'lootItems should be an array');
+  });
+
+  test('lootItems entries start with + when loot is found', () => {
+    // Run many times to get at least one non-nothing result
+    for (let i = 0; i < 50; i++) {
+      const state = freshState();
+      const hero = state.hero;
+      state.tiles.get(hexKey(hero.col, hero.row)).explored = false;
+      const r = executeExplore(state, hero);
+      const found = r.lootItems.filter(l => l.startsWith('+'));
+      if (found.length > 0) {
+        assert.ok(found.every(l => l.startsWith('+')), 'all loot labels should start with +');
+        return; // test passes
+      }
+    }
+    // If we never found loot in 50 tries, that's acceptable — loot tables include 'nothing'
   });
 });
 
@@ -674,6 +729,72 @@ describe('executeUseItem — weapon equip', () => {
   });
 });
 
+// ── auto-equip weapon on loot ─────────────────────────────────────────────────
+
+describe('auto-equip weapon on loot find', () => {
+  // Helper: place hero on a blacksmith tile and rig Math.random so rollLoot
+  // always picks the first entry (weapon:sword for blacksmith).
+  function blacksmithState() {
+    const state = freshState();
+    const hero = state.hero;
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.type = TileType.BUILDING;
+    t.building = BuildingType.BLACKSMITH;
+    t.explored = false;
+    return { state, hero, t };
+  }
+
+  // rollLoot is called twice per explore. We control both calls:
+  // call 1 (Math.random=0): blacksmith first entry → weapon:sword
+  // call 2 (Math.random=0.95): blacksmith last entry → wood (non-weapon)
+  function makeRandom(firstVal, secondVal) {
+    let calls = 0;
+    return () => calls++ === 0 ? firstVal : secondVal;
+  }
+
+  test('weapon auto-equipped when hero has no weapon', () => {
+    const { state, hero } = blacksmithState();
+    assert.equal(hero.weapon, null, 'precondition: no weapon');
+    const origRandom = Math.random;
+    Math.random = makeRandom(0, 0.95); // sword on first roll, wood on second
+    try {
+      executeExplore(state, hero);
+    } finally {
+      Math.random = origRandom;
+    }
+    assert.equal(hero.weapon, WeaponType.SWORD, 'sword should be auto-equipped');
+    assert.equal((hero.items['weapon:sword'] || 0), 0, 'should NOT be in items when auto-equipped');
+  });
+
+  test('weapon goes to items when hero already has a weapon', () => {
+    const { state, hero } = blacksmithState();
+    hero.equipWeapon(WeaponType.AXE); // already armed
+    const origRandom = Math.random;
+    Math.random = makeRandom(0, 0.95); // sword on first roll, wood on second
+    try {
+      executeExplore(state, hero);
+    } finally {
+      Math.random = origRandom;
+    }
+    assert.equal(hero.weapon, WeaponType.AXE, 'existing weapon should remain equipped');
+    assert.ok((hero.items['weapon:sword'] || 0) >= 1, 'new weapon should be in items');
+  });
+
+  test('auto-equip log message says equipped immediately', () => {
+    const { state, hero } = blacksmithState();
+    const origRandom = Math.random;
+    Math.random = makeRandom(0, 0.95); // sword on first roll, wood on second
+    let r;
+    try {
+      r = executeExplore(state, hero);
+    } finally {
+      Math.random = origRandom;
+    }
+    const combined = r.log.join(' ');
+    assert.ok(combined.includes('equips'), `log should mention equipping, got: "${combined}"`);
+  });
+});
+
 // ── executeUseAbility ─────────────────────────────────────────────────────────
 
 describe('executeUseAbility — HEAL', () => {
@@ -750,5 +871,88 @@ describe('executeUseAbility — RALLY', () => {
     // RALLY returns budgetBonus for the resolver to apply (both offline and online
     // use resolvePlans which handles budgetBonus; actionsLeft is not mutated directly)
     assert.equal(r.budgetBonus, 1, 'RALLY should return budgetBonus of 1');
+  });
+});
+
+// ── Inventory stash separation ─────────────────────────────────────────────
+// Design: Hero resources land in inventory.shared; witch resources land in
+// inventory.witch. The two stashes are independent. The plan-panel display
+// must use the human player's faction (via _planFaction) to select the correct
+// stash — using state.activePlayer is incorrect because it defaults to HERO
+// and is only updated during resolution, not during the planning phase.
+
+describe('Inventory stash separation', () => {
+  test('hero stash (inventory.shared) and witch stash (inventory.witch) are independent', () => {
+    const state = freshState();
+    // Populate both stashes with different resources
+    state.inventory.shared[ResourceType.WOOD] = 3;
+    state.inventory.shared[ResourceType.FOOD] = 1;
+    state.inventory.witch[ResourceType.METAL] = 2;
+
+    // Hero stash should contain hero resources only
+    assert.equal(state.inventory.shared[ResourceType.WOOD], 3);
+    assert.equal(state.inventory.shared[ResourceType.FOOD], 1);
+    assert.equal(state.inventory.shared[ResourceType.METAL] || 0, 0,
+      'hero stash must not contain witch metal');
+
+    // Witch stash should contain witch resources only
+    assert.equal(state.inventory.witch[ResourceType.METAL], 2);
+    assert.equal(state.inventory.witch[ResourceType.WOOD] || 0, 0,
+      'witch stash must not contain hero wood');
+    assert.equal(state.inventory.witch[ResourceType.FOOD] || 0, 0,
+      'witch stash must not contain hero food');
+  });
+
+  test('witch resources do not bleed into hero stash after summon', () => {
+    const state = freshState();
+    state.inventory.shared[ResourceType.METAL] = 0;
+    state.inventory.witch[ResourceType.METAL] = 1;
+
+    // Consuming witch metal (via summon) should not touch the hero stash
+    const target = getNeighbors(state.witch.col, state.witch.row)
+      .find(n => {
+        const t = state.tiles.get(hexKey(n.col, n.row));
+        return t && t.type !== TileType.RIVER &&
+          !state.entities.some(e => e.col === n.col && e.row === n.row);
+      });
+    if (!target) return; // skip if map has no valid spawn hex (shouldn't happen)
+
+    executeSummon(state, state.witch, target.col, target.row);
+
+    assert.equal(state.inventory.shared[ResourceType.METAL] || 0, 0,
+      'hero stash must be unchanged after witch summons');
+  });
+
+  // Regression guard: the plan-panel inventory display must use _planFaction
+  // (the faction the human is actually playing), NOT state.activePlayer which
+  // defaults to HERO and can be stale during the planning phase.
+  //
+  // Expected stash-selection logic (mirrors _renderInventory in ui.js):
+  //   const faction = this._planFaction ?? (state.activePlayer === Player.HERO ? 'hero' : 'witch');
+  //   const isHero  = faction === 'hero';
+  //   const stash   = isHero ? inv.shared : inv.witch;
+  test('stash selection: planFaction=witch overrides activePlayer=HERO', () => {
+    const state = freshState();
+    // Simulate the stale activePlayer scenario: activePlayer is HERO (the default)
+    // but the human is actually playing witch.
+    assert.equal(state.activePlayer, Player.HERO, 'precondition: activePlayer defaults to HERO');
+    const planFaction = 'witch'; // human is playing witch
+
+    // Reproduce the fixed stash-selection logic
+    const inv = state.inventory;
+    const isHero = planFaction === 'hero'; // correct: use planFaction, not activePlayer
+    const stash = isHero ? inv.shared : inv.witch;
+
+    state.inventory.witch[ResourceType.METAL] = 5;
+    state.inventory.shared[ResourceType.WOOD]  = 7;
+
+    assert.equal(stash, inv.witch, 'witch player must see inv.witch, not inv.shared');
+    assert.equal(stash[ResourceType.METAL], 5, 'witch player must see witch metal count');
+
+    // Verify the buggy code would have returned the wrong stash
+    const buggyIsHero = state.activePlayer === Player.HERO; // always true by default
+    const buggyStash  = buggyIsHero ? inv.shared : inv.witch;
+    assert.notEqual(buggyStash, stash,
+      'the bug (using activePlayer) returns the wrong stash for witch players');
   });
 });

@@ -1,7 +1,7 @@
-// Lobby: matchmaking queue, room lifecycle, server-side AI, action dispatch
+// Lobby: room lifecycle, server-side AI, action dispatch
 import { randomUUID } from 'crypto';
 import { GameState, Player } from '../src/game.js';
-import { WitchAI, HeroAI }  from '../src/ai.js';
+import { WitchAI, HeroAI, HERO_PERSONALITIES, WITCH_PERSONALITIES } from '../src/ai.js';
 import { serializeState, deserializeState } from './state-sync.js';
 import { recordResult }                    from './leaderboard.js';
 import { resolvePlansMP }                  from './resolver.js';
@@ -11,21 +11,35 @@ import { generateMultipleStarts }          from '../src/map.js';
 import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS } from '../src/entities.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
-const AI_FILL_DELAY_MS   = 5_000;  // wait this long before filling with AI
 const RECONNECT_GRACE_MS = 60_000; // time to reconnect before forfeit
 const AI_TAKEOVER_MS     = 12_000; // replace disconnected player with AI after 12s
 const TURN_TIMEOUT_MS    = 90_000; // auto-submit empty plan after 90s of inactivity
+const CHRONICLE_MAX      = 100;    // max rounds retained per room in the chronicle
 
 // ── State ────────────────────────────────────────────────────────────────────
 
 /** @type {Map<string, Room>} */
 const rooms = new Map();
 
-/** @type {{ playerId: string, ws: import('ws').WebSocket, playerName: string, joinedAt: number, fog: boolean }[]} */
-const queue = [];
-
 /** 6-char uppercase code → roomId */
 const codeToRoom = new Map();
+
+// ── Personality helpers ───────────────────────────────────────────────────────
+
+const PERSONALITY_LABELS = {
+  balanced:  'Balanced',
+  berserker: 'Berserker',
+  sentinel:  'Sentinel',
+  scavenger: 'Scavenger',
+  hoarder:   'Hoarder',
+  swarm:     'Swarm',
+};
+
+function _randomPersonality(faction) {
+  const registry = faction === 'witch' ? WITCH_PERSONALITIES : HERO_PERSONALITIES;
+  const keys = Object.keys(registry);
+  return keys[Math.floor(Math.random() * keys.length)];
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -43,10 +57,20 @@ const codeToRoom = new Map();
  */
 
 /**
+ * @typedef {{ faction:'hero'|'witch', seatIndex:number, status:'empty'|'human'|'ai',
+ *             playerId:string|null, name:string|null, personality:string|null }} SlotDescriptor
+ */
+
+/**
  * @typedef {{
  *   id:               string,
  *   code:             string,
- *   state:            import('../src/game.js').GameState,
+ *   status:           'lobby'|'playing',
+ *   isPrivate:        boolean,
+ *   hostPlayerId:     string|null,
+ *   config:           { fog:boolean, mapSize:string, playersPerSide:number },
+ *   slots:            SlotDescriptor[],
+ *   state:            import('../src/game.js').GameState|null,
  *   players:          Seat[],
  *   aiTimer:          ReturnType<typeof setTimeout>|null,
  *   turnTimer:        ReturnType<typeof setTimeout>|null,
@@ -73,6 +97,17 @@ function broadcastExcept(room, playerId, obj) {
   }
 }
 
+/** Send a message to every admin spectator watching this room. */
+function broadcastToSpectators(room, obj) {
+  for (const ws of room.spectators) send(ws, obj);
+}
+
+/** Append a chronicle entry and trim to CHRONICLE_MAX. */
+function _appendChronicle(room, entry) {
+  room.chronicle.push(entry);
+  if (room.chronicle.length > CHRONICLE_MAX) room.chronicle.shift();
+}
+
 function randomCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let c = '';
@@ -95,28 +130,82 @@ function wsFor(room, playerId) {
 
 // ── Room ─────────────────────────────────────────────────────────────────────
 
-/** Create an empty room shell. Players are added via _addSeat(). */
-function createRoom(fog = true) {
-  const id    = randomUUID();
+/**
+ * Create an empty room shell in lobby state.
+ * GameState is deferred — created when the host calls startGame().
+ * @param {object} [config]
+ * @param {boolean} [config.fog]
+ * @param {string}  [config.mapSize]
+ * @param {number}  [config.playersPerSide]
+ */
+function createRoom(config = {}) {
+  const id   = randomUUID();
   let   code;
   do { code = randomCode(); } while (codeToRoom.has(code));
 
-  const state = new GameState(false, false);
-  state.fogOfWar = fog;
-
   /** @type {Room} */
   const room = {
-    id, code, state,
+    id,
+    code,
+    status:           'lobby',
+    isPrivate:        false,
+    hostPlayerId:     null,
+    config: {
+      fog:            config.fog ?? true,
+      mapSize:        config.mapSize ?? 'standard',
+      playersPerSide: Math.max(1, Math.min(4, (config.playersPerSide | 0) || 1)),
+    },
+    slots:            [],
+    state:            null,
     players:          [],
-    aiTimer:          null,
     turnTimer:        null,
     disconnectTimers: new Map(),
     takeoverTimers:   new Map(),
+    spectators:       new Set(),
+    chronicle:        [],
+    createdAt:        Date.now(),
   };
 
   rooms.set(id, room);
   codeToRoom.set(code, id);
   return room;
+}
+
+/** Build an ordered slot array for the given players-per-side count. */
+function _buildSlots(playersPerSide) {
+  const pps   = Math.max(1, Math.min(4, playersPerSide | 0));
+  const slots = [];
+  for (let i = 0; i < pps; i++) {
+    slots.push({ faction: 'hero', seatIndex: i, status: 'empty', playerId: null, name: null, personality: null });
+  }
+  for (let i = 0; i < pps; i++) {
+    slots.push({ faction: 'witch', seatIndex: i, status: 'empty', playerId: null, name: null, personality: null });
+  }
+  return slots;
+}
+
+/** Serialise a lobby room for wire transmission (no ws refs). */
+function _lobbyPublic(room) {
+  return {
+    id:               room.id,
+    code:             room.isPrivate ? room.code : null,
+    isPrivate:        room.isPrivate,
+    hostPlayerId:     room.hostPlayerId,
+    config:           { ...room.config },
+    slots:            room.slots.map(s => ({ ...s })),
+    createdAt:        room.createdAt,
+    participantCount: room.slots.filter(s => s.status === 'human').length,
+  };
+}
+
+/** Send a lobbyUpdate to every human participant in a lobby room. */
+function broadcastLobbyUpdate(room) {
+  const payload = { type: 'lobbyUpdate', lobby: _lobbyPublic(room) };
+  for (const slot of room.slots) {
+    if (slot.status === 'human' && slot._ws) {
+      send(slot._ws, payload);
+    }
+  }
 }
 
 /**
@@ -152,10 +241,12 @@ function _addSeat(room, playerId, ws, name, faction, isAI, ai = null) {
 }
 
 function destroyRoom(room) {
-  if (room.aiTimer)   clearTimeout(room.aiTimer);
   if (room.turnTimer) clearTimeout(room.turnTimer);
   for (const t of room.disconnectTimers.values()) clearTimeout(t);
   for (const t of room.takeoverTimers.values())   clearTimeout(t);
+  // Notify admin spectators the room is gone
+  broadcastToSpectators(room, { type: 'adminRoomEnded', roomId: room.id });
+  room.spectators.clear();
   rooms.delete(room.id);
   codeToRoom.delete(room.code);
 }
@@ -215,6 +306,22 @@ function _startPlanningPhase(room) {
 
   _startPlanningTimer(room);
   _runAIPlanSubmission(room);
+
+  // Let admin spectators know a new planning phase has started
+  broadcastToSpectators(room, {
+    type:    'adminPlanningPhase',
+    roomId:  room.id,
+    round:   room.state.round,
+    phase:   room.state.phase,
+    players: room.players.map(s => ({
+      playerId:     s.playerId,
+      name:         s.name,
+      faction:      s.faction,
+      isAI:         s.isAI,
+      personality:  s.personality ?? null,
+      actionsLeft:  room.state.playerActionsLeft?.get(s.playerId) ?? 0,
+    })),
+  });
 }
 
 /** Generate and submit plans for every AI seat, staggered by a short random delay. */
@@ -251,13 +358,15 @@ function _submitPlayerPlan(room, playerId, plan) {
     return;
   }
 
-  // Notify all other players that this player has locked in
-  broadcastExcept(room, playerId, {
+  // Notify all other players and spectators that this player has locked in
+  const submittedMsg = {
     type:     'playerSubmitted',
     playerId,
     name:     seatFor(room, playerId)?.name ?? playerId,
     faction:  factionFor(room, playerId),
-  });
+  };
+  broadcastExcept(room, playerId, submittedMsg);
+  broadcastToSpectators(room, submittedMsg);
 
   if (allReady) {
     _executeResolution(room);
@@ -325,7 +434,23 @@ function _executeResolution(room) {
     entitySnapshot: step.entitySnapshot ?? [],
   }));
 
-  broadcast(room, { type: 'resolutionComplete', steps: serializedSteps, finalState });
+  const resolutionMsg = { type: 'resolutionComplete', steps: serializedSteps, finalState };
+  broadcast(room, resolutionMsg);
+  broadcastToSpectators(room, resolutionMsg);
+
+  // Append to the per-room chronicle for admin inspection
+  _appendChronicle(room, {
+    round:       finalState.round,
+    phase:       finalState.phase,
+    resolvedAt:  Date.now(),
+    steps:       serializedSteps,
+    entities:    finalState.entities.map(e => ({
+      id: e.id, type: e.type, owner: e.owner, ownerId: e.ownerId,
+      name: e.name, hp: e.hp, maxHp: e.maxHp, col: e.col, row: e.row,
+      alive: (e.hp ?? 0) > 0,
+    })),
+    log:         finalState.log ?? [],
+  });
 
   if (!state.gameOver) {
     setTimeout(() => _startPlanningPhase(room), 4000);
@@ -342,17 +467,22 @@ function _serializeEvents(events) {
     };
     if (ev.result) {
       out.result = {
-        success:      ev.result.success,
-        log:          ev.result.log          ?? [],
-        encounterLog: ev.result.encounterLog ?? [],
-        cost:         ev.result.cost         ?? 1,
-        killed:       ev.result.killed       ?? false,
-        damage:       ev.result.damage       ?? 0,
-        counterDmg:   ev.result.counterDmg   ?? 0,
-        crush:        ev.result.crush        ?? false,
-        counter:      ev.result.counter      ?? false,
-        attackRoll:   ev.result.attackRoll   ?? 0,
-        defenseRoll:  ev.result.defenseRoll  ?? 0,
+        success:           ev.result.success,
+        log:               ev.result.log              ?? [],
+        encounterLog:      ev.result.encounterLog     ?? [],
+        encounterSurvivor: ev.result.encounterSurvivor ?? null,
+        cost:              ev.result.cost             ?? 1,
+        killed:            ev.result.killed           ?? false,
+        damage:            ev.result.damage           ?? 0,
+        counterDmg:        ev.result.counterDmg       ?? 0,
+        crush:             ev.result.crush            ?? false,
+        counter:           ev.result.counter          ?? false,
+        attackRoll:        ev.result.attackRoll       ?? 0,
+        defenseRoll:       ev.result.defenseRoll      ?? 0,
+        hit:               ev.result.hit              ?? false,
+        margin:            ev.result.margin           ?? 0,
+        fortAbsorbed:      ev.result.fortAbsorbed     ?? 0,
+        breakdown:         ev.result.breakdown        ?? null,
       };
     }
     if (ev.battleSnaps) {
@@ -364,19 +494,20 @@ function _serializeEvents(events) {
 
 // ── AI helpers ────────────────────────────────────────────────────────────────
 
-function _makeAI(room, faction, playerId = null) {
-  return faction === 'witch'
-    ? new WitchAI(room.state, () => {}, 0, playerId)
-    : new HeroAI(room.state, () => {}, 0, playerId);
+function _makeAI(room, faction, playerId = null, personality = null) {
+  const registry   = faction === 'witch' ? WITCH_PERSONALITIES : HERO_PERSONALITIES;
+  const AICls      = registry[personality] ?? (faction === 'witch' ? WitchAI : HeroAI);
+  return new AICls(room.state, () => {}, 0, playerId);
 }
 
 /**
  * Attach a server AI to an existing faction slot.
  * Replaces the human player's seat entry with an AI seat.
+ * @param {string|null} personality  Key from HERO/WITCH_PERSONALITIES, or null for balanced.
  */
-function attachAI(room, faction, forPlayerId = null) {
+function attachAI(room, faction, forPlayerId = null, personality = null) {
   const syntheticPlayerId = `ai-${faction}-${randomUUID().slice(0, 8)}`;
-  const ai = _makeAI(room, faction, syntheticPlayerId);
+  const ai = _makeAI(room, faction, syntheticPlayerId, personality);
 
   if (forPlayerId) {
     // Take over an existing human seat
@@ -401,8 +532,14 @@ function attachAI(room, faction, forPlayerId = null) {
   }
 
   // Add a fresh AI seat (used when filling an empty slot)
-  const name = faction === 'witch' ? 'The AI Witch' : 'The AI Hero';
+  const label = PERSONALITY_LABELS[personality] ?? 'Balanced';
+  const name  = faction === 'witch'
+    ? `The AI Witch (${label})`
+    : `The AI Hero (${label})`;
   _addSeat(room, syntheticPlayerId, null, name, faction, true, ai);
+  // Store personality on the seat for player-list broadcasts
+  const newSeat = seatFor(room, syntheticPlayerId);
+  if (newSeat) newSeat.personality = personality ?? 'balanced';
 
   // Also update AI flags on the state so fog-of-war works
   if (faction === 'witch') room.state.witchIsAI = true;
@@ -416,10 +553,10 @@ function attachAI(room, faction, forPlayerId = null) {
  * Calls state.addPlayer() to create a new leader entity at a spawn point
  * near the faction's existing leader (no synthetic-patching needed).
  */
-function _addExtraAISeat(room, faction) {
+function _addExtraAISeat(room, faction, personality = null) {
   const pid  = `ai-${faction}-${randomUUID().slice(0, 8)}`;
   const name = faction === 'witch' ? 'Witch Ally' : 'Hero Ally';
-  const ai   = _makeAI(room, faction, pid); // pass pid so AI scopes plan to its own entities
+  const ai   = _makeAI(room, faction, pid, personality); // pass pid so AI scopes plan to its own entities
 
   // Spawn near the faction's existing leaders, with enough separation
   const existing = room.state.entities.filter(
@@ -437,7 +574,7 @@ function _addExtraAISeat(room, faction) {
   const leader       = room.state.entities.find(e => e.ownerId === pid);
   if (leader) leader.color = colors[factionIndex % colors.length];
 
-  const seat = { playerId: pid, ws: null, name, faction, isAI: true, ai };
+  const seat = { playerId: pid, ws: null, name, faction, isAI: true, ai, personality: personality ?? 'balanced' };
   room.players.push(seat);
   if (faction === 'witch') room.state.witchIsAI = true;
   else                     room.state.heroIsAI  = true;
@@ -458,15 +595,20 @@ function _fillAISeats(room, heroPerSide, witchPerSide) {
 // ── Broadcast helpers ─────────────────────────────────────────────────────────
 
 function broadcastState(room, reason = 'update') {
+  if (!room.state) return;
   const snap = serializeState(room.state);
   broadcast(room, { type: 'stateUpdate', reason, state: snap });
+  broadcastToSpectators(room, { type: 'stateUpdate', reason, state: snap });
 }
 
 function checkAndHandleGameOver(room) {
   if (!room.state.gameOver) return;
 
   const winner = room.state.winner;
-  broadcastState(room, 'gameOver');
+  // Don't broadcast a stateUpdate here — the game-over state is already
+  // included in the resolutionComplete finalState, which the client displays
+  // after the resolution animation finishes.  Broadcasting early would show
+  // the victory screen before the final turn plays out.
 
   // Record results for human players
   const record = (playerId, outcome) => {
@@ -484,169 +626,236 @@ function checkAndHandleGameOver(room) {
   setTimeout(() => destroyRoom(room), 5_000);
 }
 
-// ── Matchmaking ───────────────────────────────────────────────────────────────
+// ── Lobby API ─────────────────────────────────────────────────────────────────
 
-function tryMatch() {
-  if (queue.length < 2) return;
-
-  const a = queue.shift();
-  const b = queue.shift();
-
-  // Randomly assign factions
-  const [heroEntry, witchEntry] = Math.random() < 0.5 ? [a, b] : [b, a];
-  const fog = heroEntry.fog ?? witchEntry.fog ?? true;
-
-  const room = createRoom(fog);
-  _addSeat(room, heroEntry.playerId,  heroEntry.ws,  heroEntry.playerName,  'hero',  false);
-  _addSeat(room, witchEntry.playerId, witchEntry.ws, witchEntry.playerName, 'witch', false);
-
-  // Each player's playersPerSide preference fills their own side with AI partners
-  const heroPPS  = heroEntry.playersPerSide  ?? 1;
-  const witchPPS = witchEntry.playersPerSide ?? 1;
-  _fillAISeats(room, heroPPS, witchPPS);
-
-  // matchFound includes the full player roster so clients know who they're playing with
-  const playerList = room.players.map(s => ({
-    playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI,
-  }));
-  send(heroEntry.ws,  { type: 'matchFound', roomId: room.id, faction: 'hero',  myPlayerId: heroEntry.playerId,  players: playerList, aiOpponent: false });
-  send(witchEntry.ws, { type: 'matchFound', roomId: room.id, faction: 'witch', myPlayerId: witchEntry.playerId, players: playerList, aiOpponent: false });
-
-  broadcastState(room, 'start');
-  _startPlanningPhase(room);
-}
-
-// ── Public API ────────────────────────────────────────────────────────────────
-
-/** Player joins the matchmaking queue. Returns a cleanup fn. */
-export function joinQueue(playerId, playerName, ws, fog = true, playersPerSide = 1) {
-  leaveQueue(playerId);
-
-  const pps   = Math.max(1, Math.min(4, playersPerSide | 0));
-  const entry = { playerId, playerName, ws, joinedAt: Date.now(), fog, playersPerSide: pps };
-  queue.push(entry);
-  send(ws, { type: 'inQueue', position: queue.length });
-  tryMatch();
-
-  // AI fill-in after delay if still waiting
-  const fillTimer = setTimeout(() => {
-    const idx = queue.findIndex(e => e.playerId === playerId);
-    if (idx === -1) return; // already matched
-    queue.splice(idx, 1);
-
-    const humanFaction = Math.random() < 0.5 ? 'hero' : 'witch';
-    const aiFaction    = humanFaction === 'hero' ? 'witch' : 'hero';
-
-    const room = createRoom(fog);
-    _addSeat(room, playerId, ws, playerName, humanFaction, false);
-    attachAI(room, aiFaction);
-    _fillAISeats(room, pps, pps); // fill remaining AI slots on both sides
-
-    const playerList = room.players.map(s => ({ playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI }));
-    send(ws, {
-      type:         'matchFound',
-      roomId:       room.id,
-      faction:      humanFaction,
-      myPlayerId:   playerId,
-      players:      playerList,
-      aiOpponent:   true,
-    });
-
-    broadcastState(room, 'start');
-    _startPlanningPhase(room);
-  }, AI_FILL_DELAY_MS);
-
-  return () => {
-    clearTimeout(fillTimer);
-    leaveQueue(playerId);
-  };
-}
-
-export function leaveQueue(playerId) {
-  const idx = queue.findIndex(e => e.playerId === playerId);
-  if (idx !== -1) queue.splice(idx, 1);
-}
-
-/** Create a private room and return the join code. First player becomes hero. */
-export function createPrivateRoom(playerId, playerName, ws, fog = true, playersPerSide = 1) {
-  const pps  = Math.max(1, Math.min(4, playersPerSide | 0));
-  const room = createRoom(fog);
-  room.playersPerSide = pps;
-  _addSeat(room, playerId, ws, playerName, 'hero', false);
-  // Immediately fill hero's AI ally slots if pps > 1
-  _fillAISeats(room, pps, 0);
-  send(ws, { type: 'roomCode', code: room.code, roomId: room.id });
-
-  // AI fill-in if second player never arrives
-  room.aiTimer = setTimeout(() => {
-    if (room.players.some(s => s.faction === 'witch')) return; // already filled
-    attachAI(room, 'witch');
-    _fillAISeats(room, pps, pps); // fill witch AI allies too
-    const playerList = room.players.map(s => ({ playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI }));
-    const witchSeat  = room.players.find(s => s.faction === 'witch' && s.isAI);
-    send(ws, { type: 'opponentJoined', opponentName: witchSeat?.name ?? 'AI Opponent', aiOpponent: true, players: playerList });
-    broadcastState(room, 'start');
-    _startPlanningPhase(room);
-  }, AI_FILL_DELAY_MS);
-}
-
-/** Immediately start a solo game against a server AI (no queue wait). */
-export function joinAIGame(playerId, playerName, ws, fog = true, playersPerSide = 1) {
-  const pps          = Math.max(1, Math.min(4, playersPerSide | 0));
-  const humanFaction = Math.random() < 0.5 ? 'hero' : 'witch';
-  const aiFaction    = humanFaction === 'hero' ? 'witch' : 'hero';
-
-  const room = createRoom(fog);
-  _addSeat(room, playerId, ws, playerName, humanFaction, false);
-  attachAI(room, aiFaction);
-  _fillAISeats(room, pps, pps); // add AI allies on both sides up to pps
-
-  const playerList = room.players.map(s => ({ playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI }));
-  send(ws, {
-    type:         'matchFound',
-    roomId:       room.id,
-    faction:      humanFaction,
-    myPlayerId:   playerId,
-    players:      playerList,
-    aiOpponent:   true,
+/**
+ * Create a new lobby room. The host fills the first hero slot.
+ */
+export function createLobby(playerId, playerName, ws, config = {}) {
+  const pps  = Math.max(1, Math.min(4, (config.playersPerSide | 0) || 1));
+  const room = createRoom({
+    fog:           config.fog ?? true,
+    mapSize:       config.mapSize ?? 'standard',
+    playersPerSide: pps,
   });
+  room.isPrivate    = config.isPrivate ?? false;
+  room.hostPlayerId = playerId;
+  room.slots        = _buildSlots(pps);
+
+  // Host takes the first hero slot
+  const heroSlot = room.slots.find(s => s.faction === 'hero');
+  heroSlot.status   = 'human';
+  heroSlot.playerId = playerId;
+  heroSlot.name     = playerName;
+  heroSlot._ws      = ws;
+
+  send(ws, { type: 'lobbyJoined', lobby: _lobbyPublic(room) });
+}
+
+/**
+ * Join an existing lobby by room ID (public) or 6-char code (private).
+ */
+export function joinLobby(playerId, playerName, ws, codeOrId) {
+  // Look up by code first, then by direct ID
+  const byCode   = codeOrId?.length === 6 ? codeToRoom.get(codeOrId.toUpperCase()) : null;
+  const roomId   = byCode ?? codeOrId;
+  const room     = rooms.get(roomId);
+
+  if (!room || room.status !== 'lobby') {
+    send(ws, { type: 'error', message: 'Lobby not found or already started.' });
+    return;
+  }
+
+  // Prevent duplicate joins
+  if (room.slots.some(s => s.playerId === playerId)) {
+    send(ws, { type: 'error', message: 'You are already in this lobby.' });
+    return;
+  }
+
+  // Find first empty slot (witch side preferred for 1v1 parity, then hero)
+  const emptySlot =
+    room.slots.find(s => s.status === 'empty' && s.faction === 'witch') ??
+    room.slots.find(s => s.status === 'empty');
+
+  if (!emptySlot) {
+    send(ws, { type: 'error', message: 'Lobby is full.' });
+    return;
+  }
+
+  emptySlot.status   = 'human';
+  emptySlot.playerId = playerId;
+  emptySlot.name     = playerName;
+  emptySlot._ws      = ws;
+
+  send(ws, { type: 'lobbyJoined', lobby: _lobbyPublic(room) });
+  broadcastLobbyUpdate(room);
+}
+
+/** Return a list of public lobbies (not yet started). */
+export function browseLobby() {
+  return [...rooms.values()]
+    .filter(r => r.status === 'lobby' && !r.isPrivate)
+    .map(_lobbyPublic);
+}
+
+/** Host assigns an AI personality to an empty slot. */
+export function setSlotAI(playerId, roomId, slotIndex, personality) {
+  const room = rooms.get(roomId);
+  if (!room || room.status !== 'lobby') { return; }
+  if (room.hostPlayerId !== playerId)   { return; }
+
+  const slot = room.slots[slotIndex];
+  if (!slot || slot.status === 'human') { return; }
+
+  const resolved = personality === 'random'
+    ? _randomPersonality(slot.faction)
+    : (personality ?? 'balanced');
+
+  const label   = PERSONALITY_LABELS[resolved] ?? 'Balanced';
+  const aiName  = slot.faction === 'witch'
+    ? `AI Witch (${label})`
+    : `AI Hero (${label})`;
+
+  slot.status      = 'ai';
+  slot.personality = resolved;
+  slot.name        = aiName;
+  slot._ws         = null;
+
+  broadcastLobbyUpdate(room);
+}
+
+/** Host removes an AI from a slot, returning it to empty. */
+export function removeSlotAI(playerId, roomId, slotIndex) {
+  const room = rooms.get(roomId);
+  if (!room || room.status !== 'lobby') { return; }
+  if (room.hostPlayerId !== playerId)   { return; }
+
+  const slot = room.slots[slotIndex];
+  if (!slot || slot.status !== 'ai')    { return; }
+
+  slot.status      = 'empty';
+  slot.personality = null;
+  slot.name        = null;
+
+  broadcastLobbyUpdate(room);
+}
+
+/** Host fills all empty slots with AI (personality: specific key or 'random'). */
+export function fillAllWithAI(playerId, roomId, personality) {
+  const room = rooms.get(roomId);
+  if (!room || room.status !== 'lobby') { return; }
+  if (room.hostPlayerId !== playerId)   { return; }
+
+  for (let i = 0; i < room.slots.length; i++) {
+    if (room.slots[i].status === 'empty') {
+      setSlotAI(playerId, roomId, i, personality ?? 'random');
+    }
+  }
+  // broadcastLobbyUpdate is called by each setSlotAI — fire one final authoritative update
+  broadcastLobbyUpdate(room);
+}
+
+/** Host starts the game. Initializes GameState and begins planning phase. */
+export function startGame(playerId, roomId) {
+  const room = rooms.get(roomId);
+  if (!room || room.status !== 'lobby') { return; }
+  if (room.hostPlayerId !== playerId)   { return; }
+
+  // All slots must be filled
+  if (room.slots.some(s => s.status === 'empty')) {
+    const hostSlot = room.slots.find(s => s.playerId === playerId);
+    send(hostSlot?._ws, { type: 'error', message: 'Fill all slots before starting.' });
+    return;
+  }
+
+  // Determine AI flags for GameState constructor
+  const anyWitchAI = room.slots.some(s => s.faction === 'witch' && s.status === 'ai');
+  const anyHeroAI  = room.slots.some(s => s.faction === 'hero'  && s.status === 'ai');
+
+  // Initialize GameState
+  const state      = new GameState(anyWitchAI, anyHeroAI, room.config.mapSize);
+  state.fogOfWar   = room.config.fog;
+  room.state       = state;
+  room.status      = 'playing';
+
+  // Add seats in slot order — first hero slot patches the synthetic ID, extras use addPlayer
+  let heroCount  = 0;
+  let witchCount = 0;
+  for (const slot of room.slots) {
+    if (slot.status === 'human') {
+      if ((slot.faction === 'hero' && heroCount === 0) ||
+          (slot.faction === 'witch' && witchCount === 0)) {
+        _addSeat(room, slot.playerId, slot._ws, slot.name, slot.faction, false);
+      } else {
+        // Extra human seat — for now treat as AI-ally until human join is fully wired
+        _addExtraAISeat(room, slot.faction, slot.personality ?? 'balanced');
+      }
+    } else {
+      // AI slot
+      if ((slot.faction === 'hero' && heroCount === 0) ||
+          (slot.faction === 'witch' && witchCount === 0)) {
+        attachAI(room, slot.faction, null, slot.personality);
+      } else {
+        _addExtraAISeat(room, slot.faction, slot.personality);
+      }
+    }
+    if (slot.faction === 'hero')  heroCount++;
+    else                          witchCount++;
+  }
+
+  // Send matchFound to every human player
+  const playerList = room.players.map(s => ({
+    playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI, personality: s.personality ?? null,
+  }));
+  const aiOpponent = room.slots.some(s => s.status === 'ai');
+  for (const slot of room.slots) {
+    if (slot.status === 'human' && slot._ws) {
+      send(slot._ws, {
+        type:       'matchFound',
+        roomId:     room.id,
+        faction:    slot.faction,
+        myPlayerId: slot.playerId,
+        players:    playerList,
+        aiOpponent,
+      });
+    }
+  }
 
   broadcastState(room, 'start');
   _startPlanningPhase(room);
 }
 
-/** Second player joins a private room by code. */
-export function joinPrivateRoom(playerId, playerName, ws, code) {
-  const roomId = codeToRoom.get(code.toUpperCase());
-  if (!roomId) { send(ws, { type: 'error', message: 'Room not found. Check the code and try again.' }); return; }
-
+/** Player leaves a lobby before the game starts. */
+export function leaveLobby(playerId, roomId) {
   const room = rooms.get(roomId);
-  if (!room)  { send(ws, { type: 'error', message: 'Room has expired.' }); return; }
+  if (!room || room.status !== 'lobby') { return; }
 
-  // Room is full when the witch slot is already taken by a human or AI
-  const witchFilled = room.players.some(s => s.faction === 'witch');
-  if (witchFilled) { send(ws, { type: 'error', message: 'Room is already full.' }); return; }
+  if (room.hostPlayerId === playerId) {
+    // Host left — notify everyone and destroy the room
+    for (const slot of room.slots) {
+      if (slot.status === 'human' && slot._ws && slot.playerId !== playerId) {
+        send(slot._ws, { type: 'error', message: 'The host left the lobby.' });
+      }
+    }
+    destroyRoom(room);
+    return;
+  }
 
-  // Clear the AI fill timer — a real player is joining
-  if (room.aiTimer) { clearTimeout(room.aiTimer); room.aiTimer = null; }
-
-  _addSeat(room, playerId, ws, playerName, 'witch', false);
-  // Fill AI ally slots on both sides per the host's playersPerSide preference
-  _fillAISeats(room, room.playersPerSide ?? 1, room.playersPerSide ?? 1);
-
-  const playerList = room.players.map(s => ({ playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI }));
-  const heroSeat = room.players.find(s => s.faction === 'hero');
-  send(heroSeat?.ws, { type: 'opponentJoined', opponentName: playerName, aiOpponent: false, players: playerList });
-  send(ws, { type: 'matchFound', roomId: room.id, faction: 'witch', myPlayerId: playerId, players: playerList, aiOpponent: false });
-
-  broadcastState(room, 'start');
-  _startPlanningPhase(room);
+  // Non-host — reset their slot to empty
+  const slot = room.slots.find(s => s.playerId === playerId);
+  if (slot) {
+    slot.status   = 'empty';
+    slot.playerId = null;
+    slot.name     = null;
+    slot._ws      = null;
+    broadcastLobbyUpdate(room);
+  }
 }
 
 /** Handle a plan submission from a player. */
 export function handlePlanSubmit(playerId, roomId, plan) {
   const room = rooms.get(roomId);
-  if (!room) return;
+  if (!room || !room.state) return;
 
   const seat = seatFor(room, playerId);
   if (!seat) return;
@@ -680,6 +889,12 @@ export function handleAction(playerId, roomId, _actionType, _params) {
 export function handleDisconnect(playerId, roomId) {
   const room = rooms.get(roomId);
   if (!room) return;
+
+  // If still in lobby, just leave it
+  if (room.status === 'lobby') {
+    leaveLobby(playerId, roomId);
+    return;
+  }
 
   const faction = factionFor(room, playerId);
   broadcastExcept(room, playerId, { type: 'opponentDisconnected', graceMs: RECONNECT_GRACE_MS });
@@ -744,6 +959,26 @@ export function handleReconnect(playerId, roomId, ws) {
 
   send(ws, { type: 'reconnected', faction: seat.faction, myPlayerId: playerId, roomId: room.id });
   send(ws, { type: 'stateUpdate', reason: 'reconnect', state: serializeState(room.state) });
+
+  // If the game is in planning phase, resend the planningPhase message so the
+  // client re-enters planning mode (no separate planningPhase is sent on reconnect otherwise).
+  if (room.state.planningPhase && !room.state.resolving) {
+    const budget = room.state.playerActionsLeft?.get(playerId)
+      ?? (seat.faction === 'hero' ? room.state.heroActionsLeft : room.state.witchActionsLeft);
+    const playerList = room.players.map(s => ({
+      playerId: s.playerId, name: s.name, faction: s.faction,
+      isAI: s.isAI, personality: s.personality ?? null,
+    }));
+    send(ws, {
+      type:            'planningPhase',
+      myActionsLeft:   budget,
+      heroActionsLeft:  room.state.heroActionsLeft,
+      witchActionsLeft: room.state.witchActionsLeft,
+      timeoutMs:        0,  // no countdown for reconnected players
+      players:          playerList,
+    });
+  }
+
   return true;
 }
 
@@ -754,6 +989,112 @@ export function getRoomByCode(code) {
 
 export function getRoom(roomId) {
   return rooms.get(roomId) ?? null;
+}
+
+// ── Admin / spectator exports ─────────────────────────────────────────────────
+
+/** Lightweight summary of every active room (no full state). */
+export function getRooms() {
+  return [...rooms.values()].map(room => ({
+    id:             room.id,
+    code:           room.code,
+    status:         room.status,
+    round:          room.state?.round          ?? 0,
+    phase:          room.state?.phase          ?? null,
+    gameOver:       room.state?.gameOver       ?? false,
+    winner:         room.state?.winner         ?? null,
+    planningPhase:  room.state?.planningPhase  ?? false,
+    config:         room.config,
+    slots:          room.slots.map(s => ({ faction: s.faction, status: s.status, name: s.name })),
+    players:        room.players.map(s => ({
+      playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI, personality: s.personality ?? null,
+    })),
+    spectatorCount: room.spectators.size,
+    createdAt:      room.createdAt,
+  }));
+}
+
+/** Queue no longer exists — returns empty array for backwards compat. */
+export function getQueue() {
+  return [];
+}
+
+/**
+ * Subscribe an admin WebSocket to a room's live updates.
+ * Immediately sends the current serialized state and full chronicle.
+ * Returns false if the room doesn't exist.
+ */
+export function subscribeSpectator(roomId, ws) {
+  const room = rooms.get(roomId);
+  if (!room) return false;
+  room.spectators.add(ws);
+  // Send current state immediately so the spectator gets a starting snapshot
+  send(ws, {
+    type:      'adminSpectateInit',
+    roomId,
+    state:     room.state ? serializeState(room.state) : null,
+    players:   room.players.map(s => ({
+      playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI, personality: s.personality ?? null,
+    })),
+    chronicle: room.chronicle,
+  });
+  return true;
+}
+
+/**
+ * Remove an admin WebSocket from all rooms it was spectating.
+ * Pass a specific roomId to unsubscribe from one room only.
+ */
+export function unsubscribeSpectator(ws, roomId = null) {
+  if (roomId) {
+    rooms.get(roomId)?.spectators.delete(ws);
+  } else {
+    for (const room of rooms.values()) room.spectators.delete(ws);
+  }
+}
+
+/** Return the full chronicle for a room (array of round records). */
+export function getRoomChronicle(roomId) {
+  return rooms.get(roomId)?.chronicle ?? null;
+}
+
+/**
+ * Admin-initiated save activation — loads a save and starts it as an AI-vs-AI
+ * game that can be spectated from the admin panel.
+ * Returns { ok, roomId } on success, { ok: false, error, status } on failure.
+ */
+export function adminResumeGame(savedRoomId) {
+  const save = getSave(savedRoomId);
+  if (!save) return { ok: false, error: 'No save found.', status: 404 };
+
+  if (save.game_version !== VERSION) {
+    return { ok: false, error: `Save is from v${save.game_version}; server is v${VERSION}. Cannot resume.`, status: 400 };
+  }
+
+  let state;
+  try {
+    state = deserializeState(save.state);
+  } catch (err) {
+    console.error(`[adminResume ${savedRoomId}] deserializeState error:`, err);
+    return { ok: false, error: 'Failed to restore save.', status: 500 };
+  }
+
+  // Force both sides to AI
+  state.heroIsAI  = true;
+  state.witchIsAI = true;
+
+  const room = createRoom({ fog: state.fogOfWar });
+  room.state  = state;
+  room.status = 'playing';
+
+  // Attach AI for both factions
+  attachAI(room, 'hero');
+  attachAI(room, 'witch');
+
+  deleteSave(savedRoomId);
+
+  _startPlanningPhase(room);
+  return { ok: true, roomId: room.id };
 }
 
 /**
@@ -802,8 +1143,9 @@ export function resumeGame(playerId, ws, roomId) {
   const aiFaction    = humanFaction === 'hero' ? 'witch' : 'hero';
 
   // Create a fresh room and inject the restored state
-  const room   = createRoom(state.fogOfWar);
+  const room   = createRoom({ fog: state.fogOfWar });
   room.state   = state;
+  room.status  = 'playing';
 
   // Add the human player's seat, then an AI for the opponent
   const humanName = isHero  ? (save.hero_name  || 'Hero')  : (save.witch_name || 'Witch');
@@ -812,7 +1154,7 @@ export function resumeGame(playerId, ws, roomId) {
 
   deleteSave(roomId);
 
-  const playerList = room.players.map(s => ({ playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI }));
+  const playerList = room.players.map(s => ({ playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI, personality: s.personality ?? null }));
   send(ws, {
     type:         'matchFound',
     roomId:       room.id,

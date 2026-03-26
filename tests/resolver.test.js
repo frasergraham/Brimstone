@@ -383,3 +383,130 @@ describe('resolvePlans — state integrity', () => {
     assert.ok(state.entities.length > countBefore, 'Summon should add entity to state');
   });
 });
+
+// ── Resolver tags log entries with faction (Bug #10) ─────────────────────────
+
+describe('resolvePlans — log entries tagged with faction', () => {
+  test('hero action logs are tagged with "hero" owner', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const reachable = getReachableHexes(state, hero, 1);
+    if (!reachable.length) return;
+
+    state.log = [];
+    resolvePlans(state, [{
+      type: PlanActionType.MOVE,
+      entityId: hero.id,
+      toCol: reachable[0].col,
+      toRow: reachable[0].row,
+    }], []);
+
+    // At least one log entry should be tagged with 'hero'
+    const tagged = state.log.filter(e => typeof e === 'object' && e.owner === 'hero');
+    assert.ok(tagged.length > 0, 'Hero action should produce log entries tagged with "hero"');
+  });
+
+  test('witch action logs are tagged with "witch" owner', () => {
+    const state = freshState();
+    const witch = state.witch;
+    const reachable = getReachableHexes(state, witch, 1);
+    if (!reachable.length) return;
+
+    state.log = [];
+    resolvePlans(state, [], [{
+      type: PlanActionType.MOVE,
+      entityId: witch.id,
+      toCol: reachable[0].col,
+      toRow: reachable[0].row,
+    }]);
+
+    const tagged = state.log.filter(e => typeof e === 'object' && e.owner === 'witch');
+    assert.ok(tagged.length > 0, 'Witch action should produce log entries tagged with "witch"');
+  });
+
+  test('untagged log entries remain plain strings', () => {
+    const state = freshState();
+    // Empty plans produce no action logs, but existing system logs should remain as strings
+    const initialLogCount = state.log.length;
+    resolvePlans(state, [], []);
+    // Initial logs (game setup) should all be plain strings
+    const initialLogs = state.log.slice(0, initialLogCount);
+    for (const entry of initialLogs) {
+      assert.equal(typeof entry, 'string', 'System log entries should remain plain strings');
+    }
+  });
+});
+
+
+// ── Battle results include required fields (Bugs #4 + #5) ───────────────────
+
+describe('resolvePlans — battle result fields', () => {
+  test('BATTLE_UNIT result includes hit, margin, fortAbsorbed, and breakdown', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const minion = createMinion(hero.col, hero.row);
+    state.entities.push(minion);
+
+    const heroPlan = [{
+      type: PlanActionType.BATTLE_UNIT,
+      entityId: hero.id,
+      targetId: minion.id,
+    }];
+
+    const steps = resolvePlans(state, heroPlan, []);
+    assert.ok(steps.length > 0, 'Should produce at least one step');
+
+    const battleEvent = steps[0].heroEvents.find(e => e.type === ResEventType.ACTION_OK);
+    assert.ok(battleEvent, 'Should have an ACTION_OK event');
+    assert.ok('hit' in battleEvent.result, 'Result should include hit field');
+    assert.ok('margin' in battleEvent.result, 'Result should include margin field');
+    assert.ok('fortAbsorbed' in battleEvent.result, 'Result should include fortAbsorbed field');
+    assert.ok('breakdown' in battleEvent.result, 'Result should include breakdown field');
+    assert.equal(typeof battleEvent.result.hit, 'boolean', 'hit should be a boolean');
+    assert.equal(typeof battleEvent.result.margin, 'number', 'margin should be a number');
+    assert.equal(typeof battleEvent.result.breakdown, 'object', 'breakdown should be an object');
+  });
+
+  test('battle result breakdown contains dice and bonus details', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const minion = createMinion(hero.col, hero.row);
+    state.entities.push(minion);
+
+    const steps = resolvePlans(state, [{
+      type: PlanActionType.BATTLE_UNIT,
+      entityId: hero.id,
+      targetId: minion.id,
+    }], []);
+
+    const battleEvent = steps[0]?.heroEvents?.find(e => e.type === ResEventType.ACTION_OK);
+    if (!battleEvent) return;
+
+    const bd = battleEvent.result.breakdown;
+    assert.ok('atkBaseDie' in bd, 'breakdown should have atkBaseDie');
+    assert.ok('defBaseDie' in bd, 'breakdown should have defBaseDie');
+    assert.ok('phaseBonus' in bd, 'breakdown should have phaseBonus');
+    assert.ok('fortBonus' in bd, 'breakdown should have fortBonus');
+  });
+
+  test('battle result includes battleSnaps with actor and target snapshots', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const minion = createMinion(hero.col, hero.row);
+    state.entities.push(minion);
+
+    const steps = resolvePlans(state, [{
+      type: PlanActionType.BATTLE_UNIT,
+      entityId: hero.id,
+      targetId: minion.id,
+    }], []);
+
+    const battleEvent = steps[0]?.heroEvents?.find(e => e.type === ResEventType.ACTION_OK);
+    assert.ok(battleEvent, 'Should have a battle event');
+    assert.ok(battleEvent.battleSnaps, 'Battle event should include battleSnaps');
+    assert.ok(battleEvent.battleSnaps.actorSnap, 'Should have actorSnap');
+    assert.ok(battleEvent.battleSnaps.targetSnap, 'Should have targetSnap');
+    assert.equal(battleEvent.battleSnaps.actorSnap.id, hero.id, 'actorSnap should be the hero');
+    assert.equal(battleEvent.battleSnaps.targetSnap.id, minion.id, 'targetSnap should be the minion');
+  });
+});

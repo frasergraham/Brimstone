@@ -37,6 +37,25 @@ function _hexToRgba(hex, alpha) {
   return hex; // already rgba / named — pass through unchanged
 }
 
+/**
+ * Parse a '#rrggbb' or 'rgba(r,g,b,a)' / 'rgb(r,g,b)' string into [r,g,b,a].
+ * Returns null if the format is unrecognised.
+ */
+export function _parseColor(color) {
+  if (typeof color !== 'string') return null;
+  if (color.startsWith('#') && color.length === 7) {
+    return [
+      parseInt(color.slice(1, 3), 16),
+      parseInt(color.slice(3, 5), 16),
+      parseInt(color.slice(5, 7), 16),
+      1,
+    ];
+  }
+  const m = color.match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+))?\s*\)/);
+  if (m) return [+m[1], +m[2], +m[3], m[4] !== undefined ? +m[4] : 1];
+  return null;
+}
+
 export class Renderer {
   constructor(canvas, state) {
     this.canvas  = canvas;
@@ -51,10 +70,17 @@ export class Renderer {
     /** Ghost overlay steps from computeGhostState(). null = no overlay. */
     this.planGhostSteps = null;
 
+    /** ID of the currently selected entity; drives the ⊕ indicator drawn above its hex. */
+    this.selectedEntityId = null;
+
     // Zoom & pan
-    this.zoomLevel = 1.0;
-    this._panX     = 0;
-    this._panY     = 0;
+    this.zoomLevel  = 1.0;
+    this._panX      = 0;
+    this._panY      = 0;
+    // Insets account for panels that overlay the canvas (plan panel right, chronicle sidebar left).
+    // Set by UIController when panels open/close so framing targets only the visible area.
+    this.insetLeft  = 0;
+    this.insetRight = 0;
 
     // Damage flash overlays: [{col, row, text, color, endTime, fontScale, textColor}]
     this._flashes = [];
@@ -69,7 +95,105 @@ export class Renderer {
     // Smooth zoom/pan animation: null when idle
     this._zoomAnim = null; // {startZoom,targetZoom,startPanX,targetPanX,startPanY,targetPanY,startTime,duration}
 
+    // Tilemap sprite sheet — populated by loadImages()
+    this._tilemapImg   = null;   // HTMLImageElement for assets/tilemap.png
+    this._spriteRects  = null;   // Map<id, {x,y,size}> — source rect in the tilemap
+
     this._resize();
+  }
+
+  /**
+   * Build a map of asset-id → source rect within assets/tilemap.png.
+   * The layout mirrors the stitchTilemap() function in scripts/generate-assets.js:
+   *   CELL=256, GAP=6, COLS=7, LABEL_H=30, groups: Tiles → Buildings → Units
+   */
+  static _buildSpriteRects() {
+    const CELL = 256, GAP = 6, COLS = 7, LABEL_H = 30;
+    const groups = [
+      ['grass','forest','dirt','road','river','bridge'],
+      ['town_hall','church','inn','blacksmith','graveyard','mill',
+       'dock','house','barn','watchtower','apothecary','storehouse','stable'],
+      ['hero','witch','zombie','minion','wood_golem','iron_golem',
+       'survivor_innkeeper','survivor_nurse','survivor_blacksmith',
+       'survivor_herbalist','survivor_militia','survivor_priest',
+       'survivor_baker','survivor_trapper','survivor_schoolteacher',
+       'survivor_gravedigger','survivor_midwife','survivor_farmhand'],
+    ];
+
+    const rects = new Map();
+    let y = GAP;
+
+    for (const ids of groups) {
+      y += LABEL_H + GAP; // skip the category label row
+      for (let i = 0; i < ids.length; i++) {
+        const col  = i % COLS;
+        const row  = Math.floor(i / COLS);
+        const sx   = GAP + col * (CELL + GAP);
+        const sy   = y   + row * (CELL + GAP);
+        rects.set(ids[i], { x: sx, y: sy, size: CELL });
+      }
+      y += Math.ceil(ids.length / COLS) * (CELL + GAP);
+    }
+
+    return rects;
+  }
+
+  /**
+   * Load assets/tilemap.png and compute per-sprite source rects.
+   * Falls back gracefully (colour fills) when the file is absent.
+   */
+  async loadImages(basePath = 'assets') {
+    const img = new Image();
+    await new Promise(resolve => {
+      img.onload  = resolve;
+      img.onerror = resolve; // absent tilemap → silent fallback
+      img.src = `${basePath}/tilemap.png`;
+    });
+
+    if (!img.naturalWidth) return; // failed to load — keep colour fallbacks
+
+    this._tilemapImg  = img;
+    this._spriteRects = Renderer._buildSpriteRects();
+    this._portraitCache = new Map();
+    this.draw();
+  }
+
+  /**
+   * Draw the named sprite to an offscreen canvas and return a cached data URL
+   * suitable for use as an <img src>.  Returns null if the tilemap isn't loaded
+   * or the asset id is unknown.
+   */
+  getPortraitDataURL(assetId, size = 128) {
+    if (!this._tilemapImg || !this._spriteRects) return null;
+    const rect = this._spriteRects.get(assetId);
+    if (!rect) return null;
+    const key = `${assetId}@${size}`;
+    if (this._portraitCache.has(key)) return this._portraitCache.get(key);
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    c.getContext('2d').drawImage(this._tilemapImg, rect.x, rect.y, rect.size, rect.size, 0, 0, size, size);
+    const url = c.toDataURL();
+    this._portraitCache.set(key, url);
+    return url;
+  }
+
+  /** Map a survivor entity's title to its sprite asset id. */
+  static _survivorAssetId(title) {
+    const MAP = {
+      'Innkeeper':        'survivor_innkeeper',
+      'Nurse':            'survivor_nurse',
+      'Blacksmith':       'survivor_blacksmith',
+      'Herbalist':        'survivor_herbalist',
+      'Militia Sergeant': 'survivor_militia',
+      'Parish Priest':    'survivor_priest',
+      'Baker':            'survivor_baker',
+      'Trapper':          'survivor_trapper',
+      'Schoolteacher':    'survivor_schoolteacher',
+      'Gravedigger':      'survivor_gravedigger',
+      'Midwife':          'survivor_midwife',
+      'Farmhand':         'survivor_farmhand',
+    };
+    return MAP[title] ?? null;
   }
 
   // Add a brief flash overlay on a hex (e.g. damage numbers).
@@ -95,10 +219,12 @@ export class Renderer {
   }
 
   /** Slide an entity icon from one hex to another (opponent move feedback). */
-  addMoveAnim(entityId, fromCol, fromRow, toCol, toRow, entityType, owner) {
+  addMoveAnim(entityId, fromCol, fromRow, toCol, toRow, entityType, owner, title = null) {
     const from = this._toCanvas(fromCol, fromRow);
     const to   = this._toCanvas(toCol,   toRow);
-    // Replace any previous anim for this entity
+    const portraitId = entityType === EntityType.SURVIVOR
+      ? Renderer._survivorAssetId(title)
+      : entityType; // non-survivor type values match asset ids directly
     this._moveAnims = this._moveAnims.filter(a => a.entityId !== entityId);
     this._moveAnims.push({
       entityId,
@@ -106,6 +232,7 @@ export class Renderer {
       toX:   to.x,   toY:   to.y,
       glyph: entityGlyph(entityType),
       color: ENTITY_COLOR[entityType],
+      portraitId,
       startTime: Date.now(),
       duration:  480,
     });
@@ -116,6 +243,16 @@ export class Renderer {
   addAttackAnim(actorCol, actorRow, targetCol, targetRow) {
     this.addFlash(actorCol,  actorRow,  '', 'rgba(255,140,0,0.75)', 700);
     this.addFlash(targetCol, targetRow, '', 'rgba(220,40,40,0.75)',  700);
+  }
+
+  /** Show a floating HP-change number over a hex (red for damage, green for healing). */
+  addHpChangeFlash(col, row, delta) {
+    if (delta === 0) return;
+    if (delta < 0) {
+      this.addFlash(col, row, `${delta}`, 'rgba(220,40,40,0.1)', 1800, 0.88, 'rgba(255,100,100,1)');
+    } else {
+      this.addFlash(col, row, `+${delta}`, 'rgba(40,180,40,0.1)', 1800, 0.88, 'rgba(100,255,100,1)');
+    }
   }
 
   /** Keep calling draw() until all animations have expired. */
@@ -144,9 +281,12 @@ export class Renderer {
    */
   _computeFrameView(positions, paddingHexes, maxZoom) {
     if (!positions || positions.length === 0) return null;
-    const W  = this.canvas.width;
-    const H  = this.canvas.height;
-    const hs = this.hexSize;
+    const fullW = this.canvas.width;
+    const H     = this.canvas.height;
+    const hs    = this.hexSize;
+    // Effective visible width excludes panels that overlay the canvas edges
+    const visW  = fullW - (this.insetLeft ?? 0) - (this.insetRight ?? 0);
+    const offX  = this.insetLeft ?? 0; // left offset of the visible area
 
     const pts = positions.map(p => this._toCanvas(p.col, p.row));
     let minX = pts[0].x, maxX = pts[0].x, minY = pts[0].y, maxY = pts[0].y;
@@ -159,17 +299,17 @@ export class Renderer {
     minX -= pad; maxX += pad;
     minY -= pad; maxY += pad;
 
-    // Zoom to fit the padded box, clamped to [1.0, maxZoom]
-    const z = Math.max(1.0, Math.min(maxZoom, Math.min(W / (maxX - minX), H / (maxY - minY))));
+    // Zoom to fit the padded box within the visible area, clamped to [1.0, maxZoom]
+    const z = Math.max(1.0, Math.min(maxZoom, Math.min(visW / (maxX - minX), H / (maxY - minY))));
 
-    // Pan to center the box
+    // Pan to center the box within the visible area (shifted by insetLeft)
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
-    let panX = W / 2 - cx * z;
+    let panX = offX + visW / 2 - cx * z;
     let panY = H / 2 - cy * z;
 
     // Clamp so the map doesn't drift off-screen
-    const minPanX = Math.min(0, W - W * z);
+    const minPanX = Math.min(0, fullW - fullW * z);
     const minPanY = Math.min(0, H - H * z);
     panX = Math.max(minPanX, Math.min(0, panX));
     panY = Math.max(minPanY, Math.min(0, panY));
@@ -271,7 +411,8 @@ export class Renderer {
 
   resetView() {
     this.zoomLevel = 1.0;
-    this._panX = 0;
+    // Offset pan so the map centers within the visible area (excluding side-panel insets)
+    this._panX = (this.insetLeft ?? 0) / 2 - (this.insetRight ?? 0) / 2;
     this._panY = 0;
   }
 
@@ -374,7 +515,13 @@ export class Renderer {
     }
 
     if (this.selectedHex) {
-      this._drawOutline(this.selectedHex.col, this.selectedHex.row, '#f5c842', 2.5);
+      const selEntity = this.selectedEntityId
+        ? this.state.entities.find(e => e.id === this.selectedEntityId)
+        : null;
+      const selColor = selEntity
+        ? _hexToRgba(selEntity.color ?? ENTITY_COLOR[selEntity.type] ?? '#f5c842', 0.95)
+        : '#f5c842';
+      this._drawOutline(this.selectedHex.col, this.selectedHex.row, selColor, 2.5, true);
     }
     if (this.hoveredHex) {
       this._drawOutline(this.hoveredHex.col, this.hoveredHex.row, 'rgba(255,255,255,0.3)', 1);
@@ -428,6 +575,16 @@ export class Renderer {
     // Plan ghost overlay — numbered arrows for move steps
     if (this.planGhostSteps?.length) {
       this._drawPlanOverlay(this.planGhostSteps);
+    }
+
+    // ⊕ indicator at ghost position (falls back to real position outside planning mode)
+    if (this.selectedEntityId) {
+      const lastStep  = this.planGhostSteps?.at(-1);
+      const ghostPos  = lastStep?.positions.get(this.selectedEntityId);
+      const selEntity = ghostPos ? null
+        : this.state.entities.find(e => e.id === this.selectedEntityId && e.alive);
+      const pos = ghostPos ?? (selEntity ? { col: selEntity.col, row: selEntity.row } : null);
+      if (pos) this._drawSelectionIndicator(pos.col, pos.row);
     }
 
     ctx.restore(); // end zoom/pan transform
@@ -536,6 +693,24 @@ export class Renderer {
     ctx.fillStyle = color;
     ctx.fill();
 
+    // ── Building image from sprite sheet ──────────────────────────────────
+    // Terrain tile images are disabled for now (terrain uses colour fills).
+    if (tile.type === TileType.BUILDING) {
+      const rect = this._spriteRects?.get(tile.building);
+      if (rect && this._tilemapImg) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(corners[0].x, corners[0].y);
+        for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
+        ctx.closePath();
+        ctx.clip();
+        ctx.drawImage(this._tilemapImg,
+          rect.x, rect.y, rect.size, rect.size,  // source rect in tilemap
+          x - hs, y - hs, hs * 2, hs * 2);       // destination on canvas
+        ctx.restore();
+      }
+    }
+
     ctx.strokeStyle = '#111418';
     ctx.lineWidth   = 0.8;
     ctx.stroke();
@@ -544,16 +719,47 @@ export class Renderer {
     // The water bezier and road strip are layered on top in _drawRiverLayer / _drawRoadLayer.
     if (tile.type === TileType.BRIDGE) return;
 
-    // ── Fortification outline — grey, thickness scales with fortifyLevel ──
+    // ── Fortification outline — tiered colour, outer glow, inner highlight ──
     if (tile.fortifyLevel > 0) {
+      const lvl = tile.fortifyLevel;
+      // Colour palette: level 1 = amber wood, 2 = stone grey, 3 = silver steel, 4 = iron-gilt
+      const fortPalette = [
+        null,
+        [160, 100,  55],   // 1 — amber/wood palisade
+        [120, 135, 148],   // 2 — rough stone
+        [180, 196, 210],   // 3 — dressed silver steel
+        [205, 165,  35],   // 4 — iron-gilt ramparts
+      ];
+      const [fr, fg, fb] = fortPalette[Math.min(lvl, 4)];
+      const alpha = Math.min(0.95, 0.5 + lvl * 0.12);
+      const lw    = lvl * 2; // level 1: 2px, level 4: 8px
+
       ctx.beginPath();
       ctx.moveTo(corners[0].x, corners[0].y);
       for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
       ctx.closePath();
-      const alpha = Math.min(0.9, 0.4 + tile.fortifyLevel * 0.12);
-      ctx.strokeStyle = `rgba(190,190,190,${alpha})`;
-      ctx.lineWidth   = tile.fortifyLevel * 2; // level 1: 2px, level 4: 8px
+
+      // Outer diffuse glow
+      ctx.strokeStyle = `rgba(${fr},${fg},${fb},0.18)`;
+      ctx.lineWidth   = lw + 5;
       ctx.stroke();
+
+      // Main fort ring
+      ctx.strokeStyle = `rgba(${fr},${fg},${fb},${alpha})`;
+      ctx.lineWidth   = lw;
+      ctx.stroke();
+
+      // Inner highlight rim for level 2+ (lighter edge for depth)
+      if (lvl >= 2) {
+        const innerCs = hexCorners(x, y, hs - 1 - lw * 0.6);
+        ctx.beginPath();
+        ctx.moveTo(innerCs[0].x, innerCs[0].y);
+        for (let i = 1; i < 6; i++) ctx.lineTo(innerCs[i].x, innerCs[i].y);
+        ctx.closePath();
+        ctx.strokeStyle = `rgba(${Math.min(255, fr + 65)},${Math.min(255, fg + 65)},${Math.min(255, fb + 65)},0.45)`;
+        ctx.lineWidth   = 1;
+        ctx.stroke();
+      }
     }
 
     // ── Explored dot (all tile types, including buildings) ────────────────
@@ -566,11 +772,15 @@ export class Renderer {
 
     // ── Building: icon + name ─────────────────────────────────────────────
     if (tile.type === TileType.BUILDING && tile.building) {
+      const hasBuildingImg = !!this._spriteRects?.get(tile.building) && !!this._tilemapImg;
 
-      ctx.font         = `${Math.floor(hs * 0.55)}px serif`;
-      ctx.textAlign    = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(BUILDING_ICON[tile.building] || '?', x, y - hs * 0.10);
+      // Show emoji icon only when there is no image (image provides the visual)
+      if (!hasBuildingImg) {
+        ctx.font         = `${Math.floor(hs * 0.55)}px serif`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(BUILDING_ICON[tile.building] || '?', x, y - hs * 0.10);
+      }
 
       ctx.fillStyle    = 'rgba(255,248,230,0.92)';
       ctx.font         = `bold ${Math.max(7, Math.floor(hs * 0.25))}px "Georgia", serif`;
@@ -623,8 +833,9 @@ export class Renderer {
   // entity's per-player colour so each player's territory is visually distinct.
   _drawUnitPresenceOutlines(revealedHexes) {
     const state = this.state;
-    const humanIsHero  = state.witchIsAI && !state.heroIsAI;
-    const humanIsWitch = state.heroIsAI  && !state.witchIsAI;
+    const myFaction    = state.myFaction;
+    const humanIsHero  = myFaction ? myFaction === 'hero'  : (state.witchIsAI && !state.heroIsAI);
+    const humanIsWitch = myFaction ? myFaction === 'witch' : (state.heroIsAI  && !state.witchIsAI);
 
     // Map hexKey → outline colour of the first (highest-priority) entity on that hex.
     // Leaders are pushed to entities before followers so they win ties naturally.
@@ -650,7 +861,7 @@ export class Renderer {
 
     for (const [k, color] of hexColors) {
       const [col, row] = k.split(',').map(Number);
-      this._drawOutline(col, row, _hexToRgba(color, 0.85), 3);
+      this._drawOutline(col, row, _hexToRgba(color, 0.85), 3, true);
     }
   }
 
@@ -894,16 +1105,44 @@ export class Renderer {
     ctx.closePath();
     ctx.fillStyle = color;
     ctx.fill();
-    ctx.strokeStyle = color.replace(/,\s*[\d.]+\)$/, ', 0.9)');
-    ctx.lineWidth   = 2;
+
+    // Crisp border ring at full saturation
+    const rgba = _parseColor(color);
+    if (rgba) {
+      const [r, g, b, a] = rgba;
+      ctx.strokeStyle = `rgba(${r},${g},${b},${Math.min(1, a * 4)})`;
+    } else {
+      ctx.strokeStyle = color.replace(/,\s*[\d.]+\)$/, ', 0.9)');
+    }
+    ctx.lineWidth = 1.5;
     ctx.stroke();
   }
 
-  _drawOutline(col, row, color, lineWidth = 2) {
+  _drawOutline(col, row, color, lineWidth = 2, glow = false) {
     const ctx = this.ctx;
     const hs  = this.hexSize;
     const { x, y } = this._toCanvas(col, row);
     const corners   = hexCorners(x, y, hs - 1.5);
+
+    if (glow) {
+      const rgba = _parseColor(color);
+      if (rgba) {
+        const [r, g, b] = rgba;
+        ctx.beginPath();
+        ctx.moveTo(corners[0].x, corners[0].y);
+        for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
+        ctx.closePath();
+        // Outer soft halo
+        ctx.strokeStyle = `rgba(${r},${g},${b},0.12)`;
+        ctx.lineWidth   = lineWidth + 7;
+        ctx.stroke();
+        // Mid glow ring
+        ctx.strokeStyle = `rgba(${r},${g},${b},0.28)`;
+        ctx.lineWidth   = lineWidth + 3;
+        ctx.stroke();
+      }
+    }
+
     ctx.beginPath();
     ctx.moveTo(corners[0].x, corners[0].y);
     for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
@@ -911,13 +1150,26 @@ export class Renderer {
     ctx.strokeStyle = color;
     ctx.lineWidth   = lineWidth;
     ctx.stroke();
+
+    // Specular: thin bright stroke on the upper two edges (top-lit bevel)
+    // Corners 5→0→1 are the naturally lit faces of a pointy-top hex.
+    ctx.beginPath();
+    ctx.moveTo(corners[5].x, corners[5].y);
+    ctx.lineTo(corners[0].x, corners[0].y);
+    ctx.lineTo(corners[1].x, corners[1].y);
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth   = Math.max(0.5, lineWidth * 0.45);
+    ctx.lineCap     = 'round';
+    ctx.stroke();
+    ctx.lineCap     = 'butt';
   }
 
   _drawEntityStack(col, row, stack) {
     const ctx    = this.ctx;
     const hs     = this.hexSize;
     const { x, y } = this._toCanvas(col, row);
-    const r      = hs * 0.32;
+    // Larger portrait radius when a single unit occupies the hex
+    const r      = stack.length === 1 ? hs * 0.42 : hs * 0.32;
     const max    = Math.min(stack.length, 3);
 
     for (let i = 0; i < max; i++) {
@@ -926,24 +1178,87 @@ export class Renderer {
       const ex = x + offsets.x * (hs / 30);
       const ey = y + offsets.y * (hs / 30);
 
+      // Drop shadow — offset slightly for lift effect
       ctx.beginPath();
-      ctx.arc(ex + 1, ey + 1, r, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.arc(ex + 2, ey + 2, r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
       ctx.fill();
 
+      // Base fill with radial gradient: highlight top-left, dark bottom-right
+      const baseCol  = entity.color ?? ENTITY_COLOR[entity.type];
+      const baseRgba = _parseColor(baseCol);
       ctx.beginPath();
       ctx.arc(ex, ey, r, 0, Math.PI * 2);
-      ctx.fillStyle = entity.color ?? ENTITY_COLOR[entity.type];
+      if (baseRgba) {
+        const [cr, cg, cb] = baseRgba;
+        const grad = ctx.createRadialGradient(ex - r * 0.3, ey - r * 0.35, r * 0.05,
+                                               ex + r * 0.1, ey + r * 0.15, r);
+        grad.addColorStop(0,    `rgb(${Math.min(255, cr + 70)},${Math.min(255, cg + 65)},${Math.min(255, cb + 55)})`);
+        grad.addColorStop(0.45, `rgb(${cr},${cg},${cb})`);
+        grad.addColorStop(1,    `rgb(${Math.max(0, cr - 45)},${Math.max(0, cg - 45)},${Math.max(0, cb - 45)})`);
+        ctx.fillStyle = grad;
+      } else {
+        ctx.fillStyle = baseCol;
+      }
       ctx.fill();
-      ctx.strokeStyle = '#ffffffaa';
-      ctx.lineWidth   = 1;
-      ctx.stroke();
 
-      ctx.fillStyle    = '#ffffffdd';
-      ctx.font         = `bold ${Math.floor(r * 1.1)}px serif`;
-      ctx.textAlign    = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(entityGlyph(entity.type), ex, ey + 1);
+      // ── Portrait image from sprite sheet ───────────────────────────────
+      const portraitKey = entity.type === EntityType.SURVIVOR
+        ? Renderer._survivorAssetId(entity.title)
+        : entity.type; // 'hero', 'witch', 'zombie', etc.
+
+      const pRect = portraitKey ? this._spriteRects?.get(portraitKey) : null;
+      const portrait = pRect && this._tilemapImg;
+      if (portrait) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(ex, ey, r, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.drawImage(this._tilemapImg,
+          pRect.x, pRect.y, pRect.size, pRect.size,
+          ex - r, ey - r, r * 2, r * 2);
+        // Vignette overlay: darken portrait edges for depth
+        const vGrad = ctx.createRadialGradient(ex, ey, r * 0.4, ex, ey, r);
+        vGrad.addColorStop(0, 'rgba(0,0,0,0)');
+        vGrad.addColorStop(1, 'rgba(0,0,0,0.42)');
+        ctx.fillStyle = vGrad;
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // Circle border: coloured glow ring + crisp inner border + specular arc
+      const entityCol  = entity.color ?? ENTITY_COLOR[entity.type];
+      const borderRgba = _parseColor(entityCol);
+      if (borderRgba) {
+        const [br, bg, bb] = borderRgba;
+        ctx.beginPath();
+        ctx.arc(ex, ey, r + 1.5, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(${br},${bg},${bb},0.4)`;
+        ctx.lineWidth   = 3;
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      ctx.arc(ex, ey, r, 0, Math.PI * 2);
+      ctx.strokeStyle = portrait ? _hexToRgba(entityCol, 0.9) : 'rgba(255,255,255,0.7)';
+      ctx.lineWidth   = portrait ? 2 : 1.5;
+      ctx.stroke();
+      // Specular highlight arc — top-left quadrant
+      ctx.beginPath();
+      ctx.arc(ex, ey, r * 0.8, Math.PI * 1.1, Math.PI * 1.65);
+      ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+      ctx.lineWidth   = r * 0.22;
+      ctx.lineCap     = 'round';
+      ctx.stroke();
+      ctx.lineCap     = 'butt';
+
+      // Draw glyph only when no portrait image is available
+      if (!portrait) {
+        ctx.fillStyle    = '#ffffffdd';
+        ctx.font         = `bold ${Math.floor(r * 1.1)}px serif`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(entityGlyph(entity.type), ex, ey + 1);
+      }
 
       if (entity.type === EntityType.HERO || entity.type === EntityType.WITCH ||
           entity.type === EntityType.SURVIVOR || entity.type === EntityType.WOOD_GOLEM ||
@@ -952,11 +1267,22 @@ export class Renderer {
         const barH = Math.max(2, hs * 0.08);
         const bx   = ex - r;
         const by   = ey + r + 2;
-        ctx.fillStyle = '#333';
+        // Background trough with shadow
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.fillRect(bx - 1, by - 1, barW + 2, barH + 2);
+        ctx.fillStyle = '#1a1a1a';
         ctx.fillRect(bx, by, barW, barH);
+        // Gradient fill: lighter top edge, base colour bottom
         const pct = entity.hp / entity.maxHp;
-        ctx.fillStyle = pct > 0.5 ? '#4caf50' : pct > 0.25 ? '#ff9800' : '#f44336';
+        const hpRgb = pct > 0.5 ? [76, 175, 80] : pct > 0.25 ? [255, 152, 0] : [244, 67, 54];
+        const barFill = ctx.createLinearGradient(bx, by, bx, by + barH);
+        barFill.addColorStop(0, `rgba(${Math.min(255, hpRgb[0] + 45)},${Math.min(255, hpRgb[1] + 45)},${Math.min(255, hpRgb[2] + 45)},1)`);
+        barFill.addColorStop(1, `rgba(${hpRgb[0]},${hpRgb[1]},${hpRgb[2]},1)`);
+        ctx.fillStyle = barFill;
         ctx.fillRect(bx, by, barW * pct, barH);
+        // Shine stripe along the top
+        ctx.fillStyle = 'rgba(255,255,255,0.18)';
+        ctx.fillRect(bx, by, barW * pct, Math.max(1, barH * 0.4));
       }
 
       if (entity.weapon && entity.owner === 'hero') {
@@ -985,6 +1311,45 @@ export class Renderer {
       ctx.textBaseline = 'middle';
       ctx.fillText(`+${stack.length - 3}`, bx + 7, by + 5);
     }
+
+    // ⊕ indicator is now drawn in draw() at the ghost position — removed from here.
+  }
+
+  /** Draw the ⊕ action-hint indicator above a hex position. */
+  _drawSelectionIndicator(col, row) {
+    const ctx = this.ctx;
+    const hs  = this.hexSize;
+    const { x, y } = this._toCanvas(col, row);
+    const ir = Math.max(5, hs * 0.17);
+    const ix = x + hs * 0.42;
+    const iy = y - hs * 0.58;
+
+    // Semi-transparent disc
+    ctx.beginPath();
+    ctx.arc(ix, iy, ir, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.42)';
+    ctx.fill();
+
+    // Thin border
+    ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+    ctx.lineWidth   = 0.8;
+    ctx.stroke();
+
+    // + glyph
+    ctx.fillStyle    = 'rgba(20,20,40,0.82)';
+    ctx.font         = `bold ${Math.floor(ir * 1.45)}px sans-serif`;
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('+', ix, iy + 0.5);
+
+    // Specular arc at top-left of disc
+    ctx.beginPath();
+    ctx.arc(ix, iy, ir * 0.72, Math.PI * 1.1, Math.PI * 1.65);
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.lineWidth   = ir * 0.28;
+    ctx.lineCap     = 'round';
+    ctx.stroke();
+    ctx.lineCap     = 'butt';
   }
 
   /** Draw plan ghost overlay: ghost entities, summon icons, move arrows, attack arrows. */
@@ -1225,16 +1590,27 @@ export class Renderer {
       ctx.arc(x, y, r, 0, Math.PI * 2);
       ctx.fillStyle = a.color;
       ctx.fill();
-      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+
+      // Portrait image if available, otherwise glyph
+      const pRect = a.portraitId ? this._spriteRects?.get(a.portraitId) : null;
+      if (pRect && this._tilemapImg) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.drawImage(this._tilemapImg, pRect.x, pRect.y, pRect.size, pRect.size, x - r, y - r, r * 2, r * 2);
+        ctx.restore();
+      } else {
+        ctx.fillStyle    = '#ffffffee';
+        ctx.font         = `bold ${Math.floor(r * 1.1)}px serif`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(a.glyph, x, y + 1);
+      }
+
+      ctx.strokeStyle = a.color;
       ctx.lineWidth   = 2;
       ctx.stroke();
-
-      // Glyph
-      ctx.fillStyle    = '#ffffffee';
-      ctx.font         = `bold ${Math.floor(r * 1.1)}px serif`;
-      ctx.textAlign    = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(a.glyph, x, y + 1);
     }
   }
 }

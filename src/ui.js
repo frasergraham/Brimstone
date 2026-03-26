@@ -36,6 +36,10 @@ export class UIController {
 
     this._lastHazardKey    = '';   // deduplicates hazard popups across state updates
     this._battleInterval   = null; // dice animation interval — cleared on new dialog
+    this.speedMode         = 'cinematic'; // 'cinematic' | 'fast' | 'instant'
+    this._chronicleMode    = 'mini'; // 'none' | 'mini' | 'full'
+    // When true, disable all planning/action UI — used for spectator mode
+    this.spectator         = false;
 
     // ── Planning mode state ──────────────────────────────────────────────────
     this._planMode      = false;   // true during simultaneous planning phase
@@ -96,6 +100,7 @@ export class UIController {
       this.onRedraw();
     });
     document.getElementById('zoom-fit')?.addEventListener('click', () => {
+      this.renderer.resize(); // re-measure wrapper after any panel changes
       this.renderer.resetView();
       this.onRedraw();
     });
@@ -105,6 +110,17 @@ export class UIController {
       if (units.length > 0) this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 400 });
       this.onRedraw();
     });
+    document.getElementById('speed-toggle')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._toggleSpeedPopup();
+    });
+    // Speed popup option clicks
+    document.getElementById('speed-popup')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.speed-option');
+      if (btn) this._setSpeed(btn.dataset.mode);
+    });
+    // Close speed popup on outside click
+    document.addEventListener('click', () => this._closeSpeedPopup());
 
     // Touch: tap, drag-to-pan, pinch-to-zoom (mobile)
     this.canvas.addEventListener('touchstart', e => {
@@ -163,19 +179,45 @@ export class UIController {
       this._isDragging = false;
     }, { passive: false });
 
-    // Chronicle overlay toggle
-    document.getElementById('chronicle-btn')?.addEventListener('click', () => this._toggleChronicle());
-    document.getElementById('chronicle-close')?.addEventListener('click', () => this._toggleChronicle());
+    // In-game menu
+    document.getElementById('menu-btn')?.addEventListener('click', () => {
+      const popup = document.getElementById('game-menu-popup');
+      if (popup) popup.style.display = popup.style.display === 'none' ? 'block' : 'none';
+    });
+    document.getElementById('menu-quit-btn')?.addEventListener('click', () => {
+      const popup = document.getElementById('game-menu-popup');
+      if (popup) popup.style.display = 'none';
+      this.onQuitToMenu?.();
+    });
+    document.addEventListener('click', e => {
+      const popup = document.getElementById('game-menu-popup');
+      if (!popup || popup.style.display === 'none') return;
+      const btn = document.getElementById('menu-btn');
+      if (!popup.contains(e.target) && e.target !== btn) popup.style.display = 'none';
+    });
+    // Mobile: canvas touchend calls e.preventDefault() which suppresses the
+    // synthesized click, so the click handler above never fires when tapping
+    // the canvas with the menu open. Use touchstart (fires before preventDefault)
+    // to close the popup on outside touches.
+    document.addEventListener('touchstart', e => {
+      const popup = document.getElementById('game-menu-popup');
+      if (!popup || popup.style.display === 'none') return;
+      const btn = document.getElementById('menu-btn');
+      if (!popup.contains(e.target) && e.target !== btn) popup.style.display = 'none';
+    }, { passive: true });
+
+    // Chronicle: three-state button lives inside #chronicle-mini (wired on each render).
+    // chronicle-close / chronicle-sidebar-close close back to 'none'.
+    document.getElementById('chronicle-close')?.addEventListener('click', () => {
+      this._setChronicleMode('none');
+    });
     document.getElementById('chronicle-overlay')?.addEventListener('click', e => {
-      if (e.target === document.getElementById('chronicle-overlay')) this._toggleChronicle();
+      if (e.target === document.getElementById('chronicle-overlay')) this._setChronicleMode('none');
+    });
+    document.getElementById('chronicle-sidebar-close')?.addEventListener('click', () => {
+      this._setChronicleMode('none');
     });
 
-    // Inventory overlay toggle
-    document.getElementById('inventory-btn')?.addEventListener('click', () => this._toggleInventory());
-    document.getElementById('inventory-close')?.addEventListener('click', () => this._toggleInventory());
-    document.getElementById('inventory-overlay')?.addEventListener('click', e => {
-      if (e.target === document.getElementById('inventory-overlay')) this._toggleInventory();
-    });
 
     // Tile zoom close
     document.getElementById('tile-zoom-close')?.addEventListener('click', () => this._hideTileDetail());
@@ -308,17 +350,22 @@ export class UIController {
         panel.classList.remove('collapsed');
       }
     }
+    // Plan panel overlays the right side of the canvas — bias framing away from it
+    if (this.renderer) this.renderer.insetRight = 220;
 
     this._clearSelection();
 
-    // Auto-select this player's own leader so they immediately know which
-    // hero/witch is theirs (especially important in team MP with 4 players).
-    const myLeader = this.state?.entities.find(e =>
-      e.alive && e.owner === faction &&
-      (e.type === 'hero' || e.type === 'witch') &&
-      (!this.myPlayerId || e.ownerId === this.myPlayerId)
-    );
-    if (myLeader) this._selectEntity(myLeader);
+    // Auto-select the leader on round 1 so the player knows which unit is
+    // theirs (especially important in team MP).  After round 1 it's annoying
+    // because it overrides whatever the player was looking at.
+    if ((this.state?.round ?? 1) <= 1) {
+      const myLeader = this.state?.entities.find(e =>
+        e.alive && e.owner === faction &&
+        (e.type === 'hero' || e.type === 'witch') &&
+        (!this.myPlayerId || e.ownerId === this.myPlayerId)
+      );
+      if (myLeader) this._selectEntity(myLeader);
+    }
 
     this._refreshPlanOverlay();
     this._renderPlanPanel();
@@ -337,8 +384,8 @@ export class UIController {
       }
     }
 
-    // Show a brief phase-info toast so the player always knows current conditions.
-    this._showPhaseToast(faction);
+    // Show a dismissible phase-info modal so the player always knows current conditions.
+    this._showPhaseModal(faction, budget);
 
     // If attrition just increased, show a blocking popup after the toast settles.
     if (this.state.attritionChanged && this.state.attritionLevel > 0) {
@@ -365,7 +412,10 @@ export class UIController {
     const panel = document.getElementById('plan-panel');
     if (panel) { panel.style.display = 'none'; panel.classList.remove('collapsed'); }
 
-    if (this.renderer) this.renderer.planGhostSteps = null;
+    if (this.renderer) {
+      this.renderer.planGhostSteps = null;
+      this.renderer.insetRight = 0;
+    }
     this._clearSelection();
     this._updateSidebar();
     this.onRedraw();
@@ -387,7 +437,7 @@ export class UIController {
     el.style.display = '';
     let html = '';
     for (const p of players) {
-      const isMe      = p.id === this.myPlayerId;
+      const isMe      = p.playerId === this.myPlayerId;
       const submitted = p._submitted ?? false;
       const icon      = submitted ? '✓' : '⋯';
       const cls       = submitted ? 'player-ready' : 'player-waiting';
@@ -405,7 +455,7 @@ export class UIController {
 
   /** Called when the server notifies that another player has submitted. */
   _onPlayerSubmitted(playerId, name, faction) {
-    const p = this._players?.find(p => p.id === playerId);
+    const p = this._players?.find(p => p.playerId === playerId);
     if (p) p._submitted = true;
     this._renderPlayerStatus();
   }
@@ -509,6 +559,16 @@ export class UIController {
       [PlanActionType.USE_ABILITY]: '✦',
     };
 
+    const ENTITY_GLYPH = {
+      [EntityType.HERO]:       '⚔',
+      [EntityType.WITCH]:      '✦',
+      [EntityType.SURVIVOR]:   '☺',
+      [EntityType.ZOMBIE]:     '†',
+      [EntityType.MINION]:     '☠',
+      [EntityType.WOOD_GOLEM]: '🪵',
+      [EntityType.IRON_GOLEM]: '⚙',
+    };
+
     const describeAction = (a, i) => {
       const entity = this.state.entities.find(e => e.id === a.entityId);
       const who    = entity?.displayName ?? 'Unit';
@@ -551,16 +611,21 @@ export class UIController {
       const overBudget = !isFree && runningCost > this._planBudget;
       const foodPowered = overBudget && foodUsed < foodEnabled;
       if (foodPowered) foodUsed++;
-      const icon = ICONS[a.type] || '•';
-      const desc = describeAction(a, i);
-      const foodTag = foodPowered ? ` <span class="plan-food-tag">-1 🍞</span>` : '';
-      const rmBtn = this._planSubmitted
+      const desc       = describeAction(a, i);
+      const foodTag    = foodPowered ? ` <span class="plan-food-tag">-1 🍞</span>` : '';
+      const rmBtn      = this._planSubmitted
         ? ''
         : `<button class="plan-step-remove" data-plan-idx="${i}" title="Remove">✕</button>`;
-      const cls = foodPowered ? ' food-powered' : overBudget ? ' over-budget' : '';
+      const cls        = foodPowered ? ' food-powered' : overBudget ? ' over-budget' : '';
+      const stepEntity = this.state?.entities?.find(e => e.id === a.entityId);
+      const stepGlyph  = stepEntity ? (ENTITY_GLYPH[stepEntity.type] || '?') : '';
+      const stepColor  = stepEntity ? (ENTITY_COLOR[stepEntity.type]  || '#aaa') : '#aaa';
+      const iconSpan   = stepEntity
+        ? `<span class="plan-step-icon" style="color:${stepColor}">${stepGlyph}</span>`
+        : '';
       html += `<div class="plan-step${cls}">
         <span class="plan-step-num">${i + 1}</span>
-        <span class="plan-step-icon">${icon}</span>
+        ${iconSpan}
         <span class="plan-step-desc" title="${desc}">${desc}${foodTag}</span>
         ${rmBtn}
       </div>`;
@@ -619,6 +684,9 @@ export class UIController {
     if (toggleBtn && panel) {
       toggleBtn.textContent = panel.classList.contains('collapsed') ? '▶' : '◀';
     }
+
+    // Render inventory section at the bottom of the plan panel
+    this._renderInventory();
   }
 
   /** Toggle the plan panel between expanded and collapsed. */
@@ -638,6 +706,13 @@ export class UIController {
     const { x, y } = this._canvasPos(e);
     const hex = this._canvasToHex(x, y);
     if (hex.col < 0 || hex.col >= MAP_COLS || hex.row < 0 || hex.row >= MAP_ROWS) return;
+
+    // Spectators: view tile/unit info only — no actions or planning
+    if (this.spectator) {
+      this._showTileDetail(hex);
+      this.onRedraw();
+      return;
+    }
 
     // On opponent's turn, allow viewing tiles/units but block all actions
     if (!this._planMode && this._isOpponentTurn()) {
@@ -671,9 +746,10 @@ export class UIController {
       hex.col === _selDisplayHex.col && hex.row === _selDisplayHex.row
     ) {
       if (this._popupVisible) {
-        // Third click — deselect entirely
+        // Second tap on already-selected unit — deselect entirely
         this._clearSelection();
       } else {
+        // Popup was dismissed; re-show it
         this._showActionPopup(this._selectedEntity);
         this._popupVisible = true;
       }
@@ -725,7 +801,7 @@ export class UIController {
           this._popupVisible = true;
         }
       } else {
-        // New unit — select it, hide any open tile detail
+        // New unit — first tap selects and shows highlights; second tap opens popup
         this._hideTileDetail();
         this._selectEntity(entity);
         this._pendingUnitPick = null;
@@ -761,7 +837,8 @@ export class UIController {
       }
     }
 
-    this.renderer.selectedHex = { col: effectiveEntity.col, row: effectiveEntity.row };
+    this.renderer.selectedHex      = { col: effectiveEntity.col, row: effectiveEntity.row };
+    this.renderer.selectedEntityId = entity.id;
     this._validActions = getValidActions(this.state, effectiveEntity);
     // Move is always the default awaiting action — clicking a green hex moves.
     const hasMoveAction = this._validActions.some(a => a.type === ActionType.MOVE);
@@ -790,8 +867,9 @@ export class UIController {
     this._validActions         = [];
     this._pendingUnitPick      = null;
     this._popupVisible         = false;
-    this.renderer.selectedHex  = null;
-    this.renderer.highlightHexes = [];
+    this.renderer.selectedHex      = null;
+    this.renderer.selectedEntityId = null;
+    this.renderer.highlightHexes   = [];
     _hideActionPopup();
     this._hideTileDetail();
   }
@@ -804,7 +882,12 @@ export class UIController {
     const { actionType } = this._awaitingTarget || {};
     if (!actionType || actionType === ActionType.MOVE) {
       const a = this._validActions.find(a => a.type === ActionType.MOVE);
-      if (a) renderer.highlightHexes = a.targets.map(t => ({ ...t, color: 'rgba(60,220,80,0.55)' }));
+      if (a) renderer.highlightHexes = a.targets.map(t => ({ ...t, color: 'rgba(60,220,80,0.22)' }));
+      // Also highlight enemy hexes in red so clicking them directly queues an attack
+      const b = this._validActions.find(a => a.type === ActionType.BATTLE);
+      if (b) renderer.highlightHexes = renderer.highlightHexes.concat(
+        b.targets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,60,60,0.55)' }))
+      );
     } else if (actionType === ActionType.BATTLE) {
       const a = this._validActions.find(a => a.type === ActionType.BATTLE);
       if (a) renderer.highlightHexes = a.targets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,60,60,0.55)' }));
@@ -817,6 +900,16 @@ export class UIController {
     const state = this.state;
 
     if (actionType === ActionType.MOVE) {
+      // If the clicked hex has a valid battle target, route directly to battle
+      // without needing to open the action popup first.
+      const battleActionForMove = this._validActions.find(a => a.type === ActionType.BATTLE);
+      const battleTargetsAtHex  = battleActionForMove?.targets.filter(t => t.col === hex.col && t.row === hex.row) || [];
+      if (battleTargetsAtHex.length > 0) {
+        this._awaitingTarget = { actionType: ActionType.BATTLE, actor };
+        this._handleTargetClick(hex);
+        return;
+      }
+
       const moveAction = this._validActions.find(a => a.type === ActionType.MOVE);
       const isValidTarget = moveAction && moveAction.targets.some(t => t.col === hex.col && t.row === hex.row);
       if (!isValidTarget) {
@@ -852,8 +945,8 @@ export class UIController {
       else this._clearSelection();
       this._updateSidebar();
       this.onRedraw();
-      if (result.encounterLog?.length) {
-        this._showResultDialog(result.encounterLog, () => {
+      if (result.encounterSurvivor) {
+        this._showEncounterDialog(result.encounterSurvivor, () => {
           this._updateSidebar();
           this.onRedraw();
           this._maybeShowNoActionsDialog();
@@ -872,24 +965,12 @@ export class UIController {
       this.renderer.highlightHexes = [];
 
       const executeFight = (target) => {
-        // Planning mode: add battle to plan, then keep battle highlights active
-        // so tapping the same target again immediately stacks another attack.
+        // Planning mode: add battle to plan, then re-select the actor so red
+        // battle highlights refresh naturally — clicking the same enemy again stacks another attack.
         if (this._planMode) {
           this._addToPlan({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id });
-          // Recompute valid actions using projected position.
-          const proj = this._getProjectedPos(actor.id);
-          const eff  = proj ? { ...actor, col: proj.col, row: proj.row } : actor;
-          this._validActions = getValidActions(this.state, eff);
-          const hasBattle = this._validActions.some(a => a.type === ActionType.BATTLE);
-          if (actor.alive && hasBattle) {
-            // Keep attack mode active — next tap on same target stacks an attack.
-            // Use real entity (actor) not the spread copy (eff); eff lacks prototype getters.
-            this._awaitingTarget = { actionType: ActionType.BATTLE, actor: actor };
-            this._updateHighlights();
-          } else {
-            if (actor.alive) this._selectEntity(actor);
-            else this._clearSelection();
-          }
+          if (actor.alive) this._selectEntity(actor);
+          else this._clearSelection();
           this._updateSidebar();
           this.onRedraw();
           return;
@@ -934,6 +1015,9 @@ export class UIController {
         if (result.success) state.spendAction(result.cost);
 
         this.renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
+        // HP-change floaters from pre/post snapshot comparison
+        this.renderer.addHpChangeFlash(actor.col,  actor.row,  actor.hp  - actorSnap.hp);
+        this.renderer.addHpChangeFlash(target.col, target.row, target.hp - targetSnap.hp);
         if (result.killed) {
           setTimeout(() => {
             const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
@@ -997,9 +1081,14 @@ export class UIController {
     if (this._pendingUnitPick) {
       let html = `<div class="popup-unit-name">Which unit to select?</div>`;
       for (const u of this._pendingUnitPick.units) {
-        const col = ENTITY_COLOR[u.type] || '#888';
+        const col        = ENTITY_COLOR[u.type] || '#888';
+        const portraitId = u.type === 'survivor' ? _SURVIVOR_TITLE_ASSET[u.title] : u.type;
+        const src        = portraitId ? this.renderer.getPortraitDataURL(portraitId) : null;
+        const portrait   = src
+          ? `<img src="${src}" style="width:32px;height:32px;border-radius:50%;border:1.5px solid ${col};flex-shrink:0;margin-right:0.4rem;">`
+          : '';
         html += `<button class="action-btn pick-unit" data-action="pick_unit" data-unit-id="${u.id}"
-          style="border-left:3px solid ${col}">${u.displayName} — HP ${u.hp}/${u.maxHp}</button>`;
+          style="border-left:3px solid ${col};display:flex;align-items:center;">${portrait}${u.displayName} — HP ${u.hp}/${u.maxHp}</button>`;
       }
       popup.innerHTML = html;
       _attachPopupListeners(popup, this);
@@ -1039,7 +1128,7 @@ export class UIController {
           regularHtml += btn('🔍 Explore', 'explore', dis, `data-action="explore"`);
           break;
         case ActionType.BATTLE:
-          regularHtml += btn('⚔ Attack', 'battle', dis, `data-action="battle"`);
+          // Attack is now triggered directly by clicking a red-highlighted enemy hex — no popup button needed.
           break;
         case ActionType.FORTIFY: {
           const shared     = state.inventory.shared;
@@ -1151,7 +1240,7 @@ export class UIController {
       <span class="usb-hp-wrap">
         <span class="usb-stat">HP</span>
         <span class="usb-hp-track">
-          <span class="usb-hp-fill" style="width:${hpPct}%;background:${hpColor}"></span>
+          <span class="usb-hp-fill" style="width:${hpPct}%;background:linear-gradient(to bottom,rgba(255,255,255,0.28) 0%,rgba(255,255,255,0) 55%),${hpColor}"></span>
         </span>
         <span class="usb-stat-val">${entity.hp}/${entity.maxHp}</span>
       </span>
@@ -1209,6 +1298,15 @@ export class UIController {
         <div class="turn-line">Round ${state.round}</div>
         <div class="turn-line player-${faction}">${status}</div>
         <div class="actions-remaining" title="Actions budget">${diamonds}</div>
+      `;
+      return;
+    }
+
+    // During resolution, show neutral resolution label
+    if (state.resolving) {
+      el.innerHTML = `
+        <div class="turn-line">Round ${state.round}</div>
+        <div class="turn-line">⚙ Resolution Phase</div>
       `;
       return;
     }
@@ -1379,24 +1477,18 @@ export class UIController {
         const result = executeExplore(state, entity);
         for (const msg of result.log) state.addLog(msg);
         if (result.success) state.spendAction(result.cost);
-        this._showResultDialog(result.log, () => {
-          state.checkVictory();
-          if (entity.alive) this._selectEntity(entity);
-          else this._clearSelection();
-          this._updateSidebar();
-          this.onRedraw();
-          this._maybeShowNoActionsDialog();
-        });
+        this._showLootFlashes(entity, result.lootItems ?? []);
+        state.checkVictory();
+        if (entity.alive) this._selectEntity(entity);
+        else this._clearSelection();
+        this._updateSidebar();
+        this.onRedraw();
+        this._maybeShowNoActionsDialog();
         break;
       }
 
       case 'battle':
-        _hideActionPopup();
-        this._awaitingTarget = { actionType: ActionType.BATTLE, actor: entity };
-        this._updateHighlights();
-        state.addLog('Click an enemy to attack.');
-        this._updateSidebar();
-        this.onRedraw();
+        // Attack is triggered via red hex clicks — this case is no longer used.
         break;
 
       case 'fortify': {
@@ -1551,6 +1643,84 @@ export class UIController {
     }
   }
 
+  // ── Speed popup ───────────────────────────────────────────────────────────
+
+  static SPEED_LABELS = { cinematic: 'Cinematic', fast: 'Fast', instant: 'Instant' };
+
+  _toggleSpeedPopup() {
+    const popup = document.getElementById('speed-popup');
+    if (!popup) return;
+    const isOpen = popup.style.display !== 'none';
+    if (isOpen) { this._closeSpeedPopup(); return; }
+    // Mark active option
+    popup.querySelectorAll('.speed-option').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.mode === this.speedMode);
+    });
+    popup.style.display = 'flex';
+  }
+
+  _closeSpeedPopup() {
+    const popup = document.getElementById('speed-popup');
+    if (popup) popup.style.display = 'none';
+  }
+
+  _setSpeed(mode) {
+    if (!UIController.SPEED_LABELS[mode]) return;
+    this.speedMode = mode;
+    this._closeSpeedPopup();
+    const btn = document.getElementById('speed-toggle');
+    if (btn) {
+      btn.title = `Battle speed: ${UIController.SPEED_LABELS[mode]}`;
+      btn.className = `zoom-btn speed-${mode}`;
+    }
+    this._showSpeedToast(`⚡ ${UIController.SPEED_LABELS[mode]}`);
+  }
+
+  _showSpeedToast(text) {
+    let toast = document.getElementById('speed-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'speed-toast';
+      toast.className = 'speed-toast';
+      const wrapper = document.getElementById('canvas-wrapper');
+      if (wrapper) wrapper.appendChild(toast);
+    }
+    toast.textContent = text;
+    toast.classList.remove('speed-toast-out');
+    clearTimeout(this._speedToastTimer);
+    this._speedToastTimer = setTimeout(() => {
+      toast.classList.add('speed-toast-out');
+    }, 1500);
+  }
+
+  // ── Battle toast (minor skirmishes) ──────────────────────────────────────
+
+  _showBattleToast(actorSnap, targetSnap, result) {
+    const container = document.getElementById('battle-toast-container');
+    if (!container) return;
+
+    const outcome = result.killed
+      ? '💀 slain'
+      : result.hit
+        ? result.damage >= 2 ? `💥 crush −${result.damage}HP` : `⚔ hit −${result.damage}HP`
+        : result.counterDmg > 0 ? '🛡 counter' : 'miss';
+
+    const toast = document.createElement('div');
+    toast.className = 'battle-toast' +
+      (result.killed ? ' kill' : result.damage >= 2 ? ' crush' : '');
+    toast.textContent =
+      `${actorSnap.name} → ${targetSnap.name}  [${result.attackRoll}v${result.defenseRoll}]  ${outcome}`;
+    container.appendChild(toast);
+
+    const displayMs = this.speedMode === 'instant' ? 600
+                    : this.speedMode === 'fast'     ? 1200
+                    :                                 2000;
+    setTimeout(() => {
+      toast.style.animation = 'battle-toast-out 0.3s ease forwards';
+      setTimeout(() => toast.remove(), 300);
+    }, displayMs);
+  }
+
   // ── Attrition popup ──────────────────────────────────────────────────────
 
   _showAttritionPopup() {
@@ -1572,7 +1742,10 @@ export class UIController {
 
   // ── Phase toast ──────────────────────────────────────────────────────────
 
-  _showPhaseToast(faction) {
+  _showPhaseModal(faction, budget) {
+    // Instant mode skips all popups
+    if (this.speedMode === 'instant') return;
+
     const phase = this.state.phase;
     const PHASE_INFO = {
       dawn:  { icon: '🌅', label: 'Dawn',  lines: ['Hero gains +1 action · Attrition rises', 'Power Nodes scored · Tiles reset'] },
@@ -1583,29 +1756,64 @@ export class UIController {
     const info = PHASE_INFO[phase];
     if (!info) return;
 
-    // Remove any existing toast first
-    document.getElementById('phase-toast')?.remove();
+    const el = document.getElementById('phase-modal');
+    if (!el) return;
 
-    const toast = document.createElement('div');
-    toast.id = 'phase-toast';
-    toast.className = `phase-toast phase-toast-${phase}`;
-    toast.innerHTML = `
-      <span class="phase-toast-icon">${info.icon}</span>
-      <div class="phase-toast-body">
-        <div class="phase-toast-title">${info.label} — Round ${this.state.round}</div>
-        <div class="phase-toast-lines">${info.lines.join(' · ')}</div>
-      </div>
-    `;
-    document.getElementById('game-screen')?.appendChild(toast);
+    // Compute action breakdown for display
+    const actions  = budget ?? (faction === 'hero' ? this.state.heroActionsLeft : this.state.witchActionsLeft) ?? 0;
+    const entities = this.state.entities;
+    let breakdown  = '';
+    if (faction === 'hero') {
+      const timeBonus     = (phase === 'day' || phase === 'dawn') ? 1 : 0;
+      const survivorCount = entities.filter(e => e.alive && e.owner === 'hero' && e.type !== 'hero').length;
+      const survivorBonus = Math.min(survivorCount, 5);
+      const parts = ['3 base'];
+      if (timeBonus)     parts.push(`+1 ${phase}`);
+      if (survivorBonus) parts.push(`+${survivorBonus} survivor${survivorBonus !== 1 ? 's' : ''}`);
+      breakdown = parts.join(' · ');
+    } else {
+      const timeBonus = phase === 'night' ? 1 : 0;
+      const unitCount = entities.filter(e => e.alive && e.owner === 'witch' && e.type !== 'witch').length;
+      const unitBonus = Math.min(Math.floor(unitCount / 2), 4);
+      const parts = ['4 base'];
+      if (timeBonus) parts.push('+1 night');
+      if (unitBonus) parts.push(`+${unitBonus} units`);
+      breakdown = parts.join(' · ');
+    }
 
-    // Auto-dismiss after 3.2s
-    setTimeout(() => toast.classList.add('phase-toast-hide'), 3200);
-    setTimeout(() => toast.remove(), 3700);
+    // Set content
+    const iconEl    = el.querySelector('.phase-modal-icon');
+    const titleEl   = el.querySelector('.phase-modal-title');
+    const effectsEl = el.querySelector('.phase-modal-effects');
+    const budgetEl  = el.querySelector('.phase-modal-budget');
+    if (iconEl)    iconEl.textContent   = info.icon;
+    if (titleEl)   titleEl.textContent  = `${info.label} — Round ${this.state.round}`;
+    if (effectsEl) effectsEl.innerHTML  = info.lines.map(l => `<div>${l}</div>`).join('');
+    if (budgetEl) {
+      const pips = Array.from({ length: actions }, () =>
+        `<span class="action-pip">●</span>`
+      ).join('');
+      budgetEl.innerHTML =
+        `<span class="action-pip-label">${actions} action${actions !== 1 ? 's' : ''}</span>${pips}` +
+        `<div class="action-breakdown">${breakdown}</div>`;
+    }
+
+    // Set phase accent class
+    el.className = `visible phase-${phase}`;
+
+    // Dismiss only on button click — no auto-dismiss, no backdrop click
+    const continueBtn = document.getElementById('phase-modal-continue');
+    const dismiss = () => {
+      el.classList.remove('visible');
+      continueBtn?.removeEventListener('click', dismiss);
+    };
+    continueBtn?.addEventListener('click', dismiss);
   }
 
   // ── Scoring toast (dawn / dusk checkpoints) ──────────────────────────────
 
   showScoringToast(prevScore) {
+    if (this.speedMode === 'instant') return;
     const state      = this.state;
     const phase      = state.phase; // 'dawn' or 'dusk' — already advanced by endRound()
     const phaseIcon  = phase === 'dawn' ? '🌅' : '🌇';
@@ -1659,7 +1867,95 @@ export class UIController {
 
   // ── Dialogs ───────────────────────────────────────────────────────────────
 
-  _showResultDialog(messages, onDismiss) {
+  /** Show floating "+Item" text over a hex for each loot item found. */
+  _showLootFlashes(entity, lootItems) {
+    if (!lootItems.length) {
+      this.renderer.addFlash(entity.col, entity.row, '—', 'rgba(120,110,90,0.15)', 1200, 0.6, 'rgba(160,148,124,0.9)');
+      return;
+    }
+    lootItems.forEach((label, i) => {
+      setTimeout(() => {
+        this.renderer.addFlash(entity.col, entity.row, label, 'rgba(200,170,60,0.1)', 1800, 0.72, '#e8d48a');
+        this.onRedraw();
+      }, i * 420);
+    });
+  }
+
+  /** Show a unit card popup for a newly-encountered survivor or zombie. */
+  _showEncounterDialog(encounterUnit, onDismiss) {
+    const dialog = document.getElementById('encounter-dialog');
+    const card   = document.getElementById('encounter-card');
+
+    const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
+    const glyph  = GLYPHS[encounterUnit.type] ?? '?';
+    const color  = encounterUnit.color || '#d4c9b0';
+
+    const assetId = encounterUnit.type === 'survivor'
+      ? (_SURVIVOR_TITLE_ASSET[encounterUnit.title] ?? null)
+      : encounterUnit.type;
+    const src = assetId ? this.renderer.getPortraitDataURL(assetId) : null;
+
+    const portraitHtml = src
+      ? `<img src="${src}" style="width:72px;height:72px;border-radius:50%;border:2px solid ${color};display:block;">`
+      : `<div style="font-size:2.8rem;line-height:1;color:${color};width:72px;text-align:center;">${glyph}</div>`;
+
+    const titleHtml = encounterUnit.title
+      ? `<div style="font-size:0.75rem;color:#9a8a7a;font-style:italic;margin-bottom:0.25rem;">${encounterUnit.title}</div>`
+      : '';
+
+    const abilityHtml = encounterUnit.abilityLabel
+      ? `<div style="font-size:0.72rem;color:#88eeff;margin-top:0.3rem;">✦ ${encounterUnit.abilityLabel}</div>`
+      : '';
+
+    const hpPct   = encounterUnit.maxHp > 0 ? (encounterUnit.hp / encounterUnit.maxHp) * 100 : 100;
+    const hpColor = hpPct > 60 ? '#4caf7d' : hpPct > 30 ? '#f5c842' : '#c0392b';
+
+    const message = encounterUnit.type === 'survivor'
+      ? `${encounterUnit.name} steps from the shadows and joins the party!`
+      : `A cowering survivor is found… raised as a zombie by the witch!`;
+
+    card.innerHTML = `
+      <div style="display:flex;align-items:center;gap:0.85rem;margin-bottom:0.75rem;">
+        <div style="flex-shrink:0;">${portraitHtml}</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:1rem;font-weight:bold;color:${color};margin-bottom:0.12rem;">${glyph} ${encounterUnit.name}</div>
+          ${titleHtml}
+          <div style="font-size:0.72rem;color:#c8b89a;">HP ${encounterUnit.hp}/${encounterUnit.maxHp} · ATK ${encounterUnit.attack} · DEF ${encounterUnit.defense}</div>
+          <div style="background:#1e1e2a;border-radius:3px;height:5px;margin-top:0.3rem;overflow:hidden;">
+            <div style="width:${hpPct}%;height:100%;background:${hpColor};border-radius:3px;"></div>
+          </div>
+          ${abilityHtml}
+        </div>
+      </div>
+      <div style="font-size:0.82rem;color:#b8a88a;text-align:center;margin-bottom:0.5rem;">${message}</div>
+      ${this.autoplay ? '' : '<div class="result-dismiss">— click anywhere to continue —</div>'}
+    `;
+
+    dialog.style.display = 'flex';
+
+    const dismiss = () => {
+      dialog.style.display = 'none';
+      dialog.removeEventListener('click', dismiss);
+      document.removeEventListener('keydown', keyDismiss);
+      if (onDismiss) onDismiss();
+    };
+    const keyDismiss = e => {
+      if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') dismiss();
+    };
+
+    if (this.autoplay || this.speedMode === 'instant') {
+      setTimeout(dismiss, this.autoplay ? 700 : 80);
+    } else if (this.speedMode === 'fast') {
+      setTimeout(dismiss, 600);
+      dialog.addEventListener('click', dismiss);
+      document.addEventListener('keydown', keyDismiss);
+    } else {
+      dialog.addEventListener('click', dismiss);
+      document.addEventListener('keydown', keyDismiss);
+    }
+  }
+
+  _showResultDialog(messages, onDismiss, encounterSurvivor = null) {
     const dialog = document.getElementById('result-dialog');
     // Collapse consecutive duplicate lines into "message (×N)"
     const collapsed = [];
@@ -1674,6 +1970,21 @@ export class UIController {
     const btns = document.getElementById('result-buttons');
     btns.style.display = 'none';
     btns.innerHTML = '';
+
+    // Survivor portrait
+    const portraitEl = document.getElementById('result-portrait');
+    if (portraitEl) {
+      const assetId = encounterSurvivor?.title ? _SURVIVOR_TITLE_ASSET[encounterSurvivor.title] : null;
+      const src     = assetId ? this.renderer.getPortraitDataURL(assetId) : null;
+      if (src) {
+        portraitEl.style.display = 'block';
+        portraitEl.innerHTML = `<img src="${src}" style="width:80px;height:80px;border-radius:50%;border:2px solid #c8a96e;display:block;">`;
+      } else {
+        portraitEl.style.display = 'none';
+        portraitEl.innerHTML = '';
+      }
+    }
+
     dialog.style.display = 'flex';
 
     const dismiss = () => {
@@ -1686,8 +1997,10 @@ export class UIController {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') dismiss();
     };
 
-    if (this.autoplay) {
-      setTimeout(dismiss, 500);
+    if (this.autoplay || this.speedMode === 'instant') {
+      setTimeout(dismiss, this.autoplay ? 500 : 100);
+    } else if (this.speedMode === 'fast') {
+      setTimeout(dismiss, 800);
     } else {
       dialog.addEventListener('click', dismiss);
       document.addEventListener('keydown', keyDismiss);
@@ -1810,8 +2123,10 @@ export class UIController {
     }
 
     // Populate combatant panels
-    document.getElementById('battle-attacker').innerHTML = _combatantHTML(actorSnap, 'atk');
-    document.getElementById('battle-defender').innerHTML = _combatantHTML(targetSnap, 'def');
+    const atkPortrait = this.renderer.getPortraitDataURL(_entityPortraitId(actorSnap));
+    const defPortrait = this.renderer.getPortraitDataURL(_entityPortraitId(targetSnap));
+    document.getElementById('battle-attacker').innerHTML = _combatantHTML(actorSnap, 'atk', atkPortrait);
+    document.getElementById('battle-defender').innerHTML = _combatantHTML(targetSnap, 'def', defPortrait);
 
     const atkDie  = document.getElementById('battle-atk-die');
     const defDie  = document.getElementById('battle-def-die');
@@ -1921,16 +2236,24 @@ export class UIController {
       }
     };
 
-    if (this.autoplay) {
-      // Skip animation — show result immediately, auto-dismiss after 500ms
+    if (this.autoplay || this.speedMode === 'instant') {
+      // Skip animation — show result immediately, auto-dismiss
       atkDie.textContent = result.attackRoll;
       defDie.textContent = result.defenseRoll;
       atkDie.className = 'die-display' + (result.hit ? ' atk-win' : '');
       defDie.className = 'die-display' + (!result.hit ? ' def-win' : '');
       revealResult();
-      setTimeout(dismiss, 500);
+      setTimeout(dismiss, this.autoplay ? 500 : 100);
+    } else if (this.speedMode === 'fast') {
+      // Skip dice animation — show result immediately, auto-dismiss after 800ms
+      atkDie.textContent = result.attackRoll;
+      defDie.textContent = result.defenseRoll;
+      atkDie.className = 'die-display' + (result.hit ? ' atk-win' : '');
+      defDie.className = 'die-display' + (!result.hit ? ' def-win' : '');
+      revealResult();
+      setTimeout(dismiss, 800);
     } else {
-      // Animated dice roll
+      // Cinematic: animated dice roll, manual click to dismiss
       atkDie.textContent = '?';
       defDie.textContent = '?';
       atkDie.className   = 'die-display rolling';
@@ -2072,23 +2395,10 @@ export class UIController {
       let html = '';
       if (visible.length) html += `<div class="tile-units-heading">Units</div>`;
       for (const u of myUnits) {
-        const col    = ENTITY_COLOR[u.type] || '#888';
-        const hearts = '♥'.repeat(u.hp) + '♡'.repeat(Math.max(0, u.maxHp - u.hp));
-        const atkStr = `${u.attack}${u.attackBonus ? `+${u.attackBonus}` : ''}`;
-        const defStr = `${u.defense}${u.defenseBonus ? `+${u.defenseBonus}` : ''}`;
-        const label  = u.type === EntityType.SURVIVOR && u.name ? u.name : u.displayName;
-        html += `<div class="tile-unit-card selectable" data-unit-id="${u.id}">
-          <span class="tile-unit-card-name" style="color:${col}">${label}</span>
-          <span class="tile-unit-card-stats">${hearts} · ATK ${atkStr} · DEF ${defStr}</span>
-        </div>`;
+        html += _unitCardHTML(u, { renderer: this.renderer, selectable: true });
       }
       for (const u of foeUnits) {
-        const col    = ENTITY_COLOR[u.type] || '#888';
-        const hearts = '♥'.repeat(u.hp) + '♡'.repeat(Math.max(0, u.maxHp - u.hp));
-        html += `<div class="tile-unit-card">
-          <span class="tile-unit-card-name" style="color:${col}">${u.displayName}</span>
-          <span class="tile-unit-card-stats">${hearts}</span>
-        </div>`;
+        html += _unitCardHTML(u, { renderer: this.renderer, showStats: false });
       }
       unitsEl.innerHTML = html;
       unitsEl.querySelectorAll('.tile-unit-card.selectable').forEach(card => {
@@ -2111,53 +2421,210 @@ export class UIController {
     document.getElementById('tile-zoom-overlay')?.classList.remove('visible');
   }
 
-  _toggleChronicle() {
-    const overlay = document.getElementById('chronicle-overlay');
-    if (!overlay) return;
-    overlay.classList.toggle('visible');
-    if (overlay.classList.contains('visible')) {
-      this._renderLog(); // rebuild full log before showing
-    }
+  /** Cycle chronicle through: none → mini → full → none */
+  _cycleChronicle() {
+    const modes = ['none', 'mini', 'full'];
+    const next  = modes[(modes.indexOf(this._chronicleMode) + 1) % modes.length];
+    this._setChronicleMode(next);
+  }
+
+  _setChronicleMode(mode) {
+    this._chronicleMode = mode;
+    const sidebar = document.getElementById('chronicle-sidebar');
+    if (sidebar) sidebar.style.display = mode === 'full' ? 'flex' : 'none';
+    this._renderMiniChronicle();
+    if (mode === 'full') this._renderSidebarLog();
+    // Update renderer inset so framing avoids the sidebar area
+    if (this.renderer) this.renderer.insetLeft = mode === 'full' ? 240 : 0;
+    // Resize canvas to account for sidebar width change, then redraw
+    this.renderer?.resize();
+    this.onRedraw?.();
+  }
+
+  _renderSidebarLog() {
+    const el = document.getElementById('chronicle-sidebar-log');
+    if (!el) return;
+    const visible = this._visibleLog();
+    el.innerHTML = visible.map(m => `<div class="log-entry">${this._logText(m)}</div>`).join('');
+    el.scrollTop = el.scrollHeight;
   }
 
   _renderInventory() {
-    const el    = document.getElementById('inventory-content');
-    const title = document.getElementById('inventory-title');
+    const el = document.getElementById('plan-inventory');
     if (!el) return;
 
-    const state  = this.state;
-    const isHero = state.activePlayer === Player.HERO;
-    const inv    = state.inventory;
-    const stash  = isHero ? inv.shared : inv.witch;
-
-    if (title) title.textContent = isHero ? '⚔ Hero Supplies' : '🕯 Witch Stores';
+    const state   = this.state;
+    const faction = this._planFaction ?? (state.activePlayer === Player.HERO ? 'hero' : 'witch');
+    const isHero  = faction === 'hero';
+    const inv     = state.inventory;
+    const stash   = isHero ? inv.shared : inv.witch;
+    const label   = isHero ? '⚔ Supplies' : '🕯 Stores';
 
     const entries = Object.entries(stash).filter(([, v]) => v > 0);
-    if (!entries.length) {
-      el.innerHTML = `<div class="inv-empty">Nothing held.</div>`;
-      return;
-    }
-    el.innerHTML = entries.map(([k, v]) =>
-      `<div class="inv-resource-row">
-        <span class="inv-resource-label">${RESOURCE_LABEL[k] || k}</span>
-        <span class="inv-resource-val">×${v}</span>
-      </div>`
-    ).join('');
+    const rows = entries.length
+      ? entries.map(([k, v]) =>
+          `<div class="inv-resource-row">
+            <span class="inv-resource-label">${RESOURCE_LABEL[k] || k}</span>
+            <span class="inv-resource-val">×${v}</span>
+          </div>`
+        ).join('')
+      : `<div class="inv-empty">Nothing held.</div>`;
+
+    el.innerHTML = `<div class="plan-inventory-title">${label}</div>${rows}`;
   }
 
-  _toggleInventory() {
-    const overlay = document.getElementById('inventory-overlay');
-    if (!overlay) return;
-    overlay.classList.toggle('visible');
-    if (overlay.classList.contains('visible')) this._renderInventory();
+  /** Return the text of a log entry, handling both string and {text,owner} formats. */
+  _logText(entry) {
+    return typeof entry === 'string' ? entry : entry.text;
+  }
+
+  /** Filter log entries to only those the current player can see. */
+  _visibleLog() {
+    const log = this.state?.log ?? [];
+    if (!this.state?.fogOfWar) return log;
+    const myFaction = this._planFaction
+      ?? (this.state.heroIsAI === false ? 'hero' : 'witch');
+    return log.filter(entry => {
+      if (typeof entry === 'string') return true; // untagged entries are always visible
+      return !entry.owner || entry.owner === myFaction;
+    });
   }
 
   _renderLog() {
     const el = document.getElementById('event-log');
     if (!el) return;
-    // Show full log — entries are added throughout the game so nothing is lost.
-    el.innerHTML = this.state.log.map(m => `<div class="log-entry">${m}</div>`).join('');
+    const visible = this._visibleLog();
+    el.innerHTML = visible.map(m =>
+      `<div class="log-entry">${this._logText(m)}</div>`
+    ).join('');
     el.scrollTop = el.scrollHeight;
+
+    this._renderMiniChronicle();
+    if (this._chronicleMode === 'full') this._renderSidebarLog();
+  }
+
+  _renderMiniChronicle() {
+    const el = document.getElementById('chronicle-mini');
+    if (!el) return;
+    const mode       = this._chronicleMode ?? 'mini';
+    const activeClass = mode !== 'none' ? ' chronicle-mini-btn-active' : '';
+    const btnHtml    = `<button id="chronicle-btn" class="chronicle-mini-btn${activeClass}" title="Chronicle">📜</button>`;
+
+    if (mode === 'mini') {
+      const visible = this._visibleLog();
+      const last5   = visible.slice(-5);
+      const entries = last5.map(m => `<div class="mini-log-entry">${this._logText(m)}</div>`).join('');
+      el.innerHTML  = btnHtml + entries;
+    } else {
+      // 'none' or 'full': just the button (entries are in sidebar for full, hidden for none)
+      el.innerHTML = btnHtml;
+    }
+    document.getElementById('chronicle-btn')?.addEventListener('click', () => this._cycleChronicle());
+  }
+
+  /**
+   * Show the post-resolution round summary modal.
+   * Resolves with 'next' or 'replay'.
+   */
+  _showResolutionSummary(steps, roundNum) {
+    return new Promise(resolve => {
+      const el = document.getElementById('round-summary');
+      if (!el) { resolve('next'); return; }
+
+      // Collect kills, survivors found, and summons from steps
+      const kills     = [];
+      const survivors = [];
+      const summons   = [];
+      for (const step of steps ?? []) {
+        const allEvents = [
+          ...(step.heroEvents  ?? []),
+          ...(step.witchEvents ?? []),
+          ...(step.playerEvents ?? []).flatMap(pe => pe.events ?? []),
+        ];
+        for (const ev of allEvents) {
+          if (ev.result?.killed) {
+            const snap = ev.battleSnaps?.targetSnap ?? ev.result.killed;
+            const name = snap?.title ?? snap?.name ?? snap?.type ?? 'Unit';
+            kills.push(name);
+          }
+          if (ev.result?.encounterSurvivor) {
+            survivors.push(ev.result.encounterSurvivor);
+          }
+          if (ev.action?.type === 'summon' && ev.result?.success) {
+            const logLine = ev.result?.log?.[0] ?? '';
+            summons.push(logLine || 'Unit summoned');
+          }
+        }
+      }
+
+      const titleEl  = el.querySelector('.round-summary-title');
+      const eventsEl = document.getElementById('round-summary-events');
+      if (titleEl)  titleEl.textContent = `Round ${roundNum ?? ''} complete`;
+      if (eventsEl) {
+        let html = '';
+        for (const n of kills) {
+          html += `<div class="summary-kill">☠ ${n} slain</div>`;
+        }
+        for (const s of survivors) {
+          if (s.type === 'zombie') {
+            html += `<div class="summary-summon">† Zombie raised</div>`;
+          } else {
+            const label = s.title ? `${s.name} the ${s.title}` : s.name;
+            html += `<div class="summary-survivor">☺ ${label} joined</div>`;
+          }
+        }
+        for (const s of summons) {
+          html += `<div class="summary-summon">✦ ${s}</div>`;
+        }
+        eventsEl.innerHTML = html || `<div class="summary-neutral">No notable events this round.</div>`;
+      }
+
+      // Render replay-speed mini-picker
+      const speedRowEl = document.getElementById('round-summary-speed-row');
+      if (speedRowEl) {
+        const modes = Object.entries(UIController.SPEED_LABELS);
+        speedRowEl.innerHTML = modes.map(([mode, label]) =>
+          `<button class="summary-speed-btn${this.speedMode === mode ? ' active' : ''}" data-mode="${mode}">${label}</button>`
+        ).join('');
+        speedRowEl.querySelectorAll('.summary-speed-btn').forEach(btn => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._setSpeed(btn.dataset.mode);
+            speedRowEl.querySelectorAll('.summary-speed-btn').forEach(b =>
+              b.classList.toggle('active', b.dataset.mode === this.speedMode)
+            );
+          });
+        });
+      }
+
+      el.classList.add('visible');
+
+      const nextBtn   = document.getElementById('round-summary-next');
+      const replayBtn = document.getElementById('round-summary-replay');
+
+      const cleanup = () => {
+        el.classList.remove('visible');
+        nextBtn?.removeEventListener('click', onNext);
+        replayBtn?.removeEventListener('click', onReplay);
+      };
+      const onNext   = () => { cleanup(); resolve('next'); };
+      const onReplay = () => { cleanup(); resolve('replay'); };
+
+      nextBtn?.addEventListener('click', onNext);
+      replayBtn?.addEventListener('click', onReplay);
+    });
+  }
+
+  /**
+   * Update the live state reference (used by spectator mode and online reconnect).
+   * Refreshes the renderer, log, and sidebar without triggering AI.
+   */
+  updateState(newState) {
+    this.state = newState;
+    if (this.renderer) this.renderer.state = newState;
+    this._renderLog();
+    this._updateTurnInfo?.();
+    this.onRedraw?.();
   }
 
   refresh() {
@@ -2198,16 +2665,83 @@ function _visibleUnitsAt(state, col, row) {
   });
 }
 
-function _snapEntity(e) {
-  return { id: e.id, name: e.displayName, hp: e.hp, maxHp: e.maxHp, attack: e.attack, defense: e.defense, type: e.type };
+// ── Tilemap sprite helpers ────────────────────────────────────────────────────
+
+const _SURVIVOR_TITLE_ASSET = {
+  'Innkeeper':        'survivor_innkeeper',
+  'Nurse':            'survivor_nurse',
+  'Blacksmith':       'survivor_blacksmith',
+  'Herbalist':        'survivor_herbalist',
+  'Militia Sergeant': 'survivor_militia',
+  'Parish Priest':    'survivor_priest',
+  'Baker':            'survivor_baker',
+  'Trapper':          'survivor_trapper',
+  'Schoolteacher':    'survivor_schoolteacher',
+  'Gravedigger':      'survivor_gravedigger',
+  'Midwife':          'survivor_midwife',
+  'Farmhand':         'survivor_farmhand',
+};
+
+/** Return the tilemap asset id for any entity snap (uses title for survivors). */
+function _entityPortraitId(snap) {
+  if (snap.type === 'survivor') return _SURVIVOR_TITLE_ASSET[snap.title] ?? null;
+  return snap.type; // 'hero', 'witch', 'zombie', etc.
 }
 
-function _combatantHTML(snap, role) {
-  const label     = role === 'atk' ? '⚔ Attacker' : '🛡 Defender';
-  const color     = ENTITY_COLOR[snap.type] || '#888';
-  const hpPct     = (snap.hp / snap.maxHp) * 100;
-  const hpColor   = hpPct > 50 ? '#4caf50' : hpPct > 25 ? '#ff9800' : '#f44336';
+/**
+ * Render a unit card with circular portrait (or glyph fallback).
+ * Single shared implementation used by tile-detail, dialogs, etc.
+ *
+ * @param {object} entity   Entity or snap with type/name/title/hp/maxHp/attack/defense.
+ * @param {object} opts
+ * @param {Renderer} [opts.renderer]   For portrait lookup. If null, glyph only.
+ * @param {boolean} [opts.selectable]  Add `selectable` class + data-unit-id.
+ * @param {boolean} [opts.showStats]   Show ATK/DEF stats (default true).
+ * @param {number}  [opts.portraitSize] Portrait diameter in px (default 36).
+ */
+function _unitCardHTML(entity, { renderer = null, selectable = false, showStats = true, portraitSize = 36 } = {}) {
+  const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
+  const color  = ENTITY_COLOR[entity.type] || '#888';
+  const glyph  = GLYPHS[entity.type] ?? '?';
+  const label  = (entity.type === 'survivor' && entity.name) ? entity.name
+               : (entity.displayName ?? entity.name ?? entity.type);
+
+  // Portrait image (circular), falling back to text glyph
+  const assetId = _entityPortraitId(entity);
+  const src     = (renderer && assetId) ? renderer.getPortraitDataURL(assetId, portraitSize * 2) : null;
+  const portraitHtml = src
+    ? `<img class="tile-unit-card-portrait" src="${src}" style="width:${portraitSize}px;height:${portraitSize}px;border-color:${color};" alt="">`
+    : `<span class="tile-unit-card-icon" style="color:${color}">${glyph}</span>`;
+
+  // Stats line
+  const hearts = '♥'.repeat(entity.hp ?? 0) + '♡'.repeat(Math.max(0, (entity.maxHp ?? entity.hp ?? 0) - (entity.hp ?? 0)));
+  let statsHtml = hearts;
+  if (showStats && entity.attack !== undefined) {
+    const atkStr = `${entity.attack}${entity.attackBonus ? `+${entity.attackBonus}` : ''}`;
+    const defStr = `${entity.defense}${entity.defenseBonus ? `+${entity.defenseBonus}` : ''}`;
+    statsHtml = `${hearts} · ATK ${atkStr} · DEF ${defStr}`;
+  }
+
+  const cls    = selectable ? 'tile-unit-card selectable' : 'tile-unit-card';
+  const dataId = selectable ? ` data-unit-id="${entity.id}"` : '';
+
+  return `<div class="${cls}"${dataId}>${portraitHtml}<span class="tile-unit-card-name" style="color:${color}">${label}</span><span class="tile-unit-card-stats">${statsHtml}</span></div>`;
+}
+
+function _snapEntity(e) {
+  return { id: e.id, name: e.displayName, hp: e.hp, maxHp: e.maxHp, attack: e.attack, defense: e.defense, type: e.type, title: e.title ?? null };
+}
+
+function _combatantHTML(snap, role, portraitSrc = null) {
+  const label      = role === 'atk' ? '⚔ Attacker' : '🛡 Defender';
+  const color      = ENTITY_COLOR[snap.type] || '#888';
+  const hpPct      = (snap.hp / snap.maxHp) * 100;
+  const hpColor    = hpPct > 50 ? '#4caf50' : hpPct > 25 ? '#ff9800' : '#f44336';
+  const portraitHtml = portraitSrc
+    ? `<img src="${portraitSrc}" style="width:56px;height:56px;border-radius:50%;border:2px solid ${color};display:block;margin:0 auto 0.35rem;">`
+    : '';
   return `
+    ${portraitHtml}
     <div class="combatant-name" style="color:${color}">${snap.name}</div>
     <div style="font-size:0.68rem;color:#7a7060;margin-bottom:0.3rem">${label}</div>
     <div class="combatant-stats">HP: ${snap.hp}/${snap.maxHp} · ATK: ${snap.attack} · DEF: ${snap.defense}</div>

@@ -21,9 +21,13 @@
         </p>
       </div>
       <div class="setup-buttons" style="flex-direction:column;align-items:center">
-        <button id="btn-new-game"    class="setup-btn primary" style="width:200px">New Game</button>
-        <button id="btn-how-to-play" class="setup-btn"         style="width:200px">How to Play</button>
-        <button id="btn-options"     class="setup-btn"         style="width:200px">Options</button>
+        <button id="btn-single-player" class="setup-btn primary" style="width:200px">⚔ Single Player</button>
+        <button id="btn-multiplayer"   class="setup-btn"         style="width:200px">🌐 Multiplayer</button>
+        <button id="btn-how-to-play"   class="setup-btn"         style="width:200px">How to Play</button>
+        <button id="btn-options"       class="setup-btn"         style="width:200px">Options</button>
+      </div>
+      <div style="margin-top:1.25rem;text-align:center">
+        <a href="/admin" class="admin-link">Admin</a>
       </div>
     </div>
 
@@ -93,11 +97,10 @@
       </div>
     </div>
 
-    <!-- New Game config -->
-    <div id="setup-step-newgame" class="setup-card" style="display:none">
-      <h1 class="title" style="font-size:2rem;margin-bottom:1rem">NEW GAME</h1>
+    <!-- Single Player -->
+    <div id="setup-step-singleplayer" class="setup-card" style="display:none">
+      <h1 class="title" style="font-size:2rem;margin-bottom:1rem">SINGLE PLAYER</h1>
 
-      <!-- Common options -->
       <div class="setup-options">
         <label class="setup-option-label">
           Map size
@@ -114,85 +117,76 @@
         </label>
       </div>
 
-      <!-- Local / Online toggle -->
-      <div class="mode-toggle">
-        <button id="btn-mode-local"  class="mode-toggle-btn active">Local</button>
-        <button id="btn-mode-online" class="mode-toggle-btn">Online</button>
+      <div class="player-mode-group">
+        <label class="player-mode-pill">
+          <input type="radio" name="player-mode" value="vs-ai" checked>
+          <span>vs AI</span>
+        </label>
+        <label class="player-mode-pill">
+          <input type="radio" name="player-mode" value="two-players">
+          <span>Two Players</span>
+        </label>
+        <label class="player-mode-pill">
+          <input type="radio" name="player-mode" value="autoplay">
+          <span>AI vs AI</span>
+        </label>
       </div>
 
-      <!-- Local section -->
-      <div id="newgame-local-section">
-        <div class="player-mode-group">
-          <label class="player-mode-pill">
-            <input type="radio" name="player-mode" value="vs-ai" checked>
-            <span>vs AI</span>
-          </label>
-          <label class="player-mode-pill">
-            <input type="radio" name="player-mode" value="two-players">
-            <span>Two Players</span>
-          </label>
-          <label class="player-mode-pill">
-            <input type="radio" name="player-mode" value="autoplay">
-            <span>AI vs AI</span>
-          </label>
-        </div>
-        <!-- Side selection (vs AI only) -->
-        <div id="side-selection" class="setup-buttons" style="margin-bottom:0">
-          <button id="btn-play-hero"  class="setup-btn primary">⚔ Play as Hero</button>
-          <button id="btn-play-witch" class="setup-btn">✦ Play as Witch</button>
-        </div>
-        <!-- Start button (two players / AI vs AI) -->
-        <div id="btn-start-wrap" class="setup-buttons" style="display:none;margin-bottom:0">
-          <button id="btn-start-local" class="setup-btn primary">Start Game</button>
-        </div>
+      <!-- Side selection (vs AI only) -->
+      <div id="side-selection" class="setup-buttons" style="margin-bottom:0">
+        <button id="btn-play-hero"  class="setup-btn primary">⚔ Play as Hero</button>
+        <button id="btn-play-witch" class="setup-btn">✦ Play as Witch</button>
+      </div>
+      <!-- Start button (two players / AI vs AI) -->
+      <div id="btn-start-wrap" class="setup-buttons" style="display:none;margin-bottom:0">
+        <button id="btn-start-local" class="setup-btn primary">Start Game</button>
       </div>
 
-      <!-- Online section -->
-      <div id="newgame-online-section" style="display:none">
-        <div id="online-session-info" style="display:none;margin-top:0.75rem" class="setup-lore">
-          <p>Playing as <strong id="online-session-name"></strong>
-             &nbsp;<span id="online-session-stats" class="stats-badge"></span></p>
-          <button id="btn-change-name" class="setup-btn secondary" style="margin-top:0.5rem">Change Name</button>
-        </div>
-        <div id="online-name-form" style="margin-top:0.5rem">
-          <input id="online-username" class="setup-input" type="text"
-                 placeholder="Enter a username…" maxlength="20" autocomplete="off">
-          <button id="btn-online-signin" class="setup-btn primary" style="margin-top:0.4rem">Sign In</button>
-          <p id="online-name-error" class="setup-error" style="display:none"></p>
-        </div>
-        <div class="pps-selector" style="margin-top:0.75rem">
-          <span class="pps-label">Players per side:</span>
-          <div class="pps-pills">
-            <label class="pps-pill"><input type="radio" name="pps" value="1" checked><span>1v1</span></label>
-            <label class="pps-pill"><input type="radio" name="pps" value="2"><span>2v2</span></label>
-            <label class="pps-pill"><input type="radio" name="pps" value="3"><span>3v3</span></label>
-            <label class="pps-pill"><input type="radio" name="pps" value="4"><span>4v4</span></label>
-          </div>
-        </div>
-        <!-- Active games -->
-        <div class="active-games-section">
-          <div class="active-games-label">Active Games</div>
-          <div id="active-games-list" class="saves-list">
-            <p class="saves-empty">Sign in to see your active games.</p>
-          </div>
-        </div>
-        <!-- Match buttons -->
-        <div class="setup-buttons online-match-buttons">
-          <button id="btn-quick-match"    class="setup-btn primary">⚔ Quick Match</button>
-          <button id="btn-play-ai-online" class="setup-btn">🤖 vs AI</button>
-          <button id="btn-create-room"    class="setup-btn">🔑 Create Room</button>
-          <button id="btn-join-room"      class="setup-btn">🚪 Join with Code</button>
-        </div>
-        <div id="join-room-form" style="display:none;margin-top:0.75rem">
-          <input id="room-code-input" class="setup-input" type="text"
-                 placeholder="Enter 6-letter room code…" maxlength="6"
-                 autocomplete="off" style="text-transform:uppercase">
-          <button id="btn-join-room-confirm" class="setup-btn primary" style="margin-top:0.5rem">Join Room</button>
+      <!-- In-progress local saves -->
+      <div class="active-games-section" style="margin-top:0.75rem">
+        <div class="active-games-label">In Progress</div>
+        <div id="sp-saves-list" class="saves-list">
+          <p class="saves-empty">No saved games.</p>
         </div>
       </div>
 
       <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
-        <button id="btn-newgame-back" class="setup-btn">← Back</button>
+        <button id="btn-singleplayer-back" class="setup-btn">← Back</button>
+      </div>
+    </div>
+
+    <!-- Multiplayer -->
+    <div id="setup-step-multiplayer" class="setup-card" style="display:none">
+      <h1 class="title" style="font-size:2rem;margin-bottom:1rem">MULTIPLAYER</h1>
+
+      <div id="mp-session-info" style="display:none" class="setup-lore">
+        <p>Playing as <strong id="mp-session-name"></strong>
+           &nbsp;<span id="mp-session-stats" class="stats-badge"></span></p>
+        <button id="btn-mp-change-name" class="setup-btn secondary" style="margin-top:0.5rem">Change Name</button>
+      </div>
+      <div id="mp-name-form">
+        <input id="mp-username" class="setup-input" type="text"
+               placeholder="Enter a username…" maxlength="20" autocomplete="off">
+        <button id="btn-mp-signin" class="setup-btn primary" style="margin-top:0.4rem">Sign In</button>
+        <p id="mp-name-error" class="setup-error" style="display:none"></p>
+      </div>
+
+      <!-- Active online games -->
+      <div class="active-games-section" style="margin-top:0.75rem">
+        <div class="active-games-label">Active Games</div>
+        <div id="active-games-list" class="saves-list">
+          <p class="saves-empty">Sign in to see your active games.</p>
+        </div>
+      </div>
+
+      <!-- Online action buttons (shown after sign-in) -->
+      <div id="mp-action-buttons" class="setup-buttons online-match-buttons" style="display:none">
+        <button id="btn-create-game" class="setup-btn primary">⚔ Create Game</button>
+        <button id="btn-join-game"   class="setup-btn">🚪 Join Game</button>
+      </div>
+
+      <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
+        <button id="btn-multiplayer-back" class="setup-btn">← Back</button>
       </div>
     </div>
 
@@ -207,16 +201,96 @@
       </div>
     </div>
 
-  <!-- ── Online: matchmaking / waiting ────────────────────────────── -->
+  <!-- ── Online: Create Game config ──────────────────────────────── -->
+  <div id="setup-step-create-game" class="setup-card" style="display:none">
+    <h1 class="title" style="font-size:2rem">CREATE GAME</h1>
+    <div class="cg-options">
+      <div class="cg-option-row">
+        <span class="cg-option-label">Map size</span>
+        <select id="cg-map-size" class="setup-select">
+          <option value="skirmish">Skirmish (9×9)</option>
+          <option value="standard" selected>Standard (13×11)</option>
+          <option value="regional">Regional (17×13)</option>
+          <option value="campaign">Campaign (21×15)</option>
+        </select>
+      </div>
+      <div class="cg-option-row">
+        <span class="cg-option-label">Players per side</span>
+        <div class="pps-pills">
+          <label class="pps-pill"><input type="radio" name="cg-pps" value="1" checked><span>1v1</span></label>
+          <label class="pps-pill"><input type="radio" name="cg-pps" value="2"><span>2v2</span></label>
+          <label class="pps-pill"><input type="radio" name="cg-pps" value="3"><span>3v3</span></label>
+          <label class="pps-pill"><input type="radio" name="cg-pps" value="4"><span>4v4</span></label>
+        </div>
+      </div>
+      <div class="cg-option-row">
+        <span class="cg-option-label">Fog of war</span>
+        <label class="cg-toggle">
+          <input type="checkbox" id="cg-fog" checked>
+          <span class="cg-toggle-track"></span>
+        </label>
+      </div>
+      <div class="cg-option-row">
+        <span class="cg-option-label">Private game</span>
+        <label class="cg-toggle">
+          <input type="checkbox" id="cg-private">
+          <span class="cg-toggle-track"></span>
+        </label>
+        <span class="cg-option-hint">Invite only — share a code</span>
+      </div>
+    </div>
+    <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
+      <button id="btn-create-game-back" class="setup-btn">← Back</button>
+      <button id="btn-create-game-confirm" class="setup-btn primary">Create →</button>
+    </div>
+  </div>
+
+  <!-- ── Online: Join Game ──────────────────────────────────────── -->
+  <div id="setup-step-join-game" class="setup-card" style="display:none">
+    <h1 class="title" style="font-size:2rem">JOIN GAME</h1>
+    <div class="active-games-section">
+      <div class="active-games-label">Open Games</div>
+      <div id="public-lobbies-list" class="saves-list">
+        <p class="saves-empty">Loading…</p>
+      </div>
+    </div>
+    <div style="margin-top:0.75rem">
+      <div class="active-games-label">Private Code</div>
+      <input id="join-code-input" class="setup-input" type="text"
+             placeholder="Enter 6-letter code…" maxlength="6"
+             autocomplete="off" style="text-transform:uppercase;margin-top:0.4rem">
+      <button id="btn-join-private" class="setup-btn primary" style="margin-top:0.4rem">Join →</button>
+      <p id="join-game-error" class="setup-error" style="display:none"></p>
+    </div>
+    <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
+      <button id="btn-join-game-back" class="setup-btn">← Back</button>
+    </div>
+  </div>
+
+  <!-- ── Online: Game Lobby (pre-start slot management) ───────── -->
+  <div id="setup-step-lobby" class="setup-card" style="display:none">
+    <h1 class="title" style="font-size:2rem">GAME LOBBY</h1>
+    <div id="lobby-code-wrap" style="display:none" class="setup-lore">
+      <p>Private game — share this code:<br>
+      <span id="lobby-code-display" class="room-code-display"></span></p>
+    </div>
+    <div id="lobby-config-summary" class="setup-lore" style="font-size:0.85rem;margin-bottom:0.5rem"></div>
+    <div id="lobby-slots-grid"></div>
+    <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0.5rem">
+      <button id="btn-lobby-populate-ai" class="setup-btn">🤖 Populate with AI</button>
+      <button id="btn-lobby-start" class="setup-btn primary" disabled>▶ Start Game</button>
+    </div>
+    <div class="setup-buttons" style="margin-bottom:0">
+      <button id="btn-lobby-leave" class="setup-btn">✕ Leave</button>
+    </div>
+  </div>
+
+  <!-- ── Online: waiting spinner (resume save only) ────────────── -->
   <div id="setup-step-waiting" class="setup-card" style="display:none">
     <h1 class="title">SEARCHING…</h1>
     <p class="subtitle" id="waiting-subtitle">Looking for an opponent</p>
     <div class="setup-lore">
       <p id="waiting-message">Searching for a worthy opponent in Salem…</p>
-      <p id="waiting-room-code" style="display:none">
-        Share this code with a friend:<br>
-        <span id="waiting-code-display" class="room-code-display"></span>
-      </p>
     </div>
     <div class="waiting-spinner">⏳</div>
     <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
@@ -232,20 +306,31 @@
   <div id="game-screen">
 
     <header id="game-header">
+      <button id="menu-btn" class="header-icon-btn" title="Menu">☰</button>
       <span class="header-title">BRIMSTONE</span>
       <div id="online-status" style="display:none"></div>
       <div id="turn-info"></div>
       <!-- End Turn lives in the header, next to the action diamonds -->
       <button id="end-turn-btn" class="header-icon-btn end-turn-header" title="End Turn">↩</button>
       <div id="node-status"></div>
-      <button id="inventory-btn"  class="header-icon-btn" title="Supplies">🎒</button>
-      <button id="chronicle-btn"  class="header-icon-btn" title="Chronicle">📜</button>
       <span id="game-version" class="game-version"></span>
     </header>
+    <!-- In-game menu popup -->
+    <div id="game-menu-popup" class="game-menu-popup" style="display:none">
+      <button id="menu-quit-btn" class="game-menu-item">Quit to Menu</button>
+    </div>
     <!-- Cycle bar: always-visible 8-step day/night strip, shown below header on mobile -->
     <div id="cycle-bar"><div id="node-status-bar"></div></div>
 
     <main id="game-main">
+      <!-- Chronicle sidebar: left panel shown in 'full' chronicle mode -->
+      <div id="chronicle-sidebar" style="display:none">
+        <div class="chronicle-sidebar-header">
+          <span class="chronicle-title">📜 Chronicle</span>
+          <button id="chronicle-sidebar-close" title="Close chronicle">✕</button>
+        </div>
+        <div id="chronicle-sidebar-log"></div>
+      </div>
       <div id="canvas-wrapper">
         <canvas id="game-canvas"></canvas>
         <!-- Unit stats bar: shown during planning when a unit is selected -->
@@ -256,7 +341,28 @@
           <button id="zoom-out" class="zoom-btn" title="Zoom out (−)">－</button>
           <button id="zoom-fit" class="zoom-btn" title="Fit map">⛶</button>
           <button id="zoom-me"  class="zoom-btn" title="Focus on my units">⊙</button>
+          <button id="speed-toggle" class="zoom-btn" title="Battle speed">⚡</button>
+          <!-- Speed mode picker popup -->
+          <div id="speed-popup" class="speed-popup" style="display:none">
+            <button class="speed-option" data-mode="cinematic">
+              <span class="speed-option-icon">🎬</span>
+              <span class="speed-option-label">Cinematic</span>
+              <span class="speed-option-desc">Dialog for important battles (default)</span>
+            </button>
+            <button class="speed-option" data-mode="fast">
+              <span class="speed-option-icon">⏩</span>
+              <span class="speed-option-label">Fast</span>
+              <span class="speed-option-desc">Dialog on death only</span>
+            </button>
+            <button class="speed-option" data-mode="instant">
+              <span class="speed-option-icon">⏭</span>
+              <span class="speed-option-label">Instant</span>
+              <span class="speed-option-desc">No dialogs, no pauses</span>
+            </button>
+          </div>
         </div>
+        <!-- Mini chronicle: last 5 log messages, top-left overlay -->
+        <div id="chronicle-mini"></div>
       </div>
 
       <!-- Plan panel — slides in during planning phase -->
@@ -274,10 +380,11 @@
         <div id="plan-food-row" class="plan-food-row"></div>
         <div class="plan-panel-footer">
           <button id="plan-clear-btn" class="plan-btn secondary">✕ Clear</button>
-          <button id="plan-submit-btn" class="plan-btn primary">✓ Submit Plan</button>
+          <button id="plan-submit-btn" class="plan-btn primary">✓ Submit</button>
           <span id="plan-countdown" class="plan-countdown" style="display:none"></span>
         </div>
         <div id="plan-players" class="plan-players" style="display:none"></div>
+        <div id="plan-inventory" class="plan-inventory"></div>
         <div id="plan-status" class="plan-status"></div>
       </div>
     </main>
@@ -298,17 +405,6 @@
         <button id="chronicle-close">✕</button>
       </div>
       <div id="event-log"></div>
-    </div>
-  </div>
-
-  <!-- ── Inventory overlay ─────────────────────────────────────────── -->
-  <div id="inventory-overlay">
-    <div id="inventory-panel">
-      <div class="chronicle-header">
-        <span class="chronicle-title" id="inventory-title">🎒 Supplies</span>
-        <button id="inventory-close">✕</button>
-      </div>
-      <div id="inventory-content"></div>
     </div>
   </div>
 
@@ -346,9 +442,44 @@
   <!-- ── Action popup (positioned over unit on canvas) ────────────── -->
   <div id="action-popup"></div>
 
+  <!-- ── Encounter dialog (survivor / zombie found) ───────────────── -->
+  <div id="encounter-dialog">
+    <div class="result-card" id="encounter-card"></div>
+  </div>
+
+  <!-- ── Battle toast container ───────────────────────────────────── -->
+  <div id="battle-toast-container" class="battle-toast-container"></div>
+
+  <!-- ── Phase start modal ────────────────────────────────────────── -->
+  <div id="phase-modal">
+    <div class="phase-modal-card">
+      <div class="phase-modal-icon"></div>
+      <div class="phase-modal-title"></div>
+      <div class="phase-modal-effects"></div>
+      <div class="phase-modal-budget"></div>
+      <button id="phase-modal-continue" class="plan-btn primary">Plan →</button>
+    </div>
+  </div>
+
+  <!-- ── Round summary modal ──────────────────────────────────────── -->
+  <div id="round-summary">
+    <div class="round-summary-card">
+      <div class="round-summary-title"></div>
+      <div id="round-summary-events" class="round-summary-events"></div>
+      <div class="round-summary-actions">
+        <div class="round-summary-replay-group">
+          <button id="round-summary-replay" class="plan-btn secondary">↺ Replay</button>
+          <div id="round-summary-speed-row" class="round-summary-speed-row"></div>
+        </div>
+        <button id="round-summary-next"   class="plan-btn primary">Next Turn →</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Result dialog ─────────────────────────────────────────────── -->
   <div id="result-dialog">
     <div class="result-card">
+      <div id="result-portrait" style="display:none;text-align:center;margin-bottom:0.6rem;"></div>
       <div id="result-messages" class="result-messages"></div>
       <div id="result-dismiss-hint" class="result-dismiss">— click anywhere to continue —</div>
       <div id="result-buttons" class="result-buttons" style="display:none"></div>
@@ -358,6 +489,7 @@
   <!-- ── Battle dialog ─────────────────────────────────────────────── -->
   <div id="battle-dialog">
     <div class="battle-card">
+      <div class="battle-critical-badge">⚔ Critical Battle</div>
       <div id="battle-summary" class="battle-summary"></div>
       <div class="battle-combatants">
         <div id="battle-attacker" class="combatant-panel"></div>

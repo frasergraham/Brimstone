@@ -7,6 +7,8 @@ import { MultiplayerClient, MirrorState, loadSession, clearSession } from './mul
 import { VERSION }           from './version.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType }    from './planner.js';
+import { isBattleSignificant } from './battle-utils.js';
+import { serializeState, deserializeState } from '../server/state-sync.js';
 
 // Stamp version into both badges
 document.getElementById('version-badge').textContent = `v${VERSION}`;
@@ -19,8 +21,37 @@ let _pendingPlanningPhase = null; // buffered onPlanningPhase payload received d
 
 // ── Local game init ───────────────────────────────────────────────────────────
 
+function _genSaveId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+/**
+ * Shared setup for all local (single-player) game starts.
+ * Creates the Renderer, UIController, and wires the callbacks that must be
+ * present regardless of whether the game is new or resumed:
+ *   - onQuitToMenu  → reload the page (returns to setup screen)
+ *   - AI battle callbacks → show animated battle dialog
+ *
+ * Called by both init() and _startFromState() so neither can forget a callback.
+ */
+function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
+  renderer = new Renderer(canvas, state);
+  renderer.resize();
+  renderer.loadImages();
+
+  ui = new UIController(canvas, state, renderer, localWitchAI, redraw, localHeroAI, autoplay);
+  ui.onQuitToMenu = () => location.reload();
+
+  const battleCallback = (actorSnap, targetSnap, result) =>
+    new Promise(resolve => ui._showBattleDialog(actorSnap, targetSnap, result, resolve));
+  if (localWitchAI) localWitchAI.onBattleResult = battleCallback;
+  if (localHeroAI)  localHeroAI.onBattleResult  = battleCallback;
+}
+
 function init(witchIsAI, heroIsAI, autoplay = false) {
   _autoplay = autoplay;
+  // Assign a fresh save ID for this game (only used for single-player saves)
+  _spSaveId = _genSaveId();
   const canvas = document.getElementById('game-canvas');
 
   document.getElementById('setup-screen').style.display  = 'none';
@@ -31,20 +62,12 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
   // Allow global fog-of-war override from the setup screen checkbox.
   const fogChk = document.getElementById('chk-fog-of-war');
   if (fogChk && !fogChk.checked) state.fogOfWar = false;
-  renderer = new Renderer(canvas, state);
-  renderer.resize();
 
   const thinkDelay = autoplay ? 0 : undefined;
   witchAI = witchIsAI ? new WitchAI(state, redraw, thinkDelay) : null;
   heroAI  = heroIsAI  ? new HeroAI(state, redraw, thinkDelay)  : null;
 
-  ui = new UIController(canvas, state, renderer, witchAI, redraw, heroAI, autoplay);
-
-  const battleCallback = (actorSnap, targetSnap, result) =>
-    new Promise(resolve => ui._showBattleDialog(actorSnap, targetSnap, result, resolve));
-
-  if (witchAI) witchAI.onBattleResult = battleCallback;
-  if (heroAI)  heroAI.onBattleResult  = battleCallback;
+  _setupLocalUI(canvas, witchAI, heroAI, autoplay);
 
   redraw();
 
@@ -89,9 +112,10 @@ function showGameOver() {
   el.querySelector('.winner-text').innerHTML =
     `<div class="winner-banner">${banner}</div><div class="winner-reason">${reason}</div>`;
 
-  // "View Map" dismisses the overlay so the player can inspect the final board.
+  // "View Map" dismisses the overlay and lifts fog so the player can inspect the final board.
   el.querySelector('#btn-view-map')?.addEventListener('click', () => {
     el.style.display = 'none';
+    if (state) { state.fogOfWar = false; redraw(); }
   }, { once: true });
 
   // Clicking the backdrop (not the card) also dismisses.
@@ -198,7 +222,22 @@ async function _runLocalResolution() {
   const finalEntities = state.entities;
 
   const humanFaction = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : null;
+  const preReplayEntities = steps[0]?.entitySnapshot ?? finalEntities;
+
   await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+
+  // Show post-resolution summary modal (skip in autoplay mode)
+  if (!_autoplay && ui && humanFaction) {
+    let action;
+    do {
+      action = await ui._showResolutionSummary(steps, state.round);
+      if (action === 'replay') {
+        state.entities = preReplayEntities;
+        redraw();
+        await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+      }
+    } while (action === 'replay');
+  }
 
   const prevScore = { hero: state.nodeScore.hero, witch: state.nodeScore.witch };
 
@@ -206,12 +245,20 @@ async function _runLocalResolution() {
   if (ui) ui._triggerHazardFlashes();
   redraw();
 
+  // Persist single-player progress to localStorage
+  _saveSpGame();
+
   // Show a scoring toast whenever we land on a scoring checkpoint (dawn/dusk).
   if ((state.phase === 'dawn' || state.phase === 'dusk') && ui) {
     ui.showScoringToast(prevScore);
   }
 
-  if (state.gameOver) { showGameOver(); return; }
+  if (state.gameOver) {
+    // Clean up save on game over
+    if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
+    showGameOver();
+    return;
+  }
 
   if (_autoplay) {
     await _delay(300);
@@ -245,11 +292,22 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
     // Support both legacy {heroEvents, witchEvents} (offline) and
     // new {playerEvents: [{playerId, faction, events}]} (online MP) step formats.
-    const events = [
+    const allStepEvents = [
       ...(step.heroEvents  ?? []),
       ...(step.witchEvents ?? []),
       ...(step.playerEvents ?? []).flatMap(pe => pe.events ?? []),
-    ].filter(ev => ev.type === ResEventType.ACTION_OK);
+    ];
+    const events = allStepEvents.filter(ev => ev.type === ResEventType.ACTION_OK);
+
+    // ── Phase 0: food consumed floaters ──────────────────────────────────────
+    for (const ev of allStepEvents.filter(e => e.type === ResEventType.FOOD_CONSUMED)) {
+      if (humanFaction && ev.faction !== humanFaction) continue;
+      const heroSnap = step.entitySnapshot?.find(e => e.type === 'hero');
+      if (heroSnap) {
+        renderer.addFlash(heroSnap.col, heroSnap.row, '-1\u00a0🍞', 'rgba(200,140,40,0.1)', 1600, 0.72, '#e8c84a');
+        redrawFn();
+      }
+    }
 
     // ── Phase 1: animate moves for both factions simultaneously ──────────────
     let hadMove = false;
@@ -268,13 +326,14 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
           preSnap.col, preSnap.row,
           action.toCol, action.toRow,
           preSnap.type, preSnap.owner,
+          preSnap.title ?? null,
         );
         hadMove = true;
       }
 
       if ((!humanFaction || ev.faction === humanFaction) && result?.encounterLog?.length) {
         if (!myPlayerId || preSnap?.ownerId === myPlayerId) {
-          pendingDialogs.push(result.encounterLog);
+          pendingDialogs.push({ log: result.encounterLog, encounterUnit: result.encounterSurvivor ?? null });
         }
       }
     }
@@ -284,10 +343,17 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     state.entities = postEntities;
     redrawFn();
 
-    if (!_autoplay && hadMove) await _delay(520); // slightly longer than anim duration (480ms)
-    for (const log of pendingDialogs) {
+    if (!_autoplay && hadMove) {
+      const _spd = ui?.speedMode ?? 'cinematic';
+      if (_spd !== 'instant') await _delay(_spd === 'fast' ? 180 : 520);
+    }
+    for (const entry of pendingDialogs) {
       redrawFn();
-      await new Promise(resolve => ui._showResultDialog(log, resolve));
+      if (entry.encounterUnit) {
+        await new Promise(resolve => ui._showEncounterDialog(entry.encounterUnit, resolve));
+      } else {
+        await new Promise(resolve => ui._showResultDialog(entry.log, resolve));
+      }
     }
 
     // ── Phase 2: battles and summons ──────────────────────────────────────────
@@ -310,14 +376,20 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
                  )));
         if (battleSnaps && showDialog) {
           const { actorSnap, targetSnap } = battleSnaps;
-          // Zoom in on the combatants for the duration of the dialog
-          if (!_autoplay) {
+          const significant = isBattleSignificant(actorSnap, targetSnap, result, humanFaction);
+          // Zoom in on the combatants for significant battles only
+          if (!_autoplay && significant) {
             renderer.frameHexes(
               [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
               { paddingHexes: 2.5, maxZoom: 2.0, duration: 350 },
             );
           }
           renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
+          // HP-change floaters derived from pre/post snapshots (covers all damage sources)
+          for (const snap of [actorSnap, targetSnap]) {
+            const post = postEntities.find(e => e.id === snap.id);
+            if (post) renderer.addHpChangeFlash(post.col, post.row, post.hp - snap.hp);
+          }
           if (result?.killed) {
             // Brief delay so the attack flash is visible before the death burst
             setTimeout(() => {
@@ -326,9 +398,38 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             }, 350);
           }
           redrawFn();
-          await new Promise(resolve => {
-            ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
-          });
+          if (!_autoplay) {
+            const speed = ui?.speedMode ?? 'cinematic';
+            // Decide display mode per speed setting:
+            //   cinematic — dialog for significant battles (default)
+            //   fast      — toast only; dialog on kill
+            //   instant   — no dialog/toast; skip pauses
+            const isKill = !!result?.killed;
+            const showFullDialog = speed === 'cinematic'
+              ? significant
+              : speed === 'fast'
+                ? isKill
+                : false; // instant: never
+
+            // Zoom: cinematic → significant battles only; fast/instant → never
+            const shouldZoom = speed === 'cinematic' && significant;
+
+            if (shouldZoom) {
+              renderer.frameHexes(
+                [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
+                { paddingHexes: 2.5, maxZoom: 2.0, duration: 350 },
+              );
+            }
+
+            if (showFullDialog) {
+              await new Promise(resolve => {
+                ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
+              });
+            } else if (speed !== 'instant') {
+              ui._showBattleToast(actorSnap, targetSnap, result);
+              await _delay(speed === 'fast' ? 300 : 600);
+            }
+          }
           hadBattle = true;
         }
       } else if (action.type === PlanActionType.SUMMON) {
@@ -349,17 +450,20 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (humanFaction && ev.faction !== humanFaction) continue;
       const actor = step.entitySnapshot?.find(e => e.id === action.entityId);
       if (myPlayerId && actor?.ownerId !== myPlayerId) continue;
+      if (actor) ui._showLootFlashes(actor, result.lootItems ?? []);
       redrawFn();
-      await new Promise(resolve => ui._showResultDialog(result.log, resolve));
-      hadBattle = true;
     }
 
     if (hadMove || hadBattle) {
       redrawFn();
-      if (!_autoplay) await _delay(hadMove ? 300 : 250);
+      if (!_autoplay) {
+        const _spd2 = ui?.speedMode ?? 'cinematic';
+        if (_spd2 !== 'instant') await _delay(_spd2 === 'fast' ? 80 : hadMove ? 300 : 250);
+      }
     } else if (events.length > 0 && !_autoplay) {
       // Non-visual actions (fortify, use_item, etc.) — brief pause so resolution feels deliberate.
-      await _delay(150);
+      const _spd3 = ui?.speedMode ?? 'cinematic';
+      if (_spd3 !== 'instant') await _delay(_spd3 === 'fast' ? 50 : 150);
     }
   }
 
@@ -370,6 +474,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 }
 
 function _delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
 
 // ── Online game init ──────────────────────────────────────────────────────────
 
@@ -384,9 +489,11 @@ function initOnline(mirrorState, myFaction, mpClient) {
 
   renderer = new Renderer(canvas, state);
   renderer.resize();
+  renderer.loadImages();
 
   // No local AI — all turns handled server-side
   ui = new UIController(canvas, state, renderer, null, redrawOnline, null, false);
+  ui.onQuitToMenu = () => location.reload();
   ui.mp         = mpClient;
   ui.myPlayerId = mpClient.myPlayerId ?? null;
   ui._players   = state.players ?? [];
@@ -434,56 +541,51 @@ window.addEventListener('resize', () => {
 
 // ── Setup screen ──────────────────────────────────────────────────────────────
 
-const stepMode    = document.getElementById('setup-step-mode');
-const stepNewgame = document.getElementById('setup-step-newgame');
-const stepHowto   = document.getElementById('setup-step-howtoplay');
-const stepOptions = document.getElementById('setup-step-options');
-const stepWaiting = document.getElementById('setup-step-waiting');
+const stepMode         = document.getElementById('setup-step-mode');
+const stepSinglePlayer = document.getElementById('setup-step-singleplayer');
+const stepMultiplayer  = document.getElementById('setup-step-multiplayer');
+const stepHowto        = document.getElementById('setup-step-howtoplay');
+const stepOptions      = document.getElementById('setup-step-options');
+const stepWaiting      = document.getElementById('setup-step-waiting');
+const stepCreateGame   = document.getElementById('setup-step-create-game');
+const stepJoinGame     = document.getElementById('setup-step-join-game');
+const stepLobby        = document.getElementById('setup-step-lobby');
 
 function showStep(step) {
-  stepMode   .style.display = step === 'mode'     ? '' : 'none';
-  stepNewgame.style.display = step === 'newgame'  ? '' : 'none';
-  stepHowto  .style.display = step === 'howtoplay'? '' : 'none';
-  stepOptions.style.display = step === 'options'  ? '' : 'none';
-  stepWaiting.style.display = step === 'waiting'  ? '' : 'none';
+  stepMode        .style.display = step === 'mode'          ? '' : 'none';
+  stepSinglePlayer.style.display = step === 'singleplayer'  ? '' : 'none';
+  stepMultiplayer .style.display = step === 'multiplayer'   ? '' : 'none';
+  stepHowto       .style.display = step === 'howtoplay'     ? '' : 'none';
+  stepOptions     .style.display = step === 'options'       ? '' : 'none';
+  stepWaiting     .style.display = step === 'waiting'       ? '' : 'none';
+  stepCreateGame  .style.display = step === 'create-game'   ? '' : 'none';
+  stepJoinGame    .style.display = step === 'join-game'     ? '' : 'none';
+  stepLobby       .style.display = step === 'lobby'         ? '' : 'none';
 }
+
+// Current lobby state (pre-game)
+let _currentLobby = null;
 
 // ── Welcome screen buttons ────────────────────────────────────────────────────
 
-document.getElementById('btn-new-game')   .addEventListener('click', () => showStep('newgame'));
-document.getElementById('btn-how-to-play').addEventListener('click', () => showStep('howtoplay'));
-document.getElementById('btn-options')    .addEventListener('click', () => showStep('options'));
+document.getElementById('btn-single-player').addEventListener('click', () => _showSinglePlayerScreen());
+document.getElementById('btn-multiplayer')  .addEventListener('click', () => _showMultiplayerScreen());
+document.getElementById('btn-how-to-play')  .addEventListener('click', () => showStep('howtoplay'));
+document.getElementById('btn-options')      .addEventListener('click', () => showStep('options'));
 document.getElementById('btn-howtoplay-back').addEventListener('click', () => showStep('mode'));
-document.getElementById('btn-options-back')  .addEventListener('click', () => showStep('mode'));
+document.getElementById('btn-options-back') .addEventListener('click', () => showStep('mode'));
 
-// ── New Game screen ────────────────────────────────────────────────────────────
+// ── Single Player screen ───────────────────────────────────────────────────────
 
-document.getElementById('btn-newgame-back').addEventListener('click', () => {
-  if (mp) { mp.disconnect(); mp = null; }
+function _showSinglePlayerScreen() {
+  showStep('singleplayer');
+  _renderSpSaves();
+}
+
+document.getElementById('btn-singleplayer-back').addEventListener('click', () => {
   renderer = null; ui = null; state = null;
   showStep('mode');
 });
-
-// Local / Online mode toggle
-document.getElementById('btn-mode-local').addEventListener('click', () => _activateLocalMode());
-document.getElementById('btn-mode-online').addEventListener('click', () => _activateOnlineMode());
-
-function _activateLocalMode() {
-  document.getElementById('btn-mode-local') .classList.add('active');
-  document.getElementById('btn-mode-online').classList.remove('active');
-  document.getElementById('newgame-local-section') .style.display = '';
-  document.getElementById('newgame-online-section').style.display = 'none';
-}
-
-function _activateOnlineMode() {
-  document.getElementById('btn-mode-online').classList.add('active');
-  document.getElementById('btn-mode-local') .classList.remove('active');
-  document.getElementById('newgame-online-section').style.display = '';
-  document.getElementById('newgame-local-section') .style.display = 'none';
-  _initOnlineStep();
-  const session = loadSession();
-  if (session) _fetchActiveSaves();
-}
 
 // Player mode radio changes (vs AI / Two Players / AI vs AI)
 document.querySelectorAll('input[name="player-mode"]').forEach(r => {
@@ -491,8 +593,8 @@ document.querySelectorAll('input[name="player-mode"]').forEach(r => {
 });
 function _onPlayerModeChange() {
   const mode = document.querySelector('input[name="player-mode"]:checked')?.value;
-  document.getElementById('side-selection') .style.display = mode === 'vs-ai'      ? '' : 'none';
-  document.getElementById('btn-start-wrap') .style.display = mode !== 'vs-ai'      ? '' : 'none';
+  document.getElementById('side-selection') .style.display = mode === 'vs-ai' ? '' : 'none';
+  document.getElementById('btn-start-wrap') .style.display = mode !== 'vs-ai' ? '' : 'none';
 }
 
 document.getElementById('btn-play-hero') .addEventListener('click', () => init(true,  false));
@@ -530,6 +632,118 @@ document.getElementById('btn-restart').addEventListener('click', () => {
 
 function _esc(str) {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Single-player localStorage saves ─────────────────────────────────────────
+
+const _SP_SAVE_KEY = 'brimstone_sp_saves';
+
+function _loadSpSaves() {
+  try {
+    return JSON.parse(localStorage.getItem(_SP_SAVE_KEY) || '[]');
+  } catch { return []; }
+}
+
+function _saveSpSaves(saves) {
+  try { localStorage.setItem(_SP_SAVE_KEY, JSON.stringify(saves)); } catch {}
+}
+
+/** Persist the current single-player game state to localStorage. */
+function _saveSpGame() {
+  if (!state || state.gameOver || _autoplay) return;
+  const saves = _loadSpSaves();
+  const existing = saves.findIndex(s => s.id === _spSaveId);
+  const mode = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : 'two-players';
+  const serialized = serializeState(state);
+  const entry = {
+    id:         _spSaveId,
+    mode,
+    mapSize:    document.getElementById('select-map-size')?.value ?? 'standard',
+    fog:        state.fogOfWar,
+    round:      state.round,
+    phase:      state.phase,
+    updatedAt:  Math.floor(Date.now() / 1000),
+    startedAt:  existing >= 0 ? saves[existing].startedAt : Math.floor(Date.now() / 1000),
+    state:      serialized,
+  };
+  if (existing >= 0) saves[existing] = entry;
+  else saves.unshift(entry);
+  // Keep at most 10 saves
+  _saveSpSaves(saves.slice(0, 10));
+}
+
+/** Delete a single-player save. */
+function _deleteSpSave(id) {
+  const saves = _loadSpSaves().filter(s => s.id !== id);
+  _saveSpSaves(saves);
+}
+
+/** Render the in-progress saves list on the Single Player screen. */
+function _renderSpSaves() {
+  const list = document.getElementById('sp-saves-list');
+  if (!list) return;
+  const saves = _loadSpSaves();
+  if (!saves.length) {
+    list.innerHTML = '<p class="saves-empty">No saved games.</p>';
+    return;
+  }
+  list.innerHTML = '';
+  const modeLabels = { hero: '⚔ vs AI (Hero)', witch: '✦ vs AI (Witch)', 'two-players': '👥 Two Players' };
+  const phaseLabel = { dawn: '🌅 Dawn', day: '☀ Day', dusk: '🌇 Dusk', night: '🌙 Night' };
+  for (const s of saves) {
+    const ago = _timeAgo(s.updatedAt);
+    const entry = document.createElement('div');
+    entry.className = 'save-entry';
+    entry.innerHTML = `
+      <div class="save-entry-info">
+        <div class="save-entry-title">${modeLabels[s.mode] ?? s.mode}</div>
+        <div class="save-entry-meta">Round ${s.round} · ${phaseLabel[s.phase] ?? s.phase} · ${_esc(s.mapSize)} · ${ago}</div>
+      </div>
+      <div style="display:flex;gap:0.4rem">
+        <button class="setup-btn primary sp-resume-btn">Resume</button>
+        <button class="setup-btn sp-delete-btn" title="Delete save">✕</button>
+      </div>
+    `;
+    entry.querySelector('.sp-resume-btn').addEventListener('click', () => _resumeSpSave(s));
+    entry.querySelector('.sp-delete-btn').addEventListener('click', () => {
+      _deleteSpSave(s.id);
+      _renderSpSaves();
+    });
+    list.appendChild(entry);
+  }
+}
+
+let _spSaveId = null;
+
+/** Resume a single-player game from localStorage. */
+function _resumeSpSave(save) {
+  _spSaveId = save.id;
+  const deserialized = deserializeState(save.state);
+  _startFromState(deserialized, save.mode);
+}
+
+/** Start a game from an existing deserialized state (used by SP resume). */
+function _startFromState(existingState, mode) {
+  _autoplay = false;
+  const canvas = document.getElementById('game-canvas');
+
+  document.getElementById('setup-screen').style.display = 'none';
+  document.getElementById('game-screen').style.display  = 'flex';
+
+  state   = existingState;
+  witchAI = state.witchIsAI ? new WitchAI(state, redraw) : null;
+  heroAI  = state.heroIsAI  ? new HeroAI(state, redraw)  : null;
+
+  _setupLocalUI(canvas, witchAI, heroAI, false);
+
+  redraw();
+
+  requestAnimationFrame(() => {
+    renderer.resize();
+    redraw();
+  });
+
+  _startLocalPlanningPhase();
 }
 
 // ── Active games (inline in New Game screen) ──────────────────────────────────
@@ -590,7 +804,6 @@ function _resumeSave(roomId) {
     showStep('waiting');
     document.getElementById('waiting-subtitle').textContent = 'Resuming game…';
     document.getElementById('waiting-message').textContent  = 'Restoring your saved game…';
-    document.getElementById('waiting-room-code').style.display = 'none';
     mp.resumeSave(roomId);
   });
 }
@@ -603,102 +816,266 @@ function _timeAgo(unixSecs) {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
+// ── Multiplayer screen ────────────────────────────────────────────────────────
+
+function _showMultiplayerScreen() {
+  showStep('multiplayer');
+  _initMpStep();
+  const session = loadSession();
+  if (session) _fetchActiveSaves();
+}
+
+document.getElementById('btn-multiplayer-back').addEventListener('click', () => {
+  if (mp) { mp.disconnect(); mp = null; }
+  renderer = null; ui = null; state = null;
+  showStep('mode');
+});
+
 // ── Online flow ───────────────────────────────────────────────────────────────
 
 document.getElementById('btn-cancel-wait').addEventListener('click', () => {
-  if (mp) { mp.leaveQueue(); }
-  showStep('newgame');
-  _activateOnlineMode();
-});
-
-document.getElementById('btn-join-room').addEventListener('click', () => {
-  const form = document.getElementById('join-room-form');
-  form.style.display = form.style.display === 'none' ? '' : 'none';
-});
-
-document.getElementById('btn-join-room-confirm').addEventListener('click', () => {
-  const code = document.getElementById('room-code-input').value.trim().toUpperCase();
-  if (code.length !== 6) { _onlineError('Enter a 6-letter room code.'); return; }
-  _ensureAuthed(() => mp.joinRoom(code));
+  showStep('multiplayer');
+  _initMpStep();
 });
 
 function _fogChecked() {
   return document.getElementById('chk-fog-of-war')?.checked ?? true;
 }
 
-function _ppsSelected() {
-  const checked = document.querySelector('input[name="pps"]:checked');
-  return checked ? parseInt(checked.value, 10) : 1;
+// ── Create Game flow ──────────────────────────────────────────────────────────
+
+document.getElementById('btn-create-game').addEventListener('click', () => {
+  _ensureAuthed(() => showStep('create-game'));
+});
+
+document.getElementById('btn-create-game-back').addEventListener('click', () => {
+  showStep('multiplayer');
+});
+
+document.getElementById('btn-create-game-confirm').addEventListener('click', () => {
+  _ensureAuthed(() => {
+    const config = {
+      fog:           document.getElementById('cg-fog').checked,
+      mapSize:       document.getElementById('cg-map-size').value,
+      playersPerSide: parseInt(document.querySelector('input[name="cg-pps"]:checked')?.value ?? '1', 10),
+      isPrivate:     document.getElementById('cg-private').checked,
+    };
+    mp.createLobby(config);
+    // Transition to lobby card happens in onLobbyJoined callback
+  });
+});
+
+// ── Join Game flow ────────────────────────────────────────────────────────────
+
+document.getElementById('btn-join-game').addEventListener('click', () => {
+  _ensureAuthed(() => {
+    showStep('join-game');
+    _loadPublicLobbies();
+  });
+});
+
+document.getElementById('btn-join-game-back').addEventListener('click', () => {
+  showStep('multiplayer');
+});
+
+document.getElementById('btn-join-private').addEventListener('click', () => {
+  const code = document.getElementById('join-code-input').value.trim().toUpperCase();
+  const err  = document.getElementById('join-game-error');
+  if (code.length !== 6) {
+    err.textContent = 'Enter a 6-letter room code.';
+    err.style.display = '';
+    return;
+  }
+  err.style.display = 'none';
+  _ensureAuthed(() => mp.joinLobby(code));
+});
+
+function _loadPublicLobbies() {
+  if (!mp) return;
+  document.getElementById('public-lobbies-list').innerHTML =
+    '<p class="saves-empty">Loading…</p>';
+  mp.browseLobby();
 }
 
-document.getElementById('btn-quick-match').addEventListener('click', () => {
-  _ensureAuthed(() => {
-    showStep('waiting');
-    const pps = _ppsSelected();
-    document.getElementById('waiting-subtitle').textContent = 'Searching for an opponent…';
-    document.getElementById('waiting-message').textContent  = `Searching for a worthy opponent in Salem… (AI fills in after 5s) [${pps}v${pps}]`;
-    document.getElementById('waiting-room-code').style.display = 'none';
-    mp.joinQueue(_fogChecked(), pps);
-  });
+function _renderPublicLobbies(rooms) {
+  const list = document.getElementById('public-lobbies-list');
+  if (!list) return;
+  if (!rooms?.length) {
+    list.innerHTML = '<p class="saves-empty">No open games right now.</p>';
+    return;
+  }
+  list.innerHTML = '';
+  for (const lobby of rooms) {
+    const pps    = lobby.config?.playersPerSide ?? 1;
+    const size   = lobby.config?.mapSize ?? 'standard';
+    const fog    = lobby.config?.fog !== false ? 'Fog' : 'No Fog';
+    const open   = lobby.slots?.filter(s => s.status === 'empty').length ?? 0;
+    const total  = lobby.slots?.length ?? pps * 2;
+    const host   = lobby.slots?.find(s => s.playerId === lobby.hostPlayerId)?.name ?? 'Unknown';
+
+    const entry = document.createElement('div');
+    entry.className = 'save-entry';
+    entry.innerHTML = `
+      <div class="save-entry-info">
+        <div class="save-entry-title">⚔ ${_esc(host)}'s game</div>
+        <div class="save-entry-meta">${pps}v${pps} · ${_esc(size.charAt(0).toUpperCase() + size.slice(1))} · ${fog} · ${total - open}/${total} players</div>
+      </div>
+      <button class="setup-btn primary">Join</button>
+    `;
+    entry.querySelector('button').addEventListener('click', () => {
+      _ensureAuthed(() => mp.joinLobby(lobby.id));
+    });
+    list.appendChild(entry);
+  }
+}
+
+// ── Lobby card ────────────────────────────────────────────────────────────────
+
+const _HERO_PERSONALITIES  = ['balanced', 'berserker', 'sentinel', 'scavenger'];
+const _WITCH_PERSONALITIES = ['balanced', 'berserker', 'hoarder',  'swarm'];
+const _PERSONALITY_LABELS  = {
+  balanced: 'Balanced', berserker: 'Berserker', sentinel: 'Sentinel',
+  scavenger: 'Scavenger', hoarder: 'Hoarder', swarm: 'Swarm',
+};
+
+function _renderLobby(lobby) {
+  if (!lobby) return;
+  _currentLobby = lobby;
+  showStep('lobby');
+
+  // Code display for private games
+  const codeWrap = document.getElementById('lobby-code-wrap');
+  const codeDisp = document.getElementById('lobby-code-display');
+  if (lobby.isPrivate && lobby.code) {
+    codeWrap.style.display = '';
+    codeDisp.textContent   = lobby.code;
+  } else {
+    codeWrap.style.display = 'none';
+  }
+
+  // Config summary
+  const pps  = lobby.config?.playersPerSide ?? 1;
+  const size = lobby.config?.mapSize ?? 'standard';
+  const fog  = lobby.config?.fog !== false ? 'Fog on' : 'No fog';
+  document.getElementById('lobby-config-summary').textContent =
+    `${pps}v${pps} · ${size.charAt(0).toUpperCase() + size.slice(1)} · ${fog}`;
+
+  // Slots grid
+  const myId    = mp?.player?.id;
+  const isHost  = lobby.hostPlayerId === myId;
+  const grid    = document.getElementById('lobby-slots-grid');
+  grid.innerHTML = '';
+
+  const heroSlots  = lobby.slots.filter(s => s.faction === 'hero');
+  const witchSlots = lobby.slots.filter(s => s.faction === 'witch');
+
+  const container = document.createElement('div');
+  container.className = 'lobby-factions';
+
+  for (const [label, icon, slots] of [['Hero Side', '⚔', heroSlots], ['Witch Side', '✦', witchSlots]]) {
+    const col = document.createElement('div');
+    col.className = 'lobby-faction-col';
+    col.innerHTML = `<div class="lobby-faction-label">${icon} ${label}</div>`;
+
+    for (const slot of slots) {
+      const row = document.createElement('div');
+      row.className = 'lobby-slot-row';
+
+      if (slot.status === 'human') {
+        const isMe = slot.playerId === myId;
+        row.innerHTML = `<span class="lobby-slot-name">${_esc(slot.name)}${isMe ? ' <em>(you)</em>' : ''}</span>`;
+      } else if (slot.status === 'ai') {
+        const label = _PERSONALITY_LABELS[slot.personality] ?? 'Balanced';
+        row.innerHTML = `<span class="lobby-slot-name ai-slot">🤖 ${_esc(slot.name ?? 'AI')}</span>`;
+        if (isHost) {
+          const removeBtn = document.createElement('button');
+          removeBtn.className = 'setup-btn secondary lobby-slot-btn';
+          removeBtn.textContent = '✕';
+          removeBtn.addEventListener('click', () => {
+            mp.removeSlotAI(lobby.id, slot.seatIndex + (slot.faction === 'witch' ? pps : 0));
+          });
+          row.appendChild(removeBtn);
+        }
+      } else {
+        // empty slot
+        row.innerHTML = `<span class="lobby-slot-name empty-slot">Waiting…</span>`;
+        if (isHost) {
+          const personalities = slot.faction === 'witch' ? _WITCH_PERSONALITIES : _HERO_PERSONALITIES;
+          const select = document.createElement('select');
+          select.className = 'setup-select lobby-personality-select';
+          select.innerHTML = '<option value="">— Assign AI —</option>' +
+            ['random', ...personalities].map(p =>
+              `<option value="${p}">${p === 'random' ? 'Random' : (_PERSONALITY_LABELS[p] ?? p)}</option>`
+            ).join('');
+          select.addEventListener('change', () => {
+            if (!select.value) return;
+            const idx = lobby.slots.indexOf(slot);
+            mp.setSlotAI(lobby.id, idx, select.value);
+            select.value = '';
+          });
+          row.appendChild(select);
+        }
+      }
+      col.appendChild(row);
+    }
+    container.appendChild(col);
+  }
+  grid.appendChild(container);
+
+  // Start button — enabled only for host when all slots filled
+  const startBtn = document.getElementById('btn-lobby-start');
+  const allFilled = lobby.slots.every(s => s.status !== 'empty');
+  startBtn.disabled = !(isHost && allFilled);
+}
+
+document.getElementById('btn-lobby-populate-ai').addEventListener('click', () => {
+  if (_currentLobby) mp.fillAllWithAI(_currentLobby.id, 'random');
 });
 
-document.getElementById('btn-play-ai-online').addEventListener('click', () => {
-  _ensureAuthed(() => {
-    showStep('waiting');
-    const pps = _ppsSelected();
-    document.getElementById('waiting-subtitle').textContent = 'Starting game vs AI…';
-    document.getElementById('waiting-message').textContent  = `Summoning your opponent from the dark… [${pps}v${pps}]`;
-    document.getElementById('waiting-room-code').style.display = 'none';
-    mp.playAI(_fogChecked(), pps);
-  });
+document.getElementById('btn-lobby-start').addEventListener('click', () => {
+  if (_currentLobby) mp.startGame(_currentLobby.id);
 });
 
-document.getElementById('btn-create-room').addEventListener('click', () => {
-  _ensureAuthed(() => {
-    showStep('waiting');
-    const pps = _ppsSelected();
-    document.getElementById('waiting-subtitle').textContent = 'Creating private room…';
-    document.getElementById('waiting-message').textContent  = `Waiting for your opponent to join… [${pps}v${pps}]`;
-    document.getElementById('waiting-room-code').style.display = 'none';
-    mp.createRoom(_fogChecked(), pps);
-  });
+document.getElementById('btn-lobby-leave').addEventListener('click', () => {
+  if (_currentLobby) {
+    mp.leaveLobby(_currentLobby.id);
+    _currentLobby = null;
+  }
+  showStep('multiplayer');
 });
 
-// Room code display (received after createRoom)
-document.addEventListener('brimstone:roomCode', e => {
-  const { code } = e.detail;
-  document.getElementById('waiting-room-code').style.display = '';
-  document.getElementById('waiting-code-display').textContent = code;
-});
-
-function _initOnlineStep() {
+function _initMpStep() {
   const session     = loadSession();
-  const sessionInfo = document.getElementById('online-session-info');
-  const nameForm    = document.getElementById('online-name-form');
+  const sessionInfo = document.getElementById('mp-session-info');
+  const nameForm    = document.getElementById('mp-name-form');
+  const actionBtns  = document.getElementById('mp-action-buttons');
 
   if (session) {
-    document.getElementById('online-session-name').textContent = session.username;
+    document.getElementById('mp-session-name').textContent = session.username;
     sessionInfo.style.display = '';
     nameForm.style.display    = 'none';
+    actionBtns.style.display  = '';
   } else {
     sessionInfo.style.display = 'none';
     nameForm.style.display    = '';
+    actionBtns.style.display  = 'none';
   }
 
-  document.getElementById('online-name-error').style.display = 'none';
+  document.getElementById('mp-name-error').style.display = 'none';
 }
 
-document.getElementById('btn-online-signin').addEventListener('click', () => {
+document.getElementById('btn-mp-signin').addEventListener('click', () => {
   _ensureAuthed(() => {
-    _initOnlineStep();    // switch from name form → session info
+    _initMpStep();
     _fetchActiveSaves();
   });
 });
 
-document.getElementById('btn-change-name').addEventListener('click', () => {
+document.getElementById('btn-mp-change-name').addEventListener('click', () => {
   clearSession();
-  document.getElementById('online-session-info').style.display = 'none';
-  document.getElementById('online-name-form').style.display    = '';
+  document.getElementById('mp-session-info').style.display = 'none';
+  document.getElementById('mp-name-form').style.display    = '';
+  document.getElementById('mp-action-buttons').style.display = 'none';
   document.getElementById('active-games-list').innerHTML =
     '<p class="saves-empty">Sign in to see your active games.</p>';
   if (mp) { mp.disconnect(); mp = null; }
@@ -706,14 +1083,14 @@ document.getElementById('btn-change-name').addEventListener('click', () => {
 });
 
 function _onlineError(msg) {
-  const el = document.getElementById('online-name-error');
+  const el = document.getElementById('mp-name-error');
   el.textContent    = msg;
   el.style.display  = '';
 }
 
 /** Ensure we have an authenticated MultiplayerClient, then call cb(). */
 function _ensureAuthed(cb) {
-  const nameInput = document.getElementById('online-username');
+  const nameInput = document.getElementById('mp-username');
   const session   = loadSession();
   const wsUrl     = _serverWsUrl();
 
@@ -773,8 +1150,8 @@ function _createMpClient() {
           } catch (err) {
             console.error('initOnline failed:', err);
             _onlineError(`Failed to start game: ${err.message}`);
-            showStep('newgame');
-            _activateOnlineMode();
+            showStep('multiplayer');
+            _initMpStep();
           }
         }
         return;
@@ -799,7 +1176,7 @@ function _createMpClient() {
         for (const e of state.entities) {
           const old = oldPos.get(e.id);
           if (old && (old.col !== e.col || old.row !== e.row)) {
-            renderer.addMoveAnim(e.id, old.col, old.row, e.col, e.row, e.type, e.owner);
+            renderer.addMoveAnim(e.id, old.col, old.row, e.col, e.row, e.type, e.owner, e.title ?? null);
           }
         }
       }
@@ -818,6 +1195,9 @@ function _createMpClient() {
         const target = state.entities.find(e => e.id === targetSnap.id);
         if (actor && target) {
           renderer.addAttackAnim(actor.col, actor.row, target.col, target.row);
+          // HP-change floaters from pre/post snapshot comparison
+          renderer.addHpChangeFlash(actor.col,  actor.row,  actor.hp  - actorSnap.hp);
+          renderer.addHpChangeFlash(target.col, target.row, target.hp - targetSnap.hp);
         }
       }
 
@@ -842,18 +1222,33 @@ function _createMpClient() {
       }
     },
 
+    onLobbyJoined(lobby) {
+      _renderLobby(lobby);
+    },
+
+    onLobbyUpdate(lobby) {
+      _renderLobby(lobby);
+    },
+
+    onLobbyList(rooms) {
+      _renderPublicLobbies(rooms);
+    },
+
     onMatchFound({ roomId, faction, opponentName, aiOpponent, resumed, myPlayerId, players }) {
+      // Show waiting card briefly during game start (covers both resume and lobby→game transitions)
+      showStep('waiting');
       if (resumed) {
         document.getElementById('waiting-subtitle').textContent =
           `Resuming as ${faction === 'hero' ? 'Hero ⚔' : 'Witch ✦'}`;
         document.getElementById('waiting-message').textContent =
-          `Restored! Opponent: ${opponentName}. Resuming…`;
+          `Restored! Starting game…`;
       } else {
         document.getElementById('waiting-subtitle').textContent =
-          `Matched! You play ${faction === 'hero' ? 'Hero ⚔' : 'Witch ✦'}`;
+          `Game starting as ${faction === 'hero' ? 'Hero ⚔' : 'Witch ✦'}`;
         document.getElementById('waiting-message').textContent =
-          `Opponent: ${opponentName}${aiOpponent ? ' (AI)' : ''}. Starting game…`;
+          `Starting game…`;
       }
+      _currentLobby = null;
       // Store player context so initOnline / enterPlanningMode can use it.
       if (ui) {
         if (myPlayerId) ui.myPlayerId = myPlayerId;
@@ -870,14 +1265,12 @@ function _createMpClient() {
       // Leaderboard removed — no-op
     },
 
-    onInQueue(position) {
-      document.getElementById('waiting-message').textContent =
-        `In queue (position ${position}). An AI will fill in after 5 seconds if no one is found.`;
+    onInQueue(_position) {
+      // Queue removed — no-op
     },
 
     onOpponentJoined(name) {
-      document.getElementById('waiting-message').textContent =
-        `${name} joined! Starting game…`;
+      // Lobby update handles this now — no-op
     },
 
     onOpponentDisconnected(graceMs) {
@@ -913,7 +1306,28 @@ function _createMpClient() {
       // This ensures state.entities is already correct when the last slide lands.
       const finalEntities = finalState.entities ?? state.entities;
 
-      _animateResolutionSteps(steps, finalEntities, redrawOnline, mp?.myFaction, mp?.myPlayerId ?? null).then(() => {
+      const _preReplayEntitiesOnline = steps[0]?.entitySnapshot ?? finalEntities;
+      _animateResolutionSteps(steps, finalEntities, redrawOnline, mp?.myFaction, mp?.myPlayerId ?? null).then(async () => {
+        // Show post-resolution summary modal for human players.
+        // Keep _resolving = true for the whole summary+replay block so that any
+        // incoming onPlanningPhase messages are buffered, not immediately applied.
+        if (ui && mp?.myFaction) {
+          _resolving = true;
+          let action;
+          do {
+            action = await ui._showResolutionSummary(steps, state.round);
+            if (action === 'replay') {
+              state.entities = _preReplayEntitiesOnline;
+              redrawOnline();
+              await _animateResolutionSteps(steps, finalEntities, redrawOnline, mp.myFaction, mp.myPlayerId ?? null);
+              // _animateResolutionSteps sets _resolving = false at end; re-engage
+              // the guard so onPlanningPhase stays buffered during the next summary show.
+              _resolving = true;
+            }
+          } while (action === 'replay');
+          _resolving = false;
+        }
+
         // Apply full final state (phase, round, score, tiles, etc.)
         Object.assign(state, finalState);
         state.hero      = finalState.hero;
@@ -942,8 +1356,8 @@ function _createMpClient() {
       // During auth phase, show error in the lobby
       if (!state || document.getElementById('setup-screen').style.display !== 'none') {
         _onlineError(msg);
-        showStep('newgame');
-        _activateOnlineMode();
+        showStep('multiplayer');
+        _initMpStep();
       } else {
         // In-game error — flash in status bar
         const el = document.getElementById('online-status');
@@ -969,12 +1383,16 @@ MultiplayerClient.prototype._route = function(msg) {
 
   if (msg.type === 'authError') {
     // Token no longer valid (e.g. server restarted) — clear session and
-    // show the name-entry form so the error label inside it is visible
+    // show the name-entry form so the error label inside it is visible.
+    const expiredSession = loadSession();
     clearSession();
     if (mp) mp._player = null;
-    document.getElementById('online-session-info').style.display = 'none';
-    document.getElementById('online-name-form').style.display    = '';
-    showStep('newgame');
-    _activateOnlineMode();
+    document.getElementById('mp-session-info').style.display    = 'none';
+    document.getElementById('mp-name-form').style.display       = '';
+    document.getElementById('mp-action-buttons').style.display  = 'none';
+    if (expiredSession?.username) {
+      document.getElementById('mp-username').value = expiredSession.username;
+    }
+    showStep('multiplayer');
   }
 };

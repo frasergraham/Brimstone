@@ -10,14 +10,19 @@ import { registerOrLogin, getPlayerByToken } from './server/auth.js';
 import { getLeaderboard }                    from './server/leaderboard.js';
 import { getActiveSaves, pruneStaleAndIncompatibleSaves } from './server/saves.js';
 import {
-  joinQueue, leaveQueue,
-  createPrivateRoom, joinPrivateRoom,
-  joinAIGame,
+  createLobby, joinLobby, browseLobby,
+  setSlotAI, removeSlotAI, fillAllWithAI, startGame, leaveLobby,
   handleAction, handleEndTurn, handlePlanSubmit,
   handleDisconnect, handleReconnect,
-  resumeGame,
+  resumeGame, adminResumeGame,
   getRoom,
+  getRooms, getQueue,
+  subscribeSpectator, unsubscribeSpectator, getRoomChronicle,
 } from './server/lobby.js';
+import {
+  getAllPlayers, getAllSaves, getSaveWithState,
+} from './server/admin.js';
+import { serializeState } from './server/state-sync.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT      = process.env.PORT || 3000;
@@ -52,20 +57,85 @@ app.get('/api/saves', (req, res) => {
   res.json(getActiveSaves(player.id));
 });
 
+// ── Admin pages ───────────────────────────────────────────────────────────────
+
+app.get('/admin', (_req, res) => res.sendFile(join(__dirname, 'admin.html')));
+app.get('/spectate', (_req, res) => res.sendFile(join(__dirname, 'spectate.html')));
+
+// ── Admin REST API ────────────────────────────────────────────────────────────
+
+app.get('/admin/api/stats', (_req, res) => {
+  res.json({
+    version:      VERSION,
+    uptime:       Math.floor(process.uptime()),
+    connections:  clients.size,
+    activeRooms:  getRooms().length,
+    queueSize:    getQueue().length,
+  });
+});
+
+app.get('/admin/api/rooms', (_req, res) => {
+  res.json(getRooms());
+});
+
+app.get('/admin/api/rooms/:id', (req, res) => {
+  const room = getRoom(req.params.id);
+  if (!room) { res.status(404).json({ error: 'Room not found.' }); return; }
+  const summary = getRooms().find(r => r.id === req.params.id);
+  res.json({ ...summary, state: serializeState(room.state) });
+});
+
+app.get('/admin/api/rooms/:id/chronicle', (req, res) => {
+  const chronicle = getRoomChronicle(req.params.id);
+  if (chronicle === null) { res.status(404).json({ error: 'Room not found.' }); return; }
+  res.json(chronicle);
+});
+
+app.get('/admin/api/queue', (_req, res) => {
+  res.json(getQueue());
+});
+
+app.get('/admin/api/players', (_req, res) => {
+  res.json(getAllPlayers());
+});
+
+app.get('/admin/api/saves', (_req, res) => {
+  res.json(getAllSaves());
+});
+
+app.get('/admin/api/saves/:roomId', (req, res) => {
+  const save = getSaveWithState(req.params.roomId);
+  if (!save) { res.status(404).json({ error: 'Save not found.' }); return; }
+  res.json(save);
+});
+
+app.post('/admin/api/saves/:roomId/activate', (req, res) => {
+  const roomId = req.params.roomId;
+  const result = adminResumeGame(roomId);
+  if (!result.ok) {
+    res.status(result.status ?? 400).json({ error: result.error });
+    return;
+  }
+  res.json({ ok: true, roomId: result.roomId });
+});
+
 // ── HTTP + WS server ─────────────────────────────────────────────────────────
 
 const server = createServer(app);
 const wss    = new WebSocketServer({ server });
 
 // Per-connection state
-const clients = new Map(); // ws → { player, roomId, cancelQueue? }
+const clients = new Map(); // ws → { player, roomId, spectatingRooms }
 
 function send(ws, obj) {
   if (ws.readyState === 1) ws.send(JSON.stringify(obj));
 }
 
 function clientState(ws) {
-  if (!clients.has(ws)) clients.set(ws, { player: null, roomId: null, cancelQueue: null });
+  if (!clients.has(ws)) clients.set(ws, {
+    player: null, roomId: null,
+    spectatingRooms: new Set(),
+  });
   return clients.get(ws);
 }
 
@@ -81,9 +151,12 @@ wss.on('connection', ws => {
   });
 
   ws.on('close', () => {
-    if (cs.cancelQueue) { cs.cancelQueue(); cs.cancelQueue = null; }
     if (cs.player && cs.roomId) {
       handleDisconnect(cs.player.id, cs.roomId);
+    }
+    // Clean up any spectator subscriptions
+    if (cs.spectatingRooms.size > 0) {
+      unsubscribeSpectator(ws);
     }
     clients.delete(ws);
   });
@@ -123,35 +196,52 @@ function route(ws, cs, msg) {
       break;
     }
 
-    // ── Matchmaking ───────────────────────────────────────────────────────
-    case 'joinQueue': {
+    // ── Lobby ─────────────────────────────────────────────────────────────
+    case 'createLobby': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
-      if (cs.cancelQueue) cs.cancelQueue();
-      cs.cancelQueue = joinQueue(cs.player.id, cs.player.username, ws, msg.fog ?? true, msg.playersPerSide ?? 1);
+      createLobby(cs.player.id, cs.player.username, ws, msg);
       break;
     }
 
-    case 'leaveQueue': {
-      if (cs.cancelQueue) { cs.cancelQueue(); cs.cancelQueue = null; }
-      leaveQueue(cs.player?.id);
+    case 'joinLobby': {
+      if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
+      joinLobby(cs.player.id, cs.player.username, ws, msg.codeOrId);
       break;
     }
 
-    case 'playAI': {
+    case 'browseLobby': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
-      joinAIGame(cs.player.id, cs.player.username, ws, msg.fog ?? true, msg.playersPerSide ?? 1);
+      send(ws, { type: 'lobbyList', rooms: browseLobby() });
       break;
     }
 
-    case 'createRoom': {
+    case 'setSlotAI': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
-      createPrivateRoom(cs.player.id, cs.player.username, ws, msg.fog ?? true, msg.playersPerSide ?? 1);
+      setSlotAI(cs.player.id, msg.roomId, msg.slotIndex, msg.personality);
       break;
     }
 
-    case 'joinRoom': {
+    case 'removeSlotAI': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
-      joinPrivateRoom(cs.player.id, cs.player.username, ws, msg.code);
+      removeSlotAI(cs.player.id, msg.roomId, msg.slotIndex);
+      break;
+    }
+
+    case 'fillAllWithAI': {
+      if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
+      fillAllWithAI(cs.player.id, msg.roomId, msg.personality);
+      break;
+    }
+
+    case 'startGame': {
+      if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
+      startGame(cs.player.id, msg.roomId);
+      break;
+    }
+
+    case 'leaveLobby': {
+      if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
+      leaveLobby(cs.player.id, msg.roomId);
       break;
     }
 
@@ -159,7 +249,10 @@ function route(ws, cs, msg) {
     case 'setRoom': {
       if (!cs.player) return;
       const room = getRoom(msg.roomId);
-      if (room && room.players.some(s => s.playerId === cs.player.id)) {
+      if (room && (
+        room.players.some(s => s.playerId === cs.player.id) ||
+        (room.status === 'lobby' && room.slots.some(s => s.playerId === cs.player.id))
+      )) {
         cs.roomId = msg.roomId;
       }
       break;
@@ -188,6 +281,27 @@ function route(ws, cs, msg) {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
       if (!msg.roomId) { send(ws, { type: 'error', message: 'roomId required.' }); return; }
       resumeGame(cs.player.id, ws, msg.roomId);
+      break;
+    }
+
+    // ── Admin / spectator ─────────────────────────────────────────────────
+    case 'adminSpectateRoom': {
+      if (!msg.roomId) { send(ws, { type: 'error', message: 'roomId required.' }); return; }
+      const joined = subscribeSpectator(msg.roomId, ws);
+      if (!joined) {
+        send(ws, { type: 'error', message: 'Room not found.' });
+      } else {
+        cs.spectatingRooms.add(msg.roomId);
+      }
+      break;
+    }
+
+    case 'adminUnspectateRoom': {
+      const rid = msg.roomId;
+      if (rid) {
+        unsubscribeSpectator(ws, rid);
+        cs.spectatingRooms.delete(rid);
+      }
       break;
     }
 
