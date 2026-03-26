@@ -249,11 +249,22 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
     // Support both legacy {heroEvents, witchEvents} (offline) and
     // new {playerEvents: [{playerId, faction, events}]} (online MP) step formats.
-    const events = [
+    const allStepEvents = [
       ...(step.heroEvents  ?? []),
       ...(step.witchEvents ?? []),
       ...(step.playerEvents ?? []).flatMap(pe => pe.events ?? []),
-    ].filter(ev => ev.type === ResEventType.ACTION_OK);
+    ];
+    const events = allStepEvents.filter(ev => ev.type === ResEventType.ACTION_OK);
+
+    // ── Phase 0: food consumed floaters ──────────────────────────────────────
+    for (const ev of allStepEvents.filter(e => e.type === ResEventType.FOOD_CONSUMED)) {
+      if (humanFaction && ev.faction !== humanFaction) continue;
+      const heroSnap = step.entitySnapshot?.find(e => e.type === 'hero');
+      if (heroSnap) {
+        renderer.addFlash(heroSnap.col, heroSnap.row, '-1\u00a0🍞', 'rgba(200,140,40,0.1)', 1600, 0.72, '#e8c84a');
+        redrawFn();
+      }
+    }
 
     // ── Phase 1: animate moves for both factions simultaneously ──────────────
     let hadMove = false;
