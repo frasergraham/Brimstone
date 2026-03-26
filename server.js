@@ -58,6 +58,11 @@ app.get('/api/saves', (req, res) => {
   res.json(getActiveSaves(player.id));
 });
 
+// ── Admin pages ───────────────────────────────────────────────────────────────
+
+app.get('/admin', (_req, res) => res.sendFile(join(__dirname, 'admin.html')));
+app.get('/spectate', (_req, res) => res.sendFile(join(__dirname, 'spectate.html')));
+
 // ── Admin REST API ────────────────────────────────────────────────────────────
 
 app.get('/admin/api/stats', (_req, res) => {
