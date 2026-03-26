@@ -124,6 +124,7 @@ export class MultiplayerClient {
     this.myFaction  = null;  // 'hero' | 'witch'
     this.myPlayerId = null;  // player UUID (from matchFound)
     this.roomId     = null;
+    this._lobbyId   = null;  // current lobby room ID (pre-game)
     this.active     = false; // true once in a game room
     this._queue     = [];    // buffered outgoing messages before connection
     this._pendingBattle = null; // battle result waiting to be shown after server state arrives
@@ -154,12 +155,35 @@ export class MultiplayerClient {
     this._send({ type: 'auth', username, token, roomId });
   }
 
-  joinQueue(fog = true, playersPerSide = 1)  { this._send({ type: 'joinQueue',   fog, playersPerSide }); }
-  leaveQueue()                               { this._send({ type: 'leaveQueue'                        }); }
-  playAI(fog = true, playersPerSide = 1)     { this._send({ type: 'playAI',     fog, playersPerSide }); }
+  /** Create a new game lobby. config: { fog, mapSize, playersPerSide, isPrivate } */
+  createLobby(config = {}) { this._send({ type: 'createLobby', ...config }); }
 
-  createRoom(fog = true, playersPerSide = 1) { this._send({ type: 'createRoom', fog, playersPerSide }); }
-  joinRoom(code)                             { this._send({ type: 'joinRoom',   code                }); }
+  /** Join a lobby by room ID (public) or 6-char code (private). */
+  joinLobby(codeOrId)      { this._send({ type: 'joinLobby', codeOrId }); }
+
+  /** Request the list of open public lobbies. */
+  browseLobby()            { this._send({ type: 'browseLobby' }); }
+
+  /** Host: assign AI to a slot. personality: key or 'random'. */
+  setSlotAI(roomId, slotIndex, personality) {
+    this._send({ type: 'setSlotAI', roomId, slotIndex, personality });
+  }
+
+  /** Host: remove AI from a slot. */
+  removeSlotAI(roomId, slotIndex) {
+    this._send({ type: 'removeSlotAI', roomId, slotIndex });
+  }
+
+  /** Host: fill all empty slots with AI. personality: key or 'random'. */
+  fillAllWithAI(roomId, personality = 'random') {
+    this._send({ type: 'fillAllWithAI', roomId, personality });
+  }
+
+  /** Host: start the game once all slots are filled. */
+  startGame(roomId) { this._send({ type: 'startGame', roomId }); }
+
+  /** Leave the lobby before the game starts. */
+  leaveLobby(roomId) { this._send({ type: 'leaveLobby', roomId }); }
 
   requestLeaderboard() { this._send({ type: 'requestLeaderboard' }); }
 
@@ -253,11 +277,17 @@ export class MultiplayerClient {
         this._opts.onInQueue?.(msg.position);
         break;
 
-      case 'roomCode':
-        // Private room created — show code to user via lobby UI
-        document.dispatchEvent(new CustomEvent('brimstone:roomCode', {
-          detail: { code: msg.code, roomId: msg.roomId }
-        }));
+      case 'lobbyJoined':
+        this._lobbyId = msg.lobby?.id ?? null;
+        this._opts.onLobbyJoined?.(msg.lobby);
+        break;
+
+      case 'lobbyUpdate':
+        this._opts.onLobbyUpdate?.(msg.lobby);
+        break;
+
+      case 'lobbyList':
+        this._opts.onLobbyList?.(msg.rooms);
         break;
 
       case 'opponentJoined':

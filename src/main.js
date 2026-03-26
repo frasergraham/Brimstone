@@ -467,19 +467,28 @@ window.addEventListener('resize', () => {
 
 // ── Setup screen ──────────────────────────────────────────────────────────────
 
-const stepMode    = document.getElementById('setup-step-mode');
-const stepNewgame = document.getElementById('setup-step-newgame');
-const stepHowto   = document.getElementById('setup-step-howtoplay');
-const stepOptions = document.getElementById('setup-step-options');
-const stepWaiting = document.getElementById('setup-step-waiting');
+const stepMode       = document.getElementById('setup-step-mode');
+const stepNewgame    = document.getElementById('setup-step-newgame');
+const stepHowto      = document.getElementById('setup-step-howtoplay');
+const stepOptions    = document.getElementById('setup-step-options');
+const stepWaiting    = document.getElementById('setup-step-waiting');
+const stepCreateGame = document.getElementById('setup-step-create-game');
+const stepJoinGame   = document.getElementById('setup-step-join-game');
+const stepLobby      = document.getElementById('setup-step-lobby');
 
 function showStep(step) {
-  stepMode   .style.display = step === 'mode'     ? '' : 'none';
-  stepNewgame.style.display = step === 'newgame'  ? '' : 'none';
-  stepHowto  .style.display = step === 'howtoplay'? '' : 'none';
-  stepOptions.style.display = step === 'options'  ? '' : 'none';
-  stepWaiting.style.display = step === 'waiting'  ? '' : 'none';
+  stepMode      .style.display = step === 'mode'        ? '' : 'none';
+  stepNewgame   .style.display = step === 'newgame'     ? '' : 'none';
+  stepHowto     .style.display = step === 'howtoplay'   ? '' : 'none';
+  stepOptions   .style.display = step === 'options'     ? '' : 'none';
+  stepWaiting   .style.display = step === 'waiting'     ? '' : 'none';
+  stepCreateGame.style.display = step === 'create-game' ? '' : 'none';
+  stepJoinGame  .style.display = step === 'join-game'   ? '' : 'none';
+  stepLobby     .style.display = step === 'lobby'       ? '' : 'none';
 }
+
+// Current lobby state (pre-game)
+let _currentLobby = null;
 
 // ── Welcome screen buttons ────────────────────────────────────────────────────
 
@@ -623,7 +632,6 @@ function _resumeSave(roomId) {
     showStep('waiting');
     document.getElementById('waiting-subtitle').textContent = 'Resuming game…';
     document.getElementById('waiting-message').textContent  = 'Restoring your saved game…';
-    document.getElementById('waiting-room-code').style.display = 'none';
     mp.resumeSave(roomId);
   });
 }
@@ -639,69 +647,217 @@ function _timeAgo(unixSecs) {
 // ── Online flow ───────────────────────────────────────────────────────────────
 
 document.getElementById('btn-cancel-wait').addEventListener('click', () => {
-  if (mp) { mp.leaveQueue(); }
   showStep('newgame');
   _activateOnlineMode();
-});
-
-document.getElementById('btn-join-room').addEventListener('click', () => {
-  const form = document.getElementById('join-room-form');
-  form.style.display = form.style.display === 'none' ? '' : 'none';
-});
-
-document.getElementById('btn-join-room-confirm').addEventListener('click', () => {
-  const code = document.getElementById('room-code-input').value.trim().toUpperCase();
-  if (code.length !== 6) { _onlineError('Enter a 6-letter room code.'); return; }
-  _ensureAuthed(() => mp.joinRoom(code));
 });
 
 function _fogChecked() {
   return document.getElementById('chk-fog-of-war')?.checked ?? true;
 }
 
-function _ppsSelected() {
-  const checked = document.querySelector('input[name="pps"]:checked');
-  return checked ? parseInt(checked.value, 10) : 1;
+// ── Create Game flow ──────────────────────────────────────────────────────────
+
+document.getElementById('btn-create-game').addEventListener('click', () => {
+  _ensureAuthed(() => showStep('create-game'));
+});
+
+document.getElementById('btn-create-game-back').addEventListener('click', () => {
+  showStep('newgame');
+  _activateOnlineMode();
+});
+
+document.getElementById('btn-create-game-confirm').addEventListener('click', () => {
+  _ensureAuthed(() => {
+    const config = {
+      fog:           document.getElementById('cg-fog').checked,
+      mapSize:       document.getElementById('cg-map-size').value,
+      playersPerSide: parseInt(document.querySelector('input[name="cg-pps"]:checked')?.value ?? '1', 10),
+      isPrivate:     document.getElementById('cg-private').checked,
+    };
+    mp.createLobby(config);
+    // Transition to lobby card happens in onLobbyJoined callback
+  });
+});
+
+// ── Join Game flow ────────────────────────────────────────────────────────────
+
+document.getElementById('btn-join-game').addEventListener('click', () => {
+  _ensureAuthed(() => {
+    showStep('join-game');
+    _loadPublicLobbies();
+  });
+});
+
+document.getElementById('btn-join-game-back').addEventListener('click', () => {
+  showStep('newgame');
+  _activateOnlineMode();
+});
+
+document.getElementById('btn-join-private').addEventListener('click', () => {
+  const code = document.getElementById('join-code-input').value.trim().toUpperCase();
+  const err  = document.getElementById('join-game-error');
+  if (code.length !== 6) {
+    err.textContent = 'Enter a 6-letter room code.';
+    err.style.display = '';
+    return;
+  }
+  err.style.display = 'none';
+  _ensureAuthed(() => mp.joinLobby(code));
+});
+
+function _loadPublicLobbies() {
+  if (!mp) return;
+  document.getElementById('public-lobbies-list').innerHTML =
+    '<p class="saves-empty">Loading…</p>';
+  mp.browseLobby();
 }
 
-document.getElementById('btn-quick-match').addEventListener('click', () => {
-  _ensureAuthed(() => {
-    showStep('waiting');
-    const pps = _ppsSelected();
-    document.getElementById('waiting-subtitle').textContent = 'Searching for an opponent…';
-    document.getElementById('waiting-message').textContent  = `Searching for a worthy opponent in Salem… (AI fills in after 5s) [${pps}v${pps}]`;
-    document.getElementById('waiting-room-code').style.display = 'none';
-    mp.joinQueue(_fogChecked(), pps);
-  });
+function _renderPublicLobbies(rooms) {
+  const list = document.getElementById('public-lobbies-list');
+  if (!list) return;
+  if (!rooms?.length) {
+    list.innerHTML = '<p class="saves-empty">No open games right now.</p>';
+    return;
+  }
+  list.innerHTML = '';
+  for (const lobby of rooms) {
+    const pps    = lobby.config?.playersPerSide ?? 1;
+    const size   = lobby.config?.mapSize ?? 'standard';
+    const fog    = lobby.config?.fog !== false ? 'Fog' : 'No Fog';
+    const open   = lobby.slots?.filter(s => s.status === 'empty').length ?? 0;
+    const total  = lobby.slots?.length ?? pps * 2;
+    const host   = lobby.slots?.find(s => s.playerId === lobby.hostPlayerId)?.name ?? 'Unknown';
+
+    const entry = document.createElement('div');
+    entry.className = 'save-entry';
+    entry.innerHTML = `
+      <div class="save-entry-info">
+        <div class="save-entry-title">⚔ ${_esc(host)}'s game</div>
+        <div class="save-entry-meta">${pps}v${pps} · ${_esc(size.charAt(0).toUpperCase() + size.slice(1))} · ${fog} · ${total - open}/${total} players</div>
+      </div>
+      <button class="setup-btn primary">Join</button>
+    `;
+    entry.querySelector('button').addEventListener('click', () => {
+      _ensureAuthed(() => mp.joinLobby(lobby.id));
+    });
+    list.appendChild(entry);
+  }
+}
+
+// ── Lobby card ────────────────────────────────────────────────────────────────
+
+const _HERO_PERSONALITIES  = ['balanced', 'berserker', 'sentinel', 'scavenger'];
+const _WITCH_PERSONALITIES = ['balanced', 'berserker', 'hoarder',  'swarm'];
+const _PERSONALITY_LABELS  = {
+  balanced: 'Balanced', berserker: 'Berserker', sentinel: 'Sentinel',
+  scavenger: 'Scavenger', hoarder: 'Hoarder', swarm: 'Swarm',
+};
+
+function _renderLobby(lobby) {
+  if (!lobby) return;
+  _currentLobby = lobby;
+  showStep('lobby');
+
+  // Code display for private games
+  const codeWrap = document.getElementById('lobby-code-wrap');
+  const codeDisp = document.getElementById('lobby-code-display');
+  if (lobby.isPrivate && lobby.code) {
+    codeWrap.style.display = '';
+    codeDisp.textContent   = lobby.code;
+  } else {
+    codeWrap.style.display = 'none';
+  }
+
+  // Config summary
+  const pps  = lobby.config?.playersPerSide ?? 1;
+  const size = lobby.config?.mapSize ?? 'standard';
+  const fog  = lobby.config?.fog !== false ? 'Fog on' : 'No fog';
+  document.getElementById('lobby-config-summary').textContent =
+    `${pps}v${pps} · ${size.charAt(0).toUpperCase() + size.slice(1)} · ${fog}`;
+
+  // Slots grid
+  const myId    = mp?.player?.id;
+  const isHost  = lobby.hostPlayerId === myId;
+  const grid    = document.getElementById('lobby-slots-grid');
+  grid.innerHTML = '';
+
+  const heroSlots  = lobby.slots.filter(s => s.faction === 'hero');
+  const witchSlots = lobby.slots.filter(s => s.faction === 'witch');
+
+  const container = document.createElement('div');
+  container.className = 'lobby-factions';
+
+  for (const [label, icon, slots] of [['Hero Side', '⚔', heroSlots], ['Witch Side', '✦', witchSlots]]) {
+    const col = document.createElement('div');
+    col.className = 'lobby-faction-col';
+    col.innerHTML = `<div class="lobby-faction-label">${icon} ${label}</div>`;
+
+    for (const slot of slots) {
+      const row = document.createElement('div');
+      row.className = 'lobby-slot-row';
+
+      if (slot.status === 'human') {
+        const isMe = slot.playerId === myId;
+        row.innerHTML = `<span class="lobby-slot-name">${_esc(slot.name)}${isMe ? ' <em>(you)</em>' : ''}</span>`;
+      } else if (slot.status === 'ai') {
+        const label = _PERSONALITY_LABELS[slot.personality] ?? 'Balanced';
+        row.innerHTML = `<span class="lobby-slot-name ai-slot">🤖 ${_esc(slot.name ?? 'AI')}</span>`;
+        if (isHost) {
+          const removeBtn = document.createElement('button');
+          removeBtn.className = 'setup-btn secondary lobby-slot-btn';
+          removeBtn.textContent = '✕';
+          removeBtn.addEventListener('click', () => {
+            mp.removeSlotAI(lobby.id, slot.seatIndex + (slot.faction === 'witch' ? pps : 0));
+          });
+          row.appendChild(removeBtn);
+        }
+      } else {
+        // empty slot
+        row.innerHTML = `<span class="lobby-slot-name empty-slot">Waiting…</span>`;
+        if (isHost) {
+          const personalities = slot.faction === 'witch' ? _WITCH_PERSONALITIES : _HERO_PERSONALITIES;
+          const select = document.createElement('select');
+          select.className = 'setup-select lobby-personality-select';
+          select.innerHTML = '<option value="">— Assign AI —</option>' +
+            ['random', ...personalities].map(p =>
+              `<option value="${p}">${p === 'random' ? 'Random' : (_PERSONALITY_LABELS[p] ?? p)}</option>`
+            ).join('');
+          select.addEventListener('change', () => {
+            if (!select.value) return;
+            const idx = lobby.slots.indexOf(slot);
+            mp.setSlotAI(lobby.id, idx, select.value);
+            select.value = '';
+          });
+          row.appendChild(select);
+        }
+      }
+      col.appendChild(row);
+    }
+    container.appendChild(col);
+  }
+  grid.appendChild(container);
+
+  // Start button — enabled only for host when all slots filled
+  const startBtn = document.getElementById('btn-lobby-start');
+  const allFilled = lobby.slots.every(s => s.status !== 'empty');
+  startBtn.disabled = !(isHost && allFilled);
+}
+
+document.getElementById('btn-lobby-populate-ai').addEventListener('click', () => {
+  if (_currentLobby) mp.fillAllWithAI(_currentLobby.id, 'random');
 });
 
-document.getElementById('btn-play-ai-online').addEventListener('click', () => {
-  _ensureAuthed(() => {
-    showStep('waiting');
-    const pps = _ppsSelected();
-    document.getElementById('waiting-subtitle').textContent = 'Starting game vs AI…';
-    document.getElementById('waiting-message').textContent  = `Summoning your opponent from the dark… [${pps}v${pps}]`;
-    document.getElementById('waiting-room-code').style.display = 'none';
-    mp.playAI(_fogChecked(), pps);
-  });
+document.getElementById('btn-lobby-start').addEventListener('click', () => {
+  if (_currentLobby) mp.startGame(_currentLobby.id);
 });
 
-document.getElementById('btn-create-room').addEventListener('click', () => {
-  _ensureAuthed(() => {
-    showStep('waiting');
-    const pps = _ppsSelected();
-    document.getElementById('waiting-subtitle').textContent = 'Creating private room…';
-    document.getElementById('waiting-message').textContent  = `Waiting for your opponent to join… [${pps}v${pps}]`;
-    document.getElementById('waiting-room-code').style.display = 'none';
-    mp.createRoom(_fogChecked(), pps);
-  });
-});
-
-// Room code display (received after createRoom)
-document.addEventListener('brimstone:roomCode', e => {
-  const { code } = e.detail;
-  document.getElementById('waiting-room-code').style.display = '';
-  document.getElementById('waiting-code-display').textContent = code;
+document.getElementById('btn-lobby-leave').addEventListener('click', () => {
+  if (_currentLobby) {
+    mp.leaveLobby(_currentLobby.id);
+    _currentLobby = null;
+  }
+  showStep('newgame');
+  _activateOnlineMode();
 });
 
 function _initOnlineStep() {
@@ -878,18 +1034,33 @@ function _createMpClient() {
       }
     },
 
+    onLobbyJoined(lobby) {
+      _renderLobby(lobby);
+    },
+
+    onLobbyUpdate(lobby) {
+      _renderLobby(lobby);
+    },
+
+    onLobbyList(rooms) {
+      _renderPublicLobbies(rooms);
+    },
+
     onMatchFound({ roomId, faction, opponentName, aiOpponent, resumed, myPlayerId, players }) {
+      // Show waiting card briefly during game start (covers both resume and lobby→game transitions)
+      showStep('waiting');
       if (resumed) {
         document.getElementById('waiting-subtitle').textContent =
           `Resuming as ${faction === 'hero' ? 'Hero ⚔' : 'Witch ✦'}`;
         document.getElementById('waiting-message').textContent =
-          `Restored! Opponent: ${opponentName}. Resuming…`;
+          `Restored! Starting game…`;
       } else {
         document.getElementById('waiting-subtitle').textContent =
-          `Matched! You play ${faction === 'hero' ? 'Hero ⚔' : 'Witch ✦'}`;
+          `Game starting as ${faction === 'hero' ? 'Hero ⚔' : 'Witch ✦'}`;
         document.getElementById('waiting-message').textContent =
-          `Opponent: ${opponentName}${aiOpponent ? ' (AI)' : ''}. Starting game…`;
+          `Starting game…`;
       }
+      _currentLobby = null;
       // Store player context so initOnline / enterPlanningMode can use it.
       if (ui) {
         if (myPlayerId) ui.myPlayerId = myPlayerId;
@@ -906,14 +1077,12 @@ function _createMpClient() {
       // Leaderboard removed — no-op
     },
 
-    onInQueue(position) {
-      document.getElementById('waiting-message').textContent =
-        `In queue (position ${position}). An AI will fill in after 5 seconds if no one is found.`;
+    onInQueue(_position) {
+      // Queue removed — no-op
     },
 
     onOpponentJoined(name) {
-      document.getElementById('waiting-message').textContent =
-        `${name} joined! Starting game…`;
+      // Lobby update handles this now — no-op
     },
 
     onOpponentDisconnected(graceMs) {

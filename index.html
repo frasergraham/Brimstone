@@ -160,15 +160,6 @@
           <button id="btn-online-signin" class="setup-btn primary" style="margin-top:0.4rem">Sign In</button>
           <p id="online-name-error" class="setup-error" style="display:none"></p>
         </div>
-        <div class="pps-selector" style="margin-top:0.75rem">
-          <span class="pps-label">Players per side:</span>
-          <div class="pps-pills">
-            <label class="pps-pill"><input type="radio" name="pps" value="1" checked><span>1v1</span></label>
-            <label class="pps-pill"><input type="radio" name="pps" value="2"><span>2v2</span></label>
-            <label class="pps-pill"><input type="radio" name="pps" value="3"><span>3v3</span></label>
-            <label class="pps-pill"><input type="radio" name="pps" value="4"><span>4v4</span></label>
-          </div>
-        </div>
         <!-- Active games -->
         <div class="active-games-section">
           <div class="active-games-label">Active Games</div>
@@ -176,18 +167,10 @@
             <p class="saves-empty">Sign in to see your active games.</p>
           </div>
         </div>
-        <!-- Match buttons -->
+        <!-- Online action buttons -->
         <div class="setup-buttons online-match-buttons">
-          <button id="btn-quick-match"    class="setup-btn primary">⚔ Quick Match</button>
-          <button id="btn-play-ai-online" class="setup-btn">🤖 vs AI</button>
-          <button id="btn-create-room"    class="setup-btn">🔑 Create Room</button>
-          <button id="btn-join-room"      class="setup-btn">🚪 Join with Code</button>
-        </div>
-        <div id="join-room-form" style="display:none;margin-top:0.75rem">
-          <input id="room-code-input" class="setup-input" type="text"
-                 placeholder="Enter 6-letter room code…" maxlength="6"
-                 autocomplete="off" style="text-transform:uppercase">
-          <button id="btn-join-room-confirm" class="setup-btn primary" style="margin-top:0.5rem">Join Room</button>
+          <button id="btn-create-game" class="setup-btn primary">⚔ Create Game</button>
+          <button id="btn-join-game"   class="setup-btn">🚪 Join Game</button>
         </div>
       </div>
 
@@ -207,16 +190,86 @@
       </div>
     </div>
 
-  <!-- ── Online: matchmaking / waiting ────────────────────────────── -->
+  <!-- ── Online: Create Game config ──────────────────────────────── -->
+  <div id="setup-step-create-game" class="setup-card" style="display:none">
+    <h1 class="title" style="font-size:2rem">CREATE GAME</h1>
+    <div class="setup-options">
+      <label class="setup-option-label">Map size
+        <select id="cg-map-size" class="setup-select">
+          <option value="skirmish">Skirmish (9×9)</option>
+          <option value="standard" selected>Standard (13×11)</option>
+          <option value="regional">Regional (17×13)</option>
+          <option value="campaign">Campaign (21×15)</option>
+        </select>
+      </label>
+      <label class="setup-option-label">
+        <input type="checkbox" id="cg-fog" checked> Fog of war
+      </label>
+      <div class="pps-selector" style="margin-top:0.5rem">
+        <span class="pps-label">Players per side:</span>
+        <div class="pps-pills">
+          <label class="pps-pill"><input type="radio" name="cg-pps" value="1" checked><span>1v1</span></label>
+          <label class="pps-pill"><input type="radio" name="cg-pps" value="2"><span>2v2</span></label>
+          <label class="pps-pill"><input type="radio" name="cg-pps" value="3"><span>3v3</span></label>
+          <label class="pps-pill"><input type="radio" name="cg-pps" value="4"><span>4v4</span></label>
+        </div>
+      </div>
+      <label class="setup-option-label" style="margin-top:0.5rem">
+        <input type="checkbox" id="cg-private"> Private game (invite by code)
+      </label>
+    </div>
+    <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
+      <button id="btn-create-game-back" class="setup-btn">← Back</button>
+      <button id="btn-create-game-confirm" class="setup-btn primary">Create →</button>
+    </div>
+  </div>
+
+  <!-- ── Online: Join Game ─────────────────────────────────────── -->
+  <div id="setup-step-join-game" class="setup-card" style="display:none">
+    <h1 class="title" style="font-size:2rem">JOIN GAME</h1>
+    <div class="active-games-section">
+      <div class="active-games-label">Open Games</div>
+      <div id="public-lobbies-list" class="saves-list">
+        <p class="saves-empty">Loading…</p>
+      </div>
+    </div>
+    <div style="margin-top:0.75rem">
+      <div class="active-games-label">Private Code</div>
+      <input id="join-code-input" class="setup-input" type="text"
+             placeholder="Enter 6-letter code…" maxlength="6"
+             autocomplete="off" style="text-transform:uppercase;margin-top:0.4rem">
+      <button id="btn-join-private" class="setup-btn primary" style="margin-top:0.4rem">Join →</button>
+      <p id="join-game-error" class="setup-error" style="display:none"></p>
+    </div>
+    <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
+      <button id="btn-join-game-back" class="setup-btn">← Back</button>
+    </div>
+  </div>
+
+  <!-- ── Online: Game Lobby (pre-start slot management) ───────── -->
+  <div id="setup-step-lobby" class="setup-card" style="display:none">
+    <h1 class="title" style="font-size:2rem">GAME LOBBY</h1>
+    <div id="lobby-code-wrap" style="display:none" class="setup-lore">
+      <p>Private game — share this code:<br>
+      <span id="lobby-code-display" class="room-code-display"></span></p>
+    </div>
+    <div id="lobby-config-summary" class="setup-lore" style="font-size:0.85rem;margin-bottom:0.5rem"></div>
+    <div id="lobby-slots-grid"></div>
+    <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0.5rem">
+      <button id="btn-lobby-populate-ai" class="setup-btn">🤖 Populate with AI</button>
+      <button id="btn-lobby-start" class="setup-btn primary" disabled>▶ Start Game</button>
+    </div>
+    <div class="setup-buttons" style="margin-bottom:0">
+      <button id="btn-lobby-leave" class="setup-btn">✕ Leave</button>
+    </div>
+  </div>
+
+  <!-- ── Online: waiting spinner (resume save only) ────────────── -->
   <div id="setup-step-waiting" class="setup-card" style="display:none">
     <h1 class="title">SEARCHING…</h1>
     <p class="subtitle" id="waiting-subtitle">Looking for an opponent</p>
     <div class="setup-lore">
       <p id="waiting-message">Searching for a worthy opponent in Salem…</p>
-      <p id="waiting-room-code" style="display:none">
-        Share this code with a friend:<br>
-        <span id="waiting-code-display" class="room-code-display"></span>
-      </p>
     </div>
     <div class="waiting-spinner">⏳</div>
     <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">

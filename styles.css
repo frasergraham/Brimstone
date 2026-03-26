@@ -294,6 +294,59 @@ canvas { touch-action: pan-x pan-y; }
   margin-bottom: 0.75rem;
 }
 
+/* ── Lobby slots grid ────────────────────────────────────────────────────── */
+.lobby-factions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  text-align: left;
+}
+.lobby-faction-col {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  padding: 0.6rem 0.7rem;
+}
+.lobby-faction-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin-bottom: 0.5rem;
+}
+.lobby-slot-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2rem;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  padding-bottom: 0.3rem;
+  margin-bottom: 0.3rem;
+}
+.lobby-slot-row:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+.lobby-slot-name {
+  flex: 1;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+.lobby-slot-name.empty-slot { color: var(--text-dim); font-style: italic; }
+.lobby-slot-name.ai-slot    { color: #b09050; }
+.lobby-slot-name em         { color: var(--text-dim); font-size: 0.78rem; }
+.lobby-slot-btn {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.4rem;
+  min-width: unset;
+}
+.lobby-personality-select {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.25rem;
+  max-width: 120px;
+}
+
 /* ── How to Play body ────────────────────────────────────────────────────── */
 .howtoplay-body {
   text-align: left;
