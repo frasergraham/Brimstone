@@ -7,6 +7,7 @@ import { MultiplayerClient, MirrorState, loadSession, clearSession } from './mul
 import { VERSION }           from './version.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType }    from './planner.js';
+import { isBattleSignificant } from './battle-utils.js';
 
 // Stamp version into both badges
 document.getElementById('version-badge').textContent = `v${VERSION}`;
@@ -316,8 +317,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
                  )));
         if (battleSnaps && showDialog) {
           const { actorSnap, targetSnap } = battleSnaps;
-          // Zoom in on the combatants for the duration of the dialog
-          if (!_autoplay) {
+          const significant = isBattleSignificant(actorSnap, targetSnap, result, humanFaction);
+          // Zoom in on the combatants for significant battles only
+          if (!_autoplay && significant) {
             renderer.frameHexes(
               [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
               { paddingHexes: 2.5, maxZoom: 2.0, duration: 350 },
@@ -332,9 +334,15 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             }, 350);
           }
           redrawFn();
-          await new Promise(resolve => {
-            ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
-          });
+          if (significant && !_autoplay) {
+            await new Promise(resolve => {
+              ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
+            });
+          } else if (!_autoplay) {
+            ui._showBattleToast(actorSnap, targetSnap, result);
+            // Brief pause so map animation is visible before the next step
+            await _delay(ui.speedMode === 'instant' ? 150 : ui.speedMode === 'fast' ? 400 : 600);
+          }
           hadBattle = true;
         }
       } else if (action.type === PlanActionType.SUMMON) {
@@ -375,6 +383,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 }
 
 function _delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
 
 // ── Online game init ──────────────────────────────────────────────────────────
 
