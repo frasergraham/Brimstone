@@ -222,7 +222,22 @@ async function _runLocalResolution() {
   const finalEntities = state.entities;
 
   const humanFaction = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : null;
+  const preReplayEntities = steps[0]?.entitySnapshot ?? finalEntities;
+
   await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+
+  // Show post-resolution summary modal (skip in autoplay mode)
+  if (!_autoplay && ui && humanFaction) {
+    let action;
+    do {
+      action = await ui._showResolutionSummary(steps, state.round);
+      if (action === 'replay') {
+        state.entities = preReplayEntities;
+        redraw();
+        await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+      }
+    } while (action === 'replay');
+  }
 
   const prevScore = { hero: state.nodeScore.hero, witch: state.nodeScore.witch };
 
@@ -380,14 +395,45 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             }, 350);
           }
           redrawFn();
-          if (significant && !_autoplay) {
-            await new Promise(resolve => {
-              ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
-            });
-          } else if (!_autoplay) {
-            ui._showBattleToast(actorSnap, targetSnap, result);
-            // Brief pause so map animation is visible before the next step
-            await _delay(ui.speedMode === 'instant' ? 150 : ui.speedMode === 'fast' ? 400 : 600);
+          if (!_autoplay) {
+            const speed = ui?.speedMode ?? 'cinematic';
+            // Decide display mode per speed setting:
+            //   full     — dialog for any hit; zoom to all battles
+            //   basic    — dialog for player's own significant battles only
+            //   cinematic— dialog for significant battles (default)
+            //   fast     — toast only; dialog on kill
+            //   instant  — no dialog/toast; skip pauses
+            const isKill = !!result?.killed;
+            const showFullDialog = speed === 'full'
+              ? (result?.damage > 0 || result?.counterDmg > 0 || isKill)
+              : speed === 'basic'
+                ? (significant && ev.faction === humanFaction)
+                : speed === 'cinematic'
+                  ? significant
+                  : speed === 'fast'
+                    ? isKill
+                    : false; // instant: never
+
+            // Zoom: full → always; basic/cinematic → significant; fast/instant → never
+            const shouldZoom = speed === 'full'
+              ? true
+              : (speed === 'basic' || speed === 'cinematic') && significant;
+
+            if (shouldZoom) {
+              renderer.frameHexes(
+                [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
+                { paddingHexes: 2.5, maxZoom: 2.0, duration: 350 },
+              );
+            }
+
+            if (showFullDialog) {
+              await new Promise(resolve => {
+                ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
+              });
+            } else if (speed !== 'instant') {
+              ui._showBattleToast(actorSnap, targetSnap, result);
+              await _delay(speed === 'fast' ? 300 : 600);
+            }
           }
           hadBattle = true;
         }

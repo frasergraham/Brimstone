@@ -13,6 +13,51 @@
     #end-turn-btn, #plan-panel, #cancel-wrap, #inventory-btn { display: none !important; }
     #game-over { display: none; }
 
+    /* Player ready panel (right side during planning) */
+    #sp-ready-panel {
+      width: 180px;
+      flex-shrink: 0;
+      background: var(--bg-panel);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .sp-ready-header {
+      padding: 0.5rem 0.75rem;
+      font-size: 0.78rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    #sp-ready-list {
+      padding: 0.4rem 0.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .sp-ready-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.78rem;
+      padding: 3px 4px;
+      border-radius: 3px;
+    }
+    .sp-ready-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: var(--text-dim);
+    }
+    .sp-ready-dot.submitted { background: var(--green); }
+    .sp-ready-name { color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sp-ready-faction-hero  { color: var(--hero); }
+    .sp-ready-faction-witch { color: var(--witch); }
+
     .spectator-banner {
       position: fixed;
       top: 0;
@@ -118,6 +163,14 @@
     <div id="cycle-bar"><div id="node-status-bar"></div></div>
 
     <main id="game-main">
+      <!-- Chronicle sidebar: left panel shown in 'full' chronicle mode -->
+      <div id="chronicle-sidebar" style="display:none">
+        <div class="chronicle-sidebar-header">
+          <span class="chronicle-title">📜 Chronicle</span>
+          <button id="chronicle-sidebar-close" title="Close chronicle">✕</button>
+        </div>
+        <div id="chronicle-sidebar-log"></div>
+      </div>
       <div id="canvas-wrapper">
         <canvas id="game-canvas"></canvas>
         <div id="unit-stats-bar" style="display:none"></div>
@@ -127,6 +180,12 @@
           <button id="zoom-fit" class="zoom-btn" title="Fit map">F</button>
         </div>
         <div id="chronicle-mini"></div>
+      </div>
+
+      <!-- Player ready list shown during planning phase -->
+      <div id="sp-ready-panel" style="display:none">
+        <div class="sp-ready-header">📋 Planning</div>
+        <div id="sp-ready-list"></div>
       </div>
 
       <div id="plan-panel" style="display:none"></div>
@@ -195,6 +254,14 @@
 
     let renderer = null;
     let currentState = null;
+    let chronicleMode = 'mini'; // 'none' | 'mini' | 'full'
+    let planningPlayers = [];   // [{playerId, name, faction, isAI, personality}]
+    let submittedIds = new Set(); // playerIds that have submitted this round
+
+    const PERSONALITY_LABELS = {
+      balanced: 'Balanced', berserker: 'Berserker', sentinel: 'Sentinel',
+      scavenger: 'Scavenger', hoarder: 'Hoarder', swarm: 'Swarm',
+    };
 
     function connectSpectator(roomId) {
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -248,6 +315,25 @@
         case 'adminPlanningPhase': {
           const roundEl = document.getElementById('sp-round');
           roundEl.textContent = `Round ${msg.round} — ${msg.phase}`;
+          if (msg.players) {
+            planningPlayers = msg.players;
+            submittedIds = new Set();
+            renderReadyList();
+          }
+          break;
+        }
+
+        case 'playerSubmitted': {
+          submittedIds.add(msg.playerId);
+          renderReadyList();
+          break;
+        }
+
+        case 'resolutionStart': {
+          // Hide ready list during resolution
+          planningPlayers = [];
+          submittedIds = new Set();
+          renderReadyList();
           break;
         }
 
@@ -282,9 +368,8 @@
         renderer.draw();
       });
       document.getElementById('zoom-fit')?.addEventListener('click', () => {
-        renderer.zoomLevel = 1;
-        renderer._panX = 0;
-        renderer._panY = 0;
+        renderer.resize();
+        renderer.resetView();
         renderer.draw();
       });
 
@@ -355,53 +440,122 @@
       }
     }
 
+    function playerDisplayName(p) {
+      if (!p.isAI) return p.name;
+      const label = PERSONALITY_LABELS[p.personality] ?? p.personality ?? 'AI';
+      return `${p.name} (${label})`;
+    }
+
     function updateInfo(players, state) {
       if (players) {
-        const heroPlayers = players.filter(p => p.faction === 'hero');
+        const heroPlayers  = players.filter(p => p.faction === 'hero');
         const witchPlayers = players.filter(p => p.faction === 'witch');
-
-        const heroNames = heroPlayers.map(p => p.name + (p.isAI ? ' (AI)' : '')).join(', ');
-        const witchNames = witchPlayers.map(p => p.name + (p.isAI ? ' (AI)' : '')).join(', ');
-
-        document.getElementById('sp-hero').textContent = `⚔ ${heroNames || 'Hero'}`;
+        const heroNames  = heroPlayers.map(playerDisplayName).join(', ');
+        const witchNames = witchPlayers.map(playerDisplayName).join(', ');
+        document.getElementById('sp-hero').textContent  = `⚔ ${heroNames  || 'Hero'}`;
         document.getElementById('sp-witch').textContent = `✦ ${witchNames || 'Witch'}`;
       }
       document.getElementById('sp-round').textContent = `Round ${state.round} — ${state.phase}`;
     }
 
-    function updateChronicle(state) {
-      // Update the mini chronicle with last few log entries
-      const mini = document.getElementById('chronicle-mini');
-      if (mini && state.log) {
-        const recent = state.log.slice(-5);
-        mini.innerHTML = recent.map(msg =>
-          `<div class="chronicle-mini-line">${escapeHtml(msg)}</div>`
-        ).join('');
+    function renderReadyList() {
+      const panel = document.getElementById('sp-ready-panel');
+      const list  = document.getElementById('sp-ready-list');
+      if (!panel || !list) return;
+      if (planningPlayers.length === 0) {
+        panel.style.display = 'none';
+        return;
       }
+      panel.style.display = 'flex';
+      list.innerHTML = planningPlayers.map(p => {
+        const submitted = submittedIds.has(p.playerId);
+        const factionClass = `sp-ready-faction-${p.faction}`;
+        const dotClass = submitted ? 'sp-ready-dot submitted' : 'sp-ready-dot';
+        const label = playerDisplayName(p);
+        const status = submitted ? '✓' : '…';
+        return `<div class="sp-ready-row">
+          <span class="${dotClass}"></span>
+          <span class="sp-ready-name ${factionClass}" title="${label}">${label}</span>
+          <span style="font-size:0.72rem;color:${submitted ? 'var(--green)' : 'var(--text-dim)'}">${status}</span>
+        </div>`;
+      }).join('');
+    }
 
-      // Update full chronicle overlay
-      const logEl = document.getElementById('event-log');
-      if (logEl && state.log) {
-        logEl.innerHTML = state.log.map(msg =>
-          `<div class="log-entry">${escapeHtml(msg)}</div>`
-        ).join('');
-        logEl.scrollTop = logEl.scrollHeight;
-      }
+    /** Extract text from a log entry — handles both plain strings and {text,owner} objects. */
+    function logText(entry) {
+      return typeof entry === 'string' ? entry : (entry?.text ?? String(entry));
     }
 
     function escapeHtml(str) {
       const el = document.createElement('span');
-      el.textContent = str;
+      el.textContent = String(str);
       return el.innerHTML;
     }
 
-    // Wire up chronicle overlay toggle
-    document.getElementById('chronicle-btn')?.addEventListener('click', () => {
-      const overlay = document.getElementById('chronicle-overlay');
-      overlay.style.display = overlay.style.display === 'flex' ? 'none' : 'flex';
+    // ── Chronicle three-state (none / mini / full) ──────────────────────────
+
+    function cycleChronicle() {
+      const modes = ['none', 'mini', 'full'];
+      chronicleMode = modes[(modes.indexOf(chronicleMode) + 1) % modes.length];
+      applyChronicleMode();
+    }
+
+    function applyChronicleMode() {
+      const sidebar = document.getElementById('chronicle-sidebar');
+      if (sidebar) sidebar.style.display = chronicleMode === 'full' ? 'flex' : 'none';
+      renderMiniChronicle(currentState?.log ?? []);
+      if (chronicleMode === 'full') renderSidebarLog(currentState?.log ?? []);
+      // Resize canvas when sidebar opens/closes
+      if (renderer) { renderer.resize(); renderer.draw(); }
+    }
+
+    function renderMiniChronicle(log) {
+      const mini = document.getElementById('chronicle-mini');
+      if (!mini) return;
+      const activeClass = chronicleMode !== 'none' ? ' chronicle-mini-btn-active' : '';
+      const btnHtml = `<button id="chronicle-btn" class="chronicle-mini-btn${activeClass}" title="Chronicle">📜</button>`;
+      if (chronicleMode === 'mini') {
+        const recent  = log.slice(-5);
+        const entries = recent.map(m => `<div class="mini-log-entry">${escapeHtml(logText(m))}</div>`).join('');
+        mini.innerHTML = btnHtml + entries;
+      } else {
+        mini.innerHTML = btnHtml;
+      }
+      document.getElementById('chronicle-btn')?.addEventListener('click', cycleChronicle);
+    }
+
+    function renderSidebarLog(log) {
+      const el = document.getElementById('chronicle-sidebar-log');
+      if (!el) return;
+      el.innerHTML = log.map(m => `<div class="log-entry">${escapeHtml(logText(m))}</div>`).join('');
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function renderFullOverlayLog(log) {
+      const logEl = document.getElementById('event-log');
+      if (!logEl) return;
+      logEl.innerHTML = log.map(m => `<div class="log-entry">${escapeHtml(logText(m))}</div>`).join('');
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function updateChronicle(state) {
+      const log = state.log ?? [];
+      renderMiniChronicle(log);
+      if (chronicleMode === 'full') renderSidebarLog(log);
+    }
+
+    // Close buttons
+    document.getElementById('chronicle-sidebar-close')?.addEventListener('click', () => {
+      chronicleMode = 'none';
+      applyChronicleMode();
     });
     document.getElementById('chronicle-close')?.addEventListener('click', () => {
-      document.getElementById('chronicle-overlay').style.display = 'none';
+      document.getElementById('chronicle-overlay')?.classList.remove('visible');
+    });
+    document.getElementById('chronicle-overlay')?.addEventListener('click', e => {
+      if (e.target === document.getElementById('chronicle-overlay')) {
+        e.target.classList.remove('visible');
+      }
     });
   </script>
 </body>

@@ -323,6 +323,14 @@
     <div id="cycle-bar"><div id="node-status-bar"></div></div>
 
     <main id="game-main">
+      <!-- Chronicle sidebar: left panel shown in 'full' chronicle mode -->
+      <div id="chronicle-sidebar" style="display:none">
+        <div class="chronicle-sidebar-header">
+          <span class="chronicle-title">📜 Chronicle</span>
+          <button id="chronicle-sidebar-close" title="Close chronicle">✕</button>
+        </div>
+        <div id="chronicle-sidebar-log"></div>
+      </div>
       <div id="canvas-wrapper">
         <canvas id="game-canvas"></canvas>
         <!-- Unit stats bar: shown during planning when a unit is selected -->
@@ -333,7 +341,35 @@
           <button id="zoom-out" class="zoom-btn" title="Zoom out (−)">－</button>
           <button id="zoom-fit" class="zoom-btn" title="Fit map">⛶</button>
           <button id="zoom-me"  class="zoom-btn" title="Focus on my units">⊙</button>
-          <button id="speed-toggle" class="zoom-btn" title="Battle speed: Cinematic">⚡</button>
+          <button id="speed-toggle" class="zoom-btn" title="Battle speed">⚡</button>
+          <!-- Speed mode picker popup -->
+          <div id="speed-popup" class="speed-popup" style="display:none">
+            <button class="speed-option" data-mode="full">
+              <span class="speed-option-icon">🎬</span>
+              <span class="speed-option-label">Full</span>
+              <span class="speed-option-desc">Center on every action</span>
+            </button>
+            <button class="speed-option" data-mode="basic">
+              <span class="speed-option-icon">▶</span>
+              <span class="speed-option-label">Basic</span>
+              <span class="speed-option-desc">Faster, focus on your units</span>
+            </button>
+            <button class="speed-option" data-mode="cinematic">
+              <span class="speed-option-icon">⚡</span>
+              <span class="speed-option-label">Cinematic</span>
+              <span class="speed-option-desc">Important battles only</span>
+            </button>
+            <button class="speed-option" data-mode="fast">
+              <span class="speed-option-icon">⏩</span>
+              <span class="speed-option-label">Fast</span>
+              <span class="speed-option-desc">Skip dialogs unless death</span>
+            </button>
+            <button class="speed-option" data-mode="instant">
+              <span class="speed-option-icon">⏭</span>
+              <span class="speed-option-label">Instant</span>
+              <span class="speed-option-desc">No dialogs, summary only</span>
+            </button>
+          </div>
         </div>
         <!-- Mini chronicle: last 5 log messages, top-left overlay -->
         <div id="chronicle-mini"></div>
@@ -354,7 +390,7 @@
         <div id="plan-food-row" class="plan-food-row"></div>
         <div class="plan-panel-footer">
           <button id="plan-clear-btn" class="plan-btn secondary">✕ Clear</button>
-          <button id="plan-submit-btn" class="plan-btn primary">✓ Submit Plan</button>
+          <button id="plan-submit-btn" class="plan-btn primary">✓ Submit</button>
           <span id="plan-countdown" class="plan-countdown" style="display:none"></span>
         </div>
         <div id="plan-players" class="plan-players" style="display:none"></div>
@@ -423,6 +459,29 @@
 
   <!-- ── Battle toast container ───────────────────────────────────── -->
   <div id="battle-toast-container" class="battle-toast-container"></div>
+
+  <!-- ── Phase start modal ────────────────────────────────────────── -->
+  <div id="phase-modal">
+    <div class="phase-modal-card">
+      <div class="phase-modal-icon"></div>
+      <div class="phase-modal-title"></div>
+      <div class="phase-modal-effects"></div>
+      <div class="phase-modal-budget"></div>
+      <button id="phase-modal-continue" class="plan-btn primary">Plan →</button>
+    </div>
+  </div>
+
+  <!-- ── Round summary modal ──────────────────────────────────────── -->
+  <div id="round-summary">
+    <div class="round-summary-card">
+      <div class="round-summary-title"></div>
+      <div id="round-summary-events" class="round-summary-events"></div>
+      <div class="round-summary-actions">
+        <button id="round-summary-replay" class="plan-btn secondary">↺ Replay</button>
+        <button id="round-summary-next"   class="plan-btn primary">Next Turn →</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ── Result dialog ─────────────────────────────────────────────── -->
   <div id="result-dialog">
