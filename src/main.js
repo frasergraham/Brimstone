@@ -91,9 +91,10 @@ function showGameOver() {
   el.querySelector('.winner-text').innerHTML =
     `<div class="winner-banner">${banner}</div><div class="winner-reason">${reason}</div>`;
 
-  // "View Map" dismisses the overlay so the player can inspect the final board.
+  // "View Map" dismisses the overlay and lifts fog so the player can inspect the final board.
   el.querySelector('#btn-view-map')?.addEventListener('click', () => {
     el.style.display = 'none';
+    if (state) { state.fogOfWar = false; redraw(); }
   }, { once: true });
 
   // Clicking the backdrop (not the card) also dismisses.
