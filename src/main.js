@@ -1308,8 +1308,11 @@ function _createMpClient() {
 
       const _preReplayEntitiesOnline = steps[0]?.entitySnapshot ?? finalEntities;
       _animateResolutionSteps(steps, finalEntities, redrawOnline, mp?.myFaction, mp?.myPlayerId ?? null).then(async () => {
-        // Show post-resolution summary modal for human players
+        // Show post-resolution summary modal for human players.
+        // Keep _resolving = true for the whole summary+replay block so that any
+        // incoming onPlanningPhase messages are buffered, not immediately applied.
         if (ui && mp?.myFaction) {
+          _resolving = true;
           let action;
           do {
             action = await ui._showResolutionSummary(steps, state.round);
@@ -1317,8 +1320,12 @@ function _createMpClient() {
               state.entities = _preReplayEntitiesOnline;
               redrawOnline();
               await _animateResolutionSteps(steps, finalEntities, redrawOnline, mp.myFaction, mp.myPlayerId ?? null);
+              // _animateResolutionSteps sets _resolving = false at end; re-engage
+              // the guard so onPlanningPhase stays buffered during the next summary show.
+              _resolving = true;
             }
           } while (action === 'replay');
+          _resolving = false;
         }
 
         // Apply full final state (phase, round, score, tiles, etc.)
