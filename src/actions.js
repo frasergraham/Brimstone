@@ -354,7 +354,7 @@ export function executeExplore(state, actor) {
   if (isHerbalist && actor.owner === 'hero') {
     actor.items[ResourceType.HERBS] = (actor.items[ResourceType.HERBS] || 0) + 1;
     log.push(`${actor.displayName}'s keen eye also finds Herbs!`);
-    lootItems.push('+Herbs');
+    lootItems.push('+🌿');
   }
 
   return { success: true, log, cost: 1, lootItems };
@@ -370,7 +370,7 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
     if (actor.owner === 'hero') {
       actor.items['horse'] = 1;
       log.push(`Found a horse! ${actor.displayName}'s movement range increases to 2.`);
-      lootItems?.push('+Horse');
+      lootItems?.push('+🐴');
     }
     return;
   }
@@ -382,11 +382,11 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
       if (!actor.weapon) {
         actor.equipWeapon(weaponKey);
         log.push(`Found a ${label}! ${actor.displayName} equips it immediately.`);
-        lootItems?.push(`+${label} (equipped)`);
+        lootItems?.push('+⚔');
       } else {
         actor.items[lootType] = (actor.items[lootType] || 0) + 1;
         log.push(`Found a ${label}! Added to ${actor.displayName}'s pack.`);
-        lootItems?.push(`+${label}`);
+        lootItems?.push('+⚔');
       }
     } else {
       log.push(`The witch finds a weapon but has no use for it.`);
@@ -399,21 +399,23 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
     if (actor.owner === 'hero') {
       actor.items[lootType] = (actor.items[lootType] || 0) + 1;
       log.push(`Found Herbs! Added to ${actor.displayName}'s pack.`);
-      lootItems?.push('+Herbs');
+      lootItems?.push('+🌿');
     }
     return;
   }
 
   // All other resources are shared
   const resLabel = lootType.charAt(0).toUpperCase() + lootType.slice(1);
+  const RES_ICON = { wood: '🪵', metal: '⚙', food: '🍞', silver: '🥈', scripture: '📜' };
+  const resIcon = RES_ICON[lootType] || `+${resLabel}`;
   if (actor.owner === 'hero') {
     state.inventory.shared[lootType] = (state.inventory.shared[lootType] || 0) + 1;
     log.push(`Found ${lootType}! Added to shared supplies.`);
-    lootItems?.push(`+${resLabel}`);
+    lootItems?.push(`+${resIcon}`);
   } else {
     state.inventory.witch[lootType] = (state.inventory.witch[lootType] || 0) + 1;
     log.push(`The witch secures ${lootType} for dark rituals.`);
-    lootItems?.push(`+${resLabel}`);
+    lootItems?.push(`+${resIcon}`);
   }
 }
 
