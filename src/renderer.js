@@ -17,14 +17,10 @@ export const PAD_Y = 30;
 const BG_COLOR = '#0d1117';
 const MIN_HEX_SIZE = 10;
 
-function hexCorners(cx, cy, size) {
-  const pts = [];
-  for (let i = 0; i < 6; i++) {
-    const angle = Math.PI / 180 * (60 * i - 30);
-    pts.push({ x: cx + size * Math.cos(angle), y: cy + size * Math.sin(angle) });
-  }
-  return pts;
-}
+// Isometric view parameters
+const ISO_Y_SCALE   = 0.55;  // vertical compression for the tilted view
+const ISO_DEPTH_PX  = 0.13;  // tile "height" as fraction of hexSize
+
 
 /** Convert a 6-digit hex colour string to an rgba() string with the given alpha. */
 function _hexToRgba(hex, alpha) {
@@ -43,6 +39,9 @@ export class Renderer {
     this.ctx     = canvas.getContext('2d');
     this.state   = state;
     this.hexSize = 30; // will be updated by _resize()
+
+    /** Set true to switch to the isometric (tilted) view. */
+    this.isoMode = false;
 
     this.selectedHex    = null;
     this.highlightHexes = [];
@@ -324,6 +323,32 @@ export class Renderer {
     this._startAnimLoop();
   }
 
+  /**
+   * Return the 6 corners of a hex centred at (cx, cy).
+   * In iso mode the y-offsets of each corner are scaled by ISO_Y_SCALE,
+   * matching the y-compression applied to hex centres in _toCanvas().
+   */
+  _hexCorners(cx, cy, size) {
+    const yScale = this.isoMode ? ISO_Y_SCALE : 1;
+    const pts = [];
+    for (let i = 0; i < 6; i++) {
+      const angle = Math.PI / 180 * (60 * i - 30);
+      pts.push({ x: cx + size * Math.cos(angle), y: cy + size * Math.sin(angle) * yScale });
+    }
+    return pts;
+  }
+
+  /** Toggle between the top-down and isometric view. */
+  toggleIso() {
+    this.isoMode = !this.isoMode;
+    // Clear in-flight animations — their stored canvas positions belong to the old projection.
+    this._moveAnims = [];
+    this._flashes   = [];
+    this._deathAnims = [];
+    this._resize();
+    this.resetView();
+  }
+
   _resize() {
     const wrapper = this.canvas.parentElement;
     const W = (wrapper && wrapper.clientWidth  > 0) ? wrapper.clientWidth  : this.canvas.width;
@@ -331,8 +356,9 @@ export class Renderer {
 
     // Compute hex size to fit grid within the full wrapper (no padding subtracted here —
     // padding is derived from hexSize afterward and used to center the grid).
+    const yScale  = this.isoMode ? ISO_Y_SCALE : 1;
     const sizeByW = W / (SQRT3 * (MAP_COLS + 0.5));
-    const sizeByH = H / (1.5 * MAP_ROWS + 0.5);
+    const sizeByH = H / ((1.5 * MAP_ROWS + 0.5) * yScale);
     this.hexSize = Math.max(MIN_HEX_SIZE, Math.floor(Math.min(sizeByW, sizeByH)));
 
     // Canvas fills the wrapper exactly so no gaps appear on any edge
@@ -342,7 +368,7 @@ export class Renderer {
     // Center the hex grid within the canvas
     const hs = this.hexSize;
     this._padX = Math.round((W - SQRT3 * hs * (MAP_COLS + 0.5)) / 2 + SQRT3 * hs * 0.5);
-    this._padY = Math.round((H - (1.5 * MAP_ROWS + 0.5) * hs) / 2 + hs);
+    this._padY = Math.round((H - (1.5 * MAP_ROWS + 0.5) * hs * yScale) / 2 + hs * yScale);
 
     this._clampPan();
   }
@@ -353,6 +379,9 @@ export class Renderer {
 
   _toCanvas(col, row) {
     const { x, y } = hexToPixel(col, row, this.hexSize);
+    if (this.isoMode) {
+      return { x: x + this._padX, y: y * ISO_Y_SCALE + this._padY };
+    }
     return { x: x + this._padX, y: y + this._padY };
   }
 
@@ -360,6 +389,9 @@ export class Renderer {
   canvasToHex(canvasX, canvasY) {
     const x = (canvasX - this._panX) / this.zoomLevel;
     const y = (canvasY - this._panY) / this.zoomLevel;
+    if (this.isoMode) {
+      return _pixelToHex(x - this._padX, (y - this._padY) / ISO_Y_SCALE, this.hexSize);
+    }
     return _pixelToHex(x - this._padX, y - this._padY, this.hexSize);
   }
 
@@ -560,7 +592,7 @@ export class Renderer {
       const t = remaining / total; // 1.0 = just started, 0.0 = expired
 
       const { x, y } = this._toCanvas(f.col, f.row);
-      const corners   = hexCorners(x, y, hs - 1);
+      const corners   = this._hexCorners(x, y, hs - 1);
 
       // Red hex overlay (fades out)
       ctx.beginPath();
@@ -633,7 +665,7 @@ export class Renderer {
     if (!tile) return;
 
     const { x, y } = this._toCanvas(col, row);
-    const corners   = hexCorners(x, y, hs - 1);
+    const corners   = this._hexCorners(x, y, hs - 1);
 
     // Road and river tiles use a grass background — the actual road strips and
     // water ribbons are drawn in dedicated layers on top.
@@ -642,6 +674,29 @@ export class Renderer {
       : (tile.type === TileType.ROAD || tile.type === TileType.RIVER || tile.type === TileType.BRIDGE)
         ? TILE_COLOR[TileType.GRASS]
         : (TILE_COLOR[tile.type] || TILE_COLOR[TileType.GRASS]);
+
+    // ── Iso depth sides (drawn before the top face so back-to-front row order hides them) ──
+    if (this.isoMode) {
+      const depth = Math.max(2, Math.floor(hs * ISO_DEPTH_PX));
+      // Left front face: corners[3] → [4] (bottom-left pair)
+      ctx.beginPath();
+      ctx.moveTo(corners[3].x, corners[3].y);
+      ctx.lineTo(corners[4].x, corners[4].y);
+      ctx.lineTo(corners[4].x, corners[4].y + depth);
+      ctx.lineTo(corners[3].x, corners[3].y + depth);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(0,0,0,0.42)';
+      ctx.fill();
+      // Right front face: corners[2] → [3] (bottom-right pair)
+      ctx.beginPath();
+      ctx.moveTo(corners[2].x, corners[2].y);
+      ctx.lineTo(corners[3].x, corners[3].y);
+      ctx.lineTo(corners[3].x, corners[3].y + depth);
+      ctx.lineTo(corners[2].x, corners[2].y + depth);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.fill();
+    }
 
     ctx.beginPath();
     ctx.moveTo(corners[0].x, corners[0].y);
@@ -743,7 +798,7 @@ export class Renderer {
         if (visibleSet.has(k)) continue; // visible — no fog
 
         const { x, y } = this._toCanvas(col, row);
-        const corners = hexCorners(x, y, hs);
+        const corners = this._hexCorners(x, y, hs);
 
         ctx.beginPath();
         ctx.moveTo(corners[0].x, corners[0].y);
@@ -1024,7 +1079,7 @@ export class Renderer {
     const ctx = this.ctx;
     const hs  = this.hexSize;
     const { x, y } = this._toCanvas(col, row);
-    const corners   = hexCorners(x, y, hs - 1);
+    const corners   = this._hexCorners(x, y, hs - 1);
     ctx.beginPath();
     ctx.moveTo(corners[0].x, corners[0].y);
     for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
@@ -1040,7 +1095,7 @@ export class Renderer {
     const ctx = this.ctx;
     const hs  = this.hexSize;
     const { x, y } = this._toCanvas(col, row);
-    const corners   = hexCorners(x, y, hs - 1.5);
+    const corners   = this._hexCorners(x, y, hs - 1.5);
     ctx.beginPath();
     ctx.moveTo(corners[0].x, corners[0].y);
     for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);

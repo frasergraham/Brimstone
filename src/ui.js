@@ -107,6 +107,12 @@ export class UIController {
       this.onRedraw();
     });
     document.getElementById('speed-toggle')?.addEventListener('click', () => this._toggleSpeed());
+    document.getElementById('iso-toggle')?.addEventListener('click', () => {
+      this.renderer.toggleIso();
+      const btn = document.getElementById('iso-toggle');
+      if (btn) btn.style.color = this.renderer.isoMode ? 'var(--day, #f5c842)' : '';
+      this.onRedraw();
+    });
 
     // Touch: tap, drag-to-pan, pinch-to-zoom (mobile)
     this.canvas.addEventListener('touchstart', e => {
