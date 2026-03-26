@@ -222,6 +222,16 @@ export class Renderer {
     this.addFlash(targetCol, targetRow, '', 'rgba(220,40,40,0.75)',  700);
   }
 
+  /** Show a floating HP-change number over a hex (red for damage, green for healing). */
+  addHpChangeFlash(col, row, delta) {
+    if (delta === 0) return;
+    if (delta < 0) {
+      this.addFlash(col, row, `${delta}`, 'rgba(220,40,40,0.1)', 1800, 0.88, 'rgba(255,100,100,1)');
+    } else {
+      this.addFlash(col, row, `+${delta}`, 'rgba(40,180,40,0.1)', 1800, 0.88, 'rgba(100,255,100,1)');
+    }
+  }
+
   /** Keep calling draw() until all animations have expired. */
   _startAnimLoop() {
     if (this._animFramePending) return;

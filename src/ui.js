@@ -973,6 +973,9 @@ export class UIController {
         if (result.success) state.spendAction(result.cost);
 
         this.renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
+        // HP-change floaters from pre/post snapshot comparison
+        this.renderer.addHpChangeFlash(actor.col,  actor.row,  actor.hp  - actorSnap.hp);
+        this.renderer.addHpChangeFlash(target.col, target.row, target.hp - targetSnap.hp);
         if (result.killed) {
           setTimeout(() => {
             const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
