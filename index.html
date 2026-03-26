@@ -238,7 +238,6 @@
       <!-- End Turn lives in the header, next to the action diamonds -->
       <button id="end-turn-btn" class="header-icon-btn end-turn-header" title="End Turn">↩</button>
       <div id="node-status"></div>
-      <button id="inventory-btn"  class="header-icon-btn" title="Supplies">🎒</button>
       <button id="chronicle-btn"  class="header-icon-btn" title="Chronicle">📜</button>
       <span id="game-version" class="game-version"></span>
     </header>
@@ -281,6 +280,7 @@
           <span id="plan-countdown" class="plan-countdown" style="display:none"></span>
         </div>
         <div id="plan-players" class="plan-players" style="display:none"></div>
+        <div id="plan-inventory" class="plan-inventory"></div>
         <div id="plan-status" class="plan-status"></div>
       </div>
     </main>
@@ -301,17 +301,6 @@
         <button id="chronicle-close">✕</button>
       </div>
       <div id="event-log"></div>
-    </div>
-  </div>
-
-  <!-- ── Inventory overlay ─────────────────────────────────────────── -->
-  <div id="inventory-overlay">
-    <div id="inventory-panel">
-      <div class="chronicle-header">
-        <span class="chronicle-title" id="inventory-title">🎒 Supplies</span>
-        <button id="inventory-close">✕</button>
-      </div>
-      <div id="inventory-content"></div>
     </div>
   </div>
 
