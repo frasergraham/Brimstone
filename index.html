@@ -21,9 +21,13 @@
         </p>
       </div>
       <div class="setup-buttons" style="flex-direction:column;align-items:center">
-        <button id="btn-new-game"    class="setup-btn primary" style="width:200px">New Game</button>
-        <button id="btn-how-to-play" class="setup-btn"         style="width:200px">How to Play</button>
-        <button id="btn-options"     class="setup-btn"         style="width:200px">Options</button>
+        <button id="btn-single-player" class="setup-btn primary" style="width:200px">⚔ Single Player</button>
+        <button id="btn-multiplayer"   class="setup-btn"         style="width:200px">🌐 Multiplayer</button>
+        <button id="btn-how-to-play"   class="setup-btn"         style="width:200px">How to Play</button>
+        <button id="btn-options"       class="setup-btn"         style="width:200px">Options</button>
+      </div>
+      <div style="margin-top:1.25rem;text-align:center">
+        <a href="/admin" class="admin-link">Admin</a>
       </div>
     </div>
 
@@ -93,11 +97,10 @@
       </div>
     </div>
 
-    <!-- New Game config -->
-    <div id="setup-step-newgame" class="setup-card" style="display:none">
-      <h1 class="title" style="font-size:2rem;margin-bottom:1rem">NEW GAME</h1>
+    <!-- Single Player -->
+    <div id="setup-step-singleplayer" class="setup-card" style="display:none">
+      <h1 class="title" style="font-size:2rem;margin-bottom:1rem">SINGLE PLAYER</h1>
 
-      <!-- Common options -->
       <div class="setup-options">
         <label class="setup-option-label">
           Map size
@@ -114,68 +117,76 @@
         </label>
       </div>
 
-      <!-- Local / Online toggle -->
-      <div class="mode-toggle">
-        <button id="btn-mode-local"  class="mode-toggle-btn active">Local</button>
-        <button id="btn-mode-online" class="mode-toggle-btn">Online</button>
+      <div class="player-mode-group">
+        <label class="player-mode-pill">
+          <input type="radio" name="player-mode" value="vs-ai" checked>
+          <span>vs AI</span>
+        </label>
+        <label class="player-mode-pill">
+          <input type="radio" name="player-mode" value="two-players">
+          <span>Two Players</span>
+        </label>
+        <label class="player-mode-pill">
+          <input type="radio" name="player-mode" value="autoplay">
+          <span>AI vs AI</span>
+        </label>
       </div>
 
-      <!-- Local section -->
-      <div id="newgame-local-section">
-        <div class="player-mode-group">
-          <label class="player-mode-pill">
-            <input type="radio" name="player-mode" value="vs-ai" checked>
-            <span>vs AI</span>
-          </label>
-          <label class="player-mode-pill">
-            <input type="radio" name="player-mode" value="two-players">
-            <span>Two Players</span>
-          </label>
-          <label class="player-mode-pill">
-            <input type="radio" name="player-mode" value="autoplay">
-            <span>AI vs AI</span>
-          </label>
-        </div>
-        <!-- Side selection (vs AI only) -->
-        <div id="side-selection" class="setup-buttons" style="margin-bottom:0">
-          <button id="btn-play-hero"  class="setup-btn primary">⚔ Play as Hero</button>
-          <button id="btn-play-witch" class="setup-btn">✦ Play as Witch</button>
-        </div>
-        <!-- Start button (two players / AI vs AI) -->
-        <div id="btn-start-wrap" class="setup-buttons" style="display:none;margin-bottom:0">
-          <button id="btn-start-local" class="setup-btn primary">Start Game</button>
-        </div>
+      <!-- Side selection (vs AI only) -->
+      <div id="side-selection" class="setup-buttons" style="margin-bottom:0">
+        <button id="btn-play-hero"  class="setup-btn primary">⚔ Play as Hero</button>
+        <button id="btn-play-witch" class="setup-btn">✦ Play as Witch</button>
+      </div>
+      <!-- Start button (two players / AI vs AI) -->
+      <div id="btn-start-wrap" class="setup-buttons" style="display:none;margin-bottom:0">
+        <button id="btn-start-local" class="setup-btn primary">Start Game</button>
       </div>
 
-      <!-- Online section -->
-      <div id="newgame-online-section" style="display:none">
-        <div id="online-session-info" style="display:none;margin-top:0.75rem" class="setup-lore">
-          <p>Playing as <strong id="online-session-name"></strong>
-             &nbsp;<span id="online-session-stats" class="stats-badge"></span></p>
-          <button id="btn-change-name" class="setup-btn secondary" style="margin-top:0.5rem">Change Name</button>
-        </div>
-        <div id="online-name-form" style="margin-top:0.5rem">
-          <input id="online-username" class="setup-input" type="text"
-                 placeholder="Enter a username…" maxlength="20" autocomplete="off">
-          <button id="btn-online-signin" class="setup-btn primary" style="margin-top:0.4rem">Sign In</button>
-          <p id="online-name-error" class="setup-error" style="display:none"></p>
-        </div>
-        <!-- Active games -->
-        <div class="active-games-section">
-          <div class="active-games-label">Active Games</div>
-          <div id="active-games-list" class="saves-list">
-            <p class="saves-empty">Sign in to see your active games.</p>
-          </div>
-        </div>
-        <!-- Online action buttons -->
-        <div class="setup-buttons online-match-buttons">
-          <button id="btn-create-game" class="setup-btn primary">⚔ Create Game</button>
-          <button id="btn-join-game"   class="setup-btn">🚪 Join Game</button>
+      <!-- In-progress local saves -->
+      <div class="active-games-section" style="margin-top:0.75rem">
+        <div class="active-games-label">In Progress</div>
+        <div id="sp-saves-list" class="saves-list">
+          <p class="saves-empty">No saved games.</p>
         </div>
       </div>
 
       <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
-        <button id="btn-newgame-back" class="setup-btn">← Back</button>
+        <button id="btn-singleplayer-back" class="setup-btn">← Back</button>
+      </div>
+    </div>
+
+    <!-- Multiplayer -->
+    <div id="setup-step-multiplayer" class="setup-card" style="display:none">
+      <h1 class="title" style="font-size:2rem;margin-bottom:1rem">MULTIPLAYER</h1>
+
+      <div id="mp-session-info" style="display:none" class="setup-lore">
+        <p>Playing as <strong id="mp-session-name"></strong>
+           &nbsp;<span id="mp-session-stats" class="stats-badge"></span></p>
+        <button id="btn-mp-change-name" class="setup-btn secondary" style="margin-top:0.5rem">Change Name</button>
+      </div>
+      <div id="mp-name-form">
+        <input id="mp-username" class="setup-input" type="text"
+               placeholder="Enter a username…" maxlength="20" autocomplete="off">
+        <button id="btn-mp-signin" class="setup-btn primary" style="margin-top:0.4rem">Sign In</button>
+        <p id="mp-name-error" class="setup-error" style="display:none"></p>
+      </div>
+
+      <!-- Active online games -->
+      <div class="active-games-section" style="margin-top:0.75rem">
+        <div class="active-games-label">Active Games</div>
+        <div id="active-games-list" class="saves-list">
+          <p class="saves-empty">Sign in to see your active games.</p>
+        </div>
+      </div>
+
+      <!-- Online action buttons (shown after sign-in) -->
+      <div id="mp-action-buttons" class="setup-buttons online-match-buttons" style="display:none">
+        <button id="btn-create-game" class="setup-btn primary">⚔ Create Game</button>
+        <button id="btn-join-game"   class="setup-btn">🚪 Join Game</button>
+      </div>
+
+      <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
+        <button id="btn-multiplayer-back" class="setup-btn">← Back</button>
       </div>
     </div>
 
@@ -224,7 +235,7 @@
     </div>
   </div>
 
-  <!-- ── Online: Join Game ─────────────────────────────────────── -->
+  <!-- ── Online: Join Game ──────────────────────────────────────── -->
   <div id="setup-step-join-game" class="setup-card" style="display:none">
     <h1 class="title" style="font-size:2rem">JOIN GAME</h1>
     <div class="active-games-section">

@@ -8,6 +8,7 @@ import { VERSION }           from './version.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType }    from './planner.js';
 import { isBattleSignificant } from './battle-utils.js';
+import { serializeState, deserializeState } from '../server/state-sync.js';
 
 // Stamp version into both badges
 document.getElementById('version-badge').textContent = `v${VERSION}`;
@@ -20,8 +21,14 @@ let _pendingPlanningPhase = null; // buffered onPlanningPhase payload received d
 
 // ── Local game init ───────────────────────────────────────────────────────────
 
+function _genSaveId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
 function init(witchIsAI, heroIsAI, autoplay = false) {
   _autoplay = autoplay;
+  // Assign a fresh save ID for this game (only used for single-player saves)
+  _spSaveId = _genSaveId();
   const canvas = document.getElementById('game-canvas');
 
   document.getElementById('setup-screen').style.display  = 'none';
@@ -210,12 +217,20 @@ async function _runLocalResolution() {
   if (ui) ui._triggerHazardFlashes();
   redraw();
 
+  // Persist single-player progress to localStorage
+  _saveSpGame();
+
   // Show a scoring toast whenever we land on a scoring checkpoint (dawn/dusk).
   if ((state.phase === 'dawn' || state.phase === 'dusk') && ui) {
     ui.showScoringToast(prevScore);
   }
 
-  if (state.gameOver) { showGameOver(); return; }
+  if (state.gameOver) {
+    // Clean up save on game over
+    if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
+    showGameOver();
+    return;
+  }
 
   if (_autoplay) {
     await _delay(300);
@@ -467,24 +482,26 @@ window.addEventListener('resize', () => {
 
 // ── Setup screen ──────────────────────────────────────────────────────────────
 
-const stepMode       = document.getElementById('setup-step-mode');
-const stepNewgame    = document.getElementById('setup-step-newgame');
-const stepHowto      = document.getElementById('setup-step-howtoplay');
-const stepOptions    = document.getElementById('setup-step-options');
-const stepWaiting    = document.getElementById('setup-step-waiting');
-const stepCreateGame = document.getElementById('setup-step-create-game');
-const stepJoinGame   = document.getElementById('setup-step-join-game');
-const stepLobby      = document.getElementById('setup-step-lobby');
+const stepMode         = document.getElementById('setup-step-mode');
+const stepSinglePlayer = document.getElementById('setup-step-singleplayer');
+const stepMultiplayer  = document.getElementById('setup-step-multiplayer');
+const stepHowto        = document.getElementById('setup-step-howtoplay');
+const stepOptions      = document.getElementById('setup-step-options');
+const stepWaiting      = document.getElementById('setup-step-waiting');
+const stepCreateGame   = document.getElementById('setup-step-create-game');
+const stepJoinGame     = document.getElementById('setup-step-join-game');
+const stepLobby        = document.getElementById('setup-step-lobby');
 
 function showStep(step) {
-  stepMode      .style.display = step === 'mode'        ? '' : 'none';
-  stepNewgame   .style.display = step === 'newgame'     ? '' : 'none';
-  stepHowto     .style.display = step === 'howtoplay'   ? '' : 'none';
-  stepOptions   .style.display = step === 'options'     ? '' : 'none';
-  stepWaiting   .style.display = step === 'waiting'     ? '' : 'none';
-  stepCreateGame.style.display = step === 'create-game' ? '' : 'none';
-  stepJoinGame  .style.display = step === 'join-game'   ? '' : 'none';
-  stepLobby     .style.display = step === 'lobby'       ? '' : 'none';
+  stepMode        .style.display = step === 'mode'          ? '' : 'none';
+  stepSinglePlayer.style.display = step === 'singleplayer'  ? '' : 'none';
+  stepMultiplayer .style.display = step === 'multiplayer'   ? '' : 'none';
+  stepHowto       .style.display = step === 'howtoplay'     ? '' : 'none';
+  stepOptions     .style.display = step === 'options'       ? '' : 'none';
+  stepWaiting     .style.display = step === 'waiting'       ? '' : 'none';
+  stepCreateGame  .style.display = step === 'create-game'   ? '' : 'none';
+  stepJoinGame    .style.display = step === 'join-game'     ? '' : 'none';
+  stepLobby       .style.display = step === 'lobby'         ? '' : 'none';
 }
 
 // Current lobby state (pre-game)
@@ -492,40 +509,24 @@ let _currentLobby = null;
 
 // ── Welcome screen buttons ────────────────────────────────────────────────────
 
-document.getElementById('btn-new-game')   .addEventListener('click', () => showStep('newgame'));
-document.getElementById('btn-how-to-play').addEventListener('click', () => showStep('howtoplay'));
-document.getElementById('btn-options')    .addEventListener('click', () => showStep('options'));
+document.getElementById('btn-single-player').addEventListener('click', () => _showSinglePlayerScreen());
+document.getElementById('btn-multiplayer')  .addEventListener('click', () => _showMultiplayerScreen());
+document.getElementById('btn-how-to-play')  .addEventListener('click', () => showStep('howtoplay'));
+document.getElementById('btn-options')      .addEventListener('click', () => showStep('options'));
 document.getElementById('btn-howtoplay-back').addEventListener('click', () => showStep('mode'));
-document.getElementById('btn-options-back')  .addEventListener('click', () => showStep('mode'));
+document.getElementById('btn-options-back') .addEventListener('click', () => showStep('mode'));
 
-// ── New Game screen ────────────────────────────────────────────────────────────
+// ── Single Player screen ───────────────────────────────────────────────────────
 
-document.getElementById('btn-newgame-back').addEventListener('click', () => {
-  if (mp) { mp.disconnect(); mp = null; }
+function _showSinglePlayerScreen() {
+  showStep('singleplayer');
+  _renderSpSaves();
+}
+
+document.getElementById('btn-singleplayer-back').addEventListener('click', () => {
   renderer = null; ui = null; state = null;
   showStep('mode');
 });
-
-// Local / Online mode toggle
-document.getElementById('btn-mode-local').addEventListener('click', () => _activateLocalMode());
-document.getElementById('btn-mode-online').addEventListener('click', () => _activateOnlineMode());
-
-function _activateLocalMode() {
-  document.getElementById('btn-mode-local') .classList.add('active');
-  document.getElementById('btn-mode-online').classList.remove('active');
-  document.getElementById('newgame-local-section') .style.display = '';
-  document.getElementById('newgame-online-section').style.display = 'none';
-}
-
-function _activateOnlineMode() {
-  document.getElementById('btn-mode-online').classList.add('active');
-  document.getElementById('btn-mode-local') .classList.remove('active');
-  document.getElementById('newgame-online-section').style.display = '';
-  document.getElementById('newgame-local-section') .style.display = 'none';
-  _initOnlineStep();
-  const session = loadSession();
-  if (session) _fetchActiveSaves();
-}
 
 // Player mode radio changes (vs AI / Two Players / AI vs AI)
 document.querySelectorAll('input[name="player-mode"]').forEach(r => {
@@ -533,8 +534,8 @@ document.querySelectorAll('input[name="player-mode"]').forEach(r => {
 });
 function _onPlayerModeChange() {
   const mode = document.querySelector('input[name="player-mode"]:checked')?.value;
-  document.getElementById('side-selection') .style.display = mode === 'vs-ai'      ? '' : 'none';
-  document.getElementById('btn-start-wrap') .style.display = mode !== 'vs-ai'      ? '' : 'none';
+  document.getElementById('side-selection') .style.display = mode === 'vs-ai' ? '' : 'none';
+  document.getElementById('btn-start-wrap') .style.display = mode !== 'vs-ai' ? '' : 'none';
 }
 
 document.getElementById('btn-play-hero') .addEventListener('click', () => init(true,  false));
@@ -572,6 +573,127 @@ document.getElementById('btn-restart').addEventListener('click', () => {
 
 function _esc(str) {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Single-player localStorage saves ─────────────────────────────────────────
+
+const _SP_SAVE_KEY = 'brimstone_sp_saves';
+
+function _loadSpSaves() {
+  try {
+    return JSON.parse(localStorage.getItem(_SP_SAVE_KEY) || '[]');
+  } catch { return []; }
+}
+
+function _saveSpSaves(saves) {
+  try { localStorage.setItem(_SP_SAVE_KEY, JSON.stringify(saves)); } catch {}
+}
+
+/** Persist the current single-player game state to localStorage. */
+function _saveSpGame() {
+  if (!state || state.gameOver || _autoplay) return;
+  const saves = _loadSpSaves();
+  const existing = saves.findIndex(s => s.id === _spSaveId);
+  const mode = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : 'two-players';
+  const serialized = serializeState(state);
+  const entry = {
+    id:         _spSaveId,
+    mode,
+    mapSize:    document.getElementById('select-map-size')?.value ?? 'standard',
+    fog:        state.fogOfWar,
+    round:      state.round,
+    phase:      state.phase,
+    updatedAt:  Math.floor(Date.now() / 1000),
+    startedAt:  existing >= 0 ? saves[existing].startedAt : Math.floor(Date.now() / 1000),
+    state:      serialized,
+  };
+  if (existing >= 0) saves[existing] = entry;
+  else saves.unshift(entry);
+  // Keep at most 10 saves
+  _saveSpSaves(saves.slice(0, 10));
+}
+
+/** Delete a single-player save. */
+function _deleteSpSave(id) {
+  const saves = _loadSpSaves().filter(s => s.id !== id);
+  _saveSpSaves(saves);
+}
+
+/** Render the in-progress saves list on the Single Player screen. */
+function _renderSpSaves() {
+  const list = document.getElementById('sp-saves-list');
+  if (!list) return;
+  const saves = _loadSpSaves();
+  if (!saves.length) {
+    list.innerHTML = '<p class="saves-empty">No saved games.</p>';
+    return;
+  }
+  list.innerHTML = '';
+  const modeLabels = { hero: '⚔ vs AI (Hero)', witch: '✦ vs AI (Witch)', 'two-players': '👥 Two Players' };
+  const phaseLabel = { dawn: '🌅 Dawn', day: '☀ Day', dusk: '🌇 Dusk', night: '🌙 Night' };
+  for (const s of saves) {
+    const ago = _timeAgo(s.updatedAt);
+    const entry = document.createElement('div');
+    entry.className = 'save-entry';
+    entry.innerHTML = `
+      <div class="save-entry-info">
+        <div class="save-entry-title">${modeLabels[s.mode] ?? s.mode}</div>
+        <div class="save-entry-meta">Round ${s.round} · ${phaseLabel[s.phase] ?? s.phase} · ${_esc(s.mapSize)} · ${ago}</div>
+      </div>
+      <div style="display:flex;gap:0.4rem">
+        <button class="setup-btn primary sp-resume-btn">Resume</button>
+        <button class="setup-btn sp-delete-btn" title="Delete save">✕</button>
+      </div>
+    `;
+    entry.querySelector('.sp-resume-btn').addEventListener('click', () => _resumeSpSave(s));
+    entry.querySelector('.sp-delete-btn').addEventListener('click', () => {
+      _deleteSpSave(s.id);
+      _renderSpSaves();
+    });
+    list.appendChild(entry);
+  }
+}
+
+let _spSaveId = null;
+
+/** Resume a single-player game from localStorage. */
+function _resumeSpSave(save) {
+  _spSaveId = save.id;
+  const deserialized = deserializeState(save.state);
+  _startFromState(deserialized, save.mode);
+}
+
+/** Start a game from an existing deserialized state (used by SP resume). */
+function _startFromState(existingState, mode) {
+  _autoplay = false;
+  const canvas = document.getElementById('game-canvas');
+
+  document.getElementById('setup-screen').style.display = 'none';
+  document.getElementById('game-screen').style.display  = 'flex';
+
+  state    = existingState;
+  renderer = new Renderer(canvas, state);
+  renderer.resize();
+  renderer.loadImages();
+
+  witchAI = state.witchIsAI ? new WitchAI(state, redraw) : null;
+  heroAI  = state.heroIsAI  ? new HeroAI(state, redraw)  : null;
+
+  ui = new UIController(canvas, state, renderer, witchAI, redraw, heroAI, false);
+
+  const battleCallback = (actorSnap, targetSnap, result) =>
+    new Promise(resolve => ui._showBattleDialog(actorSnap, targetSnap, result, resolve));
+  if (witchAI) witchAI.onBattleResult = battleCallback;
+  if (heroAI)  heroAI.onBattleResult  = battleCallback;
+
+  redraw();
+
+  requestAnimationFrame(() => {
+    renderer.resize();
+    redraw();
+  });
+
+  _startLocalPlanningPhase();
 }
 
 // ── Active games (inline in New Game screen) ──────────────────────────────────
@@ -644,11 +766,26 @@ function _timeAgo(unixSecs) {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
+// ── Multiplayer screen ────────────────────────────────────────────────────────
+
+function _showMultiplayerScreen() {
+  showStep('multiplayer');
+  _initMpStep();
+  const session = loadSession();
+  if (session) _fetchActiveSaves();
+}
+
+document.getElementById('btn-multiplayer-back').addEventListener('click', () => {
+  if (mp) { mp.disconnect(); mp = null; }
+  renderer = null; ui = null; state = null;
+  showStep('mode');
+});
+
 // ── Online flow ───────────────────────────────────────────────────────────────
 
 document.getElementById('btn-cancel-wait').addEventListener('click', () => {
-  showStep('newgame');
-  _activateOnlineMode();
+  showStep('multiplayer');
+  _initMpStep();
 });
 
 function _fogChecked() {
@@ -662,8 +799,7 @@ document.getElementById('btn-create-game').addEventListener('click', () => {
 });
 
 document.getElementById('btn-create-game-back').addEventListener('click', () => {
-  showStep('newgame');
-  _activateOnlineMode();
+  showStep('multiplayer');
 });
 
 document.getElementById('btn-create-game-confirm').addEventListener('click', () => {
@@ -689,8 +825,7 @@ document.getElementById('btn-join-game').addEventListener('click', () => {
 });
 
 document.getElementById('btn-join-game-back').addEventListener('click', () => {
-  showStep('newgame');
-  _activateOnlineMode();
+  showStep('multiplayer');
 });
 
 document.getElementById('btn-join-private').addEventListener('click', () => {
@@ -856,38 +991,41 @@ document.getElementById('btn-lobby-leave').addEventListener('click', () => {
     mp.leaveLobby(_currentLobby.id);
     _currentLobby = null;
   }
-  showStep('newgame');
-  _activateOnlineMode();
+  showStep('multiplayer');
 });
 
-function _initOnlineStep() {
+function _initMpStep() {
   const session     = loadSession();
-  const sessionInfo = document.getElementById('online-session-info');
-  const nameForm    = document.getElementById('online-name-form');
+  const sessionInfo = document.getElementById('mp-session-info');
+  const nameForm    = document.getElementById('mp-name-form');
+  const actionBtns  = document.getElementById('mp-action-buttons');
 
   if (session) {
-    document.getElementById('online-session-name').textContent = session.username;
+    document.getElementById('mp-session-name').textContent = session.username;
     sessionInfo.style.display = '';
     nameForm.style.display    = 'none';
+    actionBtns.style.display  = '';
   } else {
     sessionInfo.style.display = 'none';
     nameForm.style.display    = '';
+    actionBtns.style.display  = 'none';
   }
 
-  document.getElementById('online-name-error').style.display = 'none';
+  document.getElementById('mp-name-error').style.display = 'none';
 }
 
-document.getElementById('btn-online-signin').addEventListener('click', () => {
+document.getElementById('btn-mp-signin').addEventListener('click', () => {
   _ensureAuthed(() => {
-    _initOnlineStep();    // switch from name form → session info
+    _initMpStep();
     _fetchActiveSaves();
   });
 });
 
-document.getElementById('btn-change-name').addEventListener('click', () => {
+document.getElementById('btn-mp-change-name').addEventListener('click', () => {
   clearSession();
-  document.getElementById('online-session-info').style.display = 'none';
-  document.getElementById('online-name-form').style.display    = '';
+  document.getElementById('mp-session-info').style.display = 'none';
+  document.getElementById('mp-name-form').style.display    = '';
+  document.getElementById('mp-action-buttons').style.display = 'none';
   document.getElementById('active-games-list').innerHTML =
     '<p class="saves-empty">Sign in to see your active games.</p>';
   if (mp) { mp.disconnect(); mp = null; }
@@ -895,14 +1033,14 @@ document.getElementById('btn-change-name').addEventListener('click', () => {
 });
 
 function _onlineError(msg) {
-  const el = document.getElementById('online-name-error');
+  const el = document.getElementById('mp-name-error');
   el.textContent    = msg;
   el.style.display  = '';
 }
 
 /** Ensure we have an authenticated MultiplayerClient, then call cb(). */
 function _ensureAuthed(cb) {
-  const nameInput = document.getElementById('online-username');
+  const nameInput = document.getElementById('mp-username');
   const session   = loadSession();
   const wsUrl     = _serverWsUrl();
 
@@ -962,8 +1100,8 @@ function _createMpClient() {
           } catch (err) {
             console.error('initOnline failed:', err);
             _onlineError(`Failed to start game: ${err.message}`);
-            showStep('newgame');
-            _activateOnlineMode();
+            showStep('multiplayer');
+            _initMpStep();
           }
         }
         return;
@@ -1147,8 +1285,8 @@ function _createMpClient() {
       // During auth phase, show error in the lobby
       if (!state || document.getElementById('setup-screen').style.display !== 'none') {
         _onlineError(msg);
-        showStep('newgame');
-        _activateOnlineMode();
+        showStep('multiplayer');
+        _initMpStep();
       } else {
         // In-game error — flash in status bar
         const el = document.getElementById('online-status');
@@ -1175,17 +1313,15 @@ MultiplayerClient.prototype._route = function(msg) {
   if (msg.type === 'authError') {
     // Token no longer valid (e.g. server restarted) — clear session and
     // show the name-entry form so the error label inside it is visible.
-    // Pre-fill the username from the expired session so the user can
-    // re-sign-in without retyping.
     const expiredSession = loadSession();
     clearSession();
     if (mp) mp._player = null;
-    document.getElementById('online-session-info').style.display = 'none';
-    document.getElementById('online-name-form').style.display    = '';
+    document.getElementById('mp-session-info').style.display    = 'none';
+    document.getElementById('mp-name-form').style.display       = '';
+    document.getElementById('mp-action-buttons').style.display  = 'none';
     if (expiredSession?.username) {
-      document.getElementById('online-username').value = expiredSession.username;
+      document.getElementById('mp-username').value = expiredSession.username;
     }
-    showStep('newgame');
-    _activateOnlineMode();
+    showStep('multiplayer');
   }
 };

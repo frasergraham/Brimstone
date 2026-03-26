@@ -2224,3 +2224,14 @@ canvas { touch-action: pan-x pan-y; }
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+
+/* Admin link on welcome screen */
+.admin-link {
+  color: var(--text-dim, #7a7a8a);
+  font-size: 0.75rem;
+  text-decoration: none;
+  opacity: 0.55;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.admin-link:hover { opacity: 1; color: var(--text); text-decoration: underline; }
