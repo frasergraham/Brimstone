@@ -217,13 +217,11 @@ export class Renderer {
   }
 
   /** Flash attacker (orange) and target (red) hexes during a battle. */
-  addAttackAnim(actorCol, actorRow, targetCol, targetRow, damage = 0, counterDmg = 0) {
+  addAttackAnim(actorCol, actorRow, targetCol, targetRow, damage = 0) {
     this.addFlash(actorCol,  actorRow,  '', 'rgba(255,140,0,0.75)', 700);
     this.addFlash(targetCol, targetRow, '', 'rgba(220,40,40,0.75)',  700);
     if (damage > 0)
       this.addFlash(targetCol, targetRow, `-${damage}`, 'rgba(220,40,40,0.1)', 1800, 0.88, 'rgba(255,100,100,1)');
-    if (counterDmg > 0)
-      this.addFlash(actorCol, actorRow, `-${counterDmg}`, 'rgba(220,40,40,0.1)', 1800, 0.88, 'rgba(255,100,100,1)');
   }
 
   /** Keep calling draw() until all animations have expired. */

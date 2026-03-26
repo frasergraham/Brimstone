@@ -972,7 +972,7 @@ export class UIController {
         for (const msg of result.log) state.addLog(msg);
         if (result.success) state.spendAction(result.cost);
 
-        this.renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row, result.damage ?? 0, result.counterDmg ?? 0);
+        this.renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row, result.damage ?? 0);
         if (result.killed) {
           setTimeout(() => {
             const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
