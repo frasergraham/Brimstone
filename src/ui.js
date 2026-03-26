@@ -172,12 +172,6 @@ export class UIController {
       if (e.target === document.getElementById('chronicle-overlay')) this._toggleChronicle();
     });
 
-    // Inventory overlay toggle
-    document.getElementById('inventory-btn')?.addEventListener('click', () => this._toggleInventory());
-    document.getElementById('inventory-close')?.addEventListener('click', () => this._toggleInventory());
-    document.getElementById('inventory-overlay')?.addEventListener('click', e => {
-      if (e.target === document.getElementById('inventory-overlay')) this._toggleInventory();
-    });
 
     // Tile zoom close
     document.getElementById('tile-zoom-close')?.addEventListener('click', () => this._hideTileDetail());
@@ -622,6 +616,9 @@ export class UIController {
     if (toggleBtn && panel) {
       toggleBtn.textContent = panel.classList.contains('collapsed') ? '▶' : '◀';
     }
+
+    // Render inventory section at the bottom of the plan panel
+    this._renderInventory();
   }
 
   /** Toggle the plan panel between expanded and collapsed. */
@@ -2281,36 +2278,27 @@ export class UIController {
   }
 
   _renderInventory() {
-    const el    = document.getElementById('inventory-content');
-    const title = document.getElementById('inventory-title');
+    const el = document.getElementById('plan-inventory');
     if (!el) return;
 
     const state   = this.state;
     const faction = this._planFaction ?? (state.activePlayer === Player.HERO ? 'hero' : 'witch');
     const isHero  = faction === 'hero';
     const inv     = state.inventory;
-    const stash  = isHero ? inv.shared : inv.witch;
-
-    if (title) title.textContent = isHero ? '⚔ Hero Supplies' : '🕯 Witch Stores';
+    const stash   = isHero ? inv.shared : inv.witch;
+    const label   = isHero ? '⚔ Supplies' : '🕯 Stores';
 
     const entries = Object.entries(stash).filter(([, v]) => v > 0);
-    if (!entries.length) {
-      el.innerHTML = `<div class="inv-empty">Nothing held.</div>`;
-      return;
-    }
-    el.innerHTML = entries.map(([k, v]) =>
-      `<div class="inv-resource-row">
-        <span class="inv-resource-label">${RESOURCE_LABEL[k] || k}</span>
-        <span class="inv-resource-val">×${v}</span>
-      </div>`
-    ).join('');
-  }
+    const rows = entries.length
+      ? entries.map(([k, v]) =>
+          `<div class="inv-resource-row">
+            <span class="inv-resource-label">${RESOURCE_LABEL[k] || k}</span>
+            <span class="inv-resource-val">×${v}</span>
+          </div>`
+        ).join('')
+      : `<div class="inv-empty">Nothing held.</div>`;
 
-  _toggleInventory() {
-    const overlay = document.getElementById('inventory-overlay');
-    if (!overlay) return;
-    overlay.classList.toggle('visible');
-    if (overlay.classList.contains('visible')) this._renderInventory();
+    el.innerHTML = `<div class="plan-inventory-title">${label}</div>${rows}`;
   }
 
   /** Return the text of a log entry, handling both string and {text,owner} formats. */
