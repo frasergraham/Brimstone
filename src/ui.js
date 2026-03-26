@@ -1570,6 +1570,24 @@ export class UIController {
       btn.classList.toggle('speed-fast',    this.speedMode === 'fast');
       btn.classList.toggle('speed-instant', this.speedMode === 'instant');
     }
+    this._showSpeedToast(`⚡ Speed: ${labels[this.speedMode]}`);
+  }
+
+  _showSpeedToast(text) {
+    let toast = document.getElementById('speed-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'speed-toast';
+      toast.className = 'speed-toast';
+      const wrapper = document.getElementById('canvas-wrapper');
+      if (wrapper) wrapper.appendChild(toast);
+    }
+    toast.textContent = text;
+    toast.classList.remove('speed-toast-out');
+    clearTimeout(this._speedToastTimer);
+    this._speedToastTimer = setTimeout(() => {
+      toast.classList.add('speed-toast-out');
+    }, 1500);
   }
 
   // ── Battle toast (minor skirmishes) ──────────────────────────────────────

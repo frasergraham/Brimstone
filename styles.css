@@ -2122,3 +2122,25 @@ canvas { touch-action: pan-x pan-y; }
 /* Speed toggle button active states */
 .zoom-btn.speed-fast    { color: #f5c842; border-color: rgba(245, 200, 66, 0.6); }
 .zoom-btn.speed-instant { color: #e05050; border-color: rgba(220, 80,  80, 0.6); }
+
+/* Speed toast — shown near zoom controls when speed is toggled */
+.speed-toast {
+  position: absolute;
+  bottom: 56px;
+  left: 8px;
+  background: rgba(13, 10, 22, 0.88);
+  border: 1px solid rgba(180, 150, 80, 0.4);
+  border-radius: 6px;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.78rem;
+  color: #e8dcc8;
+  pointer-events: none;
+  z-index: 20;
+  animation: speed-toast-in 0.18s ease;
+  transition: opacity 0.3s ease;
+}
+.speed-toast.speed-toast-out { opacity: 0; }
+@keyframes speed-toast-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
