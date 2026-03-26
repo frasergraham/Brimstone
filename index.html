@@ -204,20 +204,18 @@
   <!-- ── Online: Create Game config ──────────────────────────────── -->
   <div id="setup-step-create-game" class="setup-card" style="display:none">
     <h1 class="title" style="font-size:2rem">CREATE GAME</h1>
-    <div class="setup-options">
-      <label class="setup-option-label">Map size
+    <div class="cg-options">
+      <div class="cg-option-row">
+        <span class="cg-option-label">Map size</span>
         <select id="cg-map-size" class="setup-select">
           <option value="skirmish">Skirmish (9×9)</option>
           <option value="standard" selected>Standard (13×11)</option>
           <option value="regional">Regional (17×13)</option>
           <option value="campaign">Campaign (21×15)</option>
         </select>
-      </label>
-      <label class="setup-option-label">
-        <input type="checkbox" id="cg-fog" checked> Fog of war
-      </label>
-      <div class="pps-selector" style="margin-top:0.5rem">
-        <span class="pps-label">Players per side:</span>
+      </div>
+      <div class="cg-option-row">
+        <span class="cg-option-label">Players per side</span>
         <div class="pps-pills">
           <label class="pps-pill"><input type="radio" name="cg-pps" value="1" checked><span>1v1</span></label>
           <label class="pps-pill"><input type="radio" name="cg-pps" value="2"><span>2v2</span></label>
@@ -225,9 +223,21 @@
           <label class="pps-pill"><input type="radio" name="cg-pps" value="4"><span>4v4</span></label>
         </div>
       </div>
-      <label class="setup-option-label" style="margin-top:0.5rem">
-        <input type="checkbox" id="cg-private"> Private game (invite by code)
-      </label>
+      <div class="cg-option-row">
+        <span class="cg-option-label">Fog of war</span>
+        <label class="cg-toggle">
+          <input type="checkbox" id="cg-fog" checked>
+          <span class="cg-toggle-track"></span>
+        </label>
+      </div>
+      <div class="cg-option-row">
+        <span class="cg-option-label">Private game</span>
+        <label class="cg-toggle">
+          <input type="checkbox" id="cg-private">
+          <span class="cg-toggle-track"></span>
+        </label>
+        <span class="cg-option-hint">Invite only — share a code</span>
+      </div>
     </div>
     <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
       <button id="btn-create-game-back" class="setup-btn">← Back</button>
