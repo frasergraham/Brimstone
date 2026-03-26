@@ -343,7 +343,10 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     state.entities = postEntities;
     redrawFn();
 
-    if (!_autoplay && hadMove) await _delay(520); // slightly longer than anim duration (480ms)
+    if (!_autoplay && hadMove) {
+      const _spd = ui?.speedMode ?? 'cinematic';
+      if (_spd !== 'instant') await _delay(_spd === 'fast' ? 180 : 520);
+    }
     for (const entry of pendingDialogs) {
       redrawFn();
       if (entry.encounterUnit) {
@@ -461,10 +464,14 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
     if (hadMove || hadBattle) {
       redrawFn();
-      if (!_autoplay) await _delay(hadMove ? 300 : 250);
+      if (!_autoplay) {
+        const _spd2 = ui?.speedMode ?? 'cinematic';
+        if (_spd2 !== 'instant') await _delay(_spd2 === 'fast' ? 80 : hadMove ? 300 : 250);
+      }
     } else if (events.length > 0 && !_autoplay) {
       // Non-visual actions (fortify, use_item, etc.) — brief pause so resolution feels deliberate.
-      await _delay(150);
+      const _spd3 = ui?.speedMode ?? 'cinematic';
+      if (_spd3 !== 'instant') await _delay(_spd3 === 'fast' ? 50 : 150);
     }
   }
 
@@ -1307,7 +1314,21 @@ function _createMpClient() {
       // This ensures state.entities is already correct when the last slide lands.
       const finalEntities = finalState.entities ?? state.entities;
 
-      _animateResolutionSteps(steps, finalEntities, redrawOnline, mp?.myFaction, mp?.myPlayerId ?? null).then(() => {
+      const _preReplayEntitiesOnline = steps[0]?.entitySnapshot ?? finalEntities;
+      _animateResolutionSteps(steps, finalEntities, redrawOnline, mp?.myFaction, mp?.myPlayerId ?? null).then(async () => {
+        // Show post-resolution summary modal for human players
+        if (ui && mp?.myFaction) {
+          let action;
+          do {
+            action = await ui._showResolutionSummary(steps, state.round);
+            if (action === 'replay') {
+              state.entities = _preReplayEntitiesOnline;
+              redrawOnline();
+              await _animateResolutionSteps(steps, finalEntities, redrawOnline, mp.myFaction, mp.myPlayerId ?? null);
+            }
+          } while (action === 'replay');
+        }
+
         // Apply full final state (phase, round, score, tiles, etc.)
         Object.assign(state, finalState);
         state.hero      = finalState.hero;

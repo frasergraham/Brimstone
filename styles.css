@@ -1130,6 +1130,12 @@ canvas { touch-action: pan-x pan-y; }
 }
 .tile-unit-card.selectable:hover { background: var(--bg-section); border-color: #4a3a60; }
 .tile-unit-card-icon { font-size: 0.9rem; flex-shrink: 0; width: 1.2rem; text-align: center; }
+.tile-unit-card-portrait {
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 2px solid #888;
+  object-fit: cover;
+}
 .tile-unit-card-name { font-size: 0.85rem; flex: 1; }
 .tile-unit-card-stats { font-size: 0.75rem; color: var(--text-dim); white-space: nowrap; }
 
@@ -2334,16 +2340,29 @@ canvas { touch-action: pan-x pan-y; }
   font-size: 0.78rem;
   color: var(--text);
   margin-top: 0.3rem;
-  padding: 0.3rem 0.8rem;
+  padding: 0.35rem 0.8rem;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   width: 100%;
   display: flex;
-  justify-content: space-around;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15rem;
+  flex-wrap: wrap;
 }
 
-.phase-modal-budget .hero-budget  { color: var(--hero); }
-.phase-modal-budget .witch-budget { color: var(--witch); }
+.action-pip-label {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  margin-right: 0.3rem;
+  white-space: nowrap;
+}
+
+.action-pip {
+  color: var(--gold, #c8a84b);
+  font-size: 0.9rem;
+  line-height: 1;
+}
 
 #phase-modal-continue {
   margin-top: 0.5rem;

@@ -1,27 +1,20 @@
-// Tests for personality label rendering in player status panels.
+// Tests for player display name rendering in player status panels.
+// AI players no longer show personality labels — names are always just p.name.
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-// Mirrors the PERSONALITY_LABELS map used in ui.js and spectate.html
-const PERSONALITY_LABELS = {
-  balanced:  'Balanced',
-  berserker: 'Berserker',
-  sentinel:  'Sentinel',
-  scavenger: 'Scavenger',
-  hoarder:   'Hoarder',
-  swarm:     'Swarm',
-};
-
-function playerDisplayName(player) {
-  if (!player.isAI) return player.name;
-  const label = PERSONALITY_LABELS[player.personality] ?? player.personality ?? 'AI';
-  return `${player.name} (${label})`;
+function playerDisplayName(player, isMe = false) {
+  return isMe ? `${player.name} (you)` : player.name;
 }
 
 describe('playerDisplayName — human players', () => {
   test('human player: name only', () => {
     assert.equal(playerDisplayName({ name: 'Alice', isAI: false }), 'Alice');
+  });
+
+  test('human player (me): shows (you) suffix', () => {
+    assert.equal(playerDisplayName({ name: 'Alice', isAI: false }, true), 'Alice (you)');
   });
 
   test('human player with personality field: personality ignored', () => {
@@ -33,52 +26,38 @@ describe('playerDisplayName — human players', () => {
 });
 
 describe('playerDisplayName — AI players', () => {
-  test('AI balanced → name (Balanced)', () => {
+  test('AI player: name only (no personality suffix)', () => {
     assert.equal(
       playerDisplayName({ name: 'Alicia', isAI: true, personality: 'balanced' }),
-      'Alicia (Balanced)',
+      'Alicia',
     );
   });
 
-  test('AI berserker → name (Berserker)', () => {
+  test('AI berserker: name only', () => {
     assert.equal(
       playerDisplayName({ name: 'Samuel', isAI: true, personality: 'berserker' }),
-      'Samuel (Berserker)',
+      'Samuel',
     );
   });
 
-  test('AI hoarder → name (Hoarder)', () => {
+  test('AI hoarder: name only', () => {
     assert.equal(
       playerDisplayName({ name: 'Witch', isAI: true, personality: 'hoarder' }),
-      'Witch (Hoarder)',
+      'Witch',
     );
   });
 
-  test('AI with unknown personality: uses raw value', () => {
-    assert.equal(
-      playerDisplayName({ name: 'Golem', isAI: true, personality: 'unknown_type' }),
-      'Golem (unknown_type)',
-    );
-  });
-
-  test('AI with null personality: falls back to "AI"', () => {
+  test('AI with null personality: name only', () => {
     assert.equal(
       playerDisplayName({ name: 'Bot', isAI: true, personality: null }),
-      'Bot (AI)',
+      'Bot',
     );
   });
 
-  test('AI with no personality field: falls back to "AI"', () => {
+  test('AI with no personality field: name only', () => {
     assert.equal(
       playerDisplayName({ name: 'Bot', isAI: true }),
-      'Bot (AI)',
+      'Bot',
     );
-  });
-
-  test('all known personalities resolve to their display label', () => {
-    for (const [key, label] of Object.entries(PERSONALITY_LABELS)) {
-      const result = playerDisplayName({ name: 'X', isAI: true, personality: key });
-      assert.equal(result, `X (${label})`, `personality '${key}' should map to '${label}'`);
-    }
   });
 });
