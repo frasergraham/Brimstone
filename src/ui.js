@@ -36,6 +36,7 @@ export class UIController {
 
     this._lastHazardKey    = '';   // deduplicates hazard popups across state updates
     this._battleInterval   = null; // dice animation interval — cleared on new dialog
+    this.speedMode         = 'cinematic'; // 'cinematic' | 'fast' | 'instant'
 
     // ── Planning mode state ──────────────────────────────────────────────────
     this._planMode      = false;   // true during simultaneous planning phase
@@ -105,6 +106,7 @@ export class UIController {
       if (units.length > 0) this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 400 });
       this.onRedraw();
     });
+    document.getElementById('speed-toggle')?.addEventListener('click', () => this._toggleSpeed());
 
     // Touch: tap, drag-to-pan, pinch-to-zoom (mobile)
     this.canvas.addEventListener('touchstart', e => {
@@ -1556,6 +1558,48 @@ export class UIController {
     }
   }
 
+  // ── Speed toggle ─────────────────────────────────────────────────────────
+
+  _toggleSpeed() {
+    const modes  = ['cinematic', 'fast', 'instant'];
+    const labels = { cinematic: 'Cinematic', fast: 'Fast', instant: 'Instant' };
+    this.speedMode = modes[(modes.indexOf(this.speedMode) + 1) % modes.length];
+    const btn = document.getElementById('speed-toggle');
+    if (btn) {
+      btn.title = `Battle speed: ${labels[this.speedMode]}`;
+      btn.classList.toggle('speed-fast',    this.speedMode === 'fast');
+      btn.classList.toggle('speed-instant', this.speedMode === 'instant');
+    }
+  }
+
+  // ── Battle toast (minor skirmishes) ──────────────────────────────────────
+
+  _showBattleToast(actorSnap, targetSnap, result) {
+    const container = document.getElementById('battle-toast-container');
+    if (!container) return;
+
+    const outcome = result.killed
+      ? '💀 slain'
+      : result.hit
+        ? result.damage >= 2 ? `💥 crush −${result.damage}HP` : `⚔ hit −${result.damage}HP`
+        : result.counterDmg > 0 ? '🛡 counter' : 'miss';
+
+    const toast = document.createElement('div');
+    toast.className = 'battle-toast' +
+      (result.killed ? ' kill' : result.damage >= 2 ? ' crush' : '');
+    toast.textContent =
+      `${actorSnap.name} → ${targetSnap.name}  [${result.attackRoll}v${result.defenseRoll}]  ${outcome}`;
+    container.appendChild(toast);
+
+    const displayMs = this.speedMode === 'instant' ? 600
+                    : this.speedMode === 'fast'     ? 1200
+                    :                                 2000;
+    setTimeout(() => {
+      toast.style.animation = 'battle-toast-out 0.3s ease forwards';
+      setTimeout(() => toast.remove(), 300);
+    }, displayMs);
+  }
+
   // ── Attrition popup ──────────────────────────────────────────────────────
 
   _showAttritionPopup() {
@@ -1790,8 +1834,10 @@ export class UIController {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') dismiss();
     };
 
-    if (this.autoplay) {
-      setTimeout(dismiss, 500);
+    if (this.autoplay || this.speedMode === 'instant') {
+      setTimeout(dismiss, this.autoplay ? 500 : 100);
+    } else if (this.speedMode === 'fast') {
+      setTimeout(dismiss, 800);
     } else {
       dialog.addEventListener('click', dismiss);
       document.addEventListener('keydown', keyDismiss);
@@ -2027,16 +2073,24 @@ export class UIController {
       }
     };
 
-    if (this.autoplay) {
-      // Skip animation — show result immediately, auto-dismiss after 500ms
+    if (this.autoplay || this.speedMode === 'instant') {
+      // Skip animation — show result immediately, auto-dismiss
       atkDie.textContent = result.attackRoll;
       defDie.textContent = result.defenseRoll;
       atkDie.className = 'die-display' + (result.hit ? ' atk-win' : '');
       defDie.className = 'die-display' + (!result.hit ? ' def-win' : '');
       revealResult();
-      setTimeout(dismiss, 500);
+      setTimeout(dismiss, this.autoplay ? 500 : 100);
+    } else if (this.speedMode === 'fast') {
+      // Skip dice animation — show result immediately, auto-dismiss after 800ms
+      atkDie.textContent = result.attackRoll;
+      defDie.textContent = result.defenseRoll;
+      atkDie.className = 'die-display' + (result.hit ? ' atk-win' : '');
+      defDie.className = 'die-display' + (!result.hit ? ' def-win' : '');
+      revealResult();
+      setTimeout(dismiss, 800);
     } else {
-      // Animated dice roll
+      // Cinematic: animated dice roll, manual click to dismiss
       atkDie.textContent = '?';
       defDie.textContent = '?';
       atkDie.className   = 'die-display rolling';
