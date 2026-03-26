@@ -182,8 +182,7 @@ export class UIController {
       if (!popup.contains(e.target) && e.target !== btn) popup.style.display = 'none';
     });
 
-    // Chronicle overlay toggle
-    document.getElementById('chronicle-btn')?.addEventListener('click', () => this._toggleChronicle());
+    // Chronicle overlay toggle (open button lives inside #chronicle-mini and is wired on each render)
     document.getElementById('chronicle-close')?.addEventListener('click', () => this._toggleChronicle());
     document.getElementById('chronicle-overlay')?.addEventListener('click', e => {
       if (e.target === document.getElementById('chronicle-overlay')) this._toggleChronicle();
@@ -2387,9 +2386,11 @@ export class UIController {
     if (!el) return;
     const visible = this._visibleLog();
     const last5 = visible.slice(-5);
-    el.innerHTML = last5
+    const entries = last5
       .map(m => `<div class="mini-log-entry">${this._logText(m)}</div>`)
       .join('');
+    el.innerHTML = `<button id="chronicle-btn" class="chronicle-mini-btn" title="Chronicle">📜</button>${entries}`;
+    document.getElementById('chronicle-btn')?.addEventListener('click', () => this._toggleChronicle());
   }
 
   refresh() {
