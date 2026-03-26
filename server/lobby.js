@@ -15,6 +15,7 @@ const AI_FILL_DELAY_MS   = 5_000;  // wait this long before filling with AI
 const RECONNECT_GRACE_MS = 60_000; // time to reconnect before forfeit
 const AI_TAKEOVER_MS     = 12_000; // replace disconnected player with AI after 12s
 const TURN_TIMEOUT_MS    = 90_000; // auto-submit empty plan after 90s of inactivity
+const CHRONICLE_MAX      = 100;    // max rounds retained per room in the chronicle
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -73,6 +74,17 @@ function broadcastExcept(room, playerId, obj) {
   }
 }
 
+/** Send a message to every admin spectator watching this room. */
+function broadcastToSpectators(room, obj) {
+  for (const ws of room.spectators) send(ws, obj);
+}
+
+/** Append a chronicle entry and trim to CHRONICLE_MAX. */
+function _appendChronicle(room, entry) {
+  room.chronicle.push(entry);
+  if (room.chronicle.length > CHRONICLE_MAX) room.chronicle.shift();
+}
+
 function randomCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let c = '';
@@ -112,6 +124,10 @@ function createRoom(fog = true) {
     turnTimer:        null,
     disconnectTimers: new Map(),
     takeoverTimers:   new Map(),
+    // Admin/spectator support
+    spectators:       new Set(),   // WebSocket connections watching this room
+    chronicle:        [],          // per-round resolution records (capped at CHRONICLE_MAX)
+    createdAt:        Date.now(),
   };
 
   rooms.set(id, room);
@@ -156,6 +172,9 @@ function destroyRoom(room) {
   if (room.turnTimer) clearTimeout(room.turnTimer);
   for (const t of room.disconnectTimers.values()) clearTimeout(t);
   for (const t of room.takeoverTimers.values())   clearTimeout(t);
+  // Notify admin spectators the room is gone
+  broadcastToSpectators(room, { type: 'adminRoomEnded', roomId: room.id });
+  room.spectators.clear();
   rooms.delete(room.id);
   codeToRoom.delete(room.code);
 }
@@ -215,6 +234,21 @@ function _startPlanningPhase(room) {
 
   _startPlanningTimer(room);
   _runAIPlanSubmission(room);
+
+  // Let admin spectators know a new planning phase has started
+  broadcastToSpectators(room, {
+    type:    'adminPlanningPhase',
+    roomId:  room.id,
+    round:   room.state.round,
+    phase:   room.state.phase,
+    players: room.players.map(s => ({
+      playerId:     s.playerId,
+      name:         s.name,
+      faction:      s.faction,
+      isAI:         s.isAI,
+      actionsLeft:  room.state.playerActionsLeft?.get(s.playerId) ?? 0,
+    })),
+  });
 }
 
 /** Generate and submit plans for every AI seat, staggered by a short random delay. */
@@ -325,7 +359,23 @@ function _executeResolution(room) {
     entitySnapshot: step.entitySnapshot ?? [],
   }));
 
-  broadcast(room, { type: 'resolutionComplete', steps: serializedSteps, finalState });
+  const resolutionMsg = { type: 'resolutionComplete', steps: serializedSteps, finalState };
+  broadcast(room, resolutionMsg);
+  broadcastToSpectators(room, resolutionMsg);
+
+  // Append to the per-room chronicle for admin inspection
+  _appendChronicle(room, {
+    round:       finalState.round,
+    phase:       finalState.phase,
+    resolvedAt:  Date.now(),
+    steps:       serializedSteps,
+    entities:    finalState.entities.map(e => ({
+      id: e.id, type: e.type, owner: e.owner, ownerId: e.ownerId,
+      name: e.name, hp: e.hp, maxHp: e.maxHp, col: e.col, row: e.row,
+      alive: (e.hp ?? 0) > 0,
+    })),
+    log:         finalState.log ?? [],
+  });
 
   if (!state.gameOver) {
     setTimeout(() => _startPlanningPhase(room), 4000);
@@ -464,6 +514,7 @@ function _fillAISeats(room, heroPerSide, witchPerSide) {
 function broadcastState(room, reason = 'update') {
   const snap = serializeState(room.state);
   broadcast(room, { type: 'stateUpdate', reason, state: snap });
+  broadcastToSpectators(room, { type: 'stateUpdate', reason, state: snap });
 }
 
 function checkAndHandleGameOver(room) {
@@ -761,6 +812,114 @@ export function getRoomByCode(code) {
 
 export function getRoom(roomId) {
   return rooms.get(roomId) ?? null;
+}
+
+// ── Admin / spectator exports ─────────────────────────────────────────────────
+
+/** Lightweight summary of every active room (no full state). */
+export function getRooms() {
+  return [...rooms.values()].map(room => ({
+    id:             room.id,
+    code:           room.code,
+    round:          room.state.round,
+    phase:          room.state.phase,
+    gameOver:       room.state.gameOver ?? false,
+    winner:         room.state.winner   ?? null,
+    planningPhase:  room.state.planningPhase ?? false,
+    players:        room.players.map(s => ({
+      playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI,
+    })),
+    spectatorCount: room.spectators.size,
+    createdAt:      room.createdAt,
+  }));
+}
+
+/** Current matchmaking queue entries (safe to expose — no ws refs). */
+export function getQueue() {
+  return queue.map(e => ({
+    playerId:      e.playerId,
+    playerName:    e.playerName,
+    joinedAt:      e.joinedAt,
+    fog:           e.fog,
+    playersPerSide: e.playersPerSide,
+  }));
+}
+
+/**
+ * Subscribe an admin WebSocket to a room's live updates.
+ * Immediately sends the current serialized state and full chronicle.
+ * Returns false if the room doesn't exist.
+ */
+export function subscribeSpectator(roomId, ws) {
+  const room = rooms.get(roomId);
+  if (!room) return false;
+  room.spectators.add(ws);
+  // Send current state immediately so the spectator gets a starting snapshot
+  send(ws, {
+    type:      'adminSpectateInit',
+    roomId,
+    state:     serializeState(room.state),
+    players:   room.players.map(s => ({
+      playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI,
+    })),
+    chronicle: room.chronicle,
+  });
+  return true;
+}
+
+/**
+ * Remove an admin WebSocket from all rooms it was spectating.
+ * Pass a specific roomId to unsubscribe from one room only.
+ */
+export function unsubscribeSpectator(ws, roomId = null) {
+  if (roomId) {
+    rooms.get(roomId)?.spectators.delete(ws);
+  } else {
+    for (const room of rooms.values()) room.spectators.delete(ws);
+  }
+}
+
+/** Return the full chronicle for a room (array of round records). */
+export function getRoomChronicle(roomId) {
+  return rooms.get(roomId)?.chronicle ?? null;
+}
+
+/**
+ * Admin-initiated save activation — loads a save and starts it as an AI-vs-AI
+ * game that can be spectated from the admin panel.
+ * Returns { ok, roomId } on success, { ok: false, error, status } on failure.
+ */
+export function adminResumeGame(savedRoomId) {
+  const save = getSave(savedRoomId);
+  if (!save) return { ok: false, error: 'No save found.', status: 404 };
+
+  if (save.game_version !== VERSION) {
+    return { ok: false, error: `Save is from v${save.game_version}; server is v${VERSION}. Cannot resume.`, status: 400 };
+  }
+
+  let state;
+  try {
+    state = deserializeState(save.state);
+  } catch (err) {
+    console.error(`[adminResume ${savedRoomId}] deserializeState error:`, err);
+    return { ok: false, error: 'Failed to restore save.', status: 500 };
+  }
+
+  // Force both sides to AI
+  state.heroIsAI  = true;
+  state.witchIsAI = true;
+
+  const room = createRoom(state.fogOfWar);
+  room.state = state;
+
+  // Attach AI for both factions
+  attachAI(room, 'hero');
+  attachAI(room, 'witch');
+
+  deleteSave(savedRoomId);
+
+  _startPlanningPhase(room);
+  return { ok: true, roomId: room.id };
 }
 
 /**
