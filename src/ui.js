@@ -769,12 +769,10 @@ export class UIController {
           this._popupVisible = true;
         }
       } else {
-        // New unit — select it and immediately show popup (single tap to act)
+        // New unit — first tap selects and shows highlights; second tap opens popup
         this._hideTileDetail();
         this._selectEntity(entity);
         this._pendingUnitPick = null;
-        this._showActionPopup(entity);
-        this._popupVisible = true;
       }
     } else {
       // Multiple units on hex — show simple picker popup

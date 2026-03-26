@@ -507,7 +507,13 @@ export class Renderer {
     }
 
     if (this.selectedHex) {
-      this._drawOutline(this.selectedHex.col, this.selectedHex.row, '#f5c842', 2.5, true);
+      const selEntity = this.selectedEntityId
+        ? this.state.entities.find(e => e.id === this.selectedEntityId)
+        : null;
+      const selColor = selEntity
+        ? _hexToRgba(selEntity.color ?? ENTITY_COLOR[selEntity.type] ?? '#f5c842', 0.95)
+        : '#f5c842';
+      this._drawOutline(this.selectedHex.col, this.selectedHex.row, selColor, 2.5, true);
     }
     if (this.hoveredHex) {
       this._drawOutline(this.hoveredHex.col, this.hoveredHex.row, 'rgba(255,255,255,0.3)', 1);
@@ -1289,23 +1295,39 @@ export class Renderer {
     }
 
     // ⊕ indicator: shown above the hex when this stack contains the selected entity.
-    // Hints to the player that clicking the unit again opens the action menu.
+    // Hints the player that clicking again opens the action menu.
+    // Checks all entities in the stack regardless of owner so witch/survivors work too.
     if (this.selectedEntityId && stack.some(e => e.id === this.selectedEntityId)) {
-      const ir = Math.max(6, hs * 0.22);
+      const ir = Math.max(5, hs * 0.17);
       const ix = x + hs * 0.42;
       const iy = y - hs * 0.58;
+
+      // Semi-transparent disc
       ctx.beginPath();
       ctx.arc(ix, iy, ir, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.fillStyle = 'rgba(255,255,255,0.68)';
       ctx.fill();
-      ctx.strokeStyle = 'rgba(0,0,0,0.3)';
-      ctx.lineWidth   = 1;
+
+      // Thin border
+      ctx.strokeStyle = 'rgba(0,0,0,0.22)';
+      ctx.lineWidth   = 0.8;
       ctx.stroke();
+
+      // + glyph
       ctx.fillStyle    = '#1a1a2e';
-      ctx.font         = `bold ${Math.floor(ir * 1.5)}px sans-serif`;
+      ctx.font         = `bold ${Math.floor(ir * 1.45)}px sans-serif`;
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText('+', ix, iy + 0.5);
+
+      // Specular arc at top-left of disc
+      ctx.beginPath();
+      ctx.arc(ix, iy, ir * 0.72, Math.PI * 1.1, Math.PI * 1.65);
+      ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+      ctx.lineWidth   = ir * 0.28;
+      ctx.lineCap     = 'round';
+      ctx.stroke();
+      ctx.lineCap     = 'butt';
     }
   }
 
