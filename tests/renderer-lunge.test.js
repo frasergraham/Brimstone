@@ -38,6 +38,19 @@ function makeRendererStub() {
       this._lungeAnims = [];
     },
 
+    returnAllLungeAnims() {
+      const returnDuration = 180;
+      for (const a of this._lungeAnims) {
+        if (!a.returning) {
+          a.settled       = true;
+          a.returning     = true;
+          a.returnStartTime = Date.now();
+          a.returnDuration  = returnDuration;
+        }
+      }
+      this._startAnimLoopCalled = !!this._lungeAnims.length;
+    },
+
     setBattleHighlights(combatantHexes, allyHexes) {
       this._battleCombatantHexes = combatantHexes ?? [];
       this._battleAllyHexes      = allyHexes ?? [];
@@ -105,6 +118,34 @@ describe('clearAllLungeAnims', () => {
   });
 });
 
+describe('returnAllLungeAnims', () => {
+  test('marks existing lunges as returning', () => {
+    const r = makeRendererStub();
+    r.addLungeAnim('e1', 0, 0, 2, 0, 'hero', 'hero');
+    r._lungeAnims[0].settled = true; // simulate settled state
+    r.returnAllLungeAnims();
+    assert.equal(r._lungeAnims[0].returning, true);
+    assert.equal(typeof r._lungeAnims[0].returnStartTime, 'number');
+    assert.equal(r._lungeAnims[0].returnDuration, 180);
+  });
+
+  test('does not double-mark already-returning lunges', () => {
+    const r = makeRendererStub();
+    r.addLungeAnim('e1', 0, 0, 2, 0, 'hero', 'hero');
+    r._lungeAnims[0].settled = true;
+    r.returnAllLungeAnims();
+    const firstReturnStart = r._lungeAnims[0].returnStartTime;
+    r.returnAllLungeAnims();
+    assert.equal(r._lungeAnims[0].returnStartTime, firstReturnStart);
+  });
+
+  test('is a no-op on empty array', () => {
+    const r = makeRendererStub();
+    r.returnAllLungeAnims(); // should not throw
+    assert.equal(r._lungeAnims.length, 0);
+  });
+});
+
 // ── setBattleHighlights / clearBattleHighlights ───────────────────────────────
 
 describe('setBattleHighlights', () => {
@@ -147,7 +188,7 @@ function isAlive(stub) {
   return stub._moveAnims.some(a => now < a.startTime + a.duration)
       || stub._flashes.some(f => now < f.endTime)
       || stub._deathAnims.some(a => now < a.startTime + a.duration)
-      || stub._lungeAnims.some(a => !a.settled);
+      || stub._lungeAnims.some(a => !a.settled || a.returning);
 }
 
 function makeFullStub() {
@@ -186,8 +227,14 @@ describe('waitForAnimations alive-check logic', () => {
 
   test('settled lunge → not alive', () => {
     const r = makeFullStub();
-    r._lungeAnims.push({ settled: true });
+    r._lungeAnims.push({ settled: true, returning: false });
     assert.equal(isAlive(r), false);
+  });
+
+  test('returning lunge → alive', () => {
+    const r = makeFullStub();
+    r._lungeAnims.push({ settled: true, returning: true, returnStartTime: Date.now(), returnDuration: 180 });
+    assert.equal(isAlive(r), true);
   });
 
   test('active death anim → alive', () => {

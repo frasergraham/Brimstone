@@ -275,9 +275,27 @@ export class Renderer {
     this._startAnimLoop();
   }
 
-  /** Remove all lunge animations (snaps entities back to their state positions). */
+  /** Remove all lunge animations immediately (snaps entities back to their state positions). */
   clearAllLungeAnims() {
     this._lungeAnims = [];
+  }
+
+  /**
+   * Trigger a return animation on all active lunge anims so entities slide back
+   * to their home hex instead of snapping. Completed returns are auto-removed.
+   * Call waitForAnimations() afterwards to await the returns.
+   */
+  returnAllLungeAnims() {
+    const returnDuration = 180;
+    for (const a of this._lungeAnims) {
+      if (!a.returning) {
+        a.settled       = true; // treat as settled so it starts at midX/midY
+        a.returning     = true;
+        a.returnStartTime = Date.now();
+        a.returnDuration  = returnDuration;
+      }
+    }
+    if (this._lungeAnims.length) this._startAnimLoop();
   }
 
   /** Set which hexes should be highlighted red during a combat sequence. */
@@ -302,9 +320,9 @@ export class Renderer {
   addHpChangeFlash(col, row, delta) {
     if (delta === 0) return;
     if (delta < 0) {
-      this.addFlash(col, row, `${delta}`, 'rgba(220,40,40,0.1)', 1800, 0.88, 'rgba(255,100,100,1)');
+      this.addFlash(col, row, `${delta}`, 'rgba(220,40,40,0.1)', 1200, 0.88, 'rgba(255,100,100,1)');
     } else {
-      this.addFlash(col, row, `+${delta}`, 'rgba(40,180,40,0.1)', 1800, 0.88, 'rgba(100,255,100,1)');
+      this.addFlash(col, row, `+${delta}`, 'rgba(40,180,40,0.1)', 1200, 0.88, 'rgba(100,255,100,1)');
     }
   }
 
@@ -317,7 +335,7 @@ export class Renderer {
       const alive = this._moveAnims.some(a => now < a.startTime + a.duration)
                  || this._flashes.some(f => now < f.endTime)
                  || this._deathAnims.some(a => now < a.startTime + a.duration)
-                 || this._lungeAnims.some(a => !a.settled)
+                 || this._lungeAnims.some(a => !a.settled || a.returning)
                  || !!this._zoomAnim;
       this.draw();
       if (alive) {
@@ -341,7 +359,7 @@ export class Renderer {
         const alive = this._moveAnims.some(a => now < a.startTime + a.duration)
                    || this._flashes.some(f => now < f.endTime)
                    || this._deathAnims.some(a => now < a.startTime + a.duration)
-                   || this._lungeAnims.some(a => !a.settled)
+                   || this._lungeAnims.some(a => !a.settled || a.returning)
                    || !!this._zoomAnim;
         if (alive) requestAnimationFrame(check);
         else resolve();
@@ -1658,14 +1676,27 @@ export class Renderer {
     const hs  = this.hexSize;
     const r   = hs * 0.35;
 
+    // Remove returns that have fully completed
+    this._lungeAnims = this._lungeAnims.filter(
+      a => !a.returning || now < a.returnStartTime + a.returnDuration
+    );
+
     if (!this._lungeAnims.length) return;
 
     for (const a of this._lungeAnims) {
-      const t    = Math.min(1, (now - a.startTime) / a.duration);
-      if (t >= 1) a.settled = true;
-      const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t; // ease in-out quad
-      const x    = a.fromX + (a.midX - a.fromX) * ease;
-      const y    = a.fromY + (a.midY - a.fromY) * ease;
+      let x, y;
+      if (a.returning) {
+        const t    = Math.min(1, (now - a.returnStartTime) / a.returnDuration);
+        const ease = 1 - (1 - t) * (1 - t); // ease-out quad
+        x = a.midX + (a.fromX - a.midX) * ease;
+        y = a.midY + (a.fromY - a.midY) * ease;
+      } else {
+        const t    = Math.min(1, (now - a.startTime) / a.duration);
+        if (t >= 1) a.settled = true;
+        const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t; // ease in-out quad
+        x = a.fromX + (a.midX - a.fromX) * ease;
+        y = a.fromY + (a.midY - a.fromY) * ease;
+      }
 
       // Shadow
       ctx.beginPath();

@@ -533,9 +533,10 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
             }
 
-            // ── Step 4: Clear highlights and lunge ───────────────────────────
+            // ── Step 4: Clear highlights, animate lunge return ───────────────
             renderer.clearBattleHighlights();
-            renderer.clearAllLungeAnims();
+            renderer.returnAllLungeAnims(); // slide entity back rather than snap
+            if (speed === 'cinematic') await renderer.waitForAnimations();
             redrawFn();
 
           } else {
