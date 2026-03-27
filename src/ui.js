@@ -1242,13 +1242,16 @@ export class UIController {
     // Render always-visible cycle bar (compact icon row)
     const cycleBar = this._el('cycle-bar');
     if (cycleBar) {
-      const stepsHtml = CYCLE_STEPS.map((step, i) => {
+      cycleBar.innerHTML = CYCLE_STEPS.map((step, i) => {
         const active = i === roundInCycle;
         return `<div class="cycle-step phase-${step.phase} ${active ? 'cycle-active' : 'cycle-dim'}"
                      title="${step.desc}">${step.icon}${active ? `<span class="cycle-name">${step.label}</span>` : ''}</div>`;
       }).join('');
-      cycleBar.innerHTML = stepsHtml + `<span class="cycle-round-label">${roundLabel}</span>`;
     }
+
+    // Round label sits below the cycle bar
+    const roundLabelEl = this._el('round-label');
+    if (roundLabelEl) roundLabelEl.textContent = roundLabel;
 
     // During planning phase, show planning info
     if (this._planMode) {
@@ -1266,9 +1269,7 @@ export class UIController {
 
     // During resolution, show neutral resolution label
     if (state.resolving) {
-      el.innerHTML = `
-        <div class="turn-line">⚙ Resolution Phase</div>
-      `;
+      el.innerHTML = `<div class="turn-line">⚙ Resolution Phase</div>`;
       return;
     }
 
@@ -1280,14 +1281,7 @@ export class UIController {
       ? '◆'.repeat(state.actionsLeft)
       : '◇';
 
-    // On wider screens the cycle strip also lives in turn-info; on mobile it's
-    // only shown in #cycle-bar so we omit it here to avoid duplication.
     el.innerHTML = `
-      <div class="cycle-strip cycle-strip-header">${CYCLE_STEPS.map((step, i) => {
-        const active = i === roundInCycle;
-        return `<div class="cycle-step phase-${step.phase} ${active ? 'cycle-active' : 'cycle-dim'}"
-                     title="${step.desc}">${step.icon}${active ? `<span class="cycle-name">${step.label}</span>` : ''}</div>`;
-      }).join('')}<span class="cycle-round-label">${roundLabel}</span></div>
       <div class="turn-line player-${state.activePlayer}">
         ${player}'s Turn ${isAI ? '<span class="ai-badge">AI</span>' : ''}
       </div>

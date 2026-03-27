@@ -632,10 +632,29 @@ canvas { touch-action: pan-x pan-y; }
   margin-bottom: 0.25rem;
 }
 
-/* Dedicated cycle bar: hidden on desktop (cycle-strip-header takes its place),
-   visible below the header on mobile so it's always accessible. */
+/* Always-visible 8-step day/night strip below the header */
 #cycle-bar {
-  display: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0.25rem 0.5rem;
+  background: rgba(13,17,23,0.92);
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  flex-shrink: 0;
+}
+
+/* Day N · Round M label row below the cycle bar */
+#round-label {
+  text-align: center;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
+  opacity: 0.6;
+  padding: 0.1rem 0.5rem 0.2rem;
+  background: rgba(13,17,23,0.88);
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  flex-shrink: 0;
 }
 
 .cycle-step {
@@ -669,7 +688,7 @@ canvas { touch-action: pan-x pan-y; }
   white-space: nowrap;
 }
 
-/* Day N · Round M label in cycle-strip-header (desktop) and cycle-bar (mobile) */
+/* Day N · Round M label — kept for any remaining inline uses */
 .cycle-round-label {
   font-size: 0.7rem;
   color: var(--text-dim);
@@ -1866,21 +1885,7 @@ canvas { touch-action: pan-x pan-y; }
 
 /* ── Mobile / touch layout ─────────────────────────────────────────────── */
 
-/* ── Cycle strip visibility: show dedicated bar, hide inline strip ─────── */
-/* Applies on tablet/iPad (≤1400px) covers all iPad sizes incl. Pro landscape */
-@media (max-width: 1400px) {
-  .cycle-strip-header { display: none; }
-  #cycle-bar {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    padding: 0.2rem 0.5rem;
-    background: rgba(13,17,23,0.92);
-    border-bottom: 1px solid rgba(255,255,255,0.07);
-    flex-shrink: 0;
-  }
-}
+/* cycle-strip-header no longer used — cycle bar is always visible */
 
 @media (max-width: 700px) {
   html, body { overflow: hidden; font-size: 15px; }
