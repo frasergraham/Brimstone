@@ -10,6 +10,7 @@
     "start": "node server.js",
     "dev": "node server.js",
     "dev:client": "npx serve . -p 3000",
+    "pretest": "npm install --prefer-offline",
     "test": "node --test tests/*.test.js",
     "test:verbose": "node --test --test-reporter=spec tests/*.test.js",
     "test:ui": "node --test tests/ui/*.test.js",
