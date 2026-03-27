@@ -302,9 +302,16 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     // ── Phase 0: food consumed floaters ──────────────────────────────────────
     for (const ev of allStepEvents.filter(e => e.type === ResEventType.FOOD_CONSUMED)) {
       if (humanFaction && ev.faction !== humanFaction) continue;
-      const heroSnap = step.entitySnapshot?.find(e => e.type === 'hero');
-      if (heroSnap) {
-        renderer.addFlash(heroSnap.col, heroSnap.row, '-1\u00a0🍞', 'rgba(200,140,40,0.1)', 1600, 0.72, '#e8c84a');
+      // Find the action that consumed the food — show the floater over the acting
+      // unit, not the hero.
+      const actionEv = allStepEvents.find(
+        e => e.type === ResEventType.ACTION_OK && e.faction === ev.faction,
+      );
+      const actorSnap = actionEv
+        ? step.entitySnapshot?.find(e => e.id === actionEv.action.entityId)
+        : null;
+      if (actorSnap) {
+        renderer.addFlash(actorSnap.col, actorSnap.row, '-1\u00a0🍞', 'rgba(200,140,40,0.1)', 1600, 0.72, '#e8c84a');
         redrawFn();
       }
     }
@@ -338,9 +345,14 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       }
     }
 
-    // Switch to post-step entity state — when move anims expire the entities
-    // are already at their destinations, so no position snap-back occurs.
-    state.entities = postEntities;
+    // Update only moved-entity positions in-place so that when move
+    // animations expire the entities sit at their destinations (no snap-back)
+    // without revealing encounter survivors, HP changes, or deaths yet.
+    for (const ev of events) {
+      if (ev.action.type !== PlanActionType.MOVE) continue;
+      const ent = state.entities.find(e => e.id === ev.action.entityId);
+      if (ent) { ent.col = ev.action.toCol; ent.row = ev.action.toRow; }
+    }
     redrawFn();
 
     if (!_autoplay && hadMove) {
@@ -454,8 +466,13 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       redrawFn();
     }
 
+    // Apply the full post-step entity state now that all dialogs for this step
+    // have been shown.  This reveals HP changes, deaths, and new encounter
+    // entities only after the player has seen the relevant dialog/animation.
+    state.entities = postEntities;
+    redrawFn();
+
     if (hadMove || hadBattle) {
-      redrawFn();
       if (!_autoplay) {
         const _spd2 = ui?.speedMode ?? 'cinematic';
         if (_spd2 !== 'instant') await _delay(_spd2 === 'fast' ? 80 : hadMove ? 300 : 250);
