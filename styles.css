@@ -701,6 +701,12 @@ canvas { touch-action: pan-x pan-y; }
 
 .turn-line { font-size: 0.85rem; color: var(--text-dim); }
 
+.turn-faction {
+  font-size: 1rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
 .player-hero  { color: var(--hero) !important; }
 .player-witch { color: var(--witch) !important; }
 

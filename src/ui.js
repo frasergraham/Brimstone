@@ -1256,23 +1256,31 @@ export class UIController {
     // During planning phase, show planning info
     if (this._planMode) {
       const faction = this._planFaction;
+      const glyph   = faction === 'hero' ? '⚔' : '✦';
       const budget  = this._planBudget;
       const used    = this._plan.filter(a => a.type !== PlanActionType.EQUIP_WEAPON && a.type !== PlanActionType.USE_ITEM).length;
       const diamonds = '◆'.repeat(Math.max(0, budget - used)) + '◇'.repeat(Math.max(0, used));
-      const status  = this._planSubmitted ? '✓ Plan Submitted — Waiting…' : `📋 Planning Phase`;
-      el.innerHTML = `
-        <div class="turn-line player-${faction}">${status}</div>
-        <div class="actions-remaining" title="Actions budget">${diamonds}</div>
-      `;
+      if (this._planSubmitted) {
+        el.innerHTML = `
+          <span class="turn-faction player-${faction}">${glyph}</span>
+          <span class="turn-line">Waiting for opponent…</span>
+        `;
+      } else {
+        el.innerHTML = `
+          <span class="turn-faction player-${faction}">${glyph}</span>
+          <div class="actions-remaining" title="Actions budget">${diamonds}</div>
+        `;
+      }
       return;
     }
 
     // During resolution, show neutral resolution label
     if (state.resolving) {
-      el.innerHTML = `<div class="turn-line">⚙ Resolution Phase</div>`;
+      el.innerHTML = `<span class="turn-line">Round ${state.round} · Resolution</span>`;
       return;
     }
 
+    const glyph  = state.activePlayer === 'hero' ? '⚔' : '✦';
     const player = state.activePlayer === 'hero' ? 'Hero' : 'Witch';
     const isAI   = (state.activePlayer === 'witch' && state.witchIsAI) ||
                    (state.activePlayer === 'hero'  && state.heroIsAI);
@@ -1282,9 +1290,8 @@ export class UIController {
       : '◇';
 
     el.innerHTML = `
-      <div class="turn-line player-${state.activePlayer}">
-        ${player}'s Turn ${isAI ? '<span class="ai-badge">AI</span>' : ''}
-      </div>
+      <span class="turn-faction player-${state.activePlayer}">${glyph}</span>
+      <span class="turn-line">${player}'s Turn ${isAI ? '<span class="ai-badge">AI</span>' : ''}</span>
       <div class="actions-remaining">${diamonds}</div>
     `;
   }
