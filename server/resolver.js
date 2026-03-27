@@ -160,7 +160,7 @@ function runAction(state, action, faction, playerId = null) {
     }
 
     case PlanActionType.SUMMON: {
-      const r = executeSummon(state, entity, action.toCol, action.toRow);
+      const r = executeSummon(state, entity, action.toCol, action.toRow, action.summonType ?? null);
       if (!r.success) return { kind: 'fail', reason: r.log[0] };
       return { kind: 'ok', result: r };
     }

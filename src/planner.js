@@ -116,11 +116,15 @@ export function computeGhostState(state, plan) {
         attackArrow = { fromCol: fromPos.col, fromRow: fromPos.row, toCol: action.targetCol, toRow: action.targetRow };
       }
     } else if (action.type === PlanActionType.SUMMON) {
-      // Determine summon type from witch inventory.
-      const inv = state.inventory?.witch ?? {};
-      const summonType = (inv[ResourceType.METAL] || 0) > 0 ? EntityType.IRON_GOLEM
-                       : (inv[ResourceType.WOOD]  || 0) > 0 ? EntityType.WOOD_GOLEM
-                       : EntityType.MINION;
+      // Use explicit summonType from the plan action when available (player's choice).
+      // Fall back to auto-pick from current inventory for legacy/AI plans without a type.
+      let summonType = action.summonType ?? null;
+      if (!summonType) {
+        const inv = state.inventory?.witch ?? {};
+        summonType = (inv[ResourceType.METAL] || 0) >= 2 ? EntityType.IRON_GOLEM
+                   : (inv[ResourceType.WOOD]  || 0) >= 2 ? EntityType.WOOD_GOLEM
+                   : EntityType.MINION;
+      }
       summonInfo = { col: action.toCol, row: action.toRow, type: summonType };
       // Give the new unit a temporary id for ghost rendering.
       const ghostId = `ghost-summon-${steps.length}`;

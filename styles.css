@@ -1830,6 +1830,13 @@ canvas { touch-action: pan-x pan-y; }
   padding: 2px 0;
 }
 
+.round-summary-events .summary-resources {
+  padding: 2px 0;
+  font-size: 0.82rem;
+}
+.round-summary-events .summary-resources.found { color: #7ec8a0; }
+.round-summary-events .summary-resources.used  { color: #c8a878; }
+
 .round-summary-actions {
   display: flex;
   gap: 0.6rem;

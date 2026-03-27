@@ -216,31 +216,33 @@ export function getValidActions(state, actor) {
   ];
   if (battleTargets.length) actions.push({ type: ActionType.BATTLE, targets: battleTargets });
 
-  // Fortify — hero on any tile (not river), cap at 4, uses shared inventory
+  // Fortify — hero on any tile (not river), cap at 4, uses shared inventory.
+  // Always included when contextually valid; affordable=false when no resources.
   if (t && t.type !== TileType.RIVER && t.fortifyLevel < 4 && actorIsHero) {
     const shared     = state.inventory.shared;
     const woodCount  = (shared[ResourceType.WOOD]  || 0);
     const metalCount = (shared[ResourceType.METAL] || 0);
-    if (woodCount > 0 || metalCount > 0) {
-      actions.push({ type: ActionType.FORTIFY, targets: [{ col: actor.col, row: actor.row }] });
-    }
+    const affordable = woodCount > 0 || metalCount > 0;
+    actions.push({ type: ActionType.FORTIFY, targets: [{ col: actor.col, row: actor.row }], affordable });
   }
 
-  // Summon — witch only; each summon costs 2 resources
+  // Summon — witch only; three separate entries (one per unit type), each with
+  // affordable flag.  The popup always shows all three so the player can choose.
+  // affordable is per-type: iron_golem needs 2 metal, wood_golem needs 2 wood,
+  // minion needs any 2 resources.
   if (!actorIsHero) {
-    const inv = state.inventory.witch;
-    const canSummon = (inv[ResourceType.METAL] || 0) >= 2 ||
-                      (inv[ResourceType.WOOD]  || 0) >= 2 ||
-                      Object.values(inv).reduce((s, v) => s + v, 0) >= 2;
-    if (canSummon) {
-      const spawnTargets = getNeighbors(actor.col, actor.row).filter(n => {
-        const nt = tile(state, n.col, n.row);
-        return nt && nt.type !== TileType.RIVER && entitiesAt(state, n.col, n.row).length === 0;
-      });
-      if (spawnTargets.length) {
-        const summonType = pickSummonType(inv);
-        actions.push({ type: ActionType.SUMMON, targets: spawnTargets, summonType });
-      }
+    const spawnTargets = getNeighbors(actor.col, actor.row).filter(n => {
+      const nt = tile(state, n.col, n.row);
+      return nt && nt.type !== TileType.RIVER && entitiesAt(state, n.col, n.row).length === 0;
+    });
+    if (spawnTargets.length) {
+      const inv   = state.inventory.witch;
+      const metal = inv[ResourceType.METAL] || 0;
+      const wood  = inv[ResourceType.WOOD]  || 0;
+      const total = Object.values(inv).reduce((s, v) => s + (v || 0), 0);
+      actions.push({ type: ActionType.SUMMON, summonType: EntityType.IRON_GOLEM, targets: spawnTargets, affordable: metal >= 2 });
+      actions.push({ type: ActionType.SUMMON, summonType: EntityType.WOOD_GOLEM, targets: spawnTargets, affordable: wood  >= 2 });
+      actions.push({ type: ActionType.SUMMON, summonType: EntityType.MINION,     targets: spawnTargets, affordable: total >= 2 });
     }
   }
 
@@ -633,45 +635,53 @@ export function executeFortify(state, actor) {
   return { success: false, log: ['No wood or metal in shared supplies.'] };
 }
 
-export function executeSummon(state, actor, targetCol, targetRow) {
-  const inv = state.inventory.witch;
+// requestedType: optional EntityType (IRON_GOLEM / WOOD_GOLEM / MINION).
+// When provided the summon respects the player's explicit choice; falls back to
+// auto-pick if the requested type is no longer affordable (e.g. plan mis-ordering).
+export function executeSummon(state, actor, targetCol, targetRow, requestedType = null) {
+  const inv     = state.inventory.witch;
+  const ownerId = actor.ownerId;
   let summonedUnit, res, unitName;
 
-  const ownerId = actor.ownerId;
-  if ((inv[ResourceType.METAL] || 0) >= 2) {
-    res = ResourceType.METAL;
+  const metal = inv[ResourceType.METAL] || 0;
+  const wood  = inv[ResourceType.WOOD]  || 0;
+  const total = Object.values(inv).reduce((s, v) => s + (v || 0), 0);
+
+  // Resolve final type: honour request if affordable, else fall back to auto-pick
+  let resolvedType = requestedType;
+  if (resolvedType === EntityType.IRON_GOLEM && metal < 2) resolvedType = null;
+  if (resolvedType === EntityType.WOOD_GOLEM && wood  < 2) resolvedType = null;
+  if (resolvedType === EntityType.MINION      && total < 2) resolvedType = null;
+  if (!resolvedType) {
+    // Auto-pick priority: iron > wood > minion
+    if      (metal >= 2) resolvedType = EntityType.IRON_GOLEM;
+    else if (wood  >= 2) resolvedType = EntityType.WOOD_GOLEM;
+    else if (total >= 2) resolvedType = EntityType.MINION;
+    else return { success: false, log: ['Need at least 2 resources to summon.'] };
+  }
+
+  if (resolvedType === EntityType.IRON_GOLEM) {
+    res = ResourceType.METAL; inv[res] -= 2;
     summonedUnit = createIronGolem(targetCol, targetRow, ownerId);
     unitName = 'Iron Golem';
-  } else if ((inv[ResourceType.WOOD] || 0) >= 2) {
-    res = ResourceType.WOOD;
+  } else if (resolvedType === EntityType.WOOD_GOLEM) {
+    res = ResourceType.WOOD; inv[res] -= 2;
     summonedUnit = createWoodGolem(targetCol, targetRow, ownerId);
     unitName = 'Wood Golem';
   } else {
-    // Minion costs 2 of any resource — find two units (can mix types)
-    const keys = Object.keys(inv).filter(k => inv[k] > 0);
-    const total = keys.reduce((s, k) => s + inv[k], 0);
-    if (total < 2) return { success: false, log: ['Need at least 2 resources to summon.'] };
-    // Spend 2: drain from resources with largest stacks first
-    keys.sort((a, b) => inv[b] - inv[a]);
+    // Minion: spend 2 from any resources, largest stacks first
+    const keys = Object.keys(inv).filter(k => inv[k] > 0).sort((a, b) => inv[b] - inv[a]);
     let remaining = 2;
     for (const k of keys) {
-      const spend = Math.min(inv[k], remaining);
-      inv[k] -= spend;
-      remaining -= spend;
+      const spend = Math.min(inv[k], remaining); inv[k] -= spend; remaining -= spend;
       if (remaining === 0) break;
     }
-    res = null; // mixed resources
     summonedUnit = createMinion(targetCol, targetRow, ownerId);
     unitName = 'Minion';
   }
 
-  if (res !== null) inv[res] -= 2;
   state.entities.push(summonedUnit);
-  return {
-    success: true,
-    log: [`The witch raises a ${unitName}!`],
-    cost: 1,
-  };
+  return { success: true, log: [`The witch raises a ${unitName}!`], cost: 1 };
 }
 
 export function executeUseItem(state, actor, item) {

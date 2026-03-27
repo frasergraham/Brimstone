@@ -912,7 +912,7 @@ export class UIController {
 
   _handleTargetClick(hex) {
     if (!this._awaitingTarget) return;
-    const { actionType, actor } = this._awaitingTarget;
+    const { actionType, actor, summonType } = this._awaitingTarget;
     const state = this.state;
 
     if (actionType === ActionType.MOVE) {
@@ -1057,7 +1057,7 @@ export class UIController {
       this.renderer.highlightHexes = [];
 
       if (this._planMode) {
-        this._addToPlan({ type: PlanActionType.SUMMON, entityId: actor.id, toCol: hex.col, toRow: hex.row });
+        this._addToPlan({ type: PlanActionType.SUMMON, entityId: actor.id, toCol: hex.col, toRow: hex.row, summonType: summonType ?? undefined });
         if (actor.alive) this._selectEntity(actor);
         else this._clearSelection();
         this._updateSidebar();
@@ -1066,13 +1066,13 @@ export class UIController {
       }
 
       if (this.mp?.active) {
-        this.mp.sendAction('summon', { entityId: actor.id, col: hex.col, row: hex.row });
+        this.mp.sendAction('summon', { entityId: actor.id, col: hex.col, row: hex.row, summonType: summonType ?? undefined });
         this._clearSelection();
         this._updateSidebar();
         this.onRedraw();
         return;
       }
-      const result = executeSummon(state, actor, hex.col, hex.row);
+      const result = executeSummon(state, actor, hex.col, hex.row, summonType ?? null);
       for (const msg of result.log) state.addLog(msg);
       if (result.success) {
         state.spendAction(result.cost);
@@ -1151,11 +1151,12 @@ export class UIController {
           // Attack is now triggered directly by clicking a red-highlighted enemy hex — no popup button needed.
           break;
         case ActionType.FORTIFY: {
-          // Use projected inventory in plan mode so queued fortifies block further fortifies
+          // Use projected inventory in plan mode so queued fortifies reduce affordability
           const fortInv    = projInv ? projInv.shared : state.inventory.shared;
           const hasMetal   = (fortInv.metal || 0) > 0;
           const hasWood    = (fortInv.wood  || 0) > 0;
-          const cantAfford = projInv && !hasMetal && !hasWood;
+          // Use action.affordable as fallback when projInv not available
+          const cantAfford = projInv ? (!hasMetal && !hasWood) : !action.affordable;
           const hasDoubler = entity.type === EntityType.SURVIVOR && entity.ability === SurvivorAbility.FORTIFY_DOUBLE;
           const tileData   = state.tiles.get(hexKey(entity.col, entity.row));
           const cur        = tileData ? tileData.fortifyLevel : 0;
@@ -1164,16 +1165,34 @@ export class UIController {
             : hasDoubler
               ? `🪵 Fortify +${Math.min(4, cur + 2)} DEF ★ (1🪵)`
               : `🪵 Fortify +${Math.min(4, cur + 1)} DEF (1🪵)`;
-          regularHtml += btn(lbl, 'fortify', cantAfford ? 'disabled' : dis, `data-action="fortify"`);
+          regularHtml += btn(lbl, 'fortify', (cantAfford || !hasAct) ? 'disabled' : '', `data-action="fortify"`);
           break;
         }
-        case ActionType.SUMMON: {
-          const projWitch = projInv ? projInv.witch : state.inventory.witch;
-          const witchTotal = Object.values(projWitch).reduce((s, v) => s + (v || 0), 0);
-          const cantAfford = projInv && witchTotal < 2;
-          regularHtml += btn(_summonLabel(projWitch), 'summon', cantAfford ? 'disabled' : dis, `data-action="summon"`);
+        case ActionType.SUMMON:
+          // Each SUMMON entry has a specific summonType — render all three as separate buttons.
+          // De-duplicate: only render the first time we hit a SUMMON action (we'll loop all three).
+          // (The loop handles this — each has a distinct summonType so we render each once.)
+          {
+            const projWitch = projInv ? projInv.witch : state.inventory.witch;
+            const projMetal = projWitch[ResourceType.METAL] || 0;
+            const projWood  = projWitch[ResourceType.WOOD]  || 0;
+            const projTotal = Object.values(projWitch).reduce((s, v) => s + (v || 0), 0);
+            const projAffordable = {
+              [EntityType.IRON_GOLEM]: projMetal >= 2,
+              [EntityType.WOOD_GOLEM]: projWood  >= 2,
+              [EntityType.MINION]:     projTotal >= 2,
+            };
+            const SUMMON_LABEL = {
+              [EntityType.IRON_GOLEM]: '🔩 Iron Golem (2⚙)',
+              [EntityType.WOOD_GOLEM]: '🪵 Wood Golem (2🪵)',
+              [EntityType.MINION]:     '🌑 Minion (2 res)',
+            };
+            const st = action.summonType;
+            const canAfford = projAffordable[st] ?? action.affordable;
+            const btnDis = (!canAfford || !hasAct) ? 'disabled' : '';
+            regularHtml += btn(SUMMON_LABEL[st] ?? '🌑 Summon', 'summon', btnDis, `data-action="summon" data-summon-type="${st}"`);
+          }
           break;
-        }
         case ActionType.USE_ITEM:
           for (const item of action.usable) {
             // Food is managed via the plan-panel food slots in planning mode.
@@ -1573,7 +1592,9 @@ export class UIController {
 
       case 'summon': {
         _hideActionPopup();
-        this._awaitingTarget = { actionType: ActionType.SUMMON, actor: entity };
+        const summonType = button.dataset.summonType ?? null;
+        this._awaitingTarget = { actionType: ActionType.SUMMON, actor: entity, summonType };
+        // Use targets from the matching summon action (all three share the same targets)
         const summonAction = this._validActions.find(a => a.type === ActionType.SUMMON);
         if (summonAction) {
           this.renderer.highlightHexes = summonAction.targets.map(t => ({ ...t, color: 'rgba(180,80,200,0.30)' }));
@@ -2555,11 +2576,16 @@ export class UIController {
 
       const { prevScore, prevNodes, humanFaction, fogOfWar, gameOver, winner, winReason } = opts;
 
-      // Collect kills, survivors found, and summons from steps
-      // with fog-of-war filtering: skip opponent-only events the player can't see
+      // Collect kills, survivors found, summons, and resource flows from steps.
+      // Fog-of-war filtering: skip opponent-only events the player can't see.
       const kills     = [];
       const survivors = [];
       const summons   = [];
+      const foundRes  = {}; // icon → count  (from explore loot)
+      const usedRes   = {}; // icon → count  (from summon/fortify/use-item)
+      const _addRes = (map, icon, n = 1) => { map[icon] = (map[icon] || 0) + n; };
+      const RES_ICON_MAP = { wood: '🪵', metal: '⚙', food: '🍞', silver: '🥈', scripture: '📜', herbs: '🌿' };
+
       for (const step of steps ?? []) {
         // Tag each event with its faction for fog filtering
         const taggedEvents = [
@@ -2594,6 +2620,36 @@ export class UIController {
           if (ev.action?.type === 'summon' && ev.result?.success) {
             const logLine = ev.result?.log?.[0] ?? '';
             summons.push(logLine || 'Unit summoned');
+          }
+
+          // ── Resource tracking ─────────────────────────────────────────────
+          if (ev.result?.success) {
+            // Resources found: collect lootItems from explore results
+            if (ev.action?.type === 'explore') {
+              for (const item of ev.result.lootItems ?? []) {
+                if (!item.startsWith('+')) continue;
+                const icon = item.slice(1);
+                // Skip weapons (⚔) and horses (🐴) — not consumable resources
+                if (icon !== '⚔' && icon !== '🐴') _addRes(foundRes, icon);
+              }
+            }
+            // Resources spent: summon
+            if (ev.action?.type === 'summon') {
+              const log0 = ev.result?.log?.[0] ?? '';
+              if (log0.includes('Iron Golem'))      _addRes(usedRes, '⚙', 2);
+              else if (log0.includes('Wood Golem')) _addRes(usedRes, '🪵', 2);
+              else                                  _addRes(usedRes, 'res', 2);
+            }
+            // Resources spent: fortify
+            if (ev.action?.type === 'fortify') {
+              const log0 = ev.result?.log?.[0] ?? '';
+              _addRes(usedRes, log0.includes('metal') ? '⚙' : '🪵');
+            }
+            // Resources spent: use-item (only trackable consumables)
+            if (ev.action?.type === 'use_item') {
+              const icon = RES_ICON_MAP[ev.action?.item];
+              if (icon) _addRes(usedRes, icon);
+            }
           }
         }
       }
@@ -2650,6 +2706,20 @@ export class UIController {
         }
         for (const s of summons) {
           html += `<div class="summary-summon">✦ ${s}</div>`;
+        }
+
+        // Resource economy rows
+        const foundEntries = Object.entries(foundRes);
+        const usedEntries  = Object.entries(usedRes);
+        if (foundEntries.length > 0) {
+          const foundStr = foundEntries.map(([icon, n]) => `${n}${icon}`).join(' ');
+          html += `<div class="summary-resources found">📦 Found: ${foundStr}</div>`;
+        }
+        if (usedEntries.length > 0) {
+          const usedStr = usedEntries.map(([icon, n]) =>
+            icon === 'res' ? `${n} res` : `${n}${icon}`
+          ).join(' ');
+          html += `<div class="summary-resources used">📤 Spent: ${usedStr}</div>`;
         }
 
         // Node control changes
@@ -2795,12 +2865,6 @@ function btn(label, cls, disabled = '', extra = '') {
   return `<button class="action-btn ${cls}" ${disabled} ${extra}>${label}</button>`;
 }
 
-function _summonLabel(witchInv) {
-  if ((witchInv.metal || 0) >= 2) return '🔩 Iron Golem (2⚙)';
-  if ((witchInv.wood  || 0) >= 2) return '🪵 Wood Golem (2🪵)';
-  const total = Object.values(witchInv).reduce((s, v) => s + (v || 0), 0);
-  return total >= 2 ? '🌑 Minion (2 res)' : '🌑 Summon';
-}
 
 function _visibleUnitsAt(state, col, row) {
   if (!state.fogOfWar) return state.entities.filter(e => e.alive && e.col === col && e.row === row);
