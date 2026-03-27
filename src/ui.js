@@ -10,6 +10,8 @@ import {
   executeFortify, executeSummon, executeUseItem, executeUseAbility,
 } from './actions.js';
 import { PlanActionType, computeGhostState } from './planner.js';
+import { compileTurnBattleSummary } from './battle-utils.js';
+import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
 import { buildPlanStepsHtml, buildPlayerStatusHtml, buildObjectivesHtml } from './ui-render.js';
 
@@ -2604,6 +2606,15 @@ export class UIController {
       }
       if (eventsEl) {
         let html = '';
+
+        // Combat summary — aggregate damage between each pair of combatants
+        const battleLines = compileTurnBattleSummary(
+          steps ?? [], this.state.entities, ResEventType, PlanActionType,
+        );
+        for (const line of battleLines) {
+          html += `<div class="summary-combat">${line}</div>`;
+        }
+
         for (const n of kills) {
           html += `<div class="summary-kill">☠ ${n} slain</div>`;
         }
