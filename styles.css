@@ -2594,3 +2594,145 @@ canvas { touch-action: pan-x pan-y; }
   text-transform: uppercase;
 }
 .admin-link:hover { opacity: 1; color: var(--text); text-decoration: underline; }
+
+/* ── Spectator mode ──────────────────────────────────────────────────────────── */
+
+/* Hide planning/action UI when body has .spectator-mode class */
+body.spectator-mode #plan-panel    { display: none !important; }
+body.spectator-mode #end-turn-btn  { display: none !important; }
+body.spectator-mode #cancel-wrap   { display: none !important; }
+body.spectator-mode #inventory-btn { display: none !important; }
+body.spectator-mode #unit-stats-bar{ display: none; }
+body.spectator-mode #game-over     { display: none; }
+body.spectator-mode #setup-screen  { display: none !important; }
+body.spectator-mode #game-screen   { display: flex !important; }
+
+/* Player ready panel (right side during planning) */
+#sp-ready-panel {
+  width: 180px;
+  flex-shrink: 0;
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sp-ready-header {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+#sp-ready-list {
+  padding: 0.4rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sp-ready-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  padding: 3px 4px;
+  border-radius: 3px;
+}
+.sp-ready-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-dim);
+}
+.sp-ready-dot.submitted { background: var(--green); }
+.sp-ready-name { color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-ready-faction-hero  { color: var(--hero); }
+.sp-ready-faction-witch { color: var(--witch); }
+
+.spectator-banner {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  background: rgba(13, 15, 22, 0.85);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  padding: 0.3rem 1rem;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  pointer-events: none;
+  letter-spacing: 0.08em;
+}
+.spectator-banner .live-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  margin-right: 0.4rem;
+  vertical-align: middle;
+  animation: pulse 2s infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.spectator-info {
+  position: fixed;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  background: rgba(13, 15, 22, 0.9);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.4rem 1.2rem;
+  font-size: 0.85rem;
+  color: var(--text);
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+}
+.spectator-info .faction-hero  { color: var(--hero); }
+.spectator-info .faction-witch { color: var(--witch); }
+.spectator-info .round-info    { color: var(--text-dim); }
+
+#spectate-status {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--text-dim);
+  font-size: 1.2rem;
+  font-style: italic;
+  z-index: 999;
+}
+
+#spectate-game-over {
+  display: none;
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1001;
+  background: rgba(13, 15, 22, 0.95);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1.5rem 2.5rem;
+  text-align: center;
+}
+#spectate-game-over h2 {
+  font-size: 1.8rem;
+  color: var(--day);
+  margin-bottom: 0.5rem;
+}
+#spectate-game-over p {
+  color: var(--text);
+  margin-bottom: 1rem;
+}

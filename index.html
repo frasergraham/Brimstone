@@ -365,6 +365,12 @@
         <div id="chronicle-mini"></div>
       </div>
 
+      <!-- Spectator ready panel (shown during planning phase) -->
+      <div id="sp-ready-panel" style="display:none">
+        <div class="sp-ready-header">📋 Planning</div>
+        <div id="sp-ready-list"></div>
+      </div>
+
       <!-- Plan panel — slides in during planning phase -->
       <div id="plan-panel" class="plan-panel" style="display:none">
         <!-- Collapse tab — always visible so the panel can be reopened -->
@@ -523,6 +529,21 @@
         <button id="btn-view-map" class="setup-btn">View Map</button>
       </div>
     </div>
+  </div>
+
+  <!-- Spectator chrome (hidden until spectator mode activated) -->
+  <div class="spectator-banner" id="spectator-banner" style="display:none">
+    <span class="live-dot"></span>SPECTATING
+  </div>
+  <div class="spectator-info" id="spectator-info" style="display:none">
+    <span class="faction-hero" id="sp-hero">-</span>
+    <span class="round-info"   id="sp-round">-</span>
+    <span class="faction-witch" id="sp-witch">-</span>
+  </div>
+  <div id="spectate-status" style="display:none">Connecting...</div>
+  <div id="spectate-game-over" style="display:none">
+    <h2 id="sp-winner-text"></h2>
+    <p  id="sp-win-reason"></p>
   </div>
 
   <script type="module" src="src/main.js"></script>
