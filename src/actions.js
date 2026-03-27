@@ -12,6 +12,7 @@ export const ActionType = Object.freeze({
   MOVE:         'move',
   EXPLORE:      'explore',
   BATTLE:       'battle',
+  BATTLE_HEX:   'battle_hex',  // Blind attack on a hex — for use through fog of war
   FORTIFY:      'fortify',
   SUMMON:       'summon',
   USE_ITEM:     'use_item',
@@ -209,12 +210,26 @@ export function getValidActions(state, actor) {
     actions.push({ type: ActionType.EXPLORE, targets: [{ col: actor.col, row: actor.row }] });
   }
 
-  // Battle
+  // Battle — targets visible enemies (UI applies fog filter on highlights)
   const battleTargets = [
     ...sameHexEnemies(state, actor),
     ...adjacentEnemies(state, actor),
   ];
   if (battleTargets.length) actions.push({ type: ActionType.BATTLE, targets: battleTargets });
+
+  // Battle Hex — blind attack on any adjacent non-river hex (for attacking through fog).
+  // Distinct from BATTLE: no enemy must be known to be present.
+  // At resolution: attacks a random enemy on the hex; skips if hex is empty.
+  const battleHexTargets = [
+    { col: actor.col, row: actor.row }, // same hex (co-located)
+    ...getNeighbors(actor.col, actor.row),
+  ].filter(n => {
+    const nt = tile(state, n.col, n.row);
+    return nt && nt.type !== TileType.RIVER;
+  });
+  if (battleHexTargets.length) {
+    actions.push({ type: ActionType.BATTLE_HEX, targets: battleHexTargets });
+  }
 
   // Fortify — hero on any tile (not river), cap at 4, uses shared inventory.
   // Always included when contextually valid; affordable=false when no resources.

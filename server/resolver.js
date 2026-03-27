@@ -142,7 +142,8 @@ function runAction(state, action, faction, playerId = null) {
       );
       if (enemies.length === 0) return { kind: 'skip', reason: 'No enemy on target hex.' };
 
-      const target     = enemies[0];
+      // Pick a random enemy when multiple units occupy the hex
+      const target     = enemies[Math.floor(Math.random() * enemies.length)];
       const actorSnap  = snapEntity(entity);
       const targetSnap = snapEntity(target);
       const r = executeBattle(state, entity, target);

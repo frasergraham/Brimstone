@@ -899,14 +899,39 @@ export class UIController {
     if (!actionType || actionType === ActionType.MOVE) {
       const a = this._validActions.find(a => a.type === ActionType.MOVE);
       if (a) renderer.highlightHexes = a.targets.map(t => ({ ...t, color: 'rgba(60,220,80,0.22)' }));
-      // Also highlight enemy hexes in red so clicking them directly queues an attack
+      // Highlight enemy hexes in red — but only VISIBLE ones when fog is active.
+      // Fogged enemies must be attacked via the explicit "Attack Hex" action instead.
       const b = this._validActions.find(a => a.type === ActionType.BATTLE);
-      if (b) renderer.highlightHexes = renderer.highlightHexes.concat(
-        b.targets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,60,60,0.55)' }))
-      );
+      if (b) {
+        const state = this.state;
+        let visTargets = b.targets;
+        if (state.fogOfWar && this._selectedEntity) {
+          const visHexes = this._selectedEntity.owner === 'hero'
+            ? getVisibleEnemyHexes(state)
+            : getVisibleHeroHexes(state);
+          visTargets = b.targets.filter(t => visHexes.has(hexKey(t.col, t.row)));
+        }
+        renderer.highlightHexes = renderer.highlightHexes.concat(
+          visTargets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,60,60,0.55)' }))
+        );
+      }
     } else if (actionType === ActionType.BATTLE) {
       const a = this._validActions.find(a => a.type === ActionType.BATTLE);
-      if (a) renderer.highlightHexes = a.targets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,60,60,0.55)' }));
+      if (a) {
+        const state = this.state;
+        let visTargets = a.targets;
+        if (state.fogOfWar && this._selectedEntity) {
+          const visHexes = this._selectedEntity.owner === 'hero'
+            ? getVisibleEnemyHexes(state)
+            : getVisibleHeroHexes(state);
+          visTargets = a.targets.filter(t => visHexes.has(hexKey(t.col, t.row)));
+        }
+        renderer.highlightHexes = visTargets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,60,60,0.55)' }));
+      }
+    } else if (actionType === ActionType.BATTLE_HEX) {
+      // Highlight all adjacent non-river hexes as potential targets
+      renderer.highlightHexes = (this._awaitingTarget.hexTargets ?? [])
+        .map(t => ({ col: t.col, row: t.row, color: 'rgba(220,120,40,0.50)' }));
     }
   }
 
@@ -1084,6 +1109,43 @@ export class UIController {
       this._updateSidebar();
       this.onRedraw();
       this._maybeShowNoActionsDialog();
+
+    } else if (actionType === ActionType.BATTLE_HEX) {
+      this._awaitingTarget = null;
+      this.renderer.highlightHexes = [];
+
+      if (this._planMode) {
+        this._addToPlan({ type: PlanActionType.BATTLE_HEX, entityId: actor.id, targetCol: hex.col, targetRow: hex.row });
+        if (actor.alive) this._selectEntity(actor);
+        else this._clearSelection();
+        this._updateSidebar();
+        this.onRedraw();
+        return;
+      }
+      // In non-plan mode, execute immediately (used in direct-action / online mode)
+      if (this.mp?.active) {
+        this.mp.sendAction('battle_hex', { entityId: actor.id, targetCol: hex.col, targetRow: hex.row });
+        this._clearSelection();
+        this._updateSidebar();
+        this.onRedraw();
+        return;
+      }
+      // Offline direct-action: attempt battle against whatever is on the hex
+      const hexEnemies = state.entities.filter(
+        e => e.alive && e.owner !== actor.owner && e.col === hex.col && e.row === hex.row
+      );
+      if (hexEnemies.length > 0) {
+        const target = hexEnemies[Math.floor(Math.random() * hexEnemies.length)];
+        this._awaitingTarget = { actionType: ActionType.BATTLE, actor };
+        this._handleTargetClick(hex);
+      } else {
+        state.addLog('No enemy found on that hex.', actor.owner);
+        state.spendAction(1);
+      }
+      if (actor.alive) this._selectEntity(actor);
+      else this._clearSelection();
+      this._updateSidebar();
+      this.onRedraw();
     }
   }
 
@@ -1148,7 +1210,14 @@ export class UIController {
           regularHtml += btn('🔍 Explore', 'explore', dis, `data-action="explore"`);
           break;
         case ActionType.BATTLE:
-          // Attack is now triggered directly by clicking a red-highlighted enemy hex — no popup button needed.
+          // Attack is triggered directly by clicking a red-highlighted visible-enemy hex — no popup button needed.
+          break;
+        case ActionType.BATTLE_HEX:
+          // "Attack Hex" — lets the player attack a hex that may be hidden by fog of war.
+          // Only show in planning mode (resolution handles the skip if the hex turns out empty).
+          if (this._planMode) {
+            regularHtml += btn('⚔ Attack Hex', 'battle-hex', dis, `data-action="attack_hex"`);
+          }
           break;
         case ActionType.FORTIFY: {
           // Use projected inventory in plan mode so queued fortifies reduce affordability
@@ -1461,8 +1530,9 @@ export class UIController {
 
     if (targeting && hint) {
       const labels = {
-        [ActionType.BATTLE]: 'Tap an enemy to attack',
-        [ActionType.SUMMON]: 'Tap an adjacent empty hex',
+        [ActionType.BATTLE]:     'Tap an enemy to attack',
+        [ActionType.SUMMON]:     'Tap an adjacent empty hex',
+        [ActionType.BATTLE_HEX]: 'Tap a hex to attack (skips if empty)',
       };
       hint.textContent = labels[this._awaitingTarget.actionType] ?? '';
     }
@@ -1600,6 +1670,18 @@ export class UIController {
           this.renderer.highlightHexes = summonAction.targets.map(t => ({ ...t, color: 'rgba(180,80,200,0.30)' }));
         }
         state.addLog('Click an adjacent empty hex to raise a unit.');
+        this._updateSidebar();
+        this.onRedraw();
+        break;
+      }
+
+      case 'attack_hex': {
+        _hideActionPopup();
+        const bhAction = this._validActions.find(a => a.type === ActionType.BATTLE_HEX);
+        const hexTargets = bhAction?.targets ?? [];
+        this._awaitingTarget = { actionType: ActionType.BATTLE_HEX, actor: entity, hexTargets };
+        renderer.highlightHexes = hexTargets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,120,40,0.50)' }));
+        state.addLog('Click a hex to attack it (skips if empty).');
         this._updateSidebar();
         this.onRedraw();
         break;
