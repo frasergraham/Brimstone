@@ -1829,6 +1829,11 @@ canvas { touch-action: pan-x pan-y; }
   flex-wrap: wrap;
 }
 
+.round-summary-gameover-btns {
+  display: flex;
+  gap: 0.5rem;
+}
+
 .summary-speed-btn {
   background: var(--bg-input, #1e1e2a);
   border: 1px solid var(--border);
@@ -2525,6 +2530,15 @@ canvas { touch-action: pan-x pan-y; }
 }
 .summary-node.hero-text  { color: var(--hero); }
 .summary-node.witch-text { color: var(--witch); }
+.summary-game-over {
+  border-top: 1px solid rgba(255,255,255,0.15);
+  margin-top: 0.6rem;
+  padding-top: 0.5rem;
+  font-weight: bold;
+  font-size: 0.9rem;
+}
+.summary-game-over.hero-text  { color: var(--hero); }
+.summary-game-over.witch-text { color: var(--witch); }
 
 /* Resolution overlay */
 #resolution-overlay {

@@ -2509,7 +2509,7 @@ export class UIController {
       const el = this._el('round-summary');
       if (!el) { resolve('next'); return; }
 
-      const { prevScore, prevNodes, humanFaction, fogOfWar } = opts;
+      const { prevScore, prevNodes, humanFaction, fogOfWar, gameOver, winner, winReason } = opts;
 
       // Collect kills, survivors found, and summons from steps
       // with fog-of-war filtering: skip opponent-only events the player can't see
@@ -2566,7 +2566,14 @@ export class UIController {
 
       const titleEl  = el.querySelector('.round-summary-title');
       const eventsEl = this._el('round-summary-events');
-      if (titleEl)  titleEl.textContent = `Round ${roundNum ?? ''} complete`;
+      if (titleEl) {
+        if (gameOver) {
+          const isWin = winner === humanFaction;
+          titleEl.textContent = isWin ? 'Victory!' : 'Defeat';
+        } else {
+          titleEl.textContent = `Round ${roundNum ?? ''} complete`;
+        }
+      }
       if (eventsEl) {
         let html = '';
         for (const n of kills) {
@@ -2633,6 +2640,12 @@ export class UIController {
           </div>`;
         }
 
+        // Game-over: insert win reason at the end
+        if (gameOver && winReason) {
+          const cls = winner === humanFaction ? 'hero-text' : 'witch-text';
+          html += `<div class="summary-game-over ${cls}">${winReason}</div>`;
+        }
+
         eventsEl.innerHTML = html || `<div class="summary-neutral">No notable events this round.</div>`;
       }
 
@@ -2654,21 +2667,45 @@ export class UIController {
         });
       }
 
-      el.classList.add('visible');
-
       const nextBtn   = this._el('round-summary-next');
       const replayBtn = this._el('round-summary-replay');
+      const actionsEl = el.querySelector('.round-summary-actions');
+
+      // Game-over: replace normal actions with play-again / view-map buttons
+      let gameOverBtns = null;
+      if (gameOver && actionsEl) {
+        // Hide normal buttons
+        if (nextBtn)   nextBtn.style.display   = 'none';
+        // Keep replay visible
+        gameOverBtns = document.createElement('div');
+        gameOverBtns.className = 'round-summary-gameover-btns';
+        gameOverBtns.innerHTML =
+          `<button class="plan-btn primary" data-action="restart">Play Again</button>` +
+          `<button class="plan-btn secondary" data-action="viewmap">View Map</button>`;
+        actionsEl.appendChild(gameOverBtns);
+      } else if (nextBtn) {
+        nextBtn.style.display = '';
+        nextBtn.textContent   = 'Next Turn →';
+      }
+
+      el.classList.add('visible');
 
       const cleanup = () => {
         el.classList.remove('visible');
         nextBtn?.removeEventListener('click', onNext);
         replayBtn?.removeEventListener('click', onReplay);
+        if (gameOverBtns) gameOverBtns.remove();
+        if (nextBtn) nextBtn.style.display = '';
       };
       const onNext   = () => { cleanup(); resolve('next'); };
       const onReplay = () => { cleanup(); resolve('replay'); };
 
       nextBtn?.addEventListener('click', onNext);
       replayBtn?.addEventListener('click', onReplay);
+      if (gameOverBtns) {
+        gameOverBtns.querySelector('[data-action="restart"]')?.addEventListener('click', () => { cleanup(); resolve('restart'); });
+        gameOverBtns.querySelector('[data-action="viewmap"]')?.addEventListener('click', () => { cleanup(); resolve('viewmap'); });
+      }
     });
   }
 

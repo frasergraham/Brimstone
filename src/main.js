@@ -249,6 +249,7 @@ async function _runLocalResolution() {
     do {
       action = await ui._showResolutionSummary(steps, state.round - 1, {
         prevScore, prevNodes, humanFaction, fogOfWar: state.fogOfWar,
+        gameOver: state.gameOver, winner: state.winner, winReason: state.winReason,
       });
       if (action === 'replay') {
         state.entities = preReplayEntities;
@@ -258,10 +259,20 @@ async function _runLocalResolution() {
     } while (action === 'replay');
     // Animate score bar changes after summary is dismissed
     ui._animateScoreBar(prevScore, prevNodes);
-  }
 
-  if (state.gameOver) {
-    // Clean up save on game over
+    if (state.gameOver) {
+      if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
+      if (action === 'viewmap') {
+        // Lift fog so the player can inspect the final board
+        state.fogOfWar = false;
+        redraw();
+      } else if (action === 'restart') {
+        _doRestart();
+      }
+      return;
+    }
+  } else if (state.gameOver) {
+    // Autoplay or no human — use the legacy game-over screen
     if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
     showGameOver();
     return;
@@ -480,8 +491,39 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     // Apply the full post-step entity state now that all dialogs for this step
     // have been shown.  This reveals HP changes, deaths, and new encounter
     // entities only after the player has seen the relevant dialog/animation.
+    // Snapshot node control BEFORE applying post-step entities so we can detect captures this step.
+    const preStepNodeOwners = state.witchObjectives?.map(obj => {
+      const holder = step.entitySnapshot?.find(e => e.alive && e.col === obj.col && e.row === obj.row);
+      return holder?.owner ?? null;
+    });
+
     state.entities = postEntities;
     redrawFn();
+
+    // Animate node dot changes that happened this step (real-time capture feedback)
+    if (ui && state.witchObjectives && preStepNodeOwners) {
+      ui._renderObjectives();
+      const barEl = document.getElementById('score-bar-content');
+      if (barEl) {
+        const dots = barEl.querySelectorAll('.node-dot');
+        let hadNodeChange = false;
+        preStepNodeOwners.forEach((prevOwner, idx) => {
+          if (idx >= dots.length) return;
+          const obj = state.witchObjectives[idx];
+          const postHolder = postEntities.find(e => e.alive && e.col === obj.col && e.row === obj.row);
+          const postOwner = postHolder?.owner ?? null;
+          if (postOwner !== prevOwner) {
+            dots[idx].classList.add('node-dot-glow');
+            hadNodeChange = true;
+          }
+        });
+        if (hadNodeChange) {
+          setTimeout(() => {
+            dots.forEach(d => d.classList.remove('node-dot-glow'));
+          }, 2000);
+        }
+      }
+    }
 
     if (hadMove || hadBattle) {
       if (!_autoplay) {
@@ -622,7 +664,7 @@ document.getElementById('btn-start-local').addEventListener('click', () => {
   else if (mode === 'autoplay') init(true, true, true);
 });
 
-document.getElementById('btn-restart').addEventListener('click', () => {
+function _doRestart() {
   const el = document.getElementById('game-over');
   if (el) { el.style.display = 'none'; delete el.dataset.shown; }
 
@@ -643,7 +685,9 @@ document.getElementById('btn-restart').addEventListener('click', () => {
     document.getElementById('setup-screen').style.display = 'flex';
     document.getElementById('game-screen').style.display  = 'none';
   }
-});
+}
+
+document.getElementById('btn-restart').addEventListener('click', _doRestart);
 
 function _esc(str) {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -1354,6 +1398,7 @@ function _createMpClient() {
           do {
             action = await ui._showResolutionSummary(steps, (finalState.round ?? state.round) - 1, {
               prevScore, prevNodes, humanFaction: mp.myFaction, fogOfWar: state.fogOfWar,
+              gameOver: state.gameOver, winner: state.winner, winReason: state.winReason,
             });
             if (action === 'replay') {
               state.entities = _preReplayEntitiesOnline;
@@ -1367,11 +1412,22 @@ function _createMpClient() {
           _resolving = false;
           // Animate score bar changes after summary is dismissed
           ui._animateScoreBar(prevScore, prevNodes);
+
+          if (state.gameOver) {
+            if (action === 'viewmap') {
+              state.fogOfWar = false;
+              redrawOnline();
+            } else if (action === 'restart') {
+              _doRestart();
+            }
+            return;
+          }
+        } else if (state.gameOver) {
+          showGameOver();
+          return;
         }
 
-        if (state.gameOver) {
-          showGameOver();
-        } else {
+        if (!state.gameOver) {
           // Planning mode: never show "no actions" dialog here — a new planning
           // phase is always imminent. Apply any buffered planning phase immediately.
           if (_pendingPlanningPhase) {

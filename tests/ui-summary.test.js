@@ -200,3 +200,88 @@ describe('reckoning scoring line', () => {
     assert.ok(line.includes('1 Power Node to'));
   });
 });
+
+// ── Game-over summary customization ─────────────────────────────────────────
+
+describe('game-over summary title', () => {
+  function getSummaryTitle(gameOver, winner, humanFaction, roundNum) {
+    if (gameOver) {
+      const isWin = winner === humanFaction;
+      return isWin ? 'Victory!' : 'Defeat';
+    }
+    return `Round ${roundNum ?? ''} complete`;
+  }
+
+  test('normal round shows round number', () => {
+    assert.equal(getSummaryTitle(false, null, 'hero', 5), 'Round 5 complete');
+  });
+
+  test('victory when hero wins and player is hero', () => {
+    assert.equal(getSummaryTitle(true, 'hero', 'hero', 10), 'Victory!');
+  });
+
+  test('defeat when witch wins and player is hero', () => {
+    assert.equal(getSummaryTitle(true, 'witch', 'hero', 10), 'Defeat');
+  });
+
+  test('victory when witch wins and player is witch', () => {
+    assert.equal(getSummaryTitle(true, 'witch', 'witch', 10), 'Victory!');
+  });
+
+  test('defeat when hero wins and player is witch', () => {
+    assert.equal(getSummaryTitle(true, 'hero', 'witch', 10), 'Defeat');
+  });
+});
+
+// ── Per-step node capture detection ─────────────────────────────────────────
+
+describe('per-step node capture detection', () => {
+  // Mirrors the per-step logic in _animateResolutionSteps
+  function detectStepNodeChanges(witchObjectives, preStepEntities, postStepEntities) {
+    const preOwners = witchObjectives.map(obj => {
+      const holder = preStepEntities.find(e => e.alive && e.col === obj.col && e.row === obj.row);
+      return holder?.owner ?? null;
+    });
+    const changes = [];
+    preOwners.forEach((prevOwner, idx) => {
+      const obj = witchObjectives[idx];
+      const postHolder = postStepEntities.find(e => e.alive && e.col === obj.col && e.row === obj.row);
+      const postOwner = postHolder?.owner ?? null;
+      if (postOwner !== prevOwner) {
+        changes.push({ label: obj.label, from: prevOwner, to: postOwner });
+      }
+    });
+    return changes;
+  }
+
+  const objectives = [
+    { col: 3, row: 4, label: 'Dark Grove' },
+    { col: 7, row: 2, label: 'Blood Altar' },
+  ];
+
+  test('detects unit moving onto a node in a single step', () => {
+    const pre  = [{ alive: true, col: 2, row: 4, owner: 'hero', id: 1 }];
+    const post = [{ alive: true, col: 3, row: 4, owner: 'hero', id: 1 }];
+    const changes = detectStepNodeChanges(objectives, pre, post);
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].label, 'Dark Grove');
+    assert.equal(changes[0].to, 'hero');
+  });
+
+  test('no change when node control stays the same', () => {
+    const pre  = [{ alive: true, col: 3, row: 4, owner: 'hero', id: 1 }];
+    const post = [{ alive: true, col: 3, row: 4, owner: 'hero', id: 1 }];
+    const changes = detectStepNodeChanges(objectives, pre, post);
+    assert.equal(changes.length, 0);
+  });
+
+  test('detects unit leaving a node', () => {
+    const pre  = [{ alive: true, col: 7, row: 2, owner: 'witch', id: 1 }];
+    const post = [{ alive: true, col: 8, row: 2, owner: 'witch', id: 1 }];
+    const changes = detectStepNodeChanges(objectives, pre, post);
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].label, 'Blood Altar');
+    assert.equal(changes[0].from, 'witch');
+    assert.equal(changes[0].to, null);
+  });
+});
