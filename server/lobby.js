@@ -262,10 +262,13 @@ function _startPlanningTimer(room) {
   room.turnTimer = setTimeout(() => {
     room.turnTimer = null;
     if (room.state.gameOver || !room.state.planningPhase) return;
-    // Auto-submit empty plans for any human who hasn't submitted yet
+    // Auto-submit empty plans for any seat (human or AI) that hasn't submitted yet.
+    // Without the AI check the game would hang indefinitely if AI plan generation fails.
     for (const seat of room.players) {
-      if (!seat.isAI && !room.state.playerReady.get(seat.playerId)) {
-        send(seat.ws, { type: 'error', message: 'Planning time expired — an empty plan was submitted.' });
+      if (!room.state.playerReady.get(seat.playerId)) {
+        if (!seat.isAI) {
+          send(seat.ws, { type: 'error', message: 'Planning time expired — an empty plan was submitted.' });
+        }
         _submitPlayerPlan(room, seat.playerId, []);
       }
     }
@@ -338,7 +341,13 @@ function _runAIPlanSubmission(room) {
     setTimeout(() => {
       if (!rooms.has(room.id)) return;
       if (room.state.gameOver || !room.state.planningPhase) return;
-      const plan = ai.generatePlan();
+      let plan;
+      try {
+        plan = ai.generatePlan();
+      } catch (err) {
+        console.error(`[room ${room.id}] AI plan generation error for ${playerId}:`, err);
+        plan = [];
+      }
       _submitPlayerPlan(room, playerId, plan);
     }, delay);
   }

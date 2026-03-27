@@ -517,3 +517,77 @@ describe('addLog — owner tagging', () => {
     assert.ok(state.log.length <= 100, 'Log should not exceed 100 entries');
   });
 });
+
+// ── submitPlayerPlan (multiplayer per-player path) ────────────────────────────
+
+describe('submitPlayerPlan (multiplayer)', () => {
+  function makeMultiplayerState() {
+    const state = new GameState(true, false);
+    // Simulate what _addSeat does in the lobby: patch synthetic IDs to real UUIDs.
+    const heroId  = 'player-hero-uuid';
+    const witchId = 'ai-witch-uuid';
+    state.players[0].id = heroId;
+    state.players[1].id = witchId;
+    // Also patch ownerId on the leader entities so AI helpers work correctly.
+    const heroEntity  = state.entities.find(e => e.type === EntityType.HERO);
+    const witchEntity = state.entities.find(e => e.type === EntityType.WITCH);
+    if (heroEntity)  heroEntity.ownerId  = heroId;
+    if (witchEntity) witchEntity.ownerId = witchId;
+    return { state, heroId, witchId };
+  }
+
+  test('allReady is false until both players submit', () => {
+    const { state, heroId, witchId } = makeMultiplayerState();
+    state.startPlanning();
+    const r1 = state.submitPlayerPlan(witchId, []);
+    assert.equal(r1, false, 'not ready after first submission');
+    const r2 = state.submitPlayerPlan(heroId, []);
+    assert.equal(r2, true, 'ready after both submissions');
+  });
+
+  test('playerReady is reset between rounds', () => {
+    const { state, heroId, witchId } = makeMultiplayerState();
+
+    // Round 1
+    state.startPlanning();
+    state.submitPlayerPlan(witchId, []);
+    state.submitPlayerPlan(heroId, []);
+    state.endRound();
+
+    // Round 2: playerReady must be reset so both players can submit again
+    state.startPlanning();
+    assert.equal(state.playerReady.get(heroId),  false, 'hero ready flag reset for round 2');
+    assert.equal(state.playerReady.get(witchId), false, 'witch ready flag reset for round 2');
+    const r1 = state.submitPlayerPlan(witchId, []);
+    assert.equal(r1, false, 'not ready after first submission in round 2');
+    const r2 = state.submitPlayerPlan(heroId, []);
+    assert.equal(r2, true, 'ready after both submissions in round 2');
+  });
+
+  test('double submission throws in the same round', () => {
+    const { state, witchId } = makeMultiplayerState();
+    state.startPlanning();
+    state.submitPlayerPlan(witchId, []);
+    assert.throws(
+      () => state.submitPlayerPlan(witchId, []),
+      /already submitted/i,
+    );
+  });
+
+  test('submitting for unknown playerId throws', () => {
+    const { state } = makeMultiplayerState();
+    state.startPlanning();
+    assert.throws(
+      () => state.submitPlayerPlan('nonexistent-player', []),
+      /unknown player/i,
+    );
+  });
+
+  test('playerReady keys match state.players ids after startPlanning', () => {
+    const { state, heroId, witchId } = makeMultiplayerState();
+    state.startPlanning();
+    assert.ok(state.playerReady.has(heroId),  'playerReady initialized with heroId');
+    assert.ok(state.playerReady.has(witchId), 'playerReady initialized with witchId');
+    assert.equal(state.playerReady.size, 2,   'exactly 2 entries in playerReady');
+  });
+});
