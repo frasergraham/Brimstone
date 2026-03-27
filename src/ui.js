@@ -665,9 +665,22 @@ export class UIController {
 
     if (statusEl && !this._planSubmitted) statusEl.textContent = '';
 
-    // Keep the collapse-tab count badge in sync
+    // Keep the collapse-tab count badge in sync — show count and color by budget state
     const tabCount = this._el('plan-tab-count');
-    if (tabCount) tabCount.textContent = this._plan.length > 0 ? this._plan.length : '';
+    if (tabCount) {
+      const budgetCost = this._plan.filter(a =>
+        a.type !== PlanActionType.EQUIP_WEAPON && a.type !== PlanActionType.USE_ITEM
+      ).length;
+      tabCount.textContent = budgetCost;
+      const foodAvail = this.state?.inventory?.shared?.[ResourceType.FOOD] || 0;
+      if (budgetCost > this._planBudget + foodAvail) {
+        tabCount.className = 'plan-tab-count plan-tab-over';
+      } else if (budgetCost > this._planBudget) {
+        tabCount.className = 'plan-tab-count plan-tab-food';
+      } else {
+        tabCount.className = 'plan-tab-count plan-tab-ok';
+      }
+    }
 
     // Update collapse-button arrow direction
     const panel = this._el('plan-panel');

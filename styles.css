@@ -2181,13 +2181,14 @@ canvas { touch-action: pan-x pan-y; }
 }
 .plan-tab-count {
   font-size: 0.65rem;
-  color: var(--hero);
   font-weight: 700;
   min-width: 0.9rem;
   text-align: center;
   writing-mode: horizontal-tb;
 }
-.plan-panel[data-witch-mode] .plan-tab-count { color: var(--witch); }
+.plan-tab-ok   { color: #4caf7d; }
+.plan-tab-food { color: #c8a030; }
+.plan-tab-over { color: #d04040; }
 
 .plan-panel-header {
   padding: 0.5rem 0.75rem;
