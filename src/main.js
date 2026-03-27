@@ -1,7 +1,7 @@
 // Entry point: wires all modules, setup screen flow, resize
 import { GameState, Player } from './game.js';
 import { Renderer }          from './renderer.js';
-import { UIController }      from './ui.js';
+import { UIController, UIMode } from './ui.js';
 import { WitchAI, HeroAI }   from './ai.js';
 import { MultiplayerClient, MirrorState, loadSession, clearSession } from './multiplayer.js';
 import { VERSION }           from './version.js';
@@ -498,9 +498,6 @@ function initOnline(mirrorState, myFaction, mpClient) {
   ui.myPlayerId = mpClient.myPlayerId ?? null;
   ui._players   = state.players ?? [];
 
-  // Show opponent name / online status
-  _updateOnlineStatus(mpClient);
-
   redrawOnline();
 
   requestAnimationFrame(() => {
@@ -520,15 +517,6 @@ function redrawOnline() {
   renderer.draw();
   if (ui) ui._updateSidebar?.();
   if (state?.gameOver) showGameOver();
-}
-
-function _updateOnlineStatus(mpClient) {
-  const el = document.getElementById('online-status');
-  if (!el) return;
-  const faction = mpClient.myFaction;
-  const symbol  = faction === 'hero' ? '⚔' : '✦';
-  el.textContent = `${symbol} Online — Playing as ${faction === 'hero' ? 'Hero' : 'Witch'}`;
-  el.style.display = '';
 }
 
 // ── Window resize ─────────────────────────────────────────────────────────────
@@ -612,7 +600,6 @@ document.getElementById('btn-restart').addEventListener('click', () => {
 
   // Disconnect from server if in online mode
   if (mp) { mp.disconnect(); mp = null; }
-  document.getElementById('online-status').style.display = 'none';
 
   // Reset game objects so initOnline / init start fresh
   renderer = null;
@@ -1275,12 +1262,13 @@ function _createMpClient() {
 
     onOpponentDisconnected(graceMs) {
       const secs = Math.round(graceMs / 1000);
-      const el = document.getElementById('online-status');
-      if (el) el.textContent = `⚠ Opponent disconnected. Waiting ${secs}s for reconnect…`;
+      const statusEl = document.getElementById('plan-status');
+      if (statusEl) statusEl.textContent = `⚠ Opponent disconnected — waiting ${secs}s for reconnect…`;
     },
 
     onOpponentReconnected() {
-      if (mp) _updateOnlineStatus(mp);
+      const statusEl = document.getElementById('plan-status');
+      if (statusEl) statusEl.textContent = '';
     },
 
     onPlanningPhase(payload) {
@@ -1300,6 +1288,7 @@ function _createMpClient() {
 
     onResolutionComplete({ steps, finalState }) {
       if (!ui || !renderer) return;
+      state.resolving = true;   // flag before exitPlanningMode fires its redraw
       ui.exitPlanningMode();
 
       // Use the server's final entity list as the landing state for the animation.
@@ -1359,9 +1348,8 @@ function _createMpClient() {
         showStep('multiplayer');
         _initMpStep();
       } else {
-        // In-game error — flash in status bar
-        const el = document.getElementById('online-status');
-        if (el) { el.textContent = `⚠ ${msg}`; }
+        // In-game error — show as modal dialog
+        if (ui) ui._showResultDialog([`⚠ ${msg}`]);
       }
     },
 
@@ -1396,3 +1384,165 @@ MultiplayerClient.prototype._route = function(msg) {
     showStep('multiplayer');
   }
 };
+
+// ── Spectator mode ────────────────────────────────────────────────────────────
+
+function initSpectator(roomId) {
+  document.body.classList.add('spectator-mode');
+  const statusEl = document.getElementById('spectate-status');
+  statusEl.style.display = '';
+  statusEl.textContent = 'Connecting...';
+
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = window.BRIMSTONE_WS ?? `${protocol}//${location.host}`;
+  const ws = new WebSocket(wsUrl);
+
+  let planningPlayers = [];
+  let submittedIds    = new Set();
+
+  ws.addEventListener('open', () => {
+    statusEl.textContent = 'Joining room...';
+    ws.send(JSON.stringify({ type: 'adminSpectateRoom', roomId }));
+  });
+
+  ws.addEventListener('message', e => {
+    let msg; try { msg = JSON.parse(e.data); } catch { return; }
+    _handleSpectatorMessage(msg);
+  });
+
+  ws.addEventListener('close', () => {
+    statusEl.textContent = 'Disconnected.';
+    statusEl.style.display = '';
+  });
+
+  ws.addEventListener('error', () => {
+    statusEl.textContent = 'Connection error.';
+    statusEl.style.display = '';
+  });
+
+  function _handleSpectatorMessage(msg) {
+    switch (msg.type) {
+      case 'adminSpectateInit': {
+        statusEl.style.display = 'none';
+        document.getElementById('spectator-info').style.display = '';
+        document.getElementById('spectator-banner').style.display = '';
+        const mirrorState = MirrorState.fromSnapshot(msg.state);
+        mirrorState.fogOfWar = false;
+        _initSpectatorUI(mirrorState);
+        _updateSpectatorInfoBar(msg.players, mirrorState);
+        break;
+      }
+      case 'stateUpdate': {
+        const mirrorState = MirrorState.fromSnapshot(msg.state);
+        mirrorState.fogOfWar = false;
+        state = mirrorState;
+        ui?.updateState(mirrorState);
+        _updateSpectatorRoundLabel(mirrorState);
+        _checkSpectatorGameOver(mirrorState);
+        break;
+      }
+      case 'resolutionComplete': {
+        const mirrorState = MirrorState.fromSnapshot(msg.finalState);
+        mirrorState.fogOfWar = false;
+        state = mirrorState;
+        ui?.updateState(mirrorState);
+        _updateSpectatorRoundLabel(mirrorState);
+        _checkSpectatorGameOver(mirrorState);
+        planningPlayers = [];
+        submittedIds = new Set();
+        _renderSpectatorReadyList(planningPlayers, submittedIds);
+        break;
+      }
+      case 'adminPlanningPhase': {
+        document.getElementById('sp-round').textContent = `Round ${msg.round} — ${msg.phase}`;
+        if (msg.players) {
+          planningPlayers = msg.players;
+          submittedIds = new Set();
+          _renderSpectatorReadyList(planningPlayers, submittedIds);
+        }
+        break;
+      }
+      case 'playerSubmitted': {
+        submittedIds.add(msg.playerId);
+        _renderSpectatorReadyList(planningPlayers, submittedIds);
+        break;
+      }
+      case 'resolutionStart': {
+        planningPlayers = [];
+        submittedIds = new Set();
+        _renderSpectatorReadyList(planningPlayers, submittedIds);
+        break;
+      }
+      case 'adminRoomEnded':
+        statusEl.textContent = 'Game ended.';
+        statusEl.style.display = '';
+        break;
+      case 'error':
+        statusEl.textContent = msg.message || 'Error';
+        statusEl.style.display = '';
+        break;
+    }
+  }
+
+  function _initSpectatorUI(mirrorState) {
+    const canvas = document.getElementById('game-canvas');
+    renderer = new Renderer(canvas, mirrorState);
+    renderer.resize();
+    renderer.loadImages();
+    ui = new UIController(canvas, mirrorState, renderer, null, () => renderer.draw(), null, false);
+    ui.setMode(UIMode.SPECTATOR);
+    window.addEventListener('resize', () => { renderer.resize(); renderer.draw(); });
+    renderer.draw();
+  }
+}
+
+function _updateSpectatorInfoBar(players, st) {
+  if (players) {
+    const heroNames  = players.filter(p => p.faction === 'hero').map(p => p.name).join(', ');
+    const witchNames = players.filter(p => p.faction === 'witch').map(p => p.name).join(', ');
+    document.getElementById('sp-hero').textContent  = `⚔ ${heroNames  || 'Hero'}`;
+    document.getElementById('sp-witch').textContent = `✦ ${witchNames || 'Witch'}`;
+  }
+  _updateSpectatorRoundLabel(st);
+}
+
+function _updateSpectatorRoundLabel(st) {
+  document.getElementById('sp-round').textContent = `Round ${st.round} — ${st.phase}`;
+}
+
+function _checkSpectatorGameOver(st) {
+  if (!st.gameOver) return;
+  const goEl    = document.getElementById('spectate-game-over');
+  const winText = document.getElementById('sp-winner-text');
+  const reasonEl = document.getElementById('sp-win-reason');
+  winText.textContent = st.winner === 'hero' ? 'Hero Wins!' : 'Witch Wins!';
+  winText.style.color = st.winner === 'hero' ? 'var(--hero)' : 'var(--witch)';
+  reasonEl.textContent = st.winReason || '';
+  goEl.style.display = '';
+}
+
+function _renderSpectatorReadyList(players, submittedIds) {
+  const panel = document.getElementById('sp-ready-panel');
+  const list  = document.getElementById('sp-ready-list');
+  if (!panel || !list) return;
+  if (players.length === 0) { panel.style.display = 'none'; return; }
+  panel.style.display = 'flex';
+  list.innerHTML = players.map(p => {
+    const submitted = submittedIds.has(p.playerId);
+    const fCls      = `sp-ready-faction-${p.faction}`;
+    const dotCls    = submitted ? 'sp-ready-dot submitted' : 'sp-ready-dot';
+    const status    = submitted ? '✓' : '…';
+    const safeName  = String(p.name).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `<div class="sp-ready-row">
+      <span class="${dotCls}"></span>
+      <span class="sp-ready-name ${fCls}" title="${safeName}">${safeName}</span>
+      <span style="font-size:0.72rem;color:${submitted ? 'var(--green)' : 'var(--text-dim)'}">${status}</span>
+    </div>`;
+  }).join('');
+}
+
+// Auto-start spectator mode when ?spectate=<roomId> or ?room=<roomId> is in the URL.
+// This allows /spectate?room=X (served as index.html) to work automatically.
+const _spectateParam = new URLSearchParams(location.search).get('spectate')
+                    ?? new URLSearchParams(location.search).get('room');
+if (_spectateParam) initSpectator(_spectateParam);

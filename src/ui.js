@@ -10,9 +10,25 @@ import {
   executeFortify, executeSummon, executeUseItem, executeUseAbility,
 } from './actions.js';
 import { PlanActionType, computeGhostState } from './planner.js';
+import { collectUIElements } from './ui-elements.js';
+import { buildPlanStepsHtml, buildPlayerStatusHtml, buildObjectivesHtml } from './ui-render.js';
+
+/** Enum of UI operating modes. */
+export const UIMode = Object.freeze({ LOCAL: 'local', ONLINE: 'online', SPECTATOR: 'spectator' });
 
 export class UIController {
-  constructor(canvas, state, renderer, witchAI, onRedraw, heroAI = null, autoplay = false) {
+  /**
+   * @param {HTMLCanvasElement} canvas
+   * @param {object}            state
+   * @param {object}            renderer
+   * @param {object|null}       witchAI
+   * @param {function}          onRedraw
+   * @param {object|null}       [heroAI]
+   * @param {boolean}           [autoplay]
+   * @param {object|null}       [els]  Pre-collected element bag from collectUIElements().
+   *                                   Pass a fake bag in tests to avoid touching document.
+   */
+  constructor(canvas, state, renderer, witchAI, onRedraw, heroAI = null, autoplay = false, els = null) {
     this.canvas    = canvas;
     this.state     = state;
     this.renderer  = renderer;
@@ -21,6 +37,10 @@ export class UIController {
     this.onRedraw  = onRedraw;
     this.autoplay  = autoplay;
     this.mp        = null;  // set externally when in online mode
+
+    // Injected element bag — tests supply fake elements keyed by DOM ID.
+    // Falls back to document.getElementById at each call site when missing.
+    this._els = els ?? {};
 
     this._selectedEntity  = null;
     this._validActions    = [];
@@ -57,6 +77,40 @@ export class UIController {
     this._bindEvents();
   }
 
+  // ── Element access ───────────────────────────────────────────────────────────
+
+  /**
+   * Look up a DOM element by its HTML id string.
+   * Returns the element from the injected `_els` bag when available
+   * (used in tests), otherwise falls back to document.getElementById.
+   * @param {string} id
+   * @returns {HTMLElement|null}
+   */
+  _el(id) {
+    return (id in this._els) ? this._els[id] : document.getElementById(id);
+  }
+
+  // ── Mode management ──────────────────────────────────────────────────────────
+
+  /**
+   * Switch UI operating mode at runtime.
+   * Replaces the scattered `this.spectator` / `this.mp` / `this.myPlayerId`
+   * flag checks with a single mode enum so transitions (e.g. dead → spectator)
+   * can happen without a page reload.
+   *
+   * @param {string}       mode       UIMode.LOCAL | UIMode.ONLINE | UIMode.SPECTATOR
+   * @param {object}       [opts]
+   * @param {object|null}  [opts.mp]          MultiplayerClient reference (online only)
+   * @param {string|null}  [opts.myPlayerId]  Local player UUID (online only)
+   * @param {Array}        [opts.players]     Full player roster (online only)
+   */
+  setMode(mode, { mp = null, myPlayerId = null, players = [] } = {}) {
+    this.spectator   = (mode === UIMode.SPECTATOR);
+    this.mp          = mp;
+    this.myPlayerId  = myPlayerId;
+    this._players    = players;
+  }
+
   _bindEvents() {
     this.canvas.addEventListener('mousemove', e => this._onMouseMove(e));
     this.canvas.addEventListener('click',     e => this._onClick(e));
@@ -87,35 +141,35 @@ export class UIController {
 
     // Zoom control buttons (+, −, fit)
     const zoomStep = 1.25;
-    document.getElementById('zoom-in')?.addEventListener('click', () => {
+    this._el('zoom-in')?.addEventListener('click', () => {
       const cx = this.canvas.width  / 2;
       const cy = this.canvas.height / 2;
       this.renderer.setZoom(this.renderer.zoomLevel * zoomStep, cx, cy);
       this.onRedraw();
     });
-    document.getElementById('zoom-out')?.addEventListener('click', () => {
+    this._el('zoom-out')?.addEventListener('click', () => {
       const cx = this.canvas.width  / 2;
       const cy = this.canvas.height / 2;
       this.renderer.setZoom(this.renderer.zoomLevel / zoomStep, cx, cy);
       this.onRedraw();
     });
-    document.getElementById('zoom-fit')?.addEventListener('click', () => {
+    this._el('zoom-fit')?.addEventListener('click', () => {
       this.renderer.resize(); // re-measure wrapper after any panel changes
       this.renderer.resetView();
       this.onRedraw();
     });
-    document.getElementById('zoom-me')?.addEventListener('click', () => {
+    this._el('zoom-me')?.addEventListener('click', () => {
       const faction = this._planFaction ?? (!this.state.heroIsAI ? 'hero' : 'witch');
       const units   = this.state.entities.filter(e => e.alive && e.owner === faction);
       if (units.length > 0) this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 400 });
       this.onRedraw();
     });
-    document.getElementById('speed-toggle')?.addEventListener('click', (e) => {
+    this._el('speed-toggle')?.addEventListener('click', (e) => {
       e.stopPropagation();
       this._toggleSpeedPopup();
     });
     // Speed popup option clicks
-    document.getElementById('speed-popup')?.addEventListener('click', (e) => {
+    this._el('speed-popup')?.addEventListener('click', (e) => {
       const btn = e.target.closest('.speed-option');
       if (btn) this._setSpeed(btn.dataset.mode);
     });
@@ -180,19 +234,19 @@ export class UIController {
     }, { passive: false });
 
     // In-game menu
-    document.getElementById('menu-btn')?.addEventListener('click', () => {
-      const popup = document.getElementById('game-menu-popup');
+    this._el('menu-btn')?.addEventListener('click', () => {
+      const popup = this._el('game-menu-popup');
       if (popup) popup.style.display = popup.style.display === 'none' ? 'block' : 'none';
     });
-    document.getElementById('menu-quit-btn')?.addEventListener('click', () => {
-      const popup = document.getElementById('game-menu-popup');
+    this._el('menu-quit-btn')?.addEventListener('click', () => {
+      const popup = this._el('game-menu-popup');
       if (popup) popup.style.display = 'none';
       this.onQuitToMenu?.();
     });
     document.addEventListener('click', e => {
-      const popup = document.getElementById('game-menu-popup');
+      const popup = this._el('game-menu-popup');
       if (!popup || popup.style.display === 'none') return;
-      const btn = document.getElementById('menu-btn');
+      const btn = this._el('menu-btn');
       if (!popup.contains(e.target) && e.target !== btn) popup.style.display = 'none';
     });
     // Mobile: canvas touchend calls e.preventDefault() which suppresses the
@@ -200,33 +254,33 @@ export class UIController {
     // the canvas with the menu open. Use touchstart (fires before preventDefault)
     // to close the popup on outside touches.
     document.addEventListener('touchstart', e => {
-      const popup = document.getElementById('game-menu-popup');
+      const popup = this._el('game-menu-popup');
       if (!popup || popup.style.display === 'none') return;
-      const btn = document.getElementById('menu-btn');
+      const btn = this._el('menu-btn');
       if (!popup.contains(e.target) && e.target !== btn) popup.style.display = 'none';
     }, { passive: true });
 
     // Chronicle: three-state button lives inside #chronicle-mini (wired on each render).
     // chronicle-close / chronicle-sidebar-close close back to 'none'.
-    document.getElementById('chronicle-close')?.addEventListener('click', () => {
+    this._el('chronicle-close')?.addEventListener('click', () => {
       this._setChronicleMode('none');
     });
-    document.getElementById('chronicle-overlay')?.addEventListener('click', e => {
-      if (e.target === document.getElementById('chronicle-overlay')) this._setChronicleMode('none');
+    this._el('chronicle-overlay')?.addEventListener('click', e => {
+      if (e.target === this._el('chronicle-overlay')) this._setChronicleMode('none');
     });
-    document.getElementById('chronicle-sidebar-close')?.addEventListener('click', () => {
+    this._el('chronicle-sidebar-close')?.addEventListener('click', () => {
       this._setChronicleMode('none');
     });
 
 
     // Tile zoom close
-    document.getElementById('tile-zoom-close')?.addEventListener('click', () => this._hideTileDetail());
-    document.getElementById('tile-zoom-overlay')?.addEventListener('click', e => {
-      if (e.target === document.getElementById('tile-zoom-overlay')) this._hideTileDetail();
+    this._el('tile-zoom-close')?.addEventListener('click', () => this._hideTileDetail());
+    this._el('tile-zoom-overlay')?.addEventListener('click', e => {
+      if (e.target === this._el('tile-zoom-overlay')) this._hideTileDetail();
     });
 
     // Cancel-action pill (floating over canvas during battle/summon targeting)
-    document.getElementById('cancel-action-btn')?.addEventListener('click', () => {
+    this._el('cancel-action-btn')?.addEventListener('click', () => {
       const entity = this._selectedEntity;
       if (entity) {
         this._selectEntity(entity);
@@ -239,7 +293,7 @@ export class UIController {
     });
 
     // End Turn / Submit Plan in header
-    document.getElementById('end-turn-btn')?.addEventListener('click', () => {
+    this._el('end-turn-btn')?.addEventListener('click', () => {
       if (this.state.gameOver) return;
       if (this._planMode) { this._doSubmitPlan(); return; }
       if (this._isOpponentTurn()) return;
@@ -247,8 +301,8 @@ export class UIController {
     });
 
     // Plan panel buttons
-    document.getElementById('plan-submit-btn')?.addEventListener('click', () => this._doSubmitPlan());
-    document.getElementById('plan-clear-btn')?.addEventListener('click',  () => {
+    this._el('plan-submit-btn')?.addEventListener('click', () => this._doSubmitPlan());
+    this._el('plan-clear-btn')?.addEventListener('click',  () => {
       if (this._planSubmitted) return;
       this._plan = [];
       this._refreshPlanOverlay();
@@ -256,8 +310,8 @@ export class UIController {
       if (this._selectedEntity) this._selectEntity(this._selectedEntity);
       this.onRedraw();
     });
-    document.getElementById('plan-toggle-btn')?.addEventListener('click', () => this._togglePlanPanel());
-    document.getElementById('plan-tab')?.addEventListener('click',        () => this._togglePlanPanel());
+    this._el('plan-toggle-btn')?.addEventListener('click', () => this._togglePlanPanel());
+    this._el('plan-tab')?.addEventListener('click',        () => this._togglePlanPanel());
   }
 
   _canvasPos(e) {
@@ -338,7 +392,7 @@ export class UIController {
     this._planSubmitted    = false;
     this._planFoodEnabled  = this.state?.inventory?.shared?.[ResourceType.FOOD] || 0;
 
-    const panel = document.getElementById('plan-panel');
+    const panel = this._el('plan-panel');
     if (panel) {
       panel.style.display = '';
       panel.classList.remove('plan-submitted');
@@ -409,7 +463,7 @@ export class UIController {
 
     this._stopCountdown();
 
-    const panel = document.getElementById('plan-panel');
+    const panel = this._el('plan-panel');
     if (panel) { panel.style.display = 'none'; panel.classList.remove('collapsed'); }
 
     if (this.renderer) {
@@ -425,7 +479,7 @@ export class UIController {
 
   /** Render the list of players and their submission state into #plan-players. */
   _renderPlayerStatus() {
-    const el = document.getElementById('plan-players');
+    const el = this._el('plan-players');
     if (!el) return;
 
     const players = this._players ?? [];
@@ -435,22 +489,7 @@ export class UIController {
     }
 
     el.style.display = '';
-    let html = '';
-    for (const p of players) {
-      const isMe      = p.playerId === this.myPlayerId;
-      const submitted = p._submitted ?? false;
-      const icon      = submitted ? '✓' : '⋯';
-      const cls       = submitted ? 'player-ready' : 'player-waiting';
-      const label     = isMe ? `${p.name} (you)` : p.name;
-      const fCls      = p.faction === 'hero' ? 'faction-hero' : 'faction-witch';
-      const safeName  = String(label).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      html += `<div class="plan-player-row ${cls}">
-        <span class="plan-player-icon ${fCls}">${p.faction === 'hero' ? '⚔' : '✦'}</span>
-        <span class="plan-player-name">${safeName}</span>
-        <span class="plan-player-status">${icon}</span>
-      </div>`;
-    }
-    el.innerHTML = html;
+    el.innerHTML = buildPlayerStatusHtml(players, this.myPlayerId);
   }
 
   /** Called when the server notifies that another player has submitted. */
@@ -463,7 +502,7 @@ export class UIController {
   /** Start a countdown timer showing seconds remaining until auto-submit. */
   _startCountdown(timeoutMs) {
     this._stopCountdown();
-    const el    = document.getElementById('plan-countdown');
+    const el    = this._el('plan-countdown');
     if (!el) return;
     el.style.display = '';
     const end = Date.now() + timeoutMs;
@@ -483,7 +522,7 @@ export class UIController {
       clearInterval(this._countdownTimer);
       this._countdownTimer = null;
     }
-    const el = document.getElementById('plan-countdown');
+    const el = this._el('plan-countdown');
     if (el) { el.style.display = 'none'; el.textContent = ''; }
   }
 
@@ -515,10 +554,10 @@ export class UIController {
     if (this._planSubmitted) return;
     this._planSubmitted = true;
 
-    const panel = document.getElementById('plan-panel');
+    const panel = this._el('plan-panel');
     if (panel) panel.classList.add('plan-submitted');
 
-    const status = document.getElementById('plan-status');
+    const status = this._el('plan-status');
     if (status) status.textContent = 'Waiting for opponents…';
 
     // Mark ourselves as submitted in the player list so the status panel updates.
@@ -534,9 +573,9 @@ export class UIController {
 
   /** Render the plan panel steps list. */
   _renderPlanPanel() {
-    const stepsEl  = document.getElementById('plan-steps');
-    const budgeEl  = document.getElementById('plan-budget-badge');
-    const statusEl = document.getElementById('plan-status');
+    const stepsEl  = this._el('plan-steps');
+    const budgeEl  = this._el('plan-budget-badge');
+    const statusEl = this._el('plan-status');
     if (!stepsEl) return;
 
     // Count budget-consuming actions
@@ -547,91 +586,14 @@ export class UIController {
 
     if (budgeEl) budgeEl.textContent = `${Math.max(0, remaining)} left`;
 
-    const ICONS = {
-      [PlanActionType.MOVE]:        '↗',
-      [PlanActionType.BATTLE_UNIT]: '⚔',
-      [PlanActionType.BATTLE_HEX]:  '⚔',
-      [PlanActionType.EXPLORE]:     '🔍',
-      [PlanActionType.FORTIFY]:     '🪵',
-      [PlanActionType.SUMMON]:      '✦',
-      [PlanActionType.USE_ITEM]:    '🧪',
-      [PlanActionType.EQUIP_WEAPON]:'⚔',
-      [PlanActionType.USE_ABILITY]: '✦',
-    };
-
-    const ENTITY_GLYPH = {
-      [EntityType.HERO]:       '⚔',
-      [EntityType.WITCH]:      '✦',
-      [EntityType.SURVIVOR]:   '☺',
-      [EntityType.ZOMBIE]:     '†',
-      [EntityType.MINION]:     '☠',
-      [EntityType.WOOD_GOLEM]: '🪵',
-      [EntityType.IRON_GOLEM]: '⚙',
-    };
-
-    const describeAction = (a, i) => {
-      const entity = this.state.entities.find(e => e.id === a.entityId);
-      const who    = entity?.displayName ?? 'Unit';
-      switch (a.type) {
-        case PlanActionType.MOVE:
-          return `${who} → (${a.toCol},${a.toRow})`;
-        case PlanActionType.BATTLE_UNIT: {
-          const target = this.state.entities.find(e => e.id === a.targetId);
-          return `${who} attacks ${target?.displayName ?? '?'}`;
-        }
-        case PlanActionType.BATTLE_HEX:
-          return `${who} attacks (${a.targetCol},${a.targetRow})`;
-        case PlanActionType.EXPLORE:
-          return `${who} explores`;
-        case PlanActionType.FORTIFY:
-          return `${who} fortifies`;
-        case PlanActionType.SUMMON:
-          return `${who} summons at (${a.toCol},${a.toRow})`;
-        case PlanActionType.USE_ITEM:
-          return `${who} uses ${a.item}`;
-        case PlanActionType.EQUIP_WEAPON:
-          return `${who} equips ${a.weapon}`;
-        case PlanActionType.USE_ABILITY:
-          return `${who} uses ability`;
-        default:
-          return `Step ${i + 1}`;
-      }
-    };
-
-    // Track running cost to identify over-budget steps.
     // Over-budget steps are food-powered up to _planFoodEnabled, then truly over-budget.
     const foodAvailable = (this.state.inventory?.shared?.[ResourceType.FOOD] || 0);
     const foodEnabled   = Math.min(this._planFoodEnabled ?? foodAvailable, foodAvailable);
-    let runningCost = 0;
-    let foodUsed = 0;
-    let html = '';
-    this._plan.forEach((a, i) => {
-      const isFree = a.type === PlanActionType.EQUIP_WEAPON || a.type === PlanActionType.USE_ITEM;
-      if (!isFree) runningCost++;
-      const overBudget = !isFree && runningCost > this._planBudget;
-      const foodPowered = overBudget && foodUsed < foodEnabled;
-      if (foodPowered) foodUsed++;
-      const desc       = describeAction(a, i);
-      const foodTag    = foodPowered ? ` <span class="plan-food-tag">-1 🍞</span>` : '';
-      const rmBtn      = this._planSubmitted
-        ? ''
-        : `<button class="plan-step-remove" data-plan-idx="${i}" title="Remove">✕</button>`;
-      const cls        = foodPowered ? ' food-powered' : overBudget ? ' over-budget' : '';
-      const stepEntity = this.state?.entities?.find(e => e.id === a.entityId);
-      const stepGlyph  = stepEntity ? (ENTITY_GLYPH[stepEntity.type] || '?') : '';
-      const stepColor  = stepEntity ? (ENTITY_COLOR[stepEntity.type]  || '#aaa') : '#aaa';
-      const iconSpan   = stepEntity
-        ? `<span class="plan-step-icon" style="color:${stepColor}">${stepGlyph}</span>`
-        : '';
-      html += `<div class="plan-step${cls}">
-        <span class="plan-step-num">${i + 1}</span>
-        ${iconSpan}
-        <span class="plan-step-desc" title="${desc}">${desc}${foodTag}</span>
-        ${rmBtn}
-      </div>`;
-    });
-    if (!html) html = `<div class="plan-step"><span class="plan-step-desc" style="color:var(--muted)">No actions queued — click units to add</span></div>`;
-    stepsEl.innerHTML = html;
+
+    stepsEl.innerHTML = buildPlanStepsHtml(
+      this._plan, this._planBudget, foodEnabled, foodAvailable,
+      this._planSubmitted, this.state.entities ?? [],
+    );
 
     // Attach remove listeners
     stepsEl.querySelectorAll('.plan-step-remove').forEach(btn => {
@@ -648,7 +610,7 @@ export class UIController {
     });
 
     // ── Food slots row ──────────────────────────────────────────────────────
-    const foodRowEl = document.getElementById('plan-food-row');
+    const foodRowEl = this._el('plan-food-row');
     if (foodRowEl) {
       if (foodAvailable > 0 && !this._planSubmitted) {
         let slots = '';
@@ -675,12 +637,12 @@ export class UIController {
     if (statusEl && !this._planSubmitted) statusEl.textContent = '';
 
     // Keep the collapse-tab count badge in sync
-    const tabCount = document.getElementById('plan-tab-count');
+    const tabCount = this._el('plan-tab-count');
     if (tabCount) tabCount.textContent = this._plan.length > 0 ? this._plan.length : '';
 
     // Update collapse-button arrow direction
-    const panel = document.getElementById('plan-panel');
-    const toggleBtn = document.getElementById('plan-toggle-btn');
+    const panel = this._el('plan-panel');
+    const toggleBtn = this._el('plan-toggle-btn');
     if (toggleBtn && panel) {
       toggleBtn.textContent = panel.classList.contains('collapsed') ? '▶' : '◀';
     }
@@ -691,11 +653,11 @@ export class UIController {
 
   /** Toggle the plan panel between expanded and collapsed. */
   _togglePlanPanel() {
-    const panel = document.getElementById('plan-panel');
+    const panel = this._el('plan-panel');
     if (!panel) return;
     panel.classList.toggle('collapsed');
     const isCollapsed = panel.classList.contains('collapsed');
-    const toggleBtn = document.getElementById('plan-toggle-btn');
+    const toggleBtn = this._el('plan-toggle-btn');
     if (toggleBtn) toggleBtn.textContent = isCollapsed ? '▶' : '◀';
   }
 
@@ -1075,7 +1037,7 @@ export class UIController {
 
   _showActionPopup(entity) {
     const state = this.state;
-    const popup = document.getElementById('action-popup');
+    const popup = this._el('action-popup');
 
     // Unit picker mode
     if (this._pendingUnitPick) {
@@ -1207,7 +1169,7 @@ export class UIController {
   }
 
   _renderUnitStatsBar() {
-    const bar = document.getElementById('unit-stats-bar');
+    const bar = this._el('unit-stats-bar');
     if (!bar) return;
 
     const entity = this._selectedEntity;
@@ -1258,7 +1220,7 @@ export class UIController {
 
   _renderTurnInfo() {
     const state = this.state;
-    const el    = document.getElementById('turn-info');
+    const el    = this._el('turn-info');
     if (!el) return;
 
     // 8-step cycle — shared between header and cycle-bar
@@ -1274,43 +1236,51 @@ export class UIController {
     ];
 
     const roundInCycle = (state.round - 1) % 8;
+    const cycle        = Math.ceil(state.round / 8);
+    const roundLabel   = `Day ${cycle} · Round ${roundInCycle + 1}`;
 
     // Render always-visible cycle bar (compact icon row)
-    const cycleBar = document.getElementById('cycle-bar');
+    const cycleBar = this._el('cycle-bar');
     if (cycleBar) {
-      const stepsHtml = CYCLE_STEPS.map((step, i) => {
+      cycleBar.innerHTML = CYCLE_STEPS.map((step, i) => {
         const active = i === roundInCycle;
         return `<div class="cycle-step phase-${step.phase} ${active ? 'cycle-active' : 'cycle-dim'}"
                      title="${step.desc}">${step.icon}${active ? `<span class="cycle-name">${step.label}</span>` : ''}</div>`;
       }).join('');
-      // Preserve #node-status-bar (mobile node/score display) — re-inject after steps
-      cycleBar.innerHTML = stepsHtml + `<div id="node-status-bar"></div>`;
     }
+
+    // Round label sits below the cycle bar
+    const roundLabelEl = this._el('round-label');
+    if (roundLabelEl) roundLabelEl.textContent = roundLabel;
 
     // During planning phase, show planning info
     if (this._planMode) {
       const faction = this._planFaction;
+      const glyph   = faction === 'hero' ? '⚔' : '✦';
       const budget  = this._planBudget;
       const used    = this._plan.filter(a => a.type !== PlanActionType.EQUIP_WEAPON && a.type !== PlanActionType.USE_ITEM).length;
       const diamonds = '◆'.repeat(Math.max(0, budget - used)) + '◇'.repeat(Math.max(0, used));
-      const status  = this._planSubmitted ? '✓ Plan Submitted — Waiting…' : `📋 Planning Phase`;
-      el.innerHTML = `
-        <div class="turn-line">Round ${state.round}</div>
-        <div class="turn-line player-${faction}">${status}</div>
-        <div class="actions-remaining" title="Actions budget">${diamonds}</div>
-      `;
+      if (this._planSubmitted) {
+        el.innerHTML = `
+          <span class="turn-faction player-${faction}">${glyph}</span>
+          <span class="turn-line">Waiting for opponent…</span>
+        `;
+      } else {
+        el.innerHTML = `
+          <span class="turn-faction player-${faction}">${glyph}</span>
+          <div class="actions-remaining" title="Actions budget">${diamonds}</div>
+        `;
+      }
       return;
     }
 
     // During resolution, show neutral resolution label
     if (state.resolving) {
-      el.innerHTML = `
-        <div class="turn-line">Round ${state.round}</div>
-        <div class="turn-line">⚙ Resolution Phase</div>
-      `;
+      el.innerHTML = `<span class="turn-line">Resolving Actions…</span>`;
       return;
     }
 
+    const glyph  = state.activePlayer === 'hero' ? '⚔' : '✦';
     const player = state.activePlayer === 'hero' ? 'Hero' : 'Witch';
     const isAI   = (state.activePlayer === 'witch' && state.witchIsAI) ||
                    (state.activePlayer === 'hero'  && state.heroIsAI);
@@ -1319,67 +1289,31 @@ export class UIController {
       ? '◆'.repeat(state.actionsLeft)
       : '◇';
 
-    // On wider screens the cycle strip also lives in turn-info; on mobile it's
-    // only shown in #cycle-bar so we omit it here to avoid duplication.
     el.innerHTML = `
-      <div class="cycle-strip cycle-strip-header">${CYCLE_STEPS.map((step, i) => {
-        const active = i === roundInCycle;
-        return `<div class="cycle-step phase-${step.phase} ${active ? 'cycle-active' : 'cycle-dim'}"
-                     title="${step.desc}">${step.icon}${active ? `<span class="cycle-name">${step.label}</span>` : ''}</div>`;
-      }).join('')}</div>
-      <div class="turn-line">Round ${state.round}</div>
-      <div class="turn-line player-${state.activePlayer}">
-        ${player}'s Turn ${isAI ? '<span class="ai-badge">AI</span>' : ''}
-      </div>
+      <span class="turn-faction player-${state.activePlayer}">${glyph}</span>
+      <span class="turn-line">${player}'s Turn ${isAI ? '<span class="ai-badge">AI</span>' : ''}</span>
       <div class="actions-remaining">${diamonds}</div>
     `;
   }
 
   _renderObjectives() {
-    const el = document.getElementById('node-status');
+    const el = this._el('score-bar-content');
     if (!el) return;
     const state = this.state;
 
-    let nodeDots = '';
-    let witchCount = 0, heroCount = 0;
-    for (const obj of state.witchObjectives) {
-      const witchHere = state.entities.find(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row);
-      const heroHere  = state.entities.find(e => e.alive && e.owner === 'hero'  && e.col === obj.col && e.row === obj.row);
-      let cls;
-      if (witchHere)      { cls = 'witch'; witchCount++; }
-      else if (heroHere)  { cls = 'hero';  heroCount++;  }
-      else                { cls = 'neutral'; }
-      nodeDots += `<span class="node-dot ${cls}" title="${obj.label}"></span>`;
-    }
-
-    const score     = state.nodeScore ?? { hero: 0, witch: 0 };
-    const scoreMax  = 4;
-    const heroPips  = Array.from({ length: scoreMax }, (_, i) =>
-      `<span class="score-pip hero${i < score.hero ? ' filled' : ''}"></span>`).join('');
-    const witchPips = Array.from({ length: scoreMax }, (_, i) =>
-      `<span class="score-pip witch${i < score.witch ? ' filled' : ''}"></span>`).join('');
-
-    const html =
-      `<span class="score-track hero-track" title="Hero score: ${score.hero}/4">${heroPips}</span>` +
-      `<span class="node-dots-group">${nodeDots}</span>` +
-      `<span class="score-track witch-track" title="Witch score: ${score.witch}/4">${witchPips}</span>`;
-
-    const title = witchCount === 3 ? '⚠ Witch holds all nodes!'
-                : heroCount  === 3 ? '★ Hero holds all nodes!'
-                : 'Power Nodes';
+    const { html, title } = buildObjectivesHtml(
+      state.witchObjectives, state.entities, state.nodeScore,
+    );
 
     el.innerHTML = html;
-    el.title = title;
-
-    // Mirror to cycle-bar version shown on mobile
-    const elBar = document.getElementById('node-status-bar');
-    if (elBar) { elBar.innerHTML = html; elBar.title = title; }
+    const bar = this._el('score-bar');
+    if (bar) bar.title = title;
   }
 
   _renderActionPanel() {
     // Show/hide the floating cancel pill and update its hint text
-    const wrap = document.getElementById('cancel-wrap');
-    const hint = document.getElementById('target-hint');
+    const wrap = this._el('cancel-wrap');
+    const hint = this._el('target-hint');
     if (!wrap) return;
 
     const targeting = this._awaitingTarget && !this._awaitingTarget.isDefault;
@@ -1395,7 +1329,7 @@ export class UIController {
   }
 
   _renderEndTurnBtn() {
-    const btn = document.getElementById('end-turn-btn');
+    const btn = this._el('end-turn-btn');
     if (!btn) return;
     const state = this.state;
 
@@ -1648,7 +1582,7 @@ export class UIController {
   static SPEED_LABELS = { cinematic: 'Cinematic', fast: 'Fast', instant: 'Instant' };
 
   _toggleSpeedPopup() {
-    const popup = document.getElementById('speed-popup');
+    const popup = this._el('speed-popup');
     if (!popup) return;
     const isOpen = popup.style.display !== 'none';
     if (isOpen) { this._closeSpeedPopup(); return; }
@@ -1660,7 +1594,7 @@ export class UIController {
   }
 
   _closeSpeedPopup() {
-    const popup = document.getElementById('speed-popup');
+    const popup = this._el('speed-popup');
     if (popup) popup.style.display = 'none';
   }
 
@@ -1668,7 +1602,7 @@ export class UIController {
     if (!UIController.SPEED_LABELS[mode]) return;
     this.speedMode = mode;
     this._closeSpeedPopup();
-    const btn = document.getElementById('speed-toggle');
+    const btn = this._el('speed-toggle');
     if (btn) {
       btn.title = `Battle speed: ${UIController.SPEED_LABELS[mode]}`;
       btn.className = `zoom-btn speed-${mode}`;
@@ -1682,7 +1616,7 @@ export class UIController {
       toast = document.createElement('div');
       toast.id = 'speed-toast';
       toast.className = 'speed-toast';
-      const wrapper = document.getElementById('canvas-wrapper');
+      const wrapper = this._el('canvas-wrapper');
       if (wrapper) wrapper.appendChild(toast);
     }
     toast.textContent = text;
@@ -1696,7 +1630,7 @@ export class UIController {
   // ── Battle toast (minor skirmishes) ──────────────────────────────────────
 
   _showBattleToast(actorSnap, targetSnap, result) {
-    const container = document.getElementById('battle-toast-container');
+    const container = this._el('battle-toast-container');
     if (!container) return;
 
     const outcome = result.killed
@@ -1756,7 +1690,7 @@ export class UIController {
     const info = PHASE_INFO[phase];
     if (!info) return;
 
-    const el = document.getElementById('phase-modal');
+    const el = this._el('phase-modal');
     if (!el) return;
 
     // Compute action breakdown for display
@@ -1802,7 +1736,7 @@ export class UIController {
     el.className = `visible phase-${phase}`;
 
     // Dismiss only on button click — no auto-dismiss, no backdrop click
-    const continueBtn = document.getElementById('phase-modal-continue');
+    const continueBtn = this._el('phase-modal-continue');
     const dismiss = () => {
       el.classList.remove('visible');
       continueBtn?.removeEventListener('click', dismiss);
@@ -1859,7 +1793,7 @@ export class UIController {
         <div class="score-toast-track">⚔ ${heroPips}&nbsp;&nbsp;${witchPips} ✦</div>
       </div>
     `;
-    document.getElementById('game-screen')?.appendChild(toast);
+    this._el('game-screen')?.appendChild(toast);
 
     setTimeout(() => toast.classList.add('phase-toast-hide'), 3200);
     setTimeout(() => toast.remove(), 3700);
@@ -1883,8 +1817,8 @@ export class UIController {
 
   /** Show a unit card popup for a newly-encountered survivor or zombie. */
   _showEncounterDialog(encounterUnit, onDismiss) {
-    const dialog = document.getElementById('encounter-dialog');
-    const card   = document.getElementById('encounter-card');
+    const dialog = this._el('encounter-dialog');
+    const card   = this._el('encounter-card');
 
     const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
     const glyph  = GLYPHS[encounterUnit.type] ?? '?';
@@ -1956,7 +1890,7 @@ export class UIController {
   }
 
   _showResultDialog(messages, onDismiss, encounterSurvivor = null) {
-    const dialog = document.getElementById('result-dialog');
+    const dialog = this._el('result-dialog');
     // Collapse consecutive duplicate lines into "message (×N)"
     const collapsed = [];
     for (const msg of messages) {
@@ -1964,15 +1898,15 @@ export class UIController {
       if (last?.msg === msg) last.count++;
       else collapsed.push({ msg, count: 1 });
     }
-    document.getElementById('result-messages').textContent =
+    this._el('result-messages').textContent =
       collapsed.map(({ msg, count }) => count > 1 ? `${msg} (×${count})` : msg).join('\n');
-    document.getElementById('result-dismiss-hint').style.display = this.autoplay ? 'none' : '';
-    const btns = document.getElementById('result-buttons');
+    this._el('result-dismiss-hint').style.display = this.autoplay ? 'none' : '';
+    const btns = this._el('result-buttons');
     btns.style.display = 'none';
     btns.innerHTML = '';
 
     // Survivor portrait
-    const portraitEl = document.getElementById('result-portrait');
+    const portraitEl = this._el('result-portrait');
     if (portraitEl) {
       const assetId = encounterSurvivor?.title ? _SURVIVOR_TITLE_ASSET[encounterSurvivor.title] : null;
       const src     = assetId ? this.renderer.getPortraitDataURL(assetId) : null;
@@ -2018,11 +1952,11 @@ export class UIController {
 
   _showNoActionsDialog() {
     const state  = this.state;
-    const dialog = document.getElementById('result-dialog');
-    const hint   = document.getElementById('result-dismiss-hint');
-    const btns   = document.getElementById('result-buttons');
+    const dialog = this._el('result-dialog');
+    const hint   = this._el('result-dismiss-hint');
+    const btns   = this._el('result-buttons');
 
-    document.getElementById('result-messages').textContent = 'No more actions!';
+    this._el('result-messages').textContent = 'No more actions!';
     hint.style.display = 'none';
     btns.style.display = 'flex';
     btns.innerHTML = '';
@@ -2067,11 +2001,11 @@ export class UIController {
   }
 
   _showDefenderPickerDialog(defenders, onPick) {
-    const dialog = document.getElementById('result-dialog');
-    const hint   = document.getElementById('result-dismiss-hint');
-    const btns   = document.getElementById('result-buttons');
+    const dialog = this._el('result-dialog');
+    const hint   = this._el('result-dismiss-hint');
+    const btns   = this._el('result-buttons');
 
-    document.getElementById('result-messages').textContent = 'Multiple enemies here — choose your target:';
+    this._el('result-messages').textContent = 'Multiple enemies here — choose your target:';
     hint.style.display = 'none';
     btns.style.display = 'flex';
     btns.innerHTML = '';
@@ -2099,11 +2033,11 @@ export class UIController {
     // Cancel any in-flight dice animation from a previous battle dialog
     if (this._battleInterval) { clearInterval(this._battleInterval); this._battleInterval = null; }
 
-    const dialog = document.getElementById('battle-dialog');
-    const footer = document.getElementById('battle-footer');
+    const dialog = this._el('battle-dialog');
+    const footer = this._el('battle-footer');
 
     // Summary line: "[Actor] attacks [Target], aided by …"
-    const summaryEl = document.getElementById('battle-summary');
+    const summaryEl = this._el('battle-summary');
     if (summaryEl) {
       let summary = `${actorSnap.name} attacks ${targetSnap.name}`;
       const bd = result?.breakdown;
@@ -2125,19 +2059,19 @@ export class UIController {
     // Populate combatant panels
     const atkPortrait = this.renderer.getPortraitDataURL(_entityPortraitId(actorSnap));
     const defPortrait = this.renderer.getPortraitDataURL(_entityPortraitId(targetSnap));
-    document.getElementById('battle-attacker').innerHTML = _combatantHTML(actorSnap, 'atk', atkPortrait);
-    document.getElementById('battle-defender').innerHTML = _combatantHTML(targetSnap, 'def', defPortrait);
+    this._el('battle-attacker').innerHTML = _combatantHTML(actorSnap, 'atk', atkPortrait);
+    this._el('battle-defender').innerHTML = _combatantHTML(targetSnap, 'def', defPortrait);
 
-    const atkDie  = document.getElementById('battle-atk-die');
-    const defDie  = document.getElementById('battle-def-die');
-    const outcome = document.getElementById('battle-outcome');
+    const atkDie  = this._el('battle-atk-die');
+    const defDie  = this._el('battle-def-die');
+    const outcome = this._el('battle-outcome');
     outcome.textContent = '';
     outcome.className   = 'battle-outcome';
     footer.innerHTML    = this.autoplay ? '' : '<div class="result-dismiss">— click to continue —</div>';
 
     // Reset breakdown columns (hidden until dice settle)
-    const atkBkd = document.getElementById('battle-atk-breakdown');
-    const defBkd = document.getElementById('battle-def-breakdown');
+    const atkBkd = this._el('battle-atk-breakdown');
+    const defBkd = this._el('battle-def-breakdown');
     if (atkBkd) { atkBkd.innerHTML = ''; atkBkd.classList.remove('visible'); }
     if (defBkd) { defBkd.innerHTML = ''; defBkd.classList.remove('visible'); }
 
@@ -2163,15 +2097,15 @@ export class UIController {
       // Populate and fade-in breakdown columns
       const bd = result.breakdown;
       if (bd) {
-        document.getElementById('battle-atk-breakdown').innerHTML =
+        this._el('battle-atk-breakdown').innerHTML =
           _buildBreakdownHTML(actorSnap, bd, 'atk', result.attackRoll);
-        document.getElementById('battle-def-breakdown').innerHTML =
+        this._el('battle-def-breakdown').innerHTML =
           _buildBreakdownHTML(targetSnap, bd, 'def', result.defenseRoll);
         // Double-rAF ensures a paint happens before adding visible,
         // so the opacity 0→1 transition fires reliably.
         requestAnimationFrame(() => requestAnimationFrame(() => {
-          document.getElementById('battle-atk-breakdown').classList.add('visible');
-          document.getElementById('battle-def-breakdown').classList.add('visible');
+          this._el('battle-atk-breakdown').classList.add('visible');
+          this._el('battle-def-breakdown').classList.add('visible');
         }));
       }
 
@@ -2309,7 +2243,7 @@ export class UIController {
   _showTileDetail(hex) {
     const state   = this.state;
     const tile    = state.tiles.get(hexKey(hex.col, hex.row));
-    const overlay = document.getElementById('tile-zoom-overlay');
+    const overlay = this._el('tile-zoom-overlay');
     if (!overlay || !tile) return;
 
     // ── Tile color map matching renderer ──
@@ -2332,9 +2266,9 @@ export class UIController {
     };
 
     // ── SVG hex elements ──
-    const polyEl = document.getElementById('tile-zoom-poly');
-    const fortEl = document.getElementById('tile-zoom-fort');
-    const iconEl = document.getElementById('tile-zoom-icon');
+    const polyEl = this._el('tile-zoom-poly');
+    const fortEl = this._el('tile-zoom-fort');
+    const iconEl = this._el('tile-zoom-icon');
 
     const fillColor = TILE_COLOR_MAP[tile.type] ?? '#3a5430';
     if (polyEl) polyEl.setAttribute('fill', fillColor);
@@ -2356,8 +2290,8 @@ export class UIController {
     }
 
     // ── Label box ──
-    const nameEl  = document.getElementById('tile-zoom-tile-name');
-    const linesEl = document.getElementById('tile-zoom-info-lines');
+    const nameEl  = this._el('tile-zoom-tile-name');
+    const linesEl = this._el('tile-zoom-info-lines');
 
     if (nameEl) {
       nameEl.textContent = tile.building ? (BUILDING_LABEL[tile.building] ?? tile.type)
@@ -2389,7 +2323,7 @@ export class UIController {
     const planOwner = this._planMode ? this._planFaction : state.activePlayer;
     const myUnits  = visible.filter(u => u.owner === planOwner);
     const foeUnits = visible.filter(u => u.owner !== planOwner);
-    const unitsEl  = document.getElementById('tile-zoom-units');
+    const unitsEl  = this._el('tile-zoom-units');
 
     if (unitsEl) {
       let html = '';
@@ -2418,7 +2352,7 @@ export class UIController {
   }
 
   _hideTileDetail() {
-    document.getElementById('tile-zoom-overlay')?.classList.remove('visible');
+    this._el('tile-zoom-overlay')?.classList.remove('visible');
   }
 
   /** Cycle chronicle through: none → mini → full → none */
@@ -2430,7 +2364,7 @@ export class UIController {
 
   _setChronicleMode(mode) {
     this._chronicleMode = mode;
-    const sidebar = document.getElementById('chronicle-sidebar');
+    const sidebar = this._el('chronicle-sidebar');
     if (sidebar) sidebar.style.display = mode === 'full' ? 'flex' : 'none';
     this._renderMiniChronicle();
     if (mode === 'full') this._renderSidebarLog();
@@ -2442,7 +2376,7 @@ export class UIController {
   }
 
   _renderSidebarLog() {
-    const el = document.getElementById('chronicle-sidebar-log');
+    const el = this._el('chronicle-sidebar-log');
     if (!el) return;
     const visible = this._visibleLog();
     el.innerHTML = visible.map(m => `<div class="log-entry">${this._logText(m)}</div>`).join('');
@@ -2450,7 +2384,7 @@ export class UIController {
   }
 
   _renderInventory() {
-    const el = document.getElementById('plan-inventory');
+    const el = this._el('plan-inventory');
     if (!el) return;
 
     const state   = this.state;
@@ -2491,7 +2425,7 @@ export class UIController {
   }
 
   _renderLog() {
-    const el = document.getElementById('event-log');
+    const el = this._el('event-log');
     if (!el) return;
     const visible = this._visibleLog();
     el.innerHTML = visible.map(m =>
@@ -2504,7 +2438,7 @@ export class UIController {
   }
 
   _renderMiniChronicle() {
-    const el = document.getElementById('chronicle-mini');
+    const el = this._el('chronicle-mini');
     if (!el) return;
     const mode       = this._chronicleMode ?? 'mini';
     const activeClass = mode !== 'none' ? ' chronicle-mini-btn-active' : '';
@@ -2519,7 +2453,7 @@ export class UIController {
       // 'none' or 'full': just the button (entries are in sidebar for full, hidden for none)
       el.innerHTML = btnHtml;
     }
-    document.getElementById('chronicle-btn')?.addEventListener('click', () => this._cycleChronicle());
+    this._el('chronicle-btn')?.addEventListener('click', () => this._cycleChronicle());
   }
 
   /**
@@ -2528,7 +2462,7 @@ export class UIController {
    */
   _showResolutionSummary(steps, roundNum) {
     return new Promise(resolve => {
-      const el = document.getElementById('round-summary');
+      const el = this._el('round-summary');
       if (!el) { resolve('next'); return; }
 
       // Collect kills, survivors found, and summons from steps
@@ -2558,7 +2492,7 @@ export class UIController {
       }
 
       const titleEl  = el.querySelector('.round-summary-title');
-      const eventsEl = document.getElementById('round-summary-events');
+      const eventsEl = this._el('round-summary-events');
       if (titleEl)  titleEl.textContent = `Round ${roundNum ?? ''} complete`;
       if (eventsEl) {
         let html = '';
@@ -2580,7 +2514,7 @@ export class UIController {
       }
 
       // Render replay-speed mini-picker
-      const speedRowEl = document.getElementById('round-summary-speed-row');
+      const speedRowEl = this._el('round-summary-speed-row');
       if (speedRowEl) {
         const modes = Object.entries(UIController.SPEED_LABELS);
         speedRowEl.innerHTML = modes.map(([mode, label]) =>
@@ -2599,8 +2533,8 @@ export class UIController {
 
       el.classList.add('visible');
 
-      const nextBtn   = document.getElementById('round-summary-next');
-      const replayBtn = document.getElementById('round-summary-replay');
+      const nextBtn   = this._el('round-summary-next');
+      const replayBtn = this._el('round-summary-replay');
 
       const cleanup = () => {
         el.classList.remove('visible');

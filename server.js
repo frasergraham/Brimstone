@@ -60,7 +60,7 @@ app.get('/api/saves', (req, res) => {
 // ── Admin pages ───────────────────────────────────────────────────────────────
 
 app.get('/admin', (_req, res) => res.sendFile(join(__dirname, 'admin.html')));
-app.get('/spectate', (_req, res) => res.sendFile(join(__dirname, 'spectate.html')));
+app.get('/spectate', (_req, res) => res.sendFile(join(__dirname, 'index.html')));
 
 // ── Admin REST API ────────────────────────────────────────────────────────────
 
