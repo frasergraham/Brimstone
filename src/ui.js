@@ -1236,6 +1236,8 @@ export class UIController {
     ];
 
     const roundInCycle = (state.round - 1) % 8;
+    const cycle        = Math.ceil(state.round / 8);
+    const roundLabel   = `Day ${cycle} · Round ${roundInCycle + 1}`;
 
     // Render always-visible cycle bar (compact icon row)
     const cycleBar = this._el('cycle-bar');
@@ -1245,8 +1247,7 @@ export class UIController {
         return `<div class="cycle-step phase-${step.phase} ${active ? 'cycle-active' : 'cycle-dim'}"
                      title="${step.desc}">${step.icon}${active ? `<span class="cycle-name">${step.label}</span>` : ''}</div>`;
       }).join('');
-      // Preserve #node-status-bar (mobile node/score display) — re-inject after steps
-      cycleBar.innerHTML = stepsHtml + `<div id="node-status-bar"></div>`;
+      cycleBar.innerHTML = stepsHtml + `<span class="cycle-round-label">${roundLabel}</span>`;
     }
 
     // During planning phase, show planning info
@@ -1257,7 +1258,7 @@ export class UIController {
       const diamonds = '◆'.repeat(Math.max(0, budget - used)) + '◇'.repeat(Math.max(0, used));
       const status  = this._planSubmitted ? '✓ Plan Submitted — Waiting…' : `📋 Planning Phase`;
       el.innerHTML = `
-        <div class="turn-line">Round ${state.round}</div>
+        <div class="turn-line cycle-round-label-inline">${roundLabel}</div>
         <div class="turn-line player-${faction}">${status}</div>
         <div class="actions-remaining" title="Actions budget">${diamonds}</div>
       `;
@@ -1267,7 +1268,7 @@ export class UIController {
     // During resolution, show neutral resolution label
     if (state.resolving) {
       el.innerHTML = `
-        <div class="turn-line">Round ${state.round}</div>
+        <div class="turn-line cycle-round-label-inline">${roundLabel}</div>
         <div class="turn-line">⚙ Resolution Phase</div>
       `;
       return;
@@ -1289,7 +1290,7 @@ export class UIController {
         return `<div class="cycle-step phase-${step.phase} ${active ? 'cycle-active' : 'cycle-dim'}"
                      title="${step.desc}">${step.icon}${active ? `<span class="cycle-name">${step.label}</span>` : ''}</div>`;
       }).join('')}</div>
-      <div class="turn-line">Round ${state.round}</div>
+      <div class="turn-line cycle-round-label-inline">${roundLabel}</div>
       <div class="turn-line player-${state.activePlayer}">
         ${player}'s Turn ${isAI ? '<span class="ai-badge">AI</span>' : ''}
       </div>
@@ -1298,7 +1299,7 @@ export class UIController {
   }
 
   _renderObjectives() {
-    const el = this._el('node-status');
+    const el = this._el('score-bar-content');
     if (!el) return;
     const state = this.state;
 
@@ -1307,11 +1308,8 @@ export class UIController {
     );
 
     el.innerHTML = html;
-    el.title = title;
-
-    // Mirror to cycle-bar version shown on mobile
-    const elBar = this._el('node-status-bar');
-    if (elBar) { elBar.innerHTML = html; elBar.title = title; }
+    const bar = this._el('score-bar');
+    if (bar) bar.title = title;
   }
 
   _renderActionPanel() {

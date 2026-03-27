@@ -497,18 +497,34 @@ canvas { touch-action: pan-x pan-y; }
   min-width: 0;
 }
 
-/* ── Node status dots ──────────────────────────────────────────────────── */
+/* ── Score bar — bottom strip showing Power Nodes + score track ──────── */
 
-#node-status {
+#score-bar {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.3rem 0.75rem;
+  background: rgba(13,17,23,0.95);
+  border-top: 1px solid rgba(255,255,255,0.07);
   flex-shrink: 0;
 }
 
-#node-status-bar {
-  display: none;
+#score-bar-content {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
 }
+
+.score-bar-faction {
+  font-size: 0.72rem;
+  font-weight: bold;
+  letter-spacing: 0.05em;
+  opacity: 0.7;
+  white-space: nowrap;
+}
+.score-bar-faction.hero-faction  { color: var(--hero); }
+.score-bar-faction.witch-faction { color: var(--witch); }
 
 .node-dot {
   width: 13px;
@@ -651,6 +667,22 @@ canvas { touch-action: pan-x pan-y; }
   text-transform: uppercase;
   margin-top: 0.05rem;
   white-space: nowrap;
+}
+
+/* Day N · Round M label in the cycle bar (mobile) and turn-info (desktop) */
+.cycle-round-label {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  letter-spacing: 0.04em;
+  opacity: 0.75;
+  margin: 0 0.4rem;
+}
+.cycle-round-label-inline {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  opacity: 0.75;
+  letter-spacing: 0.04em;
 }
 
 .turn-line { font-size: 0.85rem; color: var(--text-dim); }
@@ -1907,17 +1939,6 @@ canvas { touch-action: pan-x pan-y; }
 
   /* Node dots slightly larger for touch */
   .node-dot { width: 15px; height: 15px; }
-
-  /* Move node progress out of the crowded header into the cycle bar */
-  #node-status { display: none; }
-  #node-status-bar {
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-    margin-left: auto;
-    padding-left: 0.5rem;
-    border-left: 1px solid rgba(255,255,255,0.1);
-  }
 
   /* End turn button slightly larger tap target */
   .end-turn-header { padding: 0 0.65rem; height: 36px; }

@@ -308,11 +308,9 @@
     <header id="game-header">
       <button id="menu-btn" class="header-icon-btn" title="Menu">☰</button>
       <span class="header-title">BRIMSTONE</span>
-      <div id="online-status" style="display:none"></div>
       <div id="turn-info"></div>
       <!-- End Turn lives in the header, next to the action diamonds -->
       <button id="end-turn-btn" class="header-icon-btn end-turn-header" title="End Turn">↩</button>
-      <div id="node-status"></div>
       <span id="game-version" class="game-version"></span>
     </header>
     <!-- In-game menu popup -->
@@ -394,6 +392,13 @@
         <div id="plan-status" class="plan-status"></div>
       </div>
     </main>
+
+    <!-- Score bar — always-visible objectives strip at the bottom -->
+    <div id="score-bar">
+      <span class="score-bar-faction hero-faction">⚔ Hero</span>
+      <div id="score-bar-content"></div>
+      <span class="score-bar-faction witch-faction">Witch ✦</span>
+    </div>
 
     <!-- Floating cancel pill — appears during battle/summon targeting -->
     <div id="cancel-wrap">

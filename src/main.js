@@ -498,9 +498,6 @@ function initOnline(mirrorState, myFaction, mpClient) {
   ui.myPlayerId = mpClient.myPlayerId ?? null;
   ui._players   = state.players ?? [];
 
-  // Show opponent name / online status
-  _updateOnlineStatus(mpClient);
-
   redrawOnline();
 
   requestAnimationFrame(() => {
@@ -520,15 +517,6 @@ function redrawOnline() {
   renderer.draw();
   if (ui) ui._updateSidebar?.();
   if (state?.gameOver) showGameOver();
-}
-
-function _updateOnlineStatus(mpClient) {
-  const el = document.getElementById('online-status');
-  if (!el) return;
-  const faction = mpClient.myFaction;
-  const symbol  = faction === 'hero' ? '⚔' : '✦';
-  el.textContent = `${symbol} Online — Playing as ${faction === 'hero' ? 'Hero' : 'Witch'}`;
-  el.style.display = '';
 }
 
 // ── Window resize ─────────────────────────────────────────────────────────────
@@ -612,7 +600,6 @@ document.getElementById('btn-restart').addEventListener('click', () => {
 
   // Disconnect from server if in online mode
   if (mp) { mp.disconnect(); mp = null; }
-  document.getElementById('online-status').style.display = 'none';
 
   // Reset game objects so initOnline / init start fresh
   renderer = null;
@@ -1275,12 +1262,13 @@ function _createMpClient() {
 
     onOpponentDisconnected(graceMs) {
       const secs = Math.round(graceMs / 1000);
-      const el = document.getElementById('online-status');
-      if (el) el.textContent = `⚠ Opponent disconnected. Waiting ${secs}s for reconnect…`;
+      const statusEl = document.getElementById('plan-status');
+      if (statusEl) statusEl.textContent = `⚠ Opponent disconnected — waiting ${secs}s for reconnect…`;
     },
 
     onOpponentReconnected() {
-      if (mp) _updateOnlineStatus(mp);
+      const statusEl = document.getElementById('plan-status');
+      if (statusEl) statusEl.textContent = '';
     },
 
     onPlanningPhase(payload) {
@@ -1359,9 +1347,8 @@ function _createMpClient() {
         showStep('multiplayer');
         _initMpStep();
       } else {
-        // In-game error — flash in status bar
-        const el = document.getElementById('online-status');
-        if (el) { el.textContent = `⚠ ${msg}`; }
+        // In-game error — show as modal dialog
+        if (ui) ui._showResultDialog([`⚠ ${msg}`]);
       }
     },
 
