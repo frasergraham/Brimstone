@@ -1646,15 +1646,29 @@ function initSpectator(roomId) {
         break;
       }
       case 'resolutionComplete': {
-        const mirrorState = MirrorState.fromSnapshot(msg.finalState);
-        mirrorState.fogOfWar = false;
-        state = mirrorState;
-        ui?.updateState(mirrorState);
-        _updateSpectatorRoundLabel(mirrorState);
-        _checkSpectatorGameOver(mirrorState);
-        planningPlayers = [];
-        submittedIds = new Set();
-        _renderSpectatorReadyList(planningPlayers, submittedIds);
+        const finalMirror = MirrorState.fromSnapshot(msg.finalState);
+        finalMirror.fogOfWar = false;
+        const finalEntities = finalMirror.entities;
+        const redrawFn = () => renderer?.draw();
+        // Animate the resolution steps before applying the final state.
+        // Pass 'spectator' as humanFaction sentinel: fog is off so all units are
+        // visible, battles are shown, but encounter dialogs are suppressed
+        // (no faction matches 'spectator', so pendingDialogs stays empty).
+        _animateResolutionSteps(
+          msg.steps ?? [],
+          finalEntities,
+          redrawFn,
+          'spectator',
+          null,
+        ).then(() => {
+          state = finalMirror;
+          ui?.updateState(finalMirror);
+          _updateSpectatorRoundLabel(finalMirror);
+          _checkSpectatorGameOver(finalMirror);
+          planningPlayers = [];
+          submittedIds = new Set();
+          _renderSpectatorReadyList(planningPlayers, submittedIds);
+        });
         break;
       }
       case 'adminPlanningPhase': {
@@ -1695,6 +1709,7 @@ function initSpectator(roomId) {
     renderer.loadImages();
     ui = new UIController(canvas, mirrorState, renderer, null, () => renderer.draw(), null, false);
     ui.setMode(UIMode.SPECTATOR);
+    ui.speedMode = 'fast';
     window.addEventListener('resize', () => { renderer.resize(); renderer.draw(); });
     renderer.draw();
   }
