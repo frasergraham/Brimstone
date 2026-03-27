@@ -74,7 +74,7 @@ export class UIController {
 
     // ── Multiplayer ──────────────────────────────────────────────────────────
     this.myPlayerId     = null;    // UUID of the local player (null in offline mode)
-    this._players       = [];      // full player roster [{id,name,faction,isAI}]
+    this._players       = [];      // full player roster [{playerId,name,faction,isAI}]
     this._countdownTimer = null;   // setInterval handle for countdown display
 
     this._bindEvents();
@@ -614,7 +614,7 @@ export class UIController {
     if (status) status.textContent = 'Waiting for opponents…';
 
     // Mark ourselves as submitted in the player list so the status panel updates.
-    const me = this._players?.find(p => p.id === this.myPlayerId);
+    const me = this._players?.find(p => p.playerId === this.myPlayerId);
     if (me) me._submitted = true;
     this._renderPlayerStatus();
 
