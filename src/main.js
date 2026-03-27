@@ -283,14 +283,13 @@ async function _runLocalResolution() {
 
 /**
  * Fire the visual result animations that follow a battle (HP floaters, death burst).
- * Called after the dialog is dismissed (narrow) or after dice settle (wide).
+ * Uses result.damage / result.counterDmg directly so that simultaneous battles in
+ * the same step each show only their own damage, not accumulated step damage.
  */
-function _playBattleResultAnims(actorSnap, targetSnap, result, postEntities, redrawFn) {
+function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
   renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
-  for (const snap of [actorSnap, targetSnap]) {
-    const post = postEntities.find(e => e.id === snap.id);
-    if (post) renderer.addHpChangeFlash(post.col, post.row, post.hp - snap.hp);
-  }
+  if (result?.damage)     renderer.addHpChangeFlash(targetSnap.col, targetSnap.row, -(result.damage));
+  if (result?.counterDmg) renderer.addHpChangeFlash(actorSnap.col,  actorSnap.row,  -(result.counterDmg));
   if (result?.killed) {
     const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
     renderer.addDeathAnim(targetSnap.col, targetSnap.row, deadColor);
@@ -513,12 +512,11 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
                 ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
               });
               renderer.insetRight = prevInsetRight;
-              _playBattleResultAnims(actorSnap, targetSnap, result, postEntities, redrawFn);
+              _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
               // Drain all floaters (HP text 1800ms, death burst 600ms) before next battle.
               await renderer.waitForAnimations();
             } else if (speed === 'fast') {
-              // No dialog — toast notification + outcome floater on map.
-              ui._showBattleToast(actorSnap, targetSnap, result);
+              // No dialog — outcome floater on map only (no DOM toast to avoid top-right clutter).
               const outcomeText = isKill
                 ? `💀 ${targetSnap.name ?? 'unit'} slain`
                 : result.hit
@@ -527,12 +525,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               const flashColor = isKill ? 'rgba(220,40,40,0.15)' : result.hit ? 'rgba(255,140,0,0.1)' : 'rgba(100,100,100,0.1)';
               const textColor  = isKill ? '#ff6666' : result.hit ? '#ffcc44' : '#999';
               renderer.addFlash(targetSnap.col, targetSnap.row, outcomeText, flashColor, 1600, 0.72, textColor);
-              _playBattleResultAnims(actorSnap, targetSnap, result, postEntities, redrawFn);
+              _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
               // Short fixed wait — floaters from different battles can overlap in fast mode.
               await _delay(400);
             } else {
               // Instant — result animations only, no wait.
-              _playBattleResultAnims(actorSnap, targetSnap, result, postEntities, redrawFn);
+              _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
             }
 
             // ── Step 4: Clear highlights and lunge ───────────────────────────
@@ -542,7 +540,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
           } else {
             // Autoplay: fire all animations immediately without dialogs or lunge.
-            _playBattleResultAnims(actorSnap, targetSnap, result, postEntities, redrawFn);
+            _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
           }
           hadBattle = true;
         }
