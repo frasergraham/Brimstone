@@ -2706,8 +2706,8 @@ export class UIController {
             summons.push(logLine || 'Unit summoned');
           }
 
-          // ── Resource tracking ─────────────────────────────────────────────
-          if (ev.result?.success) {
+          // ── Resource tracking (player's faction only) ─────────────────
+          if (ev.result?.success && (!humanFaction || ev._faction === humanFaction)) {
             // Resources found: collect lootItems from explore results
             if (ev.action?.type === 'explore') {
               for (const item of ev.result.lootItems ?? []) {

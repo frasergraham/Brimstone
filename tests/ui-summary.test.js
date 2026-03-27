@@ -429,3 +429,78 @@ describe('action budget breakdown rows', () => {
     assert.equal(total, 3 + 1 + 3); // base + dawn + 3 survivors = 7
   });
 });
+
+// ── Resource tracking scoping ───────────────────────────────────────────────
+
+// Mirrors the resource-tracking guard added to _showResolutionSummary:
+//   if (ev.result?.success && (!humanFaction || ev._faction === humanFaction))
+function shouldTrackResource(ev, humanFaction) {
+  return ev.result?.success && (!humanFaction || ev._faction === humanFaction);
+}
+
+function buildExploreEvent(faction, lootItems) {
+  return {
+    _faction: faction,
+    action: { type: 'explore' },
+    result: { success: true, lootItems },
+  };
+}
+
+function buildSummonEvent(faction, logLine) {
+  return {
+    _faction: faction,
+    action: { type: 'summon' },
+    result: { success: true, log: [logLine] },
+  };
+}
+
+describe('resource tracking scoping in summary', () => {
+  test('fog off: own explore event is tracked', () => {
+    const ev = buildExploreEvent('hero', ['+🪵']);
+    assert.ok(shouldTrackResource(ev, 'hero'));
+  });
+
+  test('fog off: opponent explore event is NOT tracked', () => {
+    const ev = buildExploreEvent('witch', ['+⚙']);
+    assert.ok(!shouldTrackResource(ev, 'hero'));
+  });
+
+  test('fog on: own explore event is tracked', () => {
+    const ev = buildExploreEvent('hero', ['+🪵']);
+    assert.ok(shouldTrackResource(ev, 'hero'));
+  });
+
+  test('fog on: opponent explore event is NOT tracked', () => {
+    const ev = buildExploreEvent('witch', ['+⚙']);
+    assert.ok(!shouldTrackResource(ev, 'hero'));
+  });
+
+  test('fog off: opponent summon (wood golem) is NOT tracked', () => {
+    const ev = buildSummonEvent('witch', 'Wood Golem summoned');
+    assert.ok(!shouldTrackResource(ev, 'hero'));
+  });
+
+  test('fog off: own summon is tracked', () => {
+    const ev = buildSummonEvent('hero', 'Minion summoned');
+    assert.ok(shouldTrackResource(ev, 'hero'));
+  });
+
+  test('failed event is never tracked regardless of faction', () => {
+    const ev = { _faction: 'hero', action: { type: 'explore' }, result: { success: false, lootItems: ['+🪵'] } };
+    assert.ok(!shouldTrackResource(ev, 'hero'));
+  });
+
+  test('autoplay (no humanFaction): all factions are tracked', () => {
+    const heroEv  = buildExploreEvent('hero', ['+🪵']);
+    const witchEv = buildExploreEvent('witch', ['+⚙']);
+    assert.ok(shouldTrackResource(heroEv,  null));
+    assert.ok(shouldTrackResource(witchEv, null));
+  });
+
+  test('witch player: own summon tracked, hero explore not tracked', () => {
+    const summonEv  = buildSummonEvent('witch', 'Iron Golem summoned');
+    const exploreEv = buildExploreEvent('hero', ['+🪵']);
+    assert.ok(shouldTrackResource(summonEv,  'witch'));
+    assert.ok(!shouldTrackResource(exploreEv, 'witch'));
+  });
+});
