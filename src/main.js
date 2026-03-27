@@ -440,11 +440,24 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
                 ? isKill
                 : false; // instant: never
 
+            // On wide landscape screens, offset the camera left so the map is visible
+            // beside the docked battle dialog (dialog is ~500px on the right).
+            const isLandscape = window.innerWidth >= 900 && window.innerWidth / window.innerHeight >= 1.25;
+            const prevInsetRight = renderer.insetRight ?? 0;
+
             // Show dialog FIRST, then fire result animations after dismissal
             if (showFullDialog) {
+              if (isLandscape) {
+                renderer.insetRight = 500;
+                renderer.frameHexes(
+                  [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
+                  { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
+                );
+              }
               await new Promise(resolve => {
                 ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
               });
+              if (isLandscape) renderer.insetRight = prevInsetRight;
             } else if (speed !== 'instant') {
               ui._showBattleToast(actorSnap, targetSnap, result);
             }

@@ -2135,10 +2135,12 @@ export class UIController {
     if (defBkd) { defBkd.innerHTML = ''; defBkd.classList.remove('visible'); }
 
     dialog.style.display = 'flex';
+    const card = dialog.querySelector('.battle-card');
 
     const dismiss = () => {
       dialog.style.display = 'none';
       dialog.removeEventListener('click', dismiss);
+      card?.removeEventListener('click', dismiss);
       document.removeEventListener('keydown', keyDismiss);
       if (onDismiss) onDismiss();
     };
@@ -2266,6 +2268,7 @@ export class UIController {
       // Allow dismiss only after dice settle
       setTimeout(() => {
         dialog.addEventListener('click', dismiss);
+        card?.addEventListener('click', dismiss);
         document.addEventListener('keydown', keyDismiss);
       }, maxTicks * 55 + 200);
     }

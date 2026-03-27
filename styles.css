@@ -1526,6 +1526,22 @@ canvas { touch-action: pan-x pan-y; }
   cursor: pointer;
 }
 
+/* Landscape: dock dialog on the right, no dimming */
+@media (min-width: 900px) and (min-aspect-ratio: 5/4) {
+  #battle-dialog {
+    background: none;
+    justify-content: flex-end;
+    align-items: center;
+    pointer-events: none;
+  }
+  #battle-dialog .battle-card {
+    pointer-events: auto;
+    margin-right: 1rem;
+    box-shadow: -4px 0 30px rgba(0,0,0,0.7);
+    border-left: 2px solid var(--border);
+  }
+}
+
 .battle-critical-badge {
   font-size: 0.68rem;
   font-weight: bold;
