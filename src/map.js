@@ -406,8 +406,10 @@ function _generateRiver(rand) {
   return path;
 }
 
-// Generate an east-west meandering river path: exactly one tile per column (col 0 → MAP_COLS-1).
-// Meanders up or down one row at each column step using hex adjacency parity.
+/// Generate an east-west meandering river path: exactly one tile per column (col 0 → MAP_COLS-1).
+// Drift is only allowed when the current row is ODD, because in odd-r offset the only
+// rightward neighbors of an even-row hex are at (col+1, row) — no diagonal step exists.
+// From an odd-row hex the rightward neighbors are (col+1, row-1), (col+1, row), (col+1, row+1).
 function _generateRiverEW(rand) {
   const path = [];
   const minStart = Math.max(2, Math.floor(MAP_ROWS / 4));
@@ -419,14 +421,12 @@ function _generateRiverEW(rand) {
     path.push({ col, row });
 
     if (col < MAP_COLS - 1) {
-      // In odd-r offset, moving right from even row: can stay same or go up (row-1)
-      // Moving right from odd row: can stay same or go down (row+1)
-      const isEven = row % 2 === 0;
-      const optA = isEven ? row     : row;     // "straight"
-      const optB = isEven ? row - 1 : row + 1; // "drift"
-      const a = Math.max(2, Math.min(MAP_ROWS - 3, optA));
-      const b = Math.max(2, Math.min(MAP_ROWS - 3, optB));
-      row = (rand() < 0.5) ? a : b;
+      if (row % 2 === 1) {
+        // Odd row: upper-right (row-1), straight (row), or lower-right (row+1) are all hex-adjacent
+        const opts = [row - 1, row, row + 1].filter(r => r >= 2 && r <= MAP_ROWS - 3);
+        row = opts[Math.floor(rand() * opts.length)];
+      }
+      // Even row: only (col+1, row) is a rightward hex-neighbor — must go straight
     }
   }
 
