@@ -10,6 +10,7 @@ import { PlanActionType }    from './planner.js';
 import { hexDistance }       from './hex.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
+import { MAP_SIZES } from './map.js';
 
 // Stamp version into badges
 document.getElementById('version-badge').textContent = `v${VERSION}`;
@@ -58,8 +59,9 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
   document.getElementById('setup-screen').style.display  = 'none';
   document.getElementById('game-screen').style.display   = 'flex';
 
-  const mapSize = document.getElementById('select-map-size')?.value ?? 'standard';
-  state    = new GameState(witchIsAI, heroIsAI, mapSize);
+  const mapSize   = document.getElementById('select-map-size')?.value ?? 'standard';
+  const nodeCount = parseInt(document.getElementById('select-node-count')?.value ?? '3', 10);
+  state    = new GameState(witchIsAI, heroIsAI, mapSize, nodeCount);
   // Allow global fog-of-war override from the setup screen checkbox.
   const fogChk = document.getElementById('chk-fog-of-war');
   if (fogChk && !fogChk.checked) state.fogOfWar = false;
@@ -1011,6 +1013,38 @@ function _fogChecked() {
   return document.getElementById('chk-fog-of-war')?.checked ?? true;
 }
 
+// ── Node count selectors — populate options based on map size ─────────────────
+
+function _populateNodeCountSelect(selectId, mapSizeSelectId) {
+  const mapSizeEl  = document.getElementById(mapSizeSelectId);
+  const nodeEl     = document.getElementById(selectId);
+  if (!mapSizeEl || !nodeEl) return;
+  const cfg        = MAP_SIZES[mapSizeEl.value] ?? MAP_SIZES.standard;
+  const min        = cfg.nodeCountMin ?? 1;
+  const max        = cfg.nodeCountMax ?? cfg.nodeCount ?? 3;
+  const current    = parseInt(nodeEl.value, 10);
+  nodeEl.innerHTML = '';
+  for (let i = min; i <= max; i++) {
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    opt.textContent = String(i);
+    if (i === cfg.nodeCount) opt.selected = true;
+    nodeEl.appendChild(opt);
+  }
+  // Restore previous selection if still in range; otherwise default
+  if (current >= min && current <= max) nodeEl.value = String(current);
+}
+
+document.getElementById('select-map-size')?.addEventListener('change', () => {
+  _populateNodeCountSelect('select-node-count', 'select-map-size');
+});
+document.getElementById('cg-map-size')?.addEventListener('change', () => {
+  _populateNodeCountSelect('cg-node-count', 'cg-map-size');
+});
+// Initialize on load
+_populateNodeCountSelect('select-node-count', 'select-map-size');
+_populateNodeCountSelect('cg-node-count', 'cg-map-size');
+
 // ── Create Game flow ──────────────────────────────────────────────────────────
 
 document.getElementById('btn-create-game').addEventListener('click', () => {
@@ -1026,6 +1060,7 @@ document.getElementById('btn-create-game-confirm').addEventListener('click', () 
     const config = {
       fog:           document.getElementById('cg-fog').checked,
       mapSize:       document.getElementById('cg-map-size').value,
+      nodeCount:     parseInt(document.getElementById('cg-node-count')?.value ?? '3', 10),
       playersPerSide: parseInt(document.querySelector('input[name="cg-pps"]:checked')?.value ?? '1', 10),
       isPrivate:     document.getElementById('cg-private').checked,
     };

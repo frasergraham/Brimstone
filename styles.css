@@ -534,10 +534,10 @@ canvas { touch-action: pan-x pan-y; }
   display: inline-block;
   transition: box-shadow 0.2s;
 }
-.node-dot.hero      { background: #4488ff; border-color: #66aaff; box-shadow: 0 0 5px rgba(68,136,255,0.5); }
-.node-dot.witch     { background: #cc3333; border-color: #ff5555; box-shadow: 0 0 5px rgba(200,50,50,0.5); }
-.node-dot.contested { background: #cc8800; border-color: #ffaa00; box-shadow: 0 0 5px rgba(200,140,0,0.5); }
-.node-dot.neutral   { background: transparent; border-color: #554433; }
+.node-dot.hero      { border-color: #66aaff; box-shadow: 0 0 5px rgba(68,136,255,0.6); }
+.node-dot.witch     { border-color: #ff5555; box-shadow: 0 0 5px rgba(200,50,50,0.6); }
+.node-dot.contested { border-color: #ffaa00; box-shadow: 0 0 5px rgba(200,140,0,0.6); }
+.node-dot.neutral   { border-color: #554433; }
 
 .node-dots-group { display: flex; align-items: center; gap: 0.35rem; }
 

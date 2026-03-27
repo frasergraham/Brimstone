@@ -5,6 +5,19 @@ import { Tile, TileType, BuildingType } from './tiles.js';
 // Flavor labels for the witch power nodes (extra labels for larger maps)
 const WITCH_OBJECTIVE_LABELS = [
   'Ancient Altar', 'Dark Grove', 'Cursed Crossroads', 'Forgotten Hollow',
+  'Witches\' Mound', 'Blighted Fen', 'Shadow Cairn',
+];
+
+// Distinct colors for each power node index — used in renderer and score tracker.
+// Chosen to be visually distinct from hero blue (#4488ff) and witch red (#cc3333).
+export const NODE_COLORS = [
+  '#22c55e', // emerald green
+  '#f59e0b', // amber
+  '#06b6d4', // cyan
+  '#a855f7', // violet
+  '#ec4899', // pink
+  '#84cc16', // lime
+  '#f97316', // orange
 ];
 
 // ── Village archetypes ────────────────────────────────────────────────────────
@@ -31,7 +44,8 @@ const VILLAGE_TEMPLATES = {
 //   CHURCH, APOTHECARY, TOWN_HALL, BLACKSMITH buildings.
 // minVillageDist: minimum hex distance between village centers.
 // forestSeeds: starting positions for cluster growth.
-// nodeCount: number of witch power-node objectives.
+// nodeCount: default number of witch power-node objectives.
+// nodeCountMin / nodeCountMax: allowed range for configurable node count.
 // survivorCounts: { buildings, terrain } — tiles flagged hiddenSurvivor=true.
 // bridgeMax: max river-crossing bridges.
 
@@ -46,7 +60,7 @@ export const MAP_SIZES = {
       {col:8,row:3},{col:0,row:4},{col:1,row:7},{col:8,row:6},
       {col:4,row:2},{col:5,row:6},
     ],
-    nodeCount: 2,
+    nodeCount: 2, nodeCountMin: 1, nodeCountMax: 3,
     survivorCounts: { buildings: 9, terrain: 2 },
     bridgeMax: 2,
     minBridges: 1,
@@ -62,7 +76,7 @@ export const MAP_SIZES = {
       {col:7,row:3},{col:8,row:8},{col:0,row:4},{col:6,row:9},
       {col:3,row:11},{col:10,row:12},{col:6,row:12},
     ],
-    nodeCount: 3,
+    nodeCount: 3, nodeCountMin: 2, nodeCountMax: 5,
     survivorCounts: { buildings: 14, terrain: 3 },
     bridgeMax: 4,
     minBridges: 2,
@@ -79,7 +93,7 @@ export const MAP_SIZES = {
       {col:5,row:1},{col:12,row:6},{col:3,row:6},{col:14,row:11},
       {col:2,row:13},{col:14,row:14},{col:8,row:15},{col:1,row:16},{col:15,row:16},
     ],
-    nodeCount: 3,
+    nodeCount: 3, nodeCountMin: 2, nodeCountMax: 6,
     survivorCounts: { buildings: 18, terrain: 4 },
     bridgeMax: 5,
     minBridges: 2,
@@ -98,7 +112,7 @@ export const MAP_SIZES = {
       {col:3,row:15},{col:17,row:16},{col:10,row:17},{col:5,row:18},
       {col:14,row:19},{col:0,row:20},{col:20,row:20},{col:10,row:20},
     ],
-    nodeCount: 3,
+    nodeCount: 3, nodeCountMin: 2, nodeCountMax: 7,
     survivorCounts: { buildings: 24, terrain: 6 },
     bridgeMax: 6,
     minBridges: 3,
@@ -464,7 +478,7 @@ function _generateRiverEW(rand) {
   return path;
 }
 
-export function generateMap(seed = Date.now(), mapSize = 'standard') {
+export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOverride = null) {
   const cfg = MAP_SIZES[mapSize] ?? MAP_SIZES.standard;
   setMapDimensions(cfg.cols, cfg.rows);
 
@@ -684,11 +698,15 @@ export function generateMap(seed = Date.now(), mapSize = 'standard') {
                   || buildingPlacements[buildingPlacements.length - 1];
   const startPositions = [heroStart, witchStart];
 
+  const resolvedNodeCount = (nodeCountOverride != null)
+    ? Math.max(cfg.nodeCountMin ?? 1, Math.min(cfg.nodeCountMax ?? cfg.nodeCount, nodeCountOverride))
+    : cfg.nodeCount;
   const objPositions = _pickNodesAcrossRiver(rand, tiles, resolvedNodeCount, 4, buildingKeys, riverMap, riverEW, startPositions);
   const witchObjectives = objPositions.map((pos, i) => ({
     col: pos.col, row: pos.row,
     label: WITCH_OBJECTIVE_LABELS[i] ?? `Power Node ${i + 1}`,
     hexes: _pickNodeCluster(rand, tiles, pos, buildingKeys, startPositions),
+    color: NODE_COLORS[i % NODE_COLORS.length],
     seenByHero:  false,
     seenByWitch: false,
     prevCtrl:    'neutral',

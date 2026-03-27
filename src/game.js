@@ -121,9 +121,9 @@ const PHASE_ICON = {
 export { PHASE_ICON };
 
 export class GameState {
-  constructor(witchIsAI = true, heroIsAI = false, mapSize = 'standard') {
+  constructor(witchIsAI = true, heroIsAI = false, mapSize = 'standard', nodeCount = null) {
     resetRoster();
-    const mapData  = generateMap(undefined, mapSize);
+    const mapData  = generateMap(undefined, mapSize, nodeCount);
     this.tiles     = mapData.tiles;
     this.entities  = [];
     this.witchIsAI = witchIsAI;

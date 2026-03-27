@@ -1175,11 +1175,13 @@ export class Renderer {
 
   _drawObjectiveHexGlow(col, row, obj, state) {
     const ctrl = nodeController(obj, state.entities);
-    const fillColor =
-      ctrl === 'hero'      ? 'rgba(50,120,220,0.22)'  :
-      ctrl === 'witch'     ? 'rgba(180,0,80,0.22)'    :
-      ctrl === 'contested' ? 'rgba(200,140,0,0.22)'   :
-                             'rgba(160,0,220,0.15)';
+    const nodeColor = obj.color ?? '#8800cc';
+    // Faction-tinted overlay
+    const factionOverlay =
+      ctrl === 'hero'      ? 'rgba(50,120,220,0.18)'  :
+      ctrl === 'witch'     ? 'rgba(180,0,80,0.18)'    :
+      ctrl === 'contested' ? 'rgba(200,140,0,0.18)'   :
+                             null;
     const { x, y } = this._toCanvas(col, row);
     const hs = this.hexSize;
     const corners = hexCorners(x, y, hs - 1);
@@ -1188,15 +1190,20 @@ export class Renderer {
     ctx.moveTo(corners[0].x, corners[0].y);
     for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
     ctx.closePath();
-    ctx.fillStyle = fillColor;
+    // Node color base fill (~20% opacity)
+    ctx.fillStyle = nodeColor + '33';
     ctx.fill();
-    // Subtle border ring
-    const borderColor =
-      ctrl === 'hero'      ? 'rgba(50,120,220,0.5)'  :
-      ctrl === 'witch'     ? 'rgba(180,0,80,0.5)'    :
-      ctrl === 'contested' ? 'rgba(200,140,0,0.5)'   :
-                             'rgba(160,0,220,0.4)';
-    ctx.strokeStyle = borderColor;
+    // Faction overlay on controlled/contested hexes
+    if (factionOverlay) {
+      ctx.beginPath();
+      ctx.moveTo(corners[0].x, corners[0].y);
+      for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
+      ctx.closePath();
+      ctx.fillStyle = factionOverlay;
+      ctx.fill();
+    }
+    // Border ring in node color (~53% opacity)
+    ctx.strokeStyle = nodeColor + '88';
     ctx.lineWidth = 1.5;
     ctx.stroke();
   }
@@ -1208,25 +1215,25 @@ export class Renderer {
 
     const obj  = state.witchObjectives.find(o => o.col === col && o.row === row);
     const ctrl = obj ? nodeController(obj, state.entities) : 'neutral';
+    const nodeColor = obj?.color ?? 'rgba(180,0,255,0.7)';
 
-    const symbolColor =
+    // Symbol uses node color; faction glow tints the outline
+    const glowColor =
       ctrl === 'witch'     ? '#ff4444' :
       ctrl === 'hero'      ? '#4488ff' :
       ctrl === 'contested' ? '#ffaa00' :
-                             'rgba(180,0,255,0.7)';
-    const labelColor =
-      ctrl === 'witch'     ? '#ff8888' :
-      ctrl === 'hero'      ? '#88aaff' :
-      ctrl === 'contested' ? '#ffd060' :
-                             'rgba(220,160,255,0.85)';
+                             nodeColor;
 
-    ctx.fillStyle    = symbolColor;
+    ctx.shadowColor = glowColor;
+    ctx.shadowBlur  = ctrl === 'neutral' ? 4 : 8;
+    ctx.fillStyle    = nodeColor;
     ctx.font         = `bold ${Math.floor(hs * 0.5)}px serif`;
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('⛧', x, y - hs * 0.15);
+    ctx.shadowBlur = 0;
 
-    ctx.fillStyle = labelColor;
+    ctx.fillStyle = nodeColor + 'cc';
     ctx.font      = `${Math.max(6, Math.floor(hs * 0.2))}px sans-serif`;
     ctx.fillText(label, x, y + hs * 0.35);
   }
