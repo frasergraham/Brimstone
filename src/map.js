@@ -715,6 +715,93 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   return { tiles, witchObjectives, heroStart, witchStart, mapSize, survivorCounts: cfg.survivorCounts };
 }
 
+// ── Tutorial map ─────────────────────────────────────────────────────────────
+
+/**
+ * Returns a small, hand-crafted 9×9 map for the tutorial scenario.
+ * No river. Single Power Node. Two buildings near the hero start.
+ * Calls setMapDimensions(9, 9) to update the global grid size.
+ *
+ * Deliberately minimal — the tutorial should be legible, not complex.
+ *
+ * Layout (col, row):
+ *   INN      (2,6)  — hero start
+ *   CHURCH   (2,5)  — exploration target, adjacent north of INN
+ *   GRAVEYARD(7,1)  — witch start
+ *   Forest cluster  — (4,2),(5,2),(4,3),(6,2) for visual depth
+ *   Road            — INN ↔ CHURCH ↔ tile(2,4) ↔ tile(3,4)
+ *   Power Node      — center (4,4), cluster hexes (4,4),(5,4),(4,5)
+ */
+export function generateTutorialMap() {
+  const COLS = 9;
+  const ROWS = 9;
+  setMapDimensions(COLS, ROWS);
+
+  const tiles = new Map();
+  for (let row = 0; row < ROWS; row++) {
+    for (let col = 0; col < COLS; col++) {
+      tiles.set(hexKey(col, row), new Tile(col, row, TileType.GRASS));
+    }
+  }
+
+  // ── Buildings ──────────────────────────────────────────────────────────────
+  const inn = tiles.get(hexKey(2, 6));
+  inn.type = TileType.BUILDING; inn.building = BuildingType.INN; inn.fortifyLevel = 1;
+
+  const church = tiles.get(hexKey(2, 5));
+  church.type = TileType.BUILDING; church.building = BuildingType.CHURCH; church.fortifyLevel = 1;
+  // hiddenSurvivor is set by initTutorial() after state creation
+
+  const grave = tiles.get(hexKey(7, 1));
+  grave.type = TileType.BUILDING; grave.building = BuildingType.GRAVEYARD; grave.fortifyLevel = 1;
+
+  // ── Forest cluster ─────────────────────────────────────────────────────────
+  for (const { col, row } of [
+    { col: 4, row: 2 }, { col: 5, row: 2 }, { col: 4, row: 3 }, { col: 6, row: 2 },
+  ]) {
+    const t = tiles.get(hexKey(col, row));
+    if (t && t.type === TileType.GRASS) t.type = TileType.FOREST;
+  }
+
+  // ── Road: INN ↔ CHURCH ↔ (2,4) ↔ (3,4) ────────────────────────────────────
+  inn.roadDirs.add(hexKey(2, 5));
+  church.roadDirs.add(hexKey(2, 6));
+  church.roadDirs.add(hexKey(2, 4));
+
+  const road24 = tiles.get(hexKey(2, 4));
+  road24.type = TileType.ROAD;
+  road24.roadDirs.add(hexKey(2, 5));
+  road24.roadDirs.add(hexKey(3, 4));
+
+  const road34 = tiles.get(hexKey(3, 4));
+  road34.type = TileType.ROAD;
+  road34.roadDirs.add(hexKey(2, 4));
+
+  // ── Power Node — cluster (4,4),(5,4),(4,5); no overlap with road or forest ─
+  const witchObjectives = [
+    {
+      col: 4, row: 4,
+      label: 'The Crossroads',
+      hexes: [{ col: 4, row: 4 }, { col: 5, row: 4 }, { col: 4, row: 5 }],
+      color: NODE_COLORS[0],
+      seenByHero:  true, // no fog in tutorial
+      seenByWitch: true,
+      prevCtrl: 'neutral',
+    },
+  ];
+
+  return {
+    tiles,
+    witchObjectives,
+    heroStart:     { col: 2, row: 6 },
+    witchStart:    { col: 7, row: 1 },
+    mapSize:       'tutorial',
+    survivorCounts: { buildings: 0, terrain: 0 },
+    cols: COLS,
+    rows: ROWS,
+  };
+}
+
 // ── Multiple start positions (multiplayer) ───────────────────────────────────
 //
 // Returns an array of `count` distinct start positions for a faction.

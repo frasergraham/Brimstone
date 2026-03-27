@@ -71,6 +71,9 @@ export class Renderer {
     /** Ghost overlay steps from computeGhostState(). null = no overlay. */
     this.planGhostSteps = null;
 
+    /** Tutorial spotlight: pulsing ring drawn over this hex. null = inactive. */
+    this.tutorialSpotlightHex = null;
+
     /** ID of the currently selected entity; drives the ⊕ indicator drawn above its hex. */
     this.selectedEntityId = null;
 
@@ -699,8 +702,35 @@ export class Renderer {
       if (pos) this._drawSelectionIndicator(pos.col, pos.row);
     }
 
+    // Tutorial spotlight — pulsing gold ring on the target hex
+    if (this.tutorialSpotlightHex) {
+      this._drawTutorialSpotlight(this.tutorialSpotlightHex.col, this.tutorialSpotlightHex.row);
+    }
+
     ctx.restore(); // end zoom/pan transform
 
+  }
+
+  _drawTutorialSpotlight(col, row) {
+    const ctx = this.ctx;
+    const hs  = this.hexSize;
+    const { x, y } = this._toCanvas(col, row);
+    // Sine-wave pulse: alpha oscillates between 0.4 and 0.95 at ~1.5 Hz
+    const pulse = 0.675 + 0.325 * Math.sin(Date.now() / 340);
+    const corners = hexCorners(x, y, hs - 1);
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(corners[0].x, corners[0].y);
+    for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
+    ctx.closePath();
+    ctx.strokeStyle = `rgba(255,215,0,${pulse})`; // gold
+    ctx.lineWidth   = 3.5;
+    ctx.shadowColor = 'rgba(255,200,0,0.8)';
+    ctx.shadowBlur  = 12;
+    ctx.stroke();
+    ctx.restore();
+    // Drive the animation loop so the pulse redraws continuously
+    this._startAnimLoop();
   }
 
   _drawFlashes() {

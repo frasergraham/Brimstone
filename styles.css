@@ -2808,3 +2808,90 @@ body.spectator-mode #game-screen   { display: flex !important; }
   color: var(--text);
   margin-bottom: 1rem;
 }
+
+/* ── Tutorial overlay ──────────────────────────────────────────────────────── */
+
+/* Backdrop: invisible by default; activates when .active is added */
+#tutorial-backdrop {
+  display: none; /* unused currently; reserved for future dim-everything option */
+}
+
+/* Floating tooltip card */
+.tutorial-tooltip {
+  position: fixed;
+  z-index: 920;
+  max-width: 340px;
+  background: linear-gradient(160deg, #1a1209 0%, #0d0a06 100%);
+  border: 1px solid #6b4a1e;
+  border-radius: 6px;
+  padding: 1rem 1.1rem 0.85rem;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.7), 0 0 0 1px rgba(180,130,40,0.18);
+  pointer-events: auto;
+  transition: opacity 0.2s;
+}
+
+/* Position variants */
+.tutorial-tooltip--center {
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+.tutorial-tooltip--bottom-left {
+  left: 1.2rem;
+  bottom: 5.5rem;
+}
+.tutorial-tooltip--bottom-right {
+  right: 1.2rem;
+  bottom: 5.5rem;
+}
+
+.tut-title {
+  font-family: 'Cinzel', 'Palatino Linotype', serif;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #d4a72c;
+  margin-bottom: 0.45rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tut-body {
+  font-size: 0.82rem;
+  color: #c8b89a;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  margin-bottom: 0.75rem;
+}
+
+.tut-next-btn {
+  background: linear-gradient(135deg, #5a3a10, #3a2008);
+  border: 1px solid #c8901a;
+  color: #f0d080;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.35rem 0.9rem;
+  border-radius: 4px;
+  cursor: pointer;
+  float: right;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+.tut-next-btn:hover {
+  background: linear-gradient(135deg, #7a5020, #5a3010);
+  box-shadow: 0 0 8px rgba(200,140,20,0.4);
+}
+
+/* Element spotlight: a golden glow outline drawn around a UI element */
+.tutorial-spotlit {
+  position: relative;
+  z-index: 910;
+  border-radius: 4px;
+  outline: 2px solid rgba(255, 215, 0, 0.85);
+  outline-offset: 2px;
+  box-shadow: 0 0 10px 2px rgba(255, 200, 0, 0.45);
+  animation: tut-spotlight-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes tut-spotlight-pulse {
+  0%, 100% { box-shadow: 0 0 8px 1px rgba(255,200,0,0.35); }
+  50%       { box-shadow: 0 0 16px 4px rgba(255,200,0,0.65); }
+}

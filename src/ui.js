@@ -583,6 +583,7 @@ export class UIController {
   _addToPlan(action) {
     if (this._planSubmitted) return;
     this._plan.push(action);
+    this.onPlanActionAdded?.(action);
     this._refreshPlanOverlay();
     this._renderPlanPanel();
   }
@@ -839,6 +840,7 @@ export class UIController {
 
   _selectEntity(entity) {
     this._selectedEntity  = entity;
+    this.onEntitySelected?.(entity);
     this._pendingUnitPick = null;
     this._popupVisible    = false;
     _hideActionPopup();
