@@ -78,24 +78,34 @@ function buildMPState() {
   return state;
 }
 
+// ── Ally context helpers ───────────────────────────────────────────────────────
+
 /**
- * Given a faction AI oracle (HeroAI or WitchAI) and a specific playerId,
- * generate a plan scoped only to that player's entities.
- *
- * Strategy: let the oracle produce the full faction plan, then keep only
- * actions whose entityId belongs to this player's entities.
+ * Build a fresh ally context for one faction's planning pass.
+ * The context is shared (mutated) by all allied players as their plans are generated
+ * in sequence, so each subsequent player avoids duplicating the prior player's choices.
  */
-function generateScopedPlan(ai, state, playerId) {
-  // Temporarily expose the playerId filter on the state so the AI can work with it.
-  const fullPlan = ai.generatePlan();
+function buildAllyContext() {
+  return {
+    claimedNodes:      new Set(), // hexKey strings of nodes already targeted by an ally
+    allyBattleTargets: new Set(), // entity IDs that an ally is already attacking
+    allyPositions:     [],        // { col, row } of allies' leaders at plan-start
+  };
+}
 
-  const myIds = new Set(
-    state.entities
-      .filter(e => e.alive && e.ownerId === playerId)
-      .map(e => e.id)
-  );
-
-  return fullPlan.filter(action => myIds.has(action.entityId));
+/**
+ * After generating a player's plan, update the shared ally context so subsequent
+ * allied players can avoid duplicating objectives and combat targets.
+ */
+function updateAllyContext(ctx, plan, leader) {
+  // Record the leader's current position so later allies know not to flee when nearby
+  if (leader) ctx.allyPositions.push({ col: leader.col, row: leader.row });
+  // Register battle targets committed to by this player's plan
+  for (const a of plan) {
+    if (a.type === PlanActionType.BATTLE_UNIT) ctx.allyBattleTargets.add(a.targetId);
+  }
+  // claimedNodes is updated automatically inside _bestNodeForHero / _bestWitchObjective
+  // when generatePlan() passes the shared ctx.claimedNodes Set.
 }
 
 // ── Main game loop ─────────────────────────────────────────────────────────────
@@ -103,11 +113,13 @@ function generateScopedPlan(ai, state, playerId) {
 function runGame() {
   const state = buildMPState();
 
-  // Create one AI oracle per faction (they read the full faction state).
-  // For multiple players of the same faction, they all share the oracle — plans
-  // are then scoped to each player's own entities.
-  const heroOracle  = new HeroAI(state,  () => {}, 0);
-  const witchOracle = new WitchAI(state, () => {}, 0);
+  // Create one AI instance per player, each scoped to their own entities (matching lobby.js).
+  // This ensures every player's leader acts independently rather than all sharing one oracle.
+  const playerAIs = new Map();
+  for (const p of state.players) {
+    const AIClass = p.faction === 'hero' ? HeroAI : WitchAI;
+    playerAIs.set(p.id, new AIClass(state, () => {}, 0, p.id));
+  }
 
   const metrics = {
     actionCounts: {},
@@ -150,11 +162,25 @@ function runGame() {
   while (!state.gameOver && state.round <= MAX_ROUNDS) {
     state.startPlanning();
 
-    // Build per-player plans
+    // Build per-player plans with shared ally context per faction.
+    // Plans are generated in player order (heroes first, then witches) so each player's
+    // choices inform the next: claimedNodes and allyBattleTargets accumulate across the loop.
+    const heroCtx  = buildAllyContext();
+    const witchCtx = buildAllyContext();
+
     const playerEntries = [];
-    for (const p of state.players) {
-      const oracle = p.faction === 'hero' ? heroOracle : witchOracle;
-      const plan   = generateScopedPlan(oracle, state, p.id);
+    // Heroes first, then witches — consistent with resolvePlansMP ordering
+    const ordered = [
+      ...state.players.filter(p => p.faction === 'hero'),
+      ...state.players.filter(p => p.faction === 'witch'),
+    ];
+    for (const p of ordered) {
+      const ai  = playerAIs.get(p.id);
+      const ctx = p.faction === 'hero' ? heroCtx : witchCtx;
+      const leader = state.entities.find(e => e.alive && e.ownerId === p.id &&
+        (e.type === 'hero' || e.type === 'witch'));
+      const plan = ai.generatePlan(ctx);
+      updateAllyContext(ctx, plan, leader);
       state.submitPlayerPlan(p.id, plan);
       playerEntries.push({ playerId: p.id, faction: p.faction, plan });
     }

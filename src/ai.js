@@ -108,29 +108,36 @@ function _nearestClusterHex(actor, obj) {
 
 // Returns the best node target for the witch: neutral nodes first, then hero-controlled.
 // Excludes the node the actor just departed (prevents oscillation in planning sim).
-function _bestWitchObjective(state, actor) {
+// claimedNodes (optional Set<"col,row">) — nodes already targeted by allied AI players;
+//   the chosen objective's hexes are added to this set so subsequent allies pick differently.
+function _bestWitchObjective(state, actor, claimedNodes = null) {
   const justLeft = state._justLeft && state._justLeft[actor.id];
   const notJustLeft = obj => !(justLeft && justLeft.col === obj.col && justLeft.row === obj.row);
+  const notClaimed  = obj => !claimedNodes || !obj.hexes.some(h => claimedNodes.has(hexKey(h.col, h.row)));
 
   const neutral = state.witchObjectives.filter(obj =>
-    nodeController(obj, state.entities) === 'neutral' && notJustLeft(obj)
+    nodeController(obj, state.entities) === 'neutral' && notJustLeft(obj) && notClaimed(obj)
   );
   if (neutral.length) {
     neutral.sort((a, b) =>
       hexDistance(actor.col, actor.row, a.col, a.row) -
       hexDistance(actor.col, actor.row, b.col, b.row)
     );
-    return _nearestClusterHex(actor, neutral[0]);
+    const chosen = neutral[0];
+    if (claimedNodes) chosen.hexes.forEach(h => claimedNodes.add(hexKey(h.col, h.row)));
+    return _nearestClusterHex(actor, chosen);
   }
   const heroHeld = state.witchObjectives.filter(obj =>
-    nodeController(obj, state.entities) === 'hero' && notJustLeft(obj)
+    nodeController(obj, state.entities) === 'hero' && notJustLeft(obj) && notClaimed(obj)
   );
   if (heroHeld.length) {
     heroHeld.sort((a, b) =>
       hexDistance(actor.col, actor.row, a.col, a.row) -
       hexDistance(actor.col, actor.row, b.col, b.row)
     );
-    return _nearestClusterHex(actor, heroHeld[0]);
+    const chosen = heroHeld[0];
+    if (claimedNodes) chosen.hexes.forEach(h => claimedNodes.add(hexKey(h.col, h.row)));
+    return _nearestClusterHex(actor, chosen);
   }
   return null;
 }
@@ -154,6 +161,7 @@ export class WitchAI {
     this._running      = false;
     this.thinkDelay    = thinkDelay;
     this.playerId      = playerId;  // null → offline/legacy; set → scoped MP plan
+    this._allyContext  = null;      // set during generatePlan() for MP coordination
   }
 
   async takeTurn() {
@@ -530,8 +538,13 @@ export class WitchAI {
     await delay(this.thinkDelay * 0.5);
   }
 
-  /** Generate a complete plan synchronously for the simultaneous-turn system. */
-  generatePlan() {
+  /** Generate a complete plan synchronously for the simultaneous-turn system.
+   * @param {object|null} allyContext - Shared mutable coordination context for allied AI players.
+   *   Shape: { claimedNodes: Set<string>, allyBattleTargets: Set<entityId>, allyPositions: {col,row}[] }
+   *   Passing null (default) disables all ally-awareness — identical to solo/offline behaviour.
+   */
+  generatePlan(allyContext = null) {
+    this._allyContext = allyContext;
     const sim = new PlanSimState(this.state, 'witch', this.playerId);
     const plan = [];
 
@@ -548,6 +561,7 @@ export class WitchAI {
         default:                         sim.actionsLeft--; break;
       }
     }
+    this._allyContext = null;
     return plan;
   }
 
@@ -565,8 +579,14 @@ export class WitchAI {
     const witchOnNode = _isOnNode(sim, witch);
     const heroScore   = sim.nodeScore.hero;
     const hero        = sim.hero;
+    // Ally context shorthand (null in 1v1 / offline — no behaviour change)
+    const claimedNodes   = this._allyContext?.claimedNodes ?? null;
+    const focusTargets   = this._allyContext?.allyBattleTargets ?? null;
+    const allyPositions  = this._allyContext?.allyPositions ?? null;
+    // Nodes uncovered by any witch unit, also excluding nodes already claimed by allied AI players
     const uncoveredNodes = sim.witchObjectives.filter(obj =>
-      !sim.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
+      !sim.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row) &&
+      !(claimedNodes && obj.hexes.some(h => claimedNodes.has(hexKey(h.col, h.row))))
     );
 
     const tryMove = (entity, target) => {
@@ -585,20 +605,22 @@ export class WitchAI {
       ({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id });
 
     if (isNight) {
-      // 0. Flee if critical HP
+      // 0. Flee if critical HP — suppressed when an allied leader is adjacent (mutual support)
       if (hero && witch.hp <= Math.ceil(witch.maxHp * 0.3)) {
-        const close = hexDistance(witch.col, witch.row, hero.col, hero.row) <= 2;
+        const close   = hexDistance(witch.col, witch.row, hero.col, hero.row) <= 2;
         const covered = minions.some(m => hexDistance(witch.col, witch.row, m.col, m.row) <= 1);
-        if (close && !covered) { const a = tryFlee(witch, hero); if (a) return a; }
+        const allyNearby = allyPositions?.some(a => hexDistance(a.col, a.row, witch.col, witch.row) <= 1) ?? false;
+        if (close && !covered && !allyNearby) { const a = tryFlee(witch, hero); if (a) return a; }
       }
 
       // 1. Witch fights co-located hero unit
       const col1 = sim.entities.find(e => e.alive && e.owner === 'hero' && e.col === witch.col && e.row === witch.row);
       if (col1) return tryBattle(witch, col1);
 
-      // 2. Fight adjacent hero unit
-      const adj2 = sim.entities.find(e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1);
-      if (adj2) return tryBattle(witch, adj2);
+      // 2. Fight adjacent hero unit (gang-up: prefer enemy already targeted by an ally)
+      const adj2Candidates = sim.entities.filter(e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1);
+      const adj2 = (focusTargets?.size ? adj2Candidates.find(e => focusTargets.has(e.id)) : null) ?? adj2Candidates[0] ?? null;
+      if (adj2) { if (focusTargets) focusTargets.add(adj2.id); return tryBattle(witch, adj2); }
 
       // 3. Minion attacks
       for (const m of minions) {
@@ -610,17 +632,18 @@ export class WitchAI {
 
       // 4. Urgent race to nodes
       if (heroScore >= 2) {
-        if (!witchOnNode) { const a = tryMove(witch, _bestWitchObjective(sim, witch)); if (a) return a; }
+        if (!witchOnNode) { const a = tryMove(witch, _bestWitchObjective(sim, witch, claimedNodes)); if (a) return a; }
         for (const m of realMinions) {
           if (_isOnNode(sim, m)) continue;
-          const a = tryMove(m, _bestWitchObjective(sim, m)); if (a) return a;
+          const a = tryMove(m, _bestWitchObjective(sim, m, claimedNodes)); if (a) return a;
         }
       }
 
       // 5. Hold node
       if (witchOnNode) {
-        const thr = sim.entities.find(e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1);
-        if (thr) return tryBattle(witch, thr);
+        const thrCandidates = sim.entities.filter(e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1);
+        const thr = (focusTargets?.size ? thrCandidates.find(e => focusTargets.has(e.id)) : null) ?? thrCandidates[0] ?? null;
+        if (thr) { if (focusTargets) focusTargets.add(thr.id); return tryBattle(witch, thr); }
         const srt = [...uncoveredNodes].sort((a, b) =>
           hexDistance(witch.col, witch.row, a.col, a.row) - hexDistance(witch.col, witch.row, b.col, b.row));
         for (const m of realMinions) {
@@ -661,12 +684,12 @@ export class WitchAI {
       }
 
       // 7. Witch moves toward objective
-      { const a = tryMove(witch, _bestWitchObjective(sim, witch)); if (a) return a; }
+      { const a = tryMove(witch, _bestWitchObjective(sim, witch, claimedNodes)); if (a) return a; }
 
       // 8. Move minions toward objectives or hero
       for (const m of realMinions) {
         if (_isOnNode(sim, m)) continue;
-        const obj = _bestWitchObjective(sim, m);
+        const obj = _bestWitchObjective(sim, m, claimedNodes);
         if (obj) { const a = tryMove(m, obj); if (a) return a; }
         if (hero) { const a = tryMove(m, hero); if (a) return a; }
       }
@@ -679,8 +702,9 @@ export class WitchAI {
     // ── DAY strategy ──────────────────────────────────────────────────────────
     const distToHero = hero ? hexDistance(witch.col, witch.row, hero.col, hero.row) : Infinity;
 
-    // 0. Flee if injured and hero nearby
-    if (hero && distToHero <= 2 && witch.hp <= Math.ceil(witch.maxHp * 0.6)) {
+    // 0. Flee if injured and hero nearby — suppressed when an allied leader is adjacent
+    const allyNearbyDay = allyPositions?.some(a => hexDistance(a.col, a.row, witch.col, witch.row) <= 1) ?? false;
+    if (hero && distToHero <= 2 && witch.hp <= Math.ceil(witch.maxHp * 0.6) && !allyNearbyDay) {
       const a = tryFlee(witch, hero); if (a) return a;
     }
 
@@ -696,17 +720,18 @@ export class WitchAI {
 
     // 3. Urgent node race
     if (heroScore >= 2) {
-      if (!witchOnNode) { const a = tryMove(witch, _bestWitchObjective(sim, witch)); if (a) return a; }
+      if (!witchOnNode) { const a = tryMove(witch, _bestWitchObjective(sim, witch, claimedNodes)); if (a) return a; }
       for (const m of realMinions) {
         if (_isOnNode(sim, m)) continue;
-        const a = tryMove(m, _bestWitchObjective(sim, m)); if (a) return a;
+        const a = tryMove(m, _bestWitchObjective(sim, m, claimedNodes)); if (a) return a;
       }
     }
 
     // 4. Hold node
     if (witchOnNode) {
-      const thr = sim.entities.find(e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1);
-      if (thr) return tryBattle(witch, thr);
+      const thrCandidatesDay = sim.entities.filter(e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1);
+      const thr = (focusTargets?.size ? thrCandidatesDay.find(e => focusTargets.has(e.id)) : null) ?? thrCandidatesDay[0] ?? null;
+      if (thr) { if (focusTargets) focusTargets.add(thr.id); return tryBattle(witch, thr); }
       for (const m of realMinions) {
         if (_isOnNode(sim, m) || !uncoveredNodes.length) continue;
         const s = [...uncoveredNodes].sort((a, b) => hexDistance(m.col, m.row, a.col, a.row) - hexDistance(m.col, m.row, b.col, b.row));
@@ -734,15 +759,18 @@ export class WitchAI {
     }
 
     // 5. Witch fights adjacent hero (day ATK penalty accepted — keeps hero honest)
-    const adjD2 = sim.entities.find(e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1);
-    if (adjD2) return tryBattle(witch, adjD2);
+    //    Gang-up: prefer enemy already targeted by an allied witch
+    const adjD2Candidates = sim.entities.filter(e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1);
+    const adjD2 = (focusTargets?.size ? adjD2Candidates.find(e => focusTargets.has(e.id)) : null) ?? adjD2Candidates[0] ?? null;
+    if (adjD2) { if (focusTargets) focusTargets.add(adjD2.id); return tryBattle(witch, adjD2); }
 
     // 6. Minions toward nodes, plus adjacent attacks for node-bound minions
     for (const m of realMinions) {
-      const ma = sim.entities.find(e => e.alive && e.owner === 'hero' && hexDistance(m.col, m.row, e.col, e.row) === 1);
-      if (ma) return tryBattle(m, ma);
+      const maCandidates = sim.entities.filter(e => e.alive && e.owner === 'hero' && hexDistance(m.col, m.row, e.col, e.row) === 1);
+      const ma = (focusTargets?.size ? maCandidates.find(e => focusTargets.has(e.id)) : null) ?? maCandidates[0] ?? null;
+      if (ma) { if (focusTargets) focusTargets.add(ma.id); return tryBattle(m, ma); }
       if (_isOnNode(sim, m)) continue;
-      const a = tryMove(m, _bestWitchObjective(sim, m)); if (a) return a;
+      const a = tryMove(m, _bestWitchObjective(sim, m, claimedNodes)); if (a) return a;
     }
 
     // 7. Summon
@@ -770,7 +798,7 @@ export class WitchAI {
     if (unexpAdj) return { type: PlanActionType.MOVE, entityId: witch.id, toCol: unexpAdj.col, toRow: unexpAdj.row };
 
     // 10. Move toward objective
-    { const a = tryMove(witch, _bestWitchObjective(sim, witch)); if (a) return a; }
+    { const a = tryMove(witch, _bestWitchObjective(sim, witch, claimedNodes)); if (a) return a; }
 
     // 11. Pursue hero to force combat
     if (hero) { const a = tryMove(witch, hero); if (a) return a; }
@@ -793,6 +821,7 @@ export class HeroAI {
     this._running       = false;
     this.thinkDelay     = thinkDelay;
     this.playerId       = playerId;  // null → offline/legacy; set → scoped MP plan
+    this._allyContext   = null;      // set during generatePlan() for MP coordination
   }
 
   async takeTurn() {
@@ -1120,8 +1149,13 @@ export class HeroAI {
     return false;
   }
 
-  /** Generate a complete plan synchronously for the simultaneous-turn system. */
-  generatePlan() {
+  /** Generate a complete plan synchronously for the simultaneous-turn system.
+   * @param {object|null} allyContext - Shared mutable coordination context for allied AI players.
+   *   Shape: { claimedNodes: Set<string>, allyBattleTargets: Set<entityId>, allyPositions: {col,row}[] }
+   *   Passing null (default) disables all ally-awareness — identical to solo/offline behaviour.
+   */
+  generatePlan(allyContext = null) {
+    this._allyContext = allyContext;
     const sim = new PlanSimState(this.state, 'hero', this.playerId);
     const plan = [];
 
@@ -1138,6 +1172,7 @@ export class HeroAI {
         default:                         sim.actionsLeft--; break;
       }
     }
+    this._allyContext = null;
     return plan;
   }
 
@@ -1164,6 +1199,10 @@ export class HeroAI {
     const tryBattle = (actor, target) =>
       ({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id });
 
+    // Ally context shorthand (null in 1v1 / offline — no behaviour change)
+    const claimedNodes  = this._allyContext?.claimedNodes ?? null;
+    const focusTargets  = this._allyContext?.allyBattleTargets ?? null;
+
     // Heal via herbs (free action — always good to include)
     const herbs = (hero.items && hero.items[ResourceType.HERBS]) || 0;
     if (herbs > 0 && hero.hp < hero.maxHp) {
@@ -1177,12 +1216,13 @@ export class HeroAI {
 
       // 2b. Fight adjacent witch (the boss) — worth the risk at night; avoid minion swarms
       const adjWitchN = sim.entities.find(e => e.alive && e.type === EntityType.WITCH && hexDistance(hero.col, hero.row, e.col, e.row) === 1);
-      if (adjWitchN) return tryBattle(hero, adjWitchN);
+      if (adjWitchN) { if (focusTargets) focusTargets.add(adjWitchN.id); return tryBattle(hero, adjWitchN); }
 
       // 3. Node combat + dispatch — hero stays mobile, doesn't idle on node
       if (heroOnNode) {
-        const thr = sim.entities.find(e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1);
-        if (thr) return tryBattle(hero, thr);
+        const thrNCandidates = sim.entities.filter(e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1);
+        const thr = (focusTargets?.size ? thrNCandidates.find(e => focusTargets.has(e.id)) : null) ?? thrNCandidates[0] ?? null;
+        if (thr) { if (focusTargets) focusTargets.add(thr.id); return tryBattle(hero, thr); }
         const undef = _undefendedNodes(sim, hero);
         for (const s of survivors) {
           if (_isOnNode(sim, s)) continue;
@@ -1201,10 +1241,10 @@ export class HeroAI {
 
       // 4. Urgent: witch holds 2+
       if (witchNodeCount >= 2) {
-        const a = tryMove(hero, _bestNodeForHero(sim, hero)); if (a) return a;
+        const a = tryMove(hero, _bestNodeForHero(sim, hero, claimedNodes)); if (a) return a;
         for (const s of survivors) {
           if (_isOnNode(sim, s)) continue;
-          const b = tryMove(s, _bestNodeForHero(sim, s)); if (b) return b;
+          const b = tryMove(s, _bestNodeForHero(sim, s, claimedNodes)); if (b) return b;
         }
       }
 
@@ -1213,7 +1253,7 @@ export class HeroAI {
       if (heroTile && heroTile.type !== TileType.BUILDING) {
         // Hero not in building — advance toward a node or witch rather than shelter
         // (hero takes no night damage; survivors need shelter but hero does not)
-        const nodeTarget = _bestNodeForHero(sim, hero);
+        const nodeTarget = _bestNodeForHero(sim, hero, claimedNodes);
         if (nodeTarget) { const a = tryMove(hero, nodeTarget); if (a) return a; }
         if (witch) { const a = tryMove(hero, witch); if (a) return a; }
       }
@@ -1257,19 +1297,21 @@ export class HeroAI {
     const col = sim.entities.find(e => e.alive && e.owner === 'witch' && e.col === hero.col && e.row === hero.row);
     if (col) return tryBattle(hero, col);
 
-    // 3. Fight adjacent witch — prioritise the witch herself
-    const adjW = [
+    // 3. Fight adjacent witch — prioritise the witch herself; gang-up with allies
+    const adjWCandidates = [
       sim.entities.find(e => e.alive && e.type === EntityType.WITCH && hexDistance(hero.col, hero.row, e.col, e.row) === 1),
       sim.entities.find(e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1),
-    ].find(Boolean);
-    if (adjW) return tryBattle(hero, adjW);
+    ].filter(Boolean);
+    const adjW = (focusTargets?.size ? adjWCandidates.find(e => focusTargets.has(e.id)) : null) ?? adjWCandidates[0] ?? null;
+    if (adjW) { if (focusTargets) focusTargets.add(adjW.id); return tryBattle(hero, adjW); }
 
     // 4. Survivors fight
     for (const s of survivors) {
       const sc = sim.entities.find(e => e.alive && e.owner === 'witch' && e.col === s.col && e.row === s.row);
       if (sc) return tryBattle(s, sc);
-      const sa = sim.entities.find(e => e.alive && e.owner === 'witch' && hexDistance(s.col, s.row, e.col, e.row) === 1);
-      if (sa) return tryBattle(s, sa);
+      const saCandidates = sim.entities.filter(e => e.alive && e.owner === 'witch' && hexDistance(s.col, s.row, e.col, e.row) === 1);
+      const sa = (focusTargets?.size ? saCandidates.find(e => focusTargets.has(e.id)) : null) ?? saCandidates[0] ?? null;
+      if (sa) { if (focusTargets) focusTargets.add(sa.id); return tryBattle(s, sa); }
     }
 
     // 5. Explore current building before moving out (find survivors + loot early)
@@ -1291,8 +1333,9 @@ export class HeroAI {
 
     // 6. Hold node: fight threats, dispatch survivors to other nodes, then pursue witch
     if (heroOnNode) {
-      const thr = sim.entities.find(e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1);
-      if (thr) return tryBattle(hero, thr);
+      const thrDCandidates = sim.entities.filter(e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1);
+      const thrD = (focusTargets?.size ? thrDCandidates.find(e => focusTargets.has(e.id)) : null) ?? thrDCandidates[0] ?? null;
+      if (thrD) { if (focusTargets) focusTargets.add(thrD.id); return tryBattle(hero, thrD); }
       const undef = _undefendedNodes(sim, hero);
       for (const s of survivors) {
         if (_isOnNode(sim, s)) continue;
@@ -1309,10 +1352,10 @@ export class HeroAI {
 
     // 7. Urgent: witch holds 2+
     if (witchNodeCount >= 2) {
-      const a = tryMove(hero, _bestNodeForHero(sim, hero)); if (a) return a;
+      const a = tryMove(hero, _bestNodeForHero(sim, hero, claimedNodes)); if (a) return a;
       for (const s of survivors) {
         if (_isOnNode(sim, s)) continue;
-        const b = tryMove(s, _bestNodeForHero(sim, s)); if (b) return b;
+        const b = tryMove(s, _bestNodeForHero(sim, s, claimedNodes)); if (b) return b;
       }
     }
 
@@ -1325,12 +1368,12 @@ export class HeroAI {
     }
 
     // 9. Move toward nearest node
-    { const a = tryMove(hero, _bestNodeForHero(sim, hero)); if (a) return a; }
+    { const a = tryMove(hero, _bestNodeForHero(sim, hero, claimedNodes)); if (a) return a; }
 
     // 10. Anchor survivors to nodes
     for (const s of survivors) {
       if (_isOnNode(sim, s)) continue;
-      const a = tryMove(s, _bestNodeForHero(sim, s)); if (a) return a;
+      const a = tryMove(s, _bestNodeForHero(sim, s, claimedNodes)); if (a) return a;
     }
 
     // 11. Hunt the witch (kill wins the game; prefer this over building exploration)
@@ -1372,29 +1415,36 @@ function _undefendedNodes(state, holder) {
 // Best node target for a hero unit: neutral first, then witch-controlled to contest.
 // Returns the nearest cluster hex to the actor.
 // Excludes the node the actor just departed (prevents oscillation in planning sim).
-function _bestNodeForHero(state, actor) {
+// claimedNodes (optional Set<"col,row">) — nodes already targeted by allied AI players;
+//   the chosen objective's hexes are added to this set so subsequent allies pick differently.
+function _bestNodeForHero(state, actor, claimedNodes = null) {
   const justLeft = state._justLeft && state._justLeft[actor.id];
   const notJustLeft = obj => !(justLeft && justLeft.col === obj.col && justLeft.row === obj.row);
+  const notClaimed  = obj => !claimedNodes || !obj.hexes.some(h => claimedNodes.has(hexKey(h.col, h.row)));
 
   const neutral = state.witchObjectives.filter(obj =>
-    nodeController(obj, state.entities) === 'neutral' && notJustLeft(obj)
+    nodeController(obj, state.entities) === 'neutral' && notJustLeft(obj) && notClaimed(obj)
   );
   if (neutral.length) {
     neutral.sort((a, b) =>
       hexDistance(actor.col, actor.row, a.col, a.row) -
       hexDistance(actor.col, actor.row, b.col, b.row)
     );
-    return _nearestClusterHex(actor, neutral[0]);
+    const chosen = neutral[0];
+    if (claimedNodes) chosen.hexes.forEach(h => claimedNodes.add(hexKey(h.col, h.row)));
+    return _nearestClusterHex(actor, chosen);
   }
   const witchHeld = state.witchObjectives.filter(obj =>
-    nodeController(obj, state.entities) === 'witch' && notJustLeft(obj)
+    nodeController(obj, state.entities) === 'witch' && notJustLeft(obj) && notClaimed(obj)
   );
   if (witchHeld.length) {
     witchHeld.sort((a, b) =>
       hexDistance(actor.col, actor.row, a.col, a.row) -
       hexDistance(actor.col, actor.row, b.col, b.row)
     );
-    return _nearestClusterHex(actor, witchHeld[0]);
+    const chosen = witchHeld[0];
+    if (claimedNodes) chosen.hexes.forEach(h => claimedNodes.add(hexKey(h.col, h.row)));
+    return _nearestClusterHex(actor, chosen);
   }
   return null;
 }
@@ -1577,7 +1627,7 @@ export class HeroBerserker extends HeroAI {
     }
 
     // Emergency node race (hero score almost lost)
-    if (witchNodeCount >= 2) { const a = tryMove(hero, _bestNodeForHero(sim, hero)); if (a) return a; }
+    if (witchNodeCount >= 2) { const a = tryMove(hero, _bestNodeForHero(sim, hero, this._allyContext?.claimedNodes)); if (a) return a; }
 
     // Always charge toward the witch — day AND night
     if (witch) { const a = tryMove(hero, witch); if (a) return a; }
@@ -1585,7 +1635,7 @@ export class HeroBerserker extends HeroAI {
     // Survivors anchor nodes passively
     for (const s of survivors) {
       if (_isOnNode(sim, s)) continue;
-      const a = tryMove(s, _bestNodeForHero(sim, s)); if (a) return a;
+      const a = tryMove(s, _bestNodeForHero(sim, s, this._allyContext?.claimedNodes)); if (a) return a;
     }
     return null;
   }
@@ -1616,7 +1666,7 @@ export class HeroSentinel extends HeroAI {
     }
 
     // Not on a node yet → race there
-    if (!heroOnNode) { const a = tryMove(hero, _bestNodeForHero(sim, hero)); if (a) return a; }
+    if (!heroOnNode) { const a = tryMove(hero, _bestNodeForHero(sim, hero, this._allyContext?.claimedNodes)); if (a) return a; }
 
     // On a node → defend it, dispatch survivors, explore, then hold
     if (heroOnNode) {
@@ -1637,7 +1687,7 @@ export class HeroSentinel extends HeroAI {
     // Survivors toward nodes
     for (const s of survivors) {
       if (_isOnNode(sim, s)) continue;
-      const a = tryMove(s, _bestNodeForHero(sim, s)); if (a) return a;
+      const a = tryMove(s, _bestNodeForHero(sim, s, this._allyContext?.claimedNodes)); if (a) return a;
     }
     return null;
   }
@@ -1679,7 +1729,7 @@ export class HeroScavenger extends HeroAI {
     }
 
     // Emergency: witch about to win
-    if (witchNodeCount >= 2) { const a = tryMove(hero, _bestNodeForHero(sim, hero)); if (a) return a; }
+    if (witchNodeCount >= 2) { const a = tryMove(hero, _bestNodeForHero(sim, hero, this._allyContext?.claimedNodes)); if (a) return a; }
 
     // Explore current tile (buildings and terrain)
     if (!sim.isExplored(hero.col, hero.row)) return { type: PlanActionType.EXPLORE, entityId: hero.id };
@@ -1689,10 +1739,10 @@ export class HeroScavenger extends HeroAI {
     if (bldg) { const a = tryMove(hero, bldg); if (a) return a; }
 
     // Buildings exhausted — pivot to nodes
-    { const a = tryMove(hero, _bestNodeForHero(sim, hero)); if (a) return a; }
+    { const a = tryMove(hero, _bestNodeForHero(sim, hero, this._allyContext?.claimedNodes)); if (a) return a; }
     for (const s of survivors) {
       if (_isOnNode(sim, s)) continue;
-      const a = tryMove(s, _bestNodeForHero(sim, s)); if (a) return a;
+      const a = tryMove(s, _bestNodeForHero(sim, s, this._allyContext?.claimedNodes)); if (a) return a;
     }
     return null;
   }
@@ -1734,7 +1784,7 @@ export class WitchBerserker extends WitchAI {
 
     // Emergency node only if hero is about to score-win
     if (heroScore >= 2) {
-      if (!_isOnNode(sim, witch)) { const a = tryMove(witch, _bestWitchObjective(sim, witch)); if (a) return a; }
+      if (!_isOnNode(sim, witch)) { const a = tryMove(witch, _bestWitchObjective(sim, witch, this._allyContext?.claimedNodes)); if (a) return a; }
     }
 
     // Always charge toward hero (day and night)
@@ -1772,7 +1822,7 @@ export class WitchHoarder extends WitchAI {
 
     // Emergency: hero about to win
     if (heroScore >= 2) {
-      if (!_isOnNode(sim, witch)) { const a = tryMove(witch, _bestWitchObjective(sim, witch)); if (a) return a; }
+      if (!_isOnNode(sim, witch)) { const a = tryMove(witch, _bestWitchObjective(sim, witch, this._allyContext?.claimedNodes)); if (a) return a; }
     }
 
     // Always try to summon if under army cap
@@ -1790,16 +1840,16 @@ export class WitchHoarder extends WitchAI {
     }
 
     // Army ready — flood nodes
-    if (!_isOnNode(sim, witch)) { const a = tryMove(witch, _bestWitchObjective(sim, witch)); if (a) return a; }
+    if (!_isOnNode(sim, witch)) { const a = tryMove(witch, _bestWitchObjective(sim, witch, this._allyContext?.claimedNodes)); if (a) return a; }
     for (const m of realMinions) {
       if (_isOnNode(sim, m)) continue;
-      const a = tryMove(m, _bestWitchObjective(sim, m)); if (a) return a;
+      const a = tryMove(m, _bestWitchObjective(sim, m, this._allyContext?.claimedNodes)); if (a) return a;
     }
     if (_isOnNode(sim, witch)) return null; // hold
 
     // Fallback explore
     if (!sim.isExplored(witch.col, witch.row)) return { type: PlanActionType.EXPLORE, entityId: witch.id };
-    { const a = tryMove(witch, _bestWitchObjective(sim, witch)); if (a) return a; }
+    { const a = tryMove(witch, _bestWitchObjective(sim, witch, this._allyContext?.claimedNodes)); if (a) return a; }
     return null;
   }
 }
@@ -1839,7 +1889,7 @@ export class WitchSwarm extends WitchAI {
     // Flood all minions toward uncovered nodes
     for (const m of realMinions) {
       if (_isOnNode(sim, m)) continue;
-      const obj = _bestWitchObjective(sim, m);
+      const obj = _bestWitchObjective(sim, m, this._allyContext?.claimedNodes);
       if (obj) { const a = tryMove(m, obj); if (a) return a; }
     }
 
@@ -1853,7 +1903,7 @@ export class WitchSwarm extends WitchAI {
     if (unexpAdj) return { type: PlanActionType.MOVE, entityId: witch.id, toCol: unexpAdj.col, toRow: unexpAdj.row };
 
     // Keep witch near a safe node (last resort movement)
-    { const a = tryMove(witch, _bestWitchObjective(sim, witch)); if (a) return a; }
+    { const a = tryMove(witch, _bestWitchObjective(sim, witch, this._allyContext?.claimedNodes)); if (a) return a; }
     return null;
   }
 }
