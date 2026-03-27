@@ -224,14 +224,17 @@ async function _runLocalResolution() {
   const humanFaction = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : null;
   const preReplayEntities = steps[0]?.entitySnapshot ?? finalEntities;
 
-  await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
-
-  // Snapshot scoring state BEFORE endRound so we can detect changes
-  const prevScore = { hero: state.nodeScore.hero, witch: state.nodeScore.witch };
+  // Snapshot node control BEFORE resolution so we can detect changes from unit movement
+  const preResEntities = steps[0]?.entitySnapshot ?? state.entities;
   const prevNodes = state.witchObjectives.map(obj => {
-    const holder = state.entities.find(e => e.alive && e.col === obj.col && e.row === obj.row);
+    const holder = preResEntities.find(e => e.alive && e.col === obj.col && e.row === obj.row);
     return { col: obj.col, row: obj.row, label: obj.label, owner: holder?.owner ?? null };
   });
+
+  await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+
+  // Snapshot score BEFORE endRound so we can detect scoring changes
+  const prevScore = { hero: state.nodeScore.hero, witch: state.nodeScore.witch };
 
   state.endRound();
   if (ui) ui._triggerHazardFlashes();
@@ -1322,12 +1325,13 @@ function _createMpClient() {
 
       const _preReplayEntitiesOnline = steps[0]?.entitySnapshot ?? finalEntities;
 
-      // Snapshot scoring state BEFORE applying finalState so we can detect changes
-      const prevScore = { hero: state.nodeScore?.hero ?? 0, witch: state.nodeScore?.witch ?? 0 };
+      // Snapshot node control BEFORE resolution using pre-step entities
+      const preResEntities = steps[0]?.entitySnapshot ?? state.entities;
       const prevNodes = (state.witchObjectives ?? []).map(obj => {
-        const holder = state.entities.find(e => e.alive && e.col === obj.col && e.row === obj.row);
+        const holder = preResEntities.find(e => e.alive && e.col === obj.col && e.row === obj.row);
         return { col: obj.col, row: obj.row, label: obj.label, owner: holder?.owner ?? null };
       });
+      const prevScore = { hero: state.nodeScore?.hero ?? 0, witch: state.nodeScore?.witch ?? 0 };
 
       _animateResolutionSteps(steps, finalEntities, redrawOnline, mp?.myFaction, mp?.myPlayerId ?? null).then(async () => {
         // Apply full final state (phase, round, score, tiles, etc.) BEFORE summary
