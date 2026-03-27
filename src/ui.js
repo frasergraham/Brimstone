@@ -1258,7 +1258,6 @@ export class UIController {
       const diamonds = '◆'.repeat(Math.max(0, budget - used)) + '◇'.repeat(Math.max(0, used));
       const status  = this._planSubmitted ? '✓ Plan Submitted — Waiting…' : `📋 Planning Phase`;
       el.innerHTML = `
-        <div class="turn-line cycle-round-label-inline">${roundLabel}</div>
         <div class="turn-line player-${faction}">${status}</div>
         <div class="actions-remaining" title="Actions budget">${diamonds}</div>
       `;
@@ -1268,7 +1267,6 @@ export class UIController {
     // During resolution, show neutral resolution label
     if (state.resolving) {
       el.innerHTML = `
-        <div class="turn-line cycle-round-label-inline">${roundLabel}</div>
         <div class="turn-line">⚙ Resolution Phase</div>
       `;
       return;
@@ -1289,8 +1287,7 @@ export class UIController {
         const active = i === roundInCycle;
         return `<div class="cycle-step phase-${step.phase} ${active ? 'cycle-active' : 'cycle-dim'}"
                      title="${step.desc}">${step.icon}${active ? `<span class="cycle-name">${step.label}</span>` : ''}</div>`;
-      }).join('')}</div>
-      <div class="turn-line cycle-round-label-inline">${roundLabel}</div>
+      }).join('')}<span class="cycle-round-label">${roundLabel}</span></div>
       <div class="turn-line player-${state.activePlayer}">
         ${player}'s Turn ${isAI ? '<span class="ai-badge">AI</span>' : ''}
       </div>

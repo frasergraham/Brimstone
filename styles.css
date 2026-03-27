@@ -669,7 +669,7 @@ canvas { touch-action: pan-x pan-y; }
   white-space: nowrap;
 }
 
-/* Day N · Round M label in the cycle bar (mobile) and turn-info (desktop) */
+/* Day N · Round M label in cycle-strip-header (desktop) and cycle-bar (mobile) */
 .cycle-round-label {
   font-size: 0.7rem;
   color: var(--text-dim);
@@ -677,12 +677,7 @@ canvas { touch-action: pan-x pan-y; }
   letter-spacing: 0.04em;
   opacity: 0.75;
   margin: 0 0.4rem;
-}
-.cycle-round-label-inline {
-  font-size: 0.75rem;
-  color: var(--text-dim);
-  opacity: 0.75;
-  letter-spacing: 0.04em;
+  align-self: center;
 }
 
 .turn-line { font-size: 0.85rem; color: var(--text-dim); }
