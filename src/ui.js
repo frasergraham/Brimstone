@@ -2,7 +2,7 @@
 import { hexKey, hexToPixel, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType } from './tiles.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
-import { Phase, Player, PHASE_ICON } from './game.js';
+import { Phase, Player, PHASE_ICON, nodeController } from './game.js';
 import { PAD_X, PAD_Y } from './renderer.js';
 import {
   ActionType, getValidActions, getVisibleEnemyHexes, getVisibleHeroHexes,
@@ -2487,14 +2487,18 @@ export class UIController {
                                          : tile.type;
     }
 
-    const obj       = state.witchObjectives.find(o => o.col === hex.col && o.row === hex.row);
+    const obj       = state.witchObjectives.find(o =>
+      o.hexes.some(h => h.col === hex.col && h.row === hex.row)
+    );
     let linesHtml   = '';
 
     if (obj) {
-      const witchHere = state.entities.find(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row);
-      const heroHere  = state.entities.find(e => e.alive && e.owner === 'hero'  && e.col === obj.col && e.row === obj.row);
-      const ctrl = witchHere ? '🔴 Witch' : heroHere ? '🔵 Hero' : '⭕ Contested';
-      linesHtml += `<div class="tile-zoom-info-line node">⚔ Power Node — ${ctrl}</div>`;
+      const ctrl = nodeController(obj, state.entities);
+      const ctrlStr = ctrl === 'hero'      ? '🔵 Hero'
+                    : ctrl === 'witch'     ? '🔴 Witch'
+                    : ctrl === 'contested' ? '⚡ Contested'
+                    : '⭕ Uncontrolled';
+      linesHtml += `<div class="tile-zoom-info-line node">⚔ Power Node (${obj.label}) — ${ctrlStr}</div>`;
     }
     if (tile.explored && tile.fortifyLevel) {
       const fl = tile.fortifyLevel >= 3 ? `⚙⚙ Heavily Reinforced (+${tile.fortifyLevel} DEF)`

@@ -403,6 +403,8 @@ function _executeResolution(room) {
   const summaryLines = compileTurnBattleSummary(steps, state.entities, ResEventType, PlanActionType);
   for (const line of summaryLines) state.log.push(line);
 
+  state.updateNodeDiscovery();
+  state.checkAndLogNodeControlChanges();
   state.endRound();
   checkAndHandleGameOver(room);
 

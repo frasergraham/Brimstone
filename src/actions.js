@@ -231,14 +231,19 @@ export function getValidActions(state, actor) {
     actions.push({ type: ActionType.BATTLE_HEX, targets: battleHexTargets });
   }
 
-  // Fortify — hero on any tile (not river), cap at 4, uses shared inventory.
+  // Fortify — hero on any tile (not river, not a power node hex), cap at 4, uses shared inventory.
   // Always included when contextually valid; affordable=false when no resources.
   if (t && t.type !== TileType.RIVER && t.fortifyLevel < 4 && actorIsHero) {
-    const shared     = state.inventory.shared;
-    const woodCount  = (shared[ResourceType.WOOD]  || 0);
-    const metalCount = (shared[ResourceType.METAL] || 0);
-    const affordable = woodCount > 0 || metalCount > 0;
-    actions.push({ type: ActionType.FORTIFY, targets: [{ col: actor.col, row: actor.row }], affordable });
+    const onNodeHex = state.witchObjectives.some(obj =>
+      obj.hexes.some(h => h.col === actor.col && h.row === actor.row)
+    );
+    if (!onNodeHex) {
+      const shared     = state.inventory.shared;
+      const woodCount  = (shared[ResourceType.WOOD]  || 0);
+      const metalCount = (shared[ResourceType.METAL] || 0);
+      const affordable = woodCount > 0 || metalCount > 0;
+      actions.push({ type: ActionType.FORTIFY, targets: [{ col: actor.col, row: actor.row }], affordable });
+    }
   }
 
   // Summon — witch only; three separate entries (one per unit type), each with
@@ -626,6 +631,10 @@ export function executeFortify(state, actor) {
   const t = tile(state, actor.col, actor.row);
   if (!t || t.type === TileType.RIVER) return { success: false, log: ['Cannot fortify here.'] };
   if (t.fortifyLevel >= 4) return { success: false, log: ['Cannot fortify further.'] };
+  const onNodeHex = state.witchObjectives?.some(obj =>
+    obj.hexes?.some(h => h.col === actor.col && h.row === actor.row)
+  );
+  if (onNodeHex) return { success: false, log: ['Cannot fortify a Power Node hex.'] };
 
   const shared     = state.inventory.shared;
   const metalCount = (shared[ResourceType.METAL] || 0);

@@ -212,6 +212,8 @@ async function _runLocalResolution() {
   // Snapshot score BEFORE endRound so we can detect scoring changes
   const prevScore = { hero: state.nodeScore.hero, witch: state.nodeScore.witch };
 
+  state.updateNodeDiscovery();
+  state.checkAndLogNodeControlChanges();
   state.endRound();
   if (ui) ui._triggerHazardFlashes();
   redraw();

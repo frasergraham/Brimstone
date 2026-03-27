@@ -3,7 +3,7 @@
 import { getNeighbors, hexDistance, hexKey } from './hex.js';
 import { TileType, ResourceType } from './tiles.js';
 import { EntityType } from './entities.js';
-import { Phase, computeActions, computeActionsForPlayer, Player } from './game.js';
+import { Phase, computeActions, computeActionsForPlayer, Player, nodeController } from './game.js';
 import {
   executeMove, executeExplore, executeBattle, executeSummon, executeUseItem,
   getVisibleEnemyHexes, getVisibleHeroHexes,
@@ -91,37 +91,46 @@ function stepAwayFrom(state, actor, threat) {
 }
 
 function _isOnNode(state, entity) {
-  return state.witchObjectives.some(obj => obj.col === entity.col && obj.row === entity.row);
+  return state.witchObjectives.some(obj =>
+    obj.hexes.some(h => h.col === entity.col && h.row === entity.row)
+  );
 }
 
-// Returns the best node target for the witch: unclaimed first, then hero-held nodes to contest.
+// Returns the hex in obj.hexes closest to actor.
+function _nearestClusterHex(actor, obj) {
+  let best = obj, bestDist = Infinity;
+  for (const h of obj.hexes) {
+    const d = hexDistance(actor.col, actor.row, h.col, h.row);
+    if (d < bestDist) { bestDist = d; best = h; }
+  }
+  return best;
+}
+
+// Returns the best node target for the witch: neutral nodes first, then hero-controlled.
 // Excludes the node the actor just departed (prevents oscillation in planning sim).
 function _bestWitchObjective(state, actor) {
   const justLeft = state._justLeft && state._justLeft[actor.id];
   const notJustLeft = obj => !(justLeft && justLeft.col === obj.col && justLeft.row === obj.row);
 
-  const unclaimed = state.witchObjectives.filter(obj =>
-    !state.entities.some(e => e.alive && e.col === obj.col && e.row === obj.row) &&
-    notJustLeft(obj)
+  const neutral = state.witchObjectives.filter(obj =>
+    nodeController(obj, state.entities) === 'neutral' && notJustLeft(obj)
   );
-  if (unclaimed.length) {
-    unclaimed.sort((a, b) =>
+  if (neutral.length) {
+    neutral.sort((a, b) =>
       hexDistance(actor.col, actor.row, a.col, a.row) -
       hexDistance(actor.col, actor.row, b.col, b.row)
     );
-    return unclaimed[0];
+    return _nearestClusterHex(actor, neutral[0]);
   }
   const heroHeld = state.witchObjectives.filter(obj =>
-    state.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row) &&
-    !state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row) &&
-    notJustLeft(obj)
+    nodeController(obj, state.entities) === 'hero' && notJustLeft(obj)
   );
   if (heroHeld.length) {
     heroHeld.sort((a, b) =>
       hexDistance(actor.col, actor.row, a.col, a.row) -
       hexDistance(actor.col, actor.row, b.col, b.row)
     );
-    return heroHeld[0];
+    return _nearestClusterHex(actor, heroHeld[0]);
   }
   return null;
 }
@@ -1354,40 +1363,38 @@ function _nearestUnexploredBuilding(state, actor) {
 // Nodes not currently defended by any hero unit (excluding the holding actor itself).
 function _undefendedNodes(state, holder) {
   return state.witchObjectives.filter(obj =>
-    !(obj.col === holder.col && obj.row === holder.row) &&
-    !state.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row)
+    !obj.hexes.some(h => h.col === holder.col && h.row === holder.row) &&
+    !state.entities.some(e => e.alive && e.owner === 'hero' &&
+      obj.hexes.some(h => h.col === e.col && h.row === e.row))
   );
 }
 
-// Best node target for a hero unit: unclaimed first, then witch-held nodes to contest.
-// Excludes nodes already occupied by the actor (no need to move there).
+// Best node target for a hero unit: neutral first, then witch-controlled to contest.
+// Returns the nearest cluster hex to the actor.
 // Excludes the node the actor just departed (prevents oscillation in planning sim).
 function _bestNodeForHero(state, actor) {
   const justLeft = state._justLeft && state._justLeft[actor.id];
   const notJustLeft = obj => !(justLeft && justLeft.col === obj.col && justLeft.row === obj.row);
 
-  const unclaimed = state.witchObjectives.filter(obj =>
-    !state.entities.some(e => e.alive && e.col === obj.col && e.row === obj.row) &&
-    notJustLeft(obj)
+  const neutral = state.witchObjectives.filter(obj =>
+    nodeController(obj, state.entities) === 'neutral' && notJustLeft(obj)
   );
-  if (unclaimed.length) {
-    unclaimed.sort((a, b) =>
+  if (neutral.length) {
+    neutral.sort((a, b) =>
       hexDistance(actor.col, actor.row, a.col, a.row) -
       hexDistance(actor.col, actor.row, b.col, b.row)
     );
-    return unclaimed[0];
+    return _nearestClusterHex(actor, neutral[0]);
   }
   const witchHeld = state.witchObjectives.filter(obj =>
-    state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row) &&
-    !state.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row) &&
-    notJustLeft(obj)
+    nodeController(obj, state.entities) === 'witch' && notJustLeft(obj)
   );
   if (witchHeld.length) {
     witchHeld.sort((a, b) =>
       hexDistance(actor.col, actor.row, a.col, a.row) -
       hexDistance(actor.col, actor.row, b.col, b.row)
     );
-    return witchHeld[0];
+    return _nearestClusterHex(actor, witchHeld[0]);
   }
   return null;
 }
