@@ -440,7 +440,6 @@ export class UIController {
     this._planBudget       = budget;
     this._plan             = [];
     this._planSubmitted    = false;
-    this._planFoodEnabled  = this.state?.inventory?.shared?.[ResourceType.FOOD] || 0;
 
     const panel = this._el('plan-panel');
     if (panel) {
@@ -636,12 +635,11 @@ export class UIController {
 
     if (budgeEl) budgeEl.textContent = `${Math.max(0, remaining)} left`;
 
-    // Over-budget steps are food-powered up to _planFoodEnabled, then truly over-budget.
+    // Food is auto-applied to over-budget actions until exhausted.
     const foodAvailable = (this.state.inventory?.shared?.[ResourceType.FOOD] || 0);
-    const foodEnabled   = Math.min(this._planFoodEnabled ?? foodAvailable, foodAvailable);
 
     stepsEl.innerHTML = buildPlanStepsHtml(
-      this._plan, this._planBudget, foodEnabled, foodAvailable,
+      this._plan, this._planBudget, foodAvailable, foodAvailable,
       this._planSubmitted, this.state.entities ?? [],
     );
 
@@ -659,30 +657,9 @@ export class UIController {
       });
     });
 
-    // ── Food slots row ──────────────────────────────────────────────────────
+    // Clear the old food row (food is now shown inline on over-budget actions)
     const foodRowEl = this._el('plan-food-row');
-    if (foodRowEl) {
-      if (foodAvailable > 0 && !this._planSubmitted) {
-        let slots = '';
-        for (let i = 0; i < foodAvailable; i++) {
-          const on = i < foodEnabled;
-          slots += `<button class="plan-food-slot${on ? ' on' : ''}" data-food-idx="${i}" title="${on ? 'Click to disable this food ration' : 'Click to enable this food ration'}">🍞</button>`;
-        }
-        foodRowEl.innerHTML = `<span class="plan-food-label">Extra actions:</span>${slots}`;
-        foodRowEl.querySelectorAll('.plan-food-slot').forEach(btn => {
-          btn.addEventListener('click', e => {
-            e.stopPropagation();
-            const idx = parseInt(btn.dataset.foodIdx);
-            // Toggle: if slot i is currently on, clicking it turns off i and above.
-            // If slot i is off, clicking turns on up to i.
-            this._planFoodEnabled = (idx < foodEnabled) ? idx : idx + 1;
-            this._renderPlanPanel();
-          });
-        });
-      } else {
-        foodRowEl.innerHTML = '';
-      }
-    }
+    if (foodRowEl) foodRowEl.innerHTML = '';
 
     if (statusEl && !this._planSubmitted) statusEl.textContent = '';
 

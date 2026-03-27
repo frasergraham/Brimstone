@@ -2240,11 +2240,18 @@ canvas { touch-action: pan-x pan-y; }
   color: var(--muted);
   text-align: right;
 }
-.plan-step-icon {
-  font-size: 0.9rem;
+.plan-step-avatar {
+  width: 1.3rem;
+  height: 1.3rem;
+  border-radius: 50%;
   flex-shrink: 0;
-  min-width: 1.1em;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
+  line-height: 1;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.6);
 }
 .plan-step-desc {
   flex: 1;
@@ -2304,10 +2311,10 @@ canvas { touch-action: pan-x pan-y; }
 .plan-step.over-budget { opacity: 0.5; }
 .plan-step.over-budget .plan-step-num  { background: rgba(160,50,50,0.75); color: #faa; border-radius: 3px; padding: 0 2px; }
 .plan-step.over-budget .plan-step-desc { text-decoration: line-through; color: var(--text-dim); }
-.plan-step.over-budget .plan-step-icon { opacity: 0.4; }
+.plan-step.over-budget .plan-step-avatar { opacity: 0.4; }
 .plan-step.food-powered { opacity: 0.9; }
 .plan-step.food-powered .plan-step-num  { background: rgba(180,130,20,0.75); color: #ffd; border-radius: 3px; padding: 0 2px; }
-.plan-step.food-powered .plan-step-icon { opacity: 0.85; }
+.plan-step.food-powered .plan-step-avatar { opacity: 0.85; }
 .plan-food-tag { font-size: 0.65rem; color: #c8a030; margin-left: 0.3rem; white-space: nowrap; }
 
 /* ── Plan countdown timer ────────────────────────────────────────────── */
@@ -2356,29 +2363,6 @@ canvas { touch-action: pan-x pan-y; }
   padding: 0.4rem 0.75rem 0.2rem;
   border-top: 1px solid rgba(255,255,255,0.06);
 }
-.plan-food-label {
-  font-size: 0.72rem;
-  color: var(--text-dim);
-  white-space: nowrap;
-  margin-right: 0.2rem;
-}
-.plan-food-slot {
-  background: none;
-  border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 3px;
-  cursor: pointer;
-  font-size: 0.9rem;
-  line-height: 1;
-  padding: 0.15rem 0.25rem;
-  opacity: 0.28;
-  transition: opacity 0.15s, border-color 0.15s;
-}
-.plan-food-slot.on {
-  opacity: 1;
-  border-color: #c8a030;
-}
-.plan-food-slot:hover { opacity: 0.7; }
-.plan-food-slot.on:hover { opacity: 0.75; }
 
 /* ── Phase start modal ────────────────────────────────────────────────── */
 
