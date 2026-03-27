@@ -1,8 +1,31 @@
 // Central game state and turn management
 import { generateMap } from './map.js';
-import { createHero, createWitch, createMinion, createSurvivor, resetRoster, EntityType } from './entities.js';
+import { createHero, createWitch, createMinion, createSurvivor, resetRoster, EntityType, SurvivorAbility } from './entities.js';
 import { BuildingType, ResourceType, TileType } from './tiles.js';
-import { hexKey, getNeighbors } from './hex.js';
+import { hexKey, hexDistance, getNeighbors } from './hex.js';
+import { sightRange } from './actions.js';
+
+/**
+ * Determine which faction controls a power node cluster based on majority hex occupation.
+ * Multiple units on the same hex count as one occupied hex.
+ * @returns {'hero'|'witch'|'contested'|'neutral'}
+ */
+export function nodeController(obj, entities) {
+  const hexSet = new Set(obj.hexes.map(h => hexKey(h.col, h.row)));
+  const heroHexes  = new Set();
+  const witchHexes = new Set();
+  for (const e of entities) {
+    if (!e.alive) continue;
+    const k = hexKey(e.col, e.row);
+    if (!hexSet.has(k)) continue;
+    if (e.owner === 'hero')  heroHexes.add(k);
+    if (e.owner === 'witch') witchHexes.add(k);
+  }
+  if (heroHexes.size > witchHexes.size)  return 'hero';
+  if (witchHexes.size > heroHexes.size)  return 'witch';
+  if (heroHexes.size === 0) return 'neutral';
+  return 'contested';
+}
 
 // Win reason strings (shown in game-over overlay)
 export const WIN_REASON = {
@@ -98,9 +121,9 @@ const PHASE_ICON = {
 export { PHASE_ICON };
 
 export class GameState {
-  constructor(witchIsAI = true, heroIsAI = false, mapSize = 'standard') {
+  constructor(witchIsAI = true, heroIsAI = false, mapSize = 'standard', nodeCount = null) {
     resetRoster();
-    const mapData  = generateMap(undefined, mapSize);
+    const mapData  = generateMap(undefined, mapSize, nodeCount);
     this.tiles     = mapData.tiles;
     this.entities  = [];
     this.witchIsAI = witchIsAI;
@@ -127,6 +150,7 @@ export class GameState {
     this._survivorCounts = mapData.survivorCounts;
     this.witchObjectives = mapData.witchObjectives;
     this._placeHiddenSurvivors();
+    this.updateNodeDiscovery();
 
     this.round        = 1;
     this.phase        = Phase.DAWN;
@@ -352,7 +376,7 @@ export class GameState {
       }
       if (hero.hp < hero.maxHp) {
         const onNode = this.witchObjectives.some(
-          obj => obj.col === hero.col && obj.row === hero.row
+          obj => obj.hexes.some(h => h.col === hero.col && h.row === hero.row)
         );
         if (onNode) {
           hero.heal(1);
@@ -365,13 +389,20 @@ export class GameState {
     if (this.phase === Phase.NIGHT) {
       const witchLeaders = this.entities.filter(e => e.alive && e.type === EntityType.WITCH);
       for (const obj of this.witchObjectives) {
-        const freeHex = () => getNeighbors(obj.col, obj.row).find(n => {
-          const t = this.tiles.get(hexKey(n.col, n.row));
-          return t && t.type !== TileType.RIVER &&
-            !this.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
-        });
+        const freeHex = () => {
+          // Look for a free hex adjacent to any hex in the cluster
+          for (const clusterHex of obj.hexes) {
+            const n = getNeighbors(clusterHex.col, clusterHex.row).find(nb => {
+              const t = this.tiles.get(hexKey(nb.col, nb.row));
+              return t && t.type !== TileType.RIVER &&
+                !this.entities.some(e => e.alive && e.col === nb.col && e.row === nb.row);
+            });
+            if (n) return n;
+          }
+          return null;
+        };
         for (const witch of witchLeaders) {
-          if (witch.col === obj.col && witch.row === obj.row) {
+          if (obj.hexes.some(h => h.col === witch.col && h.row === witch.row)) {
             if (Math.random() < 0.33) {
               const hex = freeHex();
               if (hex) {
@@ -384,7 +415,7 @@ export class GameState {
           }
         }
         for (const hero of heroLeaders) {
-          if (hero.col === obj.col && hero.row === obj.row) {
+          if (obj.hexes.some(h => h.col === hero.col && h.row === hero.row)) {
             if (Math.random() < 0.33) {
               const hex = freeHex();
               if (hex) {
@@ -721,16 +752,17 @@ export class GameState {
   _checkNodeObjectives(phase) {
     const isDawn     = phase === Phase.DAWN;
     const phaseLabel = isDawn ? 'dawn' : 'dusk';
+    const nodeCount  = this.witchObjectives.length;
 
-    const witchCount = this.witchObjectives.filter(obj =>
-      this.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
-    ).length;
-    const heroCount = this.witchObjectives.filter(obj =>
-      this.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row)
-    ).length;
+    let witchCount = 0, heroCount = 0;
+    for (const obj of this.witchObjectives) {
+      const ctrl = nodeController(obj, this.entities);
+      if (ctrl === 'witch') witchCount++;
+      if (ctrl === 'hero')  heroCount++;
+    }
 
-    // Instant win: sweep all three nodes
-    if (witchCount === 3) {
+    // Instant win: sweep all nodes
+    if (witchCount === nodeCount) {
       this.winner    = 'witch';
       this.winReason = isDawn ? WIN_REASON.NODES_WITCH : WIN_REASON.NODES_WITCH_DUSK;
       this.addLog(isDawn
@@ -738,7 +770,7 @@ export class GameState {
         : '🌙 As dusk falls, the witch holds all three Power Nodes! The ritual advances!');
       return;
     }
-    if (heroCount === 3) {
+    if (heroCount === nodeCount) {
       this.winner    = 'hero';
       this.winReason = isDawn ? WIN_REASON.NODES_HERO : WIN_REASON.NODES_HERO_DUSK;
       this.addLog(isDawn
@@ -747,7 +779,7 @@ export class GameState {
       return;
     }
 
-    // Scoring: whoever holds more nodes scores 1 point (even 1–0 counts)
+    // Scoring: whoever controls more nodes scores 1 point (ties score nothing)
     if (witchCount > heroCount) {
       this.nodeScore.witch++;
       this.addLog(`🌙 At ${phaseLabel}: witch leads ${witchCount}–${heroCount}. Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);
@@ -766,6 +798,51 @@ export class GameState {
       }
     } else {
       this.addLog(`⚖ At ${phaseLabel}: nodes tied (${witchCount}–${heroCount}). Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);
+    }
+  }
+
+  /**
+   * Check if any node's control state changed since last call and add log entries.
+   * Should be called after resolution completes each round.
+   */
+  checkAndLogNodeControlChanges() {
+    for (const obj of this.witchObjectives) {
+      const ctrl = nodeController(obj, this.entities);
+      if (ctrl !== obj.prevCtrl) {
+        if (ctrl === 'contested')
+          this.addLog(`⚡ ${obj.label} is now contested!`);
+        else if (ctrl === 'hero')
+          this.addLog(`🔵 The hero claims ${obj.label}.`);
+        else if (ctrl === 'witch')
+          this.addLog(`🔴 The witch seizes ${obj.label}.`);
+        else if (ctrl === 'neutral')
+          this.addLog(`⭕ ${obj.label} is no longer held.`);
+        obj.prevCtrl = ctrl;
+      }
+    }
+  }
+
+  /**
+   * Permanently mark nodes as discovered by factions whose units can currently see them.
+   * A node is "seen" if any of its hexes is within sightRange of any faction entity.
+   * Should be called after resolution and at game start.
+   */
+  updateNodeDiscovery() {
+    for (const obj of this.witchObjectives) {
+      if (!obj.seenByHero) {
+        obj.seenByHero = this.entities.some(e => {
+          if (!e.alive || e.owner !== 'hero') return false;
+          const range = sightRange(this.phase, e.ability === SurvivorAbility.SCOUT);
+          return obj.hexes.some(h => hexDistance(e.col, e.row, h.col, h.row) <= range);
+        });
+      }
+      if (!obj.seenByWitch) {
+        obj.seenByWitch = this.entities.some(e => {
+          if (!e.alive || e.owner !== 'witch') return false;
+          const range = sightRange(this.phase, false);
+          return obj.hexes.some(h => hexDistance(e.col, e.row, h.col, h.row) <= range);
+        });
+      }
     }
   }
 

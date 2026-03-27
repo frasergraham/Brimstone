@@ -10,6 +10,8 @@ import { PlanActionType }    from './planner.js';
 import { hexDistance }       from './hex.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
+import { MAP_SIZES } from './map.js';
+import { nodeController } from './game.js';
 
 // Stamp version into badges
 document.getElementById('version-badge').textContent = `v${VERSION}`;
@@ -58,8 +60,9 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
   document.getElementById('setup-screen').style.display  = 'none';
   document.getElementById('game-screen').style.display   = 'flex';
 
-  const mapSize = document.getElementById('select-map-size')?.value ?? 'standard';
-  state    = new GameState(witchIsAI, heroIsAI, mapSize);
+  const mapSize   = document.getElementById('select-map-size')?.value ?? 'standard';
+  const nodeCount = parseInt(document.getElementById('select-node-count')?.value ?? '3', 10);
+  state    = new GameState(witchIsAI, heroIsAI, mapSize, nodeCount);
   // Allow global fog-of-war override from the setup screen checkbox.
   const fogChk = document.getElementById('chk-fog-of-war');
   if (fogChk && !fogChk.checked) state.fogOfWar = false;
@@ -197,10 +200,10 @@ async function _runLocalResolution() {
 
   // Snapshot node control BEFORE resolution so we can detect changes from unit movement
   const preResEntities = steps[0]?.entitySnapshot ?? state.entities;
-  const prevNodes = state.witchObjectives.map(obj => {
-    const holder = preResEntities.find(e => e.alive && e.col === obj.col && e.row === obj.row);
-    return { col: obj.col, row: obj.row, label: obj.label, owner: holder?.owner ?? null };
-  });
+  const prevNodes = state.witchObjectives.map(obj => ({
+    col: obj.col, row: obj.row, label: obj.label,
+    owner: nodeController(obj, preResEntities),
+  }));
 
   await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
 
@@ -212,6 +215,8 @@ async function _runLocalResolution() {
   // Snapshot score BEFORE endRound so we can detect scoring changes
   const prevScore = { hero: state.nodeScore.hero, witch: state.nodeScore.witch };
 
+  state.updateNodeDiscovery();
+  state.checkAndLogNodeControlChanges();
   state.endRound();
   if (ui) ui._triggerHazardFlashes();
   redraw();
@@ -1009,6 +1014,38 @@ function _fogChecked() {
   return document.getElementById('chk-fog-of-war')?.checked ?? true;
 }
 
+// ── Node count selectors — populate options based on map size ─────────────────
+
+function _populateNodeCountSelect(selectId, mapSizeSelectId) {
+  const mapSizeEl  = document.getElementById(mapSizeSelectId);
+  const nodeEl     = document.getElementById(selectId);
+  if (!mapSizeEl || !nodeEl) return;
+  const cfg        = MAP_SIZES[mapSizeEl.value] ?? MAP_SIZES.standard;
+  const min        = cfg.nodeCountMin ?? 1;
+  const max        = cfg.nodeCountMax ?? cfg.nodeCount ?? 3;
+  const current    = parseInt(nodeEl.value, 10);
+  nodeEl.innerHTML = '';
+  for (let i = min; i <= max; i++) {
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    opt.textContent = String(i);
+    if (i === cfg.nodeCount) opt.selected = true;
+    nodeEl.appendChild(opt);
+  }
+  // Restore previous selection if still in range; otherwise default
+  if (current >= min && current <= max) nodeEl.value = String(current);
+}
+
+document.getElementById('select-map-size')?.addEventListener('change', () => {
+  _populateNodeCountSelect('select-node-count', 'select-map-size');
+});
+document.getElementById('cg-map-size')?.addEventListener('change', () => {
+  _populateNodeCountSelect('cg-node-count', 'cg-map-size');
+});
+// Initialize on load
+_populateNodeCountSelect('select-node-count', 'select-map-size');
+_populateNodeCountSelect('cg-node-count', 'cg-map-size');
+
 // ── Create Game flow ──────────────────────────────────────────────────────────
 
 document.getElementById('btn-create-game').addEventListener('click', () => {
@@ -1024,6 +1061,7 @@ document.getElementById('btn-create-game-confirm').addEventListener('click', () 
     const config = {
       fog:           document.getElementById('cg-fog').checked,
       mapSize:       document.getElementById('cg-map-size').value,
+      nodeCount:     parseInt(document.getElementById('cg-node-count')?.value ?? '3', 10),
       playersPerSide: parseInt(document.querySelector('input[name="cg-pps"]:checked')?.value ?? '1', 10),
       isPrivate:     document.getElementById('cg-private').checked,
     };

@@ -527,16 +527,18 @@ canvas { touch-action: pan-x pan-y; }
 .score-bar-faction.witch-faction { color: var(--witch); }
 
 .node-dot {
-  width: 13px;
-  height: 13px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  border: 1.5px solid rgba(255,255,255,0.15);
+  border: 2.5px solid rgba(255,255,255,0.15);
   display: inline-block;
-  transition: box-shadow 0.2s;
+  transition: box-shadow 0.2s, background 0.2s;
 }
-.node-dot.hero    { background: #4488ff; border-color: #66aaff; box-shadow: 0 0 5px rgba(68,136,255,0.5); }
-.node-dot.witch   { background: #cc3333; border-color: #ff5555; box-shadow: 0 0 5px rgba(200,50,50,0.5); }
-.node-dot.neutral { background: transparent; border-color: #554433; }
+/* Background = faction control color; border = node's own color (set via inline style) */
+.node-dot.hero      { background: #4488ff; box-shadow: 0 0 7px rgba(68,136,255,0.7); }
+.node-dot.witch     { background: #cc3333; box-shadow: 0 0 7px rgba(200,50,50,0.7); }
+.node-dot.contested { background: #cc8800; box-shadow: 0 0 7px rgba(200,140,0,0.7); }
+.node-dot.neutral   { background: transparent; }
 
 .node-dots-group { display: flex; align-items: center; gap: 0.35rem; }
 

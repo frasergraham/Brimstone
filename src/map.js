@@ -5,6 +5,19 @@ import { Tile, TileType, BuildingType } from './tiles.js';
 // Flavor labels for the witch power nodes (extra labels for larger maps)
 const WITCH_OBJECTIVE_LABELS = [
   'Ancient Altar', 'Dark Grove', 'Cursed Crossroads', 'Forgotten Hollow',
+  'Witches\' Mound', 'Blighted Fen', 'Shadow Cairn',
+];
+
+// Distinct colors for each power node index — used in renderer and score tracker.
+// Chosen to be visually distinct from hero blue (#4488ff) and witch red (#cc3333).
+export const NODE_COLORS = [
+  '#22c55e', // emerald green
+  '#f59e0b', // amber
+  '#06b6d4', // cyan
+  '#a855f7', // violet
+  '#ec4899', // pink
+  '#84cc16', // lime
+  '#f97316', // orange
 ];
 
 // ── Village archetypes ────────────────────────────────────────────────────────
@@ -31,7 +44,8 @@ const VILLAGE_TEMPLATES = {
 //   CHURCH, APOTHECARY, TOWN_HALL, BLACKSMITH buildings.
 // minVillageDist: minimum hex distance between village centers.
 // forestSeeds: starting positions for cluster growth.
-// nodeCount: number of witch power-node objectives.
+// nodeCount: default number of witch power-node objectives.
+// nodeCountMin / nodeCountMax: allowed range for configurable node count.
 // survivorCounts: { buildings, terrain } — tiles flagged hiddenSurvivor=true.
 // bridgeMax: max river-crossing bridges.
 
@@ -46,7 +60,7 @@ export const MAP_SIZES = {
       {col:8,row:3},{col:0,row:4},{col:1,row:7},{col:8,row:6},
       {col:4,row:2},{col:5,row:6},
     ],
-    nodeCount: 2,
+    nodeCount: 2, nodeCountMin: 1, nodeCountMax: 3,
     survivorCounts: { buildings: 9, terrain: 2 },
     bridgeMax: 2,
     minBridges: 1,
@@ -62,7 +76,7 @@ export const MAP_SIZES = {
       {col:7,row:3},{col:8,row:8},{col:0,row:4},{col:6,row:9},
       {col:3,row:11},{col:10,row:12},{col:6,row:12},
     ],
-    nodeCount: 3,
+    nodeCount: 3, nodeCountMin: 2, nodeCountMax: 5,
     survivorCounts: { buildings: 14, terrain: 3 },
     bridgeMax: 4,
     minBridges: 2,
@@ -79,7 +93,7 @@ export const MAP_SIZES = {
       {col:5,row:1},{col:12,row:6},{col:3,row:6},{col:14,row:11},
       {col:2,row:13},{col:14,row:14},{col:8,row:15},{col:1,row:16},{col:15,row:16},
     ],
-    nodeCount: 3,
+    nodeCount: 3, nodeCountMin: 2, nodeCountMax: 6,
     survivorCounts: { buildings: 18, terrain: 4 },
     bridgeMax: 5,
     minBridges: 2,
@@ -98,7 +112,7 @@ export const MAP_SIZES = {
       {col:3,row:15},{col:17,row:16},{col:10,row:17},{col:5,row:18},
       {col:14,row:19},{col:0,row:20},{col:20,row:20},{col:10,row:20},
     ],
-    nodeCount: 3,
+    nodeCount: 3, nodeCountMin: 2, nodeCountMax: 7,
     survivorCounts: { buildings: 24, terrain: 6 },
     bridgeMax: 6,
     minBridges: 3,
@@ -264,12 +278,14 @@ function _riverSide(col, row, riverMap, riverEW = false) {
 
 // Like _pickSpread but guarantees at least one node on each side of the river
 // when count >= 2 and both sides have valid candidates.
-function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, riverMap, riverEW = false) {
+// startPositions: array of {col,row} — no node center may be within 3 hexes of these.
+function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, riverMap, riverEW = false, startPositions = []) {
   const left = [], right = [];
   for (const [k, t] of tiles) {
     if (t.type !== TileType.GRASS) continue;
     if (forbiddenKeys.has(k)) continue;
     if (t.col < 1 || t.col > MAP_COLS - 2 || t.row < 1 || t.row > MAP_ROWS - 2) continue;
+    if (startPositions.some(sp => hexDistance(sp.col, sp.row, t.col, t.row) <= 3)) continue;
     (_riverSide(t.col, t.row, riverMap, riverEW) === 'left' ? left : right).push({ col: t.col, row: t.row });
   }
   _shuffle(left, rand);
@@ -291,6 +307,35 @@ function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, river
 
   while (placed.length < count) placed.push({ col: 1, row: 1 });
   return placed.slice(0, count);
+}
+
+// Pick 2 satellite hexes adjacent to center to form a 3-hex cluster.
+// Prefers a "triangle" (two neighbors that are also adjacent to each other).
+// startPositions: no satellite may be within 3 hexes of these.
+function _pickNodeCluster(rand, tiles, center, forbiddenKeys, startPositions = []) {
+  const neighbors = _shuffle(
+    getNeighbors(center.col, center.row).filter(n => {
+      const t = tiles.get(hexKey(n.col, n.row));
+      if (!t || t.type === TileType.RIVER) return false;
+      if (forbiddenKeys.has(hexKey(n.col, n.row))) return false;
+      if (startPositions.some(sp => hexDistance(sp.col, sp.row, n.col, n.row) <= 3)) return false;
+      return true;
+    }),
+    rand
+  );
+
+  // Try to find a triangle pair (both neighbors are adjacent to each other)
+  for (let i = 0; i < neighbors.length; i++) {
+    for (let j = i + 1; j < neighbors.length; j++) {
+      if (hexDistance(neighbors[i].col, neighbors[i].row, neighbors[j].col, neighbors[j].row) === 1) {
+        return [{ col: center.col, row: center.row }, neighbors[i], neighbors[j]];
+      }
+    }
+  }
+  // Fallback: any two valid neighbors
+  if (neighbors.length >= 2) return [{ col: center.col, row: center.row }, neighbors[0], neighbors[1]];
+  if (neighbors.length === 1) return [{ col: center.col, row: center.row }, neighbors[0], { col: center.col, row: center.row }];
+  return [{ col: center.col, row: center.row }, { col: center.col, row: center.row }, { col: center.col, row: center.row }];
 }
 
 // Place one village's buildings in a compact cluster around a center hex.
@@ -433,7 +478,7 @@ function _generateRiverEW(rand) {
   return path;
 }
 
-export function generateMap(seed = Date.now(), mapSize = 'standard') {
+export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOverride = null) {
   const cfg = MAP_SIZES[mapSize] ?? MAP_SIZES.standard;
   setMapDimensions(cfg.cols, cfg.rows);
 
@@ -643,18 +688,29 @@ export function generateMap(seed = Date.now(), mapSize = 'standard') {
     }
   }
 
-  // 6. Place witch objectives — well-spread, guaranteed across both sides of the river
+  // 6. Place witch objectives — well-spread, guaranteed across both sides of the river,
+  //    with 3-hex clusters and minimum distance from starting positions.
   const buildingKeys = new Set(buildingPlacements.map(b => hexKey(b.col, b.row)));
-  const objPositions = _pickNodesAcrossRiver(rand, tiles, cfg.nodeCount, 4, buildingKeys, riverMap, riverEW);
-  const witchObjectives = objPositions.map((pos, i) => ({
-    col: pos.col, row: pos.row, label: WITCH_OBJECTIVE_LABELS[i] ?? `Power Node ${i + 1}`,
-  }));
-
-  // 7. Determine start positions
+  // Extract start positions now (buildings are placed; INN = hero start, GRAVEYARD = witch start)
   const heroStart  = buildingPlacements.find(b => b.building === BuildingType.INN)
                   || buildingPlacements[0];
   const witchStart = buildingPlacements.find(b => b.building === BuildingType.GRAVEYARD)
                   || buildingPlacements[buildingPlacements.length - 1];
+  const startPositions = [heroStart, witchStart];
+
+  const resolvedNodeCount = (nodeCountOverride != null)
+    ? Math.max(cfg.nodeCountMin ?? 1, Math.min(cfg.nodeCountMax ?? cfg.nodeCount, nodeCountOverride))
+    : cfg.nodeCount;
+  const objPositions = _pickNodesAcrossRiver(rand, tiles, resolvedNodeCount, 4, buildingKeys, riverMap, riverEW, startPositions);
+  const witchObjectives = objPositions.map((pos, i) => ({
+    col: pos.col, row: pos.row,
+    label: WITCH_OBJECTIVE_LABELS[i] ?? `Power Node ${i + 1}`,
+    hexes: _pickNodeCluster(rand, tiles, pos, buildingKeys, startPositions),
+    color: NODE_COLORS[i % NODE_COLORS.length],
+    seenByHero:  false,
+    seenByWitch: false,
+    prevCtrl:    'neutral',
+  }));
 
   return { tiles, witchObjectives, heroStart, witchStart, mapSize, survivorCounts: cfg.survivorCounts };
 }

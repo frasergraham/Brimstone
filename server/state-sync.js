@@ -76,7 +76,16 @@ export function serializeState(state) {
     attritionChanged:     state.attritionChanged ?? false,
     nodeScore:            { ...state.nodeScore },
     log:                  [...state.log],
-    witchObjectives:      state.witchObjectives.map(o => ({ ...o })),
+    witchObjectives:      state.witchObjectives.map(o => ({
+      col:        o.col,
+      row:        o.row,
+      label:      o.label,
+      color:      o.color      ?? '#22c55e',
+      hexes:      (o.hexes ?? [{ col: o.col, row: o.row }]).map(h => ({ col: h.col, row: h.row })),
+      seenByHero:  o.seenByHero  ?? false,
+      seenByWitch: o.seenByWitch ?? false,
+      prevCtrl:    o.prevCtrl    ?? 'neutral',
+    })),
     inventory:            JSON.parse(JSON.stringify(state.inventory)),
     lastNightDamage:      [...(state.lastNightDamage || [])],
     lastDayDamage:        [...(state.lastDayDamage   || [])],
@@ -145,7 +154,16 @@ export function deserializeState(snap) {
   state.attritionChanged     = snap.attritionChanged     ?? false;
   state.nodeScore            = { ...snap.nodeScore };
   state.log                  = [...snap.log];
-  state.witchObjectives      = snap.witchObjectives.map(o => ({ ...o }));
+  state.witchObjectives      = snap.witchObjectives.map(o => ({
+    col:        o.col,
+    row:        o.row,
+    label:      o.label,
+    color:      o.color      ?? '#22c55e',
+    hexes:      (o.hexes ?? [{ col: o.col, row: o.row }]).map(h => ({ col: h.col, row: h.row })),
+    seenByHero:  o.seenByHero  ?? false,
+    seenByWitch: o.seenByWitch ?? false,
+    prevCtrl:    o.prevCtrl    ?? 'neutral',
+  }));
   state.inventory            = JSON.parse(JSON.stringify(snap.inventory));
   state.lastNightDamage      = [...(snap.lastNightDamage || [])];
   state.lastDayDamage        = [...(snap.lastDayDamage   || [])];

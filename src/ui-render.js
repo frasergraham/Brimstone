@@ -5,6 +5,7 @@
 import { PlanActionType } from './planner.js';
 import { EntityType, ENTITY_COLOR } from './entities.js';
 import { ResourceType } from './tiles.js';
+import { nodeController } from './game.js';
 
 // ── Plan action description ───────────────────────────────────────────────────
 
@@ -227,13 +228,14 @@ export function buildObjectivesHtml(witchObjectives, entities, nodeScore) {
   let witchCount = 0, heroCount = 0;
 
   for (const obj of witchObjectives) {
-    const witchHere = entities.find(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row);
-    const heroHere  = entities.find(e => e.alive && e.owner === 'hero'  && e.col === obj.col && e.row === obj.row);
+    const ctrl = nodeController(obj, entities);
     let cls;
-    if (witchHere)     { cls = 'witch'; witchCount++; }
-    else if (heroHere) { cls = 'hero';  heroCount++;  }
-    else               { cls = 'neutral'; }
-    nodeDots += `<span class="node-dot ${cls}" title="${obj.label ?? ''}"></span>`;
+    if      (ctrl === 'witch')     { cls = 'witch';     witchCount++; }
+    else if (ctrl === 'hero')      { cls = 'hero';       heroCount++;  }
+    else if (ctrl === 'contested') { cls = 'contested'; }
+    else                           { cls = 'neutral';   }
+    const nodeColor = obj.color ?? '#888';
+    nodeDots += `<span class="node-dot ${cls}" title="${obj.label ?? ''}" style="border-color:${nodeColor}"></span>`;
   }
 
   const score     = nodeScore ?? { hero: 0, witch: 0 };
@@ -247,8 +249,8 @@ export function buildObjectivesHtml(witchObjectives, entities, nodeScore) {
     `<span class="node-dots-group">${nodeDots}</span>` +
     `<span class="score-track witch-track" title="Witch score: ${score.witch}/4">${witchPips}</span>`;
 
-  const title = witchCount === 3 ? '⚠ Witch holds all nodes!'
-              : heroCount  === 3 ? '★ Hero holds all nodes!'
+  const title = witchCount === witchObjectives.length ? '⚠ Witch controls all nodes!'
+              : heroCount  === witchObjectives.length ? '★ Hero controls all nodes!'
               : 'Power Nodes';
 
   return { html, title };

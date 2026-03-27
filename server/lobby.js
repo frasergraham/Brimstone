@@ -155,6 +155,7 @@ function createRoom(config = {}) {
     config: {
       fog:            config.fog ?? true,
       mapSize:        config.mapSize ?? 'standard',
+      nodeCount:      config.nodeCount ?? null,
       playersPerSide: Math.max(1, Math.min(4, (config.playersPerSide | 0) || 1)),
     },
     slots:            [],
@@ -403,6 +404,8 @@ function _executeResolution(room) {
   const summaryLines = compileTurnBattleSummary(steps, state.entities, ResEventType, PlanActionType);
   for (const line of summaryLines) state.log.push(line);
 
+  state.updateNodeDiscovery();
+  state.checkAndLogNodeControlChanges();
   state.endRound();
   checkAndHandleGameOver(room);
 
@@ -642,6 +645,7 @@ export function createLobby(playerId, playerName, ws, config = {}) {
   const room = createRoom({
     fog:           config.fog ?? true,
     mapSize:       config.mapSize ?? 'standard',
+    nodeCount:     config.nodeCount ?? null,
     playersPerSide: pps,
   });
   room.isPrivate    = config.isPrivate ?? false;
@@ -779,7 +783,7 @@ export function startGame(playerId, roomId) {
   const anyHeroAI  = room.slots.some(s => s.faction === 'hero'  && s.status === 'ai');
 
   // Initialize GameState
-  const state      = new GameState(anyWitchAI, anyHeroAI, room.config.mapSize);
+  const state      = new GameState(anyWitchAI, anyHeroAI, room.config.mapSize, room.config.nodeCount);
   state.fogOfWar   = room.config.fog;
   room.state       = state;
   room.status      = 'playing';
