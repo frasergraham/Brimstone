@@ -306,16 +306,16 @@
   <div id="game-screen">
 
     <header id="game-header">
-      <button id="menu-btn" class="header-icon-btn" title="Menu">☰</button>
       <span class="header-title">BRIMSTONE</span>
       <div id="turn-info"></div>
       <!-- End Turn lives in the header, next to the action diamonds -->
       <button id="end-turn-btn" class="header-icon-btn end-turn-header" title="End Turn">↩</button>
-      <span id="game-version" class="game-version"></span>
+      <button id="menu-btn" class="header-icon-btn" title="Menu">☰</button>
     </header>
     <!-- In-game menu popup -->
     <div id="game-menu-popup" class="game-menu-popup" style="display:none">
       <button id="menu-quit-btn" class="game-menu-item">Quit to Menu</button>
+      <div id="menu-version" class="game-menu-version"></div>
     </div>
     <!-- Cycle bar: always-visible 8-step day/night strip -->
     <div id="cycle-bar"></div>
@@ -341,6 +341,7 @@
           <button id="zoom-fit" class="zoom-btn" title="Fit map">⛶</button>
           <button id="zoom-me"  class="zoom-btn" title="Focus on my units">⊙</button>
           <button id="speed-toggle" class="zoom-btn" title="Battle speed">⚡</button>
+          <button id="chronicle-toggle" class="zoom-btn" title="Toggle chronicle">📜</button>
           <!-- Speed mode picker popup -->
           <div id="speed-popup" class="speed-popup" style="display:none">
             <button class="speed-option" data-mode="cinematic">
@@ -374,7 +375,7 @@
       <div id="plan-panel" class="plan-panel" style="display:none">
         <!-- Collapse tab — always visible so the panel can be reopened -->
         <button id="plan-tab" class="plan-tab" title="Toggle plan panel">
-          📋<span id="plan-tab-count" class="plan-tab-count"></span>
+          <span class="plan-tab-label">Action Plan</span><span id="plan-tab-count" class="plan-tab-count"></span>
         </button>
         <div class="plan-panel-header">
           <span class="plan-panel-title">📋 Your Plan</span>
@@ -522,17 +523,6 @@
       <div id="battle-outcome" class="battle-outcome"></div>
       <div id="battle-footer" class="battle-footer">
         <div class="result-dismiss">— click to continue —</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── Game-over overlay ─────────────────────────────────────────── -->
-  <div id="game-over">
-    <div class="game-over-card">
-      <div class="winner-text"></div>
-      <div class="game-over-buttons">
-        <button id="btn-restart" class="setup-btn primary">Play Again</button>
-        <button id="btn-view-map" class="setup-btn">View Map</button>
       </div>
     </div>
   </div>

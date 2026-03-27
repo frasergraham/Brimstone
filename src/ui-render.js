@@ -74,11 +74,12 @@ export function buildPlanStepsHtml(plan, budget, foodEnabled, foodAvailable, sub
     const isFree     = a.type === PlanActionType.EQUIP_WEAPON || a.type === PlanActionType.USE_ITEM;
     if (!isFree) runningCost++;
     const overBudget  = !isFree && runningCost > budget;
-    const foodPowered = overBudget && foodUsed < foodEnabled;
+    // Food is auto-applied to over-budget actions until we run out
+    const foodPowered = overBudget && foodUsed < foodAvailable;
     if (foodPowered) foodUsed++;
 
     const desc      = describePlanAction(a, entities, i);
-    const foodTag   = foodPowered ? ` <span class="plan-food-tag">-1 🍞</span>` : '';
+    const foodTag   = foodPowered ? ` <span class="plan-food-tag">🍞</span>` : '';
     const rmBtn     = submitted
       ? ''
       : `<button class="plan-step-remove" data-plan-idx="${i}" title="Remove">✕</button>`;
@@ -87,13 +88,13 @@ export function buildPlanStepsHtml(plan, budget, foodEnabled, foodAvailable, sub
     const stepEntity = entities.find(e => e.id === a.entityId);
     const stepGlyph  = stepEntity ? (ENTITY_GLYPH[stepEntity.type] || '?') : '';
     const stepColor  = stepEntity ? (ENTITY_COLOR[stepEntity.type]  || '#aaa') : '#aaa';
-    const iconSpan   = stepEntity
-      ? `<span class="plan-step-icon" style="color:${stepColor}">${stepGlyph}</span>`
+    const avatar     = stepEntity
+      ? `<span class="plan-step-avatar" style="background:${stepColor}">${stepGlyph}</span>`
       : '';
 
     html += `<div class="plan-step${cls}">
         <span class="plan-step-num">${i + 1}</span>
-        ${iconSpan}
+        ${avatar}
         <span class="plan-step-desc" title="${desc}">${desc}${foodTag}</span>
         ${rmBtn}
       </div>`;

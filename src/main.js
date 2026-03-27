@@ -10,9 +10,9 @@ import { PlanActionType }    from './planner.js';
 import { isBattleSignificant } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 
-// Stamp version into both badges
+// Stamp version into badges
 document.getElementById('version-badge').textContent = `v${VERSION}`;
-document.getElementById('game-version').textContent  = `v${VERSION}`;
+document.getElementById('menu-version').textContent  = `v${VERSION}`;
 
 let state, renderer, ui, witchAI, heroAI;
 let _autoplay  = false;
@@ -92,36 +92,6 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
 function redraw() {
   renderer.draw();
   if (ui) ui._updateSidebar?.();
-  if (state?.gameOver) showGameOver();
-}
-
-function showGameOver() {
-  const el = document.getElementById('game-over');
-  if (!el || el.dataset.shown) return;
-  el.dataset.shown = '1';
-
-  const banner = state.winner === 'hero'
-    ? '☀ The Hero Triumphs!'
-    : '🌙 The Witch Prevails!';
-  const reason = state.winReason
-    || (state.winner === 'hero'
-        ? 'The hero has vanquished the witch! Salem is saved!'
-        : 'The witch has won. Darkness falls over Salem forever…');
-
-  el.style.display = 'flex';
-  el.querySelector('.winner-text').innerHTML =
-    `<div class="winner-banner">${banner}</div><div class="winner-reason">${reason}</div>`;
-
-  // "View Map" dismisses the overlay and lifts fog so the player can inspect the final board.
-  el.querySelector('#btn-view-map')?.addEventListener('click', () => {
-    el.style.display = 'none';
-    if (state) { state.fogOfWar = false; redraw(); }
-  }, { once: true });
-
-  // Clicking the backdrop (not the card) also dismisses.
-  el.addEventListener('click', (e) => {
-    if (e.target === el) el.style.display = 'none';
-  });
 }
 
 // ── Local planning lifecycle ──────────────────────────────────────────────────
@@ -189,7 +159,7 @@ async function _runLocalAutoResolution() {
 }
 
 async function _runLocalResolution() {
-  if (!state || state.gameOver) { showGameOver(); return; }
+  if (!state || state.gameOver) return;
 
   // Cap shared food to the human player's enabled food count so the resolver
   // only auto-spends the rations the player actually chose to commit.
@@ -224,21 +194,16 @@ async function _runLocalResolution() {
   const humanFaction = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : null;
   const preReplayEntities = steps[0]?.entitySnapshot ?? finalEntities;
 
+  // Snapshot node control BEFORE resolution so we can detect changes from unit movement
+  const preResEntities = steps[0]?.entitySnapshot ?? state.entities;
+  const prevNodes = state.witchObjectives.map(obj => {
+    const holder = preResEntities.find(e => e.alive && e.col === obj.col && e.row === obj.row);
+    return { col: obj.col, row: obj.row, label: obj.label, owner: holder?.owner ?? null };
+  });
+
   await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
 
-  // Show post-resolution summary modal (skip in autoplay mode)
-  if (!_autoplay && ui && humanFaction) {
-    let action;
-    do {
-      action = await ui._showResolutionSummary(steps, state.round);
-      if (action === 'replay') {
-        state.entities = preReplayEntities;
-        redraw();
-        await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
-      }
-    } while (action === 'replay');
-  }
-
+  // Snapshot score BEFORE endRound so we can detect scoring changes
   const prevScore = { hero: state.nodeScore.hero, witch: state.nodeScore.witch };
 
   state.endRound();
@@ -248,15 +213,59 @@ async function _runLocalResolution() {
   // Persist single-player progress to localStorage
   _saveSpGame();
 
-  // Show a scoring toast whenever we land on a scoring checkpoint (dawn/dusk).
-  if ((state.phase === 'dawn' || state.phase === 'dusk') && ui) {
-    ui.showScoringToast(prevScore);
-  }
+  // Show post-resolution summary modal (skip in autoplay mode)
+  if (!_autoplay && ui && humanFaction) {
+    let action;
+    do {
+      action = await ui._showResolutionSummary(steps, state.round - 1, {
+        prevScore, prevNodes, humanFaction, fogOfWar: state.fogOfWar,
+        gameOver: state.gameOver, winner: state.winner, winReason: state.winReason,
+      });
+      if (action === 'replay') {
+        state.entities = preReplayEntities;
+        redraw();
+        await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+      }
+    } while (action === 'replay');
+    // Animate score bar changes after summary is dismissed
+    ui._animateScoreBar(prevScore, prevNodes);
 
-  if (state.gameOver) {
-    // Clean up save on game over
+    if (state.gameOver) {
+      if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
+      if (action === 'viewmap') {
+        // Lift fog so the player can inspect the final board
+        state.fogOfWar = false;
+        redraw();
+      } else if (action === 'restart') {
+        _doRestart();
+      }
+      return;
+    }
+  } else if (state.gameOver && ui) {
+    // Autoplay game-over — still show the summary so the user sees the result
     if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
-    showGameOver();
+    let action;
+    do {
+      action = await ui._showResolutionSummary(steps, state.round - 1, {
+        prevScore, prevNodes, humanFaction: null, fogOfWar: false,
+        gameOver: true, winner: state.winner, winReason: state.winReason,
+      });
+      if (action === 'replay') {
+        state.entities = preReplayEntities;
+        redraw();
+        await _animateResolutionSteps(steps, finalEntities, redraw, null, null);
+      }
+    } while (action === 'replay');
+    if (action === 'viewmap') {
+      state.fogOfWar = false;
+      redraw();
+    } else if (action === 'restart') {
+      _doRestart();
+    }
+    return;
+  } else if (state.gameOver) {
+    // No UI (headless) — just clean up
+    if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
     return;
   }
 
@@ -298,6 +307,34 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       ...(step.playerEvents ?? []).flatMap(pe => pe.events ?? []),
     ];
     const events = allStepEvents.filter(ev => ev.type === ResEventType.ACTION_OK);
+
+    // ── Frame camera on this step's actors ──────────────────────────────────
+    if (!_autoplay) {
+      const _cspd = ui?.speedMode ?? 'cinematic';
+      if (_cspd !== 'instant') {
+        const frameTargets = [];
+        for (const ev of events) {
+          const snap = step.entitySnapshot?.find(e => e.id === ev.action?.entityId);
+          const isOpponent = humanFaction && ev.faction !== humanFaction;
+          if (snap && !(isOpponent && state.fogOfWar)) {
+            // For moves, frame the destination; for others, frame the actor's current position
+            if (ev.action.type === PlanActionType.MOVE) {
+              frameTargets.push({ col: ev.action.toCol, row: ev.action.toRow });
+            } else {
+              frameTargets.push({ col: snap.col, row: snap.row });
+            }
+            // For battles, also frame the target
+            if ((ev.action.type === PlanActionType.BATTLE_UNIT || ev.action.type === PlanActionType.BATTLE_HEX) && ev.battleSnaps?.targetSnap) {
+              frameTargets.push({ col: ev.battleSnaps.targetSnap.col, row: ev.battleSnaps.targetSnap.row });
+            }
+          }
+        }
+        if (frameTargets.length) {
+          renderer.frameHexes(frameTargets, { paddingHexes: 3.0, maxZoom: 2.0, duration: 250 });
+          await _delay(_cspd === 'fast' ? 100 : 280);
+        }
+      }
+    }
 
     // ── Phase 0: food consumed floaters ──────────────────────────────────────
     for (const ev of allStepEvents.filter(e => e.type === ResEventType.FOOD_CONSUMED)) {
@@ -393,33 +430,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         if (battleSnaps && showDialog) {
           const { actorSnap, targetSnap } = battleSnaps;
           const significant = isBattleSignificant(actorSnap, targetSnap, result, humanFaction);
-          // Zoom in on the combatants for significant battles only
-          if (!_autoplay && significant) {
-            renderer.frameHexes(
-              [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
-              { paddingHexes: 2.5, maxZoom: 2.0, duration: 350 },
-            );
-          }
-          renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
-          // HP-change floaters derived from pre/post snapshots (covers all damage sources)
-          for (const snap of [actorSnap, targetSnap]) {
-            const post = postEntities.find(e => e.id === snap.id);
-            if (post) renderer.addHpChangeFlash(post.col, post.row, post.hp - snap.hp);
-          }
-          if (result?.killed) {
-            // Brief delay so the attack flash is visible before the death burst
-            setTimeout(() => {
-              const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
-              renderer.addDeathAnim(targetSnap.col, targetSnap.row, deadColor);
-            }, 350);
-          }
-          redrawFn();
+
           if (!_autoplay) {
             const speed = ui?.speedMode ?? 'cinematic';
-            // Decide display mode per speed setting:
-            //   cinematic — dialog for significant battles (default)
-            //   fast      — toast only; dialog on kill
-            //   instant   — no dialog/toast; skip pauses
             const isKill = !!result?.killed;
             const showFullDialog = speed === 'cinematic'
               ? significant
@@ -427,24 +440,65 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
                 ? isKill
                 : false; // instant: never
 
-            // Zoom: cinematic → significant battles only; fast/instant → never
-            const shouldZoom = speed === 'cinematic' && significant;
+            // On wide landscape screens, offset the camera left so the map is visible
+            // beside the docked battle dialog (dialog is ~500px on the right).
+            const isLandscape = window.innerWidth >= 900 && window.innerWidth / window.innerHeight >= 1.25;
+            const prevInsetRight = renderer.insetRight ?? 0;
 
-            if (shouldZoom) {
-              renderer.frameHexes(
-                [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
-                { paddingHexes: 2.5, maxZoom: 2.0, duration: 350 },
-              );
-            }
-
+            // Show dialog FIRST, then fire result animations after dismissal
             if (showFullDialog) {
+              if (isLandscape) {
+                renderer.insetRight = 500;
+                renderer.frameHexes(
+                  [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
+                  { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
+                );
+              }
               await new Promise(resolve => {
                 ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
               });
+              if (isLandscape) renderer.insetRight = prevInsetRight;
             } else if (speed !== 'instant') {
               ui._showBattleToast(actorSnap, targetSnap, result);
-              await _delay(speed === 'fast' ? 300 : 600);
+              // Show outcome as a canvas floater over the battle hex
+              const outcomeText = isKill
+                ? `💀 ${targetSnap.name} slain`
+                : result.hit
+                  ? result.damage >= 2 ? `💥 −${result.damage}` : `⚔ −${result.damage}`
+                  : result.counterDmg > 0 ? `🛡 counter` : `miss`;
+              const flashColor = isKill ? 'rgba(220,40,40,0.15)' : result.hit ? 'rgba(255,140,0,0.1)' : 'rgba(100,100,100,0.1)';
+              const textColor  = isKill ? '#ff6666' : result.hit ? '#ffcc44' : '#999';
+              renderer.addFlash(targetSnap.col, targetSnap.row, outcomeText, flashColor, 1600, 0.72, textColor);
             }
+
+            // Fire visual result animations AFTER dialog/toast dismissed
+            renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
+            for (const snap of [actorSnap, targetSnap]) {
+              const post = postEntities.find(e => e.id === snap.id);
+              if (post) renderer.addHpChangeFlash(post.col, post.row, post.hp - snap.hp);
+            }
+            if (isKill) {
+              const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
+              renderer.addDeathAnim(targetSnap.col, targetSnap.row, deadColor);
+            }
+            redrawFn();
+
+            // Brief pause to let result animations play out
+            if (speed !== 'instant') {
+              await _delay(speed === 'fast' ? 200 : 500);
+            }
+          } else {
+            // Autoplay: fire all animations immediately without dialogs
+            renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
+            for (const snap of [actorSnap, targetSnap]) {
+              const post = postEntities.find(e => e.id === snap.id);
+              if (post) renderer.addHpChangeFlash(post.col, post.row, post.hp - snap.hp);
+            }
+            if (result?.killed) {
+              const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
+              renderer.addDeathAnim(targetSnap.col, targetSnap.row, deadColor);
+            }
+            redrawFn();
           }
           hadBattle = true;
         }
@@ -473,8 +527,39 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     // Apply the full post-step entity state now that all dialogs for this step
     // have been shown.  This reveals HP changes, deaths, and new encounter
     // entities only after the player has seen the relevant dialog/animation.
+    // Snapshot node control BEFORE applying post-step entities so we can detect captures this step.
+    const preStepNodeOwners = state.witchObjectives?.map(obj => {
+      const holder = step.entitySnapshot?.find(e => e.alive && e.col === obj.col && e.row === obj.row);
+      return holder?.owner ?? null;
+    });
+
     state.entities = postEntities;
     redrawFn();
+
+    // Animate node dot changes that happened this step (real-time capture feedback)
+    if (ui && state.witchObjectives && preStepNodeOwners) {
+      ui._renderObjectives();
+      const barEl = document.getElementById('score-bar-content');
+      if (barEl) {
+        const dots = barEl.querySelectorAll('.node-dot');
+        let hadNodeChange = false;
+        preStepNodeOwners.forEach((prevOwner, idx) => {
+          if (idx >= dots.length) return;
+          const obj = state.witchObjectives[idx];
+          const postHolder = postEntities.find(e => e.alive && e.col === obj.col && e.row === obj.row);
+          const postOwner = postHolder?.owner ?? null;
+          if (postOwner !== prevOwner) {
+            dots[idx].classList.add('node-dot-glow');
+            hadNodeChange = true;
+          }
+        });
+        if (hadNodeChange) {
+          setTimeout(() => {
+            dots.forEach(d => d.classList.remove('node-dot-glow'));
+          }, 2000);
+        }
+      }
+    }
 
     if (hadMove || hadBattle) {
       if (!_autoplay) {
@@ -537,7 +622,6 @@ function redrawOnline() {
   if (!renderer) return;
   renderer.draw();
   if (ui) ui._updateSidebar?.();
-  if (state?.gameOver) showGameOver();
 }
 
 // ── Window resize ─────────────────────────────────────────────────────────────
@@ -615,10 +699,7 @@ document.getElementById('btn-start-local').addEventListener('click', () => {
   else if (mode === 'autoplay') init(true, true, true);
 });
 
-document.getElementById('btn-restart').addEventListener('click', () => {
-  const el = document.getElementById('game-over');
-  if (el) { el.style.display = 'none'; delete el.dataset.shown; }
-
+function _doRestart() {
   // Disconnect from server if in online mode
   if (mp) { mp.disconnect(); mp = null; }
 
@@ -636,7 +717,7 @@ document.getElementById('btn-restart').addEventListener('click', () => {
     document.getElementById('setup-screen').style.display = 'flex';
     document.getElementById('game-screen').style.display  = 'none';
   }
-});
+}
 
 function _esc(str) {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -1192,8 +1273,7 @@ function _createMpClient() {
       ui._clearSelection();
       ui._triggerHazardFlashes();
       redrawOnline();
-      if (state.gameOver) showGameOver();
-      else ui._maybeShowNoActionsDialog();
+      if (!state.gameOver) ui._maybeShowNoActionsDialog();
     },
 
     onBattle(actorSnap, targetSnap, result, afterDismiss) {
@@ -1317,7 +1397,27 @@ function _createMpClient() {
       const finalEntities = finalState.entities ?? state.entities;
 
       const _preReplayEntitiesOnline = steps[0]?.entitySnapshot ?? finalEntities;
+
+      // Snapshot node control BEFORE resolution using pre-step entities
+      const preResEntities = steps[0]?.entitySnapshot ?? state.entities;
+      const prevNodes = (state.witchObjectives ?? []).map(obj => {
+        const holder = preResEntities.find(e => e.alive && e.col === obj.col && e.row === obj.row);
+        return { col: obj.col, row: obj.row, label: obj.label, owner: holder?.owner ?? null };
+      });
+      const prevScore = { hero: state.nodeScore?.hero ?? 0, witch: state.nodeScore?.witch ?? 0 };
+
       _animateResolutionSteps(steps, finalEntities, redrawOnline, mp?.myFaction, mp?.myPlayerId ?? null).then(async () => {
+        // Apply full final state (phase, round, score, tiles, etc.) BEFORE summary
+        // so the reckoning section can show scoring results.
+        Object.assign(state, finalState);
+        state.hero      = finalState.hero;
+        state.witch     = finalState.witch;
+        state.myFaction = mp?.myFaction;
+
+        // Mirror the same post-resolution side effects as the local path.
+        ui._triggerHazardFlashes();
+        redrawOnline();
+
         // Show post-resolution summary modal for human players.
         // Keep _resolving = true for the whole summary+replay block so that any
         // incoming onPlanningPhase messages are buffered, not immediately applied.
@@ -1325,7 +1425,10 @@ function _createMpClient() {
           _resolving = true;
           let action;
           do {
-            action = await ui._showResolutionSummary(steps, state.round);
+            action = await ui._showResolutionSummary(steps, (finalState.round ?? state.round) - 1, {
+              prevScore, prevNodes, humanFaction: mp.myFaction, fogOfWar: state.fogOfWar,
+              gameOver: state.gameOver, winner: state.winner, winReason: state.winReason,
+            });
             if (action === 'replay') {
               state.entities = _preReplayEntitiesOnline;
               redrawOnline();
@@ -1336,21 +1439,23 @@ function _createMpClient() {
             }
           } while (action === 'replay');
           _resolving = false;
+          // Animate score bar changes after summary is dismissed
+          ui._animateScoreBar(prevScore, prevNodes);
+
+          if (state.gameOver) {
+            if (action === 'viewmap') {
+              state.fogOfWar = false;
+              redrawOnline();
+            } else if (action === 'restart') {
+              _doRestart();
+            }
+            return;
+          }
+        } else if (state.gameOver) {
+          return;
         }
 
-        // Apply full final state (phase, round, score, tiles, etc.)
-        Object.assign(state, finalState);
-        state.hero      = finalState.hero;
-        state.witch     = finalState.witch;
-        state.myFaction = mp?.myFaction;
-
-        // Mirror the same post-resolution side effects as the local path.
-        ui._triggerHazardFlashes();
-        redrawOnline();
-
-        if (state.gameOver) {
-          showGameOver();
-        } else {
+        if (!state.gameOver) {
           // Planning mode: never show "no actions" dialog here — a new planning
           // phase is always imminent. Apply any buffered planning phase immediately.
           if (_pendingPlanningPhase) {

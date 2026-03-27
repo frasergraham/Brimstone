@@ -57,7 +57,8 @@ export class UIController {
     this._lastHazardKey    = '';   // deduplicates hazard popups across state updates
     this._battleInterval   = null; // dice animation interval — cleared on new dialog
     this.speedMode         = 'cinematic'; // 'cinematic' | 'fast' | 'instant'
-    this._chronicleMode    = 'mini'; // 'none' | 'mini' | 'full'
+    // Start with chronicle hidden on small screens (≤768px)
+    this._chronicleMode    = window.innerWidth <= 768 ? 'none' : 'mini'; // 'none' | 'mini' | 'full'
     // When true, disable all planning/action UI — used for spectator mode
     this.spectator         = false;
 
@@ -159,9 +160,16 @@ export class UIController {
       this.onRedraw();
     });
     this._el('zoom-me')?.addEventListener('click', () => {
-      const faction = this._planFaction ?? (!this.state.heroIsAI ? 'hero' : 'witch');
-      const units   = this.state.entities.filter(e => e.alive && e.owner === faction);
-      if (units.length > 0) this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 400 });
+      if (this._selectedEntity && this._selectedEntity.alive) {
+        // Zoom to selected unit
+        const pos = this._planMode ? (this._getProjectedPos(this._selectedEntity.id) ?? this._selectedEntity) : this._selectedEntity;
+        this.renderer.frameHexes([pos], { maxZoom: 2.0, paddingHexes: 3, duration: 400 });
+      } else {
+        // No selection — frame all player's units
+        const faction = this._planFaction ?? (!this.state.heroIsAI ? 'hero' : 'witch');
+        const units   = this.state.entities.filter(e => e.alive && e.owner === faction);
+        if (units.length > 0) this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 400 });
+      }
       this.onRedraw();
     });
     this._el('speed-toggle')?.addEventListener('click', (e) => {
@@ -175,6 +183,9 @@ export class UIController {
     });
     // Close speed popup on outside click
     document.addEventListener('click', () => this._closeSpeedPopup());
+
+    // Chronicle toggle in map controls area
+    this._el('chronicle-toggle')?.addEventListener('click', () => this._cycleChronicle());
 
     // Touch: tap, drag-to-pan, pinch-to-zoom (mobile)
     this.canvas.addEventListener('touchstart', e => {
@@ -258,6 +269,47 @@ export class UIController {
       if (!popup || popup.style.display === 'none') return;
       const btn = this._el('menu-btn');
       if (!popup.contains(e.target) && e.target !== btn) popup.style.display = 'none';
+    }, { passive: true });
+
+    // Edge swipe: swipe left from right edge opens plan panel, swipe right closes it
+    this._edgeSwipe = null;
+    document.addEventListener('touchstart', e => {
+      if (!this._planMode || e.touches.length !== 1) return;
+      const t = e.touches[0];
+      const edgeZone = 30; // px from right edge
+      const panel = this._el('plan-panel');
+      if (!panel) return;
+      const isCollapsed = panel.classList.contains('collapsed');
+      // Start tracking if near right edge (to open) or panel is expanded (to close)
+      if (t.clientX >= window.innerWidth - edgeZone || !isCollapsed) {
+        this._edgeSwipe = { startX: t.clientX, startY: t.clientY, collapsed: isCollapsed };
+      }
+    }, { passive: true });
+    document.addEventListener('touchmove', e => {
+      if (!this._edgeSwipe) return;
+      const t = e.touches[0];
+      const dy = Math.abs(t.clientY - this._edgeSwipe.startY);
+      // Cancel if vertical movement exceeds horizontal (scrolling)
+      if (dy > 60) { this._edgeSwipe = null; }
+    }, { passive: true });
+    document.addEventListener('touchend', e => {
+      if (!this._edgeSwipe) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - this._edgeSwipe.startX;
+      const threshold = 50;
+      const panel = this._el('plan-panel');
+      if (panel && this._edgeSwipe.collapsed && dx < -threshold) {
+        // Swiped left from right edge — open panel
+        panel.classList.remove('collapsed');
+        this._syncPlanInset();
+        this._renderPlanPanel();
+      } else if (panel && !this._edgeSwipe.collapsed && dx > threshold) {
+        // Swiped right — close panel
+        panel.classList.add('collapsed');
+        this._syncPlanInset();
+        this._renderPlanPanel();
+      }
+      this._edgeSwipe = null;
     }, { passive: true });
 
     // Chronicle: three-state button lives inside #chronicle-mini (wired on each render).
@@ -390,7 +442,6 @@ export class UIController {
     this._planBudget       = budget;
     this._plan             = [];
     this._planSubmitted    = false;
-    this._planFoodEnabled  = this.state?.inventory?.shared?.[ResourceType.FOOD] || 0;
 
     const panel = this._el('plan-panel');
     if (panel) {
@@ -405,7 +456,7 @@ export class UIController {
       }
     }
     // Plan panel overlays the right side of the canvas — bias framing away from it
-    if (this.renderer) this.renderer.insetRight = 220;
+    this._syncPlanInset();
 
     this._clearSelection();
 
@@ -586,12 +637,11 @@ export class UIController {
 
     if (budgeEl) budgeEl.textContent = `${Math.max(0, remaining)} left`;
 
-    // Over-budget steps are food-powered up to _planFoodEnabled, then truly over-budget.
+    // Food is auto-applied to over-budget actions until exhausted.
     const foodAvailable = (this.state.inventory?.shared?.[ResourceType.FOOD] || 0);
-    const foodEnabled   = Math.min(this._planFoodEnabled ?? foodAvailable, foodAvailable);
 
     stepsEl.innerHTML = buildPlanStepsHtml(
-      this._plan, this._planBudget, foodEnabled, foodAvailable,
+      this._plan, this._planBudget, foodAvailable, foodAvailable,
       this._planSubmitted, this.state.entities ?? [],
     );
 
@@ -609,36 +659,28 @@ export class UIController {
       });
     });
 
-    // ── Food slots row ──────────────────────────────────────────────────────
+    // Clear the old food row (food is now shown inline on over-budget actions)
     const foodRowEl = this._el('plan-food-row');
-    if (foodRowEl) {
-      if (foodAvailable > 0 && !this._planSubmitted) {
-        let slots = '';
-        for (let i = 0; i < foodAvailable; i++) {
-          const on = i < foodEnabled;
-          slots += `<button class="plan-food-slot${on ? ' on' : ''}" data-food-idx="${i}" title="${on ? 'Click to disable this food ration' : 'Click to enable this food ration'}">🍞</button>`;
-        }
-        foodRowEl.innerHTML = `<span class="plan-food-label">Extra actions:</span>${slots}`;
-        foodRowEl.querySelectorAll('.plan-food-slot').forEach(btn => {
-          btn.addEventListener('click', e => {
-            e.stopPropagation();
-            const idx = parseInt(btn.dataset.foodIdx);
-            // Toggle: if slot i is currently on, clicking it turns off i and above.
-            // If slot i is off, clicking turns on up to i.
-            this._planFoodEnabled = (idx < foodEnabled) ? idx : idx + 1;
-            this._renderPlanPanel();
-          });
-        });
-      } else {
-        foodRowEl.innerHTML = '';
-      }
-    }
+    if (foodRowEl) foodRowEl.innerHTML = '';
 
     if (statusEl && !this._planSubmitted) statusEl.textContent = '';
 
-    // Keep the collapse-tab count badge in sync
+    // Keep the collapse-tab count badge in sync — show count and color by budget state
     const tabCount = this._el('plan-tab-count');
-    if (tabCount) tabCount.textContent = this._plan.length > 0 ? this._plan.length : '';
+    if (tabCount) {
+      const budgetCost = this._plan.filter(a =>
+        a.type !== PlanActionType.EQUIP_WEAPON && a.type !== PlanActionType.USE_ITEM
+      ).length;
+      tabCount.textContent = budgetCost;
+      const foodAvail = this.state?.inventory?.shared?.[ResourceType.FOOD] || 0;
+      if (budgetCost > this._planBudget + foodAvail) {
+        tabCount.className = 'plan-tab-count plan-tab-over';
+      } else if (budgetCost > this._planBudget) {
+        tabCount.className = 'plan-tab-count plan-tab-food';
+      } else {
+        tabCount.className = 'plan-tab-count plan-tab-ok';
+      }
+    }
 
     // Update collapse-button arrow direction
     const panel = this._el('plan-panel');
@@ -659,6 +701,15 @@ export class UIController {
     const isCollapsed = panel.classList.contains('collapsed');
     const toggleBtn = this._el('plan-toggle-btn');
     if (toggleBtn) toggleBtn.textContent = isCollapsed ? '▶' : '◀';
+    this._syncPlanInset();
+  }
+
+  /** Update renderer.insetRight based on whether the plan panel is visible and expanded. */
+  _syncPlanInset() {
+    if (!this.renderer) return;
+    const panel = this._el('plan-panel');
+    const visible = panel && panel.style.display !== 'none' && !panel.classList.contains('collapsed');
+    this.renderer.insetRight = visible ? 220 : 0;
   }
 
   _onClick(e) {
@@ -1259,7 +1310,8 @@ export class UIController {
       const glyph   = faction === 'hero' ? '⚔' : '✦';
       const budget  = this._planBudget;
       const used    = this._plan.filter(a => a.type !== PlanActionType.EQUIP_WEAPON && a.type !== PlanActionType.USE_ITEM).length;
-      const diamonds = '◆'.repeat(Math.max(0, budget - used)) + '◇'.repeat(Math.max(0, used));
+      const capped  = Math.min(used, budget); // don't render more diamonds than budget
+      const diamonds = '◆'.repeat(Math.max(0, budget - capped)) + '◇'.repeat(capped);
       if (this._planSubmitted) {
         el.innerHTML = `
           <span class="turn-faction player-${faction}">${glyph}</span>
@@ -1308,6 +1360,51 @@ export class UIController {
     el.innerHTML = html;
     const bar = this._el('score-bar');
     if (bar) bar.title = title;
+  }
+
+  /**
+   * Animate glow on score pips and node dots that changed since prevScore/prevNodes.
+   */
+  _animateScoreBar(prevScore, prevNodes) {
+    if (!prevScore && !prevNodes) return;
+    this._renderObjectives(); // ensure DOM is up to date
+
+    const barEl = this._el('score-bar-content');
+    if (!barEl) return;
+
+    // Animate score pip changes
+    if (prevScore) {
+      const state = this.state;
+      const heroPips  = barEl.querySelectorAll('.score-pip.hero');
+      const witchPips = barEl.querySelectorAll('.score-pip.witch');
+      for (let i = prevScore.hero; i < state.nodeScore.hero && i < heroPips.length; i++) {
+        heroPips[i].classList.add('score-pip-glow');
+      }
+      for (let i = prevScore.witch; i < state.nodeScore.witch && i < witchPips.length; i++) {
+        witchPips[i].classList.add('score-pip-glow');
+      }
+    }
+
+    // Animate node dot changes
+    if (prevNodes) {
+      const dots = barEl.querySelectorAll('.node-dot');
+      prevNodes.forEach((prev, i) => {
+        if (i >= dots.length) return;
+        const currentHolder = this.state.entities.find(
+          e => e.alive && e.col === prev.col && e.row === prev.row
+        );
+        const currentOwner = currentHolder?.owner ?? null;
+        if (currentOwner !== prev.owner) {
+          dots[i].classList.add('node-dot-glow');
+        }
+      });
+    }
+
+    // Remove glow classes after animation completes
+    setTimeout(() => {
+      barEl.querySelectorAll('.score-pip-glow').forEach(el => el.classList.remove('score-pip-glow'));
+      barEl.querySelectorAll('.node-dot-glow').forEach(el => el.classList.remove('node-dot-glow'));
+    }, 2000);
   }
 
   _renderActionPanel() {
@@ -1696,23 +1793,28 @@ export class UIController {
     // Compute action breakdown for display
     const actions  = budget ?? (faction === 'hero' ? this.state.heroActionsLeft : this.state.witchActionsLeft) ?? 0;
     const entities = this.state.entities;
-    let breakdown  = '';
+    const inventory = this.state.inventory;
+    const stash = faction === 'hero' ? inventory?.shared : inventory?.witch;
+    const foodCount = stash?.food ?? 0;
+
+    // Build line-item rows: { label, value }
+    const rows = [];
     if (faction === 'hero') {
+      const base = 3;
       const timeBonus     = (phase === 'day' || phase === 'dawn') ? 1 : 0;
       const survivorCount = entities.filter(e => e.alive && e.owner === 'hero' && e.type !== 'hero').length;
       const survivorBonus = Math.min(survivorCount, 5);
-      const parts = ['3 base'];
-      if (timeBonus)     parts.push(`+1 ${phase}`);
-      if (survivorBonus) parts.push(`+${survivorBonus} survivor${survivorBonus !== 1 ? 's' : ''}`);
-      breakdown = parts.join(' · ');
+      rows.push({ label: 'Base', value: base });
+      if (timeBonus)     rows.push({ label: `${info.icon} ${info.label} bonus`, value: timeBonus });
+      if (survivorBonus) rows.push({ label: `☺ Survivor${survivorBonus !== 1 ? 's' : ''} (${survivorCount})`, value: survivorBonus });
     } else {
+      const base = 4;
       const timeBonus = phase === 'night' ? 1 : 0;
       const unitCount = entities.filter(e => e.alive && e.owner === 'witch' && e.type !== 'witch').length;
       const unitBonus = Math.min(Math.floor(unitCount / 2), 4);
-      const parts = ['4 base'];
-      if (timeBonus) parts.push('+1 night');
-      if (unitBonus) parts.push(`+${unitBonus} units`);
-      breakdown = parts.join(' · ');
+      rows.push({ label: 'Base', value: base });
+      if (timeBonus) rows.push({ label: `${info.icon} ${info.label} bonus`, value: timeBonus });
+      if (unitBonus) rows.push({ label: `☠ Minions (${unitCount})`, value: unitBonus });
     }
 
     // Set content
@@ -1725,11 +1827,23 @@ export class UIController {
     if (effectsEl) effectsEl.innerHTML  = info.lines.map(l => `<div>${l}</div>`).join('');
     if (budgetEl) {
       const pips = Array.from({ length: actions }, () =>
-        `<span class="action-pip">●</span>`
+        `<span class="action-pip">◆</span>`
       ).join('');
+
+      let breakdownHtml = '<div class="action-breakdown-table">';
+      for (const r of rows) {
+        breakdownHtml += `<div class="abkd-row"><span class="abkd-label">${r.label}</span><span class="abkd-val">+${r.value}</span></div>`;
+      }
+      breakdownHtml += `<hr class="abkd-divider">`;
+      breakdownHtml += `<div class="abkd-row abkd-total"><span class="abkd-label">Total</span><span class="abkd-val">${actions}</span></div>`;
+      if (foodCount > 0) {
+        breakdownHtml += `<div class="abkd-row abkd-food"><span class="abkd-label">🍞 Food ×${foodCount}</span><span class="abkd-val">(extra actions)</span></div>`;
+      }
+      breakdownHtml += '</div>';
+
       budgetEl.innerHTML =
-        `<span class="action-pip-label">${actions} action${actions !== 1 ? 's' : ''}</span>${pips}` +
-        `<div class="action-breakdown">${breakdown}</div>`;
+        `<div class="action-pip-row">${pips}</div>` +
+        breakdownHtml;
     }
 
     // Set phase accent class
@@ -1742,61 +1856,6 @@ export class UIController {
       continueBtn?.removeEventListener('click', dismiss);
     };
     continueBtn?.addEventListener('click', dismiss);
-  }
-
-  // ── Scoring toast (dawn / dusk checkpoints) ──────────────────────────────
-
-  showScoringToast(prevScore) {
-    if (this.speedMode === 'instant') return;
-    const state      = this.state;
-    const phase      = state.phase; // 'dawn' or 'dusk' — already advanced by endRound()
-    const phaseIcon  = phase === 'dawn' ? '🌅' : '🌇';
-    const phaseLabel = phase === 'dawn' ? 'Dawn Reckoning' : 'Dusk Reckoning';
-
-    // Count nodes held by each faction right now (same snapshot scoring used).
-    const witchCount = state.witchObjectives.filter(obj =>
-      state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
-    ).length;
-    const heroCount = state.witchObjectives.filter(obj =>
-      state.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row)
-    ).length;
-
-    const heroDelta  = state.nodeScore.hero  - prevScore.hero;
-    const witchDelta = state.nodeScore.witch - prevScore.witch;
-
-    let resultLine;
-    if (witchDelta > 0) {
-      resultLine = `Witch holds ${witchCount}–${heroCount} · Witch scores! (${state.nodeScore.witch}/4)`;
-    } else if (heroDelta > 0) {
-      resultLine = `Hero holds ${heroCount}–${witchCount} · Hero scores! (${state.nodeScore.hero}/4)`;
-    } else if (witchCount === 3 || heroCount === 3) {
-      resultLine = `All three nodes held — instant win!`;
-    } else {
-      resultLine = `Nodes tied ${heroCount}–${witchCount} · No score awarded`;
-    }
-
-    const pip = (filled, cls) =>
-      `<span class="score-pip ${cls}${filled ? ' filled' : ''}"></span>`;
-    const heroPips  = Array.from({ length: 4 }, (_, i) => pip(i < state.nodeScore.hero,  'hero')).join('');
-    const witchPips = Array.from({ length: 4 }, (_, i) => pip(i < state.nodeScore.witch, 'witch')).join('');
-
-    document.getElementById('score-toast')?.remove();
-
-    const toast = document.createElement('div');
-    toast.id        = 'score-toast';
-    toast.className = `phase-toast score-toast score-toast-${phase}`;
-    toast.innerHTML = `
-      <span class="phase-toast-icon">${phaseIcon}</span>
-      <div class="phase-toast-body">
-        <div class="phase-toast-title">${phaseLabel}</div>
-        <div class="phase-toast-lines">${resultLine}</div>
-        <div class="score-toast-track">⚔ ${heroPips}&nbsp;&nbsp;${witchPips} ✦</div>
-      </div>
-    `;
-    this._el('game-screen')?.appendChild(toast);
-
-    setTimeout(() => toast.classList.add('phase-toast-hide'), 3200);
-    setTimeout(() => toast.remove(), 3700);
   }
 
   // ── Dialogs ───────────────────────────────────────────────────────────────
@@ -2076,10 +2135,12 @@ export class UIController {
     if (defBkd) { defBkd.innerHTML = ''; defBkd.classList.remove('visible'); }
 
     dialog.style.display = 'flex';
+    const card = dialog.querySelector('.battle-card');
 
     const dismiss = () => {
       dialog.style.display = 'none';
       dialog.removeEventListener('click', dismiss);
+      card?.removeEventListener('click', dismiss);
       document.removeEventListener('keydown', keyDismiss);
       if (onDismiss) onDismiss();
     };
@@ -2207,6 +2268,7 @@ export class UIController {
       // Allow dismiss only after dice settle
       setTimeout(() => {
         dialog.addEventListener('click', dismiss);
+        card?.addEventListener('click', dismiss);
         document.addEventListener('keydown', keyDismiss);
       }, maxTicks * 55 + 200);
     }
@@ -2440,45 +2502,66 @@ export class UIController {
   _renderMiniChronicle() {
     const el = this._el('chronicle-mini');
     if (!el) return;
-    const mode       = this._chronicleMode ?? 'mini';
-    const activeClass = mode !== 'none' ? ' chronicle-mini-btn-active' : '';
-    const btnHtml    = `<button id="chronicle-btn" class="chronicle-mini-btn${activeClass}" title="Chronicle">📜</button>`;
+    const mode = this._chronicleMode ?? 'mini';
 
     if (mode === 'mini') {
       const visible = this._visibleLog();
       const last5   = visible.slice(-5);
-      const entries = last5.map(m => `<div class="mini-log-entry">${this._logText(m)}</div>`).join('');
-      el.innerHTML  = btnHtml + entries;
+      el.innerHTML  = last5.map(m => `<div class="mini-log-entry">${this._logText(m)}</div>`).join('');
     } else {
-      // 'none' or 'full': just the button (entries are in sidebar for full, hidden for none)
-      el.innerHTML = btnHtml;
+      el.innerHTML = '';
     }
-    this._el('chronicle-btn')?.addEventListener('click', () => this._cycleChronicle());
+
+    // Update active state on the chronicle toggle in map controls
+    const toggleBtn = this._el('chronicle-toggle');
+    if (toggleBtn) {
+      toggleBtn.classList.toggle('chronicle-btn-active', mode !== 'none');
+    }
   }
 
   /**
    * Show the post-resolution round summary modal.
    * Resolves with 'next' or 'replay'.
+   * @param {object} [opts] - Optional scoring context (fog, node control, reckoning).
    */
-  _showResolutionSummary(steps, roundNum) {
+  _showResolutionSummary(steps, roundNum, opts = {}) {
     return new Promise(resolve => {
       const el = this._el('round-summary');
       if (!el) { resolve('next'); return; }
 
+      const { prevScore, prevNodes, humanFaction, fogOfWar, gameOver, winner, winReason } = opts;
+
       // Collect kills, survivors found, and summons from steps
+      // with fog-of-war filtering: skip opponent-only events the player can't see
       const kills     = [];
       const survivors = [];
       const summons   = [];
       for (const step of steps ?? []) {
-        const allEvents = [
-          ...(step.heroEvents  ?? []),
-          ...(step.witchEvents ?? []),
-          ...(step.playerEvents ?? []).flatMap(pe => pe.events ?? []),
+        // Tag each event with its faction for fog filtering
+        const taggedEvents = [
+          ...(step.heroEvents  ?? []).map(ev => ({ ...ev, _faction: 'hero' })),
+          ...(step.witchEvents ?? []).map(ev => ({ ...ev, _faction: 'witch' })),
+          ...(step.playerEvents ?? []).flatMap(pe =>
+            (pe.events ?? []).map(ev => ({ ...ev, _faction: pe.faction }))
+          ),
         ];
-        for (const ev of allEvents) {
+        for (const ev of taggedEvents) {
+          // Fog filter: skip opponent events (but always show kills of our units)
+          if (fogOfWar && humanFaction && ev._faction !== humanFaction) {
+            // Exception: show kills where our unit was the target
+            const isOurUnitKilled = ev.result?.killed &&
+              (ev.battleSnaps?.targetSnap?.owner === humanFaction);
+            if (!isOurUnitKilled) continue;
+          }
+
           if (ev.result?.killed) {
             const snap = ev.battleSnaps?.targetSnap ?? ev.result.killed;
-            const name = snap?.title ?? snap?.name ?? snap?.type ?? 'Unit';
+            let name;
+            if (snap?.name && snap?.title) {
+              name = `${snap.name} the ${snap.title}`;
+            } else {
+              name = snap?.name ?? snap?.title ?? snap?.type ?? 'Unit';
+            }
             kills.push(name);
           }
           if (ev.result?.encounterSurvivor) {
@@ -2491,9 +2574,34 @@ export class UIController {
         }
       }
 
+      // Detect node control changes
+      const nodeChanges = [];
+      if (prevNodes) {
+        const state = this.state;
+        for (const prev of prevNodes) {
+          const currentHolder = state.entities.find(
+            e => e.alive && e.col === prev.col && e.row === prev.row
+          );
+          const currentOwner = currentHolder?.owner ?? null;
+          if (currentOwner !== prev.owner) {
+            nodeChanges.push({ label: prev.label, from: prev.owner, to: currentOwner });
+          }
+        }
+      }
+
       const titleEl  = el.querySelector('.round-summary-title');
       const eventsEl = this._el('round-summary-events');
-      if (titleEl)  titleEl.textContent = `Round ${roundNum ?? ''} complete`;
+      if (titleEl) {
+        if (gameOver) {
+          if (!humanFaction) {
+            titleEl.textContent = winner === 'hero' ? 'Hero Wins!' : 'Witch Wins!';
+          } else {
+            titleEl.textContent = winner === humanFaction ? 'Victory!' : 'Defeat';
+          }
+        } else {
+          titleEl.textContent = `Round ${roundNum ?? ''} complete`;
+        }
+      }
       if (eventsEl) {
         let html = '';
         for (const n of kills) {
@@ -2510,6 +2618,62 @@ export class UIController {
         for (const s of summons) {
           html += `<div class="summary-summon">✦ ${s}</div>`;
         }
+
+        // Node control changes
+        for (const nc of nodeChanges) {
+          if (nc.to === 'hero') {
+            html += `<div class="summary-node hero-text">⚔ Hero now controls ${nc.label}</div>`;
+          } else if (nc.to === 'witch') {
+            html += `<div class="summary-node witch-text">✦ Witch has seized ${nc.label}</div>`;
+          } else {
+            html += `<div class="summary-node">◇ ${nc.label} is no longer controlled</div>`;
+          }
+        }
+
+        // Reckoning section at dawn/dusk
+        const state = this.state;
+        if (prevScore && (state.phase === 'dawn' || state.phase === 'dusk')) {
+          const heroDelta  = state.nodeScore.hero  - prevScore.hero;
+          const witchDelta = state.nodeScore.witch - prevScore.witch;
+          const witchCount = state.witchObjectives.filter(obj =>
+            state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
+          ).length;
+          const heroCount = state.witchObjectives.filter(obj =>
+            state.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row)
+          ).length;
+
+          const phaseLabel = state.phase === 'dawn' ? '🌅 Dawn Reckoning' : '🌇 Dusk Reckoning';
+
+          let reckoningLine;
+          if (witchCount === 3 || heroCount === 3) {
+            const who = witchCount === 3 ? 'Witch' : 'Hero';
+            reckoningLine = `${who} holds all 3 Power Nodes!`;
+          } else if (witchDelta > 0) {
+            reckoningLine = `Witch holds ${witchCount} Power Node${witchCount !== 1 ? 's' : ''} to Hero's ${heroCount}. Witch scores 1 victory point.`;
+          } else if (heroDelta > 0) {
+            reckoningLine = `Hero holds ${heroCount} Power Node${heroCount !== 1 ? 's' : ''} to Witch's ${witchCount}. Hero scores 1 victory point.`;
+          } else {
+            reckoningLine = `Nodes tied ${heroCount}–${witchCount}. No points scored.`;
+          }
+
+          const pip = (filled, cls) =>
+            `<span class="score-pip ${cls}${filled ? ' filled' : ''}"></span>`;
+          const heroPips  = Array.from({ length: 4 }, (_, i) => pip(i < state.nodeScore.hero,  'hero')).join('');
+          const witchPips = Array.from({ length: 4 }, (_, i) => pip(i < state.nodeScore.witch, 'witch')).join('');
+
+          html += `<div class="summary-reckoning">
+            <div class="summary-reckoning-title">${phaseLabel}</div>
+            <div class="summary-reckoning-result">${reckoningLine}</div>
+            <div class="summary-score-track">⚔ ${heroPips}&nbsp;&nbsp;${witchPips} ✦</div>
+          </div>`;
+        }
+
+        // Game-over: insert win reason at the end
+        if (gameOver && winReason) {
+          const cls = winner === humanFaction ? 'hero-text' : 'witch-text';
+          html += `<div class="summary-game-over ${cls}">${winReason}</div>`;
+        }
+
         eventsEl.innerHTML = html || `<div class="summary-neutral">No notable events this round.</div>`;
       }
 
@@ -2531,21 +2695,45 @@ export class UIController {
         });
       }
 
-      el.classList.add('visible');
-
       const nextBtn   = this._el('round-summary-next');
       const replayBtn = this._el('round-summary-replay');
+      const actionsEl = el.querySelector('.round-summary-actions');
+
+      // Game-over: replace normal actions with play-again / view-map buttons
+      let gameOverBtns = null;
+      if (gameOver && actionsEl) {
+        // Hide normal buttons
+        if (nextBtn)   nextBtn.style.display   = 'none';
+        // Keep replay visible
+        gameOverBtns = document.createElement('div');
+        gameOverBtns.className = 'round-summary-gameover-btns';
+        gameOverBtns.innerHTML =
+          `<button class="plan-btn primary" data-action="restart">Play Again</button>` +
+          `<button class="plan-btn secondary" data-action="viewmap">View Map</button>`;
+        actionsEl.appendChild(gameOverBtns);
+      } else if (nextBtn) {
+        nextBtn.style.display = '';
+        nextBtn.textContent   = 'Next Turn →';
+      }
+
+      el.classList.add('visible');
 
       const cleanup = () => {
         el.classList.remove('visible');
         nextBtn?.removeEventListener('click', onNext);
         replayBtn?.removeEventListener('click', onReplay);
+        if (gameOverBtns) gameOverBtns.remove();
+        if (nextBtn) nextBtn.style.display = '';
       };
       const onNext   = () => { cleanup(); resolve('next'); };
       const onReplay = () => { cleanup(); resolve('replay'); };
 
       nextBtn?.addEventListener('click', onNext);
       replayBtn?.addEventListener('click', onReplay);
+      if (gameOverBtns) {
+        gameOverBtns.querySelector('[data-action="restart"]')?.addEventListener('click', () => { cleanup(); resolve('restart'); });
+        gameOverBtns.querySelector('[data-action="viewmap"]')?.addEventListener('click', () => { cleanup(); resolve('viewmap'); });
+      }
     });
   }
 
