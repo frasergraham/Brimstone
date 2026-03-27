@@ -37,10 +37,9 @@ const PERSONALITY_LABELS = {
   swarm:     'Swarm',
 };
 
-function _randomPersonality(faction) {
-  const registry = faction === 'witch' ? WITCH_PERSONALITIES : HERO_PERSONALITIES;
-  const keys = Object.keys(registry);
-  return keys[Math.floor(Math.random() * keys.length)];
+function _randomPersonality(_faction) {
+  // Non-balanced personalities are temporarily disabled pending tuning.
+  return 'balanced';
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
