@@ -10,9 +10,9 @@ import { PlanActionType }    from './planner.js';
 import { isBattleSignificant } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 
-// Stamp version into both badges
+// Stamp version into badges
 document.getElementById('version-badge').textContent = `v${VERSION}`;
-document.getElementById('game-version').textContent  = `v${VERSION}`;
+document.getElementById('menu-version').textContent  = `v${VERSION}`;
 
 let state, renderer, ui, witchAI, heroAI;
 let _autoplay  = false;

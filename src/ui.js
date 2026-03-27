@@ -155,20 +155,21 @@ export class UIController {
       this.onRedraw();
     });
     this._el('zoom-fit')?.addEventListener('click', () => {
+      this.renderer.resize(); // re-measure wrapper after any panel changes
+      this.renderer.resetView();
+      this.onRedraw();
+    });
+    this._el('zoom-me')?.addEventListener('click', () => {
       if (this._selectedEntity && this._selectedEntity.alive) {
         // Zoom to selected unit
         const pos = this._planMode ? (this._getProjectedPos(this._selectedEntity.id) ?? this._selectedEntity) : this._selectedEntity;
         this.renderer.frameHexes([pos], { maxZoom: 2.0, paddingHexes: 3, duration: 400 });
       } else {
-        this.renderer.resize(); // re-measure wrapper after any panel changes
-        this.renderer.resetView();
+        // No selection — frame all player's units
+        const faction = this._planFaction ?? (!this.state.heroIsAI ? 'hero' : 'witch');
+        const units   = this.state.entities.filter(e => e.alive && e.owner === faction);
+        if (units.length > 0) this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 400 });
       }
-      this.onRedraw();
-    });
-    this._el('zoom-me')?.addEventListener('click', () => {
-      const faction = this._planFaction ?? (!this.state.heroIsAI ? 'hero' : 'witch');
-      const units   = this.state.entities.filter(e => e.alive && e.owner === faction);
-      if (units.length > 0) this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 400 });
       this.onRedraw();
     });
     this._el('speed-toggle')?.addEventListener('click', (e) => {

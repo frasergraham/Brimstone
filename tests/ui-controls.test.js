@@ -82,30 +82,32 @@ describe('action diamonds never exceed budget', () => {
   });
 });
 
-// ── Zoom-to-fit behavior ────────────────────────────────────────────────────
+// ── Zoom-me (⊙) target selection ────────────────────────────────────────────
 
-// Mirrors the decision logic in the zoom-fit click handler
-function zoomFitTarget(selectedEntity) {
+// Mirrors the decision logic in the zoom-me click handler:
+// - selected alive entity → zoom to that unit
+// - otherwise → frame all player's units
+function zoomMeTarget(selectedEntity) {
   if (selectedEntity && selectedEntity.alive) {
     return 'selected-unit';
   }
-  return 'full-map';
+  return 'all-units';
 }
 
-describe('zoom-to-fit target selection', () => {
-  test('no selected entity: zooms to full map', () => {
-    assert.equal(zoomFitTarget(null), 'full-map');
+describe('zoom-me (⊙) target selection', () => {
+  test('no selected entity: frames all player units', () => {
+    assert.equal(zoomMeTarget(null), 'all-units');
   });
 
-  test('selected alive entity: zooms to unit', () => {
-    assert.equal(zoomFitTarget({ alive: true, col: 5, row: 3 }), 'selected-unit');
+  test('selected alive entity: zooms to that unit', () => {
+    assert.equal(zoomMeTarget({ alive: true, col: 5, row: 3 }), 'selected-unit');
   });
 
-  test('selected dead entity: zooms to full map', () => {
-    assert.equal(zoomFitTarget({ alive: false, col: 5, row: 3 }), 'full-map');
+  test('selected dead entity: frames all player units', () => {
+    assert.equal(zoomMeTarget({ alive: false, col: 5, row: 3 }), 'all-units');
   });
 
-  test('undefined entity: zooms to full map', () => {
-    assert.equal(zoomFitTarget(undefined), 'full-map');
+  test('undefined entity: frames all player units', () => {
+    assert.equal(zoomMeTarget(undefined), 'all-units');
   });
 });
