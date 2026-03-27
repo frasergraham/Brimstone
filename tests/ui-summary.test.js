@@ -285,3 +285,101 @@ describe('per-step node capture detection', () => {
     assert.equal(changes[0].to, null);
   });
 });
+
+// ── Action budget breakdown ─────────────────────────────────────────────────
+
+// Mirrors the line-item computation in _showPhaseModal
+function computeBudgetRows(faction, phase, entities) {
+  const rows = [];
+  if (faction === 'hero') {
+    const base = 3;
+    const timeBonus = (phase === 'day' || phase === 'dawn') ? 1 : 0;
+    const survivorCount = entities.filter(e => e.alive && e.owner === 'hero' && e.type !== 'hero').length;
+    const survivorBonus = Math.min(survivorCount, 5);
+    rows.push({ label: 'Base', value: base });
+    if (timeBonus)     rows.push({ label: `phase bonus`, value: timeBonus });
+    if (survivorBonus) rows.push({ label: `survivors`, value: survivorBonus });
+  } else {
+    const base = 4;
+    const timeBonus = phase === 'night' ? 1 : 0;
+    const unitCount = entities.filter(e => e.alive && e.owner === 'witch' && e.type !== 'witch').length;
+    const unitBonus = Math.min(Math.floor(unitCount / 2), 4);
+    rows.push({ label: 'Base', value: base });
+    if (timeBonus) rows.push({ label: `phase bonus`, value: timeBonus });
+    if (unitBonus) rows.push({ label: `minions`, value: unitBonus });
+  }
+  return rows;
+}
+
+describe('action budget breakdown rows', () => {
+  test('hero base only (no bonus phase, no survivors)', () => {
+    const rows = computeBudgetRows('hero', 'night', [
+      { alive: true, owner: 'hero', type: 'hero' },
+    ]);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].value, 3);
+  });
+
+  test('hero with day bonus and 2 survivors', () => {
+    const rows = computeBudgetRows('hero', 'day', [
+      { alive: true, owner: 'hero', type: 'hero' },
+      { alive: true, owner: 'hero', type: 'survivor' },
+      { alive: true, owner: 'hero', type: 'survivor' },
+    ]);
+    assert.equal(rows.length, 3); // base + day + survivors
+    assert.equal(rows[0].value, 3);
+    assert.equal(rows[1].value, 1); // day bonus
+    assert.equal(rows[2].value, 2); // 2 survivors
+  });
+
+  test('hero survivor bonus caps at 5', () => {
+    const entities = [
+      { alive: true, owner: 'hero', type: 'hero' },
+      ...Array.from({ length: 7 }, () => ({ alive: true, owner: 'hero', type: 'survivor' })),
+    ];
+    const rows = computeBudgetRows('hero', 'dusk', entities);
+    const surRow = rows.find(r => r.label.includes('survivors'));
+    assert.equal(surRow.value, 5);
+  });
+
+  test('witch base only (no night, no minions)', () => {
+    const rows = computeBudgetRows('witch', 'day', [
+      { alive: true, owner: 'witch', type: 'witch' },
+    ]);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].value, 4);
+  });
+
+  test('witch with night bonus and 4 minions', () => {
+    const rows = computeBudgetRows('witch', 'night', [
+      { alive: true, owner: 'witch', type: 'witch' },
+      ...Array.from({ length: 4 }, () => ({ alive: true, owner: 'witch', type: 'minion' })),
+    ]);
+    assert.equal(rows.length, 3); // base + night + minions
+    assert.equal(rows[0].value, 4);
+    assert.equal(rows[1].value, 1); // night bonus
+    assert.equal(rows[2].value, 2); // floor(4/2) = 2
+  });
+
+  test('witch minion bonus caps at 4', () => {
+    const entities = [
+      { alive: true, owner: 'witch', type: 'witch' },
+      ...Array.from({ length: 12 }, () => ({ alive: true, owner: 'witch', type: 'minion' })),
+    ];
+    const rows = computeBudgetRows('witch', 'dawn', entities);
+    const unitRow = rows.find(r => r.label.includes('minions'));
+    assert.equal(unitRow.value, 4);
+  });
+
+  test('total matches sum of all row values', () => {
+    const entities = [
+      { alive: true, owner: 'hero', type: 'hero' },
+      { alive: true, owner: 'hero', type: 'survivor' },
+      { alive: true, owner: 'hero', type: 'survivor' },
+      { alive: true, owner: 'hero', type: 'survivor' },
+    ];
+    const rows = computeBudgetRows('hero', 'dawn', entities);
+    const total = rows.reduce((sum, r) => sum + r.value, 0);
+    assert.equal(total, 3 + 1 + 3); // base + dawn + 3 survivors = 7
+  });
+});

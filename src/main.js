@@ -92,36 +92,6 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
 function redraw() {
   renderer.draw();
   if (ui) ui._updateSidebar?.();
-  if (state?.gameOver) showGameOver();
-}
-
-function showGameOver() {
-  const el = document.getElementById('game-over');
-  if (!el || el.dataset.shown) return;
-  el.dataset.shown = '1';
-
-  const banner = state.winner === 'hero'
-    ? '☀ The Hero Triumphs!'
-    : '🌙 The Witch Prevails!';
-  const reason = state.winReason
-    || (state.winner === 'hero'
-        ? 'The hero has vanquished the witch! Salem is saved!'
-        : 'The witch has won. Darkness falls over Salem forever…');
-
-  el.style.display = 'flex';
-  el.querySelector('.winner-text').innerHTML =
-    `<div class="winner-banner">${banner}</div><div class="winner-reason">${reason}</div>`;
-
-  // "View Map" dismisses the overlay and lifts fog so the player can inspect the final board.
-  el.querySelector('#btn-view-map')?.addEventListener('click', () => {
-    el.style.display = 'none';
-    if (state) { state.fogOfWar = false; redraw(); }
-  }, { once: true });
-
-  // Clicking the backdrop (not the card) also dismisses.
-  el.addEventListener('click', (e) => {
-    if (e.target === el) el.style.display = 'none';
-  });
 }
 
 // ── Local planning lifecycle ──────────────────────────────────────────────────
@@ -189,7 +159,7 @@ async function _runLocalAutoResolution() {
 }
 
 async function _runLocalResolution() {
-  if (!state || state.gameOver) { showGameOver(); return; }
+  if (!state || state.gameOver) return;
 
   // Cap shared food to the human player's enabled food count so the resolver
   // only auto-spends the rations the player actually chose to commit.
@@ -272,9 +242,8 @@ async function _runLocalResolution() {
       return;
     }
   } else if (state.gameOver) {
-    // Autoplay or no human — use the legacy game-over screen
+    // Autoplay or no human — just clean up save
     if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
-    showGameOver();
     return;
   }
 
@@ -586,7 +555,6 @@ function redrawOnline() {
   if (!renderer) return;
   renderer.draw();
   if (ui) ui._updateSidebar?.();
-  if (state?.gameOver) showGameOver();
 }
 
 // ── Window resize ─────────────────────────────────────────────────────────────
@@ -665,9 +633,6 @@ document.getElementById('btn-start-local').addEventListener('click', () => {
 });
 
 function _doRestart() {
-  const el = document.getElementById('game-over');
-  if (el) { el.style.display = 'none'; delete el.dataset.shown; }
-
   // Disconnect from server if in online mode
   if (mp) { mp.disconnect(); mp = null; }
 
@@ -686,8 +651,6 @@ function _doRestart() {
     document.getElementById('game-screen').style.display  = 'none';
   }
 }
-
-document.getElementById('btn-restart').addEventListener('click', _doRestart);
 
 function _esc(str) {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -1243,8 +1206,7 @@ function _createMpClient() {
       ui._clearSelection();
       ui._triggerHazardFlashes();
       redrawOnline();
-      if (state.gameOver) showGameOver();
-      else ui._maybeShowNoActionsDialog();
+      if (!state.gameOver) ui._maybeShowNoActionsDialog();
     },
 
     onBattle(actorSnap, targetSnap, result, afterDismiss) {
@@ -1423,7 +1385,6 @@ function _createMpClient() {
             return;
           }
         } else if (state.gameOver) {
-          showGameOver();
           return;
         }
 

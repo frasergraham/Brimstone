@@ -1848,63 +1848,35 @@ canvas { touch-action: pan-x pan-y; }
 .summary-speed-btn:hover { color: var(--text); border-color: var(--text-dim); }
 .summary-speed-btn.active { color: var(--gold, #c8a84b); border-color: var(--gold, #c8a84b); }
 
-/* Action breakdown below pips in phase modal */
-.action-breakdown {
-  font-size: 0.68rem;
-  color: var(--text-dim);
-  margin-top: 0.3rem;
-  letter-spacing: 0.03em;
+/* Action breakdown table in phase modal */
+.action-breakdown-table {
+  width: 100%;
+  margin-top: 0.35rem;
+  font-size: 0.72rem;
 }
-
-/* ── Game over ───────────────────────────────────────────────────────────── */
-
-#game-over {
-  display: none;
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.75);
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-  cursor: pointer;
-}
-
-#game-over .game-over-card {
-  cursor: default;
-}
-
-.game-over-card {
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  padding: 2.5rem 3rem;
-  text-align: center;
-  border-radius: 4px;
-  box-shadow: 0 0 60px rgba(100, 50, 160, 0.35);
-}
-
-.game-over-buttons {
+.abkd-row {
   display: flex;
-  gap: 0.75rem;
-  justify-content: center;
+  justify-content: space-between;
+  padding: 0.12rem 0;
+  color: var(--text-dim);
 }
-
-.winner-text {
-  font-size: 1.3rem;
-  color: var(--day);
-  margin-bottom: 1.5rem;
-  max-width: 340px;
+.abkd-label { flex: 1; text-align: left; }
+.abkd-val   { font-variant-numeric: tabular-nums; color: var(--text); }
+.abkd-divider {
+  border: none;
+  border-top: 1px solid rgba(255,255,255,0.15);
+  margin: 0.15rem 0;
 }
-
-.winner-banner {
-  font-size: 1.5rem;
+.abkd-total {
   font-weight: bold;
-  margin-bottom: 0.6rem;
+  color: var(--text);
 }
-
-.winner-reason {
-  font-size: 0.95rem;
-  opacity: 0.85;
-  line-height: 1.5;
+.abkd-total .abkd-label,
+.abkd-total .abkd-val { color: var(--gold, #c8a84b); }
+.abkd-food .abkd-val {
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  font-style: italic;
 }
 
 .battle-gang-note {
@@ -1958,9 +1930,6 @@ canvas { touch-action: pan-x pan-y; }
   .setup-rules { font-size: 0.84rem; }
   .title { font-size: 2.2rem; }
   .setup-btn { padding: 0.75rem 1.2rem; font-size: 1rem; min-height: 44px; }
-
-  .game-over-card { padding: 2rem 1.5rem; margin: 1rem; }
-  .winner-text { font-size: 1.1rem; }
 
   /* Chronicle + Inventory panels full-width on mobile */
   #chronicle-panel, #inventory-panel { width: 100%; border-left: none; }
@@ -2425,23 +2394,19 @@ canvas { touch-action: pan-x pan-y; }
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   width: 100%;
+}
+
+.action-pip-row {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 0.15rem;
-  flex-wrap: wrap;
-}
-
-.action-pip-label {
-  font-size: 0.72rem;
-  color: var(--text-dim);
-  margin-right: 0.3rem;
-  white-space: nowrap;
+  gap: 0.2rem;
+  margin-bottom: 0.15rem;
 }
 
 .action-pip {
   color: var(--gold, #c8a84b);
-  font-size: 0.9rem;
+  font-size: 1rem;
   line-height: 1;
 }
 
@@ -2680,7 +2645,6 @@ body.spectator-mode #end-turn-btn  { display: none !important; }
 body.spectator-mode #cancel-wrap   { display: none !important; }
 body.spectator-mode #inventory-btn { display: none !important; }
 body.spectator-mode #unit-stats-bar{ display: none; }
-body.spectator-mode #game-over     { display: none; }
 body.spectator-mode #setup-screen  { display: none !important; }
 body.spectator-mode #game-screen   { display: flex !important; }
 

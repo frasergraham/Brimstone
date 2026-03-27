@@ -1793,23 +1793,28 @@ export class UIController {
     // Compute action breakdown for display
     const actions  = budget ?? (faction === 'hero' ? this.state.heroActionsLeft : this.state.witchActionsLeft) ?? 0;
     const entities = this.state.entities;
-    let breakdown  = '';
+    const inventory = this.state.inventory;
+    const stash = faction === 'hero' ? inventory?.shared : inventory?.witch;
+    const foodCount = stash?.food ?? 0;
+
+    // Build line-item rows: { label, value }
+    const rows = [];
     if (faction === 'hero') {
+      const base = 3;
       const timeBonus     = (phase === 'day' || phase === 'dawn') ? 1 : 0;
       const survivorCount = entities.filter(e => e.alive && e.owner === 'hero' && e.type !== 'hero').length;
       const survivorBonus = Math.min(survivorCount, 5);
-      const parts = ['3 base'];
-      if (timeBonus)     parts.push(`+1 ${phase}`);
-      if (survivorBonus) parts.push(`+${survivorBonus} survivor${survivorBonus !== 1 ? 's' : ''}`);
-      breakdown = parts.join(' · ');
+      rows.push({ label: 'Base', value: base });
+      if (timeBonus)     rows.push({ label: `${info.icon} ${info.label} bonus`, value: timeBonus });
+      if (survivorBonus) rows.push({ label: `☺ Survivor${survivorBonus !== 1 ? 's' : ''} (${survivorCount})`, value: survivorBonus });
     } else {
+      const base = 4;
       const timeBonus = phase === 'night' ? 1 : 0;
       const unitCount = entities.filter(e => e.alive && e.owner === 'witch' && e.type !== 'witch').length;
       const unitBonus = Math.min(Math.floor(unitCount / 2), 4);
-      const parts = ['4 base'];
-      if (timeBonus) parts.push('+1 night');
-      if (unitBonus) parts.push(`+${unitBonus} units`);
-      breakdown = parts.join(' · ');
+      rows.push({ label: 'Base', value: base });
+      if (timeBonus) rows.push({ label: `${info.icon} ${info.label} bonus`, value: timeBonus });
+      if (unitBonus) rows.push({ label: `☠ Minions (${unitCount})`, value: unitBonus });
     }
 
     // Set content
@@ -1822,11 +1827,23 @@ export class UIController {
     if (effectsEl) effectsEl.innerHTML  = info.lines.map(l => `<div>${l}</div>`).join('');
     if (budgetEl) {
       const pips = Array.from({ length: actions }, () =>
-        `<span class="action-pip">●</span>`
+        `<span class="action-pip">◆</span>`
       ).join('');
+
+      let breakdownHtml = '<div class="action-breakdown-table">';
+      for (const r of rows) {
+        breakdownHtml += `<div class="abkd-row"><span class="abkd-label">${r.label}</span><span class="abkd-val">+${r.value}</span></div>`;
+      }
+      breakdownHtml += `<hr class="abkd-divider">`;
+      breakdownHtml += `<div class="abkd-row abkd-total"><span class="abkd-label">Total</span><span class="abkd-val">${actions}</span></div>`;
+      if (foodCount > 0) {
+        breakdownHtml += `<div class="abkd-row abkd-food"><span class="abkd-label">🍞 Food ×${foodCount}</span><span class="abkd-val">(extra actions)</span></div>`;
+      }
+      breakdownHtml += '</div>';
+
       budgetEl.innerHTML =
-        `<span class="action-pip-label">${actions} action${actions !== 1 ? 's' : ''}</span>${pips}` +
-        `<div class="action-breakdown">${breakdown}</div>`;
+        `<div class="action-pip-row">${pips}</div>` +
+        breakdownHtml;
     }
 
     // Set phase accent class
