@@ -1362,6 +1362,51 @@ export class UIController {
     if (bar) bar.title = title;
   }
 
+  /**
+   * Animate glow on score pips and node dots that changed since prevScore/prevNodes.
+   */
+  _animateScoreBar(prevScore, prevNodes) {
+    if (!prevScore && !prevNodes) return;
+    this._renderObjectives(); // ensure DOM is up to date
+
+    const barEl = this._el('score-bar-content');
+    if (!barEl) return;
+
+    // Animate score pip changes
+    if (prevScore) {
+      const state = this.state;
+      const heroPips  = barEl.querySelectorAll('.score-pip.hero');
+      const witchPips = barEl.querySelectorAll('.score-pip.witch');
+      for (let i = prevScore.hero; i < state.nodeScore.hero && i < heroPips.length; i++) {
+        heroPips[i].classList.add('score-pip-glow');
+      }
+      for (let i = prevScore.witch; i < state.nodeScore.witch && i < witchPips.length; i++) {
+        witchPips[i].classList.add('score-pip-glow');
+      }
+    }
+
+    // Animate node dot changes
+    if (prevNodes) {
+      const dots = barEl.querySelectorAll('.node-dot');
+      prevNodes.forEach((prev, i) => {
+        if (i >= dots.length) return;
+        const currentHolder = this.state.entities.find(
+          e => e.alive && e.col === prev.col && e.row === prev.row
+        );
+        const currentOwner = currentHolder?.owner ?? null;
+        if (currentOwner !== prev.owner) {
+          dots[i].classList.add('node-dot-glow');
+        }
+      });
+    }
+
+    // Remove glow classes after animation completes
+    setTimeout(() => {
+      barEl.querySelectorAll('.score-pip-glow').forEach(el => el.classList.remove('score-pip-glow'));
+      barEl.querySelectorAll('.node-dot-glow').forEach(el => el.classList.remove('node-dot-glow'));
+    }, 2000);
+  }
+
   _renderActionPanel() {
     // Show/hide the floating cancel pill and update its hint text
     const wrap = this._el('cancel-wrap');
@@ -1794,61 +1839,6 @@ export class UIController {
       continueBtn?.removeEventListener('click', dismiss);
     };
     continueBtn?.addEventListener('click', dismiss);
-  }
-
-  // ── Scoring toast (dawn / dusk checkpoints) ──────────────────────────────
-
-  showScoringToast(prevScore) {
-    if (this.speedMode === 'instant') return;
-    const state      = this.state;
-    const phase      = state.phase; // 'dawn' or 'dusk' — already advanced by endRound()
-    const phaseIcon  = phase === 'dawn' ? '🌅' : '🌇';
-    const phaseLabel = phase === 'dawn' ? 'Dawn Reckoning' : 'Dusk Reckoning';
-
-    // Count nodes held by each faction right now (same snapshot scoring used).
-    const witchCount = state.witchObjectives.filter(obj =>
-      state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
-    ).length;
-    const heroCount = state.witchObjectives.filter(obj =>
-      state.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row)
-    ).length;
-
-    const heroDelta  = state.nodeScore.hero  - prevScore.hero;
-    const witchDelta = state.nodeScore.witch - prevScore.witch;
-
-    let resultLine;
-    if (witchDelta > 0) {
-      resultLine = `Witch holds ${witchCount}–${heroCount} · Witch scores! (${state.nodeScore.witch}/4)`;
-    } else if (heroDelta > 0) {
-      resultLine = `Hero holds ${heroCount}–${witchCount} · Hero scores! (${state.nodeScore.hero}/4)`;
-    } else if (witchCount === 3 || heroCount === 3) {
-      resultLine = `All three nodes held — instant win!`;
-    } else {
-      resultLine = `Nodes tied ${heroCount}–${witchCount} · No score awarded`;
-    }
-
-    const pip = (filled, cls) =>
-      `<span class="score-pip ${cls}${filled ? ' filled' : ''}"></span>`;
-    const heroPips  = Array.from({ length: 4 }, (_, i) => pip(i < state.nodeScore.hero,  'hero')).join('');
-    const witchPips = Array.from({ length: 4 }, (_, i) => pip(i < state.nodeScore.witch, 'witch')).join('');
-
-    document.getElementById('score-toast')?.remove();
-
-    const toast = document.createElement('div');
-    toast.id        = 'score-toast';
-    toast.className = `phase-toast score-toast score-toast-${phase}`;
-    toast.innerHTML = `
-      <span class="phase-toast-icon">${phaseIcon}</span>
-      <div class="phase-toast-body">
-        <div class="phase-toast-title">${phaseLabel}</div>
-        <div class="phase-toast-lines">${resultLine}</div>
-        <div class="score-toast-track">⚔ ${heroPips}&nbsp;&nbsp;${witchPips} ✦</div>
-      </div>
-    `;
-    this._el('game-screen')?.appendChild(toast);
-
-    setTimeout(() => toast.classList.add('phase-toast-hide'), 3200);
-    setTimeout(() => toast.remove(), 3700);
   }
 
   // ── Dialogs ───────────────────────────────────────────────────────────────
@@ -2512,23 +2502,38 @@ export class UIController {
   /**
    * Show the post-resolution round summary modal.
    * Resolves with 'next' or 'replay'.
+   * @param {object} [opts] - Optional scoring context (fog, node control, reckoning).
    */
-  _showResolutionSummary(steps, roundNum) {
+  _showResolutionSummary(steps, roundNum, opts = {}) {
     return new Promise(resolve => {
       const el = this._el('round-summary');
       if (!el) { resolve('next'); return; }
 
+      const { prevScore, prevNodes, humanFaction, fogOfWar } = opts;
+
       // Collect kills, survivors found, and summons from steps
+      // with fog-of-war filtering: skip opponent-only events the player can't see
       const kills     = [];
       const survivors = [];
       const summons   = [];
       for (const step of steps ?? []) {
-        const allEvents = [
-          ...(step.heroEvents  ?? []),
-          ...(step.witchEvents ?? []),
-          ...(step.playerEvents ?? []).flatMap(pe => pe.events ?? []),
+        // Tag each event with its faction for fog filtering
+        const taggedEvents = [
+          ...(step.heroEvents  ?? []).map(ev => ({ ...ev, _faction: 'hero' })),
+          ...(step.witchEvents ?? []).map(ev => ({ ...ev, _faction: 'witch' })),
+          ...(step.playerEvents ?? []).flatMap(pe =>
+            (pe.events ?? []).map(ev => ({ ...ev, _faction: pe.faction }))
+          ),
         ];
-        for (const ev of allEvents) {
+        for (const ev of taggedEvents) {
+          // Fog filter: skip opponent events (but always show kills of our units)
+          if (fogOfWar && humanFaction && ev._faction !== humanFaction) {
+            // Exception: show kills where our unit was the target
+            const isOurUnitKilled = ev.result?.killed &&
+              (ev.battleSnaps?.targetSnap?.owner === humanFaction);
+            if (!isOurUnitKilled) continue;
+          }
+
           if (ev.result?.killed) {
             const snap = ev.battleSnaps?.targetSnap ?? ev.result.killed;
             const name = snap?.title ?? snap?.name ?? snap?.type ?? 'Unit';
@@ -2540,6 +2545,21 @@ export class UIController {
           if (ev.action?.type === 'summon' && ev.result?.success) {
             const logLine = ev.result?.log?.[0] ?? '';
             summons.push(logLine || 'Unit summoned');
+          }
+        }
+      }
+
+      // Detect node control changes
+      const nodeChanges = [];
+      if (prevNodes) {
+        const state = this.state;
+        for (const prev of prevNodes) {
+          const currentHolder = state.entities.find(
+            e => e.alive && e.col === prev.col && e.row === prev.row
+          );
+          const currentOwner = currentHolder?.owner ?? null;
+          if (currentOwner !== prev.owner) {
+            nodeChanges.push({ label: prev.label, from: prev.owner, to: currentOwner });
           }
         }
       }
@@ -2563,6 +2583,56 @@ export class UIController {
         for (const s of summons) {
           html += `<div class="summary-summon">✦ ${s}</div>`;
         }
+
+        // Node control changes
+        for (const nc of nodeChanges) {
+          if (nc.to === 'hero') {
+            html += `<div class="summary-node hero-text">⚔ Hero now controls ${nc.label}</div>`;
+          } else if (nc.to === 'witch') {
+            html += `<div class="summary-node witch-text">✦ Witch has seized ${nc.label}</div>`;
+          } else {
+            html += `<div class="summary-node">◇ ${nc.label} is no longer controlled</div>`;
+          }
+        }
+
+        // Reckoning section at dawn/dusk
+        const state = this.state;
+        if (prevScore && (state.phase === 'dawn' || state.phase === 'dusk')) {
+          const heroDelta  = state.nodeScore.hero  - prevScore.hero;
+          const witchDelta = state.nodeScore.witch - prevScore.witch;
+          const witchCount = state.witchObjectives.filter(obj =>
+            state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
+          ).length;
+          const heroCount = state.witchObjectives.filter(obj =>
+            state.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row)
+          ).length;
+
+          const phaseLabel = state.phase === 'dawn' ? '🌅 Dawn Reckoning' : '🌇 Dusk Reckoning';
+
+          let reckoningLine;
+          if (witchCount === 3 || heroCount === 3) {
+            const who = witchCount === 3 ? 'Witch' : 'Hero';
+            reckoningLine = `${who} holds all 3 Power Nodes!`;
+          } else if (witchDelta > 0) {
+            reckoningLine = `Witch holds ${witchCount} Power Node${witchCount !== 1 ? 's' : ''} to Hero's ${heroCount}. Witch scores 1 victory point.`;
+          } else if (heroDelta > 0) {
+            reckoningLine = `Hero holds ${heroCount} Power Node${heroCount !== 1 ? 's' : ''} to Witch's ${witchCount}. Hero scores 1 victory point.`;
+          } else {
+            reckoningLine = `Nodes tied ${heroCount}–${witchCount}. No points scored.`;
+          }
+
+          const pip = (filled, cls) =>
+            `<span class="score-pip ${cls}${filled ? ' filled' : ''}"></span>`;
+          const heroPips  = Array.from({ length: 4 }, (_, i) => pip(i < state.nodeScore.hero,  'hero')).join('');
+          const witchPips = Array.from({ length: 4 }, (_, i) => pip(i < state.nodeScore.witch, 'witch')).join('');
+
+          html += `<div class="summary-reckoning">
+            <div class="summary-reckoning-title">${phaseLabel}</div>
+            <div class="summary-reckoning-result">${reckoningLine}</div>
+            <div class="summary-score-track">⚔ ${heroPips}&nbsp;&nbsp;${witchPips} ✦</div>
+          </div>`;
+        }
+
         eventsEl.innerHTML = html || `<div class="summary-neutral">No notable events this round.</div>`;
       }
 

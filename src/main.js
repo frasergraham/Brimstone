@@ -226,20 +226,12 @@ async function _runLocalResolution() {
 
   await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
 
-  // Show post-resolution summary modal (skip in autoplay mode)
-  if (!_autoplay && ui && humanFaction) {
-    let action;
-    do {
-      action = await ui._showResolutionSummary(steps, state.round);
-      if (action === 'replay') {
-        state.entities = preReplayEntities;
-        redraw();
-        await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
-      }
-    } while (action === 'replay');
-  }
-
+  // Snapshot scoring state BEFORE endRound so we can detect changes
   const prevScore = { hero: state.nodeScore.hero, witch: state.nodeScore.witch };
+  const prevNodes = state.witchObjectives.map(obj => {
+    const holder = state.entities.find(e => e.alive && e.col === obj.col && e.row === obj.row);
+    return { col: obj.col, row: obj.row, label: obj.label, owner: holder?.owner ?? null };
+  });
 
   state.endRound();
   if (ui) ui._triggerHazardFlashes();
@@ -248,9 +240,21 @@ async function _runLocalResolution() {
   // Persist single-player progress to localStorage
   _saveSpGame();
 
-  // Show a scoring toast whenever we land on a scoring checkpoint (dawn/dusk).
-  if ((state.phase === 'dawn' || state.phase === 'dusk') && ui) {
-    ui.showScoringToast(prevScore);
+  // Show post-resolution summary modal (skip in autoplay mode)
+  if (!_autoplay && ui && humanFaction) {
+    let action;
+    do {
+      action = await ui._showResolutionSummary(steps, state.round - 1, {
+        prevScore, prevNodes, humanFaction, fogOfWar: state.fogOfWar,
+      });
+      if (action === 'replay') {
+        state.entities = preReplayEntities;
+        redraw();
+        await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+      }
+    } while (action === 'replay');
+    // Animate score bar changes after summary is dismissed
+    ui._animateScoreBar(prevScore, prevNodes);
   }
 
   if (state.gameOver) {
@@ -1317,7 +1321,26 @@ function _createMpClient() {
       const finalEntities = finalState.entities ?? state.entities;
 
       const _preReplayEntitiesOnline = steps[0]?.entitySnapshot ?? finalEntities;
+
+      // Snapshot scoring state BEFORE applying finalState so we can detect changes
+      const prevScore = { hero: state.nodeScore?.hero ?? 0, witch: state.nodeScore?.witch ?? 0 };
+      const prevNodes = (state.witchObjectives ?? []).map(obj => {
+        const holder = state.entities.find(e => e.alive && e.col === obj.col && e.row === obj.row);
+        return { col: obj.col, row: obj.row, label: obj.label, owner: holder?.owner ?? null };
+      });
+
       _animateResolutionSteps(steps, finalEntities, redrawOnline, mp?.myFaction, mp?.myPlayerId ?? null).then(async () => {
+        // Apply full final state (phase, round, score, tiles, etc.) BEFORE summary
+        // so the reckoning section can show scoring results.
+        Object.assign(state, finalState);
+        state.hero      = finalState.hero;
+        state.witch     = finalState.witch;
+        state.myFaction = mp?.myFaction;
+
+        // Mirror the same post-resolution side effects as the local path.
+        ui._triggerHazardFlashes();
+        redrawOnline();
+
         // Show post-resolution summary modal for human players.
         // Keep _resolving = true for the whole summary+replay block so that any
         // incoming onPlanningPhase messages are buffered, not immediately applied.
@@ -1325,7 +1348,9 @@ function _createMpClient() {
           _resolving = true;
           let action;
           do {
-            action = await ui._showResolutionSummary(steps, state.round);
+            action = await ui._showResolutionSummary(steps, (finalState.round ?? state.round) - 1, {
+              prevScore, prevNodes, humanFaction: mp.myFaction, fogOfWar: state.fogOfWar,
+            });
             if (action === 'replay') {
               state.entities = _preReplayEntitiesOnline;
               redrawOnline();
@@ -1336,17 +1361,9 @@ function _createMpClient() {
             }
           } while (action === 'replay');
           _resolving = false;
+          // Animate score bar changes after summary is dismissed
+          ui._animateScoreBar(prevScore, prevNodes);
         }
-
-        // Apply full final state (phase, round, score, tiles, etc.)
-        Object.assign(state, finalState);
-        state.hero      = finalState.hero;
-        state.witch     = finalState.witch;
-        state.myFaction = mp?.myFaction;
-
-        // Mirror the same post-resolution side effects as the local path.
-        ui._triggerHazardFlashes();
-        redrawOnline();
 
         if (state.gameOver) {
           showGameOver();

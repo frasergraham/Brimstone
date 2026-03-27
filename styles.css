@@ -2480,18 +2480,51 @@ canvas { touch-action: pan-x pan-y; }
 .phase-toast-title { font-weight: bold; font-size: 0.85rem; color: #e8dcc8; }
 .phase-toast-lines { font-size: 0.72rem; color: var(--text-dim); margin-top: 0.1rem; }
 
-.score-toast { top: calc(38% + 4rem); animation: score-toast-in 0.25s ease; }
-@keyframes score-toast-in { from { opacity:0; transform:translate(-50%,-46%); } to { opacity:1; transform:translate(-50%,-50%); } }
-.score-toast-dawn  { border-color: rgba(255,140,0,0.4); }
-.score-toast-dusk  { border-color: rgba(180,60,0,0.4); }
-.score-toast-track {
+/* ── Score bar glow animations ─────────────────────────────────────── */
+@keyframes pip-glow {
+  0%   { box-shadow: 0 0 4px currentColor; }
+  50%  { box-shadow: 0 0 12px currentColor, 0 0 20px currentColor; }
+  100% { box-shadow: 0 0 4px currentColor; }
+}
+.score-pip-glow { animation: pip-glow 0.6s ease 3; }
+
+@keyframes node-glow {
+  0%, 100% { box-shadow: 0 0 5px currentColor; }
+  50%      { box-shadow: 0 0 14px currentColor, 0 0 24px currentColor; }
+}
+.node-dot-glow { animation: node-glow 0.6s ease 3; }
+
+/* ── Reckoning section in round summary ──────────────────────────── */
+.summary-reckoning {
+  border-top: 1px solid rgba(255,255,255,0.1);
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+}
+.summary-reckoning-title {
+  font-weight: bold;
+  font-size: 0.85rem;
+  color: #e8dcc8;
+  margin-bottom: 0.2rem;
+}
+.summary-reckoning-result {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  margin-bottom: 0.3rem;
+}
+.summary-score-track {
   display: flex;
   align-items: center;
   gap: 3px;
-  margin-top: 0.3rem;
   font-size: 0.7rem;
   color: var(--text-dim);
 }
+.summary-node {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  padding: 0.1rem 0;
+}
+.summary-node.hero-text  { color: var(--hero); }
+.summary-node.witch-text { color: var(--witch); }
 
 /* Resolution overlay */
 #resolution-overlay {
