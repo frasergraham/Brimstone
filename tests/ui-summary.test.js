@@ -57,6 +57,42 @@ describe('fog of war event filtering in summary', () => {
   });
 });
 
+// ── Kill name formatting ────────────────────────────────────────────────────
+
+// Mirrors the kill name logic in _showResolutionSummary
+function formatKillName(snap) {
+  if (snap?.name && snap?.title) {
+    return `${snap.name} the ${snap.title}`;
+  }
+  return snap?.name ?? snap?.title ?? snap?.type ?? 'Unit';
+}
+
+describe('kill name formatting in summary', () => {
+  test('survivor with name and title shows both', () => {
+    const snap = { name: 'Samuel Cooper', title: 'Militia Sergeant', type: 'survivor' };
+    assert.equal(formatKillName(snap), 'Samuel Cooper the Militia Sergeant');
+  });
+
+  test('hero with name only shows name', () => {
+    const snap = { name: 'The Hero', title: null, type: 'hero' };
+    assert.equal(formatKillName(snap), 'The Hero');
+  });
+
+  test('minion with no name or title falls back to type', () => {
+    const snap = { name: null, title: null, type: 'minion' };
+    assert.equal(formatKillName(snap), 'minion');
+  });
+
+  test('unit with only title shows title', () => {
+    const snap = { name: null, title: 'Wood Golem', type: 'wood_golem' };
+    assert.equal(formatKillName(snap), 'Wood Golem');
+  });
+
+  test('null snap returns Unit', () => {
+    assert.equal(formatKillName(null), 'Unit');
+  });
+});
+
 // ── Node control change detection ───────────────────────────────────────────
 
 // Mirrors the node control change logic

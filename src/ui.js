@@ -2556,7 +2556,12 @@ export class UIController {
 
           if (ev.result?.killed) {
             const snap = ev.battleSnaps?.targetSnap ?? ev.result.killed;
-            const name = snap?.title ?? snap?.name ?? snap?.type ?? 'Unit';
+            let name;
+            if (snap?.name && snap?.title) {
+              name = `${snap.name} the ${snap.title}`;
+            } else {
+              name = snap?.name ?? snap?.title ?? snap?.type ?? 'Unit';
+            }
             kills.push(name);
           }
           if (ev.result?.encounterSurvivor) {
