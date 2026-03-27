@@ -76,6 +76,59 @@ export function getReachableHexes(state, actor, range, posOverride = null) {
   return reachable;
 }
 
+// Find the shortest path (road-preferring) from actor's position to (toCol, toRow).
+// Returns an array of {col, row} steps NOT including the start, up to the destination,
+// or null if no path exists within the movement budget.
+// posOverride allows querying from a projected position rather than actor's current pos.
+function findShortestPath(state, actor, toCol, toRow, posOverride = null) {
+  const startCol = posOverride?.col ?? actor.col;
+  const startRow = posOverride?.row ?? actor.row;
+  const startK   = hexKey(startCol, startRow);
+  const goalK    = hexKey(toCol, toRow);
+  if (startK === goalK) return [];
+
+  const dist   = new Map([[startK, 0]]);
+  const parent = new Map([[startK, null]]);
+  const queue  = [{ col: startCol, row: startRow, c: 0 }];
+
+  while (queue.length) {
+    queue.sort((a, b) => a.c - b.c);
+    const { col, row, c } = queue.shift();
+    const k = hexKey(col, row);
+    if (c > (dist.get(k) ?? Infinity)) continue;
+    if (k === goalK) break;
+
+    for (const n of getNeighbors(col, row)) {
+      const nk = hexKey(n.col, n.row);
+      const nt = tile(state, n.col, n.row);
+      if (!nt || nt.type === TileType.RIVER) continue;
+      if (hasEnemy(state, actor, n.col, n.row) && nk !== goalK) continue;
+      const isRoadLike = nt.type === TileType.ROAD || nt.type === TileType.BRIDGE ||
+                         nt.type === TileType.BUILDING;
+      const nc = c + (isRoadLike ? 1 : 2);
+      if (nc < (dist.get(nk) ?? Infinity)) {
+        dist.set(nk, nc);
+        parent.set(nk, { col, row });
+        queue.push({ col: n.col, row: n.row, c: nc });
+      }
+    }
+  }
+
+  if (!parent.has(goalK)) return null;
+
+  // Reconstruct path from goal back to start
+  const path = [];
+  let cur = goalK;
+  while (cur !== startK) {
+    const [c, r] = cur.split(',').map(Number);
+    path.unshift({ col: c, row: r });
+    const p = parent.get(cur);
+    if (!p) return null;
+    cur = hexKey(p.col, p.row);
+  }
+  return path;
+}
+
 function entitiesAt(state, col, row) {
   return state.entities.filter(e => e.alive && e.col === col && e.row === row);
 }
@@ -123,11 +176,12 @@ export function getVisibleEnemyHexes(state) {
 }
 
 // Returns a Set of hexKeys where hero-side entities are visible to witch units.
+// Witch sight is always 2 hexes regardless of day/night phase.
 export function getVisibleHeroHexes(state) {
   const revealed = new Set();
   for (const we of state.entities) {
     if (!we.alive || we.owner !== 'witch') continue;
-    const range = sightRange(state.phase, false);
+    const range = 2; // witch has fixed 2-hex sight in all phases
     for (const he of state.entities) {
       if (!he.alive || he.owner !== 'hero') continue;
       if (hexDistance(we.col, we.row, he.col, he.row) <= range) {
@@ -172,11 +226,13 @@ export function getValidActions(state, actor) {
     }
   }
 
-  // Summon — witch only
+  // Summon — witch only; each summon costs 2 resources
   if (!actorIsHero) {
     const inv = state.inventory.witch;
-    const totalRes = Object.values(inv).reduce((s, v) => s + v, 0);
-    if (totalRes > 0) {
+    const canSummon = (inv[ResourceType.METAL] || 0) >= 2 ||
+                      (inv[ResourceType.WOOD]  || 0) >= 2 ||
+                      Object.values(inv).reduce((s, v) => s + v, 0) >= 2;
+    if (canSummon) {
       const spawnTargets = getNeighbors(actor.col, actor.row).filter(n => {
         const nt = tile(state, n.col, n.row);
         return nt && nt.type !== TileType.RIVER && entitiesAt(state, n.col, n.row).length === 0;
@@ -188,15 +244,19 @@ export function getValidActions(state, actor) {
     }
   }
 
+  // Herbs — available to any unit that carries them
+  {
+    const myItems = actor.items || {};
+    if ((myItems[ResourceType.HERBS] || 0) > 0 && actor.hp < actor.maxHp) {
+      actions.push({ type: ActionType.USE_ITEM, usable: [{ item: ResourceType.HERBS, label: '🌿 Herbs (heal 2)', source: 'items' }] });
+    }
+  }
+
   // Use item (hero-side)
   if (actorIsHero) {
     const usable = [];
     const shared  = state.inventory.shared;
     const myItems = actor.items || {};
-
-    // Per-unit items: herbs, weapons
-    if ((myItems[ResourceType.HERBS] || 0) > 0 && actor.hp < actor.maxHp)
-      usable.push({ item: ResourceType.HERBS, label: '🌿 Herbs (heal 2)', source: 'items' });
 
     // Shared resources
     if ((shared[ResourceType.FOOD] || 0) > 0)
@@ -262,8 +322,8 @@ function _buildAbilityAction(state, actor) {
 }
 
 function pickSummonType(inv) {
-  if ((inv[ResourceType.METAL] || 0) > 0) return EntityType.IRON_GOLEM;
-  if ((inv[ResourceType.WOOD]  || 0) > 0) return EntityType.WOOD_GOLEM;
+  if ((inv[ResourceType.METAL] || 0) >= 2) return EntityType.IRON_GOLEM;
+  if ((inv[ResourceType.WOOD]  || 0) >= 2) return EntityType.WOOD_GOLEM;
   return EntityType.MINION;
 }
 
@@ -278,56 +338,69 @@ export function executeMove(state, actor, targetCol, targetRow) {
   if (!reachable.some(h => h.col === targetCol && h.row === targetRow))
     return { success: false, log: [`Cannot reach (${targetCol},${targetRow}) from current position.`] };
 
-  const t = tile(state, targetCol, targetRow);
-  if (!t || t.type === TileType.RIVER)
-    return { success: false, log: ['Cannot move there.'] };
-  if (hasEnemy(state, actor, targetCol, targetRow))
-    return { success: false, log: ['An enemy blocks the way.'] };
+  // Find the road-preferring path from current position to destination.
+  const fullPath = findShortestPath(state, actor, targetCol, targetRow) ?? [{ col: targetCol, row: targetRow }];
 
-  actor.col = targetCol;
-  actor.row = targetRow;
-
-  if (t.type === TileType.BUILDING) {
-    log.push(`${actor.displayName} enters the ${t.building || 'building'}.`);
-  } else {
-    log.push(`${actor.displayName} moves to (${targetCol},${targetRow}).`);
-  }
-
-  // Hidden survivor encounter — triggers once per tile for any unit that steps on it
+  // Walk the path step by step; stop if an enemy blocks a mid-path hex.
+  const walkedPath = [];
   const encounterLog = [];
   let encounterSurvivor = null;
-  if (t.hiddenSurvivor) {
-    t.hiddenSurvivor = false;
-    if (actor.owner === 'hero') {
-      const s = createSurvivor(targetCol, targetRow, actor.ownerId);
-      s.owner = 'hero';
-      state.entities.push(s);
-      const abilityNote = s.abilityLabel ? ` · ${s.abilityLabel}` : '';
-      encounterLog.push(`☺ ${s.name} the ${s.title} steps out of hiding and joins the party! (HP ${s.hp}/${s.maxHp} · ATK ${s.attack} · DEF ${s.defense}${abilityNote})`);
-      encounterSurvivor = {
-        type: 'survivor',
-        name: s.name, title: s.title,
-        hp: s.hp, maxHp: s.maxHp,
-        attack: s.attack, defense: s.defense,
-        abilityLabel: s.abilityLabel,
-        color: s.color,
-      };
-    } else {
-      const z = createZombie(targetCol, targetRow, actor.ownerId);
-      state.entities.push(z);
-      encounterLog.push(`† A cowering survivor is found… raised as a zombie! (HP ${z.hp}/${z.maxHp} · ATK ${z.attack} · DEF ${z.defense})`);
-      encounterSurvivor = {
-        type: 'zombie',
-        name: 'Zombie',
-        hp: z.hp, maxHp: z.maxHp,
-        attack: z.attack, defense: z.defense,
-        color: z.color,
-      };
+
+  for (const step of fullPath) {
+    // Check if this hex is blocked by an enemy (could have moved here since plan was made)
+    if (hasEnemy(state, actor, step.col, step.row)) break;
+    const st = tile(state, step.col, step.row);
+    if (!st || st.type === TileType.RIVER) break;
+
+    actor.col = step.col;
+    actor.row = step.row;
+    walkedPath.push({ col: step.col, row: step.row });
+
+    // Hidden survivor encounter — triggers at each tile stepped on
+    if (st.hiddenSurvivor) {
+      st.hiddenSurvivor = false;
+      if (actor.owner === 'hero') {
+        const s = createSurvivor(step.col, step.row, actor.ownerId);
+        s.owner = 'hero';
+        state.entities.push(s);
+        const abilityNote = s.abilityLabel ? ` · ${s.abilityLabel}` : '';
+        encounterLog.push(`☺ ${s.name} the ${s.title} steps out of hiding and joins the party! (HP ${s.hp}/${s.maxHp} · ATK ${s.attack} · DEF ${s.defense}${abilityNote})`);
+        encounterSurvivor = {
+          type: 'survivor',
+          name: s.name, title: s.title,
+          hp: s.hp, maxHp: s.maxHp,
+          attack: s.attack, defense: s.defense,
+          abilityLabel: s.abilityLabel,
+          color: s.color,
+        };
+      } else {
+        const z = createZombie(step.col, step.row, actor.ownerId);
+        state.entities.push(z);
+        encounterLog.push(`† A cowering survivor is found… raised as a zombie! (HP ${z.hp}/${z.maxHp} · ATK ${z.attack} · DEF ${z.defense})`);
+        encounterSurvivor = {
+          type: 'zombie',
+          name: 'Zombie',
+          hp: z.hp, maxHp: z.maxHp,
+          attack: z.attack, defense: z.defense,
+          color: z.color,
+        };
+      }
     }
-    log.push(...encounterLog);
   }
 
-  return { success: true, log, cost: 1, encounterLog, encounterSurvivor };
+  if (walkedPath.length === 0)
+    return { success: false, log: ['The way is blocked.'] };
+
+  const finalStep = walkedPath[walkedPath.length - 1];
+  const ft = tile(state, finalStep.col, finalStep.row);
+  if (ft?.type === TileType.BUILDING) {
+    log.push(`${actor.displayName} enters the ${ft.building || 'building'}.`);
+  } else {
+    log.push(`${actor.displayName} moves to (${finalStep.col},${finalStep.row}).`);
+  }
+  if (encounterLog.length) log.push(...encounterLog);
+
+  return { success: true, log, cost: 1, path: walkedPath, encounterLog, encounterSurvivor };
 }
 
 export function executeExplore(state, actor) {
@@ -395,12 +468,10 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
   }
 
   if (lootType === ResourceType.HERBS) {
-    // Herbs are per-unit (potions)
-    if (actor.owner === 'hero') {
-      actor.items[lootType] = (actor.items[lootType] || 0) + 1;
-      log.push(`Found Herbs! Added to ${actor.displayName}'s pack.`);
-      lootItems?.push('+🌿');
-    }
+    // Herbs are per-unit (potions) — any faction can carry and use them
+    actor.items[lootType] = (actor.items[lootType] || 0) + 1;
+    log.push(`Found Herbs! Added to ${actor.displayName}'s pack.`);
+    lootItems?.push('+🌿');
     return;
   }
 
@@ -563,34 +634,42 @@ export function executeFortify(state, actor) {
 }
 
 export function executeSummon(state, actor, targetCol, targetRow) {
-  if ((state.witchSummonsThisTurn || 0) >= 1) {
-    return { success: false, log: ['The witch can only summon once per turn.'] };
-  }
   const inv = state.inventory.witch;
   let summonedUnit, res, unitName;
 
   const ownerId = actor.ownerId;
-  if ((inv[ResourceType.METAL] || 0) > 0) {
+  if ((inv[ResourceType.METAL] || 0) >= 2) {
     res = ResourceType.METAL;
     summonedUnit = createIronGolem(targetCol, targetRow, ownerId);
     unitName = 'Iron Golem';
-  } else if ((inv[ResourceType.WOOD] || 0) > 0) {
+  } else if ((inv[ResourceType.WOOD] || 0) >= 2) {
     res = ResourceType.WOOD;
     summonedUnit = createWoodGolem(targetCol, targetRow, ownerId);
     unitName = 'Wood Golem';
   } else {
-    res = Object.keys(inv).find(k => inv[k] > 0);
-    if (!res) return { success: false, log: ['No resources to summon.'] };
+    // Minion costs 2 of any resource — find two units (can mix types)
+    const keys = Object.keys(inv).filter(k => inv[k] > 0);
+    const total = keys.reduce((s, k) => s + inv[k], 0);
+    if (total < 2) return { success: false, log: ['Need at least 2 resources to summon.'] };
+    // Spend 2: drain from resources with largest stacks first
+    keys.sort((a, b) => inv[b] - inv[a]);
+    let remaining = 2;
+    for (const k of keys) {
+      const spend = Math.min(inv[k], remaining);
+      inv[k] -= spend;
+      remaining -= spend;
+      if (remaining === 0) break;
+    }
+    res = null; // mixed resources
     summonedUnit = createMinion(targetCol, targetRow, ownerId);
     unitName = 'Minion';
   }
 
-  inv[res]--;
+  if (res !== null) inv[res] -= 2;
   state.entities.push(summonedUnit);
-  state.witchSummonsThisTurn = (state.witchSummonsThisTurn || 0) + 1;
   return {
     success: true,
-    log: [`The witch raises a ${unitName} from ${res}!`],
+    log: [`The witch raises a ${unitName}!`],
     cost: 1,
   };
 }

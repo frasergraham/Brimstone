@@ -72,7 +72,6 @@ export function serializeState(state) {
     fogOfWar:             state.fogOfWar,
     winner:               state.winner,
     winReason:            state.winReason,
-    witchSummonsThisTurn: state.witchSummonsThisTurn,
     attritionLevel:       state.attritionLevel,
     attritionChanged:     state.attritionChanged ?? false,
     nodeScore:            { ...state.nodeScore },
@@ -142,7 +141,6 @@ export function deserializeState(snap) {
   state.round                = snap.round;
   state.activePlayer         = snap.activePlayer;
   state.actionsLeft          = snap.actionsLeft;
-  state.witchSummonsThisTurn = snap.witchSummonsThisTurn ?? 0;
   state.attritionLevel       = snap.attritionLevel       ?? 0;
   state.attritionChanged     = snap.attritionChanged     ?? false;
   state.nodeScore            = { ...snap.nodeScore };

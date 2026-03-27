@@ -253,16 +253,15 @@ function drainOneStep(state, queue, budget) {
       // Loop: try the next action in the same step
 
     } else {
-      // Hard failure — halt this faction's remaining plan
+      // Hard failure — skip this action but let remaining plan continue
       queue.shift();
-      queue.length = 0;
       subEvents.push({
         type:   ResEventType.ACTION_FAIL,
         faction: budget.faction,
         action,
         reason: out.reason,
       });
-      break;
+      // Loop: try the next action in the same step
     }
   }
 

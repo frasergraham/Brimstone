@@ -365,8 +365,7 @@ describe('resolvePlans — state integrity', () => {
   test('summon adds entity to state.entities', () => {
     const state = freshState();
     const witch = state.witch;
-    state.inventory.witch[ResourceType.FOOD] = 1;
-    state.witchSummonsThisTurn = 0;
+    state.inventory.witch[ResourceType.FOOD] = 2;
 
     const neighbor = emptyPassableNeighbor(state, witch);
     if (!neighbor) return;

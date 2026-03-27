@@ -42,8 +42,10 @@ export const Phase = Object.freeze({
 export const Player = Object.freeze({ HERO: 'hero', WITCH: 'witch' });
 
 // Calculate actions for a player at the start of their turn.
-// Hero  — base 3 + 1 in DAWN/DAY + 1 per survivor (cap +5, so needs 5 survivors for full bonus)
-// Witch — base 4 + 1 in NIGHT + 1 per 2 minions (cap +6, so needs 12 minions for full bonus)
+// Hero  — base 3 + 1 in DAWN/DAY + 1 per survivor (cap +5, needs 5 survivors)
+// Witch — base 2 + 1 in NIGHT + 1 per unit (cap +3, needs 3 units)
+// Witch starts weaker but scales with her summoned army. The lower base offsets
+// the advantage of unlimited summons enabling wide node control.
 export function computeActions(player, phase, entities) {
   const isHero     = player === Player.HERO;
   const owner      = isHero ? 'hero' : 'witch';
@@ -55,9 +57,7 @@ export function computeActions(player, phase, entities) {
     return 3 + timeBonus + Math.min(extras, 5);
   } else {
     const timeBonus = phase === Phase.NIGHT ? 1 : 0;
-    // Each pair of minions earns +1 action, up to +4 (needs 8 minions for full bonus)
-    const unitBonus = Math.min(Math.floor(extras / 2), 4);
-    return 4 + timeBonus + unitBonus;
+    return 2 + timeBonus + Math.min(extras, 3);
   }
 }
 
@@ -78,8 +78,7 @@ export function computeActionsForPlayer(playerId, faction, phase, entities) {
     return 3 + timeBonus + Math.min(extras, 5);
   } else {
     const timeBonus = phase === Phase.NIGHT ? 1 : 0;
-    const unitBonus = Math.min(Math.floor(extras / 2), 4);
-    return 4 + timeBonus + unitBonus;
+    return 2 + timeBonus + Math.min(extras, 3);
   }
 }
 
@@ -135,8 +134,6 @@ export class GameState {
     this.phase        = Phase.DAWN;
     this.activePlayer = Player.HERO;
     this.actionsLeft  = computeActions(Player.HERO, Phase.DAWN, []);
-    this.witchSummonsThisTurn = 0;
-
     this.log = [
       `🌅 Dawn breaks over Salem. The hero stirs at the Inn.`,
       `Three Power Nodes: ${this.witchObjectives.map(o => o.label).join(', ')}.`,
@@ -335,7 +332,6 @@ export class GameState {
    */
   endRound() {
     this.resolving = false;
-    this.witchSummonsThisTurn = 0;
 
     // Rest heal: every living hero-faction leader in a building or on a node.
     const heroLeaders = this.entities.filter(
@@ -488,7 +484,6 @@ export class GameState {
 
       this.activePlayer = Player.WITCH;
       this.actionsLeft  = computeActions(Player.WITCH, this.phase, this.entities);
-      this.witchSummonsThisTurn = 0;
       this.addLog(`The witch stirs… (${this.actionsLeft} actions)`);
     } else {
       // Node effects: only during NIGHT
@@ -533,7 +528,6 @@ export class GameState {
       }
 
       // End of full round — advance round and check phase
-      this.witchSummonsThisTurn = 0;
       this.activePlayer = Player.HERO;
       this.round++;
 

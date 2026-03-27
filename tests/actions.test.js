@@ -550,13 +550,12 @@ describe('executeFortify', () => {
 });
 
 // ── executeSummon ─────────────────────────────────────────────────────────────
-// Design: Metal → Iron Golem; Wood → Wood Golem; else → Minion; once per turn
+// Design: Metal → Iron Golem (costs 2); Wood → Wood Golem (costs 2); else → Minion (costs 2 total)
+// No once-per-turn limit; multiple summons allowed per turn.
 
 describe('executeSummon', () => {
   function witchState() {
-    const state = freshState();
-    state.witchSummonsThisTurn = 0;
-    return state;
+    return freshState();
   }
 
   function findSummonTarget(state) {
@@ -564,9 +563,9 @@ describe('executeSummon', () => {
     return emptyPassableNeighbor(state, witch);
   }
 
-  test('metal → Iron Golem', () => {
+  test('metal → Iron Golem (costs 2 metal)', () => {
     const state = witchState();
-    state.inventory.witch[ResourceType.METAL] = 1;
+    state.inventory.witch[ResourceType.METAL] = 2;
     const target = findSummonTarget(state);
     if (!target) return;
 
@@ -575,13 +574,13 @@ describe('executeSummon', () => {
     const summoned = state.entities.find(e => e.col === target.col && e.row === target.row);
     assert.ok(summoned, 'A unit should appear on the target hex');
     assert.equal(summoned.type, EntityType.IRON_GOLEM, 'Metal should summon Iron Golem');
-    assert.equal(state.inventory.witch[ResourceType.METAL], 0, 'Metal should be consumed');
+    assert.equal(state.inventory.witch[ResourceType.METAL], 0, '2 metal should be consumed');
   });
 
-  test('wood → Wood Golem (when no metal)', () => {
+  test('wood → Wood Golem (costs 2 wood, when no metal)', () => {
     const state = witchState();
     state.inventory.witch[ResourceType.METAL] = 0;
-    state.inventory.witch[ResourceType.WOOD] = 1;
+    state.inventory.witch[ResourceType.WOOD] = 2;
     const target = findSummonTarget(state);
     if (!target) return;
 
@@ -589,13 +588,14 @@ describe('executeSummon', () => {
     assert.equal(r.success, true);
     const summoned = state.entities.find(e => e.col === target.col && e.row === target.row);
     assert.equal(summoned?.type, EntityType.WOOD_GOLEM, 'Wood should summon Wood Golem');
+    assert.equal(state.inventory.witch[ResourceType.WOOD], 0, '2 wood should be consumed');
   });
 
-  test('other resource → Minion', () => {
+  test('other resource → Minion (costs 2 total)', () => {
     const state = witchState();
     state.inventory.witch[ResourceType.METAL] = 0;
     state.inventory.witch[ResourceType.WOOD] = 0;
-    state.inventory.witch[ResourceType.FOOD] = 1;
+    state.inventory.witch[ResourceType.FOOD] = 2;
     const target = findSummonTarget(state);
     if (!target) return;
 
@@ -603,6 +603,17 @@ describe('executeSummon', () => {
     assert.equal(r.success, true);
     const summoned = state.entities.find(e => e.col === target.col && e.row === target.row);
     assert.equal(summoned?.type, EntityType.MINION, 'Non-metal/wood resource should summon Minion');
+    assert.equal(state.inventory.witch[ResourceType.FOOD], 0, '2 food should be consumed');
+  });
+
+  test('fails when fewer than 2 total resources', () => {
+    const state = witchState();
+    state.inventory.witch = { [ResourceType.FOOD]: 1 };
+    const target = findSummonTarget(state);
+    if (!target) return;
+
+    const r = executeSummon(state, state.witch, target.col, target.row);
+    assert.equal(r.success, false, 'Should fail with only 1 resource');
   });
 
   test('fails when no resources', () => {
@@ -615,40 +626,29 @@ describe('executeSummon', () => {
     assert.equal(r.success, false);
   });
 
-  test('fails on second summon in same turn', () => {
+  test('allows multiple summons in the same turn', () => {
     const state = witchState();
-    state.inventory.witch[ResourceType.FOOD] = 5;
+    state.inventory.witch[ResourceType.FOOD] = 6;
     const target = findSummonTarget(state);
     if (!target) return;
 
     const r1 = executeSummon(state, state.witch, target.col, target.row);
-    assert.equal(r1.success, true);
+    assert.equal(r1.success, true, 'First summon should succeed');
 
     // Find another empty neighbor for second summon
     const target2 = emptyPassableNeighbor(state, state.witch);
     if (!target2) return;
     const r2 = executeSummon(state, state.witch, target2.col, target2.row);
-    assert.equal(r2.success, false, 'Second summon in same turn should fail');
+    assert.equal(r2.success, true, 'Second summon in same turn should also succeed');
   });
 
   test('costs 1 action', () => {
     const state = witchState();
-    state.inventory.witch[ResourceType.FOOD] = 1;
+    state.inventory.witch[ResourceType.FOOD] = 2;
     const target = findSummonTarget(state);
     if (!target) return;
     const r = executeSummon(state, state.witch, target.col, target.row);
     assert.equal(r.cost, 1);
-  });
-
-  test('increments witchSummonsThisTurn counter', () => {
-    const state = witchState();
-    state.inventory.witch[ResourceType.FOOD] = 1;
-    const target = findSummonTarget(state);
-    if (!target) return;
-
-    assert.equal(state.witchSummonsThisTurn, 0);
-    executeSummon(state, state.witch, target.col, target.row);
-    assert.equal(state.witchSummonsThisTurn, 1);
   });
 });
 
