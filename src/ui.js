@@ -2088,7 +2088,7 @@ export class UIController {
     dialog.style.display = 'flex';
   }
 
-  _showBattleDialog(actorSnap, targetSnap, result, onDismiss, onRematch = null) {
+  _showBattleDialog(actorSnap, targetSnap, result, onDismiss, onRematch = null, onDiceComplete = null) {
     // Cancel any in-flight dice animation from a previous battle dialog
     if (this._battleInterval) { clearInterval(this._battleInterval); this._battleInterval = null; }
 
@@ -2238,6 +2238,7 @@ export class UIController {
       atkDie.className = 'die-display' + (result.hit ? ' atk-win' : '');
       defDie.className = 'die-display' + (!result.hit ? ' def-win' : '');
       revealResult();
+      onDiceComplete?.();
       setTimeout(dismiss, this.autoplay ? 500 : 100);
     } else if (this.speedMode === 'fast') {
       // Skip dice animation — show result immediately, auto-dismiss after 800ms
@@ -2246,6 +2247,7 @@ export class UIController {
       atkDie.className = 'die-display' + (result.hit ? ' atk-win' : '');
       defDie.className = 'die-display' + (!result.hit ? ' def-win' : '');
       revealResult();
+      onDiceComplete?.();
       setTimeout(dismiss, 800);
     } else {
       // Cinematic: animated dice roll, manual click to dismiss
@@ -2263,6 +2265,7 @@ export class UIController {
           clearInterval(this._battleInterval);
           this._battleInterval = null;
           revealResult();
+          onDiceComplete?.();
         }
       }, 55);
       // Allow dismiss only after dice settle

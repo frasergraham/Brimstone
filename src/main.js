@@ -7,7 +7,8 @@ import { MultiplayerClient, MirrorState, loadSession, clearSession } from './mul
 import { VERSION }           from './version.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType }    from './planner.js';
-import { isBattleSignificant } from './battle-utils.js';
+import { hexDistance }       from './hex.js';
+import { isBattleSignificant, compileTurnBattleSummary } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 
 // Stamp version into badges
@@ -203,6 +204,11 @@ async function _runLocalResolution() {
 
   await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
 
+  // Add aggregate battle summary to the log before endRound inserts phase entries
+  const summaryLines = compileTurnBattleSummary(steps, state.entities, ResEventType, PlanActionType);
+  for (const line of summaryLines) state.log.push(line);
+  if (summaryLines.length && ui) ui._renderLog();
+
   // Snapshot score BEFORE endRound so we can detect scoring changes
   const prevScore = { hero: state.nodeScore.hero, witch: state.nodeScore.witch };
 
@@ -273,6 +279,41 @@ async function _runLocalResolution() {
     await _delay(300);
   }
   _startLocalPlanningPhase();
+}
+
+/**
+ * Fire the visual result animations that follow a battle (HP floaters, death burst).
+ * Called after the dialog is dismissed (narrow) or after dice settle (wide).
+ */
+function _playBattleResultAnims(actorSnap, targetSnap, result, postEntities, redrawFn) {
+  renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
+  for (const snap of [actorSnap, targetSnap]) {
+    const post = postEntities.find(e => e.id === snap.id);
+    if (post) renderer.addHpChangeFlash(post.col, post.row, post.hp - snap.hp);
+  }
+  if (result?.killed) {
+    const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
+    renderer.addDeathAnim(targetSnap.col, targetSnap.row, deadColor);
+  }
+  redrawFn();
+}
+
+/**
+ * Find entities adjacent to a battle that provide gang-up or ally-defence bonuses.
+ * Returns the entities (with .col/.row) so the caller can build hex lists.
+ */
+function _getBattleAllyEntities(actorSnap, targetSnap, entities) {
+  return entities.filter(e => {
+    if (!e.alive) return false;
+    if (e.id === actorSnap.id || e.id === targetSnap.id) return false;
+    // Attacker-side ally adjacent to the target (gang-up)
+    if (e.owner === actorSnap.owner &&
+        hexDistance(e.col, e.row, targetSnap.col, targetSnap.row) <= 1) return true;
+    // Defender-side ally adjacent to the attacker (defensive support)
+    if (e.owner === targetSnap.owner &&
+        hexDistance(e.col, e.row, actorSnap.col, actorSnap.row) <= 1) return true;
+    return false;
+  });
 }
 
 /**
@@ -445,7 +486,27 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             const isLandscape = window.innerWidth >= 900 && window.innerWidth / window.innerHeight >= 1.25;
             const prevInsetRight = renderer.insetRight ?? 0;
 
-            // Show dialog FIRST, then fire result animations after dismissal
+            // ── Step 1: Lunge — attacker slides toward target border ──────────
+            if (speed !== 'instant') {
+              renderer.addLungeAnim(
+                actorSnap.id,
+                actorSnap.col, actorSnap.row,
+                targetSnap.col, targetSnap.row,
+                actorSnap.type, actorSnap.owner, actorSnap.title ?? null,
+              );
+              redrawFn();
+              await _delay(speed === 'fast' ? 150 : 280);
+            }
+
+            // ── Step 2: Battle hex highlights ────────────────────────────────
+            const allyEntities = _getBattleAllyEntities(actorSnap, targetSnap, state.entities);
+            renderer.setBattleHighlights(
+              [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
+              allyEntities.map(e => ({ col: e.col, row: e.row })),
+            );
+            redrawFn();
+
+            // ── Step 3: Dialog / toast / floaters ────────────────────────────
             if (showFullDialog) {
               if (isLandscape) {
                 renderer.insetRight = 500;
@@ -454,51 +515,54 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
                   { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
                 );
               }
-              await new Promise(resolve => {
-                ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
-              });
+
+              if (isLandscape) {
+                // Wide screen: play result animations after dice settle, while dialog is open
+                let diceResolve;
+                const diceComplete = new Promise(r => { diceResolve = r; });
+                const dialogDone = new Promise(resolve => {
+                  ui._showBattleDialog(actorSnap, targetSnap, result, resolve, null, diceResolve);
+                });
+                await diceComplete;
+                _playBattleResultAnims(actorSnap, targetSnap, result, postEntities, redrawFn);
+                if (speed !== 'instant') await _delay(speed === 'fast' ? 200 : 500);
+                await dialogDone;
+              } else {
+                // Narrow screen: dialog covers the map — wait for dismiss before floaters
+                await new Promise(resolve => {
+                  ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
+                });
+                _playBattleResultAnims(actorSnap, targetSnap, result, postEntities, redrawFn);
+                if (speed !== 'instant') await _delay(speed === 'fast' ? 200 : 500);
+              }
+
               if (isLandscape) renderer.insetRight = prevInsetRight;
-            } else if (speed !== 'instant') {
-              ui._showBattleToast(actorSnap, targetSnap, result);
-              // Show outcome as a canvas floater over the battle hex
-              const outcomeText = isKill
-                ? `💀 ${targetSnap.name} slain`
-                : result.hit
-                  ? result.damage >= 2 ? `💥 −${result.damage}` : `⚔ −${result.damage}`
-                  : result.counterDmg > 0 ? `🛡 counter` : `miss`;
-              const flashColor = isKill ? 'rgba(220,40,40,0.15)' : result.hit ? 'rgba(255,140,0,0.1)' : 'rgba(100,100,100,0.1)';
-              const textColor  = isKill ? '#ff6666' : result.hit ? '#ffcc44' : '#999';
-              renderer.addFlash(targetSnap.col, targetSnap.row, outcomeText, flashColor, 1600, 0.72, textColor);
+            } else {
+              // Non-significant battle: toast + immediate floaters (no dialog)
+              if (speed !== 'instant') {
+                ui._showBattleToast(actorSnap, targetSnap, result);
+                // Outcome floater over the target hex
+                const outcomeText = isKill
+                  ? `💀 ${targetSnap.name} slain`
+                  : result.hit
+                    ? result.damage >= 2 ? `💥 −${result.damage}` : `⚔ −${result.damage}`
+                    : result.counterDmg > 0 ? `🛡 counter` : `miss`;
+                const flashColor = isKill ? 'rgba(220,40,40,0.15)' : result.hit ? 'rgba(255,140,0,0.1)' : 'rgba(100,100,100,0.1)';
+                const textColor  = isKill ? '#ff6666' : result.hit ? '#ffcc44' : '#999';
+                renderer.addFlash(targetSnap.col, targetSnap.row, outcomeText, flashColor, 1600, 0.72, textColor);
+              }
+              _playBattleResultAnims(actorSnap, targetSnap, result, postEntities, redrawFn);
+              if (speed !== 'instant') await _delay(speed === 'fast' ? 200 : 500);
             }
 
-            // Fire visual result animations AFTER dialog/toast dismissed
-            renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
-            for (const snap of [actorSnap, targetSnap]) {
-              const post = postEntities.find(e => e.id === snap.id);
-              if (post) renderer.addHpChangeFlash(post.col, post.row, post.hp - snap.hp);
-            }
-            if (isKill) {
-              const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
-              renderer.addDeathAnim(targetSnap.col, targetSnap.row, deadColor);
-            }
+            // ── Step 4: Clear highlights and lunge ───────────────────────────
+            renderer.clearBattleHighlights();
+            renderer.clearAllLungeAnims();
             redrawFn();
 
-            // Brief pause to let result animations play out
-            if (speed !== 'instant') {
-              await _delay(speed === 'fast' ? 200 : 500);
-            }
           } else {
-            // Autoplay: fire all animations immediately without dialogs
-            renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
-            for (const snap of [actorSnap, targetSnap]) {
-              const post = postEntities.find(e => e.id === snap.id);
-              if (post) renderer.addHpChangeFlash(post.col, post.row, post.hp - snap.hp);
-            }
-            if (result?.killed) {
-              const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
-              renderer.addDeathAnim(targetSnap.col, targetSnap.row, deadColor);
-            }
-            redrawFn();
+            // Autoplay: fire all animations immediately without dialogs or lunge
+            _playBattleResultAnims(actorSnap, targetSnap, result, postEntities, redrawFn);
           }
           hadBattle = true;
         }

@@ -4,7 +4,9 @@ import { GameState, Player } from '../src/game.js';
 import { WitchAI, HeroAI, HERO_PERSONALITIES, WITCH_PERSONALITIES } from '../src/ai.js';
 import { serializeState, deserializeState } from './state-sync.js';
 import { recordResult }                    from './leaderboard.js';
-import { resolvePlansMP }                  from './resolver.js';
+import { resolvePlansMP, ResEventType }    from './resolver.js';
+import { compileTurnBattleSummary }        from '../src/battle-utils.js';
+import { PlanActionType }                  from '../src/planner.js';
 import { upsertSave, deleteSave, getSave } from './saves.js';
 import { VERSION }                         from '../src/version.js';
 import { generateMultipleStarts }          from '../src/map.js';
@@ -396,6 +398,10 @@ function _executeResolution(room) {
     console.error(`[room ${room.id}] resolvePlansMP error:`, err);
     steps = [];
   }
+
+  // Add aggregate battle summary to log before endRound (so it serialises into finalState)
+  const summaryLines = compileTurnBattleSummary(steps, state.entities, ResEventType, PlanActionType);
+  for (const line of summaryLines) state.log.push(line);
 
   state.endRound();
   checkAndHandleGameOver(room);
