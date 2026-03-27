@@ -2311,7 +2311,8 @@ canvas { touch-action: pan-x pan-y; }
 .plan-step.food-powered { opacity: 0.9; }
 .plan-step.food-powered .plan-step-num  { background: rgba(180,130,20,0.75); color: #ffd; border-radius: 3px; padding: 0 2px; }
 .plan-step.food-powered .plan-step-avatar { opacity: 0.85; }
-.plan-food-tag { font-size: 0.65rem; color: #c8a030; margin-left: 0.3rem; white-space: nowrap; }
+.plan-food-tag  { font-size: 0.65rem; color: #c8a030; margin-left: 0.3rem; white-space: nowrap; }
+.plan-step-cost { font-size: 0.62rem; color: var(--muted); margin-left: 0.25rem; white-space: nowrap; opacity: 0.85; }
 
 /* ── Plan countdown timer ────────────────────────────────────────────── */
 .plan-countdown {

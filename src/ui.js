@@ -9,7 +9,7 @@ import {
   executeMove, executeExplore, executeBattle,
   executeFortify, executeSummon, executeUseItem, executeUseAbility,
 } from './actions.js';
-import { PlanActionType, computeGhostState } from './planner.js';
+import { PlanActionType, computeGhostState, computeProjectedInventory } from './planner.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
@@ -642,9 +642,10 @@ export class UIController {
     // Food is auto-applied to over-budget actions until exhausted.
     const foodAvailable = (this.state.inventory?.shared?.[ResourceType.FOOD] || 0);
 
+    const initialInv = computeProjectedInventory(this.state, []);
     stepsEl.innerHTML = buildPlanStepsHtml(
       this._plan, this._planBudget, foodAvailable, foodAvailable,
-      this._planSubmitted, this.state.entities ?? [],
+      this._planSubmitted, this.state.entities ?? [], initialInv,
     );
 
     // Attach remove listeners
@@ -1127,6 +1128,10 @@ export class UIController {
       }
     }
     const actions = getValidActions(state, effectiveEntity);
+
+    // In planning mode, compute projected inventory after all queued steps so we can
+    // disable resource-dependent actions the player can no longer afford.
+    const projInv = this._planMode ? computeProjectedInventory(state, this._plan) : null;
     // In planning mode, always show actions (budget tracked separately)
     const hasAct  = this._planMode || state.actionsAvailable > 0;
 
@@ -1146,27 +1151,44 @@ export class UIController {
           // Attack is now triggered directly by clicking a red-highlighted enemy hex — no popup button needed.
           break;
         case ActionType.FORTIFY: {
-          const shared     = state.inventory.shared;
-          const hasMetal   = (shared.metal || 0) > 0;
+          // Use projected inventory in plan mode so queued fortifies block further fortifies
+          const fortInv    = projInv ? projInv.shared : state.inventory.shared;
+          const hasMetal   = (fortInv.metal || 0) > 0;
+          const hasWood    = (fortInv.wood  || 0) > 0;
+          const cantAfford = projInv && !hasMetal && !hasWood;
           const hasDoubler = entity.type === EntityType.SURVIVOR && entity.ability === SurvivorAbility.FORTIFY_DOUBLE;
           const tileData   = state.tiles.get(hexKey(entity.col, entity.row));
           const cur        = tileData ? tileData.fortifyLevel : 0;
           const lbl = hasMetal
-            ? `⚙ Reinforce +${Math.min(4, cur + 2)} DEF`
+            ? `⚙ Reinforce +${Math.min(4, cur + 2)} DEF (1⚙)`
             : hasDoubler
-              ? `🪵 Fortify +${Math.min(4, cur + 2)} DEF ★`
-              : `🪵 Fortify +${Math.min(4, cur + 1)} DEF`;
-          regularHtml += btn(lbl, 'fortify', dis, `data-action="fortify"`);
+              ? `🪵 Fortify +${Math.min(4, cur + 2)} DEF ★ (1🪵)`
+              : `🪵 Fortify +${Math.min(4, cur + 1)} DEF (1🪵)`;
+          regularHtml += btn(lbl, 'fortify', cantAfford ? 'disabled' : dis, `data-action="fortify"`);
           break;
         }
-        case ActionType.SUMMON:
-          regularHtml += btn(_summonLabel(state.inventory.witch), 'summon', dis, `data-action="summon"`);
+        case ActionType.SUMMON: {
+          const projWitch = projInv ? projInv.witch : state.inventory.witch;
+          const witchTotal = Object.values(projWitch).reduce((s, v) => s + (v || 0), 0);
+          const cantAfford = projInv && witchTotal < 2;
+          regularHtml += btn(_summonLabel(projWitch), 'summon', cantAfford ? 'disabled' : dis, `data-action="summon"`);
           break;
+        }
         case ActionType.USE_ITEM:
           for (const item of action.usable) {
             // Food is managed via the plan-panel food slots in planning mode.
             if (this._planMode && item.item === ResourceType.FOOD) continue;
-            regularHtml += btn(item.label, 'item', dis, `data-action="use_item" data-item="${item.item}"`);
+            // Disable if projected inventory can't cover this item
+            let itemDis = dis;
+            if (projInv) {
+              if (item.item === ResourceType.HERBS) {
+                const eitems = projInv.entityItems[entity.id] ?? {};
+                if ((eitems[ResourceType.HERBS] || 0) < 1) itemDis = 'disabled';
+              } else if (!item.item.startsWith('weapon:')) {
+                if ((projInv.shared[item.item] || 0) < 1) itemDis = 'disabled';
+              }
+            }
+            regularHtml += btn(item.label, 'item', itemDis, `data-action="use_item" data-item="${item.item}"`);
           }
           break;
         case ActionType.EQUIP_WEAPON:
@@ -2774,10 +2796,10 @@ function btn(label, cls, disabled = '', extra = '') {
 }
 
 function _summonLabel(witchInv) {
-  if ((witchInv.metal || 0) > 0) return '🔩 Iron Golem';
-  if ((witchInv.wood  || 0) > 0) return '🪵 Wood Golem';
-  const res = Object.keys(witchInv).find(k => witchInv[k] > 0);
-  return res ? `🌑 Summon Minion` : '🌑 Summon';
+  if ((witchInv.metal || 0) >= 2) return '🔩 Iron Golem (2⚙)';
+  if ((witchInv.wood  || 0) >= 2) return '🪵 Wood Golem (2🪵)';
+  const total = Object.values(witchInv).reduce((s, v) => s + (v || 0), 0);
+  return total >= 2 ? '🌑 Minion (2 res)' : '🌑 Summon';
 }
 
 function _visibleUnitsAt(state, col, row) {

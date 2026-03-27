@@ -956,3 +956,74 @@ describe('Inventory stash separation', () => {
       'the bug (using activePlayer) returns the wrong stash for witch players');
   });
 });
+
+// ── computeProjectedInventory ─────────────────────────────────────────────────
+import { computeProjectedInventory } from '../src/planner.js';
+import { PlanActionType } from '../src/planner.js';
+
+describe('computeProjectedInventory', () => {
+  function baseState() {
+    const s = new GameState(true, true);
+    s.inventory.witch.metal = 4;
+    s.inventory.witch.wood  = 2;
+    s.inventory.shared.wood = 3;
+    s.inventory.shared.metal = 1;
+    s.inventory.shared.food  = 2;
+    return s;
+  }
+
+  test('empty plan returns snapshot equal to current inventory', () => {
+    const s = baseState();
+    const p = computeProjectedInventory(s, []);
+    assert.equal(p.witch.metal, 4);
+    assert.equal(p.shared.wood,  3);
+  });
+
+  test('SUMMON deducts 2 metal (Iron Golem path)', () => {
+    const s = baseState();
+    const p = computeProjectedInventory(s, [{ type: PlanActionType.SUMMON }]);
+    assert.equal(p.witch.metal, 2, 'metal reduced by 2');
+    assert.equal(p.witch.wood,  2, 'wood unchanged');
+  });
+
+  test('two SUMMONs deduct 4 metal total', () => {
+    const s = baseState();
+    const plan = [{ type: PlanActionType.SUMMON }, { type: PlanActionType.SUMMON }];
+    const p = computeProjectedInventory(s, plan);
+    assert.equal(p.witch.metal, 0);
+    assert.equal(p.witch.wood,  2, 'wood unchanged when metal covers both');
+  });
+
+  test('SUMMON falls to wood when metal < 2', () => {
+    const s = baseState();
+    s.inventory.witch.metal = 1;
+    const p = computeProjectedInventory(s, [{ type: PlanActionType.SUMMON }]);
+    assert.equal(p.witch.wood, 0, 'wood reduced by 2 (Wood Golem path)');
+  });
+
+  test('FORTIFY deducts 1 metal from shared (metal preferred)', () => {
+    const s = baseState();
+    const p = computeProjectedInventory(s, [{ type: PlanActionType.FORTIFY }]);
+    assert.equal(p.shared.metal, 0);
+    assert.equal(p.shared.wood,  3, 'wood untouched when metal available');
+  });
+
+  test('FORTIFY deducts 1 wood when no shared metal', () => {
+    const s = baseState();
+    s.inventory.shared.metal = 0;
+    const p = computeProjectedInventory(s, [{ type: PlanActionType.FORTIFY }]);
+    assert.equal(p.shared.wood, 2);
+  });
+
+  test('USE_ITEM food deducts from shared', () => {
+    const s = baseState();
+    const p = computeProjectedInventory(s, [{ type: PlanActionType.USE_ITEM, item: 'food', entityId: 'x' }]);
+    assert.equal(p.shared.food, 1);
+  });
+
+  test('does not mutate original state', () => {
+    const s = baseState();
+    computeProjectedInventory(s, [{ type: PlanActionType.SUMMON }]);
+    assert.equal(s.inventory.witch.metal, 4, 'original state unchanged');
+  });
+});

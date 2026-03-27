@@ -4,6 +4,7 @@
 
 import { PlanActionType } from './planner.js';
 import { EntityType, ENTITY_COLOR } from './entities.js';
+import { ResourceType } from './tiles.js';
 
 // ── Plan action description ───────────────────────────────────────────────────
 
@@ -44,18 +45,54 @@ export function describePlanAction(action, entities, index = 0) {
 
 // ── Plan steps list HTML ──────────────────────────────────────────────────────
 
+const RES_ICON = {
+  [ResourceType.WOOD]:      '🪵',
+  [ResourceType.METAL]:     '⚙',
+  [ResourceType.HERBS]:     '🌿',
+  [ResourceType.FOOD]:      '🍞',
+  [ResourceType.SILVER]:    '🥈',
+  [ResourceType.SCRIPTURE]: '📜',
+};
+
+/**
+ * Return a short cost badge string (e.g. "−2⚙") for a plan action, given the
+ * projected inventory AT THAT STEP.  Returns '' for free / action-point-only actions.
+ */
+function _stepCostLabel(action, projShared, projWitch, projEntityItems) {
+  switch (action.type) {
+    case PlanActionType.SUMMON: {
+      if ((projWitch[ResourceType.METAL] || 0) >= 2) return `−2${RES_ICON[ResourceType.METAL]}`;
+      if ((projWitch[ResourceType.WOOD]  || 0) >= 2) return `−2${RES_ICON[ResourceType.WOOD]}`;
+      return '−2 res';
+    }
+    case PlanActionType.FORTIFY:
+      if ((projShared[ResourceType.METAL] || 0) > 0) return `−1${RES_ICON[ResourceType.METAL]}`;
+      if ((projShared[ResourceType.WOOD]  || 0) > 0) return `−1${RES_ICON[ResourceType.WOOD]}`;
+      return '';
+    case PlanActionType.USE_ITEM: {
+      const item = action.item;
+      if (!item || item.startsWith('weapon:')) return '';
+      return `−1${RES_ICON[item] || item}`;
+    }
+    default: return '';
+  }
+}
+
 /**
  * Build the innerHTML for the #plan-steps list.
  *
- * @param {Array}   plan          Current plan action array.
- * @param {number}  budget        Total action budget for this round.
- * @param {number}  foodEnabled   How many food rations are toggled on.
- * @param {number}  foodAvailable Total food rations in inventory.
- * @param {boolean} submitted     Whether the plan has been locked in.
- * @param {Array}   entities      Live entity array (for name lookups).
+ * @param {Array}   plan             Current plan action array.
+ * @param {number}  budget           Total action budget for this round.
+ * @param {number}  foodEnabled      How many food rations are toggled on.
+ * @param {number}  foodAvailable    Total food rations in inventory.
+ * @param {boolean} submitted        Whether the plan has been locked in.
+ * @param {Array}   entities         Live entity array (for name lookups).
+ * @param {object}  [initialInv]     Starting inventory snapshot { shared, witch, entityItems }.
+ *                                   When provided, each step shows a resource-cost badge and
+ *                                   over-budget steps are marked accordingly.
  * @returns {string}  HTML string safe to assign to stepsEl.innerHTML.
  */
-export function buildPlanStepsHtml(plan, budget, foodEnabled, foodAvailable, submitted, entities) {
+export function buildPlanStepsHtml(plan, budget, foodEnabled, foodAvailable, submitted, entities, initialInv) {
   const ENTITY_GLYPH = {
     [EntityType.HERO]:       '⚔',
     [EntityType.WITCH]:      '✦',
@@ -65,6 +102,16 @@ export function buildPlanStepsHtml(plan, budget, foodEnabled, foodAvailable, sub
     [EntityType.WOOD_GOLEM]: '🪵',
     [EntityType.IRON_GOLEM]: '⚙',
   };
+
+  // Projected inventory — updated as we walk through steps
+  const projShared      = { ...(initialInv?.shared      ?? {}) };
+  const projWitch       = { ...(initialInv?.witch       ?? {}) };
+  const projEntityItems = {};
+  if (initialInv?.entityItems) {
+    for (const [id, items] of Object.entries(initialInv.entityItems)) {
+      projEntityItems[id] = { ...items };
+    }
+  }
 
   let runningCost = 0;
   let foodUsed    = 0;
@@ -92,12 +139,44 @@ export function buildPlanStepsHtml(plan, budget, foodEnabled, foodAvailable, sub
       ? `<span class="plan-step-avatar" style="background:${stepColor}">${stepGlyph}</span>`
       : '';
 
+    // Resource cost badge — only shown when inventory data is available
+    const costLbl = initialInv ? _stepCostLabel(a, projShared, projWitch, projEntityItems) : '';
+    const costTag = costLbl ? ` <span class="plan-step-cost">${costLbl}</span>` : '';
+
     html += `<div class="plan-step${cls}">
         <span class="plan-step-num">${i + 1}</span>
         ${avatar}
-        <span class="plan-step-desc" title="${desc}">${desc}${foodTag}</span>
+        <span class="plan-step-desc" title="${desc}">${desc}${foodTag}${costTag}</span>
         ${rmBtn}
       </div>`;
+
+    // Advance projected inventory for subsequent steps
+    switch (a.type) {
+      case PlanActionType.SUMMON:
+        if ((projWitch[ResourceType.METAL] || 0) >= 2) { projWitch[ResourceType.METAL] -= 2; }
+        else if ((projWitch[ResourceType.WOOD] || 0) >= 2) { projWitch[ResourceType.WOOD] -= 2; }
+        else {
+          let rem = 2;
+          for (const k of Object.keys(projWitch).sort((a, b) => projWitch[b] - projWitch[a])) {
+            const spend = Math.min(projWitch[k] || 0, rem); projWitch[k] -= spend; rem -= spend;
+            if (rem === 0) break;
+          }
+        }
+        break;
+      case PlanActionType.FORTIFY:
+        if ((projShared[ResourceType.METAL] || 0) > 0) projShared[ResourceType.METAL]--;
+        else if ((projShared[ResourceType.WOOD] || 0) > 0) projShared[ResourceType.WOOD]--;
+        break;
+      case PlanActionType.USE_ITEM: {
+        const item = a.item;
+        if (!item || item.startsWith('weapon:')) break;
+        if (item === ResourceType.HERBS) {
+          const eitems = projEntityItems[a.entityId];
+          if (eitems && (eitems[item] || 0) > 0) eitems[item]--;
+        } else if ((projShared[item] || 0) > 0) { projShared[item]--; }
+        break;
+      }
+    }
   });
 
   return html || `<div class="plan-step"><span class="plan-step-desc" style="color:var(--muted)">No actions queued — click units to add</span></div>`;

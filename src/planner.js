@@ -140,6 +140,64 @@ export function computeGhostState(state, plan) {
   return steps;
 }
 
+// ── Projected inventory ──────────────────────────────────────────────────────
+//
+// Simulates resource consumption across a plan so the UI can show per-step costs
+// and grey out actions the player will no longer be able to afford.
+//
+// Returns { shared, witch, entityItems } — plain objects (shallow clones of state
+// inventory values).  Does NOT mutate the real state.
+
+export function computeProjectedInventory(state, plan) {
+  const shared = { ...(state.inventory?.shared ?? {}) };
+  const witch  = { ...(state.inventory?.witch  ?? {}) };
+  // Per-entity personal items (herbs, weapons)
+  const entityItems = {};
+  for (const e of (state.entities ?? [])) {
+    if (e.items) entityItems[e.id] = { ...e.items };
+  }
+
+  for (const action of plan) {
+    switch (action.type) {
+      case PlanActionType.SUMMON: {
+        // Mirrors pickSummonType + executeSummon spending
+        if ((witch[ResourceType.METAL] || 0) >= 2) {
+          witch[ResourceType.METAL] -= 2;
+        } else if ((witch[ResourceType.WOOD] || 0) >= 2) {
+          witch[ResourceType.WOOD] -= 2;
+        } else {
+          let rem = 2;
+          for (const k of Object.keys(witch).sort((a, b) => witch[b] - witch[a])) {
+            const spend = Math.min(witch[k] || 0, rem);
+            witch[k] = (witch[k] || 0) - spend;
+            rem -= spend;
+            if (rem === 0) break;
+          }
+        }
+        break;
+      }
+      case PlanActionType.FORTIFY:
+        // Metal preferred, then wood — mirrors executeFortify
+        if ((shared[ResourceType.METAL] || 0) > 0) shared[ResourceType.METAL]--;
+        else if ((shared[ResourceType.WOOD] || 0) > 0) shared[ResourceType.WOOD]--;
+        break;
+      case PlanActionType.USE_ITEM: {
+        const item = action.item;
+        if (!item || item.startsWith('weapon:')) break;
+        if (item === ResourceType.HERBS) {
+          const eitems = entityItems[action.entityId];
+          if (eitems && (eitems[item] || 0) > 0) eitems[item]--;
+        } else {
+          if ((shared[item] || 0) > 0) shared[item]--;
+        }
+        break;
+      }
+    }
+  }
+
+  return { shared, witch, entityItems };
+}
+
 // ── Plan validation (client-side, fast) ─────────────────────────────────────
 //
 // Validates a candidate plan action against a projected state.
