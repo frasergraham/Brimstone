@@ -375,8 +375,13 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
           }
         }
         if (frameTargets.length) {
-          renderer.frameHexes(frameTargets, { paddingHexes: 3.0, maxZoom: 2.0, duration: 250 });
-          await _delay(_cspd === 'fast' ? 100 : 280);
+          const _isStep = _cspd === 'step';
+          renderer.frameHexes(frameTargets, {
+            paddingHexes: _isStep ? 1.5 : 3.0,
+            maxZoom:      _isStep ? 3.5 : 2.0,
+            duration:     _isStep ? 400 : 250,
+          });
+          await _delay(_isStep ? 400 : (_cspd === 'fast' ? 100 : 280));
         }
       }
     }
@@ -539,8 +544,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               redrawFn();
             }
 
-            // ── Step 3: Dialog (cinematic) or toast+floater (fast) ───────────
-            if (speed === 'cinematic') {
+            // ── Step 3: Dialog (cinematic/step) or toast+floater (fast) ────────
+            if (speed === 'cinematic' || speed === 'step') {
               // Full dialog for every battle — no significance filter.
               // Offset camera so the map is visible beside the docked dialog.
               const prevInsetRight = renderer.insetRight ?? 0;
@@ -576,7 +581,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             // ── Step 4: Clear highlights, animate lunge return ───────────────
             renderer.clearBattleHighlights();
             renderer.returnAllLungeAnims(); // slide entity back rather than snap
-            if (speed === 'cinematic') await renderer.waitForAnimations();
+            if (speed === 'cinematic' || speed === 'step') await renderer.waitForAnimations();
             redrawFn();
 
           } else {
@@ -647,16 +652,25 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     if (hadMove || hadBattle) {
       if (!_autoplay) {
         const _spd2 = ui?.speedMode ?? 'cinematic';
-        if (_spd2 !== 'instant') await _delay(_spd2 === 'fast' ? 80 : hadMove ? 300 : 250);
+        if (_spd2 === 'step') {
+          await ui._waitForStep();
+        } else if (_spd2 !== 'instant') {
+          await _delay(_spd2 === 'fast' ? 80 : hadMove ? 300 : 250);
+        }
       }
     } else if (events.length > 0 && !_autoplay) {
       // Non-visual actions (fortify, use_item, etc.) — brief pause so resolution feels deliberate.
       const _spd3 = ui?.speedMode ?? 'cinematic';
-      if (_spd3 !== 'instant') await _delay(_spd3 === 'fast' ? 50 : 150);
+      if (_spd3 === 'step') {
+        await ui._waitForStep();
+      } else if (_spd3 !== 'instant') {
+        await _delay(_spd3 === 'fast' ? 50 : 150);
+      }
     }
   }
 
   // Restore the authoritative final state and do one last draw.
+  ui?._clearStepContinue();
   state.entities = finalEntities;
   redrawFn();
   _resolving = false;

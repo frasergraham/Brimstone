@@ -58,7 +58,8 @@ export class UIController {
 
     this._lastHazardKey    = '';   // deduplicates hazard popups across state updates
     this._battleInterval   = null; // dice animation interval — cleared on new dialog
-    this.speedMode         = 'cinematic'; // 'cinematic' | 'fast' | 'instant'
+    this.speedMode         = 'cinematic'; // 'step' | 'cinematic' | 'fast' | 'instant'
+    this._stepResolve      = null;        // set while waiting for click-to-advance in step mode
     // Start with chronicle hidden on small screens (≤768px)
     this._chronicleMode    = window.innerWidth <= 768 ? 'none' : 'mini'; // 'none' | 'mini' | 'full'
     // When true, disable all planning/action UI — used for spectator mode
@@ -183,6 +184,9 @@ export class UIController {
       const btn = e.target.closest('.speed-option');
       if (btn) this._setSpeed(btn.dataset.mode);
     });
+    // Step-by-step continue bar click
+    this._el('step-continue-bar')?.addEventListener('click', () => this._clearStepContinue());
+
     // Close speed popup on outside click
     document.addEventListener('click', () => this._closeSpeedPopup());
 
@@ -717,6 +721,7 @@ export class UIController {
 
   _onClick(e) {
     if (this._didDragPan) { this._didDragPan = false; return; }
+    if (this._stepResolve) { this._stepResolve(); return; }
     if (this.state.gameOver) return;
 
     const { x, y } = this._canvasPos(e);
@@ -1801,7 +1806,7 @@ export class UIController {
 
   // ── Speed popup ───────────────────────────────────────────────────────────
 
-  static SPEED_LABELS = { cinematic: 'Cinematic', fast: 'Fast', instant: 'Instant' };
+  static SPEED_LABELS = { step: 'Step by Step', cinematic: 'Cinematic', fast: 'Fast', instant: 'Instant' };
 
   _toggleSpeedPopup() {
     const popup = this._el('speed-popup');
@@ -1830,6 +1835,22 @@ export class UIController {
       btn.className = `zoom-btn speed-${mode}`;
     }
     this._showSpeedToast(`⚡ ${UIController.SPEED_LABELS[mode]}`);
+  }
+
+  _waitForStep() {
+    return new Promise(resolve => {
+      const bar = this._el('step-continue-bar');
+      if (bar) bar.style.display = 'flex';
+      this._stepResolve = () => {
+        if (bar) bar.style.display = 'none';
+        this._stepResolve = null;
+        resolve();
+      };
+    });
+  }
+
+  _clearStepContinue() {
+    if (this._stepResolve) this._stepResolve();
   }
 
   _showSpeedToast(text) {
