@@ -271,6 +271,45 @@ export class UIController {
       if (!popup.contains(e.target) && e.target !== btn) popup.style.display = 'none';
     }, { passive: true });
 
+    // Edge swipe: swipe left from right edge opens plan panel, swipe right closes it
+    this._edgeSwipe = null;
+    document.addEventListener('touchstart', e => {
+      if (!this._planMode || e.touches.length !== 1) return;
+      const t = e.touches[0];
+      const edgeZone = 30; // px from right edge
+      const panel = this._el('plan-panel');
+      if (!panel) return;
+      const isCollapsed = panel.classList.contains('collapsed');
+      // Start tracking if near right edge (to open) or panel is expanded (to close)
+      if (t.clientX >= window.innerWidth - edgeZone || !isCollapsed) {
+        this._edgeSwipe = { startX: t.clientX, startY: t.clientY, collapsed: isCollapsed };
+      }
+    }, { passive: true });
+    document.addEventListener('touchmove', e => {
+      if (!this._edgeSwipe) return;
+      const t = e.touches[0];
+      const dy = Math.abs(t.clientY - this._edgeSwipe.startY);
+      // Cancel if vertical movement exceeds horizontal (scrolling)
+      if (dy > 60) { this._edgeSwipe = null; }
+    }, { passive: true });
+    document.addEventListener('touchend', e => {
+      if (!this._edgeSwipe) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - this._edgeSwipe.startX;
+      const threshold = 50;
+      const panel = this._el('plan-panel');
+      if (panel && this._edgeSwipe.collapsed && dx < -threshold) {
+        // Swiped left from right edge — open panel
+        panel.classList.remove('collapsed');
+        this._renderPlanPanel();
+      } else if (panel && !this._edgeSwipe.collapsed && dx > threshold) {
+        // Swiped right — close panel
+        panel.classList.add('collapsed');
+        this._renderPlanPanel();
+      }
+      this._edgeSwipe = null;
+    }, { passive: true });
+
     // Chronicle: three-state button lives inside #chronicle-mini (wired on each render).
     // chronicle-close / chronicle-sidebar-close close back to 'none'.
     this._el('chronicle-close')?.addEventListener('click', () => {
