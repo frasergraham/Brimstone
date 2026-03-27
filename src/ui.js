@@ -1502,10 +1502,8 @@ export class UIController {
       const dots = barEl.querySelectorAll('.node-dot');
       prevNodes.forEach((prev, i) => {
         if (i >= dots.length) return;
-        const currentHolder = this.state.entities.find(
-          e => e.alive && e.col === prev.col && e.row === prev.row
-        );
-        const currentOwner = currentHolder?.owner ?? null;
+        const obj = this.state.witchObjectives.find(o => o.col === prev.col && o.row === prev.row);
+        const currentOwner = obj ? nodeController(obj, this.state.entities) : 'neutral';
         if (currentOwner !== prev.owner) {
           dots[i].classList.add('node-dot-glow');
         }
@@ -2745,10 +2743,8 @@ export class UIController {
       if (prevNodes) {
         const state = this.state;
         for (const prev of prevNodes) {
-          const currentHolder = state.entities.find(
-            e => e.alive && e.col === prev.col && e.row === prev.row
-          );
-          const currentOwner = currentHolder?.owner ?? null;
+          const obj = state.witchObjectives.find(o => o.col === prev.col && o.row === prev.row);
+          const currentOwner = obj ? nodeController(obj, state.entities) : 'neutral';
           if (currentOwner !== prev.owner) {
             nodeChanges.push({ label: prev.label, from: prev.owner, to: currentOwner });
           }
@@ -2814,6 +2810,8 @@ export class UIController {
             html += `<div class="summary-node hero-text">⚔ Hero now controls ${nc.label}</div>`;
           } else if (nc.to === 'witch') {
             html += `<div class="summary-node witch-text">✦ Witch has seized ${nc.label}</div>`;
+          } else if (nc.to === 'contested') {
+            html += `<div class="summary-node">⚡ ${nc.label} is now contested</div>`;
           } else {
             html += `<div class="summary-node">◇ ${nc.label} is no longer controlled</div>`;
           }

@@ -235,7 +235,7 @@ export function buildObjectivesHtml(witchObjectives, entities, nodeScore) {
     else if (ctrl === 'contested') { cls = 'contested'; }
     else                           { cls = 'neutral';   }
     const nodeColor = obj.color ?? '#888';
-    nodeDots += `<span class="node-dot ${cls}" title="${obj.label ?? ''}" style="background-color:${nodeColor}"></span>`;
+    nodeDots += `<span class="node-dot ${cls}" title="${obj.label ?? ''}" style="border-color:${nodeColor}"></span>`;
   }
 
   const score     = nodeScore ?? { hero: 0, witch: 0 };

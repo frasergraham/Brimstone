@@ -11,6 +11,7 @@ import { hexDistance }       from './hex.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { MAP_SIZES } from './map.js';
+import { nodeController } from './game.js';
 
 // Stamp version into badges
 document.getElementById('version-badge').textContent = `v${VERSION}`;
@@ -199,10 +200,10 @@ async function _runLocalResolution() {
 
   // Snapshot node control BEFORE resolution so we can detect changes from unit movement
   const preResEntities = steps[0]?.entitySnapshot ?? state.entities;
-  const prevNodes = state.witchObjectives.map(obj => {
-    const holder = preResEntities.find(e => e.alive && e.col === obj.col && e.row === obj.row);
-    return { col: obj.col, row: obj.row, label: obj.label, owner: holder?.owner ?? null };
-  });
+  const prevNodes = state.witchObjectives.map(obj => ({
+    col: obj.col, row: obj.row, label: obj.label,
+    owner: nodeController(obj, preResEntities),
+  }));
 
   await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
 
