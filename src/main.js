@@ -460,6 +460,15 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               if (isLandscape) renderer.insetRight = prevInsetRight;
             } else if (speed !== 'instant') {
               ui._showBattleToast(actorSnap, targetSnap, result);
+              // Show outcome as a canvas floater over the battle hex
+              const outcomeText = isKill
+                ? `💀 ${targetSnap.name} slain`
+                : result.hit
+                  ? result.damage >= 2 ? `💥 −${result.damage}` : `⚔ −${result.damage}`
+                  : result.counterDmg > 0 ? `🛡 counter` : `miss`;
+              const flashColor = isKill ? 'rgba(220,40,40,0.15)' : result.hit ? 'rgba(255,140,0,0.1)' : 'rgba(100,100,100,0.1)';
+              const textColor  = isKill ? '#ff6666' : result.hit ? '#ffcc44' : '#999';
+              renderer.addFlash(targetSnap.col, targetSnap.row, outcomeText, flashColor, 1600, 0.72, textColor);
             }
 
             // Fire visual result animations AFTER dialog/toast dismissed
