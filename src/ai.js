@@ -540,7 +540,7 @@ export class WitchAI {
 
   /** Generate a complete plan synchronously for the simultaneous-turn system.
    * @param {object|null} allyContext - Shared mutable coordination context for allied AI players.
-   *   Shape: { claimedNodes: Set<string>, allyBattleTargets: Set<entityId>, allyPositions: {col,row}[] }
+   *   Shape: { claimedNodes: Set<string>, allyPositions: {col,row}[] }
    *   Passing null (default) disables all ally-awareness — identical to solo/offline behaviour.
    */
   generatePlan(allyContext = null) {
@@ -580,9 +580,8 @@ export class WitchAI {
     const heroScore   = sim.nodeScore.hero;
     const hero        = sim.hero;
     // Ally context shorthand (null in 1v1 / offline — no behaviour change)
-    const claimedNodes   = this._allyContext?.claimedNodes ?? null;
-    const focusTargets   = this._allyContext?.allyBattleTargets ?? null;
-    const allyPositions  = this._allyContext?.allyPositions ?? null;
+    const claimedNodes  = this._allyContext?.claimedNodes ?? null;
+    const allyPositions = this._allyContext?.allyPositions ?? null;
     // Nodes uncovered by any witch unit, also excluding nodes already claimed by allied AI players
     const uncoveredNodes = sim.witchObjectives.filter(obj =>
       !sim.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row) &&
@@ -617,10 +616,11 @@ export class WitchAI {
       const col1 = sim.entities.find(e => e.alive && e.owner === 'hero' && e.col === witch.col && e.row === witch.row);
       if (col1) return tryBattle(witch, col1);
 
-      // 2. Fight adjacent hero unit (gang-up: prefer enemy already targeted by an ally)
-      const adj2Candidates = sim.entities.filter(e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1);
-      const adj2 = (focusTargets?.size ? adj2Candidates.find(e => focusTargets.has(e.id)) : null) ?? adj2Candidates[0] ?? null;
-      if (adj2) { if (focusTargets) focusTargets.add(adj2.id); return tryBattle(witch, adj2); }
+      // 2. Fight adjacent hero unit — prioritise the hero leader over survivors
+      const adj2 = sim.entities.find(e => e.alive && e.type === EntityType.HERO && hexDistance(witch.col, witch.row, e.col, e.row) === 1)
+        ?? sim.entities.find(e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1)
+        ?? null;
+      if (adj2) return tryBattle(witch, adj2);
 
       // 3. Minion attacks
       for (const m of minions) {
@@ -641,9 +641,10 @@ export class WitchAI {
 
       // 5. Hold node
       if (witchOnNode) {
-        const thrCandidates = sim.entities.filter(e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1);
-        const thr = (focusTargets?.size ? thrCandidates.find(e => focusTargets.has(e.id)) : null) ?? thrCandidates[0] ?? null;
-        if (thr) { if (focusTargets) focusTargets.add(thr.id); return tryBattle(witch, thr); }
+        const thr = sim.entities.find(e => e.alive && e.type === EntityType.HERO && hexDistance(witch.col, witch.row, e.col, e.row) === 1)
+          ?? sim.entities.find(e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1)
+          ?? null;
+        if (thr) return tryBattle(witch, thr);
         const srt = [...uncoveredNodes].sort((a, b) =>
           hexDistance(witch.col, witch.row, a.col, a.row) - hexDistance(witch.col, witch.row, b.col, b.row));
         for (const m of realMinions) {
@@ -702,9 +703,12 @@ export class WitchAI {
     // ── DAY strategy ──────────────────────────────────────────────────────────
     const distToHero = hero ? hexDistance(witch.col, witch.row, hero.col, hero.row) : Infinity;
 
-    // 0. Flee if injured and hero nearby — suppressed when an allied leader is adjacent
+    // 0. Flee if injured and hero nearby — suppressed when an allied leader is adjacent.
+    //    In team games the hero's stat advantage (14HP/3ATK) is more punishing; flee sooner.
     const allyNearbyDay = allyPositions?.some(a => hexDistance(a.col, a.row, witch.col, witch.row) <= 1) ?? false;
-    if (hero && distToHero <= 2 && witch.hp <= Math.ceil(witch.maxHp * 0.6) && !allyNearbyDay) {
+    const dayFleeHpRatio = allyPositions !== null ? 0.75 : 0.60;
+    const dayFleeDist    = allyPositions !== null ? 3 : 2;
+    if (hero && distToHero <= dayFleeDist && witch.hp <= Math.ceil(witch.maxHp * dayFleeHpRatio) && !allyNearbyDay) {
       const a = tryFlee(witch, hero); if (a) return a;
     }
 
@@ -729,9 +733,10 @@ export class WitchAI {
 
     // 4. Hold node
     if (witchOnNode) {
-      const thrCandidatesDay = sim.entities.filter(e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1);
-      const thr = (focusTargets?.size ? thrCandidatesDay.find(e => focusTargets.has(e.id)) : null) ?? thrCandidatesDay[0] ?? null;
-      if (thr) { if (focusTargets) focusTargets.add(thr.id); return tryBattle(witch, thr); }
+      const thr = sim.entities.find(e => e.alive && e.type === EntityType.HERO && hexDistance(witch.col, witch.row, e.col, e.row) === 1)
+        ?? sim.entities.find(e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1)
+        ?? null;
+      if (thr) return tryBattle(witch, thr);
       for (const m of realMinions) {
         if (_isOnNode(sim, m) || !uncoveredNodes.length) continue;
         const s = [...uncoveredNodes].sort((a, b) => hexDistance(m.col, m.row, a.col, a.row) - hexDistance(m.col, m.row, b.col, b.row));
@@ -758,17 +763,16 @@ export class WitchAI {
       return null; // hold the node
     }
 
-    // 5. Witch fights adjacent hero (day ATK penalty accepted — keeps hero honest)
-    //    Gang-up: prefer enemy already targeted by an allied witch
-    const adjD2Candidates = sim.entities.filter(e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1);
-    const adjD2 = (focusTargets?.size ? adjD2Candidates.find(e => focusTargets.has(e.id)) : null) ?? adjD2Candidates[0] ?? null;
-    if (adjD2) { if (focusTargets) focusTargets.add(adjD2.id); return tryBattle(witch, adjD2); }
+    // 5. Witch fights adjacent hero — prioritise the hero leader over survivors
+    const adjD2 = sim.entities.find(e => e.alive && e.type === EntityType.HERO && hexDistance(witch.col, witch.row, e.col, e.row) === 1)
+      ?? sim.entities.find(e => e.alive && e.owner === 'hero' && hexDistance(witch.col, witch.row, e.col, e.row) === 1)
+      ?? null;
+    if (adjD2) return tryBattle(witch, adjD2);
 
     // 6. Minions toward nodes, plus adjacent attacks for node-bound minions
     for (const m of realMinions) {
-      const maCandidates = sim.entities.filter(e => e.alive && e.owner === 'hero' && hexDistance(m.col, m.row, e.col, e.row) === 1);
-      const ma = (focusTargets?.size ? maCandidates.find(e => focusTargets.has(e.id)) : null) ?? maCandidates[0] ?? null;
-      if (ma) { if (focusTargets) focusTargets.add(ma.id); return tryBattle(m, ma); }
+      const ma = sim.entities.find(e => e.alive && e.owner === 'hero' && hexDistance(m.col, m.row, e.col, e.row) === 1);
+      if (ma) return tryBattle(m, ma);
       if (_isOnNode(sim, m)) continue;
       const a = tryMove(m, _bestWitchObjective(sim, m, claimedNodes)); if (a) return a;
     }
@@ -1151,7 +1155,7 @@ export class HeroAI {
 
   /** Generate a complete plan synchronously for the simultaneous-turn system.
    * @param {object|null} allyContext - Shared mutable coordination context for allied AI players.
-   *   Shape: { claimedNodes: Set<string>, allyBattleTargets: Set<entityId>, allyPositions: {col,row}[] }
+   *   Shape: { claimedNodes: Set<string>, allyPositions: {col,row}[] }
    *   Passing null (default) disables all ally-awareness — identical to solo/offline behaviour.
    */
   generatePlan(allyContext = null) {
@@ -1201,7 +1205,6 @@ export class HeroAI {
 
     // Ally context shorthand (null in 1v1 / offline — no behaviour change)
     const claimedNodes  = this._allyContext?.claimedNodes ?? null;
-    const focusTargets  = this._allyContext?.allyBattleTargets ?? null;
 
     // Heal via herbs (free action — always good to include)
     const herbs = (hero.items && hero.items[ResourceType.HERBS]) || 0;
@@ -1216,13 +1219,12 @@ export class HeroAI {
 
       // 2b. Fight adjacent witch (the boss) — worth the risk at night; avoid minion swarms
       const adjWitchN = sim.entities.find(e => e.alive && e.type === EntityType.WITCH && hexDistance(hero.col, hero.row, e.col, e.row) === 1);
-      if (adjWitchN) { if (focusTargets) focusTargets.add(adjWitchN.id); return tryBattle(hero, adjWitchN); }
+      if (adjWitchN) return tryBattle(hero, adjWitchN);
 
       // 3. Node combat + dispatch — hero stays mobile, doesn't idle on node
       if (heroOnNode) {
-        const thrNCandidates = sim.entities.filter(e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1);
-        const thr = (focusTargets?.size ? thrNCandidates.find(e => focusTargets.has(e.id)) : null) ?? thrNCandidates[0] ?? null;
-        if (thr) { if (focusTargets) focusTargets.add(thr.id); return tryBattle(hero, thr); }
+        const thr = sim.entities.find(e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1);
+        if (thr) return tryBattle(hero, thr);
         const undef = _undefendedNodes(sim, hero);
         for (const s of survivors) {
           if (_isOnNode(sim, s)) continue;
@@ -1297,21 +1299,18 @@ export class HeroAI {
     const col = sim.entities.find(e => e.alive && e.owner === 'witch' && e.col === hero.col && e.row === hero.row);
     if (col) return tryBattle(hero, col);
 
-    // 3. Fight adjacent witch — prioritise the witch herself; gang-up with allies
-    const adjWCandidates = [
-      sim.entities.find(e => e.alive && e.type === EntityType.WITCH && hexDistance(hero.col, hero.row, e.col, e.row) === 1),
-      sim.entities.find(e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1),
-    ].filter(Boolean);
-    const adjW = (focusTargets?.size ? adjWCandidates.find(e => focusTargets.has(e.id)) : null) ?? adjWCandidates[0] ?? null;
-    if (adjW) { if (focusTargets) focusTargets.add(adjW.id); return tryBattle(hero, adjW); }
+    // 3. Fight adjacent witch — prioritise the witch herself
+    const adjW = sim.entities.find(e => e.alive && e.type === EntityType.WITCH && hexDistance(hero.col, hero.row, e.col, e.row) === 1)
+      ?? sim.entities.find(e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1)
+      ?? null;
+    if (adjW) return tryBattle(hero, adjW);
 
     // 4. Survivors fight
     for (const s of survivors) {
       const sc = sim.entities.find(e => e.alive && e.owner === 'witch' && e.col === s.col && e.row === s.row);
       if (sc) return tryBattle(s, sc);
-      const saCandidates = sim.entities.filter(e => e.alive && e.owner === 'witch' && hexDistance(s.col, s.row, e.col, e.row) === 1);
-      const sa = (focusTargets?.size ? saCandidates.find(e => focusTargets.has(e.id)) : null) ?? saCandidates[0] ?? null;
-      if (sa) { if (focusTargets) focusTargets.add(sa.id); return tryBattle(s, sa); }
+      const sa = sim.entities.find(e => e.alive && e.owner === 'witch' && hexDistance(s.col, s.row, e.col, e.row) === 1);
+      if (sa) return tryBattle(s, sa);
     }
 
     // 5. Explore current building before moving out (find survivors + loot early)
@@ -1333,9 +1332,8 @@ export class HeroAI {
 
     // 6. Hold node: fight threats, dispatch survivors to other nodes, then pursue witch
     if (heroOnNode) {
-      const thrDCandidates = sim.entities.filter(e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1);
-      const thrD = (focusTargets?.size ? thrDCandidates.find(e => focusTargets.has(e.id)) : null) ?? thrDCandidates[0] ?? null;
-      if (thrD) { if (focusTargets) focusTargets.add(thrD.id); return tryBattle(hero, thrD); }
+      const thrD = sim.entities.find(e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1);
+      if (thrD) return tryBattle(hero, thrD);
       const undef = _undefendedNodes(sim, hero);
       for (const s of survivors) {
         if (_isOnNode(sim, s)) continue;
@@ -1475,11 +1473,24 @@ class PlanSimState {
       .map(e => ({ ...e, alive: true }));
 
     if (playerId) {
-      // Multiplayer: scope leader ref and budget to this specific player
-      const leaderType = faction === 'hero' ? EntityType.HERO : EntityType.WITCH;
+      // Multiplayer: scope leader ref and budget to this specific player.
+      // sim.hero / sim.witch serve two roles:
+      //   • The faction that matches the player → their own leader (the actor)
+      //   • The opposite faction → the nearest enemy leader (for flee/hunt distance checks)
+      // Without an enemy leader reference, flee and hunt logic silently no-ops.
+      const leaderType = faction === 'hero' ? EntityType.HERO  : EntityType.WITCH;
+      const enemyType  = faction === 'hero' ? EntityType.WITCH : EntityType.HERO;
       const leader = this.entities.find(e => e.type === leaderType && e.ownerId === playerId) ?? null;
-      this.hero  = faction === 'hero'  ? leader : null;
-      this.witch = faction === 'witch' ? leader : null;
+      // Nearest enemy leader (fallback: any enemy leader)
+      const enemyLeader = leader
+        ? (this.entities
+            .filter(e => e.type === enemyType && e.alive)
+            .sort((a, b) =>
+              hexDistance(a.col, a.row, leader.col, leader.row) -
+              hexDistance(b.col, b.row, leader.col, leader.row))[0] ?? null)
+        : (this.entities.find(e => e.type === enemyType) ?? null);
+      this.hero  = faction === 'hero'  ? leader : enemyLeader;
+      this.witch = faction === 'witch' ? leader : enemyLeader;
       this.actionsLeft = computeActionsForPlayer(playerId, faction, realState.phase, this.entities);
     } else {
       // Offline / legacy: use first entity of each type, faction-level budget

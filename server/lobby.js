@@ -341,8 +341,8 @@ function _runAIPlanSubmission(room) {
   if (room.state.gameOver) return;
 
   // One ally context per faction — shared across all AI players of that faction.
-  const heroCtx  = { claimedNodes: new Set(), allyBattleTargets: new Set(), allyPositions: [] };
-  const witchCtx = { claimedNodes: new Set(), allyBattleTargets: new Set(), allyPositions: [] };
+  const heroCtx  = { claimedNodes: new Set(), allyPositions: [] };
+  const witchCtx = { claimedNodes: new Set(), allyPositions: [] };
 
   let offset = 0;
   for (const seat of room.players) {

@@ -87,23 +87,18 @@ function buildMPState() {
  */
 function buildAllyContext() {
   return {
-    claimedNodes:      new Set(), // hexKey strings of nodes already targeted by an ally
-    allyBattleTargets: new Set(), // entity IDs that an ally is already attacking
-    allyPositions:     [],        // { col, row } of allies' leaders at plan-start
+    claimedNodes:  new Set(), // hexKey strings of nodes already targeted by an ally
+    allyPositions: [],        // { col, row } of allies' leaders at plan-start
   };
 }
 
 /**
  * After generating a player's plan, update the shared ally context so subsequent
- * allied players can avoid duplicating objectives and combat targets.
+ * allied players can avoid duplicating objectives.
  */
 function updateAllyContext(ctx, plan, leader) {
   // Record the leader's current position so later allies know not to flee when nearby
   if (leader) ctx.allyPositions.push({ col: leader.col, row: leader.row });
-  // Register battle targets committed to by this player's plan
-  for (const a of plan) {
-    if (a.type === PlanActionType.BATTLE_UNIT) ctx.allyBattleTargets.add(a.targetId);
-  }
   // claimedNodes is updated automatically inside _bestNodeForHero / _bestWitchObjective
   // when generatePlan() passes the shared ctx.claimedNodes Set.
 }
@@ -164,7 +159,7 @@ function runGame() {
 
     // Build per-player plans with shared ally context per faction.
     // Plans are generated in player order (heroes first, then witches) so each player's
-    // choices inform the next: claimedNodes and allyBattleTargets accumulate across the loop.
+    // choices inform the next: claimedNodes accumulates across the loop.
     const heroCtx  = buildAllyContext();
     const witchCtx = buildAllyContext();
 
