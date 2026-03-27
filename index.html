@@ -306,21 +306,20 @@
   <div id="game-screen">
 
     <header id="game-header">
-      <button id="menu-btn" class="header-icon-btn" title="Menu">☰</button>
       <span class="header-title">BRIMSTONE</span>
-      <div id="online-status" style="display:none"></div>
       <div id="turn-info"></div>
       <!-- End Turn lives in the header, next to the action diamonds -->
       <button id="end-turn-btn" class="header-icon-btn end-turn-header" title="End Turn">↩</button>
-      <div id="node-status"></div>
-      <span id="game-version" class="game-version"></span>
+      <button id="menu-btn" class="header-icon-btn" title="Menu">☰</button>
     </header>
     <!-- In-game menu popup -->
     <div id="game-menu-popup" class="game-menu-popup" style="display:none">
       <button id="menu-quit-btn" class="game-menu-item">Quit to Menu</button>
+      <div id="menu-version" class="game-menu-version"></div>
     </div>
-    <!-- Cycle bar: always-visible 8-step day/night strip, shown below header on mobile -->
-    <div id="cycle-bar"><div id="node-status-bar"></div></div>
+    <!-- Cycle bar: always-visible 8-step day/night strip -->
+    <div id="cycle-bar"></div>
+    <div id="round-label"></div>
 
     <main id="game-main">
       <!-- Chronicle sidebar: left panel shown in 'full' chronicle mode -->
@@ -342,6 +341,7 @@
           <button id="zoom-fit" class="zoom-btn" title="Fit map">⛶</button>
           <button id="zoom-me"  class="zoom-btn" title="Focus on my units">⊙</button>
           <button id="speed-toggle" class="zoom-btn" title="Battle speed">⚡</button>
+          <button id="chronicle-toggle" class="zoom-btn" title="Toggle chronicle">📜</button>
           <!-- Speed mode picker popup -->
           <div id="speed-popup" class="speed-popup" style="display:none">
             <button class="speed-option" data-mode="cinematic">
@@ -365,11 +365,17 @@
         <div id="chronicle-mini"></div>
       </div>
 
+      <!-- Spectator ready panel (shown during planning phase) -->
+      <div id="sp-ready-panel" style="display:none">
+        <div class="sp-ready-header">📋 Planning</div>
+        <div id="sp-ready-list"></div>
+      </div>
+
       <!-- Plan panel — slides in during planning phase -->
       <div id="plan-panel" class="plan-panel" style="display:none">
         <!-- Collapse tab — always visible so the panel can be reopened -->
         <button id="plan-tab" class="plan-tab" title="Toggle plan panel">
-          📋<span id="plan-tab-count" class="plan-tab-count"></span>
+          <span class="plan-tab-label">Action Plan</span><span id="plan-tab-count" class="plan-tab-count"></span>
         </button>
         <div class="plan-panel-header">
           <span class="plan-panel-title">📋 Your Plan</span>
@@ -388,6 +394,13 @@
         <div id="plan-status" class="plan-status"></div>
       </div>
     </main>
+
+    <!-- Score bar — always-visible objectives strip at the bottom -->
+    <div id="score-bar">
+      <span class="score-bar-faction hero-faction">⚔ Hero</span>
+      <div id="score-bar-content"></div>
+      <span class="score-bar-faction witch-faction">Witch ✦</span>
+    </div>
 
     <!-- Floating cancel pill — appears during battle/summon targeting -->
     <div id="cancel-wrap">
@@ -514,15 +527,19 @@
     </div>
   </div>
 
-  <!-- ── Game-over overlay ─────────────────────────────────────────── -->
-  <div id="game-over">
-    <div class="game-over-card">
-      <div class="winner-text"></div>
-      <div class="game-over-buttons">
-        <button id="btn-restart" class="setup-btn primary">Play Again</button>
-        <button id="btn-view-map" class="setup-btn">View Map</button>
-      </div>
-    </div>
+  <!-- Spectator chrome (hidden until spectator mode activated) -->
+  <div class="spectator-banner" id="spectator-banner" style="display:none">
+    <span class="live-dot"></span>SPECTATING
+  </div>
+  <div class="spectator-info" id="spectator-info" style="display:none">
+    <span class="faction-hero" id="sp-hero">-</span>
+    <span class="round-info"   id="sp-round">-</span>
+    <span class="faction-witch" id="sp-witch">-</span>
+  </div>
+  <div id="spectate-status" style="display:none">Connecting...</div>
+  <div id="spectate-game-over" style="display:none">
+    <h2 id="sp-winner-text"></h2>
+    <p  id="sp-win-reason"></p>
   </div>
 
   <script type="module" src="src/main.js"></script>

@@ -10,9 +10,25 @@ import {
   executeFortify, executeSummon, executeUseItem, executeUseAbility,
 } from './actions.js';
 import { PlanActionType, computeGhostState } from './planner.js';
+import { collectUIElements } from './ui-elements.js';
+import { buildPlanStepsHtml, buildPlayerStatusHtml, buildObjectivesHtml } from './ui-render.js';
+
+/** Enum of UI operating modes. */
+export const UIMode = Object.freeze({ LOCAL: 'local', ONLINE: 'online', SPECTATOR: 'spectator' });
 
 export class UIController {
-  constructor(canvas, state, renderer, witchAI, onRedraw, heroAI = null, autoplay = false) {
+  /**
+   * @param {HTMLCanvasElement} canvas
+   * @param {object}            state
+   * @param {object}            renderer
+   * @param {object|null}       witchAI
+   * @param {function}          onRedraw
+   * @param {object|null}       [heroAI]
+   * @param {boolean}           [autoplay]
+   * @param {object|null}       [els]  Pre-collected element bag from collectUIElements().
+   *                                   Pass a fake bag in tests to avoid touching document.
+   */
+  constructor(canvas, state, renderer, witchAI, onRedraw, heroAI = null, autoplay = false, els = null) {
     this.canvas    = canvas;
     this.state     = state;
     this.renderer  = renderer;
@@ -21,6 +37,10 @@ export class UIController {
     this.onRedraw  = onRedraw;
     this.autoplay  = autoplay;
     this.mp        = null;  // set externally when in online mode
+
+    // Injected element bag — tests supply fake elements keyed by DOM ID.
+    // Falls back to document.getElementById at each call site when missing.
+    this._els = els ?? {};
 
     this._selectedEntity  = null;
     this._validActions    = [];
@@ -37,7 +57,8 @@ export class UIController {
     this._lastHazardKey    = '';   // deduplicates hazard popups across state updates
     this._battleInterval   = null; // dice animation interval — cleared on new dialog
     this.speedMode         = 'cinematic'; // 'cinematic' | 'fast' | 'instant'
-    this._chronicleMode    = 'mini'; // 'none' | 'mini' | 'full'
+    // Start with chronicle hidden on small screens (≤768px)
+    this._chronicleMode    = window.innerWidth <= 768 ? 'none' : 'mini'; // 'none' | 'mini' | 'full'
     // When true, disable all planning/action UI — used for spectator mode
     this.spectator         = false;
 
@@ -55,6 +76,40 @@ export class UIController {
     this._countdownTimer = null;   // setInterval handle for countdown display
 
     this._bindEvents();
+  }
+
+  // ── Element access ───────────────────────────────────────────────────────────
+
+  /**
+   * Look up a DOM element by its HTML id string.
+   * Returns the element from the injected `_els` bag when available
+   * (used in tests), otherwise falls back to document.getElementById.
+   * @param {string} id
+   * @returns {HTMLElement|null}
+   */
+  _el(id) {
+    return (id in this._els) ? this._els[id] : document.getElementById(id);
+  }
+
+  // ── Mode management ──────────────────────────────────────────────────────────
+
+  /**
+   * Switch UI operating mode at runtime.
+   * Replaces the scattered `this.spectator` / `this.mp` / `this.myPlayerId`
+   * flag checks with a single mode enum so transitions (e.g. dead → spectator)
+   * can happen without a page reload.
+   *
+   * @param {string}       mode       UIMode.LOCAL | UIMode.ONLINE | UIMode.SPECTATOR
+   * @param {object}       [opts]
+   * @param {object|null}  [opts.mp]          MultiplayerClient reference (online only)
+   * @param {string|null}  [opts.myPlayerId]  Local player UUID (online only)
+   * @param {Array}        [opts.players]     Full player roster (online only)
+   */
+  setMode(mode, { mp = null, myPlayerId = null, players = [] } = {}) {
+    this.spectator   = (mode === UIMode.SPECTATOR);
+    this.mp          = mp;
+    this.myPlayerId  = myPlayerId;
+    this._players    = players;
   }
 
   _bindEvents() {
@@ -87,40 +142,50 @@ export class UIController {
 
     // Zoom control buttons (+, −, fit)
     const zoomStep = 1.25;
-    document.getElementById('zoom-in')?.addEventListener('click', () => {
+    this._el('zoom-in')?.addEventListener('click', () => {
       const cx = this.canvas.width  / 2;
       const cy = this.canvas.height / 2;
       this.renderer.setZoom(this.renderer.zoomLevel * zoomStep, cx, cy);
       this.onRedraw();
     });
-    document.getElementById('zoom-out')?.addEventListener('click', () => {
+    this._el('zoom-out')?.addEventListener('click', () => {
       const cx = this.canvas.width  / 2;
       const cy = this.canvas.height / 2;
       this.renderer.setZoom(this.renderer.zoomLevel / zoomStep, cx, cy);
       this.onRedraw();
     });
-    document.getElementById('zoom-fit')?.addEventListener('click', () => {
+    this._el('zoom-fit')?.addEventListener('click', () => {
       this.renderer.resize(); // re-measure wrapper after any panel changes
       this.renderer.resetView();
       this.onRedraw();
     });
-    document.getElementById('zoom-me')?.addEventListener('click', () => {
-      const faction = this._planFaction ?? (!this.state.heroIsAI ? 'hero' : 'witch');
-      const units   = this.state.entities.filter(e => e.alive && e.owner === faction);
-      if (units.length > 0) this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 400 });
+    this._el('zoom-me')?.addEventListener('click', () => {
+      if (this._selectedEntity && this._selectedEntity.alive) {
+        // Zoom to selected unit
+        const pos = this._planMode ? (this._getProjectedPos(this._selectedEntity.id) ?? this._selectedEntity) : this._selectedEntity;
+        this.renderer.frameHexes([pos], { maxZoom: 2.0, paddingHexes: 3, duration: 400 });
+      } else {
+        // No selection — frame all player's units
+        const faction = this._planFaction ?? (!this.state.heroIsAI ? 'hero' : 'witch');
+        const units   = this.state.entities.filter(e => e.alive && e.owner === faction);
+        if (units.length > 0) this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 400 });
+      }
       this.onRedraw();
     });
-    document.getElementById('speed-toggle')?.addEventListener('click', (e) => {
+    this._el('speed-toggle')?.addEventListener('click', (e) => {
       e.stopPropagation();
       this._toggleSpeedPopup();
     });
     // Speed popup option clicks
-    document.getElementById('speed-popup')?.addEventListener('click', (e) => {
+    this._el('speed-popup')?.addEventListener('click', (e) => {
       const btn = e.target.closest('.speed-option');
       if (btn) this._setSpeed(btn.dataset.mode);
     });
     // Close speed popup on outside click
     document.addEventListener('click', () => this._closeSpeedPopup());
+
+    // Chronicle toggle in map controls area
+    this._el('chronicle-toggle')?.addEventListener('click', () => this._cycleChronicle());
 
     // Touch: tap, drag-to-pan, pinch-to-zoom (mobile)
     this.canvas.addEventListener('touchstart', e => {
@@ -180,19 +245,19 @@ export class UIController {
     }, { passive: false });
 
     // In-game menu
-    document.getElementById('menu-btn')?.addEventListener('click', () => {
-      const popup = document.getElementById('game-menu-popup');
+    this._el('menu-btn')?.addEventListener('click', () => {
+      const popup = this._el('game-menu-popup');
       if (popup) popup.style.display = popup.style.display === 'none' ? 'block' : 'none';
     });
-    document.getElementById('menu-quit-btn')?.addEventListener('click', () => {
-      const popup = document.getElementById('game-menu-popup');
+    this._el('menu-quit-btn')?.addEventListener('click', () => {
+      const popup = this._el('game-menu-popup');
       if (popup) popup.style.display = 'none';
       this.onQuitToMenu?.();
     });
     document.addEventListener('click', e => {
-      const popup = document.getElementById('game-menu-popup');
+      const popup = this._el('game-menu-popup');
       if (!popup || popup.style.display === 'none') return;
-      const btn = document.getElementById('menu-btn');
+      const btn = this._el('menu-btn');
       if (!popup.contains(e.target) && e.target !== btn) popup.style.display = 'none';
     });
     // Mobile: canvas touchend calls e.preventDefault() which suppresses the
@@ -200,33 +265,74 @@ export class UIController {
     // the canvas with the menu open. Use touchstart (fires before preventDefault)
     // to close the popup on outside touches.
     document.addEventListener('touchstart', e => {
-      const popup = document.getElementById('game-menu-popup');
+      const popup = this._el('game-menu-popup');
       if (!popup || popup.style.display === 'none') return;
-      const btn = document.getElementById('menu-btn');
+      const btn = this._el('menu-btn');
       if (!popup.contains(e.target) && e.target !== btn) popup.style.display = 'none';
+    }, { passive: true });
+
+    // Edge swipe: swipe left from right edge opens plan panel, swipe right closes it
+    this._edgeSwipe = null;
+    document.addEventListener('touchstart', e => {
+      if (!this._planMode || e.touches.length !== 1) return;
+      const t = e.touches[0];
+      const edgeZone = 30; // px from right edge
+      const panel = this._el('plan-panel');
+      if (!panel) return;
+      const isCollapsed = panel.classList.contains('collapsed');
+      // Start tracking if near right edge (to open) or panel is expanded (to close)
+      if (t.clientX >= window.innerWidth - edgeZone || !isCollapsed) {
+        this._edgeSwipe = { startX: t.clientX, startY: t.clientY, collapsed: isCollapsed };
+      }
+    }, { passive: true });
+    document.addEventListener('touchmove', e => {
+      if (!this._edgeSwipe) return;
+      const t = e.touches[0];
+      const dy = Math.abs(t.clientY - this._edgeSwipe.startY);
+      // Cancel if vertical movement exceeds horizontal (scrolling)
+      if (dy > 60) { this._edgeSwipe = null; }
+    }, { passive: true });
+    document.addEventListener('touchend', e => {
+      if (!this._edgeSwipe) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - this._edgeSwipe.startX;
+      const threshold = 50;
+      const panel = this._el('plan-panel');
+      if (panel && this._edgeSwipe.collapsed && dx < -threshold) {
+        // Swiped left from right edge — open panel
+        panel.classList.remove('collapsed');
+        this._syncPlanInset();
+        this._renderPlanPanel();
+      } else if (panel && !this._edgeSwipe.collapsed && dx > threshold) {
+        // Swiped right — close panel
+        panel.classList.add('collapsed');
+        this._syncPlanInset();
+        this._renderPlanPanel();
+      }
+      this._edgeSwipe = null;
     }, { passive: true });
 
     // Chronicle: three-state button lives inside #chronicle-mini (wired on each render).
     // chronicle-close / chronicle-sidebar-close close back to 'none'.
-    document.getElementById('chronicle-close')?.addEventListener('click', () => {
+    this._el('chronicle-close')?.addEventListener('click', () => {
       this._setChronicleMode('none');
     });
-    document.getElementById('chronicle-overlay')?.addEventListener('click', e => {
-      if (e.target === document.getElementById('chronicle-overlay')) this._setChronicleMode('none');
+    this._el('chronicle-overlay')?.addEventListener('click', e => {
+      if (e.target === this._el('chronicle-overlay')) this._setChronicleMode('none');
     });
-    document.getElementById('chronicle-sidebar-close')?.addEventListener('click', () => {
+    this._el('chronicle-sidebar-close')?.addEventListener('click', () => {
       this._setChronicleMode('none');
     });
 
 
     // Tile zoom close
-    document.getElementById('tile-zoom-close')?.addEventListener('click', () => this._hideTileDetail());
-    document.getElementById('tile-zoom-overlay')?.addEventListener('click', e => {
-      if (e.target === document.getElementById('tile-zoom-overlay')) this._hideTileDetail();
+    this._el('tile-zoom-close')?.addEventListener('click', () => this._hideTileDetail());
+    this._el('tile-zoom-overlay')?.addEventListener('click', e => {
+      if (e.target === this._el('tile-zoom-overlay')) this._hideTileDetail();
     });
 
     // Cancel-action pill (floating over canvas during battle/summon targeting)
-    document.getElementById('cancel-action-btn')?.addEventListener('click', () => {
+    this._el('cancel-action-btn')?.addEventListener('click', () => {
       const entity = this._selectedEntity;
       if (entity) {
         this._selectEntity(entity);
@@ -239,7 +345,7 @@ export class UIController {
     });
 
     // End Turn / Submit Plan in header
-    document.getElementById('end-turn-btn')?.addEventListener('click', () => {
+    this._el('end-turn-btn')?.addEventListener('click', () => {
       if (this.state.gameOver) return;
       if (this._planMode) { this._doSubmitPlan(); return; }
       if (this._isOpponentTurn()) return;
@@ -247,8 +353,8 @@ export class UIController {
     });
 
     // Plan panel buttons
-    document.getElementById('plan-submit-btn')?.addEventListener('click', () => this._doSubmitPlan());
-    document.getElementById('plan-clear-btn')?.addEventListener('click',  () => {
+    this._el('plan-submit-btn')?.addEventListener('click', () => this._doSubmitPlan());
+    this._el('plan-clear-btn')?.addEventListener('click',  () => {
       if (this._planSubmitted) return;
       this._plan = [];
       this._refreshPlanOverlay();
@@ -256,8 +362,8 @@ export class UIController {
       if (this._selectedEntity) this._selectEntity(this._selectedEntity);
       this.onRedraw();
     });
-    document.getElementById('plan-toggle-btn')?.addEventListener('click', () => this._togglePlanPanel());
-    document.getElementById('plan-tab')?.addEventListener('click',        () => this._togglePlanPanel());
+    this._el('plan-toggle-btn')?.addEventListener('click', () => this._togglePlanPanel());
+    this._el('plan-tab')?.addEventListener('click',        () => this._togglePlanPanel());
   }
 
   _canvasPos(e) {
@@ -336,9 +442,8 @@ export class UIController {
     this._planBudget       = budget;
     this._plan             = [];
     this._planSubmitted    = false;
-    this._planFoodEnabled  = this.state?.inventory?.shared?.[ResourceType.FOOD] || 0;
 
-    const panel = document.getElementById('plan-panel');
+    const panel = this._el('plan-panel');
     if (panel) {
       panel.style.display = '';
       panel.classList.remove('plan-submitted');
@@ -351,7 +456,7 @@ export class UIController {
       }
     }
     // Plan panel overlays the right side of the canvas — bias framing away from it
-    if (this.renderer) this.renderer.insetRight = 220;
+    this._syncPlanInset();
 
     this._clearSelection();
 
@@ -409,7 +514,7 @@ export class UIController {
 
     this._stopCountdown();
 
-    const panel = document.getElementById('plan-panel');
+    const panel = this._el('plan-panel');
     if (panel) { panel.style.display = 'none'; panel.classList.remove('collapsed'); }
 
     if (this.renderer) {
@@ -425,7 +530,7 @@ export class UIController {
 
   /** Render the list of players and their submission state into #plan-players. */
   _renderPlayerStatus() {
-    const el = document.getElementById('plan-players');
+    const el = this._el('plan-players');
     if (!el) return;
 
     const players = this._players ?? [];
@@ -435,22 +540,7 @@ export class UIController {
     }
 
     el.style.display = '';
-    let html = '';
-    for (const p of players) {
-      const isMe      = p.playerId === this.myPlayerId;
-      const submitted = p._submitted ?? false;
-      const icon      = submitted ? '✓' : '⋯';
-      const cls       = submitted ? 'player-ready' : 'player-waiting';
-      const label     = isMe ? `${p.name} (you)` : p.name;
-      const fCls      = p.faction === 'hero' ? 'faction-hero' : 'faction-witch';
-      const safeName  = String(label).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      html += `<div class="plan-player-row ${cls}">
-        <span class="plan-player-icon ${fCls}">${p.faction === 'hero' ? '⚔' : '✦'}</span>
-        <span class="plan-player-name">${safeName}</span>
-        <span class="plan-player-status">${icon}</span>
-      </div>`;
-    }
-    el.innerHTML = html;
+    el.innerHTML = buildPlayerStatusHtml(players, this.myPlayerId);
   }
 
   /** Called when the server notifies that another player has submitted. */
@@ -463,7 +553,7 @@ export class UIController {
   /** Start a countdown timer showing seconds remaining until auto-submit. */
   _startCountdown(timeoutMs) {
     this._stopCountdown();
-    const el    = document.getElementById('plan-countdown');
+    const el    = this._el('plan-countdown');
     if (!el) return;
     el.style.display = '';
     const end = Date.now() + timeoutMs;
@@ -483,7 +573,7 @@ export class UIController {
       clearInterval(this._countdownTimer);
       this._countdownTimer = null;
     }
-    const el = document.getElementById('plan-countdown');
+    const el = this._el('plan-countdown');
     if (el) { el.style.display = 'none'; el.textContent = ''; }
   }
 
@@ -515,10 +605,10 @@ export class UIController {
     if (this._planSubmitted) return;
     this._planSubmitted = true;
 
-    const panel = document.getElementById('plan-panel');
+    const panel = this._el('plan-panel');
     if (panel) panel.classList.add('plan-submitted');
 
-    const status = document.getElementById('plan-status');
+    const status = this._el('plan-status');
     if (status) status.textContent = 'Waiting for opponents…';
 
     // Mark ourselves as submitted in the player list so the status panel updates.
@@ -534,9 +624,9 @@ export class UIController {
 
   /** Render the plan panel steps list. */
   _renderPlanPanel() {
-    const stepsEl  = document.getElementById('plan-steps');
-    const budgeEl  = document.getElementById('plan-budget-badge');
-    const statusEl = document.getElementById('plan-status');
+    const stepsEl  = this._el('plan-steps');
+    const budgeEl  = this._el('plan-budget-badge');
+    const statusEl = this._el('plan-status');
     if (!stepsEl) return;
 
     // Count budget-consuming actions
@@ -547,91 +637,13 @@ export class UIController {
 
     if (budgeEl) budgeEl.textContent = `${Math.max(0, remaining)} left`;
 
-    const ICONS = {
-      [PlanActionType.MOVE]:        '↗',
-      [PlanActionType.BATTLE_UNIT]: '⚔',
-      [PlanActionType.BATTLE_HEX]:  '⚔',
-      [PlanActionType.EXPLORE]:     '🔍',
-      [PlanActionType.FORTIFY]:     '🪵',
-      [PlanActionType.SUMMON]:      '✦',
-      [PlanActionType.USE_ITEM]:    '🧪',
-      [PlanActionType.EQUIP_WEAPON]:'⚔',
-      [PlanActionType.USE_ABILITY]: '✦',
-    };
-
-    const ENTITY_GLYPH = {
-      [EntityType.HERO]:       '⚔',
-      [EntityType.WITCH]:      '✦',
-      [EntityType.SURVIVOR]:   '☺',
-      [EntityType.ZOMBIE]:     '†',
-      [EntityType.MINION]:     '☠',
-      [EntityType.WOOD_GOLEM]: '🪵',
-      [EntityType.IRON_GOLEM]: '⚙',
-    };
-
-    const describeAction = (a, i) => {
-      const entity = this.state.entities.find(e => e.id === a.entityId);
-      const who    = entity?.displayName ?? 'Unit';
-      switch (a.type) {
-        case PlanActionType.MOVE:
-          return `${who} → (${a.toCol},${a.toRow})`;
-        case PlanActionType.BATTLE_UNIT: {
-          const target = this.state.entities.find(e => e.id === a.targetId);
-          return `${who} attacks ${target?.displayName ?? '?'}`;
-        }
-        case PlanActionType.BATTLE_HEX:
-          return `${who} attacks (${a.targetCol},${a.targetRow})`;
-        case PlanActionType.EXPLORE:
-          return `${who} explores`;
-        case PlanActionType.FORTIFY:
-          return `${who} fortifies`;
-        case PlanActionType.SUMMON:
-          return `${who} summons at (${a.toCol},${a.toRow})`;
-        case PlanActionType.USE_ITEM:
-          return `${who} uses ${a.item}`;
-        case PlanActionType.EQUIP_WEAPON:
-          return `${who} equips ${a.weapon}`;
-        case PlanActionType.USE_ABILITY:
-          return `${who} uses ability`;
-        default:
-          return `Step ${i + 1}`;
-      }
-    };
-
-    // Track running cost to identify over-budget steps.
-    // Over-budget steps are food-powered up to _planFoodEnabled, then truly over-budget.
+    // Food is auto-applied to over-budget actions until exhausted.
     const foodAvailable = (this.state.inventory?.shared?.[ResourceType.FOOD] || 0);
-    const foodEnabled   = Math.min(this._planFoodEnabled ?? foodAvailable, foodAvailable);
-    let runningCost = 0;
-    let foodUsed = 0;
-    let html = '';
-    this._plan.forEach((a, i) => {
-      const isFree = a.type === PlanActionType.EQUIP_WEAPON || a.type === PlanActionType.USE_ITEM;
-      if (!isFree) runningCost++;
-      const overBudget = !isFree && runningCost > this._planBudget;
-      const foodPowered = overBudget && foodUsed < foodEnabled;
-      if (foodPowered) foodUsed++;
-      const desc       = describeAction(a, i);
-      const foodTag    = foodPowered ? ` <span class="plan-food-tag">-1 🍞</span>` : '';
-      const rmBtn      = this._planSubmitted
-        ? ''
-        : `<button class="plan-step-remove" data-plan-idx="${i}" title="Remove">✕</button>`;
-      const cls        = foodPowered ? ' food-powered' : overBudget ? ' over-budget' : '';
-      const stepEntity = this.state?.entities?.find(e => e.id === a.entityId);
-      const stepGlyph  = stepEntity ? (ENTITY_GLYPH[stepEntity.type] || '?') : '';
-      const stepColor  = stepEntity ? (ENTITY_COLOR[stepEntity.type]  || '#aaa') : '#aaa';
-      const iconSpan   = stepEntity
-        ? `<span class="plan-step-icon" style="color:${stepColor}">${stepGlyph}</span>`
-        : '';
-      html += `<div class="plan-step${cls}">
-        <span class="plan-step-num">${i + 1}</span>
-        ${iconSpan}
-        <span class="plan-step-desc" title="${desc}">${desc}${foodTag}</span>
-        ${rmBtn}
-      </div>`;
-    });
-    if (!html) html = `<div class="plan-step"><span class="plan-step-desc" style="color:var(--muted)">No actions queued — click units to add</span></div>`;
-    stepsEl.innerHTML = html;
+
+    stepsEl.innerHTML = buildPlanStepsHtml(
+      this._plan, this._planBudget, foodAvailable, foodAvailable,
+      this._planSubmitted, this.state.entities ?? [],
+    );
 
     // Attach remove listeners
     stepsEl.querySelectorAll('.plan-step-remove').forEach(btn => {
@@ -647,40 +659,32 @@ export class UIController {
       });
     });
 
-    // ── Food slots row ──────────────────────────────────────────────────────
-    const foodRowEl = document.getElementById('plan-food-row');
-    if (foodRowEl) {
-      if (foodAvailable > 0 && !this._planSubmitted) {
-        let slots = '';
-        for (let i = 0; i < foodAvailable; i++) {
-          const on = i < foodEnabled;
-          slots += `<button class="plan-food-slot${on ? ' on' : ''}" data-food-idx="${i}" title="${on ? 'Click to disable this food ration' : 'Click to enable this food ration'}">🍞</button>`;
-        }
-        foodRowEl.innerHTML = `<span class="plan-food-label">Extra actions:</span>${slots}`;
-        foodRowEl.querySelectorAll('.plan-food-slot').forEach(btn => {
-          btn.addEventListener('click', e => {
-            e.stopPropagation();
-            const idx = parseInt(btn.dataset.foodIdx);
-            // Toggle: if slot i is currently on, clicking it turns off i and above.
-            // If slot i is off, clicking turns on up to i.
-            this._planFoodEnabled = (idx < foodEnabled) ? idx : idx + 1;
-            this._renderPlanPanel();
-          });
-        });
-      } else {
-        foodRowEl.innerHTML = '';
-      }
-    }
+    // Clear the old food row (food is now shown inline on over-budget actions)
+    const foodRowEl = this._el('plan-food-row');
+    if (foodRowEl) foodRowEl.innerHTML = '';
 
     if (statusEl && !this._planSubmitted) statusEl.textContent = '';
 
-    // Keep the collapse-tab count badge in sync
-    const tabCount = document.getElementById('plan-tab-count');
-    if (tabCount) tabCount.textContent = this._plan.length > 0 ? this._plan.length : '';
+    // Keep the collapse-tab count badge in sync — show count and color by budget state
+    const tabCount = this._el('plan-tab-count');
+    if (tabCount) {
+      const budgetCost = this._plan.filter(a =>
+        a.type !== PlanActionType.EQUIP_WEAPON && a.type !== PlanActionType.USE_ITEM
+      ).length;
+      tabCount.textContent = budgetCost;
+      const foodAvail = this.state?.inventory?.shared?.[ResourceType.FOOD] || 0;
+      if (budgetCost > this._planBudget + foodAvail) {
+        tabCount.className = 'plan-tab-count plan-tab-over';
+      } else if (budgetCost > this._planBudget) {
+        tabCount.className = 'plan-tab-count plan-tab-food';
+      } else {
+        tabCount.className = 'plan-tab-count plan-tab-ok';
+      }
+    }
 
     // Update collapse-button arrow direction
-    const panel = document.getElementById('plan-panel');
-    const toggleBtn = document.getElementById('plan-toggle-btn');
+    const panel = this._el('plan-panel');
+    const toggleBtn = this._el('plan-toggle-btn');
     if (toggleBtn && panel) {
       toggleBtn.textContent = panel.classList.contains('collapsed') ? '▶' : '◀';
     }
@@ -691,12 +695,21 @@ export class UIController {
 
   /** Toggle the plan panel between expanded and collapsed. */
   _togglePlanPanel() {
-    const panel = document.getElementById('plan-panel');
+    const panel = this._el('plan-panel');
     if (!panel) return;
     panel.classList.toggle('collapsed');
     const isCollapsed = panel.classList.contains('collapsed');
-    const toggleBtn = document.getElementById('plan-toggle-btn');
+    const toggleBtn = this._el('plan-toggle-btn');
     if (toggleBtn) toggleBtn.textContent = isCollapsed ? '▶' : '◀';
+    this._syncPlanInset();
+  }
+
+  /** Update renderer.insetRight based on whether the plan panel is visible and expanded. */
+  _syncPlanInset() {
+    if (!this.renderer) return;
+    const panel = this._el('plan-panel');
+    const visible = panel && panel.style.display !== 'none' && !panel.classList.contains('collapsed');
+    this.renderer.insetRight = visible ? 220 : 0;
   }
 
   _onClick(e) {
@@ -1075,7 +1088,7 @@ export class UIController {
 
   _showActionPopup(entity) {
     const state = this.state;
-    const popup = document.getElementById('action-popup');
+    const popup = this._el('action-popup');
 
     // Unit picker mode
     if (this._pendingUnitPick) {
@@ -1207,7 +1220,7 @@ export class UIController {
   }
 
   _renderUnitStatsBar() {
-    const bar = document.getElementById('unit-stats-bar');
+    const bar = this._el('unit-stats-bar');
     if (!bar) return;
 
     const entity = this._selectedEntity;
@@ -1258,7 +1271,7 @@ export class UIController {
 
   _renderTurnInfo() {
     const state = this.state;
-    const el    = document.getElementById('turn-info');
+    const el    = this._el('turn-info');
     if (!el) return;
 
     // 8-step cycle — shared between header and cycle-bar
@@ -1274,43 +1287,52 @@ export class UIController {
     ];
 
     const roundInCycle = (state.round - 1) % 8;
+    const cycle        = Math.ceil(state.round / 8);
+    const roundLabel   = `Day ${cycle} · Round ${roundInCycle + 1}`;
 
     // Render always-visible cycle bar (compact icon row)
-    const cycleBar = document.getElementById('cycle-bar');
+    const cycleBar = this._el('cycle-bar');
     if (cycleBar) {
-      const stepsHtml = CYCLE_STEPS.map((step, i) => {
+      cycleBar.innerHTML = CYCLE_STEPS.map((step, i) => {
         const active = i === roundInCycle;
         return `<div class="cycle-step phase-${step.phase} ${active ? 'cycle-active' : 'cycle-dim'}"
                      title="${step.desc}">${step.icon}${active ? `<span class="cycle-name">${step.label}</span>` : ''}</div>`;
       }).join('');
-      // Preserve #node-status-bar (mobile node/score display) — re-inject after steps
-      cycleBar.innerHTML = stepsHtml + `<div id="node-status-bar"></div>`;
     }
+
+    // Round label sits below the cycle bar
+    const roundLabelEl = this._el('round-label');
+    if (roundLabelEl) roundLabelEl.textContent = roundLabel;
 
     // During planning phase, show planning info
     if (this._planMode) {
       const faction = this._planFaction;
+      const glyph   = faction === 'hero' ? '⚔' : '✦';
       const budget  = this._planBudget;
       const used    = this._plan.filter(a => a.type !== PlanActionType.EQUIP_WEAPON && a.type !== PlanActionType.USE_ITEM).length;
-      const diamonds = '◆'.repeat(Math.max(0, budget - used)) + '◇'.repeat(Math.max(0, used));
-      const status  = this._planSubmitted ? '✓ Plan Submitted — Waiting…' : `📋 Planning Phase`;
-      el.innerHTML = `
-        <div class="turn-line">Round ${state.round}</div>
-        <div class="turn-line player-${faction}">${status}</div>
-        <div class="actions-remaining" title="Actions budget">${diamonds}</div>
-      `;
+      const capped  = Math.min(used, budget); // don't render more diamonds than budget
+      const diamonds = '◆'.repeat(Math.max(0, budget - capped)) + '◇'.repeat(capped);
+      if (this._planSubmitted) {
+        el.innerHTML = `
+          <span class="turn-faction player-${faction}">${glyph}</span>
+          <span class="turn-line">Waiting for opponent…</span>
+        `;
+      } else {
+        el.innerHTML = `
+          <span class="turn-faction player-${faction}">${glyph}</span>
+          <div class="actions-remaining" title="Actions budget">${diamonds}</div>
+        `;
+      }
       return;
     }
 
     // During resolution, show neutral resolution label
     if (state.resolving) {
-      el.innerHTML = `
-        <div class="turn-line">Round ${state.round}</div>
-        <div class="turn-line">⚙ Resolution Phase</div>
-      `;
+      el.innerHTML = `<span class="turn-line">Resolving Actions…</span>`;
       return;
     }
 
+    const glyph  = state.activePlayer === 'hero' ? '⚔' : '✦';
     const player = state.activePlayer === 'hero' ? 'Hero' : 'Witch';
     const isAI   = (state.activePlayer === 'witch' && state.witchIsAI) ||
                    (state.activePlayer === 'hero'  && state.heroIsAI);
@@ -1319,67 +1341,76 @@ export class UIController {
       ? '◆'.repeat(state.actionsLeft)
       : '◇';
 
-    // On wider screens the cycle strip also lives in turn-info; on mobile it's
-    // only shown in #cycle-bar so we omit it here to avoid duplication.
     el.innerHTML = `
-      <div class="cycle-strip cycle-strip-header">${CYCLE_STEPS.map((step, i) => {
-        const active = i === roundInCycle;
-        return `<div class="cycle-step phase-${step.phase} ${active ? 'cycle-active' : 'cycle-dim'}"
-                     title="${step.desc}">${step.icon}${active ? `<span class="cycle-name">${step.label}</span>` : ''}</div>`;
-      }).join('')}</div>
-      <div class="turn-line">Round ${state.round}</div>
-      <div class="turn-line player-${state.activePlayer}">
-        ${player}'s Turn ${isAI ? '<span class="ai-badge">AI</span>' : ''}
-      </div>
+      <span class="turn-faction player-${state.activePlayer}">${glyph}</span>
+      <span class="turn-line">${player}'s Turn ${isAI ? '<span class="ai-badge">AI</span>' : ''}</span>
       <div class="actions-remaining">${diamonds}</div>
     `;
   }
 
   _renderObjectives() {
-    const el = document.getElementById('node-status');
+    const el = this._el('score-bar-content');
     if (!el) return;
     const state = this.state;
 
-    let nodeDots = '';
-    let witchCount = 0, heroCount = 0;
-    for (const obj of state.witchObjectives) {
-      const witchHere = state.entities.find(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row);
-      const heroHere  = state.entities.find(e => e.alive && e.owner === 'hero'  && e.col === obj.col && e.row === obj.row);
-      let cls;
-      if (witchHere)      { cls = 'witch'; witchCount++; }
-      else if (heroHere)  { cls = 'hero';  heroCount++;  }
-      else                { cls = 'neutral'; }
-      nodeDots += `<span class="node-dot ${cls}" title="${obj.label}"></span>`;
-    }
-
-    const score     = state.nodeScore ?? { hero: 0, witch: 0 };
-    const scoreMax  = 4;
-    const heroPips  = Array.from({ length: scoreMax }, (_, i) =>
-      `<span class="score-pip hero${i < score.hero ? ' filled' : ''}"></span>`).join('');
-    const witchPips = Array.from({ length: scoreMax }, (_, i) =>
-      `<span class="score-pip witch${i < score.witch ? ' filled' : ''}"></span>`).join('');
-
-    const html =
-      `<span class="score-track hero-track" title="Hero score: ${score.hero}/4">${heroPips}</span>` +
-      `<span class="node-dots-group">${nodeDots}</span>` +
-      `<span class="score-track witch-track" title="Witch score: ${score.witch}/4">${witchPips}</span>`;
-
-    const title = witchCount === 3 ? '⚠ Witch holds all nodes!'
-                : heroCount  === 3 ? '★ Hero holds all nodes!'
-                : 'Power Nodes';
+    const { html, title } = buildObjectivesHtml(
+      state.witchObjectives, state.entities, state.nodeScore,
+    );
 
     el.innerHTML = html;
-    el.title = title;
+    const bar = this._el('score-bar');
+    if (bar) bar.title = title;
+  }
 
-    // Mirror to cycle-bar version shown on mobile
-    const elBar = document.getElementById('node-status-bar');
-    if (elBar) { elBar.innerHTML = html; elBar.title = title; }
+  /**
+   * Animate glow on score pips and node dots that changed since prevScore/prevNodes.
+   */
+  _animateScoreBar(prevScore, prevNodes) {
+    if (!prevScore && !prevNodes) return;
+    this._renderObjectives(); // ensure DOM is up to date
+
+    const barEl = this._el('score-bar-content');
+    if (!barEl) return;
+
+    // Animate score pip changes
+    if (prevScore) {
+      const state = this.state;
+      const heroPips  = barEl.querySelectorAll('.score-pip.hero');
+      const witchPips = barEl.querySelectorAll('.score-pip.witch');
+      for (let i = prevScore.hero; i < state.nodeScore.hero && i < heroPips.length; i++) {
+        heroPips[i].classList.add('score-pip-glow');
+      }
+      for (let i = prevScore.witch; i < state.nodeScore.witch && i < witchPips.length; i++) {
+        witchPips[i].classList.add('score-pip-glow');
+      }
+    }
+
+    // Animate node dot changes
+    if (prevNodes) {
+      const dots = barEl.querySelectorAll('.node-dot');
+      prevNodes.forEach((prev, i) => {
+        if (i >= dots.length) return;
+        const currentHolder = this.state.entities.find(
+          e => e.alive && e.col === prev.col && e.row === prev.row
+        );
+        const currentOwner = currentHolder?.owner ?? null;
+        if (currentOwner !== prev.owner) {
+          dots[i].classList.add('node-dot-glow');
+        }
+      });
+    }
+
+    // Remove glow classes after animation completes
+    setTimeout(() => {
+      barEl.querySelectorAll('.score-pip-glow').forEach(el => el.classList.remove('score-pip-glow'));
+      barEl.querySelectorAll('.node-dot-glow').forEach(el => el.classList.remove('node-dot-glow'));
+    }, 2000);
   }
 
   _renderActionPanel() {
     // Show/hide the floating cancel pill and update its hint text
-    const wrap = document.getElementById('cancel-wrap');
-    const hint = document.getElementById('target-hint');
+    const wrap = this._el('cancel-wrap');
+    const hint = this._el('target-hint');
     if (!wrap) return;
 
     const targeting = this._awaitingTarget && !this._awaitingTarget.isDefault;
@@ -1395,7 +1426,7 @@ export class UIController {
   }
 
   _renderEndTurnBtn() {
-    const btn = document.getElementById('end-turn-btn');
+    const btn = this._el('end-turn-btn');
     if (!btn) return;
     const state = this.state;
 
@@ -1648,7 +1679,7 @@ export class UIController {
   static SPEED_LABELS = { cinematic: 'Cinematic', fast: 'Fast', instant: 'Instant' };
 
   _toggleSpeedPopup() {
-    const popup = document.getElementById('speed-popup');
+    const popup = this._el('speed-popup');
     if (!popup) return;
     const isOpen = popup.style.display !== 'none';
     if (isOpen) { this._closeSpeedPopup(); return; }
@@ -1660,7 +1691,7 @@ export class UIController {
   }
 
   _closeSpeedPopup() {
-    const popup = document.getElementById('speed-popup');
+    const popup = this._el('speed-popup');
     if (popup) popup.style.display = 'none';
   }
 
@@ -1668,7 +1699,7 @@ export class UIController {
     if (!UIController.SPEED_LABELS[mode]) return;
     this.speedMode = mode;
     this._closeSpeedPopup();
-    const btn = document.getElementById('speed-toggle');
+    const btn = this._el('speed-toggle');
     if (btn) {
       btn.title = `Battle speed: ${UIController.SPEED_LABELS[mode]}`;
       btn.className = `zoom-btn speed-${mode}`;
@@ -1682,7 +1713,7 @@ export class UIController {
       toast = document.createElement('div');
       toast.id = 'speed-toast';
       toast.className = 'speed-toast';
-      const wrapper = document.getElementById('canvas-wrapper');
+      const wrapper = this._el('canvas-wrapper');
       if (wrapper) wrapper.appendChild(toast);
     }
     toast.textContent = text;
@@ -1696,7 +1727,7 @@ export class UIController {
   // ── Battle toast (minor skirmishes) ──────────────────────────────────────
 
   _showBattleToast(actorSnap, targetSnap, result) {
-    const container = document.getElementById('battle-toast-container');
+    const container = this._el('battle-toast-container');
     if (!container) return;
 
     const outcome = result.killed
@@ -1756,29 +1787,34 @@ export class UIController {
     const info = PHASE_INFO[phase];
     if (!info) return;
 
-    const el = document.getElementById('phase-modal');
+    const el = this._el('phase-modal');
     if (!el) return;
 
     // Compute action breakdown for display
     const actions  = budget ?? (faction === 'hero' ? this.state.heroActionsLeft : this.state.witchActionsLeft) ?? 0;
     const entities = this.state.entities;
-    let breakdown  = '';
+    const inventory = this.state.inventory;
+    const stash = faction === 'hero' ? inventory?.shared : inventory?.witch;
+    const foodCount = stash?.food ?? 0;
+
+    // Build line-item rows: { label, value }
+    const rows = [];
     if (faction === 'hero') {
+      const base = 3;
       const timeBonus     = (phase === 'day' || phase === 'dawn') ? 1 : 0;
       const survivorCount = entities.filter(e => e.alive && e.owner === 'hero' && e.type !== 'hero').length;
       const survivorBonus = Math.min(survivorCount, 5);
-      const parts = ['3 base'];
-      if (timeBonus)     parts.push(`+1 ${phase}`);
-      if (survivorBonus) parts.push(`+${survivorBonus} survivor${survivorBonus !== 1 ? 's' : ''}`);
-      breakdown = parts.join(' · ');
+      rows.push({ label: 'Base', value: base });
+      if (timeBonus)     rows.push({ label: `${info.icon} ${info.label} bonus`, value: timeBonus });
+      if (survivorBonus) rows.push({ label: `☺ Survivor${survivorBonus !== 1 ? 's' : ''} (${survivorCount})`, value: survivorBonus });
     } else {
+      const base = 4;
       const timeBonus = phase === 'night' ? 1 : 0;
       const unitCount = entities.filter(e => e.alive && e.owner === 'witch' && e.type !== 'witch').length;
       const unitBonus = Math.min(Math.floor(unitCount / 2), 4);
-      const parts = ['4 base'];
-      if (timeBonus) parts.push('+1 night');
-      if (unitBonus) parts.push(`+${unitBonus} units`);
-      breakdown = parts.join(' · ');
+      rows.push({ label: 'Base', value: base });
+      if (timeBonus) rows.push({ label: `${info.icon} ${info.label} bonus`, value: timeBonus });
+      if (unitBonus) rows.push({ label: `☠ Minions (${unitCount})`, value: unitBonus });
     }
 
     // Set content
@@ -1791,78 +1827,35 @@ export class UIController {
     if (effectsEl) effectsEl.innerHTML  = info.lines.map(l => `<div>${l}</div>`).join('');
     if (budgetEl) {
       const pips = Array.from({ length: actions }, () =>
-        `<span class="action-pip">●</span>`
+        `<span class="action-pip">◆</span>`
       ).join('');
+
+      let breakdownHtml = '<div class="action-breakdown-table">';
+      for (const r of rows) {
+        breakdownHtml += `<div class="abkd-row"><span class="abkd-label">${r.label}</span><span class="abkd-val">+${r.value}</span></div>`;
+      }
+      breakdownHtml += `<hr class="abkd-divider">`;
+      breakdownHtml += `<div class="abkd-row abkd-total"><span class="abkd-label">Total</span><span class="abkd-val">${actions}</span></div>`;
+      if (foodCount > 0) {
+        breakdownHtml += `<div class="abkd-row abkd-food"><span class="abkd-label">🍞 Food ×${foodCount}</span><span class="abkd-val">(extra actions)</span></div>`;
+      }
+      breakdownHtml += '</div>';
+
       budgetEl.innerHTML =
-        `<span class="action-pip-label">${actions} action${actions !== 1 ? 's' : ''}</span>${pips}` +
-        `<div class="action-breakdown">${breakdown}</div>`;
+        `<div class="action-pip-row">${pips}</div>` +
+        breakdownHtml;
     }
 
     // Set phase accent class
     el.className = `visible phase-${phase}`;
 
     // Dismiss only on button click — no auto-dismiss, no backdrop click
-    const continueBtn = document.getElementById('phase-modal-continue');
+    const continueBtn = this._el('phase-modal-continue');
     const dismiss = () => {
       el.classList.remove('visible');
       continueBtn?.removeEventListener('click', dismiss);
     };
     continueBtn?.addEventListener('click', dismiss);
-  }
-
-  // ── Scoring toast (dawn / dusk checkpoints) ──────────────────────────────
-
-  showScoringToast(prevScore) {
-    if (this.speedMode === 'instant') return;
-    const state      = this.state;
-    const phase      = state.phase; // 'dawn' or 'dusk' — already advanced by endRound()
-    const phaseIcon  = phase === 'dawn' ? '🌅' : '🌇';
-    const phaseLabel = phase === 'dawn' ? 'Dawn Reckoning' : 'Dusk Reckoning';
-
-    // Count nodes held by each faction right now (same snapshot scoring used).
-    const witchCount = state.witchObjectives.filter(obj =>
-      state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
-    ).length;
-    const heroCount = state.witchObjectives.filter(obj =>
-      state.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row)
-    ).length;
-
-    const heroDelta  = state.nodeScore.hero  - prevScore.hero;
-    const witchDelta = state.nodeScore.witch - prevScore.witch;
-
-    let resultLine;
-    if (witchDelta > 0) {
-      resultLine = `Witch holds ${witchCount}–${heroCount} · Witch scores! (${state.nodeScore.witch}/4)`;
-    } else if (heroDelta > 0) {
-      resultLine = `Hero holds ${heroCount}–${witchCount} · Hero scores! (${state.nodeScore.hero}/4)`;
-    } else if (witchCount === 3 || heroCount === 3) {
-      resultLine = `All three nodes held — instant win!`;
-    } else {
-      resultLine = `Nodes tied ${heroCount}–${witchCount} · No score awarded`;
-    }
-
-    const pip = (filled, cls) =>
-      `<span class="score-pip ${cls}${filled ? ' filled' : ''}"></span>`;
-    const heroPips  = Array.from({ length: 4 }, (_, i) => pip(i < state.nodeScore.hero,  'hero')).join('');
-    const witchPips = Array.from({ length: 4 }, (_, i) => pip(i < state.nodeScore.witch, 'witch')).join('');
-
-    document.getElementById('score-toast')?.remove();
-
-    const toast = document.createElement('div');
-    toast.id        = 'score-toast';
-    toast.className = `phase-toast score-toast score-toast-${phase}`;
-    toast.innerHTML = `
-      <span class="phase-toast-icon">${phaseIcon}</span>
-      <div class="phase-toast-body">
-        <div class="phase-toast-title">${phaseLabel}</div>
-        <div class="phase-toast-lines">${resultLine}</div>
-        <div class="score-toast-track">⚔ ${heroPips}&nbsp;&nbsp;${witchPips} ✦</div>
-      </div>
-    `;
-    document.getElementById('game-screen')?.appendChild(toast);
-
-    setTimeout(() => toast.classList.add('phase-toast-hide'), 3200);
-    setTimeout(() => toast.remove(), 3700);
   }
 
   // ── Dialogs ───────────────────────────────────────────────────────────────
@@ -1883,8 +1876,8 @@ export class UIController {
 
   /** Show a unit card popup for a newly-encountered survivor or zombie. */
   _showEncounterDialog(encounterUnit, onDismiss) {
-    const dialog = document.getElementById('encounter-dialog');
-    const card   = document.getElementById('encounter-card');
+    const dialog = this._el('encounter-dialog');
+    const card   = this._el('encounter-card');
 
     const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
     const glyph  = GLYPHS[encounterUnit.type] ?? '?';
@@ -1956,7 +1949,7 @@ export class UIController {
   }
 
   _showResultDialog(messages, onDismiss, encounterSurvivor = null) {
-    const dialog = document.getElementById('result-dialog');
+    const dialog = this._el('result-dialog');
     // Collapse consecutive duplicate lines into "message (×N)"
     const collapsed = [];
     for (const msg of messages) {
@@ -1964,15 +1957,15 @@ export class UIController {
       if (last?.msg === msg) last.count++;
       else collapsed.push({ msg, count: 1 });
     }
-    document.getElementById('result-messages').textContent =
+    this._el('result-messages').textContent =
       collapsed.map(({ msg, count }) => count > 1 ? `${msg} (×${count})` : msg).join('\n');
-    document.getElementById('result-dismiss-hint').style.display = this.autoplay ? 'none' : '';
-    const btns = document.getElementById('result-buttons');
+    this._el('result-dismiss-hint').style.display = this.autoplay ? 'none' : '';
+    const btns = this._el('result-buttons');
     btns.style.display = 'none';
     btns.innerHTML = '';
 
     // Survivor portrait
-    const portraitEl = document.getElementById('result-portrait');
+    const portraitEl = this._el('result-portrait');
     if (portraitEl) {
       const assetId = encounterSurvivor?.title ? _SURVIVOR_TITLE_ASSET[encounterSurvivor.title] : null;
       const src     = assetId ? this.renderer.getPortraitDataURL(assetId) : null;
@@ -2018,11 +2011,11 @@ export class UIController {
 
   _showNoActionsDialog() {
     const state  = this.state;
-    const dialog = document.getElementById('result-dialog');
-    const hint   = document.getElementById('result-dismiss-hint');
-    const btns   = document.getElementById('result-buttons');
+    const dialog = this._el('result-dialog');
+    const hint   = this._el('result-dismiss-hint');
+    const btns   = this._el('result-buttons');
 
-    document.getElementById('result-messages').textContent = 'No more actions!';
+    this._el('result-messages').textContent = 'No more actions!';
     hint.style.display = 'none';
     btns.style.display = 'flex';
     btns.innerHTML = '';
@@ -2067,11 +2060,11 @@ export class UIController {
   }
 
   _showDefenderPickerDialog(defenders, onPick) {
-    const dialog = document.getElementById('result-dialog');
-    const hint   = document.getElementById('result-dismiss-hint');
-    const btns   = document.getElementById('result-buttons');
+    const dialog = this._el('result-dialog');
+    const hint   = this._el('result-dismiss-hint');
+    const btns   = this._el('result-buttons');
 
-    document.getElementById('result-messages').textContent = 'Multiple enemies here — choose your target:';
+    this._el('result-messages').textContent = 'Multiple enemies here — choose your target:';
     hint.style.display = 'none';
     btns.style.display = 'flex';
     btns.innerHTML = '';
@@ -2099,11 +2092,11 @@ export class UIController {
     // Cancel any in-flight dice animation from a previous battle dialog
     if (this._battleInterval) { clearInterval(this._battleInterval); this._battleInterval = null; }
 
-    const dialog = document.getElementById('battle-dialog');
-    const footer = document.getElementById('battle-footer');
+    const dialog = this._el('battle-dialog');
+    const footer = this._el('battle-footer');
 
     // Summary line: "[Actor] attacks [Target], aided by …"
-    const summaryEl = document.getElementById('battle-summary');
+    const summaryEl = this._el('battle-summary');
     if (summaryEl) {
       let summary = `${actorSnap.name} attacks ${targetSnap.name}`;
       const bd = result?.breakdown;
@@ -2125,27 +2118,29 @@ export class UIController {
     // Populate combatant panels
     const atkPortrait = this.renderer.getPortraitDataURL(_entityPortraitId(actorSnap));
     const defPortrait = this.renderer.getPortraitDataURL(_entityPortraitId(targetSnap));
-    document.getElementById('battle-attacker').innerHTML = _combatantHTML(actorSnap, 'atk', atkPortrait);
-    document.getElementById('battle-defender').innerHTML = _combatantHTML(targetSnap, 'def', defPortrait);
+    this._el('battle-attacker').innerHTML = _combatantHTML(actorSnap, 'atk', atkPortrait);
+    this._el('battle-defender').innerHTML = _combatantHTML(targetSnap, 'def', defPortrait);
 
-    const atkDie  = document.getElementById('battle-atk-die');
-    const defDie  = document.getElementById('battle-def-die');
-    const outcome = document.getElementById('battle-outcome');
+    const atkDie  = this._el('battle-atk-die');
+    const defDie  = this._el('battle-def-die');
+    const outcome = this._el('battle-outcome');
     outcome.textContent = '';
     outcome.className   = 'battle-outcome';
     footer.innerHTML    = this.autoplay ? '' : '<div class="result-dismiss">— click to continue —</div>';
 
     // Reset breakdown columns (hidden until dice settle)
-    const atkBkd = document.getElementById('battle-atk-breakdown');
-    const defBkd = document.getElementById('battle-def-breakdown');
+    const atkBkd = this._el('battle-atk-breakdown');
+    const defBkd = this._el('battle-def-breakdown');
     if (atkBkd) { atkBkd.innerHTML = ''; atkBkd.classList.remove('visible'); }
     if (defBkd) { defBkd.innerHTML = ''; defBkd.classList.remove('visible'); }
 
     dialog.style.display = 'flex';
+    const card = dialog.querySelector('.battle-card');
 
     const dismiss = () => {
       dialog.style.display = 'none';
       dialog.removeEventListener('click', dismiss);
+      card?.removeEventListener('click', dismiss);
       document.removeEventListener('keydown', keyDismiss);
       if (onDismiss) onDismiss();
     };
@@ -2163,15 +2158,15 @@ export class UIController {
       // Populate and fade-in breakdown columns
       const bd = result.breakdown;
       if (bd) {
-        document.getElementById('battle-atk-breakdown').innerHTML =
+        this._el('battle-atk-breakdown').innerHTML =
           _buildBreakdownHTML(actorSnap, bd, 'atk', result.attackRoll);
-        document.getElementById('battle-def-breakdown').innerHTML =
+        this._el('battle-def-breakdown').innerHTML =
           _buildBreakdownHTML(targetSnap, bd, 'def', result.defenseRoll);
         // Double-rAF ensures a paint happens before adding visible,
         // so the opacity 0→1 transition fires reliably.
         requestAnimationFrame(() => requestAnimationFrame(() => {
-          document.getElementById('battle-atk-breakdown').classList.add('visible');
-          document.getElementById('battle-def-breakdown').classList.add('visible');
+          this._el('battle-atk-breakdown').classList.add('visible');
+          this._el('battle-def-breakdown').classList.add('visible');
         }));
       }
 
@@ -2273,6 +2268,7 @@ export class UIController {
       // Allow dismiss only after dice settle
       setTimeout(() => {
         dialog.addEventListener('click', dismiss);
+        card?.addEventListener('click', dismiss);
         document.addEventListener('keydown', keyDismiss);
       }, maxTicks * 55 + 200);
     }
@@ -2309,7 +2305,7 @@ export class UIController {
   _showTileDetail(hex) {
     const state   = this.state;
     const tile    = state.tiles.get(hexKey(hex.col, hex.row));
-    const overlay = document.getElementById('tile-zoom-overlay');
+    const overlay = this._el('tile-zoom-overlay');
     if (!overlay || !tile) return;
 
     // ── Tile color map matching renderer ──
@@ -2332,9 +2328,9 @@ export class UIController {
     };
 
     // ── SVG hex elements ──
-    const polyEl = document.getElementById('tile-zoom-poly');
-    const fortEl = document.getElementById('tile-zoom-fort');
-    const iconEl = document.getElementById('tile-zoom-icon');
+    const polyEl = this._el('tile-zoom-poly');
+    const fortEl = this._el('tile-zoom-fort');
+    const iconEl = this._el('tile-zoom-icon');
 
     const fillColor = TILE_COLOR_MAP[tile.type] ?? '#3a5430';
     if (polyEl) polyEl.setAttribute('fill', fillColor);
@@ -2356,8 +2352,8 @@ export class UIController {
     }
 
     // ── Label box ──
-    const nameEl  = document.getElementById('tile-zoom-tile-name');
-    const linesEl = document.getElementById('tile-zoom-info-lines');
+    const nameEl  = this._el('tile-zoom-tile-name');
+    const linesEl = this._el('tile-zoom-info-lines');
 
     if (nameEl) {
       nameEl.textContent = tile.building ? (BUILDING_LABEL[tile.building] ?? tile.type)
@@ -2389,7 +2385,7 @@ export class UIController {
     const planOwner = this._planMode ? this._planFaction : state.activePlayer;
     const myUnits  = visible.filter(u => u.owner === planOwner);
     const foeUnits = visible.filter(u => u.owner !== planOwner);
-    const unitsEl  = document.getElementById('tile-zoom-units');
+    const unitsEl  = this._el('tile-zoom-units');
 
     if (unitsEl) {
       let html = '';
@@ -2418,7 +2414,7 @@ export class UIController {
   }
 
   _hideTileDetail() {
-    document.getElementById('tile-zoom-overlay')?.classList.remove('visible');
+    this._el('tile-zoom-overlay')?.classList.remove('visible');
   }
 
   /** Cycle chronicle through: none → mini → full → none */
@@ -2430,7 +2426,7 @@ export class UIController {
 
   _setChronicleMode(mode) {
     this._chronicleMode = mode;
-    const sidebar = document.getElementById('chronicle-sidebar');
+    const sidebar = this._el('chronicle-sidebar');
     if (sidebar) sidebar.style.display = mode === 'full' ? 'flex' : 'none';
     this._renderMiniChronicle();
     if (mode === 'full') this._renderSidebarLog();
@@ -2442,7 +2438,7 @@ export class UIController {
   }
 
   _renderSidebarLog() {
-    const el = document.getElementById('chronicle-sidebar-log');
+    const el = this._el('chronicle-sidebar-log');
     if (!el) return;
     const visible = this._visibleLog();
     el.innerHTML = visible.map(m => `<div class="log-entry">${this._logText(m)}</div>`).join('');
@@ -2450,7 +2446,7 @@ export class UIController {
   }
 
   _renderInventory() {
-    const el = document.getElementById('plan-inventory');
+    const el = this._el('plan-inventory');
     if (!el) return;
 
     const state   = this.state;
@@ -2491,7 +2487,7 @@ export class UIController {
   }
 
   _renderLog() {
-    const el = document.getElementById('event-log');
+    const el = this._el('event-log');
     if (!el) return;
     const visible = this._visibleLog();
     el.innerHTML = visible.map(m =>
@@ -2504,47 +2500,68 @@ export class UIController {
   }
 
   _renderMiniChronicle() {
-    const el = document.getElementById('chronicle-mini');
+    const el = this._el('chronicle-mini');
     if (!el) return;
-    const mode       = this._chronicleMode ?? 'mini';
-    const activeClass = mode !== 'none' ? ' chronicle-mini-btn-active' : '';
-    const btnHtml    = `<button id="chronicle-btn" class="chronicle-mini-btn${activeClass}" title="Chronicle">📜</button>`;
+    const mode = this._chronicleMode ?? 'mini';
 
     if (mode === 'mini') {
       const visible = this._visibleLog();
       const last5   = visible.slice(-5);
-      const entries = last5.map(m => `<div class="mini-log-entry">${this._logText(m)}</div>`).join('');
-      el.innerHTML  = btnHtml + entries;
+      el.innerHTML  = last5.map(m => `<div class="mini-log-entry">${this._logText(m)}</div>`).join('');
     } else {
-      // 'none' or 'full': just the button (entries are in sidebar for full, hidden for none)
-      el.innerHTML = btnHtml;
+      el.innerHTML = '';
     }
-    document.getElementById('chronicle-btn')?.addEventListener('click', () => this._cycleChronicle());
+
+    // Update active state on the chronicle toggle in map controls
+    const toggleBtn = this._el('chronicle-toggle');
+    if (toggleBtn) {
+      toggleBtn.classList.toggle('chronicle-btn-active', mode !== 'none');
+    }
   }
 
   /**
    * Show the post-resolution round summary modal.
    * Resolves with 'next' or 'replay'.
+   * @param {object} [opts] - Optional scoring context (fog, node control, reckoning).
    */
-  _showResolutionSummary(steps, roundNum) {
+  _showResolutionSummary(steps, roundNum, opts = {}) {
     return new Promise(resolve => {
-      const el = document.getElementById('round-summary');
+      const el = this._el('round-summary');
       if (!el) { resolve('next'); return; }
 
+      const { prevScore, prevNodes, humanFaction, fogOfWar, gameOver, winner, winReason } = opts;
+
       // Collect kills, survivors found, and summons from steps
+      // with fog-of-war filtering: skip opponent-only events the player can't see
       const kills     = [];
       const survivors = [];
       const summons   = [];
       for (const step of steps ?? []) {
-        const allEvents = [
-          ...(step.heroEvents  ?? []),
-          ...(step.witchEvents ?? []),
-          ...(step.playerEvents ?? []).flatMap(pe => pe.events ?? []),
+        // Tag each event with its faction for fog filtering
+        const taggedEvents = [
+          ...(step.heroEvents  ?? []).map(ev => ({ ...ev, _faction: 'hero' })),
+          ...(step.witchEvents ?? []).map(ev => ({ ...ev, _faction: 'witch' })),
+          ...(step.playerEvents ?? []).flatMap(pe =>
+            (pe.events ?? []).map(ev => ({ ...ev, _faction: pe.faction }))
+          ),
         ];
-        for (const ev of allEvents) {
+        for (const ev of taggedEvents) {
+          // Fog filter: skip opponent events (but always show kills of our units)
+          if (fogOfWar && humanFaction && ev._faction !== humanFaction) {
+            // Exception: show kills where our unit was the target
+            const isOurUnitKilled = ev.result?.killed &&
+              (ev.battleSnaps?.targetSnap?.owner === humanFaction);
+            if (!isOurUnitKilled) continue;
+          }
+
           if (ev.result?.killed) {
             const snap = ev.battleSnaps?.targetSnap ?? ev.result.killed;
-            const name = snap?.title ?? snap?.name ?? snap?.type ?? 'Unit';
+            let name;
+            if (snap?.name && snap?.title) {
+              name = `${snap.name} the ${snap.title}`;
+            } else {
+              name = snap?.name ?? snap?.title ?? snap?.type ?? 'Unit';
+            }
             kills.push(name);
           }
           if (ev.result?.encounterSurvivor) {
@@ -2557,9 +2574,34 @@ export class UIController {
         }
       }
 
+      // Detect node control changes
+      const nodeChanges = [];
+      if (prevNodes) {
+        const state = this.state;
+        for (const prev of prevNodes) {
+          const currentHolder = state.entities.find(
+            e => e.alive && e.col === prev.col && e.row === prev.row
+          );
+          const currentOwner = currentHolder?.owner ?? null;
+          if (currentOwner !== prev.owner) {
+            nodeChanges.push({ label: prev.label, from: prev.owner, to: currentOwner });
+          }
+        }
+      }
+
       const titleEl  = el.querySelector('.round-summary-title');
-      const eventsEl = document.getElementById('round-summary-events');
-      if (titleEl)  titleEl.textContent = `Round ${roundNum ?? ''} complete`;
+      const eventsEl = this._el('round-summary-events');
+      if (titleEl) {
+        if (gameOver) {
+          if (!humanFaction) {
+            titleEl.textContent = winner === 'hero' ? 'Hero Wins!' : 'Witch Wins!';
+          } else {
+            titleEl.textContent = winner === humanFaction ? 'Victory!' : 'Defeat';
+          }
+        } else {
+          titleEl.textContent = `Round ${roundNum ?? ''} complete`;
+        }
+      }
       if (eventsEl) {
         let html = '';
         for (const n of kills) {
@@ -2576,11 +2618,67 @@ export class UIController {
         for (const s of summons) {
           html += `<div class="summary-summon">✦ ${s}</div>`;
         }
+
+        // Node control changes
+        for (const nc of nodeChanges) {
+          if (nc.to === 'hero') {
+            html += `<div class="summary-node hero-text">⚔ Hero now controls ${nc.label}</div>`;
+          } else if (nc.to === 'witch') {
+            html += `<div class="summary-node witch-text">✦ Witch has seized ${nc.label}</div>`;
+          } else {
+            html += `<div class="summary-node">◇ ${nc.label} is no longer controlled</div>`;
+          }
+        }
+
+        // Reckoning section at dawn/dusk
+        const state = this.state;
+        if (prevScore && (state.phase === 'dawn' || state.phase === 'dusk')) {
+          const heroDelta  = state.nodeScore.hero  - prevScore.hero;
+          const witchDelta = state.nodeScore.witch - prevScore.witch;
+          const witchCount = state.witchObjectives.filter(obj =>
+            state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
+          ).length;
+          const heroCount = state.witchObjectives.filter(obj =>
+            state.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row)
+          ).length;
+
+          const phaseLabel = state.phase === 'dawn' ? '🌅 Dawn Reckoning' : '🌇 Dusk Reckoning';
+
+          let reckoningLine;
+          if (witchCount === 3 || heroCount === 3) {
+            const who = witchCount === 3 ? 'Witch' : 'Hero';
+            reckoningLine = `${who} holds all 3 Power Nodes!`;
+          } else if (witchDelta > 0) {
+            reckoningLine = `Witch holds ${witchCount} Power Node${witchCount !== 1 ? 's' : ''} to Hero's ${heroCount}. Witch scores 1 victory point.`;
+          } else if (heroDelta > 0) {
+            reckoningLine = `Hero holds ${heroCount} Power Node${heroCount !== 1 ? 's' : ''} to Witch's ${witchCount}. Hero scores 1 victory point.`;
+          } else {
+            reckoningLine = `Nodes tied ${heroCount}–${witchCount}. No points scored.`;
+          }
+
+          const pip = (filled, cls) =>
+            `<span class="score-pip ${cls}${filled ? ' filled' : ''}"></span>`;
+          const heroPips  = Array.from({ length: 4 }, (_, i) => pip(i < state.nodeScore.hero,  'hero')).join('');
+          const witchPips = Array.from({ length: 4 }, (_, i) => pip(i < state.nodeScore.witch, 'witch')).join('');
+
+          html += `<div class="summary-reckoning">
+            <div class="summary-reckoning-title">${phaseLabel}</div>
+            <div class="summary-reckoning-result">${reckoningLine}</div>
+            <div class="summary-score-track">⚔ ${heroPips}&nbsp;&nbsp;${witchPips} ✦</div>
+          </div>`;
+        }
+
+        // Game-over: insert win reason at the end
+        if (gameOver && winReason) {
+          const cls = winner === humanFaction ? 'hero-text' : 'witch-text';
+          html += `<div class="summary-game-over ${cls}">${winReason}</div>`;
+        }
+
         eventsEl.innerHTML = html || `<div class="summary-neutral">No notable events this round.</div>`;
       }
 
       // Render replay-speed mini-picker
-      const speedRowEl = document.getElementById('round-summary-speed-row');
+      const speedRowEl = this._el('round-summary-speed-row');
       if (speedRowEl) {
         const modes = Object.entries(UIController.SPEED_LABELS);
         speedRowEl.innerHTML = modes.map(([mode, label]) =>
@@ -2597,21 +2695,45 @@ export class UIController {
         });
       }
 
-      el.classList.add('visible');
+      const nextBtn   = this._el('round-summary-next');
+      const replayBtn = this._el('round-summary-replay');
+      const actionsEl = el.querySelector('.round-summary-actions');
 
-      const nextBtn   = document.getElementById('round-summary-next');
-      const replayBtn = document.getElementById('round-summary-replay');
+      // Game-over: replace normal actions with play-again / view-map buttons
+      let gameOverBtns = null;
+      if (gameOver && actionsEl) {
+        // Hide normal buttons
+        if (nextBtn)   nextBtn.style.display   = 'none';
+        // Keep replay visible
+        gameOverBtns = document.createElement('div');
+        gameOverBtns.className = 'round-summary-gameover-btns';
+        gameOverBtns.innerHTML =
+          `<button class="plan-btn primary" data-action="restart">Play Again</button>` +
+          `<button class="plan-btn secondary" data-action="viewmap">View Map</button>`;
+        actionsEl.appendChild(gameOverBtns);
+      } else if (nextBtn) {
+        nextBtn.style.display = '';
+        nextBtn.textContent   = 'Next Turn →';
+      }
+
+      el.classList.add('visible');
 
       const cleanup = () => {
         el.classList.remove('visible');
         nextBtn?.removeEventListener('click', onNext);
         replayBtn?.removeEventListener('click', onReplay);
+        if (gameOverBtns) gameOverBtns.remove();
+        if (nextBtn) nextBtn.style.display = '';
       };
       const onNext   = () => { cleanup(); resolve('next'); };
       const onReplay = () => { cleanup(); resolve('replay'); };
 
       nextBtn?.addEventListener('click', onNext);
       replayBtn?.addEventListener('click', onReplay);
+      if (gameOverBtns) {
+        gameOverBtns.querySelector('[data-action="restart"]')?.addEventListener('click', () => { cleanup(); resolve('restart'); });
+        gameOverBtns.querySelector('[data-action="viewmap"]')?.addEventListener('click', () => { cleanup(); resolve('viewmap'); });
+      }
     });
   }
 

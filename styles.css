@@ -497,18 +497,34 @@ canvas { touch-action: pan-x pan-y; }
   min-width: 0;
 }
 
-/* ── Node status dots ──────────────────────────────────────────────────── */
+/* ── Score bar — bottom strip showing Power Nodes + score track ──────── */
 
-#node-status {
+#score-bar {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.3rem 0.75rem;
+  background: rgba(13,17,23,0.95);
+  border-top: 1px solid rgba(255,255,255,0.07);
   flex-shrink: 0;
 }
 
-#node-status-bar {
-  display: none;
+#score-bar-content {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
 }
+
+.score-bar-faction {
+  font-size: 0.72rem;
+  font-weight: bold;
+  letter-spacing: 0.05em;
+  opacity: 0.7;
+  white-space: nowrap;
+}
+.score-bar-faction.hero-faction  { color: var(--hero); }
+.score-bar-faction.witch-faction { color: var(--witch); }
 
 .node-dot {
   width: 13px;
@@ -581,7 +597,7 @@ canvas { touch-action: pan-x pan-y; }
 .game-menu-popup {
   position: absolute;
   top: 42px;
-  left: 8px;
+  right: 8px;
   z-index: 90;
   background: var(--bg-panel);
   border: 1px solid var(--border);
@@ -607,6 +623,17 @@ canvas { touch-action: pan-x pan-y; }
   background: rgba(255,255,255,0.07);
   color: var(--text-bright);
 }
+.game-menu-version {
+  font-size: 0.6rem;
+  color: rgba(255,255,255,0.2);
+  letter-spacing: 0.05em;
+  text-align: center;
+  padding: 0.25rem 0.6rem 0.15rem;
+  user-select: none;
+  pointer-events: none;
+  border-top: 1px solid rgba(255,255,255,0.05);
+  margin-top: 0.15rem;
+}
 
 /* ── Day cycle strip ──────────────────────────────────────────────────── */
 .cycle-strip {
@@ -616,10 +643,29 @@ canvas { touch-action: pan-x pan-y; }
   margin-bottom: 0.25rem;
 }
 
-/* Dedicated cycle bar: hidden on desktop (cycle-strip-header takes its place),
-   visible below the header on mobile so it's always accessible. */
+/* Always-visible 8-step day/night strip below the header */
 #cycle-bar {
-  display: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0.25rem 0.5rem;
+  background: rgba(13,17,23,0.92);
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  flex-shrink: 0;
+}
+
+/* Day N · Round M label row below the cycle bar */
+#round-label {
+  text-align: center;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
+  opacity: 0.6;
+  padding: 0.1rem 0.5rem 0.2rem;
+  background: rgba(13,17,23,0.88);
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  flex-shrink: 0;
 }
 
 .cycle-step {
@@ -653,7 +699,24 @@ canvas { touch-action: pan-x pan-y; }
   white-space: nowrap;
 }
 
+/* Day N · Round M label — kept for any remaining inline uses */
+.cycle-round-label {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  letter-spacing: 0.04em;
+  opacity: 0.75;
+  margin: 0 0.4rem;
+  align-self: center;
+}
+
 .turn-line { font-size: 0.85rem; color: var(--text-dim); }
+
+.turn-faction {
+  font-size: 1rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
 
 .player-hero  { color: var(--hero) !important; }
 .player-witch { color: var(--witch) !important; }
@@ -835,12 +898,16 @@ canvas { touch-action: pan-x pan-y; }
   background: rgba(200, 168, 75, 0.18);
 }
 
-/* Touch devices: make zoom buttons slightly larger for finger tapping */
+/* Touch devices: make zoom buttons slightly larger for finger tapping,
+   but hide +/- since pinch-to-zoom is available */
 @media (hover: none) and (pointer: coarse) {
   .zoom-btn {
     width: 42px;
     height: 42px;
     font-size: 20px;
+  }
+  #zoom-in, #zoom-out {
+    display: none;
   }
 }
 
@@ -945,6 +1012,11 @@ canvas { touch-action: pan-x pan-y; }
 .chronicle-mini-btn-active {
   border-color: var(--gold) !important;
   color: var(--gold) !important;
+}
+/* Active state for chronicle toggle in map controls */
+.chronicle-btn-active {
+  border-color: rgba(200, 168, 75, 0.75) !important;
+  background: rgba(200, 168, 75, 0.18) !important;
 }
 
 /* ── Chronicle overlay ─────────────────────────────────────────────────── */
@@ -1454,6 +1526,22 @@ canvas { touch-action: pan-x pan-y; }
   cursor: pointer;
 }
 
+/* Landscape: dock dialog on the right, no dimming */
+@media (min-width: 900px) and (min-aspect-ratio: 5/4) {
+  #battle-dialog {
+    background: none;
+    justify-content: flex-end;
+    align-items: center;
+    pointer-events: none;
+  }
+  #battle-dialog .battle-card {
+    pointer-events: auto;
+    margin-right: 1rem;
+    box-shadow: -4px 0 30px rgba(0,0,0,0.7);
+    border-left: 2px solid var(--border);
+  }
+}
+
 .battle-critical-badge {
   font-size: 0.68rem;
   font-weight: bold;
@@ -1757,6 +1845,11 @@ canvas { touch-action: pan-x pan-y; }
   flex-wrap: wrap;
 }
 
+.round-summary-gameover-btns {
+  display: flex;
+  gap: 0.5rem;
+}
+
 .summary-speed-btn {
   background: var(--bg-input, #1e1e2a);
   border: 1px solid var(--border);
@@ -1771,63 +1864,35 @@ canvas { touch-action: pan-x pan-y; }
 .summary-speed-btn:hover { color: var(--text); border-color: var(--text-dim); }
 .summary-speed-btn.active { color: var(--gold, #c8a84b); border-color: var(--gold, #c8a84b); }
 
-/* Action breakdown below pips in phase modal */
-.action-breakdown {
-  font-size: 0.68rem;
-  color: var(--text-dim);
-  margin-top: 0.3rem;
-  letter-spacing: 0.03em;
+/* Action breakdown table in phase modal */
+.action-breakdown-table {
+  width: 100%;
+  margin-top: 0.35rem;
+  font-size: 0.72rem;
 }
-
-/* ── Game over ───────────────────────────────────────────────────────────── */
-
-#game-over {
-  display: none;
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.75);
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-  cursor: pointer;
-}
-
-#game-over .game-over-card {
-  cursor: default;
-}
-
-.game-over-card {
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  padding: 2.5rem 3rem;
-  text-align: center;
-  border-radius: 4px;
-  box-shadow: 0 0 60px rgba(100, 50, 160, 0.35);
-}
-
-.game-over-buttons {
+.abkd-row {
   display: flex;
-  gap: 0.75rem;
-  justify-content: center;
+  justify-content: space-between;
+  padding: 0.12rem 0;
+  color: var(--text-dim);
 }
-
-.winner-text {
-  font-size: 1.3rem;
-  color: var(--day);
-  margin-bottom: 1.5rem;
-  max-width: 340px;
+.abkd-label { flex: 1; text-align: left; }
+.abkd-val   { font-variant-numeric: tabular-nums; color: var(--text); }
+.abkd-divider {
+  border: none;
+  border-top: 1px solid rgba(255,255,255,0.15);
+  margin: 0.15rem 0;
 }
-
-.winner-banner {
-  font-size: 1.5rem;
+.abkd-total {
   font-weight: bold;
-  margin-bottom: 0.6rem;
+  color: var(--text);
 }
-
-.winner-reason {
-  font-size: 0.95rem;
-  opacity: 0.85;
-  line-height: 1.5;
+.abkd-total .abkd-label,
+.abkd-total .abkd-val { color: var(--gold, #c8a84b); }
+.abkd-food .abkd-val {
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  font-style: italic;
 }
 
 .battle-gang-note {
@@ -1839,21 +1904,7 @@ canvas { touch-action: pan-x pan-y; }
 
 /* ── Mobile / touch layout ─────────────────────────────────────────────── */
 
-/* ── Cycle strip visibility: show dedicated bar, hide inline strip ─────── */
-/* Applies on tablet/iPad (≤1400px) covers all iPad sizes incl. Pro landscape */
-@media (max-width: 1400px) {
-  .cycle-strip-header { display: none; }
-  #cycle-bar {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    padding: 0.2rem 0.5rem;
-    background: rgba(13,17,23,0.92);
-    border-bottom: 1px solid rgba(255,255,255,0.07);
-    flex-shrink: 0;
-  }
-}
+/* cycle-strip-header no longer used — cycle bar is always visible */
 
 @media (max-width: 700px) {
   html, body { overflow: hidden; font-size: 15px; }
@@ -1896,9 +1947,6 @@ canvas { touch-action: pan-x pan-y; }
   .title { font-size: 2.2rem; }
   .setup-btn { padding: 0.75rem 1.2rem; font-size: 1rem; min-height: 44px; }
 
-  .game-over-card { padding: 2rem 1.5rem; margin: 1rem; }
-  .winner-text { font-size: 1.1rem; }
-
   /* Chronicle + Inventory panels full-width on mobile */
   #chronicle-panel, #inventory-panel { width: 100%; border-left: none; }
 
@@ -1907,17 +1955,6 @@ canvas { touch-action: pan-x pan-y; }
 
   /* Node dots slightly larger for touch */
   .node-dot { width: 15px; height: 15px; }
-
-  /* Move node progress out of the crowded header into the cycle bar */
-  #node-status { display: none; }
-  #node-status-bar {
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-    margin-left: auto;
-    padding-left: 0.5rem;
-    border-left: 1px solid rgba(255,255,255,0.1);
-  }
 
   /* End turn button slightly larger tap target */
   .end-turn-header { padding: 0 0.65rem; height: 36px; }
@@ -2062,15 +2099,6 @@ canvas { touch-action: pan-x pan-y; }
 }
 #setup-screen { position: relative; }
 
-.game-version {
-  font-size: 0.6rem;
-  color: rgba(255,255,255,0.2);
-  letter-spacing: 0.05em;
-  margin-left: auto;
-  align-self: center;
-  user-select: none;
-}
-
 /* ── Plan panel ────────────────────────────────────────────────── */
 #game-main {
   position: relative;
@@ -2124,8 +2152,8 @@ canvas { touch-action: pan-x pan-y; }
   border-right: none;
   border-radius: 6px 0 0 6px;
   color: #ccc;
-  font-size: 0.85rem;
-  padding: 0.4rem 0.5rem;
+  font-size: 0.7rem;
+  padding: 0.35rem 0.25rem;
   cursor: pointer;
   display: flex;
   flex-direction: column;
@@ -2133,16 +2161,24 @@ canvas { touch-action: pan-x pan-y; }
   gap: 0.2rem;
   line-height: 1;
   transition: background 0.15s;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  letter-spacing: 0.02em;
 }
 .plan-tab:hover { background: rgba(40,50,60,0.97); color: #fff; }
+.plan-tab-label {
+  white-space: nowrap;
+}
 .plan-tab-count {
   font-size: 0.65rem;
-  color: var(--hero);
   font-weight: 700;
   min-width: 0.9rem;
   text-align: center;
+  writing-mode: horizontal-tb;
 }
-.plan-panel[data-witch-mode] .plan-tab-count { color: var(--witch); }
+.plan-tab-ok   { color: #4caf7d; }
+.plan-tab-food { color: #c8a030; }
+.plan-tab-over { color: #d04040; }
 
 .plan-panel-header {
   padding: 0.5rem 0.75rem;
@@ -2195,11 +2231,18 @@ canvas { touch-action: pan-x pan-y; }
   color: var(--muted);
   text-align: right;
 }
-.plan-step-icon {
-  font-size: 0.9rem;
+.plan-step-avatar {
+  width: 1.3rem;
+  height: 1.3rem;
+  border-radius: 50%;
   flex-shrink: 0;
-  min-width: 1.1em;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
+  line-height: 1;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.6);
 }
 .plan-step-desc {
   flex: 1;
@@ -2259,10 +2302,10 @@ canvas { touch-action: pan-x pan-y; }
 .plan-step.over-budget { opacity: 0.5; }
 .plan-step.over-budget .plan-step-num  { background: rgba(160,50,50,0.75); color: #faa; border-radius: 3px; padding: 0 2px; }
 .plan-step.over-budget .plan-step-desc { text-decoration: line-through; color: var(--text-dim); }
-.plan-step.over-budget .plan-step-icon { opacity: 0.4; }
+.plan-step.over-budget .plan-step-avatar { opacity: 0.4; }
 .plan-step.food-powered { opacity: 0.9; }
 .plan-step.food-powered .plan-step-num  { background: rgba(180,130,20,0.75); color: #ffd; border-radius: 3px; padding: 0 2px; }
-.plan-step.food-powered .plan-step-icon { opacity: 0.85; }
+.plan-step.food-powered .plan-step-avatar { opacity: 0.85; }
 .plan-food-tag { font-size: 0.65rem; color: #c8a030; margin-left: 0.3rem; white-space: nowrap; }
 
 /* ── Plan countdown timer ────────────────────────────────────────────── */
@@ -2311,29 +2354,6 @@ canvas { touch-action: pan-x pan-y; }
   padding: 0.4rem 0.75rem 0.2rem;
   border-top: 1px solid rgba(255,255,255,0.06);
 }
-.plan-food-label {
-  font-size: 0.72rem;
-  color: var(--text-dim);
-  white-space: nowrap;
-  margin-right: 0.2rem;
-}
-.plan-food-slot {
-  background: none;
-  border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 3px;
-  cursor: pointer;
-  font-size: 0.9rem;
-  line-height: 1;
-  padding: 0.15rem 0.25rem;
-  opacity: 0.28;
-  transition: opacity 0.15s, border-color 0.15s;
-}
-.plan-food-slot.on {
-  opacity: 1;
-  border-color: #c8a030;
-}
-.plan-food-slot:hover { opacity: 0.7; }
-.plan-food-slot.on:hover { opacity: 0.75; }
 
 /* ── Phase start modal ────────────────────────────────────────────────── */
 
@@ -2390,23 +2410,19 @@ canvas { touch-action: pan-x pan-y; }
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   width: 100%;
+}
+
+.action-pip-row {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 0.15rem;
-  flex-wrap: wrap;
-}
-
-.action-pip-label {
-  font-size: 0.72rem;
-  color: var(--text-dim);
-  margin-right: 0.3rem;
-  white-space: nowrap;
+  gap: 0.2rem;
+  margin-bottom: 0.15rem;
 }
 
 .action-pip {
   color: var(--gold, #c8a84b);
-  font-size: 0.9rem;
+  font-size: 1rem;
   line-height: 1;
 }
 
@@ -2450,18 +2466,60 @@ canvas { touch-action: pan-x pan-y; }
 .phase-toast-title { font-weight: bold; font-size: 0.85rem; color: #e8dcc8; }
 .phase-toast-lines { font-size: 0.72rem; color: var(--text-dim); margin-top: 0.1rem; }
 
-.score-toast { top: calc(38% + 4rem); animation: score-toast-in 0.25s ease; }
-@keyframes score-toast-in { from { opacity:0; transform:translate(-50%,-46%); } to { opacity:1; transform:translate(-50%,-50%); } }
-.score-toast-dawn  { border-color: rgba(255,140,0,0.4); }
-.score-toast-dusk  { border-color: rgba(180,60,0,0.4); }
-.score-toast-track {
+/* ── Score bar glow animations ─────────────────────────────────────── */
+@keyframes pip-glow {
+  0%   { box-shadow: 0 0 4px currentColor; }
+  50%  { box-shadow: 0 0 12px currentColor, 0 0 20px currentColor; }
+  100% { box-shadow: 0 0 4px currentColor; }
+}
+.score-pip-glow { animation: pip-glow 0.6s ease 3; }
+
+@keyframes node-glow {
+  0%, 100% { box-shadow: 0 0 5px currentColor; }
+  50%      { box-shadow: 0 0 14px currentColor, 0 0 24px currentColor; }
+}
+.node-dot-glow { animation: node-glow 0.6s ease 3; }
+
+/* ── Reckoning section in round summary ──────────────────────────── */
+.summary-reckoning {
+  border-top: 1px solid rgba(255,255,255,0.1);
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+}
+.summary-reckoning-title {
+  font-weight: bold;
+  font-size: 0.85rem;
+  color: #e8dcc8;
+  margin-bottom: 0.2rem;
+}
+.summary-reckoning-result {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  margin-bottom: 0.3rem;
+}
+.summary-score-track {
   display: flex;
   align-items: center;
   gap: 3px;
-  margin-top: 0.3rem;
   font-size: 0.7rem;
   color: var(--text-dim);
 }
+.summary-node {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  padding: 0.1rem 0;
+}
+.summary-node.hero-text  { color: var(--hero); }
+.summary-node.witch-text { color: var(--witch); }
+.summary-game-over {
+  border-top: 1px solid rgba(255,255,255,0.15);
+  margin-top: 0.6rem;
+  padding-top: 0.5rem;
+  font-weight: bold;
+  font-size: 0.9rem;
+}
+.summary-game-over.hero-text  { color: var(--hero); }
+.summary-game-over.witch-text { color: var(--witch); }
 
 /* Resolution overlay */
 #resolution-overlay {
@@ -2594,3 +2652,144 @@ canvas { touch-action: pan-x pan-y; }
   text-transform: uppercase;
 }
 .admin-link:hover { opacity: 1; color: var(--text); text-decoration: underline; }
+
+/* ── Spectator mode ──────────────────────────────────────────────────────────── */
+
+/* Hide planning/action UI when body has .spectator-mode class */
+body.spectator-mode #plan-panel    { display: none !important; }
+body.spectator-mode #end-turn-btn  { display: none !important; }
+body.spectator-mode #cancel-wrap   { display: none !important; }
+body.spectator-mode #inventory-btn { display: none !important; }
+body.spectator-mode #unit-stats-bar{ display: none; }
+body.spectator-mode #setup-screen  { display: none !important; }
+body.spectator-mode #game-screen   { display: flex !important; }
+
+/* Player ready panel (right side during planning) */
+#sp-ready-panel {
+  width: 180px;
+  flex-shrink: 0;
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sp-ready-header {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+#sp-ready-list {
+  padding: 0.4rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sp-ready-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  padding: 3px 4px;
+  border-radius: 3px;
+}
+.sp-ready-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-dim);
+}
+.sp-ready-dot.submitted { background: var(--green); }
+.sp-ready-name { color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-ready-faction-hero  { color: var(--hero); }
+.sp-ready-faction-witch { color: var(--witch); }
+
+.spectator-banner {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  background: rgba(13, 15, 22, 0.85);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  padding: 0.3rem 1rem;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  pointer-events: none;
+  letter-spacing: 0.08em;
+}
+.spectator-banner .live-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  margin-right: 0.4rem;
+  vertical-align: middle;
+  animation: pulse 2s infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.spectator-info {
+  position: fixed;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  background: rgba(13, 15, 22, 0.9);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.4rem 1.2rem;
+  font-size: 0.85rem;
+  color: var(--text);
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+}
+.spectator-info .faction-hero  { color: var(--hero); }
+.spectator-info .faction-witch { color: var(--witch); }
+.spectator-info .round-info    { color: var(--text-dim); }
+
+#spectate-status {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--text-dim);
+  font-size: 1.2rem;
+  font-style: italic;
+  z-index: 999;
+}
+
+#spectate-game-over {
+  display: none;
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1001;
+  background: rgba(13, 15, 22, 0.95);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1.5rem 2.5rem;
+  text-align: center;
+}
+#spectate-game-over h2 {
+  font-size: 1.8rem;
+  color: var(--day);
+  margin-bottom: 0.5rem;
+}
+#spectate-game-over p {
+  color: var(--text);
+  margin-bottom: 1rem;
+}
