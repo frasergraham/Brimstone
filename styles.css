@@ -887,12 +887,16 @@ canvas { touch-action: pan-x pan-y; }
   background: rgba(200, 168, 75, 0.18);
 }
 
-/* Touch devices: make zoom buttons slightly larger for finger tapping */
+/* Touch devices: make zoom buttons slightly larger for finger tapping,
+   but hide +/- since pinch-to-zoom is available */
 @media (hover: none) and (pointer: coarse) {
   .zoom-btn {
     width: 42px;
     height: 42px;
     font-size: 20px;
+  }
+  #zoom-in, #zoom-out {
+    display: none;
   }
 }
 
@@ -997,6 +1001,11 @@ canvas { touch-action: pan-x pan-y; }
 .chronicle-mini-btn-active {
   border-color: var(--gold) !important;
   color: var(--gold) !important;
+}
+/* Active state for chronicle toggle in map controls */
+.chronicle-btn-active {
+  border-color: rgba(200, 168, 75, 0.75) !important;
+  background: rgba(200, 168, 75, 0.18) !important;
 }
 
 /* ── Chronicle overlay ─────────────────────────────────────────────────── */
@@ -2151,23 +2160,30 @@ canvas { touch-action: pan-x pan-y; }
   border-right: none;
   border-radius: 6px 0 0 6px;
   color: #ccc;
-  font-size: 0.85rem;
-  padding: 0.4rem 0.5rem;
+  font-size: 0.75rem;
+  padding: 0.5rem 0.4rem;
   cursor: pointer;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.2rem;
+  gap: 0.3rem;
   line-height: 1;
   transition: background 0.15s;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  letter-spacing: 0.05em;
 }
 .plan-tab:hover { background: rgba(40,50,60,0.97); color: #fff; }
+.plan-tab-label {
+  white-space: nowrap;
+}
 .plan-tab-count {
   font-size: 0.65rem;
   color: var(--hero);
   font-weight: 700;
   min-width: 0.9rem;
   text-align: center;
+  writing-mode: horizontal-tb;
 }
 .plan-panel[data-witch-mode] .plan-tab-count { color: var(--witch); }
 

@@ -57,7 +57,8 @@ export class UIController {
     this._lastHazardKey    = '';   // deduplicates hazard popups across state updates
     this._battleInterval   = null; // dice animation interval — cleared on new dialog
     this.speedMode         = 'cinematic'; // 'cinematic' | 'fast' | 'instant'
-    this._chronicleMode    = 'mini'; // 'none' | 'mini' | 'full'
+    // Start with chronicle hidden on small screens (≤768px)
+    this._chronicleMode    = window.innerWidth <= 768 ? 'none' : 'mini'; // 'none' | 'mini' | 'full'
     // When true, disable all planning/action UI — used for spectator mode
     this.spectator         = false;
 
@@ -154,8 +155,14 @@ export class UIController {
       this.onRedraw();
     });
     this._el('zoom-fit')?.addEventListener('click', () => {
-      this.renderer.resize(); // re-measure wrapper after any panel changes
-      this.renderer.resetView();
+      if (this._selectedEntity && this._selectedEntity.alive) {
+        // Zoom to selected unit
+        const pos = this._planMode ? (this._getProjectedPos(this._selectedEntity.id) ?? this._selectedEntity) : this._selectedEntity;
+        this.renderer.frameHexes([pos], { maxZoom: 2.0, paddingHexes: 3, duration: 400 });
+      } else {
+        this.renderer.resize(); // re-measure wrapper after any panel changes
+        this.renderer.resetView();
+      }
       this.onRedraw();
     });
     this._el('zoom-me')?.addEventListener('click', () => {
@@ -175,6 +182,9 @@ export class UIController {
     });
     // Close speed popup on outside click
     document.addEventListener('click', () => this._closeSpeedPopup());
+
+    // Chronicle toggle in map controls area
+    this._el('chronicle-toggle')?.addEventListener('click', () => this._cycleChronicle());
 
     // Touch: tap, drag-to-pan, pinch-to-zoom (mobile)
     this.canvas.addEventListener('touchstart', e => {
@@ -1259,7 +1269,8 @@ export class UIController {
       const glyph   = faction === 'hero' ? '⚔' : '✦';
       const budget  = this._planBudget;
       const used    = this._plan.filter(a => a.type !== PlanActionType.EQUIP_WEAPON && a.type !== PlanActionType.USE_ITEM).length;
-      const diamonds = '◆'.repeat(Math.max(0, budget - used)) + '◇'.repeat(Math.max(0, used));
+      const capped  = Math.min(used, budget); // don't render more diamonds than budget
+      const diamonds = '◆'.repeat(Math.max(0, budget - capped)) + '◇'.repeat(capped);
       if (this._planSubmitted) {
         el.innerHTML = `
           <span class="turn-faction player-${faction}">${glyph}</span>
@@ -2440,20 +2451,21 @@ export class UIController {
   _renderMiniChronicle() {
     const el = this._el('chronicle-mini');
     if (!el) return;
-    const mode       = this._chronicleMode ?? 'mini';
-    const activeClass = mode !== 'none' ? ' chronicle-mini-btn-active' : '';
-    const btnHtml    = `<button id="chronicle-btn" class="chronicle-mini-btn${activeClass}" title="Chronicle">📜</button>`;
+    const mode = this._chronicleMode ?? 'mini';
 
     if (mode === 'mini') {
       const visible = this._visibleLog();
       const last5   = visible.slice(-5);
-      const entries = last5.map(m => `<div class="mini-log-entry">${this._logText(m)}</div>`).join('');
-      el.innerHTML  = btnHtml + entries;
+      el.innerHTML  = last5.map(m => `<div class="mini-log-entry">${this._logText(m)}</div>`).join('');
     } else {
-      // 'none' or 'full': just the button (entries are in sidebar for full, hidden for none)
-      el.innerHTML = btnHtml;
+      el.innerHTML = '';
     }
-    this._el('chronicle-btn')?.addEventListener('click', () => this._cycleChronicle());
+
+    // Update active state on the chronicle toggle in map controls
+    const toggleBtn = this._el('chronicle-toggle');
+    if (toggleBtn) {
+      toggleBtn.classList.toggle('chronicle-btn-active', mode !== 'none');
+    }
   }
 
   /**
