@@ -1288,6 +1288,7 @@ function _createMpClient() {
 
     onResolutionComplete({ steps, finalState }) {
       if (!ui || !renderer) return;
+      state.resolving = true;   // flag before exitPlanningMode fires its redraw
       ui.exitPlanningMode();
 
       // Use the server's final entity list as the landing state for the animation.

@@ -1276,7 +1276,7 @@ export class UIController {
 
     // During resolution, show neutral resolution label
     if (state.resolving) {
-      el.innerHTML = `<span class="turn-line">Round ${state.round} · Resolution</span>`;
+      el.innerHTML = `<span class="turn-line">Resolving Actions…</span>`;
       return;
     }
 
