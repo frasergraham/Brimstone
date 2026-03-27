@@ -476,11 +476,21 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
             // ── Step 1: Lunge — attacker slides toward target border ──────────
             // Cinematic and fast both lunge; instant skips the visual.
+            // Use current display position for both ends: if the target (or
+            // actor) also has a MOVE in this same step, displayEntities already
+            // has it at the post-move hex, so the lunge must chase that position
+            // rather than the pre-move battleSnap coordinates.
+            const actorDisplay  = state.entities.find(e => e.id === actorSnap.id);
+            const targetDisplay = state.entities.find(e => e.id === targetSnap.id);
+            const lungeFromCol = actorDisplay?.col  ?? actorSnap.col;
+            const lungeFromRow = actorDisplay?.row  ?? actorSnap.row;
+            const lungeToCol   = targetDisplay?.col ?? targetSnap.col;
+            const lungeToRow   = targetDisplay?.row ?? targetSnap.row;
             if (speed !== 'instant') {
               renderer.addLungeAnim(
                 actorSnap.id,
-                actorSnap.col, actorSnap.row,
-                targetSnap.col, targetSnap.row,
+                lungeFromCol, lungeFromRow,
+                lungeToCol, lungeToRow,
                 actorSnap.type, actorSnap.owner, actorSnap.title ?? null,
               );
               redrawFn();
@@ -491,7 +501,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             if (speed !== 'instant') {
               const allyEntities = _getBattleAllyEntities(actorSnap, targetSnap, state.entities);
               renderer.setBattleHighlights(
-                [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
+                [{ col: lungeFromCol, row: lungeFromRow }, { col: lungeToCol, row: lungeToRow }],
                 allyEntities.map(e => ({ col: e.col, row: e.row })),
               );
               redrawFn();
