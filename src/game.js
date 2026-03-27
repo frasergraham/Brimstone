@@ -43,9 +43,7 @@ export const Player = Object.freeze({ HERO: 'hero', WITCH: 'witch' });
 
 // Calculate actions for a player at the start of their turn.
 // Hero  — base 3 + 1 in DAWN/DAY + 1 per survivor (cap +5, needs 5 survivors)
-// Witch — base 2 + 1 in NIGHT + 1 per unit (cap +3, needs 3 units)
-// Witch starts weaker but scales with her summoned army. The lower base offsets
-// the advantage of unlimited summons enabling wide node control.
+// Witch — base 3 + 1 in NIGHT + 1 per unit (cap +3, needs 3 units)
 export function computeActions(player, phase, entities) {
   const isHero     = player === Player.HERO;
   const owner      = isHero ? 'hero' : 'witch';
@@ -57,7 +55,7 @@ export function computeActions(player, phase, entities) {
     return 3 + timeBonus + Math.min(extras, 5);
   } else {
     const timeBonus = phase === Phase.NIGHT ? 1 : 0;
-    return 2 + timeBonus + Math.min(extras, 3);
+    return 3 + timeBonus + Math.min(extras, 3);
   }
 }
 
@@ -78,7 +76,7 @@ export function computeActionsForPlayer(playerId, faction, phase, entities) {
     return 3 + timeBonus + Math.min(extras, 5);
   } else {
     const timeBonus = phase === Phase.NIGHT ? 1 : 0;
-    return 2 + timeBonus + Math.min(extras, 3);
+    return 3 + timeBonus + Math.min(extras, 3);
   }
 }
 
