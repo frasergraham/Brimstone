@@ -126,13 +126,13 @@ describe('food floater position — acting entity lookup', () => {
 // ── Bug 2: State should not update before dialogs complete ─────────────────
 
 describe('resolution state timing — deferred entity update', () => {
-  test('move step: position-only update preserves pre-step HP and entity set', () => {
+  test('move step: display entities show moved positions without revealing encounters', () => {
     // Simulates the fixed animation flow:
-    // 1. After move anims: only positions are updated in-place
+    // 1. Build a display-only copy from the step snapshot with positions patched
     // 2. Full postEntities applied later (after dialogs)
 
-    // Pre-step entities (shallow copies stand in for real Entity objects)
-    const preEntities = [
+    // Step snapshot (pre-step state)
+    const entitySnapshot = [
       { id: 'h1', col: 2, row: 3, hp: 14, type: 'hero', alive: true },
       { id: 's1', col: 4, row: 5, hp: 3, type: 'survivor', alive: true },
     ];
@@ -148,25 +148,60 @@ describe('resolution state timing — deferred entity update', () => {
       { action: { type: PlanActionType.MOVE, entityId: 'h1', toCol: 3, toRow: 3 }, faction: 'hero' },
     ];
 
-    // Phase 1: in-place position update (the fix)
+    // Build display-only copy (mirrors the fix in main.js)
+    const displayEntities = entitySnapshot.map(e => ({ ...e }));
     for (const ev of moveEvents) {
       if (ev.action.type !== PlanActionType.MOVE) continue;
-      const ent = preEntities.find(e => e.id === ev.action.entityId);
+      const ent = displayEntities.find(e => e.id === ev.action.entityId);
       if (ent) { ent.col = ev.action.toCol; ent.row = ev.action.toRow; }
     }
 
-    // Hero position updated
-    assert.equal(preEntities[0].col, 3, 'hero moved to new col');
-    assert.equal(preEntities[0].row, 3, 'hero moved to new row');
+    // Display entities show hero at new position
+    assert.equal(displayEntities[0].col, 3, 'hero moved to new col');
+    assert.equal(displayEntities[0].row, 3, 'hero moved to new row');
 
     // But no new entity appeared yet
-    assert.equal(preEntities.length, 2, 'encounter survivor not yet added');
+    assert.equal(displayEntities.length, 2, 'encounter survivor not yet added');
+
+    // Original snapshot is NOT mutated (safe for replay)
+    assert.equal(entitySnapshot[0].col, 2, 'snapshot hero col unchanged');
+    assert.equal(entitySnapshot[0].row, 3, 'snapshot hero row unchanged');
 
     // After dialogs: full state applied
-    const state = { entities: preEntities };
+    const state = { entities: displayEntities };
     state.entities = postEntities;
     assert.equal(state.entities.length, 3, 'survivor appears after dialog');
     assert.equal(state.entities[2].id, 's2');
+  });
+
+  test('display copy does not corrupt finalEntities', () => {
+    // The real Entity objects (finalEntities) should NOT be modified
+    // by the display-entity construction in step 0.
+    const realEntities = [
+      { id: 'h1', col: 10, row: 10, hp: 14, type: 'hero' },  // final position
+    ];
+    const stepSnapshot = [
+      { id: 'h1', col: 0, row: 0, hp: 14, type: 'hero' },    // start-of-step position
+    ];
+    const finalEntities = realEntities;  // same reference as the caller holds
+
+    // Simulate step 0: state.entities is still the real array
+    let stateEntities = realEntities;
+
+    // Build display copy from snapshot (NOT from stateEntities)
+    const displayEntities = stepSnapshot.map(e => ({ ...e }));
+    const moveEv = { action: { type: PlanActionType.MOVE, entityId: 'h1', toCol: 5, toRow: 5 } };
+    const ent = displayEntities.find(e => e.id === moveEv.action.entityId);
+    if (ent) { ent.col = moveEv.action.toCol; ent.row = moveEv.action.toRow; }
+    stateEntities = displayEntities;
+
+    // Display shows intermediate position
+    assert.equal(stateEntities[0].col, 5);
+    assert.equal(stateEntities[0].row, 5);
+
+    // finalEntities (real entities) still at their final position
+    assert.equal(finalEntities[0].col, 10, 'finalEntities not corrupted');
+    assert.equal(finalEntities[0].row, 10, 'finalEntities not corrupted');
   });
 
   test('battle step: HP change is not visible until after dialog', () => {

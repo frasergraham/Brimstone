@@ -345,14 +345,18 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       }
     }
 
-    // Update only moved-entity positions in-place so that when move
-    // animations expire the entities sit at their destinations (no snap-back)
-    // without revealing encounter survivors, HP changes, or deaths yet.
+    // Build a display-only entity array from this step's snapshot with
+    // moved-entity positions patched to their destinations.  We shallow-copy
+    // to avoid mutating the original snapshot (needed for replay) and to
+    // avoid corrupting finalEntities (which shares real Entity references
+    // with the initial state.entities).
+    const displayEntities = step.entitySnapshot.map(e => ({ ...e }));
     for (const ev of events) {
       if (ev.action.type !== PlanActionType.MOVE) continue;
-      const ent = state.entities.find(e => e.id === ev.action.entityId);
+      const ent = displayEntities.find(e => e.id === ev.action.entityId);
       if (ent) { ent.col = ev.action.toCol; ent.row = ev.action.toRow; }
     }
+    state.entities = displayEntities;
     redrawFn();
 
     if (!_autoplay && hadMove) {
