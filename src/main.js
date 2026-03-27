@@ -8,7 +8,7 @@ import { VERSION }           from './version.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType }    from './planner.js';
 import { hexDistance }       from './hex.js';
-import { isBattleSignificant, compileTurnBattleSummary } from './battle-utils.js';
+import { compileTurnBattleSummary } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 
 // Stamp version into badges
@@ -455,38 +455,28 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     for (const ev of events) {
       const { action, result, battleSnaps } = ev;
       if (action.type === PlanActionType.BATTLE_UNIT || action.type === PlanActionType.BATTLE_HEX) {
-        // Show dialog if one of my own units is involved (team MP), or falling back
-        // to faction-level logic (offline / fog-off / standard 1v1).
+        // Show animation/dialog if one of my own units is involved (team MP), or falling
+        // back to faction-level logic (offline / fog-off / standard 1v1).
         const myUnit = myPlayerId && battleSnaps && (
           battleSnaps.actorSnap?.ownerId  === myPlayerId ||
           battleSnaps.targetSnap?.ownerId === myPlayerId
         );
-        const showDialog = myPlayerId
+        const showForPlayer = myPlayerId
           ? myUnit
           : (!humanFaction || !state.fogOfWar || ev.faction === humanFaction
               || (battleSnaps && (
                    battleSnaps.targetSnap?.owner === humanFaction ||
                    battleSnaps.actorSnap?.owner  === humanFaction
                  )));
-        if (battleSnaps && showDialog) {
+        if (battleSnaps && showForPlayer) {
           const { actorSnap, targetSnap } = battleSnaps;
-          const significant = isBattleSignificant(actorSnap, targetSnap, result, humanFaction);
+          const isKill = !!result?.killed;
 
           if (!_autoplay) {
             const speed = ui?.speedMode ?? 'cinematic';
-            const isKill = !!result?.killed;
-            const showFullDialog = speed === 'cinematic'
-              ? significant
-              : speed === 'fast'
-                ? isKill
-                : false; // instant: never
-
-            // On wide landscape screens, offset the camera left so the map is visible
-            // beside the docked battle dialog (dialog is ~500px on the right).
-            const isLandscape = window.innerWidth >= 900 && window.innerWidth / window.innerHeight >= 1.25;
-            const prevInsetRight = renderer.insetRight ?? 0;
 
             // ── Step 1: Lunge — attacker slides toward target border ──────────
+            // Cinematic and fast both lunge; instant skips the visual.
             if (speed !== 'instant') {
               renderer.addLungeAnim(
                 actorSnap.id,
@@ -499,60 +489,50 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             }
 
             // ── Step 2: Battle hex highlights ────────────────────────────────
-            const allyEntities = _getBattleAllyEntities(actorSnap, targetSnap, state.entities);
-            renderer.setBattleHighlights(
-              [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
-              allyEntities.map(e => ({ col: e.col, row: e.row })),
-            );
-            redrawFn();
+            if (speed !== 'instant') {
+              const allyEntities = _getBattleAllyEntities(actorSnap, targetSnap, state.entities);
+              renderer.setBattleHighlights(
+                [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
+                allyEntities.map(e => ({ col: e.col, row: e.row })),
+              );
+              redrawFn();
+            }
 
-            // ── Step 3: Dialog / toast / floaters ────────────────────────────
-            if (showFullDialog) {
-              if (isLandscape) {
-                renderer.insetRight = 500;
-                renderer.frameHexes(
-                  [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
-                  { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
-                );
-              }
-
-              if (isLandscape) {
-                // Wide screen: play result animations after dice settle, while dialog is open
-                let diceResolve;
-                const diceComplete = new Promise(r => { diceResolve = r; });
-                const dialogDone = new Promise(resolve => {
-                  ui._showBattleDialog(actorSnap, targetSnap, result, resolve, null, diceResolve);
-                });
-                await diceComplete;
-                _playBattleResultAnims(actorSnap, targetSnap, result, postEntities, redrawFn);
-                if (speed !== 'instant') await _delay(speed === 'fast' ? 200 : 500);
-                await dialogDone;
-              } else {
-                // Narrow screen: dialog covers the map — wait for dismiss before floaters
-                await new Promise(resolve => {
-                  ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
-                });
-                _playBattleResultAnims(actorSnap, targetSnap, result, postEntities, redrawFn);
-                if (speed !== 'instant') await _delay(speed === 'fast' ? 200 : 500);
-              }
-
-              if (isLandscape) renderer.insetRight = prevInsetRight;
-            } else {
-              // Non-significant battle: toast + immediate floaters (no dialog)
-              if (speed !== 'instant') {
-                ui._showBattleToast(actorSnap, targetSnap, result);
-                // Outcome floater over the target hex
-                const outcomeText = isKill
-                  ? `💀 ${targetSnap.name} slain`
-                  : result.hit
-                    ? result.damage >= 2 ? `💥 −${result.damage}` : `⚔ −${result.damage}`
-                    : result.counterDmg > 0 ? `🛡 counter` : `miss`;
-                const flashColor = isKill ? 'rgba(220,40,40,0.15)' : result.hit ? 'rgba(255,140,0,0.1)' : 'rgba(100,100,100,0.1)';
-                const textColor  = isKill ? '#ff6666' : result.hit ? '#ffcc44' : '#999';
-                renderer.addFlash(targetSnap.col, targetSnap.row, outcomeText, flashColor, 1600, 0.72, textColor);
-              }
+            // ── Step 3: Dialog (cinematic) or toast+floater (fast) ───────────
+            if (speed === 'cinematic') {
+              // Full dialog for every battle — no significance filter.
+              // Offset camera so the map is visible beside the docked dialog.
+              const prevInsetRight = renderer.insetRight ?? 0;
+              renderer.insetRight = 500;
+              renderer.frameHexes(
+                [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
+                { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
+              );
+              // Wait for dialog dismiss, THEN play floaters so nothing overlaps.
+              await new Promise(resolve => {
+                ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
+              });
+              renderer.insetRight = prevInsetRight;
               _playBattleResultAnims(actorSnap, targetSnap, result, postEntities, redrawFn);
-              if (speed !== 'instant') await _delay(speed === 'fast' ? 200 : 500);
+              // Drain all floaters (HP text 1800ms, death burst 600ms) before next battle.
+              await renderer.waitForAnimations();
+            } else if (speed === 'fast') {
+              // No dialog — toast notification + outcome floater on map.
+              ui._showBattleToast(actorSnap, targetSnap, result);
+              const outcomeText = isKill
+                ? `💀 ${targetSnap.name ?? 'unit'} slain`
+                : result.hit
+                  ? result.damage >= 2 ? `💥 −${result.damage}` : `⚔ −${result.damage}`
+                  : result.counterDmg > 0 ? `🛡 counter` : `miss`;
+              const flashColor = isKill ? 'rgba(220,40,40,0.15)' : result.hit ? 'rgba(255,140,0,0.1)' : 'rgba(100,100,100,0.1)';
+              const textColor  = isKill ? '#ff6666' : result.hit ? '#ffcc44' : '#999';
+              renderer.addFlash(targetSnap.col, targetSnap.row, outcomeText, flashColor, 1600, 0.72, textColor);
+              _playBattleResultAnims(actorSnap, targetSnap, result, postEntities, redrawFn);
+              // Short fixed wait — floaters from different battles can overlap in fast mode.
+              await _delay(400);
+            } else {
+              // Instant — result animations only, no wait.
+              _playBattleResultAnims(actorSnap, targetSnap, result, postEntities, redrawFn);
             }
 
             // ── Step 4: Clear highlights and lunge ───────────────────────────
@@ -561,7 +541,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             redrawFn();
 
           } else {
-            // Autoplay: fire all animations immediately without dialogs or lunge
+            // Autoplay: fire all animations immediately without dialogs or lunge.
             _playBattleResultAnims(actorSnap, targetSnap, result, postEntities, redrawFn);
           }
           hadBattle = true;

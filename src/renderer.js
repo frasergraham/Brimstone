@@ -330,6 +330,27 @@ export class Renderer {
   }
 
   /**
+   * Returns a Promise that resolves once all active canvas animations
+   * (move, flash, death, lunge, zoom) have completed.
+   * Safe to call when no animations are running — resolves on next frame.
+   */
+  waitForAnimations() {
+    return new Promise(resolve => {
+      const check = () => {
+        const now = Date.now();
+        const alive = this._moveAnims.some(a => now < a.startTime + a.duration)
+                   || this._flashes.some(f => now < f.endTime)
+                   || this._deathAnims.some(a => now < a.startTime + a.duration)
+                   || this._lungeAnims.some(a => !a.settled)
+                   || !!this._zoomAnim;
+        if (alive) requestAnimationFrame(check);
+        else resolve();
+      };
+      requestAnimationFrame(check);
+    });
+  }
+
+  /**
    * Compute a target {zoom, panX, panY} that frames the given hex positions
    * with padding, clamped to [1.0, maxZoom].
    */

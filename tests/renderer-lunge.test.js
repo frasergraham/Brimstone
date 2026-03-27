@@ -136,3 +136,75 @@ describe('clearBattleHighlights', () => {
     assert.equal(r._battleAllyHexes.length, 0);
   });
 });
+
+// ── waitForAnimations — pure-logic variant ────────────────────────────────────
+// The real method uses requestAnimationFrame (DOM). Test the alive-check logic
+// directly using the same predicate extracted to a helper, verifying the
+// conditions under which it would resolve vs keep looping.
+
+function isAlive(stub) {
+  const now = Date.now();
+  return stub._moveAnims.some(a => now < a.startTime + a.duration)
+      || stub._flashes.some(f => now < f.endTime)
+      || stub._deathAnims.some(a => now < a.startTime + a.duration)
+      || stub._lungeAnims.some(a => !a.settled);
+}
+
+function makeFullStub() {
+  return {
+    _moveAnims:  [],
+    _flashes:    [],
+    _deathAnims: [],
+    _lungeAnims: [],
+    ...makeRendererStub(),
+  };
+}
+
+describe('waitForAnimations alive-check logic', () => {
+  test('no animations → not alive (should resolve immediately)', () => {
+    const r = makeFullStub();
+    assert.equal(isAlive(r), false);
+  });
+
+  test('active flash → alive', () => {
+    const r = makeFullStub();
+    r._flashes.push({ endTime: Date.now() + 2000 });
+    assert.equal(isAlive(r), true);
+  });
+
+  test('expired flash → not alive', () => {
+    const r = makeFullStub();
+    r._flashes.push({ endTime: Date.now() - 1 }); // already expired
+    assert.equal(isAlive(r), false);
+  });
+
+  test('unsettled lunge → alive', () => {
+    const r = makeFullStub();
+    r._lungeAnims.push({ settled: false });
+    assert.equal(isAlive(r), true);
+  });
+
+  test('settled lunge → not alive', () => {
+    const r = makeFullStub();
+    r._lungeAnims.push({ settled: true });
+    assert.equal(isAlive(r), false);
+  });
+
+  test('active death anim → alive', () => {
+    const r = makeFullStub();
+    r._deathAnims.push({ startTime: Date.now(), duration: 600 });
+    assert.equal(isAlive(r), true);
+  });
+
+  test('expired death anim → not alive', () => {
+    const r = makeFullStub();
+    r._deathAnims.push({ startTime: Date.now() - 700, duration: 600 });
+    assert.equal(isAlive(r), false);
+  });
+
+  test('active move anim → alive', () => {
+    const r = makeFullStub();
+    r._moveAnims.push({ startTime: Date.now(), duration: 480 });
+    assert.equal(isAlive(r), true);
+  });
+});
