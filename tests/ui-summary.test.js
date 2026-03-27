@@ -206,8 +206,10 @@ describe('reckoning scoring line', () => {
 describe('game-over summary title', () => {
   function getSummaryTitle(gameOver, winner, humanFaction, roundNum) {
     if (gameOver) {
-      const isWin = winner === humanFaction;
-      return isWin ? 'Victory!' : 'Defeat';
+      if (!humanFaction) {
+        return winner === 'hero' ? 'Hero Wins!' : 'Witch Wins!';
+      }
+      return winner === humanFaction ? 'Victory!' : 'Defeat';
     }
     return `Round ${roundNum ?? ''} complete`;
   }
@@ -230,6 +232,14 @@ describe('game-over summary title', () => {
 
   test('defeat when hero wins and player is witch', () => {
     assert.equal(getSummaryTitle(true, 'hero', 'witch', 10), 'Defeat');
+  });
+
+  test('autoplay: hero wins shows "Hero Wins!"', () => {
+    assert.equal(getSummaryTitle(true, 'hero', null, 10), 'Hero Wins!');
+  });
+
+  test('autoplay: witch wins shows "Witch Wins!"', () => {
+    assert.equal(getSummaryTitle(true, 'witch', null, 10), 'Witch Wins!');
   });
 });
 

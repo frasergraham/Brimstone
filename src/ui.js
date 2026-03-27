@@ -2585,8 +2585,11 @@ export class UIController {
       const eventsEl = this._el('round-summary-events');
       if (titleEl) {
         if (gameOver) {
-          const isWin = winner === humanFaction;
-          titleEl.textContent = isWin ? 'Victory!' : 'Defeat';
+          if (!humanFaction) {
+            titleEl.textContent = winner === 'hero' ? 'Hero Wins!' : 'Witch Wins!';
+          } else {
+            titleEl.textContent = winner === humanFaction ? 'Victory!' : 'Defeat';
+          }
         } else {
           titleEl.textContent = `Round ${roundNum ?? ''} complete`;
         }

@@ -241,8 +241,30 @@ async function _runLocalResolution() {
       }
       return;
     }
+  } else if (state.gameOver && ui) {
+    // Autoplay game-over — still show the summary so the user sees the result
+    if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
+    let action;
+    do {
+      action = await ui._showResolutionSummary(steps, state.round - 1, {
+        prevScore, prevNodes, humanFaction: null, fogOfWar: false,
+        gameOver: true, winner: state.winner, winReason: state.winReason,
+      });
+      if (action === 'replay') {
+        state.entities = preReplayEntities;
+        redraw();
+        await _animateResolutionSteps(steps, finalEntities, redraw, null, null);
+      }
+    } while (action === 'replay');
+    if (action === 'viewmap') {
+      state.fogOfWar = false;
+      redraw();
+    } else if (action === 'restart') {
+      _doRestart();
+    }
+    return;
   } else if (state.gameOver) {
-    // Autoplay or no human — just clean up save
+    // No UI (headless) — just clean up
     if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
     return;
   }
