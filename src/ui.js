@@ -301,10 +301,12 @@ export class UIController {
       if (panel && this._edgeSwipe.collapsed && dx < -threshold) {
         // Swiped left from right edge — open panel
         panel.classList.remove('collapsed');
+        this._syncPlanInset();
         this._renderPlanPanel();
       } else if (panel && !this._edgeSwipe.collapsed && dx > threshold) {
         // Swiped right — close panel
         panel.classList.add('collapsed');
+        this._syncPlanInset();
         this._renderPlanPanel();
       }
       this._edgeSwipe = null;
@@ -454,7 +456,7 @@ export class UIController {
       }
     }
     // Plan panel overlays the right side of the canvas — bias framing away from it
-    if (this.renderer) this.renderer.insetRight = 220;
+    this._syncPlanInset();
 
     this._clearSelection();
 
@@ -686,6 +688,15 @@ export class UIController {
     const isCollapsed = panel.classList.contains('collapsed');
     const toggleBtn = this._el('plan-toggle-btn');
     if (toggleBtn) toggleBtn.textContent = isCollapsed ? '▶' : '◀';
+    this._syncPlanInset();
+  }
+
+  /** Update renderer.insetRight based on whether the plan panel is visible and expanded. */
+  _syncPlanInset() {
+    if (!this.renderer) return;
+    const panel = this._el('plan-panel');
+    const visible = panel && panel.style.display !== 'none' && !panel.classList.contains('collapsed');
+    this.renderer.insetRight = visible ? 220 : 0;
   }
 
   _onClick(e) {
