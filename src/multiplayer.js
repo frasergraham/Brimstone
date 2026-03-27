@@ -52,7 +52,6 @@ export class MirrorState {
     s.fogOfWar             = snap.fogOfWar;
     s._winner              = snap.winner;
     s.winReason            = snap.winReason;
-    s.witchSummonsThisTurn = snap.witchSummonsThisTurn;
     s.attritionLevel       = snap.attritionLevel;
     s.nodeScore            = snap.nodeScore;
     s.log                  = snap.log;

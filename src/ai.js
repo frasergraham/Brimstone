@@ -620,10 +620,10 @@ export class WitchAI {
           const a = tryMove(m, s[0]); if (a) return a;
         }
         // Use spare budget: summon or explore; stay on node at night.
-        if (sim.witchSummonsThisTurn === 0) {
+        {
           const inv = sim.inventory.witch;
           const total = Object.values(inv).reduce((s, v) => s + v, 0);
-          if (total > 0 && minions.length < 8) {
+          if (total >= 2 && minions.length < 8) {
             const hex = getNeighbors(witch.col, witch.row).find(n => {
               const t = sim.tiles.get(hexKey(n.col, n.row));
               return t && t.type !== TileType.RIVER && !sim.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
@@ -639,10 +639,10 @@ export class WitchAI {
       }
 
       // 6. Summon
-      if (sim.witchSummonsThisTurn === 0) {
+      {
         const inv = sim.inventory.witch;
         const total = Object.values(inv).reduce((s, v) => s + v, 0);
-        if (total > 0 && minions.length < 8) {
+        if (total >= 2 && minions.length < 8) {
           const hex = getNeighbors(witch.col, witch.row).find(n => {
             const t = sim.tiles.get(hexKey(n.col, n.row));
             return t && t.type !== TileType.RIVER && !sim.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
@@ -704,10 +704,10 @@ export class WitchAI {
         const a = tryMove(m, s[0]); if (a) return a;
       }
       // Use spare budget: summon more troops or explore for resources; do NOT leave node.
-      if (sim.witchSummonsThisTurn === 0) {
+      {
         const inv = sim.inventory.witch;
         const total = Object.values(inv).reduce((s, v) => s + v, 0);
-        if (total > 0 && minions.length < 5) {
+        if (total >= 2 && minions.length < 5) {
           const hex = getNeighbors(witch.col, witch.row).find(n => {
             const t = sim.tiles.get(hexKey(n.col, n.row));
             return t && t.type !== TileType.RIVER && !sim.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
@@ -738,16 +738,14 @@ export class WitchAI {
 
     // 7. Summon
     if (uncoveredNodes.length === 0 || minions.length === 0) {
-      if (sim.witchSummonsThisTurn === 0) {
-        const inv = sim.inventory.witch;
-        const total = Object.values(inv).reduce((s, v) => s + v, 0);
-        if (total > 0 && minions.length < 5) {
-          const hex = getNeighbors(witch.col, witch.row).find(n => {
-            const t = sim.tiles.get(hexKey(n.col, n.row));
-            return t && t.type !== TileType.RIVER && !sim.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
-          });
-          if (hex) return { type: PlanActionType.SUMMON, entityId: witch.id, toCol: hex.col, toRow: hex.row };
-        }
+      const inv = sim.inventory.witch;
+      const total = Object.values(inv).reduce((s, v) => s + v, 0);
+      if (total >= 2 && minions.length < 5) {
+        const hex = getNeighbors(witch.col, witch.row).find(n => {
+          const t = sim.tiles.get(hexKey(n.col, n.row));
+          return t && t.type !== TileType.RIVER && !sim.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
+        });
+        if (hex) return { type: PlanActionType.SUMMON, entityId: witch.id, toCol: hex.col, toRow: hex.row };
       }
     }
 
@@ -1411,7 +1409,6 @@ class PlanSimState {
     this.nodeScore        = realState.nodeScore;
     this.fogOfWar         = realState.fogOfWar;
     this.inventory        = JSON.parse(JSON.stringify(realState.inventory));
-    this.witchSummonsThisTurn = realState.witchSummonsThisTurn ?? 0;
 
     // Shallow-copy live entities so position tracking works without mutating the real state.
     // NOTE: Entity.alive is a getter (hp > 0) and is NOT included in spread. We must add it
@@ -1480,7 +1477,16 @@ class PlanSimState {
       type: EntityType.MINION, owner: 'witch',
       col: toCol, row: toRow, alive: true, hp: 2,
     });
-    this.witchSummonsThisTurn++;
+    // Spend 2 resources from witch inventory (drain largest stacks first)
+    const inv = this.inventory.witch;
+    const keys = Object.keys(inv).filter(k => inv[k] > 0).sort((a, b) => inv[b] - inv[a]);
+    let remaining = 2;
+    for (const k of keys) {
+      const spend = Math.min(inv[k], remaining);
+      inv[k] -= spend;
+      remaining -= spend;
+      if (remaining === 0) break;
+    }
     this.actionsLeft--;
   }
 }
@@ -1511,9 +1517,9 @@ function _makeHelpers(sim) {
   const tryBattle = (actor, target) =>
     ({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id });
   const trySummon = (witch, minions, cap = 8) => {
-    if (minions.length >= cap || sim.witchSummonsThisTurn > 0) return null;
+    if (minions.length >= cap) return null;
     const inv = sim.inventory.witch;
-    if (Object.values(inv).reduce((s, v) => s + v, 0) <= 0) return null;
+    if (Object.values(inv).reduce((s, v) => s + v, 0) < 2) return null;
     const hex = getNeighbors(witch.col, witch.row).find(n => {
       const t = sim.tiles.get(hexKey(n.col, n.row));
       return t && t.type !== TileType.RIVER &&

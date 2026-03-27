@@ -394,26 +394,26 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     }
 
     // ── Phase 1: animate moves for both factions simultaneously ──────────────
+    // Multi-hex moves (horse or road chains) animate hop-by-hop using result.path.
     let hadMove = false;
     const pendingDialogs = [];
 
+    // Collect pre-step snapshots and paths for all move events
+    const moveAnims = [];
     for (const ev of events) {
       const { action, result } = ev;
       if (action.type !== PlanActionType.MOVE) continue;
 
-      // Look up pre-step position from this step's snapshot
       const preSnap = step.entitySnapshot?.find(e => e.id === action.entityId);
       const isOpponent = humanFaction && ev.faction !== humanFaction;
-      if (preSnap && !(isOpponent && state.fogOfWar)) {
-        renderer.addMoveAnim(
-          action.entityId,
-          preSnap.col, preSnap.row,
-          action.toCol, action.toRow,
-          preSnap.type, preSnap.owner,
-          preSnap.title ?? null,
-        );
-        hadMove = true;
-      }
+      const visible = preSnap && !(isOpponent && state.fogOfWar);
+
+      // Use result.path if available (new path-following move); fall back to single hop
+      const path = result?.path?.length > 0
+        ? result.path
+        : [{ col: action.toCol, row: action.toRow }];
+
+      if (visible) moveAnims.push({ ev, preSnap, path });
 
       if ((!humanFaction || ev.faction === humanFaction) && result?.encounterLog?.length) {
         if (!myPlayerId || preSnap?.ownerId === myPlayerId) {
@@ -422,24 +422,51 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       }
     }
 
-    // Build a display-only entity array from this step's snapshot with
-    // moved-entity positions patched to their destinations.  We shallow-copy
-    // to avoid mutating the original snapshot (needed for replay) and to
-    // avoid corrupting finalEntities (which shares real Entity references
-    // with the initial state.entities).
+    // Build display entity array starting from the snapshot
     const displayEntities = step.entitySnapshot.map(e => ({ ...e }));
-    for (const ev of events) {
-      if (ev.action.type !== PlanActionType.MOVE) continue;
-      const ent = displayEntities.find(e => e.id === ev.action.entityId);
-      if (ent) { ent.col = ev.action.toCol; ent.row = ev.action.toRow; }
-    }
-    state.entities = displayEntities;
-    redrawFn();
 
-    if (!_autoplay && hadMove) {
+    if (moveAnims.length > 0) {
+      hadMove = true;
       const _spd = ui?.speedMode ?? 'cinematic';
-      if (_spd !== 'instant') await _delay(_spd === 'fast' ? 180 : 520);
+      const hopDelay = _spd === 'instant' ? 0 : _spd === 'fast' ? 120 : 320;
+
+      // Determine max hops across all moving entities
+      const maxHops = moveAnims.reduce((m, a) => Math.max(m, a.path.length), 0);
+
+      for (let hop = 0; hop < maxHops; hop++) {
+        // Start animations for all entities at this hop index
+        for (const { ev, preSnap, path } of moveAnims) {
+          if (hop >= path.length) continue;
+          const fromPos = hop === 0 ? preSnap : path[hop - 1];
+          const toPos   = path[hop];
+          renderer.addMoveAnim(
+            ev.action.entityId,
+            fromPos.col, fromPos.row,
+            toPos.col, toPos.row,
+            preSnap.type, preSnap.owner,
+            preSnap.title ?? null,
+          );
+          // Patch display entity to current hop destination
+          const ent = displayEntities.find(e => e.id === ev.action.entityId);
+          if (ent) { ent.col = toPos.col; ent.row = toPos.row; }
+        }
+        state.entities = displayEntities;
+        redrawFn();
+        if (!_autoplay && hopDelay > 0) await _delay(hopDelay);
+      }
+    } else {
+      // No visible moves — still need to patch display entities to final positions
+      for (const ev of events) {
+        if (ev.action.type !== PlanActionType.MOVE) continue;
+        const path = ev.result?.path;
+        const finalPos = path?.length > 0 ? path[path.length - 1] : { col: ev.action.toCol, row: ev.action.toRow };
+        const ent = displayEntities.find(e => e.id === ev.action.entityId);
+        if (ent) { ent.col = finalPos.col; ent.row = finalPos.row; }
+      }
+      state.entities = displayEntities;
+      redrawFn();
     }
+
     for (const entry of pendingDialogs) {
       redrawFn();
       if (entry.encounterUnit) {

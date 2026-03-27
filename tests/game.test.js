@@ -60,7 +60,7 @@ describe('Phase cycle', () => {
 
 // ── computeActions ────────────────────────────────────────────────────────────
 // Hero:  base 3 + 1 in DAWN/DAY  + 1 per alive survivor (cap +5)
-// Witch: base 4 + 1 in NIGHT     + floor(units/2) (cap +4)
+// Witch: base 3 + 1 in NIGHT     + 1 per alive unit (cap +3)
 
 describe('computeActions — Hero', () => {
   const makeEntities = (survivorCount) => [
@@ -122,34 +122,34 @@ describe('computeActions — Witch', () => {
     })),
   ];
 
-  test('DAWN/DAY/DUSK: 4 base, no time bonus', () => {
+  test('DAWN/DAY/DUSK: 3 base, no time bonus', () => {
     const ents = makeWitchEntities(0);
-    assert.equal(computeActions(Player.WITCH, Phase.DAWN, ents), 4);
-    assert.equal(computeActions(Player.WITCH, Phase.DAY,  ents), 4);
-    assert.equal(computeActions(Player.WITCH, Phase.DUSK, ents), 4);
+    assert.equal(computeActions(Player.WITCH, Phase.DAWN, ents), 3);
+    assert.equal(computeActions(Player.WITCH, Phase.DAY,  ents), 3);
+    assert.equal(computeActions(Player.WITCH, Phase.DUSK, ents), 3);
   });
 
-  test('NIGHT: 5 base (4 + 1 time bonus)', () => {
+  test('NIGHT: 4 base (3 + 1 time bonus)', () => {
     const ents = makeWitchEntities(0);
-    assert.equal(computeActions(Player.WITCH, Phase.NIGHT, ents), 5);
+    assert.equal(computeActions(Player.WITCH, Phase.NIGHT, ents), 4);
   });
 
-  test('+1 action per 2 alive witch units', () => {
-    // 2 minions → floor(2/2)=1 → total 5
+  test('+1 action per alive witch unit', () => {
+    // 1 minion → +1 → total 4
+    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(1)), 4);
+    // 2 minions → +2 → total 5
     assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(2)), 5);
-    // 3 minions → floor(3/2)=1 → total 5
-    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(3)), 5);
-    // 4 minions → floor(4/2)=2 → total 6
-    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(4)), 6);
+    // 3 minions → +3 → total 6
+    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(3)), 6);
   });
 
-  test('witch unit bonus caps at +4', () => {
-    // 8 minions → floor(8/2)=4 → capped at +4 → total 8
-    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(8)), 8);
-    // 12 minions → still capped at +4 → total 8 (NOT +6 as comment wrongly states)
-    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(12)), 8);
-    // 20 minions → still capped at +4
-    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(20)), 8);
+  test('witch unit bonus caps at +3', () => {
+    // 3 minions → +3 → total 6
+    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(3)), 6);
+    // 5 minions → capped at +3 → total 6
+    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(5)), 6);
+    // 20 minions → still capped at +3
+    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(20)), 6);
   });
 });
 

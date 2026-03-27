@@ -52,23 +52,24 @@ export const MAP_SIZES = {
     minBridges: 1,
   },
   standard: {
-    label: 'Standard (13×11)',
-    cols: 13, rows: 11,
+    label: 'Standard (13×13)',
+    cols: 13, rows: 13,
     villages: ['market', 'parish', 'harbor'],
     minVillageDist: 6,
     forestSeeds: [
       {col:0,row:0},{col:1,row:1},{col:11,row:1},{col:12,row:0},
       {col:12,row:4},{col:0,row:6},{col:1,row:9},{col:12,row:8},
       {col:7,row:3},{col:8,row:8},{col:0,row:4},{col:6,row:9},
+      {col:3,row:11},{col:10,row:12},{col:6,row:12},
     ],
     nodeCount: 3,
-    survivorCounts: { buildings: 13, terrain: 2 },
+    survivorCounts: { buildings: 14, terrain: 3 },
     bridgeMax: 4,
     minBridges: 2,
   },
   regional: {
-    label: 'Regional (17×13)',
-    cols: 17, rows: 13,
+    label: 'Regional (17×17)',
+    cols: 17, rows: 17,
     villages: ['market', 'parish', 'harbor', 'garrison'],
     minVillageDist: 6,
     forestSeeds: [
@@ -76,15 +77,16 @@ export const MAP_SIZES = {
       {col:16,row:4},{col:0,row:7},{col:1,row:11},{col:16,row:9},
       {col:9,row:3},{col:10,row:9},{col:0,row:4},{col:7,row:11},
       {col:5,row:1},{col:12,row:6},{col:3,row:6},{col:14,row:11},
+      {col:2,row:13},{col:14,row:14},{col:8,row:15},{col:1,row:16},{col:15,row:16},
     ],
     nodeCount: 3,
-    survivorCounts: { buildings: 16, terrain: 4 },
+    survivorCounts: { buildings: 18, terrain: 4 },
     bridgeMax: 5,
     minBridges: 2,
   },
   campaign: {
-    label: 'Campaign (21×15)',
-    cols: 21, rows: 15,
+    label: 'Campaign (21×21)',
+    cols: 21, rows: 21,
     villages: ['market', 'parish', 'harbor', 'garrison', 'farmstead'],
     minVillageDist: 7,
     forestSeeds: [
@@ -93,9 +95,11 @@ export const MAP_SIZES = {
       {col:11,row:3},{col:12,row:11},{col:0,row:5},{col:8,row:13},
       {col:5,row:1},{col:15,row:7},{col:3,row:7},{col:17,row:13},
       {col:8,row:0},{col:14,row:0},{col:0,row:10},{col:20,row:7},
+      {col:3,row:15},{col:17,row:16},{col:10,row:17},{col:5,row:18},
+      {col:14,row:19},{col:0,row:20},{col:20,row:20},{col:10,row:20},
     ],
     nodeCount: 3,
-    survivorCounts: { buildings: 20, terrain: 5 },
+    survivorCounts: { buildings: 24, terrain: 6 },
     bridgeMax: 6,
     minBridges: 3,
   },
@@ -233,29 +237,40 @@ function _pickCornerBuildings(rand, tiles) {
   return result;
 }
 
-// Build a row→col map from the generated river path (captured before tiles are mutated).
-function _buildRiverMap(riverPath) {
+// Build a lookup map from the generated river path (captured before tiles are mutated).
+// N-S river: row→col map.  E-W river: col→row map.
+function _buildRiverMap(riverPath, riverEW = false) {
   const m = new Map();
-  for (const { col, row } of riverPath) m.set(row, col);
+  if (riverEW) {
+    for (const { col, row } of riverPath) m.set(col, row);
+  } else {
+    for (const { col, row } of riverPath) m.set(row, col);
+  }
   return m;
 }
 
-// Which side of the river is a hex on? 'left' (west) or 'right' (east).
-// Hexes that share the exact river column are treated as 'right' (consistent tiebreak).
-function _riverSide(col, row, riverMap) {
+// Which side of the river is a hex on?
+// N-S river: 'left' (west) or 'right' (east).
+// E-W river: 'left' (north/top) or 'right' (south/bottom).
+// Hexes at the exact river position are treated as 'right' (consistent tiebreak).
+function _riverSide(col, row, riverMap, riverEW = false) {
+  if (riverEW) {
+    const rr = riverMap.get(col);
+    return (rr === undefined || row < rr) ? 'left' : 'right';
+  }
   const rc = riverMap.get(row);
   return (rc === undefined || col < rc) ? 'left' : 'right';
 }
 
 // Like _pickSpread but guarantees at least one node on each side of the river
 // when count >= 2 and both sides have valid candidates.
-function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, riverMap) {
+function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, riverMap, riverEW = false) {
   const left = [], right = [];
   for (const [k, t] of tiles) {
     if (t.type !== TileType.GRASS) continue;
     if (forbiddenKeys.has(k)) continue;
     if (t.col < 1 || t.col > MAP_COLS - 2 || t.row < 1 || t.row > MAP_ROWS - 2) continue;
-    (_riverSide(t.col, t.row, riverMap) === 'left' ? left : right).push({ col: t.col, row: t.row });
+    (_riverSide(t.col, t.row, riverMap, riverEW) === 'left' ? left : right).push({ col: t.col, row: t.row });
   }
   _shuffle(left, rand);
   _shuffle(right, rand);
@@ -359,7 +374,7 @@ function _generateVillages(rand, tiles, villageNames, minVillageDist, reservedKe
   return { allPlacements, villageGroups };
 }
 
-// Generate a meandering river path: exactly one tile per row (row 0 → MAP_ROWS-1).
+// Generate a north-south meandering river path: exactly one tile per row (row 0 → MAP_ROWS-1).
 // This guarantees every interior tile has exactly 2 river neighbours (no clusters),
 // and the two endpoints each have exactly 1 (so the bezier can extend off-screen).
 //
@@ -391,6 +406,33 @@ function _generateRiver(rand) {
   return path;
 }
 
+/// Generate an east-west meandering river path: exactly one tile per column (col 0 → MAP_COLS-1).
+// Drift is only allowed when the current row is ODD, because in odd-r offset the only
+// rightward neighbors of an even-row hex are at (col+1, row) — no diagonal step exists.
+// From an odd-row hex the rightward neighbors are (col+1, row-1), (col+1, row), (col+1, row+1).
+function _generateRiverEW(rand) {
+  const path = [];
+  const minStart = Math.max(2, Math.floor(MAP_ROWS / 4));
+  const rangeLen  = Math.max(1, Math.floor(MAP_ROWS / 2));
+  const startRow  = minStart + Math.floor(rand() * rangeLen);
+  let row = Math.min(startRow, MAP_ROWS - 3);
+
+  for (let col = 0; col < MAP_COLS; col++) {
+    path.push({ col, row });
+
+    if (col < MAP_COLS - 1) {
+      if (row % 2 === 1) {
+        // Odd row: upper-right (row-1), straight (row), or lower-right (row+1) are all hex-adjacent
+        const opts = [row - 1, row, row + 1].filter(r => r >= 2 && r <= MAP_ROWS - 3);
+        row = opts[Math.floor(rand() * opts.length)];
+      }
+      // Even row: only (col+1, row) is a rightward hex-neighbor — must go straight
+    }
+  }
+
+  return path;
+}
+
 export function generateMap(seed = Date.now(), mapSize = 'standard') {
   const cfg = MAP_SIZES[mapSize] ?? MAP_SIZES.standard;
   setMapDimensions(cfg.cols, cfg.rows);
@@ -405,9 +447,11 @@ export function generateMap(seed = Date.now(), mapSize = 'standard') {
     }
   }
 
-  // 2. Carve meandering river; capture path to build a row→col lookup for later checks.
-  const riverPath = _generateRiver(rand);
-  const riverMap  = _buildRiverMap(riverPath);
+  // 2. Carve meandering river — randomly N-S or E-W.
+  //    Capture path to build a positional lookup for later checks.
+  const riverEW   = rand() < 0.5;
+  const riverPath = riverEW ? _generateRiverEW(rand) : _generateRiver(rand);
+  const riverMap  = _buildRiverMap(riverPath, riverEW);
   for (const { col, row } of riverPath) {
     const t = tiles.get(hexKey(col, row));
     if (t) t.type = TileType.RIVER;
@@ -468,7 +512,7 @@ export function generateMap(seed = Date.now(), mapSize = 'standard') {
 
   // Guarantee minimum river crossings on the inter-village trunk
   {
-    const side = (col, row) => _riverSide(col, row, riverMap);
+    const side = (col, row) => _riverSide(col, row, riverMap, riverEW);
     const crossCount = interEdges.filter(e =>
       side(e.from.col, e.from.row) !== side(e.to.col, e.to.row)
     ).length;
@@ -486,8 +530,14 @@ export function generateMap(seed = Date.now(), mapSize = 'standard') {
       const chosen = [];
       for (const e of extra) {
         if (chosen.length >= cfg.minBridges - crossCount) break;
-        const midRow = (e.from.row + e.to.row) / 2;
-        if (!chosen.some(c => Math.abs((c.from.row + c.to.row) / 2 - midRow) < 2)) {
+        // Space bridges along the perpendicular axis to the river
+        const midPos = riverEW
+          ? (e.from.col + e.to.col) / 2
+          : (e.from.row + e.to.row) / 2;
+        const cMidPos = c => riverEW
+          ? (c.from.col + c.to.col) / 2
+          : (c.from.row + c.to.row) / 2;
+        if (!chosen.some(c => Math.abs(cMidPos(c) - midPos) < 2)) {
           chosen.push(e); interEdges.push(e);
         }
       }
@@ -595,7 +645,7 @@ export function generateMap(seed = Date.now(), mapSize = 'standard') {
 
   // 6. Place witch objectives — well-spread, guaranteed across both sides of the river
   const buildingKeys = new Set(buildingPlacements.map(b => hexKey(b.col, b.row)));
-  const objPositions = _pickNodesAcrossRiver(rand, tiles, cfg.nodeCount, 4, buildingKeys, riverMap);
+  const objPositions = _pickNodesAcrossRiver(rand, tiles, cfg.nodeCount, 4, buildingKeys, riverMap, riverEW);
   const witchObjectives = objPositions.map((pos, i) => ({
     col: pos.col, row: pos.row, label: WITCH_OBJECTIVE_LABELS[i] ?? `Power Node ${i + 1}`,
   }));
