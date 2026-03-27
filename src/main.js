@@ -308,6 +308,34 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     ];
     const events = allStepEvents.filter(ev => ev.type === ResEventType.ACTION_OK);
 
+    // ── Frame camera on this step's actors ──────────────────────────────────
+    if (!_autoplay) {
+      const _cspd = ui?.speedMode ?? 'cinematic';
+      if (_cspd !== 'instant') {
+        const frameTargets = [];
+        for (const ev of events) {
+          const snap = step.entitySnapshot?.find(e => e.id === ev.action?.entityId);
+          const isOpponent = humanFaction && ev.faction !== humanFaction;
+          if (snap && !(isOpponent && state.fogOfWar)) {
+            // For moves, frame the destination; for others, frame the actor's current position
+            if (ev.action.type === PlanActionType.MOVE) {
+              frameTargets.push({ col: ev.action.toCol, row: ev.action.toRow });
+            } else {
+              frameTargets.push({ col: snap.col, row: snap.row });
+            }
+            // For battles, also frame the target
+            if ((ev.action.type === PlanActionType.BATTLE_UNIT || ev.action.type === PlanActionType.BATTLE_HEX) && ev.battleSnaps?.targetSnap) {
+              frameTargets.push({ col: ev.battleSnaps.targetSnap.col, row: ev.battleSnaps.targetSnap.row });
+            }
+          }
+        }
+        if (frameTargets.length) {
+          renderer.frameHexes(frameTargets, { paddingHexes: 3.0, maxZoom: 2.0, duration: 250 });
+          await _delay(_cspd === 'fast' ? 100 : 280);
+        }
+      }
+    }
+
     // ── Phase 0: food consumed floaters ──────────────────────────────────────
     for (const ev of allStepEvents.filter(e => e.type === ResEventType.FOOD_CONSUMED)) {
       if (humanFaction && ev.faction !== humanFaction) continue;
@@ -402,33 +430,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         if (battleSnaps && showDialog) {
           const { actorSnap, targetSnap } = battleSnaps;
           const significant = isBattleSignificant(actorSnap, targetSnap, result, humanFaction);
-          // Zoom in on the combatants for significant battles only
-          if (!_autoplay && significant) {
-            renderer.frameHexes(
-              [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
-              { paddingHexes: 2.5, maxZoom: 2.0, duration: 350 },
-            );
-          }
-          renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
-          // HP-change floaters derived from pre/post snapshots (covers all damage sources)
-          for (const snap of [actorSnap, targetSnap]) {
-            const post = postEntities.find(e => e.id === snap.id);
-            if (post) renderer.addHpChangeFlash(post.col, post.row, post.hp - snap.hp);
-          }
-          if (result?.killed) {
-            // Brief delay so the attack flash is visible before the death burst
-            setTimeout(() => {
-              const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
-              renderer.addDeathAnim(targetSnap.col, targetSnap.row, deadColor);
-            }, 350);
-          }
-          redrawFn();
+
           if (!_autoplay) {
             const speed = ui?.speedMode ?? 'cinematic';
-            // Decide display mode per speed setting:
-            //   cinematic — dialog for significant battles (default)
-            //   fast      — toast only; dialog on kill
-            //   instant   — no dialog/toast; skip pauses
             const isKill = !!result?.killed;
             const showFullDialog = speed === 'cinematic'
               ? significant
@@ -436,24 +440,43 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
                 ? isKill
                 : false; // instant: never
 
-            // Zoom: cinematic → significant battles only; fast/instant → never
-            const shouldZoom = speed === 'cinematic' && significant;
-
-            if (shouldZoom) {
-              renderer.frameHexes(
-                [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
-                { paddingHexes: 2.5, maxZoom: 2.0, duration: 350 },
-              );
-            }
-
+            // Show dialog FIRST, then fire result animations after dismissal
             if (showFullDialog) {
               await new Promise(resolve => {
                 ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
               });
             } else if (speed !== 'instant') {
               ui._showBattleToast(actorSnap, targetSnap, result);
-              await _delay(speed === 'fast' ? 300 : 600);
             }
+
+            // Fire visual result animations AFTER dialog/toast dismissed
+            renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
+            for (const snap of [actorSnap, targetSnap]) {
+              const post = postEntities.find(e => e.id === snap.id);
+              if (post) renderer.addHpChangeFlash(post.col, post.row, post.hp - snap.hp);
+            }
+            if (isKill) {
+              const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
+              renderer.addDeathAnim(targetSnap.col, targetSnap.row, deadColor);
+            }
+            redrawFn();
+
+            // Brief pause to let result animations play out
+            if (speed !== 'instant') {
+              await _delay(speed === 'fast' ? 200 : 500);
+            }
+          } else {
+            // Autoplay: fire all animations immediately without dialogs
+            renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
+            for (const snap of [actorSnap, targetSnap]) {
+              const post = postEntities.find(e => e.id === snap.id);
+              if (post) renderer.addHpChangeFlash(post.col, post.row, post.hp - snap.hp);
+            }
+            if (result?.killed) {
+              const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
+              renderer.addDeathAnim(targetSnap.col, targetSnap.row, deadColor);
+            }
+            redrawFn();
           }
           hadBattle = true;
         }
