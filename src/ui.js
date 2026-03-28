@@ -1912,7 +1912,6 @@ export class UIController {
       desc,
       `☀ Day: witch undead in the open take ${level} damage`,
       `🌙 Night: survivors in the open take ${level} damage`,
-      `🏰 All fortifications degrade by 1 each night (minimum 1)`,
     ], () => {});
   }
 
