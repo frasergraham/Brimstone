@@ -1412,7 +1412,7 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
   const draw = redrawFn ?? redraw;
 
   _replayAborted      = false;
-  _replayPaused       = false;
+  _replayPaused       = true;    // start paused at round 1; user presses play to begin
   _replayGoBack       = false;
   _replayAtRoundStart = false;
   _replayActive       = true;
@@ -1420,7 +1420,7 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
   const savedSpeedMode = ui.speedMode;
   ui.speedMode = 'fast';
 
-  // Control callback wired to HUD buttons
+  // Control callback wired to HUD buttons; override initial state to paused
   ui.showReplayHUD(rounds.length, (action) => {
     switch (action) {
       case 'play':
@@ -1451,6 +1451,7 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
         break;
     }
   });
+  ui.setReplayPlayState('pause'); // override showReplayHUD's default 'play' indicator
 
   let lastSteps    = null;
   let lastRoundNum = 0;
