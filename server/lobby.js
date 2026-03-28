@@ -37,10 +37,9 @@ const PERSONALITY_LABELS = {
   swarm:     'Swarm',
 };
 
-function _randomPersonality(faction) {
-  const registry = faction === 'witch' ? WITCH_PERSONALITIES : HERO_PERSONALITIES;
-  const keys = Object.keys(registry);
-  return keys[Math.floor(Math.random() * keys.length)];
+function _randomPersonality(_faction) {
+  // Non-balanced personalities are temporarily disabled pending tuning.
+  return 'balanced';
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -330,25 +329,41 @@ function _startPlanningPhase(room) {
   });
 }
 
-/** Generate and submit plans for every AI seat, staggered by a short random delay. */
+/** Generate and submit plans for every AI seat, staggered by a short random delay.
+ *
+ * Allied AI players of the same faction share a mutable ally context so each
+ * player's plan avoids duplicating the prior player's node targets and battle focus.
+ * The staggered timeouts fire in a deterministic order (offset 0, 400, 800 …),
+ * so context written by an earlier AI is visible to all later ones in the same faction.
+ */
 function _runAIPlanSubmission(room) {
   if (room.state.gameOver) return;
+
+  // One ally context per faction — shared across all AI players of that faction.
+  const heroCtx  = { claimedNodes: new Set(), allyPositions: [] };
+  const witchCtx = { claimedNodes: new Set(), allyPositions: [] };
+
   let offset = 0;
   for (const seat of room.players) {
     if (!seat.isAI || !seat.ai) continue;
     const delay = 300 + offset + Math.floor(Math.random() * 350);
     offset += 400;
-    const { playerId, ai } = seat;
+    const { playerId, faction, ai } = seat;
+    const ctx = faction === 'hero' ? heroCtx : witchCtx;
     setTimeout(() => {
       if (!rooms.has(room.id)) return;
       if (room.state.gameOver || !room.state.planningPhase) return;
       let plan;
       try {
-        plan = ai.generatePlan();
+        plan = ai.generatePlan(ctx);
       } catch (err) {
         console.error(`[room ${room.id}] AI plan generation error for ${playerId}:`, err);
         plan = [];
       }
+      // Update ally context so subsequent AI players (higher offsets) see this plan's choices.
+      const leader = room.state.entities.find(e => e.alive && e.ownerId === playerId &&
+        (e.type === 'hero' || e.type === 'witch'));
+      if (leader) ctx.allyPositions.push({ col: leader.col, row: leader.row });
       _submitPlayerPlan(room, playerId, plan);
     }, delay);
   }
