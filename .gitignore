@@ -6,3 +6,4 @@ data/
 .env
 assets/generated/
 .DS_Store
+scripts/map-renders/
