@@ -698,7 +698,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
           hadBattle = true;
         }
       } else if (action.type === PlanActionType.SUMMON) {
-        renderer.addSpawnAnim(action.toCol, action.toRow, '#b39ddb');
+        const actorSnap = step.entitySnapshot?.find(e => e.id === action.entityId);
+        if (actorSnap) renderer.addSpawnAnim(actorSnap.col, actorSnap.row, '#b39ddb');
         hadBattle = true;
       }
     }

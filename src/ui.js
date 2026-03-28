@@ -1087,39 +1087,6 @@ export class UIController {
         executeFight(targetsAtHex[0]);
       }
 
-    } else if (actionType === ActionType.SUMMON) {
-      this._awaitingTarget = null;
-      this.renderer.highlightHexes = [];
-
-      if (this._planMode) {
-        this._addToPlan({ type: PlanActionType.SUMMON, entityId: actor.id, toCol: hex.col, toRow: hex.row, summonType: summonType ?? undefined });
-        if (actor.alive) this._selectEntity(actor);
-        else this._clearSelection();
-        this._updateSidebar();
-        this.onRedraw();
-        return;
-      }
-
-      if (this.mp?.active) {
-        this.mp.sendAction('summon', { entityId: actor.id, col: hex.col, row: hex.row, summonType: summonType ?? undefined });
-        this._clearSelection();
-        this._updateSidebar();
-        this.onRedraw();
-        return;
-      }
-      const result = executeSummon(state, actor, hex.col, hex.row, summonType ?? null);
-      for (const msg of result.log) state.addLog(msg);
-      if (result.success) {
-        state.spendAction(result.cost);
-        this.renderer.addSpawnAnim(hex.col, hex.row, '#b39ddb');
-      }
-      state.checkVictory();
-      if (actor.alive) { this._selectEntity(actor); }
-      else this._clearSelection();
-      this._updateSidebar();
-      this.onRedraw();
-      this._maybeShowNoActionsDialog();
-
     } else if (actionType === ActionType.BATTLE_HEX) {
       this._awaitingTarget = null;
       this.renderer.highlightHexes = [];
@@ -1539,7 +1506,6 @@ export class UIController {
     if (targeting && hint) {
       const labels = {
         [ActionType.BATTLE]:     'Tap an enemy to attack',
-        [ActionType.SUMMON]:     'Tap an adjacent empty hex',
         [ActionType.BATTLE_HEX]: 'Tap a hex to attack (skips if empty)',
       };
       hint.textContent = labels[this._awaitingTarget.actionType] ?? '';
@@ -1671,15 +1637,31 @@ export class UIController {
       case 'summon': {
         _hideActionPopup();
         const summonType = button.dataset.summonType ?? null;
-        this._awaitingTarget = { actionType: ActionType.SUMMON, actor: entity, summonType };
-        // Use targets from the matching summon action (all three share the same targets)
-        const summonAction = this._validActions.find(a => a.type === ActionType.SUMMON);
-        if (summonAction) {
-          this.renderer.highlightHexes = summonAction.targets.map(t => ({ ...t, color: 'rgba(180,80,200,0.30)' }));
+        if (this._planMode) {
+          this._addToPlan({ type: PlanActionType.SUMMON, entityId: entity.id, summonType: summonType ?? undefined });
+          if (entity.alive) this._selectEntity(entity);
+          else this._clearSelection();
+          this._updateSidebar();
+          this.onRedraw();
+        } else if (this.mp?.active) {
+          this.mp.sendAction('summon', { entityId: entity.id, summonType: summonType ?? undefined });
+          this._clearSelection();
+          this._updateSidebar();
+          this.onRedraw();
+        } else {
+          const result = executeSummon(state, entity, summonType ?? null);
+          for (const msg of result.log) state.addLog(msg);
+          if (result.success) {
+            state.spendAction(result.cost);
+            this.renderer.addSpawnAnim(entity.col, entity.row, '#b39ddb');
+          }
+          state.checkVictory();
+          if (entity.alive) this._selectEntity(entity);
+          else this._clearSelection();
+          this._updateSidebar();
+          this.onRedraw();
+          this._maybeShowNoActionsDialog();
         }
-        state.addLog('Click an adjacent empty hex to raise a unit.');
-        this._updateSidebar();
-        this.onRedraw();
         break;
       }
 
@@ -2732,12 +2714,12 @@ export class UIController {
                 if (icon !== '⚔' && icon !== '🐴') _addRes(foundRes, icon);
               }
             }
-            // Resources spent: summon
+            // Resources spent: summon — use result.spent for exact breakdown
             if (ev.action?.type === 'summon') {
-              const log0 = ev.result?.log?.[0] ?? '';
-              if (log0.includes('Iron Golem'))      _addRes(usedRes, '⚙', 2);
-              else if (log0.includes('Wood Golem')) _addRes(usedRes, '🪵', 2);
-              else                                  _addRes(usedRes, 'res', 2);
+              for (const { type, amount } of ev.result?.spent ?? []) {
+                const icon = RES_ICON_MAP[type] ?? type;
+                _addRes(usedRes, icon, amount);
+              }
             }
             // Resources spent: fortify
             if (ev.action?.type === 'fortify') {
