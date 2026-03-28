@@ -1322,13 +1322,13 @@ export class HeroAI {
       return { type: PlanActionType.EXPLORE, entityId: hero.id };
     }
 
-    // 5b. Fortify building before moving out — invest up to level 2 in day
+    // 5b. Fortify undefended building before moving out (quick one-time setup)
     if (heroTile && heroTile.type === TileType.BUILDING) {
       const fortLevel = heroTile.fortifyLevel || 0;
       const shared = sim.inventory.shared;
       const hasWood  = (shared[ResourceType.WOOD]  || 0) > 0;
       const hasMetal = (shared[ResourceType.METAL] || 0) > 0;
-      if (fortLevel <= 1 && (hasWood || hasMetal)) {
+      if (fortLevel === 0 && (hasWood || hasMetal)) {
         return { type: PlanActionType.FORTIFY, entityId: hero.id };
       }
     }
