@@ -593,24 +593,24 @@ export function executeBattle(state, actor, target) {
   let killed     = false;
   let damage     = 0;          // damage dealt to target
   let counterDmg = 0;          // damage dealt to attacker (counter)
-  let fortAbsorbed = 0;        // how many fortify levels were consumed
+  let fortDamaged = 0;         // fort levels lost this combat (1 if defender took any damage)
 
   if (hit) {
     // Crushing blow: attacker's roll is at least double the defender's roll
     const totalDmg = attackRoll >= 2 * defenseRoll ? 2 : 1;
 
+    // All damage goes directly to the defender
     for (let d = 0; d < totalDmg; d++) {
-      if (defTile && defTile.fortifyLevel > 0) {
-        // Fortification absorbs this point of damage
-        defTile.fortifyLevel -= 1;
-        fortAbsorbed += 1;
-        log.push(`🏰 The fortifications take the blow! (now +${defTile.fortifyLevel} DEF)`);
-      } else {
-        // Damage goes to the entity
-        damage += 1;
-        const wasKilled = target.takeDamage(1);
-        if (wasKilled) { killed = true; break; }
-      }
+      damage += 1;
+      const wasKilled = target.takeDamage(1);
+      if (wasKilled) { killed = true; break; }
+    }
+
+    // Fort takes -1 if the defender took any damage
+    if (damage > 0 && defTile && defTile.fortifyLevel > 0) {
+      defTile.fortifyLevel -= 1;
+      fortDamaged = 1;
+      log.push(`🏰 The fortifications are damaged! (now +${defTile.fortifyLevel} DEF)`);
     }
 
     if (killed) {
@@ -623,13 +623,6 @@ export function executeBattle(state, actor, target) {
     if (attackRoll >= 2 * defenseRoll) log.push(`💥 Crushing blow! (${attackRoll} vs ${defenseRoll})`);
   } else {
     log.push(`${target.displayName} defends successfully.`);
-
-    // Tie (margin === 0) chips fortification by 1 — close call, cracks the walls
-    if (margin === 0 && defTile && defTile.fortifyLevel > 0) {
-      defTile.fortifyLevel -= 1;
-      fortAbsorbed += 1;
-      log.push(`🏰 The blow chips the fortifications! (now +${defTile.fortifyLevel} DEF)`);
-    }
 
     // Counter-attack: defender's roll is at least double the attacker's roll
     if (defenseRoll >= 2 * attackRoll && actor.alive) {
@@ -648,7 +641,7 @@ export function executeBattle(state, actor, target) {
   return {
     success: true, log, cost: 1,
     attackRoll, defenseRoll, hit, killed,
-    margin, damage, counterDmg, fortAbsorbed,
+    margin, damage, counterDmg, fortDamaged,
     attackerAllies, defenderAllies,
     breakdown: {
       atkBaseDie, defBaseDie,

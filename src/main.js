@@ -396,8 +396,10 @@ async function _runLocalResolution(skipSummary = false) {
  */
 function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
   renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
-  if (result?.damage)     renderer.addHpChangeFlash(targetSnap.col, targetSnap.row, -(result.damage));
-  if (result?.counterDmg) renderer.addHpChangeFlash(actorSnap.col,  actorSnap.row,  -(result.counterDmg));
+  if (result?.damage)      renderer.addHpChangeFlash(targetSnap.col, targetSnap.row, -(result.damage));
+  if (result?.counterDmg)  renderer.addHpChangeFlash(actorSnap.col,  actorSnap.row,  -(result.counterDmg));
+  if (result?.fortDamaged) renderer.addFlash(targetSnap.col, targetSnap.row, '🏰-1',
+    'rgba(120,120,140,0.15)', 1600, 0.65, 'rgba(180,180,200,1)');
   if (result?.killed) {
     const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
     renderer.addDeathAnim(targetSnap.col, targetSnap.row, deadColor);

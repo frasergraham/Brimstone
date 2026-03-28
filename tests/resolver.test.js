@@ -464,7 +464,7 @@ describe('resolvePlans — log entries tagged with faction', () => {
 // ── Battle results include required fields (Bugs #4 + #5) ───────────────────
 
 describe('resolvePlans — battle result fields', () => {
-  test('BATTLE_UNIT result includes hit, margin, fortAbsorbed, and breakdown', () => {
+  test('BATTLE_UNIT result includes hit, margin, fortDamaged, and breakdown', () => {
     const state = freshState();
     const hero = state.hero;
     const minion = createMinion(hero.col, hero.row);
@@ -483,7 +483,7 @@ describe('resolvePlans — battle result fields', () => {
     assert.ok(battleEvent, 'Should have an ACTION_OK event');
     assert.ok('hit' in battleEvent.result, 'Result should include hit field');
     assert.ok('margin' in battleEvent.result, 'Result should include margin field');
-    assert.ok('fortAbsorbed' in battleEvent.result, 'Result should include fortAbsorbed field');
+    assert.ok('fortDamaged' in battleEvent.result, 'Result should include fortDamaged field');
     assert.ok('breakdown' in battleEvent.result, 'Result should include breakdown field');
     assert.equal(typeof battleEvent.result.hit, 'boolean', 'hit should be a boolean');
     assert.equal(typeof battleEvent.result.margin, 'number', 'margin should be a number');

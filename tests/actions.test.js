@@ -438,7 +438,7 @@ describe('executeBattle', () => {
     assert.equal(r.breakdown.phaseBonus, 0, 'Hero should have no phase bonus in NIGHT');
   });
 
-  test('fortification absorbs damage before entity takes HP damage', () => {
+  test('fortification damaged when defender takes damage, defender still takes HP damage', () => {
     const state = freshState();
     const minion = createMinion(state.hero.col, state.hero.row);
     state.entities.push(minion);
@@ -451,11 +451,65 @@ describe('executeBattle', () => {
     const hpBefore = minion.hp;
     const r = executeBattle(state, state.hero, minion);
 
-    if (r.hit) {
-      // Fort should have absorbed at least 1 point
-      assert.ok(r.fortAbsorbed >= 0);
-      const expectedDamage = Math.max(0, (r.attackRoll >= 2 * r.defenseRoll ? 2 : 1) - r.fortAbsorbed);
-      assert.equal(minion.hp, Math.max(0, hpBefore - expectedDamage));
+    assert.ok(r.hit, 'Should be a hit with attackBonus=50');
+    // Defender takes real HP damage (fort no longer absorbs)
+    assert.ok(r.damage > 0, 'Defender should take damage directly');
+    // Fort also loses 1 level
+    assert.equal(r.fortDamaged, 1, 'fortDamaged should be 1');
+    assert.equal(minionTile.fortifyLevel, fortBefore - 1, 'Fort level should drop by 1');
+  });
+
+  test('fortification does NOT degrade when attacker misses', () => {
+    const state = freshState();
+    const minion = createMinion(state.hero.col, state.hero.row);
+    state.entities.push(minion);
+    const minionTile = state.tiles.get(hexKey(minion.col, minion.row));
+    minionTile.fortifyLevel = 2;
+    // Give minion huge defense so hero always misses
+    minion.defenseBonus = 50;
+
+    const fortBefore = minionTile.fortifyLevel;
+    const r = executeBattle(state, state.hero, minion);
+
+    assert.ok(!r.hit, 'Should be a miss with defender defenseBonus=50');
+    assert.equal(r.fortDamaged, 0, 'fortDamaged should be 0 on miss');
+    assert.equal(minionTile.fortifyLevel, fortBefore, 'Fort level should not change on miss');
+  });
+
+  test('fortification does NOT degrade on tie (margin === 0)', () => {
+    const state = freshState();
+    const minion = createMinion(state.hero.col, state.hero.row);
+    state.entities.push(minion);
+    const minionTile = state.tiles.get(hexKey(minion.col, minion.row));
+    minionTile.fortifyLevel = 2;
+    const fortBefore = minionTile.fortifyLevel;
+
+    // Run many battles and check any tie case doesn't damage the fort
+    for (let i = 0; i < 50; i++) {
+      const s2 = freshState();
+      const m2 = createMinion(s2.hero.col, s2.hero.row);
+      s2.entities.push(m2);
+      const t2 = s2.tiles.get(hexKey(m2.col, m2.row));
+      t2.fortifyLevel = 2;
+      const r = executeBattle(s2, s2.hero, m2);
+      if (r.margin === 0) {
+        // Tie: fort should not degrade
+        assert.equal(r.fortDamaged, 0, 'fortDamaged should be 0 on tie');
+        assert.equal(t2.fortifyLevel, 2, 'Fort level should not change on tie');
+        break;
+      }
+    }
+  });
+
+  test('night hazard does NOT degrade fortifications', () => {
+    const state = freshState();
+    // Set all tiles with fortifyLevel > 1 and verify they stay unchanged after night
+    for (const t of state.tiles.values()) {
+      t.fortifyLevel = 3;
+    }
+    state._applyNightHazard(1);
+    for (const t of state.tiles.values()) {
+      assert.equal(t.fortifyLevel, 3, 'Night should no longer erode fortifications');
     }
   });
 

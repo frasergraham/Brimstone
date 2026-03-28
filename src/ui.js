@@ -1766,14 +1766,8 @@ export class UIController {
     this._lastHazardKey = hazardKey;
 
     for (const pos of nightPositions) {
-      if (pos.isFort) {
-        // Fort degradation: subtle grey flash, small number
-        this.renderer.addFlash(pos.col, pos.row, '🏰-1', 'rgba(120,120,140,0.5)', 1600, 0.55, 'rgba(180,180,200,1)');
-      } else {
-        // Unit damage: big bold number
-        const dmg = pos.dmg || 1;
-        this.renderer.addFlash(pos.col, pos.row, `-${dmg}`, 'rgba(80,0,160,0.6)', 2200, 1.4, 'rgba(210,140,255,1)');
-      }
+      const dmg = pos.dmg || 1;
+      this.renderer.addFlash(pos.col, pos.row, `-${dmg}`, 'rgba(80,0,160,0.6)', 2200, 1.4, 'rgba(210,140,255,1)');
     }
     for (const pos of dayPositions) {
       const dmg = pos.dmg || 1;
@@ -1918,7 +1912,6 @@ export class UIController {
       desc,
       `☀ Day: witch undead in the open take ${level} damage`,
       `🌙 Night: survivors in the open take ${level} damage`,
-      `🏰 All fortifications degrade by 1 each night (minimum 1)`,
     ], () => {});
   }
 
@@ -2327,17 +2320,12 @@ export class UIController {
         outcome.textContent = `💀 ${targetSnap.name} is slain!${dmgNote}`;
         outcome.className   = 'battle-outcome kill';
       } else if (result.hit) {
-        if (result.fortAbsorbed > 0 && result.damage === 0) {
-          outcome.textContent = `🏰 Fortifications absorb the blow!`;
-          outcome.className   = 'battle-outcome miss';
-        } else if (result.damage >= 2) {
-          outcome.textContent = `💥💥 Crushing hit! ${targetSnap.name} takes ${result.damage} damage!`;
+        const fortNote = result.fortDamaged ? ` (-${result.fortDamaged} fortifications)` : '';
+        if (result.damage >= 2) {
+          outcome.textContent = `💥💥 Crushing hit! ${targetSnap.name} takes ${result.damage} damage!${fortNote}`;
           outcome.className   = 'battle-outcome kill';
-        } else if (result.fortAbsorbed > 0) {
-          outcome.textContent = `🏰 Fort weakened! ${targetSnap.name} takes ${result.damage} damage`;
-          outcome.className   = 'battle-outcome hit';
         } else {
-          outcome.textContent = `💥 Hit! ${targetSnap.name} takes 1 damage`;
+          outcome.textContent = `💥 Hit! ${targetSnap.name} takes 1 damage${fortNote}`;
           outcome.className   = 'battle-outcome hit';
         }
       } else if (result.counterDmg > 0) {
