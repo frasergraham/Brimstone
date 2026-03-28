@@ -351,6 +351,56 @@ function pickSummonType(inv) {
 
 // ── Execution ──────────────────────────────────────────────────────────────
 
+// Probability of spotting a hidden survivor when moving through a tile, by phase.
+// Keys are the Phase enum string values ('dawn', 'day', 'dusk', 'night').
+// Exploring a tile always finds survivors regardless of this table.
+const SURVIVOR_FIND_CHANCE = Object.freeze({
+  day:   0.50,
+  dawn:  0.35,
+  dusk:  0.35,
+  night: 0.25,
+});
+
+// Reveal and materialise a hidden survivor (or zombie for the witch) on a tile.
+// Clears the hiddenSurvivor flag and returns { encounterLog, encounterSurvivor }.
+function _triggerSurvivorEncounter(state, actor, col, row) {
+  const st = tile(state, col, row);
+  if (!st?.hiddenSurvivor) return null;
+  st.hiddenSurvivor = false;
+
+  const encounterLog = [];
+  let encounterSurvivor = null;
+
+  if (actor.owner === 'hero') {
+    const s = createSurvivor(col, row, actor.ownerId);
+    s.owner = 'hero';
+    state.entities.push(s);
+    const abilityNote = s.abilityLabel ? ` · ${s.abilityLabel}` : '';
+    encounterLog.push(`☺ ${s.name} the ${s.title} steps out of hiding and joins the party! (HP ${s.hp}/${s.maxHp} · ATK ${s.attack} · DEF ${s.defense}${abilityNote})`);
+    encounterSurvivor = {
+      type: 'survivor',
+      name: s.name, title: s.title,
+      hp: s.hp, maxHp: s.maxHp,
+      attack: s.attack, defense: s.defense,
+      abilityLabel: s.abilityLabel,
+      color: s.color,
+    };
+  } else {
+    const z = createZombie(col, row, actor.ownerId);
+    state.entities.push(z);
+    encounterLog.push(`† A cowering survivor is found… raised as a zombie! (HP ${z.hp}/${z.maxHp} · ATK ${z.attack} · DEF ${z.defense})`);
+    encounterSurvivor = {
+      type: 'zombie',
+      name: 'Zombie',
+      hp: z.hp, maxHp: z.maxHp,
+      attack: z.attack, defense: z.defense,
+      color: z.color,
+    };
+  }
+
+  return { encounterLog, encounterSurvivor };
+}
+
 export function executeMove(state, actor, targetCol, targetRow) {
   const log = [];
 
@@ -378,35 +428,10 @@ export function executeMove(state, actor, targetCol, targetRow) {
     actor.row = step.row;
     walkedPath.push({ col: step.col, row: step.row });
 
-    // Hidden survivor encounter — triggers at each tile stepped on
-    if (st.hiddenSurvivor) {
-      st.hiddenSurvivor = false;
-      if (actor.owner === 'hero') {
-        const s = createSurvivor(step.col, step.row, actor.ownerId);
-        s.owner = 'hero';
-        state.entities.push(s);
-        const abilityNote = s.abilityLabel ? ` · ${s.abilityLabel}` : '';
-        encounterLog.push(`☺ ${s.name} the ${s.title} steps out of hiding and joins the party! (HP ${s.hp}/${s.maxHp} · ATK ${s.attack} · DEF ${s.defense}${abilityNote})`);
-        encounterSurvivor = {
-          type: 'survivor',
-          name: s.name, title: s.title,
-          hp: s.hp, maxHp: s.maxHp,
-          attack: s.attack, defense: s.defense,
-          abilityLabel: s.abilityLabel,
-          color: s.color,
-        };
-      } else {
-        const z = createZombie(step.col, step.row, actor.ownerId);
-        state.entities.push(z);
-        encounterLog.push(`† A cowering survivor is found… raised as a zombie! (HP ${z.hp}/${z.maxHp} · ATK ${z.attack} · DEF ${z.defense})`);
-        encounterSurvivor = {
-          type: 'zombie',
-          name: 'Zombie',
-          hp: z.hp, maxHp: z.maxHp,
-          attack: z.attack, defense: z.defense,
-          color: z.color,
-        };
-      }
+    // Hidden survivor encounter — phase-based chance on movement
+    if (st.hiddenSurvivor && Math.random() < (SURVIVOR_FIND_CHANCE[state.phase] ?? 0.5)) {
+      const enc = _triggerSurvivorEncounter(state, actor, step.col, step.row);
+      if (enc) { encounterLog.push(...enc.encounterLog); encounterSurvivor = enc.encounterSurvivor; }
     }
   }
 
@@ -433,6 +458,14 @@ export function executeExplore(state, actor) {
 
   t.explored = true;
 
+  // Exploring always reveals a hidden survivor, regardless of phase.
+  let encounterLog = [];
+  let encounterSurvivor = null;
+  if (t.hiddenSurvivor) {
+    const enc = _triggerSurvivorEncounter(state, actor, actor.col, actor.row);
+    if (enc) { encounterLog = enc.encounterLog; encounterSurvivor = enc.encounterSurvivor; }
+  }
+
   // HERBALIST ability: also yield 1 herbs on any explore (goes to actor's items)
   const isHerbalist = actor.type === EntityType.SURVIVOR &&
     actor.ability === SurvivorAbility.HERBALIST;
@@ -452,7 +485,8 @@ export function executeExplore(state, actor) {
     lootItems.push('+🌿');
   }
 
-  return { success: true, log, cost: 1, lootItems };
+  if (encounterLog.length) log.push(...encounterLog);
+  return { success: true, log, cost: 1, lootItems, encounterLog, encounterSurvivor };
 }
 
 function _applyLoot(state, actor, lootType, log, lootItems) {

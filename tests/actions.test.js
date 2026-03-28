@@ -170,8 +170,14 @@ describe('executeMove', () => {
     const t = state.tiles.get(hexKey(target.col, target.row));
     t.hiddenSurvivor = true;
 
+    const origRandom = Math.random;
+    Math.random = () => 0.1; // always below discovery threshold
     const countBefore = state.entities.length;
-    executeMove(state, hero, target.col, target.row);
+    try {
+      executeMove(state, hero, target.col, target.row);
+    } finally {
+      Math.random = origRandom;
+    }
     assert.ok(state.entities.length > countBefore, 'A survivor should be added');
     assert.equal(t.hiddenSurvivor, false, 'hiddenSurvivor flag should be cleared');
     // The new entity should be a hero-side survivor
@@ -188,8 +194,14 @@ describe('executeMove', () => {
     const t = state.tiles.get(hexKey(target.col, target.row));
     t.hiddenSurvivor = true;
 
+    const origRandom = Math.random;
+    Math.random = () => 0.1; // always below discovery threshold
     const countBefore = state.entities.length;
-    executeMove(state, witch, target.col, target.row);
+    try {
+      executeMove(state, witch, target.col, target.row);
+    } finally {
+      Math.random = origRandom;
+    }
     assert.ok(state.entities.length > countBefore, 'An entity should be added');
     const newEnt = state.entities[state.entities.length - 1];
     assert.equal(newEnt.type, EntityType.ZOMBIE, 'Witch should raise a zombie from hidden survivor');
@@ -213,7 +225,11 @@ describe('executeMove', () => {
     const target = firstReachable(state, hero);
     if (!target) return;
     state.tiles.get(hexKey(target.col, target.row)).hiddenSurvivor = true;
-    const r = executeMove(state, hero, target.col, target.row);
+    const origRandom = Math.random;
+    Math.random = () => 0.1;
+    let r;
+    try { r = executeMove(state, hero, target.col, target.row); }
+    finally { Math.random = origRandom; }
     assert.ok(r.encounterSurvivor, 'encounterSurvivor should be set');
     assert.equal(r.encounterSurvivor.type, 'survivor');
     assert.ok(r.encounterSurvivor.name, 'should have a name');
@@ -229,7 +245,11 @@ describe('executeMove', () => {
     const target = firstReachable(state, witch);
     if (!target) return;
     state.tiles.get(hexKey(target.col, target.row)).hiddenSurvivor = true;
-    const r = executeMove(state, witch, target.col, target.row);
+    const origRandom = Math.random;
+    Math.random = () => 0.1;
+    let r;
+    try { r = executeMove(state, witch, target.col, target.row); }
+    finally { Math.random = origRandom; }
     assert.ok(r.encounterSurvivor, 'encounterSurvivor should be set for zombie');
     assert.equal(r.encounterSurvivor.type, 'zombie');
     assert.ok(typeof r.encounterSurvivor.hp === 'number', 'zombie should have hp');
@@ -754,6 +774,7 @@ describe('auto-equip weapon on loot find', () => {
     t.type = TileType.BUILDING;
     t.building = BuildingType.BLACKSMITH;
     t.explored = false;
+    t.hiddenSurvivor = false; // prevent survivor encounter from consuming Math.random calls
     return { state, hero, t };
   }
 
@@ -1038,5 +1059,171 @@ describe('computeProjectedInventory', () => {
     const s = baseState();
     computeProjectedInventory(s, [{ type: PlanActionType.SUMMON }]);
     assert.equal(s.inventory.witch.metal, 4, 'original state unchanged');
+  });
+});
+
+// ── Survivor discovery (phase-based chance) ───────────────────────────────────
+
+describe('survivor discovery — phase-based move chance', () => {
+  // Helper: place a hiddenSurvivor on the first reachable tile and attempt the move.
+  function moveOntoSurvivor(state, actor, roll) {
+    const target = firstReachable(state, actor);
+    if (!target) return null;
+    state.tiles.get(hexKey(target.col, target.row)).hiddenSurvivor = true;
+    const origRandom = Math.random;
+    Math.random = () => roll;
+    let r;
+    try { r = executeMove(state, actor, target.col, target.row); }
+    finally { Math.random = origRandom; }
+    return { r, target };
+  }
+
+  test('DAY phase: roll below 0.5 discovers survivor', () => {
+    const state = freshState();
+    resetRoster();
+    state.phase = Phase.DAY;
+    const out = moveOntoSurvivor(state, state.hero, 0.49);
+    if (!out) return;
+    assert.ok(out.r.encounterSurvivor, 'survivor should be found');
+    assert.equal(state.tiles.get(hexKey(out.target.col, out.target.row)).hiddenSurvivor, false);
+  });
+
+  test('DAY phase: roll at or above 0.5 misses survivor', () => {
+    const state = freshState();
+    resetRoster();
+    state.phase = Phase.DAY;
+    const out = moveOntoSurvivor(state, state.hero, 0.5);
+    if (!out) return;
+    assert.equal(out.r.encounterSurvivor, null, 'survivor should not be found');
+    assert.equal(state.tiles.get(hexKey(out.target.col, out.target.row)).hiddenSurvivor, true,
+      'hiddenSurvivor flag should remain true when missed');
+  });
+
+  test('NIGHT phase: roll below 0.25 discovers survivor', () => {
+    const state = freshState();
+    resetRoster();
+    state.phase = Phase.NIGHT;
+    const out = moveOntoSurvivor(state, state.hero, 0.24);
+    if (!out) return;
+    assert.ok(out.r.encounterSurvivor, 'survivor should be found at night with low roll');
+  });
+
+  test('NIGHT phase: roll at or above 0.25 misses survivor', () => {
+    const state = freshState();
+    resetRoster();
+    state.phase = Phase.NIGHT;
+    const out = moveOntoSurvivor(state, state.hero, 0.25);
+    if (!out) return;
+    assert.equal(out.r.encounterSurvivor, null, 'survivor should not be found at night with 0.25 roll');
+    assert.equal(state.tiles.get(hexKey(out.target.col, out.target.row)).hiddenSurvivor, true);
+  });
+
+  test('DAWN phase: roll below 0.35 discovers survivor', () => {
+    const state = freshState(); // starts as DAWN by default
+    resetRoster();
+    const out = moveOntoSurvivor(state, state.hero, 0.34);
+    if (!out) return;
+    assert.ok(out.r.encounterSurvivor, 'survivor found at dawn with roll below threshold');
+  });
+
+  test('DAWN phase: roll at or above 0.35 misses survivor', () => {
+    const state = freshState();
+    resetRoster();
+    const out = moveOntoSurvivor(state, state.hero, 0.35);
+    if (!out) return;
+    assert.equal(out.r.encounterSurvivor, null, 'survivor missed at dawn with roll at threshold');
+    assert.equal(state.tiles.get(hexKey(out.target.col, out.target.row)).hiddenSurvivor, true);
+  });
+
+  test('DUSK phase: roll below 0.35 discovers survivor', () => {
+    const state = freshState();
+    resetRoster();
+    state.phase = Phase.DUSK;
+    const out = moveOntoSurvivor(state, state.hero, 0.34);
+    if (!out) return;
+    assert.ok(out.r.encounterSurvivor, 'survivor found at dusk with roll below threshold');
+  });
+
+  test('missed survivor does not create any new entity', () => {
+    const state = freshState();
+    resetRoster();
+    state.phase = Phase.NIGHT;
+    const countBefore = state.entities.length;
+    moveOntoSurvivor(state, state.hero, 0.9); // well above any threshold
+    assert.equal(state.entities.length, countBefore, 'no entity should be created on a miss');
+  });
+
+  test('witch misses: no zombie created', () => {
+    const state = freshState();
+    state.phase = Phase.NIGHT;
+    const countBefore = state.entities.length;
+    moveOntoSurvivor(state, state.witch, 0.9);
+    assert.equal(state.entities.length, countBefore, 'no zombie on a missed roll');
+  });
+
+  test('witch hits at night: zombie is created', () => {
+    const state = freshState();
+    state.phase = Phase.NIGHT;
+    const out = moveOntoSurvivor(state, state.witch, 0.1);
+    if (!out) return;
+    assert.ok(out.r.encounterSurvivor, 'witch should encounter something');
+    assert.equal(out.r.encounterSurvivor.type, 'zombie');
+  });
+});
+
+describe('survivor discovery — explore always finds', () => {
+  test('explore finds survivor regardless of phase (NIGHT)', () => {
+    const state = freshState();
+    resetRoster();
+    state.phase = Phase.NIGHT;
+    const hero = state.hero;
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.explored = false;
+    t.hiddenSurvivor = true;
+    const countBefore = state.entities.length;
+    const r = executeExplore(state, hero);
+    assert.equal(r.success, true);
+    assert.ok(state.entities.length > countBefore, 'explore should always find the survivor');
+    assert.equal(t.hiddenSurvivor, false, 'flag should be cleared');
+    assert.ok(r.encounterSurvivor, 'result should carry encounterSurvivor');
+    assert.equal(r.encounterSurvivor.type, 'survivor');
+  });
+
+  test('explore finds survivor regardless of phase (DAY)', () => {
+    const state = freshState();
+    resetRoster();
+    state.phase = Phase.DAY;
+    const hero = state.hero;
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.explored = false;
+    t.hiddenSurvivor = true;
+    const r = executeExplore(state, hero);
+    assert.ok(r.encounterSurvivor, 'should always find survivor when exploring regardless of phase');
+  });
+
+  test('explore find works even if Math.random would block discovery', () => {
+    const state = freshState();
+    resetRoster();
+    const hero = state.hero;
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.explored = false;
+    t.hiddenSurvivor = true;
+    const origRandom = Math.random;
+    Math.random = () => 0.99; // would block any phase-based move discovery
+    let r;
+    try { r = executeExplore(state, hero); }
+    finally { Math.random = origRandom; }
+    assert.ok(r.encounterSurvivor, 'explore must find survivor ignoring Math.random');
+    assert.equal(t.hiddenSurvivor, false);
+  });
+
+  test('explore with no hidden survivor returns no encounterSurvivor', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.explored = false;
+    t.hiddenSurvivor = false;
+    const r = executeExplore(state, hero);
+    assert.equal(r.encounterSurvivor, null);
   });
 });
