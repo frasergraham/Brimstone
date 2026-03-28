@@ -8,7 +8,12 @@ import { fileURLToPath }   from 'url';
 import { VERSION } from './src/version.js';
 import { registerOrLogin, getPlayerByToken } from './server/auth.js';
 import { getLeaderboard }                    from './server/leaderboard.js';
-import { getActiveSaves, pruneStaleAndIncompatibleSaves } from './server/saves.js';
+import { getActiveSaves, pruneStaleAndIncompatibleSaves,
+         getCompletedGames, getCompletedGame, getCompletedGameRounds,
+         pinCompletedGame, deleteCompletedGame,
+         pruneExpiredCompletedGames, getAllCompletedGames,
+         createSpCompletedGame, getAllSpCompletedGames,
+         getSpCompletedGame, getSpCompletedGameRounds }    from './server/saves.js';
 import {
   createLobby, joinLobby, browseLobby,
   setSlotAI, removeSlotAI, fillAllWithAI, startGame, leaveLobby,
@@ -57,10 +62,54 @@ app.get('/api/saves', (req, res) => {
   res.json(getActiveSaves(player.id));
 });
 
+// REST: completed games for a player
+app.get('/api/completed-games', (req, res) => {
+  const token = req.query.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
+  res.json(getCompletedGames(player.id));
+});
+
+app.get('/api/completed-games/:gameId/rounds', (req, res) => {
+  const token = req.query.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
+  const game = getCompletedGame(req.params.gameId);
+  if (!game) { res.status(404).json({ error: 'Not found.' }); return; }
+  if (game.hero_player_id !== player.id && game.witch_player_id !== player.id) {
+    res.status(403).json({ error: 'Forbidden.' }); return;
+  }
+  res.json(getCompletedGameRounds(req.params.gameId));
+});
+
+app.post('/api/completed-games/:gameId/pin', (req, res) => {
+  const token = req.query.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
+  const pinned = !!req.body?.pinned;
+  const ok = pinCompletedGame(req.params.gameId, player.id, pinned);
+  if (!ok) { res.status(404).json({ error: 'Not found or forbidden.' }); return; }
+  res.json({ ok: true, pinned });
+});
+
+app.delete('/api/completed-games/:gameId', (req, res) => {
+  const token = req.query.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
+  const ok = deleteCompletedGame(req.params.gameId, player.id);
+  if (!ok) { res.status(404).json({ error: 'Not found or forbidden.' }); return; }
+  res.json({ ok: true });
+});
+
 // ── Admin pages ───────────────────────────────────────────────────────────────
 
-app.get('/admin', (_req, res) => res.sendFile(join(__dirname, 'admin.html')));
+app.get('/admin',    (_req, res) => res.sendFile(join(__dirname, 'admin.html')));
 app.get('/spectate', (_req, res) => res.sendFile(join(__dirname, 'index.html')));
+app.get('/replay',   (_req, res) => res.sendFile(join(__dirname, 'index.html')));
 
 // ── Admin REST API ────────────────────────────────────────────────────────────
 
@@ -117,6 +166,53 @@ app.post('/admin/api/saves/:roomId/activate', (req, res) => {
     return;
   }
   res.json({ ok: true, roomId: result.roomId });
+});
+
+app.get('/admin/api/completed-games', (_req, res) => {
+  res.json(getAllCompletedGames());
+});
+
+app.get('/admin/api/completed-games/:gameId', (req, res) => {
+  const game = getCompletedGame(req.params.gameId);
+  if (!game) { res.status(404).json({ error: 'Not found.' }); return; }
+  res.json(game);
+});
+
+app.get('/admin/api/completed-games/:gameId/rounds', (req, res) => {
+  res.json(getCompletedGameRounds(req.params.gameId));
+});
+
+// ── SP game uploads ───────────────────────────────────────────────────────────
+
+app.post('/api/sp/completed-games', (req, res) => {
+  const { gameId, heroName, witchName, winner, winReason, totalRounds,
+          gameVersion, mode, rounds } = req.body ?? {};
+  if (!gameId || !winner || !Array.isArray(rounds)) {
+    res.status(400).json({ error: 'gameId, winner, and rounds are required.' });
+    return;
+  }
+  try {
+    createSpCompletedGame(gameId, { heroName, witchName, winner, winReason,
+      totalRounds, gameVersion, mode }, rounds);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('SP upload error:', e);
+    res.status(500).json({ error: 'Failed to store game.' });
+  }
+});
+
+app.get('/admin/api/sp/completed-games', (_req, res) => {
+  res.json(getAllSpCompletedGames());
+});
+
+app.get('/admin/api/sp/completed-games/:gameId', (req, res) => {
+  const game = getSpCompletedGame(req.params.gameId);
+  if (!game) { res.status(404).json({ error: 'Not found.' }); return; }
+  res.json(game);
+});
+
+app.get('/admin/api/sp/completed-games/:gameId/rounds', (req, res) => {
+  res.json(getSpCompletedGameRounds(req.params.gameId));
 });
 
 // ── HTTP + WS server ─────────────────────────────────────────────────────────
@@ -328,4 +424,6 @@ server.listen(PORT, () => {
   console.log(`Brimstone v${VERSION} listening on port ${PORT}`);
   const pruned = pruneStaleAndIncompatibleSaves(VERSION);
   if (pruned > 0) console.log(`Pruned ${pruned} stale/incompatible save(s).`);
+  const prunedCompleted = pruneExpiredCompletedGames();
+  if (prunedCompleted > 0) console.log(`Pruned ${prunedCompleted} expired completed game(s).`);
 });

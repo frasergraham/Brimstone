@@ -26,6 +26,17 @@ let _resolving = false;           // true while _animateResolutionSteps is runni
 let _pendingPlanningPhase = null; // buffered onPlanningPhase payload received during animation
 let _tutorialConductor = null;    // non-null while a tutorial session is active
 
+// ── Round-history for full-game replay ───────────────────────────────────────
+// Accumulated during a session; reset each new/resumed game.
+let _roundHistory        = [];  // SP offline:  { roundNum, preState, steps }[]
+let _onlineRoundHistory  = [];  // MP online:   { roundNum, preState, steps }[]
+let _replayAborted       = false;
+let _replayPaused        = false;
+let _replayGoBack        = false;   // false | 'curr' | 'prev'
+let _replayAtRoundStart  = false;   // true while paused at the pre-animation point of a round
+let _replayActive        = false;   // true while _replayFullGame is running
+let _replaySpeedMult     = 0.5;     // playback speed multiplier (0.5=play, 1.0=ff, 1.5=vff)
+
 // ── Local game init ───────────────────────────────────────────────────────────
 
 function _genSaveId() {
@@ -58,6 +69,7 @@ function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
 function init(witchIsAI, heroIsAI, autoplay = false) {
   _autoplay = autoplay;
   _tutorialConductor = null; // ensure tutorial state is cleared for normal games
+  _roundHistory = [];
   // Assign a fresh save ID for this game (only used for single-player saves)
   _spSaveId = _genSaveId();
   const canvas = document.getElementById('game-canvas');
@@ -277,6 +289,10 @@ async function _runLocalResolution(skipSummary = false) {
     var _foodOverage = orig - cap;
   }
 
+  // Snapshot state BEFORE resolution for full-game replay
+  const _preResolveStateJson = JSON.stringify(serializeState(state));
+  const _preResolveRoundNum  = state.round;
+
   let steps;
   try {
     steps = resolvePlans(state, state.heroPlan, state.witchPlan);
@@ -327,25 +343,50 @@ async function _runLocalResolution(skipSummary = false) {
   // Persist single-player progress to localStorage
   _saveSpGame();
 
+  // Accumulate round for full-game replay
+  if (!_autoplay) {
+    _roundHistory.push({
+      roundNum:     _preResolveRoundNum,
+      preState:     _preResolveStateJson,
+      steps:        JSON.stringify(steps),
+      // Save post-resolution entities for the last round so the replay
+      // correctly snaps to the outcome (not back to pre-action positions).
+      // Captured before endRound() so it reflects combat results only.
+      finalEntities: state.gameOver ? finalEntities : undefined,
+    });
+  }
+
   // Show post-resolution summary modal (skip in autoplay or tutorial mode)
   if (!_autoplay && !skipSummary && ui && humanFaction) {
+    // Finalize game-over immediately — cleanup survives any navigation away
+    if (state.gameOver) {
+      if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
+      _saveCompletedSpGame(state.winner, state.winReason);
+      _uploadSpGame(state.winner, state.winReason);
+    }
+
     let action;
     do {
       action = await ui._showResolutionSummary(steps, state.round - 1, {
         prevScore, prevNodes, humanFaction, fogOfWar: state.fogOfWar,
         gameOver: state.gameOver, winner: state.winner, winReason: state.winReason,
+        hasFullReplay: _roundHistory.length > 0,
       });
       if (action === 'replay') {
         state.entities = preReplayEntities;
         redraw();
         await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+      } else if (action === 'replay-full') {
+        await _replayFullGame(_roundHistory, state.winner, state.winReason,
+          state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch');
+        _doRestart();
+        return;
       }
     } while (action === 'replay');
     // Animate score bar changes after summary is dismissed
     ui._animateScoreBar(prevScore, prevNodes);
 
     if (state.gameOver) {
-      if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
       if (action === 'viewmap') {
         // Lift fog so the player can inspect the final board
         state.fogOfWar = false;
@@ -358,16 +399,24 @@ async function _runLocalResolution(skipSummary = false) {
   } else if (state.gameOver && ui) {
     // Autoplay game-over — still show the summary so the user sees the result
     if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
+    _saveCompletedSpGame(state.winner, state.winReason);
+    _uploadSpGame(state.winner, state.winReason);
     let action;
     do {
       action = await ui._showResolutionSummary(steps, state.round - 1, {
         prevScore, prevNodes, humanFaction: null, fogOfWar: false,
         gameOver: true, winner: state.winner, winReason: state.winReason,
+        hasFullReplay: _roundHistory.length > 0,
       });
       if (action === 'replay') {
         state.entities = preReplayEntities;
         redraw();
         await _animateResolutionSteps(steps, finalEntities, redraw, null, null);
+      } else if (action === 'replay-full') {
+        await _replayFullGame(_roundHistory, state.winner, state.winReason,
+          state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch');
+        _doRestart();
+        return;
       }
     } while (action === 'replay');
     if (action === 'viewmap') {
@@ -380,6 +429,7 @@ async function _runLocalResolution(skipSummary = false) {
   } else if (state.gameOver) {
     // No UI (headless) — just clean up
     if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
+    _saveCompletedSpGame(state.winner, state.winReason);
     return;
   }
 
@@ -445,6 +495,8 @@ function _getBattleAllyEntities(actorSnap, targetSnap, entities) {
 async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFaction = null, myPlayerId = null) {
   _resolving = true;
   for (let i = 0; i < steps.length; i++) {
+    // During replay: if BACK or STOP was pressed, abort remaining steps immediately
+    if (_replayGoBack || _replayAborted) break;
     const step = steps[i];
     // Post-step entities: what the world looks like AFTER this step resolves.
     const postEntities = i + 1 < steps.length ? steps[i + 1].entitySnapshot : finalEntities;
@@ -466,7 +518,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     // ── Frame camera on this step's actors ──────────────────────────────────
     if (!_autoplay) {
       const _cspd = ui?.speedMode ?? 'cinematic';
-      if (_cspd !== 'instant') {
+      {
         const frameTargets = [];
         for (const ev of events) {
           const snap = step.entitySnapshot?.find(e => e.id === ev.action?.entityId);
@@ -491,7 +543,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             maxZoom:      _isStep ? 3.5 : 2.0,
             duration:     _isStep ? 400 : 250,
           });
-          await _delay(_isStep ? 400 : (_cspd === 'fast' ? 100 : 280));
+          await _delay(_isStep ? 400 : (_cspd === 'vfast' ? 140 : 280));
         }
       }
     }
@@ -545,7 +597,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     if (moveAnims.length > 0) {
       hadMove = true;
       const _spd = ui?.speedMode ?? 'cinematic';
-      const hopDelay = _spd === 'instant' ? 0 : _spd === 'fast' ? 120 : 320;
+      const hopDelay = _spd === 'vfast' ? 160 : 320;
 
       // Determine max hops across all moving entities
       const maxHops = moveAnims.reduce((m, a) => Math.max(m, a.path.length), 0);
@@ -584,12 +636,15 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       redrawFn();
     }
 
-    for (const entry of pendingDialogs) {
-      redrawFn();
-      if (entry.encounterUnit) {
-        await new Promise(resolve => ui._showEncounterDialog(entry.encounterUnit, resolve));
-      } else {
-        await new Promise(resolve => ui._showResultDialog(entry.log, resolve));
+    const _suppressDialogs = _replayActive || ui?.speedMode === 'fast' || ui?.speedMode === 'vfast';
+    if (!_suppressDialogs) {
+      for (const entry of pendingDialogs) {
+        redrawFn();
+        if (entry.encounterUnit) {
+          await new Promise(resolve => ui._showEncounterDialog(entry.encounterUnit, resolve));
+        } else {
+          await new Promise(resolve => ui._showResultDialog(entry.log, resolve));
+        }
       }
     }
 
@@ -619,7 +674,6 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             const speed = ui?.speedMode ?? 'cinematic';
 
             // ── Step 1: Lunge — attacker slides toward target border ──────────
-            // Cinematic and fast both lunge; instant skips the visual.
             // Use current display position for both ends: if the target (or
             // actor) also has a MOVE in this same step, displayEntities already
             // has it at the post-move hex, so the lunge must chase that position
@@ -630,19 +684,17 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             const lungeFromRow = actorDisplay?.row  ?? actorSnap.row;
             const lungeToCol   = targetDisplay?.col ?? targetSnap.col;
             const lungeToRow   = targetDisplay?.row ?? targetSnap.row;
-            if (speed !== 'instant') {
-              renderer.addLungeAnim(
-                actorSnap.id,
-                lungeFromCol, lungeFromRow,
-                lungeToCol, lungeToRow,
-                actorSnap.type, actorSnap.owner, actorSnap.title ?? null,
-              );
-              redrawFn();
-              await _delay(speed === 'fast' ? 150 : 280);
-            }
+            renderer.addLungeAnim(
+              actorSnap.id,
+              lungeFromCol, lungeFromRow,
+              lungeToCol, lungeToRow,
+              actorSnap.type, actorSnap.owner, actorSnap.title ?? null,
+            );
+            redrawFn();
+            await _delay(speed === 'vfast' ? 140 : 280);
 
             // ── Step 2: Battle hex highlights ────────────────────────────────
-            if (speed !== 'instant') {
+            {
               const allyEntities = _getBattleAllyEntities(actorSnap, targetSnap, state.entities);
               renderer.setBattleHighlights(
                 [{ col: lungeFromCol, row: lungeFromRow }, { col: lungeToCol, row: lungeToRow }],
@@ -651,7 +703,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               redrawFn();
             }
 
-            // ── Step 3: Dialog (cinematic/step) or toast+floater (fast) ────────
+            // ── Step 3: Dialog (cinematic/step) or toast+floater (fast/vfast) ─
             if (speed === 'cinematic' || speed === 'step') {
               // Full dialog for every battle — no significance filter.
               // Offset camera so the map is visible beside the docked dialog.
@@ -669,20 +721,17 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
               // Drain all floaters (HP text 1800ms, death burst 600ms) before next battle.
               await renderer.waitForAnimations();
-            } else if (speed === 'fast') {
-              // On a miss (no damage to target) show a randomised flavour word;
-              // hits are already communicated by the red HP-change floater.
+            } else if (speed === 'fast' || speed === 'vfast') {
+              // Toast + floater only — no dialog.
+              // On a miss show a randomised flavour word; hits communicate via HP floater.
               if (!result.hit) {
                 const _MISS_TEXT = ['miss', 'dodged', 'blocked', 'parried', 'deflected'];
                 const missText = _MISS_TEXT[Math.floor(Math.random() * _MISS_TEXT.length)];
                 renderer.addFlash(targetSnap.col, targetSnap.row, missText, 'rgba(100,100,100,0.1)', 1000, 0.65, '#888');
               }
               _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
-              // Short fixed wait — floaters from different battles can overlap in fast mode.
-              await _delay(400);
-            } else {
-              // Instant — result animations only, no wait.
-              _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
+              // Brief wait so floaters from different battles don't pile up.
+              await _delay(speed === 'vfast' ? 200 : 400);
             }
 
             // ── Step 4: Clear highlights, animate lunge return ───────────────
@@ -762,8 +811,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         const _spd2 = ui?.speedMode ?? 'cinematic';
         if (_spd2 === 'step') {
           await ui._waitForStep();
-        } else if (_spd2 !== 'instant') {
-          await _delay(_spd2 === 'fast' ? 80 : hadMove ? 300 : 250);
+        } else {
+          await _delay(_spd2 === 'vfast' ? (hadMove ? 150 : 125) : hadMove ? 300 : 250);
         }
       }
     } else if (events.length > 0 && !_autoplay) {
@@ -771,20 +820,45 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       const _spd3 = ui?.speedMode ?? 'cinematic';
       if (_spd3 === 'step') {
         await ui._waitForStep();
-      } else if (_spd3 !== 'instant') {
-        await _delay(_spd3 === 'fast' ? 50 : 150);
+      } else {
+        await _delay(_spd3 === 'vfast' ? 75 : 150);
       }
     }
   }
 
-  // Restore the authoritative final state and do one last draw.
+  // Restore the authoritative final state.
   ui?._clearStepContinue();
   state.entities = finalEntities;
-  redrawFn();
+  // Skip the final redraw during replay navigation (caller will render the target preState).
+  if (!_replayGoBack && !_replayAborted) {
+    redrawFn();
+  }
   _resolving = false;
 }
 
-function _delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+function _delay(ms) {
+  if (!_replayActive) return new Promise(resolve => setTimeout(resolve, ms));
+
+  // During replay: poll every ≤50 ms so pause/abort/back take effect immediately.
+  const effective = _replaySpeedMult > 0 ? ms / _replaySpeedMult : ms;
+  return new Promise(resolve => {
+    let remaining = effective;
+    let last = Date.now();
+    function tick() {
+      if (_replayAborted || _replayGoBack) { resolve(); return; }
+      if (!_replayPaused) {
+        const now = Date.now();
+        remaining -= (now - last);
+        last = now;
+      } else {
+        last = Date.now(); // don't count paused time toward remaining
+      }
+      if (remaining <= 0) { resolve(); return; }
+      setTimeout(tick, Math.min(50, remaining));
+    }
+    tick();
+  });
+}
 
 
 // ── Online game init ──────────────────────────────────────────────────────────
@@ -879,11 +953,30 @@ document.getElementById('btn-options-back') .addEventListener('click', () => sho
 function _showSinglePlayerScreen() {
   showStep('singleplayer');
   _renderSpSaves();
+  _renderCompletedSpGames();
 }
 
 document.getElementById('btn-singleplayer-back').addEventListener('click', () => {
   renderer = null; ui = null; state = null;
   showStep('mode');
+});
+
+// Tab switching for In Progress / Completed panels (SP and MP)
+document.addEventListener('click', e => {
+  const tab = e.target.closest('.saves-tab');
+  if (!tab) return;
+  const bar = tab.closest('.saves-tab-bar');
+  if (!bar) return;
+  // Deactivate all tabs in this bar
+  bar.querySelectorAll('.saves-tab').forEach(t => t.classList.remove('active'));
+  tab.classList.add('active');
+  // Show the target panel, hide siblings
+  const targetId = tab.dataset.target;
+  const section  = bar.closest('.active-games-section');
+  if (!section) return;
+  section.querySelectorAll('.saves-list').forEach(el => {
+    el.style.display = el.id === targetId ? '' : 'none';
+  });
 });
 
 // Player mode radio changes (vs AI / Two Players / AI vs AI)
@@ -1020,6 +1113,7 @@ function _resumeSpSave(save) {
 /** Start a game from an existing deserialized state (used by SP resume). */
 function _startFromState(existingState, mode) {
   _autoplay = false;
+  _roundHistory = [];
   const canvas = document.getElementById('game-canvas');
 
   document.getElementById('setup-screen').style.display = 'none';
@@ -1111,13 +1205,519 @@ function _timeAgo(unixSecs) {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
+// ── Completed SP games (localStorage) ────────────────────────────────────────
+
+const _SP_COMPLETED_INDEX_KEY = 'brimstone_completed_index';
+const _SP_COMPLETED_MAX_AGE_S = 3 * 86400;  // 3 days
+const _SP_COMPLETED_MAX_GAMES = 10;
+
+function _loadCompletedSpIndex() {
+  try { return JSON.parse(localStorage.getItem(_SP_COMPLETED_INDEX_KEY) || '[]'); } catch { return []; }
+}
+
+function _saveCompletedSpIndex(index) {
+  try { localStorage.setItem(_SP_COMPLETED_INDEX_KEY, JSON.stringify(index)); } catch {}
+}
+
+/** Load full replay data for one completed game (or null). */
+function _loadCompletedSpGame(id) {
+  try { return JSON.parse(localStorage.getItem(`brimstone_completed_${id}`) || 'null'); } catch { return null; }
+}
+
+function _saveCompletedSpGameData(id, data) {
+  try { localStorage.setItem(`brimstone_completed_${id}`, JSON.stringify(data)); } catch {}
+}
+
+function _deleteCompletedSpGame(id) {
+  const index = _loadCompletedSpIndex().filter(g => g.id !== id);
+  _saveCompletedSpIndex(index);
+  try { localStorage.removeItem(`brimstone_completed_${id}`); } catch {}
+}
+
+function _pinCompletedSpGame(id, pinned) {
+  const index = _loadCompletedSpIndex();
+  const entry = index.find(g => g.id === id);
+  if (entry) {
+    entry.pinned = pinned;
+    _saveCompletedSpIndex(index);
+  }
+}
+
+/** Remove expired (unpinned, > 3 days old) completed games. */
+function _pruneCompletedSpGames() {
+  const now = Math.floor(Date.now() / 1000);
+  const index = _loadCompletedSpIndex();
+  const keep = index.filter(g => g.pinned || (now - g.createdAt) < _SP_COMPLETED_MAX_AGE_S);
+  const removed = index.filter(g => !keep.includes(g));
+  for (const g of removed) {
+    try { localStorage.removeItem(`brimstone_completed_${g.id}`); } catch {}
+  }
+  if (removed.length) _saveCompletedSpIndex(keep);
+}
+
+/** Persist a completed SP game with full replay rounds to localStorage. */
+function _saveCompletedSpGame(winner, winReason) {
+  if (!state || !_roundHistory.length) return;
+  const id      = _genSaveId();
+  const mode    = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : 'two-players';
+  const now     = Math.floor(Date.now() / 1000);
+  const meta    = {
+    id,
+    mode,
+    winner:      winner      ?? '',
+    winReason:   winReason   ?? '',
+    heroName:    state.hero?.displayName  ?? 'Hero',
+    witchName:   state.witch?.displayName ?? 'Witch',
+    totalRounds: state.round - 1,
+    createdAt:   now,
+    pinned:      false,
+  };
+
+  // Write replay data
+  _saveCompletedSpGameData(id, { meta, rounds: _roundHistory });
+
+  // Update index — keep max N (unpinned, non-latest removed first)
+  const index = _loadCompletedSpIndex();
+  index.unshift(meta);
+  // Prune: drop oldest unpinned beyond the limit
+  let kept = 0;
+  const pruned = [];
+  for (const g of index) {
+    if (g.pinned || kept < _SP_COMPLETED_MAX_GAMES) { kept++; }
+    else { pruned.push(g); }
+  }
+  for (const g of pruned) {
+    try { localStorage.removeItem(`brimstone_completed_${g.id}`); } catch {}
+  }
+  _saveCompletedSpIndex(index.filter(g => !pruned.includes(g)));
+}
+
+/**
+ * Fire-and-forget: upload the just-completed SP game to the server.
+ * Silently swallows errors — local localStorage copy is always authoritative.
+ */
+function _uploadSpGame(winner, winReason) {
+  if (!state || !_roundHistory.length) return;
+  const base = window.BRIMSTONE_SERVER || '';
+  if (!base && !location.hostname) return;  // no server configured
+
+  const mode    = !state.heroIsAI ? 'hvai' : !state.witchIsAI ? 'aivh' : 'aivai';
+  const gameId  = _genSaveId();
+  const payload = {
+    gameId,
+    heroName:    state.hero?.displayName  ?? 'Hero',
+    witchName:   state.witch?.displayName ?? 'Witch',
+    winner:      winner    ?? '',
+    winReason:   winReason ?? '',
+    totalRounds: state.round - 1,
+    gameVersion: VERSION,
+    mode,
+    rounds: _roundHistory.map(r => ({
+      roundNum: r.roundNum,
+      preState: typeof r.preState === 'string' ? r.preState : JSON.stringify(r.preState),
+      steps:    typeof r.steps    === 'string' ? r.steps    : JSON.stringify(r.steps),
+    })),
+  };
+
+  fetch(`${base}/api/sp/completed-games`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(payload),
+  }).catch(() => {});  // silently ignore network errors
+}
+
+/** Render the completed games tab on the SP setup screen. */
+function _renderCompletedSpGames() {
+  const list = document.getElementById('sp-completed-list');
+  if (!list) return;
+  _pruneCompletedSpGames();
+  const index = _loadCompletedSpIndex();
+  if (!index.length) {
+    list.innerHTML = '<p class="saves-empty">No completed games yet.</p>';
+    return;
+  }
+  const modeLabels = { hero: '⚔ vs AI', witch: '✦ vs AI', 'two-players': '👥 Two Players' };
+  list.innerHTML = '';
+  for (const g of index) {
+    const winnerLabel = g.winner === 'hero' ? '⚔ Hero wins' : '✦ Witch wins';
+    const ago = _timeAgo(g.createdAt);
+    const entry = document.createElement('div');
+    entry.className = 'save-entry';
+    entry.innerHTML = `
+      <div class="save-entry-info">
+        <div class="save-entry-title">${modeLabels[g.mode] ?? g.mode} — ${winnerLabel}</div>
+        <div class="save-entry-meta">${_esc(g.winReason)} · ${g.totalRounds} rounds · ${ago}${g.pinned ? ' 📌' : ''}</div>
+      </div>
+      <div style="display:flex;gap:0.4rem">
+        <button class="setup-btn primary sp-completed-replay-btn">Replay</button>
+        <button class="setup-btn sp-completed-pin-btn"   title="${g.pinned ? 'Unpin' : 'Pin to keep'}">${g.pinned ? '📌' : '📎'}</button>
+        <button class="setup-btn sp-completed-delete-btn" title="Delete">✕</button>
+      </div>
+    `;
+    entry.querySelector('.sp-completed-replay-btn').addEventListener('click', async () => {
+      const data = _loadCompletedSpGame(g.id);
+      if (!data?.rounds?.length) { alert('Replay data not found.'); return; }
+      // Need a game state to render — start a replay-only session
+      await _startSpReplay(data);
+    });
+    entry.querySelector('.sp-completed-pin-btn').addEventListener('click', () => {
+      _pinCompletedSpGame(g.id, !g.pinned);
+      _renderCompletedSpGames();
+    });
+    entry.querySelector('.sp-completed-delete-btn').addEventListener('click', () => {
+      _deleteCompletedSpGame(g.id);
+      _renderCompletedSpGames();
+    });
+    list.appendChild(entry);
+  }
+}
+
+/** Start a full-game replay from the setup screen (no active game session). */
+async function _startSpReplay(data) {
+  const { meta, rounds } = data;
+  if (!rounds.length) return;
+
+  // Reconstruct state from the first round's preState
+  const firstState = deserializeState(JSON.parse(rounds[0].preState));
+  const canvas = document.getElementById('game-canvas');
+
+  document.getElementById('setup-screen').style.display = 'none';
+  document.getElementById('game-screen').style.display  = 'flex';
+
+  state   = firstState;
+  witchAI = null;
+  heroAI  = null;
+
+  _setupLocalUI(canvas, null, null, false);
+  redraw();
+
+  requestAnimationFrame(async () => {
+    renderer.resize();
+    redraw();
+    await _replayFullGame(rounds, meta.winner, meta.winReason, meta.heroName, meta.witchName);
+    // After replay finishes, return to setup
+    document.getElementById('setup-screen').style.display = '';
+    document.getElementById('game-screen').style.display  = 'none';
+    state = null; renderer = null; ui = null;
+    showStep('singleplayer');
+    _renderSpSaves();
+    _renderCompletedSpGames();
+  });
+}
+
+// ── Full-game replay engine ───────────────────────────────────────────────────
+
+/**
+ * Replay all rounds of a completed game in sequence (fast mode by default).
+ * @param {Array}  rounds       — [{ roundNum, preState, steps }]
+ * @param {string} winner
+ * @param {string} winReason
+ * @param {string} heroName
+ * @param {string} witchName
+ * @param {Function} [redrawFn] — defaults to local redraw()
+ */
+async function _replayFullGame(rounds, winner, winReason, heroName, witchName, redrawFn) {
+  if (!rounds.length || !ui || !renderer) return null;
+  const draw = redrawFn ?? redraw;
+
+  _replayAborted      = false;
+  _replayPaused       = true;    // start paused at round 1; user presses play to begin
+  _replayGoBack       = false;
+  _replayAtRoundStart = false;
+  _replayActive       = true;
+  _replaySpeedMult    = 0.5;   // default: PLAY speed
+  const savedSpeedMode = ui.speedMode;
+  ui.speedMode = 'fast';
+
+  // Control callback wired to HUD buttons; override initial state to paused
+  ui.showReplayHUD(rounds.length, (action) => {
+    switch (action) {
+      case 'play':
+        _replaySpeedMult = 0.5; _replayPaused = false;
+        ui.setReplayPlayState('play');
+        break;
+      case 'ff':
+        _replaySpeedMult = 1.0; _replayPaused = false;
+        ui.setReplayPlayState('ff');
+        break;
+      case 'vff':
+        _replaySpeedMult = 2.0; _replayPaused = false;
+        ui.setReplayPlayState('vff');
+        break;
+      case 'pause':
+        _replayPaused = true;
+        ui.setReplayPlayState('pause');
+        break;
+      case 'back':
+        // Music-player behaviour: back at round start → go to previous round;
+        // back mid-animation → restart current round. Either way, implies pause.
+        _replayPaused = true;
+        _replayGoBack = _replayAtRoundStart ? 'prev' : 'curr';
+        ui.setReplayPlayState('pause');
+        break;
+      case 'stop':
+        _replayAborted = true; _replayPaused = false;
+        break;
+    }
+  });
+  ui.setReplayPlayState('pause'); // override showReplayHUD's default 'play' indicator
+
+  let lastSteps    = null;
+  let lastRoundNum = 0;
+  let lastPreState = null;
+
+  let _startFrom = 0;
+
+  // Outer loop: re-entered when BACK is pressed at the end-of-replay hold screen
+  replayOuter: while (true) {
+    for (let i = _startFrom; i < rounds.length; i++) {
+      if (_replayAborted) break;
+
+      const round = rounds[i];
+      const preStateData = typeof round.preState === 'string'
+        ? JSON.parse(round.preState)
+        : round.preState;
+      const preState = deserializeState(preStateData);
+
+      // Restore state and draw BEFORE the pause check — canvas always has valid content.
+      // Clear lingering animations from the previous round first to avoid ghost effects.
+      renderer.clearAnimations();
+      Object.assign(state, preState);
+      state.hero     = preState.hero;
+      state.witch    = preState.witch;
+      state.fogOfWar = false;
+      draw();
+
+      // ── At round start: accept BACK / PAUSE before animation begins ─────────
+      _replayAtRoundStart = true;
+      while (_replayPaused && !_replayAborted && !_replayGoBack) {
+        await new Promise(r => setTimeout(r, 50));
+      }
+      _replayAtRoundStart = false;
+      if (_replayAborted) break;
+
+      // BACK pressed while paused at round start → jump to prev/curr round
+      if (_replayGoBack) {
+        const toPrev = _replayGoBack === 'prev';
+        _replayGoBack = false;
+        i = Math.max(-1, toPrev ? i - 2 : i - 1);
+        continue;
+      }
+
+      // Show hazard flashes from the previous round's endRound() before animating
+      if (preState.lastNightDamage?.length || preState.lastDayDamage?.length) {
+        ui._triggerHazardFlashes();
+        await _delay(600);
+        if (_replayAborted) break;
+      }
+
+      ui.updateReplayHUD();
+
+      // Get final entities (start of next round = end of this round)
+      let finalEntities;
+      if (i + 1 < rounds.length) {
+        const nextData = typeof rounds[i + 1].preState === 'string'
+          ? JSON.parse(rounds[i + 1].preState)
+          : rounds[i + 1].preState;
+        finalEntities = nextData.entities ?? preState.entities;
+      } else {
+        // Last round: use saved post-resolution entities if present (captures actual
+        // combat outcomes), otherwise fall back to preState entities.
+        finalEntities = round.finalEntities ?? preState.entities;
+      }
+
+      const stepsRaw = typeof round.steps === 'string' ? JSON.parse(round.steps) : round.steps;
+      lastSteps    = stepsRaw;
+      lastRoundNum = typeof round.roundNum === 'number' ? round.roundNum : i + 1;
+      lastPreState = preState;
+
+      await _animateResolutionSteps(stepsRaw, finalEntities, draw, null, null);
+
+      if (_replayAborted) break;
+
+      // BACK pressed during animation → jump to prev/curr round
+      if (_replayGoBack) {
+        const toPrev = _replayGoBack === 'prev';
+        _replayGoBack = false;
+        i = Math.max(-1, toPrev ? i - 2 : i - 1);
+        continue;
+      }
+
+      // Brief inter-round pause (respects pause/abort flags via _delay)
+      if (i < rounds.length - 1) {
+        await _delay(300);
+        if (_replayGoBack) {
+          const toPrev = _replayGoBack === 'prev';
+          _replayGoBack = false;
+          i = Math.max(-1, toPrev ? i - 2 : i - 1);
+          continue;
+        }
+      }
+    }
+
+    _startFrom = 0; // reset for any restart
+
+    if (_replayAborted) break replayOuter;
+
+    // ── End-of-replay hold ──────────────────────────────────────────────────
+    // All rounds played — pause and wait for STOP or BACK rather than auto-exiting
+    _replayPaused       = true;
+    _replayAtRoundStart = true;   // treat end-hold as "at round start" for BACK logic
+    ui.setReplayPlayState('pause');
+
+    while (!_replayAborted && !_replayGoBack) {
+      await new Promise(r => setTimeout(r, 50));
+    }
+    _replayAtRoundStart = false;
+
+    if (_replayAborted) break replayOuter;
+
+    // BACK from end: jump to last or second-to-last round (stay paused)
+    if (_replayGoBack) {
+      const toPrev = _replayGoBack === 'prev';
+      _replayGoBack = false;
+      _startFrom = toPrev ? Math.max(0, rounds.length - 2) : Math.max(0, rounds.length - 1);
+      continue replayOuter;
+    }
+
+    break replayOuter; // safety exit (shouldn't reach here)
+  }
+
+  ui.hideReplayHUD();
+  _replayActive       = false;
+  _replayPaused       = false;
+  _replayGoBack       = false;
+  _replayAtRoundStart = false;
+  _replaySpeedMult    = 0.5;
+  ui.speedMode        = savedSpeedMode;
+  // Caller is responsible for navigation (e.g. _doRestart() or showing setup screen)
+}
+
+// ── Multiplayer completed games ───────────────────────────────────────────────
+
+function _fetchCompletedGames() {
+  const list = document.getElementById('mp-completed-list');
+  if (!list) return;
+  list.innerHTML = '<p class="saves-empty">Loading…</p>';
+
+  const session = loadSession();
+  if (!session) {
+    list.innerHTML = '<p class="saves-empty">Sign in to see completed games.</p>';
+    return;
+  }
+
+  const base = window.BRIMSTONE_SERVER || '';
+  fetch(`${base}/api/completed-games?token=${encodeURIComponent(session.token)}`)
+    .then(r => r.json())
+    .then(games => _renderCompletedGames(games, session))
+    .catch(() => {
+      list.innerHTML = '<p class="saves-empty">Could not load completed games.</p>';
+    });
+}
+
+function _renderCompletedGames(games, session) {
+  const list = document.getElementById('mp-completed-list');
+  if (!list) return;
+  if (!games.length) {
+    list.innerHTML = '<p class="saves-empty">No completed games.</p>';
+    return;
+  }
+  list.innerHTML = '';
+  const base = window.BRIMSTONE_SERVER || '';
+  for (const g of games) {
+    const myFaction   = g.hero_player_id === session?.id ? 'hero' : 'witch';
+    const winnerLabel = g.winner === 'hero' ? '⚔ Hero wins' : '✦ Witch wins';
+    const ago = _timeAgo(g.created_at);
+    const entry = document.createElement('div');
+    entry.className = 'save-entry';
+    entry.innerHTML = `
+      <div class="save-entry-info">
+        <div class="save-entry-title">${_esc(g.hero_name)} vs ${_esc(g.witch_name)} — ${winnerLabel}</div>
+        <div class="save-entry-meta">${_esc(g.win_reason)} · ${g.total_rounds} rounds · ${ago}${g.pinned ? ' 📌' : ''}</div>
+      </div>
+      <div style="display:flex;gap:0.4rem">
+        <button class="setup-btn primary mp-completed-replay-btn">Replay</button>
+        <button class="setup-btn mp-completed-pin-btn"   title="${g.pinned ? 'Unpin' : 'Pin to keep'}">${g.pinned ? '📌' : '📎'}</button>
+        <button class="setup-btn mp-completed-delete-btn" title="Delete">✕</button>
+      </div>
+    `;
+    entry.querySelector('.mp-completed-replay-btn').addEventListener('click', async () => {
+      const token = session.token;
+      try {
+        const rounds = await fetch(
+          `${base}/api/completed-games/${encodeURIComponent(g.game_id)}/rounds?token=${encodeURIComponent(token)}`
+        ).then(r => r.json());
+        await _startMpReplay(rounds, g);
+      } catch { alert('Could not load replay data.'); }
+    });
+    entry.querySelector('.mp-completed-pin-btn').addEventListener('click', async () => {
+      const token = session.token;
+      await fetch(`${base}/api/completed-games/${encodeURIComponent(g.game_id)}/pin?token=${encodeURIComponent(token)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pinned: !g.pinned }),
+      });
+      _fetchCompletedGames();
+    });
+    entry.querySelector('.mp-completed-delete-btn').addEventListener('click', async () => {
+      const token = session.token;
+      await fetch(`${base}/api/completed-games/${encodeURIComponent(g.game_id)}?token=${encodeURIComponent(token)}`, {
+        method: 'DELETE',
+      });
+      _fetchCompletedGames();
+    });
+    list.appendChild(entry);
+  }
+}
+
+/** Start a full-game replay from the MP completed games tab. */
+async function _startMpReplay(rounds, gameMeta) {
+  if (!rounds.length) return;
+
+  const firstState = deserializeState(JSON.parse(rounds[0].pre_state_json));
+  const canvas = document.getElementById('game-canvas');
+
+  document.getElementById('setup-screen').style.display = 'none';
+  document.getElementById('game-screen').style.display  = 'flex';
+
+  state   = firstState;
+  witchAI = null;
+  heroAI  = null;
+
+  _setupLocalUI(canvas, null, null, false);
+  redraw();
+
+  requestAnimationFrame(async () => {
+    renderer.resize();
+    redraw();
+
+    // Convert server round format { round_num, pre_state_json, steps_json } → replay format
+    const replayRounds = rounds.map(r => ({
+      roundNum: r.round_num,
+      preState: r.pre_state_json,
+      steps:    r.steps_json,
+    }));
+
+    await _replayFullGame(replayRounds, gameMeta.winner, gameMeta.win_reason,
+      gameMeta.hero_name, gameMeta.witch_name);
+
+    // Return to MP screen after replay
+    document.getElementById('setup-screen').style.display = '';
+    document.getElementById('game-screen').style.display  = 'none';
+    state = null; renderer = null; ui = null;
+    _showMultiplayerScreen();
+  });
+}
+
 // ── Multiplayer screen ────────────────────────────────────────────────────────
 
 function _showMultiplayerScreen() {
   showStep('multiplayer');
   _initMpStep();
   const session = loadSession();
-  if (session) _fetchActiveSaves();
+  if (session) {
+    _fetchActiveSaves();
+    _fetchCompletedGames();
+  }
 }
 
 document.getElementById('btn-multiplayer-back').addEventListener('click', () => {
@@ -1565,6 +2165,8 @@ function _createMpClient() {
     },
 
     onMatchFound({ roomId, faction, opponentName, aiOpponent, resumed, myPlayerId, players }) {
+      // Reset online round history for this game
+      _onlineRoundHistory = [];
       // Show waiting card briefly during game start (covers both resume and lobby→game transitions)
       showStep('waiting');
       if (resumed) {
@@ -1634,6 +2236,10 @@ function _createMpClient() {
       state.resolving = true;   // flag before exitPlanningMode fires its redraw
       ui.exitPlanningMode();
 
+      // Snapshot state BEFORE applying finalState — used for full-game replay
+      const _onlinePreStateJson = JSON.stringify(serializeState(state));
+      const _onlineRoundNum     = state.round;
+
       // Use the server's final entity list as the landing state for the animation.
       // This ensures state.entities is already correct when the last slide lands.
       const finalEntities = finalState.entities ?? state.entities;
@@ -1656,6 +2262,13 @@ function _createMpClient() {
         state.witch     = finalState.witch;
         state.myFaction = mp?.myFaction;
 
+        // Accumulate round for full-game replay
+        _onlineRoundHistory.push({
+          roundNum:  _onlineRoundNum,
+          preState:  _onlinePreStateJson,
+          steps:     JSON.stringify(steps),
+        });
+
         // Mirror the same post-resolution side effects as the local path.
         ui._triggerHazardFlashes();
         redrawOnline();
@@ -1670,6 +2283,7 @@ function _createMpClient() {
             action = await ui._showResolutionSummary(steps, (finalState.round ?? state.round) - 1, {
               prevScore, prevNodes, humanFaction: mp.myFaction, fogOfWar: state.fogOfWar,
               gameOver: state.gameOver, winner: state.winner, winReason: state.winReason,
+              hasFullReplay: _onlineRoundHistory.length > 0,
             });
             if (action === 'replay') {
               state.entities = _preReplayEntitiesOnline;
@@ -1678,6 +2292,13 @@ function _createMpClient() {
               // _animateResolutionSteps sets _resolving = false at end; re-engage
               // the guard so onPlanningPhase stays buffered during the next summary show.
               _resolving = true;
+            } else if (action === 'replay-full') {
+              _resolving = false;
+              await _replayFullGame(_onlineRoundHistory, state.winner, state.winReason,
+                state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch',
+                redrawOnline);
+              _doRestart();
+              return;
             }
           } while (action === 'replay');
           _resolving = false;
@@ -1929,3 +2550,35 @@ function _renderSpectatorReadyList(players, submittedIds) {
 const _spectateParam = new URLSearchParams(location.search).get('spectate')
                     ?? new URLSearchParams(location.search).get('room');
 if (_spectateParam) initSpectator(_spectateParam);
+
+// Auto-start admin replay when ?replayGame=<gameId>[&source=sp] is in the URL.
+// This allows /replay?replayGame=X (served as index.html) to work automatically.
+const _replayGameParam   = new URLSearchParams(location.search).get('replayGame');
+const _replaySourceParam = new URLSearchParams(location.search).get('source') ?? 'mp';
+if (_replayGameParam) _loadAdminReplay(_replayGameParam, _replaySourceParam);
+
+async function _loadAdminReplay(gameId, source = 'mp') {
+  const base = source === 'sp'
+    ? `/admin/api/sp/completed-games/${encodeURIComponent(gameId)}`
+    : `/admin/api/completed-games/${encodeURIComponent(gameId)}`;
+
+  try {
+    const [meta, rounds] = await Promise.all([
+      fetch(base).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }),
+      fetch(`${base}/rounds`).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }),
+    ]);
+
+    if (!rounds.length) { alert('No replay rounds found for this game.'); return; }
+
+    const replayRounds = rounds.map(r => ({
+      roundNum: r.round_num,
+      preState: r.pre_state_json,
+      steps:    r.steps_json,
+    }));
+
+    await _startMpReplay(replayRounds, meta);
+  } catch (e) {
+    console.error('Admin replay load error:', e);
+    alert('Could not load replay data.');
+  }
+}
