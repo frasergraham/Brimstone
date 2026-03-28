@@ -250,19 +250,16 @@ export function getValidActions(state, actor) {
   // affordable flag.  The popup always shows all three so the player can choose.
   // affordable is per-type: iron_golem needs 2 metal, wood_golem needs 2 wood,
   // minion needs any 2 resources.
+  // Summoned units spawn on the witch's own tile (no target hex needed).
   if (!actorIsHero) {
-    const spawnTargets = getNeighbors(actor.col, actor.row).filter(n => {
-      const nt = tile(state, n.col, n.row);
-      return nt && nt.type !== TileType.RIVER && entitiesAt(state, n.col, n.row).length === 0;
-    });
-    if (spawnTargets.length) {
-      const inv   = state.inventory.witch;
-      const metal = inv[ResourceType.METAL] || 0;
-      const wood  = inv[ResourceType.WOOD]  || 0;
-      const total = Object.values(inv).reduce((s, v) => s + (v || 0), 0);
-      actions.push({ type: ActionType.SUMMON, summonType: EntityType.IRON_GOLEM, targets: spawnTargets, affordable: metal >= 2 });
-      actions.push({ type: ActionType.SUMMON, summonType: EntityType.WOOD_GOLEM, targets: spawnTargets, affordable: wood  >= 2 });
-      actions.push({ type: ActionType.SUMMON, summonType: EntityType.MINION,     targets: spawnTargets, affordable: total >= 2 });
+    const inv   = state.inventory.witch;
+    const metal = inv[ResourceType.METAL] || 0;
+    const wood  = inv[ResourceType.WOOD]  || 0;
+    const total = Object.values(inv).reduce((s, v) => s + (v || 0), 0);
+    if (total >= 2) {
+      actions.push({ type: ActionType.SUMMON, summonType: EntityType.IRON_GOLEM, affordable: metal >= 2 });
+      actions.push({ type: ActionType.SUMMON, summonType: EntityType.WOOD_GOLEM, affordable: wood  >= 2 });
+      actions.push({ type: ActionType.SUMMON, summonType: EntityType.MINION,     affordable: true });
     }
   }
 
@@ -662,7 +659,8 @@ export function executeFortify(state, actor) {
 // requestedType: optional EntityType (IRON_GOLEM / WOOD_GOLEM / MINION).
 // When provided the summon respects the player's explicit choice; falls back to
 // auto-pick if the requested type is no longer affordable (e.g. plan mis-ordering).
-export function executeSummon(state, actor, targetCol, targetRow, requestedType = null) {
+// The summoned unit always spawns on the actor's own tile.
+export function executeSummon(state, actor, requestedType = null) {
   const inv     = state.inventory.witch;
   const ownerId = actor.ownerId;
   let summonedUnit, res, unitName;
@@ -686,11 +684,11 @@ export function executeSummon(state, actor, targetCol, targetRow, requestedType 
 
   if (resolvedType === EntityType.IRON_GOLEM) {
     res = ResourceType.METAL; inv[res] -= 2;
-    summonedUnit = createIronGolem(targetCol, targetRow, ownerId);
+    summonedUnit = createIronGolem(actor.col, actor.row, ownerId);
     unitName = 'Iron Golem';
   } else if (resolvedType === EntityType.WOOD_GOLEM) {
     res = ResourceType.WOOD; inv[res] -= 2;
-    summonedUnit = createWoodGolem(targetCol, targetRow, ownerId);
+    summonedUnit = createWoodGolem(actor.col, actor.row, ownerId);
     unitName = 'Wood Golem';
   } else {
     // Minion: spend 2 from any resources, largest stacks first
@@ -700,7 +698,7 @@ export function executeSummon(state, actor, targetCol, targetRow, requestedType 
       const spend = Math.min(inv[k], remaining); inv[k] -= spend; remaining -= spend;
       if (remaining === 0) break;
     }
-    summonedUnit = createMinion(targetCol, targetRow, ownerId);
+    summonedUnit = createMinion(actor.col, actor.row, ownerId);
     unitName = 'Minion';
   }
 

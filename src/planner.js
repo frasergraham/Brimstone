@@ -125,10 +125,14 @@ export function computeGhostState(state, plan) {
                    : (inv[ResourceType.WOOD]  || 0) >= 2 ? EntityType.WOOD_GOLEM
                    : EntityType.MINION;
       }
-      summonInfo = { col: action.toCol, row: action.toRow, type: summonType };
+      // Summoned unit appears on the witch's current projected position.
+      const witchPos = positions.get(action.entityId);
+      const spawnCol = witchPos?.col ?? 0;
+      const spawnRow = witchPos?.row ?? 0;
+      summonInfo = { col: spawnCol, row: spawnRow, type: summonType };
       // Give the new unit a temporary id for ghost rendering.
       const ghostId = `ghost-summon-${steps.length}`;
-      positions.set(ghostId, { col: action.toCol, row: action.toRow });
+      positions.set(ghostId, { col: spawnCol, row: spawnRow });
     }
 
     steps.push({
@@ -251,11 +255,8 @@ export function validatePlanAction(state, action, projectedPositions = null) {
     case PlanActionType.USE_ABILITY:
       return { valid: true };
 
-    case PlanActionType.SUMMON: {
-      if (action.toCol == null || action.toRow == null)
-        return { valid: false, reason: 'No summon target.' };
+    case PlanActionType.SUMMON:
       return { valid: true };
-    }
 
     case PlanActionType.USE_ITEM: {
       if (!action.item) return { valid: false, reason: 'No item specified.' };

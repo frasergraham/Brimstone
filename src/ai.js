@@ -557,7 +557,7 @@ export class WitchAI {
         case PlanActionType.BATTLE_UNIT:
         case PlanActionType.BATTLE_HEX:  sim.applyBattle(); break;
         case PlanActionType.EXPLORE:     sim.applyExplore(action.entityId); break;
-        case PlanActionType.SUMMON:      sim.applySummon(action.toCol, action.toRow); break;
+        case PlanActionType.SUMMON:      sim.applySummon(sim.witch); break;
         default:                         sim.actionsLeft--; break;
       }
     }
@@ -657,11 +657,7 @@ export class WitchAI {
           const inv = sim.inventory.witch;
           const total = Object.values(inv).reduce((s, v) => s + v, 0);
           if (total >= 2 && minions.length < 8) {
-            const hex = getNeighbors(witch.col, witch.row).find(n => {
-              const t = sim.tiles.get(hexKey(n.col, n.row));
-              return t && t.type !== TileType.RIVER && !sim.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
-            });
-            if (hex) return { type: PlanActionType.SUMMON, entityId: witch.id, toCol: hex.col, toRow: hex.row };
+            return { type: PlanActionType.SUMMON, entityId: witch.id };
           }
         }
         const wtn = sim.tiles.get(hexKey(witch.col, witch.row));
@@ -676,11 +672,7 @@ export class WitchAI {
         const inv = sim.inventory.witch;
         const total = Object.values(inv).reduce((s, v) => s + v, 0);
         if (total >= 2 && minions.length < 8) {
-          const hex = getNeighbors(witch.col, witch.row).find(n => {
-            const t = sim.tiles.get(hexKey(n.col, n.row));
-            return t && t.type !== TileType.RIVER && !sim.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
-          });
-          if (hex) return { type: PlanActionType.SUMMON, entityId: witch.id, toCol: hex.col, toRow: hex.row };
+          return { type: PlanActionType.SUMMON, entityId: witch.id };
         }
       }
 
@@ -747,11 +739,7 @@ export class WitchAI {
         const inv = sim.inventory.witch;
         const total = Object.values(inv).reduce((s, v) => s + v, 0);
         if (total >= 2 && minions.length < 5) {
-          const hex = getNeighbors(witch.col, witch.row).find(n => {
-            const t = sim.tiles.get(hexKey(n.col, n.row));
-            return t && t.type !== TileType.RIVER && !sim.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
-          });
-          if (hex) return { type: PlanActionType.SUMMON, entityId: witch.id, toCol: hex.col, toRow: hex.row };
+          return { type: PlanActionType.SUMMON, entityId: witch.id };
         }
       }
       const wtn = sim.tiles.get(hexKey(witch.col, witch.row));
@@ -782,11 +770,7 @@ export class WitchAI {
       const inv = sim.inventory.witch;
       const total = Object.values(inv).reduce((s, v) => s + v, 0);
       if (total >= 2 && minions.length < 8) {
-        const hex = getNeighbors(witch.col, witch.row).find(n => {
-          const t = sim.tiles.get(hexKey(n.col, n.row));
-          return t && t.type !== TileType.RIVER && !sim.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
-        });
-        if (hex) return { type: PlanActionType.SUMMON, entityId: witch.id, toCol: hex.col, toRow: hex.row };
+        return { type: PlanActionType.SUMMON, entityId: witch.id };
       }
     }
 
@@ -1542,11 +1526,13 @@ class PlanSimState {
     this.actionsLeft--;
   }
 
-  applySummon(toCol, toRow) {
+  applySummon(witch) {
+    const col = witch?.col ?? 0;
+    const row = witch?.row ?? 0;
     this.entities.push({
       id: `sim-${this.entities.length}`,
       type: EntityType.MINION, owner: 'witch',
-      col: toCol, row: toRow, alive: true, hp: 2,
+      col, row, alive: true, hp: 2,
     });
     // Spend 2 resources from witch inventory (drain largest stacks first)
     const inv = this.inventory.witch;
@@ -1591,13 +1577,7 @@ function _makeHelpers(sim) {
     if (minions.length >= cap) return null;
     const inv = sim.inventory.witch;
     if (Object.values(inv).reduce((s, v) => s + v, 0) < 2) return null;
-    const hex = getNeighbors(witch.col, witch.row).find(n => {
-      const t = sim.tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== TileType.RIVER &&
-        !sim.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
-    });
-    if (!hex) return null;
-    return { type: PlanActionType.SUMMON, entityId: witch.id, toCol: hex.col, toRow: hex.row };
+    return { type: PlanActionType.SUMMON, entityId: witch.id };
   };
   return { tryMove, tryBattle, trySummon };
 }

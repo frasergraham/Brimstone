@@ -386,24 +386,21 @@ describe('resolvePlans — state integrity', () => {
     assert.ok(!minionStillAlive, 'Killed minion should be removed from entities');
   });
 
-  test('summon adds entity to state.entities', () => {
+  test('summon adds entity to state.entities on witch tile', () => {
     const state = freshState();
     const witch = state.witch;
     state.inventory.witch[ResourceType.FOOD] = 2;
-
-    const neighbor = emptyPassableNeighbor(state, witch);
-    if (!neighbor) return;
 
     const countBefore = state.entities.length;
     const witchPlan = [{
       type: PlanActionType.SUMMON,
       entityId: witch.id,
-      toCol: neighbor.col,
-      toRow: neighbor.row,
     }];
 
     resolvePlans(state, [], witchPlan);
     assert.ok(state.entities.length > countBefore, 'Summon should add entity to state');
+    const summoned = state.entities.find(e => e !== witch && e.col === witch.col && e.row === witch.row);
+    assert.ok(summoned, 'Summoned unit should appear on the witch tile');
   });
 });
 

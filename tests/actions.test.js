@@ -571,50 +571,42 @@ describe('executeSummon', () => {
     return freshState();
   }
 
-  function findSummonTarget(state) {
-    const witch = state.witch;
-    return emptyPassableNeighbor(state, witch);
-  }
-
-  test('metal → Iron Golem (costs 2 metal)', () => {
+  test('metal → Iron Golem spawns on witch tile (costs 2 metal)', () => {
     const state = witchState();
     state.inventory.witch[ResourceType.METAL] = 2;
-    const target = findSummonTarget(state);
-    if (!target) return;
+    const { col, row } = state.witch;
 
-    const r = executeSummon(state, state.witch, target.col, target.row);
+    const r = executeSummon(state, state.witch);
     assert.equal(r.success, true);
-    const summoned = state.entities.find(e => e.col === target.col && e.row === target.row);
-    assert.ok(summoned, 'A unit should appear on the target hex');
+    const summoned = state.entities.find(e => e !== state.witch && e.col === col && e.row === row);
+    assert.ok(summoned, 'A unit should appear on the witch tile');
     assert.equal(summoned.type, EntityType.IRON_GOLEM, 'Metal should summon Iron Golem');
     assert.equal(state.inventory.witch[ResourceType.METAL], 0, '2 metal should be consumed');
   });
 
-  test('wood → Wood Golem (costs 2 wood, when no metal)', () => {
+  test('wood → Wood Golem spawns on witch tile (costs 2 wood, when no metal)', () => {
     const state = witchState();
     state.inventory.witch[ResourceType.METAL] = 0;
     state.inventory.witch[ResourceType.WOOD] = 2;
-    const target = findSummonTarget(state);
-    if (!target) return;
+    const { col, row } = state.witch;
 
-    const r = executeSummon(state, state.witch, target.col, target.row);
+    const r = executeSummon(state, state.witch);
     assert.equal(r.success, true);
-    const summoned = state.entities.find(e => e.col === target.col && e.row === target.row);
+    const summoned = state.entities.find(e => e !== state.witch && e.col === col && e.row === row);
     assert.equal(summoned?.type, EntityType.WOOD_GOLEM, 'Wood should summon Wood Golem');
     assert.equal(state.inventory.witch[ResourceType.WOOD], 0, '2 wood should be consumed');
   });
 
-  test('other resource → Minion (costs 2 total)', () => {
+  test('other resource → Minion spawns on witch tile (costs 2 total)', () => {
     const state = witchState();
     state.inventory.witch[ResourceType.METAL] = 0;
     state.inventory.witch[ResourceType.WOOD] = 0;
     state.inventory.witch[ResourceType.FOOD] = 2;
-    const target = findSummonTarget(state);
-    if (!target) return;
+    const { col, row } = state.witch;
 
-    const r = executeSummon(state, state.witch, target.col, target.row);
+    const r = executeSummon(state, state.witch);
     assert.equal(r.success, true);
-    const summoned = state.entities.find(e => e.col === target.col && e.row === target.row);
+    const summoned = state.entities.find(e => e !== state.witch && e.col === col && e.row === row);
     assert.equal(summoned?.type, EntityType.MINION, 'Non-metal/wood resource should summon Minion');
     assert.equal(state.inventory.witch[ResourceType.FOOD], 0, '2 food should be consumed');
   });
@@ -622,46 +614,52 @@ describe('executeSummon', () => {
   test('fails when fewer than 2 total resources', () => {
     const state = witchState();
     state.inventory.witch = { [ResourceType.FOOD]: 1 };
-    const target = findSummonTarget(state);
-    if (!target) return;
 
-    const r = executeSummon(state, state.witch, target.col, target.row);
+    const r = executeSummon(state, state.witch);
     assert.equal(r.success, false, 'Should fail with only 1 resource');
   });
 
   test('fails when no resources', () => {
     const state = witchState();
     state.inventory.witch = {};
-    const target = findSummonTarget(state);
-    if (!target) return;
 
-    const r = executeSummon(state, state.witch, target.col, target.row);
+    const r = executeSummon(state, state.witch);
     assert.equal(r.success, false);
   });
 
-  test('allows multiple summons in the same turn', () => {
+  test('allows multiple summons in the same turn (stacking on witch tile)', () => {
     const state = witchState();
     state.inventory.witch[ResourceType.FOOD] = 6;
-    const target = findSummonTarget(state);
-    if (!target) return;
 
-    const r1 = executeSummon(state, state.witch, target.col, target.row);
+    const r1 = executeSummon(state, state.witch);
     assert.equal(r1.success, true, 'First summon should succeed');
 
-    // Find another empty neighbor for second summon
-    const target2 = emptyPassableNeighbor(state, state.witch);
-    if (!target2) return;
-    const r2 = executeSummon(state, state.witch, target2.col, target2.row);
+    const r2 = executeSummon(state, state.witch);
     assert.equal(r2.success, true, 'Second summon in same turn should also succeed');
   });
 
   test('costs 1 action', () => {
     const state = witchState();
     state.inventory.witch[ResourceType.FOOD] = 2;
-    const target = findSummonTarget(state);
-    if (!target) return;
-    const r = executeSummon(state, state.witch, target.col, target.row);
+    const r = executeSummon(state, state.witch);
     assert.equal(r.cost, 1);
+  });
+
+  test('summon available even when all adjacent hexes are occupied', () => {
+    // No adjacent-hex requirement — should still work
+    const state = witchState();
+    state.inventory.witch[ResourceType.FOOD] = 2;
+    // Fill all neighbors with entities
+    const neighbors = getNeighbors(state.witch.col, state.witch.row);
+    for (const n of neighbors) {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      if (t && t.type !== TileType.RIVER) {
+        const m = createMinion(n.col, n.row, null);
+        state.entities.push(m);
+      }
+    }
+    const r = executeSummon(state, state.witch);
+    assert.equal(r.success, true, 'Should summon even with all neighbors occupied');
   });
 });
 
@@ -922,15 +920,8 @@ describe('Inventory stash separation', () => {
     state.inventory.witch[ResourceType.METAL] = 1;
 
     // Consuming witch metal (via summon) should not touch the hero stash
-    const target = getNeighbors(state.witch.col, state.witch.row)
-      .find(n => {
-        const t = state.tiles.get(hexKey(n.col, n.row));
-        return t && t.type !== TileType.RIVER &&
-          !state.entities.some(e => e.col === n.col && e.row === n.row);
-      });
-    if (!target) return; // skip if map has no valid spawn hex (shouldn't happen)
-
-    executeSummon(state, state.witch, target.col, target.row);
+    // (summon fails here because only 1 metal, but the point is shared stash unchanged)
+    executeSummon(state, state.witch);
 
     assert.equal(state.inventory.shared[ResourceType.METAL] || 0, 0,
       'hero stash must be unchanged after witch summons');
