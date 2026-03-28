@@ -950,7 +950,7 @@ function _saveSpGame() {
   const entry = {
     id:         _spSaveId,
     mode,
-    mapSize:    document.getElementById('select-map-size')?.value ?? 'standard',
+    mapSize:    state.mapSize ?? 'standard',
     fog:        state.fogOfWar,
     round:      state.round,
     phase:      state.phase,
