@@ -844,6 +844,7 @@ const stepSinglePlayer = document.getElementById('setup-step-singleplayer');
 const stepMultiplayer  = document.getElementById('setup-step-multiplayer');
 const stepHowto        = document.getElementById('setup-step-howtoplay');
 const stepOptions      = document.getElementById('setup-step-options');
+const stepChangelog    = document.getElementById('setup-step-changelog');
 const stepWaiting      = document.getElementById('setup-step-waiting');
 const stepCreateGame   = document.getElementById('setup-step-create-game');
 const stepJoinGame     = document.getElementById('setup-step-join-game');
@@ -855,6 +856,7 @@ function showStep(step) {
   stepMultiplayer .style.display = step === 'multiplayer'   ? '' : 'none';
   stepHowto       .style.display = step === 'howtoplay'     ? '' : 'none';
   stepOptions     .style.display = step === 'options'       ? '' : 'none';
+  stepChangelog   .style.display = step === 'changelog'     ? '' : 'none';
   stepWaiting     .style.display = step === 'waiting'       ? '' : 'none';
   stepCreateGame  .style.display = step === 'create-game'   ? '' : 'none';
   stepJoinGame    .style.display = step === 'join-game'     ? '' : 'none';
@@ -873,6 +875,37 @@ document.getElementById('btn-how-to-play')  .addEventListener('click', () => sho
 document.getElementById('btn-options')      .addEventListener('click', () => showStep('options'));
 document.getElementById('btn-howtoplay-back').addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-options-back') .addEventListener('click', () => showStep('mode'));
+document.getElementById('btn-changelog-back').addEventListener('click', () => showStep('mode'));
+
+// Version badge opens revision history
+document.getElementById('version-badge').addEventListener('click', (e) => {
+  e.preventDefault();
+  _openChangelog();
+});
+
+let _changelogLoaded = false;
+function _openChangelog() {
+  showStep('changelog');
+  if (_changelogLoaded) return;
+  fetch('/CHANGELOG.json')
+    .then(r => r.json())
+    .then(releases => {
+      const container = document.getElementById('changelog-body');
+      container.innerHTML = releases.map(r => `
+        <div class="changelog-release">
+          <div class="changelog-version-heading">v${r.version}</div>
+          <div class="changelog-date">${r.date}${r.summary ? ' — ' + r.summary : ''}</div>
+          <ul class="changelog-notes">
+            ${r.notes.map(n => `<li>${n}</li>`).join('')}
+          </ul>
+        </div>
+      `).join('');
+      _changelogLoaded = true;
+    })
+    .catch(() => {
+      document.getElementById('changelog-body').textContent = 'Could not load revision history.';
+    });
+}
 
 // ── Single Player screen ───────────────────────────────────────────────────────
 

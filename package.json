@@ -17,6 +17,8 @@
     "test:ui:verbose": "node --test --test-reporter=spec tests/ui/*.test.js",
     "test:all": "node --test tests/*.test.js tests/ui/*.test.js",
     "validate": "node scripts/validate.js",
+    "release": "node scripts/release.js",
+    "release:dry": "node scripts/release.js --dry-run",
     "assets:dry": "node scripts/generate-assets.js --dry-run",
     "assets:test": "node scripts/generate-assets.js --test",
     "assets:gen": "node scripts/generate-assets.js",
