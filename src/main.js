@@ -32,9 +32,10 @@ let _roundHistory        = [];  // SP offline:  { roundNum, preState, steps }[]
 let _onlineRoundHistory  = [];  // MP online:   { roundNum, preState, steps }[]
 let _replayAborted       = false;
 let _replayPaused        = false;
-let _replayGoBack        = false;
-let _replayActive        = false;  // true while _replayFullGame is running
-let _replaySpeedMult     = 0.5;    // playback speed multiplier (0.5=play, 1.0=ff, 1.5=vff)
+let _replayGoBack        = false;   // false | 'curr' | 'prev'
+let _replayAtRoundStart  = false;   // true while paused at the pre-animation point of a round
+let _replayActive        = false;   // true while _replayFullGame is running
+let _replaySpeedMult     = 0.5;     // playback speed multiplier (0.5=play, 1.0=ff, 1.5=vff)
 
 // ── Local game init ───────────────────────────────────────────────────────────
 
@@ -826,8 +827,27 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 }
 
 function _delay(ms) {
-  const effective = (_replayActive && _replaySpeedMult > 0) ? ms / _replaySpeedMult : ms;
-  return new Promise(resolve => setTimeout(resolve, effective));
+  if (!_replayActive) return new Promise(resolve => setTimeout(resolve, ms));
+
+  // During replay: poll every ≤50 ms so pause/abort/back take effect immediately.
+  const effective = _replaySpeedMult > 0 ? ms / _replaySpeedMult : ms;
+  return new Promise(resolve => {
+    let remaining = effective;
+    let last = Date.now();
+    function tick() {
+      if (_replayAborted || _replayGoBack) { resolve(); return; }
+      if (!_replayPaused) {
+        const now = Date.now();
+        remaining -= (now - last);
+        last = now;
+      } else {
+        last = Date.now(); // don't count paused time toward remaining
+      }
+      if (remaining <= 0) { resolve(); return; }
+      setTimeout(tick, Math.min(50, remaining));
+    }
+    tick();
+  });
 }
 
 
@@ -1390,23 +1410,44 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
   if (!rounds.length || !ui || !renderer) return null;
   const draw = redrawFn ?? redraw;
 
-  _replayAborted   = false;
-  _replayPaused    = false;
-  _replayGoBack    = false;
-  _replayActive    = true;
-  _replaySpeedMult = 0.5;   // default: PLAY speed
+  _replayAborted      = false;
+  _replayPaused       = false;
+  _replayGoBack       = false;
+  _replayAtRoundStart = false;
+  _replayActive       = true;
+  _replaySpeedMult    = 0.5;   // default: PLAY speed
   const savedSpeedMode = ui.speedMode;
   ui.speedMode = 'fast';
 
   // Control callback wired to HUD buttons
   ui.showReplayHUD(rounds.length, (action) => {
     switch (action) {
-      case 'play':   _replaySpeedMult = 0.5; _replayPaused = false; ui.setReplayPlayState('play');  break;
-      case 'ff':     _replaySpeedMult = 1.0; _replayPaused = false; ui.setReplayPlayState('ff');    break;
-      case 'vff':    _replaySpeedMult = 1.5; _replayPaused = false; ui.setReplayPlayState('vff');   break;
-      case 'pause':  _replayPaused = true;                           ui.setReplayPlayState('pause'); break;
-      case 'back':   _replayGoBack = true;   _replayPaused = false; ui.setReplayPlayState('play');  break;
-      case 'stop':   _replayAborted = true;  _replayPaused = false;                                 break;
+      case 'play':
+        _replaySpeedMult = 0.5; _replayPaused = false;
+        ui.setReplayPlayState('play');
+        break;
+      case 'ff':
+        _replaySpeedMult = 1.0; _replayPaused = false;
+        ui.setReplayPlayState('ff');
+        break;
+      case 'vff':
+        _replaySpeedMult = 1.5; _replayPaused = false;
+        ui.setReplayPlayState('vff');
+        break;
+      case 'pause':
+        _replayPaused = true;
+        ui.setReplayPlayState('pause');
+        break;
+      case 'back':
+        // Music-player behaviour: back at round start → go to previous round;
+        // back mid-animation → restart current round. Either way, implies pause.
+        _replayPaused = true;
+        _replayGoBack = _replayAtRoundStart ? 'prev' : 'curr';
+        ui.setReplayPlayState('pause');
+        break;
+      case 'stop':
+        _replayAborted = true; _replayPaused = false;
+        break;
     }
   });
 
@@ -1417,36 +1458,40 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
   for (let i = 0; i < rounds.length; i++) {
     if (_replayAborted) break;
 
-    // ── Handle "go back" — jump to previous round ──────────────────────────
-    if (_replayGoBack) {
-      _replayGoBack = false;
-      i = Math.max(-1, i - 2);  // -2 because loop increments i at end
-      continue;
-    }
-
     const round = rounds[i];
     const preStateData = typeof round.preState === 'string'
       ? JSON.parse(round.preState)
       : round.preState;
     const preState = deserializeState(preStateData);
 
-    // Restore state and draw BEFORE the pause check — canvas is always valid
+    // Restore state and draw BEFORE the pause check — canvas always has valid content
     Object.assign(state, preState);
     state.hero     = preState.hero;
     state.witch    = preState.witch;
     state.fogOfWar = false;
     draw();
 
-    // ── Pause spin (canvas has valid content at this point) ─────────────────
-    while (_replayPaused && !_replayAborted) {
-      await _delay(50);
+    // ── At round start: accept BACK / PAUSE before animation begins ─────────
+    _replayAtRoundStart = true;
+    while (_replayPaused && !_replayAborted && !_replayGoBack) {
+      await new Promise(r => setTimeout(r, 50));
     }
+    _replayAtRoundStart = false;
     if (_replayAborted) break;
+
+    // BACK pressed while paused at round start → jump to prev/curr round
+    if (_replayGoBack) {
+      const toPrev = _replayGoBack === 'prev';
+      _replayGoBack = false;
+      i = Math.max(-1, toPrev ? i - 2 : i - 1);
+      continue;
+    }
 
     // Show hazard flashes from the previous round's endRound() before animating
     if (preState.lastNightDamage?.length || preState.lastDayDamage?.length) {
       ui._triggerHazardFlashes();
       await _delay(600);
+      if (_replayAborted) break;
     }
 
     ui.updateReplayHUD(i + 1, rounds.length);
@@ -1471,25 +1516,33 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
 
     if (_replayAborted) break;
 
-    // Handle back press that arrived during animation
+    // BACK pressed during animation → jump to prev/curr round
     if (_replayGoBack) {
+      const toPrev = _replayGoBack === 'prev';
       _replayGoBack = false;
-      i = Math.max(-1, i - 2);
+      i = Math.max(-1, toPrev ? i - 2 : i - 1);
       continue;
     }
 
-    // Brief inter-round pause
+    // Brief inter-round pause (respects pause/abort flags via _delay)
     if (i < rounds.length - 1) {
       await _delay(300);
+      if (_replayGoBack) {
+        const toPrev = _replayGoBack === 'prev';
+        _replayGoBack = false;
+        i = Math.max(-1, toPrev ? i - 2 : i - 1);
+        continue;
+      }
     }
   }
 
   ui.hideReplayHUD();
-  _replayActive    = false;
-  _replayPaused    = false;
-  _replayGoBack    = false;
-  _replaySpeedMult = 0.5;
-  ui.speedMode     = savedSpeedMode;
+  _replayActive       = false;
+  _replayPaused       = false;
+  _replayGoBack       = false;
+  _replayAtRoundStart = false;
+  _replaySpeedMult    = 0.5;
+  ui.speedMode        = savedSpeedMode;
 
   let summaryAction = null;
 

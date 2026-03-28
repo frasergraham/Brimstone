@@ -133,6 +133,7 @@ export class UIController {
 
     // Mouse drag-to-pan (desktop)
     this.canvas.addEventListener('mousedown', e => {
+      if (this.renderer.viewLocked) return;
       this._mouseDown  = { clientX: e.clientX, clientY: e.clientY };
       this._didDragPan = false;
       this.canvas.style.cursor = 'grabbing';
@@ -159,10 +160,27 @@ export class UIController {
       this.renderer.setZoom(this.renderer.zoomLevel / zoomStep, cx, cy);
       this.onRedraw();
     });
+    this._lastFitTapTime = 0;
     this._el('zoom-fit')?.addEventListener('click', () => {
-      this.renderer.resize(); // re-measure wrapper after any panel changes
-      this.renderer.resetView();
-      this.onRedraw();
+      const now = Date.now();
+      const isDoubleTap = (now - this._lastFitTapTime) < 400;
+      this._lastFitTapTime = now;
+      if (isDoubleTap) {
+        // Double-tap: toggle view lock; fit map first if locking
+        this.renderer.viewLocked = !this.renderer.viewLocked;
+        if (this.renderer.viewLocked) {
+          this.renderer.resize();
+          this.renderer.resetView();
+          this.renderer._zoomAnim = null;
+        }
+        this._updateFitBtnLockState();
+        this.onRedraw();
+      } else if (!this.renderer.viewLocked) {
+        // Single-tap when unlocked: fit map
+        this.renderer.resize();
+        this.renderer.resetView();
+        this.onRedraw();
+      }
     });
     this._el('zoom-me')?.addEventListener('click', () => {
       if (this._selectedEntity && this._selectedEntity.alive) {
@@ -212,6 +230,7 @@ export class UIController {
 
     this.canvas.addEventListener('touchmove', e => {
       e.preventDefault();
+      if (this.renderer.viewLocked) return;
       if (e.touches.length === 2 && this._pinchDist !== null) {
         const newDist = _touchDist(e.touches[0], e.touches[1]);
         const midCX  = (e.touches[0].clientX + e.touches[1].clientX) / 2;
@@ -386,6 +405,9 @@ export class UIController {
 
   _onMouseMove(e) {
     // Drag-to-pan when mouse button held
+    if (this._mouseDown && this.renderer.viewLocked) {
+      this._mouseDown = null; // release drag if view was locked mid-drag
+    }
     if (this._mouseDown) {
       const dx = e.clientX - this._mouseDown.clientX;
       const dy = e.clientY - this._mouseDown.clientY;
@@ -2956,6 +2978,19 @@ export class UIController {
   // ── Replay HUD ──────────────────────────────────────────────────────────────
 
   /**
+   * Update the fit-button appearance to reflect the current view-lock state.
+   */
+  _updateFitBtnLockState() {
+    const btn = this._el('zoom-fit');
+    if (!btn) return;
+    const locked = this.renderer?.viewLocked ?? false;
+    btn.classList.toggle('view-locked', locked);
+    btn.title = locked
+      ? 'View locked — double-tap to unlock'
+      : 'Fit map to screen (double-tap to lock view)';
+  }
+
+  /**
    * Show the replay progress HUD above the canvas.
    * @param {number}   totalRounds
    * @param {Function} onControl  — called with action string: 'back'|'play'|'pause'|'ff'|'vff'|'stop'
@@ -2970,6 +3005,16 @@ export class UIController {
     // Disable the in-game speed toggle while replaying
     const speedToggle = document.getElementById('speed-toggle');
     if (speedToggle) speedToggle.disabled = true;
+
+    // Default to locked view for replay (fit map, no auto-zoom)
+    this._preReplayViewLocked = this.renderer?.viewLocked ?? false;
+    if (this.renderer && !this.renderer.viewLocked) {
+      this.renderer.resize();
+      this.renderer.resetView();
+      this.renderer._zoomAnim = null;
+      this.renderer.viewLocked = true;
+    }
+    this._updateFitBtnLockState();
 
     // Wire up control buttons
     const ids = ['back', 'play', 'pause', 'ff', 'vff', 'stop'];
@@ -3008,6 +3053,12 @@ export class UIController {
     // Re-enable the in-game speed toggle
     const speedToggle = document.getElementById('speed-toggle');
     if (speedToggle) speedToggle.disabled = false;
+
+    // Restore view-lock state that existed before replay started
+    if (this.renderer) {
+      this.renderer.viewLocked = this._preReplayViewLocked ?? false;
+      this._updateFitBtnLockState();
+    }
   }
 
   /**

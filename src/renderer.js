@@ -81,6 +81,7 @@ export class Renderer {
     this.zoomLevel  = 1.0;
     this._panX      = 0;
     this._panY      = 0;
+    this.viewLocked = false;  // when true: blocks frameHexes, setZoom, and drag-pan
     // Insets account for panels that overlay the canvas (plan panel right, chronicle sidebar left).
     // Set by UIController when panels open/close so framing targets only the visible area.
     this.insetLeft  = 0;
@@ -424,6 +425,7 @@ export class Renderer {
    *   duration     – animation length in ms; 0 = instant (default 500)
    */
   frameHexes(positions, { paddingHexes = 2.0, maxZoom = 2.0, duration = 500 } = {}) {
+    if (this.viewLocked) return;
     const target = this._computeFrameView(positions, paddingHexes, maxZoom);
     if (!target) return;
 
@@ -497,6 +499,7 @@ export class Renderer {
 
   // Zoom toward a focal point (canvas pixel coordinates)
   setZoom(newZoom, focalX, focalY) {
+    if (this.viewLocked) return;
     this._zoomAnim = null; // cancel any auto-framing animation on manual input
     newZoom = Math.max(0.5, Math.min(4.0, newZoom));
     const ratio  = newZoom / this.zoomLevel;
