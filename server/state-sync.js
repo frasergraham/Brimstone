@@ -4,6 +4,7 @@
 import { VERSION }           from '../src/version.js';
 import { Entity, bumpEntityId } from '../src/entities.js';
 import { GameState }         from '../src/game.js';
+import { setMapDimensions }  from '../src/hex.js';
 
 export function serializeState(state) {
   const tiles = [];
@@ -94,6 +95,7 @@ export function serializeState(state) {
     witchId:              state.witch?.id ?? null,
     mapCols,
     mapRows,
+    mapSize:              state.mapSize ?? 'standard',
     tiles,
     entities,
   };
@@ -129,6 +131,11 @@ export function deserializeState(snap) {
     return isNaN(n) ? max : Math.max(max, n);
   }, 0);
   bumpEntityId(maxId);
+
+  // Restore global hex math dimensions so neighbor/distance calculations use the
+  // correct grid size. The constructor above generated a default-size map which
+  // set MAP_COLS/MAP_ROWS to standard defaults; overwrite them now.
+  setMapDimensions(snap.mapCols, snap.mapRows);
 
   // ── Leader references ─────────────────────────────────────────────────────
   state.hero  = state.entities.find(e => e.id === snap.heroId)  ?? null;
@@ -169,6 +176,7 @@ export function deserializeState(snap) {
   state.lastDayDamage        = [...(snap.lastDayDamage   || [])];
   state.lastHazardLog        = [...(snap.lastHazardLog   || [])];
   state.fogOfWar             = snap.fogOfWar;
+  state.mapSize              = snap.mapSize   ?? 'standard';
   state.winner               = snap.winner    ?? null;
   state.winReason            = snap.winReason ?? null;
 

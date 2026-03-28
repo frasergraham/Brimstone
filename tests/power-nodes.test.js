@@ -6,7 +6,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { GameState, nodeController, Phase } from '../src/game.js';
-import { hexKey, hexDistance, getNeighbors } from '../src/hex.js';
+import { hexKey, hexDistance, getNeighbors, MAP_COLS, MAP_ROWS } from '../src/hex.js';
 import { TileType } from '../src/tiles.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { executeFortify, getValidActions, sightRange } from '../src/actions.js';
@@ -430,6 +430,29 @@ describe('Serialization round-trip', () => {
     const snap = serializeState(state);
     const restored = deserializeState(snap);
     assert.equal(restored.witchObjectives[0].prevCtrl, 'hero');
+  });
+
+  test('mapSize survives round-trip for all map sizes', () => {
+    for (const size of ['skirmish', 'standard', 'regional', 'campaign']) {
+      const state = new GameState(true, true, size);
+      const snap = serializeState(state);
+      assert.equal(snap.mapSize, size, `snap.mapSize should be ${size}`);
+      const restored = deserializeState(snap);
+      assert.equal(restored.mapSize, size, `restored.mapSize should be ${size}`);
+    }
+  });
+
+  test('deserializeState restores MAP_COLS/MAP_ROWS for non-standard map sizes', () => {
+    // Skirmish is 9×9, standard is 13×11 — use skirmish to differ from default
+    const state = new GameState(true, true, 'skirmish');
+    const snap = serializeState(state);
+    // Clobber globals by constructing a standard map
+    new GameState(true, true, 'standard');
+    // Restore the skirmish save — globals should be corrected
+    deserializeState(snap);
+    // MAP_COLS/MAP_ROWS are live ES module bindings — they reflect the current value
+    assert.equal(MAP_COLS, snap.mapCols, 'MAP_COLS should match saved mapCols');
+    assert.equal(MAP_ROWS, snap.mapRows, 'MAP_ROWS should match saved mapRows');
   });
 
   test('old save format without hexes degrades gracefully', () => {
