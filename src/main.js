@@ -373,10 +373,10 @@ async function _runLocalResolution(skipSummary = false) {
         redraw();
         await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
       } else if (action === 'replay-full') {
-        // Full-replay shows its own last-turn summary; capture its exit action
-        action = await _replayFullGame(_roundHistory, state.winner, state.winReason,
-          state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch') ?? 'done';
-        break;  // exit outer loop — inner summary already shown
+        await _replayFullGame(_roundHistory, state.winner, state.winReason,
+          state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch');
+        _doRestart();
+        return;
       }
     } while (action === 'replay');
     // Animate score bar changes after summary is dismissed
@@ -409,9 +409,10 @@ async function _runLocalResolution(skipSummary = false) {
         redraw();
         await _animateResolutionSteps(steps, finalEntities, redraw, null, null);
       } else if (action === 'replay-full') {
-        action = await _replayFullGame(_roundHistory, state.winner, state.winReason,
-          state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch') ?? 'done';
-        break;
+        await _replayFullGame(_roundHistory, state.winner, state.winReason,
+          state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch');
+        _doRestart();
+        return;
       }
     } while (action === 'replay');
     if (action === 'viewmap') {
@@ -1455,85 +1456,117 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
   let lastRoundNum = 0;
   let lastPreState = null;
 
-  for (let i = 0; i < rounds.length; i++) {
-    if (_replayAborted) break;
+  let _startFrom = 0;
 
-    const round = rounds[i];
-    const preStateData = typeof round.preState === 'string'
-      ? JSON.parse(round.preState)
-      : round.preState;
-    const preState = deserializeState(preStateData);
-
-    // Restore state and draw BEFORE the pause check — canvas always has valid content
-    Object.assign(state, preState);
-    state.hero     = preState.hero;
-    state.witch    = preState.witch;
-    state.fogOfWar = false;
-    draw();
-
-    // ── At round start: accept BACK / PAUSE before animation begins ─────────
-    _replayAtRoundStart = true;
-    while (_replayPaused && !_replayAborted && !_replayGoBack) {
-      await new Promise(r => setTimeout(r, 50));
-    }
-    _replayAtRoundStart = false;
-    if (_replayAborted) break;
-
-    // BACK pressed while paused at round start → jump to prev/curr round
-    if (_replayGoBack) {
-      const toPrev = _replayGoBack === 'prev';
-      _replayGoBack = false;
-      i = Math.max(-1, toPrev ? i - 2 : i - 1);
-      continue;
-    }
-
-    // Show hazard flashes from the previous round's endRound() before animating
-    if (preState.lastNightDamage?.length || preState.lastDayDamage?.length) {
-      ui._triggerHazardFlashes();
-      await _delay(600);
+  // Outer loop: re-entered when BACK is pressed at the end-of-replay hold screen
+  replayOuter: while (true) {
+    for (let i = _startFrom; i < rounds.length; i++) {
       if (_replayAborted) break;
-    }
 
-    ui.updateReplayHUD();
+      const round = rounds[i];
+      const preStateData = typeof round.preState === 'string'
+        ? JSON.parse(round.preState)
+        : round.preState;
+      const preState = deserializeState(preStateData);
 
-    // Get final entities (start of next round = end of this round)
-    let finalEntities;
-    if (i + 1 < rounds.length) {
-      const nextData = typeof rounds[i + 1].preState === 'string'
-        ? JSON.parse(rounds[i + 1].preState)
-        : rounds[i + 1].preState;
-      finalEntities = nextData.entities ?? preState.entities;
-    } else {
-      finalEntities = preState.entities;
-    }
+      // Restore state and draw BEFORE the pause check — canvas always has valid content
+      Object.assign(state, preState);
+      state.hero     = preState.hero;
+      state.witch    = preState.witch;
+      state.fogOfWar = false;
+      draw();
 
-    const stepsRaw = typeof round.steps === 'string' ? JSON.parse(round.steps) : round.steps;
-    lastSteps    = stepsRaw;
-    lastRoundNum = typeof round.roundNum === 'number' ? round.roundNum : i + 1;
-    lastPreState = preState;
+      // ── At round start: accept BACK / PAUSE before animation begins ─────────
+      _replayAtRoundStart = true;
+      while (_replayPaused && !_replayAborted && !_replayGoBack) {
+        await new Promise(r => setTimeout(r, 50));
+      }
+      _replayAtRoundStart = false;
+      if (_replayAborted) break;
 
-    await _animateResolutionSteps(stepsRaw, finalEntities, draw, null, null);
-
-    if (_replayAborted) break;
-
-    // BACK pressed during animation → jump to prev/curr round
-    if (_replayGoBack) {
-      const toPrev = _replayGoBack === 'prev';
-      _replayGoBack = false;
-      i = Math.max(-1, toPrev ? i - 2 : i - 1);
-      continue;
-    }
-
-    // Brief inter-round pause (respects pause/abort flags via _delay)
-    if (i < rounds.length - 1) {
-      await _delay(300);
+      // BACK pressed while paused at round start → jump to prev/curr round
       if (_replayGoBack) {
         const toPrev = _replayGoBack === 'prev';
         _replayGoBack = false;
         i = Math.max(-1, toPrev ? i - 2 : i - 1);
         continue;
       }
+
+      // Show hazard flashes from the previous round's endRound() before animating
+      if (preState.lastNightDamage?.length || preState.lastDayDamage?.length) {
+        ui._triggerHazardFlashes();
+        await _delay(600);
+        if (_replayAborted) break;
+      }
+
+      ui.updateReplayHUD();
+
+      // Get final entities (start of next round = end of this round)
+      let finalEntities;
+      if (i + 1 < rounds.length) {
+        const nextData = typeof rounds[i + 1].preState === 'string'
+          ? JSON.parse(rounds[i + 1].preState)
+          : rounds[i + 1].preState;
+        finalEntities = nextData.entities ?? preState.entities;
+      } else {
+        finalEntities = preState.entities;
+      }
+
+      const stepsRaw = typeof round.steps === 'string' ? JSON.parse(round.steps) : round.steps;
+      lastSteps    = stepsRaw;
+      lastRoundNum = typeof round.roundNum === 'number' ? round.roundNum : i + 1;
+      lastPreState = preState;
+
+      await _animateResolutionSteps(stepsRaw, finalEntities, draw, null, null);
+
+      if (_replayAborted) break;
+
+      // BACK pressed during animation → jump to prev/curr round
+      if (_replayGoBack) {
+        const toPrev = _replayGoBack === 'prev';
+        _replayGoBack = false;
+        i = Math.max(-1, toPrev ? i - 2 : i - 1);
+        continue;
+      }
+
+      // Brief inter-round pause (respects pause/abort flags via _delay)
+      if (i < rounds.length - 1) {
+        await _delay(300);
+        if (_replayGoBack) {
+          const toPrev = _replayGoBack === 'prev';
+          _replayGoBack = false;
+          i = Math.max(-1, toPrev ? i - 2 : i - 1);
+          continue;
+        }
+      }
     }
+
+    _startFrom = 0; // reset for any restart
+
+    if (_replayAborted) break replayOuter;
+
+    // ── End-of-replay hold ──────────────────────────────────────────────────
+    // All rounds played — pause and wait for STOP or BACK rather than auto-exiting
+    _replayPaused       = true;
+    _replayAtRoundStart = true;   // treat end-hold as "at round start" for BACK logic
+    ui.setReplayPlayState('pause');
+
+    while (!_replayAborted && !_replayGoBack) {
+      await new Promise(r => setTimeout(r, 50));
+    }
+    _replayAtRoundStart = false;
+
+    if (_replayAborted) break replayOuter;
+
+    // BACK from end: jump to last or second-to-last round (stay paused)
+    if (_replayGoBack) {
+      const toPrev = _replayGoBack === 'prev';
+      _replayGoBack = false;
+      _startFrom = toPrev ? Math.max(0, rounds.length - 2) : Math.max(0, rounds.length - 1);
+      continue replayOuter;
+    }
+
+    break replayOuter; // safety exit (shouldn't reach here)
   }
 
   ui.hideReplayHUD();
@@ -1543,35 +1576,7 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
   _replayAtRoundStart = false;
   _replaySpeedMult    = 0.5;
   ui.speedMode        = savedSpeedMode;
-
-  let summaryAction = null;
-
-  if (!_replayAborted) {
-    // Show final game state with fog off
-    state.gameOver  = true;
-    state.winner    = winner;
-    state.winReason = winReason;
-    state.fogOfWar  = false;
-    draw();
-
-    // Show the last-turn summary (no next-turn option, no full-replay button)
-    if (lastSteps) {
-      do {
-        summaryAction = await ui._showResolutionSummary(lastSteps, lastRoundNum, {
-          prevScore: null, prevNodes: null, humanFaction: null, fogOfWar: false,
-          gameOver: true, winner, winReason, hasFullReplay: false,
-        });
-        if (summaryAction === 'replay' && lastPreState) {
-          state.entities = lastPreState.entities;
-          state.fogOfWar = false;
-          draw();
-          await _animateResolutionSteps(lastSteps, lastSteps.at(-1)?.entitySnapshot ?? lastPreState.entities, draw, null, null);
-        }
-      } while (summaryAction === 'replay');
-    }
-  }
-
-  return summaryAction;  // caller may act on 'viewmap' / 'restart' / null
+  // Caller is responsible for navigation (e.g. _doRestart() or showing setup screen)
 }
 
 // ── Multiplayer completed games ───────────────────────────────────────────────
@@ -2274,12 +2279,12 @@ function _createMpClient() {
               // the guard so onPlanningPhase stays buffered during the next summary show.
               _resolving = true;
             } else if (action === 'replay-full') {
-              _resolving = true;
-              action = await _replayFullGame(_onlineRoundHistory, state.winner, state.winReason,
+              _resolving = false;
+              await _replayFullGame(_onlineRoundHistory, state.winner, state.winReason,
                 state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch',
-                redrawOnline) ?? 'done';
-              _resolving = true;
-              break;
+                redrawOnline);
+              _doRestart();
+              return;
             }
           } while (action === 'replay');
           _resolving = false;
