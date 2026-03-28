@@ -58,7 +58,7 @@ export class UIController {
 
     this._lastHazardKey    = '';   // deduplicates hazard popups across state updates
     this._battleInterval   = null; // dice animation interval — cleared on new dialog
-    this.speedMode         = 'cinematic'; // 'step' | 'cinematic' | 'fast' | 'instant'
+    this.speedMode         = 'cinematic'; // 'step' | 'cinematic' | 'fast' | 'vfast'
     this._stepResolve      = null;        // set while waiting for click-to-advance in step mode
     // Start with chronicle hidden on small screens (≤768px)
     this._chronicleMode    = window.innerWidth <= 768 ? 'none' : 'mini'; // 'none' | 'mini' | 'full'
@@ -1833,7 +1833,7 @@ export class UIController {
 
   // ── Speed popup ───────────────────────────────────────────────────────────
 
-  static SPEED_LABELS = { step: 'Step by Step', cinematic: 'Cinematic', fast: 'Fast', vfast: 'Very Fast', instant: 'Instant' };
+  static SPEED_LABELS = { step: 'Step by Step', cinematic: 'Cinematic', fast: 'Fast', vfast: 'Very Fast' };
 
   _toggleSpeedPopup() {
     const popup = this._el('speed-popup');
@@ -1916,9 +1916,9 @@ export class UIController {
       `${actorSnap.name} → ${targetSnap.name}  [${result.attackRoll}v${result.defenseRoll}]  ${outcome}`;
     container.appendChild(toast);
 
-    const displayMs = this.speedMode === 'instant' ? 600
-                    : this.speedMode === 'fast'     ? 1200
-                    :                                 2000;
+    const displayMs = this.speedMode === 'vfast' ? 600
+                    : this.speedMode === 'fast'    ? 1200
+                    :                               2000;
     setTimeout(() => {
       toast.style.animation = 'battle-toast-out 0.3s ease forwards';
       setTimeout(() => toast.remove(), 300);
@@ -1947,8 +1947,6 @@ export class UIController {
   // ── Phase toast ──────────────────────────────────────────────────────────
 
   _showPhaseModal(faction, budget) {
-    // Instant mode and tutorial mode skip all popups
-    if (this.speedMode === 'instant') return;
     if (this.tutorialMode) return;
 
     const phase = this.state.phase;
@@ -2110,9 +2108,9 @@ export class UIController {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') dismiss();
     };
 
-    if (this.autoplay || this.speedMode === 'instant') {
-      setTimeout(dismiss, this.autoplay ? 700 : 80);
-    } else if (this.speedMode === 'fast') {
+    if (this.autoplay) {
+      setTimeout(dismiss, 700);
+    } else if (this.speedMode === 'fast' || this.speedMode === 'vfast') {
       setTimeout(dismiss, 600);
       dialog.addEventListener('click', dismiss);
       document.addEventListener('keydown', keyDismiss);
@@ -2164,9 +2162,9 @@ export class UIController {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') dismiss();
     };
 
-    if (this.autoplay || this.speedMode === 'instant') {
-      setTimeout(dismiss, this.autoplay ? 500 : 100);
-    } else if (this.speedMode === 'fast') {
+    if (this.autoplay) {
+      setTimeout(dismiss, 500);
+    } else if (this.speedMode === 'fast' || this.speedMode === 'vfast') {
       setTimeout(dismiss, 800);
     } else {
       dialog.addEventListener('click', dismiss);
@@ -2405,14 +2403,14 @@ export class UIController {
       }
     };
 
-    if (this.autoplay || this.speedMode === 'instant') {
+    if (this.autoplay) {
       // Skip animation — show result immediately, auto-dismiss
       atkDie.textContent = result.attackRoll;
       defDie.textContent = result.defenseRoll;
       atkDie.className = 'die-display' + (result.hit ? ' atk-win' : '');
       defDie.className = 'die-display' + (!result.hit ? ' def-win' : '');
       revealResult();
-      setTimeout(dismiss, this.autoplay ? 500 : 100);
+      setTimeout(dismiss, 500);
     } else if (this.speedMode === 'fast') {
       // Skip dice animation — show result immediately, auto-dismiss after 800ms
       atkDie.textContent = result.attackRoll;

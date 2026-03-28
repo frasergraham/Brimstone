@@ -511,7 +511,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     // ── Frame camera on this step's actors ──────────────────────────────────
     if (!_autoplay) {
       const _cspd = ui?.speedMode ?? 'cinematic';
-      if (_cspd !== 'instant') {
+      {
         const frameTargets = [];
         for (const ev of events) {
           const snap = step.entitySnapshot?.find(e => e.id === ev.action?.entityId);
@@ -593,7 +593,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     if (moveAnims.length > 0) {
       hadMove = true;
       const _spd = ui?.speedMode ?? 'cinematic';
-      const hopDelay = _spd === 'instant' ? 0 : _spd === 'vfast' ? 210 : 320;
+      const hopDelay = _spd === 'vfast' ? 210 : 320;
 
       // Determine max hops across all moving entities
       const maxHops = moveAnims.reduce((m, a) => Math.max(m, a.path.length), 0);
@@ -632,7 +632,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       redrawFn();
     }
 
-    const _suppressDialogs = _replayActive || ui?.speedMode === 'fast' || ui?.speedMode === 'vfast' || ui?.speedMode === 'instant';
+    const _suppressDialogs = _replayActive || ui?.speedMode === 'fast' || ui?.speedMode === 'vfast';
     if (!_suppressDialogs) {
       for (const entry of pendingDialogs) {
         redrawFn();
@@ -670,7 +670,6 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             const speed = ui?.speedMode ?? 'cinematic';
 
             // ── Step 1: Lunge — attacker slides toward target border ──────────
-            // Cinematic and fast both lunge; instant skips the visual.
             // Use current display position for both ends: if the target (or
             // actor) also has a MOVE in this same step, displayEntities already
             // has it at the post-move hex, so the lunge must chase that position
@@ -681,19 +680,17 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             const lungeFromRow = actorDisplay?.row  ?? actorSnap.row;
             const lungeToCol   = targetDisplay?.col ?? targetSnap.col;
             const lungeToRow   = targetDisplay?.row ?? targetSnap.row;
-            if (speed !== 'instant') {
-              renderer.addLungeAnim(
-                actorSnap.id,
-                lungeFromCol, lungeFromRow,
-                lungeToCol, lungeToRow,
-                actorSnap.type, actorSnap.owner, actorSnap.title ?? null,
-              );
-              redrawFn();
-              await _delay(speed === 'vfast' ? 190 : 280);
-            }
+            renderer.addLungeAnim(
+              actorSnap.id,
+              lungeFromCol, lungeFromRow,
+              lungeToCol, lungeToRow,
+              actorSnap.type, actorSnap.owner, actorSnap.title ?? null,
+            );
+            redrawFn();
+            await _delay(speed === 'vfast' ? 190 : 280);
 
             // ── Step 2: Battle hex highlights ────────────────────────────────
-            if (speed !== 'instant') {
+            {
               const allyEntities = _getBattleAllyEntities(actorSnap, targetSnap, state.entities);
               renderer.setBattleHighlights(
                 [{ col: lungeFromCol, row: lungeFromRow }, { col: lungeToCol, row: lungeToRow }],
@@ -731,9 +728,6 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
               // Brief wait so floaters from different battles don't pile up.
               await _delay(speed === 'vfast' ? 270 : 400);
-            } else {
-              // Instant — result animations only, no wait.
-              _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
             }
 
             // ── Step 4: Clear highlights, animate lunge return ───────────────
@@ -812,7 +806,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         const _spd2 = ui?.speedMode ?? 'cinematic';
         if (_spd2 === 'step') {
           await ui._waitForStep();
-        } else if (_spd2 !== 'instant') {
+        } else {
           await _delay(_spd2 === 'vfast' ? (hadMove ? 200 : 165) : hadMove ? 300 : 250);
         }
       }
@@ -821,7 +815,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       const _spd3 = ui?.speedMode ?? 'cinematic';
       if (_spd3 === 'step') {
         await ui._waitForStep();
-      } else if (_spd3 !== 'instant') {
+      } else {
         await _delay(_spd3 === 'vfast' ? 100 : 150);
       }
     }
