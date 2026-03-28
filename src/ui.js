@@ -2,14 +2,16 @@
 import { hexKey, hexToPixel, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType } from './tiles.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
-import { Phase, Player, PHASE_ICON } from './game.js';
+import { Phase, Player, PHASE_ICON, nodeController } from './game.js';
 import { PAD_X, PAD_Y } from './renderer.js';
 import {
   ActionType, getValidActions, getVisibleEnemyHexes, getVisibleHeroHexes,
   executeMove, executeExplore, executeBattle,
   executeFortify, executeSummon, executeUseItem, executeUseAbility,
 } from './actions.js';
-import { PlanActionType, computeGhostState } from './planner.js';
+import { PlanActionType, computeGhostState, computeProjectedInventory } from './planner.js';
+import { compileTurnBattleSummary } from './battle-utils.js';
+import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
 import { buildPlanStepsHtml, buildPlayerStatusHtml, buildObjectivesHtml } from './ui-render.js';
 
@@ -56,11 +58,14 @@ export class UIController {
 
     this._lastHazardKey    = '';   // deduplicates hazard popups across state updates
     this._battleInterval   = null; // dice animation interval — cleared on new dialog
-    this.speedMode         = 'cinematic'; // 'cinematic' | 'fast' | 'instant'
+    this.speedMode         = 'cinematic'; // 'step' | 'cinematic' | 'fast' | 'instant'
+    this._stepResolve      = null;        // set while waiting for click-to-advance in step mode
     // Start with chronicle hidden on small screens (≤768px)
     this._chronicleMode    = window.innerWidth <= 768 ? 'none' : 'mini'; // 'none' | 'mini' | 'full'
     // When true, disable all planning/action UI — used for spectator mode
     this.spectator         = false;
+    // When true, suppress phase modals and auto-select — used for tutorial mode
+    this.tutorialMode      = false;
 
     // ── Planning mode state ──────────────────────────────────────────────────
     this._planMode      = false;   // true during simultaneous planning phase
@@ -72,7 +77,7 @@ export class UIController {
 
     // ── Multiplayer ──────────────────────────────────────────────────────────
     this.myPlayerId     = null;    // UUID of the local player (null in offline mode)
-    this._players       = [];      // full player roster [{id,name,faction,isAI}]
+    this._players       = [];      // full player roster [{playerId,name,faction,isAI}]
     this._countdownTimer = null;   // setInterval handle for countdown display
 
     this._bindEvents();
@@ -181,6 +186,9 @@ export class UIController {
       const btn = e.target.closest('.speed-option');
       if (btn) this._setSpeed(btn.dataset.mode);
     });
+    // Step-by-step continue bar click
+    this._el('step-continue-bar')?.addEventListener('click', () => this._clearStepContinue());
+
     // Close speed popup on outside click
     document.addEventListener('click', () => this._closeSpeedPopup());
 
@@ -463,7 +471,8 @@ export class UIController {
     // Auto-select the leader on round 1 so the player knows which unit is
     // theirs (especially important in team MP).  After round 1 it's annoying
     // because it overrides whatever the player was looking at.
-    if ((this.state?.round ?? 1) <= 1) {
+    // Tutorial mode skips this — the "select your hero" step teaches clicking.
+    if (!this.tutorialMode && (this.state?.round ?? 1) <= 1) {
       const myLeader = this.state?.entities.find(e =>
         e.alive && e.owner === faction &&
         (e.type === 'hero' || e.type === 'witch') &&
@@ -581,6 +590,7 @@ export class UIController {
   _addToPlan(action) {
     if (this._planSubmitted) return;
     this._plan.push(action);
+    this.onPlanActionAdded?.(action);
     this._refreshPlanOverlay();
     this._renderPlanPanel();
   }
@@ -612,7 +622,7 @@ export class UIController {
     if (status) status.textContent = 'Waiting for opponents…';
 
     // Mark ourselves as submitted in the player list so the status panel updates.
-    const me = this._players?.find(p => p.id === this.myPlayerId);
+    const me = this._players?.find(p => p.playerId === this.myPlayerId);
     if (me) me._submitted = true;
     this._renderPlayerStatus();
 
@@ -640,9 +650,10 @@ export class UIController {
     // Food is auto-applied to over-budget actions until exhausted.
     const foodAvailable = (this.state.inventory?.shared?.[ResourceType.FOOD] || 0);
 
+    const initialInv = computeProjectedInventory(this.state, []);
     stepsEl.innerHTML = buildPlanStepsHtml(
       this._plan, this._planBudget, foodAvailable, foodAvailable,
-      this._planSubmitted, this.state.entities ?? [],
+      this._planSubmitted, this.state.entities ?? [], initialInv,
     );
 
     // Attach remove listeners
@@ -714,6 +725,7 @@ export class UIController {
 
   _onClick(e) {
     if (this._didDragPan) { this._didDragPan = false; return; }
+    if (this._stepResolve) { this._stepResolve(); return; }
     if (this.state.gameOver) return;
 
     const { x, y } = this._canvasPos(e);
@@ -836,6 +848,7 @@ export class UIController {
 
   _selectEntity(entity) {
     this._selectedEntity  = entity;
+    this.onEntitySelected?.(entity);
     this._pendingUnitPick = null;
     this._popupVisible    = false;
     _hideActionPopup();
@@ -896,20 +909,45 @@ export class UIController {
     if (!actionType || actionType === ActionType.MOVE) {
       const a = this._validActions.find(a => a.type === ActionType.MOVE);
       if (a) renderer.highlightHexes = a.targets.map(t => ({ ...t, color: 'rgba(60,220,80,0.22)' }));
-      // Also highlight enemy hexes in red so clicking them directly queues an attack
+      // Highlight enemy hexes in red — but only VISIBLE ones when fog is active.
+      // Fogged enemies must be attacked via the explicit "Attack Hex" action instead.
       const b = this._validActions.find(a => a.type === ActionType.BATTLE);
-      if (b) renderer.highlightHexes = renderer.highlightHexes.concat(
-        b.targets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,60,60,0.55)' }))
-      );
+      if (b) {
+        const state = this.state;
+        let visTargets = b.targets;
+        if (state.fogOfWar && this._selectedEntity) {
+          const visHexes = this._selectedEntity.owner === 'hero'
+            ? getVisibleEnemyHexes(state)
+            : getVisibleHeroHexes(state);
+          visTargets = b.targets.filter(t => visHexes.has(hexKey(t.col, t.row)));
+        }
+        renderer.highlightHexes = renderer.highlightHexes.concat(
+          visTargets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,60,60,0.55)' }))
+        );
+      }
     } else if (actionType === ActionType.BATTLE) {
       const a = this._validActions.find(a => a.type === ActionType.BATTLE);
-      if (a) renderer.highlightHexes = a.targets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,60,60,0.55)' }));
+      if (a) {
+        const state = this.state;
+        let visTargets = a.targets;
+        if (state.fogOfWar && this._selectedEntity) {
+          const visHexes = this._selectedEntity.owner === 'hero'
+            ? getVisibleEnemyHexes(state)
+            : getVisibleHeroHexes(state);
+          visTargets = a.targets.filter(t => visHexes.has(hexKey(t.col, t.row)));
+        }
+        renderer.highlightHexes = visTargets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,60,60,0.55)' }));
+      }
+    } else if (actionType === ActionType.BATTLE_HEX) {
+      // Highlight all adjacent non-river hexes as potential targets
+      renderer.highlightHexes = (this._awaitingTarget.hexTargets ?? [])
+        .map(t => ({ col: t.col, row: t.row, color: 'rgba(220,120,40,0.50)' }));
     }
   }
 
   _handleTargetClick(hex) {
     if (!this._awaitingTarget) return;
-    const { actionType, actor } = this._awaitingTarget;
+    const { actionType, actor, summonType } = this._awaitingTarget;
     const state = this.state;
 
     if (actionType === ActionType.MOVE) {
@@ -1054,7 +1092,7 @@ export class UIController {
       this.renderer.highlightHexes = [];
 
       if (this._planMode) {
-        this._addToPlan({ type: PlanActionType.SUMMON, entityId: actor.id, toCol: hex.col, toRow: hex.row });
+        this._addToPlan({ type: PlanActionType.SUMMON, entityId: actor.id, toCol: hex.col, toRow: hex.row, summonType: summonType ?? undefined });
         if (actor.alive) this._selectEntity(actor);
         else this._clearSelection();
         this._updateSidebar();
@@ -1063,13 +1101,13 @@ export class UIController {
       }
 
       if (this.mp?.active) {
-        this.mp.sendAction('summon', { entityId: actor.id, col: hex.col, row: hex.row });
+        this.mp.sendAction('summon', { entityId: actor.id, col: hex.col, row: hex.row, summonType: summonType ?? undefined });
         this._clearSelection();
         this._updateSidebar();
         this.onRedraw();
         return;
       }
-      const result = executeSummon(state, actor, hex.col, hex.row);
+      const result = executeSummon(state, actor, hex.col, hex.row, summonType ?? null);
       for (const msg of result.log) state.addLog(msg);
       if (result.success) {
         state.spendAction(result.cost);
@@ -1081,6 +1119,43 @@ export class UIController {
       this._updateSidebar();
       this.onRedraw();
       this._maybeShowNoActionsDialog();
+
+    } else if (actionType === ActionType.BATTLE_HEX) {
+      this._awaitingTarget = null;
+      this.renderer.highlightHexes = [];
+
+      if (this._planMode) {
+        this._addToPlan({ type: PlanActionType.BATTLE_HEX, entityId: actor.id, targetCol: hex.col, targetRow: hex.row });
+        if (actor.alive) this._selectEntity(actor);
+        else this._clearSelection();
+        this._updateSidebar();
+        this.onRedraw();
+        return;
+      }
+      // In non-plan mode, execute immediately (used in direct-action / online mode)
+      if (this.mp?.active) {
+        this.mp.sendAction('battle_hex', { entityId: actor.id, targetCol: hex.col, targetRow: hex.row });
+        this._clearSelection();
+        this._updateSidebar();
+        this.onRedraw();
+        return;
+      }
+      // Offline direct-action: attempt battle against whatever is on the hex
+      const hexEnemies = state.entities.filter(
+        e => e.alive && e.owner !== actor.owner && e.col === hex.col && e.row === hex.row
+      );
+      if (hexEnemies.length > 0) {
+        const target = hexEnemies[Math.floor(Math.random() * hexEnemies.length)];
+        this._awaitingTarget = { actionType: ActionType.BATTLE, actor };
+        this._handleTargetClick(hex);
+      } else {
+        state.addLog('No enemy found on that hex.', actor.owner);
+        state.spendAction(1);
+      }
+      if (actor.alive) this._selectEntity(actor);
+      else this._clearSelection();
+      this._updateSidebar();
+      this.onRedraw();
     }
   }
 
@@ -1125,6 +1200,10 @@ export class UIController {
       }
     }
     const actions = getValidActions(state, effectiveEntity);
+
+    // In planning mode, compute projected inventory after all queued steps so we can
+    // disable resource-dependent actions the player can no longer afford.
+    const projInv = this._planMode ? computeProjectedInventory(state, this._plan) : null;
     // In planning mode, always show actions (budget tracked separately)
     const hasAct  = this._planMode || state.actionsAvailable > 0;
 
@@ -1141,30 +1220,73 @@ export class UIController {
           regularHtml += btn('🔍 Explore', 'explore', dis, `data-action="explore"`);
           break;
         case ActionType.BATTLE:
-          // Attack is now triggered directly by clicking a red-highlighted enemy hex — no popup button needed.
+          // Attack is triggered directly by clicking a red-highlighted visible-enemy hex — no popup button needed.
+          break;
+        case ActionType.BATTLE_HEX:
+          // "Attack Hex" — lets the player attack a hex that may be hidden by fog of war.
+          // Only show in planning mode (resolution handles the skip if the hex turns out empty).
+          if (this._planMode) {
+            regularHtml += btn('⚔ Attack Hex', 'battle-hex', dis, `data-action="attack_hex"`);
+          }
           break;
         case ActionType.FORTIFY: {
-          const shared     = state.inventory.shared;
-          const hasMetal   = (shared.metal || 0) > 0;
+          // Use projected inventory in plan mode so queued fortifies reduce affordability
+          const fortInv    = projInv ? projInv.shared : state.inventory.shared;
+          const hasMetal   = (fortInv.metal || 0) > 0;
+          const hasWood    = (fortInv.wood  || 0) > 0;
+          // Use action.affordable as fallback when projInv not available
+          const cantAfford = projInv ? (!hasMetal && !hasWood) : !action.affordable;
           const hasDoubler = entity.type === EntityType.SURVIVOR && entity.ability === SurvivorAbility.FORTIFY_DOUBLE;
           const tileData   = state.tiles.get(hexKey(entity.col, entity.row));
           const cur        = tileData ? tileData.fortifyLevel : 0;
           const lbl = hasMetal
-            ? `⚙ Reinforce +${Math.min(4, cur + 2)} DEF`
+            ? `⚙ Reinforce +${Math.min(4, cur + 2)} DEF (1⚙)`
             : hasDoubler
-              ? `🪵 Fortify +${Math.min(4, cur + 2)} DEF ★`
-              : `🪵 Fortify +${Math.min(4, cur + 1)} DEF`;
-          regularHtml += btn(lbl, 'fortify', dis, `data-action="fortify"`);
+              ? `🪵 Fortify +${Math.min(4, cur + 2)} DEF ★ (1🪵)`
+              : `🪵 Fortify +${Math.min(4, cur + 1)} DEF (1🪵)`;
+          regularHtml += btn(lbl, 'fortify', (cantAfford || !hasAct) ? 'disabled' : '', `data-action="fortify"`);
           break;
         }
         case ActionType.SUMMON:
-          regularHtml += btn(_summonLabel(state.inventory.witch), 'summon', dis, `data-action="summon"`);
+          // Each SUMMON entry has a specific summonType — render all three as separate buttons.
+          // De-duplicate: only render the first time we hit a SUMMON action (we'll loop all three).
+          // (The loop handles this — each has a distinct summonType so we render each once.)
+          {
+            const projWitch = projInv ? projInv.witch : state.inventory.witch;
+            const projMetal = projWitch[ResourceType.METAL] || 0;
+            const projWood  = projWitch[ResourceType.WOOD]  || 0;
+            const projTotal = Object.values(projWitch).reduce((s, v) => s + (v || 0), 0);
+            const projAffordable = {
+              [EntityType.IRON_GOLEM]: projMetal >= 2,
+              [EntityType.WOOD_GOLEM]: projWood  >= 2,
+              [EntityType.MINION]:     projTotal >= 2,
+            };
+            const SUMMON_LABEL = {
+              [EntityType.IRON_GOLEM]: '🔩 Iron Golem (2⚙)',
+              [EntityType.WOOD_GOLEM]: '🪵 Wood Golem (2🪵)',
+              [EntityType.MINION]:     '🌑 Minion (2 res)',
+            };
+            const st = action.summonType;
+            const canAfford = projAffordable[st] ?? action.affordable;
+            const btnDis = (!canAfford || !hasAct) ? 'disabled' : '';
+            regularHtml += btn(SUMMON_LABEL[st] ?? '🌑 Summon', 'summon', btnDis, `data-action="summon" data-summon-type="${st}"`);
+          }
           break;
         case ActionType.USE_ITEM:
           for (const item of action.usable) {
             // Food is managed via the plan-panel food slots in planning mode.
             if (this._planMode && item.item === ResourceType.FOOD) continue;
-            regularHtml += btn(item.label, 'item', dis, `data-action="use_item" data-item="${item.item}"`);
+            // Disable if projected inventory can't cover this item
+            let itemDis = dis;
+            if (projInv) {
+              if (item.item === ResourceType.HERBS) {
+                const eitems = projInv.entityItems[entity.id] ?? {};
+                if ((eitems[ResourceType.HERBS] || 0) < 1) itemDis = 'disabled';
+              } else if (!item.item.startsWith('weapon:')) {
+                if ((projInv.shared[item.item] || 0) < 1) itemDis = 'disabled';
+              }
+            }
+            regularHtml += btn(item.label, 'item', itemDis, `data-action="use_item" data-item="${item.item}"`);
           }
           break;
         case ActionType.EQUIP_WEAPON:
@@ -1390,10 +1512,8 @@ export class UIController {
       const dots = barEl.querySelectorAll('.node-dot');
       prevNodes.forEach((prev, i) => {
         if (i >= dots.length) return;
-        const currentHolder = this.state.entities.find(
-          e => e.alive && e.col === prev.col && e.row === prev.row
-        );
-        const currentOwner = currentHolder?.owner ?? null;
+        const obj = this.state.witchObjectives.find(o => o.col === prev.col && o.row === prev.row);
+        const currentOwner = obj ? nodeController(obj, this.state.entities) : 'neutral';
         if (currentOwner !== prev.owner) {
           dots[i].classList.add('node-dot-glow');
         }
@@ -1418,8 +1538,9 @@ export class UIController {
 
     if (targeting && hint) {
       const labels = {
-        [ActionType.BATTLE]: 'Tap an enemy to attack',
-        [ActionType.SUMMON]: 'Tap an adjacent empty hex',
+        [ActionType.BATTLE]:     'Tap an enemy to attack',
+        [ActionType.SUMMON]:     'Tap an adjacent empty hex',
+        [ActionType.BATTLE_HEX]: 'Tap a hex to attack (skips if empty)',
       };
       hint.textContent = labels[this._awaitingTarget.actionType] ?? '';
     }
@@ -1549,12 +1670,26 @@ export class UIController {
 
       case 'summon': {
         _hideActionPopup();
-        this._awaitingTarget = { actionType: ActionType.SUMMON, actor: entity };
+        const summonType = button.dataset.summonType ?? null;
+        this._awaitingTarget = { actionType: ActionType.SUMMON, actor: entity, summonType };
+        // Use targets from the matching summon action (all three share the same targets)
         const summonAction = this._validActions.find(a => a.type === ActionType.SUMMON);
         if (summonAction) {
           this.renderer.highlightHexes = summonAction.targets.map(t => ({ ...t, color: 'rgba(180,80,200,0.30)' }));
         }
         state.addLog('Click an adjacent empty hex to raise a unit.');
+        this._updateSidebar();
+        this.onRedraw();
+        break;
+      }
+
+      case 'attack_hex': {
+        _hideActionPopup();
+        const bhAction = this._validActions.find(a => a.type === ActionType.BATTLE_HEX);
+        const hexTargets = bhAction?.targets ?? [];
+        this._awaitingTarget = { actionType: ActionType.BATTLE_HEX, actor: entity, hexTargets };
+        renderer.highlightHexes = hexTargets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,120,40,0.50)' }));
+        state.addLog('Click a hex to attack it (skips if empty).');
         this._updateSidebar();
         this.onRedraw();
         break;
@@ -1676,7 +1811,7 @@ export class UIController {
 
   // ── Speed popup ───────────────────────────────────────────────────────────
 
-  static SPEED_LABELS = { cinematic: 'Cinematic', fast: 'Fast', instant: 'Instant' };
+  static SPEED_LABELS = { step: 'Step by Step', cinematic: 'Cinematic', fast: 'Fast', instant: 'Instant' };
 
   _toggleSpeedPopup() {
     const popup = this._el('speed-popup');
@@ -1705,6 +1840,22 @@ export class UIController {
       btn.className = `zoom-btn speed-${mode}`;
     }
     this._showSpeedToast(`⚡ ${UIController.SPEED_LABELS[mode]}`);
+  }
+
+  _waitForStep() {
+    return new Promise(resolve => {
+      const bar = this._el('step-continue-bar');
+      if (bar) bar.style.display = 'flex';
+      this._stepResolve = () => {
+        if (bar) bar.style.display = 'none';
+        this._stepResolve = null;
+        resolve();
+      };
+    });
+  }
+
+  _clearStepContinue() {
+    if (this._stepResolve) this._stepResolve();
   }
 
   _showSpeedToast(text) {
@@ -1774,8 +1925,9 @@ export class UIController {
   // ── Phase toast ──────────────────────────────────────────────────────────
 
   _showPhaseModal(faction, budget) {
-    // Instant mode skips all popups
+    // Instant mode and tutorial mode skip all popups
     if (this.speedMode === 'instant') return;
+    if (this.tutorialMode) return;
 
     const phase = this.state.phase;
     const PHASE_INFO = {
@@ -2360,14 +2512,18 @@ export class UIController {
                                          : tile.type;
     }
 
-    const obj       = state.witchObjectives.find(o => o.col === hex.col && o.row === hex.row);
+    const obj       = state.witchObjectives.find(o =>
+      o.hexes.some(h => h.col === hex.col && h.row === hex.row)
+    );
     let linesHtml   = '';
 
     if (obj) {
-      const witchHere = state.entities.find(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row);
-      const heroHere  = state.entities.find(e => e.alive && e.owner === 'hero'  && e.col === obj.col && e.row === obj.row);
-      const ctrl = witchHere ? '🔴 Witch' : heroHere ? '🔵 Hero' : '⭕ Contested';
-      linesHtml += `<div class="tile-zoom-info-line node">⚔ Power Node — ${ctrl}</div>`;
+      const ctrl = nodeController(obj, state.entities);
+      const ctrlStr = ctrl === 'hero'      ? '🔵 Hero'
+                    : ctrl === 'witch'     ? '🔴 Witch'
+                    : ctrl === 'contested' ? '⚡ Contested'
+                    : '⭕ Uncontrolled';
+      linesHtml += `<div class="tile-zoom-info-line node">⚔ Power Node (${obj.label}) — ${ctrlStr}</div>`;
     }
     if (tile.explored && tile.fortifyLevel) {
       const fl = tile.fortifyLevel >= 3 ? `⚙⚙ Heavily Reinforced (+${tile.fortifyLevel} DEF)`
@@ -2531,11 +2687,16 @@ export class UIController {
 
       const { prevScore, prevNodes, humanFaction, fogOfWar, gameOver, winner, winReason } = opts;
 
-      // Collect kills, survivors found, and summons from steps
-      // with fog-of-war filtering: skip opponent-only events the player can't see
+      // Collect kills, survivors found, summons, and resource flows from steps.
+      // Fog-of-war filtering: skip opponent-only events the player can't see.
       const kills     = [];
       const survivors = [];
       const summons   = [];
+      const foundRes  = {}; // icon → count  (from explore loot)
+      const usedRes   = {}; // icon → count  (from summon/fortify/use-item)
+      const _addRes = (map, icon, n = 1) => { map[icon] = (map[icon] || 0) + n; };
+      const RES_ICON_MAP = { wood: '🪵', metal: '⚙', food: '🍞', silver: '🥈', scripture: '📜', herbs: '🌿' };
+
       for (const step of steps ?? []) {
         // Tag each event with its faction for fog filtering
         const taggedEvents = [
@@ -2571,6 +2732,36 @@ export class UIController {
             const logLine = ev.result?.log?.[0] ?? '';
             summons.push(logLine || 'Unit summoned');
           }
+
+          // ── Resource tracking (player's faction only) ─────────────────
+          if (ev.result?.success && (!humanFaction || ev._faction === humanFaction)) {
+            // Resources found: collect lootItems from explore results
+            if (ev.action?.type === 'explore') {
+              for (const item of ev.result.lootItems ?? []) {
+                if (!item.startsWith('+')) continue;
+                const icon = item.slice(1);
+                // Skip weapons (⚔) and horses (🐴) — not consumable resources
+                if (icon !== '⚔' && icon !== '🐴') _addRes(foundRes, icon);
+              }
+            }
+            // Resources spent: summon
+            if (ev.action?.type === 'summon') {
+              const log0 = ev.result?.log?.[0] ?? '';
+              if (log0.includes('Iron Golem'))      _addRes(usedRes, '⚙', 2);
+              else if (log0.includes('Wood Golem')) _addRes(usedRes, '🪵', 2);
+              else                                  _addRes(usedRes, 'res', 2);
+            }
+            // Resources spent: fortify
+            if (ev.action?.type === 'fortify') {
+              const log0 = ev.result?.log?.[0] ?? '';
+              _addRes(usedRes, log0.includes('metal') ? '⚙' : '🪵');
+            }
+            // Resources spent: use-item (only trackable consumables)
+            if (ev.action?.type === 'use_item') {
+              const icon = RES_ICON_MAP[ev.action?.item];
+              if (icon) _addRes(usedRes, icon);
+            }
+          }
         }
       }
 
@@ -2579,10 +2770,8 @@ export class UIController {
       if (prevNodes) {
         const state = this.state;
         for (const prev of prevNodes) {
-          const currentHolder = state.entities.find(
-            e => e.alive && e.col === prev.col && e.row === prev.row
-          );
-          const currentOwner = currentHolder?.owner ?? null;
+          const obj = state.witchObjectives.find(o => o.col === prev.col && o.row === prev.row);
+          const currentOwner = obj ? nodeController(obj, state.entities) : 'neutral';
           if (currentOwner !== prev.owner) {
             nodeChanges.push({ label: prev.label, from: prev.owner, to: currentOwner });
           }
@@ -2604,6 +2793,15 @@ export class UIController {
       }
       if (eventsEl) {
         let html = '';
+
+        // Combat summary — aggregate damage between each pair of combatants
+        const battleLines = compileTurnBattleSummary(
+          steps ?? [], this.state.entities, ResEventType, PlanActionType,
+        );
+        for (const line of battleLines) {
+          html += `<div class="summary-combat">${line}</div>`;
+        }
+
         for (const n of kills) {
           html += `<div class="summary-kill">☠ ${n} slain</div>`;
         }
@@ -2619,12 +2817,28 @@ export class UIController {
           html += `<div class="summary-summon">✦ ${s}</div>`;
         }
 
+        // Resource economy rows
+        const foundEntries = Object.entries(foundRes);
+        const usedEntries  = Object.entries(usedRes);
+        if (foundEntries.length > 0) {
+          const foundStr = foundEntries.map(([icon, n]) => `${n}${icon}`).join(' ');
+          html += `<div class="summary-resources found">📦 Found: ${foundStr}</div>`;
+        }
+        if (usedEntries.length > 0) {
+          const usedStr = usedEntries.map(([icon, n]) =>
+            icon === 'res' ? `${n} res` : `${n}${icon}`
+          ).join(' ');
+          html += `<div class="summary-resources used">📤 Spent: ${usedStr}</div>`;
+        }
+
         // Node control changes
         for (const nc of nodeChanges) {
           if (nc.to === 'hero') {
             html += `<div class="summary-node hero-text">⚔ Hero now controls ${nc.label}</div>`;
           } else if (nc.to === 'witch') {
             html += `<div class="summary-node witch-text">✦ Witch has seized ${nc.label}</div>`;
+          } else if (nc.to === 'contested') {
+            html += `<div class="summary-node">⚡ ${nc.label} is now contested</div>`;
           } else {
             html += `<div class="summary-node">◇ ${nc.label} is no longer controlled</div>`;
           }
@@ -2762,12 +2976,6 @@ function btn(label, cls, disabled = '', extra = '') {
   return `<button class="action-btn ${cls}" ${disabled} ${extra}>${label}</button>`;
 }
 
-function _summonLabel(witchInv) {
-  if ((witchInv.metal || 0) > 0) return '🔩 Iron Golem';
-  if ((witchInv.wood  || 0) > 0) return '🪵 Wood Golem';
-  const res = Object.keys(witchInv).find(k => witchInv[k] > 0);
-  return res ? `🌑 Summon Minion` : '🌑 Summon';
-}
 
 function _visibleUnitsAt(state, col, row) {
   if (!state.fogOfWar) return state.entities.filter(e => e.alive && e.col === col && e.row === row);

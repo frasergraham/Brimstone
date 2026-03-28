@@ -5,6 +5,19 @@ import { Tile, TileType, BuildingType } from './tiles.js';
 // Flavor labels for the witch power nodes (extra labels for larger maps)
 const WITCH_OBJECTIVE_LABELS = [
   'Ancient Altar', 'Dark Grove', 'Cursed Crossroads', 'Forgotten Hollow',
+  'Witches\' Mound', 'Blighted Fen', 'Shadow Cairn',
+];
+
+// Distinct colors for each power node index — used in renderer and score tracker.
+// Chosen to be visually distinct from hero blue (#4488ff) and witch red (#cc3333).
+export const NODE_COLORS = [
+  '#22c55e', // emerald green
+  '#f59e0b', // amber
+  '#06b6d4', // cyan
+  '#a855f7', // violet
+  '#ec4899', // pink
+  '#84cc16', // lime
+  '#f97316', // orange
 ];
 
 // ── Village archetypes ────────────────────────────────────────────────────────
@@ -31,7 +44,8 @@ const VILLAGE_TEMPLATES = {
 //   CHURCH, APOTHECARY, TOWN_HALL, BLACKSMITH buildings.
 // minVillageDist: minimum hex distance between village centers.
 // forestSeeds: starting positions for cluster growth.
-// nodeCount: number of witch power-node objectives.
+// nodeCount: default number of witch power-node objectives.
+// nodeCountMin / nodeCountMax: allowed range for configurable node count.
 // survivorCounts: { buildings, terrain } — tiles flagged hiddenSurvivor=true.
 // bridgeMax: max river-crossing bridges.
 
@@ -46,29 +60,30 @@ export const MAP_SIZES = {
       {col:8,row:3},{col:0,row:4},{col:1,row:7},{col:8,row:6},
       {col:4,row:2},{col:5,row:6},
     ],
-    nodeCount: 2,
+    nodeCount: 2, nodeCountMin: 1, nodeCountMax: 3,
     survivorCounts: { buildings: 9, terrain: 2 },
     bridgeMax: 2,
     minBridges: 1,
   },
   standard: {
-    label: 'Standard (13×11)',
-    cols: 13, rows: 11,
+    label: 'Standard (13×13)',
+    cols: 13, rows: 13,
     villages: ['market', 'parish', 'harbor'],
     minVillageDist: 6,
     forestSeeds: [
       {col:0,row:0},{col:1,row:1},{col:11,row:1},{col:12,row:0},
       {col:12,row:4},{col:0,row:6},{col:1,row:9},{col:12,row:8},
       {col:7,row:3},{col:8,row:8},{col:0,row:4},{col:6,row:9},
+      {col:3,row:11},{col:10,row:12},{col:6,row:12},
     ],
-    nodeCount: 3,
-    survivorCounts: { buildings: 13, terrain: 2 },
+    nodeCount: 3, nodeCountMin: 2, nodeCountMax: 5,
+    survivorCounts: { buildings: 14, terrain: 3 },
     bridgeMax: 4,
     minBridges: 2,
   },
   regional: {
-    label: 'Regional (17×13)',
-    cols: 17, rows: 13,
+    label: 'Regional (17×17)',
+    cols: 17, rows: 17,
     villages: ['market', 'parish', 'harbor', 'garrison'],
     minVillageDist: 6,
     forestSeeds: [
@@ -76,15 +91,16 @@ export const MAP_SIZES = {
       {col:16,row:4},{col:0,row:7},{col:1,row:11},{col:16,row:9},
       {col:9,row:3},{col:10,row:9},{col:0,row:4},{col:7,row:11},
       {col:5,row:1},{col:12,row:6},{col:3,row:6},{col:14,row:11},
+      {col:2,row:13},{col:14,row:14},{col:8,row:15},{col:1,row:16},{col:15,row:16},
     ],
-    nodeCount: 3,
-    survivorCounts: { buildings: 16, terrain: 4 },
+    nodeCount: 3, nodeCountMin: 2, nodeCountMax: 6,
+    survivorCounts: { buildings: 18, terrain: 4 },
     bridgeMax: 5,
     minBridges: 2,
   },
   campaign: {
-    label: 'Campaign (21×15)',
-    cols: 21, rows: 15,
+    label: 'Campaign (21×21)',
+    cols: 21, rows: 21,
     villages: ['market', 'parish', 'harbor', 'garrison', 'farmstead'],
     minVillageDist: 7,
     forestSeeds: [
@@ -93,9 +109,11 @@ export const MAP_SIZES = {
       {col:11,row:3},{col:12,row:11},{col:0,row:5},{col:8,row:13},
       {col:5,row:1},{col:15,row:7},{col:3,row:7},{col:17,row:13},
       {col:8,row:0},{col:14,row:0},{col:0,row:10},{col:20,row:7},
+      {col:3,row:15},{col:17,row:16},{col:10,row:17},{col:5,row:18},
+      {col:14,row:19},{col:0,row:20},{col:20,row:20},{col:10,row:20},
     ],
-    nodeCount: 3,
-    survivorCounts: { buildings: 20, terrain: 5 },
+    nodeCount: 3, nodeCountMin: 2, nodeCountMax: 7,
+    survivorCounts: { buildings: 24, terrain: 6 },
     bridgeMax: 6,
     minBridges: 3,
   },
@@ -233,29 +251,42 @@ function _pickCornerBuildings(rand, tiles) {
   return result;
 }
 
-// Build a row→col map from the generated river path (captured before tiles are mutated).
-function _buildRiverMap(riverPath) {
+// Build a lookup map from the generated river path (captured before tiles are mutated).
+// N-S river: row→col map.  E-W river: col→row map.
+function _buildRiverMap(riverPath, riverEW = false) {
   const m = new Map();
-  for (const { col, row } of riverPath) m.set(row, col);
+  if (riverEW) {
+    for (const { col, row } of riverPath) m.set(col, row);
+  } else {
+    for (const { col, row } of riverPath) m.set(row, col);
+  }
   return m;
 }
 
-// Which side of the river is a hex on? 'left' (west) or 'right' (east).
-// Hexes that share the exact river column are treated as 'right' (consistent tiebreak).
-function _riverSide(col, row, riverMap) {
+// Which side of the river is a hex on?
+// N-S river: 'left' (west) or 'right' (east).
+// E-W river: 'left' (north/top) or 'right' (south/bottom).
+// Hexes at the exact river position are treated as 'right' (consistent tiebreak).
+function _riverSide(col, row, riverMap, riverEW = false) {
+  if (riverEW) {
+    const rr = riverMap.get(col);
+    return (rr === undefined || row < rr) ? 'left' : 'right';
+  }
   const rc = riverMap.get(row);
   return (rc === undefined || col < rc) ? 'left' : 'right';
 }
 
 // Like _pickSpread but guarantees at least one node on each side of the river
 // when count >= 2 and both sides have valid candidates.
-function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, riverMap) {
+// startPositions: array of {col,row} — no node center may be within 3 hexes of these.
+function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, riverMap, riverEW = false, startPositions = []) {
   const left = [], right = [];
   for (const [k, t] of tiles) {
     if (t.type !== TileType.GRASS) continue;
     if (forbiddenKeys.has(k)) continue;
     if (t.col < 1 || t.col > MAP_COLS - 2 || t.row < 1 || t.row > MAP_ROWS - 2) continue;
-    (_riverSide(t.col, t.row, riverMap) === 'left' ? left : right).push({ col: t.col, row: t.row });
+    if (startPositions.some(sp => hexDistance(sp.col, sp.row, t.col, t.row) <= 3)) continue;
+    (_riverSide(t.col, t.row, riverMap, riverEW) === 'left' ? left : right).push({ col: t.col, row: t.row });
   }
   _shuffle(left, rand);
   _shuffle(right, rand);
@@ -276,6 +307,35 @@ function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, river
 
   while (placed.length < count) placed.push({ col: 1, row: 1 });
   return placed.slice(0, count);
+}
+
+// Pick 2 satellite hexes adjacent to center to form a 3-hex cluster.
+// Prefers a "triangle" (two neighbors that are also adjacent to each other).
+// startPositions: no satellite may be within 3 hexes of these.
+function _pickNodeCluster(rand, tiles, center, forbiddenKeys, startPositions = []) {
+  const neighbors = _shuffle(
+    getNeighbors(center.col, center.row).filter(n => {
+      const t = tiles.get(hexKey(n.col, n.row));
+      if (!t || t.type === TileType.RIVER) return false;
+      if (forbiddenKeys.has(hexKey(n.col, n.row))) return false;
+      if (startPositions.some(sp => hexDistance(sp.col, sp.row, n.col, n.row) <= 3)) return false;
+      return true;
+    }),
+    rand
+  );
+
+  // Try to find a triangle pair (both neighbors are adjacent to each other)
+  for (let i = 0; i < neighbors.length; i++) {
+    for (let j = i + 1; j < neighbors.length; j++) {
+      if (hexDistance(neighbors[i].col, neighbors[i].row, neighbors[j].col, neighbors[j].row) === 1) {
+        return [{ col: center.col, row: center.row }, neighbors[i], neighbors[j]];
+      }
+    }
+  }
+  // Fallback: any two valid neighbors
+  if (neighbors.length >= 2) return [{ col: center.col, row: center.row }, neighbors[0], neighbors[1]];
+  if (neighbors.length === 1) return [{ col: center.col, row: center.row }, neighbors[0], { col: center.col, row: center.row }];
+  return [{ col: center.col, row: center.row }, { col: center.col, row: center.row }, { col: center.col, row: center.row }];
 }
 
 // Place one village's buildings in a compact cluster around a center hex.
@@ -359,7 +419,7 @@ function _generateVillages(rand, tiles, villageNames, minVillageDist, reservedKe
   return { allPlacements, villageGroups };
 }
 
-// Generate a meandering river path: exactly one tile per row (row 0 → MAP_ROWS-1).
+// Generate a north-south meandering river path: exactly one tile per row (row 0 → MAP_ROWS-1).
 // This guarantees every interior tile has exactly 2 river neighbours (no clusters),
 // and the two endpoints each have exactly 1 (so the bezier can extend off-screen).
 //
@@ -391,7 +451,34 @@ function _generateRiver(rand) {
   return path;
 }
 
-export function generateMap(seed = Date.now(), mapSize = 'standard') {
+/// Generate an east-west meandering river path: exactly one tile per column (col 0 → MAP_COLS-1).
+// Drift is only allowed when the current row is ODD, because in odd-r offset the only
+// rightward neighbors of an even-row hex are at (col+1, row) — no diagonal step exists.
+// From an odd-row hex the rightward neighbors are (col+1, row-1), (col+1, row), (col+1, row+1).
+function _generateRiverEW(rand) {
+  const path = [];
+  const minStart = Math.max(2, Math.floor(MAP_ROWS / 4));
+  const rangeLen  = Math.max(1, Math.floor(MAP_ROWS / 2));
+  const startRow  = minStart + Math.floor(rand() * rangeLen);
+  let row = Math.min(startRow, MAP_ROWS - 3);
+
+  for (let col = 0; col < MAP_COLS; col++) {
+    path.push({ col, row });
+
+    if (col < MAP_COLS - 1) {
+      if (row % 2 === 1) {
+        // Odd row: upper-right (row-1), straight (row), or lower-right (row+1) are all hex-adjacent
+        const opts = [row - 1, row, row + 1].filter(r => r >= 2 && r <= MAP_ROWS - 3);
+        row = opts[Math.floor(rand() * opts.length)];
+      }
+      // Even row: only (col+1, row) is a rightward hex-neighbor — must go straight
+    }
+  }
+
+  return path;
+}
+
+export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOverride = null) {
   const cfg = MAP_SIZES[mapSize] ?? MAP_SIZES.standard;
   setMapDimensions(cfg.cols, cfg.rows);
 
@@ -405,9 +492,11 @@ export function generateMap(seed = Date.now(), mapSize = 'standard') {
     }
   }
 
-  // 2. Carve meandering river; capture path to build a row→col lookup for later checks.
-  const riverPath = _generateRiver(rand);
-  const riverMap  = _buildRiverMap(riverPath);
+  // 2. Carve meandering river — randomly N-S or E-W.
+  //    Capture path to build a positional lookup for later checks.
+  const riverEW   = rand() < 0.5;
+  const riverPath = riverEW ? _generateRiverEW(rand) : _generateRiver(rand);
+  const riverMap  = _buildRiverMap(riverPath, riverEW);
   for (const { col, row } of riverPath) {
     const t = tiles.get(hexKey(col, row));
     if (t) t.type = TileType.RIVER;
@@ -468,7 +557,7 @@ export function generateMap(seed = Date.now(), mapSize = 'standard') {
 
   // Guarantee minimum river crossings on the inter-village trunk
   {
-    const side = (col, row) => _riverSide(col, row, riverMap);
+    const side = (col, row) => _riverSide(col, row, riverMap, riverEW);
     const crossCount = interEdges.filter(e =>
       side(e.from.col, e.from.row) !== side(e.to.col, e.to.row)
     ).length;
@@ -486,8 +575,14 @@ export function generateMap(seed = Date.now(), mapSize = 'standard') {
       const chosen = [];
       for (const e of extra) {
         if (chosen.length >= cfg.minBridges - crossCount) break;
-        const midRow = (e.from.row + e.to.row) / 2;
-        if (!chosen.some(c => Math.abs((c.from.row + c.to.row) / 2 - midRow) < 2)) {
+        // Space bridges along the perpendicular axis to the river
+        const midPos = riverEW
+          ? (e.from.col + e.to.col) / 2
+          : (e.from.row + e.to.row) / 2;
+        const cMidPos = c => riverEW
+          ? (c.from.col + c.to.col) / 2
+          : (c.from.row + c.to.row) / 2;
+        if (!chosen.some(c => Math.abs(cMidPos(c) - midPos) < 2)) {
           chosen.push(e); interEdges.push(e);
         }
       }
@@ -593,20 +688,121 @@ export function generateMap(seed = Date.now(), mapSize = 'standard') {
     }
   }
 
-  // 6. Place witch objectives — well-spread, guaranteed across both sides of the river
+  // 6. Place witch objectives — well-spread, guaranteed across both sides of the river,
+  //    with 3-hex clusters and minimum distance from starting positions.
   const buildingKeys = new Set(buildingPlacements.map(b => hexKey(b.col, b.row)));
-  const objPositions = _pickNodesAcrossRiver(rand, tiles, cfg.nodeCount, 4, buildingKeys, riverMap);
-  const witchObjectives = objPositions.map((pos, i) => ({
-    col: pos.col, row: pos.row, label: WITCH_OBJECTIVE_LABELS[i] ?? `Power Node ${i + 1}`,
-  }));
-
-  // 7. Determine start positions
+  // Extract start positions now (buildings are placed; INN = hero start, GRAVEYARD = witch start)
   const heroStart  = buildingPlacements.find(b => b.building === BuildingType.INN)
                   || buildingPlacements[0];
   const witchStart = buildingPlacements.find(b => b.building === BuildingType.GRAVEYARD)
                   || buildingPlacements[buildingPlacements.length - 1];
+  const startPositions = [heroStart, witchStart];
+
+  const resolvedNodeCount = (nodeCountOverride != null)
+    ? Math.max(cfg.nodeCountMin ?? 1, Math.min(cfg.nodeCountMax ?? cfg.nodeCount, nodeCountOverride))
+    : cfg.nodeCount;
+  const objPositions = _pickNodesAcrossRiver(rand, tiles, resolvedNodeCount, 4, buildingKeys, riverMap, riverEW, startPositions);
+  const witchObjectives = objPositions.map((pos, i) => ({
+    col: pos.col, row: pos.row,
+    label: WITCH_OBJECTIVE_LABELS[i] ?? `Power Node ${i + 1}`,
+    hexes: _pickNodeCluster(rand, tiles, pos, buildingKeys, startPositions),
+    color: NODE_COLORS[i % NODE_COLORS.length],
+    seenByHero:  false,
+    seenByWitch: false,
+    prevCtrl:    'neutral',
+  }));
 
   return { tiles, witchObjectives, heroStart, witchStart, mapSize, survivorCounts: cfg.survivorCounts };
+}
+
+// ── Tutorial map ─────────────────────────────────────────────────────────────
+
+/**
+ * Returns a small, hand-crafted 9×9 map for the tutorial scenario.
+ * No river. Single Power Node. Three buildings near the hero start.
+ * Calls setMapDimensions(9, 9) to update the global grid size.
+ *
+ * Deliberately minimal — the tutorial should be legible, not complex.
+ *
+ * Layout (col, row):
+ *   INN      (2,6)  — hero start
+ *   CHURCH   (2,5)  — first exploration target, adjacent north of INN
+ *   HOUSE    (2,4)  — survivor building north of Church (on the road)
+ *   GRAVEYARD(7,1)  — witch start
+ *   Forest cluster  — (4,2),(5,2),(4,3),(6,2) for visual depth
+ *   Road            — INN ↔ CHURCH ↔ HOUSE ↔ tile(3,4)
+ *   Power Node      — center (4,4), cluster hexes (4,4),(5,4),(4,5)
+ */
+export function generateTutorialMap() {
+  const COLS = 9;
+  const ROWS = 9;
+  setMapDimensions(COLS, ROWS);
+
+  const tiles = new Map();
+  for (let row = 0; row < ROWS; row++) {
+    for (let col = 0; col < COLS; col++) {
+      tiles.set(hexKey(col, row), new Tile(col, row, TileType.GRASS));
+    }
+  }
+
+  // ── Buildings ──────────────────────────────────────────────────────────────
+  const inn = tiles.get(hexKey(2, 6));
+  inn.type = TileType.BUILDING; inn.building = BuildingType.INN; inn.fortifyLevel = 1;
+
+  const church = tiles.get(hexKey(2, 5));
+  church.type = TileType.BUILDING; church.building = BuildingType.CHURCH; church.fortifyLevel = 1;
+  // hiddenSurvivor is set by initTutorial() after state creation
+
+  const grave = tiles.get(hexKey(7, 1));
+  grave.type = TileType.BUILDING; grave.building = BuildingType.GRAVEYARD; grave.fortifyLevel = 1;
+
+  // ── Forest cluster ─────────────────────────────────────────────────────────
+  for (const { col, row } of [
+    { col: 4, row: 2 }, { col: 5, row: 2 }, { col: 4, row: 3 }, { col: 6, row: 2 },
+  ]) {
+    const t = tiles.get(hexKey(col, row));
+    if (t && t.type === TileType.GRASS) t.type = TileType.FOREST;
+  }
+
+  // ── HOUSE at (2,4) — survivor building on the road north of CHURCH ───────────
+  const house = tiles.get(hexKey(2, 4));
+  house.type = TileType.BUILDING; house.building = BuildingType.HOUSE; house.fortifyLevel = 1;
+  // hiddenSurvivor is set by initTutorial() after state creation
+
+  // ── Road: INN ↔ CHURCH ↔ HOUSE ↔ (3,4) ─────────────────────────────────────
+  inn.roadDirs.add(hexKey(2, 5));
+  church.roadDirs.add(hexKey(2, 6));
+  church.roadDirs.add(hexKey(2, 4));
+  house.roadDirs.add(hexKey(2, 5));
+  house.roadDirs.add(hexKey(3, 4));
+
+  const road34 = tiles.get(hexKey(3, 4));
+  road34.type = TileType.ROAD;
+  road34.roadDirs.add(hexKey(2, 4));
+
+  // ── Power Node — cluster (4,4),(5,4),(4,5); no overlap with road or forest ─
+  const witchObjectives = [
+    {
+      col: 4, row: 4,
+      label: 'The Crossroads',
+      hexes: [{ col: 4, row: 4 }, { col: 5, row: 4 }, { col: 4, row: 5 }],
+      color: NODE_COLORS[0],
+      seenByHero:  true, // no fog in tutorial
+      seenByWitch: true,
+      prevCtrl: 'neutral',
+    },
+  ];
+
+  return {
+    tiles,
+    witchObjectives,
+    heroStart:     { col: 2, row: 6 },
+    witchStart:    { col: 7, row: 1 },
+    mapSize:       'tutorial',
+    survivorCounts: { buildings: 0, terrain: 0 },
+    cols: COLS,
+    rows: ROWS,
+  };
 }
 
 // ── Multiple start positions (multiplayer) ───────────────────────────────────

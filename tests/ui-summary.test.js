@@ -95,14 +95,15 @@ describe('kill name formatting in summary', () => {
 
 // ── Node control change detection ───────────────────────────────────────────
 
-// Mirrors the node control change logic
+// Mirrors the node control change logic in ui.js _showResolutionSummary.
+// currentOwner uses 'neutral' (not null) to match nodeController() output.
 function detectNodeChanges(prevNodes, currentEntities) {
   const changes = [];
   for (const prev of prevNodes) {
     const currentHolder = currentEntities.find(
       e => e.alive && e.col === prev.col && e.row === prev.row
     );
-    const currentOwner = currentHolder?.owner ?? null;
+    const currentOwner = currentHolder?.owner ?? 'neutral';
     if (currentOwner !== prev.owner) {
       changes.push({ label: prev.label, from: prev.owner, to: currentOwner });
     }
@@ -112,7 +113,7 @@ function detectNodeChanges(prevNodes, currentEntities) {
 
 describe('node control change detection', () => {
   const prevNodes = [
-    { col: 3, row: 4, label: 'Dark Grove', owner: null },
+    { col: 3, row: 4, label: 'Dark Grove', owner: 'neutral' },
     { col: 7, row: 2, label: 'Blood Altar', owner: 'hero' },
     { col: 10, row: 8, label: 'Cursed Well', owner: 'witch' },
   ];
@@ -135,7 +136,7 @@ describe('node control change detection', () => {
     const changes = detectNodeChanges(prevNodes, entities);
     assert.equal(changes.length, 1);
     assert.equal(changes[0].label, 'Dark Grove');
-    assert.equal(changes[0].from, null);
+    assert.equal(changes[0].from, 'neutral');
     assert.equal(changes[0].to, 'hero');
   });
 
@@ -160,7 +161,7 @@ describe('node control change detection', () => {
     assert.equal(changes.length, 1);
     assert.equal(changes[0].label, 'Cursed Well');
     assert.equal(changes[0].from, 'witch');
-    assert.equal(changes[0].to, null);
+    assert.equal(changes[0].to, 'neutral');
   });
 
   test('dead entities do not count as controlling', () => {
@@ -171,7 +172,19 @@ describe('node control change detection', () => {
     const changes = detectNodeChanges(prevNodes, entities);
     assert.equal(changes.length, 1);
     assert.equal(changes[0].label, 'Blood Altar');
-    assert.equal(changes[0].to, null);
+    assert.equal(changes[0].to, 'neutral');
+  });
+
+  test('neutral nodes with no entities produce no changes (regression: multiplayer always-neutral bug)', () => {
+    // prevNodes built with nodeController() returns 'neutral' (not null) for uncontrolled nodes.
+    // currentOwner also resolves to 'neutral' — they must be equal to avoid spurious changes.
+    const allNeutralPrev = [
+      { col: 3, row: 4, label: 'Dark Grove', owner: 'neutral' },
+      { col: 7, row: 2, label: 'Blood Altar', owner: 'neutral' },
+      { col: 10, row: 8, label: 'Cursed Well', owner: 'neutral' },
+    ];
+    const changes = detectNodeChanges(allNeutralPrev, []);
+    assert.equal(changes.length, 0);
   });
 
   test('multiple changes detected simultaneously', () => {
@@ -427,5 +440,80 @@ describe('action budget breakdown rows', () => {
     const rows = computeBudgetRows('hero', 'dawn', entities);
     const total = rows.reduce((sum, r) => sum + r.value, 0);
     assert.equal(total, 3 + 1 + 3); // base + dawn + 3 survivors = 7
+  });
+});
+
+// ── Resource tracking scoping ───────────────────────────────────────────────
+
+// Mirrors the resource-tracking guard added to _showResolutionSummary:
+//   if (ev.result?.success && (!humanFaction || ev._faction === humanFaction))
+function shouldTrackResource(ev, humanFaction) {
+  return ev.result?.success && (!humanFaction || ev._faction === humanFaction);
+}
+
+function buildExploreEvent(faction, lootItems) {
+  return {
+    _faction: faction,
+    action: { type: 'explore' },
+    result: { success: true, lootItems },
+  };
+}
+
+function buildSummonEvent(faction, logLine) {
+  return {
+    _faction: faction,
+    action: { type: 'summon' },
+    result: { success: true, log: [logLine] },
+  };
+}
+
+describe('resource tracking scoping in summary', () => {
+  test('fog off: own explore event is tracked', () => {
+    const ev = buildExploreEvent('hero', ['+🪵']);
+    assert.ok(shouldTrackResource(ev, 'hero'));
+  });
+
+  test('fog off: opponent explore event is NOT tracked', () => {
+    const ev = buildExploreEvent('witch', ['+⚙']);
+    assert.ok(!shouldTrackResource(ev, 'hero'));
+  });
+
+  test('fog on: own explore event is tracked', () => {
+    const ev = buildExploreEvent('hero', ['+🪵']);
+    assert.ok(shouldTrackResource(ev, 'hero'));
+  });
+
+  test('fog on: opponent explore event is NOT tracked', () => {
+    const ev = buildExploreEvent('witch', ['+⚙']);
+    assert.ok(!shouldTrackResource(ev, 'hero'));
+  });
+
+  test('fog off: opponent summon (wood golem) is NOT tracked', () => {
+    const ev = buildSummonEvent('witch', 'Wood Golem summoned');
+    assert.ok(!shouldTrackResource(ev, 'hero'));
+  });
+
+  test('fog off: own summon is tracked', () => {
+    const ev = buildSummonEvent('hero', 'Minion summoned');
+    assert.ok(shouldTrackResource(ev, 'hero'));
+  });
+
+  test('failed event is never tracked regardless of faction', () => {
+    const ev = { _faction: 'hero', action: { type: 'explore' }, result: { success: false, lootItems: ['+🪵'] } };
+    assert.ok(!shouldTrackResource(ev, 'hero'));
+  });
+
+  test('autoplay (no humanFaction): all factions are tracked', () => {
+    const heroEv  = buildExploreEvent('hero', ['+🪵']);
+    const witchEv = buildExploreEvent('witch', ['+⚙']);
+    assert.ok(shouldTrackResource(heroEv,  null));
+    assert.ok(shouldTrackResource(witchEv, null));
+  });
+
+  test('witch player: own summon tracked, hero explore not tracked', () => {
+    const summonEv  = buildSummonEvent('witch', 'Iron Golem summoned');
+    const exploreEv = buildExploreEvent('hero', ['+🪵']);
+    assert.ok(shouldTrackResource(summonEv,  'witch'));
+    assert.ok(!shouldTrackResource(exploreEv, 'witch'));
   });
 });

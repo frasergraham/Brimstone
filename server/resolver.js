@@ -142,7 +142,8 @@ function runAction(state, action, faction, playerId = null) {
       );
       if (enemies.length === 0) return { kind: 'skip', reason: 'No enemy on target hex.' };
 
-      const target     = enemies[0];
+      // Pick a random enemy when multiple units occupy the hex
+      const target     = enemies[Math.floor(Math.random() * enemies.length)];
       const actorSnap  = snapEntity(entity);
       const targetSnap = snapEntity(target);
       const r = executeBattle(state, entity, target);
@@ -160,7 +161,7 @@ function runAction(state, action, faction, playerId = null) {
     }
 
     case PlanActionType.SUMMON: {
-      const r = executeSummon(state, entity, action.toCol, action.toRow);
+      const r = executeSummon(state, entity, action.toCol, action.toRow, action.summonType ?? null);
       if (!r.success) return { kind: 'fail', reason: r.log[0] };
       return { kind: 'ok', result: r };
     }
@@ -253,16 +254,15 @@ function drainOneStep(state, queue, budget) {
       // Loop: try the next action in the same step
 
     } else {
-      // Hard failure — halt this faction's remaining plan
+      // Hard failure — skip this action but let remaining plan continue
       queue.shift();
-      queue.length = 0;
       subEvents.push({
         type:   ResEventType.ACTION_FAIL,
         faction: budget.faction,
         action,
         reason: out.reason,
       });
-      break;
+      // Loop: try the next action in the same step
     }
   }
 

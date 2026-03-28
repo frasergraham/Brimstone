@@ -201,6 +201,30 @@ describe('_doSubmitPlan', () => {
 
     assert.equal(callCount, 1, 'onPlanSubmit should only fire once');
   });
+
+  test('marks local player as submitted in _players using playerId', () => {
+    // Regression: player objects use `playerId` (not `id`), so the find must
+    // use p.playerId.  Previously p.id was used, so the local player's row
+    // never got the ✓ checkmark.
+    const { ui } = makeUI();
+    const myId = 'player-uuid-123';
+    ui.myPlayerId = myId;
+    ui._players = [
+      { playerId: myId,           name: 'Alice', faction: 'hero',  isAI: false },
+      { playerId: 'opponent-456', name: 'Bob',   faction: 'witch', isAI: false },
+    ];
+
+    ui.enterPlanningMode('hero', 3);
+    ui._doSubmitPlan();
+
+    const me = ui._players.find(p => p.playerId === myId);
+    assert.equal(me._submitted, true,
+      'local player entry should be marked _submitted=true after plan submission');
+
+    const opponent = ui._players.find(p => p.playerId === 'opponent-456');
+    assert.ok(!opponent._submitted,
+      'opponent entry should remain un-submitted');
+  });
 });
 
 // ── countdown timer ───────────────────────────────────────────────────────────

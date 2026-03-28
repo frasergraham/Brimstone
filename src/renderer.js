@@ -9,6 +9,7 @@ import {
 } from './tiles.js';
 import { ENTITY_COLOR, EntityType, SurvivorAbility } from './entities.js';
 import { getVisibleEnemyHexes, getVisibleHeroHexes, sightRange } from './actions.js';
+import { nodeController } from './game.js';
 
 // PAD_X/PAD_Y are now computed dynamically in _resize() as this._padX / this._padY.
 // These constants are kept for backward-compat imports but should not be used internally.
@@ -70,6 +71,9 @@ export class Renderer {
     /** Ghost overlay steps from computeGhostState(). null = no overlay. */
     this.planGhostSteps = null;
 
+    /** Tutorial spotlight: pulsing ring drawn over this hex. null = inactive. */
+    this.tutorialSpotlightHex = null;
+
     /** ID of the currently selected entity; drives the ⊕ indicator drawn above its hex. */
     this.selectedEntityId = null;
 
@@ -90,6 +94,14 @@ export class Renderer {
 
     // Move animations: sliding entity icons
     this._moveAnims = [];
+
+    // Lunge animations: attacker slides to hex border during combat, stays there until cleared
+    this._lungeAnims = [];
+
+    // Battle hex highlights: set during combat animation, cleared after
+    this._battleCombatantHexes = []; // [{col, row}] — bright red
+    this._battleAllyHexes      = []; // [{col, row}] — faint red
+
     this._animFramePending = false;
 
     // Smooth zoom/pan animation: null when idle
@@ -239,6 +251,69 @@ export class Renderer {
     this._startAnimLoop();
   }
 
+  /**
+   * Slide the attacker to the border of the target hex and hold it there.
+   * The entity stays at the midpoint until clearAllLungeAnims() is called.
+   */
+  addLungeAnim(entityId, fromCol, fromRow, toCol, toRow, entityType, owner, title = null) {
+    const from = this._toCanvas(fromCol, fromRow);
+    const to   = this._toCanvas(toCol,   toRow);
+    const midX = (from.x + to.x) * 0.5;
+    const midY = (from.y + to.y) * 0.5;
+    const portraitId = entityType === EntityType.SURVIVOR
+      ? Renderer._survivorAssetId(title)
+      : entityType;
+    // Replace any existing lunge for this entity
+    this._lungeAnims = this._lungeAnims.filter(a => a.entityId !== entityId);
+    this._lungeAnims.push({
+      entityId,
+      fromX: from.x, fromY: from.y,
+      midX, midY,
+      glyph:     entityGlyph(entityType),
+      color:     ENTITY_COLOR[entityType],
+      portraitId,
+      startTime: Date.now(),
+      duration:  250,
+      settled:   false,
+    });
+    this._startAnimLoop();
+  }
+
+  /** Remove all lunge animations immediately (snaps entities back to their state positions). */
+  clearAllLungeAnims() {
+    this._lungeAnims = [];
+  }
+
+  /**
+   * Trigger a return animation on all active lunge anims so entities slide back
+   * to their home hex instead of snapping. Completed returns are auto-removed.
+   * Call waitForAnimations() afterwards to await the returns.
+   */
+  returnAllLungeAnims() {
+    const returnDuration = 180;
+    for (const a of this._lungeAnims) {
+      if (!a.returning) {
+        a.settled       = true; // treat as settled so it starts at midX/midY
+        a.returning     = true;
+        a.returnStartTime = Date.now();
+        a.returnDuration  = returnDuration;
+      }
+    }
+    if (this._lungeAnims.length) this._startAnimLoop();
+  }
+
+  /** Set which hexes should be highlighted red during a combat sequence. */
+  setBattleHighlights(combatantHexes, allyHexes) {
+    this._battleCombatantHexes = combatantHexes ?? [];
+    this._battleAllyHexes      = allyHexes ?? [];
+  }
+
+  /** Clear combat hex highlights. */
+  clearBattleHighlights() {
+    this._battleCombatantHexes = [];
+    this._battleAllyHexes      = [];
+  }
+
   /** Flash attacker (orange) and target (red) hexes during a battle. */
   addAttackAnim(actorCol, actorRow, targetCol, targetRow) {
     this.addFlash(actorCol,  actorRow,  '', 'rgba(255,140,0,0.75)', 700);
@@ -249,9 +324,9 @@ export class Renderer {
   addHpChangeFlash(col, row, delta) {
     if (delta === 0) return;
     if (delta < 0) {
-      this.addFlash(col, row, `${delta}`, 'rgba(220,40,40,0.1)', 1800, 0.88, 'rgba(255,100,100,1)');
+      this.addFlash(col, row, `${delta}`, 'rgba(220,40,40,0.1)', 1200, 0.88, 'rgba(255,100,100,1)');
     } else {
-      this.addFlash(col, row, `+${delta}`, 'rgba(40,180,40,0.1)', 1800, 0.88, 'rgba(100,255,100,1)');
+      this.addFlash(col, row, `+${delta}`, 'rgba(40,180,40,0.1)', 1200, 0.88, 'rgba(100,255,100,1)');
     }
   }
 
@@ -264,6 +339,7 @@ export class Renderer {
       const alive = this._moveAnims.some(a => now < a.startTime + a.duration)
                  || this._flashes.some(f => now < f.endTime)
                  || this._deathAnims.some(a => now < a.startTime + a.duration)
+                 || this._lungeAnims.some(a => !a.settled || a.returning)
                  || !!this._zoomAnim;
       this.draw();
       if (alive) {
@@ -273,6 +349,27 @@ export class Renderer {
       }
     };
     requestAnimationFrame(loop);
+  }
+
+  /**
+   * Returns a Promise that resolves once all active canvas animations
+   * (move, flash, death, lunge, zoom) have completed.
+   * Safe to call when no animations are running — resolves on next frame.
+   */
+  waitForAnimations() {
+    return new Promise(resolve => {
+      const check = () => {
+        const now = Date.now();
+        const alive = this._moveAnims.some(a => now < a.startTime + a.duration)
+                   || this._flashes.some(f => now < f.endTime)
+                   || this._deathAnims.some(a => now < a.startTime + a.duration)
+                   || this._lungeAnims.some(a => !a.settled || a.returning)
+                   || !!this._zoomAnim;
+        if (alive) requestAnimationFrame(check);
+        else resolve();
+      };
+      requestAnimationFrame(check);
+    });
   }
 
   /**
@@ -498,11 +595,16 @@ export class Renderer {
     if (state.fogOfWar && humanIsHero)  this._drawFogLayer('hero');
     if (state.fogOfWar && humanIsWitch) this._drawFogLayer('witch');
 
-    // Objective glows and symbols always drawn on top of fog — always visible
+    // Objective glows and symbols — only drawn once a node has been discovered
     for (const obj of state.witchObjectives) {
-      this._drawObjectiveGlow(obj.col, obj.row);
-    }
-    for (const obj of state.witchObjectives) {
+      const shouldDraw = !state.fogOfWar
+        || (humanIsHero  && obj.seenByHero)
+        || (humanIsWitch && obj.seenByWitch)
+        || (!humanIsHero && !humanIsWitch); // AI vs AI / spectator
+      if (!shouldDraw) continue;
+      for (const h of obj.hexes) {
+        this._drawObjectiveHexGlow(h.col, h.row, obj, state);
+      }
       this._drawObjectiveSymbol(obj.col, obj.row, obj.label, state);
     }
 
@@ -512,6 +614,14 @@ export class Renderer {
     // Highlights
     for (const h of this.highlightHexes) {
       this._drawHighlight(h.col, h.row, h.color || 'rgba(100,200,100,0.25)');
+    }
+
+    // Battle highlights (combatants = bright red, assisting allies = faint red)
+    for (const h of this._battleCombatantHexes) {
+      this._drawHighlight(h.col, h.row, 'rgba(200,40,40,0.30)');
+    }
+    for (const h of this._battleAllyHexes) {
+      this._drawHighlight(h.col, h.row, 'rgba(200,80,80,0.14)');
     }
 
     if (this.selectedHex) {
@@ -527,13 +637,15 @@ export class Renderer {
       this._drawOutline(this.hoveredHex.col, this.hoveredHex.row, 'rgba(255,255,255,0.3)', 1);
     }
 
-    // Entities — skip any entity whose move animation is still in flight
+    // Entities — skip any entity whose move or lunge animation is still in flight
     const now = Date.now();
     const animatingIds = new Set(
       this._moveAnims
         .filter(a => now < a.startTime + a.duration)
         .map(a => a.entityId)
     );
+    // Lunge anims suppress entity drawing for as long as the lunge is active (settled or not)
+    for (const a of this._lungeAnims) animatingIds.add(a.entityId);
 
     const drawn = new Set();
     for (const entity of state.entities) {
@@ -572,6 +684,9 @@ export class Renderer {
     // Sliding entity icons for move animations (opponent moves / own moves)
     this._drawMoveAnims();
 
+    // Lunge animations — attacker held at hex border during combat
+    this._drawLungeAnims();
+
     // Plan ghost overlay — numbered arrows for move steps
     if (this.planGhostSteps?.length) {
       this._drawPlanOverlay(this.planGhostSteps);
@@ -587,8 +702,35 @@ export class Renderer {
       if (pos) this._drawSelectionIndicator(pos.col, pos.row);
     }
 
+    // Tutorial spotlight — pulsing gold ring on the target hex
+    if (this.tutorialSpotlightHex) {
+      this._drawTutorialSpotlight(this.tutorialSpotlightHex.col, this.tutorialSpotlightHex.row);
+    }
+
     ctx.restore(); // end zoom/pan transform
 
+  }
+
+  _drawTutorialSpotlight(col, row) {
+    const ctx = this.ctx;
+    const hs  = this.hexSize;
+    const { x, y } = this._toCanvas(col, row);
+    // Sine-wave pulse: alpha oscillates between 0.4 and 0.95 at ~1.5 Hz
+    const pulse = 0.675 + 0.325 * Math.sin(Date.now() / 340);
+    const corners = hexCorners(x, y, hs - 1);
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(corners[0].x, corners[0].y);
+    for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
+    ctx.closePath();
+    ctx.strokeStyle = `rgba(255,215,0,${pulse})`; // gold
+    ctx.lineWidth   = 3.5;
+    ctx.shadowColor = 'rgba(255,200,0,0.8)';
+    ctx.shadowBlur  = 12;
+    ctx.stroke();
+    ctx.restore();
+    // Drive the animation loop so the pulse redraws continuously
+    this._startAnimLoop();
   }
 
   _drawFlashes() {
@@ -1061,17 +1203,39 @@ export class Renderer {
 
   // Decorative border frame drawn in canvas coordinates (outside the zoom transform).
 
-  _drawObjectiveGlow(col, row) {
-    const ctx = this.ctx;
-    const hs  = this.hexSize;
+  _drawObjectiveHexGlow(col, row, obj, state) {
+    const ctrl = nodeController(obj, state.entities);
+    const nodeColor = obj.color ?? '#8800cc';
+    // Faction-tinted overlay
+    const factionOverlay =
+      ctrl === 'hero'      ? 'rgba(50,120,220,0.18)'  :
+      ctrl === 'witch'     ? 'rgba(180,0,80,0.18)'    :
+      ctrl === 'contested' ? 'rgba(200,140,0,0.18)'   :
+                             null;
     const { x, y } = this._toCanvas(col, row);
-    const gradient = ctx.createRadialGradient(x, y, 0, x, y, hs * 1.5);
-    gradient.addColorStop(0, 'rgba(160,0,220,0.25)');
-    gradient.addColorStop(1, 'rgba(160,0,220,0)');
-    ctx.fillStyle = gradient;
+    const hs = this.hexSize;
+    const corners = hexCorners(x, y, hs - 1);
+    const ctx = this.ctx;
     ctx.beginPath();
-    ctx.arc(x, y, hs * 1.5, 0, Math.PI * 2);
+    ctx.moveTo(corners[0].x, corners[0].y);
+    for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
+    ctx.closePath();
+    // Node color base fill (~20% opacity)
+    ctx.fillStyle = nodeColor + '33';
     ctx.fill();
+    // Faction overlay on controlled/contested hexes
+    if (factionOverlay) {
+      ctx.beginPath();
+      ctx.moveTo(corners[0].x, corners[0].y);
+      for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
+      ctx.closePath();
+      ctx.fillStyle = factionOverlay;
+      ctx.fill();
+    }
+    // Border ring in node color (~53% opacity)
+    ctx.strokeStyle = nodeColor + '88';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
   }
 
   _drawObjectiveSymbol(col, row, label, state) {
@@ -1079,17 +1243,27 @@ export class Renderer {
     const hs  = this.hexSize;
     const { x, y } = this._toCanvas(col, row);
 
-    const witchHeld = state.entities.some(
-      e => e.alive && e.owner === 'witch' && e.col === col && e.row === row
-    );
+    const obj  = state.witchObjectives.find(o => o.col === col && o.row === row);
+    const ctrl = obj ? nodeController(obj, state.entities) : 'neutral';
+    const nodeColor = obj?.color ?? 'rgba(180,0,255,0.7)';
 
-    ctx.fillStyle    = witchHeld ? '#ff4444' : 'rgba(180,0,255,0.7)';
+    // Symbol uses node color; faction glow tints the outline
+    const glowColor =
+      ctrl === 'witch'     ? '#ff4444' :
+      ctrl === 'hero'      ? '#4488ff' :
+      ctrl === 'contested' ? '#ffaa00' :
+                             nodeColor;
+
+    ctx.shadowColor = glowColor;
+    ctx.shadowBlur  = ctrl === 'neutral' ? 4 : 8;
+    ctx.fillStyle    = nodeColor;
     ctx.font         = `bold ${Math.floor(hs * 0.5)}px serif`;
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('⛧', x, y - hs * 0.15);
+    ctx.shadowBlur = 0;
 
-    ctx.fillStyle = witchHeld ? '#ff8888' : 'rgba(220,160,255,0.85)';
+    ctx.fillStyle = nodeColor + 'cc';
     ctx.font      = `${Math.max(6, Math.floor(hs * 0.2))}px sans-serif`;
     ctx.fillText(label, x, y + hs * 0.35);
   }
@@ -1562,6 +1736,69 @@ export class Renderer {
     }
 
     ctx.restore();
+  }
+
+  _drawLungeAnims() {
+    const ctx = this.ctx;
+    const now = Date.now();
+    const hs  = this.hexSize;
+    const r   = hs * 0.35;
+
+    // Remove returns that have fully completed
+    this._lungeAnims = this._lungeAnims.filter(
+      a => !a.returning || now < a.returnStartTime + a.returnDuration
+    );
+
+    if (!this._lungeAnims.length) return;
+
+    for (const a of this._lungeAnims) {
+      let x, y;
+      if (a.returning) {
+        const t    = Math.min(1, (now - a.returnStartTime) / a.returnDuration);
+        const ease = 1 - (1 - t) * (1 - t); // ease-out quad
+        x = a.midX + (a.fromX - a.midX) * ease;
+        y = a.midY + (a.fromY - a.midY) * ease;
+      } else {
+        const t    = Math.min(1, (now - a.startTime) / a.duration);
+        if (t >= 1) a.settled = true;
+        const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t; // ease in-out quad
+        x = a.fromX + (a.midX - a.fromX) * ease;
+        y = a.fromY + (a.midY - a.fromY) * ease;
+      }
+
+      // Shadow
+      ctx.beginPath();
+      ctx.arc(x + 1, y + 2, r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fill();
+
+      // Entity circle
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = a.color;
+      ctx.fill();
+
+      // Portrait image if available, otherwise glyph
+      const pRect = a.portraitId ? this._spriteRects?.get(a.portraitId) : null;
+      if (pRect && this._tilemapImg) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.drawImage(this._tilemapImg, pRect.x, pRect.y, pRect.size, pRect.size, x - r, y - r, r * 2, r * 2);
+        ctx.restore();
+      } else {
+        ctx.fillStyle    = '#ffffffee';
+        ctx.font         = `bold ${Math.floor(r * 1.1)}px serif`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(a.glyph, x, y + 1);
+      }
+
+      ctx.strokeStyle = a.color;
+      ctx.lineWidth   = 2;
+      ctx.stroke();
+    }
   }
 
   _drawMoveAnims() {

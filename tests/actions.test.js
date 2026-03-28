@@ -133,6 +133,19 @@ describe('executeMove', () => {
     assert.equal(r.cost, 1);
   });
 
+  test('returns a path array ending at the destination', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const target = firstReachable(state, hero);
+    if (!target) return;
+    const r = executeMove(state, hero, target.col, target.row);
+    assert.ok(Array.isArray(r.path), 'result.path should be an array');
+    assert.ok(r.path.length >= 1, 'path should have at least one step');
+    const last = r.path[r.path.length - 1];
+    assert.equal(last.col, target.col);
+    assert.equal(last.row, target.row);
+  });
+
   test('fails when target tile is a river', () => {
     const state = freshState();
     const hero = state.hero;
@@ -550,13 +563,12 @@ describe('executeFortify', () => {
 });
 
 // ── executeSummon ─────────────────────────────────────────────────────────────
-// Design: Metal → Iron Golem; Wood → Wood Golem; else → Minion; once per turn
+// Design: Metal → Iron Golem (costs 2); Wood → Wood Golem (costs 2); else → Minion (costs 2 total)
+// No once-per-turn limit; multiple summons allowed per turn.
 
 describe('executeSummon', () => {
   function witchState() {
-    const state = freshState();
-    state.witchSummonsThisTurn = 0;
-    return state;
+    return freshState();
   }
 
   function findSummonTarget(state) {
@@ -564,9 +576,9 @@ describe('executeSummon', () => {
     return emptyPassableNeighbor(state, witch);
   }
 
-  test('metal → Iron Golem', () => {
+  test('metal → Iron Golem (costs 2 metal)', () => {
     const state = witchState();
-    state.inventory.witch[ResourceType.METAL] = 1;
+    state.inventory.witch[ResourceType.METAL] = 2;
     const target = findSummonTarget(state);
     if (!target) return;
 
@@ -575,13 +587,13 @@ describe('executeSummon', () => {
     const summoned = state.entities.find(e => e.col === target.col && e.row === target.row);
     assert.ok(summoned, 'A unit should appear on the target hex');
     assert.equal(summoned.type, EntityType.IRON_GOLEM, 'Metal should summon Iron Golem');
-    assert.equal(state.inventory.witch[ResourceType.METAL], 0, 'Metal should be consumed');
+    assert.equal(state.inventory.witch[ResourceType.METAL], 0, '2 metal should be consumed');
   });
 
-  test('wood → Wood Golem (when no metal)', () => {
+  test('wood → Wood Golem (costs 2 wood, when no metal)', () => {
     const state = witchState();
     state.inventory.witch[ResourceType.METAL] = 0;
-    state.inventory.witch[ResourceType.WOOD] = 1;
+    state.inventory.witch[ResourceType.WOOD] = 2;
     const target = findSummonTarget(state);
     if (!target) return;
 
@@ -589,13 +601,14 @@ describe('executeSummon', () => {
     assert.equal(r.success, true);
     const summoned = state.entities.find(e => e.col === target.col && e.row === target.row);
     assert.equal(summoned?.type, EntityType.WOOD_GOLEM, 'Wood should summon Wood Golem');
+    assert.equal(state.inventory.witch[ResourceType.WOOD], 0, '2 wood should be consumed');
   });
 
-  test('other resource → Minion', () => {
+  test('other resource → Minion (costs 2 total)', () => {
     const state = witchState();
     state.inventory.witch[ResourceType.METAL] = 0;
     state.inventory.witch[ResourceType.WOOD] = 0;
-    state.inventory.witch[ResourceType.FOOD] = 1;
+    state.inventory.witch[ResourceType.FOOD] = 2;
     const target = findSummonTarget(state);
     if (!target) return;
 
@@ -603,6 +616,17 @@ describe('executeSummon', () => {
     assert.equal(r.success, true);
     const summoned = state.entities.find(e => e.col === target.col && e.row === target.row);
     assert.equal(summoned?.type, EntityType.MINION, 'Non-metal/wood resource should summon Minion');
+    assert.equal(state.inventory.witch[ResourceType.FOOD], 0, '2 food should be consumed');
+  });
+
+  test('fails when fewer than 2 total resources', () => {
+    const state = witchState();
+    state.inventory.witch = { [ResourceType.FOOD]: 1 };
+    const target = findSummonTarget(state);
+    if (!target) return;
+
+    const r = executeSummon(state, state.witch, target.col, target.row);
+    assert.equal(r.success, false, 'Should fail with only 1 resource');
   });
 
   test('fails when no resources', () => {
@@ -615,40 +639,29 @@ describe('executeSummon', () => {
     assert.equal(r.success, false);
   });
 
-  test('fails on second summon in same turn', () => {
+  test('allows multiple summons in the same turn', () => {
     const state = witchState();
-    state.inventory.witch[ResourceType.FOOD] = 5;
+    state.inventory.witch[ResourceType.FOOD] = 6;
     const target = findSummonTarget(state);
     if (!target) return;
 
     const r1 = executeSummon(state, state.witch, target.col, target.row);
-    assert.equal(r1.success, true);
+    assert.equal(r1.success, true, 'First summon should succeed');
 
     // Find another empty neighbor for second summon
     const target2 = emptyPassableNeighbor(state, state.witch);
     if (!target2) return;
     const r2 = executeSummon(state, state.witch, target2.col, target2.row);
-    assert.equal(r2.success, false, 'Second summon in same turn should fail');
+    assert.equal(r2.success, true, 'Second summon in same turn should also succeed');
   });
 
   test('costs 1 action', () => {
     const state = witchState();
-    state.inventory.witch[ResourceType.FOOD] = 1;
+    state.inventory.witch[ResourceType.FOOD] = 2;
     const target = findSummonTarget(state);
     if (!target) return;
     const r = executeSummon(state, state.witch, target.col, target.row);
     assert.equal(r.cost, 1);
-  });
-
-  test('increments witchSummonsThisTurn counter', () => {
-    const state = witchState();
-    state.inventory.witch[ResourceType.FOOD] = 1;
-    const target = findSummonTarget(state);
-    if (!target) return;
-
-    assert.equal(state.witchSummonsThisTurn, 0);
-    executeSummon(state, state.witch, target.col, target.row);
-    assert.equal(state.witchSummonsThisTurn, 1);
   });
 });
 
@@ -954,5 +967,76 @@ describe('Inventory stash separation', () => {
     const buggyStash  = buggyIsHero ? inv.shared : inv.witch;
     assert.notEqual(buggyStash, stash,
       'the bug (using activePlayer) returns the wrong stash for witch players');
+  });
+});
+
+// ── computeProjectedInventory ─────────────────────────────────────────────────
+import { computeProjectedInventory } from '../src/planner.js';
+import { PlanActionType } from '../src/planner.js';
+
+describe('computeProjectedInventory', () => {
+  function baseState() {
+    const s = new GameState(true, true);
+    s.inventory.witch.metal = 4;
+    s.inventory.witch.wood  = 2;
+    s.inventory.shared.wood = 3;
+    s.inventory.shared.metal = 1;
+    s.inventory.shared.food  = 2;
+    return s;
+  }
+
+  test('empty plan returns snapshot equal to current inventory', () => {
+    const s = baseState();
+    const p = computeProjectedInventory(s, []);
+    assert.equal(p.witch.metal, 4);
+    assert.equal(p.shared.wood,  3);
+  });
+
+  test('SUMMON deducts 2 metal (Iron Golem path)', () => {
+    const s = baseState();
+    const p = computeProjectedInventory(s, [{ type: PlanActionType.SUMMON }]);
+    assert.equal(p.witch.metal, 2, 'metal reduced by 2');
+    assert.equal(p.witch.wood,  2, 'wood unchanged');
+  });
+
+  test('two SUMMONs deduct 4 metal total', () => {
+    const s = baseState();
+    const plan = [{ type: PlanActionType.SUMMON }, { type: PlanActionType.SUMMON }];
+    const p = computeProjectedInventory(s, plan);
+    assert.equal(p.witch.metal, 0);
+    assert.equal(p.witch.wood,  2, 'wood unchanged when metal covers both');
+  });
+
+  test('SUMMON falls to wood when metal < 2', () => {
+    const s = baseState();
+    s.inventory.witch.metal = 1;
+    const p = computeProjectedInventory(s, [{ type: PlanActionType.SUMMON }]);
+    assert.equal(p.witch.wood, 0, 'wood reduced by 2 (Wood Golem path)');
+  });
+
+  test('FORTIFY deducts 1 metal from shared (metal preferred)', () => {
+    const s = baseState();
+    const p = computeProjectedInventory(s, [{ type: PlanActionType.FORTIFY }]);
+    assert.equal(p.shared.metal, 0);
+    assert.equal(p.shared.wood,  3, 'wood untouched when metal available');
+  });
+
+  test('FORTIFY deducts 1 wood when no shared metal', () => {
+    const s = baseState();
+    s.inventory.shared.metal = 0;
+    const p = computeProjectedInventory(s, [{ type: PlanActionType.FORTIFY }]);
+    assert.equal(p.shared.wood, 2);
+  });
+
+  test('USE_ITEM food deducts from shared', () => {
+    const s = baseState();
+    const p = computeProjectedInventory(s, [{ type: PlanActionType.USE_ITEM, item: 'food', entityId: 'x' }]);
+    assert.equal(p.shared.food, 1);
+  });
+
+  test('does not mutate original state', () => {
+    const s = baseState();
+    computeProjectedInventory(s, [{ type: PlanActionType.SUMMON }]);
+    assert.equal(s.inventory.witch.metal, 4, 'original state unchanged');
   });
 });

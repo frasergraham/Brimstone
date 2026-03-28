@@ -116,11 +116,15 @@ export function computeGhostState(state, plan) {
         attackArrow = { fromCol: fromPos.col, fromRow: fromPos.row, toCol: action.targetCol, toRow: action.targetRow };
       }
     } else if (action.type === PlanActionType.SUMMON) {
-      // Determine summon type from witch inventory.
-      const inv = state.inventory?.witch ?? {};
-      const summonType = (inv[ResourceType.METAL] || 0) > 0 ? EntityType.IRON_GOLEM
-                       : (inv[ResourceType.WOOD]  || 0) > 0 ? EntityType.WOOD_GOLEM
-                       : EntityType.MINION;
+      // Use explicit summonType from the plan action when available (player's choice).
+      // Fall back to auto-pick from current inventory for legacy/AI plans without a type.
+      let summonType = action.summonType ?? null;
+      if (!summonType) {
+        const inv = state.inventory?.witch ?? {};
+        summonType = (inv[ResourceType.METAL] || 0) >= 2 ? EntityType.IRON_GOLEM
+                   : (inv[ResourceType.WOOD]  || 0) >= 2 ? EntityType.WOOD_GOLEM
+                   : EntityType.MINION;
+      }
       summonInfo = { col: action.toCol, row: action.toRow, type: summonType };
       // Give the new unit a temporary id for ghost rendering.
       const ghostId = `ghost-summon-${steps.length}`;
@@ -138,6 +142,64 @@ export function computeGhostState(state, plan) {
   }
 
   return steps;
+}
+
+// ── Projected inventory ──────────────────────────────────────────────────────
+//
+// Simulates resource consumption across a plan so the UI can show per-step costs
+// and grey out actions the player will no longer be able to afford.
+//
+// Returns { shared, witch, entityItems } — plain objects (shallow clones of state
+// inventory values).  Does NOT mutate the real state.
+
+export function computeProjectedInventory(state, plan) {
+  const shared = { ...(state.inventory?.shared ?? {}) };
+  const witch  = { ...(state.inventory?.witch  ?? {}) };
+  // Per-entity personal items (herbs, weapons)
+  const entityItems = {};
+  for (const e of (state.entities ?? [])) {
+    if (e.items) entityItems[e.id] = { ...e.items };
+  }
+
+  for (const action of plan) {
+    switch (action.type) {
+      case PlanActionType.SUMMON: {
+        // Mirrors pickSummonType + executeSummon spending
+        if ((witch[ResourceType.METAL] || 0) >= 2) {
+          witch[ResourceType.METAL] -= 2;
+        } else if ((witch[ResourceType.WOOD] || 0) >= 2) {
+          witch[ResourceType.WOOD] -= 2;
+        } else {
+          let rem = 2;
+          for (const k of Object.keys(witch).sort((a, b) => witch[b] - witch[a])) {
+            const spend = Math.min(witch[k] || 0, rem);
+            witch[k] = (witch[k] || 0) - spend;
+            rem -= spend;
+            if (rem === 0) break;
+          }
+        }
+        break;
+      }
+      case PlanActionType.FORTIFY:
+        // Metal preferred, then wood — mirrors executeFortify
+        if ((shared[ResourceType.METAL] || 0) > 0) shared[ResourceType.METAL]--;
+        else if ((shared[ResourceType.WOOD] || 0) > 0) shared[ResourceType.WOOD]--;
+        break;
+      case PlanActionType.USE_ITEM: {
+        const item = action.item;
+        if (!item || item.startsWith('weapon:')) break;
+        if (item === ResourceType.HERBS) {
+          const eitems = entityItems[action.entityId];
+          if (eitems && (eitems[item] || 0) > 0) eitems[item]--;
+        } else {
+          if ((shared[item] || 0) > 0) shared[item]--;
+        }
+        break;
+      }
+    }
+  }
+
+  return { shared, witch, entityItems };
 }
 
 // ── Plan validation (client-side, fast) ─────────────────────────────────────

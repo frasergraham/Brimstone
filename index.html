@@ -23,6 +23,7 @@
       <div class="setup-buttons" style="flex-direction:column;align-items:center">
         <button id="btn-single-player" class="setup-btn primary" style="width:200px">⚔ Single Player</button>
         <button id="btn-multiplayer"   class="setup-btn"         style="width:200px">🌐 Multiplayer</button>
+        <button id="btn-tutorial"      class="setup-btn"         style="width:200px">⚑ Tutorial</button>
         <button id="btn-how-to-play"   class="setup-btn"         style="width:200px">How to Play</button>
         <button id="btn-options"       class="setup-btn"         style="width:200px">Options</button>
       </div>
@@ -109,6 +110,15 @@
             <option value="standard" selected>Standard (13×11)</option>
             <option value="regional">Regional (17×13)</option>
             <option value="campaign">Campaign (21×15)</option>
+          </select>
+        </label>
+        <label class="setup-option-label">
+          Power nodes
+          <select id="select-node-count" class="setup-select">
+            <option value="2">2</option>
+            <option value="3" selected>3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
           </select>
         </label>
         <label class="setup-option-label">
@@ -212,6 +222,15 @@
           <option value="standard" selected>Standard (13×11)</option>
           <option value="regional">Regional (17×13)</option>
           <option value="campaign">Campaign (21×15)</option>
+        </select>
+      </div>
+      <div class="cg-option-row">
+        <span class="cg-option-label">Power nodes</span>
+        <select id="cg-node-count" class="setup-select">
+          <option value="2">2</option>
+          <option value="3" selected>3</option>
+          <option value="4">4</option>
+          <option value="5">5</option>
         </select>
       </div>
       <div class="cg-option-row">
@@ -332,6 +351,8 @@
       </div>
       <div id="canvas-wrapper">
         <canvas id="game-canvas"></canvas>
+        <!-- Step-by-step continue bar: shown during step mode resolution -->
+        <div id="step-continue-bar" style="display:none">👆 Click to advance</div>
         <!-- Unit stats bar: shown during planning when a unit is selected -->
         <div id="unit-stats-bar" style="display:none"></div>
         <!-- Zoom controls — always visible on desktop, hidden on touch-only devices -->
@@ -344,6 +365,11 @@
           <button id="chronicle-toggle" class="zoom-btn" title="Toggle chronicle">📜</button>
           <!-- Speed mode picker popup -->
           <div id="speed-popup" class="speed-popup" style="display:none">
+            <button class="speed-option" data-mode="step">
+              <span class="speed-option-icon">👆</span>
+              <span class="speed-option-label">Step by Step</span>
+              <span class="speed-option-desc">Click to advance each action</span>
+            </button>
             <button class="speed-option" data-mode="cinematic">
               <span class="speed-option-icon">🎬</span>
               <span class="speed-option-label">Cinematic</span>
@@ -540,6 +566,17 @@
   <div id="spectate-game-over" style="display:none">
     <h2 id="sp-winner-text"></h2>
     <p  id="sp-win-reason"></p>
+  </div>
+
+  <!-- ── Tutorial overlay ─────────────────────────────────────────────────── -->
+  <!-- Spotlight glow highlight for DOM elements; activated via .tutorial-spotlit class -->
+  <div id="tutorial-backdrop"></div>
+
+  <!-- Floating tooltip card shown during tutorial steps -->
+  <div id="tutorial-tooltip" class="tutorial-tooltip tutorial-tooltip--center" style="display:none">
+    <div class="tut-title"></div>
+    <div class="tut-body"></div>
+    <button class="tut-next-btn">Got it →</button>
   </div>
 
   <script type="module" src="src/main.js"></script>

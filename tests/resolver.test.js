@@ -137,6 +137,30 @@ describe('resolvePlans — move action', () => {
     assert.equal(hero.col, target.col);
     assert.equal(hero.row, target.row);
   });
+
+  test('MOVE result includes path array ending at destination (for online serialization)', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const reachable = getReachableHexes(state, hero, 1);
+    if (!reachable.length) return;
+    const target = reachable[0];
+
+    const steps = resolvePlans(state, [{
+      type: PlanActionType.MOVE,
+      entityId: hero.id,
+      toCol: target.col,
+      toRow: target.row,
+    }], []);
+
+    assert.ok(steps.length > 0);
+    const ev = steps[0].heroEvents[0];
+    assert.equal(ev.type, ResEventType.ACTION_OK);
+    assert.ok(Array.isArray(ev.result.path), 'result.path must be an array (used by _serializeEvents for online)');
+    assert.ok(ev.result.path.length >= 1, 'path must have at least one step');
+    const last = ev.result.path[ev.result.path.length - 1];
+    assert.equal(last.col, target.col);
+    assert.equal(last.row, target.row);
+  });
 });
 
 describe('resolvePlans — BATTLE_UNIT skip on dead target', () => {
@@ -365,8 +389,7 @@ describe('resolvePlans — state integrity', () => {
   test('summon adds entity to state.entities', () => {
     const state = freshState();
     const witch = state.witch;
-    state.inventory.witch[ResourceType.FOOD] = 1;
-    state.witchSummonsThisTurn = 0;
+    state.inventory.witch[ResourceType.FOOD] = 2;
 
     const neighbor = emptyPassableNeighbor(state, witch);
     if (!neighbor) return;

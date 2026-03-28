@@ -60,7 +60,7 @@ describe('Phase cycle', () => {
 
 // ── computeActions ────────────────────────────────────────────────────────────
 // Hero:  base 3 + 1 in DAWN/DAY  + 1 per alive survivor (cap +5)
-// Witch: base 4 + 1 in NIGHT     + floor(units/2) (cap +4)
+// Witch: base 3 + 1 in NIGHT     + 1 per alive unit (cap +3)
 
 describe('computeActions — Hero', () => {
   const makeEntities = (survivorCount) => [
@@ -122,34 +122,34 @@ describe('computeActions — Witch', () => {
     })),
   ];
 
-  test('DAWN/DAY/DUSK: 4 base, no time bonus', () => {
+  test('DAWN/DAY/DUSK: 3 base, no time bonus', () => {
     const ents = makeWitchEntities(0);
-    assert.equal(computeActions(Player.WITCH, Phase.DAWN, ents), 4);
-    assert.equal(computeActions(Player.WITCH, Phase.DAY,  ents), 4);
-    assert.equal(computeActions(Player.WITCH, Phase.DUSK, ents), 4);
+    assert.equal(computeActions(Player.WITCH, Phase.DAWN, ents), 3);
+    assert.equal(computeActions(Player.WITCH, Phase.DAY,  ents), 3);
+    assert.equal(computeActions(Player.WITCH, Phase.DUSK, ents), 3);
   });
 
-  test('NIGHT: 5 base (4 + 1 time bonus)', () => {
+  test('NIGHT: 4 base (3 + 1 time bonus)', () => {
     const ents = makeWitchEntities(0);
-    assert.equal(computeActions(Player.WITCH, Phase.NIGHT, ents), 5);
+    assert.equal(computeActions(Player.WITCH, Phase.NIGHT, ents), 4);
   });
 
-  test('+1 action per 2 alive witch units', () => {
-    // 2 minions → floor(2/2)=1 → total 5
+  test('+1 action per alive witch unit', () => {
+    // 1 minion → +1 → total 4
+    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(1)), 4);
+    // 2 minions → +2 → total 5
     assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(2)), 5);
-    // 3 minions → floor(3/2)=1 → total 5
-    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(3)), 5);
-    // 4 minions → floor(4/2)=2 → total 6
-    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(4)), 6);
+    // 3 minions → +3 → total 6
+    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(3)), 6);
   });
 
-  test('witch unit bonus caps at +4', () => {
-    // 8 minions → floor(8/2)=4 → capped at +4 → total 8
-    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(8)), 8);
-    // 12 minions → still capped at +4 → total 8 (NOT +6 as comment wrongly states)
-    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(12)), 8);
-    // 20 minions → still capped at +4
-    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(20)), 8);
+  test('witch unit bonus caps at +3', () => {
+    // 3 minions → +3 → total 6
+    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(3)), 6);
+    // 5 minions → capped at +3 → total 6
+    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(5)), 6);
+    // 20 minions → still capped at +3
+    assert.equal(computeActions(Player.WITCH, Phase.DUSK, makeWitchEntities(20)), 6);
   });
 });
 
@@ -515,5 +515,79 @@ describe('addLog — owner tagging', () => {
       state.addLog(`msg ${i}`, i % 2 === 0 ? 'hero' : null);
     }
     assert.ok(state.log.length <= 100, 'Log should not exceed 100 entries');
+  });
+});
+
+// ── submitPlayerPlan (multiplayer per-player path) ────────────────────────────
+
+describe('submitPlayerPlan (multiplayer)', () => {
+  function makeMultiplayerState() {
+    const state = new GameState(true, false);
+    // Simulate what _addSeat does in the lobby: patch synthetic IDs to real UUIDs.
+    const heroId  = 'player-hero-uuid';
+    const witchId = 'ai-witch-uuid';
+    state.players[0].id = heroId;
+    state.players[1].id = witchId;
+    // Also patch ownerId on the leader entities so AI helpers work correctly.
+    const heroEntity  = state.entities.find(e => e.type === EntityType.HERO);
+    const witchEntity = state.entities.find(e => e.type === EntityType.WITCH);
+    if (heroEntity)  heroEntity.ownerId  = heroId;
+    if (witchEntity) witchEntity.ownerId = witchId;
+    return { state, heroId, witchId };
+  }
+
+  test('allReady is false until both players submit', () => {
+    const { state, heroId, witchId } = makeMultiplayerState();
+    state.startPlanning();
+    const r1 = state.submitPlayerPlan(witchId, []);
+    assert.equal(r1, false, 'not ready after first submission');
+    const r2 = state.submitPlayerPlan(heroId, []);
+    assert.equal(r2, true, 'ready after both submissions');
+  });
+
+  test('playerReady is reset between rounds', () => {
+    const { state, heroId, witchId } = makeMultiplayerState();
+
+    // Round 1
+    state.startPlanning();
+    state.submitPlayerPlan(witchId, []);
+    state.submitPlayerPlan(heroId, []);
+    state.endRound();
+
+    // Round 2: playerReady must be reset so both players can submit again
+    state.startPlanning();
+    assert.equal(state.playerReady.get(heroId),  false, 'hero ready flag reset for round 2');
+    assert.equal(state.playerReady.get(witchId), false, 'witch ready flag reset for round 2');
+    const r1 = state.submitPlayerPlan(witchId, []);
+    assert.equal(r1, false, 'not ready after first submission in round 2');
+    const r2 = state.submitPlayerPlan(heroId, []);
+    assert.equal(r2, true, 'ready after both submissions in round 2');
+  });
+
+  test('double submission throws in the same round', () => {
+    const { state, witchId } = makeMultiplayerState();
+    state.startPlanning();
+    state.submitPlayerPlan(witchId, []);
+    assert.throws(
+      () => state.submitPlayerPlan(witchId, []),
+      /already submitted/i,
+    );
+  });
+
+  test('submitting for unknown playerId throws', () => {
+    const { state } = makeMultiplayerState();
+    state.startPlanning();
+    assert.throws(
+      () => state.submitPlayerPlan('nonexistent-player', []),
+      /unknown player/i,
+    );
+  });
+
+  test('playerReady keys match state.players ids after startPlanning', () => {
+    const { state, heroId, witchId } = makeMultiplayerState();
+    state.startPlanning();
+    assert.ok(state.playerReady.has(heroId),  'playerReady initialized with heroId');
+    assert.ok(state.playerReady.has(witchId), 'playerReady initialized with witchId');
+    assert.equal(state.playerReady.size, 2,   'exactly 2 entries in playerReady');
   });
 });

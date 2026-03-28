@@ -4,7 +4,9 @@ import { GameState, Player } from '../src/game.js';
 import { WitchAI, HeroAI, HERO_PERSONALITIES, WITCH_PERSONALITIES } from '../src/ai.js';
 import { serializeState, deserializeState } from './state-sync.js';
 import { recordResult }                    from './leaderboard.js';
-import { resolvePlansMP }                  from './resolver.js';
+import { resolvePlansMP, ResEventType }    from './resolver.js';
+import { compileTurnBattleSummary }        from '../src/battle-utils.js';
+import { PlanActionType }                  from '../src/planner.js';
 import { upsertSave, deleteSave, getSave } from './saves.js';
 import { VERSION }                         from '../src/version.js';
 import { generateMultipleStarts }          from '../src/map.js';
@@ -35,10 +37,9 @@ const PERSONALITY_LABELS = {
   swarm:     'Swarm',
 };
 
-function _randomPersonality(faction) {
-  const registry = faction === 'witch' ? WITCH_PERSONALITIES : HERO_PERSONALITIES;
-  const keys = Object.keys(registry);
-  return keys[Math.floor(Math.random() * keys.length)];
+function _randomPersonality(_faction) {
+  // Non-balanced personalities are temporarily disabled pending tuning.
+  return 'balanced';
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -153,6 +154,7 @@ function createRoom(config = {}) {
     config: {
       fog:            config.fog ?? true,
       mapSize:        config.mapSize ?? 'standard',
+      nodeCount:      config.nodeCount ?? null,
       playersPerSide: Math.max(1, Math.min(4, (config.playersPerSide | 0) || 1)),
     },
     slots:            [],
@@ -260,10 +262,13 @@ function _startPlanningTimer(room) {
   room.turnTimer = setTimeout(() => {
     room.turnTimer = null;
     if (room.state.gameOver || !room.state.planningPhase) return;
-    // Auto-submit empty plans for any human who hasn't submitted yet
+    // Auto-submit empty plans for any seat (human or AI) that hasn't submitted yet.
+    // Without the AI check the game would hang indefinitely if AI plan generation fails.
     for (const seat of room.players) {
-      if (!seat.isAI && !room.state.playerReady.get(seat.playerId)) {
-        send(seat.ws, { type: 'error', message: 'Planning time expired — an empty plan was submitted.' });
+      if (!room.state.playerReady.get(seat.playerId)) {
+        if (!seat.isAI) {
+          send(seat.ws, { type: 'error', message: 'Planning time expired — an empty plan was submitted.' });
+        }
         _submitPlayerPlan(room, seat.playerId, []);
       }
     }
@@ -324,19 +329,41 @@ function _startPlanningPhase(room) {
   });
 }
 
-/** Generate and submit plans for every AI seat, staggered by a short random delay. */
+/** Generate and submit plans for every AI seat, staggered by a short random delay.
+ *
+ * Allied AI players of the same faction share a mutable ally context so each
+ * player's plan avoids duplicating the prior player's node targets and battle focus.
+ * The staggered timeouts fire in a deterministic order (offset 0, 400, 800 …),
+ * so context written by an earlier AI is visible to all later ones in the same faction.
+ */
 function _runAIPlanSubmission(room) {
   if (room.state.gameOver) return;
+
+  // One ally context per faction — shared across all AI players of that faction.
+  const heroCtx  = { claimedNodes: new Set(), allyPositions: [] };
+  const witchCtx = { claimedNodes: new Set(), allyPositions: [] };
+
   let offset = 0;
   for (const seat of room.players) {
     if (!seat.isAI || !seat.ai) continue;
     const delay = 300 + offset + Math.floor(Math.random() * 350);
     offset += 400;
-    const { playerId, ai } = seat;
+    const { playerId, faction, ai } = seat;
+    const ctx = faction === 'hero' ? heroCtx : witchCtx;
     setTimeout(() => {
       if (!rooms.has(room.id)) return;
       if (room.state.gameOver || !room.state.planningPhase) return;
-      const plan = ai.generatePlan();
+      let plan;
+      try {
+        plan = ai.generatePlan(ctx);
+      } catch (err) {
+        console.error(`[room ${room.id}] AI plan generation error for ${playerId}:`, err);
+        plan = [];
+      }
+      // Update ally context so subsequent AI players (higher offsets) see this plan's choices.
+      const leader = room.state.entities.find(e => e.alive && e.ownerId === playerId &&
+        (e.type === 'hero' || e.type === 'witch'));
+      if (leader) ctx.allyPositions.push({ col: leader.col, row: leader.row });
       _submitPlayerPlan(room, playerId, plan);
     }, delay);
   }
@@ -397,6 +424,12 @@ function _executeResolution(room) {
     steps = [];
   }
 
+  // Add aggregate battle summary to log before endRound (so it serialises into finalState)
+  const summaryLines = compileTurnBattleSummary(steps, state.entities, ResEventType, PlanActionType);
+  for (const line of summaryLines) state.log.push(line);
+
+  state.updateNodeDiscovery();
+  state.checkAndLogNodeControlChanges();
   state.endRound();
   checkAndHandleGameOver(room);
 
@@ -483,6 +516,7 @@ function _serializeEvents(events) {
         margin:            ev.result.margin           ?? 0,
         fortAbsorbed:      ev.result.fortAbsorbed     ?? 0,
         breakdown:         ev.result.breakdown        ?? null,
+        path:              ev.result.path             ?? [],
       };
     }
     if (ev.battleSnaps) {
@@ -636,6 +670,7 @@ export function createLobby(playerId, playerName, ws, config = {}) {
   const room = createRoom({
     fog:           config.fog ?? true,
     mapSize:       config.mapSize ?? 'standard',
+    nodeCount:     config.nodeCount ?? null,
     playersPerSide: pps,
   });
   room.isPrivate    = config.isPrivate ?? false;
@@ -773,7 +808,7 @@ export function startGame(playerId, roomId) {
   const anyHeroAI  = room.slots.some(s => s.faction === 'hero'  && s.status === 'ai');
 
   // Initialize GameState
-  const state      = new GameState(anyWitchAI, anyHeroAI, room.config.mapSize);
+  const state      = new GameState(anyWitchAI, anyHeroAI, room.config.mapSize, room.config.nodeCount);
   state.fogOfWar   = room.config.fog;
   room.state       = state;
   room.status      = 'playing';
