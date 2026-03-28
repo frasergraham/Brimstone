@@ -516,6 +516,7 @@ function _serializeEvents(events) {
         margin:            ev.result.margin           ?? 0,
         fortAbsorbed:      ev.result.fortAbsorbed     ?? 0,
         breakdown:         ev.result.breakdown        ?? null,
+        path:              ev.result.path             ?? [],
       };
     }
     if (ev.battleSnaps) {
