@@ -285,6 +285,16 @@ export class Renderer {
     this._lungeAnims = [];
   }
 
+  /** Clear all in-flight canvas animations (moves, flashes, deaths, lunges, battle highlights). */
+  clearAnimations() {
+    this._moveAnims              = [];
+    this._flashes                = [];
+    this._deathAnims             = [];
+    this._lungeAnims             = [];
+    this._battleCombatantHexes   = [];
+    this._battleAllyHexes        = [];
+  }
+
   /**
    * Trigger a return animation on all active lunge anims so entities slide back
    * to their home hex instead of snapping. Completed returns are auto-removed.

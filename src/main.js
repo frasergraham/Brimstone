@@ -346,9 +346,13 @@ async function _runLocalResolution(skipSummary = false) {
   // Accumulate round for full-game replay
   if (!_autoplay) {
     _roundHistory.push({
-      roundNum:  _preResolveRoundNum,
-      preState:  _preResolveStateJson,
-      steps:     JSON.stringify(steps),
+      roundNum:     _preResolveRoundNum,
+      preState:     _preResolveStateJson,
+      steps:        JSON.stringify(steps),
+      // Save post-resolution entities for the last round so the replay
+      // correctly snaps to the outcome (not back to pre-action positions).
+      // Captured before endRound() so it reflects combat results only.
+      finalEntities: state.gameOver ? finalEntities : undefined,
     });
   }
 
@@ -489,6 +493,8 @@ function _getBattleAllyEntities(actorSnap, targetSnap, entities) {
 async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFaction = null, myPlayerId = null) {
   _resolving = true;
   for (let i = 0; i < steps.length; i++) {
+    // During replay: if BACK or STOP was pressed, abort remaining steps immediately
+    if (_replayGoBack || _replayAborted) break;
     const step = steps[i];
     // Post-step entities: what the world looks like AFTER this step resolves.
     const postEntities = i + 1 < steps.length ? steps[i + 1].entitySnapshot : finalEntities;
@@ -820,10 +826,13 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     }
   }
 
-  // Restore the authoritative final state and do one last draw.
+  // Restore the authoritative final state.
   ui?._clearStepContinue();
   state.entities = finalEntities;
-  redrawFn();
+  // Skip the final redraw during replay navigation (caller will render the target preState).
+  if (!_replayGoBack && !_replayAborted) {
+    redrawFn();
+  }
   _resolving = false;
 }
 
@@ -1470,7 +1479,9 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
         : round.preState;
       const preState = deserializeState(preStateData);
 
-      // Restore state and draw BEFORE the pause check — canvas always has valid content
+      // Restore state and draw BEFORE the pause check — canvas always has valid content.
+      // Clear lingering animations from the previous round first to avoid ghost effects.
+      renderer.clearAnimations();
       Object.assign(state, preState);
       state.hero     = preState.hero;
       state.witch    = preState.witch;
@@ -1510,7 +1521,9 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
           : rounds[i + 1].preState;
         finalEntities = nextData.entities ?? preState.entities;
       } else {
-        finalEntities = preState.entities;
+        // Last round: use saved post-resolution entities if present (captures actual
+        // combat outcomes), otherwise fall back to preState entities.
+        finalEntities = round.finalEntities ?? preState.entities;
       }
 
       const stepsRaw = typeof round.steps === 'string' ? JSON.parse(round.steps) : round.steps;
