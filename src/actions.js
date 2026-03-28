@@ -546,10 +546,9 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
 export function executeBattle(state, actor, target) {
   const log = [];
 
-  // Phase bonus
+  // Phase bonus — only witch gets a night bonus (+2 ATK for all witch units)
   let phaseBonus = 0;
-  if (state.phase === Phase.DAY   && actor.owner === 'hero')  phaseBonus = 1;
-  if (state.phase === Phase.NIGHT && actor.owner === 'witch') phaseBonus = 1;
+  if (state.phase === Phase.NIGHT && actor.owner === 'witch') phaseBonus = 2;
 
   // Compute situational bonuses without touching entity fields
   // Gang-up: attacker allies adjacent to the TARGET (flanking/surrounding them)
@@ -572,13 +571,21 @@ export function executeBattle(state, actor, target) {
   const extraAtkDice = attackerAllies >= 1 ? 1 : 0;  // 2+ combatants on attacker side
   const extraDefDice = defenderAllies >= 1 ? 1 : 0;  // 2+ combatants on defender side
 
+  // Fatigue: hero-side defenders lose -1 DEF for every 2 times they've defended this round
+  const fatiguePenalty = target.owner === 'hero'
+    ? Math.floor((target.defendCount || 0) / 2)
+    : 0;
+
   const { attackRoll, defenseRoll, hit, margin,
           atkBaseDie, defBaseDie, atkExtraDice, defExtraDice, atkStaffBonus } =
-    Entity.resolveCombat(actor, target, phaseBonus, 0, fortBonus, extraAtkDice, extraDefDice);
+    Entity.resolveCombat(actor, target, phaseBonus, 0, fortBonus, extraAtkDice, extraDefDice,
+                         fatiguePenalty);
 
-  const phaseNote  = phaseBonus > 0
-    ? ` (${state.phase === Phase.DAY ? '☀ day bonus' : '🌙 night bonus'})`
-    : '';
+  // Increment the defender's defend count for fatigue tracking
+  if (target.defendCount === undefined) target.defendCount = 0;
+  target.defendCount += 1;
+
+  const phaseNote  = phaseBonus > 0 ? ' (🌙 night bonus)' : '';
   const gangNote    = attackerAllies >= 1 ? ' [gang-up +d3]' : '';
   const allyDefNote = defenderAllies >= 1 ? ' [allies +d3]'  : '';
 
@@ -644,7 +651,7 @@ export function executeBattle(state, actor, target) {
       atkBaseDie, defBaseDie,
       atkExtraDice, defExtraDice,
       atkStaffBonus,
-      phaseBonus, fortBonus,
+      phaseBonus, fortBonus, fatiguePenalty,
       atkAllyNames: atkAllies.map(e => e.displayName),
       defAllyNames: defAllies.map(e => e.displayName),
     },

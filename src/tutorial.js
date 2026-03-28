@@ -137,7 +137,7 @@ export const TUTORIAL_STEPS = [
   {
     id: 'day_night',
     title: 'Day / Night Cycle',
-    body: 'The bar below the header tracks the 8-round cycle: 🌅 Dawn → ☀ Day → 🌇 Dusk → 🌙 Night.\n\nDay gives the Hero +1 ATK. Night gives the Witch +1 ATK. Dawn and Dusk score Power Nodes.\n\nAttrition also rises each Dawn — undead and survivors left in the open will start to suffer.',
+    body: 'The bar below the header tracks the 8-round cycle: 🌅 Dawn → ☀ Day → 🌇 Dusk → 🌙 Night.\n\nNight gives the Witch +2 ATK. Dawn and Dusk score Power Nodes.\n\nHero units suffer fatigue — every 2 defenses in a round costs them −1 DEF.\n\nAttrition also rises each Dawn — undead and survivors left in the open will start to suffer.',
     trigger: 'click',
     spotlight: { type: 'element', selector: '#cycle-bar' },
     tooltipPos: 'bottom-left',

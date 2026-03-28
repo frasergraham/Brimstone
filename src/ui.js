@@ -1366,13 +1366,13 @@ export class UIController {
     // 8-step cycle — shared between header and cycle-bar
     const CYCLE_STEPS = [
       { phase: 'dawn',  icon: '🌅', label: 'Dawn',  desc: 'Hero +1 action · node scoring · attrition rises' },
-      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Hero +1 ATK · Witch undead in the open suffer' },
-      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Hero +1 ATK · Witch undead in the open suffer' },
-      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Hero +1 ATK · Witch undead in the open suffer' },
+      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Witch undead in the open suffer' },
+      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Witch undead in the open suffer' },
+      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Witch undead in the open suffer' },
       { phase: 'dusk',  icon: '🌇', label: 'Dusk',  desc: 'Node scoring · seek cover before night' },
-      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +1 ATK · Survivors in the open suffer' },
-      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +1 ATK · Survivors in the open suffer' },
-      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +1 ATK · Survivors in the open suffer' },
+      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
+      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
+      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
     ];
 
     const roundInCycle = (state.round - 1) % 8;
@@ -1907,9 +1907,9 @@ export class UIController {
     const phase = this.state.phase;
     const PHASE_INFO = {
       dawn:  { icon: '🌅', label: 'Dawn',  lines: ['Hero gains +1 action · Attrition rises', 'Power Nodes scored · Tiles reset'] },
-      day:   { icon: '☀️',  label: 'Day',   lines: ['Hero +1 ATK · Build & fortify', 'Witch undead in the open suffer'] },
+      day:   { icon: '☀️',  label: 'Day',   lines: ['Build & fortify', 'Witch undead in the open suffer'] },
       dusk:  { icon: '🌇', label: 'Dusk',  lines: ['Power Nodes scored · Seek shelter', 'Night approaches…'] },
-      night: { icon: '🌙', label: 'Night', lines: ['Witch +1 ATK · Raise undead', 'Survivors in the open suffer'] },
+      night: { icon: '🌙', label: 'Night', lines: ['Witch +2 ATK · Raise undead', 'Survivors in the open suffer'] },
     };
     const info = PHASE_INFO[phase];
     if (!info) return;
@@ -3065,7 +3065,7 @@ function _buildBreakdownHTML(snap, bd, side, total) {
   if (side === 'atk') {
     parts.push(row('Base d6', bd.atkBaseDie, true));
     parts.push(row(`${snap.name} ATK`, snap.attack));
-    if (bd.phaseBonus)    parts.push(row('☀ Day', bd.phaseBonus));
+    if (bd.phaseBonus)    parts.push(row('🌙 Night', bd.phaseBonus));
     if (bd.atkStaffBonus) parts.push(row('⚕ Staff (undead)', bd.atkStaffBonus));
     bd.atkExtraDice.forEach((r, i) => {
       parts.push(row(`${bd.atkAllyNames[i] ?? 'Ally'} (D3)`, r, true));
@@ -3074,6 +3074,7 @@ function _buildBreakdownHTML(snap, bd, side, total) {
     parts.push(row('Base d6', bd.defBaseDie, true));
     parts.push(row(`${snap.name} DEF`, snap.defense));
     if (bd.fortBonus) parts.push(row(`🏰 Fort ×${bd.fortBonus}`, bd.fortBonus));
+    if (bd.fatiguePenalty) parts.push(row('😓 Fatigue', -bd.fatiguePenalty));
     bd.defExtraDice.forEach((r, i) => {
       parts.push(row(`${bd.defAllyNames[i] ?? 'Ally'} (D3)`, r, true));
     });
