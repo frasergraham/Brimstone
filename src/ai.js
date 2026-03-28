@@ -777,11 +777,11 @@ export class WitchAI {
       const a = tryMove(m, _bestWitchObjective(sim, m, claimedNodes)); if (a) return a;
     }
 
-    // 7. Summon
-    if (uncoveredNodes.length === 0 || minions.length === 0) {
+    // 7. Summon — build the army whenever resources allow; cap matches night (8)
+    {
       const inv = sim.inventory.witch;
       const total = Object.values(inv).reduce((s, v) => s + v, 0);
-      if (total >= 2 && minions.length < 5) {
+      if (total >= 2 && minions.length < 8) {
         const hex = getNeighbors(witch.col, witch.row).find(n => {
           const t = sim.tiles.get(hexKey(n.col, n.row));
           return t && t.type !== TileType.RIVER && !sim.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
@@ -1230,7 +1230,10 @@ export class HeroAI {
           if (_isOnNode(sim, s)) continue;
           if (undef.length) {
             const sorted = [...undef].sort((a, b) => hexDistance(s.col, s.row, a.col, a.row) - hexDistance(s.col, s.row, b.col, b.row));
-            const a = tryMove(s, sorted[0]); if (a) return a;
+            // At night, nodes are open terrain — only dispatch survivors already nearby
+            // to avoid attrition damage on long exposed marches
+            const close = sorted.find(n => hexDistance(s.col, s.row, n.col, n.row) <= 3);
+            if (close) { const a = tryMove(s, close); if (a) return a; }
           }
         }
         // Explore current tile
@@ -1274,13 +1277,13 @@ export class HeroAI {
       if (heroTN && heroTN.type === TileType.BUILDING && !sim.isExplored(hero.col, hero.row)) {
         return { type: PlanActionType.EXPLORE, entityId: hero.id };
       }
-      // 7b. Fortify sheltered building (spare night budget — defensive investment)
+      // 7b. Fortify sheltered building — invest up to level 3 at dusk/night for defence
       if (heroTN && heroTN.type === TileType.BUILDING) {
         const fortLevel = heroTN.fortifyLevel || 0;
         const shared = sim.inventory.shared;
         const hasWood  = (shared[ResourceType.WOOD]  || 0) > 0;
         const hasMetal = (shared[ResourceType.METAL] || 0) > 0;
-        if (fortLevel < 2 && (hasWood || hasMetal)) {
+        if (fortLevel < 3 && (hasWood || hasMetal)) {
           return { type: PlanActionType.FORTIFY, entityId: hero.id };
         }
       }
@@ -1319,14 +1322,23 @@ export class HeroAI {
       return { type: PlanActionType.EXPLORE, entityId: hero.id };
     }
 
-    // 5b. Fortify undefended building before moving out (quick one-time setup)
+    // 5b. Fortify building before moving out — invest up to level 2 in day
     if (heroTile && heroTile.type === TileType.BUILDING) {
       const fortLevel = heroTile.fortifyLevel || 0;
       const shared = sim.inventory.shared;
       const hasWood  = (shared[ResourceType.WOOD]  || 0) > 0;
       const hasMetal = (shared[ResourceType.METAL] || 0) > 0;
-      if (fortLevel === 0 && (hasWood || hasMetal)) {
+      if (fortLevel <= 1 && (hasWood || hasMetal)) {
         return { type: PlanActionType.FORTIFY, entityId: hero.id };
+      }
+    }
+
+    // 5c. Route to a nearby unexplored building when the hero is alone.
+    //     Finding survivors is higher value than node-racing in the early game.
+    if (survivors.length === 0 && witchNodeCount < 2) {
+      const nearBuilding = _nearestUnexploredBuilding(sim, hero);
+      if (nearBuilding && hexDistance(hero.col, hero.row, nearBuilding.col, nearBuilding.row) <= 4) {
+        const a = tryMove(hero, nearBuilding); if (a) return a;
       }
     }
 
