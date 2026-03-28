@@ -456,6 +456,11 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     ];
     const events = allStepEvents.filter(ev => ev.type === ResEventType.ACTION_OK);
 
+    // Restore pre-step entity state before the camera pan so the canvas never
+    // shows the final resolved state during the framing delay.
+    const displayEntities = step.entitySnapshot.map(e => ({ ...e }));
+    state.entities = displayEntities;
+
     // ── Frame camera on this step's actors ──────────────────────────────────
     if (!_autoplay) {
       const _cspd = ui?.speedMode ?? 'cinematic';
@@ -534,9 +539,6 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         }
       }
     }
-
-    // Build display entity array starting from the snapshot
-    const displayEntities = step.entitySnapshot.map(e => ({ ...e }));
 
     if (moveAnims.length > 0) {
       hadMove = true;
