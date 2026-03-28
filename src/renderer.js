@@ -240,6 +240,8 @@ export class Renderer {
     this._moveAnims = this._moveAnims.filter(a => a.entityId !== entityId);
     this._moveAnims.push({
       entityId,
+      owner,
+      fromCol, fromRow, toCol, toRow,
       fromX: from.x, fromY: from.y,
       toX:   to.x,   toY:   to.y,
       glyph: entityGlyph(entityType),
@@ -267,6 +269,8 @@ export class Renderer {
     this._lungeAnims = this._lungeAnims.filter(a => a.entityId !== entityId);
     this._lungeAnims.push({
       entityId,
+      owner,
+      fromCol, fromRow, toCol, toRow,
       fromX: from.x, fromY: from.y,
       midX, midY,
       glyph:     entityGlyph(entityType),
@@ -591,6 +595,15 @@ export class Renderer {
       if (humanIsWitch) revealedHexes = getVisibleHeroHexes(state);  // witch sees hero
     }
 
+    // Full set of hexes the observer can see (used to cull animations in fog).
+    // Distinct from revealedHexes, which only tracks hexes where enemy entities exist.
+    let fogVisibleHexes = null;
+    const hiddenOwner = humanIsHero ? 'witch' : (humanIsWitch ? 'hero' : null);
+    if (state.fogOfWar && hiddenOwner) {
+      const observerOwner = humanIsHero ? 'hero' : 'witch';
+      fogVisibleHexes = this._buildFogVisibleHexes(observerOwner);
+    }
+
     // Fog of war: grey overlay on all hexes outside the human player's vision
     if (state.fogOfWar && humanIsHero)  this._drawFogLayer('hero');
     if (state.fogOfWar && humanIsWitch) this._drawFogLayer('witch');
@@ -676,16 +689,16 @@ export class Renderer {
     }
 
     // Damage flash overlays (night/day hazard animations)
-    this._drawFlashes();
+    this._drawFlashes(fogVisibleHexes);
 
     // Death burst / spawn sparkle rings
-    this._drawDeathAnims();
+    this._drawDeathAnims(fogVisibleHexes);
 
     // Sliding entity icons for move animations (opponent moves / own moves)
-    this._drawMoveAnims();
+    this._drawMoveAnims(fogVisibleHexes, hiddenOwner);
 
     // Lunge animations — attacker held at hex border during combat
-    this._drawLungeAnims();
+    this._drawLungeAnims(fogVisibleHexes, hiddenOwner);
 
     // Plan ghost overlay — numbered arrows for move steps
     if (this.planGhostSteps?.length) {
@@ -733,13 +746,14 @@ export class Renderer {
     this._startAnimLoop();
   }
 
-  _drawFlashes() {
+  _drawFlashes(fogVisibleHexes = null) {
     const ctx = this.ctx;
     const hs  = this.hexSize;
     const now = Date.now();
     this._flashes = this._flashes.filter(f => now < f.endTime);
 
     for (const f of this._flashes) {
+      if (fogVisibleHexes !== null && !fogVisibleHexes.has(hexKey(f.col, f.row))) continue;
       const total = f.endTime - f.startTime;
       const remaining = f.endTime - now;
       const t = remaining / total; // 1.0 = just started, 0.0 = expired
@@ -769,12 +783,13 @@ export class Renderer {
     }
   }
 
-  _drawDeathAnims() {
+  _drawDeathAnims(fogVisibleHexes = null) {
     const ctx = this.ctx;
     const hs  = this.hexSize;
     const now = Date.now();
     this._deathAnims = this._deathAnims.filter(a => now < a.startTime + a.duration);
     for (const a of this._deathAnims) {
+      if (fogVisibleHexes !== null && !fogVisibleHexes.has(hexKey(a.col, a.row))) continue;
       const t = (now - a.startTime) / a.duration; // 0→1
       const { x, y } = this._toCanvas(a.col, a.row);
 
@@ -934,12 +949,9 @@ export class Renderer {
 
   // Fog of war: draw a dark grey overlay on every hex NOT within the observer's
   // sight range. observerOwner is 'hero' or 'witch'.
-  _drawFogLayer(observerOwner) {
-    const ctx   = this.ctx;
+  /** Returns the Set of hexKeys visible to observerOwner's units (used for fog culling). */
+  _buildFogVisibleHexes(observerOwner) {
     const state = this.state;
-    const hs    = this.hexSize;
-
-    // Build the visible hex set from observerOwner's units
     const visibleSet = new Set();
     for (const e of state.entities) {
       if (!e.alive || e.owner !== observerOwner) continue;
@@ -952,6 +964,14 @@ export class Renderer {
         }
       }
     }
+    return visibleSet;
+  }
+
+  _drawFogLayer(observerOwner) {
+    const ctx   = this.ctx;
+    const hs    = this.hexSize;
+
+    const visibleSet = this._buildFogVisibleHexes(observerOwner);
 
     for (let row = 0; row < MAP_ROWS; row++) {
       for (let col = 0; col < MAP_COLS; col++) {
@@ -1738,7 +1758,7 @@ export class Renderer {
     ctx.restore();
   }
 
-  _drawLungeAnims() {
+  _drawLungeAnims(fogVisibleHexes = null, hiddenOwner = null) {
     const ctx = this.ctx;
     const now = Date.now();
     const hs  = this.hexSize;
@@ -1752,6 +1772,11 @@ export class Renderer {
     if (!this._lungeAnims.length) return;
 
     for (const a of this._lungeAnims) {
+      if (fogVisibleHexes !== null && hiddenOwner !== null && a.owner === hiddenOwner) {
+        const fromVisible = fogVisibleHexes.has(hexKey(a.fromCol, a.fromRow));
+        const toVisible   = fogVisibleHexes.has(hexKey(a.toCol,   a.toRow));
+        if (!fromVisible && !toVisible) continue;
+      }
       let x, y;
       if (a.returning) {
         const t    = Math.min(1, (now - a.returnStartTime) / a.returnDuration);
@@ -1801,7 +1826,7 @@ export class Renderer {
     }
   }
 
-  _drawMoveAnims() {
+  _drawMoveAnims(fogVisibleHexes = null, hiddenOwner = null) {
     const ctx = this.ctx;
     const now = Date.now();
     const hs  = this.hexSize;
@@ -1811,6 +1836,11 @@ export class Renderer {
     if (!this._moveAnims.length) return;
 
     for (const a of this._moveAnims) {
+      if (fogVisibleHexes !== null && hiddenOwner !== null && a.owner === hiddenOwner) {
+        const fromVisible = fogVisibleHexes.has(hexKey(a.fromCol, a.fromRow));
+        const toVisible   = fogVisibleHexes.has(hexKey(a.toCol,   a.toRow));
+        if (!fromVisible && !toVisible) continue;
+      }
       const t    = Math.min(1, (now - a.startTime) / a.duration);
       const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t; // ease in-out quad
       const x    = a.fromX + (a.toX - a.fromX) * ease;
