@@ -1,4 +1,5 @@
-// Game save persistence — upsert/delete/list/get for in-progress game states.
+// Game save persistence — upsert/delete/list/get for in-progress game states
+// and completed-game replay storage.
 import db from './db.js';
 
 const SAVE_MAX_AGE_DAYS = 3;
@@ -90,4 +91,166 @@ export function getSave(roomId) {
   const row = _getByRoom.get(roomId);
   if (!row) return null;
   return { ...row, state: JSON.parse(row.state_json) };
+}
+
+// ---------------------------------------------------------------------------
+// Completed-game replay storage
+// ---------------------------------------------------------------------------
+
+const _insertCompletedGame = db.prepare(`
+  INSERT OR IGNORE INTO completed_games
+    (game_id, room_id, hero_player_id, witch_player_id, hero_name, witch_name,
+     winner, win_reason, total_rounds, game_version, mode, pinned, created_at, expires_at)
+  VALUES
+    (@gameId, @roomId, @heroPlayerId, @witchPlayerId, @heroName, @witchName,
+     @winner, @winReason, @totalRounds, @gameVersion, @mode, 0,
+     unixepoch(), unixepoch() + @ttlSeconds)
+`);
+
+const _insertReplayRound = db.prepare(`
+  INSERT OR IGNORE INTO game_replay_rounds (game_id, round_num, pre_state_json, steps_json)
+  VALUES (@gameId, @roundNum, @preStateJson, @stepsJson)
+`);
+
+const _listCompletedByPlayer = db.prepare(`
+  SELECT game_id, room_id, hero_player_id, witch_player_id, hero_name, witch_name,
+         winner, win_reason, total_rounds, game_version, mode, pinned, created_at, expires_at
+  FROM   completed_games
+  WHERE  hero_player_id = ? OR witch_player_id = ?
+  ORDER  BY created_at DESC
+`);
+
+const _getCompletedRounds = db.prepare(`
+  SELECT round_num, pre_state_json, steps_json
+  FROM   game_replay_rounds
+  WHERE  game_id = ?
+  ORDER  BY round_num ASC
+`);
+
+const _getCompletedGame = db.prepare(`
+  SELECT * FROM completed_games WHERE game_id = ?
+`);
+
+const _setPinned = db.prepare(`
+  UPDATE completed_games
+  SET pinned = @pinned,
+      expires_at = CASE WHEN @pinned = 1 THEN NULL ELSE unixepoch() + @ttlSeconds END
+  WHERE game_id = @gameId AND (hero_player_id = @playerId OR witch_player_id = @playerId)
+`);
+
+const _deleteCompletedGame = db.prepare(`
+  DELETE FROM completed_games
+  WHERE game_id = @gameId AND (hero_player_id = @playerId OR witch_player_id = @playerId)
+`);
+
+const _deleteCompletedRounds = db.prepare(`
+  DELETE FROM game_replay_rounds WHERE game_id = ?
+`);
+
+const _pruneExpired = db.prepare(`
+  SELECT game_id FROM completed_games
+  WHERE pinned = 0 AND expires_at IS NOT NULL AND expires_at < unixepoch()
+`);
+
+const _deleteExpiredGame  = db.prepare(`DELETE FROM completed_games WHERE game_id = ?`);
+
+const TTL_SECONDS = SAVE_MAX_AGE_DAYS * 86400;
+
+/**
+ * Persist a completed game with its full round replay history.
+ *
+ * @param {string} gameId      — fresh UUID for this completed-game record
+ * @param {string} roomId      — original room UUID
+ * @param {object} meta        — { heroPlayerId, witchPlayerId, heroName, witchName,
+ *                                 winner, winReason, totalRounds, gameVersion, mode }
+ * @param {Array}  rounds      — [{ roundNum, preStateJson, stepsJson }]
+ */
+export function createCompletedGame(gameId, roomId, meta, rounds) {
+  const insertAll = db.transaction(() => {
+    _insertCompletedGame.run({
+      gameId,
+      roomId,
+      heroPlayerId:  meta.heroPlayerId  ?? null,
+      witchPlayerId: meta.witchPlayerId ?? null,
+      heroName:      meta.heroName      ?? '',
+      witchName:     meta.witchName     ?? '',
+      winner:        meta.winner        ?? '',
+      winReason:     meta.winReason     ?? '',
+      totalRounds:   meta.totalRounds   ?? 0,
+      gameVersion:   meta.gameVersion   ?? '',
+      mode:          meta.mode          ?? 'hvai',
+      ttlSeconds:    TTL_SECONDS,
+    });
+    for (const r of rounds) {
+      _insertReplayRound.run({
+        gameId,
+        roundNum:     r.roundNum,
+        preStateJson: r.preStateJson,
+        stepsJson:    r.stepsJson,
+      });
+    }
+  });
+  insertAll();
+}
+
+/**
+ * List all completed games for a player (lightweight — no replay data).
+ */
+export function getCompletedGames(playerId) {
+  return _listCompletedByPlayer.all(playerId, playerId);
+}
+
+/**
+ * Return all rounds for a completed game, ordered by round number.
+ * Each row: { round_num, pre_state_json, steps_json }
+ */
+export function getCompletedGameRounds(gameId) {
+  return _getCompletedRounds.all(gameId);
+}
+
+/**
+ * Get a single completed game record (without rounds).
+ */
+export function getCompletedGame(gameId) {
+  return _getCompletedGame.get(gameId) ?? null;
+}
+
+/**
+ * Pin or unpin a completed game.
+ * Only the owning player can pin; returns true if a row was updated.
+ */
+export function pinCompletedGame(gameId, playerId, pinned) {
+  const { changes } = _setPinned.run({
+    gameId,
+    playerId,
+    pinned: pinned ? 1 : 0,
+    ttlSeconds: TTL_SECONDS,
+  });
+  return changes > 0;
+}
+
+/**
+ * Delete a completed game and all its rounds.
+ * Only the owning player can delete; returns true if a row was deleted.
+ */
+export function deleteCompletedGame(gameId, playerId) {
+  const { changes } = _deleteCompletedGame.run({ gameId, playerId });
+  if (changes > 0) _deleteCompletedRounds.run(gameId);
+  return changes > 0;
+}
+
+/**
+ * Remove expired (unpinned, past TTL) completed games and their rounds.
+ * Returns number of games pruned.
+ */
+export function pruneExpiredCompletedGames() {
+  const expired = _pruneExpired.all();
+  const del = db.transaction(() => {
+    for (const { game_id } of expired) {
+      _deleteExpiredGame.run(game_id);
+      _deleteCompletedRounds.run(game_id);
+    }
+  });
+  del();
+  return expired.length;
 }

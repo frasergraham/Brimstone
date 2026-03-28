@@ -26,6 +26,12 @@ let _resolving = false;           // true while _animateResolutionSteps is runni
 let _pendingPlanningPhase = null; // buffered onPlanningPhase payload received during animation
 let _tutorialConductor = null;    // non-null while a tutorial session is active
 
+// ── Round-history for full-game replay ───────────────────────────────────────
+// Accumulated during a session; reset each new/resumed game.
+let _roundHistory        = [];  // SP offline:  { roundNum, preState, steps }[]
+let _onlineRoundHistory  = [];  // MP online:   { roundNum, preState, steps }[]
+let _replayAborted       = false;
+
 // ── Local game init ───────────────────────────────────────────────────────────
 
 function _genSaveId() {
@@ -58,6 +64,7 @@ function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
 function init(witchIsAI, heroIsAI, autoplay = false) {
   _autoplay = autoplay;
   _tutorialConductor = null; // ensure tutorial state is cleared for normal games
+  _roundHistory = [];
   // Assign a fresh save ID for this game (only used for single-player saves)
   _spSaveId = _genSaveId();
   const canvas = document.getElementById('game-canvas');
@@ -277,6 +284,10 @@ async function _runLocalResolution(skipSummary = false) {
     var _foodOverage = orig - cap;
   }
 
+  // Snapshot state BEFORE resolution for full-game replay
+  const _preResolveStateJson = JSON.stringify(serializeState(state));
+  const _preResolveRoundNum  = state.round;
+
   let steps;
   try {
     steps = resolvePlans(state, state.heroPlan, state.witchPlan);
@@ -327,6 +338,15 @@ async function _runLocalResolution(skipSummary = false) {
   // Persist single-player progress to localStorage
   _saveSpGame();
 
+  // Accumulate round for full-game replay
+  if (!_autoplay) {
+    _roundHistory.push({
+      roundNum:  _preResolveRoundNum,
+      preState:  _preResolveStateJson,
+      steps:     JSON.stringify(steps),
+    });
+  }
+
   // Show post-resolution summary modal (skip in autoplay or tutorial mode)
   if (!_autoplay && !skipSummary && ui && humanFaction) {
     let action;
@@ -334,18 +354,23 @@ async function _runLocalResolution(skipSummary = false) {
       action = await ui._showResolutionSummary(steps, state.round - 1, {
         prevScore, prevNodes, humanFaction, fogOfWar: state.fogOfWar,
         gameOver: state.gameOver, winner: state.winner, winReason: state.winReason,
+        hasFullReplay: _roundHistory.length > 0,
       });
       if (action === 'replay') {
         state.entities = preReplayEntities;
         redraw();
         await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+      } else if (action === 'replay-full') {
+        await _replayFullGame(_roundHistory, state.winner, state.winReason,
+          state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch');
       }
-    } while (action === 'replay');
+    } while (action === 'replay' || action === 'replay-full');
     // Animate score bar changes after summary is dismissed
     ui._animateScoreBar(prevScore, prevNodes);
 
     if (state.gameOver) {
       if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
+      _saveCompletedSpGame(state.winner, state.winReason);
       if (action === 'viewmap') {
         // Lift fog so the player can inspect the final board
         state.fogOfWar = false;
@@ -358,18 +383,23 @@ async function _runLocalResolution(skipSummary = false) {
   } else if (state.gameOver && ui) {
     // Autoplay game-over — still show the summary so the user sees the result
     if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
+    _saveCompletedSpGame(state.winner, state.winReason);
     let action;
     do {
       action = await ui._showResolutionSummary(steps, state.round - 1, {
         prevScore, prevNodes, humanFaction: null, fogOfWar: false,
         gameOver: true, winner: state.winner, winReason: state.winReason,
+        hasFullReplay: _roundHistory.length > 0,
       });
       if (action === 'replay') {
         state.entities = preReplayEntities;
         redraw();
         await _animateResolutionSteps(steps, finalEntities, redraw, null, null);
+      } else if (action === 'replay-full') {
+        await _replayFullGame(_roundHistory, state.winner, state.winReason,
+          state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch');
       }
-    } while (action === 'replay');
+    } while (action === 'replay' || action === 'replay-full');
     if (action === 'viewmap') {
       state.fogOfWar = false;
       redraw();
@@ -380,6 +410,7 @@ async function _runLocalResolution(skipSummary = false) {
   } else if (state.gameOver) {
     // No UI (headless) — just clean up
     if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
+    _saveCompletedSpGame(state.winner, state.winReason);
     return;
   }
 
@@ -874,11 +905,30 @@ document.getElementById('btn-options-back') .addEventListener('click', () => sho
 function _showSinglePlayerScreen() {
   showStep('singleplayer');
   _renderSpSaves();
+  _renderCompletedSpGames();
 }
 
 document.getElementById('btn-singleplayer-back').addEventListener('click', () => {
   renderer = null; ui = null; state = null;
   showStep('mode');
+});
+
+// Tab switching for In Progress / Completed panels (SP and MP)
+document.addEventListener('click', e => {
+  const tab = e.target.closest('.saves-tab');
+  if (!tab) return;
+  const bar = tab.closest('.saves-tab-bar');
+  if (!bar) return;
+  // Deactivate all tabs in this bar
+  bar.querySelectorAll('.saves-tab').forEach(t => t.classList.remove('active'));
+  tab.classList.add('active');
+  // Show the target panel, hide siblings
+  const targetId = tab.dataset.target;
+  const section  = bar.closest('.active-games-section');
+  if (!section) return;
+  section.querySelectorAll('.saves-list').forEach(el => {
+    el.style.display = el.id === targetId ? '' : 'none';
+  });
 });
 
 // Player mode radio changes (vs AI / Two Players / AI vs AI)
@@ -1015,6 +1065,7 @@ function _resumeSpSave(save) {
 /** Start a game from an existing deserialized state (used by SP resume). */
 function _startFromState(existingState, mode) {
   _autoplay = false;
+  _roundHistory = [];
   const canvas = document.getElementById('game-canvas');
 
   document.getElementById('setup-screen').style.display = 'none';
@@ -1106,13 +1157,376 @@ function _timeAgo(unixSecs) {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
+// ── Completed SP games (localStorage) ────────────────────────────────────────
+
+const _SP_COMPLETED_INDEX_KEY = 'brimstone_completed_index';
+const _SP_COMPLETED_MAX_AGE_S = 3 * 86400;  // 3 days
+const _SP_COMPLETED_MAX_GAMES = 10;
+
+function _loadCompletedSpIndex() {
+  try { return JSON.parse(localStorage.getItem(_SP_COMPLETED_INDEX_KEY) || '[]'); } catch { return []; }
+}
+
+function _saveCompletedSpIndex(index) {
+  try { localStorage.setItem(_SP_COMPLETED_INDEX_KEY, JSON.stringify(index)); } catch {}
+}
+
+/** Load full replay data for one completed game (or null). */
+function _loadCompletedSpGame(id) {
+  try { return JSON.parse(localStorage.getItem(`brimstone_completed_${id}`) || 'null'); } catch { return null; }
+}
+
+function _saveCompletedSpGameData(id, data) {
+  try { localStorage.setItem(`brimstone_completed_${id}`, JSON.stringify(data)); } catch {}
+}
+
+function _deleteCompletedSpGame(id) {
+  const index = _loadCompletedSpIndex().filter(g => g.id !== id);
+  _saveCompletedSpIndex(index);
+  try { localStorage.removeItem(`brimstone_completed_${id}`); } catch {}
+}
+
+function _pinCompletedSpGame(id, pinned) {
+  const index = _loadCompletedSpIndex();
+  const entry = index.find(g => g.id === id);
+  if (entry) {
+    entry.pinned = pinned;
+    _saveCompletedSpIndex(index);
+  }
+}
+
+/** Remove expired (unpinned, > 3 days old) completed games. */
+function _pruneCompletedSpGames() {
+  const now = Math.floor(Date.now() / 1000);
+  const index = _loadCompletedSpIndex();
+  const keep = index.filter(g => g.pinned || (now - g.createdAt) < _SP_COMPLETED_MAX_AGE_S);
+  const removed = index.filter(g => !keep.includes(g));
+  for (const g of removed) {
+    try { localStorage.removeItem(`brimstone_completed_${g.id}`); } catch {}
+  }
+  if (removed.length) _saveCompletedSpIndex(keep);
+}
+
+/** Persist a completed SP game with full replay rounds to localStorage. */
+function _saveCompletedSpGame(winner, winReason) {
+  if (!state || !_roundHistory.length) return;
+  const id      = _genSaveId();
+  const mode    = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : 'two-players';
+  const now     = Math.floor(Date.now() / 1000);
+  const meta    = {
+    id,
+    mode,
+    winner:      winner      ?? '',
+    winReason:   winReason   ?? '',
+    heroName:    state.hero?.displayName  ?? 'Hero',
+    witchName:   state.witch?.displayName ?? 'Witch',
+    totalRounds: state.round - 1,
+    createdAt:   now,
+    pinned:      false,
+  };
+
+  // Write replay data
+  _saveCompletedSpGameData(id, { meta, rounds: _roundHistory });
+
+  // Update index — keep max N (unpinned, non-latest removed first)
+  const index = _loadCompletedSpIndex();
+  index.unshift(meta);
+  // Prune: drop oldest unpinned beyond the limit
+  let kept = 0;
+  const pruned = [];
+  for (const g of index) {
+    if (g.pinned || kept < _SP_COMPLETED_MAX_GAMES) { kept++; }
+    else { pruned.push(g); }
+  }
+  for (const g of pruned) {
+    try { localStorage.removeItem(`brimstone_completed_${g.id}`); } catch {}
+  }
+  _saveCompletedSpIndex(index.filter(g => !pruned.includes(g)));
+}
+
+/** Render the completed games tab on the SP setup screen. */
+function _renderCompletedSpGames() {
+  const list = document.getElementById('sp-completed-list');
+  if (!list) return;
+  _pruneCompletedSpGames();
+  const index = _loadCompletedSpIndex();
+  if (!index.length) {
+    list.innerHTML = '<p class="saves-empty">No completed games yet.</p>';
+    return;
+  }
+  const modeLabels = { hero: '⚔ vs AI', witch: '✦ vs AI', 'two-players': '👥 Two Players' };
+  list.innerHTML = '';
+  for (const g of index) {
+    const winnerLabel = g.winner === 'hero' ? '⚔ Hero wins' : '✦ Witch wins';
+    const ago = _timeAgo(g.createdAt);
+    const entry = document.createElement('div');
+    entry.className = 'save-entry';
+    entry.innerHTML = `
+      <div class="save-entry-info">
+        <div class="save-entry-title">${modeLabels[g.mode] ?? g.mode} — ${winnerLabel}</div>
+        <div class="save-entry-meta">${_esc(g.winReason)} · ${g.totalRounds} rounds · ${ago}${g.pinned ? ' 📌' : ''}</div>
+      </div>
+      <div style="display:flex;gap:0.4rem">
+        <button class="setup-btn primary sp-completed-replay-btn">Replay</button>
+        <button class="setup-btn sp-completed-pin-btn"   title="${g.pinned ? 'Unpin' : 'Pin to keep'}">${g.pinned ? '📌' : '📎'}</button>
+        <button class="setup-btn sp-completed-delete-btn" title="Delete">✕</button>
+      </div>
+    `;
+    entry.querySelector('.sp-completed-replay-btn').addEventListener('click', async () => {
+      const data = _loadCompletedSpGame(g.id);
+      if (!data?.rounds?.length) { alert('Replay data not found.'); return; }
+      // Need a game state to render — start a replay-only session
+      await _startSpReplay(data);
+    });
+    entry.querySelector('.sp-completed-pin-btn').addEventListener('click', () => {
+      _pinCompletedSpGame(g.id, !g.pinned);
+      _renderCompletedSpGames();
+    });
+    entry.querySelector('.sp-completed-delete-btn').addEventListener('click', () => {
+      _deleteCompletedSpGame(g.id);
+      _renderCompletedSpGames();
+    });
+    list.appendChild(entry);
+  }
+}
+
+/** Start a full-game replay from the setup screen (no active game session). */
+async function _startSpReplay(data) {
+  const { meta, rounds } = data;
+  if (!rounds.length) return;
+
+  // Reconstruct state from the first round's preState
+  const firstState = deserializeState(JSON.parse(rounds[0].preState));
+  const canvas = document.getElementById('game-canvas');
+
+  document.getElementById('setup-screen').style.display = 'none';
+  document.getElementById('game-screen').style.display  = 'flex';
+
+  state   = firstState;
+  witchAI = null;
+  heroAI  = null;
+
+  _setupLocalUI(canvas, null, null, false);
+  redraw();
+
+  requestAnimationFrame(async () => {
+    renderer.resize();
+    redraw();
+    await _replayFullGame(rounds, meta.winner, meta.winReason, meta.heroName, meta.witchName);
+    // After replay finishes, return to setup
+    document.getElementById('setup-screen').style.display = '';
+    document.getElementById('game-screen').style.display  = 'none';
+    state = null; renderer = null; ui = null;
+    showStep('singleplayer');
+    _renderSpSaves();
+    _renderCompletedSpGames();
+  });
+}
+
+// ── Full-game replay engine ───────────────────────────────────────────────────
+
+/**
+ * Replay all rounds of a completed game in sequence (fast mode by default).
+ * @param {Array}  rounds       — [{ roundNum, preState, steps }]
+ * @param {string} winner
+ * @param {string} winReason
+ * @param {string} heroName
+ * @param {string} witchName
+ * @param {Function} [redrawFn] — defaults to local redraw()
+ */
+async function _replayFullGame(rounds, winner, winReason, heroName, witchName, redrawFn) {
+  if (!rounds.length || !ui || !renderer) return;
+  const draw = redrawFn ?? redraw;
+
+  _replayAborted = false;
+  const prevSpeedMode = ui.speedMode;
+  ui.speedMode = 'fast';
+
+  ui.showReplayHUD(rounds.length, (newSpeed) => { ui.speedMode = newSpeed; }, () => { _replayAborted = true; });
+
+  for (let i = 0; i < rounds.length; i++) {
+    if (_replayAborted) break;
+
+    const round = rounds[i];
+    const preStateData = typeof round.preState === 'string'
+      ? JSON.parse(round.preState)
+      : round.preState;
+    const preState = deserializeState(preStateData);
+
+    // Restore to the pre-round game state
+    Object.assign(state, preState);
+    state.hero  = preState.hero;
+    state.witch = preState.witch;
+    draw();
+
+    // Show hazard flashes from the previous round's endRound() before animating
+    if (preState.lastNightDamage?.length || preState.lastDayDamage?.length) {
+      ui._triggerHazardFlashes();
+      await _delay(ui.speedMode === 'instant' ? 0 : 600);
+    }
+
+    ui.updateReplayHUD(i + 1, rounds.length);
+
+    // Get final entities (start of next round = end of this round)
+    let finalEntities;
+    if (i + 1 < rounds.length) {
+      const nextData = typeof rounds[i + 1].preState === 'string'
+        ? JSON.parse(rounds[i + 1].preState)
+        : rounds[i + 1].preState;
+      finalEntities = nextData.entities ?? preState.entities;
+    } else {
+      finalEntities = preState.entities;
+    }
+
+    const stepsRaw = typeof round.steps === 'string' ? JSON.parse(round.steps) : round.steps;
+
+    await _animateResolutionSteps(stepsRaw, finalEntities, draw, null, null);
+
+    if (_replayAborted) break;
+
+    // Brief inter-round pause
+    if (i < rounds.length - 1) {
+      await _delay(ui.speedMode === 'instant' ? 0 : 300);
+    }
+  }
+
+  ui.hideReplayHUD();
+  ui.speedMode = prevSpeedMode;
+
+  if (!_replayAborted) {
+    // Show final game-over state
+    state.gameOver  = true;
+    state.winner    = winner;
+    state.winReason = winReason;
+    draw();
+  }
+}
+
+// ── Multiplayer completed games ───────────────────────────────────────────────
+
+function _fetchCompletedGames() {
+  const list = document.getElementById('mp-completed-list');
+  if (!list) return;
+  list.innerHTML = '<p class="saves-empty">Loading…</p>';
+
+  const session = loadSession();
+  if (!session) {
+    list.innerHTML = '<p class="saves-empty">Sign in to see completed games.</p>';
+    return;
+  }
+
+  const base = window.BRIMSTONE_SERVER || '';
+  fetch(`${base}/api/completed-games?token=${encodeURIComponent(session.token)}`)
+    .then(r => r.json())
+    .then(games => _renderCompletedGames(games, session))
+    .catch(() => {
+      list.innerHTML = '<p class="saves-empty">Could not load completed games.</p>';
+    });
+}
+
+function _renderCompletedGames(games, session) {
+  const list = document.getElementById('mp-completed-list');
+  if (!list) return;
+  if (!games.length) {
+    list.innerHTML = '<p class="saves-empty">No completed games.</p>';
+    return;
+  }
+  list.innerHTML = '';
+  const base = window.BRIMSTONE_SERVER || '';
+  for (const g of games) {
+    const myFaction   = g.hero_player_id === session?.id ? 'hero' : 'witch';
+    const winnerLabel = g.winner === 'hero' ? '⚔ Hero wins' : '✦ Witch wins';
+    const ago = _timeAgo(g.created_at);
+    const entry = document.createElement('div');
+    entry.className = 'save-entry';
+    entry.innerHTML = `
+      <div class="save-entry-info">
+        <div class="save-entry-title">${_esc(g.hero_name)} vs ${_esc(g.witch_name)} — ${winnerLabel}</div>
+        <div class="save-entry-meta">${_esc(g.win_reason)} · ${g.total_rounds} rounds · ${ago}${g.pinned ? ' 📌' : ''}</div>
+      </div>
+      <div style="display:flex;gap:0.4rem">
+        <button class="setup-btn primary mp-completed-replay-btn">Replay</button>
+        <button class="setup-btn mp-completed-pin-btn"   title="${g.pinned ? 'Unpin' : 'Pin to keep'}">${g.pinned ? '📌' : '📎'}</button>
+        <button class="setup-btn mp-completed-delete-btn" title="Delete">✕</button>
+      </div>
+    `;
+    entry.querySelector('.mp-completed-replay-btn').addEventListener('click', async () => {
+      const token = session.token;
+      try {
+        const rounds = await fetch(
+          `${base}/api/completed-games/${encodeURIComponent(g.game_id)}/rounds?token=${encodeURIComponent(token)}`
+        ).then(r => r.json());
+        await _startMpReplay(rounds, g);
+      } catch { alert('Could not load replay data.'); }
+    });
+    entry.querySelector('.mp-completed-pin-btn').addEventListener('click', async () => {
+      const token = session.token;
+      await fetch(`${base}/api/completed-games/${encodeURIComponent(g.game_id)}/pin?token=${encodeURIComponent(token)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pinned: !g.pinned }),
+      });
+      _fetchCompletedGames();
+    });
+    entry.querySelector('.mp-completed-delete-btn').addEventListener('click', async () => {
+      const token = session.token;
+      await fetch(`${base}/api/completed-games/${encodeURIComponent(g.game_id)}?token=${encodeURIComponent(token)}`, {
+        method: 'DELETE',
+      });
+      _fetchCompletedGames();
+    });
+    list.appendChild(entry);
+  }
+}
+
+/** Start a full-game replay from the MP completed games tab. */
+async function _startMpReplay(rounds, gameMeta) {
+  if (!rounds.length) return;
+
+  const firstState = deserializeState(JSON.parse(rounds[0].pre_state_json));
+  const canvas = document.getElementById('game-canvas');
+
+  document.getElementById('setup-screen').style.display = 'none';
+  document.getElementById('game-screen').style.display  = 'flex';
+
+  state   = firstState;
+  witchAI = null;
+  heroAI  = null;
+
+  _setupLocalUI(canvas, null, null, false);
+  redraw();
+
+  requestAnimationFrame(async () => {
+    renderer.resize();
+    redraw();
+
+    // Convert server round format { round_num, pre_state_json, steps_json } → replay format
+    const replayRounds = rounds.map(r => ({
+      roundNum: r.round_num,
+      preState: r.pre_state_json,
+      steps:    r.steps_json,
+    }));
+
+    await _replayFullGame(replayRounds, gameMeta.winner, gameMeta.win_reason,
+      gameMeta.hero_name, gameMeta.witch_name);
+
+    // Return to MP screen after replay
+    document.getElementById('setup-screen').style.display = '';
+    document.getElementById('game-screen').style.display  = 'none';
+    state = null; renderer = null; ui = null;
+    _showMultiplayerScreen();
+  });
+}
+
 // ── Multiplayer screen ────────────────────────────────────────────────────────
 
 function _showMultiplayerScreen() {
   showStep('multiplayer');
   _initMpStep();
   const session = loadSession();
-  if (session) _fetchActiveSaves();
+  if (session) {
+    _fetchActiveSaves();
+    _fetchCompletedGames();
+  }
 }
 
 document.getElementById('btn-multiplayer-back').addEventListener('click', () => {
@@ -1560,6 +1974,8 @@ function _createMpClient() {
     },
 
     onMatchFound({ roomId, faction, opponentName, aiOpponent, resumed, myPlayerId, players }) {
+      // Reset online round history for this game
+      _onlineRoundHistory = [];
       // Show waiting card briefly during game start (covers both resume and lobby→game transitions)
       showStep('waiting');
       if (resumed) {
@@ -1629,6 +2045,10 @@ function _createMpClient() {
       state.resolving = true;   // flag before exitPlanningMode fires its redraw
       ui.exitPlanningMode();
 
+      // Snapshot state BEFORE applying finalState — used for full-game replay
+      const _onlinePreStateJson = JSON.stringify(serializeState(state));
+      const _onlineRoundNum     = state.round;
+
       // Use the server's final entity list as the landing state for the animation.
       // This ensures state.entities is already correct when the last slide lands.
       const finalEntities = finalState.entities ?? state.entities;
@@ -1651,6 +2071,13 @@ function _createMpClient() {
         state.witch     = finalState.witch;
         state.myFaction = mp?.myFaction;
 
+        // Accumulate round for full-game replay
+        _onlineRoundHistory.push({
+          roundNum:  _onlineRoundNum,
+          preState:  _onlinePreStateJson,
+          steps:     JSON.stringify(steps),
+        });
+
         // Mirror the same post-resolution side effects as the local path.
         ui._triggerHazardFlashes();
         redrawOnline();
@@ -1665,6 +2092,7 @@ function _createMpClient() {
             action = await ui._showResolutionSummary(steps, (finalState.round ?? state.round) - 1, {
               prevScore, prevNodes, humanFaction: mp.myFaction, fogOfWar: state.fogOfWar,
               gameOver: state.gameOver, winner: state.winner, winReason: state.winReason,
+              hasFullReplay: _onlineRoundHistory.length > 0,
             });
             if (action === 'replay') {
               state.entities = _preReplayEntitiesOnline;
@@ -1673,8 +2101,14 @@ function _createMpClient() {
               // _animateResolutionSteps sets _resolving = false at end; re-engage
               // the guard so onPlanningPhase stays buffered during the next summary show.
               _resolving = true;
+            } else if (action === 'replay-full') {
+              _resolving = true;
+              await _replayFullGame(_onlineRoundHistory, state.winner, state.winReason,
+                state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch',
+                redrawOnline);
+              _resolving = true;
             }
-          } while (action === 'replay');
+          } while (action === 'replay' || action === 'replay-full');
           _resolving = false;
           // Animate score bar changes after summary is dismissed
           ui._animateScoreBar(prevScore, prevNodes);

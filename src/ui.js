@@ -2685,7 +2685,7 @@ export class UIController {
       const el = this._el('round-summary');
       if (!el) { resolve('next'); return; }
 
-      const { prevScore, prevNodes, humanFaction, fogOfWar, gameOver, winner, winReason } = opts;
+      const { prevScore, prevNodes, humanFaction, fogOfWar, gameOver, winner, winReason, hasFullReplay } = opts;
 
       // Collect kills, survivors found, summons, and resource flows from steps.
       // Fog-of-war filtering: skip opponent-only events the player can't see.
@@ -2923,7 +2923,8 @@ export class UIController {
         gameOverBtns.className = 'round-summary-gameover-btns';
         gameOverBtns.innerHTML =
           `<button class="plan-btn primary" data-action="restart">Play Again</button>` +
-          `<button class="plan-btn secondary" data-action="viewmap">View Map</button>`;
+          `<button class="plan-btn secondary" data-action="viewmap">View Map</button>` +
+          (hasFullReplay ? `<button class="plan-btn secondary" data-action="replay-full">Replay Full Game</button>` : '');
         actionsEl.appendChild(gameOverBtns);
       } else if (nextBtn) {
         nextBtn.style.display = '';
@@ -2947,8 +2948,53 @@ export class UIController {
       if (gameOverBtns) {
         gameOverBtns.querySelector('[data-action="restart"]')?.addEventListener('click', () => { cleanup(); resolve('restart'); });
         gameOverBtns.querySelector('[data-action="viewmap"]')?.addEventListener('click', () => { cleanup(); resolve('viewmap'); });
+        gameOverBtns.querySelector('[data-action="replay-full"]')?.addEventListener('click', () => { cleanup(); resolve('replay-full'); });
       }
     });
+  }
+
+  // ── Replay HUD ──────────────────────────────────────────────────────────────
+
+  /** Show the replay progress HUD above the canvas. */
+  showReplayHUD(totalRounds, onSpeedChange, onStop) {
+    const hud = this._el('replay-hud');
+    if (!hud) return;
+    hud.style.display = 'flex';
+    this._replayOnSpeedChange = onSpeedChange;
+    this._replayOnStop = onStop;
+    this._replayTotalRounds = totalRounds;
+    const speedBtn = this._el('replay-speed-btn');
+    const stopBtn  = this._el('replay-stop-btn');
+    if (speedBtn) {
+      speedBtn.textContent = `Speed: ${this._speedLabel()}`;
+      speedBtn.onclick = () => {
+        const next = this.speedMode === 'fast' ? 'cinematic' : 'fast';
+        this.speedMode = next;
+        speedBtn.textContent = `Speed: ${this._speedLabel()}`;
+        onSpeedChange?.(next);
+      };
+    }
+    if (stopBtn) {
+      stopBtn.onclick = () => onStop?.();
+    }
+  }
+
+  /** Update the round counter in the replay HUD. */
+  updateReplayHUD(current, total) {
+    const label = this._el('replay-round-label');
+    if (label) label.textContent = `Round ${current} / ${total ?? this._replayTotalRounds ?? '?'}`;
+  }
+
+  /** Hide the replay HUD. */
+  hideReplayHUD() {
+    const hud = this._el('replay-hud');
+    if (hud) hud.style.display = 'none';
+    this._replayOnSpeedChange = null;
+    this._replayOnStop = null;
+  }
+
+  _speedLabel() {
+    return this.speedMode === 'cinematic' ? 'Cinematic' : 'Fast';
   }
 
   /**

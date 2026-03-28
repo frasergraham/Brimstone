@@ -152,11 +152,17 @@
         <button id="btn-start-local" class="setup-btn primary">Start Game</button>
       </div>
 
-      <!-- In-progress local saves -->
+      <!-- In-progress and completed local saves -->
       <div class="active-games-section" style="margin-top:0.75rem">
-        <div class="active-games-label">In Progress</div>
+        <div class="saves-tab-bar">
+          <button class="saves-tab active" data-target="sp-saves-list">In Progress</button>
+          <button class="saves-tab"        data-target="sp-completed-list">Completed</button>
+        </div>
         <div id="sp-saves-list" class="saves-list">
           <p class="saves-empty">No saved games.</p>
+        </div>
+        <div id="sp-completed-list" class="saves-list" style="display:none">
+          <p class="saves-empty">No completed games yet.</p>
         </div>
       </div>
 
@@ -181,11 +187,17 @@
         <p id="mp-name-error" class="setup-error" style="display:none"></p>
       </div>
 
-      <!-- Active online games -->
+      <!-- Active and completed online games -->
       <div class="active-games-section" style="margin-top:0.75rem">
-        <div class="active-games-label">Active Games</div>
+        <div class="saves-tab-bar">
+          <button class="saves-tab active" data-target="active-games-list">In Progress</button>
+          <button class="saves-tab"        data-target="mp-completed-list">Completed</button>
+        </div>
         <div id="active-games-list" class="saves-list">
           <p class="saves-empty">Sign in to see your active games.</p>
+        </div>
+        <div id="mp-completed-list" class="saves-list" style="display:none">
+          <p class="saves-empty">Sign in to see completed games.</p>
         </div>
       </div>
 
@@ -353,6 +365,12 @@
         <canvas id="game-canvas"></canvas>
         <!-- Step-by-step continue bar: shown during step mode resolution -->
         <div id="step-continue-bar" style="display:none">👆 Click to advance</div>
+        <!-- Replay HUD: shown during full-game replay -->
+        <div id="replay-hud" style="display:none">
+          <span id="replay-round-label">Round 1 / ?</span>
+          <button id="replay-speed-btn" class="zoom-btn">Speed: Fast</button>
+          <button id="replay-stop-btn"  class="zoom-btn">■ Stop</button>
+        </div>
         <!-- Unit stats bar: shown during planning when a unit is selected -->
         <div id="unit-stats-bar" style="display:none"></div>
         <!-- Zoom controls — always visible on desktop, hidden on touch-only devices -->
