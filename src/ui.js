@@ -2327,17 +2327,12 @@ export class UIController {
         outcome.textContent = `💀 ${targetSnap.name} is slain!${dmgNote}`;
         outcome.className   = 'battle-outcome kill';
       } else if (result.hit) {
-        if (result.fortAbsorbed > 0 && result.damage === 0) {
-          outcome.textContent = `🏰 Fortifications absorb the blow!`;
-          outcome.className   = 'battle-outcome miss';
-        } else if (result.damage >= 2) {
-          outcome.textContent = `💥💥 Crushing hit! ${targetSnap.name} takes ${result.damage} damage!`;
+        const fortNote = result.fortDamaged ? ' (fort damaged)' : '';
+        if (result.damage >= 2) {
+          outcome.textContent = `💥💥 Crushing hit! ${targetSnap.name} takes ${result.damage} damage!${fortNote}`;
           outcome.className   = 'battle-outcome kill';
-        } else if (result.fortAbsorbed > 0) {
-          outcome.textContent = `🏰 Fort weakened! ${targetSnap.name} takes ${result.damage} damage`;
-          outcome.className   = 'battle-outcome hit';
         } else {
-          outcome.textContent = `💥 Hit! ${targetSnap.name} takes 1 damage`;
+          outcome.textContent = `💥 Hit! ${targetSnap.name} takes 1 damage${fortNote}`;
           outcome.className   = 'battle-outcome hit';
         }
       } else if (result.counterDmg > 0) {

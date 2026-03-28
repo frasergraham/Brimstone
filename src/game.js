@@ -644,17 +644,6 @@ export class GameState {
   }
 
   _applyNightHazard(dmg = 1) {
-    // Fort degradation: ALL fortifications (including buildings) lose 1 level each
-    // night, but are floored at 1 — they never crumble completely from the dark.
-    for (const [key, t] of this.tiles) {
-      if (t.fortifyLevel > 1) {
-        t.fortifyLevel--;
-        const [col, row] = key.split(',').map(Number);
-        this.lastNightDamage.push({ col, row, dmg: 1, isFort: true });
-        this.addLog(`🌑 The dark erodes a fortification at (${col},${row}). (level ${t.fortifyLevel} remaining)`);
-      }
-    }
-
     // Only SURVIVORS in the open take night damage — the hero is hardened against it.
     // Fortified hexes shelter their occupants.
     const endangered = this.entities.filter(e => {
