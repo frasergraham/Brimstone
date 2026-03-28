@@ -1591,6 +1591,10 @@ function _createMpClient() {
       if (ui) ui._onPlayerSubmitted(playerId, name, faction);
     },
 
+    onTimerReset(timeoutMs) {
+      if (ui) ui.resetCountdown(timeoutMs);
+    },
+
     onLeaderboard(_entries) {
       // Leaderboard removed — no-op
     },

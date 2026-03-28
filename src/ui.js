@@ -576,6 +576,13 @@ export class UIController {
     this._countdownTimer = setInterval(tick, 500);
   }
 
+  /** Reset the countdown to a new deadline (called when the server extends the timer). */
+  resetCountdown(timeoutMs) {
+    if (this._planMode && !this._planSubmitted && timeoutMs > 0) {
+      this._startCountdown(timeoutMs);
+    }
+  }
+
   /** Stop the countdown timer. */
   _stopCountdown() {
     if (this._countdownTimer) {
