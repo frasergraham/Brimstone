@@ -368,8 +368,14 @@
         <!-- Replay HUD: shown during full-game replay -->
         <div id="replay-hud" style="display:none">
           <span id="replay-round-label">Round 1 / ?</span>
-          <div id="replay-speed-btns" class="replay-speed-btns"></div>
-          <button id="replay-stop-btn" class="zoom-btn">■ Stop</button>
+          <div class="replay-controls">
+            <button id="replay-back-btn"  class="replay-ctrl-btn" title="Previous round">⏮</button>
+            <button id="replay-play-btn"  class="replay-ctrl-btn active" title="Play (0.5×)">▶</button>
+            <button id="replay-pause-btn" class="replay-ctrl-btn" title="Pause">⏸</button>
+            <button id="replay-ff-btn"    class="replay-ctrl-btn" title="Fast (1×)">⏩</button>
+            <button id="replay-vff-btn"   class="replay-ctrl-btn" title="Very Fast (1.5×)">⏭</button>
+            <button id="replay-stop-btn"  class="replay-ctrl-btn replay-stop" title="Stop">■</button>
+          </div>
         </div>
         <!-- Unit stats bar: shown during planning when a unit is selected -->
         <div id="unit-stats-bar" style="display:none"></div>

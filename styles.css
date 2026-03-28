@@ -2682,35 +2682,40 @@ canvas { touch-action: pan-x pan-y; }
   color: var(--text-bright);
   margin-right: 0.2rem;
 }
-#replay-stop-btn {
-  font-size: 0.78rem;
-  padding: 0.2rem 0.7rem;
-  min-width: unset;
-  margin-left: 0.2rem;
-}
-.replay-speed-btns {
+.replay-controls {
   display: flex;
-  gap: 2px;
+  gap: 3px;
+  align-items: center;
 }
-.replay-mult-btn {
+.replay-ctrl-btn {
   background: rgba(255,255,255,0.06);
   border: 1px solid rgba(170,130,255,0.3);
-  border-radius: 4px;
+  border-radius: 5px;
   color: var(--text-dim);
   font-family: inherit;
-  font-size: 0.74rem;
-  padding: 0.15rem 0.45rem;
+  font-size: 0.88rem;
+  padding: 0.2rem 0.55rem;
+  min-width: unset;
   cursor: pointer;
   transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
-.replay-mult-btn:hover {
-  background: rgba(170,130,255,0.15);
+.replay-ctrl-btn:hover {
+  background: rgba(170,130,255,0.18);
   color: var(--text-bright);
 }
-.replay-mult-btn.active {
-  background: rgba(170,130,255,0.25);
-  border-color: rgba(200,160,255,0.7);
+.replay-ctrl-btn.active {
+  background: rgba(170,130,255,0.28);
+  border-color: rgba(200,160,255,0.75);
   color: var(--text-bright);
+}
+.replay-ctrl-btn.replay-stop {
+  color: #e07070;
+  border-color: rgba(220,100,100,0.35);
+}
+.replay-ctrl-btn.replay-stop:hover {
+  background: rgba(220,80,80,0.18);
+  border-color: rgba(220,100,100,0.7);
+  color: #ffaaaa;
 }
 
 /* Saves tab bar — In Progress / Completed toggle */

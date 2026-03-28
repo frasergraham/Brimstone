@@ -2955,42 +2955,42 @@ export class UIController {
 
   // ── Replay HUD ──────────────────────────────────────────────────────────────
 
-  static REPLAY_SPEEDS = [0.5, 1, 1.5, 2];
-
   /**
    * Show the replay progress HUD above the canvas.
    * @param {number}   totalRounds
-   * @param {Function} onMultiplierChange  — called with the new numeric multiplier
-   * @param {Function} onStop
+   * @param {Function} onControl  — called with action string: 'back'|'play'|'pause'|'ff'|'vff'|'stop'
    */
-  showReplayHUD(totalRounds, onMultiplierChange, onStop) {
+  showReplayHUD(totalRounds, onControl) {
     const hud = this._el('replay-hud');
     if (!hud) return;
     hud.style.display = 'flex';
-    this._replayOnStop = onStop;
     this._replayTotalRounds = totalRounds;
-    this._replayCurMult = 1;
+    this._replayOnControl = onControl;
 
-    // Render multiplier buttons
-    const multContainer = this._el('replay-speed-btns');
-    if (multContainer) {
-      multContainer.innerHTML = UIController.REPLAY_SPEEDS
-        .map(s => `<button class="replay-mult-btn${s === 1 ? ' active' : ''}" data-mult="${s}">${s}×</button>`)
-        .join('');
-      multContainer.querySelectorAll('.replay-mult-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const mult = parseFloat(btn.dataset.mult);
-          this._replayCurMult = mult;
-          multContainer.querySelectorAll('.replay-mult-btn').forEach(b =>
-            b.classList.toggle('active', b.dataset.mult === btn.dataset.mult)
-          );
-          onMultiplierChange?.(mult);
-        });
-      });
+    // Disable the in-game speed toggle while replaying
+    const speedToggle = document.getElementById('speed-toggle');
+    if (speedToggle) speedToggle.disabled = true;
+
+    // Wire up control buttons
+    const ids = ['back', 'play', 'pause', 'ff', 'vff', 'stop'];
+    for (const action of ids) {
+      const btn = document.getElementById(`replay-${action}-btn`);
+      if (btn) btn.onclick = () => onControl?.(action);
     }
 
-    const stopBtn = this._el('replay-stop-btn');
-    if (stopBtn) stopBtn.onclick = () => onStop?.();
+    this.setReplayPlayState('play');
+  }
+
+  /**
+   * Highlight the currently active replay control button.
+   * @param {string} activeAction — 'play'|'pause'|'ff'|'vff'|'back'|'stop'
+   */
+  setReplayPlayState(activeAction) {
+    const ids = ['back', 'play', 'pause', 'ff', 'vff', 'stop'];
+    for (const action of ids) {
+      const btn = document.getElementById(`replay-${action}-btn`);
+      if (btn) btn.classList.toggle('active', action === activeAction);
+    }
   }
 
   /** Update the round counter in the replay HUD. */
@@ -3003,7 +3003,11 @@ export class UIController {
   hideReplayHUD() {
     const hud = this._el('replay-hud');
     if (hud) hud.style.display = 'none';
-    this._replayOnStop = null;
+    this._replayOnControl = null;
+
+    // Re-enable the in-game speed toggle
+    const speedToggle = document.getElementById('speed-toggle');
+    if (speedToggle) speedToggle.disabled = false;
   }
 
   /**

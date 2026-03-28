@@ -31,8 +31,10 @@ let _tutorialConductor = null;    // non-null while a tutorial session is active
 let _roundHistory        = [];  // SP offline:  { roundNum, preState, steps }[]
 let _onlineRoundHistory  = [];  // MP online:   { roundNum, preState, steps }[]
 let _replayAborted       = false;
+let _replayPaused        = false;
+let _replayGoBack        = false;
 let _replayActive        = false;  // true while _replayFullGame is running
-let _replaySpeedMult     = 1.0;    // playback speed multiplier (0.5/1/1.5/2)
+let _replaySpeedMult     = 0.5;    // playback speed multiplier (0.5=play, 1.0=ff, 1.5=vff)
 
 // ── Local game init ───────────────────────────────────────────────────────────
 
@@ -1345,14 +1347,42 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
   if (!rounds.length || !ui || !renderer) return;
   const draw = redrawFn ?? redraw;
 
-  _replayAborted  = false;
-  _replayActive   = true;
-  _replaySpeedMult = 1.0;
-  ui.speedMode    = 'fast';  // locked to fast for the full replay
+  _replayAborted   = false;
+  _replayPaused    = false;
+  _replayGoBack    = false;
+  _replayActive    = true;
+  _replaySpeedMult = 0.5;   // default: PLAY speed
+  const savedSpeedMode = ui.speedMode;
+  ui.speedMode = 'fast';
 
-  ui.showReplayHUD(rounds.length, (mult) => { _replaySpeedMult = mult; }, () => { _replayAborted = true; });
+  // Control callback wired to HUD buttons
+  ui.showReplayHUD(rounds.length, (action) => {
+    switch (action) {
+      case 'play':   _replaySpeedMult = 0.5; _replayPaused = false; ui.setReplayPlayState('play');  break;
+      case 'ff':     _replaySpeedMult = 1.0; _replayPaused = false; ui.setReplayPlayState('ff');    break;
+      case 'vff':    _replaySpeedMult = 1.5; _replayPaused = false; ui.setReplayPlayState('vff');   break;
+      case 'pause':  _replayPaused = true;                           ui.setReplayPlayState('pause'); break;
+      case 'back':   _replayGoBack = true;   _replayPaused = false; ui.setReplayPlayState('play');  break;
+      case 'stop':   _replayAborted = true;  _replayPaused = false;                                 break;
+    }
+  });
+
+  let lastSteps = null;
 
   for (let i = 0; i < rounds.length; i++) {
+    if (_replayAborted) break;
+
+    // ── Handle "go back" — jump to previous round ──────────────────────────
+    if (_replayGoBack) {
+      _replayGoBack = false;
+      i = Math.max(-1, i - 2);  // -2 because loop increments i at end
+      continue;
+    }
+
+    // ── Pause spin ─────────────────────────────────────────────────────────
+    while (_replayPaused && !_replayAborted) {
+      await _delay(50);
+    }
     if (_replayAborted) break;
 
     const round = rounds[i];
@@ -1361,16 +1391,17 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
       : round.preState;
     const preState = deserializeState(preStateData);
 
-    // Restore to the pre-round game state
+    // Restore to the pre-round game state; disable fog for replay
     Object.assign(state, preState);
-    state.hero  = preState.hero;
-    state.witch = preState.witch;
+    state.hero      = preState.hero;
+    state.witch     = preState.witch;
+    state.fogOfWar  = false;
     draw();
 
     // Show hazard flashes from the previous round's endRound() before animating
     if (preState.lastNightDamage?.length || preState.lastDayDamage?.length) {
       ui._triggerHazardFlashes();
-      await _delay(ui.speedMode === 'instant' ? 0 : 600);
+      await _delay(600);
     }
 
     ui.updateReplayHUD(i + 1, rounds.length);
@@ -1387,27 +1418,63 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
     }
 
     const stepsRaw = typeof round.steps === 'string' ? JSON.parse(round.steps) : round.steps;
+    lastSteps = stepsRaw;
 
     await _animateResolutionSteps(stepsRaw, finalEntities, draw, null, null);
 
     if (_replayAborted) break;
 
+    // Handle back press that arrived during animation
+    if (_replayGoBack) {
+      _replayGoBack = false;
+      i = Math.max(-1, i - 2);
+      continue;
+    }
+
     // Brief inter-round pause
     if (i < rounds.length - 1) {
-      await _delay(ui.speedMode === 'instant' ? 0 : 300);
+      await _delay(300);
     }
   }
 
   ui.hideReplayHUD();
   _replayActive    = false;
-  _replaySpeedMult = 1.0;
+  _replayPaused    = false;
+  _replayGoBack    = false;
+  _replaySpeedMult = 0.5;
+  ui.speedMode     = savedSpeedMode;
 
   if (!_replayAborted) {
-    // Show final game-over state
+    // Show final game state with fog off
     state.gameOver  = true;
     state.winner    = winner;
     state.winReason = winReason;
+    state.fogOfWar  = false;
     draw();
+
+    // Show the last-turn summary (no next-turn option, no full-replay button)
+    if (lastSteps) {
+      const lastRound = rounds[rounds.length - 1];
+      const lastRoundNum = typeof lastRound.roundNum === 'number' ? lastRound.roundNum : rounds.length;
+      let action;
+      do {
+        action = await ui._showResolutionSummary(lastSteps, lastRoundNum, {
+          prevScore: null, prevNodes: null, humanFaction: null, fogOfWar: false,
+          gameOver: true, winner, winReason, hasFullReplay: false,
+        });
+        if (action === 'replay') {
+          // Replay last round in-place
+          const preStateData = typeof lastRound.preState === 'string'
+            ? JSON.parse(lastRound.preState)
+            : lastRound.preState;
+          const preState = deserializeState(preStateData);
+          state.entities = preState.entities;
+          state.fogOfWar = false;
+          draw();
+          await _animateResolutionSteps(lastSteps, lastSteps.at(-1)?.entitySnapshot ?? preState.entities, draw, null, null);
+        }
+      } while (action === 'replay');
+    }
   }
 }
 
@@ -2367,3 +2434,37 @@ function _renderSpectatorReadyList(players, submittedIds) {
 const _spectateParam = new URLSearchParams(location.search).get('spectate')
                     ?? new URLSearchParams(location.search).get('room');
 if (_spectateParam) initSpectator(_spectateParam);
+
+// Auto-start admin replay when ?replayGame=<gameId> is in the URL.
+// This allows /replay?replayGame=X (served as index.html) to work automatically.
+const _replayGameParam = new URLSearchParams(location.search).get('replayGame');
+if (_replayGameParam) _loadAdminReplay(_replayGameParam);
+
+async function _loadAdminReplay(gameId) {
+  try {
+    const [meta, rounds] = await Promise.all([
+      fetch(`/admin/api/completed-games/${encodeURIComponent(gameId)}`).then(r => {
+        if (!r.ok) throw new Error(r.status);
+        return r.json();
+      }),
+      fetch(`/admin/api/completed-games/${encodeURIComponent(gameId)}/rounds`).then(r => {
+        if (!r.ok) throw new Error(r.status);
+        return r.json();
+      }),
+    ]);
+
+    if (!rounds.length) { alert('No replay rounds found for this game.'); return; }
+
+    // Map server-side column names to the format _startMpReplay expects
+    const replayRounds = rounds.map(r => ({
+      roundNum: r.round_num,
+      preState: r.pre_state_json,
+      steps:    r.steps_json,
+    }));
+
+    await _startMpReplay(replayRounds, meta);
+  } catch (e) {
+    console.error('Admin replay load error:', e);
+    alert('Could not load replay data.');
+  }
+}

@@ -254,3 +254,18 @@ export function pruneExpiredCompletedGames() {
   del();
   return expired.length;
 }
+
+const _getAllCompleted = db.prepare(
+  `SELECT game_id, room_id, hero_player_id, witch_player_id,
+          hero_name, witch_name, winner, win_reason, total_rounds,
+          game_version, mode, pinned, created_at, expires_at
+   FROM completed_games
+   ORDER BY created_at DESC`
+);
+
+/**
+ * Return all completed games (admin view — no player filter).
+ */
+export function getAllCompletedGames() {
+  return _getAllCompleted.all();
+}

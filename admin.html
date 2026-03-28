@@ -189,6 +189,7 @@
     <div class="tabs">
       <button class="tab-btn active" data-tab="tab-games">Active Games</button>
       <button class="tab-btn" data-tab="tab-saves">Saved Games</button>
+      <button class="tab-btn" data-tab="tab-completed">Completed Games</button>
       <button class="tab-btn" data-tab="tab-players">Players</button>
     </div>
 
@@ -231,6 +232,27 @@
         <tbody id="saves-body"></tbody>
       </table>
       <p class="empty-msg" id="saves-empty" style="display:none">No saved games.</p>
+    </div>
+
+    <!-- ── Completed Games tab ─────────────────────── -->
+    <div id="tab-completed" class="tab-content">
+      <div class="refresh-row"><button class="btn" id="refresh-completed">Refresh</button></div>
+      <table id="completed-table">
+        <thead>
+          <tr>
+            <th>Hero</th>
+            <th>Witch</th>
+            <th>Winner</th>
+            <th>Rounds</th>
+            <th>Mode</th>
+            <th>Pinned</th>
+            <th>Played</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="completed-body"></tbody>
+      </table>
+      <p class="empty-msg" id="completed-empty" style="display:none">No completed games on record.</p>
     </div>
 
     <!-- ── Players tab ──────────────────────────────── -->
@@ -455,16 +477,50 @@
       return el.innerHTML;
     }
 
+    // ── Completed Games ──────────────────────────────────────────────────────────
+
+    async function loadCompletedGames() {
+      try {
+        const games = await api('/admin/api/completed-games');
+        const tbody = document.getElementById('completed-body');
+        const empty = document.getElementById('completed-empty');
+        if (!games.length) {
+          tbody.innerHTML = '';
+          empty.style.display = '';
+          return;
+        }
+        empty.style.display = 'none';
+        tbody.innerHTML = games.map(g => {
+          const pinnedIcon = g.pinned ? '📌' : '';
+          const replayUrl  = `/replay?replayGame=${g.game_id}`;
+          return `<tr>
+            <td>${g.hero_name || '—'}</td>
+            <td>${g.witch_name || '—'}</td>
+            <td>${g.winner} <small style="opacity:.6">${g.win_reason || ''}</small></td>
+            <td>${g.total_rounds}</td>
+            <td>${g.mode}</td>
+            <td>${pinnedIcon}</td>
+            <td>${timeAgo(g.created_at)}</td>
+            <td><a class="btn btn-sm" href="${replayUrl}" target="_blank">Replay</a></td>
+          </tr>`;
+        }).join('');
+      } catch (e) {
+        console.error('loadCompletedGames error:', e);
+      }
+    }
+
     // ── Init ────────────────────────────────────────────────────────────────────
 
     document.getElementById('refresh-rooms').addEventListener('click', () => { loadRooms(); loadStats(); });
     document.getElementById('refresh-saves').addEventListener('click', loadSaves);
     document.getElementById('refresh-players').addEventListener('click', loadPlayers);
+    document.getElementById('refresh-completed').addEventListener('click', loadCompletedGames);
 
     loadStats();
     loadRooms();
     loadSaves();
     loadPlayers();
+    loadCompletedGames();
 
     // Auto-refresh stats and rooms every 10 seconds
     setInterval(() => { loadStats(); loadRooms(); }, 10000);

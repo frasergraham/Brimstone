@@ -11,7 +11,7 @@ import { getLeaderboard }                    from './server/leaderboard.js';
 import { getActiveSaves, pruneStaleAndIncompatibleSaves,
          getCompletedGames, getCompletedGame, getCompletedGameRounds,
          pinCompletedGame, deleteCompletedGame,
-         pruneExpiredCompletedGames }                      from './server/saves.js';
+         pruneExpiredCompletedGames, getAllCompletedGames } from './server/saves.js';
 import {
   createLobby, joinLobby, browseLobby,
   setSlotAI, removeSlotAI, fillAllWithAI, startGame, leaveLobby,
@@ -105,8 +105,9 @@ app.delete('/api/completed-games/:gameId', (req, res) => {
 
 // ── Admin pages ───────────────────────────────────────────────────────────────
 
-app.get('/admin', (_req, res) => res.sendFile(join(__dirname, 'admin.html')));
+app.get('/admin',    (_req, res) => res.sendFile(join(__dirname, 'admin.html')));
 app.get('/spectate', (_req, res) => res.sendFile(join(__dirname, 'index.html')));
+app.get('/replay',   (_req, res) => res.sendFile(join(__dirname, 'index.html')));
 
 // ── Admin REST API ────────────────────────────────────────────────────────────
 
@@ -163,6 +164,20 @@ app.post('/admin/api/saves/:roomId/activate', (req, res) => {
     return;
   }
   res.json({ ok: true, roomId: result.roomId });
+});
+
+app.get('/admin/api/completed-games', (_req, res) => {
+  res.json(getAllCompletedGames());
+});
+
+app.get('/admin/api/completed-games/:gameId', (req, res) => {
+  const game = getCompletedGame(req.params.gameId);
+  if (!game) { res.status(404).json({ error: 'Not found.' }); return; }
+  res.json(game);
+});
+
+app.get('/admin/api/completed-games/:gameId/rounds', (req, res) => {
+  res.json(getCompletedGameRounds(req.params.gameId));
 });
 
 // ── HTTP + WS server ─────────────────────────────────────────────────────────
