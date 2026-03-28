@@ -31,6 +31,8 @@ let _tutorialConductor = null;    // non-null while a tutorial session is active
 let _roundHistory        = [];  // SP offline:  { roundNum, preState, steps }[]
 let _onlineRoundHistory  = [];  // MP online:   { roundNum, preState, steps }[]
 let _replayAborted       = false;
+let _replayActive        = false;  // true while _replayFullGame is running
+let _replaySpeedMult     = 1.0;    // playback speed multiplier (0.5/1/1.5/2)
 
 // ── Local game init ───────────────────────────────────────────────────────────
 
@@ -611,12 +613,14 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       redrawFn();
     }
 
-    for (const entry of pendingDialogs) {
-      redrawFn();
-      if (entry.encounterUnit) {
-        await new Promise(resolve => ui._showEncounterDialog(entry.encounterUnit, resolve));
-      } else {
-        await new Promise(resolve => ui._showResultDialog(entry.log, resolve));
+    if (!_replayActive) {
+      for (const entry of pendingDialogs) {
+        redrawFn();
+        if (entry.encounterUnit) {
+          await new Promise(resolve => ui._showEncounterDialog(entry.encounterUnit, resolve));
+        } else {
+          await new Promise(resolve => ui._showResultDialog(entry.log, resolve));
+        }
       }
     }
 
@@ -810,7 +814,10 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   _resolving = false;
 }
 
-function _delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+function _delay(ms) {
+  const effective = (_replayActive && _replaySpeedMult > 0) ? ms / _replaySpeedMult : ms;
+  return new Promise(resolve => setTimeout(resolve, effective));
+}
 
 
 // ── Online game init ──────────────────────────────────────────────────────────
@@ -1338,11 +1345,12 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
   if (!rounds.length || !ui || !renderer) return;
   const draw = redrawFn ?? redraw;
 
-  _replayAborted = false;
-  const prevSpeedMode = ui.speedMode;
-  ui.speedMode = 'fast';
+  _replayAborted  = false;
+  _replayActive   = true;
+  _replaySpeedMult = 1.0;
+  ui.speedMode    = 'fast';  // locked to fast for the full replay
 
-  ui.showReplayHUD(rounds.length, (newSpeed) => { ui.speedMode = newSpeed; }, () => { _replayAborted = true; });
+  ui.showReplayHUD(rounds.length, (mult) => { _replaySpeedMult = mult; }, () => { _replayAborted = true; });
 
   for (let i = 0; i < rounds.length; i++) {
     if (_replayAborted) break;
@@ -1391,7 +1399,8 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
   }
 
   ui.hideReplayHUD();
-  ui.speedMode = prevSpeedMode;
+  _replayActive    = false;
+  _replaySpeedMult = 1.0;
 
   if (!_replayAborted) {
     // Show final game-over state

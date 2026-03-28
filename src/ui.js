@@ -2955,28 +2955,42 @@ export class UIController {
 
   // ── Replay HUD ──────────────────────────────────────────────────────────────
 
-  /** Show the replay progress HUD above the canvas. */
-  showReplayHUD(totalRounds, onSpeedChange, onStop) {
+  static REPLAY_SPEEDS = [0.5, 1, 1.5, 2];
+
+  /**
+   * Show the replay progress HUD above the canvas.
+   * @param {number}   totalRounds
+   * @param {Function} onMultiplierChange  — called with the new numeric multiplier
+   * @param {Function} onStop
+   */
+  showReplayHUD(totalRounds, onMultiplierChange, onStop) {
     const hud = this._el('replay-hud');
     if (!hud) return;
     hud.style.display = 'flex';
-    this._replayOnSpeedChange = onSpeedChange;
     this._replayOnStop = onStop;
     this._replayTotalRounds = totalRounds;
-    const speedBtn = this._el('replay-speed-btn');
-    const stopBtn  = this._el('replay-stop-btn');
-    if (speedBtn) {
-      speedBtn.textContent = `Speed: ${this._speedLabel()}`;
-      speedBtn.onclick = () => {
-        const next = this.speedMode === 'fast' ? 'cinematic' : 'fast';
-        this.speedMode = next;
-        speedBtn.textContent = `Speed: ${this._speedLabel()}`;
-        onSpeedChange?.(next);
-      };
+    this._replayCurMult = 1;
+
+    // Render multiplier buttons
+    const multContainer = this._el('replay-speed-btns');
+    if (multContainer) {
+      multContainer.innerHTML = UIController.REPLAY_SPEEDS
+        .map(s => `<button class="replay-mult-btn${s === 1 ? ' active' : ''}" data-mult="${s}">${s}×</button>`)
+        .join('');
+      multContainer.querySelectorAll('.replay-mult-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const mult = parseFloat(btn.dataset.mult);
+          this._replayCurMult = mult;
+          multContainer.querySelectorAll('.replay-mult-btn').forEach(b =>
+            b.classList.toggle('active', b.dataset.mult === btn.dataset.mult)
+          );
+          onMultiplierChange?.(mult);
+        });
+      });
     }
-    if (stopBtn) {
-      stopBtn.onclick = () => onStop?.();
-    }
+
+    const stopBtn = this._el('replay-stop-btn');
+    if (stopBtn) stopBtn.onclick = () => onStop?.();
   }
 
   /** Update the round counter in the replay HUD. */
@@ -2989,12 +3003,7 @@ export class UIController {
   hideReplayHUD() {
     const hud = this._el('replay-hud');
     if (hud) hud.style.display = 'none';
-    this._replayOnSpeedChange = null;
     this._replayOnStop = null;
-  }
-
-  _speedLabel() {
-    return this.speedMode === 'cinematic' ? 'Cinematic' : 'Fast';
   }
 
   /**
