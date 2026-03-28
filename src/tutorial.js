@@ -251,10 +251,10 @@ export const TUTORIAL_STEPS = [
   {
     id: 'score_tracker',
     title: 'Score Tracker',
-    body: 'The three dots in the header show who controls each Power Node (orange = Hero, purple = Witch, grey = neutral).\n\nThe pips below each dot record cumulative score points. At each Dawn and Dusk, whoever holds more nodes scores 1 point. First to 4 points wins by node control.',
+    body: 'The bar at the bottom of the screen shows who controls each Power Node (orange = Hero, purple = Witch, grey = neutral) alongside score pips for each side.\n\nAt each Dawn and Dusk, whoever holds more nodes scores 1 point — shown as filled pips. First to 4 points wins by node control.',
     trigger: 'click',
-    spotlight: { type: 'element', selector: '#node-status' },
-    tooltipPos: 'bottom-left',
+    spotlight: { type: 'element', selector: '#score-bar' },
+    tooltipPos: 'center',
     witchPlan: null,
   },
   {

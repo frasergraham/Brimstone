@@ -287,11 +287,11 @@ describe('TUTORIAL_STEPS', () => {
     assert.equal(TUTORIAL_STEPS[st].trigger, 'click');
   });
 
-  test('score_tracker spotlights #node-status element', () => {
+  test('score_tracker spotlights #score-bar element', () => {
     const step = TUTORIAL_STEPS.find(s => s.id === 'score_tracker');
     assert.ok(step, 'score_tracker step exists');
     assert.equal(step.spotlight?.type, 'element');
-    assert.ok(step.spotlight?.selector?.includes('node-status'), 'spotlights node-status');
+    assert.ok(step.spotlight?.selector?.includes('score-bar'), 'spotlights score-bar');
   });
 
   test('auto-trigger steps are watch_r1, watch_r2, watch_r3 only', () => {
