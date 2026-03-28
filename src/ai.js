@@ -1333,15 +1333,6 @@ export class HeroAI {
       }
     }
 
-    // 5c. Route to an immediately nearby unexplored building when the hero is alone.
-    //     Only detour for buildings within 2 hexes — don't leave the main route.
-    if (survivors.length === 0 && witchNodeCount < 2) {
-      const nearBuilding = _nearestUnexploredBuilding(sim, hero);
-      if (nearBuilding && hexDistance(hero.col, hero.row, nearBuilding.col, nearBuilding.row) <= 2) {
-        const a = tryMove(hero, nearBuilding); if (a) return a;
-      }
-    }
-
     // 6. Hold node: fight threats, dispatch survivors to other nodes, then pursue witch
     if (heroOnNode) {
       const thrD = sim.entities.find(e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1);
