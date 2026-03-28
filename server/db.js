@@ -61,6 +61,26 @@ db.exec(`
     steps_json     TEXT NOT NULL,
     PRIMARY KEY (game_id, round_num)
   );
+
+  CREATE TABLE IF NOT EXISTS sp_completed_games (
+    game_id      TEXT PRIMARY KEY,
+    hero_name    TEXT NOT NULL DEFAULT '',
+    witch_name   TEXT NOT NULL DEFAULT '',
+    winner       TEXT NOT NULL,
+    win_reason   TEXT NOT NULL DEFAULT '',
+    total_rounds INTEGER NOT NULL DEFAULT 0,
+    game_version TEXT NOT NULL DEFAULT '',
+    mode         TEXT NOT NULL DEFAULT 'hvai',
+    created_at   INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  CREATE TABLE IF NOT EXISTS sp_replay_rounds (
+    game_id        TEXT NOT NULL,
+    round_num      INTEGER NOT NULL,
+    pre_state_json TEXT NOT NULL,
+    steps_json     TEXT NOT NULL,
+    PRIMARY KEY (game_id, round_num)
+  );
 `);
 
 export default db;

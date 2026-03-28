@@ -11,7 +11,9 @@ import { getLeaderboard }                    from './server/leaderboard.js';
 import { getActiveSaves, pruneStaleAndIncompatibleSaves,
          getCompletedGames, getCompletedGame, getCompletedGameRounds,
          pinCompletedGame, deleteCompletedGame,
-         pruneExpiredCompletedGames, getAllCompletedGames } from './server/saves.js';
+         pruneExpiredCompletedGames, getAllCompletedGames,
+         createSpCompletedGame, getAllSpCompletedGames,
+         getSpCompletedGame, getSpCompletedGameRounds }    from './server/saves.js';
 import {
   createLobby, joinLobby, browseLobby,
   setSlotAI, removeSlotAI, fillAllWithAI, startGame, leaveLobby,
@@ -178,6 +180,39 @@ app.get('/admin/api/completed-games/:gameId', (req, res) => {
 
 app.get('/admin/api/completed-games/:gameId/rounds', (req, res) => {
   res.json(getCompletedGameRounds(req.params.gameId));
+});
+
+// ── SP game uploads ───────────────────────────────────────────────────────────
+
+app.post('/api/sp/completed-games', (req, res) => {
+  const { gameId, heroName, witchName, winner, winReason, totalRounds,
+          gameVersion, mode, rounds } = req.body ?? {};
+  if (!gameId || !winner || !Array.isArray(rounds)) {
+    res.status(400).json({ error: 'gameId, winner, and rounds are required.' });
+    return;
+  }
+  try {
+    createSpCompletedGame(gameId, { heroName, witchName, winner, winReason,
+      totalRounds, gameVersion, mode }, rounds);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('SP upload error:', e);
+    res.status(500).json({ error: 'Failed to store game.' });
+  }
+});
+
+app.get('/admin/api/sp/completed-games', (_req, res) => {
+  res.json(getAllSpCompletedGames());
+});
+
+app.get('/admin/api/sp/completed-games/:gameId', (req, res) => {
+  const game = getSpCompletedGame(req.params.gameId);
+  if (!game) { res.status(404).json({ error: 'Not found.' }); return; }
+  res.json(game);
+});
+
+app.get('/admin/api/sp/completed-games/:gameId/rounds', (req, res) => {
+  res.json(getSpCompletedGameRounds(req.params.gameId));
 });
 
 // ── HTTP + WS server ─────────────────────────────────────────────────────────

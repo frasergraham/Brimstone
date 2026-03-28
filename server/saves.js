@@ -269,3 +269,75 @@ const _getAllCompleted = db.prepare(
 export function getAllCompletedGames() {
   return _getAllCompleted.all();
 }
+
+// ── Single-player uploaded games ──────────────────────────────────────────────
+
+const _insertSpGame = db.prepare(
+  `INSERT OR REPLACE INTO sp_completed_games
+     (game_id, hero_name, witch_name, winner, win_reason, total_rounds, game_version, mode)
+   VALUES (@game_id, @hero_name, @witch_name, @winner, @win_reason, @total_rounds, @game_version, @mode)`
+);
+const _insertSpRound = db.prepare(
+  `INSERT OR REPLACE INTO sp_replay_rounds (game_id, round_num, pre_state_json, steps_json)
+   VALUES (@game_id, @round_num, @pre_state_json, @steps_json)`
+);
+const _getAllSpCompleted = db.prepare(
+  `SELECT game_id, hero_name, witch_name, winner, win_reason, total_rounds,
+          game_version, mode, created_at
+   FROM sp_completed_games ORDER BY created_at DESC`
+);
+const _getSpCompletedRounds = db.prepare(
+  `SELECT round_num, pre_state_json, steps_json
+   FROM sp_replay_rounds WHERE game_id = ? ORDER BY round_num ASC`
+);
+
+/**
+ * Persist a single-player completed game upload.
+ * @param {string} gameId
+ * @param {{ heroName, witchName, winner, winReason, totalRounds, gameVersion, mode }} meta
+ * @param {{ roundNum, preState, steps }[]} rounds
+ */
+export function createSpCompletedGame(gameId, meta, rounds) {
+  const insert = db.transaction(() => {
+    _insertSpGame.run({
+      game_id:      gameId,
+      hero_name:    meta.heroName    ?? '',
+      witch_name:   meta.witchName   ?? '',
+      winner:       meta.winner,
+      win_reason:   meta.winReason   ?? '',
+      total_rounds: meta.totalRounds ?? rounds.length,
+      game_version: meta.gameVersion ?? '',
+      mode:         meta.mode        ?? 'hvai',
+    });
+    for (const r of rounds) {
+      _insertSpRound.run({
+        game_id:        gameId,
+        round_num:      r.roundNum,
+        pre_state_json: typeof r.preState === 'string' ? r.preState : JSON.stringify(r.preState),
+        steps_json:     typeof r.steps    === 'string' ? r.steps    : JSON.stringify(r.steps),
+      });
+    }
+  });
+  insert();
+}
+
+const _getSpCompletedGame = db.prepare(
+  `SELECT game_id, hero_name, witch_name, winner, win_reason, total_rounds,
+          game_version, mode, created_at
+   FROM sp_completed_games WHERE game_id = ?`
+);
+
+/** Return all SP uploaded completed games (admin view). */
+export function getAllSpCompletedGames() {
+  return _getAllSpCompleted.all();
+}
+
+/** Return one SP completed game record (without rounds). */
+export function getSpCompletedGame(gameId) {
+  return _getSpCompletedGame.get(gameId) ?? null;
+}
+
+/** Return all replay rounds for one SP game. */
+export function getSpCompletedGameRounds(gameId) {
+  return _getSpCompletedRounds.all(gameId);
+}

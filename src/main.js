@@ -353,6 +353,13 @@ async function _runLocalResolution(skipSummary = false) {
 
   // Show post-resolution summary modal (skip in autoplay or tutorial mode)
   if (!_autoplay && !skipSummary && ui && humanFaction) {
+    // Finalize game-over immediately — cleanup survives any navigation away
+    if (state.gameOver) {
+      if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
+      _saveCompletedSpGame(state.winner, state.winReason);
+      _uploadSpGame(state.winner, state.winReason);
+    }
+
     let action;
     do {
       action = await ui._showResolutionSummary(steps, state.round - 1, {
@@ -365,16 +372,16 @@ async function _runLocalResolution(skipSummary = false) {
         redraw();
         await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
       } else if (action === 'replay-full') {
-        await _replayFullGame(_roundHistory, state.winner, state.winReason,
-          state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch');
+        // Full-replay shows its own last-turn summary; capture its exit action
+        action = await _replayFullGame(_roundHistory, state.winner, state.winReason,
+          state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch') ?? 'done';
+        break;  // exit outer loop — inner summary already shown
       }
-    } while (action === 'replay' || action === 'replay-full');
+    } while (action === 'replay');
     // Animate score bar changes after summary is dismissed
     ui._animateScoreBar(prevScore, prevNodes);
 
     if (state.gameOver) {
-      if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
-      _saveCompletedSpGame(state.winner, state.winReason);
       if (action === 'viewmap') {
         // Lift fog so the player can inspect the final board
         state.fogOfWar = false;
@@ -388,6 +395,7 @@ async function _runLocalResolution(skipSummary = false) {
     // Autoplay game-over — still show the summary so the user sees the result
     if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
     _saveCompletedSpGame(state.winner, state.winReason);
+    _uploadSpGame(state.winner, state.winReason);
     let action;
     do {
       action = await ui._showResolutionSummary(steps, state.round - 1, {
@@ -400,10 +408,11 @@ async function _runLocalResolution(skipSummary = false) {
         redraw();
         await _animateResolutionSteps(steps, finalEntities, redraw, null, null);
       } else if (action === 'replay-full') {
-        await _replayFullGame(_roundHistory, state.winner, state.winReason,
-          state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch');
+        action = await _replayFullGame(_roundHistory, state.winner, state.winReason,
+          state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch') ?? 'done';
+        break;
       }
-    } while (action === 'replay' || action === 'replay-full');
+    } while (action === 'replay');
     if (action === 'viewmap') {
       state.fogOfWar = false;
       redraw();
@@ -1253,6 +1262,40 @@ function _saveCompletedSpGame(winner, winReason) {
   _saveCompletedSpIndex(index.filter(g => !pruned.includes(g)));
 }
 
+/**
+ * Fire-and-forget: upload the just-completed SP game to the server.
+ * Silently swallows errors — local localStorage copy is always authoritative.
+ */
+function _uploadSpGame(winner, winReason) {
+  if (!state || !_roundHistory.length) return;
+  const base = window.BRIMSTONE_SERVER || '';
+  if (!base && !location.hostname) return;  // no server configured
+
+  const mode    = !state.heroIsAI ? 'hvai' : !state.witchIsAI ? 'aivh' : 'aivai';
+  const gameId  = _genSaveId();
+  const payload = {
+    gameId,
+    heroName:    state.hero?.displayName  ?? 'Hero',
+    witchName:   state.witch?.displayName ?? 'Witch',
+    winner:      winner    ?? '',
+    winReason:   winReason ?? '',
+    totalRounds: state.round - 1,
+    gameVersion: VERSION,
+    mode,
+    rounds: _roundHistory.map(r => ({
+      roundNum: r.roundNum,
+      preState: typeof r.preState === 'string' ? r.preState : JSON.stringify(r.preState),
+      steps:    typeof r.steps    === 'string' ? r.steps    : JSON.stringify(r.steps),
+    })),
+  };
+
+  fetch(`${base}/api/sp/completed-games`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(payload),
+  }).catch(() => {});  // silently ignore network errors
+}
+
 /** Render the completed games tab on the SP setup screen. */
 function _renderCompletedSpGames() {
   const list = document.getElementById('sp-completed-list');
@@ -1344,7 +1387,7 @@ async function _startSpReplay(data) {
  * @param {Function} [redrawFn] — defaults to local redraw()
  */
 async function _replayFullGame(rounds, winner, winReason, heroName, witchName, redrawFn) {
-  if (!rounds.length || !ui || !renderer) return;
+  if (!rounds.length || !ui || !renderer) return null;
   const draw = redrawFn ?? redraw;
 
   _replayAborted   = false;
@@ -1367,7 +1410,9 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
     }
   });
 
-  let lastSteps = null;
+  let lastSteps    = null;
+  let lastRoundNum = 0;
+  let lastPreState = null;
 
   for (let i = 0; i < rounds.length; i++) {
     if (_replayAborted) break;
@@ -1379,24 +1424,24 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
       continue;
     }
 
-    // ── Pause spin ─────────────────────────────────────────────────────────
-    while (_replayPaused && !_replayAborted) {
-      await _delay(50);
-    }
-    if (_replayAborted) break;
-
     const round = rounds[i];
     const preStateData = typeof round.preState === 'string'
       ? JSON.parse(round.preState)
       : round.preState;
     const preState = deserializeState(preStateData);
 
-    // Restore to the pre-round game state; disable fog for replay
+    // Restore state and draw BEFORE the pause check — canvas is always valid
     Object.assign(state, preState);
-    state.hero      = preState.hero;
-    state.witch     = preState.witch;
-    state.fogOfWar  = false;
+    state.hero     = preState.hero;
+    state.witch    = preState.witch;
+    state.fogOfWar = false;
     draw();
+
+    // ── Pause spin (canvas has valid content at this point) ─────────────────
+    while (_replayPaused && !_replayAborted) {
+      await _delay(50);
+    }
+    if (_replayAborted) break;
 
     // Show hazard flashes from the previous round's endRound() before animating
     if (preState.lastNightDamage?.length || preState.lastDayDamage?.length) {
@@ -1418,7 +1463,9 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
     }
 
     const stepsRaw = typeof round.steps === 'string' ? JSON.parse(round.steps) : round.steps;
-    lastSteps = stepsRaw;
+    lastSteps    = stepsRaw;
+    lastRoundNum = typeof round.roundNum === 'number' ? round.roundNum : i + 1;
+    lastPreState = preState;
 
     await _animateResolutionSteps(stepsRaw, finalEntities, draw, null, null);
 
@@ -1444,6 +1491,8 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
   _replaySpeedMult = 0.5;
   ui.speedMode     = savedSpeedMode;
 
+  let summaryAction = null;
+
   if (!_replayAborted) {
     // Show final game state with fog off
     state.gameOver  = true;
@@ -1454,28 +1503,22 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
 
     // Show the last-turn summary (no next-turn option, no full-replay button)
     if (lastSteps) {
-      const lastRound = rounds[rounds.length - 1];
-      const lastRoundNum = typeof lastRound.roundNum === 'number' ? lastRound.roundNum : rounds.length;
-      let action;
       do {
-        action = await ui._showResolutionSummary(lastSteps, lastRoundNum, {
+        summaryAction = await ui._showResolutionSummary(lastSteps, lastRoundNum, {
           prevScore: null, prevNodes: null, humanFaction: null, fogOfWar: false,
           gameOver: true, winner, winReason, hasFullReplay: false,
         });
-        if (action === 'replay') {
-          // Replay last round in-place
-          const preStateData = typeof lastRound.preState === 'string'
-            ? JSON.parse(lastRound.preState)
-            : lastRound.preState;
-          const preState = deserializeState(preStateData);
-          state.entities = preState.entities;
+        if (summaryAction === 'replay' && lastPreState) {
+          state.entities = lastPreState.entities;
           state.fogOfWar = false;
           draw();
-          await _animateResolutionSteps(lastSteps, lastSteps.at(-1)?.entitySnapshot ?? preState.entities, draw, null, null);
+          await _animateResolutionSteps(lastSteps, lastSteps.at(-1)?.entitySnapshot ?? lastPreState.entities, draw, null, null);
         }
-      } while (action === 'replay');
+      } while (summaryAction === 'replay');
     }
   }
+
+  return summaryAction;  // caller may act on 'viewmap' / 'restart' / null
 }
 
 // ── Multiplayer completed games ───────────────────────────────────────────────
@@ -2179,12 +2222,13 @@ function _createMpClient() {
               _resolving = true;
             } else if (action === 'replay-full') {
               _resolving = true;
-              await _replayFullGame(_onlineRoundHistory, state.winner, state.winReason,
+              action = await _replayFullGame(_onlineRoundHistory, state.winner, state.winReason,
                 state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch',
-                redrawOnline);
+                redrawOnline) ?? 'done';
               _resolving = true;
+              break;
             }
-          } while (action === 'replay' || action === 'replay-full');
+          } while (action === 'replay');
           _resolving = false;
           // Animate score bar changes after summary is dismissed
           ui._animateScoreBar(prevScore, prevNodes);
@@ -2435,27 +2479,25 @@ const _spectateParam = new URLSearchParams(location.search).get('spectate')
                     ?? new URLSearchParams(location.search).get('room');
 if (_spectateParam) initSpectator(_spectateParam);
 
-// Auto-start admin replay when ?replayGame=<gameId> is in the URL.
+// Auto-start admin replay when ?replayGame=<gameId>[&source=sp] is in the URL.
 // This allows /replay?replayGame=X (served as index.html) to work automatically.
-const _replayGameParam = new URLSearchParams(location.search).get('replayGame');
-if (_replayGameParam) _loadAdminReplay(_replayGameParam);
+const _replayGameParam   = new URLSearchParams(location.search).get('replayGame');
+const _replaySourceParam = new URLSearchParams(location.search).get('source') ?? 'mp';
+if (_replayGameParam) _loadAdminReplay(_replayGameParam, _replaySourceParam);
 
-async function _loadAdminReplay(gameId) {
+async function _loadAdminReplay(gameId, source = 'mp') {
+  const base = source === 'sp'
+    ? `/admin/api/sp/completed-games/${encodeURIComponent(gameId)}`
+    : `/admin/api/completed-games/${encodeURIComponent(gameId)}`;
+
   try {
     const [meta, rounds] = await Promise.all([
-      fetch(`/admin/api/completed-games/${encodeURIComponent(gameId)}`).then(r => {
-        if (!r.ok) throw new Error(r.status);
-        return r.json();
-      }),
-      fetch(`/admin/api/completed-games/${encodeURIComponent(gameId)}/rounds`).then(r => {
-        if (!r.ok) throw new Error(r.status);
-        return r.json();
-      }),
+      fetch(base).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }),
+      fetch(`${base}/rounds`).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }),
     ]);
 
     if (!rounds.length) { alert('No replay rounds found for this game.'); return; }
 
-    // Map server-side column names to the format _startMpReplay expects
     const replayRounds = rounds.map(r => ({
       roundNum: r.round_num,
       preState: r.pre_state_json,
