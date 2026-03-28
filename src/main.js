@@ -1637,10 +1637,10 @@ function _createMpClient() {
 
       // Snapshot node control BEFORE resolution using pre-step entities
       const preResEntities = steps[0]?.entitySnapshot ?? state.entities;
-      const prevNodes = (state.witchObjectives ?? []).map(obj => {
-        const holder = preResEntities.find(e => e.alive && e.col === obj.col && e.row === obj.row);
-        return { col: obj.col, row: obj.row, label: obj.label, owner: holder?.owner ?? null };
-      });
+      const prevNodes = (state.witchObjectives ?? []).map(obj => ({
+        col: obj.col, row: obj.row, label: obj.label,
+        owner: nodeController(obj, preResEntities),
+      }));
       const prevScore = { hero: state.nodeScore?.hero ?? 0, witch: state.nodeScore?.witch ?? 0 };
 
       _animateResolutionSteps(steps, finalEntities, redrawOnline, mp?.myFaction, mp?.myPlayerId ?? null).then(async () => {
