@@ -536,7 +536,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             maxZoom:      _isStep ? 3.5 : 2.0,
             duration:     _isStep ? 400 : 250,
           });
-          await _delay(_isStep ? 400 : (_cspd === 'fast' ? 100 : 280));
+          await _delay(_isStep ? 400 : (_cspd === 'vfast' ? 190 : 280));
         }
       }
     }
@@ -593,7 +593,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     if (moveAnims.length > 0) {
       hadMove = true;
       const _spd = ui?.speedMode ?? 'cinematic';
-      const hopDelay = _spd === 'instant' ? 0 : _spd === 'fast' ? 120 : 320;
+      const hopDelay = _spd === 'instant' ? 0 : _spd === 'vfast' ? 210 : 320;
 
       // Determine max hops across all moving entities
       const maxHops = moveAnims.reduce((m, a) => Math.max(m, a.path.length), 0);
@@ -632,7 +632,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       redrawFn();
     }
 
-    if (!_replayActive) {
+    const _suppressDialogs = _replayActive || ui?.speedMode === 'fast' || ui?.speedMode === 'vfast' || ui?.speedMode === 'instant';
+    if (!_suppressDialogs) {
       for (const entry of pendingDialogs) {
         redrawFn();
         if (entry.encounterUnit) {
@@ -688,7 +689,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
                 actorSnap.type, actorSnap.owner, actorSnap.title ?? null,
               );
               redrawFn();
-              await _delay(speed === 'fast' ? 150 : 280);
+              await _delay(speed === 'vfast' ? 190 : 280);
             }
 
             // ── Step 2: Battle hex highlights ────────────────────────────────
@@ -701,7 +702,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               redrawFn();
             }
 
-            // ── Step 3: Dialog (cinematic/step) or toast+floater (fast) ────────
+            // ── Step 3: Dialog (cinematic/step) or toast+floater (fast/vfast) ─
             if (speed === 'cinematic' || speed === 'step') {
               // Full dialog for every battle — no significance filter.
               // Offset camera so the map is visible beside the docked dialog.
@@ -719,17 +720,17 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
               // Drain all floaters (HP text 1800ms, death burst 600ms) before next battle.
               await renderer.waitForAnimations();
-            } else if (speed === 'fast') {
-              // On a miss (no damage to target) show a randomised flavour word;
-              // hits are already communicated by the red HP-change floater.
+            } else if (speed === 'fast' || speed === 'vfast') {
+              // Toast + floater only — no dialog.
+              // On a miss show a randomised flavour word; hits communicate via HP floater.
               if (!result.hit) {
                 const _MISS_TEXT = ['miss', 'dodged', 'blocked', 'parried', 'deflected'];
                 const missText = _MISS_TEXT[Math.floor(Math.random() * _MISS_TEXT.length)];
                 renderer.addFlash(targetSnap.col, targetSnap.row, missText, 'rgba(100,100,100,0.1)', 1000, 0.65, '#888');
               }
               _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
-              // Short fixed wait — floaters from different battles can overlap in fast mode.
-              await _delay(400);
+              // Brief wait so floaters from different battles don't pile up.
+              await _delay(speed === 'vfast' ? 270 : 400);
             } else {
               // Instant — result animations only, no wait.
               _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
@@ -812,7 +813,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         if (_spd2 === 'step') {
           await ui._waitForStep();
         } else if (_spd2 !== 'instant') {
-          await _delay(_spd2 === 'fast' ? 80 : hadMove ? 300 : 250);
+          await _delay(_spd2 === 'vfast' ? (hadMove ? 200 : 165) : hadMove ? 300 : 250);
         }
       }
     } else if (events.length > 0 && !_autoplay) {
@@ -821,7 +822,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (_spd3 === 'step') {
         await ui._waitForStep();
       } else if (_spd3 !== 'instant') {
-        await _delay(_spd3 === 'fast' ? 50 : 150);
+        await _delay(_spd3 === 'vfast' ? 100 : 150);
       }
     }
   }

@@ -470,9 +470,10 @@ export class Renderer {
     const sizeByH = H / (1.5 * MAP_ROWS + 0.5);
     this.hexSize = Math.max(MIN_HEX_SIZE, Math.floor(Math.min(sizeByW, sizeByH)));
 
-    // Canvas fills the wrapper exactly so no gaps appear on any edge
-    this.canvas.width  = W;
-    this.canvas.height = H;
+    // Canvas fills the wrapper exactly — only update if size actually changed
+    // to avoid unnecessary clears that cause blank-frame flashes.
+    if (this.canvas.width  !== W) this.canvas.width  = W;
+    if (this.canvas.height !== H) this.canvas.height = H;
 
     // Center the hex grid within the canvas
     const hs = this.hexSize;
