@@ -656,6 +656,9 @@ export class GameState {
       for (const e of endangered) {
         const t = this.tiles.get(hexKey(e.col, e.row));
         if (t && t.fortifyLevel > 0) {
+          const line = `🏰 ${e.displayName} is sheltered by the fort! (level ${t.fortifyLevel})`;
+          this.addLog(line);
+          this.lastHazardLog.push({ text: line, entityId: e.id, ownerId: e.ownerId ?? null });
           continue;
         }
         this.lastNightDamage.push({ col: e.col, row: e.row, dmg });
@@ -687,6 +690,9 @@ export class GameState {
       for (const e of sunburned) {
         const t = this.tiles.get(hexKey(e.col, e.row));
         if (t && t.fortifyLevel > 0) {
+          const line = `🏰 ${e.displayName} is sheltered by the fort! (level ${t.fortifyLevel})`;
+          this.addLog(line);
+          this.lastHazardLog.push({ text: line, entityId: e.id, ownerId: e.ownerId ?? null });
           continue;
         }
         this.lastDayDamage.push({ col: e.col, row: e.row, dmg });
