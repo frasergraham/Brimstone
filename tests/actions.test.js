@@ -133,6 +133,19 @@ describe('executeMove', () => {
     assert.equal(r.cost, 1);
   });
 
+  test('returns a path array ending at the destination', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const target = firstReachable(state, hero);
+    if (!target) return;
+    const r = executeMove(state, hero, target.col, target.row);
+    assert.ok(Array.isArray(r.path), 'result.path should be an array');
+    assert.ok(r.path.length >= 1, 'path should have at least one step');
+    const last = r.path[r.path.length - 1];
+    assert.equal(last.col, target.col);
+    assert.equal(last.row, target.row);
+  });
+
   test('fails when target tile is a river', () => {
     const state = freshState();
     const hero = state.hero;
