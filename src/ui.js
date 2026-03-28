@@ -1916,7 +1916,7 @@ export class UIController {
       `${actorSnap.name} → ${targetSnap.name}  [${result.attackRoll}v${result.defenseRoll}]  ${outcome}`;
     container.appendChild(toast);
 
-    const displayMs = this.speedMode === 'vfast' ? 600
+    const displayMs = this.speedMode === 'vfast' ? 500
                     : this.speedMode === 'fast'    ? 1200
                     :                               2000;
     setTimeout(() => {

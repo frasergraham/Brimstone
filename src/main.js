@@ -536,7 +536,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             maxZoom:      _isStep ? 3.5 : 2.0,
             duration:     _isStep ? 400 : 250,
           });
-          await _delay(_isStep ? 400 : (_cspd === 'vfast' ? 190 : 280));
+          await _delay(_isStep ? 400 : (_cspd === 'vfast' ? 140 : 280));
         }
       }
     }
@@ -593,7 +593,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     if (moveAnims.length > 0) {
       hadMove = true;
       const _spd = ui?.speedMode ?? 'cinematic';
-      const hopDelay = _spd === 'vfast' ? 210 : 320;
+      const hopDelay = _spd === 'vfast' ? 160 : 320;
 
       // Determine max hops across all moving entities
       const maxHops = moveAnims.reduce((m, a) => Math.max(m, a.path.length), 0);
@@ -687,7 +687,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               actorSnap.type, actorSnap.owner, actorSnap.title ?? null,
             );
             redrawFn();
-            await _delay(speed === 'vfast' ? 190 : 280);
+            await _delay(speed === 'vfast' ? 140 : 280);
 
             // ── Step 2: Battle hex highlights ────────────────────────────────
             {
@@ -727,7 +727,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               }
               _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
               // Brief wait so floaters from different battles don't pile up.
-              await _delay(speed === 'vfast' ? 270 : 400);
+              await _delay(speed === 'vfast' ? 200 : 400);
             }
 
             // ── Step 4: Clear highlights, animate lunge return ───────────────
@@ -807,7 +807,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         if (_spd2 === 'step') {
           await ui._waitForStep();
         } else {
-          await _delay(_spd2 === 'vfast' ? (hadMove ? 200 : 165) : hadMove ? 300 : 250);
+          await _delay(_spd2 === 'vfast' ? (hadMove ? 150 : 125) : hadMove ? 300 : 250);
         }
       }
     } else if (events.length > 0 && !_autoplay) {
@@ -816,7 +816,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (_spd3 === 'step') {
         await ui._waitForStep();
       } else {
-        await _delay(_spd3 === 'vfast' ? 100 : 150);
+        await _delay(_spd3 === 'vfast' ? 75 : 150);
       }
     }
   }
@@ -1436,7 +1436,7 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
         ui.setReplayPlayState('ff');
         break;
       case 'vff':
-        _replaySpeedMult = 1.5; _replayPaused = false;
+        _replaySpeedMult = 2.0; _replayPaused = false;
         ui.setReplayPlayState('vff');
         break;
       case 'pause':

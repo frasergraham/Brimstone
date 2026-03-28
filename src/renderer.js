@@ -285,7 +285,7 @@ export class Renderer {
     this._lungeAnims = [];
   }
 
-  /** Clear all in-flight canvas animations (moves, flashes, deaths, lunges, battle highlights). */
+  /** Clear all in-flight canvas animations (moves, flashes, deaths, lunges, battle highlights, zoom). */
   clearAnimations() {
     this._moveAnims              = [];
     this._flashes                = [];
@@ -293,6 +293,7 @@ export class Renderer {
     this._lungeAnims             = [];
     this._battleCombatantHexes   = [];
     this._battleAllyHexes        = [];
+    this._zoomAnim               = null;  // cancel any ongoing camera zoom so it doesn't bleed into next round
   }
 
   /**
@@ -470,10 +471,17 @@ export class Renderer {
     const sizeByH = H / (1.5 * MAP_ROWS + 0.5);
     this.hexSize = Math.max(MIN_HEX_SIZE, Math.floor(Math.min(sizeByW, sizeByH)));
 
-    // Canvas fills the wrapper exactly — only update if size actually changed
-    // to avoid unnecessary clears that cause blank-frame flashes.
-    if (this.canvas.width  !== W) this.canvas.width  = W;
-    if (this.canvas.height !== H) this.canvas.height = H;
+    // Canvas fills the wrapper exactly — only update if size actually changed.
+    // After a canvas dimension change the GPU may composite a transparent frame
+    // before the next draw() call, so immediately fill the background to prevent
+    // a blank flash.
+    let sizeChanged = false;
+    if (this.canvas.width  !== W) { this.canvas.width  = W; sizeChanged = true; }
+    if (this.canvas.height !== H) { this.canvas.height = H; sizeChanged = true; }
+    if (sizeChanged && this.ctx) {
+      this.ctx.fillStyle = '#0d1117';
+      this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    }
 
     // Center the hex grid within the canvas
     const hs = this.hexSize;
