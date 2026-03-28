@@ -1277,13 +1277,13 @@ export class HeroAI {
       if (heroTN && heroTN.type === TileType.BUILDING && !sim.isExplored(hero.col, hero.row)) {
         return { type: PlanActionType.EXPLORE, entityId: hero.id };
       }
-      // 7b. Fortify sheltered building — invest up to level 3 at dusk/night for defence
+      // 7b. Fortify sheltered building — invest up to level 2 at dusk/night for defence
       if (heroTN && heroTN.type === TileType.BUILDING) {
         const fortLevel = heroTN.fortifyLevel || 0;
         const shared = sim.inventory.shared;
         const hasWood  = (shared[ResourceType.WOOD]  || 0) > 0;
         const hasMetal = (shared[ResourceType.METAL] || 0) > 0;
-        if (fortLevel < 3 && (hasWood || hasMetal)) {
+        if (fortLevel < 2 && (hasWood || hasMetal)) {
           return { type: PlanActionType.FORTIFY, entityId: hero.id };
         }
       }
@@ -1333,11 +1333,11 @@ export class HeroAI {
       }
     }
 
-    // 5c. Route to a nearby unexplored building when the hero is alone.
-    //     Finding survivors is higher value than node-racing in the early game.
+    // 5c. Route to an immediately nearby unexplored building when the hero is alone.
+    //     Only detour for buildings within 2 hexes — don't leave the main route.
     if (survivors.length === 0 && witchNodeCount < 2) {
       const nearBuilding = _nearestUnexploredBuilding(sim, hero);
-      if (nearBuilding && hexDistance(hero.col, hero.row, nearBuilding.col, nearBuilding.row) <= 4) {
+      if (nearBuilding && hexDistance(hero.col, hero.row, nearBuilding.col, nearBuilding.row) <= 2) {
         const a = tryMove(hero, nearBuilding); if (a) return a;
       }
     }
