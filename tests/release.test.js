@@ -71,7 +71,6 @@ describe('Release script', () => {
       'node scripts/release.js --dry-run patch',
       { cwd: ROOT, encoding: 'utf8' },
     );
-    // Should show current → bumped version
     assert.match(output, /Version:.*→/, 'Should display version bump');
     assert.match(output, /dry run/, 'Should indicate dry run');
 
@@ -114,8 +113,32 @@ describe('Release script', () => {
       'node scripts/release.js --dry-run patch',
       { cwd: ROOT, encoding: 'utf8' },
     );
-    // Should have at least one bullet point from git history
     assert.match(output, /- .+/, 'Should contain at least one release note bullet');
+  });
+
+  test('non-dry-run rejects when not on dev branch', () => {
+    // We are running tests on a feature branch, not dev, so this should fail
+    const branch = execSync('git rev-parse --abbrev-ref HEAD', {
+      cwd: ROOT, encoding: 'utf8',
+    }).trim();
+
+    if (branch !== 'dev') {
+      assert.throws(() => {
+        execSync('node scripts/release.js patch 2>&1', {
+          cwd: ROOT, encoding: 'utf8',
+        });
+      }, /./,
+      'Should reject release when not on dev branch');
+    }
+  });
+
+  test('--dry-run skips branch check', () => {
+    // dry-run should work on any branch
+    const output = execSync(
+      'node scripts/release.js --dry-run patch',
+      { cwd: ROOT, encoding: 'utf8' },
+    );
+    assert.match(output, /dry run/);
   });
 });
 

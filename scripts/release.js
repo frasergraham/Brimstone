@@ -1,21 +1,26 @@
 #!/usr/bin/env node
-// Release promotion script: bumps version, generates customer-friendly release
-// notes from git history, and updates CHANGELOG.json.
+// Release promotion script: bumps version on dev, generates customer-friendly
+// release notes, commits, tags, and fast-forward merges to the prod branch.
 //
 // Usage:
-//   node scripts/release.js patch          # 1.0.4 → 1.0.5
-//   node scripts/release.js minor          # 1.0.4 → 1.1.0
-//   node scripts/release.js major          # 1.0.4 → 2.0.0
-//   node scripts/release.js --dry-run patch # preview without writing
+//   node scripts/release.js patch            # 1.0.4 → 1.0.5
+//   node scripts/release.js minor            # 1.0.4 → 1.1.0
+//   node scripts/release.js major            # 1.0.4 → 2.0.0
+//   node scripts/release.js --dry-run patch  # preview without writing or committing
 //
-// What it does:
-//   1. Reads the current version from src/version.js
-//   2. Bumps it according to the semver level
-//   3. Collects git commits since the last version tag (or all commits if no tag)
-//   4. Generates customer-friendly release notes (groups by feat/fix/chore)
-//   5. Prepends the new release to CHANGELOG.json
-//   6. Writes the bumped version to src/version.js
-//   7. Prints a summary of changes
+// Flow:
+//   1. Verifies you are on the dev branch with a clean working tree
+//   2. Reads the current version from src/version.js
+//   3. Bumps it according to the semver level
+//   4. Collects git commits since the last version tag (or all if no tag)
+//   5. Generates customer-friendly release notes (groups by feat/fix/chore)
+//   6. Prepends the new release to CHANGELOG.json
+//   7. Writes the bumped version to src/version.js
+//   8. Commits the release on dev and tags it
+//   9. Fast-forward merges dev into the prod branch (master)
+//  10. Returns to dev
+//
+// The version bump originates on dev and flows forward — no back-merge needed.
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
@@ -24,6 +29,20 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
+
+const DEV_BRANCH  = 'dev';
+const PROD_BRANCH = 'master';
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function git(cmd, opts = {}) {
+  return execSync(`git ${cmd}`, { cwd: ROOT, encoding: 'utf8', ...opts }).trim();
+}
+
+function die(msg) {
+  console.error(`Error: ${msg}`);
+  process.exit(1);
+}
 
 // ── Parse args ────────────────────────────────────────────────────────────────
 
@@ -36,14 +55,29 @@ if (!level) {
   process.exit(1);
 }
 
+// ── Pre-flight checks ────────────────────────────────────────────────────────
+
+if (!dryRun) {
+  const branch = git('rev-parse --abbrev-ref HEAD');
+  if (branch !== DEV_BRANCH) {
+    die(`Must be on '${DEV_BRANCH}' branch to release (currently on '${branch}').\n` +
+        `  Run: git checkout ${DEV_BRANCH}`);
+  }
+
+  const status = git('status --porcelain');
+  if (status) {
+    die('Working tree is not clean. Commit or stash your changes first.\n' +
+        git('status --short'));
+  }
+}
+
 // ── Read current version ──────────────────────────────────────────────────────
 
 const VERSION_FILE = resolve(ROOT, 'src/version.js');
 const versionSrc = readFileSync(VERSION_FILE, 'utf8');
 const versionMatch = versionSrc.match(/VERSION\s*=\s*'(\d+\.\d+\.\d+)'/);
 if (!versionMatch) {
-  console.error('Could not parse version from src/version.js');
-  process.exit(1);
+  die('Could not parse version from src/version.js');
 }
 const currentVersion = versionMatch[1];
 
@@ -64,25 +98,17 @@ console.log(`Version: ${currentVersion} → ${newVersion} (${level})`);
 // ── Collect git commits since last tag ────────────────────────────────────────
 
 function getCommitsSinceLastTag() {
-  // Find the latest version tag (v1.0.4, v1.0.3, etc.)
   let range;
   try {
-    const lastTag = execSync('git describe --tags --abbrev=0 2>/dev/null', {
-      cwd: ROOT, encoding: 'utf8',
-    }).trim();
+    const lastTag = git('describe --tags --abbrev=0 2>/dev/null');
     range = `${lastTag}..HEAD`;
     console.log(`Collecting commits since tag: ${lastTag}`);
   } catch {
-    // No tags yet — use all commits
     range = 'HEAD';
     console.log('No previous version tag found — using full history');
   }
 
-  const raw = execSync(
-    `git log ${range} --pretty=format:"%s" --no-merges`,
-    { cwd: ROOT, encoding: 'utf8' },
-  ).trim();
-
+  const raw = git(`log ${range} --pretty=format:"%s" --no-merges`);
   return raw ? raw.split('\n') : [];
 }
 
@@ -97,29 +123,27 @@ console.log(`Found ${commits.length} commit(s) to summarize.\n`);
 
 // ── Categorize commits ────────────────────────────────────────────────────────
 
-// Conventional-commit prefix → customer-friendly category
 const CATEGORIES = [
-  { prefix: /^feat[:(]/i,    label: 'New Features',  icon: 'new' },
-  { prefix: /^fix[:(]/i,     label: 'Bug Fixes',     icon: 'fix' },
-  { prefix: /^perf[:(]/i,    label: 'Performance',   icon: 'perf' },
-  { prefix: /^refactor[:(]/i, label: 'Improvements', icon: 'improve' },
-  { prefix: /^chore[:(]/i,   label: 'Maintenance',   icon: 'chore' },
-  { prefix: /^docs[:(]/i,    label: 'Documentation', icon: 'docs' },
-  { prefix: /^test[:(]/i,    label: 'Testing',       icon: 'test' },
-  { prefix: /^style[:(]/i,   label: 'Visual',        icon: 'style' },
+  { prefix: /^feat[:(]/i,     label: 'New Features' },
+  { prefix: /^fix[:(]/i,      label: 'Bug Fixes' },
+  { prefix: /^perf[:(]/i,     label: 'Performance' },
+  { prefix: /^refactor[:(]/i, label: 'Improvements' },
+  { prefix: /^chore[:(]/i,    label: 'Maintenance' },
+  { prefix: /^docs[:(]/i,     label: 'Documentation' },
+  { prefix: /^test[:(]/i,     label: 'Testing' },
+  { prefix: /^style[:(]/i,    label: 'Visual' },
 ];
 
-function categorize(commits) {
-  const groups = new Map();  // label → messages[]
+function categorize(commitMessages) {
+  const groups = new Map();
   const uncategorized = [];
 
-  for (const msg of commits) {
+  for (const msg of commitMessages) {
     let matched = false;
     for (const cat of CATEGORIES) {
       if (cat.prefix.test(msg)) {
-        const cleaned = cleanMessage(msg);
         if (!groups.has(cat.label)) groups.set(cat.label, []);
-        groups.get(cat.label).push(cleaned);
+        groups.get(cat.label).push(cleanMessage(msg));
         matched = true;
         break;
       }
@@ -129,7 +153,6 @@ function categorize(commits) {
     }
   }
 
-  // Put uncategorized commits under "Other Changes"
   if (uncategorized.length > 0) {
     groups.set('Other Changes', uncategorized);
   }
@@ -138,10 +161,7 @@ function categorize(commits) {
 }
 
 function cleanMessage(msg) {
-  // Strip conventional-commit prefix: "feat: foo bar" → "Foo bar"
-  // Also handle "feat(scope): msg" format
   let cleaned = msg.replace(/^\w+(\([^)]*\))?[:\s]+/, '');
-  // Capitalize first letter
   cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
   return cleaned;
 }
@@ -152,7 +172,6 @@ const grouped = categorize(commits);
 
 function generateNotes(groups) {
   const notes = [];
-  // Preferred display order
   const order = [
     'New Features', 'Bug Fixes', 'Performance', 'Improvements',
     'Visual', 'Other Changes', 'Maintenance', 'Documentation', 'Testing',
@@ -160,13 +179,10 @@ function generateNotes(groups) {
 
   for (const label of order) {
     if (groups.has(label)) {
-      for (const note of groups.get(label)) {
-        notes.push(note);
-      }
+      for (const note of groups.get(label)) notes.push(note);
     }
   }
 
-  // Catch any labels not in the order list
   for (const [label, items] of groups) {
     if (!order.includes(label)) {
       for (const note of items) notes.push(note);
@@ -186,7 +202,6 @@ function generateSummary(groups) {
 
   if (parts.length === 0) return 'Maintenance and improvements';
 
-  // "New features, bug fixes, and improvements"
   if (parts.length === 1) return parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
   const last = parts.pop();
   return (parts.join(', ') + ', and ' + last).replace(/^./, c => c.toUpperCase());
@@ -209,7 +224,7 @@ if (dryRun) {
   process.exit(0);
 }
 
-// ── Update CHANGELOG.json ─────────────────────────────────────────────────────
+// ── Write files ──────────────────────────────────────────────────────────────
 
 const CHANGELOG_FILE = resolve(ROOT, 'CHANGELOG.json');
 let changelog;
@@ -220,19 +235,9 @@ try {
 }
 
 const today = new Date().toISOString().slice(0, 10);
-const newEntry = {
-  version: newVersion,
-  date: today,
-  summary,
-  notes,
-};
-
-// Prepend new release at the top
-changelog.unshift(newEntry);
+changelog.unshift({ version: newVersion, date: today, summary, notes });
 writeFileSync(CHANGELOG_FILE, JSON.stringify(changelog, null, 2) + '\n');
-console.log(`Updated CHANGELOG.json`);
-
-// ── Update src/version.js ─────────────────────────────────────────────────────
+console.log('Updated CHANGELOG.json');
 
 const newVersionSrc = versionSrc.replace(
   /VERSION\s*=\s*'[^']+'/,
@@ -241,11 +246,37 @@ const newVersionSrc = versionSrc.replace(
 writeFileSync(VERSION_FILE, newVersionSrc);
 console.log(`Updated src/version.js → ${newVersion}`);
 
-// ── Done ──────────────────────────────────────────────────────────────────────
+// ── Commit, tag, and promote ─────────────────────────────────────────────────
 
-console.log(`\nRelease v${newVersion} prepared. Next steps:`);
-console.log(`  1. Review changes:  git diff`);
-console.log(`  2. Run tests:       npm test`);
-console.log(`  3. Commit:          git add -A && git commit -m "release: v${newVersion}"`);
-console.log(`  4. Tag:             git tag v${newVersion}`);
-console.log(`  5. Push:            git push && git push --tags`);
+const tag = `v${newVersion}`;
+
+console.log(`\nCommitting release on ${DEV_BRANCH}...`);
+git('add src/version.js CHANGELOG.json');
+git(`commit -m "release: ${tag}"`);
+git(`tag ${tag}`);
+console.log(`Created commit and tag ${tag} on ${DEV_BRANCH}`);
+
+console.log(`\nFast-forward merging ${DEV_BRANCH} → ${PROD_BRANCH}...`);
+git(`checkout ${PROD_BRANCH}`);
+try {
+  git(`merge --ff-only ${DEV_BRANCH}`);
+  console.log(`${PROD_BRANCH} is now at ${tag}`);
+} catch (err) {
+  // Return to dev before dying
+  git(`checkout ${DEV_BRANCH}`);
+  die(
+    `Fast-forward merge failed — ${PROD_BRANCH} has diverged from ${DEV_BRANCH}.\n` +
+    `Resolve manually:\n` +
+    `  git checkout ${PROD_BRANCH}\n` +
+    `  git merge ${DEV_BRANCH}\n` +
+    `  git checkout ${DEV_BRANCH}`
+  );
+}
+
+git(`checkout ${DEV_BRANCH}`);
+console.log(`Returned to ${DEV_BRANCH}`);
+
+// ── Push ─────────────────────────────────────────────────────────────────────
+
+console.log(`\nRelease ${tag} ready. Push with:`);
+console.log(`  git push origin ${DEV_BRANCH} ${PROD_BRANCH} --tags`);
