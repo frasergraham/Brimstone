@@ -42,6 +42,22 @@ describe('generateTutorialMap', () => {
     assert.equal(t.building, BuildingType.CHURCH);
   });
 
+  test('HOUSE (survivor building) is at (2,4)', () => {
+    const { tiles } = generateTutorialMap();
+    const t = tiles.get(hexKey(2, 4));
+    assert.ok(t, 'tile exists at (2,4)');
+    assert.equal(t.type, TileType.BUILDING);
+    assert.equal(t.building, BuildingType.HOUSE);
+  });
+
+  test('HOUSE at (2,4) is road-connected to CHURCH (2,5)', () => {
+    const { tiles } = generateTutorialMap();
+    const house  = tiles.get(hexKey(2, 4));
+    const church = tiles.get(hexKey(2, 5));
+    assert.ok(house.roadDirs.has(hexKey(2, 5)),  'house connects to church');
+    assert.ok(church.roadDirs.has(hexKey(2, 4)), 'church connects to house');
+  });
+
   test('GRAVEYARD is at (7,1)', () => {
     const { tiles } = generateTutorialMap();
     const t = tiles.get(hexKey(7, 1));
@@ -163,8 +179,8 @@ describe('setForcedDice', () => {
 // ── TUTORIAL_STEPS definitions ────────────────────────────────────────────────
 
 describe('TUTORIAL_STEPS', () => {
-  test('has 14 steps', () => {
-    assert.equal(TUTORIAL_STEPS.length, 14);
+  test('has 24 steps', () => {
+    assert.equal(TUTORIAL_STEPS.length, 24);
   });
 
   test('first step id is "welcome"', () => {
@@ -214,6 +230,73 @@ describe('TUTORIAL_STEPS', () => {
     const submitStep = TUTORIAL_STEPS.find(s => s.id === 'submit_plan');
     assert.ok(submitStep, 'submit_plan step exists');
     assert.deepEqual(submitStep.witchPlan, []);
+  });
+
+  test('round-3 submit step has witchPlan: []', () => {
+    const step = TUTORIAL_STEPS.find(s => s.id === 'submit_r3');
+    assert.ok(step, 'submit_r3 step exists');
+    assert.deepEqual(step.witchPlan, []);
+  });
+
+  test('day_night step exists after watch_r1 and before combat_intro', () => {
+    const w1 = TUTORIAL_STEPS.findIndex(s => s.id === 'watch_r1');
+    const dn = TUTORIAL_STEPS.findIndex(s => s.id === 'day_night');
+    const ci = TUTORIAL_STEPS.findIndex(s => s.id === 'combat_intro');
+    assert.ok(dn > w1, 'day_night after watch_r1');
+    assert.ok(dn < ci, 'day_night before combat_intro');
+    assert.equal(TUTORIAL_STEPS[dn].trigger, 'click');
+    assert.ok(TUTORIAL_STEPS[dn].spotlight?.selector?.includes('cycle-bar'), 'spotlights cycle-bar');
+  });
+
+  test('survivor steps exist in correct order', () => {
+    const ids = ['watch_r2', 'survivor_intro', 'move_to_house', 'explore_house', 'submit_r3', 'watch_r3'];
+    const indices = ids.map(id => TUTORIAL_STEPS.findIndex(s => s.id === id));
+    for (let i = 1; i < indices.length; i++) {
+      assert.ok(indices[i] > indices[i - 1], `${ids[i]} comes after ${ids[i - 1]}`);
+    }
+  });
+
+  test('move_to_house spotlights HOUSE at (2,4)', () => {
+    const step = TUTORIAL_STEPS.find(s => s.id === 'move_to_house');
+    assert.ok(step, 'move_to_house step exists');
+    assert.equal(step.spotlight?.type, 'hex');
+    assert.equal(step.spotlight?.col, 2);
+    assert.equal(step.spotlight?.row, 4);
+    assert.equal(step.trigger?.actionType, PlanActionType.MOVE);
+  });
+
+  test('explore_house triggers on EXPLORE action', () => {
+    const step = TUTORIAL_STEPS.find(s => s.id === 'explore_house');
+    assert.ok(step, 'explore_house step exists');
+    assert.equal(step.trigger?.type, 'action_queued');
+    assert.equal(step.trigger?.actionType, PlanActionType.EXPLORE);
+  });
+
+  test('explanation steps exist after watch_r3', () => {
+    const r3  = TUTORIAL_STEPS.findIndex(s => s.id === 'watch_r3');
+    const ms  = TUTORIAL_STEPS.findIndex(s => s.id === 'multi_select');
+    const ft  = TUTORIAL_STEPS.findIndex(s => s.id === 'fortify');
+    const st  = TUTORIAL_STEPS.findIndex(s => s.id === 'score_tracker');
+    const pn  = TUTORIAL_STEPS.findIndex(s => s.id === 'power_nodes');
+    assert.ok(ms > r3,  'multi_select after watch_r3');
+    assert.ok(ft > ms,  'fortify after multi_select');
+    assert.ok(st > ft,  'score_tracker after fortify');
+    assert.ok(pn > st,  'power_nodes after score_tracker');
+    assert.equal(TUTORIAL_STEPS[ms].trigger, 'click');
+    assert.equal(TUTORIAL_STEPS[ft].trigger, 'click');
+    assert.equal(TUTORIAL_STEPS[st].trigger, 'click');
+  });
+
+  test('score_tracker spotlights #node-status element', () => {
+    const step = TUTORIAL_STEPS.find(s => s.id === 'score_tracker');
+    assert.ok(step, 'score_tracker step exists');
+    assert.equal(step.spotlight?.type, 'element');
+    assert.ok(step.spotlight?.selector?.includes('node-status'), 'spotlights node-status');
+  });
+
+  test('auto-trigger steps are watch_r1, watch_r2, watch_r3 only', () => {
+    const autoSteps = TUTORIAL_STEPS.filter(s => s.trigger === 'auto').map(s => s.id);
+    assert.deepEqual(autoSteps.sort(), ['watch_r1', 'watch_r2', 'watch_r3'].sort());
   });
 });
 
@@ -270,11 +353,21 @@ function makeStubs() {
 
 describe('TutorialConductor logic (no DOM)', () => {
   test('TUTORIAL_STEPS step indices are consistent', () => {
-    // Verify the step index lookup used in onPlanningPhaseStart() works
-    const idx = TUTORIAL_STEPS.findIndex(s => s.id === 'watch_resolution');
-    assert.ok(idx >= 0, 'watch_resolution step found');
-    const combatIdx = TUTORIAL_STEPS.findIndex(s => s.id === 'combat_intro');
-    assert.ok(combatIdx > idx, 'combat_intro comes after watch_resolution');
+    // Verify the step index lookups used in onPlanningPhaseStart() are valid
+    const r1Idx      = TUTORIAL_STEPS.findIndex(s => s.id === 'watch_r1');
+    const dayNight   = TUTORIAL_STEPS.findIndex(s => s.id === 'day_night');
+    const combatIdx  = TUTORIAL_STEPS.findIndex(s => s.id === 'combat_intro');
+    const r2Idx      = TUTORIAL_STEPS.findIndex(s => s.id === 'watch_r2');
+    const survivorIn = TUTORIAL_STEPS.findIndex(s => s.id === 'survivor_intro');
+    const r3Idx      = TUTORIAL_STEPS.findIndex(s => s.id === 'watch_r3');
+    const multiSel   = TUTORIAL_STEPS.findIndex(s => s.id === 'multi_select');
+    assert.ok(r1Idx      >= 0, 'watch_r1 step found');
+    assert.ok(dayNight   > r1Idx,    'day_night comes after watch_r1');
+    assert.ok(combatIdx  > dayNight, 'combat_intro comes after day_night');
+    assert.ok(r2Idx      > combatIdx,'watch_r2 comes after combat_intro');
+    assert.ok(survivorIn > r2Idx,    'survivor_intro comes after watch_r2');
+    assert.ok(r3Idx      > survivorIn,'watch_r3 comes after survivor_intro');
+    assert.ok(multiSel   > r3Idx,   'multi_select comes after watch_r3');
   });
 
   test('getWitchPlan returns [] when round 0 and submit_plan step has witchPlan:[]', () => {

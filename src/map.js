@@ -719,17 +719,18 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
 
 /**
  * Returns a small, hand-crafted 9×9 map for the tutorial scenario.
- * No river. Single Power Node. Two buildings near the hero start.
+ * No river. Single Power Node. Three buildings near the hero start.
  * Calls setMapDimensions(9, 9) to update the global grid size.
  *
  * Deliberately minimal — the tutorial should be legible, not complex.
  *
  * Layout (col, row):
  *   INN      (2,6)  — hero start
- *   CHURCH   (2,5)  — exploration target, adjacent north of INN
+ *   CHURCH   (2,5)  — first exploration target, adjacent north of INN
+ *   HOUSE    (2,4)  — survivor building north of Church (on the road)
  *   GRAVEYARD(7,1)  — witch start
  *   Forest cluster  — (4,2),(5,2),(4,3),(6,2) for visual depth
- *   Road            — INN ↔ CHURCH ↔ tile(2,4) ↔ tile(3,4)
+ *   Road            — INN ↔ CHURCH ↔ HOUSE ↔ tile(3,4)
  *   Power Node      — center (4,4), cluster hexes (4,4),(5,4),(4,5)
  */
 export function generateTutorialMap() {
@@ -763,15 +764,17 @@ export function generateTutorialMap() {
     if (t && t.type === TileType.GRASS) t.type = TileType.FOREST;
   }
 
-  // ── Road: INN ↔ CHURCH ↔ (2,4) ↔ (3,4) ────────────────────────────────────
+  // ── HOUSE at (2,4) — survivor building on the road north of CHURCH ───────────
+  const house = tiles.get(hexKey(2, 4));
+  house.type = TileType.BUILDING; house.building = BuildingType.HOUSE; house.fortifyLevel = 1;
+  // hiddenSurvivor is set by initTutorial() after state creation
+
+  // ── Road: INN ↔ CHURCH ↔ HOUSE ↔ (3,4) ─────────────────────────────────────
   inn.roadDirs.add(hexKey(2, 5));
   church.roadDirs.add(hexKey(2, 6));
   church.roadDirs.add(hexKey(2, 4));
-
-  const road24 = tiles.get(hexKey(2, 4));
-  road24.type = TileType.ROAD;
-  road24.roadDirs.add(hexKey(2, 5));
-  road24.roadDirs.add(hexKey(3, 4));
+  house.roadDirs.add(hexKey(2, 5));
+  house.roadDirs.add(hexKey(3, 4));
 
   const road34 = tiles.get(hexKey(3, 4));
   road34.type = TileType.ROAD;

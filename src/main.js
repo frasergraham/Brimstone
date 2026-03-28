@@ -125,6 +125,10 @@ function initTutorial() {
   const tutMinion = createMinion(3, 5, 'witch');
   state.entities.push(tutMinion);
 
+  // Guarantee a survivor in the HOUSE at (2,4) for the round-3 exploration demo.
+  const houseTile = state.tiles.get(_hexKey(2, 4));
+  if (houseTile) houseTile.hiddenSurvivor = true;
+
   // No AI helpers for tutorial — TutorialConductor drives the witch plan.
   witchAI = null;
   heroAI  = null;
@@ -174,6 +178,10 @@ function _startLocalPlanningPhase() {
   // Tutorial mode: hero always plans; conductor provides scripted witch plan.
   if (_tutorialConductor) {
     _tutorialConductor.onPlanningPhaseStart();
+    // After round 3 (survivor rescue) the tutorial is in explanation-only mode —
+    // no more planning rounds.  We still call onPlanningPhaseStart so the conductor
+    // can advance to the explanation steps, but we don't enter planning mode.
+    if (_tutorialConductor._round >= 3) return;
     ui.enterPlanningMode('hero', state.heroActionsLeft);
     ui.onPlanSubmit = (heroPlan) => _onTutorialPlanSubmit(heroPlan);
     return;
