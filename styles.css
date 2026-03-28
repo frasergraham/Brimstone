@@ -2174,8 +2174,11 @@ canvas { touch-action: pan-x pan-y; }
   align-items: center;
   gap: 0.2rem;
   line-height: 1;
-  transition: background 0.15s;
+  transition: background 0.15s, border-color 0.15s;
   writing-mode: vertical-rl;
+  /* Progress indicator visible when panel is collapsed on mobile */
+  background-image: linear-gradient(to top, rgba(212,167,44,0.25) var(--progress, 100%), transparent var(--progress, 100%));
+  background-origin: border-box;
   text-orientation: mixed;
   letter-spacing: 0.02em;
 }
@@ -2294,10 +2297,28 @@ canvas { touch-action: pan-x pan-y; }
   font-weight: 600;
 }
 .plan-btn.primary {
-  background: var(--hero);
+  background: linear-gradient(to right, var(--hero) var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
   color: #000;
+  position: relative;
+  overflow: hidden;
 }
-.plan-btn.primary:hover { background: #e8c84e; }
+.plan-btn.primary:hover {
+  background: linear-gradient(to right, #e8c84e var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
+}
+.plan-panel[data-witch-mode="1"] .plan-btn.primary {
+  background: linear-gradient(to right, var(--witch) var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
+  color: #fff;
+}
+.plan-panel[data-witch-mode="1"] .plan-btn.primary:hover {
+  background: linear-gradient(to right, #b06cc8 var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
+}
+.plan-btn.primary.countdown-urgent {
+  animation: btn-pulse 0.5s ease-in-out infinite alternate;
+}
+@keyframes btn-pulse {
+  from { box-shadow: 0 0 0 0 rgba(224,112,80,0); }
+  to   { box-shadow: 0 0 8px 2px rgba(224,112,80,0.5); }
+}
 .plan-btn.secondary {
   background: rgba(255,255,255,0.08);
   color: rgba(255,255,255,0.6);
@@ -2323,20 +2344,31 @@ canvas { touch-action: pan-x pan-y; }
 .plan-food-tag  { font-size: 0.65rem; color: #c8a030; margin-left: 0.3rem; white-space: nowrap; }
 .plan-step-cost { font-size: 0.62rem; color: var(--muted); margin-left: 0.25rem; white-space: nowrap; opacity: 0.85; }
 
-/* ── Plan countdown timer ────────────────────────────────────────────── */
-.plan-countdown {
-  font-size: 0.8rem;
-  font-family: var(--font-mono);
-  color: var(--text-dim);
-  margin-left: auto;
-  padding: 0 0.2rem;
-  min-width: 2.5rem;
-  text-align: right;
+/* ── Grace dialog (timeout expiry) ───────────────────────────────────── */
+.grace-dialog {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 85;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.65);
 }
-.plan-countdown.countdown-urgent {
-  color: #e07050;
-  font-weight: bold;
+.grace-dialog.visible { display: flex; }
+.grace-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1.2rem 1.5rem;
+  max-width: min(360px, 90vw);
+  text-align: center;
+  box-shadow: 0 0 40px rgba(0,0,0,0.7);
 }
+.grace-title   { font-size: 1.1rem; font-weight: 700; color: #e07050; margin-bottom: 0.5rem; }
+.grace-message { font-size: 0.85rem; color: var(--text-dim); margin-bottom: 0.5rem; }
+.grace-countdown { font-size: 0.8rem; color: var(--text-dim); margin-bottom: 0.75rem; font-family: var(--font-mono); }
+.grace-buttons { display: flex; flex-direction: column; gap: 0.5rem; }
+.grace-buttons .plan-btn { padding: 0.6rem 1rem; font-size: 0.85rem; }
 
 /* ── Plan player status panel ─────────────────────────────────────────── */
 .plan-players {

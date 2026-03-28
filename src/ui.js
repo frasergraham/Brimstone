@@ -559,31 +559,123 @@ export class UIController {
     this._renderPlayerStatus();
   }
 
-  /** Start a countdown timer showing seconds remaining until auto-submit. */
+  /** Start a countdown timer — progress bar on submit button + plan tab. */
   _startCountdown(timeoutMs) {
     this._stopCountdown();
-    const el    = this._el('plan-countdown');
-    if (!el) return;
-    el.style.display = '';
+    const submitBtn = this._el('plan-submit-btn');
+    const planTab   = this._el('plan-tab');
+    if (!submitBtn) return;
+
+    const GRACE_PERIOD = 5000;
     const end = Date.now() + timeoutMs;
+    this._countdownEnd   = end;
+    this._countdownTotal = timeoutMs;
+
     const tick = () => {
-      const secs = Math.max(0, Math.ceil((end - Date.now()) / 1000));
-      el.textContent = `${secs}s`;
-      el.classList.toggle('countdown-urgent', secs <= 10);
-      if (secs <= 0) this._stopCountdown();
+      const remaining = Math.max(0, end - Date.now());
+      const secs = Math.ceil(remaining / 1000);
+      const pct  = (remaining / timeoutMs) * 100;
+
+      submitBtn.style.setProperty('--progress', pct + '%');
+      submitBtn.textContent = secs > 0 ? `\u2713 Submit (${secs}s)` : '\u2713 Submit';
+      submitBtn.classList.toggle('countdown-urgent', secs <= 10);
+
+      if (planTab) planTab.style.setProperty('--progress', pct + '%');
+
+      if (remaining <= GRACE_PERIOD && !this._graceActive) {
+        this._stopCountdownTimer();
+        this._showGraceDialog(remaining);
+      }
     };
     tick();
     this._countdownTimer = setInterval(tick, 500);
   }
 
-  /** Stop the countdown timer. */
-  _stopCountdown() {
+  /** Stop just the main countdown interval (not the grace dialog). */
+  _stopCountdownTimer() {
     if (this._countdownTimer) {
       clearInterval(this._countdownTimer);
       this._countdownTimer = null;
     }
-    const el = this._el('plan-countdown');
-    if (el) { el.style.display = 'none'; el.textContent = ''; }
+  }
+
+  /** Stop countdown and reset submit button / plan tab to default state. */
+  _stopCountdown() {
+    this._stopCountdownTimer();
+    this._countdownEnd   = null;
+    this._countdownTotal = null;
+
+    const submitBtn = this._el('plan-submit-btn');
+    if (submitBtn) {
+      submitBtn.style.removeProperty('--progress');
+      submitBtn.textContent = '\u2713 Submit';
+      submitBtn.classList.remove('countdown-urgent');
+    }
+    const planTab = this._el('plan-tab');
+    if (planTab) planTab.style.removeProperty('--progress');
+
+    this._dismissGraceDialog();
+  }
+
+  /** Show grace dialog when planning time expires; auto-submits current plan. */
+  _showGraceDialog(remainingMs) {
+    if (this._planSubmitted) return;
+    this._graceActive = true;
+
+    const dialog    = this._el('grace-dialog');
+    const secsSpan  = this._el('grace-seconds');
+    const submitBtn = this._el('plan-submit-btn');
+    if (!dialog) return;
+    dialog.classList.add('visible');
+
+    const graceEnd = Date.now() + remainingMs;
+
+    // Wire button handlers via AbortController for clean teardown
+    const ac = new AbortController();
+    this._graceAbort = ac;
+
+    this._el('grace-submit-current')?.addEventListener('click', () => {
+      this._dismissGraceDialog();
+      this._doSubmitPlan();
+    }, { signal: ac.signal });
+
+    this._el('grace-submit-empty')?.addEventListener('click', () => {
+      this._dismissGraceDialog();
+      this._plan = [];
+      this._doSubmitPlan();
+    }, { signal: ac.signal });
+
+    this._graceTimer = setInterval(() => {
+      const left = Math.max(0, graceEnd - Date.now());
+      const s = Math.ceil(left / 1000);
+      if (secsSpan) secsSpan.textContent = String(s);
+
+      // Keep draining the submit button progress to 0
+      if (submitBtn) {
+        submitBtn.style.setProperty('--progress', '0%');
+        submitBtn.textContent = `\u2713 Submit (${s}s)`;
+      }
+
+      if (left <= 0) {
+        this._dismissGraceDialog();
+        this._doSubmitPlan(); // default: submit current plan
+      }
+    }, 250);
+  }
+
+  /** Dismiss the grace dialog and clean up timers/listeners. */
+  _dismissGraceDialog() {
+    this._graceActive = false;
+    if (this._graceTimer) {
+      clearInterval(this._graceTimer);
+      this._graceTimer = null;
+    }
+    if (this._graceAbort) {
+      this._graceAbort.abort();
+      this._graceAbort = null;
+    }
+    const dialog = this._el('grace-dialog');
+    if (dialog) dialog.classList.remove('visible');
   }
 
   /** Add one action to the plan queue. */
@@ -613,6 +705,7 @@ export class UIController {
   /** Submit the current plan. */
   _doSubmitPlan() {
     if (this._planSubmitted) return;
+    this._stopCountdown();
     this._planSubmitted = true;
 
     const panel = this._el('plan-panel');
