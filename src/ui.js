@@ -2999,7 +2999,6 @@ export class UIController {
     const hud = this._el('replay-hud');
     if (!hud) return;
     hud.style.display = 'flex';
-    this._replayTotalRounds = totalRounds;
     this._replayOnControl = onControl;
 
     // Disable the in-game speed toggle while replaying
@@ -3038,10 +3037,12 @@ export class UIController {
     }
   }
 
-  /** Update the round counter in the replay HUD. */
-  updateReplayHUD(current, total) {
-    const label = this._el('replay-round-label');
-    if (label) label.textContent = `Round ${current} / ${total ?? this._replayTotalRounds ?? '?'}`;
+  /**
+   * Sync the main turn-info header to the current state (called after each
+   * replay round is restored so the header tracks replay progress).
+   */
+  updateReplayHUD() {
+    this._renderTurnInfo();
   }
 
   /** Hide the replay HUD. */

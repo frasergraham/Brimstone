@@ -1494,7 +1494,7 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
       if (_replayAborted) break;
     }
 
-    ui.updateReplayHUD(i + 1, rounds.length);
+    ui.updateReplayHUD();
 
     // Get final entities (start of next round = end of this round)
     let finalEntities;
