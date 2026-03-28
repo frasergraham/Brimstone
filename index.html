@@ -23,6 +23,7 @@
       <div class="setup-buttons" style="flex-direction:column;align-items:center">
         <button id="btn-single-player" class="setup-btn primary" style="width:200px">⚔ Single Player</button>
         <button id="btn-multiplayer"   class="setup-btn"         style="width:200px">🌐 Multiplayer</button>
+        <button id="btn-tutorial"      class="setup-btn"         style="width:200px">⚑ Tutorial</button>
         <button id="btn-how-to-play"   class="setup-btn"         style="width:200px">How to Play</button>
         <button id="btn-options"       class="setup-btn"         style="width:200px">Options</button>
       </div>
@@ -565,6 +566,17 @@
   <div id="spectate-game-over" style="display:none">
     <h2 id="sp-winner-text"></h2>
     <p  id="sp-win-reason"></p>
+  </div>
+
+  <!-- ── Tutorial overlay ─────────────────────────────────────────────────── -->
+  <!-- Spotlight glow highlight for DOM elements; activated via .tutorial-spotlit class -->
+  <div id="tutorial-backdrop"></div>
+
+  <!-- Floating tooltip card shown during tutorial steps -->
+  <div id="tutorial-tooltip" class="tutorial-tooltip tutorial-tooltip--center" style="display:none">
+    <div class="tut-title"></div>
+    <div class="tut-body"></div>
+    <button class="tut-next-btn">Got it →</button>
   </div>
 
   <script type="module" src="src/main.js"></script>

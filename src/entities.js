@@ -3,6 +3,15 @@ import { WEAPON_STATS } from './tiles.js';
 
 let _nextId = 1;
 
+// Forced-dice queue — for tutorial canned outcomes.  Push values via setForcedDice();
+// each call to _nextDie() pops from the front, or falls back to a real random roll.
+let _forcedDice = [];
+export function setForcedDice(...values) { _forcedDice = [...values]; }
+function _nextDie(sides) {
+  if (_forcedDice.length > 0) return _forcedDice.shift();
+  return Math.ceil(Math.random() * sides);
+}
+
 export const EntityType = Object.freeze({
   HERO:       'hero',
   WITCH:      'witch',
@@ -289,12 +298,12 @@ export class Entity {
       extraAtk += 2;
     }
 
-    const atkBaseDie  = Math.ceil(Math.random() * 6);
-    const defBaseDie  = Math.ceil(Math.random() * 6);
+    const atkBaseDie  = _nextDie(6);
+    const defBaseDie  = _nextDie(6);
     const atkExtraDice = [];
     const defExtraDice = [];
-    for (let i = 0; i < extraAtkDice; i++) atkExtraDice.push(Math.ceil(Math.random() * 3));
-    for (let i = 0; i < extraDefDice; i++) defExtraDice.push(Math.ceil(Math.random() * 3));
+    for (let i = 0; i < extraAtkDice; i++) atkExtraDice.push(_nextDie(3));
+    for (let i = 0; i < extraDefDice; i++) defExtraDice.push(_nextDie(3));
 
     const attackRoll  = atkBaseDie + attacker.attack  + attacker.attackBonus + extraAtk
                         + atkExtraDice.reduce((s, r) => s + r, 0);

@@ -10,8 +10,11 @@ import { PlanActionType }    from './planner.js';
 import { hexDistance }       from './hex.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
-import { MAP_SIZES } from './map.js';
+import { MAP_SIZES, generateTutorialMap } from './map.js';
 import { nodeController } from './game.js';
+import { TutorialConductor } from './tutorial.js';
+import { createMinion, setForcedDice } from './entities.js';
+import { hexKey as _hexKey } from './hex.js';
 
 // Stamp version into badges
 document.getElementById('version-badge').textContent = `v${VERSION}`;
@@ -21,6 +24,7 @@ let state, renderer, ui, witchAI, heroAI;
 let _autoplay  = false;
 let _resolving = false;           // true while _animateResolutionSteps is running
 let _pendingPlanningPhase = null; // buffered onPlanningPhase payload received during animation
+let _tutorialConductor = null;    // non-null while a tutorial session is active
 
 // ── Local game init ───────────────────────────────────────────────────────────
 
@@ -53,6 +57,7 @@ function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
 
 function init(witchIsAI, heroIsAI, autoplay = false) {
   _autoplay = autoplay;
+  _tutorialConductor = null; // ensure tutorial state is cleared for normal games
   // Assign a fresh save ID for this game (only used for single-player saves)
   _spSaveId = _genSaveId();
   const canvas = document.getElementById('game-canvas');
@@ -98,6 +103,66 @@ function redraw() {
   if (ui) ui._updateSidebar?.();
 }
 
+// ── Tutorial mode ─────────────────────────────────────────────────────────────
+
+function initTutorial() {
+  _autoplay  = false;
+  _spSaveId  = null; // no save for tutorial
+  const canvas = document.getElementById('game-canvas');
+
+  document.getElementById('setup-screen').style.display = 'none';
+  document.getElementById('game-screen').style.display  = 'flex';
+
+  // Build the fixed tutorial map and inject it into a new GameState.
+  // witchIsAI = false so we can drive the witch plan ourselves via TutorialConductor.
+  const mapData = generateTutorialMap();
+  state = new GameState(false, false, 'tutorial', null, mapData);
+
+  // Disable fog of war — tutorial should be fully visible.
+  state.fogOfWar = false;
+
+  // Place the tutorial minion at (3,5) — adjacent to the church where the hero will stand.
+  const tutMinion = createMinion(3, 5, 'witch');
+  state.entities.push(tutMinion);
+
+  // Guarantee a survivor in the HOUSE at (2,4) for the round-3 exploration demo.
+  const houseTile = state.tiles.get(_hexKey(2, 4));
+  if (houseTile) houseTile.hiddenSurvivor = true;
+
+  // No AI helpers for tutorial — TutorialConductor drives the witch plan.
+  witchAI = null;
+  heroAI  = null;
+
+  _setupLocalUI(canvas, null, null, false);
+
+  // Suppress phase modals and hero auto-select during the tutorial.
+  ui.tutorialMode = true;
+
+  // Wire tutorial callbacks into UIController.
+  ui.onPlanActionAdded = (action) => _tutorialConductor?.onActionQueued(action);
+  ui.onEntitySelected  = (entity) => _tutorialConductor?.onEntitySelected(entity);
+
+  // Suppress the resolution summary modal — tutorial has its own flow.
+  const _origOnPlanSubmit = null; // will be set per-round below
+
+  redraw();
+
+  requestAnimationFrame(() => {
+    renderer.resize();
+    const heroEntity = state.entities.find(e => e.type === 'hero');
+    if (heroEntity) {
+      renderer.frameHexes([heroEntity], { maxZoom: 2.2, paddingHexes: 3, duration: 500 });
+    }
+    redraw();
+  });
+
+  // Create conductor after UI is set up so renderer reference is valid.
+  _tutorialConductor = new TutorialConductor(state, ui, renderer, redraw);
+  _tutorialConductor.start();
+
+  _startLocalPlanningPhase();
+}
+
 // ── Local planning lifecycle ──────────────────────────────────────────────────
 
 function _startLocalPlanningPhase() {
@@ -107,6 +172,18 @@ function _startLocalPlanningPhase() {
   if (_autoplay) {
     // AI vs AI: generate both plans immediately then resolve
     setTimeout(() => _runLocalAutoResolution(), 0);
+    return;
+  }
+
+  // Tutorial mode: hero always plans; conductor provides scripted witch plan.
+  if (_tutorialConductor) {
+    _tutorialConductor.onPlanningPhaseStart();
+    // After round 3 (survivor rescue) the tutorial is in explanation-only mode —
+    // no more planning rounds.  We still call onPlanningPhaseStart so the conductor
+    // can advance to the explanation steps, but we don't enter planning mode.
+    if (_tutorialConductor._round >= 3) return;
+    ui.enterPlanningMode('hero', state.heroActionsLeft);
+    ui.onPlanSubmit = (heroPlan) => _onTutorialPlanSubmit(heroPlan);
     return;
   }
 
@@ -122,6 +199,29 @@ function _startLocalPlanningPhase() {
     ui.enterPlanningMode(humanFaction, budget);
     ui.onPlanSubmit = (plan) => _onLocalHumanPlanSubmit(humanFaction, plan);
   }
+}
+
+/**
+ * Tutorial plan submit: hero submits, conductor provides scripted witch plan,
+ * then both resolve together.  No resolution summary modal is shown.
+ */
+async function _onTutorialPlanSubmit(heroPlan) {
+  ui.exitPlanningMode();
+  _tutorialConductor?.onPlanSubmitted();
+
+  // Round 2 (combat round): force deterministic dice so the tutorial can
+  // describe the outcome reliably.
+  // Hero (ATK 3) attacks Minion (DEF 0): die=2 → atk=5, die=3 → def=3 → hit 1 dmg
+  // Minion (ATK 1) attacks Hero (DEF 2): die=5 → atk=6, die=3 → def=5 → hit 1 dmg
+  if (_tutorialConductor?._round === 1) {
+    setForcedDice(2, 3, 5, 3);
+  }
+
+  state.submitPlan('hero', heroPlan);
+  const witchPlan = _tutorialConductor ? _tutorialConductor.getWitchPlan() : [];
+  state.submitPlan('witch', witchPlan);
+
+  await _runLocalResolution(true /* skipSummary */);
 }
 
 /** Human vs Human: hero submitted, now show witch planning. */
@@ -162,7 +262,7 @@ async function _runLocalAutoResolution() {
   await _runLocalResolution();
 }
 
-async function _runLocalResolution() {
+async function _runLocalResolution(skipSummary = false) {
   if (!state || state.gameOver) return;
 
   // Cap shared food to the human player's enabled food count so the resolver
@@ -207,6 +307,9 @@ async function _runLocalResolution() {
 
   await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
 
+  // Notify tutorial conductor that resolution animation has finished.
+  if (_tutorialConductor) _tutorialConductor.onResolutionComplete();
+
   // Add aggregate battle summary to the log before endRound inserts phase entries
   const summaryLines = compileTurnBattleSummary(steps, state.entities, ResEventType, PlanActionType);
   for (const line of summaryLines) state.log.push(line);
@@ -224,8 +327,8 @@ async function _runLocalResolution() {
   // Persist single-player progress to localStorage
   _saveSpGame();
 
-  // Show post-resolution summary modal (skip in autoplay mode)
-  if (!_autoplay && ui && humanFaction) {
+  // Show post-resolution summary modal (skip in autoplay or tutorial mode)
+  if (!_autoplay && !skipSummary && ui && humanFaction) {
     let action;
     do {
       action = await ui._showResolutionSummary(steps, state.round - 1, {
@@ -760,6 +863,7 @@ let _currentLobby = null;
 
 document.getElementById('btn-single-player').addEventListener('click', () => _showSinglePlayerScreen());
 document.getElementById('btn-multiplayer')  .addEventListener('click', () => _showMultiplayerScreen());
+document.getElementById('btn-tutorial')     .addEventListener('click', () => initTutorial());
 document.getElementById('btn-how-to-play')  .addEventListener('click', () => showStep('howtoplay'));
 document.getElementById('btn-options')      .addEventListener('click', () => showStep('options'));
 document.getElementById('btn-howtoplay-back').addEventListener('click', () => showStep('mode'));

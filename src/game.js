@@ -2,7 +2,7 @@
 import { generateMap } from './map.js';
 import { createHero, createWitch, createMinion, createSurvivor, resetRoster, EntityType, SurvivorAbility } from './entities.js';
 import { BuildingType, ResourceType, TileType } from './tiles.js';
-import { hexKey, hexDistance, getNeighbors } from './hex.js';
+import { hexKey, hexDistance, getNeighbors, setMapDimensions } from './hex.js';
 import { sightRange } from './actions.js';
 
 /**
@@ -121,9 +121,26 @@ const PHASE_ICON = {
 export { PHASE_ICON };
 
 export class GameState {
-  constructor(witchIsAI = true, heroIsAI = false, mapSize = 'standard', nodeCount = null) {
+  /**
+   * @param {boolean} witchIsAI
+   * @param {boolean} heroIsAI
+   * @param {string}  mapSize
+   * @param {number|null} nodeCount
+   * @param {object|null} mapDataOverride  Pre-built map data (e.g. from generateTutorialMap()).
+   *   When provided, generateMap() is skipped. Must include { tiles, witchObjectives,
+   *   heroStart, witchStart, mapSize, survivorCounts, cols?, rows? }.
+   */
+  constructor(witchIsAI = true, heroIsAI = false, mapSize = 'standard', nodeCount = null, mapDataOverride = null) {
     resetRoster();
-    const mapData  = generateMap(undefined, mapSize, nodeCount);
+    let mapData;
+    if (mapDataOverride) {
+      if (mapDataOverride.cols && mapDataOverride.rows) {
+        setMapDimensions(mapDataOverride.cols, mapDataOverride.rows);
+      }
+      mapData = mapDataOverride;
+    } else {
+      mapData = generateMap(undefined, mapSize, nodeCount);
+    }
     this.tiles     = mapData.tiles;
     this.entities  = [];
     this.witchIsAI = witchIsAI;
