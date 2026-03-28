@@ -57,6 +57,15 @@ export const TUTORIAL_STEPS = [
     witchPlan: null,
   },
   {
+    id: 'click_stages',
+    title: 'How Clicking Works',
+    body: 'Clicking a unit has three stages:\n\n1st click → Select the unit. Green hexes show where it can move. Click a green hex to queue a Move.\n\n2nd click (on the unit again) → Open the action menu — Move, Explore, Battle, etc.\n\nClick empty space → Deselect.',
+    trigger: 'click',
+    spotlight: null,
+    tooltipPos: 'center',
+    witchPlan: null,
+  },
+  {
     id: 'select_hero',
     title: 'Select Your Hero',
     body: 'Click your ⚔ Hero on the map to select them and see available actions.',
@@ -86,9 +95,9 @@ export const TUTORIAL_STEPS = [
   {
     id: 'queue_explore',
     title: 'Explore a Building',
-    body: 'Click your Hero again (at the Inn). Their ghost is now at the Church, so Explore will appear in the action menu — queue it to search for supplies.',
+    body: 'Your hero\'s ghost is now at the Church. Click the ghost (the Church hex) to open the action menu there.\n\nThe ghost shows where your hero will be after the move — actions are planned from that position. Choose Explore to search the Church for supplies.',
     trigger: { type: 'action_queued', actionType: PlanActionType.EXPLORE },
-    spotlight: { type: 'hex', col: 2, row: 6 },
+    spotlight: { type: 'hex', col: 2, row: 5 },
     tooltipPos: 'bottom-left',
     witchPlan: null,
   },
@@ -98,7 +107,7 @@ export const TUTORIAL_STEPS = [
     body: 'Your plan is ready: Move to Church, then Explore. Click Submit Plan — both sides will act simultaneously.',
     trigger: { type: 'plan_submitted' },
     spotlight: { type: 'element', selector: '#plan-submit-btn' },
-    tooltipPos: 'bottom-right',
+    tooltipPos: 'bottom-left',
     witchPlan: [], // witch idles in round 1
   },
   {
@@ -134,7 +143,7 @@ export const TUTORIAL_STEPS = [
     body: 'Submit your plan. The minion will fight back — watch the dice resolve!',
     trigger: { type: 'plan_submitted' },
     spotlight: { type: 'element', selector: '#plan-submit-btn' },
-    tooltipPos: 'bottom-right',
+    tooltipPos: 'bottom-left',
     witchPlan: null, // set dynamically by getWitchPlan() for round 2
   },
   {

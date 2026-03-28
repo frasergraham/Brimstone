@@ -63,6 +63,8 @@ export class UIController {
     this._chronicleMode    = window.innerWidth <= 768 ? 'none' : 'mini'; // 'none' | 'mini' | 'full'
     // When true, disable all planning/action UI — used for spectator mode
     this.spectator         = false;
+    // When true, suppress phase modals and auto-select — used for tutorial mode
+    this.tutorialMode      = false;
 
     // ── Planning mode state ──────────────────────────────────────────────────
     this._planMode      = false;   // true during simultaneous planning phase
@@ -465,7 +467,8 @@ export class UIController {
     // Auto-select the leader on round 1 so the player knows which unit is
     // theirs (especially important in team MP).  After round 1 it's annoying
     // because it overrides whatever the player was looking at.
-    if ((this.state?.round ?? 1) <= 1) {
+    // Tutorial mode skips this — the "select your hero" step teaches clicking.
+    if (!this.tutorialMode && (this.state?.round ?? 1) <= 1) {
       const myLeader = this.state?.entities.find(e =>
         e.alive && e.owner === faction &&
         (e.type === 'hero' || e.type === 'witch') &&
@@ -1901,8 +1904,9 @@ export class UIController {
   // ── Phase toast ──────────────────────────────────────────────────────────
 
   _showPhaseModal(faction, budget) {
-    // Instant mode skips all popups
+    // Instant mode and tutorial mode skip all popups
     if (this.speedMode === 'instant') return;
+    if (this.tutorialMode) return;
 
     const phase = this.state.phase;
     const PHASE_INFO = {

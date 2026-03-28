@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { generateTutorialMap } from '../src/map.js';
 import { GameState } from '../src/game.js';
 import { TutorialConductor, TUTORIAL_STEPS } from '../src/tutorial.js';
-import { EntityType } from '../src/entities.js';
+import { EntityType, setForcedDice } from '../src/entities.js';
 import { hexKey, MAP_COLS, MAP_ROWS } from '../src/hex.js';
 import { TileType, BuildingType } from '../src/tiles.js';
 import { PlanActionType } from '../src/planner.js';
@@ -123,11 +123,48 @@ describe('GameState with tutorial map override', () => {
   });
 });
 
+// ── setForcedDice ─────────────────────────────────────────────────────────────
+
+import { Entity } from '../src/entities.js';
+
+describe('setForcedDice', () => {
+  test('forced dice produce deterministic resolveCombat results', () => {
+    // Hero (ATK 3, DEF 2) vs Minion (ATK 1, DEF 0)
+    // Force: atkDie=2 → atk=5, defDie=3 → def=3 → hit, margin=2
+    const hero   = { type: 'hero',  attack: 3, defense: 2, attackBonus: 0, defenseBonus: 0, weapon: null };
+    const minion = { type: 'minion', attack: 1, defense: 0, attackBonus: 0, defenseBonus: 0, weapon: null };
+    setForcedDice(2, 3);
+    const result = Entity.resolveCombat(hero, minion);
+    assert.equal(result.atkBaseDie,  2);
+    assert.equal(result.defBaseDie,  3);
+    assert.equal(result.attackRoll,  5);   // 2 + 3
+    assert.equal(result.defenseRoll, 3);   // 3 + 0
+    assert.equal(result.hit, true);
+    assert.equal(result.margin, 2);
+  });
+
+  test('reverts to random after forced queue empties', () => {
+    setForcedDice(6, 6); // use up the forced values
+    Entity.resolveCombat(
+      { type: 'hero',  attack: 3, defense: 2, attackBonus: 0, defenseBonus: 0, weapon: null },
+      { type: 'minion', attack: 1, defense: 0, attackBonus: 0, defenseBonus: 0, weapon: null },
+    );
+    // After consuming both forced dice the queue is empty; a second call must
+    // not throw and must return a valid result (random dice, so just check shape).
+    const r2 = Entity.resolveCombat(
+      { type: 'hero',  attack: 3, defense: 2, attackBonus: 0, defenseBonus: 0, weapon: null },
+      { type: 'minion', attack: 1, defense: 0, attackBonus: 0, defenseBonus: 0, weapon: null },
+    );
+    assert.ok(typeof r2.atkBaseDie === 'number');
+    assert.ok(r2.atkBaseDie >= 1 && r2.atkBaseDie <= 6);
+  });
+});
+
 // ── TUTORIAL_STEPS definitions ────────────────────────────────────────────────
 
 describe('TUTORIAL_STEPS', () => {
-  test('has 13 steps', () => {
-    assert.equal(TUTORIAL_STEPS.length, 13);
+  test('has 14 steps', () => {
+    assert.equal(TUTORIAL_STEPS.length, 14);
   });
 
   test('first step id is "welcome"', () => {
@@ -147,6 +184,30 @@ describe('TUTORIAL_STEPS', () => {
       assert.ok(step.body,   `step ${step.id} has body`);
       assert.ok(step.trigger !== undefined, `step ${step.id} has trigger`);
     }
+  });
+
+  test('click_stages step exists between planning_intro and select_hero', () => {
+    const piIdx = TUTORIAL_STEPS.findIndex(s => s.id === 'planning_intro');
+    const csIdx = TUTORIAL_STEPS.findIndex(s => s.id === 'click_stages');
+    const shIdx = TUTORIAL_STEPS.findIndex(s => s.id === 'select_hero');
+    assert.ok(csIdx > piIdx, 'click_stages comes after planning_intro');
+    assert.ok(csIdx < shIdx, 'click_stages comes before select_hero');
+    assert.equal(TUTORIAL_STEPS[csIdx].trigger, 'click');
+  });
+
+  test('queue_explore step spotlights Church (2,5) not Inn', () => {
+    const step = TUTORIAL_STEPS.find(s => s.id === 'queue_explore');
+    assert.ok(step, 'queue_explore step exists');
+    assert.equal(step.spotlight?.type, 'hex');
+    assert.equal(step.spotlight?.col, 2);
+    assert.equal(step.spotlight?.row, 5);
+  });
+
+  test('submit_plan and submit_fight use bottom-left tooltip position', () => {
+    const sp = TUTORIAL_STEPS.find(s => s.id === 'submit_plan');
+    const sf = TUTORIAL_STEPS.find(s => s.id === 'submit_fight');
+    assert.equal(sp.tooltipPos, 'bottom-left');
+    assert.equal(sf.tooltipPos, 'bottom-left');
   });
 
   test('round-1 witch plan step has witchPlan: []', () => {

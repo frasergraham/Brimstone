@@ -13,7 +13,7 @@ import { serializeState, deserializeState } from '../server/state-sync.js';
 import { MAP_SIZES, generateTutorialMap } from './map.js';
 import { nodeController } from './game.js';
 import { TutorialConductor } from './tutorial.js';
-import { createMinion } from './entities.js';
+import { createMinion, setForcedDice } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
 
 // Stamp version into badges
@@ -125,15 +125,14 @@ function initTutorial() {
   const tutMinion = createMinion(3, 5, 'witch');
   state.entities.push(tutMinion);
 
-  // Guarantee a survivor in the church for the exploration demo.
-  const churchTile = state.tiles.get(_hexKey(2, 5));
-  if (churchTile) churchTile.hiddenSurvivor = true;
-
   // No AI helpers for tutorial — TutorialConductor drives the witch plan.
   witchAI = null;
   heroAI  = null;
 
   _setupLocalUI(canvas, null, null, false);
+
+  // Suppress phase modals and hero auto-select during the tutorial.
+  ui.tutorialMode = true;
 
   // Wire tutorial callbacks into UIController.
   ui.onPlanActionAdded = (action) => _tutorialConductor?.onActionQueued(action);
@@ -201,6 +200,14 @@ function _startLocalPlanningPhase() {
 async function _onTutorialPlanSubmit(heroPlan) {
   ui.exitPlanningMode();
   _tutorialConductor?.onPlanSubmitted();
+
+  // Round 2 (combat round): force deterministic dice so the tutorial can
+  // describe the outcome reliably.
+  // Hero (ATK 3) attacks Minion (DEF 0): die=2 → atk=5, die=3 → def=3 → hit 1 dmg
+  // Minion (ATK 1) attacks Hero (DEF 2): die=5 → atk=6, die=3 → def=5 → hit 1 dmg
+  if (_tutorialConductor?._round === 1) {
+    setForcedDice(2, 3, 5, 3);
+  }
 
   state.submitPlan('hero', heroPlan);
   const witchPlan = _tutorialConductor ? _tutorialConductor.getWitchPlan() : [];
