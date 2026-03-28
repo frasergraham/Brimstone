@@ -691,19 +691,28 @@ export function executeSummon(state, actor, requestedType = null) {
     summonedUnit = createWoodGolem(actor.col, actor.row, ownerId);
     unitName = 'Wood Golem';
   } else {
-    // Minion: spend 2 from any resources, largest stacks first
+    // Minion: spend 2 from any resources, largest stacks first; track what was spent
     const keys = Object.keys(inv).filter(k => inv[k] > 0).sort((a, b) => inv[b] - inv[a]);
     let remaining = 2;
+    const spentMap = {};
     for (const k of keys) {
       const spend = Math.min(inv[k], remaining); inv[k] -= spend; remaining -= spend;
+      spentMap[k] = (spentMap[k] || 0) + spend;
       if (remaining === 0) break;
     }
     summonedUnit = createMinion(actor.col, actor.row, ownerId);
     unitName = 'Minion';
+    state.entities.push(summonedUnit);
+    return {
+      success: true,
+      log: [`The witch raises a ${unitName}!`],
+      cost: 1,
+      spent: Object.entries(spentMap).map(([type, amount]) => ({ type, amount })),
+    };
   }
 
   state.entities.push(summonedUnit);
-  return { success: true, log: [`The witch raises a ${unitName}!`], cost: 1 };
+  return { success: true, log: [`The witch raises a ${unitName}!`], cost: 1, spent: [{ type: res, amount: 2 }] };
 }
 
 export function executeUseItem(state, actor, item) {

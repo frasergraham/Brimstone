@@ -2726,12 +2726,12 @@ export class UIController {
                 if (icon !== '⚔' && icon !== '🐴') _addRes(foundRes, icon);
               }
             }
-            // Resources spent: summon
+            // Resources spent: summon — use result.spent for exact breakdown
             if (ev.action?.type === 'summon') {
-              const log0 = ev.result?.log?.[0] ?? '';
-              if (log0.includes('Iron Golem'))      _addRes(usedRes, '⚙', 2);
-              else if (log0.includes('Wood Golem')) _addRes(usedRes, '🪵', 2);
-              else                                  _addRes(usedRes, 'res', 2);
+              for (const { type, amount } of ev.result?.spent ?? []) {
+                const icon = RES_ICON_MAP[type] ?? type;
+                _addRes(usedRes, icon, amount);
+              }
             }
             // Resources spent: fortify
             if (ev.action?.type === 'fortify') {
