@@ -1237,11 +1237,13 @@ export class HeroAI {
         }
       }
 
-      // 5. Seek shelter for survivors; hero moves toward objectives at night
+      // 5. Seek shelter for survivors; hero also seeks buildings at night for fatigue protection
       const heroTile = sim.tiles.get(hexKey(hero.col, hero.row));
       if (heroTile && heroTile.type !== TileType.BUILDING) {
-        // Hero not in building — advance toward a node or witch rather than shelter
-        // (hero takes no night damage; survivors need shelter but hero does not)
+        // Hero should seek a building at night — fatigue makes open-field defense punishing
+        const shelter = nearestBuilding(sim, hero);
+        if (shelter) { const a = tryMove(hero, shelter); if (a) return a; }
+        // Fallback: advance toward a node or witch
         const nodeTarget = _bestNodeForHero(sim, hero, claimedNodes);
         if (nodeTarget) { const a = tryMove(hero, nodeTarget); if (a) return a; }
         if (witch) { const a = tryMove(hero, witch); if (a) return a; }
@@ -1261,19 +1263,22 @@ export class HeroAI {
       if (heroTN && heroTN.type === TileType.BUILDING && !sim.isExplored(hero.col, hero.row)) {
         return { type: PlanActionType.EXPLORE, entityId: hero.id };
       }
-      // 7b. Fortify sheltered building — invest up to level 2 at dusk/night for defence
+      // 7b. Fortify sheltered building — invest up to level 3 at dusk/night for defence
+      //     (fatigue makes defense weaker over time, so higher fort compensates)
       if (heroTN && heroTN.type === TileType.BUILDING) {
         const fortLevel = heroTN.fortifyLevel || 0;
         const shared = sim.inventory.shared;
         const hasWood  = (shared[ResourceType.WOOD]  || 0) > 0;
         const hasMetal = (shared[ResourceType.METAL] || 0) > 0;
-        if (fortLevel < 2 && (hasWood || hasMetal)) {
+        if (fortLevel < 3 && (hasWood || hasMetal)) {
           return { type: PlanActionType.FORTIFY, entityId: hero.id };
         }
       }
-      // 8. Hero can move at night without hazard — advance toward witch-held nodes
+      // 8. If sheltered and fortified, stay put — leaving exposes hero to fatigue
+      if (heroTN && heroTN.type === TileType.BUILDING) return null;
+      // 9. Otherwise advance toward witch-held nodes
       { const a = tryMove(hero, _bestNodeForHero(sim, hero)); if (a) return a; }
-      // 9. Or move toward witch if close enough
+      // 10. Or move toward witch if close enough
       if (witch && hexDistance(hero.col, hero.row, witch.col, witch.row) <= 4) {
         const a = tryMove(hero, witch); if (a) return a;
       }
@@ -1306,13 +1311,13 @@ export class HeroAI {
       return { type: PlanActionType.EXPLORE, entityId: hero.id };
     }
 
-    // 5b. Fortify undefended building before moving out (quick one-time setup)
+    // 5b. Fortify building during daytime — invest up to level 1 to prepare for night
     if (heroTile && heroTile.type === TileType.BUILDING) {
       const fortLevel = heroTile.fortifyLevel || 0;
       const shared = sim.inventory.shared;
       const hasWood  = (shared[ResourceType.WOOD]  || 0) > 0;
       const hasMetal = (shared[ResourceType.METAL] || 0) > 0;
-      if (fortLevel === 0 && (hasWood || hasMetal)) {
+      if (fortLevel < 1 && (hasWood || hasMetal)) {
         return { type: PlanActionType.FORTIFY, entityId: hero.id };
       }
     }
