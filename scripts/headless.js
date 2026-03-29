@@ -405,7 +405,7 @@ if (Math.abs(heroPct - witchPct) > 0.12) {
     suggestions.push('• Or buff witch: lower minion-per-action threshold from 2→1 minions, or raise minion HP to 3');
   } else {
     suggestions.push('• Witch too strong: reduce witch base actions (4→3), or make minion summoning cost 2 actions');
-    suggestions.push('• Or buff hero: increase hero base HP to 12, or give hero +1 ATK in DUSK as well');
+    suggestions.push('• Or buff hero: increase hero base HP to 12, or reduce fatigue threshold');
   }
 }
 

@@ -6,6 +6,7 @@ import { EntityType } from './entities.js';
 import { Phase, computeActions, computeActionsForPlayer, Player, nodeController } from './game.js';
 import {
   executeMove, executeExplore, executeBattle, executeSummon, executeUseItem,
+  executeFortify,
   getVisibleEnemyHexes, getVisibleHeroHexes,
 } from './actions.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
@@ -961,6 +962,17 @@ export class HeroAI {
         return result.success;
       }
 
+      // 7b. Fortify sheltered building — invest up to level 3 at night
+      if (heroTileN && heroTileN.type === TileType.BUILDING && (heroTileN.fortifyLevel || 0) < 3) {
+        const shared = state.inventory.shared;
+        if ((shared[ResourceType.WOOD] || 0) > 0 || (shared[ResourceType.METAL] || 0) > 0) {
+          const result = executeFortify(state, hero);
+          logResult(state, result);
+          if (result.success) state.spendAction(result.cost);
+          return result.success;
+        }
+      }
+
       return false;
     }
 
@@ -1237,11 +1249,13 @@ export class HeroAI {
         }
       }
 
-      // 5. Seek shelter for survivors; hero moves toward objectives at night
+      // 5. Seek shelter for survivors; hero also seeks buildings at night for fatigue protection
       const heroTile = sim.tiles.get(hexKey(hero.col, hero.row));
       if (heroTile && heroTile.type !== TileType.BUILDING) {
-        // Hero not in building — advance toward a node or witch rather than shelter
-        // (hero takes no night damage; survivors need shelter but hero does not)
+        // Hero should seek a building at night — fatigue makes open-field defense punishing
+        const shelter = nearestBuilding(sim, hero);
+        if (shelter) { const a = tryMove(hero, shelter); if (a) return a; }
+        // Fallback: advance toward a node or witch
         const nodeTarget = _bestNodeForHero(sim, hero, claimedNodes);
         if (nodeTarget) { const a = tryMove(hero, nodeTarget); if (a) return a; }
         if (witch) { const a = tryMove(hero, witch); if (a) return a; }
@@ -1261,19 +1275,22 @@ export class HeroAI {
       if (heroTN && heroTN.type === TileType.BUILDING && !sim.isExplored(hero.col, hero.row)) {
         return { type: PlanActionType.EXPLORE, entityId: hero.id };
       }
-      // 7b. Fortify sheltered building — invest up to level 2 at dusk/night for defence
+      // 7b. Fortify sheltered building — invest up to level 3 at dusk/night for defence
+      //     (fatigue makes defense weaker over time, so higher fort compensates)
       if (heroTN && heroTN.type === TileType.BUILDING) {
         const fortLevel = heroTN.fortifyLevel || 0;
         const shared = sim.inventory.shared;
         const hasWood  = (shared[ResourceType.WOOD]  || 0) > 0;
         const hasMetal = (shared[ResourceType.METAL] || 0) > 0;
-        if (fortLevel < 2 && (hasWood || hasMetal)) {
+        if (fortLevel < 3 && (hasWood || hasMetal)) {
           return { type: PlanActionType.FORTIFY, entityId: hero.id };
         }
       }
-      // 8. Hero can move at night without hazard — advance toward witch-held nodes
+      // 8. If sheltered and fortified, stay put — leaving exposes hero to fatigue
+      if (heroTN && heroTN.type === TileType.BUILDING) return null;
+      // 9. Otherwise advance toward witch-held nodes
       { const a = tryMove(hero, _bestNodeForHero(sim, hero)); if (a) return a; }
-      // 9. Or move toward witch if close enough
+      // 10. Or move toward witch if close enough
       if (witch && hexDistance(hero.col, hero.row, witch.col, witch.row) <= 4) {
         const a = tryMove(hero, witch); if (a) return a;
       }
@@ -1306,13 +1323,13 @@ export class HeroAI {
       return { type: PlanActionType.EXPLORE, entityId: hero.id };
     }
 
-    // 5b. Fortify undefended building before moving out (quick one-time setup)
+    // 5b. Fortify building during daytime — invest up to level 1 to prepare for night
     if (heroTile && heroTile.type === TileType.BUILDING) {
       const fortLevel = heroTile.fortifyLevel || 0;
       const shared = sim.inventory.shared;
       const hasWood  = (shared[ResourceType.WOOD]  || 0) > 0;
       const hasMetal = (shared[ResourceType.METAL] || 0) > 0;
-      if (fortLevel === 0 && (hasWood || hasMetal)) {
+      if (fortLevel < 1 && (hasWood || hasMetal)) {
         return { type: PlanActionType.FORTIFY, entityId: hero.id };
       }
     }
@@ -1573,44 +1590,57 @@ function _makeHelpers(sim) {
   };
   const tryBattle = (actor, target) =>
     ({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id });
+  const tryFortify = (entity, maxLevel = 3) => {
+    const t = sim.tiles.get(hexKey(entity.col, entity.row));
+    if (!t || t.type !== TileType.BUILDING) return null;
+    if ((t.fortifyLevel || 0) >= maxLevel) return null;
+    const shared = sim.inventory.shared;
+    if ((shared[ResourceType.WOOD] || 0) <= 0 && (shared[ResourceType.METAL] || 0) <= 0) return null;
+    return { type: PlanActionType.FORTIFY, entityId: entity.id };
+  };
   const trySummon = (witch, minions, cap = 8) => {
     if (minions.length >= cap) return null;
     const inv = sim.inventory.witch;
     if (Object.values(inv).reduce((s, v) => s + v, 0) < 2) return null;
     return { type: PlanActionType.SUMMON, entityId: witch.id };
   };
-  return { tryMove, tryBattle, trySummon };
+  return { tryMove, tryBattle, tryFortify, trySummon };
 }
 
 // ── Hero: Berserker ───────────────────────────────────────────────────────────
-// Chase the witch at all costs. Fight at every range, even at night.
+// Aggressive hunter. Day: charge witch relentlessly, fight everything.
+// Night: retreat to shelter and fortify — fatigue makes open combat suicidal.
 // Only cares about nodes when the hero faction is one checkpoint from losing.
 
 export class HeroBerserker extends HeroAI {
   _decidePlanAction(sim) {
     const hero = sim.hero;
     if (!hero) return null;
-    const { tryMove, tryBattle } = _makeHelpers(sim);
+    const { tryMove, tryBattle, tryFortify } = _makeHelpers(sim);
     const witch     = sim.witch;
+    const isNight   = sim.phase === Phase.NIGHT || sim.phase === Phase.DUSK;
     const survivors = sim.entities.filter(e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR);
     const witchNodeCount = sim.witchObjectives.filter(obj =>
       sim.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
     ).length;
 
-    // Herbs only when nearly dead (don't waste a free action on minor wounds)
+    // Herbs only when nearly dead
     const herbs = (hero.items?.[ResourceType.HERBS]) || 0;
     if (herbs > 0 && hero.hp <= 3) return { type: PlanActionType.USE_ITEM, entityId: hero.id, item: ResourceType.HERBS };
 
-    // Fight co-located
+    // Fight co-located (always)
     const col = sim.entities.find(e => e.alive && e.owner === 'witch' && e.col === hero.col && e.row === hero.row);
     if (col) return tryBattle(hero, col);
 
-    // Fight adjacent — witch first
-    const adj = [
-      sim.entities.find(e => e.alive && e.type === EntityType.WITCH && hexDistance(hero.col, hero.row, e.col, e.row) === 1),
-      sim.entities.find(e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1),
-    ].find(Boolean);
-    if (adj) return tryBattle(hero, adj);
+    // Fight adjacent — witch first (always engage the witch boss, even at night)
+    const adjWitch = sim.entities.find(e => e.alive && e.type === EntityType.WITCH && hexDistance(hero.col, hero.row, e.col, e.row) === 1);
+    if (adjWitch) return tryBattle(hero, adjWitch);
+
+    // Day: fight all adjacent enemies aggressively
+    if (!isNight) {
+      const adj = sim.entities.find(e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1);
+      if (adj) return tryBattle(hero, adj);
+    }
 
     // Survivors fight anything adjacent
     for (const s of survivors) {
@@ -1623,7 +1653,26 @@ export class HeroBerserker extends HeroAI {
     // Emergency node race (hero score almost lost)
     if (witchNodeCount >= 2) { const a = tryMove(hero, _bestNodeForHero(sim, hero, this._allyContext?.claimedNodes)); if (a) return a; }
 
-    // Always charge toward the witch — day AND night
+    if (isNight) {
+      // Night: shelter and fortify — fatigue makes open-field brawling dangerous
+      const heroTile = sim.tiles.get(hexKey(hero.col, hero.row));
+      if (!heroTile || heroTile.type !== TileType.BUILDING) {
+        const a = tryMove(hero, nearestBuilding(sim, hero)); if (a) return a;
+      }
+      // Fortify while sheltered
+      { const a = tryFortify(hero, 3); if (a) return a; }
+      // Survivors shelter
+      for (const s of survivors) {
+        if (_isOnNode(sim, s)) continue;
+        const st = sim.tiles.get(hexKey(s.col, s.row));
+        if (!st || st.type !== TileType.BUILDING) {
+          const a = tryMove(s, nearestBuilding(sim, s)); if (a) return a;
+        }
+      }
+      return null;
+    }
+
+    // Day: charge toward the witch
     if (witch) { const a = tryMove(hero, witch); if (a) return a; }
 
     // Survivors anchor nodes passively
@@ -1636,14 +1685,16 @@ export class HeroBerserker extends HeroAI {
 }
 
 // ── Hero: Sentinel ────────────────────────────────────────────────────────────
-// Sprint to the nearest node and entrench. Never leave voluntarily.
-// Sends every survivor to defend a different node. Explore only on the node tile.
+// Entrench on a node or building and fortify heavily. Day: race to node, build up.
+// Night: retreat to nearest building if not on a node, fortify to max level 4.
+// Sends every survivor to defend a different node. Most defensive personality.
 
 export class HeroSentinel extends HeroAI {
   _decidePlanAction(sim) {
     const hero = sim.hero;
     if (!hero) return null;
-    const { tryMove, tryBattle } = _makeHelpers(sim);
+    const { tryMove, tryBattle, tryFortify } = _makeHelpers(sim);
+    const isNight    = sim.phase === Phase.NIGHT || sim.phase === Phase.DUSK;
     const survivors  = sim.entities.filter(e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR);
     const heroOnNode = _isOnNode(sim, hero);
 
@@ -1659,10 +1710,45 @@ export class HeroSentinel extends HeroAI {
       if (sc) return tryBattle(s, sc);
     }
 
-    // Not on a node yet → race there
+    if (isNight) {
+      // Night: if on a node, hold it and fortify nearby building logic doesn't apply
+      // If not on a node, retreat to building and fortify heavily
+      if (heroOnNode) {
+        const adj = sim.entities.find(e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1);
+        if (adj) return tryBattle(hero, adj);
+        // Dispatch survivors to nearby nodes only (avoid long marches in the dark)
+        const undefended = _undefendedNodes(sim, hero);
+        for (const s of survivors) {
+          if (_isOnNode(sim, s)) continue;
+          const sorted = [...undefended].sort((a, b) =>
+            hexDistance(s.col, s.row, a.col, a.row) - hexDistance(s.col, s.row, b.col, b.row));
+          const close = sorted.find(n => hexDistance(s.col, s.row, n.col, n.row) <= 3);
+          if (close) { const a = tryMove(s, close); if (a) return a; }
+        }
+        return null; // hold the node
+      }
+      // Not on a node — seek a building and fortify to max
+      const heroTile = sim.tiles.get(hexKey(hero.col, hero.row));
+      if (!heroTile || heroTile.type !== TileType.BUILDING) {
+        const a = tryMove(hero, nearestBuilding(sim, hero)); if (a) return a;
+      }
+      // Fortify up to 4 — sentinel invests everything into defense
+      { const a = tryFortify(hero, 4); if (a) return a; }
+      if (!sim.isExplored(hero.col, hero.row)) return { type: PlanActionType.EXPLORE, entityId: hero.id };
+      // Survivors shelter
+      for (const s of survivors) {
+        if (_isOnNode(sim, s)) continue;
+        const st = sim.tiles.get(hexKey(s.col, s.row));
+        if (!st || st.type !== TileType.BUILDING) {
+          const a = tryMove(s, nearestBuilding(sim, s)); if (a) return a;
+        }
+      }
+      return null; // hold position
+    }
+
+    // Day: race to node, fortify it, entrench
     if (!heroOnNode) { const a = tryMove(hero, _bestNodeForHero(sim, hero, this._allyContext?.claimedNodes)); if (a) return a; }
 
-    // On a node → defend it, dispatch survivors, explore, then hold
     if (heroOnNode) {
       const adj = sim.entities.find(e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1);
       if (adj) return tryBattle(hero, adj);
@@ -1688,14 +1774,16 @@ export class HeroSentinel extends HeroAI {
 }
 
 // ── Hero: Scavenger ───────────────────────────────────────────────────────────
-// Loot all buildings before engaging. Fights only when forced or fully healthy.
+// Day: loot all buildings before engaging. Fights only when forced or healthy.
+// Night: retreat to a building, fortify with gathered resources, explore in safety.
 // Builds a large survivor army, then pivots to nodes once resources are secured.
 
 export class HeroScavenger extends HeroAI {
   _decidePlanAction(sim) {
     const hero = sim.hero;
     if (!hero) return null;
-    const { tryMove, tryBattle } = _makeHelpers(sim);
+    const { tryMove, tryBattle, tryFortify } = _makeHelpers(sim);
+    const isNight   = sim.phase === Phase.NIGHT || sim.phase === Phase.DUSK;
     const survivors = sim.entities.filter(e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR);
     const witchNodeCount = sim.witchObjectives.filter(obj =>
       sim.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
@@ -1709,8 +1797,8 @@ export class HeroScavenger extends HeroAI {
     const col = sim.entities.find(e => e.alive && e.owner === 'witch' && e.col === hero.col && e.row === hero.row);
     if (col) return tryBattle(hero, col);
 
-    // Fight adjacent only if above half HP
-    if (hero.hp > hero.maxHp * 0.5) {
+    // Fight adjacent only if above half HP (day only — too risky at night)
+    if (!isNight && hero.hp > hero.maxHp * 0.5) {
       const adj = [
         sim.entities.find(e => e.alive && e.type === EntityType.WITCH && hexDistance(hero.col, hero.row, e.col, e.row) === 1),
         sim.entities.find(e => e.alive && e.owner === 'witch' && hexDistance(hero.col, hero.row, e.col, e.row) === 1),
@@ -1725,8 +1813,34 @@ export class HeroScavenger extends HeroAI {
     // Emergency: witch about to win
     if (witchNodeCount >= 2) { const a = tryMove(hero, _bestNodeForHero(sim, hero, this._allyContext?.claimedNodes)); if (a) return a; }
 
-    // Explore current tile (buildings and terrain)
+    if (isNight) {
+      // Night: shelter in a building, explore it for free loot, then fortify
+      const heroTile = sim.tiles.get(hexKey(hero.col, hero.row));
+      if (!heroTile || heroTile.type !== TileType.BUILDING) {
+        // Move toward nearest unexplored building — get loot AND shelter
+        const bldg = _nearestUnexploredBuilding(sim, hero) ?? nearestBuilding(sim, hero);
+        if (bldg) { const a = tryMove(hero, bldg); if (a) return a; }
+      }
+      // Explore while sheltered (scavenger loves loot even at night)
+      if (!sim.isExplored(hero.col, hero.row)) return { type: PlanActionType.EXPLORE, entityId: hero.id };
+      // Fortify with gathered resources
+      { const a = tryFortify(hero, 3); if (a) return a; }
+      // Survivors shelter
+      for (const s of survivors) {
+        if (_isOnNode(sim, s)) continue;
+        const st = sim.tiles.get(hexKey(s.col, s.row));
+        if (!st || st.type !== TileType.BUILDING) {
+          const a = tryMove(s, nearestBuilding(sim, s)); if (a) return a;
+        }
+      }
+      return null;
+    }
+
+    // Day: explore aggressively
     if (!sim.isExplored(hero.col, hero.row)) return { type: PlanActionType.EXPLORE, entityId: hero.id };
+
+    // Fortify current building to level 1 while passing through (prep for night)
+    { const a = tryFortify(hero, 1); if (a) return a; }
 
     // Move toward nearest unexplored building
     const bldg = _nearestUnexploredBuilding(sim, hero);
