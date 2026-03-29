@@ -80,6 +80,7 @@ export function serializeState(state) {
     witchKills:           state.witchKills       ?? 0,
     witchSummonCount:     state.witchSummonCount ?? 0,
     nodeScore:            { ...state.nodeScore },
+    disableScoring:       !!state.disableScoring,
     log:                  [...state.log],
     witchObjectives:      state.witchObjectives.map(o => ({
       col:        o.col,
@@ -164,6 +165,7 @@ export function deserializeState(snap) {
   state.attritionLevel       = snap.attritionLevel       ?? 0;
   state.attritionChanged     = snap.attritionChanged     ?? false;
   state.nodeScore            = { ...snap.nodeScore };
+  state.disableScoring       = !!snap.disableScoring;
   state.log                  = [...snap.log];
   state.witchObjectives      = snap.witchObjectives.map(o => ({
     col:        o.col,

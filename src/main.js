@@ -1196,6 +1196,7 @@ function _initCampaignMission(missionDef) {
   if (!builder) { console.error('No map builder for', missionDef.mapBuilder); return; }
   const mapData = builder();
   mapData.noWitch = !missionDef.hasWitch;
+  mapData.disableScoring = !!missionDef.disableScoring;
 
   // Hide setup, show game
   document.getElementById('setup-screen').style.display = 'none';

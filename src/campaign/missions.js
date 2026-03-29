@@ -36,7 +36,8 @@ export const MISSIONS = [
     mapBuilder:    'prologue',
     mapSize:       'skirmish',
 
-    hasWitch:      false,
+    hasWitch:        false,
+    disableScoring:  true,
     enemyUnits: [
       { type: 'zombie', col: 3, row: 2 },
       { type: 'zombie', col: 6, row: 5 },
@@ -71,7 +72,8 @@ export const MISSIONS = [
     mapBuilder:    'first_night',
     mapSize:       'standard',
 
-    hasWitch:      false,
+    hasWitch:        false,
+    disableScoring:  true,
     enemyUnits: [
       { type: 'zombie', col: 10, row: 2 },
       { type: 'zombie', col: 11, row: 4 },
@@ -109,7 +111,8 @@ export const MISSIONS = [
     mapBuilder:    'witchs_trail',
     mapSize:       'standard',
 
-    hasWitch:      true,
+    hasWitch:        true,
+    disableScoring:  true,
     enemyUnits: [
       { type: 'minion', col: 10, row: 3 },
       { type: 'minion', col: 11, row: 6 },

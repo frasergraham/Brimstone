@@ -1590,6 +1590,11 @@ export class UIController {
   }
 
   _renderObjectives() {
+    const bar = this._el('score-bar');
+    if (bar && this.state.disableScoring) {
+      bar.style.display = 'none';
+      return;
+    }
     const el = this._el('score-bar-content');
     if (!el) return;
     const state = this.state;
@@ -1599,8 +1604,7 @@ export class UIController {
     );
 
     el.innerHTML = html;
-    const bar = this._el('score-bar');
-    if (bar) bar.title = title;
+    if (bar) { bar.style.display = ''; bar.title = title; }
   }
 
   /**

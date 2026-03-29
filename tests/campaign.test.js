@@ -373,3 +373,47 @@ describe('Wave spawner', () => {
     assert.equal(state.entities.length, initialCount + 1);
   });
 });
+
+// ── Disable scoring ─────────────────────────────────────────────────────────
+
+describe('disableScoring', () => {
+  test('disableScoring flag is set from mapDataOverride', () => {
+    const mapData = MISSION_MAP_BUILDERS.prologue();
+    mapData.noWitch = true;
+    mapData.disableScoring = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    assert.equal(state.disableScoring, true);
+  });
+
+  test('disableScoring defaults to false', () => {
+    const mapData = MISSION_MAP_BUILDERS.prologue();
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    assert.equal(state.disableScoring, false);
+  });
+
+  test('endRound skips node scoring when disableScoring is true', () => {
+    const mapData = MISSION_MAP_BUILDERS.first_night();
+    mapData.disableScoring = true;
+    const state = new GameState(true, false, 'standard', null, mapData);
+    state.disableScoring = true;
+
+    // Advance to dusk (where scoring normally happens)
+    // Phase cycle: DAWN(1) → DAY(3) → DUSK(1) → NIGHT(3)
+    // Start at round 1 (DAWN). endRound() advances to next.
+    const initialScore = { ...state.nodeScore };
+    // Run several rounds to pass through dawn/dusk
+    for (let i = 0; i < 8; i++) {
+      state.endRound();
+      if (state.gameOver) break;
+    }
+    // Score should remain unchanged
+    assert.deepEqual(state.nodeScore, initialScore);
+  });
+
+  test('all prologue missions have disableScoring set', () => {
+    for (const m of MISSIONS) {
+      assert.equal(typeof m.disableScoring, 'boolean', `${m.id} missing disableScoring`);
+    }
+  });
+});

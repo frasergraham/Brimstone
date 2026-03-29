@@ -202,6 +202,8 @@ export class GameState {
 
     // Cumulative node scoring: each dawn/dusk majority scores 1 point; first to 3 wins.
     this.nodeScore = { hero: 0, witch: 0 };
+    // When true, skip dawn/dusk node scoring and hide the score track UI.
+    this.disableScoring = !!mapDataOverride?.disableScoring;
 
     // ── Campaign / custom victory ──────────────────────────────────────────
     // When set, checked first by checkVictory(). Return { winner, winReason, log? } or null.
@@ -630,12 +632,12 @@ export class GameState {
         this.attritionLevel = Math.min(3, this.attritionLevel + 1);
         this.addLog(`🌅 A new dawn — cycle ${Math.ceil(this.round / CYCLE_LENGTH)}. Attrition rises to ${this.attritionLevel}!`);
         for (const [, t] of this.tiles) t.explored = false;
-        this._checkNodeObjectives(Phase.DAWN);
+        if (!this.disableScoring) this._checkNodeObjectives(Phase.DAWN);
       }
 
       // Dusk: score nodes
       if (this.phase === Phase.DUSK) {
-        this._checkNodeObjectives(Phase.DUSK);
+        if (!this.disableScoring) this._checkNodeObjectives(Phase.DUSK);
       }
     }
 
