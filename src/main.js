@@ -16,7 +16,7 @@ import { serializeState, deserializeState } from '../server/state-sync.js';
 import { MAP_SIZES, generateTutorialMap } from './map.js';
 import { nodeController } from './game.js';
 import { TutorialConductor } from './tutorial.js';
-import { createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, setForcedDice, EntityType } from './entities.js';
+import { createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, setForcedDice, EntityType, markRosterUsedByName } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
@@ -1216,6 +1216,36 @@ function _createEnemyEntity(type, col, row) {
   }
 }
 
+const _DEPARTURE_MESSAGES = [
+  name => `${name} left town to search for supplies in the outlying farms.`,
+  name => `${name} slipped away at dawn to scout the old trade road.`,
+  name => `${name} volunteered to warn the neighboring settlement.`,
+  name => `${name} departed to tend to a wounded traveler found on the road.`,
+  name => `${name} set off alone to bury the dead in the churchyard.`,
+  name => `${name} vanished into the fog — perhaps the strain was too much.`,
+  name => `${name} headed south, hoping to find reinforcements.`,
+  name => `${name} left to guard the bridge crossing overnight.`,
+];
+
+const _ARRIVAL_MESSAGES = [
+  name => `${name} wanders into town, weary but willing to fight.`,
+  name => `${name} stumbles out of the tree line, clutching a makeshift weapon.`,
+  name => `${name} emerges from the cellar of a ruined house and joins you.`,
+  name => `A voice calls from the fog — ${name} steps forward, ready for battle.`,
+  name => `${name} was hiding in the church. Hearing your approach, they join the cause.`,
+  name => `${name} arrives breathless, having fled the horrors to the north.`,
+  name => `The door of the inn creaks open — ${name} has been waiting for someone to lead.`,
+  name => `${name} crawls from the wreckage of a collapsed barn, bruised but alive.`,
+];
+
+function _departureMessage(name) {
+  return _DEPARTURE_MESSAGES[Math.floor(Math.random() * _DEPARTURE_MESSAGES.length)](name);
+}
+
+function _arrivalMessage(name) {
+  return _ARRIVAL_MESSAGES[Math.floor(Math.random() * _ARRIVAL_MESSAGES.length)](name);
+}
+
 function _initCampaignMission(missionDef) {
   _activeMissionDef = missionDef;
   _gameStartTime = Date.now();
@@ -1288,6 +1318,43 @@ function _initCampaignMission(missionDef) {
       s.items = { ...rosterEntry.items };
       s.owner = 'hero';
       state.entities.push(s);
+      // Exclude this character from the hidden-survivor discovery pool
+      markRosterUsedByName(rosterEntry.name);
+    }
+  }
+
+  // ── Roster balancing: enforce min/max survivor count ──────────────────────
+  if (missionDef.minSurvivors != null || missionDef.maxSurvivors != null) {
+    const heroSurvivors = state.entities.filter(
+      e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR
+    );
+    const min = missionDef.minSurvivors ?? 0;
+    const max = missionDef.maxSurvivors ?? Infinity;
+
+    // Too many — some leave with a narrative reason
+    if (heroSurvivors.length > max) {
+      const excess = heroSurvivors.slice(max);
+      for (const s of excess) {
+        state.entities.splice(state.entities.indexOf(s), 1);
+        state.addLog(_departureMessage(s.name));
+      }
+    }
+
+    // Too few — newcomers arrive
+    const currentCount = state.entities.filter(
+      e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR
+    ).length;
+    if (currentCount < min) {
+      const heroStart = mapData.heroStart;
+      const spots = getNeighbors(heroStart.col, heroStart.row)
+        .filter(n => !state.entities.some(e => e.col === n.col && e.row === n.row));
+      for (let i = currentCount; i < min && spots.length > 0; i++) {
+        const spot = spots.shift();
+        const s = createSurvivor(spot.col, spot.row, 'hero');
+        s.owner = 'hero';
+        state.entities.push(s);
+        state.addLog(_arrivalMessage(s.name));
+      }
     }
   }
 

@@ -334,6 +334,8 @@ const MISSIONS = [
 
     maxSurvivorsFromRoster: 3,
     missionSurvivors:       1,
+    minSurvivors:           1,
+    maxSurvivors:           3,
 
     objectives: {
       win:  { type: 'slay_witch', reason: 'The witch is defeated — for now.' },
