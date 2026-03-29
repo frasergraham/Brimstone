@@ -13,6 +13,7 @@ import {
 import { generateToken, verifyToken, sendMagicLinkEmail } from './server/magic-link.js';
 import { getLeaderboard }                    from './server/leaderboard.js';
 import { recordGameStats, getGameStats, getAggregateStats } from './server/game-stats.js';
+import { upsertCampaignSave, getCampaignSave, getCampaignSaves, deleteCampaignSave } from './server/campaign-saves.js';
 import { getActiveSaves, pruneStaleAndIncompatibleSaves,
          getCompletedGames, getCompletedGame, getCompletedGameRounds,
          pinCompletedGame, deleteCompletedGame,
@@ -235,6 +236,56 @@ app.post('/api/account/username', (req, res) => {
   const result = changeUsername(player.id, req.body?.username);
   if (!result.ok) { res.status(400).json({ error: result.error }); return; }
   res.json({ ok: true, player: { id: result.player.id, username: result.player.username } });
+});
+
+// ── Campaign saves (cloud backup for verified users) ──────────────────────────
+
+function _requireAuth(req, res) {
+  const token = req.query.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return null; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return null; }
+  return player;
+}
+
+function _requireVerifiedEmail(player, res) {
+  const identities = getPlayerIdentities(player.id);
+  if (!identities.some(i => i.provider === 'email')) {
+    res.status(403).json({ error: 'Link a verified email to enable cloud saves.' });
+    return false;
+  }
+  return true;
+}
+
+app.get('/api/campaign-saves', (req, res) => {
+  const player = _requireAuth(req, res);
+  if (!player) return;
+  res.json(getCampaignSaves(player.id));
+});
+
+app.get('/api/campaign-saves/:slot', (req, res) => {
+  const player = _requireAuth(req, res);
+  if (!player) return;
+  const save = getCampaignSave(player.id, req.params.slot);
+  if (!save) { res.status(404).json({ error: 'No campaign save found.' }); return; }
+  res.json(save);
+});
+
+app.put('/api/campaign-saves/:slot', (req, res) => {
+  const player = _requireAuth(req, res);
+  if (!player) return;
+  if (!_requireVerifiedEmail(player, res)) return;
+  const { state } = req.body || {};
+  if (!state) { res.status(400).json({ error: 'Missing state.' }); return; }
+  upsertCampaignSave(player.id, req.params.slot, JSON.stringify(state), VERSION);
+  res.json({ ok: true });
+});
+
+app.delete('/api/campaign-saves/:slot', (req, res) => {
+  const player = _requireAuth(req, res);
+  if (!player) return;
+  deleteCampaignSave(player.id, req.params.slot);
+  res.json({ ok: true });
 });
 
 // ── Admin pages ───────────────────────────────────────────────────────────────

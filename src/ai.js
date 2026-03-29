@@ -203,6 +203,7 @@ export class WitchAI {
     const state = this.state;
     const phase = state.phase;
     const witch = state.witch;
+    if (!witch) return false; // no-witch campaign mission — legacy path unused
     const isNight = phase === Phase.NIGHT || phase === Phase.DUSK;
 
     const minions = state.entities.filter(
@@ -569,7 +570,9 @@ export class WitchAI {
   /** Synchronous action decision for plan generation. Returns a PlanAction or null. */
   _decidePlanAction(sim) {
     const witch = sim.witch;
-    if (!witch) return null;
+
+    // Leaderless mode (campaign no-witch missions): only control minions.
+    if (!witch) return this._decidePlanActionLeaderless(sim);
 
     const phase  = sim.phase;
     const isNight = phase === Phase.NIGHT || phase === Phase.DUSK;
@@ -791,6 +794,59 @@ export class WitchAI {
 
     // 11. Pursue hero to force combat
     if (hero) { const a = tryMove(witch, hero); if (a) return a; }
+
+    return null;
+  }
+
+  /**
+   * Leaderless plan generation — used in campaign missions without a witch entity.
+   * Controls only pre-placed minion/zombie/golem units.
+   * Strategy: attack nearby heroes, advance toward hero, move toward nodes.
+   */
+  _decidePlanActionLeaderless(sim) {
+    const hero = sim.hero;
+    const minions = sim.entities.filter(e => e.alive && e.owner === 'witch');
+    // Only dispatch real entities (not sim-summoned placeholders)
+    const realMinions = minions.filter(m => !m.id.startsWith('sim-'));
+    if (realMinions.length === 0) return null;
+
+    const tryMove = (entity, target) => {
+      if (!target) return null;
+      const step = stepToward(sim, entity, target);
+      if (step) return { type: PlanActionType.MOVE, entityId: entity.id, toCol: step.col, toRow: step.row };
+      return null;
+    };
+    const tryBattle = (actor, target) =>
+      ({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id });
+
+    // 1. Any minion co-located with a hero unit → attack
+    for (const m of realMinions) {
+      const colocated = sim.entities.find(e => e.alive && e.owner === 'hero' && e.col === m.col && e.row === m.row);
+      if (colocated) return tryBattle(m, colocated);
+    }
+
+    // 2. Any minion adjacent to a hero unit → attack
+    for (const m of realMinions) {
+      const adj = sim.entities.find(e => e.alive && e.owner === 'hero' && hexDistance(m.col, m.row, e.col, e.row) === 1);
+      if (adj) return tryBattle(m, adj);
+    }
+
+    // 3. Move minions toward the hero
+    if (hero) {
+      for (const m of realMinions) {
+        const a = tryMove(m, hero);
+        if (a) return a;
+      }
+    }
+
+    // 4. Move toward nearest hero-owned entity if hero ref is missing
+    const anyHero = sim.entities.find(e => e.alive && e.owner === 'hero');
+    if (anyHero) {
+      for (const m of realMinions) {
+        const a = tryMove(m, anyHero);
+        if (a) return a;
+      }
+    }
 
     return null;
   }
@@ -1111,7 +1167,7 @@ export class HeroAI {
 
     // 10. Hunt the witch — kill wins the game; always prefer this over building exploration
     const visibleWitchHexes = getVisibleEnemyHexes(state);
-    if (visibleWitchHexes.has(hexKey(state.witch.col, state.witch.row))) {
+    if (state.witch && visibleWitchHexes.has(hexKey(state.witch.col, state.witch.row))) {
       const step = stepToward(state, hero, state.witch);
       if (step) {
         const result = executeMove(state, hero, step.col, step.row);
@@ -1862,7 +1918,7 @@ export class HeroScavenger extends HeroAI {
 export class WitchBerserker extends WitchAI {
   _decidePlanAction(sim) {
     const witch = sim.witch;
-    if (!witch) return null;
+    if (!witch) return this._decidePlanActionLeaderless(sim);
     const { tryMove, tryBattle, trySummon } = _makeHelpers(sim);
     const hero    = sim.hero;
     const minions = sim.entities.filter(e => e.alive && e.owner === 'witch' && e.type !== EntityType.WITCH);
@@ -1910,7 +1966,7 @@ export class WitchBerserker extends WitchAI {
 export class WitchHoarder extends WitchAI {
   _decidePlanAction(sim) {
     const witch = sim.witch;
-    if (!witch) return null;
+    if (!witch) return this._decidePlanActionLeaderless(sim);
     const { tryMove, tryBattle, trySummon } = _makeHelpers(sim);
     const hero      = sim.hero;
     const minions   = sim.entities.filter(e => e.alive && e.owner === 'witch' && e.type !== EntityType.WITCH);
@@ -1969,7 +2025,7 @@ export class WitchHoarder extends WitchAI {
 export class WitchSwarm extends WitchAI {
   _decidePlanAction(sim) {
     const witch = sim.witch;
-    if (!witch) return null;
+    if (!witch) return this._decidePlanActionLeaderless(sim);
     const { tryMove, tryBattle, trySummon } = _makeHelpers(sim);
     const hero      = sim.hero;
     const minions   = sim.entities.filter(e => e.alive && e.owner === 'witch' && e.type !== EntityType.WITCH);

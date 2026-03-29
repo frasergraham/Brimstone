@@ -3154,3 +3154,153 @@ body.spectator-mode #game-screen   { display: flex !important; }
   0%, 100% { box-shadow: 0 0 8px 1px rgba(255,200,0,0.35); }
   50%       { box-shadow: 0 0 16px 4px rgba(255,200,0,0.65); }
 }
+
+/* ── Campaign / Story Mode ──────────────────────────────────────────────── */
+
+.campaign-mission-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+  max-width: 420px;
+}
+
+.campaign-mission {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--clr-dim, #555);
+  border-radius: 6px;
+  font-size: 0.95rem;
+  transition: background 0.15s;
+}
+
+.campaign-mission.available {
+  cursor: pointer;
+  border-color: var(--clr-gold, #d4a72c);
+}
+.campaign-mission.available:hover {
+  background: rgba(212, 167, 44, 0.12);
+}
+
+.campaign-mission.completed {
+  opacity: 0.65;
+  border-color: var(--clr-dim, #555);
+}
+
+.campaign-mission.locked {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.campaign-mission-icon {
+  font-size: 1.2rem;
+  width: 1.5rem;
+  text-align: center;
+}
+
+.campaign-mission-name {
+  flex: 1;
+}
+
+.campaign-mission-status {
+  font-size: 0.8rem;
+  color: var(--clr-dim, #888);
+}
+
+.campaign-briefing {
+  max-width: 480px;
+}
+
+.campaign-mission-title {
+  font-size: 1.4rem;
+  color: var(--clr-gold, #d4a72c);
+  margin-bottom: 0.5rem;
+}
+
+.campaign-mission-text {
+  line-height: 1.5;
+  margin-bottom: 0.75rem;
+  color: var(--clr-text, #ddd);
+}
+
+.campaign-objectives {
+  margin: 0.75rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.campaign-obj {
+  font-size: 0.9rem;
+  padding: 0.3rem 0;
+}
+
+.campaign-obj-icon {
+  margin-right: 0.35rem;
+}
+
+.campaign-roster-summary {
+  margin-bottom: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(255,255,255,0.04);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.campaign-roster-label {
+  color: var(--clr-gold, #d4a72c);
+  margin-bottom: 0.2rem;
+}
+
+.campaign-resources-label {
+  color: var(--clr-dim, #888);
+}
+
+.campaign-deploy-roster {
+  margin: 0.75rem 0;
+}
+
+.campaign-deploy-roster h3 {
+  font-size: 0.95rem;
+  margin-bottom: 0.4rem;
+}
+
+.campaign-roster-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.campaign-survivor-pick {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+/* Debrief screen */
+.debrief-stats {
+  margin: 0.75rem 0;
+  display: flex;
+  gap: 1.5rem;
+  font-size: 0.9rem;
+  color: var(--clr-dim, #aaa);
+}
+
+.debrief-roster {
+  margin-top: 0.75rem;
+}
+
+.debrief-roster h3 {
+  font-size: 0.95rem;
+  color: var(--clr-gold, #d4a72c);
+  margin-bottom: 0.4rem;
+}
+
+.debrief-survivor {
+  font-size: 0.85rem;
+  padding: 0.2rem 0;
+}

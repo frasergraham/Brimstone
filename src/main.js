@@ -2,7 +2,7 @@
 import { GameState, Player } from './game.js';
 import { Renderer }          from './renderer.js';
 import { UIController, UIMode } from './ui.js';
-import { WitchAI, HeroAI }   from './ai.js';
+import { WitchAI, HeroAI, WITCH_PERSONALITIES }   from './ai.js';
 import {
   MultiplayerClient, MirrorState, loadSession, clearSession,
   checkEmailTokenInUrl, requestLinkEmail, requestEmailLogin, fetchIdentities,
@@ -10,14 +10,17 @@ import {
 import { VERSION, BUILD_VERSION } from './version.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType }    from './planner.js';
-import { hexDistance }       from './hex.js';
+import { hexDistance, getNeighbors } from './hex.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { MAP_SIZES, generateTutorialMap } from './map.js';
 import { nodeController } from './game.js';
 import { TutorialConductor } from './tutorial.js';
-import { createMinion, setForcedDice } from './entities.js';
+import { createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, setForcedDice, EntityType } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
+import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves } from './campaign/campaign.js';
+import { MISSIONS } from './campaign/missions.js';
+import { MISSION_MAP_BUILDERS } from './campaign/mission-maps.js';
 
 // Stamp version into badges
 document.getElementById('version-badge').textContent = `v${BUILD_VERSION}`;
@@ -381,6 +384,13 @@ async function _runLocalResolution(skipSummary = false) {
   state.updateNodeDiscovery();
   state.checkAndLogNodeControlChanges();
   state.endRound();
+
+  // Campaign wave spawning: inject new enemies after each round
+  if (_activeMissionDef?.waves) {
+    const waveLogs = processWaves(state, _activeMissionDef.waves, _createEnemyEntity);
+    for (const msg of waveLogs) state.addLog(msg);
+  }
+
   if (ui) ui._triggerHazardFlashes();
   redraw();
 
@@ -432,6 +442,11 @@ async function _runLocalResolution(skipSummary = false) {
     ui._animateScoreBar(prevScore, prevNodes);
 
     if (state.gameOver) {
+      // Campaign mission debrief
+      if (_activeCampaign && _activeMissionDef) {
+        _handleCampaignMissionEnd();
+        return;
+      }
       if (action === 'viewmap') {
         // Lift fog so the player can inspect the final board
         state.fogOfWar = false;
@@ -961,7 +976,10 @@ window.addEventListener('resize', () => {
 // ── Setup screen ──────────────────────────────────────────────────────────────
 
 const stepMode         = document.getElementById('setup-step-mode');
+const stepSpChoice     = document.getElementById('setup-step-sp-choice');
 const stepSinglePlayer = document.getElementById('setup-step-singleplayer');
+const stepCampaign     = document.getElementById('setup-step-campaign');
+const stepDebrief      = document.getElementById('setup-step-debrief');
 const stepMultiplayer  = document.getElementById('setup-step-multiplayer');
 const stepHowto        = document.getElementById('setup-step-howtoplay');
 const stepOptions      = document.getElementById('setup-step-options');
@@ -974,7 +992,10 @@ const stepLobby        = document.getElementById('setup-step-lobby');
 
 function showStep(step) {
   stepMode        .style.display = step === 'mode'          ? '' : 'none';
+  stepSpChoice    .style.display = step === 'sp-choice'     ? '' : 'none';
   stepSinglePlayer.style.display = step === 'singleplayer'  ? '' : 'none';
+  stepCampaign    .style.display = step === 'campaign'      ? '' : 'none';
+  stepDebrief     .style.display = step === 'debrief'       ? '' : 'none';
   stepMultiplayer .style.display = step === 'multiplayer'   ? '' : 'none';
   stepHowto       .style.display = step === 'howtoplay'     ? '' : 'none';
   stepOptions     .style.display = step === 'options'       ? '' : 'none';
@@ -991,7 +1012,10 @@ let _currentLobby = null;
 
 // ── Welcome screen buttons ────────────────────────────────────────────────────
 
-document.getElementById('btn-single-player').addEventListener('click', () => _showSinglePlayerScreen());
+document.getElementById('btn-single-player').addEventListener('click', () => showStep('sp-choice'));
+document.getElementById('btn-quick-play')    .addEventListener('click', () => _showSinglePlayerScreen());
+document.getElementById('btn-story-mode')    .addEventListener('click', () => _showCampaignScreen());
+document.getElementById('btn-sp-choice-back').addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-multiplayer')  .addEventListener('click', () => _showMultiplayerScreen());
 document.getElementById('btn-tutorial')     .addEventListener('click', () => initTutorial());
 document.getElementById('btn-how-to-play')  .addEventListener('click', () => showStep('howtoplay'));
@@ -1042,7 +1066,291 @@ function _showSinglePlayerScreen() {
 
 document.getElementById('btn-singleplayer-back').addEventListener('click', () => {
   renderer = null; ui = null; state = null;
-  showStep('mode');
+  showStep('sp-choice');
+});
+
+// ── Campaign / Story Mode ─────────────────────────────────────────────────────
+
+let _activeCampaign  = null;  // Campaign instance (persists across missions)
+let _activeMissionDef = null; // Current mission definition
+let _campaignSelectedMission = null; // Mission ID selected on campaign screen
+
+function _showCampaignScreen() {
+  _activeCampaign = new Campaign();
+  _activeCampaign.load(); // loads from localStorage if exists
+  _renderCampaignScreen();
+  showStep('campaign');
+}
+
+function _renderCampaignScreen() {
+  const listEl = document.getElementById('campaign-mission-list');
+  const briefEl = document.getElementById('campaign-briefing');
+  const navEl = document.getElementById('campaign-nav');
+  const rosterEl = document.getElementById('campaign-roster-summary');
+  briefEl.style.display = 'none';
+  navEl.style.display = '';
+  listEl.style.display = '';
+
+  // Roster summary
+  if (_activeCampaign.roster.length > 0) {
+    rosterEl.style.display = '';
+    rosterEl.innerHTML = `<div class="campaign-roster-label">Roster: ${_activeCampaign.roster.length} survivor${_activeCampaign.roster.length !== 1 ? 's' : ''}</div>` +
+      `<div class="campaign-resources-label">` +
+      Object.entries(_activeCampaign.resources).filter(([,v]) => v > 0).map(([k,v]) => `${k}: ${v}`).join(' · ') +
+      `</div>`;
+  } else {
+    rosterEl.style.display = 'none';
+  }
+
+  // Mission list
+  const missions = _activeCampaign.getMissionList();
+  listEl.innerHTML = missions.map(m => {
+    const cls = m.completed ? 'campaign-mission completed' : m.available ? 'campaign-mission available' : 'campaign-mission locked';
+    const icon = m.completed ? '✓' : m.available ? '→' : '🔒';
+    return `<div class="${cls}" data-mission="${m.id}">
+      <span class="campaign-mission-icon">${icon}</span>
+      <span class="campaign-mission-name">${m.title}</span>
+      ${m.completed ? '<span class="campaign-mission-status">Complete</span>' : ''}
+    </div>`;
+  }).join('');
+
+  // Click handlers for missions
+  listEl.querySelectorAll('.campaign-mission.available').forEach(el => {
+    el.addEventListener('click', () => {
+      _campaignSelectedMission = el.dataset.mission;
+      _showMissionBriefing(_campaignSelectedMission);
+    });
+  });
+}
+
+function _showMissionBriefing(missionId) {
+  const missionDef = _activeCampaign.getMissionDef(missionId);
+  if (!missionDef) return;
+
+  const listEl = document.getElementById('campaign-mission-list');
+  const briefEl = document.getElementById('campaign-briefing');
+  const navEl = document.getElementById('campaign-nav');
+
+  listEl.style.display = 'none';
+  navEl.style.display = 'none';
+  briefEl.style.display = '';
+
+  document.getElementById('campaign-mission-title').textContent = missionDef.title;
+  document.getElementById('campaign-mission-text').textContent = missionDef.briefing;
+
+  // Objectives
+  const objEl = document.getElementById('campaign-objectives');
+  const winDesc = _objectiveDescription(missionDef.objectives.win);
+  const loseDesc = _objectiveDescription(missionDef.objectives.lose);
+  objEl.innerHTML = `
+    <div class="campaign-obj"><span class="campaign-obj-icon">☀</span> <strong>Victory:</strong> ${winDesc}</div>
+    <div class="campaign-obj"><span class="campaign-obj-icon">💀</span> <strong>Defeat:</strong> ${loseDesc}</div>
+  `;
+
+  // Deploy roster (if campaign has survivors and mission allows them)
+  const deployEl = document.getElementById('campaign-deploy-roster');
+  const pickerEl = document.getElementById('campaign-roster-picker');
+  if (_activeCampaign.roster.length > 0 && missionDef.maxSurvivorsFromRoster > 0) {
+    deployEl.style.display = '';
+    pickerEl.innerHTML = _activeCampaign.roster.map((s, i) => `
+      <label class="campaign-survivor-pick">
+        <input type="checkbox" data-idx="${i}" ${i < missionDef.maxSurvivorsFromRoster ? 'checked' : ''}>
+        <span>${s.name} (${s.ability}) HP:${s.hp}/${s.maxHp}</span>
+      </label>
+    `).join('');
+  } else {
+    deployEl.style.display = 'none';
+  }
+}
+
+function _objectiveDescription(obj) {
+  if (!obj) return 'None';
+  switch (obj.type) {
+    case 'eliminate_all':  return 'Eliminate all enemies';
+    case 'hero_killed':    return 'Don\'t let the hero fall';
+    case 'survive_rounds': return `Survive ${obj.rounds} rounds`;
+    case 'reach_hex':      return 'Reach the objective hex';
+    case 'slay_witch':     return 'Slay the witch';
+    case 'control_nodes':  return 'Control the Power Nodes';
+    default:               return obj.type;
+  }
+}
+
+function _createEnemyEntity(type, col, row) {
+  switch (type) {
+    case 'zombie':     return createZombie(col, row, 'witch');
+    case 'minion':     return createMinion(col, row, 'witch');
+    case 'wood_golem': return createWoodGolem(col, row, 'witch');
+    case 'iron_golem': return createIronGolem(col, row, 'witch');
+    default:           return createMinion(col, row, 'witch');
+  }
+}
+
+function _initCampaignMission(missionDef) {
+  _activeMissionDef = missionDef;
+  _gameStartTime = Date.now();
+  _spSaveId = null; // campaign uses its own save system
+
+  // Build map
+  const builder = MISSION_MAP_BUILDERS[missionDef.mapBuilder];
+  if (!builder) { console.error('No map builder for', missionDef.mapBuilder); return; }
+  const mapData = builder();
+  mapData.noWitch = !missionDef.hasWitch;
+
+  // Hide setup, show game
+  document.getElementById('setup-screen').style.display = 'none';
+  document.getElementById('game-screen').style.display = 'flex';
+
+  // Create game state
+  state = new GameState(true, false, missionDef.mapSize, null, mapData);
+  state.fogOfWar = true;
+
+  // Set custom victory delegate
+  state.victoryDelegate = buildVictoryDelegate(missionDef.objectives);
+
+  // Inject carried-over hero stats
+  if (_activeCampaign && _activeCampaign.heroStats) {
+    const hs = _activeCampaign.heroStats;
+    state.hero.hp      = Math.min(hs.hp, state.hero.maxHp);
+    state.hero.weapon  = hs.weapon;
+    state.hero.items   = { ...hs.items };
+  }
+
+  // Inject carried-over resources
+  if (_activeCampaign) {
+    const res = { ...(_activeCampaign.resources || {}) };
+    // Add mission starting resources
+    if (missionDef.startingResources) {
+      for (const [k, v] of Object.entries(missionDef.startingResources)) {
+        res[k] = (res[k] || 0) + v;
+      }
+    }
+    Object.assign(state.inventory.shared, res);
+  }
+
+  // Deploy carried-over survivors from roster
+  if (_activeCampaign && missionDef.maxSurvivorsFromRoster > 0) {
+    const pickerEl = document.getElementById('campaign-roster-picker');
+    const checked = pickerEl ? [...pickerEl.querySelectorAll('input:checked')].map(cb => parseInt(cb.dataset.idx)) : [];
+    const toDeploy = checked.slice(0, missionDef.maxSurvivorsFromRoster);
+    // Place survivors near hero start
+    const heroStart = mapData.heroStart;
+    const neighbors = getNeighbors(heroStart.col, heroStart.row);
+    for (let i = 0; i < toDeploy.length && i < neighbors.length; i++) {
+      const rosterEntry = _activeCampaign.roster[toDeploy[i]];
+      if (!rosterEntry) continue;
+      const n = neighbors[i];
+      const s = createSurvivor(n.col, n.row, 'hero');
+      // Restore stats from roster
+      s.name = rosterEntry.name;
+      s.title = rosterEntry.title;
+      s.bio = rosterEntry.bio;
+      s.ability = rosterEntry.ability;
+      s.abilityLabel = rosterEntry.abilityLabel;
+      s.color = rosterEntry.color;
+      s.hp = rosterEntry.hp;
+      s.maxHp = rosterEntry.maxHp;
+      s.attack = rosterEntry.attack;
+      s.defense = rosterEntry.defense;
+      s.weapon = rosterEntry.weapon;
+      s.items = { ...rosterEntry.items };
+      s.owner = 'hero';
+      state.entities.push(s);
+    }
+  }
+
+  // Pre-place enemy units from mission definition
+  if (missionDef.enemyUnits) {
+    for (const enemy of missionDef.enemyUnits) {
+      const e = _createEnemyEntity(enemy.type, enemy.col, enemy.row);
+      if (e) state.entities.push(e);
+    }
+  }
+
+  // Set up AI
+  const AIClass = WITCH_PERSONALITIES[missionDef.aiPersonality] ?? WitchAI;
+  witchAI = new AIClass(state, redraw);
+  heroAI = null;
+
+  _setupLocalUI(canvas, witchAI, null, false);
+  _roundHistory = [];
+  _startLocalPlanningPhase();
+}
+
+function _handleCampaignMissionEnd() {
+  if (!_activeCampaign || !_activeMissionDef || !state) return;
+
+  const won = state.winner === 'hero';
+  const missionDef = _activeMissionDef;
+
+  // Gather surviving survivors for roster (permadeath: dead ones are lost)
+  const survivors = state.entities
+    .filter(e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR)
+    .map(e => snapshotSurvivor(e));
+
+  // Apply mission result to campaign state
+  _activeCampaign.applyMissionResult(missionDef.id, {
+    won,
+    survivors,
+    resources: { ...state.inventory.shared },
+    heroStats: state.hero ? {
+      hp: state.hero.hp, maxHp: state.hero.maxHp,
+      attack: state.hero.attack, defense: state.hero.defense,
+      weapon: state.hero.weapon, items: { ...state.hero.items },
+    } : _activeCampaign.heroStats,
+    flags: {},
+  });
+
+  // Show debrief screen
+  document.getElementById('game-screen').style.display = 'none';
+  document.getElementById('setup-screen').style.display = '';
+
+  const title = won ? 'VICTORY' : 'DEFEAT';
+  const text = won ? (missionDef.victoryText || 'Mission complete.') : (missionDef.defeatText || 'Mission failed.');
+  document.getElementById('debrief-title').textContent = title;
+  document.getElementById('debrief-text').textContent = text;
+
+  // Stats
+  const statsEl = document.getElementById('debrief-stats');
+  statsEl.innerHTML = `
+    <div>Rounds: ${state.round}</div>
+    <div>Kills: ${state.heroKills}</div>
+    <div>Survivors remaining: ${survivors.length}</div>
+  `;
+
+  // Roster status
+  const rosterEl = document.getElementById('debrief-roster');
+  if (survivors.length > 0) {
+    rosterEl.innerHTML = '<h3>Surviving Roster</h3>' +
+      survivors.map(s => `<div class="debrief-survivor">${s.name} — HP: ${s.hp}/${s.maxHp}</div>`).join('');
+  } else {
+    rosterEl.innerHTML = '';
+  }
+
+  // Clean up game state
+  renderer = null; ui = null; witchAI = null; heroAI = null;
+  _activeMissionDef = null;
+
+  showStep('debrief');
+}
+
+// Campaign event listeners
+document.getElementById('btn-campaign-back')   .addEventListener('click', () => showStep('sp-choice'));
+document.getElementById('btn-briefing-back')   .addEventListener('click', () => _renderCampaignScreen());
+document.getElementById('btn-delete-campaign')  .addEventListener('click', () => {
+  if (confirm('Delete your campaign save? This cannot be undone.')) {
+    _activeCampaign.delete();
+    showStep('sp-choice');
+  }
+});
+document.getElementById('btn-start-mission')   .addEventListener('click', () => {
+  if (!_campaignSelectedMission) return;
+  const missionDef = _activeCampaign.getMissionDef(_campaignSelectedMission);
+  if (missionDef) _initCampaignMission(missionDef);
+});
+document.getElementById('btn-debrief-continue').addEventListener('click', () => {
+  _showCampaignScreen();
+  showStep('campaign');
 });
 
 // Tab switching for In Progress / Completed panels (SP and MP)
@@ -1092,6 +1400,7 @@ function _doRestart() {
   state    = null;
   witchAI  = null;
   heroAI   = null;
+  _activeMissionDef = null;
 
   if (_autoplay) {
     init(true, true, true);

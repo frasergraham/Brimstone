@@ -89,6 +89,16 @@ export const SCHEMA_SQL = `
     used       INTEGER NOT NULL DEFAULT 0
   );
 
+  CREATE TABLE IF NOT EXISTS campaign_saves (
+    player_id    TEXT NOT NULL REFERENCES players(id),
+    save_slot    TEXT NOT NULL DEFAULT 'campaign-1',
+    state_json   TEXT NOT NULL,
+    game_version TEXT NOT NULL,
+    updated_at   INTEGER NOT NULL DEFAULT (unixepoch()),
+    created_at   INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (player_id, save_slot)
+  );
+
   CREATE TABLE IF NOT EXISTS game_stats (
     id                TEXT PRIMARY KEY,
     mode              TEXT NOT NULL,
