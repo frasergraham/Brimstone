@@ -3,7 +3,10 @@ import { GameState, Player } from './game.js';
 import { Renderer }          from './renderer.js';
 import { UIController, UIMode } from './ui.js';
 import { WitchAI, HeroAI }   from './ai.js';
-import { MultiplayerClient, MirrorState, loadSession, clearSession } from './multiplayer.js';
+import {
+  MultiplayerClient, MirrorState, loadSession, clearSession,
+  checkEmailTokenInUrl, requestLinkEmail, requestEmailLogin, fetchIdentities,
+} from './multiplayer.js';
 import { VERSION, BUILD_VERSION } from './version.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType }    from './planner.js';
@@ -2063,13 +2066,47 @@ function _initMpStep() {
     sessionInfo.style.display = '';
     nameForm.style.display    = 'none';
     actionBtns.style.display  = '';
+
+    // Check if email is already linked and update UI
+    _updateEmailLinkStatus(session.token);
   } else {
     sessionInfo.style.display = 'none';
     nameForm.style.display    = '';
     actionBtns.style.display  = 'none';
   }
 
+  // Reset email form states
   document.getElementById('mp-name-error').style.display = 'none';
+  const linkForm = document.getElementById('mp-link-email-form');
+  if (linkForm) linkForm.style.display = 'none';
+  const linkStatus = document.getElementById('mp-link-email-status');
+  if (linkStatus) linkStatus.style.display = 'none';
+  const loginStatus = document.getElementById('mp-email-login-status');
+  if (loginStatus) loginStatus.style.display = 'none';
+}
+
+async function _updateEmailLinkStatus(token) {
+  const linkBtn = document.getElementById('btn-mp-link-email');
+  const emailBadge = document.getElementById('mp-email-badge');
+  if (!linkBtn || !emailBadge) return;
+
+  try {
+    const identities = await fetchIdentities(token);
+    const emailIdentity = identities.find(i => i.provider === 'email');
+    if (emailIdentity) {
+      // Email already linked — show badge, hide link button
+      emailBadge.textContent = `✓ ${emailIdentity.provider_id}`;
+      emailBadge.style.display = '';
+      linkBtn.style.display = 'none';
+    } else {
+      emailBadge.style.display = 'none';
+      linkBtn.style.display = '';
+    }
+  } catch {
+    // Silently fail — email badge is non-critical
+    emailBadge.style.display = 'none';
+    linkBtn.style.display = '';
+  }
 }
 
 document.getElementById('btn-mp-signin').addEventListener('click', () => {
@@ -2088,6 +2125,58 @@ document.getElementById('btn-mp-change-name').addEventListener('click', () => {
     '<p class="saves-empty">Sign in to see your active games.</p>';
   if (mp) { mp.disconnect(); mp = null; }
   renderer = null; ui = null; state = null;
+});
+
+// ── Email linking (signed-in player links their email) ───────────────────────
+
+document.getElementById('btn-mp-link-email').addEventListener('click', () => {
+  const form = document.getElementById('mp-link-email-form');
+  form.style.display = form.style.display === 'none' ? '' : 'none';
+});
+
+document.getElementById('btn-mp-send-link').addEventListener('click', async () => {
+  const session = loadSession();
+  if (!session) return;
+
+  const emailInput = document.getElementById('mp-link-email-input');
+  const email = emailInput.value.trim();
+  if (!email) return;
+
+  const statusEl = document.getElementById('mp-link-email-status');
+  statusEl.textContent = 'Sending…';
+  statusEl.className   = 'setup-hint';
+  statusEl.style.display = '';
+
+  const result = await requestLinkEmail(session.token, email);
+  if (result.ok) {
+    statusEl.textContent = result.message || 'Check your email for the link!';
+    statusEl.className   = 'setup-hint';
+  } else {
+    statusEl.textContent = result.error || 'Failed to send link.';
+    statusEl.className   = 'setup-error';
+  }
+});
+
+// ── Email login (new device, no session) ─────────────────────────────────────
+
+document.getElementById('btn-mp-email-login').addEventListener('click', async () => {
+  const emailInput = document.getElementById('mp-email-login-input');
+  const email = emailInput.value.trim();
+  if (!email) return;
+
+  const statusEl = document.getElementById('mp-email-login-status');
+  statusEl.textContent = 'Sending…';
+  statusEl.className   = 'setup-hint';
+  statusEl.style.display = '';
+
+  const result = await requestEmailLogin(email);
+  if (result.ok) {
+    statusEl.textContent = result.message || 'Check your email for the login link!';
+    statusEl.className   = 'setup-hint';
+  } else {
+    statusEl.textContent = result.error || 'Failed to send link.';
+    statusEl.className   = 'setup-error';
+  }
 });
 
 function _onlineError(msg) {
@@ -2661,5 +2750,26 @@ async function _loadAdminReplay(gameId, source = 'mp') {
   } catch (e) {
     console.error('Admin replay load error:', e);
     alert('Could not load replay data.');
+  }
+}
+
+// Auto-login via magic link redirect: ?email_token=<token>
+const _emailToken = checkEmailTokenInUrl();
+if (_emailToken) {
+  // The URL param is a session token from a verified magic link.
+  // Store it and show the multiplayer screen as logged in.
+  try {
+    // We need to auth with the server to get the full player object.
+    // Create a temporary client to authenticate.
+    const _tmpMp = _createMpClient();
+    _tmpMp.connect(_serverWsUrl());
+    _tmpMp._opts._onAuthOk = () => {
+      mp = _tmpMp;
+      _showMultiplayerScreen();
+    };
+    _tmpMp.auth({ token: _emailToken });
+  } catch {
+    // Fallback: just store minimal session and show multiplayer screen
+    _showMultiplayerScreen();
   }
 }

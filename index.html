@@ -178,12 +178,27 @@
       <div id="mp-session-info" style="display:none" class="setup-lore">
         <p>Playing as <strong id="mp-session-name"></strong>
            &nbsp;<span id="mp-session-stats" class="stats-badge"></span></p>
-        <button id="btn-mp-change-name" class="setup-btn secondary" style="margin-top:0.5rem">Change Name</button>
+        <span id="mp-email-badge" class="email-badge" style="display:none"></span>
+        <div style="display:flex;gap:0.4rem;margin-top:0.5rem;flex-wrap:wrap;justify-content:center">
+          <button id="btn-mp-link-email" class="setup-btn secondary">Link Email</button>
+          <button id="btn-mp-change-name" class="setup-btn secondary">Change Name</button>
+        </div>
+        <div id="mp-link-email-form" style="display:none;margin-top:0.5rem">
+          <input id="mp-link-email-input" class="setup-input" type="email"
+                 placeholder="your@email.com" autocomplete="email">
+          <button id="btn-mp-send-link" class="setup-btn primary" style="margin-top:0.4rem">Send Link</button>
+          <p id="mp-link-email-status" class="setup-hint" style="display:none"></p>
+        </div>
       </div>
       <div id="mp-name-form">
         <input id="mp-username" class="setup-input" type="text"
                placeholder="Enter a username…" maxlength="20" autocomplete="off">
         <button id="btn-mp-signin" class="setup-btn primary" style="margin-top:0.4rem">Sign In</button>
+        <div class="email-login-divider" style="margin:0.6rem 0;font-size:0.75rem;opacity:0.6">— or sign in with email —</div>
+        <input id="mp-email-login-input" class="setup-input" type="email"
+               placeholder="your@email.com" autocomplete="email">
+        <button id="btn-mp-email-login" class="setup-btn secondary" style="margin-top:0.4rem">Send Login Link</button>
+        <p id="mp-email-login-status" class="setup-hint" style="display:none"></p>
         <p id="mp-name-error" class="setup-error" style="display:none"></p>
       </div>
 

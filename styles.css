@@ -2054,6 +2054,23 @@ canvas { touch-action: pan-x pan-y; }
   color: var(--muted);
 }
 
+.email-badge {
+  display: inline-block;
+  font-size: 0.78rem;
+  color: #7ecf7e;
+  margin-top: 0.25rem;
+}
+
+.setup-hint {
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin: 0.25rem 0;
+}
+
+.email-login-divider {
+  text-align: center;
+}
+
 .room-code-display {
   display: inline-block;
   font-size: 2rem;

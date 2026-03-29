@@ -6,7 +6,11 @@ import { join, dirname }   from 'path';
 import { fileURLToPath }   from 'url';
 
 import { VERSION, BUILD_VERSION } from './src/version.js';
-import { registerOrLogin, getPlayerByToken } from './server/auth.js';
+import {
+  registerOrLogin, getPlayerByToken, getPlayerByEmail,
+  linkEmail, loginByEmail, getPlayerIdentities,
+} from './server/auth.js';
+import { generateToken, verifyToken, sendMagicLinkEmail } from './server/magic-link.js';
 import { getLeaderboard }                    from './server/leaderboard.js';
 import { recordGameStats, getGameStats, getAggregateStats } from './server/game-stats.js';
 import { getActiveSaves, pruneStaleAndIncompatibleSaves,
@@ -120,6 +124,105 @@ app.post('/api/game-stats', (req, res) => {
     console.error('POST /api/game-stats error:', err);
     res.status(500).json({ error: 'Failed to record stats.' });
   }
+});
+
+// ── Auth: magic link endpoints ────────────────────────────────────────────────
+
+// Link an email to an existing account (authenticated player)
+app.post('/auth/link-email', async (req, res) => {
+  const { token, email } = req.body || {};
+  if (!token || !email) {
+    res.status(400).json({ error: 'Token and email are required.' });
+    return;
+  }
+
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid session.' }); return; }
+
+  // Validate email format (basic)
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    res.status(400).json({ error: 'Invalid email address.' });
+    return;
+  }
+
+  // Check if already linked to another account
+  const existing = getPlayerByEmail(email);
+  if (existing && existing.id !== player.id) {
+    res.status(409).json({ error: 'This email is already linked to another account.' });
+    return;
+  }
+  if (existing && existing.id === player.id) {
+    res.json({ ok: true, message: 'Email already linked.' });
+    return;
+  }
+
+  const magicToken = generateToken(email, player.id);
+  const result = await sendMagicLinkEmail(email, magicToken, { isLink: true });
+  if (!result.ok) { res.status(500).json({ error: result.error }); return; }
+
+  res.json({ ok: true, message: 'Magic link sent! Check your email.' });
+});
+
+// Request a login link for an existing account (from a new device)
+app.post('/auth/login-email', async (req, res) => {
+  const { email } = req.body || {};
+  if (!email) { res.status(400).json({ error: 'Email is required.' }); return; }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    res.status(400).json({ error: 'Invalid email address.' });
+    return;
+  }
+
+  const player = getPlayerByEmail(email);
+  if (!player) {
+    // Don't reveal whether the email exists — still return success
+    res.json({ ok: true, message: 'If an account exists for this email, a login link has been sent.' });
+    return;
+  }
+
+  const magicToken = generateToken(email, player.id);
+  const result = await sendMagicLinkEmail(email, magicToken, { isLink: false });
+  if (!result.ok) { res.status(500).json({ error: result.error }); return; }
+
+  res.json({ ok: true, message: 'If an account exists for this email, a login link has been sent.' });
+});
+
+// Verify a magic link token — redirect to game with session
+app.get('/auth/verify', (req, res) => {
+  const { token } = req.query;
+  if (!token) { res.status(400).send('Missing token.'); return; }
+
+  const result = verifyToken(token);
+  if (!result) {
+    res.status(400).send('Invalid or expired link. Please request a new one.');
+    return;
+  }
+
+  const { email, playerId } = result;
+
+  if (playerId) {
+    // Link email to account (or login for existing linked account)
+    const linkResult = linkEmail(playerId, email);
+    if (!linkResult.ok) { res.status(400).send(linkResult.error); return; }
+
+    const player = loginByEmail(playerId);
+    if (!player.ok) { res.status(400).send(player.error); return; }
+
+    // Redirect to game with the player's session token in the URL
+    res.redirect(`/?email_token=${encodeURIComponent(player.player.token)}`);
+  } else {
+    // Should not happen — we always set playerId. But handle gracefully.
+    res.status(400).send('Invalid link.');
+  }
+});
+
+// Get linked identities for the authenticated player
+app.get('/api/identities', (req, res) => {
+  const token = req.query.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
+  res.json(getPlayerIdentities(player.id));
 });
 
 // ── Admin pages ───────────────────────────────────────────────────────────────
