@@ -3268,6 +3268,13 @@ function _positionPopup(popup, ui) {
 function _attachPopupListeners(popup, ui) {
   popup.querySelectorAll('button[data-action]').forEach(b => {
     b.addEventListener('click', () => ui._handleActionButton(b));
+    // On mobile, the synthesized click after touchend can be delayed or
+    // swallowed (e.g. iOS treats the first tap on a newly-visible element
+    // as a focus event).  Fire directly on touchend for instant response.
+    b.addEventListener('touchend', e => {
+      e.preventDefault();
+      ui._handleActionButton(b);
+    }, { passive: false });
   });
 }
 
