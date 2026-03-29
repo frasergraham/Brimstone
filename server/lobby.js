@@ -948,6 +948,15 @@ export function handlePlanSubmit(playerId, roomId, plan) {
   _startPlanningTimer(room);
 
   _submitPlayerPlan(room, playerId, plan);
+
+  // Notify remaining players that the deadline has been extended
+  if (room.state.planningPhase) {
+    for (const seat of room.players) {
+      if (!room.state.playerReady.get(seat.playerId)) {
+        send(seat.ws, { type: 'timerReset', timeoutMs: TURN_TIMEOUT_MS });
+      }
+    }
+  }
 }
 
 /** Legacy handler — kept for clients that submit via the old 'endTurn' message. */

@@ -239,6 +239,8 @@ function clientState(ws) {
 
 wss.on('connection', ws => {
   const cs = clientState(ws);
+  ws._isAlive = true;
+  ws.on('pong', () => { ws._isAlive = true; });
 
   ws.on('message', raw => {
     let msg;
@@ -259,6 +261,20 @@ wss.on('connection', ws => {
 
   ws.on('error', () => ws.terminate());
 });
+
+// ── Heartbeat — detect zombie connections within ~30s ────────────────────────
+
+const HEARTBEAT_INTERVAL_MS = 15_000;
+
+const _heartbeat = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (!ws._isAlive) { ws.terminate(); continue; }
+    ws._isAlive = false;
+    ws.ping();
+  }
+}, HEARTBEAT_INTERVAL_MS);
+
+wss.on('close', () => clearInterval(_heartbeat));
 
 function route(ws, cs, msg) {
   switch (msg.type) {
