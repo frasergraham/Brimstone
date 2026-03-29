@@ -114,3 +114,27 @@ export function loginByEmail(playerId) {
   if (!player) return { ok: false, error: 'Player not found.' };
   return { ok: true, player };
 }
+
+/**
+ * Change a player's username. Returns { ok, player } or { ok: false, error }.
+ */
+const _updateUsername = db.prepare('UPDATE players SET username = ? WHERE id = ?');
+
+export function changeUsername(playerId, newUsername) {
+  const name = (newUsername || '').trim();
+  if (name.length < 2 || name.length > 20) {
+    return { ok: false, error: 'Username must be 2–20 characters.' };
+  }
+  if (!/^[a-zA-Z0-9_\- ]+$/.test(name)) {
+    return { ok: false, error: 'Username may only contain letters, numbers, spaces, hyphens, and underscores.' };
+  }
+
+  const existing = _getByName.get(name);
+  if (existing && existing.id !== playerId) {
+    return { ok: false, error: 'That username is already taken.' };
+  }
+
+  _updateUsername.run(name, playerId);
+  const player = _getById.get(playerId);
+  return { ok: true, player };
+}

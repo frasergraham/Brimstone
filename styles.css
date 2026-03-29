@@ -2028,6 +2028,12 @@ canvas { touch-action: pan-x pan-y; }
 .secondary { background: #1a1f2e; color: var(--muted); border-color: #2a3040; }
 .secondary:hover { background: #232840; color: var(--text); }
 
+.acct-section { margin-bottom: 1rem; text-align: left; }
+.acct-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 0.2rem; }
+.acct-value { font-size: 1rem; color: var(--text); }
+.acct-row { display: flex; align-items: center; gap: 0.5rem; }
+.acct-inline-btn { font-size: 0.75rem; padding: 0.2rem 0.5rem; }
+
 .setup-input {
   width: 100%;
   max-width: 320px;

@@ -6,6 +6,7 @@ import db from '../server/db.js';
 import {
   registerOrLogin, getPlayerByToken, getPlayerById,
   linkEmail, getPlayerByEmail, getPlayerIdentities, loginByEmail,
+  changeUsername,
 } from '../server/auth.js';
 import { generateToken, verifyToken } from '../server/magic-link.js';
 
@@ -242,5 +243,56 @@ describe('full magic link flow', () => {
     // Invalid token with no username
     const expired = registerOrLogin({ token: 'bogus-token-value' });
     assert.equal(expired.ok, false);
+  });
+});
+
+// ── changeUsername ────────────────────────────────────────────────────────────
+
+describe('changeUsername', () => {
+  test('changes username successfully', () => {
+    const player = createPlayer('rename1');
+    const result = changeUsername(player.id, 'test-email-renamed1');
+    assert.ok(result.ok);
+    assert.equal(result.player.username, 'test-email-renamed1');
+
+    // Verify persisted
+    const fetched = getPlayerById(player.id);
+    assert.equal(fetched.username, 'test-email-renamed1');
+  });
+
+  test('rejects too-short username', () => {
+    const player = createPlayer('rename2');
+    const result = changeUsername(player.id, 'a');
+    assert.equal(result.ok, false);
+    assert.ok(result.error.includes('2–20'));
+  });
+
+  test('rejects invalid characters', () => {
+    const player = createPlayer('rename3');
+    const result = changeUsername(player.id, 'bad@name!');
+    assert.equal(result.ok, false);
+  });
+
+  test('rejects username taken by another player', () => {
+    const p1 = createPlayer('rename4a');
+    const p2 = createPlayer('rename4b');
+    const result = changeUsername(p2.id, p1.username);
+    assert.equal(result.ok, false);
+    assert.ok(result.error.includes('already taken'));
+  });
+
+  test('allows renaming to same name (no-op)', () => {
+    const player = createPlayer('rename5');
+    const result = changeUsername(player.id, player.username);
+    assert.ok(result.ok);
+  });
+
+  test('preserves player id and token after rename', () => {
+    const player = createPlayer('rename6');
+    const origToken = player.token;
+    const result = changeUsername(player.id, 'test-email-renamed6');
+    assert.ok(result.ok);
+    assert.equal(result.player.id, player.id);
+    assert.equal(result.player.token, origToken);
   });
 });

@@ -25,6 +25,7 @@
         <button id="btn-multiplayer"   class="setup-btn"         style="width:200px">🌐 Multiplayer</button>
         <button id="btn-tutorial"      class="setup-btn"         style="width:200px">⚑ Tutorial</button>
         <button id="btn-how-to-play"   class="setup-btn"         style="width:200px">How to Play</button>
+        <button id="btn-account"       class="setup-btn"         style="width:200px">Account</button>
         <button id="btn-options"       class="setup-btn"         style="width:200px">Options</button>
       </div>
       <div style="margin-top:1.25rem;text-align:center">
@@ -180,14 +181,7 @@
            &nbsp;<span id="mp-session-stats" class="stats-badge"></span></p>
         <span id="mp-email-badge" class="email-badge" style="display:none"></span>
         <div style="display:flex;gap:0.4rem;margin-top:0.5rem;flex-wrap:wrap;justify-content:center">
-          <button id="btn-mp-link-email" class="setup-btn secondary">Link Email</button>
-          <button id="btn-mp-change-name" class="setup-btn secondary">Change Name</button>
-        </div>
-        <div id="mp-link-email-form" style="display:none;margin-top:0.5rem">
-          <input id="mp-link-email-input" class="setup-input" type="email"
-                 placeholder="your@email.com" autocomplete="email">
-          <button id="btn-mp-send-link" class="setup-btn primary" style="margin-top:0.4rem">Send Link</button>
-          <p id="mp-link-email-status" class="setup-hint" style="display:none"></p>
+          <button id="btn-mp-sign-out" class="setup-btn secondary">Sign Out</button>
         </div>
       </div>
       <div id="mp-name-form">
@@ -243,7 +237,67 @@
         <p>No options are available yet.<br>Check back in a future update.</p>
       </div>
       <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
-        <button id="btn-options-back" class="setup-btn">← Back</button>
+        <button id="btn-options-back" class="setup-btn">&larr; Back</button>
+      </div>
+    </div>
+
+    <!-- Account -->
+    <div id="setup-step-account" class="setup-card" style="display:none">
+      <h1 class="title" style="font-size:2rem">ACCOUNT</h1>
+
+      <!-- Not signed in -->
+      <div id="acct-signed-out">
+        <div class="setup-lore"><p>You are not signed in.</p></div>
+        <div class="setup-buttons" style="margin-top:0.75rem">
+          <button id="btn-acct-goto-mp" class="setup-btn primary">Sign In</button>
+        </div>
+      </div>
+
+      <!-- Signed in -->
+      <div id="acct-signed-in" style="display:none">
+        <div class="acct-section">
+          <div class="acct-label">Username</div>
+          <div class="acct-row">
+            <span id="acct-username" class="acct-value"></span>
+            <button id="btn-acct-edit-name" class="setup-btn secondary acct-inline-btn">Edit</button>
+          </div>
+          <div id="acct-name-edit" style="display:none;margin-top:0.4rem">
+            <input id="acct-name-input" class="setup-input" type="text"
+                   placeholder="New username" maxlength="20" autocomplete="off">
+            <div style="display:flex;gap:0.4rem;margin-top:0.4rem">
+              <button id="btn-acct-save-name" class="setup-btn primary">Save</button>
+              <button id="btn-acct-cancel-name" class="setup-btn secondary">Cancel</button>
+            </div>
+            <p id="acct-name-error" class="setup-error" style="display:none"></p>
+          </div>
+        </div>
+
+        <div class="acct-section">
+          <div class="acct-label">Email</div>
+          <div class="acct-row">
+            <span id="acct-email" class="acct-value"></span>
+            <button id="btn-acct-link-email" class="setup-btn secondary acct-inline-btn">Link Email</button>
+          </div>
+          <div id="acct-email-form" style="display:none;margin-top:0.4rem">
+            <input id="acct-email-input" class="setup-input" type="email"
+                   placeholder="your@email.com" autocomplete="email">
+            <button id="btn-acct-send-link" class="setup-btn primary" style="margin-top:0.4rem">Send Link</button>
+            <p id="acct-email-status" class="setup-hint" style="display:none"></p>
+          </div>
+        </div>
+
+        <div class="acct-section">
+          <div class="acct-label">Record</div>
+          <div id="acct-stats" class="acct-value"></div>
+        </div>
+
+        <div class="setup-buttons" style="margin-top:1rem">
+          <button id="btn-acct-signout" class="setup-btn secondary">Sign Out</button>
+        </div>
+      </div>
+
+      <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
+        <button id="btn-account-back" class="setup-btn">&larr; Back</button>
       </div>
     </div>
 

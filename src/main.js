@@ -966,6 +966,7 @@ const stepMultiplayer  = document.getElementById('setup-step-multiplayer');
 const stepHowto        = document.getElementById('setup-step-howtoplay');
 const stepOptions      = document.getElementById('setup-step-options');
 const stepChangelog    = document.getElementById('setup-step-changelog');
+const stepAccount      = document.getElementById('setup-step-account');
 const stepWaiting      = document.getElementById('setup-step-waiting');
 const stepCreateGame   = document.getElementById('setup-step-create-game');
 const stepJoinGame     = document.getElementById('setup-step-join-game');
@@ -978,6 +979,7 @@ function showStep(step) {
   stepHowto       .style.display = step === 'howtoplay'     ? '' : 'none';
   stepOptions     .style.display = step === 'options'       ? '' : 'none';
   stepChangelog   .style.display = step === 'changelog'     ? '' : 'none';
+  stepAccount     .style.display = step === 'account'       ? '' : 'none';
   stepWaiting     .style.display = step === 'waiting'       ? '' : 'none';
   stepCreateGame  .style.display = step === 'create-game'   ? '' : 'none';
   stepJoinGame    .style.display = step === 'join-game'     ? '' : 'none';
@@ -994,8 +996,10 @@ document.getElementById('btn-multiplayer')  .addEventListener('click', () => _sh
 document.getElementById('btn-tutorial')     .addEventListener('click', () => initTutorial());
 document.getElementById('btn-how-to-play')  .addEventListener('click', () => showStep('howtoplay'));
 document.getElementById('btn-options')      .addEventListener('click', () => showStep('options'));
+document.getElementById('btn-account')      .addEventListener('click', () => { _initAccountPage(); showStep('account'); });
 document.getElementById('btn-howtoplay-back').addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-options-back') .addEventListener('click', () => showStep('mode'));
+document.getElementById('btn-account-back') .addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-changelog-back').addEventListener('click', () => showStep('mode'));
 
 // Version badge opens revision history
@@ -2066,83 +2070,140 @@ function _initMpStep() {
     sessionInfo.style.display = '';
     nameForm.style.display    = 'none';
     actionBtns.style.display  = '';
-
-    // Check if email is already linked and update UI
-    _updateEmailLinkStatus(session.token);
   } else {
     sessionInfo.style.display = 'none';
     nameForm.style.display    = '';
     actionBtns.style.display  = 'none';
   }
 
-  // Reset email form states
+  // Reset form states
   document.getElementById('mp-name-error').style.display = 'none';
-  const linkForm = document.getElementById('mp-link-email-form');
-  if (linkForm) linkForm.style.display = 'none';
-  const linkStatus = document.getElementById('mp-link-email-status');
-  if (linkStatus) linkStatus.style.display = 'none';
   const loginStatus = document.getElementById('mp-email-login-status');
   if (loginStatus) loginStatus.style.display = 'none';
 }
 
-async function _updateEmailLinkStatus(token) {
-  const linkBtn = document.getElementById('btn-mp-link-email');
+// ── Account page ──────────────────────────────────────────────────────────────
+
+async function _initAccountPage() {
+  const session = loadSession();
+  const signedOut = document.getElementById('acct-signed-out');
+  const signedIn  = document.getElementById('acct-signed-in');
+
+  if (!session) {
+    signedOut.style.display = '';
+    signedIn.style.display  = 'none';
+    return;
+  }
+
+  signedOut.style.display = 'none';
+  signedIn.style.display  = '';
+
+  // Username
+  document.getElementById('acct-username').textContent = session.username;
+  document.getElementById('acct-name-edit').style.display = 'none';
+  document.getElementById('acct-name-error').style.display = 'none';
+
+  // Stats
+  const stats = document.getElementById('acct-stats');
+  stats.textContent = `${session.wins ?? 0}W / ${session.losses ?? 0}L / ${session.draws ?? 0}D`;
+
+  // Email — fetch linked identities
+  const emailEl   = document.getElementById('acct-email');
+  const linkBtn   = document.getElementById('btn-acct-link-email');
+  const emailForm = document.getElementById('acct-email-form');
   const emailBadge = document.getElementById('mp-email-badge');
-  if (!linkBtn || !emailBadge) return;
+  emailForm.style.display = 'none';
+  const emailStatus = document.getElementById('acct-email-status');
+  if (emailStatus) emailStatus.style.display = 'none';
 
   try {
-    const identities = await fetchIdentities(token);
+    const identities = await fetchIdentities(session.token);
     const emailIdentity = identities.find(i => i.provider === 'email');
     if (emailIdentity) {
-      // Email already linked — show badge, hide link button
-      emailBadge.textContent = `✓ ${emailIdentity.provider_id}`;
-      emailBadge.style.display = '';
+      emailEl.textContent = emailIdentity.provider_id;
       linkBtn.style.display = 'none';
+      // Also update the MP screen badge
+      if (emailBadge) {
+        emailBadge.textContent = `✓ ${emailIdentity.provider_id}`;
+        emailBadge.style.display = '';
+      }
     } else {
-      emailBadge.style.display = 'none';
+      emailEl.textContent = 'Not linked';
       linkBtn.style.display = '';
+      if (emailBadge) emailBadge.style.display = 'none';
     }
   } catch {
-    // Silently fail — email badge is non-critical
-    emailBadge.style.display = 'none';
+    emailEl.textContent = 'Not linked';
     linkBtn.style.display = '';
+    if (emailBadge) emailBadge.style.display = 'none';
   }
 }
 
-document.getElementById('btn-mp-signin').addEventListener('click', () => {
-  _ensureAuthed(() => {
-    _initMpStep();
-    _fetchActiveSaves();
-  });
+// Account: go to MP to sign in
+document.getElementById('btn-acct-goto-mp').addEventListener('click', () => {
+  _showMultiplayerScreen();
 });
 
-document.getElementById('btn-mp-change-name').addEventListener('click', () => {
-  clearSession();
-  document.getElementById('mp-session-info').style.display = 'none';
-  document.getElementById('mp-name-form').style.display    = '';
-  document.getElementById('mp-action-buttons').style.display = 'none';
-  document.getElementById('active-games-list').innerHTML =
-    '<p class="saves-empty">Sign in to see your active games.</p>';
-  if (mp) { mp.disconnect(); mp = null; }
-  renderer = null; ui = null; state = null;
+// Account: edit username
+document.getElementById('btn-acct-edit-name').addEventListener('click', () => {
+  const session = loadSession();
+  document.getElementById('acct-name-input').value = session?.username || '';
+  document.getElementById('acct-name-edit').style.display = '';
+  document.getElementById('acct-name-error').style.display = 'none';
 });
 
-// ── Email linking (signed-in player links their email) ───────────────────────
-
-document.getElementById('btn-mp-link-email').addEventListener('click', () => {
-  const form = document.getElementById('mp-link-email-form');
-  form.style.display = form.style.display === 'none' ? '' : 'none';
+document.getElementById('btn-acct-cancel-name').addEventListener('click', () => {
+  document.getElementById('acct-name-edit').style.display = 'none';
 });
 
-document.getElementById('btn-mp-send-link').addEventListener('click', async () => {
+document.getElementById('btn-acct-save-name').addEventListener('click', async () => {
   const session = loadSession();
   if (!session) return;
 
-  const emailInput = document.getElementById('mp-link-email-input');
-  const email = emailInput.value.trim();
+  const input = document.getElementById('acct-name-input');
+  const newName = input.value.trim();
+  const errorEl = document.getElementById('acct-name-error');
+
+  try {
+    const res = await fetch('/api/account/username', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: session.token, username: newName }),
+    });
+    const data = await res.json();
+
+    if (data.ok) {
+      // Update session in localStorage
+      session.username = data.player.username;
+      localStorage.setItem('brimstone_session', JSON.stringify(session));
+      // Update displays
+      document.getElementById('acct-username').textContent = data.player.username;
+      document.getElementById('acct-name-edit').style.display = 'none';
+      document.getElementById('mp-session-name').textContent = data.player.username;
+    } else {
+      errorEl.textContent = data.error || 'Failed to change username.';
+      errorEl.style.display = '';
+    }
+  } catch {
+    errorEl.textContent = 'Network error. Please try again.';
+    errorEl.style.display = '';
+  }
+});
+
+// Account: link email
+document.getElementById('btn-acct-link-email').addEventListener('click', () => {
+  const form = document.getElementById('acct-email-form');
+  form.style.display = form.style.display === 'none' ? '' : 'none';
+});
+
+document.getElementById('btn-acct-send-link').addEventListener('click', async () => {
+  const session = loadSession();
+  if (!session) return;
+
+  const email = document.getElementById('acct-email-input').value.trim();
   if (!email) return;
 
-  const statusEl = document.getElementById('mp-link-email-status');
+  const statusEl = document.getElementById('acct-email-status');
   statusEl.textContent = 'Sending…';
   statusEl.className   = 'setup-hint';
   statusEl.style.display = '';
@@ -2157,7 +2218,33 @@ document.getElementById('btn-mp-send-link').addEventListener('click', async () =
   }
 });
 
-// ── Email login (new device, no session) ─────────────────────────────────────
+// Account: sign out
+document.getElementById('btn-acct-signout').addEventListener('click', () => {
+  clearSession();
+  if (mp) { mp.disconnect(); mp = null; }
+  renderer = null; ui = null; state = null;
+  _initAccountPage();
+});
+
+document.getElementById('btn-mp-signin').addEventListener('click', () => {
+  _ensureAuthed(() => {
+    _initMpStep();
+    _fetchActiveSaves();
+  });
+});
+
+document.getElementById('btn-mp-sign-out').addEventListener('click', () => {
+  clearSession();
+  document.getElementById('mp-session-info').style.display = 'none';
+  document.getElementById('mp-name-form').style.display    = '';
+  document.getElementById('mp-action-buttons').style.display = 'none';
+  document.getElementById('active-games-list').innerHTML =
+    '<p class="saves-empty">Sign in to see your active games.</p>';
+  if (mp) { mp.disconnect(); mp = null; }
+  renderer = null; ui = null; state = null;
+});
+
+// ── Email login (new device, no session — on multiplayer screen) ─────────────
 
 document.getElementById('btn-mp-email-login').addEventListener('click', async () => {
   const emailInput = document.getElementById('mp-email-login-input');

@@ -8,7 +8,7 @@ import { fileURLToPath }   from 'url';
 import { VERSION, BUILD_VERSION } from './src/version.js';
 import {
   registerOrLogin, getPlayerByToken, getPlayerByEmail,
-  linkEmail, loginByEmail, getPlayerIdentities,
+  linkEmail, loginByEmail, getPlayerIdentities, changeUsername,
 } from './server/auth.js';
 import { generateToken, verifyToken, sendMagicLinkEmail } from './server/magic-link.js';
 import { getLeaderboard }                    from './server/leaderboard.js';
@@ -223,6 +223,18 @@ app.get('/api/identities', (req, res) => {
   const player = getPlayerByToken(token);
   if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
   res.json(getPlayerIdentities(player.id));
+});
+
+// Change username (authenticated player)
+app.post('/api/account/username', (req, res) => {
+  const token = req.body?.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
+
+  const result = changeUsername(player.id, req.body?.username);
+  if (!result.ok) { res.status(400).json({ error: result.error }); return; }
+  res.json({ ok: true, player: { id: result.player.id, username: result.player.username } });
 });
 
 // ── Admin pages ───────────────────────────────────────────────────────────────
