@@ -263,14 +263,14 @@ describe('submit button progress bar', () => {
       '--progress should not be set in local (no-timeout) mode');
   });
 
-  test('sets --progress on floating submit button', () => {
+  test('sets --progress on header submit button', () => {
     const { ui, els } = makeUI();
 
     ui.enterPlanningMode('hero', 3, 60000);
 
     const progress = els['end-turn-btn'].style._props['--progress'];
     assert.ok(progress !== undefined,
-      '--progress should be set on floating submit button when timeout is active');
+      '--progress should be set on header submit button when timeout is active');
 
     ui._stopCountdown();
   });
@@ -365,26 +365,26 @@ describe('grace dialog', () => {
   });
 });
 
-// ── floating submit button ────────────────────────────────────────────────────
+// ── header submit button ────────────────────────────────────────────────────
 
-describe('floating submit button', () => {
-  test('end-turn-btn gets planning-float class during planning', () => {
+describe('header submit button', () => {
+  test('end-turn-btn gets planning-active class during planning', () => {
     const { ui, els } = makeUI();
     ui.enterPlanningMode('hero', 3);
 
-    assert.ok(els['end-turn-btn']._classList.has('planning-float'),
-      'end-turn-btn should have planning-float class in planning mode');
+    assert.ok(els['end-turn-btn']._classList.has('planning-active'),
+      'end-turn-btn should have planning-active class in planning mode');
 
     ui._stopCountdown();
   });
 
-  test('planning-float class removed after exiting planning', () => {
+  test('planning-active class removed after exiting planning', () => {
     const { ui, els } = makeUI();
     ui.enterPlanningMode('hero', 3);
     ui.exitPlanningMode();
 
-    assert.ok(!els['end-turn-btn']._classList.has('planning-float'),
-      'planning-float should be removed after exit');
+    assert.ok(!els['end-turn-btn']._classList.has('planning-active'),
+      'planning-active should be removed after exit');
   });
 
   test('plan-open class set when panel is expanded', () => {

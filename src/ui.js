@@ -1635,14 +1635,13 @@ export class UIController {
     if (this._planMode) {
       btn.disabled = this._planSubmitted || state.gameOver;
       btn.classList.toggle('urgent', !this._planSubmitted && !state.gameOver);
+      btn.classList.add('planning-active');
       btn.title = this._planSubmitted ? 'Plan submitted' : 'Submit Plan';
-      // Don't overwrite text while countdown is driving it
+      // Let the countdown timer own the text when it's running
       if (!this._countdownTimer && !this._graceActive) {
         btn.textContent = this._planSubmitted ? '✓' : '✓ Submit';
       }
-      // Float the submit button over the bottom-right of the map;
-      // hide when plan panel is expanded (not collapsed).
-      btn.classList.add('planning-float');
+      // Hide when plan panel is expanded (not collapsed)
       const panel = this._el('plan-panel');
       const panelOpen = panel && panel.style.display !== 'none'
                      && !panel.classList.contains('collapsed');
@@ -1650,7 +1649,7 @@ export class UIController {
       return;
     }
 
-    btn.classList.remove('planning-float', 'plan-open');
+    btn.classList.remove('planning-active', 'plan-open');
     btn.textContent = '↩';
     const isOpponent = this._isOpponentTurn();
     const noActs    = state.actionsAvailable === 0;

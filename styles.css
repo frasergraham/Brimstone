@@ -594,38 +594,21 @@ canvas { touch-action: pan-x pan-y; }
   border-color: var(--day);
   animation: pulse-gold 1.4s ease-in-out infinite;
 }
-/* During planning: float the submit button over the bottom-right of the map */
-.end-turn-header.planning-float {
-  position: fixed;
-  bottom: 40px;
-  right: 8px;
-  z-index: 45;
-  width: 7.5rem;
-  height: auto;
-  padding: 0.35rem 0;
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-align: center;
-  border-radius: 4px;
+/* During planning: progress bar + countdown on the header submit button */
+.end-turn-header.planning-active {
   background: linear-gradient(to right, var(--hero) var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
   color: #fff;
   text-shadow: 0 1px 3px rgba(0,0,0,0.7);
-  border: 1px solid rgba(255,255,255,0.2);
-  box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+  border-color: rgba(255,255,255,0.2);
   overflow: hidden;
+  min-width: 6.5rem;
+  text-align: center;
 }
-.end-turn-header.planning-float:hover {
-  background: linear-gradient(to right, #e8c84e var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
-}
-.end-turn-header.planning-float:disabled {
-  opacity: 0.4;
-  background: rgba(255,255,255,0.08);
-}
-.end-turn-header.planning-float.countdown-urgent {
+.end-turn-header.planning-active.countdown-urgent {
   animation: btn-pulse 0.5s ease-in-out infinite alternate;
 }
-/* Hide floating submit when plan panel is expanded */
-.end-turn-header.planning-float.plan-open {
+/* Hide header submit when plan panel is expanded */
+.end-turn-header.plan-open {
   display: none;
 }
 
@@ -2006,7 +1989,6 @@ canvas { touch-action: pan-x pan-y; }
 
   /* End turn button slightly larger tap target */
   .end-turn-header { padding: 0 0.65rem; height: 36px; }
-  .end-turn-header.planning-float { padding: 0.45rem 0; bottom: 44px; right: 8px; }
 
 }
 
