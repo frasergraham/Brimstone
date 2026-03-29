@@ -58,7 +58,7 @@ export class UIController {
 
     this._lastHazardKey    = '';   // deduplicates hazard popups across state updates
     this._battleInterval   = null; // dice animation interval — cleared on new dialog
-    this.speedMode         = 'cinematic'; // 'step' | 'cinematic' | 'fast' | 'instant'
+    this.speedMode         = 'cinematic'; // 'step' | 'cinematic' | 'fast' | 'vfast'
     this._stepResolve      = null;        // set while waiting for click-to-advance in step mode
     // Start with chronicle hidden on small screens (≤768px)
     this._chronicleMode    = window.innerWidth <= 768 ? 'none' : 'mini'; // 'none' | 'mini' | 'full'
@@ -133,6 +133,7 @@ export class UIController {
 
     // Mouse drag-to-pan (desktop)
     this.canvas.addEventListener('mousedown', e => {
+      if (this.renderer.viewLocked) return;
       this._mouseDown  = { clientX: e.clientX, clientY: e.clientY };
       this._didDragPan = false;
       this.canvas.style.cursor = 'grabbing';
@@ -159,10 +160,27 @@ export class UIController {
       this.renderer.setZoom(this.renderer.zoomLevel / zoomStep, cx, cy);
       this.onRedraw();
     });
+    this._lastFitTapTime = 0;
     this._el('zoom-fit')?.addEventListener('click', () => {
-      this.renderer.resize(); // re-measure wrapper after any panel changes
-      this.renderer.resetView();
-      this.onRedraw();
+      const now = Date.now();
+      const isDoubleTap = (now - this._lastFitTapTime) < 400;
+      this._lastFitTapTime = now;
+      if (isDoubleTap) {
+        // Double-tap: toggle view lock; fit map first if locking
+        this.renderer.viewLocked = !this.renderer.viewLocked;
+        if (this.renderer.viewLocked) {
+          this.renderer.resize();
+          this.renderer.resetView();
+          this.renderer._zoomAnim = null;
+        }
+        this._updateFitBtnLockState();
+        this.onRedraw();
+      } else if (!this.renderer.viewLocked) {
+        // Single-tap when unlocked: fit map
+        this.renderer.resize();
+        this.renderer.resetView();
+        this.onRedraw();
+      }
     });
     this._el('zoom-me')?.addEventListener('click', () => {
       if (this._selectedEntity && this._selectedEntity.alive) {
@@ -212,6 +230,7 @@ export class UIController {
 
     this.canvas.addEventListener('touchmove', e => {
       e.preventDefault();
+      if (this.renderer.viewLocked) return;
       if (e.touches.length === 2 && this._pinchDist !== null) {
         const newDist = _touchDist(e.touches[0], e.touches[1]);
         const midCX  = (e.touches[0].clientX + e.touches[1].clientX) / 2;
@@ -396,6 +415,9 @@ export class UIController {
 
   _onMouseMove(e) {
     // Drag-to-pan when mouse button held
+    if (this._mouseDown && this.renderer.viewLocked) {
+      this._mouseDown = null; // release drag if view was locked mid-drag
+    }
     if (this._mouseDown) {
       const dx = e.clientX - this._mouseDown.clientX;
       const dy = e.clientY - this._mouseDown.clientY;
@@ -608,6 +630,13 @@ export class UIController {
     };
     tick();
     this._countdownTimer = setInterval(tick, 500);
+  }
+
+  /** Reset the countdown to a new deadline (called when the server extends the timer). */
+  resetCountdown(timeoutMs) {
+    if (this._planMode && !this._planSubmitted && timeoutMs > 0) {
+      this._startCountdown(timeoutMs);
+    }
   }
 
   /** Stop just the main countdown interval (not the grace dialog). */
@@ -1489,13 +1518,13 @@ export class UIController {
     // 8-step cycle — shared between header and cycle-bar
     const CYCLE_STEPS = [
       { phase: 'dawn',  icon: '🌅', label: 'Dawn',  desc: 'Hero +1 action · node scoring · attrition rises' },
-      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Hero +1 ATK · Witch undead in the open suffer' },
-      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Hero +1 ATK · Witch undead in the open suffer' },
-      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Hero +1 ATK · Witch undead in the open suffer' },
+      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Witch undead in the open suffer' },
+      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Witch undead in the open suffer' },
+      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Witch undead in the open suffer' },
       { phase: 'dusk',  icon: '🌇', label: 'Dusk',  desc: 'Node scoring · seek cover before night' },
-      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +1 ATK · Survivors in the open suffer' },
-      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +1 ATK · Survivors in the open suffer' },
-      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +1 ATK · Survivors in the open suffer' },
+      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
+      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
+      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
     ];
 
     const roundInCycle = (state.round - 1) % 8;
@@ -1920,7 +1949,7 @@ export class UIController {
 
   // ── Speed popup ───────────────────────────────────────────────────────────
 
-  static SPEED_LABELS = { step: 'Step by Step', cinematic: 'Cinematic', fast: 'Fast', instant: 'Instant' };
+  static SPEED_LABELS = { step: 'Step by Step', cinematic: 'Cinematic', fast: 'Fast', vfast: 'Very Fast' };
 
   _toggleSpeedPopup() {
     const popup = this._el('speed-popup');
@@ -2003,9 +2032,9 @@ export class UIController {
       `${actorSnap.name} → ${targetSnap.name}  [${result.attackRoll}v${result.defenseRoll}]  ${outcome}`;
     container.appendChild(toast);
 
-    const displayMs = this.speedMode === 'instant' ? 600
-                    : this.speedMode === 'fast'     ? 1200
-                    :                                 2000;
+    const displayMs = this.speedMode === 'vfast' ? 500
+                    : this.speedMode === 'fast'    ? 1200
+                    :                               2000;
     setTimeout(() => {
       toast.style.animation = 'battle-toast-out 0.3s ease forwards';
       setTimeout(() => toast.remove(), 300);
@@ -2033,16 +2062,14 @@ export class UIController {
   // ── Phase toast ──────────────────────────────────────────────────────────
 
   _showPhaseModal(faction, budget) {
-    // Instant mode and tutorial mode skip all popups
-    if (this.speedMode === 'instant') return;
     if (this.tutorialMode) return;
 
     const phase = this.state.phase;
     const PHASE_INFO = {
       dawn:  { icon: '🌅', label: 'Dawn',  lines: ['Hero gains +1 action · Attrition rises', 'Power Nodes scored · Tiles reset'] },
-      day:   { icon: '☀️',  label: 'Day',   lines: ['Hero +1 ATK · Build & fortify', 'Witch undead in the open suffer'] },
+      day:   { icon: '☀️',  label: 'Day',   lines: ['Build & fortify', 'Witch undead in the open suffer'] },
       dusk:  { icon: '🌇', label: 'Dusk',  lines: ['Power Nodes scored · Seek shelter', 'Night approaches…'] },
-      night: { icon: '🌙', label: 'Night', lines: ['Witch +1 ATK · Raise undead', 'Survivors in the open suffer'] },
+      night: { icon: '🌙', label: 'Night', lines: ['Witch +2 ATK · Raise undead', 'Survivors in the open suffer'] },
     };
     const info = PHASE_INFO[phase];
     if (!info) return;
@@ -2196,9 +2223,9 @@ export class UIController {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') dismiss();
     };
 
-    if (this.autoplay || this.speedMode === 'instant') {
-      setTimeout(dismiss, this.autoplay ? 700 : 80);
-    } else if (this.speedMode === 'fast') {
+    if (this.autoplay) {
+      setTimeout(dismiss, 700);
+    } else if (this.speedMode === 'fast' || this.speedMode === 'vfast') {
       setTimeout(dismiss, 600);
       dialog.addEventListener('click', dismiss);
       document.addEventListener('keydown', keyDismiss);
@@ -2250,9 +2277,9 @@ export class UIController {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') dismiss();
     };
 
-    if (this.autoplay || this.speedMode === 'instant') {
-      setTimeout(dismiss, this.autoplay ? 500 : 100);
-    } else if (this.speedMode === 'fast') {
+    if (this.autoplay) {
+      setTimeout(dismiss, 500);
+    } else if (this.speedMode === 'fast' || this.speedMode === 'vfast') {
       setTimeout(dismiss, 800);
     } else {
       dialog.addEventListener('click', dismiss);
@@ -2486,14 +2513,14 @@ export class UIController {
       }
     };
 
-    if (this.autoplay || this.speedMode === 'instant') {
+    if (this.autoplay) {
       // Skip animation — show result immediately, auto-dismiss
       atkDie.textContent = result.attackRoll;
       defDie.textContent = result.defenseRoll;
       atkDie.className = 'die-display' + (result.hit ? ' atk-win' : '');
       defDie.className = 'die-display' + (!result.hit ? ' def-win' : '');
       revealResult();
-      setTimeout(dismiss, this.autoplay ? 500 : 100);
+      setTimeout(dismiss, 500);
     } else if (this.speedMode === 'fast') {
       // Skip dice animation — show result immediately, auto-dismiss after 800ms
       atkDie.textContent = result.attackRoll;
@@ -2788,7 +2815,7 @@ export class UIController {
       const el = this._el('round-summary');
       if (!el) { resolve('next'); return; }
 
-      const { prevScore, prevNodes, humanFaction, fogOfWar, gameOver, winner, winReason } = opts;
+      const { prevScore, prevNodes, humanFaction, fogOfWar, gameOver, winner, winReason, hasFullReplay } = opts;
 
       // Collect kills, survivors found, summons, and resource flows from steps.
       // Fog-of-war filtering: skip opponent-only events the player can't see.
@@ -3026,7 +3053,8 @@ export class UIController {
         gameOverBtns.className = 'round-summary-gameover-btns';
         gameOverBtns.innerHTML =
           `<button class="plan-btn primary" data-action="restart">Play Again</button>` +
-          `<button class="plan-btn secondary" data-action="viewmap">View Map</button>`;
+          `<button class="plan-btn secondary" data-action="viewmap">View Map</button>` +
+          (hasFullReplay ? `<button class="plan-btn secondary" data-action="replay-full">Replay Full Game</button>` : '');
         actionsEl.appendChild(gameOverBtns);
       } else if (nextBtn) {
         nextBtn.style.display = '';
@@ -3050,8 +3078,96 @@ export class UIController {
       if (gameOverBtns) {
         gameOverBtns.querySelector('[data-action="restart"]')?.addEventListener('click', () => { cleanup(); resolve('restart'); });
         gameOverBtns.querySelector('[data-action="viewmap"]')?.addEventListener('click', () => { cleanup(); resolve('viewmap'); });
+        gameOverBtns.querySelector('[data-action="replay-full"]')?.addEventListener('click', () => { cleanup(); resolve('replay-full'); });
       }
     });
+  }
+
+  // ── Replay HUD ──────────────────────────────────────────────────────────────
+
+  /**
+   * Update the fit-button appearance to reflect the current view-lock state.
+   */
+  _updateFitBtnLockState() {
+    const btn = this._el('zoom-fit');
+    if (!btn) return;
+    const locked = this.renderer?.viewLocked ?? false;
+    btn.classList.toggle('view-locked', locked);
+    btn.title = locked
+      ? 'View locked — double-tap to unlock'
+      : 'Fit map to screen (double-tap to lock view)';
+  }
+
+  /**
+   * Show the replay progress HUD above the canvas.
+   * @param {number}   totalRounds
+   * @param {Function} onControl  — called with action string: 'back'|'play'|'pause'|'ff'|'vff'|'stop'
+   */
+  showReplayHUD(totalRounds, onControl) {
+    const hud = this._el('replay-hud');
+    if (!hud) return;
+    hud.style.display = 'flex';
+    this._replayOnControl = onControl;
+
+    // Disable the in-game speed toggle while replaying
+    const speedToggle = document.getElementById('speed-toggle');
+    if (speedToggle) speedToggle.disabled = true;
+
+    // Default to locked view for replay (fit map, no auto-zoom)
+    this._preReplayViewLocked = this.renderer?.viewLocked ?? false;
+    if (this.renderer && !this.renderer.viewLocked) {
+      this.renderer.resize();
+      this.renderer.resetView();
+      this.renderer._zoomAnim = null;
+      this.renderer.viewLocked = true;
+    }
+    this._updateFitBtnLockState();
+
+    // Wire up control buttons
+    const ids = ['back', 'play', 'pause', 'ff', 'vff', 'stop'];
+    for (const action of ids) {
+      const btn = document.getElementById(`replay-${action}-btn`);
+      if (btn) btn.onclick = () => onControl?.(action);
+    }
+
+    this.setReplayPlayState('play');
+  }
+
+  /**
+   * Highlight the currently active replay control button.
+   * @param {string} activeAction — 'play'|'pause'|'ff'|'vff'|'back'|'stop'
+   */
+  setReplayPlayState(activeAction) {
+    const ids = ['back', 'play', 'pause', 'ff', 'vff', 'stop'];
+    for (const action of ids) {
+      const btn = document.getElementById(`replay-${action}-btn`);
+      if (btn) btn.classList.toggle('active', action === activeAction);
+    }
+  }
+
+  /**
+   * Sync the main turn-info header to the current state (called after each
+   * replay round is restored so the header tracks replay progress).
+   */
+  updateReplayHUD() {
+    this._renderTurnInfo();
+  }
+
+  /** Hide the replay HUD. */
+  hideReplayHUD() {
+    const hud = this._el('replay-hud');
+    if (hud) hud.style.display = 'none';
+    this._replayOnControl = null;
+
+    // Re-enable the in-game speed toggle
+    const speedToggle = document.getElementById('speed-toggle');
+    if (speedToggle) speedToggle.disabled = false;
+
+    // Restore view-lock state that existed before replay started
+    if (this.renderer) {
+      this.renderer.viewLocked = this._preReplayViewLocked ?? false;
+      this._updateFitBtnLockState();
+    }
   }
 
   /**
@@ -3198,7 +3314,7 @@ function _buildBreakdownHTML(snap, bd, side, total) {
   if (side === 'atk') {
     parts.push(row('Base d6', bd.atkBaseDie, true));
     parts.push(row(`${snap.name} ATK`, snap.attack));
-    if (bd.phaseBonus)    parts.push(row('☀ Day', bd.phaseBonus));
+    if (bd.phaseBonus)    parts.push(row('🌙 Night', bd.phaseBonus));
     if (bd.atkStaffBonus) parts.push(row('⚕ Staff (undead)', bd.atkStaffBonus));
     bd.atkExtraDice.forEach((r, i) => {
       parts.push(row(`${bd.atkAllyNames[i] ?? 'Ally'} (D3)`, r, true));
@@ -3207,6 +3323,7 @@ function _buildBreakdownHTML(snap, bd, side, total) {
     parts.push(row('Base d6', bd.defBaseDie, true));
     parts.push(row(`${snap.name} DEF`, snap.defense));
     if (bd.fortBonus) parts.push(row(`🏰 Fort ×${bd.fortBonus}`, bd.fortBonus));
+    if (bd.fatiguePenalty) parts.push(row('😓 Fatigue', -bd.fatiguePenalty));
     bd.defExtraDice.forEach((r, i) => {
       parts.push(row(`${bd.defAllyNames[i] ?? 'Ally'} (D3)`, r, true));
     });

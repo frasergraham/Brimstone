@@ -627,7 +627,7 @@ export class GameState {
   _announcePhaseChange(from, to) {
     const messages = {
       [`${Phase.DAWN}->${Phase.DAY}`]:
-        `☀ The sun rises. The hero fights with vigour! (+1 ATK in combat)`,
+        `☀ The sun rises. The light burns the undead in the open!`,
       [`${Phase.DAY}->${Phase.DUSK}`]:
         `🌇 Dusk falls. Seek shelter before night. Neither side has advantage.`,
       [`${Phase.DUSK}->${Phase.NIGHT}`]:

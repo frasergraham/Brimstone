@@ -63,9 +63,9 @@
           <h3 class="htp-heading">Phase Cycle <span class="htp-dim">(8 rounds per cycle)</span></h3>
           <table class="htp-table">
             <tr><td>🌅 Dawn</td><td>Hero +1 action · attrition rises · Power Nodes scored</td></tr>
-            <tr><td>☀ Day</td><td>Hero +1 ATK · witch undead in the open take damage</td></tr>
+            <tr><td>☀ Day</td><td>Witch undead in the open take damage</td></tr>
             <tr><td>🌇 Dusk</td><td>Power Nodes scored</td></tr>
-            <tr><td>🌙 Night</td><td>Witch +1 ATK · survivors in the open take damage</td></tr>
+            <tr><td>🌙 Night</td><td>Witch +2 ATK · survivors in the open take damage</td></tr>
           </table>
         </div>
         <div class="htp-section">
@@ -152,11 +152,17 @@
         <button id="btn-start-local" class="setup-btn primary">Start Game</button>
       </div>
 
-      <!-- In-progress local saves -->
+      <!-- In-progress and completed local saves -->
       <div class="active-games-section" style="margin-top:0.75rem">
-        <div class="active-games-label">In Progress</div>
+        <div class="saves-tab-bar">
+          <button class="saves-tab active" data-target="sp-saves-list">In Progress</button>
+          <button class="saves-tab"        data-target="sp-completed-list">Completed</button>
+        </div>
         <div id="sp-saves-list" class="saves-list">
           <p class="saves-empty">No saved games.</p>
+        </div>
+        <div id="sp-completed-list" class="saves-list" style="display:none">
+          <p class="saves-empty">No completed games yet.</p>
         </div>
       </div>
 
@@ -181,11 +187,17 @@
         <p id="mp-name-error" class="setup-error" style="display:none"></p>
       </div>
 
-      <!-- Active online games -->
+      <!-- Active and completed online games -->
       <div class="active-games-section" style="margin-top:0.75rem">
-        <div class="active-games-label">Active Games</div>
+        <div class="saves-tab-bar">
+          <button class="saves-tab active" data-target="active-games-list">In Progress</button>
+          <button class="saves-tab"        data-target="mp-completed-list">Completed</button>
+        </div>
         <div id="active-games-list" class="saves-list">
           <p class="saves-empty">Sign in to see your active games.</p>
+        </div>
+        <div id="mp-completed-list" class="saves-list" style="display:none">
+          <p class="saves-empty">Sign in to see completed games.</p>
         </div>
       </div>
 
@@ -197,6 +209,15 @@
 
       <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
         <button id="btn-multiplayer-back" class="setup-btn">← Back</button>
+      </div>
+    </div>
+
+    <!-- Revision History -->
+    <div id="setup-step-changelog" class="setup-card setup-card-wide" style="display:none">
+      <h1 class="title" style="font-size:2rem">REVISION HISTORY</h1>
+      <div id="changelog-body" class="changelog-body"></div>
+      <div class="setup-buttons" style="margin-top:1.5rem;margin-bottom:0">
+        <button id="btn-changelog-back" class="setup-btn">&larr; Back</button>
       </div>
     </div>
 
@@ -317,7 +338,7 @@
     </div>
   </div>
 
-  <div id="version-badge" class="version-badge"></div>
+  <a id="version-badge" class="version-badge version-link"></a>
 
   </div><!-- /#setup-screen -->
 
@@ -353,6 +374,17 @@
         <canvas id="game-canvas"></canvas>
         <!-- Step-by-step continue bar: shown during step mode resolution -->
         <div id="step-continue-bar" style="display:none">👆 Click to advance</div>
+        <!-- Replay HUD: shown during full-game replay -->
+        <div id="replay-hud" style="display:none">
+          <div class="replay-controls">
+            <button id="replay-back-btn"  class="replay-ctrl-btn" title="Previous round">⏮</button>
+            <button id="replay-play-btn"  class="replay-ctrl-btn active" title="Play (0.5×)">▶</button>
+            <button id="replay-pause-btn" class="replay-ctrl-btn" title="Pause">⏸</button>
+            <button id="replay-ff-btn"    class="replay-ctrl-btn" title="Fast (1×)">⏩</button>
+            <button id="replay-vff-btn"   class="replay-ctrl-btn" title="Very Fast (1.5×)">⏭</button>
+            <button id="replay-stop-btn"  class="replay-ctrl-btn replay-stop" title="Stop">■</button>
+          </div>
+        </div>
         <!-- Unit stats bar: shown during planning when a unit is selected -->
         <div id="unit-stats-bar" style="display:none"></div>
         <!-- Zoom controls — always visible on desktop, hidden on touch-only devices -->
@@ -378,12 +410,12 @@
             <button class="speed-option" data-mode="fast">
               <span class="speed-option-icon">⏩</span>
               <span class="speed-option-label">Fast</span>
-              <span class="speed-option-desc">Dialog on death only</span>
+              <span class="speed-option-desc">Cinematic pace, no popups</span>
             </button>
-            <button class="speed-option" data-mode="instant">
+            <button class="speed-option" data-mode="vfast">
               <span class="speed-option-icon">⏭</span>
-              <span class="speed-option-label">Instant</span>
-              <span class="speed-option-desc">No dialogs, no pauses</span>
+              <span class="speed-option-label">Very Fast</span>
+              <span class="speed-option-desc">1.5× speed, no popups</span>
             </button>
           </div>
         </div>

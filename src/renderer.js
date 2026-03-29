@@ -81,6 +81,7 @@ export class Renderer {
     this.zoomLevel  = 1.0;
     this._panX      = 0;
     this._panY      = 0;
+    this.viewLocked = false;  // when true: blocks frameHexes, setZoom, and drag-pan
     // Insets account for panels that overlay the canvas (plan panel right, chronicle sidebar left).
     // Set by UIController when panels open/close so framing targets only the visible area.
     this.insetLeft  = 0;
@@ -288,6 +289,17 @@ export class Renderer {
     this._lungeAnims = [];
   }
 
+  /** Clear all in-flight canvas animations (moves, flashes, deaths, lunges, battle highlights, zoom). */
+  clearAnimations() {
+    this._moveAnims              = [];
+    this._flashes                = [];
+    this._deathAnims             = [];
+    this._lungeAnims             = [];
+    this._battleCombatantHexes   = [];
+    this._battleAllyHexes        = [];
+    this._zoomAnim               = null;  // cancel any ongoing camera zoom so it doesn't bleed into next round
+  }
+
   /**
    * Trigger a return animation on all active lunge anims so entities slide back
    * to their home hex instead of snapping. Completed returns are auto-removed.
@@ -428,6 +440,7 @@ export class Renderer {
    *   duration     – animation length in ms; 0 = instant (default 500)
    */
   frameHexes(positions, { paddingHexes = 2.0, maxZoom = 2.0, duration = 500 } = {}) {
+    if (this.viewLocked) return;
     const target = this._computeFrameView(positions, paddingHexes, maxZoom);
     if (!target) return;
 
@@ -462,9 +475,17 @@ export class Renderer {
     const sizeByH = H / (1.5 * MAP_ROWS + 0.5);
     this.hexSize = Math.max(MIN_HEX_SIZE, Math.floor(Math.min(sizeByW, sizeByH)));
 
-    // Canvas fills the wrapper exactly so no gaps appear on any edge
-    this.canvas.width  = W;
-    this.canvas.height = H;
+    // Canvas fills the wrapper exactly — only update if size actually changed.
+    // After a canvas dimension change the GPU may composite a transparent frame
+    // before the next draw() call, so immediately fill the background to prevent
+    // a blank flash.
+    let sizeChanged = false;
+    if (this.canvas.width  !== W) { this.canvas.width  = W; sizeChanged = true; }
+    if (this.canvas.height !== H) { this.canvas.height = H; sizeChanged = true; }
+    if (sizeChanged && this.ctx) {
+      this.ctx.fillStyle = '#0d1117';
+      this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    }
 
     // Center the hex grid within the canvas
     const hs = this.hexSize;
@@ -501,6 +522,7 @@ export class Renderer {
 
   // Zoom toward a focal point (canvas pixel coordinates)
   setZoom(newZoom, focalX, focalY) {
+    if (this.viewLocked) return;
     this._zoomAnim = null; // cancel any auto-framing animation on manual input
     newZoom = Math.max(0.5, Math.min(4.0, newZoom));
     const ratio  = newZoom / this.zoomLevel;

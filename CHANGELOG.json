@@ -1,0 +1,14 @@
+[
+  {
+    "version": "1.0.4",
+    "date": "2026-03-28",
+    "summary": "Bug fixes and quality-of-life improvements",
+    "notes": [
+      "Fixed fortification damage — forts now degrade on combat damage, not automatically at night",
+      "Summoned creatures now spawn on the summoner's tile for clearer positioning",
+      "Improved fog of war — animations at fogged hexes are now properly hidden",
+      "Phase-based survivor discovery chance adds strategic depth to exploration",
+      "Fixed game save/resume for single-player games preserving map size correctly"
+    ]
+  }
+]

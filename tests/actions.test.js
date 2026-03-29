@@ -407,18 +407,7 @@ describe('executeBattle', () => {
     assert.equal(r.success, true);
   });
 
-  test('hero gets phase bonus in DAY', () => {
-    const state = freshState();
-    state.phase = Phase.DAY;
-    const minion = createMinion(state.hero.col, state.hero.row);
-    state.entities.push(minion);
-
-    // We can't control random, but the breakdown should show phaseBonus=1
-    const r = executeBattle(state, state.hero, minion);
-    assert.equal(r.breakdown.phaseBonus, 1, 'Hero should have phaseBonus=1 in DAY');
-  });
-
-  test('witch gets phase bonus in NIGHT', () => {
+  test('witch gets +2 phase bonus in NIGHT (attacker)', () => {
     const state = freshState();
     state.phase = Phase.NIGHT;
     const survivor = new Entity(EntityType.SURVIVOR, 'hero', state.witch.col, state.witch.row);
@@ -426,7 +415,16 @@ describe('executeBattle', () => {
     state.entities.push(survivor);
 
     const r = executeBattle(state, state.witch, survivor);
-    assert.equal(r.breakdown.phaseBonus, 1, 'Witch should have phaseBonus=1 in NIGHT');
+    assert.equal(r.breakdown.phaseBonus, 2, 'Witch should have phaseBonus=2 in NIGHT');
+  });
+
+  test('hero does NOT get phase bonus in DAY (removed)', () => {
+    const state = freshState();
+    state.phase = Phase.DAY;
+    const minion = createMinion(state.hero.col, state.hero.row);
+    state.entities.push(minion);
+    const r = executeBattle(state, state.hero, minion);
+    assert.equal(r.breakdown.phaseBonus, 0, 'Hero should have no phase bonus in DAY');
   });
 
   test('hero does NOT get phase bonus in NIGHT', () => {
@@ -436,6 +434,64 @@ describe('executeBattle', () => {
     state.entities.push(minion);
     const r = executeBattle(state, state.hero, minion);
     assert.equal(r.breakdown.phaseBonus, 0, 'Hero should have no phase bonus in NIGHT');
+  });
+
+  test('witch gets +2 phase bonus in NIGHT', () => {
+    const state = freshState();
+    state.phase = Phase.NIGHT;
+    const survivor = new Entity(EntityType.SURVIVOR, 'hero', state.witch.col, state.witch.row);
+    survivor.items = {};
+    state.entities.push(survivor);
+
+    const r = executeBattle(state, state.witch, survivor);
+    assert.equal(r.breakdown.phaseBonus, 2, 'Witch should have phaseBonus=2 in NIGHT');
+  });
+
+  test('hero defender gets fatigue after 2 defenses', () => {
+    const state = freshState();
+    const minion = createMinion(state.hero.col, state.hero.row);
+    state.entities.push(minion);
+    // Give hero lots of HP so it survives
+    state.hero.hp = 50;
+    state.hero.maxHp = 50;
+    minion.attackBonus = -50; // ensure miss so hero survives
+
+    // First 2 defenses: no fatigue penalty
+    const r1 = executeBattle(state, minion, state.hero);
+    assert.equal(r1.breakdown.fatiguePenalty, 0, 'No fatigue on first defense');
+    const r2 = executeBattle(state, minion, state.hero);
+    assert.equal(r2.breakdown.fatiguePenalty, 0, 'No fatigue on second defense');
+
+    // Third defense: fatigue kicks in (2 prior defenses / 2 = 1)
+    const r3 = executeBattle(state, minion, state.hero);
+    assert.equal(r3.breakdown.fatiguePenalty, 1, 'Fatigue -1 DEF after 2 prior defenses');
+
+    // Fourth defense: still 1 (3 / 2 = 1)
+    const r4 = executeBattle(state, minion, state.hero);
+    assert.equal(r4.breakdown.fatiguePenalty, 1, 'Fatigue still -1 after 3 prior defenses');
+
+    // Fifth defense: fatigue increases (4 / 2 = 2)
+    const r5 = executeBattle(state, minion, state.hero);
+    assert.equal(r5.breakdown.fatiguePenalty, 2, 'Fatigue -2 DEF after 4 prior defenses');
+  });
+
+  test('witch defender does NOT get fatigue', () => {
+    const state = freshState();
+    state.witch.hp = 50;
+    state.witch.maxHp = 50;
+    state.hero.attackBonus = -50; // ensure miss
+
+    executeBattle(state, state.hero, state.witch);
+    executeBattle(state, state.hero, state.witch);
+    const r3 = executeBattle(state, state.hero, state.witch);
+    assert.equal(r3.breakdown.fatiguePenalty, 0, 'Witch should never get fatigue');
+  });
+
+  test('fatigue resets on resetTurn', () => {
+    const state = freshState();
+    state.hero.defendCount = 4;
+    state.hero.resetTurn();
+    assert.equal(state.hero.defendCount, 0, 'defendCount should reset');
   });
 
   test('fortification damaged when defender takes damage, defender still takes HP damage', () => {
