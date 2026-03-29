@@ -330,11 +330,13 @@ export class UIController {
         panel.classList.remove('collapsed');
         this._syncPlanInset();
         this._renderPlanPanel();
+        this._renderEndTurnBtn();
       } else if (panel && !this._edgeSwipe.collapsed && dx > threshold) {
         // Swiped right — close panel
         panel.classList.add('collapsed');
         this._syncPlanInset();
         this._renderPlanPanel();
+        this._renderEndTurnBtn();
       }
       this._edgeSwipe = null;
     }, { passive: true });
@@ -372,16 +374,24 @@ export class UIController {
     });
 
     // End Turn / Submit Plan in header
-    this._el('end-turn-btn')?.addEventListener('click', () => {
+    const _endTurnHandler = () => {
       if (this.state.gameOver) return;
       if (this._planMode) { this._doSubmitPlan(); return; }
       if (this._isOpponentTurn()) return;
       this._doEndTurn();
-    });
+    };
+    this._el('end-turn-btn')?.addEventListener('click', _endTurnHandler);
+    this._el('end-turn-btn')?.addEventListener('touchend', e => {
+      e.preventDefault(); _endTurnHandler();
+    }, { passive: false });
 
-    // Plan panel buttons
-    this._el('plan-submit-btn')?.addEventListener('click', () => this._doSubmitPlan());
-    this._el('plan-clear-btn')?.addEventListener('click',  () => {
+    // Plan panel buttons — touchend for instant mobile response
+    const _tap = (el, fn) => {
+      el?.addEventListener('click', fn);
+      el?.addEventListener('touchend', e => { e.preventDefault(); fn(); }, { passive: false });
+    };
+    _tap(this._el('plan-submit-btn'), () => this._doSubmitPlan());
+    _tap(this._el('plan-clear-btn'),  () => {
       if (this._planSubmitted) return;
       this._plan = [];
       this._refreshPlanOverlay();
@@ -389,8 +399,8 @@ export class UIController {
       if (this._selectedEntity) this._selectEntity(this._selectedEntity);
       this.onRedraw();
     });
-    this._el('plan-toggle-btn')?.addEventListener('click', () => this._togglePlanPanel());
-    this._el('plan-tab')?.addEventListener('click',        () => this._togglePlanPanel());
+    _tap(this._el('plan-toggle-btn'), () => this._togglePlanPanel());
+    _tap(this._el('plan-tab'),        () => this._togglePlanPanel());
   }
 
   _canvasPos(e) {
@@ -581,18 +591,42 @@ export class UIController {
     this._renderPlayerStatus();
   }
 
-  /** Start a countdown timer showing seconds remaining until auto-submit. */
+  /** Start a countdown timer — progress bar on submit button + floating button. */
   _startCountdown(timeoutMs) {
     this._stopCountdown();
-    const el    = this._el('plan-countdown');
-    if (!el) return;
-    el.style.display = '';
+    const submitBtn = this._el('plan-submit-btn');
+    if (!submitBtn) return;
+
+    const GRACE_PERIOD = 5000;
     const end = Date.now() + timeoutMs;
+    this._countdownEnd   = end;
+    this._countdownTotal = timeoutMs;
+
+    const floatBtn = this._el('end-turn-btn');
+
     const tick = () => {
-      const secs = Math.max(0, Math.ceil((end - Date.now()) / 1000));
-      el.textContent = `${secs}s`;
-      el.classList.toggle('countdown-urgent', secs <= 10);
-      if (secs <= 0) this._stopCountdown();
+      const remaining = Math.max(0, end - Date.now());
+      const totalSecs = Math.ceil(remaining / 1000);
+      const pct  = (remaining / timeoutMs) * 100;
+      const mm = String(Math.floor(totalSecs / 60)).padStart(2, '0');
+      const ss = String(totalSecs % 60).padStart(2, '0');
+      const label = totalSecs > 0 ? `\u2713 Submit ${mm}:${ss}` : '\u2713 Submit';
+
+      submitBtn.style.setProperty('--progress', pct + '%');
+      submitBtn.textContent = label;
+      submitBtn.classList.toggle('countdown-urgent', totalSecs <= 10);
+
+      // Mirror progress on the floating submit button
+      if (floatBtn) {
+        floatBtn.style.setProperty('--progress', pct + '%');
+        floatBtn.textContent = label;
+        floatBtn.classList.toggle('countdown-urgent', totalSecs <= 10);
+      }
+
+      if (remaining <= GRACE_PERIOD && !this._graceActive) {
+        this._stopCountdownTimer();
+        this._showGraceDialog(remaining);
+      }
     };
     tick();
     this._countdownTimer = setInterval(tick, 500);
@@ -605,14 +639,101 @@ export class UIController {
     }
   }
 
-  /** Stop the countdown timer. */
-  _stopCountdown() {
+  /** Stop just the main countdown interval (not the grace dialog). */
+  _stopCountdownTimer() {
     if (this._countdownTimer) {
       clearInterval(this._countdownTimer);
       this._countdownTimer = null;
     }
-    const el = this._el('plan-countdown');
-    if (el) { el.style.display = 'none'; el.textContent = ''; }
+  }
+
+  /** Stop countdown and reset submit button / floating button to default state. */
+  _stopCountdown() {
+    this._stopCountdownTimer();
+    this._countdownEnd   = null;
+    this._countdownTotal = null;
+
+    const submitBtn = this._el('plan-submit-btn');
+    if (submitBtn) {
+      submitBtn.style.removeProperty('--progress');
+      submitBtn.textContent = '\u2713 Submit';
+      submitBtn.classList.remove('countdown-urgent');
+    }
+
+    const floatBtn = this._el('end-turn-btn');
+    if (floatBtn) {
+      floatBtn.style.removeProperty('--progress');
+      floatBtn.classList.remove('countdown-urgent');
+    }
+
+    this._dismissGraceDialog();
+  }
+
+  /** Show grace dialog when planning time expires; auto-submits current plan. */
+  _showGraceDialog(remainingMs) {
+    if (this._planSubmitted) return;
+    this._graceActive = true;
+
+    const dialog    = this._el('grace-dialog');
+    const secsSpan  = this._el('grace-seconds');
+    const submitBtn = this._el('plan-submit-btn');
+    if (!dialog) return;
+    dialog.classList.add('visible');
+
+    const graceEnd = Date.now() + remainingMs;
+
+    // Wire button handlers via AbortController for clean teardown
+    const ac = new AbortController();
+    this._graceAbort = ac;
+
+    this._el('grace-submit-current')?.addEventListener('click', () => {
+      this._dismissGraceDialog();
+      this._doSubmitPlan();
+    }, { signal: ac.signal });
+
+    this._el('grace-submit-empty')?.addEventListener('click', () => {
+      this._dismissGraceDialog();
+      this._plan = [];
+      this._doSubmitPlan();
+    }, { signal: ac.signal });
+
+    this._graceTimer = setInterval(() => {
+      const left = Math.max(0, graceEnd - Date.now());
+      const s = Math.ceil(left / 1000);
+      if (secsSpan) secsSpan.textContent = String(s);
+
+      // Keep draining the submit buttons to 0
+      const graceLabel = `\u2713 Submit 00:0${s}`;
+      if (submitBtn) {
+        submitBtn.style.setProperty('--progress', '0%');
+        submitBtn.textContent = graceLabel;
+      }
+      const floatBtnGrace = this._el('end-turn-btn');
+      if (floatBtnGrace) {
+        floatBtnGrace.style.setProperty('--progress', '0%');
+        floatBtnGrace.textContent = graceLabel;
+      }
+
+      if (left <= 0) {
+        this._dismissGraceDialog();
+        this._doSubmitPlan(); // default: submit current plan
+      }
+    }, 250);
+  }
+
+  /** Dismiss the grace dialog and clean up timers/listeners. */
+  _dismissGraceDialog() {
+    this._graceActive = false;
+    if (this._graceTimer) {
+      clearInterval(this._graceTimer);
+      this._graceTimer = null;
+    }
+    if (this._graceAbort) {
+      this._graceAbort.abort();
+      this._graceAbort = null;
+    }
+    const dialog = this._el('grace-dialog');
+    if (dialog) dialog.classList.remove('visible');
   }
 
   /** Add one action to the plan queue. */
@@ -642,6 +763,7 @@ export class UIController {
   /** Submit the current plan. */
   _doSubmitPlan() {
     if (this._planSubmitted) return;
+    this._stopCountdown();
     this._planSubmitted = true;
 
     const panel = this._el('plan-panel');
@@ -742,6 +864,7 @@ export class UIController {
     const toggleBtn = this._el('plan-toggle-btn');
     if (toggleBtn) toggleBtn.textContent = isCollapsed ? '▶' : '◀';
     this._syncPlanInset();
+    this._renderEndTurnBtn();
   }
 
   /** Update renderer.insetRight based on whether the plan panel is visible and expanded. */
@@ -1549,11 +1672,21 @@ export class UIController {
     if (this._planMode) {
       btn.disabled = this._planSubmitted || state.gameOver;
       btn.classList.toggle('urgent', !this._planSubmitted && !state.gameOver);
+      btn.classList.add('planning-active');
       btn.title = this._planSubmitted ? 'Plan submitted' : 'Submit Plan';
-      btn.textContent = this._planSubmitted ? '✓' : '✓ Submit';
+      // Let the countdown timer own the text when it's running
+      if (!this._countdownTimer && !this._graceActive) {
+        btn.textContent = this._planSubmitted ? '✓' : '✓ Submit';
+      }
+      // Hide when plan panel is expanded (not collapsed)
+      const panel = this._el('plan-panel');
+      const panelOpen = panel && panel.style.display !== 'none'
+                     && !panel.classList.contains('collapsed');
+      btn.classList.toggle('plan-open', !!panelOpen);
       return;
     }
 
+    btn.classList.remove('planning-active', 'plan-open');
     btn.textContent = '↩';
     const isOpponent = this._isOpponentTurn();
     const noActs    = state.actionsAvailable === 0;
@@ -3260,6 +3393,13 @@ function _positionPopup(popup, ui) {
 function _attachPopupListeners(popup, ui) {
   popup.querySelectorAll('button[data-action]').forEach(b => {
     b.addEventListener('click', () => ui._handleActionButton(b));
+    // On mobile, the synthesized click after touchend can be delayed or
+    // swallowed (e.g. iOS treats the first tap on a newly-visible element
+    // as a focus event).  Fire directly on touchend for instant response.
+    b.addEventListener('touchend', e => {
+      e.preventDefault();
+      ui._handleActionButton(b);
+    }, { passive: false });
   });
 }
 

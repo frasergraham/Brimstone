@@ -445,11 +445,23 @@
         <div class="plan-panel-footer">
           <button id="plan-clear-btn" class="plan-btn secondary">✕ Clear</button>
           <button id="plan-submit-btn" class="plan-btn primary">✓ Submit</button>
-          <span id="plan-countdown" class="plan-countdown" style="display:none"></span>
         </div>
         <div id="plan-players" class="plan-players" style="display:none"></div>
         <div id="plan-inventory" class="plan-inventory"></div>
         <div id="plan-status" class="plan-status"></div>
+      </div>
+
+      <!-- Grace dialog — shown when planning time expires, offers 5s to submit -->
+      <div id="grace-dialog" class="grace-dialog">
+        <div class="grace-card">
+          <div class="grace-title">&#9200; Time's Up!</div>
+          <div class="grace-message">Your planning time has expired.</div>
+          <div class="grace-countdown">Auto-submitting in <span id="grace-seconds">5</span>s&#8230;</div>
+          <div class="grace-buttons">
+            <button id="grace-submit-current" class="plan-btn primary">&#10003; Submit Current Plan</button>
+            <button id="grace-submit-empty" class="plan-btn secondary">&#10005; Submit Empty Plan</button>
+          </div>
+        </div>
       </div>
     </main>
 

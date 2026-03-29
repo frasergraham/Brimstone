@@ -49,10 +49,15 @@ describe('resetCountdown', () => {
     // Countdown should be running — now reset it to 90s
     ui.resetCountdown(90_000);
 
-    const el = els['plan-countdown'];
-    assert.equal(el.style.display, '', 'countdown should be visible');
-    // Text should show ~90s, not the original ~30s
-    assert.match(el.textContent, /^90s$/, 'countdown should show the reset value');
+    const btn = els['plan-submit-btn'];
+    // Progress bar should be set (submit button shows countdown via --progress)
+    assert.ok(btn.style._props['--progress'] !== undefined,
+      '--progress should be set on submit button');
+    // Text should show ~01:30, not the original ~00:30
+    assert.ok(btn.textContent.includes('01:'),
+      `countdown should show reset value (~01:30), got: "${btn.textContent}"`);
+
+    ui._stopCountdown();
   });
 
   test('is a no-op when plan is already submitted', () => {
@@ -64,20 +69,20 @@ describe('resetCountdown', () => {
 
     ui.resetCountdown(90_000);
 
-    const el = els['plan-countdown'];
-    assert.equal(el.style.display, 'none', 'countdown should stay hidden after submit');
+    const btn = els['plan-submit-btn'];
+    assert.equal(btn.style._props['--progress'], undefined,
+      '--progress should not be set after submit');
   });
 
   test('is a no-op when not in planning mode', () => {
     const { ui, els } = makeUI();
-    const el = els['plan-countdown'];
-    // Ensure the element starts hidden
-    el.style.display = 'none';
 
     // Not in planning mode at all
     ui.resetCountdown(90_000);
 
-    assert.equal(el.style.display, 'none', 'countdown should not appear outside planning');
+    const btn = els['plan-submit-btn'];
+    assert.equal(btn.style._props['--progress'], undefined,
+      '--progress should not be set outside planning');
   });
 
   test('is a no-op when timeoutMs is 0', () => {
@@ -87,8 +92,9 @@ describe('resetCountdown', () => {
 
     ui.resetCountdown(0);
 
-    const el = els['plan-countdown'];
-    assert.equal(el.style.display, 'none', 'countdown should not restart with 0 timeout');
+    const btn = els['plan-submit-btn'];
+    assert.equal(btn.style._props['--progress'], undefined,
+      '--progress should not restart with 0 timeout');
   });
 });
 
