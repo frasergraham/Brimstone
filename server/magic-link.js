@@ -8,8 +8,15 @@ import db from './db.js';
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const EMAIL_FROM     = process.env.EMAIL_FROM || 'Brimstone <noreply@brimstone.game>';
-const BASE_URL       = process.env.BASE_URL || '';  // e.g. https://brimstone.game
 const TOKEN_TTL_MS   = 15 * 60 * 1000; // 15 minutes
+
+// Derive BASE_URL: explicit env var > Railway public domain > localhost fallback
+function _baseUrl() {
+  if (process.env.BASE_URL) return process.env.BASE_URL;
+  if (process.env.RAILWAY_PUBLIC_DOMAIN) return `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
+  const port = process.env.PORT || 3000;
+  return `http://localhost:${port}`;
+}
 
 // ── Prepared statements ──────────────────────────────────────────────────────
 
@@ -67,8 +74,7 @@ export function verifyToken(token) {
  * Falls back to console logging if RESEND_API_KEY is not configured.
  */
 export async function sendMagicLinkEmail(email, token, { isLink = false } = {}) {
-  const baseUrl = BASE_URL || 'http://localhost:3000';
-  const verifyUrl = `${baseUrl}/auth/verify?token=${token}`;
+  const verifyUrl = `${_baseUrl()}/auth/verify?token=${token}`;
 
   const subject = isLink
     ? 'Link your Brimstone account'
