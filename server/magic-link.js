@@ -7,7 +7,7 @@ import db from './db.js';
 // ── Configuration ────────────────────────────────────────────────────────────
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
-const EMAIL_FROM     = process.env.EMAIL_FROM || 'Brimstone <noreply@brimstone.game>';
+const EMAIL_FROM     = process.env.EMAIL_FROM || 'Brimstone <onboarding@resend.dev>';
 const TOKEN_TTL_MS   = 15 * 60 * 1000; // 15 minutes
 
 // Derive BASE_URL: explicit env var > Railway public domain > localhost fallback
