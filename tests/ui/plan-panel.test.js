@@ -364,3 +364,57 @@ describe('grace dialog', () => {
       'grace dialog should be dismissed on exit');
   });
 });
+
+// ── floating submit button ────────────────────────────────────────────────────
+
+describe('floating submit button', () => {
+  test('end-turn-btn gets planning-float class during planning', () => {
+    const { ui, els } = makeUI();
+    ui.enterPlanningMode('hero', 3);
+
+    assert.ok(els['end-turn-btn']._classList.has('planning-float'),
+      'end-turn-btn should have planning-float class in planning mode');
+
+    ui._stopCountdown();
+  });
+
+  test('planning-float class removed after exiting planning', () => {
+    const { ui, els } = makeUI();
+    ui.enterPlanningMode('hero', 3);
+    ui.exitPlanningMode();
+
+    assert.ok(!els['end-turn-btn']._classList.has('planning-float'),
+      'planning-float should be removed after exit');
+  });
+
+  test('plan-open class set when panel is expanded', () => {
+    const { ui, els } = makeUI();
+    // Simulate expanded panel (visible and not collapsed)
+    els['plan-panel'].style.display = '';
+    els['plan-panel'].classList.remove('collapsed');
+
+    ui.enterPlanningMode('hero', 3);
+
+    assert.ok(els['end-turn-btn']._classList.has('plan-open'),
+      'plan-open should be set when panel is expanded');
+
+    ui._stopCountdown();
+  });
+
+  test('plan-open class not set when panel is collapsed', () => {
+    const { ui, els } = makeUI();
+    // Simulate collapsed panel
+    els['plan-panel'].style.display = '';
+    els['plan-panel'].classList.add('collapsed');
+
+    ui.enterPlanningMode('hero', 3);
+    // enterPlanningMode may uncollapse on wide screens, so force collapsed
+    els['plan-panel'].classList.add('collapsed');
+    ui._renderEndTurnBtn();
+
+    assert.ok(!els['end-turn-btn']._classList.has('plan-open'),
+      'plan-open should not be set when panel is collapsed');
+
+    ui._stopCountdown();
+  });
+});

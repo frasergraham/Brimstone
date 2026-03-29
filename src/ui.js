@@ -311,11 +311,13 @@ export class UIController {
         panel.classList.remove('collapsed');
         this._syncPlanInset();
         this._renderPlanPanel();
+        this._renderEndTurnBtn();
       } else if (panel && !this._edgeSwipe.collapsed && dx > threshold) {
         // Swiped right — close panel
         panel.classList.add('collapsed');
         this._syncPlanInset();
         this._renderPlanPanel();
+        this._renderEndTurnBtn();
       }
       this._edgeSwipe = null;
     }, { passive: true });
@@ -806,6 +808,7 @@ export class UIController {
     const toggleBtn = this._el('plan-toggle-btn');
     if (toggleBtn) toggleBtn.textContent = isCollapsed ? '▶' : '◀';
     this._syncPlanInset();
+    this._renderEndTurnBtn();
   }
 
   /** Update renderer.insetRight based on whether the plan panel is visible and expanded. */
@@ -1615,9 +1618,17 @@ export class UIController {
       btn.classList.toggle('urgent', !this._planSubmitted && !state.gameOver);
       btn.title = this._planSubmitted ? 'Plan submitted' : 'Submit Plan';
       btn.textContent = this._planSubmitted ? '✓' : '✓ Submit';
+      // Float the submit button over the bottom-right of the map;
+      // hide when plan panel is expanded (not collapsed).
+      btn.classList.add('planning-float');
+      const panel = this._el('plan-panel');
+      const panelOpen = panel && panel.style.display !== 'none'
+                     && !panel.classList.contains('collapsed');
+      btn.classList.toggle('plan-open', !!panelOpen);
       return;
     }
 
+    btn.classList.remove('planning-float', 'plan-open');
     btn.textContent = '↩';
     const isOpponent = this._isOpponentTurn();
     const noActs    = state.actionsAvailable === 0;

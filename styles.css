@@ -594,6 +594,34 @@ canvas { touch-action: pan-x pan-y; }
   border-color: var(--day);
   animation: pulse-gold 1.4s ease-in-out infinite;
 }
+/* During planning: float the submit button over the bottom-right of the map */
+.end-turn-header.planning-float {
+  position: fixed;
+  bottom: 60px;
+  right: 16px;
+  z-index: 45;
+  height: auto;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  border-radius: 6px;
+  background: var(--hero);
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+  border: 1px solid rgba(255,255,255,0.2);
+  box-shadow: 0 2px 12px rgba(0,0,0,0.5);
+}
+.end-turn-header.planning-float:hover {
+  background: #e8c84e;
+}
+.end-turn-header.planning-float:disabled {
+  opacity: 0.4;
+  background: rgba(255,255,255,0.08);
+}
+/* Hide floating submit when plan panel is expanded */
+.end-turn-header.planning-float.plan-open {
+  display: none;
+}
 
 /* ── In-game menu popup ──────────────────────────────────────────────── */
 .game-menu-popup {
@@ -1972,6 +2000,7 @@ canvas { touch-action: pan-x pan-y; }
 
   /* End turn button slightly larger tap target */
   .end-turn-header { padding: 0 0.65rem; height: 36px; }
+  .end-turn-header.planning-float { padding: 0.6rem 1.2rem; bottom: 68px; right: 12px; }
 
 }
 
@@ -2298,7 +2327,8 @@ canvas { touch-action: pan-x pan-y; }
 }
 .plan-btn.primary {
   background: linear-gradient(to right, var(--hero) var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
-  color: #000;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.7);
   position: relative;
   overflow: hidden;
 }
@@ -2307,7 +2337,6 @@ canvas { touch-action: pan-x pan-y; }
 }
 .plan-panel[data-witch-mode="1"] .plan-btn.primary {
   background: linear-gradient(to right, var(--witch) var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
-  color: #fff;
 }
 .plan-panel[data-witch-mode="1"] .plan-btn.primary:hover {
   background: linear-gradient(to right, #b06cc8 var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
