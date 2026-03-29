@@ -575,10 +575,12 @@ canvas { touch-action: pan-x pan-y; }
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  transition: border-color 0.15s, color 0.15s;
   padding: 0;
 }
-@media (hover: hover) { .header-icon-btn:hover { border-color: var(--text); color: var(--text-bright); } }
+@media (hover: hover) {
+  .header-icon-btn { transition: border-color 0.15s, color 0.15s; }
+  .header-icon-btn:hover { border-color: var(--text); color: var(--text-bright); }
+}
 .header-icon-btn:disabled { opacity: 0.3; cursor: default; }
 
 /* End Turn: slightly wider to fit text, urgent pulse when no actions left */
@@ -1277,9 +1279,11 @@ canvas { touch-action: pan-x pan-y; }
   padding: 0.25rem 0.6rem;
   border-radius: 12px;
   cursor: pointer;
-  transition: background 0.12s;
 }
-@media (hover: hover) { #cancel-action-btn:hover { background: rgba(170,68,51,0.25); } }
+@media (hover: hover) {
+  #cancel-action-btn { transition: background 0.12s; }
+  #cancel-action-btn:hover { background: rgba(170,68,51,0.25); }
+}
 
 .action-title {
   font-size: 0.75rem;
@@ -1308,9 +1312,7 @@ canvas { touch-action: pan-x pan-y; }
   cursor: pointer;
   text-align: left;
   border-radius: 2px;
-  transition: background 0.1s, border-color 0.1s;
 }
-
 /* Compact variant used inside the floating popup */
 #action-popup .action-btn {
   padding: 0.28rem 0.45rem;
@@ -1322,7 +1324,10 @@ canvas { touch-action: pan-x pan-y; }
   margin: 0.25rem 0 0.15rem;
   padding-top: 0.2rem;
 }
-@media (hover: hover) { .action-btn:hover:not(:disabled) { background: #1e2438; border-color: #5a4890; } }
+@media (hover: hover) {
+  .action-btn { transition: background 0.1s, border-color 0.1s; }
+  .action-btn:hover:not(:disabled) { background: #1e2438; border-color: #5a4890; }
+}
 .action-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
 .action-btn.move    { border-left: 2px solid var(--green); }
@@ -2191,12 +2196,14 @@ canvas { touch-action: pan-x pan-y; }
   align-items: center;
   gap: 0.2rem;
   line-height: 1;
-  transition: background 0.15s, border-color 0.15s;
   writing-mode: vertical-rl;
   text-orientation: mixed;
   letter-spacing: 0.02em;
 }
-@media (hover: hover) { .plan-tab:hover { background: rgba(40,50,60,0.97); color: #fff; } }
+@media (hover: hover) {
+  .plan-tab { transition: background 0.15s, border-color 0.15s; }
+  .plan-tab:hover { background: rgba(40,50,60,0.97); color: #fff; }
+}
 .plan-tab-label {
   white-space: nowrap;
 }
