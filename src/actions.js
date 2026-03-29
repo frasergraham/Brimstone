@@ -619,6 +619,8 @@ export function executeBattle(state, actor, target) {
 
     if (killed) {
       log.push(`${target.displayName} is slain!`);
+      if (actor.owner === 'hero') state.heroKills++;
+      else if (actor.owner === 'witch') state.witchKills++;
       state.entities = state.entities.filter(e => e.id !== target.id);
     } else if (damage > 0) {
       const label = damage >= 2 ? `${damage} damage (crushing blow!)` : `${damage} damage`;
@@ -635,6 +637,8 @@ export function executeBattle(state, actor, target) {
       log.push(`⚔ ${target.displayName} counter-attacks! ${actor.displayName} takes 1 damage.`);
       if (counterKilled) {
         log.push(`${actor.displayName} is slain by the counter!`);
+        if (target.owner === 'hero') state.heroKills++;
+        else if (target.owner === 'witch') state.witchKills++;
         state.entities = state.entities.filter(e => e.id !== actor.id);
       } else {
         log.push(`${actor.displayName} is at ${actor.hp}/${actor.maxHp} HP.`);
@@ -737,6 +741,7 @@ export function executeSummon(state, actor, requestedType = null) {
     summonedUnit = createMinion(actor.col, actor.row, ownerId);
     unitName = 'Minion';
     state.entities.push(summonedUnit);
+    state.witchSummonCount++;
     return {
       success: true,
       log: [`The witch raises a ${unitName}!`],
@@ -746,6 +751,7 @@ export function executeSummon(state, actor, requestedType = null) {
   }
 
   state.entities.push(summonedUnit);
+  state.witchSummonCount++;
   return { success: true, log: [`The witch raises a ${unitName}!`], cost: 1, spent: [{ type: res, amount: 2 }] };
 }
 

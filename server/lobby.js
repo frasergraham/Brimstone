@@ -4,6 +4,7 @@ import { GameState, Player } from '../src/game.js';
 import { WitchAI, HeroAI, HERO_PERSONALITIES, WITCH_PERSONALITIES } from '../src/ai.js';
 import { serializeState, deserializeState } from './state-sync.js';
 import { recordResult }                    from './leaderboard.js';
+import { recordGameStats }                 from './game-stats.js';
 import { resolvePlansMP, ResEventType }    from './resolver.js';
 import { compileTurnBattleSummary }        from '../src/battle-utils.js';
 import { PlanActionType }                  from '../src/planner.js';
@@ -667,6 +668,36 @@ function checkAndHandleGameOver(room) {
     const outcome = seat.faction === winner ? 'win' : (winner ? 'loss' : 'draw');
     record(seat.playerId, outcome);
   }
+
+  // Record per-game stats
+  try {
+    const firstHero  = room.players.find(s => s.faction === 'hero'  && !s.isAI);
+    const firstWitch = room.players.find(s => s.faction === 'witch' && !s.isAI);
+    const heroSlot   = room.slots?.find(s => s.faction === 'hero'  && s.status === 'ai');
+    const witchSlot  = room.slots?.find(s => s.faction === 'witch' && s.status === 'ai');
+    recordGameStats({
+      id:                randomUUID(),
+      mode:              'online',
+      map_size:          room.state.mapSize || 'standard',
+      winner:            room.state.winner,
+      win_reason:        room.state.winReason,
+      rounds:            room.state.round,
+      final_phase:       room.state.phase,
+      hero_score:        room.state.nodeScore?.hero  || 0,
+      witch_score:       room.state.nodeScore?.witch || 0,
+      hero_kills:        room.state.heroKills  || 0,
+      witch_kills:       room.state.witchKills || 0,
+      hero_survivors:    room.state.entities.filter(e => e.owner === 'hero' && e.type === 'survivor').length,
+      witch_summons:     room.state.witchSummonCount || 0,
+      hero_personality:  heroSlot?.personality  || null,
+      witch_personality: witchSlot?.personality || null,
+      hero_player_id:    firstHero?.playerId   || null,
+      witch_player_id:   firstWitch?.playerId  || null,
+      game_version:      VERSION,
+      fog_of_war:        room.state.fogOfWar ? 1 : 0,
+      duration_ms:       Date.now() - room.createdAt,
+    });
+  } catch (err) { console.error(`[room ${room.id}] recordGameStats error:`, err); }
 
   try { deleteSave(room.id); } catch (err) { console.error(`[room ${room.id}] deleteSave error:`, err); }
 

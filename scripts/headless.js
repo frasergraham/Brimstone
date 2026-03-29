@@ -11,6 +11,15 @@ import { WitchAI, HeroAI }       from '../src/ai.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType }         from '../src/planner.js';
 import { MAP_SIZES }              from '../src/map.js';
+import { VERSION }                from '../src/version.js';
+import { randomUUID }             from 'crypto';
+
+// Optional: record stats to DB if available (fails silently if DB module not loadable)
+let recordGameStats = null;
+try {
+  const mod = await import('../server/game-stats.js');
+  recordGameStats = mod.recordGameStats;
+} catch { /* running without server deps — skip stats recording */ }
 
 const N       = parseInt(process.argv[2] ?? '200', 10);
 const MAP_SIZE = process.argv[3] ?? 'standard';
@@ -174,6 +183,34 @@ function runGame() {
         winReason = `draw at cap (nodes ${wn}–${hn}, score ${ws}–${hs})`;
       }
     }
+  }
+
+  // Record to DB if available
+  if (recordGameStats && winner !== 'draw') {
+    try {
+      recordGameStats({
+        id:                randomUUID(),  // imported from 'crypto' at top
+        mode:              'headless',
+        map_size:          MAP_SIZE,
+        winner,
+        win_reason:        winReason,
+        rounds:            state.round,
+        final_phase:       state.phase,
+        hero_score:        state.nodeScore?.hero  || 0,
+        witch_score:       state.nodeScore?.witch || 0,
+        hero_kills:        state.heroKills  || 0,
+        witch_kills:       state.witchKills || 0,
+        hero_survivors:    state.entities.filter(e => e.owner === 'hero' && e.type === 'survivor').length,
+        witch_summons:     state.witchSummonCount || 0,
+        hero_personality:  heroAI.constructor.name,
+        witch_personality: witchAI.constructor.name,
+        hero_player_id:    null,
+        witch_player_id:   null,
+        game_version:      VERSION,
+        fog_of_war:        0,
+        duration_ms:       null,
+      });
+    } catch { /* non-critical — skip */ }
   }
 
   return {

@@ -70,4 +70,28 @@ export const SCHEMA_SQL = `
     steps_json     TEXT NOT NULL,
     PRIMARY KEY (game_id, round_num)
   );
+
+  CREATE TABLE IF NOT EXISTS game_stats (
+    id                TEXT PRIMARY KEY,
+    mode              TEXT NOT NULL,
+    map_size          TEXT NOT NULL,
+    winner            TEXT NOT NULL,
+    win_reason        TEXT NOT NULL,
+    rounds            INTEGER NOT NULL,
+    final_phase       TEXT NOT NULL,
+    hero_score        INTEGER NOT NULL DEFAULT 0,
+    witch_score       INTEGER NOT NULL DEFAULT 0,
+    hero_kills        INTEGER NOT NULL DEFAULT 0,
+    witch_kills       INTEGER NOT NULL DEFAULT 0,
+    hero_survivors    INTEGER NOT NULL DEFAULT 0,
+    witch_summons     INTEGER NOT NULL DEFAULT 0,
+    hero_personality  TEXT,
+    witch_personality TEXT,
+    hero_player_id    TEXT,
+    witch_player_id   TEXT,
+    game_version      TEXT NOT NULL,
+    fog_of_war        INTEGER NOT NULL DEFAULT 0,
+    duration_ms       INTEGER,
+    created_at        INTEGER NOT NULL DEFAULT (unixepoch())
+  );
 `;

@@ -76,6 +76,9 @@ export function serializeState(state) {
     winReason:            state.winReason,
     attritionLevel:       state.attritionLevel,
     attritionChanged:     state.attritionChanged ?? false,
+    heroKills:            state.heroKills        ?? 0,
+    witchKills:           state.witchKills       ?? 0,
+    witchSummonCount:     state.witchSummonCount ?? 0,
     nodeScore:            { ...state.nodeScore },
     log:                  [...state.log],
     witchObjectives:      state.witchObjectives.map(o => ({
@@ -180,6 +183,9 @@ export function deserializeState(snap) {
   state.mapSize              = snap.mapSize   ?? 'standard';
   state.winner               = snap.winner    ?? null;
   state.winReason            = snap.winReason ?? null;
+  state.heroKills            = snap.heroKills        ?? 0;
+  state.witchKills           = snap.witchKills       ?? 0;
+  state.witchSummonCount     = snap.witchSummonCount ?? 0;
 
   // ── Planning fields — reset to clean pre-planning state ──────────────────
   state.planningPhase    = false;

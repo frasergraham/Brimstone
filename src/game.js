@@ -187,6 +187,11 @@ export class GameState {
     this.lastDayDamage     = []; // {col,row,dmg} entries for flash animation
     this.lastHazardLog     = []; // human-readable lines describing hazard events this phase
 
+    // ── Cumulative stats counters (for game-stats tracking) ──────────────────
+    this.heroKills        = 0; // entities killed by hero side (combat + hazards)
+    this.witchKills       = 0; // entities killed by witch side (combat + hazards)
+    this.witchSummonCount = 0; // total summons performed by witch side
+
     // Cumulative node scoring: each dawn/dusk majority scores 1 point; first to 3 wins.
     this.nodeScore = { hero: 0, witch: 0 };
 

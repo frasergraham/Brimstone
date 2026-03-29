@@ -177,7 +177,7 @@
 <body>
   <div class="admin-wrap">
     <h1>BRIMSTONE ADMIN</h1>
-    <p class="subtitle" id="version-line">Loading...</p>
+    <p class="subtitle" id="version-line">Loading... &mdash; <a href="/admin/stats" style="color:var(--hero)">Game Stats</a></p>
 
     <div class="stats-bar" id="stats-bar">
       <div class="stat-box"><div class="label">Connections</div><div class="value" id="stat-connections">-</div></div>
@@ -351,13 +351,13 @@
     async function loadStats() {
       try {
         const stats = await api('/admin/api/stats');
-        document.getElementById('version-line').textContent = `v${stats.version}`;
+        document.getElementById('version-line').innerHTML = `v${stats.version} &mdash; <a href="/admin/stats" style="color:var(--hero)">Game Stats</a>`;
         document.getElementById('stat-connections').textContent = stats.connections;
         document.getElementById('stat-rooms').textContent = stats.activeRooms;
         document.getElementById('stat-queue').textContent = stats.queueSize;
         document.getElementById('stat-uptime').textContent = formatUptime(stats.uptime);
       } catch (e) {
-        document.getElementById('version-line').textContent = 'Failed to connect';
+        document.getElementById('version-line').innerHTML = 'Failed to connect &mdash; <a href="/admin/stats" style="color:var(--hero)">Game Stats</a>';
       }
     }
 
