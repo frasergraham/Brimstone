@@ -578,7 +578,7 @@ canvas { touch-action: pan-x pan-y; }
   transition: border-color 0.15s, color 0.15s;
   padding: 0;
 }
-.header-icon-btn:hover { border-color: var(--text); color: var(--text-bright); }
+@media (hover: hover) { .header-icon-btn:hover { border-color: var(--text); color: var(--text-bright); } }
 .header-icon-btn:disabled { opacity: 0.3; cursor: default; }
 
 /* End Turn: slightly wider to fit text, urgent pulse when no actions left */
@@ -1279,7 +1279,7 @@ canvas { touch-action: pan-x pan-y; }
   cursor: pointer;
   transition: background 0.12s;
 }
-#cancel-action-btn:hover { background: rgba(170,68,51,0.25); }
+@media (hover: hover) { #cancel-action-btn:hover { background: rgba(170,68,51,0.25); } }
 
 .action-title {
   font-size: 0.75rem;
@@ -1322,7 +1322,7 @@ canvas { touch-action: pan-x pan-y; }
   margin: 0.25rem 0 0.15rem;
   padding-top: 0.2rem;
 }
-.action-btn:hover:not(:disabled) { background: #1e2438; border-color: #5a4890; }
+@media (hover: hover) { .action-btn:hover:not(:disabled) { background: #1e2438; border-color: #5a4890; } }
 .action-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
 .action-btn.move    { border-left: 2px solid var(--green); }
@@ -1335,7 +1335,7 @@ canvas { touch-action: pan-x pan-y; }
   border-left: 2px solid #4caf7d;
   color: #a0e8bc;
 }
-.action-btn.free:hover:not(:disabled) { background: #142a1e; border-color: #4caf7d; }
+@media (hover: hover) { .action-btn.free:hover:not(:disabled) { background: #142a1e; border-color: #4caf7d; } }
 .action-btn.tile-info {
   border-left: 2px solid #556;
   color: var(--text-dim);
@@ -1359,7 +1359,7 @@ canvas { touch-action: pan-x pan-y; }
   color: var(--text-dim);
   text-align: center;
 }
-.action-btn.end-turn:hover:not(:disabled) { color: var(--text); border-color: #6a5090; }
+@media (hover: hover) { .action-btn.end-turn:hover:not(:disabled) { color: var(--text); border-color: #6a5090; } }
 
 /* Selected entity info */
 .entity-name    { font-size: 1rem; font-weight: bold; margin-bottom: 0.3rem; }
@@ -2196,7 +2196,7 @@ canvas { touch-action: pan-x pan-y; }
   text-orientation: mixed;
   letter-spacing: 0.02em;
 }
-.plan-tab:hover { background: rgba(40,50,60,0.97); color: #fff; }
+@media (hover: hover) { .plan-tab:hover { background: rgba(40,50,60,0.97); color: #fff; } }
 .plan-tab-label {
   white-space: nowrap;
 }
@@ -2318,14 +2318,18 @@ canvas { touch-action: pan-x pan-y; }
   position: relative;
   overflow: hidden;
 }
-.plan-btn.primary:hover {
-  background: linear-gradient(to right, #e8c84e var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
+@media (hover: hover) {
+  .plan-btn.primary:hover {
+    background: linear-gradient(to right, #e8c84e var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
+  }
 }
 .plan-panel[data-witch-mode="1"] .plan-btn.primary {
   background: linear-gradient(to right, var(--witch) var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
 }
-.plan-panel[data-witch-mode="1"] .plan-btn.primary:hover {
-  background: linear-gradient(to right, #b06cc8 var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
+@media (hover: hover) {
+  .plan-panel[data-witch-mode="1"] .plan-btn.primary:hover {
+    background: linear-gradient(to right, #b06cc8 var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
+  }
 }
 .plan-btn.primary.countdown-urgent {
   animation: btn-pulse 0.5s ease-in-out infinite alternate;
@@ -2338,7 +2342,7 @@ canvas { touch-action: pan-x pan-y; }
   background: rgba(255,255,255,0.08);
   color: rgba(255,255,255,0.6);
 }
-.plan-btn.secondary:hover { background: rgba(255,255,255,0.15); }
+@media (hover: hover) { .plan-btn.secondary:hover { background: rgba(255,255,255,0.15); } }
 .plan-status {
   font-size: 0.72rem;
   color: var(--muted);
