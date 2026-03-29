@@ -242,13 +242,13 @@ describe('submit button progress bar', () => {
     ui._stopCountdown();
   });
 
-  test('submit button text includes seconds when countdown active', () => {
+  test('submit button text shows mm:ss when countdown active', () => {
     const { ui, els } = makeUI();
 
     ui.enterPlanningMode('hero', 3, 60000);
 
-    assert.ok(els['plan-submit-btn'].textContent.includes('s'),
-      'submit button should show seconds remaining');
+    assert.ok(els['plan-submit-btn'].textContent.includes(':'),
+      `submit button should show mm:ss, got: "${els['plan-submit-btn'].textContent}"`);
 
     ui._stopCountdown();
   });

@@ -576,13 +576,15 @@ export class UIController {
 
     const tick = () => {
       const remaining = Math.max(0, end - Date.now());
-      const secs = Math.ceil(remaining / 1000);
+      const totalSecs = Math.ceil(remaining / 1000);
       const pct  = (remaining / timeoutMs) * 100;
-      const label = secs > 0 ? `\u2713 Submit (${secs}s)` : '\u2713 Submit';
+      const mm = String(Math.floor(totalSecs / 60)).padStart(2, '0');
+      const ss = String(totalSecs % 60).padStart(2, '0');
+      const label = totalSecs > 0 ? `\u2713 Submit ${mm}:${ss}` : '\u2713 Submit';
 
       submitBtn.style.setProperty('--progress', pct + '%');
       submitBtn.textContent = label;
-      submitBtn.classList.toggle('countdown-urgent', secs <= 10);
+      submitBtn.classList.toggle('countdown-urgent', totalSecs <= 10);
 
       // Mirror progress on the floating submit button
       if (floatBtn) {
@@ -663,10 +665,16 @@ export class UIController {
       const s = Math.ceil(left / 1000);
       if (secsSpan) secsSpan.textContent = String(s);
 
-      // Keep draining the submit button progress to 0
+      // Keep draining the submit buttons to 0
+      const graceLabel = `\u2713 Submit 00:0${s}`;
       if (submitBtn) {
         submitBtn.style.setProperty('--progress', '0%');
-        submitBtn.textContent = `\u2713 Submit (${s}s)`;
+        submitBtn.textContent = graceLabel;
+      }
+      const floatBtnGrace = this._el('end-turn-btn');
+      if (floatBtnGrace) {
+        floatBtnGrace.style.setProperty('--progress', '0%');
+        floatBtnGrace.textContent = graceLabel;
       }
 
       if (left <= 0) {
@@ -1628,7 +1636,10 @@ export class UIController {
       btn.disabled = this._planSubmitted || state.gameOver;
       btn.classList.toggle('urgent', !this._planSubmitted && !state.gameOver);
       btn.title = this._planSubmitted ? 'Plan submitted' : 'Submit Plan';
-      btn.textContent = this._planSubmitted ? '✓' : '✓ Submit';
+      // Don't overwrite text while countdown is driving it
+      if (!this._countdownTimer && !this._graceActive) {
+        btn.textContent = this._planSubmitted ? '✓' : '✓ Submit';
+      }
       // Float the submit button over the bottom-right of the map;
       // hide when plan panel is expanded (not collapsed).
       btn.classList.add('planning-float');
