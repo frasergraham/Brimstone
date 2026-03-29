@@ -355,16 +355,24 @@ export class UIController {
     });
 
     // End Turn / Submit Plan in header
-    this._el('end-turn-btn')?.addEventListener('click', () => {
+    const _endTurnHandler = () => {
       if (this.state.gameOver) return;
       if (this._planMode) { this._doSubmitPlan(); return; }
       if (this._isOpponentTurn()) return;
       this._doEndTurn();
-    });
+    };
+    this._el('end-turn-btn')?.addEventListener('click', _endTurnHandler);
+    this._el('end-turn-btn')?.addEventListener('touchend', e => {
+      e.preventDefault(); _endTurnHandler();
+    }, { passive: false });
 
-    // Plan panel buttons
-    this._el('plan-submit-btn')?.addEventListener('click', () => this._doSubmitPlan());
-    this._el('plan-clear-btn')?.addEventListener('click',  () => {
+    // Plan panel buttons — touchend for instant mobile response
+    const _tap = (el, fn) => {
+      el?.addEventListener('click', fn);
+      el?.addEventListener('touchend', e => { e.preventDefault(); fn(); }, { passive: false });
+    };
+    _tap(this._el('plan-submit-btn'), () => this._doSubmitPlan());
+    _tap(this._el('plan-clear-btn'),  () => {
       if (this._planSubmitted) return;
       this._plan = [];
       this._refreshPlanOverlay();
@@ -372,8 +380,8 @@ export class UIController {
       if (this._selectedEntity) this._selectEntity(this._selectedEntity);
       this.onRedraw();
     });
-    this._el('plan-toggle-btn')?.addEventListener('click', () => this._togglePlanPanel());
-    this._el('plan-tab')?.addEventListener('click',        () => this._togglePlanPanel());
+    _tap(this._el('plan-toggle-btn'), () => this._togglePlanPanel());
+    _tap(this._el('plan-tab'),        () => this._togglePlanPanel());
   }
 
   _canvasPos(e) {
