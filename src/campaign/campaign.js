@@ -1,8 +1,6 @@
 // Campaign state management — persistence, roster, resources, progression.
 // Stored in localStorage; optionally synced to server for verified users.
 
-import { MISSIONS, MissionId } from './missions.js';
-
 const SAVE_VERSION = 1;
 
 /**
@@ -159,10 +157,16 @@ function resolveSpawnPosition(state, spawnAt) {
 // ── Campaign class ──────────────────────────────────────────────────────────
 
 export class Campaign {
-  constructor(saveSlot = 'campaign-1') {
-    this.saveSlot          = saveSlot;
+  /**
+   * @param {object} campaignDef  Campaign definition from campaign-registry.
+   *   Must include { id, title, missions[], mapBuilders, firstMission }.
+   * @param {string} saveSlot     localStorage key suffix (defaults to campaignDef.id).
+   */
+  constructor(campaignDef, saveSlot) {
+    this.campaignDef       = campaignDef;
+    this.saveSlot          = saveSlot ?? `campaign-${campaignDef.id}`;
     this.version           = SAVE_VERSION;
-    this.currentMission    = MissionId.PROLOGUE;
+    this.currentMission    = campaignDef.firstMission;
     this.completedMissions = new Set();
     this.roster            = []; // Array of snapshotSurvivor() objects
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0 };
@@ -175,6 +179,7 @@ export class Campaign {
   save() {
     this.updatedAt = Date.now();
     const data = {
+      campaignId:        this.campaignDef.id,
       version:           this.version,
       currentMission:    this.currentMission,
       completedMissions: [...this.completedMissions],
@@ -193,7 +198,7 @@ export class Campaign {
     if (!raw) return false;
     const data = JSON.parse(raw);
     this.version           = data.version ?? SAVE_VERSION;
-    this.currentMission    = data.currentMission ?? MissionId.PROLOGUE;
+    this.currentMission    = data.currentMission ?? this.campaignDef.firstMission;
     this.completedMissions = new Set(data.completedMissions ?? []);
     this.roster            = data.roster ?? [];
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...data.resources };
@@ -209,20 +214,24 @@ export class Campaign {
   }
 
   /** Check if a save exists without fully loading. */
-  static exists(saveSlot = 'campaign-1') {
+  static exists(saveSlot) {
     return localStorage.getItem(`brimstone-${saveSlot}`) !== null;
   }
 
-  /** Get mission definition by ID. */
+  /** Get mission definition by ID (from this campaign's missions). */
   getMissionDef(missionId) {
-    return MISSIONS.find(m => m.id === missionId) ?? null;
+    return this.campaignDef.missions.find(m => m.id === missionId) ?? null;
+  }
+
+  /** Get the map builder function for a mission. */
+  getMapBuilder(mapBuilderKey) {
+    return this.campaignDef.mapBuilders[mapBuilderKey] ?? null;
   }
 
   /** Get the next available (unlocked, not completed) mission. */
   getNextMission() {
-    for (const mission of MISSIONS) {
+    for (const mission of this.campaignDef.missions) {
       if (this.completedMissions.has(mission.id)) continue;
-      // Check prerequisites
       if (mission.requires && !mission.requires.every(r => this.completedMissions.has(r))) continue;
       return mission.id;
     }
@@ -231,7 +240,7 @@ export class Campaign {
 
   /** Get list of missions with their status for the mission select screen. */
   getMissionList() {
-    return MISSIONS.map(m => {
+    return this.campaignDef.missions.map(m => {
       const completed = this.completedMissions.has(m.id);
       const available = completed || (
         !m.requires || m.requires.every(r => this.completedMissions.has(r))
@@ -251,9 +260,6 @@ export class Campaign {
    * Apply the result of a completed mission.
    * @param {string} missionId
    * @param {object} result - { won, survivors[], resources, heroStats, flags }
-   *   survivors: array of snapshotSurvivor objects for entities that survived the mission
-   *   resources: state.inventory.shared at end of mission
-   *   heroStats: hero entity stats at end of mission
    */
   applyMissionResult(missionId, result) {
     const missionDef = this.getMissionDef(missionId);
@@ -308,6 +314,7 @@ export class Campaign {
   async syncToServer(token) {
     if (!token) return { ok: false, error: 'No token' };
     const data = {
+      campaignId:        this.campaignDef.id,
       version:           this.version,
       currentMission:    this.currentMission,
       completedMissions: [...this.completedMissions],
@@ -347,7 +354,7 @@ export class Campaign {
   /** Restore campaign state from a server-fetched data object. */
   restoreFromServerData(data) {
     this.version           = data.version ?? SAVE_VERSION;
-    this.currentMission    = data.currentMission ?? MissionId.PROLOGUE;
+    this.currentMission    = data.currentMission ?? this.campaignDef.firstMission;
     this.completedMissions = new Set(data.completedMissions ?? []);
     this.roster            = data.roster ?? [];
     this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...data.resources };

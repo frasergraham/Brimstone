@@ -19,8 +19,7 @@ import { TutorialConductor } from './tutorial.js';
 import { createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, setForcedDice, EntityType } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves } from './campaign/campaign.js';
-import { MISSIONS } from './campaign/missions.js';
-import { MISSION_MAP_BUILDERS } from './campaign/mission-maps.js';
+import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
 
 // Stamp version into badges
 document.getElementById('version-badge').textContent = `v${BUILD_VERSION}`;
@@ -978,6 +977,7 @@ window.addEventListener('resize', () => {
 const stepMode         = document.getElementById('setup-step-mode');
 const stepSpChoice     = document.getElementById('setup-step-sp-choice');
 const stepSinglePlayer = document.getElementById('setup-step-singleplayer');
+const stepCampaignSelect = document.getElementById('setup-step-campaign-select');
 const stepCampaign     = document.getElementById('setup-step-campaign');
 const stepDebrief      = document.getElementById('setup-step-debrief');
 const stepMultiplayer  = document.getElementById('setup-step-multiplayer');
@@ -992,10 +992,11 @@ const stepLobby        = document.getElementById('setup-step-lobby');
 
 function showStep(step) {
   stepMode        .style.display = step === 'mode'          ? '' : 'none';
-  stepSpChoice    .style.display = step === 'sp-choice'     ? '' : 'none';
-  stepSinglePlayer.style.display = step === 'singleplayer'  ? '' : 'none';
-  stepCampaign    .style.display = step === 'campaign'      ? '' : 'none';
-  stepDebrief     .style.display = step === 'debrief'       ? '' : 'none';
+  stepSpChoice      .style.display = step === 'sp-choice'       ? '' : 'none';
+  stepSinglePlayer  .style.display = step === 'singleplayer'    ? '' : 'none';
+  stepCampaignSelect.style.display = step === 'campaign-select' ? '' : 'none';
+  stepCampaign      .style.display = step === 'campaign'        ? '' : 'none';
+  stepDebrief       .style.display = step === 'debrief'         ? '' : 'none';
   stepMultiplayer .style.display = step === 'multiplayer'   ? '' : 'none';
   stepHowto       .style.display = step === 'howtoplay'     ? '' : 'none';
   stepOptions     .style.display = step === 'options'       ? '' : 'none';
@@ -1014,7 +1015,7 @@ let _currentLobby = null;
 
 document.getElementById('btn-single-player').addEventListener('click', () => showStep('sp-choice'));
 document.getElementById('btn-quick-play')    .addEventListener('click', () => _showSinglePlayerScreen());
-document.getElementById('btn-story-mode')    .addEventListener('click', () => _showCampaignScreen());
+document.getElementById('btn-story-mode')    .addEventListener('click', () => _showCampaignSelectScreen());
 document.getElementById('btn-sp-choice-back').addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-multiplayer')  .addEventListener('click', () => _showMultiplayerScreen());
 document.getElementById('btn-tutorial')     .addEventListener('click', () => initTutorial());
@@ -1075,9 +1076,32 @@ let _activeCampaign  = null;  // Campaign instance (persists across missions)
 let _activeMissionDef = null; // Current mission definition
 let _campaignSelectedMission = null; // Mission ID selected on campaign screen
 
-function _showCampaignScreen() {
-  _activeCampaign = new Campaign();
-  _activeCampaign.load(); // loads from localStorage if exists
+function _showCampaignSelectScreen() {
+  const listEl = document.getElementById('campaign-select-list');
+  listEl.innerHTML = CAMPAIGNS.map(c => {
+    const hasSave = Campaign.exists(`campaign-${c.id}`);
+    return `<div class="campaign-select-item" data-campaign="${c.id}">
+      <div class="campaign-select-title">${c.title}</div>
+      <div class="campaign-select-desc">${c.description}</div>
+      ${hasSave ? '<div class="campaign-select-badge">Save found</div>' : ''}
+    </div>`;
+  }).join('');
+
+  listEl.querySelectorAll('.campaign-select-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const def = getCampaignById(el.dataset.campaign);
+      if (def) _showCampaignScreen(def);
+    });
+  });
+
+  showStep('campaign-select');
+}
+
+function _showCampaignScreen(campaignDef) {
+  if (campaignDef) {
+    _activeCampaign = new Campaign(campaignDef);
+    _activeCampaign.load();
+  }
   _renderCampaignScreen();
   showStep('campaign');
 }
@@ -1090,6 +1114,12 @@ function _renderCampaignScreen() {
   briefEl.style.display = 'none';
   navEl.style.display = '';
   listEl.style.display = '';
+
+  // Set campaign title from definition
+  const titleEl = document.getElementById('campaign-title');
+  if (titleEl && _activeCampaign?.campaignDef) {
+    titleEl.textContent = _activeCampaign.campaignDef.title;
+  }
 
   // Roster summary
   if (_activeCampaign.roster.length > 0) {
@@ -1192,7 +1222,7 @@ function _initCampaignMission(missionDef) {
   _spSaveId = null; // campaign uses its own save system
 
   // Build map
-  const builder = MISSION_MAP_BUILDERS[missionDef.mapBuilder];
+  const builder = _activeCampaign.getMapBuilder(missionDef.mapBuilder);
   if (!builder) { console.error('No map builder for', missionDef.mapBuilder); return; }
   const mapData = builder();
   mapData.noWitch = !missionDef.hasWitch;
@@ -1338,12 +1368,13 @@ function _handleCampaignMissionEnd() {
 }
 
 // Campaign event listeners
-document.getElementById('btn-campaign-back')   .addEventListener('click', () => showStep('sp-choice'));
+document.getElementById('btn-campaign-select-back').addEventListener('click', () => showStep('sp-choice'));
+document.getElementById('btn-campaign-back')   .addEventListener('click', () => _showCampaignSelectScreen());
 document.getElementById('btn-briefing-back')   .addEventListener('click', () => _renderCampaignScreen());
 document.getElementById('btn-delete-campaign')  .addEventListener('click', () => {
   if (confirm('Delete your campaign save? This cannot be undone.')) {
     _activeCampaign.delete();
-    showStep('sp-choice');
+    _showCampaignSelectScreen();
   }
 });
 document.getElementById('btn-start-mission')   .addEventListener('click', () => {
@@ -1353,7 +1384,6 @@ document.getElementById('btn-start-mission')   .addEventListener('click', () => 
 });
 document.getElementById('btn-debrief-continue').addEventListener('click', () => {
   _showCampaignScreen();
-  showStep('campaign');
 });
 
 // Tab switching for In Progress / Completed panels (SP and MP)

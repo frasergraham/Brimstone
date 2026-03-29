@@ -3155,7 +3155,47 @@ body.spectator-mode #game-screen   { display: flex !important; }
   50%       { box-shadow: 0 0 16px 4px rgba(255,200,0,0.65); }
 }
 
-/* ── Campaign / Story Mode ──────────────────────────────────────────────── */
+/* ── Campaign / Story Mode ────────────────────────��─────────────────────── */
+
+.campaign-select-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+  max-width: 420px;
+}
+
+.campaign-select-item {
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--clr-dim);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+.campaign-select-item:hover {
+  border-color: var(--clr-gold);
+  background: rgba(255,215,0,0.06);
+}
+
+.campaign-select-title {
+  font-size: 1.1rem;
+  font-weight: bold;
+  color: var(--clr-gold);
+  margin-bottom: 0.25rem;
+}
+
+.campaign-select-desc {
+  font-size: 0.85rem;
+  color: var(--clr-text);
+  line-height: 1.4;
+}
+
+.campaign-select-badge {
+  font-size: 0.75rem;
+  color: var(--clr-dim);
+  margin-top: 0.35rem;
+  font-style: italic;
+}
 
 .campaign-mission-list {
   display: flex;

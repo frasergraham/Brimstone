@@ -8,8 +8,8 @@ import { hexKey } from '../src/hex.js';
 import {
   Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves,
 } from '../src/campaign/campaign.js';
-import { MISSIONS, MissionId, ObjectiveType } from '../src/campaign/missions.js';
-import { MISSION_MAP_BUILDERS } from '../src/campaign/mission-maps.js';
+import { ObjectiveType } from '../src/campaign/missions.js';
+import { CAMPAIGNS, getCampaignById } from '../src/campaign/campaign-registry.js';
 
 // ── Helper: localStorage mock for Node ──────────────────────────────────────
 const _store = {};
@@ -20,11 +20,47 @@ globalThis.localStorage = {
   clear: () => { for (const k of Object.keys(_store)) delete _store[k]; },
 };
 
-// ── Mission definitions ─────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+const salemDef = getCampaignById('salem_prologue');
+
+function buildMap(builderKey) {
+  return salemDef.mapBuilders[builderKey]();
+}
+
+// ── Campaign registry ──────────────────────────────────────────────────────
+
+describe('Campaign registry', () => {
+  test('CAMPAIGNS array is non-empty', () => {
+    assert.ok(CAMPAIGNS.length > 0);
+  });
+
+  test('each campaign has required fields', () => {
+    for (const c of CAMPAIGNS) {
+      assert.ok(c.id, 'campaign missing id');
+      assert.ok(c.title, `${c.id} missing title`);
+      assert.ok(c.description, `${c.id} missing description`);
+      assert.ok(Array.isArray(c.missions), `${c.id} missing missions array`);
+      assert.ok(c.mapBuilders, `${c.id} missing mapBuilders`);
+      assert.ok(c.firstMission, `${c.id} missing firstMission`);
+    }
+  });
+
+  test('getCampaignById returns matching campaign', () => {
+    assert.ok(salemDef);
+    assert.equal(salemDef.id, 'salem_prologue');
+  });
+
+  test('getCampaignById returns null for unknown ID', () => {
+    assert.equal(getCampaignById('nonexistent'), null);
+  });
+});
+
+// ── Mission definitions (inside campaign) ───────────────────────────────────
 
 describe('Mission definitions', () => {
   test('all missions have required fields', () => {
-    for (const m of MISSIONS) {
+    for (const m of salemDef.missions) {
       assert.ok(m.id, `mission missing id`);
       assert.ok(m.title, `${m.id} missing title`);
       assert.ok(m.briefing, `${m.id} missing briefing`);
@@ -35,8 +71,8 @@ describe('Mission definitions', () => {
   });
 
   test('all mission map builders exist and return valid mapData', () => {
-    for (const m of MISSIONS) {
-      const builder = MISSION_MAP_BUILDERS[m.mapBuilder];
+    for (const m of salemDef.missions) {
+      const builder = salemDef.mapBuilders[m.mapBuilder];
       assert.ok(builder, `No builder for ${m.mapBuilder}`);
       const mapData = builder();
       assert.ok(mapData.tiles instanceof Map, `${m.id}: tiles is not a Map`);
@@ -46,13 +82,13 @@ describe('Mission definitions', () => {
     }
   });
 
-  test('prologue mission has 3 missions total', () => {
-    assert.equal(MISSIONS.length, 3);
+  test('prologue campaign has 3 missions total', () => {
+    assert.equal(salemDef.missions.length, 3);
   });
 
   test('mission prerequisites form a valid chain', () => {
     const completed = new Set();
-    for (const m of MISSIONS) {
+    for (const m of salemDef.missions) {
       if (m.requires) {
         for (const req of m.requires) {
           assert.ok(completed.has(req), `${m.id} requires ${req} which hasn't appeared yet`);
@@ -61,13 +97,17 @@ describe('Mission definitions', () => {
       completed.add(m.id);
     }
   });
+
+  test('firstMission matches the first mission id', () => {
+    assert.equal(salemDef.firstMission, salemDef.missions[0].id);
+  });
 });
 
 // ── GameState: no-witch mode ─────────────────────────────────────────────────
 
 describe('GameState no-witch mode', () => {
   test('GameState can be created without a witch', () => {
-    const mapData = MISSION_MAP_BUILDERS.prologue();
+    const mapData = buildMap('prologue');
     mapData.noWitch = true;
     const state = new GameState(true, false, 'skirmish', null, mapData);
     assert.equal(state.witch, null);
@@ -76,7 +116,7 @@ describe('GameState no-witch mode', () => {
   });
 
   test('witch faction is registered but has no leader', () => {
-    const mapData = MISSION_MAP_BUILDERS.prologue();
+    const mapData = buildMap('prologue');
     mapData.noWitch = true;
     const state = new GameState(true, false, 'skirmish', null, mapData);
     const witchPlayer = state.players.find(p => p.faction === 'witch');
@@ -85,26 +125,24 @@ describe('GameState no-witch mode', () => {
   });
 
   test('factionEliminated returns false for no-witch faction', () => {
-    const mapData = MISSION_MAP_BUILDERS.prologue();
+    const mapData = buildMap('prologue');
     mapData.noWitch = true;
     const state = new GameState(true, false, 'skirmish', null, mapData);
     assert.equal(state.factionEliminated('witch'), false);
   });
 
   test('checkVictory does not crash with null witch', () => {
-    const mapData = MISSION_MAP_BUILDERS.prologue();
+    const mapData = buildMap('prologue');
     mapData.noWitch = true;
     const state = new GameState(true, false, 'skirmish', null, mapData);
-    // Should not throw
     state.checkVictory();
     assert.equal(state.gameOver, false);
   });
 
   test('no-witch game with witch entities still tracks them', () => {
-    const mapData = MISSION_MAP_BUILDERS.prologue();
+    const mapData = buildMap('prologue');
     mapData.noWitch = true;
     const state = new GameState(true, false, 'skirmish', null, mapData);
-    // Add some enemy units
     const z = createZombie(3, 3, 'witch');
     state.entities.push(z);
     assert.equal(state.entities.filter(e => e.owner === 'witch').length, 1);
@@ -119,10 +157,9 @@ describe('Victory delegate', () => {
       win: { type: 'eliminate_all' },
       lose: { type: 'hero_killed' },
     });
-    const mapData = MISSION_MAP_BUILDERS.prologue();
+    const mapData = buildMap('prologue');
     mapData.noWitch = true;
     const state = new GameState(true, false, 'skirmish', null, mapData);
-    // No enemy entities → win
     const result = delegate(state);
     assert.ok(result);
     assert.equal(result.winner, 'hero');
@@ -133,7 +170,7 @@ describe('Victory delegate', () => {
       win: { type: 'eliminate_all' },
       lose: { type: 'hero_killed' },
     });
-    const mapData = MISSION_MAP_BUILDERS.prologue();
+    const mapData = buildMap('prologue');
     mapData.noWitch = true;
     const state = new GameState(true, false, 'skirmish', null, mapData);
     state.entities.push(createZombie(3, 3, 'witch'));
@@ -146,11 +183,11 @@ describe('Victory delegate', () => {
       win: { type: 'survive_rounds', rounds: 5 },
       lose: { type: 'hero_killed' },
     });
-    const mapData = MISSION_MAP_BUILDERS.prologue();
+    const mapData = buildMap('prologue');
     mapData.noWitch = true;
     const state = new GameState(true, false, 'skirmish', null, mapData);
     state.round = 5;
-    assert.equal(delegate(state), null); // not yet (round 5 = exactly at limit)
+    assert.equal(delegate(state), null);
     state.round = 6;
     const result = delegate(state);
     assert.ok(result);
@@ -162,9 +199,9 @@ describe('Victory delegate', () => {
       win: { type: 'eliminate_all' },
       lose: { type: 'hero_killed' },
     });
-    const mapData = MISSION_MAP_BUILDERS.prologue();
+    const mapData = buildMap('prologue');
     const state = new GameState(true, false, 'skirmish', null, mapData);
-    state.hero.hp = 0; // kill the hero
+    state.hero.hp = 0;
     const result = delegate(state);
     assert.ok(result);
     assert.equal(result.winner, 'witch');
@@ -176,14 +213,14 @@ describe('Victory delegate', () => {
       lose: { type: 'hero_killed' },
     });
     const state = new GameState(true, false);
-    state.witch.hp = 0; // kill the witch
+    state.witch.hp = 0;
     const result = delegate(state);
     assert.ok(result);
     assert.equal(result.winner, 'hero');
   });
 
   test('victoryDelegate is called by checkVictory', () => {
-    const mapData = MISSION_MAP_BUILDERS.prologue();
+    const mapData = buildMap('prologue');
     mapData.noWitch = true;
     const state = new GameState(true, false, 'skirmish', null, mapData);
     state.victoryDelegate = buildVictoryDelegate({
@@ -191,7 +228,7 @@ describe('Victory delegate', () => {
       lose: { type: 'hero_killed' },
     });
     state.checkVictory();
-    assert.equal(state.winner, 'hero'); // no enemies → immediate win
+    assert.equal(state.winner, 'hero');
   });
 });
 
@@ -202,20 +239,36 @@ describe('Campaign class', () => {
     localStorage.clear();
   });
 
-  test('new campaign starts at prologue with empty roster', () => {
-    const c = new Campaign('test-1');
-    assert.equal(c.currentMission, MissionId.PROLOGUE);
+  test('new campaign starts at firstMission with empty roster', () => {
+    const c = new Campaign(salemDef);
+    assert.equal(c.currentMission, 'prologue');
     assert.equal(c.roster.length, 0);
     assert.equal(c.completedMissions.size, 0);
   });
 
+  test('campaign stores campaignDef reference', () => {
+    const c = new Campaign(salemDef);
+    assert.equal(c.campaignDef.id, 'salem_prologue');
+    assert.equal(c.campaignDef.missions.length, 3);
+  });
+
+  test('save slot defaults to campaign-{id}', () => {
+    const c = new Campaign(salemDef);
+    assert.equal(c.saveSlot, 'campaign-salem_prologue');
+  });
+
+  test('save slot can be overridden', () => {
+    const c = new Campaign(salemDef, 'custom-slot');
+    assert.equal(c.saveSlot, 'custom-slot');
+  });
+
   test('save and load round-trips', () => {
-    const c = new Campaign('test-1');
+    const c = new Campaign(salemDef);
     c.resources.herbs = 5;
     c.roster.push({ name: 'Abigail', hp: 3, maxHp: 4 });
     c.save();
 
-    const c2 = new Campaign('test-1');
+    const c2 = new Campaign(salemDef);
     const loaded = c2.load();
     assert.ok(loaded);
     assert.equal(c2.resources.herbs, 5);
@@ -223,8 +276,15 @@ describe('Campaign class', () => {
     assert.equal(c2.roster[0].name, 'Abigail');
   });
 
+  test('save includes campaignId', () => {
+    const c = new Campaign(salemDef);
+    c.save();
+    const raw = JSON.parse(localStorage.getItem(`brimstone-campaign-salem_prologue`));
+    assert.equal(raw.campaignId, 'salem_prologue');
+  });
+
   test('delete clears save', () => {
-    const c = new Campaign('test-del');
+    const c = new Campaign(salemDef, 'test-del');
     c.save();
     assert.ok(Campaign.exists('test-del'));
     c.delete();
@@ -232,61 +292,74 @@ describe('Campaign class', () => {
   });
 
   test('getMissionList returns correct statuses', () => {
-    const c = new Campaign('test-ml');
+    const c = new Campaign(salemDef);
     const list = c.getMissionList();
     assert.equal(list.length, 3);
-    assert.ok(list[0].available); // prologue is available
-    assert.ok(!list[1].available); // first_night requires prologue
-    assert.ok(!list[2].available); // witchs_trail requires first_night
+    assert.ok(list[0].available);
+    assert.ok(!list[1].available);
+    assert.ok(!list[2].available);
+  });
+
+  test('getMissionDef looks up from campaignDef missions', () => {
+    const c = new Campaign(salemDef);
+    const m = c.getMissionDef('prologue');
+    assert.ok(m);
+    assert.equal(m.title, 'The Awakening');
+  });
+
+  test('getMapBuilder returns builder from campaignDef', () => {
+    const c = new Campaign(salemDef);
+    const builder = c.getMapBuilder('prologue');
+    assert.equal(typeof builder, 'function');
+    const mapData = builder();
+    assert.ok(mapData.tiles instanceof Map);
   });
 
   test('applyMissionResult advances campaign on victory', () => {
-    const c = new Campaign('test-result');
-    c.applyMissionResult(MissionId.PROLOGUE, {
+    const c = new Campaign(salemDef);
+    c.applyMissionResult('prologue', {
       won: true,
       survivors: [{ name: 'Martha', hp: 2, maxHp: 3, attack: 1, defense: 1 }],
       resources: { herbs: 3, food: 1 },
       heroStats: { hp: 12, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} },
     });
-    assert.ok(c.completedMissions.has(MissionId.PROLOGUE));
-    assert.equal(c.currentMission, MissionId.FIRST_NIGHT);
+    assert.ok(c.completedMissions.has('prologue'));
+    assert.equal(c.currentMission, 'first_night');
     assert.equal(c.roster.length, 1);
     assert.equal(c.roster[0].name, 'Martha');
   });
 
   test('applyMissionResult applies rewards on victory', () => {
-    const c = new Campaign('test-rewards');
-    c.applyMissionResult(MissionId.PROLOGUE, {
+    const c = new Campaign(salemDef);
+    c.applyMissionResult('prologue', {
       won: true,
       survivors: [],
       resources: { herbs: 0 },
       heroStats: { hp: 14, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} },
     });
-    // Prologue gives herbs:2, food:1 as rewards
     assert.equal(c.resources.herbs, 2);
     assert.equal(c.resources.food, 1);
   });
 
   test('applyMissionResult does not advance on defeat', () => {
-    const c = new Campaign('test-defeat');
-    c.applyMissionResult(MissionId.PROLOGUE, {
+    const c = new Campaign(salemDef);
+    c.applyMissionResult('prologue', {
       won: false,
       survivors: [],
       resources: {},
       heroStats: { hp: 0, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} },
     });
-    assert.ok(!c.completedMissions.has(MissionId.PROLOGUE));
-    assert.equal(c.currentMission, MissionId.PROLOGUE);
+    assert.ok(!c.completedMissions.has('prologue'));
+    assert.equal(c.currentMission, 'prologue');
   });
 
   test('permadeath: dead survivors are removed from roster', () => {
-    const c = new Campaign('test-perma');
+    const c = new Campaign(salemDef);
     c.roster = [
       { name: 'Alice', hp: 3, maxHp: 3 },
       { name: 'Bob', hp: 2, maxHp: 3 },
     ];
-    // Only Alice survived
-    c.applyMissionResult(MissionId.PROLOGUE, {
+    c.applyMissionResult('prologue', {
       won: true,
       survivors: [{ name: 'Alice', hp: 3, maxHp: 3, attack: 1, defense: 1 }],
       resources: {},
@@ -301,7 +374,6 @@ describe('Campaign class', () => {
 
 describe('snapshotSurvivor', () => {
   test('captures entity data correctly', () => {
-    // Simulate an entity
     const entity = {
       name: 'Test', title: 'The Brave', bio: 'A hero',
       ability: 'brawler', abilityLabel: 'Brawler',
@@ -314,7 +386,6 @@ describe('snapshotSurvivor', () => {
     assert.equal(snap.hp, 3);
     assert.equal(snap.weapon, 'sword');
     assert.deepEqual(snap.items, { herbs: 1 });
-    // Items should be a copy, not same reference
     entity.items.herbs = 99;
     assert.equal(snap.items.herbs, 1);
   });
@@ -324,7 +395,7 @@ describe('snapshotSurvivor', () => {
 
 describe('Wave spawner', () => {
   test('processWaves spawns units on matching round', () => {
-    const mapData = MISSION_MAP_BUILDERS.prologue();
+    const mapData = buildMap('prologue');
     mapData.noWitch = true;
     const state = new GameState(true, false, 'skirmish', null, mapData);
     state.round = 3;
@@ -343,13 +414,12 @@ describe('Wave spawner', () => {
 
     assert.equal(state.entities.length, initialCount + 1);
     assert.equal(logs.length, 1);
-    // Round 5 wave should NOT spawn
     const witchEntities = state.entities.filter(e => e.owner === 'witch');
     assert.equal(witchEntities.length, 1);
   });
 
   test('processWaves returns empty for null waves', () => {
-    const mapData = MISSION_MAP_BUILDERS.prologue();
+    const mapData = buildMap('prologue');
     mapData.noWitch = true;
     const state = new GameState(true, false, 'skirmish', null, mapData);
     const logs = processWaves(state, null, () => {});
@@ -357,7 +427,7 @@ describe('Wave spawner', () => {
   });
 
   test('processWaves handles graveyard spawn location', () => {
-    const mapData = MISSION_MAP_BUILDERS.first_night();
+    const mapData = buildMap('first_night');
     const state = new GameState(true, false, 'standard', null, mapData);
     state.round = 3;
 
@@ -369,7 +439,6 @@ describe('Wave spawner', () => {
     const createFn = (type, col, row) => createZombie(col, row, 'witch');
     processWaves(state, waves, createFn);
 
-    // Should have spawned one zombie at the graveyard
     assert.equal(state.entities.length, initialCount + 1);
   });
 });
@@ -378,7 +447,7 @@ describe('Wave spawner', () => {
 
 describe('disableScoring', () => {
   test('disableScoring flag is set from mapDataOverride', () => {
-    const mapData = MISSION_MAP_BUILDERS.prologue();
+    const mapData = buildMap('prologue');
     mapData.noWitch = true;
     mapData.disableScoring = true;
     const state = new GameState(true, false, 'skirmish', null, mapData);
@@ -386,33 +455,28 @@ describe('disableScoring', () => {
   });
 
   test('disableScoring defaults to false', () => {
-    const mapData = MISSION_MAP_BUILDERS.prologue();
+    const mapData = buildMap('prologue');
     mapData.noWitch = true;
     const state = new GameState(true, false, 'skirmish', null, mapData);
     assert.equal(state.disableScoring, false);
   });
 
   test('endRound skips node scoring when disableScoring is true', () => {
-    const mapData = MISSION_MAP_BUILDERS.first_night();
+    const mapData = buildMap('first_night');
     mapData.disableScoring = true;
     const state = new GameState(true, false, 'standard', null, mapData);
     state.disableScoring = true;
 
-    // Advance to dusk (where scoring normally happens)
-    // Phase cycle: DAWN(1) → DAY(3) → DUSK(1) → NIGHT(3)
-    // Start at round 1 (DAWN). endRound() advances to next.
     const initialScore = { ...state.nodeScore };
-    // Run several rounds to pass through dawn/dusk
     for (let i = 0; i < 8; i++) {
       state.endRound();
       if (state.gameOver) break;
     }
-    // Score should remain unchanged
     assert.deepEqual(state.nodeScore, initialScore);
   });
 
   test('all prologue missions have disableScoring set', () => {
-    for (const m of MISSIONS) {
+    for (const m of salemDef.missions) {
       assert.equal(typeof m.disableScoring, 'boolean', `${m.id} missing disableScoring`);
     }
   });
