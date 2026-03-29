@@ -422,3 +422,77 @@ export function loadSession() {
 export function clearSession() {
   try { localStorage.removeItem('brimstone_session'); } catch {}
 }
+
+// ── Email auth helpers ───────────────────────────────────────────────────────
+
+/**
+ * Request a magic link to link an email to the current account.
+ * @param {string} token  - The player's session token
+ * @param {string} email  - Email address to link
+ * @returns {Promise<{ok: boolean, message?: string, error?: string}>}
+ */
+export async function requestLinkEmail(token, email) {
+  try {
+    const res = await fetch('/auth/link-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, email }),
+    });
+    return await res.json();
+  } catch {
+    return { ok: false, error: 'Network error. Please try again.' };
+  }
+}
+
+/**
+ * Request a magic link to log in from a new device.
+ * @param {string} email  - Email address associated with the account
+ * @returns {Promise<{ok: boolean, message?: string, error?: string}>}
+ */
+export async function requestEmailLogin(email) {
+  try {
+    const res = await fetch('/auth/login-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    return await res.json();
+  } catch {
+    return { ok: false, error: 'Network error. Please try again.' };
+  }
+}
+
+/**
+ * Fetch the player's linked identities.
+ * @param {string} token  - The player's session token
+ * @returns {Promise<Array<{provider: string, provider_id: string}>>}
+ */
+export async function fetchIdentities(token) {
+  try {
+    const res = await fetch(`/api/identities?token=${encodeURIComponent(token)}`);
+    if (!res.ok) return [];
+    return await res.json();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Check for an email_token in the URL (from magic link redirect).
+ * If found, authenticate with it and strip the param from the URL.
+ * @returns {string|null} The session token from the URL, or null.
+ */
+export function checkEmailTokenInUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const emailToken = params.get('email_token');
+  if (!emailToken) return null;
+
+  // Strip the token from the URL without reloading
+  params.delete('email_token');
+  const newUrl = params.toString()
+    ? `${window.location.pathname}?${params}`
+    : window.location.pathname;
+  window.history.replaceState({}, '', newUrl);
+
+  return emailToken;
+}

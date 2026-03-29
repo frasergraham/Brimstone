@@ -71,6 +71,24 @@ export const SCHEMA_SQL = `
     PRIMARY KEY (game_id, round_num)
   );
 
+  CREATE TABLE IF NOT EXISTS player_identities (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    player_id   TEXT NOT NULL REFERENCES players(id),
+    provider    TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    metadata    TEXT NOT NULL DEFAULT '{}',
+    created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+    UNIQUE(provider, provider_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS magic_tokens (
+    token      TEXT PRIMARY KEY,
+    email      TEXT NOT NULL,
+    player_id  TEXT,
+    expires_at INTEGER NOT NULL,
+    used       INTEGER NOT NULL DEFAULT 0
+  );
+
   CREATE TABLE IF NOT EXISTS game_stats (
     id                TEXT PRIMARY KEY,
     mode              TEXT NOT NULL,
