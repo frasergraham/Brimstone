@@ -25,6 +25,7 @@ let _autoplay  = false;
 let _resolving = false;           // true while _animateResolutionSteps is running
 let _pendingPlanningPhase = null; // buffered onPlanningPhase payload received during animation
 let _tutorialConductor = null;    // non-null while a tutorial session is active
+let _gameStartTime = null;        // wall-clock timestamp for game duration tracking
 
 // ── Round-history for full-game replay ───────────────────────────────────────
 // Accumulated during a session; reset each new/resumed game.
@@ -68,6 +69,7 @@ function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
 
 function init(witchIsAI, heroIsAI, autoplay = false) {
   _autoplay = autoplay;
+  _gameStartTime = Date.now();
   _tutorialConductor = null; // ensure tutorial state is cleared for normal games
   _roundHistory = [];
   // Assign a fresh save ID for this game (only used for single-player saves)
@@ -113,6 +115,45 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
 function redraw() {
   renderer.draw();
   if (ui) ui._updateSidebar?.();
+}
+
+/** Record game stats to server (falls back to localStorage if unavailable). */
+function _recordLocalGameStats() {
+  if (!state || !state.gameOver) return;
+  const stats = {
+    id:                crypto.randomUUID(),
+    mode:              'local',
+    game_version:      VERSION,
+    map_size:          state.mapSize || 'standard',
+    winner:            state.winner,
+    win_reason:        state.winReason,
+    rounds:            state.round,
+    final_phase:       state.phase,
+    hero_score:        state.nodeScore?.hero  || 0,
+    witch_score:       state.nodeScore?.witch || 0,
+    hero_kills:        state.heroKills  || 0,
+    witch_kills:       state.witchKills || 0,
+    hero_survivors:    state.entities.filter(e => e.owner === 'hero' && e.type === 'survivor').length,
+    witch_summons:     state.witchSummonCount || 0,
+    hero_personality:  heroAI?.constructor?.name  || null,
+    witch_personality: witchAI?.constructor?.name || null,
+    hero_player_id:    null,
+    witch_player_id:   null,
+    fog_of_war:        state.fogOfWar ? 1 : 0,
+    duration_ms:       _gameStartTime ? Date.now() - _gameStartTime : null,
+  };
+  fetch('/api/game-stats', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(stats),
+  }).catch(() => {
+    // Server not available — store locally for later
+    try {
+      const local = JSON.parse(localStorage.getItem('brimstone_stats') || '[]');
+      local.push(stats);
+      localStorage.setItem('brimstone_stats', JSON.stringify(local));
+    } catch { /* storage full or unavailable — silently discard */ }
+  });
 }
 
 // ── Tutorial mode ─────────────────────────────────────────────────────────────
@@ -360,6 +401,7 @@ async function _runLocalResolution(skipSummary = false) {
   if (!_autoplay && !skipSummary && ui && humanFaction) {
     // Finalize game-over immediately — cleanup survives any navigation away
     if (state.gameOver) {
+      _recordLocalGameStats();
       if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
       _saveCompletedSpGame(state.winner, state.winReason);
       _uploadSpGame(state.winner, state.winReason);
@@ -398,6 +440,7 @@ async function _runLocalResolution(skipSummary = false) {
     }
   } else if (state.gameOver && ui) {
     // Autoplay game-over — still show the summary so the user sees the result
+    _recordLocalGameStats();
     if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
     _saveCompletedSpGame(state.winner, state.winReason);
     _uploadSpGame(state.winner, state.winReason);
@@ -428,6 +471,7 @@ async function _runLocalResolution(skipSummary = false) {
     return;
   } else if (state.gameOver) {
     // No UI (headless) — just clean up
+    _recordLocalGameStats();
     if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
     _saveCompletedSpGame(state.winner, state.winReason);
     return;

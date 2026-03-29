@@ -8,6 +8,7 @@ import { fileURLToPath }   from 'url';
 import { VERSION } from './src/version.js';
 import { registerOrLogin, getPlayerByToken } from './server/auth.js';
 import { getLeaderboard }                    from './server/leaderboard.js';
+import { recordGameStats, getGameStats, getAggregateStats } from './server/game-stats.js';
 import { getActiveSaves, pruneStaleAndIncompatibleSaves,
          getCompletedGames, getCompletedGame, getCompletedGameRounds,
          pinCompletedGame, deleteCompletedGame,
@@ -105,9 +106,26 @@ app.delete('/api/completed-games/:gameId', (req, res) => {
   res.json({ ok: true });
 });
 
+// REST: record game stats (used by local/offline mode)
+app.post('/api/game-stats', (req, res) => {
+  try {
+    const stats = req.body;
+    if (!stats?.id || !stats?.winner || !stats?.win_reason) {
+      res.status(400).json({ error: 'Missing required fields.' });
+      return;
+    }
+    recordGameStats(stats);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('POST /api/game-stats error:', err);
+    res.status(500).json({ error: 'Failed to record stats.' });
+  }
+});
+
 // ── Admin pages ───────────────────────────────────────────────────────────────
 
-app.get('/admin',    (_req, res) => res.sendFile(join(__dirname, 'admin.html')));
+app.get('/admin',       (_req, res) => res.sendFile(join(__dirname, 'admin.html')));
+app.get('/admin/stats', (_req, res) => res.sendFile(join(__dirname, 'admin-stats.html')));
 app.get('/spectate', (_req, res) => res.sendFile(join(__dirname, 'index.html')));
 app.get('/replay',   (_req, res) => res.sendFile(join(__dirname, 'index.html')));
 
@@ -156,6 +174,20 @@ app.get('/admin/api/saves/:roomId', (req, res) => {
   const save = getSaveWithState(req.params.roomId);
   if (!save) { res.status(404).json({ error: 'Save not found.' }); return; }
   res.json(save);
+});
+
+app.get('/admin/api/game-stats', (req, res) => {
+  res.json(getGameStats({
+    mode:         req.query.mode         || undefined,
+    map_size:     req.query.map_size     || undefined,
+    winner:       req.query.winner       || undefined,
+    game_version: req.query.game_version || undefined,
+    limit:        req.query.limit ? parseInt(req.query.limit, 10) : 100,
+  }));
+});
+
+app.get('/admin/api/game-stats/summary', (_req, res) => {
+  res.json(getAggregateStats());
 });
 
 app.post('/admin/api/saves/:roomId/activate', (req, res) => {
