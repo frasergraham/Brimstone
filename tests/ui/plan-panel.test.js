@@ -263,14 +263,14 @@ describe('submit button progress bar', () => {
       '--progress should not be set in local (no-timeout) mode');
   });
 
-  test('sets --progress on plan tab for mobile visibility', () => {
+  test('sets --progress on floating submit button', () => {
     const { ui, els } = makeUI();
 
     ui.enterPlanningMode('hero', 3, 60000);
 
-    const progress = els['plan-tab'].style._props['--progress'];
+    const progress = els['end-turn-btn'].style._props['--progress'];
     assert.ok(progress !== undefined,
-      '--progress should be set on plan-tab when timeout is active');
+      '--progress should be set on floating submit button when timeout is active');
 
     ui._stopCountdown();
   });
@@ -288,13 +288,13 @@ describe('submit button progress bar', () => {
       'urgent class should be removed');
   });
 
-  test('_stopCountdown removes --progress from plan tab', () => {
+  test('_stopCountdown removes --progress from floating button', () => {
     const { ui, els } = makeUI();
     ui.enterPlanningMode('hero', 3, 60000);
     ui._stopCountdown();
 
-    assert.equal(els['plan-tab'].style._props['--progress'], undefined,
-      '--progress should be removed from plan-tab after stop');
+    assert.equal(els['end-turn-btn'].style._props['--progress'], undefined,
+      '--progress should be removed from floating button after stop');
   });
 
   test('_doSubmitPlan resets progress bar', () => {

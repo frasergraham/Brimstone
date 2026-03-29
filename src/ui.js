@@ -561,11 +561,10 @@ export class UIController {
     this._renderPlayerStatus();
   }
 
-  /** Start a countdown timer — progress bar on submit button + plan tab. */
+  /** Start a countdown timer — progress bar on submit button + floating button. */
   _startCountdown(timeoutMs) {
     this._stopCountdown();
     const submitBtn = this._el('plan-submit-btn');
-    const planTab   = this._el('plan-tab');
     if (!submitBtn) return;
 
     const GRACE_PERIOD = 5000;
@@ -584,8 +583,6 @@ export class UIController {
       submitBtn.style.setProperty('--progress', pct + '%');
       submitBtn.textContent = label;
       submitBtn.classList.toggle('countdown-urgent', secs <= 10);
-
-      if (planTab) planTab.style.setProperty('--progress', pct + '%');
 
       // Mirror progress on the floating submit button
       if (floatBtn) {
@@ -611,7 +608,7 @@ export class UIController {
     }
   }
 
-  /** Stop countdown and reset submit button / plan tab to default state. */
+  /** Stop countdown and reset submit button / floating button to default state. */
   _stopCountdown() {
     this._stopCountdownTimer();
     this._countdownEnd   = null;
@@ -623,8 +620,6 @@ export class UIController {
       submitBtn.textContent = '\u2713 Submit';
       submitBtn.classList.remove('countdown-urgent');
     }
-    const planTab = this._el('plan-tab');
-    if (planTab) planTab.style.removeProperty('--progress');
 
     const floatBtn = this._el('end-turn-btn');
     if (floatBtn) {
