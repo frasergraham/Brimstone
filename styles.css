@@ -596,7 +596,7 @@ canvas { touch-action: pan-x pan-y; }
 }
 /* During planning: progress bar + countdown on the header submit button */
 .end-turn-header.planning-active {
-  background: linear-gradient(to right, var(--hero) var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
+  background: linear-gradient(to right, #a8872a var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
   color: #fff;
   text-shadow: 0 1px 3px rgba(0,0,0,0.7);
   border-color: rgba(255,255,255,0.2);
