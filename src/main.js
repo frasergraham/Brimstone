@@ -1200,6 +1200,7 @@ function _initCampaignMission(missionDef) {
   // Hide setup, show game
   document.getElementById('setup-screen').style.display = 'none';
   document.getElementById('game-screen').style.display = 'flex';
+  const canvas = document.getElementById('game-canvas');
 
   // Create game state
   state = new GameState(true, false, missionDef.mapSize, null, mapData);
@@ -1274,6 +1275,7 @@ function _initCampaignMission(missionDef) {
 
   _setupLocalUI(canvas, witchAI, null, false);
   _roundHistory = [];
+  redraw();
   _startLocalPlanningPhase();
 }
 
