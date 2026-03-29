@@ -265,8 +265,8 @@ const MISSIONS = [
       lose: { type: 'hero_killed' },
     },
 
-    startingResources: { food: 1, herbs: 1 },
-    rewards:           { herbs: 2, food: 1 },
+    startingResources: { food: 1, herbs: 1, wood: 1 },
+    rewards:           { herbs: 2, food: 1, wood: 1 },
 
     requires: null,
   },
@@ -303,7 +303,7 @@ const MISSIONS = [
       lose: { type: 'hero_killed' },
     },
 
-    startingResources: { wood: 2 },
+    startingResources: { wood: 3, metal: 1 },
     rewards:           { wood: 2, metal: 1, food: 2 },
 
     requires: ['prologue'],
