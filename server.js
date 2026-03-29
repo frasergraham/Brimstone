@@ -5,7 +5,7 @@ import { createServer }    from 'http';
 import { join, dirname }   from 'path';
 import { fileURLToPath }   from 'url';
 
-import { VERSION } from './src/version.js';
+import { VERSION, BUILD_VERSION } from './src/version.js';
 import { registerOrLogin, getPlayerByToken } from './server/auth.js';
 import { getLeaderboard }                    from './server/leaderboard.js';
 import { recordGameStats, getGameStats, getAggregateStats } from './server/game-stats.js';
@@ -43,7 +43,7 @@ app.use(express.static(join(__dirname)));   // serve game files from repo root
 app.get('/health', (_req, res) => {
   res.json({
     status:      'ok',
-    version:     VERSION,
+    version:     BUILD_VERSION,
     uptime:      Math.floor(process.uptime()),
     connections: clients.size,
   });
@@ -133,7 +133,7 @@ app.get('/replay',   (_req, res) => res.sendFile(join(__dirname, 'index.html')))
 
 app.get('/admin/api/stats', (_req, res) => {
   res.json({
-    version:      VERSION,
+    version:      BUILD_VERSION,
     uptime:       Math.floor(process.uptime()),
     connections:  clients.size,
     activeRooms:  getRooms().length,
@@ -469,7 +469,7 @@ function _publicPlayer(p) {
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 server.listen(PORT, () => {
-  console.log(`Brimstone v${VERSION} listening on port ${PORT}`);
+  console.log(`Brimstone v${BUILD_VERSION} listening on port ${PORT}`);
   const pruned = pruneStaleAndIncompatibleSaves(VERSION);
   if (pruned > 0) console.log(`Pruned ${pruned} stale/incompatible save(s).`);
   const prunedCompleted = pruneExpiredCompletedGames();

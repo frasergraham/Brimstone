@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { VERSION } from '../src/version.js';
+import { VERSION, BUILD_VERSION } from '../src/version.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
@@ -21,6 +21,23 @@ describe('Version file', () => {
 
   test('version string is non-empty', () => {
     assert.ok(VERSION.length > 0);
+  });
+
+  test('BUILD_VERSION equals VERSION when RAILWAY_GIT_COMMIT_SHA is unset', () => {
+    if (!process.env.RAILWAY_GIT_COMMIT_SHA) {
+      assert.equal(BUILD_VERSION, VERSION,
+        'BUILD_VERSION should equal VERSION in local dev');
+    }
+  });
+
+  test('BUILD_VERSION starts with VERSION', () => {
+    assert.ok(BUILD_VERSION.startsWith(VERSION),
+      `BUILD_VERSION "${BUILD_VERSION}" must start with VERSION "${VERSION}"`);
+  });
+
+  test('BUILD_VERSION matches semver or semver+hash format', () => {
+    assert.match(BUILD_VERSION, /^\d+\.\d+\.\d+(\+[a-f0-9]{8})?$/,
+      `BUILD_VERSION "${BUILD_VERSION}" must be semver or semver+shortsha`);
   });
 });
 

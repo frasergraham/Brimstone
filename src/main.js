@@ -4,7 +4,7 @@ import { Renderer }          from './renderer.js';
 import { UIController, UIMode } from './ui.js';
 import { WitchAI, HeroAI }   from './ai.js';
 import { MultiplayerClient, MirrorState, loadSession, clearSession } from './multiplayer.js';
-import { VERSION }           from './version.js';
+import { VERSION, BUILD_VERSION } from './version.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType }    from './planner.js';
 import { hexDistance }       from './hex.js';
@@ -17,8 +17,8 @@ import { createMinion, setForcedDice } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
 
 // Stamp version into badges
-document.getElementById('version-badge').textContent = `v${VERSION}`;
-document.getElementById('menu-version').textContent  = `v${VERSION}`;
+document.getElementById('version-badge').textContent = `v${BUILD_VERSION}`;
+document.getElementById('menu-version').textContent  = `v${BUILD_VERSION}`;
 
 let state, renderer, ui, witchAI, heroAI;
 let _autoplay  = false;
