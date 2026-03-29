@@ -573,16 +573,26 @@ export class UIController {
     this._countdownEnd   = end;
     this._countdownTotal = timeoutMs;
 
+    const floatBtn = this._el('end-turn-btn');
+
     const tick = () => {
       const remaining = Math.max(0, end - Date.now());
       const secs = Math.ceil(remaining / 1000);
       const pct  = (remaining / timeoutMs) * 100;
+      const label = secs > 0 ? `\u2713 Submit (${secs}s)` : '\u2713 Submit';
 
       submitBtn.style.setProperty('--progress', pct + '%');
-      submitBtn.textContent = secs > 0 ? `\u2713 Submit (${secs}s)` : '\u2713 Submit';
+      submitBtn.textContent = label;
       submitBtn.classList.toggle('countdown-urgent', secs <= 10);
 
       if (planTab) planTab.style.setProperty('--progress', pct + '%');
+
+      // Mirror progress on the floating submit button
+      if (floatBtn) {
+        floatBtn.style.setProperty('--progress', pct + '%');
+        floatBtn.textContent = label;
+        floatBtn.classList.toggle('countdown-urgent', secs <= 10);
+      }
 
       if (remaining <= GRACE_PERIOD && !this._graceActive) {
         this._stopCountdownTimer();
@@ -615,6 +625,12 @@ export class UIController {
     }
     const planTab = this._el('plan-tab');
     if (planTab) planTab.style.removeProperty('--progress');
+
+    const floatBtn = this._el('end-turn-btn');
+    if (floatBtn) {
+      floatBtn.style.removeProperty('--progress');
+      floatBtn.classList.remove('countdown-urgent');
+    }
 
     this._dismissGraceDialog();
   }

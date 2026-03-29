@@ -597,26 +597,30 @@ canvas { touch-action: pan-x pan-y; }
 /* During planning: float the submit button over the bottom-right of the map */
 .end-turn-header.planning-float {
   position: fixed;
-  bottom: 60px;
-  right: 16px;
+  bottom: 8px;
+  right: 8px;
   z-index: 45;
   height: auto;
-  padding: 0.5rem 1rem;
-  font-size: 0.9rem;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.75rem;
   font-weight: 600;
-  border-radius: 6px;
-  background: var(--hero);
+  border-radius: 4px;
+  background: linear-gradient(to right, var(--hero) var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
   color: #fff;
-  text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+  text-shadow: 0 1px 3px rgba(0,0,0,0.7);
   border: 1px solid rgba(255,255,255,0.2);
-  box-shadow: 0 2px 12px rgba(0,0,0,0.5);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+  overflow: hidden;
 }
 .end-turn-header.planning-float:hover {
-  background: #e8c84e;
+  background: linear-gradient(to right, #e8c84e var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
 }
 .end-turn-header.planning-float:disabled {
   opacity: 0.4;
   background: rgba(255,255,255,0.08);
+}
+.end-turn-header.planning-float.countdown-urgent {
+  animation: btn-pulse 0.5s ease-in-out infinite alternate;
 }
 /* Hide floating submit when plan panel is expanded */
 .end-turn-header.planning-float.plan-open {
@@ -2000,7 +2004,7 @@ canvas { touch-action: pan-x pan-y; }
 
   /* End turn button slightly larger tap target */
   .end-turn-header { padding: 0 0.65rem; height: 36px; }
-  .end-turn-header.planning-float { padding: 0.6rem 1.2rem; bottom: 68px; right: 12px; }
+  .end-turn-header.planning-float { padding: 0.45rem 0.8rem; bottom: 8px; right: 8px; }
 
 }
 
@@ -2317,7 +2321,6 @@ canvas { touch-action: pan-x pan-y; }
   border-top: 1px solid rgba(255,255,255,0.1);
 }
 .plan-btn {
-  flex: 1;
   padding: 0.4rem 0.3rem;
   border: none;
   border-radius: 4px;
@@ -2325,6 +2328,8 @@ canvas { touch-action: pan-x pan-y; }
   font-size: 0.75rem;
   font-weight: 600;
 }
+.plan-btn.secondary { flex: 0 0 auto; }
+.plan-btn.primary   { flex: 1; }
 .plan-btn.primary {
   background: linear-gradient(to right, var(--hero) var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
   color: #fff;
