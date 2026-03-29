@@ -590,7 +590,7 @@ export class UIController {
       if (floatBtn) {
         floatBtn.style.setProperty('--progress', pct + '%');
         floatBtn.textContent = label;
-        floatBtn.classList.toggle('countdown-urgent', secs <= 10);
+        floatBtn.classList.toggle('countdown-urgent', totalSecs <= 10);
       }
 
       if (remaining <= GRACE_PERIOD && !this._graceActive) {
