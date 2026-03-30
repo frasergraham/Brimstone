@@ -1487,9 +1487,16 @@ export class UIController {
       ? entity.weapon.charAt(0).toUpperCase() + entity.weapon.slice(1)
       : null;
 
+    // Portrait image with glyph fallback
+    const assetId = _entityPortraitId(entity);
+    const src = assetId ? this.renderer.getPortraitDataURL(assetId, 56) : null;
+    const portraitHtml = src
+      ? `<img class="usb-portrait" src="${src}" style="border-color:${color};" alt="">`
+      : `<span class="usb-icon" style="background:${color}">${glyph}</span>`;
+
     bar.style.display = 'flex';
     bar.innerHTML = `
-      <span class="usb-icon" style="background:${color}">${glyph}</span>
+      ${portraitHtml}
       <span class="usb-info">
         <span class="usb-name" style="color:${color}">${entity.displayName}</span>
         <span class="usb-details">

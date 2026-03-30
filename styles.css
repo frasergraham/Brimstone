@@ -780,12 +780,21 @@ canvas { touch-action: pan-x pan-y; }
   max-width: min(460px, 92vw);
 }
 
+.usb-portrait {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid;
+  flex-shrink: 0;
+  object-fit: cover;
+}
+
 .usb-icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 1.7rem;
-  height: 1.7rem;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   font-size: 0.95rem;
   line-height: 1;
@@ -865,16 +874,17 @@ canvas { touch-action: pan-x pan-y; }
 .usb-deselect-btn {
   margin-left: 0.2rem;
   flex-shrink: 0;
-  background: none;
-  border: 1px solid rgba(255,255,255,0.15);
-  border-radius: 3px;
-  color: var(--text-dim);
-  font-size: 0.75rem;
-  padding: 0.1rem 0.4rem;
+  background: rgba(192,57,43,0.15);
+  border: 1px solid rgba(192,57,43,0.5);
+  border-radius: 4px;
+  color: #e74c3c;
+  font-size: 1rem;
+  padding: 0.15rem 0.45rem;
   cursor: pointer;
-  line-height: 1.4;
+  line-height: 1.2;
+  font-weight: bold;
 }
-.usb-deselect-btn:hover { border-color: rgba(255,255,255,0.4); color: var(--text-bright); }
+.usb-deselect-btn:hover { background: rgba(192,57,43,0.3); border-color: #e74c3c; color: #ff6b5b; }
 
 #game-main {
   display: flex;
