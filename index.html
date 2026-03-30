@@ -36,16 +36,24 @@
 
     <!-- How to Play / Play Reference -->
     <div id="setup-step-howtoplay" class="setup-card setup-card-wide" style="display:none">
-      <h1 class="title" style="font-size:2rem">PLAY REFERENCE</h1>
-      <a class="htp-tutorial-link" onclick="document.getElementById('btn-tutorial').click()">New to Brimstone? Start the Tutorial</a>
+      <h1 class="title" style="font-size:2rem">HOW TO PLAY</h1>
+      <div style="text-align:center;margin-bottom:0.75rem">
+        <button class="setup-btn" onclick="document.getElementById('btn-tutorial').click()" style="width:180px">Play the Tutorial</button>
+      </div>
       <div class="howtoplay-body">
 
         <details class="htp-section" open>
           <summary class="htp-heading">Basic Concepts</summary>
-          <p class="htp-intro">A turn-based hex strategy game set in cursed colonial Salem. Two asymmetric factions — <span class="hero-col">Hero</span> and <span class="witch-col">Witch</span> — fight across a procedurally-generated map.</p>
-          <p>The <span class="htp-faction hero-col">⚔ Hero</span> explores buildings, recruits survivors, and fortifies positions. Survivors grant extra actions each round.</p>
-          <p>The <span class="htp-faction witch-col">✦ Witch</span> summons undead minions and golems, and seizes Power Nodes. Minions grant extra actions each round.</p>
-          <p>The game follows an <b>8-round day/night cycle</b> that shifts the balance between factions — daytime favors the Hero, nighttime favors the Witch.</p>
+          <p class="htp-intro">A turn-based hex strategy game set in cursed colonial Salem.</p>
+
+          <p>Two asymmetric factions clash across a procedurally-generated map:</p>
+          <table class="htp-table">
+            <tr><td><span class="hero-col">⚔ Hero</span></td><td>Explores buildings, recruits survivors, and fortifies positions. Survivors grant extra actions each round.</td></tr>
+            <tr><td><span class="witch-col">✦ Witch</span></td><td>Summons undead minions and golems, and seizes Power Nodes. Minions grant extra actions each round.</td></tr>
+          </table>
+
+          <p style="margin-top:0.6rem">The game follows an <b>8-round day/night cycle</b> that shifts the balance between factions — daytime favors the Hero, nighttime favors the Witch.</p>
+
           <p>Each round uses <b>simultaneous planning</b>: both sides independently queue their actions, then all plans are resolved together. You never wait for a turn — both factions act at once.</p>
         </details>
 
@@ -54,11 +62,18 @@
           <div class="htp-two-col">
             <div>
               <div class="htp-faction hero-col">⚔ Hero wins by:</div>
-              <ul><li>Slaying the Witch</li><li>Holding more Power Nodes at 4 scoring checkpoints</li></ul>
+              <ul>
+                <li>Slaying the Witch</li>
+                <li>Holding more Power Nodes at 4 scoring checkpoints</li>
+              </ul>
             </div>
             <div>
               <div class="htp-faction witch-col">✦ Witch wins by:</div>
-              <ul><li>Slaying the Hero</li><li>Seizing all Power Nodes</li><li>Accumulating 4 scoring points</li></ul>
+              <ul>
+                <li>Slaying the Hero</li>
+                <li>Seizing all Power Nodes</li>
+                <li>Accumulating 4 scoring points</li>
+              </ul>
             </div>
           </div>
         </details>
@@ -66,65 +81,100 @@
         <details class="htp-section">
           <summary class="htp-heading">Day / Night Cycle <span class="htp-dim">(8 rounds per cycle)</span></summary>
           <table class="htp-table">
-            <tr><td>🌅 Dawn</td><td><span class="hero-col">Hero +1 bonus action.</span> Scoring checkpoint — the faction holding more Power Nodes scores a point. Attrition damage increases each cycle.</td></tr>
-            <tr><td>☀ Day <span class="htp-dim">(3 rounds)</span></td><td><span class="hero-col">Hero +1 bonus action.</span> Witch undead caught in the open take attrition damage from the sunlight.</td></tr>
-            <tr><td>🌇 Dusk</td><td>Scoring checkpoint — the faction holding more Power Nodes scores a point.</td></tr>
-            <tr><td>🌙 Night <span class="htp-dim">(3 rounds)</span></td><td><span class="witch-col">Witch +1 bonus action</span> and <span class="witch-col">all witch units gain +2 ATK.</span> Hero survivors caught in the open take attrition damage from the darkness.</td></tr>
+            <tr>
+              <td>🌅 Dawn</td>
+              <td><span class="hero-col">Hero +1 bonus action.</span><br>Scoring checkpoint. Attrition damage increases each cycle.</td>
+            </tr>
+            <tr>
+              <td>☀ Day <span class="htp-dim">(×3)</span></td>
+              <td><span class="hero-col">Hero +1 bonus action.</span><br>Witch undead caught in the open take attrition damage.</td>
+            </tr>
+            <tr>
+              <td>🌇 Dusk</td>
+              <td>Scoring checkpoint.</td>
+            </tr>
+            <tr>
+              <td>🌙 Night <span class="htp-dim">(×3)</span></td>
+              <td><span class="witch-col">Witch +1 bonus action. All witch units +2 ATK.</span><br>Hero survivors caught in the open take attrition damage.</td>
+            </tr>
           </table>
-          <p style="margin-top:0.5rem"><b>Scoring:</b> At each Dawn and Dusk, whichever faction controls more Power Nodes scores <b>+1 point</b>. If neither side holds more, no points are scored. The first faction to reach <b>4 cumulative points</b> wins. If a faction controls <b>every</b> Power Node at a scoring checkpoint, they win instantly — regardless of the point total.</p>
-          <p><b>Attrition:</b> Attrition damage starts at zero and rises each cycle, making exposed units increasingly vulnerable. Keep your forces sheltered during hostile phases or risk losing them to the elements.</p>
+
+          <p class="htp-sub-heading">Scoring</p>
+          <p>At each Dawn and Dusk, whichever faction controls more Power Nodes scores <b>+1 point</b>. Ties score nothing. The first faction to reach <b>4 cumulative points</b> wins.</p>
+          <p>If a faction controls <b>every</b> Power Node at a scoring checkpoint, they win instantly — regardless of the point total.</p>
+
+          <p class="htp-sub-heading">Attrition</p>
+          <p>Attrition damage starts at zero and rises each cycle, making exposed units increasingly vulnerable. Keep your forces sheltered during hostile phases.</p>
         </details>
 
         <details class="htp-section">
           <summary class="htp-heading">Power Nodes ⛧</summary>
           <p>Cursed power nodes are scattered across the map. They serve two purposes:</p>
-          <p><b>Scoring:</b> At Dawn and Dusk, the faction holding more nodes scores a point (see Day / Night Cycle for details).</p>
-          <p><b>Bonus Actions:</b> Each power node your faction controls grants <b>+1 bonus action</b> during the planning phase. Controlling multiple nodes can dramatically increase your tempo, so contesting them is critical.</p>
+
+          <table class="htp-table">
+            <tr><td>Scoring</td><td>The faction holding more nodes scores a point at each Dawn and Dusk.</td></tr>
+            <tr><td>Bonus Actions</td><td>Each node your faction controls grants <b>+1 bonus action</b> during planning. Controlling multiple nodes dramatically increases your tempo.</td></tr>
+          </table>
         </details>
 
         <details class="htp-section">
           <summary class="htp-heading">Actions</summary>
           <table class="htp-table">
-            <tr><td>Move</td><td>Step to an adjacent hex (2 hexes with a horse)</td></tr>
-            <tr><td>Explore</td><td>Uncover loot, weapons, or survivors in buildings</td></tr>
-            <tr><td>Attack Hex</td><td>Attack any adjacent hex — works through fog of war. Hits a random enemy if multiple occupy the hex; skips if empty</td></tr>
-            <tr><td>Guard</td><td>Take a defensive guard stance. Stacks charges — when an enemy acts nearby, a charge is consumed for a reactive strike</td></tr>
-            <tr><td>Fortify</td><td>Hero only: spend 🪵 Wood (+1 DEF) or ⚙ Metal (+2 DEF) to fortify your hex, up to +4 DEF</td></tr>
-            <tr><td>Summon</td><td>Witch only: spend resources to summon a minion or golem</td></tr>
-            <tr><td>Use Item</td><td>Herbs (+2 HP) · Food (+1 action) · Silver (+1 ATK in next combat) · Scripture (ward)</td></tr>
-            <tr><td>Equip</td><td>Free — equip a found weapon for permanent stat bonuses</td></tr>
+            <tr><td>Move</td><td>Step to an adjacent hex (2 hexes with a horse).</td></tr>
+            <tr><td>Explore</td><td>Uncover loot, weapons, or survivors in buildings.</td></tr>
+            <tr><td>Attack Hex</td><td>Attack any adjacent hex. Works through fog of war — hits a random enemy if multiple occupy the hex, skips if empty.</td></tr>
+            <tr><td>Guard</td><td>Take a defensive stance. Each use adds a charge. When an enemy acts nearby, a charge is consumed for an automatic reactive strike.</td></tr>
+            <tr><td>Fortify</td><td>Hero only. Spend 🪵 Wood (+1 DEF) or ⚙ Metal (+2 DEF) to fortify your hex, up to +4 DEF.</td></tr>
+            <tr><td>Summon</td><td>Witch only. Spend resources to summon a minion or golem.</td></tr>
+            <tr><td>Use Item</td><td>Herbs (+2 HP) · Food (+1 action) · Silver (+1 ATK) · Scripture (ward).</td></tr>
+            <tr><td>Equip</td><td>Free. Equip a found weapon for permanent stat bonuses.</td></tr>
           </table>
         </details>
 
         <details class="htp-section">
           <summary class="htp-heading">Combat</summary>
-          <p>Both sides roll dice and add their stats and modifiers. The totals are compared to determine the outcome:</p>
-          <ul class="htp-combat-outcomes">
-            <li><b>Hit</b> — attack total &gt; defense total → 1 damage</li>
-            <li><b>Crush</b> — attack total ≥ 2× defense total → 2 damage</li>
-            <li><b>Counter</b> — defense total ≥ 2× attack total → 1 damage to the attacker</li>
-          </ul>
-          <p style="margin-top:0.5rem"><b>Combat Modifiers:</b></p>
+          <p>Both sides roll dice, add their stats and any modifiers, then compare totals:</p>
+
+          <table class="htp-table" style="margin-bottom:0.5rem">
+            <tr><td>Hit</td><td>Attack &gt; Defense → <b>1 damage</b></td></tr>
+            <tr><td>Crush</td><td>Attack ≥ 2× Defense → <b>2 damage</b></td></tr>
+            <tr><td>Counter</td><td>Defense ≥ 2× Attack → <b>1 damage to the attacker</b></td></tr>
+          </table>
+
+          <p class="htp-sub-heading">Modifiers</p>
           <table class="htp-table">
-            <tr><td>Night Bonus</td><td>All witch units gain +2 ATK during Night</td></tr>
+            <tr><td>Night Bonus</td><td>All witch units +2 ATK during Night</td></tr>
+            <tr><td>Gang-up</td><td>Each adjacent ally adds a bonus die (max 3)</td></tr>
+            <tr><td>Fortification</td><td>Up to +4 DEF from fortified terrain</td></tr>
+            <tr><td>Fatigue</td><td>-1 DEF per 2 defenses this round (hero-side only)</td></tr>
+            <tr><td>Silver</td><td>+1 ATK (consumable, one use)</td></tr>
+            <tr><td>Inspire</td><td>+1 ATK (survivor ability)</td></tr>
+          </table>
+
+          <p class="htp-sub-heading">Weapons</p>
+          <table class="htp-table">
             <tr><td>Sword</td><td>+2 ATK</td></tr>
             <tr><td>Axe</td><td>+1 ATK, +1 DEF</td></tr>
             <tr><td>Shield</td><td>+2 DEF</td></tr>
             <tr><td>Bow</td><td>+1 ATK</td></tr>
             <tr><td>Dagger</td><td>+1 ATK</td></tr>
-            <tr><td>Staff</td><td>+1 ATK base, +2 bonus ATK vs undead</td></tr>
-            <tr><td>Gang-up</td><td>Each adjacent ally adds a bonus die (max 3 allies)</td></tr>
-            <tr><td>Fortification</td><td>Up to +4 DEF from fortified terrain</td></tr>
-            <tr><td>Fatigue</td><td>-1 DEF per 2 times defended this round (hero-side only)</td></tr>
-            <tr><td>Silver</td><td>+1 ATK (consumable item, one-time use)</td></tr>
-            <tr><td>Inspire</td><td>+1 ATK (survivor ability)</td></tr>
+            <tr><td>Staff</td><td>+1 ATK, +2 bonus ATK vs undead</td></tr>
           </table>
-          <p style="margin-top:0.4rem" class="htp-dim">If a fortified defender takes damage, the fortification level decreases by 1.</p>
+
+          <p style="margin-top:0.5rem" class="htp-dim">Fortification level decreases by 1 when the defender takes damage.</p>
         </details>
 
         <details class="htp-section">
           <summary class="htp-heading">Fog of War</summary>
-          <p>Active when any AI is present. Hero sight range varies by phase: Day (3), Dawn/Dusk (2), Night (1). SCOUT survivors extend sight by 1. Enemies outside your sight are hidden.</p>
+          <p>Active when any AI is present. Enemies outside your sight range are hidden.</p>
+
+          <table class="htp-table">
+            <tr><td>Day</td><td>Sight range 3</td></tr>
+            <tr><td>Dawn / Dusk</td><td>Sight range 2</td></tr>
+            <tr><td>Night</td><td>Sight range 1</td></tr>
+          </table>
+
+          <p style="margin-top:0.4rem">SCOUT survivors extend sight by 1.</p>
         </details>
 
       </div>
