@@ -577,9 +577,9 @@ export function executeBattle(state, actor, target) {
   const defTile        = tile(state, target.col, target.row);
   const fortBonus      = defTile?.fortifyLevel || 0;
 
-  // Allies give an extra d3 rather than a flat +1 — more variance, bigger swings
-  const extraAtkDice = attackerAllies >= 1 ? 1 : 0;  // 2+ combatants on attacker side
-  const extraDefDice = defenderAllies >= 1 ? 1 : 0;  // 2+ combatants on defender side
+  // Each ally adds an extra d3 — more allies = bigger swings (capped at 3 dice)
+  const extraAtkDice = Math.min(attackerAllies, 3);
+  const extraDefDice = Math.min(defenderAllies, 3);
 
   // Fatigue: hero-side defenders lose -1 DEF for every 2 times they've defended this round
   const fatiguePenalty = target.owner === 'hero'

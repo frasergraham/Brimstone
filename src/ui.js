@@ -3318,6 +3318,7 @@ function _buildBreakdownHTML(snap, bd, side, total) {
   if (side === 'atk') {
     parts.push(row('Base d6', bd.atkBaseDie, true));
     parts.push(row(`${snap.name} ATK`, snap.attack));
+    if (snap.attackBonus) parts.push(row('🪙 Silver', snap.attackBonus));
     if (bd.phaseBonus)    parts.push(row('🌙 Night', bd.phaseBonus));
     if (bd.atkStaffBonus) parts.push(row('⚕ Staff (undead)', bd.atkStaffBonus));
     bd.atkExtraDice.forEach((r, i) => {
@@ -3326,6 +3327,7 @@ function _buildBreakdownHTML(snap, bd, side, total) {
   } else {
     parts.push(row('Base d6', bd.defBaseDie, true));
     parts.push(row(`${snap.name} DEF`, snap.defense));
+    if (snap.defenseBonus) parts.push(row('🛡 Bonus DEF', snap.defenseBonus));
     if (bd.fortBonus) parts.push(row(`🏰 Fort ×${bd.fortBonus}`, bd.fortBonus));
     if (bd.fatiguePenalty) parts.push(row('😓 Fatigue', -bd.fatiguePenalty));
     bd.defExtraDice.forEach((r, i) => {

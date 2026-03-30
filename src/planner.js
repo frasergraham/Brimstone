@@ -51,6 +51,8 @@ export function snapEntity(entity) {
     attack:      entity.attack,
     defense:     entity.defense,
     weapon:      entity.weapon,
+    attackBonus: entity.attackBonus || 0,
+    defenseBonus: entity.defenseBonus || 0,
     name:        entity.displayName,
     title:       entity.title,
     displayName: entity.displayName,
