@@ -4,7 +4,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  GameState, Phase, Player, computeActions, WIN_REASON,
+  GameState, Phase, Player, computeActions, countHeldNodes, WIN_REASON,
 } from '../src/game.js';
 import { EntityType, createMinion } from '../src/entities.js';
 import { hexKey } from '../src/hex.js';
@@ -620,5 +620,150 @@ describe('submitPlayerPlan (multiplayer)', () => {
     assert.ok(state.playerReady.has(heroId),  'playerReady initialized with heroId');
     assert.ok(state.playerReady.has(witchId), 'playerReady initialized with witchId');
     assert.equal(state.playerReady.size, 2,   'exactly 2 entries in playerReady');
+  });
+});
+
+// ── countHeldNodes ──────────────────────────────────────────────────────────
+
+describe('countHeldNodes', () => {
+  function makeNodeFixture() {
+    const objectives = [
+      { col: 5, row: 5, hexes: [{ col: 5, row: 5 }, { col: 5, row: 6 }, { col: 6, row: 5 }] },
+      { col: 10, row: 10, hexes: [{ col: 10, row: 10 }, { col: 10, row: 11 }, { col: 11, row: 10 }] },
+      { col: 15, row: 15, hexes: [{ col: 15, row: 15 }, { col: 15, row: 16 }, { col: 16, row: 15 }] },
+    ];
+    return objectives;
+  }
+
+  test('returns 0 when no entities on nodes', () => {
+    const objectives = makeNodeFixture();
+    const entities = [{ alive: true, owner: 'hero', col: 0, row: 0 }];
+    assert.equal(countHeldNodes('hero', objectives, entities), 0);
+    assert.equal(countHeldNodes('witch', objectives, entities), 0);
+  });
+
+  test('counts nodes controlled by hero', () => {
+    const objectives = makeNodeFixture();
+    const entities = [
+      { alive: true, owner: 'hero', col: 5, row: 5 },
+      { alive: true, owner: 'hero', col: 10, row: 10 },
+    ];
+    assert.equal(countHeldNodes('hero', objectives, entities), 2);
+    assert.equal(countHeldNodes('witch', objectives, entities), 0);
+  });
+
+  test('counts nodes controlled by witch', () => {
+    const objectives = makeNodeFixture();
+    const entities = [
+      { alive: true, owner: 'witch', col: 15, row: 15 },
+    ];
+    assert.equal(countHeldNodes('witch', objectives, entities), 1);
+    assert.equal(countHeldNodes('hero', objectives, entities), 0);
+  });
+
+  test('contested nodes do not count for either faction', () => {
+    const objectives = makeNodeFixture();
+    // Both factions occupy 1 hex each on the same node → contested
+    const entities = [
+      { alive: true, owner: 'hero', col: 5, row: 5 },
+      { alive: true, owner: 'witch', col: 5, row: 6 },
+    ];
+    assert.equal(countHeldNodes('hero', objectives, entities), 0);
+    assert.equal(countHeldNodes('witch', objectives, entities), 0);
+  });
+
+  test('handles empty objectives array', () => {
+    assert.equal(countHeldNodes('hero', [], []), 0);
+  });
+});
+
+// ── computeActions with nodeBonus ────────────────────────────────────────────
+
+describe('computeActions — nodeBonus', () => {
+  test('default nodeBonus is 0, existing results unchanged', () => {
+    const ents = [{ alive: true, owner: 'hero', type: EntityType.HERO }];
+    assert.equal(computeActions(Player.HERO, Phase.DUSK, ents), 3);
+    assert.equal(computeActions(Player.HERO, Phase.DUSK, ents, 0), 3);
+  });
+
+  test('hero gains +1 per nodeBonus', () => {
+    const ents = [{ alive: true, owner: 'hero', type: EntityType.HERO }];
+    assert.equal(computeActions(Player.HERO, Phase.DUSK, ents, 1), 4);
+    assert.equal(computeActions(Player.HERO, Phase.DUSK, ents, 2), 5);
+    assert.equal(computeActions(Player.HERO, Phase.DUSK, ents, 3), 6);
+  });
+
+  test('witch gains +1 per nodeBonus', () => {
+    const ents = [{ alive: true, owner: 'witch', type: EntityType.WITCH }];
+    assert.equal(computeActions(Player.WITCH, Phase.DUSK, ents, 1), 4);
+    assert.equal(computeActions(Player.WITCH, Phase.DUSK, ents, 2), 5);
+    assert.equal(computeActions(Player.WITCH, Phase.DUSK, ents, 3), 6);
+  });
+
+  test('nodeBonus stacks with time bonus and unit bonus', () => {
+    const ents = [
+      { alive: true, owner: 'hero', type: EntityType.HERO },
+      { alive: true, owner: 'hero', type: EntityType.SURVIVOR },
+    ];
+    // DAWN: 3 base + 1 time + 1 survivor + 2 nodes = 7
+    assert.equal(computeActions(Player.HERO, Phase.DAWN, ents, 2), 7);
+  });
+});
+
+// ── startPlanning with node bonus ────────────────────────────────────────────
+
+describe('startPlanning — power node bonus', () => {
+  test('hero on a power node gets +1 action', () => {
+    const state = new GameState(true, true);
+    // Place hero on the first power node's center hex
+    const node = state.witchObjectives[0];
+    state.hero.col = node.col;
+    state.hero.row = node.row;
+    // Move witch away from all nodes
+    state.witch.col = 0;
+    state.witch.row = 0;
+
+    state.startPlanning();
+
+    // Hero should have base budget + 1 node bonus
+    const baseHero = computeActions(Player.HERO, state.phase, state.entities, 0);
+    assert.equal(state.heroActionsLeft, baseHero + 1);
+  });
+
+  test('witch on two power nodes gets +2 actions', () => {
+    const state = new GameState(true, true);
+    // Move hero away from all nodes
+    state.hero.col = 0;
+    state.hero.row = 0;
+    // Place witch on first node
+    const node0 = state.witchObjectives[0];
+    state.witch.col = node0.col;
+    state.witch.row = node0.row;
+    // Place a minion on second node
+    const node1 = state.witchObjectives[1];
+    const minion = createMinion(node1.col, node1.row);
+    minion.owner = 'witch';
+    state.entities.push(minion);
+
+    state.startPlanning();
+
+    const baseWitch = computeActions(Player.WITCH, state.phase, state.entities, 0);
+    assert.equal(state.witchActionsLeft, baseWitch + 2);
+  });
+
+  test('no bonus when no nodes held', () => {
+    const state = new GameState(true, true);
+    // Move both leaders away from all nodes
+    state.hero.col = 0;
+    state.hero.row = 0;
+    state.witch.col = 1;
+    state.witch.row = 0;
+
+    state.startPlanning();
+
+    const baseHero  = computeActions(Player.HERO,  state.phase, state.entities, 0);
+    const baseWitch = computeActions(Player.WITCH, state.phase, state.entities, 0);
+    assert.equal(state.heroActionsLeft, baseHero);
+    assert.equal(state.witchActionsLeft, baseWitch);
   });
 });

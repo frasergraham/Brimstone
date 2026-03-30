@@ -11,7 +11,7 @@ import {
 import { EntityType } from '../src/entities.js';
 import { hexDistance } from '../src/hex.js';
 import { PlanActionType, snapEntity } from '../src/planner.js';
-import { Phase } from '../src/game.js';
+import { Phase, countHeldNodes } from '../src/game.js';
 import { ResourceType } from '../src/tiles.js';
 
 // ── Event types ──────────────────────────────────────────────────────────────
@@ -34,14 +34,14 @@ function budgetFor(state, faction) {
   const extras = state.entities.filter(
     e => e.alive && e.owner === faction && e.type !== faction
   ).length;
+  const nodeBonus = countHeldNodes(faction, state.witchObjectives ?? [], state.entities);
 
   if (isHero) {
     const timeBonus = (state.phase === Phase.DAY || state.phase === Phase.DAWN) ? 1 : 0;
-    return 3 + timeBonus + Math.min(extras, 5);
+    return 3 + timeBonus + Math.min(extras, 5) + nodeBonus;
   } else {
     const timeBonus = state.phase === Phase.NIGHT ? 1 : 0;
-    const unitBonus = Math.min(Math.floor(extras / 2), 4);
-    return 4 + timeBonus + unitBonus;
+    return 3 + timeBonus + Math.min(extras, 3) + nodeBonus;
   }
 }
 
@@ -52,14 +52,14 @@ function budgetForPlayer(state, playerId, faction) {
   const extras     = state.entities.filter(
     e => e.alive && e.ownerId === playerId && e.type !== leaderType
   ).length;
+  const nodeBonus = countHeldNodes(faction, state.witchObjectives ?? [], state.entities);
 
   if (isHero) {
     const timeBonus = (state.phase === Phase.DAY || state.phase === Phase.DAWN) ? 1 : 0;
-    return 3 + timeBonus + Math.min(extras, 5);
+    return 3 + timeBonus + Math.min(extras, 5) + nodeBonus;
   } else {
     const timeBonus = state.phase === Phase.NIGHT ? 1 : 0;
-    const unitBonus = Math.min(Math.floor(extras / 2), 4);
-    return 4 + timeBonus + unitBonus;
+    return 3 + timeBonus + Math.min(extras, 3) + nodeBonus;
   }
 }
 

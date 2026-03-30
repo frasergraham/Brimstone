@@ -2,7 +2,7 @@
 import { hexKey, hexToPixel, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType } from './tiles.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
-import { Phase, Player, PHASE_ICON, nodeController } from './game.js';
+import { Phase, Player, PHASE_ICON, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y } from './renderer.js';
 import {
   ActionType, getValidActions, getVisibleEnemyHexes, getVisibleHeroHexes,
@@ -2229,13 +2229,18 @@ export class UIController {
       if (timeBonus)     rows.push({ label: `${info.icon} ${info.label} bonus`, value: timeBonus });
       if (survivorBonus) rows.push({ label: `☺ Survivor${survivorBonus !== 1 ? 's' : ''} (${survivorCount})`, value: survivorBonus });
     } else {
-      const base = 4;
+      const base = 3;
       const timeBonus = phase === 'night' ? 1 : 0;
       const unitCount = entities.filter(e => e.alive && e.owner === 'witch' && e.type !== 'witch').length;
-      const unitBonus = Math.min(Math.floor(unitCount / 2), 4);
+      const unitBonus = Math.min(unitCount, 3);
       rows.push({ label: 'Base', value: base });
       if (timeBonus) rows.push({ label: `${info.icon} ${info.label} bonus`, value: timeBonus });
-      if (unitBonus) rows.push({ label: `☠ Minions (${unitCount})`, value: unitBonus });
+      if (unitBonus) rows.push({ label: `☠ Minion${unitBonus !== 1 ? 's' : ''} (${unitCount})`, value: unitBonus });
+    }
+    // Power node bonus: +1 action per held node
+    const nodeBonus = countHeldNodes(faction, this.state.witchObjectives ?? [], entities);
+    if (nodeBonus) {
+      rows.push({ label: `◆ Power Node${nodeBonus !== 1 ? 's' : ''} (${nodeBonus})`, value: nodeBonus });
     }
 
     // Set content
