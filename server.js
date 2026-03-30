@@ -5,10 +5,22 @@ import { createServer }    from 'http';
 import { join, dirname }   from 'path';
 import { fileURLToPath }   from 'url';
 
-import { VERSION } from './src/version.js';
-import { registerOrLogin, getPlayerByToken } from './server/auth.js';
+import { VERSION, BUILD_VERSION } from './src/version.js';
+import {
+  registerOrLogin, getPlayerByToken, getPlayerByEmail,
+  linkEmail, loginByEmail, getPlayerIdentities, changeUsername,
+} from './server/auth.js';
+import { generateToken, verifyToken, sendMagicLinkEmail } from './server/magic-link.js';
 import { getLeaderboard }                    from './server/leaderboard.js';
-import { getActiveSaves, pruneStaleAndIncompatibleSaves } from './server/saves.js';
+import { recordGameStats, getGameStats, getAggregateStats } from './server/game-stats.js';
+import { recordCampaignGameStats, getCampaignGameStats, getCampaignAggregateStats } from './server/campaign-game-stats.js';
+import { upsertCampaignSave, getCampaignSave, getCampaignSaves, deleteCampaignSave } from './server/campaign-saves.js';
+import { getActiveSaves, pruneStaleAndIncompatibleSaves,
+         getCompletedGames, getCompletedGame, getCompletedGameRounds,
+         pinCompletedGame, deleteCompletedGame,
+         pruneExpiredCompletedGames, getAllCompletedGames,
+         createSpCompletedGame, getAllSpCompletedGames,
+         getSpCompletedGame, getSpCompletedGameRounds }    from './server/saves.js';
 import {
   createLobby, joinLobby, browseLobby,
   setSlotAI, removeSlotAI, fillAllWithAI, startGame, leaveLobby,
@@ -37,7 +49,7 @@ app.use(express.static(join(__dirname)));   // serve game files from repo root
 app.get('/health', (_req, res) => {
   res.json({
     status:      'ok',
-    version:     VERSION,
+    version:     BUILD_VERSION,
     uptime:      Math.floor(process.uptime()),
     connections: clients.size,
   });
@@ -57,16 +69,254 @@ app.get('/api/saves', (req, res) => {
   res.json(getActiveSaves(player.id));
 });
 
+// REST: completed games for a player
+app.get('/api/completed-games', (req, res) => {
+  const token = req.query.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
+  res.json(getCompletedGames(player.id));
+});
+
+app.get('/api/completed-games/:gameId/rounds', (req, res) => {
+  const token = req.query.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
+  const game = getCompletedGame(req.params.gameId);
+  if (!game) { res.status(404).json({ error: 'Not found.' }); return; }
+  if (game.hero_player_id !== player.id && game.witch_player_id !== player.id) {
+    res.status(403).json({ error: 'Forbidden.' }); return;
+  }
+  res.json(getCompletedGameRounds(req.params.gameId));
+});
+
+app.post('/api/completed-games/:gameId/pin', (req, res) => {
+  const token = req.query.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
+  const pinned = !!req.body?.pinned;
+  const ok = pinCompletedGame(req.params.gameId, player.id, pinned);
+  if (!ok) { res.status(404).json({ error: 'Not found or forbidden.' }); return; }
+  res.json({ ok: true, pinned });
+});
+
+app.delete('/api/completed-games/:gameId', (req, res) => {
+  const token = req.query.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
+  const ok = deleteCompletedGame(req.params.gameId, player.id);
+  if (!ok) { res.status(404).json({ error: 'Not found or forbidden.' }); return; }
+  res.json({ ok: true });
+});
+
+// REST: record game stats (used by local/offline mode)
+app.post('/api/game-stats', (req, res) => {
+  try {
+    const stats = req.body;
+    if (!stats?.id || !stats?.winner || !stats?.win_reason) {
+      res.status(400).json({ error: 'Missing required fields.' });
+      return;
+    }
+    recordGameStats(stats);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('POST /api/game-stats error:', err);
+    res.status(500).json({ error: 'Failed to record stats.' });
+  }
+});
+
+// REST: record campaign game stats
+app.post('/api/campaign-game-stats', (req, res) => {
+  try {
+    const stats = req.body;
+    if (!stats?.id || !stats?.campaign_id || !stats?.mission_id || !stats?.winner) {
+      res.status(400).json({ error: 'Missing required fields.' });
+      return;
+    }
+    recordCampaignGameStats(stats);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('POST /api/campaign-game-stats error:', err);
+    res.status(500).json({ error: 'Failed to record campaign stats.' });
+  }
+});
+
+// ── Auth: magic link endpoints ────────────────────────────────────────────────
+
+// Link an email to an existing account (authenticated player)
+app.post('/auth/link-email', async (req, res) => {
+  const { token, email } = req.body || {};
+  if (!token || !email) {
+    res.status(400).json({ error: 'Token and email are required.' });
+    return;
+  }
+
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid session.' }); return; }
+
+  // Validate email format (basic)
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    res.status(400).json({ error: 'Invalid email address.' });
+    return;
+  }
+
+  // Check if already linked to another account
+  const existing = getPlayerByEmail(email);
+  if (existing && existing.id !== player.id) {
+    res.status(409).json({ error: 'This email is already linked to another account.' });
+    return;
+  }
+  if (existing && existing.id === player.id) {
+    res.json({ ok: true, message: 'Email already linked.' });
+    return;
+  }
+
+  const magicToken = generateToken(email, player.id);
+  const result = await sendMagicLinkEmail(email, magicToken, { isLink: true });
+  if (!result.ok) { res.status(500).json({ error: result.error }); return; }
+
+  res.json({ ok: true, message: 'Magic link sent! Check your email.' });
+});
+
+// Request a login link for an existing account (from a new device)
+app.post('/auth/login-email', async (req, res) => {
+  const { email } = req.body || {};
+  if (!email) { res.status(400).json({ error: 'Email is required.' }); return; }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    res.status(400).json({ error: 'Invalid email address.' });
+    return;
+  }
+
+  const player = getPlayerByEmail(email);
+  if (!player) {
+    // Don't reveal whether the email exists — still return success
+    res.json({ ok: true, message: 'If an account exists for this email, a login link has been sent.' });
+    return;
+  }
+
+  const magicToken = generateToken(email, player.id);
+  const result = await sendMagicLinkEmail(email, magicToken, { isLink: false });
+  if (!result.ok) { res.status(500).json({ error: result.error }); return; }
+
+  res.json({ ok: true, message: 'If an account exists for this email, a login link has been sent.' });
+});
+
+// Verify a magic link token — redirect to game with session
+app.get('/auth/verify', (req, res) => {
+  const { token } = req.query;
+  if (!token) { res.status(400).send('Missing token.'); return; }
+
+  const result = verifyToken(token);
+  if (!result) {
+    res.status(400).send('Invalid or expired link. Please request a new one.');
+    return;
+  }
+
+  const { email, playerId } = result;
+
+  if (playerId) {
+    // Link email to account (or login for existing linked account)
+    const linkResult = linkEmail(playerId, email);
+    if (!linkResult.ok) { res.status(400).send(linkResult.error); return; }
+
+    const player = loginByEmail(playerId);
+    if (!player.ok) { res.status(400).send(player.error); return; }
+
+    // Redirect to game with the player's session token in the URL
+    res.redirect(`/?email_token=${encodeURIComponent(player.player.token)}`);
+  } else {
+    // Should not happen — we always set playerId. But handle gracefully.
+    res.status(400).send('Invalid link.');
+  }
+});
+
+// Get linked identities for the authenticated player
+app.get('/api/identities', (req, res) => {
+  const token = req.query.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
+  res.json(getPlayerIdentities(player.id));
+});
+
+// Change username (authenticated player)
+app.post('/api/account/username', (req, res) => {
+  const token = req.body?.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
+
+  const result = changeUsername(player.id, req.body?.username);
+  if (!result.ok) { res.status(400).json({ error: result.error }); return; }
+  res.json({ ok: true, player: { id: result.player.id, username: result.player.username } });
+});
+
+// ── Campaign saves (cloud backup for verified users) ──────────────────────────
+
+function _requireAuth(req, res) {
+  const token = req.query.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return null; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return null; }
+  return player;
+}
+
+function _requireVerifiedEmail(player, res) {
+  const identities = getPlayerIdentities(player.id);
+  if (!identities.some(i => i.provider === 'email')) {
+    res.status(403).json({ error: 'Link a verified email to enable cloud saves.' });
+    return false;
+  }
+  return true;
+}
+
+app.get('/api/campaign-saves', (req, res) => {
+  const player = _requireAuth(req, res);
+  if (!player) return;
+  res.json(getCampaignSaves(player.id));
+});
+
+app.get('/api/campaign-saves/:slot', (req, res) => {
+  const player = _requireAuth(req, res);
+  if (!player) return;
+  const save = getCampaignSave(player.id, req.params.slot);
+  if (!save) { res.status(404).json({ error: 'No campaign save found.' }); return; }
+  res.json(save);
+});
+
+app.put('/api/campaign-saves/:slot', (req, res) => {
+  const player = _requireAuth(req, res);
+  if (!player) return;
+  if (!_requireVerifiedEmail(player, res)) return;
+  const { state } = req.body || {};
+  if (!state) { res.status(400).json({ error: 'Missing state.' }); return; }
+  upsertCampaignSave(player.id, req.params.slot, JSON.stringify(state), VERSION);
+  res.json({ ok: true });
+});
+
+app.delete('/api/campaign-saves/:slot', (req, res) => {
+  const player = _requireAuth(req, res);
+  if (!player) return;
+  deleteCampaignSave(player.id, req.params.slot);
+  res.json({ ok: true });
+});
+
 // ── Admin pages ───────────────────────────────────────────────────────────────
 
-app.get('/admin', (_req, res) => res.sendFile(join(__dirname, 'admin.html')));
+app.get('/admin',       (_req, res) => res.sendFile(join(__dirname, 'admin.html')));
+app.get('/admin/stats', (_req, res) => res.sendFile(join(__dirname, 'admin-stats.html')));
 app.get('/spectate', (_req, res) => res.sendFile(join(__dirname, 'index.html')));
+app.get('/replay',   (_req, res) => res.sendFile(join(__dirname, 'index.html')));
 
 // ── Admin REST API ────────────────────────────────────────────────────────────
 
 app.get('/admin/api/stats', (_req, res) => {
   res.json({
-    version:      VERSION,
+    version:      BUILD_VERSION,
     uptime:       Math.floor(process.uptime()),
     connections:  clients.size,
     activeRooms:  getRooms().length,
@@ -109,6 +359,33 @@ app.get('/admin/api/saves/:roomId', (req, res) => {
   res.json(save);
 });
 
+app.get('/admin/api/game-stats', (req, res) => {
+  res.json(getGameStats({
+    mode:         req.query.mode         || undefined,
+    map_size:     req.query.map_size     || undefined,
+    winner:       req.query.winner       || undefined,
+    game_version: req.query.game_version || undefined,
+    limit:        req.query.limit ? parseInt(req.query.limit, 10) : 100,
+  }));
+});
+
+app.get('/admin/api/game-stats/summary', (_req, res) => {
+  res.json(getAggregateStats());
+});
+
+app.get('/admin/api/campaign-game-stats', (req, res) => {
+  res.json(getCampaignGameStats({
+    campaign_id: req.query.campaign_id || undefined,
+    mission_id:  req.query.mission_id  || undefined,
+    winner:      req.query.winner      || undefined,
+    limit:       req.query.limit ? parseInt(req.query.limit, 10) : 100,
+  }));
+});
+
+app.get('/admin/api/campaign-game-stats/summary', (_req, res) => {
+  res.json(getCampaignAggregateStats());
+});
+
 app.post('/admin/api/saves/:roomId/activate', (req, res) => {
   const roomId = req.params.roomId;
   const result = adminResumeGame(roomId);
@@ -117,6 +394,53 @@ app.post('/admin/api/saves/:roomId/activate', (req, res) => {
     return;
   }
   res.json({ ok: true, roomId: result.roomId });
+});
+
+app.get('/admin/api/completed-games', (_req, res) => {
+  res.json(getAllCompletedGames());
+});
+
+app.get('/admin/api/completed-games/:gameId', (req, res) => {
+  const game = getCompletedGame(req.params.gameId);
+  if (!game) { res.status(404).json({ error: 'Not found.' }); return; }
+  res.json(game);
+});
+
+app.get('/admin/api/completed-games/:gameId/rounds', (req, res) => {
+  res.json(getCompletedGameRounds(req.params.gameId));
+});
+
+// ── SP game uploads ───────────────────────────────────────────────────────────
+
+app.post('/api/sp/completed-games', (req, res) => {
+  const { gameId, heroName, witchName, winner, winReason, totalRounds,
+          gameVersion, mode, rounds } = req.body ?? {};
+  if (!gameId || !winner || !Array.isArray(rounds)) {
+    res.status(400).json({ error: 'gameId, winner, and rounds are required.' });
+    return;
+  }
+  try {
+    createSpCompletedGame(gameId, { heroName, witchName, winner, winReason,
+      totalRounds, gameVersion, mode }, rounds);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('SP upload error:', e);
+    res.status(500).json({ error: 'Failed to store game.' });
+  }
+});
+
+app.get('/admin/api/sp/completed-games', (_req, res) => {
+  res.json(getAllSpCompletedGames());
+});
+
+app.get('/admin/api/sp/completed-games/:gameId', (req, res) => {
+  const game = getSpCompletedGame(req.params.gameId);
+  if (!game) { res.status(404).json({ error: 'Not found.' }); return; }
+  res.json(game);
+});
+
+app.get('/admin/api/sp/completed-games/:gameId/rounds', (req, res) => {
+  res.json(getSpCompletedGameRounds(req.params.gameId));
 });
 
 // ── HTTP + WS server ─────────────────────────────────────────────────────────
@@ -143,6 +467,8 @@ function clientState(ws) {
 
 wss.on('connection', ws => {
   const cs = clientState(ws);
+  ws._isAlive = true;
+  ws.on('pong', () => { ws._isAlive = true; });
 
   ws.on('message', raw => {
     let msg;
@@ -163,6 +489,20 @@ wss.on('connection', ws => {
 
   ws.on('error', () => ws.terminate());
 });
+
+// ── Heartbeat — detect zombie connections within ~30s ────────────────────────
+
+const HEARTBEAT_INTERVAL_MS = 15_000;
+
+const _heartbeat = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (!ws._isAlive) { ws.terminate(); continue; }
+    ws._isAlive = false;
+    ws.ping();
+  }
+}, HEARTBEAT_INTERVAL_MS);
+
+wss.on('close', () => clearInterval(_heartbeat));
 
 function route(ws, cs, msg) {
   switch (msg.type) {
@@ -325,7 +665,9 @@ function _publicPlayer(p) {
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 server.listen(PORT, () => {
-  console.log(`Brimstone v${VERSION} listening on port ${PORT}`);
+  console.log(`Brimstone v${BUILD_VERSION} listening on port ${PORT}`);
   const pruned = pruneStaleAndIncompatibleSaves(VERSION);
   if (pruned > 0) console.log(`Pruned ${pruned} stale/incompatible save(s).`);
+  const prunedCompleted = pruneExpiredCompletedGames();
+  if (prunedCompleted > 0) console.log(`Pruned ${prunedCompleted} expired completed game(s).`);
 });

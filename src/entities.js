@@ -230,6 +230,7 @@ export class Entity {
     this.abilityLabel = null;
 
     this.actedThisTurn = false;
+    this.defendCount   = 0;
 
     // Personal backpack: herbs, weapons (key = 'weapon:sword' etc), horse
     this.items = {};
@@ -268,6 +269,7 @@ export class Entity {
     this.actedThisTurn = false;
     this.attackBonus   = 0;
     this.defenseBonus  = 0;
+    this.defendCount   = 0;
   }
 
   takeDamage(amount) {
@@ -286,7 +288,7 @@ export class Entity {
   // (ally gang-up / defender ally support — gives variance instead of flat +1)
   // Returns full breakdown for UI rendering alongside the totals.
   static resolveCombat(attacker, defender, phaseBonus = 0, extraAtkBonus = 0, extraDefBonus = 0,
-                       extraAtkDice = 0, extraDefDice = 0) {
+                       extraAtkDice = 0, extraDefDice = 0, fatiguePenalty = 0) {
     let extraAtk = phaseBonus + extraAtkBonus;
     let atkStaffBonus = 0;
     if (attacker.weapon === 'staff' &&
@@ -308,11 +310,12 @@ export class Entity {
     const attackRoll  = atkBaseDie + attacker.attack  + attacker.attackBonus + extraAtk
                         + atkExtraDice.reduce((s, r) => s + r, 0);
     const defenseRoll = defBaseDie + defender.defense + defender.defenseBonus + extraDefBonus
+                        - fatiguePenalty
                         + defExtraDice.reduce((s, r) => s + r, 0);
     const margin = attackRoll - defenseRoll;
     return {
       attackRoll, defenseRoll, hit: margin > 0, margin,
-      atkBaseDie, defBaseDie, atkExtraDice, defExtraDice, atkStaffBonus,
+      atkBaseDie, defBaseDie, atkExtraDice, defExtraDice, atkStaffBonus, fatiguePenalty,
     };
   }
 }
@@ -361,6 +364,16 @@ export function createSurvivor(col, row, ownerId = null) {
 
 export function resetRoster() {
   _usedRosterIndices.clear();
+}
+
+/**
+ * Mark survivor roster entries as used by name so they won't be generated
+ * again by createSurvivor(). Used by campaign mode to exclude carried-over
+ * survivors from the discoverable pool.
+ */
+export function markRosterUsedByName(name) {
+  const idx = SURVIVOR_ROSTER.findIndex(c => c.name === name);
+  if (idx >= 0) _usedRosterIndices.add(idx);
 }
 
 function _witchColor(type, entity) {

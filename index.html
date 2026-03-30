@@ -25,10 +25,12 @@
         <button id="btn-multiplayer"   class="setup-btn"         style="width:200px">🌐 Multiplayer</button>
         <button id="btn-tutorial"      class="setup-btn"         style="width:200px">⚑ Tutorial</button>
         <button id="btn-how-to-play"   class="setup-btn"         style="width:200px">How to Play</button>
+        <button id="btn-account"       class="setup-btn"         style="width:200px">Account</button>
         <button id="btn-options"       class="setup-btn"         style="width:200px">Options</button>
       </div>
       <div style="margin-top:1.25rem;text-align:center">
         <a href="/admin" class="admin-link">Admin</a>
+        <div id="menu-version" class="menu-version"></div>
       </div>
     </div>
 
@@ -63,9 +65,9 @@
           <h3 class="htp-heading">Phase Cycle <span class="htp-dim">(8 rounds per cycle)</span></h3>
           <table class="htp-table">
             <tr><td>🌅 Dawn</td><td>Hero +1 action · attrition rises · Power Nodes scored</td></tr>
-            <tr><td>☀ Day</td><td>Hero +1 ATK · witch undead in the open take damage</td></tr>
+            <tr><td>☀ Day</td><td>Witch undead in the open take damage</td></tr>
             <tr><td>🌇 Dusk</td><td>Power Nodes scored</td></tr>
-            <tr><td>🌙 Night</td><td>Witch +1 ATK · survivors in the open take damage</td></tr>
+            <tr><td>🌙 Night</td><td>Witch +2 ATK · survivors in the open take damage</td></tr>
           </table>
         </div>
         <div class="htp-section">
@@ -98,9 +100,67 @@
       </div>
     </div>
 
-    <!-- Single Player -->
+    <!-- Single Player Mode Choice -->
+    <div id="setup-step-sp-choice" class="setup-card" style="display:none">
+      <h1 class="title" style="font-size:2rem;margin-bottom:0.5rem">SINGLE PLAYER</h1>
+      <div class="setup-lore"><p>Choose your path into Salem.</p></div>
+      <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.75rem">
+        <button id="btn-story-mode" class="setup-btn primary" style="width:220px">📖 Story Mode</button>
+        <button id="btn-quick-play" class="setup-btn" style="width:220px">⚔ Quick Play</button>
+      </div>
+      <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
+        <button id="btn-sp-choice-back" class="setup-btn">← Back</button>
+      </div>
+    </div>
+
+    <!-- Campaign: Story Selection -->
+    <div id="setup-step-campaign-select" class="setup-card setup-card-wide" style="display:none">
+      <h1 class="title" style="font-size:2rem;margin-bottom:0.5rem">STORY MODE</h1>
+      <div class="setup-lore"><p>Choose a story to play.</p></div>
+      <div id="campaign-select-list" class="campaign-select-list"></div>
+      <div class="setup-buttons" style="margin-top:1rem">
+        <button id="btn-campaign-select-back" class="setup-btn">&larr; Back</button>
+      </div>
+    </div>
+
+    <!-- Campaign: Mission Select & Briefing -->
+    <div id="setup-step-campaign" class="setup-card setup-card-wide" style="display:none">
+      <h1 id="campaign-title" class="title" style="font-size:2rem;margin-bottom:0.5rem">CAMPAIGN</h1>
+      <div id="campaign-roster-summary" class="campaign-roster-summary" style="display:none"></div>
+      <div id="campaign-mission-list" class="campaign-mission-list"></div>
+      <div id="campaign-briefing" class="campaign-briefing" style="display:none">
+        <h2 id="campaign-mission-title" class="campaign-mission-title"></h2>
+        <p id="campaign-mission-text" class="campaign-mission-text"></p>
+        <div id="campaign-objectives" class="campaign-objectives"></div>
+        <div id="campaign-deploy-roster" class="campaign-deploy-roster" style="display:none">
+          <h3>Deploy Survivors</h3>
+          <div id="campaign-roster-picker" class="campaign-roster-picker"></div>
+        </div>
+        <div class="setup-buttons" style="margin-top:1rem">
+          <button id="btn-start-mission" class="setup-btn primary">Begin Mission</button>
+          <button id="btn-briefing-back" class="setup-btn">← Back</button>
+        </div>
+      </div>
+      <div id="campaign-nav" class="setup-buttons" style="margin-top:1rem">
+        <button id="btn-campaign-back" class="setup-btn">← Back</button>
+        <button id="btn-delete-campaign" class="setup-btn" style="color:var(--clr-dim);font-size:0.85rem">Start Over</button>
+      </div>
+    </div>
+
+    <!-- Campaign: Mission Debrief (shown after mission completes) -->
+    <div id="setup-step-debrief" class="setup-card" style="display:none">
+      <h1 id="debrief-title" class="title" style="font-size:2rem;margin-bottom:0.5rem">MISSION COMPLETE</h1>
+      <p id="debrief-text" class="campaign-mission-text"></p>
+      <div id="debrief-stats" class="debrief-stats"></div>
+      <div id="debrief-roster" class="debrief-roster"></div>
+      <div class="setup-buttons" style="margin-top:1rem">
+        <button id="btn-debrief-continue" class="setup-btn primary">Continue</button>
+      </div>
+    </div>
+
+    <!-- Single Player: Quick Play -->
     <div id="setup-step-singleplayer" class="setup-card" style="display:none">
-      <h1 class="title" style="font-size:2rem;margin-bottom:1rem">SINGLE PLAYER</h1>
+      <h1 class="title" style="font-size:2rem;margin-bottom:1rem">QUICK PLAY</h1>
 
       <div class="setup-options">
         <label class="setup-option-label">
@@ -152,11 +212,17 @@
         <button id="btn-start-local" class="setup-btn primary">Start Game</button>
       </div>
 
-      <!-- In-progress local saves -->
+      <!-- In-progress and completed local saves -->
       <div class="active-games-section" style="margin-top:0.75rem">
-        <div class="active-games-label">In Progress</div>
+        <div class="saves-tab-bar">
+          <button class="saves-tab active" data-target="sp-saves-list">In Progress</button>
+          <button class="saves-tab"        data-target="sp-completed-list">Completed</button>
+        </div>
         <div id="sp-saves-list" class="saves-list">
           <p class="saves-empty">No saved games.</p>
+        </div>
+        <div id="sp-completed-list" class="saves-list" style="display:none">
+          <p class="saves-empty">No completed games yet.</p>
         </div>
       </div>
 
@@ -172,20 +238,34 @@
       <div id="mp-session-info" style="display:none" class="setup-lore">
         <p>Playing as <strong id="mp-session-name"></strong>
            &nbsp;<span id="mp-session-stats" class="stats-badge"></span></p>
-        <button id="btn-mp-change-name" class="setup-btn secondary" style="margin-top:0.5rem">Change Name</button>
+        <span id="mp-email-badge" class="email-badge" style="display:none"></span>
+        <div style="display:flex;gap:0.4rem;margin-top:0.5rem;flex-wrap:wrap;justify-content:center">
+          <button id="btn-mp-sign-out" class="setup-btn secondary">Sign Out</button>
+        </div>
       </div>
       <div id="mp-name-form">
         <input id="mp-username" class="setup-input" type="text"
                placeholder="Enter a username…" maxlength="20" autocomplete="off">
         <button id="btn-mp-signin" class="setup-btn primary" style="margin-top:0.4rem">Sign In</button>
+        <div class="email-login-divider" style="margin:0.6rem 0;font-size:0.75rem;opacity:0.6">— or sign in with email —</div>
+        <input id="mp-email-login-input" class="setup-input" type="email"
+               placeholder="your@email.com" autocomplete="email">
+        <button id="btn-mp-email-login" class="setup-btn secondary" style="margin-top:0.4rem">Send Login Link</button>
+        <p id="mp-email-login-status" class="setup-hint" style="display:none"></p>
         <p id="mp-name-error" class="setup-error" style="display:none"></p>
       </div>
 
-      <!-- Active online games -->
+      <!-- Active and completed online games -->
       <div class="active-games-section" style="margin-top:0.75rem">
-        <div class="active-games-label">Active Games</div>
+        <div class="saves-tab-bar">
+          <button class="saves-tab active" data-target="active-games-list">In Progress</button>
+          <button class="saves-tab"        data-target="mp-completed-list">Completed</button>
+        </div>
         <div id="active-games-list" class="saves-list">
           <p class="saves-empty">Sign in to see your active games.</p>
+        </div>
+        <div id="mp-completed-list" class="saves-list" style="display:none">
+          <p class="saves-empty">Sign in to see completed games.</p>
         </div>
       </div>
 
@@ -200,6 +280,15 @@
       </div>
     </div>
 
+    <!-- Revision History -->
+    <div id="setup-step-changelog" class="setup-card setup-card-wide" style="display:none">
+      <h1 class="title" style="font-size:2rem">REVISION HISTORY</h1>
+      <div id="changelog-body" class="changelog-body"></div>
+      <div class="setup-buttons" style="margin-top:1.5rem;margin-bottom:0">
+        <button id="btn-changelog-back" class="setup-btn">&larr; Back</button>
+      </div>
+    </div>
+
     <!-- Options -->
     <div id="setup-step-options" class="setup-card" style="display:none">
       <h1 class="title" style="font-size:2rem">OPTIONS</h1>
@@ -207,7 +296,67 @@
         <p>No options are available yet.<br>Check back in a future update.</p>
       </div>
       <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
-        <button id="btn-options-back" class="setup-btn">← Back</button>
+        <button id="btn-options-back" class="setup-btn">&larr; Back</button>
+      </div>
+    </div>
+
+    <!-- Account -->
+    <div id="setup-step-account" class="setup-card" style="display:none">
+      <h1 class="title" style="font-size:2rem">ACCOUNT</h1>
+
+      <!-- Not signed in -->
+      <div id="acct-signed-out">
+        <div class="setup-lore"><p>You are not signed in.</p></div>
+        <div class="setup-buttons" style="margin-top:0.75rem">
+          <button id="btn-acct-goto-mp" class="setup-btn primary">Sign In</button>
+        </div>
+      </div>
+
+      <!-- Signed in -->
+      <div id="acct-signed-in" style="display:none">
+        <div class="acct-section">
+          <div class="acct-label">Username</div>
+          <div class="acct-row">
+            <span id="acct-username" class="acct-value"></span>
+            <button id="btn-acct-edit-name" class="setup-btn secondary acct-inline-btn">Edit</button>
+          </div>
+          <div id="acct-name-edit" style="display:none;margin-top:0.4rem">
+            <input id="acct-name-input" class="setup-input" type="text"
+                   placeholder="New username" maxlength="20" autocomplete="off">
+            <div style="display:flex;gap:0.4rem;margin-top:0.4rem">
+              <button id="btn-acct-save-name" class="setup-btn primary">Save</button>
+              <button id="btn-acct-cancel-name" class="setup-btn secondary">Cancel</button>
+            </div>
+            <p id="acct-name-error" class="setup-error" style="display:none"></p>
+          </div>
+        </div>
+
+        <div class="acct-section">
+          <div class="acct-label">Email</div>
+          <div class="acct-row">
+            <span id="acct-email" class="acct-value"></span>
+            <button id="btn-acct-link-email" class="setup-btn secondary acct-inline-btn">Link Email</button>
+          </div>
+          <div id="acct-email-form" style="display:none;margin-top:0.4rem">
+            <input id="acct-email-input" class="setup-input" type="email"
+                   placeholder="your@email.com" autocomplete="email">
+            <button id="btn-acct-send-link" class="setup-btn primary" style="margin-top:0.4rem">Send Link</button>
+            <p id="acct-email-status" class="setup-hint" style="display:none"></p>
+          </div>
+        </div>
+
+        <div class="acct-section">
+          <div class="acct-label">Record</div>
+          <div id="acct-stats" class="acct-value"></div>
+        </div>
+
+        <div class="setup-buttons" style="margin-top:1rem">
+          <button id="btn-acct-signout" class="setup-btn secondary">Sign Out</button>
+        </div>
+      </div>
+
+      <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
+        <button id="btn-account-back" class="setup-btn">&larr; Back</button>
       </div>
     </div>
 
@@ -317,7 +466,7 @@
     </div>
   </div>
 
-  <div id="version-badge" class="version-badge"></div>
+  <a id="version-badge" class="version-badge version-link"></a>
 
   </div><!-- /#setup-screen -->
 
@@ -353,6 +502,17 @@
         <canvas id="game-canvas"></canvas>
         <!-- Step-by-step continue bar: shown during step mode resolution -->
         <div id="step-continue-bar" style="display:none">👆 Click to advance</div>
+        <!-- Replay HUD: shown during full-game replay -->
+        <div id="replay-hud" style="display:none">
+          <div class="replay-controls">
+            <button id="replay-back-btn"  class="replay-ctrl-btn" title="Previous round">⏮</button>
+            <button id="replay-play-btn"  class="replay-ctrl-btn active" title="Play (0.5×)">▶</button>
+            <button id="replay-pause-btn" class="replay-ctrl-btn" title="Pause">⏸</button>
+            <button id="replay-ff-btn"    class="replay-ctrl-btn" title="Fast (1×)">⏩</button>
+            <button id="replay-vff-btn"   class="replay-ctrl-btn" title="Very Fast (1.5×)">⏭</button>
+            <button id="replay-stop-btn"  class="replay-ctrl-btn replay-stop" title="Stop">■</button>
+          </div>
+        </div>
         <!-- Unit stats bar: shown during planning when a unit is selected -->
         <div id="unit-stats-bar" style="display:none"></div>
         <!-- Zoom controls — always visible on desktop, hidden on touch-only devices -->
@@ -378,12 +538,12 @@
             <button class="speed-option" data-mode="fast">
               <span class="speed-option-icon">⏩</span>
               <span class="speed-option-label">Fast</span>
-              <span class="speed-option-desc">Dialog on death only</span>
+              <span class="speed-option-desc">Cinematic pace, no popups</span>
             </button>
-            <button class="speed-option" data-mode="instant">
+            <button class="speed-option" data-mode="vfast">
               <span class="speed-option-icon">⏭</span>
-              <span class="speed-option-label">Instant</span>
-              <span class="speed-option-desc">No dialogs, no pauses</span>
+              <span class="speed-option-label">Very Fast</span>
+              <span class="speed-option-desc">1.5× speed, no popups</span>
             </button>
           </div>
         </div>
@@ -413,11 +573,23 @@
         <div class="plan-panel-footer">
           <button id="plan-clear-btn" class="plan-btn secondary">✕ Clear</button>
           <button id="plan-submit-btn" class="plan-btn primary">✓ Submit</button>
-          <span id="plan-countdown" class="plan-countdown" style="display:none"></span>
         </div>
         <div id="plan-players" class="plan-players" style="display:none"></div>
         <div id="plan-inventory" class="plan-inventory"></div>
         <div id="plan-status" class="plan-status"></div>
+      </div>
+
+      <!-- Grace dialog — shown when planning time expires, offers 5s to submit -->
+      <div id="grace-dialog" class="grace-dialog">
+        <div class="grace-card">
+          <div class="grace-title">&#9200; Time's Up!</div>
+          <div class="grace-message">Your planning time has expired.</div>
+          <div class="grace-countdown">Auto-submitting in <span id="grace-seconds">5</span>s&#8230;</div>
+          <div class="grace-buttons">
+            <button id="grace-submit-current" class="plan-btn primary">&#10003; Submit Current Plan</button>
+            <button id="grace-submit-empty" class="plan-btn secondary">&#10005; Submit Empty Plan</button>
+          </div>
+        </div>
       </div>
     </main>
 

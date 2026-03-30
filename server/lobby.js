@@ -4,10 +4,12 @@ import { GameState, Player } from '../src/game.js';
 import { WitchAI, HeroAI, HERO_PERSONALITIES, WITCH_PERSONALITIES } from '../src/ai.js';
 import { serializeState, deserializeState } from './state-sync.js';
 import { recordResult }                    from './leaderboard.js';
+import { recordGameStats }                 from './game-stats.js';
 import { resolvePlansMP, ResEventType }    from './resolver.js';
 import { compileTurnBattleSummary }        from '../src/battle-utils.js';
 import { PlanActionType }                  from '../src/planner.js';
-import { upsertSave, deleteSave, getSave } from './saves.js';
+import { upsertSave, deleteSave, getSave,
+         createCompletedGame }             from './saves.js';
 import { VERSION }                         from '../src/version.js';
 import { generateMultipleStarts }          from '../src/map.js';
 import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS } from '../src/entities.js';
@@ -165,6 +167,7 @@ function createRoom(config = {}) {
     takeoverTimers:   new Map(),
     spectators:       new Set(),
     chronicle:        [],
+    replayRounds:     [],   // { roundNum, preStateJson, stepsJson }[]
     createdAt:        Date.now(),
   };
 
@@ -416,6 +419,9 @@ function _executeResolution(room) {
     });
   }
 
+  // Snapshot state BEFORE resolution for full-game replay
+  const preStateJson = JSON.stringify(serializeState(state));
+
   let steps;
   try {
     steps = resolvePlansMP(state, playerEntries);
@@ -466,6 +472,13 @@ function _executeResolution(room) {
     })),
     entitySnapshot: step.entitySnapshot ?? [],
   }));
+
+  // Store round data for full-game replay (roundNum is pre-endRound value)
+  room.replayRounds.push({
+    roundNum:    state.round - 1,  // endRound() already incremented state.round
+    preStateJson,
+    stepsJson:   JSON.stringify(serializedSteps),
+  });
 
   const resolutionMsg = { type: 'resolutionComplete', steps: serializedSteps, finalState };
   broadcast(room, resolutionMsg);
@@ -656,7 +669,68 @@ function checkAndHandleGameOver(room) {
     record(seat.playerId, outcome);
   }
 
+  // Record per-game stats
+  try {
+    const firstHero  = room.players.find(s => s.faction === 'hero'  && !s.isAI);
+    const firstWitch = room.players.find(s => s.faction === 'witch' && !s.isAI);
+    const heroSlot   = room.slots?.find(s => s.faction === 'hero'  && s.status === 'ai');
+    const witchSlot  = room.slots?.find(s => s.faction === 'witch' && s.status === 'ai');
+    recordGameStats({
+      id:                randomUUID(),
+      mode:              'online',
+      map_size:          room.state.mapSize || 'standard',
+      winner:            room.state.winner,
+      win_reason:        room.state.winReason,
+      rounds:            room.state.round,
+      final_phase:       room.state.phase,
+      hero_score:        room.state.nodeScore?.hero  || 0,
+      witch_score:       room.state.nodeScore?.witch || 0,
+      hero_kills:        room.state.heroKills  || 0,
+      witch_kills:       room.state.witchKills || 0,
+      hero_survivors:    room.state.entities.filter(e => e.owner === 'hero' && e.type === 'survivor').length,
+      witch_summons:     room.state.witchSummonCount || 0,
+      hero_personality:  heroSlot?.personality  || null,
+      witch_personality: witchSlot?.personality || null,
+      hero_player_id:    firstHero?.playerId   || null,
+      witch_player_id:   firstWitch?.playerId  || null,
+      game_version:      VERSION,
+      fog_of_war:        room.state.fogOfWar ? 1 : 0,
+      duration_ms:       Date.now() - room.createdAt,
+    });
+  } catch (err) { console.error(`[room ${room.id}] recordGameStats error:`, err); }
+
   try { deleteSave(room.id); } catch (err) { console.error(`[room ${room.id}] deleteSave error:`, err); }
+
+  // Persist full-game replay
+  if (room.replayRounds.length > 0) {
+    try {
+      const gameId    = randomUUID();
+      const firstHero  = room.players.find(s => s.faction === 'hero'  && !s.isAI);
+      const firstWitch = room.players.find(s => s.faction === 'witch' && !s.isAI);
+      const heroName   = room.players.find(s => s.faction === 'hero')?.name  ?? '';
+      const witchName  = room.players.find(s => s.faction === 'witch')?.name ?? '';
+      const humanHero  = room.players.some(s => s.faction === 'hero'  && !s.isAI);
+      const humanWitch = room.players.some(s => s.faction === 'witch' && !s.isAI);
+      const mode = humanHero && humanWitch ? 'hvh'
+                 : humanHero               ? 'hvai'
+                 : humanWitch              ? 'aivh'
+                 :                          'aivai';
+      createCompletedGame(gameId, room.id, {
+        heroPlayerId:  firstHero?.playerId  ?? null,
+        witchPlayerId: firstWitch?.playerId ?? null,
+        heroName,
+        witchName,
+        winner:      room.state.winner      ?? '',
+        winReason:   room.state.winReason   ?? '',
+        totalRounds: room.state.round - 1,
+        gameVersion: VERSION,
+        mode,
+      }, room.replayRounds);
+    } catch (err) {
+      console.error(`[room ${room.id}] createCompletedGame error:`, err);
+    }
+  }
+
   setTimeout(() => destroyRoom(room), 5_000);
 }
 
@@ -905,6 +979,15 @@ export function handlePlanSubmit(playerId, roomId, plan) {
   _startPlanningTimer(room);
 
   _submitPlayerPlan(room, playerId, plan);
+
+  // Notify remaining players that the deadline has been extended
+  if (room.state.planningPhase) {
+    for (const seat of room.players) {
+      if (!room.state.playerReady.get(seat.playerId)) {
+        send(seat.ws, { type: 'timerReset', timeoutMs: TURN_TIMEOUT_MS });
+      }
+    }
+  }
 }
 
 /** Legacy handler — kept for clients that submit via the old 'endTurn' message. */

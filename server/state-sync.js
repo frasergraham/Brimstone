@@ -4,6 +4,7 @@
 import { VERSION }           from '../src/version.js';
 import { Entity, bumpEntityId } from '../src/entities.js';
 import { GameState }         from '../src/game.js';
+import { setMapDimensions }  from '../src/hex.js';
 
 export function serializeState(state) {
   const tiles = [];
@@ -48,6 +49,7 @@ export function serializeState(state) {
     ability:       e.ability       ?? null,
     abilityLabel:  e.abilityLabel  ?? null,
     actedThisTurn: e.actedThisTurn ?? false,
+    defendCount:   e.defendCount   ?? 0,
     items:         { ...e.items },
     // alive is omitted — Entity derives it from hp via getter
   }));
@@ -74,7 +76,13 @@ export function serializeState(state) {
     winReason:            state.winReason,
     attritionLevel:       state.attritionLevel,
     attritionChanged:     state.attritionChanged ?? false,
+    heroKills:            state.heroKills        ?? 0,
+    witchKills:           state.witchKills       ?? 0,
+    witchSummonCount:     state.witchSummonCount ?? 0,
     nodeScore:            { ...state.nodeScore },
+    disableScoring:       !!state.disableScoring,
+    maxDiscoverableSurvivors: state.maxDiscoverableSurvivors ?? null,
+    discoveredSurvivorCount:  state.discoveredSurvivorCount ?? 0,
     log:                  [...state.log],
     witchObjectives:      state.witchObjectives.map(o => ({
       col:        o.col,
@@ -94,6 +102,7 @@ export function serializeState(state) {
     witchId:              state.witch?.id ?? null,
     mapCols,
     mapRows,
+    mapSize:              state.mapSize ?? 'standard',
     tiles,
     entities,
   };
@@ -130,6 +139,11 @@ export function deserializeState(snap) {
   }, 0);
   bumpEntityId(maxId);
 
+  // Restore global hex math dimensions so neighbor/distance calculations use the
+  // correct grid size. The constructor above generated a default-size map which
+  // set MAP_COLS/MAP_ROWS to standard defaults; overwrite them now.
+  setMapDimensions(snap.mapCols, snap.mapRows);
+
   // ── Leader references ─────────────────────────────────────────────────────
   state.hero  = state.entities.find(e => e.id === snap.heroId)  ?? null;
   state.witch = state.entities.find(e => e.id === snap.witchId) ?? null;
@@ -153,6 +167,9 @@ export function deserializeState(snap) {
   state.attritionLevel       = snap.attritionLevel       ?? 0;
   state.attritionChanged     = snap.attritionChanged     ?? false;
   state.nodeScore            = { ...snap.nodeScore };
+  state.disableScoring       = !!snap.disableScoring;
+  state.maxDiscoverableSurvivors = snap.maxDiscoverableSurvivors ?? null;
+  state.discoveredSurvivorCount  = snap.discoveredSurvivorCount  ?? 0;
   state.log                  = [...snap.log];
   state.witchObjectives      = snap.witchObjectives.map(o => ({
     col:        o.col,
@@ -169,8 +186,12 @@ export function deserializeState(snap) {
   state.lastDayDamage        = [...(snap.lastDayDamage   || [])];
   state.lastHazardLog        = [...(snap.lastHazardLog   || [])];
   state.fogOfWar             = snap.fogOfWar;
+  state.mapSize              = snap.mapSize   ?? 'standard';
   state.winner               = snap.winner    ?? null;
   state.winReason            = snap.winReason ?? null;
+  state.heroKills            = snap.heroKills        ?? 0;
+  state.witchKills           = snap.witchKills       ?? 0;
+  state.witchSummonCount     = snap.witchSummonCount ?? 0;
 
   // ── Planning fields — reset to clean pre-planning state ──────────────────
   state.planningPhase    = false;

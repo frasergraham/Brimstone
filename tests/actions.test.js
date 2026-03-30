@@ -170,8 +170,14 @@ describe('executeMove', () => {
     const t = state.tiles.get(hexKey(target.col, target.row));
     t.hiddenSurvivor = true;
 
+    const origRandom = Math.random;
+    Math.random = () => 0.1; // always below discovery threshold
     const countBefore = state.entities.length;
-    executeMove(state, hero, target.col, target.row);
+    try {
+      executeMove(state, hero, target.col, target.row);
+    } finally {
+      Math.random = origRandom;
+    }
     assert.ok(state.entities.length > countBefore, 'A survivor should be added');
     assert.equal(t.hiddenSurvivor, false, 'hiddenSurvivor flag should be cleared');
     // The new entity should be a hero-side survivor
@@ -188,8 +194,14 @@ describe('executeMove', () => {
     const t = state.tiles.get(hexKey(target.col, target.row));
     t.hiddenSurvivor = true;
 
+    const origRandom = Math.random;
+    Math.random = () => 0.1; // always below discovery threshold
     const countBefore = state.entities.length;
-    executeMove(state, witch, target.col, target.row);
+    try {
+      executeMove(state, witch, target.col, target.row);
+    } finally {
+      Math.random = origRandom;
+    }
     assert.ok(state.entities.length > countBefore, 'An entity should be added');
     const newEnt = state.entities[state.entities.length - 1];
     assert.equal(newEnt.type, EntityType.ZOMBIE, 'Witch should raise a zombie from hidden survivor');
@@ -213,7 +225,11 @@ describe('executeMove', () => {
     const target = firstReachable(state, hero);
     if (!target) return;
     state.tiles.get(hexKey(target.col, target.row)).hiddenSurvivor = true;
-    const r = executeMove(state, hero, target.col, target.row);
+    const origRandom = Math.random;
+    Math.random = () => 0.1;
+    let r;
+    try { r = executeMove(state, hero, target.col, target.row); }
+    finally { Math.random = origRandom; }
     assert.ok(r.encounterSurvivor, 'encounterSurvivor should be set');
     assert.equal(r.encounterSurvivor.type, 'survivor');
     assert.ok(r.encounterSurvivor.name, 'should have a name');
@@ -229,7 +245,11 @@ describe('executeMove', () => {
     const target = firstReachable(state, witch);
     if (!target) return;
     state.tiles.get(hexKey(target.col, target.row)).hiddenSurvivor = true;
-    const r = executeMove(state, witch, target.col, target.row);
+    const origRandom = Math.random;
+    Math.random = () => 0.1;
+    let r;
+    try { r = executeMove(state, witch, target.col, target.row); }
+    finally { Math.random = origRandom; }
     assert.ok(r.encounterSurvivor, 'encounterSurvivor should be set for zombie');
     assert.equal(r.encounterSurvivor.type, 'zombie');
     assert.ok(typeof r.encounterSurvivor.hp === 'number', 'zombie should have hp');
@@ -387,18 +407,7 @@ describe('executeBattle', () => {
     assert.equal(r.success, true);
   });
 
-  test('hero gets phase bonus in DAY', () => {
-    const state = freshState();
-    state.phase = Phase.DAY;
-    const minion = createMinion(state.hero.col, state.hero.row);
-    state.entities.push(minion);
-
-    // We can't control random, but the breakdown should show phaseBonus=1
-    const r = executeBattle(state, state.hero, minion);
-    assert.equal(r.breakdown.phaseBonus, 1, 'Hero should have phaseBonus=1 in DAY');
-  });
-
-  test('witch gets phase bonus in NIGHT', () => {
+  test('witch gets +2 phase bonus in NIGHT (attacker)', () => {
     const state = freshState();
     state.phase = Phase.NIGHT;
     const survivor = new Entity(EntityType.SURVIVOR, 'hero', state.witch.col, state.witch.row);
@@ -406,7 +415,16 @@ describe('executeBattle', () => {
     state.entities.push(survivor);
 
     const r = executeBattle(state, state.witch, survivor);
-    assert.equal(r.breakdown.phaseBonus, 1, 'Witch should have phaseBonus=1 in NIGHT');
+    assert.equal(r.breakdown.phaseBonus, 2, 'Witch should have phaseBonus=2 in NIGHT');
+  });
+
+  test('hero does NOT get phase bonus in DAY (removed)', () => {
+    const state = freshState();
+    state.phase = Phase.DAY;
+    const minion = createMinion(state.hero.col, state.hero.row);
+    state.entities.push(minion);
+    const r = executeBattle(state, state.hero, minion);
+    assert.equal(r.breakdown.phaseBonus, 0, 'Hero should have no phase bonus in DAY');
   });
 
   test('hero does NOT get phase bonus in NIGHT', () => {
@@ -418,7 +436,65 @@ describe('executeBattle', () => {
     assert.equal(r.breakdown.phaseBonus, 0, 'Hero should have no phase bonus in NIGHT');
   });
 
-  test('fortification absorbs damage before entity takes HP damage', () => {
+  test('witch gets +2 phase bonus in NIGHT', () => {
+    const state = freshState();
+    state.phase = Phase.NIGHT;
+    const survivor = new Entity(EntityType.SURVIVOR, 'hero', state.witch.col, state.witch.row);
+    survivor.items = {};
+    state.entities.push(survivor);
+
+    const r = executeBattle(state, state.witch, survivor);
+    assert.equal(r.breakdown.phaseBonus, 2, 'Witch should have phaseBonus=2 in NIGHT');
+  });
+
+  test('hero defender gets fatigue after 2 defenses', () => {
+    const state = freshState();
+    const minion = createMinion(state.hero.col, state.hero.row);
+    state.entities.push(minion);
+    // Give hero lots of HP so it survives
+    state.hero.hp = 50;
+    state.hero.maxHp = 50;
+    minion.attackBonus = -50; // ensure miss so hero survives
+
+    // First 2 defenses: no fatigue penalty
+    const r1 = executeBattle(state, minion, state.hero);
+    assert.equal(r1.breakdown.fatiguePenalty, 0, 'No fatigue on first defense');
+    const r2 = executeBattle(state, minion, state.hero);
+    assert.equal(r2.breakdown.fatiguePenalty, 0, 'No fatigue on second defense');
+
+    // Third defense: fatigue kicks in (2 prior defenses / 2 = 1)
+    const r3 = executeBattle(state, minion, state.hero);
+    assert.equal(r3.breakdown.fatiguePenalty, 1, 'Fatigue -1 DEF after 2 prior defenses');
+
+    // Fourth defense: still 1 (3 / 2 = 1)
+    const r4 = executeBattle(state, minion, state.hero);
+    assert.equal(r4.breakdown.fatiguePenalty, 1, 'Fatigue still -1 after 3 prior defenses');
+
+    // Fifth defense: fatigue increases (4 / 2 = 2)
+    const r5 = executeBattle(state, minion, state.hero);
+    assert.equal(r5.breakdown.fatiguePenalty, 2, 'Fatigue -2 DEF after 4 prior defenses');
+  });
+
+  test('witch defender does NOT get fatigue', () => {
+    const state = freshState();
+    state.witch.hp = 50;
+    state.witch.maxHp = 50;
+    state.hero.attackBonus = -50; // ensure miss
+
+    executeBattle(state, state.hero, state.witch);
+    executeBattle(state, state.hero, state.witch);
+    const r3 = executeBattle(state, state.hero, state.witch);
+    assert.equal(r3.breakdown.fatiguePenalty, 0, 'Witch should never get fatigue');
+  });
+
+  test('fatigue resets on resetTurn', () => {
+    const state = freshState();
+    state.hero.defendCount = 4;
+    state.hero.resetTurn();
+    assert.equal(state.hero.defendCount, 0, 'defendCount should reset');
+  });
+
+  test('fortification damaged when defender takes damage, defender still takes HP damage', () => {
     const state = freshState();
     const minion = createMinion(state.hero.col, state.hero.row);
     state.entities.push(minion);
@@ -431,11 +507,65 @@ describe('executeBattle', () => {
     const hpBefore = minion.hp;
     const r = executeBattle(state, state.hero, minion);
 
-    if (r.hit) {
-      // Fort should have absorbed at least 1 point
-      assert.ok(r.fortAbsorbed >= 0);
-      const expectedDamage = Math.max(0, (r.attackRoll >= 2 * r.defenseRoll ? 2 : 1) - r.fortAbsorbed);
-      assert.equal(minion.hp, Math.max(0, hpBefore - expectedDamage));
+    assert.ok(r.hit, 'Should be a hit with attackBonus=50');
+    // Defender takes real HP damage (fort no longer absorbs)
+    assert.ok(r.damage > 0, 'Defender should take damage directly');
+    // Fort also loses 1 level
+    assert.equal(r.fortDamaged, 1, 'fortDamaged should be 1');
+    assert.equal(minionTile.fortifyLevel, fortBefore - 1, 'Fort level should drop by 1');
+  });
+
+  test('fortification does NOT degrade when attacker misses', () => {
+    const state = freshState();
+    const minion = createMinion(state.hero.col, state.hero.row);
+    state.entities.push(minion);
+    const minionTile = state.tiles.get(hexKey(minion.col, minion.row));
+    minionTile.fortifyLevel = 2;
+    // Give minion huge defense so hero always misses
+    minion.defenseBonus = 50;
+
+    const fortBefore = minionTile.fortifyLevel;
+    const r = executeBattle(state, state.hero, minion);
+
+    assert.ok(!r.hit, 'Should be a miss with defender defenseBonus=50');
+    assert.equal(r.fortDamaged, 0, 'fortDamaged should be 0 on miss');
+    assert.equal(minionTile.fortifyLevel, fortBefore, 'Fort level should not change on miss');
+  });
+
+  test('fortification does NOT degrade on tie (margin === 0)', () => {
+    const state = freshState();
+    const minion = createMinion(state.hero.col, state.hero.row);
+    state.entities.push(minion);
+    const minionTile = state.tiles.get(hexKey(minion.col, minion.row));
+    minionTile.fortifyLevel = 2;
+    const fortBefore = minionTile.fortifyLevel;
+
+    // Run many battles and check any tie case doesn't damage the fort
+    for (let i = 0; i < 50; i++) {
+      const s2 = freshState();
+      const m2 = createMinion(s2.hero.col, s2.hero.row);
+      s2.entities.push(m2);
+      const t2 = s2.tiles.get(hexKey(m2.col, m2.row));
+      t2.fortifyLevel = 2;
+      const r = executeBattle(s2, s2.hero, m2);
+      if (r.margin === 0) {
+        // Tie: fort should not degrade
+        assert.equal(r.fortDamaged, 0, 'fortDamaged should be 0 on tie');
+        assert.equal(t2.fortifyLevel, 2, 'Fort level should not change on tie');
+        break;
+      }
+    }
+  });
+
+  test('night hazard does NOT degrade fortifications', () => {
+    const state = freshState();
+    // Set all tiles with fortifyLevel > 1 and verify they stay unchanged after night
+    for (const t of state.tiles.values()) {
+      t.fortifyLevel = 3;
+    }
+    state._applyNightHazard(1);
+    for (const t of state.tiles.values()) {
+      assert.equal(t.fortifyLevel, 3, 'Night should no longer erode fortifications');
     }
   });
 
@@ -571,50 +701,42 @@ describe('executeSummon', () => {
     return freshState();
   }
 
-  function findSummonTarget(state) {
-    const witch = state.witch;
-    return emptyPassableNeighbor(state, witch);
-  }
-
-  test('metal → Iron Golem (costs 2 metal)', () => {
+  test('metal → Iron Golem spawns on witch tile (costs 2 metal)', () => {
     const state = witchState();
     state.inventory.witch[ResourceType.METAL] = 2;
-    const target = findSummonTarget(state);
-    if (!target) return;
+    const { col, row } = state.witch;
 
-    const r = executeSummon(state, state.witch, target.col, target.row);
+    const r = executeSummon(state, state.witch);
     assert.equal(r.success, true);
-    const summoned = state.entities.find(e => e.col === target.col && e.row === target.row);
-    assert.ok(summoned, 'A unit should appear on the target hex');
+    const summoned = state.entities.find(e => e !== state.witch && e.col === col && e.row === row);
+    assert.ok(summoned, 'A unit should appear on the witch tile');
     assert.equal(summoned.type, EntityType.IRON_GOLEM, 'Metal should summon Iron Golem');
     assert.equal(state.inventory.witch[ResourceType.METAL], 0, '2 metal should be consumed');
   });
 
-  test('wood → Wood Golem (costs 2 wood, when no metal)', () => {
+  test('wood → Wood Golem spawns on witch tile (costs 2 wood, when no metal)', () => {
     const state = witchState();
     state.inventory.witch[ResourceType.METAL] = 0;
     state.inventory.witch[ResourceType.WOOD] = 2;
-    const target = findSummonTarget(state);
-    if (!target) return;
+    const { col, row } = state.witch;
 
-    const r = executeSummon(state, state.witch, target.col, target.row);
+    const r = executeSummon(state, state.witch);
     assert.equal(r.success, true);
-    const summoned = state.entities.find(e => e.col === target.col && e.row === target.row);
+    const summoned = state.entities.find(e => e !== state.witch && e.col === col && e.row === row);
     assert.equal(summoned?.type, EntityType.WOOD_GOLEM, 'Wood should summon Wood Golem');
     assert.equal(state.inventory.witch[ResourceType.WOOD], 0, '2 wood should be consumed');
   });
 
-  test('other resource → Minion (costs 2 total)', () => {
+  test('other resource → Minion spawns on witch tile (costs 2 total)', () => {
     const state = witchState();
     state.inventory.witch[ResourceType.METAL] = 0;
     state.inventory.witch[ResourceType.WOOD] = 0;
     state.inventory.witch[ResourceType.FOOD] = 2;
-    const target = findSummonTarget(state);
-    if (!target) return;
+    const { col, row } = state.witch;
 
-    const r = executeSummon(state, state.witch, target.col, target.row);
+    const r = executeSummon(state, state.witch);
     assert.equal(r.success, true);
-    const summoned = state.entities.find(e => e.col === target.col && e.row === target.row);
+    const summoned = state.entities.find(e => e !== state.witch && e.col === col && e.row === row);
     assert.equal(summoned?.type, EntityType.MINION, 'Non-metal/wood resource should summon Minion');
     assert.equal(state.inventory.witch[ResourceType.FOOD], 0, '2 food should be consumed');
   });
@@ -622,46 +744,52 @@ describe('executeSummon', () => {
   test('fails when fewer than 2 total resources', () => {
     const state = witchState();
     state.inventory.witch = { [ResourceType.FOOD]: 1 };
-    const target = findSummonTarget(state);
-    if (!target) return;
 
-    const r = executeSummon(state, state.witch, target.col, target.row);
+    const r = executeSummon(state, state.witch);
     assert.equal(r.success, false, 'Should fail with only 1 resource');
   });
 
   test('fails when no resources', () => {
     const state = witchState();
     state.inventory.witch = {};
-    const target = findSummonTarget(state);
-    if (!target) return;
 
-    const r = executeSummon(state, state.witch, target.col, target.row);
+    const r = executeSummon(state, state.witch);
     assert.equal(r.success, false);
   });
 
-  test('allows multiple summons in the same turn', () => {
+  test('allows multiple summons in the same turn (stacking on witch tile)', () => {
     const state = witchState();
     state.inventory.witch[ResourceType.FOOD] = 6;
-    const target = findSummonTarget(state);
-    if (!target) return;
 
-    const r1 = executeSummon(state, state.witch, target.col, target.row);
+    const r1 = executeSummon(state, state.witch);
     assert.equal(r1.success, true, 'First summon should succeed');
 
-    // Find another empty neighbor for second summon
-    const target2 = emptyPassableNeighbor(state, state.witch);
-    if (!target2) return;
-    const r2 = executeSummon(state, state.witch, target2.col, target2.row);
+    const r2 = executeSummon(state, state.witch);
     assert.equal(r2.success, true, 'Second summon in same turn should also succeed');
   });
 
   test('costs 1 action', () => {
     const state = witchState();
     state.inventory.witch[ResourceType.FOOD] = 2;
-    const target = findSummonTarget(state);
-    if (!target) return;
-    const r = executeSummon(state, state.witch, target.col, target.row);
+    const r = executeSummon(state, state.witch);
     assert.equal(r.cost, 1);
+  });
+
+  test('summon available even when all adjacent hexes are occupied', () => {
+    // No adjacent-hex requirement — should still work
+    const state = witchState();
+    state.inventory.witch[ResourceType.FOOD] = 2;
+    // Fill all neighbors with entities
+    const neighbors = getNeighbors(state.witch.col, state.witch.row);
+    for (const n of neighbors) {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      if (t && t.type !== TileType.RIVER) {
+        const m = createMinion(n.col, n.row, null);
+        state.entities.push(m);
+      }
+    }
+    const r = executeSummon(state, state.witch);
+    assert.equal(r.success, true, 'Should summon even with all neighbors occupied');
   });
 });
 
@@ -754,6 +882,7 @@ describe('auto-equip weapon on loot find', () => {
     t.type = TileType.BUILDING;
     t.building = BuildingType.BLACKSMITH;
     t.explored = false;
+    t.hiddenSurvivor = false; // prevent survivor encounter from consuming Math.random calls
     return { state, hero, t };
   }
 
@@ -922,15 +1051,8 @@ describe('Inventory stash separation', () => {
     state.inventory.witch[ResourceType.METAL] = 1;
 
     // Consuming witch metal (via summon) should not touch the hero stash
-    const target = getNeighbors(state.witch.col, state.witch.row)
-      .find(n => {
-        const t = state.tiles.get(hexKey(n.col, n.row));
-        return t && t.type !== TileType.RIVER &&
-          !state.entities.some(e => e.col === n.col && e.row === n.row);
-      });
-    if (!target) return; // skip if map has no valid spawn hex (shouldn't happen)
-
-    executeSummon(state, state.witch, target.col, target.row);
+    // (summon fails here because only 1 metal, but the point is shared stash unchanged)
+    executeSummon(state, state.witch);
 
     assert.equal(state.inventory.shared[ResourceType.METAL] || 0, 0,
       'hero stash must be unchanged after witch summons');
@@ -1038,5 +1160,211 @@ describe('computeProjectedInventory', () => {
     const s = baseState();
     computeProjectedInventory(s, [{ type: PlanActionType.SUMMON }]);
     assert.equal(s.inventory.witch.metal, 4, 'original state unchanged');
+  });
+});
+
+// ── Survivor discovery (phase-based chance) ───────────────────────────────────
+
+describe('survivor discovery — phase-based move chance', () => {
+  // Helper: place a hiddenSurvivor on the first reachable tile and attempt the move.
+  function moveOntoSurvivor(state, actor, roll) {
+    const target = firstReachable(state, actor);
+    if (!target) return null;
+    state.tiles.get(hexKey(target.col, target.row)).hiddenSurvivor = true;
+    const origRandom = Math.random;
+    Math.random = () => roll;
+    let r;
+    try { r = executeMove(state, actor, target.col, target.row); }
+    finally { Math.random = origRandom; }
+    return { r, target };
+  }
+
+  test('DAY phase: roll below 0.5 discovers survivor', () => {
+    const state = freshState();
+    resetRoster();
+    state.phase = Phase.DAY;
+    const out = moveOntoSurvivor(state, state.hero, 0.49);
+    if (!out) return;
+    assert.ok(out.r.encounterSurvivor, 'survivor should be found');
+    assert.equal(state.tiles.get(hexKey(out.target.col, out.target.row)).hiddenSurvivor, false);
+  });
+
+  test('DAY phase: roll at or above 0.5 misses survivor', () => {
+    const state = freshState();
+    resetRoster();
+    state.phase = Phase.DAY;
+    const out = moveOntoSurvivor(state, state.hero, 0.5);
+    if (!out) return;
+    assert.equal(out.r.encounterSurvivor, null, 'survivor should not be found');
+    assert.equal(state.tiles.get(hexKey(out.target.col, out.target.row)).hiddenSurvivor, true,
+      'hiddenSurvivor flag should remain true when missed');
+  });
+
+  test('NIGHT phase: roll below 0.25 discovers survivor', () => {
+    const state = freshState();
+    resetRoster();
+    state.phase = Phase.NIGHT;
+    const out = moveOntoSurvivor(state, state.hero, 0.24);
+    if (!out) return;
+    assert.ok(out.r.encounterSurvivor, 'survivor should be found at night with low roll');
+  });
+
+  test('NIGHT phase: roll at or above 0.25 misses survivor', () => {
+    const state = freshState();
+    resetRoster();
+    state.phase = Phase.NIGHT;
+    const out = moveOntoSurvivor(state, state.hero, 0.25);
+    if (!out) return;
+    assert.equal(out.r.encounterSurvivor, null, 'survivor should not be found at night with 0.25 roll');
+    assert.equal(state.tiles.get(hexKey(out.target.col, out.target.row)).hiddenSurvivor, true);
+  });
+
+  test('DAWN phase: roll below 0.35 discovers survivor', () => {
+    const state = freshState(); // starts as DAWN by default
+    resetRoster();
+    const out = moveOntoSurvivor(state, state.hero, 0.34);
+    if (!out) return;
+    assert.ok(out.r.encounterSurvivor, 'survivor found at dawn with roll below threshold');
+  });
+
+  test('DAWN phase: roll at or above 0.35 misses survivor', () => {
+    const state = freshState();
+    resetRoster();
+    const out = moveOntoSurvivor(state, state.hero, 0.35);
+    if (!out) return;
+    assert.equal(out.r.encounterSurvivor, null, 'survivor missed at dawn with roll at threshold');
+    assert.equal(state.tiles.get(hexKey(out.target.col, out.target.row)).hiddenSurvivor, true);
+  });
+
+  test('DUSK phase: roll below 0.35 discovers survivor', () => {
+    const state = freshState();
+    resetRoster();
+    state.phase = Phase.DUSK;
+    const out = moveOntoSurvivor(state, state.hero, 0.34);
+    if (!out) return;
+    assert.ok(out.r.encounterSurvivor, 'survivor found at dusk with roll below threshold');
+  });
+
+  test('missed survivor does not create any new entity', () => {
+    const state = freshState();
+    resetRoster();
+    state.phase = Phase.NIGHT;
+    const countBefore = state.entities.length;
+    moveOntoSurvivor(state, state.hero, 0.9); // well above any threshold
+    assert.equal(state.entities.length, countBefore, 'no entity should be created on a miss');
+  });
+
+  test('witch misses: no zombie created', () => {
+    const state = freshState();
+    state.phase = Phase.NIGHT;
+    const countBefore = state.entities.length;
+    moveOntoSurvivor(state, state.witch, 0.9);
+    assert.equal(state.entities.length, countBefore, 'no zombie on a missed roll');
+  });
+
+  test('witch hits at night: zombie is created', () => {
+    const state = freshState();
+    state.phase = Phase.NIGHT;
+    const out = moveOntoSurvivor(state, state.witch, 0.1);
+    if (!out) return;
+    assert.ok(out.r.encounterSurvivor, 'witch should encounter something');
+    assert.equal(out.r.encounterSurvivor.type, 'zombie');
+  });
+});
+
+describe('survivor discovery — explore always finds', () => {
+  test('explore finds survivor regardless of phase (NIGHT)', () => {
+    const state = freshState();
+    resetRoster();
+    state.phase = Phase.NIGHT;
+    const hero = state.hero;
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.explored = false;
+    t.hiddenSurvivor = true;
+    const countBefore = state.entities.length;
+    const r = executeExplore(state, hero);
+    assert.equal(r.success, true);
+    assert.ok(state.entities.length > countBefore, 'explore should always find the survivor');
+    assert.equal(t.hiddenSurvivor, false, 'flag should be cleared');
+    assert.ok(r.encounterSurvivor, 'result should carry encounterSurvivor');
+    assert.equal(r.encounterSurvivor.type, 'survivor');
+  });
+
+  test('explore finds survivor regardless of phase (DAY)', () => {
+    const state = freshState();
+    resetRoster();
+    state.phase = Phase.DAY;
+    const hero = state.hero;
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.explored = false;
+    t.hiddenSurvivor = true;
+    const r = executeExplore(state, hero);
+    assert.ok(r.encounterSurvivor, 'should always find survivor when exploring regardless of phase');
+  });
+
+  test('explore find works even if Math.random would block discovery', () => {
+    const state = freshState();
+    resetRoster();
+    const hero = state.hero;
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.explored = false;
+    t.hiddenSurvivor = true;
+    const origRandom = Math.random;
+    Math.random = () => 0.99; // would block any phase-based move discovery
+    let r;
+    try { r = executeExplore(state, hero); }
+    finally { Math.random = origRandom; }
+    assert.ok(r.encounterSurvivor, 'explore must find survivor ignoring Math.random');
+    assert.equal(t.hiddenSurvivor, false);
+  });
+
+  test('explore with no hidden survivor returns no encounterSurvivor', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.explored = false;
+    t.hiddenSurvivor = false;
+    const r = executeExplore(state, hero);
+    assert.equal(r.encounterSurvivor, null);
+  });
+
+  test('maxDiscoverableSurvivors caps survivor discoveries', () => {
+    const state = freshState();
+    resetRoster();
+    state.maxDiscoverableSurvivors = 1;
+    state.discoveredSurvivorCount = 0;
+
+    const hero = state.hero;
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.explored = false;
+    t.hiddenSurvivor = true;
+
+    // First discovery succeeds
+    const r1 = executeExplore(state, hero);
+    assert.ok(r1.encounterSurvivor, 'first discovery should succeed');
+    assert.equal(state.discoveredSurvivorCount, 1);
+
+    // Second discovery is blocked
+    t.explored = false;
+    t.hiddenSurvivor = true;
+    const r2 = executeExplore(state, hero);
+    assert.equal(r2.encounterSurvivor, null, 'second discovery should be blocked by cap');
+    assert.equal(t.hiddenSurvivor, false, 'flag should still be cleared');
+  });
+
+  test('null maxDiscoverableSurvivors allows unlimited discoveries', () => {
+    const state = freshState();
+    resetRoster();
+    state.maxDiscoverableSurvivors = null;
+    state.discoveredSurvivorCount = 5;
+
+    const hero = state.hero;
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.explored = false;
+    t.hiddenSurvivor = true;
+
+    const r = executeExplore(state, hero);
+    assert.ok(r.encounterSurvivor, 'discovery should succeed when cap is null');
+    assert.equal(state.discoveredSurvivorCount, 6);
   });
 });

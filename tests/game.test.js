@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {
   GameState, Phase, Player, computeActions, WIN_REASON,
 } from '../src/game.js';
-import { EntityType } from '../src/entities.js';
+import { EntityType, createMinion } from '../src/entities.js';
 import { hexKey } from '../src/hex.js';
 import { TileType } from '../src/tiles.js';
 
@@ -269,6 +269,37 @@ describe('Victory — node scoring', () => {
     state._checkNodeObjectives(Phase.DUSK);
     assert.equal(state.nodeScore.hero, heroBefore, 'hero should not score on tie');
     assert.equal(state.nodeScore.witch, witchBefore, 'witch should not score on tie');
+  });
+});
+
+// ── disableScoring skips node objectives in endRound ─────────────────────────
+
+describe('disableScoring in endRound', () => {
+  test('endRound does not score nodes when disableScoring is true', () => {
+    const state = new GameState(true, true);
+    state.disableScoring = true;
+
+    // Place hero on all 3 nodes to guarantee sweep
+    const hero = state.hero;
+    for (const obj of state.witchObjectives) {
+      const e = createMinion(obj.col, obj.row, 'p1');
+      e.owner = 'hero';
+      state.entities.push(e);
+    }
+
+    // Advance to a dawn round
+    while (state.phase !== Phase.DAWN && !state.gameOver) {
+      state.startPlanning();
+      state.submitPlan('hero', []);
+      state.submitPlan('witch', []);
+      state.endRound();
+    }
+
+    // Score should remain 0 and no winner from nodes
+    assert.equal(state.nodeScore.hero, 0, 'hero score should remain 0');
+    assert.equal(state.nodeScore.witch, 0, 'witch score should remain 0');
+    assert.ok(!state.winner || state.winReason === undefined ||
+      !state.winReason?.includes('Node'), 'should not win via nodes');
   });
 });
 

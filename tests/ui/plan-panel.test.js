@@ -227,37 +227,194 @@ describe('_doSubmitPlan', () => {
   });
 });
 
-// ── countdown timer ───────────────────────────────────────────────────────────
+// ── submit button progress bar ────────────────────────────────────────────────
 
-describe('countdown timer', () => {
-  test('countdown element shown when timeoutMs > 0', () => {
+describe('submit button progress bar', () => {
+  test('sets --progress on submit button when timeoutMs > 0', () => {
     const { ui, els } = makeUI();
-    els['plan-countdown'].style.display = 'none';
 
     ui.enterPlanningMode('hero', 3, 60000);
 
-    assert.equal(els['plan-countdown'].style.display, '',
-      'countdown should be visible when timeout is set');
+    const progress = els['plan-submit-btn'].style._props['--progress'];
+    assert.ok(progress !== undefined,
+      '--progress should be set on submit button when timeout is active');
 
-    // Clean up interval
     ui._stopCountdown();
   });
 
-  test('countdown not shown when timeoutMs is 0 (local mode)', () => {
+  test('submit button text shows mm:ss when countdown active', () => {
     const { ui, els } = makeUI();
-    els['plan-countdown'].style.display = 'none';
+
+    ui.enterPlanningMode('hero', 3, 60000);
+
+    assert.ok(els['plan-submit-btn'].textContent.includes(':'),
+      `submit button should show mm:ss, got: "${els['plan-submit-btn'].textContent}"`);
+
+    ui._stopCountdown();
+  });
+
+  test('no --progress set when timeoutMs is 0 (local mode)', () => {
+    const { ui, els } = makeUI();
 
     ui.enterPlanningMode('hero', 3, 0);
 
-    assert.equal(els['plan-countdown'].style.display, 'none',
-      'countdown should remain hidden in local (no-timeout) mode');
+    const progress = els['plan-submit-btn'].style._props['--progress'];
+    assert.equal(progress, undefined,
+      '--progress should not be set in local (no-timeout) mode');
   });
 
-  test('_stopCountdown hides countdown element', () => {
+  test('sets --progress on header submit button', () => {
+    const { ui, els } = makeUI();
+
+    ui.enterPlanningMode('hero', 3, 60000);
+
+    const progress = els['end-turn-btn'].style._props['--progress'];
+    assert.ok(progress !== undefined,
+      '--progress should be set on header submit button when timeout is active');
+
+    ui._stopCountdown();
+  });
+
+  test('_stopCountdown resets submit button to default', () => {
     const { ui, els } = makeUI();
     ui.enterPlanningMode('hero', 3, 60000);
     ui._stopCountdown();
-    assert.equal(els['plan-countdown'].style.display, 'none',
-      'countdown should be hidden after stop');
+
+    assert.equal(els['plan-submit-btn'].style._props['--progress'], undefined,
+      '--progress should be removed after stop');
+    assert.equal(els['plan-submit-btn'].textContent, '\u2713 Submit',
+      'button text should reset to default');
+    assert.ok(!els['plan-submit-btn']._classList.has('countdown-urgent'),
+      'urgent class should be removed');
+  });
+
+  test('_stopCountdown removes --progress from floating button', () => {
+    const { ui, els } = makeUI();
+    ui.enterPlanningMode('hero', 3, 60000);
+    ui._stopCountdown();
+
+    assert.equal(els['end-turn-btn'].style._props['--progress'], undefined,
+      '--progress should be removed from floating button after stop');
+  });
+
+  test('_doSubmitPlan resets progress bar', () => {
+    const { ui, els } = makeUI();
+    ui.enterPlanningMode('hero', 3, 60000);
+    ui._doSubmitPlan();
+
+    assert.equal(els['plan-submit-btn'].style._props['--progress'], undefined,
+      '--progress should be removed after submitting');
+  });
+});
+
+// ── grace dialog ──────────────────────────────────────────────────────────────
+
+describe('grace dialog', () => {
+  test('_showGraceDialog makes dialog visible', () => {
+    const { ui, els } = makeUI();
+    ui.enterPlanningMode('hero', 3);
+
+    ui._showGraceDialog(5000);
+
+    assert.ok(els['grace-dialog']._classList.has('visible'),
+      'grace dialog should have visible class');
+
+    ui._dismissGraceDialog();
+  });
+
+  test('_dismissGraceDialog hides dialog', () => {
+    const { ui, els } = makeUI();
+    ui.enterPlanningMode('hero', 3);
+    ui._showGraceDialog(5000);
+    ui._dismissGraceDialog();
+
+    assert.ok(!els['grace-dialog']._classList.has('visible'),
+      'grace dialog should not have visible class after dismiss');
+  });
+
+  test('_showGraceDialog is no-op when already submitted', () => {
+    const { ui, els } = makeUI();
+    ui.enterPlanningMode('hero', 3);
+    ui._doSubmitPlan();
+
+    ui._showGraceDialog(5000);
+
+    assert.ok(!els['grace-dialog']._classList.has('visible'),
+      'grace dialog should not show when plan is already submitted');
+  });
+
+  test('_stopCountdown dismisses grace dialog', () => {
+    const { ui, els } = makeUI();
+    ui.enterPlanningMode('hero', 3);
+    ui._showGraceDialog(5000);
+    ui._stopCountdown();
+
+    assert.ok(!els['grace-dialog']._classList.has('visible'),
+      'grace dialog should be dismissed by _stopCountdown');
+    assert.equal(ui._graceActive, false);
+  });
+
+  test('exitPlanningMode cleans up grace dialog', () => {
+    const { ui, els } = makeUI();
+    ui.enterPlanningMode('hero', 3);
+    ui._showGraceDialog(5000);
+    ui.exitPlanningMode();
+
+    assert.ok(!els['grace-dialog']._classList.has('visible'),
+      'grace dialog should be dismissed on exit');
+  });
+});
+
+// ── header submit button ────────────────────────────────────────────────────
+
+describe('header submit button', () => {
+  test('end-turn-btn gets planning-active class during planning', () => {
+    const { ui, els } = makeUI();
+    ui.enterPlanningMode('hero', 3);
+
+    assert.ok(els['end-turn-btn']._classList.has('planning-active'),
+      'end-turn-btn should have planning-active class in planning mode');
+
+    ui._stopCountdown();
+  });
+
+  test('planning-active class removed after exiting planning', () => {
+    const { ui, els } = makeUI();
+    ui.enterPlanningMode('hero', 3);
+    ui.exitPlanningMode();
+
+    assert.ok(!els['end-turn-btn']._classList.has('planning-active'),
+      'planning-active should be removed after exit');
+  });
+
+  test('plan-open class set when panel is expanded', () => {
+    const { ui, els } = makeUI();
+    // Simulate expanded panel (visible and not collapsed)
+    els['plan-panel'].style.display = '';
+    els['plan-panel'].classList.remove('collapsed');
+
+    ui.enterPlanningMode('hero', 3);
+
+    assert.ok(els['end-turn-btn']._classList.has('plan-open'),
+      'plan-open should be set when panel is expanded');
+
+    ui._stopCountdown();
+  });
+
+  test('plan-open class not set when panel is collapsed', () => {
+    const { ui, els } = makeUI();
+    // Simulate collapsed panel
+    els['plan-panel'].style.display = '';
+    els['plan-panel'].classList.add('collapsed');
+
+    ui.enterPlanningMode('hero', 3);
+    // enterPlanningMode may uncollapse on wide screens, so force collapsed
+    els['plan-panel'].classList.add('collapsed');
+    ui._renderEndTurnBtn();
+
+    assert.ok(!els['end-turn-btn']._classList.has('plan-open'),
+      'plan-open should not be set when panel is collapsed');
+
+    ui._stopCountdown();
   });
 });

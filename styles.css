@@ -575,10 +575,12 @@ canvas { touch-action: pan-x pan-y; }
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  transition: border-color 0.15s, color 0.15s;
   padding: 0;
 }
-.header-icon-btn:hover { border-color: var(--text); color: var(--text-bright); }
+@media (hover: hover) {
+  .header-icon-btn { transition: border-color 0.15s, color 0.15s; }
+  .header-icon-btn:hover { border-color: var(--text); color: var(--text-bright); }
+}
 .header-icon-btn:disabled { opacity: 0.3; cursor: default; }
 
 /* End Turn: slightly wider to fit text, urgent pulse when no actions left */
@@ -593,6 +595,23 @@ canvas { touch-action: pan-x pan-y; }
   color: var(--day);
   border-color: var(--day);
   animation: pulse-gold 1.4s ease-in-out infinite;
+}
+/* During planning: progress bar + countdown on the header submit button */
+.end-turn-header.planning-active {
+  background: linear-gradient(to right, #a8872a var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.7);
+  border-color: rgba(255,255,255,0.2);
+  overflow: hidden;
+  min-width: 6.5rem;
+  text-align: center;
+}
+.end-turn-header.planning-active.countdown-urgent {
+  animation: btn-pulse 0.5s ease-in-out infinite alternate;
+}
+/* Hide header submit when plan panel is expanded */
+.end-turn-header.plan-open {
+  display: none;
 }
 
 /* ── In-game menu popup ──────────────────────────────────────────────── */
@@ -898,6 +917,25 @@ canvas { touch-action: pan-x pan-y; }
 
 .zoom-btn:active {
   background: rgba(200, 168, 75, 0.18);
+}
+
+/* Fit button in view-locked state */
+.zoom-btn.view-locked {
+  background: rgba(170, 130, 255, 0.22);
+  border-color: rgba(200, 160, 255, 0.7);
+  color: #d4b8ff;
+}
+.zoom-btn.view-locked::after {
+  content: '🔒';
+  font-size: 0.6rem;
+  position: absolute;
+  bottom: 1px;
+  right: 1px;
+  line-height: 1;
+}
+.zoom-btn.view-locked {
+  position: relative;
+  overflow: hidden;
 }
 
 /* Touch devices: make zoom buttons slightly larger for finger tapping,
@@ -1260,9 +1298,11 @@ canvas { touch-action: pan-x pan-y; }
   padding: 0.25rem 0.6rem;
   border-radius: 12px;
   cursor: pointer;
-  transition: background 0.12s;
 }
-#cancel-action-btn:hover { background: rgba(170,68,51,0.25); }
+@media (hover: hover) {
+  #cancel-action-btn { transition: background 0.12s; }
+  #cancel-action-btn:hover { background: rgba(170,68,51,0.25); }
+}
 
 .action-title {
   font-size: 0.75rem;
@@ -1291,9 +1331,7 @@ canvas { touch-action: pan-x pan-y; }
   cursor: pointer;
   text-align: left;
   border-radius: 2px;
-  transition: background 0.1s, border-color 0.1s;
 }
-
 /* Compact variant used inside the floating popup */
 #action-popup .action-btn {
   padding: 0.28rem 0.45rem;
@@ -1305,7 +1343,10 @@ canvas { touch-action: pan-x pan-y; }
   margin: 0.25rem 0 0.15rem;
   padding-top: 0.2rem;
 }
-.action-btn:hover:not(:disabled) { background: #1e2438; border-color: #5a4890; }
+@media (hover: hover) {
+  .action-btn { transition: background 0.1s, border-color 0.1s; }
+  .action-btn:hover:not(:disabled) { background: #1e2438; border-color: #5a4890; }
+}
 .action-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
 .action-btn.move    { border-left: 2px solid var(--green); }
@@ -1318,7 +1359,7 @@ canvas { touch-action: pan-x pan-y; }
   border-left: 2px solid #4caf7d;
   color: #a0e8bc;
 }
-.action-btn.free:hover:not(:disabled) { background: #142a1e; border-color: #4caf7d; }
+@media (hover: hover) { .action-btn.free:hover:not(:disabled) { background: #142a1e; border-color: #4caf7d; } }
 .action-btn.tile-info {
   border-left: 2px solid #556;
   color: var(--text-dim);
@@ -1342,7 +1383,7 @@ canvas { touch-action: pan-x pan-y; }
   color: var(--text-dim);
   text-align: center;
 }
-.action-btn.end-turn:hover:not(:disabled) { color: var(--text); border-color: #6a5090; }
+@media (hover: hover) { .action-btn.end-turn:hover:not(:disabled) { color: var(--text); border-color: #6a5090; } }
 
 /* Selected entity info */
 .entity-name    { font-size: 1rem; font-weight: bold; margin-bottom: 0.3rem; }
@@ -1861,7 +1902,13 @@ canvas { touch-action: pan-x pan-y; }
 
 .round-summary-gameover-btns {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
+}
+.round-summary-gameover-btns .plan-btn {
+  padding: 0.6rem 1rem;
+  font-size: 0.9rem;
+  min-height: 44px;
 }
 
 .summary-speed-btn {
@@ -1973,6 +2020,18 @@ canvas { touch-action: pan-x pan-y; }
   /* End turn button slightly larger tap target */
   .end-turn-header { padding: 0 0.65rem; height: 36px; }
 
+  /* How-to-play: stack two-column layout */
+  .htp-two-col { grid-template-columns: 1fr; }
+  .htp-table tr td:first-child { white-space: normal; }
+
+  /* Dialogs / modals: cap widths to viewport */
+  .round-summary-card { min-width: 0; max-width: 90vw; padding: 1.2rem; }
+  .phase-modal-card { min-width: 0; max-width: 90vw; padding: 1rem 1.2rem; }
+  #encounter-card { min-width: 0; }
+
+  /* Game menu: 44px touch targets */
+  .game-menu-item { min-height: 44px; display: flex; align-items: center; }
+
 }
 
 /* ── Online / Multiplayer ─────────────────────────────────────────────────── */
@@ -1986,6 +2045,12 @@ canvas { touch-action: pan-x pan-y; }
 
 .secondary { background: #1a1f2e; color: var(--muted); border-color: #2a3040; }
 .secondary:hover { background: #232840; color: var(--text); }
+
+.acct-section { margin-bottom: 1rem; text-align: left; }
+.acct-label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 0.2rem; }
+.acct-value { font-size: 1rem; color: var(--text); }
+.acct-row { display: flex; align-items: center; gap: 0.5rem; }
+.acct-inline-btn { font-size: 0.75rem; padding: 0.2rem 0.5rem; }
 
 .setup-input {
   width: 100%;
@@ -2011,6 +2076,23 @@ canvas { touch-action: pan-x pan-y; }
 .stats-badge {
   font-size: 0.8rem;
   color: var(--muted);
+}
+
+.email-badge {
+  display: inline-block;
+  font-size: 0.78rem;
+  color: #7ecf7e;
+  margin-top: 0.25rem;
+}
+
+.setup-hint {
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin: 0.25rem 0;
+}
+
+.email-login-divider {
+  text-align: center;
 }
 
 .room-code-display {
@@ -2108,10 +2190,58 @@ canvas { touch-action: pan-x pan-y; }
   font-size: 0.65rem;
   color: rgba(255,255,255,0.2);
   letter-spacing: 0.05em;
-  pointer-events: none;
   user-select: none;
 }
+.version-link {
+  pointer-events: auto;
+  cursor: pointer;
+  text-decoration: none;
+  transition: color 0.2s;
+}
+.version-link:hover {
+  color: rgba(255,255,255,0.5);
+  text-decoration: underline;
+}
 #setup-screen { position: relative; }
+
+/* ── Changelog / Revision History ─────────────────────────────── */
+.changelog-body {
+  max-height: 60vh;
+  overflow-y: auto;
+  padding-right: 0.5rem;
+}
+.changelog-release {
+  margin-bottom: 1.5rem;
+}
+.changelog-release:last-child {
+  margin-bottom: 0;
+}
+.changelog-version-heading {
+  font-size: 1.1rem;
+  color: var(--hero);
+  margin-bottom: 0.15rem;
+}
+.changelog-date {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-bottom: 0.3rem;
+}
+.changelog-summary {
+  font-style: italic;
+  color: var(--text);
+  margin-bottom: 0.5rem;
+  font-size: 0.9rem;
+}
+.changelog-notes {
+  list-style: disc;
+  padding-left: 1.25rem;
+  color: var(--text);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+.changelog-notes li {
+  margin-bottom: 0.2rem;
+}
 
 /* ── Plan panel ────────────────────────────────────────────────── */
 #game-main {
@@ -2174,12 +2304,14 @@ canvas { touch-action: pan-x pan-y; }
   align-items: center;
   gap: 0.2rem;
   line-height: 1;
-  transition: background 0.15s;
   writing-mode: vertical-rl;
   text-orientation: mixed;
   letter-spacing: 0.02em;
 }
-.plan-tab:hover { background: rgba(40,50,60,0.97); color: #fff; }
+@media (hover: hover) {
+  .plan-tab { transition: background 0.15s, border-color 0.15s; }
+  .plan-tab:hover { background: rgba(40,50,60,0.97); color: #fff; }
+}
 .plan-tab-label {
   white-space: nowrap;
 }
@@ -2285,7 +2417,6 @@ canvas { touch-action: pan-x pan-y; }
   border-top: 1px solid rgba(255,255,255,0.1);
 }
 .plan-btn {
-  flex: 1;
   padding: 0.4rem 0.3rem;
   border: none;
   border-radius: 4px;
@@ -2293,16 +2424,40 @@ canvas { touch-action: pan-x pan-y; }
   font-size: 0.75rem;
   font-weight: 600;
 }
+.plan-btn.secondary { flex: 0 0 auto; }
+.plan-btn.primary   { flex: 1; }
 .plan-btn.primary {
-  background: var(--hero);
-  color: #000;
+  background: linear-gradient(to right, var(--hero) var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.7);
+  position: relative;
+  overflow: hidden;
 }
-.plan-btn.primary:hover { background: #e8c84e; }
+@media (hover: hover) {
+  .plan-btn.primary:hover {
+    background: linear-gradient(to right, #e8c84e var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
+  }
+}
+.plan-panel[data-witch-mode="1"] .plan-btn.primary {
+  background: linear-gradient(to right, var(--witch) var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
+}
+@media (hover: hover) {
+  .plan-panel[data-witch-mode="1"] .plan-btn.primary:hover {
+    background: linear-gradient(to right, #b06cc8 var(--progress, 100%), rgba(0,0,0,0.3) var(--progress, 100%));
+  }
+}
+.plan-btn.primary.countdown-urgent {
+  animation: btn-pulse 0.5s ease-in-out infinite alternate;
+}
+@keyframes btn-pulse {
+  from { box-shadow: 0 0 0 0 rgba(224,112,80,0); }
+  to   { box-shadow: 0 0 8px 2px rgba(224,112,80,0.5); }
+}
 .plan-btn.secondary {
   background: rgba(255,255,255,0.08);
   color: rgba(255,255,255,0.6);
 }
-.plan-btn.secondary:hover { background: rgba(255,255,255,0.15); }
+@media (hover: hover) { .plan-btn.secondary:hover { background: rgba(255,255,255,0.15); } }
 .plan-status {
   font-size: 0.72rem;
   color: var(--muted);
@@ -2323,20 +2478,31 @@ canvas { touch-action: pan-x pan-y; }
 .plan-food-tag  { font-size: 0.65rem; color: #c8a030; margin-left: 0.3rem; white-space: nowrap; }
 .plan-step-cost { font-size: 0.62rem; color: var(--muted); margin-left: 0.25rem; white-space: nowrap; opacity: 0.85; }
 
-/* ── Plan countdown timer ────────────────────────────────────────────── */
-.plan-countdown {
-  font-size: 0.8rem;
-  font-family: var(--font-mono);
-  color: var(--text-dim);
-  margin-left: auto;
-  padding: 0 0.2rem;
-  min-width: 2.5rem;
-  text-align: right;
+/* ── Grace dialog (timeout expiry) ───────────────────────────────────── */
+.grace-dialog {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 85;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.65);
 }
-.plan-countdown.countdown-urgent {
-  color: #e07050;
-  font-weight: bold;
+.grace-dialog.visible { display: flex; }
+.grace-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1.2rem 1.5rem;
+  max-width: min(360px, 90vw);
+  text-align: center;
+  box-shadow: 0 0 40px rgba(0,0,0,0.7);
 }
+.grace-title   { font-size: 1.1rem; font-weight: 700; color: #e07050; margin-bottom: 0.5rem; }
+.grace-message { font-size: 0.85rem; color: var(--text-dim); margin-bottom: 0.5rem; }
+.grace-countdown { font-size: 0.8rem; color: var(--text-dim); margin-bottom: 0.75rem; font-family: var(--font-mono); }
+.grace-buttons { display: flex; flex-direction: column; gap: 0.5rem; }
+.grace-buttons .plan-btn { padding: 0.6rem 1rem; font-size: 0.85rem; }
 
 /* ── Plan player status panel ─────────────────────────────────────────── */
 .plan-players {
@@ -2658,6 +2824,90 @@ canvas { touch-action: pan-x pan-y; }
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* Replay HUD — shown at top of canvas during full-game replay */
+#replay-hud {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(13, 10, 22, 0.92);
+  border: 1px solid rgba(170, 130, 255, 0.5);
+  border-radius: 20px;
+  padding: 0.4rem 1rem;
+  font-size: 0.82rem;
+  color: #c8b8e8;
+  z-index: 25;
+  align-items: center;
+  gap: 0.6rem;
+  pointer-events: auto;
+  user-select: none;
+  white-space: nowrap;
+}
+#replay-round-label {
+  font-weight: 600;
+  color: var(--text-bright);
+  margin-right: 0.2rem;
+}
+.replay-controls {
+  display: flex;
+  gap: 3px;
+  align-items: center;
+}
+.replay-ctrl-btn {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(170,130,255,0.3);
+  border-radius: 5px;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 0.88rem;
+  padding: 0.2rem 0.55rem;
+  min-width: unset;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.replay-ctrl-btn:hover {
+  background: rgba(170,130,255,0.18);
+  color: var(--text-bright);
+}
+.replay-ctrl-btn.active {
+  background: rgba(170,130,255,0.28);
+  border-color: rgba(200,160,255,0.75);
+  color: var(--text-bright);
+}
+.replay-ctrl-btn.replay-stop {
+  color: #e07070;
+  border-color: rgba(220,100,100,0.35);
+}
+.replay-ctrl-btn.replay-stop:hover {
+  background: rgba(220,80,80,0.18);
+  border-color: rgba(220,100,100,0.7);
+  color: #ffaaaa;
+}
+
+/* Saves tab bar — In Progress / Completed toggle */
+.saves-tab-bar {
+  display: flex;
+  gap: 0;
+  margin-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+.saves-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  font-family: inherit;
+}
+.saves-tab:hover { color: var(--text-bright); }
+.saves-tab.active {
+  color: var(--hero);
+  border-bottom-color: var(--hero);
+}
+
 /* Step-by-step continue bar — shown at bottom of canvas waiting for user click */
 #step-continue-bar {
   position: absolute;
@@ -2694,6 +2944,13 @@ canvas { touch-action: pan-x pan-y; }
   text-transform: uppercase;
 }
 .admin-link:hover { opacity: 1; color: var(--text); text-decoration: underline; }
+.menu-version {
+  margin-top: 0.4rem;
+  font-size: 0.65rem;
+  color: var(--text-dim, #7a7a8a);
+  opacity: 0.6;
+  letter-spacing: 0.04em;
+}
 
 /* ── Spectator mode ──────────────────────────────────────────────────────────── */
 
@@ -2921,4 +3178,194 @@ body.spectator-mode #game-screen   { display: flex !important; }
 @keyframes tut-spotlight-pulse {
   0%, 100% { box-shadow: 0 0 8px 1px rgba(255,200,0,0.35); }
   50%       { box-shadow: 0 0 16px 4px rgba(255,200,0,0.65); }
+}
+
+/* ── Campaign / Story Mode ────────────────────────��─────────────────────── */
+
+.campaign-select-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+  max-width: 420px;
+}
+
+.campaign-select-item {
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--clr-dim);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+.campaign-select-item:hover {
+  border-color: var(--clr-gold);
+  background: rgba(255,215,0,0.06);
+}
+
+.campaign-select-title {
+  font-size: 1.1rem;
+  font-weight: bold;
+  color: var(--clr-gold);
+  margin-bottom: 0.25rem;
+}
+
+.campaign-select-desc {
+  font-size: 0.85rem;
+  color: var(--clr-text);
+  line-height: 1.4;
+}
+
+.campaign-select-badge {
+  font-size: 0.75rem;
+  color: var(--clr-dim);
+  margin-top: 0.35rem;
+  font-style: italic;
+}
+
+.campaign-mission-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+  max-width: 420px;
+}
+
+.campaign-mission {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--clr-dim, #555);
+  border-radius: 6px;
+  font-size: 0.95rem;
+  transition: background 0.15s;
+}
+
+.campaign-mission.available {
+  cursor: pointer;
+  border-color: var(--clr-gold, #d4a72c);
+}
+.campaign-mission.available:hover {
+  background: rgba(212, 167, 44, 0.12);
+}
+
+.campaign-mission.completed {
+  opacity: 0.65;
+  border-color: var(--clr-dim, #555);
+}
+
+.campaign-mission.locked {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.campaign-mission-icon {
+  font-size: 1.2rem;
+  width: 1.5rem;
+  text-align: center;
+}
+
+.campaign-mission-name {
+  flex: 1;
+}
+
+.campaign-mission-status {
+  font-size: 0.8rem;
+  color: var(--clr-dim, #888);
+}
+
+.campaign-briefing {
+  max-width: 480px;
+}
+
+.campaign-mission-title {
+  font-size: 1.4rem;
+  color: var(--clr-gold, #d4a72c);
+  margin-bottom: 0.5rem;
+}
+
+.campaign-mission-text {
+  line-height: 1.5;
+  margin-bottom: 0.75rem;
+  color: var(--clr-text, #ddd);
+}
+
+.campaign-objectives {
+  margin: 0.75rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.campaign-obj {
+  font-size: 0.9rem;
+  padding: 0.3rem 0;
+}
+
+.campaign-obj-icon {
+  margin-right: 0.35rem;
+}
+
+.campaign-roster-summary {
+  margin-bottom: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(255,255,255,0.04);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.campaign-roster-label {
+  color: var(--clr-gold, #d4a72c);
+  margin-bottom: 0.2rem;
+}
+
+.campaign-resources-label {
+  color: var(--clr-dim, #888);
+}
+
+.campaign-deploy-roster {
+  margin: 0.75rem 0;
+}
+
+.campaign-deploy-roster h3 {
+  font-size: 0.95rem;
+  margin-bottom: 0.4rem;
+}
+
+.campaign-roster-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.campaign-survivor-pick {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+/* Debrief screen */
+.debrief-stats {
+  margin: 0.75rem 0;
+  display: flex;
+  gap: 1.5rem;
+  font-size: 0.9rem;
+  color: var(--clr-dim, #aaa);
+}
+
+.debrief-roster {
+  margin-top: 0.75rem;
+}
+
+.debrief-roster h3 {
+  font-size: 0.95rem;
+  color: var(--clr-gold, #d4a72c);
+  margin-bottom: 0.4rem;
+}
+
+.debrief-survivor {
+  font-size: 0.85rem;
+  padding: 0.2rem 0;
 }

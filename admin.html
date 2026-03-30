@@ -172,12 +172,28 @@
     }
 
     .time-ago { color: var(--text-dim); font-size: 0.8rem; }
+
+    /* ── Mobile ──────────────────────────── */
+    @media (max-width: 600px) {
+      .admin-wrap { padding: 1rem 0.75rem 2rem; }
+      h1 { font-size: 1.4rem; letter-spacing: 0.1em; }
+      .stats-bar { gap: 0.75rem; }
+      .stat-box { min-width: 0; flex: 1 1 70px; padding: 0.5rem 0.6rem; }
+      .stat-box .value { font-size: 1.3rem; }
+      .tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      .tab-btn { padding: 0.5rem 0.75rem; font-size: 0.82rem; white-space: nowrap; }
+      .tab-content { overflow-x: auto; }
+      th, td { padding: 0.35rem 0.5rem; }
+      th { font-size: 0.65rem; }
+      .btn { min-height: 44px; padding: 0.5rem 0.75rem; font-size: 0.85rem; }
+      .refresh-row { flex-wrap: wrap; gap: 0.5rem; }
+    }
   </style>
 </head>
 <body>
   <div class="admin-wrap">
     <h1>BRIMSTONE ADMIN</h1>
-    <p class="subtitle" id="version-line">Loading...</p>
+    <p class="subtitle" id="version-line">Loading... &mdash; <a href="/admin/stats" style="color:var(--hero)">Game Stats</a></p>
 
     <div class="stats-bar" id="stats-bar">
       <div class="stat-box"><div class="label">Connections</div><div class="value" id="stat-connections">-</div></div>
@@ -189,6 +205,7 @@
     <div class="tabs">
       <button class="tab-btn active" data-tab="tab-games">Active Games</button>
       <button class="tab-btn" data-tab="tab-saves">Saved Games</button>
+      <button class="tab-btn" data-tab="tab-completed">Completed Games</button>
       <button class="tab-btn" data-tab="tab-players">Players</button>
     </div>
 
@@ -231,6 +248,56 @@
         <tbody id="saves-body"></tbody>
       </table>
       <p class="empty-msg" id="saves-empty" style="display:none">No saved games.</p>
+    </div>
+
+    <!-- ── Completed Games tab ─────────────────────── -->
+    <div id="tab-completed" class="tab-content">
+      <div class="refresh-row">
+        <div style="display:flex;gap:0.4rem;align-items:center">
+          <button class="btn completed-sub active" data-sub="mp">Online</button>
+          <button class="btn completed-sub" data-sub="sp">Single Player</button>
+        </div>
+        <button class="btn" id="refresh-completed">Refresh</button>
+      </div>
+
+      <!-- Online (MP) completed games -->
+      <div id="completed-sub-mp">
+        <table id="completed-table">
+          <thead>
+            <tr>
+              <th>Hero</th>
+              <th>Witch</th>
+              <th>Winner</th>
+              <th>Rounds</th>
+              <th>Mode</th>
+              <th>Pinned</th>
+              <th>Played</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="completed-body"></tbody>
+        </table>
+        <p class="empty-msg" id="completed-empty" style="display:none">No online completed games on record.</p>
+      </div>
+
+      <!-- Single-player uploaded games -->
+      <div id="completed-sub-sp" style="display:none">
+        <table id="sp-completed-table">
+          <thead>
+            <tr>
+              <th>Hero</th>
+              <th>Witch</th>
+              <th>Winner</th>
+              <th>Rounds</th>
+              <th>Mode</th>
+              <th>Uploaded</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="sp-completed-body"></tbody>
+        </table>
+        <p class="empty-msg" id="sp-completed-empty" style="display:none">No single-player uploads on record.</p>
+      </div>
     </div>
 
     <!-- ── Players tab ──────────────────────────────── -->
@@ -300,13 +367,13 @@
     async function loadStats() {
       try {
         const stats = await api('/admin/api/stats');
-        document.getElementById('version-line').textContent = `v${stats.version}`;
+        document.getElementById('version-line').innerHTML = `v${stats.version} &mdash; <a href="/admin/stats" style="color:var(--hero)">Game Stats</a>`;
         document.getElementById('stat-connections').textContent = stats.connections;
         document.getElementById('stat-rooms').textContent = stats.activeRooms;
         document.getElementById('stat-queue').textContent = stats.queueSize;
         document.getElementById('stat-uptime').textContent = formatUptime(stats.uptime);
       } catch (e) {
-        document.getElementById('version-line').textContent = 'Failed to connect';
+        document.getElementById('version-line').innerHTML = 'Failed to connect &mdash; <a href="/admin/stats" style="color:var(--hero)">Game Stats</a>';
       }
     }
 
@@ -455,16 +522,93 @@
       return el.innerHTML;
     }
 
+    // ── Completed Games ──────────────────────────────────────────────────────────
+
+    async function loadCompletedGames() {
+      await Promise.all([loadMpCompletedGames(), loadSpCompletedGames()]);
+    }
+
+    async function loadMpCompletedGames() {
+      try {
+        const games = await api('/admin/api/completed-games');
+        const tbody = document.getElementById('completed-body');
+        const empty = document.getElementById('completed-empty');
+        if (!games.length) {
+          tbody.innerHTML = '';
+          empty.style.display = '';
+          return;
+        }
+        empty.style.display = 'none';
+        tbody.innerHTML = games.map(g => {
+          const pinnedIcon = g.pinned ? '📌' : '';
+          const replayUrl  = `/replay?replayGame=${g.game_id}&source=mp`;
+          return `<tr>
+            <td>${g.hero_name || '—'}</td>
+            <td>${g.witch_name || '—'}</td>
+            <td>${g.winner} <small style="opacity:.6">${g.win_reason || ''}</small></td>
+            <td>${g.total_rounds}</td>
+            <td>${g.mode}</td>
+            <td>${pinnedIcon}</td>
+            <td>${timeAgo(g.created_at)}</td>
+            <td><a class="btn btn-sm" href="${replayUrl}" target="_blank">Replay</a></td>
+          </tr>`;
+        }).join('');
+      } catch (e) {
+        console.error('loadMpCompletedGames error:', e);
+      }
+    }
+
+    async function loadSpCompletedGames() {
+      try {
+        const games = await api('/admin/api/sp/completed-games');
+        const tbody = document.getElementById('sp-completed-body');
+        const empty = document.getElementById('sp-completed-empty');
+        if (!games.length) {
+          tbody.innerHTML = '';
+          empty.style.display = '';
+          return;
+        }
+        empty.style.display = 'none';
+        tbody.innerHTML = games.map(g => {
+          const replayUrl = `/replay?replayGame=${g.game_id}&source=sp`;
+          return `<tr>
+            <td>${g.hero_name || '—'}</td>
+            <td>${g.witch_name || '—'}</td>
+            <td>${g.winner} <small style="opacity:.6">${g.win_reason || ''}</small></td>
+            <td>${g.total_rounds}</td>
+            <td>${g.mode}</td>
+            <td>${timeAgo(g.created_at)}</td>
+            <td><a class="btn btn-sm" href="${replayUrl}" target="_blank">Replay</a></td>
+          </tr>`;
+        }).join('');
+      } catch (e) {
+        console.error('loadSpCompletedGames error:', e);
+      }
+    }
+
     // ── Init ────────────────────────────────────────────────────────────────────
 
     document.getElementById('refresh-rooms').addEventListener('click', () => { loadRooms(); loadStats(); });
     document.getElementById('refresh-saves').addEventListener('click', loadSaves);
     document.getElementById('refresh-players').addEventListener('click', loadPlayers);
+    document.getElementById('refresh-completed').addEventListener('click', loadCompletedGames);
+
+    // Sub-tab switching within Completed Games
+    document.querySelectorAll('.completed-sub').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.completed-sub').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const sub = btn.dataset.sub;
+        document.getElementById('completed-sub-mp').style.display = sub === 'mp' ? '' : 'none';
+        document.getElementById('completed-sub-sp').style.display = sub === 'sp' ? '' : 'none';
+      });
+    });
 
     loadStats();
     loadRooms();
     loadSaves();
     loadPlayers();
+    loadCompletedGames();
 
     // Auto-refresh stats and rooms every 10 seconds
     setInterval(() => { loadStats(); loadRooms(); }, 10000);

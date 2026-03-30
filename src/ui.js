@@ -58,7 +58,7 @@ export class UIController {
 
     this._lastHazardKey    = '';   // deduplicates hazard popups across state updates
     this._battleInterval   = null; // dice animation interval — cleared on new dialog
-    this.speedMode         = 'cinematic'; // 'step' | 'cinematic' | 'fast' | 'instant'
+    this.speedMode         = 'cinematic'; // 'step' | 'cinematic' | 'fast' | 'vfast'
     this._stepResolve      = null;        // set while waiting for click-to-advance in step mode
     // Start with chronicle hidden on small screens (≤768px)
     this._chronicleMode    = window.innerWidth <= 768 ? 'none' : 'mini'; // 'none' | 'mini' | 'full'
@@ -133,6 +133,7 @@ export class UIController {
 
     // Mouse drag-to-pan (desktop)
     this.canvas.addEventListener('mousedown', e => {
+      if (this.renderer.viewLocked) return;
       this._mouseDown  = { clientX: e.clientX, clientY: e.clientY };
       this._didDragPan = false;
       this.canvas.style.cursor = 'grabbing';
@@ -159,10 +160,27 @@ export class UIController {
       this.renderer.setZoom(this.renderer.zoomLevel / zoomStep, cx, cy);
       this.onRedraw();
     });
+    this._lastFitTapTime = 0;
     this._el('zoom-fit')?.addEventListener('click', () => {
-      this.renderer.resize(); // re-measure wrapper after any panel changes
-      this.renderer.resetView();
-      this.onRedraw();
+      const now = Date.now();
+      const isDoubleTap = (now - this._lastFitTapTime) < 400;
+      this._lastFitTapTime = now;
+      if (isDoubleTap) {
+        // Double-tap: toggle view lock; fit map first if locking
+        this.renderer.viewLocked = !this.renderer.viewLocked;
+        if (this.renderer.viewLocked) {
+          this.renderer.resize();
+          this.renderer.resetView();
+          this.renderer._zoomAnim = null;
+        }
+        this._updateFitBtnLockState();
+        this.onRedraw();
+      } else if (!this.renderer.viewLocked) {
+        // Single-tap when unlocked: fit map
+        this.renderer.resize();
+        this.renderer.resetView();
+        this.onRedraw();
+      }
     });
     this._el('zoom-me')?.addEventListener('click', () => {
       if (this._selectedEntity && this._selectedEntity.alive) {
@@ -212,6 +230,7 @@ export class UIController {
 
     this.canvas.addEventListener('touchmove', e => {
       e.preventDefault();
+      if (this.renderer.viewLocked) return;
       if (e.touches.length === 2 && this._pinchDist !== null) {
         const newDist = _touchDist(e.touches[0], e.touches[1]);
         const midCX  = (e.touches[0].clientX + e.touches[1].clientX) / 2;
@@ -311,11 +330,13 @@ export class UIController {
         panel.classList.remove('collapsed');
         this._syncPlanInset();
         this._renderPlanPanel();
+        this._renderEndTurnBtn();
       } else if (panel && !this._edgeSwipe.collapsed && dx > threshold) {
         // Swiped right — close panel
         panel.classList.add('collapsed');
         this._syncPlanInset();
         this._renderPlanPanel();
+        this._renderEndTurnBtn();
       }
       this._edgeSwipe = null;
     }, { passive: true });
@@ -353,16 +374,24 @@ export class UIController {
     });
 
     // End Turn / Submit Plan in header
-    this._el('end-turn-btn')?.addEventListener('click', () => {
+    const _endTurnHandler = () => {
       if (this.state.gameOver) return;
       if (this._planMode) { this._doSubmitPlan(); return; }
       if (this._isOpponentTurn()) return;
       this._doEndTurn();
-    });
+    };
+    this._el('end-turn-btn')?.addEventListener('click', _endTurnHandler);
+    this._el('end-turn-btn')?.addEventListener('touchend', e => {
+      e.preventDefault(); _endTurnHandler();
+    }, { passive: false });
 
-    // Plan panel buttons
-    this._el('plan-submit-btn')?.addEventListener('click', () => this._doSubmitPlan());
-    this._el('plan-clear-btn')?.addEventListener('click',  () => {
+    // Plan panel buttons — touchend for instant mobile response
+    const _tap = (el, fn) => {
+      el?.addEventListener('click', fn);
+      el?.addEventListener('touchend', e => { e.preventDefault(); fn(); }, { passive: false });
+    };
+    _tap(this._el('plan-submit-btn'), () => this._doSubmitPlan());
+    _tap(this._el('plan-clear-btn'),  () => {
       if (this._planSubmitted) return;
       this._plan = [];
       this._refreshPlanOverlay();
@@ -370,8 +399,8 @@ export class UIController {
       if (this._selectedEntity) this._selectEntity(this._selectedEntity);
       this.onRedraw();
     });
-    this._el('plan-toggle-btn')?.addEventListener('click', () => this._togglePlanPanel());
-    this._el('plan-tab')?.addEventListener('click',        () => this._togglePlanPanel());
+    _tap(this._el('plan-toggle-btn'), () => this._togglePlanPanel());
+    _tap(this._el('plan-tab'),        () => this._togglePlanPanel());
   }
 
   _canvasPos(e) {
@@ -386,6 +415,9 @@ export class UIController {
 
   _onMouseMove(e) {
     // Drag-to-pan when mouse button held
+    if (this._mouseDown && this.renderer.viewLocked) {
+      this._mouseDown = null; // release drag if view was locked mid-drag
+    }
     if (this._mouseDown) {
       const dx = e.clientX - this._mouseDown.clientX;
       const dy = e.clientY - this._mouseDown.clientY;
@@ -559,31 +591,149 @@ export class UIController {
     this._renderPlayerStatus();
   }
 
-  /** Start a countdown timer showing seconds remaining until auto-submit. */
+  /** Start a countdown timer — progress bar on submit button + floating button. */
   _startCountdown(timeoutMs) {
     this._stopCountdown();
-    const el    = this._el('plan-countdown');
-    if (!el) return;
-    el.style.display = '';
+    const submitBtn = this._el('plan-submit-btn');
+    if (!submitBtn) return;
+
+    const GRACE_PERIOD = 5000;
     const end = Date.now() + timeoutMs;
+    this._countdownEnd   = end;
+    this._countdownTotal = timeoutMs;
+
+    const floatBtn = this._el('end-turn-btn');
+
     const tick = () => {
-      const secs = Math.max(0, Math.ceil((end - Date.now()) / 1000));
-      el.textContent = `${secs}s`;
-      el.classList.toggle('countdown-urgent', secs <= 10);
-      if (secs <= 0) this._stopCountdown();
+      const remaining = Math.max(0, end - Date.now());
+      const totalSecs = Math.ceil(remaining / 1000);
+      const pct  = (remaining / timeoutMs) * 100;
+      const mm = String(Math.floor(totalSecs / 60)).padStart(2, '0');
+      const ss = String(totalSecs % 60).padStart(2, '0');
+      const label = totalSecs > 0 ? `\u2713 Submit ${mm}:${ss}` : '\u2713 Submit';
+
+      submitBtn.style.setProperty('--progress', pct + '%');
+      submitBtn.textContent = label;
+      submitBtn.classList.toggle('countdown-urgent', totalSecs <= 10);
+
+      // Mirror progress on the floating submit button
+      if (floatBtn) {
+        floatBtn.style.setProperty('--progress', pct + '%');
+        floatBtn.textContent = label;
+        floatBtn.classList.toggle('countdown-urgent', totalSecs <= 10);
+      }
+
+      if (remaining <= GRACE_PERIOD && !this._graceActive) {
+        this._stopCountdownTimer();
+        this._showGraceDialog(remaining);
+      }
     };
     tick();
     this._countdownTimer = setInterval(tick, 500);
   }
 
-  /** Stop the countdown timer. */
-  _stopCountdown() {
+  /** Reset the countdown to a new deadline (called when the server extends the timer). */
+  resetCountdown(timeoutMs) {
+    if (this._planMode && !this._planSubmitted && timeoutMs > 0) {
+      this._startCountdown(timeoutMs);
+    }
+  }
+
+  /** Stop just the main countdown interval (not the grace dialog). */
+  _stopCountdownTimer() {
     if (this._countdownTimer) {
       clearInterval(this._countdownTimer);
       this._countdownTimer = null;
     }
-    const el = this._el('plan-countdown');
-    if (el) { el.style.display = 'none'; el.textContent = ''; }
+  }
+
+  /** Stop countdown and reset submit button / floating button to default state. */
+  _stopCountdown() {
+    this._stopCountdownTimer();
+    this._countdownEnd   = null;
+    this._countdownTotal = null;
+
+    const submitBtn = this._el('plan-submit-btn');
+    if (submitBtn) {
+      submitBtn.style.removeProperty('--progress');
+      submitBtn.textContent = '\u2713 Submit';
+      submitBtn.classList.remove('countdown-urgent');
+    }
+
+    const floatBtn = this._el('end-turn-btn');
+    if (floatBtn) {
+      floatBtn.style.removeProperty('--progress');
+      floatBtn.classList.remove('countdown-urgent');
+    }
+
+    this._dismissGraceDialog();
+  }
+
+  /** Show grace dialog when planning time expires; auto-submits current plan. */
+  _showGraceDialog(remainingMs) {
+    if (this._planSubmitted) return;
+    this._graceActive = true;
+
+    const dialog    = this._el('grace-dialog');
+    const secsSpan  = this._el('grace-seconds');
+    const submitBtn = this._el('plan-submit-btn');
+    if (!dialog) return;
+    dialog.classList.add('visible');
+
+    const graceEnd = Date.now() + remainingMs;
+
+    // Wire button handlers via AbortController for clean teardown
+    const ac = new AbortController();
+    this._graceAbort = ac;
+
+    this._el('grace-submit-current')?.addEventListener('click', () => {
+      this._dismissGraceDialog();
+      this._doSubmitPlan();
+    }, { signal: ac.signal });
+
+    this._el('grace-submit-empty')?.addEventListener('click', () => {
+      this._dismissGraceDialog();
+      this._plan = [];
+      this._doSubmitPlan();
+    }, { signal: ac.signal });
+
+    this._graceTimer = setInterval(() => {
+      const left = Math.max(0, graceEnd - Date.now());
+      const s = Math.ceil(left / 1000);
+      if (secsSpan) secsSpan.textContent = String(s);
+
+      // Keep draining the submit buttons to 0
+      const graceLabel = `\u2713 Submit 00:0${s}`;
+      if (submitBtn) {
+        submitBtn.style.setProperty('--progress', '0%');
+        submitBtn.textContent = graceLabel;
+      }
+      const floatBtnGrace = this._el('end-turn-btn');
+      if (floatBtnGrace) {
+        floatBtnGrace.style.setProperty('--progress', '0%');
+        floatBtnGrace.textContent = graceLabel;
+      }
+
+      if (left <= 0) {
+        this._dismissGraceDialog();
+        this._doSubmitPlan(); // default: submit current plan
+      }
+    }, 250);
+  }
+
+  /** Dismiss the grace dialog and clean up timers/listeners. */
+  _dismissGraceDialog() {
+    this._graceActive = false;
+    if (this._graceTimer) {
+      clearInterval(this._graceTimer);
+      this._graceTimer = null;
+    }
+    if (this._graceAbort) {
+      this._graceAbort.abort();
+      this._graceAbort = null;
+    }
+    const dialog = this._el('grace-dialog');
+    if (dialog) dialog.classList.remove('visible');
   }
 
   /** Add one action to the plan queue. */
@@ -613,6 +763,7 @@ export class UIController {
   /** Submit the current plan. */
   _doSubmitPlan() {
     if (this._planSubmitted) return;
+    this._stopCountdown();
     this._planSubmitted = true;
 
     const panel = this._el('plan-panel');
@@ -713,6 +864,7 @@ export class UIController {
     const toggleBtn = this._el('plan-toggle-btn');
     if (toggleBtn) toggleBtn.textContent = isCollapsed ? '▶' : '◀';
     this._syncPlanInset();
+    this._renderEndTurnBtn();
   }
 
   /** Update renderer.insetRight based on whether the plan panel is visible and expanded. */
@@ -1087,39 +1239,6 @@ export class UIController {
         executeFight(targetsAtHex[0]);
       }
 
-    } else if (actionType === ActionType.SUMMON) {
-      this._awaitingTarget = null;
-      this.renderer.highlightHexes = [];
-
-      if (this._planMode) {
-        this._addToPlan({ type: PlanActionType.SUMMON, entityId: actor.id, toCol: hex.col, toRow: hex.row, summonType: summonType ?? undefined });
-        if (actor.alive) this._selectEntity(actor);
-        else this._clearSelection();
-        this._updateSidebar();
-        this.onRedraw();
-        return;
-      }
-
-      if (this.mp?.active) {
-        this.mp.sendAction('summon', { entityId: actor.id, col: hex.col, row: hex.row, summonType: summonType ?? undefined });
-        this._clearSelection();
-        this._updateSidebar();
-        this.onRedraw();
-        return;
-      }
-      const result = executeSummon(state, actor, hex.col, hex.row, summonType ?? null);
-      for (const msg of result.log) state.addLog(msg);
-      if (result.success) {
-        state.spendAction(result.cost);
-        this.renderer.addSpawnAnim(hex.col, hex.row, '#b39ddb');
-      }
-      state.checkVictory();
-      if (actor.alive) { this._selectEntity(actor); }
-      else this._clearSelection();
-      this._updateSidebar();
-      this.onRedraw();
-      this._maybeShowNoActionsDialog();
-
     } else if (actionType === ActionType.BATTLE_HEX) {
       this._awaitingTarget = null;
       this.renderer.highlightHexes = [];
@@ -1399,13 +1518,13 @@ export class UIController {
     // 8-step cycle — shared between header and cycle-bar
     const CYCLE_STEPS = [
       { phase: 'dawn',  icon: '🌅', label: 'Dawn',  desc: 'Hero +1 action · node scoring · attrition rises' },
-      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Hero +1 ATK · Witch undead in the open suffer' },
-      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Hero +1 ATK · Witch undead in the open suffer' },
-      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Hero +1 ATK · Witch undead in the open suffer' },
+      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Witch undead in the open suffer' },
+      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Witch undead in the open suffer' },
+      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Witch undead in the open suffer' },
       { phase: 'dusk',  icon: '🌇', label: 'Dusk',  desc: 'Node scoring · seek cover before night' },
-      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +1 ATK · Survivors in the open suffer' },
-      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +1 ATK · Survivors in the open suffer' },
-      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +1 ATK · Survivors in the open suffer' },
+      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
+      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
+      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
     ];
 
     const roundInCycle = (state.round - 1) % 8;
@@ -1471,6 +1590,11 @@ export class UIController {
   }
 
   _renderObjectives() {
+    const bar = this._el('score-bar');
+    if (bar && this.state.disableScoring) {
+      bar.style.display = 'none';
+      return;
+    }
     const el = this._el('score-bar-content');
     if (!el) return;
     const state = this.state;
@@ -1480,8 +1604,7 @@ export class UIController {
     );
 
     el.innerHTML = html;
-    const bar = this._el('score-bar');
-    if (bar) bar.title = title;
+    if (bar) { bar.style.display = ''; bar.title = title; }
   }
 
   /**
@@ -1539,7 +1662,6 @@ export class UIController {
     if (targeting && hint) {
       const labels = {
         [ActionType.BATTLE]:     'Tap an enemy to attack',
-        [ActionType.SUMMON]:     'Tap an adjacent empty hex',
         [ActionType.BATTLE_HEX]: 'Tap a hex to attack (skips if empty)',
       };
       hint.textContent = labels[this._awaitingTarget.actionType] ?? '';
@@ -1554,11 +1676,21 @@ export class UIController {
     if (this._planMode) {
       btn.disabled = this._planSubmitted || state.gameOver;
       btn.classList.toggle('urgent', !this._planSubmitted && !state.gameOver);
+      btn.classList.add('planning-active');
       btn.title = this._planSubmitted ? 'Plan submitted' : 'Submit Plan';
-      btn.textContent = this._planSubmitted ? '✓' : '✓ Submit';
+      // Let the countdown timer own the text when it's running
+      if (!this._countdownTimer && !this._graceActive) {
+        btn.textContent = this._planSubmitted ? '✓' : '✓ Submit';
+      }
+      // Hide when plan panel is expanded (not collapsed)
+      const panel = this._el('plan-panel');
+      const panelOpen = panel && panel.style.display !== 'none'
+                     && !panel.classList.contains('collapsed');
+      btn.classList.toggle('plan-open', !!panelOpen);
       return;
     }
 
+    btn.classList.remove('planning-active', 'plan-open');
     btn.textContent = '↩';
     const isOpponent = this._isOpponentTurn();
     const noActs    = state.actionsAvailable === 0;
@@ -1671,15 +1803,31 @@ export class UIController {
       case 'summon': {
         _hideActionPopup();
         const summonType = button.dataset.summonType ?? null;
-        this._awaitingTarget = { actionType: ActionType.SUMMON, actor: entity, summonType };
-        // Use targets from the matching summon action (all three share the same targets)
-        const summonAction = this._validActions.find(a => a.type === ActionType.SUMMON);
-        if (summonAction) {
-          this.renderer.highlightHexes = summonAction.targets.map(t => ({ ...t, color: 'rgba(180,80,200,0.30)' }));
+        if (this._planMode) {
+          this._addToPlan({ type: PlanActionType.SUMMON, entityId: entity.id, summonType: summonType ?? undefined });
+          if (entity.alive) this._selectEntity(entity);
+          else this._clearSelection();
+          this._updateSidebar();
+          this.onRedraw();
+        } else if (this.mp?.active) {
+          this.mp.sendAction('summon', { entityId: entity.id, summonType: summonType ?? undefined });
+          this._clearSelection();
+          this._updateSidebar();
+          this.onRedraw();
+        } else {
+          const result = executeSummon(state, entity, summonType ?? null);
+          for (const msg of result.log) state.addLog(msg);
+          if (result.success) {
+            state.spendAction(result.cost);
+            this.renderer.addSpawnAnim(entity.col, entity.row, '#b39ddb');
+          }
+          state.checkVictory();
+          if (entity.alive) this._selectEntity(entity);
+          else this._clearSelection();
+          this._updateSidebar();
+          this.onRedraw();
+          this._maybeShowNoActionsDialog();
         }
-        state.addLog('Click an adjacent empty hex to raise a unit.');
-        this._updateSidebar();
-        this.onRedraw();
         break;
       }
 
@@ -1766,14 +1914,8 @@ export class UIController {
     this._lastHazardKey = hazardKey;
 
     for (const pos of nightPositions) {
-      if (pos.isFort) {
-        // Fort degradation: subtle grey flash, small number
-        this.renderer.addFlash(pos.col, pos.row, '🏰-1', 'rgba(120,120,140,0.5)', 1600, 0.55, 'rgba(180,180,200,1)');
-      } else {
-        // Unit damage: big bold number
-        const dmg = pos.dmg || 1;
-        this.renderer.addFlash(pos.col, pos.row, `-${dmg}`, 'rgba(80,0,160,0.6)', 2200, 1.4, 'rgba(210,140,255,1)');
-      }
+      const dmg = pos.dmg || 1;
+      this.renderer.addFlash(pos.col, pos.row, `-${dmg}`, 'rgba(80,0,160,0.6)', 2200, 1.4, 'rgba(210,140,255,1)');
     }
     for (const pos of dayPositions) {
       const dmg = pos.dmg || 1;
@@ -1811,7 +1953,7 @@ export class UIController {
 
   // ── Speed popup ───────────────────────────────────────────────────────────
 
-  static SPEED_LABELS = { step: 'Step by Step', cinematic: 'Cinematic', fast: 'Fast', instant: 'Instant' };
+  static SPEED_LABELS = { step: 'Step by Step', cinematic: 'Cinematic', fast: 'Fast', vfast: 'Very Fast' };
 
   _toggleSpeedPopup() {
     const popup = this._el('speed-popup');
@@ -1894,9 +2036,9 @@ export class UIController {
       `${actorSnap.name} → ${targetSnap.name}  [${result.attackRoll}v${result.defenseRoll}]  ${outcome}`;
     container.appendChild(toast);
 
-    const displayMs = this.speedMode === 'instant' ? 600
-                    : this.speedMode === 'fast'     ? 1200
-                    :                                 2000;
+    const displayMs = this.speedMode === 'vfast' ? 500
+                    : this.speedMode === 'fast'    ? 1200
+                    :                               2000;
     setTimeout(() => {
       toast.style.animation = 'battle-toast-out 0.3s ease forwards';
       setTimeout(() => toast.remove(), 300);
@@ -1918,23 +2060,20 @@ export class UIController {
       desc,
       `☀ Day: witch undead in the open take ${level} damage`,
       `🌙 Night: survivors in the open take ${level} damage`,
-      `🏰 All fortifications degrade by 1 each night (minimum 1)`,
     ], () => {});
   }
 
   // ── Phase toast ──────────────────────────────────────────────────────────
 
   _showPhaseModal(faction, budget) {
-    // Instant mode and tutorial mode skip all popups
-    if (this.speedMode === 'instant') return;
     if (this.tutorialMode) return;
 
     const phase = this.state.phase;
     const PHASE_INFO = {
       dawn:  { icon: '🌅', label: 'Dawn',  lines: ['Hero gains +1 action · Attrition rises', 'Power Nodes scored · Tiles reset'] },
-      day:   { icon: '☀️',  label: 'Day',   lines: ['Hero +1 ATK · Build & fortify', 'Witch undead in the open suffer'] },
+      day:   { icon: '☀️',  label: 'Day',   lines: ['Build & fortify', 'Witch undead in the open suffer'] },
       dusk:  { icon: '🌇', label: 'Dusk',  lines: ['Power Nodes scored · Seek shelter', 'Night approaches…'] },
-      night: { icon: '🌙', label: 'Night', lines: ['Witch +1 ATK · Raise undead', 'Survivors in the open suffer'] },
+      night: { icon: '🌙', label: 'Night', lines: ['Witch +2 ATK · Raise undead', 'Survivors in the open suffer'] },
     };
     const info = PHASE_INFO[phase];
     if (!info) return;
@@ -2088,9 +2227,9 @@ export class UIController {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') dismiss();
     };
 
-    if (this.autoplay || this.speedMode === 'instant') {
-      setTimeout(dismiss, this.autoplay ? 700 : 80);
-    } else if (this.speedMode === 'fast') {
+    if (this.autoplay) {
+      setTimeout(dismiss, 700);
+    } else if (this.speedMode === 'fast' || this.speedMode === 'vfast') {
       setTimeout(dismiss, 600);
       dialog.addEventListener('click', dismiss);
       document.addEventListener('keydown', keyDismiss);
@@ -2142,9 +2281,9 @@ export class UIController {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') dismiss();
     };
 
-    if (this.autoplay || this.speedMode === 'instant') {
-      setTimeout(dismiss, this.autoplay ? 500 : 100);
-    } else if (this.speedMode === 'fast') {
+    if (this.autoplay) {
+      setTimeout(dismiss, 500);
+    } else if (this.speedMode === 'fast' || this.speedMode === 'vfast') {
       setTimeout(dismiss, 800);
     } else {
       dialog.addEventListener('click', dismiss);
@@ -2327,17 +2466,12 @@ export class UIController {
         outcome.textContent = `💀 ${targetSnap.name} is slain!${dmgNote}`;
         outcome.className   = 'battle-outcome kill';
       } else if (result.hit) {
-        if (result.fortAbsorbed > 0 && result.damage === 0) {
-          outcome.textContent = `🏰 Fortifications absorb the blow!`;
-          outcome.className   = 'battle-outcome miss';
-        } else if (result.damage >= 2) {
-          outcome.textContent = `💥💥 Crushing hit! ${targetSnap.name} takes ${result.damage} damage!`;
+        const fortNote = result.fortDamaged ? ` (-${result.fortDamaged} fortifications)` : '';
+        if (result.damage >= 2) {
+          outcome.textContent = `💥💥 Crushing hit! ${targetSnap.name} takes ${result.damage} damage!${fortNote}`;
           outcome.className   = 'battle-outcome kill';
-        } else if (result.fortAbsorbed > 0) {
-          outcome.textContent = `🏰 Fort weakened! ${targetSnap.name} takes ${result.damage} damage`;
-          outcome.className   = 'battle-outcome hit';
         } else {
-          outcome.textContent = `💥 Hit! ${targetSnap.name} takes 1 damage`;
+          outcome.textContent = `💥 Hit! ${targetSnap.name} takes 1 damage${fortNote}`;
           outcome.className   = 'battle-outcome hit';
         }
       } else if (result.counterDmg > 0) {
@@ -2383,14 +2517,14 @@ export class UIController {
       }
     };
 
-    if (this.autoplay || this.speedMode === 'instant') {
+    if (this.autoplay) {
       // Skip animation — show result immediately, auto-dismiss
       atkDie.textContent = result.attackRoll;
       defDie.textContent = result.defenseRoll;
       atkDie.className = 'die-display' + (result.hit ? ' atk-win' : '');
       defDie.className = 'die-display' + (!result.hit ? ' def-win' : '');
       revealResult();
-      setTimeout(dismiss, this.autoplay ? 500 : 100);
+      setTimeout(dismiss, 500);
     } else if (this.speedMode === 'fast') {
       // Skip dice animation — show result immediately, auto-dismiss after 800ms
       atkDie.textContent = result.attackRoll;
@@ -2685,7 +2819,7 @@ export class UIController {
       const el = this._el('round-summary');
       if (!el) { resolve('next'); return; }
 
-      const { prevScore, prevNodes, humanFaction, fogOfWar, gameOver, winner, winReason } = opts;
+      const { prevScore, prevNodes, humanFaction, fogOfWar, gameOver, winner, winReason, hasFullReplay } = opts;
 
       // Collect kills, survivors found, summons, and resource flows from steps.
       // Fog-of-war filtering: skip opponent-only events the player can't see.
@@ -2744,12 +2878,12 @@ export class UIController {
                 if (icon !== '⚔' && icon !== '🐴') _addRes(foundRes, icon);
               }
             }
-            // Resources spent: summon
+            // Resources spent: summon — use result.spent for exact breakdown
             if (ev.action?.type === 'summon') {
-              const log0 = ev.result?.log?.[0] ?? '';
-              if (log0.includes('Iron Golem'))      _addRes(usedRes, '⚙', 2);
-              else if (log0.includes('Wood Golem')) _addRes(usedRes, '🪵', 2);
-              else                                  _addRes(usedRes, 'res', 2);
+              for (const { type, amount } of ev.result?.spent ?? []) {
+                const icon = RES_ICON_MAP[type] ?? type;
+                _addRes(usedRes, icon, amount);
+              }
             }
             // Resources spent: fortify
             if (ev.action?.type === 'fortify') {
@@ -2844,9 +2978,9 @@ export class UIController {
           }
         }
 
-        // Reckoning section at dawn/dusk
+        // Reckoning section at dawn/dusk (skip when scoring is disabled, e.g. campaign missions)
         const state = this.state;
-        if (prevScore && (state.phase === 'dawn' || state.phase === 'dusk')) {
+        if (!state.disableScoring && prevScore && (state.phase === 'dawn' || state.phase === 'dusk')) {
           const heroDelta  = state.nodeScore.hero  - prevScore.hero;
           const witchDelta = state.nodeScore.witch - prevScore.witch;
           const witchCount = state.witchObjectives.filter(obj =>
@@ -2923,7 +3057,8 @@ export class UIController {
         gameOverBtns.className = 'round-summary-gameover-btns';
         gameOverBtns.innerHTML =
           `<button class="plan-btn primary" data-action="restart">Play Again</button>` +
-          `<button class="plan-btn secondary" data-action="viewmap">View Map</button>`;
+          `<button class="plan-btn secondary" data-action="viewmap">View Map</button>` +
+          (hasFullReplay ? `<button class="plan-btn secondary" data-action="replay-full">Replay Full Game</button>` : '');
         actionsEl.appendChild(gameOverBtns);
       } else if (nextBtn) {
         nextBtn.style.display = '';
@@ -2947,8 +3082,96 @@ export class UIController {
       if (gameOverBtns) {
         gameOverBtns.querySelector('[data-action="restart"]')?.addEventListener('click', () => { cleanup(); resolve('restart'); });
         gameOverBtns.querySelector('[data-action="viewmap"]')?.addEventListener('click', () => { cleanup(); resolve('viewmap'); });
+        gameOverBtns.querySelector('[data-action="replay-full"]')?.addEventListener('click', () => { cleanup(); resolve('replay-full'); });
       }
     });
+  }
+
+  // ── Replay HUD ──────────────────────────────────────────────────────────────
+
+  /**
+   * Update the fit-button appearance to reflect the current view-lock state.
+   */
+  _updateFitBtnLockState() {
+    const btn = this._el('zoom-fit');
+    if (!btn) return;
+    const locked = this.renderer?.viewLocked ?? false;
+    btn.classList.toggle('view-locked', locked);
+    btn.title = locked
+      ? 'View locked — double-tap to unlock'
+      : 'Fit map to screen (double-tap to lock view)';
+  }
+
+  /**
+   * Show the replay progress HUD above the canvas.
+   * @param {number}   totalRounds
+   * @param {Function} onControl  — called with action string: 'back'|'play'|'pause'|'ff'|'vff'|'stop'
+   */
+  showReplayHUD(totalRounds, onControl) {
+    const hud = this._el('replay-hud');
+    if (!hud) return;
+    hud.style.display = 'flex';
+    this._replayOnControl = onControl;
+
+    // Disable the in-game speed toggle while replaying
+    const speedToggle = document.getElementById('speed-toggle');
+    if (speedToggle) speedToggle.disabled = true;
+
+    // Default to locked view for replay (fit map, no auto-zoom)
+    this._preReplayViewLocked = this.renderer?.viewLocked ?? false;
+    if (this.renderer && !this.renderer.viewLocked) {
+      this.renderer.resize();
+      this.renderer.resetView();
+      this.renderer._zoomAnim = null;
+      this.renderer.viewLocked = true;
+    }
+    this._updateFitBtnLockState();
+
+    // Wire up control buttons
+    const ids = ['back', 'play', 'pause', 'ff', 'vff', 'stop'];
+    for (const action of ids) {
+      const btn = document.getElementById(`replay-${action}-btn`);
+      if (btn) btn.onclick = () => onControl?.(action);
+    }
+
+    this.setReplayPlayState('play');
+  }
+
+  /**
+   * Highlight the currently active replay control button.
+   * @param {string} activeAction — 'play'|'pause'|'ff'|'vff'|'back'|'stop'
+   */
+  setReplayPlayState(activeAction) {
+    const ids = ['back', 'play', 'pause', 'ff', 'vff', 'stop'];
+    for (const action of ids) {
+      const btn = document.getElementById(`replay-${action}-btn`);
+      if (btn) btn.classList.toggle('active', action === activeAction);
+    }
+  }
+
+  /**
+   * Sync the main turn-info header to the current state (called after each
+   * replay round is restored so the header tracks replay progress).
+   */
+  updateReplayHUD() {
+    this._renderTurnInfo();
+  }
+
+  /** Hide the replay HUD. */
+  hideReplayHUD() {
+    const hud = this._el('replay-hud');
+    if (hud) hud.style.display = 'none';
+    this._replayOnControl = null;
+
+    // Re-enable the in-game speed toggle
+    const speedToggle = document.getElementById('speed-toggle');
+    if (speedToggle) speedToggle.disabled = false;
+
+    // Restore view-lock state that existed before replay started
+    if (this.renderer) {
+      this.renderer.viewLocked = this._preReplayViewLocked ?? false;
+      this._updateFitBtnLockState();
+    }
   }
 
   /**
@@ -3095,7 +3318,7 @@ function _buildBreakdownHTML(snap, bd, side, total) {
   if (side === 'atk') {
     parts.push(row('Base d6', bd.atkBaseDie, true));
     parts.push(row(`${snap.name} ATK`, snap.attack));
-    if (bd.phaseBonus)    parts.push(row('☀ Day', bd.phaseBonus));
+    if (bd.phaseBonus)    parts.push(row('🌙 Night', bd.phaseBonus));
     if (bd.atkStaffBonus) parts.push(row('⚕ Staff (undead)', bd.atkStaffBonus));
     bd.atkExtraDice.forEach((r, i) => {
       parts.push(row(`${bd.atkAllyNames[i] ?? 'Ally'} (D3)`, r, true));
@@ -3104,6 +3327,7 @@ function _buildBreakdownHTML(snap, bd, side, total) {
     parts.push(row('Base d6', bd.defBaseDie, true));
     parts.push(row(`${snap.name} DEF`, snap.defense));
     if (bd.fortBonus) parts.push(row(`🏰 Fort ×${bd.fortBonus}`, bd.fortBonus));
+    if (bd.fatiguePenalty) parts.push(row('😓 Fatigue', -bd.fatiguePenalty));
     bd.defExtraDice.forEach((r, i) => {
       parts.push(row(`${bd.defAllyNames[i] ?? 'Ally'} (D3)`, r, true));
     });
@@ -3173,6 +3397,13 @@ function _positionPopup(popup, ui) {
 function _attachPopupListeners(popup, ui) {
   popup.querySelectorAll('button[data-action]').forEach(b => {
     b.addEventListener('click', () => ui._handleActionButton(b));
+    // On mobile, the synthesized click after touchend can be delayed or
+    // swallowed (e.g. iOS treats the first tap on a newly-visible element
+    // as a focus event).  Fire directly on touchend for instant response.
+    b.addEventListener('touchend', e => {
+      e.preventDefault();
+      ui._handleActionButton(b);
+    }, { passive: false });
   });
 }
 

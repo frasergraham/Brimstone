@@ -156,10 +156,18 @@ export class GameState {
 
     // Offline / legacy path: create one hero and one witch with synthetic player IDs.
     this.hero  = createHero(mapData.heroStart.col,  mapData.heroStart.row, 'hero');
-    this.witch = createWitch(mapData.witchStart.col, mapData.witchStart.row, 'witch');
-    this.entities.push(this.hero, this.witch);
+    this.entities.push(this.hero);
     this.players.push({ id: 'hero',  name: 'Hero',  faction: 'hero',  isAI: heroIsAI,  leaderId: this.hero.id });
-    this.players.push({ id: 'witch', name: 'Witch', faction: 'witch', isAI: witchIsAI, leaderId: this.witch.id });
+
+    // Witch is optional — campaign missions may omit the witch entity entirely.
+    if (mapDataOverride?.noWitch) {
+      this.witch = null;
+      this.players.push({ id: 'witch', name: 'Witch', faction: 'witch', isAI: true, leaderId: null });
+    } else {
+      this.witch = createWitch(mapData.witchStart.col, mapData.witchStart.row, 'witch');
+      this.entities.push(this.witch);
+      this.players.push({ id: 'witch', name: 'Witch', faction: 'witch', isAI: witchIsAI, leaderId: this.witch.id });
+    }
 
     this.inventory = { shared: {}, witch: {} };
 
@@ -187,8 +195,23 @@ export class GameState {
     this.lastDayDamage     = []; // {col,row,dmg} entries for flash animation
     this.lastHazardLog     = []; // human-readable lines describing hazard events this phase
 
+    // ── Cumulative stats counters (for game-stats tracking) ──────────────────
+    this.heroKills        = 0; // entities killed by hero side (combat + hazards)
+    this.witchKills       = 0; // entities killed by witch side (combat + hazards)
+    this.witchSummonCount = 0; // total summons performed by witch side
+
     // Cumulative node scoring: each dawn/dusk majority scores 1 point; first to 3 wins.
     this.nodeScore = { hero: 0, witch: 0 };
+    // When true, skip dawn/dusk node scoring and hide the score track UI.
+    this.disableScoring = !!mapDataOverride?.disableScoring;
+
+    // Max survivors discoverable from hidden-survivor tiles (null = unlimited).
+    this.maxDiscoverableSurvivors = mapDataOverride?.maxDiscoverableSurvivors ?? null;
+    this.discoveredSurvivorCount  = 0;
+
+    // ── Campaign / custom victory ──────────────────────────────────────────
+    // When set, checked first by checkVictory(). Return { winner, winReason, log? } or null.
+    this.victoryDelegate = null;
 
     // Attrition level: hazard damage dealt to exposed units (see attritionForCycle).
     this.attritionLevel    = 0;
@@ -269,9 +292,11 @@ export class GameState {
 
   /** Return true if every player on the given faction is eliminated. */
   factionEliminated(faction) {
-    return this.players
-      .filter(p => p.faction === faction)
-      .every(p => !this.entities.some(e => e.id === p.leaderId && e.alive));
+    const factionPlayers = this.players.filter(p => p.faction === faction);
+    // A faction with no leader (e.g. no-witch campaign mission) cannot be eliminated.
+    if (factionPlayers.every(p => p.leaderId === null)) return false;
+    return factionPlayers
+      .every(p => p.leaderId === null || !this.entities.some(e => e.id === p.leaderId && e.alive));
   }
 
   // ── Simultaneous-turn planning API ─────────────────────────────────────
@@ -487,10 +512,10 @@ export class GameState {
         this.addLog(`🌅 A new dawn — cycle ${cycle}.`);
       }
       for (const [, t] of this.tiles) t.explored = false;
-      this._checkNodeObjectives(Phase.DAWN);
+      if (!this.disableScoring) this._checkNodeObjectives(Phase.DAWN);
     }
     if (this.phase === Phase.DUSK) {
-      this._checkNodeObjectives(Phase.DUSK);
+      if (!this.disableScoring) this._checkNodeObjectives(Phase.DUSK);
     }
 
     this.checkVictory();
@@ -546,7 +571,7 @@ export class GameState {
           });
 
           // Witch herself on the node → spawn minion
-          const witchHere = this.witch.alive &&
+          const witchHere = this.witch?.alive &&
             this.witch.col === obj.col && this.witch.row === obj.row;
           if (witchHere) {
             const hex = freeHex();
@@ -611,12 +636,12 @@ export class GameState {
         this.attritionLevel = Math.min(3, this.attritionLevel + 1);
         this.addLog(`🌅 A new dawn — cycle ${Math.ceil(this.round / CYCLE_LENGTH)}. Attrition rises to ${this.attritionLevel}!`);
         for (const [, t] of this.tiles) t.explored = false;
-        this._checkNodeObjectives(Phase.DAWN);
+        if (!this.disableScoring) this._checkNodeObjectives(Phase.DAWN);
       }
 
       // Dusk: score nodes
       if (this.phase === Phase.DUSK) {
-        this._checkNodeObjectives(Phase.DUSK);
+        if (!this.disableScoring) this._checkNodeObjectives(Phase.DUSK);
       }
     }
 
@@ -627,7 +652,7 @@ export class GameState {
   _announcePhaseChange(from, to) {
     const messages = {
       [`${Phase.DAWN}->${Phase.DAY}`]:
-        `☀ The sun rises. The hero fights with vigour! (+1 ATK in combat)`,
+        `☀ The sun rises. The light burns the undead in the open!`,
       [`${Phase.DAY}->${Phase.DUSK}`]:
         `🌇 Dusk falls. Seek shelter before night. Neither side has advantage.`,
       [`${Phase.DUSK}->${Phase.NIGHT}`]:
@@ -644,17 +669,6 @@ export class GameState {
   }
 
   _applyNightHazard(dmg = 1) {
-    // Fort degradation: ALL fortifications (including buildings) lose 1 level each
-    // night, but are floored at 1 — they never crumble completely from the dark.
-    for (const [key, t] of this.tiles) {
-      if (t.fortifyLevel > 1) {
-        t.fortifyLevel--;
-        const [col, row] = key.split(',').map(Number);
-        this.lastNightDamage.push({ col, row, dmg: 1, isFort: true });
-        this.addLog(`🌑 The dark erodes a fortification at (${col},${row}). (level ${t.fortifyLevel} remaining)`);
-      }
-    }
-
     // Only SURVIVORS in the open take night damage — the hero is hardened against it.
     // Fortified hexes shelter their occupants.
     const endangered = this.entities.filter(e => {
@@ -724,8 +738,18 @@ export class GameState {
   // ── Victory conditions ─────────────────────────────────────────────────
 
   checkVictory() {
-    // All witch leaders eliminated → heroes win
-    if (this.factionEliminated('witch')) {
+    // Custom victory delegate (campaign missions) takes priority
+    if (this.victoryDelegate) {
+      const result = this.victoryDelegate(this);
+      if (result) {
+        this.winner    = result.winner;
+        this.winReason = result.winReason;
+        if (result.log) this.addLog(result.log);
+        return;
+      }
+    }
+    // All witch leaders eliminated → heroes win (skip if no witch in this game)
+    if (this.witch !== null && this.factionEliminated('witch')) {
       this.winner    = 'hero';
       this.winReason = WIN_REASON.WITCH_SLAIN;
       this.addLog('☀ The witch has been defeated! Salem is saved!');

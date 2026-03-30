@@ -386,24 +386,21 @@ describe('resolvePlans — state integrity', () => {
     assert.ok(!minionStillAlive, 'Killed minion should be removed from entities');
   });
 
-  test('summon adds entity to state.entities', () => {
+  test('summon adds entity to state.entities on witch tile', () => {
     const state = freshState();
     const witch = state.witch;
     state.inventory.witch[ResourceType.FOOD] = 2;
-
-    const neighbor = emptyPassableNeighbor(state, witch);
-    if (!neighbor) return;
 
     const countBefore = state.entities.length;
     const witchPlan = [{
       type: PlanActionType.SUMMON,
       entityId: witch.id,
-      toCol: neighbor.col,
-      toRow: neighbor.row,
     }];
 
     resolvePlans(state, [], witchPlan);
     assert.ok(state.entities.length > countBefore, 'Summon should add entity to state');
+    const summoned = state.entities.find(e => e !== witch && e.col === witch.col && e.row === witch.row);
+    assert.ok(summoned, 'Summoned unit should appear on the witch tile');
   });
 });
 
@@ -464,7 +461,7 @@ describe('resolvePlans — log entries tagged with faction', () => {
 // ── Battle results include required fields (Bugs #4 + #5) ───────────────────
 
 describe('resolvePlans — battle result fields', () => {
-  test('BATTLE_UNIT result includes hit, margin, fortAbsorbed, and breakdown', () => {
+  test('BATTLE_UNIT result includes hit, margin, fortDamaged, and breakdown', () => {
     const state = freshState();
     const hero = state.hero;
     const minion = createMinion(hero.col, hero.row);
@@ -483,7 +480,7 @@ describe('resolvePlans — battle result fields', () => {
     assert.ok(battleEvent, 'Should have an ACTION_OK event');
     assert.ok('hit' in battleEvent.result, 'Result should include hit field');
     assert.ok('margin' in battleEvent.result, 'Result should include margin field');
-    assert.ok('fortAbsorbed' in battleEvent.result, 'Result should include fortAbsorbed field');
+    assert.ok('fortDamaged' in battleEvent.result, 'Result should include fortDamaged field');
     assert.ok('breakdown' in battleEvent.result, 'Result should include breakdown field');
     assert.equal(typeof battleEvent.result.hit, 'boolean', 'hit should be a boolean');
     assert.equal(typeof battleEvent.result.margin, 'number', 'margin should be a number');

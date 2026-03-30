@@ -25,6 +25,8 @@ function makeRendererStub() {
       this._lungeAnims = this._lungeAnims.filter(a => a.entityId !== entityId);
       this._lungeAnims.push({
         entityId,
+        owner,
+        fromCol, fromRow, toCol, toRow,
         fromX: from.x, fromY: from.y,
         midX, midY,
         startTime: Date.now(),

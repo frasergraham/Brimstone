@@ -250,19 +250,16 @@ export function getValidActions(state, actor) {
   // affordable flag.  The popup always shows all three so the player can choose.
   // affordable is per-type: iron_golem needs 2 metal, wood_golem needs 2 wood,
   // minion needs any 2 resources.
+  // Summoned units spawn on the witch's own tile (no target hex needed).
   if (!actorIsHero) {
-    const spawnTargets = getNeighbors(actor.col, actor.row).filter(n => {
-      const nt = tile(state, n.col, n.row);
-      return nt && nt.type !== TileType.RIVER && entitiesAt(state, n.col, n.row).length === 0;
-    });
-    if (spawnTargets.length) {
-      const inv   = state.inventory.witch;
-      const metal = inv[ResourceType.METAL] || 0;
-      const wood  = inv[ResourceType.WOOD]  || 0;
-      const total = Object.values(inv).reduce((s, v) => s + (v || 0), 0);
-      actions.push({ type: ActionType.SUMMON, summonType: EntityType.IRON_GOLEM, targets: spawnTargets, affordable: metal >= 2 });
-      actions.push({ type: ActionType.SUMMON, summonType: EntityType.WOOD_GOLEM, targets: spawnTargets, affordable: wood  >= 2 });
-      actions.push({ type: ActionType.SUMMON, summonType: EntityType.MINION,     targets: spawnTargets, affordable: total >= 2 });
+    const inv   = state.inventory.witch;
+    const metal = inv[ResourceType.METAL] || 0;
+    const wood  = inv[ResourceType.WOOD]  || 0;
+    const total = Object.values(inv).reduce((s, v) => s + (v || 0), 0);
+    if (total >= 2) {
+      actions.push({ type: ActionType.SUMMON, summonType: EntityType.IRON_GOLEM, affordable: metal >= 2 });
+      actions.push({ type: ActionType.SUMMON, summonType: EntityType.WOOD_GOLEM, affordable: wood  >= 2 });
+      actions.push({ type: ActionType.SUMMON, summonType: EntityType.MINION,     affordable: true });
     }
   }
 
@@ -351,6 +348,66 @@ function pickSummonType(inv) {
 
 // ── Execution ──────────────────────────────────────────────────────────────
 
+// Probability of spotting a hidden survivor when moving through a tile, by phase.
+// Keys are the Phase enum string values ('dawn', 'day', 'dusk', 'night').
+// Exploring a tile always finds survivors regardless of this table.
+const SURVIVOR_FIND_CHANCE = Object.freeze({
+  day:   0.50,
+  dawn:  0.35,
+  dusk:  0.35,
+  night: 0.25,
+});
+
+// Reveal and materialise a hidden survivor (or zombie for the witch) on a tile.
+// Clears the hiddenSurvivor flag and returns { encounterLog, encounterSurvivor }.
+function _triggerSurvivorEncounter(state, actor, col, row) {
+  const st = tile(state, col, row);
+  if (!st?.hiddenSurvivor) return null;
+
+  // Campaign cap: skip encounter if hero side already found max survivors
+  if (actor.owner === 'hero' &&
+      state.maxDiscoverableSurvivors != null &&
+      state.discoveredSurvivorCount >= state.maxDiscoverableSurvivors) {
+    st.hiddenSurvivor = false;
+    return null;
+  }
+
+  st.hiddenSurvivor = false;
+
+  const encounterLog = [];
+  let encounterSurvivor = null;
+
+  if (actor.owner === 'hero') {
+    const s = createSurvivor(col, row, actor.ownerId);
+    s.owner = 'hero';
+    state.entities.push(s);
+    state.discoveredSurvivorCount = (state.discoveredSurvivorCount || 0) + 1;
+    const abilityNote = s.abilityLabel ? ` · ${s.abilityLabel}` : '';
+    encounterLog.push(`☺ ${s.name} the ${s.title} steps out of hiding and joins the party! (HP ${s.hp}/${s.maxHp} · ATK ${s.attack} · DEF ${s.defense}${abilityNote})`);
+    encounterSurvivor = {
+      type: 'survivor',
+      name: s.name, title: s.title,
+      hp: s.hp, maxHp: s.maxHp,
+      attack: s.attack, defense: s.defense,
+      abilityLabel: s.abilityLabel,
+      color: s.color,
+    };
+  } else {
+    const z = createZombie(col, row, actor.ownerId);
+    state.entities.push(z);
+    encounterLog.push(`† A cowering survivor is found… raised as a zombie! (HP ${z.hp}/${z.maxHp} · ATK ${z.attack} · DEF ${z.defense})`);
+    encounterSurvivor = {
+      type: 'zombie',
+      name: 'Zombie',
+      hp: z.hp, maxHp: z.maxHp,
+      attack: z.attack, defense: z.defense,
+      color: z.color,
+    };
+  }
+
+  return { encounterLog, encounterSurvivor };
+}
+
 export function executeMove(state, actor, targetCol, targetRow) {
   const log = [];
 
@@ -378,35 +435,10 @@ export function executeMove(state, actor, targetCol, targetRow) {
     actor.row = step.row;
     walkedPath.push({ col: step.col, row: step.row });
 
-    // Hidden survivor encounter — triggers at each tile stepped on
-    if (st.hiddenSurvivor) {
-      st.hiddenSurvivor = false;
-      if (actor.owner === 'hero') {
-        const s = createSurvivor(step.col, step.row, actor.ownerId);
-        s.owner = 'hero';
-        state.entities.push(s);
-        const abilityNote = s.abilityLabel ? ` · ${s.abilityLabel}` : '';
-        encounterLog.push(`☺ ${s.name} the ${s.title} steps out of hiding and joins the party! (HP ${s.hp}/${s.maxHp} · ATK ${s.attack} · DEF ${s.defense}${abilityNote})`);
-        encounterSurvivor = {
-          type: 'survivor',
-          name: s.name, title: s.title,
-          hp: s.hp, maxHp: s.maxHp,
-          attack: s.attack, defense: s.defense,
-          abilityLabel: s.abilityLabel,
-          color: s.color,
-        };
-      } else {
-        const z = createZombie(step.col, step.row, actor.ownerId);
-        state.entities.push(z);
-        encounterLog.push(`† A cowering survivor is found… raised as a zombie! (HP ${z.hp}/${z.maxHp} · ATK ${z.attack} · DEF ${z.defense})`);
-        encounterSurvivor = {
-          type: 'zombie',
-          name: 'Zombie',
-          hp: z.hp, maxHp: z.maxHp,
-          attack: z.attack, defense: z.defense,
-          color: z.color,
-        };
-      }
+    // Hidden survivor encounter — phase-based chance on movement
+    if (st.hiddenSurvivor && Math.random() < (SURVIVOR_FIND_CHANCE[state.phase] ?? 0.5)) {
+      const enc = _triggerSurvivorEncounter(state, actor, step.col, step.row);
+      if (enc) { encounterLog.push(...enc.encounterLog); encounterSurvivor = enc.encounterSurvivor; }
     }
   }
 
@@ -433,6 +465,14 @@ export function executeExplore(state, actor) {
 
   t.explored = true;
 
+  // Exploring always reveals a hidden survivor, regardless of phase.
+  let encounterLog = [];
+  let encounterSurvivor = null;
+  if (t.hiddenSurvivor) {
+    const enc = _triggerSurvivorEncounter(state, actor, actor.col, actor.row);
+    if (enc) { encounterLog = enc.encounterLog; encounterSurvivor = enc.encounterSurvivor; }
+  }
+
   // HERBALIST ability: also yield 1 herbs on any explore (goes to actor's items)
   const isHerbalist = actor.type === EntityType.SURVIVOR &&
     actor.ability === SurvivorAbility.HERBALIST;
@@ -452,7 +492,8 @@ export function executeExplore(state, actor) {
     lootItems.push('+🌿');
   }
 
-  return { success: true, log, cost: 1, lootItems };
+  if (encounterLog.length) log.push(...encounterLog);
+  return { success: true, log, cost: 1, lootItems, encounterLog, encounterSurvivor };
 }
 
 function _applyLoot(state, actor, lootType, log, lootItems) {
@@ -515,10 +556,9 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
 export function executeBattle(state, actor, target) {
   const log = [];
 
-  // Phase bonus
+  // Phase bonus — only witch gets a night bonus (+2 ATK for all witch units)
   let phaseBonus = 0;
-  if (state.phase === Phase.DAY   && actor.owner === 'hero')  phaseBonus = 1;
-  if (state.phase === Phase.NIGHT && actor.owner === 'witch') phaseBonus = 1;
+  if (state.phase === Phase.NIGHT && actor.owner === 'witch') phaseBonus = 2;
 
   // Compute situational bonuses without touching entity fields
   // Gang-up: attacker allies adjacent to the TARGET (flanking/surrounding them)
@@ -541,13 +581,21 @@ export function executeBattle(state, actor, target) {
   const extraAtkDice = attackerAllies >= 1 ? 1 : 0;  // 2+ combatants on attacker side
   const extraDefDice = defenderAllies >= 1 ? 1 : 0;  // 2+ combatants on defender side
 
+  // Fatigue: hero-side defenders lose -1 DEF for every 2 times they've defended this round
+  const fatiguePenalty = target.owner === 'hero'
+    ? Math.floor((target.defendCount || 0) / 2)
+    : 0;
+
   const { attackRoll, defenseRoll, hit, margin,
           atkBaseDie, defBaseDie, atkExtraDice, defExtraDice, atkStaffBonus } =
-    Entity.resolveCombat(actor, target, phaseBonus, 0, fortBonus, extraAtkDice, extraDefDice);
+    Entity.resolveCombat(actor, target, phaseBonus, 0, fortBonus, extraAtkDice, extraDefDice,
+                         fatiguePenalty);
 
-  const phaseNote  = phaseBonus > 0
-    ? ` (${state.phase === Phase.DAY ? '☀ day bonus' : '🌙 night bonus'})`
-    : '';
+  // Increment the defender's defend count for fatigue tracking
+  if (target.defendCount === undefined) target.defendCount = 0;
+  target.defendCount += 1;
+
+  const phaseNote  = phaseBonus > 0 ? ' (🌙 night bonus)' : '';
   const gangNote    = attackerAllies >= 1 ? ' [gang-up +d3]' : '';
   const allyDefNote = defenderAllies >= 1 ? ' [allies +d3]'  : '';
 
@@ -559,28 +607,30 @@ export function executeBattle(state, actor, target) {
   let killed     = false;
   let damage     = 0;          // damage dealt to target
   let counterDmg = 0;          // damage dealt to attacker (counter)
-  let fortAbsorbed = 0;        // how many fortify levels were consumed
+  let fortDamaged = 0;         // fort levels lost this combat (1 if defender took any damage)
 
   if (hit) {
     // Crushing blow: attacker's roll is at least double the defender's roll
     const totalDmg = attackRoll >= 2 * defenseRoll ? 2 : 1;
 
+    // All damage goes directly to the defender
     for (let d = 0; d < totalDmg; d++) {
-      if (defTile && defTile.fortifyLevel > 0) {
-        // Fortification absorbs this point of damage
-        defTile.fortifyLevel -= 1;
-        fortAbsorbed += 1;
-        log.push(`🏰 The fortifications take the blow! (now +${defTile.fortifyLevel} DEF)`);
-      } else {
-        // Damage goes to the entity
-        damage += 1;
-        const wasKilled = target.takeDamage(1);
-        if (wasKilled) { killed = true; break; }
-      }
+      damage += 1;
+      const wasKilled = target.takeDamage(1);
+      if (wasKilled) { killed = true; break; }
+    }
+
+    // Fort takes -1 if the defender took any damage
+    if (damage > 0 && defTile && defTile.fortifyLevel > 0) {
+      defTile.fortifyLevel -= 1;
+      fortDamaged = 1;
+      log.push(`🏰 The fortifications are damaged! (now +${defTile.fortifyLevel} DEF)`);
     }
 
     if (killed) {
       log.push(`${target.displayName} is slain!`);
+      if (actor.owner === 'hero') state.heroKills++;
+      else if (actor.owner === 'witch') state.witchKills++;
       state.entities = state.entities.filter(e => e.id !== target.id);
     } else if (damage > 0) {
       const label = damage >= 2 ? `${damage} damage (crushing blow!)` : `${damage} damage`;
@@ -590,13 +640,6 @@ export function executeBattle(state, actor, target) {
   } else {
     log.push(`${target.displayName} defends successfully.`);
 
-    // Tie (margin === 0) chips fortification by 1 — close call, cracks the walls
-    if (margin === 0 && defTile && defTile.fortifyLevel > 0) {
-      defTile.fortifyLevel -= 1;
-      fortAbsorbed += 1;
-      log.push(`🏰 The blow chips the fortifications! (now +${defTile.fortifyLevel} DEF)`);
-    }
-
     // Counter-attack: defender's roll is at least double the attacker's roll
     if (defenseRoll >= 2 * attackRoll && actor.alive) {
       const counterKilled = actor.takeDamage(1);
@@ -604,6 +647,8 @@ export function executeBattle(state, actor, target) {
       log.push(`⚔ ${target.displayName} counter-attacks! ${actor.displayName} takes 1 damage.`);
       if (counterKilled) {
         log.push(`${actor.displayName} is slain by the counter!`);
+        if (target.owner === 'hero') state.heroKills++;
+        else if (target.owner === 'witch') state.witchKills++;
         state.entities = state.entities.filter(e => e.id !== actor.id);
       } else {
         log.push(`${actor.displayName} is at ${actor.hp}/${actor.maxHp} HP.`);
@@ -614,13 +659,13 @@ export function executeBattle(state, actor, target) {
   return {
     success: true, log, cost: 1,
     attackRoll, defenseRoll, hit, killed,
-    margin, damage, counterDmg, fortAbsorbed,
+    margin, damage, counterDmg, fortDamaged,
     attackerAllies, defenderAllies,
     breakdown: {
       atkBaseDie, defBaseDie,
       atkExtraDice, defExtraDice,
       atkStaffBonus,
-      phaseBonus, fortBonus,
+      phaseBonus, fortBonus, fatiguePenalty,
       atkAllyNames: atkAllies.map(e => e.displayName),
       defAllyNames: defAllies.map(e => e.displayName),
     },
@@ -662,7 +707,8 @@ export function executeFortify(state, actor) {
 // requestedType: optional EntityType (IRON_GOLEM / WOOD_GOLEM / MINION).
 // When provided the summon respects the player's explicit choice; falls back to
 // auto-pick if the requested type is no longer affordable (e.g. plan mis-ordering).
-export function executeSummon(state, actor, targetCol, targetRow, requestedType = null) {
+// The summoned unit always spawns on the actor's own tile.
+export function executeSummon(state, actor, requestedType = null) {
   const inv     = state.inventory.witch;
   const ownerId = actor.ownerId;
   let summonedUnit, res, unitName;
@@ -686,26 +732,37 @@ export function executeSummon(state, actor, targetCol, targetRow, requestedType 
 
   if (resolvedType === EntityType.IRON_GOLEM) {
     res = ResourceType.METAL; inv[res] -= 2;
-    summonedUnit = createIronGolem(targetCol, targetRow, ownerId);
+    summonedUnit = createIronGolem(actor.col, actor.row, ownerId);
     unitName = 'Iron Golem';
   } else if (resolvedType === EntityType.WOOD_GOLEM) {
     res = ResourceType.WOOD; inv[res] -= 2;
-    summonedUnit = createWoodGolem(targetCol, targetRow, ownerId);
+    summonedUnit = createWoodGolem(actor.col, actor.row, ownerId);
     unitName = 'Wood Golem';
   } else {
-    // Minion: spend 2 from any resources, largest stacks first
+    // Minion: spend 2 from any resources, largest stacks first; track what was spent
     const keys = Object.keys(inv).filter(k => inv[k] > 0).sort((a, b) => inv[b] - inv[a]);
     let remaining = 2;
+    const spentMap = {};
     for (const k of keys) {
       const spend = Math.min(inv[k], remaining); inv[k] -= spend; remaining -= spend;
+      spentMap[k] = (spentMap[k] || 0) + spend;
       if (remaining === 0) break;
     }
-    summonedUnit = createMinion(targetCol, targetRow, ownerId);
+    summonedUnit = createMinion(actor.col, actor.row, ownerId);
     unitName = 'Minion';
+    state.entities.push(summonedUnit);
+    state.witchSummonCount++;
+    return {
+      success: true,
+      log: [`The witch raises a ${unitName}!`],
+      cost: 1,
+      spent: Object.entries(spentMap).map(([type, amount]) => ({ type, amount })),
+    };
   }
 
   state.entities.push(summonedUnit);
-  return { success: true, log: [`The witch raises a ${unitName}!`], cost: 1 };
+  state.witchSummonCount++;
+  return { success: true, log: [`The witch raises a ${unitName}!`], cost: 1, spent: [{ type: res, amount: 2 }] };
 }
 
 export function executeUseItem(state, actor, item) {

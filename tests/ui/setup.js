@@ -17,7 +17,13 @@ export function makeFakeElement(id = '') {
   const el = {
     id,
     // ── style ──────────────────────────────────────────────────────────────
-    style: { display: '', visibility: '', cursor: '' },
+    style: {
+      display: '', visibility: '', cursor: '',
+      _props: {},
+      setProperty(k, v) { this._props[k] = v; },
+      removeProperty(k) { delete this._props[k]; },
+      getPropertyValue(k) { return this._props[k] ?? ''; },
+    },
     // ── class ─────────────────────────────────────────────────────────────
     get className() { return [..._classList].join(' '); },
     set className(v) {
@@ -201,7 +207,8 @@ export function createElementsBag(overrides = {}) {
     'end-turn-btn','turn-info','cycle-bar','node-status','node-status-bar','online-status',
     'plan-panel','plan-tab','plan-tab-count','plan-toggle-btn',
     'plan-steps','plan-budget-badge','plan-status','plan-players',
-    'plan-food-row','plan-countdown','plan-submit-btn','plan-clear-btn','plan-inventory',
+    'plan-food-row','plan-submit-btn','plan-clear-btn','plan-inventory',
+    'grace-dialog','grace-seconds','grace-submit-current','grace-submit-empty',
     'unit-stats-bar','action-popup','cancel-action-btn','cancel-wrap','target-hint',
     'chronicle-close','chronicle-overlay','chronicle-sidebar-close',
     'chronicle-sidebar','chronicle-sidebar-log','chronicle-mini','event-log',

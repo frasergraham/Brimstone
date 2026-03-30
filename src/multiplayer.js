@@ -7,6 +7,11 @@
  */
 import { setMapDimensions } from './hex.js';
 
+// ── Reconnect constants ──────────────────────────────────────────────────────
+
+const RECONNECT_BASE_MS   = 3000;
+const RECONNECT_MAX_TRIES = 3;
+
 // ── MirrorEntity ─────────────────────────────────────────────────────────────
 
 const _DISPLAY_NAMES = {
@@ -127,6 +132,9 @@ export class MultiplayerClient {
     this.active     = false; // true once in a game room
     this._queue     = [];    // buffered outgoing messages before connection
     this._pendingBattle = null; // battle result waiting to be shown after server state arrives
+    this._reconnectAttempt = 0;
+    this._reconnectTimer   = null;
+    this._boundOnClose     = null; // stored so we can removeEventListener before replacing the WS
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
@@ -135,17 +143,24 @@ export class MultiplayerClient {
   get connected(){ return this._ws?.readyState === 1; }
 
   connect(serverUrl) {
-    if (this._ws) this._ws.close();
+    // Detach the old close listener before closing so it doesn't trigger _scheduleReconnect
+    if (this._ws) {
+      if (this._boundOnClose) this._ws.removeEventListener('close', this._boundOnClose);
+      this._ws.close();
+    }
+    this._boundOnClose = () => this._onClose();
     this._ws = new WebSocket(serverUrl);
 
     this._ws.addEventListener('open',    () => this._onOpen());
     this._ws.addEventListener('message', e  => this._onMessage(e));
-    this._ws.addEventListener('close',   () => this._onClose());
+    this._ws.addEventListener('close',   this._boundOnClose);
     this._ws.addEventListener('error',   () => this._opts.onError?.('Connection error.'));
   }
 
   disconnect() {
     this.active = false;
+    if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
+    this._reconnectAttempt = 0;
     this._ws?.close();
   }
 
@@ -216,17 +231,30 @@ export class MultiplayerClient {
   }
 
   _onOpen() {
+    this._reconnectAttempt = 0;
+    if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
     // Flush queued messages
     for (const str of this._queue) this._ws.send(str);
     this._queue = [];
   }
 
   _onClose() {
-    if (this.active) {
-      this._opts.onError?.('Disconnected from server. Attempting to reconnect…');
-      // Reconnect after 3s
-      setTimeout(() => this._reconnect(), 3000);
+    if (this.active) this._scheduleReconnect();
+  }
+
+  _scheduleReconnect() {
+    if (this._reconnectAttempt >= RECONNECT_MAX_TRIES) {
+      this._opts.onError?.('Unable to reconnect. Please refresh the page.');
+      this._reconnectAttempt = 0;
+      return;
     }
+    const delay   = RECONNECT_BASE_MS * (2 ** this._reconnectAttempt);
+    const attempt = this._reconnectAttempt + 1;
+    this._opts.onError?.(`Disconnected. Reconnecting (${attempt}/${RECONNECT_MAX_TRIES}) in ${delay / 1000}s…`);
+    this._reconnectTimer = setTimeout(() => {
+      this._reconnectAttempt++;
+      this._reconnect();
+    }, delay);
   }
 
   _reconnect() {
@@ -357,6 +385,10 @@ export class MultiplayerClient {
         this._opts.onOpponentReady?.();
         break;
 
+      case 'timerReset':
+        this._opts.onTimerReset?.(msg.timeoutMs);
+        break;
+
       case 'resolutionComplete': {
         const mirror = MirrorState.fromSnapshot(msg.finalState);
         this._opts.onResolutionComplete?.({ steps: msg.steps, finalState: mirror });
@@ -389,4 +421,78 @@ export function loadSession() {
 /** Clear the saved session (logout). */
 export function clearSession() {
   try { localStorage.removeItem('brimstone_session'); } catch {}
+}
+
+// ── Email auth helpers ───────────────────────────────────────────────────────
+
+/**
+ * Request a magic link to link an email to the current account.
+ * @param {string} token  - The player's session token
+ * @param {string} email  - Email address to link
+ * @returns {Promise<{ok: boolean, message?: string, error?: string}>}
+ */
+export async function requestLinkEmail(token, email) {
+  try {
+    const res = await fetch('/auth/link-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, email }),
+    });
+    return await res.json();
+  } catch {
+    return { ok: false, error: 'Network error. Please try again.' };
+  }
+}
+
+/**
+ * Request a magic link to log in from a new device.
+ * @param {string} email  - Email address associated with the account
+ * @returns {Promise<{ok: boolean, message?: string, error?: string}>}
+ */
+export async function requestEmailLogin(email) {
+  try {
+    const res = await fetch('/auth/login-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    return await res.json();
+  } catch {
+    return { ok: false, error: 'Network error. Please try again.' };
+  }
+}
+
+/**
+ * Fetch the player's linked identities.
+ * @param {string} token  - The player's session token
+ * @returns {Promise<Array<{provider: string, provider_id: string}>>}
+ */
+export async function fetchIdentities(token) {
+  try {
+    const res = await fetch(`/api/identities?token=${encodeURIComponent(token)}`);
+    if (!res.ok) return [];
+    return await res.json();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Check for an email_token in the URL (from magic link redirect).
+ * If found, authenticate with it and strip the param from the URL.
+ * @returns {string|null} The session token from the URL, or null.
+ */
+export function checkEmailTokenInUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const emailToken = params.get('email_token');
+  if (!emailToken) return null;
+
+  // Strip the token from the URL without reloading
+  params.delete('email_token');
+  const newUrl = params.toString()
+    ? `${window.location.pathname}?${params}`
+    : window.location.pathname;
+  window.history.replaceState({}, '', newUrl);
+
+  return emailToken;
 }

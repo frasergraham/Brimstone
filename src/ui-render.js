@@ -32,7 +32,7 @@ export function describePlanAction(action, entities, index = 0) {
     case PlanActionType.FORTIFY:
       return `${who} fortifies`;
     case PlanActionType.SUMMON:
-      return `${who} summons at (${action.toCol},${action.toRow})`;
+      return `${who} summons`;
     case PlanActionType.USE_ITEM:
       return `${who} uses ${action.item}`;
     case PlanActionType.EQUIP_WEAPON:
