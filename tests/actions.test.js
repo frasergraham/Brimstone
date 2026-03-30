@@ -569,6 +569,26 @@ describe('executeBattle', () => {
     }
   });
 
+  test('no daytime attrition damage to witch minions', () => {
+    const state = freshState();
+    // Place a minion on an open (non-building) tile
+    const neighbor = emptyPassableNeighbor(state, state.witch);
+    assert.ok(neighbor, 'need an open tile for the minion');
+    const minion = createMinion(neighbor.col, neighbor.row);
+    state.entities.push(minion);
+    const hpBefore = minion.hp;
+
+    // Advance to a DAY phase by calling endRound until phase is DAY
+    while (state.phase !== Phase.DAY) {
+      state.endRound();
+    }
+
+    // Minion should not have taken any damage from the day phase
+    const alive = state.entities.find(e => e.id === minion.id);
+    assert.ok(alive, 'minion should still be in the entity list');
+    assert.equal(alive.hp, hpBefore, 'minion HP should be unchanged — no daytime attrition');
+  });
+
   test('attacker allies on adjacent hexes are counted for gang-up', () => {
     const state = freshState();
     const hero = state.hero;

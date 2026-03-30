@@ -1823,10 +1823,9 @@ export class UIController {
   _triggerHazardFlashes() {
     const state = this.state;
     const nightPositions = state.lastNightDamage || [];
-    const dayPositions   = state.lastDayDamage   || [];
     const hazardLog      = state.lastHazardLog    || [];
 
-    if (!nightPositions.length && !dayPositions.length) return;
+    if (!nightPositions.length) return;
 
     // Deduplicate: in online mode each server action re-sends the same hazard
     // arrays until the next turn, so we must not pop the dialog on every update.
@@ -1838,11 +1837,6 @@ export class UIController {
       const dmg = pos.dmg || 1;
       this.renderer.addFlash(pos.col, pos.row, `-${dmg}`, 'rgba(80,0,160,0.6)', 2200, 1.4, 'rgba(210,140,255,1)');
     }
-    for (const pos of dayPositions) {
-      const dmg = pos.dmg || 1;
-      this.renderer.addFlash(pos.col, pos.row, `-${dmg}`, 'rgba(255,180,0,0.6)', 2200, 1.4, 'rgba(255,230,80,1)');
-    }
-
     // Animate flashes while showing the dialog (skip in autoplay)
     if (!this.autoplay) {
       const endTime = Date.now() + 2200;
@@ -1860,10 +1854,7 @@ export class UIController {
         .filter(e => !myId || !e.ownerId || e.ownerId === myId)
         .map(e => e.text ?? e);
       if (myLines.length) {
-        const isNight = nightPositions.length > 0;
-        const header  = isNight
-          ? '🌙 Night falls — unprotected survivors suffer!'
-          : '☀ Dawn breaks — witch minions caught in the open suffer!';
+        const header  = '🌙 Night falls — unprotected survivors suffer!';
         this._showResultDialog([header, ...myLines], () => {
           this._updateSidebar();
           this.onRedraw();

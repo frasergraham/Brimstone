@@ -101,7 +101,6 @@ export function serializeState(state) {
     })),
     inventory:            JSON.parse(JSON.stringify(state.inventory)),
     lastNightDamage:      [...(state.lastNightDamage || [])],
-    lastDayDamage:        [...(state.lastDayDamage   || [])],
     lastHazardLog:        [...(state.lastHazardLog   || [])],
     heroId:               state.hero?.id  ?? null,
     witchId:              state.witch?.id ?? null,
@@ -188,7 +187,6 @@ export function deserializeState(snap) {
   }));
   state.inventory            = JSON.parse(JSON.stringify(snap.inventory));
   state.lastNightDamage      = [...(snap.lastNightDamage || [])];
-  state.lastDayDamage        = [...(snap.lastDayDamage   || [])];
   state.lastHazardLog        = [...(snap.lastHazardLog   || [])];
   // Backward compat: old saves stored fogOfWar as boolean
   state.fogOfWar             = typeof snap.fogOfWar === 'boolean'

@@ -2251,7 +2251,7 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
       }
 
       // Show hazard flashes from the previous round's endRound() before animating
-      if (preState.lastNightDamage?.length || preState.lastDayDamage?.length) {
+      if (preState.lastNightDamage?.length) {
         ui._triggerHazardFlashes();
         await _delay(600);
         if (_replayAborted) break;

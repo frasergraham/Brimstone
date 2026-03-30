@@ -218,7 +218,6 @@ export class GameState {
     this.winner            = null;
     this.winReason         = null;
     this.lastNightDamage   = []; // {col,row,dmg,isFort} entries for flash animation
-    this.lastDayDamage     = []; // {col,row,dmg} entries for flash animation
     this.lastHazardLog     = []; // human-readable lines describing hazard events this phase
 
     // ── Cumulative stats counters (for game-stats tracking) ──────────────────
@@ -529,11 +528,6 @@ export class GameState {
       this.lastHazardLog   = [];
       this._applyNightHazard(this.attritionLevel);
     }
-    if (this.phase === Phase.DAY) {
-      this.lastDayDamage = [];
-      this.lastHazardLog = [];
-      this._applyDayHazard(this.attritionLevel);
-    }
     if (this.phase === Phase.DAWN) {
       const cycle    = Math.ceil(this.round / CYCLE_LENGTH);
       const newLevel = attritionForCycle(cycle);
@@ -657,13 +651,6 @@ export class GameState {
         this._applyNightHazard(this.attritionLevel);
       }
 
-      // Day hazard: witch minions/zombies/golems in the open take attritionLevel damage
-      if (this.phase === Phase.DAY) {
-        this.lastDayDamage = [];
-        this.lastHazardLog = [];
-        this._applyDayHazard(this.attritionLevel);
-      }
-
       // Dawn: ramp attrition, reset explored tiles, check nodes
       if (this.phase === Phase.DAWN) {
         this.attritionLevel = Math.min(3, this.attritionLevel + 1);
@@ -685,7 +672,7 @@ export class GameState {
   _announcePhaseChange(from, to) {
     const messages = {
       [`${Phase.DAWN}->${Phase.DAY}`]:
-        `☀ The sun rises. The light burns the undead in the open!`,
+        `☀ The sun rises. Daylight favors the hero.`,
       [`${Phase.DAY}->${Phase.DUSK}`]:
         `🌇 Dusk falls. Seek shelter before night. Neither side has advantage.`,
       [`${Phase.DUSK}->${Phase.NIGHT}`]:
@@ -731,40 +718,6 @@ export class GameState {
     }
     if (endangered.length === 0 || dmg === 0) {
       this.addLog(`🌙 Night falls. Survivors are safe for now.`);
-    }
-  }
-
-  _applyDayHazard(dmg = 1) {
-    // Witch minions, zombies, and golems caught in the open during daylight take dmg damage.
-    // Fortified hexes shelter their occupants from hazard damage.
-    const sunburned = this.entities.filter(e => {
-      if (!e.alive || e.owner !== 'witch') return false;
-      if (e.type === EntityType.WITCH) return false;
-      const t = this.tiles.get(hexKey(e.col, e.row));
-      return !(t && t.type === TileType.BUILDING);
-    });
-
-    if (dmg > 0) {
-      for (const e of sunburned) {
-        const t = this.tiles.get(hexKey(e.col, e.row));
-        if (t && t.fortifyLevel > 0) {
-          const line = `🏰 ${e.displayName} is sheltered by the fort! (level ${t.fortifyLevel})`;
-          this.addLog(line, 'witch', this.playerColorFor(e));
-          this.lastHazardLog.push({ text: line, entityId: e.id, ownerId: e.ownerId ?? null });
-          continue;
-        }
-        this.lastDayDamage.push({ col: e.col, row: e.row, dmg });
-        const killed = e.takeDamage(dmg);
-        const line = killed
-          ? `💀 ${e.displayName} is destroyed by the light!`
-          : `☀ ${e.displayName} is scorched in the open! (-${dmg} HP, ${e.hp}/${e.maxHp} remaining)`;
-        this.addLog(line, 'witch', this.playerColorFor(e));
-        this.lastHazardLog.push({ text: line, entityId: e.id, ownerId: e.ownerId ?? null });
-        if (killed) this.entities = this.entities.filter(x => x.id !== e.id);
-      }
-    }
-    if (sunburned.length === 0 || dmg === 0) {
-      this.addLog(`☀ Daylight. Witch units are sheltered or out of harm's way.`, 'witch');
     }
   }
 
