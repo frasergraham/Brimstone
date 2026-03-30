@@ -1368,7 +1368,11 @@ export class UIController {
           break;
         }
         case ActionType.GUARD:
-          regularHtml += btn('🛡 Guard', 'guard', dis, `data-action="guard"`);
+        {
+          const charges = action.currentCharges || 0;
+          const lbl = charges > 0 ? `🛡 Guard (+${charges + 1})` : '🛡 Guard';
+          regularHtml += btn(lbl, 'guard', dis, `data-action="guard"`);
+        }
           break;
         case ActionType.SUMMON:
           // Each SUMMON entry has a specific summonType — render all three as separate buttons.

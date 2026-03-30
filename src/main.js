@@ -628,7 +628,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     for (const ev of allStepEvents) {
       if (ev.type === ResEventType.ACTION_OK && ev.action?.type === PlanActionType.GUARD) {
         const de = displayEntities.find(e => e.id === ev.action.entityId);
-        if (de) de.guarding = true;
+        if (de) de.guarding = (de.guarding || 0) + 1;
       }
     }
     state.entities = displayEntities;

@@ -231,7 +231,7 @@ export class Entity {
 
     this.actedThisTurn = false;
     this.defendCount   = 0;
-    this.guarding      = false;
+    this.guarding      = 0;
 
     // Personal backpack: herbs, weapons (key = 'weapon:sword' etc), horse
     this.items = {};
@@ -271,7 +271,7 @@ export class Entity {
     this.attackBonus   = 0;
     this.defenseBonus  = 0;
     this.defendCount   = 0;
-    this.guarding      = false;
+    this.guarding      = 0;
   }
 
   takeDamage(amount) {

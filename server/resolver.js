@@ -308,15 +308,18 @@ function _checkGuardStrikes(state, action, actor, faction, subEvents) {
   adjKeys.add(hexKey(triggerCol, triggerRow));
   for (const n of getNeighbors(triggerCol, triggerRow)) adjKeys.add(hexKey(n.col, n.row));
 
-  // Find enemy guarding entities adjacent to the trigger hex
+  // Find enemy guarding entities adjacent to the trigger hex (with charges > 0)
   const guardians = state.entities.filter(e =>
-    e.alive && e.guarding && e.owner !== faction &&
+    e.alive && (e.guarding > 0) && e.owner !== faction &&
     adjKeys.has(hexKey(e.col, e.row)) &&
     hexDistance(e.col, e.row, triggerCol, triggerRow) <= 1
   );
 
   for (const guardian of guardians) {
     if (!actor.alive) break;  // stop if target was killed by a prior guard strike
+    if (guardian.guarding <= 0) continue;  // charges exhausted by prior strike this step
+
+    guardian.guarding--;  // consume one guard charge
 
     const guardSnap  = snapEntity(guardian);
     const targetSnap = snapEntity(actor);
@@ -358,7 +361,7 @@ function snapshotEntities(entities) {
     attack:        e.attack,
     defense:       e.defense,
     fortification: e.fortification,
-    guarding:      e.guarding ?? false,
+    guarding:      e.guarding ?? 0,
     displayName:   e.displayName,
     title:         e.title,
   }));

@@ -264,10 +264,8 @@ export function getValidActions(state, actor) {
     }
   }
 
-  // Guard — any unit can take a guard stance (reactive attack vs adjacent enemies)
-  if (!actor.guarding) {
-    actions.push({ type: ActionType.GUARD });
-  }
+  // Guard — any unit can take a guard stance (stacks: each use adds 1 charge)
+  actions.push({ type: ActionType.GUARD, currentCharges: actor.guarding || 0 });
 
   // Herbs — available to any unit that carries them
   {
@@ -415,7 +413,7 @@ function _triggerSurvivorEncounter(state, actor, col, row) {
 }
 
 export function executeMove(state, actor, targetCol, targetRow) {
-  actor.guarding = false;  // Moving breaks guard stance
+  actor.guarding = 0;  // Moving breaks guard stance
   const log = [];
 
   // Reachability check — road tiles cost half, so roads extend effective range.
@@ -561,7 +559,7 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
 }
 
 export function executeBattle(state, actor, target) {
-  actor.guarding = false;  // Attacking breaks guard stance
+  actor.guarding = 0;  // Attacking breaks guard stance
   const log = [];
 
   // Phase bonus — only witch gets a night bonus (+2 ATK for all witch units)
@@ -865,10 +863,12 @@ export function executeUseAbility(state, actor) {
 }
 
 export function executeGuard(state, actor) {
-  actor.guarding = true;
+  actor.guarding = (actor.guarding || 0) + 1;
+  const charges = actor.guarding;
+  const label = charges > 1 ? ` (${charges} charges)` : '';
   return {
     success: true,
-    log: [`${actor.displayName} takes a guard stance.`],
+    log: [`${actor.displayName} takes a guard stance.${label}`],
     cost: 1,
   };
 }

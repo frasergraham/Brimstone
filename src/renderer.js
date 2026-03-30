@@ -664,7 +664,7 @@ export class Renderer {
     if (!state.planningPhase) {
       const guardZoneKeys = new Set();
       for (const e of state.entities) {
-        if (!e.alive || !e.guarding) continue;
+        if (!e.alive || !(e.guarding > 0)) continue;
         if (revealedHexes && !revealedHexes.has(hexKey(e.col, e.row))) continue;
         for (const n of getNeighbors(e.col, e.row)) {
           guardZoneKeys.add(hexKey(n.col, n.row));
@@ -1532,8 +1532,8 @@ export class Renderer {
         ctx.fill();
       }
 
-      // Guard stance indicator — shield icon at bottom-right
-      if (entity.guarding) {
+      // Guard stance indicator — shield icon at bottom-right, with charge count
+      if (entity.guarding > 0) {
         const gs = Math.max(8, Math.floor(r * 0.7));
         const gx = ex + r * 0.5;
         const gy = ey + r * 0.4;
@@ -1541,7 +1541,8 @@ export class Renderer {
         ctx.font = `bold ${gs}px serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('🛡', gx, gy);
+        const label = entity.guarding > 1 ? `🛡${entity.guarding}` : '🛡';
+        ctx.fillText(label, gx, gy);
       }
     }
 

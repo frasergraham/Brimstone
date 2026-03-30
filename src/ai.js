@@ -1467,7 +1467,7 @@ export class HeroAI {
 // adjacent (they may walk into guard range).  Also guards when holding a node
 // with no immediate target.  Returns null if guard is not useful.
 function _tryGuard(sim, entity) {
-  if (!entity || !entity.alive || entity.guarding) return null;
+  if (!entity || !entity.alive || (entity.guarding || 0) >= 2) return null;
   const enemies = sim.entities.filter(e =>
     e.alive && e.owner !== entity.owner
   );
@@ -1652,7 +1652,7 @@ class PlanSimState {
 
   applyGuard(entityId) {
     const e = this.entities.find(en => en.id === entityId);
-    if (e) e.guarding = true;
+    if (e) e.guarding = (e.guarding || 0) + 1;
     this.actionsLeft--;
   }
 }

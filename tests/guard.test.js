@@ -34,15 +34,24 @@ function emptyPassableNeighbor(state, entity) {
 // ── executeGuard ─────────────────────────────────────────────────────────────
 
 describe('executeGuard', () => {
-  test('sets guarding = true and costs 1 action', () => {
+  test('increments guarding charge and costs 1 action', () => {
     const state = freshState();
     const hero = state.hero;
-    assert.equal(hero.guarding, false);
+    assert.equal(hero.guarding, 0);
 
     const r = executeGuard(state, hero);
     assert.equal(r.success, true);
     assert.equal(r.cost, 1);
-    assert.equal(hero.guarding, true);
+    assert.equal(hero.guarding, 1);
+  });
+
+  test('stacks multiple guard charges', () => {
+    const state = freshState();
+    const hero = state.hero;
+    executeGuard(state, hero);
+    executeGuard(state, hero);
+    executeGuard(state, hero);
+    assert.equal(hero.guarding, 3);
   });
 
   test('works for witch units', () => {
@@ -50,7 +59,7 @@ describe('executeGuard', () => {
     const witch = state.witch;
     const r = executeGuard(state, witch);
     assert.equal(r.success, true);
-    assert.equal(witch.guarding, true);
+    assert.equal(witch.guarding, 1);
   });
 
   test('works for minions', () => {
@@ -60,28 +69,28 @@ describe('executeGuard', () => {
     state.entities.push(minion);
     const r = executeGuard(state, minion);
     assert.equal(r.success, true);
-    assert.equal(minion.guarding, true);
+    assert.equal(minion.guarding, 1);
   });
 });
 
 // ── Guard clearing ───────────────────────────────────────────────────────────
 
 describe('Guard clearing', () => {
-  test('executeMove clears guarding', () => {
+  test('executeMove clears all guard charges', () => {
     const state = freshState();
     const hero = state.hero;
-    hero.guarding = true;
+    hero.guarding = 3;
 
     const target = emptyPassableNeighbor(state, hero);
     if (!target) return; // skip if no passable neighbor
     executeMove(state, hero, target.col, target.row);
-    assert.equal(hero.guarding, false);
+    assert.equal(hero.guarding, 0);
   });
 
-  test('executeBattle clears guarding on attacker', () => {
+  test('executeBattle clears all guard charges on attacker', () => {
     const state = freshState();
     const hero = state.hero;
-    hero.guarding = true;
+    hero.guarding = 2;
 
     // Place a minion adjacent for combat
     const adj = emptyPassableNeighbor(state, hero);
@@ -91,15 +100,15 @@ describe('Guard clearing', () => {
     state.entities.push(minion);
 
     executeBattle(state, hero, minion);
-    assert.equal(hero.guarding, false);
+    assert.equal(hero.guarding, 0);
   });
 
-  test('resetTurn clears guarding', () => {
+  test('resetTurn clears all guard charges', () => {
     const state = freshState();
     const hero = state.hero;
-    hero.guarding = true;
+    hero.guarding = 3;
     hero.resetTurn();
-    assert.equal(hero.guarding, false);
+    assert.equal(hero.guarding, 0);
   });
 });
 
@@ -118,11 +127,13 @@ describe('Guard in getValidActions', () => {
     assert.ok(actions.some(a => a.type === ActionType.GUARD));
   });
 
-  test('Guard action not available when already guarding', () => {
+  test('Guard action still available when already guarding (stacking)', () => {
     const state = freshState();
-    state.hero.guarding = true;
+    state.hero.guarding = 2;
     const actions = getValidActions(state, state.hero);
-    assert.ok(!actions.some(a => a.type === ActionType.GUARD));
+    const guardAction = actions.find(a => a.type === ActionType.GUARD);
+    assert.ok(guardAction, 'Guard should be available for stacking');
+    assert.equal(guardAction.currentCharges, 2);
   });
 });
 
@@ -132,7 +143,7 @@ describe('executeGuardStrike', () => {
   test('performs a reactive attack with no ally dice', () => {
     const state = freshState();
     const hero = state.hero;
-    hero.guarding = true;
+    hero.guarding = 1;
 
     // Place a minion on a neighbor hex
     const adj = emptyPassableNeighbor(state, hero);
@@ -152,7 +163,7 @@ describe('executeGuardStrike', () => {
   test('strips silver (attackBonus) during guard strike', () => {
     const state = freshState();
     const hero = state.hero;
-    hero.guarding = true;
+    hero.guarding = 1;
     hero.attackBonus = 3; // simulating silver bonuses
 
     const adj = emptyPassableNeighbor(state, hero);
@@ -170,7 +181,7 @@ describe('executeGuardStrike', () => {
   test('can kill the target', () => {
     const state = freshState();
     const hero = state.hero;
-    hero.guarding = true;
+    hero.guarding = 1;
     hero.attack = 20; // guarantee a kill
 
     const adj = emptyPassableNeighbor(state, hero);
@@ -193,7 +204,7 @@ describe('executeGuardStrike', () => {
     const state = freshState();
     // Use a weak hero attacking a strong golem
     const hero = state.hero;
-    hero.guarding = true;
+    hero.guarding = 1;
     hero.attack = 0; // very weak
 
     const adj = emptyPassableNeighbor(state, hero);
@@ -222,7 +233,7 @@ describe('executeGuardStrike', () => {
     state.phase = Phase.NIGHT;
 
     const witch = state.witch;
-    witch.guarding = true;
+    witch.guarding = 1;
 
     const adj = emptyPassableNeighbor(state, witch);
     if (!adj) return;
@@ -305,7 +316,7 @@ describe('Guard strikes in resolver', () => {
     if (!survTarget) return;
 
     // Hero guards, survivor moves
-    hero.guarding = true; // pre-set to simplify
+    hero.guarding = 1; // pre-set to simplify
     const heroPlan = [
       { type: PlanActionType.GUARD, entityId: hero.id },
     ];
@@ -392,31 +403,31 @@ describe('GUARD action in resolver', () => {
     assert.ok(steps.length >= 1);
     const heroEvents = steps[0].heroEvents;
     assert.ok(heroEvents.some(e => e.type === ResEventType.ACTION_OK));
-    assert.equal(hero.guarding, true);
+    assert.equal(hero.guarding, 1);
   });
 });
 
 // ── Serialization ────────────────────────────────────────────────────────────
 
 describe('Guard serialization', () => {
-  test('guarding field survives serialize/deserialize', () => {
+  test('guarding charges survive serialize/deserialize', () => {
     const state = freshState();
-    state.hero.guarding = true;
+    state.hero.guarding = 3;
 
     const snap = serializeState(state);
     const heroSnap = snap.entities.find(e => e.id === state.hero.id);
-    assert.equal(heroSnap.guarding, true, 'guarding should be serialized');
+    assert.equal(heroSnap.guarding, 3, 'guarding charges should be serialized');
 
     const restored = deserializeState(snap);
     const restoredHero = restored.entities.find(e => e.id === state.hero.id);
-    assert.equal(restoredHero.guarding, true, 'guarding should survive deserialization');
+    assert.equal(restoredHero.guarding, 3, 'guarding charges should survive deserialization');
   });
 
-  test('guarding defaults to false for entities without the field', () => {
+  test('guarding defaults to 0 for entities without the field', () => {
     const state = freshState();
     const snap = serializeState(state);
     const heroSnap = snap.entities.find(e => e.id === state.hero.id);
-    assert.equal(heroSnap.guarding, false);
+    assert.equal(heroSnap.guarding, 0);
   });
 });
 
