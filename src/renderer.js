@@ -546,11 +546,14 @@ export class Renderer {
     // Content dimensions at current zoom
     const contentW = this.canvas.width  * this.zoomLevel;
     const contentH = this.canvas.height * this.zoomLevel;
-    // Allow pan up to the overflow in each axis; clamp to [overflow, 0]
-    const minX = Math.min(0, wrapW - contentW);
-    const minY = Math.min(0, wrapH - contentH);
-    this._panX = Math.max(minX, Math.min(0, this._panX));
-    this._panY = Math.max(minY, Math.min(0, this._panY));
+    // Allow panning beyond the map edges so any hex (including edge hexes)
+    // can be centered in the viewport.  The margin is ~40% of the viewport.
+    const marginX = wrapW * 0.4;
+    const marginY = wrapH * 0.4;
+    const minX = Math.min(0, wrapW - contentW) - marginX;
+    const minY = Math.min(0, wrapH - contentH) - marginY;
+    this._panX = Math.max(minX, Math.min(marginX, this._panX));
+    this._panY = Math.max(minY, Math.min(marginY, this._panY));
   }
 
   draw() {
@@ -1015,7 +1018,7 @@ export class Renderer {
         ctx.moveTo(corners[0].x, corners[0].y);
         for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
         ctx.closePath();
-        ctx.fillStyle = 'rgba(0,0,0,0.70)';
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
         ctx.fill();
       }
     }
