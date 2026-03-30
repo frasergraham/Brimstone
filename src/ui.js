@@ -2558,7 +2558,7 @@ export class UIController {
     const el = this._el('chronicle-sidebar-log');
     if (!el) return;
     const visible = this._visibleLog();
-    el.innerHTML = visible.map(m => `<div class="log-entry">${this._logText(m)}</div>`).join('');
+    el.innerHTML = visible.map(m => `<div class="log-entry ${this._logEntryModifier(m)}">${this._logText(m)}</div>`).join('');
     el.scrollTop = el.scrollHeight;
   }
 
@@ -2591,6 +2591,16 @@ export class UIController {
     return typeof entry === 'string' ? entry : entry.text;
   }
 
+  /** Return CSS modifier class(es) for a log entry (faction color / round separator). */
+  _logEntryModifier(entry) {
+    if (typeof entry === 'string') {
+      return /^Round \d+/.test(entry) ? 'log-round-separator' : '';
+    }
+    if (entry.owner === 'hero') return 'log-hero';
+    if (entry.owner === 'witch') return 'log-witch';
+    return '';
+  }
+
   /** Filter log entries to only those the current player can see. */
   _visibleLog() {
     const log = this.state?.log ?? [];
@@ -2608,7 +2618,7 @@ export class UIController {
     if (!el) return;
     const visible = this._visibleLog();
     el.innerHTML = visible.map(m =>
-      `<div class="log-entry">${this._logText(m)}</div>`
+      `<div class="log-entry ${this._logEntryModifier(m)}">${this._logText(m)}</div>`
     ).join('');
     el.scrollTop = el.scrollHeight;
 
@@ -2624,7 +2634,7 @@ export class UIController {
     if (mode === 'mini') {
       const visible = this._visibleLog();
       const last5   = visible.slice(-5);
-      el.innerHTML  = last5.map(m => `<div class="mini-log-entry">${this._logText(m)}</div>`).join('');
+      el.innerHTML  = last5.map(m => `<div class="mini-log-entry ${this._logEntryModifier(m)}">${this._logText(m)}</div>`).join('');
     } else {
       el.innerHTML = '';
     }
