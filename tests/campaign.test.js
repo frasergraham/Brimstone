@@ -43,6 +43,7 @@ describe('Campaign registry', () => {
       assert.ok(Array.isArray(c.missions), `${c.id} missing missions array`);
       assert.ok(c.mapBuilders, `${c.id} missing mapBuilders`);
       assert.ok(c.firstMission, `${c.id} missing firstMission`);
+      assert.ok('prerequisiteCampaign' in c, `${c.id} missing prerequisiteCampaign field`);
     }
   });
 
@@ -367,6 +368,32 @@ describe('Campaign class', () => {
     });
     assert.equal(c.roster.length, 1);
     assert.equal(c.roster[0].name, 'Alice');
+  });
+
+  test('isComplete returns false when missions remain', () => {
+    const c = new Campaign(salemDef);
+    c.completedMissions.add('prologue');
+    assert.ok(!c.isComplete());
+  });
+
+  test('isComplete returns true when all missions are completed', () => {
+    const c = new Campaign(salemDef);
+    for (const m of salemDef.missions) c.completedMissions.add(m.id);
+    assert.ok(c.isComplete());
+  });
+
+  test('static isCampaignCompleted returns false with no save', () => {
+    localStorage.clear();
+    assert.ok(!Campaign.isCampaignCompleted(salemDef));
+  });
+
+  test('static isCampaignCompleted returns true when all missions done', () => {
+    localStorage.clear();
+    const c = new Campaign(salemDef);
+    for (const m of salemDef.missions) c.completedMissions.add(m.id);
+    c.save();
+    assert.ok(Campaign.isCampaignCompleted(salemDef));
+    localStorage.clear();
   });
 });
 

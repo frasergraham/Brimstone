@@ -1133,14 +1133,19 @@ function _showCampaignSelectScreen() {
   const listEl = document.getElementById('campaign-select-list');
   listEl.innerHTML = CAMPAIGNS.map(c => {
     const hasSave = Campaign.exists(`campaign-${c.id}`);
-    return `<div class="campaign-select-item" data-campaign="${c.id}">
-      <div class="campaign-select-title">${c.title}</div>
+    const locked = c.prerequisiteCampaign
+      ? !Campaign.isCampaignCompleted(getCampaignById(c.prerequisiteCampaign))
+      : false;
+    const cls = `campaign-select-item${locked ? ' locked' : ''}`;
+    return `<div class="${cls}" data-campaign="${c.id}">
+      <div class="campaign-select-title">${locked ? '🔒 ' : ''}${c.title}</div>
       <div class="campaign-select-desc">${c.description}</div>
       ${hasSave ? '<div class="campaign-select-badge">Save found</div>' : ''}
+      ${locked ? '<div class="campaign-select-badge">Complete the previous chapter to unlock</div>' : ''}
     </div>`;
   }).join('');
 
-  listEl.querySelectorAll('.campaign-select-item').forEach(el => {
+  listEl.querySelectorAll('.campaign-select-item:not(.locked)').forEach(el => {
     el.addEventListener('click', () => {
       const def = getCampaignById(el.dataset.campaign);
       if (def) _showCampaignScreen(def);

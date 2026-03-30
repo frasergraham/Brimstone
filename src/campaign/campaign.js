@@ -238,6 +238,21 @@ export class Campaign {
     return null; // all missions completed
   }
 
+  /** Check if all missions in this campaign are completed. */
+  isComplete() {
+    return this.campaignDef.missions.every(m => this.completedMissions.has(m.id));
+  }
+
+  /**
+   * Check if a campaign is completed by loading its save.
+   * Returns true only if a save exists and every mission is completed.
+   */
+  static isCampaignCompleted(campaignDef) {
+    const c = new Campaign(campaignDef);
+    if (!c.load()) return false;
+    return c.isComplete();
+  }
+
   /** Get list of missions with their status for the mission select screen. */
   getMissionList() {
     return this.campaignDef.missions.map(m => {
