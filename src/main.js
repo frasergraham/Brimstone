@@ -664,31 +664,87 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     }
     state.entities = displayEntities;
 
+    // Track the last battle dialog's framed hex positions so we can skip
+    // redundant camera reframes when consecutive battles are at the same spot.
+    // Declared before the step-level frame so we can pre-apply the dialog
+    // inset when the first action in a step is a battle.
+    let _lastBattleFrameKey = null;
+    let _battleInsetActive = false;
+    const _prevInsetRight = renderer.insetRight ?? 0;
+    // The battle dialog only docks to the right (needing an inset offset)
+    // on wide landscape screens — on phone-sized screens it's a centered
+    // overlay so no camera offset is needed.
+    const _dialogDocksRight = (typeof window !== 'undefined'
+      && window.matchMedia?.('(min-width: 900px) and (min-aspect-ratio: 5/4)')?.matches) ?? false;
+    const _battleInsetValue = _dialogDocksRight ? 500 : 0;
+
     // ── Frame camera on this step's actors ──────────────────────────────────
     if (!_autoplay) {
       const _cspd = ui?.speedMode ?? 'cinematic';
       {
-        const frameTargets = [];
-        for (const ev of events) {
-          const snap = step.entitySnapshot?.find(e => e.id === ev.action?.entityId);
-          const isOpponent = humanFaction && ev.faction !== humanFaction;
-          if (snap && !(isOpponent && state.fogOfWar !== 'none')) {
-            // For moves, frame the destination; for others, frame the actor's current position
-            if (ev.action.type === PlanActionType.MOVE) {
-              frameTargets.push({ col: ev.action.toCol, row: ev.action.toRow });
-            } else {
-              frameTargets.push({ col: snap.col, row: snap.row });
+        // In cinematic/step modes, battles get per-battle dialog framing
+        // (with insetRight=500). To avoid a "yoyo" (centered frame → dialog
+        // reframe), detect the first visible battle and apply the dialog
+        // inset directly in this step-level frame, so the camera lands in the
+        // final position from the start.
+        const hasBattleDialogFraming = (_cspd === 'cinematic' || _cspd === 'step');
+        let firstBattleTargets = null;
+        let firstBattleFrameKey = null;
+        if (hasBattleDialogFraming) {
+          for (const ev of events) {
+            if (ev.action.type !== PlanActionType.BATTLE_UNIT && ev.action.type !== PlanActionType.BATTLE_HEX) continue;
+            if (!ev.battleSnaps) continue;
+            const { actorSnap, targetSnap } = ev.battleSnaps;
+            const myUnit = myPlayerId && (
+              actorSnap?.ownerId === myPlayerId || targetSnap?.ownerId === myPlayerId
+            );
+            const showForPlayer = myPlayerId
+              ? myUnit
+              : (!humanFaction || state.fogOfWar === 'none' || ev.faction === humanFaction
+                  || (targetSnap?.owner === humanFaction || actorSnap?.owner === humanFaction));
+            if (showForPlayer && actorSnap && targetSnap) {
+              firstBattleTargets = [
+                { col: actorSnap.col, row: actorSnap.row },
+                { col: targetSnap.col, row: targetSnap.row },
+              ];
+              firstBattleFrameKey = `${actorSnap.col},${actorSnap.row}|${targetSnap.col},${targetSnap.row}`;
+              break;
             }
-            // For battles, also frame the target
-            if ((ev.action.type === PlanActionType.BATTLE_UNIT || ev.action.type === PlanActionType.BATTLE_HEX) && ev.battleSnaps?.targetSnap) {
-              frameTargets.push({ col: ev.battleSnaps.targetSnap.col, row: ev.battleSnaps.targetSnap.row });
+          }
+        }
+
+        const frameTargets = [];
+        if (firstBattleTargets) {
+          // Pre-apply the dialog inset so the step-level frame already
+          // accounts for the battle dialog panel — no second reframe needed.
+          if (_dialogDocksRight) {
+            renderer.insetRight = _battleInsetValue;
+            _battleInsetActive = true;
+          }
+          _lastBattleFrameKey = firstBattleFrameKey;
+          frameTargets.push(...firstBattleTargets);
+        } else {
+          for (const ev of events) {
+            const snap = step.entitySnapshot?.find(e => e.id === ev.action?.entityId);
+            const isOpponent = humanFaction && ev.faction !== humanFaction;
+            if (snap && !(isOpponent && state.fogOfWar !== 'none')) {
+              // For moves, frame the destination; for others, frame the actor's current position
+              if (ev.action.type === PlanActionType.MOVE) {
+                frameTargets.push({ col: ev.action.toCol, row: ev.action.toRow });
+              } else {
+                frameTargets.push({ col: snap.col, row: snap.row });
+              }
+              // For battles, also frame the target
+              if ((ev.action.type === PlanActionType.BATTLE_UNIT || ev.action.type === PlanActionType.BATTLE_HEX) && ev.battleSnaps?.targetSnap) {
+                frameTargets.push({ col: ev.battleSnaps.targetSnap.col, row: ev.battleSnaps.targetSnap.row });
+              }
             }
           }
         }
         if (frameTargets.length) {
           const _isStep = _cspd === 'step';
           renderer.frameHexes(frameTargets, {
-            paddingHexes: _isStep ? 1.5 : 3.0,
+            paddingHexes: firstBattleTargets ? 2.5 : (_isStep ? 1.5 : 3.0),
             maxZoom:      _isStep ? 3.5 : 2.0,
             duration:     _isStep ? 400 : 250,
           });
@@ -856,17 +912,26 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             if (speed === 'cinematic' || speed === 'step') {
               // Full dialog for every battle — no significance filter.
               // Offset camera so the map is visible beside the docked dialog.
-              const prevInsetRight = renderer.insetRight ?? 0;
-              renderer.insetRight = 500;
-              renderer.frameHexes(
-                [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
-                { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
-              );
+              // Skip the reframe if the camera is already positioned for these
+              // same hex positions (avoids yoyo between consecutive battles at
+              // the same spot).
+              const frameKey = `${actorSnap.col},${actorSnap.row}|${targetSnap.col},${targetSnap.row}`;
+              const needsReframe = frameKey !== _lastBattleFrameKey || (_dialogDocksRight && !_battleInsetActive);
+              if (needsReframe) {
+                if (_dialogDocksRight) {
+                  renderer.insetRight = _battleInsetValue;
+                  _battleInsetActive = true;
+                }
+                renderer.frameHexes(
+                  [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
+                  { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
+                );
+              }
+              _lastBattleFrameKey = frameKey;
               // Wait for dialog dismiss, THEN play floaters so nothing overlaps.
               await new Promise(resolve => {
                 ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
               });
-              renderer.insetRight = prevInsetRight;
               _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
               // Drain all floaters (HP text 1800ms, death burst 600ms) before next battle.
               await renderer.waitForAnimations();
@@ -945,16 +1010,24 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         redrawFn();
 
         if (speed === 'cinematic' || speed === 'step') {
-          const prevInsetRight = renderer.insetRight ?? 0;
-          renderer.insetRight = 500;
-          renderer.frameHexes(
-            [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
-            { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
-          );
+          // Reuse the same frame-key tracking from Phase 2 so guard strikes
+          // at the same position as a preceding regular battle skip reframing.
+          const frameKey = `${actorSnap.col},${actorSnap.row}|${targetSnap.col},${targetSnap.row}`;
+          const needsReframe = frameKey !== _lastBattleFrameKey || (_dialogDocksRight && !_battleInsetActive);
+          if (needsReframe) {
+            if (_dialogDocksRight) {
+              renderer.insetRight = _battleInsetValue;
+              _battleInsetActive = true;
+            }
+            renderer.frameHexes(
+              [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
+              { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
+            );
+          }
+          _lastBattleFrameKey = frameKey;
           await new Promise(resolve => {
             ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
           });
-          renderer.insetRight = prevInsetRight;
           _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
           await renderer.waitForAnimations();
         } else {
@@ -978,6 +1051,11 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
       }
       hadBattle = true;
+    }
+    // Restore inset after all battles (regular + guard strikes) are done.
+    if (_battleInsetActive) {
+      renderer.insetRight = _prevInsetRight;
+      _battleInsetActive = false;
     }
 
     // ── Phase 3: explore results — only this player's own entities ───────────
