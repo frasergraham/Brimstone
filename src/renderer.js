@@ -1532,17 +1532,25 @@ export class Renderer {
         ctx.fill();
       }
 
-      // Guard stance indicator — shield icon at bottom-right, with charge count
+      // Guard stance indicator — small shield badge at bottom-right
       if (entity.guarding > 0) {
-        const gs = Math.max(8, Math.floor(r * 0.7));
-        const gx = ex + r * 0.5;
-        const gy = ey + r * 0.4;
-        ctx.fillStyle = '#ffffffdd';
-        ctx.font = `bold ${gs}px serif`;
+        const br = Math.max(5, hs * 0.13);
+        const bx = ex + r - br * 0.3;
+        const by = ey + r - br * 0.3;
+        // Background circle
+        ctx.beginPath();
+        ctx.arc(bx, by, br, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(230,160,60,0.9)';
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        // Charge number
+        ctx.fillStyle = '#fff';
+        ctx.font = `bold ${Math.max(7, Math.floor(br * 1.3))}px monospace`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        const label = entity.guarding > 1 ? `🛡${entity.guarding}` : '🛡';
-        ctx.fillText(label, gx, gy);
+        ctx.fillText(String(entity.guarding), bx, by + 0.5);
       }
     }
 
