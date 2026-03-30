@@ -624,6 +624,13 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     // Restore pre-step entity state before the camera pan so the canvas never
     // shows the final resolved state during the framing delay.
     const displayEntities = step.entitySnapshot.map(e => ({ ...e }));
+    // Apply GUARD actions from this step so guard zone highlights render immediately.
+    for (const ev of allStepEvents) {
+      if (ev.type === ResEventType.ACTION_OK && ev.action?.type === PlanActionType.GUARD) {
+        const de = displayEntities.find(e => e.id === ev.action.entityId);
+        if (de) de.guarding = true;
+      }
+    }
     state.entities = displayEntities;
 
     // ── Frame camera on this step's actors ──────────────────────────────────
