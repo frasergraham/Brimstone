@@ -115,11 +115,28 @@ function runAction(state, action, faction, playerId = null) {
     }
 
     case PlanActionType.BATTLE_UNIT: {
-      const target = state.entities.find(e => e.id === action.targetId && e.alive);
-      if (!target) return { kind: 'skip', reason: 'Target is dead or gone.' };
+      let target = state.entities.find(e => e.id === action.targetId && e.alive);
 
-      const dist = hexDistance(entity.col, entity.row, target.col, target.row);
-      if (dist > 1) return { kind: 'skip', reason: 'Target moved out of range.' };
+      if (target) {
+        const dist = hexDistance(entity.col, entity.row, target.col, target.row);
+        if (dist > 1) target = null; // target moved out of range
+      }
+
+      // Fallback: original target gone/moved — attack another enemy on the planned hex
+      if (!target && action.targetCol != null && action.targetRow != null) {
+        const dist = hexDistance(entity.col, entity.row, action.targetCol, action.targetRow);
+        if (dist <= 1) {
+          const enemies = state.entities.filter(
+            e => e.alive && e.owner !== faction &&
+                 e.col === action.targetCol && e.row === action.targetRow
+          );
+          if (enemies.length > 0) {
+            target = enemies[Math.floor(Math.random() * enemies.length)];
+          }
+        }
+      }
+
+      if (!target) return { kind: 'skip', reason: 'Target is dead or gone.' };
 
       const actorSnap  = snapEntity(entity);
       const targetSnap = snapEntity(target);

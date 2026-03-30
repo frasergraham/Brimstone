@@ -407,7 +407,7 @@ export class TutorialConductor {
       );
       const hero = this.state.entities.find(e => e.type === EntityType.HERO && e.alive);
       if (minion && hero) {
-        return [{ type: PlanActionType.BATTLE_UNIT, entityId: minion.id, targetId: hero.id }];
+        return [{ type: PlanActionType.BATTLE_UNIT, entityId: minion.id, targetId: hero.id, targetCol: hero.col, targetRow: hero.row }];
       }
     }
     // Round 3+: witch idles

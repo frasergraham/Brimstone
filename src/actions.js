@@ -421,11 +421,15 @@ export function executeMove(state, actor, targetCol, targetRow) {
   const fullPath = findShortestPath(state, actor, targetCol, targetRow) ?? [{ col: targetCol, row: targetRow }];
 
   // Walk the path step by step; stop if an enemy blocks a mid-path hex.
+  // Cap the number of hex steps to prevent long road-chain traversals when a
+  // prior move in the plan failed and the entity is further away than expected.
+  const maxSteps = hasHorse ? 3 : 2;
   const walkedPath = [];
   const encounterLog = [];
   let encounterSurvivor = null;
 
   for (const step of fullPath) {
+    if (walkedPath.length >= maxSteps) break;
     // Check if this hex is blocked by an enemy (could have moved here since plan was made)
     if (hasEnemy(state, actor, step.col, step.row)) break;
     const st = tile(state, step.col, step.row);

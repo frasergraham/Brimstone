@@ -1223,7 +1223,7 @@ export class UIController {
         // Planning mode: add battle to plan, then re-select the actor so red
         // battle highlights refresh naturally — clicking the same enemy again stacks another attack.
         if (this._planMode) {
-          this._addToPlan({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id });
+          this._addToPlan({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id, targetCol: target.col, targetRow: target.row });
           if (actor.alive) this._selectEntity(actor);
           else this._clearSelection();
           this._updateSidebar();
