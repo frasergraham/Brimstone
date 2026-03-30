@@ -182,7 +182,7 @@
       "name": "The Hero",
       "category": "unit",
       "parameters": {
-        "prompt": "A colonial New England hero warrior, rugged and weathered, layered leather and wool, battered sword at hip, resolute expression beneath wide-brimmed Puritan hat. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A colonial New England hero warrior, rugged and weathered, layered leather and wool, battered sword at hip, resolute expression beneath wide-brimmed Puritan hat. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -190,7 +190,7 @@
       "name": "The Witch",
       "category": "unit",
       "parameters": {
-        "prompt": "A Salem witch, dark flowing robes, silver and bone jewellery, eyes glowing faintly with unnatural light, wisps of shadow and violet smoke. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A Salem witch, dark flowing robes, silver and bone jewellery, eyes glowing faintly with unnatural light, wisps of shadow and violet smoke. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -198,7 +198,7 @@
       "name": "Zombie",
       "category": "unit",
       "parameters": {
-        "prompt": "A colonial-era zombie, tattered Puritan burial clothes, pale grey-green decomposing flesh, hollow milky eyes, earth clinging to its form, reaching clawed hands. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A colonial-era zombie, tattered Puritan burial clothes, pale grey-green decomposing flesh, hollow milky eyes, earth clinging to its form, reaching clawed hands. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -206,7 +206,7 @@
       "name": "Minion",
       "category": "unit",
       "parameters": {
-        "prompt": "A witch's bound minion, hunched shadowy figure in tattered rags, face obscured beneath a hood, clutches crude iron blade, bound by dark sigil-marked ropes. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A witch's bound minion, hunched shadowy figure in tattered rags, face obscured beneath a hood, clutches crude iron blade, bound by dark sigil-marked ropes. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -214,7 +214,7 @@
       "name": "Wood Golem",
       "category": "unit",
       "parameters": {
-        "prompt": "A massive wood golem, constructed from twisted oak, bark-covered limbs, glowing amber runes carved into chest, branches forming crude fingers, moss and vines through joints. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A massive wood golem, constructed from twisted oak, bark-covered limbs, glowing amber runes carved into chest, branches forming crude fingers, moss and vines through joints. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -222,7 +222,7 @@
       "name": "Iron Golem",
       "category": "unit",
       "parameters": {
-        "prompt": "A towering iron golem, forged from salvaged colonial metalwork, dark corroded plates riveted together, sigils branded into iron, glowing violet cracks at joints. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A towering iron golem, forged from salvaged colonial metalwork, dark corroded plates riveted together, sigils branded into iron, glowing violet cracks at joints. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -230,7 +230,7 @@
       "name": "John O'Connor — Innkeeper",
       "category": "unit",
       "parameters": {
-        "prompt": "A stocky colonial innkeeper, heavy apron over coarse linen, sleeves rolled up, carries a wood-splitting axe, tired but defiant expression. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A stocky colonial innkeeper, heavy apron over coarse linen, sleeves rolled up, carries a wood-splitting axe, tired but defiant expression. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -238,7 +238,7 @@
       "name": "Mary Quinn — Nurse",
       "category": "unit",
       "parameters": {
-        "prompt": "A colonial nurse, plain grey dress and white apron stained with salve, carries a medicine satchel, calm determined eyes, healing herbs tucked into belt. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A colonial nurse, plain grey dress and white apron stained with salve, carries a medicine satchel, calm determined eyes, healing herbs tucked into belt. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -246,7 +246,7 @@
       "name": "Thomas Putnam — Blacksmith",
       "category": "unit",
       "parameters": {
-        "prompt": "A massive colonial blacksmith, soot-darkened leather apron, enormous arms, carries a war hammer, scars from forge sparks, grim and resolute. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A massive colonial blacksmith, soot-darkened leather apron, enormous arms, carries a war hammer, scars from forge sparks, grim and resolute. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -254,7 +254,7 @@
       "name": "Abigail Foster — Herbalist",
       "category": "unit",
       "parameters": {
-        "prompt": "A young colonial herbalist, hooded cloak with dried herbs and wildflowers, wicker basket of plants, sharp intelligent eyes. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A young colonial herbalist, hooded cloak with dried herbs and wildflowers, wicker basket of plants, sharp intelligent eyes. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -262,7 +262,7 @@
       "name": "Samuel Cooper — Militia Sergeant",
       "category": "unit",
       "parameters": {
-        "prompt": "A weathered colonial militia sergeant, worn buff coat and leather crossbelt, carries musket and short sword, commanding posture, battle-hardened face beneath tricorn hat. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A weathered colonial militia sergeant, worn buff coat and leather crossbelt, carries musket and short sword, commanding posture, battle-hardened face beneath tricorn hat. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -270,7 +270,7 @@
       "name": "Father Crane — Parish Priest",
       "category": "unit",
       "parameters": {
-        "prompt": "An aged Puritan parish priest, long black cassock, silver cross at chest, carries leather-bound Bible, iron resolve in tired eyes. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "An aged Puritan parish priest, long black cassock, silver cross at chest, carries leather-bound Bible, iron resolve in tired eyes. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -278,7 +278,7 @@
       "name": "Hannah Marsh — Baker",
       "category": "unit",
       "parameters": {
-        "prompt": "A stout colonial baker, flour-dusted apron and rolled sleeves, carries a rolling pin repurposed as a club, cheerful but fierce expression. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A stout colonial baker, flour-dusted apron and rolled sleeves, carries a rolling pin repurposed as a club, cheerful but fierce expression. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -286,7 +286,7 @@
       "name": "Ezra Boone — Trapper",
       "category": "unit",
       "parameters": {
-        "prompt": "A lean colonial trapper, fur-trimmed frontier coat, carries flintlock rifle, animal pelts at belt, sharp woodsman's eyes. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A lean colonial trapper, fur-trimmed frontier coat, carries flintlock rifle, animal pelts at belt, sharp woodsman's eyes. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -294,7 +294,7 @@
       "name": "Constance Bell — Schoolteacher",
       "category": "unit",
       "parameters": {
-        "prompt": "A composed colonial schoolteacher, modest dark dress with white collar, carries journal, perceptive eyes behind small spectacles, ink-stained fingers. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A composed colonial schoolteacher, modest dark dress with white collar, carries journal, perceptive eyes behind small spectacles, ink-stained fingers. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -302,7 +302,7 @@
       "name": "Isaac Graves — Gravedigger",
       "category": "unit",
       "parameters": {
-        "prompt": "A gaunt colonial gravedigger, mud-caked boots and worn overcoat, carries long-handled shovel, hollow eyes, unafraid and stoic. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A gaunt colonial gravedigger, mud-caked boots and worn overcoat, carries long-handled shovel, hollow eyes, unafraid and stoic. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -310,7 +310,7 @@
       "name": "Patience Cole — Midwife",
       "category": "unit",
       "parameters": {
-        "prompt": "A capable colonial midwife, simple linen dress and cloak, carries satchel of medical supplies, warm steady hands, calm authority. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A capable colonial midwife, simple linen dress and cloak, carries satchel of medical supplies, warm steady hands, calm authority. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -318,7 +318,7 @@
       "name": "Silas Holt — Farmhand",
       "category": "unit",
       "parameters": {
-        "prompt": "A young colonial farmhand, rough spun shirt and suspenders, carries pitchfork, youthful face set with determination, broad shoulders. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A young colonial farmhand, rough spun shirt and suspenders, carries pitchfork, youthful face set with determination, broad shoulders. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -326,7 +326,7 @@
       "name": "Mercy Hale — Tanner",
       "category": "unit",
       "parameters": {
-        "prompt": "A sturdy colonial tanner woman, leather-stained apron over wool dress, calloused hands, carries a curved scraping knife, weathered but unbowed expression. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A sturdy colonial tanner woman, leather-stained apron over wool dress, calloused hands, carries a curved scraping knife, weathered but unbowed expression. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -334,7 +334,7 @@
       "name": "Elijah Pratt — Chandler",
       "category": "unit",
       "parameters": {
-        "prompt": "A thin colonial chandler, wax-spattered waistcoat, carries a bundle of tallow candles, sharp observant eyes, lantern hanging from belt. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A thin colonial chandler, wax-spattered waistcoat, carries a bundle of tallow candles, sharp observant eyes, lantern hanging from belt. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -342,7 +342,7 @@
       "name": "Ruth Wardwell — Goodwife",
       "category": "unit",
       "parameters": {
-        "prompt": "A resolute colonial goodwife, simple homespun dress and bonnet, strong weathered hands, carries an iron ladle like a weapon, fierce maternal determination. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A resolute colonial goodwife, simple homespun dress and bonnet, strong weathered hands, carries an iron ladle like a weapon, fierce maternal determination. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -350,7 +350,7 @@
       "name": "Nathaniel Corwin — Constable",
       "category": "unit",
       "parameters": {
-        "prompt": "A stern colonial constable, dark coat with brass buttons, leather baldric, carries a heavy wooden truncheon, square jaw and cold authoritative eyes. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A stern colonial constable, dark coat with brass buttons, leather baldric, carries a heavy wooden truncheon, square jaw and cold authoritative eyes. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -358,7 +358,7 @@
       "name": "Agnes Whittaker — Weaver",
       "category": "unit",
       "parameters": {
-        "prompt": "A nimble colonial weaver woman, grey shawl over faded blue dress, deft hands holding shuttle and thread, quick intelligent eyes behind wisps of hair. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A nimble colonial weaver woman, grey shawl over faded blue dress, deft hands holding shuttle and thread, quick intelligent eyes behind wisps of hair. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -366,7 +366,7 @@
       "name": "Josiah Dane — Carpenter",
       "category": "unit",
       "parameters": {
-        "prompt": "A broad-shouldered colonial carpenter, sawdust in his beard, rolled sleeves revealing scarred forearms, carries a heavy mallet and chisel, steady craftsman's gaze. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A broad-shouldered colonial carpenter, sawdust in his beard, rolled sleeves revealing scarred forearms, carries a heavy mallet and chisel, steady craftsman's gaze. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -374,7 +374,7 @@
       "name": "Prudence Faulkner — Apothecary's Daughter",
       "category": "unit",
       "parameters": {
-        "prompt": "A young colonial apothecary's daughter, dark hair under linen cap, carries a mortar and pestle, pouch of dried herbs at hip, thoughtful sorrowful eyes. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A young colonial apothecary's daughter, dark hair under linen cap, carries a mortar and pestle, pouch of dried herbs at hip, thoughtful sorrowful eyes. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     },
     {
@@ -382,7 +382,7 @@
       "name": "Caleb Osgood — Fisherman",
       "category": "unit",
       "parameters": {
-        "prompt": "A salt-crusted colonial fisherman, oilskin coat and heavy boots, carries a gaff hook, rope-burned hands, wind-scoured face with deep-set determined eyes. Circular portrait format with border, light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is slightly cartoonish and whimsical, but still rugged."
+        "prompt": "A salt-crusted colonial fisherman, oilskin coat and heavy boots, carries a gaff hook, rope-burned hands, wind-scoured face with deep-set determined eyes. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       }
     }
   ]
