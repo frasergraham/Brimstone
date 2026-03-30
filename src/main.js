@@ -457,7 +457,7 @@ async function _runLocalResolution(skipSummary = false) {
     for (const msg of waveLogs) state.addLog(msg);
   }
 
-  if (ui) ui._triggerPostRoundEffects();
+  if (ui) await ui._triggerPostRoundEffects();
   redraw();
 
   // Persist single-player progress to localStorage
@@ -3208,7 +3208,7 @@ function _createMpClient() {
         });
 
         // Mirror the same post-resolution side effects as the local path.
-        ui._triggerPostRoundEffects();
+        await ui._triggerPostRoundEffects();
         redrawOnline();
 
         // Show post-resolution summary modal for human players.

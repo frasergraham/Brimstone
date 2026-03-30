@@ -1820,7 +1820,7 @@ export class UIController {
 
   // ── Hazard flash animations ───────────────────────────────────────────────
 
-  _triggerPostRoundEffects() {
+  async _triggerPostRoundEffects() {
     const state = this.state;
     const events = state.postRoundEvents || [];
     const flashEvents = events.filter(ev => ev.flash && ev.col != null);
@@ -1840,14 +1840,10 @@ export class UIController {
       );
     }
 
-    // Drive animation loop (skip in autoplay)
+    // Drive animation loop and wait for flashes to finish (skip in autoplay)
     if (!this.autoplay) {
-      const endTime = Date.now() + 2200;
-      const loop = () => {
-        this.onRedraw();
-        if (Date.now() < endTime) requestAnimationFrame(loop);
-      };
-      requestAnimationFrame(loop);
+      this.onRedraw();
+      await this.renderer.waitForAnimations();
     }
   }
 
@@ -2819,14 +2815,19 @@ export class UIController {
         // Post-round effects (night attrition, etc.)
         const postEvents = this.state.postRoundEvents || [];
         const myId = this.myPlayerId;
-        for (const ev of postEvents) {
-          if (myId && ev.ownerId && ev.ownerId !== myId) continue;
-          if (ev.type === 'kill') {
-            html += `<div class="summary-hazard">💀 ${ev.entityName} consumed by the night</div>`;
-          } else if (ev.type === 'damage') {
-            html += `<div class="summary-hazard">🌙 ${ev.entityName} −${ev.amount} HP</div>`;
-          } else if (ev.type === 'shelter') {
-            html += `<div class="summary-shelter">🏰 ${ev.entityName} sheltered</div>`;
+        const visiblePostEvents = postEvents.filter(ev =>
+          ev.type !== 'safe' && (!myId || !ev.ownerId || ev.ownerId === myId)
+        );
+        if (visiblePostEvents.length) {
+          html += `<div class="summary-hazard-header">🌙 Night Attrition</div>`;
+          for (const ev of visiblePostEvents) {
+            if (ev.type === 'kill') {
+              html += `<div class="summary-hazard">💀 ${ev.entityName} −${ev.amount} HP (unsheltered at night) — killed</div>`;
+            } else if (ev.type === 'damage') {
+              html += `<div class="summary-hazard">🌙 ${ev.entityName} −${ev.amount} HP (unsheltered at night)</div>`;
+            } else if (ev.type === 'shelter') {
+              html += `<div class="summary-shelter">🏰 ${ev.entityName} sheltered by fortifications</div>`;
+            }
           }
         }
 
