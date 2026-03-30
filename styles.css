@@ -1978,9 +1978,37 @@ canvas { touch-action: pan-x pan-y; }
 }
 
 .round-summary-speed-row {
+  position: relative;
+}
+
+.summary-speed-toggle {
+  background: var(--bg-input, #1e1e2a);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 4px;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.summary-speed-toggle:hover { color: var(--text); border-color: var(--text-dim); }
+
+.summary-speed-popup {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.3rem;
   display: flex;
-  gap: 0.3rem;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 40;
+  min-width: 190px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.6);
 }
 
 .round-summary-gameover-btns {
@@ -1994,19 +2022,6 @@ canvas { touch-action: pan-x pan-y; }
   min-height: 44px;
 }
 
-.summary-speed-btn {
-  background: var(--bg-input, #1e1e2a);
-  border: 1px solid var(--border);
-  color: var(--text-dim);
-  border-radius: 3px;
-  padding: 0.15rem 0.5rem;
-  font-size: 0.7rem;
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
-}
-
-.summary-speed-btn:hover { color: var(--text); border-color: var(--text-dim); }
-.summary-speed-btn.active { color: var(--gold, #c8a84b); border-color: var(--gold, #c8a84b); }
 
 /* Action breakdown table in phase modal */
 .action-breakdown-table {
