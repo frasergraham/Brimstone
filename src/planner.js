@@ -22,6 +22,7 @@ export const PlanActionType = Object.freeze({
   USE_ITEM:     'use-item',
   EQUIP_WEAPON: 'equip-weapon',
   USE_ABILITY:  'use-ability',
+  GUARD:        'guard',
 });
 
 // Maximum number of steps a player may place in their plan.
@@ -252,6 +253,7 @@ export function validatePlanAction(state, action, projectedPositions = null) {
 
     case PlanActionType.EXPLORE:
     case PlanActionType.FORTIFY:
+    case PlanActionType.GUARD:
     case PlanActionType.USE_ABILITY:
       return { valid: true };
 

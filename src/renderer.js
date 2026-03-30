@@ -1514,6 +1514,18 @@ export class Renderer {
         ctx.arc(ex - r + 2, ey - r + 2, Math.max(2, hs * 0.08), 0, Math.PI * 2);
         ctx.fill();
       }
+
+      // Guard stance indicator — shield icon at bottom-right
+      if (entity.guarding) {
+        const gs = Math.max(8, Math.floor(r * 0.7));
+        const gx = ex + r * 0.5;
+        const gy = ey + r * 0.4;
+        ctx.fillStyle = '#ffffffdd';
+        ctx.font = `bold ${gs}px serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🛡', gx, gy);
+      }
     }
 
     if (stack.length > 3) {

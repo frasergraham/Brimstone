@@ -7,9 +7,10 @@
 import {
   executeMove, executeExplore, executeBattle,
   executeFortify, executeSummon, executeUseItem, executeUseAbility,
+  executeGuard, executeGuardStrike,
 } from '../src/actions.js';
 import { EntityType } from '../src/entities.js';
-import { hexDistance } from '../src/hex.js';
+import { hexDistance, getNeighbors, hexKey } from '../src/hex.js';
 import { PlanActionType, snapEntity } from '../src/planner.js';
 import { Phase } from '../src/game.js';
 import { ResourceType } from '../src/tiles.js';
@@ -22,6 +23,7 @@ export const ResEventType = Object.freeze({
   ACTION_FAIL:    'action_fail',    // hard failure — plan halts for this faction
   BUDGET_CAP:     'budget_cap',     // budget exhausted; remaining plan ignored
   FOOD_CONSUMED:  'food_consumed',  // ration auto-consumed to fund one over-budget action
+  GUARD_STRIKE:   'guard_strike',   // reactive attack from a guarding unit
 });
 
 // ── Budget calculation ───────────────────────────────────────────────────────
@@ -160,6 +162,12 @@ function runAction(state, action, faction, playerId = null) {
       return { kind: 'ok', result: r };
     }
 
+    case PlanActionType.GUARD: {
+      const r = executeGuard(state, entity);
+      if (!r.success) return { kind: 'fail', reason: r.log[0] };
+      return { kind: 'ok', result: r };
+    }
+
     case PlanActionType.SUMMON: {
       const r = executeSummon(state, entity, action.summonType ?? null);
       if (!r.success) return { kind: 'fail', reason: r.log[0] };
@@ -222,6 +230,9 @@ function drainOneStep(state, queue, budget) {
     }
   }
 
+  let resolvedAction = null;   // track for guard-strike check
+  let resolvedEntity = null;
+
   while (queue.length > 0 && budget.remaining > 0) {
     const action = queue[0];
     const out = runAction(state, action, budget.faction, budget.playerId ?? null);
@@ -241,6 +252,9 @@ function drainOneStep(state, queue, budget) {
         result:      out.result,
         battleSnaps: out.battleSnaps ?? null,
       });
+
+      resolvedAction = action;
+      resolvedEntity = state.entities.find(e => e.id === action.entityId && e.alive);
       break; // consumed one slot — done with this step
 
     } else if (out.kind === 'skip') {
@@ -266,7 +280,61 @@ function drainOneStep(state, queue, budget) {
     }
   }
 
+  // ── Guard strike check ──────────────────────────────────────────────────
+  // After a successful action, check if any enemy guards are adjacent to the
+  // action's target hex.  Each guarding enemy gets a free reactive attack.
+  if (resolvedAction && resolvedEntity) {
+    _checkGuardStrikes(state, resolvedAction, resolvedEntity, budget.faction, subEvents);
+  }
+
   return subEvents;
+}
+
+// Determine the hex that triggered guard reactions and run guard strikes.
+function _checkGuardStrikes(state, action, actor, faction, subEvents) {
+  // Determine the "trigger hex" — where the acting entity performed its action
+  let triggerCol, triggerRow;
+  if (action.type === PlanActionType.MOVE) {
+    triggerCol = action.toCol;
+    triggerRow = action.toRow;
+  } else {
+    // For all other actions, the actor's current position is the trigger
+    triggerCol = actor.col;
+    triggerRow = actor.row;
+  }
+
+  // Find all adjacent hexes (including the trigger hex itself for co-located guards)
+  const adjKeys = new Set();
+  adjKeys.add(hexKey(triggerCol, triggerRow));
+  for (const n of getNeighbors(triggerCol, triggerRow)) adjKeys.add(hexKey(n.col, n.row));
+
+  // Find enemy guarding entities adjacent to the trigger hex
+  const guardians = state.entities.filter(e =>
+    e.alive && e.guarding && e.owner !== faction &&
+    adjKeys.has(hexKey(e.col, e.row)) &&
+    hexDistance(e.col, e.row, triggerCol, triggerRow) <= 1
+  );
+
+  for (const guardian of guardians) {
+    if (!actor.alive) break;  // stop if target was killed by a prior guard strike
+
+    const guardSnap  = snapEntity(guardian);
+    const targetSnap = snapEntity(actor);
+    const r = executeGuardStrike(state, guardian, actor);
+
+    for (const msg of r.log ?? []) state.addLog(msg, guardian.owner);
+
+    subEvents.push({
+      type:        ResEventType.GUARD_STRIKE,
+      faction:     guardian.owner,
+      guardianId:  guardian.id,
+      targetId:    actor.id,
+      result:      r,
+      battleSnaps: { actorSnap: guardSnap, targetSnap },
+    });
+
+    if (r.killed) _handleLeaderDeath(state, actor);
+  }
 }
 
 // ── Entity snapshot ──────────────────────────────────────────────────────────
@@ -290,6 +358,7 @@ function snapshotEntities(entities) {
     attack:        e.attack,
     defense:       e.defense,
     fortification: e.fortification,
+    guarding:      e.guarding ?? false,
     displayName:   e.displayName,
     title:         e.title,
   }));

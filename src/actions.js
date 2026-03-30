@@ -18,6 +18,7 @@ export const ActionType = Object.freeze({
   USE_ITEM:     'use_item',
   EQUIP_WEAPON: 'equip_weapon',
   USE_ABILITY:  'use_ability',
+  GUARD:        'guard',
   END_TURN:     'end_turn',
 });
 
@@ -263,6 +264,11 @@ export function getValidActions(state, actor) {
     }
   }
 
+  // Guard — any unit can take a guard stance (reactive attack vs adjacent enemies)
+  if (!actor.guarding) {
+    actions.push({ type: ActionType.GUARD });
+  }
+
   // Herbs — available to any unit that carries them
   {
     const myItems = actor.items || {};
@@ -409,6 +415,7 @@ function _triggerSurvivorEncounter(state, actor, col, row) {
 }
 
 export function executeMove(state, actor, targetCol, targetRow) {
+  actor.guarding = false;  // Moving breaks guard stance
   const log = [];
 
   // Reachability check — road tiles cost half, so roads extend effective range.
@@ -554,6 +561,7 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
 }
 
 export function executeBattle(state, actor, target) {
+  actor.guarding = false;  // Attacking breaks guard stance
   const log = [];
 
   // Phase bonus — only witch gets a night bonus (+2 ATK for all witch units)
@@ -854,4 +862,87 @@ export function executeUseAbility(state, actor) {
     default:
       return { success: false, log: ['No active ability.'] };
   }
+}
+
+export function executeGuard(state, actor) {
+  actor.guarding = true;
+  return {
+    success: true,
+    log: [`${actor.displayName} takes a guard stance.`],
+    cost: 1,
+  };
+}
+
+// Weakened reactive attack from a guarding unit.
+// No ally bonus (extraAtkDice=0), no silver (attackBonus stripped),
+// no counter-attack. All other bonuses (phase, weapon/staff, fort) apply.
+export function executeGuardStrike(state, guardian, target) {
+  const log = [];
+
+  // Phase bonus applies normally
+  let phaseBonus = 0;
+  if (state.phase === Phase.NIGHT && guardian.owner === 'witch') phaseBonus = 2;
+
+  // Strip silver: temporarily zero attackBonus, restore after
+  const savedAtkBonus = guardian.attackBonus;
+  guardian.attackBonus = 0;
+
+  // Fortification still applies to the target's defense
+  const defTile = tile(state, target.col, target.row);
+  const fortBonus = defTile?.fortifyLevel || 0;
+
+  // No ally dice, no extra attack bonus, no fatigue penalty
+  const { attackRoll, defenseRoll, hit, margin,
+          atkBaseDie, defBaseDie, atkStaffBonus } =
+    Entity.resolveCombat(guardian, target, phaseBonus, 0, fortBonus, 0, 0, 0);
+
+  // Restore attackBonus
+  guardian.attackBonus = savedAtkBonus;
+
+  log.push(
+    `🛡 ${guardian.displayName} strikes from guard! ` +
+    `[${attackRoll} vs ${defenseRoll}]`
+  );
+
+  let killed = false;
+  let damage = 0;
+
+  if (hit) {
+    const totalDmg = attackRoll >= 2 * defenseRoll ? 2 : 1;
+
+    for (let d = 0; d < totalDmg; d++) {
+      damage += 1;
+      const wasKilled = target.takeDamage(1);
+      if (wasKilled) { killed = true; break; }
+    }
+
+    // Fort degradation on damage
+    if (damage > 0 && defTile && defTile.fortifyLevel > 0) {
+      defTile.fortifyLevel -= 1;
+      log.push(`🏰 The fortifications are damaged! (now +${defTile.fortifyLevel} DEF)`);
+    }
+
+    if (killed) {
+      log.push(`${target.displayName} is slain by the guard strike!`);
+      if (guardian.owner === 'hero') state.heroKills++;
+      else if (guardian.owner === 'witch') state.witchKills++;
+      state.entities = state.entities.filter(e => e.id !== target.id);
+    } else {
+      const label = damage >= 2 ? `${damage} damage (crushing blow!)` : `${damage} damage`;
+      log.push(`${target.displayName} takes ${label}. (${target.hp}/${target.maxHp} HP)`);
+    }
+    if (attackRoll >= 2 * defenseRoll) log.push(`💥 Crushing blow from guard!`);
+  } else {
+    log.push(`${target.displayName} evades the guard strike.`);
+    // No counter-attack on guard strikes
+  }
+
+  return {
+    success: true, log, cost: 0, guardStrike: true,
+    attackRoll, defenseRoll, hit, killed, margin, damage,
+    breakdown: {
+      atkBaseDie, defBaseDie,
+      atkStaffBonus, phaseBonus, fortBonus,
+    },
+  };
 }
