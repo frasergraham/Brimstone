@@ -1823,8 +1823,8 @@ export class UIController {
   async _triggerPostRoundEffects() {
     const state = this.state;
     const events = state.postRoundEvents || [];
-    const flashEvents = events.filter(ev => ev.flash && ev.col != null);
-    if (!flashEvents.length) return;
+    const positionedEvents = events.filter(ev => ev.col != null && ev.type !== 'safe');
+    if (!positionedEvents.length) return;
 
     // Deduplicate: in online mode each server action re-sends the same state
     // until the next turn, so we must not re-fire on every update.
@@ -1832,6 +1832,14 @@ export class UIController {
     if (key === this._lastPostRoundKey) return;
     this._lastPostRoundKey = key;
 
+    // Frame camera on all affected units before animating
+    if (!this.autoplay && this.renderer) {
+      const positions = positionedEvents.map(ev => ({ col: ev.col, row: ev.row }));
+      this.renderer.frameHexes(positions, { paddingHexes: 2.5, maxZoom: 2.0, duration: 400 });
+      await new Promise(r => setTimeout(r, 420));
+    }
+
+    const flashEvents = positionedEvents.filter(ev => ev.flash);
     for (const ev of flashEvents) {
       const f = ev.flash;
       this.renderer.addFlash(
@@ -1841,7 +1849,7 @@ export class UIController {
     }
 
     // Drive animation loop and wait for flashes to finish (skip in autoplay)
-    if (!this.autoplay) {
+    if (!this.autoplay && flashEvents.length) {
       this.onRedraw();
       await this.renderer.waitForAnimations();
     }
@@ -2826,7 +2834,9 @@ export class UIController {
             } else if (ev.type === 'damage') {
               html += `<div class="summary-hazard">🌙 ${ev.entityName} −${ev.amount} HP (unsheltered at night)</div>`;
             } else if (ev.type === 'shelter') {
-              html += `<div class="summary-shelter">🏰 ${ev.entityName} sheltered by fortifications</div>`;
+              const isBuilding = ev.text.startsWith('🏠');
+              const desc = isBuilding ? 'sheltered in building' : 'sheltered by fortifications';
+              html += `<div class="summary-shelter">${isBuilding ? '🏠' : '🏰'} ${ev.entityName} ${desc}</div>`;
             }
           }
         }

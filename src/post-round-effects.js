@@ -65,14 +65,43 @@ function nightAttritionEffect(state) {
   const dmg = state.attritionLevel;
   const events = [];
 
-  const endangered = state.entities.filter(e => {
-    if (!e.alive || e.type !== EntityType.SURVIVOR) return false;
+  // All living survivors, split by shelter status.
+  const allSurvivors = state.entities.filter(e =>
+    e.alive && e.type === EntityType.SURVIVOR
+  );
+
+  // Survivors sheltered inside buildings (always safe).
+  const inBuilding = [];
+  // Survivors outside buildings (may be fortified or exposed).
+  const exposed = [];
+  for (const e of allSurvivors) {
     const t = state.tiles.get(hexKey(e.col, e.row));
-    return !(t && t.type === TileType.BUILDING);
-  });
+    if (t && t.type === TileType.BUILDING) {
+      inBuilding.push(e);
+    } else {
+      exposed.push(e);
+    }
+  }
+
+  // Building shelter events
+  for (const e of inBuilding) {
+    const t = state.tiles.get(hexKey(e.col, e.row));
+    const bName = t?.building ?? 'building';
+    events.push({
+      type:       PostRoundEventType.SHELTER,
+      entityId:   e.id,
+      ownerId:    e.ownerId ?? null,
+      entityName: e.displayName,
+      col: e.col, row: e.row,
+      amount: 0,
+      killed: false,
+      text: `🏠 ${e.displayName} is sheltered in the ${bName}.`,
+      flash: null,
+    });
+  }
 
   if (dmg > 0) {
-    for (const e of endangered) {
+    for (const e of exposed) {
       const t = state.tiles.get(hexKey(e.col, e.row));
       if (t && t.fortifyLevel > 0) {
         events.push({
@@ -116,7 +145,7 @@ function nightAttritionEffect(state) {
     }
   }
 
-  if (endangered.length === 0 || dmg === 0) {
+  if (allSurvivors.length === 0 || dmg === 0) {
     events.push({
       type:       PostRoundEventType.SAFE,
       entityId:   null,
