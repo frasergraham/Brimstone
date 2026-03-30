@@ -20,6 +20,17 @@ const _upsert = db.prepare(`
 `);
 
 const _delete = db.prepare(`DELETE FROM game_saves WHERE room_id = ?`);
+const _deleteSaveRounds = db.prepare(`DELETE FROM save_replay_rounds WHERE room_id = ?`);
+const _insertSaveRound = db.prepare(`
+  INSERT OR REPLACE INTO save_replay_rounds (room_id, round_num, pre_state_json, steps_json)
+  VALUES (@roomId, @roundNum, @preStateJson, @stepsJson)
+`);
+const _getSaveRounds = db.prepare(`
+  SELECT round_num, pre_state_json, steps_json
+  FROM   save_replay_rounds
+  WHERE  room_id = ?
+  ORDER  BY round_num ASC
+`);
 
 const _listByPlayer = db.prepare(`
   SELECT room_id, hero_player_id, witch_player_id, hero_name, witch_name,
@@ -54,9 +65,20 @@ export function upsertSave(roomId, heroPlayerId, witchPlayerId, heroName, witchN
   });
 }
 
-/** Remove the save for a completed or abandoned room. */
+/** Remove the save for a completed or abandoned room (including replay rounds). */
 export function deleteSave(roomId) {
+  _deleteSaveRounds.run(roomId);
   _delete.run(roomId);
+}
+
+/** Append a single round's replay data to the save. */
+export function appendSaveRound(roomId, roundNum, preStateJson, stepsJson) {
+  _insertSaveRound.run({ roomId, roundNum, preStateJson, stepsJson });
+}
+
+/** Retrieve all replay rounds for a save, ordered by round number. */
+export function getSaveRounds(roomId) {
+  return _getSaveRounds.all(roomId);
 }
 
 /**
@@ -68,6 +90,14 @@ export function deleteSave(roomId) {
  */
 export function pruneStaleAndIncompatibleSaves(currentVersion) {
   const cutoff = Math.floor(Date.now() / 1000) - SAVE_MAX_AGE_DAYS * 86400;
+  // Collect room IDs that will be pruned so we can clean up their replay rounds
+  const staleRooms = db.prepare(`
+    SELECT room_id FROM game_saves
+    WHERE updated_at < ? OR game_version != ?
+  `).all(cutoff, currentVersion);
+  for (const { room_id } of staleRooms) {
+    _deleteSaveRounds.run(room_id);
+  }
   const { changes } = db.prepare(`
     DELETE FROM game_saves
     WHERE updated_at < ? OR game_version != ?

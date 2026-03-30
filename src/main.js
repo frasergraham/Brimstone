@@ -1718,13 +1718,21 @@ function _saveSpGame() {
   if (existing >= 0) saves[existing] = entry;
   else saves.unshift(entry);
   // Keep at most 10 saves
-  _saveSpSaves(saves.slice(0, 10));
+  const kept = saves.slice(0, 10);
+  // Remove history for saves that are being dropped
+  for (const dropped of saves.slice(10)) {
+    try { localStorage.removeItem('brimstone_sp_history_' + dropped.id); } catch {}
+  }
+  _saveSpSaves(kept);
+  // Persist round history separately (avoids bloating the saves list)
+  try { localStorage.setItem('brimstone_sp_history_' + _spSaveId, JSON.stringify(_roundHistory)); } catch {}
 }
 
 /** Delete a single-player save. */
 function _deleteSpSave(id) {
   const saves = _loadSpSaves().filter(s => s.id !== id);
   _saveSpSaves(saves);
+  try { localStorage.removeItem('brimstone_sp_history_' + id); } catch {}
 }
 
 /** Render the in-progress saves list on the Single Player screen. */
@@ -1768,13 +1776,19 @@ let _spSaveId = null;
 function _resumeSpSave(save) {
   _spSaveId = save.id;
   const deserialized = deserializeState(save.state);
-  _startFromState(deserialized, save.mode);
+  // Restore round history accumulated before the save
+  let priorHistory = [];
+  try {
+    const raw = localStorage.getItem('brimstone_sp_history_' + save.id);
+    if (raw) priorHistory = JSON.parse(raw);
+  } catch {}
+  _startFromState(deserialized, save.mode, priorHistory);
 }
 
 /** Start a game from an existing deserialized state (used by SP resume). */
-function _startFromState(existingState, mode) {
+function _startFromState(existingState, mode, existingHistory) {
   _autoplay = false;
-  _roundHistory = [];
+  _roundHistory = existingHistory || [];
   const canvas = document.getElementById('game-canvas');
 
   document.getElementById('setup-screen').style.display = 'none';
@@ -3040,9 +3054,17 @@ function _createMpClient() {
       _renderPublicLobbies(rooms);
     },
 
-    onMatchFound({ roomId, faction, opponentName, aiOpponent, resumed, myPlayerId, players }) {
-      // Reset online round history for this game
-      _onlineRoundHistory = [];
+    onMatchFound({ roomId, faction, opponentName, aiOpponent, resumed, myPlayerId, players, priorRounds }) {
+      // Reset online round history for this game, restoring prior rounds on resume
+      if (resumed && priorRounds?.length) {
+        _onlineRoundHistory = priorRounds.map(r => ({
+          roundNum: r.roundNum,
+          preState: r.preStateJson,
+          steps:    r.stepsJson,
+        }));
+      } else {
+        _onlineRoundHistory = [];
+      }
       // Show waiting card briefly during game start (covers both resume and lobby→game transitions)
       showStep('waiting');
       if (resumed) {
