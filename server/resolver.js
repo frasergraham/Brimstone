@@ -388,6 +388,7 @@ function snapshotEntities(entities) {
     guarding:      e.guarding ?? 0,
     displayName:   e.displayName,
     title:         e.title,
+    color:         e.color ?? null,
   }));
 }
 
