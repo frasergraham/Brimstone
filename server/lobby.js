@@ -592,9 +592,7 @@ function attachAI(room, faction, forPlayerId = null, personality = null) {
   }
 
   // Add a fresh AI seat (used when filling an empty slot)
-  const label    = PERSONALITY_LABELS[personality] ?? 'Balanced';
-  const baseName = pickAIName(faction, room.usedAINames);
-  const name     = `${baseName} (${label})`;
+  const name = pickAIName(faction, room.usedAINames);
   _addSeat(room, syntheticPlayerId, null, name, faction, true, ai);
   // Store personality on the seat for player-list broadcasts
   const newSeat = seatFor(room, syntheticPlayerId);
@@ -832,9 +830,7 @@ export function setSlotAI(playerId, roomId, slotIndex, personality) {
     ? _randomPersonality(slot.faction)
     : (personality ?? 'balanced');
 
-  const label    = PERSONALITY_LABELS[resolved] ?? 'Balanced';
-  const baseName = pickAIName(slot.faction, room.usedAINames);
-  const aiName   = `${baseName} (${label})`;
+  const aiName = pickAIName(slot.faction, room.usedAINames);
 
   slot.status      = 'ai';
   slot.personality = resolved;
@@ -855,9 +851,7 @@ export function removeSlotAI(playerId, roomId, slotIndex) {
 
   // Release the AI name back to the pool
   if (slot.name && room.usedAINames) {
-    // Strip personality suffix like " (Balanced)" to match the base name in the Set
-    const base = slot.name.replace(/\s*\([^)]*\)\s*$/, '');
-    room.usedAINames.delete(base);
+    room.usedAINames.delete(slot.name);
   }
 
   slot.status      = 'empty';

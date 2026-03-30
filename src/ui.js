@@ -556,7 +556,7 @@ export class UIController {
     }
 
     el.style.display = '';
-    el.innerHTML = buildPlayerStatusHtml(players, this.myPlayerId);
+    el.innerHTML = buildPlayerStatusHtml(players);
   }
 
   /** Called when the server notifies that another player has submitted. */
