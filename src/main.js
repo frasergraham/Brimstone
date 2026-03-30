@@ -597,7 +597,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   _resolving = true;
   for (let i = 0; i < steps.length; i++) {
     // During replay: if BACK or STOP was pressed, abort remaining steps immediately
-    if (_replayGoBack || _replayAborted) break;
+    if (_replayGoBack || _replayAborted || _replayJumpToEnd) break;
     const step = steps[i];
     // Post-step entities: what the world looks like AFTER this step resolves.
     const postEntities = i + 1 < steps.length ? steps[i + 1].entitySnapshot : finalEntities;
@@ -1019,7 +1019,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   ui?._clearStepContinue();
   state.entities = finalEntities;
   // Skip the final redraw during replay navigation (caller will render the target preState).
-  if (!_replayGoBack && !_replayAborted) {
+  if (!_replayGoBack && !_replayAborted && !_replayJumpToEnd) {
     redrawFn();
   }
   _resolving = false;
@@ -1034,7 +1034,7 @@ function _delay(ms) {
     let remaining = effective;
     let last = Date.now();
     function tick() {
-      if (_replayAborted || _replayGoBack) { resolve(); return; }
+      if (_replayAborted || _replayGoBack || _replayJumpToEnd) { resolve(); return; }
       if (!_replayPaused) {
         const now = Date.now();
         remaining -= (now - last);
@@ -2166,11 +2166,12 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
 
       // ── At round start: accept BACK / PAUSE before animation begins ─────────
       _replayAtRoundStart = true;
-      while (_replayPaused && !_replayAborted && !_replayGoBack) {
+      while (_replayPaused && !_replayAborted && !_replayGoBack && !_replayJumpToEnd) {
         await new Promise(r => setTimeout(r, 50));
       }
       _replayAtRoundStart = false;
       if (_replayAborted) break;
+      if (_replayJumpToEnd) continue; // handled at top of loop
 
       // BACK pressed while paused at round start → jump to prev/curr round
       if (_replayGoBack) {
