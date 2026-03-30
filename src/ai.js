@@ -26,13 +26,13 @@ const FOG_MESSAGES = [
 ];
 
 function fogLog(state) {
-  if (state.fogOfWar) {
+  if (state.fogOfWar !== 'none') {
     state.addLog(FOG_MESSAGES[Math.floor(Math.random() * FOG_MESSAGES.length)]);
   }
 }
 
 function logResult(state, result) {
-  if (state.fogOfWar) {
+  if (state.fogOfWar !== 'none') {
     if (result.success) fogLog(state);
   } else {
     for (const msg of result.log) state.addLog(msg);

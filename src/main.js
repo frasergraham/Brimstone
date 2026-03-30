@@ -89,9 +89,9 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
   const mapSize   = document.getElementById('select-map-size')?.value ?? 'standard';
   const nodeCount = parseInt(document.getElementById('select-node-count')?.value ?? '3', 10);
   state    = new GameState(witchIsAI, heroIsAI, mapSize, nodeCount);
-  // Allow global fog-of-war override from the setup screen checkbox.
-  const fogChk = document.getElementById('chk-fog-of-war');
-  if (fogChk && !fogChk.checked) state.fogOfWar = false;
+  // Allow global fog-of-war override from the setup screen select.
+  const fogSel = document.getElementById('select-fog-of-war');
+  if (fogSel) state.fogOfWar = fogSel.value;
 
   const thinkDelay = autoplay ? 0 : undefined;
   witchAI = witchIsAI ? new WitchAI(state, redraw, thinkDelay) : null;
@@ -146,7 +146,7 @@ function _recordLocalGameStats() {
     witch_personality: witchAI?.constructor?.name || null,
     hero_player_id:    null,
     witch_player_id:   null,
-    fog_of_war:        state.fogOfWar ? 1 : 0,
+    fog_of_war:        state.fogOfWar !== 'none' ? 1 : 0,
     duration_ms:       _gameStartTime ? Date.now() - _gameStartTime : null,
   };
   fetch('/api/game-stats', {
@@ -224,7 +224,7 @@ function initTutorial() {
   state = new GameState(false, false, 'tutorial', null, mapData);
 
   // Disable fog of war — tutorial should be fully visible.
-  state.fogOfWar = false;
+  state.fogOfWar = 'none';
 
   // Guarantee a survivor in the HOUSE at (2,3) for the round-3 exploration demo.
   const houseTile = state.tiles.get(_hexKey(2, 3));
@@ -518,7 +518,7 @@ async function _runLocalResolution(skipSummary = false) {
     let action;
     do {
       action = await ui._showResolutionSummary(steps, state.round - 1, {
-        prevScore, prevNodes, humanFaction: null, fogOfWar: false,
+        prevScore, prevNodes, humanFaction: null, fogOfWar: 'none',
         gameOver: true, winner: _goStateAP.winner, winReason: _goStateAP.winReason,
         hasFullReplay: _roundHistory.length > 0,
       });
@@ -644,7 +644,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         for (const ev of events) {
           const snap = step.entitySnapshot?.find(e => e.id === ev.action?.entityId);
           const isOpponent = humanFaction && ev.faction !== humanFaction;
-          if (snap && !(isOpponent && state.fogOfWar)) {
+          if (snap && !(isOpponent && state.fogOfWar !== 'none')) {
             // For moves, frame the destination; for others, frame the actor's current position
             if (ev.action.type === PlanActionType.MOVE) {
               frameTargets.push({ col: ev.action.toCol, row: ev.action.toRow });
@@ -699,7 +699,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
       const preSnap = step.entitySnapshot?.find(e => e.id === action.entityId);
       const isOpponent = humanFaction && ev.faction !== humanFaction;
-      const visible = preSnap && !(isOpponent && state.fogOfWar);
+      const visible = preSnap && !(isOpponent && state.fogOfWar !== 'none');
 
       // Use result.path if available (new path-following move); fall back to single hop
       const path = result?.path?.length > 0
@@ -782,7 +782,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         );
         const showForPlayer = myPlayerId
           ? myUnit
-          : (!humanFaction || !state.fogOfWar || ev.faction === humanFaction
+          : (!humanFaction || state.fogOfWar === 'none' || ev.faction === humanFaction
               || (battleSnaps && (
                    battleSnaps.targetSnap?.owner === humanFaction ||
                    battleSnaps.actorSnap?.owner  === humanFaction
@@ -885,7 +885,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
       const showForPlayer = myPlayerId
         ? (actorSnap?.ownerId === myPlayerId || targetSnap?.ownerId === myPlayerId)
-        : (!humanFaction || !state.fogOfWar || ev.faction === humanFaction
+        : (!humanFaction || state.fogOfWar === 'none' || ev.faction === humanFaction
             || targetSnap?.owner === humanFaction || actorSnap?.owner === humanFaction);
 
       if (!showForPlayer) continue;
@@ -1417,7 +1417,7 @@ function _initCampaignMission(missionDef) {
 
   // Create game state
   state = new GameState(true, false, missionDef.mapSize, null, mapData);
-  state.fogOfWar = true;
+  state.fogOfWar = 'partial';
 
   // Set custom victory delegate
   state.victoryDelegate = buildVictoryDelegate(missionDef.objectives);
@@ -2155,7 +2155,7 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
         Object.assign(state, lastState);
         state.hero     = lastState.hero;
         state.witch    = lastState.witch;
-        state.fogOfWar = false;
+        state.fogOfWar = 'none';
         // Apply final entities if available (captures combat outcomes of last round)
         if (lastRound.finalEntities) {
           const finals = lastRound.finalEntities;
@@ -2181,7 +2181,7 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
       Object.assign(state, preState);
       state.hero     = preState.hero;
       state.witch    = preState.witch;
-      state.fogOfWar = false;
+      state.fogOfWar = 'none';
       draw();
 
       // ── At round start: accept BACK / PAUSE before animation begins ─────────
@@ -2433,8 +2433,8 @@ document.getElementById('btn-cancel-wait').addEventListener('click', () => {
   _initMpStep();
 });
 
-function _fogChecked() {
-  return document.getElementById('chk-fog-of-war')?.checked ?? true;
+function _fogSelected() {
+  return document.getElementById('select-fog-of-war')?.value ?? 'partial';
 }
 
 // ── Node count selectors — populate options based on map size ─────────────────
@@ -2482,7 +2482,7 @@ document.getElementById('btn-create-game-back').addEventListener('click', () => 
 document.getElementById('btn-create-game-confirm').addEventListener('click', () => {
   _ensureAuthed(() => {
     const config = {
-      fog:           document.getElementById('cg-fog').checked,
+      fog:           document.getElementById('cg-fog').value,
       mapSize:       document.getElementById('cg-map-size').value,
       nodeCount:     parseInt(document.getElementById('cg-node-count')?.value ?? '3', 10),
       playersPerSide: parseInt(document.querySelector('input[name="cg-pps"]:checked')?.value ?? '1', 10),
@@ -2536,7 +2536,8 @@ function _renderPublicLobbies(rooms) {
   for (const lobby of rooms) {
     const pps    = lobby.config?.playersPerSide ?? 1;
     const size   = lobby.config?.mapSize ?? 'standard';
-    const fog    = lobby.config?.fog !== false ? 'Fog' : 'No Fog';
+    const fogMode = lobby.config?.fog ?? 'partial';
+    const fog    = fogMode === 'none' ? 'No Fog' : `Fog: ${fogMode.charAt(0).toUpperCase() + fogMode.slice(1)}`;
     const open   = lobby.slots?.filter(s => s.status === 'empty').length ?? 0;
     const total  = lobby.slots?.length ?? pps * 2;
     const host   = lobby.slots?.find(s => s.playerId === lobby.hostPlayerId)?.name ?? 'Unknown';
@@ -2584,7 +2585,8 @@ function _renderLobby(lobby) {
   // Config summary
   const pps  = lobby.config?.playersPerSide ?? 1;
   const size = lobby.config?.mapSize ?? 'standard';
-  const fog  = lobby.config?.fog !== false ? 'Fog on' : 'No fog';
+  const fogMode = lobby.config?.fog ?? 'partial';
+  const fog  = fogMode === 'none' ? 'No fog' : `Fog: ${fogMode.charAt(0).toUpperCase() + fogMode.slice(1)}`;
   document.getElementById('lobby-config-summary').textContent =
     `${pps}v${pps} · ${size.charAt(0).toUpperCase() + size.slice(1)} · ${fog}`;
 
@@ -3187,7 +3189,7 @@ function _createMpClient() {
 
           if (state.gameOver) {
             if (action === 'viewmap') {
-              state.fogOfWar = false;
+              state.fogOfWar = 'none';
               redrawOnline();
             } else if (action === 'restart') {
               _doRestart();
@@ -3296,14 +3298,14 @@ function initSpectator(roomId) {
         document.getElementById('spectator-info').style.display = '';
         document.getElementById('spectator-banner').style.display = '';
         const mirrorState = MirrorState.fromSnapshot(msg.state);
-        mirrorState.fogOfWar = false;
+        mirrorState.fogOfWar = 'none';
         _initSpectatorUI(mirrorState);
         _updateSpectatorInfoBar(msg.players, mirrorState);
         break;
       }
       case 'stateUpdate': {
         const mirrorState = MirrorState.fromSnapshot(msg.state);
-        mirrorState.fogOfWar = false;
+        mirrorState.fogOfWar = 'none';
         state = mirrorState;
         ui?.updateState(mirrorState);
         _updateSpectatorRoundLabel(mirrorState);
@@ -3312,7 +3314,7 @@ function initSpectator(roomId) {
       }
       case 'resolutionComplete': {
         const finalMirror = MirrorState.fromSnapshot(msg.finalState);
-        finalMirror.fogOfWar = false;
+        finalMirror.fogOfWar = 'none';
         const finalEntities = finalMirror.entities;
         const redrawFn = () => renderer?.draw();
         // Animate the resolution steps before applying the final state.

@@ -284,10 +284,11 @@
           </div>
           <div class="qp-option-row">
             <span class="qp-option-label">Fog of War</span>
-            <label class="cg-toggle">
-              <input type="checkbox" id="chk-fog-of-war" checked>
-              <span class="cg-toggle-track"></span>
-            </label>
+            <select id="select-fog-of-war" class="qp-select">
+              <option value="none">None</option>
+              <option value="partial" selected>Partial</option>
+              <option value="full">Full</option>
+            </select>
           </div>
         </div>
       </details>
@@ -478,10 +479,11 @@
       </div>
       <div class="cg-option-row">
         <span class="cg-option-label">Fog of war</span>
-        <label class="cg-toggle">
-          <input type="checkbox" id="cg-fog" checked>
-          <span class="cg-toggle-track"></span>
-        </label>
+        <select id="cg-fog" class="cg-select">
+          <option value="none">None</option>
+          <option value="partial" selected>Partial</option>
+          <option value="full">Full</option>
+        </select>
       </div>
       <div class="cg-option-row">
         <span class="cg-option-label">Private game</span>

@@ -161,8 +161,15 @@ export class GameState {
     this.witchIsAI = witchIsAI;
     this.heroIsAI  = heroIsAI;
 
-    // Fog of war: hide opponent from the human player's view when any side is AI
-    this.fogOfWar = witchIsAI || heroIsAI;
+    // Fog of war mode: 'none' | 'partial' | 'full'
+    //   none    — everything visible
+    //   partial — terrain visible, enemies hidden outside sight range
+    //   full    — hexes outside movement+sight range are black; explored hexes dimmed
+    this.fogOfWar = (witchIsAI || heroIsAI) ? 'partial' : 'none';
+
+    // Hexes that have been seen at least once per faction (full fog memory).
+    // Set<hexKey> per faction — persisted via state-sync.
+    this.exploredHexes = { hero: new Set(), witch: new Set() };
 
     // ── Player registry (multiplayer) ──────────────────────────────────────
     // Each entry: { id, name, faction, isAI, leaderId }
@@ -911,6 +918,13 @@ export class GameState {
         });
       }
     }
+  }
+
+  /** Merge a set of hex keys into a faction's explored-hex memory. */
+  markExplored(faction, hexKeys) {
+    const set = this.exploredHexes[faction];
+    if (!set) return;
+    for (const k of hexKeys) set.add(k);
   }
 
   get gameOver() { return this.winner !== null; }

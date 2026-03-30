@@ -147,6 +147,59 @@ function sameHexEnemies(state, entity) {
     .filter(e => e.id !== entity.id && e.owner !== entity.owner && e.alive);
 }
 
+// ── Fog-of-war movement reachability ──────────────────────────────────────
+// Like getReachableHexes but ignores enemies — used to compute the "dimmed"
+// zone in full fog mode (theoretical movement, not actual legal moves).
+
+export function getFogReachableHexes(state, actor, posOverride = null) {
+  const hasHorse = actor.owner === 'hero' && (actor.items?.['horse'] || 0) > 0;
+  const range    = hasHorse ? 2 : 1;
+  const budget   = range * 2;
+  const startCol = posOverride?.col ?? actor.col;
+  const startRow = posOverride?.row ?? actor.row;
+  const startK   = hexKey(startCol, startRow);
+  const dist     = new Map([[startK, 0]]);
+  const queue    = [{ col: startCol, row: startRow, c: 0 }];
+
+  while (queue.length) {
+    queue.sort((a, b) => a.c - b.c);
+    const { col, row, c } = queue.shift();
+    if (c > (dist.get(hexKey(col, row)) ?? Infinity)) continue;
+    for (const n of getNeighbors(col, row)) {
+      const nk = hexKey(n.col, n.row);
+      const nt = tile(state, n.col, n.row);
+      if (!nt || nt.type === TileType.RIVER) continue;
+      // No enemy blocking — this is theoretical reachability for fog visibility
+      const isRoadLike = nt.type === TileType.ROAD || nt.type === TileType.BRIDGE ||
+                         nt.type === TileType.BUILDING;
+      const nc = c + (isRoadLike ? 1 : 2);
+      if (nc <= budget && nc < (dist.get(nk) ?? Infinity)) {
+        dist.set(nk, nc);
+        queue.push({ col: n.col, row: n.row, c: nc });
+      }
+    }
+  }
+
+  const reachable = new Set();
+  for (const [k, d] of dist) {
+    if (d <= budget) reachable.add(k);  // include start hex
+  }
+  return reachable;
+}
+
+// Union of all movement-reachable hexes for a faction's alive entities.
+// projectedPositions: optional Map<entityId, {col,row}> for plan-mode ghost positions.
+export function buildFogMovementHexes(state, observerOwner, projectedPositions = null) {
+  const union = new Set();
+  for (const e of state.entities) {
+    if (!e.alive || e.owner !== observerOwner) continue;
+    const pos = projectedPositions?.get(e.id) ?? null;
+    const reachable = getFogReachableHexes(state, e, pos);
+    for (const k of reachable) union.add(k);
+  }
+  return union;
+}
+
 // ── Visibility ─────────────────────────────────────────────────────────────
 
 // Base sight range varies by phase: Day=3, Dawn/Dusk=2, Night=1.
