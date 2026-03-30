@@ -1995,6 +1995,15 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   padding: 2px 0;
 }
 
+.round-summary-events .summary-hazard {
+  color: var(--witch, #9b59b6);
+  padding: 2px 0;
+}
+.round-summary-events .summary-shelter {
+  color: var(--text-dim);
+  padding: 2px 0;
+}
+
 .round-summary-events .summary-resources {
   padding: 2px 0;
   font-size: 0.82rem;

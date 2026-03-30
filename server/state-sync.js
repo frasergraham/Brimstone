@@ -100,8 +100,7 @@ export function serializeState(state) {
       prevCtrl:    o.prevCtrl    ?? 'neutral',
     })),
     inventory:            JSON.parse(JSON.stringify(state.inventory)),
-    lastNightDamage:      [...(state.lastNightDamage || [])],
-    lastHazardLog:        [...(state.lastHazardLog   || [])],
+    postRoundEvents:      [...(state.postRoundEvents || [])],
     heroId:               state.hero?.id  ?? null,
     witchId:              state.witch?.id ?? null,
     mapCols,
@@ -168,7 +167,7 @@ export function deserializeState(snap) {
   state.round                = snap.round;
   state.activePlayer         = snap.activePlayer;
   state.actionsLeft          = snap.actionsLeft;
-  state.attritionLevel       = snap.attritionLevel       ?? 0;
+  state.attritionLevel       = snap.attritionLevel       ?? 1;
   state.attritionChanged     = snap.attritionChanged     ?? false;
   state.nodeScore            = { ...snap.nodeScore };
   state.disableScoring       = !!snap.disableScoring;
@@ -186,8 +185,7 @@ export function deserializeState(snap) {
     prevCtrl:    o.prevCtrl    ?? 'neutral',
   }));
   state.inventory            = JSON.parse(JSON.stringify(snap.inventory));
-  state.lastNightDamage      = [...(snap.lastNightDamage || [])];
-  state.lastHazardLog        = [...(snap.lastHazardLog   || [])];
+  state.postRoundEvents      = [...(snap.postRoundEvents || [])];
   // Backward compat: old saves stored fogOfWar as boolean
   state.fogOfWar             = typeof snap.fogOfWar === 'boolean'
     ? (snap.fogOfWar ? 'partial' : 'none')

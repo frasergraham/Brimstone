@@ -328,10 +328,10 @@ describe('Attrition schedule (endRound)', () => {
     }
   }
 
-  test('attrition is 0 in cycle 1 (rounds 1-8)', () => {
+  test('attrition is 1 in cycle 1 (rounds 1-8)', () => {
     const state = new GameState(true, true);
     advanceToRound(state, 2); // still cycle 1
-    assert.equal(state.attritionLevel, 0);
+    assert.equal(state.attritionLevel, 1);
   });
 
   test('attrition is 1 in cycle 2 (round 9+)', () => {

@@ -57,7 +57,7 @@ export class UIController {
     this._mouseDown   = null;
     this._didDragPan  = false;
 
-    this._lastHazardKey    = '';   // deduplicates hazard popups across state updates
+    this._lastPostRoundKey = '';   // deduplicates post-round effect animations across state updates
     this._battleInterval   = null; // dice animation interval — cleared on new dialog
     this.speedMode         = 'cinematic'; // 'step' | 'cinematic' | 'fast' | 'vfast'
     this._stepResolve      = null;        // set while waiting for click-to-advance in step mode
@@ -1820,24 +1820,27 @@ export class UIController {
 
   // ── Hazard flash animations ───────────────────────────────────────────────
 
-  _triggerHazardFlashes() {
+  _triggerPostRoundEffects() {
     const state = this.state;
-    const nightPositions = state.lastNightDamage || [];
-    const hazardLog      = state.lastHazardLog    || [];
+    const events = state.postRoundEvents || [];
+    const flashEvents = events.filter(ev => ev.flash && ev.col != null);
+    if (!flashEvents.length) return;
 
-    if (!nightPositions.length) return;
+    // Deduplicate: in online mode each server action re-sends the same state
+    // until the next turn, so we must not re-fire on every update.
+    const key = `${state.round}|${events.map(e => e.text).join('~')}`;
+    if (key === this._lastPostRoundKey) return;
+    this._lastPostRoundKey = key;
 
-    // Deduplicate: in online mode each server action re-sends the same hazard
-    // arrays until the next turn, so we must not pop the dialog on every update.
-    const hazardKey = `${state.round}|${hazardLog.map(e => (e.text ?? e)).join('~')}`;
-    if (hazardKey === this._lastHazardKey) return;
-    this._lastHazardKey = hazardKey;
-
-    for (const pos of nightPositions) {
-      const dmg = pos.dmg || 1;
-      this.renderer.addFlash(pos.col, pos.row, `-${dmg}`, 'rgba(80,0,160,0.6)', 2200, 1.4, 'rgba(210,140,255,1)');
+    for (const ev of flashEvents) {
+      const f = ev.flash;
+      this.renderer.addFlash(
+        ev.col, ev.row, f.label,
+        f.color, f.duration ?? 2200, f.fontScale ?? 1.4, f.textColor,
+      );
     }
-    // Animate flashes while showing the dialog (skip in autoplay)
+
+    // Drive animation loop (skip in autoplay)
     if (!this.autoplay) {
       const endTime = Date.now() + 2200;
       const loop = () => {
@@ -1845,21 +1848,6 @@ export class UIController {
         if (Date.now() < endTime) requestAnimationFrame(loop);
       };
       requestAnimationFrame(loop);
-    }
-
-    // Show a dialog summarising what happened, filtered to this player's own units.
-    if (hazardLog.length) {
-      const myId    = this.myPlayerId;
-      const myLines = hazardLog
-        .filter(e => !myId || !e.ownerId || e.ownerId === myId)
-        .map(e => e.text ?? e);
-      if (myLines.length) {
-        const header  = '🌙 Night falls — unprotected survivors suffer!';
-        this._showResultDialog([header, ...myLines], () => {
-          this._updateSidebar();
-          this.onRedraw();
-        });
-      }
     }
   }
 
@@ -1962,15 +1950,12 @@ export class UIController {
   _showAttritionPopup() {
     const level = this.state.attritionLevel;
     const desc  = level === 1
-      ? 'Exposed units suffer 1 damage each day and night.'
-      : level === 2
-        ? 'Exposed units now suffer 2 damage each day and night.'
-        : `Exposed units suffer ${level} damage each day and night.`;
+      ? 'Exposed survivors suffer 1 damage each night.'
+      : `Exposed survivors now suffer ${level} damage each night.`;
     this._showResultDialog([
       `🌑 The curse deepens — Salem's mystical energy grows stronger!`,
       ``,
       desc,
-      `☀ Day: witch undead in the open take ${level} damage`,
       `🌙 Night: survivors in the open take ${level} damage`,
     ], () => {});
   }
@@ -2828,6 +2813,20 @@ export class UIController {
             html += `<div class="summary-node">⚡ ${nc.label} is now contested</div>`;
           } else {
             html += `<div class="summary-node">◇ ${nc.label} is no longer controlled</div>`;
+          }
+        }
+
+        // Post-round effects (night attrition, etc.)
+        const postEvents = this.state.postRoundEvents || [];
+        const myId = this.myPlayerId;
+        for (const ev of postEvents) {
+          if (myId && ev.ownerId && ev.ownerId !== myId) continue;
+          if (ev.type === 'kill') {
+            html += `<div class="summary-hazard">💀 ${ev.entityName} consumed by the night</div>`;
+          } else if (ev.type === 'damage') {
+            html += `<div class="summary-hazard">🌙 ${ev.entityName} −${ev.amount} HP</div>`;
+          } else if (ev.type === 'shelter') {
+            html += `<div class="summary-shelter">🏰 ${ev.entityName} sheltered</div>`;
           }
         }
 

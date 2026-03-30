@@ -68,8 +68,7 @@ export class MirrorState {
     s.log                  = snap.log;
     s.witchObjectives      = snap.witchObjectives;
     s.inventory            = snap.inventory;
-    s.lastNightDamage      = snap.lastNightDamage || [];
-    s.lastHazardLog        = snap.lastHazardLog   || [];
+    s.postRoundEvents      = snap.postRoundEvents || [];
     s.planningPhase        = snap.planningPhase   ?? false;
     s.resolving            = snap.resolving       ?? false;
     s.heroReady            = snap.heroReady       ?? false;
