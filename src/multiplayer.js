@@ -465,11 +465,12 @@ export async function requestEmailLogin(email) {
 /**
  * Fetch the player's linked identities.
  * @param {string} token  - The player's session token
- * @returns {Promise<Array<{provider: string, provider_id: string}>>}
+ * @returns {Promise<Array|null>} Array of identities, or null if the token was rejected (401).
  */
 export async function fetchIdentities(token) {
   try {
     const res = await fetch(`/api/identities?token=${encodeURIComponent(token)}`);
+    if (res.status === 401) return null;
     if (!res.ok) return [];
     return await res.json();
   } catch {

@@ -2692,6 +2692,13 @@ async function _initAccountPage() {
 
   try {
     const identities = await fetchIdentities(session.token);
+    if (identities === null) {
+      // Token rejected by server — stale session
+      clearSession();
+      signedOut.style.display = '';
+      signedIn.style.display  = 'none';
+      return;
+    }
     const emailIdentity = identities.find(i => i.provider === 'email');
     if (emailIdentity) {
       emailEl.textContent = emailIdentity.provider_id;
