@@ -161,6 +161,50 @@ function _recordLocalGameStats() {
   });
 }
 
+/** Record campaign game stats to server (falls back to localStorage). */
+function _recordCampaignGameStats() {
+  if (!state || !state.gameOver || !_activeCampaign || !_activeMissionDef) return;
+  const missionDef = _activeMissionDef;
+  const survivorsDeployed = state.entities.filter(
+    e => e.owner === 'hero' && e.type === EntityType.SURVIVOR
+  ).length;
+  const survivorsLost = state.entities.filter(
+    e => e.owner === 'hero' && e.type === EntityType.SURVIVOR && !e.alive
+  ).length;
+  const enemiesSpawned = state.entities.filter(e => e.owner === 'witch').length;
+  const stats = {
+    id:                 crypto.randomUUID(),
+    campaign_id:        _activeCampaign.campaignDef.id,
+    mission_id:         missionDef.id,
+    mission_title:      missionDef.title || '',
+    winner:             state.winner,
+    win_reason:         state.winReason || '',
+    rounds:             state.round,
+    final_phase:        state.phase,
+    hero_kills:         state.heroKills  || 0,
+    witch_kills:        state.witchKills || 0,
+    survivors_deployed: survivorsDeployed,
+    survivors_lost:     survivorsLost,
+    enemies_spawned:    enemiesSpawned,
+    has_witch:          missionDef.hasWitch ? 1 : 0,
+    ai_personality:     missionDef.aiPersonality || null,
+    map_size:           missionDef.mapSize || 'standard',
+    game_version:       VERSION,
+    duration_ms:        _gameStartTime ? Date.now() - _gameStartTime : null,
+  };
+  fetch('/api/campaign-game-stats', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(stats),
+  }).catch(() => {
+    try {
+      const local = JSON.parse(localStorage.getItem('brimstone_campaign_stats') || '[]');
+      local.push(stats);
+      localStorage.setItem('brimstone_campaign_stats', JSON.stringify(local));
+    } catch { /* storage full or unavailable — silently discard */ }
+  });
+}
+
 // ── Tutorial mode ─────────────────────────────────────────────────────────────
 
 function initTutorial() {
@@ -1379,6 +1423,9 @@ function _initCampaignMission(missionDef) {
 
 function _handleCampaignMissionEnd() {
   if (!_activeCampaign || !_activeMissionDef || !state) return;
+
+  // Record campaign-specific stats before cleaning up
+  _recordCampaignGameStats();
 
   const won = state.winner === 'hero';
   const missionDef = _activeMissionDef;

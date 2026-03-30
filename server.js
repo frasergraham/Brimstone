@@ -13,6 +13,7 @@ import {
 import { generateToken, verifyToken, sendMagicLinkEmail } from './server/magic-link.js';
 import { getLeaderboard }                    from './server/leaderboard.js';
 import { recordGameStats, getGameStats, getAggregateStats } from './server/game-stats.js';
+import { recordCampaignGameStats, getCampaignGameStats, getCampaignAggregateStats } from './server/campaign-game-stats.js';
 import { upsertCampaignSave, getCampaignSave, getCampaignSaves, deleteCampaignSave } from './server/campaign-saves.js';
 import { getActiveSaves, pruneStaleAndIncompatibleSaves,
          getCompletedGames, getCompletedGame, getCompletedGameRounds,
@@ -124,6 +125,22 @@ app.post('/api/game-stats', (req, res) => {
   } catch (err) {
     console.error('POST /api/game-stats error:', err);
     res.status(500).json({ error: 'Failed to record stats.' });
+  }
+});
+
+// REST: record campaign game stats
+app.post('/api/campaign-game-stats', (req, res) => {
+  try {
+    const stats = req.body;
+    if (!stats?.id || !stats?.campaign_id || !stats?.mission_id || !stats?.winner) {
+      res.status(400).json({ error: 'Missing required fields.' });
+      return;
+    }
+    recordCampaignGameStats(stats);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('POST /api/campaign-game-stats error:', err);
+    res.status(500).json({ error: 'Failed to record campaign stats.' });
   }
 });
 
@@ -354,6 +371,19 @@ app.get('/admin/api/game-stats', (req, res) => {
 
 app.get('/admin/api/game-stats/summary', (_req, res) => {
   res.json(getAggregateStats());
+});
+
+app.get('/admin/api/campaign-game-stats', (req, res) => {
+  res.json(getCampaignGameStats({
+    campaign_id: req.query.campaign_id || undefined,
+    mission_id:  req.query.mission_id  || undefined,
+    winner:      req.query.winner      || undefined,
+    limit:       req.query.limit ? parseInt(req.query.limit, 10) : 100,
+  }));
+});
+
+app.get('/admin/api/campaign-game-stats/summary', (_req, res) => {
+  res.json(getCampaignAggregateStats());
 });
 
 app.post('/admin/api/saves/:roomId/activate', (req, res) => {

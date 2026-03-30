@@ -122,4 +122,26 @@ export const SCHEMA_SQL = `
     duration_ms       INTEGER,
     created_at        INTEGER NOT NULL DEFAULT (unixepoch())
   );
+
+  CREATE TABLE IF NOT EXISTS campaign_game_stats (
+    id                TEXT PRIMARY KEY,
+    campaign_id       TEXT NOT NULL,
+    mission_id        TEXT NOT NULL,
+    mission_title     TEXT NOT NULL DEFAULT '',
+    winner            TEXT NOT NULL,
+    win_reason        TEXT NOT NULL,
+    rounds            INTEGER NOT NULL,
+    final_phase       TEXT NOT NULL,
+    hero_kills        INTEGER NOT NULL DEFAULT 0,
+    witch_kills       INTEGER NOT NULL DEFAULT 0,
+    survivors_deployed INTEGER NOT NULL DEFAULT 0,
+    survivors_lost    INTEGER NOT NULL DEFAULT 0,
+    enemies_spawned   INTEGER NOT NULL DEFAULT 0,
+    has_witch         INTEGER NOT NULL DEFAULT 0,
+    ai_personality    TEXT,
+    map_size          TEXT NOT NULL DEFAULT 'standard',
+    game_version      TEXT NOT NULL,
+    duration_ms       INTEGER,
+    created_at        INTEGER NOT NULL DEFAULT (unixepoch())
+  );
 `;
