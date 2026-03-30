@@ -1,5 +1,34 @@
 [
   {
+    "version": "1.1.0",
+    "date": "2026-03-30",
+    "summary": "New features, and bug fixes",
+    "notes": [
+      "Guard charges stack — each guard action adds one reactive strike",
+      "Animate guard strikes during resolution playback",
+      "+1 action per held power node at planning start",
+      "Add light orange guard zone highlights during playback",
+      "Add Guard action for all units",
+      "Allow view-only selection of enemy units to inspect stats",
+      "Add disambiguation dialog when moving to hex with friendly unit",
+      "Replace emoji shield with drawn badge for guard indicator",
+      "Include full breakdown fields in guard strike result",
+      "Apply guard flag to display entities during resolution playback",
+      "Allow centering edge hexes and lighten fog of war",
+      "Use faction color for hex outlines in all game modes",
+      "Use dynamic node count instead of hardcoded \"all three\" in victory text",
+      "Show survivor encounter dialog when found via Explore action",
+      "Survivor counts: skirmish 5, standard 8, regional 12, campaign 16",
+      "Survivor placement: reduce counts, expand roster to 20, add distance constraint",
+      "Failed movement and battle fallback in plan resolution",
+      "Character portrait in unit stats bar, make deselect button bigger and red",
+      "Campaign/mission list alignment, rename first campaign, add prerequisite campaign support",
+      "Combat scoring: scale ally gang-up dice and show silver in breakdown",
+      "Unit stats bar layout for mobile readability",
+      "Quick play menu: faction toggle, expandable options, local pass & play"
+    ]
+  },
+  {
     "version": "1.0.5",
     "date": "2026-03-30",
     "summary": "New features, bug fixes, improvements, and visual updates",
