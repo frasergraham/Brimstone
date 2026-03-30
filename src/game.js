@@ -527,6 +527,10 @@ export class GameState {
       this.lastNightDamage = [];
       this.lastHazardLog   = [];
       this._applyNightHazard(this.attritionLevel);
+    } else {
+      // Clear stale night-hazard data once we leave night.
+      this.lastNightDamage = [];
+      this.lastHazardLog   = [];
     }
     if (this.phase === Phase.DAWN) {
       const cycle    = Math.ceil(this.round / CYCLE_LENGTH);
@@ -649,6 +653,10 @@ export class GameState {
         this.lastNightDamage = [];
         this.lastHazardLog   = [];
         this._applyNightHazard(this.attritionLevel);
+      } else {
+        // Clear stale night-hazard data once we leave night.
+        this.lastNightDamage = [];
+        this.lastHazardLog   = [];
       }
 
       // Dawn: ramp attrition, reset explored tiles, check nodes

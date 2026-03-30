@@ -589,6 +589,26 @@ describe('executeBattle', () => {
     assert.equal(alive.hp, hpBefore, 'minion HP should be unchanged — no daytime attrition');
   });
 
+  test('night hazard data is cleared when leaving night phase', () => {
+    const state = freshState();
+    // Place a survivor in the open
+    const neighbor = emptyPassableNeighbor(state, state.hero);
+    assert.ok(neighbor, 'need an open tile for the survivor');
+    const survivor = createSurvivor(neighbor.col, neighbor.row);
+    state.entities.push(survivor);
+    state.attritionLevel = 1;
+
+    // Advance into night to trigger hazard
+    while (state.phase !== Phase.NIGHT) state.endRound();
+    assert.ok(state.lastNightDamage.length > 0 || state.lastHazardLog.length > 0,
+      'night hazard should populate damage/log arrays');
+
+    // Advance past night into dawn
+    while (state.phase === Phase.NIGHT) state.endRound();
+    assert.equal(state.lastNightDamage.length, 0, 'night damage should be cleared after leaving night');
+    assert.equal(state.lastHazardLog.length, 0, 'hazard log should be cleared after leaving night');
+  });
+
   test('attacker allies on adjacent hexes are counted for gang-up', () => {
     const state = freshState();
     const hero = state.hero;
