@@ -298,13 +298,6 @@
         const data = await r.json();
         if (!data.isAdmin) { window.location.href = '/'; return; }
       } catch { window.location.href = '/'; }
-
-      // Append token to admin navigation links
-      document.querySelectorAll('a.admin-nav-link').forEach(a => {
-        const u = new URL(a.href, location.origin);
-        u.searchParams.set('token', _token);
-        a.href = u.toString();
-      });
     })();
 
     async function load() {

@@ -338,19 +338,13 @@ app.delete('/api/campaign-saves/:slot', (req, res) => {
 });
 
 // ── Admin pages ───────────────────────────────────────────────────────────────
+// HTML shells are served freely — each page has a client-side auth gate that
+// checks /api/me/admin and redirects non-admins.  The actual security boundary
+// is on the /admin/api/* endpoints (all require _requireAdmin).
 
-app.get('/admin', (req, res) => {
-  if (!_requireAdmin(req, res)) return;
-  res.sendFile(join(__dirname, 'admin.html'));
-});
-app.get('/admin/stats', (req, res) => {
-  if (!_requireAdmin(req, res)) return;
-  res.sendFile(join(__dirname, 'admin-stats.html'));
-});
-app.get('/admin/campaign-stats', (req, res) => {
-  if (!_requireAdmin(req, res)) return;
-  res.sendFile(join(__dirname, 'admin-campaign-stats.html'));
-});
+app.get('/admin',               (_req, res) => res.sendFile(join(__dirname, 'admin.html')));
+app.get('/admin/stats',         (_req, res) => res.sendFile(join(__dirname, 'admin-stats.html')));
+app.get('/admin/campaign-stats',(_req, res) => res.sendFile(join(__dirname, 'admin-campaign-stats.html')));
 app.get('/spectate', (_req, res) => res.sendFile(join(__dirname, 'index.html')));
 app.get('/replay',   (_req, res) => res.sendFile(join(__dirname, 'index.html')));
 

@@ -1178,7 +1178,6 @@ document.getElementById('menu-version').textContent = `v${VERSION}`;
     const _adminLink = document.getElementById('admin-link');
     if (_adminLink) {
       _adminLink.style.display = '';
-      _adminLink.href = `/admin?token=${encodeURIComponent(_s.token)}`;
     }
   }
 }

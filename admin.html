@@ -634,15 +634,6 @@
 
     // Auto-refresh stats and rooms every 10 seconds
     setInterval(() => { loadStats(); loadRooms(); }, 10000);
-
-    // Append token to admin navigation links
-    if (_token) {
-      document.querySelectorAll('a.admin-nav-link').forEach(a => {
-        const u = new URL(a.href, location.origin);
-        u.searchParams.set('token', _token);
-        a.href = u.toString();
-      });
-    }
   </script>
 </body>
 </html>
