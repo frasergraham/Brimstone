@@ -2125,6 +2125,9 @@ export class UIController {
     }
   }
 
+  /** Called after online state sync; no-op — planning mode handles budget display. */
+  _maybeShowNoActionsDialog() {}
+
   _showResultDialog(messages, onDismiss, encounterSurvivor = null) {
     const dialog = this._el('result-dialog');
     // Collapse consecutive duplicate lines into "message (×N)"
