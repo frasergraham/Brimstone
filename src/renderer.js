@@ -662,6 +662,23 @@ export class Renderer {
       this._drawHighlight(h.col, h.row, 'rgba(200,80,80,0.14)');
     }
 
+    // Guard zone highlights — light orange on hexes adjacent to guarding units
+    // Only during resolution playback, not during planning
+    if (!state.planningPhase) {
+      const guardZoneKeys = new Set();
+      for (const e of state.entities) {
+        if (!e.alive || !(e.guarding > 0)) continue;
+        if (revealedHexes && !revealedHexes.has(hexKey(e.col, e.row))) continue;
+        for (const n of getNeighbors(e.col, e.row)) {
+          guardZoneKeys.add(hexKey(n.col, n.row));
+        }
+      }
+      for (const key of guardZoneKeys) {
+        const [c, r] = key.split(',').map(Number);
+        this._drawHighlight(c, r, 'rgba(230,160,60,0.18)');
+      }
+    }
+
     if (this.selectedHex) {
       const selEntity = this.selectedEntityId
         ? this.state.entities.find(e => e.id === this.selectedEntityId)
@@ -1531,6 +1548,27 @@ export class Renderer {
         ctx.beginPath();
         ctx.arc(ex - r + 2, ey - r + 2, Math.max(2, hs * 0.08), 0, Math.PI * 2);
         ctx.fill();
+      }
+
+      // Guard stance indicator — small shield badge at bottom-right
+      if (entity.guarding > 0) {
+        const br = Math.max(5, hs * 0.13);
+        const bx = ex + r - br * 0.3;
+        const by = ey + r - br * 0.3;
+        // Background circle
+        ctx.beginPath();
+        ctx.arc(bx, by, br, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(230,160,60,0.9)';
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        // Charge number
+        ctx.fillStyle = '#fff';
+        ctx.font = `bold ${Math.max(7, Math.floor(br * 1.3))}px monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(entity.guarding), bx, by + 0.5);
       }
     }
 

@@ -560,6 +560,7 @@ export class WitchAI {
         case PlanActionType.BATTLE_HEX:  sim.applyBattle(); break;
         case PlanActionType.EXPLORE:     sim.applyExplore(action.entityId); break;
         case PlanActionType.SUMMON:      sim.applySummon(sim.witch); break;
+        case PlanActionType.GUARD:       sim.applyGuard(action.entityId); break;
         default:                         sim.actionsLeft--; break;
       }
     }
@@ -794,6 +795,12 @@ export class WitchAI {
 
     // 11. Pursue hero to force combat
     if (hero) { const a = tryMove(witch, hero); if (a) return a; }
+
+    // 12. Guard if enemies are nearby
+    { const a = _tryGuard(sim, witch); if (a) return a; }
+    for (const m of realMinions) {
+      const a = _tryGuard(sim, m); if (a) return a;
+    }
 
     return null;
   }
@@ -1225,6 +1232,7 @@ export class HeroAI {
         case PlanActionType.BATTLE_HEX:  sim.applyBattle(); break;
         case PlanActionType.EXPLORE:     sim.applyExplore(action.entityId); break;
         case PlanActionType.USE_ITEM:    /* herbs are free, food costs 1 */ if (action.item !== ResourceType.HERBS) sim.actionsLeft--; break;
+        case PlanActionType.GUARD:       sim.applyGuard(action.entityId); break;
         default:                         sim.actionsLeft--; break;
       }
     }
@@ -1443,11 +1451,33 @@ export class HeroAI {
       const a = tryMove(hero, _nearestUnexploredBuilding(sim, hero)); if (a) return a;
     }
 
+    // 13. Guard if enemies are nearby — reactive strike may punish their approach
+    { const a = _tryGuard(sim, hero); if (a) return a; }
+    for (const s of survivors) {
+      const a = _tryGuard(sim, s); if (a) return a;
+    }
+
     return null;
   }
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
+
+// Guard helper: returns a GUARD action if any enemy is within 2 hexes but not
+// adjacent (they may walk into guard range).  Also guards when holding a node
+// with no immediate target.  Returns null if guard is not useful.
+function _tryGuard(sim, entity) {
+  if (!entity || !entity.alive || (entity.guarding || 0) >= 2) return null;
+  const enemies = sim.entities.filter(e =>
+    e.alive && e.owner !== entity.owner
+  );
+  const hasNearbyEnemy = enemies.some(e => {
+    const d = hexDistance(entity.col, entity.row, e.col, e.row);
+    return d >= 1 && d <= 2;
+  });
+  if (hasNearbyEnemy) return { type: PlanActionType.GUARD, entityId: entity.id };
+  return null;
+}
 
 function _nearestUnexploredBuilding(state, actor) {
   let best = null, bestDist = Infinity;
@@ -1620,6 +1650,12 @@ class PlanSimState {
       remaining -= spend;
       if (remaining === 0) break;
     }
+    this.actionsLeft--;
+  }
+
+  applyGuard(entityId) {
+    const e = this.entities.find(en => en.id === entityId);
+    if (e) e.guarding = (e.guarding || 0) + 1;
     this.actionsLeft--;
   }
 }

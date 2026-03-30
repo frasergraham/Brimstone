@@ -39,15 +39,24 @@ export function compileTurnBattleSummary(steps, finalEntities, ResEventType, Pla
       ...(step.playerEvents ?? []).flatMap(pe => pe.events ?? []),
     ];
     for (const ev of allEvents) {
-      if (ev.type !== ResEventType.ACTION_OK) continue;
-      if (ev.action.type !== PlanActionType.BATTLE_UNIT &&
-          ev.action.type !== PlanActionType.BATTLE_HEX) continue;
-      if (!ev.battleSnaps) continue;
-      battleEvents.push({
-        actorSnap:  ev.battleSnaps.actorSnap,
-        targetSnap: ev.battleSnaps.targetSnap,
-        result:     ev.result,
-      });
+      // Normal battles
+      if (ev.type === ResEventType.ACTION_OK &&
+          (ev.action.type === PlanActionType.BATTLE_UNIT || ev.action.type === PlanActionType.BATTLE_HEX) &&
+          ev.battleSnaps) {
+        battleEvents.push({
+          actorSnap:  ev.battleSnaps.actorSnap,
+          targetSnap: ev.battleSnaps.targetSnap,
+          result:     ev.result,
+        });
+      }
+      // Guard strike reactions
+      if (ev.type === ResEventType.GUARD_STRIKE && ev.battleSnaps) {
+        battleEvents.push({
+          actorSnap:  ev.battleSnaps.actorSnap,
+          targetSnap: ev.battleSnaps.targetSnap,
+          result:     ev.result,
+        });
+      }
     }
   }
   if (!battleEvents.length) return [];

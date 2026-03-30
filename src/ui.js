@@ -8,6 +8,7 @@ import {
   ActionType, getValidActions, getVisibleEnemyHexes, getVisibleHeroHexes,
   executeMove, executeExplore, executeBattle,
   executeFortify, executeSummon, executeUseItem, executeUseAbility,
+  executeGuard,
 } from './actions.js';
 import { PlanActionType, computeGhostState, computeProjectedInventory } from './planner.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
@@ -1418,6 +1419,13 @@ export class UIController {
           regularHtml += btn(lbl, 'fortify', (cantAfford || !hasAct) ? 'disabled' : '', `data-action="fortify"`);
           break;
         }
+        case ActionType.GUARD:
+        {
+          const charges = action.currentCharges || 0;
+          const lbl = charges > 0 ? `🛡 Guard (+${charges + 1})` : '🛡 Guard';
+          regularHtml += btn(lbl, 'guard', dis, `data-action="guard"`);
+        }
+          break;
         case ActionType.SUMMON:
           // Each SUMMON entry has a specific summonType — render all three as separate buttons.
           // De-duplicate: only render the first time we hit a SUMMON action (we'll loop all three).
@@ -1921,6 +1929,31 @@ export class UIController {
         for (const msg of result.log) state.addLog(msg);
         if (result.success) state.spendAction(result.cost);
         this._showResultDialog(result.log, () => {
+          if (entity.alive) this._selectEntity(entity);
+          else this._clearSelection();
+          this._updateSidebar();
+          this.onRedraw();
+          this._maybeShowNoActionsDialog();
+        });
+        break;
+      }
+
+      case 'guard': {
+        _hideActionPopup();
+        if (this._planMode) {
+          this._addToPlan({ type: PlanActionType.GUARD, entityId: entity.id });
+          if (entity.alive) this._selectEntity(entity);
+          else this._clearSelection();
+          this._updateSidebar(); this.onRedraw(); break;
+        }
+        if (this.mp?.active) {
+          this.mp.sendAction('guard', { entityId: entity.id });
+          this._clearSelection(); this._updateSidebar(); this.onRedraw(); break;
+        }
+        const guardResult = executeGuard(state, entity);
+        for (const msg of guardResult.log) state.addLog(msg);
+        if (guardResult.success) state.spendAction(guardResult.cost);
+        this._showResultDialog(guardResult.log, () => {
           if (entity.alive) this._selectEntity(entity);
           else this._clearSelection();
           this._updateSidebar();

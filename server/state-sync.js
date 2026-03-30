@@ -50,6 +50,7 @@ export function serializeState(state) {
     abilityLabel:  e.abilityLabel  ?? null,
     actedThisTurn: e.actedThisTurn ?? false,
     defendCount:   e.defendCount   ?? 0,
+    guarding:      e.guarding      ?? 0,
     items:         { ...e.items },
     // alive is omitted — Entity derives it from hp via getter
   }));

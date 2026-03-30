@@ -31,6 +31,8 @@ export function describePlanAction(action, entities, index = 0) {
       return `${who} explores`;
     case PlanActionType.FORTIFY:
       return `${who} fortifies`;
+    case PlanActionType.GUARD:
+      return `${who} guards`;
     case PlanActionType.SUMMON:
       return `${who} summons`;
     case PlanActionType.USE_ITEM:
