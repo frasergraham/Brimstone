@@ -587,7 +587,7 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
         lootItems?.push('+⚔');
       }
     } else {
-      log.push(`The witch finds a weapon but has no use for it.`);
+      log.push(`${actor.displayName} finds a weapon but has no use for it.`);
     }
     return;
   }
@@ -610,7 +610,7 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
     lootItems?.push(`+${resIcon}`);
   } else {
     state.inventory.witch[lootType] = (state.inventory.witch[lootType] || 0) + 1;
-    log.push(`The witch secures ${lootType} for dark rituals.`);
+    log.push(`${actor.displayName} secures ${lootType} for dark rituals.`);
     lootItems?.push(`+${resIcon}`);
   }
 }
@@ -817,7 +817,7 @@ export function executeSummon(state, actor, requestedType = null) {
     state.witchSummonCount++;
     return {
       success: true,
-      log: [`The witch raises a ${unitName}!`],
+      log: [`${actor.displayName} raises a ${unitName}!`],
       cost: 1,
       spent: Object.entries(spentMap).map(([type, amount]) => ({ type, amount })),
     };
@@ -908,11 +908,16 @@ export function executeUseAbility(state, actor) {
       return { success: true, log, cost: 0 };
     }
 
-    case SurvivorAbility.RALLY:
+    case SurvivorAbility.RALLY: {
       // Return budgetBonus so both offline and multiplayer resolvers can apply it
       // per-player without touching the shared state.actionsLeft.
-      log.push(`${actor.displayName}'s words fortify the hero's spirit! (+1 action)`);
+      const rallyHero = state.entities.find(e =>
+        e.alive && e.type === EntityType.HERO &&
+        (e.ownerId === actor.ownerId || e.owner === 'hero')
+      );
+      log.push(`${actor.displayName}'s words fortify ${rallyHero?.displayName ?? 'the hero'}'s spirit! (+1 action)`);
       return { success: true, log, cost: 0, budgetBonus: 1 };
+    }
 
     default:
       return { success: false, log: ['No active ability.'] };
