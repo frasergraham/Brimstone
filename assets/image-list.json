@@ -17,7 +17,7 @@
       "name": "Grass",
       "category": "tile",
       "parameters": {
-        "prompt": "A top-down single hex tile showing overgrown meadow grass, pale frost-touched blades, dark loamy earth between tufts, autumn yellows and deep greens. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing overgrown meadow grass, pale frost-touched blades, dark loamy earth between tufts, autumn yellows and deep greens. Transparent background, tileable, nothing overlapping the edges, no shadows."
       }
     },
     {
@@ -25,7 +25,7 @@
       "name": "Forest",
       "category": "tile",
       "parameters": {
-        "prompt": "A top-down single hex tile showing dense dark forest, ancient gnarled oak and pine canopy seen from above, deep shadows, fallen leaves, foreboding. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing dense dark forest, ancient gnarled oak and pine canopy seen from above, deep shadows, fallen leaves, foreboding. Transparent background, tileable, nothing overlapping the edges, no shadows."
       }
     },
     {
@@ -33,7 +33,7 @@
       "name": "Dirt",
       "category": "tile",
       "parameters": {
-        "prompt": "A top-down single hex tile showing bare earth, churned gravel and mud, wagon-rut impressions, scattered pebbles, cold grey-brown soil. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing bare earth, churned gravel and mud, wagon-rut impressions, scattered pebbles, cold grey-brown soil. Transparent background, tileable, nothing overlapping the edges, no shadows."
       }
     },
     {
@@ -41,7 +41,7 @@
       "name": "Road",
       "category": "tile",
       "parameters": {
-        "prompt": "A top-down single hex tile showing a narrow dirt road, rutted wagon tracks, compressed earth, loose stones along edges, muted ochre and brown. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a narrow dirt road, rutted wagon tracks, compressed earth, loose stones along edges, muted ochre and brown. Transparent background, tileable, nothing overlapping the edges, no shadows."
       }
     },
     {
@@ -49,7 +49,7 @@
       "name": "River",
       "category": "tile",
       "parameters": {
-        "prompt": "A top-down single hex tile showing a dark cold river, black water reflecting pale sky, smooth current, mossy banks, reeds at edges, deep navy and teal tones. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a dark cold river, black water reflecting pale sky, smooth current, mossy banks, reeds at edges, deep navy and teal tones. Transparent background, tileable, nothing overlapping the edges, no shadows."
       }
     },
     {
@@ -57,7 +57,7 @@
       "name": "Bridge",
       "category": "tile",
       "parameters": {
-        "prompt": "A top-down single hex tile showing a weathered wooden bridge crossing dark water, rough-hewn planks, rope and iron railings, aged timber over deep navy water. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a weathered wooden bridge crossing dark water, rough-hewn planks, rope and iron railings, aged timber over deep navy water. Transparent background, tileable, nothing overlapping the edges, no shadows."
       }
     },
     {
@@ -66,7 +66,7 @@
       "category": "building",
       "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
       "parameters": {
-        "prompt": "A top-down single hex tile showing a colonial New England town hall, imposing limestone facade, tall arched windows, worn steps, candle glow behind frosted glass. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a colonial New England town hall, imposing limestone facade, tall arched windows, worn steps, candle glow behind frosted glass. Transparent background, tileable, nothing overlapping the edges, no shadows."
       }
     },
     {
@@ -75,7 +75,7 @@
       "category": "building",
       "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
       "parameters": {
-        "prompt": "A top-down single hex tile showing a Puritan church, white clapboard darkened by age, tall narrow steeple, leaded windows, iron-hinged door, lantern at entrance. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a Puritan church, white clapboard darkened by age, tall narrow steeple, leaded windows, iron-hinged door, lantern at entrance. Transparent background, tileable, nothing overlapping the edges, no shadows."
       }
     },
     {
@@ -84,7 +84,7 @@
       "category": "building",
       "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
       "parameters": {
-        "prompt": "A top-down single hex tile showing a colonial inn and tavern, warm amber candlelight from small windows, timber-framed with a low thatched roof, wooden sign, firelight glow. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a colonial inn and tavern, warm amber candlelight from small windows, timber-framed with a low thatched roof, wooden sign, firelight glow. Transparent background, tileable, nothing overlapping the edges, no shadows."
       }
     },
     {
@@ -93,7 +93,7 @@
       "category": "building",
       "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
       "parameters": {
-        "prompt": "A top-down single hex tile showing a colonial blacksmith forge, sooty stone walls, forge fire glowing orange within, iron tools hanging beside door, smoke from chimney. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a colonial blacksmith forge, sooty stone walls, forge fire glowing orange within, iron tools hanging beside door, smoke from chimney. Transparent background, tileable, nothing overlapping the edges, no shadows."
       }
     },
     {
@@ -102,7 +102,7 @@
       "category": "building",
       "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
       "parameters": {
-        "prompt": "A top-down single hex tile showing a fog-shrouded colonial graveyard, crooked weathered headstones, half-collapsed iron fence, dark mossy stone, dead grass, freshly disturbed earth. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a fog-shrouded colonial graveyard, crooked weathered headstones, half-collapsed iron fence, dark mossy stone, dead grass, freshly disturbed earth. Transparent background, tileable, nothing overlapping the edges, no shadows."
       }
     },
     {
@@ -111,7 +111,7 @@
       "category": "building",
       "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
       "parameters": {
-        "prompt": "A top-down single hex tile showing a colonial grain mill, large wooden water wheel, golden straw scattered around entrance, weathered timber structure. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a colonial grain mill, large wooden water wheel, golden straw scattered around entrance, weathered timber structure. Transparent background, tileable, nothing overlapping the edges, no shadows."
       }
     },
     {
@@ -120,7 +120,7 @@
       "category": "building",
       "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
       "parameters": {
-        "prompt": "A top-down single hex tile showing a colonial river dock, rough-hewn wooden pier over dark water, rope coils, barrels and crates, moored flat-bottomed boat. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a colonial river dock, rough-hewn wooden pier over dark water, rope coils, barrels and crates, moored flat-bottomed boat. Transparent background, tileable, nothing overlapping the edges, no shadows."
       }
     },
     {
@@ -129,7 +129,7 @@
       "category": "building",
       "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
       "parameters": {
-        "prompt": "A top-down single hex tile showing a colonial New England dwelling, timber-frame construction, low shake-shingle roof, shuttered windows, stone chimney, modest and isolated. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a colonial New England dwelling, timber-frame construction, low shake-shingle roof, shuttered windows, stone chimney, modest and isolated. Transparent background, tileable, nothing overlapping the edges, no shadows."
       }
     },
     {
@@ -138,7 +138,7 @@
       "category": "building",
       "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
       "parameters": {
-        "prompt": "A top-down single hex tile showing a colonial barn, large weathered timber structure, red-brown paint peeling, hay visible through open loft doors, broken cart wheel. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a colonial barn, large weathered timber structure, red-brown paint peeling, hay visible through open loft doors, broken cart wheel. Transparent background, tileable, nothing overlapping the edges, no shadows."
       }
     },
     {
@@ -147,7 +147,7 @@
       "category": "building",
       "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
       "parameters": {
-        "prompt": "A top-down single hex tile showing a colonial stone watchtower, dark ashlar construction, torch burning at top, arrow slits in thick walls, military and foreboding. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a colonial stone watchtower, dark ashlar construction, torch burning at top, arrow slits in thick walls, military and foreboding. Transparent background, tileable, nothing overlapping the edges, no shadows."
       }
     },
     {
@@ -156,7 +156,7 @@
       "category": "building",
       "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
       "parameters": {
-        "prompt": "A top-down single hex tile showing a colonial apothecary, herb bundles hanging from eaves, small flasks visible through wavy glass windows, purple-grey stone walls, mortar and pestle by door. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a colonial apothecary, herb bundles hanging from eaves, small flasks visible through wavy glass windows, purple-grey stone walls, mortar and pestle by door. Transparent background, tileable, nothing overlapping the edges, no shadows."
       }
     },
     {
@@ -165,7 +165,7 @@
       "category": "building",
       "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
       "parameters": {
-        "prompt": "A top-down single hex tile showing a colonial storehouse, heavy wooden double doors padlocked shut, tan stone walls, supply barrels and crates stacked outside. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a colonial storehouse, heavy wooden double doors padlocked shut, tan stone walls, supply barrels and crates stacked outside. Transparent background, tileable, nothing overlapping the edges, no shadows."
       }
     },
     {
@@ -174,7 +174,7 @@
       "category": "building",
       "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
       "parameters": {
-        "prompt": "A top-down single hex tile showing a colonial stable, low saddle-brown timber building, straw spilling from entrance, iron hitching post, horseshoe above door. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a colonial stable, low saddle-brown timber building, straw spilling from entrance, iron hitching post, horseshoe above door. Transparent background, tileable, nothing overlapping the edges, no shadows."
       }
     },
     {
