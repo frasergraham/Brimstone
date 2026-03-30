@@ -2591,11 +2591,13 @@ export class UIController {
     return typeof entry === 'string' ? entry : entry.text;
   }
 
-  /** Return CSS modifier class(es) for a log entry (faction color / round separator). */
+  /** Return CSS modifier class(es) for a log entry (entity/faction color + round separator). */
   _logEntryModifier(entry) {
     if (typeof entry === 'string') {
       return /^Round \d+/.test(entry) ? 'log-round-separator' : '';
     }
+    // Entity-type-specific color takes priority over faction color
+    if (entry.entityType) return `log-entity-${entry.entityType}`;
     if (entry.owner === 'hero') return 'log-hero';
     if (entry.owner === 'witch') return 'log-witch';
     return '';

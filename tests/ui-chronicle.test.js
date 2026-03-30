@@ -100,6 +100,7 @@ function logEntryModifier(entry) {
   if (typeof entry === 'string') {
     return /^Round \d+/.test(entry) ? 'log-round-separator' : '';
   }
+  if (entry.entityType) return `log-entity-${entry.entityType}`;
   if (entry.owner === 'hero') return 'log-hero';
   if (entry.owner === 'witch') return 'log-witch';
   return '';
@@ -118,12 +119,28 @@ describe('logEntryModifier — returns CSS modifier class for log entries', () =
     assert.equal(logEntryModifier('Round 12 — 🌙 NIGHT'), 'log-round-separator');
   });
 
-  test('hero-owned entry returns log-hero', () => {
+  test('hero-owned entry (no entityType) returns log-hero', () => {
     assert.equal(logEntryModifier({ text: 'Hero explores.', owner: 'hero' }), 'log-hero');
   });
 
-  test('witch-owned entry returns log-witch', () => {
+  test('witch-owned entry (no entityType) returns log-witch', () => {
     assert.equal(logEntryModifier({ text: 'Witch summons minion.', owner: 'witch' }), 'log-witch');
+  });
+
+  test('entityType takes priority over owner', () => {
+    assert.equal(logEntryModifier({ text: 'Survivor explores.', owner: 'hero', entityType: 'survivor' }), 'log-entity-survivor');
+  });
+
+  test('hero entityType returns log-entity-hero', () => {
+    assert.equal(logEntryModifier({ text: 'Hero heals.', owner: 'hero', entityType: 'hero' }), 'log-entity-hero');
+  });
+
+  test('minion entityType returns log-entity-minion', () => {
+    assert.equal(logEntryModifier({ text: 'Minion attacks.', owner: 'witch', entityType: 'minion' }), 'log-entity-minion');
+  });
+
+  test('wood_golem entityType returns log-entity-wood_golem', () => {
+    assert.equal(logEntryModifier({ text: 'Wood Golem moves.', owner: 'witch', entityType: 'wood_golem' }), 'log-entity-wood_golem');
   });
 
   test('object with no owner returns empty', () => {

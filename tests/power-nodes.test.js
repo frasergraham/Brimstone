@@ -425,7 +425,9 @@ describe('checkAndLogNodeControlChanges', () => {
     const before = state.log.length;
     state.checkAndLogNodeControlChanges();
     assert.ok(state.log.length > before, 'Should have added a log entry');
-    assert.ok(state.log[state.log.length - 1].includes(obj.label),
+    const lastEntry = state.log[state.log.length - 1];
+    const text = typeof lastEntry === 'string' ? lastEntry : lastEntry.text;
+    assert.ok(text.includes(obj.label),
       'Log should mention the node label');
     assert.equal(obj.prevCtrl, 'hero', 'prevCtrl should update to hero');
   });
