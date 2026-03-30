@@ -51,6 +51,14 @@ export const SCHEMA_SQL = `
     PRIMARY KEY (game_id, round_num)
   );
 
+  CREATE TABLE IF NOT EXISTS save_replay_rounds (
+    room_id        TEXT NOT NULL,
+    round_num      INTEGER NOT NULL,
+    pre_state_json TEXT NOT NULL,
+    steps_json     TEXT NOT NULL,
+    PRIMARY KEY (room_id, round_num)
+  );
+
   CREATE TABLE IF NOT EXISTS sp_completed_games (
     game_id      TEXT PRIMARY KEY,
     hero_name    TEXT NOT NULL DEFAULT '',

@@ -9,7 +9,8 @@ import { resolvePlansMP, ResEventType }    from './resolver.js';
 import { compileTurnBattleSummary }        from '../src/battle-utils.js';
 import { PlanActionType }                  from '../src/planner.js';
 import { upsertSave, deleteSave, getSave,
-         createCompletedGame }             from './saves.js';
+         createCompletedGame, appendSaveRound,
+         getSaveRounds }                   from './saves.js';
 import { VERSION }                         from '../src/version.js';
 import { generateMultipleStarts }          from '../src/map.js';
 import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS } from '../src/entities.js';
@@ -474,11 +475,21 @@ function _executeResolution(room) {
   }));
 
   // Store round data for full-game replay (roundNum is pre-endRound value)
-  room.replayRounds.push({
+  const roundEntry = {
     roundNum:    state.round - 1,  // endRound() already incremented state.round
     preStateJson,
     stepsJson:   JSON.stringify(serializedSteps),
-  });
+  };
+  room.replayRounds.push(roundEntry);
+
+  // Persist the round to the DB so resumed games retain full replay history
+  if (!state.gameOver) {
+    try {
+      appendSaveRound(room.id, roundEntry.roundNum, roundEntry.preStateJson, roundEntry.stepsJson);
+    } catch (err) {
+      console.error(`[room ${room.id}] appendSaveRound error:`, err);
+    }
+  }
 
   const resolutionMsg = { type: 'resolutionComplete', steps: serializedSteps, finalState };
   broadcast(room, resolutionMsg);
@@ -1260,10 +1271,23 @@ export function resumeGame(playerId, ws, roomId) {
   const humanFaction = isHero ? 'hero' : 'witch';
   const aiFaction    = humanFaction === 'hero' ? 'witch' : 'hero';
 
+  // Restore replay rounds accumulated before the save
+  let priorRounds = [];
+  try {
+    priorRounds = getSaveRounds(roomId).map(r => ({
+      roundNum:     r.round_num,
+      preStateJson: r.pre_state_json,
+      stepsJson:    r.steps_json,
+    }));
+  } catch (err) {
+    console.error(`[resume ${roomId}] getSaveRounds error:`, err);
+  }
+
   // Create a fresh room and inject the restored state
   const room   = createRoom({ fog: state.fogOfWar });
   room.state   = state;
   room.status  = 'playing';
+  room.replayRounds = priorRounds;
 
   // Add the human player's seat, then an AI for the opponent
   const humanName = isHero  ? (save.hero_name  || 'Hero')  : (save.witch_name || 'Witch');
@@ -1281,6 +1305,7 @@ export function resumeGame(playerId, ws, roomId) {
     players:      playerList,
     aiOpponent:   true,
     resumed:      true,
+    priorRounds:  priorRounds,
   });
 
   broadcastState(room, 'resume');
