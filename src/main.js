@@ -871,6 +871,84 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       }
     }
 
+    // ── Phase 2b: guard strike reactions ─────────────────────────────────────
+    // Guard strikes are reactive attacks emitted as GUARD_STRIKE events.
+    // Animate them the same way as normal battles: lunge, highlights, dialog/toast.
+    const guardStrikeEvents = allStepEvents.filter(ev => ev.type === ResEventType.GUARD_STRIKE);
+    for (const ev of guardStrikeEvents) {
+      const { result, battleSnaps } = ev;
+      if (!battleSnaps) continue;
+      const { actorSnap, targetSnap } = battleSnaps;
+
+      const showForPlayer = myPlayerId
+        ? (actorSnap?.ownerId === myPlayerId || targetSnap?.ownerId === myPlayerId)
+        : (!humanFaction || !state.fogOfWar || ev.faction === humanFaction
+            || targetSnap?.owner === humanFaction || actorSnap?.owner === humanFaction);
+
+      if (!showForPlayer) continue;
+
+      if (!_autoplay) {
+        const speed = ui?.speedMode ?? 'cinematic';
+
+        // Lunge: guardian slides toward the target
+        const guardDisplay  = state.entities.find(e => e.id === actorSnap.id);
+        const targetDisplay = state.entities.find(e => e.id === targetSnap.id);
+        const lungeFromCol = guardDisplay?.col  ?? actorSnap.col;
+        const lungeFromRow = guardDisplay?.row  ?? actorSnap.row;
+        const lungeToCol   = targetDisplay?.col ?? targetSnap.col;
+        const lungeToRow   = targetDisplay?.row ?? targetSnap.row;
+        renderer.addLungeAnim(
+          actorSnap.id,
+          lungeFromCol, lungeFromRow,
+          lungeToCol, lungeToRow,
+          actorSnap.type, actorSnap.owner, actorSnap.title ?? null,
+        );
+        redrawFn();
+        await _delay(speed === 'vfast' ? 140 : 280);
+
+        // Battle hex highlights
+        renderer.setBattleHighlights(
+          [{ col: lungeFromCol, row: lungeFromRow }, { col: lungeToCol, row: lungeToRow }],
+          [],  // no allies for guard strikes
+        );
+        redrawFn();
+
+        if (speed === 'cinematic' || speed === 'step') {
+          const prevInsetRight = renderer.insetRight ?? 0;
+          renderer.insetRight = 500;
+          renderer.frameHexes(
+            [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
+            { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
+          );
+          await new Promise(resolve => {
+            ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
+          });
+          renderer.insetRight = prevInsetRight;
+          _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
+          await renderer.waitForAnimations();
+        } else {
+          if (!result.hit) {
+            const _MISS_TEXT = ['miss', 'dodged', 'blocked', 'parried', 'deflected'];
+            const missText = _MISS_TEXT[Math.floor(Math.random() * _MISS_TEXT.length)];
+            renderer.addFlash(targetSnap.col, targetSnap.row, missText, 'rgba(100,100,100,0.1)', 1000, 0.65, '#888');
+          }
+          _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
+          await _delay(speed === 'vfast' ? 200 : 400);
+        }
+
+        // Clear highlights, return lunge
+        renderer.clearBattleHighlights();
+        renderer.returnAllLungeAnims();
+        if (speed === 'cinematic' || speed === 'step') await renderer.waitForAnimations();
+        redrawFn();
+
+      } else {
+        // Autoplay: fire all animations immediately
+        _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
+      }
+      hadBattle = true;
+    }
+
     // ── Phase 3: explore results — only this player's own entities ───────────
     // In team MP each player owns a subset of their faction's units via ownerId.
     // Only show dialogs for entities this player directly controls; other players'
