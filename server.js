@@ -155,7 +155,11 @@ app.post('/auth/link-email', async (req, res) => {
   }
 
   const player = getPlayerByToken(token);
-  if (!player) { res.status(401).json({ error: 'Invalid session.' }); return; }
+  if (!player) {
+    console.warn('[link-email] Token lookup failed — likely stale client session');
+    res.status(401).json({ error: 'Invalid session.' });
+    return;
+  }
 
   // Validate email format (basic)
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {

@@ -246,6 +246,22 @@ describe('full magic link flow', () => {
   });
 });
 
+// ── getPlayerByToken (stale session precondition) ───────────────────────────
+
+describe('getPlayerByToken', () => {
+  test('returns null for a bogus token (stale session)', () => {
+    const result = getPlayerByToken('nonexistent-stale-token');
+    assert.equal(result, null);
+  });
+
+  test('returns the player for a valid token', () => {
+    const player = createPlayer('tkvalid1');
+    const found = getPlayerByToken(player.token);
+    assert.ok(found);
+    assert.equal(found.id, player.id);
+  });
+});
+
 // ── changeUsername ────────────────────────────────────────────────────────────
 
 describe('changeUsername', () => {
