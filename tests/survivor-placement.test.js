@@ -66,8 +66,8 @@ describe('Hidden survivor placement distance', () => {
     for (const t of state.tiles.values()) {
       if (t.hiddenSurvivor) count++;
     }
-    // standard: buildings=5 + terrain=2 = 7
-    assert.equal(count, 7, `expected 7 hidden survivors on standard map, got ${count}`);
+    // standard: buildings=7 + terrain=1 = 8
+    assert.equal(count, 8, `expected 8 hidden survivors on standard map, got ${count}`);
   });
 
   test('correct number of hidden survivors placed for skirmish map', () => {
@@ -77,7 +77,7 @@ describe('Hidden survivor placement distance', () => {
     for (const t of state.tiles.values()) {
       if (t.hiddenSurvivor) count++;
     }
-    // skirmish: buildings=3 + terrain=1 = 4
-    assert.equal(count, 4, `expected 4 hidden survivors on skirmish map, got ${count}`);
+    // skirmish: buildings=4 + terrain=1 = 5
+    assert.equal(count, 5, `expected 5 hidden survivors on skirmish map, got ${count}`);
   });
 });
