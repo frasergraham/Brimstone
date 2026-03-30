@@ -54,7 +54,13 @@ export class MirrorState {
     s.actionsLeft          = snap.actionsLeft;
     s.witchIsAI            = snap.witchIsAI;
     s.heroIsAI             = snap.heroIsAI;
-    s.fogOfWar             = snap.fogOfWar;
+    s.fogOfWar             = typeof snap.fogOfWar === 'boolean'
+      ? (snap.fogOfWar ? 'partial' : 'none')
+      : (snap.fogOfWar ?? 'none');
+    s.exploredHexes = {
+      hero:  new Set(snap.exploredHexes?.hero  ?? []),
+      witch: new Set(snap.exploredHexes?.witch ?? []),
+    };
     s._winner              = snap.winner;
     s.winReason            = snap.winReason;
     s.attritionLevel       = snap.attritionLevel;

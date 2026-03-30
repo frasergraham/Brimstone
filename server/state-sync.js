@@ -73,6 +73,10 @@ export function serializeState(state) {
     heroActionsLeft:      state.heroActionsLeft  ?? 0,
     witchActionsLeft:     state.witchActionsLeft ?? 0,
     fogOfWar:             state.fogOfWar,
+    exploredHexes: {
+      hero:  [...(state.exploredHexes?.hero  ?? [])],
+      witch: [...(state.exploredHexes?.witch ?? [])],
+    },
     winner:               state.winner,
     winReason:            state.winReason,
     attritionLevel:       state.attritionLevel,
@@ -186,7 +190,14 @@ export function deserializeState(snap) {
   state.lastNightDamage      = [...(snap.lastNightDamage || [])];
   state.lastDayDamage        = [...(snap.lastDayDamage   || [])];
   state.lastHazardLog        = [...(snap.lastHazardLog   || [])];
-  state.fogOfWar             = snap.fogOfWar;
+  // Backward compat: old saves stored fogOfWar as boolean
+  state.fogOfWar             = typeof snap.fogOfWar === 'boolean'
+    ? (snap.fogOfWar ? 'partial' : 'none')
+    : (snap.fogOfWar ?? 'none');
+  state.exploredHexes = {
+    hero:  new Set(snap.exploredHexes?.hero  ?? []),
+    witch: new Set(snap.exploredHexes?.witch ?? []),
+  };
   state.mapSize              = snap.mapSize   ?? 'standard';
   state.winner               = snap.winner    ?? null;
   state.winReason            = snap.winReason ?? null;

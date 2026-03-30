@@ -137,7 +137,7 @@ function wsFor(room, playerId) {
  * Create an empty room shell in lobby state.
  * GameState is deferred — created when the host calls startGame().
  * @param {object} [config]
- * @param {boolean} [config.fog]
+ * @param {string} [config.fog]  'none' | 'partial' | 'full'
  * @param {string}  [config.mapSize]
  * @param {number}  [config.playersPerSide]
  */
@@ -154,7 +154,7 @@ function createRoom(config = {}) {
     isPrivate:        false,
     hostPlayerId:     null,
     config: {
-      fog:            config.fog ?? true,
+      fog:            config.fog ?? 'partial',
       mapSize:        config.mapSize ?? 'standard',
       nodeCount:      config.nodeCount ?? null,
       playersPerSide: Math.max(1, Math.min(4, (config.playersPerSide | 0) || 1)),
@@ -694,7 +694,7 @@ function checkAndHandleGameOver(room) {
       hero_player_id:    firstHero?.playerId   || null,
       witch_player_id:   firstWitch?.playerId  || null,
       game_version:      VERSION,
-      fog_of_war:        room.state.fogOfWar ? 1 : 0,
+      fog_of_war:        room.state.fogOfWar !== 'none' ? 1 : 0,
       duration_ms:       Date.now() - room.createdAt,
     });
   } catch (err) { console.error(`[room ${room.id}] recordGameStats error:`, err); }
@@ -742,7 +742,7 @@ function checkAndHandleGameOver(room) {
 export function createLobby(playerId, playerName, ws, config = {}) {
   const pps  = Math.max(1, Math.min(4, (config.playersPerSide | 0) || 1));
   const room = createRoom({
-    fog:           config.fog ?? true,
+    fog:           config.fog ?? 'partial',
     mapSize:       config.mapSize ?? 'standard',
     nodeCount:     config.nodeCount ?? null,
     playersPerSide: pps,

@@ -1071,7 +1071,7 @@ export class UIController {
       if (b) {
         const state = this.state;
         let visTargets = b.targets;
-        if (state.fogOfWar && this._selectedEntity) {
+        if (state.fogOfWar !== 'none' && this._selectedEntity) {
           const visHexes = this._selectedEntity.owner === 'hero'
             ? getVisibleEnemyHexes(state)
             : getVisibleHeroHexes(state);
@@ -1086,7 +1086,7 @@ export class UIController {
       if (a) {
         const state = this.state;
         let visTargets = a.targets;
-        if (state.fogOfWar && this._selectedEntity) {
+        if (state.fogOfWar !== 'none' && this._selectedEntity) {
           const visHexes = this._selectedEntity.owner === 'hero'
             ? getVisibleEnemyHexes(state)
             : getVisibleHeroHexes(state);
@@ -2594,7 +2594,7 @@ export class UIController {
   /** Filter log entries to only those the current player can see. */
   _visibleLog() {
     const log = this.state?.log ?? [];
-    if (!this.state?.fogOfWar) return log;
+    if (this.state?.fogOfWar === 'none') return log;
     const myFaction = this._planFaction
       ?? (this.state.heroIsAI === false ? 'hero' : 'witch');
     return log.filter(entry => {
@@ -2669,7 +2669,7 @@ export class UIController {
         ];
         for (const ev of taggedEvents) {
           // Fog filter: skip opponent events (but always show kills of our units)
-          if (fogOfWar && humanFaction && ev._faction !== humanFaction) {
+          if (fogOfWar !== 'none' && humanFaction && ev._faction !== humanFaction) {
             // Exception: show kills where our unit was the target
             const isOurUnitKilled = ev.result?.killed &&
               (ev.battleSnaps?.targetSnap?.owner === humanFaction);
@@ -3089,7 +3089,7 @@ function btn(label, cls, disabled = '', extra = '') {
 
 
 function _visibleUnitsAt(state, col, row) {
-  if (!state.fogOfWar) return state.entities.filter(e => e.alive && e.col === col && e.row === row);
+  if (state.fogOfWar === 'none') return state.entities.filter(e => e.alive && e.col === col && e.row === row);
   const myFaction    = state.myFaction;
   const humanIsHero  = myFaction ? myFaction === 'hero'  : (state.witchIsAI && !state.heroIsAI);
   const humanIsWitch = myFaction ? myFaction === 'witch' : (state.heroIsAI  && !state.witchIsAI);

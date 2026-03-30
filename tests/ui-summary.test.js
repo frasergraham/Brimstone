@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 
 // Mirrors the fog filtering logic in _showResolutionSummary
 function filterEventByFog(ev, fogOfWar, humanFaction) {
-  if (!fogOfWar || !humanFaction) return true; // no filtering
+  if (!fogOfWar || fogOfWar === 'none' || !humanFaction) return true; // no filtering
   if (ev._faction === humanFaction) return true; // our event
   // Exception: show kills where our unit was the target
   if (ev.result?.killed && ev.battleSnaps?.targetSnap?.owner === humanFaction) return true;

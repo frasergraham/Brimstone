@@ -27,7 +27,7 @@ before(async () => {
 
 function makeUI() {
   const state    = new GameState(true, false);
-  state.fogOfWar = false;  // disable fog so enemies are always visible in tests
+  state.fogOfWar = 'none';  // disable fog so enemies are always visible in tests
   const renderer = makeFakeRenderer();
   const els      = createElementsBag();
   Object.assign(_elements, els);

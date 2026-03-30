@@ -8,7 +8,7 @@ import {
   TileType, TILE_COLOR, BUILDING_COLOR, BUILDING_LABEL, BUILDING_ICON,
 } from './tiles.js';
 import { ENTITY_COLOR, EntityType, SurvivorAbility } from './entities.js';
-import { getVisibleEnemyHexes, getVisibleHeroHexes, sightRange } from './actions.js';
+import { getVisibleEnemyHexes, getVisibleHeroHexes, sightRange, buildFogMovementHexes } from './actions.js';
 import { nodeController } from './game.js';
 
 // PAD_X/PAD_Y are now computed dynamically in _resize() as this._padX / this._padY.
@@ -614,8 +614,9 @@ export class Renderer {
     const myFaction    = state.myFaction;  // 'hero' | 'witch' | undefined
     const humanIsHero  = myFaction ? myFaction === 'hero'  : (state.witchIsAI && !state.heroIsAI);
     const humanIsWitch = myFaction ? myFaction === 'witch' : (state.heroIsAI  && !state.witchIsAI);
+    const fogActive = state.fogOfWar !== 'none';
     let revealedHexes = null;
-    if (state.fogOfWar) {
+    if (fogActive) {
       if (humanIsHero)  revealedHexes = getVisibleEnemyHexes(state); // hero sees witch
       if (humanIsWitch) revealedHexes = getVisibleHeroHexes(state);  // witch sees hero
     }
@@ -624,18 +625,22 @@ export class Renderer {
     // Distinct from revealedHexes, which only tracks hexes where enemy entities exist.
     let fogVisibleHexes = null;
     const hiddenOwner = humanIsHero ? 'witch' : (humanIsWitch ? 'hero' : null);
-    if (state.fogOfWar && hiddenOwner) {
+    if (fogActive && hiddenOwner) {
       const observerOwner = humanIsHero ? 'hero' : 'witch';
       fogVisibleHexes = this._buildFogVisibleHexes(observerOwner);
     }
 
-    // Fog of war: grey overlay on all hexes outside the human player's vision
-    if (state.fogOfWar && humanIsHero)  this._drawFogLayer('hero');
-    if (state.fogOfWar && humanIsWitch) this._drawFogLayer('witch');
+    // Fog of war layer
+    if (fogActive) {
+      const observerOwner = humanIsHero ? 'hero' : (humanIsWitch ? 'witch' : null);
+      if (observerOwner) {
+        this._drawFogLayer(observerOwner, state.fogOfWar, fogVisibleHexes);
+      }
+    }
 
     // Objective glows and symbols — only drawn once a node has been discovered
     for (const obj of state.witchObjectives) {
-      const shouldDraw = !state.fogOfWar
+      const shouldDraw = !fogActive
         || (humanIsHero  && obj.seenByHero)
         || (humanIsWitch && obj.seenByWitch)
         || (!humanIsHero && !humanIsWitch); // AI vs AI / spectator
@@ -1017,28 +1022,59 @@ export class Renderer {
     return visibleSet;
   }
 
-  _drawFogLayer(observerOwner) {
+  _drawFogLayer(observerOwner, mode, sightSet) {
     const ctx   = this.ctx;
     const hs    = this.hexSize;
+    const state = this.state;
 
-    const visibleSet = this._buildFogVisibleHexes(observerOwner);
+    if (mode === 'partial') {
+      // Original behavior: dim overlay outside sight range
+      for (let row = 0; row < MAP_ROWS; row++) {
+        for (let col = 0; col < MAP_COLS; col++) {
+          if (sightSet.has(hexKey(col, row))) continue;
+          this._fillFogHex(col, row, hs, 'rgba(0,0,0,0.55)');
+        }
+      }
+      return;
+    }
+
+    // Full fog: three tiers — bright / dimmed / black
+    // Get projected positions from plan ghost overlay for dynamic fog during planning
+    const lastStep = this.planGhostSteps?.at(-1);
+    const projectedPositions = lastStep?.positions ?? null;
+    const moveSet = buildFogMovementHexes(state, observerOwner, projectedPositions);
+    const explored = state.exploredHexes?.[observerOwner];
+
+    // Update explored hex memory with current sight + movement sets
+    if (explored) {
+      for (const k of sightSet) explored.add(k);
+      for (const k of moveSet)  explored.add(k);
+    }
 
     for (let row = 0; row < MAP_ROWS; row++) {
       for (let col = 0; col < MAP_COLS; col++) {
         const k = hexKey(col, row);
-        if (visibleSet.has(k)) continue; // visible — no fog
-
-        const { x, y } = this._toCanvas(col, row);
-        const corners = hexCorners(x, y, hs);
-
-        ctx.beginPath();
-        ctx.moveTo(corners[0].x, corners[0].y);
-        for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
-        ctx.closePath();
-        ctx.fillStyle = 'rgba(0,0,0,0.55)';
-        ctx.fill();
+        if (sightSet.has(k)) continue; // bright — no overlay
+        if (moveSet.has(k) || explored?.has(k)) {
+          // Dimmed — terrain visible but darkened
+          this._fillFogHex(col, row, hs, 'rgba(0,0,0,0.55)');
+        } else {
+          // Black — hex not rendered (opaque overlay hides terrain)
+          this._fillFogHex(col, row, hs, 'rgba(0,0,0,1.0)');
+        }
       }
     }
+  }
+
+  _fillFogHex(col, row, hs, color) {
+    const { x, y } = this._toCanvas(col, row);
+    const corners = hexCorners(x, y, hs);
+    this.ctx.beginPath();
+    this.ctx.moveTo(corners[0].x, corners[0].y);
+    for (let i = 1; i < 6; i++) this.ctx.lineTo(corners[i].x, corners[i].y);
+    this.ctx.closePath();
+    this.ctx.fillStyle = color;
+    this.ctx.fill();
   }
 
   // Thick coloured outlines on hexes occupied by units — colour matches the

@@ -58,7 +58,7 @@ describe('chronicle mode cycling', () => {
 // ── Visible log filtering (fog-of-war logic) ──────────────────────────────
 
 function visibleLog(log, fogOfWar, myFaction) {
-  if (!fogOfWar) return log;
+  if (fogOfWar === 'none' || !fogOfWar) return log;
   return log.filter(entry => {
     if (typeof entry === 'string') return true;
     return !entry.owner || entry.owner === myFaction;
