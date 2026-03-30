@@ -668,20 +668,53 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     if (!_autoplay) {
       const _cspd = ui?.speedMode ?? 'cinematic';
       {
-        const frameTargets = [];
-        for (const ev of events) {
-          const snap = step.entitySnapshot?.find(e => e.id === ev.action?.entityId);
-          const isOpponent = humanFaction && ev.faction !== humanFaction;
-          if (snap && !(isOpponent && state.fogOfWar !== 'none')) {
-            // For moves, frame the destination; for others, frame the actor's current position
-            if (ev.action.type === PlanActionType.MOVE) {
-              frameTargets.push({ col: ev.action.toCol, row: ev.action.toRow });
-            } else {
-              frameTargets.push({ col: snap.col, row: snap.row });
+        // In cinematic/step modes, battles get per-battle frameHexes calls
+        // (with dialog inset). Framing ALL targets here would zoom out wide,
+        // then each battle zooms back in — a jarring "yoyo". Instead, frame
+        // only the first visible battle so the step-level frame leads smoothly
+        // into the first battle dialog frame.
+        const hasBattleDialogFraming = (_cspd === 'cinematic' || _cspd === 'step');
+        let firstBattleTargets = null;
+        if (hasBattleDialogFraming) {
+          for (const ev of events) {
+            if (ev.action.type !== PlanActionType.BATTLE_UNIT && ev.action.type !== PlanActionType.BATTLE_HEX) continue;
+            if (!ev.battleSnaps) continue;
+            const { actorSnap, targetSnap } = ev.battleSnaps;
+            const myUnit = myPlayerId && (
+              actorSnap?.ownerId === myPlayerId || targetSnap?.ownerId === myPlayerId
+            );
+            const showForPlayer = myPlayerId
+              ? myUnit
+              : (!humanFaction || state.fogOfWar === 'none' || ev.faction === humanFaction
+                  || (targetSnap?.owner === humanFaction || actorSnap?.owner === humanFaction));
+            if (showForPlayer && actorSnap && targetSnap) {
+              firstBattleTargets = [
+                { col: actorSnap.col, row: actorSnap.row },
+                { col: targetSnap.col, row: targetSnap.row },
+              ];
+              break;
             }
-            // For battles, also frame the target
-            if ((ev.action.type === PlanActionType.BATTLE_UNIT || ev.action.type === PlanActionType.BATTLE_HEX) && ev.battleSnaps?.targetSnap) {
-              frameTargets.push({ col: ev.battleSnaps.targetSnap.col, row: ev.battleSnaps.targetSnap.row });
+          }
+        }
+
+        const frameTargets = [];
+        if (firstBattleTargets) {
+          frameTargets.push(...firstBattleTargets);
+        } else {
+          for (const ev of events) {
+            const snap = step.entitySnapshot?.find(e => e.id === ev.action?.entityId);
+            const isOpponent = humanFaction && ev.faction !== humanFaction;
+            if (snap && !(isOpponent && state.fogOfWar !== 'none')) {
+              // For moves, frame the destination; for others, frame the actor's current position
+              if (ev.action.type === PlanActionType.MOVE) {
+                frameTargets.push({ col: ev.action.toCol, row: ev.action.toRow });
+              } else {
+                frameTargets.push({ col: snap.col, row: snap.row });
+              }
+              // For battles, also frame the target
+              if ((ev.action.type === PlanActionType.BATTLE_UNIT || ev.action.type === PlanActionType.BATTLE_HEX) && ev.battleSnaps?.targetSnap) {
+                frameTargets.push({ col: ev.battleSnaps.targetSnap.col, row: ev.battleSnaps.targetSnap.row });
+              }
             }
           }
         }
