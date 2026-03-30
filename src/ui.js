@@ -922,7 +922,10 @@ export class UIController {
       this._selectedEntity &&
       hex.col === _selDisplayHex.col && hex.row === _selDisplayHex.row
     ) {
-      if (this._popupVisible) {
+      if (this._isEnemySelection) {
+        // Enemy unit: second tap deselects, no popup
+        this._clearSelection();
+      } else if (this._popupVisible) {
         // Second tap on already-selected unit — deselect entirely
         this._clearSelection();
       } else {
@@ -964,8 +967,15 @@ export class UIController {
     });
 
     if (clickedEntities.length === 0) {
-      // Nothing selectable here — just deselect
-      this._clearSelection();
+      // No friendly units — check for visible enemy units (view-only selection)
+      const enemyEntities = _visibleUnitsAt(state, hex.col, hex.row)
+        .filter(e => e.owner !== ownerFilter);
+      if (enemyEntities.length > 0) {
+        this._hideTileDetail();
+        this._selectEnemyEntity(enemyEntities[0]);
+      } else {
+        this._clearSelection();
+      }
     } else if (clickedEntities.length === 1) {
       const entity = clickedEntities[0];
       if (entity === this._selectedEntity) {
@@ -1000,6 +1010,7 @@ export class UIController {
 
   _selectEntity(entity) {
     this._selectedEntity  = entity;
+    this._isEnemySelection = false;
     this.onEntitySelected?.(entity);
     this._pendingUnitPick = null;
     this._popupVisible    = false;
@@ -1032,6 +1043,23 @@ export class UIController {
     // Popup is NOT shown here — user taps the unit a second time to open it
   }
 
+  /** Select an enemy entity for view-only inspection (stats bar, no actions). */
+  _selectEnemyEntity(entity) {
+    this._selectedEntity       = entity;
+    this._isEnemySelection     = true;
+    this._pendingUnitPick      = null;
+    this._popupVisible         = false;
+    this._awaitingTarget       = null;
+    this._validActions         = [];
+    _hideActionPopup();
+
+    this.renderer.selectedHex      = { col: entity.col, row: entity.row };
+    this.renderer.selectedEntityId = entity.id;
+    this.renderer.highlightHexes   = [];
+
+    this.onEntitySelected?.(entity);
+  }
+
   /** Return the latest projected position for an entity from the ghost overlay, or null. */
   _getProjectedPos(entityId) {
     const steps = this.renderer?.planGhostSteps;
@@ -1041,6 +1069,7 @@ export class UIController {
 
   _clearSelection() {
     this._selectedEntity       = null;
+    this._isEnemySelection     = false;
     this._awaitingTarget       = null;
     this._validActions         = [];
     this._pendingUnitPick      = null;
