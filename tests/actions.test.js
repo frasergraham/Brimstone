@@ -589,6 +589,59 @@ describe('executeBattle', () => {
     assert.ok(typeof r.attackerAllies === 'number');
     assert.ok(typeof r.defenderAllies === 'number');
   });
+
+  test('multiple allies each add a d3 die (up to cap of 3)', () => {
+    const state = freshState();
+    const hero = state.hero;
+    // Place target adjacent to hero
+    const targetHex = emptyPassableNeighbor(state, hero);
+    if (!targetHex) return;
+    const minion = createMinion(targetHex.col, targetHex.row);
+    state.entities.push(minion);
+
+    // Place 2 survivors adjacent to the target (on target's hex neighbors)
+    const targetNeighbors = getNeighbors(targetHex.col, targetHex.row).filter(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && t.type !== TileType.RIVER;
+    });
+    const placed = [];
+    for (let i = 0; i < Math.min(2, targetNeighbors.length); i++) {
+      const s = new Entity(EntityType.SURVIVOR, 'hero', targetNeighbors[i].col, targetNeighbors[i].row);
+      s.items = {};
+      state.entities.push(s);
+      placed.push(s);
+    }
+
+    const r = executeBattle(state, hero, minion);
+    // Hero itself is adjacent to target, plus placed survivors
+    assert.ok(r.attackerAllies >= placed.length, `Expected at least ${placed.length} allies, got ${r.attackerAllies}`);
+    assert.equal(r.breakdown.atkExtraDice.length, Math.min(r.attackerAllies, 3),
+      'Each ally (up to 3) should contribute a d3 die');
+  });
+
+  test('silver attackBonus is included in combat attack roll', () => {
+    const state = freshState();
+    const hero = state.hero;
+    state.inventory.shared[ResourceType.SILVER] = 1;
+
+    // Use silver to get +1 attackBonus
+    const useResult = executeUseItem(state, hero, ResourceType.SILVER);
+    assert.equal(useResult.success, true);
+    assert.equal(hero.attackBonus, 1, 'Silver should set attackBonus to 1');
+
+    // Place target adjacent to hero
+    const targetHex = emptyPassableNeighbor(state, hero);
+    if (!targetHex) return;
+    const minion = createMinion(targetHex.col, targetHex.row);
+    state.entities.push(minion);
+
+    const r = executeBattle(state, hero, minion);
+    // attackRoll = baseDie + hero.attack + hero.attackBonus(1) + phaseBonus + extraDice
+    // Verify the attackRoll includes the silver bonus by checking it's at least
+    // baseDie(1) + attack + 1(silver)
+    assert.ok(r.attackRoll >= 1 + hero.attack + 1,
+      `attackRoll (${r.attackRoll}) should include silver bonus`);
+  });
 });
 
 // ── executeFortify ────────────────────────────────────────────────────────────
