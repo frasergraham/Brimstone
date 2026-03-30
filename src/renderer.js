@@ -634,16 +634,19 @@ export class Renderer {
     if (state.fogOfWar && humanIsWitch) this._drawFogLayer('witch');
 
     // Explored dots — drawn after fog so they respect fog of war
-    for (let row = 0; row < MAP_ROWS; row++) {
-      for (let col = 0; col < MAP_COLS; col++) {
-        const t = state.tiles.get(hexKey(col, row));
-        if (!t || !t.explored) continue;
-        if (fogVisibleHexes && !fogVisibleHexes.has(hexKey(col, row))) continue;
-        const { x, y } = this._toCanvas(col, row);
-        ctx.fillStyle = 'rgba(245,200,66,0.70)';
-        ctx.beginPath();
-        ctx.arc(x, y + hs * 0.55, Math.max(2, hs * 0.08), 0, Math.PI * 2);
-        ctx.fill();
+    {
+      const hs = this.hexSize;
+      for (let row = 0; row < MAP_ROWS; row++) {
+        for (let col = 0; col < MAP_COLS; col++) {
+          const t = state.tiles.get(hexKey(col, row));
+          if (!t || !t.explored) continue;
+          if (fogVisibleHexes && !fogVisibleHexes.has(hexKey(col, row))) continue;
+          const { x, y } = this._toCanvas(col, row);
+          ctx.fillStyle = 'rgba(245,200,66,0.70)';
+          ctx.beginPath();
+          ctx.arc(x, y + hs * 0.55, Math.max(2, hs * 0.08), 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
     }
 
