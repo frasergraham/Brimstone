@@ -671,6 +671,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     let _lastBattleFrameKey = null;
     let _battleInsetActive = false;
     const _prevInsetRight = renderer.insetRight ?? 0;
+    // The battle dialog only docks to the right (needing an inset offset)
+    // on wide landscape screens — on phone-sized screens it's a centered
+    // overlay so no camera offset is needed.
+    const _dialogDocksRight = (typeof window !== 'undefined'
+      && window.matchMedia?.('(min-width: 900px) and (min-aspect-ratio: 5/4)')?.matches) ?? false;
+    const _battleInsetValue = _dialogDocksRight ? 500 : 0;
 
     // ── Frame camera on this step's actors ──────────────────────────────────
     if (!_autoplay) {
@@ -711,8 +717,10 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         if (firstBattleTargets) {
           // Pre-apply the dialog inset so the step-level frame already
           // accounts for the battle dialog panel — no second reframe needed.
-          renderer.insetRight = 500;
-          _battleInsetActive = true;
+          if (_dialogDocksRight) {
+            renderer.insetRight = _battleInsetValue;
+            _battleInsetActive = true;
+          }
           _lastBattleFrameKey = firstBattleFrameKey;
           frameTargets.push(...firstBattleTargets);
         } else {
@@ -908,9 +916,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               // same hex positions (avoids yoyo between consecutive battles at
               // the same spot).
               const frameKey = `${actorSnap.col},${actorSnap.row}|${targetSnap.col},${targetSnap.row}`;
-              if (frameKey !== _lastBattleFrameKey || !_battleInsetActive) {
-                renderer.insetRight = 500;
-                _battleInsetActive = true;
+              const needsReframe = frameKey !== _lastBattleFrameKey || (_dialogDocksRight && !_battleInsetActive);
+              if (needsReframe) {
+                if (_dialogDocksRight) {
+                  renderer.insetRight = _battleInsetValue;
+                  _battleInsetActive = true;
+                }
                 renderer.frameHexes(
                   [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
                   { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
@@ -1002,9 +1013,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
           // Reuse the same frame-key tracking from Phase 2 so guard strikes
           // at the same position as a preceding regular battle skip reframing.
           const frameKey = `${actorSnap.col},${actorSnap.row}|${targetSnap.col},${targetSnap.row}`;
-          if (frameKey !== _lastBattleFrameKey || !_battleInsetActive) {
-            renderer.insetRight = 500;
-            _battleInsetActive = true;
+          const needsReframe = frameKey !== _lastBattleFrameKey || (_dialogDocksRight && !_battleInsetActive);
+          if (needsReframe) {
+            if (_dialogDocksRight) {
+              renderer.insetRight = _battleInsetValue;
+              _battleInsetActive = true;
+            }
             renderer.frameHexes(
               [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
               { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
