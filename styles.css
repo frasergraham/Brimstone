@@ -2926,6 +2926,13 @@ canvas { touch-action: pan-x pan-y; }
   text-transform: uppercase;
 }
 .admin-link:hover { opacity: 1; color: var(--text); text-decoration: underline; }
+.menu-version {
+  margin-top: 0.4rem;
+  font-size: 0.65rem;
+  color: var(--text-dim, #7a7a8a);
+  opacity: 0.6;
+  letter-spacing: 0.04em;
+}
 
 /* ── Spectator mode ──────────────────────────────────────────────────────────── */
 

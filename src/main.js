@@ -1002,6 +1002,9 @@ document.getElementById('btn-options-back') .addEventListener('click', () => sho
 document.getElementById('btn-account-back') .addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-changelog-back').addEventListener('click', () => showStep('mode'));
 
+// Show game version on main menu
+document.getElementById('menu-version').textContent = `v${VERSION}`;
+
 // Version badge opens revision history
 document.getElementById('version-badge').addEventListener('click', (e) => {
   e.preventDefault();
