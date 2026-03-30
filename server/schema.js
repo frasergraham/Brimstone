@@ -89,6 +89,16 @@ export const SCHEMA_SQL = `
     used       INTEGER NOT NULL DEFAULT 0
   );
 
+  CREATE TABLE IF NOT EXISTS campaign_saves (
+    player_id    TEXT NOT NULL REFERENCES players(id),
+    save_slot    TEXT NOT NULL DEFAULT 'campaign-1',
+    state_json   TEXT NOT NULL,
+    game_version TEXT NOT NULL,
+    updated_at   INTEGER NOT NULL DEFAULT (unixepoch()),
+    created_at   INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (player_id, save_slot)
+  );
+
   CREATE TABLE IF NOT EXISTS game_stats (
     id                TEXT PRIMARY KEY,
     mode              TEXT NOT NULL,
@@ -109,6 +119,28 @@ export const SCHEMA_SQL = `
     witch_player_id   TEXT,
     game_version      TEXT NOT NULL,
     fog_of_war        INTEGER NOT NULL DEFAULT 0,
+    duration_ms       INTEGER,
+    created_at        INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  CREATE TABLE IF NOT EXISTS campaign_game_stats (
+    id                TEXT PRIMARY KEY,
+    campaign_id       TEXT NOT NULL,
+    mission_id        TEXT NOT NULL,
+    mission_title     TEXT NOT NULL DEFAULT '',
+    winner            TEXT NOT NULL,
+    win_reason        TEXT NOT NULL,
+    rounds            INTEGER NOT NULL,
+    final_phase       TEXT NOT NULL,
+    hero_kills        INTEGER NOT NULL DEFAULT 0,
+    witch_kills       INTEGER NOT NULL DEFAULT 0,
+    survivors_deployed INTEGER NOT NULL DEFAULT 0,
+    survivors_lost    INTEGER NOT NULL DEFAULT 0,
+    enemies_spawned   INTEGER NOT NULL DEFAULT 0,
+    has_witch         INTEGER NOT NULL DEFAULT 0,
+    ai_personality    TEXT,
+    map_size          TEXT NOT NULL DEFAULT 'standard',
+    game_version      TEXT NOT NULL,
     duration_ms       INTEGER,
     created_at        INTEGER NOT NULL DEFAULT (unixepoch())
   );

@@ -2,7 +2,7 @@
 import { GameState, Player } from './game.js';
 import { Renderer }          from './renderer.js';
 import { UIController, UIMode } from './ui.js';
-import { WitchAI, HeroAI }   from './ai.js';
+import { WitchAI, HeroAI, WITCH_PERSONALITIES }   from './ai.js';
 import {
   MultiplayerClient, MirrorState, loadSession, clearSession,
   checkEmailTokenInUrl, requestLinkEmail, requestEmailLogin, fetchIdentities,
@@ -10,14 +10,16 @@ import {
 import { VERSION, BUILD_VERSION } from './version.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType }    from './planner.js';
-import { hexDistance }       from './hex.js';
+import { hexDistance, getNeighbors } from './hex.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { MAP_SIZES, generateTutorialMap } from './map.js';
 import { nodeController } from './game.js';
 import { TutorialConductor } from './tutorial.js';
-import { createMinion, setForcedDice } from './entities.js';
+import { createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, setForcedDice, EntityType, markRosterUsedByName } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
+import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves } from './campaign/campaign.js';
+import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
 
 // Stamp version into badges
 document.getElementById('version-badge').textContent = `v${BUILD_VERSION}`;
@@ -155,6 +157,50 @@ function _recordLocalGameStats() {
       const local = JSON.parse(localStorage.getItem('brimstone_stats') || '[]');
       local.push(stats);
       localStorage.setItem('brimstone_stats', JSON.stringify(local));
+    } catch { /* storage full or unavailable — silently discard */ }
+  });
+}
+
+/** Record campaign game stats to server (falls back to localStorage). */
+function _recordCampaignGameStats() {
+  if (!state || !state.gameOver || !_activeCampaign || !_activeMissionDef) return;
+  const missionDef = _activeMissionDef;
+  const survivorsDeployed = state.entities.filter(
+    e => e.owner === 'hero' && e.type === EntityType.SURVIVOR
+  ).length;
+  const survivorsLost = state.entities.filter(
+    e => e.owner === 'hero' && e.type === EntityType.SURVIVOR && !e.alive
+  ).length;
+  const enemiesSpawned = state.entities.filter(e => e.owner === 'witch').length;
+  const stats = {
+    id:                 crypto.randomUUID(),
+    campaign_id:        _activeCampaign.campaignDef.id,
+    mission_id:         missionDef.id,
+    mission_title:      missionDef.title || '',
+    winner:             state.winner,
+    win_reason:         state.winReason || '',
+    rounds:             state.round,
+    final_phase:        state.phase,
+    hero_kills:         state.heroKills  || 0,
+    witch_kills:        state.witchKills || 0,
+    survivors_deployed: survivorsDeployed,
+    survivors_lost:     survivorsLost,
+    enemies_spawned:    enemiesSpawned,
+    has_witch:          missionDef.hasWitch ? 1 : 0,
+    ai_personality:     missionDef.aiPersonality || null,
+    map_size:           missionDef.mapSize || 'standard',
+    game_version:       VERSION,
+    duration_ms:        _gameStartTime ? Date.now() - _gameStartTime : null,
+  };
+  fetch('/api/campaign-game-stats', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(stats),
+  }).catch(() => {
+    try {
+      const local = JSON.parse(localStorage.getItem('brimstone_campaign_stats') || '[]');
+      local.push(stats);
+      localStorage.setItem('brimstone_campaign_stats', JSON.stringify(local));
     } catch { /* storage full or unavailable — silently discard */ }
   });
 }
@@ -381,6 +427,13 @@ async function _runLocalResolution(skipSummary = false) {
   state.updateNodeDiscovery();
   state.checkAndLogNodeControlChanges();
   state.endRound();
+
+  // Campaign wave spawning: inject new enemies after each round
+  if (_activeMissionDef?.waves) {
+    const waveLogs = processWaves(state, _activeMissionDef.waves, _createEnemyEntity);
+    for (const msg of waveLogs) state.addLog(msg);
+  }
+
   if (ui) ui._triggerHazardFlashes();
   redraw();
 
@@ -404,10 +457,12 @@ async function _runLocalResolution(skipSummary = false) {
   if (!_autoplay && !skipSummary && ui && humanFaction) {
     // Finalize game-over immediately — cleanup survives any navigation away
     if (state.gameOver) {
-      _recordLocalGameStats();
-      if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
-      _saveCompletedSpGame(state.winner, state.winReason);
-      _uploadSpGame(state.winner, state.winReason);
+      if (!_activeCampaign) {
+        _recordLocalGameStats();
+        if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
+        _saveCompletedSpGame(state.winner, state.winReason);
+        _uploadSpGame(state.winner, state.winReason);
+      }
     }
 
     let action;
@@ -432,6 +487,11 @@ async function _runLocalResolution(skipSummary = false) {
     ui._animateScoreBar(prevScore, prevNodes);
 
     if (state.gameOver) {
+      // Campaign mission debrief
+      if (_activeCampaign && _activeMissionDef) {
+        _handleCampaignMissionEnd();
+        return;
+      }
       if (action === 'viewmap') {
         // Lift fog so the player can inspect the final board
         state.fogOfWar = false;
@@ -443,10 +503,12 @@ async function _runLocalResolution(skipSummary = false) {
     }
   } else if (state.gameOver && ui) {
     // Autoplay game-over — still show the summary so the user sees the result
-    _recordLocalGameStats();
-    if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
-    _saveCompletedSpGame(state.winner, state.winReason);
-    _uploadSpGame(state.winner, state.winReason);
+    if (!_activeCampaign) {
+      _recordLocalGameStats();
+      if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
+      _saveCompletedSpGame(state.winner, state.winReason);
+      _uploadSpGame(state.winner, state.winReason);
+    }
     let action;
     do {
       action = await ui._showResolutionSummary(steps, state.round - 1, {
@@ -474,9 +536,11 @@ async function _runLocalResolution(skipSummary = false) {
     return;
   } else if (state.gameOver) {
     // No UI (headless) — just clean up
-    _recordLocalGameStats();
-    if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
-    _saveCompletedSpGame(state.winner, state.winReason);
+    if (!_activeCampaign) {
+      _recordLocalGameStats();
+      if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
+      _saveCompletedSpGame(state.winner, state.winReason);
+    }
     return;
   }
 
@@ -961,7 +1025,11 @@ window.addEventListener('resize', () => {
 // ── Setup screen ──────────────────────────────────────────────────────────────
 
 const stepMode         = document.getElementById('setup-step-mode');
+const stepSpChoice     = document.getElementById('setup-step-sp-choice');
 const stepSinglePlayer = document.getElementById('setup-step-singleplayer');
+const stepCampaignSelect = document.getElementById('setup-step-campaign-select');
+const stepCampaign     = document.getElementById('setup-step-campaign');
+const stepDebrief      = document.getElementById('setup-step-debrief');
 const stepMultiplayer  = document.getElementById('setup-step-multiplayer');
 const stepHowto        = document.getElementById('setup-step-howtoplay');
 const stepOptions      = document.getElementById('setup-step-options');
@@ -974,7 +1042,11 @@ const stepLobby        = document.getElementById('setup-step-lobby');
 
 function showStep(step) {
   stepMode        .style.display = step === 'mode'          ? '' : 'none';
-  stepSinglePlayer.style.display = step === 'singleplayer'  ? '' : 'none';
+  stepSpChoice      .style.display = step === 'sp-choice'       ? '' : 'none';
+  stepSinglePlayer  .style.display = step === 'singleplayer'    ? '' : 'none';
+  stepCampaignSelect.style.display = step === 'campaign-select' ? '' : 'none';
+  stepCampaign      .style.display = step === 'campaign'        ? '' : 'none';
+  stepDebrief       .style.display = step === 'debrief'         ? '' : 'none';
   stepMultiplayer .style.display = step === 'multiplayer'   ? '' : 'none';
   stepHowto       .style.display = step === 'howtoplay'     ? '' : 'none';
   stepOptions     .style.display = step === 'options'       ? '' : 'none';
@@ -991,7 +1063,10 @@ let _currentLobby = null;
 
 // ── Welcome screen buttons ────────────────────────────────────────────────────
 
-document.getElementById('btn-single-player').addEventListener('click', () => _showSinglePlayerScreen());
+document.getElementById('btn-single-player').addEventListener('click', () => showStep('sp-choice'));
+document.getElementById('btn-quick-play')    .addEventListener('click', () => _showSinglePlayerScreen());
+document.getElementById('btn-story-mode')    .addEventListener('click', () => _showCampaignSelectScreen());
+document.getElementById('btn-sp-choice-back').addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-multiplayer')  .addEventListener('click', () => _showMultiplayerScreen());
 document.getElementById('btn-tutorial')     .addEventListener('click', () => initTutorial());
 document.getElementById('btn-how-to-play')  .addEventListener('click', () => showStep('howtoplay'));
@@ -1045,7 +1120,404 @@ function _showSinglePlayerScreen() {
 
 document.getElementById('btn-singleplayer-back').addEventListener('click', () => {
   renderer = null; ui = null; state = null;
-  showStep('mode');
+  showStep('sp-choice');
+});
+
+// ── Campaign / Story Mode ─────────────────────────────────────────────────────
+
+let _activeCampaign  = null;  // Campaign instance (persists across missions)
+let _activeMissionDef = null; // Current mission definition
+let _campaignSelectedMission = null; // Mission ID selected on campaign screen
+
+function _showCampaignSelectScreen() {
+  const listEl = document.getElementById('campaign-select-list');
+  listEl.innerHTML = CAMPAIGNS.map(c => {
+    const hasSave = Campaign.exists(`campaign-${c.id}`);
+    return `<div class="campaign-select-item" data-campaign="${c.id}">
+      <div class="campaign-select-title">${c.title}</div>
+      <div class="campaign-select-desc">${c.description}</div>
+      ${hasSave ? '<div class="campaign-select-badge">Save found</div>' : ''}
+    </div>`;
+  }).join('');
+
+  listEl.querySelectorAll('.campaign-select-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const def = getCampaignById(el.dataset.campaign);
+      if (def) _showCampaignScreen(def);
+    });
+  });
+
+  showStep('campaign-select');
+}
+
+function _showCampaignScreen(campaignDef) {
+  if (campaignDef) {
+    _activeCampaign = new Campaign(campaignDef);
+    _activeCampaign.load();
+  }
+  _renderCampaignScreen();
+  showStep('campaign');
+}
+
+function _renderCampaignScreen() {
+  const listEl = document.getElementById('campaign-mission-list');
+  const briefEl = document.getElementById('campaign-briefing');
+  const navEl = document.getElementById('campaign-nav');
+  const rosterEl = document.getElementById('campaign-roster-summary');
+  briefEl.style.display = 'none';
+  navEl.style.display = '';
+  listEl.style.display = '';
+
+  // Set campaign title from definition
+  const titleEl = document.getElementById('campaign-title');
+  if (titleEl && _activeCampaign?.campaignDef) {
+    titleEl.textContent = _activeCampaign.campaignDef.title;
+  }
+
+  // Roster summary
+  if (_activeCampaign.roster.length > 0) {
+    rosterEl.style.display = '';
+    rosterEl.innerHTML = `<div class="campaign-roster-label">Roster: ${_activeCampaign.roster.length} survivor${_activeCampaign.roster.length !== 1 ? 's' : ''}</div>` +
+      `<div class="campaign-resources-label">` +
+      Object.entries(_activeCampaign.resources).filter(([,v]) => v > 0).map(([k,v]) => `${k}: ${v}`).join(' · ') +
+      `</div>`;
+  } else {
+    rosterEl.style.display = 'none';
+  }
+
+  // Mission list
+  const missions = _activeCampaign.getMissionList();
+  listEl.innerHTML = missions.map(m => {
+    const cls = m.completed ? 'campaign-mission completed' : m.available ? 'campaign-mission available' : 'campaign-mission locked';
+    const icon = m.completed ? '✓' : m.available ? '→' : '🔒';
+    return `<div class="${cls}" data-mission="${m.id}">
+      <span class="campaign-mission-icon">${icon}</span>
+      <span class="campaign-mission-name">${m.title}</span>
+      ${m.completed ? '<span class="campaign-mission-status">Complete</span>' : ''}
+    </div>`;
+  }).join('');
+
+  // Click handlers for missions
+  listEl.querySelectorAll('.campaign-mission.available').forEach(el => {
+    el.addEventListener('click', () => {
+      _campaignSelectedMission = el.dataset.mission;
+      _showMissionBriefing(_campaignSelectedMission);
+    });
+  });
+}
+
+function _showMissionBriefing(missionId) {
+  const missionDef = _activeCampaign.getMissionDef(missionId);
+  if (!missionDef) return;
+
+  const listEl = document.getElementById('campaign-mission-list');
+  const briefEl = document.getElementById('campaign-briefing');
+  const navEl = document.getElementById('campaign-nav');
+
+  listEl.style.display = 'none';
+  navEl.style.display = 'none';
+  briefEl.style.display = '';
+
+  document.getElementById('campaign-mission-title').textContent = missionDef.title;
+  document.getElementById('campaign-mission-text').textContent = missionDef.briefing;
+
+  // Objectives
+  const objEl = document.getElementById('campaign-objectives');
+  const winDesc = _objectiveDescription(missionDef.objectives.win);
+  const loseDesc = _objectiveDescription(missionDef.objectives.lose);
+  objEl.innerHTML = `
+    <div class="campaign-obj"><span class="campaign-obj-icon">☀</span> <strong>Victory:</strong> ${winDesc}</div>
+    <div class="campaign-obj"><span class="campaign-obj-icon">💀</span> <strong>Defeat:</strong> ${loseDesc}</div>
+  `;
+
+  // Deploy roster (if campaign has survivors and mission allows them)
+  const deployEl = document.getElementById('campaign-deploy-roster');
+  const pickerEl = document.getElementById('campaign-roster-picker');
+  if (_activeCampaign.roster.length > 0 && missionDef.maxSurvivorsFromRoster > 0) {
+    deployEl.style.display = '';
+    pickerEl.innerHTML = _activeCampaign.roster.map((s, i) => `
+      <label class="campaign-survivor-pick">
+        <input type="checkbox" data-idx="${i}" ${i < missionDef.maxSurvivorsFromRoster ? 'checked' : ''}>
+        <span>${s.name} (${s.ability}) HP:${s.hp}/${s.maxHp}</span>
+      </label>
+    `).join('');
+  } else {
+    deployEl.style.display = 'none';
+  }
+}
+
+function _objectiveDescription(obj) {
+  if (!obj) return 'None';
+  switch (obj.type) {
+    case 'eliminate_all':  return 'Eliminate all enemies';
+    case 'hero_killed':    return 'Don\'t let the hero fall';
+    case 'survive_rounds': return `Survive ${obj.rounds} rounds`;
+    case 'reach_hex':      return 'Reach the objective hex';
+    case 'slay_witch':     return 'Slay the witch';
+    case 'control_nodes':  return 'Control the Power Nodes';
+    default:               return obj.type;
+  }
+}
+
+function _createEnemyEntity(type, col, row) {
+  switch (type) {
+    case 'zombie':     return createZombie(col, row, 'witch');
+    case 'minion':     return createMinion(col, row, 'witch');
+    case 'wood_golem': return createWoodGolem(col, row, 'witch');
+    case 'iron_golem': return createIronGolem(col, row, 'witch');
+    default:           return createMinion(col, row, 'witch');
+  }
+}
+
+const _DEPARTURE_MESSAGES = [
+  name => `${name} left town to search for supplies in the outlying farms.`,
+  name => `${name} slipped away at dawn to scout the old trade road.`,
+  name => `${name} volunteered to warn the neighboring settlement.`,
+  name => `${name} departed to tend to a wounded traveler found on the road.`,
+  name => `${name} set off alone to bury the dead in the churchyard.`,
+  name => `${name} vanished into the fog — perhaps the strain was too much.`,
+  name => `${name} headed south, hoping to find reinforcements.`,
+  name => `${name} left to guard the bridge crossing overnight.`,
+];
+
+const _ARRIVAL_MESSAGES = [
+  name => `${name} wanders into town, weary but willing to fight.`,
+  name => `${name} stumbles out of the tree line, clutching a makeshift weapon.`,
+  name => `${name} emerges from the cellar of a ruined house and joins you.`,
+  name => `A voice calls from the fog — ${name} steps forward, ready for battle.`,
+  name => `${name} was hiding in the church. Hearing your approach, they join the cause.`,
+  name => `${name} arrives breathless, having fled the horrors to the north.`,
+  name => `The door of the inn creaks open — ${name} has been waiting for someone to lead.`,
+  name => `${name} crawls from the wreckage of a collapsed barn, bruised but alive.`,
+];
+
+function _departureMessage(name) {
+  return _DEPARTURE_MESSAGES[Math.floor(Math.random() * _DEPARTURE_MESSAGES.length)](name);
+}
+
+function _arrivalMessage(name) {
+  return _ARRIVAL_MESSAGES[Math.floor(Math.random() * _ARRIVAL_MESSAGES.length)](name);
+}
+
+function _initCampaignMission(missionDef) {
+  _activeMissionDef = missionDef;
+  _gameStartTime = Date.now();
+  _spSaveId = null; // campaign uses its own save system
+
+  // Build map
+  const builder = _activeCampaign.getMapBuilder(missionDef.mapBuilder);
+  if (!builder) { console.error('No map builder for', missionDef.mapBuilder); return; }
+  const mapData = builder();
+  mapData.noWitch = !missionDef.hasWitch;
+  mapData.disableScoring = !!missionDef.disableScoring;
+  if (missionDef.maxDiscoverableSurvivors != null) {
+    mapData.maxDiscoverableSurvivors = missionDef.maxDiscoverableSurvivors;
+  }
+
+  // Hide setup, show game
+  document.getElementById('setup-screen').style.display = 'none';
+  document.getElementById('game-screen').style.display = 'flex';
+  const canvas = document.getElementById('game-canvas');
+
+  // Create game state
+  state = new GameState(true, false, missionDef.mapSize, null, mapData);
+  state.fogOfWar = true;
+
+  // Set custom victory delegate
+  state.victoryDelegate = buildVictoryDelegate(missionDef.objectives);
+
+  // Inject carried-over hero stats
+  if (_activeCampaign && _activeCampaign.heroStats) {
+    const hs = _activeCampaign.heroStats;
+    state.hero.hp      = Math.min(hs.hp, state.hero.maxHp);
+    state.hero.weapon  = hs.weapon;
+    state.hero.items   = { ...hs.items };
+  }
+
+  // Inject carried-over resources
+  if (_activeCampaign) {
+    const res = { ...(_activeCampaign.resources || {}) };
+    // Add mission starting resources
+    if (missionDef.startingResources) {
+      for (const [k, v] of Object.entries(missionDef.startingResources)) {
+        res[k] = (res[k] || 0) + v;
+      }
+    }
+    Object.assign(state.inventory.shared, res);
+  }
+
+  // Deploy carried-over survivors from roster
+  if (_activeCampaign && missionDef.maxSurvivorsFromRoster > 0) {
+    const pickerEl = document.getElementById('campaign-roster-picker');
+    const checked = pickerEl ? [...pickerEl.querySelectorAll('input:checked')].map(cb => parseInt(cb.dataset.idx)) : [];
+    const toDeploy = checked.slice(0, missionDef.maxSurvivorsFromRoster);
+    // Place survivors near hero start
+    const heroStart = mapData.heroStart;
+    const neighbors = getNeighbors(heroStart.col, heroStart.row);
+    for (let i = 0; i < toDeploy.length && i < neighbors.length; i++) {
+      const rosterEntry = _activeCampaign.roster[toDeploy[i]];
+      if (!rosterEntry) continue;
+      const n = neighbors[i];
+      const s = createSurvivor(n.col, n.row, 'hero');
+      // Restore stats from roster
+      s.name = rosterEntry.name;
+      s.title = rosterEntry.title;
+      s.bio = rosterEntry.bio;
+      s.ability = rosterEntry.ability;
+      s.abilityLabel = rosterEntry.abilityLabel;
+      s.color = rosterEntry.color;
+      s.hp = rosterEntry.hp;
+      s.maxHp = rosterEntry.maxHp;
+      s.attack = rosterEntry.attack;
+      s.defense = rosterEntry.defense;
+      s.weapon = rosterEntry.weapon;
+      s.items = { ...rosterEntry.items };
+      s.owner = 'hero';
+      state.entities.push(s);
+      // Exclude this character from the hidden-survivor discovery pool
+      markRosterUsedByName(rosterEntry.name);
+    }
+  }
+
+  // ── Roster balancing: enforce min/max survivor count ──────────────────────
+  if (missionDef.minSurvivors != null || missionDef.maxSurvivors != null) {
+    const heroSurvivors = state.entities.filter(
+      e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR
+    );
+    const min = missionDef.minSurvivors ?? 0;
+    const max = missionDef.maxSurvivors ?? Infinity;
+
+    // Too many — some leave with a narrative reason
+    if (heroSurvivors.length > max) {
+      const excess = heroSurvivors.slice(max);
+      for (const s of excess) {
+        state.entities.splice(state.entities.indexOf(s), 1);
+        state.addLog(_departureMessage(s.name));
+      }
+    }
+
+    // Too few — newcomers arrive
+    const currentCount = state.entities.filter(
+      e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR
+    ).length;
+    if (currentCount < min) {
+      const heroStart = mapData.heroStart;
+      const spots = getNeighbors(heroStart.col, heroStart.row)
+        .filter(n => !state.entities.some(e => e.col === n.col && e.row === n.row));
+      for (let i = currentCount; i < min && spots.length > 0; i++) {
+        const spot = spots.shift();
+        const s = createSurvivor(spot.col, spot.row, 'hero');
+        s.owner = 'hero';
+        state.entities.push(s);
+        state.addLog(_arrivalMessage(s.name));
+      }
+    }
+  }
+
+  // Pre-place enemy units from mission definition
+  if (missionDef.enemyUnits) {
+    for (const enemy of missionDef.enemyUnits) {
+      const e = _createEnemyEntity(enemy.type, enemy.col, enemy.row);
+      if (e) state.entities.push(e);
+    }
+  }
+
+  // Set up AI
+  const AIClass = WITCH_PERSONALITIES[missionDef.aiPersonality] ?? WitchAI;
+  witchAI = new AIClass(state, redraw);
+  heroAI = null;
+
+  _setupLocalUI(canvas, witchAI, null, false);
+  _roundHistory = [];
+
+  // Log victory conditions at mission start
+  const winDesc = _objectiveDescription(missionDef.objectives?.win);
+  const loseDesc = _objectiveDescription(missionDef.objectives?.lose);
+  state.addLog(`═══ ${missionDef.title} ═══`);
+  state.addLog(`☀ Victory: ${winDesc}`);
+  state.addLog(`💀 Defeat: ${loseDesc}`);
+
+  redraw();
+  _startLocalPlanningPhase();
+}
+
+function _handleCampaignMissionEnd() {
+  if (!_activeCampaign || !_activeMissionDef || !state) return;
+
+  // Record campaign-specific stats before cleaning up
+  _recordCampaignGameStats();
+
+  const won = state.winner === 'hero';
+  const missionDef = _activeMissionDef;
+
+  // Gather surviving survivors for roster (permadeath: dead ones are lost)
+  const survivors = state.entities
+    .filter(e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR)
+    .map(e => snapshotSurvivor(e));
+
+  // Apply mission result to campaign state
+  _activeCampaign.applyMissionResult(missionDef.id, {
+    won,
+    survivors,
+    resources: { ...state.inventory.shared },
+    heroStats: state.hero ? {
+      hp: state.hero.hp, maxHp: state.hero.maxHp,
+      attack: state.hero.attack, defense: state.hero.defense,
+      weapon: state.hero.weapon, items: { ...state.hero.items },
+    } : _activeCampaign.heroStats,
+    flags: {},
+  });
+
+  // Show debrief screen
+  document.getElementById('game-screen').style.display = 'none';
+  document.getElementById('setup-screen').style.display = '';
+
+  const title = won ? 'VICTORY' : 'DEFEAT';
+  const text = won ? (missionDef.victoryText || 'Mission complete.') : (missionDef.defeatText || 'Mission failed.');
+  document.getElementById('debrief-title').textContent = title;
+  document.getElementById('debrief-text').textContent = text;
+
+  // Stats
+  const statsEl = document.getElementById('debrief-stats');
+  statsEl.innerHTML = `
+    <div>Rounds: ${state.round}</div>
+    <div>Kills: ${state.heroKills}</div>
+    <div>Survivors remaining: ${survivors.length}</div>
+  `;
+
+  // Roster status
+  const rosterEl = document.getElementById('debrief-roster');
+  if (survivors.length > 0) {
+    rosterEl.innerHTML = '<h3>Surviving Roster</h3>' +
+      survivors.map(s => `<div class="debrief-survivor">${s.name} — HP: ${s.hp}/${s.maxHp}</div>`).join('');
+  } else {
+    rosterEl.innerHTML = '';
+  }
+
+  // Clean up game state
+  renderer = null; ui = null; witchAI = null; heroAI = null;
+  _activeMissionDef = null;
+
+  showStep('debrief');
+}
+
+// Campaign event listeners
+document.getElementById('btn-campaign-select-back').addEventListener('click', () => showStep('sp-choice'));
+document.getElementById('btn-campaign-back')   .addEventListener('click', () => _showCampaignSelectScreen());
+document.getElementById('btn-briefing-back')   .addEventListener('click', () => _renderCampaignScreen());
+document.getElementById('btn-delete-campaign')  .addEventListener('click', () => {
+  if (confirm('Start over? All campaign progress, roster survivors, and resources will be lost. This cannot be undone.')) {
+    _activeCampaign.delete();
+    _showCampaignSelectScreen();
+  }
+});
+document.getElementById('btn-start-mission')   .addEventListener('click', () => {
+  if (!_campaignSelectedMission) return;
+  const missionDef = _activeCampaign.getMissionDef(_campaignSelectedMission);
+  if (missionDef) _initCampaignMission(missionDef);
+});
+document.getElementById('btn-debrief-continue').addEventListener('click', () => {
+  _showCampaignScreen();
 });
 
 // Tab switching for In Progress / Completed panels (SP and MP)
@@ -1095,6 +1567,7 @@ function _doRestart() {
   state    = null;
   witchAI  = null;
   heroAI   = null;
+  _activeMissionDef = null;
 
   if (_autoplay) {
     init(true, true, true);

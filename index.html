@@ -100,9 +100,67 @@
       </div>
     </div>
 
-    <!-- Single Player -->
+    <!-- Single Player Mode Choice -->
+    <div id="setup-step-sp-choice" class="setup-card" style="display:none">
+      <h1 class="title" style="font-size:2rem;margin-bottom:0.5rem">SINGLE PLAYER</h1>
+      <div class="setup-lore"><p>Choose your path into Salem.</p></div>
+      <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.75rem">
+        <button id="btn-story-mode" class="setup-btn primary" style="width:220px">📖 Story Mode</button>
+        <button id="btn-quick-play" class="setup-btn" style="width:220px">⚔ Quick Play</button>
+      </div>
+      <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
+        <button id="btn-sp-choice-back" class="setup-btn">← Back</button>
+      </div>
+    </div>
+
+    <!-- Campaign: Story Selection -->
+    <div id="setup-step-campaign-select" class="setup-card setup-card-wide" style="display:none">
+      <h1 class="title" style="font-size:2rem;margin-bottom:0.5rem">STORY MODE</h1>
+      <div class="setup-lore"><p>Choose a story to play.</p></div>
+      <div id="campaign-select-list" class="campaign-select-list"></div>
+      <div class="setup-buttons" style="margin-top:1rem">
+        <button id="btn-campaign-select-back" class="setup-btn">&larr; Back</button>
+      </div>
+    </div>
+
+    <!-- Campaign: Mission Select & Briefing -->
+    <div id="setup-step-campaign" class="setup-card setup-card-wide" style="display:none">
+      <h1 id="campaign-title" class="title" style="font-size:2rem;margin-bottom:0.5rem">CAMPAIGN</h1>
+      <div id="campaign-roster-summary" class="campaign-roster-summary" style="display:none"></div>
+      <div id="campaign-mission-list" class="campaign-mission-list"></div>
+      <div id="campaign-briefing" class="campaign-briefing" style="display:none">
+        <h2 id="campaign-mission-title" class="campaign-mission-title"></h2>
+        <p id="campaign-mission-text" class="campaign-mission-text"></p>
+        <div id="campaign-objectives" class="campaign-objectives"></div>
+        <div id="campaign-deploy-roster" class="campaign-deploy-roster" style="display:none">
+          <h3>Deploy Survivors</h3>
+          <div id="campaign-roster-picker" class="campaign-roster-picker"></div>
+        </div>
+        <div class="setup-buttons" style="margin-top:1rem">
+          <button id="btn-start-mission" class="setup-btn primary">Begin Mission</button>
+          <button id="btn-briefing-back" class="setup-btn">← Back</button>
+        </div>
+      </div>
+      <div id="campaign-nav" class="setup-buttons" style="margin-top:1rem">
+        <button id="btn-campaign-back" class="setup-btn">← Back</button>
+        <button id="btn-delete-campaign" class="setup-btn" style="color:var(--clr-dim);font-size:0.85rem">Start Over</button>
+      </div>
+    </div>
+
+    <!-- Campaign: Mission Debrief (shown after mission completes) -->
+    <div id="setup-step-debrief" class="setup-card" style="display:none">
+      <h1 id="debrief-title" class="title" style="font-size:2rem;margin-bottom:0.5rem">MISSION COMPLETE</h1>
+      <p id="debrief-text" class="campaign-mission-text"></p>
+      <div id="debrief-stats" class="debrief-stats"></div>
+      <div id="debrief-roster" class="debrief-roster"></div>
+      <div class="setup-buttons" style="margin-top:1rem">
+        <button id="btn-debrief-continue" class="setup-btn primary">Continue</button>
+      </div>
+    </div>
+
+    <!-- Single Player: Quick Play -->
     <div id="setup-step-singleplayer" class="setup-card" style="display:none">
-      <h1 class="title" style="font-size:2rem;margin-bottom:1rem">SINGLE PLAYER</h1>
+      <h1 class="title" style="font-size:2rem;margin-bottom:1rem">QUICK PLAY</h1>
 
       <div class="setup-options">
         <label class="setup-option-label">

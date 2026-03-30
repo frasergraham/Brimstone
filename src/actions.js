@@ -363,6 +363,15 @@ const SURVIVOR_FIND_CHANCE = Object.freeze({
 function _triggerSurvivorEncounter(state, actor, col, row) {
   const st = tile(state, col, row);
   if (!st?.hiddenSurvivor) return null;
+
+  // Campaign cap: skip encounter if hero side already found max survivors
+  if (actor.owner === 'hero' &&
+      state.maxDiscoverableSurvivors != null &&
+      state.discoveredSurvivorCount >= state.maxDiscoverableSurvivors) {
+    st.hiddenSurvivor = false;
+    return null;
+  }
+
   st.hiddenSurvivor = false;
 
   const encounterLog = [];
@@ -372,6 +381,7 @@ function _triggerSurvivorEncounter(state, actor, col, row) {
     const s = createSurvivor(col, row, actor.ownerId);
     s.owner = 'hero';
     state.entities.push(s);
+    state.discoveredSurvivorCount = (state.discoveredSurvivorCount || 0) + 1;
     const abilityNote = s.abilityLabel ? ` · ${s.abilityLabel}` : '';
     encounterLog.push(`☺ ${s.name} the ${s.title} steps out of hiding and joins the party! (HP ${s.hp}/${s.maxHp} · ATK ${s.attack} · DEF ${s.defense}${abilityNote})`);
     encounterSurvivor = {

@@ -366,6 +366,16 @@ export function resetRoster() {
   _usedRosterIndices.clear();
 }
 
+/**
+ * Mark survivor roster entries as used by name so they won't be generated
+ * again by createSurvivor(). Used by campaign mode to exclude carried-over
+ * survivors from the discoverable pool.
+ */
+export function markRosterUsedByName(name) {
+  const idx = SURVIVOR_ROSTER.findIndex(c => c.name === name);
+  if (idx >= 0) _usedRosterIndices.add(idx);
+}
+
 function _witchColor(type, entity) {
   const palette = WITCH_UNIT_COLORS[type];
   return palette[parseInt(entity.id.slice(1)) % palette.length];
