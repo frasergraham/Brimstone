@@ -512,10 +512,10 @@ export class GameState {
         this.addLog(`🌅 A new dawn — cycle ${cycle}.`);
       }
       for (const [, t] of this.tiles) t.explored = false;
-      this._checkNodeObjectives(Phase.DAWN);
+      if (!this.disableScoring) this._checkNodeObjectives(Phase.DAWN);
     }
     if (this.phase === Phase.DUSK) {
-      this._checkNodeObjectives(Phase.DUSK);
+      if (!this.disableScoring) this._checkNodeObjectives(Phase.DUSK);
     }
 
     this.checkVictory();
