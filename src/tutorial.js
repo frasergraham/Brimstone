@@ -174,6 +174,7 @@ export class TutorialConductor {
     this._clearSpotlight();
     if (this._tooltip) this._tooltip.style.display = 'none';
     if (this.renderer) this.renderer.tutorialSpotlightHex = null;
+    if (this.ui) this.ui.tutorialClickBlocked = false;
   }
 
   // ── Private ─────────────────────────────────────────────────────────────────
@@ -205,6 +206,12 @@ export class TutorialConductor {
         // Action-gated or auto steps: hide the button
         this._nextBtn.style.display = 'none';
       }
+    }
+
+    // Block map clicks during dialog steps (waiting for "Got it" button)
+    if (this.ui) {
+      const isDialogStep = (step.trigger === 'click' || step.trigger === 'start_game');
+      this.ui.tutorialClickBlocked = isDialogStep;
     }
 
     // Spotlight

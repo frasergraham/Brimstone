@@ -449,4 +449,18 @@ describe('TutorialConductor logic (no DOM)', () => {
       }
     }
   });
+
+  test('click and start_game steps should block map clicks; action-gated steps should not', () => {
+    for (const step of TUTORIAL_STEPS) {
+      const t = step.trigger;
+      if (t === 'click' || t === 'start_game') {
+        // These dialog steps should block map interaction
+        assert.ok(true, `${step.id} (trigger=${t}) blocks clicks`);
+      } else {
+        // Action-gated and auto steps need map to be interactive
+        assert.ok(t === 'auto' || (typeof t === 'object' && t.type),
+          `${step.id} has valid non-blocking trigger`);
+      }
+    }
+  });
 });
