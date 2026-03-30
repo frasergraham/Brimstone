@@ -832,6 +832,11 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
     // ── Phase 2: battles and summons ──────────────────────────────────────────
     let hadBattle = false;
+    // Track the last battle dialog's framed hex positions so we can skip
+    // redundant camera reframes when consecutive battles are at the same spot.
+    let _lastBattleFrameKey = null;
+    let _battleInsetActive = false;
+    const _prevInsetRight = renderer.insetRight ?? 0;
     for (const ev of events) {
       const { action, result, battleSnaps } = ev;
       if (action.type === PlanActionType.BATTLE_UNIT || action.type === PlanActionType.BATTLE_HEX) {
@@ -889,17 +894,23 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             if (speed === 'cinematic' || speed === 'step') {
               // Full dialog for every battle — no significance filter.
               // Offset camera so the map is visible beside the docked dialog.
-              const prevInsetRight = renderer.insetRight ?? 0;
-              renderer.insetRight = 500;
-              renderer.frameHexes(
-                [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
-                { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
-              );
+              // Skip the reframe if the camera is already positioned for these
+              // same hex positions (avoids yoyo between consecutive battles at
+              // the same spot).
+              const frameKey = `${actorSnap.col},${actorSnap.row}|${targetSnap.col},${targetSnap.row}`;
+              if (frameKey !== _lastBattleFrameKey || !_battleInsetActive) {
+                renderer.insetRight = 500;
+                _battleInsetActive = true;
+                renderer.frameHexes(
+                  [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
+                  { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
+                );
+              }
+              _lastBattleFrameKey = frameKey;
               // Wait for dialog dismiss, THEN play floaters so nothing overlaps.
               await new Promise(resolve => {
                 ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
               });
-              renderer.insetRight = prevInsetRight;
               _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
               // Drain all floaters (HP text 1800ms, death burst 600ms) before next battle.
               await renderer.waitForAnimations();
@@ -978,16 +989,21 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         redrawFn();
 
         if (speed === 'cinematic' || speed === 'step') {
-          const prevInsetRight = renderer.insetRight ?? 0;
-          renderer.insetRight = 500;
-          renderer.frameHexes(
-            [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
-            { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
-          );
+          // Reuse the same frame-key tracking from Phase 2 so guard strikes
+          // at the same position as a preceding regular battle skip reframing.
+          const frameKey = `${actorSnap.col},${actorSnap.row}|${targetSnap.col},${targetSnap.row}`;
+          if (frameKey !== _lastBattleFrameKey || !_battleInsetActive) {
+            renderer.insetRight = 500;
+            _battleInsetActive = true;
+            renderer.frameHexes(
+              [{ col: actorSnap.col, row: actorSnap.row }, { col: targetSnap.col, row: targetSnap.row }],
+              { paddingHexes: 2.5, maxZoom: 2.0, duration: 200 },
+            );
+          }
+          _lastBattleFrameKey = frameKey;
           await new Promise(resolve => {
             ui._showBattleDialog(actorSnap, targetSnap, result, resolve);
           });
-          renderer.insetRight = prevInsetRight;
           _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
           await renderer.waitForAnimations();
         } else {
@@ -1011,6 +1027,11 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn);
       }
       hadBattle = true;
+    }
+    // Restore inset after all battles (regular + guard strikes) are done.
+    if (_battleInsetActive) {
+      renderer.insetRight = _prevInsetRight;
+      _battleInsetActive = false;
     }
 
     // ── Phase 3: explore results — only this player's own entities ───────────
