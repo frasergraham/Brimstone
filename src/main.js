@@ -466,11 +466,14 @@ async function _runLocalResolution(skipSummary = false) {
       }
     }
 
+    // Save game-over state — replay mutates `state` with intermediate round data
+    const _goState = { gameOver: state.gameOver, winner: state.winner, winReason: state.winReason };
+
     let action;
     do {
       action = await ui._showResolutionSummary(steps, state.round - 1, {
         prevScore, prevNodes, humanFaction, fogOfWar: state.fogOfWar,
-        gameOver: state.gameOver, winner: state.winner, winReason: state.winReason,
+        gameOver: _goState.gameOver, winner: _goState.winner, winReason: _goState.winReason,
         hasFullReplay: _roundHistory.length > 0,
       });
       if (action === 'replay') {
@@ -478,8 +481,12 @@ async function _runLocalResolution(skipSummary = false) {
         redraw();
         await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
       } else if (action === 'replay-full') {
-        await _replayFullGame(_roundHistory, state.winner, state.winReason,
+        await _replayFullGame(_roundHistory, _goState.winner, _goState.winReason,
           state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch');
+        // Restore game-over fields overwritten by replay's Object.assign(state, preState)
+        Object.assign(state, _goState);
+        state.fogOfWar = false;
+        redraw();
       }
     } while (action === 'replay' || action === 'replay-full');
     // Animate score bar changes after summary is dismissed
@@ -504,11 +511,14 @@ async function _runLocalResolution(skipSummary = false) {
       _saveCompletedSpGame(state.winner, state.winReason);
       _uploadSpGame(state.winner, state.winReason);
     }
+    // Save game-over state — replay mutates `state` with intermediate round data
+    const _goStateAP = { gameOver: true, winner: state.winner, winReason: state.winReason };
+
     let action;
     do {
       action = await ui._showResolutionSummary(steps, state.round - 1, {
         prevScore, prevNodes, humanFaction: null, fogOfWar: false,
-        gameOver: true, winner: state.winner, winReason: state.winReason,
+        gameOver: true, winner: _goStateAP.winner, winReason: _goStateAP.winReason,
         hasFullReplay: _roundHistory.length > 0,
       });
       if (action === 'replay') {
@@ -516,8 +526,11 @@ async function _runLocalResolution(skipSummary = false) {
         redraw();
         await _animateResolutionSteps(steps, finalEntities, redraw, null, null);
       } else if (action === 'replay-full') {
-        await _replayFullGame(_roundHistory, state.winner, state.winReason,
+        await _replayFullGame(_roundHistory, _goStateAP.winner, _goStateAP.winReason,
           state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch');
+        Object.assign(state, _goStateAP);
+        state.fogOfWar = false;
+        redraw();
       }
     } while (action === 'replay' || action === 'replay-full');
     if (action === 'restart') {
