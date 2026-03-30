@@ -381,6 +381,11 @@ async function _runLocalResolution(skipSummary = false) {
   const _preResolveStateJson = JSON.stringify(serializeState(state));
   const _preResolveRoundNum  = state.round;
 
+  // Snapshot which tiles are explored before resolution so we can defer
+  // showing the explored dot until the EXPLORE step is actually animated.
+  const preExploredSet = new Set();
+  for (const [k, t] of state.tiles) { if (t.explored) preExploredSet.add(k); }
+
   let steps;
   try {
     steps = resolvePlans(state, state.heroPlan, state.witchPlan);
@@ -399,6 +404,14 @@ async function _runLocalResolution(skipSummary = false) {
   // Hold a reference to the final entity array so we can restore it after animation.
   const finalEntities = state.entities;
 
+  // Snapshot post-resolution explored flags, then revert to pre-resolution state
+  // so the explored dot only appears when the EXPLORE step is actually animated.
+  const postExplored = new Map();
+  for (const [k, t] of state.tiles) postExplored.set(k, t.explored);
+  for (const [k, t] of state.tiles) {
+    if (t.explored && !preExploredSet.has(k)) t.explored = false;
+  }
+
   const humanFaction = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : null;
   const preReplayEntities = steps[0]?.entitySnapshot ?? finalEntities;
 
@@ -410,6 +423,12 @@ async function _runLocalResolution(skipSummary = false) {
   }));
 
   await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+
+  // Restore final explored state after animation completes.
+  for (const [k, v] of postExplored) {
+    const t = state.tiles.get(k);
+    if (t) t.explored = v;
+  }
 
   // Notify tutorial conductor that resolution animation has finished.
   if (_tutorialConductor) _tutorialConductor.onResolutionComplete();
@@ -481,8 +500,13 @@ async function _runLocalResolution(skipSummary = false) {
       });
       if (action === 'replay') {
         state.entities = preReplayEntities;
+        // Reset explored flags so they reveal progressively during replay.
+        for (const [k, t] of state.tiles) {
+          if (t.explored && !preExploredSet.has(k)) t.explored = false;
+        }
         redraw();
         await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+        for (const [k, v] of postExplored) { const t = state.tiles.get(k); if (t) t.explored = v; }
       } else if (action === 'replay-full') {
         await _replayFullGame(_roundHistory, _goState.winner, _goState.winReason,
           state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch');
@@ -524,8 +548,12 @@ async function _runLocalResolution(skipSummary = false) {
       });
       if (action === 'replay') {
         state.entities = preReplayEntities;
+        for (const [k, t] of state.tiles) {
+          if (t.explored && !preExploredSet.has(k)) t.explored = false;
+        }
         redraw();
         await _animateResolutionSteps(steps, finalEntities, redraw, null, null);
+        for (const [k, v] of postExplored) { const t = state.tiles.get(k); if (t) t.explored = v; }
       } else if (action === 'replay-full') {
         await _replayFullGame(_roundHistory, _goStateAP.winner, _goStateAP.winReason,
           state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch');
@@ -960,9 +988,16 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     for (const ev of events) {
       const { action, result } = ev;
       if (action.type !== PlanActionType.EXPLORE) continue;
+      // Reveal the explored dot now that the explore step is being animated.
+      const explorer = step.entitySnapshot?.find(e => e.id === action.entityId);
+      if (explorer) {
+        const tk = _hexKey(explorer.col, explorer.row);
+        const tt = state.tiles.get(tk);
+        if (tt) tt.explored = true;
+      }
       if (!result?.log?.length) continue;
       if (humanFaction && ev.faction !== humanFaction) continue;
-      const actor = step.entitySnapshot?.find(e => e.id === action.entityId);
+      const actor = explorer;
       if (myPlayerId && actor?.ownerId !== myPlayerId) continue;
       if (actor) ui._showLootFlashes(actor, result.lootItems ?? []);
       redrawFn();
@@ -3167,8 +3202,27 @@ function _createMpClient() {
             });
             if (action === 'replay') {
               state.entities = _preReplayEntitiesOnline;
+              // Reset explored flags newly set this round so they reveal progressively.
+              const preExpOnline = new Set();
+              for (const s of steps) {
+                for (const ev of [...(s.heroEvents ?? []), ...(s.witchEvents ?? []), ...(s.playerEvents ?? []).flatMap(pe => pe.events ?? [])]) {
+                  if (ev.type === ResEventType.ACTION_OK && ev.action?.type === PlanActionType.EXPLORE) {
+                    const actor = s.entitySnapshot?.find(e => e.id === ev.action.entityId);
+                    if (actor) { const tk = _hexKey(actor.col, actor.row); const t = state.tiles.get(tk); if (t) t.explored = false; }
+                  }
+                }
+              }
               redrawOnline();
               await _animateResolutionSteps(steps, finalEntities, redrawOnline, mp.myFaction, mp.myPlayerId ?? null);
+              // Restore explored flags after replay.
+              for (const s of steps) {
+                for (const ev of [...(s.heroEvents ?? []), ...(s.witchEvents ?? []), ...(s.playerEvents ?? []).flatMap(pe => pe.events ?? [])]) {
+                  if (ev.type === ResEventType.ACTION_OK && ev.action?.type === PlanActionType.EXPLORE) {
+                    const actor = s.entitySnapshot?.find(e => e.id === ev.action.entityId);
+                    if (actor) { const tk = _hexKey(actor.col, actor.row); const t = state.tiles.get(tk); if (t) t.explored = true; }
+                  }
+                }
+              }
               // _animateResolutionSteps sets _resolving = false at end; re-engage
               // the guard so onPlanningPhase stays buffered during the next summary show.
               _resolving = true;
