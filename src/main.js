@@ -483,12 +483,10 @@ async function _runLocalResolution(skipSummary = false) {
       } else if (action === 'replay-full') {
         await _replayFullGame(_roundHistory, _goState.winner, _goState.winReason,
           state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch');
-        // Restore game-over fields overwritten by replay's Object.assign(state, preState)
-        Object.assign(state, _goState);
-        state.fogOfWar = false;
-        redraw();
+        _doRestart();
+        return;
       }
-    } while (action === 'replay' || action === 'replay-full');
+    } while (action === 'replay');
     // Animate score bar changes after summary is dismissed
     ui._animateScoreBar(prevScore, prevNodes);
 
@@ -528,11 +526,10 @@ async function _runLocalResolution(skipSummary = false) {
       } else if (action === 'replay-full') {
         await _replayFullGame(_roundHistory, _goStateAP.winner, _goStateAP.winReason,
           state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch');
-        Object.assign(state, _goStateAP);
-        state.fogOfWar = false;
-        redraw();
+        _doRestart();
+        return;
       }
-    } while (action === 'replay' || action === 'replay-full');
+    } while (action === 'replay');
     if (action === 'restart') {
       _doRestart();
     }
@@ -2120,7 +2117,14 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
         _replayJumpToEnd = true; _replayPaused = false;
         break;
       case 'stop':
-        _replayAborted = true; _replayPaused = false;
+        _replayPaused = true;
+        ui.setReplayPlayState('pause');
+        ui.showReplayExitDialog().then(choice => {
+          if (choice === 'exit') {
+            _replayAborted = true; _replayPaused = false;
+          }
+          // 'cancel' → stays paused, user presses play to resume
+        });
         break;
     }
   });

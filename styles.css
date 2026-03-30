@@ -2983,6 +2983,42 @@ canvas { touch-action: pan-x pan-y; }
   color: #ffaaaa;
 }
 
+/* Replay exit confirmation dialog */
+.replay-exit-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 95;
+}
+.replay-exit-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1.4rem 1.8rem;
+  max-width: 320px;
+  text-align: center;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+}
+.replay-exit-text {
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  margin-bottom: 1.1rem;
+  line-height: 1.4;
+}
+.replay-exit-btns {
+  display: flex;
+  gap: 0.6rem;
+  justify-content: center;
+}
+.replay-exit-btns .plan-btn {
+  min-height: 40px;
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+}
+
 /* Saves tab bar — In Progress / Completed toggle */
 .saves-tab-bar {
   display: flex;

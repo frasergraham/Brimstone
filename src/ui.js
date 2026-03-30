@@ -3378,6 +3378,32 @@ export class UIController {
   }
 
   /**
+   * Show a confirmation dialog during replay when stop is pressed.
+   * @returns {Promise<'exit'|'cancel'>}
+   */
+  showReplayExitDialog() {
+    return new Promise(resolve => {
+      const overlay = document.createElement('div');
+      overlay.className = 'replay-exit-overlay';
+      overlay.innerHTML =
+        `<div class="replay-exit-card">` +
+        `<div class="replay-exit-text">You can replay saved games at any time from the main menu.</div>` +
+        `<div class="replay-exit-btns">` +
+        `<button class="plan-btn primary" data-action="exit">Exit to Menu</button>` +
+        `<button class="plan-btn secondary" data-action="cancel">Cancel</button>` +
+        `</div></div>`;
+      document.body.appendChild(overlay);
+
+      overlay.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-action]');
+        if (!btn) return;
+        overlay.remove();
+        resolve(btn.dataset.action);
+      });
+    });
+  }
+
+  /**
    * Update the live state reference (used by spectator mode and online reconnect).
    * Refreshes the renderer, log, and sidebar without triggering AI.
    */
