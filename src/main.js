@@ -42,6 +42,7 @@ let _replayGoBack        = false;   // false | 'curr' | 'prev'
 let _replayAtRoundStart  = false;   // true while paused at the pre-animation point of a round
 let _replayActive        = false;   // true while _replayFullGame is running
 let _replaySpeedMult     = 0.5;     // playback speed multiplier (0.5=play, 1.0=ff, 1.5=vff)
+let _replayJumpToEnd     = false;   // true when user wants to skip to the final game state
 
 // ── Local game init ───────────────────────────────────────────────────────────
 
@@ -465,11 +466,14 @@ async function _runLocalResolution(skipSummary = false) {
       }
     }
 
+    // Save game-over state — replay mutates `state` with intermediate round data
+    const _goState = { gameOver: state.gameOver, winner: state.winner, winReason: state.winReason };
+
     let action;
     do {
       action = await ui._showResolutionSummary(steps, state.round - 1, {
         prevScore, prevNodes, humanFaction, fogOfWar: state.fogOfWar,
-        gameOver: state.gameOver, winner: state.winner, winReason: state.winReason,
+        gameOver: _goState.gameOver, winner: _goState.winner, winReason: _goState.winReason,
         hasFullReplay: _roundHistory.length > 0,
       });
       if (action === 'replay') {
@@ -477,7 +481,7 @@ async function _runLocalResolution(skipSummary = false) {
         redraw();
         await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
       } else if (action === 'replay-full') {
-        await _replayFullGame(_roundHistory, state.winner, state.winReason,
+        await _replayFullGame(_roundHistory, _goState.winner, _goState.winReason,
           state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch');
         _doRestart();
         return;
@@ -492,11 +496,7 @@ async function _runLocalResolution(skipSummary = false) {
         _handleCampaignMissionEnd();
         return;
       }
-      if (action === 'viewmap') {
-        // Lift fog so the player can inspect the final board
-        state.fogOfWar = false;
-        redraw();
-      } else if (action === 'restart') {
+      if (action === 'restart') {
         _doRestart();
       }
       return;
@@ -509,11 +509,14 @@ async function _runLocalResolution(skipSummary = false) {
       _saveCompletedSpGame(state.winner, state.winReason);
       _uploadSpGame(state.winner, state.winReason);
     }
+    // Save game-over state — replay mutates `state` with intermediate round data
+    const _goStateAP = { gameOver: true, winner: state.winner, winReason: state.winReason };
+
     let action;
     do {
       action = await ui._showResolutionSummary(steps, state.round - 1, {
         prevScore, prevNodes, humanFaction: null, fogOfWar: false,
-        gameOver: true, winner: state.winner, winReason: state.winReason,
+        gameOver: true, winner: _goStateAP.winner, winReason: _goStateAP.winReason,
         hasFullReplay: _roundHistory.length > 0,
       });
       if (action === 'replay') {
@@ -521,16 +524,13 @@ async function _runLocalResolution(skipSummary = false) {
         redraw();
         await _animateResolutionSteps(steps, finalEntities, redraw, null, null);
       } else if (action === 'replay-full') {
-        await _replayFullGame(_roundHistory, state.winner, state.winReason,
+        await _replayFullGame(_roundHistory, _goStateAP.winner, _goStateAP.winReason,
           state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch');
         _doRestart();
         return;
       }
     } while (action === 'replay');
-    if (action === 'viewmap') {
-      state.fogOfWar = false;
-      redraw();
-    } else if (action === 'restart') {
+    if (action === 'restart') {
       _doRestart();
     }
     return;
@@ -607,7 +607,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   _resolving = true;
   for (let i = 0; i < steps.length; i++) {
     // During replay: if BACK or STOP was pressed, abort remaining steps immediately
-    if (_replayGoBack || _replayAborted) break;
+    if (_replayGoBack || _replayAborted || _replayJumpToEnd) break;
     const step = steps[i];
     // Post-step entities: what the world looks like AFTER this step resolves.
     const postEntities = i + 1 < steps.length ? steps[i + 1].entitySnapshot : finalEntities;
@@ -1029,7 +1029,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   ui?._clearStepContinue();
   state.entities = finalEntities;
   // Skip the final redraw during replay navigation (caller will render the target preState).
-  if (!_replayGoBack && !_replayAborted) {
+  if (!_replayGoBack && !_replayAborted && !_replayJumpToEnd) {
     redrawFn();
   }
   _resolving = false;
@@ -1044,7 +1044,7 @@ function _delay(ms) {
     let remaining = effective;
     let last = Date.now();
     function tick() {
-      if (_replayAborted || _replayGoBack) { resolve(); return; }
+      if (_replayAborted || _replayGoBack || _replayJumpToEnd) { resolve(); return; }
       if (!_replayPaused) {
         const now = Date.now();
         remaining -= (now - last);
@@ -2113,8 +2113,18 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
         _replayGoBack = _replayAtRoundStart ? 'prev' : 'curr';
         ui.setReplayPlayState('pause');
         break;
+      case 'end':
+        _replayJumpToEnd = true; _replayPaused = false;
+        break;
       case 'stop':
-        _replayAborted = true; _replayPaused = false;
+        _replayPaused = true;
+        ui.setReplayPlayState('pause');
+        ui.showReplayExitDialog().then(choice => {
+          if (choice === 'exit') {
+            _replayAborted = true; _replayPaused = false;
+          }
+          // 'cancel' → stays paused, user presses play to resume
+        });
         break;
     }
   });
@@ -2130,6 +2140,31 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
   replayOuter: while (true) {
     for (let i = _startFrom; i < rounds.length; i++) {
       if (_replayAborted) break;
+
+      // Jump to end: restore final game state and skip to end-of-replay hold
+      if (_replayJumpToEnd) {
+        _replayJumpToEnd = false;
+        const lastRound = rounds[rounds.length - 1];
+        const lastData = typeof lastRound.preState === 'string'
+          ? JSON.parse(lastRound.preState) : lastRound.preState;
+        const lastState = deserializeState(lastData);
+        renderer.clearAnimations();
+        Object.assign(state, lastState);
+        state.hero     = lastState.hero;
+        state.witch    = lastState.witch;
+        state.fogOfWar = false;
+        // Apply final entities if available (captures combat outcomes of last round)
+        if (lastRound.finalEntities) {
+          const finals = lastRound.finalEntities;
+          for (const e of state.entities) {
+            const f = finals.find(fe => fe.id === e.id);
+            if (f) Object.assign(e, f);
+          }
+        }
+        draw();
+        ui.updateReplayHUD();
+        break; // exit for-loop → falls through to end-of-replay hold
+      }
 
       const round = rounds[i];
       const preStateData = typeof round.preState === 'string'
@@ -2148,11 +2183,12 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
 
       // ── At round start: accept BACK / PAUSE before animation begins ─────────
       _replayAtRoundStart = true;
-      while (_replayPaused && !_replayAborted && !_replayGoBack) {
+      while (_replayPaused && !_replayAborted && !_replayGoBack && !_replayJumpToEnd) {
         await new Promise(r => setTimeout(r, 50));
       }
       _replayAtRoundStart = false;
       if (_replayAborted) break;
+      if (_replayJumpToEnd) continue; // handled at top of loop
 
       // BACK pressed while paused at round start → jump to prev/curr round
       if (_replayGoBack) {
@@ -2192,6 +2228,7 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
       await _animateResolutionSteps(stepsRaw, finalEntities, draw, null, null);
 
       if (_replayAborted) break;
+      if (_replayJumpToEnd) continue; // handled at top of loop
 
       // BACK pressed during animation → jump to prev/curr round
       if (_replayGoBack) {
@@ -2243,9 +2280,11 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
 
   ui.hideReplayHUD();
   _replayActive       = false;
+  _replayAborted      = false;
   _replayPaused       = false;
   _replayGoBack       = false;
   _replayAtRoundStart = false;
+  _replayJumpToEnd    = false;
   _replaySpeedMult    = 0.5;
   ui.speedMode        = savedSpeedMode;
   // Caller is responsible for navigation (e.g. _doRestart() or showing setup screen)

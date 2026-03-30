@@ -3194,22 +3194,54 @@ export class UIController {
         eventsEl.innerHTML = html || `<div class="summary-neutral">No notable events this round.</div>`;
       }
 
-      // Render replay-speed mini-picker
+      // Render replay-speed dropdown (compact single-button toggle + popup)
       const speedRowEl = this._el('round-summary-speed-row');
       if (speedRowEl) {
+        const SPEED_ICONS = { step: '👆', cinematic: '🎬', fast: '⏩', vfast: '⏭' };
+        const SPEED_DESCS = { step: 'Click to advance each action', cinematic: 'Dialog for important battles', fast: 'Cinematic pace, no popups', vfast: '1.5× speed, no popups' };
         const modes = Object.entries(UIController.SPEED_LABELS);
-        speedRowEl.innerHTML = modes.map(([mode, label]) =>
-          `<button class="summary-speed-btn${this.speedMode === mode ? ' active' : ''}" data-mode="${mode}">${label}</button>`
-        ).join('');
-        speedRowEl.querySelectorAll('.summary-speed-btn').forEach(btn => {
-          btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this._setSpeed(btn.dataset.mode);
-            speedRowEl.querySelectorAll('.summary-speed-btn').forEach(b =>
+
+        speedRowEl.innerHTML =
+          `<button class="summary-speed-toggle" title="Battle speed">⚡ ${UIController.SPEED_LABELS[this.speedMode]}</button>` +
+          `<div class="summary-speed-popup" style="display:none">` +
+          modes.map(([mode, label]) =>
+            `<button class="speed-option${this.speedMode === mode ? ' active' : ''}" data-mode="${mode}">` +
+            `<span class="speed-option-icon">${SPEED_ICONS[mode]}</span>` +
+            `<span class="speed-option-label">${label}</span>` +
+            `<span class="speed-option-desc">${SPEED_DESCS[mode]}</span>` +
+            `</button>`
+          ).join('') +
+          `</div>`;
+
+        const toggleBtn = speedRowEl.querySelector('.summary-speed-toggle');
+        const popup = speedRowEl.querySelector('.summary-speed-popup');
+
+        toggleBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const open = popup.style.display !== 'none';
+          popup.style.display = open ? 'none' : 'flex';
+          if (!open) {
+            popup.querySelectorAll('.speed-option').forEach(b =>
               b.classList.toggle('active', b.dataset.mode === this.speedMode)
             );
-          });
+          }
         });
+        popup.addEventListener('click', (e) => {
+          const btn = e.target.closest('.speed-option');
+          if (!btn) return;
+          e.stopPropagation();
+          this._setSpeed(btn.dataset.mode);
+          toggleBtn.textContent = `⚡ ${UIController.SPEED_LABELS[this.speedMode]}`;
+          popup.querySelectorAll('.speed-option').forEach(b =>
+            b.classList.toggle('active', b.dataset.mode === this.speedMode)
+          );
+          popup.style.display = 'none';
+        });
+        // Close popup when clicking outside
+        const closePopup = () => { popup.style.display = 'none'; };
+        document.addEventListener('click', closePopup);
+        // Store cleanup ref so we can remove it when dialog closes
+        speedRowEl._closePopup = closePopup;
       }
 
       const nextBtn   = this._el('round-summary-next');
@@ -3225,8 +3257,7 @@ export class UIController {
         gameOverBtns = document.createElement('div');
         gameOverBtns.className = 'round-summary-gameover-btns';
         gameOverBtns.innerHTML =
-          `<button class="plan-btn primary" data-action="restart">Play Again</button>` +
-          `<button class="plan-btn secondary" data-action="viewmap">View Map</button>` +
+          `<button class="plan-btn primary" data-action="restart">Return to Menu</button>` +
           (hasFullReplay ? `<button class="plan-btn secondary" data-action="replay-full">Replay Full Game</button>` : '');
         actionsEl.appendChild(gameOverBtns);
       } else if (nextBtn) {
@@ -3242,6 +3273,10 @@ export class UIController {
         replayBtn?.removeEventListener('click', onReplay);
         if (gameOverBtns) gameOverBtns.remove();
         if (nextBtn) nextBtn.style.display = '';
+        if (speedRowEl?._closePopup) {
+          document.removeEventListener('click', speedRowEl._closePopup);
+          speedRowEl._closePopup = null;
+        }
       };
       const onNext   = () => { cleanup(); resolve('next'); };
       const onReplay = () => { cleanup(); resolve('replay'); };
@@ -3250,7 +3285,6 @@ export class UIController {
       replayBtn?.addEventListener('click', onReplay);
       if (gameOverBtns) {
         gameOverBtns.querySelector('[data-action="restart"]')?.addEventListener('click', () => { cleanup(); resolve('restart'); });
-        gameOverBtns.querySelector('[data-action="viewmap"]')?.addEventListener('click', () => { cleanup(); resolve('viewmap'); });
         gameOverBtns.querySelector('[data-action="replay-full"]')?.addEventListener('click', () => { cleanup(); resolve('replay-full'); });
       }
     });
@@ -3297,7 +3331,7 @@ export class UIController {
     this._updateFitBtnLockState();
 
     // Wire up control buttons
-    const ids = ['back', 'play', 'pause', 'ff', 'vff', 'stop'];
+    const ids = ['back', 'play', 'pause', 'ff', 'vff', 'end', 'stop'];
     for (const action of ids) {
       const btn = document.getElementById(`replay-${action}-btn`);
       if (btn) btn.onclick = () => onControl?.(action);
@@ -3308,10 +3342,10 @@ export class UIController {
 
   /**
    * Highlight the currently active replay control button.
-   * @param {string} activeAction — 'play'|'pause'|'ff'|'vff'|'back'|'stop'
+   * @param {string} activeAction — 'play'|'pause'|'ff'|'vff'|'back'|'end'|'stop'
    */
   setReplayPlayState(activeAction) {
-    const ids = ['back', 'play', 'pause', 'ff', 'vff', 'stop'];
+    const ids = ['back', 'play', 'pause', 'ff', 'vff', 'end', 'stop'];
     for (const action of ids) {
       const btn = document.getElementById(`replay-${action}-btn`);
       if (btn) btn.classList.toggle('active', action === activeAction);
@@ -3341,6 +3375,32 @@ export class UIController {
       this.renderer.viewLocked = this._preReplayViewLocked ?? false;
       this._updateFitBtnLockState();
     }
+  }
+
+  /**
+   * Show a confirmation dialog during replay when stop is pressed.
+   * @returns {Promise<'exit'|'cancel'>}
+   */
+  showReplayExitDialog() {
+    return new Promise(resolve => {
+      const overlay = document.createElement('div');
+      overlay.className = 'replay-exit-overlay';
+      overlay.innerHTML =
+        `<div class="replay-exit-card">` +
+        `<div class="replay-exit-text">You can replay saved games at any time from the main menu.</div>` +
+        `<div class="replay-exit-btns">` +
+        `<button class="plan-btn primary" data-action="exit">Exit to Menu</button>` +
+        `<button class="plan-btn secondary" data-action="cancel">Cancel</button>` +
+        `</div></div>`;
+      document.body.appendChild(overlay);
+
+      overlay.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-action]');
+        if (!btn) return;
+        overlay.remove();
+        resolve(btn.dataset.action);
+      });
+    });
   }
 
   /**
