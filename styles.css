@@ -3333,6 +3333,54 @@ body.spectator-mode #game-screen   { display: flex !important; }
   50%       { box-shadow: 0 0 16px 4px rgba(255,200,0,0.65); }
 }
 
+/* Tutorial directional arrow — red pulsing arrow pointing at a UI element */
+.tutorial-arrow {
+  position: fixed;
+  z-index: 920;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  animation: tut-arrow-pulse 1.2s ease-in-out infinite;
+  filter: drop-shadow(0 0 6px rgba(231, 76, 60, 0.7));
+}
+
+/* Arrow pointing UP (triangle at top, shaft below) */
+.tutorial-arrow--up {
+  border-left:   14px solid transparent;
+  border-right:  14px solid transparent;
+  border-bottom: 22px solid #e74c3c;
+  transform: translateX(-50%);
+}
+
+/* Arrow pointing DOWN */
+.tutorial-arrow--down {
+  border-left:   14px solid transparent;
+  border-right:  14px solid transparent;
+  border-top:    22px solid #e74c3c;
+  transform: translateX(-50%);
+}
+
+/* Arrow pointing LEFT */
+.tutorial-arrow--left {
+  border-top:    14px solid transparent;
+  border-bottom: 14px solid transparent;
+  border-right:  22px solid #e74c3c;
+  transform: translateY(-50%);
+}
+
+/* Arrow pointing RIGHT */
+.tutorial-arrow--right {
+  border-top:    14px solid transparent;
+  border-bottom: 14px solid transparent;
+  border-left:   22px solid #e74c3c;
+  transform: translateY(-50%);
+}
+
+@keyframes tut-arrow-pulse {
+  0%, 100% { opacity: 0.7; filter: drop-shadow(0 0 4px rgba(231,76,60,0.5)); }
+  50%       { opacity: 1.0; filter: drop-shadow(0 0 10px rgba(231,76,60,0.9)); }
+}
+
 /* ── Campaign / Story Mode ────────────────────────��─────────────────────── */
 
 .campaign-select-list {

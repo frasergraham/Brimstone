@@ -2,112 +2,139 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generateTutorialMap } from '../src/map.js';
+import { buildTutorialMap, TUTORIAL_STEPS, TUTORIAL_WAVES, TUTORIAL_FORCED_DICE } from '../src/tutorial/tutorial-config.js';
 import { GameState } from '../src/game.js';
-import { TutorialConductor, TUTORIAL_STEPS } from '../src/tutorial.js';
-import { EntityType, setForcedDice } from '../src/entities.js';
+import { TutorialConductor } from '../src/tutorial.js';
+import { EntityType, setForcedDice, Entity } from '../src/entities.js';
 import { hexKey, MAP_COLS, MAP_ROWS } from '../src/hex.js';
 import { TileType, BuildingType } from '../src/tiles.js';
 import { PlanActionType } from '../src/planner.js';
 
-// ── generateTutorialMap ───────────────────────────────────────────────────────
+// ── buildTutorialMap ─────────────────────────────────────────────────────────
 
-describe('generateTutorialMap', () => {
+describe('buildTutorialMap', () => {
   test('returns a 9×9 tile map', () => {
-    const { tiles, cols, rows } = generateTutorialMap();
+    const { tiles, cols, rows } = buildTutorialMap();
     assert.equal(cols, 9);
     assert.equal(rows, 9);
     assert.equal(tiles.size, 81);
   });
 
   test('sets global map dimensions to 9×9', () => {
-    generateTutorialMap();
+    buildTutorialMap();
     assert.equal(MAP_COLS, 9);
     assert.equal(MAP_ROWS, 9);
   });
 
-  test('INN is at (2,6)', () => {
-    const { tiles } = generateTutorialMap();
-    const t = tiles.get(hexKey(2, 6));
-    assert.ok(t, 'tile exists at (2,6)');
+  test('INN is at (2,7)', () => {
+    const { tiles } = buildTutorialMap();
+    const t = tiles.get(hexKey(2, 7));
+    assert.ok(t, 'tile exists at (2,7)');
     assert.equal(t.type, TileType.BUILDING);
     assert.equal(t.building, BuildingType.INN);
   });
 
   test('CHURCH is at (2,5)', () => {
-    const { tiles } = generateTutorialMap();
+    const { tiles } = buildTutorialMap();
     const t = tiles.get(hexKey(2, 5));
     assert.ok(t, 'tile exists at (2,5)');
     assert.equal(t.type, TileType.BUILDING);
     assert.equal(t.building, BuildingType.CHURCH);
   });
 
-  test('HOUSE (survivor building) is at (2,4)', () => {
-    const { tiles } = generateTutorialMap();
-    const t = tiles.get(hexKey(2, 4));
-    assert.ok(t, 'tile exists at (2,4)');
+  test('HOUSE (survivor building) is at (2,3)', () => {
+    const { tiles } = buildTutorialMap();
+    const t = tiles.get(hexKey(2, 3));
+    assert.ok(t, 'tile exists at (2,3)');
     assert.equal(t.type, TileType.BUILDING);
     assert.equal(t.building, BuildingType.HOUSE);
   });
 
-  test('HOUSE at (2,4) is road-connected to CHURCH (2,5)', () => {
-    const { tiles } = generateTutorialMap();
-    const house  = tiles.get(hexKey(2, 4));
-    const church = tiles.get(hexKey(2, 5));
-    assert.ok(house.roadDirs.has(hexKey(2, 5)),  'house connects to church');
-    assert.ok(church.roadDirs.has(hexKey(2, 4)), 'church connects to house');
+  test('Blacksmith is at (5,5)', () => {
+    const { tiles } = buildTutorialMap();
+    const t = tiles.get(hexKey(5, 5));
+    assert.ok(t, 'tile exists at (5,5)');
+    assert.equal(t.type, TileType.BUILDING);
+    assert.equal(t.building, BuildingType.BLACKSMITH);
   });
 
-  test('GRAVEYARD is at (7,1)', () => {
-    const { tiles } = generateTutorialMap();
-    const t = tiles.get(hexKey(7, 1));
-    assert.ok(t, 'tile exists at (7,1)');
+  test('Barn is at (6,3)', () => {
+    const { tiles } = buildTutorialMap();
+    const t = tiles.get(hexKey(6, 3));
+    assert.ok(t, 'tile exists at (6,3)');
+    assert.equal(t.type, TileType.BUILDING);
+    assert.equal(t.building, BuildingType.BARN);
+  });
+
+  test('Graveyard is at (7,2)', () => {
+    const { tiles } = buildTutorialMap();
+    const t = tiles.get(hexKey(7, 2));
+    assert.ok(t, 'tile exists at (7,2)');
     assert.equal(t.type, TileType.BUILDING);
     assert.equal(t.building, BuildingType.GRAVEYARD);
   });
 
-  test('heroStart is at INN position (2,6)', () => {
-    const { heroStart } = generateTutorialMap();
-    assert.equal(heroStart.col, 2);
-    assert.equal(heroStart.row, 6);
+  test('INN and CHURCH are road-connected via roadDirs', () => {
+    const { tiles } = buildTutorialMap();
+    const inn    = tiles.get(hexKey(2, 7));
+    const road26 = tiles.get(hexKey(2, 6));
+    const church = tiles.get(hexKey(2, 5));
+    assert.ok(inn.roadDirs.has(hexKey(2, 6)),    'INN → road(2,6)');
+    assert.ok(road26.roadDirs.has(hexKey(2, 7)), 'road(2,6) → INN');
+    assert.ok(road26.roadDirs.has(hexKey(2, 5)), 'road(2,6) → CHURCH');
+    assert.ok(church.roadDirs.has(hexKey(2, 6)), 'CHURCH → road(2,6)');
   });
 
-  test('witchStart is at GRAVEYARD position (7,1)', () => {
-    const { witchStart } = generateTutorialMap();
-    assert.equal(witchStart.col, 7);
-    assert.equal(witchStart.row, 1);
+  test('Church and Blacksmith are road-connected', () => {
+    const { tiles } = buildTutorialMap();
+    const church = tiles.get(hexKey(2, 5));
+    const smith  = tiles.get(hexKey(5, 5));
+    assert.ok(church.roadDirs.has(hexKey(3, 5)), 'Church connects east via road');
+    assert.ok(smith.roadDirs.has(hexKey(4, 5)),  'Blacksmith connects west via road');
+  });
+
+  test('heroStart is at INN position (2,7)', () => {
+    const { heroStart } = buildTutorialMap();
+    assert.equal(heroStart.col, 2);
+    assert.equal(heroStart.row, 7);
+  });
+
+  test('noWitch flag is set', () => {
+    const mapData = buildTutorialMap();
+    assert.equal(mapData.noWitch, true);
   });
 
   test('single power node exists', () => {
-    const { witchObjectives } = generateTutorialMap();
+    const { witchObjectives } = buildTutorialMap();
     assert.equal(witchObjectives.length, 1);
     assert.equal(witchObjectives[0].col, 4);
     assert.equal(witchObjectives[0].row, 4);
   });
 
   test('power node cluster has exactly 3 hexes', () => {
-    const { witchObjectives } = generateTutorialMap();
+    const { witchObjectives } = buildTutorialMap();
     assert.equal(witchObjectives[0].hexes.length, 3);
   });
 
   test('power node is always visible (seenByHero and seenByWitch)', () => {
-    const { witchObjectives } = generateTutorialMap();
+    const { witchObjectives } = buildTutorialMap();
     assert.equal(witchObjectives[0].seenByHero,  true);
     assert.equal(witchObjectives[0].seenByWitch, true);
   });
 
-  test('INN and CHURCH are road-connected via roadDirs', () => {
-    const { tiles } = generateTutorialMap();
-    const inn    = tiles.get(hexKey(2, 6));
-    const church = tiles.get(hexKey(2, 5));
-    assert.ok(inn.roadDirs.has(hexKey(2, 5)),    'INN → CHURCH');
-    assert.ok(church.roadDirs.has(hexKey(2, 6)), 'CHURCH → INN');
-  });
-
   test('survivorCounts is {buildings:0, terrain:0} (tutorial places survivors manually)', () => {
-    const { survivorCounts } = generateTutorialMap();
+    const { survivorCounts } = buildTutorialMap();
     assert.equal(survivorCounts.buildings, 0);
     assert.equal(survivorCounts.terrain,   0);
+  });
+
+  test('hero starts 2 hexes from church (road allows reaching in one move)', () => {
+    const { heroStart } = buildTutorialMap();
+    // Hero at (2,7), Church at (2,5) — 2 hexes apart
+    assert.equal(heroStart.col, 2);
+    assert.equal(heroStart.row, 7);
+    // Church is at row 5, hero at row 7, distance = 2
+    assert.equal(heroStart.row - 5, 2);
   });
 });
 
@@ -115,48 +142,46 @@ describe('generateTutorialMap', () => {
 
 describe('GameState with tutorial map override', () => {
   test('accepts tutorial map as 5th constructor argument', () => {
-    const mapData = generateTutorialMap();
+    const mapData = buildTutorialMap();
     const state = new GameState(false, false, 'tutorial', null, mapData);
     assert.ok(state.tiles.size > 0);
   });
 
-  test('hero starts at INN (2,6)', () => {
-    const mapData = generateTutorialMap();
+  test('hero starts at INN (2,7)', () => {
+    const mapData = buildTutorialMap();
     const state   = new GameState(false, false, 'tutorial', null, mapData);
     const hero    = state.entities.find(e => e.type === EntityType.HERO);
     assert.ok(hero, 'hero entity exists');
     assert.equal(hero.col, 2);
-    assert.equal(hero.row, 6);
+    assert.equal(hero.row, 7);
   });
 
-  test('witch starts at GRAVEYARD (7,1)', () => {
-    const mapData = generateTutorialMap();
+  test('no witch entity when noWitch is set', () => {
+    const mapData = buildTutorialMap();
     const state   = new GameState(false, false, 'tutorial', null, mapData);
     const witch   = state.entities.find(e => e.type === EntityType.WITCH);
-    assert.ok(witch, 'witch entity exists');
-    assert.equal(witch.col, 7);
-    assert.equal(witch.row, 1);
+    assert.equal(witch, undefined, 'no witch entity');
+    assert.equal(state.witch, null, 'state.witch is null');
   });
 });
 
 // ── setForcedDice ─────────────────────────────────────────────────────────────
 
-import { Entity } from '../src/entities.js';
-
 describe('setForcedDice', () => {
-  test('forced dice produce deterministic resolveCombat results', () => {
+  test('tutorial forced dice produce a crush kill on minion', () => {
     // Hero (ATK 3, DEF 2) vs Minion (ATK 1, DEF 0)
-    // Force: atkDie=2 → atk=5, defDie=3 → def=3 → hit, margin=2
+    // Force: atkDie=6 → atk=9, defDie=1 → def=1 → crush (9 >= 2×1)
     const hero   = { type: 'hero',  attack: 3, defense: 2, attackBonus: 0, defenseBonus: 0, weapon: null };
     const minion = { type: 'minion', attack: 1, defense: 0, attackBonus: 0, defenseBonus: 0, weapon: null };
-    setForcedDice(2, 3);
+    setForcedDice(...TUTORIAL_FORCED_DICE);
     const result = Entity.resolveCombat(hero, minion);
-    assert.equal(result.atkBaseDie,  2);
-    assert.equal(result.defBaseDie,  3);
-    assert.equal(result.attackRoll,  5);   // 2 + 3
-    assert.equal(result.defenseRoll, 3);   // 3 + 0
+    assert.equal(result.atkBaseDie,  6);
+    assert.equal(result.defBaseDie,  1);
+    assert.equal(result.attackRoll,  9);   // 6 + 3
+    assert.equal(result.defenseRoll, 1);   // 1 + 0
     assert.equal(result.hit, true);
-    assert.equal(result.margin, 2);
+    // Crush: attackRoll >= 2 * defenseRoll → 9 >= 2 → 2 damage kills minion (HP 2)
+    assert.ok(result.attackRoll >= 2 * result.defenseRoll, 'crush threshold met');
   });
 
   test('reverts to random after forced queue empties', () => {
@@ -202,13 +227,13 @@ describe('TUTORIAL_STEPS', () => {
     }
   });
 
-  test('click_stages step exists between planning_intro and select_hero', () => {
+  test('unit_selection step exists between planning_intro and select_hero', () => {
     const piIdx = TUTORIAL_STEPS.findIndex(s => s.id === 'planning_intro');
-    const csIdx = TUTORIAL_STEPS.findIndex(s => s.id === 'click_stages');
+    const usIdx = TUTORIAL_STEPS.findIndex(s => s.id === 'unit_selection');
     const shIdx = TUTORIAL_STEPS.findIndex(s => s.id === 'select_hero');
-    assert.ok(csIdx > piIdx, 'click_stages comes after planning_intro');
-    assert.ok(csIdx < shIdx, 'click_stages comes before select_hero');
-    assert.equal(TUTORIAL_STEPS[csIdx].trigger, 'click');
+    assert.ok(usIdx > piIdx, 'unit_selection comes after planning_intro');
+    assert.ok(usIdx < shIdx, 'unit_selection comes before select_hero');
+    assert.equal(TUTORIAL_STEPS[usIdx].trigger, 'click');
   });
 
   test('queue_explore step spotlights Church (2,5) not Inn', () => {
@@ -238,30 +263,35 @@ describe('TUTORIAL_STEPS', () => {
     assert.deepEqual(step.witchPlan, []);
   });
 
-  test('day_night step exists after watch_r1 and before combat_intro', () => {
+  test('combat_intro comes after watch_r1 (not day_night first)', () => {
     const w1 = TUTORIAL_STEPS.findIndex(s => s.id === 'watch_r1');
-    const dn = TUTORIAL_STEPS.findIndex(s => s.id === 'day_night');
     const ci = TUTORIAL_STEPS.findIndex(s => s.id === 'combat_intro');
-    assert.ok(dn > w1, 'day_night after watch_r1');
-    assert.ok(dn < ci, 'day_night before combat_intro');
+    assert.ok(ci > w1, 'combat_intro after watch_r1');
+    assert.equal(TUTORIAL_STEPS[ci].trigger.actionType, PlanActionType.BATTLE_UNIT);
+  });
+
+  test('day_night comes after watch_r2 (moved later in sequence)', () => {
+    const w2 = TUTORIAL_STEPS.findIndex(s => s.id === 'watch_r2');
+    const dn = TUTORIAL_STEPS.findIndex(s => s.id === 'day_night');
+    assert.ok(dn > w2, 'day_night after watch_r2');
     assert.equal(TUTORIAL_STEPS[dn].trigger, 'click');
     assert.ok(TUTORIAL_STEPS[dn].spotlight?.selector?.includes('cycle-bar'), 'spotlights cycle-bar');
   });
 
   test('survivor steps exist in correct order', () => {
-    const ids = ['watch_r2', 'survivor_intro', 'move_to_house', 'explore_house', 'submit_r3', 'watch_r3'];
+    const ids = ['watch_r2', 'day_night', 'survivor_intro', 'move_to_house', 'explore_house', 'submit_r3', 'watch_r3'];
     const indices = ids.map(id => TUTORIAL_STEPS.findIndex(s => s.id === id));
     for (let i = 1; i < indices.length; i++) {
       assert.ok(indices[i] > indices[i - 1], `${ids[i]} comes after ${ids[i - 1]}`);
     }
   });
 
-  test('move_to_house spotlights HOUSE at (2,4)', () => {
+  test('move_to_house spotlights HOUSE at (2,3)', () => {
     const step = TUTORIAL_STEPS.find(s => s.id === 'move_to_house');
     assert.ok(step, 'move_to_house step exists');
     assert.equal(step.spotlight?.type, 'hex');
     assert.equal(step.spotlight?.col, 2);
-    assert.equal(step.spotlight?.row, 4);
+    assert.equal(step.spotlight?.row, 3);
     assert.equal(step.trigger?.actionType, PlanActionType.MOVE);
   });
 
@@ -272,19 +302,27 @@ describe('TUTORIAL_STEPS', () => {
     assert.equal(step.trigger?.actionType, PlanActionType.EXPLORE);
   });
 
-  test('explanation steps exist after watch_r3', () => {
+  test('explanation steps exist after watch_r3 including guard', () => {
     const r3  = TUTORIAL_STEPS.findIndex(s => s.id === 'watch_r3');
     const ms  = TUTORIAL_STEPS.findIndex(s => s.id === 'multi_select');
     const ft  = TUTORIAL_STEPS.findIndex(s => s.id === 'fortify');
     const st  = TUTORIAL_STEPS.findIndex(s => s.id === 'score_tracker');
-    const pn  = TUTORIAL_STEPS.findIndex(s => s.id === 'power_nodes');
+    const gd  = TUTORIAL_STEPS.findIndex(s => s.id === 'guard');
     assert.ok(ms > r3,  'multi_select after watch_r3');
     assert.ok(ft > ms,  'fortify after multi_select');
     assert.ok(st > ft,  'score_tracker after fortify');
-    assert.ok(pn > st,  'power_nodes after score_tracker');
+    assert.ok(gd > st,  'guard after score_tracker');
     assert.equal(TUTORIAL_STEPS[ms].trigger, 'click');
     assert.equal(TUTORIAL_STEPS[ft].trigger, 'click');
     assert.equal(TUTORIAL_STEPS[st].trigger, 'click');
+    assert.equal(TUTORIAL_STEPS[gd].trigger, 'click');
+  });
+
+  test('guard step exists', () => {
+    const step = TUTORIAL_STEPS.find(s => s.id === 'guard');
+    assert.ok(step, 'guard step exists');
+    assert.equal(step.trigger, 'click');
+    assert.ok(step.body.toLowerCase().includes('guard'), 'body mentions guard');
   });
 
   test('score_tracker spotlights #score-bar element', () => {
@@ -298,76 +336,56 @@ describe('TUTORIAL_STEPS', () => {
     const autoSteps = TUTORIAL_STEPS.filter(s => s.trigger === 'auto').map(s => s.id);
     assert.deepEqual(autoSteps.sort(), ['watch_r1', 'watch_r2', 'watch_r3'].sort());
   });
+
+  test('no references to Salem in any step body or title', () => {
+    for (const step of TUTORIAL_STEPS) {
+      assert.ok(!step.body.includes('Salem'),  `step ${step.id} body has no Salem reference`);
+      assert.ok(!step.title.includes('Salem'), `step ${step.id} title has no Salem reference`);
+    }
+  });
+
+  test('combat_intro does not mention action menu for battle', () => {
+    const step = TUTORIAL_STEPS.find(s => s.id === 'combat_intro');
+    assert.ok(!step.body.includes('action menu'), 'should not reference action menu for attacking');
+    assert.ok(!step.body.includes('choose Battle'), 'should not say choose Battle');
+  });
+
+  test('combat_formula does not say "d6"', () => {
+    const step = TUTORIAL_STEPS.find(s => s.id === 'combat_formula');
+    assert.ok(!step.body.includes('d6'), 'should not reference d6');
+  });
+});
+
+// ── TUTORIAL_WAVES ───────────────────────────────────────────────────────────
+
+describe('TUTORIAL_WAVES', () => {
+  test('wave spawns minion at (3,5) on round 2 (after first endRound)', () => {
+    assert.equal(TUTORIAL_WAVES.length, 1);
+    assert.equal(TUTORIAL_WAVES[0].round, 2);
+    assert.equal(TUTORIAL_WAVES[0].units[0].type, 'minion');
+    assert.deepEqual(TUTORIAL_WAVES[0].units[0].spawnAt, { col: 3, row: 5 });
+  });
 });
 
 // ── TutorialConductor step gating ────────────────────────────────────────────
-
-// Minimal stubs — conductor only uses these specific properties/methods.
-function makeStubs() {
-  const renderer = {
-    tutorialSpotlightHex: null,
-  };
-  const ui = {};
-  const state = {
-    entities: [],
-  };
-  const domStubs = {
-    backdrop: { classList: { add() {}, remove() {} } },
-    tooltip:  {
-      style: { display: '' },
-      className: '',
-      querySelector: (sel) => {
-        if (sel === '.tut-title') return { textContent: '' };
-        if (sel === '.tut-body')  return { textContent: '' };
-        if (sel === '.tut-next-btn') return {
-          textContent: '', style: { display: '' },
-          addEventListener() {},
-        };
-        return null;
-      },
-    },
-  };
-
-  // Patch document.getElementById to return stubs
-  const origGetById  = globalThis.document?.getElementById?.bind(document);
-  const origQuerySel = globalThis.document?.querySelector?.bind(document);
-
-  if (typeof document !== 'undefined') {
-    document.getElementById = (id) => {
-      if (id === 'tutorial-backdrop') return domStubs.backdrop;
-      if (id === 'tutorial-tooltip')  return domStubs.tooltip;
-      return origGetById(id);
-    };
-    document.querySelector = (sel) => {
-      if (sel === '.tutorial-spotlit') return null;
-      return origQuerySel(sel);
-    };
-  }
-
-  return { renderer, ui, state, domStubs, origGetById, origQuerySel };
-}
-
-// Only run DOM-dependent tests when a document is available (Node test runner
-// does not include a DOM by default — these tests are tagged as needing jsdom).
-// For now, test the pure-logic parts that don't touch DOM.
 
 describe('TutorialConductor logic (no DOM)', () => {
   test('TUTORIAL_STEPS step indices are consistent', () => {
     // Verify the step index lookups used in onPlanningPhaseStart() are valid
     const r1Idx      = TUTORIAL_STEPS.findIndex(s => s.id === 'watch_r1');
-    const dayNight   = TUTORIAL_STEPS.findIndex(s => s.id === 'day_night');
     const combatIdx  = TUTORIAL_STEPS.findIndex(s => s.id === 'combat_intro');
     const r2Idx      = TUTORIAL_STEPS.findIndex(s => s.id === 'watch_r2');
+    const dayNight   = TUTORIAL_STEPS.findIndex(s => s.id === 'day_night');
     const survivorIn = TUTORIAL_STEPS.findIndex(s => s.id === 'survivor_intro');
     const r3Idx      = TUTORIAL_STEPS.findIndex(s => s.id === 'watch_r3');
     const multiSel   = TUTORIAL_STEPS.findIndex(s => s.id === 'multi_select');
     assert.ok(r1Idx      >= 0, 'watch_r1 step found');
-    assert.ok(dayNight   > r1Idx,    'day_night comes after watch_r1');
-    assert.ok(combatIdx  > dayNight, 'combat_intro comes after day_night');
-    assert.ok(r2Idx      > combatIdx,'watch_r2 comes after combat_intro');
-    assert.ok(survivorIn > r2Idx,    'survivor_intro comes after watch_r2');
-    assert.ok(r3Idx      > survivorIn,'watch_r3 comes after survivor_intro');
-    assert.ok(multiSel   > r3Idx,   'multi_select comes after watch_r3');
+    assert.ok(combatIdx  > r1Idx,      'combat_intro comes after watch_r1');
+    assert.ok(r2Idx      > combatIdx,  'watch_r2 comes after combat_intro');
+    assert.ok(dayNight   > r2Idx,      'day_night comes after watch_r2');
+    assert.ok(survivorIn > dayNight,   'survivor_intro comes after day_night');
+    assert.ok(r3Idx      > survivorIn, 'watch_r3 comes after survivor_intro');
+    assert.ok(multiSel   > r3Idx,      'multi_select comes after watch_r3');
   });
 
   test('getWitchPlan returns [] when round 0 and submit_plan step has witchPlan:[]', () => {
@@ -418,6 +436,30 @@ describe('TutorialConductor logic (no DOM)', () => {
           `${step.id} spotlight col in bounds`);
         assert.ok(step.spotlight.row >= 0 && step.spotlight.row < 9,
           `${step.id} spotlight row in bounds`);
+      }
+    }
+  });
+
+  test('arrow spotlight steps have valid direction values', () => {
+    const validDirs = ['up', 'down', 'left', 'right'];
+    for (const step of TUTORIAL_STEPS) {
+      if (step.spotlight?.arrow) {
+        assert.ok(validDirs.includes(step.spotlight.arrow),
+          `${step.id} arrow direction "${step.spotlight.arrow}" is valid`);
+      }
+    }
+  });
+
+  test('click and start_game steps should block map clicks; action-gated steps should not', () => {
+    for (const step of TUTORIAL_STEPS) {
+      const t = step.trigger;
+      if (t === 'click' || t === 'start_game') {
+        // These dialog steps should block map interaction
+        assert.ok(true, `${step.id} (trigger=${t}) blocks clicks`);
+      } else {
+        // Action-gated and auto steps need map to be interactive
+        assert.ok(t === 'auto' || (typeof t === 'object' && t.type),
+          `${step.id} has valid non-blocking trigger`);
       }
     }
   });

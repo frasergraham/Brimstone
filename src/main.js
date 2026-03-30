@@ -13,7 +13,8 @@ import { PlanActionType }    from './planner.js';
 import { hexDistance, getNeighbors } from './hex.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
-import { MAP_SIZES, generateTutorialMap } from './map.js';
+import { MAP_SIZES } from './map.js';
+import { buildTutorialMap, TUTORIAL_WAVES, TUTORIAL_FORCED_DICE } from './tutorial/tutorial-config.js';
 import { nodeController } from './game.js';
 import { TutorialConductor } from './tutorial.js';
 import { createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, setForcedDice, EntityType, markRosterUsedByName } from './entities.js';
@@ -218,18 +219,15 @@ function initTutorial() {
 
   // Build the fixed tutorial map and inject it into a new GameState.
   // witchIsAI = false so we can drive the witch plan ourselves via TutorialConductor.
-  const mapData = generateTutorialMap();
+  // noWitch = true so no witch entity is created.
+  const mapData = buildTutorialMap();
   state = new GameState(false, false, 'tutorial', null, mapData);
 
   // Disable fog of war — tutorial should be fully visible.
   state.fogOfWar = false;
 
-  // Place the tutorial minion at (3,5) — adjacent to the church where the hero will stand.
-  const tutMinion = createMinion(3, 5, 'witch');
-  state.entities.push(tutMinion);
-
-  // Guarantee a survivor in the HOUSE at (2,4) for the round-3 exploration demo.
-  const houseTile = state.tiles.get(_hexKey(2, 4));
+  // Guarantee a survivor in the HOUSE at (2,3) for the round-3 exploration demo.
+  const houseTile = state.tiles.get(_hexKey(2, 3));
   if (houseTile) houseTile.hiddenSurvivor = true;
 
   // No AI helpers for tutorial — TutorialConductor drives the witch plan.
@@ -314,10 +312,9 @@ async function _onTutorialPlanSubmit(heroPlan) {
 
   // Round 2 (combat round): force deterministic dice so the tutorial can
   // describe the outcome reliably.
-  // Hero (ATK 3) attacks Minion (DEF 0): die=2 → atk=5, die=3 → def=3 → hit 1 dmg
-  // Minion (ATK 1) attacks Hero (DEF 2): die=5 → atk=6, die=3 → def=5 → hit 1 dmg
+  // Hero (ATK 3) attacks Minion (DEF 0): die=6 → atk=9, die=1 → def=1 → crush 2 dmg → kills minion
   if (_tutorialConductor?._round === 1) {
-    setForcedDice(2, 3, 5, 3);
+    setForcedDice(...TUTORIAL_FORCED_DICE);
   }
 
   state.submitPlan('hero', heroPlan);
@@ -432,6 +429,12 @@ async function _runLocalResolution(skipSummary = false) {
   // Campaign wave spawning: inject new enemies after each round
   if (_activeMissionDef?.waves) {
     const waveLogs = processWaves(state, _activeMissionDef.waves, _createEnemyEntity);
+    for (const msg of waveLogs) state.addLog(msg);
+  }
+
+  // Tutorial wave spawning: minion appears after round 1
+  if (_tutorialConductor) {
+    const waveLogs = processWaves(state, TUTORIAL_WAVES, _createEnemyEntity);
     for (const msg of waveLogs) state.addLog(msg);
   }
 

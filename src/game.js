@@ -141,7 +141,7 @@ export class GameState {
    * @param {boolean} heroIsAI
    * @param {string}  mapSize
    * @param {number|null} nodeCount
-   * @param {object|null} mapDataOverride  Pre-built map data (e.g. from generateTutorialMap()).
+   * @param {object|null} mapDataOverride  Pre-built map data (e.g. from tutorial or campaign configs).
    *   When provided, generateMap() is skipped. Must include { tiles, witchObjectives,
    *   heroStart, witchStart, mapSize, survivorCounts, cols?, rows? }.
    */
