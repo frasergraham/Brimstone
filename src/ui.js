@@ -45,8 +45,10 @@ export class UIController {
     this._selectedEntity  = null;
     this._validActions    = [];
     this._awaitingTarget  = null;
-    this._pendingUnitPick = null;
-    this._pendingDisambig = null;
+    this._pendingUnitPick    = null;
+    this._pendingDisambig    = null;
+    this._pendingDefenderPick = null; // { defenders[], onPick(def) }
+    this._pendingEnemyPick   = null;  // { units[] } — enemy info disambiguation
     this._popupVisible    = false;   // tracks whether the action popup is shown
 
     this._touchStart  = null;
@@ -944,7 +946,16 @@ export class UIController {
       // No friendly units — check for visible enemy units (view-only selection)
       const enemyEntities = _visibleUnitsAt(state, hex.col, hex.row)
         .filter(e => e.owner !== ownerFilter);
-      if (enemyEntities.length > 0) {
+      if (enemyEntities.length > 1) {
+        this._hideTileDetail();
+        this._selectedEntity       = null;
+        this._popupVisible         = true;
+        this._validActions         = [];
+        this.renderer.selectedHex    = { col: hex.col, row: hex.row };
+        this.renderer.highlightHexes = [];
+        this._pendingEnemyPick = { units: enemyEntities };
+        this._showActionPopup(null);
+      } else if (enemyEntities.length === 1) {
         this._hideTileDetail();
         this._selectEnemyEntity(enemyEntities[0]);
       } else {
@@ -1048,6 +1059,8 @@ export class UIController {
     this._validActions         = [];
     this._pendingUnitPick      = null;
     this._pendingDisambig      = null;
+    this._pendingDefenderPick  = null;
+    this._pendingEnemyPick     = null;
     this._popupVisible         = false;
     this.renderer.selectedHex      = null;
     this.renderer.selectedEntityId = null;
@@ -1199,17 +1212,26 @@ export class UIController {
     const state = this.state;
     const popup = this._el('action-popup');
 
-    // Unit picker mode
-    if (this._pendingUnitPick) {
-      let html = `<div class="popup-unit-name">Which unit to select?</div>`;
-      for (const u of this._pendingUnitPick.units) {
+    // Unit picker mode (friendly units, defender targets, or enemy info)
+    const pickerUnits = this._pendingUnitPick?.units
+      || this._pendingDefenderPick?.defenders
+      || this._pendingEnemyPick?.units;
+    if (pickerUnits) {
+      const actionTag = this._pendingDefenderPick ? 'pick_defender'
+        : this._pendingEnemyPick ? 'pick_enemy'
+        : 'pick_unit';
+      const header = this._pendingDefenderPick ? 'Choose your target:'
+        : this._pendingEnemyPick ? 'Which unit to inspect?'
+        : 'Which unit to select?';
+      let html = `<div class="popup-unit-name">${header}</div>`;
+      for (const u of pickerUnits) {
         const col        = ENTITY_COLOR[u.type] || '#888';
         const portraitId = u.type === 'survivor' ? _SURVIVOR_TITLE_ASSET[u.title] : u.type;
         const src        = portraitId ? this.renderer.getPortraitDataURL(portraitId) : null;
         const portrait   = src
           ? `<img src="${src}" style="width:32px;height:32px;border-radius:50%;border:1.5px solid ${col};flex-shrink:0;margin-right:0.4rem;">`
           : '';
-        html += `<button class="action-btn pick-unit" data-action="pick_unit" data-unit-id="${u.id}"
+        html += `<button class="action-btn pick-unit" data-action="${actionTag}" data-unit-id="${u.id}"
           style="border-left:3px solid ${col};display:flex;align-items:center;">${portrait}${u.displayName} — HP ${u.hp}/${u.maxHp}</button>`;
       }
       popup.innerHTML = html;
@@ -1672,6 +1694,24 @@ export class UIController {
       this._pendingDisambig = null;
       const unit = state.entities.find(e => e.id === button.dataset.unitId);
       if (unit) this._selectEntity(unit);
+      this._updateSidebar();
+      this.onRedraw();
+      return;
+    }
+
+    if (action === 'pick_defender') {
+      const pick = this._pendingDefenderPick;
+      this._pendingDefenderPick = null;
+      if (!pick) return;
+      const def = pick.defenders.find(e => e.id === button.dataset.unitId);
+      if (def) pick.onPick(def);
+      return;
+    }
+
+    if (action === 'pick_enemy') {
+      this._pendingEnemyPick = null;
+      const unit = state.entities.find(e => e.id === button.dataset.unitId);
+      if (unit) this._selectEnemyEntity(unit);
       this._updateSidebar();
       this.onRedraw();
       return;
@@ -2178,32 +2218,9 @@ export class UIController {
   }
 
   _showDefenderPickerDialog(defenders, onPick) {
-    const dialog = this._el('result-dialog');
-    const hint   = this._el('result-dismiss-hint');
-    const btns   = this._el('result-buttons');
-
-    this._el('result-messages').textContent = 'Multiple enemies here — choose your target:';
-    hint.style.display = 'none';
-    btns.style.display = 'flex';
-    btns.innerHTML = '';
-
-    for (const def of defenders) {
-      const btn = document.createElement('button');
-      const col  = ENTITY_COLOR[def.type] || '#888';
-      btn.style.borderLeft = `3px solid ${col}`;
-      btn.textContent = `${def.displayName}  HP ${def.hp}/${def.maxHp}`;
-      btn.addEventListener('click', e => {
-        e.stopPropagation();
-        dialog.style.display = 'none';
-        hint.style.display = '';
-        btns.style.display = 'none';
-        btns.innerHTML = '';
-        onPick(def);
-      });
-      btns.appendChild(btn);
-    }
-
-    dialog.style.display = 'flex';
+    this._pendingDefenderPick = { defenders, onPick };
+    this._popupVisible = true;
+    this._showActionPopup(null);
   }
 
   _showBattleDialog(actorSnap, targetSnap, result, onDismiss, onRematch = null) {
@@ -3252,8 +3269,11 @@ function _hideActionPopup() {
 }
 
 function _positionPopup(popup, ui) {
-  if (!ui._selectedEntity && !ui._pendingUnitPick) return;
-  const target = ui._selectedEntity || (ui._pendingUnitPick?.units[0]);
+  if (!ui._selectedEntity && !ui._pendingUnitPick && !ui._pendingDefenderPick && !ui._pendingEnemyPick) return;
+  const target = ui._selectedEntity
+    || ui._pendingUnitPick?.units[0]
+    || ui._pendingDefenderPick?.defenders[0]
+    || ui._pendingEnemyPick?.units[0];
   if (!target) return;
 
   // Measure popup height while invisible so we can fit it in the viewport
