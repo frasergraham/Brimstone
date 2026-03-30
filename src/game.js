@@ -27,6 +27,21 @@ export function nodeController(obj, entities) {
   return 'contested';
 }
 
+/**
+ * Count how many power nodes a faction currently controls.
+ * @param {'hero'|'witch'} faction
+ * @param {Array} witchObjectives - power node cluster array
+ * @param {Array} entities - all entities
+ * @returns {number}
+ */
+export function countHeldNodes(faction, witchObjectives, entities) {
+  let count = 0;
+  for (const obj of witchObjectives) {
+    if (nodeController(obj, entities) === faction) count++;
+  }
+  return count;
+}
+
 // Win reason strings (shown in game-over overlay)
 export const WIN_REASON = {
   WITCH_SLAIN:      'The hero hunted down the witch and ended the curse!',
@@ -65,9 +80,9 @@ export const Phase = Object.freeze({
 export const Player = Object.freeze({ HERO: 'hero', WITCH: 'witch' });
 
 // Calculate actions for a player at the start of their turn.
-// Hero  — base 3 + 1 in DAWN/DAY + 1 per survivor (cap +5, needs 5 survivors)
-// Witch — base 3 + 1 in NIGHT + 1 per unit (cap +3, needs 3 units)
-export function computeActions(player, phase, entities) {
+// Hero  — base 3 + 1 in DAWN/DAY + 1 per survivor (cap +5) + 1 per held power node
+// Witch — base 3 + 1 in NIGHT + 1 per unit (cap +3) + 1 per held power node
+export function computeActions(player, phase, entities, nodeBonus = 0) {
   const isHero     = player === Player.HERO;
   const owner      = isHero ? 'hero' : 'witch';
   const leaderType = isHero ? 'hero' : 'witch';
@@ -75,10 +90,10 @@ export function computeActions(player, phase, entities) {
 
   if (isHero) {
     const timeBonus = (phase === Phase.DAY || phase === Phase.DAWN) ? 1 : 0;
-    return 3 + timeBonus + Math.min(extras, 5);
+    return 3 + timeBonus + Math.min(extras, 5) + nodeBonus;
   } else {
     const timeBonus = phase === Phase.NIGHT ? 1 : 0;
-    return 3 + timeBonus + Math.min(extras, 3);
+    return 3 + timeBonus + Math.min(extras, 3) + nodeBonus;
   }
 }
 
@@ -86,7 +101,7 @@ export function computeActions(player, phase, entities) {
  * Compute the action budget for one specific player (multiplayer path).
  * Counts only entities owned by that player (ownerId match), not the whole faction.
  */
-export function computeActionsForPlayer(playerId, faction, phase, entities) {
+export function computeActionsForPlayer(playerId, faction, phase, entities, nodeBonus = 0) {
   const isHero     = faction === Player.HERO;
   const leaderType = isHero ? EntityType.HERO : EntityType.WITCH;
   // Count non-leader entities belonging to this player specifically
@@ -96,10 +111,10 @@ export function computeActionsForPlayer(playerId, faction, phase, entities) {
 
   if (isHero) {
     const timeBonus = (phase === Phase.DAY || phase === Phase.DAWN) ? 1 : 0;
-    return 3 + timeBonus + Math.min(extras, 5);
+    return 3 + timeBonus + Math.min(extras, 5) + nodeBonus;
   } else {
     const timeBonus = phase === Phase.NIGHT ? 1 : 0;
-    return 3 + timeBonus + Math.min(extras, 3);
+    return 3 + timeBonus + Math.min(extras, 3) + nodeBonus;
   }
 }
 
@@ -314,9 +329,13 @@ export class GameState {
     this.heroReady        = false;
     this.witchReady       = false;
 
+    // Power-node bonus: +1 action per node the faction controls
+    const heroNodeBonus  = countHeldNodes('hero',  this.witchObjectives, this.entities);
+    const witchNodeBonus = countHeldNodes('witch', this.witchObjectives, this.entities);
+
     // Legacy faction-level budgets (offline mode)
-    this.heroActionsLeft  = computeActions(Player.HERO,  this.phase, this.entities);
-    this.witchActionsLeft = computeActions(Player.WITCH, this.phase, this.entities);
+    this.heroActionsLeft  = computeActions(Player.HERO,  this.phase, this.entities, heroNodeBonus);
+    this.witchActionsLeft = computeActions(Player.WITCH, this.phase, this.entities, witchNodeBonus);
 
     // Per-player budgets (multiplayer)
     this.playerPlans       = new Map();
@@ -324,12 +343,15 @@ export class GameState {
     this.playerActionsLeft = new Map();
     for (const p of this.players) {
       this.playerReady.set(p.id, false);
-      this.playerActionsLeft.set(p.id, computeActionsForPlayer(p.id, p.faction, this.phase, this.entities));
+      const nb = p.faction === Player.HERO ? heroNodeBonus : witchNodeBonus;
+      this.playerActionsLeft.set(p.id, computeActionsForPlayer(p.id, p.faction, this.phase, this.entities, nb));
     }
 
+    const heroNB  = heroNodeBonus  ? ` (incl. +${heroNodeBonus} node)` : '';
+    const witchNB = witchNodeBonus ? ` (incl. +${witchNodeBonus} node)` : '';
     this.addLog(
-      `📋 Planning phase — Hero: ${this.heroActionsLeft} actions, ` +
-      `Witch: ${this.witchActionsLeft} actions.`
+      `📋 Planning phase — Hero: ${this.heroActionsLeft} actions${heroNB}, ` +
+      `Witch: ${this.witchActionsLeft} actions${witchNB}.`
     );
   }
 

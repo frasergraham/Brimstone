@@ -3,7 +3,7 @@
 import { getNeighbors, hexDistance, hexKey } from './hex.js';
 import { TileType, ResourceType } from './tiles.js';
 import { EntityType } from './entities.js';
-import { Phase, computeActions, computeActionsForPlayer, Player, nodeController } from './game.js';
+import { Phase, computeActions, computeActionsForPlayer, Player, nodeController, countHeldNodes } from './game.js';
 import {
   executeMove, executeExplore, executeBattle, executeSummon, executeUseItem,
   executeFortify,
@@ -1551,15 +1551,18 @@ class PlanSimState {
         : (this.entities.find(e => e.type === enemyType) ?? null);
       this.hero  = faction === 'hero'  ? leader : enemyLeader;
       this.witch = faction === 'witch' ? leader : enemyLeader;
-      this.actionsLeft = computeActionsForPlayer(playerId, faction, realState.phase, this.entities);
+      const nb = countHeldNodes(faction, realState.witchObjectives ?? [], this.entities);
+      this.actionsLeft = computeActionsForPlayer(playerId, faction, realState.phase, this.entities, nb);
     } else {
       // Offline / legacy: use first entity of each type, faction-level budget
       this.hero  = this.entities.find(e => e.type === EntityType.HERO)  ?? null;
       this.witch = this.entities.find(e => e.type === EntityType.WITCH) ?? null;
+      const nb = countHeldNodes(faction, realState.witchObjectives ?? [], this.entities);
       this.actionsLeft = computeActions(
         faction === 'hero' ? Player.HERO : Player.WITCH,
         realState.phase,
         this.entities,
+        nb,
       );
     }
     this._faction = faction;
