@@ -1206,6 +1206,17 @@ document.getElementById('btn-changelog-back').addEventListener('click', () => sh
 // Show game version on main menu
 document.getElementById('menu-version').textContent = `v${VERSION}`;
 
+// Show admin link only for admin users
+{
+  const _s = loadSession();
+  if (_s?.is_admin) {
+    const _adminLink = document.getElementById('admin-link');
+    if (_adminLink) {
+      _adminLink.style.display = '';
+    }
+  }
+}
+
 // Version badge opens revision history
 document.getElementById('version-badge').addEventListener('click', (e) => {
   e.preventDefault();
@@ -3290,9 +3301,9 @@ function _createMpClient() {
     onError(msg) {
       // During auth phase, show error in the lobby
       if (!state || document.getElementById('setup-screen').style.display !== 'none') {
-        _onlineError(msg);
         showStep('multiplayer');
         _initMpStep();
+        _onlineError(msg);  // show after _initMpStep so it doesn't get reset
       } else {
         // In-game error — show as modal dialog
         if (ui) ui._showResultDialog([`⚠ ${msg}`]);

@@ -41,10 +41,12 @@ describe('createBackend', () => {
   test('exec() runs raw SQL', () => {
     backend = createBackend(':memory:');
 
+    const before = backend.prepare('SELECT count(*) AS n FROM players').get().n;
     backend.exec("INSERT INTO players (id, username, token) VALUES ('e1', 'bob', 'tok-e1')");
-    const rows = backend.prepare('SELECT * FROM players').all();
-    assert.equal(rows.length, 1);
-    assert.equal(rows[0].username, 'bob');
+    const after_ = backend.prepare('SELECT count(*) AS n FROM players').get().n;
+    assert.equal(after_ - before, 1);
+    const bob = backend.prepare("SELECT * FROM players WHERE id = 'e1'").get();
+    assert.equal(bob.username, 'bob');
   });
 
   test('transaction() wraps operations atomically', () => {
@@ -55,13 +57,15 @@ describe('createBackend', () => {
       backend.prepare("INSERT INTO players (id, username, token) VALUES (?, ?, ?)").run(b.id, b.name, b.token);
     });
 
+    const before = backend.prepare('SELECT count(*) AS n FROM players').get().n;
+
     insertTwo(
       { id: 't1', name: 'txn-alice', token: 'tok-t1' },
       { id: 't2', name: 'txn-bob',   token: 'tok-t2' }
     );
 
     const count = backend.prepare('SELECT count(*) AS n FROM players').get().n;
-    assert.equal(count, 2);
+    assert.equal(count - before, 2);
   });
 
   test('close() shuts down without error', () => {

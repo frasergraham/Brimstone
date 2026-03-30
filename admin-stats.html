@@ -277,7 +277,7 @@
   <div class="wrap">
     <button class="refresh-btn" onclick="load()">Refresh</button>
     <h1>BRIMSTONE</h1>
-    <p class="subtitle">Game Statistics &amp; Balance Analysis &mdash; <a href="/admin">Admin Panel</a></p>
+    <p class="subtitle">Game Statistics &amp; Balance Analysis &mdash; <a href="/admin" class="admin-nav-link">Admin Panel</a></p>
 
     <div id="content">
       <p class="empty-state">Loading stats...</p>
@@ -285,9 +285,26 @@
   </div>
 
   <script>
+    // ── Auth gate ────────────────────────────────────────────────────────────────
+
+    const _session = JSON.parse(localStorage.getItem('brimstone_session') || 'null');
+    const _token = _session?.token;
+
+    (async () => {
+      if (!_token) { window.location.href = '/'; return; }
+      try {
+        const r = await fetch(`/api/me/admin?token=${encodeURIComponent(_token)}`);
+        if (!r.ok) { window.location.href = '/'; return; }
+        const data = await r.json();
+        if (!data.isAdmin) { window.location.href = '/'; return; }
+      } catch { window.location.href = '/'; }
+    })();
+
     async function load() {
       try {
-        const res = await fetch('/admin/api/game-stats/summary');
+        const sep = _token ? `?token=${encodeURIComponent(_token)}` : '';
+        const res = await fetch(`/admin/api/game-stats/summary${sep}`);
+        if (res.status === 401 || res.status === 403) { window.location.href = '/'; return; }
         const data = await res.json();
         render(data);
       } catch (err) {

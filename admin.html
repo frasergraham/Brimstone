@@ -192,8 +192,11 @@
 </head>
 <body>
   <div class="admin-wrap">
-    <h1>BRIMSTONE ADMIN</h1>
-    <p class="subtitle" id="version-line">Loading... &mdash; <a href="/admin/stats" style="color:var(--hero)">Game Stats</a></p>
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem">
+      <h1>BRIMSTONE ADMIN</h1>
+      <a href="/" class="btn" style="text-decoration:none;font-size:0.85rem">Back to main menu</a>
+    </div>
+    <p class="subtitle" id="version-line">Loading... &mdash; <a href="/admin/stats" class="admin-nav-link" style="color:var(--hero)">Game Stats</a></p>
 
     <div class="stats-bar" id="stats-bar">
       <div class="stat-box"><div class="label">Connections</div><div class="value" id="stat-connections">-</div></div>
@@ -321,10 +324,28 @@
   </div>
 
   <script>
+    // ── Auth gate ────────────────────────────────────────────────────────────────
+
+    const _session = JSON.parse(localStorage.getItem('brimstone_session') || 'null');
+    const _token = _session?.token;
+
+    (async () => {
+      if (!_token) { window.location.href = '/'; return; }
+      try {
+        const r = await fetch(`/api/me/admin?token=${encodeURIComponent(_token)}`);
+        if (!r.ok) { window.location.href = '/'; return; }
+        const data = await r.json();
+        if (!data.isAdmin) { window.location.href = '/'; return; }
+      } catch { window.location.href = '/'; }
+    })();
+
     // ── Helpers ──────────────────────────────────────────────────────────────────
 
     async function api(path) {
-      const res = await fetch(path);
+      const sep = path.includes('?') ? '&' : '?';
+      const url = _token ? `${path}${sep}token=${encodeURIComponent(_token)}` : path;
+      const res = await fetch(url);
+      if (res.status === 401 || res.status === 403) { window.location.href = '/'; return; }
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
       return res.json();
     }
@@ -367,13 +388,13 @@
     async function loadStats() {
       try {
         const stats = await api('/admin/api/stats');
-        document.getElementById('version-line').innerHTML = `v${stats.version} &mdash; <a href="/admin/stats" style="color:var(--hero)">Game Stats</a>`;
+        document.getElementById('version-line').innerHTML = `v${stats.version} &mdash; <a href="/admin/stats" class="admin-nav-link" style="color:var(--hero)">Game Stats</a>`;
         document.getElementById('stat-connections').textContent = stats.connections;
         document.getElementById('stat-rooms').textContent = stats.activeRooms;
         document.getElementById('stat-queue').textContent = stats.queueSize;
         document.getElementById('stat-uptime').textContent = formatUptime(stats.uptime);
       } catch (e) {
-        document.getElementById('version-line').innerHTML = 'Failed to connect &mdash; <a href="/admin/stats" style="color:var(--hero)">Game Stats</a>';
+        document.getElementById('version-line').innerHTML = 'Failed to connect &mdash; <a href="/admin/stats" class="admin-nav-link" style="color:var(--hero)">Game Stats</a>';
       }
     }
 
@@ -459,7 +480,8 @@
 
     async function activateSave(roomId) {
       try {
-        const res = await fetch(`/admin/api/saves/${roomId}/activate`, { method: 'POST' });
+        const sep = _token ? `?token=${encodeURIComponent(_token)}` : '';
+        const res = await fetch(`/admin/api/saves/${roomId}/activate${sep}`, { method: 'POST' });
         const data = await res.json();
         if (!res.ok) {
           alert(data.error || 'Failed to activate save.');
