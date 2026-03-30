@@ -1910,6 +1910,7 @@ canvas { touch-action: pan-x pan-y; }
   min-width: 280px;
   max-width: 400px;
   box-shadow: 0 0 40px rgba(80, 40, 120, 0.4);
+  overflow: visible;
 }
 
 .round-summary-title {
@@ -2006,7 +2007,7 @@ canvas { touch-action: pan-x pan-y; }
   display: flex;
   flex-direction: column;
   gap: 2px;
-  z-index: 40;
+  z-index: 100;
   min-width: 190px;
   box-shadow: 0 4px 16px rgba(0,0,0,0.6);
 }

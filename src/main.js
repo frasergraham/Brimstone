@@ -2276,6 +2276,7 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
 
   ui.hideReplayHUD();
   _replayActive       = false;
+  _replayAborted      = false;
   _replayPaused       = false;
   _replayGoBack       = false;
   _replayAtRoundStart = false;
