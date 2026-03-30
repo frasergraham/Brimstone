@@ -457,10 +457,12 @@ async function _runLocalResolution(skipSummary = false) {
   if (!_autoplay && !skipSummary && ui && humanFaction) {
     // Finalize game-over immediately — cleanup survives any navigation away
     if (state.gameOver) {
-      _recordLocalGameStats();
-      if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
-      _saveCompletedSpGame(state.winner, state.winReason);
-      _uploadSpGame(state.winner, state.winReason);
+      if (!_activeCampaign) {
+        _recordLocalGameStats();
+        if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
+        _saveCompletedSpGame(state.winner, state.winReason);
+        _uploadSpGame(state.winner, state.winReason);
+      }
     }
 
     let action;
@@ -501,10 +503,12 @@ async function _runLocalResolution(skipSummary = false) {
     }
   } else if (state.gameOver && ui) {
     // Autoplay game-over — still show the summary so the user sees the result
-    _recordLocalGameStats();
-    if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
-    _saveCompletedSpGame(state.winner, state.winReason);
-    _uploadSpGame(state.winner, state.winReason);
+    if (!_activeCampaign) {
+      _recordLocalGameStats();
+      if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
+      _saveCompletedSpGame(state.winner, state.winReason);
+      _uploadSpGame(state.winner, state.winReason);
+    }
     let action;
     do {
       action = await ui._showResolutionSummary(steps, state.round - 1, {
@@ -532,9 +536,11 @@ async function _runLocalResolution(skipSummary = false) {
     return;
   } else if (state.gameOver) {
     // No UI (headless) — just clean up
-    _recordLocalGameStats();
-    if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
-    _saveCompletedSpGame(state.winner, state.winReason);
+    if (!_activeCampaign) {
+      _recordLocalGameStats();
+      if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
+      _saveCompletedSpGame(state.winner, state.winReason);
+    }
     return;
   }
 
