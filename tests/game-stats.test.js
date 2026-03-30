@@ -153,6 +153,31 @@ describe('state-sync round-trips new stat fields', () => {
     assert.equal(restored.witchKills, 0);
     assert.equal(restored.witchSummonCount, 0);
   });
+
+  test('maxDiscoverableSurvivors and discoveredSurvivorCount survive round-trip', () => {
+    const state = freshState();
+    state.maxDiscoverableSurvivors = 2;
+    state.discoveredSurvivorCount = 1;
+
+    const snap = serializeState(state);
+    assert.equal(snap.maxDiscoverableSurvivors, 2);
+    assert.equal(snap.discoveredSurvivorCount, 1);
+
+    const restored = deserializeState(snap);
+    assert.equal(restored.maxDiscoverableSurvivors, 2);
+    assert.equal(restored.discoveredSurvivorCount, 1);
+  });
+
+  test('maxDiscoverableSurvivors defaults to null for old snapshots', () => {
+    const state = freshState();
+    const snap = serializeState(state);
+    delete snap.maxDiscoverableSurvivors;
+    delete snap.discoveredSurvivorCount;
+
+    const restored = deserializeState(snap);
+    assert.equal(restored.maxDiscoverableSurvivors, null);
+    assert.equal(restored.discoveredSurvivorCount, 0);
+  });
 });
 
 // ── Database stats tests ─────────────────────────────────────────────────────

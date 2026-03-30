@@ -205,6 +205,10 @@ export class GameState {
     // When true, skip dawn/dusk node scoring and hide the score track UI.
     this.disableScoring = !!mapDataOverride?.disableScoring;
 
+    // Max survivors discoverable from hidden-survivor tiles (null = unlimited).
+    this.maxDiscoverableSurvivors = mapDataOverride?.maxDiscoverableSurvivors ?? null;
+    this.discoveredSurvivorCount  = 0;
+
     // ── Campaign / custom victory ──────────────────────────────────────────
     // When set, checked first by checkVictory(). Return { winner, winReason, log? } or null.
     this.victoryDelegate = null;

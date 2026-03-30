@@ -81,6 +81,8 @@ export function serializeState(state) {
     witchSummonCount:     state.witchSummonCount ?? 0,
     nodeScore:            { ...state.nodeScore },
     disableScoring:       !!state.disableScoring,
+    maxDiscoverableSurvivors: state.maxDiscoverableSurvivors ?? null,
+    discoveredSurvivorCount:  state.discoveredSurvivorCount ?? 0,
     log:                  [...state.log],
     witchObjectives:      state.witchObjectives.map(o => ({
       col:        o.col,
@@ -166,6 +168,8 @@ export function deserializeState(snap) {
   state.attritionChanged     = snap.attritionChanged     ?? false;
   state.nodeScore            = { ...snap.nodeScore };
   state.disableScoring       = !!snap.disableScoring;
+  state.maxDiscoverableSurvivors = snap.maxDiscoverableSurvivors ?? null;
+  state.discoveredSurvivorCount  = snap.discoveredSurvivorCount  ?? 0;
   state.log                  = [...snap.log];
   state.witchObjectives      = snap.witchObjectives.map(o => ({
     col:        o.col,

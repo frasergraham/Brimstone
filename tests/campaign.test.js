@@ -614,3 +614,29 @@ describe('markRosterUsedByName', () => {
     assert.ok(s.name);
   });
 });
+
+// ── maxDiscoverableSurvivors config ────────────────────────────────────────
+
+describe('maxDiscoverableSurvivors config', () => {
+  test('missions 1 and 2 have maxDiscoverableSurvivors set to 2', () => {
+    const m1 = salemDef.missions.find(m => m.id === 'prologue');
+    const m2 = salemDef.missions.find(m => m.id === 'first_night');
+    assert.equal(m1.maxDiscoverableSurvivors, 2);
+    assert.equal(m2.maxDiscoverableSurvivors, 2);
+  });
+
+  test('mission 3 does not restrict discoverable survivors', () => {
+    const m3 = salemDef.missions.find(m => m.id === 'witchs_trail');
+    assert.equal(m3.maxDiscoverableSurvivors, undefined);
+  });
+});
+
+// ── disableScoring on missions ─────────────────────────────────────────────
+
+describe('disableScoring on missions', () => {
+  test('all prologue missions have disableScoring set', () => {
+    for (const m of salemDef.missions) {
+      assert.equal(m.disableScoring, true, `${m.id} should have disableScoring: true`);
+    }
+  });
+});

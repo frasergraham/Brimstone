@@ -1301,6 +1301,9 @@ function _initCampaignMission(missionDef) {
   const mapData = builder();
   mapData.noWitch = !missionDef.hasWitch;
   mapData.disableScoring = !!missionDef.disableScoring;
+  if (missionDef.maxDiscoverableSurvivors != null) {
+    mapData.maxDiscoverableSurvivors = missionDef.maxDiscoverableSurvivors;
+  }
 
   // Hide setup, show game
   document.getElementById('setup-screen').style.display = 'none';
@@ -1417,6 +1420,14 @@ function _initCampaignMission(missionDef) {
 
   _setupLocalUI(canvas, witchAI, null, false);
   _roundHistory = [];
+
+  // Log victory conditions at mission start
+  const winDesc = _objectiveDescription(missionDef.objectives?.win);
+  const loseDesc = _objectiveDescription(missionDef.objectives?.lose);
+  state.addLog(`═══ ${missionDef.title} ═══`);
+  state.addLog(`☀ Victory: ${winDesc}`);
+  state.addLog(`💀 Defeat: ${loseDesc}`);
+
   redraw();
   _startLocalPlanningPhase();
 }
@@ -1486,7 +1497,7 @@ document.getElementById('btn-campaign-select-back').addEventListener('click', ()
 document.getElementById('btn-campaign-back')   .addEventListener('click', () => _showCampaignSelectScreen());
 document.getElementById('btn-briefing-back')   .addEventListener('click', () => _renderCampaignScreen());
 document.getElementById('btn-delete-campaign')  .addEventListener('click', () => {
-  if (confirm('Delete your campaign save? This cannot be undone.')) {
+  if (confirm('Start over? All campaign progress, roster survivors, and resources will be lost. This cannot be undone.')) {
     _activeCampaign.delete();
     _showCampaignSelectScreen();
   }

@@ -257,8 +257,9 @@ const MISSIONS = [
     waves:         null,
     aiPersonality: 'balanced',
 
-    maxSurvivorsFromRoster: 0,
-    missionSurvivors:       1,
+    maxSurvivorsFromRoster:    0,
+    missionSurvivors:          1,
+    maxDiscoverableSurvivors:  2,
 
     objectives: {
       win:  { type: 'eliminate_all', reason: 'The streets of Salem are clear.' },
@@ -295,8 +296,9 @@ const MISSIONS = [
     ],
     aiPersonality: 'berserker',
 
-    maxSurvivorsFromRoster: 2,
-    missionSurvivors:       1,
+    maxSurvivorsFromRoster:    2,
+    missionSurvivors:          1,
+    maxDiscoverableSurvivors:  2,
 
     objectives: {
       win:  { type: 'survive_rounds', rounds: 8, reason: 'You survived the night. Dawn brings hope.' },

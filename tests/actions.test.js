@@ -1327,4 +1327,44 @@ describe('survivor discovery — explore always finds', () => {
     const r = executeExplore(state, hero);
     assert.equal(r.encounterSurvivor, null);
   });
+
+  test('maxDiscoverableSurvivors caps survivor discoveries', () => {
+    const state = freshState();
+    resetRoster();
+    state.maxDiscoverableSurvivors = 1;
+    state.discoveredSurvivorCount = 0;
+
+    const hero = state.hero;
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.explored = false;
+    t.hiddenSurvivor = true;
+
+    // First discovery succeeds
+    const r1 = executeExplore(state, hero);
+    assert.ok(r1.encounterSurvivor, 'first discovery should succeed');
+    assert.equal(state.discoveredSurvivorCount, 1);
+
+    // Second discovery is blocked
+    t.explored = false;
+    t.hiddenSurvivor = true;
+    const r2 = executeExplore(state, hero);
+    assert.equal(r2.encounterSurvivor, null, 'second discovery should be blocked by cap');
+    assert.equal(t.hiddenSurvivor, false, 'flag should still be cleared');
+  });
+
+  test('null maxDiscoverableSurvivors allows unlimited discoveries', () => {
+    const state = freshState();
+    resetRoster();
+    state.maxDiscoverableSurvivors = null;
+    state.discoveredSurvivorCount = 5;
+
+    const hero = state.hero;
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.explored = false;
+    t.hiddenSurvivor = true;
+
+    const r = executeExplore(state, hero);
+    assert.ok(r.encounterSurvivor, 'discovery should succeed when cap is null');
+    assert.equal(state.discoveredSurvivorCount, 6);
+  });
 });
