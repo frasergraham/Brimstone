@@ -605,7 +605,7 @@ export class WitchAI {
     };
 
     const tryBattle = (actor, target) =>
-      ({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id });
+      ({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id, targetCol: target.col, targetRow: target.row });
 
     if (isNight) {
       // 0. Flee if critical HP — suppressed when an allied leader is adjacent (mutual support)
@@ -817,7 +817,7 @@ export class WitchAI {
       return null;
     };
     const tryBattle = (actor, target) =>
-      ({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id });
+      ({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id, targetCol: target.col, targetRow: target.row });
 
     // 1. Any minion co-located with a hero unit → attack
     for (const m of realMinions) {
@@ -1253,7 +1253,7 @@ export class HeroAI {
       return null;
     };
     const tryBattle = (actor, target) =>
-      ({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id });
+      ({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id, targetCol: target.col, targetRow: target.row });
 
     // Ally context shorthand (null in 1v1 / offline — no behaviour change)
     const claimedNodes  = this._allyContext?.claimedNodes ?? null;
@@ -1645,7 +1645,7 @@ function _makeHelpers(sim) {
     return null;
   };
   const tryBattle = (actor, target) =>
-    ({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id });
+    ({ type: PlanActionType.BATTLE_UNIT, entityId: actor.id, targetId: target.id, targetCol: target.col, targetRow: target.row });
   const tryFortify = (entity, maxLevel = 3) => {
     const t = sim.tiles.get(hexKey(entity.col, entity.row));
     if (!t || t.type !== TileType.BUILDING) return null;

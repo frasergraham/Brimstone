@@ -9,9 +9,9 @@ import { PlanActionType } from '../src/planner.js';
 import {
   Entity, EntityType, createMinion, createZombie,
 } from '../src/entities.js';
-import { ResourceType } from '../src/tiles.js';
+import { TileType, ResourceType } from '../src/tiles.js';
 import { hexKey, getNeighbors } from '../src/hex.js';
-import { getReachableHexes } from '../src/actions.js';
+import { getReachableHexes, executeMove } from '../src/actions.js';
 
 function freshState() {
   return new GameState(true, true);
@@ -528,5 +528,240 @@ describe('resolvePlans — battle result fields', () => {
     assert.ok(battleEvent.battleSnaps.targetSnap, 'Should have targetSnap');
     assert.equal(battleEvent.battleSnaps.actorSnap.id, hero.id, 'actorSnap should be the hero');
     assert.equal(battleEvent.battleSnaps.targetSnap.id, minion.id, 'targetSnap should be the minion');
+  });
+});
+
+// ── Movement hex-step cap ────────────────────────────────────────────────────
+// executeMove now limits the number of hex tiles walked per action (2 normal, 3 horse).
+
+/**
+ * Build a minimal state with a horizontal road chain on row 2.
+ * Clears all entities except the hero placed at (startCol, 2).
+ * Road tiles: from startCol to startCol + length - 1, all on row 2.
+ */
+function roadChainState(startCol, length) {
+  const state = freshState();
+  // Place hero at start of the chain
+  state.hero.col = startCol;
+  state.hero.row = 2;
+  // Remove all entities except hero
+  state.entities = state.entities.filter(e => e.id === state.hero.id);
+  // Lay road tiles along the chain
+  for (let c = startCol; c < startCol + length; c++) {
+    const k = hexKey(c, 2);
+    const t = state.tiles.get(k);
+    if (t) {
+      t.type = TileType.ROAD;
+      t.building = null;
+      t.fortifyLevel = 0;
+      t.hiddenSurvivor = false;
+    }
+  }
+  return state;
+}
+
+describe('executeMove — hex-step cap', () => {
+  test('normal unit on road chain stops after 2 hex steps', () => {
+    const state = roadChainState(2, 6);
+    const hero = state.hero;
+    // Target is 4 road tiles away — cost-reachable (budget 2, roads cost 1 each = only 2 reachable)
+    // But let's target 2 tiles away first to confirm it works
+    const r2 = executeMove(state, hero, 4, 2);
+    assert.ok(r2.success, 'Move to 2 tiles away should succeed');
+    assert.equal(hero.col, 4, 'Hero should reach col 4 (2 road steps)');
+    assert.ok(r2.path.length <= 2, 'Path should be at most 2 steps');
+  });
+
+  test('normal unit cannot walk more than 2 road tiles even if cost-reachable', () => {
+    // With range=1, budget=2, and road tiles costing 1 each, getReachableHexes
+    // allows up to 2 road tiles. The step cap also limits to 2, so for normal
+    // movement these align. This test validates the cap is in effect.
+    const state = roadChainState(2, 6);
+    const hero = state.hero;
+    const result = executeMove(state, hero, 4, 2);
+    assert.ok(result.success);
+    assert.ok(result.path.length <= 2, 'Path must not exceed 2 hex steps');
+  });
+
+  test('horse unit on road chain stops after 3 hex steps', () => {
+    const state = roadChainState(1, 8);
+    const hero = state.hero;
+    // Give hero a horse (range 2, budget 4 → 4 road tiles cost-reachable)
+    hero.items = { horse: 1 };
+
+    // Move to 3 tiles away (col 1 → col 4)
+    const r3 = executeMove(state, hero, 4, 2);
+    assert.ok(r3.success, 'Horse move to 3 tiles away should succeed');
+    assert.equal(hero.col, 4, 'Hero should reach col 4 (3 road steps)');
+    assert.ok(r3.path.length <= 3, 'Horse path should be at most 3 steps');
+  });
+
+  test('horse unit cannot exceed 3 hex steps even with 4 road tiles budget', () => {
+    const state = roadChainState(1, 8);
+    const hero = state.hero;
+    hero.items = { horse: 1 };
+
+    // col 5 is 4 road tiles away — cost-reachable with horse but step-capped at 3
+    const r4 = executeMove(state, hero, 5, 2);
+    assert.ok(r4.success, 'Move should succeed (partial walk)');
+    assert.ok(r4.path.length <= 3, 'Horse path must not exceed 3 hex steps');
+    // Hero stops at col 4 (3 steps), not col 5
+    assert.equal(hero.col, 4, 'Hero should stop at 3 steps, not reach 4th tile');
+  });
+
+  test('1-step move is unaffected by cap', () => {
+    const state = roadChainState(3, 4);
+    const hero = state.hero;
+    const result = executeMove(state, hero, 4, 2);
+    assert.ok(result.success);
+    assert.equal(result.path.length, 1);
+    assert.equal(hero.col, 4);
+  });
+});
+
+// ── BATTLE_UNIT target fallback ───────────���──────────────────────────────────
+// When the original target is gone/moved, fall back to another enemy on the
+// planned target hex (random pick, like BATTLE_HEX).
+
+describe('resolvePlans — BATTLE_UNIT target fallback', () => {
+  test('original target alive and adjacent — normal battle, no fallback', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const minion = createMinion(hero.col, hero.row);
+    state.entities.push(minion);
+
+    const heroPlan = [{
+      type: PlanActionType.BATTLE_UNIT,
+      entityId: hero.id,
+      targetId: minion.id,
+      targetCol: minion.col,
+      targetRow: minion.row,
+    }];
+
+    const steps = resolvePlans(state, heroPlan, []);
+    assert.ok(steps.length > 0);
+    const ev = steps[0].heroEvents.find(e => e.type === ResEventType.ACTION_OK);
+    assert.ok(ev, 'Should have an ACTION_OK battle event');
+  });
+
+  test('original target dead, other enemy on hex — fallback attacks substitute', () => {
+    const state = freshState();
+    const hero = state.hero;
+    // Place two minions on hero's hex
+    const target = createMinion(hero.col, hero.row);
+    const other  = createMinion(hero.col, hero.row);
+    state.entities.push(target, other);
+
+    // Kill the original target before resolution (alive is derived from hp)
+    target.hp = 0;
+
+    const heroPlan = [{
+      type: PlanActionType.BATTLE_UNIT,
+      entityId: hero.id,
+      targetId: target.id,
+      targetCol: hero.col,
+      targetRow: hero.row,
+    }];
+
+    const steps = resolvePlans(state, heroPlan, []);
+    const allEvents = steps.flatMap(s => s.heroEvents);
+    const ok = allEvents.find(e => e.type === ResEventType.ACTION_OK);
+    assert.ok(ok, 'Fallback should attack the substitute enemy (ACTION_OK)');
+  });
+
+  test('original target moved away, other enemy on hex — fallback fires', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const target = createMinion(hero.col, hero.row);
+    const other  = createMinion(hero.col, hero.row);
+    state.entities.push(target, other);
+
+    // Move the original target far away so dist > 1
+    target.col = hero.col + 5;
+    target.row = hero.row + 5;
+
+    const heroPlan = [{
+      type: PlanActionType.BATTLE_UNIT,
+      entityId: hero.id,
+      targetId: target.id,
+      targetCol: hero.col,   // planned hex still has 'other'
+      targetRow: hero.row,
+    }];
+
+    const steps = resolvePlans(state, heroPlan, []);
+    const allEvents = steps.flatMap(s => s.heroEvents);
+    const ok = allEvents.find(e => e.type === ResEventType.ACTION_OK);
+    assert.ok(ok, 'Fallback should attack substitute when original moved away');
+  });
+
+  test('original target gone, no enemy on hex — skip', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const target = createMinion(hero.col, hero.row);
+    state.entities.push(target);
+
+    // Kill target — no other enemies on hex (alive derived from hp)
+    target.hp = 0;
+
+    const heroPlan = [{
+      type: PlanActionType.BATTLE_UNIT,
+      entityId: hero.id,
+      targetId: target.id,
+      targetCol: hero.col,
+      targetRow: hero.row,
+    }];
+
+    const steps = resolvePlans(state, heroPlan, []);
+    const allEvents = steps.flatMap(s => s.heroEvents);
+    const ok = allEvents.find(e => e.type === ResEventType.ACTION_OK);
+    // Should skip, not produce an ok
+    assert.ok(!ok, 'Should not produce ACTION_OK when no enemies remain');
+  });
+
+  test('action missing targetCol/targetRow — backward compat skip', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const target = createMinion(hero.col, hero.row);
+    state.entities.push(target);
+    target.hp = 0;
+
+    // Old-format action without targetCol/targetRow
+    const heroPlan = [{
+      type: PlanActionType.BATTLE_UNIT,
+      entityId: hero.id,
+      targetId: target.id,
+    }];
+
+    const steps = resolvePlans(state, heroPlan, []);
+    const allEvents = steps.flatMap(s => s.heroEvents);
+    const ok = allEvents.find(e => e.type === ResEventType.ACTION_OK);
+    assert.ok(!ok, 'Without targetCol/targetRow, fallback should not fire');
+  });
+
+  test('fallback hex out of attacker range — skip', () => {
+    const state = freshState();
+    const hero = state.hero;
+    // Place a minion on a distant hex
+    const farCol = hero.col + 3;
+    const farRow = hero.row;
+    const target = createMinion(farCol, farRow);
+    const other  = createMinion(farCol, farRow);
+    state.entities.push(target, other);
+
+    // Kill original target
+    target.hp = 0;
+
+    const heroPlan = [{
+      type: PlanActionType.BATTLE_UNIT,
+      entityId: hero.id,
+      targetId: target.id,
+      targetCol: farCol,   // hex is 3+ away from hero
+      targetRow: farRow,
+    }];
+
+    const steps = resolvePlans(state, heroPlan, []);
+    const allEvents = steps.flatMap(s => s.heroEvents);
+    const ok = allEvents.find(e => e.type === ResEventType.ACTION_OK);
+    assert.ok(!ok, 'Fallback should not fire when planned hex is out of range');
   });
 });
