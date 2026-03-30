@@ -355,9 +355,10 @@ const MISSIONS = [
 
 export default {
   id:          'salem_prologue',
-  title:       'The Salem Prologue',
+  title:       'Chapter 1 - Prologue',
   description: 'A cursed village, the walking dead, and a witch pulling the strings. Three missions stand between Salem and oblivion.',
   missions:    MISSIONS,
   mapBuilders: MAP_BUILDERS,
   firstMission: 'prologue',
+  prerequisiteCampaign: null,
 };
