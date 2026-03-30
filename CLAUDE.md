@@ -4,11 +4,13 @@
 
 These directives apply to all code changes — follow them without exception.
 
-### 1. Tests are mandatory
+### 1. Tests are mandatory (with exceptions)
 - Every change must be accompanied by tests.
 - When fixing a bug: **write a failing test first**, then make it pass (red → green).
 - New features require tests covering the happy path and key edge cases.
+- **Exception:** Small, visual-only changes (e.g. adding a label, tweaking CSS, rearranging UI elements) do not require tests. Use judgement — if there's no logic to verify, skip the test.
 - Tests live in `tests/` and are run with `npm test`.
+- Be conscious of test runtime. Avoid heavyweight DOM mocks or slow setup for trivial assertions. Keep the suite fast to support rapid iteration.
 
 ### 2. Run tests before every push
 - Always run `npm test` before pushing. Do not push if tests fail.
