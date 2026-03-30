@@ -942,7 +942,10 @@ export function executeGuardStrike(state, guardian, target) {
     attackRoll, defenseRoll, hit, killed, margin, damage,
     breakdown: {
       atkBaseDie, defBaseDie,
+      atkExtraDice: [], defExtraDice: [],
+      atkAllyNames: [], defAllyNames: [],
       atkStaffBonus, phaseBonus, fortBonus,
+      fatiguePenalty: 0,
     },
   };
 }
