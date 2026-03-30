@@ -359,9 +359,9 @@ describe('TUTORIAL_STEPS', () => {
 // ── TUTORIAL_WAVES ───────────────────────────────────────────────────────────
 
 describe('TUTORIAL_WAVES', () => {
-  test('wave spawns minion at (3,5) on round 1', () => {
+  test('wave spawns minion at (3,5) on round 2 (after first endRound)', () => {
     assert.equal(TUTORIAL_WAVES.length, 1);
-    assert.equal(TUTORIAL_WAVES[0].round, 1);
+    assert.equal(TUTORIAL_WAVES[0].round, 2);
     assert.equal(TUTORIAL_WAVES[0].units[0].type, 'minion');
     assert.deepEqual(TUTORIAL_WAVES[0].units[0].spawnAt, { col: 3, row: 5 });
   });

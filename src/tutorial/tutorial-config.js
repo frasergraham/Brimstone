@@ -145,10 +145,12 @@ export function buildTutorialMap() {
 }
 
 // ── Wave config — minion spawns adjacent to hero after round 1 ────────────
+// state.round starts at 1 and endRound() increments it, so after the first
+// resolution state.round === 2. processWaves checks wave.round === state.round.
 
 export const TUTORIAL_WAVES = [
   {
-    round: 1,
+    round: 2,
     units: [{ type: 'minion', spawnAt: { col: 3, row: 5 } }],
   },
 ];
