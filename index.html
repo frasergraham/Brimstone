@@ -162,55 +162,52 @@
     <div id="setup-step-singleplayer" class="setup-card" style="display:none">
       <h1 class="title" style="font-size:2rem;margin-bottom:1rem">QUICK PLAY</h1>
 
-      <div class="setup-options">
+      <!-- Map size (primary choice) -->
+      <div class="setup-options" style="margin-bottom:0.75rem">
         <label class="setup-option-label">
           Map size
           <select id="select-map-size" class="setup-select">
-            <option value="skirmish">Skirmish (9×9)</option>
-            <option value="standard" selected>Standard (13×11)</option>
-            <option value="regional">Regional (17×13)</option>
-            <option value="campaign">Campaign (21×15)</option>
+            <option value="skirmish">Skirmish</option>
+            <option value="standard" selected>Standard</option>
+            <option value="regional">Regional</option>
+            <option value="campaign">Campaign</option>
           </select>
-        </label>
-        <label class="setup-option-label">
-          Power nodes
-          <select id="select-node-count" class="setup-select">
-            <option value="2">2</option>
-            <option value="3" selected>3</option>
-            <option value="4">4</option>
-            <option value="5">5</option>
-          </select>
-        </label>
-        <label class="setup-option-label">
-          <input type="checkbox" id="chk-fog-of-war" checked>
-          Fog of war
         </label>
       </div>
 
-      <div class="player-mode-group">
-        <label class="player-mode-pill">
-          <input type="radio" name="player-mode" value="vs-ai" checked>
-          <span>vs AI</span>
-        </label>
-        <label class="player-mode-pill">
-          <input type="radio" name="player-mode" value="two-players">
-          <span>Two Players</span>
-        </label>
-        <label class="player-mode-pill">
-          <input type="radio" name="player-mode" value="autoplay">
-          <span>AI vs AI</span>
-        </label>
+      <!-- Faction toggle -->
+      <div class="qp-faction-toggle">
+        <button id="btn-faction-hero" class="qp-faction-btn active" data-faction="hero">⚔ Hero</button>
+        <button id="btn-faction-witch" class="qp-faction-btn" data-faction="witch">✦ Witch</button>
       </div>
 
-      <!-- Side selection (vs AI only) -->
-      <div id="side-selection" class="setup-buttons" style="margin-bottom:0">
-        <button id="btn-play-hero"  class="setup-btn primary">⚔ Play as Hero</button>
-        <button id="btn-play-witch" class="setup-btn">✦ Play as Witch</button>
+      <!-- Start Game button -->
+      <div class="setup-buttons" style="margin-bottom:0.75rem">
+        <button id="btn-start-qp" class="setup-btn primary" style="width:180px">Start Game</button>
       </div>
-      <!-- Start button (two players / AI vs AI) -->
-      <div id="btn-start-wrap" class="setup-buttons" style="display:none;margin-bottom:0">
-        <button id="btn-start-local" class="setup-btn primary">Start Game</button>
-      </div>
+
+      <!-- Expandable advanced options -->
+      <details class="qp-advanced">
+        <summary class="qp-advanced-summary">Advanced Options</summary>
+        <div class="qp-options-list">
+          <div class="qp-option-row">
+            <span class="qp-option-label">Power Nodes</span>
+            <select id="select-node-count" class="setup-select">
+              <option value="2">2</option>
+              <option value="3" selected>3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+            </select>
+          </div>
+          <div class="qp-option-row">
+            <span class="qp-option-label">Fog of War</span>
+            <label class="cg-toggle">
+              <input type="checkbox" id="chk-fog-of-war" checked>
+              <span class="cg-toggle-track"></span>
+            </label>
+          </div>
+        </div>
+      </details>
 
       <!-- In-progress and completed local saves -->
       <div class="active-games-section" style="margin-top:0.75rem">
@@ -273,6 +270,11 @@
       <div id="mp-action-buttons" class="setup-buttons online-match-buttons" style="display:none">
         <button id="btn-create-game" class="setup-btn primary">⚔ Create Game</button>
         <button id="btn-join-game"   class="setup-btn">🚪 Join Game</button>
+      </div>
+
+      <div class="mp-local-divider">— or —</div>
+      <div class="setup-buttons" style="margin-bottom:0">
+        <button id="btn-local-pass-play" class="setup-btn" style="width:220px">🎮 Local Pass &amp; Play</button>
       </div>
 
       <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">

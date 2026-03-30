@@ -1538,23 +1538,28 @@ document.addEventListener('click', e => {
   });
 });
 
-// Player mode radio changes (vs AI / Two Players / AI vs AI)
-document.querySelectorAll('input[name="player-mode"]').forEach(r => {
-  r.addEventListener('change', _onPlayerModeChange);
+// Quick Play faction toggle
+let _qpFaction = 'hero';
+document.getElementById('btn-faction-hero').addEventListener('click', () => {
+  _qpFaction = 'hero';
+  document.getElementById('btn-faction-hero').classList.add('active');
+  document.getElementById('btn-faction-witch').classList.remove('active');
 });
-function _onPlayerModeChange() {
-  const mode = document.querySelector('input[name="player-mode"]:checked')?.value;
-  document.getElementById('side-selection') .style.display = mode === 'vs-ai' ? '' : 'none';
-  document.getElementById('btn-start-wrap') .style.display = mode !== 'vs-ai' ? '' : 'none';
-}
+document.getElementById('btn-faction-witch').addEventListener('click', () => {
+  _qpFaction = 'witch';
+  document.getElementById('btn-faction-witch').classList.add('active');
+  document.getElementById('btn-faction-hero').classList.remove('active');
+});
 
-document.getElementById('btn-play-hero') .addEventListener('click', () => init(true,  false));
-document.getElementById('btn-play-witch').addEventListener('click', () => init(false, true));
+// Quick Play start button (always 1v1 vs AI)
+document.getElementById('btn-start-qp').addEventListener('click', () => {
+  if (_qpFaction === 'hero') init(true, false);
+  else init(false, true);
+});
 
-document.getElementById('btn-start-local').addEventListener('click', () => {
-  const mode = document.querySelector('input[name="player-mode"]:checked')?.value;
-  if (mode === 'two-players') init(false, false);
-  else if (mode === 'autoplay') init(true, true, true);
+// Local Pass & Play (from multiplayer screen)
+document.getElementById('btn-local-pass-play').addEventListener('click', () => {
+  init(false, false);
 });
 
 function _doRestart() {
