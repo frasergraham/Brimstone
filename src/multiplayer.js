@@ -288,6 +288,7 @@ export class MultiplayerClient {
             id:       msg.player.id,
             username: msg.player.username,
             token:    msg.player.token,
+            is_admin: msg.player.is_admin || false,
           }));
         } catch {}
         break;
