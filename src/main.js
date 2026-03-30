@@ -664,17 +664,26 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     }
     state.entities = displayEntities;
 
+    // Track the last battle dialog's framed hex positions so we can skip
+    // redundant camera reframes when consecutive battles are at the same spot.
+    // Declared before the step-level frame so we can pre-apply the dialog
+    // inset when the first action in a step is a battle.
+    let _lastBattleFrameKey = null;
+    let _battleInsetActive = false;
+    const _prevInsetRight = renderer.insetRight ?? 0;
+
     // ── Frame camera on this step's actors ──────────────────────────────────
     if (!_autoplay) {
       const _cspd = ui?.speedMode ?? 'cinematic';
       {
-        // In cinematic/step modes, battles get per-battle frameHexes calls
-        // (with dialog inset). Framing ALL targets here would zoom out wide,
-        // then each battle zooms back in — a jarring "yoyo". Instead, frame
-        // only the first visible battle so the step-level frame leads smoothly
-        // into the first battle dialog frame.
+        // In cinematic/step modes, battles get per-battle dialog framing
+        // (with insetRight=500). To avoid a "yoyo" (centered frame → dialog
+        // reframe), detect the first visible battle and apply the dialog
+        // inset directly in this step-level frame, so the camera lands in the
+        // final position from the start.
         const hasBattleDialogFraming = (_cspd === 'cinematic' || _cspd === 'step');
         let firstBattleTargets = null;
+        let firstBattleFrameKey = null;
         if (hasBattleDialogFraming) {
           for (const ev of events) {
             if (ev.action.type !== PlanActionType.BATTLE_UNIT && ev.action.type !== PlanActionType.BATTLE_HEX) continue;
@@ -692,6 +701,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
                 { col: actorSnap.col, row: actorSnap.row },
                 { col: targetSnap.col, row: targetSnap.row },
               ];
+              firstBattleFrameKey = `${actorSnap.col},${actorSnap.row}|${targetSnap.col},${targetSnap.row}`;
               break;
             }
           }
@@ -699,6 +709,11 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
         const frameTargets = [];
         if (firstBattleTargets) {
+          // Pre-apply the dialog inset so the step-level frame already
+          // accounts for the battle dialog panel — no second reframe needed.
+          renderer.insetRight = 500;
+          _battleInsetActive = true;
+          _lastBattleFrameKey = firstBattleFrameKey;
           frameTargets.push(...firstBattleTargets);
         } else {
           for (const ev of events) {
@@ -721,7 +736,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         if (frameTargets.length) {
           const _isStep = _cspd === 'step';
           renderer.frameHexes(frameTargets, {
-            paddingHexes: _isStep ? 1.5 : 3.0,
+            paddingHexes: firstBattleTargets ? 2.5 : (_isStep ? 1.5 : 3.0),
             maxZoom:      _isStep ? 3.5 : 2.0,
             duration:     _isStep ? 400 : 250,
           });
@@ -832,11 +847,6 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
     // ── Phase 2: battles and summons ──────────────────────────────────────────
     let hadBattle = false;
-    // Track the last battle dialog's framed hex positions so we can skip
-    // redundant camera reframes when consecutive battles are at the same spot.
-    let _lastBattleFrameKey = null;
-    let _battleInsetActive = false;
-    const _prevInsetRight = renderer.insetRight ?? 0;
     for (const ev of events) {
       const { action, result, battleSnaps } = ev;
       if (action.type === PlanActionType.BATTLE_UNIT || action.type === PlanActionType.BATTLE_HEX) {
