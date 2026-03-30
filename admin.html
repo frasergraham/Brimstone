@@ -172,6 +172,22 @@
     }
 
     .time-ago { color: var(--text-dim); font-size: 0.8rem; }
+
+    /* ── Mobile ──────────────────────────── */
+    @media (max-width: 600px) {
+      .admin-wrap { padding: 1rem 0.75rem 2rem; }
+      h1 { font-size: 1.4rem; letter-spacing: 0.1em; }
+      .stats-bar { gap: 0.75rem; }
+      .stat-box { min-width: 0; flex: 1 1 70px; padding: 0.5rem 0.6rem; }
+      .stat-box .value { font-size: 1.3rem; }
+      .tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      .tab-btn { padding: 0.5rem 0.75rem; font-size: 0.82rem; white-space: nowrap; }
+      .tab-content { overflow-x: auto; }
+      th, td { padding: 0.35rem 0.5rem; }
+      th { font-size: 0.65rem; }
+      .btn { min-height: 44px; padding: 0.5rem 0.75rem; font-size: 0.85rem; }
+      .refresh-row { flex-wrap: wrap; gap: 0.5rem; }
+    }
   </style>
 </head>
 <body>
