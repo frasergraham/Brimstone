@@ -15,6 +15,7 @@ import {
 } from '../src/entities.js';
 import { TileType, BuildingType, ResourceType, WeaponType } from '../src/tiles.js';
 import { hexKey, getNeighbors } from '../src/hex.js';
+import { applyPostRoundEffects } from '../src/post-round-effects.js';
 
 function freshState() {
   return new GameState(true, true);
@@ -559,14 +560,56 @@ describe('executeBattle', () => {
 
   test('night hazard does NOT degrade fortifications', () => {
     const state = freshState();
+    state.phase = Phase.NIGHT;
+    state.attritionLevel = 1;
     // Set all tiles with fortifyLevel > 1 and verify they stay unchanged after night
     for (const t of state.tiles.values()) {
       t.fortifyLevel = 3;
     }
-    state._applyNightHazard(1);
+    applyPostRoundEffects(state);
     for (const t of state.tiles.values()) {
       assert.equal(t.fortifyLevel, 3, 'Night should no longer erode fortifications');
     }
+  });
+
+  test('no daytime attrition damage to witch minions', () => {
+    const state = freshState();
+    // Place a minion on an open (non-building) tile
+    const neighbor = emptyPassableNeighbor(state, state.witch);
+    assert.ok(neighbor, 'need an open tile for the minion');
+    const minion = createMinion(neighbor.col, neighbor.row);
+    state.entities.push(minion);
+    const hpBefore = minion.hp;
+
+    // Advance to a DAY phase by calling endRound until phase is DAY
+    while (state.phase !== Phase.DAY) {
+      state.endRound();
+    }
+
+    // Minion should not have taken any damage from the day phase
+    const alive = state.entities.find(e => e.id === minion.id);
+    assert.ok(alive, 'minion should still be in the entity list');
+    assert.equal(alive.hp, hpBefore, 'minion HP should be unchanged — no daytime attrition');
+  });
+
+  test('post-round events are cleared when leaving night phase', () => {
+    const state = freshState();
+    // Place a survivor in the open
+    const neighbor = emptyPassableNeighbor(state, state.hero);
+    assert.ok(neighbor, 'need an open tile for the survivor');
+    const survivor = createSurvivor(neighbor.col, neighbor.row);
+    state.entities.push(survivor);
+
+    // Advance into night to trigger hazard
+    while (state.phase !== Phase.NIGHT) state.endRound();
+    assert.ok(state.postRoundEvents.length > 0,
+      'post-round events should be populated during night');
+
+    // Advance past night into dawn
+    while (state.phase === Phase.NIGHT) state.endRound();
+    // Non-night phases produce no events (night attrition returns [])
+    const hasFlashEvents = state.postRoundEvents.some(ev => ev.flash);
+    assert.ok(!hasFlashEvents, 'no flash events should remain after leaving night');
   });
 
   test('attacker allies on adjacent hexes are counted for gang-up', () => {

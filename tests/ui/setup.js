@@ -246,7 +246,7 @@ export function makeState(overrides = {}) {
     gameOver:        false,
     winner:          null,
     fogOfWar:        'none',
-    attritionLevel:  0,
+    attritionLevel:  1,
     attritionChanged: false,
     entities:        [],
     hero:            null,

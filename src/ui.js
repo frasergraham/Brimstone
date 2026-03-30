@@ -57,7 +57,7 @@ export class UIController {
     this._mouseDown   = null;
     this._didDragPan  = false;
 
-    this._lastHazardKey    = '';   // deduplicates hazard popups across state updates
+    this._lastPostRoundKey = '';   // deduplicates post-round effect animations across state updates
     this._battleInterval   = null; // dice animation interval — cleared on new dialog
     this.speedMode         = 'cinematic'; // 'step' | 'cinematic' | 'fast' | 'vfast'
     this._stepResolve      = null;        // set while waiting for click-to-advance in step mode
@@ -1820,55 +1820,38 @@ export class UIController {
 
   // ── Hazard flash animations ───────────────────────────────────────────────
 
-  _triggerHazardFlashes() {
+  async _triggerPostRoundEffects() {
     const state = this.state;
-    const nightPositions = state.lastNightDamage || [];
-    const dayPositions   = state.lastDayDamage   || [];
-    const hazardLog      = state.lastHazardLog    || [];
+    const events = state.postRoundEvents || [];
+    const positionedEvents = events.filter(ev => ev.col != null && ev.type !== 'safe');
+    if (!positionedEvents.length) return;
 
-    if (!nightPositions.length && !dayPositions.length) return;
+    // Deduplicate: in online mode each server action re-sends the same state
+    // until the next turn, so we must not re-fire on every update.
+    const key = `${state.round}|${events.map(e => e.text).join('~')}`;
+    if (key === this._lastPostRoundKey) return;
+    this._lastPostRoundKey = key;
 
-    // Deduplicate: in online mode each server action re-sends the same hazard
-    // arrays until the next turn, so we must not pop the dialog on every update.
-    const hazardKey = `${state.round}|${hazardLog.map(e => (e.text ?? e)).join('~')}`;
-    if (hazardKey === this._lastHazardKey) return;
-    this._lastHazardKey = hazardKey;
-
-    for (const pos of nightPositions) {
-      const dmg = pos.dmg || 1;
-      this.renderer.addFlash(pos.col, pos.row, `-${dmg}`, 'rgba(80,0,160,0.6)', 2200, 1.4, 'rgba(210,140,255,1)');
-    }
-    for (const pos of dayPositions) {
-      const dmg = pos.dmg || 1;
-      this.renderer.addFlash(pos.col, pos.row, `-${dmg}`, 'rgba(255,180,0,0.6)', 2200, 1.4, 'rgba(255,230,80,1)');
+    // Frame camera on all affected units before animating
+    if (!this.autoplay && this.renderer) {
+      const positions = positionedEvents.map(ev => ({ col: ev.col, row: ev.row }));
+      this.renderer.frameHexes(positions, { paddingHexes: 2.5, maxZoom: 2.0, duration: 400 });
+      await new Promise(r => setTimeout(r, 420));
     }
 
-    // Animate flashes while showing the dialog (skip in autoplay)
-    if (!this.autoplay) {
-      const endTime = Date.now() + 2200;
-      const loop = () => {
-        this.onRedraw();
-        if (Date.now() < endTime) requestAnimationFrame(loop);
-      };
-      requestAnimationFrame(loop);
+    const flashEvents = positionedEvents.filter(ev => ev.flash);
+    for (const ev of flashEvents) {
+      const f = ev.flash;
+      this.renderer.addFlash(
+        ev.col, ev.row, f.label,
+        f.color, f.duration ?? 2200, f.fontScale ?? 1.4, f.textColor,
+      );
     }
 
-    // Show a dialog summarising what happened, filtered to this player's own units.
-    if (hazardLog.length) {
-      const myId    = this.myPlayerId;
-      const myLines = hazardLog
-        .filter(e => !myId || !e.ownerId || e.ownerId === myId)
-        .map(e => e.text ?? e);
-      if (myLines.length) {
-        const isNight = nightPositions.length > 0;
-        const header  = isNight
-          ? '🌙 Night falls — unprotected survivors suffer!'
-          : '☀ Dawn breaks — witch minions caught in the open suffer!';
-        this._showResultDialog([header, ...myLines], () => {
-          this._updateSidebar();
-          this.onRedraw();
-        });
-      }
+    // Drive animation loop and wait for flashes to finish (skip in autoplay)
+    if (!this.autoplay && flashEvents.length) {
+      this.onRedraw();
+      await this.renderer.waitForAnimations();
     }
   }
 
@@ -1971,15 +1954,12 @@ export class UIController {
   _showAttritionPopup() {
     const level = this.state.attritionLevel;
     const desc  = level === 1
-      ? 'Exposed units suffer 1 damage each day and night.'
-      : level === 2
-        ? 'Exposed units now suffer 2 damage each day and night.'
-        : `Exposed units suffer ${level} damage each day and night.`;
+      ? 'Exposed survivors suffer 1 damage each night.'
+      : `Exposed survivors now suffer ${level} damage each night.`;
     this._showResultDialog([
       `🌑 The curse deepens — Salem's mystical energy grows stronger!`,
       ``,
       desc,
-      `☀ Day: witch undead in the open take ${level} damage`,
       `🌙 Night: survivors in the open take ${level} damage`,
     ], () => {});
   }
@@ -2837,6 +2817,27 @@ export class UIController {
             html += `<div class="summary-node">⚡ ${nc.label} is now contested</div>`;
           } else {
             html += `<div class="summary-node">◇ ${nc.label} is no longer controlled</div>`;
+          }
+        }
+
+        // Post-round effects (night attrition, etc.)
+        const postEvents = this.state.postRoundEvents || [];
+        const myId = this.myPlayerId;
+        const visiblePostEvents = postEvents.filter(ev =>
+          ev.type !== 'safe' && (!myId || !ev.ownerId || ev.ownerId === myId)
+        );
+        if (visiblePostEvents.length) {
+          html += `<div class="summary-hazard-header">🌙 Night Attrition</div>`;
+          for (const ev of visiblePostEvents) {
+            if (ev.type === 'kill') {
+              html += `<div class="summary-hazard">💀 ${ev.entityName} −${ev.amount} HP (unsheltered at night) — killed</div>`;
+            } else if (ev.type === 'damage') {
+              html += `<div class="summary-hazard">🌙 ${ev.entityName} −${ev.amount} HP (unsheltered at night)</div>`;
+            } else if (ev.type === 'shelter') {
+              const isBuilding = ev.text.startsWith('🏠');
+              const desc = isBuilding ? 'sheltered in building' : 'sheltered by fortifications';
+              html += `<div class="summary-shelter">${isBuilding ? '🏠' : '🏰'} ${ev.entityName} ${desc}</div>`;
+            }
           }
         }
 
