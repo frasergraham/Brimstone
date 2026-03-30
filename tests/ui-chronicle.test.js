@@ -93,3 +93,76 @@ describe('visibleLog — fog-of-war filtering', () => {
     assert.ok(visible.includes(log[2]));    // witch entry included
   });
 });
+
+// ── logEntryModifier — CSS class selection ────────────────────────────────
+
+function logEntryModifier(entry) {
+  if (typeof entry === 'string') {
+    return /^Round \d+/.test(entry) ? 'log-round-separator' : '';
+  }
+  if (entry.color) return '';
+  if (entry.owner === 'hero') return 'log-hero';
+  if (entry.owner === 'witch') return 'log-witch';
+  return '';
+}
+
+function logEntryStyle(entry) {
+  if (typeof entry === 'object' && entry.color) return ` style="color:${entry.color}"`;
+  return '';
+}
+
+describe('logEntryModifier — returns CSS modifier class for log entries', () => {
+  test('plain string returns empty', () => {
+    assert.equal(logEntryModifier('Hero moves north.'), '');
+  });
+
+  test('round header returns log-round-separator', () => {
+    assert.equal(logEntryModifier('Round 3 — ☀ DAY'), 'log-round-separator');
+  });
+
+  test('round 12 also matches', () => {
+    assert.equal(logEntryModifier('Round 12 — 🌙 NIGHT'), 'log-round-separator');
+  });
+
+  test('hero-owned entry (no color) returns log-hero', () => {
+    assert.equal(logEntryModifier({ text: 'Hero explores.', owner: 'hero' }), 'log-hero');
+  });
+
+  test('witch-owned entry (no color) returns log-witch', () => {
+    assert.equal(logEntryModifier({ text: 'Witch summons minion.', owner: 'witch' }), 'log-witch');
+  });
+
+  test('entry with player color returns empty (uses inline style)', () => {
+    assert.equal(logEntryModifier({ text: 'Hero moves.', owner: 'hero', color: '#d4a72c' }), '');
+  });
+
+  test('object with no owner returns empty', () => {
+    assert.equal(logEntryModifier({ text: 'Attrition rises.' }), '');
+  });
+
+  test('object with undefined owner returns empty', () => {
+    assert.equal(logEntryModifier({ text: 'Scoring update.', owner: undefined }), '');
+  });
+
+  test('string not starting with Round returns empty', () => {
+    assert.equal(logEntryModifier('Rounding up survivors...'), '');
+  });
+});
+
+describe('logEntryStyle — inline style for player color', () => {
+  test('plain string returns empty', () => {
+    assert.equal(logEntryStyle('Hero moves.'), '');
+  });
+
+  test('entry with color returns inline style', () => {
+    assert.equal(logEntryStyle({ text: 'Hero moves.', color: '#d4a72c' }), ' style="color:#d4a72c"');
+  });
+
+  test('entry with no color returns empty', () => {
+    assert.equal(logEntryStyle({ text: 'Phase change.', owner: 'hero' }), '');
+  });
+
+  test('multiplayer player 2 color renders correctly', () => {
+    assert.equal(logEntryStyle({ text: 'Move.', color: '#f07020' }), ' style="color:#f07020"');
+  });
+});

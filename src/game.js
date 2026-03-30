@@ -1,6 +1,6 @@
 // Central game state and turn management
 import { generateMap } from './map.js';
-import { createHero, createWitch, createMinion, createSurvivor, resetRoster, EntityType, SurvivorAbility } from './entities.js';
+import { createHero, createWitch, createMinion, createSurvivor, resetRoster, EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
 import { BuildingType, ResourceType, TileType } from './tiles.js';
 import { hexKey, hexDistance, getNeighbors, setMapDimensions } from './hex.js';
 import { sightRange } from './actions.js';
@@ -440,13 +440,13 @@ export class GameState {
         const b = heroTile.building;
         if (b === BuildingType.INN) {
           hero.heal(3);
-          this.addLog(`🏨 ${hero.displayName} rests at the inn. (+3 HP, now ${hero.hp}/${hero.maxHp})`);
+          this.addLog(`🏨 ${hero.displayName} rests at the inn. (+3 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', this.playerColorFor(hero));
         } else if (b === BuildingType.CHURCH) {
           hero.heal(3);
-          this.addLog(`⛪ ${hero.displayName} prays at the chapel. (+3 HP, now ${hero.hp}/${hero.maxHp})`);
+          this.addLog(`⛪ ${hero.displayName} prays at the chapel. (+3 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', this.playerColorFor(hero));
         } else {
           hero.heal(1);
-          this.addLog(`🏠 ${hero.displayName} rests in shelter. (+1 HP, now ${hero.hp}/${hero.maxHp})`);
+          this.addLog(`🏠 ${hero.displayName} rests in shelter. (+1 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', this.playerColorFor(hero));
         }
       }
       if (hero.hp < hero.maxHp) {
@@ -455,7 +455,7 @@ export class GameState {
         );
         if (onNode) {
           hero.heal(1);
-          this.addLog(`✨ ${hero.displayName} draws power from the node. (+1 HP, now ${hero.hp}/${hero.maxHp})`);
+          this.addLog(`✨ ${hero.displayName} draws power from the node. (+1 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', this.playerColorFor(hero));
         }
       }
     }
@@ -482,10 +482,10 @@ export class GameState {
               const hex = freeHex();
               if (hex) {
                 this.entities.push(createMinion(hex.col, hex.row, witch.ownerId));
-                this.addLog(`🌑 ${witch.displayName} channels the node — a minion rises from the dark!`);
+                this.addLog(`🌑 ${witch.displayName} channels the node — a minion rises from the dark!`, 'witch', this.playerColorFor(witch));
               }
             } else {
-              this.addLog(`🌑 The node stirs… but yields nothing this night.`);
+              this.addLog(`🌑 The node stirs… but yields nothing this night.`, 'witch');
             }
           }
         }
@@ -499,10 +499,10 @@ export class GameState {
                 if (Math.random() < 0.5) s.items['horse'] = 1;
                 this.entities.push(s);
                 const horseNote = s.items['horse'] ? ' (arrives on horseback!)' : '';
-                this.addLog(`✨ The node calls to the living — a survivor emerges!${horseNote}`);
+                this.addLog(`✨ The node calls to the living — a survivor emerges!${horseNote}`, 'hero', this.playerColorFor(hero));
               }
             } else {
-              this.addLog(`✨ The node pulses faintly… no one answers the call tonight.`);
+              this.addLog(`✨ The node pulses faintly… no one answers the call tonight.`, 'hero');
             }
           }
         }
@@ -565,13 +565,13 @@ export class GameState {
         const b = heroTile.building;
         if (b === BuildingType.INN) {
           this.hero.heal(3);
-          this.addLog(`🏨 The hero rests at the inn. (+3 HP, now ${this.hero.hp}/${this.hero.maxHp})`);
+          this.addLog(`🏨 The hero rests at the inn. (+3 HP, now ${this.hero.hp}/${this.hero.maxHp})`, 'hero', this.playerColorFor(this.hero));
         } else if (b === BuildingType.CHURCH) {
           this.hero.heal(3);
-          this.addLog(`⛪ The hero prays at the chapel. (+3 HP, now ${this.hero.hp}/${this.hero.maxHp})`);
+          this.addLog(`⛪ The hero prays at the chapel. (+3 HP, now ${this.hero.hp}/${this.hero.maxHp})`, 'hero', this.playerColorFor(this.hero));
         } else {
           this.hero.heal(1);
-          this.addLog(`🏠 The hero rests in shelter. (+1 HP, now ${this.hero.hp}/${this.hero.maxHp})`);
+          this.addLog(`🏠 The hero rests in shelter. (+1 HP, now ${this.hero.hp}/${this.hero.maxHp})`, 'hero', this.playerColorFor(this.hero));
         }
       }
 
@@ -582,13 +582,13 @@ export class GameState {
         );
         if (onNode) {
           this.hero.heal(1);
-          this.addLog(`✨ The hero draws power from the node. (+1 HP, now ${this.hero.hp}/${this.hero.maxHp})`);
+          this.addLog(`✨ The hero draws power from the node. (+1 HP, now ${this.hero.hp}/${this.hero.maxHp})`, 'hero', this.playerColorFor(this.hero));
         }
       }
 
       this.activePlayer = Player.WITCH;
       this.actionsLeft  = computeActions(Player.WITCH, this.phase, this.entities);
-      this.addLog(`The witch stirs… (${this.actionsLeft} actions)`);
+      this.addLog(`The witch stirs… (${this.actionsLeft} actions)`, 'witch', this.playerColorFor(this.witch));
     } else {
       // Node effects: only during NIGHT
       // • Witch standing on a node raises a free minion each night round.
@@ -610,7 +610,7 @@ export class GameState {
             const hex = freeHex();
             if (hex) {
               this.entities.push(createMinion(hex.col, hex.row));
-              this.addLog(`🌑 The witch channels the node — a minion rises from the dark!`);
+              this.addLog(`🌑 The witch channels the node — a minion rises from the dark!`, 'witch', this.playerColorFor(this.witch));
             }
           }
 
@@ -625,7 +625,7 @@ export class GameState {
               if (Math.random() < 0.5) s.items['horse'] = 1;
               this.entities.push(s);
               const horseNote = s.items['horse'] ? ' (arrives on horseback!)' : '';
-              this.addLog(`✨ The node calls to the living — a survivor emerges to join the hero!${horseNote}`);
+              this.addLog(`✨ The node calls to the living — a survivor emerges to join the hero!${horseNote}`, 'hero', this.playerColorFor(this.hero));
             }
           }
         }
@@ -715,7 +715,7 @@ export class GameState {
         const t = this.tiles.get(hexKey(e.col, e.row));
         if (t && t.fortifyLevel > 0) {
           const line = `🏰 ${e.displayName} is sheltered by the fort! (level ${t.fortifyLevel})`;
-          this.addLog(line);
+          this.addLog(line, 'hero', this.playerColorFor(e));
           this.lastHazardLog.push({ text: line, entityId: e.id, ownerId: e.ownerId ?? null });
           continue;
         }
@@ -724,7 +724,7 @@ export class GameState {
         const line = killed
           ? `💀 ${e.displayName} is consumed by the night!`
           : `🌙 ${e.displayName} suffers in the open! (-${dmg} HP, ${e.hp}/${e.maxHp} remaining)`;
-        this.addLog(line);
+        this.addLog(line, 'hero', this.playerColorFor(e));
         this.lastHazardLog.push({ text: line, entityId: e.id, ownerId: e.ownerId ?? null });
         if (killed) this.entities = this.entities.filter(x => x.id !== e.id);
       }
@@ -749,7 +749,7 @@ export class GameState {
         const t = this.tiles.get(hexKey(e.col, e.row));
         if (t && t.fortifyLevel > 0) {
           const line = `🏰 ${e.displayName} is sheltered by the fort! (level ${t.fortifyLevel})`;
-          this.addLog(line);
+          this.addLog(line, 'witch', this.playerColorFor(e));
           this.lastHazardLog.push({ text: line, entityId: e.id, ownerId: e.ownerId ?? null });
           continue;
         }
@@ -758,13 +758,13 @@ export class GameState {
         const line = killed
           ? `💀 ${e.displayName} is destroyed by the light!`
           : `☀ ${e.displayName} is scorched in the open! (-${dmg} HP, ${e.hp}/${e.maxHp} remaining)`;
-        this.addLog(line);
+        this.addLog(line, 'witch', this.playerColorFor(e));
         this.lastHazardLog.push({ text: line, entityId: e.id, ownerId: e.ownerId ?? null });
         if (killed) this.entities = this.entities.filter(x => x.id !== e.id);
       }
     }
     if (sunburned.length === 0 || dmg === 0) {
-      this.addLog(`☀ Daylight. Witch units are sheltered or out of harm's way.`);
+      this.addLog(`☀ Daylight. Witch units are sheltered or out of harm's way.`, 'witch');
     }
   }
 
@@ -785,14 +785,14 @@ export class GameState {
     if (this.witch !== null && this.factionEliminated('witch')) {
       this.winner    = 'hero';
       this.winReason = WIN_REASON.WITCH_SLAIN;
-      this.addLog('☀ The witch has been defeated! Salem is saved!');
+      this.addLog('☀ The witch has been defeated! Salem is saved!', 'hero');
       return;
     }
     // All hero leaders eliminated → witches win
     if (this.factionEliminated('hero')) {
       this.winner    = 'witch';
       this.winReason = WIN_REASON.HERO_SLAIN;
-      this.addLog('🌙 The heroes have fallen. Darkness descends on Salem forever…');
+      this.addLog('🌙 The heroes have fallen. Darkness descends on Salem forever…', 'witch');
     }
   }
 
@@ -841,7 +841,7 @@ export class GameState {
       this.winReason = isDawn ? WIN_REASON.NODES_WITCH : WIN_REASON.NODES_WITCH_DUSK;
       this.addLog(isDawn
         ? '🌙 As dawn breaks, the witch holds all Power Nodes! Salem is lost…'
-        : '🌙 As dusk falls, the witch holds all Power Nodes! The ritual advances!');
+        : '🌙 As dusk falls, the witch holds all Power Nodes! The ritual advances!', 'witch');
       return;
     }
     if (heroCount === nodeCount) {
@@ -849,26 +849,26 @@ export class GameState {
       this.winReason = isDawn ? WIN_REASON.NODES_HERO : WIN_REASON.NODES_HERO_DUSK;
       this.addLog(isDawn
         ? '☀ At dawn, the hero holds all Power Nodes! The witch\'s ritual is broken!'
-        : '☀ As dusk falls, the hero holds all Power Nodes! The ritual is disrupted!');
+        : '☀ As dusk falls, the hero holds all Power Nodes! The ritual is disrupted!', 'hero');
       return;
     }
 
     // Scoring: whoever controls more nodes scores 1 point (ties score nothing)
     if (witchCount > heroCount) {
       this.nodeScore.witch++;
-      this.addLog(`🌙 At ${phaseLabel}: witch leads ${witchCount}–${heroCount}. Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);
+      this.addLog(`🌙 At ${phaseLabel}: witch leads ${witchCount}–${heroCount}. Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`, 'witch');
       if (this.nodeScore.witch >= 4) {
         this.winner    = 'witch';
         this.winReason = WIN_REASON.SCORE_WITCH;
-        this.addLog('🌙 The witch has claimed three ritual moments — Salem falls to darkness!');
+        this.addLog('🌙 The witch has claimed three ritual moments — Salem falls to darkness!', 'witch');
       }
     } else if (heroCount > witchCount) {
       this.nodeScore.hero++;
-      this.addLog(`☀ At ${phaseLabel}: hero leads ${heroCount}–${witchCount}. Score — Hero ${this.nodeScore.hero} / Witch ${this.nodeScore.witch}`);
+      this.addLog(`☀ At ${phaseLabel}: hero leads ${heroCount}–${witchCount}. Score — Hero ${this.nodeScore.hero} / Witch ${this.nodeScore.witch}`, 'hero');
       if (this.nodeScore.hero >= 4) {
         this.winner    = 'hero';
         this.winReason = WIN_REASON.SCORE_HERO;
-        this.addLog('☀ The hero has broken the ritual three times — Salem is saved!');
+        this.addLog('☀ The hero has broken the ritual three times — Salem is saved!', 'hero');
       }
     } else {
       this.addLog(`⚖ At ${phaseLabel}: nodes tied (${witchCount}–${heroCount}). Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);
@@ -886,9 +886,9 @@ export class GameState {
         if (ctrl === 'contested')
           this.addLog(`⚡ ${obj.label} is now contested!`);
         else if (ctrl === 'hero')
-          this.addLog(`🔵 The hero claims ${obj.label}.`);
+          this.addLog(`🔵 The hero claims ${obj.label}.`, 'hero');
         else if (ctrl === 'witch')
-          this.addLog(`🔴 The witch seizes ${obj.label}.`);
+          this.addLog(`🔴 The witch seizes ${obj.label}.`, 'witch');
         else if (ctrl === 'neutral')
           this.addLog(`⭕ ${obj.label} is no longer held.`);
         obj.prevCtrl = ctrl;
@@ -929,8 +929,33 @@ export class GameState {
 
   get gameOver() { return this.winner !== null; }
 
-  addLog(msg, owner = null) {
-    this.log.push(owner ? { text: msg, owner } : msg);
+  /**
+   * Look up the player color for an entity — the owning leader's assigned color,
+   * falling back to the faction default from ENTITY_COLOR.
+   */
+  playerColorFor(entity) {
+    if (!entity) return null;
+    if (entity.ownerId) {
+      const leader = this.entities.find(e =>
+        e.ownerId === entity.ownerId &&
+        (e.type === EntityType.HERO || e.type === EntityType.WITCH)
+      );
+      if (leader?.color) return leader.color;
+    }
+    if (entity.owner === 'hero')  return ENTITY_COLOR[EntityType.HERO];
+    if (entity.owner === 'witch') return ENTITY_COLOR[EntityType.WITCH];
+    return null;
+  }
+
+  addLog(msg, owner = null, color = null) {
+    if (owner || color) {
+      const entry = { text: msg };
+      if (owner) entry.owner = owner;
+      if (color) entry.color = color;
+      this.log.push(entry);
+    } else {
+      this.log.push(msg);
+    }
     if (this.log.length > 100) this.log.shift();
   }
 

@@ -1515,6 +1515,26 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 .log-entry:last-child { color: var(--text); }
 
+/* Faction color coding (fallback when no explicit player color on entry) */
+.log-hero  { color: var(--hero); }
+.log-witch { color: var(--witch); }
+
+/* Round separator */
+.log-round-separator {
+  margin-top: 0.5rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid #3a2d58;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.03em;
+}
+
+#chronicle-mini .log-round-separator {
+  margin-top: 0.25rem;
+  padding-top: 0.2rem;
+  border-top: 1px solid rgba(58, 45, 88, 0.6);
+}
+
 /* Scrollbar */
 #event-log::-webkit-scrollbar, #inventory-content::-webkit-scrollbar { width: 4px; }
 #event-log::-webkit-scrollbar-track, #inventory-content::-webkit-scrollbar-track { background: transparent; }

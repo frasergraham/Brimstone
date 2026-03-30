@@ -260,7 +260,11 @@ function drainOneStep(state, queue, budget) {
       budget.remaining += out.budgetBonus ?? 0;  // Food / Rally bonus
       queue.shift();
 
-      for (const msg of out.result.log ?? []) state.addLog(msg, budget.faction);
+      const actingEntity = state.entities.find(e => e.id === action.entityId);
+      const pColor = (typeof state.playerColorFor === 'function')
+        ? state.playerColorFor(actingEntity)
+        : null;
+      for (const msg of out.result.log ?? []) state.addLog(msg, budget.faction, pColor);
 
       subEvents.push({
         type:        ResEventType.ACTION_OK,
@@ -271,7 +275,7 @@ function drainOneStep(state, queue, budget) {
       });
 
       resolvedAction = action;
-      resolvedEntity = state.entities.find(e => e.id === action.entityId && e.alive);
+      resolvedEntity = actingEntity?.alive ? actingEntity : null;
       break; // consumed one slot — done with this step
 
     } else if (out.kind === 'skip') {
@@ -342,7 +346,10 @@ function _checkGuardStrikes(state, action, actor, faction, subEvents) {
     const targetSnap = snapEntity(actor);
     const r = executeGuardStrike(state, guardian, actor);
 
-    for (const msg of r.log ?? []) state.addLog(msg, guardian.owner);
+    const gColor = (typeof state.playerColorFor === 'function')
+      ? state.playerColorFor(guardian)
+      : null;
+    for (const msg of r.log ?? []) state.addLog(msg, guardian.owner, gColor);
 
     subEvents.push({
       type:        ResEventType.GUARD_STRIKE,
@@ -381,6 +388,7 @@ function snapshotEntities(entities) {
     guarding:      e.guarding ?? 0,
     displayName:   e.displayName,
     title:         e.title,
+    color:         e.color ?? null,
   }));
 }
 
