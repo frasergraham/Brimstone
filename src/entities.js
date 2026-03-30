@@ -49,6 +49,14 @@ const SURVIVOR_COLORS = [
   '#68c4e0',  // light blue
   '#4cba5a',  // vivid green
   '#f0e060',  // bright yellow
+  '#a8d86c',  // pastel lime
+  '#48a0c0',  // steel blue
+  '#d0b840',  // dark gold
+  '#60d4a0',  // mint
+  '#88b8f0',  // periwinkle
+  '#c8e048',  // chartreuse
+  '#50c8a0',  // seafoam
+  '#e0c868',  // muted amber
 ];
 
 // Named character pool — one is drawn at random when a survivor is discovered
@@ -148,6 +156,70 @@ export const SURVIVOR_ROSTER = [
     maxHp: 2, attack: 2, defense: 2,
     ability: SurvivorAbility.BRAWLER,
     abilityLabel: 'Farm Strong — +1 ATK (permanent, already applied)',
+  },
+  {
+    name: 'Mercy Hale',
+    title: 'Tanner',
+    bio: "Cures leather like her grandmother before her. Hands tough as the hides she works.",
+    maxHp: 3, attack: 2, defense: 3,
+    ability: SurvivorAbility.STURDY,
+    abilityLabel: 'Thick Skin — +1 DEF (permanent, already applied)',
+  },
+  {
+    name: 'Elijah Pratt',
+    title: 'Chandler',
+    bio: "Makes candles and soap. Knows every cellar and storeroom in town.",
+    maxHp: 2, attack: 2, defense: 2,
+    ability: SurvivorAbility.SCOUT,
+    abilityLabel: "Candle Light — reveals the witch's forces within 3 hexes",
+  },
+  {
+    name: 'Ruth Wardwell',
+    title: 'Goodwife',
+    bio: "Raised seven children through famine and fever. Nothing breaks her resolve.",
+    maxHp: 4, attack: 1, defense: 2,
+    ability: SurvivorAbility.RALLY,
+    abilityLabel: 'Stalwart Spirit — grants the hero 1 bonus action (free)',
+  },
+  {
+    name: 'Nathaniel Corwin',
+    title: 'Constable',
+    bio: "Enforced the law before the law stopped mattering.",
+    maxHp: 3, attack: 3, defense: 2,
+    ability: SurvivorAbility.BRAWLER,
+    abilityLabel: 'Heavy Hand — +1 ATK (permanent, already applied)',
+  },
+  {
+    name: 'Agnes Whittaker',
+    title: 'Weaver',
+    bio: "Her loom sits idle but her hands are still quick with needle and knot.",
+    maxHp: 2, attack: 1, defense: 2,
+    ability: SurvivorAbility.FORTIFY_DOUBLE,
+    abilityLabel: 'Nimble Fingers — fortifies a building to full strength with just Wood',
+  },
+  {
+    name: 'Josiah Dane',
+    title: 'Carpenter',
+    bio: "Built half the roofs in Salem. Knows timber like a brother.",
+    maxHp: 3, attack: 2, defense: 2,
+    ability: SurvivorAbility.FORTIFY_DOUBLE,
+    abilityLabel: 'Master Builder — fortifies a building to full strength with just Wood',
+  },
+  {
+    name: 'Prudence Faulkner',
+    title: "Apothecary's Daughter",
+    bio: "Learned her mother's remedies before the trials took everything.",
+    maxHp: 2, attack: 1, defense: 3,
+    ability: SurvivorAbility.HEAL,
+    abilityLabel: 'Salve and Poultice — heals the hero 1 HP (costs 1 action)',
+  },
+  {
+    name: 'Caleb Osgood',
+    title: 'Fisherman',
+    bio: "Hauled nets in storms that would drown lesser men.",
+    maxHp: 3, attack: 2, defense: 2,
+    ability: SurvivorAbility.INSPIRE,
+    abilityLabel: 'Sea-Hardened — grants hero +1 ATK for the next battle (free)',
   },
 ];
 

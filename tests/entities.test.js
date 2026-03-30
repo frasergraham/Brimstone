@@ -432,8 +432,8 @@ describe('Entity.resolveCombat', () => {
 // ── Survivor roster ───────────────────────────────────────────────────────────
 
 describe('Survivor roster', () => {
-  test('roster has exactly 12 characters', () => {
-    assert.equal(SURVIVOR_ROSTER.length, 12);
+  test('roster has exactly 20 characters', () => {
+    assert.equal(SURVIVOR_ROSTER.length, 20);
   });
 
   test('no two roster entries share the same name', () => {
@@ -444,7 +444,7 @@ describe('Survivor roster', () => {
   test('createSurvivor draws without replacement (no duplicates in one game)', () => {
     resetRoster();
     const names = [];
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 20; i++) {
       const s = createSurvivor(0, 0);
       assert.ok(!names.includes(s.name), `Duplicate survivor drawn: ${s.name}`);
       names.push(s.name);

@@ -320,6 +320,70 @@
       "parameters": {
         "prompt": "A young colonial farmhand, rough spun shirt and suspenders, carries pitchfork, youthful face set with determination, broad shoulders. Circular portrait format, figure fills the circle. Transparent background."
       }
+    },
+    {
+      "id": "survivor_tanner",
+      "name": "Mercy Hale — Tanner",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A sturdy colonial tanner woman, leather-stained apron over wool dress, calloused hands, carries a curved scraping knife, weathered but unbowed expression. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "survivor_chandler",
+      "name": "Elijah Pratt — Chandler",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A thin colonial chandler, wax-spattered waistcoat, carries a bundle of tallow candles, sharp observant eyes, lantern hanging from belt. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "survivor_goodwife",
+      "name": "Ruth Wardwell — Goodwife",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A resolute colonial goodwife, simple homespun dress and bonnet, strong weathered hands, carries an iron ladle like a weapon, fierce maternal determination. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "survivor_constable",
+      "name": "Nathaniel Corwin — Constable",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A stern colonial constable, dark coat with brass buttons, leather baldric, carries a heavy wooden truncheon, square jaw and cold authoritative eyes. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "survivor_weaver",
+      "name": "Agnes Whittaker — Weaver",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A nimble colonial weaver woman, grey shawl over faded blue dress, deft hands holding shuttle and thread, quick intelligent eyes behind wisps of hair. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "survivor_carpenter",
+      "name": "Josiah Dane — Carpenter",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A broad-shouldered colonial carpenter, sawdust in his beard, rolled sleeves revealing scarred forearms, carries a heavy mallet and chisel, steady craftsman's gaze. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "survivor_apothecary",
+      "name": "Prudence Faulkner — Apothecary's Daughter",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A young colonial apothecary's daughter, dark hair under linen cap, carries a mortar and pestle, pouch of dried herbs at hip, thoughtful sorrowful eyes. Circular portrait format, figure fills the circle. Transparent background."
+      }
+    },
+    {
+      "id": "survivor_fisherman",
+      "name": "Caleb Osgood — Fisherman",
+      "category": "unit",
+      "parameters": {
+        "prompt": "A salt-crusted colonial fisherman, oilskin coat and heavy boots, carries a gaff hook, rope-burned hands, wind-scoured face with deep-set determined eyes. Circular portrait format, figure fills the circle. Transparent background."
+      }
     }
   ]
 }
