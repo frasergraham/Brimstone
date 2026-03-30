@@ -3225,9 +3225,9 @@ function _createMpClient() {
     onError(msg) {
       // During auth phase, show error in the lobby
       if (!state || document.getElementById('setup-screen').style.display !== 'none') {
-        _onlineError(msg);
         showStep('multiplayer');
         _initMpStep();
+        _onlineError(msg);  // show after _initMpStep so it doesn't get reset
       } else {
         // In-game error — show as modal dialog
         if (ui) ui._showResultDialog([`⚠ ${msg}`]);
