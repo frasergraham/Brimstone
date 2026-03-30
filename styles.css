@@ -1902,7 +1902,13 @@ canvas { touch-action: pan-x pan-y; }
 
 .round-summary-gameover-btns {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
+}
+.round-summary-gameover-btns .plan-btn {
+  padding: 0.6rem 1rem;
+  font-size: 0.9rem;
+  min-height: 44px;
 }
 
 .summary-speed-btn {
