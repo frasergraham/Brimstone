@@ -43,6 +43,16 @@ const PORT      = process.env.PORT || 3000;
 
 const app = express();
 app.use(express.json());
+
+// Block direct static access to admin HTML files — they're served via auth-gated routes
+app.use((req, res, next) => {
+  if (/^\/admin.*\.html$/i.test(req.path)) {
+    res.status(403).send('Forbidden');
+    return;
+  }
+  next();
+});
+
 app.use(express.static(join(__dirname)));   // serve game files from repo root
 
 // Health check — Railway pings this to confirm the service is up
@@ -278,6 +288,24 @@ function _requireVerifiedEmail(player, res) {
   return true;
 }
 
+function _requireAdmin(req, res) {
+  const player = _requireAuth(req, res);
+  if (!player) return null;
+  if (!player.is_admin) {
+    res.status(403).json({ error: 'Admin access required.' });
+    return null;
+  }
+  return player;
+}
+
+// ── Admin status check (used by client to show/hide admin link) ──────────────
+
+app.get('/api/me/admin', (req, res) => {
+  const player = _requireAuth(req, res);
+  if (!player) return;
+  res.json({ isAdmin: !!player.is_admin });
+});
+
 app.get('/api/campaign-saves', (req, res) => {
   const player = _requireAuth(req, res);
   if (!player) return;
@@ -311,14 +339,25 @@ app.delete('/api/campaign-saves/:slot', (req, res) => {
 
 // ── Admin pages ───────────────────────────────────────────────────────────────
 
-app.get('/admin',       (_req, res) => res.sendFile(join(__dirname, 'admin.html')));
-app.get('/admin/stats', (_req, res) => res.sendFile(join(__dirname, 'admin-stats.html')));
+app.get('/admin', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  res.sendFile(join(__dirname, 'admin.html'));
+});
+app.get('/admin/stats', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  res.sendFile(join(__dirname, 'admin-stats.html'));
+});
+app.get('/admin/campaign-stats', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  res.sendFile(join(__dirname, 'admin-campaign-stats.html'));
+});
 app.get('/spectate', (_req, res) => res.sendFile(join(__dirname, 'index.html')));
 app.get('/replay',   (_req, res) => res.sendFile(join(__dirname, 'index.html')));
 
 // ── Admin REST API ────────────────────────────────────────────────────────────
 
-app.get('/admin/api/stats', (_req, res) => {
+app.get('/admin/api/stats', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
   res.json({
     version:      BUILD_VERSION,
     uptime:       Math.floor(process.uptime()),
@@ -328,11 +367,13 @@ app.get('/admin/api/stats', (_req, res) => {
   });
 });
 
-app.get('/admin/api/rooms', (_req, res) => {
+app.get('/admin/api/rooms', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
   res.json(getRooms());
 });
 
 app.get('/admin/api/rooms/:id', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
   const room = getRoom(req.params.id);
   if (!room) { res.status(404).json({ error: 'Room not found.' }); return; }
   const summary = getRooms().find(r => r.id === req.params.id);
@@ -340,30 +381,36 @@ app.get('/admin/api/rooms/:id', (req, res) => {
 });
 
 app.get('/admin/api/rooms/:id/chronicle', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
   const chronicle = getRoomChronicle(req.params.id);
   if (chronicle === null) { res.status(404).json({ error: 'Room not found.' }); return; }
   res.json(chronicle);
 });
 
-app.get('/admin/api/queue', (_req, res) => {
+app.get('/admin/api/queue', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
   res.json(getQueue());
 });
 
-app.get('/admin/api/players', (_req, res) => {
+app.get('/admin/api/players', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
   res.json(getAllPlayers());
 });
 
-app.get('/admin/api/saves', (_req, res) => {
+app.get('/admin/api/saves', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
   res.json(getAllSaves());
 });
 
 app.get('/admin/api/saves/:roomId', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
   const save = getSaveWithState(req.params.roomId);
   if (!save) { res.status(404).json({ error: 'Save not found.' }); return; }
   res.json(save);
 });
 
 app.get('/admin/api/game-stats', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
   res.json(getGameStats({
     mode:         req.query.mode         || undefined,
     map_size:     req.query.map_size     || undefined,
@@ -373,11 +420,13 @@ app.get('/admin/api/game-stats', (req, res) => {
   }));
 });
 
-app.get('/admin/api/game-stats/summary', (_req, res) => {
+app.get('/admin/api/game-stats/summary', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
   res.json(getAggregateStats());
 });
 
 app.get('/admin/api/campaign-game-stats', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
   res.json(getCampaignGameStats({
     campaign_id: req.query.campaign_id || undefined,
     mission_id:  req.query.mission_id  || undefined,
@@ -386,11 +435,13 @@ app.get('/admin/api/campaign-game-stats', (req, res) => {
   }));
 });
 
-app.get('/admin/api/campaign-game-stats/summary', (_req, res) => {
+app.get('/admin/api/campaign-game-stats/summary', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
   res.json(getCampaignAggregateStats());
 });
 
 app.post('/admin/api/saves/:roomId/activate', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
   const roomId = req.params.roomId;
   const result = adminResumeGame(roomId);
   if (!result.ok) {
@@ -400,17 +451,20 @@ app.post('/admin/api/saves/:roomId/activate', (req, res) => {
   res.json({ ok: true, roomId: result.roomId });
 });
 
-app.get('/admin/api/completed-games', (_req, res) => {
+app.get('/admin/api/completed-games', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
   res.json(getAllCompletedGames());
 });
 
 app.get('/admin/api/completed-games/:gameId', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
   const game = getCompletedGame(req.params.gameId);
   if (!game) { res.status(404).json({ error: 'Not found.' }); return; }
   res.json(game);
 });
 
 app.get('/admin/api/completed-games/:gameId/rounds', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
   res.json(getCompletedGameRounds(req.params.gameId));
 });
 
@@ -433,17 +487,20 @@ app.post('/api/sp/completed-games', (req, res) => {
   }
 });
 
-app.get('/admin/api/sp/completed-games', (_req, res) => {
+app.get('/admin/api/sp/completed-games', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
   res.json(getAllSpCompletedGames());
 });
 
 app.get('/admin/api/sp/completed-games/:gameId', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
   const game = getSpCompletedGame(req.params.gameId);
   if (!game) { res.status(404).json({ error: 'Not found.' }); return; }
   res.json(game);
 });
 
 app.get('/admin/api/sp/completed-games/:gameId/rounds', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
   res.json(getSpCompletedGameRounds(req.params.gameId));
 });
 
@@ -630,6 +687,7 @@ function route(ws, cs, msg) {
 
     // ── Admin / spectator ─────────────────────────────────────────────────
     case 'adminSpectateRoom': {
+      if (!cs.player?.is_admin) { send(ws, { type: 'error', message: 'Admin access required.' }); return; }
       if (!msg.roomId) { send(ws, { type: 'error', message: 'roomId required.' }); return; }
       const joined = subscribeSpectator(msg.roomId, ws);
       if (!joined) {
@@ -641,6 +699,7 @@ function route(ws, cs, msg) {
     }
 
     case 'adminUnspectateRoom': {
+      if (!cs.player?.is_admin) { send(ws, { type: 'error', message: 'Admin access required.' }); return; }
       const rid = msg.roomId;
       if (rid) {
         unsubscribeSpectator(ws, rid);
@@ -663,6 +722,7 @@ function _publicPlayer(p) {
     wins:     p.wins,
     losses:   p.losses,
     draws:    p.draws,
+    is_admin: !!p.is_admin,
   };
 }
 

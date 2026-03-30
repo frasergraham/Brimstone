@@ -1171,6 +1171,18 @@ document.getElementById('btn-changelog-back').addEventListener('click', () => sh
 // Show game version on main menu
 document.getElementById('menu-version').textContent = `v${VERSION}`;
 
+// Show admin link only for admin users
+{
+  const _s = loadSession();
+  if (_s?.is_admin) {
+    const _adminLink = document.getElementById('admin-link');
+    if (_adminLink) {
+      _adminLink.style.display = '';
+      _adminLink.href = `/admin?token=${encodeURIComponent(_s.token)}`;
+    }
+  }
+}
+
 // Version badge opens revision history
 document.getElementById('version-badge').addEventListener('click', (e) => {
   e.preventDefault();

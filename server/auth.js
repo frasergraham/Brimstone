@@ -3,10 +3,14 @@
 import { randomUUID } from 'crypto';
 import db from './db.js';
 
+// Admin email allow list — players with a verified email on this list get is_admin = 1
+const ADMIN_EMAILS = ['frasergraham@me.com'];
+
 const _getByToken = db.prepare('SELECT * FROM players WHERE token = ?');
 const _getById    = db.prepare('SELECT * FROM players WHERE id = ?');
 const _getByName  = db.prepare('SELECT id FROM players WHERE username = ? COLLATE NOCASE');
 const _insert     = db.prepare('INSERT INTO players (id, username, token) VALUES (?, ?, ?)');
+const _setAdmin   = db.prepare('UPDATE players SET is_admin = ? WHERE id = ?');
 
 // Identity linking
 const _insertIdentity = db.prepare(
@@ -84,6 +88,7 @@ export function linkEmail(playerId, email) {
   if (!player) return { ok: false, error: 'Player not found.' };
 
   _insertIdentity.run(playerId, 'email', normalised);
+  grantAdminIfEligible(playerId);
   return { ok: true };
 }
 
@@ -113,6 +118,27 @@ export function loginByEmail(playerId) {
   const player = _getById.get(playerId);
   if (!player) return { ok: false, error: 'Player not found.' };
   return { ok: true, player };
+}
+
+// ── Admin helpers ────────────────────────────────────────────────────────────
+
+/** Check if an email is on the admin allow list. */
+export function isAdminEmail(email) {
+  return ADMIN_EMAILS.includes(email.toLowerCase().trim());
+}
+
+/**
+ * Grant admin if any of the player's linked emails are on the admin allow list.
+ * Called after email linking to auto-promote eligible players.
+ */
+export function grantAdminIfEligible(playerId) {
+  const identities = _getIdentities.all(playerId);
+  const hasAdminEmail = identities.some(
+    i => i.provider === 'email' && ADMIN_EMAILS.includes(i.provider_id)
+  );
+  if (hasAdminEmail) {
+    _setAdmin.run(1, playerId);
+  }
 }
 
 /**

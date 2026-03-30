@@ -1,0 +1,201 @@
+// Tests for admin access control: is_admin column, admin email allow list,
+// grantAdminIfEligible, seed user, and linkEmail auto-grant.
+
+import { describe, test, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import db from '../server/db.js';
+import {
+  registerOrLogin, getPlayerByToken, linkEmail,
+  isAdminEmail, grantAdminIfEligible, getPlayerIdentities,
+} from '../server/auth.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const root = resolve(__dirname, '..');
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function cleanUp() {
+  db.prepare('DELETE FROM player_identities WHERE player_id IN (SELECT id FROM players WHERE username LIKE ?)').run('test-acl-%');
+  db.prepare('DELETE FROM players WHERE username LIKE ?').run('test-acl-%');
+}
+
+function createTestPlayer(suffix) {
+  const result = registerOrLogin({ username: `test-acl-${suffix}` });
+  assert.ok(result.ok, `Failed to create test player: ${result.error}`);
+  return result.player;
+}
+
+// ── is_admin defaults to 0 ───────────────────────────────────────────────────
+
+describe('is_admin column', () => {
+  beforeEach(cleanUp);
+
+  test('defaults to 0 for new players', () => {
+    const player = createTestPlayer('default1');
+    assert.equal(player.is_admin, 0);
+  });
+
+  test('is included in player row from getPlayerByToken', () => {
+    const player = createTestPlayer('token1');
+    const fetched = getPlayerByToken(player.token);
+    assert.ok('is_admin' in fetched, 'is_admin field should be present');
+    assert.equal(fetched.is_admin, 0);
+  });
+});
+
+// ── Seed user: TwistedWeasel ─────────────────────────────────────────────────
+
+describe('TwistedWeasel seed admin user', () => {
+  test('exists in the database', () => {
+    const player = db.prepare('SELECT * FROM players WHERE username = ?').get('TwistedWeasel');
+    assert.ok(player, 'TwistedWeasel should exist in players table');
+    assert.equal(player.id, 'seed-admin-twisted-weasel');
+    assert.equal(player.is_admin, 1);
+  });
+
+  test('has verified email identity linked', () => {
+    const identity = db.prepare(
+      'SELECT * FROM player_identities WHERE player_id = ? AND provider = ?'
+    ).get('seed-admin-twisted-weasel', 'email');
+    assert.ok(identity, 'TwistedWeasel should have an email identity');
+    assert.equal(identity.provider_id, 'frasergraham@me.com');
+  });
+});
+
+// ── isAdminEmail ─────────────────────────────────────────────────────────────
+
+describe('isAdminEmail', () => {
+  test('returns true for admin email', () => {
+    assert.equal(isAdminEmail('frasergraham@me.com'), true);
+  });
+
+  test('returns true for admin email with different case', () => {
+    assert.equal(isAdminEmail('FraserGraham@Me.Com'), true);
+  });
+
+  test('returns false for non-admin email', () => {
+    assert.equal(isAdminEmail('nobody@example.com'), false);
+  });
+});
+
+// ── grantAdminIfEligible ─────────────────────────────────────────────────────
+
+describe('grantAdminIfEligible', () => {
+  beforeEach(cleanUp);
+
+  test('sets is_admin = 1 for player with admin email linked', () => {
+    const player = createTestPlayer('grant1');
+    // Temporarily unlink the seed user's email so we can use it for this test
+    db.prepare('DELETE FROM player_identities WHERE provider_id = ?').run('frasergraham@me.com');
+    db.prepare(
+      'INSERT INTO player_identities (player_id, provider, provider_id) VALUES (?, ?, ?)'
+    ).run(player.id, 'email', 'frasergraham@me.com');
+
+    grantAdminIfEligible(player.id);
+
+    const updated = getPlayerByToken(player.token);
+    assert.equal(updated.is_admin, 1);
+
+    // Restore seed user's email
+    db.prepare('DELETE FROM player_identities WHERE player_id = ?').run(player.id);
+    db.prepare(
+      'INSERT OR IGNORE INTO player_identities (player_id, provider, provider_id) VALUES (?, ?, ?)'
+    ).run('seed-admin-twisted-weasel', 'email', 'frasergraham@me.com');
+  });
+
+  test('does NOT set is_admin for player with non-admin email', () => {
+    const player = createTestPlayer('grant2');
+    db.prepare(
+      'INSERT INTO player_identities (player_id, provider, provider_id) VALUES (?, ?, ?)'
+    ).run(player.id, 'email', 'nobody@example.com');
+
+    grantAdminIfEligible(player.id);
+
+    const updated = getPlayerByToken(player.token);
+    assert.equal(updated.is_admin, 0);
+  });
+
+  test('does nothing for player with no identities', () => {
+    const player = createTestPlayer('grant3');
+    grantAdminIfEligible(player.id);
+    const updated = getPlayerByToken(player.token);
+    assert.equal(updated.is_admin, 0);
+  });
+});
+
+// ── linkEmail auto-grants admin ──────────────────────────────────────────────
+
+describe('linkEmail auto-grants admin', () => {
+  beforeEach(cleanUp);
+
+  test('grants admin when linking an admin email', () => {
+    const player = createTestPlayer('link1');
+    assert.equal(player.is_admin, 0);
+
+    // Temporarily unlink seed user's email so we can test linking it
+    db.prepare('DELETE FROM player_identities WHERE provider_id = ?').run('frasergraham@me.com');
+
+    const result = linkEmail(player.id, 'frasergraham@me.com');
+    assert.ok(result.ok);
+
+    const updated = getPlayerByToken(player.token);
+    assert.equal(updated.is_admin, 1);
+
+    // Restore seed user's email
+    db.prepare('DELETE FROM player_identities WHERE player_id = ?').run(player.id);
+    db.prepare(
+      'INSERT OR IGNORE INTO player_identities (player_id, provider, provider_id) VALUES (?, ?, ?)'
+    ).run('seed-admin-twisted-weasel', 'email', 'frasergraham@me.com');
+  });
+
+  test('does NOT grant admin when linking a non-admin email', () => {
+    const player = createTestPlayer('link2');
+    const result = linkEmail(player.id, 'someone@example.com');
+    assert.ok(result.ok);
+
+    const updated = getPlayerByToken(player.token);
+    assert.equal(updated.is_admin, 0);
+  });
+});
+
+// ── Admin link visibility ────────────────────────────────────────────────────
+
+describe('admin link in index.html', () => {
+  const html = readFileSync(resolve(root, 'index.html'), 'utf8');
+
+  test('admin link is hidden by default', () => {
+    assert.ok(
+      html.includes('id="admin-link"'),
+      'Admin link should have id="admin-link"'
+    );
+    assert.ok(
+      html.includes('style="display:none"'),
+      'Admin link should be hidden by default'
+    );
+  });
+});
+
+// ── Admin HTML pages have auth gates ─────────────────────────────────────────
+
+describe('admin HTML pages auth gate', () => {
+  for (const file of ['admin.html', 'admin-stats.html', 'admin-campaign-stats.html']) {
+    test(`${file} checks /api/me/admin before loading`, () => {
+      const html = readFileSync(resolve(root, file), 'utf8');
+      assert.ok(
+        html.includes('/api/me/admin'),
+        `${file} should contain an auth gate calling /api/me/admin`
+      );
+    });
+  }
+
+  test('admin.html has a Back to main menu link', () => {
+    const html = readFileSync(resolve(root, 'admin.html'), 'utf8');
+    assert.ok(
+      html.includes('Back to main menu'),
+      'admin.html should have a "Back to main menu" link'
+    );
+  });
+});

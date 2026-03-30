@@ -9,6 +9,7 @@ export const SCHEMA_SQL = `
     wins       INTEGER NOT NULL DEFAULT 0,
     losses     INTEGER NOT NULL DEFAULT 0,
     draws      INTEGER NOT NULL DEFAULT 0,
+    is_admin   INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
