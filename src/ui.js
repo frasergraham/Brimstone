@@ -2558,7 +2558,7 @@ export class UIController {
     const el = this._el('chronicle-sidebar-log');
     if (!el) return;
     const visible = this._visibleLog();
-    el.innerHTML = visible.map(m => `<div class="log-entry ${this._logEntryModifier(m)}">${this._logText(m)}</div>`).join('');
+    el.innerHTML = visible.map(m => `<div class="log-entry ${this._logEntryModifier(m)}"${this._logEntryStyle(m)}>${this._logText(m)}</div>`).join('');
     el.scrollTop = el.scrollHeight;
   }
 
@@ -2591,15 +2591,21 @@ export class UIController {
     return typeof entry === 'string' ? entry : entry.text;
   }
 
-  /** Return CSS modifier class(es) for a log entry (entity/faction color + round separator). */
+  /** Return CSS modifier class(es) for a log entry (round separator + faction fallback). */
   _logEntryModifier(entry) {
     if (typeof entry === 'string') {
       return /^Round \d+/.test(entry) ? 'log-round-separator' : '';
     }
-    // Entity-type-specific color takes priority over faction color
-    if (entry.entityType) return `log-entity-${entry.entityType}`;
+    // If entry carries an explicit color, we use inline style — no class needed
+    if (entry.color) return '';
     if (entry.owner === 'hero') return 'log-hero';
     if (entry.owner === 'witch') return 'log-witch';
+    return '';
+  }
+
+  /** Return an inline style attribute for entries with an explicit player color. */
+  _logEntryStyle(entry) {
+    if (typeof entry === 'object' && entry.color) return ` style="color:${entry.color}"`;
     return '';
   }
 
@@ -2620,7 +2626,7 @@ export class UIController {
     if (!el) return;
     const visible = this._visibleLog();
     el.innerHTML = visible.map(m =>
-      `<div class="log-entry ${this._logEntryModifier(m)}">${this._logText(m)}</div>`
+      `<div class="log-entry ${this._logEntryModifier(m)}"${this._logEntryStyle(m)}>${this._logText(m)}</div>`
     ).join('');
     el.scrollTop = el.scrollHeight;
 
@@ -2636,7 +2642,7 @@ export class UIController {
     if (mode === 'mini') {
       const visible = this._visibleLog();
       const last5   = visible.slice(-5);
-      el.innerHTML  = last5.map(m => `<div class="mini-log-entry ${this._logEntryModifier(m)}">${this._logText(m)}</div>`).join('');
+      el.innerHTML  = last5.map(m => `<div class="mini-log-entry ${this._logEntryModifier(m)}"${this._logEntryStyle(m)}>${this._logText(m)}</div>`).join('');
     } else {
       el.innerHTML = '';
     }

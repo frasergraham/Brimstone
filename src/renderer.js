@@ -1477,9 +1477,16 @@ export class Renderer {
         ctx.restore();
       }
 
-      // Circle border: coloured glow ring + crisp inner border + specular arc
-      const entityCol  = entity.color ?? ENTITY_COLOR[entity.type];
-      const borderRgba = _parseColor(entityCol);
+      // Circle border: use player color so units clearly show ownership.
+      // Falls back to faction color (same logic as hex outlines).
+      const playerBorderCol = entity.ownerId
+        ? this._playerColorMap.get(entity.ownerId)
+        : null;
+      const factionBorderCol = entity.owner === 'hero'
+        ? ENTITY_COLOR[EntityType.HERO]
+        : ENTITY_COLOR[EntityType.WITCH];
+      const borderCol  = playerBorderCol ?? factionBorderCol;
+      const borderRgba = _parseColor(borderCol);
       if (borderRgba) {
         const [br, bg, bb] = borderRgba;
         ctx.beginPath();
@@ -1490,7 +1497,7 @@ export class Renderer {
       }
       ctx.beginPath();
       ctx.arc(ex, ey, r, 0, Math.PI * 2);
-      ctx.strokeStyle = portrait ? _hexToRgba(entityCol, 0.9) : 'rgba(255,255,255,0.7)';
+      ctx.strokeStyle = portrait ? _hexToRgba(borderCol, 0.9) : 'rgba(255,255,255,0.7)';
       ctx.lineWidth   = portrait ? 2 : 1.5;
       ctx.stroke();
       // Specular highlight arc — top-left quadrant

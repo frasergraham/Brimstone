@@ -261,8 +261,10 @@ function drainOneStep(state, queue, budget) {
       queue.shift();
 
       const actingEntity = state.entities.find(e => e.id === action.entityId);
-      const eType = actingEntity?.type ?? null;
-      for (const msg of out.result.log ?? []) state.addLog(msg, budget.faction, eType);
+      const pColor = (typeof state.playerColorFor === 'function')
+        ? state.playerColorFor(actingEntity)
+        : null;
+      for (const msg of out.result.log ?? []) state.addLog(msg, budget.faction, pColor);
 
       subEvents.push({
         type:        ResEventType.ACTION_OK,
@@ -344,7 +346,10 @@ function _checkGuardStrikes(state, action, actor, faction, subEvents) {
     const targetSnap = snapEntity(actor);
     const r = executeGuardStrike(state, guardian, actor);
 
-    for (const msg of r.log ?? []) state.addLog(msg, guardian.owner, guardian.type);
+    const gColor = (typeof state.playerColorFor === 'function')
+      ? state.playerColorFor(guardian)
+      : null;
+    for (const msg of r.log ?? []) state.addLog(msg, guardian.owner, gColor);
 
     subEvents.push({
       type:        ResEventType.GUARD_STRIKE,

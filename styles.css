@@ -16,11 +16,6 @@
   --night:        #7b4fbb;
   --green:        #4caf7d;
   --red:          #c0392b;
-  --survivor:     #4caf7d;
-  --zombie:       #7c9a57;
-  --minion:       #c0392b;
-  --wood-golem:   #8B5E3C;
-  --iron-golem:   #607D8B;
   --font-serif:   "Georgia", "Times New Roman", serif;
   --font-mono:    "Courier New", monospace;
 }
@@ -1520,18 +1515,9 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 .log-entry:last-child { color: var(--text); }
 
-/* Faction color coding */
+/* Faction color coding (fallback when no explicit player color on entry) */
 .log-hero  { color: var(--hero); }
 .log-witch { color: var(--witch); }
-
-/* Entity-type color coding (matches renderer entity base colors) */
-.log-entity-hero       { color: var(--hero); }
-.log-entity-witch      { color: var(--witch); }
-.log-entity-survivor   { color: var(--survivor); }
-.log-entity-zombie     { color: var(--zombie); }
-.log-entity-minion     { color: var(--minion); }
-.log-entity-wood_golem { color: var(--wood-golem); }
-.log-entity-iron_golem { color: var(--iron-golem); }
 
 /* Round separator */
 .log-round-separator {

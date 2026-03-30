@@ -1,6 +1,6 @@
 // Central game state and turn management
 import { generateMap } from './map.js';
-import { createHero, createWitch, createMinion, createSurvivor, resetRoster, EntityType, SurvivorAbility } from './entities.js';
+import { createHero, createWitch, createMinion, createSurvivor, resetRoster, EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
 import { BuildingType, ResourceType, TileType } from './tiles.js';
 import { hexKey, hexDistance, getNeighbors, setMapDimensions } from './hex.js';
 import { sightRange } from './actions.js';
@@ -433,13 +433,13 @@ export class GameState {
         const b = heroTile.building;
         if (b === BuildingType.INN) {
           hero.heal(3);
-          this.addLog(`🏨 ${hero.displayName} rests at the inn. (+3 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', EntityType.HERO);
+          this.addLog(`🏨 ${hero.displayName} rests at the inn. (+3 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', this.playerColorFor(hero));
         } else if (b === BuildingType.CHURCH) {
           hero.heal(3);
-          this.addLog(`⛪ ${hero.displayName} prays at the chapel. (+3 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', EntityType.HERO);
+          this.addLog(`⛪ ${hero.displayName} prays at the chapel. (+3 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', this.playerColorFor(hero));
         } else {
           hero.heal(1);
-          this.addLog(`🏠 ${hero.displayName} rests in shelter. (+1 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', EntityType.HERO);
+          this.addLog(`🏠 ${hero.displayName} rests in shelter. (+1 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', this.playerColorFor(hero));
         }
       }
       if (hero.hp < hero.maxHp) {
@@ -448,7 +448,7 @@ export class GameState {
         );
         if (onNode) {
           hero.heal(1);
-          this.addLog(`✨ ${hero.displayName} draws power from the node. (+1 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', EntityType.HERO);
+          this.addLog(`✨ ${hero.displayName} draws power from the node. (+1 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', this.playerColorFor(hero));
         }
       }
     }
@@ -475,7 +475,7 @@ export class GameState {
               const hex = freeHex();
               if (hex) {
                 this.entities.push(createMinion(hex.col, hex.row, witch.ownerId));
-                this.addLog(`🌑 ${witch.displayName} channels the node — a minion rises from the dark!`, 'witch', EntityType.WITCH);
+                this.addLog(`🌑 ${witch.displayName} channels the node — a minion rises from the dark!`, 'witch', this.playerColorFor(witch));
               }
             } else {
               this.addLog(`🌑 The node stirs… but yields nothing this night.`, 'witch');
@@ -492,7 +492,7 @@ export class GameState {
                 if (Math.random() < 0.5) s.items['horse'] = 1;
                 this.entities.push(s);
                 const horseNote = s.items['horse'] ? ' (arrives on horseback!)' : '';
-                this.addLog(`✨ The node calls to the living — a survivor emerges!${horseNote}`, 'hero', EntityType.HERO);
+                this.addLog(`✨ The node calls to the living — a survivor emerges!${horseNote}`, 'hero', this.playerColorFor(hero));
               }
             } else {
               this.addLog(`✨ The node pulses faintly… no one answers the call tonight.`, 'hero');
@@ -558,13 +558,13 @@ export class GameState {
         const b = heroTile.building;
         if (b === BuildingType.INN) {
           this.hero.heal(3);
-          this.addLog(`🏨 The hero rests at the inn. (+3 HP, now ${this.hero.hp}/${this.hero.maxHp})`, 'hero', EntityType.HERO);
+          this.addLog(`🏨 The hero rests at the inn. (+3 HP, now ${this.hero.hp}/${this.hero.maxHp})`, 'hero', this.playerColorFor(this.hero));
         } else if (b === BuildingType.CHURCH) {
           this.hero.heal(3);
-          this.addLog(`⛪ The hero prays at the chapel. (+3 HP, now ${this.hero.hp}/${this.hero.maxHp})`, 'hero', EntityType.HERO);
+          this.addLog(`⛪ The hero prays at the chapel. (+3 HP, now ${this.hero.hp}/${this.hero.maxHp})`, 'hero', this.playerColorFor(this.hero));
         } else {
           this.hero.heal(1);
-          this.addLog(`🏠 The hero rests in shelter. (+1 HP, now ${this.hero.hp}/${this.hero.maxHp})`, 'hero', EntityType.HERO);
+          this.addLog(`🏠 The hero rests in shelter. (+1 HP, now ${this.hero.hp}/${this.hero.maxHp})`, 'hero', this.playerColorFor(this.hero));
         }
       }
 
@@ -575,13 +575,13 @@ export class GameState {
         );
         if (onNode) {
           this.hero.heal(1);
-          this.addLog(`✨ The hero draws power from the node. (+1 HP, now ${this.hero.hp}/${this.hero.maxHp})`, 'hero', EntityType.HERO);
+          this.addLog(`✨ The hero draws power from the node. (+1 HP, now ${this.hero.hp}/${this.hero.maxHp})`, 'hero', this.playerColorFor(this.hero));
         }
       }
 
       this.activePlayer = Player.WITCH;
       this.actionsLeft  = computeActions(Player.WITCH, this.phase, this.entities);
-      this.addLog(`The witch stirs… (${this.actionsLeft} actions)`, 'witch', EntityType.WITCH);
+      this.addLog(`The witch stirs… (${this.actionsLeft} actions)`, 'witch', this.playerColorFor(this.witch));
     } else {
       // Node effects: only during NIGHT
       // • Witch standing on a node raises a free minion each night round.
@@ -603,7 +603,7 @@ export class GameState {
             const hex = freeHex();
             if (hex) {
               this.entities.push(createMinion(hex.col, hex.row));
-              this.addLog(`🌑 The witch channels the node — a minion rises from the dark!`, 'witch', EntityType.WITCH);
+              this.addLog(`🌑 The witch channels the node — a minion rises from the dark!`, 'witch', this.playerColorFor(this.witch));
             }
           }
 
@@ -618,7 +618,7 @@ export class GameState {
               if (Math.random() < 0.5) s.items['horse'] = 1;
               this.entities.push(s);
               const horseNote = s.items['horse'] ? ' (arrives on horseback!)' : '';
-              this.addLog(`✨ The node calls to the living — a survivor emerges to join the hero!${horseNote}`, 'hero', EntityType.HERO);
+              this.addLog(`✨ The node calls to the living — a survivor emerges to join the hero!${horseNote}`, 'hero', this.playerColorFor(this.hero));
             }
           }
         }
@@ -708,7 +708,7 @@ export class GameState {
         const t = this.tiles.get(hexKey(e.col, e.row));
         if (t && t.fortifyLevel > 0) {
           const line = `🏰 ${e.displayName} is sheltered by the fort! (level ${t.fortifyLevel})`;
-          this.addLog(line, 'hero', e.type);
+          this.addLog(line, 'hero', this.playerColorFor(e));
           this.lastHazardLog.push({ text: line, entityId: e.id, ownerId: e.ownerId ?? null });
           continue;
         }
@@ -717,7 +717,7 @@ export class GameState {
         const line = killed
           ? `💀 ${e.displayName} is consumed by the night!`
           : `🌙 ${e.displayName} suffers in the open! (-${dmg} HP, ${e.hp}/${e.maxHp} remaining)`;
-        this.addLog(line, 'hero', e.type);
+        this.addLog(line, 'hero', this.playerColorFor(e));
         this.lastHazardLog.push({ text: line, entityId: e.id, ownerId: e.ownerId ?? null });
         if (killed) this.entities = this.entities.filter(x => x.id !== e.id);
       }
@@ -742,7 +742,7 @@ export class GameState {
         const t = this.tiles.get(hexKey(e.col, e.row));
         if (t && t.fortifyLevel > 0) {
           const line = `🏰 ${e.displayName} is sheltered by the fort! (level ${t.fortifyLevel})`;
-          this.addLog(line, 'witch', e.type);
+          this.addLog(line, 'witch', this.playerColorFor(e));
           this.lastHazardLog.push({ text: line, entityId: e.id, ownerId: e.ownerId ?? null });
           continue;
         }
@@ -751,7 +751,7 @@ export class GameState {
         const line = killed
           ? `💀 ${e.displayName} is destroyed by the light!`
           : `☀ ${e.displayName} is scorched in the open! (-${dmg} HP, ${e.hp}/${e.maxHp} remaining)`;
-        this.addLog(line, 'witch', e.type);
+        this.addLog(line, 'witch', this.playerColorFor(e));
         this.lastHazardLog.push({ text: line, entityId: e.id, ownerId: e.ownerId ?? null });
         if (killed) this.entities = this.entities.filter(x => x.id !== e.id);
       }
@@ -915,11 +915,29 @@ export class GameState {
 
   get gameOver() { return this.winner !== null; }
 
-  addLog(msg, owner = null, entityType = null) {
-    if (owner || entityType) {
+  /**
+   * Look up the player color for an entity — the owning leader's assigned color,
+   * falling back to the faction default from ENTITY_COLOR.
+   */
+  playerColorFor(entity) {
+    if (!entity) return null;
+    if (entity.ownerId) {
+      const leader = this.entities.find(e =>
+        e.ownerId === entity.ownerId &&
+        (e.type === EntityType.HERO || e.type === EntityType.WITCH)
+      );
+      if (leader?.color) return leader.color;
+    }
+    if (entity.owner === 'hero')  return ENTITY_COLOR[EntityType.HERO];
+    if (entity.owner === 'witch') return ENTITY_COLOR[EntityType.WITCH];
+    return null;
+  }
+
+  addLog(msg, owner = null, color = null) {
+    if (owner || color) {
       const entry = { text: msg };
       if (owner) entry.owner = owner;
-      if (entityType) entry.entityType = entityType;
+      if (color) entry.color = color;
       this.log.push(entry);
     } else {
       this.log.push(msg);

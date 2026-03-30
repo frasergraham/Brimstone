@@ -100,9 +100,14 @@ function logEntryModifier(entry) {
   if (typeof entry === 'string') {
     return /^Round \d+/.test(entry) ? 'log-round-separator' : '';
   }
-  if (entry.entityType) return `log-entity-${entry.entityType}`;
+  if (entry.color) return '';
   if (entry.owner === 'hero') return 'log-hero';
   if (entry.owner === 'witch') return 'log-witch';
+  return '';
+}
+
+function logEntryStyle(entry) {
+  if (typeof entry === 'object' && entry.color) return ` style="color:${entry.color}"`;
   return '';
 }
 
@@ -119,28 +124,16 @@ describe('logEntryModifier — returns CSS modifier class for log entries', () =
     assert.equal(logEntryModifier('Round 12 — 🌙 NIGHT'), 'log-round-separator');
   });
 
-  test('hero-owned entry (no entityType) returns log-hero', () => {
+  test('hero-owned entry (no color) returns log-hero', () => {
     assert.equal(logEntryModifier({ text: 'Hero explores.', owner: 'hero' }), 'log-hero');
   });
 
-  test('witch-owned entry (no entityType) returns log-witch', () => {
+  test('witch-owned entry (no color) returns log-witch', () => {
     assert.equal(logEntryModifier({ text: 'Witch summons minion.', owner: 'witch' }), 'log-witch');
   });
 
-  test('entityType takes priority over owner', () => {
-    assert.equal(logEntryModifier({ text: 'Survivor explores.', owner: 'hero', entityType: 'survivor' }), 'log-entity-survivor');
-  });
-
-  test('hero entityType returns log-entity-hero', () => {
-    assert.equal(logEntryModifier({ text: 'Hero heals.', owner: 'hero', entityType: 'hero' }), 'log-entity-hero');
-  });
-
-  test('minion entityType returns log-entity-minion', () => {
-    assert.equal(logEntryModifier({ text: 'Minion attacks.', owner: 'witch', entityType: 'minion' }), 'log-entity-minion');
-  });
-
-  test('wood_golem entityType returns log-entity-wood_golem', () => {
-    assert.equal(logEntryModifier({ text: 'Wood Golem moves.', owner: 'witch', entityType: 'wood_golem' }), 'log-entity-wood_golem');
+  test('entry with player color returns empty (uses inline style)', () => {
+    assert.equal(logEntryModifier({ text: 'Hero moves.', owner: 'hero', color: '#d4a72c' }), '');
   });
 
   test('object with no owner returns empty', () => {
@@ -153,5 +146,23 @@ describe('logEntryModifier — returns CSS modifier class for log entries', () =
 
   test('string not starting with Round returns empty', () => {
     assert.equal(logEntryModifier('Rounding up survivors...'), '');
+  });
+});
+
+describe('logEntryStyle — inline style for player color', () => {
+  test('plain string returns empty', () => {
+    assert.equal(logEntryStyle('Hero moves.'), '');
+  });
+
+  test('entry with color returns inline style', () => {
+    assert.equal(logEntryStyle({ text: 'Hero moves.', color: '#d4a72c' }), ' style="color:#d4a72c"');
+  });
+
+  test('entry with no color returns empty', () => {
+    assert.equal(logEntryStyle({ text: 'Phase change.', owner: 'hero' }), '');
+  });
+
+  test('multiplayer player 2 color renders correctly', () => {
+    assert.equal(logEntryStyle({ text: 'Move.', color: '#f07020' }), ' style="color:#f07020"');
   });
 });
