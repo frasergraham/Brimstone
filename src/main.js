@@ -878,6 +878,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (myPlayerId && actor?.ownerId !== myPlayerId) continue;
       if (actor) ui._showLootFlashes(actor, result.lootItems ?? []);
       redrawFn();
+      if (!_suppressDialogs && result.encounterSurvivor) {
+        await new Promise(resolve => ui._showEncounterDialog(result.encounterSurvivor, resolve));
+      }
     }
 
     // Apply the full post-step entity state now that all dialogs for this step

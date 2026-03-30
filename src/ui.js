@@ -48,6 +48,7 @@ export class UIController {
     this._validActions    = [];
     this._awaitingTarget  = null;
     this._pendingUnitPick = null;
+    this._pendingDisambig = null;
     this._popupVisible    = false;   // tracks whether the action popup is shown
 
     this._touchStart  = null;
@@ -1073,6 +1074,7 @@ export class UIController {
     this._awaitingTarget       = null;
     this._validActions         = [];
     this._pendingUnitPick      = null;
+    this._pendingDisambig      = null;
     this._popupVisible         = false;
     this.renderer.selectedHex      = null;
     this.renderer.selectedEntityId = null;
@@ -1149,6 +1151,27 @@ export class UIController {
         this._handleSelection(hex);
         return;
       }
+
+      // Disambiguation: if the target hex has a selectable friendly unit, ask
+      // whether the player wants to move there or select that unit instead.
+      const ownerFilter = this._planMode ? this._planFaction : state.activePlayer;
+      const lastGhostPos = this._planMode
+        ? this.renderer?.planGhostSteps?.at(-1)?.positions
+        : null;
+      const alliesAtHex = state.entities.filter(e => {
+        if (!e.alive || e.owner !== ownerFilter || e.id === actor.id) return false;
+        if (this.myPlayerId && e.ownerId && e.ownerId !== this.myPlayerId) return false;
+        const pos = (this._planMode && lastGhostPos?.get(e.id)) || { col: e.col, row: e.row };
+        return pos.col === hex.col && pos.row === hex.row;
+      });
+
+      if (alliesAtHex.length > 0) {
+        // Show disambiguation popup
+        this._pendingDisambig = { actor, hex, allies: alliesAtHex };
+        this._showDisambigPopup();
+        return;
+      }
+
       this._awaitingTarget = null;
       this.renderer.highlightHexes = [];
 
@@ -1477,6 +1500,27 @@ export class UIController {
     popup.style.display = 'block';
   }
 
+  _showDisambigPopup() {
+    const popup = this._el('action-popup');
+    const { actor, hex, allies } = this._pendingDisambig;
+    let html = `<div class="popup-unit-name">Move or select?</div>`;
+    html += `<button class="action-btn" data-action="disambig_move">Move ${actor.displayName} here</button>`;
+    for (const u of allies) {
+      const col = ENTITY_COLOR[u.type] || '#888';
+      const portraitId = u.type === 'survivor' ? _SURVIVOR_TITLE_ASSET[u.title] : u.type;
+      const src = portraitId ? this.renderer.getPortraitDataURL(portraitId) : null;
+      const portrait = src
+        ? `<img src="${src}" style="width:32px;height:32px;border-radius:50%;border:1.5px solid ${col};flex-shrink:0;margin-right:0.4rem;">`
+        : '';
+      html += `<button class="action-btn pick-unit" data-action="pick_unit" data-unit-id="${u.id}"
+        style="border-left:3px solid ${col};display:flex;align-items:center;">${portrait}Select ${u.displayName}</button>`;
+    }
+    popup.innerHTML = html;
+    _attachPopupListeners(popup, this);
+    _positionPopup(popup, this);
+    popup.style.display = 'block';
+  }
+
   // ── Sidebar ───────────────────────────────────────────────────────────────
 
   _updateSidebar() {
@@ -1763,10 +1807,56 @@ export class UIController {
     }
 
     if (action === 'pick_unit') {
+      this._pendingDisambig = null;
       const unit = state.entities.find(e => e.id === button.dataset.unitId);
       if (unit) this._selectEntity(unit);
       this._updateSidebar();
       this.onRedraw();
+      return;
+    }
+
+    if (action === 'disambig_move') {
+      const disambig = this._pendingDisambig;
+      this._pendingDisambig = null;
+      _hideActionPopup();
+      if (!disambig) return;
+      const { actor, hex } = disambig;
+      this._awaitingTarget = null;
+      this.renderer.highlightHexes = [];
+
+      if (this._planMode) {
+        this._addToPlan({ type: PlanActionType.MOVE, entityId: actor.id, toCol: hex.col, toRow: hex.row });
+        if (actor.alive) this._selectEntity(actor);
+        else this._clearSelection();
+        this._updateSidebar();
+        this.onRedraw();
+        return;
+      }
+
+      if (this.mp?.active) {
+        this.mp.sendAction('move', { entityId: actor.id, col: hex.col, row: hex.row });
+        this._clearSelection();
+        this._updateSidebar();
+        this.onRedraw();
+        return;
+      }
+      const result = executeMove(state, actor, hex.col, hex.row);
+      for (const msg of result.log) state.addLog(msg);
+      if (result.success) state.spendAction(result.cost);
+      state.checkVictory();
+      if (actor.alive && !result.encounterLog?.length) { this._selectEntity(actor); }
+      else this._clearSelection();
+      this._updateSidebar();
+      this.onRedraw();
+      if (result.encounterSurvivor) {
+        this._showEncounterDialog(result.encounterSurvivor, () => {
+          this._updateSidebar();
+          this.onRedraw();
+          this._maybeShowNoActionsDialog();
+        });
+      } else {
+        this._maybeShowNoActionsDialog();
+      }
       return;
     }
 
@@ -3033,9 +3123,10 @@ export class UIController {
           const phaseLabel = state.phase === 'dawn' ? '🌅 Dawn Reckoning' : '🌇 Dusk Reckoning';
 
           let reckoningLine;
-          if (witchCount === 3 || heroCount === 3) {
-            const who = witchCount === 3 ? 'Witch' : 'Hero';
-            reckoningLine = `${who} holds all 3 Power Nodes!`;
+          const totalNodes = state.witchObjectives.length;
+          if (witchCount === totalNodes || heroCount === totalNodes) {
+            const who = witchCount === totalNodes ? 'Witch' : 'Hero';
+            reckoningLine = `${who} holds all Power Nodes!`;
           } else if (witchDelta > 0) {
             reckoningLine = `Witch holds ${witchCount} Power Node${witchCount !== 1 ? 's' : ''} to Hero's ${heroCount}. Witch scores 1 victory point.`;
           } else if (heroDelta > 0) {

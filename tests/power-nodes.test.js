@@ -215,6 +215,74 @@ describe('Node scoring with cluster control', () => {
   });
 });
 
+// ── Dynamic node count win text ───────────────────────────────────────────────
+
+describe('Node sweep win with non-standard node count', () => {
+  test('witch sweeping 2 nodes (not 3) triggers instant win', () => {
+    const state = new GameState(true, true);
+    // Override to only 2 nodes
+    state.witchObjectives = state.witchObjectives.slice(0, 2);
+    state.nodeScore = { hero: 0, witch: 0 };
+    state.winner = null;
+    state.winReason = null;
+
+    // Place witch on both nodes
+    for (let i = 0; i < state.witchObjectives.length; i++) {
+      const obj = state.witchObjectives[i];
+      if (i === 0) {
+        state.witch.col = obj.hexes[0].col;
+        state.witch.row = obj.hexes[0].row;
+        // Put witch entities on majority of hexes
+        state.entities.push(makeEntity(`wm${i}a`, 'witch', obj.hexes[1].col, obj.hexes[1].row));
+      } else {
+        state.entities.push(makeEntity(`wm${i}a`, 'witch', obj.hexes[0].col, obj.hexes[0].row));
+        state.entities.push(makeEntity(`wm${i}b`, 'witch', obj.hexes[1].col, obj.hexes[1].row));
+      }
+    }
+
+    state._checkNodeObjectives(Phase.DAWN);
+    assert.equal(state.winner, 'witch', 'witch should win by sweeping all 2 nodes');
+    assert.ok(state.winReason.includes('all Power Nodes'),
+      `win reason should say "all Power Nodes", got: ${state.winReason}`);
+    assert.ok(!state.winReason.includes('three'),
+      'win reason should not contain "three"');
+  });
+
+  test('hero sweeping 4 nodes triggers instant win', () => {
+    const state = new GameState(true, true);
+    // Add a 4th node
+    const extra = {
+      col: 1, row: 1, label: 'Node 4',
+      hexes: [{ col: 1, row: 1 }, { col: 1, row: 2 }, { col: 2, row: 1 }],
+      seenByHero: true, seenByWitch: true, prevCtrl: 'neutral',
+    };
+    state.witchObjectives.push(extra);
+    state.nodeScore = { hero: 0, witch: 0 };
+    state.winner = null;
+    state.winReason = null;
+
+    // Place hero entities on majority hexes of all 4 nodes
+    for (let i = 0; i < state.witchObjectives.length; i++) {
+      const obj = state.witchObjectives[i];
+      if (i === 0) {
+        state.hero.col = obj.hexes[0].col;
+        state.hero.row = obj.hexes[0].row;
+        state.entities.push(makeEntity(`hm${i}`, 'hero', obj.hexes[1].col, obj.hexes[1].row));
+      } else {
+        state.entities.push(makeEntity(`hm${i}a`, 'hero', obj.hexes[0].col, obj.hexes[0].row));
+        state.entities.push(makeEntity(`hm${i}b`, 'hero', obj.hexes[1].col, obj.hexes[1].row));
+      }
+    }
+
+    state._checkNodeObjectives(Phase.DAWN);
+    assert.equal(state.winner, 'hero', 'hero should win by sweeping all 4 nodes');
+    assert.ok(state.winReason.includes('all Power Nodes'),
+      `win reason should say "all Power Nodes", got: ${state.winReason}`);
+    assert.ok(!state.winReason.includes('three'),
+      'win reason should not contain "three"');
+  });
+});
+
 // ── updateNodeDiscovery ───────────────────────────────────────────────────────
 
 describe('updateNodeDiscovery', () => {

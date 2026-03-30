@@ -546,11 +546,14 @@ export class Renderer {
     // Content dimensions at current zoom
     const contentW = this.canvas.width  * this.zoomLevel;
     const contentH = this.canvas.height * this.zoomLevel;
-    // Allow pan up to the overflow in each axis; clamp to [overflow, 0]
-    const minX = Math.min(0, wrapW - contentW);
-    const minY = Math.min(0, wrapH - contentH);
-    this._panX = Math.max(minX, Math.min(0, this._panX));
-    this._panY = Math.max(minY, Math.min(0, this._panY));
+    // Allow panning beyond the map edges so any hex (including edge hexes)
+    // can be centered in the viewport.  The margin is ~40% of the viewport.
+    const marginX = wrapW * 0.4;
+    const marginY = wrapH * 0.4;
+    const minX = Math.min(0, wrapW - contentW) - marginX;
+    const minY = Math.min(0, wrapH - contentH) - marginY;
+    this._panX = Math.max(minX, Math.min(marginX, this._panX));
+    this._panY = Math.max(minY, Math.min(marginY, this._panY));
   }
 
   draw() {
@@ -663,10 +666,18 @@ export class Renderer {
       const selEntity = this.selectedEntityId
         ? this.state.entities.find(e => e.id === this.selectedEntityId)
         : null;
-      const selColor = selEntity
-        ? _hexToRgba(selEntity.color ?? ENTITY_COLOR[selEntity.type] ?? '#f5c842', 0.95)
-        : '#f5c842';
-      this._drawOutline(this.selectedHex.col, this.selectedHex.row, selColor, 2.5, true);
+      // Use faction colour for the selected hex outline (consistent with unit
+      // presence outlines); in multiplayer use the per-player colour.
+      let selColor = '#f5c842';
+      if (selEntity) {
+        const playerColor = selEntity.ownerId
+          ? this._playerColorMap.get(selEntity.ownerId) : null;
+        const factionColor = selEntity.owner === 'hero'
+          ? ENTITY_COLOR[EntityType.HERO]
+          : ENTITY_COLOR[EntityType.WITCH];
+        selColor = _hexToRgba(playerColor ?? factionColor, 0.95);
+      }
+      this._drawOutline(this.selectedHex.col, this.selectedHex.row, selColor, 3, true);
     }
     if (this.hoveredHex) {
       this._drawOutline(this.hoveredHex.col, this.hoveredHex.row, 'rgba(255,255,255,0.3)', 1);
@@ -1007,7 +1018,7 @@ export class Renderer {
         ctx.moveTo(corners[0].x, corners[0].y);
         for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
         ctx.closePath();
-        ctx.fillStyle = 'rgba(0,0,0,0.70)';
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
         ctx.fill();
       }
     }
@@ -1034,18 +1045,25 @@ export class Renderer {
       if (e.owner === 'witch' && humanIsHero  && revealedHexes && !revealedHexes.has(k)) continue;
 
       if (!hexColors.has(k)) {
-        // Hex outline always shows the owning player's colour — so every unit on
-        // a hex reads as belonging to that player regardless of unit type.
-        // In offline mode ownerId is null and playerColor falls back to entity.color
-        // (which IS the player colour on leaders, or the type palette on followers).
+        // Hex outline always shows the faction colour so every unit on a hex
+        // reads as belonging to that side regardless of unit type.
+        // In multiplayer (2v2+) use the per-player colour from playerColorMap;
+        // in 1v1/offline fall back to the faction leader colour.
         const playerColor = e.ownerId ? this._playerColorMap.get(e.ownerId) : null;
-        hexColors.set(k, playerColor ?? e.color ?? ENTITY_COLOR[e.type] ?? '#ffffff');
+        const factionColor = e.owner === 'hero'
+          ? ENTITY_COLOR[EntityType.HERO]
+          : ENTITY_COLOR[EntityType.WITCH];
+        hexColors.set(k, playerColor ?? factionColor);
       }
     }
 
+    const selKey = this.selectedHex
+      ? hexKey(this.selectedHex.col, this.selectedHex.row)
+      : null;
     for (const [k, color] of hexColors) {
       const [col, row] = k.split(',').map(Number);
-      this._drawOutline(col, row, _hexToRgba(color, 0.85), 3, true);
+      const isSelected = k === selKey;
+      this._drawOutline(col, row, _hexToRgba(color, 0.85), isSelected ? 3 : 2, true);
     }
   }
 

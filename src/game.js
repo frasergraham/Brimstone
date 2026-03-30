@@ -31,10 +31,10 @@ export function nodeController(obj, entities) {
 export const WIN_REASON = {
   WITCH_SLAIN:      'The hero hunted down the witch and ended the curse!',
   HERO_SLAIN:       'The hero fell in battle. Salem is lost to darkness.',
-  NODES_WITCH:      'The witch seized all three Power Nodes at dawn — the ritual is complete!',
-  NODES_HERO:       'The hero held all three Power Nodes at dawn — the witch\'s ritual is broken!',
-  NODES_WITCH_DUSK: 'As dusk falls, the witch holds all three Power Nodes — the ritual advances!',
-  NODES_HERO_DUSK:  'As dusk falls, the hero holds all three Power Nodes — the witch\'s ritual is disrupted!',
+  NODES_WITCH:      'The witch seized all Power Nodes at dawn — the ritual is complete!',
+  NODES_HERO:       'The hero held all Power Nodes at dawn — the witch\'s ritual is broken!',
+  NODES_WITCH_DUSK: 'As dusk falls, the witch holds all Power Nodes — the ritual advances!',
+  NODES_HERO_DUSK:  'As dusk falls, the hero holds all Power Nodes — the witch\'s ritual is disrupted!',
   SCORE_WITCH:      'The witch dominates the Power Nodes across three cycles — the ritual is complete!',
   SCORE_HERO:       'The hero holds the Power Nodes through the darkness — the curse is broken!',
 };
@@ -807,16 +807,16 @@ export class GameState {
       this.winner    = 'witch';
       this.winReason = isDawn ? WIN_REASON.NODES_WITCH : WIN_REASON.NODES_WITCH_DUSK;
       this.addLog(isDawn
-        ? '🌙 As dawn breaks, the witch holds all three Power Nodes! Salem is lost…'
-        : '🌙 As dusk falls, the witch holds all three Power Nodes! The ritual advances!');
+        ? '🌙 As dawn breaks, the witch holds all Power Nodes! Salem is lost…'
+        : '🌙 As dusk falls, the witch holds all Power Nodes! The ritual advances!');
       return;
     }
     if (heroCount === nodeCount) {
       this.winner    = 'hero';
       this.winReason = isDawn ? WIN_REASON.NODES_HERO : WIN_REASON.NODES_HERO_DUSK;
       this.addLog(isDawn
-        ? '☀ At dawn, the hero holds all three Power Nodes! The witch\'s ritual is broken!'
-        : '☀ As dusk falls, the hero holds all three Power Nodes! The ritual is disrupted!');
+        ? '☀ At dawn, the hero holds all Power Nodes! The witch\'s ritual is broken!'
+        : '☀ As dusk falls, the hero holds all Power Nodes! The ritual is disrupted!');
       return;
     }
 
