@@ -1489,18 +1489,22 @@ export class UIController {
 
     bar.style.display = 'flex';
     bar.innerHTML = `
-      <span class="usb-glyph" style="color:${color}">${glyph}</span>
-      <span class="usb-name" style="color:${color}">${entity.displayName}</span>
-      <span class="usb-hp-wrap">
-        <span class="usb-stat">HP</span>
-        <span class="usb-hp-track">
-          <span class="usb-hp-fill" style="width:${hpPct}%;background:linear-gradient(to bottom,rgba(255,255,255,0.28) 0%,rgba(255,255,255,0) 55%),${hpColor}"></span>
+      <span class="usb-icon" style="background:${color}">${glyph}</span>
+      <span class="usb-info">
+        <span class="usb-name" style="color:${color}">${entity.displayName}</span>
+        <span class="usb-details">
+          <span class="usb-hp-wrap">
+            <span class="usb-stat">HP</span>
+            <span class="usb-hp-track">
+              <span class="usb-hp-fill" style="width:${hpPct}%;background:linear-gradient(to bottom,rgba(255,255,255,0.28) 0%,rgba(255,255,255,0) 55%),${hpColor}"></span>
+            </span>
+            <span class="usb-stat-val">${entity.hp}/${entity.maxHp}</span>
+          </span>
+          <span class="usb-stat">ATK <span class="usb-stat-val">${entity.attack}</span></span>
+          <span class="usb-stat">DEF <span class="usb-stat-val">${entity.defense}</span></span>
+          ${weaponLabel ? `<span class="usb-weapon">⚔ ${weaponLabel}</span>` : ''}
         </span>
-        <span class="usb-stat-val">${entity.hp}/${entity.maxHp}</span>
       </span>
-      <span class="usb-stat">ATK <span class="usb-stat-val">${entity.attack}</span></span>
-      <span class="usb-stat">DEF <span class="usb-stat-val">${entity.defense}</span></span>
-      ${weaponLabel ? `<span class="usb-weapon">⚔ ${weaponLabel}</span>` : ''}
       <button class="usb-deselect-btn" title="Deselect unit">✕</button>
     `;
     bar.querySelector('.usb-deselect-btn').addEventListener('click', () => {
