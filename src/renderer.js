@@ -659,6 +659,23 @@ export class Renderer {
       this._drawHighlight(h.col, h.row, 'rgba(200,80,80,0.14)');
     }
 
+    // Guard zone highlights — light orange on hexes adjacent to guarding units
+    // Only during resolution playback, not during planning
+    if (!state.planningPhase) {
+      const guardZoneKeys = new Set();
+      for (const e of state.entities) {
+        if (!e.alive || !e.guarding) continue;
+        if (revealedHexes && !revealedHexes.has(hexKey(e.col, e.row))) continue;
+        for (const n of getNeighbors(e.col, e.row)) {
+          guardZoneKeys.add(hexKey(n.col, n.row));
+        }
+      }
+      for (const key of guardZoneKeys) {
+        const [c, r] = key.split(',').map(Number);
+        this._drawHighlight(c, r, 'rgba(230,160,60,0.18)');
+      }
+    }
+
     if (this.selectedHex) {
       const selEntity = this.selectedEntityId
         ? this.state.entities.find(e => e.id === this.selectedEntityId)
