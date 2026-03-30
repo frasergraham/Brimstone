@@ -2014,6 +2014,18 @@ canvas { touch-action: pan-x pan-y; }
   /* End turn button slightly larger tap target */
   .end-turn-header { padding: 0 0.65rem; height: 36px; }
 
+  /* How-to-play: stack two-column layout */
+  .htp-two-col { grid-template-columns: 1fr; }
+  .htp-table tr td:first-child { white-space: normal; }
+
+  /* Dialogs / modals: cap widths to viewport */
+  .round-summary-card { min-width: 0; max-width: 90vw; padding: 1.2rem; }
+  .phase-modal-card { min-width: 0; max-width: 90vw; padding: 1rem 1.2rem; }
+  #encounter-card { min-width: 0; }
+
+  /* Game menu: 44px touch targets */
+  .game-menu-item { min-height: 44px; display: flex; align-items: center; }
+
 }
 
 /* ── Online / Multiplayer ─────────────────────────────────────────────────── */
