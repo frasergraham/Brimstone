@@ -174,6 +174,10 @@ export class GameState {
     this.mapSize       = mapData.mapSize;
     this._survivorCounts = mapData.survivorCounts;
     this.witchObjectives = mapData.witchObjectives;
+    this._heroStart  = { col: mapData.heroStart.col,  row: mapData.heroStart.row };
+    this._witchStart = mapData.witchStart
+      ? { col: mapData.witchStart.col, row: mapData.witchStart.row }
+      : null;
     this._placeHiddenSurvivors();
     this.updateNodeDiscovery();
 
@@ -898,13 +902,24 @@ export class GameState {
     return this.entities.filter(e => e.owner === player && e.alive);
   }
 
-  // Scatter 12 hidden survivors across the map: 10 in buildings, 2 on terrain.
+  // Scatter hidden survivors across the map (count varies by map size).
   // Each tile can hold at most one; they reveal when any unit steps onto the tile.
+  // Survivors are never placed within MIN_SURVIVOR_DIST hexes of a start position.
   _placeHiddenSurvivors() {
+    const MIN_SURVIVOR_DIST = 3;
+    const tooClose = (t) => {
+      if (this._heroStart &&
+          hexDistance(t.col, t.row, this._heroStart.col, this._heroStart.row) < MIN_SURVIVOR_DIST) return true;
+      if (this._witchStart &&
+          hexDistance(t.col, t.row, this._witchStart.col, this._witchStart.row) < MIN_SURVIVOR_DIST) return true;
+      return false;
+    };
+
     const buildings = [];
     const terrain   = [];
     for (const t of this.tiles.values()) {
       if (t.type === TileType.RIVER) continue;
+      if (tooClose(t)) continue;
       if (t.type === TileType.BUILDING) buildings.push(t);
       else terrain.push(t);
     }
@@ -917,7 +932,7 @@ export class GameState {
       return arr;
     };
 
-    const sc = this._survivorCounts ?? { buildings: 13, terrain: 2 };
+    const sc = this._survivorCounts ?? { buildings: 5, terrain: 2 };
     shuffle(buildings).slice(0, sc.buildings).forEach(t => { t.hiddenSurvivor = true; });
     shuffle(terrain).slice(0, sc.terrain).forEach(t => { t.hiddenSurvivor = true; });
   }
