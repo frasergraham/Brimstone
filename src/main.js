@@ -2993,7 +2993,6 @@ function _createMpClient() {
       ui._clearSelection();
       ui._triggerHazardFlashes();
       redrawOnline();
-      if (!state.gameOver) ui._maybeShowNoActionsDialog();
     },
 
     onBattle(actorSnap, targetSnap, result, afterDismiss) {
