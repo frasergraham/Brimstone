@@ -3682,8 +3682,9 @@ body.spectator-mode #game-screen   { display: flex !important; }
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
-  width: 100%;
   max-width: 260px;
+  width: 200px;
+  align-self: center;
 }
 .menu-async-header {
   font-size: 0.75rem;

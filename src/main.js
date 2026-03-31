@@ -2081,9 +2081,9 @@ function _fetchAsyncGames() {
 
 function _deleteAsyncGame(roomId) {
   const dialog = document.createElement('div');
-  dialog.className = 'game-over-overlay';
+  dialog.style.cssText = 'position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.55)';
   dialog.innerHTML = `
-    <div class="game-over-box" style="max-width:360px">
+    <div class="result-card" style="max-width:360px;pointer-events:auto">
       <h2 style="margin-bottom:0.5em">Delete Game</h2>
       <p style="margin-bottom:1.2em">Delete this game? This cannot be undone.</p>
       <div style="display:flex;gap:0.5em;justify-content:center">
@@ -2546,16 +2546,39 @@ async function _asyncWatchLastTurn(lastRound) {
   await ui._triggerPostRoundEffects();
   redrawOnline();
 
-  // Show resolution summary
+  // Show resolution summary with replay support
   if (ui && _asyncFaction) {
     _resolving = true;
-    await ui._showResolutionSummary(stepsArr, lastRound.roundNum ?? (state.round - 1), {
-      humanFaction: _asyncFaction,
-      fogOfWar: state.fogOfWar,
-      gameOver: state.gameOver,
-      winner: state.winner,
-      winReason: state.winReason,
-    });
+    let action;
+    do {
+      action = await ui._showResolutionSummary(stepsArr, lastRound.roundNum ?? (state.round - 1), {
+        humanFaction: _asyncFaction,
+        fogOfWar: state.fogOfWar,
+        gameOver: state.gameOver,
+        winner: state.winner,
+        winReason: state.winReason,
+      });
+      if (action === 'replay') {
+        // Restore pre-resolution state and re-animate
+        const replayPre = MirrorState.fromSnapshot(
+          typeof preState === 'string' ? JSON.parse(preState) : preState
+        );
+        Object.assign(state, replayPre);
+        state.hero      = replayPre.hero;
+        state.witch     = replayPre.witch;
+        state.myFaction = _asyncFaction;
+        redrawOnline();
+        await _animateResolutionSteps(stepsArr, finalEntities, redrawOnline, _asyncFaction, mp?.myPlayerId ?? null);
+        // Restore post-resolution state after replay
+        Object.assign(state, postResState);
+        state.hero      = postResState.hero;
+        state.witch     = postResState.witch;
+        state.myFaction = _asyncFaction;
+        await ui._triggerPostRoundEffects();
+        redrawOnline();
+        _resolving = true; // re-engage guard for next summary show
+      }
+    } while (action === 'replay');
     _resolving = false;
   }
 }
