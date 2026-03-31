@@ -795,30 +795,37 @@ describe('Power node free spawn — singleplayer (endTurn)', () => {
       'Witch on a node should no longer spawn free minions');
   });
 
-  test('hero on a node during NIGHT still spawns a free survivor', () => {
+  test('hero on a node during NIGHT can spawn a free survivor (33% chance)', () => {
     resetRoster();
-    const state = new GameState(true, true);
-    state.phase = Phase.NIGHT;
-    state.activePlayer = Player.WITCH;
+    // Run multiple trials — with 33% chance, at least one of 20 should spawn
+    let spawned = false;
+    for (let i = 0; i < 20 && !spawned; i++) {
+      resetRoster();
+      const state = new GameState(true, true);
+      state.phase = Phase.NIGHT;
+      state.activePlayer = Player.WITCH;
 
-    const node = state.witchObjectives[0];
-    state.hero.col = node.col;
-    state.hero.row = node.row;
-    // Move witch away from node so it doesn't interfere
-    state.witch.col = 0;
-    state.witch.row = 0;
+      const node = state.witchObjectives[0];
+      state.hero.col = node.col;
+      state.hero.row = node.row;
+      // Move witch away from node so it doesn't interfere
+      state.witch.col = 0;
+      state.witch.row = 0;
 
-    const survivorsBefore = state.entities.filter(
-      e => e.alive && e.type === EntityType.SURVIVOR
-    ).length;
+      const survivorsBefore = state.entities.filter(
+        e => e.alive && e.type === EntityType.SURVIVOR
+      ).length;
 
-    state.endTurn();
+      state.endTurn();
 
-    const survivorsAfter = state.entities.filter(
-      e => e.alive && e.type === EntityType.SURVIVOR
-    ).length;
+      const survivorsAfter = state.entities.filter(
+        e => e.alive && e.type === EntityType.SURVIVOR
+      ).length;
 
-    assert.ok(survivorsAfter > survivorsBefore,
-      'Hero on a node should still spawn a free survivor');
+      if (survivorsAfter > survivorsBefore) spawned = true;
+    }
+
+    assert.ok(spawned,
+      'Hero on a node should be able to spawn a free survivor (33% chance, tested 20 trials)');
   });
 });

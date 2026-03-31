@@ -555,7 +555,9 @@ export class GameState {
       // Node blessing: hero standing on a Power Node heals 1 HP
       if (this.hero.alive && this.hero.hp < this.hero.maxHp) {
         const onNode = this.witchObjectives.some(
-          obj => obj.col === this.hero.col && obj.row === this.hero.row
+          obj => obj.hexes
+            ? obj.hexes.some(h => h.col === this.hero.col && h.row === this.hero.row)
+            : (obj.col === this.hero.col && obj.row === this.hero.row)
         );
         if (onNode) {
           this.hero.heal(1);
@@ -568,28 +570,40 @@ export class GameState {
       this.addLog(`${this.factionName('witch')} stirs… (${this.actionsLeft} actions)`, 'witch', this.playerColorFor(this.witch));
     } else {
       // Node effects: only during NIGHT
-      // • Hero standing on a node attracts a free survivor each night round.
+      // • Hero standing on a node has a 33% chance to attract a free survivor.
       // (Witch no longer spawns free minions from nodes.)
       if (this.phase === Phase.NIGHT) {
         for (const obj of this.witchObjectives) {
-          const freeHex = () => getNeighbors(obj.col, obj.row).find(n => {
-            const t = this.tiles.get(hexKey(n.col, n.row));
-            return t && t.type !== TileType.RIVER &&
-              !this.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
-          });
+          const freeHex = () => {
+            const hexes = obj.hexes || [{ col: obj.col, row: obj.row }];
+            for (const clusterHex of hexes) {
+              const n = getNeighbors(clusterHex.col, clusterHex.row).find(nb => {
+                const t = this.tiles.get(hexKey(nb.col, nb.row));
+                return t && t.type !== TileType.RIVER &&
+                  !this.entities.some(e => e.alive && e.col === nb.col && e.row === nb.row);
+              });
+              if (n) return n;
+            }
+            return null;
+          };
 
-          // Hero on the node → attract a survivor
+          // Hero on the node → 33% chance to attract a survivor
+          const nodeHexes = obj.hexes || [{ col: obj.col, row: obj.row }];
           const heroHere = this.hero.alive &&
-            this.hero.col === obj.col && this.hero.row === obj.row;
+            nodeHexes.some(h => h.col === this.hero.col && h.row === this.hero.row);
           if (heroHere) {
-            const hex = freeHex();
-            if (hex) {
-              const s = createSurvivor(hex.col, hex.row);
-              s.owner = 'hero';
-              if (Math.random() < 0.5) s.items['horse'] = 1;
-              this.entities.push(s);
-              const horseNote = s.items['horse'] ? ' (arrives on horseback!)' : '';
-              this.addLog(`✨ The node calls to the living — a survivor emerges to join ${this.hero.displayName}!${horseNote}`, 'hero', this.playerColorFor(this.hero));
+            if (Math.random() < 0.33) {
+              const hex = freeHex();
+              if (hex) {
+                const s = createSurvivor(hex.col, hex.row, this.hero.ownerId);
+                s.owner = 'hero';
+                if (Math.random() < 0.5) s.items['horse'] = 1;
+                this.entities.push(s);
+                const horseNote = s.items['horse'] ? ' (arrives on horseback!)' : '';
+                this.addLog(`✨ The node calls to the living — a survivor emerges to join ${this.hero.displayName}!${horseNote}`, 'hero', this.playerColorFor(this.hero));
+              }
+            } else {
+              this.addLog(`✨ The node pulses faintly… no one answers the call tonight.`, 'hero');
             }
           }
         }
@@ -619,8 +633,15 @@ export class GameState {
 
       // Dawn: ramp attrition, reset explored tiles, check nodes
       if (this.phase === Phase.DAWN) {
-        this.attritionLevel = Math.min(3, this.attritionLevel + 1);
-        this.addLog(`🌅 A new dawn — cycle ${Math.ceil(this.round / CYCLE_LENGTH)}. Attrition rises to ${this.attritionLevel}!`);
+        const cycle    = Math.ceil(this.round / CYCLE_LENGTH);
+        const newLevel = attritionForCycle(cycle);
+        this.attritionChanged = newLevel !== this.attritionLevel;
+        this.attritionLevel   = newLevel;
+        if (this.attritionChanged && newLevel > 0) {
+          this.addLog(`🌅 A new dawn — cycle ${cycle}. The curse deepens! Hazard damage rises to ${newLevel}.`);
+        } else {
+          this.addLog(`🌅 A new dawn — cycle ${cycle}.`);
+        }
         for (const [, t] of this.tiles) t.explored = false;
         if (!this.disableScoring) this._checkNodeObjectives(Phase.DAWN);
       }
