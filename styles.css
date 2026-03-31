@@ -414,6 +414,33 @@ canvas { touch-action: pan-x pan-y; }
   max-height: 180px;
   margin-bottom: 0.5rem;
 }
+.async-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.4rem;
+}
+.async-list-title {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.async-refresh-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0.1rem 0.4rem;
+  transition: color 0.15s, border-color 0.15s;
+}
+.async-refresh-btn:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
 
 /* ── Online match buttons grid ───────────────────────────────────────────── */
 .online-match-buttons {
@@ -2642,7 +2669,8 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 .plan-panel[data-witch-mode] .plan-panel-title { color: var(--witch); }
 .plan-submitted .plan-step-remove { display: none; }
-.plan-submitted .plan-btn { opacity: 0.5; pointer-events: none; }
+.plan-submitted #plan-clear-btn,
+.plan-submitted #plan-submit-btn { opacity: 0.5; pointer-events: none; }
 .plan-step.over-budget { opacity: 0.5; }
 .plan-step.over-budget .plan-step-num  { background: rgba(160,50,50,0.75); color: #faa; border-radius: 3px; padding: 0 2px; }
 .plan-step.over-budget .plan-step-desc { text-decoration: line-through; color: var(--text-dim); }
@@ -3680,13 +3708,12 @@ body.spectator-mode #game-screen   { display: flex !important; }
 /* ── Main menu async notification box ──────────────────────────────────── */
 
 .menu-async-box {
-  margin-top: 1.25rem;
+  margin: 1.25rem auto 0;
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
   max-width: 260px;
   width: 200px;
-  align-self: center;
 }
 .menu-async-header {
   font-size: 0.75rem;
