@@ -661,6 +661,131 @@ export function genGatherResources(sim, board, budget) {
   return actions;
 }
 
+// ── Stage 5: Plan Assembly ──────────────────────────────────────────────────
+// Merges generator outputs, validates, filters oscillation, fills gaps.
+
+// Free actions that don't cost AP
+const FREE_ACTIONS = new Set([PlanActionType.USE_ITEM, PlanActionType.EQUIP_WEAPON]);
+
+export function assemblePlan(allActions, sim, board, prevPositions) {
+  // 1. Sort by priority (lower = higher priority)
+  const sorted = [...allActions].sort((a, b) => (a._priority ?? 99) - (b._priority ?? 99));
+
+  // 2. Anti-oscillation filter: remove moves that return a unit to its
+  //    previous-turn position (cross-turn memory)
+  const filtered = sorted.filter(action => {
+    if (action.type !== PlanActionType.MOVE) return true;
+    // Intra-plan: skip if unit already departed this hex this plan
+    const departed = sim.departedHexes.get(action.entityId);
+    if (departed && departed.has(hexKey(action.toCol, action.toRow))) return false;
+    // Cross-turn: skip if returning to exact previous-turn position
+    const prev = prevPositions.get(action.entityId);
+    if (prev && prev.col === action.toCol && prev.row === action.toRow) return false;
+    return true;
+  });
+
+  // 3. Deduplicate: remove duplicate actions on the same entity+hex
+  const seen = new Set();
+  const deduped = filtered.filter(action => {
+    let key;
+    if (action.type === PlanActionType.MOVE) {
+      key = `${action.entityId}:move:${action.toCol},${action.toRow}`;
+    } else if (action.type === PlanActionType.BATTLE_UNIT) {
+      key = `${action.entityId}:battle:${action.targetId}`;
+    } else {
+      key = `${action.entityId}:${action.type}`;
+    }
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  // 4. Enforce budget: count AP-costing actions, drop excess from tail
+  const budgetCapped = [];
+  let apUsed = 0;
+  const totalBudget = board.totalBudget;
+  for (const action of deduped) {
+    if (FREE_ACTIONS.has(action.type)) {
+      budgetCapped.push(action);
+      continue;
+    }
+    if (apUsed < totalBudget) {
+      budgetCapped.push(action);
+      apUsed++;
+    }
+  }
+
+  // 5. Gap-fill: if we have remaining AP, fill with useful fallback actions
+  const remaining = totalBudget - apUsed;
+  if (remaining > 0 && board.witch) {
+    const witchEntity = sim.entities.find(e => e.id === board.witch.id);
+    if (witchEntity) {
+      _fillGaps(budgetCapped, sim, board, witchEntity, remaining, prevPositions);
+    }
+  }
+
+  // 6. Strip internal metadata and truncate to MAX_PLAN_LENGTH
+  const plan = budgetCapped.slice(0, MAX_PLAN_LENGTH).map(a => {
+    const clean = { ...a };
+    delete clean._priority;
+    delete clean._goal;
+    return clean;
+  });
+
+  return plan;
+}
+
+function _fillGaps(plan, sim, board, witchEntity, remaining, prevPositions) {
+  let left = remaining;
+
+  // Try to explore current hex if unexplored
+  if (left > 0 && !sim.isExplored(witchEntity.col, witchEntity.row)) {
+    plan.push({ type: PlanActionType.EXPLORE, entityId: witchEntity.id });
+    sim.applyExplore(witchEntity.id);
+    left--;
+  }
+
+  // Move uncommitted minions toward nearest uncovered node
+  if (left > 0) {
+    const uncoveredNodes = board.nodes.filter(n => n.controller !== 'witch');
+    for (const minion of board.minions) {
+      if (left <= 0) break;
+      if (sim.unitCommitments.has(minion.id)) continue;
+      const simMinion = sim.entities.find(e => e.id === minion.id);
+      if (!simMinion) continue;
+
+      // Pick closest uncovered node
+      let bestNode = null, bestDist = Infinity;
+      for (const n of uncoveredNodes) {
+        const d = hexDistance(simMinion.col, simMinion.row, n.obj.col, n.obj.row);
+        if (d < bestDist) { bestDist = d; bestNode = n; }
+      }
+      if (!bestNode) continue;
+
+      const step = stepToward(sim, simMinion, bestNode.obj);
+      if (!step) continue;
+
+      // Anti-oscillation check for gap-fill moves too
+      const prev = prevPositions.get(minion.id);
+      if (prev && prev.col === step.col && prev.row === step.row) continue;
+
+      plan.push({
+        type: PlanActionType.MOVE, entityId: simMinion.id,
+        toCol: step.col, toRow: step.row,
+      });
+      sim.applyMove(simMinion.id, step.col, step.row);
+      sim.unitCommitments.set(simMinion.id, 'gap-fill');
+      left--;
+    }
+  }
+
+  // Guard with the witch if nothing else to do
+  if (left > 0) {
+    plan.push({ type: PlanActionType.GUARD, entityId: witchEntity.id });
+    left--;
+  }
+}
+
 // ── WitchAIEngine ────────────────────────────────────────────────────────────
 
 export class WitchAIEngine {
@@ -689,7 +814,7 @@ export class WitchAIEngine {
     const killActions    = genKillHero(sim, board, budget[Goal.KILL_HERO]);
     const gatherActions  = genGatherResources(sim, board, budget[Goal.GATHER_RESOURCES]);
 
-    // Collect all generated actions (assembly/merge is Phase 3)
+    // Collect all generated actions
     const allActions = [
       ...defendActions,
       ...buildActions,
@@ -698,7 +823,8 @@ export class WitchAIEngine {
       ...gatherActions,
     ];
 
-    // TODO Phase 3: assemble plan (merge, validate, anti-oscillation, gap-fill)
+    // Stage 5: Assemble final plan
+    const plan = assemblePlan(allActions, sim, board, this._prevPositions);
 
     // Update cross-turn memory
     for (const e of sim.entities) {
@@ -707,8 +833,6 @@ export class WitchAIEngine {
       }
     }
 
-    // Sort by priority, truncate to MAX_PLAN_LENGTH
-    allActions.sort((a, b) => (a._priority || 99) - (b._priority || 99));
-    return allActions.slice(0, MAX_PLAN_LENGTH);
+    return plan;
   }
 }

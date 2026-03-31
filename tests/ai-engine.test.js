@@ -1,5 +1,6 @@
-// Tests for src/ai-engine.js — Phase 1: Foundation
-// Covers EnginePlanSimState, assessBoard, scoreGoals, allocateBudget.
+// Tests for src/ai-engine.js — Phases 1-3
+// Covers EnginePlanSimState, assessBoard, scoreGoals, allocateBudget,
+// tactic generators, estimateCombat, and assemblePlan.
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -20,8 +21,9 @@ import {
   genControlNodes,
   genKillHero,
   genGatherResources,
+  assemblePlan,
 } from '../src/ai-engine.js';
-import { PlanActionType } from '../src/planner.js';
+import { PlanActionType, MAX_PLAN_LENGTH } from '../src/planner.js';
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -742,11 +744,141 @@ describe('genGatherResources', () => {
   });
 });
 
-// ── WitchAIEngine.generatePlan (Phase 2 integration) ───────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// Phase 3: Plan Assembly
+// ══════════════════════════════════════════════════════════════════════════════
 
-describe('WitchAIEngine.generatePlan (Phase 2)', () => {
+describe('assemblePlan', () => {
+  test('sorts actions by priority', () => {
+    const sim = makeSim();
+    const board = assessBoard(sim);
+    const actions = [
+      { type: PlanActionType.MOVE, entityId: 'witch1', toCol: 1, toRow: 0, _priority: 5, _goal: Goal.KILL_HERO },
+      { type: PlanActionType.SUMMON, entityId: 'witch1', _priority: 2, _goal: Goal.BUILD_ARMY },
+      { type: PlanActionType.USE_ITEM, entityId: 'witch1', item: ResourceType.HERBS, _priority: 0, _goal: Goal.DEFEND_WITCH },
+    ];
+    const plan = assemblePlan(actions, sim, board, new Map());
+    assert.equal(plan[0].type, PlanActionType.USE_ITEM);
+    assert.equal(plan[1].type, PlanActionType.SUMMON);
+    assert.equal(plan[2].type, PlanActionType.MOVE);
+  });
+
+  test('strips internal _priority and _goal metadata', () => {
+    const sim = makeSim();
+    const board = assessBoard(sim);
+    const actions = [
+      { type: PlanActionType.SUMMON, entityId: 'witch1', _priority: 2, _goal: Goal.BUILD_ARMY },
+    ];
+    const plan = assemblePlan(actions, sim, board, new Map());
+    assert.equal(plan[0]._priority, undefined);
+    assert.equal(plan[0]._goal, undefined);
+  });
+
+  test('filters cross-turn oscillation (returning to previous position)', () => {
+    const sim = makeSim();
+    const board = assessBoard(sim);
+    const prevPositions = new Map([['witch1', { col: 1, row: 0 }]]);
+    const actions = [
+      { type: PlanActionType.MOVE, entityId: 'witch1', toCol: 1, toRow: 0, _priority: 5, _goal: Goal.KILL_HERO },
+    ];
+    const plan = assemblePlan(actions, sim, board, prevPositions);
+    const oscillating = plan.find(a => a.type === PlanActionType.MOVE && a.toCol === 1 && a.toRow === 0);
+    assert.ok(!oscillating, 'should filter out move returning to previous-turn position');
+  });
+
+  test('filters intra-plan oscillation (returning to departed hex)', () => {
+    const sim = makeSim();
+    // Simulate that witch1 departed (0,0) during this plan
+    sim.departedHexes.set('witch1', new Set([hexKey(0, 0)]));
+    const board = assessBoard(sim);
+    const actions = [
+      { type: PlanActionType.MOVE, entityId: 'witch1', toCol: 0, toRow: 0, _priority: 5, _goal: Goal.KILL_HERO },
+    ];
+    const plan = assemblePlan(actions, sim, board, new Map());
+    const oscillating = plan.find(a => a.type === PlanActionType.MOVE && a.toCol === 0 && a.toRow === 0);
+    assert.ok(!oscillating, 'should filter out move returning to departed hex');
+  });
+
+  test('deduplicates identical moves', () => {
+    const sim = makeSim();
+    const board = assessBoard(sim);
+    const actions = [
+      { type: PlanActionType.MOVE, entityId: 'witch1', toCol: 1, toRow: 0, _priority: 3, _goal: Goal.KILL_HERO },
+      { type: PlanActionType.MOVE, entityId: 'witch1', toCol: 1, toRow: 0, _priority: 5, _goal: Goal.CONTROL_NODES },
+    ];
+    const plan = assemblePlan(actions, sim, board, new Map());
+    const moves = plan.filter(a => a.type === PlanActionType.MOVE && a.toCol === 1 && a.toRow === 0);
+    assert.equal(moves.length, 1);
+  });
+
+  test('enforces budget (AP-costing actions capped)', () => {
+    const sim = makeSim();
+    const board = assessBoard(sim);
+    // Budget is sim.actionsLeft (typically 4 for witch at night)
+    const manyActions = Array.from({ length: 20 }, (_, i) => ({
+      type: PlanActionType.MOVE, entityId: `unit${i}`, toCol: i % 5, toRow: 0,
+      _priority: 3, _goal: Goal.CONTROL_NODES,
+    }));
+    const plan = assemblePlan(manyActions, sim, board, new Map());
+    // AP-costing actions should not exceed budget
+    const apActions = plan.filter(a => a.type !== PlanActionType.USE_ITEM && a.type !== PlanActionType.EQUIP_WEAPON);
+    assert.ok(apActions.length <= board.totalBudget + 2, // +2 for gap-fill
+      `AP actions (${apActions.length}) should be near budget (${board.totalBudget})`);
+  });
+
+  test('free actions (USE_ITEM) not counted against budget', () => {
+    const sim = makeSim();
+    const board = assessBoard(sim);
+    const actions = [
+      { type: PlanActionType.USE_ITEM, entityId: 'witch1', item: ResourceType.HERBS, _priority: 0, _goal: Goal.DEFEND_WITCH },
+      { type: PlanActionType.SUMMON, entityId: 'witch1', _priority: 2, _goal: Goal.BUILD_ARMY },
+    ];
+    const plan = assemblePlan(actions, sim, board, new Map());
+    assert.ok(plan.some(a => a.type === PlanActionType.USE_ITEM), 'USE_ITEM should be included');
+    assert.ok(plan.some(a => a.type === PlanActionType.SUMMON), 'SUMMON should be included');
+  });
+
+  test('gap-fill adds guard when nothing else to do', () => {
+    const sim = makeSim();
+    const board = assessBoard(sim);
+    // Empty actions = all budget is remaining → gap-fill should add something
+    const plan = assemblePlan([], sim, board, new Map());
+    assert.ok(plan.length > 0, 'gap-fill should add fallback actions');
+    const guardAction = plan.find(a => a.type === PlanActionType.GUARD);
+    assert.ok(guardAction, 'should include GUARD as fallback');
+  });
+
+  test('truncates to MAX_PLAN_LENGTH', () => {
+    const sim = makeSim();
+    // Give a large budget
+    sim.actionsLeft = 20;
+    const board = assessBoard(sim);
+    const manyActions = Array.from({ length: 20 }, (_, i) => ({
+      type: PlanActionType.MOVE, entityId: `unit${i}`, toCol: i % 5, toRow: Math.floor(i / 5),
+      _priority: 3, _goal: Goal.CONTROL_NODES,
+    }));
+    const plan = assemblePlan(manyActions, sim, board, new Map());
+    assert.ok(plan.length <= MAX_PLAN_LENGTH, `plan length ${plan.length} exceeds MAX_PLAN_LENGTH`);
+  });
+
+  test('non-move actions pass through anti-oscillation filter', () => {
+    const sim = makeSim();
+    const board = assessBoard(sim);
+    const prevPositions = new Map([['witch1', { col: 0, row: 0 }]]);
+    const actions = [
+      { type: PlanActionType.SUMMON, entityId: 'witch1', _priority: 2, _goal: Goal.BUILD_ARMY },
+      { type: PlanActionType.GUARD, entityId: 'witch1', _priority: 4, _goal: Goal.CONTROL_NODES },
+    ];
+    const plan = assemblePlan(actions, sim, board, prevPositions);
+    assert.ok(plan.some(a => a.type === PlanActionType.SUMMON), 'SUMMON should not be filtered');
+    assert.ok(plan.some(a => a.type === PlanActionType.GUARD), 'GUARD should not be filtered');
+  });
+});
+
+// ── WitchAIEngine.generatePlan (integration) ───────────────────────────────
+
+describe('WitchAIEngine.generatePlan (integration)', () => {
   test('produces non-empty plan with valid action types', async () => {
-    // Set up a state where the engine should produce actions
     const { WitchAIEngine } = await import('../src/ai-engine.js');
     const state = makeFakeState({
       inventory: { witch: { [ResourceType.WOOD]: 4, [ResourceType.METAL]: 2 }, hero: {} },
@@ -763,6 +895,22 @@ describe('WitchAIEngine.generatePlan (Phase 2)', () => {
     }
   });
 
+  test('plan has no internal metadata (_priority, _goal)', async () => {
+    const { WitchAIEngine } = await import('../src/ai-engine.js');
+    const state = makeFakeState({
+      inventory: { witch: { [ResourceType.WOOD]: 4 }, hero: {} },
+      witchObjectives: [
+        { col: 3, row: 0, label: 'Node A', hexes: [{ col: 3, row: 0 }] },
+      ],
+    });
+    const engine = new WitchAIEngine(state, () => {}, 0);
+    const plan = engine.generatePlan();
+    for (const action of plan) {
+      assert.equal(action._priority, undefined, 'should strip _priority');
+      assert.equal(action._goal, undefined, 'should strip _goal');
+    }
+  });
+
   test('plan length does not exceed MAX_PLAN_LENGTH', async () => {
     const { WitchAIEngine } = await import('../src/ai-engine.js');
     const state = makeFakeState({
@@ -775,6 +923,33 @@ describe('WitchAIEngine.generatePlan (Phase 2)', () => {
     });
     const engine = new WitchAIEngine(state, () => {}, 0);
     const plan = engine.generatePlan();
-    assert.ok(plan.length <= 12, `plan length ${plan.length} exceeds MAX_PLAN_LENGTH (12)`);
+    assert.ok(plan.length <= MAX_PLAN_LENGTH, `plan length ${plan.length} exceeds MAX_PLAN_LENGTH`);
+  });
+
+  test('cross-turn memory prevents oscillation', async () => {
+    const { WitchAIEngine } = await import('../src/ai-engine.js');
+    const state = makeFakeState({
+      inventory: { witch: { [ResourceType.WOOD]: 2 }, hero: {} },
+    });
+    const engine = new WitchAIEngine(state, () => {}, 0);
+
+    // First plan: witch starts at (0,0), may move to (1,0)
+    const plan1 = engine.generatePlan();
+    const firstMove = plan1.find(a => a.type === PlanActionType.MOVE && a.entityId === 'witch1');
+
+    if (firstMove) {
+      // Manually place witch at the moved-to position for next turn
+      state.entities = state.entities.map(e => {
+        if (e.id === 'witch1') return { ...e, col: firstMove.toCol, row: firstMove.toRow };
+        return e;
+      });
+      const plan2 = engine.generatePlan();
+      // Should not have a move back to (0,0) for witch1
+      const backMove = plan2.find(a =>
+        a.type === PlanActionType.MOVE && a.entityId === 'witch1' &&
+        a.toCol === 0 && a.toRow === 0
+      );
+      assert.ok(!backMove, 'cross-turn memory should prevent returning to (0,0)');
+    }
   });
 });
