@@ -1713,7 +1713,13 @@ function _resolveAsyncRound(roomId) {
     console.log(`  step[${i}]: ${evCount} events, ${s.entitySnapshot?.length ?? 0} entities`);
     for (const pe of s.playerEvents) {
       for (const ev of pe.events) {
-        console.log(`    ${pe.faction} ${ev.type} ${ev.action?.type ?? '?'} entity=${ev.action?.entityId ?? '?'}`);
+        const extra = [];
+        if (ev.action?.type === 'move') {
+          extra.push(`to=${ev.action.toCol},${ev.action.toRow}`);
+          extra.push(`path=${JSON.stringify(ev.result?.path ?? 'MISSING')}`);
+        }
+        if (ev.battleSnaps) extra.push('hasBattleSnaps');
+        console.log(`    ${pe.faction} ${ev.type} ${ev.action?.type ?? '?'} entity=${ev.action?.entityId ?? '?'} ${extra.join(' ')}`);
       }
     }
   }

@@ -2495,8 +2495,10 @@ async function _asyncWatchLastTurn(lastRound) {
   console.log('[async-replay] finalEntities count:', finalEntities.length,
     'positions:', finalEntities.slice(0, 4).map(e => `${e.type}@${e.col},${e.row}`));
 
-  // Restore pre-resolution state so the animation starts from the right positions
-  const preResState = deserializeState(
+  // Restore pre-resolution state so the animation starts from the right positions.
+  // Must use MirrorState (not deserializeState) because state is a MirrorState in
+  // online/async mode — GameState has frozen properties that can't be assigned.
+  const preResState = MirrorState.fromSnapshot(
     typeof preState === 'string' ? JSON.parse(preState) : preState
   );
   Object.assign(state, preResState);
