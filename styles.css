@@ -245,6 +245,7 @@ canvas { touch-action: pan-x pan-y; }
 .setup-select {
   background: var(--bg-section);
   color: var(--text);
+  color-scheme: dark;
   border: 1px solid var(--day);
   border-radius: 4px;
   font-family: inherit;
@@ -473,6 +474,7 @@ canvas { touch-action: pan-x pan-y; }
   max-width: 120px;
   background: var(--bg-section);
   color: var(--text);
+  color-scheme: dark;
   border: 1px solid var(--border);
   border-radius: 4px;
 }
