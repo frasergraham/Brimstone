@@ -1,5 +1,5 @@
-// Tests for src/hero-ai-engine.js — Phase 1
-// Covers assessHeroBoard, scoreHeroGoals, and allocateBudget integration.
+// Tests for src/hero-ai-engine.js
+// Covers assessHeroBoard, scoreHeroGoals, allocateBudget integration, and tactic generators.
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,9 +12,18 @@ import { allocateBudget } from '../src/ai-engine.js';
 import {
   HeroGoal,
   HERO_PERSONALITY_CONFIGS,
+  HeroEnginePlanSimState,
   assessHeroBoard,
   scoreHeroGoals,
+  estimateHeroCombat,
+  genProtectHero,
+  genSlayWitch,
+  genControlNodes,
+  genExplore,
+  genFortifyPosition,
+  fillGapsHero,
 } from '../src/hero-ai-engine.js';
+import { PlanActionType } from '../src/planner.js';
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -80,6 +89,10 @@ function makeFakeState(overrides = {}) {
 
 function makeHeroSim(stateOverrides = {}) {
   return new PlanSimState(makeFakeState(stateOverrides), 'hero');
+}
+
+function makeHeroEngineSim(stateOverrides = {}) {
+  return new HeroEnginePlanSimState(makeFakeState(stateOverrides));
 }
 
 // ── assessHeroBoard ─────────────────────────────────────────────────────────
@@ -426,5 +439,372 @@ describe('HERO_PERSONALITY_CONFIGS', () => {
     // Aggressive should weight SLAY_WITCH higher
     assert.ok(aggressive[HeroGoal.SLAY_WITCH] >= balanced[HeroGoal.SLAY_WITCH],
       `aggressive SLAY (${aggressive[HeroGoal.SLAY_WITCH]}) should be >= balanced (${balanced[HeroGoal.SLAY_WITCH]})`);
+  });
+});
+
+// ── HeroEnginePlanSimState ──────────────────────────────────────────────────
+
+describe('HeroEnginePlanSimState', () => {
+  test('resourceLedger uses shared inventory', () => {
+    const sim = makeHeroEngineSim();
+    assert.equal(sim.resourceLedger[ResourceType.WOOD], 2);
+    assert.equal(sim.resourceLedger[ResourceType.METAL], 1);
+  });
+
+  test('has departedHexes and unitCommitments', () => {
+    const sim = makeHeroEngineSim();
+    assert.ok(sim.departedHexes instanceof Map);
+    assert.ok(sim.unitCommitments instanceof Map);
+  });
+});
+
+// ── estimateHeroCombat ──────────────────────────────────────────────────────
+
+describe('estimateHeroCombat', () => {
+  test('returns favorability and classification', () => {
+    const sim = makeHeroSim();
+    const board = assessHeroBoard(sim);
+    const result = estimateHeroCombat(board.hero, board.witch, board);
+    assert.ok('favorability' in result);
+    assert.ok('classification' in result);
+    assert.ok(['overwhelming', 'favorable', 'unfavorable', 'suicidal'].includes(result.classification));
+  });
+
+  test('strong attacker vs weak defender is favorable', () => {
+    const sim = makeHeroSim({
+      entities: [
+        makeEntity({ id: 'hero1', col: 3, row: 3, hp: 10, maxHp: 10, attack: 6, defense: 4, items: {} }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 4, row: 3, hp: 3, maxHp: 8, attack: 1, defense: 1 }),
+      ],
+    });
+    const board = assessHeroBoard(sim);
+    const result = estimateHeroCombat(board.hero, board.witch, board);
+    assert.ok(result.favorability > 0, `expected positive favorability, got ${result.favorability}`);
+  });
+
+  test('hero gets no night bonus', () => {
+    const sim = makeHeroSim({
+      phase: Phase.NIGHT,
+      entities: [
+        makeEntity({ id: 'hero1', col: 3, row: 3, hp: 10, maxHp: 10, attack: 3, defense: 2, items: {} }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 4, row: 3, hp: 8, maxHp: 8, attack: 3, defense: 2 }),
+      ],
+    });
+    const dayBoard = assessHeroBoard(makeHeroSim({
+      phase: Phase.DAY,
+      entities: [
+        makeEntity({ id: 'hero1', col: 3, row: 3, hp: 10, maxHp: 10, attack: 3, defense: 2, items: {} }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 4, row: 3, hp: 8, maxHp: 8, attack: 3, defense: 2 }),
+      ],
+    }));
+    const nightBoard = assessHeroBoard(sim);
+    const dayResult = estimateHeroCombat(dayBoard.hero, dayBoard.witch, dayBoard);
+    const nightResult = estimateHeroCombat(nightBoard.hero, nightBoard.witch, nightBoard);
+    assert.equal(dayResult.favorability, nightResult.favorability, 'hero combat should not change at night');
+  });
+});
+
+// ── genProtectHero ──────────────────────────────────────────────────────────
+
+describe('genProtectHero', () => {
+  test('emits USE_ITEM herbs when hero is injured', () => {
+    const sim = makeHeroEngineSim({
+      entities: [
+        makeEntity({ id: 'hero1', col: 3, row: 3, hp: 5, maxHp: 10,
+          items: { [ResourceType.HERBS]: 2 } }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
+      ],
+    });
+    const board = assessHeroBoard(sim);
+    const actions = genProtectHero(sim, board, 3);
+    const herbAction = actions.find(a => a.type === PlanActionType.USE_ITEM && a.item === ResourceType.HERBS);
+    assert.ok(herbAction, 'should emit USE_ITEM herbs');
+  });
+
+  test('emits EQUIP_WEAPON when hero has unequipped weapon', () => {
+    const sim = makeHeroEngineSim({
+      entities: [
+        makeEntity({ id: 'hero1', col: 3, row: 3, hp: 5, maxHp: 10,
+          items: { 'weapon:sword': 1 } }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
+      ],
+    });
+    const board = assessHeroBoard(sim);
+    const actions = genProtectHero(sim, board, 3);
+    const equipAction = actions.find(a => a.type === PlanActionType.EQUIP_WEAPON);
+    assert.ok(equipAction, 'should emit EQUIP_WEAPON');
+  });
+
+  test('flee when HP below shelter threshold and enemy nearby', () => {
+    const sim = makeHeroEngineSim({
+      entities: [
+        makeEntity({ id: 'hero1', col: 3, row: 3, hp: 2, maxHp: 10, items: {} }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 4, row: 3 }),
+      ],
+    });
+    const board = assessHeroBoard(sim);
+    const config = { shelterThreshold: 0.4 };
+    const actions = genProtectHero(sim, board, 3, config);
+    const moveAction = actions.find(a => a.type === PlanActionType.MOVE);
+    assert.ok(moveAction, 'should emit MOVE to flee');
+  });
+
+  test('no actions when hero is healthy', () => {
+    const sim = makeHeroEngineSim({
+      entities: [
+        makeEntity({ id: 'hero1', col: 3, row: 3, hp: 10, maxHp: 10, items: {} }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
+      ],
+    });
+    const board = assessHeroBoard(sim);
+    const actions = genProtectHero(sim, board, 3);
+    assert.equal(actions.length, 0);
+  });
+});
+
+// ── genSlayWitch ────────────────────────────────────────────────────────────
+
+describe('genSlayWitch', () => {
+  test('emits BATTLE_UNIT when hero adjacent to witch', () => {
+    const sim = makeHeroEngineSim({
+      entities: [
+        makeEntity({ id: 'hero1', col: 3, row: 3, hp: 10, maxHp: 10, attack: 5, items: {} }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 4, row: 3, hp: 8, maxHp: 8, attack: 2, defense: 1 }),
+      ],
+    });
+    const board = assessHeroBoard(sim);
+    const actions = genSlayWitch(sim, board, 3);
+    const battle = actions.find(a => a.type === PlanActionType.BATTLE_UNIT);
+    assert.ok(battle, 'should emit BATTLE_UNIT');
+    assert.equal(battle.targetId, 'witch1');
+  });
+
+  test('chases witch when not adjacent', () => {
+    const sim = makeHeroEngineSim({
+      entities: [
+        makeEntity({ id: 'hero1', col: 0, row: 0, hp: 10, maxHp: 10, items: {} }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 4, row: 4, hp: 8, maxHp: 8 }),
+      ],
+    });
+    const board = assessHeroBoard(sim);
+    const actions = genSlayWitch(sim, board, 3);
+    const moves = actions.filter(a => a.type === PlanActionType.MOVE);
+    assert.ok(moves.length > 0, 'should emit MOVE actions toward witch');
+  });
+
+  test('respects engage floor', () => {
+    // Weak hero vs strong witch — 'unfavorable' floor should skip battle
+    const sim = makeHeroEngineSim({
+      entities: [
+        makeEntity({ id: 'hero1', col: 3, row: 3, hp: 3, maxHp: 10, attack: 1, defense: 0, items: {} }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 4, row: 3, hp: 8, maxHp: 8, attack: 5, defense: 4 }),
+      ],
+    });
+    const board = assessHeroBoard(sim);
+    const config = { engageFloor: 'unfavorable' };
+    const actions = genSlayWitch(sim, board, 3, config);
+    const battle = actions.find(a => a.type === PlanActionType.BATTLE_UNIT);
+    // With suicidal classification and unfavorable floor, should not battle
+    assert.equal(battle, undefined, 'should not battle when below engage floor');
+  });
+
+  test('returns empty when witch not visible', () => {
+    const sim = makeHeroEngineSim({
+      entities: [
+        makeEntity({ id: 'hero1', col: 3, row: 3, hp: 10, maxHp: 10, items: {} }),
+        // No witch entity
+      ],
+    });
+    const board = assessHeroBoard(sim);
+    const actions = genSlayWitch(sim, board, 3);
+    assert.equal(actions.length, 0);
+  });
+});
+
+// ── genControlNodes ─────────────────────────────────────────────────────────
+
+describe('genControlNodes', () => {
+  test('moves hero toward uncovered node', () => {
+    const sim = makeHeroEngineSim({
+      entities: [
+        makeEntity({ id: 'hero1', col: 3, row: 3, hp: 10, maxHp: 10, items: {} }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
+      ],
+    });
+    const board = assessHeroBoard(sim);
+    const actions = genControlNodes(sim, board, 5);
+    const moves = actions.filter(a => a.type === PlanActionType.MOVE);
+    assert.ok(moves.length > 0, 'should emit MOVE toward node');
+  });
+
+  test('guards when on node with nearby threat', () => {
+    const sim = makeHeroEngineSim({
+      witchObjectives: [{ col: 3, row: 3, hexes: [{ col: 3, row: 3 }] }],
+      entities: [
+        makeEntity({ id: 'hero1', col: 3, row: 3, hp: 10, maxHp: 10, items: {} }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 4, row: 3 }),
+      ],
+    });
+    const board = assessHeroBoard(sim);
+    const actions = genControlNodes(sim, board, 3);
+    const guard = actions.find(a => a.type === PlanActionType.GUARD);
+    assert.ok(guard, 'should emit GUARD when on threatened node');
+  });
+});
+
+// ── genExplore ──────────────────────────────────────────────────────────────
+
+describe('genExplore', () => {
+  test('explores current unexplored building', () => {
+    const sim = makeHeroEngineSim({
+      entities: [
+        makeEntity({ id: 'hero1', col: 1, row: 1, hp: 10, maxHp: 10, items: {} }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
+      ],
+    });
+    const board = assessHeroBoard(sim);
+    const actions = genExplore(sim, board, 3);
+    const explore = actions.find(a => a.type === PlanActionType.EXPLORE);
+    assert.ok(explore, 'should emit EXPLORE on current building');
+  });
+
+  test('moves toward nearest unexplored building', () => {
+    const sim = makeHeroEngineSim({
+      entities: [
+        makeEntity({ id: 'hero1', col: 3, row: 3, hp: 10, maxHp: 10, items: {} }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
+      ],
+    });
+    const board = assessHeroBoard(sim);
+    const actions = genExplore(sim, board, 3);
+    const moves = actions.filter(a => a.type === PlanActionType.MOVE);
+    assert.ok(moves.length > 0, 'should emit MOVE toward unexplored building');
+  });
+
+  test('returns empty when no unexplored buildings', () => {
+    const tiles = new Map();
+    for (let c = 0; c < 7; c++) {
+      for (let r = 0; r < 7; r++) {
+        tiles.set(hexKey(c, r), {
+          col: c, row: r, type: TileType.GRASS, explored: true,
+          building: null, resource: null, fortifyLevel: 0,
+        });
+      }
+    }
+    const sim = makeHeroEngineSim({
+      tiles,
+      entities: [
+        makeEntity({ id: 'hero1', col: 3, row: 3, hp: 10, maxHp: 10, items: {} }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
+      ],
+    });
+    const board = assessHeroBoard(sim);
+    const actions = genExplore(sim, board, 3);
+    assert.equal(actions.length, 0);
+  });
+});
+
+// ── genFortifyPosition ──────────────────────────────────────────────────────
+
+describe('genFortifyPosition', () => {
+  test('seeks shelter at night when not in building', () => {
+    const sim = makeHeroEngineSim({
+      phase: Phase.NIGHT,
+      entities: [
+        makeEntity({ id: 'hero1', col: 3, row: 3, hp: 10, maxHp: 10, items: {} }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
+      ],
+    });
+    const board = assessHeroBoard(sim);
+    const actions = genFortifyPosition(sim, board, 3);
+    const moves = actions.filter(a => a.type === PlanActionType.MOVE);
+    assert.ok(moves.length > 0, 'should emit MOVE toward building at night');
+  });
+
+  test('fortifies building when in one with resources', () => {
+    const sim = makeHeroEngineSim({
+      phase: Phase.NIGHT,
+      entities: [
+        makeEntity({ id: 'hero1', col: 1, row: 1, hp: 10, maxHp: 10, items: {} }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
+      ],
+    });
+    const board = assessHeroBoard(sim);
+    const actions = genFortifyPosition(sim, board, 5);
+    const fortify = actions.find(a => a.type === PlanActionType.FORTIFY);
+    assert.ok(fortify, 'should emit FORTIFY when in building with resources');
+  });
+
+  test('shelters survivors at night', () => {
+    const sim = makeHeroEngineSim({
+      phase: Phase.NIGHT,
+      entities: [
+        makeEntity({ id: 'hero1', col: 1, row: 1, hp: 10, maxHp: 10, items: {} }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
+        makeEntity({ id: 's1', type: EntityType.SURVIVOR, owner: 'hero', col: 3, row: 3, hp: 3, maxHp: 3 }),
+      ],
+    });
+    const board = assessHeroBoard(sim);
+    const actions = genFortifyPosition(sim, board, 5);
+    const survivorMove = actions.find(a => a.type === PlanActionType.MOVE && a.entityId === 's1');
+    assert.ok(survivorMove, 'should shelter survivor');
+  });
+
+  test('respects fortifyCap', () => {
+    const sim = makeHeroEngineSim({
+      phase: Phase.DAY,
+      entities: [
+        makeEntity({ id: 'hero1', col: 1, row: 1, hp: 10, maxHp: 10, items: {} }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
+      ],
+    });
+    const board = assessHeroBoard(sim);
+    const config = { fortifyCapDay: 1, fortifyCapNight: 3 };
+    const actions = genFortifyPosition(sim, board, 5, config);
+    const fortifyCount = actions.filter(a => a.type === PlanActionType.FORTIFY).length;
+    assert.ok(fortifyCount <= 1, `should not exceed day cap (got ${fortifyCount})`);
+  });
+});
+
+// ── fillGapsHero ────────────────────────────────────────────────────────────
+
+describe('fillGapsHero', () => {
+  test('adds guard when enemies nearby', () => {
+    const sim = makeHeroEngineSim({
+      entities: [
+        makeEntity({ id: 'hero1', col: 3, row: 3, hp: 10, maxHp: 10, items: {} }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 4, row: 3 }),
+      ],
+    });
+    const board = assessHeroBoard(sim);
+    const heroEntity = sim.entities.find(e => e.id === 'hero1');
+    const plan = [];
+    fillGapsHero(plan, sim, board, heroEntity, 2, new Map());
+    const guard = plan.find(a => a.type === PlanActionType.GUARD);
+    assert.ok(guard, 'should add GUARD when enemy nearby');
+  });
+
+  test('adds guard fallback when nothing else to do', () => {
+    const tiles = new Map();
+    for (let c = 0; c < 7; c++) {
+      for (let r = 0; r < 7; r++) {
+        tiles.set(hexKey(c, r), {
+          col: c, row: r, type: TileType.GRASS, explored: true,
+          building: null, resource: null, fortifyLevel: 0,
+        });
+      }
+    }
+    const sim = makeHeroEngineSim({
+      tiles,
+      entities: [
+        makeEntity({ id: 'hero1', col: 3, row: 3, hp: 10, maxHp: 10, items: {} }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
+      ],
+    });
+    const board = assessHeroBoard(sim);
+    const heroEntity = sim.entities.find(e => e.id === 'hero1');
+    const plan = [];
+    fillGapsHero(plan, sim, board, heroEntity, 1, new Map());
+    assert.ok(plan.length > 0, 'should add fallback actions');
   });
 });

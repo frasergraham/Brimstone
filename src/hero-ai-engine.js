@@ -4,8 +4,8 @@
 // Pipeline: EVALUATE → SCORE → ALLOCATE → GENERATE → ASSEMBLE
 
 import { PlanSimState, stepToward, stepAwayFrom, nearestBuilding, isOnNode, inBuilding, HERO_PERSONALITIES } from './ai.js';
-import { EnginePlanSimState, allocateBudget, assemblePlan, estimateCombat } from './ai-engine.js';
-import { hexDistance, hexKey, getNeighbors } from './hex.js';
+import { EnginePlanSimState, allocateBudget, assemblePlan } from './ai-engine.js';
+import { hexDistance, hexKey } from './hex.js';
 import { Phase, nodeController } from './game.js';
 import { EntityType } from './entities.js';
 import { TileType, ResourceType } from './tiles.js';
@@ -72,6 +72,17 @@ export const HERO_PERSONALITY_CONFIGS = Object.freeze({
     fortifyCapNight: 3,
   }),
 });
+
+// ── HeroEnginePlanSimState ───────────────────────────────────────────────────
+// Extends EnginePlanSimState with hero-specific resource ledger (shared inventory).
+
+export class HeroEnginePlanSimState extends EnginePlanSimState {
+  constructor(realState, playerId = null) {
+    super(realState, 'hero', playerId);
+    // Hero uses shared inventory (wood/metal for fortification), not witch inventory
+    this.resourceLedger = JSON.parse(JSON.stringify(this.inventory.shared || {}));
+  }
+}
 
 // ── Stage 1: Board Evaluation ────────────────────────────────────────────────
 
@@ -285,4 +296,496 @@ export function scoreHeroGoals(board, goalWeights = null) {
   }
 
   return scores;
+}
+
+// ── Combat estimation (hero-perspective) ─────────────────────────────────────
+// Same dice model as witch estimateCombat but with hero-correct gang-up units.
+
+export function estimateHeroCombat(attacker, defender, board) {
+  // Hero never gets night ATK bonus
+  const nightBonus = 0;
+
+  // Attacker allies: hero-side units adjacent to the defender
+  const allies = [board.hero, ...board.survivors].filter(e =>
+    e && e.id !== attacker.id && hexDistance(e.col, e.row, defender.col, defender.row) <= 1
+  );
+  const gangUpDice = Math.min(allies.length, 3);
+
+  // Defender allies: witch-side units adjacent to the defender
+  const defAllies = [board.witch, ...board.witchMinions].filter(e =>
+    e && e.id !== defender.id && hexDistance(e.col, e.row, defender.col, defender.row) <= 1
+  );
+  const defAllyDice = Math.min(defAllies.length, 3);
+
+  const expectedAtk = (attacker.attack || 0) + 3.5 + nightBonus + gangUpDice * 2;
+  const expectedDef = (defender.defense || 0) + 3.5 + defAllyDice * 2;
+
+  const favorability = expectedAtk - expectedDef;
+
+  let classification;
+  if (favorability > 3)       classification = 'overwhelming';
+  else if (favorability > 0)  classification = 'favorable';
+  else if (favorability > -3) classification = 'unfavorable';
+  else                        classification = 'suicidal';
+
+  return { favorability, classification };
+}
+
+// ── Helper: engage floor check ──────────────────────────────────────────────
+
+function meetsEngageFloor(classification, floor) {
+  if (floor === 'suicidal') return classification !== 'suicidal';
+  if (floor === 'unfavorable') return classification === 'favorable' || classification === 'overwhelming';
+  if (floor === 'favorable') return classification === 'overwhelming';
+  return true;
+}
+
+// ── Helper: closest uncommitted hero unit to a target ───────────────────────
+
+function _closestUncommittedHero(sim, board, target) {
+  let best = null, bestDist = Infinity;
+  const candidates = [board.hero, ...board.survivors].filter(e => e && e.alive);
+  for (const e of candidates) {
+    if (sim.unitCommitments.has(e.id)) continue;
+    const d = hexDistance(e.col, e.row, target.col, target.row);
+    if (d < bestDist) { bestDist = d; best = e; }
+  }
+  return best;
+}
+
+// ── Helper: nearest unexplored building ─────────────────────────────────────
+
+function _nearestUnexploredBuilding(sim, actor) {
+  let best = null, bestDist = Infinity;
+  for (const [, t] of sim.tiles) {
+    if (t.type !== TileType.BUILDING) continue;
+    const explored = sim.isExplored ? sim.isExplored(t.col, t.row) : t.explored;
+    if (explored) continue;
+    const d = hexDistance(actor.col, actor.row, t.col, t.row);
+    if (d < bestDist) { bestDist = d; best = t; }
+  }
+  return best;
+}
+
+// ── Stage 4: Tactic Generators ──────────────────────────────────────────────
+
+// ── Generator: PROTECT_HERO ─────────────────────────────────────────────────
+
+export function genProtectHero(sim, board, budget, config = null) {
+  const actions = [];
+  if (!board.hero) return actions;
+  let remaining = budget;
+
+  const heroEntity = sim.entities.find(e => e.id === board.hero.id);
+  if (!heroEntity) return actions;
+
+  // Free action: use herbs if injured
+  const herbs = heroEntity.items?.[ResourceType.HERBS] || 0;
+  if (herbs > 0 && board.heroHpRatio < 1.0) {
+    actions.push({
+      type: PlanActionType.USE_ITEM, entityId: board.hero.id,
+      item: ResourceType.HERBS, _priority: 0, _goal: HeroGoal.PROTECT_HERO,
+    });
+  }
+
+  // Free action: equip best unequipped weapon
+  if (board.heroWeapons.length > 0 && !heroEntity.weapon) {
+    actions.push({
+      type: PlanActionType.EQUIP_WEAPON, entityId: board.hero.id,
+      weapon: board.heroWeapons[0], _priority: 0, _goal: HeroGoal.PROTECT_HERO,
+    });
+  }
+
+  // Flee: if hero HP below shelter threshold and enemy within 2 hexes
+  const shelterThreshold = config?.shelterThreshold ?? 0.4;
+  if (board.heroHpRatio < shelterThreshold && remaining > 0) {
+    const nearbyEnemy = sim.entities.find(e =>
+      e.alive && e.owner === 'witch' &&
+      hexDistance(heroEntity.col, heroEntity.row, e.col, e.row) <= 2
+    );
+    if (nearbyEnemy) {
+      // Try to flee toward nearest building
+      const shelter = nearestBuilding(sim, heroEntity);
+      const fleeStep = shelter
+        ? stepToward(sim, heroEntity, shelter)
+        : stepAwayFrom(sim, heroEntity, nearbyEnemy);
+      if (fleeStep) {
+        actions.push({
+          type: PlanActionType.MOVE, entityId: board.hero.id,
+          toCol: fleeStep.col, toRow: fleeStep.row,
+          _priority: 1, _goal: HeroGoal.PROTECT_HERO,
+        });
+        sim.applyMove(board.hero.id, fleeStep.col, fleeStep.row);
+        sim.unitCommitments.set(board.hero.id, HeroGoal.PROTECT_HERO);
+        remaining--;
+      }
+    }
+  }
+
+  return actions;
+}
+
+// ── Generator: SLAY_WITCH ───────────────────────────────────────────────────
+
+export function genSlayWitch(sim, board, budget, config = null) {
+  const actions = [];
+  if (budget <= 0 || !board.hero || !board.witchVisible) return actions;
+  let remaining = budget;
+
+  const engageFloor = config?.engageFloor ?? 'unfavorable';
+  const heroEntity = sim.entities.find(e => e.id === board.hero.id);
+  if (!heroEntity) return actions;
+
+  // All hero-side units
+  const heroUnits = [heroEntity, ...sim.entities.filter(e =>
+    e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR
+  )];
+
+  // All enemy units (witch + minions)
+  const enemies = sim.entities.filter(e => e.alive && e.owner === 'witch');
+
+  // Battle: hero-side units adjacent to enemies
+  for (const unit of heroUnits) {
+    if (remaining <= 0) break;
+    if (sim.unitCommitments.has(unit.id)) continue;
+
+    for (const enemy of enemies) {
+      const dist = hexDistance(unit.col, unit.row, enemy.col, enemy.row);
+      if (dist <= 1) {
+        const est = estimateHeroCombat(unit, enemy, board);
+        if (!meetsEngageFloor(est.classification, engageFloor)) continue;
+
+        actions.push({
+          type: PlanActionType.BATTLE_UNIT, entityId: unit.id,
+          targetId: enemy.id, targetCol: enemy.col, targetRow: enemy.row,
+          _priority: 3, _goal: HeroGoal.SLAY_WITCH,
+        });
+        sim.applyBattle();
+        sim.unitCommitments.set(unit.id, HeroGoal.SLAY_WITCH);
+        remaining--;
+        break;
+      }
+    }
+  }
+
+  // Chase witch: move hero toward witch (multi-step)
+  if (remaining > 0 && !sim.unitCommitments.has(board.hero.id) && board.witch) {
+    const witchEntity = sim.entities.find(e => e.id === board.witch.id);
+    if (witchEntity) {
+      let stepsLeft = Math.min(remaining, 3);
+      while (stepsLeft > 0) {
+        if (hexDistance(heroEntity.col, heroEntity.row, witchEntity.col, witchEntity.row) <= 1) break;
+        const step = stepToward(sim, heroEntity, witchEntity);
+        if (!step) break;
+
+        actions.push({
+          type: PlanActionType.MOVE, entityId: board.hero.id,
+          toCol: step.col, toRow: step.row,
+          _priority: 5, _goal: HeroGoal.SLAY_WITCH,
+        });
+        sim.applyMove(board.hero.id, step.col, step.row);
+        remaining--;
+        stepsLeft--;
+      }
+      sim.unitCommitments.set(board.hero.id, HeroGoal.SLAY_WITCH);
+    }
+  }
+
+  return actions;
+}
+
+// ── Generator: CONTROL_NODES ────────────────────────────────────────────────
+
+export function genControlNodes(sim, board, budget) {
+  const actions = [];
+  if (budget <= 0 || !board.hero) return actions;
+  let remaining = budget;
+
+  // Target nodes: uncovered or witch-held, plus hero-held with nearby threats
+  const witchThreatensNode = (n) => sim.entities.some(e =>
+    e.alive && e.owner === 'witch' &&
+    hexDistance(e.col, e.row, n.obj.col, n.obj.row) <= 2
+  );
+  const targetNodes = board.nodes
+    .filter(n => n.controller !== 'hero' || !n.heroPresent || witchThreatensNode(n))
+    .sort((a, b) => {
+      const aOwned = a.controller === 'hero' && a.heroPresent ? 1 : 0;
+      const bOwned = b.controller === 'hero' && b.heroPresent ? 1 : 0;
+      if (aOwned !== bOwned) return aOwned - bOwned;
+      return a.distToNearestHeroUnit - b.distToNearestHeroUnit;
+    });
+
+  for (const node of targetNodes) {
+    if (remaining <= 0) break;
+
+    const unit = _closestUncommittedHero(sim, board, node.obj);
+    if (!unit) continue;
+
+    const simUnit = sim.entities.find(e => e.id === unit.id);
+    if (!simUnit) continue;
+
+    // If unit is already on the node, guard if threatened
+    const onNode = node.obj.hexes
+      ? node.obj.hexes.some(h => h.col === simUnit.col && h.row === simUnit.row)
+      : (simUnit.col === node.obj.col && simUnit.row === node.obj.row);
+
+    if (onNode) {
+      if (witchThreatensNode(node)) {
+        actions.push({
+          type: PlanActionType.GUARD, entityId: simUnit.id,
+          _priority: 4, _goal: HeroGoal.CONTROL_NODES,
+        });
+        sim.applyGuard(simUnit.id);
+        sim.unitCommitments.set(simUnit.id, HeroGoal.CONTROL_NODES);
+        remaining--;
+      }
+      continue;
+    }
+
+    // Move toward node
+    sim.unitCommitments.set(simUnit.id, HeroGoal.CONTROL_NODES);
+    let stepsForUnit = Math.min(remaining, 3);
+    while (stepsForUnit > 0) {
+      const targetHex = node.obj.hexes
+        ? node.obj.hexes.reduce((best, h) => {
+            const d = hexDistance(simUnit.col, simUnit.row, h.col, h.row);
+            const bd = hexDistance(simUnit.col, simUnit.row, best.col, best.row);
+            return d < bd ? h : best;
+          }, node.obj.hexes[0])
+        : node.obj;
+
+      if (simUnit.col === targetHex.col && simUnit.row === targetHex.row) break;
+
+      const step = stepToward(sim, simUnit, targetHex);
+      if (!step) break;
+
+      actions.push({
+        type: PlanActionType.MOVE, entityId: simUnit.id,
+        toCol: step.col, toRow: step.row,
+        _priority: 5, _goal: HeroGoal.CONTROL_NODES,
+      });
+      sim.applyMove(simUnit.id, step.col, step.row);
+      remaining--;
+      stepsForUnit--;
+    }
+  }
+
+  return actions;
+}
+
+// ── Generator: EXPLORE ──────────────────────────────────────────────────────
+
+export function genExplore(sim, board, budget) {
+  const actions = [];
+  if (budget <= 0 || !board.hero) return actions;
+  let remaining = budget;
+
+  const heroEntity = sim.entities.find(e => e.id === board.hero.id);
+  if (!heroEntity) return actions;
+
+  // Explore current building if unexplored
+  if (!sim.isExplored(heroEntity.col, heroEntity.row) && !sim.unitCommitments.has(board.hero.id)) {
+    const tile = sim.tiles.get(hexKey(heroEntity.col, heroEntity.row));
+    if (tile && tile.type === TileType.BUILDING) {
+      actions.push({
+        type: PlanActionType.EXPLORE, entityId: board.hero.id,
+        _priority: 6, _goal: HeroGoal.EXPLORE,
+      });
+      sim.applyExplore(board.hero.id);
+      remaining--;
+    }
+  }
+
+  // Move toward nearest unexplored building, then explore on arrival
+  if (remaining > 0 && !sim.unitCommitments.has(board.hero.id)) {
+    const building = _nearestUnexploredBuilding(sim, heroEntity);
+    if (building) {
+      let stepsLeft = Math.min(remaining, 3);
+      while (stepsLeft > 0) {
+        if (heroEntity.col === building.col && heroEntity.row === building.row) {
+          // Arrived — explore
+          actions.push({
+            type: PlanActionType.EXPLORE, entityId: board.hero.id,
+            _priority: 6, _goal: HeroGoal.EXPLORE,
+          });
+          sim.applyExplore(board.hero.id);
+          remaining--;
+          break;
+        }
+        const step = stepToward(sim, heroEntity, building);
+        if (!step) break;
+
+        actions.push({
+          type: PlanActionType.MOVE, entityId: board.hero.id,
+          toCol: step.col, toRow: step.row,
+          _priority: 6, _goal: HeroGoal.EXPLORE,
+        });
+        sim.applyMove(board.hero.id, step.col, step.row);
+        remaining--;
+        stepsLeft--;
+      }
+      sim.unitCommitments.set(board.hero.id, HeroGoal.EXPLORE);
+    }
+  }
+
+  return actions;
+}
+
+// ── Generator: FORTIFY_POSITION ─────────────────────────────────────────────
+
+export function genFortifyPosition(sim, board, budget, config = null) {
+  const actions = [];
+  if (budget <= 0 || !board.hero) return actions;
+  let remaining = budget;
+
+  const heroEntity = sim.entities.find(e => e.id === board.hero.id);
+  if (!heroEntity) return actions;
+
+  const fortifyCap = board.isNight || board.isDawnOrDusk
+    ? (config?.fortifyCapNight ?? 3)
+    : (config?.fortifyCapDay ?? 1);
+
+  // Seek shelter: if night and hero not in a building, move to nearest building
+  if ((board.isNight || board.isDawnOrDusk) && !board.heroInBuilding && remaining > 0) {
+    if (!sim.unitCommitments.has(board.hero.id)) {
+      const shelter = nearestBuilding(sim, heroEntity);
+      if (shelter) {
+        let stepsLeft = Math.min(remaining, 3);
+        while (stepsLeft > 0) {
+          if (heroEntity.col === shelter.col && heroEntity.row === shelter.row) break;
+          const step = stepToward(sim, heroEntity, shelter);
+          if (!step) break;
+
+          actions.push({
+            type: PlanActionType.MOVE, entityId: board.hero.id,
+            toCol: step.col, toRow: step.row,
+            _priority: 2, _goal: HeroGoal.FORTIFY_POSITION,
+          });
+          sim.applyMove(board.hero.id, step.col, step.row);
+          remaining--;
+          stepsLeft--;
+        }
+        sim.unitCommitments.set(board.hero.id, HeroGoal.FORTIFY_POSITION);
+      }
+    }
+  }
+
+  // Fortify: if in building and below cap and has resources
+  const heroTile = sim.tiles.get(hexKey(heroEntity.col, heroEntity.row));
+  if (heroTile && heroTile.type === TileType.BUILDING && remaining > 0) {
+    const fortLevel = heroTile.fortifyLevel || 0;
+    const ledger = sim.resourceLedger;
+    while (remaining > 0 && (heroTile.fortifyLevel || 0) < fortifyCap) {
+      const hasWood = (ledger[ResourceType.WOOD] || 0) > 0;
+      const hasMetal = (ledger[ResourceType.METAL] || 0) > 0;
+      if (!hasWood && !hasMetal) break;
+
+      actions.push({
+        type: PlanActionType.FORTIFY, entityId: board.hero.id,
+        _priority: 2, _goal: HeroGoal.FORTIFY_POSITION,
+      });
+      // Deduct from resource ledger (prefer metal for stronger fortification)
+      if (hasMetal) ledger[ResourceType.METAL]--;
+      else ledger[ResourceType.WOOD]--;
+      heroTile.fortifyLevel = (heroTile.fortifyLevel || 0) + 1;
+      sim.actionsLeft--;
+      remaining--;
+    }
+  }
+
+  // Shelter survivors: move unsheltered survivors to nearest building at night
+  if ((board.isNight || board.isDawnOrDusk) && remaining > 0) {
+    for (const s of board.survivors) {
+      if (remaining <= 0) break;
+      if (sim.unitCommitments.has(s.id)) continue;
+
+      const simS = sim.entities.find(e => e.id === s.id);
+      if (!simS) continue;
+      if (inBuilding(sim, simS)) continue;
+
+      const shelter = nearestBuilding(sim, simS);
+      if (!shelter) continue;
+
+      const step = stepToward(sim, simS, shelter);
+      if (!step) continue;
+
+      actions.push({
+        type: PlanActionType.MOVE, entityId: s.id,
+        toCol: step.col, toRow: step.row,
+        _priority: 2, _goal: HeroGoal.FORTIFY_POSITION,
+      });
+      sim.applyMove(s.id, step.col, step.row);
+      sim.unitCommitments.set(s.id, HeroGoal.FORTIFY_POSITION);
+      remaining--;
+    }
+  }
+
+  return actions;
+}
+
+// ── Hero gap-fill ───────────────────────────────────────────────────────────
+
+export function fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositions) {
+  let left = remaining;
+
+  // Guard if enemies nearby
+  if (left > 0 && heroEntity) {
+    const nearbyEnemy = sim.entities.some(e =>
+      e.alive && e.owner === 'witch' &&
+      hexDistance(heroEntity.col, heroEntity.row, e.col, e.row) <= 2
+    );
+    if (nearbyEnemy) {
+      plan.push({ type: PlanActionType.GUARD, entityId: heroEntity.id });
+      sim.applyGuard(heroEntity.id);
+      left--;
+    }
+  }
+
+  // Explore current tile if unexplored
+  if (left > 0 && heroEntity && !sim.isExplored(heroEntity.col, heroEntity.row)) {
+    const tile = sim.tiles.get(hexKey(heroEntity.col, heroEntity.row));
+    if (tile && tile.type === TileType.BUILDING) {
+      plan.push({ type: PlanActionType.EXPLORE, entityId: heroEntity.id });
+      sim.applyExplore(heroEntity.id);
+      left--;
+    }
+  }
+
+  // Move uncommitted survivors toward nearest uncovered node
+  if (left > 0) {
+    const uncoveredNodes = board.nodes.filter(n => n.controller !== 'hero');
+    for (const s of board.survivors) {
+      if (left <= 0) break;
+      if (sim.unitCommitments.has(s.id)) continue;
+      const simS = sim.entities.find(e => e.id === s.id);
+      if (!simS) continue;
+
+      let bestNode = null, bestDist = Infinity;
+      for (const n of uncoveredNodes) {
+        const d = hexDistance(simS.col, simS.row, n.obj.col, n.obj.row);
+        if (d < bestDist) { bestDist = d; bestNode = n; }
+      }
+      if (!bestNode) continue;
+
+      const step = stepToward(sim, simS, bestNode.obj);
+      if (!step) continue;
+
+      const prev = prevPositions.get(s.id);
+      if (prev && prev.col === step.col && prev.row === step.row) continue;
+
+      plan.push({
+        type: PlanActionType.MOVE, entityId: simS.id,
+        toCol: step.col, toRow: step.row,
+      });
+      sim.applyMove(simS.id, step.col, step.row);
+      sim.unitCommitments.set(simS.id, 'gap-fill');
+      left--;
+    }
+  }
+
+  // Guard hero if nothing else to do
+  if (left > 0 && heroEntity) {
+    plan.push({ type: PlanActionType.GUARD, entityId: heroEntity.id });
+    left--;
+  }
 }
