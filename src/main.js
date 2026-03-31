@@ -2169,7 +2169,7 @@ function _renderAsyncGames(games) {
       entry.innerHTML = `
         <div class="save-entry-info">
           <div class="save-entry-title">${factionSymbol} Waiting for opponent${g.my_plan_submitted ? ' <span class="async-badge async-badge-waiting">Planned</span>' : ''}</div>
-          <div class="save-entry-meta">Code: <strong>${_esc(g.code)}</strong></div>
+          <div class="save-entry-meta">Code: <strong>${_esc(g.code)}</strong>${g.updated_at ? ' · ' + _timeAgo(g.updated_at) : ''}</div>
         </div>
         <button class="setup-btn ${planBtnClass} async-plan-btn">${planBtnLabel}</button>
         <button class="setup-btn secondary async-copy-btn" data-code="${_esc(g.code)}">Copy</button>
@@ -2185,7 +2185,7 @@ function _renderAsyncGames(games) {
       entry.innerHTML = `
         <div class="save-entry-info">
           <div class="save-entry-title">${factionSymbol} vs ${_esc(g.opponent_name)}</div>
-          <div class="save-entry-meta">${label} · Round ${g.round}</div>
+          <div class="save-entry-meta">${label} · Round ${g.round}${g.updated_at ? ' · ' + _timeAgo(g.updated_at) : ''}</div>
         </div>
       `;
     } else {
@@ -2204,7 +2204,7 @@ function _renderAsyncGames(games) {
       entry.innerHTML = `
         <div class="save-entry-info">
           <div class="save-entry-title">${factionSymbol} vs ${_esc(g.opponent_name)} ${statusBadge}</div>
-          <div class="save-entry-meta">Round ${g.round} · ${phaseLabel}${deadline ? ' · ' + deadline : ''} · ${g.players_submitted}/${g.players_total} submitted</div>
+          <div class="save-entry-meta">Round ${g.round} · ${phaseLabel}${deadline ? ' · ' + deadline : ''}${g.updated_at ? ' · ' + _timeAgo(g.updated_at) : ''}</div>
         </div>
         ${actionBtn}
       `;
@@ -2230,6 +2230,15 @@ function _timeRemaining(deadlineUnixSecs) {
   if (diff < 3600) return `${Math.floor(diff / 60)}m left`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h left`;
   return `${Math.floor(diff / 86400)}d left`;
+}
+
+function _timeAgo(unixSecs) {
+  if (!unixSecs) return '';
+  const diff = Math.floor(Date.now() / 1000) - unixSecs;
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
 }
 
 /**
@@ -2262,12 +2271,14 @@ function _fetchMainMenuAsyncGames() {
         const item = document.createElement('div');
         item.className = 'menu-async-item';
 
+        const ago = g.updated_at ? _timeAgo(g.updated_at) : '';
         if (g.status === 'waiting') {
-          item.innerHTML = `<span>${factionSymbol} New game — plan your first turn</span>`;
+          item.innerHTML = `<span>${factionSymbol} New game — plan your first turn</span>
+            <span class="menu-async-deadline">${ago}</span>`;
         } else {
           const deadline = g.turn_deadline ? _timeRemaining(g.turn_deadline) : '';
           item.innerHTML = `<span>${factionSymbol} vs ${_esc(g.opponent_name)}</span>
-            <span class="menu-async-deadline">${deadline}</span>`;
+            <span class="menu-async-deadline">${deadline}${deadline && ago ? ' · ' : ''}${ago}</span>`;
         }
         item.addEventListener('click', () => {
           _ensureAuthed(() => _openAsyncGame(g.room_id), 'async-username');
@@ -2378,6 +2389,8 @@ function _enterAsyncPlanning(msg) {
     // WAIT MODE — show submitted plan in read-only view (same as post-submit in sync MP)
     const budget = msg.myActionsLeft ?? 3;
     ui?.enterPlanningMode(msg.faction, budget, 0);
+    // Apply server planStatus so checkmarks show who has submitted
+    _applyPlanStatus(msg.planStatus);
     // Load the submitted plan actions into the UI so the player can review them
     if (ui && Array.isArray(msg.myPlanActions) && msg.myPlanActions.length > 0) {
       ui._plan = msg.myPlanActions;
@@ -2391,8 +2404,20 @@ function _enterAsyncPlanning(msg) {
     ui?.exitPlanningMode();
     const budget = msg.myActionsLeft ?? 3;
     ui?.enterPlanningMode(msg.faction, budget, 0);
+    // Apply server planStatus so checkmarks show who has already submitted
+    _applyPlanStatus(msg.planStatus);
     if (ui) ui.onPlanSubmit = (plan) => mp.submitAsyncPlan(msg.roomId, plan);
   }
+}
+
+/** Apply planStatus array from the server to the UI player list. */
+function _applyPlanStatus(planStatus) {
+  if (!ui || !Array.isArray(planStatus)) return;
+  for (const ps of planStatus) {
+    const p = ui._players?.find(pl => pl.playerId === ps.playerId || pl.id === ps.playerId);
+    if (p) p._submitted = !!ps.submitted;
+  }
+  ui._renderPlayerStatus();
 }
 
 function _handleAsyncPlanAccepted(_msg) {
@@ -2619,7 +2644,7 @@ async function _asyncWatchLastTurn(lastRound) {
 }
 
 function _handleAsyncPlanStatus(msg) {
-  // Could show a toast — currently no-op
+  _applyPlanStatus(msg.planStatus);
 }
 
 // ── Completed SP games (localStorage) ────────────────────────────────────────
