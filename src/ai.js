@@ -5,6 +5,7 @@ import { getNeighbors, hexDistance, hexKey } from './hex.js';
 import { TileType } from './tiles.js';
 import { EntityType } from './entities.js';
 import { Phase, computeActions, computeActionsForPlayer, Player, nodeController, countHeldNodes } from './game.js';
+import { getReachableHexes } from './actions.js';
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
@@ -27,6 +28,25 @@ export function stepToward(state, actor, target) {
     }
   }
   return null;
+}
+
+// Road-aware movement: picks the reachable hex (within 1 move action) closest
+// to the target. Roads/bridges/buildings cost 1 (vs 2 for off-road), so this
+// can cover 2 hexes per action on roads. Falls back to plain stepToward.
+export function roadStepToward(state, actor, target) {
+  if (!target) return null;
+  const reachable = getReachableHexes(state, actor, 1);
+  if (reachable.length === 0) return stepToward(state, actor, target);
+
+  let best = null, bestDist = Infinity;
+  for (const h of reachable) {
+    const d = hexDistance(h.col, h.row, target.col, target.row);
+    if (d < bestDist) { bestDist = d; best = h; }
+  }
+
+  const currentDist = hexDistance(actor.col, actor.row, target.col, target.row);
+  if (best && bestDist < currentDist) return best;
+  return stepToward(state, actor, target);
 }
 
 export function nearestBuilding(state, actor) {

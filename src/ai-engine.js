@@ -3,7 +3,7 @@
 //
 // Pipeline: EVALUATE → SCORE → ALLOCATE → GENERATE → ASSEMBLE
 
-import { PlanSimState, stepToward, stepAwayFrom, bestWitchObjective, nearestBuilding, WITCH_PERSONALITIES } from './ai.js';
+import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, bestWitchObjective, nearestBuilding, WITCH_PERSONALITIES } from './ai.js';
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
 import { EntityType } from './entities.js';
@@ -415,7 +415,7 @@ export function genDefendWitch(sim, board, budget, config = null) {
       if (guard) {
         // Move guard toward witch (to shield)
         const simGuard = sim.entities.find(e => e.id === guard.id);
-        const step = stepToward(sim, simGuard, witchEntity);
+        const step = roadStepToward(sim, simGuard, witchEntity);
         if (step) {
           actions.push({
             type: PlanActionType.MOVE, entityId: guard.id,
@@ -559,7 +559,7 @@ export function genControlNodes(sim, board, budget) {
 
       if (simUnit.col === targetHex.col && simUnit.row === targetHex.row) break;
 
-      const step = stepToward(sim, simUnit, targetHex);
+      const step = roadStepToward(sim, simUnit, targetHex);
       if (!step) break;
 
       actions.push({
@@ -631,7 +631,7 @@ export function genKillHero(sim, board, budget, config = null) {
     const simUnit = sim.entities.find(e => e.id === unit.id);
     if (!simUnit) continue;
 
-    const step = stepToward(sim, simUnit, targetHero);
+    const step = roadStepToward(sim, simUnit, targetHero);
     if (!step) continue;
 
     actions.push({
@@ -687,7 +687,7 @@ export function genGatherResources(sim, board, budget) {
           remaining--;
           break;
         }
-        const step = stepToward(sim, witchEntity, building);
+        const step = roadStepToward(sim, witchEntity, building);
         if (!step) break;
 
         actions.push({
@@ -811,7 +811,7 @@ function _fillGaps(plan, sim, board, witchEntity, remaining, prevPositions) {
       }
       if (!bestNode) continue;
 
-      const step = stepToward(sim, simMinion, bestNode.obj);
+      const step = roadStepToward(sim, simMinion, bestNode.obj);
       if (!step) continue;
 
       // Anti-oscillation check for gap-fill moves too
@@ -931,7 +931,7 @@ export class WitchAIEngine {
         if (remaining <= 0 || plan.length >= MAX_PLAN_LENGTH) break;
         // Skip units that already acted
         if (plan.some(a => a.entityId === m.id)) continue;
-        const step = stepToward(sim, m, target);
+        const step = roadStepToward(sim, m, target);
         if (step) {
           plan.push({ type: PlanActionType.MOVE, entityId: m.id,
             toCol: step.col, toRow: step.row });

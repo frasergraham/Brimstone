@@ -3,14 +3,13 @@
 //
 // Pipeline: EVALUATE → SCORE → ALLOCATE → GENERATE → ASSEMBLE
 
-import { PlanSimState, stepToward, stepAwayFrom, nearestBuilding, isOnNode, inBuilding, HERO_PERSONALITIES } from './ai.js';
+import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, nearestBuilding, isOnNode, inBuilding, HERO_PERSONALITIES } from './ai.js';
 import { EnginePlanSimState, allocateBudget, assemblePlan } from './ai-engine.js';
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
 import { EntityType } from './entities.js';
 import { TileType, ResourceType } from './tiles.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
-import { getReachableHexes } from './actions.js';
 
 // ── Goal names ───────────────────────────────────────────────────────────────
 
@@ -73,32 +72,6 @@ export const HERO_PERSONALITY_CONFIGS = Object.freeze({
     fortifyCapNight: 3,
   }),
 });
-
-// ── Road-aware movement helper ──────────────────────────────────────────────
-// Returns the reachable hex (within 1 move action) that is closest to the
-// target, preferring road tiles which let the hero move 2 hexes per action.
-// Falls back to plain stepToward if no road advantage exists.
-
-export function roadStepToward(sim, actor, target) {
-  if (!target) return null;
-  // Get all hexes reachable in one move (road-aware: roads cost 1, off-road 2, budget 2)
-  const reachable = getReachableHexes(sim, actor, 1);
-  if (reachable.length === 0) return stepToward(sim, actor, target);
-
-  // Pick the reachable hex closest to the target
-  let best = null, bestDist = Infinity;
-  for (const h of reachable) {
-    const d = hexDistance(h.col, h.row, target.col, target.row);
-    if (d < bestDist) { bestDist = d; best = h; }
-  }
-
-  // Only use road step if it's strictly closer than current position
-  const currentDist = hexDistance(actor.col, actor.row, target.col, target.row);
-  if (best && bestDist < currentDist) return best;
-
-  // Fallback to plain BFS step (handles edge cases)
-  return stepToward(sim, actor, target);
-}
 
 // ── HeroEnginePlanSimState ───────────────────────────────────────────────────
 // Extends EnginePlanSimState with hero-specific resource ledger (shared inventory).
