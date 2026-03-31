@@ -555,6 +555,7 @@ function _serializeEvents(events) {
         fortAbsorbed:      ev.result.fortAbsorbed     ?? 0,
         breakdown:         ev.result.breakdown        ?? null,
         path:              ev.result.path             ?? [],
+        lootItems:         ev.result.lootItems        ?? [],
       };
     }
     if (ev.battleSnaps) {
@@ -1855,6 +1856,9 @@ export function checkAsyncDeadlines() {
 export function pruneAsyncGames() {
   _pruneAsyncGames(VERSION);
 }
+
+/** Exported for testing only. */
+export { _serializeEvents as serializeEventsForTest };
 
 /** Get async games list for a player (for REST endpoint). */
 export { getAsyncGamesForPlayer };
