@@ -459,9 +459,8 @@ export class GameState {
       }
     }
 
-    // Night: node spawns — each witch/hero leader on a node may spawn a unit.
+    // Night: node spawns — hero leaders on a node may spawn a free survivor.
     if (this.phase === Phase.NIGHT) {
-      const witchLeaders = this.entities.filter(e => e.alive && e.type === EntityType.WITCH);
       for (const obj of this.witchObjectives) {
         const freeHex = () => {
           // Look for a free hex adjacent to any hex in the cluster
@@ -475,19 +474,6 @@ export class GameState {
           }
           return null;
         };
-        for (const witch of witchLeaders) {
-          if (obj.hexes.some(h => h.col === witch.col && h.row === witch.row)) {
-            if (Math.random() < 0.33) {
-              const hex = freeHex();
-              if (hex) {
-                this.entities.push(createMinion(hex.col, hex.row, witch.ownerId));
-                this.addLog(`🌑 ${witch.displayName} channels the node — a minion rises from the dark!`, 'witch', this.playerColorFor(witch));
-              }
-            } else {
-              this.addLog(`🌑 The node stirs… but yields nothing this night.`, 'witch');
-            }
-          }
-        }
         for (const hero of heroLeaders) {
           if (obj.hexes.some(h => h.col === hero.col && h.row === hero.row)) {
             if (Math.random() < 0.33) {
@@ -582,10 +568,8 @@ export class GameState {
       this.addLog(`${this.factionName('witch')} stirs… (${this.actionsLeft} actions)`, 'witch', this.playerColorFor(this.witch));
     } else {
       // Node effects: only during NIGHT
-      // • Witch standing on a node raises a free minion each night round.
       // • Hero standing on a node attracts a free survivor each night round.
-      // Minions held by a minion (not the witch) no longer spawn — the witch
-      // must commit herself to a node to fuel her army.
+      // (Witch no longer spawns free minions from nodes.)
       if (this.phase === Phase.NIGHT) {
         for (const obj of this.witchObjectives) {
           const freeHex = () => getNeighbors(obj.col, obj.row).find(n => {
@@ -593,17 +577,6 @@ export class GameState {
             return t && t.type !== TileType.RIVER &&
               !this.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
           });
-
-          // Witch herself on the node → spawn minion
-          const witchHere = this.witch?.alive &&
-            this.witch.col === obj.col && this.witch.row === obj.row;
-          if (witchHere) {
-            const hex = freeHex();
-            if (hex) {
-              this.entities.push(createMinion(hex.col, hex.row));
-              this.addLog(`🌑 ${this.witch.displayName} channels the node — a minion rises from the dark!`, 'witch', this.playerColorFor(this.witch));
-            }
-          }
 
           // Hero on the node → attract a survivor
           const heroHere = this.hero.alive &&

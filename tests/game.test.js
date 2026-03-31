@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {
   GameState, Phase, Player, computeActions, countHeldNodes, WIN_REASON,
 } from '../src/game.js';
-import { EntityType, createMinion } from '../src/entities.js';
+import { EntityType, createMinion, createSurvivor, resetRoster } from '../src/entities.js';
 import { hexKey } from '../src/hex.js';
 import { TileType } from '../src/tiles.js';
 
@@ -765,5 +765,60 @@ describe('startPlanning — power node bonus', () => {
     const baseWitch = computeActions(Player.WITCH, state.phase, state.entities, 0);
     assert.equal(state.heroActionsLeft, baseHero);
     assert.equal(state.witchActionsLeft, baseWitch);
+  });
+});
+
+// ── Node spawn balance: witch no longer spawns free minions ──────────────────
+
+describe('Power node free spawn — singleplayer (endTurn)', () => {
+  test('witch on a node during NIGHT does NOT spawn a free minion', () => {
+    const state = new GameState(true, true);
+    // Advance to NIGHT phase (round 6 in first cycle)
+    state.phase = Phase.NIGHT;
+    state.activePlayer = Player.WITCH;
+
+    const node = state.witchObjectives[0];
+    state.witch.col = node.col;
+    state.witch.row = node.row;
+
+    const minionsBefore = state.entities.filter(
+      e => e.alive && e.type === EntityType.MINION
+    ).length;
+
+    state.endTurn();
+
+    const minionsAfter = state.entities.filter(
+      e => e.alive && e.type === EntityType.MINION
+    ).length;
+
+    assert.equal(minionsAfter, minionsBefore,
+      'Witch on a node should no longer spawn free minions');
+  });
+
+  test('hero on a node during NIGHT still spawns a free survivor', () => {
+    resetRoster();
+    const state = new GameState(true, true);
+    state.phase = Phase.NIGHT;
+    state.activePlayer = Player.WITCH;
+
+    const node = state.witchObjectives[0];
+    state.hero.col = node.col;
+    state.hero.row = node.row;
+    // Move witch away from node so it doesn't interfere
+    state.witch.col = 0;
+    state.witch.row = 0;
+
+    const survivorsBefore = state.entities.filter(
+      e => e.alive && e.type === EntityType.SURVIVOR
+    ).length;
+
+    state.endTurn();
+
+    const survivorsAfter = state.entities.filter(
+      e => e.alive && e.type === EntityType.SURVIVOR
+    ).length;
+
+    assert.ok(survivorsAfter > survivorsBefore,
+      'Hero on a node should still spawn a free survivor');
   });
 });
