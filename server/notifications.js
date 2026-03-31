@@ -167,6 +167,18 @@ export async function notifyGameOver(playerId, gameInfo, asyncSessions) {
 }
 
 /**
+ * Send a game invite to an email address. No dedup — sent once at creation.
+ * The invite link auto-creates an account if the recipient doesn't have one.
+ */
+export async function sendGameInvite(email, gameInfo) {
+  const url = `${_baseUrl()}/invite?code=${encodeURIComponent(gameInfo.code)}`;
+  await _sendEmail(email,
+    `Brimstone — ${gameInfo.hostName} has challenged you!`,
+    `${gameInfo.hostName} has invited you to an async game of Brimstone.\n\nClick the link below to join:\n${url}\n\nIf you don't have an account, one will be created for you automatically.`
+  );
+}
+
+/**
  * Notify a player that the game was abandoned due to inactivity.
  */
 export async function notifyGameAbandoned(playerId, gameInfo) {

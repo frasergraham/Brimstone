@@ -66,6 +66,40 @@ export function getPlayerById(id) {
   return _getById.get(id) ?? null;
 }
 
+// ── Auto-create by email (invite flow) ──────────────────────────────────────
+
+/**
+ * Find an existing player by linked email, or create a new account and link it.
+ * Used when an invite link is clicked — the email is implicitly verified.
+ * Returns { ok, player, isNew } or { ok: false, error }.
+ */
+export function getOrCreateByEmail(email) {
+  const normalised = email.toLowerCase().trim();
+  const existing = _getIdentity.get('email', normalised);
+  if (existing) {
+    const player = _getById.get(existing.player_id);
+    if (player) return { ok: true, player, isNew: false };
+  }
+
+  // Derive a username from the email prefix, deduplicating if needed
+  let baseName = normalised.split('@')[0].replace(/[^a-zA-Z0-9_\- ]/g, '').slice(0, 16) || 'player';
+  let name = baseName;
+  let suffix = 1;
+  while (_getByName.get(name)) {
+    name = `${baseName}${suffix++}`;
+    if (name.length > 20) { baseName = baseName.slice(0, 12); name = `${baseName}${suffix}`; }
+  }
+
+  const id       = randomUUID();
+  const newToken = randomUUID();
+  _insert.run(id, name, newToken);
+  _insertIdentity.run(id, 'email', normalised);
+  grantAdminIfEligible(id);
+
+  const player = _getById.get(id);
+  return { ok: true, player, isNew: true };
+}
+
 // ── Email identity linking ───────────────────────────────────────────────────
 
 /**

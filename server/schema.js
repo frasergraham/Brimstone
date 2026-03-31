@@ -151,6 +151,7 @@ export const SCHEMA_SQL = `
     status                     TEXT NOT NULL DEFAULT 'waiting',
     winner                     TEXT,
     win_reason                 TEXT,
+    invitee_email              TEXT,
     consecutive_timeout_rounds INTEGER NOT NULL DEFAULT 0,
     created_at                 INTEGER NOT NULL DEFAULT (unixepoch()),
     updated_at                 INTEGER NOT NULL DEFAULT (unixepoch())

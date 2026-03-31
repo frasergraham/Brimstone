@@ -3155,6 +3155,7 @@ document.getElementById('btn-async-create-go').addEventListener('click', () => {
         mapSize:      document.getElementById('async-map-size').value,
         fog:          document.getElementById('async-fog').value,
         turnInterval: Number(document.getElementById('async-turn-interval').value),
+        inviteeEmail: document.getElementById('async-invitee-email').value.trim(),
       }),
     })
       .then(r => r.json())
@@ -3165,6 +3166,15 @@ document.getElementById('btn-async-create-go').addEventListener('click', () => {
         }
         document.getElementById('async-game-code').textContent = result.code;
         showStep('async-created');
+        // Show invite confirmation if an email was specified
+        const inviteMsg = document.getElementById('async-invite-sent');
+        const invEmail = document.getElementById('async-invitee-email').value.trim();
+        if (invEmail && inviteMsg) {
+          inviteMsg.textContent = `Invite sent to ${invEmail}`;
+          inviteMsg.style.display = '';
+        } else if (inviteMsg) {
+          inviteMsg.style.display = 'none';
+        }
         // Store roomId so host can open the game to plan
         document.getElementById('btn-async-created-play')?.setAttribute('data-room-id', result.roomId);
       })
@@ -3234,17 +3244,35 @@ document.getElementById('btn-async-join-back')?.addEventListener('click', () => 
 
 function _checkAsyncDeepLink() {
   const hash = window.location.hash;
-  const match = hash.match(/^#async=(.+)$/);
-  if (match) {
+  const asyncMatch = hash.match(/^#async=(.+)$/);
+  if (asyncMatch) {
     window.location.hash = '';
-    const roomId = match[1];
+    const roomId = asyncMatch[1];
     _showAsyncScreen();
     setTimeout(() => _openAsyncGame(roomId), 500);
+    return;
+  }
+  const inviteMatch = hash.match(/^#invite=(.+)$/);
+  if (inviteMatch) {
+    window.location.hash = '';
+    const code = decodeURIComponent(inviteMatch[1]);
+    _showAsyncScreen();
+    // Pre-fill the join code and navigate to join screen
+    setTimeout(() => {
+      showStep('async-join');
+      const input = document.getElementById('async-join-code');
+      if (input) input.value = code;
+    }, 300);
   }
 }
 
-// Check on page load
-_checkAsyncDeepLink();
+// Check on page load (deferred if email_token auth is pending — see bottom of file)
+{
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has('email_token')) {
+    _checkAsyncDeepLink();
+  }
+}
 _fetchMainMenuAsyncGames();
 
 function _loadPublicLobbies() {
@@ -4307,7 +4335,7 @@ async function _loadAdminReplay(gameId, source = 'mp') {
   }
 }
 
-// Auto-login via magic link redirect: ?email_token=<token>
+// Auto-login via magic link or invite redirect: ?email_token=<token>
 const _emailToken = checkEmailTokenInUrl();
 if (_emailToken) {
   // The URL param is a session token from a verified magic link.
@@ -4319,7 +4347,9 @@ if (_emailToken) {
     _tmpMp.connect(_serverWsUrl());
     _tmpMp._opts._onAuthOk = () => {
       mp = _tmpMp;
-      _showMultiplayerChoice();
+      // If there's an async deep link hash, open the game now that we're authed
+      _checkAsyncDeepLink();
+      if (!window.location.hash) _showMultiplayerChoice();
     };
     _tmpMp.auth({ token: _emailToken });
   } catch {

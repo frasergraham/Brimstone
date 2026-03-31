@@ -21,11 +21,11 @@ const _insert = db.prepare(`
   INSERT INTO async_games
     (room_id, code, host_player_id, host_faction,
      hero_player_id, witch_player_id, hero_name, witch_name,
-     turn_interval_ms, game_version, config_json, status)
+     turn_interval_ms, game_version, config_json, invitee_email, status)
   VALUES
     (@roomId, @code, @hostPlayerId, @hostFaction,
      @heroPlayerId, @witchPlayerId, @heroName, @witchName,
-     @turnIntervalMs, @gameVersion, @configJson, 'waiting')
+     @turnIntervalMs, @gameVersion, @configJson, @inviteeEmail, 'waiting')
 `);
 
 const _getByRoom = db.prepare(`SELECT * FROM async_games WHERE room_id = ?`);
@@ -152,7 +152,7 @@ const _planStatusForPlayerList = db.prepare(`
  * Create a new async game in 'waiting' status.
  * Returns { roomId, code }.
  */
-export function insertAsyncGame(hostPlayerId, hostPlayerName, hostFaction, config, turnIntervalMs, gameVersion) {
+export function insertAsyncGame(hostPlayerId, hostPlayerName, hostFaction, config, turnIntervalMs, gameVersion, inviteeEmail = null) {
   const roomId = randomUUID();
   let code;
   do { code = randomCode(); } while (_codeExists.get(code));
@@ -167,6 +167,7 @@ export function insertAsyncGame(hostPlayerId, hostPlayerName, hostFaction, confi
     heroPlayerId, witchPlayerId, heroName, witchName,
     turnIntervalMs, gameVersion,
     configJson: JSON.stringify(config),
+    inviteeEmail: inviteeEmail || null,
   });
 
   return { roomId, code };

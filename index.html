@@ -672,6 +672,12 @@
           <option value="259200000">3 Days</option>
         </select>
       </div>
+      <div class="cg-option-row">
+        <span class="cg-option-label">Invite opponent</span>
+        <input id="async-invitee-email" class="setup-input" type="email"
+               placeholder="opponent@email.com (optional)" autocomplete="email"
+               style="margin:0;font-size:0.85rem">
+      </div>
     </div>
 
     <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
@@ -688,6 +694,7 @@
     <div class="setup-buttons" style="margin-top:0.75rem">
       <button id="btn-async-copy-code" class="setup-btn">Copy Code</button>
     </div>
+    <p id="async-invite-sent" class="setup-hint" style="display:none;margin-top:0.5rem"></p>
     <p class="setup-hint" style="margin-top:0.5rem">You can plan your first turn now, or wait for your opponent to join.</p>
     <div class="setup-buttons" style="margin-top:0.75rem;margin-bottom:0">
       <button id="btn-async-created-play" class="setup-btn primary">Plan Turn 1</button>

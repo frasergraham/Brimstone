@@ -9,6 +9,7 @@ import { VERSION, BUILD_VERSION } from './src/version.js';
 import {
   registerOrLogin, getPlayerByToken, getPlayerByEmail,
   linkEmail, loginByEmail, getPlayerIdentities, changeUsername,
+  getOrCreateByEmail,
 } from './server/auth.js';
 import { generateToken, verifyToken, sendMagicLinkEmail } from './server/magic-link.js';
 import { getLeaderboard }                    from './server/leaderboard.js';
@@ -40,7 +41,8 @@ import {
   getAllPlayers, getAllSaves, getSaveWithState,
 } from './server/admin.js';
 import { deleteAsyncGame as _deleteAsyncGame,
-         getAsyncGame as _getAsyncGame }       from './server/async-game.js';
+         getAsyncGame as _getAsyncGame,
+         getAsyncGameByCode }                  from './server/async-game.js';
 import { serializeState } from './server/state-sync.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -304,6 +306,40 @@ app.get('/auth/verify', (req, res) => {
   } else {
     // Should not happen — we always set playerId. But handle gracefully.
     res.status(400).send('Invalid link.');
+  }
+});
+
+// Invite link: auto-create/login account and join game
+app.get('/invite', (req, res) => {
+  const code = (req.query.code || '').toUpperCase().trim();
+  if (!code) { res.status(400).send('Missing game code.'); return; }
+
+  const game = getAsyncGameByCode(code);
+  if (!game) {
+    res.status(404).send('This game is no longer available or has already started.');
+    return;
+  }
+
+  const inviteeEmail = game.invitee_email;
+
+  // If the game has a specific invitee email, auto-create/login that account
+  if (inviteeEmail) {
+    const authResult = getOrCreateByEmail(inviteeEmail);
+    if (!authResult.ok) { res.status(500).send('Failed to create account.'); return; }
+
+    const player = authResult.player;
+    const joinResult = joinAsyncGameRoom(player.id, player.username, code);
+    if (joinResult.error) {
+      // Game may have been joined already — redirect with token so they can see it
+      res.redirect(`/?email_token=${encodeURIComponent(player.token)}#async=${game.room_id}`);
+      return;
+    }
+
+    // Successfully joined — redirect with session token and deep-link to the game
+    res.redirect(`/?email_token=${encodeURIComponent(player.token)}#async=${joinResult.roomId}`);
+  } else {
+    // No invitee email — just redirect to the async join screen with the code pre-filled
+    res.redirect(`/#invite=${encodeURIComponent(code)}`);
   }
 });
 

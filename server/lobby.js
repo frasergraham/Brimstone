@@ -20,7 +20,7 @@ import { insertAsyncGame, getAsyncGame, getAsyncGameByCode,
          deleteAsyncGame }                       from './async-game.js';
 import { notifyOpponentJoined, notifyTurnReady,
          notifyOpponentSubmitted, notifyGameOver,
-         notifyGameAbandoned }                   from './notifications.js';
+         notifyGameAbandoned, sendGameInvite }   from './notifications.js';
 import { VERSION }                         from '../src/version.js';
 import { generateMultipleStarts }          from '../src/map.js';
 import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS } from '../src/entities.js';
@@ -1363,9 +1363,10 @@ export function createAsyncGameRoom(playerId, playerName, config) {
     mapSize: config.mapSize ?? 'standard',
   };
   const faction = config.faction === 'witch' ? 'witch' : 'hero';
+  const inviteeEmail = (config.inviteeEmail || '').trim().toLowerCase() || null;
 
   const result = insertAsyncGame(
-    playerId, playerName, faction, gameConfig, turnIntervalMs, VERSION
+    playerId, playerName, faction, gameConfig, turnIntervalMs, VERSION, inviteeEmail
   );
 
   // Generate the map immediately so the host can plan while waiting
@@ -1394,6 +1395,12 @@ export function createAsyncGameRoom(playerId, playerName, config) {
   // Store the generated state and insert a plan-status row for the host
   updateAsyncGameState(result.roomId, stateJson, state.round, state.phase, deadline, 0);
   insertPlanStatus(result.roomId, [playerId], state.round);
+
+  // Send invite email if an invitee was specified
+  if (inviteeEmail) {
+    sendGameInvite(inviteeEmail, { roomId: result.roomId, code: result.code, hostName: playerName })
+      .catch(() => {});
+  }
 
   return result; // { roomId, code }
 }

@@ -22,6 +22,8 @@ export function createBackend(dbPath) {
 
   // Migration: add is_admin column to existing databases
   try { db.exec('ALTER TABLE players ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0'); } catch {}
+  // Migration: add invitee_email column for game invites
+  try { db.exec('ALTER TABLE async_games ADD COLUMN invitee_email TEXT'); } catch {}
 
   // Seed default admin user (idempotent via INSERT OR IGNORE)
   db.exec(`
