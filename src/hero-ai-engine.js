@@ -5,11 +5,12 @@
 
 import { PlanSimState, stepToward, stepAwayFrom, nearestBuilding, isOnNode, inBuilding, HERO_PERSONALITIES } from './ai.js';
 import { EnginePlanSimState, allocateBudget, assemblePlan } from './ai-engine.js';
-import { hexDistance, hexKey } from './hex.js';
+import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
 import { EntityType } from './entities.js';
 import { TileType, ResourceType } from './tiles.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
+import { getReachableHexes } from './actions.js';
 
 // ── Goal names ───────────────────────────────────────────────────────────────
 
@@ -72,6 +73,32 @@ export const HERO_PERSONALITY_CONFIGS = Object.freeze({
     fortifyCapNight: 3,
   }),
 });
+
+// ── Road-aware movement helper ──────────────────────────────────────────────
+// Returns the reachable hex (within 1 move action) that is closest to the
+// target, preferring road tiles which let the hero move 2 hexes per action.
+// Falls back to plain stepToward if no road advantage exists.
+
+export function roadStepToward(sim, actor, target) {
+  if (!target) return null;
+  // Get all hexes reachable in one move (road-aware: roads cost 1, off-road 2, budget 2)
+  const reachable = getReachableHexes(sim, actor, 1);
+  if (reachable.length === 0) return stepToward(sim, actor, target);
+
+  // Pick the reachable hex closest to the target
+  let best = null, bestDist = Infinity;
+  for (const h of reachable) {
+    const d = hexDistance(h.col, h.row, target.col, target.row);
+    if (d < bestDist) { bestDist = d; best = h; }
+  }
+
+  // Only use road step if it's strictly closer than current position
+  const currentDist = hexDistance(actor.col, actor.row, target.col, target.row);
+  if (best && bestDist < currentDist) return best;
+
+  // Fallback to plain BFS step (handles edge cases)
+  return stepToward(sim, actor, target);
+}
 
 // ── HeroEnginePlanSimState ───────────────────────────────────────────────────
 // Extends EnginePlanSimState with hero-specific resource ledger (shared inventory).
@@ -195,6 +222,16 @@ export function assessHeroBoard(sim) {
   const heroTileExplored = heroTile ? (sim.isExplored ? sim.isExplored(heroTile.col, heroTile.row) : !!heroTile.explored) : true;
   const heroTileFortLevel = heroTile?.fortifyLevel || 0;
 
+  // Nearest enemy distance (any witch-owned entity)
+  let nearestEnemyDist = Infinity;
+  if (hero) {
+    for (const e of sim.entities) {
+      if (!e.alive || e.owner !== 'witch') continue;
+      const d = hexDistance(hero.col, hero.row, e.col, e.row);
+      if (d < nearestEnemyDist) nearestEnemyDist = d;
+    }
+  }
+
   return {
     phase, isNight, isDay, isDawnOrDusk,
     hero,
@@ -209,6 +246,7 @@ export function assessHeroBoard(sim) {
     sharedInventory, woodCount, metalCount,
     unexploredBuildings, nearestUnexplored,
     heroOnNode, heroInBuilding, heroTileExplored, heroTileFortLevel,
+    nearestEnemyDist,
     totalBudget: sim.actionsLeft,
   };
 }
@@ -295,6 +333,15 @@ export function scoreHeroGoals(board, goalWeights = null) {
     for (const g of ALL_HERO_GOALS) {
       if (goalWeights[g] != null) scores[g] = clamp01(scores[g] * goalWeights[g]);
     }
+  }
+
+  // Early-game explore focus: when no enemies are nearby and buildings remain,
+  // heavily prioritize exploration over defensive/passive goals.
+  // There's no reason to guard or fortify when nothing threatens you.
+  if (board.nearestEnemyDist > 4 && board.unexploredBuildings.length > 0) {
+    scores[HeroGoal.EXPLORE] = clamp01(scores[HeroGoal.EXPLORE] + 0.4);
+    scores[HeroGoal.FORTIFY_POSITION] = Math.min(scores[HeroGoal.FORTIFY_POSITION], 0.1);
+    scores[HeroGoal.PROTECT_HERO] = Math.min(scores[HeroGoal.PROTECT_HERO], 0.1);
   }
 
   return scores;
@@ -421,7 +468,7 @@ export function genProtectHero(sim, board, budget, config = null) {
       // Try to flee toward nearest building
       const shelter = nearestBuilding(sim, heroEntity);
       const fleeStep = shelter
-        ? stepToward(sim, heroEntity, shelter)
+        ? roadStepToward(sim, heroEntity, shelter)
         : stepAwayFrom(sim, heroEntity, nearbyEnemy);
       if (fleeStep) {
         actions.push({
@@ -489,7 +536,7 @@ export function genSlayWitch(sim, board, budget, config = null) {
       let stepsLeft = Math.min(remaining, 3);
       while (stepsLeft > 0) {
         if (hexDistance(heroEntity.col, heroEntity.row, witchEntity.col, witchEntity.row) <= 1) break;
-        const step = stepToward(sim, heroEntity, witchEntity);
+        const step = roadStepToward(sim, heroEntity, witchEntity);
         if (!step) break;
 
         actions.push({
@@ -570,7 +617,7 @@ export function genControlNodes(sim, board, budget) {
 
       if (simUnit.col === targetHex.col && simUnit.row === targetHex.row) break;
 
-      const step = stepToward(sim, simUnit, targetHex);
+      const step = roadStepToward(sim, simUnit, targetHex);
       if (!step) break;
 
       actions.push({
@@ -626,7 +673,7 @@ export function genExplore(sim, board, budget) {
           remaining--;
           break;
         }
-        const step = stepToward(sim, heroEntity, building);
+        const step = roadStepToward(sim, heroEntity, building);
         if (!step) break;
 
         actions.push({
@@ -667,7 +714,7 @@ export function genFortifyPosition(sim, board, budget, config = null) {
         let stepsLeft = Math.min(remaining, 3);
         while (stepsLeft > 0) {
           if (heroEntity.col === shelter.col && heroEntity.row === shelter.row) break;
-          const step = stepToward(sim, heroEntity, shelter);
+          const step = roadStepToward(sim, heroEntity, shelter);
           if (!step) break;
 
           actions.push({
@@ -720,7 +767,7 @@ export function genFortifyPosition(sim, board, budget, config = null) {
       const shelter = nearestBuilding(sim, simS);
       if (!shelter) continue;
 
-      const step = stepToward(sim, simS, shelter);
+      const step = roadStepToward(sim, simS, shelter);
       if (!step) continue;
 
       actions.push({
@@ -854,6 +901,42 @@ export function fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositi
     }
   }
 
+  // Move hero toward nearest unexplored building if no enemies nearby
+  if (left > 0 && heroEntity) {
+    const enemyNearby = sim.entities.some(e =>
+      e.alive && e.owner === 'witch' &&
+      hexDistance(heroEntity.col, heroEntity.row, e.col, e.row) <= 4
+    );
+    if (!enemyNearby && board.unexploredBuildings.length > 0) {
+      // Find nearest unexplored building from hero's current (projected) position
+      let bestB = null, bestD = Infinity;
+      for (const b of board.unexploredBuildings) {
+        if (sim.isExplored(b.col, b.row)) continue; // may have been explored in-plan
+        const d = hexDistance(heroEntity.col, heroEntity.row, b.col, b.row);
+        if (d < bestD) { bestD = d; bestB = b; }
+      }
+      while (left > 0 && bestB) {
+        if (heroEntity.col === bestB.col && heroEntity.row === bestB.row) {
+          // Arrived — explore
+          plan.push({ type: PlanActionType.EXPLORE, entityId: heroEntity.id });
+          sim.applyExplore(heroEntity.id);
+          left--;
+          break;
+        }
+        const step = roadStepToward(sim, heroEntity, bestB);
+        if (!step) break;
+        const prev = prevPositions.get(heroEntity.id);
+        if (prev && prev.col === step.col && prev.row === step.row) break;
+        plan.push({
+          type: PlanActionType.MOVE, entityId: heroEntity.id,
+          toCol: step.col, toRow: step.row,
+        });
+        sim.applyMove(heroEntity.id, step.col, step.row);
+        left--;
+      }
+    }
+  }
+
   // Move uncommitted survivors toward nearest uncovered node
   if (left > 0) {
     const uncoveredNodes = board.nodes.filter(n => n.controller !== 'hero');
@@ -870,7 +953,7 @@ export function fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositi
       }
       if (!bestNode) continue;
 
-      const step = stepToward(sim, simS, bestNode.obj);
+      const step = roadStepToward(sim, simS, bestNode.obj);
       if (!step) continue;
 
       const prev = prevPositions.get(s.id);
