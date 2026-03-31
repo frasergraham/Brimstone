@@ -3663,3 +3663,47 @@ body.spectator-mode #game-screen   { display: flex !important; }
   color: var(--text-dim);
   border: 1px solid var(--border);
 }
+
+/* ── Main menu async notification box ──────────────────────────────────── */
+
+.menu-async-box {
+  margin-top: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  width: 100%;
+  max-width: 260px;
+}
+.menu-async-header {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  padding: 0.4rem 0.75rem;
+  background: var(--bg-section);
+  border-bottom: 1px solid var(--border);
+}
+.menu-async-list {
+  display: flex;
+  flex-direction: column;
+}
+.menu-async-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.82rem;
+  color: var(--text);
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.15s;
+}
+.menu-async-item:last-child { border-bottom: none; }
+.menu-async-item:hover { background: var(--bg-section); }
+.menu-async-deadline {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}

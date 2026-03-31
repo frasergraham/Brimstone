@@ -28,6 +28,10 @@
         <button id="btn-account"       class="setup-btn"         style="width:200px">Account</button>
         <button id="btn-options"       class="setup-btn"         style="width:200px">Options</button>
       </div>
+      <div id="menu-async-box" class="menu-async-box" style="display:none">
+        <div class="menu-async-header">Async Games</div>
+        <div id="menu-async-list" class="menu-async-list"></div>
+      </div>
       <div style="margin-top:1.25rem;text-align:center">
         <a href="/admin" class="admin-link" id="admin-link" style="display:none">Admin</a>
         <div id="menu-version" class="menu-version"></div>
@@ -315,6 +319,20 @@
     <!-- Multiplayer -->
     <div id="setup-step-multiplayer" class="setup-card" style="display:none">
       <h1 class="title" style="font-size:2rem;margin-bottom:1rem">MULTIPLAYER</h1>
+      <div class="setup-lore"><p>Choose how you want to play.</p></div>
+      <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.75rem">
+        <button id="btn-mp-online" class="setup-btn primary" style="width:260px">🌐 Online Multiplayer</button>
+        <button id="btn-mp-async"  class="setup-btn"         style="width:260px">⏳ Async Multiplayer</button>
+        <button id="btn-mp-local"  class="setup-btn"         style="width:260px">🎮 Local Pass &amp; Play</button>
+      </div>
+      <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
+        <button id="btn-multiplayer-back" class="setup-btn">← Back</button>
+      </div>
+    </div>
+
+    <!-- ── Online Multiplayer ─────────────────────────────────────── -->
+    <div id="setup-step-online" class="setup-card" style="display:none">
+      <h1 class="title" style="font-size:2rem;margin-bottom:1rem">ONLINE</h1>
 
       <div id="mp-session-info" style="display:none" class="setup-lore">
         <p>Playing as <strong id="mp-session-name"></strong>
@@ -340,14 +358,10 @@
       <div class="active-games-section" style="margin-top:0.75rem">
         <div class="saves-tab-bar">
           <button class="saves-tab active" data-target="active-games-list">In Progress</button>
-          <button class="saves-tab"        data-target="async-games-list">Async</button>
           <button class="saves-tab"        data-target="mp-completed-list">Completed</button>
         </div>
         <div id="active-games-list" class="saves-list">
           <p class="saves-empty">Sign in to see your active games.</p>
-        </div>
-        <div id="async-games-list" class="saves-list" style="display:none">
-          <p class="saves-empty">Sign in to see async games.</p>
         </div>
         <div id="mp-completed-list" class="saves-list" style="display:none">
           <p class="saves-empty">Sign in to see completed games.</p>
@@ -358,16 +372,90 @@
       <div id="mp-action-buttons" class="setup-buttons online-match-buttons" style="display:none">
         <button id="btn-create-game" class="setup-btn primary">⚔ Create Game</button>
         <button id="btn-join-game"   class="setup-btn">🚪 Join Game</button>
-        <button id="btn-create-async" class="setup-btn">⏳ Async Game</button>
-      </div>
-
-      <div class="mp-local-divider">— or —</div>
-      <div class="setup-buttons" style="margin-bottom:0">
-        <button id="btn-local-pass-play" class="setup-btn" style="width:220px">🎮 Local Pass &amp; Play</button>
       </div>
 
       <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
-        <button id="btn-multiplayer-back" class="setup-btn">← Back</button>
+        <button id="btn-online-back" class="setup-btn">← Back</button>
+      </div>
+    </div>
+
+    <!-- ── Async Multiplayer ──────────────────────────────────────── -->
+    <div id="setup-step-async" class="setup-card" style="display:none">
+      <h1 class="title" style="font-size:2rem;margin-bottom:1rem">ASYNC</h1>
+
+      <div id="async-session-info" style="display:none" class="setup-lore">
+        <p>Playing as <strong id="async-session-name"></strong>
+           &nbsp;<span id="async-session-stats" class="stats-badge"></span></p>
+        <span id="async-email-badge" class="email-badge" style="display:none"></span>
+        <div style="display:flex;gap:0.4rem;margin-top:0.5rem;flex-wrap:wrap;justify-content:center">
+          <button id="btn-async-sign-out" class="setup-btn secondary">Sign Out</button>
+        </div>
+      </div>
+      <div id="async-name-form">
+        <input id="async-username" class="setup-input" type="text"
+               placeholder="Enter a username…" maxlength="20" autocomplete="off">
+        <button id="btn-async-signin" class="setup-btn primary" style="margin-top:0.4rem">Sign In</button>
+        <div class="email-login-divider" style="margin:0.6rem 0;font-size:0.75rem;opacity:0.6">— or sign in with email —</div>
+        <input id="async-email-login-input" class="setup-input" type="email"
+               placeholder="your@email.com" autocomplete="email">
+        <button id="btn-async-email-login" class="setup-btn secondary" style="margin-top:0.4rem">Send Login Link</button>
+        <p id="async-email-login-status" class="setup-hint" style="display:none"></p>
+        <p id="async-name-error" class="setup-error" style="display:none"></p>
+      </div>
+
+      <!-- Async games list -->
+      <div class="active-games-section" style="margin-top:0.75rem">
+        <div id="async-games-list" class="saves-list">
+          <p class="saves-empty">Sign in to see async games.</p>
+        </div>
+      </div>
+
+      <!-- Async action buttons (shown after sign-in) -->
+      <div id="async-action-buttons" class="setup-buttons online-match-buttons" style="display:none">
+        <button id="btn-create-async" class="setup-btn primary">⚔ Create Game</button>
+        <button id="btn-join-async"   class="setup-btn">🚪 Join Game</button>
+      </div>
+
+      <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
+        <button id="btn-async-back" class="setup-btn">← Back</button>
+      </div>
+    </div>
+
+    <!-- ── Local Pass & Play ──────────────────────────────────────── -->
+    <div id="setup-step-local-play" class="setup-card" style="display:none">
+      <h1 class="title" style="font-size:2rem">LOCAL PASS &amp; PLAY</h1>
+      <div class="setup-lore"><p>Two players share one screen, taking turns on the same device.</p></div>
+      <div class="cg-options">
+        <div class="cg-option-row">
+          <span class="cg-option-label">Map size</span>
+          <select id="local-map-size" class="setup-select">
+            <option value="skirmish">Skirmish (9×9)</option>
+            <option value="standard" selected>Standard (13×11)</option>
+            <option value="regional">Regional (17×13)</option>
+            <option value="campaign">Campaign (21×15)</option>
+          </select>
+        </div>
+        <div class="cg-option-row">
+          <span class="cg-option-label">Power Nodes</span>
+          <select id="local-node-count" class="setup-select">
+            <option value="2">2</option>
+            <option value="3" selected>3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+          </select>
+        </div>
+        <div class="cg-option-row">
+          <span class="cg-option-label">Fog of War</span>
+          <select id="local-fog" class="setup-select">
+            <option value="none" selected>None</option>
+            <option value="partial">Partial</option>
+            <option value="full">Full</option>
+          </select>
+        </div>
+      </div>
+      <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
+        <button id="btn-local-play-back" class="setup-btn">← Back</button>
+        <button id="btn-local-play-start" class="setup-btn primary">Start Game</button>
       </div>
     </div>
 
@@ -547,41 +635,48 @@
 
   <!-- ── Async: create game ────────────────────────────────────── -->
   <div id="setup-step-async-create" class="setup-card" style="display:none">
-    <h1 class="title" style="font-size:2rem">ASYNC GAME</h1>
-    <div class="setup-lore"><p>Create a long-lived game with wall-clock turn deadlines. Share the code with your opponent — they can join at any time.</p></div>
+    <h1 class="title" style="font-size:2rem">CREATE ASYNC GAME</h1>
+    <div class="setup-lore"><p>Create a long-lived game with wall-clock turn deadlines.</p></div>
 
-    <label class="setup-label">Your Faction</label>
-    <div class="setup-buttons" style="margin-bottom:0.75rem">
-      <button class="setup-btn primary async-faction-btn" data-faction="hero">Hero</button>
-      <button class="setup-btn async-faction-btn" data-faction="witch">Witch</button>
+    <div class="cg-options">
+      <div class="cg-option-row">
+        <span class="cg-option-label">Your Faction</span>
+        <div class="pps-pills">
+          <label class="pps-pill"><input type="radio" name="async-faction" value="hero" checked><span>Hero</span></label>
+          <label class="pps-pill"><input type="radio" name="async-faction" value="witch"><span>Witch</span></label>
+        </div>
+      </div>
+      <div class="cg-option-row">
+        <span class="cg-option-label">Map size</span>
+        <select id="async-map-size" class="setup-select">
+          <option value="skirmish">Skirmish (9×9)</option>
+          <option value="standard" selected>Standard (13×11)</option>
+          <option value="regional">Regional (17×13)</option>
+        </select>
+      </div>
+      <div class="cg-option-row">
+        <span class="cg-option-label">Fog of war</span>
+        <select id="async-fog" class="setup-select">
+          <option value="full" selected>Full</option>
+          <option value="partial">Partial</option>
+          <option value="none">None</option>
+        </select>
+      </div>
+      <div class="cg-option-row">
+        <span class="cg-option-label">Turn deadline</span>
+        <select id="async-turn-interval" class="setup-select">
+          <option value="3600000">1 Hour</option>
+          <option value="21600000">6 Hours</option>
+          <option value="43200000">12 Hours</option>
+          <option value="86400000" selected>1 Day</option>
+          <option value="259200000">3 Days</option>
+        </select>
+      </div>
     </div>
 
-    <label class="setup-label">Map Size</label>
-    <select id="async-map-size" class="setup-select" style="margin-bottom:0.75rem">
-      <option value="skirmish">Skirmish</option>
-      <option value="standard" selected>Standard</option>
-      <option value="regional">Regional</option>
-    </select>
-
-    <label class="setup-label">Fog of War</label>
-    <select id="async-fog" class="setup-select" style="margin-bottom:0.75rem">
-      <option value="full" selected>Full</option>
-      <option value="partial">Partial</option>
-      <option value="none">None</option>
-    </select>
-
-    <label class="setup-label">Turn Deadline</label>
-    <select id="async-turn-interval" class="setup-select" style="margin-bottom:0.75rem">
-      <option value="3600000">1 Hour</option>
-      <option value="21600000">6 Hours</option>
-      <option value="43200000">12 Hours</option>
-      <option value="86400000" selected>1 Day</option>
-      <option value="259200000">3 Days</option>
-    </select>
-
-    <div class="setup-buttons" style="margin-top:0.5rem;margin-bottom:0">
-      <button id="btn-async-create-go" class="setup-btn primary">Create Game</button>
+    <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
       <button id="btn-async-create-back" class="setup-btn">&larr; Back</button>
+      <button id="btn-async-create-go" class="setup-btn primary">Create Game</button>
     </div>
   </div>
 

@@ -1236,6 +1236,9 @@ const stepCampaignSelect = document.getElementById('setup-step-campaign-select')
 const stepCampaign     = document.getElementById('setup-step-campaign');
 const stepDebrief      = document.getElementById('setup-step-debrief');
 const stepMultiplayer  = document.getElementById('setup-step-multiplayer');
+const stepOnline       = document.getElementById('setup-step-online');
+const stepAsync        = document.getElementById('setup-step-async');
+const stepLocalPlay    = document.getElementById('setup-step-local-play');
 const stepHowto        = document.getElementById('setup-step-howtoplay');
 const stepOptions      = document.getElementById('setup-step-options');
 const stepChangelog    = document.getElementById('setup-step-changelog');
@@ -1249,24 +1252,27 @@ const stepAsyncCreated = document.getElementById('setup-step-async-created');
 const stepAsyncJoin    = document.getElementById('setup-step-async-join');
 
 function showStep(step) {
-  stepMode        .style.display = step === 'mode'          ? '' : 'none';
+  stepMode          .style.display = step === 'mode'            ? '' : 'none';
   stepSpChoice      .style.display = step === 'sp-choice'       ? '' : 'none';
   stepSinglePlayer  .style.display = step === 'singleplayer'    ? '' : 'none';
   stepCampaignSelect.style.display = step === 'campaign-select' ? '' : 'none';
   stepCampaign      .style.display = step === 'campaign'        ? '' : 'none';
   stepDebrief       .style.display = step === 'debrief'         ? '' : 'none';
-  stepMultiplayer .style.display = step === 'multiplayer'   ? '' : 'none';
-  stepHowto       .style.display = step === 'howtoplay'     ? '' : 'none';
-  stepOptions     .style.display = step === 'options'       ? '' : 'none';
-  stepChangelog   .style.display = step === 'changelog'     ? '' : 'none';
-  stepAccount     .style.display = step === 'account'       ? '' : 'none';
-  stepWaiting     .style.display = step === 'waiting'       ? '' : 'none';
-  stepCreateGame  .style.display = step === 'create-game'   ? '' : 'none';
-  stepJoinGame    .style.display = step === 'join-game'     ? '' : 'none';
-  stepLobby       .style.display = step === 'lobby'         ? '' : 'none';
-  stepAsyncCreate .style.display = step === 'async-create'  ? '' : 'none';
-  stepAsyncCreated.style.display = step === 'async-created' ? '' : 'none';
-  stepAsyncJoin   .style.display = step === 'async-join'    ? '' : 'none';
+  stepMultiplayer   .style.display = step === 'multiplayer'     ? '' : 'none';
+  stepOnline        .style.display = step === 'online'          ? '' : 'none';
+  stepAsync         .style.display = step === 'async'           ? '' : 'none';
+  stepLocalPlay     .style.display = step === 'local-play'      ? '' : 'none';
+  stepHowto         .style.display = step === 'howtoplay'       ? '' : 'none';
+  stepOptions       .style.display = step === 'options'         ? '' : 'none';
+  stepChangelog     .style.display = step === 'changelog'       ? '' : 'none';
+  stepAccount       .style.display = step === 'account'         ? '' : 'none';
+  stepWaiting       .style.display = step === 'waiting'         ? '' : 'none';
+  stepCreateGame    .style.display = step === 'create-game'     ? '' : 'none';
+  stepJoinGame      .style.display = step === 'join-game'       ? '' : 'none';
+  stepLobby         .style.display = step === 'lobby'           ? '' : 'none';
+  stepAsyncCreate   .style.display = step === 'async-create'    ? '' : 'none';
+  stepAsyncCreated  .style.display = step === 'async-created'   ? '' : 'none';
+  stepAsyncJoin     .style.display = step === 'async-join'      ? '' : 'none';
 }
 
 // Current lobby state (pre-game)
@@ -1278,7 +1284,7 @@ document.getElementById('btn-single-player').addEventListener('click', () => sho
 document.getElementById('btn-quick-play')    .addEventListener('click', () => _showSinglePlayerScreen());
 document.getElementById('btn-story-mode')    .addEventListener('click', () => _showCampaignSelectScreen());
 document.getElementById('btn-sp-choice-back').addEventListener('click', () => showStep('mode'));
-document.getElementById('btn-multiplayer')  .addEventListener('click', () => _showMultiplayerScreen());
+document.getElementById('btn-multiplayer')  .addEventListener('click', () => _showMultiplayerChoice());
 document.getElementById('btn-tutorial')     .addEventListener('click', () => initTutorial());
 document.getElementById('btn-how-to-play')  .addEventListener('click', () => showStep('howtoplay'));
 document.getElementById('btn-options')      .addEventListener('click', () => showStep('options'));
@@ -1785,7 +1791,14 @@ document.getElementById('btn-start-qp').addEventListener('click', () => {
 });
 
 // Local Pass & Play (from multiplayer screen)
-document.getElementById('btn-local-pass-play').addEventListener('click', () => {
+document.getElementById('btn-local-play-start').addEventListener('click', () => {
+  // Override single-player config selects with local-play values before calling init
+  const mapSel  = document.getElementById('select-map-size');
+  const nodeSel = document.getElementById('select-node-count');
+  const fogSel  = document.getElementById('select-fog-of-war');
+  if (mapSel)  mapSel.value  = document.getElementById('local-map-size').value;
+  if (nodeSel) nodeSel.value = document.getElementById('local-node-count').value;
+  if (fogSel)  fogSel.value  = document.getElementById('local-fog').value;
   init(false, false);
 });
 
@@ -2109,6 +2122,52 @@ function _timeRemaining(deadlineUnixSecs) {
   return `${Math.floor(diff / 86400)}d left`;
 }
 
+/**
+ * Fetch async games that need the player's attention and show them
+ * in the main menu notification box.
+ */
+function _fetchMainMenuAsyncGames() {
+  const box  = document.getElementById('menu-async-box');
+  const list = document.getElementById('menu-async-list');
+  if (!box || !list) return;
+
+  const session = loadSession();
+  if (!session) { box.style.display = 'none'; return; }
+
+  const base = window.BRIMSTONE_SERVER || '';
+  fetch(`${base}/api/async-games?token=${encodeURIComponent(session.token)}`)
+    .then(r => r.json())
+    .then(games => {
+      // Filter to actionable games: your turn, or waiting games you haven't planned
+      const actionable = games.filter(g =>
+        (g.status === 'playing' && !g.my_plan_submitted) ||
+        (g.status === 'waiting' && !g.my_plan_submitted)
+      );
+      if (!actionable.length) { box.style.display = 'none'; return; }
+
+      box.style.display = '';
+      list.innerHTML = '';
+      for (const g of actionable) {
+        const factionSymbol = g.my_faction === 'hero' ? '⚔' : '✦';
+        const item = document.createElement('div');
+        item.className = 'menu-async-item';
+
+        if (g.status === 'waiting') {
+          item.innerHTML = `<span>${factionSymbol} New game — plan your first turn</span>`;
+        } else {
+          const deadline = g.turn_deadline ? _timeRemaining(g.turn_deadline) : '';
+          item.innerHTML = `<span>${factionSymbol} vs ${_esc(g.opponent_name)}</span>
+            <span class="menu-async-deadline">${deadline}</span>`;
+        }
+        item.addEventListener('click', () => {
+          _ensureAuthed(() => _openAsyncGame(g.room_id), 'async-username');
+        });
+        list.appendChild(item);
+      }
+    })
+    .catch(() => { box.style.display = 'none'; });
+}
+
 /** State for the currently open async game. */
 let _asyncRoomId = null;
 let _asyncFaction = null;
@@ -2143,8 +2202,7 @@ function _handleAsyncStateUpdate(msg) {
     } catch (err) {
       console.error('initOnline (async) failed:', err);
       _onlineError(`Failed to load game: ${err.message}`);
-      showStep('multiplayer');
-      _initMpStep();
+      _showAsyncScreen();
       return;
     }
   } else {
@@ -2756,38 +2814,63 @@ async function _startMpReplay(rounds, gameMeta) {
     await _replayFullGame(replayRounds, gameMeta.winner, gameMeta.win_reason,
       gameMeta.hero_name, gameMeta.witch_name);
 
-    // Return to MP screen after replay
+    // Return to online screen after replay
     document.getElementById('setup-screen').style.display = '';
     document.getElementById('game-screen').style.display  = 'none';
     state = null; renderer = null; ui = null;
-    _showMultiplayerScreen();
+    _showOnlineScreen();
   });
 }
 
 // ── Multiplayer screen ────────────────────────────────────────────────────────
 
-function _showMultiplayerScreen() {
+function _showMultiplayerChoice() {
   showStep('multiplayer');
+  _fetchMainMenuAsyncGames();
+}
+
+function _showOnlineScreen() {
+  showStep('online');
   _initMpStep();
   const session = loadSession();
   if (session) {
     _fetchActiveSaves();
-    _fetchAsyncGames();
     _fetchCompletedGames();
   }
 }
+
+function _showAsyncScreen() {
+  showStep('async');
+  _initAsyncStep();
+  const session = loadSession();
+  if (session) {
+    _fetchAsyncGames();
+  }
+}
+
+document.getElementById('btn-mp-online').addEventListener('click', () => _showOnlineScreen());
+document.getElementById('btn-mp-async').addEventListener('click', () => _showAsyncScreen());
+document.getElementById('btn-mp-local').addEventListener('click', () => showStep('local-play'));
 
 document.getElementById('btn-multiplayer-back').addEventListener('click', () => {
   if (mp) { mp.disconnect(); mp = null; }
   renderer = null; ui = null; state = null;
   showStep('mode');
 });
+document.getElementById('btn-online-back').addEventListener('click', () => {
+  showStep('multiplayer');
+});
+document.getElementById('btn-async-back').addEventListener('click', () => {
+  showStep('multiplayer');
+});
+document.getElementById('btn-local-play-back').addEventListener('click', () => {
+  showStep('multiplayer');
+});
 
 // ── Online flow ───────────────────────────────────────────────────────────────
 
 document.getElementById('btn-cancel-wait').addEventListener('click', () => {
-  showStep('multiplayer');
-  _initMpStep();
+  _showOnlineScreen();
 });
 
 function _fogSelected() {
@@ -2833,7 +2916,7 @@ document.getElementById('btn-create-game').addEventListener('click', () => {
 });
 
 document.getElementById('btn-create-game-back').addEventListener('click', () => {
-  showStep('multiplayer');
+  showStep('online');
 });
 
 document.getElementById('btn-create-game-confirm').addEventListener('click', () => {
@@ -2860,7 +2943,7 @@ document.getElementById('btn-join-game').addEventListener('click', () => {
 });
 
 document.getElementById('btn-join-game-back').addEventListener('click', () => {
-  showStep('multiplayer');
+  showStep('online');
 });
 
 document.getElementById('btn-join-private').addEventListener('click', () => {
@@ -2877,30 +2960,28 @@ document.getElementById('btn-join-private').addEventListener('click', () => {
 
 // ── Async Game flow ──────────────────────────────────────────────────────────
 
-let _asyncSelectedFaction = 'hero';
+function _getAsyncFaction() {
+  const checked = document.querySelector('input[name="async-faction"]:checked');
+  return checked ? checked.value : 'hero';
+}
 
 document.getElementById('btn-create-async').addEventListener('click', () => {
   _ensureAuthed(() => {
     showStep('async-create');
-    // Default faction selection
-    _asyncSelectedFaction = 'hero';
-    for (const btn of document.querySelectorAll('.async-faction-btn')) {
-      btn.classList.toggle('primary', btn.dataset.faction === 'hero');
-    }
-  });
+    // Default faction radio to hero
+    const heroRadio = document.querySelector('input[name="async-faction"][value="hero"]');
+    if (heroRadio) heroRadio.checked = true;
+  }, 'async-username');
 });
 
-for (const btn of document.querySelectorAll('.async-faction-btn')) {
-  btn.addEventListener('click', () => {
-    _asyncSelectedFaction = btn.dataset.faction;
-    for (const b of document.querySelectorAll('.async-faction-btn')) {
-      b.classList.toggle('primary', b === btn);
-    }
-  });
-}
+document.getElementById('btn-join-async').addEventListener('click', () => {
+  _ensureAuthed(() => {
+    showStep('async-join');
+  }, 'async-username');
+});
 
 document.getElementById('btn-async-create-back').addEventListener('click', () => {
-  showStep('multiplayer');
+  showStep('async');
 });
 
 document.getElementById('btn-async-create-go').addEventListener('click', () => {
@@ -2912,7 +2993,7 @@ document.getElementById('btn-async-create-go').addEventListener('click', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         token:        session.token,
-        faction:      _asyncSelectedFaction,
+        faction:      _getAsyncFaction(),
         mapSize:      document.getElementById('async-map-size').value,
         fog:          document.getElementById('async-fog').value,
         turnInterval: Number(document.getElementById('async-turn-interval').value),
@@ -2942,8 +3023,7 @@ document.getElementById('btn-async-copy-code').addEventListener('click', () => {
 });
 
 document.getElementById('btn-async-created-done').addEventListener('click', () => {
-  showStep('multiplayer');
-  _fetchAsyncGames();
+  _showAsyncScreen();
 });
 
 document.getElementById('btn-async-created-play')?.addEventListener('click', () => {
@@ -2978,9 +3058,7 @@ document.getElementById('btn-async-join-go')?.addEventListener('click', () => {
           err.style.display = '';
           return;
         }
-        // Game joined — go to multiplayer screen and open the game
-        showStep('multiplayer');
-        _fetchAsyncGames();
+        // Game joined — open the game directly
         _openAsyncGame(result.roomId);
       })
       .catch(() => {
@@ -2991,7 +3069,7 @@ document.getElementById('btn-async-join-go')?.addEventListener('click', () => {
 });
 
 document.getElementById('btn-async-join-back')?.addEventListener('click', () => {
-  showStep('multiplayer');
+  showStep('async');
 });
 
 // ── Deep link handling for async games ──────────────────────────────────────
@@ -3002,13 +3080,14 @@ function _checkAsyncDeepLink() {
   if (match) {
     window.location.hash = '';
     const roomId = match[1];
-    _showMultiplayerScreen();
+    _showAsyncScreen();
     setTimeout(() => _openAsyncGame(roomId), 500);
   }
 }
 
 // Check on page load
 _checkAsyncDeepLink();
+_fetchMainMenuAsyncGames();
 
 function _loadPublicLobbies() {
   if (!mp) return;
@@ -3166,7 +3245,7 @@ document.getElementById('btn-lobby-leave').addEventListener('click', () => {
     mp.leaveLobby(_currentLobby.id);
     _currentLobby = null;
   }
-  showStep('multiplayer');
+  showStep('online');
 });
 
 function _initMpStep() {
@@ -3190,6 +3269,30 @@ function _initMpStep() {
   document.getElementById('mp-name-error').style.display = 'none';
   const loginStatus = document.getElementById('mp-email-login-status');
   if (loginStatus) loginStatus.style.display = 'none';
+}
+
+function _initAsyncStep() {
+  const session     = loadSession();
+  const sessionInfo = document.getElementById('async-session-info');
+  const nameForm    = document.getElementById('async-name-form');
+  const actionBtns  = document.getElementById('async-action-buttons');
+
+  if (session) {
+    document.getElementById('async-session-name').textContent = session.username;
+    sessionInfo.style.display = '';
+    nameForm.style.display    = 'none';
+    actionBtns.style.display  = '';
+  } else {
+    sessionInfo.style.display = 'none';
+    nameForm.style.display    = '';
+    actionBtns.style.display  = 'none';
+  }
+
+  // Reset form states
+  const nameErr = document.getElementById('async-name-error');
+  if (nameErr) nameErr.style.display = 'none';
+  const emailStatus = document.getElementById('async-email-login-status');
+  if (emailStatus) emailStatus.style.display = 'none';
 }
 
 // ── Account page ──────────────────────────────────────────────────────────────
@@ -3258,7 +3361,7 @@ async function _initAccountPage() {
 
 // Account: go to MP to sign in
 document.getElementById('btn-acct-goto-mp').addEventListener('click', () => {
-  _showMultiplayerScreen();
+  _showMultiplayerChoice();
 });
 
 // Account: edit username
@@ -3297,6 +3400,7 @@ document.getElementById('btn-acct-save-name').addEventListener('click', async ()
       document.getElementById('acct-username').textContent = data.player.username;
       document.getElementById('acct-name-edit').style.display = 'none';
       document.getElementById('mp-session-name').textContent = data.player.username;
+      document.getElementById('async-session-name').textContent = data.player.username;
     } else {
       errorEl.textContent = data.error || 'Failed to change username.';
       errorEl.style.display = '';
@@ -3347,23 +3451,62 @@ document.getElementById('btn-mp-signin').addEventListener('click', () => {
   _ensureAuthed(() => {
     _initMpStep();
     _fetchActiveSaves();
+    _fetchCompletedGames();
   });
 });
 
-document.getElementById('btn-mp-sign-out').addEventListener('click', () => {
+function _signOut() {
   clearSession();
-  document.getElementById('mp-session-info').style.display = 'none';
-  document.getElementById('mp-name-form').style.display    = '';
-  document.getElementById('mp-action-buttons').style.display = 'none';
-  document.getElementById('active-games-list').innerHTML =
-    '<p class="saves-empty">Sign in to see your active games.</p>';
-  document.getElementById('async-games-list').innerHTML =
-    '<p class="saves-empty">Sign in to see async games.</p>';
   if (mp) { mp.disconnect(); mp = null; }
   renderer = null; ui = null; state = null;
+}
+
+document.getElementById('btn-mp-sign-out').addEventListener('click', () => {
+  _signOut();
+  _initMpStep();
+  document.getElementById('active-games-list').innerHTML =
+    '<p class="saves-empty">Sign in to see your active games.</p>';
+  document.getElementById('mp-completed-list').innerHTML =
+    '<p class="saves-empty">Sign in to see completed games.</p>';
 });
 
-// ── Email login (new device, no session — on multiplayer screen) ─────────────
+// ── Async sign-in / sign-out ────────────────────────────────────────────────
+
+document.getElementById('btn-async-signin').addEventListener('click', () => {
+  _ensureAuthed(() => {
+    _initAsyncStep();
+    _fetchAsyncGames();
+  }, 'async-username');
+});
+
+document.getElementById('btn-async-sign-out').addEventListener('click', () => {
+  _signOut();
+  _initAsyncStep();
+  document.getElementById('async-games-list').innerHTML =
+    '<p class="saves-empty">Sign in to see async games.</p>';
+});
+
+document.getElementById('btn-async-email-login').addEventListener('click', async () => {
+  const emailInput = document.getElementById('async-email-login-input');
+  const email = emailInput.value.trim();
+  if (!email) return;
+
+  const statusEl = document.getElementById('async-email-login-status');
+  statusEl.textContent = 'Sending…';
+  statusEl.className   = 'setup-hint';
+  statusEl.style.display = '';
+
+  const result = await requestEmailLogin(email);
+  if (result.ok) {
+    statusEl.textContent = result.message || 'Check your email for the login link!';
+    statusEl.className   = 'setup-hint';
+  } else {
+    statusEl.textContent = result.error || 'Failed to send link.';
+    statusEl.className   = 'setup-error';
+  }
+});
+
+// ── Email login (new device, no session — on online screen) ─────────────────
 
 document.getElementById('btn-mp-email-login').addEventListener('click', async () => {
   const emailInput = document.getElementById('mp-email-login-input');
@@ -3386,14 +3529,24 @@ document.getElementById('btn-mp-email-login').addEventListener('click', async ()
 });
 
 function _onlineError(msg) {
-  const el = document.getElementById('mp-name-error');
-  el.textContent    = msg;
-  el.style.display  = '';
+  // Show error on whichever screen is visible
+  const mpErr = document.getElementById('mp-name-error');
+  const asyncErr = document.getElementById('async-name-error');
+  if (mpErr && stepOnline.style.display !== 'none') {
+    mpErr.textContent = msg;
+    mpErr.style.display = '';
+  } else if (asyncErr && stepAsync.style.display !== 'none') {
+    asyncErr.textContent = msg;
+    asyncErr.style.display = '';
+  } else if (mpErr) {
+    mpErr.textContent = msg;
+    mpErr.style.display = '';
+  }
 }
 
 /** Ensure we have an authenticated MultiplayerClient, then call cb(). */
-function _ensureAuthed(cb) {
-  const nameInput = document.getElementById('mp-username');
+function _ensureAuthed(cb, usernameInputId) {
+  const nameInput = document.getElementById(usernameInputId || 'mp-username');
   const session   = loadSession();
   const wsUrl     = _serverWsUrl();
 
@@ -3453,8 +3606,7 @@ function _createMpClient() {
           } catch (err) {
             console.error('initOnline failed:', err);
             _onlineError(`Failed to start game: ${err.message}`);
-            showStep('multiplayer');
-            _initMpStep();
+            _showOnlineScreen();
           }
         }
         return;
@@ -3740,11 +3892,14 @@ function _createMpClient() {
     onAsyncOpponentJoined(msg) { _handleAsyncOpponentJoined(msg); },
 
     onError(msg) {
-      // During auth phase, show error in the lobby
+      // During auth phase, show error on the appropriate screen
       if (!state || document.getElementById('setup-screen').style.display !== 'none') {
-        showStep('multiplayer');
-        _initMpStep();
-        _onlineError(msg);  // show after _initMpStep so it doesn't get reset
+        if (_asyncRoomId || stepAsync.style.display !== 'none') {
+          _showAsyncScreen();
+        } else {
+          _showOnlineScreen();
+        }
+        _onlineError(msg);
       } else {
         // In-game error — show as modal dialog
         if (ui) ui._showResultDialog([`⚠ ${msg}`]);
@@ -3773,13 +3928,15 @@ MultiplayerClient.prototype._route = function(msg) {
     const expiredSession = loadSession();
     clearSession();
     if (mp) mp._player = null;
-    document.getElementById('mp-session-info').style.display    = 'none';
-    document.getElementById('mp-name-form').style.display       = '';
-    document.getElementById('mp-action-buttons').style.display  = 'none';
     if (expiredSession?.username) {
       document.getElementById('mp-username').value = expiredSession.username;
+      document.getElementById('async-username').value = expiredSession.username;
     }
-    showStep('multiplayer');
+    if (_asyncRoomId || stepAsync.style.display !== 'none') {
+      _showAsyncScreen();
+    } else {
+      _showOnlineScreen();
+    }
   }
 };
 
@@ -4004,11 +4161,11 @@ if (_emailToken) {
     _tmpMp.connect(_serverWsUrl());
     _tmpMp._opts._onAuthOk = () => {
       mp = _tmpMp;
-      _showMultiplayerScreen();
+      _showMultiplayerChoice();
     };
     _tmpMp.auth({ token: _emailToken });
   } catch {
-    // Fallback: just store minimal session and show multiplayer screen
-    _showMultiplayerScreen();
+    // Fallback: just store minimal session and show multiplayer choice
+    _showMultiplayerChoice();
   }
 }

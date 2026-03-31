@@ -14,15 +14,24 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const mainJs = readFileSync(resolve(__dirname, '..', 'src', 'main.js'), 'utf8');
 
 describe('multiplayer onError handler ordering', () => {
-  test('_onlineError is called after _initMpStep in the onError handler', () => {
-    // Extract the onError handler block — look for the setup-screen auth phase branch
-    const onErrorMatch = mainJs.match(
-      /onError\(msg\)\s*\{[^}]*showStep\('multiplayer'\);[^}]*_initMpStep\(\);[^}]*_onlineError\(msg\)/
-    );
+  test('_onlineError is called after the screen show functions in the onError handler', () => {
+    // The onError handler calls _showOnlineScreen() or _showAsyncScreen() which
+    // internally call _initMpStep()/_initAsyncStep(), then calls _onlineError(msg).
+    // This ensures the error is displayed AFTER init resets display:none.
+    // Extract the onError handler body (allowing nested braces)
+    const onErrorStart = mainJs.indexOf('onError(msg) {');
+    assert.ok(onErrorStart !== -1, 'onError handler must exist');
+    const afterStart = mainJs.slice(onErrorStart, onErrorStart + 500);
+
+    // _showOnlineScreen() must appear before _onlineError(msg) in the handler
+    const showIdx = afterStart.indexOf('_showOnlineScreen()');
+    const errIdx  = afterStart.indexOf('_onlineError(msg)');
+    assert.ok(showIdx !== -1, 'onError handler must call _showOnlineScreen()');
+    assert.ok(errIdx  !== -1, 'onError handler must call _onlineError(msg)');
     assert.ok(
-      onErrorMatch,
-      '_onlineError(msg) must be called AFTER _initMpStep() in the onError handler, ' +
-      'otherwise _initMpStep resets the error display to none'
+      showIdx < errIdx,
+      '_onlineError(msg) must be called AFTER _showOnlineScreen() in the onError handler, ' +
+      'otherwise the init step resets the error display to none'
     );
   });
 
