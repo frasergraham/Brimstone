@@ -12,6 +12,7 @@ import { VERSION, BUILD_VERSION } from './version.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType }    from './planner.js';
 import { hexDistance, getNeighbors } from './hex.js';
+import { sightRange } from './actions.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { MAP_SIZES } from './map.js';
@@ -635,6 +636,26 @@ function _getBattleAllyEntities(actorSnap, targetSnap, entities) {
  * finalEntities: real post-resolution entity array (restored after all steps).
  * humanFaction:  if set, suppress opponent-only battle/explore dialogs.
  */
+
+/**
+ * Check whether a hex (col, row) is within sight range of any friendly entity
+ * in the current step's entity snapshot.  Used during resolution animation to
+ * decide whether an opponent action should be visible under fog of war.
+ */
+function _isFogVisible(col, row, humanFaction, entities, phase) {
+  if (!humanFaction || state.fogOfWar === 'none') return true;
+  const friendlyOwner = humanFaction; // 'hero' or 'witch'
+  for (const e of entities) {
+    if (!e.alive || e.owner !== friendlyOwner) continue;
+    // Witch always sees 2 hexes; hero uses phase-dependent sight range
+    const range = friendlyOwner === 'witch'
+      ? 2
+      : sightRange(phase, e.ability === 'scout');
+    if (hexDistance(e.col, e.row, col, row) <= range) return true;
+  }
+  return false;
+}
+
 async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFaction = null, myPlayerId = null) {
   console.log('[animate] _animateResolutionSteps called:', {
     stepsCount: steps.length,
@@ -734,7 +755,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
           for (const ev of events) {
             const snap = step.entitySnapshot?.find(e => e.id === ev.action?.entityId);
             const isOpponent = humanFaction && ev.faction !== humanFaction;
-            if (snap && !(isOpponent && state.fogOfWar !== 'none')) {
+            if (snap && (!isOpponent || _isFogVisible(snap.col, snap.row, humanFaction, step.entitySnapshot, state.phase))) {
               // For moves, frame the destination; for others, frame the actor's current position
               if (ev.action.type === PlanActionType.MOVE) {
                 frameTargets.push({ col: ev.action.toCol, row: ev.action.toRow });
@@ -790,7 +811,10 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
       const preSnap = step.entitySnapshot?.find(e => e.id === action.entityId);
       const isOpponent = humanFaction && ev.faction !== humanFaction;
-      const visible = preSnap && !(isOpponent && state.fogOfWar !== 'none');
+      // Opponent moves are visible if origin or destination is within sight range
+      const visible = preSnap && (!isOpponent
+        || _isFogVisible(preSnap.col, preSnap.row, humanFaction, step.entitySnapshot, state.phase)
+        || _isFogVisible(action.toCol, action.toRow, humanFaction, step.entitySnapshot, state.phase));
 
       // Use result.path if available (new path-following move); fall back to single hop
       const path = result?.path?.length > 0
