@@ -1150,6 +1150,13 @@ export function handleReconnect(playerId, roomId, ws) {
         timeoutMs:        0,
         players:          playerList,
       });
+      // Inform reconnecting player of who has already submitted
+      for (const s of room.players) {
+        if (s.playerId === playerId) continue;
+        if (room.state.playerReady.get(s.playerId)) {
+          send(ws, { type: 'playerSubmitted', playerId: s.playerId, name: s.name, faction: s.faction });
+        }
+      }
     }
 
     return true;
@@ -1178,6 +1185,13 @@ export function handleReconnect(playerId, roomId, ws) {
       timeoutMs:        0,  // no countdown for reconnected players
       players:          playerList,
     });
+    // Inform reconnecting player of who has already submitted
+    for (const s of room.players) {
+      if (s.playerId === playerId) continue;
+      if (room.state.playerReady.get(s.playerId)) {
+        send(ws, { type: 'playerSubmitted', playerId: s.playerId, name: s.name, faction: s.faction });
+      }
+    }
   }
 
   return true;

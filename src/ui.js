@@ -566,7 +566,7 @@ export class UIController {
 
   /** Called when the server notifies that another player has submitted. */
   _onPlayerSubmitted(playerId, name, faction) {
-    const p = this._players?.find(p => p.playerId === playerId);
+    const p = this._players?.find(pl => (pl.playerId ?? pl.id) === playerId);
     if (p) p._submitted = true;
     this._renderPlayerStatus();
   }
@@ -760,7 +760,7 @@ export class UIController {
     if (status) status.textContent = 'Waiting for opponents…';
 
     // Mark ourselves as submitted in the player list so the status panel updates.
-    const me = this._players?.find(p => p.playerId === this.myPlayerId);
+    const me = this._players?.find(p => (p.playerId ?? p.id) === this.myPlayerId);
     if (me) me._submitted = true;
     this._renderPlayerStatus();
 

@@ -2669,7 +2669,8 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 .plan-panel[data-witch-mode] .plan-panel-title { color: var(--witch); }
 .plan-submitted .plan-step-remove { display: none; }
-.plan-submitted .plan-btn { opacity: 0.5; pointer-events: none; }
+.plan-submitted #plan-clear-btn,
+.plan-submitted #plan-submit-btn { opacity: 0.5; pointer-events: none; }
 .plan-step.over-budget { opacity: 0.5; }
 .plan-step.over-budget .plan-step-num  { background: rgba(160,50,50,0.75); color: #faa; border-radius: 3px; padding: 0 2px; }
 .plan-step.over-budget .plan-step-desc { text-decoration: line-through; color: var(--text-dim); }
