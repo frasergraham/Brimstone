@@ -1,8 +1,9 @@
 // Lobby: room lifecycle, server-side AI, action dispatch
 import { randomUUID } from 'crypto';
 import { GameState, Player } from '../src/game.js';
-import { HeroAI, HERO_PERSONALITIES, WITCH_PERSONALITIES } from '../src/ai.js';
+import { HERO_PERSONALITIES, WITCH_PERSONALITIES } from '../src/ai.js';
 import { WitchAIEngine } from '../src/ai-engine.js';
+import { HeroAIEngine } from '../src/hero-ai-engine.js';
 import { serializeState, deserializeState } from './state-sync.js';
 import { recordResult }                    from './leaderboard.js';
 import { recordGameStats }                 from './game-stats.js';
@@ -34,12 +35,12 @@ const codeToRoom = new Map();
 // ── Personality helpers ───────────────────────────────────────────────────────
 
 const PERSONALITY_LABELS = {
-  balanced:  'Balanced',
-  berserker: 'Berserker',
-  sentinel:  'Sentinel',
-  scavenger: 'Scavenger',
-  hoarder:   'Hoarder',
-  swarm:     'Swarm',
+  balanced:   'Balanced',
+  aggressive: 'Aggressive',
+  defensive:  'Defensive',
+  explorer:   'Explorer',
+  hoarder:    'Hoarder',
+  swarm:      'Swarm',
 };
 
 function _randomPersonality(_faction) {
@@ -557,7 +558,7 @@ function _serializeEvents(events) {
 
 function _makeAI(room, faction, playerId = null, personality = null) {
   const registry   = faction === 'witch' ? WITCH_PERSONALITIES : HERO_PERSONALITIES;
-  const AICls      = registry[personality] ?? (faction === 'witch' ? WitchAIEngine : HeroAI);
+  const AICls      = registry[personality] ?? (faction === 'witch' ? WitchAIEngine : HeroAIEngine);
   return new AICls(room.state, () => {}, 0, playerId);
 }
 

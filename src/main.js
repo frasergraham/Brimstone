@@ -2,8 +2,9 @@
 import { GameState, Player } from './game.js';
 import { Renderer }          from './renderer.js';
 import { UIController, UIMode } from './ui.js';
-import { HeroAI, WITCH_PERSONALITIES }   from './ai.js';
+import { WITCH_PERSONALITIES }   from './ai.js';
 import { WitchAIEngine } from './ai-engine.js';
+import { HeroAIEngine } from './hero-ai-engine.js';
 import {
   MultiplayerClient, MirrorState, loadSession, clearSession,
   checkEmailTokenInUrl, requestLinkEmail, requestEmailLogin, fetchIdentities,
@@ -96,7 +97,7 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
 
   const thinkDelay = autoplay ? 0 : undefined;
   witchAI = witchIsAI ? new WitchAIEngine(state, redraw, thinkDelay) : null;
-  heroAI  = heroIsAI  ? new HeroAI(state, redraw, thinkDelay)  : null;
+  heroAI  = heroIsAI  ? new HeroAIEngine(state, redraw, thinkDelay)  : null;
 
   _setupLocalUI(canvas, witchAI, heroAI, autoplay);
 
@@ -1921,7 +1922,7 @@ function _startFromState(existingState, mode, existingHistory) {
 
   state   = existingState;
   witchAI = state.witchIsAI ? new WitchAIEngine(state, redraw) : null;
-  heroAI  = state.heroIsAI  ? new HeroAI(state, redraw)  : null;
+  heroAI  = state.heroIsAI  ? new HeroAIEngine(state, redraw)  : null;
 
   _setupLocalUI(canvas, witchAI, heroAI, false);
 
@@ -2699,11 +2700,11 @@ function _renderPublicLobbies(rooms) {
 
 // ── Lobby card ────────────────────────────────────────────────────────────────
 
-const _HERO_PERSONALITIES  = ['balanced', 'berserker', 'sentinel', 'scavenger'];
+const _HERO_PERSONALITIES  = ['balanced', 'aggressive', 'defensive', 'explorer'];
 const _WITCH_PERSONALITIES = ['balanced', 'aggressive', 'swarm'];
 const _PERSONALITY_LABELS  = {
-  balanced: 'Balanced', berserker: 'Berserker', sentinel: 'Sentinel',
-  scavenger: 'Scavenger', aggressive: 'Aggressive', swarm: 'Swarm',
+  balanced: 'Balanced', aggressive: 'Aggressive', defensive: 'Defensive',
+  explorer: 'Explorer', swarm: 'Swarm',
 };
 
 function _renderLobby(lobby) {

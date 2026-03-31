@@ -2384,24 +2384,6 @@ export class UIController {
     }
   }
 
-  // Single entry point for all AI turns — safe to call anytime
-  _maybeRunAI(delayMs = 400) {
-    if (this.state.gameOver) return;
-    const ms = this.autoplay ? 50 : delayMs;
-    const ap = this.state.activePlayer;
-    if (ap === Player.HERO && this.state.heroIsAI && this.heroAI) {
-      setTimeout(() => this._runHeroAI(), ms);
-    }
-  }
-
-  async _runHeroAI() {
-    if (!this.heroAI) return;
-    await this.heroAI.takeTurn();
-    this._updateSidebar();
-    this.onRedraw();
-    this._maybeRunAI();
-  }
-
   _showTileDetail(hex) {
     const state   = this.state;
     const tile    = state.tiles.get(hexKey(hex.col, hex.row));
@@ -3103,7 +3085,6 @@ export class UIController {
   refresh() {
     this._updateSidebar();
     this.onRedraw();
-    this._maybeRunAI(800); // kick off first AI turn if applicable
   }
 }
 

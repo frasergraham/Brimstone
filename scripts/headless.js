@@ -7,7 +7,7 @@
 // matching the actual local-vs-AI game loop exactly.
 
 import { GameState, WIN_REASON } from '../src/game.js';
-import { HeroAI }                from '../src/ai.js';
+import { HeroAIEngine }          from '../src/hero-ai-engine.js';
 import { WitchAIEngine }        from '../src/ai-engine.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType }         from '../src/planner.js';
@@ -39,7 +39,7 @@ const MAX_ROUNDS = Math.ceil(48 * (cols * rows) / (13 * 11));
 function runGame() {
   const state   = new GameState(true, true, MAP_SIZE);
   const witchAI = new WitchAIEngine(state, () => {}, 0);
-  const heroAI  = new HeroAI(state,  () => {}, 0);
+  const heroAI  = new HeroAIEngine(state,  () => {}, 0);
 
   const metrics = {
     // Action-type tallies
