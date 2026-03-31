@@ -22,6 +22,7 @@ export function collectUIElements(doc = document) {
 
     // ── Header / menu ─────────────────────────────────────────────────────
     'menu-btn':                g('menu-btn'),
+    'menu-replay-turn-btn':    g('menu-replay-turn-btn'),
     'menu-quit-btn':           g('menu-quit-btn'),
     'game-menu-popup':         g('game-menu-popup'),
     'game-screen':             g('game-screen'),

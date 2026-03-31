@@ -1195,6 +1195,7 @@ function initOnline(mirrorState, myFaction, mpClient) {
   // No local AI — all turns handled server-side
   ui = new UIController(canvas, state, renderer, null, redrawOnline, null, false);
   ui.onQuitToMenu = () => location.reload();
+  ui.onReplayLastTurn = () => _asyncReplayLastTurn();
   ui.mp         = mpClient;
   ui.myPlayerId = mpClient.myPlayerId ?? null;
   ui._players   = state.players ?? [];
@@ -2171,6 +2172,8 @@ function _fetchMainMenuAsyncGames() {
 /** State for the currently open async game. */
 let _asyncRoomId = null;
 let _asyncFaction = null;
+let _asyncLastRound = null;   // { roundNum, preState (serialized), steps (parsed) }
+let _asyncSeenRound = 0;      // round number whose replay the player has already watched
 
 function _openAsyncGame(roomId) {
   _asyncRoomId = roomId;
@@ -2195,6 +2198,17 @@ function _handleAsyncStateUpdate(msg) {
   mp.roomId     = msg.roomId;
   mp.active     = true;
 
+  // Store last round replay data (if available)
+  if (msg.lastRound) {
+    _asyncLastRound = {
+      roundNum:  msg.lastRound.roundNum,
+      preState:  msg.lastRound.preStateJson,
+      steps:     JSON.parse(msg.lastRound.stepsJson),
+    };
+  } else {
+    _asyncLastRound = null;
+  }
+
   // Init the game view
   if (!renderer || !ui) {
     try {
@@ -2213,12 +2227,33 @@ function _handleAsyncStateUpdate(msg) {
     redrawOnline();
   }
 
+  // Show/hide the async replay button based on whether replay data exists
+  _updateAsyncReplayBtn();
+
   if (msg.gameStatus === 'finished' || msg.gameStatus === 'abandoned') {
-    const label = msg.winner === msg.faction ? 'Victory' : (msg.winner ? 'Defeat' : 'Game Over');
-    ui?._showResultDialog([label, msg.winReason || '']);
+    // For finished games with an unseen last round, offer replay
+    if (_asyncLastRound && _asyncSeenRound < _asyncLastRound.roundNum) {
+      _showAsyncTurnChoice(_asyncLastRound.roundNum, () => {
+        const label = msg.winner === msg.faction ? 'Victory' : (msg.winner ? 'Defeat' : 'Game Over');
+        ui?._showResultDialog([label, msg.winReason || '']);
+      });
+    } else {
+      const label = msg.winner === msg.faction ? 'Victory' : (msg.winner ? 'Defeat' : 'Game Over');
+      ui?._showResultDialog([label, msg.winReason || '']);
+    }
     return;
   }
 
+  // If there's an unseen last round, offer the replay choice before entering planning
+  if (_asyncLastRound && _asyncSeenRound < _asyncLastRound.roundNum) {
+    _showAsyncTurnChoice(_asyncLastRound.roundNum, () => _enterAsyncPlanning(msg));
+  } else {
+    _enterAsyncPlanning(msg);
+  }
+}
+
+/** Enter the planning/waiting state for the current async round. */
+function _enterAsyncPlanning(msg) {
   if (msg.myPlanSubmitted) {
     ui?.exitPlanningMode();
     const waitingLabel = msg.gameStatus === 'waiting'
@@ -2234,6 +2269,112 @@ function _handleAsyncStateUpdate(msg) {
     ui?.exitPlanningMode();
     ui?.enterPlanningMode(msg.faction, budget, 0);
     if (ui) ui.onPlanSubmit = (plan) => mp.submitAsyncPlan(msg.roomId, plan);
+  }
+}
+
+/**
+ * Show a dialog offering "Show Last Turn" or "Jump to Planning".
+ * @param {number} roundNum - The round that was resolved
+ * @param {Function} afterFn - Called after choice (skip or after replay finishes)
+ */
+function _showAsyncTurnChoice(roundNum, afterFn) {
+  if (!ui) { afterFn(); return; }
+
+  const dialog = document.getElementById('result-dialog');
+  const msgs   = document.getElementById('result-messages');
+  const hint   = document.getElementById('result-dismiss-hint');
+  const btns   = document.getElementById('result-buttons');
+  const portrait = document.getElementById('result-portrait');
+  if (!dialog) { afterFn(); return; }
+
+  msgs.textContent = `Round ${roundNum} has been resolved.`;
+  hint.style.display = 'none';
+  if (portrait) { portrait.style.display = 'none'; portrait.innerHTML = ''; }
+  btns.innerHTML = '';
+  btns.style.display = '';
+
+  const showBtn = document.createElement('button');
+  showBtn.className = 'setup-btn primary';
+  showBtn.textContent = 'Show Last Turn';
+  const skipBtn = document.createElement('button');
+  skipBtn.className = 'setup-btn secondary';
+  skipBtn.textContent = 'Jump to End';
+
+  btns.appendChild(showBtn);
+  btns.appendChild(skipBtn);
+  dialog.style.display = 'flex';
+
+  const dismiss = () => {
+    dialog.style.display = 'none';
+  };
+
+  showBtn.addEventListener('click', () => {
+    dismiss();
+    _asyncReplayLastTurn().then(afterFn);
+  }, { once: true });
+
+  skipBtn.addEventListener('click', () => {
+    dismiss();
+    _asyncSeenRound = roundNum;
+    afterFn();
+  }, { once: true });
+}
+
+/** Show or hide the "Replay Last Turn" button in the game menu. */
+function _updateAsyncReplayBtn() {
+  const btn = document.getElementById('menu-replay-turn-btn');
+  if (!btn) return;
+  btn.style.display = _asyncLastRound ? '' : 'none';
+}
+
+/**
+ * Replay the last resolved async round with full animation.
+ * Saves and restores planning state around the replay.
+ */
+async function _asyncReplayLastTurn() {
+  if (!_asyncLastRound || !state || !renderer || !ui) return;
+
+  const { roundNum, preState, steps } = _asyncLastRound;
+  _asyncSeenRound = roundNum;
+
+  // Save current state so we can restore after replay
+  const savedStateJson = JSON.stringify(serializeState(state));
+  const wasPlanningMode = !!state.planningPhase;
+  const savedPlan = ui._currentPlan ? [...ui._currentPlan] : null;
+
+  // Hide planning mode during replay
+  if (wasPlanningMode) ui.exitPlanningMode();
+
+  // Restore pre-resolution state for animation
+  const preResState = deserializeState(JSON.parse(preState));
+  Object.assign(state, preResState);
+  state.hero      = preResState.hero;
+  state.witch     = preResState.witch;
+  state.myFaction = _asyncFaction;
+  redrawOnline();
+
+  // Get the final entities from the saved (post-resolution) state
+  const postState = deserializeState(JSON.parse(savedStateJson));
+  const finalEntities = postState.entities ?? state.entities;
+
+  // Run the animation
+  await _animateResolutionSteps(steps, finalEntities, redrawOnline, _asyncFaction, mp?.myPlayerId ?? null);
+
+  // Restore the current (post-resolution) state
+  const restored = deserializeState(JSON.parse(savedStateJson));
+  Object.assign(state, restored);
+  state.hero      = restored.hero;
+  state.witch     = restored.witch;
+  state.myFaction = _asyncFaction;
+  redrawOnline();
+
+  // Restore planning mode if it was active
+  if (wasPlanningMode && ui) {
+    const budget = state.playerActionsLeft?.[mp?.myPlayerId] ??
+                   state[_asyncFaction + 'ActionsLeft'] ?? 3;
+    ui.enterPlanningMode(_asyncFaction, budget, 0);
+    if (savedPlan) ui._currentPlan = savedPlan;
+    ui.onPlanSubmit = (plan) => mp.submitAsyncPlan(_asyncRoomId, plan);
   }
 }
 
@@ -2253,27 +2394,44 @@ function _handleAsyncOpponentJoined(msg) {
   }
 }
 
-function _handleAsyncResolution({ roomId, steps, finalState }) {
+function _handleAsyncResolution({ roomId, steps, finalState, resolvedRound, preStateJson }) {
   if (!state || !renderer) return;
 
-  // Same resolution flow as real-time games
-  Object.assign(state, finalState);
-  state.hero      = finalState.hero;
-  state.witch     = finalState.witch;
-  state.myFaction = _asyncFaction;
-  redrawOnline();
+  // Store for later replay
+  _asyncLastRound = {
+    roundNum: resolvedRound,
+    preState: preStateJson,
+    steps,
+  };
+  _updateAsyncReplayBtn();
 
-  if (state.gameOver) {
-    ui?._showResultDialog([
-      state.winner === _asyncFaction ? '🏆 Victory!' : '💀 Defeat',
-      state.winReason || '',
-    ]);
-  } else {
-    ui?._showResultDialog([
-      `Round ${state.round - 1} resolved!`,
-      'A new planning phase has begun.',
-    ]);
-  }
+  // Hide planning UI during animation
+  const wasPlanningMode = !!state.planningPhase;
+  const savedPlan = ui?._currentPlan ? [...ui._currentPlan] : null;
+  if (wasPlanningMode) ui.exitPlanningMode();
+
+  // Show the turn-ready choice dialog
+  _showAsyncTurnChoice(resolvedRound, () => {
+    // Apply the final (post-resolution) state
+    Object.assign(state, finalState);
+    state.hero      = finalState.hero;
+    state.witch     = finalState.witch;
+    state.myFaction = _asyncFaction;
+    redrawOnline();
+
+    if (state.gameOver) {
+      ui?._showResultDialog([
+        state.winner === _asyncFaction ? '🏆 Victory!' : '💀 Defeat',
+        state.winReason || '',
+      ]);
+    } else {
+      // Re-enter planning mode for the new round
+      const budget = state.playerActionsLeft?.[mp?.myPlayerId] ??
+                     state[_asyncFaction + 'ActionsLeft'] ?? 3;
+      ui?.enterPlanningMode(_asyncFaction, budget, 0);
+      if (ui) ui.onPlanSubmit = (plan) => mp.submitAsyncPlan(_asyncRoomId, plan);
+    }
+  });
 }
 
 function _handleAsyncPlanStatus(msg) {

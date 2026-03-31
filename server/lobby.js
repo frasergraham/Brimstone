@@ -11,7 +11,7 @@ import { compileTurnBattleSummary }        from '../src/battle-utils.js';
 import { PlanActionType }                  from '../src/planner.js';
 import { upsertSave, deleteSave, getSave,
          createCompletedGame, appendSaveRound,
-         getSaveRounds }                         from './saves.js';
+         getSaveRounds, getLastSaveRound }       from './saves.js';
 import { insertAsyncGame, getAsyncGame, getAsyncGameByCode,
          getAsyncGamesForPlayer, activateAsyncGame,
          updateAsyncGameState, finishAsyncGame, insertPlanStatus,
@@ -1494,6 +1494,9 @@ export function connectToAsyncGame(playerId, ws, roomId) {
   const plans     = getPlanStatus(roomId, game.round);
   const myPlan    = plans.find(p => p.player_id === playerId);
 
+  // Include last round's replay data so the client can offer "Show Last Turn"
+  const lastRound = game.round > 1 ? getLastSaveRound(roomId) : null;
+
   send(ws, {
     type:       'asyncStateUpdate',
     roomId,
@@ -1515,6 +1518,11 @@ export function connectToAsyncGame(playerId, ws, roomId) {
     winner:     game.winner,
     winReason:  game.win_reason,
     myActionsLeft: state.playerActionsLeft?.[playerId] ?? state[myFaction + 'ActionsLeft'] ?? 3,
+    lastRound:  lastRound ? {
+      roundNum:     lastRound.round_num,
+      preStateJson: lastRound.pre_state_json,
+      stepsJson:    lastRound.steps_json,
+    } : null,
   });
 }
 
@@ -1666,7 +1674,11 @@ function _resolveAsyncRound(roomId) {
   }
 
   // Push resolution to any connected players
-  const resolutionMsg = { type: 'asyncResolution', roomId, steps: serializedSteps, finalState };
+  const resolutionMsg = {
+    type: 'asyncResolution', roomId,
+    resolvedRound, preStateJson,
+    steps: serializedSteps, finalState,
+  };
   _asyncBroadcast(roomId, resolutionMsg);
 }
 

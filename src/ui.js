@@ -279,6 +279,11 @@ export class UIController {
       const popup = this._el('game-menu-popup');
       if (popup) popup.style.display = popup.style.display === 'none' ? 'block' : 'none';
     });
+    this._el('menu-replay-turn-btn')?.addEventListener('click', () => {
+      const popup = this._el('game-menu-popup');
+      if (popup) popup.style.display = 'none';
+      this.onReplayLastTurn?.();
+    });
     this._el('menu-quit-btn')?.addEventListener('click', () => {
       const popup = this._el('game-menu-popup');
       if (popup) popup.style.display = 'none';
