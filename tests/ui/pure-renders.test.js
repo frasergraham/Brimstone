@@ -183,12 +183,12 @@ describe('buildPlanStepsHtml', () => {
 
 describe('buildPlayerStatusHtml', () => {
   test('empty players returns empty string', () => {
-    assert.equal(buildPlayerStatusHtml([], null), '');
+    assert.equal(buildPlayerStatusHtml([]), '');
   });
 
   test('single player shows name and waiting state', () => {
     const players = [{ playerId: 'p1', name: 'Alice', faction: 'hero' }];
-    const html = buildPlayerStatusHtml(players, 'other');
+    const html = buildPlayerStatusHtml(players);
     assert.ok(html.includes('Alice'), 'should include player name');
     assert.ok(html.includes('player-waiting'), 'unsubmitted player should be waiting');
     assert.ok(html.includes('⋯'), 'waiting indicator');
@@ -196,34 +196,28 @@ describe('buildPlayerStatusHtml', () => {
 
   test('submitted player shows ready state', () => {
     const players = [{ playerId: 'p1', name: 'Alice', faction: 'hero', _submitted: true }];
-    const html = buildPlayerStatusHtml(players, 'other');
+    const html = buildPlayerStatusHtml(players);
     assert.ok(html.includes('player-ready'), 'submitted player should be ready');
     assert.ok(html.includes('✓'), 'ready indicator');
   });
 
-  test('local player gets (you) label', () => {
-    const players = [{ playerId: 'p1', name: 'Alice', faction: 'hero' }];
-    const html = buildPlayerStatusHtml(players, 'p1');
-    assert.ok(html.includes('Alice (you)'), 'local player should have (you) suffix');
-  });
-
   test('hero faction gets hero CSS class', () => {
     const players = [{ playerId: 'p1', name: 'Alice', faction: 'hero' }];
-    const html = buildPlayerStatusHtml(players, null);
+    const html = buildPlayerStatusHtml(players);
     assert.ok(html.includes('faction-hero'), 'hero gets faction-hero class');
     assert.ok(html.includes('⚔'), 'hero glyph');
   });
 
   test('witch faction gets witch CSS class', () => {
     const players = [{ playerId: 'p1', name: 'Bob', faction: 'witch' }];
-    const html = buildPlayerStatusHtml(players, null);
+    const html = buildPlayerStatusHtml(players);
     assert.ok(html.includes('faction-witch'), 'witch gets faction-witch class');
     assert.ok(html.includes('✦'), 'witch glyph');
   });
 
   test('XSS chars in name are escaped', () => {
     const players = [{ playerId: 'p1', name: '<script>alert(1)</script>', faction: 'hero' }];
-    const html = buildPlayerStatusHtml(players, null);
+    const html = buildPlayerStatusHtml(players);
     assert.ok(!html.includes('<script>'), 'raw <script> should be escaped');
     assert.ok(html.includes('&lt;script&gt;'), 'should use HTML entities');
   });

@@ -191,17 +191,15 @@ export function buildPlanStepsHtml(plan, budget, foodEnabled, foodAvailable, sub
  * Build the innerHTML for the #plan-players ready list.
  *
  * @param {Array<{ playerId: string, name: string, faction: string, _submitted?: boolean }>} players
- * @param {string|null} myPlayerId  UUID of the local player.
  * @returns {string}  HTML string.
  */
-export function buildPlayerStatusHtml(players, myPlayerId) {
+export function buildPlayerStatusHtml(players) {
   let html = '';
   for (const p of players) {
-    const isMe      = p.playerId === myPlayerId;
     const submitted = p._submitted ?? false;
     const icon      = submitted ? '✓' : '⋯';
     const cls       = submitted ? 'player-ready' : 'player-waiting';
-    const label     = isMe ? `${p.name} (you)` : p.name;
+    const label     = p.name;
     const fCls      = p.faction === 'hero' ? 'faction-hero' : 'faction-witch';
     const safeName  = String(label)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

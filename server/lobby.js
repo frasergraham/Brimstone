@@ -15,6 +15,7 @@ import { upsertSave, deleteSave, getSave,
 import { VERSION }                         from '../src/version.js';
 import { generateMultipleStarts }          from '../src/map.js';
 import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS } from '../src/entities.js';
+import { pickAIName }                              from '../src/ai-names.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const RECONNECT_GRACE_MS = 60_000; // time to reconnect before forfeit
@@ -170,6 +171,7 @@ function createRoom(config = {}) {
     spectators:       new Set(),
     chronicle:        [],
     replayRounds:     [],   // { roundNum, preStateJson, stepsJson }[]
+    usedAINames:      new Set(),
     createdAt:        Date.now(),
   };
 
@@ -576,7 +578,7 @@ function attachAI(room, faction, forPlayerId = null, personality = null) {
       seat.ws       = null;
       seat.isAI     = true;
       seat.ai       = ai;
-      seat.name     = faction === 'witch' ? 'The AI Witch' : 'The AI Hero';
+      seat.name     = pickAIName(faction, room.usedAINames);
       // Patch state.players too
       const sp = room.state.players.find(p => p.id === forPlayerId);
       if (sp) {
@@ -591,10 +593,7 @@ function attachAI(room, faction, forPlayerId = null, personality = null) {
   }
 
   // Add a fresh AI seat (used when filling an empty slot)
-  const label = PERSONALITY_LABELS[personality] ?? 'Balanced';
-  const name  = faction === 'witch'
-    ? `The AI Witch (${label})`
-    : `The AI Hero (${label})`;
+  const name = pickAIName(faction, room.usedAINames);
   _addSeat(room, syntheticPlayerId, null, name, faction, true, ai);
   // Store personality on the seat for player-list broadcasts
   const newSeat = seatFor(room, syntheticPlayerId);
@@ -614,7 +613,7 @@ function attachAI(room, faction, forPlayerId = null, personality = null) {
  */
 function _addExtraAISeat(room, faction, personality = null) {
   const pid  = `ai-${faction}-${randomUUID().slice(0, 8)}`;
-  const name = faction === 'witch' ? 'Witch Ally' : 'Hero Ally';
+  const name = pickAIName(faction, room.usedAINames);
   const ai   = _makeAI(room, faction, pid, personality); // pass pid so AI scopes plan to its own entities
 
   // Spawn near the faction's existing leaders, with enough separation
@@ -832,10 +831,7 @@ export function setSlotAI(playerId, roomId, slotIndex, personality) {
     ? _randomPersonality(slot.faction)
     : (personality ?? 'balanced');
 
-  const label   = PERSONALITY_LABELS[resolved] ?? 'Balanced';
-  const aiName  = slot.faction === 'witch'
-    ? `AI Witch (${label})`
-    : `AI Hero (${label})`;
+  const aiName = pickAIName(slot.faction, room.usedAINames);
 
   slot.status      = 'ai';
   slot.personality = resolved;
@@ -853,6 +849,11 @@ export function removeSlotAI(playerId, roomId, slotIndex) {
 
   const slot = room.slots[slotIndex];
   if (!slot || slot.status !== 'ai')    { return; }
+
+  // Release the AI name back to the pool
+  if (slot.name && room.usedAINames) {
+    room.usedAINames.delete(slot.name);
+  }
 
   slot.status      = 'empty';
   slot.personality = null;
