@@ -1173,9 +1173,9 @@ export class Renderer {
           const { x: nx, y: ny } = this._toCanvas(riverNbrs[0].col, riverNbrs[0].row);
           const dx = nx - x, dy = ny - y;
           const d  = Math.sqrt(dx * dx + dy * dy);
-          // Point beyond this hex in the opposite direction (off the map edge)
-          const offX = x - (dx / d) * apothem * 2;
-          const offY = y - (dy / d) * apothem * 2;
+          // Cap at the far edge of this hex (don't extend beyond the map)
+          const offX = x - (dx / d) * apothem;
+          const offY = y - (dy / d) * apothem;
           ctx.moveTo(offX, offY);
           ctx.quadraticCurveTo(x, y, edgeMids[0].x, edgeMids[0].y);
         } else {
