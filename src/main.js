@@ -2261,6 +2261,12 @@ function _openAsyncGame(roomId) {
 // ── Async: connect / state update ──────────────────────────────────────────
 
 function _handleAsyncStateUpdate(msg) {
+  // Clean up any stale UI state from a previous connection / interrupted animation
+  _resolving = false;
+  const resultDlg = document.getElementById('result-dialog');
+  if (resultDlg) resultDlg.style.display = 'none';
+  ui?.exitPlanningMode();
+
   _asyncRoomId  = msg.roomId;
   _asyncFaction = msg.faction;
 

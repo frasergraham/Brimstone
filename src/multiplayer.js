@@ -227,6 +227,7 @@ export class MultiplayerClient {
 
   /** Connect to an async game to view state and/or submit a plan. */
   connectAsync(roomId) {
+    this._asyncRoomId = roomId;
     this._send({ type: 'connectAsync', roomId });
   }
 
@@ -237,6 +238,7 @@ export class MultiplayerClient {
 
   /** Disconnect from an async game session. */
   disconnectAsync() {
+    this._asyncRoomId = null;
     this._send({ type: 'disconnectAsync' });
   }
 
@@ -312,6 +314,10 @@ export class MultiplayerClient {
             is_admin: msg.player.is_admin || false,
           }));
         } catch {}
+        // If we were in an async game, re-connect to it after re-auth
+        if (this._asyncRoomId) {
+          this.connectAsync(this._asyncRoomId);
+        }
         break;
 
       case 'authError':
