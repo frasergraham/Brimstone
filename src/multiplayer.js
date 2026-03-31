@@ -438,6 +438,7 @@ export class MultiplayerClient {
         const mirror = MirrorState.fromSnapshot(msg.finalState);
         this._opts.onAsyncResolution?.({
           roomId: msg.roomId, steps: msg.steps, finalState: mirror,
+          finalStateSnapshot: msg.finalState,
           resolvedRound: msg.resolvedRound, preStateJson: msg.preStateJson,
         });
         break;
