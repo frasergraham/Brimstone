@@ -9,6 +9,7 @@ import { VERSION, BUILD_VERSION } from './src/version.js';
 import {
   registerOrLogin, getPlayerByToken, getPlayerByEmail,
   linkEmail, loginByEmail, getPlayerIdentities, changeUsername,
+  getOrCreateByEmail,
 } from './server/auth.js';
 import { generateToken, verifyToken, sendMagicLinkEmail } from './server/magic-link.js';
 import { getLeaderboard }                    from './server/leaderboard.js';
@@ -20,7 +21,8 @@ import { pruneStaleAndIncompatibleSaves,
          pinCompletedGame, deleteCompletedGame,
          pruneExpiredCompletedGames, getAllCompletedGames,
          createSpCompletedGame, getAllSpCompletedGames,
-         getSpCompletedGame, getSpCompletedGameRounds }    from './server/saves.js';
+         getSpCompletedGame, getSpCompletedGameRounds,
+         getSaveRounds }                                   from './server/saves.js';
 import {
   createLobby, joinLobby, browseLobby,
   setSlotAI, removeSlotAI, fillAllWithAI, startGame, leaveLobby,
@@ -30,10 +32,18 @@ import {
   getRoom,
   getRooms, getQueue, getActiveRoomsForPlayer,
   subscribeSpectator, unsubscribeSpectator, getRoomChronicle,
+  // Async game support
+  createAsyncGameRoom, joinAsyncGameRoom,
+  connectToAsyncGame, handleAsyncPlanSubmit, handleAsyncDisconnect,
+  checkAsyncDeadlines, pruneAsyncGames,
+  getAsyncGamesForPlayer,
 } from './server/lobby.js';
 import {
   getAllPlayers, getAllSaves, getSaveWithState,
 } from './server/admin.js';
+import { deleteAsyncGame as _deleteAsyncGame,
+         getAsyncGame as _getAsyncGame,
+         getAsyncGameByCode }                  from './server/async-game.js';
 import { serializeState } from './server/state-sync.js';
 import { getGameModeConfig } from './server/game-mode-config.js';
 
@@ -83,6 +93,72 @@ app.get('/api/saves', (req, res) => {
   const player = getPlayerByToken(token);
   if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
   res.json(getActiveRoomsForPlayer(player.id));
+});
+
+// REST: async games for a player
+app.get('/api/async-games', (req, res) => {
+  const token = req.query.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
+  const games = getAsyncGamesForPlayer(player.id);
+  // Enrich with player-relative fields
+  const enriched = games.map(g => {
+    const myFaction = g.hero_player_id === player.id ? 'hero' : (g.witch_player_id === player.id ? 'witch' : g.host_faction);
+    const oppName = myFaction === 'hero' ? (g.witch_name || 'Witch') : (g.hero_name || 'Hero');
+    return { ...g, state_json: undefined, my_faction: myFaction, opponent_name: oppName };
+  });
+  res.json(enriched);
+});
+
+app.post('/api/async-games', (req, res) => {
+  const token = req.body?.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
+  const result = createAsyncGameRoom(player.id, player.username, req.body);
+  if (result.error) { res.status(400).json(result); return; }
+  res.json(result);
+});
+
+app.post('/api/async-games/join', (req, res) => {
+  const token = req.body?.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
+  const code = (req.body?.code || '').toUpperCase().trim();
+  if (!code) { res.status(400).json({ error: 'Game code required.' }); return; }
+  const result = joinAsyncGameRoom(player.id, player.username, code);
+  if (result.error) { res.status(400).json(result); return; }
+  res.json(result);
+});
+
+app.delete('/api/async-games/:roomId', (req, res) => {
+  const token = req.query.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
+  const game = _getAsyncGame(req.params.roomId);
+  if (!game) { res.status(404).json({ error: 'Not found.' }); return; }
+  if (game.hero_player_id !== player.id && game.witch_player_id !== player.id && game.host_player_id !== player.id) {
+    res.status(403).json({ error: 'Forbidden.' }); return;
+  }
+  _deleteAsyncGame(req.params.roomId);
+  res.json({ ok: true });
+});
+
+// REST: replay rounds for an async game
+app.get('/api/async-games/:roomId/rounds', (req, res) => {
+  const token = req.query.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
+  const game = _getAsyncGame(req.params.roomId);
+  if (!game) { res.status(404).json({ error: 'Not found.' }); return; }
+  if (game.hero_player_id !== player.id && game.witch_player_id !== player.id && game.host_player_id !== player.id) {
+    res.status(403).json({ error: 'Forbidden.' }); return;
+  }
+  res.json(getSaveRounds(req.params.roomId));
 });
 
 // REST: completed games for a player
@@ -251,6 +327,40 @@ app.get('/auth/verify', (req, res) => {
   } else {
     // Should not happen — we always set playerId. But handle gracefully.
     res.status(400).send('Invalid link.');
+  }
+});
+
+// Invite link: auto-create/login account and join game
+app.get('/invite', (req, res) => {
+  const code = (req.query.code || '').toUpperCase().trim();
+  if (!code) { res.status(400).send('Missing game code.'); return; }
+
+  const game = getAsyncGameByCode(code);
+  if (!game) {
+    res.status(404).send('This game is no longer available or has already started.');
+    return;
+  }
+
+  const inviteeEmail = game.invitee_email;
+
+  // If the game has a specific invitee email, auto-create/login that account
+  if (inviteeEmail) {
+    const authResult = getOrCreateByEmail(inviteeEmail);
+    if (!authResult.ok) { res.status(500).send('Failed to create account.'); return; }
+
+    const player = authResult.player;
+    const joinResult = joinAsyncGameRoom(player.id, player.username, code);
+    if (joinResult.error) {
+      // Game may have been joined already — redirect with token so they can see it
+      res.redirect(`/?email_token=${encodeURIComponent(player.token)}#async=${game.room_id}`);
+      return;
+    }
+
+    // Successfully joined — redirect with session token and deep-link to the game
+    res.redirect(`/?email_token=${encodeURIComponent(player.token)}#async=${joinResult.roomId}`);
+  } else {
+    // No invitee email — just redirect to the async join screen with the code pre-filled
+    res.redirect(`/#invite=${encodeURIComponent(code)}`);
   }
 });
 
@@ -518,7 +628,7 @@ function send(ws, obj) {
 
 function clientState(ws) {
   if (!clients.has(ws)) clients.set(ws, {
-    player: null, roomId: null,
+    player: null, roomId: null, asyncRoomId: null,
     spectatingRooms: new Set(),
   });
   return clients.get(ws);
@@ -540,6 +650,10 @@ wss.on('connection', ws => {
   ws.on('close', () => {
     if (cs.player && cs.roomId) {
       handleDisconnect(cs.player.id, cs.roomId);
+    }
+    // Clean up async session if present
+    if (cs.player && cs.asyncRoomId) {
+      handleAsyncDisconnect(cs.player.id, cs.asyncRoomId);
     }
     // Clean up any spectator subscriptions
     if (cs.spectatingRooms.size > 0) {
@@ -685,6 +799,29 @@ function route(ws, cs, msg) {
       break;
     }
 
+    // ── Async games ──────────────────────────────────────────────────────
+    case 'connectAsync': {
+      if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
+      if (!msg.roomId) { send(ws, { type: 'error', message: 'roomId required.' }); return; }
+      cs.asyncRoomId = msg.roomId;
+      connectToAsyncGame(cs.player.id, ws, msg.roomId);
+      break;
+    }
+
+    case 'submitAsyncPlan': {
+      if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
+      if (!msg.roomId) { send(ws, { type: 'error', message: 'roomId required.' }); return; }
+      handleAsyncPlanSubmit(cs.player.id, msg.roomId, msg.plan ?? []);
+      break;
+    }
+
+    case 'disconnectAsync': {
+      if (!cs.player || !cs.asyncRoomId) break;
+      handleAsyncDisconnect(cs.player.id, cs.asyncRoomId);
+      cs.asyncRoomId = null;
+      break;
+    }
+
     // ── Admin / spectator ─────────────────────────────────────────────────
     case 'adminSpectateRoom': {
       if (!cs.player?.is_admin) { send(ws, { type: 'error', message: 'Admin access required.' }); return; }
@@ -734,4 +871,9 @@ server.listen(PORT, () => {
   if (pruned > 0) console.log(`Pruned ${pruned} stale/incompatible save(s).`);
   const prunedCompleted = pruneExpiredCompletedGames();
   if (prunedCompleted > 0) console.log(`Pruned ${prunedCompleted} expired completed game(s).`);
+
+  // Async game maintenance
+  pruneAsyncGames();
+  checkAsyncDeadlines(); // catch any deadlines that expired while server was down
+  setInterval(checkAsyncDeadlines, 60_000); // check every minute
 });

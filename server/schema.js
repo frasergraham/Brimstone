@@ -132,6 +132,48 @@ export const SCHEMA_SQL = `
     created_at        INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
+  CREATE TABLE IF NOT EXISTS async_games (
+    room_id                    TEXT PRIMARY KEY,
+    code                       TEXT NOT NULL,
+    hero_player_id             TEXT,
+    witch_player_id            TEXT,
+    hero_name                  TEXT NOT NULL DEFAULT '',
+    witch_name                 TEXT NOT NULL DEFAULT '',
+    host_player_id             TEXT NOT NULL,
+    host_faction               TEXT NOT NULL,
+    round                      INTEGER NOT NULL DEFAULT 0,
+    phase                      TEXT NOT NULL DEFAULT '',
+    turn_deadline              INTEGER,
+    turn_interval_ms           INTEGER NOT NULL,
+    game_version               TEXT NOT NULL,
+    state_json                 TEXT,
+    config_json                TEXT NOT NULL DEFAULT '{}',
+    status                     TEXT NOT NULL DEFAULT 'waiting',
+    winner                     TEXT,
+    win_reason                 TEXT,
+    invitee_email              TEXT,
+    consecutive_timeout_rounds INTEGER NOT NULL DEFAULT 0,
+    created_at                 INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at                 INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  CREATE TABLE IF NOT EXISTS async_plan_status (
+    room_id      TEXT NOT NULL REFERENCES async_games(room_id),
+    player_id    TEXT NOT NULL,
+    round        INTEGER NOT NULL,
+    plan_json    TEXT,
+    submitted_at INTEGER,
+    PRIMARY KEY (room_id, player_id, round)
+  );
+
+  CREATE TABLE IF NOT EXISTS async_notifications (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id   TEXT NOT NULL,
+    player_id TEXT NOT NULL,
+    type      TEXT NOT NULL,
+    sent_at   INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
   CREATE TABLE IF NOT EXISTS campaign_game_stats (
     id                TEXT PRIMARY KEY,
     campaign_id       TEXT NOT NULL,
