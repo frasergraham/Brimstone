@@ -340,10 +340,14 @@
       <div class="active-games-section" style="margin-top:0.75rem">
         <div class="saves-tab-bar">
           <button class="saves-tab active" data-target="active-games-list">In Progress</button>
+          <button class="saves-tab"        data-target="async-games-list">Async</button>
           <button class="saves-tab"        data-target="mp-completed-list">Completed</button>
         </div>
         <div id="active-games-list" class="saves-list">
           <p class="saves-empty">Sign in to see your active games.</p>
+        </div>
+        <div id="async-games-list" class="saves-list" style="display:none">
+          <p class="saves-empty">Sign in to see async games.</p>
         </div>
         <div id="mp-completed-list" class="saves-list" style="display:none">
           <p class="saves-empty">Sign in to see completed games.</p>
@@ -354,6 +358,7 @@
       <div id="mp-action-buttons" class="setup-buttons online-match-buttons" style="display:none">
         <button id="btn-create-game" class="setup-btn primary">⚔ Create Game</button>
         <button id="btn-join-game"   class="setup-btn">🚪 Join Game</button>
+        <button id="btn-create-async" class="setup-btn">⏳ Async Game</button>
       </div>
 
       <div class="mp-local-divider">— or —</div>
@@ -537,6 +542,74 @@
     </div>
     <div class="setup-buttons" style="margin-bottom:0">
       <button id="btn-lobby-leave" class="setup-btn">✕ Leave</button>
+    </div>
+  </div>
+
+  <!-- ── Async: create game ────────────────────────────────────── -->
+  <div id="setup-step-async-create" class="setup-card" style="display:none">
+    <h1 class="title" style="font-size:2rem">ASYNC GAME</h1>
+    <div class="setup-lore"><p>Create a long-lived game with wall-clock turn deadlines. Share the code with your opponent — they can join at any time.</p></div>
+
+    <label class="setup-label">Your Faction</label>
+    <div class="setup-buttons" style="margin-bottom:0.75rem">
+      <button class="setup-btn primary async-faction-btn" data-faction="hero">Hero</button>
+      <button class="setup-btn async-faction-btn" data-faction="witch">Witch</button>
+    </div>
+
+    <label class="setup-label">Map Size</label>
+    <select id="async-map-size" class="setup-select" style="margin-bottom:0.75rem">
+      <option value="skirmish">Skirmish</option>
+      <option value="standard" selected>Standard</option>
+      <option value="regional">Regional</option>
+    </select>
+
+    <label class="setup-label">Fog of War</label>
+    <select id="async-fog" class="setup-select" style="margin-bottom:0.75rem">
+      <option value="full" selected>Full</option>
+      <option value="partial">Partial</option>
+      <option value="none">None</option>
+    </select>
+
+    <label class="setup-label">Turn Deadline</label>
+    <select id="async-turn-interval" class="setup-select" style="margin-bottom:0.75rem">
+      <option value="3600000">1 Hour</option>
+      <option value="21600000">6 Hours</option>
+      <option value="43200000">12 Hours</option>
+      <option value="86400000" selected>1 Day</option>
+      <option value="259200000">3 Days</option>
+    </select>
+
+    <div class="setup-buttons" style="margin-top:0.5rem;margin-bottom:0">
+      <button id="btn-async-create-go" class="setup-btn primary">Create Game</button>
+      <button id="btn-async-create-back" class="setup-btn">&larr; Back</button>
+    </div>
+  </div>
+
+  <!-- ── Async: game created (show code) ─────────────────────── -->
+  <div id="setup-step-async-created" class="setup-card" style="display:none">
+    <h1 class="title" style="font-size:2rem">GAME CREATED</h1>
+    <div class="setup-lore"><p>Share this code with your opponent:</p></div>
+    <div id="async-game-code" class="async-code-display"></div>
+    <div class="setup-buttons" style="margin-top:0.75rem">
+      <button id="btn-async-copy-code" class="setup-btn">Copy Code</button>
+    </div>
+    <p class="setup-hint" style="margin-top:0.5rem">The game will begin when your opponent joins. You'll receive an email notification.</p>
+    <div class="setup-buttons" style="margin-top:0.75rem;margin-bottom:0">
+      <button id="btn-async-created-done" class="setup-btn primary">Done</button>
+    </div>
+  </div>
+
+  <!-- ── Async: join game ────────────────────────────────────── -->
+  <div id="setup-step-async-join" class="setup-card" style="display:none">
+    <h1 class="title" style="font-size:2rem">JOIN ASYNC GAME</h1>
+    <div class="setup-lore"><p>Enter the 6-character game code shared by your opponent.</p></div>
+    <input id="async-join-code" class="setup-input" type="text"
+           placeholder="Game code" maxlength="6" autocomplete="off"
+           style="text-align:center;font-size:1.5rem;letter-spacing:0.3em;text-transform:uppercase">
+    <p id="async-join-error" class="setup-error" style="display:none"></p>
+    <div class="setup-buttons" style="margin-top:0.75rem;margin-bottom:0">
+      <button id="btn-async-join-go" class="setup-btn primary">Join</button>
+      <button id="btn-async-join-back" class="setup-btn">&larr; Back</button>
     </div>
   </div>
 

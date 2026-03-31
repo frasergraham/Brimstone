@@ -3624,3 +3624,42 @@ body.spectator-mode #game-screen   { display: flex !important; }
   font-size: 0.85rem;
   padding: 0.2rem 0;
 }
+
+/* ── Async game styles ──────────────────────────────────────────────────── */
+
+.async-code-display {
+  font-size: 2.2rem;
+  letter-spacing: 0.4em;
+  text-align: center;
+  color: var(--text-bright);
+  background: var(--bg-section);
+  border: 2px solid var(--border);
+  border-radius: 4px;
+  padding: 0.6rem 1.2rem;
+  font-family: monospace;
+  margin: 0.75rem auto;
+  display: inline-block;
+}
+
+.async-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 3px;
+  vertical-align: middle;
+  margin-left: 0.4rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.async-badge-turn {
+  background: var(--clr-gold, #d4a72c);
+  color: #1a1a2e;
+}
+
+.async-badge-waiting {
+  background: var(--bg-section);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}

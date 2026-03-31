@@ -10,7 +10,17 @@ import { resolvePlansMP, ResEventType }    from './resolver.js';
 import { compileTurnBattleSummary }        from '../src/battle-utils.js';
 import { PlanActionType }                  from '../src/planner.js';
 import { upsertSave, deleteSave, getSave,
-         createCompletedGame, appendSaveRound }  from './saves.js';
+         createCompletedGame, appendSaveRound,
+         getSaveRounds }                         from './saves.js';
+import { insertAsyncGame, getAsyncGame, getAsyncGameByCode,
+         getAsyncGamesForPlayer, activateAsyncGame,
+         updateAsyncGameState, finishAsyncGame, insertPlanStatus,
+         submitPlan, getPlanStatus, allPlansSubmitted,
+         getExpiredGames, pruneStaleAsyncGames as _pruneAsyncGames,
+         deleteAsyncGame }                       from './async-game.js';
+import { notifyOpponentJoined, notifyTurnReady,
+         notifyOpponentSubmitted, notifyGameOver,
+         notifyGameAbandoned }                   from './notifications.js';
 import { VERSION }                         from '../src/version.js';
 import { generateMultipleStarts }          from '../src/map.js';
 import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS } from '../src/entities.js';
@@ -1326,4 +1336,440 @@ export function resumeGame(playerId, ws, roomId) {
     if (rejoined) return;
   }
   send(ws, { type: 'error', message: 'Game is no longer active.' });
+}
+
+// ── Async (play-by-mail) game support ───────────────────────────────────────
+//
+// Async games live in the DB, not in the rooms Map. Players connect via
+// WebSocket only while actively viewing/submitting. The asyncSessions Map
+// tracks these lightweight connections.
+
+/** @type {Map<string, Map<string, WebSocket>>} roomId → playerId → ws */
+const asyncSessions = new Map();
+
+// Re-export for notifications module to check online status
+export { asyncSessions };
+
+/**
+ * Create a new async game. Returns { roomId, code } or { error }.
+ */
+export function createAsyncGameRoom(playerId, playerName, config) {
+  const turnIntervalMs = Math.max(
+    3_600_000,
+    Math.min(259_200_000, Number(config.turnInterval) || 86_400_000)
+  );
+  const gameConfig = {
+    fog:     config.fog     ?? 'partial',
+    mapSize: config.mapSize ?? 'standard',
+  };
+  const faction = config.faction === 'witch' ? 'witch' : 'hero';
+
+  const result = insertAsyncGame(
+    playerId, playerName, faction, gameConfig, turnIntervalMs, VERSION
+  );
+  return result; // { roomId, code }
+}
+
+/**
+ * Opponent joins an async game by code. Returns game summary or { error }.
+ */
+export function joinAsyncGameRoom(playerId, playerName, code) {
+  const game = getAsyncGameByCode(code);
+  if (!game) return { error: 'No waiting game found with that code.' };
+  if (game.host_player_id === playerId) return { error: 'You cannot join your own game.' };
+
+  const config  = JSON.parse(game.config_json || '{}');
+  const opponentFaction = game.host_faction === 'hero' ? 'witch' : 'hero';
+
+  // Generate the GameState
+  const state = new GameState(true, true, config.mapSize || 'standard');
+  state.fogOfWar = config.fog || 'partial';
+
+  // Patch synthetic player IDs to real player IDs
+  const heroPlayerId  = game.host_faction === 'hero'  ? game.host_player_id : playerId;
+  const witchPlayerId = game.host_faction === 'witch' ? game.host_player_id : playerId;
+  const heroName      = game.host_faction === 'hero'  ? game.hero_name || game.witch_name : playerName;
+  const witchName     = game.host_faction === 'witch' ? game.witch_name || game.hero_name : playerName;
+
+  // Patch the state's synthetic hero/witch player records
+  for (const p of state.players) {
+    if (p.faction === 'hero') {
+      p.id   = heroPlayerId;
+      p.name = heroName;
+      p.isAI = false;
+      const leader = state.entities.find(e => e.id === p.leaderId);
+      if (leader) leader.ownerId = heroPlayerId;
+    } else if (p.faction === 'witch') {
+      p.id   = witchPlayerId;
+      p.name = witchName;
+      p.isAI = false;
+      const leader = state.entities.find(e => e.id === p.leaderId);
+      if (leader) leader.ownerId = witchPlayerId;
+    }
+  }
+
+  state.heroIsAI  = false;
+  state.witchIsAI = false;
+
+  // Start planning so budgets are computed
+  state.startPlanning();
+
+  const serialized = serializeState(state);
+  const stateJson  = JSON.stringify(serialized);
+  const deadline   = Math.floor(Date.now() / 1000) + Math.floor(game.turn_interval_ms / 1000);
+
+  const ok = activateAsyncGame(
+    game.room_id, playerId, playerName,
+    heroName, witchName,
+    stateJson, state.round, state.phase, deadline
+  );
+  if (!ok) return { error: 'Failed to activate game.' };
+
+  // Notify the host
+  const opponentId = game.host_player_id;
+  notifyOpponentJoined(opponentId, {
+    roomId: game.room_id, opponentId: playerId,
+  }, asyncSessions).catch(() => {});
+
+  return {
+    roomId:   game.room_id,
+    faction:  opponentFaction,
+    round:    state.round,
+    phase:    state.phase,
+    heroName, witchName,
+    turnDeadline: deadline,
+    turnIntervalMs: game.turn_interval_ms,
+  };
+}
+
+/**
+ * Player connects to view/submit for an async game.
+ * Sends state + plan status over the WebSocket.
+ */
+export function connectToAsyncGame(playerId, ws, roomId) {
+  const game = getAsyncGame(roomId);
+  if (!game) { send(ws, { type: 'error', message: 'Async game not found.' }); return; }
+  if (game.hero_player_id !== playerId && game.witch_player_id !== playerId) {
+    send(ws, { type: 'error', message: 'You are not a participant in this game.' }); return;
+  }
+  if (game.status === 'waiting') {
+    send(ws, { type: 'error', message: 'Waiting for an opponent to join.' }); return;
+  }
+
+  // Register session
+  if (!asyncSessions.has(roomId)) asyncSessions.set(roomId, new Map());
+  asyncSessions.get(roomId).set(playerId, ws);
+
+  const myFaction = game.hero_player_id === playerId ? 'hero' : 'witch';
+  const state     = JSON.parse(game.state_json);
+  const plans     = getPlanStatus(roomId, game.round);
+  const myPlan    = plans.find(p => p.player_id === playerId);
+
+  send(ws, {
+    type:       'asyncStateUpdate',
+    roomId,
+    state,
+    faction:    myFaction,
+    myPlayerId: playerId,
+    round:      game.round,
+    phase:      game.phase,
+    turnDeadline:   game.turn_deadline,
+    turnIntervalMs: game.turn_interval_ms,
+    myPlanSubmitted: myPlan ? !!myPlan.submitted : false,
+    planStatus: plans.map(p => ({
+      playerId:  p.player_id,
+      submitted: !!p.submitted,
+    })),
+    heroName:  game.hero_name,
+    witchName: game.witch_name,
+    gameStatus: game.status,
+    winner:     game.winner,
+    winReason:  game.win_reason,
+    myActionsLeft: state.playerActionsLeft?.[playerId] ?? state[myFaction + 'ActionsLeft'] ?? 3,
+  });
+}
+
+/**
+ * Handle async plan submission. Persists to DB, triggers resolution if all in.
+ */
+export function handleAsyncPlanSubmit(playerId, roomId, plan) {
+  const game = getAsyncGame(roomId);
+  if (!game || game.status !== 'playing') {
+    _asyncSend(roomId, playerId, { type: 'error', message: 'Game is not active.' });
+    return;
+  }
+  if (game.hero_player_id !== playerId && game.witch_player_id !== playerId) {
+    _asyncSend(roomId, playerId, { type: 'error', message: 'Not a participant.' });
+    return;
+  }
+
+  if (!Array.isArray(plan)) plan = [];
+
+  const ok = submitPlan(roomId, playerId, game.round, plan);
+  if (!ok) {
+    _asyncSend(roomId, playerId, { type: 'error', message: 'Plan already submitted or invalid round.' });
+    return;
+  }
+
+  // Confirm to submitter
+  _asyncSend(roomId, playerId, { type: 'asyncPlanAccepted', roomId });
+
+  // Notify opponent via WebSocket if connected
+  const opponentId = game.hero_player_id === playerId ? game.witch_player_id : game.hero_player_id;
+  _asyncSend(roomId, opponentId, {
+    type:       'asyncPlanStatus',
+    roomId,
+    planStatus: getPlanStatus(roomId, game.round).map(p => ({
+      playerId: p.player_id, submitted: !!p.submitted,
+    })),
+  });
+
+  // Check if all plans are in
+  if (allPlansSubmitted(roomId, game.round)) {
+    _resolveAsyncRound(roomId);
+  } else {
+    // Notify opponent via email if not connected
+    notifyOpponentSubmitted(opponentId, {
+      roomId, opponentId: playerId,
+    }, asyncSessions).catch(() => {});
+  }
+}
+
+/**
+ * Handle async player disconnect — just clean up the session.
+ */
+export function handleAsyncDisconnect(playerId, roomId) {
+  const roomSessions = asyncSessions.get(roomId);
+  if (roomSessions) {
+    roomSessions.delete(playerId);
+    if (roomSessions.size === 0) asyncSessions.delete(roomId);
+  }
+}
+
+/**
+ * Run resolution for an async game. Called when all plans are submitted
+ * or when the deadline expires.
+ */
+function _resolveAsyncRound(roomId) {
+  const game = getAsyncGame(roomId);
+  if (!game || game.status !== 'playing') return;
+
+  const state = deserializeState(JSON.parse(game.state_json));
+  state.startPlanning();
+
+  // Gather submitted plans
+  const plans = getPlanStatus(roomId, game.round);
+  const playerEntries = [];
+  for (const p of plans) {
+    const plan = p.plan_json ? JSON.parse(p.plan_json) : [];
+    const faction = p.player_id === game.hero_player_id ? 'hero' : 'witch';
+    playerEntries.push({ playerId: p.player_id, faction, plan });
+
+    // Submit into state so resolvePlansMP can read playerPlans
+    try { state.submitPlayerPlan(p.player_id, plan); } catch (_) {}
+  }
+
+  // Snapshot before resolution
+  const preStateJson = JSON.stringify(serializeState(state));
+
+  let steps;
+  try {
+    steps = resolvePlansMP(state, playerEntries);
+  } catch (err) {
+    console.error(`[async ${roomId}] resolvePlansMP error:`, err);
+    steps = [];
+  }
+
+  // Post-resolution updates
+  const summaryLines = compileTurnBattleSummary(steps, state.entities, ResEventType, PlanActionType);
+  for (const line of summaryLines) state.log.push(line);
+
+  state.updateNodeDiscovery();
+  state.checkAndLogNodeControlChanges();
+  state.endRound();
+
+  const finalState   = serializeState(state);
+  const finalJson    = JSON.stringify(finalState);
+  const resolvedRound = state.round - 1; // endRound already incremented
+
+  // Serialize steps for wire + storage
+  const serializedSteps = steps.map(step => ({
+    stepIndex:      step.stepIndex,
+    playerEvents:   step.playerEvents.map(pe => ({
+      playerId: pe.playerId,
+      faction:  pe.faction,
+      events:   _serializeEvents(pe.events),
+    })),
+    entitySnapshot: step.entitySnapshot ?? [],
+  }));
+
+  // Store replay round
+  try {
+    appendSaveRound(roomId, resolvedRound, preStateJson, JSON.stringify(serializedSteps));
+  } catch (err) {
+    console.error(`[async ${roomId}] appendSaveRound error:`, err);
+  }
+
+  if (state.gameOver) {
+    _finishAsyncGame(roomId, game, state, serializedSteps, finalState);
+  } else {
+    // Advance to next round
+    const newDeadline = Math.floor(Date.now() / 1000) + Math.floor(game.turn_interval_ms / 1000);
+    updateAsyncGameState(roomId, finalJson, state.round, state.phase, newDeadline, 0);
+    insertPlanStatus(roomId, [game.hero_player_id, game.witch_player_id], state.round);
+
+    // Notify both players of new round
+    for (const pid of [game.hero_player_id, game.witch_player_id]) {
+      const opponentId = pid === game.hero_player_id ? game.witch_player_id : game.hero_player_id;
+      notifyTurnReady(pid, {
+        roomId, round: state.round, opponentId,
+      }, asyncSessions).catch(() => {});
+    }
+  }
+
+  // Push resolution to any connected players
+  const resolutionMsg = { type: 'asyncResolution', roomId, steps: serializedSteps, finalState };
+  _asyncBroadcast(roomId, resolutionMsg);
+}
+
+function _finishAsyncGame(roomId, game, state, serializedSteps, finalState) {
+  finishAsyncGame(roomId, 'finished', state.winner, state.winReason, JSON.stringify(finalState));
+
+  // Record leaderboard results
+  for (const pid of [game.hero_player_id, game.witch_player_id]) {
+    if (!pid) continue;
+    const faction = pid === game.hero_player_id ? 'hero' : 'witch';
+    const outcome = faction === state.winner ? 'win' : (state.winner ? 'loss' : 'draw');
+    try { recordResult(pid, outcome); } catch (_) {}
+  }
+
+  // Record game stats
+  try {
+    recordGameStats({
+      id:                randomUUID(),
+      mode:              'async',
+      map_size:          state.mapSize || 'standard',
+      winner:            state.winner,
+      win_reason:        state.winReason,
+      rounds:            state.round,
+      final_phase:       state.phase,
+      hero_score:        state.nodeScore?.hero  || 0,
+      witch_score:       state.nodeScore?.witch || 0,
+      hero_kills:        state.heroKills  || 0,
+      witch_kills:       state.witchKills || 0,
+      hero_survivors:    state.entities.filter(e => e.owner === 'hero' && e.type === 'survivor').length,
+      witch_summons:     state.witchSummonCount || 0,
+      hero_personality:  null,
+      witch_personality: null,
+      hero_player_id:    game.hero_player_id,
+      witch_player_id:   game.witch_player_id,
+      game_version:      VERSION,
+      fog_of_war:        state.fogOfWar !== 'none' ? 1 : 0,
+      duration_ms:       (Math.floor(Date.now() / 1000) - game.created_at) * 1000,
+    });
+  } catch (err) { console.error(`[async ${roomId}] recordGameStats error:`, err); }
+
+  // Save completed game replay
+  try {
+    const rounds = getSaveRounds(roomId);
+    if (rounds.length > 0) {
+      const gameId = randomUUID();
+      createCompletedGame(gameId, roomId, {
+        heroPlayerId:  game.hero_player_id,
+        witchPlayerId: game.witch_player_id,
+        heroName:      game.hero_name,
+        witchName:     game.witch_name,
+        winner:        state.winner ?? '',
+        winReason:     state.winReason ?? '',
+        totalRounds:   state.round - 1,
+        gameVersion:   VERSION,
+        mode:          'hvh',
+      }, rounds.map(r => ({
+        roundNum:     r.round_num,
+        preStateJson: r.pre_state_json,
+        stepsJson:    r.steps_json,
+      })));
+    }
+  } catch (err) {
+    console.error(`[async ${roomId}] createCompletedGame error:`, err);
+  }
+
+  // Notify both players
+  for (const pid of [game.hero_player_id, game.witch_player_id]) {
+    const opponentId = pid === game.hero_player_id ? game.witch_player_id : game.hero_player_id;
+    notifyGameOver(pid, {
+      roomId, winner: state.winner, winReason: state.winReason, opponentId,
+    }, asyncSessions).catch(() => {});
+  }
+}
+
+// ── Async deadline checker ──────────────────────────────────────────────────
+
+/**
+ * Check for async games with expired deadlines.
+ * Called periodically by setInterval in server.js.
+ */
+export function checkAsyncDeadlines() {
+  const expired = getExpiredGames();
+  for (const { room_id: roomId } of expired) {
+    try {
+      const game = getAsyncGame(roomId);
+      if (!game || game.status !== 'playing') continue;
+
+      const plans = getPlanStatus(roomId, game.round);
+      const submitted = plans.filter(p => p.submitted);
+
+      // Check if NEITHER player submitted (double timeout)
+      if (submitted.length === 0) {
+        const newCount = (game.consecutive_timeout_rounds || 0) + 1;
+        if (newCount >= 3) {
+          // Abandon the game
+          finishAsyncGame(roomId, 'abandoned', null, 'Abandoned due to inactivity', game.state_json);
+          console.log(`[async ${roomId}] Abandoned after ${newCount} consecutive double-timeouts.`);
+          for (const pid of [game.hero_player_id, game.witch_player_id]) {
+            const opponentId = pid === game.hero_player_id ? game.witch_player_id : game.hero_player_id;
+            notifyGameAbandoned(pid, { roomId, opponentId }).catch(() => {});
+          }
+          continue;
+        }
+        // Update timeout counter, auto-submit empty plans, resolve
+        updateAsyncGameState(
+          roomId, game.state_json, game.round, game.phase,
+          game.turn_deadline, newCount
+        );
+      }
+
+      // Auto-submit empty plans for players who haven't submitted
+      for (const p of plans) {
+        if (!p.submitted) {
+          submitPlan(roomId, p.player_id, game.round, []);
+        }
+      }
+
+      _resolveAsyncRound(roomId);
+    } catch (err) {
+      console.error(`[async ${roomId}] deadline check error:`, err);
+    }
+  }
+}
+
+/** Prune stale async games on startup. */
+export function pruneAsyncGames() {
+  _pruneAsyncGames(VERSION);
+}
+
+/** Get async games list for a player (for REST endpoint). */
+export { getAsyncGamesForPlayer };
+
+// ── Async session helpers ───────────────────────────────────────────────────
+
+function _asyncSend(roomId, playerId, msg) {
+  const ws = asyncSessions.get(roomId)?.get(playerId);
+  send(ws, msg);
+}
+
+function _asyncBroadcast(roomId, msg) {
+  const roomSessions = asyncSessions.get(roomId);
+  if (!roomSessions) return;
+  for (const ws of roomSessions.values()) send(ws, msg);
 }

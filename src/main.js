@@ -1244,6 +1244,9 @@ const stepWaiting      = document.getElementById('setup-step-waiting');
 const stepCreateGame   = document.getElementById('setup-step-create-game');
 const stepJoinGame     = document.getElementById('setup-step-join-game');
 const stepLobby        = document.getElementById('setup-step-lobby');
+const stepAsyncCreate  = document.getElementById('setup-step-async-create');
+const stepAsyncCreated = document.getElementById('setup-step-async-created');
+const stepAsyncJoin    = document.getElementById('setup-step-async-join');
 
 function showStep(step) {
   stepMode        .style.display = step === 'mode'          ? '' : 'none';
@@ -1261,6 +1264,9 @@ function showStep(step) {
   stepCreateGame  .style.display = step === 'create-game'   ? '' : 'none';
   stepJoinGame    .style.display = step === 'join-game'     ? '' : 'none';
   stepLobby       .style.display = step === 'lobby'         ? '' : 'none';
+  stepAsyncCreate .style.display = step === 'async-create'  ? '' : 'none';
+  stepAsyncCreated.style.display = step === 'async-created' ? '' : 'none';
+  stepAsyncJoin   .style.display = step === 'async-join'    ? '' : 'none';
 }
 
 // Current lobby state (pre-game)
@@ -2004,6 +2010,205 @@ function _timeAgo(unixSecs) {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
+// ── Async games ─────────────────────────────────────────────────────────────
+
+function _fetchAsyncGames() {
+  const list = document.getElementById('async-games-list');
+  if (!list) return;
+  list.innerHTML = '<p class="saves-empty">Loading…</p>';
+
+  const session = loadSession();
+  if (!session) {
+    list.innerHTML = '<p class="saves-empty">Sign in to see async games.</p>';
+    return;
+  }
+
+  const base = window.BRIMSTONE_SERVER || '';
+  fetch(`${base}/api/async-games?token=${encodeURIComponent(session.token)}`)
+    .then(r => r.json())
+    .then(games => _renderAsyncGames(games))
+    .catch(() => {
+      list.innerHTML = '<p class="saves-empty">Could not load async games.</p>';
+    });
+}
+
+function _renderAsyncGames(games) {
+  const list = document.getElementById('async-games-list');
+
+  if (!games.length) {
+    list.innerHTML = '<p class="saves-empty">No async games.</p>';
+    return;
+  }
+
+  list.innerHTML = '';
+  for (const g of games) {
+    const factionSymbol = g.my_faction === 'hero' ? '⚔' : '✦';
+    const phaseLabel = { dawn: 'Dawn', day: 'Day', dusk: 'Dusk', night: 'Night' }[g.phase] ?? g.phase;
+    const entry = document.createElement('div');
+    entry.className = 'save-entry';
+
+    if (g.status === 'waiting') {
+      // Waiting for opponent
+      entry.innerHTML = `
+        <div class="save-entry-info">
+          <div class="save-entry-title">${factionSymbol} Waiting for opponent</div>
+          <div class="save-entry-meta">Code: <strong>${_esc(g.code)}</strong></div>
+        </div>
+        <button class="setup-btn secondary async-copy-btn" data-code="${_esc(g.code)}">Copy</button>
+      `;
+      entry.querySelector('.async-copy-btn').addEventListener('click', (e) => {
+        navigator.clipboard?.writeText(e.target.dataset.code);
+        e.target.textContent = 'Copied!';
+        setTimeout(() => { e.target.textContent = 'Copy'; }, 1500);
+      });
+    } else if (g.status === 'finished' || g.status === 'abandoned') {
+      const label = g.status === 'abandoned' ? 'Abandoned' : (g.winner === g.my_faction ? 'Victory' : 'Defeat');
+      entry.innerHTML = `
+        <div class="save-entry-info">
+          <div class="save-entry-title">${factionSymbol} vs ${_esc(g.opponent_name)}</div>
+          <div class="save-entry-meta">${label} · Round ${g.round}</div>
+        </div>
+      `;
+    } else {
+      // Playing
+      const deadline = g.turn_deadline
+        ? _timeRemaining(g.turn_deadline)
+        : '';
+      const mySubmitted = g.my_plan_submitted;
+      const statusBadge = mySubmitted
+        ? '<span class="async-badge async-badge-waiting">Waiting</span>'
+        : '<span class="async-badge async-badge-turn">Your turn</span>';
+      const actionBtn = mySubmitted
+        ? '<button class="setup-btn secondary async-view-btn">View</button>'
+        : '<button class="setup-btn primary async-play-btn">Play</button>';
+
+      entry.innerHTML = `
+        <div class="save-entry-info">
+          <div class="save-entry-title">${factionSymbol} vs ${_esc(g.opponent_name)} ${statusBadge}</div>
+          <div class="save-entry-meta">Round ${g.round} · ${phaseLabel}${deadline ? ' · ' + deadline : ''} · ${g.players_submitted}/${g.players_total} submitted</div>
+        </div>
+        ${actionBtn}
+      `;
+      const btn = entry.querySelector('.async-play-btn, .async-view-btn');
+      btn?.addEventListener('click', () => _openAsyncGame(g.room_id));
+    }
+
+    list.appendChild(entry);
+  }
+}
+
+function _timeRemaining(deadlineUnixSecs) {
+  const diff = deadlineUnixSecs - Math.floor(Date.now() / 1000);
+  if (diff <= 0) return 'expired';
+  if (diff < 3600) return `${Math.floor(diff / 60)}m left`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h left`;
+  return `${Math.floor(diff / 86400)}d left`;
+}
+
+/** State for the currently open async game. */
+let _asyncRoomId = null;
+let _asyncFaction = null;
+
+function _openAsyncGame(roomId) {
+  _asyncRoomId = roomId;
+  _ensureAuthed(() => {
+    mp.connectAsync(roomId);
+  });
+}
+
+function _handleAsyncStateUpdate(msg) {
+  _asyncRoomId  = msg.roomId;
+  _asyncFaction = msg.faction;
+
+  const mirror = MirrorState.fromSnapshot(msg.state);
+  mirror.myFaction = msg.faction;
+
+  // Set planning state based on plan submission
+  mirror.planningPhase = !msg.myPlanSubmitted && msg.gameStatus === 'playing';
+
+  // Set up MP client state for the planning UI
+  mp.myFaction  = msg.faction;
+  mp.myPlayerId = msg.myPlayerId;
+  mp.roomId     = msg.roomId;
+  mp.active     = true;
+
+  // Init the game view
+  if (!renderer || !ui) {
+    try {
+      initOnline(mirror, msg.faction, mp);
+    } catch (err) {
+      console.error('initOnline (async) failed:', err);
+      _onlineError(`Failed to load game: ${err.message}`);
+      showStep('multiplayer');
+      _initMpStep();
+      return;
+    }
+  } else {
+    Object.assign(state, mirror);
+    state.hero      = mirror.hero;
+    state.witch     = mirror.witch;
+    state.myFaction = msg.faction;
+    redrawOnline();
+  }
+
+  if (msg.gameStatus === 'finished' || msg.gameStatus === 'abandoned') {
+    const label = msg.winner === msg.faction ? 'Victory' : (msg.winner ? 'Defeat' : 'Game Over');
+    ui?._showResultDialog([label, msg.winReason || '']);
+    return;
+  }
+
+  if (msg.myPlanSubmitted) {
+    ui?.exitPlanningMode();
+    ui?._showResultDialog([
+      '⏳ Plan submitted',
+      'Waiting for your opponent to submit their plan.',
+      `${msg.planStatus.filter(p => p.submitted).length}/${msg.planStatus.length} players submitted.`,
+    ]);
+  } else {
+    // Enter planning mode — wire up submit to async plan submission
+    const budget = msg.myActionsLeft ?? 3;
+    ui?.exitPlanningMode();
+    ui?.enterPlanningMode(msg.faction, budget, 0);
+    if (ui) ui.onPlanSubmit = (plan) => mp.submitAsyncPlan(msg.roomId, plan);
+  }
+}
+
+function _handleAsyncPlanAccepted(_msg) {
+  if (ui) {
+    ui._showResultDialog([
+      '✓ Plan submitted!',
+      'Waiting for your opponent. You\'ll be notified when the round resolves.',
+    ]);
+  }
+}
+
+function _handleAsyncResolution({ roomId, steps, finalState }) {
+  if (!state || !renderer) return;
+
+  // Same resolution flow as real-time games
+  Object.assign(state, finalState);
+  state.hero      = finalState.hero;
+  state.witch     = finalState.witch;
+  state.myFaction = _asyncFaction;
+  redrawOnline();
+
+  if (state.gameOver) {
+    ui?._showResultDialog([
+      state.winner === _asyncFaction ? '🏆 Victory!' : '💀 Defeat',
+      state.winReason || '',
+    ]);
+  } else {
+    ui?._showResultDialog([
+      `Round ${state.round - 1} resolved!`,
+      'A new planning phase has begun.',
+    ]);
+  }
+}
+
+function _handleAsyncPlanStatus(msg) {
+  // Update status while viewing — could show a toast
+}
+
 // ── Completed SP games (localStorage) ────────────────────────────────────────
 
 const _SP_COMPLETED_INDEX_KEY = 'brimstone_completed_index';
@@ -2554,6 +2759,7 @@ function _showMultiplayerScreen() {
   const session = loadSession();
   if (session) {
     _fetchActiveSaves();
+    _fetchAsyncGames();
     _fetchCompletedGames();
   }
 }
@@ -2655,6 +2861,134 @@ document.getElementById('btn-join-private').addEventListener('click', () => {
   err.style.display = 'none';
   _ensureAuthed(() => mp.joinLobby(code));
 });
+
+// ── Async Game flow ──────────────────────────────────────────────────────────
+
+let _asyncSelectedFaction = 'hero';
+
+document.getElementById('btn-create-async').addEventListener('click', () => {
+  _ensureAuthed(() => {
+    showStep('async-create');
+    // Default faction selection
+    _asyncSelectedFaction = 'hero';
+    for (const btn of document.querySelectorAll('.async-faction-btn')) {
+      btn.classList.toggle('primary', btn.dataset.faction === 'hero');
+    }
+  });
+});
+
+for (const btn of document.querySelectorAll('.async-faction-btn')) {
+  btn.addEventListener('click', () => {
+    _asyncSelectedFaction = btn.dataset.faction;
+    for (const b of document.querySelectorAll('.async-faction-btn')) {
+      b.classList.toggle('primary', b === btn);
+    }
+  });
+}
+
+document.getElementById('btn-async-create-back').addEventListener('click', () => {
+  showStep('multiplayer');
+});
+
+document.getElementById('btn-async-create-go').addEventListener('click', () => {
+  _ensureAuthed(() => {
+    const session = loadSession();
+    const base = window.BRIMSTONE_SERVER || '';
+    fetch(`${base}/api/async-games`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token:        session.token,
+        faction:      _asyncSelectedFaction,
+        mapSize:      document.getElementById('async-map-size').value,
+        fog:          document.getElementById('async-fog').value,
+        turnInterval: Number(document.getElementById('async-turn-interval').value),
+      }),
+    })
+      .then(r => r.json())
+      .then(result => {
+        if (result.error) {
+          _onlineError(result.error);
+          return;
+        }
+        document.getElementById('async-game-code').textContent = result.code;
+        showStep('async-created');
+      })
+      .catch(() => _onlineError('Failed to create async game.'));
+  });
+});
+
+document.getElementById('btn-async-copy-code').addEventListener('click', () => {
+  const code = document.getElementById('async-game-code').textContent;
+  navigator.clipboard?.writeText(code);
+  const btn = document.getElementById('btn-async-copy-code');
+  btn.textContent = 'Copied!';
+  setTimeout(() => { btn.textContent = 'Copy Code'; }, 1500);
+});
+
+document.getElementById('btn-async-created-done').addEventListener('click', () => {
+  showStep('multiplayer');
+  _fetchAsyncGames();
+});
+
+// Async join — the "Async" tab join is via the existing join-game code input,
+// but we also add a dedicated async join card for deep links and direct joins.
+document.getElementById('btn-async-join-go')?.addEventListener('click', () => {
+  const code = document.getElementById('async-join-code').value.trim().toUpperCase();
+  const err  = document.getElementById('async-join-error');
+  if (code.length !== 6) {
+    err.textContent = 'Enter a 6-character game code.';
+    err.style.display = '';
+    return;
+  }
+  err.style.display = 'none';
+
+  _ensureAuthed(() => {
+    const session = loadSession();
+    const base = window.BRIMSTONE_SERVER || '';
+    fetch(`${base}/api/async-games/join`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: session.token, code }),
+    })
+      .then(r => r.json())
+      .then(result => {
+        if (result.error) {
+          err.textContent = result.error;
+          err.style.display = '';
+          return;
+        }
+        // Game joined — go to multiplayer screen and open the game
+        showStep('multiplayer');
+        _fetchAsyncGames();
+        _openAsyncGame(result.roomId);
+      })
+      .catch(() => {
+        err.textContent = 'Failed to join game.';
+        err.style.display = '';
+      });
+  });
+});
+
+document.getElementById('btn-async-join-back')?.addEventListener('click', () => {
+  showStep('multiplayer');
+});
+
+// ── Deep link handling for async games ──────────────────────────────────────
+
+function _checkAsyncDeepLink() {
+  const hash = window.location.hash;
+  const match = hash.match(/^#async=(.+)$/);
+  if (match) {
+    window.location.hash = '';
+    const roomId = match[1];
+    _showMultiplayerScreen();
+    setTimeout(() => _openAsyncGame(roomId), 500);
+  }
+}
+
+// Check on page load
+_checkAsyncDeepLink();
 
 function _loadPublicLobbies() {
   if (!mp) return;
@@ -3003,6 +3337,8 @@ document.getElementById('btn-mp-sign-out').addEventListener('click', () => {
   document.getElementById('mp-action-buttons').style.display = 'none';
   document.getElementById('active-games-list').innerHTML =
     '<p class="saves-empty">Sign in to see your active games.</p>';
+  document.getElementById('async-games-list').innerHTML =
+    '<p class="saves-empty">Sign in to see async games.</p>';
   if (mp) { mp.disconnect(); mp = null; }
   renderer = null; ui = null; state = null;
 });
@@ -3375,6 +3711,12 @@ function _createMpClient() {
         }
       });
     },
+
+    // ── Async game callbacks ─────────────────────────────────────
+    onAsyncStateUpdate(msg) { _handleAsyncStateUpdate(msg); },
+    onAsyncPlanAccepted(msg) { _handleAsyncPlanAccepted(msg); },
+    onAsyncResolution(msg)  { _handleAsyncResolution(msg); },
+    onAsyncPlanStatus(msg)  { _handleAsyncPlanStatus(msg); },
 
     onError(msg) {
       // During auth phase, show error in the lobby

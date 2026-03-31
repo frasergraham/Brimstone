@@ -223,6 +223,23 @@ export class MultiplayerClient {
     this._send({ type: 'resumeSave', roomId });
   }
 
+  // ── Async game methods ─────────────────────────────────────────────────────
+
+  /** Connect to an async game to view state and/or submit a plan. */
+  connectAsync(roomId) {
+    this._send({ type: 'connectAsync', roomId });
+  }
+
+  /** Submit a plan for the current async round. */
+  submitAsyncPlan(roomId, plan) {
+    this._send({ type: 'submitAsyncPlan', roomId, plan });
+  }
+
+  /** Disconnect from an async game session. */
+  disconnectAsync() {
+    this._send({ type: 'disconnectAsync' });
+  }
+
   // ── Internal ───────────────────────────────────────────────────────────────
 
   _send(obj) {
@@ -397,6 +414,25 @@ export class MultiplayerClient {
       case 'resolutionComplete': {
         const mirror = MirrorState.fromSnapshot(msg.finalState);
         this._opts.onResolutionComplete?.({ steps: msg.steps, finalState: mirror });
+        break;
+      }
+
+      // ── Async game messages ─────────────────────────────────────
+      case 'asyncStateUpdate':
+        this._opts.onAsyncStateUpdate?.(msg);
+        break;
+
+      case 'asyncPlanStatus':
+        this._opts.onAsyncPlanStatus?.(msg);
+        break;
+
+      case 'asyncPlanAccepted':
+        this._opts.onAsyncPlanAccepted?.(msg);
+        break;
+
+      case 'asyncResolution': {
+        const mirror = MirrorState.fromSnapshot(msg.finalState);
+        this._opts.onAsyncResolution?.({ roomId: msg.roomId, steps: msg.steps, finalState: mirror });
         break;
       }
 
