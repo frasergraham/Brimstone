@@ -636,6 +636,12 @@ function _getBattleAllyEntities(actorSnap, targetSnap, entities) {
  * humanFaction:  if set, suppress opponent-only battle/explore dialogs.
  */
 async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFaction = null, myPlayerId = null) {
+  console.log('[animate] _animateResolutionSteps called:', {
+    stepsCount: steps.length,
+    finalEntitiesCount: finalEntities?.length ?? 0,
+    humanFaction, myPlayerId,
+    flags: { _replayGoBack, _replayAborted, _replayJumpToEnd, _autoplay },
+  });
   _resolving = true;
   for (let i = 0; i < steps.length; i++) {
     // During replay: if BACK or STOP was pressed, abort remaining steps immediately
@@ -2460,11 +2466,34 @@ async function _asyncWatchLastTurn(lastRound) {
 
   const { preState, steps, postState } = lastRound;
 
+  // ── Debug: log replay data so we can verify the server is sending actions ──
+  const stepsArr = typeof steps === 'string' ? JSON.parse(steps) : steps;
+  console.group('[async-replay] Watch Last Turn — data check');
+  console.log('roundNum:', lastRound.roundNum);
+  console.log('preState present:', !!preState, typeof preState);
+  console.log('postState present:', !!postState, typeof postState);
+  console.log('steps count:', stepsArr.length);
+  for (let i = 0; i < stepsArr.length; i++) {
+    const s = stepsArr[i];
+    const allEvents = [
+      ...(s.heroEvents ?? []),
+      ...(s.witchEvents ?? []),
+      ...(s.playerEvents ?? []).flatMap(pe => pe.events ?? []),
+    ];
+    const entityCount = s.entitySnapshot?.length ?? 0;
+    console.log(`  step[${i}]: ${allEvents.length} events, ${entityCount} entities in snapshot`, s);
+  }
+  console.log('replay flags:', { _replayGoBack, _replayAborted, _replayJumpToEnd, _resolving, _autoplay });
+  console.groupEnd();
+
   // Parse the post-resolution state — this is our animation target
   const postResState = MirrorState.fromSnapshot(
     typeof postState === 'string' ? JSON.parse(postState) : postState
   );
   const finalEntities = postResState.entities ?? [];
+
+  console.log('[async-replay] finalEntities count:', finalEntities.length,
+    'positions:', finalEntities.slice(0, 4).map(e => `${e.type}@${e.col},${e.row}`));
 
   // Restore pre-resolution state so the animation starts from the right positions
   const preResState = deserializeState(
@@ -2476,10 +2505,11 @@ async function _asyncWatchLastTurn(lastRound) {
   state.myFaction = _asyncFaction;
   redrawOnline();
 
-  const stepsArr = typeof steps === 'string' ? JSON.parse(steps) : steps;
+  console.log('[async-replay] pre-state entities:', state.entities?.slice(0, 4).map(e => `${e.type}@${e.col},${e.row}`));
 
   // Animate — entities slide from pre-state positions to post-state positions
   await _animateResolutionSteps(stepsArr, finalEntities, redrawOnline, _asyncFaction, mp?.myPlayerId ?? null);
+  console.log('[async-replay] animation complete');
 
   // Apply post-resolution state (phase, round, score, tiles, etc.)
   Object.assign(state, postResState);
