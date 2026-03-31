@@ -562,6 +562,49 @@ describe('genProtectHero', () => {
     const actions = genProtectHero(sim, board, 3);
     assert.equal(actions.length, 0);
   });
+
+  test('explores current unexplored building at high priority', () => {
+    const sim = makeHeroEngineSim({
+      entities: [
+        makeEntity({ id: 'hero1', col: 1, row: 1, hp: 10, maxHp: 10, items: {} }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
+      ],
+    });
+    // hero at (1,1) which is an unexplored building in makeFakeState
+    const board = assessHeroBoard(sim);
+    const actions = genProtectHero(sim, board, 3);
+    const explore = actions.find(a => a.type === PlanActionType.EXPLORE);
+    assert.ok(explore, 'should explore current unexplored building');
+    assert.equal(explore._priority, 1, 'should be high priority');
+  });
+
+  test('does not explore already-explored building', () => {
+    const tiles = new Map();
+    for (let c = 0; c < 7; c++) {
+      for (let r = 0; r < 7; r++) {
+        tiles.set(hexKey(c, r), {
+          col: c, row: r, type: TileType.GRASS, explored: true,
+          building: null, resource: null, fortifyLevel: 0,
+        });
+      }
+    }
+    // Building at (1,1) already explored
+    tiles.set(hexKey(1, 1), {
+      col: 1, row: 1, type: TileType.BUILDING, explored: true,
+      building: 'house', resource: null, fortifyLevel: 0,
+    });
+    const sim = makeHeroEngineSim({
+      tiles,
+      entities: [
+        makeEntity({ id: 'hero1', col: 1, row: 1, hp: 10, maxHp: 10, items: {} }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
+      ],
+    });
+    const board = assessHeroBoard(sim);
+    const actions = genProtectHero(sim, board, 3);
+    const explore = actions.find(a => a.type === PlanActionType.EXPLORE);
+    assert.equal(explore, undefined, 'should not explore already-explored building');
+  });
 });
 
 // ── genSlayWitch ────────────────────────────────────────────────────────────

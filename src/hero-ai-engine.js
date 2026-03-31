@@ -262,9 +262,11 @@ export function scoreHeroGoals(board, goalWeights = null) {
 
   // EXPLORE
   let explore = 0;
-  if (board.unexploredBuildings.length > 0) explore = 0.5;
-  if (board.survivorCount === 0) explore += 0.2;
+  if (board.unexploredBuildings.length > 0) explore = 0.6;
+  if (board.unexploredBuildings.length >= 3) explore += 0.15;
+  if (board.survivorCount === 0) explore += 0.25;
   if (board.woodCount + board.metalCount < 2) explore += 0.2;
+  if (board.heroInBuilding && !board.heroTileExplored) explore += 0.3;
   explore = clamp01(clamp01(explore) * phaseMult(HeroGoal.EXPLORE, board));
 
   // FORTIFY_POSITION
@@ -394,6 +396,18 @@ export function genProtectHero(sim, board, budget, config = null) {
       type: PlanActionType.EQUIP_WEAPON, entityId: board.hero.id,
       weapon: board.heroWeapons[0], _priority: 0, _goal: HeroGoal.PROTECT_HERO,
     });
+  }
+
+  // High-priority: explore current building if unexplored (find survivors/loot).
+  // Always emitted regardless of PROTECT budget — exploring your current tile is too
+  // valuable to skip due to budget splits. Uses 1 AP from whichever goal has slack.
+  if (board.heroInBuilding && !sim.isExplored(heroEntity.col, heroEntity.row)) {
+    actions.push({
+      type: PlanActionType.EXPLORE, entityId: board.hero.id,
+      _priority: 1, _goal: HeroGoal.EXPLORE,
+    });
+    sim.applyExplore(board.hero.id);
+    remaining--;
   }
 
   // Flee: if hero HP below shelter threshold and enemy within 2 hexes
@@ -589,7 +603,7 @@ export function genExplore(sim, board, budget) {
     if (tile && tile.type === TileType.BUILDING) {
       actions.push({
         type: PlanActionType.EXPLORE, entityId: board.hero.id,
-        _priority: 6, _goal: HeroGoal.EXPLORE,
+        _priority: 4, _goal: HeroGoal.EXPLORE,
       });
       sim.applyExplore(board.hero.id);
       remaining--;
@@ -606,7 +620,7 @@ export function genExplore(sim, board, budget) {
           // Arrived — explore
           actions.push({
             type: PlanActionType.EXPLORE, entityId: board.hero.id,
-            _priority: 6, _goal: HeroGoal.EXPLORE,
+            _priority: 4, _goal: HeroGoal.EXPLORE,
           });
           sim.applyExplore(board.hero.id);
           remaining--;
@@ -618,7 +632,7 @@ export function genExplore(sim, board, budget) {
         actions.push({
           type: PlanActionType.MOVE, entityId: board.hero.id,
           toCol: step.col, toRow: step.row,
-          _priority: 6, _goal: HeroGoal.EXPLORE,
+          _priority: 4, _goal: HeroGoal.EXPLORE,
         });
         sim.applyMove(board.hero.id, step.col, step.row);
         remaining--;
