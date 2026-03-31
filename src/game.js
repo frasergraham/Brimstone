@@ -896,8 +896,12 @@ export class GameState {
     };
 
     const sc = this._survivorCounts ?? { buildings: 5, terrain: 2 };
-    shuffle(buildings).slice(0, sc.buildings).forEach(t => { t.hiddenSurvivor = true; });
-    shuffle(terrain).slice(0, sc.terrain).forEach(t => { t.hiddenSurvivor = true; });
+    const totalNeeded = sc.buildings + sc.terrain;
+    const pickedBuildings = shuffle(buildings).slice(0, sc.buildings);
+    pickedBuildings.forEach(t => { t.hiddenSurvivor = true; });
+    // If not enough buildings were available, spill the remainder into terrain
+    const terrainNeeded = totalNeeded - pickedBuildings.length;
+    shuffle(terrain).slice(0, terrainNeeded).forEach(t => { t.hiddenSurvivor = true; });
   }
 
   toJSON() {
