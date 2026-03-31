@@ -3253,6 +3253,9 @@ document.getElementById('btn-online-back').addEventListener('click', () => {
 document.getElementById('btn-async-back').addEventListener('click', () => {
   showStep('multiplayer');
 });
+document.getElementById('btn-async-refresh').addEventListener('click', () => {
+  _fetchAsyncGames();
+});
 document.getElementById('btn-local-play-back').addEventListener('click', () => {
   showStep('multiplayer');
 });
