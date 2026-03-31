@@ -1972,16 +1972,15 @@ function _renderSaves(saves) {
     const oppName    = myFaction === 'hero' ? (s.witch_name || 'Witch') : (s.hero_name || 'Hero');
     const factionSymbol = myFaction === 'hero' ? '⚔' : '✦';
     const phaseLabel = { dawn: '🌅 Dawn', day: '☀ Day', dusk: '🌇 Dusk', night: '🌙 Night' }[s.phase] ?? s.phase;
-    const ago        = _timeAgo(s.updated_at);
 
     const entry = document.createElement('div');
     entry.className = 'save-entry';
     entry.innerHTML = `
       <div class="save-entry-info">
         <div class="save-entry-title">${factionSymbol} vs ${_esc(oppName)}</div>
-        <div class="save-entry-meta">Round ${s.round} · ${phaseLabel} · saved ${ago}</div>
+        <div class="save-entry-meta">Round ${s.round} · ${phaseLabel}</div>
       </div>
-      <button class="setup-btn primary">Resume</button>
+      <button class="setup-btn primary">Rejoin</button>
     `;
     entry.querySelector('button').addEventListener('click', () => _resumeSave(s.room_id));
     list.appendChild(entry);
@@ -1991,8 +1990,8 @@ function _renderSaves(saves) {
 function _resumeSave(roomId) {
   _ensureAuthed(() => {
     showStep('waiting');
-    document.getElementById('waiting-subtitle').textContent = 'Resuming game…';
-    document.getElementById('waiting-message').textContent  = 'Restoring your saved game…';
+    document.getElementById('waiting-subtitle').textContent = 'Rejoining game…';
+    document.getElementById('waiting-message').textContent  = 'Reconnecting to your game…';
     mp.resumeSave(roomId);
   });
 }

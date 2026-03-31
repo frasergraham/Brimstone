@@ -10,8 +10,7 @@ import { resolvePlansMP, ResEventType }    from './resolver.js';
 import { compileTurnBattleSummary }        from '../src/battle-utils.js';
 import { PlanActionType }                  from '../src/planner.js';
 import { upsertSave, deleteSave, getSave,
-         createCompletedGame, appendSaveRound,
-         getSaveRounds }                   from './saves.js';
+         createCompletedGame, appendSaveRound }  from './saves.js';
 import { VERSION }                         from '../src/version.js';
 import { generateMultipleStarts }          from '../src/map.js';
 import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS } from '../src/entities.js';
@@ -251,6 +250,7 @@ function _addSeat(room, playerId, ws, name, faction, isAI, ai = null) {
 
 function destroyRoom(room) {
   if (room.turnTimer) clearTimeout(room.turnTimer);
+  if (room.allHumansGoneTimer) clearTimeout(room.allHumansGoneTimer);
   for (const t of room.disconnectTimers.values()) clearTimeout(t);
   for (const t of room.takeoverTimers.values())   clearTimeout(t);
   // Notify admin spectators the room is gone
@@ -574,6 +574,7 @@ function attachAI(room, faction, forPlayerId = null, personality = null) {
     // Take over an existing human seat
     const seat = seatFor(room, forPlayerId);
     if (seat) {
+      seat.originalPlayerId = forPlayerId; // track for reconnect
       seat.playerId = syntheticPlayerId;
       seat.ws       = null;
       seat.isAI     = true;
@@ -1044,25 +1045,32 @@ export function handleDisconnect(playerId, roomId) {
     broadcastExcept(r, playerId, { type: 'opponentJoined', opponentName: `${aiName} (took over)`, aiOpponent: true });
     broadcastState(r, 'update');
     if (r.state.planningPhase) _runAIPlanSubmission(r);
+
+    // Check if ALL human players are now gone — start room-level destruction timer
+    _checkAllHumansGone(r);
   }, AI_TAKEOVER_MS);
   room.takeoverTimers.set(playerId, takeoverTimer);
+}
 
-  // Forfeit after full grace period if still not reconnected
-  const forfeitTimer = setTimeout(() => {
-    const room2 = rooms.get(roomId);
-    if (!room2) return;
-    const seat2 = seatFor(room2, playerId);
-    if (!seat2 || seat2.isAI) { room2.disconnectTimers.delete(playerId); return; }
+/**
+ * If no human players remain connected in the room, start a 1-minute timer
+ * to destroy the room. Called after AI takeover fires.
+ */
+function _checkAllHumansGone(room) {
+  const hasHuman = room.players.some(s => !s.isAI);
+  if (hasHuman) return;
+  if (room.allHumansGoneTimer) return; // already ticking
 
-    recordResult(playerId, 'loss');
-    for (const s of room2.players) {
-      if (s.playerId !== playerId && !s.isAI) recordResult(s.playerId, 'win');
-    }
-    broadcast(room2, { type: 'opponentForfeited' });
-    destroyRoom(room2);
+  console.log(`[room ${room.id}] all humans gone — starting ${RECONNECT_GRACE_MS / 1000}s destruction timer.`);
+  room.allHumansGoneTimer = setTimeout(() => {
+    const r = rooms.get(room.id);
+    if (!r) return;
+    // If a human reconnected in the meantime, abort
+    if (r.players.some(s => !s.isAI)) { r.allHumansGoneTimer = null; return; }
+    console.log(`[room ${room.id}] destruction timer expired — destroying room.`);
+    try { deleteSave(room.id); } catch (_) { /* ignore */ }
+    destroyRoom(r);
   }, RECONNECT_GRACE_MS);
-
-  room.disconnectTimers.set(playerId, forfeitTimer);
 }
 
 /** Handle a player reconnecting. */
@@ -1070,7 +1078,11 @@ export function handleReconnect(playerId, roomId, ws) {
   const room = rooms.get(roomId);
   if (!room) return false;
 
-  const seat = seatFor(room, playerId);
+  // Find seat by current playerId or by originalPlayerId (AI-taken-over seats)
+  let seat = seatFor(room, playerId);
+  if (!seat) {
+    seat = room.players.find(s => s.originalPlayerId === playerId) ?? null;
+  }
   if (!seat) return false;
 
   // Cancel takeover and forfeit timers
@@ -1079,10 +1091,57 @@ export function handleReconnect(playerId, roomId, ws) {
   const forfeit = room.disconnectTimers.get(playerId);
   if (forfeit)  { clearTimeout(forfeit);  room.disconnectTimers.delete(playerId); }
 
-  // If an AI already replaced this seat, it's too late
-  if (seat.isAI) {
-    send(ws, { type: 'error', message: 'An AI took over your faction. The game continues without you.' });
-    return false;
+  // Cancel room-level all-humans-gone timer if present
+  if (room.allHumansGoneTimer) {
+    clearTimeout(room.allHumansGoneTimer);
+    room.allHumansGoneTimer = null;
+  }
+
+  // If an AI already replaced this seat, reclaim it
+  if (seat.isAI && seat.originalPlayerId === playerId) {
+    const oldAiId = seat.playerId;
+    seat.playerId = playerId;
+    seat.ws       = ws;
+    seat.isAI     = false;
+    seat.ai       = null;
+    delete seat.originalPlayerId;
+
+    // Patch state.players to restore the human identity
+    const sp = room.state.players.find(p => p.id === oldAiId);
+    if (sp) {
+      sp.id   = playerId;
+      sp.isAI = false;
+      const leader = room.state.entities.find(e => e.id === sp.leaderId);
+      if (leader) leader.ownerId = playerId;
+    }
+
+    // Update AI flags on the state
+    if (seat.faction === 'witch') room.state.witchIsAI = false;
+    else                          room.state.heroIsAI  = false;
+
+    broadcastExcept(room, playerId, { type: 'opponentReconnected' });
+    send(ws, { type: 'reconnected', faction: seat.faction, myPlayerId: playerId, roomId: room.id });
+    send(ws, { type: 'stateUpdate', reason: 'reconnect', state: serializeState(room.state) });
+
+    // Resend planning phase if active
+    if (room.state.planningPhase && !room.state.resolving) {
+      const budget = room.state.playerActionsLeft?.get(playerId)
+        ?? (seat.faction === 'hero' ? room.state.heroActionsLeft : room.state.witchActionsLeft);
+      const playerList = room.players.map(s => ({
+        playerId: s.playerId, name: s.name, faction: s.faction,
+        isAI: s.isAI, personality: s.personality ?? null,
+      }));
+      send(ws, {
+        type:            'planningPhase',
+        myActionsLeft:   budget,
+        heroActionsLeft:  room.state.heroActionsLeft,
+        witchActionsLeft: room.state.witchActionsLeft,
+        timeoutMs:        0,
+        players:          playerList,
+      });
+    }
+
+    return true;
   }
 
   seat.ws = ws;
@@ -1143,6 +1202,35 @@ export function getRooms() {
     spectatorCount: room.spectators.size,
     createdAt:      room.createdAt,
   }));
+}
+
+/**
+ * Return in-memory rooms where the given player has (or had) a seat.
+ * Used by the /api/saves REST endpoint so the client can show a "Rejoin" list.
+ * Matches both current playerId and originalPlayerId (for AI-taken-over seats).
+ */
+export function getActiveRoomsForPlayer(playerId) {
+  const results = [];
+  for (const room of rooms.values()) {
+    if (room.status !== 'playing') continue;
+    if (room.state?.gameOver) continue;
+    const seat = room.players.find(
+      s => s.playerId === playerId || s.originalPlayerId === playerId
+    );
+    if (!seat) continue;
+    const heroName  = room.players.find(s => s.faction === 'hero')?.name  ?? '';
+    const witchName = room.players.find(s => s.faction === 'witch')?.name ?? '';
+    results.push({
+      room_id:          room.id,
+      hero_name:        heroName,
+      witch_name:       witchName,
+      round:            room.state.round,
+      phase:            room.state.phase,
+      hero_player_id:   room.players.find(s => s.faction === 'hero'  && !s.isAI)?.playerId ?? null,
+      witch_player_id:  room.players.find(s => s.faction === 'witch' && !s.isAI)?.playerId ?? null,
+    });
+  }
+  return results;
 }
 
 /** Queue no longer exists — returns empty array for backwards compat. */
@@ -1229,87 +1317,13 @@ export function adminResumeGame(savedRoomId) {
 }
 
 /**
- * Resume a saved game for a reconnecting player.
- *
- * First tries to reconnect to a live in-memory room (browser-refresh case).
- * If the room is gone (server restart), reconstructs it from the DB save
- * and starts a fresh planning phase against a new AI opponent.
+ * Rejoin a live in-memory game. No DB-based restore — multiplayer games only
+ * exist in memory. If the room is gone, the game is lost.
  */
 export function resumeGame(playerId, ws, roomId) {
-  // 1. Try live reconnect first.
   if (rooms.has(roomId)) {
     const rejoined = handleReconnect(playerId, roomId, ws);
     if (rejoined) return;
   }
-
-  // 2. Load from saved state.
-  const save = getSave(roomId);
-  if (!save) {
-    send(ws, { type: 'error', message: 'No save found for this game.' });
-    return;
-  }
-
-  const isHero  = save.hero_player_id  === playerId;
-  const isWitch = save.witch_player_id === playerId;
-  if (!isHero && !isWitch) {
-    send(ws, { type: 'error', message: 'You are not a player in this save.' });
-    return;
-  }
-
-  if (save.game_version !== VERSION) {
-    send(ws, { type: 'error', message: `Save is from v${save.game_version}; server is v${VERSION}. Cannot resume.` });
-    return;
-  }
-
-  let state;
-  try {
-    state = deserializeState(save.state);
-  } catch (err) {
-    console.error(`[resume ${roomId}] deserializeState error:`, err);
-    send(ws, { type: 'error', message: 'Failed to restore save.' });
-    return;
-  }
-
-  const humanFaction = isHero ? 'hero' : 'witch';
-  const aiFaction    = humanFaction === 'hero' ? 'witch' : 'hero';
-
-  // Restore replay rounds accumulated before the save
-  let priorRounds = [];
-  try {
-    priorRounds = getSaveRounds(roomId).map(r => ({
-      roundNum:     r.round_num,
-      preStateJson: r.pre_state_json,
-      stepsJson:    r.steps_json,
-    }));
-  } catch (err) {
-    console.error(`[resume ${roomId}] getSaveRounds error:`, err);
-  }
-
-  // Create a fresh room and inject the restored state
-  const room   = createRoom({ fog: state.fogOfWar });
-  room.state   = state;
-  room.status  = 'playing';
-  room.replayRounds = priorRounds;
-
-  // Add the human player's seat, then an AI for the opponent
-  const humanName = isHero  ? (save.hero_name  || 'Hero')  : (save.witch_name || 'Witch');
-  _addSeat(room, playerId, ws, humanName, humanFaction, false);
-  const aiSeat  = attachAI(room, aiFaction);
-
-  deleteSave(roomId);
-
-  const playerList = room.players.map(s => ({ playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI, personality: s.personality ?? null }));
-  send(ws, {
-    type:         'matchFound',
-    roomId:       room.id,
-    faction:      humanFaction,
-    myPlayerId:   playerId,
-    players:      playerList,
-    aiOpponent:   true,
-    resumed:      true,
-    priorRounds:  priorRounds,
-  });
-
-  broadcastState(room, 'resume');
-  _startPlanningPhase(room);
+  send(ws, { type: 'error', message: 'Game is no longer active.' });
 }
