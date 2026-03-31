@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {
   GameState, Phase, Player, computeActions, countHeldNodes, WIN_REASON,
 } from '../src/game.js';
-import { EntityType, createMinion, createSurvivor, resetRoster } from '../src/entities.js';
+import { EntityType, createMinion, resetRoster } from '../src/entities.js';
 import { hexKey } from '../src/hex.js';
 import { TileType } from '../src/tiles.js';
 
@@ -770,22 +770,20 @@ describe('startPlanning — power node bonus', () => {
 
 // ── Node spawn balance: witch no longer spawns free minions ──────────────────
 
-describe('Power node free spawn — singleplayer (endTurn)', () => {
+describe('Power node free spawn (endRound)', () => {
   test('witch on a node during NIGHT does NOT spawn a free minion', () => {
     const state = new GameState(true, true);
-    // Advance to NIGHT phase (round 6 in first cycle)
     state.phase = Phase.NIGHT;
-    state.activePlayer = Player.WITCH;
 
     const node = state.witchObjectives[0];
-    state.witch.col = node.col;
-    state.witch.row = node.row;
+    state.witch.col = node.hexes[0].col;
+    state.witch.row = node.hexes[0].row;
 
     const minionsBefore = state.entities.filter(
       e => e.alive && e.type === EntityType.MINION
     ).length;
 
-    state.endTurn();
+    state.endRound();
 
     const minionsAfter = state.entities.filter(
       e => e.alive && e.type === EntityType.MINION
@@ -796,18 +794,16 @@ describe('Power node free spawn — singleplayer (endTurn)', () => {
   });
 
   test('hero on a node during NIGHT can spawn a free survivor (33% chance)', () => {
-    resetRoster();
     // Run multiple trials — with 33% chance, at least one of 20 should spawn
     let spawned = false;
     for (let i = 0; i < 20 && !spawned; i++) {
       resetRoster();
       const state = new GameState(true, true);
       state.phase = Phase.NIGHT;
-      state.activePlayer = Player.WITCH;
 
       const node = state.witchObjectives[0];
-      state.hero.col = node.col;
-      state.hero.row = node.row;
+      state.hero.col = node.hexes[0].col;
+      state.hero.row = node.hexes[0].row;
       // Move witch away from node so it doesn't interfere
       state.witch.col = 0;
       state.witch.row = 0;
@@ -816,7 +812,7 @@ describe('Power node free spawn — singleplayer (endTurn)', () => {
         e => e.alive && e.type === EntityType.SURVIVOR
       ).length;
 
-      state.endTurn();
+      state.endRound();
 
       const survivorsAfter = state.entities.filter(
         e => e.alive && e.type === EntityType.SURVIVOR
