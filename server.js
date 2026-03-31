@@ -15,7 +15,7 @@ import { getLeaderboard }                    from './server/leaderboard.js';
 import { recordGameStats, getGameStats, getAggregateStats } from './server/game-stats.js';
 import { recordCampaignGameStats, getCampaignGameStats, getCampaignAggregateStats } from './server/campaign-game-stats.js';
 import { upsertCampaignSave, getCampaignSave, getCampaignSaves, deleteCampaignSave } from './server/campaign-saves.js';
-import { getActiveSaves, pruneStaleAndIncompatibleSaves,
+import { pruneStaleAndIncompatibleSaves,
          getCompletedGames, getCompletedGame, getCompletedGameRounds,
          pinCompletedGame, deleteCompletedGame,
          pruneExpiredCompletedGames, getAllCompletedGames,
@@ -28,7 +28,7 @@ import {
   handleDisconnect, handleReconnect,
   resumeGame, adminResumeGame,
   getRoom,
-  getRooms, getQueue,
+  getRooms, getQueue, getActiveRoomsForPlayer,
   subscribeSpectator, unsubscribeSpectator, getRoomChronicle,
 } from './server/lobby.js';
 import {
@@ -70,13 +70,13 @@ app.get('/api/leaderboard', (_req, res) => {
   res.json(getLeaderboard(20));
 });
 
-// REST: saved games for a player (token passed as query param or header)
+// REST: active in-memory games for a player (for "Rejoin" list)
 app.get('/api/saves', (req, res) => {
   const token = req.query.token || req.headers['x-token'];
   if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
   const player = getPlayerByToken(token);
   if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
-  res.json(getActiveSaves(player.id));
+  res.json(getActiveRoomsForPlayer(player.id));
 });
 
 // REST: completed games for a player
