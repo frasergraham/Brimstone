@@ -2375,15 +2375,17 @@ function _handleAsyncStateUpdate(msg) {
 /** Enter planning mode or show waiting state. */
 function _enterAsyncPlanning(msg) {
   if (msg.myPlanSubmitted) {
-    // WAIT MODE — plan already submitted, nothing to do
-    ui?.exitPlanningMode();
-    const waitingLabel = msg.gameStatus === 'waiting'
-      ? '⏳ Plan submitted — waiting for an opponent to join.'
-      : 'Waiting for your opponent to submit their plan.';
-    const statusLine = msg.gameStatus === 'waiting'
-      ? 'Share your game code so an opponent can join.'
-      : `${msg.planStatus.filter(p => p.submitted).length}/${msg.planStatus.length} players submitted.`;
-    ui?._showResultDialog(['⏳ Plan submitted', waitingLabel, statusLine]);
+    // WAIT MODE — show submitted plan in read-only view (same as post-submit in sync MP)
+    const budget = msg.myActionsLeft ?? 3;
+    ui?.enterPlanningMode(msg.faction, budget, 0);
+    // Load the submitted plan actions into the UI so the player can review them
+    if (ui && Array.isArray(msg.myPlanActions) && msg.myPlanActions.length > 0) {
+      ui._plan = msg.myPlanActions;
+      ui._refreshPlanOverlay();
+      ui._renderPlanPanel();
+    }
+    // Mark as submitted — puts the panel into read-only "Waiting for opponents…" state
+    ui?.markPlanSubmitted();
   } else {
     // PLAN MODE — enter planning, wire submit
     ui?.exitPlanningMode();
@@ -2394,14 +2396,8 @@ function _enterAsyncPlanning(msg) {
 }
 
 function _handleAsyncPlanAccepted(_msg) {
-  // Transition to WAIT MODE after submitting
-  if (ui) {
-    ui.exitPlanningMode();
-    ui._showResultDialog([
-      '✓ Plan submitted!',
-      'Waiting for your opponent. You\'ll be notified when the round resolves.',
-    ]);
-  }
+  // Transition to WAIT MODE — keep plan panel visible in read-only state
+  ui?.markPlanSubmitted();
 }
 
 function _handleAsyncOpponentJoined(msg) {

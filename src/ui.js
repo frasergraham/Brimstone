@@ -743,6 +743,13 @@ export class UIController {
   /** Submit the current plan. */
   _doSubmitPlan() {
     if (this._planSubmitted) return;
+    this.markPlanSubmitted();
+    if (this.onPlanSubmit) this.onPlanSubmit([...this._plan]);
+  }
+
+  /** Mark the plan as submitted (read-only wait state) without firing onPlanSubmit. */
+  markPlanSubmitted() {
+    if (this._planSubmitted) return;
     this._stopCountdown();
     this._planSubmitted = true;
 
@@ -759,8 +766,6 @@ export class UIController {
 
     this._updateSidebar();
     this.onRedraw();
-
-    if (this.onPlanSubmit) this.onPlanSubmit([...this._plan]);
   }
 
   /** Render the plan panel steps list. */

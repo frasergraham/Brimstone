@@ -1533,6 +1533,8 @@ export function connectToAsyncGame(playerId, ws, roomId) {
     turnDeadline:   game.turn_deadline,
     turnIntervalMs: game.turn_interval_ms,
     myPlanSubmitted: myPlan ? !!myPlan.submitted : false,
+    myPlanActions: (myPlan?.submitted && myPlan?.plan_json)
+      ? JSON.parse(myPlan.plan_json) : null,
     planStatus: plans.map(p => ({
       playerId:  p.player_id,
       submitted: !!p.submitted,
