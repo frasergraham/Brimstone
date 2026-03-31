@@ -65,6 +65,7 @@ let state, renderer, ui, witchAI, heroAI;
 let _autoplay  = false;
 let _resolving = false;           // true while _animateResolutionSteps is running
 let _pendingPlanningPhase = null; // buffered onPlanningPhase payload received during animation
+let _pendingSubmissions   = [];   // buffered playerSubmitted messages received during animation
 let _tutorialConductor = null;    // non-null while a tutorial session is active
 let _gameStartTime = null;        // wall-clock timestamp for game duration tracking
 
@@ -1880,6 +1881,8 @@ function _doRestart() {
   witchAI  = null;
   heroAI   = null;
   _activeMissionDef = null;
+  _pendingPlanningPhase = null;
+  _pendingSubmissions   = [];
 
   if (_autoplay) {
     init(true, true, true);
@@ -4134,6 +4137,7 @@ function _createMpClient() {
     },
 
     onPlayerSubmitted({ playerId, name, faction }) {
+      if (_resolving) { _pendingSubmissions.push({ playerId, name, faction }); return; }
       if (ui) ui._onPlayerSubmitted(playerId, name, faction);
     },
 
@@ -4293,6 +4297,12 @@ function _createMpClient() {
             _pendingPlanningPhase = null;
             _applyOnlinePlanningPhase(payload);
           }
+          // Replay any playerSubmitted messages that arrived during animation.
+          // These must be applied AFTER enterPlanningMode resets _submitted flags.
+          for (const sub of _pendingSubmissions) {
+            if (ui) ui._onPlayerSubmitted(sub.playerId, sub.name, sub.faction);
+          }
+          _pendingSubmissions = [];
         }
       });
     },
