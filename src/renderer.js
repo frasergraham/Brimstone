@@ -136,7 +136,10 @@ export class Renderer {
        'survivor_innkeeper','survivor_nurse','survivor_blacksmith',
        'survivor_herbalist','survivor_militia','survivor_priest',
        'survivor_baker','survivor_trapper','survivor_schoolteacher',
-       'survivor_gravedigger','survivor_midwife','survivor_farmhand'],
+       'survivor_gravedigger','survivor_midwife','survivor_farmhand',
+       'survivor_tanner','survivor_chandler','survivor_goodwife',
+       'survivor_constable','survivor_weaver','survivor_carpenter',
+       'survivor_apothecary','survivor_fisherman'],
     ];
 
     const rects = new Map();
@@ -220,6 +223,14 @@ export class Renderer {
       'Gravedigger':      'survivor_gravedigger',
       'Midwife':          'survivor_midwife',
       'Farmhand':         'survivor_farmhand',
+      'Tanner':           'survivor_tanner',
+      'Chandler':         'survivor_chandler',
+      'Goodwife':         'survivor_goodwife',
+      'Constable':        'survivor_constable',
+      'Weaver':           'survivor_weaver',
+      'Carpenter':        'survivor_carpenter',
+      "Apothecary's Daughter": 'survivor_apothecary',
+      'Fisherman':        'survivor_fisherman',
     };
     return MAP[title] ?? null;
   }
