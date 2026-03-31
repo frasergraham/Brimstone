@@ -27,6 +27,38 @@ import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
 document.getElementById('version-badge').textContent = `v${BUILD_VERSION}`;
 document.getElementById('menu-version').textContent  = `v${BUILD_VERSION}`;
 
+// ── Game mode config (env-var driven) ────────────────────────────────────────
+// Fetches /api/config to determine which game modes are enabled/disabled/hidden.
+// Maps mode keys to the button IDs they control.
+const _MODE_BUTTON_MAP = {
+  singleplayer: 'btn-single-player',
+  multiplayer:  'btn-multiplayer',
+  tutorial:     'btn-tutorial',
+  story:        'btn-story-mode',
+  quickplay:    'btn-quick-play',
+  local:        'btn-local-pass-play',
+};
+
+function _applyModeConfig(modes) {
+  for (const [mode, btnId] of Object.entries(_MODE_BUTTON_MAP)) {
+    const state = modes[mode];
+    if (!state || state === 'enabled') continue;
+    const btn = document.getElementById(btnId);
+    if (!btn) continue;
+    if (state === 'hidden') {
+      btn.style.display = 'none';
+    } else if (state === 'disabled') {
+      btn.disabled = true;
+      btn.classList.add('mode-disabled');
+    }
+  }
+}
+
+fetch('/api/config')
+  .then(r => r.ok ? r.json() : null)
+  .then(data => { if (data?.modes) _applyModeConfig(data.modes); })
+  .catch(() => {}); // offline / dev-server — all modes remain enabled
+
 let state, renderer, ui, witchAI, heroAI;
 let _autoplay  = false;
 let _resolving = false;           // true while _animateResolutionSteps is running
