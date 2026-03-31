@@ -345,6 +345,45 @@ describe('scoreGoals', () => {
     const scores = scoreGoals(makeBoard({ witchHpRatio: 1.0, heroDistance: 10 }));
     assert.equal(scores[Goal.DEFEND_WITCH], 0);
   });
+
+  test('hero holding nodes boosts CONTROL_NODES', () => {
+    const noHeld = scoreGoals(makeBoard({ heroHeldCount: 0, witchHeldCount: 0 }));
+    const heroHeld = scoreGoals(makeBoard({ heroHeldCount: 1, witchHeldCount: 0 }));
+    assert.ok(heroHeld[Goal.CONTROL_NODES] > noHeld[Goal.CONTROL_NODES],
+      `hero-held CONTROL (${heroHeld[Goal.CONTROL_NODES]}) should exceed no-held (${noHeld[Goal.CONTROL_NODES]})`);
+  });
+
+  test('hero holding more nodes than witch gives extra CONTROL_NODES boost', () => {
+    const tied = scoreGoals(makeBoard({ heroHeldCount: 1, witchHeldCount: 1 }));
+    const behind = scoreGoals(makeBoard({ heroHeldCount: 2, witchHeldCount: 1 }));
+    assert.ok(behind[Goal.CONTROL_NODES] > tied[Goal.CONTROL_NODES],
+      `behind CONTROL (${behind[Goal.CONTROL_NODES]}) should exceed tied (${tied[Goal.CONTROL_NODES]})`);
+  });
+
+  test('early-game focus: distant hero + unexplored buildings boosts GATHER_RESOURCES', () => {
+    const noBuildings = scoreGoals(makeBoard({ heroDistance: 8, unexploredBuildings: [] }));
+    const withBuildings = scoreGoals(makeBoard({ heroDistance: 8, unexploredBuildings: [{}] }));
+    assert.ok(withBuildings[Goal.GATHER_RESOURCES] > noBuildings[Goal.GATHER_RESOURCES],
+      `early-game GATHER (${withBuildings[Goal.GATHER_RESOURCES]}) should exceed baseline (${noBuildings[Goal.GATHER_RESOURCES]})`);
+  });
+
+  test('early-game focus: caps DEFEND_WITCH when hero is distant and buildings remain', () => {
+    const scores = scoreGoals(makeBoard({
+      heroDistance: 8, unexploredBuildings: [{}],
+      witchHpRatio: 0.45, // would normally trigger some DEFEND
+    }));
+    assert.ok(scores[Goal.DEFEND_WITCH] <= 0.1,
+      `early-game DEFEND should be capped at 0.1, got ${scores[Goal.DEFEND_WITCH]}`);
+  });
+
+  test('early-game focus: does not activate when hero is close', () => {
+    const scores = scoreGoals(makeBoard({ heroDistance: 3, unexploredBuildings: [{}] }));
+    // GATHER should not get the +0.4 early-game bonus when hero is close
+    const noBonus = scoreGoals(makeBoard({ heroDistance: 3, unexploredBuildings: [] }));
+    // Scores should be similar (only the normal +0.1 for unexplored buildings)
+    const diff = scores[Goal.GATHER_RESOURCES] - noBonus[Goal.GATHER_RESOURCES];
+    assert.ok(diff < 0.3, `nearby hero should not trigger early-game bonus, diff was ${diff}`);
+  });
 });
 
 // ── allocateBudget ───────────────────────────────────────────────────────────

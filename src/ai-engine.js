@@ -217,6 +217,9 @@ export function scoreGoals(board, goalWeights = null) {
   control += uncovered * 0.15;
   if (board.heroScore >= 3) control += 0.3;
   if (board.nodes.length > 0 && board.witchHeldCount === board.nodes.length - 1) control += 0.2;
+  // Urgency: contest hero-held nodes — the more they hold, the higher the pressure
+  if (board.heroHeldCount > 0) control += 0.2;
+  if (board.heroHeldCount > board.witchHeldCount) control += 0.25;
   const controlMult = board.isDawnOrDusk ? 1.8 : 1.0;
   control = clamp01(clamp01(control) * controlMult);
 
@@ -249,6 +252,18 @@ export function scoreGoals(board, goalWeights = null) {
   if (goalWeights) {
     for (const g of ALL_GOALS) {
       if (goalWeights[g] != null) scores[g] = clamp01(scores[g] * goalWeights[g]);
+    }
+  }
+
+  // Early-game focus: when the hero is far away and unexplored buildings remain,
+  // prioritize resource gathering and army building over passive defense.
+  // Mirrors the hero's early-game explore focus — no reason to turtle when
+  // there are no threats and resources to claim.
+  if (board.heroDistance > 4 && board.unexploredBuildings.length > 0) {
+    scores[Goal.GATHER_RESOURCES] = clamp01(scores[Goal.GATHER_RESOURCES] + 0.4);
+    scores[Goal.DEFEND_WITCH] = Math.min(scores[Goal.DEFEND_WITCH], 0.1);
+    if (board.canAffordSummon) {
+      scores[Goal.BUILD_ARMY] = clamp01(scores[Goal.BUILD_ARMY] + 0.2);
     }
   }
 
@@ -504,10 +519,10 @@ export function genControlNodes(sim, board, budget) {
   const targetNodes = board.nodes
     .filter(n => n.controller !== 'witch' || !n.witchPresent || n.heroPresent || heroThreatenedNode(n))
     .sort((a, b) => {
-      // Uncovered nodes first, then by distance
-      const aOwned = a.controller === 'witch' && a.witchPresent ? 1 : 0;
-      const bOwned = b.controller === 'witch' && b.witchPresent ? 1 : 0;
-      if (aOwned !== bOwned) return aOwned - bOwned;
+      // Priority: hero-held > neutral > witch-held-but-threatened, then by distance
+      const aPrio = a.controller === 'hero' ? 0 : (a.controller === 'witch' && a.witchPresent ? 2 : 1);
+      const bPrio = b.controller === 'hero' ? 0 : (b.controller === 'witch' && b.witchPresent ? 2 : 1);
+      if (aPrio !== bPrio) return aPrio - bPrio;
       return a.distToNearest - b.distToNearest;
     });
 
