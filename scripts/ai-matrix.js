@@ -14,6 +14,7 @@
 import { GameState }        from '../src/game.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { HERO_PERSONALITIES, WITCH_PERSONALITIES } from '../src/ai.js';
+import '../src/ai-engine.js'; // side-effect: registers witch personalities
 import { WIN_REASON }       from '../src/game.js';
 
 const N = parseInt(process.argv[2] ?? '200', 10);

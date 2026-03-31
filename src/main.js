@@ -2,7 +2,8 @@
 import { GameState, Player } from './game.js';
 import { Renderer }          from './renderer.js';
 import { UIController, UIMode } from './ui.js';
-import { WitchAI, HeroAI, WITCH_PERSONALITIES }   from './ai.js';
+import { HeroAI, WITCH_PERSONALITIES }   from './ai.js';
+import { WitchAIEngine } from './ai-engine.js';
 import {
   MultiplayerClient, MirrorState, loadSession, clearSession,
   checkEmailTokenInUrl, requestLinkEmail, requestEmailLogin, fetchIdentities,
@@ -94,7 +95,7 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
   if (fogSel) state.fogOfWar = fogSel.value;
 
   const thinkDelay = autoplay ? 0 : undefined;
-  witchAI = witchIsAI ? new WitchAI(state, redraw, thinkDelay) : null;
+  witchAI = witchIsAI ? new WitchAIEngine(state, redraw, thinkDelay) : null;
   heroAI  = heroIsAI  ? new HeroAI(state, redraw, thinkDelay)  : null;
 
   _setupLocalUI(canvas, witchAI, heroAI, autoplay);
@@ -1643,7 +1644,7 @@ function _initCampaignMission(missionDef) {
   }
 
   // Set up AI
-  const AIClass = WITCH_PERSONALITIES[missionDef.aiPersonality] ?? WitchAI;
+  const AIClass = WITCH_PERSONALITIES[missionDef.aiPersonality] ?? WitchAIEngine;
   witchAI = new AIClass(state, redraw);
   heroAI = null;
 
@@ -1919,7 +1920,7 @@ function _startFromState(existingState, mode, existingHistory) {
   document.getElementById('game-screen').style.display  = 'flex';
 
   state   = existingState;
-  witchAI = state.witchIsAI ? new WitchAI(state, redraw) : null;
+  witchAI = state.witchIsAI ? new WitchAIEngine(state, redraw) : null;
   heroAI  = state.heroIsAI  ? new HeroAI(state, redraw)  : null;
 
   _setupLocalUI(canvas, witchAI, heroAI, false);
@@ -2699,10 +2700,10 @@ function _renderPublicLobbies(rooms) {
 // ── Lobby card ────────────────────────────────────────────────────────────────
 
 const _HERO_PERSONALITIES  = ['balanced', 'berserker', 'sentinel', 'scavenger'];
-const _WITCH_PERSONALITIES = ['balanced', 'berserker', 'hoarder',  'swarm'];
+const _WITCH_PERSONALITIES = ['balanced', 'aggressive', 'swarm'];
 const _PERSONALITY_LABELS  = {
   balanced: 'Balanced', berserker: 'Berserker', sentinel: 'Sentinel',
-  scavenger: 'Scavenger', hoarder: 'Hoarder', swarm: 'Swarm',
+  scavenger: 'Scavenger', aggressive: 'Aggressive', swarm: 'Swarm',
 };
 
 function _renderLobby(lobby) {

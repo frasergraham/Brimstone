@@ -18,7 +18,8 @@
  */
 
 import { GameState }       from '../src/game.js';
-import { WitchAI, HeroAI } from '../src/ai.js';
+import { HeroAI }          from '../src/ai.js';
+import { WitchAIEngine }  from '../src/ai-engine.js';
 import { resolvePlansMP, ResEventType } from '../server/resolver.js';
 import { PlanActionType }  from '../src/planner.js';
 import { generateMultipleStarts } from '../src/map.js';
@@ -112,7 +113,7 @@ function runGame() {
   // This ensures every player's leader acts independently rather than all sharing one oracle.
   const playerAIs = new Map();
   for (const p of state.players) {
-    const AIClass = p.faction === 'hero' ? HeroAI : WitchAI;
+    const AIClass = p.faction === 'hero' ? HeroAI : WitchAIEngine;
     playerAIs.set(p.id, new AIClass(state, () => {}, 0, p.id));
   }
 
