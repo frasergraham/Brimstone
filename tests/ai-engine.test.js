@@ -1,6 +1,6 @@
-// Tests for src/ai-engine.js — Phases 1-3
+// Tests for src/ai-engine.js
 // Covers EnginePlanSimState, assessBoard, scoreGoals, allocateBudget,
-// tactic generators, estimateCombat, and assemblePlan.
+// tactic generators, estimateCombat, assemblePlan, and personality configs.
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -22,6 +22,9 @@ import {
   genKillHero,
   genGatherResources,
   assemblePlan,
+  PERSONALITY_CONFIGS,
+  WitchAIEngine,
+  createWitchAI,
 } from '../src/ai-engine.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from '../src/planner.js';
 
@@ -878,8 +881,7 @@ describe('assemblePlan', () => {
 // ── WitchAIEngine.generatePlan (integration) ───────────────────────────────
 
 describe('WitchAIEngine.generatePlan (integration)', () => {
-  test('produces non-empty plan with valid action types', async () => {
-    const { WitchAIEngine } = await import('../src/ai-engine.js');
+  test('produces non-empty plan with valid action types', () => {
     const state = makeFakeState({
       inventory: { witch: { [ResourceType.WOOD]: 4, [ResourceType.METAL]: 2 }, hero: {} },
       witchObjectives: [
@@ -895,8 +897,7 @@ describe('WitchAIEngine.generatePlan (integration)', () => {
     }
   });
 
-  test('plan has no internal metadata (_priority, _goal)', async () => {
-    const { WitchAIEngine } = await import('../src/ai-engine.js');
+  test('plan has no internal metadata (_priority, _goal)', () => {
     const state = makeFakeState({
       inventory: { witch: { [ResourceType.WOOD]: 4 }, hero: {} },
       witchObjectives: [
@@ -911,8 +912,7 @@ describe('WitchAIEngine.generatePlan (integration)', () => {
     }
   });
 
-  test('plan length does not exceed MAX_PLAN_LENGTH', async () => {
-    const { WitchAIEngine } = await import('../src/ai-engine.js');
+  test('plan length does not exceed MAX_PLAN_LENGTH', () => {
     const state = makeFakeState({
       inventory: { witch: { [ResourceType.WOOD]: 10, [ResourceType.METAL]: 10 }, hero: {} },
       witchObjectives: [
@@ -926,8 +926,7 @@ describe('WitchAIEngine.generatePlan (integration)', () => {
     assert.ok(plan.length <= MAX_PLAN_LENGTH, `plan length ${plan.length} exceeds MAX_PLAN_LENGTH`);
   });
 
-  test('cross-turn memory prevents oscillation', async () => {
-    const { WitchAIEngine } = await import('../src/ai-engine.js');
+  test('cross-turn memory prevents oscillation', () => {
     const state = makeFakeState({
       inventory: { witch: { [ResourceType.WOOD]: 2 }, hero: {} },
     });
@@ -950,6 +949,100 @@ describe('WitchAIEngine.generatePlan (integration)', () => {
         a.toCol === 0 && a.toRow === 0
       );
       assert.ok(!backMove, 'cross-turn memory should prevent returning to (0,0)');
+    }
+  });
+});
+
+// ── PERSONALITY_CONFIGS ─────────────────────────────────────────────────────
+
+describe('PERSONALITY_CONFIGS', () => {
+  test('all three presets exist with required fields', () => {
+    for (const name of ['balanced', 'aggressive', 'swarm']) {
+      const cfg = PERSONALITY_CONFIGS[name];
+      assert.ok(cfg, `${name} config exists`);
+      assert.ok(cfg.goalWeights, `${name} has goalWeights`);
+      assert.equal(typeof cfg.fleeThreshold, 'number');
+      assert.equal(typeof cfg.engageFloor, 'string');
+      // All 5 goals have weights
+      for (const g of Object.values(Goal)) {
+        assert.equal(typeof cfg.goalWeights[g], 'number', `${name} has weight for ${g}`);
+      }
+    }
+  });
+
+  test('goalWeights affect scoreGoals output', () => {
+    const board = makeBoard({ heroDistance: 2, isNight: true, witchHpRatio: 0.8 });
+    const baseScores = scoreGoals(board);
+    const aggroScores = scoreGoals(board, PERSONALITY_CONFIGS.aggressive.goalWeights);
+    // Aggressive boosts KILL_HERO (x1.8) and reduces GATHER (x0.4)
+    assert.ok(aggroScores[Goal.KILL_HERO] >= baseScores[Goal.KILL_HERO],
+      'aggressive should boost KILL_HERO');
+    assert.ok(aggroScores[Goal.GATHER_RESOURCES] <= baseScores[Goal.GATHER_RESOURCES],
+      'aggressive should reduce GATHER_RESOURCES');
+  });
+
+  test('createWitchAI creates engine with named config', () => {
+    const state = makeFakeState();
+    const ai = createWitchAI('aggressive', state, () => {});
+    assert.ok(ai instanceof WitchAIEngine);
+    assert.deepEqual(ai.config, PERSONALITY_CONFIGS.aggressive);
+  });
+
+  test('createWitchAI defaults to balanced for unknown personality', () => {
+    const state = makeFakeState();
+    const ai = createWitchAI('nonexistent', state, () => {});
+    assert.deepEqual(ai.config, PERSONALITY_CONFIGS.balanced);
+  });
+});
+
+// ── Personality-varied behavior ─────────────────────────────────────────────
+
+describe('personality-varied behavior', () => {
+  test('aggressive flees at lower HP threshold than balanced', () => {
+    const sim = makeSim({ witchHp: 2, witchMaxHp: 10 }); // 20% HP
+    const board = makeBoard({
+      witch: sim.entities.find(e => e.type === EntityType.WITCH),
+      witchHpRatio: 0.2,
+      visibleHeroes: [makeEntity({ id: 'h1', type: EntityType.HERO, owner: 'hero', col: 2, row: 0 })],
+      heroDistance: 2,
+      minions: [],
+    });
+
+    // Balanced flees at 0.3 → 0.2 < 0.3 → should flee
+    const balancedActions = genDefendWitch(sim, board, 3, PERSONALITY_CONFIGS.balanced);
+    const fleeBalanced = balancedActions.some(a => a.type === PlanActionType.MOVE && a._goal === Goal.DEFEND_WITCH);
+    assert.ok(fleeBalanced, 'balanced should flee at 20% HP');
+
+    // Reset sim state for aggressive test
+    const sim2 = makeSim({ witchHp: 2, witchMaxHp: 10 });
+    // Aggressive flees at 0.15 → 0.2 > 0.15 → should NOT flee
+    const aggroActions = genDefendWitch(sim2, board, 3, PERSONALITY_CONFIGS.aggressive);
+    const fleeAggro = aggroActions.some(a => a.type === PlanActionType.MOVE && a._goal === Goal.DEFEND_WITCH);
+    assert.ok(!fleeAggro, 'aggressive should not flee at 20% HP (threshold is 15%)');
+  });
+});
+
+// ── WITCH_PERSONALITIES registry ────────────────────────────────────────────
+
+describe('WITCH_PERSONALITIES registry', () => {
+  test('all personality configs are registered', async () => {
+    const { WITCH_PERSONALITIES } = await import('../src/ai.js');
+    // Import ai-engine.js to trigger registration
+    await import('../src/ai-engine.js');
+    for (const name of Object.keys(PERSONALITY_CONFIGS)) {
+      assert.ok(WITCH_PERSONALITIES[name], `${name} registered in WITCH_PERSONALITIES`);
+    }
+  });
+
+  test('registered personalities create working AI instances', async () => {
+    const { WITCH_PERSONALITIES } = await import('../src/ai.js');
+    await import('../src/ai-engine.js');
+    const state = makeFakeState();
+    for (const [name, Cls] of Object.entries(WITCH_PERSONALITIES)) {
+      const ai = new Cls(state, () => {}, 0);
+      assert.ok(ai instanceof WitchAIEngine, `${name} is a WitchAIEngine`);
+      const plan = ai.generatePlan();
+      assert.ok(Array.isArray(plan), `${name} generates an array plan`);
     }
   });
 });

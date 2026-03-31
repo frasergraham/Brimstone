@@ -2389,9 +2389,7 @@ export class UIController {
     if (this.state.gameOver) return;
     const ms = this.autoplay ? 50 : delayMs;
     const ap = this.state.activePlayer;
-    if (ap === Player.WITCH && this.state.witchIsAI && this.ai) {
-      setTimeout(() => this._runAI(), ms);
-    } else if (ap === Player.HERO && this.state.heroIsAI && this.heroAI) {
+    if (ap === Player.HERO && this.state.heroIsAI && this.heroAI) {
       setTimeout(() => this._runHeroAI(), ms);
     }
   }
@@ -2399,14 +2397,6 @@ export class UIController {
   async _runHeroAI() {
     if (!this.heroAI) return;
     await this.heroAI.takeTurn();
-    this._updateSidebar();
-    this.onRedraw();
-    this._maybeRunAI();
-  }
-
-  async _runAI() {
-    if (!this.ai) return;
-    await this.ai.takeTurn();
     this._updateSidebar();
     this.onRedraw();
     this._maybeRunAI();

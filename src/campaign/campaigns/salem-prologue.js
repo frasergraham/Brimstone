@@ -294,7 +294,7 @@ const MISSIONS = [
       { round: 5,  units: [{ type: 'zombie', spawnAt: 'graveyard' }, { type: 'minion', spawnAt: 'map_edge' }] },
       { round: 7,  units: [{ type: 'zombie', spawnAt: 'graveyard' }, { type: 'zombie', spawnAt: 'graveyard' }, { type: 'minion', spawnAt: 'map_edge' }] },
     ],
-    aiPersonality: 'berserker',
+    aiPersonality: 'aggressive',
 
     maxSurvivorsFromRoster:    2,
     missionSurvivors:          1,
@@ -332,7 +332,7 @@ const MISSIONS = [
       { round: 4,  units: [{ type: 'minion', spawnAt: 'graveyard' }] },
       { round: 8,  units: [{ type: 'wood_golem', spawnAt: 'graveyard' }] },
     ],
-    aiPersonality: 'hoarder',
+    aiPersonality: 'swarm',
 
     maxSurvivorsFromRoster: 3,
     missionSurvivors:       1,

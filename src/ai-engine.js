@@ -1,10 +1,9 @@
-// AI Engine — 5-stage pipeline witch personality
-// Drop-in replacement for WitchAI with goal-based budget allocation.
+// AI Engine — 5-stage pipeline witch AI
+// All witch personalities are config-driven variants of this single engine.
 //
 // Pipeline: EVALUATE → SCORE → ALLOCATE → GENERATE → ASSEMBLE
-// Phases 1-4: foundation, tactic generators, plan assembly, integration
 
-import { PlanSimState, stepToward, stepAwayFrom, bestWitchObjective, nearestBuilding, registerWitchPersonality } from './ai.js';
+import { PlanSimState, stepToward, stepAwayFrom, bestWitchObjective, nearestBuilding, WITCH_PERSONALITIES } from './ai.js';
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
 import { EntityType } from './entities.js';
@@ -22,6 +21,39 @@ export const Goal = Object.freeze({
 });
 
 const ALL_GOALS = Object.values(Goal);
+
+// ── Personality configs ─────────────────────────────────────────────────────
+// goalWeights: post-scoring multipliers per goal (higher = more budget share)
+// fleeThreshold: witch HP ratio below which flee actions trigger
+// engageFloor: minimum combat classification to attack
+//   'suicidal' → only skip suicidal; 'unfavorable' → need favorable+; 'favorable' → need overwhelming
+
+export const PERSONALITY_CONFIGS = Object.freeze({
+  balanced: Object.freeze({
+    goalWeights: Object.freeze({
+      [Goal.KILL_HERO]: 1.0, [Goal.CONTROL_NODES]: 1.0,
+      [Goal.BUILD_ARMY]: 1.0, [Goal.GATHER_RESOURCES]: 1.0, [Goal.DEFEND_WITCH]: 1.0,
+    }),
+    fleeThreshold: 0.3,
+    engageFloor: 'suicidal',
+  }),
+  aggressive: Object.freeze({
+    goalWeights: Object.freeze({
+      [Goal.KILL_HERO]: 1.8, [Goal.CONTROL_NODES]: 0.6,
+      [Goal.BUILD_ARMY]: 0.7, [Goal.GATHER_RESOURCES]: 0.4, [Goal.DEFEND_WITCH]: 0.7,
+    }),
+    fleeThreshold: 0.15,
+    engageFloor: 'suicidal',
+  }),
+  swarm: Object.freeze({
+    goalWeights: Object.freeze({
+      [Goal.KILL_HERO]: 0.4, [Goal.CONTROL_NODES]: 1.5,
+      [Goal.BUILD_ARMY]: 2.0, [Goal.GATHER_RESOURCES]: 1.3, [Goal.DEFEND_WITCH]: 1.3,
+    }),
+    fleeThreshold: 0.4,
+    engageFloor: 'unfavorable',
+  }),
+});
 
 // ── EnginePlanSimState ───────────────────────────────────────────────────────
 // Extends PlanSimState with extra tracking for the engine pipeline.
@@ -160,7 +192,7 @@ export function assessBoard(sim) {
 
 function clamp01(v) { return Math.max(0, Math.min(1, v)); }
 
-export function scoreGoals(board) {
+export function scoreGoals(board, goalWeights = null) {
   // DEFEND_WITCH
   let defend = 0;
   if (board.witchHpRatio < 0.3) defend = 1.0;
@@ -205,13 +237,22 @@ export function scoreGoals(board) {
   const gatherMult = board.isDay ? 1.5 : board.isNight ? 0.5 : 1.0;
   gather = clamp01(clamp01(gather) * gatherMult);
 
-  return {
+  const scores = {
     [Goal.DEFEND_WITCH]:     defend,
     [Goal.KILL_HERO]:        kill,
     [Goal.CONTROL_NODES]:    control,
     [Goal.BUILD_ARMY]:       army,
     [Goal.GATHER_RESOURCES]: gather,
   };
+
+  // Apply personality goal weights
+  if (goalWeights) {
+    for (const g of ALL_GOALS) {
+      if (goalWeights[g] != null) scores[g] = clamp01(scores[g] * goalWeights[g]);
+    }
+  }
+
+  return scores;
 }
 
 // ── Stage 3: Budget Allocation ───────────────────────────────────────────────
@@ -319,7 +360,7 @@ function _closestUncommitted(sim, board, target) {
 
 // ── Generator: DEFEND_WITCH ─────────────────────────────────────────────────
 
-export function genDefendWitch(sim, board, budget) {
+export function genDefendWitch(sim, board, budget, config = null) {
   const actions = [];
   if (budget <= 0 || !board.witch) return actions;
   let remaining = budget;
@@ -336,7 +377,8 @@ export function genDefendWitch(sim, board, budget) {
   }
 
   // Flee away from nearest hero if HP critical
-  if (board.witchHpRatio < 0.3 && board.visibleHeroes.length > 0 && remaining > 0) {
+  const fleeThreshold = config?.fleeThreshold ?? 0.3;
+  if (board.witchHpRatio < fleeThreshold && board.visibleHeroes.length > 0 && remaining > 0) {
     const nearestHero = board.visibleHeroes.reduce((best, h) => {
       const d = hexDistance(board.witch.col, board.witch.row, h.col, h.row);
       const bd = best ? hexDistance(board.witch.col, board.witch.row, best.col, best.row) : Infinity;
@@ -535,7 +577,7 @@ export function genControlNodes(sim, board, budget) {
 
 // ── Generator: KILL_HERO ────────────────────────────────────────────────────
 
-export function genKillHero(sim, board, budget) {
+export function genKillHero(sim, board, budget, config = null) {
   const actions = [];
   if (budget <= 0 || !board.witch || board.visibleHeroes.length === 0) return actions;
   let remaining = budget;
@@ -560,9 +602,12 @@ export function genKillHero(sim, board, budget) {
     for (const hero of board.visibleHeroes) {
       const dist = hexDistance(simUnit.col, simUnit.row, hero.col, hero.row);
       if (dist <= 1) {
-        // Combat estimation — skip suicidal attacks
+        // Combat estimation — skip attacks below engage floor
         const est = estimateCombat(simUnit, hero, board);
-        if (est.classification === 'suicidal') continue;
+        const floor = config?.engageFloor ?? 'suicidal';
+        if (floor === 'unfavorable' && (est.classification === 'suicidal' || est.classification === 'unfavorable')) continue;
+        if (floor === 'favorable' && est.classification !== 'overwhelming' && est.classification !== 'favorable') continue;
+        if (floor === 'suicidal' && est.classification === 'suicidal') continue;
 
         actions.push({
           type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
@@ -788,11 +833,13 @@ function _fillGaps(plan, sim, board, witchEntity, remaining, prevPositions) {
 // ── WitchAIEngine ────────────────────────────────────────────────────────────
 
 export class WitchAIEngine {
-  constructor(state, onStateChange, thinkDelay = 600, playerId = null) {
+  constructor(state, onStateChange, thinkDelay = 600, playerId = null, config = null) {
     this.state = state;
     this.onStateChange = onStateChange;
+    this.onBattleResult = null; // unused in planning mode, but expected by consumers
     this.thinkDelay = thinkDelay;
     this.playerId = playerId;
+    this.config = config ?? PERSONALITY_CONFIGS.balanced;
 
     // Cross-turn anti-oscillation memory: Map<entityId, {col, row}>
     this._prevPositions = new Map();
@@ -801,16 +848,17 @@ export class WitchAIEngine {
   generatePlan(allyContext = null) {
     const sim = new EnginePlanSimState(this.state, 'witch', this.playerId);
     const board = assessBoard(sim);
-    const scores = scoreGoals(board);
+    const cfg = this.config;
+    const scores = scoreGoals(board, cfg.goalWeights);
     const budget = allocateBudget(scores, board.totalBudget);
 
     // Stage 4: Run generators in priority order
     // Each generator mutates sim state (positions, commitments, ledger)
     // so later generators see the projected world.
-    const defendActions  = genDefendWitch(sim, board, budget[Goal.DEFEND_WITCH]);
+    const defendActions  = genDefendWitch(sim, board, budget[Goal.DEFEND_WITCH], cfg);
     const buildActions   = genBuildArmy(sim, board, budget[Goal.BUILD_ARMY]);
     const controlActions = genControlNodes(sim, board, budget[Goal.CONTROL_NODES]);
-    const killActions    = genKillHero(sim, board, budget[Goal.KILL_HERO]);
+    const killActions    = genKillHero(sim, board, budget[Goal.KILL_HERO], cfg);
     const gatherActions  = genGatherResources(sim, board, budget[Goal.GATHER_RESOURCES]);
 
     // Collect all generated actions
@@ -836,7 +884,23 @@ export class WitchAIEngine {
   }
 }
 
-// Self-register into WITCH_PERSONALITIES to break the circular-import chain.
-// ai-engine.js imports from ai.js (for PlanSimState etc.), so ai.js cannot
-// import ai-engine.js at the top level without a TDZ error.
-registerWitchPersonality('engine', WitchAIEngine);
+// ── Factory helpers ─────────────────────────────────────────────────────────
+
+/** Create a WitchAIEngine with a named personality config. */
+export function createWitchAI(personality, state, onStateChange, thinkDelay = 600, playerId = null) {
+  const cfg = PERSONALITY_CONFIGS[personality] ?? PERSONALITY_CONFIGS.balanced;
+  return new WitchAIEngine(state, onStateChange, thinkDelay, playerId, cfg);
+}
+
+// ── Register all witch personalities ────────────────────────────────────────
+// Each entry is a constructor-like function matching the (state, onChange, delay, playerId) interface.
+
+for (const name of Object.keys(PERSONALITY_CONFIGS)) {
+  WITCH_PERSONALITIES[name] = class extends WitchAIEngine {
+    constructor(state, onStateChange, thinkDelay = 600, playerId = null) {
+      super(state, onStateChange, thinkDelay, playerId, PERSONALITY_CONFIGS[name]);
+    }
+  };
+  Object.defineProperty(WITCH_PERSONALITIES[name], 'name', { value: `WitchAI_${name}` });
+}
+
