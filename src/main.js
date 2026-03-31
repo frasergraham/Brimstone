@@ -1195,7 +1195,12 @@ function initOnline(mirrorState, myFaction, mpClient) {
   // No local AI — all turns handled server-side
   ui = new UIController(canvas, state, renderer, null, redrawOnline, null, false);
   ui.onQuitToMenu = () => location.reload();
-  ui.onReplayLastTurn = () => _asyncReplayLastTurn();
+  ui.onReplayLastTurn = () => {
+    if (!_asyncLastRound) return;
+    _showAsyncTurnChoice(_asyncLastRound.roundNum, _asyncLastRound, () => {
+      // After replay, just redraw — we're already in the right state
+    });
+  };
   ui.mp         = mpClient;
   ui.myPlayerId = mpClient.myPlayerId ?? null;
   ui._players   = state.players ?? [];
@@ -2233,7 +2238,7 @@ function _handleAsyncStateUpdate(msg) {
   if (msg.gameStatus === 'finished' || msg.gameStatus === 'abandoned') {
     // For finished games with an unseen last round, offer replay
     if (_asyncLastRound && _asyncSeenRound < _asyncLastRound.roundNum) {
-      _showAsyncTurnChoice(_asyncLastRound.roundNum, () => {
+      _showAsyncTurnChoice(_asyncLastRound.roundNum, _asyncLastRound, () => {
         const label = msg.winner === msg.faction ? 'Victory' : (msg.winner ? 'Defeat' : 'Game Over');
         ui?._showResultDialog([label, msg.winReason || '']);
       });
@@ -2246,7 +2251,7 @@ function _handleAsyncStateUpdate(msg) {
 
   // If there's an unseen last round, offer the replay choice before entering planning
   if (_asyncLastRound && _asyncSeenRound < _asyncLastRound.roundNum) {
-    _showAsyncTurnChoice(_asyncLastRound.roundNum, () => _enterAsyncPlanning(msg));
+    _showAsyncTurnChoice(_asyncLastRound.roundNum, _asyncLastRound, () => _enterAsyncPlanning(msg));
   } else {
     _enterAsyncPlanning(msg);
   }
@@ -2277,7 +2282,17 @@ function _enterAsyncPlanning(msg) {
  * @param {number} roundNum - The round that was resolved
  * @param {Function} afterFn - Called after choice (skip or after replay finishes)
  */
-function _showAsyncTurnChoice(roundNum, afterFn) {
+/**
+ * Show async turn choice dialog with three options:
+ *  - Watch Last Turn (default): animate like online MP, then call afterFn
+ *  - Enter Replay Mode: full replay system with all rounds, then call afterFn
+ *  - Plan Next Turn: skip straight to afterFn
+ *
+ * @param {number} roundNum - The round that was resolved
+ * @param {Object} lastRound - { preState, steps } for the most recent round
+ * @param {Function} afterFn - Called after dialog action completes; receives finalState/planning setup
+ */
+function _showAsyncTurnChoice(roundNum, lastRound, afterFn) {
   if (!ui) { afterFn(); return; }
 
   const dialog = document.getElementById('result-dialog');
@@ -2293,27 +2308,38 @@ function _showAsyncTurnChoice(roundNum, afterFn) {
   btns.innerHTML = '';
   btns.style.display = '';
 
-  const showBtn = document.createElement('button');
-  showBtn.className = 'setup-btn primary';
-  showBtn.textContent = 'Show Last Turn';
-  const skipBtn = document.createElement('button');
-  skipBtn.className = 'setup-btn secondary';
-  skipBtn.textContent = 'Jump to End';
+  const watchBtn = document.createElement('button');
+  watchBtn.className = 'setup-btn primary';
+  watchBtn.textContent = 'Watch Last Turn';
 
-  btns.appendChild(showBtn);
-  btns.appendChild(skipBtn);
+  const replayBtn = document.createElement('button');
+  replayBtn.className = 'setup-btn secondary';
+  replayBtn.textContent = 'Enter Replay Mode';
+
+  const planBtn = document.createElement('button');
+  planBtn.className = 'setup-btn secondary';
+  planBtn.textContent = 'Plan Next Turn';
+
+  btns.appendChild(watchBtn);
+  btns.appendChild(replayBtn);
+  btns.appendChild(planBtn);
   dialog.style.display = 'flex';
 
-  const dismiss = () => {
-    dialog.style.display = 'none';
-  };
+  const dismiss = () => { dialog.style.display = 'none'; };
 
-  showBtn.addEventListener('click', () => {
+  watchBtn.addEventListener('click', () => {
     dismiss();
-    _asyncReplayLastTurn().then(afterFn);
+    _asyncSeenRound = roundNum;
+    _asyncWatchLastTurn(lastRound).then(afterFn);
   }, { once: true });
 
-  skipBtn.addEventListener('click', () => {
+  replayBtn.addEventListener('click', () => {
+    dismiss();
+    _asyncSeenRound = roundNum;
+    _asyncEnterReplayMode().then(afterFn);
+  }, { once: true });
+
+  planBtn.addEventListener('click', () => {
     dismiss();
     _asyncSeenRound = roundNum;
     afterFn();
@@ -2328,22 +2354,86 @@ function _updateAsyncReplayBtn() {
 }
 
 /**
- * Launch the full replay system for async games.
- * Fetches all replay rounds from the server, starts at the last round,
- * and uses the replay HUD with a "Plan" stop button.
- * After replay exits, restores the current game state and planning mode.
+ * "Watch Last Turn" — animate the last resolved round exactly like online MP:
+ * restore pre-resolution state, run _animateResolutionSteps, show summary,
+ * then return so the caller can enter planning.
  */
-async function _asyncReplayLastTurn() {
-  if (!state || !renderer || !ui || !_asyncRoomId) return;
+async function _asyncWatchLastTurn(lastRound) {
+  if (!lastRound || !state || !renderer || !ui) return;
 
-  if (_asyncLastRound) _asyncSeenRound = _asyncLastRound.roundNum;
+  const { preState, steps } = lastRound;
+
+  // Save current state and planning mode so we can restore after the animation
+  const savedStateJson = JSON.stringify(serializeState(state));
+  const wasPlanningMode = !!state.planningPhase;
+  const savedPlan = ui._currentPlan ? [...ui._currentPlan] : null;
+  if (wasPlanningMode) ui.exitPlanningMode();
+
+  // Restore pre-resolution state for animation
+  const preResState = deserializeState(
+    typeof preState === 'string' ? JSON.parse(preState) : preState
+  );
+  Object.assign(state, preResState);
+  state.hero      = preResState.hero;
+  state.witch     = preResState.witch;
+  state.myFaction = _asyncFaction;
+  redrawOnline();
+
+  // Parse steps if still a string
+  const stepsArr = typeof steps === 'string' ? JSON.parse(steps) : steps;
+
+  // Final entities come from the saved (post-resolution) state
+  const postState = deserializeState(JSON.parse(savedStateJson));
+  const finalEntities = postState.entities ?? state.entities;
+
+  // Animate exactly like online MP
+  await _animateResolutionSteps(stepsArr, finalEntities, redrawOnline, _asyncFaction, mp?.myPlayerId ?? null);
+
+  // Restore post-resolution state
+  const restored = deserializeState(JSON.parse(savedStateJson));
+  Object.assign(state, restored);
+  state.hero      = restored.hero;
+  state.witch     = restored.witch;
+  state.myFaction = _asyncFaction;
+
+  // Show resolution summary (same as online MP)
+  await ui._triggerPostRoundEffects();
+  redrawOnline();
+
+  if (ui && _asyncFaction) {
+    _resolving = true;
+    const action = await ui._showResolutionSummary(stepsArr, lastRound.roundNum ?? (state.round - 1), {
+      humanFaction: _asyncFaction,
+      fogOfWar: state.fogOfWar,
+      gameOver: state.gameOver,
+      winner: state.winner,
+      winReason: state.winReason,
+    });
+    _resolving = false;
+  }
+
+  // Restore planning mode if it was active (e.g. triggered from menu button)
+  if (wasPlanningMode && ui) {
+    const budget = state.playerActionsLeft?.[mp?.myPlayerId] ??
+                   state[_asyncFaction + 'ActionsLeft'] ?? 3;
+    ui.enterPlanningMode(_asyncFaction, budget, 0);
+    if (savedPlan) ui._currentPlan = savedPlan;
+    ui.onPlanSubmit = (plan) => mp.submitAsyncPlan(_asyncRoomId, plan);
+  }
+}
+
+/**
+ * "Enter Replay Mode" — fetch all replay rounds and launch the full replay
+ * system with navigation controls. The stop button reads "Plan".
+ */
+async function _asyncEnterReplayMode() {
+  if (!state || !renderer || !ui || !_asyncRoomId) return;
 
   // Save current state and planning mode so we can restore after replay
   const savedStateJson = JSON.stringify(serializeState(state));
   const wasPlanningMode = !!state.planningPhase;
   const savedPlan = ui._currentPlan ? [...ui._currentPlan] : null;
 
-  // Hide planning mode during replay
   if (wasPlanningMode) ui.exitPlanningMode();
 
   // Fetch all replay rounds from the server
@@ -2358,19 +2448,16 @@ async function _asyncReplayLastTurn() {
   }
 
   if (!rounds.length) {
-    // Nothing to replay — restore and bail
     _restoreAsyncState(savedStateJson, wasPlanningMode, savedPlan);
     return;
   }
 
-  // Convert to replay format
   const replayRounds = rounds.map(r => ({
     roundNum: r.round_num,
     preState: r.pre_state_json,
     steps:    r.steps_json,
   }));
 
-  // Start replay at the last round so the most recent turn plays first
   const startIndex = Math.max(0, replayRounds.length - 1);
 
   await _replayFullGame(replayRounds, null, null, null, null, redrawOnline, {
@@ -2379,7 +2466,6 @@ async function _asyncReplayLastTurn() {
     autoPlay:  true,
   });
 
-  // Restore the current (post-resolution) game state
   _restoreAsyncState(savedStateJson, wasPlanningMode, savedPlan);
 }
 
@@ -2434,7 +2520,7 @@ function _handleAsyncResolution({ roomId, steps, finalState, resolvedRound, preS
   if (wasPlanningMode) ui.exitPlanningMode();
 
   // Show the turn-ready choice dialog
-  _showAsyncTurnChoice(resolvedRound, () => {
+  _showAsyncTurnChoice(resolvedRound, _asyncLastRound, () => {
     // Apply the final (post-resolution) state
     Object.assign(state, finalState);
     state.hero      = finalState.hero;
