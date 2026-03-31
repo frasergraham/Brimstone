@@ -3,6 +3,7 @@ import { GameState, Player } from './game.js';
 import { Renderer }          from './renderer.js';
 import { UIController, UIMode } from './ui.js';
 import { WitchAI, HeroAI, WITCH_PERSONALITIES }   from './ai.js';
+import './ai-engine.js'; // side-effect: registers 'engine' witch personality
 import {
   MultiplayerClient, MirrorState, loadSession, clearSession,
   checkEmailTokenInUrl, requestLinkEmail, requestEmailLogin, fetchIdentities,

@@ -2126,3 +2126,9 @@ export const WITCH_PERSONALITIES = {
   hoarder:   WitchHoarder,
   swarm:     WitchSwarm,
 };
+
+/** Register a custom witch personality at runtime (used by ai-engine.js to
+ *  break the circular-import chain). */
+export function registerWitchPersonality(name, cls) {
+  WITCH_PERSONALITIES[name] = cls;
+}

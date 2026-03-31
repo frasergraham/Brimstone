@@ -2,10 +2,9 @@
 // Drop-in replacement for WitchAI with goal-based budget allocation.
 //
 // Pipeline: EVALUATE → SCORE → ALLOCATE → GENERATE → ASSEMBLE
-// Phase 1: stages 1-3 (evaluate, score, allocate)
-// Phase 2: stage 4 (tactic generators)
+// Phases 1-4: foundation, tactic generators, plan assembly, integration
 
-import { PlanSimState, stepToward, stepAwayFrom, bestWitchObjective, nearestBuilding } from './ai.js';
+import { PlanSimState, stepToward, stepAwayFrom, bestWitchObjective, nearestBuilding, registerWitchPersonality } from './ai.js';
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
 import { EntityType } from './entities.js';
@@ -836,3 +835,8 @@ export class WitchAIEngine {
     return plan;
   }
 }
+
+// Self-register into WITCH_PERSONALITIES to break the circular-import chain.
+// ai-engine.js imports from ai.js (for PlanSimState etc.), so ai.js cannot
+// import ai-engine.js at the top level without a TDZ error.
+registerWitchPersonality('engine', WitchAIEngine);
