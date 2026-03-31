@@ -324,7 +324,8 @@ function _pickNodeCluster(rand, tiles, center, forbiddenKeys, startPositions = [
     rand
   );
 
-  // Try to find a triangle pair (both neighbors are adjacent to each other)
+  // Pick two neighbors that are adjacent to each other (triangle, not a line).
+  // On a hex grid, consecutive neighbors always form a triangle with the center.
   for (let i = 0; i < neighbors.length; i++) {
     for (let j = i + 1; j < neighbors.length; j++) {
       if (hexDistance(neighbors[i].col, neighbors[i].row, neighbors[j].col, neighbors[j].row) === 1) {
@@ -332,7 +333,19 @@ function _pickNodeCluster(rand, tiles, center, forbiddenKeys, startPositions = [
       }
     }
   }
-  // Fallback: any two valid neighbors
+  // Fallback: expand search to distance-2 neighbors to find a triangle partner
+  if (neighbors.length >= 1) {
+    const n0 = neighbors[0];
+    const ring2 = getNeighbors(n0.col, n0.row).filter(n2 => {
+      if (n2.col === center.col && n2.row === center.row) return false;
+      const t = tiles.get(hexKey(n2.col, n2.row));
+      if (!t || t.type === TileType.RIVER) return false;
+      if (forbiddenKeys.has(hexKey(n2.col, n2.row))) return false;
+      return hexDistance(center.col, center.row, n2.col, n2.row) === 1;
+    });
+    if (ring2.length > 0) return [{ col: center.col, row: center.row }, n0, ring2[0]];
+  }
+  // Last resort: any two valid neighbors (may be a line, but very rare)
   if (neighbors.length >= 2) return [{ col: center.col, row: center.row }, neighbors[0], neighbors[1]];
   if (neighbors.length === 1) return [{ col: center.col, row: center.row }, neighbors[0], { col: center.col, row: center.row }];
   return [{ col: center.col, row: center.row }, { col: center.col, row: center.row }, { col: center.col, row: center.row }];

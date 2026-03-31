@@ -15,7 +15,7 @@ import { nodeController } from './game.js';
 // These constants are kept for backward-compat imports but should not be used internally.
 export const PAD_X = 40;
 export const PAD_Y = 30;
-const BG_COLOR = '#0d1117';
+const BG_COLOR = '#2a2a2f';
 const MIN_HEX_SIZE = 10;
 
 function hexCorners(cx, cy, size) {
@@ -112,6 +112,9 @@ export class Renderer {
     this._tilemapImg   = null;   // HTMLImageElement for assets/tilemap.png
     this._spriteRects  = null;   // Map<id, {x,y,size}> — source rect in the tilemap
 
+    /** When false, terrain/building sprites are hidden and only colour fills are drawn. */
+    this.useTileImages = true;
+
     this._resize();
   }
 
@@ -123,17 +126,24 @@ export class Renderer {
   static _buildSpriteRects() {
     const CELL = 256, GAP = 6, COLS = 7, LABEL_H = 30;
     const groups = [
-      ['grass','forest','dirt','road','river','bridge'],
+      ['grass_1','grass_2','grass_3','grass_4','grass_5',
+       'forest_1','forest_2','forest_3','forest_4','forest_5',
+       'dirt_1','dirt_2','dirt_3','dirt_4','dirt_5',
+       'road','river','bridge'],
       ['town_hall','church','inn','blacksmith','graveyard','mill',
        'dock','house','barn','watchtower','apothecary','storehouse','stable'],
       ['hero','witch','zombie','minion','wood_golem','iron_golem',
        'survivor_innkeeper','survivor_nurse','survivor_blacksmith',
        'survivor_herbalist','survivor_militia','survivor_priest',
        'survivor_baker','survivor_trapper','survivor_schoolteacher',
-       'survivor_gravedigger','survivor_midwife','survivor_farmhand'],
+       'survivor_gravedigger','survivor_midwife','survivor_farmhand',
+       'survivor_tanner','survivor_chandler','survivor_goodwife',
+       'survivor_constable','survivor_weaver','survivor_carpenter',
+       'survivor_apothecary','survivor_fisherman'],
     ];
 
     const rects = new Map();
+    const variantCounts = new Map(); // e.g. 'grass' → 5
     let y = GAP;
 
     for (const ids of groups) {
@@ -144,11 +154,17 @@ export class Renderer {
         const sx   = GAP + col * (CELL + GAP);
         const sy   = y   + row * (CELL + GAP);
         rects.set(ids[i], { x: sx, y: sy, size: CELL });
+        // Count variants: "grass_3" → base "grass", variant 3
+        const m = ids[i].match(/^(.+)_(\d+)$/);
+        if (m) {
+          const base = m[1], num = parseInt(m[2]);
+          variantCounts.set(base, Math.max(variantCounts.get(base) ?? 0, num));
+        }
       }
       y += Math.ceil(ids.length / COLS) * (CELL + GAP);
     }
 
-    return rects;
+    return { rects, variantCounts };
   }
 
   /**
@@ -166,7 +182,9 @@ export class Renderer {
     if (!img.naturalWidth) return; // failed to load — keep colour fallbacks
 
     this._tilemapImg  = img;
-    this._spriteRects = Renderer._buildSpriteRects();
+    const { rects, variantCounts } = Renderer._buildSpriteRects();
+    this._spriteRects    = rects;
+    this._variantCounts  = variantCounts;
     this._portraitCache = new Map();
     this.draw();
   }
@@ -205,6 +223,14 @@ export class Renderer {
       'Gravedigger':      'survivor_gravedigger',
       'Midwife':          'survivor_midwife',
       'Farmhand':         'survivor_farmhand',
+      'Tanner':           'survivor_tanner',
+      'Chandler':         'survivor_chandler',
+      'Goodwife':         'survivor_goodwife',
+      'Constable':        'survivor_constable',
+      'Weaver':           'survivor_weaver',
+      'Carpenter':        'survivor_carpenter',
+      "Apothecary's Daughter": 'survivor_apothecary',
+      'Fisherman':        'survivor_fisherman',
     };
     return MAP[title] ?? null;
   }
@@ -499,6 +525,36 @@ export class Renderer {
     this._resize();
   }
 
+  /** Draw text with a dark rounded box behind it for legibility over busy terrain. */
+  _shadowText(text, x, y) {
+    const ctx = this.ctx;
+    const prevFill = ctx.fillStyle;
+    const metrics = ctx.measureText(text);
+    const tw = metrics.width;
+    const th = metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent;
+    const px = 3, py = 2; // padding
+    const bx = x - tw / 2 - px;
+    const by = y - metrics.actualBoundingBoxAscent - py;
+    const bw = tw + px * 2;
+    const bh = th + py * 2;
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    const r = 3;
+    ctx.beginPath();
+    ctx.moveTo(bx + r, by);
+    ctx.lineTo(bx + bw - r, by);
+    ctx.quadraticCurveTo(bx + bw, by, bx + bw, by + r);
+    ctx.lineTo(bx + bw, by + bh - r);
+    ctx.quadraticCurveTo(bx + bw, by + bh, bx + bw - r, by + bh);
+    ctx.lineTo(bx + r, by + bh);
+    ctx.quadraticCurveTo(bx, by + bh, bx, by + bh - r);
+    ctx.lineTo(bx, by + r);
+    ctx.quadraticCurveTo(bx, by, bx + r, by);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = prevFill;
+    ctx.fillText(text, x, y);
+  }
+
   _toCanvas(col, row) {
     const { x, y } = hexToPixel(col, row, this.hexSize);
     return { x: x + this._padX, y: y + this._padY };
@@ -580,7 +636,7 @@ export class Renderer {
     }
 
     // Background covers the full canvas regardless of zoom/pan
-    ctx.fillStyle = BG_COLOR;
+    ctx.fillStyle = (this.useTileImages && this._tilemapImg) ? BG_COLOR : '#0d1117';
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
     // Apply zoom and pan transform for all map content
@@ -665,7 +721,14 @@ export class Renderer {
       for (const h of obj.hexes) {
         this._drawObjectiveHexGlow(h.col, h.row, obj, state);
       }
-      this._drawObjectiveSymbol(obj.col, obj.row, obj.label, state);
+      // Draw symbol at the centroid of all cluster hexes (not the center hex)
+      let cx = 0, cy = 0;
+      for (const h of obj.hexes) {
+        const p = this._toCanvas(h.col, h.row);
+        cx += p.x; cy += p.y;
+      }
+      cx /= obj.hexes.length; cy /= obj.hexes.length;
+      this._drawObjectiveSymbolAt(cx, cy, obj.label, state, obj);
     }
 
     // Thick outlines on hexes occupied by units
@@ -850,7 +913,7 @@ export class Renderer {
         ctx.font         = `bold ${Math.floor(hs * (f.fontScale ?? 0.85))}px sans-serif`;
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(f.text, x, y - rise);
+        this._shadowText(f.text, x, y - rise);
       }
     }
   }
@@ -905,7 +968,9 @@ export class Renderer {
     if (!tile) return;
 
     const { x, y } = this._toCanvas(col, row);
-    const corners   = hexCorners(x, y, hs - 1);
+    const tileImgs = this.useTileImages && this._tilemapImg;
+    // Tighter spacing when tile images are on; classic gaps when off
+    const corners = hexCorners(x, y, tileImgs ? hs - 0.5 : hs - 1);
 
     // Road and river tiles use a grass background — the actual road strips and
     // water ribbons are drawn in dedicated layers on top.
@@ -915,34 +980,78 @@ export class Renderer {
         ? TILE_COLOR[TileType.GRASS]
         : (TILE_COLOR[tile.type] || TILE_COLOR[TileType.GRASS]);
 
-    ctx.beginPath();
-    ctx.moveTo(corners[0].x, corners[0].y);
-    for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
-    ctx.closePath();
-    ctx.fillStyle = color;
-    ctx.fill();
+    // Color fill — always drawn as base; skipped for buildings when tile
+    // images are active (dirt sprite covers it).
+    if (!(tile.type === TileType.BUILDING && tileImgs)) {
+      ctx.beginPath();
+      ctx.moveTo(corners[0].x, corners[0].y);
+      for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
+      ctx.closePath();
+      ctx.fillStyle = color;
+      ctx.fill();
+    }
 
-    // ── Building image from sprite sheet ──────────────────────────────────
-    // Terrain tile images are disabled for now (terrain uses colour fills).
-    if (tile.type === TileType.BUILDING) {
-      const rect = this._spriteRects?.get(tile.building);
-      if (rect && this._tilemapImg) {
+    // Hex outline — only in classic colour-fill mode
+    if (!tileImgs) {
+      ctx.beginPath();
+      ctx.moveTo(corners[0].x, corners[0].y);
+      for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
+      ctx.closePath();
+      ctx.strokeStyle = '#111418';
+      ctx.lineWidth   = 0.8;
+      ctx.stroke();
+    }
+
+    // ── Sprite image from tilemap ────────────────────────────────────────
+    const TERRAIN_SPRITES = {
+      [TileType.GRASS]: 1, [TileType.DIRT]: 1, [TileType.FOREST]: 1,
+      [TileType.ROAD]: 1, [TileType.RIVER]: 1, [TileType.BRIDGE]: 1,
+      [TileType.BUILDING]: 1,
+    };
+
+    // Helper: pick a terrain variant sprite id for a given base type
+    const pickVariant = (baseType) => {
+      const count = this._variantCounts?.get(baseType) ?? 0;
+      if (count > 0) {
+        const variant = ((col * 7 + row * 13 + col * row) % count) + 1;
+        return `${baseType}_${variant}`;
+      }
+      return baseType;
+    };
+
+    // Terrain sprites: only when tile images are enabled
+    if (TERRAIN_SPRITES[tile.type] && tileImgs) {
+      // Draw base terrain hex (clipped to hex shape)
+      const baseId = tile.type === TileType.BUILDING
+        ? pickVariant(TileType.DIRT)
+        : (tile.type === TileType.ROAD || tile.type === TileType.RIVER || tile.type === TileType.BRIDGE)
+          ? pickVariant(TileType.GRASS)
+          : pickVariant(tile.type);
+      const clipCorners = tile.type === TileType.BUILDING ? hexCorners(x, y, hs) : corners;
+      const baseRect = this._spriteRects?.get(baseId);
+      if (baseRect) {
         ctx.save();
         ctx.beginPath();
-        ctx.moveTo(corners[0].x, corners[0].y);
-        for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
+        ctx.moveTo(clipCorners[0].x, clipCorners[0].y);
+        for (let i = 1; i < 6; i++) ctx.lineTo(clipCorners[i].x, clipCorners[i].y);
         ctx.closePath();
         ctx.clip();
         ctx.drawImage(this._tilemapImg,
-          rect.x, rect.y, rect.size, rect.size,  // source rect in tilemap
-          x - hs, y - hs, hs * 2, hs * 2);       // destination on canvas
+          baseRect.x, baseRect.y, baseRect.size, baseRect.size,
+          x - hs, y - hs, hs * 2, hs * 2);
         ctx.restore();
       }
     }
 
-    ctx.strokeStyle = '#111418';
-    ctx.lineWidth   = 0.8;
-    ctx.stroke();
+    // Building image overlay — always drawn when tilemap is available
+    if (tile.type === TileType.BUILDING && this._tilemapImg) {
+      const bldgRect = this._spriteRects?.get(tile.building);
+      if (bldgRect) {
+        ctx.drawImage(this._tilemapImg,
+          bldgRect.x, bldgRect.y, bldgRect.size, bldgRect.size,
+          x - hs, y - hs, hs * 2, hs * 2);
+      }
+    }
 
     // Bridge tiles: only the water background is drawn here.
     // The water bezier and road strip are layered on top in _drawRiverLayer / _drawRoadLayer.
@@ -1001,14 +1110,14 @@ export class Renderer {
         ctx.font         = `${Math.floor(hs * 0.55)}px serif`;
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(BUILDING_ICON[tile.building] || '?', x, y - hs * 0.10);
+        this._shadowText(BUILDING_ICON[tile.building] || '?', x, y - hs * 0.10);
       }
 
       ctx.fillStyle    = 'rgba(255,248,230,0.92)';
       ctx.font         = `bold ${Math.max(7, Math.floor(hs * 0.25))}px "Georgia", serif`;
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(BUILDING_LABEL[tile.building] || tile.building, x, y + hs * 0.58);
+      this._shadowText(BUILDING_LABEL[tile.building] || tile.building, x, y + hs * 0.58);
     }
   }
 
@@ -1361,12 +1470,17 @@ export class Renderer {
     ctx.stroke();
   }
 
+  /** @deprecated Use _drawObjectiveSymbolAt instead */
   _drawObjectiveSymbol(col, row, label, state) {
+    const { x, y } = this._toCanvas(col, row);
+    const obj = state.witchObjectives.find(o => o.col === col && o.row === row);
+    this._drawObjectiveSymbolAt(x, y, label, state, obj);
+  }
+
+  _drawObjectiveSymbolAt(x, y, label, state, obj) {
     const ctx = this.ctx;
     const hs  = this.hexSize;
-    const { x, y } = this._toCanvas(col, row);
 
-    const obj  = state.witchObjectives.find(o => o.col === col && o.row === row);
     const ctrl = obj ? nodeController(obj, state.entities) : 'neutral';
     const nodeColor = obj?.color ?? 'rgba(180,0,255,0.7)';
 
@@ -1383,12 +1497,12 @@ export class Renderer {
     ctx.font         = `bold ${Math.floor(hs * 0.5)}px serif`;
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('⛧', x, y - hs * 0.15);
+    this._shadowText('⛧', x, y - hs * 0.15);
     ctx.shadowBlur = 0;
 
     ctx.fillStyle = nodeColor + 'cc';
     ctx.font      = `${Math.max(6, Math.floor(hs * 0.2))}px sans-serif`;
-    ctx.fillText(label, x, y + hs * 0.35);
+    this._shadowText(label, x, y + hs * 0.35);
   }
 
   _drawHighlight(col, row, color) {
@@ -1554,7 +1668,7 @@ export class Renderer {
         ctx.font         = `bold ${Math.floor(r * 1.1)}px serif`;
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(entityGlyph(entity.type), ex, ey + 1);
+        this._shadowText(entityGlyph(entity.type), ex, ey + 1);
       }
 
       if (entity.type === EntityType.HERO || entity.type === EntityType.WITCH ||
