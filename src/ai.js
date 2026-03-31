@@ -1546,7 +1546,7 @@ function delay(ms) {
 // Only entity positions and action budget are tracked; combat outcomes are
 // not simulated (dice unknown) — battles simply consume one budget slot.
 
-class PlanSimState {
+export class PlanSimState {
   constructor(realState, faction, playerId = null) {
     this.tiles            = realState.tiles;          // read-only reference
     this.phase            = realState.phase;
