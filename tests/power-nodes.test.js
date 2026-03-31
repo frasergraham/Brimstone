@@ -1,5 +1,5 @@
 // Tests for the redesigned 3-hex power node system.
-// Covers: nodeController, cluster structure, scoring, discovery, fortify restriction,
+// Covers: nodeController, cluster structure, scoring, discovery, fortify on nodes,
 //         proximity constraint, serialization, and AI targeting.
 
 import { describe, test } from 'node:test';
@@ -347,35 +347,32 @@ describe('updateNodeDiscovery', () => {
   });
 });
 
-// ── Fortify restriction ───────────────────────────────────────────────────────
+// ── Fortify on node hexes ────────────────────────────────────────────────────
 
-describe('Fortify restriction on node hexes', () => {
-  test('executeFortify fails on the center hex of a node', () => {
+describe('Fortify allowed on node hexes', () => {
+  test('executeFortify succeeds on the center hex of a node', () => {
     const state = new GameState(true, true);
     const obj = state.witchObjectives[0];
     state.hero.col = obj.hexes[0].col;
     state.hero.row = obj.hexes[0].row;
-    // Give hero wood to attempt fortify
     state.inventory.shared['wood'] = 5;
     const result = executeFortify(state, state.hero);
-    assert.equal(result.success, false, 'Fortify on center hex should fail');
-    assert.ok(result.log[0].includes('Power Node'), 'Error should mention Power Node');
+    assert.equal(result.success, true, 'Fortify on center hex should succeed');
   });
 
-  test('executeFortify fails on a satellite hex of a node', () => {
+  test('executeFortify succeeds on a satellite hex of a node', () => {
     const state = new GameState(true, true);
     const obj = state.witchObjectives[0];
-    // Find a satellite hex that differs from center
     const satellite = obj.hexes.find(h => h.col !== obj.col || h.row !== obj.row);
     if (!satellite) return; // degenerate cluster, skip
     state.hero.col = satellite.col;
     state.hero.row = satellite.row;
     state.inventory.shared['wood'] = 5;
     const result = executeFortify(state, state.hero);
-    assert.equal(result.success, false, 'Fortify on satellite hex should fail');
+    assert.equal(result.success, true, 'Fortify on satellite hex should succeed');
   });
 
-  test('getValidActions does not include FORTIFY on node hexes', () => {
+  test('getValidActions includes FORTIFY on node hexes', () => {
     const state = new GameState(true, true);
     const obj = state.witchObjectives[0];
     state.hero.col = obj.hexes[0].col;
@@ -383,7 +380,7 @@ describe('Fortify restriction on node hexes', () => {
     state.inventory.shared['wood'] = 5;
     const actions = getValidActions(state, state.hero);
     const hasFortify = actions.some(a => a.type === 'fortify');
-    assert.equal(hasFortify, false, 'FORTIFY should not be available on node hex');
+    assert.equal(hasFortify, true, 'FORTIFY should be available on node hex');
   });
 });
 
