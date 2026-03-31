@@ -35,6 +35,7 @@ import {
   getAllPlayers, getAllSaves, getSaveWithState,
 } from './server/admin.js';
 import { serializeState } from './server/state-sync.js';
+import { getGameModeConfig } from './server/game-mode-config.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT      = process.env.PORT || 3000;
@@ -63,6 +64,11 @@ app.get('/health', (_req, res) => {
     uptime:      Math.floor(process.uptime()),
     connections: clients.size,
   });
+});
+
+// REST: client configuration (game mode visibility, etc.)
+app.get('/api/config', (_req, res) => {
+  res.json({ modes: getGameModeConfig() });
 });
 
 // REST: leaderboard (also exposed over WS, but handy for embedding)

@@ -99,6 +99,8 @@ canvas { touch-action: pan-x pan-y; }
   transition: background 0.15s, border-color 0.15s;
 }
 .setup-btn:hover       { background: #1e2438; border-color: #4a3870; }
+.setup-btn.mode-disabled,
+.setup-btn.mode-disabled:hover { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
 .setup-btn.primary     { border-color: var(--day); color: var(--day); }
 .setup-btn.primary:hover { background: #1e1a10; }
 
