@@ -2051,6 +2051,41 @@ function _fetchAsyncGames() {
     });
 }
 
+function _deleteAsyncGame(roomId) {
+  const dialog = document.createElement('div');
+  dialog.className = 'game-over-overlay';
+  dialog.innerHTML = `
+    <div class="game-over-box" style="max-width:360px">
+      <h2 style="margin-bottom:0.5em">Delete Game</h2>
+      <p style="margin-bottom:1.2em">Delete this game? This cannot be undone.</p>
+      <div style="display:flex;gap:0.5em;justify-content:center">
+        <button class="setup-btn secondary" id="del-cancel-btn">Cancel</button>
+        <button class="setup-btn primary" id="del-confirm-btn" style="background:var(--danger,#aa4444)">Delete</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(dialog);
+
+  dialog.querySelector('#del-cancel-btn').addEventListener('click', () => dialog.remove());
+  dialog.querySelector('#del-confirm-btn').addEventListener('click', () => {
+    const session = loadSession();
+    if (!session) { dialog.remove(); return; }
+    const base = window.BRIMSTONE_SERVER || '';
+    fetch(`${base}/api/async-games/${encodeURIComponent(roomId)}?token=${encodeURIComponent(session.token)}`, {
+      method: 'DELETE',
+    })
+      .then(r => r.json())
+      .then(res => {
+        dialog.remove();
+        if (res.ok) {
+          _fetchAsyncGames();
+          _fetchMainMenuAsyncGames();
+        }
+      })
+      .catch(() => dialog.remove());
+  });
+}
+
 function _renderAsyncGames(games) {
   const list = document.getElementById('async-games-list');
 
@@ -2115,6 +2150,14 @@ function _renderAsyncGames(games) {
       const btn = entry.querySelector('.async-play-btn, .async-view-btn');
       btn?.addEventListener('click', () => _openAsyncGame(g.room_id));
     }
+
+    // Add delete button to every entry
+    const delBtn = document.createElement('button');
+    delBtn.className = 'setup-btn secondary async-del-btn';
+    delBtn.textContent = '✕';
+    delBtn.title = 'Delete game';
+    delBtn.addEventListener('click', (e) => { e.stopPropagation(); _deleteAsyncGame(g.room_id); });
+    entry.appendChild(delBtn);
 
     list.appendChild(entry);
   }

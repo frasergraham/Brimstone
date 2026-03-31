@@ -2344,6 +2344,17 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   font-size: 0.85rem;
 }
 
+.async-del-btn {
+  padding: 0.35rem 0.55rem !important;
+  font-size: 0.85rem;
+  opacity: 0.5;
+  transition: opacity 0.15s;
+}
+.async-del-btn:hover {
+  opacity: 1;
+  color: var(--danger, #aa4444);
+}
+
 /* ── Version badges ────────────────────────────────────────────── */
 .version-badge {
   position: absolute;
