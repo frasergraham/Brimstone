@@ -211,10 +211,24 @@ export class UIController {
     this._el('step-continue-bar')?.addEventListener('click', () => this._clearStepContinue());
 
     // Close speed popup on outside click
-    document.addEventListener('click', () => this._closeSpeedPopup());
+    document.addEventListener('click', () => {
+      this._closeSpeedPopup();
+      this._closeMapOptionsPopup();
+    });
 
     // Chronicle toggle in map controls area
     this._el('chronicle-toggle')?.addEventListener('click', () => this._cycleChronicle());
+
+    // Map options toggle
+    this._el('map-options-toggle')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._toggleMapOptionsPopup();
+    });
+    this._el('map-options-popup')?.addEventListener('click', (e) => e.stopPropagation());
+    this._el('opt-tile-images')?.addEventListener('change', (e) => {
+      this.renderer.useTileImages = e.target.checked;
+      this.renderer.draw();
+    });
 
     // Touch: tap, drag-to-pan, pinch-to-zoom (mobile)
     this.canvas.addEventListener('touchstart', e => {
@@ -1878,6 +1892,18 @@ export class UIController {
 
   _closeSpeedPopup() {
     const popup = this._el('speed-popup');
+    if (popup) popup.style.display = 'none';
+  }
+
+  _toggleMapOptionsPopup() {
+    const popup = this._el('map-options-popup');
+    if (!popup) return;
+    const isOpen = popup.style.display !== 'none';
+    popup.style.display = isOpen ? 'none' : 'flex';
+  }
+
+  _closeMapOptionsPopup() {
+    const popup = this._el('map-options-popup');
     if (popup) popup.style.display = 'none';
   }
 

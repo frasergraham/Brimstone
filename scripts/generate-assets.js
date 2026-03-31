@@ -14,6 +14,7 @@
  *   --category <cat>       Only process: tile | building | unit
  *   --id <id>              Generate a single asset by id (e.g. --id grass)
  *   --stitch-only          Skip generation, stitch already-downloaded images
+ *   --remove-bg-only       Re-run background removal on existing building images
  *   --output <path>        Tilemap output path (default: assets/tilemap.png)
  *
  * Environment variables:
@@ -58,9 +59,10 @@ function argVal(name)    { const i = argv.indexOf(name); return i !== -1 ? argv[
 
 const DRY_RUN     = flag('--dry-run', '-d');
 const TEST_MODE   = flag('--test',    '-t');
-const STITCH_ONLY = flag('--stitch-only');
-const FILTER_CAT  = argVal('--category');
-const FILTER_ID   = argVal('--id');
+const STITCH_ONLY    = flag('--stitch-only');
+const REMOVE_BG_ONLY = flag('--remove-bg-only');
+const FILTER_CAT     = argVal('--category');
+const FILTER_ID      = argVal('--id');
 const OUT_PATH    = argVal('--output') ?? path.join(ROOT, 'assets', 'tilemap.png');
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -216,6 +218,28 @@ async function downloadImage(url, destPath) {
   fs.writeFileSync(destPath, Buffer.from(await res.arrayBuffer()));
 }
 
+const REMOVE_BG_MODEL = 'model_bria-remove-background';
+
+async function removeBackground(assetId, auth) {
+  const res = await fetch(
+    `${apiConfig.baseUrl}/generate/custom/${REMOVE_BG_MODEL}`,
+    {
+      method:  'POST',
+      headers: { Authorization: auth, 'Content-Type': 'application/json', Accept: 'application/json' },
+      body:    JSON.stringify({ image: assetId }),
+    }
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Remove-bg submit failed ${res.status}: ${text}`);
+  }
+  const data = await res.json();
+  const job = await pollJob(data.job.jobId, auth);
+  const resultIds = job.metadata?.assetIds ?? [];
+  if (!resultIds.length) throw new Error('Remove-bg returned no assets');
+  return resultIds[0];
+}
+
 async function generateAsset(asset, auth) {
   const dest = path.join(OUT_DIR, `${asset.id}.png`);
 
@@ -232,7 +256,15 @@ async function generateAsset(asset, auth) {
   const assetIds = job.metadata?.assetIds ?? [];
   if (!assetIds.length) throw new Error(`No assets returned for ${asset.id}`);
 
-  const imageUrl = await fetchAssetUrl(assetIds[0], auth);
+  let finalAssetId = assetIds[0];
+
+  // Remove background for building assets
+  if (asset.category === 'building') {
+    console.log(`  ✂ removing background…`);
+    finalAssetId = await removeBackground(finalAssetId, auth);
+  }
+
+  const imageUrl = await fetchAssetUrl(finalAssetId, auth);
   await downloadImage(imageUrl, dest);
   console.log(`  ✔ saved  ${path.relative(ROOT, dest)}`);
   return dest;
@@ -254,7 +286,7 @@ async function stitchTilemap(assets) {
   const GAP     = 6;
   const COLS    = 7;
   const LABEL_H = 30;
-  const BG      = { r: 13, g: 17, b: 23, alpha: 1 };  // #0d1117
+  const BG      = { r: 0, g: 0, b: 0, alpha: 0 };  // transparent
 
   const groups = [
     { label: 'Tiles',     items: assets.filter(a => a.category === 'tile')     },
@@ -305,7 +337,11 @@ async function stitchTilemap(assets) {
         continue;
       }
 
-      const cell = await sharp(imgPath).resize(CELL, CELL, { fit: 'contain', background: BG }).png().toBuffer();
+      const cell = await sharp(imgPath)
+        .ensureAlpha()
+        .resize(CELL, CELL, { fit: 'cover' })
+        .png()
+        .toBuffer();
       composites.push({ input: cell, top: cellY, left: x });
     }
 
@@ -344,6 +380,47 @@ async function main() {
       console.log(`  prompt: ${p.prompt.slice(0, 100)}…`);
       console.log();
     }
+    return;
+  }
+
+  // ── Remove background only ────────────────────────────────────────────────
+  if (REMOVE_BG_ONLY) {
+    const auth = makeAuthHeader();
+    const buildings = assets.filter(a => a.category === 'building');
+    console.log(`\nRemoving backgrounds from ${buildings.length} building assets…`);
+    for (const asset of buildings) {
+      const imgPath = path.join(OUT_DIR, `${asset.id}.png`);
+      if (!fs.existsSync(imgPath)) {
+        console.log(`  ⊘ skip   ${asset.id}.png  (not found)`);
+        continue;
+      }
+      // Upload the existing image as a data URL
+      const dataUrl = 'data:image/png;base64,' + fs.readFileSync(imgPath).toString('base64');
+      console.log(`  ✂ ${asset.id}…`);
+      const res = await fetch(
+        `${apiConfig.baseUrl}/generate/custom/${REMOVE_BG_MODEL}`,
+        {
+          method:  'POST',
+          headers: { Authorization: auth, 'Content-Type': 'application/json', Accept: 'application/json' },
+          body:    JSON.stringify({ image: dataUrl }),
+        }
+      );
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        console.error(`  ✗ failed ${res.status}: ${text}`);
+        continue;
+      }
+      const data = await res.json();
+      const job = await pollJob(data.job.jobId, auth);
+      const resultIds = job.metadata?.assetIds ?? [];
+      if (!resultIds.length) { console.error(`  ✗ no result for ${asset.id}`); continue; }
+      const imageUrl = await fetchAssetUrl(resultIds[0], auth);
+      await downloadImage(imageUrl, imgPath);
+      console.log(`  ✔ saved  ${asset.id}.png`);
+    }
+    // Stitch after removing backgrounds
+    console.log(`\nStitching ${config.assets.length} assets into tilemap…`);
+    await stitchTilemap(config.assets);
     return;
   }
 

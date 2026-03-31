@@ -13,24 +13,120 @@
   },
   "assets": [
     {
-      "id": "grass",
-      "name": "Grass",
+      "id": "grass_1",
+      "name": "Grass 1",
       "category": "tile",
       "parameters": {
         "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing overgrown meadow grass, pale frost-touched blades, dark loamy earth between tufts, autumn yellows and deep greens. Transparent background, tileable, nothing overlapping the edges, no shadows."
       }
     },
     {
-      "id": "forest",
-      "name": "Forest",
+      "id": "grass_2",
+      "name": "Grass 2",
+      "category": "tile",
+      "parameters": {
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing overgrown meadow grass, pale frost-touched blades, dark loamy earth between tufts, autumn yellows and deep greens. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "grass_3",
+      "name": "Grass 3",
+      "category": "tile",
+      "parameters": {
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing overgrown meadow grass, pale frost-touched blades, dark loamy earth between tufts, autumn yellows and deep greens. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "grass_4",
+      "name": "Grass 4",
+      "category": "tile",
+      "parameters": {
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing overgrown meadow grass, pale frost-touched blades, dark loamy earth between tufts, autumn yellows and deep greens. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "grass_5",
+      "name": "Grass 5",
+      "category": "tile",
+      "parameters": {
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing overgrown meadow grass, pale frost-touched blades, dark loamy earth between tufts, autumn yellows and deep greens. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "forest_1",
+      "name": "Forest 1",
       "category": "tile",
       "parameters": {
         "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing dense dark forest, ancient gnarled oak and pine canopy seen from above, deep shadows, fallen leaves, foreboding. Transparent background, tileable, nothing overlapping the edges, no shadows."
       }
     },
     {
-      "id": "dirt",
-      "name": "Dirt",
+      "id": "forest_2",
+      "name": "Forest 2",
+      "category": "tile",
+      "parameters": {
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing dense dark forest, ancient gnarled oak and pine canopy seen from above, deep shadows, fallen leaves, foreboding. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "forest_3",
+      "name": "Forest 3",
+      "category": "tile",
+      "parameters": {
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing dense dark forest, ancient gnarled oak and pine canopy seen from above, deep shadows, fallen leaves, foreboding. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "forest_4",
+      "name": "Forest 4",
+      "category": "tile",
+      "parameters": {
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing dense dark forest, ancient gnarled oak and pine canopy seen from above, deep shadows, fallen leaves, foreboding. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "forest_5",
+      "name": "Forest 5",
+      "category": "tile",
+      "parameters": {
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing dense dark forest, ancient gnarled oak and pine canopy seen from above, deep shadows, fallen leaves, foreboding. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "dirt_1",
+      "name": "Dirt 1",
+      "category": "tile",
+      "parameters": {
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing bare earth, churned gravel and mud, wagon-rut impressions, scattered pebbles, cold grey-brown soil. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "dirt_2",
+      "name": "Dirt 2",
+      "category": "tile",
+      "parameters": {
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing bare earth, churned gravel and mud, wagon-rut impressions, scattered pebbles, cold grey-brown soil. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "dirt_3",
+      "name": "Dirt 3",
+      "category": "tile",
+      "parameters": {
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing bare earth, churned gravel and mud, wagon-rut impressions, scattered pebbles, cold grey-brown soil. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "dirt_4",
+      "name": "Dirt 4",
+      "category": "tile",
+      "parameters": {
+        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing bare earth, churned gravel and mud, wagon-rut impressions, scattered pebbles, cold grey-brown soil. Transparent background, tileable, nothing overlapping the edges, no shadows."
+      }
+    },
+    {
+      "id": "dirt_5",
+      "name": "Dirt 5",
       "category": "tile",
       "parameters": {
         "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing bare earth, churned gravel and mud, wagon-rut impressions, scattered pebbles, cold grey-brown soil. Transparent background, tileable, nothing overlapping the edges, no shadows."
@@ -64,117 +160,117 @@
       "id": "town_hall",
       "name": "Town Hall",
       "category": "building",
-      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "referenceAssetId": "asset_7gpJm2ERWZeA48vYiH5c4ssM",
       "parameters": {
-        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a colonial New England town hall, imposing limestone facade, tall arched windows, worn steps, candle glow behind frosted glass. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down view of a colonial New England town hall, imposing limestone facade, tall arched windows, worn steps, candle glow behind frosted glass. Entire building fully visible and centered within the frame, nothing cropped or cut off at edges. Plain white background, no ground, no shadows, isolated building only."
       }
     },
     {
       "id": "church",
       "name": "Church",
       "category": "building",
-      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "referenceAssetId": "asset_7gpJm2ERWZeA48vYiH5c4ssM",
       "parameters": {
-        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a Puritan church, white clapboard darkened by age, tall narrow steeple, leaded windows, iron-hinged door, lantern at entrance. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down view of a Puritan church, white clapboard darkened by age, tall narrow steeple, leaded windows, iron-hinged door, lantern at entrance. Entire building fully visible and centered within the frame, nothing cropped or cut off at edges. Plain white background, no ground, no shadows, isolated building only."
       }
     },
     {
       "id": "inn",
       "name": "Inn",
       "category": "building",
-      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "referenceAssetId": "asset_7gpJm2ERWZeA48vYiH5c4ssM",
       "parameters": {
-        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a colonial inn and tavern, warm amber candlelight from small windows, timber-framed with a low thatched roof, wooden sign, firelight glow. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down view of a colonial inn and tavern, warm amber candlelight from small windows, timber-framed with a low thatched roof, wooden sign, firelight glow. Entire building fully visible and centered within the frame, nothing cropped or cut off at edges. Plain white background, no ground, no shadows, isolated building only."
       }
     },
     {
       "id": "blacksmith",
       "name": "Blacksmith",
       "category": "building",
-      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "referenceAssetId": "asset_7gpJm2ERWZeA48vYiH5c4ssM",
       "parameters": {
-        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a colonial blacksmith forge, sooty stone walls, forge fire glowing orange within, iron tools hanging beside door, smoke from chimney. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down view of a colonial blacksmith forge, sooty stone walls, forge fire glowing orange within, iron tools hanging beside door, smoke from chimney. Entire building fully visible and centered within the frame, nothing cropped or cut off at edges. Plain white background, no ground, no shadows, isolated building only."
       }
     },
     {
       "id": "graveyard",
       "name": "Graveyard",
       "category": "building",
-      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "referenceAssetId": "asset_7gpJm2ERWZeA48vYiH5c4ssM",
       "parameters": {
-        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a fog-shrouded colonial graveyard, crooked weathered headstones, half-collapsed iron fence, dark mossy stone, dead grass, freshly disturbed earth. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down view of a fog-shrouded colonial graveyard, crooked weathered headstones, half-collapsed iron fence, dark mossy stone, dead grass, freshly disturbed earth. Plain white background, no ground, no shadows, isolated scene only."
       }
     },
     {
       "id": "mill",
       "name": "Mill",
       "category": "building",
-      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "referenceAssetId": "asset_7gpJm2ERWZeA48vYiH5c4ssM",
       "parameters": {
-        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a colonial grain mill, large wooden water wheel, golden straw scattered around entrance, weathered timber structure. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down view of a colonial grain mill, large wooden water wheel, golden straw scattered around entrance, weathered timber structure. Entire building fully visible and centered within the frame, nothing cropped or cut off at edges. Plain white background, no ground, no shadows, isolated building only."
       }
     },
     {
       "id": "dock",
       "name": "Dock",
       "category": "building",
-      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "referenceAssetId": "asset_7gpJm2ERWZeA48vYiH5c4ssM",
       "parameters": {
-        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a colonial river dock, rough-hewn wooden pier over dark water, rope coils, barrels and crates, moored flat-bottomed boat. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down view of a colonial river dock, rough-hewn wooden pier, rope coils, barrels and crates, moored flat-bottomed boat. Entire building fully visible and centered within the frame, nothing cropped or cut off at edges. Plain white background, no ground, no shadows, isolated building only."
       }
     },
     {
       "id": "house",
       "name": "House",
       "category": "building",
-      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "referenceAssetId": "asset_7gpJm2ERWZeA48vYiH5c4ssM",
       "parameters": {
-        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a colonial New England dwelling, timber-frame construction, low shake-shingle roof, shuttered windows, stone chimney, modest and isolated. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down view of a colonial New England dwelling, timber-frame construction, low shake-shingle roof, shuttered windows, stone chimney, modest and isolated. Entire building fully visible and centered within the frame, nothing cropped or cut off at edges. Plain white background, no ground, no shadows, isolated building only."
       }
     },
     {
       "id": "barn",
       "name": "Barn",
       "category": "building",
-      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "referenceAssetId": "asset_7gpJm2ERWZeA48vYiH5c4ssM",
       "parameters": {
-        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a colonial barn, large weathered timber structure, red-brown paint peeling, hay visible through open loft doors, broken cart wheel. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down view of a colonial barn, large weathered timber structure, red-brown paint peeling, hay visible through open loft doors, broken cart wheel. Entire building fully visible and centered within the frame, nothing cropped or cut off at edges. Plain white background, no ground, no shadows, isolated building only."
       }
     },
     {
       "id": "watchtower",
       "name": "Watchtower",
       "category": "building",
-      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "referenceAssetId": "asset_7gpJm2ERWZeA48vYiH5c4ssM",
       "parameters": {
-        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a colonial stone watchtower, dark ashlar construction, torch burning at top, arrow slits in thick walls, military and foreboding. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down view of a colonial stone watchtower, dark ashlar construction, torch burning at top, arrow slits in thick walls, military and foreboding. Entire building fully visible and centered within the frame, nothing cropped or cut off at edges. Plain white background, no ground, no shadows, isolated building only."
       }
     },
     {
       "id": "apothecary",
       "name": "Apothecary",
       "category": "building",
-      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "referenceAssetId": "asset_7gpJm2ERWZeA48vYiH5c4ssM",
       "parameters": {
-        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a colonial apothecary, herb bundles hanging from eaves, small flasks visible through wavy glass windows, purple-grey stone walls, mortar and pestle by door. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down view of a colonial apothecary, herb bundles hanging from eaves, small flasks visible through wavy glass windows, purple-grey stone walls, mortar and pestle by door. Entire building fully visible and centered within the frame, nothing cropped or cut off at edges. Plain white background, no ground, no shadows, isolated building only."
       }
     },
     {
       "id": "storehouse",
       "name": "Storehouse",
       "category": "building",
-      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "referenceAssetId": "asset_7gpJm2ERWZeA48vYiH5c4ssM",
       "parameters": {
-        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a colonial storehouse, heavy wooden double doors padlocked shut, tan stone walls, supply barrels and crates stacked outside. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down view of a colonial storehouse, heavy wooden double doors padlocked shut, tan stone walls, supply barrels and crates stacked outside. Entire building fully visible and centered within the frame, nothing cropped or cut off at edges. Plain white background, no ground, no shadows, isolated building only."
       }
     },
     {
       "id": "stable",
       "name": "Stable",
       "category": "building",
-      "referenceAssetId": "asset_MYhqRhcp3wFxW2gdkronjX84",
+      "referenceAssetId": "asset_7gpJm2ERWZeA48vYiH5c4ssM",
       "parameters": {
-        "prompt": "A top-down single pointy-top hex tile (the topmost point is a vertex, not a flat edge) showing a colonial stable, low saddle-brown timber building, straw spilling from entrance, iron hitching post, horseshoe above door. Transparent background, tileable, nothing overlapping the edges, no shadows."
+        "prompt": "A top-down view of a colonial stable, low saddle-brown timber building, straw spilling from entrance, iron hitching post, horseshoe above door. Entire building fully visible and centered within the frame, nothing cropped or cut off at edges. Plain white background, no ground, no shadows, isolated building only."
       }
     },
     {
@@ -183,7 +279,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A colonial New England hero warrior, rugged and weathered, layered leather and wool, battered sword at hip, resolute expression beneath wide-brimmed Puritan hat. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "witch",
@@ -191,7 +288,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A Salem witch, dark flowing robes, silver and bone jewellery, eyes glowing faintly with unnatural light, wisps of shadow and violet smoke. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "zombie",
@@ -199,7 +297,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A colonial-era zombie, tattered Puritan burial clothes, pale grey-green decomposing flesh, hollow milky eyes, earth clinging to its form, reaching clawed hands. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "minion",
@@ -207,7 +306,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A witch's bound minion, hunched shadowy figure in tattered rags, face obscured beneath a hood, clutches crude iron blade, bound by dark sigil-marked ropes. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "wood_golem",
@@ -215,7 +315,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A massive wood golem, constructed from twisted oak, bark-covered limbs, glowing amber runes carved into chest, branches forming crude fingers, moss and vines through joints. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "iron_golem",
@@ -223,7 +324,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A towering iron golem, forged from salvaged colonial metalwork, dark corroded plates riveted together, sigils branded into iron, glowing violet cracks at joints. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "survivor_innkeeper",
@@ -231,7 +333,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A stocky colonial innkeeper, heavy apron over coarse linen, sleeves rolled up, carries a wood-splitting axe, tired but defiant expression. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "survivor_nurse",
@@ -239,7 +342,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A colonial nurse, plain grey dress and white apron stained with salve, carries a medicine satchel, calm determined eyes, healing herbs tucked into belt. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "survivor_blacksmith",
@@ -247,7 +351,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A massive colonial blacksmith, soot-darkened leather apron, enormous arms, carries a war hammer, scars from forge sparks, grim and resolute. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "survivor_herbalist",
@@ -255,7 +360,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A young colonial herbalist, hooded cloak with dried herbs and wildflowers, wicker basket of plants, sharp intelligent eyes. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "survivor_militia",
@@ -263,7 +369,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A weathered colonial militia sergeant, worn buff coat and leather crossbelt, carries musket and short sword, commanding posture, battle-hardened face beneath tricorn hat. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "survivor_priest",
@@ -271,7 +378,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "An aged Puritan parish priest, long black cassock, silver cross at chest, carries leather-bound Bible, iron resolve in tired eyes. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "survivor_baker",
@@ -279,7 +387,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A stout colonial baker, flour-dusted apron and rolled sleeves, carries a rolling pin repurposed as a club, cheerful but fierce expression. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "survivor_trapper",
@@ -287,7 +396,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A lean colonial trapper, fur-trimmed frontier coat, carries flintlock rifle, animal pelts at belt, sharp woodsman's eyes. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "survivor_schoolteacher",
@@ -295,7 +405,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A composed colonial schoolteacher, modest dark dress with white collar, carries journal, perceptive eyes behind small spectacles, ink-stained fingers. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "survivor_gravedigger",
@@ -303,7 +414,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A gaunt colonial gravedigger, mud-caked boots and worn overcoat, carries long-handled shovel, hollow eyes, unafraid and stoic. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "survivor_midwife",
@@ -311,7 +423,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A capable colonial midwife, simple linen dress and cloak, carries satchel of medical supplies, warm steady hands, calm authority. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "survivor_farmhand",
@@ -319,7 +432,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A young colonial farmhand, rough spun shirt and suspenders, carries pitchfork, youthful face set with determination, broad shoulders. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "survivor_tanner",
@@ -327,7 +441,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A sturdy colonial tanner woman, leather-stained apron over wool dress, calloused hands, carries a curved scraping knife, weathered but unbowed expression. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "survivor_chandler",
@@ -335,7 +450,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A thin colonial chandler, wax-spattered waistcoat, carries a bundle of tallow candles, sharp observant eyes, lantern hanging from belt. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "survivor_goodwife",
@@ -343,7 +459,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A resolute colonial goodwife, simple homespun dress and bonnet, strong weathered hands, carries an iron ladle like a weapon, fierce maternal determination. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "survivor_constable",
@@ -351,7 +468,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A stern colonial constable, dark coat with brass buttons, leather baldric, carries a heavy wooden truncheon, square jaw and cold authoritative eyes. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "survivor_weaver",
@@ -359,7 +477,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A nimble colonial weaver woman, grey shawl over faded blue dress, deft hands holding shuttle and thread, quick intelligent eyes behind wisps of hair. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "survivor_carpenter",
@@ -367,7 +486,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A broad-shouldered colonial carpenter, sawdust in his beard, rolled sleeves revealing scarred forearms, carries a heavy mallet and chisel, steady craftsman's gaze. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "survivor_apothecary",
@@ -375,7 +495,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A young colonial apothecary's daughter, dark hair under linen cap, carries a mortar and pestle, pouch of dried herbs at hip, thoughtful sorrowful eyes. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     },
     {
       "id": "survivor_fisherman",
@@ -383,7 +504,8 @@
       "category": "unit",
       "parameters": {
         "prompt": "A salt-crusted colonial fisherman, oilskin coat and heavy boots, carries a gaff hook, rope-burned hands, wind-scoured face with deep-set determined eyes. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
-      }
+      },
+      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
     }
   ]
 }

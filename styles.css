@@ -2957,6 +2957,26 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   min-width: 190px;
   box-shadow: 0 4px 16px rgba(0,0,0,0.6);
 }
+#map-options-popup {
+  position: absolute;
+  bottom: 0;
+  left: 44px;
+  min-width: 140px;
+}
+.map-option-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.5rem;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.map-option-row:hover { background: var(--bg-section); border-radius: 4px; }
+.map-option-row input[type="checkbox"] {
+  accent-color: var(--gold, #c8a84b);
+}
 .speed-option {
   display: grid;
   grid-template-columns: 1.4rem 1fr;

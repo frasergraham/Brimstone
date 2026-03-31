@@ -788,6 +788,14 @@
           <button id="zoom-me"  class="zoom-btn" title="Focus on my units">⊙</button>
           <button id="speed-toggle" class="zoom-btn" title="Battle speed">⚡</button>
           <button id="chronicle-toggle" class="zoom-btn" title="Toggle chronicle">📜</button>
+          <button id="map-options-toggle" class="zoom-btn" title="Map options">⚙</button>
+          <!-- Map options popup -->
+          <div id="map-options-popup" class="speed-popup" style="display:none">
+            <label class="map-option-row">
+              <input type="checkbox" id="opt-tile-images" checked>
+              <span>Tile images</span>
+            </label>
+          </div>
           <!-- Speed mode picker popup -->
           <div id="speed-popup" class="speed-popup" style="display:none">
             <button class="speed-option" data-mode="step">
