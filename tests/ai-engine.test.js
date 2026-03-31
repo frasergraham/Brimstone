@@ -14,7 +14,14 @@ import {
   scoreGoals,
   allocateBudget,
   Goal,
+  estimateCombat,
+  genDefendWitch,
+  genBuildArmy,
+  genControlNodes,
+  genKillHero,
+  genGatherResources,
 } from '../src/ai-engine.js';
+import { PlanActionType } from '../src/planner.js';
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -428,5 +435,346 @@ describe('allocateBudget', () => {
     const result = allocateBudget(scores, 10);
     assert.ok(result[Goal.KILL_HERO] > result[Goal.CONTROL_NODES],
       `KILL_HERO (${result[Goal.KILL_HERO]}) should get more than CONTROL_NODES (${result[Goal.CONTROL_NODES]})`);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Phase 2: Tactic Generators
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── estimateCombat ──────────────────────────────────────────────────────────
+
+describe('estimateCombat', () => {
+  test('returns favorability and classification', () => {
+    const attacker = makeEntity({ id: 'w1', attack: 2, defense: 2, owner: 'witch' });
+    const defender = makeEntity({ id: 'h1', attack: 3, defense: 2, owner: 'hero', col: 1, row: 0 });
+    const board = makeBoard({ minions: [], visibleHeroes: [] });
+    const result = estimateCombat(attacker, defender, board);
+    assert.equal(typeof result.favorability, 'number');
+    assert.ok(['overwhelming', 'favorable', 'unfavorable', 'suicidal'].includes(result.classification));
+  });
+
+  test('night bonus improves witch attacker favorability', () => {
+    const attacker = makeEntity({ id: 'w1', attack: 2, owner: 'witch' });
+    const defender = makeEntity({ id: 'h1', defense: 2, owner: 'hero', col: 1, row: 0 });
+    const dayResult = estimateCombat(attacker, defender, makeBoard({ isNight: false, minions: [], visibleHeroes: [] }));
+    const nightResult = estimateCombat(attacker, defender, makeBoard({ isNight: true, minions: [], visibleHeroes: [] }));
+    assert.ok(nightResult.favorability > dayResult.favorability);
+  });
+
+  test('gang-up allies improve favorability', () => {
+    const attacker = makeEntity({ id: 'w1', attack: 2, owner: 'witch', col: 0, row: 0 });
+    const defender = makeEntity({ id: 'h1', defense: 2, owner: 'hero', col: 1, row: 0 });
+    const ally = makeEntity({ id: 'm1', type: EntityType.MINION, attack: 1, owner: 'witch', col: 1, row: 1 });
+    const noAllies = estimateCombat(attacker, defender, makeBoard({ minions: [], visibleHeroes: [] }));
+    const withAllies = estimateCombat(attacker, defender, makeBoard({ minions: [ally], visibleHeroes: [] }));
+    assert.ok(withAllies.favorability > noAllies.favorability);
+  });
+
+  test('suicidal classification for very unfavorable fights', () => {
+    const attacker = makeEntity({ id: 'w1', attack: 0, defense: 0, owner: 'witch' });
+    const defender = makeEntity({ id: 'h1', attack: 5, defense: 5, owner: 'hero', col: 1, row: 0 });
+    const result = estimateCombat(attacker, defender, makeBoard({ minions: [], visibleHeroes: [] }));
+    assert.equal(result.classification, 'suicidal');
+  });
+});
+
+// ── genDefendWitch ──────────────────────────────────────────────────────────
+
+describe('genDefendWitch', () => {
+  test('produces USE_ITEM herbs when witch is injured', () => {
+    const witch = makeEntity({ id: 'witch1', hp: 5, maxHp: 10, items: { [ResourceType.HERBS]: 1 } });
+    const hero = makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 4, row: 4, hp: 8, maxHp: 8 });
+    const sim = makeSim({ entities: [witch, hero] });
+    const board = assessBoard(sim);
+    const actions = genDefendWitch(sim, board, 2);
+    const herbAction = actions.find(a => a.type === PlanActionType.USE_ITEM);
+    assert.ok(herbAction, 'should emit USE_ITEM for herbs');
+    assert.equal(herbAction.item, ResourceType.HERBS);
+  });
+
+  test('flees when witch HP critical', () => {
+    const witch = makeEntity({ id: 'witch1', hp: 2, maxHp: 10, col: 2, row: 2 });
+    const hero = makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 3, row: 2, hp: 8, maxHp: 8 });
+    const sim = makeSim({ entities: [witch, hero] });
+    const board = assessBoard(sim);
+    const actions = genDefendWitch(sim, board, 2);
+    const fleeAction = actions.find(a => a.type === PlanActionType.MOVE && a.entityId === 'witch1');
+    assert.ok(fleeAction, 'should emit flee MOVE');
+    // Should move away from hero (hero at col 3, witch at col 2, so flee toward lower col)
+    assert.ok(fleeAction.toCol <= 2 || fleeAction.toRow !== 2,
+      'flee should move away from hero');
+  });
+
+  test('returns empty actions with 0 budget', () => {
+    const sim = makeSim();
+    const board = assessBoard(sim);
+    const actions = genDefendWitch(sim, board, 0);
+    assert.equal(actions.length, 0);
+  });
+
+  test('interposes minion when hero is close', () => {
+    const witch = makeEntity({ id: 'witch1', hp: 8, maxHp: 10, col: 0, row: 0 });
+    const minion = makeEntity({ id: 'm1', type: EntityType.MINION, owner: 'witch', col: 3, row: 3, hp: 2, maxHp: 2 });
+    const hero = makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 1, row: 1, hp: 8, maxHp: 8 });
+    const sim = makeSim({ entities: [witch, minion, hero] });
+    const board = assessBoard(sim);
+    const actions = genDefendWitch(sim, board, 2);
+    const minionMove = actions.find(a => a.type === PlanActionType.MOVE && a.entityId === 'm1');
+    assert.ok(minionMove, 'should move minion toward witch to interpose');
+  });
+});
+
+// ── genBuildArmy ────────────────────────────────────────────────────────────
+
+describe('genBuildArmy', () => {
+  test('produces SUMMON actions when resources available', () => {
+    const sim = makeSim({ inventory: {
+      witch: { [ResourceType.METAL]: 2, [ResourceType.WOOD]: 2 },
+      hero: {},
+    }});
+    const board = assessBoard(sim);
+    const actions = genBuildArmy(sim, board, 2);
+    assert.ok(actions.length > 0, 'should produce at least one summon');
+    assert.ok(actions.every(a => a.type === PlanActionType.SUMMON), 'all actions should be SUMMON');
+  });
+
+  test('respects resource constraints (no overdraw)', () => {
+    const sim = makeSim({ inventory: {
+      witch: { [ResourceType.WOOD]: 2 },
+      hero: {},
+    }});
+    const board = assessBoard(sim);
+    const actions = genBuildArmy(sim, board, 5);
+    // Only 2 wood = only 1 summon possible
+    assert.equal(actions.length, 1);
+  });
+
+  test('returns empty when cannot afford summon', () => {
+    const sim = makeSim({ inventory: {
+      witch: { [ResourceType.HERBS]: 1 },
+      hero: {},
+    }});
+    const board = assessBoard(sim);
+    const actions = genBuildArmy(sim, board, 3);
+    assert.equal(actions.length, 0);
+  });
+
+  test('respects army cap', () => {
+    // Day phase has cap of 5, create 5 existing minions
+    const entities = [
+      makeEntity({ id: 'witch1', col: 0, row: 0 }),
+      ...Array.from({ length: 5 }, (_, i) =>
+        makeEntity({ id: `m${i}`, type: EntityType.MINION, owner: 'witch', col: i + 1, row: 0, hp: 2, maxHp: 2 })
+      ),
+      makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 4, row: 4, hp: 8, maxHp: 8 }),
+    ];
+    const sim = makeSim({
+      entities,
+      phase: Phase.DAY,
+      inventory: { witch: { [ResourceType.WOOD]: 4 }, hero: {} },
+    });
+    const board = assessBoard(sim);
+    const actions = genBuildArmy(sim, board, 3);
+    assert.equal(actions.length, 0, 'should not summon when at day army cap (5)');
+  });
+
+  test('deducts from resource ledger correctly', () => {
+    const sim = makeSim({ inventory: {
+      witch: { [ResourceType.METAL]: 4 },
+      hero: {},
+    }});
+    const board = assessBoard(sim);
+    genBuildArmy(sim, board, 3);
+    assert.equal(sim.resourceLedger[ResourceType.METAL], 0, 'should have spent 4 metal on 2 iron golems');
+  });
+});
+
+// ── genControlNodes ─────────────────────────────────────────────────────────
+
+describe('genControlNodes', () => {
+  test('assigns units to uncovered nodes', () => {
+    const node = { col: 3, row: 0, label: 'Node A', hexes: [{ col: 3, row: 0 }] };
+    const witch = makeEntity({ id: 'witch1', col: 0, row: 0 });
+    const minion = makeEntity({ id: 'm1', type: EntityType.MINION, owner: 'witch', col: 1, row: 0, hp: 2, maxHp: 2 });
+    const hero = makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 4, row: 4, hp: 8, maxHp: 8 });
+    const sim = makeSim({ entities: [witch, minion, hero], witchObjectives: [node] });
+    const board = assessBoard(sim);
+    const actions = genControlNodes(sim, board, 3);
+    assert.ok(actions.length > 0, 'should produce move actions toward node');
+    assert.ok(actions.every(a => a.type === PlanActionType.MOVE || a.type === PlanActionType.GUARD));
+  });
+
+  test('assigns different units to different nodes', () => {
+    const nodeA = { col: 3, row: 0, label: 'Node A', hexes: [{ col: 3, row: 0 }] };
+    const nodeB = { col: 0, row: 3, label: 'Node B', hexes: [{ col: 0, row: 3 }] };
+    const witch = makeEntity({ id: 'witch1', col: 0, row: 0 });
+    const m1 = makeEntity({ id: 'm1', type: EntityType.MINION, owner: 'witch', col: 1, row: 0, hp: 2, maxHp: 2 });
+    const m2 = makeEntity({ id: 'm2', type: EntityType.MINION, owner: 'witch', col: 0, row: 1, hp: 2, maxHp: 2 });
+    const hero = makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 4, row: 4, hp: 8, maxHp: 8 });
+    const sim = makeSim({ entities: [witch, m1, m2, hero], witchObjectives: [nodeA, nodeB] });
+    const board = assessBoard(sim);
+    const actions = genControlNodes(sim, board, 6);
+    // Check that at least 2 different entities are being moved
+    const movedEntities = new Set(actions.map(a => a.entityId));
+    assert.ok(movedEntities.size >= 2, `should assign different units, got ${movedEntities.size}`);
+  });
+
+  test('guards if on node with nearby threat', () => {
+    const node = { col: 1, row: 0, label: 'Node A', hexes: [{ col: 1, row: 0 }] };
+    const minion = makeEntity({ id: 'm1', type: EntityType.MINION, owner: 'witch', col: 1, row: 0, hp: 2, maxHp: 2 });
+    const witch = makeEntity({ id: 'witch1', col: 0, row: 0 });
+    const hero = makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 2, row: 0, hp: 8, maxHp: 8 });
+    const sim = makeSim({ entities: [witch, minion, hero], witchObjectives: [node] });
+    const board = assessBoard(sim);
+    const actions = genControlNodes(sim, board, 2);
+    const guardAction = actions.find(a => a.type === PlanActionType.GUARD && a.entityId === 'm1');
+    assert.ok(guardAction, 'should guard on node when hero is nearby');
+  });
+
+  test('returns empty with 0 budget', () => {
+    const sim = makeSim();
+    const board = assessBoard(sim);
+    const actions = genControlNodes(sim, board, 0);
+    assert.equal(actions.length, 0);
+  });
+});
+
+// ── genKillHero ─────────────────────────────────────────────────────────────
+
+describe('genKillHero', () => {
+  test('battles adjacent hero', () => {
+    const witch = makeEntity({ id: 'witch1', col: 1, row: 0 });
+    const hero = makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 1, row: 1, hp: 8, maxHp: 8, attack: 3, defense: 2 });
+    const sim = makeSim({ entities: [witch, hero] });
+    const board = assessBoard(sim);
+    const actions = genKillHero(sim, board, 2);
+    const battleAction = actions.find(a => a.type === PlanActionType.BATTLE_UNIT);
+    assert.ok(battleAction, 'should emit BATTLE_UNIT for adjacent hero');
+    assert.equal(battleAction.targetId, 'hero1');
+  });
+
+  test('skips suicidal engagements', () => {
+    // Minion (atk 1, def 0) vs Iron Golem stats hero (atk 5, def 5) — should be suicidal
+    const minion = makeEntity({ id: 'm1', type: EntityType.MINION, owner: 'witch', col: 1, row: 0, hp: 2, maxHp: 2, attack: 1, defense: 0 });
+    const witch = makeEntity({ id: 'witch1', col: 0, row: 0 });
+    const hero = makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 1, row: 1, hp: 14, maxHp: 14, attack: 5, defense: 5 });
+    const sim = makeSim({ entities: [witch, minion, hero], phase: Phase.DAY });
+    const board = assessBoard(sim);
+    const actions = genKillHero(sim, board, 2);
+    const minionBattle = actions.find(a => a.type === PlanActionType.BATTLE_UNIT && a.entityId === 'm1');
+    assert.ok(!minionBattle, 'should skip suicidal minion battle');
+  });
+
+  test('moves toward hero when not adjacent', () => {
+    const witch = makeEntity({ id: 'witch1', col: 0, row: 0 });
+    const hero = makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 4, row: 4, hp: 8, maxHp: 8, attack: 3, defense: 2 });
+    const sim = makeSim({ entities: [witch, hero] });
+    const board = assessBoard(sim);
+    const actions = genKillHero(sim, board, 2);
+    const moveAction = actions.find(a => a.type === PlanActionType.MOVE);
+    assert.ok(moveAction, 'should emit MOVE toward hero');
+  });
+
+  test('returns empty with no heroes', () => {
+    const sim = makeSim({ entities: [makeEntity({ id: 'witch1' })] });
+    const board = assessBoard(sim);
+    const actions = genKillHero(sim, board, 3);
+    assert.equal(actions.length, 0);
+  });
+});
+
+// ── genGatherResources ──────────────────────────────────────────────────────
+
+describe('genGatherResources', () => {
+  test('explores current tile if unexplored', () => {
+    const tiles = new Map();
+    for (let c = 0; c < 5; c++) {
+      for (let r = 0; r < 5; r++) {
+        tiles.set(hexKey(c, r), {
+          col: c, row: r, type: TileType.GRASS, explored: c !== 0 || r !== 0,
+          building: null, resource: null, fortifyLevel: 0,
+        });
+      }
+    }
+    const witch = makeEntity({ id: 'witch1', col: 0, row: 0 });
+    const hero = makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 4, row: 4, hp: 8, maxHp: 8 });
+    const sim = makeSim({ entities: [witch, hero], tiles });
+    const board = assessBoard(sim);
+    const actions = genGatherResources(sim, board, 2);
+    const exploreAction = actions.find(a => a.type === PlanActionType.EXPLORE);
+    assert.ok(exploreAction, 'should explore current unexplored tile');
+    assert.equal(exploreAction.entityId, 'witch1');
+  });
+
+  test('moves toward unexplored building then explores', () => {
+    const tiles = new Map();
+    for (let c = 0; c < 5; c++) {
+      for (let r = 0; r < 5; r++) {
+        tiles.set(hexKey(c, r), {
+          col: c, row: r, type: TileType.GRASS, explored: true,
+          building: null, resource: null, fortifyLevel: 0,
+        });
+      }
+    }
+    // Place an unexplored building at (1, 0)
+    tiles.set(hexKey(1, 0), {
+      col: 1, row: 0, type: TileType.BUILDING, explored: false,
+      building: 'inn', resource: null, fortifyLevel: 0,
+    });
+    const witch = makeEntity({ id: 'witch1', col: 0, row: 0 });
+    const hero = makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 4, row: 4, hp: 8, maxHp: 8 });
+    const sim = makeSim({ entities: [witch, hero], tiles });
+    const board = assessBoard(sim);
+    const actions = genGatherResources(sim, board, 3);
+    // Should move to (1,0) then explore
+    const moveAction = actions.find(a => a.type === PlanActionType.MOVE);
+    const exploreAction = actions.find(a => a.type === PlanActionType.EXPLORE);
+    assert.ok(moveAction, 'should move toward building');
+    assert.ok(exploreAction, 'should explore after arriving');
+  });
+
+  test('returns empty with 0 budget', () => {
+    const sim = makeSim();
+    const board = assessBoard(sim);
+    const actions = genGatherResources(sim, board, 0);
+    assert.equal(actions.length, 0);
+  });
+});
+
+// ── WitchAIEngine.generatePlan (Phase 2 integration) ───────────────────────
+
+describe('WitchAIEngine.generatePlan (Phase 2)', () => {
+  test('produces non-empty plan with valid action types', async () => {
+    // Set up a state where the engine should produce actions
+    const { WitchAIEngine } = await import('../src/ai-engine.js');
+    const state = makeFakeState({
+      inventory: { witch: { [ResourceType.WOOD]: 4, [ResourceType.METAL]: 2 }, hero: {} },
+      witchObjectives: [
+        { col: 3, row: 0, label: 'Node A', hexes: [{ col: 3, row: 0 }] },
+      ],
+    });
+    const engine = new WitchAIEngine(state, () => {}, 0);
+    const plan = engine.generatePlan();
+    assert.ok(plan.length > 0, 'plan should not be empty');
+    const validTypes = new Set(Object.values(PlanActionType));
+    for (const action of plan) {
+      assert.ok(validTypes.has(action.type), `invalid action type: ${action.type}`);
+    }
+  });
+
+  test('plan length does not exceed MAX_PLAN_LENGTH', async () => {
+    const { WitchAIEngine } = await import('../src/ai-engine.js');
+    const state = makeFakeState({
+      inventory: { witch: { [ResourceType.WOOD]: 10, [ResourceType.METAL]: 10 }, hero: {} },
+      witchObjectives: [
+        { col: 3, row: 0, label: 'Node A', hexes: [{ col: 3, row: 0 }] },
+        { col: 0, row: 3, label: 'Node B', hexes: [{ col: 0, row: 3 }] },
+        { col: 4, row: 4, label: 'Node C', hexes: [{ col: 4, row: 4 }] },
+      ],
+    });
+    const engine = new WitchAIEngine(state, () => {}, 0);
+    const plan = engine.generatePlan();
+    assert.ok(plan.length <= 12, `plan length ${plan.length} exceeds MAX_PLAN_LENGTH (12)`);
   });
 });
