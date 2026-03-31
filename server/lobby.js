@@ -1504,6 +1504,23 @@ export function connectToAsyncGame(playerId, ws, roomId) {
   // Include last round's replay data so the client can offer "Show Last Turn"
   const lastRound = game.round > 1 ? getLastSaveRound(roomId) : null;
 
+  // ── Debug: log reconnect replay data ──
+  if (lastRound) {
+    const parsedSteps = JSON.parse(lastRound.steps_json);
+    console.log(`[async ${roomId}] Reconnect — sending lastRound for round ${lastRound.round_num}:`);
+    console.log(`  steps: ${parsedSteps.length}`);
+    for (let i = 0; i < parsedSteps.length; i++) {
+      const s = parsedSteps[i];
+      const evCount = (s.playerEvents ?? []).reduce((n, pe) => n + (pe.events?.length ?? 0), 0)
+        + (s.heroEvents?.length ?? 0) + (s.witchEvents?.length ?? 0);
+      console.log(`  step[${i}]: ${evCount} events, ${s.entitySnapshot?.length ?? 0} entities`);
+    }
+    console.log(`  preStateJson length: ${lastRound.pre_state_json?.length ?? 0}`);
+    console.log(`  state entities: ${state?.entities?.length ?? 0}`);
+  } else {
+    console.log(`[async ${roomId}] Reconnect — no lastRound (round=${game.round})`);
+  }
+
   send(ws, {
     type:       'asyncStateUpdate',
     roomId,
@@ -1686,6 +1703,23 @@ function _resolveAsyncRound(roomId) {
     resolvedRound, preStateJson,
     steps: serializedSteps, finalState,
   };
+
+  // ── Debug: log what we're broadcasting ──
+  console.log(`[async ${roomId}] Broadcasting resolution for round ${resolvedRound}:`);
+  console.log(`  steps: ${serializedSteps.length}`);
+  for (let i = 0; i < serializedSteps.length; i++) {
+    const s = serializedSteps[i];
+    const evCount = s.playerEvents.reduce((n, pe) => n + pe.events.length, 0);
+    console.log(`  step[${i}]: ${evCount} events, ${s.entitySnapshot?.length ?? 0} entities`);
+    for (const pe of s.playerEvents) {
+      for (const ev of pe.events) {
+        console.log(`    ${pe.faction} ${ev.type} ${ev.action?.type ?? '?'} entity=${ev.action?.entityId ?? '?'}`);
+      }
+    }
+  }
+  console.log(`  preStateJson length: ${preStateJson?.length ?? 0}`);
+  console.log(`  finalState entities: ${finalState?.entities?.length ?? 0}`);
+
   _asyncBroadcast(roomId, resolutionMsg);
 }
 
