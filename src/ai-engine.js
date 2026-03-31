@@ -260,17 +260,18 @@ export function scoreGoals(board, goalWeights = null) {
 const URGENCY_THRESHOLD = 0.05;
 
 export function allocateBudget(scores, totalBudget) {
+  const allGoals = Object.keys(scores);
   const result = {};
-  for (const g of ALL_GOALS) result[g] = 0;
+  for (const g of allGoals) result[g] = 0;
 
   if (totalBudget <= 0) return result;
 
   // Filter qualifying goals
-  const qualifying = ALL_GOALS.filter(g => scores[g] > URGENCY_THRESHOLD);
+  const qualifying = allGoals.filter(g => scores[g] > URGENCY_THRESHOLD);
 
   if (qualifying.length === 0) {
-    // Edge case: nothing qualifies — give all to DEFEND_WITCH
-    result[Goal.DEFEND_WITCH] = totalBudget;
+    // Edge case: nothing qualifies — give all to first goal (faction default)
+    result[allGoals[0]] = totalBudget;
     return result;
   }
 

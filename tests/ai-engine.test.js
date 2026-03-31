@@ -403,7 +403,7 @@ describe('allocateBudget', () => {
     assert.equal(result[Goal.KILL_HERO], 5);
   });
 
-  test('no qualifying goals gives all to DEFEND_WITCH', () => {
+  test('no qualifying goals gives all to first goal', () => {
     const scores = {
       [Goal.KILL_HERO]: 0.01,
       [Goal.CONTROL_NODES]: 0.0,
@@ -412,7 +412,7 @@ describe('allocateBudget', () => {
       [Goal.DEFEND_WITCH]: 0.0,
     };
     const result = allocateBudget(scores, 4);
-    assert.equal(result[Goal.DEFEND_WITCH], 4);
+    assert.equal(result[Goal.KILL_HERO], 4);
   });
 
   test('zero budget gives all zeros', () => {

@@ -201,3 +201,88 @@ export function assessHeroBoard(sim) {
     totalBudget: sim.actionsLeft,
   };
 }
+
+// ── Stage 2: Goal Scoring ────────────────────────────────────────────────────
+
+function clamp01(v) { return Math.max(0, Math.min(1, v)); }
+
+// Phase multipliers: [night, day, dawnOrDusk]
+const PHASE_MULT = {
+  [HeroGoal.PROTECT_HERO]:     { night: 1.5, day: 0.8, dawnOrDusk: 1.0 },
+  [HeroGoal.SLAY_WITCH]:       { night: 0.5, day: 1.4, dawnOrDusk: 1.0 },
+  [HeroGoal.CONTROL_NODES]:    { night: 0.8, day: 1.0, dawnOrDusk: 1.8 },
+  [HeroGoal.EXPLORE]:          { night: 0.3, day: 1.5, dawnOrDusk: 1.0 },
+  [HeroGoal.FORTIFY_POSITION]: { night: 2.0, day: 0.5, dawnOrDusk: 1.5 },
+};
+
+function phaseMult(goal, board) {
+  const m = PHASE_MULT[goal];
+  if (board.isNight) return m.night;
+  if (board.isDay) return m.day;
+  return m.dawnOrDusk;
+}
+
+export function scoreHeroGoals(board, goalWeights = null) {
+  // PROTECT_HERO
+  let protect = 0;
+  if (board.heroHpRatio < 0.3) protect = 1.0;
+  else if (board.heroHpRatio < 0.5) protect = 0.6;
+  if (board.herbCount > 0 && board.heroHp < board.heroMaxHp) protect = Math.max(protect, 0.3);
+  if (board.witchDistance <= 2 && board.heroHpRatio < 0.5) protect = 1.0;
+  protect = clamp01(protect * phaseMult(HeroGoal.PROTECT_HERO, board));
+
+  // SLAY_WITCH
+  let slay = 0;
+  if (board.witchVisible) {
+    if (board.witchDistance <= 1) slay = 0.9;
+    else if (board.witchDistance <= 3) slay = 0.6;
+    else if (board.witchDistance <= 5) slay = 0.3;
+    else slay = 0.1;
+    if (board.witchHpRatio < 0.4) slay += 0.2;
+  }
+  slay = clamp01(clamp01(slay) * phaseMult(HeroGoal.SLAY_WITCH, board));
+
+  // CONTROL_NODES
+  let control = 0.3;
+  const uncovered = board.nodes.filter(n => n.controller !== 'hero' && !n.heroPresent).length;
+  control += uncovered * 0.15;
+  if (board.witchHeldCount >= 2) control += 0.4;
+  control = clamp01(clamp01(control) * phaseMult(HeroGoal.CONTROL_NODES, board));
+
+  // EXPLORE
+  let explore = 0;
+  if (board.unexploredBuildings.length > 0) explore = 0.5;
+  if (board.survivorCount === 0) explore += 0.2;
+  if (board.woodCount + board.metalCount < 2) explore += 0.2;
+  explore = clamp01(clamp01(explore) * phaseMult(HeroGoal.EXPLORE, board));
+
+  // FORTIFY_POSITION
+  let fortify = 0;
+  if (board.isNight || board.isDawnOrDusk) {
+    if (board.heroInBuilding) {
+      if (board.heroTileFortLevel < 3) fortify = 0.7;
+    } else {
+      fortify = 0.9; // need to move to shelter first
+    }
+  } else if (board.heroInBuilding && board.heroTileFortLevel === 0) {
+    fortify = 0.3;
+  }
+  fortify = clamp01(fortify * phaseMult(HeroGoal.FORTIFY_POSITION, board));
+
+  const scores = {
+    [HeroGoal.PROTECT_HERO]:     protect,
+    [HeroGoal.SLAY_WITCH]:       slay,
+    [HeroGoal.CONTROL_NODES]:    control,
+    [HeroGoal.EXPLORE]:          explore,
+    [HeroGoal.FORTIFY_POSITION]: fortify,
+  };
+
+  // Apply personality goal weights
+  if (goalWeights) {
+    for (const g of ALL_HERO_GOALS) {
+      if (goalWeights[g] != null) scores[g] = clamp01(scores[g] * goalWeights[g]);
+    }
+  }
+
+  return scores;
+}
