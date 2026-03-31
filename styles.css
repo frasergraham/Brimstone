@@ -113,7 +113,7 @@ canvas { touch-action: pan-x pan-y; }
   align-items: center;
   gap: 0.4rem;
   font-size: 0.88rem;
-  color: var(--text-dim);
+  color: var(--text);
   cursor: pointer;
   user-select: none;
 }
@@ -148,7 +148,7 @@ canvas { touch-action: pan-x pan-y; }
 .cg-option-label {
   flex: 1;
   font-size: 0.88rem;
-  color: var(--text-dim);
+  color: var(--text);
   white-space: nowrap;
 }
 .cg-option-hint {
@@ -243,14 +243,19 @@ canvas { touch-action: pan-x pan-y; }
 }
 
 .setup-select {
-  background: var(--bg);
-  color: var(--text-dim);
+  background: var(--bg-section);
+  color: var(--text);
+  color-scheme: dark;
   border: 1px solid var(--day);
   border-radius: 4px;
   font-family: inherit;
   font-size: 0.82rem;
   padding: 1px 4px;
   cursor: pointer;
+}
+.setup-select option {
+  background: var(--bg-section);
+  color: var(--text);
 }
 
 .setup-rules {
@@ -378,7 +383,7 @@ canvas { touch-action: pan-x pan-y; }
 .qp-option-row:last-child { border-bottom: none; }
 .qp-option-label {
   font-size: 0.88rem;
-  color: var(--text-dim);
+  color: var(--text);
   white-space: nowrap;
 }
 
@@ -467,6 +472,11 @@ canvas { touch-action: pan-x pan-y; }
   font-size: 0.75rem;
   padding: 0.15rem 0.25rem;
   max-width: 120px;
+  background: var(--bg-section);
+  color: var(--text);
+  color-scheme: dark;
+  border: 1px solid var(--border);
+  border-radius: 4px;
 }
 
 /* ── How to Play body ────────────────────────────────────────────────────── */
