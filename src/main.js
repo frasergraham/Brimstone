@@ -2772,10 +2772,11 @@ function _renderLobby(lobby) {
           const personalities = slot.faction === 'witch' ? _WITCH_PERSONALITIES : _HERO_PERSONALITIES;
           const select = document.createElement('select');
           select.className = 'setup-select lobby-personality-select';
-          // Non-balanced personalities are temporarily disabled pending tuning.
+          // Hero personalities (except balanced) are temporarily disabled pending tuning.
           select.innerHTML = '<option value="">— Assign AI —</option>' +
             ['random', ...personalities].map(p => {
-              const disabled = p !== 'random' && p !== 'balanced';
+              const isWitch = slot.faction === 'witch';
+              const disabled = !isWitch && p !== 'random' && p !== 'balanced';
               const label = p === 'random' ? 'Random' : (_PERSONALITY_LABELS[p] ?? p);
               return `<option value="${p}"${disabled ? ' disabled style="color:#666"' : ''}>${disabled ? `${label} (soon)` : label}</option>`;
             }).join('');
