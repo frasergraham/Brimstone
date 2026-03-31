@@ -848,6 +848,13 @@ export class WitchAIEngine {
   generatePlan(allyContext = null) {
     const sim = new EnginePlanSimState(this.state, 'witch', this.playerId);
     const board = assessBoard(sim);
+
+    // Leaderless mode: no witch entity (campaign missions with hasWitch: false).
+    // Minions/zombies simply attack and chase hero units.
+    if (!board.witch) {
+      return this._generateLeaderlessPlan(sim, board);
+    }
+
     const cfg = this.config;
     const scores = scoreGoals(board, cfg.goalWeights);
     const budget = allocateBudget(scores, board.totalBudget);
@@ -877,6 +884,55 @@ export class WitchAIEngine {
     for (const e of sim.entities) {
       if (e.alive && e.owner === 'witch') {
         this._prevPositions.set(e.id, { col: e.col, row: e.row });
+      }
+    }
+
+    return plan;
+  }
+
+  /** Leaderless plan: no witch on the map (campaign missions). Minions attack and chase hero. */
+  _generateLeaderlessPlan(sim, board) {
+    const plan = [];
+    const minions = sim.entities.filter(e => e.alive && e.owner === 'witch' && !e.id.startsWith('sim-'));
+    if (minions.length === 0) return plan;
+
+    const heroes = board.visibleHeroes;
+    const target = heroes[0] ?? sim.entities.find(e => e.alive && e.owner === 'hero');
+    let remaining = board.totalBudget;
+
+    // 1. Attack heroes on the same hex or adjacent
+    for (const m of minions) {
+      if (remaining <= 0) break;
+      const colocated = heroes.find(h => h.col === m.col && h.row === m.row);
+      if (colocated) {
+        plan.push({ type: PlanActionType.BATTLE_UNIT, entityId: m.id,
+          targetId: colocated.id, targetCol: colocated.col, targetRow: colocated.row });
+        sim.applyBattle();
+        remaining--;
+        continue;
+      }
+      const adj = heroes.find(h => hexDistance(m.col, m.row, h.col, h.row) === 1);
+      if (adj) {
+        plan.push({ type: PlanActionType.BATTLE_UNIT, entityId: m.id,
+          targetId: adj.id, targetCol: adj.col, targetRow: adj.row });
+        sim.applyBattle();
+        remaining--;
+      }
+    }
+
+    // 2. Move remaining minions toward closest hero
+    if (target) {
+      for (const m of minions) {
+        if (remaining <= 0 || plan.length >= MAX_PLAN_LENGTH) break;
+        // Skip units that already acted
+        if (plan.some(a => a.entityId === m.id)) continue;
+        const step = stepToward(sim, m, target);
+        if (step) {
+          plan.push({ type: PlanActionType.MOVE, entityId: m.id,
+            toCol: step.col, toRow: step.row });
+          sim.applyMove(m.id, step.col, step.row);
+          remaining--;
+        }
       }
     }
 

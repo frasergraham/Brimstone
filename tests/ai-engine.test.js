@@ -1046,3 +1046,50 @@ describe('WITCH_PERSONALITIES registry', () => {
     }
   });
 });
+
+// ── Leaderless mode (campaign missions without a witch) ─────────────────────
+
+describe('leaderless mode (no witch entity)', () => {
+  test('generates a non-empty plan with minions only', () => {
+    const state = makeFakeState({
+      entities: [
+        // No witch entity — only minions and a hero
+        makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 3, row: 0, hp: 14, maxHp: 14, attack: 3, defense: 2 }),
+        makeEntity({ id: 'z1', type: EntityType.MINION, owner: 'witch', col: 1, row: 0, hp: 2, maxHp: 2, attack: 1, defense: 0 }),
+        makeEntity({ id: 'z2', type: EntityType.MINION, owner: 'witch', col: 0, row: 1, hp: 2, maxHp: 2, attack: 1, defense: 0 }),
+      ],
+    });
+    const engine = new WitchAIEngine(state, () => {}, 0);
+    const plan = engine.generatePlan();
+    assert.ok(plan.length > 0, 'leaderless plan should not be empty');
+    // Should have MOVE actions chasing the hero
+    const moves = plan.filter(a => a.type === PlanActionType.MOVE);
+    assert.ok(moves.length > 0, 'minions should move toward hero');
+  });
+
+  test('minions attack adjacent hero units', () => {
+    const state = makeFakeState({
+      entities: [
+        makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 1, row: 0, hp: 14, maxHp: 14, attack: 3, defense: 2 }),
+        makeEntity({ id: 'z1', type: EntityType.MINION, owner: 'witch', col: 1, row: 0, hp: 2, maxHp: 2, attack: 1, defense: 0 }),
+      ],
+    });
+    const engine = new WitchAIEngine(state, () => {}, 0);
+    const plan = engine.generatePlan();
+    const battles = plan.filter(a => a.type === PlanActionType.BATTLE_UNIT);
+    assert.ok(battles.length > 0, 'minion should attack co-located hero');
+    assert.equal(battles[0].entityId, 'z1');
+    assert.equal(battles[0].targetId, 'hero1');
+  });
+
+  test('returns empty plan when no minions exist', () => {
+    const state = makeFakeState({
+      entities: [
+        makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 1, row: 0, hp: 14, maxHp: 14, attack: 3, defense: 2 }),
+      ],
+    });
+    const engine = new WitchAIEngine(state, () => {}, 0);
+    const plan = engine.generatePlan();
+    assert.equal(plan.length, 0, 'no minions means empty plan');
+  });
+});
