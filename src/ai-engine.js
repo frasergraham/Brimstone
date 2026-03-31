@@ -712,7 +712,7 @@ export function genGatherResources(sim, board, budget) {
 // Free actions that don't cost AP
 const FREE_ACTIONS = new Set([PlanActionType.USE_ITEM, PlanActionType.EQUIP_WEAPON]);
 
-export function assemblePlan(allActions, sim, board, prevPositions) {
+export function assemblePlan(allActions, sim, board, prevPositions, gapFillFn = null) {
   // 1. Sort by priority (lower = higher priority)
   const sorted = [...allActions].sort((a, b) => (a._priority ?? 99) - (b._priority ?? 99));
 
@@ -762,10 +762,14 @@ export function assemblePlan(allActions, sim, board, prevPositions) {
 
   // 5. Gap-fill: if we have remaining AP, fill with useful fallback actions
   const remaining = totalBudget - apUsed;
-  if (remaining > 0 && board.witch) {
-    const witchEntity = sim.entities.find(e => e.id === board.witch.id);
-    if (witchEntity) {
-      _fillGaps(budgetCapped, sim, board, witchEntity, remaining, prevPositions);
+  if (remaining > 0) {
+    if (gapFillFn) {
+      gapFillFn(budgetCapped, sim, board, remaining, prevPositions);
+    } else if (board.witch) {
+      const witchEntity = sim.entities.find(e => e.id === board.witch.id);
+      if (witchEntity) {
+        _fillGaps(budgetCapped, sim, board, witchEntity, remaining, prevPositions);
+      }
     }
   }
 

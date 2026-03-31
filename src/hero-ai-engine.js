@@ -725,6 +725,95 @@ export function genFortifyPosition(sim, board, budget, config = null) {
 
 // ── Hero gap-fill ───────────────────────────────────────────────────────────
 
+// ── HeroAIEngine ────────────────────────────────────────────────────────────
+
+export class HeroAIEngine {
+  constructor(state, onStateChange, thinkDelay = 600, playerId = null, config = null) {
+    this.state = state;
+    this.onStateChange = onStateChange;
+    this.onBattleResult = null; // unused in planning mode, but expected by consumers
+    this.thinkDelay = thinkDelay;
+    this.playerId = playerId;
+    this.config = config ?? HERO_PERSONALITY_CONFIGS.balanced;
+
+    // Cross-turn anti-oscillation memory: Map<entityId, {col, row}>
+    this._prevPositions = new Map();
+  }
+
+  generatePlan(allyContext = null) {
+    const sim = new HeroEnginePlanSimState(this.state, this.playerId);
+    const board = assessHeroBoard(sim);
+
+    // Leaderless mode: no hero entity (shouldn't normally happen, but be safe)
+    if (!board.hero) return [];
+
+    const cfg = this.config;
+
+    // Stage 2: Score goals
+    const scores = scoreHeroGoals(board, cfg.goalWeights);
+
+    // Stage 3: Allocate budget across goals
+    const budget = allocateBudget(scores, board.totalBudget);
+
+    // Stage 4: Run generators in priority order
+    // Each generator mutates sim state (positions, commitments, ledger)
+    // so later generators see the projected world.
+    const protectActions  = genProtectHero(sim, board, budget[HeroGoal.PROTECT_HERO], cfg);
+    const fortifyActions  = genFortifyPosition(sim, board, budget[HeroGoal.FORTIFY_POSITION], cfg);
+    const slayActions     = genSlayWitch(sim, board, budget[HeroGoal.SLAY_WITCH], cfg);
+    const controlActions  = genControlNodes(sim, board, budget[HeroGoal.CONTROL_NODES]);
+    const exploreActions  = genExplore(sim, board, budget[HeroGoal.EXPLORE]);
+
+    // Collect all generated actions
+    const allActions = [
+      ...protectActions,
+      ...fortifyActions,
+      ...slayActions,
+      ...controlActions,
+      ...exploreActions,
+    ];
+
+    // Stage 5: Assemble final plan with hero-specific gap-fill
+    const heroEntity = sim.entities.find(e => e.id === board.hero.id);
+    const plan = assemblePlan(allActions, sim, board, this._prevPositions,
+      (plan, sim, board, remaining, prevPositions) => {
+        fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositions);
+      }
+    );
+
+    // Update cross-turn memory
+    for (const e of sim.entities) {
+      if (e.alive && e.owner === 'hero') {
+        this._prevPositions.set(e.id, { col: e.col, row: e.row });
+      }
+    }
+
+    return plan;
+  }
+}
+
+// ── Factory helper ──────────────────────────────────────────────────────────
+
+/** Create a HeroAIEngine with a named personality config. */
+export function createHeroAI(personality, state, onStateChange, thinkDelay = 600, playerId = null) {
+  const cfg = HERO_PERSONALITY_CONFIGS[personality] ?? HERO_PERSONALITY_CONFIGS.balanced;
+  return new HeroAIEngine(state, onStateChange, thinkDelay, playerId, cfg);
+}
+
+// ── Register all hero personalities ─────────────────────────────────────────
+// Each entry is a constructor-like function matching the (state, onChange, delay, playerId) interface.
+
+for (const name of Object.keys(HERO_PERSONALITY_CONFIGS)) {
+  HERO_PERSONALITIES[name] = class extends HeroAIEngine {
+    constructor(state, onStateChange, thinkDelay = 600, playerId = null) {
+      super(state, onStateChange, thinkDelay, playerId, HERO_PERSONALITY_CONFIGS[name]);
+    }
+  };
+  Object.defineProperty(HERO_PERSONALITIES[name], 'name', { value: `HeroAI_${name}` });
+}
+
+// ── Hero gap-fill ───────────────────────────────────────────────────────────
+
 export function fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositions) {
   let left = remaining;
 

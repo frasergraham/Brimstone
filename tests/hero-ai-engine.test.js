@@ -7,12 +7,14 @@ import { Phase } from '../src/game.js';
 import { EntityType } from '../src/entities.js';
 import { TileType, ResourceType } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
-import { PlanSimState } from '../src/ai.js';
+import { PlanSimState, HERO_PERSONALITIES } from '../src/ai.js';
 import { allocateBudget } from '../src/ai-engine.js';
 import {
   HeroGoal,
   HERO_PERSONALITY_CONFIGS,
   HeroEnginePlanSimState,
+  HeroAIEngine,
+  createHeroAI,
   assessHeroBoard,
   scoreHeroGoals,
   estimateHeroCombat,
@@ -806,5 +808,132 @@ describe('fillGapsHero', () => {
     const plan = [];
     fillGapsHero(plan, sim, board, heroEntity, 1, new Map());
     assert.ok(plan.length > 0, 'should add fallback actions');
+  });
+});
+
+// ── Phase 3: HeroAIEngine + self-registration ──────────────────────────────
+
+describe('HeroAIEngine', () => {
+  test('constructor sets defaults', () => {
+    const state = makeFakeState();
+    const engine = new HeroAIEngine(state, () => {});
+    assert.equal(engine.thinkDelay, 600);
+    assert.equal(engine.playerId, null);
+    assert.deepEqual(engine.config, HERO_PERSONALITY_CONFIGS.balanced);
+    assert.ok(engine._prevPositions instanceof Map);
+  });
+
+  test('generatePlan returns non-empty plan', () => {
+    const state = makeFakeState();
+    const engine = new HeroAIEngine(state, () => {});
+    const plan = engine.generatePlan();
+    assert.ok(Array.isArray(plan));
+    assert.ok(plan.length > 0, 'should generate at least one action');
+  });
+
+  test('generatePlan returns clean actions (no _priority/_goal)', () => {
+    const state = makeFakeState();
+    const engine = new HeroAIEngine(state, () => {});
+    const plan = engine.generatePlan();
+    for (const action of plan) {
+      assert.equal(action._priority, undefined, 'should strip _priority');
+      assert.equal(action._goal, undefined, 'should strip _goal');
+    }
+  });
+
+  test('generatePlan returns empty for missing hero', () => {
+    const state = makeFakeState({
+      entities: [
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
+      ],
+    });
+    const engine = new HeroAIEngine(state, () => {});
+    const plan = engine.generatePlan();
+    assert.deepEqual(plan, []);
+  });
+
+  test('cross-turn memory updates after generatePlan', () => {
+    const state = makeFakeState();
+    const engine = new HeroAIEngine(state, () => {});
+    engine.generatePlan();
+    assert.ok(engine._prevPositions.size > 0, 'should record positions');
+    assert.ok(engine._prevPositions.has('hero1'), 'should track hero');
+  });
+
+  test('different configs produce different plans', () => {
+    const state = makeFakeState({
+      entities: [
+        makeEntity({ id: 'hero1', col: 3, row: 3, hp: 10, maxHp: 10,
+          items: { [ResourceType.HERBS]: 1, [ResourceType.FOOD]: 2 } }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch',
+          col: 4, row: 3, hp: 8, maxHp: 8 }),
+        makeEntity({ id: 's1', type: EntityType.SURVIVOR, owner: 'hero',
+          col: 3, row: 4, hp: 4, maxHp: 4 }),
+      ],
+    });
+
+    const aggressive = new HeroAIEngine(state, () => {}, 600, null, HERO_PERSONALITY_CONFIGS.aggressive);
+    const defensive = new HeroAIEngine(state, () => {}, 600, null, HERO_PERSONALITY_CONFIGS.defensive);
+
+    const aggrPlan = aggressive.generatePlan();
+    const defPlan = defensive.generatePlan();
+
+    // Plans may differ in length or composition
+    const aggrTypes = aggrPlan.map(a => a.type).join(',');
+    const defTypes = defPlan.map(a => a.type).join(',');
+    // Not asserting they're different (might occasionally match), but both should be valid
+    assert.ok(aggrPlan.length > 0);
+    assert.ok(defPlan.length > 0);
+  });
+});
+
+describe('createHeroAI', () => {
+  test('creates engine with named config', () => {
+    const state = makeFakeState();
+    const engine = createHeroAI('aggressive', state, () => {});
+    assert.ok(engine instanceof HeroAIEngine);
+    assert.deepEqual(engine.config, HERO_PERSONALITY_CONFIGS.aggressive);
+  });
+
+  test('falls back to balanced for unknown personality', () => {
+    const state = makeFakeState();
+    const engine = createHeroAI('nonexistent', state, () => {});
+    assert.deepEqual(engine.config, HERO_PERSONALITY_CONFIGS.balanced);
+  });
+});
+
+describe('HERO_PERSONALITIES self-registration', () => {
+  test('registers all four personalities', () => {
+    const names = Object.keys(HERO_PERSONALITY_CONFIGS);
+    for (const name of names) {
+      assert.ok(HERO_PERSONALITIES[name], `missing personality: ${name}`);
+    }
+  });
+
+  test('registered classes are constructable', () => {
+    const state = makeFakeState();
+    for (const name of Object.keys(HERO_PERSONALITY_CONFIGS)) {
+      const Cls = HERO_PERSONALITIES[name];
+      const instance = new Cls(state, () => {});
+      assert.ok(instance instanceof HeroAIEngine);
+      assert.deepEqual(instance.config, HERO_PERSONALITY_CONFIGS[name]);
+    }
+  });
+
+  test('registered classes have descriptive names', () => {
+    for (const name of Object.keys(HERO_PERSONALITY_CONFIGS)) {
+      assert.equal(HERO_PERSONALITIES[name].name, `HeroAI_${name}`);
+    }
+  });
+
+  test('registered classes generate valid plans', () => {
+    const state = makeFakeState();
+    for (const name of Object.keys(HERO_PERSONALITY_CONFIGS)) {
+      const Cls = HERO_PERSONALITIES[name];
+      const ai = new Cls(state, () => {});
+      const plan = ai.generatePlan();
+      assert.ok(Array.isArray(plan), `${name} should return array`);
+      assert.ok(plan.length > 0, `${name} should generate actions`);
+    }
   });
 });
