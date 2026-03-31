@@ -2048,14 +2048,18 @@ function _renderAsyncGames(games) {
     entry.className = 'save-entry';
 
     if (g.status === 'waiting') {
-      // Waiting for opponent
+      // Waiting for opponent — host can plan turn 1 in the meantime
+      const planBtnLabel = g.my_plan_submitted ? 'Planned' : 'Plan';
+      const planBtnClass = g.my_plan_submitted ? 'secondary' : 'primary';
       entry.innerHTML = `
         <div class="save-entry-info">
-          <div class="save-entry-title">${factionSymbol} Waiting for opponent</div>
+          <div class="save-entry-title">${factionSymbol} Waiting for opponent${g.my_plan_submitted ? ' <span class="async-badge async-badge-waiting">Planned</span>' : ''}</div>
           <div class="save-entry-meta">Code: <strong>${_esc(g.code)}</strong></div>
         </div>
+        <button class="setup-btn ${planBtnClass} async-plan-btn">${planBtnLabel}</button>
         <button class="setup-btn secondary async-copy-btn" data-code="${_esc(g.code)}">Copy</button>
       `;
+      entry.querySelector('.async-plan-btn').addEventListener('click', () => _openAsyncGame(g.room_id));
       entry.querySelector('.async-copy-btn').addEventListener('click', (e) => {
         navigator.clipboard?.writeText(e.target.dataset.code);
         e.target.textContent = 'Copied!';
@@ -2159,11 +2163,13 @@ function _handleAsyncStateUpdate(msg) {
 
   if (msg.myPlanSubmitted) {
     ui?.exitPlanningMode();
-    ui?._showResultDialog([
-      '⏳ Plan submitted',
-      'Waiting for your opponent to submit their plan.',
-      `${msg.planStatus.filter(p => p.submitted).length}/${msg.planStatus.length} players submitted.`,
-    ]);
+    const waitingLabel = msg.gameStatus === 'waiting'
+      ? '⏳ Plan submitted — waiting for an opponent to join.'
+      : 'Waiting for your opponent to submit their plan.';
+    const statusLine = msg.gameStatus === 'waiting'
+      ? 'Share your game code so an opponent can join.'
+      : `${msg.planStatus.filter(p => p.submitted).length}/${msg.planStatus.length} players submitted.`;
+    ui?._showResultDialog(['⏳ Plan submitted', waitingLabel, statusLine]);
   } else {
     // Enter planning mode — wire up submit to async plan submission
     const budget = msg.myActionsLeft ?? 3;
@@ -2179,6 +2185,13 @@ function _handleAsyncPlanAccepted(_msg) {
       '✓ Plan submitted!',
       'Waiting for your opponent. You\'ll be notified when the round resolves.',
     ]);
+  }
+}
+
+function _handleAsyncOpponentJoined(msg) {
+  // Opponent has joined — reconnect to get the updated (activated) state
+  if (_asyncRoomId === msg.roomId && mp) {
+    mp.connectAsync(msg.roomId);
   }
 }
 
@@ -2913,6 +2926,8 @@ document.getElementById('btn-async-create-go').addEventListener('click', () => {
         }
         document.getElementById('async-game-code').textContent = result.code;
         showStep('async-created');
+        // Store roomId so host can open the game to plan
+        document.getElementById('btn-async-created-play')?.setAttribute('data-room-id', result.roomId);
       })
       .catch(() => _onlineError('Failed to create async game.'));
   });
@@ -2929,6 +2944,11 @@ document.getElementById('btn-async-copy-code').addEventListener('click', () => {
 document.getElementById('btn-async-created-done').addEventListener('click', () => {
   showStep('multiplayer');
   _fetchAsyncGames();
+});
+
+document.getElementById('btn-async-created-play')?.addEventListener('click', () => {
+  const roomId = document.getElementById('btn-async-created-play').getAttribute('data-room-id');
+  if (roomId) _openAsyncGame(roomId);
 });
 
 // Async join — the "Async" tab join is via the existing join-game code input,
@@ -3717,6 +3737,7 @@ function _createMpClient() {
     onAsyncPlanAccepted(msg) { _handleAsyncPlanAccepted(msg); },
     onAsyncResolution(msg)  { _handleAsyncResolution(msg); },
     onAsyncPlanStatus(msg)  { _handleAsyncPlanStatus(msg); },
+    onAsyncOpponentJoined(msg) { _handleAsyncOpponentJoined(msg); },
 
     onError(msg) {
       // During auth phase, show error in the lobby

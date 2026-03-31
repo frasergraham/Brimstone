@@ -1367,6 +1367,34 @@ export function createAsyncGameRoom(playerId, playerName, config) {
   const result = insertAsyncGame(
     playerId, playerName, faction, gameConfig, turnIntervalMs, VERSION
   );
+
+  // Generate the map immediately so the host can plan while waiting
+  const state = new GameState(true, true, gameConfig.mapSize || 'standard');
+  state.fogOfWar = gameConfig.fog || 'partial';
+
+  // Patch the host's player record; opponent stays AI placeholder for now
+  for (const p of state.players) {
+    if (p.faction === faction) {
+      p.id   = playerId;
+      p.name = playerName;
+      p.isAI = false;
+      const leader = state.entities.find(e => e.id === p.leaderId);
+      if (leader) leader.ownerId = playerId;
+    }
+  }
+  if (faction === 'hero') state.heroIsAI = false;
+  else                     state.witchIsAI = false;
+
+  state.startPlanning();
+
+  const serialized = serializeState(state);
+  const stateJson  = JSON.stringify(serialized);
+  const deadline   = Math.floor(Date.now() / 1000) + Math.floor(turnIntervalMs / 1000);
+
+  // Store the generated state and insert a plan-status row for the host
+  updateAsyncGameState(result.roomId, stateJson, state.round, state.phase, deadline, 0);
+  insertPlanStatus(result.roomId, [playerId], state.round);
+
   return result; // { roomId, code }
 }
 
@@ -1378,40 +1406,29 @@ export function joinAsyncGameRoom(playerId, playerName, code) {
   if (!game) return { error: 'No waiting game found with that code.' };
   if (game.host_player_id === playerId) return { error: 'You cannot join your own game.' };
 
-  const config  = JSON.parse(game.config_json || '{}');
   const opponentFaction = game.host_faction === 'hero' ? 'witch' : 'hero';
 
-  // Generate the GameState
-  const state = new GameState(true, true, config.mapSize || 'standard');
-  state.fogOfWar = config.fog || 'partial';
+  // Load the map that was generated at creation time
+  const state = deserializeState(JSON.parse(game.state_json));
 
-  // Patch synthetic player IDs to real player IDs
+  // Patch the opponent's player record into the existing state
   const heroPlayerId  = game.host_faction === 'hero'  ? game.host_player_id : playerId;
   const witchPlayerId = game.host_faction === 'witch' ? game.host_player_id : playerId;
   const heroName      = game.host_faction === 'hero'  ? game.hero_name || game.witch_name : playerName;
   const witchName     = game.host_faction === 'witch' ? game.witch_name || game.hero_name : playerName;
 
-  // Patch the state's synthetic hero/witch player records
   for (const p of state.players) {
-    if (p.faction === 'hero') {
-      p.id   = heroPlayerId;
-      p.name = heroName;
+    if (p.faction === opponentFaction) {
+      p.id   = playerId;
+      p.name = playerName;
       p.isAI = false;
       const leader = state.entities.find(e => e.id === p.leaderId);
-      if (leader) leader.ownerId = heroPlayerId;
-    } else if (p.faction === 'witch') {
-      p.id   = witchPlayerId;
-      p.name = witchName;
-      p.isAI = false;
-      const leader = state.entities.find(e => e.id === p.leaderId);
-      if (leader) leader.ownerId = witchPlayerId;
+      if (leader) leader.ownerId = playerId;
     }
   }
-
   state.heroIsAI  = false;
   state.witchIsAI = false;
 
-  // Start planning so budgets are computed
   state.startPlanning();
 
   const serialized = serializeState(state);
@@ -1430,6 +1447,13 @@ export function joinAsyncGameRoom(playerId, playerName, code) {
   notifyOpponentJoined(opponentId, {
     roomId: game.room_id, opponentId: playerId,
   }, asyncSessions).catch(() => {});
+
+  // If host already connected, push updated state so they see the opponent joined
+  _asyncSend(game.room_id, opponentId, {
+    type:       'asyncOpponentJoined',
+    roomId:     game.room_id,
+    opponentName: playerName,
+  });
 
   return {
     roomId:   game.room_id,
@@ -1453,14 +1477,19 @@ export function connectToAsyncGame(playerId, ws, roomId) {
     send(ws, { type: 'error', message: 'You are not a participant in this game.' }); return;
   }
   if (game.status === 'waiting') {
-    send(ws, { type: 'error', message: 'Waiting for an opponent to join.' }); return;
+    // Only the host can connect while waiting for an opponent
+    if (game.host_player_id !== playerId) {
+      send(ws, { type: 'error', message: 'Waiting for an opponent to join.' }); return;
+    }
+    // Host can view the map and plan while waiting
   }
 
   // Register session
   if (!asyncSessions.has(roomId)) asyncSessions.set(roomId, new Map());
   asyncSessions.get(roomId).set(playerId, ws);
 
-  const myFaction = game.hero_player_id === playerId ? 'hero' : 'witch';
+  const myFaction = game.hero_player_id === playerId ? 'hero' :
+                    (game.witch_player_id === playerId ? 'witch' : game.host_faction);
   const state     = JSON.parse(game.state_json);
   const plans     = getPlanStatus(roomId, game.round);
   const myPlan    = plans.find(p => p.player_id === playerId);
@@ -1494,11 +1523,17 @@ export function connectToAsyncGame(playerId, ws, roomId) {
  */
 export function handleAsyncPlanSubmit(playerId, roomId, plan) {
   const game = getAsyncGame(roomId);
-  if (!game || game.status !== 'playing') {
+  if (!game || (game.status !== 'playing' && game.status !== 'waiting')) {
     _asyncSend(roomId, playerId, { type: 'error', message: 'Game is not active.' });
     return;
   }
-  if (game.hero_player_id !== playerId && game.witch_player_id !== playerId) {
+  // In 'waiting' status only the host can submit
+  if (game.status === 'waiting' && game.host_player_id !== playerId) {
+    _asyncSend(roomId, playerId, { type: 'error', message: 'Not a participant.' });
+    return;
+  }
+  if (game.status === 'playing' &&
+      game.hero_player_id !== playerId && game.witch_player_id !== playerId) {
     _asyncSend(roomId, playerId, { type: 'error', message: 'Not a participant.' });
     return;
   }
@@ -1513,6 +1548,9 @@ export function handleAsyncPlanSubmit(playerId, roomId, plan) {
 
   // Confirm to submitter
   _asyncSend(roomId, playerId, { type: 'asyncPlanAccepted', roomId });
+
+  // If still waiting for opponent, nothing more to do
+  if (game.status === 'waiting') return;
 
   // Notify opponent via WebSocket if connected
   const opponentId = game.hero_player_id === playerId ? game.witch_player_id : game.hero_player_id;

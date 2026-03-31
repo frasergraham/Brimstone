@@ -35,14 +35,15 @@ const OPP_ID   = 'test-opp-'  + randomUUID();
 const CONFIG   = { mapSize: 'standard', fogOfWar: true };
 const INTERVAL = 3600_000; // 1 hour
 
-/** Insert a game and return { roomId, code }. */
+/** Insert a game and return { roomId, code }. Mirrors createAsyncGameRoom by also
+ *  inserting a host plan-status row for round 1. */
 function createTestGame(overrides = {}) {
   const hostId   = overrides.hostId   ?? HOST_ID;
   const hostName = overrides.hostName ?? 'TestHost';
   const faction  = overrides.faction  ?? 'hero';
   const result   = insertAsyncGame(hostId, hostName, faction, CONFIG, INTERVAL, VERSION);
-  // Override room_id to have test- prefix for cleanup
-  // Since insertAsyncGame generates its own roomId, we'll just track and clean up all
+  // createAsyncGameRoom now stores state and inserts a plan row for the host
+  insertPlanStatus(result.roomId, [hostId], 1);
   return result;
 }
 
@@ -187,6 +188,67 @@ describe('async-game data layer', () => {
 
     // Clean up after each test in this block
     test('cleanup', () => { deleteAsyncGame(roomId); });
+  });
+
+  // ── Host pre-join planning ────────────────────────────────────────────────
+
+  describe('host pre-join planning', () => {
+    test('host can submit plan while game is still waiting', () => {
+      const { roomId } = createTestGame();
+
+      // Host submits a plan before anyone joins (game is still 'waiting')
+      const plan = [{ type: 'MOVE', entityId: 'e1', col: 1, row: 1 }];
+      const ok = submitPlan(roomId, HOST_ID, 1, plan);
+      assert.ok(ok, 'host should be able to submit plan in waiting state');
+
+      const status = getPlanStatus(roomId, 1);
+      assert.equal(status.length, 1, 'only host has a plan row');
+      assert.equal(status[0].submitted, 1);
+
+      // allPlansSubmitted is true (only 1 row, host submitted)
+      // but game can't resolve because opponent hasn't joined
+      assert.equal(allPlansSubmitted(roomId, 1), true);
+
+      deleteAsyncGame(roomId);
+    });
+
+    test('opponent joining adds their plan row, preserving host plan', () => {
+      const { roomId } = createTestGame();
+
+      // Host submits plan
+      submitPlan(roomId, HOST_ID, 1, [{ type: 'MOVE' }]);
+
+      // Opponent joins — activateAsyncGame adds opponent plan row
+      const deadline = Math.floor(Date.now() / 1000) + 3600;
+      activateAsyncGame(roomId, OPP_ID, 'Opp', 'Host', 'Opp', '{}', 1, 'dawn', deadline);
+
+      const plans = getPlanStatus(roomId, 1);
+      assert.equal(plans.length, 2, 'should have plan rows for both');
+
+      const hostPlan = plans.find(p => p.player_id === HOST_ID);
+      const oppPlan  = plans.find(p => p.player_id === OPP_ID);
+      assert.equal(hostPlan.submitted, 1, 'host plan should still be submitted');
+      assert.equal(oppPlan.submitted, 0, 'opponent plan should be unsubmitted');
+
+      // Not all submitted yet — opponent hasn't submitted
+      assert.equal(allPlansSubmitted(roomId, 1), false);
+
+      deleteAsyncGame(roomId);
+    });
+
+    test('resolution triggers when opponent submits after host pre-planned', () => {
+      const { roomId } = createTestGame();
+
+      submitPlan(roomId, HOST_ID, 1, []);
+      const deadline = Math.floor(Date.now() / 1000) + 3600;
+      activateAsyncGame(roomId, OPP_ID, 'Opp', 'Host', 'Opp', '{}', 1, 'dawn', deadline);
+
+      // Opponent submits
+      submitPlan(roomId, OPP_ID, 1, []);
+      assert.equal(allPlansSubmitted(roomId, 1), true, 'all plans should be submitted');
+
+      deleteAsyncGame(roomId);
+    });
   });
 
   // ── updateAsyncGameState ──────────────────────────────────────────────────

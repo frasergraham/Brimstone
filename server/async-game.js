@@ -226,9 +226,8 @@ export function activateAsyncGame(roomId, opponentId, opponentName, heroName, wi
     round, phase, turnDeadline,
   });
 
-  // Insert plan status rows for both players
-  _insertPlan.run({ roomId, playerId: heroPlayerId, round });
-  _insertPlan.run({ roomId, playerId: witchPlayerId, round });
+  // Insert plan status row for the opponent (host already has one from creation)
+  _insertPlan.run({ roomId, playerId: opponentId, round });
 
   return true;
 }

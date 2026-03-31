@@ -430,6 +430,10 @@ export class MultiplayerClient {
         this._opts.onAsyncPlanAccepted?.(msg);
         break;
 
+      case 'asyncOpponentJoined':
+        this._opts.onAsyncOpponentJoined?.(msg);
+        break;
+
       case 'asyncResolution': {
         const mirror = MirrorState.fromSnapshot(msg.finalState);
         this._opts.onAsyncResolution?.({ roomId: msg.roomId, steps: msg.steps, finalState: mirror });
