@@ -21,7 +21,8 @@ import { pruneStaleAndIncompatibleSaves,
          pinCompletedGame, deleteCompletedGame,
          pruneExpiredCompletedGames, getAllCompletedGames,
          createSpCompletedGame, getAllSpCompletedGames,
-         getSpCompletedGame, getSpCompletedGameRounds }    from './server/saves.js';
+         getSpCompletedGame, getSpCompletedGameRounds,
+         getSaveRounds }                                   from './server/saves.js';
 import {
   createLobby, joinLobby, browseLobby,
   setSlotAI, removeSlotAI, fillAllWithAI, startGame, leaveLobby,
@@ -138,6 +139,20 @@ app.delete('/api/async-games/:roomId', (req, res) => {
   }
   _deleteAsyncGame(req.params.roomId);
   res.json({ ok: true });
+});
+
+// REST: replay rounds for an async game
+app.get('/api/async-games/:roomId/rounds', (req, res) => {
+  const token = req.query.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
+  const game = _getAsyncGame(req.params.roomId);
+  if (!game) { res.status(404).json({ error: 'Not found.' }); return; }
+  if (game.hero_player_id !== player.id && game.witch_player_id !== player.id && game.host_player_id !== player.id) {
+    res.status(403).json({ error: 'Forbidden.' }); return;
+  }
+  res.json(getSaveRounds(req.params.roomId));
 });
 
 // REST: completed games for a player

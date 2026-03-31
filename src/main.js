@@ -2328,16 +2328,17 @@ function _updateAsyncReplayBtn() {
 }
 
 /**
- * Replay the last resolved async round with full animation.
- * Saves and restores planning state around the replay.
+ * Launch the full replay system for async games.
+ * Fetches all replay rounds from the server, starts at the last round,
+ * and uses the replay HUD with a "Plan" stop button.
+ * After replay exits, restores the current game state and planning mode.
  */
 async function _asyncReplayLastTurn() {
-  if (!_asyncLastRound || !state || !renderer || !ui) return;
+  if (!state || !renderer || !ui || !_asyncRoomId) return;
 
-  const { roundNum, preState, steps } = _asyncLastRound;
-  _asyncSeenRound = roundNum;
+  if (_asyncLastRound) _asyncSeenRound = _asyncLastRound.roundNum;
 
-  // Save current state so we can restore after replay
+  // Save current state and planning mode so we can restore after replay
   const savedStateJson = JSON.stringify(serializeState(state));
   const wasPlanningMode = !!state.planningPhase;
   const savedPlan = ui._currentPlan ? [...ui._currentPlan] : null;
@@ -2345,22 +2346,45 @@ async function _asyncReplayLastTurn() {
   // Hide planning mode during replay
   if (wasPlanningMode) ui.exitPlanningMode();
 
-  // Restore pre-resolution state for animation
-  const preResState = deserializeState(JSON.parse(preState));
-  Object.assign(state, preResState);
-  state.hero      = preResState.hero;
-  state.witch     = preResState.witch;
-  state.myFaction = _asyncFaction;
-  redrawOnline();
+  // Fetch all replay rounds from the server
+  const session = loadSession();
+  let rounds;
+  try {
+    const base = window.BRIMSTONE_SERVER || '';
+    const res = await fetch(`${base}/api/async-games/${_asyncRoomId}/rounds?token=${encodeURIComponent(session.token)}`);
+    rounds = await res.json();
+  } catch {
+    rounds = [];
+  }
 
-  // Get the final entities from the saved (post-resolution) state
-  const postState = deserializeState(JSON.parse(savedStateJson));
-  const finalEntities = postState.entities ?? state.entities;
+  if (!rounds.length) {
+    // Nothing to replay — restore and bail
+    _restoreAsyncState(savedStateJson, wasPlanningMode, savedPlan);
+    return;
+  }
 
-  // Run the animation
-  await _animateResolutionSteps(steps, finalEntities, redrawOnline, _asyncFaction, mp?.myPlayerId ?? null);
+  // Convert to replay format
+  const replayRounds = rounds.map(r => ({
+    roundNum: r.round_num,
+    preState: r.pre_state_json,
+    steps:    r.steps_json,
+  }));
 
-  // Restore the current (post-resolution) state
+  // Start replay at the last round so the most recent turn plays first
+  const startIndex = Math.max(0, replayRounds.length - 1);
+
+  await _replayFullGame(replayRounds, null, null, null, null, redrawOnline, {
+    startIndex,
+    stopLabel: 'Plan',
+    autoPlay:  true,
+  });
+
+  // Restore the current (post-resolution) game state
+  _restoreAsyncState(savedStateJson, wasPlanningMode, savedPlan);
+}
+
+/** Restore async game state and planning mode after replay. */
+function _restoreAsyncState(savedStateJson, wasPlanningMode, savedPlan) {
   const restored = deserializeState(JSON.parse(savedStateJson));
   Object.assign(state, restored);
   state.hero      = restored.hero;
@@ -2368,7 +2392,6 @@ async function _asyncReplayLastTurn() {
   state.myFaction = _asyncFaction;
   redrawOnline();
 
-  // Restore planning mode if it was active
   if (wasPlanningMode && ui) {
     const budget = state.playerActionsLeft?.[mp?.myPlayerId] ??
                    state[_asyncFaction + 'ActionsLeft'] ?? 3;
@@ -2649,12 +2672,18 @@ async function _startSpReplay(data) {
  * @param {string} witchName
  * @param {Function} [redrawFn] — defaults to local redraw()
  */
-async function _replayFullGame(rounds, winner, winReason, heroName, witchName, redrawFn) {
+/**
+ * @param {Object} [opts]
+ * @param {number}  [opts.startIndex=0] - Round index to start replay at.
+ * @param {string}  [opts.stopLabel]    - Custom label for the stop button (e.g. "Plan").
+ * @param {boolean} [opts.autoPlay=false] - If true, start playing immediately instead of paused.
+ */
+async function _replayFullGame(rounds, winner, winReason, heroName, witchName, redrawFn, opts = {}) {
   if (!rounds.length || !ui || !renderer) return null;
   const draw = redrawFn ?? redraw;
 
   _replayAborted      = false;
-  _replayPaused       = true;    // start paused at round 1; user presses play to begin
+  _replayPaused       = !opts.autoPlay;
   _replayGoBack       = false;
   _replayAtRoundStart = false;
   _replayActive       = true;
@@ -2692,24 +2721,36 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
         _replayJumpToEnd = true; _replayPaused = false;
         break;
       case 'stop':
-        _replayPaused = true;
-        ui.setReplayPlayState('pause');
-        ui.showReplayExitDialog().then(choice => {
-          if (choice === 'exit') {
-            _replayAborted = true; _replayPaused = false;
-          }
-          // 'cancel' → stays paused, user presses play to resume
-        });
+        if (opts.stopLabel) {
+          // Async mode: stop immediately without confirmation dialog
+          _replayAborted = true; _replayPaused = false;
+        } else {
+          _replayPaused = true;
+          ui.setReplayPlayState('pause');
+          ui.showReplayExitDialog().then(choice => {
+            if (choice === 'exit') {
+              _replayAborted = true; _replayPaused = false;
+            }
+            // 'cancel' → stays paused, user presses play to resume
+          });
+        }
         break;
     }
   });
-  ui.setReplayPlayState('pause'); // override showReplayHUD's default 'play' indicator
+  // Customise stop button label if requested (e.g. "Plan" for async replay)
+  if (opts.stopLabel) {
+    const stopBtn = document.getElementById('replay-stop-btn');
+    if (stopBtn) { stopBtn.textContent = opts.stopLabel; stopBtn.title = opts.stopLabel; }
+  }
+  if (!opts.autoPlay) {
+    ui.setReplayPlayState('pause');
+  }
 
   let lastSteps    = null;
   let lastRoundNum = 0;
   let lastPreState = null;
 
-  let _startFrom = 0;
+  let _startFrom = opts.startIndex ?? 0;
 
   // Outer loop: re-entered when BACK is pressed at the end-of-replay hold screen
   replayOuter: while (true) {
@@ -2727,7 +2768,7 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
         Object.assign(state, lastState);
         state.hero     = lastState.hero;
         state.witch    = lastState.witch;
-        state.fogOfWar = 'none';
+        if (!opts.stopLabel) state.fogOfWar = 'none';
         // Apply final entities if available (captures combat outcomes of last round)
         if (lastRound.finalEntities) {
           const finals = lastRound.finalEntities;
@@ -2753,7 +2794,7 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
       Object.assign(state, preState);
       state.hero     = preState.hero;
       state.witch    = preState.witch;
-      state.fogOfWar = 'none';
+      if (!opts.stopLabel) state.fogOfWar = 'none';
       draw();
 
       // ── At round start: accept BACK / PAUSE before animation begins ─────────
@@ -2853,6 +2894,11 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
     break replayOuter; // safety exit (shouldn't reach here)
   }
 
+  // Restore stop button label if it was customised
+  if (opts.stopLabel) {
+    const stopBtn = document.getElementById('replay-stop-btn');
+    if (stopBtn) { stopBtn.textContent = '■'; stopBtn.title = 'Stop'; }
+  }
   ui.hideReplayHUD();
   _replayActive       = false;
   _replayAborted      = false;
