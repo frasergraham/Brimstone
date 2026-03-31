@@ -16,8 +16,8 @@ import { WeaponType, WEAPON_STATS } from '../src/tiles.js';
 //   Witch:      HP=10, ATK=2, DEF=2, owner='witch'
 //   Zombie:     HP=2,  ATK=2, DEF=0, owner='witch'
 //   Minion:     HP=2,  ATK=1, DEF=0, owner='witch'
-//   Wood Golem: HP=4,  ATK=2, DEF=3, owner='witch'
-//   Iron Golem: HP=6,  ATK=3, DEF=4, owner='witch'
+//   Wood Golem: HP=3,  ATK=2, DEF=3, owner='witch'
+//   Iron Golem: HP=5,  ATK=3, DEF=4, owner='witch'
 
 describe('Base stats — Hero', () => {
   test('HP=14, ATK=3, DEF=2, owner=hero, type=hero', () => {
@@ -72,9 +72,9 @@ describe('Base stats — Minion', () => {
 });
 
 describe('Base stats — Wood Golem', () => {
-  test('HP=4, ATK=2, DEF=3, owner=witch', () => {
+  test('HP=3, ATK=2, DEF=3, owner=witch', () => {
     const g = createWoodGolem(0, 0);
-    assert.equal(g.maxHp, 4);
+    assert.equal(g.maxHp, 3);
     assert.equal(g.attack, 2);
     assert.equal(g.defense, 3);
     assert.equal(g.owner, 'witch');
@@ -83,9 +83,9 @@ describe('Base stats — Wood Golem', () => {
 });
 
 describe('Base stats — Iron Golem', () => {
-  test('HP=6, ATK=3, DEF=4, owner=witch', () => {
+  test('HP=5, ATK=3, DEF=4, owner=witch', () => {
     const g = createIronGolem(0, 0);
-    assert.equal(g.maxHp, 6);
+    assert.equal(g.maxHp, 5);
     assert.equal(g.attack, 3);
     assert.equal(g.defense, 4);
     assert.equal(g.owner, 'witch');

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {
   GameState, Phase, Player, computeActions, countHeldNodes, WIN_REASON,
 } from '../src/game.js';
-import { EntityType, createMinion } from '../src/entities.js';
+import { EntityType, createMinion, resetRoster } from '../src/entities.js';
 import { hexKey } from '../src/hex.js';
 import { TileType } from '../src/tiles.js';
 
@@ -765,5 +765,63 @@ describe('startPlanning — power node bonus', () => {
     const baseWitch = computeActions(Player.WITCH, state.phase, state.entities, 0);
     assert.equal(state.heroActionsLeft, baseHero);
     assert.equal(state.witchActionsLeft, baseWitch);
+  });
+});
+
+// ── Node spawn balance: witch no longer spawns free minions ──────────────────
+
+describe('Power node free spawn (endRound)', () => {
+  test('witch on a node during NIGHT does NOT spawn a free minion', () => {
+    const state = new GameState(true, true);
+    state.phase = Phase.NIGHT;
+
+    const node = state.witchObjectives[0];
+    state.witch.col = node.hexes[0].col;
+    state.witch.row = node.hexes[0].row;
+
+    const minionsBefore = state.entities.filter(
+      e => e.alive && e.type === EntityType.MINION
+    ).length;
+
+    state.endRound();
+
+    const minionsAfter = state.entities.filter(
+      e => e.alive && e.type === EntityType.MINION
+    ).length;
+
+    assert.equal(minionsAfter, minionsBefore,
+      'Witch on a node should no longer spawn free minions');
+  });
+
+  test('hero on a node during NIGHT can spawn a free survivor (33% chance)', () => {
+    // Run multiple trials — with 33% chance, at least one of 20 should spawn
+    let spawned = false;
+    for (let i = 0; i < 20 && !spawned; i++) {
+      resetRoster();
+      const state = new GameState(true, true);
+      state.phase = Phase.NIGHT;
+
+      const node = state.witchObjectives[0];
+      state.hero.col = node.hexes[0].col;
+      state.hero.row = node.hexes[0].row;
+      // Move witch away from node so it doesn't interfere
+      state.witch.col = 0;
+      state.witch.row = 0;
+
+      const survivorsBefore = state.entities.filter(
+        e => e.alive && e.type === EntityType.SURVIVOR
+      ).length;
+
+      state.endRound();
+
+      const survivorsAfter = state.entities.filter(
+        e => e.alive && e.type === EntityType.SURVIVOR
+      ).length;
+
+      if (survivorsAfter > survivorsBefore) spawned = true;
+    }
+
+    assert.ok(spawned,
+      'Hero on a node should be able to spawn a free survivor (33% chance, tested 20 trials)');
   });
 });

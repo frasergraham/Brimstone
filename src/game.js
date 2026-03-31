@@ -459,9 +459,8 @@ export class GameState {
       }
     }
 
-    // Night: node spawns — each witch/hero leader on a node may spawn a unit.
+    // Night: node spawns — hero leaders on a node may spawn a free survivor.
     if (this.phase === Phase.NIGHT) {
-      const witchLeaders = this.entities.filter(e => e.alive && e.type === EntityType.WITCH);
       for (const obj of this.witchObjectives) {
         const freeHex = () => {
           // Look for a free hex adjacent to any hex in the cluster
@@ -475,19 +474,6 @@ export class GameState {
           }
           return null;
         };
-        for (const witch of witchLeaders) {
-          if (obj.hexes.some(h => h.col === witch.col && h.row === witch.row)) {
-            if (Math.random() < 0.33) {
-              const hex = freeHex();
-              if (hex) {
-                this.entities.push(createMinion(hex.col, hex.row, witch.ownerId));
-                this.addLog(`🌑 ${witch.displayName} channels the node — a minion rises from the dark!`, 'witch', this.playerColorFor(witch));
-              }
-            } else {
-              this.addLog(`🌑 The node stirs… but yields nothing this night.`, 'witch');
-            }
-          }
-        }
         for (const hero of heroLeaders) {
           if (obj.hexes.some(h => h.col === hero.col && h.row === hero.row)) {
             if (Math.random() < 0.33) {
@@ -542,123 +528,6 @@ export class GameState {
       if (!this.disableScoring) this._checkNodeObjectives(Phase.DUSK);
     }
 
-    this.checkVictory();
-  }
-
-  endTurn() {
-    const playerLabel = this.factionName(this.activePlayer);
-    this.addLog(`${playerLabel}'s turn ends.`);
-
-    if (this.activePlayer === Player.HERO) {
-      // Rest heal: hero recovers HP when ending their turn inside a building
-      const heroTile = this.tiles.get(hexKey(this.hero.col, this.hero.row));
-      if (this.hero.alive && heroTile?.type === TileType.BUILDING && this.hero.hp < this.hero.maxHp) {
-        const b = heroTile.building;
-        if (b === BuildingType.INN) {
-          this.hero.heal(3);
-          this.addLog(`🏨 ${this.hero.displayName} rests at the inn. (+3 HP, now ${this.hero.hp}/${this.hero.maxHp})`, 'hero', this.playerColorFor(this.hero));
-        } else if (b === BuildingType.CHURCH) {
-          this.hero.heal(3);
-          this.addLog(`⛪ ${this.hero.displayName} prays at the chapel. (+3 HP, now ${this.hero.hp}/${this.hero.maxHp})`, 'hero', this.playerColorFor(this.hero));
-        } else {
-          this.hero.heal(1);
-          this.addLog(`🏠 ${this.hero.displayName} rests in shelter. (+1 HP, now ${this.hero.hp}/${this.hero.maxHp})`, 'hero', this.playerColorFor(this.hero));
-        }
-      }
-
-      // Node blessing: hero standing on a Power Node heals 1 HP
-      if (this.hero.alive && this.hero.hp < this.hero.maxHp) {
-        const onNode = this.witchObjectives.some(
-          obj => obj.col === this.hero.col && obj.row === this.hero.row
-        );
-        if (onNode) {
-          this.hero.heal(1);
-          this.addLog(`✨ ${this.hero.displayName} draws power from the node. (+1 HP, now ${this.hero.hp}/${this.hero.maxHp})`, 'hero', this.playerColorFor(this.hero));
-        }
-      }
-
-      this.activePlayer = Player.WITCH;
-      this.actionsLeft  = computeActions(Player.WITCH, this.phase, this.entities);
-      this.addLog(`${this.factionName('witch')} stirs… (${this.actionsLeft} actions)`, 'witch', this.playerColorFor(this.witch));
-    } else {
-      // Node effects: only during NIGHT
-      // • Witch standing on a node raises a free minion each night round.
-      // • Hero standing on a node attracts a free survivor each night round.
-      // Minions held by a minion (not the witch) no longer spawn — the witch
-      // must commit herself to a node to fuel her army.
-      if (this.phase === Phase.NIGHT) {
-        for (const obj of this.witchObjectives) {
-          const freeHex = () => getNeighbors(obj.col, obj.row).find(n => {
-            const t = this.tiles.get(hexKey(n.col, n.row));
-            return t && t.type !== TileType.RIVER &&
-              !this.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
-          });
-
-          // Witch herself on the node → spawn minion
-          const witchHere = this.witch?.alive &&
-            this.witch.col === obj.col && this.witch.row === obj.row;
-          if (witchHere) {
-            const hex = freeHex();
-            if (hex) {
-              this.entities.push(createMinion(hex.col, hex.row));
-              this.addLog(`🌑 ${this.witch.displayName} channels the node — a minion rises from the dark!`, 'witch', this.playerColorFor(this.witch));
-            }
-          }
-
-          // Hero on the node → attract a survivor
-          const heroHere = this.hero.alive &&
-            this.hero.col === obj.col && this.hero.row === obj.row;
-          if (heroHere) {
-            const hex = freeHex();
-            if (hex) {
-              const s = createSurvivor(hex.col, hex.row);
-              s.owner = 'hero';
-              if (Math.random() < 0.5) s.items['horse'] = 1;
-              this.entities.push(s);
-              const horseNote = s.items['horse'] ? ' (arrives on horseback!)' : '';
-              this.addLog(`✨ The node calls to the living — a survivor emerges to join ${this.hero.displayName}!${horseNote}`, 'hero', this.playerColorFor(this.hero));
-            }
-          }
-        }
-      }
-
-      // End of full round — advance round and check phase
-      this.activePlayer = Player.HERO;
-      this.round++;
-
-      const prevPhase = this.phase;
-      this.phase = phaseForRound(this.round);
-
-      this.actionsLeft = computeActions(Player.HERO, this.phase, this.entities);
-
-      // Announce phase transitions
-      if (this.phase !== prevPhase) {
-        this._announcePhaseChange(prevPhase, this.phase);
-      } else {
-        this.addLog(
-          `Round ${this.round} — ${PHASE_ICON[this.phase]} ${this.phase.toUpperCase()}` +
-          ` (Hero: ${this.actionsLeft} actions)`
-        );
-      }
-
-      // Post-round effects (night attrition, etc.)
-      this.postRoundEvents = applyPostRoundEffects(this);
-
-      // Dawn: ramp attrition, reset explored tiles, check nodes
-      if (this.phase === Phase.DAWN) {
-        this.attritionLevel = Math.min(3, this.attritionLevel + 1);
-        this.addLog(`🌅 A new dawn — cycle ${Math.ceil(this.round / CYCLE_LENGTH)}. Attrition rises to ${this.attritionLevel}!`);
-        for (const [, t] of this.tiles) t.explored = false;
-        if (!this.disableScoring) this._checkNodeObjectives(Phase.DAWN);
-      }
-
-      // Dusk: score nodes
-      if (this.phase === Phase.DUSK) {
-        if (!this.disableScoring) this._checkNodeObjectives(Phase.DUSK);
-      }
-    }
-
-    this.entities.forEach(e => e.resetTurn());
     this.checkVictory();
   }
 

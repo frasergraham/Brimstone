@@ -101,7 +101,6 @@ export class MirrorState {
   // Stub methods — server owns the state
   addLog()       { /* no-op */ }
   spendAction()  { /* no-op */ }
-  endTurn()      { /* intercepted by multiplayer layer */ }
   checkVictory() { /* no-op */ }
 }
 
