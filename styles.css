@@ -639,13 +639,13 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  border: 2.5px solid rgba(255,255,255,0.15);
+  border: 1.5px solid rgba(255,255,255,0.15);
   display: inline-block;
   transition: box-shadow 0.2s, background 0.2s;
 }
 /* Background = faction control color; border = node's own color (set via inline style) */
-.node-dot.hero      { background: #4488ff; box-shadow: 0 0 7px rgba(68,136,255,0.7); }
-.node-dot.witch     { background: #cc3333; box-shadow: 0 0 7px rgba(200,50,50,0.7); }
+.node-dot.hero      { background: var(--hero); box-shadow: 0 0 7px rgba(212,167,44,0.7); }
+.node-dot.witch     { background: var(--witch); box-shadow: 0 0 7px rgba(155,89,182,0.7); }
 .node-dot.contested { background: #cc8800; box-shadow: 0 0 7px rgba(200,140,0,0.7); }
 .node-dot.neutral   { background: transparent; }
 
@@ -663,10 +663,10 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   border: 1px solid rgba(255,255,255,0.15);
   transition: background 0.2s, box-shadow 0.2s;
 }
-.score-pip.hero           { background: transparent; border-color: #335588; }
-.score-pip.hero.filled    { background: #4488ff;     border-color: #66aaff; box-shadow: 0 0 4px rgba(68,136,255,0.6); }
-.score-pip.witch          { background: transparent; border-color: #551111; }
-.score-pip.witch.filled   { background: #cc3333;     border-color: #ff5555; box-shadow: 0 0 4px rgba(200,50,50,0.6); }
+.score-pip.hero           { background: transparent; border-color: rgba(212,167,44,0.35); }
+.score-pip.hero.filled    { background: var(--hero);  border-color: #e0be4a; box-shadow: 0 0 4px rgba(212,167,44,0.6); }
+.score-pip.witch          { background: transparent; border-color: rgba(155,89,182,0.35); }
+.score-pip.witch.filled   { background: var(--witch); border-color: #b370d4; box-shadow: 0 0 4px rgba(155,89,182,0.6); }
 
 /* ── Header icon buttons (chronicle, inventory, end-turn) ──────────────── */
 
