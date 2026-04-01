@@ -1,6 +1,6 @@
 // Single source of truth for the build version.
 // Bump this with every commit.
-export const VERSION = '1.2.0';
+export const VERSION = '1.2.1';
 
 // Unique build identifier — appends Railway's commit SHA when deployed.
 // Falls back to plain VERSION in local dev and in-browser (where process is

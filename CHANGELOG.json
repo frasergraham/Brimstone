@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.2.1",
+    "date": "2026-04-01",
+    "summary": "New features",
+    "notes": [
+      "Add background image to setup screen menus"
+    ]
+  },
+  {
     "version": "1.2.0",
     "date": "2026-04-01",
     "summary": "New features, bug fixes, performance improvements, and improvements",
