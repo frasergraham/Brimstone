@@ -86,6 +86,13 @@ describe('getGameModeConfig', () => {
     assert.equal(config.story, 'enabled');
     assert.equal(config.quickplay, 'enabled');
     assert.equal(config.local, 'enabled');
+    assert.equal(config.async, 'enabled');
+  });
+
+  test('respects async mode env var', () => {
+    process.env.BRIMSTONE_MODE_ASYNC = 'disabled';
+    const config = getGameModeConfig();
+    assert.equal(config.async, 'disabled');
   });
 
   test('returns all expected mode keys', () => {

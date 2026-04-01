@@ -39,6 +39,7 @@ const _MODE_BUTTON_MAP = {
   story:        'btn-story-mode',
   quickplay:    'btn-quick-play',
   local:        'btn-local-pass-play',
+  async:        'btn-mp-async',
 };
 
 function _applyModeConfig(modes) {
