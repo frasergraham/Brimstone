@@ -92,9 +92,9 @@ describe('enterPlanningMode', () => {
 
   test('clears previous plan', () => {
     const { ui } = makeUI();
-    ui._plan = [{ type: 'move' }]; // pre-set dirty plan
+    ui._unitPlans = new Map([['e1', [{ type: 'move', entityId: 'e1' }]]]); // pre-set dirty plan
     ui.enterPlanningMode('hero', 3);
-    assert.deepEqual(ui._plan, []);
+    assert.equal(ui._unitPlans.size, 0);
   });
 
   test('_planMode is true after entering', () => {
@@ -140,9 +140,9 @@ describe('exitPlanningMode', () => {
   test('plan queue is cleared', () => {
     const { ui } = makeUI();
     ui.enterPlanningMode('hero', 3);
-    ui._plan = [{ type: 'move' }];
+    ui._unitPlans = new Map([['e1', [{ type: 'move', entityId: 'e1' }]]]);
     ui.exitPlanningMode();
-    assert.deepEqual(ui._plan, []);
+    assert.equal(ui._unitPlans.size, 0);
   });
 });
 
@@ -174,10 +174,10 @@ describe('_doSubmitPlan', () => {
     assert.equal(ui._planSubmitted, true);
   });
 
-  test('fires onPlanSubmit callback with plan copy', () => {
+  test('fires onPlanSubmit callback with interleaved plan', () => {
     const { ui } = makeUI();
     ui.enterPlanningMode('hero', 3);
-    ui._plan = [{ type: 'explore', entityId: 'h1' }];
+    ui._unitPlans = new Map([['h1', [{ type: 'explore', entityId: 'h1' }]]]);
 
     let received = null;
     ui.onPlanSubmit = plan => { received = plan; };
@@ -186,7 +186,7 @@ describe('_doSubmitPlan', () => {
 
     assert.ok(received !== null, 'onPlanSubmit should have been called');
     assert.equal(received.length, 1, 'should pass the plan');
-    assert.notStrictEqual(received, ui._plan, 'should pass a copy, not the live array');
+    assert.equal(received[0].entityId, 'h1');
   });
 
   test('double-submit is a no-op', () => {

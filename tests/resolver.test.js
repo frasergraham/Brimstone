@@ -1,5 +1,6 @@
 // Spec-based tests for server/resolver.js
-// Covers: budget computation, paired steps, skip/fail/budget-cap events, food bonus.
+// Covers: budget computation, paired steps, per-unit simultaneous execution,
+// skip/fail/budget-cap events, food bonus.
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -7,7 +8,7 @@ import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { GameState, Phase } from '../src/game.js';
 import { PlanActionType } from '../src/planner.js';
 import {
-  Entity, EntityType, createMinion, createZombie,
+  Entity, EntityType, createMinion, createZombie, createSurvivor,
 } from '../src/entities.js';
 import { TileType, ResourceType } from '../src/tiles.js';
 import { hexKey, getNeighbors } from '../src/hex.js';
@@ -763,5 +764,132 @@ describe('resolvePlans — BATTLE_UNIT target fallback', () => {
     const allEvents = steps.flatMap(s => s.heroEvents);
     const ok = allEvents.find(e => e.type === ResEventType.ACTION_OK);
     assert.ok(!ok, 'Fallback should not fire when planned hex is out of range');
+  });
+});
+
+// ── Per-unit simultaneous execution ──────────────────────────────────────────
+
+describe('resolvePlans — per-unit simultaneous execution', () => {
+  test('two hero units execute in the same step', () => {
+    const state = freshState();
+    const hero = state.hero;
+
+    // Create a survivor near the hero
+    const heroNeighbor = emptyPassableNeighbor(state, hero);
+    if (!heroNeighbor) return;
+    const survivor = createSurvivor(heroNeighbor.col, heroNeighbor.row, null);
+    survivor.owner = 'hero';
+    state.entities.push(survivor);
+
+    // Find valid moves for both
+    const heroTarget = emptyPassableNeighbor(state, hero);
+    const survTarget = emptyPassableNeighbor(state, survivor);
+    if (!heroTarget || !survTarget) return;
+
+    // Plan: hero moves, survivor moves — interleaved as per-unit queues
+    const heroPlan = [
+      { type: PlanActionType.MOVE, entityId: hero.id, toCol: heroTarget.col, toRow: heroTarget.row },
+      { type: PlanActionType.MOVE, entityId: survivor.id, toCol: survTarget.col, toRow: survTarget.row },
+    ];
+
+    const steps = resolvePlans(state, heroPlan, []);
+    assert.ok(steps.length >= 1, 'Should produce at least one step');
+
+    // Both units should execute in the same step (simultaneous per-unit)
+    const step0Events = steps[0].heroEvents.filter(e => e.type === ResEventType.ACTION_OK);
+    const actingEntityIds = step0Events.map(e => e.action.entityId);
+    assert.ok(actingEntityIds.includes(hero.id), 'Hero should act in step 0');
+    assert.ok(actingEntityIds.includes(survivor.id), 'Survivor should act in step 0');
+  });
+
+  test('unequal queue lengths: unit with fewer actions finishes first', () => {
+    const state = freshState();
+    const hero = state.hero;
+
+    // Create survivor
+    const sPos = emptyPassableNeighbor(state, hero);
+    if (!sPos) return;
+    const survivor = createSurvivor(sPos.col, sPos.row, null);
+    survivor.owner = 'hero';
+    state.entities.push(survivor);
+
+    // Hero gets 2 alternating moves, survivor gets 1 explore
+    const posA = { col: hero.col, row: hero.row };
+    const posB = emptyPassableNeighbor(state, hero);
+    if (!posB) return;
+
+    const heroPlan = [
+      { type: PlanActionType.MOVE, entityId: hero.id, toCol: posB.col, toRow: posB.row },
+      { type: PlanActionType.MOVE, entityId: hero.id, toCol: posA.col, toRow: posA.row },
+      { type: PlanActionType.EXPLORE, entityId: survivor.id },
+    ];
+
+    const steps = resolvePlans(state, heroPlan, []);
+
+    // Step 0: hero move + survivor explore (both units act)
+    if (steps.length >= 1) {
+      const step0Entities = steps[0].heroEvents
+        .filter(e => e.type === ResEventType.ACTION_OK)
+        .map(e => e.action.entityId);
+      assert.ok(step0Entities.includes(hero.id), 'Hero should act in step 0');
+      assert.ok(step0Entities.includes(survivor.id), 'Survivor should act in step 0');
+    }
+
+    // Step 1: only hero moves (survivor has no more actions)
+    if (steps.length >= 2) {
+      const step1Entities = steps[1].heroEvents
+        .filter(e => e.type === ResEventType.ACTION_OK)
+        .map(e => e.action.entityId);
+      assert.ok(step1Entities.includes(hero.id), 'Hero should act in step 1');
+      assert.ok(!step1Entities.includes(survivor.id), 'Survivor should NOT act in step 1');
+    }
+  });
+
+  test('shared budget is consumed across multiple units', () => {
+    const state = freshState();
+    const hero = state.hero;
+
+    // Create a survivor
+    const sPos = emptyPassableNeighbor(state, hero);
+    if (!sPos) return;
+    const survivor = createSurvivor(sPos.col, sPos.row, null);
+    survivor.owner = 'hero';
+    state.entities.push(survivor);
+
+    // Give both units many moves — should be capped by shared budget
+    const posA = { col: hero.col, row: hero.row };
+    const posB = emptyPassableNeighbor(state, hero);
+    if (!posB) return;
+
+    const sA = { col: survivor.col, row: survivor.row };
+    const sB = emptyPassableNeighbor(state, survivor);
+    if (!sB) return;
+
+    // 10 moves each — way more than budget allows
+    const heroPlan = [];
+    for (let i = 0; i < 10; i++) {
+      heroPlan.push({
+        type: PlanActionType.MOVE,
+        entityId: hero.id,
+        toCol: i % 2 === 0 ? posB.col : posA.col,
+        toRow: i % 2 === 0 ? posB.row : posA.row,
+      });
+      heroPlan.push({
+        type: PlanActionType.MOVE,
+        entityId: survivor.id,
+        toCol: i % 2 === 0 ? sB.col : sA.col,
+        toRow: i % 2 === 0 ? sB.row : sA.row,
+      });
+    }
+
+    const steps = resolvePlans(state, heroPlan, []);
+    const allHeroOK = steps.flatMap(s => s.heroEvents).filter(e => e.type === ResEventType.ACTION_OK);
+    const allHeroCap = steps.flatMap(s => s.heroEvents).filter(e => e.type === ResEventType.BUDGET_CAP);
+
+    // With 20 planned actions, the budget should cap eventually
+    assert.ok(allHeroOK.length < 20, `Should not execute all 20 actions (got ${allHeroOK.length})`);
+    assert.ok(allHeroOK.length >= 3, `Should execute at least base budget worth of actions (got ${allHeroOK.length})`);
+    // Budget cap should fire at some point
+    assert.ok(allHeroCap.length > 0, 'BUDGET_CAP should fire when shared budget is exhausted');
   });
 });

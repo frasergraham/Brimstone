@@ -209,6 +209,41 @@ export function computeProjectedInventory(state, plan) {
   return { shared, witch, entityItems };
 }
 
+// ── Per-unit plan grouping and interleaving ─────────────────────────────────
+//
+// groupPlanByEntity: flat PlanAction[] → Map<entityId, PlanAction[]>
+// interleavePlan:    Map<entityId, PlanAction[]> → flat PlanAction[]
+//                    ordered by step (all units' action 0 first, then action 1, etc.)
+
+/** Group a flat plan array into per-entity queues. */
+export function groupPlanByEntity(plan) {
+  const map = new Map();
+  for (const action of (plan ?? [])) {
+    if (!map.has(action.entityId)) map.set(action.entityId, []);
+    map.get(action.entityId).push(action);
+  }
+  return map;
+}
+
+/** Interleave per-entity queues into a flat plan ordered by step index. */
+export function interleavePlan(unitPlans) {
+  const queues = [...unitPlans.values()];
+  const result = [];
+  let step = 0;
+  while (true) {
+    let added = false;
+    for (const q of queues) {
+      if (step < q.length) {
+        result.push(q[step]);
+        added = true;
+      }
+    }
+    if (!added) break;
+    step++;
+  }
+  return result;
+}
+
 // ── Plan validation (client-side, fast) ─────────────────────────────────────
 //
 // Validates a candidate plan action against a projected state.

@@ -15,6 +15,18 @@ import { PlanActionType, snapEntity } from '../src/planner.js';
 import { Phase, countHeldNodes } from '../src/game.js';
 import { ResourceType } from '../src/tiles.js';
 
+// ── Per-unit queue grouping ──────────────────────────────────────────────────
+// Groups a flat PlanAction[] into per-entity queues for simultaneous execution.
+
+function groupByEntity(plan) {
+  const map = new Map();
+  for (const action of (plan ?? [])) {
+    if (!map.has(action.entityId)) map.set(action.entityId, []);
+    map.get(action.entityId).push(action);
+  }
+  return map;
+}
+
 // ── Event types ──────────────────────────────────────────────────────────────
 
 export const ResEventType = Object.freeze({
@@ -413,18 +425,22 @@ function snapshotEntities(entities) {
 // The state object is mutated in-place. Call state.endRound() afterwards.
 
 export function resolvePlansMP(state, playerEntries) {
-  // Build per-player queue + budget objects.
+  // Build per-player structures with per-entity queues for simultaneous execution.
   // Order: hero players first, then witch players (preserves join order within faction).
   const heroEntries  = playerEntries.filter(e => e.faction === 'hero');
   const witchEntries = playerEntries.filter(e => e.faction === 'witch');
   const ordered      = [...heroEntries, ...witchEntries];
 
-  const budgets = ordered.map(entry => ({
-    playerId:  entry.playerId,
-    faction:   entry.faction,
-    remaining: budgetForPlayer(state, entry.playerId, entry.faction),
+  const players = ordered.map(entry => ({
+    playerId:   entry.playerId,
+    faction:    entry.faction,
+    unitQueues: groupByEntity(entry.plan),
+    budget: {
+      playerId:  entry.playerId,
+      faction:   entry.faction,
+      remaining: budgetForPlayer(state, entry.playerId, entry.faction),
+    },
   }));
-  const queues = ordered.map(entry => [...(entry.plan ?? [])]);
 
   const steps = [];
   let stepIndex = 0;
@@ -434,13 +450,15 @@ export function resolvePlansMP(state, playerEntries) {
     const stepEvents = [];
     let anyAction = false;
 
-    for (let i = 0; i < ordered.length; i++) {
-      const budget = budgets[i];
-      const queue  = queues[i];
-      if (queue.length === 0) continue;
-      const events = drainOneStep(state, queue, budget);
-      if (events.length > 0) {
-        stepEvents.push({ playerId: budget.playerId, faction: budget.faction, events });
+    for (const player of players) {
+      const playerEvents = [];
+      for (const [, queue] of player.unitQueues) {
+        if (queue.length === 0) continue;
+        const events = drainOneStep(state, queue, player.budget);
+        playerEvents.push(...events);
+      }
+      if (playerEvents.length > 0) {
+        stepEvents.push({ playerId: player.playerId, faction: player.faction, events: playerEvents });
         anyAction = true;
       }
     }
@@ -460,8 +478,9 @@ export function resolvePlansMP(state, playerEntries) {
 // step records with heroEvents / witchEvents arrays.
 
 export function resolvePlans(state, heroPlan, witchPlan) {
-  const heroQ  = [...(heroPlan  ?? [])];
-  const witchQ = [...(witchPlan ?? [])];
+  // Group each faction's flat plan into per-entity queues for simultaneous execution.
+  const heroUnitQueues  = groupByEntity(heroPlan);
+  const witchUnitQueues = groupByEntity(witchPlan);
 
   const heroBudget  = { faction: 'hero',  remaining: budgetFor(state, 'hero')  };
   const witchBudget = { faction: 'witch', remaining: budgetFor(state, 'witch') };
@@ -469,15 +488,28 @@ export function resolvePlans(state, heroPlan, witchPlan) {
   const steps = [];
   let stepIndex = 0;
 
-  while (heroQ.length > 0 || witchQ.length > 0) {
+  while (true) {
+    const heroHasActions  = [...heroUnitQueues.values()].some(q => q.length > 0);
+    const witchHasActions = [...witchUnitQueues.values()].some(q => q.length > 0);
+    if (!heroHasActions && !witchHasActions) break;
+
     const entitySnapshot = snapshotEntities(state.entities);
 
-    const heroEvents  = heroQ.length  > 0
-      ? drainOneStep(state, heroQ,  heroBudget)
-      : [];
-    const witchEvents = witchQ.length > 0
-      ? drainOneStep(state, witchQ, witchBudget)
-      : [];
+    // Drain one action from each hero unit that has actions queued.
+    const heroEvents = [];
+    for (const [, queue] of heroUnitQueues) {
+      if (queue.length === 0) continue;
+      const events = drainOneStep(state, queue, heroBudget);
+      heroEvents.push(...events);
+    }
+
+    // Drain one action from each witch unit.
+    const witchEvents = [];
+    for (const [, queue] of witchUnitQueues) {
+      if (queue.length === 0) continue;
+      const events = drainOneStep(state, queue, witchBudget);
+      witchEvents.push(...events);
+    }
 
     if (heroEvents.length === 0 && witchEvents.length === 0) break;
 
