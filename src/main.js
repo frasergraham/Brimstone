@@ -3973,6 +3973,12 @@ function _onlineError(msg) {
     authErr.textContent = msg;
     authErr.style.display = '';
   }
+  // If username is taken, scroll the email section into view so the user
+  // can immediately sign in with their linked email
+  if (msg && msg.includes('already taken')) {
+    const emailInput = document.getElementById('auth-email-input');
+    if (emailInput) emailInput.focus();
+  }
 }
 
 /** Ensure we have an authenticated MultiplayerClient, then call cb(). */
