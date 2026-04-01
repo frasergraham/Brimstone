@@ -496,6 +496,13 @@ async function _runLocalResolution(skipSummary = false) {
     for (const msg of waveLogs) state.addLog(msg);
   }
 
+  // Show encounter dialogs for survivors spawned at power nodes during endRound
+  if (ui && !_autoplay && state.nodeSpawnedSurvivors?.length) {
+    for (const s of state.nodeSpawnedSurvivors) {
+      await new Promise(resolve => ui._showEncounterDialog(s, resolve));
+    }
+  }
+
   if (ui) await ui._triggerPostRoundEffects();
   redraw();
 

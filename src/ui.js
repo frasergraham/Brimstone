@@ -2749,6 +2749,11 @@ export class UIController {
         }
       }
 
+      // Include survivors spawned at power nodes during endRound
+      for (const s of (this.state.nodeSpawnedSurvivors ?? [])) {
+        survivors.push(s);
+      }
+
       // Detect node control changes
       const nodeChanges = [];
       if (prevNodes) {
@@ -2777,6 +2782,12 @@ export class UIController {
       }
       if (eventsEl) {
         let html = '';
+
+        // Game-over: insert win reason at the TOP so it's immediately visible
+        if (gameOver && winReason) {
+          const cls = winner === humanFaction ? 'hero-text' : 'witch-text';
+          html += `<div class="summary-game-over ${cls}">${winReason}</div>`;
+        }
 
         // Combat summary — aggregate damage between each pair of combatants
         const battleLines = compileTurnBattleSummary(
@@ -2855,11 +2866,9 @@ export class UIController {
           const heroDelta  = state.nodeScore.hero  - prevScore.hero;
           const witchDelta = state.nodeScore.witch - prevScore.witch;
           const witchCount = state.witchObjectives.filter(obj =>
-            state.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row)
-          ).length;
+            nodeController(obj, state.entities) === 'witch').length;
           const heroCount = state.witchObjectives.filter(obj =>
-            state.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row)
-          ).length;
+            nodeController(obj, state.entities) === 'hero').length;
 
           const phaseLabel = state.phase === 'dawn' ? '🌅 Dawn Reckoning' : '🌇 Dusk Reckoning';
 
@@ -2888,11 +2897,7 @@ export class UIController {
           </div>`;
         }
 
-        // Game-over: insert win reason at the end
-        if (gameOver && winReason) {
-          const cls = winner === humanFaction ? 'hero-text' : 'witch-text';
-          html += `<div class="summary-game-over ${cls}">${winReason}</div>`;
-        }
+
 
         eventsEl.innerHTML = html || `<div class="summary-neutral">No notable events this round.</div>`;
       }
@@ -3282,7 +3287,11 @@ function _positionPopup(popup, ui) {
   // In planning mode, show popup at the entity's projected (ghost) position
   let displayCol = target.col;
   let displayRow = target.row;
-  if (ui._planMode && ui._selectedEntity) {
+  if (ui._pendingDisambig) {
+    // Disambiguation popup: show at the clicked hex, not the selected entity
+    displayCol = ui._pendingDisambig.hex.col;
+    displayRow = ui._pendingDisambig.hex.row;
+  } else if (ui._planMode && ui._selectedEntity) {
     const proj = ui._getProjectedPos(ui._selectedEntity.id);
     if (proj) { displayCol = proj.col; displayRow = proj.row; }
   }

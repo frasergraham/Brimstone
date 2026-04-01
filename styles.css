@@ -658,7 +658,7 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 /* Background = faction control color; border = node's own color (set via inline style) */
 .node-dot.hero      { background: var(--hero); box-shadow: 0 0 7px rgba(212,167,44,0.7); }
 .node-dot.witch     { background: var(--witch); box-shadow: 0 0 7px rgba(155,89,182,0.7); }
-.node-dot.contested { background: #cc8800; box-shadow: 0 0 7px rgba(200,140,0,0.7); }
+.node-dot.contested { background: linear-gradient(to right, var(--hero) 50%, var(--witch) 50%); box-shadow: 0 0 7px rgba(200,140,0,0.7); }
 .node-dot.neutral   { background: transparent; }
 
 .node-dots-group { display: flex; align-items: center; gap: 0.35rem; }
@@ -2983,11 +2983,12 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .summary-node.hero-text  { color: var(--hero); }
 .summary-node.witch-text { color: var(--witch); }
 .summary-game-over {
-  border-top: 1px solid rgba(255,255,255,0.15);
-  margin-top: 0.6rem;
-  padding-top: 0.5rem;
+  border-bottom: 1px solid rgba(255,255,255,0.15);
+  margin-bottom: 0.6rem;
+  padding-bottom: 0.5rem;
   font-weight: bold;
-  font-size: 0.9rem;
+  font-size: 1.15rem;
+  text-align: center;
 }
 .summary-game-over.hero-text  { color: var(--hero); }
 .summary-game-over.witch-text { color: var(--witch); }
