@@ -17,7 +17,7 @@
 //   6. Prepends the new release to CHANGELOG.json
 //   7. Writes the bumped version to src/version.js
 //   8. Commits the release on dev and tags it
-//   9. Fast-forward merges dev into the prod branch (master)
+//   9. Fast-forward merges dev into the prod branch
 //  10. Returns to dev
 //
 // The version bump originates on dev and flows forward — no back-merge needed.
@@ -31,7 +31,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
 const DEV_BRANCH  = 'dev';
-const PROD_BRANCH = 'master';
+const PROD_BRANCH = 'prod';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
