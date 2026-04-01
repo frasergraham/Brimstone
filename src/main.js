@@ -2858,6 +2858,18 @@ async function _startSpReplay(data) {
 // ── Full-game replay engine ───────────────────────────────────────────────────
 
 /**
+ * Replace the module-level state and update all references (renderer, UI).
+ * In online mode `state` may be a MirrorState with getter-only properties
+ * (winner, gameOver, actionsAvailable), so Object.assign from a GameState
+ * would throw.  Direct replacement avoids that conflict.
+ */
+function _swapState(newState) {
+  state = newState;
+  if (renderer) renderer.state = newState;
+  if (ui) ui.state = newState;
+}
+
+/**
  * Replay all rounds of a completed game in sequence (fast mode by default).
  * @param {Array}  rounds       — [{ roundNum, preState, steps }]
  * @param {string} winner
@@ -2959,16 +2971,20 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
           ? JSON.parse(lastRound.preState) : lastRound.preState;
         const lastState = deserializeState(lastData);
         renderer.clearAnimations();
-        Object.assign(state, lastState);
-        state.hero     = lastState.hero;
-        state.witch    = lastState.witch;
+        _swapState(lastState);
         if (!opts.stopLabel) state.fogOfWar = 'none';
         // Apply final entities if available (captures combat outcomes of last round)
         if (lastRound.finalEntities) {
           const finals = lastRound.finalEntities;
           for (const e of state.entities) {
             const f = finals.find(fe => fe.id === e.id);
-            if (f) Object.assign(e, f);
+            if (f) {
+              // Strip getter-derived properties that may be present on
+              // JSON-parsed plain objects but are getters on Entity instances.
+              delete f.alive;
+              delete f.displayName;
+              Object.assign(e, f);
+            }
           }
         }
         draw();
@@ -2985,9 +3001,7 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
       // Restore state and draw BEFORE the pause check — canvas always has valid content.
       // Clear lingering animations from the previous round first to avoid ghost effects.
       renderer.clearAnimations();
-      Object.assign(state, preState);
-      state.hero     = preState.hero;
-      state.witch    = preState.witch;
+      _swapState(preState);
       if (!opts.stopLabel) state.fogOfWar = 'none';
       draw();
 

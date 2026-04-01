@@ -1816,7 +1816,7 @@ export class UIController {
         const bhAction = this._validActions.find(a => a.type === ActionType.BATTLE_HEX);
         const hexTargets = bhAction?.targets ?? [];
         this._awaitingTarget = { actionType: ActionType.BATTLE_HEX, actor: entity, hexTargets };
-        renderer.highlightHexes = hexTargets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,120,40,0.50)' }));
+        this.renderer.highlightHexes = hexTargets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,120,40,0.50)' }));
         state.addLog('Click a hex to attack it (skips if empty).');
         this._updateSidebar();
         this.onRedraw();
