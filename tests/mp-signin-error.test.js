@@ -1,8 +1,9 @@
 // Tests for the multiplayer sign-in error visibility fix.
 //
 // The onError handler in _createMpClient must call _onlineError() AFTER
-// _initMpStep(), because _initMpStep() resets the error element to
-// display:none. If _onlineError runs first, the error is immediately hidden.
+// _showOnlineScreen()/_showAsyncScreen(). Errors now display in the auth
+// dialog (#auth-error), so the ordering concern is simpler, but we still
+// verify that the handler calls the screen-show function before _onlineError.
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,7 +18,6 @@ describe('multiplayer onError handler ordering', () => {
   test('_onlineError is called after the screen show functions in the onError handler', () => {
     // The onError handler calls _showOnlineScreen() or _showAsyncScreen() which
     // internally call _initMpStep()/_initAsyncStep(), then calls _onlineError(msg).
-    // This ensures the error is displayed AFTER init resets display:none.
     // Extract the onError handler body (allowing nested braces)
     const onErrorStart = mainJs.indexOf('onError(msg) {');
     assert.ok(onErrorStart !== -1, 'onError handler must exist');
@@ -35,11 +35,11 @@ describe('multiplayer onError handler ordering', () => {
     );
   });
 
-  test('_initMpStep resets mp-name-error to display:none', () => {
-    // Verify the assumption: _initMpStep hides the error element
+  test('_onlineError targets the auth dialog error element', () => {
+    // _onlineError should show errors in the auth dialog (#auth-error)
     assert.ok(
-      mainJs.includes("document.getElementById('mp-name-error').style.display = 'none'"),
-      '_initMpStep should reset the error element display to none'
+      mainJs.includes("document.getElementById('auth-error')"),
+      '_onlineError should target the auth-error element in the auth dialog'
     );
   });
 });

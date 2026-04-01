@@ -26,9 +26,8 @@ import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves } from '
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
 import { requestNotificationPermission, notifyTurnReady, notifyOpponentSubmitted, notifyGameOver } from './notifications.js';
 
-// Stamp version into badges
+// Stamp version into badge
 document.getElementById('version-badge').textContent = `v${BUILD_VERSION}`;
-document.getElementById('menu-version').textContent  = `v${BUILD_VERSION}`;
 
 // ── Game mode config (env-var driven) ────────────────────────────────────────
 // Fetches /api/config to determine which game modes are enabled/disabled/hidden.
@@ -1344,6 +1343,19 @@ function showStep(step) {
   stepAsyncCreate   .style.display = step === 'async-create'    ? '' : 'none';
   stepAsyncCreated  .style.display = step === 'async-created'   ? '' : 'none';
   stepAsyncJoin     .style.display = step === 'async-join'      ? '' : 'none';
+
+  // Move the session bar into the active card so it sits at its bottom
+  const _stepEl = {
+    'mode': stepMode, 'sp-choice': stepSpChoice, 'singleplayer': stepSinglePlayer,
+    'campaign-select': stepCampaignSelect, 'campaign': stepCampaign, 'debrief': stepDebrief,
+    'multiplayer': stepMultiplayer, 'online': stepOnline, 'async': stepAsync,
+    'local-play': stepLocalPlay, 'howtoplay': stepHowto, 'options': stepOptions,
+    'changelog': stepChangelog, 'account': stepAccount, 'waiting': stepWaiting,
+    'create-game': stepCreateGame, 'join-game': stepJoinGame, 'lobby': stepLobby,
+    'async-create': stepAsyncCreate, 'async-created': stepAsyncCreated, 'async-join': stepAsyncJoin,
+  }[step];
+  const sessionBar = document.getElementById('setup-session-bar');
+  if (_stepEl && sessionBar) _stepEl.appendChild(sessionBar);
 }
 
 // Current lobby state (pre-game)
@@ -1365,8 +1377,12 @@ document.getElementById('btn-options-back') .addEventListener('click', () => sho
 document.getElementById('btn-account-back') .addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-changelog-back').addEventListener('click', () => showStep('mode'));
 
-// Show game version on main menu
-document.getElementById('menu-version').textContent = `v${VERSION}`;
+// Initialize persistent session bar on page load
+_updateSessionBar();
+{
+  const sessionBar = document.getElementById('setup-session-bar');
+  if (sessionBar) stepMode.appendChild(sessionBar);
+}
 
 // Show admin link only for admin users
 {
@@ -2278,7 +2294,7 @@ function _fetchMainMenuAsyncGames() {
             <span class="menu-async-deadline">${deadline}${deadline && ago ? ' · ' : ''}${ago}</span>`;
         }
         item.addEventListener('click', () => {
-          _ensureAuthed(() => _openAsyncGame(g.room_id), 'async-username');
+          _ensureAuthed(() => _openAsyncGame(g.room_id));
         });
         list.appendChild(item);
       }
@@ -3388,13 +3404,13 @@ document.getElementById('btn-create-async').addEventListener('click', () => {
     // Default faction radio to hero
     const heroRadio = document.querySelector('input[name="async-faction"][value="hero"]');
     if (heroRadio) heroRadio.checked = true;
-  }, 'async-username');
+  });
 });
 
 document.getElementById('btn-join-async').addEventListener('click', () => {
   _ensureAuthed(() => {
     showStep('async-join');
-  }, 'async-username');
+  });
 });
 
 document.getElementById('btn-async-create-back').addEventListener('click', () => {
@@ -3695,50 +3711,33 @@ document.getElementById('btn-lobby-leave').addEventListener('click', () => {
 });
 
 function _initMpStep() {
-  const session     = loadSession();
-  const sessionInfo = document.getElementById('mp-session-info');
-  const nameForm    = document.getElementById('mp-name-form');
-  const actionBtns  = document.getElementById('mp-action-buttons');
+  const session    = loadSession();
+  const signedOut  = document.getElementById('mp-signed-out');
+  const actionBtns = document.getElementById('mp-action-buttons');
 
   if (session) {
-    document.getElementById('mp-session-name').textContent = session.username;
-    sessionInfo.style.display = '';
-    nameForm.style.display    = 'none';
-    actionBtns.style.display  = '';
+    signedOut.style.display  = 'none';
+    actionBtns.style.display = '';
   } else {
-    sessionInfo.style.display = 'none';
-    nameForm.style.display    = '';
-    actionBtns.style.display  = 'none';
+    signedOut.style.display  = '';
+    actionBtns.style.display = 'none';
   }
-
-  // Reset form states
-  document.getElementById('mp-name-error').style.display = 'none';
-  const loginStatus = document.getElementById('mp-email-login-status');
-  if (loginStatus) loginStatus.style.display = 'none';
+  _updateSessionBar();
 }
 
 function _initAsyncStep() {
-  const session     = loadSession();
-  const sessionInfo = document.getElementById('async-session-info');
-  const nameForm    = document.getElementById('async-name-form');
-  const actionBtns  = document.getElementById('async-action-buttons');
+  const session    = loadSession();
+  const signedOut  = document.getElementById('async-signed-out');
+  const actionBtns = document.getElementById('async-action-buttons');
 
   if (session) {
-    document.getElementById('async-session-name').textContent = session.username;
-    sessionInfo.style.display = '';
-    nameForm.style.display    = 'none';
-    actionBtns.style.display  = '';
+    signedOut.style.display  = 'none';
+    actionBtns.style.display = '';
   } else {
-    sessionInfo.style.display = 'none';
-    nameForm.style.display    = '';
-    actionBtns.style.display  = 'none';
+    signedOut.style.display  = '';
+    actionBtns.style.display = 'none';
   }
-
-  // Reset form states
-  const nameErr = document.getElementById('async-name-error');
-  if (nameErr) nameErr.style.display = 'none';
-  const emailStatus = document.getElementById('async-email-login-status');
-  if (emailStatus) emailStatus.style.display = 'none';
+  _updateSessionBar();
 }
 
 // ── Account page ──────────────────────────────────────────────────────────────
@@ -3747,6 +3746,8 @@ async function _initAccountPage() {
   const session = loadSession();
   const signedOut = document.getElementById('acct-signed-out');
   const signedIn  = document.getElementById('acct-signed-in');
+
+  _updateSessionBar();
 
   if (!session) {
     signedOut.style.display = '';
@@ -3770,7 +3771,6 @@ async function _initAccountPage() {
   const emailEl   = document.getElementById('acct-email');
   const linkBtn   = document.getElementById('btn-acct-link-email');
   const emailForm = document.getElementById('acct-email-form');
-  const emailBadge = document.getElementById('mp-email-badge');
   emailForm.style.display = 'none';
   const emailStatus = document.getElementById('acct-email-status');
   if (emailStatus) emailStatus.style.display = 'none';
@@ -3782,32 +3782,77 @@ async function _initAccountPage() {
       clearSession();
       signedOut.style.display = '';
       signedIn.style.display  = 'none';
+      _updateSessionBar();
       return;
     }
     const emailIdentity = identities.find(i => i.provider === 'email');
     if (emailIdentity) {
       emailEl.textContent = emailIdentity.provider_id;
       linkBtn.style.display = 'none';
-      // Also update the MP screen badge
-      if (emailBadge) {
-        emailBadge.textContent = `✓ ${emailIdentity.provider_id}`;
-        emailBadge.style.display = '';
-      }
     } else {
       emailEl.textContent = 'Not linked';
       linkBtn.style.display = '';
-      if (emailBadge) emailBadge.style.display = 'none';
     }
   } catch {
     emailEl.textContent = 'Not linked';
     linkBtn.style.display = '';
-    if (emailBadge) emailBadge.style.display = 'none';
   }
 }
 
-// Account: go to MP to sign in
-document.getElementById('btn-acct-goto-mp').addEventListener('click', () => {
-  _showMultiplayerChoice();
+// ── Auth dialog ──────────────────────────────────────────────────────────────
+
+let _authDialogCallback = null;
+
+function _showAuthDialog(onSuccess) {
+  _authDialogCallback = onSuccess;
+  const dlg = document.getElementById('auth-dialog');
+  document.getElementById('auth-username').value = '';
+  document.getElementById('auth-email-input').value = '';
+  document.getElementById('auth-error').style.display = 'none';
+  document.getElementById('auth-email-status').style.display = 'none';
+  dlg.classList.add('visible');
+}
+
+function _hideAuthDialog() {
+  document.getElementById('auth-dialog').classList.remove('visible');
+  _authDialogCallback = null;
+}
+
+document.getElementById('btn-auth-cancel').addEventListener('click', () => _hideAuthDialog());
+
+document.getElementById('btn-auth-signin').addEventListener('click', () => {
+  const errorEl = document.getElementById('auth-error');
+  errorEl.style.display = 'none';
+
+  const cb = _authDialogCallback;
+  _ensureAuthed(() => {
+    _hideAuthDialog();
+    if (cb) cb();
+  });
+});
+
+document.getElementById('btn-auth-email-login').addEventListener('click', async () => {
+  const email = document.getElementById('auth-email-input').value.trim();
+  if (!email) return;
+
+  const statusEl = document.getElementById('auth-email-status');
+  statusEl.textContent = 'Sending…';
+  statusEl.className   = 'setup-hint';
+  statusEl.style.display = '';
+
+  const result = await requestEmailLogin(email);
+  if (result.ok) {
+    statusEl.textContent = result.message || 'Check your email for the login link!';
+    statusEl.className   = 'setup-hint';
+  } else {
+    statusEl.textContent = result.error || 'Failed to send link.';
+    statusEl.className   = 'setup-error';
+  }
+});
+
+// Account: sign in via dialog
+document.getElementById('btn-acct-signin').addEventListener('click', () => {
+  _showAuthDialog(() => _initAccountPage());
 });
 
 // Account: edit username
@@ -3845,8 +3890,7 @@ document.getElementById('btn-acct-save-name').addEventListener('click', async ()
       // Update displays
       document.getElementById('acct-username').textContent = data.player.username;
       document.getElementById('acct-name-edit').style.display = 'none';
-      document.getElementById('mp-session-name').textContent = data.player.username;
-      document.getElementById('async-session-name').textContent = data.player.username;
+      _updateSessionBar();
     } else {
       errorEl.textContent = data.error || 'Failed to change username.';
       errorEl.style.display = '';
@@ -3885,16 +3929,8 @@ document.getElementById('btn-acct-send-link').addEventListener('click', async ()
   }
 });
 
-// Account: sign out
-document.getElementById('btn-acct-signout').addEventListener('click', () => {
-  clearSession();
-  if (mp) { mp.disconnect(); mp = null; }
-  renderer = null; ui = null; state = null;
-  _initAccountPage();
-});
-
 document.getElementById('btn-mp-signin').addEventListener('click', () => {
-  _ensureAuthed(() => {
+  _showAuthDialog(() => {
     _initMpStep();
     _fetchActiveSaves();
     _fetchCompletedGames();
@@ -3907,92 +3943,62 @@ function _signOut() {
   renderer = null; ui = null; state = null;
 }
 
-document.getElementById('btn-mp-sign-out').addEventListener('click', () => {
+function _updateSessionBar() {
+  const session = loadSession();
+  const bar     = document.getElementById('setup-session-bar');
+  if (session) {
+    document.getElementById('setup-session-name').textContent = session.username;
+    bar.style.display = '';
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+// ── Persistent sign-out (footer bar) ────────────────────────────────────────
+
+document.getElementById('btn-setup-signout').addEventListener('click', () => {
   _signOut();
+  _updateSessionBar();
+  // Refresh whichever screen is visible
   _initMpStep();
+  _initAsyncStep();
+  _initAccountPage();
   document.getElementById('active-games-list').innerHTML =
     '<p class="saves-empty">Sign in to see your active games.</p>';
   document.getElementById('mp-completed-list').innerHTML =
     '<p class="saves-empty">Sign in to see completed games.</p>';
-});
-
-// ── Async sign-in / sign-out ────────────────────────────────────────────────
-
-document.getElementById('btn-async-signin').addEventListener('click', () => {
-  _ensureAuthed(() => {
-    _initAsyncStep();
-    _fetchAsyncGames();
-  }, 'async-username');
-});
-
-document.getElementById('btn-async-sign-out').addEventListener('click', () => {
-  _signOut();
-  _initAsyncStep();
   document.getElementById('async-games-list').innerHTML =
     '<p class="saves-empty">Sign in to see async games.</p>';
 });
 
-document.getElementById('btn-async-email-login').addEventListener('click', async () => {
-  const emailInput = document.getElementById('async-email-login-input');
-  const email = emailInput.value.trim();
-  if (!email) return;
+// ── Async sign-in ───────────────────────────────────────────────────────────
 
-  const statusEl = document.getElementById('async-email-login-status');
-  statusEl.textContent = 'Sending…';
-  statusEl.className   = 'setup-hint';
-  statusEl.style.display = '';
-
-  const result = await requestEmailLogin(email);
-  if (result.ok) {
-    statusEl.textContent = result.message || 'Check your email for the login link!';
-    statusEl.className   = 'setup-hint';
-  } else {
-    statusEl.textContent = result.error || 'Failed to send link.';
-    statusEl.className   = 'setup-error';
-  }
+document.getElementById('btn-async-signin').addEventListener('click', () => {
+  _showAuthDialog(() => {
+    _initAsyncStep();
+    _fetchAsyncGames();
+  });
 });
 
-// ── Email login (new device, no session — on online screen) ─────────────────
-
-document.getElementById('btn-mp-email-login').addEventListener('click', async () => {
-  const emailInput = document.getElementById('mp-email-login-input');
-  const email = emailInput.value.trim();
-  if (!email) return;
-
-  const statusEl = document.getElementById('mp-email-login-status');
-  statusEl.textContent = 'Sending…';
-  statusEl.className   = 'setup-hint';
-  statusEl.style.display = '';
-
-  const result = await requestEmailLogin(email);
-  if (result.ok) {
-    statusEl.textContent = result.message || 'Check your email for the login link!';
-    statusEl.className   = 'setup-hint';
-  } else {
-    statusEl.textContent = result.error || 'Failed to send link.';
-    statusEl.className   = 'setup-error';
-  }
-});
+// (Email login is now handled by the auth dialog)
 
 function _onlineError(msg) {
-  // Show error on whichever screen is visible
-  const mpErr = document.getElementById('mp-name-error');
-  const asyncErr = document.getElementById('async-name-error');
-  if (mpErr && stepOnline.style.display !== 'none') {
-    mpErr.textContent = msg;
-    mpErr.style.display = '';
-  } else if (asyncErr && stepAsync.style.display !== 'none') {
-    asyncErr.textContent = msg;
-    asyncErr.style.display = '';
-  } else if (mpErr) {
-    mpErr.textContent = msg;
-    mpErr.style.display = '';
+  // Show error in the auth dialog if visible, otherwise ignore
+  const authErr = document.getElementById('auth-error');
+  if (authErr) {
+    authErr.textContent = msg;
+    authErr.style.display = '';
+  }
+  // If username is taken, scroll the email section into view so the user
+  // can immediately sign in with their linked email
+  if (msg && msg.includes('already taken')) {
+    const emailInput = document.getElementById('auth-email-input');
+    if (emailInput) emailInput.focus();
   }
 }
 
 /** Ensure we have an authenticated MultiplayerClient, then call cb(). */
-function _ensureAuthed(cb, usernameInputId) {
-  const nameInput = document.getElementById(usernameInputId || 'mp-username');
+function _ensureAuthed(cb) {
   const session   = loadSession();
   const wsUrl     = _serverWsUrl();
 
@@ -4016,8 +4022,14 @@ function _ensureAuthed(cb, usernameInputId) {
   if (session) {
     mp.auth({ token: session.token });
   } else {
+    const nameInput = document.getElementById('auth-username');
     const username = nameInput.value.trim();
-    if (username.length < 2) { _onlineError('Enter a username (2+ characters).'); return; }
+    if (username.length < 2) {
+      const errorEl = document.getElementById('auth-error');
+      errorEl.textContent = 'Enter a username (2+ characters).';
+      errorEl.style.display = '';
+      return;
+    }
     mp.auth({ username });
   }
 }
@@ -4345,6 +4357,9 @@ function _createMpClient() {
     onAsyncOpponentJoined(msg) { _handleAsyncOpponentJoined(msg); },
 
     onError(msg) {
+      // Ignore errors after intentional sign-out / disconnect
+      if (!mp) return;
+
       // During auth phase, show error on the appropriate screen
       if (!state || document.getElementById('setup-screen').style.display !== 'none') {
         if (_asyncRoomId || stepAsync.style.display !== 'none') {
@@ -4377,14 +4392,9 @@ MultiplayerClient.prototype._route = function(msg) {
 
   if (msg.type === 'authError') {
     // Token no longer valid (e.g. server restarted) — clear session and
-    // show the name-entry form so the error label inside it is visible.
-    const expiredSession = loadSession();
+    // show the signed-out state so the user can sign in again.
     clearSession();
     if (mp) mp._player = null;
-    if (expiredSession?.username) {
-      document.getElementById('mp-username').value = expiredSession.username;
-      document.getElementById('async-username').value = expiredSession.username;
-    }
     if (_asyncRoomId || stepAsync.style.display !== 'none') {
       _showAsyncScreen();
     } else {
@@ -4614,6 +4624,7 @@ if (_emailToken) {
     _tmpMp.connect(_serverWsUrl());
     _tmpMp._opts._onAuthOk = () => {
       mp = _tmpMp;
+      _updateSessionBar();
       // If there's an async deep link hash, open the game now that we're authed
       _checkAsyncDeepLink();
       if (!window.location.hash) _showMultiplayerChoice();

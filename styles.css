@@ -2286,6 +2286,41 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   text-align: center;
 }
 
+/* ── Auth dialog ─────────────────────────────────────────────────────── */
+
+#auth-dialog {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+#auth-dialog.visible { display: flex; }
+
+.auth-dialog-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.5rem 2rem;
+  min-width: 280px;
+  max-width: 360px;
+  text-align: center;
+  box-shadow: 0 0 36px rgba(80, 40, 120, 0.45);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.auth-dialog-title {
+  font-size: 1.4rem;
+  font-weight: bold;
+  color: var(--text-bright);
+  letter-spacing: 0.08em;
+  margin: 0 0 0.8rem;
+}
+
 .room-code-display {
   display: inline-block;
   font-size: 2rem;
@@ -2384,18 +2419,28 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   color: var(--danger, #aa4444);
 }
 
-/* ── Version badges ────────────────────────────────────────────── */
-.version-badge {
+/* ── Setup footer (version + session bar) ─────────────────────── */
+.setup-footer {
   position: absolute;
-  bottom: 0.6rem;
-  right: 0.8rem;
-  font-size: 0.65rem;
-  color: rgba(255,255,255,0.2);
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 1rem;
+  z-index: 10;
+  pointer-events: none;
+}
+.setup-footer > * { pointer-events: auto; }
+
+.version-badge {
+  font-size: 0.8rem;
+  color: rgba(255,255,255,0.35);
   letter-spacing: 0.05em;
   user-select: none;
 }
 .version-link {
-  pointer-events: auto;
   cursor: pointer;
   text-decoration: none;
   transition: color 0.2s;
@@ -2404,6 +2449,36 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   color: rgba(255,255,255,0.5);
   text-decoration: underline;
 }
+
+.setup-session-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+.setup-session-name {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.setup-signout-btn {
+  background: none;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 4px;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 0.78rem;
+  padding: 0.2rem 0.6rem;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+}
+.setup-signout-btn:hover {
+  color: var(--text);
+  border-color: rgba(255,255,255,0.4);
+}
+
 #setup-screen { position: relative; }
 
 /* ── Changelog / Revision History ─────────────────────────────── */

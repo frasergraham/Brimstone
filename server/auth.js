@@ -48,7 +48,7 @@ export function registerOrLogin({ username, token } = {}) {
   }
 
   if (_getByName.get(name)) {
-    return { ok: false, error: 'That username is already taken. Pick another or re-enter your token.' };
+    return { ok: false, error: 'That username is already taken. If it\'s yours, sign in with your linked email address below.' };
   }
 
   const id       = randomUUID();
