@@ -3541,6 +3541,9 @@ function _checkAsyncDeepLink() {
   }
 }
 
+// ── Auth dialog callback (hoisted for deep link access) ─────────────────────
+let _authDialogCallback = null;
+
 // ── Deep link handling for online game lobbies ───────────────────────────────
 
 function _checkGameDeepLink() {
@@ -3849,8 +3852,6 @@ async function _initAccountPage() {
 }
 
 // ── Auth dialog ──────────────────────────────────────────────────────────────
-
-let _authDialogCallback = null;
 
 function _showAuthDialog(onSuccess) {
   _authDialogCallback = onSuccess;
