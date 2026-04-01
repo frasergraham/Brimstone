@@ -410,6 +410,15 @@ const SURVIVOR_FIND_CHANCE = Object.freeze({
   night: 0.25,
 });
 
+// Diminishing returns: each active survivor on the map reduces find chance by 10%.
+// At 10+ survivors the chance drops to zero.
+export function survivorFindMultiplier(state) {
+  const active = state.entities.filter(
+    e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR
+  ).length;
+  return Math.max(0, 1 - 0.10 * active);
+}
+
 // Reveal and materialise a hidden survivor (or zombie for the witch) on a tile.
 // Clears the hiddenSurvivor flag and returns { encounterLog, encounterSurvivor }.
 function _triggerSurvivorEncounter(state, actor, col, row) {
@@ -492,8 +501,8 @@ export function executeMove(state, actor, targetCol, targetRow) {
     actor.row = step.row;
     walkedPath.push({ col: step.col, row: step.row });
 
-    // Hidden survivor encounter — phase-based chance on movement
-    if (st.hiddenSurvivor && Math.random() < (SURVIVOR_FIND_CHANCE[state.phase] ?? 0.5)) {
+    // Hidden survivor encounter — phase-based chance on movement, reduced by active survivors
+    if (st.hiddenSurvivor && Math.random() < (SURVIVOR_FIND_CHANCE[state.phase] ?? 0.5) * survivorFindMultiplier(state)) {
       const enc = _triggerSurvivorEncounter(state, actor, step.col, step.row);
       if (enc) { encounterLog.push(...enc.encounterLog); encounterSurvivor = enc.encounterSurvivor; }
     }
@@ -522,10 +531,10 @@ export function executeExplore(state, actor) {
 
   t.explored = true;
 
-  // Exploring always reveals a hidden survivor, regardless of phase.
+  // Exploring reveals a hidden survivor — chance reduced by active survivors on the map.
   let encounterLog = [];
   let encounterSurvivor = null;
-  if (t.hiddenSurvivor) {
+  if (t.hiddenSurvivor && Math.random() < survivorFindMultiplier(state)) {
     const enc = _triggerSurvivorEncounter(state, actor, actor.col, actor.row);
     if (enc) { encounterLog = enc.encounterLog; encounterSurvivor = enc.encounterSurvivor; }
   }
@@ -610,6 +619,27 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
   }
 }
 
+// Splash damage: when a unit is crushed or killed, all other units on the same
+// tile (except those in excludeIds) take 1 damage.  Does NOT chain — splash
+// kills do not trigger further splashes.  Returns array of killed entity info.
+function _applySplashDamage(state, col, row, excludeIds, log) {
+  const excludeSet = new Set(excludeIds);
+  const bystanders = state.entities.filter(
+    e => e.alive && e.col === col && e.row === row && !excludeSet.has(e.id)
+  );
+  const splashKills = [];
+  for (const b of bystanders) {
+    const wasKilled = b.takeDamage(1);
+    log.push(`💢 ${b.displayName} caught in the blast — takes 1 splash damage! (${b.hp}/${b.maxHp} HP)`);
+    if (wasKilled) {
+      log.push(`${b.displayName} is slain by splash damage!`);
+      splashKills.push({ id: b.id, owner: b.owner, type: b.type, ownerId: b.ownerId });
+      state.entities = state.entities.filter(e => e.id !== b.id);
+    }
+  }
+  return splashKills;
+}
+
 export function executeBattle(state, actor, target) {
   actor.guarding = 0;  // Attacking breaks guard stance
   const log = [];
@@ -666,10 +696,12 @@ export function executeBattle(state, actor, target) {
   let damage     = 0;          // damage dealt to target
   let counterDmg = 0;          // damage dealt to attacker (counter)
   let fortDamaged = 0;         // fort levels lost this combat (1 if defender took any damage)
+  let splashKills = [];         // entities killed by splash damage
+  const isCrush  = hit && attackRoll >= 2 * defenseRoll;
 
   if (hit) {
     // Crushing blow: attacker's roll is at least double the defender's roll
-    const totalDmg = attackRoll >= 2 * defenseRoll ? 2 : 1;
+    const totalDmg = isCrush ? 2 : 1;
 
     // All damage goes directly to the defender
     for (let d = 0; d < totalDmg; d++) {
@@ -694,7 +726,18 @@ export function executeBattle(state, actor, target) {
       const label = damage >= 2 ? `${damage} damage (crushing blow!)` : `${damage} damage`;
       log.push(`${target.displayName} takes ${label}. (${target.hp}/${target.maxHp} HP)`);
     }
-    if (attackRoll >= 2 * defenseRoll) log.push(`💥 Crushing blow! (${attackRoll} vs ${defenseRoll})`);
+    if (isCrush) log.push(`💥 Crushing blow! (${attackRoll} vs ${defenseRoll})`);
+
+    // Splash damage: crush or kill splashes all other units on the target's tile
+    if (isCrush || killed) {
+      splashKills = _applySplashDamage(state, target.col, target.row, [actor.id, target.id], log);
+      for (const sk of splashKills) {
+        if (sk.owner !== actor.owner) {
+          if (actor.owner === 'hero') state.heroKills++;
+          else if (actor.owner === 'witch') state.witchKills++;
+        }
+      }
+    }
   } else {
     log.push(`${target.displayName} defends successfully.`);
 
@@ -708,6 +751,16 @@ export function executeBattle(state, actor, target) {
         if (target.owner === 'hero') state.heroKills++;
         else if (target.owner === 'witch') state.witchKills++;
         state.entities = state.entities.filter(e => e.id !== actor.id);
+
+        // Counter-kill splashes other units on the attacker's tile (exclude target)
+        const counterSplash = _applySplashDamage(state, actor.col, actor.row, [target.id, actor.id], log);
+        splashKills.push(...counterSplash);
+        for (const sk of counterSplash) {
+          if (sk.owner !== target.owner) {
+            if (target.owner === 'hero') state.heroKills++;
+            else if (target.owner === 'witch') state.witchKills++;
+          }
+        }
       } else {
         log.push(`${actor.displayName} is at ${actor.hp}/${actor.maxHp} HP.`);
       }
@@ -718,7 +771,7 @@ export function executeBattle(state, actor, target) {
     success: true, log, cost: 1,
     attackRoll, defenseRoll, hit, killed,
     margin, damage, counterDmg, fortDamaged,
-    attackerAllies, defenderAllies,
+    attackerAllies, defenderAllies, splashKills,
     breakdown: {
       atkBaseDie, defBaseDie,
       atkExtraDice, defExtraDice,
@@ -958,9 +1011,11 @@ export function executeGuardStrike(state, guardian, target) {
 
   let killed = false;
   let damage = 0;
+  let splashKills = [];
+  const isCrush = hit && attackRoll >= 2 * defenseRoll;
 
   if (hit) {
-    const totalDmg = attackRoll >= 2 * defenseRoll ? 2 : 1;
+    const totalDmg = isCrush ? 2 : 1;
 
     for (let d = 0; d < totalDmg; d++) {
       damage += 1;
@@ -983,7 +1038,18 @@ export function executeGuardStrike(state, guardian, target) {
       const label = damage >= 2 ? `${damage} damage (crushing blow!)` : `${damage} damage`;
       log.push(`${target.displayName} takes ${label}. (${target.hp}/${target.maxHp} HP)`);
     }
-    if (attackRoll >= 2 * defenseRoll) log.push(`💥 Crushing blow from guard!`);
+    if (isCrush) log.push(`💥 Crushing blow from guard!`);
+
+    // Splash damage on crush or kill
+    if (isCrush || killed) {
+      splashKills = _applySplashDamage(state, target.col, target.row, [guardian.id, target.id], log);
+      for (const sk of splashKills) {
+        if (sk.owner !== guardian.owner) {
+          if (guardian.owner === 'hero') state.heroKills++;
+          else if (guardian.owner === 'witch') state.witchKills++;
+        }
+      }
+    }
   } else {
     log.push(`${target.displayName} evades the guard strike.`);
     // No counter-attack on guard strikes
@@ -991,7 +1057,7 @@ export function executeGuardStrike(state, guardian, target) {
 
   return {
     success: true, log, cost: 0, guardStrike: true,
-    attackRoll, defenseRoll, hit, killed, margin, damage,
+    attackRoll, defenseRoll, hit, killed, margin, damage, splashKills,
     breakdown: {
       atkBaseDie, defBaseDie,
       atkExtraDice: [], defExtraDice: [],
