@@ -7,7 +7,7 @@ import db from './db.js';
 // ── Configuration ────────────────────────────────────────────────────────────
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
-const EMAIL_FROM     = process.env.EMAIL_FROM || 'Brimstone <onboarding@resend.dev>';
+const EMAIL_FROM     = process.env.EMAIL_FROM || 'Brimstone <noreply@brimstone.fyi>';
 const DEDUP_WINDOW_S = 3600; // 1 hour — don't resend same notification type
 
 function _baseUrl() {
