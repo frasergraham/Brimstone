@@ -42,12 +42,24 @@ canvas { touch-action: pan-x pan-y; }
   align-items: center;
   justify-content: center;
   height: 100vh;
-  background: radial-gradient(ellipse at 50% 60%, #1a0e2a 0%, #0d0f16 70%);
+  background: url('assets/bg.png') center/cover no-repeat;
+  position: relative;
+}
+#setup-screen::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(13, 15, 22, 0.55);
+  pointer-events: none;
 }
 
 .setup-card {
+  position: relative;
+  z-index: 1;
   width: min(440px, 92vw);
-  background: var(--bg-panel);
+  background: rgba(17, 21, 32, 0.85);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 2rem 2.5rem;
@@ -2479,7 +2491,7 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   border-color: rgba(255,255,255,0.4);
 }
 
-#setup-screen { position: relative; }
+/* (position: relative declared on #setup-screen above) */
 
 /* ── Changelog / Revision History ─────────────────────────────── */
 .changelog-body {
