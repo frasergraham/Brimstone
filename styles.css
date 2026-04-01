@@ -2428,15 +2428,15 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.4rem 0.8rem;
-  font-size: 0.7rem;
+  padding: 0.6rem 1rem;
+  z-index: 10;
   pointer-events: none;
 }
 .setup-footer > * { pointer-events: auto; }
 
 .version-badge {
-  font-size: 0.65rem;
-  color: rgba(255,255,255,0.2);
+  font-size: 0.8rem;
+  color: rgba(255,255,255,0.35);
   letter-spacing: 0.05em;
   user-select: none;
 }
@@ -2453,26 +2453,30 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .setup-session-bar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 0.5rem;
+  margin-top: 1.25rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
 }
 .setup-session-name {
-  color: rgba(255,255,255,0.35);
-  font-size: 0.7rem;
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 .setup-signout-btn {
   background: none;
-  border: 1px solid rgba(255,255,255,0.15);
+  border: 1px solid rgba(255,255,255,0.2);
   border-radius: 4px;
-  color: rgba(255,255,255,0.35);
+  color: var(--muted);
   font-family: inherit;
-  font-size: 0.65rem;
-  padding: 0.15rem 0.5rem;
+  font-size: 0.78rem;
+  padding: 0.2rem 0.6rem;
   cursor: pointer;
   transition: color 0.2s, border-color 0.2s;
 }
 .setup-signout-btn:hover {
-  color: rgba(255,255,255,0.6);
-  border-color: rgba(255,255,255,0.3);
+  color: var(--text);
+  border-color: rgba(255,255,255,0.4);
 }
 
 #setup-screen { position: relative; }

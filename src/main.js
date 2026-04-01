@@ -1341,6 +1341,19 @@ function showStep(step) {
   stepAsyncCreate   .style.display = step === 'async-create'    ? '' : 'none';
   stepAsyncCreated  .style.display = step === 'async-created'   ? '' : 'none';
   stepAsyncJoin     .style.display = step === 'async-join'      ? '' : 'none';
+
+  // Move the session bar into the active card so it sits at its bottom
+  const _stepEl = {
+    'mode': stepMode, 'sp-choice': stepSpChoice, 'singleplayer': stepSinglePlayer,
+    'campaign-select': stepCampaignSelect, 'campaign': stepCampaign, 'debrief': stepDebrief,
+    'multiplayer': stepMultiplayer, 'online': stepOnline, 'async': stepAsync,
+    'local-play': stepLocalPlay, 'howtoplay': stepHowto, 'options': stepOptions,
+    'changelog': stepChangelog, 'account': stepAccount, 'waiting': stepWaiting,
+    'create-game': stepCreateGame, 'join-game': stepJoinGame, 'lobby': stepLobby,
+    'async-create': stepAsyncCreate, 'async-created': stepAsyncCreated, 'async-join': stepAsyncJoin,
+  }[step];
+  const sessionBar = document.getElementById('setup-session-bar');
+  if (_stepEl && sessionBar) _stepEl.appendChild(sessionBar);
 }
 
 // Current lobby state (pre-game)
@@ -1364,6 +1377,10 @@ document.getElementById('btn-changelog-back').addEventListener('click', () => sh
 
 // Initialize persistent session bar on page load
 _updateSessionBar();
+{
+  const sessionBar = document.getElementById('setup-session-bar');
+  if (sessionBar) stepMode.appendChild(sessionBar);
+}
 
 // Show admin link only for admin users
 {
