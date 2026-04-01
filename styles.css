@@ -801,9 +801,9 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 #round-label {
   text-align: center;
   font-size: 0.68rem;
-  color: var(--text-dim);
+  color: #b8ac98;
   letter-spacing: 0.06em;
-  opacity: 0.6;
+  opacity: 1;
   padding: 0.1rem 0.5rem 0.2rem;
   background: rgba(13,17,23,0.88);
   border-bottom: 1px solid rgba(255,255,255,0.05);
@@ -824,7 +824,7 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   user-select: none;
 }
 
-.cycle-dim  { opacity: 0.28; }
+.cycle-dim  { opacity: 0.55; }
 .cycle-active { opacity: 1; padding: 0.1rem 0.3rem; }
 
 .cycle-active.phase-dawn  { background: rgba(255,140,0,0.15);  color: #ffaa44;      border-color: #ff8c00; }
@@ -852,7 +852,7 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   align-self: center;
 }
 
-.turn-line { font-size: 0.85rem; color: var(--text-dim); }
+.turn-line { font-size: 0.85rem; color: #b8ac98; }
 
 .turn-faction {
   font-size: 1rem;
