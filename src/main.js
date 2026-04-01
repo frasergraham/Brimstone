@@ -11,7 +11,7 @@ import {
 } from './multiplayer.js';
 import { VERSION, BUILD_VERSION } from './version.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
-import { PlanActionType }    from './planner.js';
+import { PlanActionType, groupPlanByEntity } from './planner.js';
 import { hexDistance, getNeighbors } from './hex.js';
 import { sightRange } from './actions.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
@@ -2411,7 +2411,7 @@ function _enterAsyncPlanning(msg) {
     _applyPlanStatus(msg.planStatus);
     // Load the submitted plan actions into the UI so the player can review them
     if (ui && Array.isArray(msg.myPlanActions) && msg.myPlanActions.length > 0) {
-      ui._plan = msg.myPlanActions;
+      ui._unitPlans = groupPlanByEntity(msg.myPlanActions);
       ui._refreshPlanOverlay();
       ui._renderPlanPanel();
     }

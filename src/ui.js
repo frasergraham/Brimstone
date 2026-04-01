@@ -7,11 +7,11 @@ import { PAD_X, PAD_Y, Renderer } from './renderer.js';
 import {
   ActionType, getValidActions, getVisibleEnemyHexes, getVisibleHeroHexes,
 } from './actions.js';
-import { PlanActionType, computeGhostState, computeProjectedInventory } from './planner.js';
+import { PlanActionType, computeGhostState, computeProjectedInventory, interleavePlan } from './planner.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
-import { buildPlanStepsHtml, buildPlayerStatusHtml, buildObjectivesHtml } from './ui-render.js';
+import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml } from './ui-render.js';
 
 /** Enum of UI operating modes. */
 export const UIMode = Object.freeze({ LOCAL: 'local', ONLINE: 'online', SPECTATOR: 'spectator' });
@@ -72,7 +72,7 @@ export class UIController {
 
     // ── Planning mode state ──────────────────────────────────────────────────
     this._planMode      = false;   // true during simultaneous planning phase
-    this._plan          = [];      // queued PlanActions for this round
+    this._unitPlans     = new Map(); // Map<entityId, PlanAction[]> — per-unit queues
     this._planFaction   = null;    // 'hero' or 'witch' — which faction we're planning for
     this._planBudget    = 0;       // total action budget for this round
     this._planSubmitted = false;   // true after plan is locked in
@@ -413,7 +413,7 @@ export class UIController {
     _tap(this._el('plan-submit-btn'), () => this._doSubmitPlan());
     _tap(this._el('plan-clear-btn'),  () => {
       if (this._planSubmitted) return;
-      this._plan = [];
+      this._unitPlans = new Map();
       this._refreshPlanOverlay();
       this._renderPlanPanel();
       if (this._selectedEntity) this._selectEntity(this._selectedEntity);
@@ -474,7 +474,7 @@ export class UIController {
     this._planMode         = true;
     this._planFaction      = faction;
     this._planBudget       = budget;
-    this._plan             = [];
+    this._unitPlans        = new Map();
     this._planSubmitted    = false;
 
     const panel = this._el('plan-panel');
@@ -544,7 +544,7 @@ export class UIController {
   exitPlanningMode() {
     this._planMode      = false;
     this._planSubmitted = false;
-    this._plan          = [];
+    this._unitPlans     = new Map();
     this._planFaction   = null;
 
     this._stopCountdown();
@@ -687,7 +687,7 @@ export class UIController {
 
     this._el('grace-submit-empty')?.addEventListener('click', () => {
       this._dismissGraceDialog();
-      this._plan = [];
+      this._unitPlans = new Map();
       this._doSubmitPlan();
     }, { signal: ac.signal });
 
@@ -730,10 +730,13 @@ export class UIController {
     if (dialog) dialog.classList.remove('visible');
   }
 
-  /** Add one action to the plan queue. */
+  /** Add one action to the per-unit plan queue. */
   _addToPlan(action) {
     if (this._planSubmitted) return;
-    this._plan.push(action);
+    if (!this._unitPlans.has(action.entityId)) {
+      this._unitPlans.set(action.entityId, []);
+    }
+    this._unitPlans.get(action.entityId).push(action);
     this.onPlanActionAdded?.(action);
     this._refreshPlanOverlay();
     this._renderPlanPanel();
@@ -742,7 +745,8 @@ export class UIController {
   /** Recompute ghost overlay from the current plan and push to renderer. */
   _refreshPlanOverlay() {
     if (!this.renderer) return;
-    const steps = computeGhostState(this.state, this._plan);
+    const flatPlan = interleavePlan(this._unitPlans);
+    const steps = computeGhostState(this.state, flatPlan);
     // Annotate each step with whether it exceeds the action budget
     let runningCost = 0;
     for (const step of steps) {
@@ -754,11 +758,11 @@ export class UIController {
     this.renderer.planGhostSteps = steps;
   }
 
-  /** Submit the current plan. */
+  /** Submit the current plan (flattened to interleaved PlanAction[]). */
   _doSubmitPlan() {
     if (this._planSubmitted) return;
     this.markPlanSubmitted();
-    if (this.onPlanSubmit) this.onPlanSubmit([...this._plan]);
+    if (this.onPlanSubmit) this.onPlanSubmit(interleavePlan(this._unitPlans));
   }
 
   /** Mark the plan as submitted (read-only wait state) without firing onPlanSubmit. */
@@ -782,15 +786,16 @@ export class UIController {
     this.onRedraw();
   }
 
-  /** Render the plan panel steps list. */
+  /** Render the plan panel steps list (per-unit blocks). */
   _renderPlanPanel() {
     const stepsEl  = this._el('plan-steps');
     const budgeEl  = this._el('plan-budget-badge');
     const statusEl = this._el('plan-status');
     if (!stepsEl) return;
 
-    // Count budget-consuming actions
-    const budgetCost = this._plan.filter(a =>
+    // Count budget-consuming actions across all unit queues
+    const flatPlan = interleavePlan(this._unitPlans);
+    const budgetCost = flatPlan.filter(a =>
       a.type !== PlanActionType.EQUIP_WEAPON && a.type !== PlanActionType.USE_ITEM
     ).length;
     const remaining = this._planBudget - budgetCost;
@@ -801,17 +806,22 @@ export class UIController {
     const foodAvailable = (this.state.inventory?.shared?.[ResourceType.FOOD] || 0);
 
     const initialInv = computeProjectedInventory(this.state, []);
-    stepsEl.innerHTML = buildPlanStepsHtml(
-      this._plan, this._planBudget, foodAvailable, foodAvailable,
+    stepsEl.innerHTML = buildUnitPlanBlocksHtml(
+      this._unitPlans, this._planBudget, foodAvailable, foodAvailable,
       this._planSubmitted, this.state.entities ?? [], initialInv,
     );
 
-    // Attach remove listeners
+    // Attach remove listeners — per-unit: data-entity-id + data-step-idx
     stepsEl.querySelectorAll('.plan-step-remove').forEach(btn => {
       btn.addEventListener('click', e => {
         e.stopPropagation();
-        const idx = parseInt(btn.dataset.planIdx);
-        this._plan.splice(idx, 1);
+        const entityId = btn.dataset.entityId;
+        const idx = parseInt(btn.dataset.stepIdx);
+        const queue = this._unitPlans.get(entityId);
+        if (queue) {
+          queue.splice(idx, 1);
+          if (queue.length === 0) this._unitPlans.delete(entityId);
+        }
         this._refreshPlanOverlay();
         this._renderPlanPanel();
         // Refresh highlights for the selected entity after plan changes
@@ -829,9 +839,6 @@ export class UIController {
     // Keep the collapse-tab count badge in sync — show count and color by budget state
     const tabCount = this._el('plan-tab-count');
     if (tabCount) {
-      const budgetCost = this._plan.filter(a =>
-        a.type !== PlanActionType.EQUIP_WEAPON && a.type !== PlanActionType.USE_ITEM
-      ).length;
       tabCount.textContent = budgetCost;
       const foodAvail = this.state?.inventory?.shared?.[ResourceType.FOOD] || 0;
       if (budgetCost > this._planBudget + foodAvail) {
@@ -1283,7 +1290,7 @@ export class UIController {
 
     // In planning mode, compute projected inventory after all queued steps so we can
     // disable resource-dependent actions the player can no longer afford.
-    const projInv = this._planMode ? computeProjectedInventory(state, this._plan) : null;
+    const projInv = this._planMode ? computeProjectedInventory(state, interleavePlan(this._unitPlans)) : null;
     // In planning mode, always show actions (budget tracked separately)
     const hasAct  = this._planMode || state.actionsAvailable > 0;
 
@@ -1550,7 +1557,7 @@ export class UIController {
       const faction = this._planFaction;
       const glyph   = faction === 'hero' ? '⚔' : '✦';
       const budget  = this._planBudget;
-      const used    = this._plan.filter(a => a.type !== PlanActionType.EQUIP_WEAPON && a.type !== PlanActionType.USE_ITEM).length;
+      const used    = interleavePlan(this._unitPlans).filter(a => a.type !== PlanActionType.EQUIP_WEAPON && a.type !== PlanActionType.USE_ITEM).length;
       const capped  = Math.min(used, budget); // don't render more diamonds than budget
       const diamonds = '◆'.repeat(Math.max(0, budget - capped)) + '◇'.repeat(capped);
       if (this._planSubmitted) {

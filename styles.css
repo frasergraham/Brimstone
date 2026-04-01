@@ -2768,6 +2768,40 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .plan-food-tag  { font-size: 0.65rem; color: #c8a030; margin-left: 0.3rem; white-space: nowrap; }
 .plan-step-cost { font-size: 0.62rem; color: var(--muted); margin-left: 0.25rem; white-space: nowrap; opacity: 0.85; }
 
+/* ── Per-unit plan blocks ─────────────────────────────────────────────── */
+.plan-unit-block {
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  margin: 0.3rem 0.5rem;
+  background: rgba(255,255,255,0.02);
+  overflow: hidden;
+}
+.plan-unit-header {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.6rem;
+  background: rgba(255,255,255,0.04);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  font-size: 0.72rem;
+  color: rgba(255,255,255,0.7);
+}
+.plan-unit-name {
+  flex: 1;
+  font-weight: 600;
+  color: rgba(255,255,255,0.85);
+}
+.plan-unit-count {
+  font-size: 0.62rem;
+  color: var(--muted);
+}
+.plan-unit-steps .plan-step {
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+.plan-unit-steps .plan-step:last-child {
+  border-bottom: none;
+}
+
 /* ── Grace dialog (timeout expiry) ───────────────────────────────────── */
 .grace-dialog {
   display: none;
