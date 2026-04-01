@@ -580,7 +580,7 @@ app.get('/admin/api/completed-games/:gameId/rounds', (req, res) => {
 
 // ── SP game uploads ───────────────────────────────────────────────────────────
 
-app.post('/api/sp/completed-games', (req, res) => {
+app.post('/api/sp/completed-games', express.json({ limit: '10mb' }), (req, res) => {
   const { gameId, heroName, witchName, winner, winReason, totalRounds,
           gameVersion, mode, rounds } = req.body ?? {};
   if (!gameId || !winner || !Array.isArray(rounds)) {
