@@ -25,6 +25,9 @@
     "assets:gen": "node scripts/generate-assets.js",
     "assets:stitch": "node scripts/generate-assets.js --stitch-only",
     "electron:dev": "electron .",
+    "electron:package": "electron-builder --publish never",
+    "electron:package:mac": "electron-builder --mac --publish never",
+    "electron:package:win": "electron-builder --win --publish never",
     "electron:build": "electron-builder",
     "electron:build:mac": "electron-builder --mac",
     "electron:build:win": "electron-builder --win"
