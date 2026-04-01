@@ -24,6 +24,7 @@ import { createMinion, createZombie, createWoodGolem, createIronGolem, createSur
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
+import { requestNotificationPermission, notifyTurnReady, notifyOpponentSubmitted, notifyGameOver } from './notifications.js';
 
 // Stamp version into badges
 document.getElementById('version-badge').textContent = `v${BUILD_VERSION}`;
@@ -2291,6 +2292,7 @@ let _asyncSeenRound = 0;      // round number whose replay the player has alread
 
 function _openAsyncGame(roomId) {
   _asyncRoomId = roomId;
+  requestNotificationPermission();
   _ensureAuthed(() => {
     mp.connectAsync(roomId);
   });
@@ -2366,6 +2368,9 @@ function _handleAsyncStateUpdate(msg) {
     }
     return;
   }
+
+  // Notify if it's the player's turn (plan not yet submitted)
+  if (!msg.myPlanSubmitted) notifyTurnReady(mirror.round ?? 1);
 
   // ── Active game: unseen last round → offer replay before planning ──
   if (_asyncLastRound && _asyncSeenRound < _asyncLastRound.roundNum) {
@@ -2456,12 +2461,14 @@ function _handleAsyncResolution({ roomId, steps, finalState, finalStateSnapshot,
     redrawOnline();
 
     if (state.gameOver) {
+      notifyGameOver(state.winner === _asyncFaction);
       ui?._showResultDialog([
         state.winner === _asyncFaction ? 'Victory' : 'Defeat',
         state.winReason || '',
       ]);
     } else {
       // Enter PLAN MODE for the new round
+      notifyTurnReady(resolvedRound + 1);
       const budget = state.playerActionsLeft?.[mp?.myPlayerId] ??
                      state[_asyncFaction + 'ActionsLeft'] ?? 3;
       ui?.enterPlanningMode(_asyncFaction, budget, 0);
@@ -2638,6 +2645,13 @@ async function _asyncWatchLastTurn(lastRound) {
 }
 
 function _handleAsyncPlanStatus(msg) {
+  // Notify when an opponent has submitted (i.e. any player other than us)
+  if (Array.isArray(msg.planStatus)) {
+    const opponentSubmitted = msg.planStatus.some(
+      ps => ps.playerId !== mp?.myPlayerId && ps.submitted
+    );
+    if (opponentSubmitted) notifyOpponentSubmitted();
+  }
   _applyPlanStatus(msg.planStatus);
 }
 
