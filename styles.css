@@ -2286,6 +2286,41 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   text-align: center;
 }
 
+/* ── Auth dialog ─────────────────────────────────────────────────────── */
+
+#auth-dialog {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+#auth-dialog.visible { display: flex; }
+
+.auth-dialog-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.5rem 2rem;
+  min-width: 280px;
+  max-width: 360px;
+  text-align: center;
+  box-shadow: 0 0 36px rgba(80, 40, 120, 0.45);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.auth-dialog-title {
+  font-size: 1.4rem;
+  font-weight: bold;
+  color: var(--text-bright);
+  letter-spacing: 0.08em;
+  margin: 0 0 0.8rem;
+}
+
 .room-code-display {
   display: inline-block;
   font-size: 2rem;
