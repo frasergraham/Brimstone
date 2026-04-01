@@ -1,5 +1,19 @@
 [
   {
+    "version": "1.2.2",
+    "date": "2026-04-01",
+    "summary": "New features, and bug fixes",
+    "notes": [
+      "Add deep links for async games with auto-join",
+      "Add deep links for joining online multiplayer games",
+      "Increase JSON body limit for SP game uploads",
+      "Hoist _authDialogCallback declaration above deep link check",
+      "BRIMSTONE_MODE_ASYNC environment variable control",
+      "Campaign stats section to admin game stats page",
+      "IOS web app metadata and hero icon for home screen"
+    ]
+  },
+  {
     "version": "1.2.1",
     "date": "2026-04-01",
     "summary": "New features",
