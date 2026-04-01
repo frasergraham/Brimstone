@@ -2419,18 +2419,28 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   color: var(--danger, #aa4444);
 }
 
-/* ── Version badges ────────────────────────────────────────────── */
-.version-badge {
+/* ── Setup footer (version + session bar) ─────────────────────── */
+.setup-footer {
   position: absolute;
-  bottom: 0.6rem;
-  right: 0.8rem;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.7rem;
+  pointer-events: none;
+}
+.setup-footer > * { pointer-events: auto; }
+
+.version-badge {
   font-size: 0.65rem;
   color: rgba(255,255,255,0.2);
   letter-spacing: 0.05em;
   user-select: none;
 }
 .version-link {
-  pointer-events: auto;
   cursor: pointer;
   text-decoration: none;
   transition: color 0.2s;
@@ -2439,6 +2449,32 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   color: rgba(255,255,255,0.5);
   text-decoration: underline;
 }
+
+.setup-session-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.setup-session-name {
+  color: rgba(255,255,255,0.35);
+  font-size: 0.7rem;
+}
+.setup-signout-btn {
+  background: none;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 4px;
+  color: rgba(255,255,255,0.35);
+  font-family: inherit;
+  font-size: 0.65rem;
+  padding: 0.15rem 0.5rem;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s;
+}
+.setup-signout-btn:hover {
+  color: rgba(255,255,255,0.6);
+  border-color: rgba(255,255,255,0.3);
+}
+
 #setup-screen { position: relative; }
 
 /* ── Changelog / Revision History ─────────────────────────────── */

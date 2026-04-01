@@ -34,7 +34,6 @@
       </div>
       <div style="margin-top:1.25rem;text-align:center">
         <a href="/admin" class="admin-link" id="admin-link" style="display:none">Admin</a>
-        <div id="menu-version" class="menu-version"></div>
       </div>
     </div>
 
@@ -334,14 +333,6 @@
     <div id="setup-step-online" class="setup-card" style="display:none">
       <h1 class="title" style="font-size:2rem;margin-bottom:1rem">ONLINE</h1>
 
-      <div id="mp-session-info" style="display:none" class="setup-lore">
-        <p>Playing as <strong id="mp-session-name"></strong>
-           &nbsp;<span id="mp-session-stats" class="stats-badge"></span></p>
-        <span id="mp-email-badge" class="email-badge" style="display:none"></span>
-        <div style="display:flex;gap:0.4rem;margin-top:0.5rem;flex-wrap:wrap;justify-content:center">
-          <button id="btn-mp-sign-out" class="setup-btn secondary">Sign Out</button>
-        </div>
-      </div>
       <div id="mp-signed-out" style="display:none">
         <div class="setup-lore"><p>Sign in to play online.</p></div>
         <button id="btn-mp-signin" class="setup-btn primary" style="margin-top:0.4rem">Sign In</button>
@@ -376,14 +367,6 @@
     <div id="setup-step-async" class="setup-card" style="display:none">
       <h1 class="title" style="font-size:2rem;margin-bottom:1rem">ASYNC</h1>
 
-      <div id="async-session-info" style="display:none" class="setup-lore">
-        <p>Playing as <strong id="async-session-name"></strong>
-           &nbsp;<span id="async-session-stats" class="stats-badge"></span></p>
-        <span id="async-email-badge" class="email-badge" style="display:none"></span>
-        <div style="display:flex;gap:0.4rem;margin-top:0.5rem;flex-wrap:wrap;justify-content:center">
-          <button id="btn-async-sign-out" class="setup-btn secondary">Sign Out</button>
-        </div>
-      </div>
       <div id="async-signed-out" style="display:none">
         <div class="setup-lore"><p>Sign in to play async games.</p></div>
         <button id="btn-async-signin" class="setup-btn primary" style="margin-top:0.4rem">Sign In</button>
@@ -519,9 +502,6 @@
           <div id="acct-stats" class="acct-value"></div>
         </div>
 
-        <div class="setup-buttons" style="margin-top:1rem">
-          <button id="btn-acct-signout" class="setup-btn secondary">Sign Out</button>
-        </div>
       </div>
 
       <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
@@ -738,7 +718,13 @@
     </div>
   </div>
 
-  <a id="version-badge" class="version-badge version-link"></a>
+  <div id="setup-footer" class="setup-footer">
+    <a id="version-badge" class="version-badge version-link"></a>
+    <div id="setup-session-bar" class="setup-session-bar" style="display:none">
+      <span id="setup-session-name" class="setup-session-name"></span>
+      <button id="btn-setup-signout" class="setup-signout-btn">Sign Out</button>
+    </div>
+  </div>
 
   </div><!-- /#setup-screen -->
 

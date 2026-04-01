@@ -26,9 +26,8 @@ import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves } from '
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
 import { requestNotificationPermission, notifyTurnReady, notifyOpponentSubmitted, notifyGameOver } from './notifications.js';
 
-// Stamp version into badges
+// Stamp version into badge
 document.getElementById('version-badge').textContent = `v${BUILD_VERSION}`;
-document.getElementById('menu-version').textContent  = `v${BUILD_VERSION}`;
 
 // ── Game mode config (env-var driven) ────────────────────────────────────────
 // Fetches /api/config to determine which game modes are enabled/disabled/hidden.
@@ -1363,8 +1362,8 @@ document.getElementById('btn-options-back') .addEventListener('click', () => sho
 document.getElementById('btn-account-back') .addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-changelog-back').addEventListener('click', () => showStep('mode'));
 
-// Show game version on main menu
-document.getElementById('menu-version').textContent = `v${VERSION}`;
+// Initialize persistent session bar on page load
+_updateSessionBar();
 
 // Show admin link only for admin users
 {
@@ -3679,39 +3678,33 @@ document.getElementById('btn-lobby-leave').addEventListener('click', () => {
 });
 
 function _initMpStep() {
-  const session     = loadSession();
-  const sessionInfo = document.getElementById('mp-session-info');
-  const signedOut   = document.getElementById('mp-signed-out');
-  const actionBtns  = document.getElementById('mp-action-buttons');
+  const session    = loadSession();
+  const signedOut  = document.getElementById('mp-signed-out');
+  const actionBtns = document.getElementById('mp-action-buttons');
 
   if (session) {
-    document.getElementById('mp-session-name').textContent = session.username;
-    sessionInfo.style.display = '';
-    signedOut.style.display   = 'none';
-    actionBtns.style.display  = '';
+    signedOut.style.display  = 'none';
+    actionBtns.style.display = '';
   } else {
-    sessionInfo.style.display = 'none';
-    signedOut.style.display   = '';
-    actionBtns.style.display  = 'none';
+    signedOut.style.display  = '';
+    actionBtns.style.display = 'none';
   }
+  _updateSessionBar();
 }
 
 function _initAsyncStep() {
-  const session     = loadSession();
-  const sessionInfo = document.getElementById('async-session-info');
-  const signedOut   = document.getElementById('async-signed-out');
-  const actionBtns  = document.getElementById('async-action-buttons');
+  const session    = loadSession();
+  const signedOut  = document.getElementById('async-signed-out');
+  const actionBtns = document.getElementById('async-action-buttons');
 
   if (session) {
-    document.getElementById('async-session-name').textContent = session.username;
-    sessionInfo.style.display = '';
-    signedOut.style.display   = 'none';
-    actionBtns.style.display  = '';
+    signedOut.style.display  = 'none';
+    actionBtns.style.display = '';
   } else {
-    sessionInfo.style.display = 'none';
-    signedOut.style.display   = '';
-    actionBtns.style.display  = 'none';
+    signedOut.style.display  = '';
+    actionBtns.style.display = 'none';
   }
+  _updateSessionBar();
 }
 
 // ── Account page ──────────────────────────────────────────────────────────────
@@ -3720,6 +3713,8 @@ async function _initAccountPage() {
   const session = loadSession();
   const signedOut = document.getElementById('acct-signed-out');
   const signedIn  = document.getElementById('acct-signed-in');
+
+  _updateSessionBar();
 
   if (!session) {
     signedOut.style.display = '';
@@ -3743,7 +3738,6 @@ async function _initAccountPage() {
   const emailEl   = document.getElementById('acct-email');
   const linkBtn   = document.getElementById('btn-acct-link-email');
   const emailForm = document.getElementById('acct-email-form');
-  const emailBadge = document.getElementById('mp-email-badge');
   emailForm.style.display = 'none';
   const emailStatus = document.getElementById('acct-email-status');
   if (emailStatus) emailStatus.style.display = 'none';
@@ -3755,26 +3749,20 @@ async function _initAccountPage() {
       clearSession();
       signedOut.style.display = '';
       signedIn.style.display  = 'none';
+      _updateSessionBar();
       return;
     }
     const emailIdentity = identities.find(i => i.provider === 'email');
     if (emailIdentity) {
       emailEl.textContent = emailIdentity.provider_id;
       linkBtn.style.display = 'none';
-      // Also update the MP screen badge
-      if (emailBadge) {
-        emailBadge.textContent = `✓ ${emailIdentity.provider_id}`;
-        emailBadge.style.display = '';
-      }
     } else {
       emailEl.textContent = 'Not linked';
       linkBtn.style.display = '';
-      if (emailBadge) emailBadge.style.display = 'none';
     }
   } catch {
     emailEl.textContent = 'Not linked';
     linkBtn.style.display = '';
-    if (emailBadge) emailBadge.style.display = 'none';
   }
 }
 
@@ -3869,8 +3857,7 @@ document.getElementById('btn-acct-save-name').addEventListener('click', async ()
       // Update displays
       document.getElementById('acct-username').textContent = data.player.username;
       document.getElementById('acct-name-edit').style.display = 'none';
-      document.getElementById('mp-session-name').textContent = data.player.username;
-      document.getElementById('async-session-name').textContent = data.player.username;
+      _updateSessionBar();
     } else {
       errorEl.textContent = data.error || 'Failed to change username.';
       errorEl.style.display = '';
@@ -3909,14 +3896,6 @@ document.getElementById('btn-acct-send-link').addEventListener('click', async ()
   }
 });
 
-// Account: sign out
-document.getElementById('btn-acct-signout').addEventListener('click', () => {
-  clearSession();
-  if (mp) { mp.disconnect(); mp = null; }
-  renderer = null; ui = null; state = null;
-  _initAccountPage();
-});
-
 document.getElementById('btn-mp-signin').addEventListener('click', () => {
   _showAuthDialog(() => {
     _initMpStep();
@@ -3931,29 +3910,41 @@ function _signOut() {
   renderer = null; ui = null; state = null;
 }
 
-document.getElementById('btn-mp-sign-out').addEventListener('click', () => {
+function _updateSessionBar() {
+  const session = loadSession();
+  const bar     = document.getElementById('setup-session-bar');
+  if (session) {
+    document.getElementById('setup-session-name').textContent = session.username;
+    bar.style.display = '';
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+// ── Persistent sign-out (footer bar) ────────────────────────────────────────
+
+document.getElementById('btn-setup-signout').addEventListener('click', () => {
   _signOut();
+  _updateSessionBar();
+  // Refresh whichever screen is visible
   _initMpStep();
+  _initAsyncStep();
+  _initAccountPage();
   document.getElementById('active-games-list').innerHTML =
     '<p class="saves-empty">Sign in to see your active games.</p>';
   document.getElementById('mp-completed-list').innerHTML =
     '<p class="saves-empty">Sign in to see completed games.</p>';
+  document.getElementById('async-games-list').innerHTML =
+    '<p class="saves-empty">Sign in to see async games.</p>';
 });
 
-// ── Async sign-in / sign-out ────────────────────────────────────────────────
+// ── Async sign-in ───────────────────────────────────────────────────────────
 
 document.getElementById('btn-async-signin').addEventListener('click', () => {
   _showAuthDialog(() => {
     _initAsyncStep();
     _fetchAsyncGames();
   });
-});
-
-document.getElementById('btn-async-sign-out').addEventListener('click', () => {
-  _signOut();
-  _initAsyncStep();
-  document.getElementById('async-games-list').innerHTML =
-    '<p class="saves-empty">Sign in to see async games.</p>';
 });
 
 // (Email login is now handled by the auth dialog)
@@ -4594,6 +4585,7 @@ if (_emailToken) {
     _tmpMp.connect(_serverWsUrl());
     _tmpMp._opts._onAuthOk = () => {
       mp = _tmpMp;
+      _updateSessionBar();
       // If there's an async deep link hash, open the game now that we're authed
       _checkAsyncDeepLink();
       if (!window.location.hash) _showMultiplayerChoice();
