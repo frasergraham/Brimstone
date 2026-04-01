@@ -4327,6 +4327,9 @@ function _createMpClient() {
     onAsyncOpponentJoined(msg) { _handleAsyncOpponentJoined(msg); },
 
     onError(msg) {
+      // Ignore errors after intentional sign-out / disconnect
+      if (!mp) return;
+
       // During auth phase, show error on the appropriate screen
       if (!state || document.getElementById('setup-screen').style.display !== 'none') {
         if (_asyncRoomId || stepAsync.style.display !== 'none') {
