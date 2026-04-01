@@ -212,6 +212,7 @@ export class GameState {
     this.winner            = null;
     this.winReason         = null;
     this.postRoundEvents   = []; // structured PostRoundEvent[] from post-round-effects pipeline
+    this.nodeSpawnedSurvivors = []; // encounter objects for survivors spawned at power nodes
 
     // ── Cumulative stats counters (for game-stats tracking) ──────────────────
     this.heroKills        = 0; // entities killed by hero side (combat + hazards)
@@ -460,6 +461,7 @@ export class GameState {
     }
 
     // Night: node spawns — hero leaders on a node may spawn a free survivor.
+    this.nodeSpawnedSurvivors = [];
     if (this.phase === Phase.NIGHT) {
       for (const obj of this.witchObjectives) {
         const freeHex = () => {
@@ -485,6 +487,15 @@ export class GameState {
                 this.entities.push(s);
                 const horseNote = s.items['horse'] ? ' (arrives on horseback!)' : '';
                 this.addLog(`✨ The node calls to the living — a survivor emerges!${horseNote}`, 'hero', this.playerColorFor(hero));
+                this.nodeSpawnedSurvivors.push({
+                  type: 'survivor',
+                  name: s.name,
+                  title: s.title,
+                  hp: s.hp, maxHp: s.maxHp,
+                  attack: s.attack, defense: s.defense,
+                  abilityLabel: s.abilityLabel,
+                  color: s.color,
+                });
               }
             } else {
               this.addLog(`✨ The node pulses faintly… no one answers the call tonight.`, 'hero');

@@ -227,9 +227,9 @@ describe('buildPlayerStatusHtml', () => {
 
 describe('buildObjectivesHtml', () => {
   const objectives = [
-    { col: 3, row: 3, label: 'Node A' },
-    { col: 7, row: 5, label: 'Node B' },
-    { col: 5, row: 9, label: 'Node C' },
+    { col: 3, row: 3, label: 'Node A', hexes: [{ col: 3, row: 3 }, { col: 3, row: 2 }, { col: 4, row: 2 }] },
+    { col: 7, row: 5, label: 'Node B', hexes: [{ col: 7, row: 5 }, { col: 7, row: 4 }, { col: 8, row: 4 }] },
+    { col: 5, row: 9, label: 'Node C', hexes: [{ col: 5, row: 9 }, { col: 5, row: 8 }, { col: 6, row: 8 }] },
   ];
 
   test('neutral nodes get neutral class', () => {
@@ -281,5 +281,14 @@ describe('buildObjectivesHtml', () => {
   test('default title when no sweep', () => {
     const { title } = buildObjectivesHtml(objectives, [], { hero: 0, witch: 0 });
     assert.equal(title, 'Power Nodes');
+  });
+
+  test('contested node gets contested class when both factions occupy equal hexes', () => {
+    const entities = [
+      { alive: true, owner: 'hero', col: 3, row: 3 },
+      { alive: true, owner: 'witch', col: 3, row: 2 },
+    ];
+    const { html } = buildObjectivesHtml(objectives, entities, { hero: 0, witch: 0 });
+    assert.ok(html.includes('node-dot contested'), 'equally occupied node should have contested class');
   });
 });

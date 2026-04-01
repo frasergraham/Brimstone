@@ -234,6 +234,12 @@ describe('reckoning scoring line', () => {
     assert.ok(line.includes('tied 1'));
   });
 
+  test('tied with 0-0 nodes: no points scored', () => {
+    const line = computeReckoningLine({ hero: 0, witch: 0 }, { hero: 0, witch: 0 }, 0, 0);
+    assert.ok(line.includes('No points scored'));
+    assert.ok(line.includes('tied'));
+  });
+
   test('witch instant win with 3 nodes', () => {
     const line = computeReckoningLine({ hero: 0, witch: 0 }, { hero: 0, witch: 1 }, 0, 3);
     assert.equal(line, 'Witch holds all 3 Power Nodes!');

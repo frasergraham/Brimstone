@@ -541,3 +541,35 @@ describe('Serialization round-trip', () => {
     }
   });
 });
+
+// ── nodeSpawnedSurvivors serialization ────────────────────────────────────────
+
+describe('nodeSpawnedSurvivors', () => {
+  test('initialized as empty array on new GameState', () => {
+    const state = new GameState();
+    assert.ok(Array.isArray(state.nodeSpawnedSurvivors));
+    assert.equal(state.nodeSpawnedSurvivors.length, 0);
+  });
+
+  test('survives serialization round-trip', () => {
+    const state = new GameState();
+    generateMap(state, 'skirmish');
+    state.nodeSpawnedSurvivors = [
+      { type: 'survivor', name: 'TestSurvivor', title: 'Scout', hp: 3, maxHp: 3, attack: 1, defense: 1, abilityLabel: null, color: '#aaa' },
+    ];
+    const snap = serializeState(state);
+    const restored = deserializeState(snap);
+    assert.equal(restored.nodeSpawnedSurvivors.length, 1);
+    assert.equal(restored.nodeSpawnedSurvivors[0].name, 'TestSurvivor');
+  });
+
+  test('defaults to empty array when missing from snapshot', () => {
+    const state = new GameState();
+    generateMap(state, 'skirmish');
+    const snap = serializeState(state);
+    delete snap.nodeSpawnedSurvivors;
+    const restored = deserializeState(snap);
+    assert.ok(Array.isArray(restored.nodeSpawnedSurvivors));
+    assert.equal(restored.nodeSpawnedSurvivors.length, 0);
+  });
+});
