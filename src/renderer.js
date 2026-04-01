@@ -209,7 +209,7 @@ export class Renderer {
   }
 
   /** Map a survivor entity's title to its sprite asset id. */
-  static _survivorAssetId(title) {
+  static survivorAssetId(title) {
     const MAP = {
       'Innkeeper':        'survivor_innkeeper',
       'Nurse':            'survivor_nurse',
@@ -262,7 +262,7 @@ export class Renderer {
     const from = this._toCanvas(fromCol, fromRow);
     const to   = this._toCanvas(toCol,   toRow);
     const portraitId = entityType === EntityType.SURVIVOR
-      ? Renderer._survivorAssetId(title)
+      ? Renderer.survivorAssetId(title)
       : entityType; // non-survivor type values match asset ids directly
     this._moveAnims = this._moveAnims.filter(a => a.entityId !== entityId);
     this._moveAnims.push({
@@ -290,7 +290,7 @@ export class Renderer {
     const midX = (from.x + to.x) * 0.5;
     const midY = (from.y + to.y) * 0.5;
     const portraitId = entityType === EntityType.SURVIVOR
-      ? Renderer._survivorAssetId(title)
+      ? Renderer.survivorAssetId(title)
       : entityType;
     // Replace any existing lunge for this entity
     this._lungeAnims = this._lungeAnims.filter(a => a.entityId !== entityId);
@@ -1615,7 +1615,7 @@ export class Renderer {
 
       // ── Portrait image from sprite sheet ───────────────────────────────
       const portraitKey = entity.type === EntityType.SURVIVOR
-        ? Renderer._survivorAssetId(entity.title)
+        ? Renderer.survivorAssetId(entity.title)
         : entity.type; // 'hero', 'witch', 'zombie', etc.
 
       const pRect = portraitKey ? this._spriteRects?.get(portraitKey) : null;
@@ -1694,20 +1694,6 @@ export class Renderer {
         // Shine stripe along the top
         ctx.fillStyle = 'rgba(255,255,255,0.18)';
         ctx.fillRect(bx, by, barW * pct, Math.max(1, barH * 0.4));
-      }
-
-      if (entity.weapon && entity.owner === 'hero') {
-        ctx.fillStyle = '#f5c842';
-        ctx.beginPath();
-        ctx.arc(ex + r - 2, ey - r + 2, Math.max(2, hs * 0.08), 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      if (entity.type === EntityType.SURVIVOR && entity.ability) {
-        ctx.fillStyle = '#88eeff';
-        ctx.beginPath();
-        ctx.arc(ex - r + 2, ey - r + 2, Math.max(2, hs * 0.08), 0, Math.PI * 2);
-        ctx.fill();
       }
 
       // Guard stance indicator — small shield badge at bottom-right

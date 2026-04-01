@@ -3,7 +3,7 @@ import { hexKey, hexToPixel, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType } from './tiles.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
 import { Phase, Player, PHASE_ICON, nodeController, countHeldNodes } from './game.js';
-import { PAD_X, PAD_Y } from './renderer.js';
+import { PAD_X, PAD_Y, Renderer } from './renderer.js';
 import {
   ActionType, getValidActions, getVisibleEnemyHexes, getVisibleHeroHexes,
 } from './actions.js';
@@ -1250,7 +1250,7 @@ export class UIController {
       let html = `<div class="popup-unit-name">${header}</div>`;
       for (const u of pickerUnits) {
         const col        = ENTITY_COLOR[u.type] || '#888';
-        const portraitId = u.type === 'survivor' ? _SURVIVOR_TITLE_ASSET[u.title] : u.type;
+        const portraitId = u.type === 'survivor' ? Renderer.survivorAssetId(u.title) : u.type;
         const src        = portraitId ? this.renderer.getPortraitDataURL(portraitId) : null;
         const portrait   = src
           ? `<img src="${src}" style="width:32px;height:32px;border-radius:50%;border:1.5px solid ${col};flex-shrink:0;margin-right:0.4rem;">`
@@ -1423,7 +1423,7 @@ export class UIController {
     html += `<button class="action-btn" data-action="disambig_move">Move ${actor.displayName} here</button>`;
     for (const u of allies) {
       const col = ENTITY_COLOR[u.type] || '#888';
-      const portraitId = u.type === 'survivor' ? _SURVIVOR_TITLE_ASSET[u.title] : u.type;
+      const portraitId = u.type === 'survivor' ? Renderer.survivorAssetId(u.title) : u.type;
       const src = portraitId ? this.renderer.getPortraitDataURL(portraitId) : null;
       const portrait = src
         ? `<img src="${src}" style="width:32px;height:32px;border-radius:50%;border:1.5px solid ${col};flex-shrink:0;margin-right:0.4rem;">`
@@ -2117,7 +2117,7 @@ export class UIController {
     const color  = encounterUnit.color || '#d4c9b0';
 
     const assetId = encounterUnit.type === 'survivor'
-      ? (_SURVIVOR_TITLE_ASSET[encounterUnit.title] ?? null)
+      ? Renderer.survivorAssetId(encounterUnit.title)
       : encounterUnit.type;
     const src = assetId ? this.renderer.getPortraitDataURL(assetId) : null;
 
@@ -2200,7 +2200,7 @@ export class UIController {
     // Survivor portrait
     const portraitEl = this._el('result-portrait');
     if (portraitEl) {
-      const assetId = encounterSurvivor?.title ? _SURVIVOR_TITLE_ASSET[encounterSurvivor.title] : null;
+      const assetId = encounterSurvivor?.title ? Renderer.survivorAssetId(encounterSurvivor.title) : null;
       const src     = assetId ? this.renderer.getPortraitDataURL(assetId) : null;
       if (src) {
         portraitEl.style.display = 'block';
@@ -3151,24 +3151,9 @@ function _visibleUnitsAt(state, col, row) {
 
 // ── Tilemap sprite helpers ────────────────────────────────────────────────────
 
-const _SURVIVOR_TITLE_ASSET = {
-  'Innkeeper':        'survivor_innkeeper',
-  'Nurse':            'survivor_nurse',
-  'Blacksmith':       'survivor_blacksmith',
-  'Herbalist':        'survivor_herbalist',
-  'Militia Sergeant': 'survivor_militia',
-  'Parish Priest':    'survivor_priest',
-  'Baker':            'survivor_baker',
-  'Trapper':          'survivor_trapper',
-  'Schoolteacher':    'survivor_schoolteacher',
-  'Gravedigger':      'survivor_gravedigger',
-  'Midwife':          'survivor_midwife',
-  'Farmhand':         'survivor_farmhand',
-};
-
 /** Return the tilemap asset id for any entity snap (uses title for survivors). */
 function _entityPortraitId(snap) {
-  if (snap.type === 'survivor') return _SURVIVOR_TITLE_ASSET[snap.title] ?? null;
+  if (snap.type === 'survivor') return Renderer.survivorAssetId(snap.title);
   return snap.type; // 'hero', 'witch', 'zombie', etc.
 }
 
