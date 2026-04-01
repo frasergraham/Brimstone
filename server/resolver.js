@@ -144,10 +144,11 @@ function runAction(state, action, faction, playerId = null) {
       const targetSnap = snapEntity(target);
       const r = executeBattle(state, entity, target);
       if (!r.success) return { kind: 'fail', reason: r.log[0] };
-      // Scatter units when a leader is slain (by hit or counter-attack)
+      // Scatter units when a leader is slain (by hit, counter-attack, or splash)
       if (r.killed)  _handleLeaderDeath(state, target);
       if (r.counterDmg > 0 && !state.entities.some(e => e.id === entity.id))
         _handleLeaderDeath(state, entity);
+      for (const sk of r.splashKills ?? []) _handleLeaderDeath(state, sk);
       return { kind: 'ok', result: r, battleSnaps: { actorSnap, targetSnap } };
     }
 
@@ -170,6 +171,7 @@ function runAction(state, action, faction, playerId = null) {
       if (r.killed)  _handleLeaderDeath(state, target);
       if (r.counterDmg > 0 && !state.entities.some(e => e.id === entity.id))
         _handleLeaderDeath(state, entity);
+      for (const sk of r.splashKills ?? []) _handleLeaderDeath(state, sk);
       return { kind: 'ok', result: r, battleSnaps: { actorSnap, targetSnap } };
     }
 
@@ -361,6 +363,7 @@ function _checkGuardStrikes(state, action, actor, faction, subEvents) {
     });
 
     if (r.killed) _handleLeaderDeath(state, actor);
+    for (const sk of r.splashKills ?? []) _handleLeaderDeath(state, sk);
   }
 }
 

@@ -7,7 +7,7 @@ import { GameState, Phase, Player } from '../src/game.js';
 import {
   executeMove, executeExplore, executeBattle, executeFortify,
   executeSummon, executeUseItem, executeUseAbility,
-  getReachableHexes, sightRange,
+  getReachableHexes, sightRange, survivorFindMultiplier,
 } from '../src/actions.js';
 import {
   Entity, EntityType, SurvivorAbility,
@@ -684,6 +684,121 @@ describe('executeBattle', () => {
     // baseDie(1) + attack + 1(silver)
     assert.ok(r.attackRoll >= 1 + hero.attack + 1,
       `attackRoll (${r.attackRoll}) should include silver bonus`);
+  });
+});
+
+// ── Splash damage on stacked units ───────────────────────────────────────────
+
+describe('executeBattle — splash damage', () => {
+  test('crush triggers splash on bystanders', () => {
+    const state = freshState();
+    const hero = state.hero;
+    hero.attackBonus = 100; // guarantee crush
+    const minion = createMinion(hero.col, hero.row);
+    minion.hp = 10; minion.maxHp = 10; // survives the crush
+    state.entities.push(minion);
+
+    // Bystander on same tile as target
+    const bystander = createMinion(hero.col, hero.row);
+    bystander.hp = 5; bystander.maxHp = 5;
+    state.entities.push(bystander);
+
+    const r = executeBattle(state, hero, minion);
+    if (r.hit && r.attackRoll >= 2 * r.defenseRoll) {
+      // Should have splashed the bystander
+      assert.ok(bystander.hp < 5, 'bystander should take splash damage on crush');
+    }
+  });
+
+  test('kill triggers splash on bystanders', () => {
+    const state = freshState();
+    const hero = state.hero;
+    hero.attackBonus = 100;
+    // Weak minion that will definitely die
+    const minion = createMinion(hero.col, hero.row);
+    minion.hp = 1; minion.maxHp = 1;
+    state.entities.push(minion);
+
+    const bystander = createMinion(hero.col, hero.row);
+    bystander.hp = 5; bystander.maxHp = 5;
+    state.entities.push(bystander);
+
+    const r = executeBattle(state, hero, minion);
+    if (r.killed) {
+      assert.ok(bystander.hp < 5, 'bystander should take splash damage on kill');
+    }
+  });
+
+  test('attacker is excluded from splash', () => {
+    const state = freshState();
+    const hero = state.hero;
+    hero.attackBonus = 100;
+    hero.hp = 10; hero.maxHp = 10;
+    // Target on hero's hex
+    const minion = createMinion(hero.col, hero.row);
+    minion.hp = 1; minion.maxHp = 1;
+    state.entities.push(minion);
+
+    const r = executeBattle(state, hero, minion);
+    if (r.killed) {
+      assert.equal(hero.hp, 10, 'attacker should not take splash damage');
+    }
+  });
+
+  test('splash can kill bystanders and remove them', () => {
+    const state = freshState();
+    const hero = state.hero;
+    hero.attackBonus = 100;
+    const minion = createMinion(hero.col, hero.row);
+    minion.hp = 1; minion.maxHp = 1;
+    state.entities.push(minion);
+
+    // 1 HP bystander should die from splash
+    const fragile = createMinion(hero.col, hero.row);
+    fragile.hp = 1; fragile.maxHp = 1;
+    state.entities.push(fragile);
+
+    const r = executeBattle(state, hero, minion);
+    if (r.killed) {
+      assert.ok(!state.entities.find(e => e.id === fragile.id),
+        'splash-killed bystander should be removed');
+      assert.ok(r.splashKills.length > 0, 'splashKills should contain the killed bystander');
+    }
+  });
+
+  test('no splash on normal hit (no crush, no kill)', () => {
+    const state = freshState();
+    const hero = state.hero;
+    // Give hero low attack to avoid crush, target high HP to avoid kill
+    hero.attack = 1;
+    hero.attackBonus = 0;
+    const minion = createMinion(hero.col, hero.row);
+    minion.hp = 50; minion.maxHp = 50;
+    minion.defense = 0;
+    state.entities.push(minion);
+
+    const bystander = createMinion(hero.col, hero.row);
+    bystander.hp = 5; bystander.maxHp = 5;
+    state.entities.push(bystander);
+
+    // Run many times — on a normal hit (1 dmg, no crush, no kill), no splash
+    for (let i = 0; i < 20; i++) {
+      minion.hp = 50;
+      bystander.hp = 5;
+      const r = executeBattle(state, hero, minion);
+      if (r.hit && r.attackRoll < 2 * r.defenseRoll && !r.killed) {
+        assert.equal(bystander.hp, 5, 'no splash on normal hit');
+      }
+    }
+  });
+
+  test('splashKills field is always present', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const minion = createMinion(hero.col, hero.row);
+    state.entities.push(minion);
+    const r = executeBattle(state, hero, minion);
+    assert.ok(Array.isArray(r.splashKills), 'splashKills should be an array');
   });
 });
 
@@ -1462,5 +1577,91 @@ describe('survivor discovery — explore always finds', () => {
     const r = executeExplore(state, hero);
     assert.ok(r.encounterSurvivor, 'discovery should succeed when cap is null');
     assert.equal(state.discoveredSurvivorCount, 6);
+  });
+});
+
+// ── survivorFindMultiplier — diminishing survivor discovery ──────────────────
+
+describe('survivorFindMultiplier', () => {
+  test('returns 1.0 with no active survivors', () => {
+    const state = freshState();
+    // Remove any survivors that might exist from map gen
+    state.entities = state.entities.filter(e => e.type !== EntityType.SURVIVOR);
+    assert.equal(survivorFindMultiplier(state), 1.0);
+  });
+
+  test('returns 0.9 with 1 active survivor', () => {
+    const state = freshState();
+    state.entities = state.entities.filter(e => e.type !== EntityType.SURVIVOR);
+    const s = createSurvivor(0, 0);
+    s.owner = 'hero';
+    state.entities.push(s);
+    assert.ok(Math.abs(survivorFindMultiplier(state) - 0.9) < 1e-9);
+  });
+
+  test('returns 0.5 with 5 active survivors', () => {
+    const state = freshState();
+    state.entities = state.entities.filter(e => e.type !== EntityType.SURVIVOR);
+    for (let i = 0; i < 5; i++) {
+      const s = createSurvivor(i, 0);
+      s.owner = 'hero';
+      state.entities.push(s);
+    }
+    assert.ok(Math.abs(survivorFindMultiplier(state) - 0.5) < 1e-9);
+  });
+
+  test('returns 0 with 10+ active survivors', () => {
+    const state = freshState();
+    state.entities = state.entities.filter(e => e.type !== EntityType.SURVIVOR);
+    for (let i = 0; i < 10; i++) {
+      const s = createSurvivor(i, 0);
+      s.owner = 'hero';
+      state.entities.push(s);
+    }
+    assert.equal(survivorFindMultiplier(state), 0);
+  });
+
+  test('dead survivors do not count', () => {
+    const state = freshState();
+    state.entities = state.entities.filter(e => e.type !== EntityType.SURVIVOR);
+    const s = createSurvivor(0, 0);
+    s.owner = 'hero';
+    s.hp = 0; // alive is a getter: hp > 0
+    state.entities.push(s);
+    assert.equal(survivorFindMultiplier(state), 1.0);
+  });
+
+  test('witch minions do not count', () => {
+    const state = freshState();
+    state.entities = state.entities.filter(e => e.type !== EntityType.SURVIVOR);
+    const m = createMinion(0, 0);
+    state.entities.push(m);
+    assert.equal(survivorFindMultiplier(state), 1.0);
+  });
+});
+
+// ── Explore: survivor find reduced by active survivors ───────────────────────
+
+describe('executeExplore — survivor find penalty', () => {
+  test('explore fails to find survivor when 10 active survivors exist', () => {
+    resetRoster();
+    const state = freshState();
+    state.entities = state.entities.filter(e => e.type !== EntityType.SURVIVOR);
+    // Add 10 active survivors
+    for (let i = 0; i < 10; i++) {
+      const s = createSurvivor(i, 0);
+      s.owner = 'hero';
+      state.entities.push(s);
+    }
+    const hero = state.hero;
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.explored = false;
+    t.hiddenSurvivor = true;
+
+    const r = executeExplore(state, hero);
+    assert.ok(r.success, 'explore itself should succeed');
+    assert.equal(r.encounterSurvivor, null, 'should not find survivor with 10 active');
+    // The hiddenSurvivor flag should still be there since the encounter was skipped
+    assert.ok(t.hiddenSurvivor, 'hiddenSurvivor flag should remain');
   });
 });

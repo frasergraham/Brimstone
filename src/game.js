@@ -69,9 +69,13 @@ export const Phase = Object.freeze({
 
 export const Player = Object.freeze({ HERO: 'hero', WITCH: 'witch' });
 
+// Hard caps on total actions per turn (after all bonuses).
+export const HERO_ACTION_CAP  = 8;
+export const WITCH_ACTION_CAP = 10;
+
 // Calculate actions for a player at the start of their turn.
-// Hero  — base 3 + 1 in DAWN/DAY + 1 per survivor (cap +5) + 1 per held power node
-// Witch — base 3 + 1 in NIGHT + 1 per unit (cap +3) + 1 per held power node
+// Hero  — base 3 + 1 in DAWN/DAY + 1 per survivor (cap +5) + 1 per held power node; hard cap 8
+// Witch — base 3 + 1 in NIGHT + 1 per unit (cap +3) + 1 per held power node; hard cap 10
 export function computeActions(player, phase, entities, nodeBonus = 0) {
   const isHero     = player === Player.HERO;
   const owner      = isHero ? 'hero' : 'witch';
@@ -80,10 +84,10 @@ export function computeActions(player, phase, entities, nodeBonus = 0) {
 
   if (isHero) {
     const timeBonus = (phase === Phase.DAY || phase === Phase.DAWN) ? 1 : 0;
-    return 3 + timeBonus + Math.min(extras, 5) + nodeBonus;
+    return Math.min(3 + timeBonus + Math.min(extras, 5) + nodeBonus, HERO_ACTION_CAP);
   } else {
     const timeBonus = phase === Phase.NIGHT ? 1 : 0;
-    return 3 + timeBonus + Math.min(extras, 3) + nodeBonus;
+    return Math.min(3 + timeBonus + Math.min(extras, 3) + nodeBonus, WITCH_ACTION_CAP);
   }
 }
 
@@ -101,10 +105,10 @@ export function computeActionsForPlayer(playerId, faction, phase, entities, node
 
   if (isHero) {
     const timeBonus = (phase === Phase.DAY || phase === Phase.DAWN) ? 1 : 0;
-    return 3 + timeBonus + Math.min(extras, 5) + nodeBonus;
+    return Math.min(3 + timeBonus + Math.min(extras, 5) + nodeBonus, HERO_ACTION_CAP);
   } else {
     const timeBonus = phase === Phase.NIGHT ? 1 : 0;
-    return 3 + timeBonus + Math.min(extras, 3) + nodeBonus;
+    return Math.min(3 + timeBonus + Math.min(extras, 3) + nodeBonus, WITCH_ACTION_CAP);
   }
 }
 
