@@ -9,6 +9,7 @@
 //   BRIMSTONE_MODE_STORY         — Story Mode (under Single Player)
 //   BRIMSTONE_MODE_QUICKPLAY     — Quick Play (under Single Player)
 //   BRIMSTONE_MODE_LOCAL         — Local Pass & Play (under Multiplayer)
+//   BRIMSTONE_MODE_ASYNC         — Async Play-by-Mail (under Multiplayer)
 
 const VALID_STATES = ['enabled', 'disabled', 'hidden'];
 const DEFAULT_STATE = 'enabled';
@@ -20,6 +21,7 @@ const MODE_ENV_KEYS = {
   story:        'BRIMSTONE_MODE_STORY',
   quickplay:    'BRIMSTONE_MODE_QUICKPLAY',
   local:        'BRIMSTONE_MODE_LOCAL',
+  async:        'BRIMSTONE_MODE_ASYNC',
 };
 
 /**
