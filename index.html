@@ -448,9 +448,34 @@
     <!-- Options -->
     <div id="setup-step-options" class="setup-card" style="display:none">
       <h1 class="title" style="font-size:2rem">OPTIONS</h1>
-      <div class="setup-lore">
+
+      <!-- Server settings — only visible in Electron desktop app -->
+      <div id="electron-server-settings" style="display:none">
+        <div class="acct-section">
+          <div class="acct-label">Server URL</div>
+          <p style="font-size:0.8rem;color:var(--muted);margin:0.25rem 0 0.5rem">
+            Set the multiplayer server address. Leave empty for offline play only.
+          </p>
+          <input id="electron-server-url" class="setup-input" type="url"
+                 placeholder="https://brimstone.up.railway.app" autocomplete="url"
+                 style="width:100%;box-sizing:border-box">
+          <div style="display:flex;gap:0.4rem;margin-top:0.5rem;align-items:center">
+            <button id="btn-server-save" class="setup-btn primary">Save</button>
+            <button id="btn-server-test" class="setup-btn secondary">Test Connection</button>
+            <span id="server-status" style="font-size:0.8rem;margin-left:0.5rem"></span>
+          </div>
+        </div>
+
+        <div class="acct-section" id="electron-update-section">
+          <div class="acct-label">App Version</div>
+          <p id="electron-app-version" style="font-size:0.85rem;color:var(--muted);margin:0.25rem 0 0"></p>
+        </div>
+      </div>
+
+      <div id="options-empty-msg" class="setup-lore">
         <p>No options are available yet.<br>Check back in a future update.</p>
       </div>
+
       <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
         <button id="btn-options-back" class="setup-btn">&larr; Back</button>
       </div>
@@ -736,6 +761,14 @@
   </div>
 
   </div><!-- /#setup-screen -->
+
+  <!-- Update notification — Electron desktop app only -->
+  <div id="electron-update-bar" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;
+    background:var(--accent,#c9a227);color:#000;text-align:center;padding:6px 12px;font-size:0.85rem;cursor:pointer"
+    onclick="window.electronAPI?.restartAndUpdate()">
+    <span id="electron-update-msg">A new version is available.</span>
+    <b style="margin-left:8px">Click to restart and update.</b>
+  </div>
 
   <!-- ── Game screen ───────────────────────────────────────────────── -->
   <div id="game-screen">
