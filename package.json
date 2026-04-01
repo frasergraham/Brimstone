@@ -1,7 +1,8 @@
 {
   "name": "brimstone",
-  "version": "0.1.0",
+  "version": "1.2.2",
   "description": "Salem hex turn-based game with multiplayer",
+  "main": "electron/main.js",
   "type": "module",
   "engines": {
     "node": ">=18"
@@ -22,15 +23,23 @@
     "assets:dry": "node scripts/generate-assets.js --dry-run",
     "assets:test": "node scripts/generate-assets.js --test",
     "assets:gen": "node scripts/generate-assets.js",
-    "assets:stitch": "node scripts/generate-assets.js --stitch-only"
+    "assets:stitch": "node scripts/generate-assets.js --stitch-only",
+    "electron:dev": "electron .",
+    "electron:build": "electron-builder",
+    "electron:build:mac": "electron-builder --mac",
+    "electron:build:win": "electron-builder --win"
   },
   "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0",
     "sharp": "^0.33.5"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",
     "better-sqlite3": "^12.8.0",
     "canvas": "^3.2.2",
+    "electron-store": "^10.0.0",
+    "electron-updater": "^6.0.0",
     "express": "^5.2.1",
     "https-proxy-agent": "^8.0.0",
     "undici": "^7.24.6",

@@ -1426,6 +1426,97 @@ function _openChangelog() {
     });
 }
 
+// ── Electron desktop app integration ─────────────────────────────────────────
+// Wires up server settings UI and auto-update notifications when running inside
+// the Electron shell.  Entirely inert when loaded in a regular browser.
+
+if (window.electronAPI) {
+  // Show the server settings panel and hide the "no options" message
+  const settingsPanel = document.getElementById('electron-server-settings');
+  const emptyMsg      = document.getElementById('options-empty-msg');
+  if (settingsPanel) settingsPanel.style.display = '';
+  if (emptyMsg)      emptyMsg.style.display = 'none';
+
+  const urlInput     = document.getElementById('electron-server-url');
+  const saveBtn      = document.getElementById('btn-server-save');
+  const testBtn      = document.getElementById('btn-server-test');
+  const statusSpan   = document.getElementById('server-status');
+  const versionLabel = document.getElementById('electron-app-version');
+
+  // Load current server URL into the input
+  window.electronAPI.getServerUrl().then(url => {
+    if (urlInput) urlInput.value = url || '';
+  });
+
+  // Show app version
+  window.electronAPI.getVersion().then(ver => {
+    if (versionLabel) versionLabel.textContent = `v${ver}`;
+  });
+
+  // Save server URL
+  if (saveBtn) {
+    saveBtn.addEventListener('click', async () => {
+      const url = urlInput?.value.trim() || '';
+      await window.electronAPI.setServerUrl(url);
+      if (statusSpan) {
+        statusSpan.textContent = 'Saved. Restart the app to apply.';
+        statusSpan.style.color = 'var(--accent, #c9a227)';
+      }
+    });
+  }
+
+  // Test connection
+  if (testBtn) {
+    testBtn.addEventListener('click', async () => {
+      const url = urlInput?.value.trim();
+      if (!url) {
+        if (statusSpan) { statusSpan.textContent = 'Enter a URL first.'; statusSpan.style.color = '#c44'; }
+        return;
+      }
+      if (statusSpan) { statusSpan.textContent = 'Testing...'; statusSpan.style.color = 'var(--muted, #888)'; }
+      try {
+        const res = await fetch(`${url.replace(/\/$/, '')}/health`, { signal: AbortSignal.timeout(5000) });
+        const data = await res.json();
+        if (data.status === 'ok') {
+          statusSpan.textContent = `Connected — v${data.version}`;
+          statusSpan.style.color = '#4c4';
+        } else {
+          statusSpan.textContent = 'Unexpected response.';
+          statusSpan.style.color = '#c44';
+        }
+      } catch (err) {
+        if (statusSpan) {
+          statusSpan.textContent = `Failed: ${err.message}`;
+          statusSpan.style.color = '#c44';
+        }
+      }
+    });
+  }
+
+  // Auto-update notifications
+  const updateBar = document.getElementById('electron-update-bar');
+  const updateMsg = document.getElementById('electron-update-msg');
+
+  window.electronAPI.onUpdateAvailable((ver) => {
+    if (updateBar && updateMsg) {
+      updateMsg.textContent = `Downloading update v${ver}...`;
+      updateBar.style.display = '';
+      updateBar.style.cursor = 'default';
+      updateBar.querySelector('b').style.display = 'none';
+    }
+  });
+
+  window.electronAPI.onUpdateDownloaded((ver) => {
+    if (updateBar && updateMsg) {
+      updateMsg.textContent = `Update v${ver} ready.`;
+      updateBar.style.display = '';
+      updateBar.style.cursor = 'pointer';
+      const bold = updateBar.querySelector('b');
+      if (bold) bold.style.display = '';
+    }
+  });
+}
+
 // ── Single Player screen ───────────────────────────────────────────────────────
 
 function _showSinglePlayerScreen() {

@@ -246,12 +246,19 @@ const newVersionSrc = versionSrc.replace(
 writeFileSync(VERSION_FILE, newVersionSrc);
 console.log(`Updated src/version.js → ${newVersion}`);
 
+// Also bump package.json version so electron-updater stays in sync
+const PKG_FILE = resolve(__dirname, '..', 'package.json');
+const pkg = JSON.parse(readFileSync(PKG_FILE, 'utf8'));
+pkg.version = newVersion;
+writeFileSync(PKG_FILE, JSON.stringify(pkg, null, 2) + '\n');
+console.log(`Updated package.json → ${newVersion}`);
+
 // ── Commit, tag, and promote ─────────────────────────────────────────────────
 
 const tag = `v${newVersion}`;
 
 console.log(`\nCommitting release on ${DEV_BRANCH}...`);
-git('add src/version.js CHANGELOG.json');
+git('add src/version.js CHANGELOG.json package.json');
 git(`commit -m "release: ${tag}"`);
 git(`tag ${tag}`);
 console.log(`Created commit and tag ${tag} on ${DEV_BRANCH}`);
