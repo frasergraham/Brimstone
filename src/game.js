@@ -2,7 +2,7 @@
 import { generateMap } from './map.js';
 import { createHero, createWitch, createMinion, createSurvivor, resetRoster, EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
 import { BuildingType, ResourceType, TileType } from './tiles.js';
-import { hexKey, hexDistance, getNeighbors, setMapDimensions } from './hex.js';
+import { hexKey, hexDistance, getNeighbors, setMapDimensions, MAP_COLS, MAP_ROWS } from './hex.js';
 import { applyPostRoundEffects, attritionForCycle } from './post-round-effects.js';
 import { sightRange } from './actions.js';
 
@@ -709,6 +709,36 @@ export class GameState {
     const set = this.exploredHexes[faction];
     if (!set) return;
     for (const k of hexKeys) set.add(k);
+  }
+
+  /**
+   * Compute visible hexes for each faction based on current entity positions
+   * and merge them into exploredHexes. Call this server-side (and offline)
+   * after resolution and at the start of planning so that fog-of-war memory
+   * persists across turns without relying on the renderer.
+   */
+  updateExploredHexes() {
+    for (const faction of ['hero', 'witch']) {
+      const visible = new Set();
+      for (const e of this.entities) {
+        if (!e.alive || e.owner !== faction) continue;
+        const range = (faction === 'witch')
+          ? 2
+          : sightRange(this.phase, e.ability === SurvivorAbility.SCOUT);
+        const rMin = Math.max(0, e.row - range);
+        const rMax = Math.min(MAP_ROWS - 1, e.row + range);
+        const cMin = Math.max(0, e.col - range);
+        const cMax = Math.min(MAP_COLS - 1, e.col + range);
+        for (let row = rMin; row <= rMax; row++) {
+          for (let col = cMin; col <= cMax; col++) {
+            if (hexDistance(col, row, e.col, e.row) <= range) {
+              visible.add(hexKey(col, row));
+            }
+          }
+        }
+      }
+      this.markExplored(faction, visible);
+    }
   }
 
   get gameOver() { return this.winner !== null; }

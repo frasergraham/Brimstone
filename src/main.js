@@ -305,6 +305,7 @@ function initTutorial() {
 
 function _startLocalPlanningPhase() {
   if (!state || state.gameOver) return;
+  state.updateExploredHexes();
   state.startPlanning();
 
   if (_autoplay) {
@@ -480,6 +481,7 @@ async function _runLocalResolution(skipSummary = false) {
 
   state.updateNodeDiscovery();
   state.checkAndLogNodeControlChanges();
+  state.updateExploredHexes();
   state.endRound();
 
   // Campaign wave spawning: inject new enemies after each round

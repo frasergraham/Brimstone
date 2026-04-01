@@ -302,6 +302,7 @@ function _clearTurnTimer(room) {
 /** Begin a new planning phase: reset plans, compute per-player budgets, broadcast, kick AI. */
 function _startPlanningPhase(room) {
   if (room.state.gameOver) return;
+  room.state.updateExploredHexes();
   room.state.startPlanning();
 
   // Build the submission-status array for clients: who is in the game and their faction
@@ -451,6 +452,7 @@ function _executeResolution(room) {
 
   state.updateNodeDiscovery();
   state.checkAndLogNodeControlChanges();
+  state.updateExploredHexes();
   state.endRound();
   checkAndHandleGameOver(room);
 
@@ -1674,6 +1676,7 @@ function _resolveAsyncRound(roomId) {
 
   state.updateNodeDiscovery();
   state.checkAndLogNodeControlChanges();
+  state.updateExploredHexes();
   state.endRound();
 
   const finalState   = serializeState(state);
