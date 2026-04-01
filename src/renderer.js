@@ -158,8 +158,9 @@ export class Renderer {
     this.useTileImages = true;
 
     // Pre-clipped hex tile sprite cache — avoids per-frame save/clip/drawImage/restore.
-    this._hexTileCache     = new Map(); // spriteId → OffscreenCanvas
-    this._hexTileCacheSize = 0;         // hexSize when cache was built
+    this._hexTileCache      = new Map(); // spriteId → {canvas, scale}
+    this._hexTileCacheSize  = 0;         // hexSize when cache was built
+    this._hexTileCacheScale = 0;         // zoom scale when cache was built
 
     this._resize();
   }
@@ -1018,14 +1019,22 @@ export class Renderer {
 
   // ── Hex tile sprite cache ──────────────────────────────────────────────
   // Pre-renders each sprite variant clipped to a hex shape on an offscreen
-  // canvas.  Eliminates per-tile save/clip/drawImage/restore every frame.
-  // Cache is keyed by spriteId and invalidated when hexSize changes.
+  // canvas at a resolution that accounts for zoom level and devicePixelRatio.
+  // Eliminates per-tile save/clip/drawImage/restore every frame.
+  // Cache is invalidated when hexSize or effective zoom scale changes.
 
   _getHexTileSprite(spriteId, clipSize) {
     const hs = this.hexSize;
-    if (this._hexTileCacheSize !== hs) {
+    // Quantise zoom to nearest 0.25× step so the cache isn't rebuilt on every
+    // sub-pixel zoom change during pinch/scroll animations.
+    const dpr = (typeof devicePixelRatio !== 'undefined' ? devicePixelRatio : 1);
+    const rawScale = Math.max(1, this.zoomLevel) * dpr;
+    const scale = Math.ceil(rawScale * 4) / 4; // snap to 0.25 increments
+
+    if (this._hexTileCacheSize !== hs || this._hexTileCacheScale !== scale) {
       this._hexTileCache.clear();
-      this._hexTileCacheSize = hs;
+      this._hexTileCacheSize  = hs;
+      this._hexTileCacheScale = scale;
     }
     const key = clipSize === hs ? spriteId : `${spriteId}@${clipSize}`;
     let cached = this._hexTileCache.get(key);
@@ -1034,15 +1043,18 @@ export class Renderer {
     const rect = this._spriteRects?.get(spriteId);
     if (!rect || !this._tilemapImg) return null;
 
-    const dim = hs * 2;
+    // Render at scaled resolution for crisp output when zoomed in
+    const logicalDim = hs * 2;
+    const bufferDim  = Math.ceil(logicalDim * scale);
     const c = document.createElement('canvas');
-    c.width = dim; c.height = dim;
+    c.width = bufferDim; c.height = bufferDim;
     const tctx = c.getContext('2d');
+    tctx.scale(scale, scale);
     _traceHexPath(tctx, hs, hs, clipSize);
     tctx.clip();
     tctx.drawImage(this._tilemapImg,
       rect.x, rect.y, rect.size, rect.size,
-      0, 0, dim, dim);
+      0, 0, logicalDim, logicalDim);
     this._hexTileCache.set(key, c);
     return c;
   }
@@ -1100,7 +1112,9 @@ export class Renderer {
       const clipSize = tile.type === TileType.BUILDING ? hs : fillSize;
       const cached = this._getHexTileSprite(baseId, clipSize);
       if (cached) {
-        ctx.drawImage(cached, x - hs, y - hs);
+        // cached buffer is rendered at higher resolution; draw it at logical size
+        ctx.drawImage(cached, 0, 0, cached.width, cached.height,
+          x - hs, y - hs, hs * 2, hs * 2);
       }
     }
 
