@@ -303,10 +303,14 @@
     async function load() {
       try {
         const sep = _token ? `?token=${encodeURIComponent(_token)}` : '';
-        const res = await fetch(`/admin/api/game-stats/summary${sep}`);
+        const [res, campRes] = await Promise.all([
+          fetch(`/admin/api/game-stats/summary${sep}`),
+          fetch(`/admin/api/campaign-game-stats/summary${sep}`).catch(() => null)
+        ]);
         if (res.status === 401 || res.status === 403) { window.location.href = '/'; return; }
         const data = await res.json();
-        render(data);
+        const campData = campRes && campRes.ok ? await campRes.json() : null;
+        render(data, campData);
       } catch (err) {
         document.getElementById('content').innerHTML =
           `<p class="empty-state">Failed to load stats: ${err.message}</p>`;
@@ -329,7 +333,20 @@
       return '<span class="health-badge bad">Out of range</span>';
     }
 
-    function render(d) {
+    function fmtDuration(ms) {
+      if (!ms) return '--';
+      const s = Math.round(ms / 1000);
+      const m = Math.floor(s / 60);
+      return m > 0 ? `${m}m ${s % 60}s` : `${s}s`;
+    }
+
+    function winRateBadge(winPct) {
+      if (winPct >= 30 && winPct <= 70) return '<span class="health-badge good">Normal</span>';
+      if (winPct >= 15 && winPct <= 85) return '<span class="health-badge warning">Skewed</span>';
+      return '<span class="health-badge bad">Extreme</span>';
+    }
+
+    function render(d, campData) {
       if (d.totalGames === 0) {
         document.getElementById('content').innerHTML =
           '<p class="empty-state">No games recorded yet. Play some games to see stats!</p>';
@@ -452,7 +469,134 @@
         html += '</table></div>';
       }
 
+      // ── Campaign Stats ──
+      if (campData && campData.totalAttempts > 0) {
+        html += renderCampaign(campData);
+      }
+
       document.getElementById('content').innerHTML = html;
+    }
+
+    function renderCampaign(d) {
+      const totalWins = d.byMission.reduce((s, m) => s + m.wins, 0);
+      const totalLosses = d.byMission.reduce((s, m) => s + m.losses, 0);
+
+      let html = '<hr style="border:none;border-top:2px solid var(--border);margin:2.5rem 0 2rem">';
+      html += '<h2 style="font-size:1.4rem;letter-spacing:0.15em;color:var(--night);margin-bottom:1.5rem">CAMPAIGN STATS</h2>';
+
+      // ── Summary cards ──
+      html += '<div class="cards">';
+      html += card(d.totalAttempts, 'Campaign Attempts');
+      html += card(totalWins, 'Victories', 'hero');
+      html += card(totalLosses, 'Defeats', 'witch');
+      html += card(d.avgRounds, 'Avg Rounds', 'green');
+      html += card(d.avgHeroKills, 'Avg Kills', 'hero');
+      html += card(d.avgSurvivorsLost, 'Avg Survivors Lost');
+      html += '</div>';
+
+      // ── Win/Loss Balance ──
+      const heroWinPct = parseFloat(pct(totalWins, d.totalAttempts));
+      const witchWinPct = parseFloat(pct(totalLosses, d.totalAttempts));
+      html += '<div class="section">';
+      html += '<h2>Campaign Win Rate</h2>';
+      html += '<div class="balance-meter">';
+      html += `<span class="side-label hero">${heroWinPct}%</span>`;
+      html += '<div class="track">';
+      html += `<div class="hero-fill" style="width:${heroWinPct}%"></div>`;
+      html += `<div class="witch-fill" style="width:${witchWinPct}%"></div>`;
+      html += '</div>';
+      html += `<span class="side-label witch">${witchWinPct}%</span>`;
+      html += '</div>';
+      html += `<p class="note">Hero victory rate across all campaign missions. ${winRateBadge(heroWinPct)}</p>`;
+      html += '</div>';
+
+      // ── Per-Mission Breakdown ──
+      if (d.byMission.length > 0) {
+        html += '<div class="section">';
+        html += '<h2>Mission Breakdown</h2>';
+        html += '<table><tr><th>Mission</th><th>Attempts</th><th>Wins</th><th>Losses</th><th>Win %</th><th>Avg Rounds</th><th>Avg Kills</th><th>Avg Lost</th><th>Avg Duration</th></tr>';
+        for (const m of d.byMission) {
+          const wp = pct(m.wins, m.attempts);
+          html += '<tr>';
+          html += `<td>${m.mission_title || m.mission_id}</td>`;
+          html += `<td>${m.attempts}</td>`;
+          html += `<td style="color:var(--hero)">${m.wins}</td>`;
+          html += `<td style="color:var(--witch)">${m.losses}</td>`;
+          html += `<td>${wp}% ${winRateBadge(parseFloat(wp))}</td>`;
+          html += `<td>${m.avg_rounds}</td>`;
+          html += `<td style="color:var(--hero)">${m.avg_hero_kills}</td>`;
+          html += `<td style="color:var(--red)">${m.avg_survivors_lost}</td>`;
+          html += `<td>${fmtDuration(m.avg_duration_ms)}</td>`;
+          html += '</tr>';
+        }
+        html += '</table></div>';
+      }
+
+      // ── Win Reasons ──
+      if (d.byWinReason.length > 0) {
+        html += '<div class="section">';
+        html += '<h2>Campaign Win Conditions</h2>';
+        const maxRC = Math.max(...d.byWinReason.map(r => r.count), 1);
+        for (const row of d.byWinReason) {
+          const p = pct(row.count, d.totalAttempts);
+          const color = row.win_reason.toLowerCase().includes('hero') ? 'var(--hero)' : 'var(--witch)';
+          html += barRow(row.win_reason, row.count, maxRC, color, `${p}%`);
+        }
+        html += '</div>';
+      }
+
+      // ── Campaign Sessions ──
+      if (d.byCampaign.length > 0) {
+        html += '<div class="section">';
+        html += '<h2>Campaign Sessions</h2>';
+        html += '<table><tr><th>Campaign ID</th><th>Attempts</th><th>Wins</th><th>Losses</th><th>Missions Tried</th></tr>';
+        for (const c of d.byCampaign) {
+          html += '<tr>';
+          html += `<td>${c.campaign_id}</td>`;
+          html += `<td>${c.total_attempts}</td>`;
+          html += `<td style="color:var(--hero)">${c.total_wins}</td>`;
+          html += `<td style="color:var(--witch)">${c.total_losses}</td>`;
+          html += `<td>${c.missions_attempted}</td>`;
+          html += '</tr>';
+        }
+        html += '</table></div>';
+      }
+
+      // ── Unit Economy ──
+      html += '<div class="section">';
+      html += '<h2>Campaign Unit Economy (averages)</h2>';
+      html += '<table><tr><th>Metric</th><th>Value</th></tr>';
+      html += `<tr><td>Hero kills per mission</td><td style="color:var(--hero)">${d.avgHeroKills}</td></tr>`;
+      html += `<tr><td>Witch kills per mission</td><td style="color:var(--witch)">${d.avgWitchKills}</td></tr>`;
+      html += `<tr><td>Survivors deployed per mission</td><td style="color:var(--green)">${d.avgSurvivorsDeployed}</td></tr>`;
+      html += `<tr><td>Survivors lost per mission</td><td style="color:var(--red)">${d.avgSurvivorsLost}</td></tr>`;
+      html += `<tr><td>Enemies spawned per mission</td><td style="color:var(--witch)">${d.avgEnemiesSpawned}</td></tr>`;
+      html += '</table></div>';
+
+      // ── Recent Games ──
+      if (d.recentGames && d.recentGames.length > 0) {
+        html += '<div class="section">';
+        html += '<h2>Recent Campaign Games</h2>';
+        html += '<div class="recent-games">';
+        html += '<table><tr><th>Mission</th><th>Winner</th><th>Reason</th><th>Rounds</th><th>Kills</th><th>Survivors</th><th>Duration</th><th>Date</th></tr>';
+        for (const g of d.recentGames) {
+          const date = g.created_at ? new Date(g.created_at * 1000).toLocaleDateString() : '--';
+          const winColor = g.winner === 'hero' ? 'var(--hero)' : 'var(--witch)';
+          html += '<tr>';
+          html += `<td>${g.mission_title || g.mission_id}</td>`;
+          html += `<td style="color:${winColor}">${g.winner}</td>`;
+          html += `<td>${g.win_reason}</td>`;
+          html += `<td>${g.rounds}</td>`;
+          html += `<td>${g.hero_kills}</td>`;
+          html += `<td>${g.survivors_deployed - g.survivors_lost}/${g.survivors_deployed}</td>`;
+          html += `<td>${fmtDuration(g.duration_ms)}</td>`;
+          html += `<td>${date}</td>`;
+          html += '</tr>';
+        }
+        html += '</table></div></div>';
+      }
+
+      return html;
     }
 
     function card(value, label, cls = '') {
