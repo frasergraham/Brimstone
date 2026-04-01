@@ -57,10 +57,12 @@ function _applyModeConfig(modes) {
   }
 }
 
-fetch('/api/config')
-  .then(r => r.ok ? r.json() : null)
-  .then(data => { if (data?.modes) _applyModeConfig(data.modes); })
-  .catch(() => {}); // offline / dev-server — all modes remain enabled
+if (!window.electronAPI) {
+  fetch('/api/config')
+    .then(r => r.ok ? r.json() : null)
+    .then(data => { if (data?.modes) _applyModeConfig(data.modes); })
+    .catch(() => {}); // offline / dev-server — all modes remain enabled
+}
 
 let state, renderer, ui, witchAI, heroAI;
 let _autoplay  = false;

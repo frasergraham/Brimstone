@@ -3,10 +3,22 @@
 // configurable remote server for multiplayer.
 
 import { app, BrowserWindow, ipcMain, protocol, net } from 'electron';
-import { autoUpdater }  from 'electron-updater';
+import electronUpdater   from 'electron-updater';
+const { autoUpdater } = electronUpdater;
 import Store             from 'electron-store';
 import { join, extname } from 'path';
 import { pathToFileURL } from 'url';
+
+// ── Register custom scheme as privileged (must happen before app 'ready') ────
+protocol.registerSchemesAsPrivileged([{
+  scheme: 'brimstone',
+  privileges: {
+    standard: true,
+    secure: true,
+    supportFetchAPI: true,
+    corsEnabled: true,
+  },
+}]);
 
 // ── Config store ─────────────────────────────────────────────────────────────
 
@@ -85,7 +97,7 @@ function createWindow() {
     minHeight: 600,
     title: 'Brimstone',
     webPreferences: {
-      preload: join(import.meta.dirname, 'preload.js'),
+      preload: join(import.meta.dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,  // needed for preload ESM
