@@ -3465,6 +3465,15 @@ document.getElementById('btn-async-copy-code').addEventListener('click', () => {
   setTimeout(() => { btn.textContent = 'Copy Code'; }, 1500);
 });
 
+document.getElementById('btn-async-copy-link').addEventListener('click', () => {
+  const code = document.getElementById('async-game-code').textContent;
+  const inviteUrl = `${location.origin}${location.pathname}#invite=${encodeURIComponent(code)}`;
+  navigator.clipboard?.writeText(inviteUrl);
+  const btn = document.getElementById('btn-async-copy-link');
+  btn.textContent = 'Copied!';
+  setTimeout(() => { btn.textContent = '📋 Copy Invite Link'; }, 1500);
+});
+
 document.getElementById('btn-async-created-done').addEventListener('click', () => {
   _showAsyncScreen();
 });
@@ -3485,35 +3494,44 @@ document.getElementById('btn-async-join-go')?.addEventListener('click', () => {
     return;
   }
   err.style.display = 'none';
-
-  _ensureAuthed(() => {
-    const session = loadSession();
-    const base = window.BRIMSTONE_SERVER || '';
-    fetch(`${base}/api/async-games/join`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: session.token, code }),
-    })
-      .then(r => r.json())
-      .then(result => {
-        if (result.error) {
-          err.textContent = result.error;
-          err.style.display = '';
-          return;
-        }
-        // Game joined — open the game directly
-        _openAsyncGame(result.roomId);
-      })
-      .catch(() => {
-        err.textContent = 'Failed to join game.';
-        err.style.display = '';
-      });
-  });
+  _ensureAuthed(() => _joinAsyncByCode(code));
 });
 
 document.getElementById('btn-async-join-back')?.addEventListener('click', () => {
   showStep('async');
 });
+
+/** Join an async game by 6-char code (used by both the UI button and deep links). */
+function _joinAsyncByCode(code) {
+  const session = loadSession();
+  const base = window.BRIMSTONE_SERVER || '';
+  fetch(`${base}/api/async-games/join`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: session.token, code }),
+  })
+    .then(r => r.json())
+    .then(result => {
+      if (result.error) {
+        // Show error in the async join card if visible, otherwise alert
+        const err = document.getElementById('async-join-error');
+        if (err) {
+          err.textContent = result.error;
+          err.style.display = '';
+          showStep('async-join');
+          const input = document.getElementById('async-join-code');
+          if (input) input.value = code;
+        } else {
+          alert(result.error);
+        }
+        return;
+      }
+      _openAsyncGame(result.roomId);
+    })
+    .catch(() => {
+      alert('Failed to join async game.');
+    });
+}
 
 // ── Deep link handling for async games ──────────────────────────────────────
 
@@ -3521,24 +3539,30 @@ function _checkAsyncDeepLink() {
   const hash = window.location.hash;
   const asyncMatch = hash.match(/^#async=(.+)$/);
   if (asyncMatch) {
-    window.location.hash = '';
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
     const roomId = asyncMatch[1];
     _showAsyncScreen();
     setTimeout(() => _openAsyncGame(roomId), 500);
-    return;
+    return true;
   }
   const inviteMatch = hash.match(/^#invite=(.+)$/);
   if (inviteMatch) {
-    window.location.hash = '';
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
     const code = decodeURIComponent(inviteMatch[1]);
-    _showAsyncScreen();
-    // Pre-fill the join code and navigate to join screen
-    setTimeout(() => {
-      showStep('async-join');
-      const input = document.getElementById('async-join-code');
-      if (input) input.value = code;
-    }, 300);
+
+    const session = loadSession();
+    if (session) {
+      // Already signed in — auto-join
+      _ensureAuthed(() => _joinAsyncByCode(code));
+    } else {
+      // Not signed in — show auth dialog, then auto-join
+      _showAuthDialog(() => {
+        _ensureAuthed(() => _joinAsyncByCode(code));
+      });
+    }
+    return true;
   }
+  return false;
 }
 
 // ── Auth dialog callback (hoisted for deep link access) ─────────────────────
