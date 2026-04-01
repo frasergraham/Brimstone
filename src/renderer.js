@@ -18,12 +18,54 @@ export const PAD_Y = 30;
 const BG_COLOR = '#2a2a2f';
 const MIN_HEX_SIZE = 10;
 
+// Hoisted from _drawTile — avoids allocating a new object per hex per frame.
+const TERRAIN_SPRITES = Object.freeze({
+  [TileType.GRASS]: 1, [TileType.DIRT]: 1, [TileType.FOREST]: 1,
+  [TileType.ROAD]: 1, [TileType.RIVER]: 1, [TileType.BRIDGE]: 1,
+  [TileType.BUILDING]: 1,
+});
+
 function hexCorners(cx, cy, size) {
   const pts = [];
   for (let i = 0; i < 6; i++) {
     const angle = Math.PI / 180 * (60 * i - 30);
     pts.push({ x: cx + size * Math.cos(angle), y: cy + size * Math.sin(angle) });
   }
+  return pts;
+}
+
+// ── Cached hex-corner offsets ────────────────────────────────────────────────
+// hexCorners() computes 12 trig ops per call.  For a given `size` the offsets
+// are constant, so we pre-compute them once and reuse across every hex.
+const _hexOffsetCache = new Map();  // size → Float64Array(12) [dx0,dy0,…dx5,dy5]
+
+function _getHexOffsets(size) {
+  let arr = _hexOffsetCache.get(size);
+  if (arr) return arr;
+  arr = new Float64Array(12);
+  for (let i = 0; i < 6; i++) {
+    const angle = Math.PI / 180 * (60 * i - 30);
+    arr[i * 2]     = size * Math.cos(angle);
+    arr[i * 2 + 1] = size * Math.sin(angle);
+  }
+  _hexOffsetCache.set(size, arr);
+  return arr;
+}
+
+/** Trace a hex path on `ctx` using cached offsets — zero allocation. */
+function _traceHexPath(ctx, cx, cy, size) {
+  const o = _getHexOffsets(size);
+  ctx.beginPath();
+  ctx.moveTo(cx + o[0], cy + o[1]);
+  for (let i = 1; i < 6; i++) ctx.lineTo(cx + o[i * 2], cy + o[i * 2 + 1]);
+  ctx.closePath();
+}
+
+/** Return corners as an array of {x,y} using cached offsets. */
+function _cachedHexCorners(cx, cy, size) {
+  const o = _getHexOffsets(size);
+  const pts = new Array(6);
+  for (let i = 0; i < 6; i++) pts[i] = { x: cx + o[i * 2], y: cy + o[i * 2 + 1] };
   return pts;
 }
 
@@ -114,6 +156,11 @@ export class Renderer {
 
     /** When false, terrain/building sprites are hidden and only colour fills are drawn. */
     this.useTileImages = true;
+
+    // Pre-clipped hex tile sprite cache — avoids per-frame save/clip/drawImage/restore.
+    this._hexTileCache      = new Map(); // spriteId → {canvas, scale}
+    this._hexTileCacheSize  = 0;         // hexSize when cache was built
+    this._hexTileCacheScale = 0;         // zoom scale when cache was built
 
     this._resize();
   }
@@ -612,6 +659,29 @@ export class Renderer {
     this._panY = Math.max(minY, Math.min(marginY, this._panY));
   }
 
+  // ── Viewport culling ────────────────────────────────────────────────────
+  // Returns the min/max col/row range visible in the current viewport,
+  // accounting for zoom and pan.  A 1-hex margin is added on each side so
+  // partially-visible hexes at the edges are still drawn.
+  _getVisibleRange() {
+    const hs = this.hexSize;
+    const z  = this.zoomLevel;
+    // Viewport bounds in map-local (pre-zoom) coordinates
+    const left   = -this._panX / z;
+    const top    = -this._panY / z;
+    const right  = (this.canvas.width  - this._panX) / z;
+    const bottom = (this.canvas.height - this._panY) / z;
+    // Convert to col/row with 1-hex margin for partially visible hexes
+    const colW = SQRT3 * hs;
+    const rowH = 1.5 * hs;
+    return {
+      minCol: Math.max(0, Math.floor((left   - this._padX) / colW - 1)),
+      maxCol: Math.min(MAP_COLS - 1, Math.ceil((right  - this._padX) / colW + 1)),
+      minRow: Math.max(0, Math.floor((top    - this._padY) / rowH - 1)),
+      maxRow: Math.min(MAP_ROWS - 1, Math.ceil((bottom - this._padY) / rowH + 1)),
+    };
+  }
+
   draw() {
     const ctx   = this.ctx;
     const state = this.state;
@@ -644,9 +714,12 @@ export class Renderer {
     ctx.translate(this._panX, this._panY);
     ctx.scale(this.zoomLevel, this.zoomLevel);
 
+    // Viewport culling — only draw hexes visible on screen
+    const vr = this._getVisibleRange();
+
     // Pass 1: terrain tiles (grass, forest, dirt, road bg, river bg, bridges)
-    for (let row = 0; row < MAP_ROWS; row++) {
-      for (let col = 0; col < MAP_COLS; col++) {
+    for (let row = vr.minRow; row <= vr.maxRow; row++) {
+      for (let col = vr.minCol; col <= vr.maxCol; col++) {
         const t = state.tiles.get(hexKey(col, row));
         if (t && t.type !== TileType.BUILDING) this._drawTile(col, row);
       }
@@ -657,8 +730,8 @@ export class Renderer {
     this._drawRoadLayer();
 
     // Pass 2: building tiles drawn over roads/rivers so no bleed-through
-    for (let row = 0; row < MAP_ROWS; row++) {
-      for (let col = 0; col < MAP_COLS; col++) {
+    for (let row = vr.minRow; row <= vr.maxRow; row++) {
+      for (let col = vr.minCol; col <= vr.maxCol; col++) {
         const t = state.tiles.get(hexKey(col, row));
         if (t && t.type === TileType.BUILDING) this._drawTile(col, row);
       }
@@ -690,15 +763,15 @@ export class Renderer {
     if (fogActive) {
       const observerOwner = humanIsHero ? 'hero' : (humanIsWitch ? 'witch' : null);
       if (observerOwner) {
-        this._drawFogLayer(observerOwner, state.fogOfWar, fogVisibleHexes);
+        this._drawFogLayer(observerOwner, state.fogOfWar, fogVisibleHexes, vr);
       }
     }
 
     // Explored dots — drawn after fog so they respect fog of war
     {
       const hs = this.hexSize;
-      for (let row = 0; row < MAP_ROWS; row++) {
-        for (let col = 0; col < MAP_COLS; col++) {
+      for (let row = vr.minRow; row <= vr.maxRow; row++) {
+        for (let col = vr.minCol; col <= vr.maxCol; col++) {
           const t = state.tiles.get(hexKey(col, row));
           if (!t || !t.explored) continue;
           if (fogVisibleHexes && !fogVisibleHexes.has(hexKey(col, row))) continue;
@@ -795,32 +868,23 @@ export class Renderer {
     // Lunge anims suppress entity drawing for as long as the lunge is active (settled or not)
     for (const a of this._lungeAnims) animatingIds.add(a.entityId);
 
-    const drawn = new Set();
+    // Pre-build spatial index: hexKey → entity[] (avoids O(entities²) filter)
+    const entityByHex = new Map();
     for (const entity of state.entities) {
       if (!entity.alive) continue;
-      if (animatingIds.has(entity.id)) continue; // drawn by _drawMoveAnims instead
-
+      if (animatingIds.has(entity.id)) continue;
       if (revealedHexes !== null) {
-        const hiddenOwner = humanIsHero ? 'witch' : 'hero';
-        if (entity.owner === hiddenOwner && !revealedHexes.has(hexKey(entity.col, entity.row))) continue;
+        const hOwner = humanIsHero ? 'witch' : 'hero';
+        if (entity.owner === hOwner && !revealedHexes.has(hexKey(entity.col, entity.row))) continue;
       }
-
       const key = hexKey(entity.col, entity.row);
-      if (drawn.has(key)) continue;
+      const arr = entityByHex.get(key);
+      if (arr) arr.push(entity); else entityByHex.set(key, [entity]);
+    }
 
-      const stack = state.entities.filter(e => {
-        if (!e.alive || e.col !== entity.col || e.row !== entity.row) return false;
-        if (animatingIds.has(e.id)) return false;
-        if (revealedHexes !== null) {
-          const hiddenOwner = humanIsHero ? 'witch' : 'hero';
-          if (e.owner === hiddenOwner) return revealedHexes.has(hexKey(e.col, e.row));
-        }
-        return true;
-      });
-
-      if (!stack.length) continue;
-      drawn.add(key);
-      this._drawEntityStack(entity.col, entity.row, stack);
+    for (const [key, stack] of entityByHex) {
+      const [col, row] = key.split(',').map(Number);
+      this._drawEntityStack(col, row, stack);
     }
 
     // Damage flash overlays (night/day hazard animations)
@@ -865,12 +929,8 @@ export class Renderer {
     const { x, y } = this._toCanvas(col, row);
     // Sine-wave pulse: alpha oscillates between 0.4 and 0.95 at ~1.5 Hz
     const pulse = 0.675 + 0.325 * Math.sin(Date.now() / 340);
-    const corners = hexCorners(x, y, hs - 1);
+    _traceHexPath(ctx, x, y, hs - 1);
     ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(corners[0].x, corners[0].y);
-    for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
-    ctx.closePath();
     ctx.strokeStyle = `rgba(255,215,0,${pulse})`; // gold
     ctx.lineWidth   = 3.5;
     ctx.shadowColor = 'rgba(255,200,0,0.8)';
@@ -894,13 +954,9 @@ export class Renderer {
       const t = remaining / total; // 1.0 = just started, 0.0 = expired
 
       const { x, y } = this._toCanvas(f.col, f.row);
-      const corners   = hexCorners(x, y, hs - 1);
 
       // Red hex overlay (fades out)
-      ctx.beginPath();
-      ctx.moveTo(corners[0].x, corners[0].y);
-      for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
-      ctx.closePath();
+      _traceHexPath(ctx, x, y, hs - 1);
       ctx.fillStyle = f.color.replace(/[\d.]+\)$/, `${(t * 0.55).toFixed(2)})`);
       ctx.fill();
 
@@ -961,6 +1017,57 @@ export class Renderer {
     }
   }
 
+  // ── Hex tile sprite cache ──────────────────────────────────────────────
+  // Pre-renders each sprite variant clipped to a hex shape on an offscreen
+  // canvas at a resolution that accounts for zoom level and devicePixelRatio.
+  // Eliminates per-tile save/clip/drawImage/restore every frame.
+  // Cache is invalidated when hexSize or effective zoom scale changes.
+
+  _getHexTileSprite(spriteId, clipSize) {
+    const hs = this.hexSize;
+    // Quantise zoom to nearest 0.25× step so the cache isn't rebuilt on every
+    // sub-pixel zoom change during pinch/scroll animations.
+    const dpr = (typeof devicePixelRatio !== 'undefined' ? devicePixelRatio : 1);
+    const rawScale = Math.max(1, this.zoomLevel) * dpr;
+    const scale = Math.ceil(rawScale * 4) / 4; // snap to 0.25 increments
+
+    if (this._hexTileCacheSize !== hs || this._hexTileCacheScale !== scale) {
+      this._hexTileCache.clear();
+      this._hexTileCacheSize  = hs;
+      this._hexTileCacheScale = scale;
+    }
+    const key = clipSize === hs ? spriteId : `${spriteId}@${clipSize}`;
+    let cached = this._hexTileCache.get(key);
+    if (cached) return cached;
+
+    const rect = this._spriteRects?.get(spriteId);
+    if (!rect || !this._tilemapImg) return null;
+
+    // Render at scaled resolution for crisp output when zoomed in
+    const logicalDim = hs * 2;
+    const bufferDim  = Math.ceil(logicalDim * scale);
+    const c = document.createElement('canvas');
+    c.width = bufferDim; c.height = bufferDim;
+    const tctx = c.getContext('2d');
+    tctx.scale(scale, scale);
+    _traceHexPath(tctx, hs, hs, clipSize);
+    tctx.clip();
+    tctx.drawImage(this._tilemapImg,
+      rect.x, rect.y, rect.size, rect.size,
+      0, 0, logicalDim, logicalDim);
+    this._hexTileCache.set(key, c);
+    return c;
+  }
+
+  _pickVariant(baseType, col, row) {
+    const count = this._variantCounts?.get(baseType) ?? 0;
+    if (count > 0) {
+      const variant = ((col * 7 + row * 13 + col * row) % count) + 1;
+      return `${baseType}_${variant}`;
+    }
+    return baseType;
+  }
+
   _drawTile(col, row) {
     const ctx  = this.ctx;
     const hs   = this.hexSize;
@@ -969,8 +1076,7 @@ export class Renderer {
 
     const { x, y } = this._toCanvas(col, row);
     const tileImgs = this.useTileImages && this._tilemapImg;
-    // Tighter spacing when tile images are on; classic gaps when off
-    const corners = hexCorners(x, y, tileImgs ? hs - 0.5 : hs - 1);
+    const fillSize = tileImgs ? hs - 0.5 : hs - 1;
 
     // Road and river tiles use a grass background — the actual road strips and
     // water ribbons are drawn in dedicated layers on top.
@@ -983,63 +1089,32 @@ export class Renderer {
     // Color fill — always drawn as base; skipped for buildings when tile
     // images are active (dirt sprite covers it).
     if (!(tile.type === TileType.BUILDING && tileImgs)) {
-      ctx.beginPath();
-      ctx.moveTo(corners[0].x, corners[0].y);
-      for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
-      ctx.closePath();
+      _traceHexPath(ctx, x, y, fillSize);
       ctx.fillStyle = color;
       ctx.fill();
     }
 
     // Hex outline — only in classic colour-fill mode
     if (!tileImgs) {
-      ctx.beginPath();
-      ctx.moveTo(corners[0].x, corners[0].y);
-      for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
-      ctx.closePath();
+      _traceHexPath(ctx, x, y, fillSize);
       ctx.strokeStyle = '#111418';
       ctx.lineWidth   = 0.8;
       ctx.stroke();
     }
 
-    // ── Sprite image from tilemap ────────────────────────────────────────
-    const TERRAIN_SPRITES = {
-      [TileType.GRASS]: 1, [TileType.DIRT]: 1, [TileType.FOREST]: 1,
-      [TileType.ROAD]: 1, [TileType.RIVER]: 1, [TileType.BRIDGE]: 1,
-      [TileType.BUILDING]: 1,
-    };
-
-    // Helper: pick a terrain variant sprite id for a given base type
-    const pickVariant = (baseType) => {
-      const count = this._variantCounts?.get(baseType) ?? 0;
-      if (count > 0) {
-        const variant = ((col * 7 + row * 13 + col * row) % count) + 1;
-        return `${baseType}_${variant}`;
-      }
-      return baseType;
-    };
-
-    // Terrain sprites: only when tile images are enabled
+    // ── Sprite image from tilemap (using pre-clipped cache) ──────────────
     if (TERRAIN_SPRITES[tile.type] && tileImgs) {
-      // Draw base terrain hex (clipped to hex shape)
       const baseId = tile.type === TileType.BUILDING
-        ? pickVariant(TileType.DIRT)
+        ? this._pickVariant(TileType.DIRT, col, row)
         : (tile.type === TileType.ROAD || tile.type === TileType.RIVER || tile.type === TileType.BRIDGE)
-          ? pickVariant(TileType.GRASS)
-          : pickVariant(tile.type);
-      const clipCorners = tile.type === TileType.BUILDING ? hexCorners(x, y, hs) : corners;
-      const baseRect = this._spriteRects?.get(baseId);
-      if (baseRect) {
-        ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(clipCorners[0].x, clipCorners[0].y);
-        for (let i = 1; i < 6; i++) ctx.lineTo(clipCorners[i].x, clipCorners[i].y);
-        ctx.closePath();
-        ctx.clip();
-        ctx.drawImage(this._tilemapImg,
-          baseRect.x, baseRect.y, baseRect.size, baseRect.size,
+          ? this._pickVariant(TileType.GRASS, col, row)
+          : this._pickVariant(tile.type, col, row);
+      const clipSize = tile.type === TileType.BUILDING ? hs : fillSize;
+      const cached = this._getHexTileSprite(baseId, clipSize);
+      if (cached) {
+        // cached buffer is rendered at higher resolution; draw it at logical size
+        ctx.drawImage(cached, 0, 0, cached.width, cached.height,
           x - hs, y - hs, hs * 2, hs * 2);
-        ctx.restore();
       }
     }
 
@@ -1060,7 +1135,6 @@ export class Renderer {
     // ── Fortification outline — tiered colour, outer glow, inner highlight ──
     if (tile.fortifyLevel > 0) {
       const lvl = tile.fortifyLevel;
-      // Colour palette: level 1 = amber wood, 2 = stone grey, 3 = silver steel, 4 = iron-gilt
       const fortPalette = [
         null,
         [160, 100,  55],   // 1 — amber/wood palisade
@@ -1070,12 +1144,9 @@ export class Renderer {
       ];
       const [fr, fg, fb] = fortPalette[Math.min(lvl, 4)];
       const alpha = Math.min(0.95, 0.5 + lvl * 0.12);
-      const lw    = lvl * 2; // level 1: 2px, level 4: 8px
+      const lw    = lvl * 2;
 
-      ctx.beginPath();
-      ctx.moveTo(corners[0].x, corners[0].y);
-      for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
-      ctx.closePath();
+      _traceHexPath(ctx, x, y, fillSize);
 
       // Outer diffuse glow
       ctx.strokeStyle = `rgba(${fr},${fg},${fb},0.18)`;
@@ -1089,11 +1160,7 @@ export class Renderer {
 
       // Inner highlight rim for level 2+ (lighter edge for depth)
       if (lvl >= 2) {
-        const innerCs = hexCorners(x, y, hs - 1 - lw * 0.6);
-        ctx.beginPath();
-        ctx.moveTo(innerCs[0].x, innerCs[0].y);
-        for (let i = 1; i < 6; i++) ctx.lineTo(innerCs[i].x, innerCs[i].y);
-        ctx.closePath();
+        _traceHexPath(ctx, x, y, hs - 1 - lw * 0.6);
         ctx.strokeStyle = `rgba(${Math.min(255, fr + 65)},${Math.min(255, fg + 65)},${Math.min(255, fb + 65)},0.45)`;
         ctx.lineWidth   = 1;
         ctx.stroke();
@@ -1130,8 +1197,13 @@ export class Renderer {
     for (const e of state.entities) {
       if (!e.alive || e.owner !== observerOwner) continue;
       const range = sightRange(state.phase, e.ability === SurvivorAbility.SCOUT);
-      for (let row = 0; row < MAP_ROWS; row++) {
-        for (let col = 0; col < MAP_COLS; col++) {
+      // Only iterate hexes within sight range of this entity (not entire map)
+      const rMin = Math.max(0, e.row - range);
+      const rMax = Math.min(MAP_ROWS - 1, e.row + range);
+      const cMin = Math.max(0, e.col - range);
+      const cMax = Math.min(MAP_COLS - 1, e.col + range);
+      for (let row = rMin; row <= rMax; row++) {
+        for (let col = cMin; col <= cMax; col++) {
           if (hexDistance(col, row, e.col, e.row) <= range) {
             visibleSet.add(hexKey(col, row));
           }
@@ -1141,15 +1213,15 @@ export class Renderer {
     return visibleSet;
   }
 
-  _drawFogLayer(observerOwner, mode, sightSet) {
+  _drawFogLayer(observerOwner, mode, sightSet, vr) {
     const ctx   = this.ctx;
     const hs    = this.hexSize;
     const state = this.state;
 
     if (mode === 'partial') {
       // Original behavior: dim overlay outside sight range
-      for (let row = 0; row < MAP_ROWS; row++) {
-        for (let col = 0; col < MAP_COLS; col++) {
+      for (let row = vr.minRow; row <= vr.maxRow; row++) {
+        for (let col = vr.minCol; col <= vr.maxCol; col++) {
           if (sightSet.has(hexKey(col, row))) continue;
           this._fillFogHex(col, row, hs, 'rgba(0,0,0,0.55)');
         }
@@ -1170,8 +1242,8 @@ export class Renderer {
       for (const k of moveSet)  explored.add(k);
     }
 
-    for (let row = 0; row < MAP_ROWS; row++) {
-      for (let col = 0; col < MAP_COLS; col++) {
+    for (let row = vr.minRow; row <= vr.maxRow; row++) {
+      for (let col = vr.minCol; col <= vr.maxCol; col++) {
         const k = hexKey(col, row);
         if (sightSet.has(k)) continue; // bright — no overlay
         if (moveSet.has(k) || explored?.has(k)) {
@@ -1187,11 +1259,7 @@ export class Renderer {
 
   _fillFogHex(col, row, hs, color) {
     const { x, y } = this._toCanvas(col, row);
-    const corners = hexCorners(x, y, hs);
-    this.ctx.beginPath();
-    this.ctx.moveTo(corners[0].x, corners[0].y);
-    for (let i = 1; i < 6; i++) this.ctx.lineTo(corners[i].x, corners[i].y);
-    this.ctx.closePath();
+    _traceHexPath(this.ctx, x, y, hs);
     this.ctx.fillStyle = color;
     this.ctx.fill();
   }
@@ -1446,21 +1514,14 @@ export class Renderer {
                              null;
     const { x, y } = this._toCanvas(col, row);
     const hs = this.hexSize;
-    const corners = hexCorners(x, y, hs - 1);
     const ctx = this.ctx;
-    ctx.beginPath();
-    ctx.moveTo(corners[0].x, corners[0].y);
-    for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
-    ctx.closePath();
+    _traceHexPath(ctx, x, y, hs - 1);
     // Node color base fill (~20% opacity)
     ctx.fillStyle = nodeColor + '33';
     ctx.fill();
     // Faction overlay on controlled/contested hexes
     if (factionOverlay) {
-      ctx.beginPath();
-      ctx.moveTo(corners[0].x, corners[0].y);
-      for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
-      ctx.closePath();
+      _traceHexPath(ctx, x, y, hs - 1);
       ctx.fillStyle = factionOverlay;
       ctx.fill();
     }
@@ -1509,11 +1570,7 @@ export class Renderer {
     const ctx = this.ctx;
     const hs  = this.hexSize;
     const { x, y } = this._toCanvas(col, row);
-    const corners   = hexCorners(x, y, hs - 1);
-    ctx.beginPath();
-    ctx.moveTo(corners[0].x, corners[0].y);
-    for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
-    ctx.closePath();
+    _traceHexPath(ctx, x, y, hs - 1);
     ctx.fillStyle = color;
     ctx.fill();
 
@@ -1533,16 +1590,12 @@ export class Renderer {
     const ctx = this.ctx;
     const hs  = this.hexSize;
     const { x, y } = this._toCanvas(col, row);
-    const corners   = hexCorners(x, y, hs - 1.5);
 
     if (glow) {
       const rgba = _parseColor(color);
       if (rgba) {
         const [r, g, b] = rgba;
-        ctx.beginPath();
-        ctx.moveTo(corners[0].x, corners[0].y);
-        for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
-        ctx.closePath();
+        _traceHexPath(ctx, x, y, hs - 1.5);
         // Outer soft halo
         ctx.strokeStyle = `rgba(${r},${g},${b},0.12)`;
         ctx.lineWidth   = lineWidth + 7;
@@ -1554,16 +1607,14 @@ export class Renderer {
       }
     }
 
-    ctx.beginPath();
-    ctx.moveTo(corners[0].x, corners[0].y);
-    for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
-    ctx.closePath();
+    _traceHexPath(ctx, x, y, hs - 1.5);
     ctx.strokeStyle = color;
     ctx.lineWidth   = lineWidth;
     ctx.stroke();
 
     // Specular: thin bright stroke on the upper two edges (top-lit bevel)
     // Corners 5→0→1 are the naturally lit faces of a pointy-top hex.
+    const corners = _cachedHexCorners(x, y, hs - 1.5);
     ctx.beginPath();
     ctx.moveTo(corners[5].x, corners[5].y);
     ctx.lineTo(corners[0].x, corners[0].y);
