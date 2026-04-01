@@ -3541,11 +3541,34 @@ function _checkAsyncDeepLink() {
   }
 }
 
+// ── Deep link handling for online game lobbies ───────────────────────────────
+
+function _checkGameDeepLink() {
+  const hash = window.location.hash;
+  const joinMatch = hash.match(/^#join=(.+)$/);
+  if (!joinMatch) return false;
+
+  window.history.replaceState(null, '', window.location.pathname + window.location.search);
+  const codeOrId = decodeURIComponent(joinMatch[1]);
+
+  // Ensure authenticated, then join the lobby
+  const session = loadSession();
+  if (session) {
+    _ensureAuthed(() => mp.joinLobby(codeOrId));
+  } else {
+    // No session — show the auth dialog so the user can pick a username first
+    _showAuthDialog(() => {
+      _ensureAuthed(() => mp.joinLobby(codeOrId));
+    });
+  }
+  return true;
+}
+
 // Check on page load (deferred if email_token auth is pending — see bottom of file)
 {
   const params = new URLSearchParams(window.location.search);
   if (!params.has('email_token')) {
-    _checkAsyncDeepLink();
+    _checkGameDeepLink() || _checkAsyncDeepLink();
   }
 }
 _fetchMainMenuAsyncGames();
@@ -3613,6 +3636,32 @@ function _renderLobby(lobby) {
   } else {
     codeWrap.style.display = 'none';
   }
+
+  // Invite link — use code for private games, room ID for public
+  const joinKey = (lobby.isPrivate && lobby.code) ? lobby.code : lobby.id;
+  const inviteUrl = `${location.origin}${location.pathname}#join=${encodeURIComponent(joinKey)}`;
+  const copyBtn = document.getElementById('btn-lobby-copy-link');
+  const copiedEl = document.getElementById('lobby-link-copied');
+  copiedEl.style.display = 'none';
+  // Replace button to clear old listeners
+  const freshCopyBtn = copyBtn.cloneNode(true);
+  copyBtn.parentNode.replaceChild(freshCopyBtn, copyBtn);
+  freshCopyBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(inviteUrl).then(() => {
+      copiedEl.style.display = '';
+      setTimeout(() => { copiedEl.style.display = 'none'; }, 2000);
+    }).catch(() => {
+      // Fallback: select a temporary input
+      const tmp = document.createElement('input');
+      tmp.value = inviteUrl;
+      document.body.appendChild(tmp);
+      tmp.select();
+      document.execCommand('copy');
+      document.body.removeChild(tmp);
+      copiedEl.style.display = '';
+      setTimeout(() => { copiedEl.style.display = 'none'; }, 2000);
+    });
+  });
 
   // Config summary
   const pps  = lobby.config?.playersPerSide ?? 1;
@@ -4625,8 +4674,8 @@ if (_emailToken) {
     _tmpMp._opts._onAuthOk = () => {
       mp = _tmpMp;
       _updateSessionBar();
-      // If there's an async deep link hash, open the game now that we're authed
-      _checkAsyncDeepLink();
+      // If there's a deep link hash, open the game now that we're authed
+      if (!_checkGameDeepLink()) _checkAsyncDeepLink();
       if (!window.location.hash) _showMultiplayerChoice();
     };
     _tmpMp.auth({ token: _emailToken });
