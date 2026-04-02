@@ -174,6 +174,14 @@ export const SCHEMA_SQL = `
     sent_at   INTEGER NOT NULL DEFAULT (unixepoch())
   );
 
+  CREATE TABLE IF NOT EXISTS device_tokens (
+    player_id  TEXT NOT NULL REFERENCES players(id),
+    token      TEXT NOT NULL,
+    platform   TEXT NOT NULL DEFAULT 'ios',
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (player_id, token)
+  );
+
   CREATE TABLE IF NOT EXISTS campaign_game_stats (
     id                TEXT PRIMARY KEY,
     campaign_id       TEXT NOT NULL,

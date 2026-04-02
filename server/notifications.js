@@ -1,8 +1,9 @@
-// Email notifications for async games.
-// Uses the Resend API (same as magic-link.js). Falls back to console.log
-// if RESEND_API_KEY is not set or no email is linked.
+// Notifications for async games.
+// Push notifications (APNS) are preferred when the player has a registered
+// device. Email via Resend API is the fallback for players without devices.
 
 import db from './db.js';
+import { sendPush, hasDeviceTokens } from './push.js';
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
@@ -102,16 +103,26 @@ function _isOnline(asyncSessions, roomId, playerId) {
  */
 export async function notifyOpponentJoined(playerId, gameInfo, asyncSessions) {
   if (_isOnline(asyncSessions, gameInfo.roomId, playerId)) return;
-  const email = _getPlayerEmail(playerId);
-  if (!email) return;
   if (!_shouldSend(gameInfo.roomId, playerId, 'opponent_joined')) return;
   _record(gameInfo.roomId, playerId, 'opponent_joined');
 
-  const url = `${_baseUrl()}/#async=${gameInfo.roomId}`;
-  await _sendEmail(email,
-    "Caleb's Hollow — Your opponent has joined!",
-    `${_playerName(gameInfo.opponentId)} has joined your game. Round 1 is ready.\n\nPlay your turn: ${url}`
-  );
+  const opponent = _playerName(gameInfo.opponentId);
+
+  if (hasDeviceTokens(playerId)) {
+    await sendPush(playerId, {
+      title: 'Your opponent has joined!',
+      body: `${opponent} has joined your game. Round 1 is ready.`,
+      roomId: gameInfo.roomId,
+    });
+  } else {
+    const email = _getPlayerEmail(playerId);
+    if (!email) return;
+    const url = `${_baseUrl()}/#async=${gameInfo.roomId}`;
+    await _sendEmail(email,
+      "Caleb's Hollow — Your opponent has joined!",
+      `${opponent} has joined your game. Round 1 is ready.\n\nPlay your turn: ${url}`
+    );
+  }
 }
 
 /**
@@ -119,16 +130,26 @@ export async function notifyOpponentJoined(playerId, gameInfo, asyncSessions) {
  */
 export async function notifyTurnReady(playerId, gameInfo, asyncSessions) {
   if (_isOnline(asyncSessions, gameInfo.roomId, playerId)) return;
-  const email = _getPlayerEmail(playerId);
-  if (!email) return;
   if (!_shouldSend(gameInfo.roomId, playerId, 'turn_ready')) return;
   _record(gameInfo.roomId, playerId, 'turn_ready');
 
-  const url = `${_baseUrl()}/#async=${gameInfo.roomId}`;
-  await _sendEmail(email,
-    `Caleb's Hollow — Round ${gameInfo.round} is ready`,
-    `A new round has begun in your game against ${_playerName(gameInfo.opponentId)}.\n\nPlay your turn: ${url}`
-  );
+  const opponent = _playerName(gameInfo.opponentId);
+
+  if (hasDeviceTokens(playerId)) {
+    await sendPush(playerId, {
+      title: `Round ${gameInfo.round} is ready`,
+      body: `Your game against ${opponent} has a new round.`,
+      roomId: gameInfo.roomId,
+    });
+  } else {
+    const email = _getPlayerEmail(playerId);
+    if (!email) return;
+    const url = `${_baseUrl()}/#async=${gameInfo.roomId}`;
+    await _sendEmail(email,
+      `Caleb's Hollow — Round ${gameInfo.round} is ready`,
+      `A new round has begun in your game against ${opponent}.\n\nPlay your turn: ${url}`
+    );
+  }
 }
 
 /**
@@ -136,16 +157,26 @@ export async function notifyTurnReady(playerId, gameInfo, asyncSessions) {
  */
 export async function notifyOpponentSubmitted(playerId, gameInfo, asyncSessions) {
   if (_isOnline(asyncSessions, gameInfo.roomId, playerId)) return;
-  const email = _getPlayerEmail(playerId);
-  if (!email) return;
   if (!_shouldSend(gameInfo.roomId, playerId, 'opponent_submitted')) return;
   _record(gameInfo.roomId, playerId, 'opponent_submitted');
 
-  const url = `${_baseUrl()}/#async=${gameInfo.roomId}`;
-  await _sendEmail(email,
-    "Caleb's Hollow — Your opponent submitted their turn",
-    `${_playerName(gameInfo.opponentId)} has submitted their plan. Waiting on you!\n\nPlay your turn: ${url}`
-  );
+  const opponent = _playerName(gameInfo.opponentId);
+
+  if (hasDeviceTokens(playerId)) {
+    await sendPush(playerId, {
+      title: 'Your move!',
+      body: `${opponent} has submitted their plan. Waiting on you!`,
+      roomId: gameInfo.roomId,
+    });
+  } else {
+    const email = _getPlayerEmail(playerId);
+    if (!email) return;
+    const url = `${_baseUrl()}/#async=${gameInfo.roomId}`;
+    await _sendEmail(email,
+      "Caleb's Hollow — Your opponent submitted their turn",
+      `${opponent} has submitted their plan. Waiting on you!\n\nPlay your turn: ${url}`
+    );
+  }
 }
 
 /**
@@ -153,17 +184,26 @@ export async function notifyOpponentSubmitted(playerId, gameInfo, asyncSessions)
  */
 export async function notifyGameOver(playerId, gameInfo, asyncSessions) {
   if (_isOnline(asyncSessions, gameInfo.roomId, playerId)) return;
-  const email = _getPlayerEmail(playerId);
-  if (!email) return;
   if (!_shouldSend(gameInfo.roomId, playerId, 'game_over')) return;
   _record(gameInfo.roomId, playerId, 'game_over');
 
-  const url = `${_baseUrl()}/#async=${gameInfo.roomId}`;
   const winnerLabel = gameInfo.winner === 'hero' ? 'The Hero' : 'The Witch';
-  await _sendEmail(email,
-    `Caleb's Hollow — Game Over`,
-    `${winnerLabel} wins! ${gameInfo.winReason || ''}\n\nView the result: ${url}`
-  );
+
+  if (hasDeviceTokens(playerId)) {
+    await sendPush(playerId, {
+      title: 'Game Over',
+      body: `${winnerLabel} wins! ${gameInfo.winReason || ''}`,
+      roomId: gameInfo.roomId,
+    });
+  } else {
+    const email = _getPlayerEmail(playerId);
+    if (!email) return;
+    const url = `${_baseUrl()}/#async=${gameInfo.roomId}`;
+    await _sendEmail(email,
+      "Caleb's Hollow — Game Over",
+      `${winnerLabel} wins! ${gameInfo.winReason || ''}\n\nView the result: ${url}`
+    );
+  }
 }
 
 /**
@@ -182,11 +222,20 @@ export async function sendGameInvite(email, gameInfo) {
  * Notify a player that the game was abandoned due to inactivity.
  */
 export async function notifyGameAbandoned(playerId, gameInfo) {
-  const email = _getPlayerEmail(playerId);
-  if (!email) return;
+  const opponent = _playerName(gameInfo.opponentId);
 
-  await _sendEmail(email,
-    "Caleb's Hollow — Game abandoned",
-    `Your async game against ${_playerName(gameInfo.opponentId)} has been abandoned due to inactivity (3 consecutive rounds with no submissions from either player).`
-  );
+  if (hasDeviceTokens(playerId)) {
+    await sendPush(playerId, {
+      title: 'Game abandoned',
+      body: `Your game against ${opponent} was abandoned due to inactivity.`,
+      roomId: gameInfo.roomId,
+    });
+  } else {
+    const email = _getPlayerEmail(playerId);
+    if (!email) return;
+    await _sendEmail(email,
+      "Caleb's Hollow — Game abandoned",
+      `Your async game against ${opponent} has been abandoned due to inactivity (3 consecutive rounds with no submissions from either player).`
+    );
+  }
 }

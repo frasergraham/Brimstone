@@ -6,6 +6,7 @@
  * and getValidActions() rely on, but all mutations go through the server.
  */
 import { setMapDimensions } from './hex.js';
+import { registerPushNotifications, unregisterPushToken } from './platform.js';
 
 // ── Reconnect constants ──────────────────────────────────────────────────────
 
@@ -314,6 +315,8 @@ export class MultiplayerClient {
             is_admin: msg.player.is_admin || false,
           }));
         } catch {}
+        // Register for push notifications (no-op on web/Electron)
+        registerPushNotifications();
         // If we were in an async game, re-connect to it after re-auth
         if (this._asyncRoomId) {
           this.connectAsync(this._asyncRoomId);
@@ -475,6 +478,7 @@ export function loadSession() {
 
 /** Clear the saved session (logout). */
 export function clearSession() {
+  unregisterPushToken(); // remove device token from server (fire-and-forget)
   try { localStorage.removeItem('brimstone_session'); } catch {}
 }
 
