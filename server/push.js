@@ -85,6 +85,11 @@ export function getDeviceTokens(playerId) {
   return _getTokens.all(playerId);
 }
 
+/** Returns true if the player has at least one registered device token. */
+export function hasDeviceTokens(playerId) {
+  return _getTokens.all(playerId).length > 0;
+}
+
 export function pruneStaleTokens(maxAgeDays = 90) {
   const cutoff = Math.floor(Date.now() / 1000) - (maxAgeDays * 86400);
   const result = _prune.run(cutoff);

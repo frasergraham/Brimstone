@@ -7,7 +7,7 @@ import {
 } from '../server/push.js';
 import db from '../server/db.js';
 
-// Seed a test player
+// Seed test players and clean up any leftover tokens
 before(() => {
   db.prepare(`
     INSERT OR IGNORE INTO players (id, username, token) VALUES (?, ?, ?)
@@ -15,6 +15,7 @@ before(() => {
   db.prepare(`
     INSERT OR IGNORE INTO players (id, username, token) VALUES (?, ?, ?)
   `).run('push-test-player-2', 'pushuser2', 'push-tok-2');
+  db.prepare(`DELETE FROM device_tokens WHERE player_id IN (?, ?)`).run('push-test-player', 'push-test-player-2');
 });
 
 describe('device token DB helpers', () => {
