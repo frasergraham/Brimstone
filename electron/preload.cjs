@@ -1,7 +1,7 @@
 // Preload script — runs in renderer context before the page loads.
 // Exposes a minimal electronAPI to the game via contextBridge and injects
-// BRIMSTONE_SERVER / BRIMSTONE_WS globals so the existing client code
-// connects to the configured remote server for multiplayer.
+// server globals so the existing client code connects to the configured
+// remote server for multiplayer.
 
 const { contextBridge, ipcRenderer } = require('electron');
 

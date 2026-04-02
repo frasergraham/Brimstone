@@ -866,7 +866,7 @@ function _publicPlayer(p) {
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 server.listen(PORT, () => {
-  console.log(`Brimstone v${BUILD_VERSION} listening on port ${PORT}`);
+  console.log(`Caleb's Hollow v${BUILD_VERSION} listening on port ${PORT}`);
   const pruned = pruneStaleAndIncompatibleSaves(VERSION);
   if (pruned > 0) console.log(`Pruned ${pruned} stale/incompatible save(s).`);
   const prunedCompleted = pruneExpiredCompletedGames();

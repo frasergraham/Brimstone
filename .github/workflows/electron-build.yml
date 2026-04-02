@@ -50,11 +50,11 @@ jobs:
 
       - name: Ad-hoc sign macOS app bundle
         if: matrix.platform == 'mac'
-        run: codesign --deep --force -s - dist/mac-arm64/Brimstone.app
+        run: codesign --deep --force -s - "dist/mac-arm64/Caleb's Hollow.app"
 
       - name: Re-package and publish macOS artifacts
         if: matrix.platform == 'mac'
-        run: npm run electron:build:mac -- --publish ${{ (github.ref_type == 'tag' || inputs.publish) && 'always' || 'never' }} --prepackaged dist/mac-arm64/Brimstone.app
+        run: npm run electron:build:mac -- --publish ${{ (github.ref_type == 'tag' || inputs.publish) && 'always' || 'never' }} --prepackaged "dist/mac-arm64/Caleb's Hollow.app"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

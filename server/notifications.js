@@ -7,7 +7,7 @@ import db from './db.js';
 // ── Configuration ────────────────────────────────────────────────────────────
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
-const EMAIL_FROM     = process.env.EMAIL_FROM || 'Brimstone <noreply@brimstone.fyi>';
+const EMAIL_FROM     = process.env.EMAIL_FROM || "Caleb's Hollow <noreply@brimstone.fyi>";
 const DEDUP_WINDOW_S = 3600; // 1 hour — don't resend same notification type
 
 function _baseUrl() {
@@ -109,7 +109,7 @@ export async function notifyOpponentJoined(playerId, gameInfo, asyncSessions) {
 
   const url = `${_baseUrl()}/#async=${gameInfo.roomId}`;
   await _sendEmail(email,
-    'Brimstone — Your opponent has joined!',
+    "Caleb's Hollow — Your opponent has joined!",
     `${_playerName(gameInfo.opponentId)} has joined your game. Round 1 is ready.\n\nPlay your turn: ${url}`
   );
 }
@@ -126,7 +126,7 @@ export async function notifyTurnReady(playerId, gameInfo, asyncSessions) {
 
   const url = `${_baseUrl()}/#async=${gameInfo.roomId}`;
   await _sendEmail(email,
-    `Brimstone — Round ${gameInfo.round} is ready`,
+    `Caleb's Hollow — Round ${gameInfo.round} is ready`,
     `A new round has begun in your game against ${_playerName(gameInfo.opponentId)}.\n\nPlay your turn: ${url}`
   );
 }
@@ -143,7 +143,7 @@ export async function notifyOpponentSubmitted(playerId, gameInfo, asyncSessions)
 
   const url = `${_baseUrl()}/#async=${gameInfo.roomId}`;
   await _sendEmail(email,
-    'Brimstone — Your opponent submitted their turn',
+    "Caleb's Hollow — Your opponent submitted their turn",
     `${_playerName(gameInfo.opponentId)} has submitted their plan. Waiting on you!\n\nPlay your turn: ${url}`
   );
 }
@@ -161,7 +161,7 @@ export async function notifyGameOver(playerId, gameInfo, asyncSessions) {
   const url = `${_baseUrl()}/#async=${gameInfo.roomId}`;
   const winnerLabel = gameInfo.winner === 'hero' ? 'The Hero' : 'The Witch';
   await _sendEmail(email,
-    `Brimstone — Game Over`,
+    `Caleb's Hollow — Game Over`,
     `${winnerLabel} wins! ${gameInfo.winReason || ''}\n\nView the result: ${url}`
   );
 }
@@ -173,8 +173,8 @@ export async function notifyGameOver(playerId, gameInfo, asyncSessions) {
 export async function sendGameInvite(email, gameInfo) {
   const url = `${_baseUrl()}/invite?code=${encodeURIComponent(gameInfo.code)}`;
   await _sendEmail(email,
-    `Brimstone — ${gameInfo.hostName} has challenged you!`,
-    `${gameInfo.hostName} has invited you to an async game of Brimstone.\n\nClick the link below to join:\n${url}\n\nIf you don't have an account, one will be created for you automatically.`
+    `Caleb's Hollow — ${gameInfo.hostName} has challenged you!`,
+    `${gameInfo.hostName} has invited you to an async game of Caleb's Hollow.\n\nClick the link below to join:\n${url}\n\nIf you don't have an account, one will be created for you automatically.`
   );
 }
 
@@ -186,7 +186,7 @@ export async function notifyGameAbandoned(playerId, gameInfo) {
   if (!email) return;
 
   await _sendEmail(email,
-    'Brimstone — Game abandoned',
+    "Caleb's Hollow — Game abandoned",
     `Your async game against ${_playerName(gameInfo.opponentId)} has been abandoned due to inactivity (3 consecutive rounds with no submissions from either player).`
   );
 }

@@ -1,8 +1,8 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.brimstone.game',
-  appName: 'Brimstone',
+  appId: 'com.calebshollow.game',
+  appName: "Caleb's Hollow",
   webDir: 'www',
   server: {
     androidScheme: 'https',

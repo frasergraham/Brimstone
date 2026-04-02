@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Brimstone</string>
-    <string name="title_activity_main">Brimstone</string>
-    <string name="package_name">com.brimstone.game</string>
-    <string name="custom_url_scheme">com.brimstone.game</string>
+    <string name="app_name">Caleb\'s Hollow</string>
+    <string name="title_activity_main">Caleb\'s Hollow</string>
+    <string name="package_name">com.calebshollow.game</string>
+    <string name="custom_url_scheme">com.calebshollow.game</string>
 </resources>
