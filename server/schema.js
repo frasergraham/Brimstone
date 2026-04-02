@@ -14,17 +14,34 @@ export const SCHEMA_SQL = `
   );
 
   CREATE TABLE IF NOT EXISTS game_saves (
-    room_id          TEXT PRIMARY KEY,
-    hero_player_id   TEXT,
-    witch_player_id  TEXT,
-    hero_name        TEXT NOT NULL DEFAULT '',
-    witch_name       TEXT NOT NULL DEFAULT '',
-    round            INTEGER NOT NULL DEFAULT 1,
-    phase            TEXT NOT NULL DEFAULT 'dawn',
-    game_version     TEXT NOT NULL,
-    state_json       TEXT NOT NULL,
-    updated_at       INTEGER NOT NULL DEFAULT (unixepoch()),
-    created_at       INTEGER NOT NULL DEFAULT (unixepoch())
+    room_id               TEXT PRIMARY KEY,
+    hero_player_id        TEXT,
+    witch_player_id       TEXT,
+    hero_name             TEXT NOT NULL DEFAULT '',
+    witch_name            TEXT NOT NULL DEFAULT '',
+    round                 INTEGER NOT NULL DEFAULT 1,
+    phase                 TEXT NOT NULL DEFAULT 'dawn',
+    game_version          TEXT NOT NULL,
+    state_json            TEXT NOT NULL,
+    turn_deadline         INTEGER,
+    turn_interval_ms      INTEGER NOT NULL DEFAULT 90000,
+    consecutive_timeouts  TEXT NOT NULL DEFAULT '{}',
+    config_json           TEXT NOT NULL DEFAULT '{}',
+    players_json          TEXT NOT NULL DEFAULT '[]',
+    is_private            INTEGER NOT NULL DEFAULT 0,
+    code                  TEXT,
+    status                TEXT NOT NULL DEFAULT 'playing',
+    updated_at            INTEGER NOT NULL DEFAULT (unixepoch()),
+    created_at            INTEGER NOT NULL DEFAULT (unixepoch())
+  );
+
+  CREATE TABLE IF NOT EXISTS game_plan_status (
+    room_id      TEXT NOT NULL,
+    player_id    TEXT NOT NULL,
+    round        INTEGER NOT NULL,
+    plan_json    TEXT,
+    submitted_at INTEGER,
+    PRIMARY KEY (room_id, player_id, round)
   );
 
   CREATE TABLE IF NOT EXISTS completed_games (

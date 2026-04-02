@@ -2920,6 +2920,14 @@ export class UIController {
 
 
 
+        // AI takeover messages (from consecutive timeout)
+        const takeoverMsgs = this.state._takeoverMessages || [];
+        for (const msg of takeoverMsgs) {
+          html += `<div class="summary-takeover">🤖 ${msg}</div>`;
+        }
+        // Clear after showing
+        if (this.state._takeoverMessages) this.state._takeoverMessages = [];
+
         eventsEl.innerHTML = html || `<div class="summary-neutral">No notable events this round.</div>`;
       }
 

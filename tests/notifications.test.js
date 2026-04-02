@@ -165,3 +165,38 @@ describe('notifications', () => {
     });
   });
 });
+
+// ── Server-side notification suppression ────────────────────────────────────
+
+import { shouldNotify } from '../server/notifications.js';
+
+describe('shouldNotify (server-side suppression)', () => {
+  test('suppresses for short-timeout games', () => {
+    assert.equal(shouldNotify('r1', 'p1', { turnIntervalMs: 90_000 }), false);
+  });
+
+  test('allows for long-timeout games when disconnected', () => {
+    assert.equal(
+      shouldNotify('r1', 'p1', { turnIntervalMs: 86_400_000, isConnected: () => false }),
+      true,
+    );
+  });
+
+  test('suppresses when player is connected even for long-timeout', () => {
+    assert.equal(
+      shouldNotify('r1', 'p1', { turnIntervalMs: 86_400_000, isConnected: () => true }),
+      false,
+    );
+  });
+
+  test('allows at exactly the 1-hour threshold', () => {
+    assert.equal(
+      shouldNotify('r1', 'p1', { turnIntervalMs: 3_600_000, isConnected: () => false }),
+      true,
+    );
+  });
+
+  test('suppresses just under the 1-hour threshold', () => {
+    assert.equal(shouldNotify('r1', 'p1', { turnIntervalMs: 3_599_999 }), false);
+  });
+});

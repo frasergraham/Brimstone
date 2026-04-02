@@ -25,6 +25,16 @@ export function createBackend(dbPath) {
   // Migration: add invitee_email column for game invites
   try { db.exec('ALTER TABLE async_games ADD COLUMN invitee_email TEXT'); } catch {}
 
+  // Migration: extend game_saves for unified multiplayer (plan persistence, room recovery)
+  try { db.exec('ALTER TABLE game_saves ADD COLUMN turn_deadline INTEGER'); } catch {}
+  try { db.exec("ALTER TABLE game_saves ADD COLUMN turn_interval_ms INTEGER NOT NULL DEFAULT 90000"); } catch {}
+  try { db.exec("ALTER TABLE game_saves ADD COLUMN consecutive_timeouts TEXT NOT NULL DEFAULT '{}'"); } catch {}
+  try { db.exec("ALTER TABLE game_saves ADD COLUMN config_json TEXT NOT NULL DEFAULT '{}'"); } catch {}
+  try { db.exec("ALTER TABLE game_saves ADD COLUMN players_json TEXT NOT NULL DEFAULT '[]'"); } catch {}
+  try { db.exec('ALTER TABLE game_saves ADD COLUMN is_private INTEGER NOT NULL DEFAULT 0'); } catch {}
+  try { db.exec('ALTER TABLE game_saves ADD COLUMN code TEXT'); } catch {}
+  try { db.exec("ALTER TABLE game_saves ADD COLUMN status TEXT NOT NULL DEFAULT 'playing'"); } catch {}
+
   // Seed default admin user (idempotent via INSERT OR IGNORE)
   db.exec(`
     INSERT OR IGNORE INTO players (id, username, token, is_admin)

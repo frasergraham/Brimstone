@@ -224,25 +224,6 @@ export class MultiplayerClient {
     this._send({ type: 'resumeSave', roomId });
   }
 
-  // ── Async game methods ─────────────────────────────────────────────────────
-
-  /** Connect to an async game to view state and/or submit a plan. */
-  connectAsync(roomId) {
-    this._asyncRoomId = roomId;
-    this._send({ type: 'connectAsync', roomId });
-  }
-
-  /** Submit a plan for the current async round. */
-  submitAsyncPlan(roomId, plan) {
-    this._send({ type: 'submitAsyncPlan', roomId, plan });
-  }
-
-  /** Disconnect from an async game session. */
-  disconnectAsync() {
-    this._asyncRoomId = null;
-    this._send({ type: 'disconnectAsync' });
-  }
-
   // ── Internal ───────────────────────────────────────────────────────────────
 
   _send(obj) {
@@ -317,10 +298,6 @@ export class MultiplayerClient {
         } catch {}
         // Register for push notifications (no-op on web/Electron)
         registerPushNotifications();
-        // If we were in an async game, re-connect to it after re-auth
-        if (this._asyncRoomId) {
-          this.connectAsync(this._asyncRoomId);
-        }
         break;
 
       case 'authError':
@@ -420,36 +397,13 @@ export class MultiplayerClient {
         this._opts.onTimerReset?.(msg.timeoutMs);
         break;
 
+      case 'playerTakenOver':
+        this._opts.onPlayerTakenOver?.(msg);
+        break;
+
       case 'resolutionComplete': {
         const mirror = MirrorState.fromSnapshot(msg.finalState);
         this._opts.onResolutionComplete?.({ steps: msg.steps, finalState: mirror });
-        break;
-      }
-
-      // ── Async game messages ─────────────────────────────────────
-      case 'asyncStateUpdate':
-        this._opts.onAsyncStateUpdate?.(msg);
-        break;
-
-      case 'asyncPlanStatus':
-        this._opts.onAsyncPlanStatus?.(msg);
-        break;
-
-      case 'asyncPlanAccepted':
-        this._opts.onAsyncPlanAccepted?.(msg);
-        break;
-
-      case 'asyncOpponentJoined':
-        this._opts.onAsyncOpponentJoined?.(msg);
-        break;
-
-      case 'asyncResolution': {
-        const mirror = MirrorState.fromSnapshot(msg.finalState);
-        this._opts.onAsyncResolution?.({
-          roomId: msg.roomId, steps: msg.steps, finalState: mirror,
-          finalStateSnapshot: msg.finalState,
-          resolvedRound: msg.resolvedRound, preStateJson: msg.preStateJson,
-        });
         break;
       }
 

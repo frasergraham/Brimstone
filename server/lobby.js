@@ -12,16 +12,25 @@ import { compileTurnBattleSummary }        from '../src/battle-utils.js';
 import { PlanActionType }                  from '../src/planner.js';
 import { upsertSave, deleteSave, getSave,
          createCompletedGame, appendSaveRound,
-         getSaveRounds, getLastSaveRound }       from './saves.js';
+         getSaveRounds, getLastSaveRound,
+         insertPlanStatusRows, upsertPlanStatus,
+         getPlanStatus, clearPlanStatus,
+         clearAllPlanStatus, getExpiredDeadlineGames,
+         getActiveGamesForPlayer }                      from './saves.js';
 import { insertAsyncGame, getAsyncGame, getAsyncGameByCode,
          getAsyncGamesForPlayer, activateAsyncGame,
-         updateAsyncGameState, finishAsyncGame, insertPlanStatus,
-         submitPlan, getPlanStatus, allPlansSubmitted,
+         updateAsyncGameState, finishAsyncGame,
+         insertPlanStatus as insertAsyncPlanStatus,
+         submitPlan as submitAsyncPlan,
+         getPlanStatus as getAsyncPlanStatus,
+         allPlansSubmitted as asyncAllPlansSubmitted,
          getExpiredGames, pruneStaleAsyncGames as _pruneAsyncGames,
          deleteAsyncGame }                       from './async-game.js';
 import { notifyOpponentJoined, notifyTurnReady,
          notifyOpponentSubmitted, notifyGameOver,
-         notifyGameAbandoned, sendGameInvite }   from './notifications.js';
+         notifyGameAbandoned, sendGameInvite,
+         shouldNotify }                          from './notifications.js';
+import db                                  from './db.js';
 import { VERSION }                         from '../src/version.js';
 import { generateMultipleStarts }          from '../src/map.js';
 import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS } from '../src/entities.js';
@@ -118,6 +127,17 @@ function broadcastToSpectators(room, obj) {
   for (const ws of room.spectators) send(ws, obj);
 }
 
+/** Build notification options for a unified room. */
+function _notifyOpts(room) {
+  return {
+    turnIntervalMs: room.config.turnIntervalMs,
+    isConnected: (playerId) => {
+      const seat = seatFor(room, playerId);
+      return seat?.ws?.readyState === 1;
+    },
+  };
+}
+
 /** Append a chronicle entry and trim to CHRONICLE_MAX. */
 function _appendChronicle(room, entry) {
   room.chronicle.push(entry);
@@ -167,11 +187,13 @@ function createRoom(config = {}) {
     isPrivate:        false,
     hostPlayerId:     null,
     config: {
-      fog:            config.fog ?? 'partial',
-      mapSize:        config.mapSize ?? 'standard',
-      nodeCount:      config.nodeCount ?? null,
-      playersPerSide: Math.max(1, Math.min(4, (config.playersPerSide | 0) || 1)),
+      fog:              config.fog ?? 'partial',
+      mapSize:          config.mapSize ?? 'standard',
+      nodeCount:        config.nodeCount ?? null,
+      playersPerSide:   Math.max(1, Math.min(4, (config.playersPerSide | 0) || 1)),
+      turnIntervalMs:   Math.max(30_000, Math.min(259_200_000, Number(config.turnIntervalMs) || TURN_TIMEOUT_MS)),
     },
+    consecutiveTimeouts: {},  // playerId → consecutive empty-plan timeout count
     slots:            [],
     state:            null,
     players:          [],
@@ -277,20 +299,28 @@ function _startPlanningTimer(room) {
   _clearTurnTimer(room);
   if (room.state.gameOver) return;
 
+  const timeoutMs = room.config.turnIntervalMs ?? TURN_TIMEOUT_MS;
+
+  // Store the deadline in the room for background checker (hibernated rooms)
+  room.turnDeadline = Math.floor(Date.now() / 1000) + Math.ceil(timeoutMs / 1000);
+
   room.turnTimer = setTimeout(() => {
     room.turnTimer = null;
     if (room.state.gameOver || !room.state.planningPhase) return;
-    // Auto-submit empty plans for any seat (human or AI) that hasn't submitted yet.
-    // Without the AI check the game would hang indefinitely if AI plan generation fails.
-    for (const seat of room.players) {
-      if (!room.state.playerReady.get(seat.playerId)) {
-        if (!seat.isAI) {
-          send(seat.ws, { type: 'error', message: 'Planning time expired — an empty plan was submitted.' });
-        }
-        _submitPlayerPlan(room, seat.playerId, []);
+    _autoSubmitMissingPlans(room);
+  }, timeoutMs);
+}
+
+/** Auto-submit empty plans for any seat that hasn't submitted yet. */
+function _autoSubmitMissingPlans(room) {
+  for (const seat of room.players) {
+    if (!room.state.playerReady.get(seat.playerId)) {
+      if (!seat.isAI) {
+        send(seat.ws, { type: 'error', message: 'Planning time expired — an empty plan was submitted.' });
       }
+      _submitPlayerPlan(room, seat.playerId, [], true); // isTimeout=true
     }
-  }, TURN_TIMEOUT_MS);
+  }
 }
 
 function _clearTurnTimer(room) {
@@ -313,7 +343,17 @@ function _startPlanningPhase(room) {
     isAI:     s.isAI,
   }));
 
+  // Persist empty plan-status rows so hibernated rooms know who needs to submit
+  try {
+    const playerIds = room.players.map(s => s.playerId);
+    insertPlanStatusRows(room.id, playerIds, room.state.round);
+  } catch (err) {
+    console.error(`[room ${room.id}] insertPlanStatusRows error:`, err);
+  }
+
   broadcastState(room, 'planningPhase');
+
+  const timeoutMs = room.config.turnIntervalMs ?? TURN_TIMEOUT_MS;
 
   // Send planning-phase message to each player individually so each gets their own budget
   for (const seat of room.players) {
@@ -323,7 +363,7 @@ function _startPlanningPhase(room) {
       // Legacy fields kept for clients that haven't been updated yet
       heroActionsLeft:  room.state.heroActionsLeft,
       witchActionsLeft: room.state.witchActionsLeft,
-      timeoutMs:     TURN_TIMEOUT_MS,
+      timeoutMs,
       players:       playerList,
     });
   }
@@ -392,8 +432,9 @@ function _runAIPlanSubmission(room) {
  * Submit one player's plan.
  * Broadcasts a playerSubmitted notification to everyone else.
  * Triggers resolution once all players are ready.
+ * @param {boolean} [isTimeout] — true when auto-submitted due to deadline expiry
  */
-function _submitPlayerPlan(room, playerId, plan) {
+function _submitPlayerPlan(room, playerId, plan, isTimeout = false) {
   if (!room.state.planningPhase) return;
 
   let allReady;
@@ -404,15 +445,41 @@ function _submitPlayerPlan(room, playerId, plan) {
     return;
   }
 
+  // Persist plan to DB for crash recovery / hibernation
+  try {
+    upsertPlanStatus(room.id, playerId, room.state.round, plan);
+  } catch (err) {
+    console.error(`[room ${room.id}] upsertPlanStatus error:`, err);
+  }
+
+  // Track consecutive timeouts for AI takeover
+  const seat = seatFor(room, playerId);
+  if (isTimeout && !seat?.isAI) {
+    room.consecutiveTimeouts[playerId] = (room.consecutiveTimeouts[playerId] || 0) + 1;
+  } else if (!isTimeout && !seat?.isAI) {
+    room.consecutiveTimeouts[playerId] = 0;
+  }
+
   // Notify all other players and spectators that this player has locked in
   const submittedMsg = {
     type:     'playerSubmitted',
     playerId,
-    name:     seatFor(room, playerId)?.name ?? playerId,
+    name:     seat?.name ?? playerId,
     faction:  factionFor(room, playerId),
   };
   broadcastExcept(room, playerId, submittedMsg);
   broadcastToSpectators(room, submittedMsg);
+
+  // Notify disconnected opponents via email (long-timeout games only)
+  if (!isTimeout && !seat?.isAI) {
+    const opts = _notifyOpts(room);
+    for (const other of room.players) {
+      if (other.isAI || other.playerId === playerId) continue;
+      notifyOpponentSubmitted(other.playerId, {
+        roomId: room.id, opponentId: playerId,
+      }, asyncSessions, opts).catch(() => {});
+    }
+  }
 
   if (allReady) {
     _executeResolution(room);
@@ -458,10 +525,16 @@ function _executeResolution(room) {
 
   const finalState = serializeState(state);
 
-  // Persist after every round for crash-recovery reconnect
+  // Clear plan status for the resolved round
+  try {
+    clearPlanStatus(room.id, state.round - 1);  // endRound() already incremented
+  } catch (err) {
+    console.error(`[room ${room.id}] clearPlanStatus error:`, err);
+  }
+
+  // Persist after every round for crash-recovery / hibernation reconnect
   if (!state.gameOver) {
     try {
-      // Extract the first human hero/witch player IDs for the DB columns
       const firstHero  = room.players.find(s => s.faction === 'hero'  && !s.isAI);
       const firstWitch = room.players.find(s => s.faction === 'witch' && !s.isAI);
       const heroName   = room.players.find(s => s.faction === 'hero')?.name  ?? '';
@@ -473,6 +546,19 @@ function _executeResolution(room) {
         heroName,
         witchName,
         finalState,
+        {
+          turnIntervalMs:      room.config.turnIntervalMs,
+          consecutiveTimeouts: room.consecutiveTimeouts,
+          config:              room.config,
+          players:             room.players.map(s => ({
+            playerId: s.playerId, name: s.name, faction: s.faction,
+            isAI: s.isAI, personality: s.personality ?? null,
+            originalPlayerId: s.originalPlayerId ?? null,
+          })),
+          isPrivate: room.isPrivate,
+          code:      room.code,
+          status:    'playing',
+        },
       );
     } catch (err) {
       console.error(`[room ${room.id}] upsertSave error:`, err);
@@ -526,7 +612,41 @@ function _executeResolution(room) {
   });
 
   if (!state.gameOver) {
+    // Check for consecutive timeout AI takeover before next planning phase
+    _checkTimeoutTakeovers(room);
     setTimeout(() => _startPlanningPhase(room), 4000);
+
+    // Notify disconnected human players that a new round is ready (long-timeout games only)
+    const opts = _notifyOpts(room);
+    for (const seat of room.players) {
+      if (seat.isAI) continue;
+      notifyTurnReady(seat.playerId, {
+        roomId: room.id, round: state.round,
+      }, asyncSessions, opts).catch(() => {});
+    }
+  }
+}
+
+/**
+ * After resolution, check if any human player has hit 2+ consecutive timeouts.
+ * If so, replace them with AI and notify all players.
+ */
+function _checkTimeoutTakeovers(room) {
+  for (const seat of [...room.players]) {
+    if (seat.isAI) continue;
+    const count = room.consecutiveTimeouts[seat.playerId] || 0;
+    if (count >= 2) {
+      const playerName = seat.name;
+      const playerId   = seat.playerId;
+      console.log(`[room ${room.id}] ${playerName} (${playerId}) — ${count} consecutive timeouts — AI takeover.`);
+      attachAI(room, seat.faction, playerId);
+      // Broadcast takeover notification
+      const takeoverMsg = { type: 'playerTakenOver', playerId, playerName };
+      broadcast(room, takeoverMsg);
+      broadcastToSpectators(room, takeoverMsg);
+      // Reset counter
+      delete room.consecutiveTimeouts[playerId];
+    }
   }
 }
 
@@ -725,6 +845,7 @@ function checkAndHandleGameOver(room) {
     });
   } catch (err) { console.error(`[room ${room.id}] recordGameStats error:`, err); }
 
+  try { clearAllPlanStatus(room.id); } catch {}
   try { deleteSave(room.id); } catch (err) { console.error(`[room ${room.id}] deleteSave error:`, err); }
 
   // Persist full-game replay
@@ -757,6 +878,17 @@ function checkAndHandleGameOver(room) {
     }
   }
 
+  // Notify disconnected human players that the game is over (long-timeout games only)
+  const opts = _notifyOpts(room);
+  for (const seat of room.players) {
+    if (seat.isAI) continue;
+    notifyGameOver(seat.playerId, {
+      roomId: room.id,
+      winner: room.state.winner,
+      winReason: room.state.winReason,
+    }, asyncSessions, opts).catch(() => {});
+  }
+
   setTimeout(() => destroyRoom(room), 5_000);
 }
 
@@ -768,10 +900,11 @@ function checkAndHandleGameOver(room) {
 export function createLobby(playerId, playerName, ws, config = {}) {
   const pps  = Math.max(1, Math.min(4, (config.playersPerSide | 0) || 1));
   const room = createRoom({
-    fog:           config.fog ?? 'partial',
-    mapSize:       config.mapSize ?? 'standard',
-    nodeCount:     config.nodeCount ?? null,
+    fog:            config.fog ?? 'partial',
+    mapSize:        config.mapSize ?? 'standard',
+    nodeCount:      config.nodeCount ?? null,
     playersPerSide: pps,
+    turnIntervalMs: config.turnIntervalMs,
   });
   room.isPrivate    = config.isPrivate ?? false;
   room.hostPlayerId = playerId;
@@ -1010,9 +1143,10 @@ export function handlePlanSubmit(playerId, roomId, plan) {
 
   // Notify remaining players that the deadline has been extended
   if (room.state.planningPhase) {
+    const timeoutMs = room.config.turnIntervalMs ?? TURN_TIMEOUT_MS;
     for (const seat of room.players) {
       if (!room.state.playerReady.get(seat.playerId)) {
-        send(seat.ws, { type: 'timerReset', timeoutMs: TURN_TIMEOUT_MS });
+        send(seat.ws, { type: 'timerReset', timeoutMs });
       }
     }
   }
@@ -1067,24 +1201,143 @@ export function handleDisconnect(playerId, roomId) {
 }
 
 /**
- * If no human players remain connected in the room, start a 1-minute timer
- * to destroy the room. Called after AI takeover fires.
+ * If no human players remain connected in the room, start a timer to
+ * hibernate the room (evict from memory, keep in DB for reconnect).
+ * Short-timeout games (< 1 hour) get the legacy 60s destruction timer.
+ * Long-timeout games hibernate immediately so the DB deadline checker handles them.
  */
 function _checkAllHumansGone(room) {
   const hasHuman = room.players.some(s => !s.isAI);
   if (hasHuman) return;
   if (room.allHumansGoneTimer) return; // already ticking
 
-  console.log(`[room ${room.id}] all humans gone — starting ${RECONNECT_GRACE_MS / 1000}s destruction timer.`);
-  room.allHumansGoneTimer = setTimeout(() => {
-    const r = rooms.get(room.id);
-    if (!r) return;
-    // If a human reconnected in the meantime, abort
-    if (r.players.some(s => !s.isAI)) { r.allHumansGoneTimer = null; return; }
-    console.log(`[room ${room.id}] destruction timer expired — destroying room.`);
-    try { deleteSave(room.id); } catch (_) { /* ignore */ }
-    destroyRoom(r);
-  }, RECONNECT_GRACE_MS);
+  const isLongTimeout = (room.config.turnIntervalMs ?? TURN_TIMEOUT_MS) >= 3_600_000;
+
+  if (isLongTimeout) {
+    // Hibernate immediately — the background deadline checker handles resolution
+    console.log(`[room ${room.id}] all humans gone — hibernating (long timeout).`);
+    _hibernateRoom(room);
+  } else {
+    console.log(`[room ${room.id}] all humans gone — starting ${RECONNECT_GRACE_MS / 1000}s destruction timer.`);
+    room.allHumansGoneTimer = setTimeout(() => {
+      const r = rooms.get(room.id);
+      if (!r) return;
+      if (r.players.some(s => !s.isAI)) { r.allHumansGoneTimer = null; return; }
+      console.log(`[room ${room.id}] destruction timer expired — hibernating room.`);
+      _hibernateRoom(r);
+    }, RECONNECT_GRACE_MS);
+  }
+}
+
+/**
+ * Persist room state to DB and remove from in-memory rooms Map.
+ * The room can be recovered later via _recoverRoom().
+ */
+function _hibernateRoom(room) {
+  if (!room.state) return;
+  try {
+    const finalState = serializeState(room.state);
+    const firstHero  = room.players.find(s => s.faction === 'hero'  && !s.isAI);
+    const firstWitch = room.players.find(s => s.faction === 'witch' && !s.isAI);
+    const heroName   = room.players.find(s => s.faction === 'hero')?.name  ?? '';
+    const witchName  = room.players.find(s => s.faction === 'witch')?.name ?? '';
+    upsertSave(
+      room.id,
+      firstHero?.playerId  ?? null,
+      firstWitch?.playerId ?? null,
+      heroName,
+      witchName,
+      finalState,
+      {
+        turnDeadline:        room.turnDeadline ?? null,
+        turnIntervalMs:      room.config.turnIntervalMs,
+        consecutiveTimeouts: room.consecutiveTimeouts,
+        config:              room.config,
+        players:             room.players.map(s => ({
+          playerId: s.playerId, name: s.name, faction: s.faction,
+          isAI: s.isAI, personality: s.personality ?? null,
+          originalPlayerId: s.originalPlayerId ?? null,
+        })),
+        isPrivate: room.isPrivate,
+        code:      room.code,
+        status:    'playing',
+      },
+    );
+  } catch (err) {
+    console.error(`[room ${room.id}] hibernate upsertSave error:`, err);
+  }
+  destroyRoom(room);
+}
+
+/**
+ * Recover a hibernated room from DB. Returns the restored room or null.
+ */
+function _recoverRoom(roomId) {
+  const save = getSave(roomId);
+  if (!save || save.status === 'finished') return null;
+  if (save.game_version !== VERSION) return null;
+
+  let state;
+  try {
+    state = deserializeState(save.state);
+  } catch (err) {
+    console.error(`[recoverRoom ${roomId}] deserializeState error:`, err);
+    return null;
+  }
+
+  const savedPlayers = JSON.parse(save.players_json || '[]');
+  const savedConfig  = JSON.parse(save.config_json || '{}');
+
+  const room = createRoom(savedConfig);
+  // Override the generated ID/code with the saved ones
+  rooms.delete(room.id);
+  codeToRoom.delete(room.code);
+  room.id     = roomId;
+  room.code   = save.code || room.code;
+  room.state  = state;
+  room.status = 'playing';
+  room.isPrivate = !!save.is_private;
+  room.consecutiveTimeouts = JSON.parse(save.consecutive_timeouts || '{}');
+  rooms.set(room.id, room);
+  if (room.code) codeToRoom.set(room.code, room.id);
+
+  // Reconstruct seats from saved players
+  for (const p of savedPlayers) {
+    const seat = {
+      playerId: p.playerId,
+      ws:       null,
+      name:     p.name,
+      faction:  p.faction,
+      isAI:     p.isAI,
+      ai:       null,
+      personality: p.personality ?? null,
+    };
+    if (p.originalPlayerId) seat.originalPlayerId = p.originalPlayerId;
+    room.players.push(seat);
+
+    // Create AI engine for AI seats
+    if (p.isAI) {
+      seat.ai = _makeAI(room, p.faction, p.playerId, p.personality);
+      if (p.faction === 'witch') state.witchIsAI = true;
+      else                       state.heroIsAI  = true;
+    }
+  }
+
+  // Restore submitted plans from DB
+  try {
+    const planRows = getPlanStatus(roomId, state.round);
+    for (const row of planRows) {
+      if (row.plan_json !== null) {
+        const plan = JSON.parse(row.plan_json);
+        try { state.submitPlayerPlan(row.player_id, plan); } catch {}
+      }
+    }
+  } catch (err) {
+    console.error(`[recoverRoom ${roomId}] restore plans error:`, err);
+  }
+
+  console.log(`[room ${roomId}] recovered from DB (round ${state.round}, phase ${state.phase}).`);
+  return room;
 }
 
 /** Handle a player reconnecting. */
@@ -1233,12 +1486,15 @@ export function getRooms() {
 }
 
 /**
- * Return in-memory rooms where the given player has (or had) a seat.
+ * Return all games where the given player has (or had) a seat.
+ * Includes both in-memory rooms and DB-hibernated games.
  * Used by the /api/saves REST endpoint so the client can show a "Rejoin" list.
- * Matches both current playerId and originalPlayerId (for AI-taken-over seats).
  */
 export function getActiveRoomsForPlayer(playerId) {
   const results = [];
+  const seenRoomIds = new Set();
+
+  // In-memory rooms first
   for (const room of rooms.values()) {
     if (room.status !== 'playing') continue;
     if (room.state?.gameOver) continue;
@@ -1246,8 +1502,13 @@ export function getActiveRoomsForPlayer(playerId) {
       s => s.playerId === playerId || s.originalPlayerId === playerId
     );
     if (!seat) continue;
+    seenRoomIds.add(room.id);
     const heroName  = room.players.find(s => s.faction === 'hero')?.name  ?? '';
     const witchName = room.players.find(s => s.faction === 'witch')?.name ?? '';
+    // Check if this player still needs to submit a plan
+    const actionNeeded = room.state.planningPhase &&
+      !room.state.playerReady?.get(playerId) &&
+      !seat.isAI;
     results.push({
       room_id:          room.id,
       hero_name:        heroName,
@@ -1256,8 +1517,35 @@ export function getActiveRoomsForPlayer(playerId) {
       phase:            room.state.phase,
       hero_player_id:   room.players.find(s => s.faction === 'hero'  && !s.isAI)?.playerId ?? null,
       witch_player_id:  room.players.find(s => s.faction === 'witch' && !s.isAI)?.playerId ?? null,
+      turn_interval_ms: room.config.turnIntervalMs ?? TURN_TIMEOUT_MS,
+      turn_deadline:    room.turnDeadline ?? null,
+      status:           room.status,
+      action_needed:    actionNeeded,
+      players_json:     JSON.stringify(room.players.map(s => ({
+        playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI,
+      }))),
     });
   }
+
+  // DB-hibernated games
+  try {
+    const dbGames = getActiveGamesForPlayer(playerId);
+    for (const g of dbGames) {
+      if (seenRoomIds.has(g.room_id)) continue;
+      // Compute action_needed from plan status
+      if (g.status === 'playing') {
+        try {
+          const plans = getPlanStatus(g.room_id, g.round);
+          const myPlan = plans.find(p => p.player_id === playerId);
+          g.action_needed = myPlan ? !myPlan.submitted_at : true;
+        } catch { g.action_needed = true; }
+      } else {
+        g.action_needed = false;
+      }
+      results.push(g);
+    }
+  } catch {}
+
   return results;
 }
 
@@ -1345,14 +1633,28 @@ export function adminResumeGame(savedRoomId) {
 }
 
 /**
- * Rejoin a live in-memory game. No DB-based restore — multiplayer games only
- * exist in memory. If the room is gone, the game is lost.
+ * Rejoin a game. Tries in-memory first; falls back to DB recovery.
  */
 export function resumeGame(playerId, ws, roomId) {
   if (rooms.has(roomId)) {
     const rejoined = handleReconnect(playerId, roomId, ws);
     if (rejoined) return;
   }
+
+  // Try recovering the room from DB (hibernated game)
+  const room = _recoverRoom(roomId);
+  if (room) {
+    const rejoined = handleReconnect(playerId, roomId, ws);
+    if (rejoined) {
+      // If planning phase, restart timer and kick AI plans
+      if (room.state.planningPhase && !room.state.resolving) {
+        _startPlanningTimer(room);
+        _runAIPlanSubmission(room);
+      }
+      return;
+    }
+  }
+
   send(ws, { type: 'error', message: 'Game is no longer active.' });
 }
 
@@ -1412,7 +1714,7 @@ export function createAsyncGameRoom(playerId, playerName, config) {
 
   // Store the generated state and insert a plan-status row for the host
   updateAsyncGameState(result.roomId, stateJson, state.round, state.phase, deadline, 0);
-  insertPlanStatus(result.roomId, [playerId], state.round);
+  insertAsyncPlanStatus(result.roomId, [playerId], state.round);
 
   // Send invite email if an invitee was specified
   if (inviteeEmail) {
@@ -1516,7 +1818,7 @@ export function connectToAsyncGame(playerId, ws, roomId) {
   const myFaction = game.hero_player_id === playerId ? 'hero' :
                     (game.witch_player_id === playerId ? 'witch' : game.host_faction);
   const state     = JSON.parse(game.state_json);
-  const plans     = getPlanStatus(roomId, game.round);
+  const plans     = getAsyncPlanStatus(roomId, game.round);
   const myPlan    = plans.find(p => p.player_id === playerId);
 
   // Include last round's replay data so the client can offer "Show Last Turn"
@@ -1592,7 +1894,7 @@ export function handleAsyncPlanSubmit(playerId, roomId, plan) {
 
   if (!Array.isArray(plan)) plan = [];
 
-  const ok = submitPlan(roomId, playerId, game.round, plan);
+  const ok = submitAsyncPlan(roomId, playerId, game.round, plan);
   if (!ok) {
     _asyncSend(roomId, playerId, { type: 'error', message: 'Plan already submitted or invalid round.' });
     return;
@@ -1609,13 +1911,13 @@ export function handleAsyncPlanSubmit(playerId, roomId, plan) {
   _asyncSend(roomId, opponentId, {
     type:       'asyncPlanStatus',
     roomId,
-    planStatus: getPlanStatus(roomId, game.round).map(p => ({
+    planStatus: getAsyncPlanStatus(roomId, game.round).map(p => ({
       playerId: p.player_id, submitted: !!p.submitted,
     })),
   });
 
   // Check if all plans are in
-  if (allPlansSubmitted(roomId, game.round)) {
+  if (asyncAllPlansSubmitted(roomId, game.round)) {
     _resolveAsyncRound(roomId);
   } else {
     // Notify opponent via email if not connected
@@ -1648,7 +1950,7 @@ function _resolveAsyncRound(roomId) {
   state.startPlanning();
 
   // Gather submitted plans
-  const plans = getPlanStatus(roomId, game.round);
+  const plans = getAsyncPlanStatus(roomId, game.round);
   const playerEntries = [];
   for (const p of plans) {
     const plan = p.plan_json ? JSON.parse(p.plan_json) : [];
@@ -1707,7 +2009,7 @@ function _resolveAsyncRound(roomId) {
     // Advance to next round
     const newDeadline = Math.floor(Date.now() / 1000) + Math.floor(game.turn_interval_ms / 1000);
     updateAsyncGameState(roomId, finalJson, state.round, state.phase, newDeadline, 0);
-    insertPlanStatus(roomId, [game.hero_player_id, game.witch_player_id], state.round);
+    insertAsyncPlanStatus(roomId, [game.hero_player_id, game.witch_player_id], state.round);
 
     // Notify both players of new round
     for (const pid of [game.hero_player_id, game.witch_player_id]) {
@@ -1834,7 +2136,7 @@ export function checkAsyncDeadlines() {
       const game = getAsyncGame(roomId);
       if (!game || game.status !== 'playing') continue;
 
-      const plans = getPlanStatus(roomId, game.round);
+      const plans = getAsyncPlanStatus(roomId, game.round);
       const submitted = plans.filter(p => p.submitted);
 
       // Check if NEITHER player submitted (double timeout)
@@ -1860,7 +2162,7 @@ export function checkAsyncDeadlines() {
       // Auto-submit empty plans for players who haven't submitted
       for (const p of plans) {
         if (!p.submitted) {
-          submitPlan(roomId, p.player_id, game.round, []);
+          submitAsyncPlan(roomId, p.player_id, game.round, []);
         }
       }
 
@@ -1881,6 +2183,138 @@ export { _serializeEvents as serializeEventsForTest };
 
 /** Get async games list for a player (for REST endpoint). */
 export { getAsyncGamesForPlayer };
+
+// ── Unified deadline checker (for hibernated rooms) ─────────────────────────
+
+/**
+ * Check for game_saves with expired turn deadlines.
+ * Recovers hibernated rooms, auto-submits empty plans, and resolves.
+ * Called periodically by the server (e.g. every 30 seconds).
+ */
+export function checkDeadlines() {
+  let expired;
+  try {
+    expired = getExpiredDeadlineGames();
+  } catch (err) {
+    console.error('[checkDeadlines] query error:', err);
+    return;
+  }
+
+  for (const row of expired) {
+    const roomId = row.room_id;
+    try {
+      // Skip if room is already active in memory (timer handles it)
+      if (rooms.has(roomId)) continue;
+
+      const room = _recoverRoom(roomId);
+      if (!room) continue;
+
+      if (room.state.planningPhase && !room.state.resolving) {
+        console.log(`[room ${roomId}] deadline expired — auto-submitting empty plans.`);
+        _autoSubmitMissingPlans(room);
+      }
+
+      // If no humans connected after recovery, hibernate again
+      if (!room.players.some(s => s.ws)) {
+        _hibernateRoom(room);
+      }
+    } catch (err) {
+      console.error(`[checkDeadlines] room ${roomId} error:`, err);
+    }
+  }
+}
+
+// ── Async → Unified migration ───────────────────────────────────────────────
+
+/**
+ * Migrate existing async_games rows to the unified game_saves table.
+ * Called once at startup. Skips games that already have a game_saves row.
+ */
+export function migrateAsyncGames() {
+  let rows;
+  try {
+    rows = db.prepare(
+      `SELECT * FROM async_games WHERE status IN ('playing', 'waiting')`
+    ).all();
+  } catch {
+    return 0; // table doesn't exist or is empty
+  }
+
+  let migrated = 0;
+  for (const g of rows) {
+    // Skip if already migrated (game_saves row exists)
+    const existing = getSave(g.room_id);
+    if (existing) continue;
+
+    try {
+      const config = g.config_json ? JSON.parse(g.config_json) : {};
+      const players = [];
+      if (g.hero_player_id) {
+        players.push({
+          playerId: g.hero_player_id, name: g.hero_name || 'Hero',
+          faction: 'hero', isAI: false, personality: null,
+        });
+      }
+      if (g.witch_player_id) {
+        players.push({
+          playerId: g.witch_player_id, name: g.witch_name || 'Witch',
+          faction: 'witch', isAI: false, personality: null,
+        });
+      }
+
+      const serializedState = g.state_json ? JSON.parse(g.state_json) : null;
+      if (!serializedState && g.status !== 'waiting') continue;
+
+      // Only migrate playing games with actual state
+      if (g.status === 'playing' && serializedState) {
+        upsertSave(
+          g.room_id,
+          g.hero_player_id,
+          g.witch_player_id,
+          g.hero_name || '',
+          g.witch_name || '',
+          serializedState,
+          {
+            turnIntervalMs:      g.turn_interval_ms || 86400000,
+            consecutiveTimeouts: {},
+            config:              { ...config, turnIntervalMs: g.turn_interval_ms || 86400000 },
+            players,
+            isPrivate: 1,
+            code:      g.code,
+            status:    'playing',
+          },
+        );
+
+        // Copy plan status rows
+        try {
+          const plans = db.prepare(
+            `SELECT * FROM async_plan_status WHERE room_id = ?`
+          ).all(g.room_id);
+          for (const p of plans) {
+            try {
+              const planData = p.plan_json ? JSON.parse(p.plan_json) : null;
+              if (planData) {
+                upsertPlanStatus(g.room_id, p.player_id, p.round, planData);
+              }
+            } catch {}
+          }
+        } catch {}
+
+        migrated++;
+      }
+
+      // Mark async game as migrated by setting status
+      try {
+        db.prepare(`UPDATE async_games SET status = 'migrated' WHERE room_id = ?`).run(g.room_id);
+      } catch {}
+    } catch (err) {
+      console.error(`[migration] Error migrating async game ${g.room_id}:`, err);
+    }
+  }
+
+  if (migrated > 0) console.log(`[migration] Migrated ${migrated} async game(s) to unified system.`);
+  return migrated;
+}
 
 // ── Async session helpers ───────────────────────────────────────────────────
 

@@ -12,6 +12,7 @@ import {
   handleDisconnect, handleReconnect, resumeGame,
   getActiveRoomsForPlayer, getRooms, getRoom,
 } from '../server/lobby.js';
+import db from '../server/db.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -58,11 +59,17 @@ function cleanUpRooms() {
       for (const t of room.takeoverTimers.values()) clearTimeout(t);
     }
   }
+  // Clean DB saves that might interfere with getActiveRoomsForPlayer tests
+  try {
+    db.prepare("DELETE FROM game_plan_status WHERE room_id NOT LIKE 'test-%'").run();
+    db.prepare("DELETE FROM game_saves WHERE players_json LIKE '%test-player-%'").run();
+  } catch {}
 }
 
 // ── getActiveRoomsForPlayer ──────────────────────────────────────────────────
 
 describe('getActiveRoomsForPlayer', () => {
+  beforeEach(cleanUpRooms);
   afterEach(cleanUpRooms);
 
   test('returns rooms where the player has a seat', () => {

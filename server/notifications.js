@@ -84,14 +84,26 @@ function _playerName(playerId) {
   return row?.username ?? 'your opponent';
 }
 
+// ── Constants ───────────────────────────────────────────────────────────────
+
+// Only send notifications for games with turn timeout >= 1 hour
+const NOTIFY_MIN_INTERVAL_MS = 3_600_000;
+
 // ── Public API ──────────────────────────────────────────────────────────────
 
 /**
- * Check if a player has an active WebSocket session for a game.
- * The caller passes the asyncSessions map from lobby.js.
- * @param {Map<string, Map<string, WebSocket>>} asyncSessions
+ * Check if a player has an active WebSocket connection.
+ * Supports both the legacy asyncSessions Map and the unified room system.
+ * @param {Map|null} asyncSessions - legacy async sessions map
+ * @param {string} roomId
+ * @param {string} playerId
+ * @param {object} [opts] - extra options from unified system
+ * @param {Function} [opts.isConnected] - (playerId) => boolean check from lobby room
  */
-function _isOnline(asyncSessions, roomId, playerId) {
+function _isOnline(asyncSessions, roomId, playerId, opts) {
+  // Unified room check (takes precedence)
+  if (opts?.isConnected) return opts.isConnected(playerId);
+  // Legacy asyncSessions check
   const room = asyncSessions?.get(roomId);
   if (!room) return false;
   const ws = room.get(playerId);
@@ -99,10 +111,20 @@ function _isOnline(asyncSessions, roomId, playerId) {
 }
 
 /**
- * Notify a player that their opponent has joined and round 1 is ready.
+ * Should we send a notification for this game?
+ * Returns false if the player is connected or the game's timeout is too short.
  */
-export async function notifyOpponentJoined(playerId, gameInfo, asyncSessions) {
-  if (_isOnline(asyncSessions, gameInfo.roomId, playerId)) return;
+export function shouldNotify(roomId, playerId, { asyncSessions, turnIntervalMs, isConnected } = {}) {
+  if (turnIntervalMs != null && turnIntervalMs < NOTIFY_MIN_INTERVAL_MS) return false;
+  return !_isOnline(asyncSessions, roomId, playerId, { isConnected });
+}
+
+/**
+ * Notify a player that their opponent has joined and round 1 is ready.
+ * @param {object} [opts] - { turnIntervalMs, isConnected } for unified system
+ */
+export async function notifyOpponentJoined(playerId, gameInfo, asyncSessions, opts) {
+  if (!shouldNotify(gameInfo.roomId, playerId, { asyncSessions, ...opts })) return;
   if (!_shouldSend(gameInfo.roomId, playerId, 'opponent_joined')) return;
   _record(gameInfo.roomId, playerId, 'opponent_joined');
 
@@ -117,7 +139,7 @@ export async function notifyOpponentJoined(playerId, gameInfo, asyncSessions) {
   } else {
     const email = _getPlayerEmail(playerId);
     if (!email) return;
-    const url = `${_baseUrl()}/#async=${gameInfo.roomId}`;
+    const url = `${_baseUrl()}/#game=${gameInfo.roomId}`;
     await _sendEmail(email,
       "Caleb's Hollow — Your opponent has joined!",
       `${opponent} has joined your game. Round 1 is ready.\n\nPlay your turn: ${url}`
@@ -127,11 +149,11 @@ export async function notifyOpponentJoined(playerId, gameInfo, asyncSessions) {
 
 /**
  * Notify a player that a new round is ready (after resolution).
+ * @param {object} [opts] - { turnIntervalMs, isConnected } for unified system
  */
-export async function notifyTurnReady(playerId, gameInfo, asyncSessions) {
-  console.log(`[Notify] notifyTurnReady player=${playerId} room=${gameInfo.roomId} round=${gameInfo.round}`);
-  if (_isOnline(asyncSessions, gameInfo.roomId, playerId)) { console.log('[Notify]   skipped: player is online'); return; }
-  if (!_shouldSend(gameInfo.roomId, playerId, 'turn_ready')) { console.log('[Notify]   skipped: dedup'); return; }
+export async function notifyTurnReady(playerId, gameInfo, asyncSessions, opts) {
+  if (!shouldNotify(gameInfo.roomId, playerId, { asyncSessions, ...opts })) return;
+  if (!_shouldSend(gameInfo.roomId, playerId, 'turn_ready')) return;
   _record(gameInfo.roomId, playerId, 'turn_ready');
 
   const opponent = _playerName(gameInfo.opponentId);
@@ -145,7 +167,7 @@ export async function notifyTurnReady(playerId, gameInfo, asyncSessions) {
   } else {
     const email = _getPlayerEmail(playerId);
     if (!email) return;
-    const url = `${_baseUrl()}/#async=${gameInfo.roomId}`;
+    const url = `${_baseUrl()}/#game=${gameInfo.roomId}`;
     await _sendEmail(email,
       `Caleb's Hollow — Round ${gameInfo.round} is ready`,
       `A new round has begun in your game against ${opponent}.\n\nPlay your turn: ${url}`
@@ -155,11 +177,11 @@ export async function notifyTurnReady(playerId, gameInfo, asyncSessions) {
 
 /**
  * Notify a player that their opponent submitted a plan (nudge).
+ * @param {object} [opts] - { turnIntervalMs, isConnected } for unified system
  */
-export async function notifyOpponentSubmitted(playerId, gameInfo, asyncSessions) {
-  console.log(`[Notify] notifyOpponentSubmitted player=${playerId} room=${gameInfo.roomId}`);
-  if (_isOnline(asyncSessions, gameInfo.roomId, playerId)) { console.log('[Notify]   skipped: player is online'); return; }
-  if (!_shouldSend(gameInfo.roomId, playerId, 'opponent_submitted')) { console.log('[Notify]   skipped: dedup'); return; }
+export async function notifyOpponentSubmitted(playerId, gameInfo, asyncSessions, opts) {
+  if (!shouldNotify(gameInfo.roomId, playerId, { asyncSessions, ...opts })) return;
+  if (!_shouldSend(gameInfo.roomId, playerId, 'opponent_submitted')) return;
   _record(gameInfo.roomId, playerId, 'opponent_submitted');
 
   const opponent = _playerName(gameInfo.opponentId);
@@ -173,7 +195,7 @@ export async function notifyOpponentSubmitted(playerId, gameInfo, asyncSessions)
   } else {
     const email = _getPlayerEmail(playerId);
     if (!email) return;
-    const url = `${_baseUrl()}/#async=${gameInfo.roomId}`;
+    const url = `${_baseUrl()}/#game=${gameInfo.roomId}`;
     await _sendEmail(email,
       "Caleb's Hollow — Your opponent submitted their turn",
       `${opponent} has submitted their plan. Waiting on you!\n\nPlay your turn: ${url}`
@@ -183,9 +205,10 @@ export async function notifyOpponentSubmitted(playerId, gameInfo, asyncSessions)
 
 /**
  * Notify a player that the game is over.
+ * @param {object} [opts] - { turnIntervalMs, isConnected } for unified system
  */
-export async function notifyGameOver(playerId, gameInfo, asyncSessions) {
-  if (_isOnline(asyncSessions, gameInfo.roomId, playerId)) return;
+export async function notifyGameOver(playerId, gameInfo, asyncSessions, opts) {
+  if (!shouldNotify(gameInfo.roomId, playerId, { asyncSessions, ...opts })) return;
   if (!_shouldSend(gameInfo.roomId, playerId, 'game_over')) return;
   _record(gameInfo.roomId, playerId, 'game_over');
 
@@ -200,7 +223,7 @@ export async function notifyGameOver(playerId, gameInfo, asyncSessions) {
   } else {
     const email = _getPlayerEmail(playerId);
     if (!email) return;
-    const url = `${_baseUrl()}/#async=${gameInfo.roomId}`;
+    const url = `${_baseUrl()}/#game=${gameInfo.roomId}`;
     await _sendEmail(email,
       "Caleb's Hollow — Game Over",
       `${winnerLabel} wins! ${gameInfo.winReason || ''}\n\nView the result: ${url}`

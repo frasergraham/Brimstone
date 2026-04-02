@@ -2159,7 +2159,7 @@ function _fetchActiveSaves() {
   }
 
   const base = window.BRIMSTONE_SERVER || '';
-  fetch(`${base}/api/saves?token=${encodeURIComponent(session.token)}`)
+  fetch(`${base}/api/games?token=${encodeURIComponent(session.token)}`)
     .then(r => r.json())
     .then(saves => _renderSaves(saves))
     .catch(() => {
@@ -2176,6 +2176,16 @@ function _renderSaves(saves) {
     return;
   }
 
+  // Sort: action-needed first (your turn), then waiting, then lobby
+  saves.sort((a, b) => {
+    const priority = (s) => {
+      if (s.status === 'lobby') return 2;
+      if (s.action_needed) return 0;
+      return 1;
+    };
+    return priority(a) - priority(b);
+  });
+
   list.innerHTML = '';
   for (const s of saves) {
     const myFaction  = s.hero_player_id  === session?.id ? 'hero' : 'witch';
@@ -2183,12 +2193,26 @@ function _renderSaves(saves) {
     const factionSymbol = myFaction === 'hero' ? '⚔' : '✦';
     const phaseLabel = { dawn: '🌅 Dawn', day: '☀ Day', dusk: '🌇 Dusk', night: '🌙 Night' }[s.phase] ?? s.phase;
 
+    // Turn timeout label
+    const intervalMs = s.turn_interval_ms || 90000;
+    const timeoutLabel = intervalMs >= 86400000 ? `${Math.round(intervalMs / 86400000)}d turns`
+                       : intervalMs >= 3600000  ? `${Math.round(intervalMs / 3600000)}h turns`
+                       : intervalMs >= 60000    ? `${Math.round(intervalMs / 60000)}m turns`
+                       : `${Math.round(intervalMs / 1000)}s turns`;
+
+    // Action status
+    const statusLabel = s.status === 'lobby' ? 'In lobby'
+                      : s.action_needed      ? 'Your turn'
+                      : 'Waiting';
+    const statusClass = s.action_needed ? 'action-needed' : '';
+
     const entry = document.createElement('div');
     entry.className = 'save-entry';
     entry.innerHTML = `
       <div class="save-entry-info">
         <div class="save-entry-title">${factionSymbol} vs ${_esc(oppName)}</div>
-        <div class="save-entry-meta">Round ${s.round} · ${phaseLabel}</div>
+        <div class="save-entry-meta">Round ${s.round || 1} · ${phaseLabel || 'Lobby'} · ${timeoutLabel}</div>
+        <div class="save-entry-status ${statusClass}">${statusLabel}</div>
       </div>
       <button class="setup-btn primary">Rejoin</button>
     `;
@@ -3381,7 +3405,7 @@ function _showAsyncScreen() {
 }
 
 document.getElementById('btn-mp-online').addEventListener('click', () => _showOnlineScreen());
-document.getElementById('btn-mp-async').addEventListener('click', () => _showAsyncScreen());
+document.getElementById('btn-mp-async')?.addEventListener('click', () => _showAsyncScreen());
 document.getElementById('btn-mp-local').addEventListener('click', () => showStep('local-play'));
 
 document.getElementById('btn-multiplayer-back').addEventListener('click', () => {
@@ -3392,10 +3416,10 @@ document.getElementById('btn-multiplayer-back').addEventListener('click', () => 
 document.getElementById('btn-online-back').addEventListener('click', () => {
   showStep('multiplayer');
 });
-document.getElementById('btn-async-back').addEventListener('click', () => {
+document.getElementById('btn-async-back')?.addEventListener('click', () => {
   showStep('multiplayer');
 });
-document.getElementById('btn-async-refresh').addEventListener('click', () => {
+document.getElementById('btn-async-refresh')?.addEventListener('click', () => {
   _fetchAsyncGames();
 });
 document.getElementById('btn-local-play-back').addEventListener('click', () => {
@@ -3456,16 +3480,28 @@ document.getElementById('btn-create-game-back').addEventListener('click', () => 
 
 document.getElementById('btn-create-game-confirm').addEventListener('click', () => {
   _ensureAuthed(() => {
+    const turnTimeoutEl = document.getElementById('cg-turn-timeout');
+    const inviteeEl     = document.getElementById('cg-invitee-email');
     const config = {
-      fog:           document.getElementById('cg-fog').value,
-      mapSize:       document.getElementById('cg-map-size').value,
-      nodeCount:     parseInt(document.getElementById('cg-node-count')?.value ?? '3', 10),
+      fog:            document.getElementById('cg-fog').value,
+      mapSize:        document.getElementById('cg-map-size').value,
+      nodeCount:      parseInt(document.getElementById('cg-node-count')?.value ?? '3', 10),
       playersPerSide: parseInt(document.querySelector('input[name="cg-pps"]:checked')?.value ?? '1', 10),
-      isPrivate:     document.getElementById('cg-private').checked,
+      isPrivate:      document.getElementById('cg-private').checked,
+      turnIntervalMs: parseInt(turnTimeoutEl?.value ?? '90000', 10),
+      inviteeEmail:   inviteeEl?.value?.trim() || null,
     };
     mp.createLobby(config);
     // Transition to lobby card happens in onLobbyJoined callback
   });
+});
+
+// Show/hide invite email field based on turn timeout (>= 1 hour)
+document.getElementById('cg-turn-timeout')?.addEventListener('change', (e) => {
+  const inviteRow = document.getElementById('cg-invite-row');
+  if (inviteRow) {
+    inviteRow.style.display = parseInt(e.target.value, 10) >= 3600000 ? '' : 'none';
+  }
 });
 
 // ── Join Game flow ────────────────────────────────────────────────────────────
@@ -3500,7 +3536,7 @@ function _getAsyncFaction() {
   return checked ? checked.value : 'hero';
 }
 
-document.getElementById('btn-create-async').addEventListener('click', () => {
+document.getElementById('btn-create-async')?.addEventListener('click', () => {
   _ensureAuthed(() => {
     showStep('async-create');
     // Default faction radio to hero
@@ -3509,17 +3545,17 @@ document.getElementById('btn-create-async').addEventListener('click', () => {
   });
 });
 
-document.getElementById('btn-join-async').addEventListener('click', () => {
+document.getElementById('btn-join-async')?.addEventListener('click', () => {
   _ensureAuthed(() => {
     showStep('async-join');
   });
 });
 
-document.getElementById('btn-async-create-back').addEventListener('click', () => {
+document.getElementById('btn-async-create-back')?.addEventListener('click', () => {
   showStep('async');
 });
 
-document.getElementById('btn-async-create-go').addEventListener('click', () => {
+document.getElementById('btn-async-create-go')?.addEventListener('click', () => {
   _ensureAuthed(() => {
     const session = loadSession();
     const base = window.BRIMSTONE_SERVER || '';
@@ -3559,7 +3595,7 @@ document.getElementById('btn-async-create-go').addEventListener('click', () => {
   });
 });
 
-document.getElementById('btn-async-copy-code').addEventListener('click', () => {
+document.getElementById('btn-async-copy-code')?.addEventListener('click', () => {
   const code = document.getElementById('async-game-code').textContent;
   navigator.clipboard?.writeText(code);
   const btn = document.getElementById('btn-async-copy-code');
@@ -3567,7 +3603,7 @@ document.getElementById('btn-async-copy-code').addEventListener('click', () => {
   setTimeout(() => { btn.textContent = 'Copy Code'; }, 1500);
 });
 
-document.getElementById('btn-async-copy-link').addEventListener('click', () => {
+document.getElementById('btn-async-copy-link')?.addEventListener('click', () => {
   const code = document.getElementById('async-game-code').textContent;
   const inviteUrl = `${location.origin}${location.pathname}#invite=${encodeURIComponent(code)}`;
   navigator.clipboard?.writeText(inviteUrl);
@@ -3576,7 +3612,7 @@ document.getElementById('btn-async-copy-link').addEventListener('click', () => {
   setTimeout(() => { btn.textContent = '📋 Copy Invite Link'; }, 1500);
 });
 
-document.getElementById('btn-async-created-done').addEventListener('click', () => {
+document.getElementById('btn-async-created-done')?.addEventListener('click', () => {
   _showAsyncScreen();
 });
 
@@ -3639,6 +3675,19 @@ function _joinAsyncByCode(code) {
 
 function _checkAsyncDeepLink() {
   const hash = window.location.hash;
+
+  // Unified deep link: #game=<roomId> — resume via unified lobby
+  const gameMatch = hash.match(/^#game=(.+)$/);
+  if (gameMatch) {
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    const roomId = gameMatch[1];
+    _ensureAuthed(() => {
+      mp.resumeSave(roomId);
+    });
+    return true;
+  }
+
+  // Legacy deep link: #async=<roomId> — route through async UI for backward compat
   const asyncMatch = hash.match(/^#async=(.+)$/);
   if (asyncMatch) {
     window.history.replaceState(null, '', window.location.pathname + window.location.search);
@@ -3654,12 +3703,16 @@ function _checkAsyncDeepLink() {
 
     const session = loadSession();
     if (session) {
-      // Already signed in — auto-join
-      _ensureAuthed(() => _joinAsyncByCode(code));
+      // Already signed in — auto-join via lobby code
+      _ensureAuthed(() => {
+        mp.joinLobby(code);
+      });
     } else {
-      // Not signed in — show auth dialog, then auto-join
+      // Not signed in — show auth dialog, then join
       _showAuthDialog(() => {
-        _ensureAuthed(() => _joinAsyncByCode(code));
+        _ensureAuthed(() => {
+          mp.joinLobby(code);
+        });
       });
     }
     return true;
@@ -4154,7 +4207,7 @@ document.getElementById('btn-setup-signout').addEventListener('click', () => {
 
 // ── Async sign-in ───────────────────────────────────────────────────────────
 
-document.getElementById('btn-async-signin').addEventListener('click', () => {
+document.getElementById('btn-async-signin')?.addEventListener('click', () => {
   _showAuthDialog(() => {
     _initAsyncStep();
     _fetchAsyncGames();
@@ -4366,6 +4419,12 @@ function _createMpClient() {
 
     onTimerReset(timeoutMs) {
       if (ui) ui.resetCountdown(timeoutMs);
+    },
+
+    onPlayerTakenOver({ playerId, playerName }) {
+      // Store for round summary display
+      if (!state._takeoverMessages) state._takeoverMessages = [];
+      state._takeoverMessages.push(`${playerName} has been taken over by AI`);
     },
 
     onLeaderboard(_entries) {

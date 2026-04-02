@@ -32,10 +32,7 @@
         <button id="btn-account"       class="setup-btn"         style="width:200px">Account</button>
         <button id="btn-options"       class="setup-btn"         style="width:200px">Options</button>
       </div>
-      <div id="menu-async-box" class="menu-async-box" style="display:none">
-        <div class="menu-async-header">Async Games</div>
-        <div id="menu-async-list" class="menu-async-list"></div>
-      </div>
+      <!-- Async games box removed — games listed in Multiplayer section -->
       <div style="margin-top:1.25rem;text-align:center">
         <a href="/admin" class="admin-link" id="admin-link" style="display:none">Admin</a>
       </div>
@@ -325,7 +322,6 @@
       <div class="setup-lore"><p>Choose how you want to play.</p></div>
       <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.75rem">
         <button id="btn-mp-online" class="setup-btn primary" style="width:260px">🌐 Online Multiplayer</button>
-        <button id="btn-mp-async"  class="setup-btn"         style="width:260px">⏳ Async Multiplayer</button>
         <button id="btn-mp-local"  class="setup-btn"         style="width:260px">🎮 Local Pass &amp; Play</button>
       </div>
       <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
@@ -597,12 +593,32 @@
         </select>
       </div>
       <div class="cg-option-row">
+        <span class="cg-option-label">Turn timeout</span>
+        <select id="cg-turn-timeout" class="setup-select">
+          <option value="60000">1 Minute</option>
+          <option value="90000" selected>90 Seconds</option>
+          <option value="180000">3 Minutes</option>
+          <option value="300000">5 Minutes</option>
+          <option value="3600000">1 Hour</option>
+          <option value="21600000">6 Hours</option>
+          <option value="43200000">12 Hours</option>
+          <option value="86400000">1 Day</option>
+          <option value="259200000">3 Days</option>
+        </select>
+      </div>
+      <div class="cg-option-row">
         <span class="cg-option-label">Private game</span>
         <label class="cg-toggle">
           <input type="checkbox" id="cg-private">
           <span class="cg-toggle-track"></span>
         </label>
         <span class="cg-option-hint">Invite only — share a code</span>
+      </div>
+      <div id="cg-invite-row" class="cg-option-row" style="display:none">
+        <span class="cg-option-label">Invite opponent</span>
+        <input id="cg-invitee-email" class="setup-input" type="email"
+               placeholder="opponent@email.com (optional)" autocomplete="email"
+               style="margin:0;font-size:0.85rem">
       </div>
     </div>
     <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">

@@ -32,11 +32,13 @@ import {
   getRoom,
   getRooms, getQueue, getActiveRoomsForPlayer,
   subscribeSpectator, unsubscribeSpectator, getRoomChronicle,
-  // Async game support
+  // Async game support (legacy — kept for migration)
   createAsyncGameRoom, joinAsyncGameRoom,
   connectToAsyncGame, handleAsyncPlanSubmit, handleAsyncDisconnect,
   checkAsyncDeadlines, pruneAsyncGames,
   getAsyncGamesForPlayer,
+  // Unified system
+  checkDeadlines, migrateAsyncGames,
 } from './server/lobby.js';
 import {
   getAllPlayers, getAllSaves, getSaveWithState,
@@ -103,7 +105,16 @@ app.get('/api/leaderboard', (_req, res) => {
   res.json(getLeaderboard(20));
 });
 
-// REST: active in-memory games for a player (for "Rejoin" list)
+// REST: all in-progress games for a player (unified — in-memory + hibernated)
+app.get('/api/games', (req, res) => {
+  const token = req.query.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
+  res.json(getActiveRoomsForPlayer(player.id));
+});
+
+// Legacy alias — same data
 app.get('/api/saves', (req, res) => {
   const token = req.query.token || req.headers['x-token'];
   if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
@@ -352,9 +363,11 @@ app.get('/invite', (req, res) => {
   const code = (req.query.code || '').toUpperCase().trim();
   if (!code) { res.status(400).send('Missing game code.'); return; }
 
+  // Try unified lobby first, fall back to legacy async game
   const game = getAsyncGameByCode(code);
   if (!game) {
-    res.status(404).send('This game is no longer available or has already started.');
+    // May be a unified lobby — redirect with code for client-side join
+    res.redirect(`/#invite=${encodeURIComponent(code)}`);
     return;
   }
 
@@ -369,12 +382,12 @@ app.get('/invite', (req, res) => {
     const joinResult = joinAsyncGameRoom(player.id, player.username, code);
     if (joinResult.error) {
       // Game may have been joined already — redirect with token so they can see it
-      res.redirect(`/?email_token=${encodeURIComponent(player.token)}#async=${game.room_id}`);
+      res.redirect(`/?email_token=${encodeURIComponent(player.token)}#game=${game.room_id}`);
       return;
     }
 
     // Successfully joined — redirect with session token and deep-link to the game
-    res.redirect(`/?email_token=${encodeURIComponent(player.token)}#async=${joinResult.roomId}`);
+    res.redirect(`/?email_token=${encodeURIComponent(player.token)}#game=${joinResult.roomId}`);
   } else {
     // No invitee email — just redirect to the async join screen with the code pre-filled
     res.redirect(`/#invite=${encodeURIComponent(code)}`);
@@ -913,7 +926,7 @@ server.listen(PORT, () => {
   const prunedCompleted = pruneExpiredCompletedGames();
   if (prunedCompleted > 0) console.log(`Pruned ${prunedCompleted} expired completed game(s).`);
 
-  // Async game maintenance
+  // Async game maintenance (legacy — will be fully removed in future)
   pruneAsyncGames();
   checkAsyncDeadlines(); // catch any deadlines that expired while server was down
   setInterval(checkAsyncDeadlines, 60_000); // check every minute
@@ -921,4 +934,9 @@ server.listen(PORT, () => {
   // Prune stale device tokens once on startup, then daily
   pruneStaleTokens(90);
   setInterval(() => pruneStaleTokens(90), 86_400_000);
+
+  // Unified system: migrate existing async games and start deadline checker
+  try { migrateAsyncGames(); } catch (err) { console.error('[migration]', err); }
+  checkDeadlines(); // catch any unified deadlines that expired while server was down
+  setInterval(checkDeadlines, 30_000); // check every 30 seconds
 });
