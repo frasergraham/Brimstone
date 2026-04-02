@@ -37,8 +37,7 @@ mac:
   target:
     - dmg
     - zip   # required for electron-updater differential downloads
-  hardenedRuntime: true
-  gatekeeperAssess: false
+  identity: null  # ad-hoc sign (no Apple Developer certificate required)
 
 win:
   target:
