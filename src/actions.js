@@ -7,6 +7,7 @@ import {
   createWoodGolem, createIronGolem,
 } from './entities.js';
 import { Phase } from './game.js';
+import { getFaction } from './factions.js';
 
 export const ActionType = Object.freeze({
   MOVE:         'move',
@@ -252,6 +253,7 @@ export function getVisibleHeroHexes(state) {
 export function getValidActions(state, actor) {
   const actions = [];
   const t = tile(state, actor.col, actor.row);
+  const faction = getFaction(actor.owner);
   const actorIsHero = actor.owner === 'hero';
 
   // Move — range 2 if actor has a horse in personal items, otherwise 1
@@ -285,30 +287,21 @@ export function getValidActions(state, actor) {
     actions.push({ type: ActionType.BATTLE_HEX, targets: battleHexTargets });
   }
 
-  // Fortify — hero on any tile (not river), cap at 4, uses shared inventory.
+  // Fortify — faction-gated; cap at 4, uses shared inventory.
   // Always included when contextually valid; affordable=false when no resources.
-  if (t && t.type !== TileType.RIVER && t.fortifyLevel < 4 && actorIsHero) {
-    const shared     = state.inventory.shared;
-    const woodCount  = (shared[ResourceType.WOOD]  || 0);
-    const metalCount = (shared[ResourceType.METAL] || 0);
+  if (t && t.type !== TileType.RIVER && t.fortifyLevel < 4 && faction.canFortify()) {
+    const inv        = faction.getInventory(state);
+    const woodCount  = (inv[ResourceType.WOOD]  || 0);
+    const metalCount = (inv[ResourceType.METAL] || 0);
     const affordable = woodCount > 0 || metalCount > 0;
     actions.push({ type: ActionType.FORTIFY, targets: [{ col: actor.col, row: actor.row }], affordable });
   }
 
-  // Summon — witch only; three separate entries (one per unit type), each with
-  // affordable flag.  The popup always shows all three so the player can choose.
-  // affordable is per-type: iron_golem needs 2 metal, wood_golem needs 2 wood,
-  // minion needs any 2 resources.
-  // Summoned units spawn on the witch's own tile (no target hex needed).
-  if (!actorIsHero) {
-    const inv   = state.inventory.witch;
-    const metal = inv[ResourceType.METAL] || 0;
-    const wood  = inv[ResourceType.WOOD]  || 0;
-    const total = Object.values(inv).reduce((s, v) => s + (v || 0), 0);
-    if (total >= 2) {
-      actions.push({ type: ActionType.SUMMON, summonType: EntityType.IRON_GOLEM, affordable: metal >= 2 });
-      actions.push({ type: ActionType.SUMMON, summonType: EntityType.WOOD_GOLEM, affordable: wood  >= 2 });
-      actions.push({ type: ActionType.SUMMON, summonType: EntityType.MINION,     affordable: true });
+  // Summon — faction-gated; entries per unit type with affordable flag.
+  if (faction.canSummon()) {
+    const summonOpts = faction.getSummonOptions(faction.getInventory(state));
+    for (const opt of summonOpts) {
+      actions.push({ type: ActionType.SUMMON, summonType: opt.summonType, affordable: opt.affordable });
     }
   }
 
@@ -323,8 +316,8 @@ export function getValidActions(state, actor) {
     }
   }
 
-  // Use item (hero-side)
-  if (actorIsHero) {
+  // Use item (faction-gated shared items)
+  if (faction.canUseItems()) {
     const usable = [];
     const shared  = state.inventory.shared;
     const myItems = actor.items || {};
@@ -438,33 +431,15 @@ function _triggerSurvivorEncounter(state, actor, col, row) {
   const encounterLog = [];
   let encounterSurvivor = null;
 
+  const faction = getFaction(actor.owner);
+  const entity = faction.createDiscoveryEntity(col, row, actor.ownerId);
+  state.entities.push(entity);
   if (actor.owner === 'hero') {
-    const s = createSurvivor(col, row, actor.ownerId);
-    s.owner = 'hero';
-    state.entities.push(s);
     state.discoveredSurvivorCount = (state.discoveredSurvivorCount || 0) + 1;
-    const abilityNote = s.abilityLabel ? ` · ${s.abilityLabel}` : '';
-    encounterLog.push(`☺ ${s.name} the ${s.title} steps out of hiding and joins the party! (HP ${s.hp}/${s.maxHp} · ATK ${s.attack} · DEF ${s.defense}${abilityNote})`);
-    encounterSurvivor = {
-      type: 'survivor',
-      name: s.name, title: s.title,
-      hp: s.hp, maxHp: s.maxHp,
-      attack: s.attack, defense: s.defense,
-      abilityLabel: s.abilityLabel,
-      color: s.color,
-    };
-  } else {
-    const z = createZombie(col, row, actor.ownerId);
-    state.entities.push(z);
-    encounterLog.push(`† A cowering survivor is found… raised as a zombie! (HP ${z.hp}/${z.maxHp} · ATK ${z.attack} · DEF ${z.defense})`);
-    encounterSurvivor = {
-      type: 'zombie',
-      name: 'Zombie',
-      hp: z.hp, maxHp: z.maxHp,
-      attack: z.attack, defense: z.defense,
-      color: z.color,
-    };
   }
+  const result = faction.buildDiscoveryResult(entity);
+  encounterLog.push(...result.encounterLog);
+  encounterSurvivor = result.encounterSurvivor;
 
   return { encounterLog, encounterSurvivor };
 }
@@ -568,8 +543,10 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
     return;
   }
 
+  const faction = getFaction(actor.owner);
+
   if (lootType === 'horse') {
-    if (actor.owner === 'hero') {
+    if (faction.canEquipHorse()) {
       actor.items['horse'] = 1;
       log.push(`Found a horse! ${actor.displayName}'s movement range increases to 2.`);
       lootItems?.push('+🐴');
@@ -578,7 +555,7 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
   }
 
   if (lootType.startsWith('weapon:')) {
-    if (actor.owner === 'hero') {
+    if (faction.canEquipWeapon()) {
       const weaponKey = lootType.replace('weapon:', '');
       const label = WEAPON_LABEL[weaponKey] || weaponKey;
       if (!actor.weapon) {
@@ -604,19 +581,14 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
     return;
   }
 
-  // All other resources are shared
+  // All other resources go to faction inventory
   const resLabel = lootType.charAt(0).toUpperCase() + lootType.slice(1);
   const RES_ICON = { wood: '🪵', metal: '⚙', food: '🍞', silver: '🥈', scripture: '📜' };
   const resIcon = RES_ICON[lootType] || `+${resLabel}`;
-  if (actor.owner === 'hero') {
-    state.inventory.shared[lootType] = (state.inventory.shared[lootType] || 0) + 1;
-    log.push(`Found ${lootType}! Added to shared supplies.`);
-    lootItems?.push(`+${resIcon}`);
-  } else {
-    state.inventory.witch[lootType] = (state.inventory.witch[lootType] || 0) + 1;
-    log.push(`${actor.displayName} secures ${lootType} for dark rituals.`);
-    lootItems?.push(`+${resIcon}`);
-  }
+  const inv = faction.getInventory(state);
+  inv[lootType] = (inv[lootType] || 0) + 1;
+  log.push(faction.getResourceFoundLog(actor, lootType));
+  lootItems?.push(`+${resIcon}`);
 }
 
 // Splash damage: when a unit is crushed or killed, all other units on the same
@@ -644,9 +616,9 @@ export function executeBattle(state, actor, target) {
   actor.guarding = 0;  // Attacking breaks guard stance
   const log = [];
 
-  // Phase bonus — only witch gets a night bonus (+2 ATK for all witch units)
-  let phaseBonus = 0;
-  if (state.phase === Phase.NIGHT && actor.owner === 'witch') phaseBonus = 2;
+  // Phase bonus — faction-specific (e.g. witch gets +2 ATK at night)
+  const attackerFaction = getFaction(actor.owner);
+  const phaseBonus = attackerFaction.getPhaseCombatBonus(state.phase);
 
   // Compute situational bonuses without touching entity fields
   // Gang-up: attacker allies adjacent to the TARGET (flanking/surrounding them)
@@ -669,10 +641,9 @@ export function executeBattle(state, actor, target) {
   const extraAtkDice = Math.min(attackerAllies, 3);
   const extraDefDice = Math.min(defenderAllies, 3);
 
-  // Fatigue: hero-side defenders lose -1 DEF for every 2 times they've defended this round
-  const fatiguePenalty = target.owner === 'hero'
-    ? Math.floor((target.defendCount || 0) / 2)
-    : 0;
+  // Fatigue: faction-specific defense penalty based on defend count this round
+  const defenderFaction = getFaction(target.owner);
+  const fatiguePenalty = defenderFaction.getDefenseFatigue(target.defendCount || 0);
 
   const { attackRoll, defenseRoll, hit, margin,
           atkBaseDie, defBaseDie, atkExtraDice, defExtraDice, atkStaffBonus } =
