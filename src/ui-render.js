@@ -86,7 +86,6 @@ function _stepCostLabel(action, projShared, projWitch, projEntityItems) {
  *
  * @param {Array}   plan             Current plan action array.
  * @param {number}  budget           Total action budget for this round.
- * @param {number}  foodEnabled      How many food rations are toggled on.
  * @param {number}  foodAvailable    Total food rations in inventory.
  * @param {boolean} submitted        Whether the plan has been locked in.
  * @param {Array}   entities         Live entity array (for name lookups).
@@ -95,7 +94,7 @@ function _stepCostLabel(action, projShared, projWitch, projEntityItems) {
  *                                   over-budget steps are marked accordingly.
  * @returns {string}  HTML string safe to assign to stepsEl.innerHTML.
  */
-export function buildPlanStepsHtml(plan, budget, foodEnabled, foodAvailable, submitted, entities, initialInv) {
+export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entities, initialInv) {
   const ENTITY_GLYPH = {
     [EntityType.HERO]:       '⚔',
     [EntityType.WITCH]:      '✦',
@@ -202,14 +201,13 @@ const UNIT_GLYPH = {
  *
  * @param {Map<string, Array>} unitPlans  Map of entityId → PlanAction[].
  * @param {number}  budget           Total action budget for this round.
- * @param {number}  foodEnabled      How many food rations are toggled on.
  * @param {number}  foodAvailable    Total food rations in inventory.
  * @param {boolean} submitted        Whether the plan has been locked in.
  * @param {Array}   entities         Live entity array (for name lookups).
  * @param {object}  [initialInv]     Starting inventory snapshot.
  * @returns {string}  HTML string safe to assign to stepsEl.innerHTML.
  */
-export function buildUnitPlanBlocksHtml(unitPlans, budget, foodEnabled, foodAvailable, submitted, entities, initialInv) {
+export function buildUnitPlanBlocksHtml(unitPlans, budget, foodAvailable, submitted, entities, initialInv) {
   if (!unitPlans || unitPlans.size === 0) {
     return `<div class="plan-step"><span class="plan-step-desc" style="color:var(--muted)">No actions queued — click units to add</span></div>`;
   }

@@ -109,13 +109,13 @@ describe('buildPlanStepsHtml', () => {
   const entities = [hero];
 
   test('empty plan shows placeholder message', () => {
-    const html = buildPlanStepsHtml([], 3, 0, 0, false, []);
+    const html = buildPlanStepsHtml([], 3, 0, false, []);
     assert.ok(html.includes('No actions queued'), `expected placeholder, got: ${html}`);
   });
 
   test('single MOVE step shows step number and description', () => {
     const plan = [{ type: PlanActionType.MOVE, entityId: 'h1', toCol: 4, toRow: 2 }];
-    const html = buildPlanStepsHtml(plan, 3, 0, 0, false, entities);
+    const html = buildPlanStepsHtml(plan, 3, 0, false, entities);
     assert.ok(html.includes('plan-step'), 'should have plan-step class');
     assert.ok(html.includes('plan-step-num'), 'should have step number');
     assert.ok(html.includes('Hero'), 'should include entity name');
@@ -124,13 +124,13 @@ describe('buildPlanStepsHtml', () => {
 
   test('remove button present when not submitted', () => {
     const plan = [{ type: PlanActionType.MOVE, entityId: 'h1', toCol: 1, toRow: 1 }];
-    const html = buildPlanStepsHtml(plan, 3, 0, 0, false, entities);
+    const html = buildPlanStepsHtml(plan, 3, 0, false, entities);
     assert.ok(html.includes('plan-step-remove'), 'remove button should be present');
   });
 
   test('remove button absent when submitted', () => {
     const plan = [{ type: PlanActionType.MOVE, entityId: 'h1', toCol: 1, toRow: 1 }];
-    const html = buildPlanStepsHtml(plan, 3, 0, 0, true, entities);
+    const html = buildPlanStepsHtml(plan, 3, 0, true, entities);
     assert.ok(!html.includes('plan-step-remove'), 'remove button should be absent after submit');
   });
 
@@ -140,7 +140,7 @@ describe('buildPlanStepsHtml', () => {
       { type: PlanActionType.MOVE, entityId: 'h1', toCol: 1, toRow: 1 },
       { type: PlanActionType.MOVE, entityId: 'h1', toCol: 2, toRow: 2 },
     ];
-    const html = buildPlanStepsHtml(plan, 1, 0, 0, false, entities);
+    const html = buildPlanStepsHtml(plan, 1, 0, false, entities);
     assert.ok(html.includes('over-budget'), 'second step should be over-budget');
   });
 
@@ -149,8 +149,8 @@ describe('buildPlanStepsHtml', () => {
       { type: PlanActionType.MOVE, entityId: 'h1', toCol: 1, toRow: 1 },
       { type: PlanActionType.MOVE, entityId: 'h1', toCol: 2, toRow: 2 },
     ];
-    // budget=1, foodEnabled=1 → second step is food-powered not over-budget
-    const html = buildPlanStepsHtml(plan, 1, 1, 1, false, entities);
+    // budget=1, foodAvailable=1 → second step is food-powered not over-budget
+    const html = buildPlanStepsHtml(plan, 1, 1, false, entities);
     assert.ok(html.includes('food-powered'), 'second step should be food-powered');
     assert.ok(html.includes('plan-food-tag'), 'food tag should be present');
     assert.ok(!html.includes('over-budget'), 'should not be over-budget when food covers it');
@@ -163,7 +163,7 @@ describe('buildPlanStepsHtml', () => {
       { type: PlanActionType.MOVE, entityId: 'h1', toCol: 3, toRow: 3 },
     ];
     // budget=1, the two free actions should not count
-    const html = buildPlanStepsHtml(plan, 1, 0, 0, false, entities);
+    const html = buildPlanStepsHtml(plan, 1, 0, false, entities);
     assert.ok(!html.includes('over-budget'), 'free actions should not push move over budget');
   });
 
@@ -172,7 +172,7 @@ describe('buildPlanStepsHtml', () => {
       { type: PlanActionType.EXPLORE, entityId: 'h1' },
       { type: PlanActionType.FORTIFY, entityId: 'h1' },
     ];
-    const html = buildPlanStepsHtml(plan, 3, 0, 0, false, entities);
+    const html = buildPlanStepsHtml(plan, 3, 0, false, entities);
     // Check both step numbers appear
     assert.ok(html.includes('>1<'), `expected step 1 badge in: ${html.substring(0, 200)}`);
     assert.ok(html.includes('>2<'), `expected step 2 badge in: ${html.substring(0, 200)}`);

@@ -807,7 +807,7 @@ export class UIController {
 
     const initialInv = computeProjectedInventory(this.state, []);
     stepsEl.innerHTML = buildUnitPlanBlocksHtml(
-      this._unitPlans, this._planBudget, foodAvailable, foodAvailable,
+      this._unitPlans, this._planBudget, foodAvailable,
       this._planSubmitted, this.state.entities ?? [], initialInv,
     );
 
