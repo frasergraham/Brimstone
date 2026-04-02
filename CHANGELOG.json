@@ -1,5 +1,22 @@
 [
   {
+    "version": "1.3.0",
+    "date": "2026-04-02",
+    "summary": "New features, and bug fixes",
+    "notes": [
+      "Add app icon from hero artwork",
+      "Add electron:package scripts for local builds without publishing",
+      "Allow manual trigger of Electron build workflow",
+      "Add Electron build system with auto-update and CI/CD pipeline",
+      "Per-unit action queues with simultaneous execution",
+      "Resolve Electron packaging and runtime issues",
+      "Five UI/gameplay bug fixes",
+      "Turn info text and inactive cycle bar segments",
+      "Balance: action caps, survivor find penalty, splash damage",
+      "Optimize app icon size"
+    ]
+  },
+  {
     "version": "1.2.2",
     "date": "2026-04-01",
     "summary": "New features, and bug fixes",
