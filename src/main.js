@@ -1,4 +1,5 @@
 // Entry point: wires all modules, setup screen flow, resize
+import './platform.js'; // must be first — sets server globals for Capacitor builds
 import { GameState, Player } from './game.js';
 import { Renderer }          from './renderer.js';
 import { UIController, UIMode } from './ui.js';
@@ -58,7 +59,7 @@ function _applyModeConfig(modes) {
 }
 
 if (!window.electronAPI) {
-  fetch('/api/config')
+  fetch(`${window.BRIMSTONE_SERVER || ''}/api/config`)
     .then(r => r.ok ? r.json() : null)
     .then(data => { if (data?.modes) _applyModeConfig(data.modes); })
     .catch(() => {}); // offline / dev-server — all modes remain enabled
@@ -188,7 +189,7 @@ function _recordLocalGameStats() {
     fog_of_war:        state.fogOfWar !== 'none' ? 1 : 0,
     duration_ms:       _gameStartTime ? Date.now() - _gameStartTime : null,
   };
-  fetch('/api/game-stats', {
+  fetch(`${window.BRIMSTONE_SERVER || ''}/api/game-stats`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(stats),
@@ -233,7 +234,7 @@ function _recordCampaignGameStats() {
     game_version:       VERSION,
     duration_ms:        _gameStartTime ? Date.now() - _gameStartTime : null,
   };
-  fetch('/api/campaign-game-stats', {
+  fetch(`${window.BRIMSTONE_SERVER || ''}/api/campaign-game-stats`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(stats),
@@ -4051,7 +4052,7 @@ document.getElementById('btn-acct-save-name').addEventListener('click', async ()
   const errorEl = document.getElementById('acct-name-error');
 
   try {
-    const res = await fetch('/api/account/username', {
+    const res = await fetch(`${window.BRIMSTONE_SERVER || ''}/api/account/username`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: session.token, username: newName }),

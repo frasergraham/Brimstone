@@ -488,7 +488,7 @@ export function clearSession() {
  */
 export async function requestLinkEmail(token, email) {
   try {
-    const res = await fetch('/auth/link-email', {
+    const res = await fetch(`${window.BRIMSTONE_SERVER || ''}/auth/link-email`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token, email }),
@@ -506,7 +506,7 @@ export async function requestLinkEmail(token, email) {
  */
 export async function requestEmailLogin(email) {
   try {
-    const res = await fetch('/auth/login-email', {
+    const res = await fetch(`${window.BRIMSTONE_SERVER || ''}/auth/login-email`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email }),
