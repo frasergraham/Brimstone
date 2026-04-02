@@ -54,6 +54,22 @@ const PORT      = process.env.PORT || 3000;
 // ── Express ──────────────────────────────────────────────────────────────────
 
 const app = express();
+
+// CORS — allow Capacitor native shells (capacitor://localhost, http://localhost)
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && (
+    origin.startsWith('capacitor://') ||
+    origin.startsWith('http://localhost')
+  )) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-token');
+  }
+  if (req.method === 'OPTIONS') { res.sendStatus(204); return; }
+  next();
+});
+
 app.use(express.json());
 
 // Block direct static access to admin HTML files — they're served via auth-gated routes

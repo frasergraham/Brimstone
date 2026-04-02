@@ -11,19 +11,37 @@
  * window.Capacitor before importing any native plugins.
  */
 
-const DEFAULT_SERVER = 'https://brimstone.run';
+const FALLBACK_SERVER = 'https://brimstone.run';
 
 /** True when running inside a Capacitor native shell. */
 export const isNativeMobile = !!window.Capacitor;
 
 // ── Server URL injection ────────────────────────────────────────────────────
+// On native mobile, the server URL comes from (in priority order):
+//   1. localStorage override (brimstone_server_url)
+//   2. build-config.json written by cap-copy-web.js (--env=dev|prod)
+//   3. FALLBACK_SERVER constant
+//
 // Mirrors the pattern in electron/preload.cjs — the rest of the client reads
 // window.BRIMSTONE_SERVER (REST) and window.BRIMSTONE_WS (WebSocket).
 
-if (isNativeMobile && !window.BRIMSTONE_SERVER) {
-  const stored = localStorage.getItem('brimstone_server_url');
-  const serverUrl = stored || DEFAULT_SERVER;
+async function _initServerUrl() {
+  if (!isNativeMobile || window.BRIMSTONE_SERVER) return;
 
+  const stored = localStorage.getItem('brimstone_server_url');
+  let serverUrl = stored;
+
+  if (!serverUrl) {
+    try {
+      const res = await fetch('./build-config.json');
+      if (res.ok) {
+        const config = await res.json();
+        serverUrl = config.server;
+      }
+    } catch { /* file missing — use fallback */ }
+  }
+
+  serverUrl = serverUrl || FALLBACK_SERVER;
   window.BRIMSTONE_SERVER = serverUrl;
 
   try {
@@ -34,6 +52,9 @@ if (isNativeMobile && !window.BRIMSTONE_SERVER) {
     console.warn('[platform] Invalid server URL for WebSocket derivation:', serverUrl);
   }
 }
+
+// Must resolve before the rest of the app uses BRIMSTONE_SERVER
+await _initServerUrl();
 
 // ── Splash screen ───────────────────────────────────────────────────────────
 
