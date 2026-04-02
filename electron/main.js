@@ -1,4 +1,4 @@
-// Electron main process for Brimstone desktop app.
+// Electron main process for Caleb's Hollow desktop app.
 // Serves local game files via a custom protocol and connects to a
 // configurable remote server for multiplayer.
 
@@ -11,7 +11,7 @@ import { pathToFileURL } from 'url';
 
 // ── Register custom scheme as privileged (must happen before app 'ready') ────
 protocol.registerSchemesAsPrivileged([{
-  scheme: 'brimstone',
+  scheme: 'calebshollow',
   privileges: {
     standard: true,
     secure: true,
@@ -64,12 +64,12 @@ function gameRoot() {
 }
 
 // ── Custom protocol ──────────────────────────────────────────────────────────
-// Serves local files as `brimstone://./path` so ES modules load without CORS
+// Serves local files as `calebshollow://./path` so ES modules load without CORS
 // issues that would occur with file:// URLs.
 
 function registerProtocol() {
-  protocol.handle('brimstone', (request) => {
-    // Strip scheme: "brimstone://./index.html" → "./index.html"
+  protocol.handle('calebshollow', (request) => {
+    // Strip scheme: "calebshollow://./index.html" → "./index.html"
     const url = new URL(request.url);
     // pathname comes as "/./index.html" or "/src/main.js"
     let relative = decodeURIComponent(url.pathname);
@@ -95,7 +95,7 @@ function createWindow() {
     height: 800,
     minWidth: 800,
     minHeight: 600,
-    title: 'Brimstone',
+    title: "Caleb's Hollow",
     webPreferences: {
       preload: join(import.meta.dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -104,7 +104,7 @@ function createWindow() {
     },
   });
 
-  mainWindow.loadURL('brimstone://./index.html');
+  mainWindow.loadURL('calebshollow://./index.html');
 
   mainWindow.on('closed', () => { mainWindow = null; });
 }

@@ -1,4 +1,4 @@
-package com.brimstone.game;
+package com.calebshollow.game;
 
 import com.getcapacitor.BridgeActivity;
 

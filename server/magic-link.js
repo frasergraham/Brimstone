@@ -7,7 +7,7 @@ import db from './db.js';
 // ── Configuration ────────────────────────────────────────────────────────────
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
-const EMAIL_FROM     = process.env.EMAIL_FROM || 'Brimstone <noreply@brimstone.fyi>';
+const EMAIL_FROM     = process.env.EMAIL_FROM || "Caleb's Hollow <noreply@calebshollow.com>";
 const TOKEN_TTL_MS   = 15 * 60 * 1000; // 15 minutes
 
 // Derive BASE_URL: explicit env var > Railway public domain > localhost fallback
@@ -77,12 +77,12 @@ export async function sendMagicLinkEmail(email, token, { isLink = false } = {}) 
   const verifyUrl = `${_baseUrl()}/auth/verify?token=${token}`;
 
   const subject = isLink
-    ? 'Link your Brimstone account'
-    : 'Sign in to Brimstone';
+    ? "Link your Caleb's Hollow account"
+    : "Sign in to Caleb's Hollow";
 
   const body = isLink
-    ? `Click the link below to link this email to your Brimstone account:\n\n${verifyUrl}\n\nThis link expires in 15 minutes.`
-    : `Click the link below to sign in to Brimstone:\n\n${verifyUrl}\n\nThis link expires in 15 minutes.`;
+    ? `Click the link below to link this email to your Caleb's Hollow account:\n\n${verifyUrl}\n\nThis link expires in 15 minutes.`
+    : `Click the link below to sign in to Caleb's Hollow:\n\n${verifyUrl}\n\nThis link expires in 15 minutes.`;
 
   if (!RESEND_API_KEY) {
     console.log(`[Magic Link] ${subject} for ${email}:`);

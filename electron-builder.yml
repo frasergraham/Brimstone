@@ -1,5 +1,5 @@
-appId: com.brimstone.game
-productName: Brimstone
+appId: com.calebshollow.game
+productName: "Caleb's Hollow"
 
 directories:
   output: dist

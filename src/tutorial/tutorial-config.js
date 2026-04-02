@@ -186,7 +186,7 @@ export const TUTORIAL_STEPS = [
 
   {
     id: 'welcome',
-    title: 'Welcome to Brimstone',
+    title: "Welcome to Caleb's Hollow",
     body: 'A hero arrives in a cursed town. Dark forces stir in the shadows.\n\nYou play as the ⚔ Hero. Let\'s learn the core mechanics in a few minutes.',
     trigger: 'click',
     spotlight: null,

@@ -49,7 +49,7 @@ try { execSync(`xcrun simctl boot ${target}`, { stdio: 'ignore' }); } catch {}
 // Install and launch
 console.log('Installing and launching...');
 execSync(`xcrun simctl install ${target} "${appPath}"`, { stdio: 'inherit' });
-execSync(`xcrun simctl launch ${target} com.brimstone.game`, { stdio: 'inherit' });
+execSync(`xcrun simctl launch ${target} com.calebshollow.game`, { stdio: 'inherit' });
 execSync('open -a Simulator', { stdio: 'ignore' });
 
 console.log('✔ App launched in simulator');

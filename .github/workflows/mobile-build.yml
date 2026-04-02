@@ -64,7 +64,7 @@ jobs:
         if: github.ref_type == 'tag' || inputs.publish
         uses: actions/upload-artifact@v4
         with:
-          name: brimstone-ios-archive
+          name: calebs-hollow-ios-archive
           path: ios/App/build/App.xcarchive
 
   build-android:
@@ -118,7 +118,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: brimstone-android-apk
+          name: calebs-hollow-android-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload to GitHub Release
