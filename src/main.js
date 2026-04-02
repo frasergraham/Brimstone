@@ -1143,6 +1143,20 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       }
     }
 
+    // ── Phase 4: fortify/reinforce visual feedback ────────────────────────
+    for (const ev of events) {
+      const { action, result } = ev;
+      if (action.type !== PlanActionType.FORTIFY || !result?.success) continue;
+      if (humanFaction && ev.faction !== humanFaction) continue;
+      const actor = step.entitySnapshot?.find(e => e.id === action.entityId);
+      if (myPlayerId && actor?.ownerId !== myPlayerId) continue;
+      if (actor) {
+        const gain = result.defGain ?? 1;
+        renderer.addFlash(actor.col, actor.row, `🛡+${gain}`,
+          'rgba(100,180,255,0.1)', 1800, 0.72, 'rgba(130,200,255,1)');
+      }
+    }
+
     // Apply the full post-step entity state now that all dialogs for this step
     // have been shown.  This reveals HP changes, deaths, and new encounter
     // entities only after the player has seen the relevant dialog/animation.

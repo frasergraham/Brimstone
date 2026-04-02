@@ -2046,6 +2046,11 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   padding: 2px 0;
 }
 
+.round-summary-events .summary-equip {
+  color: var(--gold, #e8c84a);
+  padding: 2px 0;
+}
+
 .round-summary-events .summary-hazard-header {
   color: var(--witch, #9b59b6);
   font-weight: bold;
