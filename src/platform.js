@@ -85,3 +85,81 @@ async function _wireBackButton() {
 }
 
 if (isNativeMobile) _wireBackButton();
+
+// ── Push notifications ──────────────────────────────────────────────────────
+
+let _pushRegistered = false;
+
+/**
+ * Request push notification permission, register with APNS, and send the
+ * device token to the server. Call after the player has authenticated.
+ */
+export async function registerPushNotifications() {
+  const PushNotifications = window.Capacitor?.Plugins?.PushNotifications;
+  if (!PushNotifications || _pushRegistered) return;
+
+  try {
+    const perm = await PushNotifications.requestPermissions();
+    if (perm.receive !== 'granted') return;
+
+    // Listen for registration success
+    PushNotifications.addListener('registration', async ({ value: token }) => {
+      // Store locally for unregister on logout
+      const Preferences = window.Capacitor?.Plugins?.Preferences;
+      if (Preferences) await Preferences.set({ key: 'brimstone_push_token', value: token });
+
+      // Send to server
+      const session = JSON.parse(localStorage.getItem('brimstone_session') || 'null');
+      if (!session?.token) return;
+      const server = window.BRIMSTONE_SERVER || '';
+      try {
+        await fetch(`${server}/api/device-token`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'x-token': session.token },
+          body: JSON.stringify({ deviceToken: token, platform: 'ios' }),
+        });
+      } catch { /* offline — will retry next launch */ }
+    });
+
+    PushNotifications.addListener('registrationError', (err) => {
+      console.warn('[Push] Registration failed:', err);
+    });
+
+    // Handle notification tap — deep-link to the game
+    PushNotifications.addListener('pushNotificationActionPerformed', ({ notification }) => {
+      const roomId = notification?.data?.roomId;
+      if (roomId) {
+        window.location.hash = `async=${roomId}`;
+      }
+    });
+
+    await PushNotifications.register();
+    _pushRegistered = true;
+  } catch (err) {
+    console.warn('[Push] Setup error:', err);
+  }
+}
+
+/**
+ * Remove the device token from the server (call on logout).
+ */
+export async function unregisterPushToken() {
+  const Preferences = window.Capacitor?.Plugins?.Preferences;
+  if (!Preferences) return;
+
+  try {
+    const { value: token } = await Preferences.get({ key: 'brimstone_push_token' });
+    if (!token) return;
+
+    const session = JSON.parse(localStorage.getItem('brimstone_session') || 'null');
+    if (!session?.token) return;
+    const server = window.BRIMSTONE_SERVER || '';
+    await fetch(`${server}/api/device-token`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', 'x-token': session.token },
+      body: JSON.stringify({ deviceToken: token }),
+    });
+
+    await Preferences.remove({ key: 'brimstone_push_token' });
+  } catch { /* best effort */ }
+}

@@ -46,6 +46,7 @@ import { deleteAsyncGame as _deleteAsyncGame,
          getAsyncGameByCode }                  from './server/async-game.js';
 import { serializeState } from './server/state-sync.js';
 import { getGameModeConfig } from './server/game-mode-config.js';
+import { upsertDeviceToken, deleteDeviceToken, pruneStaleTokens } from './server/push.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT      = process.env.PORT || 3000;
@@ -450,6 +451,30 @@ app.delete('/api/campaign-saves/:slot', (req, res) => {
   const player = _requireAuth(req, res);
   if (!player) return;
   deleteCampaignSave(player.id, req.params.slot);
+  res.json({ ok: true });
+});
+
+// ── Device token registration (push notifications) ───────────────────────────
+
+app.put('/api/device-token', (req, res) => {
+  const player = _requireAuth(req, res);
+  if (!player) return;
+  const { deviceToken, platform } = req.body || {};
+  if (!deviceToken || typeof deviceToken !== 'string') {
+    return res.status(400).json({ error: 'deviceToken required.' });
+  }
+  upsertDeviceToken(player.id, deviceToken, platform || 'ios');
+  res.json({ ok: true });
+});
+
+app.delete('/api/device-token', (req, res) => {
+  const player = _requireAuth(req, res);
+  if (!player) return;
+  const { deviceToken } = req.body || {};
+  if (!deviceToken || typeof deviceToken !== 'string') {
+    return res.status(400).json({ error: 'deviceToken required.' });
+  }
+  deleteDeviceToken(player.id, deviceToken);
   res.json({ ok: true });
 });
 
@@ -876,4 +901,8 @@ server.listen(PORT, () => {
   pruneAsyncGames();
   checkAsyncDeadlines(); // catch any deadlines that expired while server was down
   setInterval(checkAsyncDeadlines, 60_000); // check every minute
+
+  // Prune stale device tokens once on startup, then daily
+  pruneStaleTokens(90);
+  setInterval(() => pruneStaleTokens(90), 86_400_000);
 });
