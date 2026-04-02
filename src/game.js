@@ -5,6 +5,7 @@ import { BuildingType, ResourceType, TileType } from './tiles.js';
 import { hexKey, hexDistance, getNeighbors, setMapDimensions, MAP_COLS, MAP_ROWS } from './hex.js';
 import { applyPostRoundEffects, attritionForCycle } from './post-round-effects.js';
 import { sightRange } from './actions.js';
+import { getFaction, allFactions } from './factions.js';
 
 /**
  * Determine which faction controls a power node cluster based on majority hex occupation.
@@ -77,18 +78,9 @@ export const WITCH_ACTION_CAP = 10;
 // Hero  — base 3 + 1 in DAWN/DAY + 1 per survivor (cap +5) + 1 per held power node; hard cap 8
 // Witch — base 3 + 1 in NIGHT + 1 per unit (cap +3) + 1 per held power node; hard cap 10
 export function computeActions(player, phase, entities, nodeBonus = 0) {
-  const isHero     = player === Player.HERO;
-  const owner      = isHero ? 'hero' : 'witch';
-  const leaderType = isHero ? 'hero' : 'witch';
-  const extras     = entities.filter(e => e.alive && e.owner === owner && e.type !== leaderType).length;
-
-  if (isHero) {
-    const timeBonus = (phase === Phase.DAY || phase === Phase.DAWN) ? 1 : 0;
-    return Math.min(3 + timeBonus + Math.min(extras, 5) + nodeBonus, HERO_ACTION_CAP);
-  } else {
-    const timeBonus = phase === Phase.NIGHT ? 1 : 0;
-    return Math.min(3 + timeBonus + Math.min(extras, 3) + nodeBonus, WITCH_ACTION_CAP);
-  }
+  const faction    = getFaction(player);
+  const extras     = entities.filter(e => e.alive && e.owner === faction.id && e.type !== faction.leaderType).length;
+  return faction.computeBudget(phase, extras, nodeBonus);
 }
 
 /**
@@ -96,20 +88,11 @@ export function computeActions(player, phase, entities, nodeBonus = 0) {
  * Counts only entities owned by that player (ownerId match), not the whole faction.
  */
 export function computeActionsForPlayer(playerId, faction, phase, entities, nodeBonus = 0) {
-  const isHero     = faction === Player.HERO;
-  const leaderType = isHero ? EntityType.HERO : EntityType.WITCH;
-  // Count non-leader entities belonging to this player specifically
+  const factionObj = getFaction(faction);
   const extras = entities.filter(
-    e => e.alive && e.ownerId === playerId && e.type !== leaderType
+    e => e.alive && e.ownerId === playerId && e.type !== factionObj.leaderType
   ).length;
-
-  if (isHero) {
-    const timeBonus = (phase === Phase.DAY || phase === Phase.DAWN) ? 1 : 0;
-    return Math.min(3 + timeBonus + Math.min(extras, 5) + nodeBonus, HERO_ACTION_CAP);
-  } else {
-    const timeBonus = phase === Phase.NIGHT ? 1 : 0;
-    return Math.min(3 + timeBonus + Math.min(extras, 3) + nodeBonus, WITCH_ACTION_CAP);
-  }
+  return factionObj.computeBudget(phase, extras, nodeBonus);
 }
 
 function phaseForRound(round) {
@@ -434,79 +417,9 @@ export class GameState {
   endRound() {
     this.resolving = false;
 
-    // Rest heal: every living hero-faction leader in a building or on a node.
-    const heroLeaders = this.entities.filter(
-      e => e.alive && e.type === EntityType.HERO
-    );
-    for (const hero of heroLeaders) {
-      const heroTile = this.tiles.get(hexKey(hero.col, hero.row));
-      if (heroTile?.type === TileType.BUILDING && hero.hp < hero.maxHp) {
-        const b = heroTile.building;
-        if (b === BuildingType.INN) {
-          hero.heal(3);
-          this.addLog(`🏨 ${hero.displayName} rests at the inn. (+3 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', this.playerColorFor(hero));
-        } else if (b === BuildingType.CHURCH) {
-          hero.heal(3);
-          this.addLog(`⛪ ${hero.displayName} prays at the chapel. (+3 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', this.playerColorFor(hero));
-        } else {
-          hero.heal(1);
-          this.addLog(`🏠 ${hero.displayName} rests in shelter. (+1 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', this.playerColorFor(hero));
-        }
-      }
-      if (hero.hp < hero.maxHp) {
-        const onNode = this.witchObjectives.some(
-          obj => obj.hexes.some(h => h.col === hero.col && h.row === hero.row)
-        );
-        if (onNode) {
-          hero.heal(1);
-          this.addLog(`✨ ${hero.displayName} draws power from the node. (+1 HP, now ${hero.hp}/${hero.maxHp})`, 'hero', this.playerColorFor(hero));
-        }
-      }
-    }
-
-    // Night: node spawns — hero leaders on a node may spawn a free survivor.
-    this.nodeSpawnedSurvivors = [];
-    if (this.phase === Phase.NIGHT) {
-      for (const obj of this.witchObjectives) {
-        const freeHex = () => {
-          // Look for a free hex adjacent to any hex in the cluster
-          for (const clusterHex of obj.hexes) {
-            const n = getNeighbors(clusterHex.col, clusterHex.row).find(nb => {
-              const t = this.tiles.get(hexKey(nb.col, nb.row));
-              return t && t.type !== TileType.RIVER &&
-                !this.entities.some(e => e.alive && e.col === nb.col && e.row === nb.row);
-            });
-            if (n) return n;
-          }
-          return null;
-        };
-        for (const hero of heroLeaders) {
-          if (obj.hexes.some(h => h.col === hero.col && h.row === hero.row)) {
-            if (Math.random() < 0.33) {
-              const hex = freeHex();
-              if (hex) {
-                const s = createSurvivor(hex.col, hex.row, hero.ownerId);
-                s.owner = 'hero';
-                if (Math.random() < 0.5) s.items['horse'] = 1;
-                this.entities.push(s);
-                const horseNote = s.items['horse'] ? ' (arrives on horseback!)' : '';
-                this.addLog(`✨ The node calls to the living — a survivor emerges!${horseNote}`, 'hero', this.playerColorFor(hero));
-                this.nodeSpawnedSurvivors.push({
-                  type: 'survivor',
-                  name: s.name,
-                  title: s.title,
-                  hp: s.hp, maxHp: s.maxHp,
-                  attack: s.attack, defense: s.defense,
-                  abilityLabel: s.abilityLabel,
-                  color: s.color,
-                });
-              }
-            } else {
-              this.addLog(`✨ The node pulses faintly… no one answers the call tonight.`, 'hero');
-            }
-          }
-        }
-      }
+    // Faction-specific end-of-round effects (healing, spawning, etc.)
+    for (const faction of allFactions()) {
+      faction.applyEndOfRoundEffects(this);
     }
 
     // Advance round and phase.
@@ -703,16 +616,18 @@ export class GameState {
   updateNodeDiscovery() {
     for (const obj of this.witchObjectives) {
       if (!obj.seenByHero) {
+        const heroFaction = getFaction('hero');
         obj.seenByHero = this.entities.some(e => {
           if (!e.alive || e.owner !== 'hero') return false;
-          const range = sightRange(this.phase, e.ability === SurvivorAbility.SCOUT);
+          const range = heroFaction.getSightRange(this.phase, e.ability === SurvivorAbility.SCOUT);
           return obj.hexes.some(h => hexDistance(e.col, e.row, h.col, h.row) <= range);
         });
       }
       if (!obj.seenByWitch) {
+        const witchFaction = getFaction('witch');
         obj.seenByWitch = this.entities.some(e => {
           if (!e.alive || e.owner !== 'witch') return false;
-          const range = sightRange(this.phase, false);
+          const range = witchFaction.getSightRange(this.phase, false);
           return obj.hexes.some(h => hexDistance(e.col, e.row, h.col, h.row) <= range);
         });
       }
@@ -733,13 +648,12 @@ export class GameState {
    * persists across turns without relying on the renderer.
    */
   updateExploredHexes() {
-    for (const faction of ['hero', 'witch']) {
+    for (const factionObj of allFactions()) {
+      const factionId = factionObj.id;
       const visible = new Set();
       for (const e of this.entities) {
-        if (!e.alive || e.owner !== faction) continue;
-        const range = (faction === 'witch')
-          ? 2
-          : sightRange(this.phase, e.ability === SurvivorAbility.SCOUT);
+        if (!e.alive || e.owner !== factionId) continue;
+        const range = factionObj.getSightRange(this.phase, e.ability === SurvivorAbility.SCOUT);
         const rMin = Math.max(0, e.row - range);
         const rMax = Math.min(MAP_ROWS - 1, e.row + range);
         const cMin = Math.max(0, e.col - range);
@@ -752,7 +666,7 @@ export class GameState {
           }
         }
       }
-      this.markExplored(faction, visible);
+      this.markExplored(factionId, visible);
     }
   }
 

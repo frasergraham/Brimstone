@@ -14,6 +14,7 @@ import { hexDistance, getNeighbors, hexKey } from '../src/hex.js';
 import { PlanActionType, snapEntity } from '../src/planner.js';
 import { Phase, countHeldNodes } from '../src/game.js';
 import { ResourceType } from '../src/tiles.js';
+import { getFaction } from '../src/factions.js';
 
 // ── Per-unit queue grouping ──────────────────────────────────────────────────
 // Groups a flat PlanAction[] into per-entity queues for simultaneous execution.
@@ -44,37 +45,22 @@ export const ResEventType = Object.freeze({
 
 /** Faction-level budget — used by the legacy 2-player resolvePlans wrapper. */
 function budgetFor(state, faction) {
-  const isHero = faction === 'hero';
+  const factionObj = getFaction(faction);
   const extras = state.entities.filter(
-    e => e.alive && e.owner === faction && e.type !== faction
+    e => e.alive && e.owner === faction && e.type !== factionObj.leaderType
   ).length;
   const nodeBonus = countHeldNodes(faction, state.witchObjectives ?? [], state.entities);
-
-  if (isHero) {
-    const timeBonus = (state.phase === Phase.DAY || state.phase === Phase.DAWN) ? 1 : 0;
-    return 3 + timeBonus + Math.min(extras, 5) + nodeBonus;
-  } else {
-    const timeBonus = state.phase === Phase.NIGHT ? 1 : 0;
-    return 3 + timeBonus + Math.min(extras, 3) + nodeBonus;
-  }
+  return factionObj.computeBudget(state.phase, extras, nodeBonus);
 }
 
 /** Per-player budget — used by resolvePlansMP. */
 function budgetForPlayer(state, playerId, faction) {
-  const isHero     = faction === 'hero';
-  const leaderType = isHero ? 'hero' : 'witch';
-  const extras     = state.entities.filter(
-    e => e.alive && e.ownerId === playerId && e.type !== leaderType
+  const factionObj = getFaction(faction);
+  const extras = state.entities.filter(
+    e => e.alive && e.ownerId === playerId && e.type !== factionObj.leaderType
   ).length;
   const nodeBonus = countHeldNodes(faction, state.witchObjectives ?? [], state.entities);
-
-  if (isHero) {
-    const timeBonus = (state.phase === Phase.DAY || state.phase === Phase.DAWN) ? 1 : 0;
-    return 3 + timeBonus + Math.min(extras, 5) + nodeBonus;
-  } else {
-    const timeBonus = state.phase === Phase.NIGHT ? 1 : 0;
-    return 3 + timeBonus + Math.min(extras, 3) + nodeBonus;
-  }
+  return factionObj.computeBudget(state.phase, extras, nodeBonus);
 }
 
 // ── Leader-death scatter ─────────────────────────────────────────────────────
