@@ -1,5 +1,14 @@
 [
   {
+    "version": "1.3.2",
+    "date": "2026-04-02",
+    "summary": "Bug fixes",
+    "notes": [
+      "Use ad-hoc code signing for macOS to prevent Gatekeeper \"damaged\" error",
+      "Sync package-lock.json version to 1.3.1"
+    ]
+  },
+  {
     "version": "1.3.1",
     "date": "2026-04-02",
     "summary": "Bug fixes",
