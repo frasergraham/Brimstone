@@ -36,7 +36,7 @@
     "cap:sync:android": "node scripts/cap-copy-web.js && npx cap sync android",
     "cap:open:ios": "npx cap open ios",
     "cap:open:android": "npx cap open android",
-    "cap:run:ios": "node scripts/cap-copy-web.js && npx cap run ios",
+    "cap:run:ios": "node scripts/cap-copy-web.js && npx cap sync ios && node scripts/run-ios-sim.js",
     "cap:run:android": "node scripts/cap-copy-web.js && npx cap run android"
   },
   "devDependencies": {

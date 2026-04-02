@@ -2185,7 +2185,7 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   #game-screen { height: 100dvh; }
 
   /* Header: tighter */
-  #game-header { padding: 0.35rem 0.75rem; gap: 0.5rem; flex-shrink: 0; }
+  #game-header { padding: max(0.35rem, env(safe-area-inset-top)) max(0.75rem, env(safe-area-inset-right)) 0.35rem max(0.75rem, env(safe-area-inset-left)); gap: 0.5rem; flex-shrink: 0; }
   .header-title { display: none; }
   #turn-info { flex-wrap: wrap; gap: 0.3rem 0.6rem; }
   .phase-hint { display: none; }

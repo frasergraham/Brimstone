@@ -39,8 +39,8 @@ if (isNativeMobile && !window.BRIMSTONE_SERVER) {
 
 async function _hideSplash() {
   try {
-    const { SplashScreen } = await import('@capacitor/splash-screen');
-    await SplashScreen.hide();
+    const SplashScreen = window.Capacitor?.Plugins?.SplashScreen;
+    if (SplashScreen) await SplashScreen.hide();
   } catch { /* plugin unavailable — ignore */ }
 }
 
@@ -57,7 +57,8 @@ if (isNativeMobile) {
 
 async function _wireBackButton() {
   try {
-    const { App } = await import('@capacitor/app');
+    const App = window.Capacitor?.Plugins?.App;
+    if (!App) return;
     App.addListener('backButton', ({ canGoBack }) => {
       // Close any open overlay / dialog first
       const overlays = [
