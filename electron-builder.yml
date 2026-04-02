@@ -37,7 +37,7 @@ mac:
   target:
     - dmg
     - zip   # required for electron-updater differential downloads
-  identity: null  # ad-hoc sign (no Apple Developer certificate required)
+  forceCodeSigning: false
 
 win:
   target:
