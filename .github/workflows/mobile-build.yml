@@ -1,0 +1,130 @@
+name: Mobile Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Upload artifacts to GitHub Releases'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Sync web assets to iOS
+        run: npm run cap:sync:ios
+
+      - name: Build iOS archive
+        working-directory: ios/App
+        run: |
+          xcodebuild archive \
+            -workspace App.xcworkspace \
+            -scheme App \
+            -archivePath build/App.xcarchive \
+            -configuration Release \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            | tail -20
+
+      # Optional: Export .ipa when signing secrets are configured
+      # - name: Export IPA
+      #   if: secrets.IOS_EXPORT_PLIST
+      #   working-directory: ios/App
+      #   run: |
+      #     xcodebuild -exportArchive \
+      #       -archivePath build/App.xcarchive \
+      #       -exportPath build/export \
+      #       -exportOptionsPlist ${{ secrets.IOS_EXPORT_PLIST }}
+
+      # Optional: Upload to TestFlight when App Store Connect API key is configured
+      # - name: Upload to TestFlight
+      #   if: secrets.APPSTORE_CONNECT_API_KEY
+      #   run: xcrun altool --upload-app -f ios/App/build/export/App.ipa --apiKey ... --apiIssuer ...
+
+      - name: Upload iOS archive
+        if: github.ref_type == 'tag' || inputs.publish
+        uses: actions/upload-artifact@v4
+        with:
+          name: brimstone-ios-archive
+          path: ios/App/build/App.xcarchive
+
+  build-android:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Sync web assets to Android
+        run: npm run cap:sync:android
+
+      - name: Set Android minSdkVersion
+        working-directory: android
+        run: |
+          # Ensure minSdkVersion is 26+ for ES module support in WebView
+          sed -i 's/minSdkVersion = .*/minSdkVersion = 26/' variables.gradle || true
+
+      - name: Build Android APK (debug, unsigned)
+        working-directory: android
+        run: ./gradlew assembleDebug
+
+      # Optional: Build signed release APK/AAB when keystore secrets are configured
+      # - name: Decode keystore
+      #   if: secrets.ANDROID_KEYSTORE
+      #   run: echo "${{ secrets.ANDROID_KEYSTORE }}" | base64 -d > android/app/release.keystore
+      #
+      # - name: Build release AAB
+      #   if: secrets.ANDROID_KEYSTORE
+      #   working-directory: android
+      #   run: ./gradlew bundleRelease
+      #   env:
+      #     KEYSTORE_PATH: app/release.keystore
+      #     KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      #     KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: brimstone-android-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload to GitHub Release
+        if: github.ref_type == 'tag' || inputs.publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: android/app/build/outputs/apk/debug/app-debug.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

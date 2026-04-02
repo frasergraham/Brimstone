@@ -597,6 +597,9 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   align-items: center;
   gap: 0.75rem;
   padding: 0.4rem 0.75rem;
+  padding-top: max(0.4rem, env(safe-area-inset-top));
+  padding-left: max(0.75rem, env(safe-area-inset-left));
+  padding-right: max(0.75rem, env(safe-area-inset-right));
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -2555,7 +2558,7 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   right: 0;
   top: 0;
   bottom: 0;
-  width: 220px;
+  width: calc(220px + env(safe-area-inset-right));
   background: rgba(13, 17, 23, 0.95);
   border-left: 1px solid rgba(255,255,255,0.1);
   display: flex;

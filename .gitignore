@@ -8,3 +8,11 @@ assets/generated/
 .DS_Store
 scripts/map-renders/
 dist/
+
+# Capacitor build artifacts
+www/
+ios/App/Pods/
+ios/capacitor-cordova-ios-plugins/
+android/.gradle/
+android/app/build/
+android/capacitor-cordova-android-plugins/
