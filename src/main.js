@@ -1506,6 +1506,10 @@ if (window.electronAPI) {
   const updateBar = document.getElementById('electron-update-bar');
   const updateMsg = document.getElementById('electron-update-msg');
 
+  updateBar?.addEventListener('click', () => {
+    window.electronAPI?.restartAndUpdate();
+  });
+
   window.electronAPI.onUpdateAvailable((ver) => {
     if (updateBar && updateMsg) {
       updateMsg.textContent = `Downloading update v${ver}...`;
