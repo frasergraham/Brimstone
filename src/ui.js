@@ -1326,11 +1326,14 @@ export class UIController {
           const hasDoubler = entity.type === EntityType.SURVIVOR && entity.ability === SurvivorAbility.FORTIFY_DOUBLE;
           const tileData   = state.tiles.get(hexKey(entity.col, entity.row));
           const cur        = tileData ? tileData.fortifyLevel : 0;
+          const metalGain   = Math.min(4, cur + 2) - cur;
+          const doublerGain = Math.min(4, cur + 2) - cur;
+          const woodGain    = Math.min(4, cur + 1) - cur;
           const lbl = hasMetal
-            ? `⚙ Reinforce +${Math.min(4, cur + 2)} DEF (1⚙)`
+            ? `⚙ Reinforce +${metalGain} DEF (1⚙)`
             : hasDoubler
-              ? `🪵 Fortify +${Math.min(4, cur + 2)} DEF ★ (1🪵)`
-              : `🪵 Fortify +${Math.min(4, cur + 1)} DEF (1🪵)`;
+              ? `🪵 Fortify +${doublerGain} DEF ★ (1🪵)`
+              : `🪵 Fortify +${woodGain} DEF (1🪵)`;
           regularHtml += btn(lbl, 'fortify', (cantAfford || !hasAct) ? 'disabled' : '', `data-action="fortify"`);
           break;
         }
@@ -2680,10 +2683,11 @@ export class UIController {
 
       // Collect kills, survivors found, summons, and resource flows from steps.
       // Fog-of-war filtering: skip opponent-only events the player can't see.
-      const kills     = [];
-      const survivors = [];
-      const summons   = [];
-      const foundRes  = {}; // icon → count  (from explore loot)
+      const kills      = [];
+      const survivors  = [];
+      const summons    = [];
+      const equipFinds = []; // dedicated lines for horse/weapon discoveries
+      const foundRes   = {}; // icon → count  (from explore loot)
       const usedRes   = {}; // icon → count  (from summon/fortify/use-item)
       const _addRes = (map, icon, n = 1) => { map[icon] = (map[icon] || 0) + n; };
       const RES_ICON_MAP = { wood: '🪵', metal: '⚙', food: '🍞', silver: '🥈', scripture: '📜', herbs: '🌿' };
@@ -2731,8 +2735,14 @@ export class UIController {
               for (const item of ev.result.lootItems ?? []) {
                 if (!item.startsWith('+')) continue;
                 const icon = item.slice(1);
-                // Skip weapons (⚔) and horses (🐴) — not consumable resources
-                if (icon !== '⚔' && icon !== '🐴') _addRes(foundRes, icon);
+                if (icon === '🐴' || icon === '⚔') {
+                  // Extract the descriptive log line for this equipment find
+                  const keyword = icon === '🐴' ? 'horse' : 'Found a ';
+                  const logLine = (ev.result.log ?? []).find(l => l.toLowerCase().includes(keyword));
+                  equipFinds.push({ icon, log: logLine || (icon === '🐴' ? 'Found a horse!' : 'Found a weapon!') });
+                } else {
+                  _addRes(foundRes, icon);
+                }
               }
             }
             // Resources spent: summon — use result.spent for exact breakdown
@@ -2817,6 +2827,10 @@ export class UIController {
         }
         for (const s of summons) {
           html += `<div class="summary-summon">✦ ${s}</div>`;
+        }
+
+        for (const eq of equipFinds) {
+          html += `<div class="summary-equip">${eq.icon === '🐴' ? '🐴' : '⚔'} ${eq.log}</div>`;
         }
 
         // Resource economy rows

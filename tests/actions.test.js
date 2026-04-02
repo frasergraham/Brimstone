@@ -880,8 +880,24 @@ describe('executeFortify', () => {
     const t = state.tiles.get(hexKey(hero.col, hero.row));
     t.fortifyLevel = 3; // one more metal (+2) would reach 5, should cap at 4
 
-    executeFortify(state, hero);
+    const r = executeFortify(state, hero);
     assert.equal(t.fortifyLevel, 4, 'Fortify level should cap at 4');
+    assert.equal(r.defGain, 1, 'defGain should reflect capped gain (4 - 3 = 1)');
+  });
+
+  test('defGain returns actual gain for metal and wood', () => {
+    const state = freshState();
+    const hero = state.hero;
+    state.inventory.shared[ResourceType.METAL] = 1;
+    const t = state.tiles.get(hexKey(hero.col, hero.row));
+    t.fortifyLevel = 0;
+
+    const r1 = executeFortify(state, hero);
+    assert.equal(r1.defGain, 2, 'Metal should give defGain of 2');
+
+    state.inventory.shared[ResourceType.WOOD] = 1;
+    const r2 = executeFortify(state, hero);
+    assert.equal(r2.defGain, 1, 'Wood should give defGain of 1');
   });
 
   test('fails when tile is already at max fortify (level 4)', () => {

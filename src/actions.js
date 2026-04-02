@@ -768,14 +768,18 @@ export function executeFortify(state, actor) {
 
   if (metalCount > 0) {
     shared[ResourceType.METAL]--;
-    t.fortifyLevel = Math.min(4, t.fortifyLevel + 2);
-    return { success: true, log: [`${actor.displayName} reinforces with metal! (now +${t.fortifyLevel} DEF)`], cost: 1 };
+    const prev = t.fortifyLevel;
+    t.fortifyLevel = Math.min(4, prev + 2);
+    const defGain = t.fortifyLevel - prev;
+    return { success: true, log: [`${actor.displayName} reinforces with metal! (now +${t.fortifyLevel} DEF)`], cost: 1, defGain };
   } else if (woodCount > 0) {
     shared[ResourceType.WOOD]--;
     const gain = hasDoubler ? 2 : 1;
-    t.fortifyLevel = Math.min(4, t.fortifyLevel + gain);
+    const prev = t.fortifyLevel;
+    t.fortifyLevel = Math.min(4, prev + gain);
+    const defGain = t.fortifyLevel - prev;
     const star = hasDoubler ? ' ★' : '';
-    return { success: true, log: [`${actor.displayName} fortifies with wood!${star} (now +${t.fortifyLevel} DEF)`], cost: 1 };
+    return { success: true, log: [`${actor.displayName} fortifies with wood!${star} (now +${t.fortifyLevel} DEF)`], cost: 1, defGain };
   }
 
   return { success: false, log: ['No wood or metal in shared supplies.'] };
