@@ -17,6 +17,15 @@ import {
 
 const { fakeCanvas } = installGlobalMocks();
 
+// platform.js accesses localStorage at module-init time — provide a stub
+const _store = {};
+globalThis.localStorage = {
+  getItem: (k) => _store[k] ?? null,
+  setItem: (k, v) => { _store[k] = String(v); },
+  removeItem: (k) => { delete _store[k]; },
+  clear: () => { for (const k of Object.keys(_store)) delete _store[k]; },
+};
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root      = join(__dirname, '..');
 
