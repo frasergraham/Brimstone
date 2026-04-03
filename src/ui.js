@@ -490,7 +490,7 @@ export class UIController {
    * @param {'hero'|'witch'} faction  Which faction the human controls.
    * @param {number} budget           Action budget for this round.
    */
-  enterPlanningMode(faction, budget, timeoutMs = 0) {
+  enterPlanningMode(faction, budget, timeoutMs = 0, { showPhaseModal = true } = {}) {
     this._planMode         = true;
     this._planFaction      = faction;
     this._planBudget       = budget;
@@ -557,7 +557,8 @@ export class UIController {
     }
 
     // Show a dismissible phase-info modal so the player always knows current conditions.
-    this._showPhaseModal(faction, budget);
+    // Skip when re-entering planning after an inline replay (player already saw it this round).
+    if (showPhaseModal && !this.tutorialMode) this._showPhaseModal(faction, budget);
 
     // If attrition just increased, show a blocking popup after the toast settles.
     if (this.state.attritionChanged && this.state.attritionLevel > 0) {

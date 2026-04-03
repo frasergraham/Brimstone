@@ -4610,7 +4610,7 @@ async function _replayLastTurnInline() {
   const budget = state.playerActionsLeft?.get(mp?.myPlayerId)
     ?? (mp?.myFaction === 'hero' ? state.heroActionsLeft : state.witchActionsLeft);
   ui._hasReplayHistory = _onlineRoundHistory.length > 0;
-  ui.enterPlanningMode(mp.myFaction, budget, 0);
+  ui.enterPlanningMode(mp.myFaction, budget, 0, { showPhaseModal: false });
   ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
   ui.onReturnToMenu = () => _showOnlineScreen();
   ui.onReplayLastTurn = () => _replayLastTurnInline();
@@ -4664,10 +4664,20 @@ async function _playReconnectReplay(replay) {
 
   if (mp?.myFaction) {
     setMode(AppMode.SUMMARY);
-    await ui._showResolutionSummary(steps, replay.roundNum, {
-      prevScore, prevNodes, humanFaction: mp.myFaction, fogOfWar: state.fogOfWar,
-      gameOver: false,
-    });
+    let action;
+    do {
+      action = await ui._showResolutionSummary(steps, replay.roundNum, {
+        prevScore, prevNodes, humanFaction: mp.myFaction, fogOfWar: state.fogOfWar,
+        gameOver: false,
+      });
+      if (action === 'replay') {
+        state.entities = preEntities;
+        redraw();
+        await _animateResolutionSteps(steps, currentEntities, redraw, mp.myFaction, mp.myPlayerId ?? null);
+        state.entities = currentEntities;
+        setMode(AppMode.SUMMARY);
+      }
+    } while (action === 'replay');
     setMode(AppMode.PLANNING);
     ui._animateScoreBar(prevScore, prevNodes);
   }
