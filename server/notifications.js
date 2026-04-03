@@ -102,8 +102,9 @@ export function shouldNotify(roomId, playerId, { isAsync, isConnected } = {}) {
  * "Waiting on you!"
  */
 export async function notifyWaitingOnYou(playerId, gameInfo, opts) {
-  if (!shouldNotify(gameInfo.roomId, playerId, opts)) return;
-  if (!_shouldSend(gameInfo.roomId, playerId, 'waiting_on_you')) return;
+  console.log(`[Notify] notifyWaitingOnYou called for player=${playerId} room=${gameInfo.roomId} isAsync=${opts?.isAsync}`);
+  if (!shouldNotify(gameInfo.roomId, playerId, opts)) { console.log(`[Notify] shouldNotify=false, skipping`); return; }
+  if (!_shouldSend(gameInfo.roomId, playerId, 'waiting_on_you')) { console.log(`[Notify] dedup suppressed waiting_on_you`); return; }
   _record(gameInfo.roomId, playerId, 'waiting_on_you');
 
   if (hasDeviceTokens(playerId)) {
@@ -127,8 +128,9 @@ export async function notifyWaitingOnYou(playerId, gameInfo, opts) {
  * Notify a player that a new round is ready (everyone submitted, resolution done).
  */
 export async function notifyRoundReady(playerId, gameInfo, opts) {
-  if (!shouldNotify(gameInfo.roomId, playerId, opts)) return;
-  if (!_shouldSend(gameInfo.roomId, playerId, 'round_ready')) return;
+  console.log(`[Notify] notifyRoundReady called for player=${playerId} room=${gameInfo.roomId} isAsync=${opts?.isAsync}`);
+  if (!shouldNotify(gameInfo.roomId, playerId, opts)) { console.log(`[Notify] shouldNotify=false, skipping`); return; }
+  if (!_shouldSend(gameInfo.roomId, playerId, 'round_ready')) { console.log(`[Notify] dedup suppressed round_ready`); return; }
   _record(gameInfo.roomId, playerId, 'round_ready');
 
   if (hasDeviceTokens(playerId)) {
