@@ -1,5 +1,6 @@
 // Entry point: wires all modules, setup screen flow, resize
 import { onInactiveChange } from './platform.js'; // must be first — sets server globals for Capacitor builds
+import { AppMode, getMode, setMode, isInGame, isAnimating, shouldBufferMessages, onModeChange } from './app-mode.js';
 import { initServerSelector } from './server-selector.js';
 import { GameState, Player } from './game.js';
 import { Renderer }          from './renderer.js';
@@ -77,7 +78,7 @@ if (!window.electronAPI) {
 
 let state, renderer, ui, witchAI, heroAI;
 let _autoplay  = false;
-let _resolving = false;           // true while _animateResolutionSteps is running
+// _inGame and _resolving replaced by AppMode state machine (src/app-mode.js)
 let _pendingPlanningPhase = null; // buffered onPlanningPhase payload received during animation
 let _pendingSubmissions   = [];   // buffered playerSubmitted messages received during animation
 let _tutorialConductor = null;    // non-null while a tutorial session is active
@@ -87,13 +88,26 @@ let _gameStartTime = null;        // wall-clock timestamp for game duration trac
 // Accumulated during a session; reset each new/resumed game.
 let _roundHistory        = [];  // SP offline:  { roundNum, preState, steps }[]
 let _onlineRoundHistory  = [];  // MP online:   { roundNum, preState, steps }[]
-let _replayAborted       = false;
-let _replayPaused        = false;
-let _replayGoBack        = false;   // false | 'curr' | 'prev'
-let _replayAtRoundStart  = false;   // true while paused at the pre-animation point of a round
-let _replayActive        = false;   // true while _replayFullGame is running
-let _replaySpeedMult     = 0.5;     // playback speed multiplier (0.5=play, 1.0=ff, 1.5=vff)
-let _replayJumpToEnd     = false;   // true when user wants to skip to the final game state
+// Playback state — only meaningful when getMode() === AppMode.PLAYBACK.
+const _playback = {
+  aborted:      false,
+  paused:       false,
+  goBack:       false,   // false | 'curr' | 'prev'
+  atRoundStart: false,   // true while paused at the pre-animation point of a round
+  speedMult:    0.5,     // 0.5=play, 1.0=ff, 1.5=vff
+  jumpToEnd:    false,   // skip to final game state
+};
+function _resetPlayback() {
+  _playback.aborted = false;
+  _playback.paused = false;
+  _playback.goBack = false;
+  _playback.atRoundStart = false;
+  _playback.speedMult = 0.5;
+  _playback.jumpToEnd = false;
+}
+
+// Keep UIController.appMode in sync with the centralized mode.
+onModeChange((newMode) => { if (ui) ui.appMode = newMode; });
 
 // ── Local game init ───────────────────────────────────────────────────────────
 
@@ -709,12 +723,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     stepsCount: steps.length,
     finalEntitiesCount: finalEntities?.length ?? 0,
     humanFaction, myPlayerId,
-    flags: { _replayGoBack, _replayAborted, _replayJumpToEnd, _autoplay },
+    flags: { goBack: _playback.goBack, aborted: _playback.aborted, jumpToEnd: _playback.jumpToEnd, _autoplay },
   });
-  _resolving = true;
+  setMode(AppMode.RESOLVING);
   for (let i = 0; i < steps.length; i++) {
     // During replay: if BACK or STOP was pressed, abort remaining steps immediately
-    if (_replayGoBack || _replayAborted || _replayJumpToEnd) break;
+    if (_playback.goBack || _playback.aborted || _playback.jumpToEnd) break;
     const step = steps[i];
     // Post-step entities: what the world looks like AFTER this step resolves.
     const postEntities = i + 1 < steps.length ? steps[i + 1].entitySnapshot : finalEntities;
@@ -920,7 +934,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       redrawFn();
     }
 
-    const _suppressDialogs = _replayActive || ui?.speedMode === 'fast' || ui?.speedMode === 'vfast';
+    const _suppressDialogs = getMode() === AppMode.PLAYBACK || ui?.speedMode === 'fast' || ui?.speedMode === 'vfast';
     if (!_suppressDialogs) {
       for (const entry of pendingDialogs) {
         redrawFn();
@@ -1238,23 +1252,23 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   ui?._clearStepContinue();
   state.entities = finalEntities;
   // Skip the final redraw during replay navigation (caller will render the target preState).
-  if (!_replayGoBack && !_replayAborted && !_replayJumpToEnd) {
+  if (!_playback.goBack && !_playback.aborted && !_playback.jumpToEnd) {
     redrawFn();
   }
-  _resolving = false;
+  // Mode transition is caller's responsibility
 }
 
 function _delay(ms) {
-  if (!_replayActive) return new Promise(resolve => setTimeout(resolve, ms));
+  if (getMode() !== AppMode.PLAYBACK) return new Promise(resolve => setTimeout(resolve, ms));
 
   // During replay: poll every ≤50 ms so pause/abort/back take effect immediately.
-  const effective = _replaySpeedMult > 0 ? ms / _replaySpeedMult : ms;
+  const effective = _playback.speedMult > 0 ? ms / _playback.speedMult : ms;
   return new Promise(resolve => {
     let remaining = effective;
     let last = Date.now();
     function tick() {
-      if (_replayAborted || _replayGoBack || _replayJumpToEnd) { resolve(); return; }
-      if (!_replayPaused) {
+      if (_playback.aborted || _playback.goBack || _playback.jumpToEnd) { resolve(); return; }
+      if (!_playback.paused) {
         const now = Date.now();
         remaining -= (now - last);
         last = now;
@@ -1292,6 +1306,7 @@ onInactiveChange((inactive) => {
 });
 
 function initOnline(mirrorState, myFaction, mpClient) {
+  setMode(AppMode.PLANNING);
   state    = mirrorState;
   const canvas = document.getElementById('game-canvas');
 
@@ -2605,7 +2620,7 @@ function _openAsyncGame(roomId) {
 
 function _handleAsyncStateUpdate(msg) {
   // Clean up any stale UI state from a previous connection / interrupted animation
-  _resolving = false;
+  setMode(AppMode.PLANNING);
   const resultDlg = document.getElementById('result-dialog');
   if (resultDlg) resultDlg.style.display = 'none';
   ui?.exitPlanningMode();
@@ -2871,7 +2886,7 @@ async function _asyncWatchLastTurn(lastRound) {
     const entityCount = s.entitySnapshot?.length ?? 0;
     console.log(`  step[${i}]: ${allEvents.length} events, ${entityCount} entities in snapshot`, s);
   }
-  console.log('replay flags:', { _replayGoBack, _replayAborted, _replayJumpToEnd, _resolving, _autoplay });
+  console.log('replay flags:', { goBack: _playback.goBack, aborted: _playback.aborted, jumpToEnd: _playback.jumpToEnd, mode: getMode(), _autoplay });
   console.groupEnd();
 
   // Parse the post-resolution state — this is our animation target
@@ -2912,7 +2927,7 @@ async function _asyncWatchLastTurn(lastRound) {
 
   // Show resolution summary with replay support
   if (ui && _asyncFaction) {
-    _resolving = true;
+    setMode(AppMode.RESOLVING);
     let action;
     do {
       action = await ui._showResolutionSummary(stepsArr, lastRound.roundNum ?? (state.round - 1), {
@@ -2940,10 +2955,10 @@ async function _asyncWatchLastTurn(lastRound) {
         state.myFaction = _asyncFaction;
         await ui._triggerPostRoundEffects();
         redrawOnline();
-        _resolving = true; // re-engage guard for next summary show
+        setMode(AppMode.RESOLVING);
       }
     } while (action === 'replay');
-    _resolving = false;
+    setMode(AppMode.PLANNING);
   }
 }
 
@@ -3194,12 +3209,9 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
   if (!rounds.length || !ui || !renderer) return null;
   const draw = redrawFn ?? redraw;
 
-  _replayAborted      = false;
-  _replayPaused       = !opts.autoPlay;
-  _replayGoBack       = false;
-  _replayAtRoundStart = false;
-  _replayActive       = true;
-  _replaySpeedMult    = 0.5;   // default: PLAY speed
+  _resetPlayback();
+  _playback.paused = !opts.autoPlay;
+  setMode(AppMode.PLAYBACK);
   const savedSpeedMode = ui.speedMode;
   ui.speedMode = 'fast';
 
@@ -3207,41 +3219,41 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
   ui.showReplayHUD(rounds.length, (action) => {
     switch (action) {
       case 'play':
-        _replaySpeedMult = 0.5; _replayPaused = false;
+        _playback.speedMult = 0.5; _playback.paused = false;
         ui.setReplayPlayState('play');
         break;
       case 'ff':
-        _replaySpeedMult = 1.0; _replayPaused = false;
+        _playback.speedMult = 1.0; _playback.paused = false;
         ui.setReplayPlayState('ff');
         break;
       case 'vff':
-        _replaySpeedMult = 2.0; _replayPaused = false;
+        _playback.speedMult = 2.0; _playback.paused = false;
         ui.setReplayPlayState('vff');
         break;
       case 'pause':
-        _replayPaused = true;
+        _playback.paused = true;
         ui.setReplayPlayState('pause');
         break;
       case 'back':
         // Music-player behaviour: back at round start → go to previous round;
         // back mid-animation → restart current round. Either way, implies pause.
-        _replayPaused = true;
-        _replayGoBack = _replayAtRoundStart ? 'prev' : 'curr';
+        _playback.paused = true;
+        _playback.goBack = _playback.atRoundStart ? 'prev' : 'curr';
         ui.setReplayPlayState('pause');
         break;
       case 'end':
-        _replayJumpToEnd = true; _replayPaused = false;
+        _playback.jumpToEnd = true; _playback.paused = false;
         break;
       case 'stop':
         if (opts.stopLabel) {
           // Async mode: stop immediately without confirmation dialog
-          _replayAborted = true; _replayPaused = false;
+          _playback.aborted = true; _playback.paused = false;
         } else {
-          _replayPaused = true;
+          _playback.paused = true;
           ui.setReplayPlayState('pause');
           ui.showReplayExitDialog().then(choice => {
             if (choice === 'exit') {
-              _replayAborted = true; _replayPaused = false;
+              _playback.aborted = true; _playback.paused = false;
             }
             // 'cancel' → stays paused, user presses play to resume
           });
@@ -3267,11 +3279,11 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
   // Outer loop: re-entered when BACK is pressed at the end-of-replay hold screen
   replayOuter: while (true) {
     for (let i = _startFrom; i < rounds.length; i++) {
-      if (_replayAborted) break;
+      if (_playback.aborted) break;
 
       // Jump to end: restore final game state and skip to end-of-replay hold
-      if (_replayJumpToEnd) {
-        _replayJumpToEnd = false;
+      if (_playback.jumpToEnd) {
+        _playback.jumpToEnd = false;
         const lastRound = rounds[rounds.length - 1];
         const lastData = typeof lastRound.preState === 'string'
           ? JSON.parse(lastRound.preState) : lastRound.preState;
@@ -3312,18 +3324,18 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
       draw();
 
       // ── At round start: accept BACK / PAUSE before animation begins ─────────
-      _replayAtRoundStart = true;
-      while (_replayPaused && !_replayAborted && !_replayGoBack && !_replayJumpToEnd) {
+      _playback.atRoundStart = true;
+      while (_playback.paused && !_playback.aborted && !_playback.goBack && !_playback.jumpToEnd) {
         await new Promise(r => setTimeout(r, 50));
       }
-      _replayAtRoundStart = false;
-      if (_replayAborted) break;
-      if (_replayJumpToEnd) continue; // handled at top of loop
+      _playback.atRoundStart = false;
+      if (_playback.aborted) break;
+      if (_playback.jumpToEnd) continue; // handled at top of loop
 
       // BACK pressed while paused at round start → jump to prev/curr round
-      if (_replayGoBack) {
-        const toPrev = _replayGoBack === 'prev';
-        _replayGoBack = false;
+      if (_playback.goBack) {
+        const toPrev = _playback.goBack === 'prev';
+        _playback.goBack = false;
         i = Math.max(-1, toPrev ? i - 2 : i - 1);
         continue;
       }
@@ -3332,7 +3344,7 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
       if (preState.postRoundEvents?.some(ev => ev.flash)) {
         ui._triggerPostRoundEffects();
         await _delay(600);
-        if (_replayAborted) break;
+        if (_playback.aborted) break;
       }
 
       ui.updateReplayHUD();
@@ -3357,13 +3369,13 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
 
       await _animateResolutionSteps(stepsRaw, finalEntities, draw, null, null);
 
-      if (_replayAborted) break;
-      if (_replayJumpToEnd) continue; // handled at top of loop
+      if (_playback.aborted) break;
+      if (_playback.jumpToEnd) continue; // handled at top of loop
 
       // BACK pressed during animation → jump to prev/curr round
-      if (_replayGoBack) {
-        const toPrev = _replayGoBack === 'prev';
-        _replayGoBack = false;
+      if (_playback.goBack) {
+        const toPrev = _playback.goBack === 'prev';
+        _playback.goBack = false;
         i = Math.max(-1, toPrev ? i - 2 : i - 1);
         continue;
       }
@@ -3371,9 +3383,9 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
       // Brief inter-round pause (respects pause/abort flags via _delay)
       if (i < rounds.length - 1) {
         await _delay(300);
-        if (_replayGoBack) {
-          const toPrev = _replayGoBack === 'prev';
-          _replayGoBack = false;
+        if (_playback.goBack) {
+          const toPrev = _playback.goBack === 'prev';
+          _playback.goBack = false;
           i = Math.max(-1, toPrev ? i - 2 : i - 1);
           continue;
         }
@@ -3382,25 +3394,25 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
 
     _startFrom = 0; // reset for any restart
 
-    if (_replayAborted) break replayOuter;
+    if (_playback.aborted) break replayOuter;
 
     // ── End-of-replay hold ──────────────────────────────────────────────────
     // All rounds played — pause and wait for STOP or BACK rather than auto-exiting
-    _replayPaused       = true;
-    _replayAtRoundStart = true;   // treat end-hold as "at round start" for BACK logic
+    _playback.paused       = true;
+    _playback.atRoundStart = true;   // treat end-hold as "at round start" for BACK logic
     ui.setReplayPlayState('pause');
 
-    while (!_replayAborted && !_replayGoBack) {
+    while (!_playback.aborted && !_playback.goBack) {
       await new Promise(r => setTimeout(r, 50));
     }
-    _replayAtRoundStart = false;
+    _playback.atRoundStart = false;
 
-    if (_replayAborted) break replayOuter;
+    if (_playback.aborted) break replayOuter;
 
     // BACK from end: jump to last or second-to-last round (stay paused)
-    if (_replayGoBack) {
-      const toPrev = _replayGoBack === 'prev';
-      _replayGoBack = false;
+    if (_playback.goBack) {
+      const toPrev = _playback.goBack === 'prev';
+      _playback.goBack = false;
       _startFrom = toPrev ? Math.max(0, rounds.length - 2) : Math.max(0, rounds.length - 1);
       continue replayOuter;
     }
@@ -3414,13 +3426,8 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
     if (stopBtn) { stopBtn.textContent = '■'; stopBtn.title = 'Stop'; }
   }
   ui.hideReplayHUD();
-  _replayActive       = false;
-  _replayAborted      = false;
-  _replayPaused       = false;
-  _replayGoBack       = false;
-  _replayAtRoundStart = false;
-  _replayJumpToEnd    = false;
-  _replaySpeedMult    = 0.5;
+  setMode(AppMode.MENU);
+  _resetPlayback();
   ui.speedMode        = savedSpeedMode;
   // Caller is responsible for navigation (e.g. _doRestart() or showing setup screen)
 }
@@ -3567,9 +3574,10 @@ async function _startMpReplay(rounds, gameMeta) {
 function _showOnlineScreen() {
   if (mp?.connected) mp.clearRoom();
   // Clear game state so the next onState triggers initOnline
-  state = null;
+  setMode(AppMode.MENU);
+  state    = null;
   renderer = null;
-  ui = null;
+  ui       = null;
   document.getElementById('game-screen').style.display  = 'none';
   document.getElementById('setup-screen').style.display = '';
   showStep('online');
@@ -4581,7 +4589,7 @@ async function _applyOnlinePlanningPhase(payload) {
 
 /** Replay the last resolved round inline (triggered by header button). */
 async function _replayLastTurnInline() {
-  if (!_onlineRoundHistory.length || !ui || !state || !renderer || _resolving) return;
+  if (!_onlineRoundHistory.length || !ui || !state || !renderer || isAnimating()) return;
 
   // Save current plan state so we can restore it after replay
   const savedPlans = new Map(ui._unitPlans);
@@ -4655,12 +4663,12 @@ async function _playReconnectReplay(replay) {
   redraw();
 
   if (mp?.myFaction) {
-    _resolving = true;
+    setMode(AppMode.SUMMARY);
     await ui._showResolutionSummary(steps, replay.roundNum, {
       prevScore, prevNodes, humanFaction: mp.myFaction, fogOfWar: state.fogOfWar,
       gameOver: false,
     });
-    _resolving = false;
+    setMode(AppMode.PLANNING);
     ui._animateScoreBar(prevScore, prevNodes);
   }
 }
@@ -4690,8 +4698,8 @@ function _createMpClient() {
         return;
       }
 
-      // Suppress mid-resolution state pushes — the animation owns state.entities right now.
-      if (_resolving) return;
+      // Suppress state pushes while animating or showing summary — animation owns state.entities.
+      if (shouldBufferMessages()) return;
 
       // Already in game — update in-place (keeps renderer pan/zoom)
 
@@ -4719,7 +4727,7 @@ function _createMpClient() {
       redrawOnline();
 
       // If the game just ended (e.g. resignation), show summary immediately
-      if (state.gameOver && !_resolving) {
+      if (state.gameOver && !isAnimating()) {
         ui._showResolutionSummary([], state.round, {
           gameOver: true,
           winner: state.winner,
@@ -4812,26 +4820,29 @@ function _createMpClient() {
     },
 
     onPlayerSubmitted({ playerId, name, faction }) {
-      if (_resolving) { _pendingSubmissions.push({ playerId, name, faction }); return; }
+      if (!isInGame()) return;
+      if (shouldBufferMessages()) { _pendingSubmissions.push({ playerId, name, faction }); return; }
       if (ui) ui._onPlayerSubmitted(playerId, name, faction);
     },
 
     onPlayerPresence(players) {
+      if (!isInGame()) return;
       if (ui) ui._onPlayerPresence(players);
     },
 
     onTimerReset(timeoutMs) {
+      if (!isInGame()) return;
       if (ui) ui.resetCountdown(timeoutMs);
     },
 
     onPlayerTakenOver({ playerId, playerName }) {
-      // Store for round summary display
+      if (!isInGame() || !state) return;
       if (!state._takeoverMessages) state._takeoverMessages = [];
       state._takeoverMessages.push(`${playerName} has been taken over by AI`);
     },
 
     onPlayerResigned({ playerId, playerName }) {
-      // Store for round summary display (similar to takeover)
+      if (!isInGame() || !state) return;
       if (!state._takeoverMessages) state._takeoverMessages = [];
       state._takeoverMessages.push(`${playerName} resigned — replaced by AI`);
     },
@@ -4874,9 +4885,9 @@ function _createMpClient() {
     },
 
     onPlanningPhase(payload) {
-      if (!ui || !mp) return;
-      // If the resolution animation is still running, defer until it finishes.
-      if (_resolving) {
+      if (!isInGame() || !ui || !mp) return;
+      // If animating or showing summary, defer until it finishes.
+      if (shouldBufferMessages()) {
         _pendingPlanningPhase = payload;
         return;
       }
@@ -4884,12 +4895,13 @@ function _createMpClient() {
     },
 
     onOpponentReady() {
+      if (!isInGame()) return;
       const statusEl = document.getElementById('plan-status');
       if (statusEl) statusEl.textContent = 'Opponent ready — waiting for resolution…';
     },
 
     onResolutionComplete({ steps, finalState }) {
-      if (!ui || !renderer) return;
+      if (!isInGame() || !ui || !renderer) return;
       state.resolving = true;   // flag before exitPlanningMode fires its redraw
       ui.exitPlanningMode();
 
@@ -4931,10 +4943,10 @@ function _createMpClient() {
         redrawOnline();
 
         // Show post-resolution summary modal for human players.
-        // Keep _resolving = true for the whole summary+replay block so that any
+        // Keep mode as SUMMARY for the whole summary+replay block so that any
         // incoming onPlanningPhase messages are buffered, not immediately applied.
         if (ui && mp?.myFaction) {
-          _resolving = true;
+          setMode(AppMode.SUMMARY);
           let action;
           do {
             action = await ui._showResolutionSummary(steps, (finalState.round ?? state.round) - 1, {
@@ -4965,11 +4977,10 @@ function _createMpClient() {
                   }
                 }
               }
-              // _animateResolutionSteps sets _resolving = false at end; re-engage
-              // the guard so onPlanningPhase stays buffered during the next summary show.
-              _resolving = true;
+              // setMode handles the transition; re-engage RESOLVING
+              // so onPlanningPhase stays buffered during the next summary show.
+              setMode(AppMode.RESOLVING);
             } else if (action === 'replay-full') {
-              _resolving = false;
               await _replayFullGame(_onlineRoundHistory, state.winner, state.winReason,
                 state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch',
                 redrawOnline);
@@ -4977,7 +4988,7 @@ function _createMpClient() {
               return;
             }
           } while (action === 'replay');
-          _resolving = false;
+          setMode(AppMode.PLANNING);
           // Animate score bar changes after summary is dismissed
           ui._animateScoreBar(prevScore, prevNodes);
 
