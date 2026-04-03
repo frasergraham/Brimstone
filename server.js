@@ -902,13 +902,18 @@ function route(ws, cs, msg) {
     // ── Room ID registration (sent by client after matchFound) ────────────
     case 'setRoom': {
       if (!cs.player) return;
+      const oldRoomId = cs.roomId;
       const room = getRoom(msg.roomId);
       if (room && (
         room.players.some(s => s.playerId === cs.player.id) ||
         (room.status === 'lobby' && room.slots.some(s => s.playerId === cs.player.id))
       )) {
         cs.roomId = msg.roomId;
+        ws._roomId = msg.roomId;
       }
+      // Broadcast presence to both old and new rooms
+      if (oldRoomId && oldRoomId !== msg.roomId) broadcastPresenceForPlayer(cs.player.id);
+      if (cs.roomId) broadcastPresenceForPlayer(cs.player.id);
       break;
     }
 

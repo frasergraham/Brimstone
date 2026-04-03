@@ -133,22 +133,27 @@ function _notifyOpts(room) {
     isAsync: room.config.isAsync ?? false,
     isConnected: (playerId) => {
       const seat = seatFor(room, playerId);
-      // Treat backgrounded/inactive players as not connected for notifications
-      return seat?.ws?.readyState === 1 && !seat.ws._inactive;
+      if (!seat?.ws || seat.ws.readyState !== 1) return false;
+      // Player is "paying attention" only if app is foregrounded AND they're in this game
+      return !seat.ws._inactive && seat.ws._roomId === room.id;
     },
   };
 }
 
 /** Build the player list with connection/active status for client display. */
 function _buildPlayerList(room) {
-  return room.players.map(s => ({
-    playerId:  s.playerId,
-    name:      s.name,
-    faction:   s.faction,
-    isAI:      s.isAI,
-    connected: s.isAI || (s.ws?.readyState === 1),
-    active:    s.isAI || (s.ws?.readyState === 1 && !s.ws._inactive),
-  }));
+  return room.players.map(s => {
+    const wsOpen = s.ws?.readyState === 1;
+    const inThisRoom = s.ws?._roomId === room.id;
+    return {
+      playerId:  s.playerId,
+      name:      s.name,
+      faction:   s.faction,
+      isAI:      s.isAI,
+      connected: s.isAI || wsOpen,
+      active:    s.isAI || (wsOpen && !s.ws._inactive && inThisRoom),
+    };
+  });
 }
 
 /** Broadcast updated player presence to all connected clients in a room. */
