@@ -3566,6 +3566,8 @@ async function _startMpReplay(rounds, gameMeta) {
 
 function _showOnlineScreen() {
   if (mp?.connected) mp.clearRoom();
+  document.getElementById('game-screen').style.display  = 'none';
+  document.getElementById('setup-screen').style.display = '';
   showStep('online');
   _initMpStep();
   const session = loadSession();
