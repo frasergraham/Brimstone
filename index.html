@@ -338,18 +338,14 @@
         <button id="btn-mp-signin" class="setup-btn primary" style="margin-top:0.4rem">Sign In</button>
       </div>
 
-      <!-- Active and completed online games -->
-      <div class="active-games-section" style="margin-top:0.75rem">
+      <!-- Active and completed online games (hidden until signed in) -->
+      <div id="mp-games-section" class="active-games-section" style="display:none;margin-top:0.75rem">
         <div class="saves-tab-bar">
           <button class="saves-tab active" data-target="active-games-list">In Progress</button>
           <button class="saves-tab"        data-target="mp-completed-list">Completed</button>
         </div>
-        <div id="active-games-list" class="saves-list">
-          <p class="saves-empty">Sign in to see your active games.</p>
-        </div>
-        <div id="mp-completed-list" class="saves-list" style="display:none">
-          <p class="saves-empty">Sign in to see completed games.</p>
-        </div>
+        <div id="active-games-list" class="saves-list"></div>
+        <div id="mp-completed-list" class="saves-list" style="display:none"></div>
       </div>
 
       <!-- Online action buttons (shown after sign-in) -->
@@ -626,10 +622,6 @@
           <span class="cg-toggle-track"></span>
         </label>
         <span class="cg-option-hint">Invite only — share a code</span>
-      </div>
-      <div id="cg-invite-row" class="cg-option-row" style="display:none">
-        <span class="cg-option-label">Invite players</span>
-        <div id="cg-invite-emails"></div>
       </div>
     </div>
     <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">

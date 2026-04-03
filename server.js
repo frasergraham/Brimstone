@@ -25,7 +25,7 @@ import { pruneStaleAndIncompatibleSaves,
          getSaveRounds }                                   from './server/saves.js';
 import {
   createLobby, joinLobby, browseLobby,
-  setSlotAI, removeSlotAI, fillAllWithAI, startGame, leaveLobby,
+  setSlotAI, removeSlotAI, fillAllWithAI, startGame, leaveLobby, resignGame, sendSlotInvite as sendSlotInviteHandler,
   handleAction, handleEndTurn, handlePlanSubmit,
   handleDisconnect, handleReconnect,
   resumeGame, adminResumeGame,
@@ -811,6 +811,18 @@ function route(ws, cs, msg) {
     case 'leaveLobby': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
       leaveLobby(cs.player.id, msg.roomId);
+      break;
+    }
+
+    case 'resignGame': {
+      if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
+      resignGame(cs.player.id, msg.roomId, ws);
+      break;
+    }
+
+    case 'sendSlotInvite': {
+      if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
+      sendSlotInviteHandler(cs.player, msg.roomId, msg.slotIndex, msg.email);
       break;
     }
 

@@ -2189,37 +2189,53 @@ function _renderSaves(saves) {
 
   list.innerHTML = '';
   for (const s of saves) {
-    const myFaction  = s.hero_player_id  === session?.id ? 'hero' : 'witch';
-    const oppName    = myFaction === 'hero' ? (s.witch_name || 'Witch') : (s.hero_name || 'Hero');
-    const factionSymbol = myFaction === 'hero' ? '⚔' : '✦';
+    const pps = s.players_per_side ?? 1;
     const phaseLabel = { dawn: '🌅 Dawn', day: '☀ Day', dusk: '🌇 Dusk', night: '🌙 Night' }[s.phase] ?? s.phase;
+    const mapLabel = (s.map_size ?? 'standard').charAt(0).toUpperCase() + (s.map_size ?? 'standard').slice(1);
+    const ago = s.updated_at ? _timeAgo(s.updated_at) : '';
 
-    // Turn timeout label
-    const intervalMs = s.turn_interval_ms || 90000;
-    const timeoutLabel = intervalMs >= 86400000 ? `${Math.round(intervalMs / 86400000)}d turns`
-                       : intervalMs >= 3600000  ? `${Math.round(intervalMs / 3600000)}h turns`
-                       : intervalMs >= 60000    ? `${Math.round(intervalMs / 60000)}m turns`
-                       : `${Math.round(intervalMs / 1000)}s turns`;
+    // Title: "1v1 vs Name" for 1v1, "NvN Game" for larger
+    let title;
+    if (pps <= 1) {
+      const myFaction = s.hero_player_id === session?.id ? 'hero' : 'witch';
+      const oppName = myFaction === 'hero' ? (s.witch_name || 'Witch') : (s.hero_name || 'Hero');
+      const sym = myFaction === 'hero' ? '⚔' : '✦';
+      title = `${sym} vs ${_esc(oppName)}`;
+    } else {
+      title = `${pps}v${pps} Game`;
+    }
 
-    // Action status
-    const statusLabel = s.status === 'lobby' ? 'In lobby'
-                      : s.action_needed      ? 'Your turn'
-                      : 'Waiting';
-    const statusClass = s.action_needed ? 'action-needed' : '';
+    // Button label
+    const btnLabel = s.status === 'lobby' ? 'View'
+                   : s.action_needed      ? 'Plan Turn'
+                   : 'View';
+    const btnClass = s.action_needed ? 'setup-btn primary' : 'setup-btn';
 
     const entry = document.createElement('div');
-    entry.className = 'save-entry';
+    entry.className = 'save-entry' + (s.action_needed ? ' save-action-needed' : '');
     entry.innerHTML = `
+      ${s.action_needed ? '<span class="save-dot"></span>' : ''}
       <div class="save-entry-info">
-        <div class="save-entry-title">${factionSymbol} vs ${_esc(oppName)}</div>
-        <div class="save-entry-meta">Round ${s.round || 1} · ${phaseLabel || 'Lobby'} · ${timeoutLabel}</div>
-        <div class="save-entry-status ${statusClass}">${statusLabel}</div>
+        <div class="save-entry-title">${title}</div>
+        <div class="save-entry-meta">Round ${s.round || 1} · ${phaseLabel || 'Lobby'} · ${_esc(mapLabel)}${ago ? ' · ' + ago : ''}</div>
       </div>
-      <button class="setup-btn primary">Rejoin</button>
+      <button class="${_esc(btnClass)}">${btnLabel}</button>
+      <button class="save-resign-btn" title="Resign">✕</button>
     `;
-    entry.querySelector('button').addEventListener('click', () => _resumeSave(s.room_id));
+    entry.querySelector('.' + (s.action_needed ? 'primary' : 'setup-btn') + ':not(.save-resign-btn)').addEventListener('click', () => _resumeSave(s.room_id));
+    entry.querySelector('.save-resign-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      _confirmResign(s.room_id);
+    });
     list.appendChild(entry);
   }
+}
+
+function _confirmResign(roomId) {
+  if (!confirm('Are you sure you want to resign? This cannot be undone.')) return;
+  _ensureAuthed(() => mp.resignGame(roomId));
+  // Refresh the list after a short delay
+  setTimeout(_fetchActiveSaves, 500);
 }
 
 function _resumeSave(roomId) {
@@ -3491,8 +3507,6 @@ document.getElementById('btn-create-game-confirm').addEventListener('click', () 
     const timeoutEl = isAsync
       ? document.getElementById('cg-turn-timeout-async')
       : document.getElementById('cg-turn-timeout-live');
-    const inviteInputs = document.querySelectorAll('#cg-invite-emails input[type="email"]');
-    const inviteEmails = [...inviteInputs].map(i => i.value.trim()).filter(Boolean);
     const config = {
       fog:            document.getElementById('cg-fog').value,
       mapSize:        document.getElementById('cg-map-size').value,
@@ -3501,15 +3515,13 @@ document.getElementById('btn-create-game-confirm').addEventListener('click', () 
       isPrivate:      document.getElementById('cg-private').checked,
       isAsync,
       turnIntervalMs: parseInt(timeoutEl?.value ?? '90000', 10),
-      inviteeEmail:   inviteEmails[0] || null,
-      inviteEmails:   inviteEmails.length ? inviteEmails : null,
     };
     mp.createLobby(config);
     // Transition to lobby card happens in onLobbyJoined callback
   });
 });
 
-// Mode toggle — swap timeout dropdowns and show/hide invite emails
+// Mode toggle — swap timeout dropdowns
 function _updateCreateGameMode() {
   const isAsync = document.querySelector('input[name="cg-mode"]:checked')?.value === 'async';
   const liveEl  = document.getElementById('cg-turn-timeout-live');
@@ -3521,39 +3533,6 @@ function _updateCreateGameMode() {
 for (const radio of document.querySelectorAll('input[name="cg-mode"]')) {
   radio.addEventListener('change', _updateCreateGameMode);
 }
-
-// Rebuild invite email fields when player count changes
-function _rebuildInviteEmails() {
-  const pps = parseInt(document.querySelector('input[name="cg-pps"]:checked')?.value ?? '1', 10);
-  const totalPlayers = pps * 2;
-  const inviteCount = totalPlayers - 1;
-  const container = document.getElementById('cg-invite-emails');
-  const inviteRow = document.getElementById('cg-invite-row');
-  if (!container || !inviteRow) return;
-  container.innerHTML = '';
-  for (let i = 0; i < inviteCount; i++) {
-    const input = document.createElement('input');
-    input.type = 'email';
-    input.className = 'setup-input';
-    input.placeholder = `Player ${i + 2} email (optional)`;
-    input.autocomplete = 'email';
-    input.style.cssText = 'margin:0 0 0.3rem;font-size:0.85rem';
-    container.appendChild(input);
-  }
-}
-
-for (const radio of document.querySelectorAll('input[name="cg-pps"]')) {
-  radio.addEventListener('change', _rebuildInviteEmails);
-}
-
-// Show invite row when private is checked
-document.getElementById('cg-private')?.addEventListener('change', (e) => {
-  const inviteRow = document.getElementById('cg-invite-row');
-  if (inviteRow) {
-    inviteRow.style.display = e.target.checked ? '' : 'none';
-    if (e.target.checked) _rebuildInviteEmails();
-  }
-});
 
 // ── Join Game flow ────────────────────────────────────────────────────────────
 
@@ -3829,22 +3808,22 @@ function _renderPublicLobbies(rooms) {
   for (const lobby of rooms) {
     const pps    = lobby.config?.playersPerSide ?? 1;
     const size   = lobby.config?.mapSize ?? 'standard';
-    const fogMode = lobby.config?.fog ?? 'partial';
-    const fog    = fogMode === 'none' ? 'No Fog' : `Fog: ${fogMode.charAt(0).toUpperCase() + fogMode.slice(1)}`;
     const open   = lobby.slots?.filter(s => s.status === 'empty').length ?? 0;
     const total  = lobby.slots?.length ?? pps * 2;
     const host   = lobby.slots?.find(s => s.playerId === lobby.hostPlayerId)?.name ?? 'Unknown';
+    const mapLabel = size.charAt(0).toUpperCase() + size.slice(1);
+    const isAsync  = lobby.config?.isAsync;
+    const modeLabel = isAsync ? 'Async' : 'Live';
 
     const entry = document.createElement('div');
-    entry.className = 'save-entry';
+    entry.className = 'save-entry save-entry-joinable';
     entry.innerHTML = `
       <div class="save-entry-info">
         <div class="save-entry-title">⚔ ${_esc(host)}'s game</div>
-        <div class="save-entry-meta">${pps}v${pps} · ${_esc(size.charAt(0).toUpperCase() + size.slice(1))} · ${fog} · ${total - open}/${total} players</div>
+        <div class="save-entry-meta">${pps}v${pps} · ${_esc(mapLabel)} · ${modeLabel} · ${total - open}/${total} players</div>
       </div>
-      <button class="setup-btn primary">Join</button>
     `;
-    entry.querySelector('button').addEventListener('click', () => {
+    entry.addEventListener('click', () => {
       _ensureAuthed(() => mp.joinLobby(lobby.id));
     });
     list.appendChild(entry);
@@ -3949,11 +3928,25 @@ function _renderLobby(lobby) {
         // empty slot
         row.innerHTML = `<span class="lobby-slot-name empty-slot">Waiting…</span>`;
         if (isHost) {
+          const slotActions = document.createElement('div');
+          slotActions.className = 'lobby-slot-actions';
+
+          // Invite button
+          const inviteBtn = document.createElement('button');
+          inviteBtn.className = 'setup-btn secondary lobby-slot-btn';
+          inviteBtn.textContent = '✉ Invite';
+          inviteBtn.addEventListener('click', () => {
+            const slotIdx = lobby.slots.indexOf(slot);
+            _showSlotInvitePopup(lobby, slotIdx, slot.faction, inviteBtn);
+          });
+          slotActions.appendChild(inviteBtn);
+
+          // AI selector
           const personalities = slot.faction === 'witch' ? _WITCH_PERSONALITIES : _HERO_PERSONALITIES;
           const select = document.createElement('select');
           select.className = 'setup-select lobby-personality-select';
           // Hero personalities (except balanced) are temporarily disabled pending tuning.
-          select.innerHTML = '<option value="">— Assign AI —</option>' +
+          select.innerHTML = '<option value="">— AI —</option>' +
             ['random', ...personalities].map(p => {
               const isWitch = slot.faction === 'witch';
               const disabled = !isWitch && p !== 'random' && p !== 'balanced';
@@ -3966,7 +3959,8 @@ function _renderLobby(lobby) {
             mp.setSlotAI(lobby.id, idx, select.value);
             select.value = '';
           });
-          row.appendChild(select);
+          slotActions.appendChild(select);
+          row.appendChild(slotActions);
         }
       }
       col.appendChild(row);
@@ -3979,6 +3973,54 @@ function _renderLobby(lobby) {
   const startBtn = document.getElementById('btn-lobby-start');
   const allFilled = lobby.slots.every(s => s.status !== 'empty');
   startBtn.disabled = !(isHost && allFilled);
+}
+
+function _showSlotInvitePopup(lobby, slotIndex, faction, anchorEl) {
+  // Remove any existing popup
+  document.querySelector('.slot-invite-popup')?.remove();
+
+  const joinKey = (lobby.isPrivate && lobby.code) ? lobby.code : lobby.id;
+  const deepLink = `${location.origin}${location.pathname}#join=${encodeURIComponent(joinKey)}&slot=${slotIndex}`;
+
+  const popup = document.createElement('div');
+  popup.className = 'slot-invite-popup';
+  popup.innerHTML = `
+    <input type="email" class="setup-input" placeholder="Email address" autocomplete="email"
+           style="font-size:0.8rem;margin:0">
+    <div style="display:flex;gap:0.3rem;margin-top:0.3rem">
+      <button class="setup-btn primary" style="font-size:0.75rem;flex:1">Send</button>
+      <button class="setup-btn" style="font-size:0.75rem;flex:1">Copy Link</button>
+    </div>
+  `;
+  const [sendBtn, copyBtn] = popup.querySelectorAll('button');
+  const emailInput = popup.querySelector('input');
+
+  sendBtn.addEventListener('click', () => {
+    const email = emailInput.value.trim();
+    if (!email) return;
+    mp.sendSlotInvite(lobby.id, slotIndex, email);
+    emailInput.value = '';
+    sendBtn.textContent = 'Sent!';
+    setTimeout(() => popup.remove(), 1500);
+  });
+
+  copyBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(deepLink).catch(() => {});
+    copyBtn.textContent = 'Copied!';
+    setTimeout(() => popup.remove(), 1500);
+  });
+
+  anchorEl.parentElement.appendChild(popup);
+  emailInput.focus();
+
+  // Close on outside click
+  const dismiss = (e) => {
+    if (!popup.contains(e.target) && e.target !== anchorEl) {
+      popup.remove();
+      document.removeEventListener('click', dismiss);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', dismiss), 0);
 }
 
 document.getElementById('btn-lobby-populate-ai').addEventListener('click', () => {
@@ -3998,16 +4040,19 @@ document.getElementById('btn-lobby-leave').addEventListener('click', () => {
 });
 
 function _initMpStep() {
-  const session    = loadSession();
-  const signedOut  = document.getElementById('mp-signed-out');
-  const actionBtns = document.getElementById('mp-action-buttons');
+  const session      = loadSession();
+  const signedOut    = document.getElementById('mp-signed-out');
+  const actionBtns   = document.getElementById('mp-action-buttons');
+  const gamesSection = document.getElementById('mp-games-section');
 
   if (session) {
-    signedOut.style.display  = 'none';
-    actionBtns.style.display = '';
+    signedOut.style.display    = 'none';
+    actionBtns.style.display   = '';
+    if (gamesSection) gamesSection.style.display = '';
   } else {
-    signedOut.style.display  = '';
-    actionBtns.style.display = 'none';
+    signedOut.style.display    = '';
+    actionBtns.style.display   = 'none';
+    if (gamesSection) gamesSection.style.display = 'none';
   }
   _updateSessionBar();
 }

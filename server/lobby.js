@@ -923,15 +923,6 @@ export function createLobby(playerId, playerName, ws, config = {}) {
   heroSlot._ws      = ws;
 
   send(ws, { type: 'lobbyJoined', lobby: _lobbyPublic(room) });
-
-  // Send invite emails
-  const emails = (config.inviteEmails || []).filter(e => typeof e === 'string' && e.trim());
-  if (config.inviteeEmail && !emails.length) emails.push(config.inviteeEmail);
-  for (const email of emails) {
-    sendGameInvite(email.trim().toLowerCase(), {
-      roomId: room.id, code: room.code, hostName: playerName,
-    }).catch(() => {});
-  }
 }
 
 /**
@@ -1134,6 +1125,70 @@ export function leaveLobby(playerId, roomId) {
     slot._ws      = null;
     broadcastLobbyUpdate(room);
   }
+}
+
+/**
+ * Resign from an active game. The resigning player loses; opponents win.
+ * Works for both in-memory and hibernated games.
+ */
+export function resignGame(playerId, roomId, ws) {
+  // Try in-memory room first
+  let room = rooms.get(roomId);
+  if (!room) {
+    // Try recovering from DB
+    room = _recoverRoom(roomId);
+  }
+  if (!room || !room.state) {
+    send(ws, { type: 'error', message: 'Game not found.' });
+    return;
+  }
+  if (room.state.gameOver) {
+    send(ws, { type: 'error', message: 'Game is already over.' });
+    return;
+  }
+
+  const seat = room.players.find(
+    s => s.playerId === playerId || s.originalPlayerId === playerId
+  );
+  if (!seat) {
+    send(ws, { type: 'error', message: 'You are not in this game.' });
+    return;
+  }
+
+  // Mark game over — the other faction wins
+  const winnerFaction = seat.faction === 'hero' ? 'witch' : 'hero';
+  room.state.gameOver  = true;
+  room.state.winner    = winnerFaction;
+  room.state.winReason = `${seat.name ?? 'A player'} resigned.`;
+
+  // Stop timers
+  if (room.turnTimer) { clearTimeout(room.turnTimer); room.turnTimer = null; }
+
+  // Notify connected players
+  broadcastState(room, 'resign');
+
+  // Run full game-over cleanup (stats, replay, notifications, room cleanup)
+  checkAndHandleGameOver(room);
+
+  // Confirm to the resigning player
+  send(ws, { type: 'resigned', roomId });
+}
+
+/**
+ * Send an email invite for a specific lobby slot. Host-only.
+ */
+export function sendSlotInvite(player, roomId, slotIndex, email) {
+  const room = rooms.get(roomId);
+  if (!room || room.status !== 'lobby') return;
+  if (room.hostPlayerId !== player.id) return;
+  if (!email || typeof email !== 'string') return;
+
+  const joinKey = room.isPrivate ? room.code : room.id;
+  sendGameInvite(email.trim().toLowerCase(), {
+    roomId: room.id,
+    code: joinKey,
+    hostName: player.username ?? 'A player',
+  }).catch(() => {});
 }
 
 /** Handle a plan submission from a player. */
@@ -1534,6 +1589,9 @@ export function getActiveRoomsForPlayer(playerId) {
       turn_interval_ms: room.config.turnIntervalMs ?? TURN_TIMEOUT_MS,
       is_async:         room.config.isAsync ?? false,
       turn_deadline:    room.turnDeadline ?? null,
+      map_size:         room.config.mapSize ?? 'standard',
+      players_per_side: room.config.playersPerSide ?? 1,
+      updated_at:       Math.floor(Date.now() / 1000),
       status:           room.status,
       action_needed:    actionNeeded,
       players_json:     JSON.stringify(room.players.map(s => ({
@@ -1547,8 +1605,17 @@ export function getActiveRoomsForPlayer(playerId) {
     const dbGames = getActiveGamesForPlayer(playerId);
     for (const g of dbGames) {
       if (seenRoomIds.has(g.room_id)) continue;
-      // Extract isAsync from config_json
-      try { g.is_async = JSON.parse(g.config_json || '{}').isAsync ?? false; } catch { g.is_async = false; }
+      // Extract fields from config_json
+      try {
+        const cfg = JSON.parse(g.config_json || '{}');
+        g.is_async = cfg.isAsync ?? false;
+        g.map_size = cfg.mapSize ?? 'standard';
+        g.players_per_side = cfg.playersPerSide ?? 1;
+      } catch {
+        g.is_async = false;
+        g.map_size = 'standard';
+        g.players_per_side = 1;
+      }
       delete g.config_json;
       // Compute action_needed from plan status
       if (g.status === 'playing') {

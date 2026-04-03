@@ -2469,6 +2469,47 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   font-size: 0.85rem;
 }
 
+/* Yellow "action needed" dot */
+.save-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--clr-gold, #daa520);
+  flex-shrink: 0;
+  box-shadow: 0 0 6px var(--clr-gold, #daa520);
+}
+
+/* Resign button */
+.save-resign-btn {
+  flex-shrink: 0;
+  background: none; border: none; cursor: pointer;
+  color: var(--text-dim); font-size: 1rem;
+  padding: 0.2rem 0.4rem; opacity: 0.4;
+  transition: opacity 0.15s, color 0.15s;
+}
+.save-resign-btn:hover {
+  opacity: 1; color: #c44;
+}
+
+/* Slot invite popup */
+.slot-invite-popup {
+  background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0.5rem;
+  margin-top: 0.3rem; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+}
+
+/* Clickable joinable game entries */
+.save-entry-joinable {
+  cursor: pointer; transition: border-color 0.15s;
+}
+.save-entry-joinable:hover {
+  border-color: var(--clr-gold, #daa520);
+}
+
+/* Lobby slot actions row */
+.lobby-slot-actions {
+  display: flex; gap: 0.3rem; align-items: center;
+}
+
 .async-del-btn {
   padding: 0.35rem 0.55rem !important;
   font-size: 0.85rem;

@@ -204,6 +204,14 @@ export class MultiplayerClient {
   /** Leave the lobby before the game starts. */
   leaveLobby(roomId) { this._send({ type: 'leaveLobby', roomId }); }
 
+  /** Send email invite for a specific lobby slot. */
+  sendSlotInvite(roomId, slotIndex, email) {
+    this._send({ type: 'sendSlotInvite', roomId, slotIndex, email });
+  }
+
+  /** Resign from an active game. */
+  resignGame(roomId) { this._send({ type: 'resignGame', roomId }); }
+
   requestLeaderboard() { this._send({ type: 'requestLeaderboard' }); }
 
   sendAction(actionType, params = {}) {
