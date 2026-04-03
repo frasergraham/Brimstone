@@ -211,14 +211,27 @@ export async function registerPushNotifications() {
 
     // Listen for registration success
     PushNotifications.addListener('registration', async ({ value: token }) => {
-      // Store locally for unregister on logout
       const Preferences = window.Capacitor?.Plugins?.Preferences;
-      if (Preferences) await Preferences.set({ key: 'brimstone_push_token', value: token });
-
-      // Send to server
       const session = JSON.parse(localStorage.getItem('brimstone_session') || 'null');
       if (!session?.token) return;
       const server = window.BRIMSTONE_SERVER || '';
+
+      // If the token changed (e.g. sandbox → production), delete the old one first
+      if (Preferences) {
+        const { value: prev } = await Preferences.get({ key: 'brimstone_push_token' });
+        if (prev && prev !== token) {
+          try {
+            await fetch(`${server}/api/device-token`, {
+              method: 'DELETE',
+              headers: { 'Content-Type': 'application/json', 'x-token': session.token },
+              body: JSON.stringify({ deviceToken: prev }),
+            });
+          } catch { /* best effort */ }
+        }
+        await Preferences.set({ key: 'brimstone_push_token', value: token });
+      }
+
+      // Register the current token with the server
       try {
         await fetch(`${server}/api/device-token`, {
           method: 'PUT',
