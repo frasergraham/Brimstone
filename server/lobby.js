@@ -186,6 +186,9 @@ function _sendReconnectPlanningState(room, playerId, ws) {
   const myPlan = planRows.find(r => r.player_id === playerId && r.plan_json);
   const submittedPlan = myPlan ? JSON.parse(myPlan.plan_json) : null;
 
+  // Send the last resolved round's replay so the player can watch what happened
+  const lastReplay = _getLastUnwatchedReplay(room);
+
   send(ws, {
     type:            'planningPhase',
     myActionsLeft:   budget,
@@ -194,6 +197,7 @@ function _sendReconnectPlanningState(room, playerId, ws) {
     timeoutMs:        0,
     players:          _buildPlayerList(room),
     submittedPlan,
+    lastReplay,
   });
 
   // Inform reconnecting player of who has already submitted (including themselves)
@@ -202,6 +206,30 @@ function _sendReconnectPlanningState(room, playerId, ws) {
       send(ws, { type: 'playerSubmitted', playerId: s.playerId, name: s.name, faction: s.faction });
     }
   }
+}
+
+/** Get the last round's replay data for reconnecting players. */
+function _getLastUnwatchedReplay(room) {
+  // Try in-memory first
+  if (room.replayRounds.length > 0) {
+    const last = room.replayRounds[room.replayRounds.length - 1];
+    return {
+      roundNum:     last.roundNum,
+      preStateJson: last.preStateJson,
+      stepsJson:    last.stepsJson,
+    };
+  }
+  // Fall back to DB
+  const dbRounds = getSaveRounds(room.id);
+  if (dbRounds.length > 0) {
+    const last = dbRounds[dbRounds.length - 1];
+    return {
+      roundNum:     last.round_num,
+      preStateJson: last.pre_state_json,
+      stepsJson:    last.steps_json,
+    };
+  }
+  return null;
 }
 
 /** Append a chronicle entry and trim to CHRONICLE_MAX. */

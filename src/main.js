@@ -4542,9 +4542,15 @@ function _ensureAuthed(cb) {
   }
 }
 
-function _applyOnlinePlanningPhase(payload) {
+async function _applyOnlinePlanningPhase(payload) {
   if (!ui || !mp) return;
-  const { myActionsLeft, heroActionsLeft, witchActionsLeft, players, timeoutMs, submittedPlan } = payload;
+  const { myActionsLeft, heroActionsLeft, witchActionsLeft, players, timeoutMs, submittedPlan, lastReplay } = payload;
+
+  // If we have a replay from the last round, play it before entering planning
+  if (lastReplay) {
+    await _playReconnectReplay(lastReplay);
+  }
+
   // Prefer per-player budget; fall back to legacy faction budget for old servers.
   const budget = myActionsLeft ?? (mp.myFaction === 'hero' ? heroActionsLeft : witchActionsLeft);
   ui.exitPlanningMode();
@@ -4564,6 +4570,57 @@ function _applyOnlinePlanningPhase(payload) {
     ui._refreshPlanOverlay();
     ui._renderPlanPanel();
     ui.markPlanSubmitted();
+  }
+}
+
+/** Play the last round's resolution replay on reconnect. */
+async function _playReconnectReplay(replay) {
+  if (!ui || !state || !renderer) return;
+
+  const redraw = () => renderer.draw(state, ui);
+  const steps = JSON.parse(replay.stepsJson);
+  if (!steps?.length) return;
+
+  // Temporarily load the pre-resolution state so the animation starts from the right position
+  const preState = JSON.parse(replay.preStateJson);
+  const currentEntities = state.entities;
+  const preEntities = steps[0]?.entitySnapshot ?? deserializeState(preState).entities ?? currentEntities;
+
+  // Snapshot pre-resolution node state for summary
+  const prevNodes = (state.witchObjectives ?? []).map(obj => ({
+    col: obj.col, row: obj.row, label: obj.label,
+    owner: nodeController(obj, preEntities),
+  }));
+  const prevScore = { hero: state.nodeScore?.hero ?? 0, witch: state.nodeScore?.witch ?? 0 };
+
+  state.entities = preEntities;
+  redraw();
+
+  // Play the resolution animation
+  await _animateResolutionSteps(steps, currentEntities, redraw, mp?.myFaction, mp?.myPlayerId ?? null);
+
+  // Restore the current state
+  state.entities = currentEntities;
+
+  // Store in round history for "replay full game"
+  _onlineRoundHistory.push({
+    roundNum: replay.roundNum,
+    preState: replay.preStateJson,
+    steps:    replay.stepsJson,
+  });
+
+  // Show summary
+  await ui._triggerPostRoundEffects();
+  redraw();
+
+  if (mp?.myFaction) {
+    _resolving = true;
+    await ui._showResolutionSummary(steps, replay.roundNum, {
+      prevScore, prevNodes, humanFaction: mp.myFaction, fogOfWar: state.fogOfWar,
+      gameOver: false,
+    });
+    _resolving = false;
+    ui._animateScoreBar(prevScore, prevNodes);
   }
 }
 
