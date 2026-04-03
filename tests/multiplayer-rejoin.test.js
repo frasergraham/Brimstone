@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import {
   createLobby, fillAllWithAI, startGame,
   handleDisconnect, handleReconnect, resumeGame,
+  handlePlanSubmit,
   getActiveRoomsForPlayer, getRooms, getRoom,
 } from '../server/lobby.js';
 import db from '../server/db.js';
@@ -52,7 +53,8 @@ function cleanUpRooms() {
   for (const r of getRooms()) {
     const room = getRoom(r.id);
     if (room) {
-      // Clear timers to avoid leaks
+      // Stop AI planning chain and clear timers to avoid leaks
+      if (room.state) room.state.winner = 'hero';
       if (room.turnTimer) clearTimeout(room.turnTimer);
       if (room.allHumansGoneTimer) clearTimeout(room.allHumansGoneTimer);
       for (const t of room.disconnectTimers.values()) clearTimeout(t);
@@ -97,6 +99,30 @@ describe('getActiveRoomsForPlayer', () => {
 });
 
 // ── handleReconnect after AI takeover ────────────────────────────────────────
+//
+// AI takeover now happens after 2 consecutive turn timeouts (not on disconnect).
+// These tests simulate the post-takeover state directly, since the takeover
+// trigger is covered by ai-takeover-timeout.test.js.
+
+/** Simulate AI takeover of a seat (mimics what attachAI does). */
+function simulateAITakeover(room, playerId) {
+  const seat = room.players.find(s => s.playerId === playerId);
+  if (!seat) return;
+  const oldId = seat.playerId;
+  const synId = `ai-${seat.faction}-simulated`;
+  seat.originalPlayerId = oldId;
+  seat.playerId = synId;
+  seat.ws = null;
+  seat.isAI = true;
+  seat.name = 'AI Takeover';
+  // Patch state.players too
+  const sp = room.state.players.find(p => p.id === oldId);
+  if (sp) { sp.id = synId; sp.isAI = true; }
+  // Transfer planning maps (mirrors attachAI behavior)
+  for (const map of [room.state.playerReady, room.state.playerPlans, room.state.playerActionsLeft]) {
+    if (map?.has(oldId)) { map.set(synId, map.get(oldId)); map.delete(oldId); }
+  }
+}
 
 describe('handleReconnect reclaims AI-taken-over seat', () => {
   afterEach(cleanUpRooms);
@@ -108,22 +134,8 @@ describe('handleReconnect reclaims AI-taken-over seat', () => {
     const { roomId, playerId } = createTestGame();
     const room = getRoom(roomId);
 
-    // Simulate what attachAI/_checkTimeoutTakeovers does after 2 missed deadlines
-    const seat = room.players.find(s => s.playerId === playerId);
-    assert.ok(seat, 'Should find human seat');
-    const oldId = seat.playerId;
-    const synId = `ai-hero-test-${Date.now()}`;
-    seat.originalPlayerId = oldId;
-    seat.playerId = synId;
-    seat.ws       = null;
-    seat.isAI     = true;
-    seat.name     = 'AI Takeover';
-    const sp = room.state.players.find(p => p.id === oldId);
-    if (sp) { sp.id = synId; sp.isAI = true; }
-    // Transfer planning maps (the bug fix we added)
-    for (const map of [room.state.playerReady, room.state.playerPlans, room.state.playerActionsLeft]) {
-      if (map?.has(oldId)) { map.set(synId, map.get(oldId)); map.delete(oldId); }
-    }
+    // Simulate AI takeover (as if 2 consecutive timeouts occurred)
+    simulateAITakeover(room, playerId);
 
     // Verify AI took over
     const aiSeat = room.players.find(s => s.originalPlayerId === playerId);
@@ -151,11 +163,8 @@ describe('handleReconnect reclaims AI-taken-over seat', () => {
     const { roomId } = createTestGame(pid);
     const room = getRoom(roomId);
 
-    // Simulate AI takeover on the seat
-    const seat = room.players.find(s => s.playerId === pid);
-    seat.originalPlayerId = pid;
-    seat.playerId = `ai-hero-test-${Date.now()}`;
-    seat.isAI = true;
+    // Simulate AI takeover
+    simulateAITakeover(room, pid);
 
     // Should still appear in active rooms via originalPlayerId
     const active = getActiveRoomsForPlayer(pid);
@@ -165,6 +174,9 @@ describe('handleReconnect reclaims AI-taken-over seat', () => {
 });
 
 // ── Room-level "all humans gone" timer ───────────────────────────────────────
+//
+// The destruction timer starts when _checkAllHumansGone detects no human seats
+// remain (i.e. all have been taken over by AI after consecutive timeouts).
 
 describe('all-humans-gone room destruction timer', () => {
   afterEach(cleanUpRooms);

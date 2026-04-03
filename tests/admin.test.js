@@ -1,10 +1,11 @@
 // Tests for admin panel: server/admin.js helpers and server/lobby.js adminResumeGame.
 
-import { describe, test, beforeEach } from 'node:test';
+import { describe, test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import db from '../server/db.js';
 import { getAllPlayers, getAllSaves, getSaveWithState } from '../server/admin.js';
 import { upsertSave, deleteSave } from '../server/saves.js';
+import { getRooms, getRoom } from '../server/lobby.js';
 import { GameState } from '../src/game.js';
 import { serializeState } from '../server/state-sync.js';
 import { VERSION } from '../src/version.js';
@@ -15,6 +16,20 @@ import { registerOrLogin } from '../server/auth.js';
 function cleanUp() {
   db.prepare('DELETE FROM game_saves WHERE room_id LIKE ?').run('test-%');
   db.prepare('DELETE FROM players WHERE username LIKE ?').run('test-admin-%');
+}
+
+/** Clear all room timers to prevent process hangs. */
+function cleanUpRooms() {
+  for (const r of getRooms()) {
+    const room = getRoom(r.id);
+    if (room) {
+      if (room.state) room.state.winner = 'hero';
+      if (room.turnTimer) clearTimeout(room.turnTimer);
+      if (room.allHumansGoneTimer) clearTimeout(room.allHumansGoneTimer);
+      for (const t of room.disconnectTimers?.values() ?? []) clearTimeout(t);
+      for (const t of room.takeoverTimers?.values() ?? []) clearTimeout(t);
+    }
+  }
 }
 
 function createTestPlayer(suffix) {
@@ -125,6 +140,8 @@ describe('adminResumeGame', () => {
     const lobby = await import('../server/lobby.js');
     adminResumeGame = lobby.adminResumeGame;
   });
+
+  afterEach(cleanUpRooms);
 
   test('returns error for nonexistent save', () => {
     const result = adminResumeGame('nonexistent-room');

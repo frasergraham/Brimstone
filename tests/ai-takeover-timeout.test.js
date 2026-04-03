@@ -24,6 +24,8 @@ function cleanUp() {
   for (const r of getRooms()) {
     const room = getRoom(r.id);
     if (room) {
+      // Stop AI planning chain by marking game over
+      if (room.state) room.state.winner = 'hero';
       if (room.turnTimer) clearTimeout(room.turnTimer);
       if (room.allHumansGoneTimer) clearTimeout(room.allHumansGoneTimer);
       for (const t of room.disconnectTimers.values()) clearTimeout(t);
