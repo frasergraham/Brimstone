@@ -71,6 +71,7 @@ index.html          # Single-page shell with all UI overlay elements
 admin-stats.html    # Admin dashboard for game analytics and balance metrics
 styles.css          # Dark gothic theme; CSS custom properties on :root
 src/
+  app-mode.js       # AppMode state machine — centralized mode enum and transitions
   main.js           # Entry point — wires all modules, setup screen flow, resize
   game.js           # GameState class: tiles, entities, phase cycle, turn/victory logic
   entities.js       # Entity class + factory functions; ownerId field; static resolveCombat()
@@ -104,6 +105,63 @@ scripts/
   ai-matrix.js      # Runs every hero personality vs every witch personality; renders result matrix
   release.js        # Automated release: version bump, changelog generation, tag, fast-forward merge to master
 ```
+
+---
+
+## App Mode State Machine
+
+The app uses a centralized mode enum (`src/app-mode.js`) instead of scattered boolean flags. All mode transitions go through `setMode()`, and every module queries the mode via helper functions.
+
+### Modes
+
+| Mode | Description |
+|------|-------------|
+| `MENU` | Browsing menus, lobby, game list. Game callbacks are no-ops. |
+| `PLANNING` | In a game, building a plan (not yet submitted). |
+| `SUBMITTED` | Plan locked, waiting for opponents. |
+| `RESOLVING` | Watching turn resolution animation (current round). |
+| `SUMMARY` | Post-resolution summary dialog. |
+| `PLAYBACK` | Full-game replay viewer (completed games only, own HUD). |
+| `SPECTATING` | Read-only live game view. |
+
+### RESOLVING vs PLAYBACK
+
+- **RESOLVING** is the current round's animation — happens live when both sides submit, on reconnect if a round was missed, or when the player taps "replay last turn". Uses the normal game renderer and UI.
+- **PLAYBACK** is the full-game replay from round 1, only available after game-over. Has its own play/pause/ff/back/stop controls. Always exits to MENU.
+
+### Transition Map
+
+```
+MENU → PLANNING       initOnline() or _startLocalPlanningPhase()
+MENU → SPECTATING     initSpectator()
+PLANNING → SUBMITTED  plan submitted
+SUBMITTED → RESOLVING onResolutionComplete
+RESOLVING → SUMMARY   animation completes
+RESOLVING → PLANNING  inline last-turn replay finishes
+SUMMARY → RESOLVING   user re-watches round
+SUMMARY → PLANNING    user dismisses, next round
+SUMMARY → PLAYBACK    game over, full replay
+SUMMARY → MENU        game over, exit
+PLAYBACK → MENU       replay ends or stopped
+```
+
+### Key helpers
+
+- `isInGame()` — true when not MENU or SPECTATING
+- `isAnimating()` — true when RESOLVING or PLAYBACK
+- `shouldBufferMessages()` — true when RESOLVING, SUMMARY, or PLAYBACK (incoming server messages are queued)
+
+### Rules
+
+- **main.js owns all mode transitions** — ui.js reads the mode via `ui.appMode` property (synced by `onModeChange`) but never calls `setMode()`.
+- **Playback sub-state** (`_playback` object in main.js) holds pause/abort/speed flags, only meaningful during PLAYBACK mode. Reset via `_resetPlayback()`.
+- **`_autoplay`** remains a separate boolean — it's a game config flag, not a mode.
+
+---
+
+## Heartbeat State Sync
+
+The server sends a JSON `heartbeat` message alongside the WebSocket ping every 15 seconds to clients in active games. Contains `roomId`, `round`, `planningPhase`, `gameOver`, and `playersReady`. The client compares this against local state and sends `requestState` if a mismatch is detected (e.g. missed a planning phase or game-over event). The server responds to `requestState` with a full state resync via `resumeGame()`.
 
 ---
 
