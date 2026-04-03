@@ -236,8 +236,7 @@ export async function registerPushNotifications() {
     PushNotifications.addListener('pushNotificationActionPerformed', ({ notification }) => {
       const roomId = notification?.data?.roomId;
       if (roomId) {
-        window.location.hash = `async=${roomId}`;
-        // Dispatch event so main.js can react even if already loaded
+        window.location.hash = `game=${roomId}`;
         window.dispatchEvent(new HashChangeEvent('hashchange'));
       }
     });
