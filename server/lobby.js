@@ -152,6 +152,7 @@ function _buildPlayerList(room) {
       isAI:      s.isAI,
       connected: s.isAI || wsOpen,
       active:    s.isAI || (wsOpen && !s.ws._inactive && inThisRoom),
+      submitted: !!room.state.playerReady?.get(s.playerId),
     };
   });
 }

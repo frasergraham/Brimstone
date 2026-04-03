@@ -568,7 +568,7 @@ export class UIController {
 
     // Multiplayer: reset submission status panel and start countdown.
     // Clear previous-round submitted flags.
-    if (this._players) this._players.forEach(p => { p._submitted = false; });
+    if (this._players) this._players.forEach(p => { p._submitted = !!p.submitted; });
     this._renderPlayerStatus();
     if (timeoutMs > 0) this._startCountdown(timeoutMs);
   }
@@ -626,6 +626,7 @@ export class UIController {
       if (p) {
         p.connected = update.connected;
         p.active    = update.active;
+        if ('submitted' in update) p._submitted = !!update.submitted;
       }
     }
     this._renderPlayerStatus();

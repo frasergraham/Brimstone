@@ -4908,6 +4908,21 @@ function _createMpClient() {
         console.log('[heartbeat] missed game-over — requesting resync');
         mp._send({ type: 'requestState' });
       }
+      // Reconcile ready indicators from server's authoritative state
+      if (planningPhase && round === state.round && !shouldBufferMessages()
+          && ui?._planMode && ui._players && playersReady) {
+        const readySet = new Set(playersReady);
+        let changed = false;
+        for (const p of ui._players) {
+          const pid = p.playerId ?? p.id;
+          const shouldBeReady = readySet.has(pid);
+          if (p._submitted !== shouldBeReady) {
+            p._submitted = shouldBeReady;
+            changed = true;
+          }
+        }
+        if (changed) ui._renderPlayerStatus();
+      }
     },
 
     onPlanningPhase(payload) {
