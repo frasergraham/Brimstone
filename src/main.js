@@ -2376,9 +2376,12 @@ function _renderAsyncGames(games) {
 function _timeRemaining(deadlineUnixSecs) {
   const diff = deadlineUnixSecs - Math.floor(Date.now() / 1000);
   if (diff <= 0) return 'expired';
-  if (diff < 3600) return `${Math.floor(diff / 60)}m left`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h left`;
-  return `${Math.floor(diff / 86400)}d left`;
+  const d = Math.floor(diff / 86400);
+  const h = Math.floor((diff % 86400) / 3600);
+  const m = Math.floor((diff % 3600) / 60);
+  if (d >= 1) return `${d}d ${h}h left`;
+  if (h >= 1) return `${h}h ${m}m left`;
+  return `${m}m left`;
 }
 
 /**

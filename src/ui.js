@@ -602,9 +602,7 @@ export class UIController {
       const remaining = Math.max(0, end - Date.now());
       const totalSecs = Math.ceil(remaining / 1000);
       const pct  = (remaining / timeoutMs) * 100;
-      const mm = String(Math.floor(totalSecs / 60)).padStart(2, '0');
-      const ss = String(totalSecs % 60).padStart(2, '0');
-      const label = totalSecs > 0 ? `\u2713 Submit ${mm}:${ss}` : '\u2713 Submit';
+      const label = totalSecs > 0 ? `\u2713 Submit ${_formatCountdown(totalSecs)}` : '\u2713 Submit';
 
       submitBtn.style.setProperty('--progress', pct + '%');
       submitBtn.textContent = label;
@@ -3159,6 +3157,23 @@ export class UIController {
 }
 
 // ── Module-level helpers ───────────────────────────────────────────────────
+
+/**
+ * Format a countdown in seconds into a friendly string.
+ * >= 1 day:  "2d 4h"
+ * >= 1 hour: "3h 12m"
+ * >= 1 min:  "05:23"
+ * < 1 min:   "0:42"
+ */
+function _formatCountdown(totalSecs) {
+  const d = Math.floor(totalSecs / 86400);
+  const h = Math.floor((totalSecs % 86400) / 3600);
+  const m = Math.floor((totalSecs % 3600) / 60);
+  const s = totalSecs % 60;
+  if (d >= 1)  return `${d}d ${h}h`;
+  if (h >= 1)  return `${h}h ${String(m).padStart(2, '0')}m`;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
 
 function btn(label, cls, disabled = '', extra = '') {
   return `<button class="action-btn ${cls}" ${disabled} ${extra}>${label}</button>`;

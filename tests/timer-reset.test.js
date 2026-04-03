@@ -53,9 +53,9 @@ describe('resetCountdown', () => {
     // Progress bar should be set (submit button shows countdown via --progress)
     assert.ok(btn.style._props['--progress'] !== undefined,
       '--progress should be set on submit button');
-    // Text should show ~01:30, not the original ~00:30
-    assert.ok(btn.textContent.includes('01:'),
-      `countdown should show reset value (~01:30), got: "${btn.textContent}"`);
+    // Text should show ~1:30, not the original ~0:30
+    assert.ok(btn.textContent.includes('1:'),
+      `countdown should show reset value (~1:30), got: "${btn.textContent}"`);
 
     ui._stopCountdown();
   });
