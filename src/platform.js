@@ -143,6 +143,35 @@ async function _wireUniversalLinks() {
 
 if (isNativeMobile) _wireUniversalLinks();
 
+// ── Game Center authentication ──────────────────────────────────────────────
+
+/** Cached Game Center credentials (or null). */
+let _gameCenterCredentials = null;
+
+/**
+ * Attempt Game Center authentication via the native plugin.
+ * Returns { playerId, displayName, alias } on success, null otherwise.
+ * Results are cached — subsequent calls return the cached value without
+ * re-triggering the native sign-in UI.
+ */
+export async function tryGameCenterAuth() {
+  if (!isNativeMobile) return null;
+  if (_gameCenterCredentials) return _gameCenterCredentials;
+
+  try {
+    const GameCenter = window.Capacitor?.Plugins?.GameCenterPlugin;
+    if (!GameCenter) return null;
+    const result = await GameCenter.authenticate();
+    if (result?.playerId) {
+      _gameCenterCredentials = result;
+      return result;
+    }
+  } catch (e) {
+    console.warn('[platform] Game Center auth failed:', e);
+  }
+  return null;
+}
+
 // ── App background/foreground detection ─────────────────────────────────────
 // Notifies the server so it can send push notifications to backgrounded players
 // instead of assuming an open WebSocket means the player is paying attention.

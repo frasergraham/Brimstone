@@ -174,6 +174,16 @@ export class MultiplayerClient {
     this._send({ type: 'auth', username, token, roomId });
   }
 
+  /** Authenticate via Game Center identity. */
+  authGameCenter({ gameCenterId, displayName, roomId } = {}) {
+    this._send({ type: 'authGameCenter', gameCenterId, displayName, roomId });
+  }
+
+  /** Link a Game Center ID to the currently authenticated player. */
+  linkGameCenter(gameCenterId) {
+    this._send({ type: 'linkGameCenter', gameCenterId });
+  }
+
   /** Create a new game lobby. config: { fog, mapSize, playersPerSide, isPrivate } */
   createLobby(config = {}) { this._send({ type: 'createLobby', ...config }); }
 
