@@ -1389,7 +1389,7 @@ document.getElementById('btn-single-player').addEventListener('click', () => sho
 document.getElementById('btn-quick-play')    .addEventListener('click', () => _showSinglePlayerScreen());
 document.getElementById('btn-story-mode')    .addEventListener('click', () => _showCampaignSelectScreen());
 document.getElementById('btn-sp-choice-back').addEventListener('click', () => showStep('mode'));
-document.getElementById('btn-multiplayer')  .addEventListener('click', () => _showMultiplayerChoice());
+document.getElementById('btn-multiplayer')  .addEventListener('click', () => _showOnlineScreen());
 document.getElementById('btn-tutorial')     .addEventListener('click', () => initTutorial());
 document.getElementById('btn-how-to-play')  .addEventListener('click', () => showStep('howtoplay'));
 document.getElementById('btn-options')      .addEventListener('click', () => showStep('options'));
@@ -3515,11 +3515,6 @@ async function _startMpReplay(rounds, gameMeta) {
 
 // ── Multiplayer screen ────────────────────────────────────────────────────────
 
-function _showMultiplayerChoice() {
-  showStep('multiplayer');
-  _fetchMainMenuAsyncGames();
-}
-
 function _showOnlineScreen() {
   showStep('online');
   _initMpStep();
@@ -3539,17 +3534,12 @@ function _showAsyncScreen() {
   }
 }
 
-document.getElementById('btn-mp-online').addEventListener('click', () => _showOnlineScreen());
 document.getElementById('btn-mp-async')?.addEventListener('click', () => _showAsyncScreen());
-document.getElementById('btn-mp-local').addEventListener('click', () => showStep('local-play'));
 
-document.getElementById('btn-multiplayer-back').addEventListener('click', () => {
+document.getElementById('btn-online-back').addEventListener('click', () => {
   if (mp) { mp.disconnect(); mp = null; }
   renderer = null; ui = null; state = null;
   showStep('mode');
-});
-document.getElementById('btn-online-back').addEventListener('click', () => {
-  showStep('multiplayer');
 });
 document.getElementById('btn-async-back')?.addEventListener('click', () => {
   showStep('multiplayer');
@@ -5117,11 +5107,11 @@ if (_emailToken) {
       _updateSessionBar();
       // If there's a deep link hash, open the game now that we're authed
       if (!_checkGameDeepLink()) _checkAsyncDeepLink();
-      if (!window.location.hash) _showMultiplayerChoice();
+      if (!window.location.hash) _showOnlineScreen();
     };
     _tmpMp.auth({ token: _emailToken });
   } catch {
-    // Fallback: just store minimal session and show multiplayer choice
-    _showMultiplayerChoice();
+    // Fallback: just store minimal session and show online screen
+    _showOnlineScreen();
   }
 }
