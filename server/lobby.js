@@ -921,6 +921,30 @@ function _addExtraAISeat(room, faction, personality = null) {
 }
 
 /**
+ * Add an extra human seat on a faction side beyond the first player.
+ * Mirrors _addExtraAISeat but creates a human-controlled player instead.
+ */
+function _addExtraHumanSeat(room, playerId, ws, name, faction) {
+  const existing = room.state.entities.filter(
+    e => e.alive && e.owner === faction && (e.type === 'hero' || e.type === 'witch')
+  );
+  const start = existing[0] ?? { col: 0, row: 0 };
+  const positions = generateMultipleStarts(room.state.tiles, start, existing.length + 1, 2, 6);
+  const pos = positions[existing.length] ?? start;
+
+  room.state.addPlayer(playerId, name, faction, pos.col, pos.row, false);
+
+  const factionIndex = room.players.filter(s => s.faction === faction).length;
+  const colors       = faction === 'hero' ? HERO_PLAYER_COLORS : WITCH_PLAYER_COLORS;
+  const leader       = room.state.entities.find(e => e.ownerId === playerId);
+  if (leader) leader.color = colors[factionIndex % colors.length];
+
+  const seat = { playerId, ws, name, faction, isAI: false, ai: null };
+  room.players.push(seat);
+  return seat;
+}
+
+/**
  * Fill both factions with AI so each side reaches `perSide` players total.
  * Human players must already be seated before calling this.
  */
@@ -1257,8 +1281,7 @@ export function startGame(playerId, roomId) {
           (slot.faction === 'witch' && witchCount === 0)) {
         _addSeat(room, slot.playerId, slot._ws, slot.name, slot.faction, false);
       } else {
-        // Extra human seat — for now treat as AI-ally until human join is fully wired
-        _addExtraAISeat(room, slot.faction, slot.personality ?? 'balanced');
+        _addExtraHumanSeat(room, slot.playerId, slot._ws, slot.name, slot.faction);
       }
     } else {
       // AI slot

@@ -951,8 +951,13 @@ export class UIController {
 
     // Outside planning mode, allow viewing tiles/units but block all actions.
     // During resolution/summary/playback, ignore clicks entirely.
+    // If appMode is PLANNING but _planMode hasn't been set yet (race between
+    // mode transition and enterPlanningMode call), ignore clicks rather than
+    // falling through to tile-detail which blocks all UI interaction.
     if (!this._planMode) {
-      if (this.appMode === 'RESOLVING' || this.appMode === 'SUMMARY' || this.appMode === 'PLAYBACK') return;
+      if (this.appMode === 'RESOLVING' || this.appMode === 'SUMMARY' ||
+          this.appMode === 'PLAYBACK' || this.appMode === 'PLANNING' ||
+          this.appMode === 'SUBMITTED') return;
       this._clearSelection();
       this._showTileDetail(hex);
       this._updateSidebar();
