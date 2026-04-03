@@ -1,5 +1,6 @@
 // Entry point: wires all modules, setup screen flow, resize
 import './platform.js'; // must be first — sets server globals for Capacitor builds
+import { initServerSelector } from './server-selector.js';
 import { GameState, Player } from './game.js';
 import { Renderer }          from './renderer.js';
 import { UIController, UIMode } from './ui.js';
@@ -61,8 +62,17 @@ function _applyModeConfig(modes) {
 if (!window.electronAPI) {
   fetch(`${window.BRIMSTONE_SERVER || ''}/api/config`)
     .then(r => r.ok ? r.json() : null)
-    .then(data => { if (data?.modes) _applyModeConfig(data.modes); })
-    .catch(() => {}); // offline / dev-server — all modes remain enabled
+    .then(data => {
+      if (data?.modes) _applyModeConfig(data.modes);
+      initServerSelector(data?.devMode ?? false);
+    })
+    .catch(() => {
+      // offline / dev-server — all modes remain enabled; still try local dev-mode
+      initServerSelector(false);
+    });
+} else {
+  // Electron: always show selector (electronAPI implies dev)
+  initServerSelector(true);
 }
 
 let state, renderer, ui, witchAI, heroAI;
