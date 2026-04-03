@@ -24,7 +24,7 @@ import { pruneStaleAndIncompatibleSaves,
          getSpCompletedGame, getSpCompletedGameRounds,
          getSaveRounds }                                   from './server/saves.js';
 import {
-  createLobby, joinLobby, browseLobby,
+  createLobby, joinLobby, joinGame, browseLobby,
   setSlotAI, removeSlotAI, fillAllWithAI, startGame, leaveLobby, resignGame, sendSlotInvite as sendSlotInviteHandler,
   handleAction, handleEndTurn, handlePlanSubmit,
   handleDisconnect, handleReconnect,
@@ -859,6 +859,12 @@ function route(ws, cs, msg) {
     case 'joinLobby': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
       joinLobby(cs.player.id, cs.player.username, ws, msg.codeOrId);
+      break;
+    }
+
+    case 'joinGame': {
+      if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
+      joinGame(cs.player.id, cs.player.username, ws, msg.codeOrId);
       break;
     }
 

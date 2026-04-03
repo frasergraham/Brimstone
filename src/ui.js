@@ -614,12 +614,25 @@ export class UIController {
   /** Called when the server broadcasts updated player presence. */
   _onPlayerPresence(players) {
     if (!this._players) return;
-    for (const update of players) {
-      const p = this._players.find(pl => (pl.playerId ?? pl.id) === update.playerId);
-      if (p) {
-        p.connected = update.connected;
-        p.active    = update.active;
-        if ('submitted' in update) p._submitted = !!update.submitted;
+    // Check if the roster has changed (new players joined, AI replaced, etc.)
+    const knownIds = new Set(this._players.map(p => p.playerId ?? p.id));
+    const incomingIds = new Set(players.map(p => p.playerId ?? p.id));
+    const rosterChanged = players.length !== this._players.length ||
+      players.some(p => !knownIds.has(p.playerId ?? p.id));
+
+    if (rosterChanged) {
+      // Full roster replacement — a late-joiner replaced a placeholder AI
+      this._players = players.map(p => ({ ...p, _submitted: !!p.submitted }));
+    } else {
+      for (const update of players) {
+        const p = this._players.find(pl => (pl.playerId ?? pl.id) === update.playerId);
+        if (p) {
+          p.connected = update.connected;
+          p.active    = update.active;
+          p.name      = update.name;
+          p.isAI      = update.isAI;
+          if ('submitted' in update) p._submitted = !!update.submitted;
+        }
       }
     }
     this._renderPlayerStatus();

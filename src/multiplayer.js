@@ -180,6 +180,9 @@ export class MultiplayerClient {
   /** Join a lobby by room ID (public) or 6-char code (private). */
   joinLobby(codeOrId)      { this._send({ type: 'joinLobby', codeOrId }); }
 
+  /** Join an active game during round 1 (late join). Uses room ID or code. */
+  joinGame(codeOrId)       { this._send({ type: 'joinGame', codeOrId }); }
+
   /** Request the list of open public lobbies. */
   browseLobby()            { this._send({ type: 'browseLobby' }); }
 
