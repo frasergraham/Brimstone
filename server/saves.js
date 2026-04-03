@@ -371,9 +371,14 @@ const _clearAllPlanStatus = db.prepare(`
  * @param {string[]} playerIds
  * @param {number} round
  */
+const _insertPlanStatusIfMissing = db.prepare(`
+  INSERT OR IGNORE INTO game_plan_status (room_id, player_id, round, plan_json, submitted_at)
+  VALUES (@roomId, @playerId, @round, NULL, NULL)
+`);
+
 export function insertPlanStatusRows(roomId, playerIds, round) {
   for (const pid of playerIds) {
-    _upsertPlanStatus.run({ roomId, playerId: pid, round, planJson: null, submittedAt: null });
+    _insertPlanStatusIfMissing.run({ roomId, playerId: pid, round });
   }
 }
 
