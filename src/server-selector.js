@@ -3,10 +3,9 @@
  *
  * Shows a small dropdown in the top-right corner of the setup screen that lets
  * developers switch between Railway environments (prod, dev, PR branches) or
- * enter a custom server URL.  The dropdown is populated with:
- *   1. Hardcoded Production + Development entries.
- *   2. Railway branch deployments fetched from /api/environments (if available).
- *   3. A "Custom…" option that reveals a text input.
+ * enter a custom server URL.  The dropdown is populated from:
+ *   1. /api/environments (Railway branch auto-discovery, if available).
+ *   2. A "Custom…" option that reveals a text input.
  *
  * Activation: called from main.js after /api/config resolves.  Shows when the
  * server returns devMode:true, or when local isDevMode is true.
@@ -14,12 +13,8 @@
 
 import { isDevMode } from './platform.js';
 
-const KNOWN_SERVERS = [
-  { label: 'Production',  url: 'https://brimstone.run' },
-  { label: 'Development', url: 'https://brimstone-dev.up.railway.app' },
-];
-
 const CUSTOM_VALUE = '__custom__';
+const THIS_SERVER  = '';
 
 /**
  * Initialise the server selector UI.
@@ -31,6 +26,9 @@ export function initServerSelector(serverDevMode = false) {
   const setupScreen = document.getElementById('setup-screen');
   if (!setupScreen) return;
 
+  const storedUrl   = localStorage.getItem('brimstone_server_url');
+  const isCustomUrl = !!storedUrl; // any stored override means user chose something
+
   // ── Build DOM ─────────────────────────────────────────────────────────────
   const wrap = document.createElement('div');
   wrap.id = 'server-selector';
@@ -41,48 +39,22 @@ export function initServerSelector(serverDevMode = false) {
 
   const select = document.createElement('select');
 
-  // Current server URL (from override or same-origin)
-  const currentUrl = localStorage.getItem('brimstone_server_url')
-    || window.BRIMSTONE_SERVER
-    || '';
+  // "(this server)" = clear the override, use same-origin / default
+  _addOption(select, THIS_SERVER, _thisServerLabel(), !isCustomUrl);
 
-  // Populate hardcoded options
-  for (const s of KNOWN_SERVERS) {
-    const opt = document.createElement('option');
-    opt.value = s.url;
-    opt.textContent = s.label;
-    if (currentUrl === s.url) opt.selected = true;
-    select.appendChild(opt);
-  }
+  // Custom option + input
+  const customOpt = _addOption(select, CUSTOM_VALUE, 'Custom\u2026', false);
 
-  // "This server" option for same-origin (when no override is set)
-  if (!currentUrl || (!KNOWN_SERVERS.some(s => s.url === currentUrl) && currentUrl === window.BRIMSTONE_SERVER)) {
-    const thisOpt = document.createElement('option');
-    thisOpt.value = '';
-    thisOpt.textContent = '(this server)';
-    if (!localStorage.getItem('brimstone_server_url')) thisOpt.selected = true;
-    select.insertBefore(thisOpt, select.firstChild);
-  }
-
-  // Custom option
-  const customOpt = document.createElement('option');
-  customOpt.value = CUSTOM_VALUE;
-  customOpt.textContent = 'Custom\u2026';
-  select.appendChild(customOpt);
-
-  // If current URL doesn't match any known server, select "Custom…" and show input
-  const isCustomUrl = currentUrl
-    && !KNOWN_SERVERS.some(s => s.url === currentUrl)
-    && localStorage.getItem('brimstone_server_url');
-
-  // Custom URL input (hidden by default)
   const input = document.createElement('input');
   input.type = 'url';
-  input.placeholder = 'https://…';
-  input.style.display = isCustomUrl ? '' : 'none';
+  input.placeholder = 'https://\u2026';
+  input.style.display = 'none';
+
+  // If user has a stored override that we don't know about yet, show as custom
   if (isCustomUrl) {
-    input.value = currentUrl;
     customOpt.selected = true;
+    input.value = storedUrl;
+    input.style.display = '';
   }
 
   wrap.appendChild(select);
@@ -90,7 +62,7 @@ export function initServerSelector(serverDevMode = false) {
   setupScreen.appendChild(wrap);
 
   // ── Fetch Railway environments ────────────────────────────────────────────
-  _fetchEnvironments(select, currentUrl);
+  _fetchEnvironments(select, input, storedUrl);
 
   // ── Event handlers ────────────────────────────────────────────────────────
   select.addEventListener('change', () => {
@@ -101,7 +73,7 @@ export function initServerSelector(serverDevMode = false) {
       return;
     }
     input.style.display = 'none';
-    _switchServer(val || null); // null = clear override (use same-origin)
+    _switchServer(val || null); // null/empty = clear override
   });
 
   input.addEventListener('keydown', (e) => {
@@ -113,6 +85,23 @@ export function initServerSelector(serverDevMode = false) {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+function _thisServerLabel() {
+  try {
+    return location.hostname === 'localhost'
+      ? `localhost:${location.port}`
+      : location.hostname;
+  } catch { return '(this server)'; }
+}
+
+function _addOption(select, value, text, selected) {
+  const opt = document.createElement('option');
+  opt.value = value;
+  opt.textContent = text;
+  if (selected) opt.selected = true;
+  select.appendChild(opt);
+  return opt;
+}
 
 function _switchServer(url) {
   if (url) {
@@ -132,7 +121,7 @@ function _switchServer(url) {
   location.reload();
 }
 
-async function _fetchEnvironments(select, currentUrl) {
+async function _fetchEnvironments(select, input, storedUrl) {
   const server = window.BRIMSTONE_SERVER || '';
   try {
     const res = await fetch(`${server}/api/environments`);
@@ -140,23 +129,25 @@ async function _fetchEnvironments(select, currentUrl) {
     const envs = await res.json();
     if (!Array.isArray(envs) || envs.length === 0) return;
 
-    // Insert Railway envs before the Custom option
+    // Insert Railway envs between "(this server)" and "Custom…"
     const customOpt = select.querySelector(`option[value="${CUSTOM_VALUE}"]`);
+    let matchedStored = false;
+
     for (const env of envs) {
-      // Skip if it duplicates a known server
-      if (KNOWN_SERVERS.some(s => s.url === env.url)) continue;
-
-      const opt = document.createElement('option');
-      opt.value = env.url;
-      opt.textContent = env.label;
-      if (currentUrl === env.url) opt.selected = true;
+      const opt = _addOption(select, env.url, env.label, false);
       select.insertBefore(opt, customOpt);
+
+      // If user's stored URL matches this Railway env, select it
+      if (storedUrl && env.url === storedUrl) {
+        opt.selected = true;
+        input.style.display = 'none';
+        matchedStored = true;
+      }
     }
 
-    // If current URL now matches a Railway env, deselect Custom
-    if (currentUrl && envs.some(e => e.url === currentUrl)) {
-      const customInput = select.parentElement?.querySelector('input');
-      if (customInput) customInput.style.display = 'none';
+    // If the stored URL matched a Railway env, clear the Custom input state
+    if (matchedStored) {
+      input.value = '';
     }
-  } catch { /* /api/environments not available — no Railway envs shown */ }
+  } catch { /* /api/environments not available — just this-server + custom */ }
 }
