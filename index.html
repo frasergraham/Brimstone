@@ -799,12 +799,16 @@
       <button id="end-turn-btn" class="header-icon-btn end-turn-header" title="End Turn">↩</button>
       <button id="menu-btn" class="header-icon-btn" title="Menu">☰</button>
     </header>
-    <!-- In-game menu popup -->
-    <div id="game-menu-popup" class="game-menu-popup" style="display:none">
-      <button id="menu-replay-turn-btn" class="game-menu-item" style="display:none">Replay Last Turn</button>
-      <button id="menu-quit-btn" class="game-menu-item">Return to Menu</button>
-      <button id="menu-resign-btn" class="game-menu-item menu-resign" style="display:none">Resign from Game</button>
-      <div id="menu-version" class="game-menu-version"></div>
+    <!-- In-game menu modal -->
+    <div id="game-menu-backdrop" class="game-menu-backdrop" style="display:none">
+      <div id="game-menu-modal" class="game-menu-modal">
+        <h2 class="game-menu-title">Menu</h2>
+        <button id="menu-replay-turn-btn" class="game-menu-btn" style="display:none">Replay Last Turn</button>
+        <button id="menu-quit-btn" class="game-menu-btn">Return to Main Menu</button>
+        <button id="menu-resign-btn" class="game-menu-btn menu-resign" style="display:none">Resign from Game</button>
+        <button id="menu-close-btn" class="game-menu-btn menu-close">Close</button>
+        <div id="menu-version" class="game-menu-version"></div>
+      </div>
     </div>
     <!-- Cycle bar: always-visible 8-step day/night strip -->
     <div id="cycle-bar"></div>

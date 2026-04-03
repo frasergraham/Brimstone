@@ -65,8 +65,8 @@ describe('styles.css mobile breakpoint (max-width: 700px)', () => {
     assert.ok(block.includes('#encounter-card'), 'Missing #encounter-card rule');
   });
 
-  test('game-menu-item has 44px touch target', () => {
-    assert.ok(block.includes('.game-menu-item'), 'Missing .game-menu-item rule');
+  test('game-menu-btn has 44px touch target', () => {
+    assert.ok(block.includes('.game-menu-btn'), 'Missing .game-menu-btn rule');
     assert.ok(block.includes('44px'), 'Missing 44px min-height');
   });
 });

@@ -765,54 +765,81 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   display: none;
 }
 
-/* ── In-game menu popup ──────────────────────────────────────────────── */
-.game-menu-popup {
-  position: absolute;
-  top: 42px;
-  right: 8px;
-  z-index: 90;
+/* ── In-game menu modal ──────────────────────────────────────────────── */
+.game-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0,0,0,0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.game-menu-modal {
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.25rem;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.6);
-  min-width: 140px;
+  border-radius: 12px;
+  padding: 2rem 2.5rem;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.8);
+  min-width: 280px;
+  max-width: 90vw;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
 }
-.game-menu-item {
+.game-menu-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.4rem;
+  color: var(--text-bright);
+  text-align: center;
+  letter-spacing: 0.06em;
+}
+.game-menu-btn {
   display: block;
   width: 100%;
-  background: none;
-  border: none;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
   color: var(--text);
-  font-size: 0.85rem;
-  text-align: left;
-  padding: 0.4rem 0.6rem;
-  border-radius: 4px;
+  font-size: 1rem;
+  text-align: center;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
   cursor: pointer;
   letter-spacing: 0.03em;
+  transition: background 0.15s, color 0.15s;
 }
-.game-menu-item:hover {
-  background: rgba(255,255,255,0.07);
+.game-menu-btn:hover {
+  background: rgba(255,255,255,0.12);
   color: var(--text-bright);
 }
-.game-menu-item.menu-resign {
-  color: #c44; margin-top: 0.15rem;
-  border-top: 1px solid rgba(255,255,255,0.05);
-  padding-top: 0.5rem;
+.game-menu-btn.menu-resign {
+  color: #c44;
+  background: rgba(200,60,60,0.08);
+  border-color: rgba(200,60,60,0.25);
 }
-.game-menu-item.menu-resign:hover {
-  background: rgba(200,60,60,0.15); color: #e55;
+.game-menu-btn.menu-resign:hover {
+  background: rgba(200,60,60,0.2);
+  color: #e55;
+}
+.game-menu-btn.menu-close {
+  background: none;
+  border: 1px solid rgba(255,255,255,0.08);
+  color: var(--text);
+  opacity: 0.7;
+  margin-top: 0.25rem;
+}
+.game-menu-btn.menu-close:hover {
+  opacity: 1;
+  background: rgba(255,255,255,0.05);
 }
 .game-menu-version {
   font-size: 0.6rem;
   color: rgba(255,255,255,0.2);
   letter-spacing: 0.05em;
   text-align: center;
-  padding: 0.25rem 0.6rem 0.15rem;
+  padding: 0.25rem 0 0;
   user-select: none;
   pointer-events: none;
-  border-top: 1px solid rgba(255,255,255,0.05);
-  margin-top: 0.15rem;
 }
 
 /* ── Day cycle strip ──────────────────────────────────────────────────── */
@@ -2317,7 +2344,7 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   #encounter-card { min-width: 0; }
 
   /* Game menu: 44px touch targets */
-  .game-menu-item { min-height: 44px; display: flex; align-items: center; }
+  .game-menu-btn { min-height: 44px; display: flex; align-items: center; justify-content: center; }
 
 }
 
