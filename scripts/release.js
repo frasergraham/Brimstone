@@ -340,22 +340,13 @@ if (iosBuild) {
     ` CODE_SIGN_STYLE=Automatic`,
   );
 
-  console.log('\n── iOS: exporting IPA ──');
+  console.log('\n── iOS: exporting and uploading to App Store Connect ──');
   run(
     `xcodebuild -exportArchive` +
     ` -archivePath "${ARCHIVE_PATH}"` +
     ` -exportPath "${EXPORT_PATH}"` +
     ` -exportOptionsPlist "${EXPORT_OPTS}"` +
     ` -allowProvisioningUpdates`,
-  );
-
-  console.log('\n── iOS: uploading to App Store Connect ──');
-  run(
-    `xcrun altool --upload-app` +
-    ` -f "${EXPORT_PATH}/App.ipa"` +
-    ` -t ios` +
-    ` --apiKey "KYMWQHSA4G"` +
-    ` --apiIssuer "0e000f48-47b8-4099-8ed2-8af24301bb2d"`,
   );
 
   console.log(`\n✔ iOS build ${tag} (build ${newBuildNum}) uploaded to App Store Connect.`);
