@@ -4986,6 +4986,13 @@ function _createMpClient() {
         console.log('[heartbeat] missed game-over — requesting resync');
         mp._send({ type: 'requestState' });
       }
+      // Detect stuck state: server says planning but client never entered planning mode.
+      // This can happen if the planningPhase message was lost during a reconnect.
+      if (planningPhase && round === state.round && !shouldBufferMessages()
+          && ui && !ui._planMode && getMode() === AppMode.PLANNING) {
+        console.log('[heartbeat] server in planning but client _planMode is false — requesting resync');
+        mp._send({ type: 'requestState' });
+      }
       // Reconcile ready indicators from server's authoritative state
       if (planningPhase && round === state.round && !shouldBufferMessages()
           && ui?._planMode && ui._players && playersReady) {
