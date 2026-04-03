@@ -151,6 +151,8 @@ export async function registerPushNotifications() {
       const roomId = notification?.data?.roomId;
       if (roomId) {
         window.location.hash = `async=${roomId}`;
+        // Dispatch event so main.js can react even if already loaded
+        window.dispatchEvent(new HashChangeEvent('hashchange'));
       }
     });
 
@@ -183,4 +185,9 @@ export async function unregisterPushToken() {
 
     await Preferences.remove({ key: 'brimstone_push_token' });
   } catch { /* best effort */ }
+}
+
+// Auto-register on launch if there's already a saved session
+if (isNativeMobile && localStorage.getItem('brimstone_session')) {
+  registerPushNotifications();
 }

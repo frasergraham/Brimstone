@@ -3700,6 +3700,11 @@ function _checkGameDeepLink() {
     _checkGameDeepLink() || _checkAsyncDeepLink();
   }
 }
+
+// Handle deep links from push notification taps (sets hash then fires hashchange)
+window.addEventListener('hashchange', () => {
+  _checkAsyncDeepLink();
+});
 _fetchMainMenuAsyncGames();
 
 function _loadPublicLobbies() {

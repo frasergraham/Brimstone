@@ -129,8 +129,9 @@ export async function notifyOpponentJoined(playerId, gameInfo, asyncSessions) {
  * Notify a player that a new round is ready (after resolution).
  */
 export async function notifyTurnReady(playerId, gameInfo, asyncSessions) {
-  if (_isOnline(asyncSessions, gameInfo.roomId, playerId)) return;
-  if (!_shouldSend(gameInfo.roomId, playerId, 'turn_ready')) return;
+  console.log(`[Notify] notifyTurnReady player=${playerId} room=${gameInfo.roomId} round=${gameInfo.round}`);
+  if (_isOnline(asyncSessions, gameInfo.roomId, playerId)) { console.log('[Notify]   skipped: player is online'); return; }
+  if (!_shouldSend(gameInfo.roomId, playerId, 'turn_ready')) { console.log('[Notify]   skipped: dedup'); return; }
   _record(gameInfo.roomId, playerId, 'turn_ready');
 
   const opponent = _playerName(gameInfo.opponentId);
@@ -156,8 +157,9 @@ export async function notifyTurnReady(playerId, gameInfo, asyncSessions) {
  * Notify a player that their opponent submitted a plan (nudge).
  */
 export async function notifyOpponentSubmitted(playerId, gameInfo, asyncSessions) {
-  if (_isOnline(asyncSessions, gameInfo.roomId, playerId)) return;
-  if (!_shouldSend(gameInfo.roomId, playerId, 'opponent_submitted')) return;
+  console.log(`[Notify] notifyOpponentSubmitted player=${playerId} room=${gameInfo.roomId}`);
+  if (_isOnline(asyncSessions, gameInfo.roomId, playerId)) { console.log('[Notify]   skipped: player is online'); return; }
+  if (!_shouldSend(gameInfo.roomId, playerId, 'opponent_submitted')) { console.log('[Notify]   skipped: dedup'); return; }
   _record(gameInfo.roomId, playerId, 'opponent_submitted');
 
   const opponent = _playerName(gameInfo.opponentId);
