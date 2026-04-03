@@ -57,14 +57,14 @@ canvas { touch-action: pan-x pan-y; }
   position: relative;
   z-index: 1;
   width: min(440px, 92vw);
-  background: rgba(17, 21, 32, 0.85);
+  background: rgba(22, 27, 40, 0.92);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
   padding: 2rem 2.5rem;
   text-align: center;
-  box-shadow: 0 0 60px rgba(100, 50, 160, 0.25);
+  box-shadow: 0 4px 32px rgba(0, 0, 0, 0.4);
 }
 
 .title {
@@ -99,18 +99,23 @@ canvas { touch-action: pan-x pan-y; }
   margin-bottom: 1.5rem;
 }
 
+.menu-separator {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  margin: 0.25rem 2rem 1rem;
+}
+
 .setup-btn {
   padding: 0.6rem 1.4rem;
-  background: var(--bg-section);
-  border: 1px solid var(--border);
-  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-bright);
   font-family: var(--font-serif);
   font-size: 0.95rem;
   cursor: pointer;
-  border-radius: 2px;
+  border-radius: 4px;
   transition: background 0.15s, border-color 0.15s;
 }
-.setup-btn:hover       { background: #1e2438; border-color: #4a3870; }
+.setup-btn:hover       { background: rgba(255, 255, 255, 0.08); border-color: rgba(255, 255, 255, 0.18); }
 .setup-btn.mode-disabled,
 .setup-btn.mode-disabled:hover { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
 .setup-btn.primary     { border-color: var(--day); color: var(--day); }
@@ -2583,8 +2588,8 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .setup-footer > * { pointer-events: auto; }
 
 .version-badge {
-  font-size: 0.8rem;
-  color: rgba(255,255,255,0.35);
+  font-size: 0.95rem;
+  color: rgba(255,255,255,0.4);
   letter-spacing: 0.05em;
   user-select: none;
 }
