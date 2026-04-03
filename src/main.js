@@ -4285,10 +4285,6 @@ async function _initAccountPage() {
   document.getElementById('acct-name-edit').style.display = 'none';
   document.getElementById('acct-name-error').style.display = 'none';
 
-  // Stats
-  const stats = document.getElementById('acct-stats');
-  stats.textContent = `${session.wins ?? 0}W / ${session.losses ?? 0}L / ${session.draws ?? 0}D`;
-
   // Email — fetch linked identities
   const emailEl   = document.getElementById('acct-email');
   const linkBtn   = document.getElementById('btn-acct-link-email');

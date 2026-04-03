@@ -18,19 +18,16 @@
     <!-- Welcome screen -->
     <div id="setup-step-mode" class="setup-card">
       <h1 class="title">CALEB'S HOLLOW</h1>
-      <div class="setup-lore">
-        <p>
-          A hero rides into a cursed New England town. The witch who haunts its
-          graveyard stirs. One will prevail before the dawn.
-        </p>
-      </div>
       <div class="setup-buttons" style="flex-direction:column;align-items:center">
-        <button id="btn-single-player" class="setup-btn primary" style="width:200px">⚔ Single Player</button>
-        <button id="btn-multiplayer"   class="setup-btn"         style="width:200px;position:relative">🌐 Multiplayer<span id="mp-badge" class="mp-badge" style="display:none"></span></button>
-        <button id="btn-tutorial"      class="setup-btn"         style="width:200px">⚑ Tutorial</button>
-        <button id="btn-how-to-play"   class="setup-btn"         style="width:200px">How to Play</button>
-        <button id="btn-account"       class="setup-btn"         style="width:200px">Account</button>
-        <button id="btn-options"       class="setup-btn"         style="width:200px">Options</button>
+        <button id="btn-single-player" class="setup-btn" style="width:200px">⚔ Single Player</button>
+        <button id="btn-multiplayer"   class="setup-btn" style="width:200px;position:relative">🌐 Multiplayer<span id="mp-badge" class="mp-badge" style="display:none"></span></button>
+        <button id="btn-tutorial"      class="setup-btn" style="width:200px">⚑ Tutorial</button>
+        <button id="btn-how-to-play"   class="setup-btn" style="width:200px">How to Play</button>
+      </div>
+      <div class="menu-separator"></div>
+      <div class="setup-buttons" style="flex-direction:column;align-items:center;margin-top:0">
+        <button id="btn-account"       class="setup-btn" style="width:200px">Account</button>
+        <button id="btn-options"       class="setup-btn" style="width:200px">Options</button>
       </div>
       <!-- Async games box removed — games listed in Multiplayer section -->
       <div style="margin-top:1.25rem;text-align:center">
@@ -516,11 +513,6 @@
             <button id="btn-acct-send-link" class="setup-btn primary" style="margin-top:0.4rem">Send Link</button>
             <p id="acct-email-status" class="setup-hint" style="display:none"></p>
           </div>
-        </div>
-
-        <div class="acct-section">
-          <div class="acct-label">Record</div>
-          <div id="acct-stats" class="acct-value"></div>
         </div>
 
       </div>
