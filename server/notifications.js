@@ -3,7 +3,7 @@
 // device. Email via Resend API is the fallback for players without devices.
 
 import db from './db.js';
-import { sendPush, hasDeviceTokens } from './push.js';
+import { sendPush, hasDeviceTokens, getDeviceTokens } from './push.js';
 
 // ── Configuration ────────────────────────────────────────────────────────────
 
@@ -55,6 +55,12 @@ function _record(roomId, playerId, type) {
   _insertNotif.run(roomId, playerId, type);
 }
 
+function _logNotifyAttempt(fn, playerId, roomId, opts) {
+  const tokens = getDeviceTokens(playerId);
+  const email = _getPlayerEmail(playerId);
+  console.log(`[Notify] ${fn} player=${playerId} room=${roomId} isAsync=${opts?.isAsync} devices=${tokens.length} tokens=[${tokens.map(t => t.token.slice(0, 8) + '…').join(',')}] email=${email || 'none'}`);
+}
+
 async function _sendEmail(to, subject, body) {
   if (!RESEND_API_KEY) {
     console.log(`[Notify] ${subject} → ${to}`);
@@ -91,9 +97,16 @@ function _playerName(playerId) {
  * Returns false if the game is not async or the player is currently connected.
  */
 export function shouldNotify(roomId, playerId, { isAsync, isConnected } = {}) {
-  if (!isAsync) return false;
-  if (isConnected && typeof isConnected === 'function') return !isConnected(playerId);
-  if (typeof isConnected === 'boolean') return !isConnected;
+  if (!isAsync) { console.log(`[Notify] shouldNotify=false: not async`); return false; }
+  if (isConnected && typeof isConnected === 'function') {
+    const connected = isConnected(playerId);
+    if (connected) console.log(`[Notify] shouldNotify=false: player ${playerId} is connected`);
+    return !connected;
+  }
+  if (typeof isConnected === 'boolean') {
+    if (isConnected) console.log(`[Notify] shouldNotify=false: isConnected=true`);
+    return !isConnected;
+  }
   return true;
 }
 
@@ -102,12 +115,13 @@ export function shouldNotify(roomId, playerId, { isAsync, isConnected } = {}) {
  * "Waiting on you!"
  */
 export async function notifyWaitingOnYou(playerId, gameInfo, opts) {
-  console.log(`[Notify] notifyWaitingOnYou called for player=${playerId} room=${gameInfo.roomId} isAsync=${opts?.isAsync}`);
-  if (!shouldNotify(gameInfo.roomId, playerId, opts)) { console.log(`[Notify] shouldNotify=false, skipping`); return; }
+  _logNotifyAttempt('notifyWaitingOnYou', playerId, gameInfo.roomId, opts);
+  if (!shouldNotify(gameInfo.roomId, playerId, opts)) return;
   if (!_shouldSend(gameInfo.roomId, playerId, 'waiting_on_you')) { console.log(`[Notify] dedup suppressed waiting_on_you`); return; }
   _record(gameInfo.roomId, playerId, 'waiting_on_you');
 
   if (hasDeviceTokens(playerId)) {
+    console.log(`[Notify] sending push for waiting_on_you to player=${playerId}`);
     await sendPush(playerId, {
       title: 'Waiting on you!',
       body: "Everyone else has submitted. Your turn to plan!",
@@ -115,7 +129,7 @@ export async function notifyWaitingOnYou(playerId, gameInfo, opts) {
     });
   } else {
     const email = _getPlayerEmail(playerId);
-    if (!email) return;
+    if (!email) { console.log(`[Notify] no device tokens and no email for player=${playerId}, skipping`); return; }
     const url = `${_baseUrl()}/#game=${gameInfo.roomId}`;
     await _sendEmail(email,
       "Caleb's Hollow — Waiting on you!",
@@ -128,12 +142,13 @@ export async function notifyWaitingOnYou(playerId, gameInfo, opts) {
  * Notify a player that a new round is ready (everyone submitted, resolution done).
  */
 export async function notifyRoundReady(playerId, gameInfo, opts) {
-  console.log(`[Notify] notifyRoundReady called for player=${playerId} room=${gameInfo.roomId} isAsync=${opts?.isAsync}`);
-  if (!shouldNotify(gameInfo.roomId, playerId, opts)) { console.log(`[Notify] shouldNotify=false, skipping`); return; }
+  _logNotifyAttempt('notifyRoundReady', playerId, gameInfo.roomId, opts);
+  if (!shouldNotify(gameInfo.roomId, playerId, opts)) return;
   if (!_shouldSend(gameInfo.roomId, playerId, 'round_ready')) { console.log(`[Notify] dedup suppressed round_ready`); return; }
   _record(gameInfo.roomId, playerId, 'round_ready');
 
   if (hasDeviceTokens(playerId)) {
+    console.log(`[Notify] sending push for round_ready to player=${playerId}`);
     await sendPush(playerId, {
       title: `Round ${gameInfo.round} is ready`,
       body: 'Everyone submitted. A new round has begun.',
@@ -141,7 +156,7 @@ export async function notifyRoundReady(playerId, gameInfo, opts) {
     });
   } else {
     const email = _getPlayerEmail(playerId);
-    if (!email) return;
+    if (!email) { console.log(`[Notify] no device tokens and no email for player=${playerId}, skipping`); return; }
     const url = `${_baseUrl()}/#game=${gameInfo.roomId}`;
     await _sendEmail(email,
       `Caleb's Hollow — Round ${gameInfo.round} is ready`,
@@ -155,13 +170,15 @@ export async function notifyRoundReady(playerId, gameInfo, opts) {
  * "You have ~N minutes to submit your plan!"
  */
 export async function notifyDeadlineApproaching(playerId, gameInfo, opts) {
+  _logNotifyAttempt('notifyDeadlineApproaching', playerId, gameInfo.roomId, opts);
   if (!shouldNotify(gameInfo.roomId, playerId, opts)) return;
-  if (!_shouldSend(gameInfo.roomId, playerId, 'deadline_approaching')) return;
+  if (!_shouldSend(gameInfo.roomId, playerId, 'deadline_approaching')) { console.log(`[Notify] dedup suppressed deadline_approaching`); return; }
   _record(gameInfo.roomId, playerId, 'deadline_approaching');
 
   const mins = gameInfo.minutesLeft ?? 10;
 
   if (hasDeviceTokens(playerId)) {
+    console.log(`[Notify] sending push for deadline_approaching to player=${playerId}`);
     await sendPush(playerId, {
       title: 'Deadline approaching',
       body: `You have ~${mins} minutes to submit your plan!`,
@@ -169,7 +186,7 @@ export async function notifyDeadlineApproaching(playerId, gameInfo, opts) {
     });
   } else {
     const email = _getPlayerEmail(playerId);
-    if (!email) return;
+    if (!email) { console.log(`[Notify] no device tokens and no email for player=${playerId}, skipping`); return; }
     const url = `${_baseUrl()}/#game=${gameInfo.roomId}`;
     await _sendEmail(email,
       "Caleb's Hollow — Deadline approaching",
@@ -182,13 +199,15 @@ export async function notifyDeadlineApproaching(playerId, gameInfo, opts) {
  * Notify a player that the game is over.
  */
 export async function notifyGameOver(playerId, gameInfo, opts) {
+  _logNotifyAttempt('notifyGameOver', playerId, gameInfo.roomId, opts);
   if (!shouldNotify(gameInfo.roomId, playerId, opts)) return;
-  if (!_shouldSend(gameInfo.roomId, playerId, 'game_over')) return;
+  if (!_shouldSend(gameInfo.roomId, playerId, 'game_over')) { console.log(`[Notify] dedup suppressed game_over`); return; }
   _record(gameInfo.roomId, playerId, 'game_over');
 
   const winnerLabel = gameInfo.winner === 'hero' ? 'The Hero' : 'The Witch';
 
   if (hasDeviceTokens(playerId)) {
+    console.log(`[Notify] sending push for game_over to player=${playerId}`);
     await sendPush(playerId, {
       title: 'Game Over',
       body: `${winnerLabel} wins! ${gameInfo.winReason || ''}`,
@@ -196,7 +215,7 @@ export async function notifyGameOver(playerId, gameInfo, opts) {
     });
   } else {
     const email = _getPlayerEmail(playerId);
-    if (!email) return;
+    if (!email) { console.log(`[Notify] no device tokens and no email for player=${playerId}, skipping`); return; }
     const url = `${_baseUrl()}/#game=${gameInfo.roomId}`;
     await _sendEmail(email,
       "Caleb's Hollow — Game Over",
@@ -221,9 +240,11 @@ export async function sendGameInvite(email, gameInfo) {
  * Notify a player that the game was abandoned due to inactivity.
  */
 export async function notifyGameAbandoned(playerId, gameInfo) {
-  const opponent = _playerName(gameInfo.opponentId);
+  _logNotifyAttempt('notifyGameAbandoned', playerId, gameInfo.roomId, { isAsync: true });
 
   if (hasDeviceTokens(playerId)) {
+    const opponent = _playerName(gameInfo.opponentId);
+    console.log(`[Notify] sending push for game_abandoned to player=${playerId}`);
     await sendPush(playerId, {
       title: 'Game abandoned',
       body: `Your game against ${opponent} was abandoned due to inactivity.`,
@@ -231,7 +252,8 @@ export async function notifyGameAbandoned(playerId, gameInfo) {
     });
   } else {
     const email = _getPlayerEmail(playerId);
-    if (!email) return;
+    if (!email) { console.log(`[Notify] no device tokens and no email for player=${playerId}, skipping`); return; }
+    const opponent = _playerName(gameInfo.opponentId);
     await _sendEmail(email,
       "Caleb's Hollow — Game abandoned",
       `Your async game against ${opponent} has been abandoned due to inactivity (3 consecutive rounds with no submissions from either player).`

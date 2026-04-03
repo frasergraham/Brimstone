@@ -125,11 +125,15 @@ export async function sendPush(playerId, { title, body, roomId }) {
 
   const deviceTokens = tokens.map(t => t.token);
 
+  console.log(`[Push] Sending "${title}" to player=${playerId} tokens=[${deviceTokens.map(t => t.slice(0, 8) + '…').join(',')}]`);
+
   try {
     const result = await provider.send(note, deviceTokens);
+    console.log(`[Push] Result: sent=${result.sent?.length || 0} failed=${result.failed?.length || 0}`);
 
     // Clean up invalid tokens
     for (const failure of result.failed || []) {
+      console.log(`[Push] Failure: device=${failure.device?.slice(0, 8)}… status=${failure.status} reason=${failure.response?.reason}`);
       if (failure.status === '410' || failure.response?.reason === 'BadDeviceToken' ||
           failure.response?.reason === 'Unregistered') {
         console.log(`[Push] Removing invalid token for player ${playerId}`);
