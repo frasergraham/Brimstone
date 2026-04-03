@@ -3566,6 +3566,10 @@ async function _startMpReplay(rounds, gameMeta) {
 
 function _showOnlineScreen() {
   if (mp?.connected) mp.clearRoom();
+  // Clear game state so the next onState triggers initOnline
+  state = null;
+  renderer = null;
+  ui = null;
   document.getElementById('game-screen').style.display  = 'none';
   document.getElementById('setup-screen').style.display = '';
   showStep('online');

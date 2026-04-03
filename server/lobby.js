@@ -538,6 +538,7 @@ function _submitPlayerPlan(room, playerId, plan, isTimeout = false) {
 
   // Persist plan to DB for crash recovery / hibernation
   try {
+    console.log(`[room ${room.id}] persisting plan for ${playerId} round=${room.state.round} actions=${plan.length}`);
     upsertPlanStatus(room.id, playerId, room.state.round, plan);
   } catch (err) {
     console.error(`[room ${room.id}] upsertPlanStatus error:`, err);
