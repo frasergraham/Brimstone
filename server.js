@@ -45,7 +45,7 @@ import { deleteAsyncGame as _deleteAsyncGame,
          getAsyncGame as _getAsyncGame,
          getAsyncGameByCode }                  from './server/async-game.js';
 import { serializeState } from './server/state-sync.js';
-import { getGameModeConfig } from './server/game-mode-config.js';
+import { getGameModeConfig, getDevMode } from './server/game-mode-config.js';
 import { upsertDeviceToken, deleteDeviceToken, pruneStaleTokens } from './server/push.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -95,7 +95,61 @@ app.get('/health', (_req, res) => {
 
 // REST: client configuration (game mode visibility, etc.)
 app.get('/api/config', (_req, res) => {
-  res.json({ modes: getGameModeConfig() });
+  const payload = { modes: getGameModeConfig() };
+  if (getDevMode()) payload.devMode = true;
+  res.json(payload);
+});
+
+// REST: Railway environment auto-discovery for the server selector
+// Requires RAILWAY_API_TOKEN + RAILWAY_PROJECT_ID env vars.
+let _envCache = null;
+let _envCacheTime = 0;
+const ENV_CACHE_TTL = 60_000; // 60 s
+
+app.get('/api/environments', async (_req, res) => {
+  if (!getDevMode()) { res.json([]); return; }
+
+  const token     = process.env.RAILWAY_API_TOKEN;
+  const projectId = process.env.RAILWAY_PROJECT_ID;
+  if (!token || !projectId) { res.json([]); return; }
+
+  // Serve from cache if fresh
+  if (_envCache && Date.now() - _envCacheTime < ENV_CACHE_TTL) {
+    res.json(_envCache);
+    return;
+  }
+
+  try {
+    const query = `
+      query ($projectId: String!) {
+        environments(projectId: $projectId) {
+          edges { node { id name deployments(first: 1) {
+            edges { node { staticUrl } }
+          } } }
+        }
+      }`;
+    const resp = await fetch('https://backboard.railway.app/graphql/v2', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ query, variables: { projectId } }),
+    });
+    const json = await resp.json();
+    const edges = json?.data?.environments?.edges || [];
+    const envs = edges
+      .map(e => {
+        const staticUrl = e.node.deployments?.edges?.[0]?.node?.staticUrl;
+        if (!staticUrl) return null;
+        return { label: e.node.name, url: `https://${staticUrl}` };
+      })
+      .filter(Boolean);
+
+    _envCache = envs;
+    _envCacheTime = Date.now();
+    res.json(envs);
+  } catch (err) {
+    console.warn('[environments] Railway API query failed:', err.message);
+    res.json(_envCache || []);
+  }
 });
 
 // REST: leaderboard (also exposed over WS, but handy for embedding)

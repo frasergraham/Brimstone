@@ -19,7 +19,7 @@ const WWW  = resolve(ROOT, 'www');
 // ── Environment config ──────────────────────────────────────────────────────
 
 const ENVS = {
-  dev:  { server: 'https://brimstone-dev.up.railway.app' },
+  dev:  { server: 'https://brimstone-dev.up.railway.app', devMode: true },
   prod: { server: 'https://brimstone.run' },
 };
 

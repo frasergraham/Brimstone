@@ -25,25 +25,11 @@ export const isNativeMobile = !!window.Capacitor;
 // Mirrors the pattern in electron/preload.cjs — the rest of the client reads
 // window.BRIMSTONE_SERVER (REST) and window.BRIMSTONE_WS (WebSocket).
 
-async function _initServerUrl() {
-  if (!isNativeMobile || window.BRIMSTONE_SERVER) return;
+/** Parsed build-config.json (if available). */
+let _buildConfig = null;
 
-  const stored = localStorage.getItem('brimstone_server_url');
-  let serverUrl = stored;
-
-  if (!serverUrl) {
-    try {
-      const res = await fetch('./build-config.json');
-      if (res.ok) {
-        const config = await res.json();
-        serverUrl = config.server;
-      }
-    } catch { /* file missing — use fallback */ }
-  }
-
-  serverUrl = serverUrl || FALLBACK_SERVER;
+function _applyServerUrl(serverUrl) {
   window.BRIMSTONE_SERVER = serverUrl;
-
   try {
     const url = new URL(serverUrl);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -53,8 +39,45 @@ async function _initServerUrl() {
   }
 }
 
+async function _initServerUrl() {
+  // ── Native mobile (Capacitor) ────────────────────────────────────────────
+  if (isNativeMobile && !window.BRIMSTONE_SERVER) {
+    const stored = localStorage.getItem('brimstone_server_url');
+    let serverUrl = stored;
+
+    if (!serverUrl) {
+      try {
+        const res = await fetch('./build-config.json');
+        if (res.ok) {
+          _buildConfig = await res.json();
+          serverUrl = _buildConfig.server;
+        }
+      } catch { /* file missing — use fallback */ }
+    }
+
+    _applyServerUrl(serverUrl || FALLBACK_SERVER);
+    return;
+  }
+
+  // ── Web (browser) — honour localStorage override ─────────────────────────
+  if (!isNativeMobile && !window.electronAPI && !window.BRIMSTONE_SERVER) {
+    const stored = localStorage.getItem('brimstone_server_url');
+    if (stored) _applyServerUrl(stored);
+  }
+}
+
 // Must resolve before the rest of the app uses BRIMSTONE_SERVER
 await _initServerUrl();
+
+/**
+ * Synchronous dev-mode check based on local signals (build config, localStorage,
+ * Electron). The server-driven signal (`/api/config → devMode`) is handled
+ * separately in main.js since it requires a network fetch.
+ */
+export const isDevMode =
+  localStorage.getItem('brimstone_dev_mode') === '1' ||
+  _buildConfig?.devMode === true ||
+  !!window.electronAPI;
 
 // ── Splash screen ───────────────────────────────────────────────────────────
 

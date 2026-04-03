@@ -45,4 +45,12 @@ export function getGameModeConfig() {
   return config;
 }
 
+/**
+ * Returns true when `BRIMSTONE_DEV_MODE=true` is set.
+ * Used to expose dev-only features (server selector, etc.) to the client.
+ */
+export function getDevMode() {
+  return process.env.BRIMSTONE_DEV_MODE === 'true';
+}
+
 export { MODE_ENV_KEYS, VALID_STATES };
