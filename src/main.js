@@ -4287,7 +4287,10 @@ async function _initAccountPage() {
   signedIn.style.display  = '';
 
   // Username
-  document.getElementById('acct-username').textContent = session.username;
+  const usernameEl = document.getElementById('acct-username');
+  usernameEl.textContent = _gcCredentials
+    ? session.username + '  (Game Center)'
+    : session.username;
   document.getElementById('acct-name-edit').style.display = 'none';
   document.getElementById('acct-name-error').style.display = 'none';
 
@@ -4317,6 +4320,7 @@ async function _initAccountPage() {
       emailEl.textContent = 'Not linked';
       linkBtn.style.display = '';
     }
+
   } catch {
     emailEl.textContent = 'Not linked';
     linkBtn.style.display = '';
