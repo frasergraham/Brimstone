@@ -25,7 +25,7 @@ import { createMinion, createZombie, createWoodGolem, createIronGolem, createSur
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
-import { requestNotificationPermission, notifyTurnReady, notifyOpponentSubmitted, notifyGameOver } from './notifications.js';
+import { requestNotificationPermission, notifyRoundReady, notifyWaitingOnYou, notifyDeadlineApproaching, notifyGameOver } from './notifications.js';
 
 // Stamp version into badge
 document.getElementById('version-badge').textContent = `v${BUILD_VERSION}`;
@@ -1383,6 +1383,7 @@ document.getElementById('btn-howtoplay-back').addEventListener('click', () => sh
 document.getElementById('btn-options-back') .addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-account-back') .addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-changelog-back').addEventListener('click', () => showStep('mode'));
+document.getElementById('reconnect-back').addEventListener('click', () => location.reload());
 
 // Initialize persistent session bar on page load
 _updateSessionBar();
@@ -2514,7 +2515,7 @@ function _handleAsyncStateUpdate(msg) {
   }
 
   // Notify if it's the player's turn (plan not yet submitted)
-  if (!msg.myPlanSubmitted) notifyTurnReady(mirror.round ?? 1);
+  if (!msg.myPlanSubmitted) notifyRoundReady(mirror.round ?? 1);
 
   // ── Active game: unseen last round → offer replay before planning ──
   if (_asyncLastRound && _asyncSeenRound < _asyncLastRound.roundNum) {
@@ -2612,7 +2613,7 @@ function _handleAsyncResolution({ roomId, steps, finalState, finalStateSnapshot,
       ]);
     } else {
       // Enter PLAN MODE for the new round
-      notifyTurnReady(resolvedRound + 1);
+      notifyRoundReady(resolvedRound + 1);
       const budget = state.playerActionsLeft?.[mp?.myPlayerId] ??
                      state[_asyncFaction + 'ActionsLeft'] ?? 3;
       ui?.enterPlanningMode(_asyncFaction, budget, 0);
@@ -2789,12 +2790,15 @@ async function _asyncWatchLastTurn(lastRound) {
 }
 
 function _handleAsyncPlanStatus(msg) {
-  // Notify when an opponent has submitted (i.e. any player other than us)
+  // Notify when we're the last unsubmitted player ("Waiting on you!")
   if (Array.isArray(msg.planStatus)) {
-    const opponentSubmitted = msg.planStatus.some(
-      ps => ps.playerId !== mp?.myPlayerId && ps.submitted
-    );
-    if (opponentSubmitted) notifyOpponentSubmitted();
+    const myStatus = msg.planStatus.find(ps => ps.playerId === mp?.myPlayerId);
+    const othersAllSubmitted = msg.planStatus
+      .filter(ps => ps.playerId !== mp?.myPlayerId)
+      .every(ps => ps.submitted);
+    if (othersAllSubmitted && myStatus && !myStatus.submitted) {
+      notifyWaitingOnYou();
+    }
   }
   _applyPlanStatus(msg.planStatus);
 }
@@ -3480,27 +3484,71 @@ document.getElementById('btn-create-game-back').addEventListener('click', () => 
 
 document.getElementById('btn-create-game-confirm').addEventListener('click', () => {
   _ensureAuthed(() => {
-    const turnTimeoutEl = document.getElementById('cg-turn-timeout');
-    const inviteeEl     = document.getElementById('cg-invitee-email');
+    const isAsync = document.querySelector('input[name="cg-mode"]:checked')?.value === 'async';
+    const timeoutEl = isAsync
+      ? document.getElementById('cg-turn-timeout-async')
+      : document.getElementById('cg-turn-timeout-live');
+    const inviteInputs = document.querySelectorAll('#cg-invite-emails input[type="email"]');
+    const inviteEmails = [...inviteInputs].map(i => i.value.trim()).filter(Boolean);
     const config = {
       fog:            document.getElementById('cg-fog').value,
       mapSize:        document.getElementById('cg-map-size').value,
       nodeCount:      parseInt(document.getElementById('cg-node-count')?.value ?? '3', 10),
       playersPerSide: parseInt(document.querySelector('input[name="cg-pps"]:checked')?.value ?? '1', 10),
       isPrivate:      document.getElementById('cg-private').checked,
-      turnIntervalMs: parseInt(turnTimeoutEl?.value ?? '90000', 10),
-      inviteeEmail:   inviteeEl?.value?.trim() || null,
+      isAsync,
+      turnIntervalMs: parseInt(timeoutEl?.value ?? '90000', 10),
+      inviteeEmail:   inviteEmails[0] || null,
+      inviteEmails:   inviteEmails.length ? inviteEmails : null,
     };
     mp.createLobby(config);
     // Transition to lobby card happens in onLobbyJoined callback
   });
 });
 
-// Show/hide invite email field based on turn timeout (>= 1 hour)
-document.getElementById('cg-turn-timeout')?.addEventListener('change', (e) => {
+// Mode toggle — swap timeout dropdowns and show/hide invite emails
+function _updateCreateGameMode() {
+  const isAsync = document.querySelector('input[name="cg-mode"]:checked')?.value === 'async';
+  const liveEl  = document.getElementById('cg-turn-timeout-live');
+  const asyncEl = document.getElementById('cg-turn-timeout-async');
+  if (liveEl)  liveEl.style.display  = isAsync ? 'none' : '';
+  if (asyncEl) asyncEl.style.display = isAsync ? '' : 'none';
+}
+
+for (const radio of document.querySelectorAll('input[name="cg-mode"]')) {
+  radio.addEventListener('change', _updateCreateGameMode);
+}
+
+// Rebuild invite email fields when player count changes
+function _rebuildInviteEmails() {
+  const pps = parseInt(document.querySelector('input[name="cg-pps"]:checked')?.value ?? '1', 10);
+  const totalPlayers = pps * 2;
+  const inviteCount = totalPlayers - 1;
+  const container = document.getElementById('cg-invite-emails');
+  const inviteRow = document.getElementById('cg-invite-row');
+  if (!container || !inviteRow) return;
+  container.innerHTML = '';
+  for (let i = 0; i < inviteCount; i++) {
+    const input = document.createElement('input');
+    input.type = 'email';
+    input.className = 'setup-input';
+    input.placeholder = `Player ${i + 2} email (optional)`;
+    input.autocomplete = 'email';
+    input.style.cssText = 'margin:0 0 0.3rem;font-size:0.85rem';
+    container.appendChild(input);
+  }
+}
+
+for (const radio of document.querySelectorAll('input[name="cg-pps"]')) {
+  radio.addEventListener('change', _rebuildInviteEmails);
+}
+
+// Show invite row when private is checked
+document.getElementById('cg-private')?.addEventListener('change', (e) => {
   const inviteRow = document.getElementById('cg-invite-row');
   if (inviteRow) {
-    inviteRow.style.display = parseInt(e.target.value, 10) >= 3600000 ? '' : 'none';
+    inviteRow.style.display = e.target.checked ? '' : 'none';
+    if (e.target.checked) _rebuildInviteEmails();
   }
 });
 
@@ -4439,15 +4487,29 @@ function _createMpClient() {
       // Lobby update handles this now — no-op
     },
 
-    onOpponentDisconnected(graceMs) {
-      const secs = Math.round(graceMs / 1000);
-      const statusEl = document.getElementById('plan-status');
-      if (statusEl) statusEl.textContent = `⚠ Opponent disconnected — waiting ${secs}s for reconnect…`;
+    onDisconnected() {
+      const overlay = document.getElementById('reconnect-overlay');
+      if (overlay) {
+        document.getElementById('reconnect-spinner').style.display = '';
+        document.getElementById('reconnect-message').textContent = 'Reconnecting\u2026';
+        document.getElementById('reconnect-back').style.display = 'none';
+        overlay.style.display = 'flex';
+      }
     },
 
-    onOpponentReconnected() {
-      const statusEl = document.getElementById('plan-status');
-      if (statusEl) statusEl.textContent = '';
+    onReconnected() {
+      const overlay = document.getElementById('reconnect-overlay');
+      if (overlay) overlay.style.display = 'none';
+    },
+
+    onDisconnectFatal(msg) {
+      const overlay = document.getElementById('reconnect-overlay');
+      if (overlay) {
+        document.getElementById('reconnect-spinner').style.display = 'none';
+        document.getElementById('reconnect-message').textContent = msg;
+        document.getElementById('reconnect-back').style.display = '';
+        overlay.style.display = 'flex';
+      }
     },
 
     onPlanningPhase(payload) {
@@ -4600,7 +4662,8 @@ function _createMpClient() {
       // Ignore errors after intentional sign-out / disconnect
       if (!mp) return;
 
-      // During auth phase, show error on the appropriate screen
+      // Only show errors on setup screens (pre-game).
+      // In-game connection errors are handled by the reconnect overlay.
       if (!state || document.getElementById('setup-screen').style.display !== 'none') {
         if (_asyncRoomId || stepAsync.style.display !== 'none') {
           _showAsyncScreen();
@@ -4608,9 +4671,6 @@ function _createMpClient() {
           _showOnlineScreen();
         }
         _onlineError(msg);
-      } else {
-        // In-game error — show as modal dialog
-        if (ui) ui._showResultDialog([`⚠ ${msg}`]);
       }
     },
 

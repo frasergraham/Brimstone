@@ -1731,6 +1731,47 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   background: var(--danger, #aa4444);
 }
 
+/* ── Reconnect overlay ────────────────────────────────────────────────── */
+
+#reconnect-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.7);
+}
+
+#reconnect-overlay[style*="display: flex"],
+#reconnect-overlay[style*="display:flex"] {
+  display: flex;
+}
+
+.reconnect-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2rem 2.5rem;
+  text-align: center;
+  box-shadow: 0 0 40px rgba(0,0,0,0.7);
+}
+
+.reconnect-card .waiting-spinner {
+  font-size: 2rem;
+  margin-bottom: 0.5rem;
+}
+
+#reconnect-message {
+  color: var(--text-bright);
+  font-size: 1rem;
+  margin: 0.5rem 0 1rem;
+}
+
+#reconnect-back {
+  pointer-events: all;
+}
+
 /* ── Battle dialog ─────────────────────────────────────────────────────── */
 
 #battle-dialog {

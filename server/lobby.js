@@ -16,6 +16,7 @@ import { upsertSave, deleteSave, getSave,
          insertPlanStatusRows, upsertPlanStatus,
          getPlanStatus, clearPlanStatus,
          clearAllPlanStatus, getExpiredDeadlineGames,
+         getApproachingDeadlineGames,
          getActiveGamesForPlayer }                      from './saves.js';
 import { insertAsyncGame, getAsyncGame, getAsyncGameByCode,
          getAsyncGamesForPlayer, activateAsyncGame,
@@ -26,8 +27,8 @@ import { insertAsyncGame, getAsyncGame, getAsyncGameByCode,
          allPlansSubmitted as asyncAllPlansSubmitted,
          getExpiredGames, pruneStaleAsyncGames as _pruneAsyncGames,
          deleteAsyncGame }                       from './async-game.js';
-import { notifyOpponentJoined, notifyTurnReady,
-         notifyOpponentSubmitted, notifyGameOver,
+import { notifyWaitingOnYou, notifyRoundReady,
+         notifyDeadlineApproaching, notifyGameOver,
          notifyGameAbandoned, sendGameInvite,
          shouldNotify }                          from './notifications.js';
 import db                                  from './db.js';
@@ -130,7 +131,7 @@ function broadcastToSpectators(room, obj) {
 /** Build notification options for a unified room. */
 function _notifyOpts(room) {
   return {
-    turnIntervalMs: room.config.turnIntervalMs,
+    isAsync: room.config.isAsync ?? false,
     isConnected: (playerId) => {
       const seat = seatFor(room, playerId);
       return seat?.ws?.readyState === 1;
@@ -192,6 +193,7 @@ function createRoom(config = {}) {
       nodeCount:        config.nodeCount ?? null,
       playersPerSide:   Math.max(1, Math.min(4, (config.playersPerSide | 0) || 1)),
       turnIntervalMs:   Math.max(30_000, Math.min(259_200_000, Number(config.turnIntervalMs) || TURN_TIMEOUT_MS)),
+      isAsync:          !!config.isAsync,
     },
     consecutiveTimeouts: {},  // playerId → consecutive empty-plan timeout count
     slots:            [],
@@ -470,14 +472,16 @@ function _submitPlayerPlan(room, playerId, plan, isTimeout = false) {
   broadcastExcept(room, playerId, submittedMsg);
   broadcastToSpectators(room, submittedMsg);
 
-  // Notify disconnected opponents via email (long-timeout games only)
+  // Notify the last unsubmitted human player that everyone else has submitted
   if (!isTimeout && !seat?.isAI) {
     const opts = _notifyOpts(room);
-    for (const other of room.players) {
-      if (other.isAI || other.playerId === playerId) continue;
-      notifyOpponentSubmitted(other.playerId, {
-        roomId: room.id, opponentId: playerId,
-      }, asyncSessions, opts).catch(() => {});
+    const unsubmitted = room.players.filter(
+      s => !s.isAI && s.playerId !== playerId && !room.state.playerReady?.get(s.playerId)
+    );
+    if (unsubmitted.length === 1) {
+      notifyWaitingOnYou(unsubmitted[0].playerId, {
+        roomId: room.id,
+      }, opts).catch(() => {});
     }
   }
 
@@ -616,13 +620,13 @@ function _executeResolution(room) {
     _checkTimeoutTakeovers(room);
     setTimeout(() => _startPlanningPhase(room), 4000);
 
-    // Notify disconnected human players that a new round is ready (long-timeout games only)
+    // Notify disconnected human players that a new round is ready
     const opts = _notifyOpts(room);
     for (const seat of room.players) {
       if (seat.isAI) continue;
-      notifyTurnReady(seat.playerId, {
+      notifyRoundReady(seat.playerId, {
         roomId: room.id, round: state.round,
-      }, asyncSessions, opts).catch(() => {});
+      }, opts).catch(() => {});
     }
   }
 }
@@ -878,7 +882,7 @@ function checkAndHandleGameOver(room) {
     }
   }
 
-  // Notify disconnected human players that the game is over (long-timeout games only)
+  // Notify disconnected human players that the game is over
   const opts = _notifyOpts(room);
   for (const seat of room.players) {
     if (seat.isAI) continue;
@@ -886,7 +890,7 @@ function checkAndHandleGameOver(room) {
       roomId: room.id,
       winner: room.state.winner,
       winReason: room.state.winReason,
-    }, asyncSessions, opts).catch(() => {});
+    }, opts).catch(() => {});
   }
 
   setTimeout(() => destroyRoom(room), 5_000);
@@ -905,6 +909,7 @@ export function createLobby(playerId, playerName, ws, config = {}) {
     nodeCount:      config.nodeCount ?? null,
     playersPerSide: pps,
     turnIntervalMs: config.turnIntervalMs,
+    isAsync:        config.isAsync ?? false,
   });
   room.isPrivate    = config.isPrivate ?? false;
   room.hostPlayerId = playerId;
@@ -918,6 +923,15 @@ export function createLobby(playerId, playerName, ws, config = {}) {
   heroSlot._ws      = ws;
 
   send(ws, { type: 'lobbyJoined', lobby: _lobbyPublic(room) });
+
+  // Send invite emails
+  const emails = (config.inviteEmails || []).filter(e => typeof e === 'string' && e.trim());
+  if (config.inviteeEmail && !emails.length) emails.push(config.inviteeEmail);
+  for (const email of emails) {
+    sendGameInvite(email.trim().toLowerCase(), {
+      roomId: room.id, code: room.code, hostName: playerName,
+    }).catch(() => {});
+  }
 }
 
 /**
@@ -1518,6 +1532,7 @@ export function getActiveRoomsForPlayer(playerId) {
       hero_player_id:   room.players.find(s => s.faction === 'hero'  && !s.isAI)?.playerId ?? null,
       witch_player_id:  room.players.find(s => s.faction === 'witch' && !s.isAI)?.playerId ?? null,
       turn_interval_ms: room.config.turnIntervalMs ?? TURN_TIMEOUT_MS,
+      is_async:         room.config.isAsync ?? false,
       turn_deadline:    room.turnDeadline ?? null,
       status:           room.status,
       action_needed:    actionNeeded,
@@ -1532,6 +1547,9 @@ export function getActiveRoomsForPlayer(playerId) {
     const dbGames = getActiveGamesForPlayer(playerId);
     for (const g of dbGames) {
       if (seenRoomIds.has(g.room_id)) continue;
+      // Extract isAsync from config_json
+      try { g.is_async = JSON.parse(g.config_json || '{}').isAsync ?? false; } catch { g.is_async = false; }
+      delete g.config_json;
       // Compute action_needed from plan status
       if (g.status === 'playing') {
         try {
@@ -1778,11 +1796,11 @@ export function joinAsyncGameRoom(playerId, playerName, code) {
   );
   if (!ok) return { error: 'Failed to activate game.' };
 
-  // Notify the host
+  // Notify the host that round 1 is ready
   const opponentId = game.host_player_id;
-  notifyOpponentJoined(opponentId, {
-    roomId: game.room_id, opponentId: playerId,
-  }, asyncSessions).catch(() => {});
+  notifyRoundReady(opponentId, {
+    roomId: game.room_id, round: 1,
+  }, { isAsync: true }).catch(() => {});
 
   // If host already connected, push updated state so they see the opponent joined
   _asyncSend(game.room_id, opponentId, {
@@ -1929,10 +1947,10 @@ export function handleAsyncPlanSubmit(playerId, roomId, plan) {
   if (asyncAllPlansSubmitted(roomId, game.round)) {
     _resolveAsyncRound(roomId);
   } else {
-    // Notify opponent via email if not connected
-    notifyOpponentSubmitted(opponentId, {
-      roomId, opponentId: playerId,
-    }, asyncSessions).catch(() => {});
+    // Notify opponent if they're the last one who hasn't submitted
+    notifyWaitingOnYou(opponentId, {
+      roomId,
+    }, { isAsync: true }).catch(() => {});
   }
 }
 
@@ -2022,10 +2040,9 @@ function _resolveAsyncRound(roomId) {
 
     // Notify both players of new round
     for (const pid of [game.hero_player_id, game.witch_player_id]) {
-      const opponentId = pid === game.hero_player_id ? game.witch_player_id : game.hero_player_id;
-      notifyTurnReady(pid, {
-        roomId, round: state.round, opponentId,
-      }, asyncSessions).catch(() => {});
+      notifyRoundReady(pid, {
+        roomId, round: state.round,
+      }, { isAsync: true }).catch(() => {});
     }
   }
 
@@ -2125,10 +2142,9 @@ function _finishAsyncGame(roomId, game, state, serializedSteps, finalState) {
 
   // Notify both players
   for (const pid of [game.hero_player_id, game.witch_player_id]) {
-    const opponentId = pid === game.hero_player_id ? game.witch_player_id : game.hero_player_id;
     notifyGameOver(pid, {
-      roomId, winner: state.winner, winReason: state.winReason, opponentId,
-    }, asyncSessions).catch(() => {});
+      roomId, winner: state.winner, winReason: state.winReason,
+    }, { isAsync: true }).catch(() => {});
   }
 }
 
@@ -2234,6 +2250,39 @@ export function checkDeadlines() {
       }
     } catch (err) {
       console.error(`[checkDeadlines] room ${roomId} error:`, err);
+    }
+  }
+}
+
+/**
+ * Check for games approaching their deadline (~10 min) and notify
+ * unsubmitted players. Called periodically by the server.
+ */
+export function checkApproachingDeadlines() {
+  let games;
+  try {
+    games = getApproachingDeadlineGames(600_000); // 10 minutes
+  } catch (err) {
+    console.error('[checkApproachingDeadlines] query error:', err);
+    return;
+  }
+
+  for (const row of games) {
+    try {
+      const config = row.config_json ? JSON.parse(row.config_json) : {};
+      if (!config.isAsync) continue;
+
+      const minutesLeft = Math.max(1, Math.round((row.turn_deadline - Date.now() / 1000) / 60));
+      const plans = getPlanStatus(row.room_id, row.round);
+
+      for (const p of plans) {
+        if (p.submitted_at) continue; // already submitted
+        notifyDeadlineApproaching(p.player_id, {
+          roomId: row.room_id, minutesLeft,
+        }, { isAsync: true }).catch(() => {});
+      }
+    } catch (err) {
+      console.error(`[checkApproachingDeadlines] room ${row.room_id} error:`, err);
     }
   }
 }

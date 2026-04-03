@@ -432,6 +432,18 @@ export function getExpiredDeadlineGames() {
   `).all();
 }
 
+export function getApproachingDeadlineGames(windowMs = 600_000) {
+  const windowS = Math.floor(windowMs / 1000);
+  return db.prepare(`
+    SELECT room_id, turn_deadline, turn_interval_ms, players_json, round, config_json
+    FROM   game_saves
+    WHERE  status = 'playing'
+      AND  turn_deadline IS NOT NULL
+      AND  turn_deadline > unixepoch()
+      AND  turn_deadline <= unixepoch() + ?
+  `).all(windowS);
+}
+
 /**
  * List all in-progress games for a player, including games stored in players_json.
  * Returns lightweight rows (no state_json) sorted by action-needed first.
@@ -441,7 +453,7 @@ export function getActiveGamesForPlayer(playerId) {
   return db.prepare(`
     SELECT room_id, hero_player_id, witch_player_id, hero_name, witch_name,
            round, phase, game_version, turn_interval_ms, turn_deadline,
-           status, code, players_json, updated_at, created_at
+           status, code, players_json, config_json, updated_at, created_at
     FROM   game_saves
     WHERE  status IN ('playing', 'lobby')
       AND  (hero_player_id = ? OR witch_player_id = ?

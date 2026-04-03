@@ -54,8 +54,9 @@ globalThis.document.addEventListener = (type, fn, ...rest) => {
 const {
   requestNotificationPermission,
   canNotify,
-  notifyTurnReady,
-  notifyOpponentSubmitted,
+  notifyRoundReady,
+  notifyWaitingOnYou,
+  notifyDeadlineApproaching,
   notifyGameOver,
 } = await import('../src/notifications.js');
 
@@ -109,35 +110,45 @@ describe('notifications', () => {
     });
   });
 
-  describe('notifyTurnReady()', () => {
+  describe('notifyRoundReady()', () => {
     test('creates notification with round number when tab hidden', () => {
-      const n = notifyTurnReady(5);
+      const n = notifyRoundReady(5);
       assert.ok(n, 'should return a notification');
       assert.equal(n.title, 'Your Turn');
       assert.ok(n.body.includes('5'), 'body should mention round number');
-      assert.equal(n.tag, 'brimstone-turn-ready');
+      assert.equal(n.tag, 'brimstone-round-ready');
     });
 
     test('suppressed when tab is visible', () => {
       documentHidden = false;
       for (const fn of visibilityListeners) fn();
-      const n = notifyTurnReady(3);
+      const n = notifyRoundReady(3);
       assert.equal(n, null, 'should not notify when tab is visible');
     });
 
     test('suppressed when permission not granted', () => {
       permissionState = 'denied';
-      const n = notifyTurnReady(3);
+      const n = notifyRoundReady(3);
       assert.equal(n, null, 'should not notify without permission');
     });
   });
 
-  describe('notifyOpponentSubmitted()', () => {
+  describe('notifyWaitingOnYou()', () => {
     test('creates notification when tab hidden and permitted', () => {
-      const n = notifyOpponentSubmitted();
+      const n = notifyWaitingOnYou();
       assert.ok(n);
-      assert.equal(n.title, 'Opponent Submitted');
-      assert.equal(n.tag, 'brimstone-opponent-submitted');
+      assert.equal(n.title, 'Waiting on you!');
+      assert.equal(n.tag, 'brimstone-waiting-on-you');
+    });
+  });
+
+  describe('notifyDeadlineApproaching()', () => {
+    test('creates notification with minutes left', () => {
+      const n = notifyDeadlineApproaching(10);
+      assert.ok(n);
+      assert.equal(n.title, 'Deadline approaching');
+      assert.ok(n.body.includes('10'), 'body should mention minutes');
+      assert.equal(n.tag, 'brimstone-deadline');
     });
   });
 
@@ -157,7 +168,7 @@ describe('notifications', () => {
 
   describe('onclick handler', () => {
     test('focuses window and closes notification on click', () => {
-      const n = notifyTurnReady(1);
+      const n = notifyRoundReady(1);
       assert.ok(n.onclick, 'onclick should be set');
       n.onclick();
       assert.ok(windowFocused, 'should have called window.focus()');
@@ -171,32 +182,32 @@ describe('notifications', () => {
 import { shouldNotify } from '../server/notifications.js';
 
 describe('shouldNotify (server-side suppression)', () => {
-  test('suppresses for short-timeout games', () => {
-    assert.equal(shouldNotify('r1', 'p1', { turnIntervalMs: 90_000 }), false);
+  test('suppresses for non-async games', () => {
+    assert.equal(shouldNotify('r1', 'p1', { isAsync: false }), false);
   });
 
-  test('allows for long-timeout games when disconnected', () => {
+  test('suppresses when isAsync is not set', () => {
+    assert.equal(shouldNotify('r1', 'p1', {}), false);
+  });
+
+  test('allows for async games when disconnected', () => {
     assert.equal(
-      shouldNotify('r1', 'p1', { turnIntervalMs: 86_400_000, isConnected: () => false }),
+      shouldNotify('r1', 'p1', { isAsync: true, isConnected: () => false }),
       true,
     );
   });
 
-  test('suppresses when player is connected even for long-timeout', () => {
+  test('suppresses when player is connected even for async', () => {
     assert.equal(
-      shouldNotify('r1', 'p1', { turnIntervalMs: 86_400_000, isConnected: () => true }),
+      shouldNotify('r1', 'p1', { isAsync: true, isConnected: () => true }),
       false,
     );
   });
 
-  test('allows at exactly the 1-hour threshold', () => {
+  test('allows for async when no isConnected provided', () => {
     assert.equal(
-      shouldNotify('r1', 'p1', { turnIntervalMs: 3_600_000, isConnected: () => false }),
+      shouldNotify('r1', 'p1', { isAsync: true }),
       true,
     );
-  });
-
-  test('suppresses just under the 1-hour threshold', () => {
-    assert.equal(shouldNotify('r1', 'p1', { turnIntervalMs: 3_599_999 }), false);
   });
 });

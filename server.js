@@ -38,7 +38,7 @@ import {
   checkAsyncDeadlines, pruneAsyncGames,
   getAsyncGamesForPlayer,
   // Unified system
-  checkDeadlines, migrateAsyncGames,
+  checkDeadlines, checkApproachingDeadlines, migrateAsyncGames,
 } from './server/lobby.js';
 import {
   getAllPlayers, getAllSaves, getSaveWithState,
@@ -939,4 +939,5 @@ server.listen(PORT, () => {
   try { migrateAsyncGames(); } catch (err) { console.error('[migration]', err); }
   checkDeadlines(); // catch any unified deadlines that expired while server was down
   setInterval(checkDeadlines, 30_000); // check every 30 seconds
+  setInterval(checkApproachingDeadlines, 60_000); // check approaching deadlines every minute
 });

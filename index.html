@@ -593,15 +593,28 @@
         </select>
       </div>
       <div class="cg-option-row">
+        <span class="cg-option-label">Mode</span>
+        <div class="pps-pills">
+          <label class="pps-pill"><input type="radio" name="cg-mode" value="live" checked>
+            <span>Live<br><small>Short turns, play in one sitting</small></span>
+          </label>
+          <label class="pps-pill"><input type="radio" name="cg-mode" value="async">
+            <span>Async<br><small>Longer turns, get notified</small></span>
+          </label>
+        </div>
+      </div>
+      <div class="cg-option-row">
         <span class="cg-option-label">Turn timeout</span>
-        <select id="cg-turn-timeout" class="setup-select">
+        <select id="cg-turn-timeout-live" class="setup-select">
           <option value="60000">1 Minute</option>
           <option value="90000" selected>90 Seconds</option>
           <option value="180000">3 Minutes</option>
           <option value="300000">5 Minutes</option>
+        </select>
+        <select id="cg-turn-timeout-async" class="setup-select" style="display:none">
           <option value="3600000">1 Hour</option>
           <option value="21600000">6 Hours</option>
-          <option value="43200000">12 Hours</option>
+          <option value="43200000" selected>12 Hours</option>
           <option value="86400000">1 Day</option>
           <option value="259200000">3 Days</option>
         </select>
@@ -615,10 +628,8 @@
         <span class="cg-option-hint">Invite only — share a code</span>
       </div>
       <div id="cg-invite-row" class="cg-option-row" style="display:none">
-        <span class="cg-option-label">Invite opponent</span>
-        <input id="cg-invitee-email" class="setup-input" type="email"
-               placeholder="opponent@email.com (optional)" autocomplete="email"
-               style="margin:0;font-size:0.85rem">
+        <span class="cg-option-label">Invite players</span>
+        <div id="cg-invite-emails"></div>
       </div>
     </div>
     <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
@@ -1019,6 +1030,15 @@
       <div id="result-messages" class="result-messages"></div>
       <div id="result-dismiss-hint" class="result-dismiss">— click anywhere to continue —</div>
       <div id="result-buttons" class="result-buttons" style="display:none"></div>
+    </div>
+  </div>
+
+  <!-- ── Reconnect overlay ─────────────────────────────────────────── -->
+  <div id="reconnect-overlay" style="display:none">
+    <div class="reconnect-card">
+      <div id="reconnect-spinner" class="waiting-spinner">⏳</div>
+      <p id="reconnect-message">Reconnecting…</p>
+      <button id="reconnect-back" class="setup-btn" style="display:none">Back to Menu</button>
     </div>
   </div>
 

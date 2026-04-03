@@ -236,26 +236,29 @@ export class MultiplayerClient {
   }
 
   _onOpen() {
+    const wasReconnecting = this._reconnectAttempt > 0;
     this._reconnectAttempt = 0;
     if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
     // Flush queued messages
     for (const str of this._queue) this._ws.send(str);
     this._queue = [];
+    if (wasReconnecting) this._opts.onReconnected?.();
   }
 
   _onClose() {
-    if (this.active) this._scheduleReconnect();
+    if (this.active) {
+      this._opts.onDisconnected?.();
+      this._scheduleReconnect();
+    }
   }
 
   _scheduleReconnect() {
     if (this._reconnectAttempt >= RECONNECT_MAX_TRIES) {
-      this._opts.onError?.('Unable to reconnect. Please refresh the page.');
+      this._opts.onDisconnectFatal?.('Unable to reconnect to the server.');
       this._reconnectAttempt = 0;
       return;
     }
-    const delay   = RECONNECT_BASE_MS * (2 ** this._reconnectAttempt);
-    const attempt = this._reconnectAttempt + 1;
-    this._opts.onError?.(`Disconnected. Reconnecting (${attempt}/${RECONNECT_MAX_TRIES}) in ${delay / 1000}s…`);
+    const delay = RECONNECT_BASE_MS * (2 ** this._reconnectAttempt);
     this._reconnectTimer = setTimeout(() => {
       this._reconnectAttempt++;
       this._reconnect();
@@ -373,11 +376,8 @@ export class MultiplayerClient {
         break;
 
       case 'opponentDisconnected':
-        this._opts.onOpponentDisconnected?.(msg.graceMs);
-        break;
-
       case 'opponentReconnected':
-        this._opts.onOpponentReconnected?.();
+        // Handled silently — reconnect overlay covers connection state
         break;
 
       case 'opponentForfeited':
