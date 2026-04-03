@@ -1281,8 +1281,9 @@ onInactiveChange((inactive) => {
     if (mp.connected) mp.setInactive(true);
   } else {
     if (mp.connected) {
-      // Socket still open — just mark as active again
       mp.setInactive(false);
+      // Re-assert room focus so presence shows active
+      if (mp.roomId) mp._send({ type: 'setRoom', roomId: mp.roomId });
     } else if (mp.active) {
       // Socket died while backgrounded — reconnect
       mp.reconnectNow();
