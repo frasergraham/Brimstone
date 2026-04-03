@@ -4005,12 +4005,15 @@ function _renderPublicLobbies(rooms) {
     const isAsync  = lobby.config?.isAsync;
     const modeLabel = isAsync ? 'Async' : 'Live';
 
+    const inProgress = lobby.roomStatus === 'playing';
+    const statusLabel = inProgress ? 'In progress — join now' : `${total - open}/${total} players`;
+
     const entry = document.createElement('div');
     entry.className = 'save-entry save-entry-joinable';
     entry.innerHTML = `
       <div class="save-entry-info">
         <div class="save-entry-title">⚔ ${_esc(host)}'s game</div>
-        <div class="save-entry-meta">${pps}v${pps} · ${_esc(mapLabel)} · ${modeLabel} · ${total - open}/${total} players</div>
+        <div class="save-entry-meta">${pps}v${pps} · ${_esc(mapLabel)} · ${modeLabel} · ${statusLabel}</div>
       </div>
     `;
     entry.addEventListener('click', () => {

@@ -334,6 +334,8 @@ function _lobbyPublic(room) {
     slots:            room.slots.map(s => ({ ...s })),
     createdAt:        room.createdAt,
     participantCount: room.slots.filter(s => s.status === 'human').length,
+    roomStatus:       room.status,       // 'lobby' or 'playing'
+    openSlots:        room.openSlots?.length ?? 0,
   };
 }
 
@@ -1113,11 +1115,19 @@ export function joinLobby(playerId, playerName, ws, codeOrId) {
   broadcastLobbyUpdate(room);
 }
 
-/** Return a list of public lobbies (not yet started). */
+/** Return a list of public lobbies (not yet started) and active games with open slots. */
 export function browseLobby() {
-  return [...rooms.values()]
-    .filter(r => r.status === 'lobby' && !r.isPrivate)
-    .map(_lobbyPublic);
+  const results = [];
+  for (const r of rooms.values()) {
+    if (r.isPrivate) continue;
+    if (r.status === 'lobby') {
+      results.push(_lobbyPublic(r));
+    } else if (r.status === 'playing' && r.openSlots?.length > 0) {
+      // Active games still accepting late joiners
+      results.push(_lobbyPublic(r));
+    }
+  }
+  return results;
 }
 
 /** Host assigns an AI personality to an empty slot. */
@@ -1230,7 +1240,14 @@ export function startGame(playerId, roomId) {
       } else {
         placeholderSeat = _addExtraAISeat(room, slot.faction, 'balanced');
       }
-      if (placeholderSeat) room.openSlotPlayerIds.add(placeholderSeat.playerId);
+      if (placeholderSeat) {
+        room.openSlotPlayerIds.add(placeholderSeat.playerId);
+        // Use a generic name instead of a thematic AI name — this slot is
+        // waiting for a human, not a committed AI player.
+        placeholderSeat.name = 'Open slot';
+        const sp = room.state.players.find(p => p.id === placeholderSeat.playerId);
+        if (sp) sp.name = 'Open slot';
+      }
       if (slot.faction === 'hero')  heroCount++;
       else                          witchCount++;
       continue;
