@@ -62,6 +62,61 @@ node scripts/ai-matrix.js [count]         # Every hero personality vs every witc
 node scripts/release.js [patch|minor|major] [--dry-run]  # Bump version, tag, generate release notes
 ```
 
+### Local Dev Server with Persistence
+
+```bash
+npm run dev    # Starts server.js with DB_PATH=./data/brimstone.db (SQLite persistence)
+```
+
+This runs the full Express server on port 3000 with WebSocket support, game saves, leaderboard, and stats all persisting to `data/brimstone.db`. Open `http://localhost:3000` in a browser.
+
+### Preferred Local Development Mode
+
+The preferred workflow for local development is: run `npm run dev` on the laptop, then build and deploy the iOS app with `--env=local` so the phone connects to the local server. This gives full multiplayer/persistence testing on a real device against the local backend.
+
+```bash
+npm run dev                    # 1. Start local server (keep running)
+npm run cap:sync:ios:local     # 2. Sync iOS build pointing at laptop's LAN IP
+# 3. Build + deploy to phone (see iOS Build section below)
+```
+
+### iOS Build (Capacitor)
+
+```bash
+npm run cap:sync:ios           # Copy web assets to www/ (dev env) and sync to ios/
+npm run cap:sync:ios:prod      # Same but with production server URL
+npm run cap:sync:ios:local     # Same but pointing at local dev server
+npm run cap:open:ios           # Open Xcode project for manual build/run
+```
+
+**Building and running on a physical device from CLI:**
+
+```bash
+npm run cap:sync:ios
+cd ios/App
+xcodebuild -project App.xcodeproj -scheme App -configuration Debug \
+  -destination "id=<DEVICE_UDID>" -derivedDataPath /tmp/brimstone-ios-build \
+  clean build
+xcrun devicectl device install app --device <DEVICE_UDID> \
+  /tmp/brimstone-ios-build/Build/Products/Debug-iphoneos/App.app
+xcrun devicectl device process launch --device <DEVICE_UDID> com.calebshollow.game
+```
+
+List connected devices with `xcrun xctrace list devices`.
+
+**Important:** Use `/tmp` (or another non-iCloud path) for `-derivedDataPath` — the project directory has iCloud/Finder extended attributes that break codesigning.
+
+### Electron Build
+
+```bash
+npm run electron:dev           # Run Electron app in dev mode (local server)
+npm run electron:dev:prod      # Run Electron app pointing at production server
+npm run electron:package:mac   # Package for macOS (no publish)
+npm run electron:package:win   # Package for Windows (no publish)
+npm run electron:build:mac     # Build macOS distributable to /tmp/brimstone-electron-dist
+npm run electron:build:win     # Build Windows distributable
+```
+
 ---
 
 ## Directory Structure
