@@ -59,7 +59,8 @@ node scripts/headless.js [count] [size]   # AI-vs-AI balance testing; size: skir
 node scripts/headless-mp.js [count]       # N-player (2v2) AI balance runner
 node scripts/combat-sim.js [rounds]       # Combat stats report
 node scripts/ai-matrix.js [count]         # Every hero personality vs every witch personality matrix
-node scripts/release.js [patch|minor|major] [--dry-run]  # Bump version, tag, generate release notes
+node scripts/release.js [patch|minor|major] [--dry-run]  # Bump version, tag, build+upload iOS to App Store Connect
+node scripts/release.js patch --ios                      # Same, but also bump iOS MARKETING_VERSION (triggers App Store review)
 ```
 
 ### Local Dev Server with Persistence
@@ -349,7 +350,9 @@ Games are auto-persisted to SQLite (`data/brimstone.db`, override with `DB_PATH`
 
 ## Release Process
 
-`scripts/release.js` automates releases: bumps version in `src/version.js`, generates release notes from commits (categorized as feat/fix/perf/refactor/chore/docs), updates `CHANGELOG.json`, creates a git tag, and fast-forward merges to master. Enforces a dev-first workflow. Use `--dry-run` to preview.
+`scripts/release.js` automates releases: bumps version in `src/version.js`, generates release notes from commits (categorized as feat/fix/perf/refactor/chore/docs), updates `CHANGELOG.json`, creates a git tag, and fast-forward merges to prod. Enforces a dev-first workflow. Use `--dry-run` to preview.
+
+**iOS version policy:** The iOS `MARKETING_VERSION` is **not** bumped by default — changing it triggers a new App Store review which takes days. Only pass `--ios` when explicitly asked to bump the iOS version to match the web release. The build number (`CURRENT_PROJECT_VERSION`) always increments so TestFlight accepts new uploads regardless.
 
 ---
 

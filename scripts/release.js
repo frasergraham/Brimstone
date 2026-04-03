@@ -7,6 +7,7 @@
 //   node scripts/release.js minor            # 1.0.4 → 1.1.0
 //   node scripts/release.js major            # 1.0.4 → 2.0.0
 //   node scripts/release.js --dry-run patch  # preview without writing or committing
+//   node scripts/release.js --ios patch      # also bump iOS marketing version (triggers App Store review)
 //
 // Flow:
 //   1. Verifies you are on the dev branch with a clean working tree
@@ -254,16 +255,21 @@ pkg.version = newVersion;
 writeFileSync(PKG_FILE, JSON.stringify(pkg, null, 2) + '\n');
 console.log(`Updated package.json → ${newVersion}`);
 
-// ── Bump iOS project version ────────────────────────────────────────────────
+// ── Bump iOS project version (only when --ios is passed) ────────────────────
+// Changing MARKETING_VERSION triggers a new App Store review, so we only bump
+// the iOS version when explicitly requested.  The build number always
+// increments so TestFlight accepts the upload.
 
 const PBXPROJ_FILE = resolve(ROOT, 'ios/App/App.xcodeproj/project.pbxproj');
 let pbxproj = readFileSync(PBXPROJ_FILE, 'utf8');
 
-// Bump MARKETING_VERSION to match (appears in both Debug and Release configs)
-pbxproj = pbxproj.replace(
-  /MARKETING_VERSION = [^;]+;/g,
-  `MARKETING_VERSION = ${newVersion};`,
-);
+if (iosBuild) {
+  pbxproj = pbxproj.replace(
+    /MARKETING_VERSION = [^;]+;/g,
+    `MARKETING_VERSION = ${newVersion};`,
+  );
+  console.log(`Updated project.pbxproj MARKETING_VERSION → ${newVersion}`);
+}
 
 // Auto-increment CURRENT_PROJECT_VERSION (used as the CFBundleVersion build number)
 const buildNumMatch = pbxproj.match(/CURRENT_PROJECT_VERSION = (\d+);/);
@@ -275,7 +281,11 @@ pbxproj = pbxproj.replace(
 );
 
 writeFileSync(PBXPROJ_FILE, pbxproj);
-console.log(`Updated project.pbxproj → ${newVersion} (build ${newBuildNum})`);
+if (iosBuild) {
+  console.log(`Updated project.pbxproj → ${newVersion} (build ${newBuildNum})`);
+} else {
+  console.log(`Updated project.pbxproj build number → ${newBuildNum} (iOS version unchanged)`);
+}
 
 // ── Commit, tag, and promote ─────────────────────────────────────────────────
 
@@ -312,9 +322,13 @@ console.log(`Returned to ${DEV_BRANCH}`);
 console.log(`\nRelease ${tag} ready. Push with:`);
 console.log(`  git push origin ${DEV_BRANCH} ${PROD_BRANCH} --tags`);
 
-// ── iOS archive and upload (optional) ────────────────────────────────────────
+// ── iOS archive and upload ──────────────────────────────────────────────────
+// Always builds and uploads to App Store Connect. The MARKETING_VERSION is only
+// bumped when --ios is passed (to avoid triggering a new App Store review).
 
-if (iosBuild) {
+const iosVersion = iosBuild ? newVersion : pbxproj.match(/MARKETING_VERSION = ([^;]+);/)?.[1]?.trim() || currentVersion;
+
+{
   const ARCHIVE_DIR  = resolve(ROOT, 'build');
   const ARCHIVE_PATH = resolve(ARCHIVE_DIR, `Brimstone-${tag}.xcarchive`);
   const EXPORT_PATH  = resolve(ARCHIVE_DIR, 'export');
@@ -349,6 +363,6 @@ if (iosBuild) {
     ` -allowProvisioningUpdates`,
   );
 
-  console.log(`\n✔ iOS build ${tag} (build ${newBuildNum}) uploaded to App Store Connect.`);
+  console.log(`\n✔ iOS build uploaded to App Store Connect (iOS ${iosVersion}, build ${newBuildNum}).`);
   console.log('  It should appear in TestFlight within a few minutes.');
 }
