@@ -3860,10 +3860,7 @@ function _checkAsyncDeepLink() {
   const gameMatch = hash.match(/^#game=(.+)$/);
   if (gameMatch) {
     window.history.replaceState(null, '', window.location.pathname + window.location.search);
-    const roomId = gameMatch[1];
-    _ensureAuthed(() => {
-      mp.resumeSave(roomId);
-    });
+    _resumeSave(gameMatch[1]);
     return true;
   }
 
