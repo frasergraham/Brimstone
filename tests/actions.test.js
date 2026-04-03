@@ -1566,17 +1566,21 @@ describe('survivor discovery — explore always finds', () => {
     t.explored = false;
     t.hiddenSurvivor = true;
 
-    // First discovery succeeds
-    const r1 = executeExplore(state, hero);
-    assert.ok(r1.encounterSurvivor, 'first discovery should succeed');
-    assert.equal(state.discoveredSurvivorCount, 1);
+    const origRandom = Math.random;
+    Math.random = () => 0; // guarantee discovery isn't blocked by random check
+    try {
+      // First discovery succeeds
+      const r1 = executeExplore(state, hero);
+      assert.ok(r1.encounterSurvivor, 'first discovery should succeed');
+      assert.equal(state.discoveredSurvivorCount, 1);
 
-    // Second discovery is blocked
-    t.explored = false;
-    t.hiddenSurvivor = true;
-    const r2 = executeExplore(state, hero);
-    assert.equal(r2.encounterSurvivor, null, 'second discovery should be blocked by cap');
-    assert.equal(t.hiddenSurvivor, false, 'flag should still be cleared');
+      // Second discovery is blocked
+      t.explored = false;
+      t.hiddenSurvivor = true;
+      const r2 = executeExplore(state, hero);
+      assert.equal(r2.encounterSurvivor, null, 'second discovery should be blocked by cap');
+      assert.equal(t.hiddenSurvivor, false, 'flag should still be cleared');
+    } finally { Math.random = origRandom; }
   });
 
   test('null maxDiscoverableSurvivors allows unlimited discoveries', () => {
@@ -1590,7 +1594,11 @@ describe('survivor discovery — explore always finds', () => {
     t.explored = false;
     t.hiddenSurvivor = true;
 
-    const r = executeExplore(state, hero);
+    const origRandom = Math.random;
+    Math.random = () => 0; // guarantee discovery isn't blocked by random check
+    let r;
+    try { r = executeExplore(state, hero); }
+    finally { Math.random = origRandom; }
     assert.ok(r.encounterSurvivor, 'discovery should succeed when cap is null');
     assert.equal(state.discoveredSurvivorCount, 6);
   });
