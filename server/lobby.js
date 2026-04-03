@@ -1276,7 +1276,18 @@ export function handleDisconnect(playerId, roomId) {
   }
 
   const faction = factionFor(room, playerId);
-  broadcastExcept(room, playerId, { type: 'opponentDisconnected', graceMs: RECONNECT_GRACE_MS });
+  const isLongTimeout = (room.config.turnIntervalMs ?? TURN_TIMEOUT_MS) >= 3_600_000;
+
+  broadcastExcept(room, playerId, { type: 'opponentDisconnected', graceMs: isLongTimeout ? null : RECONNECT_GRACE_MS });
+
+  // For async games with long deadlines, don't do quick AI takeover —
+  // players are expected to disconnect and return hours later.
+  // AI takeover is handled by _checkTimeoutTakeovers after 2 consecutive
+  // missed deadlines instead.
+  if (isLongTimeout) {
+    _checkAllHumansGone(room);
+    return;
+  }
 
   // AI takeover after a short gap so the remaining player isn't stuck
   const takeoverTimer = setTimeout(() => {
