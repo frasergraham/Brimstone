@@ -69,6 +69,7 @@ class BotClient {
     this.round     = 0;
     this.error     = null;
     this._waiters  = [];     // [{type, resolve, reject, timer}]
+    this._msgQueue = [];     // buffered messages with no matching waiter
     this._autoPlay = false;  // when true, auto-submit plans on planningPhase
   }
 
@@ -104,6 +105,11 @@ class BotClient {
   }
 
   waitFor(type, timeoutMs = 30_000) {
+    // Check buffer first — message may have arrived before waitFor was called
+    const bufIdx = this._msgQueue.findIndex(m => m.type === type);
+    if (bufIdx !== -1) {
+      return Promise.resolve(this._msgQueue.splice(bufIdx, 1)[0]);
+    }
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this._waiters = this._waiters.filter(w => w !== waiter);
@@ -127,12 +133,14 @@ class BotClient {
   // ── Internal message routing ──────────────────────────────────────────────
 
   _onMessage(msg) {
-    // Resolve any pending waitFor() calls
+    // Resolve any pending waitFor() calls, or buffer for later
     const idx = this._waiters.findIndex(w => w.type === msg.type);
     if (idx !== -1) {
       const waiter = this._waiters.splice(idx, 1)[0];
       clearTimeout(waiter.timer);
       waiter.resolve(msg);
+    } else {
+      this._msgQueue.push(msg);
     }
 
     switch (msg.type) {
@@ -346,7 +354,7 @@ async function runDisconnectTest(port, label, disconnectTiming) {
     await witchBot.connect(wsUrl);
     await witchBot.auth();
 
-    heroBot.send({ type: 'createLobby', playersPerSide: 1, mapSize: 'skirmish', isPrivate: true });
+    heroBot.send({ type: 'createLobby', playersPerSide: 1, mapSize: 'skirmish', isPrivate: true, turnIntervalMs: 3000 });
     await heroBot.waitFor('lobbyJoined');
 
     witchBot.send({ type: 'joinLobby', codeOrId: heroBot.roomId });
@@ -374,14 +382,15 @@ async function runDisconnectTest(port, label, disconnectTiming) {
       await heroBot.waitFor('opponentDisconnected', 10_000);
       checks.push('opponentDisconnected received');
 
-      // Wait for turn timer to expire (TURN_TIMEOUT_MS=3s) and round to resolve.
+      // Wait for turn timer to expire (turnIntervalMs=3s) and round to resolve.
       // Hero auto-submits; witch gets auto-submitted empty plan after timeout.
       // Need 2 consecutive timeouts for AI takeover, so wait for 2 resolution cycles.
-      await heroBot.waitFor('resolutionComplete', 15_000);
+      // Each cycle: ~3s turn timer + overhead → use generous 30s timeout.
+      await heroBot.waitFor('resolutionComplete', 30_000);
       checks.push('round resolved after timeout');
 
       // Second timeout cycle → triggers _checkTimeoutTakeovers → AI takes over
-      await heroBot.waitFor('resolutionComplete', 15_000);
+      await heroBot.waitFor('resolutionComplete', 30_000);
       checks.push('AI takeover after 2 timeouts');
 
       // Game should now be running with AI — wait a bit for more rounds
