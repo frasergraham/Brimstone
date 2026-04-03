@@ -9,7 +9,7 @@ import { VERSION, BUILD_VERSION } from './src/version.js';
 import {
   registerOrLogin, getPlayerByToken, getPlayerByEmail,
   linkEmail, loginByEmail, getPlayerIdentities, changeUsername,
-  getOrCreateByEmail,
+  getOrCreateByEmail, getOrCreateByGameCenter, linkGameCenter,
 } from './server/auth.js';
 import { generateToken, verifyToken, sendMagicLinkEmail } from './server/magic-link.js';
 import { getLeaderboard }                    from './server/leaderboard.js';
@@ -840,6 +840,35 @@ function route(ws, cs, msg) {
       }
 
       send(ws, { type: 'authOk', player: _publicPlayer(result.player) });
+      break;
+    }
+
+    // ── Game Center Auth ─────────────────────────────────────────────────
+    case 'authGameCenter': {
+      const result = getOrCreateByGameCenter(msg.gameCenterId, msg.displayName);
+      if (!result.ok) {
+        send(ws, { type: 'authError', message: result.error });
+        return;
+      }
+      cs.player = result.player;
+
+      if (msg.roomId) {
+        const rejoined = handleReconnect(result.player.id, msg.roomId, ws);
+        if (rejoined) {
+          cs.roomId = msg.roomId;
+          send(ws, { type: 'authOk', player: _publicPlayer(result.player) });
+          return;
+        }
+      }
+
+      send(ws, { type: 'authOk', player: _publicPlayer(result.player) });
+      break;
+    }
+
+    case 'linkGameCenter': {
+      if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
+      const result = linkGameCenter(cs.player.id, msg.gameCenterId);
+      send(ws, { type: 'linkGameCenterResult', ok: result.ok, error: result.error });
       break;
     }
 

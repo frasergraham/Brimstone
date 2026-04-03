@@ -175,6 +175,73 @@ export function grantAdminIfEligible(playerId) {
   }
 }
 
+// ── Game Center identity linking ────────────────────────────────────────────
+
+/**
+ * Find an existing player by Game Center ID, or create a new account and link it.
+ * On returning logins, syncs the display name to the player's username.
+ * Returns { ok, player, isNew } or { ok: false, error }.
+ */
+export function getOrCreateByGameCenter(gameCenterId, displayName) {
+  const existing = _getIdentity.get('gamecenter', gameCenterId);
+  if (existing) {
+    const player = _getById.get(existing.player_id);
+    if (!player) return { ok: false, error: 'Player not found.' };
+
+    // Sync display name on every login
+    const name = _sanitizeUsername(displayName);
+    if (name && name !== player.username) {
+      const taken = _getByName.get(name);
+      if (!taken || taken.id === player.id) {
+        _updateUsername.run(name, player.id);
+      }
+    }
+
+    const updated = _getById.get(player.id);
+    return { ok: true, player: updated, isNew: false };
+  }
+
+  // New player — derive username from display name
+  let baseName = _sanitizeUsername(displayName) || 'player';
+  let name = baseName;
+  let suffix = 1;
+  while (_getByName.get(name)) {
+    name = `${baseName}${suffix++}`;
+    if (name.length > 20) { baseName = baseName.slice(0, 12); name = `${baseName}${suffix}`; }
+  }
+
+  const id       = randomUUID();
+  const newToken = randomUUID();
+  _insert.run(id, name, newToken);
+  _insertIdentity.run(id, 'gamecenter', gameCenterId);
+
+  const player = _getById.get(id);
+  return { ok: true, player, isNew: true };
+}
+
+/**
+ * Link a Game Center ID to an existing player account.
+ * Returns { ok } or { ok: false, error }.
+ */
+export function linkGameCenter(playerId, gameCenterId) {
+  const existing = _getIdentity.get('gamecenter', gameCenterId);
+  if (existing) {
+    if (existing.player_id === playerId) return { ok: true };
+    return { ok: false, error: 'This Game Center account is already linked to another player.' };
+  }
+
+  const player = _getById.get(playerId);
+  if (!player) return { ok: false, error: 'Player not found.' };
+
+  _insertIdentity.run(playerId, 'gamecenter', gameCenterId);
+  return { ok: true };
+}
+
+/** Sanitize a display name to a valid Brimstone username. */
+function _sanitizeUsername(raw) {
+  return (raw || '').replace(/[^a-zA-Z0-9_\- ]/g, '').trim().slice(0, 20) || '';
+}
+
 /**
  * Change a player's username. Returns { ok, player } or { ok: false, error }.
  */

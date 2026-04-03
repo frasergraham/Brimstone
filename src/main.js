@@ -1,5 +1,5 @@
 // Entry point: wires all modules, setup screen flow, resize
-import { onInactiveChange } from './platform.js'; // must be first — sets server globals for Capacitor builds
+import { onInactiveChange, tryGameCenterAuth, isNativeMobile } from './platform.js'; // must be first — sets server globals for Capacitor builds
 import { AppMode, getMode, setMode, isInGame, isAnimating, shouldBufferMessages, onModeChange } from './app-mode.js';
 import { initServerSelector } from './server-selector.js';
 import { GameState, Player } from './game.js';
@@ -1448,6 +1448,12 @@ _updateSessionBar();
 {
   const sessionBar = document.getElementById('setup-session-bar');
   if (sessionBar) stepMode.appendChild(sessionBar);
+}
+
+// Eagerly attempt Game Center auth on iOS so credentials are cached
+// before the user taps any multiplayer button.
+if (isNativeMobile) {
+  tryGameCenterAuth().then(gc => { if (gc) _gcCredentials = gc; });
 }
 
 // Show admin link only for admin users
@@ -4320,6 +4326,35 @@ async function _initAccountPage() {
 // ── Auth dialog ──────────────────────────────────────────────────────────────
 
 function _showAuthDialog(onSuccess) {
+  // On iOS, try Game Center first — skip the dialog entirely if it works
+  if (isNativeMobile && !_gcCredentials) {
+    tryGameCenterAuth().then(gc => {
+      if (gc) {
+        _gcCredentials = gc;
+        _authDialogCallback = onSuccess;
+        _ensureAuthed(() => {
+          _hideAuthDialog();
+          if (onSuccess) onSuccess();
+        });
+        return;
+      }
+      _showAuthDialogUI(onSuccess);
+    });
+    return;
+  }
+  if (_gcCredentials) {
+    // Already have Game Center credentials — use them directly
+    _authDialogCallback = onSuccess;
+    _ensureAuthed(() => {
+      _hideAuthDialog();
+      if (onSuccess) onSuccess();
+    });
+    return;
+  }
+  _showAuthDialogUI(onSuccess);
+}
+
+function _showAuthDialogUI(onSuccess) {
   _authDialogCallback = onSuccess;
   const dlg = document.getElementById('auth-dialog');
   document.getElementById('auth-username').value = '';
@@ -4514,6 +4549,9 @@ function _onlineError(msg) {
 }
 
 /** Ensure we have an authenticated MultiplayerClient, then call cb(). */
+/** Cached Game Center credentials for use by _ensureAuthed. */
+let _gcCredentials = null;
+
 function _ensureAuthed(cb) {
   const session   = loadSession();
   const wsUrl     = _serverWsUrl();
@@ -4528,7 +4566,8 @@ function _ensureAuthed(cb) {
   }
 
   if (session && mp.player?.id === session.id && mp.connected) {
-    // Already authenticated on a live connection
+    // Already authenticated on a live connection — also link Game Center if available
+    if (_gcCredentials) mp.linkGameCenter(_gcCredentials.playerId);
     cb();
     return;
   }
@@ -4537,6 +4576,12 @@ function _ensureAuthed(cb) {
   mp._opts._onAuthOk = cb;
   if (session) {
     mp.auth({ token: session.token });
+  } else if (_gcCredentials) {
+    // No session but Game Center is available — authenticate via Game Center
+    mp.authGameCenter({
+      gameCenterId: _gcCredentials.playerId,
+      displayName: _gcCredentials.displayName,
+    });
   } else {
     const nameInput = document.getElementById('auth-username');
     const username = nameInput.value.trim();
