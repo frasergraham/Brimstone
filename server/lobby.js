@@ -134,7 +134,8 @@ function _notifyOpts(room) {
     isAsync: room.config.isAsync ?? false,
     isConnected: (playerId) => {
       const seat = seatFor(room, playerId);
-      return seat?.ws?.readyState === 1;
+      // Treat backgrounded/inactive players as not connected for notifications
+      return seat?.ws?.readyState === 1 && !seat.ws._inactive;
     },
   };
 }

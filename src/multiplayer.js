@@ -212,6 +212,9 @@ export class MultiplayerClient {
   /** Resign from an active game. */
   resignGame(roomId) { this._send({ type: 'resignGame', roomId }); }
 
+  /** Tell the server the player has backgrounded / foregrounded the app. */
+  setInactive(inactive) { this._send({ type: 'setInactive', inactive }); }
+
   requestLeaderboard() { this._send({ type: 'requestLeaderboard' }); }
 
   sendAction(actionType, params = {}) {

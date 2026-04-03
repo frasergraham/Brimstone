@@ -83,6 +83,13 @@ app.use((req, res, next) => {
   next();
 });
 
+// Apple App Site Association must be served as application/json
+app.get('/.well-known/apple-app-site-association', (_req, res) => {
+  res.sendFile(join(__dirname, '.well-known', 'apple-app-site-association'), {
+    headers: { 'Content-Type': 'application/json' },
+  });
+});
+
 app.use(express.static(join(__dirname)));   // serve game files from repo root
 
 // Health check — Railway pings this to confirm the service is up
@@ -741,6 +748,7 @@ function clientState(ws) {
   if (!clients.has(ws)) clients.set(ws, {
     player: null, roomId: null, asyncRoomId: null,
     spectatingRooms: new Set(),
+    inactive: false,
   });
   return clients.get(ws);
 }
@@ -874,6 +882,12 @@ function route(ws, cs, msg) {
     case 'resignGame': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
       resignGame(cs.player.id, msg.roomId, ws);
+      break;
+    }
+
+    case 'setInactive': {
+      cs.inactive = !!msg.inactive;
+      ws._inactive = cs.inactive; // also on ws so lobby.js can read it
       break;
     }
 

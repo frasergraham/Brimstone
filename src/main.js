@@ -1,5 +1,5 @@
 // Entry point: wires all modules, setup screen flow, resize
-import './platform.js'; // must be first — sets server globals for Capacitor builds
+import { onInactiveChange } from './platform.js'; // must be first — sets server globals for Capacitor builds
 import { initServerSelector } from './server-selector.js';
 import { GameState, Player } from './game.js';
 import { Renderer }          from './renderer.js';
@@ -1272,6 +1272,12 @@ function _delay(ms) {
 // ── Online game init ──────────────────────────────────────────────────────────
 
 let mp = null; // MultiplayerClient instance
+
+// Tell the server when the app is backgrounded so it can send push notifications
+// instead of assuming an open WebSocket means the player is paying attention.
+onInactiveChange((inactive) => {
+  if (mp?.connected) mp.setInactive(inactive);
+});
 
 function initOnline(mirrorState, myFaction, mpClient) {
   state    = mirrorState;
@@ -5157,25 +5163,24 @@ async function _loadAdminReplay(gameId, source = 'mp') {
 }
 
 // Auto-login via magic link or invite redirect: ?email_token=<token>
-const _emailToken = checkEmailTokenInUrl();
-if (_emailToken) {
-  // The URL param is a session token from a verified magic link.
-  // Store it and show the multiplayer screen as logged in.
+function _handleEmailToken(emailToken) {
   try {
-    // We need to auth with the server to get the full player object.
-    // Create a temporary client to authenticate.
     const _tmpMp = _createMpClient();
     _tmpMp.connect(_serverWsUrl());
     _tmpMp._opts._onAuthOk = () => {
       mp = _tmpMp;
       _updateSessionBar();
-      // If there's a deep link hash, open the game now that we're authed
       if (!_checkGameDeepLink()) _checkAsyncDeepLink();
       if (!window.location.hash) _showOnlineScreen();
     };
-    _tmpMp.auth({ token: _emailToken });
+    _tmpMp.auth({ token: emailToken });
   } catch {
-    // Fallback: just store minimal session and show online screen
     _showOnlineScreen();
   }
 }
+
+const _emailToken = checkEmailTokenInUrl();
+if (_emailToken) _handleEmailToken(_emailToken);
+
+// Universal Link magic-link sign-in (iOS — dispatched from platform.js)
+window.addEventListener('magic-link-token', (e) => _handleEmailToken(e.detail));

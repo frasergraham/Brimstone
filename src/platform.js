@@ -97,6 +97,69 @@ if (isNativeMobile) {
   }
 }
 
+// ── Universal Links (iOS magic link sign-in) ────────────────────────────────
+
+async function _wireUniversalLinks() {
+  const App = window.Capacitor?.Plugins?.App;
+  if (!App) return;
+
+  App.addListener('appUrlOpen', async ({ url }) => {
+    try {
+      const parsed = new URL(url);
+
+      // Magic link: /auth/verify?token=XXX
+      if (parsed.pathname === '/auth/verify' && parsed.searchParams.has('token')) {
+        // Hit the verify endpoint — follow the redirect to get the session token
+        const server = window.BRIMSTONE_SERVER || '';
+        const res = await fetch(`${server}/auth/verify?token=${parsed.searchParams.get('token')}`, {
+          redirect: 'manual',
+        });
+        // The server redirects to /?email_token=SESSION — extract it
+        const location = res.headers.get('location') || '';
+        const redir = new URL(location, server);
+        const emailToken = redir.searchParams.get('email_token');
+        if (emailToken) {
+          // Dispatch into the existing magic-link auth flow
+          window.dispatchEvent(new CustomEvent('magic-link-token', { detail: emailToken }));
+        }
+        return;
+      }
+
+      // Invite link: /invite?code=XXX
+      if (parsed.pathname === '/invite' && parsed.searchParams.has('code')) {
+        window.location.hash = `#invite=${parsed.searchParams.get('code')}`;
+        return;
+      }
+    } catch (e) {
+      console.warn('[platform] Universal link error:', e);
+    }
+  });
+}
+
+if (isNativeMobile) _wireUniversalLinks();
+
+// ── App background/foreground detection ─────────────────────────────────────
+// Notifies the server so it can send push notifications to backgrounded players
+// instead of assuming an open WebSocket means the player is paying attention.
+
+let _onInactiveChange = null;
+
+/** Register a callback for when the app goes inactive/active. */
+export function onInactiveChange(cb) { _onInactiveChange = cb; }
+
+function _fireInactive(inactive) {
+  _onInactiveChange?.(inactive);
+}
+
+if (isNativeMobile) {
+  const App = window.Capacitor?.Plugins?.App;
+  if (App) {
+    App.addListener('appStateChange', ({ isActive }) => _fireInactive(!isActive));
+  }
+} else {
+  document.addEventListener('visibilitychange', () => _fireInactive(document.hidden));
+}
+
 // ── Android back button ─────────────────────────────────────────────────────
 
 async function _wireBackButton() {
