@@ -1,5 +1,5 @@
 // Entry point: wires all modules, setup screen flow, resize
-import { onInactiveChange, tryGameCenterAuth, isNativeMobile } from './platform.js'; // must be first — sets server globals for Capacitor builds
+import { onInactiveChange, tryGameCenterAuth, isNativeMobile, refreshPushToken } from './platform.js'; // must be first — sets server globals for Capacitor builds
 import { AppMode, getMode, setMode, isInGame, isAnimating, shouldBufferMessages, onModeChange } from './app-mode.js';
 import { initServerSelector } from './server-selector.js';
 import { GameState, Player } from './game.js';
@@ -5175,10 +5175,14 @@ const _origRoute = MultiplayerClient.prototype._route;
 MultiplayerClient.prototype._route = function(msg) {
   _origRoute.call(this, msg);
 
-  if (msg.type === 'authOk' && this._opts._onAuthOk) {
-    const cb = this._opts._onAuthOk;
-    this._opts._onAuthOk = null;
-    cb();
+  if (msg.type === 'authOk') {
+    // Re-link push token to the current account after every auth
+    if (isNativeMobile) refreshPushToken();
+    if (this._opts._onAuthOk) {
+      const cb = this._opts._onAuthOk;
+      this._opts._onAuthOk = null;
+      cb();
+    }
   }
 
   if (msg.type === 'authError') {

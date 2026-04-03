@@ -296,6 +296,30 @@ export async function registerPushNotifications() {
 }
 
 /**
+ * Re-send the cached device token to the server under the current session.
+ * Call after any successful auth to ensure the token is linked to the
+ * correct player account (e.g. after Game Center login creates a new account).
+ */
+export async function refreshPushToken() {
+  const Preferences = window.Capacitor?.Plugins?.Preferences;
+  if (!Preferences) return;
+
+  try {
+    const { value: token } = await Preferences.get({ key: 'brimstone_push_token' });
+    if (!token) return;
+
+    const session = JSON.parse(_lsGet('brimstone_session') || 'null');
+    if (!session?.token) return;
+    const server = window.BRIMSTONE_SERVER || '';
+    await fetch(`${server}/api/device-token`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'x-token': session.token },
+      body: JSON.stringify({ deviceToken: token, platform: 'ios' }),
+    });
+  } catch { /* best effort */ }
+}
+
+/**
  * Remove the device token from the server (call on logout).
  */
 export async function unregisterPushToken() {
