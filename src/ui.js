@@ -420,6 +420,7 @@ export class UIController {
       el?.addEventListener('touchend', e => { e.preventDefault(); fn(); }, { passive: false });
     };
     _tap(this._el('plan-submit-btn'), () => this._doSubmitPlan());
+    _tap(this._el('plan-menu-btn'), () => { if (this.onReturnToMenu) this.onReturnToMenu(); });
     _tap(this._el('plan-clear-btn'),  () => {
       if (this._planSubmitted) return;
       this._unitPlans = new Map();
@@ -485,6 +486,14 @@ export class UIController {
     this._planBudget       = budget;
     this._unitPlans        = new Map();
     this._planSubmitted    = false;
+
+    // Reset footer buttons
+    const submitBtn = this._el('plan-submit-btn');
+    if (submitBtn) submitBtn.style.display = '';
+    const clearBtn = this._el('plan-clear-btn');
+    if (clearBtn) clearBtn.style.display = '';
+    const menuBtn = this._el('plan-menu-btn');
+    if (menuBtn) menuBtn.style.display = 'none';
 
     const panel = this._el('plan-panel');
     if (panel) {
@@ -797,13 +806,13 @@ export class UIController {
     const status = this._el('plan-status');
     if (status) status.textContent = 'Waiting for opponents…';
 
-    // Change panel submit button to "Return to Menu"
+    // Hide submit/clear, show return-to-menu button
     const submitBtn = this._el('plan-submit-btn');
-    if (submitBtn) {
-      submitBtn.textContent = '← Return to Menu';
-      submitBtn.disabled = false;
-      submitBtn.onclick = () => { if (this.onReturnToMenu) this.onReturnToMenu(); };
-    }
+    if (submitBtn) submitBtn.style.display = 'none';
+    const clearBtn = this._el('plan-clear-btn');
+    if (clearBtn) clearBtn.style.display = 'none';
+    const menuBtn = this._el('plan-menu-btn');
+    if (menuBtn) menuBtn.style.display = '';
 
     // Mark ourselves as submitted in the player list so the status panel updates.
     const me = this._players?.find(p => (p.playerId ?? p.id) === this.myPlayerId);
