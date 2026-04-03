@@ -4664,6 +4664,12 @@ function _createMpClient() {
       state._takeoverMessages.push(`${playerName} has been taken over by AI`);
     },
 
+    onPlayerResigned({ playerId, playerName }) {
+      // Store for round summary display (similar to takeover)
+      if (!state._takeoverMessages) state._takeoverMessages = [];
+      state._takeoverMessages.push(`${playerName} resigned — replaced by AI`);
+    },
+
     onLeaderboard(_entries) {
       // Leaderboard removed — no-op
     },

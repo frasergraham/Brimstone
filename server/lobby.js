@@ -1155,11 +1155,37 @@ export function resignGame(playerId, roomId, ws) {
     return;
   }
 
-  // Mark game over — the other faction wins
-  // gameOver is a derived getter (winner !== null), so just set winner + winReason
-  const winnerFaction = seat.faction === 'hero' ? 'witch' : 'hero';
+  const playerName = seat.name ?? 'A player';
+  const faction    = seat.faction;
+
+  // Check if there are other humans on the same side
+  const otherHumansOnSide = room.players.filter(
+    s => s.faction === faction && !s.isAI && s.playerId !== playerId
+  );
+
+  if (otherHumansOnSide.length > 0) {
+    // Teammates remain — replace resigning player with AI
+    attachAI(room, faction, playerId);
+
+    const msg = { type: 'playerResigned', playerId, playerName };
+    broadcast(room, msg);
+    broadcastToSpectators(room, msg);
+
+    // If we're in planning and the now-AI seat hasn't submitted, auto-generate a plan
+    if (room.state.planningPhase && !room.state.resolving) {
+      _runAIPlanSubmission(room);
+    }
+
+    // Update the save
+    broadcastState(room, 'resign-replaced');
+    send(ws, { type: 'resigned', roomId, replaced: true });
+    return;
+  }
+
+  // Last human on their side (or 1v1) — the other faction wins
+  const winnerFaction = faction === 'hero' ? 'witch' : 'hero';
   room.state.winner    = winnerFaction;
-  room.state.winReason = `${seat.name ?? 'A player'} resigned.`;
+  room.state.winReason = `${playerName} resigned.`;
 
   // Stop timers
   if (room.turnTimer) { clearTimeout(room.turnTimer); room.turnTimer = null; }

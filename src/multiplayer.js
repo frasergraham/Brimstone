@@ -409,6 +409,10 @@ export class MultiplayerClient {
         this._opts.onPlayerTakenOver?.(msg);
         break;
 
+      case 'playerResigned':
+        this._opts.onPlayerResigned?.(msg);
+        break;
+
       case 'resolutionComplete': {
         const mirror = MirrorState.fromSnapshot(msg.finalState);
         this._opts.onResolutionComplete?.({ steps: msg.steps, finalState: mirror });
