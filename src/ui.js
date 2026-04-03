@@ -822,14 +822,6 @@ export class UIController {
     const status = this._el('plan-status');
     if (status) status.textContent = 'Waiting for opponents…';
 
-    // Hide submit/clear, show return-to-menu button
-    const submitBtn = this._el('plan-submit-btn');
-    if (submitBtn) submitBtn.style.display = 'none';
-    const clearBtn = this._el('plan-clear-btn');
-    if (clearBtn) clearBtn.style.display = 'none';
-    const menuBtn = this._el('plan-menu-btn');
-    if (menuBtn) menuBtn.style.display = '';
-
     // Mark ourselves as submitted in the player list so the status panel updates.
     const me = this._players?.find(p => (p.playerId ?? p.id) === this.myPlayerId);
     if (me) me._submitted = true;
