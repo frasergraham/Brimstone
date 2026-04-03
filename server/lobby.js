@@ -435,8 +435,7 @@ function _closeOpenSlots(room) {
 
   console.log(`[room ${room.id}] Closing ${room.openSlots.length} open slot(s) — filling with AI.`);
 
-  // The placeholder AI seats already exist in room.players — just ensure their
-  // AI engines are active and generate plans for them.
+  // The placeholder AI seats already exist in room.players — just update lobby slots.
   for (const openSlot of room.openSlots) {
     const lobbySlot = room.slots[openSlot.slotIndex];
     if (lobbySlot) {
@@ -448,7 +447,9 @@ function _closeOpenSlots(room) {
   // Broadcast that the join window is closed
   broadcast(room, { type: 'openSlotsClosed', roomId: room.id });
 
+  // Clear the open-slot tracking so AI plan submission is no longer blocked
   room.openSlots = [];
+  room.openSlotPlayerIds?.clear();
 }
 
 function _clearTurnTimer(room) {
@@ -528,6 +529,9 @@ function _runAIPlanSubmission(room) {
   let offset = 0;
   for (const seat of room.players) {
     if (!seat.isAI || !seat.ai) continue;
+    // Skip placeholder AIs holding open slots — they don't plan until the
+    // join window closes (at which point _autoSubmitMissingPlans handles them).
+    if (room.openSlotPlayerIds?.has(seat.playerId)) continue;
     const delay = 300 + offset + Math.floor(Math.random() * 350);
     offset += 400;
     const { playerId, faction, ai } = seat;
@@ -1208,20 +1212,25 @@ export function startGame(playerId, roomId) {
   room.state       = state;
   room.status      = 'playing';
 
+  // Set of placeholder AI playerIds — these should NOT submit plans while
+  // their slots remain open for late-joining humans.
+  room.openSlotPlayerIds = new Set();
+
   // Add seats in slot order — first hero slot patches the synthetic ID, extras use addPlayer
   let heroCount  = 0;
   let witchCount = 0;
   for (const slot of room.slots) {
     if (slot.status === 'empty') {
-      // Skip empty slots — they stay open for late joiners.
-      // The first empty slot per faction still needs the synthetic player record
-      // patched with a placeholder AI so the game state is valid.
+      // Empty slots get a placeholder AI seat so the game state is valid,
+      // but they stay open for late joiners.
+      let placeholderSeat;
       if ((slot.faction === 'hero' && heroCount === 0) ||
           (slot.faction === 'witch' && witchCount === 0)) {
-        attachAI(room, slot.faction, null, 'balanced');
+        placeholderSeat = attachAI(room, slot.faction, null, 'balanced');
       } else {
-        _addExtraAISeat(room, slot.faction, 'balanced');
+        placeholderSeat = _addExtraAISeat(room, slot.faction, 'balanced');
       }
+      if (placeholderSeat) room.openSlotPlayerIds.add(placeholderSeat.playerId);
       if (slot.faction === 'hero')  heroCount++;
       else                          witchCount++;
       continue;
@@ -1388,8 +1397,9 @@ export function joinGame(playerId, playerName, ws, codeOrId) {
   if (openSlot.faction === 'witch') room.state.witchIsAI = factionStillHasAI;
   else                              room.state.heroIsAI  = factionStillHasAI;
 
-  // Remove this slot from the open slots list
+  // Remove this slot from the open slots list and placeholder tracking
   room.openSlots.splice(room.openSlots.indexOf(openSlot), 1);
+  room.openSlotPlayerIds?.delete(oldPlayerId);
 
   // Also update the lobby slot record
   const lobbySlot = room.slots[openSlot.slotIndex];
