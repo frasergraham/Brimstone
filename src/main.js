@@ -4542,13 +4542,26 @@ function _ensureAuthed(cb) {
 
 function _applyOnlinePlanningPhase(payload) {
   if (!ui || !mp) return;
-  const { myActionsLeft, heroActionsLeft, witchActionsLeft, players, timeoutMs } = payload;
+  const { myActionsLeft, heroActionsLeft, witchActionsLeft, players, timeoutMs, submittedPlan } = payload;
   // Prefer per-player budget; fall back to legacy faction budget for old servers.
   const budget = myActionsLeft ?? (mp.myFaction === 'hero' ? heroActionsLeft : witchActionsLeft);
   ui.exitPlanningMode();
   if (players) ui._players = players;
   ui.enterPlanningMode(mp.myFaction, budget, timeoutMs ?? 0);
   ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
+
+  // Restore submitted plan on reconnect — show what was already submitted
+  if (submittedPlan && submittedPlan.length > 0) {
+    for (const action of submittedPlan) {
+      if (action.entityId) {
+        if (!ui._unitPlans.has(action.entityId)) ui._unitPlans.set(action.entityId, []);
+        ui._unitPlans.get(action.entityId).push(action);
+      }
+    }
+    ui._refreshPlanOverlay();
+    ui._renderPlanPanel();
+    ui.markPlanSubmitted();
+  }
 }
 
 function _serverWsUrl() {

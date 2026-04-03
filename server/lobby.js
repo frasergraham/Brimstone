@@ -173,6 +173,37 @@ export function broadcastPresenceForPlayer(playerId) {
   }
 }
 
+/** Send planning-phase state to a reconnecting player, including their submitted plan. */
+function _sendReconnectPlanningState(room, playerId, ws) {
+  if (!room.state.planningPhase || room.state.resolving) return;
+
+  const seat = seatFor(room, playerId);
+  const budget = room.state.playerActionsLeft?.get(playerId)
+    ?? (seat?.faction === 'hero' ? room.state.heroActionsLeft : room.state.witchActionsLeft);
+
+  // Check if this player already submitted a plan
+  const planRows = getPlanStatus(room.id, room.state.round);
+  const myPlan = planRows.find(r => r.player_id === playerId && r.plan_json);
+  const submittedPlan = myPlan ? JSON.parse(myPlan.plan_json) : null;
+
+  send(ws, {
+    type:            'planningPhase',
+    myActionsLeft:   budget,
+    heroActionsLeft:  room.state.heroActionsLeft,
+    witchActionsLeft: room.state.witchActionsLeft,
+    timeoutMs:        0,
+    players:          _buildPlayerList(room),
+    submittedPlan,
+  });
+
+  // Inform reconnecting player of who has already submitted (including themselves)
+  for (const s of room.players) {
+    if (room.state.playerReady.get(s.playerId)) {
+      send(ws, { type: 'playerSubmitted', playerId: s.playerId, name: s.name, faction: s.faction });
+    }
+  }
+}
+
 /** Append a chronicle entry and trim to CHRONICLE_MAX. */
 function _appendChronicle(room, entry) {
   room.chronicle.push(entry);
@@ -1501,27 +1532,7 @@ export function handleReconnect(playerId, roomId, ws) {
     send(ws, { type: 'reconnected', faction: seat.faction, myPlayerId: playerId, roomId: room.id });
     send(ws, { type: 'stateUpdate', reason: 'reconnect', state: serializeState(room.state) });
 
-    // Resend planning phase if active
-    if (room.state.planningPhase && !room.state.resolving) {
-      const budget = room.state.playerActionsLeft?.get(playerId)
-        ?? (seat.faction === 'hero' ? room.state.heroActionsLeft : room.state.witchActionsLeft);
-      send(ws, {
-        type:            'planningPhase',
-        myActionsLeft:   budget,
-        heroActionsLeft:  room.state.heroActionsLeft,
-        witchActionsLeft: room.state.witchActionsLeft,
-        timeoutMs:        0,
-        players:          _buildPlayerList(room),
-      });
-      // Inform reconnecting player of who has already submitted
-      for (const s of room.players) {
-        if (s.playerId === playerId) continue;
-        if (room.state.playerReady.get(s.playerId)) {
-          send(ws, { type: 'playerSubmitted', playerId: s.playerId, name: s.name, faction: s.faction });
-        }
-      }
-    }
-
+    _sendReconnectPlanningState(room, playerId, ws);
     return true;
   }
 
@@ -1532,28 +1543,7 @@ export function handleReconnect(playerId, roomId, ws) {
   send(ws, { type: 'reconnected', faction: seat.faction, myPlayerId: playerId, roomId: room.id });
   send(ws, { type: 'stateUpdate', reason: 'reconnect', state: serializeState(room.state) });
 
-  // If the game is in planning phase, resend the planningPhase message so the
-  // client re-enters planning mode (no separate planningPhase is sent on reconnect otherwise).
-  if (room.state.planningPhase && !room.state.resolving) {
-    const budget = room.state.playerActionsLeft?.get(playerId)
-      ?? (seat.faction === 'hero' ? room.state.heroActionsLeft : room.state.witchActionsLeft);
-    send(ws, {
-      type:            'planningPhase',
-      myActionsLeft:   budget,
-      heroActionsLeft:  room.state.heroActionsLeft,
-      witchActionsLeft: room.state.witchActionsLeft,
-      timeoutMs:        0,  // no countdown for reconnected players
-      players:          _buildPlayerList(room),
-    });
-    // Inform reconnecting player of who has already submitted
-    for (const s of room.players) {
-      if (s.playerId === playerId) continue;
-      if (room.state.playerReady.get(s.playerId)) {
-        send(ws, { type: 'playerSubmitted', playerId: s.playerId, name: s.name, faction: s.faction });
-      }
-    }
-  }
-
+  _sendReconnectPlanningState(room, playerId, ws);
   return true;
 }
 
