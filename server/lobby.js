@@ -39,7 +39,6 @@ import { pickAIName }                              from '../src/ai-names.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const RECONNECT_GRACE_MS = 60_000; // time to reconnect before forfeit
-const AI_TAKEOVER_MS     = 12_000; // replace disconnected player with AI after 12s
 const TURN_TIMEOUT_MS    = 90_000; // auto-submit empty plan after 90s of inactivity
 const CHRONICLE_MAX      = 100;    // max rounds retained per room in the chronicle
 
@@ -1275,39 +1274,12 @@ export function handleDisconnect(playerId, roomId) {
     return;
   }
 
-  const faction = factionFor(room, playerId);
-  const isLongTimeout = (room.config.turnIntervalMs ?? TURN_TIMEOUT_MS) >= 3_600_000;
+  broadcastExcept(room, playerId, { type: 'opponentDisconnected' });
 
-  broadcastExcept(room, playerId, { type: 'opponentDisconnected', graceMs: isLongTimeout ? null : RECONNECT_GRACE_MS });
-
-  // For async games with long deadlines, don't do quick AI takeover —
-  // players are expected to disconnect and return hours later.
-  // AI takeover is handled by _checkTimeoutTakeovers after 2 consecutive
-  // missed deadlines instead.
-  if (isLongTimeout) {
-    _checkAllHumansGone(room);
-    return;
-  }
-
-  // AI takeover after a short gap so the remaining player isn't stuck
-  const takeoverTimer = setTimeout(() => {
-    const r = rooms.get(roomId);
-    if (!r || r.state.gameOver) return;
-    const seat = seatFor(r, playerId);
-    if (!seat || seat.faction !== faction) return; // already replaced or reassigned
-
-    console.log(`[room ${roomId}] ${faction} (${playerId}) disconnected — attaching AI.`);
-    _clearTurnTimer(r);
-    attachAI(r, faction, playerId); // replaces the seat in-place
-    const aiName = faction === 'hero' ? 'The AI Hero' : 'The AI Witch';
-    broadcastExcept(r, playerId, { type: 'opponentJoined', opponentName: `${aiName} (took over)`, aiOpponent: true });
-    broadcastState(r, 'update');
-    if (r.state.planningPhase) _runAIPlanSubmission(r);
-
-    // Check if ALL human players are now gone — start room-level destruction timer
-    _checkAllHumansGone(r);
-  }, AI_TAKEOVER_MS);
-  room.takeoverTimers.set(playerId, takeoverTimer);
+  // No immediate AI takeover on disconnect — AI only takes over after
+  // 2 consecutive missed turn deadlines (_checkTimeoutTakeovers).
+  // If all humans are gone, hibernate the room to DB.
+  _checkAllHumansGone(room);
 }
 
 /**
