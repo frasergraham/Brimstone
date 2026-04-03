@@ -89,6 +89,9 @@ export function initServerSelector(serverDevMode = false) {
 
 function _thisServerLabel() {
   try {
+    if (window.BRIMSTONE_SERVER) {
+      return new URL(window.BRIMSTONE_SERVER).hostname;
+    }
     return location.hostname === 'localhost'
       ? `localhost:${location.port}`
       : location.hostname;
