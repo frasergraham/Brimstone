@@ -2324,7 +2324,6 @@ function _resignLocalGame(humanFaction) {
   yesBtn.addEventListener('click', () => {
     dismiss();
     const winnerFaction = humanFaction === 'hero' ? 'witch' : 'hero';
-    state.gameOver  = true;
     state.winner    = winnerFaction;
     state.winReason = 'You resigned.';
     _saveCompletedSpGame(winnerFaction, state.winReason);

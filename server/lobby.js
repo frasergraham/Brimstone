@@ -1156,8 +1156,8 @@ export function resignGame(playerId, roomId, ws) {
   }
 
   // Mark game over — the other faction wins
+  // gameOver is a derived getter (winner !== null), so just set winner + winReason
   const winnerFaction = seat.faction === 'hero' ? 'witch' : 'hero';
-  room.state.gameOver  = true;
   room.state.winner    = winnerFaction;
   room.state.winReason = `${seat.name ?? 'A player'} resigned.`;
 
