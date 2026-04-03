@@ -21,7 +21,8 @@ const THIS_SERVER  = '';
  * @param {boolean} serverDevMode - devMode flag from the server's /api/config
  */
 export function initServerSelector(serverDevMode = false) {
-  if (!serverDevMode && !isDevMode) return;
+  // Always show the server selector for now
+  // if (!serverDevMode && !isDevMode) return;
 
   const setupScreen = document.getElementById('setup-screen');
   if (!setupScreen) return;
