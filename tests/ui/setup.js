@@ -203,7 +203,7 @@ export function installGlobalMocks() {
 export function createElementsBag(overrides = {}) {
   const ids = [
     'zoom-in','zoom-out','zoom-fit','zoom-me','speed-toggle','speed-popup','canvas-wrapper',
-    'menu-btn','menu-quit-btn','game-menu-popup','game-screen',
+    'menu-btn','menu-quit-btn','menu-close-btn','game-menu-backdrop','game-screen',
     'end-turn-btn','turn-info','cycle-bar','node-status','node-status-bar','online-status',
     'plan-panel','plan-tab','plan-tab-count','plan-toggle-btn',
     'plan-steps','plan-budget-badge','plan-status','plan-players',

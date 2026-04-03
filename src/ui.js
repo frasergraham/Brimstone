@@ -291,41 +291,34 @@ export class UIController {
       this._isDragging = false;
     }, { passive: false });
 
-    // In-game menu
+    // In-game menu modal
+    const closeMenu = () => {
+      const backdrop = this._el('game-menu-backdrop');
+      if (backdrop) backdrop.style.display = 'none';
+    };
     this._el('menu-btn')?.addEventListener('click', () => {
-      const popup = this._el('game-menu-popup');
-      if (popup) popup.style.display = popup.style.display === 'none' ? 'block' : 'none';
+      const backdrop = this._el('game-menu-backdrop');
+      if (backdrop) backdrop.style.display = backdrop.style.display === 'none' ? 'flex' : 'none';
     });
+    this._el('menu-close-btn')?.addEventListener('click', closeMenu);
     this._el('menu-replay-turn-btn')?.addEventListener('click', () => {
-      const popup = this._el('game-menu-popup');
-      if (popup) popup.style.display = 'none';
+      closeMenu();
       this.onReplayLastTurn?.();
     });
     this._el('menu-quit-btn')?.addEventListener('click', () => {
-      const popup = this._el('game-menu-popup');
-      if (popup) popup.style.display = 'none';
+      closeMenu();
       this.onQuitToMenu?.();
     });
     this._el('menu-resign-btn')?.addEventListener('click', () => {
-      const popup = this._el('game-menu-popup');
-      if (popup) popup.style.display = 'none';
+      closeMenu();
       this.onResignGame?.();
     });
-    document.addEventListener('click', e => {
-      const popup = this._el('game-menu-popup');
-      if (!popup || popup.style.display === 'none') return;
-      const btn = this._el('menu-btn');
-      if (!popup.contains(e.target) && e.target !== btn) popup.style.display = 'none';
+    // Close on backdrop click (not modal itself)
+    this._el('game-menu-backdrop')?.addEventListener('click', e => {
+      if (e.target === this._el('game-menu-backdrop')) closeMenu();
     });
-    // Mobile: canvas touchend calls e.preventDefault() which suppresses the
-    // synthesized click, so the click handler above never fires when tapping
-    // the canvas with the menu open. Use touchstart (fires before preventDefault)
-    // to close the popup on outside touches.
-    document.addEventListener('touchstart', e => {
-      const popup = this._el('game-menu-popup');
-      if (!popup || popup.style.display === 'none') return;
-      const btn = this._el('menu-btn');
-      if (!popup.contains(e.target) && e.target !== btn) popup.style.display = 'none';
+    this._el('game-menu-backdrop')?.addEventListener('touchstart', e => {
+      if (e.target === this._el('game-menu-backdrop')) closeMenu();
     }, { passive: true });
 
     // Edge swipe: swipe left from right edge opens plan panel, swipe right closes it
