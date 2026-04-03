@@ -22,9 +22,18 @@ protocol.registerSchemesAsPrivileged([{
 
 // ── Config store ─────────────────────────────────────────────────────────────
 
+const SERVERS = {
+  dev:  'https://brimstone-dev.up.railway.app',
+  prod: 'https://calebshollow.com',
+};
+
+// --env=dev overrides the default server URL for this session.
+const envArg = process.argv.find(a => a.startsWith('--env='));
+const envServer = envArg ? SERVERS[envArg.split('=')[1]] : null;
+
 const store = new Store({
   defaults: {
-    serverUrl: '',  // e.g. https://brimstone.up.railway.app
+    serverUrl: 'https://calebshollow.com',
   },
 });
 
@@ -112,7 +121,7 @@ function createWindow() {
 // ── IPC handlers ─────────────────────────────────────────────────────────────
 
 function setupIPC() {
-  ipcMain.handle('get-server-url', () => store.get('serverUrl'));
+  ipcMain.handle('get-server-url', () => envServer || store.get('serverUrl'));
 
   ipcMain.handle('set-server-url', (_event, url) => {
     store.set('serverUrl', url || '');

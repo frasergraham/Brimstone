@@ -32,12 +32,14 @@ files:
   - "server/resolver.js"
   - "server/state-sync.js"
 
+afterPack: ./scripts/electron-afterpack.js
+
 mac:
   category: public.app-category.games
   target:
     - dmg
     - zip   # required for electron-updater differential downloads
-  forceCodeSigning: false
+  notarize: true
 
 win:
   target:

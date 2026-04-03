@@ -11,7 +11,7 @@
  * window.Capacitor before importing any native plugins.
  */
 
-const FALLBACK_SERVER = 'https://brimstone.run';
+const FALLBACK_SERVER = 'https://calebshollow.com';
 
 /** True when running inside a Capacitor native shell. */
 export const isNativeMobile = !!window.Capacitor;

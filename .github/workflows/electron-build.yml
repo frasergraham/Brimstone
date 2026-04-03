@@ -39,24 +39,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build Electron app (macOS)
+      - name: Install Apple API key for notarization
         if: matrix.platform == 'mac'
-        run: npm run electron:build:mac -- --publish never
+        run: |
+          mkdir -p ~/private_keys
+          echo "$APPLE_API_KEY_BASE64" | base64 --decode > ~/private_keys/AuthKey_$APPLE_API_KEY.p8
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+
+      - name: Build, sign, notarize, and publish (macOS)
+        if: matrix.platform == 'mac'
+        run: npm run electron:build:mac -- --publish ${{ (github.ref_type == 'tag' || inputs.publish) && 'always' || 'never' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Code signing (optional — set these secrets to enable):
-          # CSC_LINK: ${{ secrets.MAC_CERTS }}
-          # CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTS_PASSWORD }}
-
-      - name: Ad-hoc sign macOS app bundle
-        if: matrix.platform == 'mac'
-        run: codesign --deep --force -s - "dist/mac-arm64/Caleb's Hollow.app"
-
-      - name: Re-package and publish macOS artifacts
-        if: matrix.platform == 'mac'
-        run: npm run electron:build:mac -- --publish ${{ (github.ref_type == 'tag' || inputs.publish) && 'always' || 'never' }} --prepackaged "dist/mac-arm64/Caleb's Hollow.app"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.MAC_CERTS }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTS_PASSWORD }}
+          APPLE_API_KEY: ~/private_keys/AuthKey_${{ secrets.APPLE_API_KEY }}.p8
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
 
       - name: Build Electron app (Windows)
         if: matrix.platform == 'win'

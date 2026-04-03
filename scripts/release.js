@@ -48,10 +48,11 @@ function die(msg) {
 
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
+const iosBuild = args.includes('--ios');
 const level = args.find(a => ['patch', 'minor', 'major'].includes(a));
 
 if (!level) {
-  console.error('Usage: node scripts/release.js [--dry-run] <patch|minor|major>');
+  console.error('Usage: node scripts/release.js [--dry-run] [--ios] <patch|minor|major>');
   process.exit(1);
 }
 
@@ -253,12 +254,35 @@ pkg.version = newVersion;
 writeFileSync(PKG_FILE, JSON.stringify(pkg, null, 2) + '\n');
 console.log(`Updated package.json → ${newVersion}`);
 
+// ── Bump iOS project version ────────────────────────────────────────────────
+
+const PBXPROJ_FILE = resolve(ROOT, 'ios/App/App.xcodeproj/project.pbxproj');
+let pbxproj = readFileSync(PBXPROJ_FILE, 'utf8');
+
+// Bump MARKETING_VERSION to match (appears in both Debug and Release configs)
+pbxproj = pbxproj.replace(
+  /MARKETING_VERSION = [^;]+;/g,
+  `MARKETING_VERSION = ${newVersion};`,
+);
+
+// Auto-increment CURRENT_PROJECT_VERSION (used as the CFBundleVersion build number)
+const buildNumMatch = pbxproj.match(/CURRENT_PROJECT_VERSION = (\d+);/);
+const oldBuildNum = buildNumMatch ? Number(buildNumMatch[1]) : 0;
+const newBuildNum = oldBuildNum + 1;
+pbxproj = pbxproj.replace(
+  /CURRENT_PROJECT_VERSION = \d+;/g,
+  `CURRENT_PROJECT_VERSION = ${newBuildNum};`,
+);
+
+writeFileSync(PBXPROJ_FILE, pbxproj);
+console.log(`Updated project.pbxproj → ${newVersion} (build ${newBuildNum})`);
+
 // ── Commit, tag, and promote ─────────────────────────────────────────────────
 
 const tag = `v${newVersion}`;
 
 console.log(`\nCommitting release on ${DEV_BRANCH}...`);
-git('add src/version.js CHANGELOG.json package.json');
+git('add src/version.js CHANGELOG.json package.json ios/App/App.xcodeproj/project.pbxproj');
 git(`commit -m "release: ${tag}"`);
 git(`tag ${tag}`);
 console.log(`Created commit and tag ${tag} on ${DEV_BRANCH}`);
@@ -287,3 +311,53 @@ console.log(`Returned to ${DEV_BRANCH}`);
 
 console.log(`\nRelease ${tag} ready. Push with:`);
 console.log(`  git push origin ${DEV_BRANCH} ${PROD_BRANCH} --tags`);
+
+// ── iOS archive and upload (optional) ────────────────────────────────────────
+
+if (iosBuild) {
+  const ARCHIVE_DIR  = resolve(ROOT, 'build');
+  const ARCHIVE_PATH = resolve(ARCHIVE_DIR, `Brimstone-${tag}.xcarchive`);
+  const EXPORT_PATH  = resolve(ARCHIVE_DIR, 'export');
+  const EXPORT_OPTS  = resolve(ROOT, 'ios/ExportOptions.plist');
+  const IOS_PROJECT  = resolve(ROOT, 'ios/App/App.xcodeproj');
+
+  function run(cmd) {
+    console.log(`\n$ ${cmd}`);
+    execSync(cmd, { cwd: ROOT, stdio: 'inherit' });
+  }
+
+  console.log('\n── iOS: syncing web assets (prod) ──');
+  run('npm run cap:sync:ios:prod');
+
+  console.log('\n── iOS: archiving ──');
+  run(
+    `xcodebuild archive` +
+    ` -project "${IOS_PROJECT}"` +
+    ` -scheme App` +
+    ` -configuration Release` +
+    ` -archivePath "${ARCHIVE_PATH}"` +
+    ` -allowProvisioningUpdates` +
+    ` CODE_SIGN_STYLE=Automatic`,
+  );
+
+  console.log('\n── iOS: exporting IPA ──');
+  run(
+    `xcodebuild -exportArchive` +
+    ` -archivePath "${ARCHIVE_PATH}"` +
+    ` -exportPath "${EXPORT_PATH}"` +
+    ` -exportOptionsPlist "${EXPORT_OPTS}"` +
+    ` -allowProvisioningUpdates`,
+  );
+
+  console.log('\n── iOS: uploading to App Store Connect ──');
+  run(
+    `xcrun altool --upload-app` +
+    ` -f "${EXPORT_PATH}/App.ipa"` +
+    ` -t ios` +
+    ` --apiKey "KYMWQHSA4G"` +
+    ` --apiIssuer "0e000f48-47b8-4099-8ed2-8af24301bb2d"`,
+  );
+
+  console.log(`\n✔ iOS build ${tag} (build ${newBuildNum}) uploaded to App Store Connect.`);
+  console.log('  It should appear in TestFlight within a few minutes.');
+}

@@ -20,7 +20,7 @@ const WWW  = resolve(ROOT, 'www');
 
 const ENVS = {
   dev:  { server: 'https://brimstone-dev.up.railway.app', devMode: true },
-  prod: { server: 'https://brimstone.run' },
+  prod: { server: 'https://calebshollow.com' },
 };
 
 const envArg = process.argv.find(a => a.startsWith('--env='));
