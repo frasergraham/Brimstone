@@ -1752,6 +1752,7 @@ export class UIController {
     const panelOpen = panel && panel.style.display !== 'none'
                    && !panel.classList.contains('collapsed');
     btn.classList.toggle('plan-open', !!panelOpen);
+    btn.classList.toggle('plan-was-submitted', !!this._planSubmitted);
   }
 
   _handleActionButton(button) {
