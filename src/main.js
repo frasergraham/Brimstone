@@ -4159,10 +4159,40 @@ function _renderLobby(lobby) {
   }
   grid.appendChild(container);
 
-  // Start button — enabled only for host when all slots filled
+  // Start button — host only; enabled when at least one human is present
   const startBtn = document.getElementById('btn-lobby-start');
-  const allFilled = lobby.slots.every(s => s.status !== 'empty');
-  startBtn.disabled = !(isHost && allFilled);
+  const populateBtn = document.getElementById('btn-lobby-populate-ai');
+  const hasEmpty = lobby.slots.some(s => s.status === 'empty');
+
+  if (isHost) {
+    startBtn.style.display = '';
+    populateBtn.style.display = '';
+    startBtn.disabled = false;
+  } else {
+    // Non-host players can't start or populate AI
+    startBtn.style.display = 'none';
+    populateBtn.style.display = 'none';
+  }
+
+  // Late-join hint below the buttons
+  let hintEl = document.getElementById('lobby-open-slots-hint');
+  if (!hintEl) {
+    hintEl = document.createElement('p');
+    hintEl.id = 'lobby-open-slots-hint';
+    hintEl.className = 'setup-lore';
+    hintEl.style.cssText = 'font-size:0.8rem;margin-top:0.5rem;opacity:0.7';
+    grid.parentNode.insertBefore(hintEl, grid.nextSibling?.nextSibling);
+  }
+
+  if (isHost && hasEmpty) {
+    hintEl.textContent = 'You can start now — empty slots stay open for others to join during the first turn. Unclaimed slots become AI at the deadline.';
+    hintEl.style.display = '';
+  } else if (!isHost) {
+    hintEl.textContent = 'Waiting for the host to start the game…';
+    hintEl.style.display = '';
+  } else {
+    hintEl.style.display = 'none';
+  }
 }
 
 function _showSlotInvitePopup(lobby, slotIndex, faction, anchorEl) {
