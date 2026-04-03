@@ -186,8 +186,9 @@ function _sendReconnectPlanningState(room, playerId, ws) {
   const myPlan = planRows.find(r => r.player_id === playerId && r.plan_json);
   const submittedPlan = myPlan ? JSON.parse(myPlan.plan_json) : null;
 
-  // Send the last resolved round's replay so the player can watch what happened
-  const lastReplay = _getLastUnwatchedReplay(room);
+  // Only send replay if the player hasn't submitted yet — if they submitted,
+  // they were in the game when the round resolved and already saw it.
+  const lastReplay = submittedPlan ? null : _getLastUnwatchedReplay(room);
 
   send(ws, {
     type:            'planningPhase',
