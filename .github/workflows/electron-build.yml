@@ -42,8 +42,8 @@ jobs:
       - name: Install Apple API key for notarization
         if: matrix.platform == 'mac'
         run: |
-          mkdir -p ~/private_keys
-          echo "$APPLE_API_KEY_BASE64" | base64 --decode > ~/private_keys/AuthKey_$APPLE_API_KEY.p8
+          mkdir -p $HOME/private_keys
+          echo "$APPLE_API_KEY_BASE64" | base64 --decode > $HOME/private_keys/AuthKey_$APPLE_API_KEY.p8
         env:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
@@ -53,7 +53,7 @@ jobs:
         run: |
           echo "CSC_LINK length: ${#CSC_LINK}"
           echo "CSC_KEY_PASSWORD set: $( [ -n "$CSC_KEY_PASSWORD" ] && echo yes || echo no )"
-          echo "API key file exists: $(ls -la ~/private_keys/ 2>&1)"
+          echo "API key file exists: $(ls -la $HOME/private_keys/ 2>&1)"
           security find-identity -v -p codesigning
         env:
           CSC_LINK: ${{ secrets.MAC_CERTS }}
@@ -66,7 +66,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.MAC_CERTS }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTS_PASSWORD }}
-          APPLE_API_KEY: ~/private_keys/AuthKey_${{ secrets.APPLE_API_KEY }}.p8
+          APPLE_API_KEY: /Users/runner/private_keys/AuthKey_${{ secrets.APPLE_API_KEY }}.p8
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
 
