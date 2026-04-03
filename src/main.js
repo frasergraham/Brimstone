@@ -1,5 +1,6 @@
 // Entry point: wires all modules, setup screen flow, resize
 import { onInactiveChange } from './platform.js'; // must be first — sets server globals for Capacitor builds
+import { AppMode, getMode, setMode, isInGame, isAnimating, shouldBufferMessages } from './app-mode.js';
 import { initServerSelector } from './server-selector.js';
 import { GameState, Player } from './game.js';
 import { Renderer }          from './renderer.js';
@@ -713,6 +714,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     flags: { _replayGoBack, _replayAborted, _replayJumpToEnd, _autoplay },
   });
   _resolving = true;
+  setMode(AppMode.RESOLVING);
   for (let i = 0; i < steps.length; i++) {
     // During replay: if BACK or STOP was pressed, abort remaining steps immediately
     if (_replayGoBack || _replayAborted || _replayJumpToEnd) break;
@@ -1243,6 +1245,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     redrawFn();
   }
   _resolving = false;
+  // Mode transition is caller's responsibility
 }
 
 function _delay(ms) {
@@ -1294,6 +1297,7 @@ onInactiveChange((inactive) => {
 
 function initOnline(mirrorState, myFaction, mpClient) {
   _inGame  = true;
+  setMode(AppMode.PLANNING);
   state    = mirrorState;
   const canvas = document.getElementById('game-canvas');
 
@@ -2608,6 +2612,7 @@ function _openAsyncGame(roomId) {
 function _handleAsyncStateUpdate(msg) {
   // Clean up any stale UI state from a previous connection / interrupted animation
   _resolving = false;
+  setMode(AppMode.PLANNING);
   const resultDlg = document.getElementById('result-dialog');
   if (resultDlg) resultDlg.style.display = 'none';
   ui?.exitPlanningMode();
@@ -2915,6 +2920,7 @@ async function _asyncWatchLastTurn(lastRound) {
   // Show resolution summary with replay support
   if (ui && _asyncFaction) {
     _resolving = true;
+    setMode(AppMode.RESOLVING);
     let action;
     do {
       action = await ui._showResolutionSummary(stepsArr, lastRound.roundNum ?? (state.round - 1), {
@@ -2943,9 +2949,11 @@ async function _asyncWatchLastTurn(lastRound) {
         await ui._triggerPostRoundEffects();
         redrawOnline();
         _resolving = true; // re-engage guard for next summary show
+        setMode(AppMode.RESOLVING);
       }
     } while (action === 'replay');
     _resolving = false;
+    setMode(AppMode.PLANNING);
   }
 }
 
@@ -3201,6 +3209,7 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
   _replayGoBack       = false;
   _replayAtRoundStart = false;
   _replayActive       = true;
+  setMode(AppMode.PLAYBACK);
   _replaySpeedMult    = 0.5;   // default: PLAY speed
   const savedSpeedMode = ui.speedMode;
   ui.speedMode = 'fast';
@@ -3417,6 +3426,7 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
   }
   ui.hideReplayHUD();
   _replayActive       = false;
+  setMode(AppMode.MENU);
   _replayAborted      = false;
   _replayPaused       = false;
   _replayGoBack       = false;
@@ -3570,6 +3580,7 @@ function _showOnlineScreen() {
   if (mp?.connected) mp.clearRoom();
   // Clear game state so the next onState triggers initOnline
   _inGame  = false;
+  setMode(AppMode.MENU);
   state    = null;
   renderer = null;
   ui       = null;
@@ -4659,11 +4670,13 @@ async function _playReconnectReplay(replay) {
 
   if (mp?.myFaction) {
     _resolving = true;
+    setMode(AppMode.SUMMARY);
     await ui._showResolutionSummary(steps, replay.roundNum, {
       prevScore, prevNodes, humanFaction: mp.myFaction, fogOfWar: state.fogOfWar,
       gameOver: false,
     });
     _resolving = false;
+    setMode(AppMode.PLANNING);
     ui._animateScoreBar(prevScore, prevNodes);
   }
 }
@@ -4942,6 +4955,7 @@ function _createMpClient() {
         // incoming onPlanningPhase messages are buffered, not immediately applied.
         if (ui && mp?.myFaction) {
           _resolving = true;
+          setMode(AppMode.SUMMARY);
           let action;
           do {
             action = await ui._showResolutionSummary(steps, (finalState.round ?? state.round) - 1, {
@@ -4975,6 +4989,7 @@ function _createMpClient() {
               // _animateResolutionSteps sets _resolving = false at end; re-engage
               // the guard so onPlanningPhase stays buffered during the next summary show.
               _resolving = true;
+              setMode(AppMode.RESOLVING);
             } else if (action === 'replay-full') {
               _resolving = false;
               await _replayFullGame(_onlineRoundHistory, state.winner, state.winReason,
@@ -4985,6 +5000,7 @@ function _createMpClient() {
             }
           } while (action === 'replay');
           _resolving = false;
+          setMode(AppMode.PLANNING);
           // Animate score bar changes after summary is dismissed
           ui._animateScoreBar(prevScore, prevNodes);
 
