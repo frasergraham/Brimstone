@@ -18,9 +18,20 @@ const WWW  = resolve(ROOT, 'www');
 
 // ── Environment config ──────────────────────────────────────────────────────
 
+function _localIp() {
+  const nets = require('os').networkInterfaces();
+  for (const iface of Object.values(nets)) {
+    for (const addr of iface) {
+      if (addr.family === 'IPv4' && !addr.internal) return addr.address;
+    }
+  }
+  return 'localhost';
+}
+
 const ENVS = {
-  dev:  { server: 'https://brimstone-dev.up.railway.app', devMode: true },
-  prod: { server: 'https://calebshollow.com' },
+  local: { server: `http://${_localIp()}:3000`, devMode: true },
+  dev:   { server: 'https://brimstone-dev.up.railway.app', devMode: true },
+  prod:  { server: 'https://calebshollow.com' },
 };
 
 const envArg = process.argv.find(a => a.startsWith('--env='));
