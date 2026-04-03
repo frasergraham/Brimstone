@@ -18,8 +18,10 @@ const WWW  = resolve(ROOT, 'www');
 
 // ── Environment config ──────────────────────────────────────────────────────
 
+import { networkInterfaces } from 'os';
+
 function _localIp() {
-  const nets = require('os').networkInterfaces();
+  const nets = networkInterfaces();
   for (const iface of Object.values(nets)) {
     for (const addr of iface) {
       if (addr.family === 'IPv4' && !addr.internal) return addr.address;
