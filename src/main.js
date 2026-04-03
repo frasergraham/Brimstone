@@ -4884,6 +4884,21 @@ function _createMpClient() {
       }
     },
 
+    onHeartbeat({ roomId, round, planningPhase, gameOver, playersReady }) {
+      if (!isInGame() || !state || !mp) return;
+      if (mp.roomId !== roomId) return;
+      // Detect missed state: server is in planning but we're stuck in an old mode
+      if (planningPhase && round > state.round && !shouldBufferMessages()) {
+        console.log(`[heartbeat] round mismatch: server=${round} client=${state.round} — requesting resync`);
+        mp._send({ type: 'requestState' });
+      }
+      // Detect game over we missed
+      if (gameOver && !state.gameOver && !shouldBufferMessages()) {
+        console.log('[heartbeat] missed game-over — requesting resync');
+        mp._send({ type: 'requestState' });
+      }
+    },
+
     onPlanningPhase(payload) {
       if (!isInGame() || !ui || !mp) return;
       // If animating or showing summary, defer until it finishes.

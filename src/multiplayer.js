@@ -406,6 +406,10 @@ export class MultiplayerClient {
         this._opts.onPlayerPresence?.(msg.players);
         break;
 
+      case 'heartbeat':
+        this._opts.onHeartbeat?.(msg);
+        break;
+
       case 'opponentForfeited':
         this._opts.onError?.('Your opponent forfeited. You win!');
         this.active = false;

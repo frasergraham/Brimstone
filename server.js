@@ -794,6 +794,24 @@ const _heartbeat = setInterval(() => {
     if (!ws._isAlive) { ws.terminate(); continue; }
     ws._isAlive = false;
     ws.ping();
+
+    // Send state-sync heartbeat to clients in active games
+    const cs = clients.get(ws);
+    if (cs?.roomId) {
+      const room = getRoom(cs.roomId);
+      if (room?.state) {
+        const ready = [];
+        for (const [pid, r] of room.state.playerReady ?? []) { if (r) ready.push(pid); }
+        send(ws, {
+          type: 'heartbeat',
+          roomId: cs.roomId,
+          round: room.state.round,
+          planningPhase: !!room.state.planningPhase,
+          gameOver: !!room.state.gameOver,
+          playersReady: ready,
+        });
+      }
+    }
   }
 }, HEARTBEAT_INTERVAL_MS);
 
@@ -896,6 +914,13 @@ function route(ws, cs, msg) {
     case 'sendSlotInvite': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
       sendSlotInviteHandler(cs.player, msg.roomId, msg.slotIndex, msg.email);
+      break;
+    }
+
+    // ── State resync (client detected heartbeat mismatch) ─────────────────
+    case 'requestState': {
+      if (!cs.player || !cs.roomId) return;
+      resumeGame(cs.player.id, ws, cs.roomId);
       break;
     }
 
