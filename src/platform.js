@@ -13,6 +13,11 @@
 
 const FALLBACK_SERVER = 'https://calebshollow.com';
 
+/** Safe localStorage.getItem — returns null in Node / when localStorage is broken. */
+function _lsGet(key) {
+  try { return _lsGet(key); } catch { return null; }
+}
+
 /** True when running inside a Capacitor native shell. */
 export const isNativeMobile = !!window.Capacitor;
 
@@ -42,7 +47,7 @@ function _applyServerUrl(serverUrl) {
 async function _initServerUrl() {
   // ── Native mobile (Capacitor) ────────────────────────────────────────────
   if (isNativeMobile && !window.BRIMSTONE_SERVER) {
-    const stored = localStorage.getItem('brimstone_server_url');
+    const stored = _lsGet('brimstone_server_url');
     let serverUrl = stored;
 
     if (!serverUrl) {
@@ -61,7 +66,7 @@ async function _initServerUrl() {
 
   // ── Web (browser) — honour localStorage override ─────────────────────────
   if (!isNativeMobile && !window.electronAPI && !window.BRIMSTONE_SERVER) {
-    const stored = localStorage.getItem('brimstone_server_url');
+    const stored = _lsGet('brimstone_server_url');
     if (stored) _applyServerUrl(stored);
   }
 }
@@ -75,7 +80,7 @@ await _initServerUrl();
  * separately in main.js since it requires a network fetch.
  */
 export const isDevMode =
-  localStorage.getItem('brimstone_dev_mode') === '1' ||
+  (typeof localStorage !== 'undefined' && _lsGet('brimstone_dev_mode') === '1') ||
   _buildConfig?.devMode === true ||
   !!window.electronAPI;
 
@@ -212,7 +217,7 @@ export async function registerPushNotifications() {
     // Listen for registration success
     PushNotifications.addListener('registration', async ({ value: token }) => {
       const Preferences = window.Capacitor?.Plugins?.Preferences;
-      const session = JSON.parse(localStorage.getItem('brimstone_session') || 'null');
+      const session = JSON.parse(_lsGet('brimstone_session') || 'null');
       if (!session?.token) return;
       const server = window.BRIMSTONE_SERVER || '';
 
@@ -272,7 +277,7 @@ export async function unregisterPushToken() {
     const { value: token } = await Preferences.get({ key: 'brimstone_push_token' });
     if (!token) return;
 
-    const session = JSON.parse(localStorage.getItem('brimstone_session') || 'null');
+    const session = JSON.parse(_lsGet('brimstone_session') || 'null');
     if (!session?.token) return;
     const server = window.BRIMSTONE_SERVER || '';
     await fetch(`${server}/api/device-token`, {
@@ -286,6 +291,6 @@ export async function unregisterPushToken() {
 }
 
 // Auto-register on launch if there's already a saved session
-if (isNativeMobile && localStorage.getItem('brimstone_session')) {
+if (isNativeMobile && _lsGet('brimstone_session')) {
   registerPushNotifications();
 }
