@@ -3891,6 +3891,33 @@ window.addEventListener('hashchange', () => {
   _checkAsyncDeepLink();
 });
 _fetchMainMenuAsyncGames();
+_updateMultiplayerBadge();
+
+/**
+ * Fetch active games count and show a badge on the Multiplayer button
+ * if any games are waiting for the player's turn.
+ */
+function _updateMultiplayerBadge() {
+  const badge = document.getElementById('mp-badge');
+  if (!badge) return;
+
+  const session = loadSession();
+  if (!session) { badge.style.display = 'none'; return; }
+
+  const base = window.BRIMSTONE_SERVER || '';
+  fetch(`${base}/api/games?token=${encodeURIComponent(session.token)}`)
+    .then(r => r.json())
+    .then(saves => {
+      const count = saves.filter(s => s.action_needed).length;
+      if (count > 0) {
+        badge.textContent = String(count);
+        badge.style.display = '';
+      } else {
+        badge.style.display = 'none';
+      }
+    })
+    .catch(() => { badge.style.display = 'none'; });
+}
 
 function _loadPublicLobbies() {
   if (!mp) return;

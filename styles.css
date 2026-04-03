@@ -2477,6 +2477,17 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   font-size: 0.85rem;
 }
 
+/* Multiplayer badge on main menu button */
+.mp-badge {
+  position: absolute; top: -6px; right: -6px;
+  min-width: 18px; height: 18px; line-height: 18px;
+  border-radius: 9px; padding: 0 5px;
+  background: var(--clr-gold, #daa520);
+  color: #000; font-size: 0.7rem; font-weight: bold;
+  text-align: center; pointer-events: none;
+  box-shadow: 0 0 6px var(--clr-gold, #daa520);
+}
+
 /* Yellow "action needed" dot */
 .save-dot {
   width: 10px; height: 10px;
