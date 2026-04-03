@@ -4909,7 +4909,8 @@ function _createMpClient() {
         mp._send({ type: 'requestState' });
       }
       // Reconcile ready indicators from server's authoritative state
-      if (planningPhase && ui?._players && playersReady) {
+      if (planningPhase && round === state.round && !shouldBufferMessages()
+          && ui?._planMode && ui._players && playersReady) {
         const readySet = new Set(playersReady);
         let changed = false;
         for (const p of ui._players) {
