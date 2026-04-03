@@ -409,8 +409,13 @@ function _startPlanningTimer(room) {
   }, timeoutMs);
 }
 
-/** Auto-submit empty plans for any seat that hasn't submitted yet. */
+/** Auto-submit empty plans for any seat that hasn't submitted yet.
+ *  If open slots remain (round 1 late-join window), close them and fill with AI first.
+ */
 function _autoSubmitMissingPlans(room) {
+  // Close the late-join window: fill any remaining open slots with AI
+  _closeOpenSlots(room);
+
   for (const seat of room.players) {
     if (!room.state.playerReady.get(seat.playerId)) {
       if (!seat.isAI) {
@@ -419,6 +424,31 @@ function _autoSubmitMissingPlans(room) {
       _submitPlayerPlan(room, seat.playerId, [], true); // isTimeout=true
     }
   }
+}
+
+/**
+ * Close remaining open slots by finalizing the placeholder AI seats.
+ * After this, no more late joins are accepted.
+ */
+function _closeOpenSlots(room) {
+  if (!room.openSlots || room.openSlots.length === 0) return;
+
+  console.log(`[room ${room.id}] Closing ${room.openSlots.length} open slot(s) — filling with AI.`);
+
+  // The placeholder AI seats already exist in room.players — just ensure their
+  // AI engines are active and generate plans for them.
+  for (const openSlot of room.openSlots) {
+    const lobbySlot = room.slots[openSlot.slotIndex];
+    if (lobbySlot) {
+      lobbySlot.status = 'ai';
+      lobbySlot.personality = 'balanced';
+    }
+  }
+
+  // Broadcast that the join window is closed
+  broadcast(room, { type: 'openSlotsClosed', roomId: room.id });
+
+  room.openSlots = [];
 }
 
 function _clearTurnTimer(room) {
@@ -1043,8 +1073,14 @@ export function joinLobby(playerId, playerName, ws, codeOrId) {
   const roomId   = byCode ?? codeOrId;
   const room     = rooms.get(roomId);
 
-  if (!room || room.status !== 'lobby') {
+  if (!room || (room.status !== 'lobby' && room.status !== 'playing')) {
     send(ws, { type: 'error', message: 'Lobby not found or already started.' });
+    return;
+  }
+
+  // If the game already started, redirect to late-join flow
+  if (room.status === 'playing') {
+    joinGame(playerId, playerName, ws, codeOrId);
     return;
   }
 
@@ -1139,22 +1175,32 @@ export function fillAllWithAI(playerId, roomId, personality) {
   broadcastLobbyUpdate(room);
 }
 
-/** Host starts the game. Initializes GameState and begins planning phase. */
+/** Host starts the game. Initializes GameState and begins planning phase.
+ *  Empty slots are allowed — they remain open for joining during round 1
+ *  and are filled with AI when the first turn deadline expires.
+ */
 export function startGame(playerId, roomId) {
   const room = rooms.get(roomId);
   if (!room || room.status !== 'lobby') { return; }
   if (room.hostPlayerId !== playerId)   { return; }
 
-  // All slots must be filled
-  if (room.slots.some(s => s.status === 'empty')) {
+  // Must have at least one human player
+  if (!room.slots.some(s => s.status === 'human')) {
     const hostSlot = room.slots.find(s => s.playerId === playerId);
-    send(hostSlot?._ws, { type: 'error', message: 'Fill all slots before starting.' });
+    send(hostSlot?._ws, { type: 'error', message: 'At least one player is required.' });
     return;
   }
 
-  // Determine AI flags for GameState constructor
-  const anyWitchAI = room.slots.some(s => s.faction === 'witch' && s.status === 'ai');
-  const anyHeroAI  = room.slots.some(s => s.faction === 'hero'  && s.status === 'ai');
+  // Track empty slots that remain open for late joiners during round 1.
+  // These get filled with AI at the end of the first turn deadline.
+  room.openSlots = room.slots
+    .map((s, i) => ({ ...s, slotIndex: i }))
+    .filter(s => s.status === 'empty');
+
+  // Determine AI flags for GameState constructor — empty slots are treated as AI
+  // until a human joins (fog-of-war needs to know if a faction has any AI).
+  const anyWitchAI = room.slots.some(s => s.faction === 'witch' && s.status !== 'human');
+  const anyHeroAI  = room.slots.some(s => s.faction === 'hero'  && s.status !== 'human');
 
   // Initialize GameState
   const state      = new GameState(anyWitchAI, anyHeroAI, room.config.mapSize, room.config.nodeCount);
@@ -1166,6 +1212,20 @@ export function startGame(playerId, roomId) {
   let heroCount  = 0;
   let witchCount = 0;
   for (const slot of room.slots) {
+    if (slot.status === 'empty') {
+      // Skip empty slots — they stay open for late joiners.
+      // The first empty slot per faction still needs the synthetic player record
+      // patched with a placeholder AI so the game state is valid.
+      if ((slot.faction === 'hero' && heroCount === 0) ||
+          (slot.faction === 'witch' && witchCount === 0)) {
+        attachAI(room, slot.faction, null, 'balanced');
+      } else {
+        _addExtraAISeat(room, slot.faction, 'balanced');
+      }
+      if (slot.faction === 'hero')  heroCount++;
+      else                          witchCount++;
+      continue;
+    }
     if (slot.status === 'human') {
       if ((slot.faction === 'hero' && heroCount === 0) ||
           (slot.faction === 'witch' && witchCount === 0)) {
@@ -1189,7 +1249,7 @@ export function startGame(playerId, roomId) {
 
   // Send matchFound to every human player
   const playerList = _buildPlayerList(room);
-  const aiOpponent = room.slots.some(s => s.status === 'ai');
+  const aiOpponent = room.slots.some(s => s.status !== 'human');
   for (const slot of room.slots) {
     if (slot.status === 'human' && slot._ws) {
       send(slot._ws, {
@@ -1199,6 +1259,7 @@ export function startGame(playerId, roomId) {
         myPlayerId: slot.playerId,
         players:    playerList,
         aiOpponent,
+        openSlots:  room.openSlots.length,
       });
     }
   }
@@ -1232,6 +1293,143 @@ export function leaveLobby(playerId, roomId) {
     slot._ws      = null;
     broadcastLobbyUpdate(room);
   }
+}
+
+/**
+ * Join an active game during round 1 by taking over an open (placeholder AI) slot.
+ * Works via room ID or 6-char join code. Available until the first turn deadline.
+ */
+export function joinGame(playerId, playerName, ws, codeOrId) {
+  // Look up by code first, then by direct ID
+  const byCode   = codeOrId?.length === 6 ? codeToRoom.get(codeOrId.toUpperCase()) : null;
+  const roomId   = byCode ?? codeOrId;
+  const room     = rooms.get(roomId);
+
+  if (!room || room.status !== 'playing') {
+    // Fall back: maybe it's still in lobby status — redirect to joinLobby
+    if (room?.status === 'lobby') {
+      joinLobby(playerId, playerName, ws, codeOrId);
+      return;
+    }
+    send(ws, { type: 'error', message: 'Game not found.' });
+    return;
+  }
+
+  // Only joinable during round 1 while open slots remain
+  if (!room.openSlots || room.openSlots.length === 0) {
+    send(ws, { type: 'error', message: 'No open slots available.' });
+    return;
+  }
+  if (room.state.round !== 1 || !room.state.planningPhase) {
+    send(ws, { type: 'error', message: 'Join window has closed.' });
+    return;
+  }
+
+  // Prevent duplicate joins
+  if (room.players.some(s => s.playerId === playerId)) {
+    send(ws, { type: 'error', message: 'You are already in this game.' });
+    return;
+  }
+
+  // Pick the first open slot (witch-side preferred for balance)
+  const slotIdx = room.openSlots.findIndex(s => s.faction === 'witch')
+    ?? room.openSlots.findIndex(() => true);
+  const openSlot = room.openSlots[slotIdx >= 0 ? slotIdx : 0];
+  if (!openSlot) {
+    send(ws, { type: 'error', message: 'No open slots available.' });
+    return;
+  }
+
+  // Find the placeholder AI seat that was created for this slot position.
+  // Match by faction + seat position (the Nth AI on that faction side).
+  const factionAISeats = room.players.filter(s => s.isAI && s.faction === openSlot.faction);
+  // Use the last AI seat on the faction side (most likely the placeholder)
+  const placeholderSeat = factionAISeats[factionAISeats.length - 1];
+  if (!placeholderSeat) {
+    send(ws, { type: 'error', message: 'No placeholder seat found.' });
+    return;
+  }
+
+  // Replace the placeholder AI with the human player
+  const oldPlayerId = placeholderSeat.playerId;
+  placeholderSeat.playerId = playerId;
+  placeholderSeat.ws       = ws;
+  placeholderSeat.name     = playerName;
+  placeholderSeat.isAI     = false;
+  placeholderSeat.ai       = null;
+
+  // Patch state.players to reflect the human takeover
+  const statePlayer = room.state.players.find(p => p.id === oldPlayerId);
+  if (statePlayer) {
+    statePlayer.id   = playerId;
+    statePlayer.name = playerName;
+    statePlayer.isAI = false;
+    const leader = room.state.entities.find(e => e.id === statePlayer.leaderId);
+    if (leader) leader.ownerId = playerId;
+  }
+
+  // Transfer per-player planning maps from old AI ID to new human ID
+  const st = room.state;
+  if (st.playerReady?.has(oldPlayerId)) {
+    // If AI already submitted a plan, reset it so the human can plan
+    st.playerReady.set(playerId, false);
+    st.playerReady.delete(oldPlayerId);
+  }
+  if (st.playerPlans?.has(oldPlayerId)) {
+    st.playerPlans.delete(oldPlayerId);
+  }
+  if (st.playerActionsLeft?.has(oldPlayerId)) {
+    st.playerActionsLeft.set(playerId, st.playerActionsLeft.get(oldPlayerId));
+    st.playerActionsLeft.delete(oldPlayerId);
+  }
+
+  // Update AI flags — if no more AI on this faction, clear the flag
+  const factionStillHasAI = room.players.some(s => s.faction === openSlot.faction && s.isAI);
+  if (openSlot.faction === 'witch') room.state.witchIsAI = factionStillHasAI;
+  else                              room.state.heroIsAI  = factionStillHasAI;
+
+  // Remove this slot from the open slots list
+  room.openSlots.splice(room.openSlots.indexOf(openSlot), 1);
+
+  // Also update the lobby slot record
+  const lobbySlot = room.slots[openSlot.slotIndex];
+  if (lobbySlot) {
+    lobbySlot.status   = 'human';
+    lobbySlot.playerId = playerId;
+    lobbySlot.name     = playerName;
+    lobbySlot._ws      = ws;
+  }
+
+  // Send matchFound to the joining player
+  const playerList = _buildPlayerList(room);
+  send(ws, {
+    type:       'matchFound',
+    roomId:     room.id,
+    faction:    openSlot.faction,
+    myPlayerId: playerId,
+    players:    playerList,
+    aiOpponent: room.players.some(s => s.isAI),
+  });
+
+  // Send state + planning phase info
+  broadcastState(room, 'lateJoin');
+  _sendReconnectPlanningState(room, playerId, ws);
+
+  // Notify everyone else
+  const joinMsg = {
+    type: 'playerJoinedGame',
+    playerId,
+    playerName,
+    faction: openSlot.faction,
+    openSlots: room.openSlots.length,
+  };
+  broadcastExcept(room, playerId, joinMsg);
+  broadcastToSpectators(room, joinMsg);
+
+  // Broadcast updated presence
+  _broadcastPresence(room);
+
+  console.log(`[room ${room.id}] ${playerName} joined open slot (${openSlot.faction}), ${room.openSlots.length} open slots remaining.`);
 }
 
 /**
