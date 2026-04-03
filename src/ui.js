@@ -70,6 +70,9 @@ export class UIController {
     // When true, block all map clicks (set by TutorialConductor during dialog steps)
     this.tutorialClickBlocked = false;
 
+    // ── App mode (set by main.js via onModeChange) ───────────────────────────
+    this.appMode        = 'MENU';  // mirrors AppMode enum from app-mode.js
+
     // ── Planning mode state ──────────────────────────────────────────────────
     this._planMode      = false;   // true during simultaneous planning phase
     this._unitPlans     = new Map(); // Map<entityId, PlanAction[]> — per-unit queues

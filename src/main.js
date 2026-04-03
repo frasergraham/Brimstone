@@ -1,6 +1,6 @@
 // Entry point: wires all modules, setup screen flow, resize
 import { onInactiveChange } from './platform.js'; // must be first — sets server globals for Capacitor builds
-import { AppMode, getMode, setMode, isInGame, isAnimating, shouldBufferMessages } from './app-mode.js';
+import { AppMode, getMode, setMode, isInGame, isAnimating, shouldBufferMessages, onModeChange } from './app-mode.js';
 import { initServerSelector } from './server-selector.js';
 import { GameState, Player } from './game.js';
 import { Renderer }          from './renderer.js';
@@ -96,6 +96,9 @@ let _replayAtRoundStart  = false;   // true while paused at the pre-animation po
 let _replayActive        = false;   // true while _replayFullGame is running
 let _replaySpeedMult     = 0.5;     // playback speed multiplier (0.5=play, 1.0=ff, 1.5=vff)
 let _replayJumpToEnd     = false;   // true when user wants to skip to the final game state
+
+// Keep UIController.appMode in sync with the centralized mode.
+onModeChange((newMode) => { if (ui) ui.appMode = newMode; });
 
 // ── Local game init ───────────────────────────────────────────────────────────
 
@@ -1249,7 +1252,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 }
 
 function _delay(ms) {
-  if (!_replayActive) return new Promise(resolve => setTimeout(resolve, ms));
+  if (getMode() !== AppMode.PLAYBACK) return new Promise(resolve => setTimeout(resolve, ms));
 
   // During replay: poll every ≤50 ms so pause/abort/back take effect immediately.
   const effective = _replaySpeedMult > 0 ? ms / _replaySpeedMult : ms;
@@ -4706,8 +4709,8 @@ function _createMpClient() {
         return;
       }
 
-      // Suppress mid-resolution state pushes — the animation owns state.entities right now.
-      if (_resolving) return;
+      // Suppress state pushes while animating or showing summary — animation owns state.entities.
+      if (shouldBufferMessages()) return;
 
       // Already in game — update in-place (keeps renderer pan/zoom)
 
@@ -4828,29 +4831,29 @@ function _createMpClient() {
     },
 
     onPlayerSubmitted({ playerId, name, faction }) {
-      if (!_inGame) return;
-      if (_resolving) { _pendingSubmissions.push({ playerId, name, faction }); return; }
+      if (!isInGame()) return;
+      if (shouldBufferMessages()) { _pendingSubmissions.push({ playerId, name, faction }); return; }
       if (ui) ui._onPlayerSubmitted(playerId, name, faction);
     },
 
     onPlayerPresence(players) {
-      if (!_inGame) return;
+      if (!isInGame()) return;
       if (ui) ui._onPlayerPresence(players);
     },
 
     onTimerReset(timeoutMs) {
-      if (!_inGame) return;
+      if (!isInGame()) return;
       if (ui) ui.resetCountdown(timeoutMs);
     },
 
     onPlayerTakenOver({ playerId, playerName }) {
-      if (!_inGame || !state) return;
+      if (!isInGame() || !state) return;
       if (!state._takeoverMessages) state._takeoverMessages = [];
       state._takeoverMessages.push(`${playerName} has been taken over by AI`);
     },
 
     onPlayerResigned({ playerId, playerName }) {
-      if (!_inGame || !state) return;
+      if (!isInGame() || !state) return;
       if (!state._takeoverMessages) state._takeoverMessages = [];
       state._takeoverMessages.push(`${playerName} resigned — replaced by AI`);
     },
@@ -4893,9 +4896,9 @@ function _createMpClient() {
     },
 
     onPlanningPhase(payload) {
-      if (!_inGame || !ui || !mp) return;
-      // If the resolution animation is still running, defer until it finishes.
-      if (_resolving) {
+      if (!isInGame() || !ui || !mp) return;
+      // If animating or showing summary, defer until it finishes.
+      if (shouldBufferMessages()) {
         _pendingPlanningPhase = payload;
         return;
       }
@@ -4903,13 +4906,13 @@ function _createMpClient() {
     },
 
     onOpponentReady() {
-      if (!_inGame) return;
+      if (!isInGame()) return;
       const statusEl = document.getElementById('plan-status');
       if (statusEl) statusEl.textContent = 'Opponent ready — waiting for resolution…';
     },
 
     onResolutionComplete({ steps, finalState }) {
-      if (!_inGame || !ui || !renderer) return;
+      if (!isInGame() || !ui || !renderer) return;
       state.resolving = true;   // flag before exitPlanningMode fires its redraw
       ui.exitPlanningMode();
 
