@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js",
+    "dev": "DB_PATH=./data/brimstone.db node server.js",
     "dev:client": "npx serve . -p 3000",
     "test": "node --test tests/*.test.js",
     "test:verbose": "node --test --test-reporter=spec tests/*.test.js",
