@@ -950,8 +950,10 @@ export class UIController {
       return;
     }
 
-    // Outside planning mode, allow viewing tiles/units but block all actions
+    // Outside planning mode, allow viewing tiles/units but block all actions.
+    // During resolution/summary/playback, ignore clicks entirely.
     if (!this._planMode) {
+      if (this.appMode === 'RESOLVING' || this.appMode === 'SUMMARY' || this.appMode === 'PLAYBACK') return;
       this._clearSelection();
       this._showTileDetail(hex);
       this._updateSidebar();
