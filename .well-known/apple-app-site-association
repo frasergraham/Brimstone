@@ -1,0 +1,14 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "T495W5MP96.com.calebshollow.game",
+        "paths": [
+          "/auth/verify*",
+          "/invite*"
+        ]
+      }
+    ]
+  }
+}
