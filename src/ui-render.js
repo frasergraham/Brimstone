@@ -348,9 +348,15 @@ export function buildPlayerStatusHtml(players) {
     const fCls      = p.faction === 'hero' ? 'faction-hero' : 'faction-witch';
     const safeName  = String(label)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // Presence dot: green = active, yellow = connected but backgrounded, grey = disconnected
+    const presenceCls = p.active ? 'presence-active'
+      : p.connected ? 'presence-inactive'
+      : 'presence-offline';
+    const presenceDot = (p.isAI || p.connected === undefined) ? ''
+      : `<span class="presence-dot ${presenceCls}"></span>`;
     html += `<div class="plan-player-row ${cls}">
         <span class="plan-player-icon ${fCls}">${p.faction === 'hero' ? '⚔' : '✦'}</span>
-        <span class="plan-player-name">${safeName}</span>
+        ${presenceDot}<span class="plan-player-name">${safeName}</span>
         <span class="plan-player-status">${icon}</span>
       </div>`;
   }

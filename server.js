@@ -39,6 +39,7 @@ import {
   getAsyncGamesForPlayer,
   // Unified system
   checkDeadlines, checkApproachingDeadlines, migrateAsyncGames,
+  broadcastPresenceForPlayer,
 } from './server/lobby.js';
 import {
   getAllPlayers, getAllSaves, getSaveWithState,
@@ -888,6 +889,7 @@ function route(ws, cs, msg) {
     case 'setInactive': {
       cs.inactive = !!msg.inactive;
       ws._inactive = cs.inactive; // also on ws so lobby.js can read it
+      if (cs.player) broadcastPresenceForPlayer(cs.player.id);
       break;
     }
 

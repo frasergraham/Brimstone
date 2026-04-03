@@ -2986,6 +2986,16 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .plan-player-row.player-ready  .plan-player-status { color: #4caf7d; }
 .plan-player-row.player-waiting .plan-player-status { color: var(--text-dim); }
 .plan-player-row.player-ready  .plan-player-name   { color: var(--text); }
+.presence-dot {
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  margin-right: 4px;
+  flex-shrink: 0;
+}
+.presence-active   { background: #4caf7d; }
+.presence-inactive { background: #e8a735; }
+.presence-offline  { background: #666; }
 
 /* ── Plan food row ────────────────────────────────────────────────────── */
 .plan-food-row {

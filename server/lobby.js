@@ -139,6 +139,35 @@ function _notifyOpts(room) {
   };
 }
 
+/** Build the player list with connection/active status for client display. */
+function _buildPlayerList(room) {
+  return room.players.map(s => ({
+    playerId:  s.playerId,
+    name:      s.name,
+    faction:   s.faction,
+    isAI:      s.isAI,
+    connected: s.isAI || (s.ws?.readyState === 1),
+    active:    s.isAI || (s.ws?.readyState === 1 && !s.ws._inactive),
+  }));
+}
+
+/** Broadcast updated player presence to all connected clients in a room. */
+function _broadcastPresence(room) {
+  const players = _buildPlayerList(room);
+  broadcast(room, { type: 'playerPresence', players });
+  broadcastToSpectators(room, { type: 'playerPresence', players });
+}
+
+/** Broadcast presence update for a specific player's room. */
+export function broadcastPresenceForPlayer(playerId) {
+  for (const room of rooms.values()) {
+    if (room.players.some(s => s.playerId === playerId)) {
+      _broadcastPresence(room);
+      return;
+    }
+  }
+}
+
 /** Append a chronicle entry and trim to CHRONICLE_MAX. */
 function _appendChronicle(room, entry) {
   room.chronicle.push(entry);
@@ -338,12 +367,7 @@ function _startPlanningPhase(room) {
   room.state.startPlanning();
 
   // Build the submission-status array for clients: who is in the game and their faction
-  const playerList = room.players.map(s => ({
-    playerId: s.playerId,
-    name:     s.name,
-    faction:  s.faction,
-    isAI:     s.isAI,
-  }));
+  const playerList = _buildPlayerList(room);
 
   // Persist empty plan-status rows so hibernated rooms know who needs to submit
   try {
@@ -1082,9 +1106,7 @@ export function startGame(playerId, roomId) {
   }
 
   // Send matchFound to every human player
-  const playerList = room.players.map(s => ({
-    playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI, personality: s.personality ?? null,
-  }));
+  const playerList = _buildPlayerList(room);
   const aiOpponent = room.slots.some(s => s.status === 'ai');
   for (const slot of room.slots) {
     if (slot.status === 'human' && slot._ws) {
@@ -1476,17 +1498,13 @@ export function handleReconnect(playerId, roomId, ws) {
     if (room.state.planningPhase && !room.state.resolving) {
       const budget = room.state.playerActionsLeft?.get(playerId)
         ?? (seat.faction === 'hero' ? room.state.heroActionsLeft : room.state.witchActionsLeft);
-      const playerList = room.players.map(s => ({
-        playerId: s.playerId, name: s.name, faction: s.faction,
-        isAI: s.isAI, personality: s.personality ?? null,
-      }));
       send(ws, {
         type:            'planningPhase',
         myActionsLeft:   budget,
         heroActionsLeft:  room.state.heroActionsLeft,
         witchActionsLeft: room.state.witchActionsLeft,
         timeoutMs:        0,
-        players:          playerList,
+        players:          _buildPlayerList(room),
       });
       // Inform reconnecting player of who has already submitted
       for (const s of room.players) {
@@ -1511,17 +1529,13 @@ export function handleReconnect(playerId, roomId, ws) {
   if (room.state.planningPhase && !room.state.resolving) {
     const budget = room.state.playerActionsLeft?.get(playerId)
       ?? (seat.faction === 'hero' ? room.state.heroActionsLeft : room.state.witchActionsLeft);
-    const playerList = room.players.map(s => ({
-      playerId: s.playerId, name: s.name, faction: s.faction,
-      isAI: s.isAI, personality: s.personality ?? null,
-    }));
     send(ws, {
       type:            'planningPhase',
       myActionsLeft:   budget,
       heroActionsLeft:  room.state.heroActionsLeft,
       witchActionsLeft: room.state.witchActionsLeft,
       timeoutMs:        0,  // no countdown for reconnected players
-      players:          playerList,
+      players:          _buildPlayerList(room),
     });
     // Inform reconnecting player of who has already submitted
     for (const s of room.players) {

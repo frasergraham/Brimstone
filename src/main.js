@@ -4702,6 +4702,10 @@ function _createMpClient() {
       if (ui) ui._onPlayerSubmitted(playerId, name, faction);
     },
 
+    onPlayerPresence(players) {
+      if (ui) ui._onPlayerPresence(players);
+    },
+
     onTimerReset(timeoutMs) {
       if (ui) ui.resetCountdown(timeoutMs);
     },

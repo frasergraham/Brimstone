@@ -398,6 +398,10 @@ export class MultiplayerClient {
         // Handled silently — reconnect overlay covers connection state
         break;
 
+      case 'playerPresence':
+        this._opts.onPlayerPresence?.(msg.players);
+        break;
+
       case 'opponentForfeited':
         this._opts.onError?.('Your opponent forfeited. You win!');
         this.active = false;

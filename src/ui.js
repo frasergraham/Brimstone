@@ -590,6 +590,19 @@ export class UIController {
     this._renderPlayerStatus();
   }
 
+  /** Called when the server broadcasts updated player presence. */
+  _onPlayerPresence(players) {
+    if (!this._players) return;
+    for (const update of players) {
+      const p = this._players.find(pl => (pl.playerId ?? pl.id) === update.playerId);
+      if (p) {
+        p.connected = update.connected;
+        p.active    = update.active;
+      }
+    }
+    this._renderPlayerStatus();
+  }
+
   /** Start a countdown timer — progress bar on submit button + floating button. */
   _startCountdown(timeoutMs) {
     this._stopCountdown();
