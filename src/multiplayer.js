@@ -215,6 +215,13 @@ export class MultiplayerClient {
   /** Tell the server the player has backgrounded / foregrounded the app. */
   setInactive(inactive) { this._send({ type: 'setInactive', inactive }); }
 
+  /** Force an immediate reconnect (e.g. when returning from background). */
+  reconnectNow() {
+    if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
+    this._reconnectAttempt = 0;
+    this._reconnect();
+  }
+
   requestLeaderboard() { this._send({ type: 'requestLeaderboard' }); }
 
   sendAction(actionType, params = {}) {

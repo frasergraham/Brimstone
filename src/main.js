@@ -1276,7 +1276,17 @@ let mp = null; // MultiplayerClient instance
 // Tell the server when the app is backgrounded so it can send push notifications
 // instead of assuming an open WebSocket means the player is paying attention.
 onInactiveChange((inactive) => {
-  if (mp?.connected) mp.setInactive(inactive);
+  if (!mp) return;
+  if (inactive) {
+    if (mp.connected) mp.setInactive(true);
+  } else {
+    // App foregrounded — reconnect immediately if the socket died while backgrounded
+    if (mp.connected) {
+      mp.setInactive(false);
+    } else if (mp.active) {
+      mp.reconnectNow();
+    }
+  }
 });
 
 function initOnline(mirrorState, myFaction, mpClient) {
