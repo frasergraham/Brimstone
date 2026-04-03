@@ -204,6 +204,14 @@ export class MultiplayerClient {
   /** Leave the lobby before the game starts. */
   leaveLobby(roomId) { this._send({ type: 'leaveLobby', roomId }); }
 
+  /** Send email invite for a specific lobby slot. */
+  sendSlotInvite(roomId, slotIndex, email) {
+    this._send({ type: 'sendSlotInvite', roomId, slotIndex, email });
+  }
+
+  /** Resign from an active game. */
+  resignGame(roomId) { this._send({ type: 'resignGame', roomId }); }
+
   requestLeaderboard() { this._send({ type: 'requestLeaderboard' }); }
 
   sendAction(actionType, params = {}) {
@@ -224,25 +232,6 @@ export class MultiplayerClient {
     this._send({ type: 'resumeSave', roomId });
   }
 
-  // ── Async game methods ─────────────────────────────────────────────────────
-
-  /** Connect to an async game to view state and/or submit a plan. */
-  connectAsync(roomId) {
-    this._asyncRoomId = roomId;
-    this._send({ type: 'connectAsync', roomId });
-  }
-
-  /** Submit a plan for the current async round. */
-  submitAsyncPlan(roomId, plan) {
-    this._send({ type: 'submitAsyncPlan', roomId, plan });
-  }
-
-  /** Disconnect from an async game session. */
-  disconnectAsync() {
-    this._asyncRoomId = null;
-    this._send({ type: 'disconnectAsync' });
-  }
-
   // ── Internal ───────────────────────────────────────────────────────────────
 
   _send(obj) {
@@ -255,26 +244,29 @@ export class MultiplayerClient {
   }
 
   _onOpen() {
+    const wasReconnecting = this._reconnectAttempt > 0;
     this._reconnectAttempt = 0;
     if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
     // Flush queued messages
     for (const str of this._queue) this._ws.send(str);
     this._queue = [];
+    if (wasReconnecting) this._opts.onReconnected?.();
   }
 
   _onClose() {
-    if (this.active) this._scheduleReconnect();
+    if (this.active) {
+      this._opts.onDisconnected?.();
+      this._scheduleReconnect();
+    }
   }
 
   _scheduleReconnect() {
     if (this._reconnectAttempt >= RECONNECT_MAX_TRIES) {
-      this._opts.onError?.('Unable to reconnect. Please refresh the page.');
+      this._opts.onDisconnectFatal?.('Unable to reconnect to the server.');
       this._reconnectAttempt = 0;
       return;
     }
-    const delay   = RECONNECT_BASE_MS * (2 ** this._reconnectAttempt);
-    const attempt = this._reconnectAttempt + 1;
-    this._opts.onError?.(`Disconnected. Reconnecting (${attempt}/${RECONNECT_MAX_TRIES}) in ${delay / 1000}s…`);
+    const delay = RECONNECT_BASE_MS * (2 ** this._reconnectAttempt);
     this._reconnectTimer = setTimeout(() => {
       this._reconnectAttempt++;
       this._reconnect();
@@ -317,10 +309,6 @@ export class MultiplayerClient {
         } catch {}
         // Register for push notifications (no-op on web/Electron)
         registerPushNotifications();
-        // If we were in an async game, re-connect to it after re-auth
-        if (this._asyncRoomId) {
-          this.connectAsync(this._asyncRoomId);
-        }
         break;
 
       case 'authError':
@@ -396,11 +384,8 @@ export class MultiplayerClient {
         break;
 
       case 'opponentDisconnected':
-        this._opts.onOpponentDisconnected?.(msg.graceMs);
-        break;
-
       case 'opponentReconnected':
-        this._opts.onOpponentReconnected?.();
+        // Handled silently — reconnect overlay covers connection state
         break;
 
       case 'opponentForfeited':
@@ -420,36 +405,17 @@ export class MultiplayerClient {
         this._opts.onTimerReset?.(msg.timeoutMs);
         break;
 
+      case 'playerTakenOver':
+        this._opts.onPlayerTakenOver?.(msg);
+        break;
+
+      case 'playerResigned':
+        this._opts.onPlayerResigned?.(msg);
+        break;
+
       case 'resolutionComplete': {
         const mirror = MirrorState.fromSnapshot(msg.finalState);
         this._opts.onResolutionComplete?.({ steps: msg.steps, finalState: mirror });
-        break;
-      }
-
-      // ── Async game messages ─────────────────────────────────────
-      case 'asyncStateUpdate':
-        this._opts.onAsyncStateUpdate?.(msg);
-        break;
-
-      case 'asyncPlanStatus':
-        this._opts.onAsyncPlanStatus?.(msg);
-        break;
-
-      case 'asyncPlanAccepted':
-        this._opts.onAsyncPlanAccepted?.(msg);
-        break;
-
-      case 'asyncOpponentJoined':
-        this._opts.onAsyncOpponentJoined?.(msg);
-        break;
-
-      case 'asyncResolution': {
-        const mirror = MirrorState.fromSnapshot(msg.finalState);
-        this._opts.onAsyncResolution?.({
-          roomId: msg.roomId, steps: msg.steps, finalState: mirror,
-          finalStateSnapshot: msg.finalState,
-          resolvedRound: msg.resolvedRound, preStateJson: msg.preStateJson,
-        });
         break;
       }
 

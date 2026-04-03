@@ -7,16 +7,30 @@ const SAVE_MAX_AGE_DAYS = 3;
 const _upsert = db.prepare(`
   INSERT INTO game_saves
     (room_id, hero_player_id, witch_player_id, hero_name, witch_name,
-     round, phase, game_version, state_json, updated_at, created_at)
+     round, phase, game_version, state_json,
+     turn_deadline, turn_interval_ms, consecutive_timeouts,
+     config_json, players_json, is_private, code, status,
+     updated_at, created_at)
   VALUES
     (@roomId, @heroPlayerId, @witchPlayerId, @heroName, @witchName,
-     @round, @phase, @gameVersion, @stateJson, unixepoch(), unixepoch())
+     @round, @phase, @gameVersion, @stateJson,
+     @turnDeadline, @turnIntervalMs, @consecutiveTimeouts,
+     @configJson, @playersJson, @isPrivate, @code, @status,
+     unixepoch(), unixepoch())
   ON CONFLICT(room_id) DO UPDATE SET
-    round        = excluded.round,
-    phase        = excluded.phase,
-    game_version = excluded.game_version,
-    state_json   = excluded.state_json,
-    updated_at   = unixepoch()
+    round                = excluded.round,
+    phase                = excluded.phase,
+    game_version         = excluded.game_version,
+    state_json           = excluded.state_json,
+    turn_deadline        = excluded.turn_deadline,
+    turn_interval_ms     = excluded.turn_interval_ms,
+    consecutive_timeouts = excluded.consecutive_timeouts,
+    config_json          = excluded.config_json,
+    players_json         = excluded.players_json,
+    is_private           = excluded.is_private,
+    code                 = excluded.code,
+    status               = excluded.status,
+    updated_at           = unixepoch()
 `);
 
 const _delete = db.prepare(`DELETE FROM game_saves WHERE room_id = ?`);
@@ -41,7 +55,8 @@ const _getLastSaveRound = db.prepare(`
 
 const _listByPlayer = db.prepare(`
   SELECT room_id, hero_player_id, witch_player_id, hero_name, witch_name,
-         round, phase, game_version, updated_at, created_at
+         round, phase, game_version, turn_interval_ms, turn_deadline,
+         status, code, players_json, updated_at, created_at
   FROM   game_saves
   WHERE  hero_player_id = ? OR witch_player_id = ?
   ORDER  BY updated_at DESC
@@ -57,18 +72,28 @@ const _getByRoom = db.prepare(`SELECT * FROM game_saves WHERE room_id = ?`);
  * @param {string} heroName
  * @param {string} witchName
  * @param {object} serializedState    — result of serializeState(); must include .version
+ * @param {object} [extra]            — optional: { turnDeadline, turnIntervalMs,
+ *                                       consecutiveTimeouts, config, players, isPrivate, code, status }
  */
-export function upsertSave(roomId, heroPlayerId, witchPlayerId, heroName, witchName, serializedState) {
+export function upsertSave(roomId, heroPlayerId, witchPlayerId, heroName, witchName, serializedState, extra = {}) {
   _upsert.run({
     roomId,
-    heroPlayerId:  heroPlayerId  ?? null,
-    witchPlayerId: witchPlayerId ?? null,
-    heroName:      heroName      ?? '',
-    witchName:     witchName     ?? '',
-    round:         serializedState.round,
-    phase:         serializedState.phase,
-    gameVersion:   serializedState.version,
-    stateJson:     JSON.stringify(serializedState),
+    heroPlayerId:        heroPlayerId  ?? null,
+    witchPlayerId:       witchPlayerId ?? null,
+    heroName:            heroName      ?? '',
+    witchName:           witchName     ?? '',
+    round:               serializedState.round,
+    phase:               serializedState.phase,
+    gameVersion:         serializedState.version,
+    stateJson:           JSON.stringify(serializedState),
+    turnDeadline:        extra.turnDeadline        ?? null,
+    turnIntervalMs:      extra.turnIntervalMs       ?? 90000,
+    consecutiveTimeouts: extra.consecutiveTimeouts  ? JSON.stringify(extra.consecutiveTimeouts) : '{}',
+    configJson:          extra.config               ? JSON.stringify(extra.config)               : '{}',
+    playersJson:         extra.players              ? JSON.stringify(extra.players)              : '[]',
+    isPrivate:           extra.isPrivate            ? 1 : 0,
+    code:                extra.code                 ?? null,
+    status:              extra.status               ?? 'playing',
   });
 }
 
@@ -142,10 +167,10 @@ export function getSave(roomId) {
 const _insertCompletedGame = db.prepare(`
   INSERT OR IGNORE INTO completed_games
     (game_id, room_id, hero_player_id, witch_player_id, hero_name, witch_name,
-     winner, win_reason, total_rounds, game_version, mode, pinned, created_at, expires_at)
+     winner, win_reason, total_rounds, game_version, mode, players_json, pinned, created_at, expires_at)
   VALUES
     (@gameId, @roomId, @heroPlayerId, @witchPlayerId, @heroName, @witchName,
-     @winner, @winReason, @totalRounds, @gameVersion, @mode, 0,
+     @winner, @winReason, @totalRounds, @gameVersion, @mode, @playersJson, 0,
      unixepoch(), unixepoch() + @ttlSeconds)
 `);
 
@@ -156,9 +181,10 @@ const _insertReplayRound = db.prepare(`
 
 const _listCompletedByPlayer = db.prepare(`
   SELECT game_id, room_id, hero_player_id, witch_player_id, hero_name, witch_name,
-         winner, win_reason, total_rounds, game_version, mode, pinned, created_at, expires_at
+         winner, win_reason, total_rounds, game_version, mode, players_json, pinned, created_at, expires_at
   FROM   completed_games
   WHERE  hero_player_id = ? OR witch_player_id = ?
+         OR players_json LIKE '%' || ? || '%'
   ORDER  BY created_at DESC
 `);
 
@@ -177,12 +203,14 @@ const _setPinned = db.prepare(`
   UPDATE completed_games
   SET pinned = @pinned,
       expires_at = CASE WHEN @pinned = 1 THEN NULL ELSE unixepoch() + @ttlSeconds END
-  WHERE game_id = @gameId AND (hero_player_id = @playerId OR witch_player_id = @playerId)
+  WHERE game_id = @gameId AND (hero_player_id = @playerId OR witch_player_id = @playerId
+        OR players_json LIKE '%' || @playerId || '%')
 `);
 
 const _deleteCompletedGame = db.prepare(`
   DELETE FROM completed_games
-  WHERE game_id = @gameId AND (hero_player_id = @playerId OR witch_player_id = @playerId)
+  WHERE game_id = @gameId AND (hero_player_id = @playerId OR witch_player_id = @playerId
+        OR players_json LIKE '%' || @playerId || '%')
 `);
 
 const _deleteCompletedRounds = db.prepare(`
@@ -221,6 +249,7 @@ export function createCompletedGame(gameId, roomId, meta, rounds) {
       totalRounds:   meta.totalRounds   ?? 0,
       gameVersion:   meta.gameVersion   ?? '',
       mode:          meta.mode          ?? 'hvai',
+      playersJson:   meta.playersJson   ?? '[]',
       ttlSeconds:    TTL_SECONDS,
     });
     for (const r of rounds) {
@@ -239,7 +268,7 @@ export function createCompletedGame(gameId, roomId, meta, rounds) {
  * List all completed games for a player (lightweight — no replay data).
  */
 export function getCompletedGames(playerId) {
-  return _listCompletedByPlayer.all(playerId, playerId);
+  return _listCompletedByPlayer.all(playerId, playerId, playerId);
 }
 
 /**
@@ -300,7 +329,7 @@ export function pruneExpiredCompletedGames() {
 const _getAllCompleted = db.prepare(
   `SELECT game_id, room_id, hero_player_id, witch_player_id,
           hero_name, witch_name, winner, win_reason, total_rounds,
-          game_version, mode, pinned, created_at, expires_at
+          game_version, mode, players_json, pinned, created_at, expires_at
    FROM completed_games
    ORDER BY created_at DESC`
 );
@@ -310,6 +339,131 @@ const _getAllCompleted = db.prepare(
  */
 export function getAllCompletedGames() {
   return _getAllCompleted.all();
+}
+
+// ── Plan persistence (unified multiplayer) ────────────────────────────────────
+
+const _upsertPlanStatus = db.prepare(`
+  INSERT INTO game_plan_status (room_id, player_id, round, plan_json, submitted_at)
+  VALUES (@roomId, @playerId, @round, @planJson, @submittedAt)
+  ON CONFLICT(room_id, player_id, round) DO UPDATE SET
+    plan_json    = excluded.plan_json,
+    submitted_at = excluded.submitted_at
+`);
+
+const _getPlanStatusForRound = db.prepare(`
+  SELECT player_id, plan_json, submitted_at
+  FROM   game_plan_status
+  WHERE  room_id = ? AND round = ?
+`);
+
+const _clearPlanStatusForRound = db.prepare(`
+  DELETE FROM game_plan_status WHERE room_id = ? AND round = ?
+`);
+
+const _clearAllPlanStatus = db.prepare(`
+  DELETE FROM game_plan_status WHERE room_id = ?
+`);
+
+/**
+ * Create empty plan status rows for all players at the start of a round.
+ * @param {string} roomId
+ * @param {string[]} playerIds
+ * @param {number} round
+ */
+export function insertPlanStatusRows(roomId, playerIds, round) {
+  for (const pid of playerIds) {
+    _upsertPlanStatus.run({ roomId, playerId: pid, round, planJson: null, submittedAt: null });
+  }
+}
+
+/**
+ * Persist a submitted plan for a player.
+ * @param {string} roomId
+ * @param {string} playerId
+ * @param {number} round
+ * @param {object} plan — the PlanAction[] array
+ */
+export function upsertPlanStatus(roomId, playerId, round, plan) {
+  _upsertPlanStatus.run({
+    roomId,
+    playerId,
+    round,
+    planJson:    JSON.stringify(plan),
+    submittedAt: Math.floor(Date.now() / 1000),
+  });
+}
+
+/**
+ * Get plan status rows for a round. Returns array of { player_id, plan_json, submitted_at }.
+ */
+export function getPlanStatus(roomId, round) {
+  return _getPlanStatusForRound.all(roomId, round);
+}
+
+/**
+ * Check whether all specified players have submitted plans for a round.
+ */
+export function allPlansSubmitted(roomId, round, playerIds) {
+  const rows = _getPlanStatusForRound.all(roomId, round);
+  const submitted = new Set(rows.filter(r => r.plan_json !== null).map(r => r.player_id));
+  return playerIds.every(pid => submitted.has(pid));
+}
+
+/**
+ * Clean up plan status after resolution completes.
+ */
+export function clearPlanStatus(roomId, round) {
+  _clearPlanStatusForRound.run(roomId, round);
+}
+
+/** Clean up all plan status rows for a room (on game over / deletion). */
+export function clearAllPlanStatus(roomId) {
+  _clearAllPlanStatus.run(roomId);
+}
+
+/**
+ * Get all game_saves with expired turn deadlines that are still playing.
+ * Used by the background deadline checker.
+ */
+export function getExpiredDeadlineGames() {
+  return db.prepare(`
+    SELECT room_id, turn_deadline, turn_interval_ms, players_json, round
+    FROM   game_saves
+    WHERE  status = 'playing'
+      AND  turn_deadline IS NOT NULL
+      AND  turn_deadline < unixepoch()
+  `).all();
+}
+
+export function getApproachingDeadlineGames(windowMs = 600_000) {
+  const windowS = Math.floor(windowMs / 1000);
+  return db.prepare(`
+    SELECT room_id, turn_deadline, turn_interval_ms, players_json, round, config_json
+    FROM   game_saves
+    WHERE  status = 'playing'
+      AND  turn_deadline IS NOT NULL
+      AND  turn_deadline > unixepoch()
+      AND  turn_deadline <= unixepoch() + ?
+  `).all(windowS);
+}
+
+/**
+ * List all in-progress games for a player, including games stored in players_json.
+ * Returns lightweight rows (no state_json) sorted by action-needed first.
+ */
+export function getActiveGamesForPlayer(playerId) {
+  // Query both hero/witch columns (legacy) and players_json (new NvN)
+  return db.prepare(`
+    SELECT room_id, hero_player_id, witch_player_id, hero_name, witch_name,
+           round, phase, game_version, turn_interval_ms, turn_deadline,
+           status, code, players_json, config_json, updated_at, created_at
+    FROM   game_saves
+    WHERE  status IN ('playing', 'lobby')
+      AND  (hero_player_id = ? OR witch_player_id = ?
+            OR players_json LIKE '%' || ? || '%')
+    ORDER  BY updated_at DESC
+  `).all(playerId, playerId, playerId);
 }
 
 // ── Single-player uploaded games ──────────────────────────────────────────────

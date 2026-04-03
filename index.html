@@ -26,16 +26,13 @@
       </div>
       <div class="setup-buttons" style="flex-direction:column;align-items:center">
         <button id="btn-single-player" class="setup-btn primary" style="width:200px">⚔ Single Player</button>
-        <button id="btn-multiplayer"   class="setup-btn"         style="width:200px">🌐 Multiplayer</button>
+        <button id="btn-multiplayer"   class="setup-btn"         style="width:200px;position:relative">🌐 Multiplayer<span id="mp-badge" class="mp-badge" style="display:none"></span></button>
         <button id="btn-tutorial"      class="setup-btn"         style="width:200px">⚑ Tutorial</button>
         <button id="btn-how-to-play"   class="setup-btn"         style="width:200px">How to Play</button>
         <button id="btn-account"       class="setup-btn"         style="width:200px">Account</button>
         <button id="btn-options"       class="setup-btn"         style="width:200px">Options</button>
       </div>
-      <div id="menu-async-box" class="menu-async-box" style="display:none">
-        <div class="menu-async-header">Async Games</div>
-        <div id="menu-async-list" class="menu-async-list"></div>
-      </div>
+      <!-- Async games box removed — games listed in Multiplayer section -->
       <div style="margin-top:1.25rem;text-align:center">
         <a href="/admin" class="admin-link" id="admin-link" style="display:none">Admin</a>
       </div>
@@ -325,7 +322,6 @@
       <div class="setup-lore"><p>Choose how you want to play.</p></div>
       <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.75rem">
         <button id="btn-mp-online" class="setup-btn primary" style="width:260px">🌐 Online Multiplayer</button>
-        <button id="btn-mp-async"  class="setup-btn"         style="width:260px">⏳ Async Multiplayer</button>
         <button id="btn-mp-local"  class="setup-btn"         style="width:260px">🎮 Local Pass &amp; Play</button>
       </div>
       <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
@@ -342,18 +338,14 @@
         <button id="btn-mp-signin" class="setup-btn primary" style="margin-top:0.4rem">Sign In</button>
       </div>
 
-      <!-- Active and completed online games -->
-      <div class="active-games-section" style="margin-top:0.75rem">
+      <!-- Active and completed online games (hidden until signed in) -->
+      <div id="mp-games-section" class="active-games-section" style="display:none;margin-top:0.75rem">
         <div class="saves-tab-bar">
           <button class="saves-tab active" data-target="active-games-list">In Progress</button>
           <button class="saves-tab"        data-target="mp-completed-list">Completed</button>
         </div>
-        <div id="active-games-list" class="saves-list">
-          <p class="saves-empty">Sign in to see your active games.</p>
-        </div>
-        <div id="mp-completed-list" class="saves-list" style="display:none">
-          <p class="saves-empty">Sign in to see completed games.</p>
-        </div>
+        <div id="active-games-list" class="saves-list"></div>
+        <div id="mp-completed-list" class="saves-list" style="display:none"></div>
       </div>
 
       <!-- Online action buttons (shown after sign-in) -->
@@ -597,6 +589,33 @@
         </select>
       </div>
       <div class="cg-option-row">
+        <span class="cg-option-label">Mode</span>
+        <div class="pps-pills">
+          <label class="pps-pill"><input type="radio" name="cg-mode" value="live" checked>
+            <span>Live<br><small>Short turns, play in one sitting</small></span>
+          </label>
+          <label class="pps-pill"><input type="radio" name="cg-mode" value="async">
+            <span>Async<br><small>Longer turns, get notified</small></span>
+          </label>
+        </div>
+      </div>
+      <div class="cg-option-row">
+        <span class="cg-option-label">Turn timeout</span>
+        <select id="cg-turn-timeout-live" class="setup-select">
+          <option value="60000">1 Minute</option>
+          <option value="90000" selected>90 Seconds</option>
+          <option value="180000">3 Minutes</option>
+          <option value="300000">5 Minutes</option>
+        </select>
+        <select id="cg-turn-timeout-async" class="setup-select" style="display:none">
+          <option value="3600000">1 Hour</option>
+          <option value="21600000">6 Hours</option>
+          <option value="43200000" selected>12 Hours</option>
+          <option value="86400000">1 Day</option>
+          <option value="259200000">3 Days</option>
+        </select>
+      </div>
+      <div class="cg-option-row">
         <span class="cg-option-label">Private game</span>
         <label class="cg-toggle">
           <input type="checkbox" id="cg-private">
@@ -782,7 +801,8 @@
     <!-- In-game menu popup -->
     <div id="game-menu-popup" class="game-menu-popup" style="display:none">
       <button id="menu-replay-turn-btn" class="game-menu-item" style="display:none">Replay Last Turn</button>
-      <button id="menu-quit-btn" class="game-menu-item">Quit to Menu</button>
+      <button id="menu-quit-btn" class="game-menu-item">Return to Menu</button>
+      <button id="menu-resign-btn" class="game-menu-item menu-resign" style="display:none">Resign from Game</button>
       <div id="menu-version" class="game-menu-version"></div>
     </div>
     <!-- Cycle bar: always-visible 8-step day/night strip -->
@@ -1003,6 +1023,15 @@
       <div id="result-messages" class="result-messages"></div>
       <div id="result-dismiss-hint" class="result-dismiss">— click anywhere to continue —</div>
       <div id="result-buttons" class="result-buttons" style="display:none"></div>
+    </div>
+  </div>
+
+  <!-- ── Reconnect overlay ─────────────────────────────────────────── -->
+  <div id="reconnect-overlay" style="display:none">
+    <div class="reconnect-card">
+      <div id="reconnect-spinner" class="waiting-spinner">⏳</div>
+      <p id="reconnect-message">Reconnecting…</p>
+      <button id="reconnect-back" class="setup-btn" style="display:none">Back to Menu</button>
     </div>
   </div>
 

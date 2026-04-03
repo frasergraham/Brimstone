@@ -48,14 +48,19 @@ function _notify(title, body, tag) {
 
 // ── Public notification helpers ──────────────────────────────────────────────
 
-/** New round is ready — time to plan moves. */
-export function notifyTurnReady(round) {
-  return _notify('Your Turn', `Round ${round} is ready — plan your moves!`, 'brimstone-turn-ready');
+/** Everyone else has submitted — waiting on you! */
+export function notifyWaitingOnYou() {
+  return _notify('Waiting on you!', "Everyone else has submitted. Your turn to plan!", 'brimstone-waiting-on-you');
 }
 
-/** Opponent has submitted their plan — nudge to submit yours. */
-export function notifyOpponentSubmitted() {
-  return _notify('Opponent Submitted', 'Your opponent has submitted their plan.', 'brimstone-opponent-submitted');
+/** New round is ready — everyone submitted, resolution complete. */
+export function notifyRoundReady(round) {
+  return _notify('Your Turn', `Round ${round} is ready — plan your moves!`, 'brimstone-round-ready');
+}
+
+/** Deadline is approaching — submit soon! */
+export function notifyDeadlineApproaching(minutesLeft) {
+  return _notify('Deadline approaching', `You have ~${minutesLeft} minutes to submit your plan!`, 'brimstone-deadline');
 }
 
 /** Game is over. */

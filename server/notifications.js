@@ -87,96 +87,91 @@ function _playerName(playerId) {
 // ── Public API ──────────────────────────────────────────────────────────────
 
 /**
- * Check if a player has an active WebSocket session for a game.
- * The caller passes the asyncSessions map from lobby.js.
- * @param {Map<string, Map<string, WebSocket>>} asyncSessions
+ * Should we send a notification for this game?
+ * Returns false if the game is not async or the player is currently connected.
  */
-function _isOnline(asyncSessions, roomId, playerId) {
-  const room = asyncSessions?.get(roomId);
-  if (!room) return false;
-  const ws = room.get(playerId);
-  return ws && ws.readyState === 1; // WebSocket.OPEN
+export function shouldNotify(roomId, playerId, { isAsync, isConnected } = {}) {
+  if (!isAsync) return false;
+  if (isConnected && typeof isConnected === 'function') return !isConnected(playerId);
+  if (typeof isConnected === 'boolean') return !isConnected;
+  return true;
 }
 
 /**
- * Notify a player that their opponent has joined and round 1 is ready.
+ * Notify the last unsubmitted player that everyone else has submitted.
+ * "Waiting on you!"
  */
-export async function notifyOpponentJoined(playerId, gameInfo, asyncSessions) {
-  if (_isOnline(asyncSessions, gameInfo.roomId, playerId)) return;
-  if (!_shouldSend(gameInfo.roomId, playerId, 'opponent_joined')) return;
-  _record(gameInfo.roomId, playerId, 'opponent_joined');
-
-  const opponent = _playerName(gameInfo.opponentId);
+export async function notifyWaitingOnYou(playerId, gameInfo, opts) {
+  if (!shouldNotify(gameInfo.roomId, playerId, opts)) return;
+  if (!_shouldSend(gameInfo.roomId, playerId, 'waiting_on_you')) return;
+  _record(gameInfo.roomId, playerId, 'waiting_on_you');
 
   if (hasDeviceTokens(playerId)) {
     await sendPush(playerId, {
-      title: 'Your opponent has joined!',
-      body: `${opponent} has joined your game. Round 1 is ready.`,
+      title: 'Waiting on you!',
+      body: "Everyone else has submitted. Your turn to plan!",
       roomId: gameInfo.roomId,
     });
   } else {
     const email = _getPlayerEmail(playerId);
     if (!email) return;
-    const url = `${_baseUrl()}/#async=${gameInfo.roomId}`;
+    const url = `${_baseUrl()}/#game=${gameInfo.roomId}`;
     await _sendEmail(email,
-      "Caleb's Hollow — Your opponent has joined!",
-      `${opponent} has joined your game. Round 1 is ready.\n\nPlay your turn: ${url}`
+      "Caleb's Hollow — Waiting on you!",
+      `Everyone else has submitted their plan. Your turn!\n\nPlay your turn: ${url}`
     );
   }
 }
 
 /**
- * Notify a player that a new round is ready (after resolution).
+ * Notify a player that a new round is ready (everyone submitted, resolution done).
  */
-export async function notifyTurnReady(playerId, gameInfo, asyncSessions) {
-  console.log(`[Notify] notifyTurnReady player=${playerId} room=${gameInfo.roomId} round=${gameInfo.round}`);
-  if (_isOnline(asyncSessions, gameInfo.roomId, playerId)) { console.log('[Notify]   skipped: player is online'); return; }
-  if (!_shouldSend(gameInfo.roomId, playerId, 'turn_ready')) { console.log('[Notify]   skipped: dedup'); return; }
-  _record(gameInfo.roomId, playerId, 'turn_ready');
-
-  const opponent = _playerName(gameInfo.opponentId);
+export async function notifyRoundReady(playerId, gameInfo, opts) {
+  if (!shouldNotify(gameInfo.roomId, playerId, opts)) return;
+  if (!_shouldSend(gameInfo.roomId, playerId, 'round_ready')) return;
+  _record(gameInfo.roomId, playerId, 'round_ready');
 
   if (hasDeviceTokens(playerId)) {
     await sendPush(playerId, {
       title: `Round ${gameInfo.round} is ready`,
-      body: `Your game against ${opponent} has a new round.`,
+      body: 'Everyone submitted. A new round has begun.',
       roomId: gameInfo.roomId,
     });
   } else {
     const email = _getPlayerEmail(playerId);
     if (!email) return;
-    const url = `${_baseUrl()}/#async=${gameInfo.roomId}`;
+    const url = `${_baseUrl()}/#game=${gameInfo.roomId}`;
     await _sendEmail(email,
       `Caleb's Hollow — Round ${gameInfo.round} is ready`,
-      `A new round has begun in your game against ${opponent}.\n\nPlay your turn: ${url}`
+      `Everyone submitted. A new round has begun.\n\nPlay your turn: ${url}`
     );
   }
 }
 
 /**
- * Notify a player that their opponent submitted a plan (nudge).
+ * Notify unsubmitted players that the deadline is approaching.
+ * "You have ~N minutes to submit your plan!"
  */
-export async function notifyOpponentSubmitted(playerId, gameInfo, asyncSessions) {
-  console.log(`[Notify] notifyOpponentSubmitted player=${playerId} room=${gameInfo.roomId}`);
-  if (_isOnline(asyncSessions, gameInfo.roomId, playerId)) { console.log('[Notify]   skipped: player is online'); return; }
-  if (!_shouldSend(gameInfo.roomId, playerId, 'opponent_submitted')) { console.log('[Notify]   skipped: dedup'); return; }
-  _record(gameInfo.roomId, playerId, 'opponent_submitted');
+export async function notifyDeadlineApproaching(playerId, gameInfo, opts) {
+  if (!shouldNotify(gameInfo.roomId, playerId, opts)) return;
+  if (!_shouldSend(gameInfo.roomId, playerId, 'deadline_approaching')) return;
+  _record(gameInfo.roomId, playerId, 'deadline_approaching');
 
-  const opponent = _playerName(gameInfo.opponentId);
+  const mins = gameInfo.minutesLeft ?? 10;
 
   if (hasDeviceTokens(playerId)) {
     await sendPush(playerId, {
-      title: 'Your move!',
-      body: `${opponent} has submitted their plan. Waiting on you!`,
+      title: 'Deadline approaching',
+      body: `You have ~${mins} minutes to submit your plan!`,
       roomId: gameInfo.roomId,
     });
   } else {
     const email = _getPlayerEmail(playerId);
     if (!email) return;
-    const url = `${_baseUrl()}/#async=${gameInfo.roomId}`;
+    const url = `${_baseUrl()}/#game=${gameInfo.roomId}`;
     await _sendEmail(email,
-      "Caleb's Hollow — Your opponent submitted their turn",
-      `${opponent} has submitted their plan. Waiting on you!\n\nPlay your turn: ${url}`
+      "Caleb's Hollow — Deadline approaching",
+      `You have ~${mins} minutes to submit your plan!\n\nPlay your turn: ${url}`
     );
   }
 }
@@ -184,8 +179,8 @@ export async function notifyOpponentSubmitted(playerId, gameInfo, asyncSessions)
 /**
  * Notify a player that the game is over.
  */
-export async function notifyGameOver(playerId, gameInfo, asyncSessions) {
-  if (_isOnline(asyncSessions, gameInfo.roomId, playerId)) return;
+export async function notifyGameOver(playerId, gameInfo, opts) {
+  if (!shouldNotify(gameInfo.roomId, playerId, opts)) return;
   if (!_shouldSend(gameInfo.roomId, playerId, 'game_over')) return;
   _record(gameInfo.roomId, playerId, 'game_over');
 
@@ -200,7 +195,7 @@ export async function notifyGameOver(playerId, gameInfo, asyncSessions) {
   } else {
     const email = _getPlayerEmail(playerId);
     if (!email) return;
-    const url = `${_baseUrl()}/#async=${gameInfo.roomId}`;
+    const url = `${_baseUrl()}/#game=${gameInfo.roomId}`;
     await _sendEmail(email,
       "Caleb's Hollow — Game Over",
       `${winnerLabel} wins! ${gameInfo.winReason || ''}\n\nView the result: ${url}`
@@ -216,7 +211,7 @@ export async function sendGameInvite(email, gameInfo) {
   const url = `${_baseUrl()}/invite?code=${encodeURIComponent(gameInfo.code)}`;
   await _sendEmail(email,
     `Caleb's Hollow — ${gameInfo.hostName} has challenged you!`,
-    `${gameInfo.hostName} has invited you to an async game of Caleb's Hollow.\n\nClick the link below to join:\n${url}\n\nIf you don't have an account, one will be created for you automatically.`
+    `${gameInfo.hostName} has invited you to a game of Caleb's Hollow.\n\nClick the link below to join:\n${url}\n\nIf you don't have an account, one will be created for you automatically.`
   );
 }
 

@@ -26,7 +26,7 @@ import { createMinion, createZombie, createWoodGolem, createIronGolem, createSur
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
-import { requestNotificationPermission, notifyTurnReady, notifyOpponentSubmitted, notifyGameOver } from './notifications.js';
+import { requestNotificationPermission, notifyRoundReady, notifyWaitingOnYou, notifyDeadlineApproaching, notifyGameOver } from './notifications.js';
 
 // Stamp version into badge
 document.getElementById('version-badge').textContent = `v${BUILD_VERSION}`;
@@ -117,6 +117,15 @@ function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
 
   ui = new UIController(canvas, state, renderer, localWitchAI, redraw, localHeroAI, autoplay);
   ui.onQuitToMenu = () => location.reload();
+
+  // Show resign option for single-player games (one side is AI)
+  const isOneSided = !!(localWitchAI) !== !!(localHeroAI);
+  const resignBtn = document.getElementById('menu-resign-btn');
+  if (resignBtn) resignBtn.style.display = isOneSided ? '' : 'none';
+  if (isOneSided) {
+    const humanFaction = localWitchAI ? 'hero' : 'witch';
+    ui.onResignGame = () => _resignLocalGame(humanFaction);
+  }
 
   const battleCallback = (actorSnap, targetSnap, result) =>
     new Promise(resolve => ui._showBattleDialog(actorSnap, targetSnap, result, resolve));
@@ -1278,10 +1287,16 @@ function initOnline(mirrorState, myFaction, mpClient) {
   // No local AI — all turns handled server-side
   ui = new UIController(canvas, state, renderer, null, redrawOnline, null, false);
   ui.onQuitToMenu = () => location.reload();
+  ui.onResignGame = () => _showResignConfirmation(mpClient);
   ui.onReplayLastTurn = () => {
     if (!_asyncLastRound) return;
     _asyncWatchLastTurn(_asyncLastRound);
   };
+
+  // Show resign option for online games
+  const resignBtn = document.getElementById('menu-resign-btn');
+  if (resignBtn) resignBtn.style.display = '';
+
   ui.mp         = mpClient;
   ui.myPlayerId = mpClient.myPlayerId ?? null;
   ui._players   = (state.players ?? []).map(p => ({ ...p, playerId: p.playerId ?? p.id }));
@@ -1384,7 +1399,7 @@ document.getElementById('btn-single-player').addEventListener('click', () => sho
 document.getElementById('btn-quick-play')    .addEventListener('click', () => _showSinglePlayerScreen());
 document.getElementById('btn-story-mode')    .addEventListener('click', () => _showCampaignSelectScreen());
 document.getElementById('btn-sp-choice-back').addEventListener('click', () => showStep('mode'));
-document.getElementById('btn-multiplayer')  .addEventListener('click', () => _showMultiplayerChoice());
+document.getElementById('btn-multiplayer')  .addEventListener('click', () => _showOnlineScreen());
 document.getElementById('btn-tutorial')     .addEventListener('click', () => initTutorial());
 document.getElementById('btn-how-to-play')  .addEventListener('click', () => showStep('howtoplay'));
 document.getElementById('btn-options')      .addEventListener('click', () => showStep('options'));
@@ -1393,6 +1408,7 @@ document.getElementById('btn-howtoplay-back').addEventListener('click', () => sh
 document.getElementById('btn-options-back') .addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-account-back') .addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-changelog-back').addEventListener('click', () => showStep('mode'));
+document.getElementById('reconnect-back').addEventListener('click', () => location.reload());
 
 // Initialize persistent session bar on page load
 _updateSessionBar();
@@ -2169,7 +2185,7 @@ function _fetchActiveSaves() {
   }
 
   const base = window.BRIMSTONE_SERVER || '';
-  fetch(`${base}/api/saves?token=${encodeURIComponent(session.token)}`)
+  fetch(`${base}/api/games?token=${encodeURIComponent(session.token)}`)
     .then(r => r.json())
     .then(saves => _renderSaves(saves))
     .catch(() => {
@@ -2186,25 +2202,161 @@ function _renderSaves(saves) {
     return;
   }
 
+  // Sort: action-needed first (your turn), then waiting, then lobby
+  saves.sort((a, b) => {
+    const priority = (s) => {
+      if (s.status === 'lobby') return 2;
+      if (s.action_needed) return 0;
+      return 1;
+    };
+    return priority(a) - priority(b);
+  });
+
   list.innerHTML = '';
   for (const s of saves) {
-    const myFaction  = s.hero_player_id  === session?.id ? 'hero' : 'witch';
-    const oppName    = myFaction === 'hero' ? (s.witch_name || 'Witch') : (s.hero_name || 'Hero');
-    const factionSymbol = myFaction === 'hero' ? '⚔' : '✦';
+    const pps = s.players_per_side ?? 1;
     const phaseLabel = { dawn: '🌅 Dawn', day: '☀ Day', dusk: '🌇 Dusk', night: '🌙 Night' }[s.phase] ?? s.phase;
+    const mapLabel = (s.map_size ?? 'standard').charAt(0).toUpperCase() + (s.map_size ?? 'standard').slice(1);
+    const ago = s.updated_at ? _timeAgo(s.updated_at) : '';
+
+    // Title: "1v1 vs Name" for 1v1, "NvN Game" for larger
+    let title;
+    if (pps <= 1) {
+      const myFaction = s.hero_player_id === session?.id ? 'hero' : 'witch';
+      const oppName = myFaction === 'hero' ? (s.witch_name || 'Witch') : (s.hero_name || 'Hero');
+      const sym = myFaction === 'hero' ? '⚔' : '✦';
+      title = `${sym} vs ${_esc(oppName)}`;
+    } else {
+      title = `${pps}v${pps} Game`;
+    }
+
+    // Button label
+    const btnLabel = s.status === 'lobby' ? 'View'
+                   : s.action_needed      ? 'Plan Turn'
+                   : 'View';
+    const btnClass = s.action_needed ? 'setup-btn primary' : 'setup-btn';
 
     const entry = document.createElement('div');
-    entry.className = 'save-entry';
+    entry.className = 'save-entry' + (s.action_needed ? ' save-action-needed' : '');
     entry.innerHTML = `
+      ${s.action_needed ? '<span class="save-dot"></span>' : ''}
       <div class="save-entry-info">
-        <div class="save-entry-title">${factionSymbol} vs ${_esc(oppName)}</div>
-        <div class="save-entry-meta">Round ${s.round} · ${phaseLabel}</div>
+        <div class="save-entry-title">${title}</div>
+        <div class="save-entry-meta">Round ${s.round || 1} · ${phaseLabel || 'Lobby'} · ${_esc(mapLabel)}${ago ? ' · ' + ago : ''}</div>
       </div>
-      <button class="setup-btn primary">Rejoin</button>
+      <button class="${_esc(btnClass)}">${btnLabel}</button>
+      <button class="save-resign-btn" title="Resign">✕</button>
     `;
-    entry.querySelector('button').addEventListener('click', () => _resumeSave(s.room_id));
+    entry.querySelector('.' + (s.action_needed ? 'primary' : 'setup-btn') + ':not(.save-resign-btn)').addEventListener('click', () => _resumeSave(s.room_id));
+    entry.querySelector('.save-resign-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      _confirmResign(s.room_id);
+    });
     list.appendChild(entry);
   }
+}
+
+function _confirmResign(roomId) {
+  if (!confirm('Are you sure you want to resign? This cannot be undone.')) return;
+  _ensureAuthed(() => mp.resignGame(roomId));
+  // Refresh the list after a short delay
+  setTimeout(_fetchActiveSaves, 500);
+}
+
+/**
+ * Show an in-game Yes/No confirmation dialog for resigning.
+ * Uses the result-dialog overlay with custom buttons.
+ */
+function _showResignConfirmation(mpClient) {
+  if (!ui) return;
+  const dialog = document.getElementById('result-dialog');
+  const msgs   = document.getElementById('result-messages');
+  const btns   = document.getElementById('result-buttons');
+  const hint   = document.getElementById('result-dismiss-hint');
+  if (!dialog || !msgs || !btns) return;
+
+  msgs.textContent = 'Are you sure you want to resign?\nThis cannot be undone.';
+  if (hint) hint.style.display = 'none';
+  const portrait = document.getElementById('result-portrait');
+  if (portrait) { portrait.style.display = 'none'; portrait.innerHTML = ''; }
+
+  btns.style.display = '';
+  btns.innerHTML = '';
+
+  const dismiss = () => { dialog.style.display = 'none'; };
+
+  const yesBtn = document.createElement('button');
+  yesBtn.className = 'setup-btn';
+  yesBtn.style.cssText = 'color:#c44;border-color:#c44';
+  yesBtn.textContent = 'Yes, Resign';
+  yesBtn.addEventListener('click', () => {
+    dismiss();
+    const roomId = mpClient?.roomId || _asyncRoomId;
+    if (roomId && mpClient) mpClient.resignGame(roomId);
+  });
+
+  const noBtn = document.createElement('button');
+  noBtn.className = 'setup-btn';
+  noBtn.textContent = 'Cancel';
+  noBtn.addEventListener('click', dismiss);
+
+  btns.appendChild(noBtn);
+  btns.appendChild(yesBtn);
+  dialog.style.display = 'flex';
+}
+
+/**
+ * Resign from a local (single-player) game.
+ * Shows confirmation dialog, then ends the game as a loss.
+ */
+function _resignLocalGame(humanFaction) {
+  if (!ui || !state || state.gameOver) return;
+  const dialog = document.getElementById('result-dialog');
+  const msgs   = document.getElementById('result-messages');
+  const btns   = document.getElementById('result-buttons');
+  const hint   = document.getElementById('result-dismiss-hint');
+  if (!dialog || !msgs || !btns) return;
+
+  msgs.textContent = 'Are you sure you want to resign?\nThis cannot be undone.';
+  if (hint) hint.style.display = 'none';
+  const portrait = document.getElementById('result-portrait');
+  if (portrait) { portrait.style.display = 'none'; portrait.innerHTML = ''; }
+
+  btns.style.display = '';
+  btns.innerHTML = '';
+
+  const dismiss = () => { dialog.style.display = 'none'; };
+
+  const yesBtn = document.createElement('button');
+  yesBtn.className = 'setup-btn';
+  yesBtn.style.cssText = 'color:#c44;border-color:#c44';
+  yesBtn.textContent = 'Yes, Resign';
+  yesBtn.addEventListener('click', () => {
+    dismiss();
+    const winnerFaction = humanFaction === 'hero' ? 'witch' : 'hero';
+    state.winner    = winnerFaction;
+    state.winReason = 'You resigned.';
+    _saveCompletedSpGame(winnerFaction, state.winReason);
+    redraw();
+    ui._showResolutionSummary([], state.round, {
+      gameOver: true,
+      winner: winnerFaction,
+      winReason: state.winReason,
+      humanFaction,
+      hasFullReplay: _roundHistory.length > 0,
+    }).then(choice => {
+      if (choice === 'restart') location.reload();
+    });
+  });
+
+  const noBtn = document.createElement('button');
+  noBtn.className = 'setup-btn';
+  noBtn.textContent = 'Cancel';
+  noBtn.addEventListener('click', dismiss);
+
+  btns.appendChild(noBtn);
+  btns.appendChild(yesBtn);
+  dialog.style.display = 'flex';
 }
 
 function _resumeSave(roomId) {
@@ -2361,9 +2513,12 @@ function _renderAsyncGames(games) {
 function _timeRemaining(deadlineUnixSecs) {
   const diff = deadlineUnixSecs - Math.floor(Date.now() / 1000);
   if (diff <= 0) return 'expired';
-  if (diff < 3600) return `${Math.floor(diff / 60)}m left`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h left`;
-  return `${Math.floor(diff / 86400)}d left`;
+  const d = Math.floor(diff / 86400);
+  const h = Math.floor((diff % 86400) / 3600);
+  const m = Math.floor((diff % 3600) / 60);
+  if (d >= 1) return `${d}d ${h}h left`;
+  if (h >= 1) return `${h}h ${m}m left`;
+  return `${m}m left`;
 }
 
 /**
@@ -2500,7 +2655,7 @@ function _handleAsyncStateUpdate(msg) {
   }
 
   // Notify if it's the player's turn (plan not yet submitted)
-  if (!msg.myPlanSubmitted) notifyTurnReady(mirror.round ?? 1);
+  if (!msg.myPlanSubmitted) notifyRoundReady(mirror.round ?? 1);
 
   // ── Active game: unseen last round → offer replay before planning ──
   if (_asyncLastRound && _asyncSeenRound < _asyncLastRound.roundNum) {
@@ -2598,7 +2753,7 @@ function _handleAsyncResolution({ roomId, steps, finalState, finalStateSnapshot,
       ]);
     } else {
       // Enter PLAN MODE for the new round
-      notifyTurnReady(resolvedRound + 1);
+      notifyRoundReady(resolvedRound + 1);
       const budget = state.playerActionsLeft?.[mp?.myPlayerId] ??
                      state[_asyncFaction + 'ActionsLeft'] ?? 3;
       ui?.enterPlanningMode(_asyncFaction, budget, 0);
@@ -2775,12 +2930,15 @@ async function _asyncWatchLastTurn(lastRound) {
 }
 
 function _handleAsyncPlanStatus(msg) {
-  // Notify when an opponent has submitted (i.e. any player other than us)
+  // Notify when we're the last unsubmitted player ("Waiting on you!")
   if (Array.isArray(msg.planStatus)) {
-    const opponentSubmitted = msg.planStatus.some(
-      ps => ps.playerId !== mp?.myPlayerId && ps.submitted
-    );
-    if (opponentSubmitted) notifyOpponentSubmitted();
+    const myStatus = msg.planStatus.find(ps => ps.playerId === mp?.myPlayerId);
+    const othersAllSubmitted = msg.planStatus
+      .filter(ps => ps.playerId !== mp?.myPlayerId)
+      .every(ps => ps.submitted);
+    if (othersAllSubmitted && myStatus && !myStatus.submitted) {
+      notifyWaitingOnYou();
+    }
   }
   _applyPlanStatus(msg.planStatus);
 }
@@ -3281,14 +3439,36 @@ function _renderCompletedGames(games, session) {
   list.innerHTML = '';
   const base = window.BRIMSTONE_SERVER || '';
   for (const g of games) {
-    const myFaction   = g.hero_player_id === session?.id ? 'hero' : 'witch';
-    const winnerLabel = g.winner === 'hero' ? '⚔ Hero wins' : '✦ Witch wins';
+    // Determine player count and title
+    let players;
+    try { players = JSON.parse(g.players_json || '[]'); } catch { players = []; }
+    const pps = players.length > 0
+      ? players.filter(p => p.faction === 'hero').length
+      : 1;
+
+    let myFaction;
+    if (players.length > 0) {
+      const mySeat = players.find(p => p.playerId === session?.id);
+      myFaction = mySeat?.faction ?? 'hero';
+    } else {
+      myFaction = g.hero_player_id === session?.id ? 'hero' : 'witch';
+    }
+
+    let title;
+    if (pps > 1) {
+      title = `${pps}v${pps} Game`;
+    } else {
+      title = `${_esc(g.hero_name)} vs ${_esc(g.witch_name)}`;
+    }
+
+    const winnerLabel = g.winner === myFaction ? 'Victory' : 'Defeat';
+    const winnerIcon  = g.winner === 'hero' ? '⚔' : '✦';
     const ago = _timeAgo(g.created_at);
     const entry = document.createElement('div');
     entry.className = 'save-entry';
     entry.innerHTML = `
       <div class="save-entry-info">
-        <div class="save-entry-title">${_esc(g.hero_name)} vs ${_esc(g.witch_name)} — ${winnerLabel}</div>
+        <div class="save-entry-title">${winnerIcon} ${title} — ${winnerLabel}</div>
         <div class="save-entry-meta">${_esc(g.win_reason)} · ${g.total_rounds} rounds · ${ago}${g.pinned ? ' 📌' : ''}</div>
       </div>
       <div style="display:flex;gap:0.4rem">
@@ -3366,11 +3546,6 @@ async function _startMpReplay(rounds, gameMeta) {
 
 // ── Multiplayer screen ────────────────────────────────────────────────────────
 
-function _showMultiplayerChoice() {
-  showStep('multiplayer');
-  _fetchMainMenuAsyncGames();
-}
-
 function _showOnlineScreen() {
   showStep('online');
   _initMpStep();
@@ -3390,22 +3565,17 @@ function _showAsyncScreen() {
   }
 }
 
-document.getElementById('btn-mp-online').addEventListener('click', () => _showOnlineScreen());
-document.getElementById('btn-mp-async').addEventListener('click', () => _showAsyncScreen());
-document.getElementById('btn-mp-local').addEventListener('click', () => showStep('local-play'));
+document.getElementById('btn-mp-async')?.addEventListener('click', () => _showAsyncScreen());
 
-document.getElementById('btn-multiplayer-back').addEventListener('click', () => {
+document.getElementById('btn-online-back').addEventListener('click', () => {
   if (mp) { mp.disconnect(); mp = null; }
   renderer = null; ui = null; state = null;
   showStep('mode');
 });
-document.getElementById('btn-online-back').addEventListener('click', () => {
+document.getElementById('btn-async-back')?.addEventListener('click', () => {
   showStep('multiplayer');
 });
-document.getElementById('btn-async-back').addEventListener('click', () => {
-  showStep('multiplayer');
-});
-document.getElementById('btn-async-refresh').addEventListener('click', () => {
+document.getElementById('btn-async-refresh')?.addEventListener('click', () => {
   _fetchAsyncGames();
 });
 document.getElementById('btn-local-play-back').addEventListener('click', () => {
@@ -3466,17 +3636,36 @@ document.getElementById('btn-create-game-back').addEventListener('click', () => 
 
 document.getElementById('btn-create-game-confirm').addEventListener('click', () => {
   _ensureAuthed(() => {
+    const isAsync = document.querySelector('input[name="cg-mode"]:checked')?.value === 'async';
+    const timeoutEl = isAsync
+      ? document.getElementById('cg-turn-timeout-async')
+      : document.getElementById('cg-turn-timeout-live');
     const config = {
-      fog:           document.getElementById('cg-fog').value,
-      mapSize:       document.getElementById('cg-map-size').value,
-      nodeCount:     parseInt(document.getElementById('cg-node-count')?.value ?? '3', 10),
+      fog:            document.getElementById('cg-fog').value,
+      mapSize:        document.getElementById('cg-map-size').value,
+      nodeCount:      parseInt(document.getElementById('cg-node-count')?.value ?? '3', 10),
       playersPerSide: parseInt(document.querySelector('input[name="cg-pps"]:checked')?.value ?? '1', 10),
-      isPrivate:     document.getElementById('cg-private').checked,
+      isPrivate:      document.getElementById('cg-private').checked,
+      isAsync,
+      turnIntervalMs: parseInt(timeoutEl?.value ?? '90000', 10),
     };
     mp.createLobby(config);
     // Transition to lobby card happens in onLobbyJoined callback
   });
 });
+
+// Mode toggle — swap timeout dropdowns
+function _updateCreateGameMode() {
+  const isAsync = document.querySelector('input[name="cg-mode"]:checked')?.value === 'async';
+  const liveEl  = document.getElementById('cg-turn-timeout-live');
+  const asyncEl = document.getElementById('cg-turn-timeout-async');
+  if (liveEl)  liveEl.style.display  = isAsync ? 'none' : '';
+  if (asyncEl) asyncEl.style.display = isAsync ? '' : 'none';
+}
+
+for (const radio of document.querySelectorAll('input[name="cg-mode"]')) {
+  radio.addEventListener('change', _updateCreateGameMode);
+}
 
 // ── Join Game flow ────────────────────────────────────────────────────────────
 
@@ -3510,7 +3699,7 @@ function _getAsyncFaction() {
   return checked ? checked.value : 'hero';
 }
 
-document.getElementById('btn-create-async').addEventListener('click', () => {
+document.getElementById('btn-create-async')?.addEventListener('click', () => {
   _ensureAuthed(() => {
     showStep('async-create');
     // Default faction radio to hero
@@ -3519,17 +3708,17 @@ document.getElementById('btn-create-async').addEventListener('click', () => {
   });
 });
 
-document.getElementById('btn-join-async').addEventListener('click', () => {
+document.getElementById('btn-join-async')?.addEventListener('click', () => {
   _ensureAuthed(() => {
     showStep('async-join');
   });
 });
 
-document.getElementById('btn-async-create-back').addEventListener('click', () => {
+document.getElementById('btn-async-create-back')?.addEventListener('click', () => {
   showStep('async');
 });
 
-document.getElementById('btn-async-create-go').addEventListener('click', () => {
+document.getElementById('btn-async-create-go')?.addEventListener('click', () => {
   _ensureAuthed(() => {
     const session = loadSession();
     const base = window.BRIMSTONE_SERVER || '';
@@ -3569,7 +3758,7 @@ document.getElementById('btn-async-create-go').addEventListener('click', () => {
   });
 });
 
-document.getElementById('btn-async-copy-code').addEventListener('click', () => {
+document.getElementById('btn-async-copy-code')?.addEventListener('click', () => {
   const code = document.getElementById('async-game-code').textContent;
   navigator.clipboard?.writeText(code);
   const btn = document.getElementById('btn-async-copy-code');
@@ -3577,7 +3766,7 @@ document.getElementById('btn-async-copy-code').addEventListener('click', () => {
   setTimeout(() => { btn.textContent = 'Copy Code'; }, 1500);
 });
 
-document.getElementById('btn-async-copy-link').addEventListener('click', () => {
+document.getElementById('btn-async-copy-link')?.addEventListener('click', () => {
   const code = document.getElementById('async-game-code').textContent;
   const inviteUrl = `${location.origin}${location.pathname}#invite=${encodeURIComponent(code)}`;
   navigator.clipboard?.writeText(inviteUrl);
@@ -3586,7 +3775,7 @@ document.getElementById('btn-async-copy-link').addEventListener('click', () => {
   setTimeout(() => { btn.textContent = '📋 Copy Invite Link'; }, 1500);
 });
 
-document.getElementById('btn-async-created-done').addEventListener('click', () => {
+document.getElementById('btn-async-created-done')?.addEventListener('click', () => {
   _showAsyncScreen();
 });
 
@@ -3649,6 +3838,19 @@ function _joinAsyncByCode(code) {
 
 function _checkAsyncDeepLink() {
   const hash = window.location.hash;
+
+  // Unified deep link: #game=<roomId> — resume via unified lobby
+  const gameMatch = hash.match(/^#game=(.+)$/);
+  if (gameMatch) {
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    const roomId = gameMatch[1];
+    _ensureAuthed(() => {
+      mp.resumeSave(roomId);
+    });
+    return true;
+  }
+
+  // Legacy deep link: #async=<roomId> — route through async UI for backward compat
   const asyncMatch = hash.match(/^#async=(.+)$/);
   if (asyncMatch) {
     window.history.replaceState(null, '', window.location.pathname + window.location.search);
@@ -3664,12 +3866,16 @@ function _checkAsyncDeepLink() {
 
     const session = loadSession();
     if (session) {
-      // Already signed in — auto-join
-      _ensureAuthed(() => _joinAsyncByCode(code));
+      // Already signed in — auto-join via lobby code
+      _ensureAuthed(() => {
+        mp.joinLobby(code);
+      });
     } else {
-      // Not signed in — show auth dialog, then auto-join
+      // Not signed in — show auth dialog, then join
       _showAuthDialog(() => {
-        _ensureAuthed(() => _joinAsyncByCode(code));
+        _ensureAuthed(() => {
+          mp.joinLobby(code);
+        });
       });
     }
     return true;
@@ -3716,6 +3922,33 @@ window.addEventListener('hashchange', () => {
   _checkAsyncDeepLink();
 });
 _fetchMainMenuAsyncGames();
+_updateMultiplayerBadge();
+
+/**
+ * Fetch active games count and show a badge on the Multiplayer button
+ * if any games are waiting for the player's turn.
+ */
+function _updateMultiplayerBadge() {
+  const badge = document.getElementById('mp-badge');
+  if (!badge) return;
+
+  const session = loadSession();
+  if (!session) { badge.style.display = 'none'; return; }
+
+  const base = window.BRIMSTONE_SERVER || '';
+  fetch(`${base}/api/games?token=${encodeURIComponent(session.token)}`)
+    .then(r => r.json())
+    .then(saves => {
+      const count = saves.filter(s => s.action_needed).length;
+      if (count > 0) {
+        badge.textContent = String(count);
+        badge.style.display = '';
+      } else {
+        badge.style.display = 'none';
+      }
+    })
+    .catch(() => { badge.style.display = 'none'; });
+}
 
 function _loadPublicLobbies() {
   if (!mp) return;
@@ -3735,22 +3968,22 @@ function _renderPublicLobbies(rooms) {
   for (const lobby of rooms) {
     const pps    = lobby.config?.playersPerSide ?? 1;
     const size   = lobby.config?.mapSize ?? 'standard';
-    const fogMode = lobby.config?.fog ?? 'partial';
-    const fog    = fogMode === 'none' ? 'No Fog' : `Fog: ${fogMode.charAt(0).toUpperCase() + fogMode.slice(1)}`;
     const open   = lobby.slots?.filter(s => s.status === 'empty').length ?? 0;
     const total  = lobby.slots?.length ?? pps * 2;
     const host   = lobby.slots?.find(s => s.playerId === lobby.hostPlayerId)?.name ?? 'Unknown';
+    const mapLabel = size.charAt(0).toUpperCase() + size.slice(1);
+    const isAsync  = lobby.config?.isAsync;
+    const modeLabel = isAsync ? 'Async' : 'Live';
 
     const entry = document.createElement('div');
-    entry.className = 'save-entry';
+    entry.className = 'save-entry save-entry-joinable';
     entry.innerHTML = `
       <div class="save-entry-info">
         <div class="save-entry-title">⚔ ${_esc(host)}'s game</div>
-        <div class="save-entry-meta">${pps}v${pps} · ${_esc(size.charAt(0).toUpperCase() + size.slice(1))} · ${fog} · ${total - open}/${total} players</div>
+        <div class="save-entry-meta">${pps}v${pps} · ${_esc(mapLabel)} · ${modeLabel} · ${total - open}/${total} players</div>
       </div>
-      <button class="setup-btn primary">Join</button>
     `;
-    entry.querySelector('button').addEventListener('click', () => {
+    entry.addEventListener('click', () => {
       _ensureAuthed(() => mp.joinLobby(lobby.id));
     });
     list.appendChild(entry);
@@ -3855,11 +4088,25 @@ function _renderLobby(lobby) {
         // empty slot
         row.innerHTML = `<span class="lobby-slot-name empty-slot">Waiting…</span>`;
         if (isHost) {
+          const slotActions = document.createElement('div');
+          slotActions.className = 'lobby-slot-actions';
+
+          // Invite button
+          const inviteBtn = document.createElement('button');
+          inviteBtn.className = 'setup-btn secondary lobby-slot-btn';
+          inviteBtn.textContent = '✉ Invite';
+          inviteBtn.addEventListener('click', () => {
+            const slotIdx = lobby.slots.indexOf(slot);
+            _showSlotInvitePopup(lobby, slotIdx, slot.faction, inviteBtn);
+          });
+          slotActions.appendChild(inviteBtn);
+
+          // AI selector
           const personalities = slot.faction === 'witch' ? _WITCH_PERSONALITIES : _HERO_PERSONALITIES;
           const select = document.createElement('select');
           select.className = 'setup-select lobby-personality-select';
           // Hero personalities (except balanced) are temporarily disabled pending tuning.
-          select.innerHTML = '<option value="">— Assign AI —</option>' +
+          select.innerHTML = '<option value="">— AI —</option>' +
             ['random', ...personalities].map(p => {
               const isWitch = slot.faction === 'witch';
               const disabled = !isWitch && p !== 'random' && p !== 'balanced';
@@ -3872,7 +4119,8 @@ function _renderLobby(lobby) {
             mp.setSlotAI(lobby.id, idx, select.value);
             select.value = '';
           });
-          row.appendChild(select);
+          slotActions.appendChild(select);
+          row.appendChild(slotActions);
         }
       }
       col.appendChild(row);
@@ -3885,6 +4133,54 @@ function _renderLobby(lobby) {
   const startBtn = document.getElementById('btn-lobby-start');
   const allFilled = lobby.slots.every(s => s.status !== 'empty');
   startBtn.disabled = !(isHost && allFilled);
+}
+
+function _showSlotInvitePopup(lobby, slotIndex, faction, anchorEl) {
+  // Remove any existing popup
+  document.querySelector('.slot-invite-popup')?.remove();
+
+  const joinKey = (lobby.isPrivate && lobby.code) ? lobby.code : lobby.id;
+  const deepLink = `${location.origin}${location.pathname}#join=${encodeURIComponent(joinKey)}&slot=${slotIndex}`;
+
+  const popup = document.createElement('div');
+  popup.className = 'slot-invite-popup';
+  popup.innerHTML = `
+    <input type="email" class="setup-input" placeholder="Email address" autocomplete="email"
+           style="font-size:0.8rem;margin:0">
+    <div style="display:flex;gap:0.3rem;margin-top:0.3rem">
+      <button class="setup-btn primary" style="font-size:0.75rem;flex:1">Send</button>
+      <button class="setup-btn" style="font-size:0.75rem;flex:1">Copy Link</button>
+    </div>
+  `;
+  const [sendBtn, copyBtn] = popup.querySelectorAll('button');
+  const emailInput = popup.querySelector('input');
+
+  sendBtn.addEventListener('click', () => {
+    const email = emailInput.value.trim();
+    if (!email) return;
+    mp.sendSlotInvite(lobby.id, slotIndex, email);
+    emailInput.value = '';
+    sendBtn.textContent = 'Sent!';
+    setTimeout(() => popup.remove(), 1500);
+  });
+
+  copyBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(deepLink).catch(() => {});
+    copyBtn.textContent = 'Copied!';
+    setTimeout(() => popup.remove(), 1500);
+  });
+
+  anchorEl.parentElement.appendChild(popup);
+  emailInput.focus();
+
+  // Close on outside click
+  const dismiss = (e) => {
+    if (!popup.contains(e.target) && e.target !== anchorEl) {
+      popup.remove();
+      document.removeEventListener('click', dismiss);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', dismiss), 0);
 }
 
 document.getElementById('btn-lobby-populate-ai').addEventListener('click', () => {
@@ -3904,16 +4200,19 @@ document.getElementById('btn-lobby-leave').addEventListener('click', () => {
 });
 
 function _initMpStep() {
-  const session    = loadSession();
-  const signedOut  = document.getElementById('mp-signed-out');
-  const actionBtns = document.getElementById('mp-action-buttons');
+  const session      = loadSession();
+  const signedOut    = document.getElementById('mp-signed-out');
+  const actionBtns   = document.getElementById('mp-action-buttons');
+  const gamesSection = document.getElementById('mp-games-section');
 
   if (session) {
-    signedOut.style.display  = 'none';
-    actionBtns.style.display = '';
+    signedOut.style.display    = 'none';
+    actionBtns.style.display   = '';
+    if (gamesSection) gamesSection.style.display = '';
   } else {
-    signedOut.style.display  = '';
-    actionBtns.style.display = 'none';
+    signedOut.style.display    = '';
+    actionBtns.style.display   = 'none';
+    if (gamesSection) gamesSection.style.display = 'none';
   }
   _updateSessionBar();
 }
@@ -4164,7 +4463,7 @@ document.getElementById('btn-setup-signout').addEventListener('click', () => {
 
 // ── Async sign-in ───────────────────────────────────────────────────────────
 
-document.getElementById('btn-async-signin').addEventListener('click', () => {
+document.getElementById('btn-async-signin')?.addEventListener('click', () => {
   _showAuthDialog(() => {
     _initAsyncStep();
     _fetchAsyncGames();
@@ -4288,6 +4587,19 @@ function _createMpClient() {
       ui._clearSelection();
       ui._triggerPostRoundEffects();
       redrawOnline();
+
+      // If the game just ended (e.g. resignation), show summary immediately
+      if (state.gameOver && !_resolving) {
+        ui._showResolutionSummary([], state.round, {
+          gameOver: true,
+          winner: state.winner,
+          winReason: state.winReason,
+          humanFaction: mp?.myFaction ?? null,
+          hasFullReplay: _onlineRoundHistory.length > 0,
+        }).then(choice => {
+          if (choice === 'restart') location.reload();
+        });
+      }
     },
 
     onBattle(actorSnap, targetSnap, result, afterDismiss) {
@@ -4378,6 +4690,18 @@ function _createMpClient() {
       if (ui) ui.resetCountdown(timeoutMs);
     },
 
+    onPlayerTakenOver({ playerId, playerName }) {
+      // Store for round summary display
+      if (!state._takeoverMessages) state._takeoverMessages = [];
+      state._takeoverMessages.push(`${playerName} has been taken over by AI`);
+    },
+
+    onPlayerResigned({ playerId, playerName }) {
+      // Store for round summary display (similar to takeover)
+      if (!state._takeoverMessages) state._takeoverMessages = [];
+      state._takeoverMessages.push(`${playerName} resigned — replaced by AI`);
+    },
+
     onLeaderboard(_entries) {
       // Leaderboard removed — no-op
     },
@@ -4390,15 +4714,29 @@ function _createMpClient() {
       // Lobby update handles this now — no-op
     },
 
-    onOpponentDisconnected(graceMs) {
-      const secs = Math.round(graceMs / 1000);
-      const statusEl = document.getElementById('plan-status');
-      if (statusEl) statusEl.textContent = `⚠ Opponent disconnected — waiting ${secs}s for reconnect…`;
+    onDisconnected() {
+      const overlay = document.getElementById('reconnect-overlay');
+      if (overlay) {
+        document.getElementById('reconnect-spinner').style.display = '';
+        document.getElementById('reconnect-message').textContent = 'Reconnecting\u2026';
+        document.getElementById('reconnect-back').style.display = 'none';
+        overlay.style.display = 'flex';
+      }
     },
 
-    onOpponentReconnected() {
-      const statusEl = document.getElementById('plan-status');
-      if (statusEl) statusEl.textContent = '';
+    onReconnected() {
+      const overlay = document.getElementById('reconnect-overlay');
+      if (overlay) overlay.style.display = 'none';
+    },
+
+    onDisconnectFatal(msg) {
+      const overlay = document.getElementById('reconnect-overlay');
+      if (overlay) {
+        document.getElementById('reconnect-spinner').style.display = 'none';
+        document.getElementById('reconnect-message').textContent = msg;
+        document.getElementById('reconnect-back').style.display = '';
+        overlay.style.display = 'flex';
+      }
     },
 
     onPlanningPhase(payload) {
@@ -4551,7 +4889,8 @@ function _createMpClient() {
       // Ignore errors after intentional sign-out / disconnect
       if (!mp) return;
 
-      // During auth phase, show error on the appropriate screen
+      // Only show errors on setup screens (pre-game).
+      // In-game connection errors are handled by the reconnect overlay.
       if (!state || document.getElementById('setup-screen').style.display !== 'none') {
         if (_asyncRoomId || stepAsync.style.display !== 'none') {
           _showAsyncScreen();
@@ -4559,9 +4898,6 @@ function _createMpClient() {
           _showOnlineScreen();
         }
         _onlineError(msg);
-      } else {
-        // In-game error — show as modal dialog
-        if (ui) ui._showResultDialog([`⚠ ${msg}`]);
       }
     },
 
@@ -4835,11 +5171,11 @@ if (_emailToken) {
       _updateSessionBar();
       // If there's a deep link hash, open the game now that we're authed
       if (!_checkGameDeepLink()) _checkAsyncDeepLink();
-      if (!window.location.hash) _showMultiplayerChoice();
+      if (!window.location.hash) _showOnlineScreen();
     };
     _tmpMp.auth({ token: _emailToken });
   } catch {
-    // Fallback: just store minimal session and show multiplayer choice
-    _showMultiplayerChoice();
+    // Fallback: just store minimal session and show online screen
+    _showOnlineScreen();
   }
 }

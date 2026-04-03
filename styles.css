@@ -795,6 +795,14 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   background: rgba(255,255,255,0.07);
   color: var(--text-bright);
 }
+.game-menu-item.menu-resign {
+  color: #c44; margin-top: 0.15rem;
+  border-top: 1px solid rgba(255,255,255,0.05);
+  padding-top: 0.5rem;
+}
+.game-menu-item.menu-resign:hover {
+  background: rgba(200,60,60,0.15); color: #e55;
+}
 .game-menu-version {
   font-size: 0.6rem;
   color: rgba(255,255,255,0.2);
@@ -1758,6 +1766,47 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   background: var(--danger, #aa4444);
 }
 
+/* ── Reconnect overlay ────────────────────────────────────────────────── */
+
+#reconnect-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.7);
+}
+
+#reconnect-overlay[style*="display: flex"],
+#reconnect-overlay[style*="display:flex"] {
+  display: flex;
+}
+
+.reconnect-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2rem 2.5rem;
+  text-align: center;
+  box-shadow: 0 0 40px rgba(0,0,0,0.7);
+}
+
+.reconnect-card .waiting-spinner {
+  font-size: 2rem;
+  margin-bottom: 0.5rem;
+}
+
+#reconnect-message {
+  color: var(--text-bright);
+  font-size: 1rem;
+  margin: 0.5rem 0 1rem;
+}
+
+#reconnect-back {
+  pointer-events: all;
+}
+
 /* ── Battle dialog ─────────────────────────────────────────────────────── */
 
 #battle-dialog {
@@ -2453,6 +2502,58 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   flex-shrink: 0;
   padding: 0.35rem 0.9rem;
   font-size: 0.85rem;
+}
+
+/* Multiplayer badge on main menu button */
+.mp-badge {
+  position: absolute; top: -6px; right: -6px;
+  min-width: 18px; height: 18px; line-height: 18px;
+  border-radius: 9px; padding: 0 5px;
+  background: var(--clr-gold, #daa520);
+  color: #000; font-size: 0.7rem; font-weight: bold;
+  text-align: center; pointer-events: none;
+  box-shadow: 0 0 6px var(--clr-gold, #daa520);
+}
+
+/* Yellow "action needed" dot */
+.save-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--clr-gold, #daa520);
+  flex-shrink: 0;
+  box-shadow: 0 0 6px var(--clr-gold, #daa520);
+}
+
+/* Resign button */
+.save-resign-btn {
+  flex-shrink: 0;
+  background: none; border: none; cursor: pointer;
+  color: var(--text-dim); font-size: 1rem;
+  padding: 0.2rem 0.4rem; opacity: 0.4;
+  transition: opacity 0.15s, color 0.15s;
+}
+.save-resign-btn:hover {
+  opacity: 1; color: #c44;
+}
+
+/* Slot invite popup */
+.slot-invite-popup {
+  background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0.5rem;
+  margin-top: 0.3rem; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+}
+
+/* Clickable joinable game entries */
+.save-entry-joinable {
+  cursor: pointer; transition: border-color 0.15s;
+}
+.save-entry-joinable:hover {
+  border-color: var(--clr-gold, #daa520);
+}
+
+/* Lobby slot actions row */
+.lobby-slot-actions {
+  display: flex; gap: 0.3rem; align-items: center;
 }
 
 .async-del-btn {
