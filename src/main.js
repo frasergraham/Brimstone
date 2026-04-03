@@ -4549,6 +4549,7 @@ function _applyOnlinePlanningPhase(payload) {
   if (players) ui._players = players;
   ui.enterPlanningMode(mp.myFaction, budget, timeoutMs ?? 0);
   ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
+  ui.onReturnToMenu = () => _showOnlineScreen();
 
   // Restore submitted plan on reconnect — show what was already submitted
   if (submittedPlan && submittedPlan.length > 0) {

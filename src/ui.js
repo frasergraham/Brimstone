@@ -400,9 +400,13 @@ export class UIController {
       this.onRedraw();
     });
 
-    // Submit Plan button in header (delegates to the plan panel submit)
+    // Submit Plan button in header — becomes "Menu" after submission
     const _submitHandler = () => {
       if (this.state.gameOver) return;
+      if (this._planSubmitted) {
+        if (this.onReturnToMenu) this.onReturnToMenu();
+        return;
+      }
       if (this._planMode) this._doSubmitPlan();
     };
     this._el('end-turn-btn')?.addEventListener('click', _submitHandler);
@@ -792,6 +796,14 @@ export class UIController {
 
     const status = this._el('plan-status');
     if (status) status.textContent = 'Waiting for opponents…';
+
+    // Change panel submit button to "Return to Menu"
+    const submitBtn = this._el('plan-submit-btn');
+    if (submitBtn) {
+      submitBtn.textContent = '← Return to Menu';
+      submitBtn.disabled = false;
+      submitBtn.onclick = () => { if (this.onReturnToMenu) this.onReturnToMenu(); };
+    }
 
     // Mark ourselves as submitted in the player list so the status panel updates.
     const me = this._players?.find(p => (p.playerId ?? p.id) === this.myPlayerId);
@@ -1707,13 +1719,13 @@ export class UIController {
     }
 
     btn.style.display = '';
-    btn.disabled = this._planSubmitted || state.gameOver;
+    btn.disabled = state.gameOver;
     btn.classList.toggle('urgent', !this._planSubmitted && !state.gameOver);
     btn.classList.add('planning-active');
-    btn.title = this._planSubmitted ? 'Plan submitted' : 'Submit Plan';
+    btn.title = this._planSubmitted ? 'Return to menu' : 'Submit Plan';
     // Let the countdown timer own the text when it's running
     if (!this._countdownTimer && !this._graceActive) {
-      btn.textContent = this._planSubmitted ? '✓' : '✓ Submit';
+      btn.textContent = this._planSubmitted ? '← Menu' : '✓ Submit';
     }
     // Hide when plan panel is expanded (not collapsed)
     const panel = this._el('plan-panel');
