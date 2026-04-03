@@ -414,6 +414,13 @@ export class UIController {
       e.preventDefault(); _submitHandler();
     }, { passive: false });
 
+    // Replay last turn button in header
+    const _replayHandler = () => { if (this.onReplayLastTurn) this.onReplayLastTurn(); };
+    this._el('replay-turn-btn')?.addEventListener('click', _replayHandler);
+    this._el('replay-turn-btn')?.addEventListener('touchend', e => {
+      e.preventDefault(); _replayHandler();
+    }, { passive: false });
+
     // Plan panel buttons — touchend for instant mobile response
     const _tap = (el, fn) => {
       el?.addEventListener('click', fn);
@@ -494,6 +501,10 @@ export class UIController {
     if (clearBtn) clearBtn.style.display = '';
     const menuBtn = this._el('plan-menu-btn');
     if (menuBtn) menuBtn.style.display = 'none';
+
+    // Show replay button if there's history to replay
+    const replayBtn = this._el('replay-turn-btn');
+    if (replayBtn) replayBtn.style.display = this._hasReplayHistory ? '' : 'none';
 
     const panel = this._el('plan-panel');
     if (panel) {

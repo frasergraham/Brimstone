@@ -4555,9 +4555,11 @@ async function _applyOnlinePlanningPhase(payload) {
   const budget = myActionsLeft ?? (mp.myFaction === 'hero' ? heroActionsLeft : witchActionsLeft);
   ui.exitPlanningMode();
   if (players) ui._players = players;
+  ui._hasReplayHistory = _onlineRoundHistory.length > 0;
   ui.enterPlanningMode(mp.myFaction, budget, timeoutMs ?? 0);
   ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
   ui.onReturnToMenu = () => _showOnlineScreen();
+  ui.onReplayLastTurn = () => _replayLastTurnInline();
 
   // Restore submitted plan on reconnect — show what was already submitted
   if (submittedPlan && submittedPlan.length > 0) {
@@ -4571,6 +4573,17 @@ async function _applyOnlinePlanningPhase(payload) {
     ui._renderPlanPanel();
     ui.markPlanSubmitted();
   }
+}
+
+/** Replay the last resolved round inline (triggered by header button). */
+async function _replayLastTurnInline() {
+  if (!_onlineRoundHistory.length || !ui || !state || !renderer || _resolving) return;
+  const last = _onlineRoundHistory[_onlineRoundHistory.length - 1];
+  await _playReconnectReplay({
+    roundNum:     last.roundNum,
+    preStateJson: last.preState,
+    stepsJson:    last.steps,
+  });
 }
 
 /** Play the last round's resolution replay on reconnect. */
