@@ -4592,6 +4592,8 @@ function initSpectator(roomId) {
   statusEl.style.display = '';
   statusEl.textContent = 'Connecting...';
 
+  const session = JSON.parse(localStorage.getItem('brimstone_session') || 'null');
+
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = window.BRIMSTONE_WS ?? `${protocol}//${location.host}`;
   const ws = new WebSocket(wsUrl);
@@ -4600,12 +4602,27 @@ function initSpectator(roomId) {
   let submittedIds    = new Set();
 
   ws.addEventListener('open', () => {
-    statusEl.textContent = 'Joining room...';
-    ws.send(JSON.stringify({ type: 'adminSpectateRoom', roomId }));
+    if (!session?.token) {
+      statusEl.textContent = 'No session found. Please log in first.';
+      ws.close();
+      return;
+    }
+    statusEl.textContent = 'Authenticating...';
+    ws.send(JSON.stringify({ type: 'auth', token: session.token }));
   });
 
   ws.addEventListener('message', e => {
     let msg; try { msg = JSON.parse(e.data); } catch { return; }
+    if (msg.type === 'authOk') {
+      statusEl.textContent = 'Joining room...';
+      ws.send(JSON.stringify({ type: 'adminSpectateRoom', roomId }));
+      return;
+    }
+    if (msg.type === 'authError') {
+      statusEl.textContent = 'Auth failed: ' + (msg.message || 'Unknown error');
+      ws.close();
+      return;
+    }
     _handleSpectatorMessage(msg);
   });
 
