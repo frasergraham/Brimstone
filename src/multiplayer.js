@@ -221,7 +221,8 @@ export class MultiplayerClient {
   /** Force an immediate reconnect (e.g. when returning from background). */
   reconnectNow() {
     if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
-    this._reconnectAttempt = 0;
+    // Set attempt to 1 so _onOpen knows this is a reconnect and fires onReconnected
+    this._reconnectAttempt = 1;
     this._reconnect();
   }
 

@@ -1280,11 +1280,13 @@ onInactiveChange((inactive) => {
   if (inactive) {
     if (mp.connected) mp.setInactive(true);
   } else {
-    // App foregrounded — reconnect immediately if the socket died while backgrounded
-    if (mp.connected) {
-      mp.setInactive(false);
-    } else if (mp.active) {
+    // App foregrounded — always reconnect if we were in a game.
+    // iOS can suspend WebSockets without firing close, so even if
+    // readyState says OPEN the connection may be dead.
+    if (mp.active && mp.roomId) {
       mp.reconnectNow();
+    } else if (mp.connected) {
+      mp.setInactive(false);
     }
   }
 });
