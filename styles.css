@@ -768,6 +768,14 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   background: rgba(255,255,255,0.07);
   color: var(--text-bright);
 }
+.game-menu-item.menu-resign {
+  color: #c44; margin-top: 0.15rem;
+  border-top: 1px solid rgba(255,255,255,0.05);
+  padding-top: 0.5rem;
+}
+.game-menu-item.menu-resign:hover {
+  background: rgba(200,60,60,0.15); color: #e55;
+}
 .game-menu-version {
   font-size: 0.6rem;
   color: rgba(255,255,255,0.2);

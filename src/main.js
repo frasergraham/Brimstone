@@ -108,6 +108,15 @@ function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
   ui = new UIController(canvas, state, renderer, localWitchAI, redraw, localHeroAI, autoplay);
   ui.onQuitToMenu = () => location.reload();
 
+  // Show resign option for single-player games (one side is AI)
+  const isOneSided = !!(localWitchAI) !== !!(localHeroAI);
+  const resignBtn = document.getElementById('menu-resign-btn');
+  if (resignBtn) resignBtn.style.display = isOneSided ? '' : 'none';
+  if (isOneSided) {
+    const humanFaction = localWitchAI ? 'hero' : 'witch';
+    ui.onResignGame = () => _resignLocalGame(humanFaction);
+  }
+
   const battleCallback = (actorSnap, targetSnap, result) =>
     new Promise(resolve => ui._showBattleDialog(actorSnap, targetSnap, result, resolve));
   if (localWitchAI) localWitchAI.onBattleResult = battleCallback;
@@ -1268,10 +1277,16 @@ function initOnline(mirrorState, myFaction, mpClient) {
   // No local AI — all turns handled server-side
   ui = new UIController(canvas, state, renderer, null, redrawOnline, null, false);
   ui.onQuitToMenu = () => location.reload();
+  ui.onResignGame = () => _showResignConfirmation(mpClient);
   ui.onReplayLastTurn = () => {
     if (!_asyncLastRound) return;
     _asyncWatchLastTurn(_asyncLastRound);
   };
+
+  // Show resign option for online games
+  const resignBtn = document.getElementById('menu-resign-btn');
+  if (resignBtn) resignBtn.style.display = '';
+
   ui.mp         = mpClient;
   ui.myPlayerId = mpClient.myPlayerId ?? null;
   ui._players   = (state.players ?? []).map(p => ({ ...p, playerId: p.playerId ?? p.id }));
@@ -2236,6 +2251,103 @@ function _confirmResign(roomId) {
   _ensureAuthed(() => mp.resignGame(roomId));
   // Refresh the list after a short delay
   setTimeout(_fetchActiveSaves, 500);
+}
+
+/**
+ * Show an in-game Yes/No confirmation dialog for resigning.
+ * Uses the result-dialog overlay with custom buttons.
+ */
+function _showResignConfirmation(mpClient) {
+  if (!ui) return;
+  const dialog = document.getElementById('result-dialog');
+  const msgs   = document.getElementById('result-messages');
+  const btns   = document.getElementById('result-buttons');
+  const hint   = document.getElementById('result-dismiss-hint');
+  if (!dialog || !msgs || !btns) return;
+
+  msgs.textContent = 'Are you sure you want to resign?\nThis cannot be undone.';
+  if (hint) hint.style.display = 'none';
+  const portrait = document.getElementById('result-portrait');
+  if (portrait) { portrait.style.display = 'none'; portrait.innerHTML = ''; }
+
+  btns.style.display = '';
+  btns.innerHTML = '';
+
+  const dismiss = () => { dialog.style.display = 'none'; };
+
+  const yesBtn = document.createElement('button');
+  yesBtn.className = 'setup-btn';
+  yesBtn.style.cssText = 'color:#c44;border-color:#c44';
+  yesBtn.textContent = 'Yes, Resign';
+  yesBtn.addEventListener('click', () => {
+    dismiss();
+    const roomId = mpClient?.roomId || _asyncRoomId;
+    if (roomId && mpClient) mpClient.resignGame(roomId);
+  });
+
+  const noBtn = document.createElement('button');
+  noBtn.className = 'setup-btn';
+  noBtn.textContent = 'Cancel';
+  noBtn.addEventListener('click', dismiss);
+
+  btns.appendChild(noBtn);
+  btns.appendChild(yesBtn);
+  dialog.style.display = 'flex';
+}
+
+/**
+ * Resign from a local (single-player) game.
+ * Shows confirmation dialog, then ends the game as a loss.
+ */
+function _resignLocalGame(humanFaction) {
+  if (!ui || !state || state.gameOver) return;
+  const dialog = document.getElementById('result-dialog');
+  const msgs   = document.getElementById('result-messages');
+  const btns   = document.getElementById('result-buttons');
+  const hint   = document.getElementById('result-dismiss-hint');
+  if (!dialog || !msgs || !btns) return;
+
+  msgs.textContent = 'Are you sure you want to resign?\nThis cannot be undone.';
+  if (hint) hint.style.display = 'none';
+  const portrait = document.getElementById('result-portrait');
+  if (portrait) { portrait.style.display = 'none'; portrait.innerHTML = ''; }
+
+  btns.style.display = '';
+  btns.innerHTML = '';
+
+  const dismiss = () => { dialog.style.display = 'none'; };
+
+  const yesBtn = document.createElement('button');
+  yesBtn.className = 'setup-btn';
+  yesBtn.style.cssText = 'color:#c44;border-color:#c44';
+  yesBtn.textContent = 'Yes, Resign';
+  yesBtn.addEventListener('click', () => {
+    dismiss();
+    const winnerFaction = humanFaction === 'hero' ? 'witch' : 'hero';
+    state.gameOver  = true;
+    state.winner    = winnerFaction;
+    state.winReason = 'You resigned.';
+    _saveCompletedSpGame(winnerFaction, state.winReason);
+    redraw();
+    ui._showResolutionSummary([], state.round, {
+      gameOver: true,
+      winner: winnerFaction,
+      winReason: state.winReason,
+      humanFaction,
+      hasFullReplay: _roundHistory.length > 0,
+    }).then(choice => {
+      if (choice === 'restart') location.reload();
+    });
+  });
+
+  const noBtn = document.createElement('button');
+  noBtn.className = 'setup-btn';
+  noBtn.textContent = 'Cancel';
+  noBtn.addEventListener('click', dismiss);
+
+  btns.appendChild(noBtn);
+  btns.appendChild(yesBtn);
+  dialog.style.display = 'flex';
 }
 
 function _resumeSave(roomId) {
@@ -4427,6 +4539,19 @@ function _createMpClient() {
       ui._clearSelection();
       ui._triggerPostRoundEffects();
       redrawOnline();
+
+      // If the game just ended (e.g. resignation), show summary immediately
+      if (state.gameOver && !_resolving) {
+        ui._showResolutionSummary([], state.round, {
+          gameOver: true,
+          winner: state.winner,
+          winReason: state.winReason,
+          humanFaction: mp?.myFaction ?? null,
+          hasFullReplay: _onlineRoundHistory.length > 0,
+        }).then(choice => {
+          if (choice === 'restart') location.reload();
+        });
+      }
     },
 
     onBattle(actorSnap, targetSnap, result, afterDismiss) {

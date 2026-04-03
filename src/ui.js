@@ -303,6 +303,11 @@ export class UIController {
       if (popup) popup.style.display = 'none';
       this.onQuitToMenu?.();
     });
+    this._el('menu-resign-btn')?.addEventListener('click', () => {
+      const popup = this._el('game-menu-popup');
+      if (popup) popup.style.display = 'none';
+      this.onResignGame?.();
+    });
     document.addEventListener('click', e => {
       const popup = this._el('game-menu-popup');
       if (!popup || popup.style.display === 'none') return;
