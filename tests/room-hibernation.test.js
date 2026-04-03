@@ -82,4 +82,23 @@ describe('room hibernation and recovery', () => {
     const game = games[0];
     assert.equal(game.turn_interval_ms, 86400000);
   });
+
+  test('resumeGame sends planningPhase even when state was saved between rounds', () => {
+    const { roomId, playerId } = createTestGame();
+
+    // Simulate the state being saved after endRound (planningPhase = false)
+    const room = getRoom(roomId);
+    room.state.planningPhase = false;
+
+    // Resume with a new WebSocket — should trigger a fresh planning phase
+    const ws2 = mockWs();
+    resumeGame(playerId, ws2, roomId);
+
+    const reconnected = ws2.findMsg('reconnected');
+    assert.ok(reconnected, 'should send reconnected');
+
+    const planning = ws2.findMsg('planningPhase');
+    assert.ok(planning, 'should send planningPhase even though state had planningPhase=false');
+    assert.ok(planning.myActionsLeft >= 0, 'should include budget');
+  });
 });

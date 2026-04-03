@@ -1637,6 +1637,11 @@ export function adminResumeGame(savedRoomId) {
  */
 export function resumeGame(playerId, ws, roomId) {
   if (rooms.has(roomId)) {
+    const room = rooms.get(roomId);
+    // If room was saved between rounds, start planning before reconnecting
+    if (!room.state.planningPhase && !room.state.gameOver && !room.state.resolving) {
+      _startPlanningPhase(room);
+    }
     const rejoined = handleReconnect(playerId, roomId, ws);
     if (rejoined) return;
   }
@@ -1646,10 +1651,14 @@ export function resumeGame(playerId, ws, roomId) {
   if (room) {
     const rejoined = handleReconnect(playerId, roomId, ws);
     if (rejoined) {
-      // If planning phase, restart timer and kick AI plans
       if (room.state.planningPhase && !room.state.resolving) {
+        // Already in planning — restart timer and kick AI plans
         _startPlanningTimer(room);
         _runAIPlanSubmission(room);
+      } else if (!room.state.gameOver) {
+        // Room was saved between rounds (after endRound, before startPlanning).
+        // Kick off a fresh planning phase so the client isn't stuck.
+        _startPlanningPhase(room);
       }
       return;
     }
@@ -2208,6 +2217,11 @@ export function checkDeadlines() {
 
       const room = _recoverRoom(roomId);
       if (!room) continue;
+
+      // If room was saved between rounds, start planning first
+      if (!room.state.planningPhase && !room.state.gameOver) {
+        _startPlanningPhase(room);
+      }
 
       if (room.state.planningPhase && !room.state.resolving) {
         console.log(`[room ${roomId}] deadline expired — auto-submitting empty plans.`);
