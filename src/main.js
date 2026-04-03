@@ -4578,12 +4578,36 @@ async function _applyOnlinePlanningPhase(payload) {
 /** Replay the last resolved round inline (triggered by header button). */
 async function _replayLastTurnInline() {
   if (!_onlineRoundHistory.length || !ui || !state || !renderer || _resolving) return;
+
+  // Save current plan state so we can restore it after replay
+  const savedPlans = new Map(ui._unitPlans);
+  const wasSubmitted = ui._planSubmitted;
+
   const last = _onlineRoundHistory[_onlineRoundHistory.length - 1];
+  // Remove from history temporarily so _playReconnectReplay doesn't double-add it
+  _onlineRoundHistory.pop();
+
+  ui.exitPlanningMode();
   await _playReconnectReplay({
     roundNum:     last.roundNum,
     preStateJson: last.preState,
     stepsJson:    last.steps,
   });
+
+  // Restore planning mode with the saved plan
+  const budget = state.playerActionsLeft?.get(mp?.myPlayerId)
+    ?? (mp?.myFaction === 'hero' ? state.heroActionsLeft : state.witchActionsLeft);
+  ui._hasReplayHistory = _onlineRoundHistory.length > 0;
+  ui.enterPlanningMode(mp.myFaction, budget, 0);
+  ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
+  ui.onReturnToMenu = () => _showOnlineScreen();
+  ui.onReplayLastTurn = () => _replayLastTurnInline();
+
+  // Restore the plan
+  ui._unitPlans = savedPlans;
+  ui._refreshPlanOverlay();
+  ui._renderPlanPanel();
+  if (wasSubmitted) ui.markPlanSubmitted();
 }
 
 /** Play the last round's resolution replay on reconnect. */
