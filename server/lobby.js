@@ -1297,6 +1297,7 @@ export function handleDisconnect(playerId, roomId) {
   }
 
   broadcastExcept(room, playerId, { type: 'opponentDisconnected' });
+  _broadcastPresence(room);
 
   // No immediate AI takeover on disconnect — AI only takes over after
   // 2 consecutive missed turn deadlines (_checkTimeoutTakeovers).
@@ -1491,6 +1492,7 @@ export function handleReconnect(playerId, roomId, ws) {
     else                          room.state.heroIsAI  = false;
 
     broadcastExcept(room, playerId, { type: 'opponentReconnected' });
+    _broadcastPresence(room);
     send(ws, { type: 'reconnected', faction: seat.faction, myPlayerId: playerId, roomId: room.id });
     send(ws, { type: 'stateUpdate', reason: 'reconnect', state: serializeState(room.state) });
 
@@ -1520,6 +1522,7 @@ export function handleReconnect(playerId, roomId, ws) {
 
   seat.ws = ws;
   broadcastExcept(room, playerId, { type: 'opponentReconnected' });
+  _broadcastPresence(room);
 
   send(ws, { type: 'reconnected', faction: seat.faction, myPlayerId: playerId, roomId: room.id });
   send(ws, { type: 'stateUpdate', reason: 'reconnect', state: serializeState(room.state) });
