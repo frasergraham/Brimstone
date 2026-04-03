@@ -38,8 +38,9 @@ import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS } from '../src/entities.js';
 import { pickAIName }                              from '../src/ai-names.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
-const RECONNECT_GRACE_MS = 60_000; // time to reconnect before forfeit
-const TURN_TIMEOUT_MS    = 90_000; // auto-submit empty plan after 90s of inactivity
+const RECONNECT_GRACE_MS = parseInt(process.env.RECONNECT_GRACE_MS, 10) || 60_000;
+const TURN_TIMEOUT_MS    = parseInt(process.env.TURN_TIMEOUT_MS, 10)    || 90_000;
+const ROUND_DELAY_MS     = parseInt(process.env.ROUND_DELAY_MS, 10)     || 4000;
 const CHRONICLE_MAX      = 100;    // max rounds retained per room in the chronicle
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -286,7 +287,7 @@ function createRoom(config = {}) {
       mapSize:          config.mapSize ?? 'standard',
       nodeCount:        config.nodeCount ?? null,
       playersPerSide:   Math.max(1, Math.min(4, (config.playersPerSide | 0) || 1)),
-      turnIntervalMs:   Math.max(30_000, Math.min(259_200_000, Number(config.turnIntervalMs) || TURN_TIMEOUT_MS)),
+      turnIntervalMs:   Math.max(Math.min(TURN_TIMEOUT_MS, 30_000), Math.min(259_200_000, Number(config.turnIntervalMs) || TURN_TIMEOUT_MS)),
       isAsync:          !!config.isAsync,
     },
     consecutiveTimeouts: {},  // playerId → consecutive empty-plan timeout count
@@ -708,7 +709,7 @@ function _executeResolution(room) {
   if (!state.gameOver) {
     // Check for consecutive timeout AI takeover before next planning phase
     _checkTimeoutTakeovers(room);
-    setTimeout(() => _startPlanningPhase(room), 4000);
+    setTimeout(() => _startPlanningPhase(room), ROUND_DELAY_MS);
 
     // Notify disconnected human players that a new round is ready
     const opts = _notifyOpts(room);
@@ -816,6 +817,20 @@ function attachAI(room, faction, forPlayerId = null, personality = null) {
         sp.isAI = true;
         const leader = room.state.entities.find(e => e.id === sp.leaderId);
         if (leader) leader.ownerId = syntheticPlayerId;
+      }
+      // Transfer per-player planning maps so the AI can submit under the new ID
+      const st = room.state;
+      if (st.playerReady?.has(forPlayerId)) {
+        st.playerReady.set(syntheticPlayerId, st.playerReady.get(forPlayerId));
+        st.playerReady.delete(forPlayerId);
+      }
+      if (st.playerPlans?.has(forPlayerId)) {
+        st.playerPlans.set(syntheticPlayerId, st.playerPlans.get(forPlayerId));
+        st.playerPlans.delete(forPlayerId);
+      }
+      if (st.playerActionsLeft?.has(forPlayerId)) {
+        st.playerActionsLeft.set(syntheticPlayerId, st.playerActionsLeft.get(forPlayerId));
+        st.playerActionsLeft.delete(forPlayerId);
       }
       return seat;
     }
@@ -1551,6 +1566,21 @@ export function handleReconnect(playerId, roomId, ws) {
       sp.isAI = false;
       const leader = room.state.entities.find(e => e.id === sp.leaderId);
       if (leader) leader.ownerId = playerId;
+    }
+
+    // Transfer per-player planning maps back to the human ID
+    const st = room.state;
+    if (st.playerReady?.has(oldAiId)) {
+      st.playerReady.set(playerId, st.playerReady.get(oldAiId));
+      st.playerReady.delete(oldAiId);
+    }
+    if (st.playerPlans?.has(oldAiId)) {
+      st.playerPlans.set(playerId, st.playerPlans.get(oldAiId));
+      st.playerPlans.delete(oldAiId);
+    }
+    if (st.playerActionsLeft?.has(oldAiId)) {
+      st.playerActionsLeft.set(playerId, st.playerActionsLeft.get(oldAiId));
+      st.playerActionsLeft.delete(oldAiId);
     }
 
     // Update AI flags on the state
