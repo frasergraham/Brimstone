@@ -167,10 +167,10 @@ export function getSave(roomId) {
 const _insertCompletedGame = db.prepare(`
   INSERT OR IGNORE INTO completed_games
     (game_id, room_id, hero_player_id, witch_player_id, hero_name, witch_name,
-     winner, win_reason, total_rounds, game_version, mode, pinned, created_at, expires_at)
+     winner, win_reason, total_rounds, game_version, mode, players_json, pinned, created_at, expires_at)
   VALUES
     (@gameId, @roomId, @heroPlayerId, @witchPlayerId, @heroName, @witchName,
-     @winner, @winReason, @totalRounds, @gameVersion, @mode, 0,
+     @winner, @winReason, @totalRounds, @gameVersion, @mode, @playersJson, 0,
      unixepoch(), unixepoch() + @ttlSeconds)
 `);
 
@@ -181,9 +181,10 @@ const _insertReplayRound = db.prepare(`
 
 const _listCompletedByPlayer = db.prepare(`
   SELECT game_id, room_id, hero_player_id, witch_player_id, hero_name, witch_name,
-         winner, win_reason, total_rounds, game_version, mode, pinned, created_at, expires_at
+         winner, win_reason, total_rounds, game_version, mode, players_json, pinned, created_at, expires_at
   FROM   completed_games
   WHERE  hero_player_id = ? OR witch_player_id = ?
+         OR players_json LIKE '%' || ? || '%'
   ORDER  BY created_at DESC
 `);
 
@@ -202,12 +203,14 @@ const _setPinned = db.prepare(`
   UPDATE completed_games
   SET pinned = @pinned,
       expires_at = CASE WHEN @pinned = 1 THEN NULL ELSE unixepoch() + @ttlSeconds END
-  WHERE game_id = @gameId AND (hero_player_id = @playerId OR witch_player_id = @playerId)
+  WHERE game_id = @gameId AND (hero_player_id = @playerId OR witch_player_id = @playerId
+        OR players_json LIKE '%' || @playerId || '%')
 `);
 
 const _deleteCompletedGame = db.prepare(`
   DELETE FROM completed_games
-  WHERE game_id = @gameId AND (hero_player_id = @playerId OR witch_player_id = @playerId)
+  WHERE game_id = @gameId AND (hero_player_id = @playerId OR witch_player_id = @playerId
+        OR players_json LIKE '%' || @playerId || '%')
 `);
 
 const _deleteCompletedRounds = db.prepare(`
@@ -246,6 +249,7 @@ export function createCompletedGame(gameId, roomId, meta, rounds) {
       totalRounds:   meta.totalRounds   ?? 0,
       gameVersion:   meta.gameVersion   ?? '',
       mode:          meta.mode          ?? 'hvai',
+      playersJson:   meta.playersJson   ?? '[]',
       ttlSeconds:    TTL_SECONDS,
     });
     for (const r of rounds) {
@@ -264,7 +268,7 @@ export function createCompletedGame(gameId, roomId, meta, rounds) {
  * List all completed games for a player (lightweight — no replay data).
  */
 export function getCompletedGames(playerId) {
-  return _listCompletedByPlayer.all(playerId, playerId);
+  return _listCompletedByPlayer.all(playerId, playerId, playerId);
 }
 
 /**
@@ -325,7 +329,7 @@ export function pruneExpiredCompletedGames() {
 const _getAllCompleted = db.prepare(
   `SELECT game_id, room_id, hero_player_id, witch_player_id,
           hero_name, witch_name, winner, win_reason, total_rounds,
-          game_version, mode, pinned, created_at, expires_at
+          game_version, mode, players_json, pinned, created_at, expires_at
    FROM completed_games
    ORDER BY created_at DESC`
 );

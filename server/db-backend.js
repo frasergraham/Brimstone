@@ -35,6 +35,9 @@ export function createBackend(dbPath) {
   try { db.exec('ALTER TABLE game_saves ADD COLUMN code TEXT'); } catch {}
   try { db.exec("ALTER TABLE game_saves ADD COLUMN status TEXT NOT NULL DEFAULT 'playing'"); } catch {}
 
+  // Migration: add players_json to completed_games for NvN support
+  try { db.exec("ALTER TABLE completed_games ADD COLUMN players_json TEXT NOT NULL DEFAULT '[]'"); } catch {}
+
   // Seed default admin user (idempotent via INSERT OR IGNORE)
   db.exec(`
     INSERT OR IGNORE INTO players (id, username, token, is_admin)

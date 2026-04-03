@@ -876,6 +876,9 @@ function checkAndHandleGameOver(room) {
         totalRounds: room.state.round - 1,
         gameVersion: VERSION,
         mode,
+        playersJson: JSON.stringify(room.players.map(s => ({
+          playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI,
+        }))),
       }, room.replayRounds);
     } catch (err) {
       console.error(`[room ${room.id}] createCompletedGame error:`, err);

@@ -56,6 +56,7 @@ export const SCHEMA_SQL = `
     total_rounds    INTEGER NOT NULL DEFAULT 0,
     game_version    TEXT NOT NULL,
     mode            TEXT NOT NULL DEFAULT 'hvai',
+    players_json    TEXT NOT NULL DEFAULT '[]',
     pinned          INTEGER NOT NULL DEFAULT 0,
     created_at      INTEGER NOT NULL DEFAULT (unixepoch()),
     expires_at      INTEGER

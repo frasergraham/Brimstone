@@ -205,7 +205,10 @@ app.get('/api/completed-games/:gameId/rounds', (req, res) => {
   if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
   const game = getCompletedGame(req.params.gameId);
   if (!game) { res.status(404).json({ error: 'Not found.' }); return; }
-  if (game.hero_player_id !== player.id && game.witch_player_id !== player.id) {
+  const isParticipant = game.hero_player_id === player.id
+    || game.witch_player_id === player.id
+    || (game.players_json || '').includes(player.id);
+  if (!isParticipant) {
     res.status(403).json({ error: 'Forbidden.' }); return;
   }
   res.json(getCompletedGameRounds(req.params.gameId));

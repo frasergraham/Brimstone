@@ -3429,14 +3429,36 @@ function _renderCompletedGames(games, session) {
   list.innerHTML = '';
   const base = window.BRIMSTONE_SERVER || '';
   for (const g of games) {
-    const myFaction   = g.hero_player_id === session?.id ? 'hero' : 'witch';
-    const winnerLabel = g.winner === 'hero' ? '⚔ Hero wins' : '✦ Witch wins';
+    // Determine player count and title
+    let players;
+    try { players = JSON.parse(g.players_json || '[]'); } catch { players = []; }
+    const pps = players.length > 0
+      ? players.filter(p => p.faction === 'hero').length
+      : 1;
+
+    let myFaction;
+    if (players.length > 0) {
+      const mySeat = players.find(p => p.playerId === session?.id);
+      myFaction = mySeat?.faction ?? 'hero';
+    } else {
+      myFaction = g.hero_player_id === session?.id ? 'hero' : 'witch';
+    }
+
+    let title;
+    if (pps > 1) {
+      title = `${pps}v${pps} Game`;
+    } else {
+      title = `${_esc(g.hero_name)} vs ${_esc(g.witch_name)}`;
+    }
+
+    const winnerLabel = g.winner === myFaction ? 'Victory' : 'Defeat';
+    const winnerIcon  = g.winner === 'hero' ? '⚔' : '✦';
     const ago = _timeAgo(g.created_at);
     const entry = document.createElement('div');
     entry.className = 'save-entry';
     entry.innerHTML = `
       <div class="save-entry-info">
-        <div class="save-entry-title">${_esc(g.hero_name)} vs ${_esc(g.witch_name)} — ${winnerLabel}</div>
+        <div class="save-entry-title">${winnerIcon} ${title} — ${winnerLabel}</div>
         <div class="save-entry-meta">${_esc(g.win_reason)} · ${g.total_rounds} rounds · ${ago}${g.pinned ? ' 📌' : ''}</div>
       </div>
       <div style="display:flex;gap:0.4rem">
