@@ -77,6 +77,7 @@ if (!window.electronAPI) {
 
 let state, renderer, ui, witchAI, heroAI;
 let _autoplay  = false;
+let _inGame    = false;           // true while the player is viewing a game (not menus)
 let _resolving = false;           // true while _animateResolutionSteps is running
 let _pendingPlanningPhase = null; // buffered onPlanningPhase payload received during animation
 let _pendingSubmissions   = [];   // buffered playerSubmitted messages received during animation
@@ -1292,6 +1293,7 @@ onInactiveChange((inactive) => {
 });
 
 function initOnline(mirrorState, myFaction, mpClient) {
+  _inGame  = true;
   state    = mirrorState;
   const canvas = document.getElementById('game-canvas');
 
@@ -3567,9 +3569,10 @@ async function _startMpReplay(rounds, gameMeta) {
 function _showOnlineScreen() {
   if (mp?.connected) mp.clearRoom();
   // Clear game state so the next onState triggers initOnline
-  state = null;
+  _inGame  = false;
+  state    = null;
   renderer = null;
-  ui = null;
+  ui       = null;
   document.getElementById('game-screen').style.display  = 'none';
   document.getElementById('setup-screen').style.display = '';
   showStep('online');
@@ -4812,26 +4815,29 @@ function _createMpClient() {
     },
 
     onPlayerSubmitted({ playerId, name, faction }) {
+      if (!_inGame) return;
       if (_resolving) { _pendingSubmissions.push({ playerId, name, faction }); return; }
       if (ui) ui._onPlayerSubmitted(playerId, name, faction);
     },
 
     onPlayerPresence(players) {
+      if (!_inGame) return;
       if (ui) ui._onPlayerPresence(players);
     },
 
     onTimerReset(timeoutMs) {
+      if (!_inGame) return;
       if (ui) ui.resetCountdown(timeoutMs);
     },
 
     onPlayerTakenOver({ playerId, playerName }) {
-      // Store for round summary display
+      if (!_inGame || !state) return;
       if (!state._takeoverMessages) state._takeoverMessages = [];
       state._takeoverMessages.push(`${playerName} has been taken over by AI`);
     },
 
     onPlayerResigned({ playerId, playerName }) {
-      // Store for round summary display (similar to takeover)
+      if (!_inGame || !state) return;
       if (!state._takeoverMessages) state._takeoverMessages = [];
       state._takeoverMessages.push(`${playerName} resigned — replaced by AI`);
     },
@@ -4874,7 +4880,7 @@ function _createMpClient() {
     },
 
     onPlanningPhase(payload) {
-      if (!ui || !mp) return;
+      if (!_inGame || !ui || !mp) return;
       // If the resolution animation is still running, defer until it finishes.
       if (_resolving) {
         _pendingPlanningPhase = payload;
@@ -4884,12 +4890,13 @@ function _createMpClient() {
     },
 
     onOpponentReady() {
+      if (!_inGame) return;
       const statusEl = document.getElementById('plan-status');
       if (statusEl) statusEl.textContent = 'Opponent ready — waiting for resolution…';
     },
 
     onResolutionComplete({ steps, finalState }) {
-      if (!ui || !renderer) return;
+      if (!_inGame || !ui || !renderer) return;
       state.resolving = true;   // flag before exitPlanningMode fires its redraw
       ui.exitPlanningMode();
 
