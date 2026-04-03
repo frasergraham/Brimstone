@@ -215,6 +215,9 @@ export class MultiplayerClient {
   /** Tell the server the player has backgrounded / foregrounded the app. */
   setInactive(inactive) { this._send({ type: 'setInactive', inactive }); }
 
+  /** Tell the server the player is no longer viewing a specific game. */
+  clearRoom() { this._send({ type: 'setRoom', roomId: null }); }
+
   /** Force an immediate reconnect (e.g. when returning from background). */
   reconnectNow() {
     if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }

@@ -903,6 +903,13 @@ function route(ws, cs, msg) {
     case 'setRoom': {
       if (!cs.player) return;
       const oldRoomId = cs.roomId;
+      if (!msg.roomId) {
+        // Clearing room (returned to menus)
+        cs.roomId = null;
+        ws._roomId = null;
+        if (oldRoomId) broadcastPresenceForPlayer(cs.player.id);
+        break;
+      }
       const room = getRoom(msg.roomId);
       if (room && (
         room.players.some(s => s.playerId === cs.player.id) ||
