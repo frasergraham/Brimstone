@@ -9,7 +9,7 @@ import { sendPush, hasDeviceTokens, getDeviceTokens } from './push.js';
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const EMAIL_FROM     = process.env.EMAIL_FROM || "Caleb's Hollow <noreply@calebshollow.com>";
-const DEDUP_WINDOW_S = 60; // 1 minute — don't resend same notification type
+const DEDUP_WINDOW_S = 10; // 10 seconds — don't resend same notification type
 
 function _baseUrl() {
   if (process.env.BASE_URL) return process.env.BASE_URL;
