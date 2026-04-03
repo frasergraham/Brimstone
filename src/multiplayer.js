@@ -216,7 +216,12 @@ export class MultiplayerClient {
   setInactive(inactive) { this._send({ type: 'setInactive', inactive }); }
 
   /** Tell the server the player is no longer viewing a specific game. */
-  clearRoom() { this._send({ type: 'setRoom', roomId: null }); }
+  /** Tell the server the player left the game view. Clears active state. */
+  clearRoom() {
+    this.active = false;
+    this.roomId = null;
+    this._send({ type: 'setRoom', roomId: null });
+  }
 
   /** Force an immediate reconnect (e.g. when returning from background). */
   reconnectNow() {

@@ -4694,8 +4694,9 @@ function _createMpClient() {
   return new MultiplayerClient({
     onState(mirrorState) {
       if (!renderer || !ui) {
-        // Game not started yet — any state update while active should start it
-        if (mp?.active) {
+        // Game not started yet — only init if the player actively joined a game
+        // (mp.active is true). Never auto-enter a game from the menus.
+        if (mp?.active && getMode() !== AppMode.MENU) {
           try {
             mirrorState.myFaction = mp.myFaction; // used by renderer for per-player fog
             initOnline(mirrorState, mp.myFaction, mp);
