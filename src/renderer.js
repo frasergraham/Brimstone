@@ -771,8 +771,8 @@ export class Renderer {
     {
       const phase = state.phase;
       let tint = null;
-      if (phase === Phase.DAWN || phase === Phase.DUSK) tint = 'rgba(30,40,70,0.12)';
-      if (phase === Phase.NIGHT) tint = 'rgba(20,28,55,0.22)';
+      if (phase === Phase.DAWN || phase === Phase.DUSK) tint = 'rgba(30,40,70,0.20)';
+      if (phase === Phase.NIGHT) tint = 'rgba(20,28,55,0.35)';
       if (tint) {
         ctx.save();
         ctx.setTransform(1, 0, 0, 1, 0, 0); // reset to screen coords
