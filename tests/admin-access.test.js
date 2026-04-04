@@ -46,22 +46,12 @@ describe('is_admin column', () => {
   });
 });
 
-// ── Seed user: TwistedWeasel ─────────────────────────────────────────────────
+// ── Seed admin was removed — verify cleanup ──────────────────────────────────
 
-describe('TwistedWeasel seed admin user', () => {
-  test('exists in the database', () => {
-    const player = db.prepare('SELECT * FROM players WHERE username = ?').get('TwistedWeasel');
-    assert.ok(player, 'TwistedWeasel should exist in players table');
-    assert.equal(player.id, 'seed-admin-twisted-weasel');
-    assert.equal(player.is_admin, 1);
-  });
-
-  test('has verified email identity linked', () => {
-    const identity = db.prepare(
-      'SELECT * FROM player_identities WHERE player_id = ? AND provider = ?'
-    ).get('seed-admin-twisted-weasel', 'email');
-    assert.ok(identity, 'TwistedWeasel should have an email identity');
-    assert.equal(identity.provider_id, 'frasergraham@me.com');
+describe('seed admin cleanup', () => {
+  test('seed-admin-twisted-weasel no longer exists', () => {
+    const player = db.prepare('SELECT * FROM players WHERE id = ?').get('seed-admin-twisted-weasel');
+    assert.equal(player, undefined, 'seed admin should be deleted on startup');
   });
 });
 
@@ -88,7 +78,6 @@ describe('grantAdminIfEligible', () => {
 
   test('sets is_admin = 1 for player with admin email linked', () => {
     const player = createTestPlayer('grant1');
-    // Temporarily unlink the seed user's email so we can use it for this test
     db.prepare('DELETE FROM player_identities WHERE provider_id = ?').run('frasergraham@me.com');
     db.prepare(
       'INSERT INTO player_identities (player_id, provider, provider_id) VALUES (?, ?, ?)'
@@ -99,11 +88,8 @@ describe('grantAdminIfEligible', () => {
     const updated = getPlayerByToken(player.token);
     assert.equal(updated.is_admin, 1);
 
-    // Restore seed user's email
+    // Clean up
     db.prepare('DELETE FROM player_identities WHERE player_id = ?').run(player.id);
-    db.prepare(
-      'INSERT OR IGNORE INTO player_identities (player_id, provider, provider_id) VALUES (?, ?, ?)'
-    ).run('seed-admin-twisted-weasel', 'email', 'frasergraham@me.com');
   });
 
   test('does NOT set is_admin for player with non-admin email', () => {
@@ -135,7 +121,6 @@ describe('linkEmail auto-grants admin', () => {
     const player = createTestPlayer('link1');
     assert.equal(player.is_admin, 0);
 
-    // Temporarily unlink seed user's email so we can test linking it
     db.prepare('DELETE FROM player_identities WHERE provider_id = ?').run('frasergraham@me.com');
 
     const result = linkEmail(player.id, 'frasergraham@me.com');
@@ -144,11 +129,8 @@ describe('linkEmail auto-grants admin', () => {
     const updated = getPlayerByToken(player.token);
     assert.equal(updated.is_admin, 1);
 
-    // Restore seed user's email
+    // Clean up
     db.prepare('DELETE FROM player_identities WHERE player_id = ?').run(player.id);
-    db.prepare(
-      'INSERT OR IGNORE INTO player_identities (player_id, provider, provider_id) VALUES (?, ?, ?)'
-    ).run('seed-admin-twisted-weasel', 'email', 'frasergraham@me.com');
   });
 
   test('does NOT grant admin when linking a non-admin email', () => {

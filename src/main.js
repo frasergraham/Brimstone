@@ -1453,9 +1453,11 @@ _updateSessionBar();
 // On iOS, attempt Game Center auth on launch and use it as the primary identity.
 // If GC auth succeeds, connect to the server and authenticate as the GC account,
 // replacing any saved session so the push token is linked to the right player.
+// The promise is stored so _showAuthDialog can await it instead of racing.
+let _gcAuthPromise = null;
 if (isNativeMobile) {
-  tryGameCenterAuth().then(gc => {
-    if (!gc) return;
+  _gcAuthPromise = tryGameCenterAuth().then(gc => {
+    if (!gc) return null;
     _gcCredentials = gc;
 
     // Connect and auth with the server immediately so the session is correct
@@ -1466,12 +1468,16 @@ if (isNativeMobile) {
     } else if (!mp.connected) {
       mp.connect(wsUrl);
     }
-    mp._opts._onAuthOk = () => {
-      _updateSessionBar();
-    };
-    mp.authGameCenter({
-      gameCenterId: gc.playerId,
-      displayName: gc.displayName,
+
+    return new Promise(resolve => {
+      mp._opts._onAuthOk = () => {
+        _updateSessionBar();
+        resolve(gc);
+      };
+      mp.authGameCenter({
+        gameCenterId: gc.playerId,
+        displayName: gc.displayName,
+      });
     });
   });
 }
@@ -4386,25 +4392,22 @@ async function _initAccountPage() {
 // ── Auth dialog ──────────────────────────────────────────────────────────────
 
 function _showAuthDialog(onSuccess) {
-  // On iOS, try Game Center first — skip the dialog entirely if it works
-  if (isNativeMobile && !_gcCredentials) {
-    tryGameCenterAuth().then(gc => {
-      if (gc) {
-        _gcCredentials = gc;
-        _authDialogCallback = onSuccess;
+  // On iOS, wait for the launch GC auth to complete before deciding what to show.
+  // This prevents the sign-in dialog from flashing while GC auth is in flight.
+  if (_gcAuthPromise) {
+    _gcAuthPromise.then(() => {
+      if (_gcCredentials) {
         _ensureAuthed(() => {
           _hideAuthDialog();
           if (onSuccess) onSuccess();
         });
-        return;
+      } else {
+        _showAuthDialogUI(onSuccess);
       }
-      _showAuthDialogUI(onSuccess);
     });
     return;
   }
   if (_gcCredentials) {
-    // Already have Game Center credentials — use them directly
-    _authDialogCallback = onSuccess;
     _ensureAuthed(() => {
       _hideAuthDialog();
       if (onSuccess) onSuccess();
