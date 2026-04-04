@@ -94,7 +94,7 @@ const _playback = {
   paused:       false,
   goBack:       false,   // false | 'curr' | 'prev'
   atRoundStart: false,   // true while paused at the pre-animation point of a round
-  speedMult:    0.5,     // 0.5=play, 1.0=ff, 1.5=vff
+  speedMult:    0.5,     // 0.5=play, 1.0=ff, 4.0=vff
   jumpToEnd:    false,   // skip to final game state
 };
 function _resetPlayback() {
@@ -3259,7 +3259,7 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
         ui.setReplayPlayState('ff');
         break;
       case 'vff':
-        _playback.speedMult = 2.0; _playback.paused = false;
+        _playback.speedMult = 4.0; _playback.paused = false;
         ui.setReplayPlayState('vff');
         break;
       case 'pause':
