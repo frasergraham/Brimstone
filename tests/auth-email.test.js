@@ -289,12 +289,13 @@ describe('changeUsername', () => {
     assert.equal(result.ok, false);
   });
 
-  test('rejects username taken by another player', () => {
+  test('allows duplicate usernames with different discriminators', () => {
     const p1 = createPlayer('rename4a');
     const p2 = createPlayer('rename4b');
     const result = changeUsername(p2.id, p1.username);
-    assert.equal(result.ok, false);
-    assert.ok(result.error.includes('already taken'));
+    assert.ok(result.ok);
+    assert.equal(result.player.username, p1.username);
+    assert.notEqual(result.player.discriminator, p1.discriminator);
   });
 
   test('allows renaming to same name (no-op)', () => {

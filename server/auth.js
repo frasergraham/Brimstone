@@ -8,8 +8,21 @@ const ADMIN_EMAILS = ['frasergraham@me.com'];
 
 const _getByToken = db.prepare('SELECT * FROM players WHERE token = ?');
 const _getById    = db.prepare('SELECT * FROM players WHERE id = ?');
-const _getByName  = db.prepare('SELECT id FROM players WHERE username = ? COLLATE NOCASE');
-const _insert     = db.prepare('INSERT INTO players (id, username, token) VALUES (?, ?, ?)');
+const _getByNameDisc = db.prepare('SELECT id FROM players WHERE username = ? COLLATE NOCASE AND discriminator = ?');
+const _insert     = db.prepare('INSERT INTO players (id, username, discriminator, token) VALUES (?, ?, ?, ?)');
+
+/** Generate a random 4-digit discriminator (1000–9999) that is unique for the given username. */
+function _randomDiscriminator(username) {
+  for (let i = 0; i < 100; i++) {
+    const disc = 1000 + Math.floor(Math.random() * 9000);
+    if (!_getByNameDisc.get(username, disc)) return disc;
+  }
+  // Extremely unlikely fallback — try sequential
+  for (let disc = 1000; disc <= 9999; disc++) {
+    if (!_getByNameDisc.get(username, disc)) return disc;
+  }
+  throw new Error('Could not find unique discriminator');
+}
 const _setAdmin   = db.prepare('UPDATE players SET is_admin = ? WHERE id = ?');
 
 // Identity linking
@@ -47,13 +60,10 @@ export function registerOrLogin({ username, token } = {}) {
     return { ok: false, error: 'Username may only contain letters, numbers, spaces, hyphens, and underscores.' };
   }
 
-  if (_getByName.get(name)) {
-    return { ok: false, error: 'That username is already taken. If it\'s yours, sign in with your linked email address below.' };
-  }
-
+  const disc     = _randomDiscriminator(name);
   const id       = randomUUID();
   const newToken = randomUUID();
-  _insert.run(id, name, newToken);
+  _insert.run(id, name, disc, newToken);
   const player = _getById.get(id);
   return { ok: true, player };
 }
@@ -81,18 +91,13 @@ export function getOrCreateByEmail(email) {
     if (player) return { ok: true, player, isNew: false };
   }
 
-  // Derive a username from the email prefix, deduplicating if needed
-  let baseName = normalised.split('@')[0].replace(/[^a-zA-Z0-9_\- ]/g, '').slice(0, 16) || 'player';
-  let name = baseName;
-  let suffix = 1;
-  while (_getByName.get(name)) {
-    name = `${baseName}${suffix++}`;
-    if (name.length > 20) { baseName = baseName.slice(0, 12); name = `${baseName}${suffix}`; }
-  }
+  // Derive a username from the email prefix — discriminator handles uniqueness
+  const name = normalised.split('@')[0].replace(/[^a-zA-Z0-9_\- ]/g, '').slice(0, 16) || 'player';
+  const disc = _randomDiscriminator(name);
 
   const id       = randomUUID();
   const newToken = randomUUID();
-  _insert.run(id, name, newToken);
+  _insert.run(id, name, disc, newToken);
   _insertIdentity.run(id, 'email', normalised);
   grantAdminIfEligible(id);
 
@@ -188,31 +193,22 @@ export function getOrCreateByGameCenter(gameCenterId, displayName) {
     const player = _getById.get(existing.player_id);
     if (!player) return { ok: false, error: 'Player not found.' };
 
-    // Sync display name on every login
+    // Sync display name on every login — no collision risk with NULL discriminator
     const name = _sanitizeUsername(displayName);
     if (name && name !== player.username) {
-      const taken = _getByName.get(name);
-      if (!taken || taken.id === player.id) {
-        _updateUsername.run(name, player.id);
-      }
+      _updateUsername.run(name, player.id);
     }
 
     const updated = _getById.get(player.id);
     return { ok: true, player: updated, isNew: false };
   }
 
-  // New player — derive username from display name
-  let baseName = _sanitizeUsername(displayName) || 'player';
-  let name = baseName;
-  let suffix = 1;
-  while (_getByName.get(name)) {
-    name = `${baseName}${suffix++}`;
-    if (name.length > 20) { baseName = baseName.slice(0, 12); name = `${baseName}${suffix}`; }
-  }
+  // New player — use GC display name directly, NULL discriminator (GC names are unique)
+  const name = _sanitizeUsername(displayName) || 'player';
 
   const id       = randomUUID();
   const newToken = randomUUID();
-  _insert.run(id, name, newToken);
+  _insert.run(id, name, null, newToken);
   _insertIdentity.run(id, 'gamecenter', gameCenterId);
 
   const player = _getById.get(id);
@@ -244,8 +240,10 @@ function _sanitizeUsername(raw) {
 
 /**
  * Change a player's username. Returns { ok, player } or { ok: false, error }.
+ * Assigns a new random discriminator for the new name.
  */
-const _updateUsername = db.prepare('UPDATE players SET username = ? WHERE id = ?');
+const _updateUsername     = db.prepare('UPDATE players SET username = ? WHERE id = ?');
+const _updateUsernameDisc = db.prepare('UPDATE players SET username = ?, discriminator = ? WHERE id = ?');
 
 export function changeUsername(playerId, newUsername) {
   const name = (newUsername || '').trim();
@@ -256,12 +254,17 @@ export function changeUsername(playerId, newUsername) {
     return { ok: false, error: 'Username may only contain letters, numbers, spaces, hyphens, and underscores.' };
   }
 
-  const existing = _getByName.get(name);
-  if (existing && existing.id !== playerId) {
-    return { ok: false, error: 'That username is already taken.' };
+  const player = _getById.get(playerId);
+  if (!player) return { ok: false, error: 'Player not found.' };
+
+  // GC accounts keep NULL discriminator — just update the name
+  if (player.discriminator === null) {
+    _updateUsername.run(name, playerId);
+  } else {
+    const disc = _randomDiscriminator(name);
+    _updateUsernameDisc.run(name, disc, playerId);
   }
 
-  _updateUsername.run(name, playerId);
-  const player = _getById.get(playerId);
-  return { ok: true, player };
+  const updated = _getById.get(playerId);
+  return { ok: true, player: updated };
 }

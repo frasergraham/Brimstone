@@ -38,10 +38,47 @@ export function createBackend(dbPath) {
   // Migration: add players_json to completed_games for NvN support
   try { db.exec("ALTER TABLE completed_games ADD COLUMN players_json TEXT NOT NULL DEFAULT '[]'"); } catch {}
 
+  // Migration: add discriminator column and drop the old UNIQUE(username) constraint.
+  // SQLite can't drop constraints, so we must recreate the table.
+  // Detect the old schema by checking if the CREATE TABLE SQL still has "username   TEXT UNIQUE".
+  {
+    const tableInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='players'").get();
+    const needsMigration = tableInfo?.sql?.includes('TEXT UNIQUE NOT NULL COLLATE NOCASE');
+    if (needsMigration) {
+      db.pragma('foreign_keys = OFF');
+      db.exec(`
+        -- Create new table with the updated schema (no UNIQUE on username alone)
+        CREATE TABLE _players_new (
+          id            TEXT PRIMARY KEY,
+          username      TEXT NOT NULL COLLATE NOCASE,
+          discriminator INTEGER,
+          token         TEXT UNIQUE NOT NULL,
+          wins          INTEGER NOT NULL DEFAULT 0,
+          losses        INTEGER NOT NULL DEFAULT 0,
+          draws         INTEGER NOT NULL DEFAULT 0,
+          is_admin      INTEGER NOT NULL DEFAULT 0,
+          created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+          UNIQUE(username, discriminator)
+        );
+        INSERT INTO _players_new (id, username, token, wins, losses, draws, is_admin, created_at)
+          SELECT id, username, token, wins, losses, draws, is_admin, created_at FROM players;
+        DROP TABLE players;
+        ALTER TABLE _players_new RENAME TO players;
+      `);
+      // Assign random 4-digit discriminators to all existing players
+      const rows = db.prepare('SELECT id FROM players WHERE discriminator IS NULL').all();
+      const update = db.prepare('UPDATE players SET discriminator = ? WHERE id = ?');
+      for (const row of rows) {
+        update.run(1000 + Math.floor(Math.random() * 9000), row.id);
+      }
+      db.pragma('foreign_keys = ON');
+    }
+  }
+
   // Seed default admin user (idempotent via INSERT OR IGNORE)
   db.exec(`
-    INSERT OR IGNORE INTO players (id, username, token, is_admin)
-    VALUES ('seed-admin-twisted-weasel', 'TwistedWeasel', 'seed-token-twisted-weasel', 1);
+    INSERT OR IGNORE INTO players (id, username, discriminator, token, is_admin)
+    VALUES ('seed-admin-twisted-weasel', 'TwistedWeasel', 1000, 'seed-token-twisted-weasel', 1);
     INSERT OR IGNORE INTO player_identities (player_id, provider, provider_id)
     VALUES ('seed-admin-twisted-weasel', 'email', 'frasergraham@me.com');
   `);

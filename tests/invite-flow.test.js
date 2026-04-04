@@ -87,7 +87,7 @@ describe('getOrCreateByEmail', () => {
     assert.ok(result.player.username.startsWith('coolplayer42'));
   });
 
-  test('deduplicates username if prefix is taken', () => {
+  test('allows same username via discriminator when email prefix matches existing', () => {
     // Create a player with the email prefix as username
     const reg = registerOrLogin({ username: 'dupetest' });
     assert.ok(reg.ok);
@@ -97,9 +97,10 @@ describe('getOrCreateByEmail', () => {
     const result = getOrCreateByEmail(email);
     assert.ok(result.ok);
     trackPlayer(result.player);
-    // Should get dupetest1, dupetest2, etc. — not 'dupetest'
-    assert.notEqual(result.player.username, 'dupetest');
-    assert.ok(result.player.username.startsWith('dupetest'));
+    // Discriminator system allows same username — no suffix needed
+    assert.equal(result.player.username, 'dupetest');
+    assert.notEqual(result.player.id, reg.player.id);
+    assert.notEqual(result.player.discriminator, reg.player.discriminator);
   });
 
   test('normalises email to lowercase', () => {

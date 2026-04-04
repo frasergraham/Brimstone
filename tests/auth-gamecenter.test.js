@@ -61,16 +61,15 @@ describe('getOrCreateByGameCenter', () => {
     assert.equal(second.player.username, 'test-gc-NewName');
   });
 
-  test('does not sync name if taken by another player', () => {
+  test('syncs name freely even if another player has the same name (discriminator system)', () => {
     const other = createPlayer('taken1');
     const gc = getOrCreateByGameCenter(`${GC_PREFIX}taken1`, 'test-gc-initial');
     assert.ok(gc.ok);
 
-    // Try to sync to the other player's username
+    // GC accounts have NULL discriminator — no collision with regular users
     const synced = getOrCreateByGameCenter(`${GC_PREFIX}taken1`, other.username);
     assert.ok(synced.ok);
-    // Should keep original name since the new one is taken
-    assert.equal(synced.player.username, 'test-gc-initial');
+    assert.equal(synced.player.username, other.username);
   });
 
   test('sanitizes invalid characters from display name', () => {
@@ -80,13 +79,13 @@ describe('getOrCreateByGameCenter', () => {
     assert.equal(result.player.username, 'Pyer123');
   });
 
-  test('deduplicates username with numeric suffix', () => {
+  test('GC accounts use exact display name with no deduplication suffix', () => {
     createPlayer('dup1');
     const result = getOrCreateByGameCenter(`${GC_PREFIX}dup1`, 'test-gc-dup1');
     assert.ok(result.ok);
-    // Should get a suffixed name since test-gc-dup1 is taken
-    assert.ok(result.player.username.startsWith('test-gc-dup1'));
-    assert.notEqual(result.player.username, 'test-gc-dup1');
+    // GC accounts get NULL discriminator — same username is allowed
+    assert.equal(result.player.username, 'test-gc-dup1');
+    assert.equal(result.player.discriminator, null);
   });
 
   test('creates gamecenter identity record', () => {
@@ -169,5 +168,38 @@ describe('account merging', () => {
     const found = getPlayerByToken(gc.player.token);
     assert.ok(found);
     assert.equal(found.id, gc.player.id);
+  });
+});
+
+// ── Discriminator system ──────────────────────────────────────────────────────
+
+describe('discriminator system', () => {
+  test('regular users get a 4-digit discriminator', () => {
+    const p = createPlayer('disc1');
+    assert.ok(p.discriminator >= 1000 && p.discriminator <= 9999,
+      `discriminator should be 4 digits, got ${p.discriminator}`);
+  });
+
+  test('two regular users can have the same username', () => {
+    const p1 = registerOrLogin({ username: 'test-gc-samename' });
+    const p2 = registerOrLogin({ username: 'test-gc-samename' });
+    assert.ok(p1.ok && p2.ok);
+    assert.equal(p1.player.username, p2.player.username);
+    assert.notEqual(p1.player.discriminator, p2.player.discriminator);
+    assert.notEqual(p1.player.id, p2.player.id);
+  });
+
+  test('GC users get NULL discriminator', () => {
+    const gc = getOrCreateByGameCenter(`${GC_PREFIX}disc-null`, 'test-gc-discnull');
+    assert.ok(gc.ok);
+    assert.equal(gc.player.discriminator, null);
+  });
+
+  test('GC and regular user can share the same display name', () => {
+    const reg = registerOrLogin({ username: 'test-gc-shared' });
+    const gc = getOrCreateByGameCenter(`${GC_PREFIX}disc-shared`, 'test-gc-shared');
+    assert.ok(reg.ok && gc.ok);
+    assert.equal(reg.player.username, gc.player.username);
+    assert.notEqual(reg.player.id, gc.player.id);
   });
 });
