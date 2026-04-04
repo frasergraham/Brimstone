@@ -230,10 +230,12 @@ if (isNativeMobile) _wireBackButton();
 // ── Push notifications ──────────────────────────────────────────────────────
 
 let _pushRegistered = false;
+let _apnsToken = null; // cached APNS device token
 
 /**
- * Request push notification permission, register with APNS, and send the
- * device token to the server. Call after the player has authenticated.
+ * Request push notification permission, register with APNS, and set up
+ * listeners. Call once on launch. The token is cached in _apnsToken and
+ * Preferences so refreshPushToken() can re-send it after account changes.
  */
 export async function registerPushNotifications() {
   const PushNotifications = window.Capacitor?.Plugins?.PushNotifications;
@@ -243,36 +245,31 @@ export async function registerPushNotifications() {
     const perm = await PushNotifications.requestPermissions();
     if (perm.receive !== 'granted') return;
 
-    // Listen for registration success
+    // Listen for registration success — fires once with the APNS token
     PushNotifications.addListener('registration', async ({ value: token }) => {
+      _apnsToken = token;
       const Preferences = window.Capacitor?.Plugins?.Preferences;
-      const session = JSON.parse(_lsGet('brimstone_session') || 'null');
-      if (!session?.token) return;
-      const server = window.BRIMSTONE_SERVER || '';
 
-      // If the token changed (e.g. sandbox → production), delete the old one first
+      // If the token changed (e.g. sandbox → production), delete the old one
       if (Preferences) {
         const { value: prev } = await Preferences.get({ key: 'brimstone_push_token' });
         if (prev && prev !== token) {
-          try {
-            await fetch(`${server}/api/device-token`, {
-              method: 'DELETE',
-              headers: { 'Content-Type': 'application/json', 'x-token': session.token },
-              body: JSON.stringify({ deviceToken: prev }),
-            });
-          } catch { /* best effort */ }
+          const session = JSON.parse(_lsGet('brimstone_session') || 'null');
+          if (session?.token) {
+            try {
+              await fetch(`${(window.BRIMSTONE_SERVER || '')}/api/device-token`, {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json', 'x-token': session.token },
+                body: JSON.stringify({ deviceToken: prev }),
+              });
+            } catch { /* best effort */ }
+          }
         }
         await Preferences.set({ key: 'brimstone_push_token', value: token });
       }
 
-      // Register the current token with the server
-      try {
-        await fetch(`${server}/api/device-token`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json', 'x-token': session.token },
-          body: JSON.stringify({ deviceToken: token, platform: 'ios' }),
-        });
-      } catch { /* offline — will retry next launch */ }
+      // Send the token to the server under the current session
+      _sendPushToken(token);
     });
 
     PushNotifications.addListener('registrationError', (err) => {
@@ -295,28 +292,37 @@ export async function registerPushNotifications() {
   }
 }
 
-/**
- * Re-send the cached device token to the server under the current session.
- * Call after any successful auth to ensure the token is linked to the
- * correct player account (e.g. after Game Center login creates a new account).
- */
-export async function refreshPushToken() {
-  const Preferences = window.Capacitor?.Plugins?.Preferences;
-  if (!Preferences) return;
-
+/** Send the APNS token to the server under the current session. */
+async function _sendPushToken(token) {
+  if (!token) return;
+  const session = JSON.parse(_lsGet('brimstone_session') || 'null');
+  if (!session?.token) return;
+  const server = window.BRIMSTONE_SERVER || '';
   try {
-    const { value: token } = await Preferences.get({ key: 'brimstone_push_token' });
-    if (!token) return;
-
-    const session = JSON.parse(_lsGet('brimstone_session') || 'null');
-    if (!session?.token) return;
-    const server = window.BRIMSTONE_SERVER || '';
     await fetch(`${server}/api/device-token`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', 'x-token': session.token },
       body: JSON.stringify({ deviceToken: token, platform: 'ios' }),
     });
-  } catch { /* best effort */ }
+  } catch { /* offline — will retry next auth */ }
+}
+
+/**
+ * Re-send the device token to the server under the current session.
+ * Call after every successful auth to ensure the token is linked to the
+ * correct player account (e.g. after Game Center login creates a new account).
+ */
+export async function refreshPushToken() {
+  // Use in-memory cached token first, fall back to Preferences
+  let token = _apnsToken;
+  if (!token) {
+    const Preferences = window.Capacitor?.Plugins?.Preferences;
+    if (Preferences) {
+      const stored = await Preferences.get({ key: 'brimstone_push_token' });
+      token = stored?.value;
+    }
+  }
+  if (token) _sendPushToken(token);
 }
 
 /**
