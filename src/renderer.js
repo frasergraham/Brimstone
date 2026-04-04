@@ -306,12 +306,13 @@ export class Renderer {
   }
 
   /** Pulsing glow animation on a node cluster — used when a power node is first revealed. */
-  addNodeRevealAnim(hexes, color) {
+  addNodeRevealAnim(hexes, color, { radiusMultiplier = 2, duration = 2000 } = {}) {
     this._nodeRevealAnims.push({
       hexes,  // [{col, row}]
       color,
       startTime: Date.now(),
-      duration: 2000,
+      duration,
+      radiusMultiplier,
     });
     this._startAnimLoop();
   }
@@ -1636,8 +1637,9 @@ export class Renderer {
       const elapsed = now - anim.startTime;
       const t = elapsed / anim.duration; // 0→1
 
-      // Expanding ring radius: starts at hex size, expands to 2× hex size
-      const ringRadius = hs * (1.0 + t * 1.0);
+      // Expanding ring radius: starts at hex size, expands to radiusMultiplier × hex size
+      const maxR = anim.radiusMultiplier ?? 2;
+      const ringRadius = hs * (1.0 + t * (maxR - 1.0));
       // Opacity: bright at start, fades out
       const alpha = Math.max(0, 1.0 - t);
       // Pulsing inner glow: rapid sine pulse that slows over time

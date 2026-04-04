@@ -1217,11 +1217,10 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       const actor = step.entitySnapshot?.find(e => e.id === action.entityId);
       if (!actor) continue;
 
-      // Gold horn flash + expanding ring (same system as power node reveals)
-      renderer.addFlash(actor.col, actor.row, '📯',
-        'rgba(220,180,60,0.25)', 2000, 1.4, 'rgba(255,215,100,1)');
+      // Gold expanding ring showing the 4-hex horn range
       renderer.addNodeRevealAnim(
         [{ col: actor.col, row: actor.row }], '#d4a72c',
+        { radiusMultiplier: 7, duration: 2000 },
       );
       redrawFn();
 
