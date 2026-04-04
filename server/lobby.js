@@ -43,6 +43,18 @@ const TURN_TIMEOUT_MS    = parseInt(process.env.TURN_TIMEOUT_MS, 10)    || 90_00
 const ROUND_DELAY_MS     = parseInt(process.env.ROUND_DELAY_MS, 10)     || 4000;
 const CHRONICLE_MAX      = 100;    // max rounds retained per room in the chronicle
 
+// ── Player notification callback (injected by server.js to avoid circular imports) ──
+
+let _sendToPlayer = null;
+
+/** Called by server.js to provide a function that sends a message to a player by ID. */
+export function setSendToPlayer(fn) { _sendToPlayer = fn; }
+
+/** Notify a player that their game list has changed (plan submitted, round resolved, etc.). */
+function _notifyGamesUpdate(playerId) {
+  _sendToPlayer?.(playerId, { type: 'gamesUpdate' });
+}
+
 // ── State ────────────────────────────────────────────────────────────────────
 
 /** @type {Map<string, Room>} */
@@ -601,6 +613,11 @@ function _submitPlayerPlan(room, playerId, plan, isTimeout = false) {
   broadcastExcept(room, playerId, submittedMsg);
   broadcastToSpectators(room, submittedMsg);
 
+  // Push game-list refresh to all human players so badge/list update in real time
+  for (const s of room.players) {
+    if (!s.isAI) _notifyGamesUpdate(s.playerId);
+  }
+
   // Notify the last unsubmitted human player that everyone else has submitted
   if (!isTimeout && !seat?.isAI) {
     const opts = _notifyOpts(room);
@@ -729,6 +746,11 @@ function _executeResolution(room) {
   const resolutionMsg = { type: 'resolutionComplete', steps: serializedSteps, finalState };
   broadcast(room, resolutionMsg);
   broadcastToSpectators(room, resolutionMsg);
+
+  // Push game-list refresh to all human players so badge/list update in real time
+  for (const seat of room.players) {
+    if (!seat.isAI) _notifyGamesUpdate(seat.playerId);
+  }
 
   // Append to the per-room chronicle for admin inspection
   _appendChronicle(room, {
@@ -2343,6 +2365,11 @@ export function handleAsyncPlanSubmit(playerId, roomId, plan) {
   // Confirm to submitter
   _asyncSend(roomId, playerId, { type: 'asyncPlanAccepted', roomId });
 
+  // Push game-list refresh so badge/list update in real time
+  _notifyGamesUpdate(playerId);
+  const _opId = game.hero_player_id === playerId ? game.witch_player_id : game.hero_player_id;
+  _notifyGamesUpdate(_opId);
+
   // If still waiting for opponent, nothing more to do
   if (game.status === 'waiting') return;
 
@@ -2495,6 +2522,10 @@ function _resolveAsyncRound(roomId, timedOutPlayerIds) {
   console.log(`  finalState entities: ${finalState?.entities?.length ?? 0}`);
 
   _asyncBroadcast(roomId, resolutionMsg);
+
+  // Push game-list refresh so badge/list update in real time
+  _notifyGamesUpdate(game.hero_player_id);
+  _notifyGamesUpdate(game.witch_player_id);
 }
 
 function _finishAsyncGame(roomId, game, state, serializedSteps, finalState) {

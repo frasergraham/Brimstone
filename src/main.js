@@ -3713,6 +3713,7 @@ function _showOnlineScreen() {
   if (session) {
     _fetchActiveSaves();
     _fetchCompletedGames();
+    _updateMultiplayerBadge();
   }
 }
 
@@ -3722,6 +3723,7 @@ function _showAsyncScreen() {
   const session = loadSession();
   if (session) {
     _fetchAsyncGames();
+    _updateMultiplayerBadge();
   }
 }
 
@@ -3731,9 +3733,11 @@ document.getElementById('btn-online-back').addEventListener('click', () => {
   if (mp) { mp.disconnect(); mp = null; }
   renderer = null; ui = null; state = null;
   showStep('mode');
+  _updateMultiplayerBadge();
 });
 document.getElementById('btn-async-back')?.addEventListener('click', () => {
   showStep('multiplayer');
+  _updateMultiplayerBadge();
 });
 document.getElementById('btn-async-refresh')?.addEventListener('click', () => {
   _fetchAsyncGames();
@@ -5078,6 +5082,19 @@ function _createMpClient() {
       if (!isInGame() || !state) return;
       if (!state._takeoverMessages) state._takeoverMessages = [];
       state._takeoverMessages.push(`${playerName} resigned — replaced by AI`);
+    },
+
+    onGamesUpdate() {
+      // Server signals that the player's game list changed (plan submitted, round resolved)
+      if (stepOnline.style.display !== 'none') {
+        _fetchActiveSaves();
+        _updateMultiplayerBadge();
+      } else if (stepAsync.style.display !== 'none') {
+        _fetchAsyncGames();
+        _updateMultiplayerBadge();
+      } else {
+        _updateMultiplayerBadge();
+      }
     },
 
     onLeaderboard(_entries) {
