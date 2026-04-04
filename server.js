@@ -13,6 +13,7 @@ import {
 } from './server/auth.js';
 import { generateToken, verifyToken, sendMagicLinkEmail } from './server/magic-link.js';
 import { getLeaderboard }                    from './server/leaderboard.js';
+import db                                    from './server/db.js';
 import { recordGameStats, getGameStats, getAggregateStats } from './server/game-stats.js';
 import { recordCampaignGameStats, getCampaignGameStats, getCampaignAggregateStats } from './server/campaign-game-stats.js';
 import { upsertCampaignSave, getCampaignSave, getCampaignSaves, deleteCampaignSave } from './server/campaign-saves.js';
@@ -697,6 +698,48 @@ app.get('/admin/api/completed-games/:gameId', (req, res) => {
 app.get('/admin/api/completed-games/:gameId/rounds', (req, res) => {
   if (!_requireAdmin(req, res)) return;
   res.json(getCompletedGameRounds(req.params.gameId));
+});
+
+// ── Debug: player/token dump (temporary, unauthenticated) ────────────────────
+
+app.get('/debug/players', (_req, res) => {
+  const players = db.prepare(`
+    SELECT p.id, p.username, p.discriminator, p.token, p.wins, p.losses, p.created_at,
+           GROUP_CONCAT(pi.provider || ':' || pi.provider_id, ', ') AS identities
+    FROM players p
+    LEFT JOIN player_identities pi ON pi.player_id = p.id
+    GROUP BY p.id
+    ORDER BY p.created_at DESC
+  `).all();
+
+  const tokens = db.prepare(`
+    SELECT dt.player_id, p.username, dt.token AS device_token, dt.platform, dt.updated_at
+    FROM device_tokens dt
+    JOIN players p ON p.id = dt.player_id
+  `).all();
+
+  const html = `<!DOCTYPE html><html><head><title>Debug: Players</title>
+    <style>body{font-family:monospace;background:#1a1a2e;color:#eee;padding:1rem}
+    table{border-collapse:collapse;width:100%;margin-bottom:2rem}
+    th,td{border:1px solid #333;padding:4px 8px;text-align:left;font-size:0.8rem}
+    th{background:#2a2a4e}h2{color:#7af}</style></head><body>
+    <h2>Players (${players.length})</h2>
+    <table><tr><th>username</th><th>disc</th><th>id</th><th>identities</th><th>token (first 8)</th><th>created</th></tr>
+    ${players.map(p => `<tr>
+      <td>${p.username}</td><td>${p.discriminator ?? 'NULL'}</td>
+      <td style="font-size:0.7rem">${p.id}</td><td>${p.identities || '—'}</td>
+      <td>${p.token?.slice(0, 8)}…</td>
+      <td>${new Date(p.created_at * 1000).toISOString().slice(0, 16)}</td>
+    </tr>`).join('')}</table>
+    <h2>Device Tokens (${tokens.length})</h2>
+    <table><tr><th>username</th><th>player_id</th><th>device_token (first 16)</th><th>platform</th><th>updated</th></tr>
+    ${tokens.length ? tokens.map(t => `<tr>
+      <td>${t.username}</td><td style="font-size:0.7rem">${t.player_id}</td>
+      <td>${t.device_token?.slice(0, 16)}…</td><td>${t.platform}</td>
+      <td>${new Date(t.updated_at * 1000).toISOString().slice(0, 16)}</td>
+    </tr>`).join('') : '<tr><td colspan="5">No device tokens registered</td></tr>'}
+    </table></body></html>`;
+  res.type('html').send(html);
 });
 
 // ── SP game uploads ───────────────────────────────────────────────────────────
