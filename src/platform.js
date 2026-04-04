@@ -311,6 +311,7 @@ async function _sendPushToken(token) {
  * Re-send the device token to the server under the current session.
  * Call after every successful auth to ensure the token is linked to the
  * correct player account (e.g. after Game Center login creates a new account).
+ * Retries briefly if the APNS token hasn't arrived yet.
  */
 export async function refreshPushToken() {
   // Use in-memory cached token first, fall back to Preferences
@@ -322,7 +323,16 @@ export async function refreshPushToken() {
       token = stored?.value;
     }
   }
-  if (token) _sendPushToken(token);
+  if (token) {
+    _sendPushToken(token);
+    return;
+  }
+  // APNS token may not have arrived yet — retry a few times
+  for (let i = 0; i < 5; i++) {
+    await new Promise(r => setTimeout(r, 1000));
+    if (_apnsToken) { _sendPushToken(_apnsToken); return; }
+  }
+  console.warn('[Push] refreshPushToken: no APNS token available after retries');
 }
 
 /**
