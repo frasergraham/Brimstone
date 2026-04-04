@@ -300,3 +300,87 @@ describe('Entity registry', () => {
     assert.equal(leader.owner, 'witch');
   });
 });
+
+// ── Kill / Summon Tracking ─────────────────────────────────────────────────
+
+describe('Kill and summon tracking', () => {
+  test('Hero trackKill increments heroKills', () => {
+    const state = { heroKills: 0, witchKills: 0 };
+    getFaction('hero').trackKill(state);
+    assert.equal(state.heroKills, 1);
+    assert.equal(state.witchKills, 0);
+  });
+
+  test('Witch trackKill increments witchKills', () => {
+    const state = { heroKills: 0, witchKills: 0 };
+    getFaction('witch').trackKill(state);
+    assert.equal(state.heroKills, 0);
+    assert.equal(state.witchKills, 1);
+  });
+
+  test('Hero trackSummon is a no-op', () => {
+    const state = { witchSummonCount: 0 };
+    getFaction('hero').trackSummon(state);
+    assert.equal(state.witchSummonCount, 0);
+  });
+
+  test('Witch trackSummon increments witchSummonCount', () => {
+    const state = { witchSummonCount: 0 };
+    getFaction('witch').trackSummon(state);
+    assert.equal(state.witchSummonCount, 1);
+  });
+});
+
+// ── Opponent / Actions / Node Keys ─────────────────────────────────────────
+
+describe('Faction helpers', () => {
+  test('getOpponentId', () => {
+    assert.equal(getFaction('hero').getOpponentId(), 'witch');
+    assert.equal(getFaction('witch').getOpponentId(), 'hero');
+  });
+
+  test('getActionsLeft reads correct field', () => {
+    const state = { heroActionsLeft: 5, witchActionsLeft: 3 };
+    assert.equal(getFaction('hero').getActionsLeft(state), 5);
+    assert.equal(getFaction('witch').getActionsLeft(state), 3);
+  });
+
+  test('getNodeSeenKey', () => {
+    assert.equal(getFaction('hero').getNodeSeenKey(), 'seenByHero');
+    assert.equal(getFaction('witch').getNodeSeenKey(), 'seenByWitch');
+  });
+});
+
+// ── hasHorse ───────────────────────────────────────────────────────────────
+
+describe('hasHorse', () => {
+  test('Hero with horse returns true', () => {
+    assert.equal(getFaction('hero').hasHorse({ items: { horse: 1 } }), true);
+  });
+
+  test('Hero without horse returns false', () => {
+    assert.equal(getFaction('hero').hasHorse({ items: {} }), false);
+    assert.equal(getFaction('hero').hasHorse({ items: { horse: 0 } }), false);
+    assert.equal(getFaction('hero').hasHorse({}), false);
+  });
+
+  test('Witch always returns false even with horse item', () => {
+    assert.equal(getFaction('witch').hasHorse({ items: { horse: 1 } }), false);
+  });
+});
+
+// ── canExplore ─────────────────────────────────────────────────────────────
+
+describe('canExplore', () => {
+  test('Hero faction: any entity can explore', () => {
+    assert.equal(getFaction('hero').canExplore({ type: EntityType.HERO }), true);
+    assert.equal(getFaction('hero').canExplore({ type: EntityType.SURVIVOR }), true);
+  });
+
+  test('Witch faction: only witch leader can explore', () => {
+    assert.equal(getFaction('witch').canExplore({ type: EntityType.WITCH }), true);
+    assert.equal(getFaction('witch').canExplore({ type: EntityType.MINION }), false);
+    assert.equal(getFaction('witch').canExplore({ type: EntityType.ZOMBIE }), false);
+    assert.equal(getFaction('witch').canExplore({ type: EntityType.IRON_GOLEM }), false);
+  });
+});
