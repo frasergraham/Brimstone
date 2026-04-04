@@ -34,13 +34,19 @@ function hasEnemy(state, actor, col, row) {
   return state.entities.some(e => e.alive && e.owner !== actor.owner && e.col === col && e.row === row);
 }
 
+function hasVisibleEnemy(state, actor, col, row, visibleEnemyHexes) {
+  if (!hasEnemy(state, actor, col, row)) return false;
+  if (!visibleEnemyHexes) return true;
+  return visibleEnemyHexes.has(hexKey(col, row));
+}
+
 // Cost-based movement: road/bridge/building tiles cost 1, all other passable
 // tiles cost 2.  Budget = range * 2, so:
 //   range 1 (no horse) → 1 off-road tile  OR  2 road tiles per action
 //   range 2 (horse)    → 2 off-road tiles OR  4 road tiles per action
 // posOverride lets the planner query reachability from a projected position
 // rather than the entity's current position.
-export function getReachableHexes(state, actor, range, posOverride = null) {
+export function getReachableHexes(state, actor, range, posOverride = null, visibleEnemyHexes = null) {
   const budget   = range * 2;
   const startCol = posOverride?.col ?? actor.col;
   const startRow = posOverride?.row ?? actor.row;
@@ -57,10 +63,7 @@ export function getReachableHexes(state, actor, range, posOverride = null) {
       const nk = hexKey(n.col, n.row);
       const nt = tile(state, n.col, n.row);
       if (!nt || nt.type === TileType.RIVER) continue;
-      if (hasEnemy(state, actor, n.col, n.row)) continue;
-      if (nt.fortifyLevel > 0 && state.entities.some(
-        e => e.alive && e.owner !== actor.owner && e.col === n.col && e.row === n.row
-      )) continue;
+      if (hasVisibleEnemy(state, actor, n.col, n.row, visibleEnemyHexes)) continue;
       const isRoadLike = nt.type === TileType.ROAD || nt.type === TileType.BRIDGE ||
                          nt.type === TileType.BUILDING;
       const nc = c + (isRoadLike ? 1 : 2);
@@ -263,7 +266,10 @@ export function getValidActions(state, actor) {
 
   // Move — range 2 if actor has a horse in personal items, otherwise 1
   const hasHorse = faction.hasHorse(actor);
-  const moveTargets = getReachableHexes(state, actor, hasHorse ? 2 : 1);
+  const visibleHexes = state.fogOfWar !== 'none'
+    ? getVisiblePositions(state, actor.owner)
+    : null;
+  const moveTargets = getReachableHexes(state, actor, hasHorse ? 2 : 1, null, visibleHexes);
   if (moveTargets.length) actions.push({ type: ActionType.MOVE, targets: moveTargets });
 
   // Explore — available on any unexplored tile; faction determines eligibility
