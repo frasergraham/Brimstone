@@ -1402,6 +1402,12 @@ export class UIController {
           regularHtml += btn(lbl, 'guard', dis, `data-action="guard"`);
         }
           break;
+        case ActionType.SOUND_HORN:
+        {
+          const hornDis = !action.affordable ? 'disabled' : dis;
+          regularHtml += btn('📯 Sound Horn', 'explore', hornDis, `data-action="sound_horn"`);
+        }
+          break;
         case ActionType.SUMMON:
           // Each SUMMON entry has a specific summonType — render all three as separate buttons.
           // De-duplicate: only render the first time we hit a SUMMON action (we'll loop all three).
@@ -1869,6 +1875,14 @@ export class UIController {
         this._updateSidebar(); this.onRedraw(); break;
       }
 
+      case 'sound_horn': {
+        _hideActionPopup();
+        this._addToPlan({ type: PlanActionType.SOUND_HORN, entityId: entity.id });
+        if (entity.alive) this._selectEntity(entity);
+        else this._clearSelection();
+        this._updateSidebar(); this.onRedraw(); break;
+      }
+
       case 'summon': {
         _hideActionPopup();
         const summonType = button.dataset.summonType ?? null;
@@ -2184,8 +2198,11 @@ export class UIController {
     });
   }
 
-  /** Show a unit card popup for a newly-encountered survivor or zombie. */
-  _showEncounterDialog(encounterUnit, onDismiss) {
+  /**
+   * Show a unit card popup for a newly-encountered survivor or zombie.
+   * @param {'explore'|'horn'|'power_node'} [discoveryMethod='explore'] How the survivor was found.
+   */
+  _showEncounterDialog(encounterUnit, onDismiss, discoveryMethod = 'explore') {
     const dialog = this._el('encounter-dialog');
     const card   = this._el('encounter-card');
 
@@ -2213,9 +2230,19 @@ export class UIController {
     const hpPct   = encounterUnit.maxHp > 0 ? (encounterUnit.hp / encounterUnit.maxHp) * 100 : 100;
     const hpColor = hpPct > 60 ? '#4caf7d' : hpPct > 30 ? '#f5c842' : '#c0392b';
 
-    const message = encounterUnit.type === 'survivor'
-      ? `${encounterUnit.name} steps from the shadows and joins the party!`
-      : `A cowering survivor is found… raised as a zombie by the witch!`;
+    let message;
+    if (encounterUnit.type === 'survivor') {
+      const prefix = discoveryMethod === 'horn'
+        ? 'Drawn by the horn\'s call, '
+        : discoveryMethod === 'power_node'
+          ? 'Drawn to the power node, '
+          : '';
+      message = prefix
+        ? `${prefix}${encounterUnit.name} steps from the shadows and joins the party!`
+        : `${encounterUnit.name} steps from the shadows and joins the party!`;
+    } else {
+      message = `A cowering survivor is found… raised as a zombie by the witch!`;
+    }
 
     card.innerHTML = `
       <div style="display:flex;align-items:center;gap:0.85rem;margin-bottom:0.75rem;">

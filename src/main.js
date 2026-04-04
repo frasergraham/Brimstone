@@ -517,7 +517,7 @@ async function _runLocalResolution(skipSummary = false) {
   // Show encounter dialogs for survivors spawned at power nodes during endRound
   if (ui && !_autoplay && state.nodeSpawnedSurvivors?.length) {
     for (const s of state.nodeSpawnedSurvivors) {
-      await new Promise(resolve => ui._showEncounterDialog(s, resolve));
+      await new Promise(resolve => ui._showEncounterDialog(s, resolve, 'power_node'));
     }
   }
 
@@ -1205,7 +1205,39 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (actor) ui._showLootFlashes(actor, result.lootItems ?? []);
       redrawFn();
       if (!_suppressDialogs && result.encounterSurvivor) {
-        await new Promise(resolve => ui._showEncounterDialog(result.encounterSurvivor, resolve));
+        await new Promise(resolve => ui._showEncounterDialog(result.encounterSurvivor, resolve, 'explore'));
+      }
+    }
+
+    // ── Phase 3b: Sound Horn — horn flash + survivor encounter ────────────
+    for (const ev of events) {
+      const { action, result } = ev;
+      if (action.type !== PlanActionType.SOUND_HORN) continue;
+      if (!result?.success) continue;
+      const actor = step.entitySnapshot?.find(e => e.id === action.entityId);
+      if (!actor) continue;
+
+      // Gold expanding ring showing the 4-hex horn range
+      renderer.addNodeRevealAnim(
+        [{ col: actor.col, row: actor.row }], '#d4a72c',
+        { radiusMultiplier: 7, duration: 2000 },
+      );
+      redrawFn();
+
+      // Wait for the horn animation to finish before showing dialogs
+      await renderer.waitForAnimations();
+
+      if (humanFaction && ev.faction !== humanFaction) continue;
+      if (myPlayerId && actor?.ownerId !== myPlayerId) continue;
+
+      if (!_suppressDialogs) {
+        if (result.encounterSurvivor) {
+          // Survivor found — show encounter card only (no separate result dialog)
+          await new Promise(resolve => ui._showEncounterDialog(result.encounterSurvivor, resolve, 'horn'));
+        } else if (result.log?.length) {
+          // No survivor — show the "nothing found" result dialog
+          await new Promise(resolve => ui._showResultDialog(result.log, resolve));
+        }
       }
     }
 

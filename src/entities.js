@@ -233,7 +233,7 @@ const BASE_STATS = {
   [EntityType.ZOMBIE]:     { maxHp: 2, attack: 2, defense: 0 },
   [EntityType.MINION]:     { maxHp: 2, attack: 1, defense: 0 },
   [EntityType.WOOD_GOLEM]: { maxHp: 3, attack: 2, defense: 3 },
-  [EntityType.IRON_GOLEM]: { maxHp: 5, attack: 3, defense: 4 },
+  [EntityType.IRON_GOLEM]: { maxHp: 5, attack: 3, defense: 2 },
 };
 
 // Visual colours used by the renderer

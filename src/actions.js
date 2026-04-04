@@ -20,6 +20,7 @@ export const ActionType = Object.freeze({
   EQUIP_WEAPON: 'equip_weapon',
   USE_ABILITY:  'use_ability',
   GUARD:        'guard',
+  SOUND_HORN:   'sound_horn',
   END_TURN:     'end_turn',
 });
 
@@ -233,8 +234,19 @@ export function getVisibleEnemyHexes(state) {
 
 // Returns a Set of hexKeys where hero-side entities are visible to witch units.
 // Witch sight is always 2 hexes regardless of day/night phase.
+// If the hero sounded the horn this round, all hero positions are revealed.
 export function getVisibleHeroHexes(state) {
   const revealed = new Set();
+
+  // Sound Horn: hero revealed to all opponents for the rest of this round
+  if (state.heroRevealedByHorn) {
+    for (const he of state.entities) {
+      if (he.alive && he.owner === 'hero') {
+        revealed.add(hexKey(he.col, he.row));
+      }
+    }
+  }
+
   for (const we of state.entities) {
     if (!we.alive || we.owner !== 'witch') continue;
     const range = 2; // witch has fixed 2-hex sight in all phases
@@ -261,8 +273,9 @@ export function getValidActions(state, actor) {
   const moveTargets = getReachableHexes(state, actor, hasHorse ? 2 : 1);
   if (moveTargets.length) actions.push({ type: ActionType.MOVE, targets: moveTargets });
 
-  // Explore — available on any unexplored tile
-  if (t && !t.explored) {
+  // Explore — available on any unexplored tile (witch minions cannot explore)
+  const isWitchMinion = actor.owner === 'witch' && actor.type !== EntityType.WITCH;
+  if (t && !t.explored && !isWitchMinion) {
     actions.push({ type: ActionType.EXPLORE, targets: [{ col: actor.col, row: actor.row }] });
   }
 
@@ -297,8 +310,8 @@ export function getValidActions(state, actor) {
     actions.push({ type: ActionType.FORTIFY, targets: [{ col: actor.col, row: actor.row }], affordable });
   }
 
-  // Summon — faction-gated; entries per unit type with affordable flag.
-  if (faction.canSummon()) {
+  // Summon — only the witch leader herself can summon.
+  if (faction.canSummon() && actor.type === EntityType.WITCH) {
     const summonOpts = faction.getSummonOptions(faction.getInventory(state));
     for (const opt of summonOpts) {
       actions.push({ type: ActionType.SUMMON, summonType: opt.summonType, affordable: opt.affordable });
@@ -307,6 +320,12 @@ export function getValidActions(state, actor) {
 
   // Guard — any unit can take a guard stance (stacks: each use adds 1 charge)
   actions.push({ type: ActionType.GUARD, currentCharges: actor.guarding || 0 });
+
+  // Sound Horn — hero leader only; costs 2 food, ranged survivor discovery
+  if (actor.type === EntityType.HERO) {
+    const food = (faction.getInventory(state)['food'] || 0);
+    actions.push({ type: ActionType.SOUND_HORN, affordable: food >= 1 });
+  }
 
   // Herbs — available to any unit that carries them
   {
@@ -949,6 +968,67 @@ export function executeGuard(state, actor) {
     log: [`${actor.displayName} takes a guard stance.${label}`],
     cost: 1,
   };
+}
+
+// ── Sound Horn ──────────────────────────────────────────────────────────────
+// Hero-only ranged exploration: 30% chance to discover a hidden survivor
+// within 4 hexes. Costs 2 food. Reveals hero position for the rest of the round.
+
+export function executeSoundHorn(state, actor) {
+  const log = [];
+  if (actor.type !== EntityType.HERO) {
+    return { success: false, log: ['Only the Hero can sound the horn.'] };
+  }
+
+  const inv = getFaction('hero').getInventory(state);
+  const food = inv['food'] || 0;
+  if (food < 1) {
+    return { success: false, log: ['Not enough food (need 1).'] };
+  }
+
+  // Deduct 1 food
+  inv['food'] -= 1;
+
+  // Reveal hero to all opponents for the rest of this round
+  state.heroRevealedByHorn = true;
+
+  log.push(`📯 ${actor.displayName} sounds the horn! The call echoes across the land.`);
+
+  // Witch-side log so the opponent sees it in summary
+  state.addLog('📯 A horn sounds in the distance — the Hero reveals their position!', 'witch');
+
+  // Find hidden survivors within 4 hexes
+  const candidates = [];
+  for (const [key, t] of state.tiles) {
+    if (!t.hiddenSurvivor) continue;
+    const [c, r] = key.split(',').map(Number);
+    if (hexDistance(c, r, actor.col, actor.row) <= 4) {
+      candidates.push({ col: c, row: r });
+    }
+  }
+
+  let encounterLog = [];
+  let encounterSurvivor = null;
+
+  if (candidates.length > 0 && Math.random() < 0.40) {
+    // Pick one at random
+    const target = candidates[Math.floor(Math.random() * candidates.length)];
+    const enc = _triggerSurvivorEncounter(state, actor, target.col, target.row);
+    if (enc) {
+      encounterLog = enc.encounterLog;
+      encounterSurvivor = enc.encounterSurvivor;
+    } else {
+      log.push('The horn call fades… no one answers.');
+    }
+  } else if (candidates.length === 0) {
+    log.push('No hidden souls stir within earshot.');
+  } else {
+    log.push('The horn call fades… no one answers.');
+  }
+
+  if (encounterLog.length) log.push(...encounterLog);
+
+  return { success: true, log, cost: 1, encounterLog, encounterSurvivor };
 }
 
 // Weakened reactive attack from a guarding unit.

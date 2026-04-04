@@ -7,7 +7,7 @@
 import {
   executeMove, executeExplore, executeBattle,
   executeFortify, executeSummon, executeUseItem, executeUseAbility,
-  executeGuard, executeGuardStrike,
+  executeGuard, executeGuardStrike, executeSoundHorn,
 } from '../src/actions.js';
 import { EntityType } from '../src/entities.js';
 import { hexDistance, getNeighbors, hexKey } from '../src/hex.js';
@@ -181,6 +181,12 @@ function runAction(state, action, faction, playerId = null) {
 
     case PlanActionType.GUARD: {
       const r = executeGuard(state, entity);
+      if (!r.success) return { kind: 'fail', reason: r.log[0] };
+      return { kind: 'ok', result: r };
+    }
+
+    case PlanActionType.SOUND_HORN: {
+      const r = executeSoundHorn(state, entity);
       if (!r.success) return { kind: 'fail', reason: r.log[0] };
       return { kind: 'ok', result: r };
     }

@@ -84,6 +84,7 @@ export function serializeState(state) {
     heroKills:            state.heroKills        ?? 0,
     witchKills:           state.witchKills       ?? 0,
     witchSummonCount:     state.witchSummonCount ?? 0,
+    heroRevealedByHorn:   state.heroRevealedByHorn ?? false,
     nodeScore:            { ...state.nodeScore },
     disableScoring:       !!state.disableScoring,
     maxDiscoverableSurvivors: state.maxDiscoverableSurvivors ?? null,
@@ -202,6 +203,7 @@ export function deserializeState(snap) {
   state.heroKills            = snap.heroKills        ?? 0;
   state.witchKills           = snap.witchKills       ?? 0;
   state.witchSummonCount     = snap.witchSummonCount ?? 0;
+  state.heroRevealedByHorn   = snap.heroRevealedByHorn ?? false;
 
   // ── Planning fields — reset to clean pre-planning state ──────────────────
   state.planningPhase    = false;

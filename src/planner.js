@@ -23,6 +23,7 @@ export const PlanActionType = Object.freeze({
   EQUIP_WEAPON: 'equip-weapon',
   USE_ABILITY:  'use-ability',
   GUARD:        'guard',
+  SOUND_HORN:   'sound-horn',
 });
 
 // Maximum number of steps a player may place in their plan.
@@ -203,6 +204,9 @@ export function computeProjectedInventory(state, plan) {
         }
         break;
       }
+      case PlanActionType.SOUND_HORN:
+        if ((shared[ResourceType.FOOD] || 0) >= 1) shared[ResourceType.FOOD] -= 1;
+        break;
     }
   }
 
@@ -292,6 +296,7 @@ export function validatePlanAction(state, action, projectedPositions = null) {
     case PlanActionType.FORTIFY:
     case PlanActionType.GUARD:
     case PlanActionType.USE_ABILITY:
+    case PlanActionType.SOUND_HORN:
       return { valid: true };
 
     case PlanActionType.SUMMON:

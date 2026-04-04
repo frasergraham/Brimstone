@@ -69,8 +69,8 @@ describe('Action budget', () => {
     assert.equal(getFaction('hero').actionCap, 8);
   });
 
-  test('Witch action cap is 10', () => {
-    assert.equal(getFaction('witch').actionCap, 10);
+  test('Witch action cap is 8', () => {
+    assert.equal(getFaction('witch').actionCap, 8);
   });
 
   test('Hero unit bonus cap is 5', () => {
@@ -117,9 +117,9 @@ describe('Action budget', () => {
     assert.equal(getFaction('witch').computeBudget(Phase.NIGHT, 2, 0), 6);
   });
 
-  test('Witch budget: capped at 10', () => {
-    // 3 + 1 + 3 (cap) + 3 = 10
-    assert.equal(getFaction('witch').computeBudget(Phase.NIGHT, 5, 3), 10);
+  test('Witch budget: capped at 8', () => {
+    // 3 + 1 + 3 (cap) + 3 = 10 → capped to 8
+    assert.equal(getFaction('witch').computeBudget(Phase.NIGHT, 5, 3), 8);
   });
 
   test('Witch budget: no time bonus in DAY', () => {

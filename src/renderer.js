@@ -9,6 +9,7 @@ import {
 } from './tiles.js';
 import { ENTITY_COLOR, EntityType, SurvivorAbility } from './entities.js';
 import { getVisibleEnemyHexes, getVisibleHeroHexes, sightRange, buildFogMovementHexes } from './actions.js';
+import { getFaction } from './factions.js';
 import { nodeController, Phase } from './game.js';
 
 // PAD_X/PAD_Y are now computed dynamically in _resize() as this._padX / this._padY.
@@ -305,12 +306,13 @@ export class Renderer {
   }
 
   /** Pulsing glow animation on a node cluster — used when a power node is first revealed. */
-  addNodeRevealAnim(hexes, color) {
+  addNodeRevealAnim(hexes, color, { radiusMultiplier = 2, duration = 2000 } = {}) {
     this._nodeRevealAnims.push({
       hexes,  // [{col, row}]
       color,
       startTime: Date.now(),
-      duration: 2000,
+      duration,
+      radiusMultiplier,
     });
     this._startAnimLoop();
   }
@@ -1252,7 +1254,7 @@ export class Renderer {
     const visibleSet = new Set();
     for (const e of state.entities) {
       if (!e.alive || e.owner !== observerOwner) continue;
-      const range = sightRange(state.phase, e.ability === SurvivorAbility.SCOUT);
+      const range = getFaction(e.owner).getSightRange(state.phase, e.ability === SurvivorAbility.SCOUT);
       // Only iterate hexes within sight range of this entity (not entire map)
       const rMin = Math.max(0, e.row - range);
       const rMax = Math.min(MAP_ROWS - 1, e.row + range);
@@ -1635,8 +1637,9 @@ export class Renderer {
       const elapsed = now - anim.startTime;
       const t = elapsed / anim.duration; // 0→1
 
-      // Expanding ring radius: starts at hex size, expands to 2× hex size
-      const ringRadius = hs * (1.0 + t * 1.0);
+      // Expanding ring radius: starts at hex size, expands to radiusMultiplier × hex size
+      const maxR = anim.radiusMultiplier ?? 2;
+      const ringRadius = hs * (1.0 + t * (maxR - 1.0));
       // Opacity: bright at start, fades out
       const alpha = Math.max(0, 1.0 - t);
       // Pulsing inner glow: rapid sine pulse that slows over time
