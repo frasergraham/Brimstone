@@ -15,7 +15,7 @@ const FALLBACK_SERVER = 'https://calebshollow.com';
 
 /** Safe localStorage.getItem — returns null in Node / when localStorage is broken. */
 function _lsGet(key) {
-  try { return _lsGet(key); } catch { return null; }
+  try { return localStorage.getItem(key); } catch { return null; }
 }
 
 /** True when running inside a Capacitor native shell. */
