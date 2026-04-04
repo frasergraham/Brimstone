@@ -706,7 +706,23 @@ export class Renderer {
     }
 
     // Background covers the full canvas regardless of zoom/pan
-    ctx.fillStyle = (this.useTileImages && this._tilemapImg) ? BG_COLOR : '#0d1117';
+    // Tint backdrop by time-of-day: warm grey (day), mid grey (dawn/dusk), dark blue-grey (night)
+    {
+      const phase = state.phase;
+      let bg;
+      if (this.useTileImages && this._tilemapImg) {
+        bg = BG_COLOR;
+      } else if (phase === Phase.DAY) {
+        bg = '#2a2820'; // light grey with subtle warm/yellow hint
+      } else if (phase === Phase.DAWN || phase === Phase.DUSK) {
+        bg = '#1e1e22'; // mid grey
+      } else if (phase === Phase.NIGHT) {
+        bg = '#0e1320'; // dark grey with blue tint
+      } else {
+        bg = '#0d1117';
+      }
+      ctx.fillStyle = bg;
+    }
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
     // Apply zoom and pan transform for all map content
