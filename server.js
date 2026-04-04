@@ -42,6 +42,7 @@ import {
   // Unified system
   checkDeadlines, checkApproachingDeadlines, migrateAsyncGames,
   broadcastPresenceForPlayer,
+  setSendToPlayer,
 } from './server/lobby.js';
 import {
   getAllPlayers, getAllSaves, getSaveWithState,
@@ -793,6 +794,34 @@ const wss    = new WebSocketServer({ server });
 // Per-connection state
 const clients = new Map(); // ws → { player, roomId, spectatingRooms }
 
+// Player → WebSocket(s) lookup (a player may have multiple tabs open)
+const playerWsMap = new Map(); // playerId → Set<ws>
+
+function _registerPlayerWs(playerId, ws) {
+  let sockets = playerWsMap.get(playerId);
+  if (!sockets) { sockets = new Set(); playerWsMap.set(playerId, sockets); }
+  sockets.add(ws);
+}
+
+function _unregisterPlayerWs(playerId, ws) {
+  const sockets = playerWsMap.get(playerId);
+  if (!sockets) return;
+  sockets.delete(ws);
+  if (sockets.size === 0) playerWsMap.delete(playerId);
+}
+
+function sendToPlayer(playerId, msg) {
+  const sockets = playerWsMap.get(playerId);
+  if (!sockets) return;
+  const json = JSON.stringify(msg);
+  for (const ws of sockets) {
+    if (ws.readyState === 1) ws.send(json);
+  }
+}
+
+// Inject into lobby.js so it can notify players without a circular import
+setSendToPlayer(sendToPlayer);
+
 function send(ws, obj) {
   if (ws.readyState === 1) ws.send(JSON.stringify(obj));
 }
@@ -820,6 +849,7 @@ wss.on('connection', ws => {
   });
 
   ws.on('close', () => {
+    if (cs.player) _unregisterPlayerWs(cs.player.id, ws);
     if (cs.player && cs.roomId) {
       handleDisconnect(cs.player.id, cs.roomId);
     }
@@ -880,6 +910,7 @@ function route(ws, cs, msg) {
         return;
       }
       cs.player = result.player;
+      _registerPlayerWs(result.player.id, ws);
 
       // Check if the player is reconnecting to a room
       if (msg.roomId) {
@@ -903,6 +934,7 @@ function route(ws, cs, msg) {
         return;
       }
       cs.player = result.player;
+      _registerPlayerWs(result.player.id, ws);
 
       if (msg.roomId) {
         const rejoined = handleReconnect(result.player.id, msg.roomId, ws);

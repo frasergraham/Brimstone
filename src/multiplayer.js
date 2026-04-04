@@ -459,6 +459,10 @@ export class MultiplayerClient {
         break;
       }
 
+      case 'gamesUpdate':
+        this._opts.onGamesUpdate?.();
+        break;
+
       case 'error':
       case 'actionError':
         this._opts.onError?.(msg.message);
