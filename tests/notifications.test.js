@@ -131,6 +131,28 @@ describe('notifications', () => {
       const n = notifyRoundReady(3);
       assert.equal(n, null, 'should not notify without permission');
     });
+
+    test('shows idle message when wasIdle and faction are set', () => {
+      const n = notifyRoundReady(8, { wasIdle: true, faction: 'hero' });
+      assert.ok(n, 'should return a notification');
+      assert.equal(n.title, 'Your Turn');
+      assert.ok(n.body.includes('hero was idle'), 'body should mention idle faction');
+      assert.ok(n.body.includes('round 7'), 'body should mention the idle round (previous)');
+      assert.ok(n.body.includes('Round 8'), 'body should mention the new round');
+    });
+
+    test('shows normal message when wasIdle is false', () => {
+      const n = notifyRoundReady(5, { wasIdle: false, faction: 'witch' });
+      assert.ok(n);
+      assert.ok(!n.body.includes('idle'), 'body should not mention idle');
+      assert.ok(n.body.includes('plan your moves'), 'body should show normal message');
+    });
+
+    test('shows normal message when no options passed', () => {
+      const n = notifyRoundReady(3);
+      assert.ok(n);
+      assert.ok(!n.body.includes('idle'), 'body should not mention idle');
+    });
   });
 
   describe('notifyWaitingOnYou()', () => {

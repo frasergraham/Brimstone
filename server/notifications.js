@@ -153,6 +153,9 @@ export async function notifyWaitingOnYou(playerId, gameInfo, opts) {
 
 /**
  * Notify a player that a new round is ready (everyone submitted, resolution done).
+ * gameInfo may include `wasIdle` (boolean) and `idleFaction` (string) — when the
+ * player's previous turn was auto-submitted empty due to timeout, the notification
+ * calls that out explicitly.
  */
 export async function notifyRoundReady(playerId, gameInfo, opts) {
   _logNotifyAttempt('notifyRoundReady', playerId, gameInfo.roomId, opts);
@@ -160,11 +163,17 @@ export async function notifyRoundReady(playerId, gameInfo, opts) {
   if (!_shouldSend(gameInfo.roomId, playerId, 'round_ready')) { console.log(`[Notify] dedup suppressed round_ready`); return; }
   _record(gameInfo.roomId, playerId, 'round_ready');
 
+  const { round, wasIdle, idleFaction } = gameInfo;
+  const idleRound = round - 1;
+  const body = wasIdle && idleFaction
+    ? `Your ${idleFaction} was idle in round ${idleRound}. Round ${round} is ready — don't miss this one!`
+    : 'Everyone submitted. A new round has begun.';
+
   if (hasDeviceTokens(playerId)) {
     console.log(`[Notify] sending push for round_ready to player=${playerId}`);
     await sendPush(playerId, {
-      title: `Round ${gameInfo.round} is ready`,
-      body: 'Everyone submitted. A new round has begun.',
+      title: `Round ${round} is ready`,
+      body,
       roomId: gameInfo.roomId,
     });
   } else {
@@ -172,8 +181,8 @@ export async function notifyRoundReady(playerId, gameInfo, opts) {
     if (!email) { console.log(`[Notify] no device tokens and no email for player=${playerId} name=${_playerTag(playerId)}, skipping`); return; }
     const url = `${_baseUrl()}/#game=${gameInfo.roomId}`;
     await _sendEmail(email,
-      `Caleb's Hollow — Round ${gameInfo.round} is ready`,
-      `Everyone submitted. A new round has begun.\n\nPlay your turn: ${url}`
+      `Caleb's Hollow — Round ${round} is ready`,
+      `${body}\n\nPlay your turn: ${url}`
     );
   }
 }
