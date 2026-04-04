@@ -1,6 +1,6 @@
 // Simultaneous-turn planning: action types, ghost-state projection, and entity snap.
 import { hexKey, getNeighbors } from './hex.js';
-import { getReachableHexes } from './actions.js';
+import { getReachableHexes, getVisiblePositions } from './actions.js';
 import { TileType, ResourceType } from './tiles.js';
 import { EntityType } from './entities.js';
 
@@ -273,7 +273,10 @@ export function validatePlanAction(state, action, projectedPositions = null) {
         return { valid: false, reason: 'Cannot move there.' };
       // Range check against projected position — road tiles cost half movement.
       const hasHorse = entity.owner === 'hero' && (entity.items?.['horse'] || 0) > 0;
-      const reachable = getReachableHexes(state, entity, hasHorse ? 2 : 1, pos);
+      const visibleHexes = state.fogOfWar !== 'none'
+        ? getVisiblePositions(state, entity.owner)
+        : null;
+      const reachable = getReachableHexes(state, entity, hasHorse ? 2 : 1, pos, visibleHexes);
       if (!reachable.some(h => h.col === action.toCol && h.row === action.toRow))
         return { valid: false, reason: 'Destination out of move range.' };
       return { valid: true };
