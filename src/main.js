@@ -1450,10 +1450,30 @@ _updateSessionBar();
   if (sessionBar) stepMode.appendChild(sessionBar);
 }
 
-// Eagerly attempt Game Center auth on iOS so credentials are cached
-// before the user taps any multiplayer button.
+// On iOS, attempt Game Center auth on launch and use it as the primary identity.
+// If GC auth succeeds, connect to the server and authenticate as the GC account,
+// replacing any saved session so the push token is linked to the right player.
 if (isNativeMobile) {
-  tryGameCenterAuth().then(gc => { if (gc) _gcCredentials = gc; });
+  tryGameCenterAuth().then(gc => {
+    if (!gc) return;
+    _gcCredentials = gc;
+
+    // Connect and auth with the server immediately so the session is correct
+    const wsUrl = _serverWsUrl();
+    if (!mp) {
+      mp = _createMpClient();
+      mp.connect(wsUrl);
+    } else if (!mp.connected) {
+      mp.connect(wsUrl);
+    }
+    mp._opts._onAuthOk = () => {
+      _updateSessionBar();
+    };
+    mp.authGameCenter({
+      gameCenterId: gc.playerId,
+      displayName: gc.displayName,
+    });
+  });
 }
 
 // Show admin link only for admin users
@@ -4326,6 +4346,9 @@ async function _initAccountPage() {
     : session.username;
   document.getElementById('acct-name-edit').style.display = 'none';
   document.getElementById('acct-name-error').style.display = 'none';
+  // Hide edit button for Game Center accounts — name is managed by Apple
+  const editNameBtn = document.getElementById('btn-acct-edit-name');
+  if (editNameBtn) editNameBtn.style.display = _gcCredentials ? 'none' : '';
 
   // Email — fetch linked identities
   const emailEl   = document.getElementById('acct-email');
