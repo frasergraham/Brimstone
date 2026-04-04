@@ -75,13 +75,14 @@ export function createBackend(dbPath) {
     }
   }
 
-  // Seed default admin user (idempotent via INSERT OR IGNORE)
-  db.exec(`
-    INSERT OR IGNORE INTO players (id, username, discriminator, token, is_admin)
-    VALUES ('seed-admin-twisted-weasel', 'TwistedWeasel', 1000, 'seed-token-twisted-weasel', 1);
-    INSERT OR IGNORE INTO player_identities (player_id, provider, provider_id)
-    VALUES ('seed-admin-twisted-weasel', 'email', 'frasergraham@me.com');
-  `);
+  // Clean up legacy seed admin if present (admin is now granted via email identity)
+  try {
+    db.exec(`
+      DELETE FROM player_identities WHERE player_id = 'seed-admin-twisted-weasel';
+      DELETE FROM device_tokens WHERE player_id = 'seed-admin-twisted-weasel';
+      DELETE FROM players WHERE id = 'seed-admin-twisted-weasel';
+    `);
+  } catch { /* tables may not exist yet on fresh DB — that's fine */ }
 
   return {
     prepare(sql)       { return db.prepare(sql); },
