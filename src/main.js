@@ -718,6 +718,35 @@ function _isFogVisible(col, row, humanFaction, entities, phase) {
   return false;
 }
 
+/**
+ * Check node discovery against current entity positions during resolution
+ * animation. If a node becomes visible to the human faction for the first
+ * time, set its seen flag and trigger a reveal glow animation.
+ */
+function _updateNodeDiscoveryDuringStep(gs, humanFaction, rend) {
+  if (!gs.witchObjectives) return;
+  for (const obj of gs.witchObjectives) {
+    // Check both factions — update discovery flags as entities move
+    for (const faction of ['hero', 'witch']) {
+      const seenKey = faction === 'hero' ? 'seenByHero' : 'seenByWitch';
+      if (obj[seenKey]) continue; // already discovered
+      const nowSeen = gs.entities.some(e => {
+        if (!e.alive || e.owner !== faction) return false;
+        const range = sightRange(gs.phase, e.ability === 'scout');
+        return obj.hexes.some(h => hexDistance(e.col, e.row, h.col, h.row) <= range);
+      });
+      if (!nowSeen) continue;
+      obj[seenKey] = true;
+      // Trigger reveal animation if this is the human's faction
+      const isHuman = humanFaction === faction
+        || (!humanFaction && gs.fogOfWar === 'none'); // no fog — show for everyone
+      if (isHuman && rend) {
+        rend.addNodeRevealAnim(obj.hexes, obj.color ?? '#8800cc');
+      }
+    }
+  }
+}
+
 async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFaction = null, myPlayerId = null) {
   console.log('[animate] _animateResolutionSteps called:', {
     stepsCount: steps.length,
@@ -933,6 +962,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       state.entities = displayEntities;
       redrawFn();
     }
+
+    // Update node discovery after moves so nodes become visible mid-animation
+    _updateNodeDiscoveryDuringStep(state, humanFaction, renderer);
 
     const _suppressDialogs = getMode() === AppMode.PLAYBACK || ui?.speedMode === 'fast' || ui?.speedMode === 'vfast';
     if (!_suppressDialogs) {

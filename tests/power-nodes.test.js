@@ -347,6 +347,77 @@ describe('updateNodeDiscovery', () => {
   });
 });
 
+// ── Per-step node discovery (during resolution animation) ────────────────────
+
+describe('Per-step node discovery', () => {
+  test('updateNodeDiscovery discovers a node when entity moves into range', () => {
+    const state = new GameState(true, true);
+    const obj = state.witchObjectives[0];
+    obj.seenByHero = false;
+    obj.seenByWitch = false;
+
+    // Place hero far away — no discovery
+    state.hero.col = 0;
+    state.hero.row = 0;
+    state.updateNodeDiscovery();
+    const range = sightRange(state.phase, false);
+    const farEnough = obj.hexes.every(h => hexDistance(0, 0, h.col, h.row) > range);
+    if (farEnough) {
+      assert.equal(obj.seenByHero, false, 'Should not see node when far away');
+    }
+
+    // Now simulate a move by placing hero adjacent to the node
+    state.hero.col = obj.hexes[0].col;
+    state.hero.row = obj.hexes[0].row;
+    state.updateNodeDiscovery();
+    assert.equal(obj.seenByHero, true, 'Should discover node after moving onto it');
+  });
+
+  test('node discovery works incrementally (step by step)', () => {
+    const state = new GameState(true, true);
+    const obj = state.witchObjectives[0];
+    obj.seenByHero = false;
+    obj.seenByWitch = false;
+
+    // Place hero far away initially
+    state.hero.col = 0;
+    state.hero.row = 0;
+    state.updateNodeDiscovery();
+
+    // Step 1: still far away
+    state.hero.col = 1;
+    state.hero.row = 0;
+    state.updateNodeDiscovery();
+
+    // Step 2: move onto the node
+    state.hero.col = obj.hexes[0].col;
+    state.hero.row = obj.hexes[0].row;
+    state.updateNodeDiscovery();
+    assert.equal(obj.seenByHero, true, 'Should be discovered after incremental move');
+  });
+
+  test('witch discovery is independent during incremental steps', () => {
+    const state = new GameState(true, true);
+    const obj = state.witchObjectives[0];
+    obj.seenByHero = false;
+    obj.seenByWitch = false;
+
+    // Move witch onto node, hero stays far
+    state.hero.col = 0;
+    state.hero.row = 0;
+    state.witch.col = obj.hexes[0].col;
+    state.witch.row = obj.hexes[0].row;
+    state.updateNodeDiscovery();
+    assert.equal(obj.seenByWitch, true, 'Witch should discover node');
+
+    const range = sightRange(state.phase, false);
+    const heroFar = obj.hexes.every(h => hexDistance(0, 0, h.col, h.row) > range);
+    if (heroFar) {
+      assert.equal(obj.seenByHero, false, 'Hero should not discover node from far away');
+    }
+  });
+});
+
 // ── Fortify on node hexes ────────────────────────────────────────────────────
 
 describe('Fortify allowed on node hexes', () => {
