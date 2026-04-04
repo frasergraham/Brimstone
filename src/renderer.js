@@ -9,7 +9,7 @@ import {
 } from './tiles.js';
 import { ENTITY_COLOR, EntityType, SurvivorAbility } from './entities.js';
 import { getVisibleEnemyHexes, getVisibleHeroHexes, sightRange, buildFogMovementHexes } from './actions.js';
-import { nodeController } from './game.js';
+import { nodeController, Phase } from './game.js';
 
 // PAD_X/PAD_Y are now computed dynamically in _resize() as this._padX / this._padY.
 // These constants are kept for backward-compat imports but should not be used internally.
@@ -706,7 +706,23 @@ export class Renderer {
     }
 
     // Background covers the full canvas regardless of zoom/pan
-    ctx.fillStyle = (this.useTileImages && this._tilemapImg) ? BG_COLOR : '#0d1117';
+    // Tint backdrop by time-of-day: warm grey (day), mid grey (dawn/dusk), dark blue-grey (night)
+    {
+      const phase = state.phase;
+      let bg;
+      if (this.useTileImages && this._tilemapImg) {
+        bg = BG_COLOR;
+      } else if (phase === Phase.DAY) {
+        bg = '#2a2820'; // light grey with subtle warm/yellow hint
+      } else if (phase === Phase.DAWN || phase === Phase.DUSK) {
+        bg = '#1e1e22'; // mid grey
+      } else if (phase === Phase.NIGHT) {
+        bg = '#0e1320'; // dark grey with blue tint
+      } else {
+        bg = '#0d1117';
+      }
+      ctx.fillStyle = bg;
+    }
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
     // Apply zoom and pan transform for all map content
@@ -764,6 +780,21 @@ export class Renderer {
       const observerOwner = humanIsHero ? 'hero' : (humanIsWitch ? 'witch' : null);
       if (observerOwner) {
         this._drawFogLayer(observerOwner, state.fogOfWar, fogVisibleHexes, vr);
+      }
+    }
+
+    // Phase tint — subtle colour wash so dusk/night feel distinct
+    {
+      const phase = state.phase;
+      let tint = null;
+      if (phase === Phase.DAWN || phase === Phase.DUSK) tint = 'rgba(30,40,70,0.20)';
+      if (phase === Phase.NIGHT) tint = 'rgba(20,28,55,0.35)';
+      if (tint) {
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0); // reset to screen coords
+        ctx.fillStyle = tint;
+        ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        ctx.restore();
       }
     }
 
