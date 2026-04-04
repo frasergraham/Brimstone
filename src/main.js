@@ -1209,6 +1209,39 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       }
     }
 
+    // ── Phase 3b: Sound Horn — horn flash + survivor encounter ────────────
+    for (const ev of events) {
+      const { action, result } = ev;
+      if (action.type !== PlanActionType.SOUND_HORN) continue;
+      if (!result?.success) continue;
+      const actor = step.entitySnapshot?.find(e => e.id === action.entityId);
+      if (!actor) continue;
+
+      // Gold radial flash with horn emoji
+      renderer.addFlash(actor.col, actor.row, '📯',
+        'rgba(220,180,60,0.25)', 2000, 1.4, 'rgba(255,215,100,1)');
+      // Expanding ring effect (reuse spawn anim with gold color)
+      renderer._deathAnims.push({
+        col: actor.col, row: actor.row,
+        color: '#d4a72c', startTime: Date.now(), duration: 800, spawn: true,
+      });
+      renderer._startAnimLoop();
+      redrawFn();
+
+      if (humanFaction && ev.faction !== humanFaction) continue;
+      if (myPlayerId && actor?.ownerId !== myPlayerId) continue;
+
+      // Show log messages as a result dialog (horn outcome)
+      if (!_suppressDialogs && result.log?.length) {
+        await new Promise(resolve =>
+          ui._showResultDialog(result.log, resolve, result.encounterSurvivor ?? null));
+      }
+      // Show encounter card if a survivor was found
+      if (!_suppressDialogs && result.encounterSurvivor) {
+        await new Promise(resolve => ui._showEncounterDialog(result.encounterSurvivor, resolve));
+      }
+    }
+
     // ── Phase 4: fortify/reinforce visual feedback ────────────────────────
     for (const ev of events) {
       const { action, result } = ev;
