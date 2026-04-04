@@ -461,7 +461,37 @@
         </div>
       </div>
 
-      <div id="options-empty-msg" class="setup-lore">
+      <!-- Default game speed -->
+      <div class="acct-section" style="text-align:left">
+        <div class="acct-label">Default Game Speed</div>
+        <p style="font-size:0.8rem;color:var(--muted);margin:0.25rem 0 0.5rem">
+          Sets the playback speed when entering any game. You can still change it in-game.
+        </p>
+        <div id="options-speed-buttons" style="display:flex;flex-direction:column;gap:0.25rem">
+          <button class="speed-option" data-mode="step">
+            <span class="speed-option-icon">👆</span>
+            <span class="speed-option-label">Step by Step</span>
+            <span class="speed-option-desc">Click to advance each action</span>
+          </button>
+          <button class="speed-option" data-mode="cinematic">
+            <span class="speed-option-icon">🎬</span>
+            <span class="speed-option-label">Cinematic</span>
+            <span class="speed-option-desc">Dialog for important battles (default)</span>
+          </button>
+          <button class="speed-option" data-mode="fast">
+            <span class="speed-option-icon">⏩</span>
+            <span class="speed-option-label">Fast</span>
+            <span class="speed-option-desc">Cinematic pace, no popups</span>
+          </button>
+          <button class="speed-option" data-mode="vfast">
+            <span class="speed-option-icon">⏭</span>
+            <span class="speed-option-label">Very Fast</span>
+            <span class="speed-option-desc">1.5× speed, no popups</span>
+          </button>
+        </div>
+      </div>
+
+      <div id="options-empty-msg" class="setup-lore" style="display:none">
         <p>No options are available yet.<br>Check back in a future update.</p>
       </div>
 
