@@ -10,6 +10,7 @@ import {
   registerOrLogin, getPlayerByToken, getPlayerByEmail,
   linkEmail, loginByEmail, getPlayerIdentities, changeUsername,
   getOrCreateByEmail, getOrCreateByGameCenter, linkGameCenter,
+  setAdmin,
 } from './server/auth.js';
 import { generateToken, verifyToken, sendMagicLinkEmail } from './server/magic-link.js';
 import { getLeaderboard }                    from './server/leaderboard.js';
@@ -44,6 +45,7 @@ import {
 } from './server/lobby.js';
 import {
   getAllPlayers, getAllSaves, getSaveWithState,
+  getAllGamesPaginated, getGameDetail, getAllPlayersDetailed,
 } from './server/admin.js';
 import { deleteAsyncGame as _deleteAsyncGame,
          getAsyncGame as _getAsyncGame,
@@ -581,8 +583,8 @@ app.delete('/api/device-token', (req, res) => {
 // is on the /admin/api/* endpoints (all require _requireAdmin).
 
 app.get('/admin',               (_req, res) => res.sendFile(join(__dirname, 'admin.html')));
-app.get('/admin/stats',         (_req, res) => res.sendFile(join(__dirname, 'admin-stats.html')));
-app.get('/admin/campaign-stats',(_req, res) => res.sendFile(join(__dirname, 'admin-campaign-stats.html')));
+app.get('/admin/stats',         (_req, res) => res.redirect('/admin'));
+app.get('/admin/campaign-stats',(_req, res) => res.redirect('/admin'));
 app.get('/spectate', (_req, res) => res.sendFile(join(__dirname, 'index.html')));
 app.get('/replay',   (_req, res) => res.sendFile(join(__dirname, 'index.html')));
 
@@ -700,46 +702,45 @@ app.get('/admin/api/completed-games/:gameId/rounds', (req, res) => {
   res.json(getCompletedGameRounds(req.params.gameId));
 });
 
-// ── Debug: player/token dump (temporary, unauthenticated) ────────────────────
+// ── Admin: paginated all-games, game detail, player detail, admin toggle ─────
 
-app.get('/debug/players', (_req, res) => {
-  const players = db.prepare(`
-    SELECT p.id, p.username, p.discriminator, p.token, p.wins, p.losses, p.created_at,
-           GROUP_CONCAT(pi.provider || ':' || pi.provider_id, ', ') AS identities
-    FROM players p
-    LEFT JOIN player_identities pi ON pi.player_id = p.id
-    GROUP BY p.id
-    ORDER BY p.created_at DESC
-  `).all();
+app.get('/admin/api/all-games', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  const page   = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit  = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+  const source = req.query.source || 'all';
+  res.json(getAllGamesPaginated({ page, limit, source }));
+});
 
-  const tokens = db.prepare(`
-    SELECT dt.player_id, p.username, dt.token AS device_token, dt.platform, dt.updated_at
-    FROM device_tokens dt
-    JOIN players p ON p.id = dt.player_id
-  `).all();
+app.get('/admin/api/game-detail/:id', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  const source = req.query.source;
+  if (!source) { res.status(400).json({ error: 'source query parameter required.' }); return; }
+  const detail = getGameDetail(req.params.id, source);
+  if (!detail) { res.status(404).json({ error: 'Game not found.' }); return; }
+  res.json(detail);
+});
 
-  const html = `<!DOCTYPE html><html><head><title>Debug: Players</title>
-    <style>body{font-family:monospace;background:#1a1a2e;color:#eee;padding:1rem}
-    table{border-collapse:collapse;width:100%;margin-bottom:2rem}
-    th,td{border:1px solid #333;padding:4px 8px;text-align:left;font-size:0.8rem}
-    th{background:#2a2a4e}h2{color:#7af}</style></head><body>
-    <h2>Players (${players.length})</h2>
-    <table><tr><th>username</th><th>disc</th><th>id</th><th>identities</th><th>token (first 8)</th><th>created</th></tr>
-    ${players.map(p => `<tr>
-      <td>${p.username}</td><td>${p.discriminator ?? 'NULL'}</td>
-      <td style="font-size:0.7rem">${p.id}</td><td>${p.identities || '—'}</td>
-      <td>${p.token?.slice(0, 8)}…</td>
-      <td>${new Date(p.created_at * 1000).toISOString().slice(0, 16)}</td>
-    </tr>`).join('')}</table>
-    <h2>Device Tokens (${tokens.length})</h2>
-    <table><tr><th>username</th><th>player_id</th><th>device_token (first 16)</th><th>platform</th><th>updated</th></tr>
-    ${tokens.length ? tokens.map(t => `<tr>
-      <td>${t.username}</td><td style="font-size:0.7rem">${t.player_id}</td>
-      <td>${t.device_token?.slice(0, 16)}…</td><td>${t.platform}</td>
-      <td>${new Date(t.updated_at * 1000).toISOString().slice(0, 16)}</td>
-    </tr>`).join('') : '<tr><td colspan="5">No device tokens registered</td></tr>'}
-    </table></body></html>`;
-  res.type('html').send(html);
+app.get('/admin/api/players/detail', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  res.json(getAllPlayersDetailed());
+});
+
+app.post('/admin/api/players/:playerId/admin', express.json(), (req, res) => {
+  const admin = _requireAdmin(req, res);
+  if (!admin) return;
+  const { playerId } = req.params;
+  const { isAdmin } = req.body ?? {};
+  if (typeof isAdmin !== 'boolean') {
+    res.status(400).json({ error: 'isAdmin (boolean) required.' });
+    return;
+  }
+  if (!isAdmin && playerId === admin.id) {
+    res.status(400).json({ error: 'Cannot remove your own admin status.' });
+    return;
+  }
+  setAdmin(playerId, isAdmin);
+  res.json({ ok: true });
 });
 
 // ── SP game uploads ───────────────────────────────────────────────────────────
