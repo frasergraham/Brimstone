@@ -1228,17 +1228,22 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       renderer._startAnimLoop();
       redrawFn();
 
+      // Wait for the horn animation to finish before showing dialogs
+      await renderer.waitForAnimations();
+
       if (humanFaction && ev.faction !== humanFaction) continue;
       if (myPlayerId && actor?.ownerId !== myPlayerId) continue;
 
-      // Show log messages as a result dialog (horn outcome)
-      if (!_suppressDialogs && result.log?.length) {
-        await new Promise(resolve =>
-          ui._showResultDialog(result.log, resolve, result.encounterSurvivor ?? null));
-      }
-      // Show encounter card if a survivor was found
-      if (!_suppressDialogs && result.encounterSurvivor) {
-        await new Promise(resolve => ui._showEncounterDialog(result.encounterSurvivor, resolve));
+      if (!_suppressDialogs) {
+        // Show log messages as a result dialog (horn outcome)
+        if (result.log?.length) {
+          await new Promise(resolve =>
+            ui._showResultDialog(result.log, resolve, result.encounterSurvivor ?? null));
+        }
+        // Show encounter card if a survivor was found
+        if (result.encounterSurvivor) {
+          await new Promise(resolve => ui._showEncounterDialog(result.encounterSurvivor, resolve));
+        }
       }
     }
 
