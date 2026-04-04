@@ -4570,7 +4570,25 @@ function _updateSessionBar() {
 
 // ── Persistent sign-out (footer bar) ────────────────────────────────────────
 
-document.getElementById('btn-setup-signout').addEventListener('click', () => {
+document.getElementById('btn-setup-signout').addEventListener('click', async () => {
+  // Warn if the account has no recovery method (no email, no Game Center)
+  if (!_gcCredentials) {
+    const session = loadSession();
+    if (session?.token) {
+      try {
+        const identities = await fetchIdentities(session.token);
+        const hasRecovery = identities?.some(i => i.provider === 'email' || i.provider === 'gamecenter');
+        if (!hasRecovery) {
+          const confirmed = confirm(
+            'Warning: You have no email or Game Center linked to this account. ' +
+            'If you sign out, you will lose access to this account permanently.\n\n' +
+            'Sign out anyway?'
+          );
+          if (!confirmed) return;
+        }
+      } catch { /* offline — proceed with sign-out */ }
+    }
+  }
   _signOut();
   _updateSessionBar();
   // Refresh whichever screen is visible
