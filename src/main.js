@@ -1280,6 +1280,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     }
   }
 
+  // Wait for any in-flight canvas animations (node reveals, flashes, etc.)
+  // to finish before showing the end-of-turn summary dialog.
+  if (!_autoplay && !_playback.goBack && !_playback.aborted && !_playback.jumpToEnd) {
+    await renderer.waitForAnimations();
+  }
+
   // Restore the authoritative final state.
   ui?._clearStepContinue();
   state.entities = finalEntities;

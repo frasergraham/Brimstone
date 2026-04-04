@@ -449,6 +449,7 @@ export class Renderer {
                  || this._flashes.some(f => now < f.endTime)
                  || this._deathAnims.some(a => now < a.startTime + a.duration)
                  || this._lungeAnims.some(a => !a.settled || a.returning)
+                 || this._nodeRevealAnims.some(a => now < a.startTime + a.duration)
                  || !!this._zoomAnim;
       this.draw();
       if (alive) {
@@ -473,6 +474,7 @@ export class Renderer {
                    || this._flashes.some(f => now < f.endTime)
                    || this._deathAnims.some(a => now < a.startTime + a.duration)
                    || this._lungeAnims.some(a => !a.settled || a.returning)
+                   || this._nodeRevealAnims.some(a => now < a.startTime + a.duration)
                    || !!this._zoomAnim;
         if (alive) requestAnimationFrame(check);
         else resolve();
