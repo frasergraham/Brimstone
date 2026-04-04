@@ -558,6 +558,7 @@ app.put('/api/device-token', (req, res) => {
   if (!deviceToken || typeof deviceToken !== 'string') {
     return res.status(400).json({ error: 'deviceToken required.' });
   }
+  console.log(`[Push] PUT device-token player=${player.id} name=${player.username} token=${deviceToken.slice(0, 8)}… platform=${platform || 'ios'}`);
   upsertDeviceToken(player.id, deviceToken, platform || 'ios');
   res.json({ ok: true });
 });
