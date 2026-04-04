@@ -45,7 +45,7 @@ import {
 } from './server/lobby.js';
 import {
   getAllPlayers, getAllSaves, getSaveWithState,
-  getAllGamesPaginated, getGameDetail, getAllPlayersDetailed,
+  getAllGamesPaginated, getGameDetail, getAllPlayersDetailed, resetStats,
 } from './server/admin.js';
 import { deleteAsyncGame as _deleteAsyncGame,
          getAsyncGame as _getAsyncGame,
@@ -741,6 +741,12 @@ app.post('/admin/api/players/:playerId/admin', express.json(), (req, res) => {
   }
   setAdmin(playerId, isAdmin);
   res.json({ ok: true });
+});
+
+app.post('/admin/api/reset-stats', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  const result = resetStats(VERSION);
+  res.json(result);
 });
 
 // ── SP game uploads ───────────────────────────────────────────────────────────

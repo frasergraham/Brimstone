@@ -1,7 +1,9 @@
 // Admin API helpers — query functions for the admin panel.
 import db from './db.js';
+import { writeFileSync } from 'fs';
+import { dirname, join } from 'path';
 import { getRooms, getRoom, getRoomChronicle } from './lobby.js';
-import { getSaveWithState, getSaveRounds, getCompletedGame, getCompletedGameRounds,
+import { getSave, getSaveRounds, getCompletedGame, getCompletedGameRounds,
          getSpCompletedGame, getSpCompletedGameRounds } from './saves.js';
 
 // ── Existing queries ────────────────────────────────────────────────────────
@@ -28,8 +30,8 @@ export function getAllSaves() {
 }
 
 /** Full save row for a specific room, with state_json parsed to an object. */
-export function getSaveWithState_(roomId) {
-  return getSaveWithState(roomId);
+export function getSaveWithState(roomId) {
+  return getSave(roomId);
 }
 
 // ── Paginated all-games query ───────────────────────────────────────────────
@@ -38,21 +40,23 @@ const _SOURCE_QUERIES = {
   saved: {
     select: `SELECT room_id AS id, 'saved' AS source, hero_name, witch_name, round, phase,
                     NULL AS winner, NULL AS win_reason, game_version, NULL AS mode,
-                    updated_at, created_at
+                    NULL AS players_json, updated_at, created_at
              FROM game_saves`,
     count:  `SELECT COUNT(*) AS cnt FROM game_saves`,
   },
   completed_mp: {
     select: `SELECT game_id AS id, 'completed_mp' AS source, hero_name, witch_name,
                     total_rounds AS round, NULL AS phase, winner, win_reason,
-                    game_version, mode, created_at AS updated_at, created_at
+                    game_version, mode, players_json,
+                    created_at AS updated_at, created_at
              FROM completed_games`,
     count:  `SELECT COUNT(*) AS cnt FROM completed_games`,
   },
   completed_sp: {
     select: `SELECT game_id AS id, 'completed_sp' AS source, hero_name, witch_name,
                     total_rounds AS round, NULL AS phase, winner, win_reason,
-                    game_version, mode, created_at AS updated_at, created_at
+                    game_version, mode, NULL AS players_json,
+                    created_at AS updated_at, created_at
              FROM sp_completed_games`,
     count:  `SELECT COUNT(*) AS cnt FROM sp_completed_games`,
   },
@@ -68,20 +72,26 @@ export function getAllGamesPaginated({ page = 1, limit = 50, source = 'all' } = 
   // Active in-memory games (always returned, not paginated from DB)
   let activeGames = [];
   if (source === 'all' || source === 'active') {
-    activeGames = getRooms().map(r => ({
-      id:           r.id,
-      source:       'active',
-      hero_name:    r.players.find(p => p.faction === 'hero')?.name ?? '',
-      witch_name:   r.players.find(p => p.faction === 'witch')?.name ?? '',
-      round:        r.round,
-      phase:        r.phase,
-      winner:       r.winner,
-      win_reason:   null,
-      game_version: null,
-      mode:         null,
-      updated_at:   Math.floor(r.createdAt / 1000),
-      created_at:   Math.floor(r.createdAt / 1000),
-    }));
+    activeGames = getRooms().map(r => {
+      const totalPlayers = r.players.length;
+      const humanPlayers = r.players.filter(p => !p.isAI).length;
+      return {
+        id:           r.id,
+        source:       'active',
+        hero_name:    r.players.find(p => p.faction === 'hero')?.name ?? '',
+        witch_name:   r.players.find(p => p.faction === 'witch')?.name ?? '',
+        round:        r.round,
+        phase:        r.phase,
+        winner:       r.winner,
+        win_reason:   null,
+        game_version: null,
+        mode:         null,
+        human_players: humanPlayers,
+        total_players: totalPlayers,
+        updated_at:   Math.floor(r.createdAt / 1000),
+        created_at:   Math.floor(r.createdAt / 1000),
+      };
+    });
   }
 
   if (source === 'active') {
@@ -101,9 +111,22 @@ export function getAllGamesPaginated({ page = 1, limit = 50, source = 'all' } = 
   }
 
   const unionSelect = selects.join(' UNION ALL ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
-  const unionCount  = counts.map(c => `(${c})`).join(' UNION ALL ');
+  const unionCount  = counts.join(' UNION ALL ');
 
-  const games = db.prepare(unionSelect).all(limit, offset);
+  const rawGames = db.prepare(unionSelect).all(limit, offset);
+  const games = rawGames.map(g => {
+    if (g.players_json) {
+      try {
+        const players = JSON.parse(g.players_json);
+        g.human_players = players.filter(p => !p.isAI).length;
+        g.total_players = players.length;
+      } catch { /* ignore parse errors */ }
+    }
+    delete g.players_json;
+    g.human_players ??= null;
+    g.total_players ??= null;
+    return g;
+  });
   const countRows = db.prepare(`SELECT SUM(cnt) AS total FROM (${unionCount})`).get();
   const dbTotal = countRows?.total ?? 0;
 
@@ -130,7 +153,7 @@ export function getGameDetail(id, source) {
       return { game: summary, rounds: chronicle, canSpectate: true };
     }
     case 'saved': {
-      const save = getSaveWithState(id);
+      const save = getSave(id);
       if (!save) return null;
       const rounds = getSaveRounds(id);
       // Strip state_json from the response (can be huge)
@@ -197,4 +220,42 @@ export function getAllPlayersDetailed() {
     identities: idMap.get(p.id) ?? [],
     device_tokens: dtMap.get(p.id) ?? [],
   }));
+}
+
+// ── Stats reset with dump ──────────────────────────────────────────────────
+
+/**
+ * Dump game_stats and campaign_game_stats to a JSON file alongside the DB,
+ * then truncate both tables. Returns the dump file path.
+ */
+export function resetStats(version) {
+  const gameStats = db.prepare('SELECT * FROM game_stats').all();
+  const campaignStats = db.prepare('SELECT * FROM campaign_game_stats').all();
+
+  if (gameStats.length === 0 && campaignStats.length === 0) {
+    return { dumped: false, reason: 'No stats to reset.' };
+  }
+
+  // Build dump filename: stats-dump-<version>-<YYYY-MM-DD-HHmmss>.json
+  const now = new Date();
+  const ts = now.toISOString().replace(/[T:]/g, '-').replace(/\..+/, '');
+  const filename = `stats-dump-${version}-${ts}.json`;
+
+  // Resolve DB file path to place dump alongside it
+  const dbPath = process.env.DB_PATH || join(dirname(new URL(import.meta.url).pathname), '..', 'data', 'brimstone.db');
+  const dumpPath = join(dirname(dbPath), filename);
+
+  const dump = {
+    version,
+    dumpedAt: now.toISOString(),
+    gameStats,
+    campaignStats,
+  };
+
+  writeFileSync(dumpPath, JSON.stringify(dump, null, 2));
+
+  db.prepare('DELETE FROM game_stats').run();
+  db.prepare('DELETE FROM campaign_game_stats').run();
+
+  return { dumped: true, file: filename, gameStatsCount: gameStats.length, campaignStatsCount: campaignStats.length };
 }

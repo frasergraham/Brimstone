@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import db from '../server/db.js';
 import {
   registerOrLogin, getPlayerByToken, linkEmail,
-  isAdminEmail, grantAdminIfEligible, getPlayerIdentities,
+  isAdminEmail, grantAdminIfEligible, getPlayerIdentities, setAdmin,
 } from '../server/auth.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -160,18 +160,16 @@ describe('admin link in index.html', () => {
   });
 });
 
-// ── Admin HTML pages have auth gates ─────────────────────────────────────────
+// ── Admin HTML page has auth gate ────────────────────────────────────────────
 
-describe('admin HTML pages auth gate', () => {
-  for (const file of ['admin.html', 'admin-stats.html', 'admin-campaign-stats.html']) {
-    test(`${file} checks /api/me/admin before loading`, () => {
-      const html = readFileSync(resolve(root, file), 'utf8');
-      assert.ok(
-        html.includes('/api/me/admin'),
-        `${file} should contain an auth gate calling /api/me/admin`
-      );
-    });
-  }
+describe('admin HTML page auth gate', () => {
+  test('admin.html checks /api/me/admin before loading', () => {
+    const html = readFileSync(resolve(root, 'admin.html'), 'utf8');
+    assert.ok(
+      html.includes('/api/me/admin'),
+      'admin.html should contain an auth gate calling /api/me/admin'
+    );
+  });
 
   test('admin.html has a Back to main menu link', () => {
     const html = readFileSync(resolve(root, 'admin.html'), 'utf8');
@@ -179,5 +177,37 @@ describe('admin HTML pages auth gate', () => {
       html.includes('Back to main menu'),
       'admin.html should have a "Back to main menu" link'
     );
+  });
+
+  test('old admin-stats.html and admin-campaign-stats.html are removed', () => {
+    for (const file of ['admin-stats.html', 'admin-campaign-stats.html']) {
+      let exists = true;
+      try { readFileSync(resolve(root, file), 'utf8'); } catch { exists = false; }
+      assert.equal(exists, false, `${file} should no longer exist`);
+    }
+  });
+});
+
+// ── Admin toggle via setAdmin ───────────────────────────────────────────────
+
+describe('setAdmin toggle', () => {
+  beforeEach(cleanUp);
+
+  test('setAdmin(playerId, true) sets is_admin = 1', () => {
+    const player = createTestPlayer('toggle1');
+    assert.equal(player.is_admin, 0);
+
+    setAdmin(player.id, true);
+    const updated = getPlayerByToken(player.token);
+    assert.equal(updated.is_admin, 1);
+  });
+
+  test('setAdmin(playerId, false) sets is_admin = 0', () => {
+    const player = createTestPlayer('toggle2');
+    setAdmin(player.id, true);
+    assert.equal(getPlayerByToken(player.token).is_admin, 1);
+
+    setAdmin(player.id, false);
+    assert.equal(getPlayerByToken(player.token).is_admin, 0);
   });
 });

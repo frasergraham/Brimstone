@@ -7,12 +7,12 @@
 - `server/admin.js` — Added `getAllGamesPaginated()`, `getAllPlayersDetailed()`, `getGameDetail()`
 - `server.js` — Added 4 new API endpoints, removed `/debug/players` route, added redirects for old admin URLs, updated imports
 
-### Remaining (client-side)
-- `admin.html` — Needs full rewrite as consolidated single-page admin panel (see architecture below)
-- `admin-stats.html` — Delete after admin.html rewrite
-- `admin-campaign-stats.html` — Delete after admin.html rewrite
-- `tests/admin-access.test.js` — Update to check single admin file, add admin toggle tests
-- Run `npm test`, push
+### Completed (client-side)
+- `admin.html` — Full rewrite as consolidated single-page admin panel with 5 tabs
+- `admin-stats.html` — Deleted
+- `admin-campaign-stats.html` — Deleted
+- `tests/admin-access.test.js` — Updated to check single admin file, added setAdmin toggle tests
+- `npm test` — 1275/1276 pass (1 pre-existing mobile-responsive failure)
 
 ---
 
