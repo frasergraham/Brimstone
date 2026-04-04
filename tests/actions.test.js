@@ -363,6 +363,25 @@ describe('executeExplore', () => {
     }
     // If we never found loot in 50 tries, that's acceptable — loot tables include 'nothing'
   });
+
+  test('explore produces at most one loot entry (no duplicates)', () => {
+    // Run many explores — when loot is found, there should be exactly 1 entry,
+    // not 2 from a duplicate _applyLoot call.
+    for (let i = 0; i < 100; i++) {
+      const state = freshState();
+      const hero = state.hero;
+      state.tiles.get(hexKey(hero.col, hero.row)).explored = false;
+      // Ensure tile is not a building so only terrain loot applies (single roll)
+      const t = state.tiles.get(hexKey(hero.col, hero.row));
+      t.type = TileType.GRASS;
+      t.building = null;
+      t.hiddenSurvivor = false;
+      const r = executeExplore(state, hero);
+      const found = r.lootItems.filter(l => l.startsWith('+'));
+      assert.ok(found.length <= 1,
+        `Expected at most 1 loot entry but got ${found.length}: ${JSON.stringify(r.lootItems)}`);
+    }
+  });
 });
 
 // ── executeBattle ─────────────────────────────────────────────────────────────

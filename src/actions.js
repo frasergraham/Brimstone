@@ -520,10 +520,8 @@ export function executeExplore(state, actor) {
 
   if (t.type === TileType.BUILDING && t.building && BUILDING_LOOT[t.building]) {
     _applyLoot(state, actor, rollLoot(BUILDING_LOOT[t.building]), log, lootItems);
-    _applyLoot(state, actor, rollLoot(BUILDING_LOOT[t.building]), log, lootItems);
   } else {
     const terrainTable = TERRAIN_LOOT[t.type] || TERRAIN_LOOT['grass'];
-    _applyLoot(state, actor, rollLoot(terrainTable), log, lootItems);
     _applyLoot(state, actor, rollLoot(terrainTable), log, lootItems);
   }
 
