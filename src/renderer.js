@@ -9,7 +9,7 @@ import {
 } from './tiles.js';
 import { ENTITY_COLOR, EntityType, SurvivorAbility } from './entities.js';
 import { getVisibleEnemyHexes, getVisibleHeroHexes, sightRange, buildFogMovementHexes } from './actions.js';
-import { nodeController } from './game.js';
+import { nodeController, Phase } from './game.js';
 
 // PAD_X/PAD_Y are now computed dynamically in _resize() as this._padX / this._padY.
 // These constants are kept for backward-compat imports but should not be used internally.
@@ -764,6 +764,21 @@ export class Renderer {
       const observerOwner = humanIsHero ? 'hero' : (humanIsWitch ? 'witch' : null);
       if (observerOwner) {
         this._drawFogLayer(observerOwner, state.fogOfWar, fogVisibleHexes, vr);
+      }
+    }
+
+    // Phase tint — subtle colour wash so dusk/night feel distinct
+    {
+      const phase = state.phase;
+      let tint = null;
+      if (phase === Phase.DAWN || phase === Phase.DUSK) tint = 'rgba(30,40,70,0.12)';
+      if (phase === Phase.NIGHT) tint = 'rgba(20,28,55,0.22)';
+      if (tint) {
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0); // reset to screen coords
+        ctx.fillStyle = tint;
+        ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        ctx.restore();
       }
     }
 
