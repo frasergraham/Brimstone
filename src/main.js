@@ -2811,7 +2811,10 @@ function _handleAsyncStateUpdate(msg) {
   }
 
   // Notify if it's the player's turn (plan not yet submitted)
-  if (!msg.myPlanSubmitted) notifyRoundReady(mirror.round ?? 1);
+  if (!msg.myPlanSubmitted) {
+    const idleOpts = msg.wasIdleLastRound ? { wasIdle: true, faction: _asyncFaction } : undefined;
+    notifyRoundReady(mirror.round ?? 1, idleOpts);
+  }
 
   // ── Active game: unseen last round → offer replay before planning ──
   if (_asyncLastRound && _asyncSeenRound < _asyncLastRound.roundNum) {
@@ -2877,7 +2880,7 @@ function _handleAsyncOpponentJoined(msg) {
  * Handle live resolution arriving while connected.
  * The message contains both the pre-state and post-state needed for replay.
  */
-function _handleAsyncResolution({ roomId, steps, finalState, finalStateSnapshot, resolvedRound, preStateJson }) {
+function _handleAsyncResolution({ roomId, steps, finalState, finalStateSnapshot, resolvedRound, preStateJson, timedOutPlayerIds }) {
   if (!state || !renderer) return;
 
   // Store replay data with the raw server snapshot as postState
@@ -2909,7 +2912,8 @@ function _handleAsyncResolution({ roomId, steps, finalState, finalStateSnapshot,
       ]);
     } else {
       // Enter PLAN MODE for the new round
-      notifyRoundReady(resolvedRound + 1);
+      const wasIdle = timedOutPlayerIds?.includes(mp?.myPlayerId);
+      notifyRoundReady(resolvedRound + 1, wasIdle ? { wasIdle: true, faction: _asyncFaction } : undefined);
       const budget = state.playerActionsLeft?.[mp?.myPlayerId] ??
                      state[_asyncFaction + 'ActionsLeft'] ?? 3;
       ui?.enterPlanningMode(_asyncFaction, budget, 0);
@@ -4769,7 +4773,12 @@ function _ensureAuthed(cb) {
 
 async function _applyOnlinePlanningPhase(payload) {
   if (!ui || !mp) return;
-  const { myActionsLeft, heroActionsLeft, witchActionsLeft, players, timeoutMs, submittedPlan, lastReplay } = payload;
+  const { myActionsLeft, heroActionsLeft, witchActionsLeft, players, timeoutMs, submittedPlan, lastReplay, wasIdleLastRound } = payload;
+
+  // Browser notification — calls out idle turn if the player timed out last round
+  if (state?.round) {
+    notifyRoundReady(state.round, wasIdleLastRound ? { wasIdle: true, faction: mp.myFaction } : undefined);
+  }
 
   // If we have a replay from the last round, play it before entering planning
   if (lastReplay) {

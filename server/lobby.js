@@ -491,6 +491,7 @@ function _startPlanningPhase(room) {
       witchActionsLeft: room.state.witchActionsLeft,
       timeoutMs,
       players:       playerList,
+      wasIdleLastRound: (room.consecutiveTimeouts[seat.playerId] || 0) > 0,
     });
   }
 
@@ -752,8 +753,10 @@ function _executeResolution(room) {
     const opts = _notifyOpts(room);
     for (const seat of room.players) {
       if (seat.isAI) continue;
+      const wasIdle = (room.consecutiveTimeouts[seat.playerId] || 0) > 0;
       notifyRoundReady(seat.playerId, {
         roomId: room.id, round: state.round,
+        wasIdle, idleFaction: wasIdle ? factionFor(room, seat.playerId) : undefined,
       }, opts).catch(() => {});
     }
   }
@@ -2269,6 +2272,14 @@ export function connectToAsyncGame(playerId, ws, roomId) {
     console.log(`[async ${roomId}] Reconnect — no lastRound (round=${game.round})`);
   }
 
+  // Check if the player was idle (empty plan) in the previous round
+  let wasIdleLastRound = false;
+  if (game.round > 1) {
+    const prevPlans = getAsyncPlanStatus(roomId, game.round - 1);
+    const prevMyPlan = prevPlans.find(p => p.player_id === playerId);
+    if (prevMyPlan?.plan_json === '[]') wasIdleLastRound = true;
+  }
+
   send(ws, {
     type:       'asyncStateUpdate',
     roomId,
@@ -2292,6 +2303,7 @@ export function connectToAsyncGame(playerId, ws, roomId) {
     winner:     game.winner,
     winReason:  game.win_reason,
     myActionsLeft: state.playerActionsLeft?.[playerId] ?? state[myFaction + 'ActionsLeft'] ?? 3,
+    wasIdleLastRound,
     lastRound:  lastRound ? {
       roundNum:     lastRound.round_num,
       preStateJson: lastRound.pre_state_json,
@@ -2369,8 +2381,10 @@ export function handleAsyncDisconnect(playerId, roomId) {
 /**
  * Run resolution for an async game. Called when all plans are submitted
  * or when the deadline expires.
+ * @param {string} roomId
+ * @param {Set<string>} [timedOutPlayerIds] — player IDs whose plans were auto-submitted empty
  */
-function _resolveAsyncRound(roomId) {
+function _resolveAsyncRound(roomId, timedOutPlayerIds) {
   const game = getAsyncGame(roomId);
   if (!game || game.status !== 'playing') return;
 
@@ -2441,8 +2455,11 @@ function _resolveAsyncRound(roomId) {
 
     // Notify both players of new round
     for (const pid of [game.hero_player_id, game.witch_player_id]) {
+      const wasIdle = timedOutPlayerIds?.has(pid) ?? false;
+      const idleFaction = pid === game.hero_player_id ? 'hero' : 'witch';
       notifyRoundReady(pid, {
         roomId, round: state.round,
+        wasIdle, idleFaction: wasIdle ? idleFaction : undefined,
       }, { isAsync: true }).catch(() => {});
     }
   }
@@ -2452,6 +2469,7 @@ function _resolveAsyncRound(roomId) {
     type: 'asyncResolution', roomId,
     resolvedRound, preStateJson,
     steps: serializedSteps, finalState,
+    timedOutPlayerIds: timedOutPlayerIds ? [...timedOutPlayerIds] : [],
   };
 
   // ── Debug: log what we're broadcasting ──
@@ -2585,6 +2603,11 @@ export function checkAsyncDeadlines() {
         );
       }
 
+      // Capture which players timed out before auto-submitting
+      const timedOutPlayerIds = new Set(
+        plans.filter(p => !p.submitted).map(p => p.player_id)
+      );
+
       // Auto-submit empty plans for players who haven't submitted
       for (const p of plans) {
         if (!p.submitted) {
@@ -2592,7 +2615,7 @@ export function checkAsyncDeadlines() {
         }
       }
 
-      _resolveAsyncRound(roomId);
+      _resolveAsyncRound(roomId, timedOutPlayerIds);
     } catch (err) {
       console.error(`[async ${roomId}] deadline check error:`, err);
     }

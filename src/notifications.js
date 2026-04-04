@@ -53,9 +53,14 @@ export function notifyWaitingOnYou() {
   return _notify('Waiting on you!', "Everyone else has submitted. Your turn to plan!", 'brimstone-waiting-on-you');
 }
 
-/** New round is ready — everyone submitted, resolution complete. */
-export function notifyRoundReady(round) {
-  return _notify('Your Turn', `Round ${round} is ready — plan your moves!`, 'brimstone-round-ready');
+/** New round is ready — everyone submitted, resolution complete.
+ *  When opts.wasIdle is true and opts.faction is set, calls out that the
+ *  player's previous turn was auto-submitted empty (timeout). */
+export function notifyRoundReady(round, { wasIdle, faction } = {}) {
+  const body = wasIdle && faction
+    ? `Your ${faction} was idle in round ${round - 1}. Round ${round} is ready — don't miss this one!`
+    : `Round ${round} is ready — plan your moves!`;
+  return _notify('Your Turn', body, 'brimstone-round-ready');
 }
 
 /** Deadline is approaching — submit soon! */
