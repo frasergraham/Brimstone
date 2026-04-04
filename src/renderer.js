@@ -69,6 +69,11 @@ function _cachedHexCorners(cx, cy, size) {
   return pts;
 }
 
+/** Convert a 0–1 alpha value to a 2-char hex string (e.g. 0.5 → '80'). */
+function _alphaHex(a) {
+  return Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, '0');
+}
+
 /** Convert a 6-digit hex colour string to an rgba() string with the given alpha. */
 function _hexToRgba(hex, alpha) {
   if (typeof hex === 'string' && hex.startsWith('#') && hex.length === 7) {
@@ -144,6 +149,9 @@ export class Renderer {
     // Battle hex highlights: set during combat animation, cleared after
     this._battleCombatantHexes = []; // [{col, row}] — bright red
     this._battleAllyHexes      = []; // [{col, row}] — faint red
+
+    // Node reveal animations: [{hexes, color, startTime, duration}]
+    this._nodeRevealAnims = [];
 
     this._animFramePending = false;
 
@@ -296,6 +304,17 @@ export class Renderer {
     this._startAnimLoop();
   }
 
+  /** Pulsing glow animation on a node cluster — used when a power node is first revealed. */
+  addNodeRevealAnim(hexes, color) {
+    this._nodeRevealAnims.push({
+      hexes,  // [{col, row}]
+      color,
+      startTime: Date.now(),
+      duration: 2000,
+    });
+    this._startAnimLoop();
+  }
+
   /** Sparkle animation at a hex — used for summon/spawn. */
   addSpawnAnim(col, row, color = '#b39ddb') {
     // Reuse flash with sparkle text and a short purple burst
@@ -370,6 +389,7 @@ export class Renderer {
     this._lungeAnims             = [];
     this._battleCombatantHexes   = [];
     this._battleAllyHexes        = [];
+    this._nodeRevealAnims        = [];
     this._zoomAnim               = null;  // cancel any ongoing camera zoom so it doesn't bleed into next round
   }
 
@@ -429,6 +449,7 @@ export class Renderer {
                  || this._flashes.some(f => now < f.endTime)
                  || this._deathAnims.some(a => now < a.startTime + a.duration)
                  || this._lungeAnims.some(a => !a.settled || a.returning)
+                 || this._nodeRevealAnims.some(a => now < a.startTime + a.duration)
                  || !!this._zoomAnim;
       this.draw();
       if (alive) {
@@ -453,6 +474,7 @@ export class Renderer {
                    || this._flashes.some(f => now < f.endTime)
                    || this._deathAnims.some(a => now < a.startTime + a.duration)
                    || this._lungeAnims.some(a => !a.settled || a.returning)
+                   || this._nodeRevealAnims.some(a => now < a.startTime + a.duration)
                    || !!this._zoomAnim;
         if (alive) requestAnimationFrame(check);
         else resolve();
@@ -834,6 +856,9 @@ export class Renderer {
       cx /= obj.hexes.length; cy /= obj.hexes.length;
       this._drawObjectiveSymbolAt(cx, cy, obj.label, state, obj);
     }
+
+    // Node reveal pulse animations — expanding glow rings on newly discovered nodes
+    this._drawNodeRevealAnims();
 
     // Thick outlines on hexes occupied by units
     this._drawUnitPresenceOutlines(revealedHexes);
@@ -1595,6 +1620,46 @@ export class Renderer {
     ctx.fillStyle = nodeColor + 'cc';
     ctx.font      = `${Math.max(6, Math.floor(hs * 0.2))}px sans-serif`;
     this._shadowText(label, x, y + hs * 0.35);
+  }
+
+  /** Draw pulsing glow rings on recently revealed power nodes. */
+  _drawNodeRevealAnims() {
+    const now = Date.now();
+    this._nodeRevealAnims = this._nodeRevealAnims.filter(a => now < a.startTime + a.duration);
+    if (!this._nodeRevealAnims.length) return;
+
+    const ctx = this.ctx;
+    const hs  = this.hexSize;
+
+    for (const anim of this._nodeRevealAnims) {
+      const elapsed = now - anim.startTime;
+      const t = elapsed / anim.duration; // 0→1
+
+      // Expanding ring radius: starts at hex size, expands to 2× hex size
+      const ringRadius = hs * (1.0 + t * 1.0);
+      // Opacity: bright at start, fades out
+      const alpha = Math.max(0, 1.0 - t);
+      // Pulsing inner glow: rapid sine pulse that slows over time
+      const pulse = 0.5 + 0.5 * Math.sin(elapsed / 120);
+      const innerAlpha = alpha * (0.3 + 0.3 * pulse);
+
+      for (const h of anim.hexes) {
+        const { x, y } = this._toCanvas(h.col, h.row);
+
+        // Inner hex glow fill
+        _traceHexPath(ctx, x, y, hs - 1);
+        ctx.fillStyle = anim.color + _alphaHex(innerAlpha);
+        ctx.fill();
+
+        // Expanding ring
+        ctx.beginPath();
+        ctx.arc(x, y, ringRadius, 0, Math.PI * 2);
+        ctx.strokeStyle = anim.color + _alphaHex(alpha * 0.6);
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+      }
+    }
+    this._startAnimLoop();
   }
 
   _drawHighlight(col, row, color) {
