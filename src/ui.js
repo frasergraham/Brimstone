@@ -59,7 +59,7 @@ export class UIController {
 
     this._lastPostRoundKey = '';   // deduplicates post-round effect animations across state updates
     this._battleInterval   = null; // dice animation interval — cleared on new dialog
-    this.speedMode         = 'cinematic'; // 'step' | 'cinematic' | 'fast' | 'vfast'
+    this.speedMode         = this._loadDefaultSpeed(); // 'step' | 'cinematic' | 'fast' | 'vfast'
     this._stepResolve      = null;        // set while waiting for click-to-advance in step mode
     // Start with chronicle hidden on small screens (≤768px)
     this._chronicleMode    = window.innerWidth <= 768 ? 'none' : 'mini'; // 'none' | 'mini' | 'full'
@@ -1951,6 +1951,14 @@ export class UIController {
   // ── Speed popup ───────────────────────────────────────────────────────────
 
   static SPEED_LABELS = { step: 'Step by Step', cinematic: 'Cinematic', fast: 'Fast', vfast: 'Very Fast' };
+
+  _loadDefaultSpeed() {
+    try {
+      const saved = localStorage.getItem('brimstone-default-speed');
+      if (saved && UIController.SPEED_LABELS[saved]) return saved;
+    } catch (_) { /* localStorage unavailable */ }
+    return 'cinematic';
+  }
 
   _toggleSpeedPopup() {
     const popup = this._el('speed-popup');

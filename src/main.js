@@ -1443,6 +1443,29 @@ document.getElementById('btn-account-back') .addEventListener('click', () => sho
 document.getElementById('btn-changelog-back').addEventListener('click', () => showStep('mode'));
 document.getElementById('reconnect-back').addEventListener('click', () => location.reload());
 
+// ── Default game speed option ─────────────────────────────────────────────────
+{
+  const SPEED_KEY = 'brimstone-default-speed';
+  const validSpeeds = ['step', 'cinematic', 'fast', 'vfast'];
+  const container = document.getElementById('options-speed-buttons');
+
+  // Highlight the saved (or default) speed on load
+  const saved = localStorage.getItem(SPEED_KEY);
+  const active = validSpeeds.includes(saved) ? saved : 'cinematic';
+  container?.querySelectorAll('.speed-option').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === active);
+  });
+
+  container?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.speed-option');
+    if (!btn || !validSpeeds.includes(btn.dataset.mode)) return;
+    localStorage.setItem(SPEED_KEY, btn.dataset.mode);
+    container.querySelectorAll('.speed-option').forEach(b => {
+      b.classList.toggle('active', b.dataset.mode === btn.dataset.mode);
+    });
+  });
+}
+
 // Initialize persistent session bar on page load
 _updateSessionBar();
 {
