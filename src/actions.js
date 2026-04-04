@@ -477,7 +477,7 @@ export function executeMove(state, actor, targetCol, targetRow) {
   // Walk the path step by step; stop if an enemy blocks a mid-path hex.
   // Cap the number of hex steps to prevent long road-chain traversals when a
   // prior move in the plan failed and the entity is further away than expected.
-  const maxSteps = hasHorse ? 3 : 2;
+  const maxSteps = hasHorse ? 4 : 2;
   const walkedPath = [];
   const encounterLog = [];
   let encounterSurvivor = null;

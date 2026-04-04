@@ -594,20 +594,29 @@ describe('executeMove — hex-step cap', () => {
     const r3 = executeMove(state, hero, 4, 2);
     assert.ok(r3.success, 'Horse move to 3 tiles away should succeed');
     assert.equal(hero.col, 4, 'Hero should reach col 4 (3 road steps)');
-    assert.ok(r3.path.length <= 3, 'Horse path should be at most 3 steps');
+    assert.equal(r3.path.length, 3, 'Horse path should be exactly 3 steps');
   });
 
-  test('horse unit cannot exceed 3 hex steps even with 4 road tiles budget', () => {
+  test('horse unit reaches 4th road tile (full budget)', () => {
     const state = roadChainState(1, 8);
     const hero = state.hero;
     hero.items = { horse: 1 };
 
-    // col 5 is 4 road tiles away — cost-reachable with horse but step-capped at 3
+    // col 5 is 4 road tiles away — cost-reachable with horse (budget 4, each road costs 1)
     const r4 = executeMove(state, hero, 5, 2);
-    assert.ok(r4.success, 'Move should succeed (partial walk)');
-    assert.ok(r4.path.length <= 3, 'Horse path must not exceed 3 hex steps');
-    // Hero stops at col 4 (3 steps), not col 5
-    assert.equal(hero.col, 4, 'Hero should stop at 3 steps, not reach 4th tile');
+    assert.ok(r4.success, 'Move to 4 road tiles away should succeed');
+    assert.equal(r4.path.length, 4, 'Horse path should be exactly 4 steps on roads');
+    assert.equal(hero.col, 5, 'Hero should reach col 5 (4 road steps with horse)');
+  });
+
+  test('horse unit cannot reach 5 road tiles away', () => {
+    const state = roadChainState(1, 10);
+    const hero = state.hero;
+    hero.items = { horse: 1 };
+
+    // col 6 is 5 road tiles away — beyond horse budget (4)
+    const r5 = executeMove(state, hero, 6, 2);
+    assert.equal(r5.success, false, '5 road tiles exceeds horse budget');
   });
 
   test('1-step move is unaffected by cap', () => {
