@@ -253,6 +253,8 @@ function _pickCornerBuildings(rand, tiles) {
 
 // Build a lookup map from the generated river path (captured before tiles are mutated).
 // N-S river: row→col map.  E-W river: col→row map.
+// E-W rivers may have vertical detour tiles (two tiles in one column); the last row
+// per column wins, which is the exit position — correct for _riverSide().
 function _buildRiverMap(riverPath, riverEW = false) {
   const m = new Map();
   if (riverEW) {
@@ -464,10 +466,12 @@ function _generateRiver(rand) {
   return path;
 }
 
-/// Generate an east-west meandering river path: exactly one tile per column (col 0 → MAP_COLS-1).
-// Drift is only allowed when the current row is ODD, because in odd-r offset the only
-// rightward neighbors of an even-row hex are at (col+1, row) — no diagonal step exists.
-// From an odd-row hex the rightward neighbors are (col+1, row-1), (col+1, row), (col+1, row+1).
+/// Generate an east-west meandering river path spanning col 0 → MAP_COLS-1.
+// In odd-r offset, even-row hexes have only one rightward neighbor (col+1, row),
+// while odd-row hexes have three: (col+1, row-1), (col+1, row), (col+1, row+1).
+// To avoid near-straight rivers, even-row hexes may insert a vertical detour step
+// (same column, row±1) to reach an odd row before continuing rightward.
+// This means some columns may contain two river tiles.
 function _generateRiverEW(rand) {
   const path = [];
   const minStart = Math.max(2, Math.floor(MAP_ROWS / 4));
@@ -480,11 +484,40 @@ function _generateRiverEW(rand) {
 
     if (col < MAP_COLS - 1) {
       if (row % 2 === 1) {
-        // Odd row: upper-right (row-1), straight (row), or lower-right (row+1) are all hex-adjacent
+        // Odd row: three rightward neighbors — pick freely
         const opts = [row - 1, row, row + 1].filter(r => r >= 2 && r <= MAP_ROWS - 3);
         row = opts[Math.floor(rand() * opts.length)];
+      } else {
+        // Even row: only (col+1, row) is rightward, but we can detour vertically
+        // to an odd row first, enabling diagonal movement on the next step.
+        // Skip detour if the new tile would neighbor an earlier river tile
+        // (path[-2]), which would create a 3-neighbor cluster.
+        if (rand() < 0.45) {
+          const up   = row - 1;
+          const down = row + 1;
+          const canUp   = up >= 2;
+          const canDown = down <= MAP_ROWS - 3;
+          let target;
+          if (canUp && canDown) {
+            target = rand() < 0.5 ? up : down;
+          } else if (canUp) {
+            target = up;
+          } else if (canDown) {
+            target = down;
+          }
+          if (target !== undefined) {
+            // Ensure detour tile won't be hex-adjacent to the previous column's tile
+            const prev = path.length >= 2 ? path[path.length - 2] : null;
+            const wouldCluster = prev &&
+              getNeighbors(col, target).some(n => n.col === prev.col && n.row === prev.row);
+            if (!wouldCluster) {
+              row = target;
+              path.push({ col, row });
+            }
+          }
+        }
+        // else: go straight to (col+1, row)
       }
-      // Even row: only (col+1, row) is a rightward hex-neighbor — must go straight
     }
   }
 
