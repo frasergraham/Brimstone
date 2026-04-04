@@ -86,8 +86,9 @@ app.use((req, res, next) => {
 
 // Apple App Site Association must be served as application/json
 app.get('/.well-known/apple-app-site-association', (_req, res) => {
-  res.sendFile(join(__dirname, '.well-known', 'apple-app-site-association'), {
-    headers: { 'Content-Type': 'application/json' },
+  const filePath = join(__dirname, '.well-known', 'apple-app-site-association');
+  res.sendFile(filePath, { headers: { 'Content-Type': 'application/json' } }, (err) => {
+    if (err && !res.headersSent) res.status(404).end();
   });
 });
 
