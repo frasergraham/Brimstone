@@ -313,7 +313,7 @@ export class WitchFaction extends Faction {
   get leaderType() { return EntityType.WITCH; }
 
   // Action Budget
-  get actionCap()    { return 10; }
+  get actionCap()    { return 8; }
   get unitBonusCap() { return 3; }
 
   isFavorablePhase(phase) {

@@ -1402,6 +1402,12 @@ export class UIController {
           regularHtml += btn(lbl, 'guard', dis, `data-action="guard"`);
         }
           break;
+        case ActionType.SOUND_HORN:
+        {
+          const hornDis = !action.affordable ? 'disabled' : dis;
+          regularHtml += btn('📯 Sound Horn', 'explore', hornDis, `data-action="sound_horn"`);
+        }
+          break;
         case ActionType.SUMMON:
           // Each SUMMON entry has a specific summonType — render all three as separate buttons.
           // De-duplicate: only render the first time we hit a SUMMON action (we'll loop all three).
@@ -1864,6 +1870,14 @@ export class UIController {
       case 'guard': {
         _hideActionPopup();
         this._addToPlan({ type: PlanActionType.GUARD, entityId: entity.id });
+        if (entity.alive) this._selectEntity(entity);
+        else this._clearSelection();
+        this._updateSidebar(); this.onRedraw(); break;
+      }
+
+      case 'sound_horn': {
+        _hideActionPopup();
+        this._addToPlan({ type: PlanActionType.SOUND_HORN, entityId: entity.id });
         if (entity.alive) this._selectEntity(entity);
         else this._clearSelection();
         this._updateSidebar(); this.onRedraw(); break;

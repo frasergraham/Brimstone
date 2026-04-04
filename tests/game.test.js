@@ -718,8 +718,8 @@ describe('computeActions — hard caps', () => {
     assert.equal(HERO_ACTION_CAP, 8);
   });
 
-  test('witch cap is 10', () => {
-    assert.equal(WITCH_ACTION_CAP, 10);
+  test('witch cap is 8', () => {
+    assert.equal(WITCH_ACTION_CAP, 8);
   });
 
   test('hero capped at 8 even with max survivors + time + nodes', () => {
@@ -745,14 +745,13 @@ describe('computeActions — hard caps', () => {
     assert.equal(computeActions(Player.HERO, Phase.DAWN, ents5, 3), 8);
   });
 
-  test('witch capped at 10 even with max units + time + nodes', () => {
+  test('witch capped at 8 even with max units + time + nodes', () => {
     const ents = [
       { alive: true, owner: 'witch', type: EntityType.WITCH },
       ...Array.from({ length: 3 }, () => ({ alive: true, owner: 'witch', type: EntityType.MINION })),
     ];
-    // NIGHT: 3 base + 1 time + 3 units + 3 nodes = 10 → exactly at cap
-    assert.equal(computeActions(Player.WITCH, Phase.NIGHT, ents, 3), 10);
-    // More nodes wouldn't matter if we could have them
+    // NIGHT: 3 base + 1 time + 3 units + 3 nodes = 10 → capped at 8
+    assert.equal(computeActions(Player.WITCH, Phase.NIGHT, ents, 3), 8);
   });
 
   test('witch with high nodeBonus stays at cap', () => {
@@ -760,8 +759,8 @@ describe('computeActions — hard caps', () => {
       { alive: true, owner: 'witch', type: EntityType.WITCH },
       ...Array.from({ length: 20 }, () => ({ alive: true, owner: 'witch', type: EntityType.MINION })),
     ];
-    // NIGHT: 3 + 1 + 3 (capped units) + 3 nodes = 10 → at cap
-    assert.equal(computeActions(Player.WITCH, Phase.NIGHT, ents, 3), 10);
+    // NIGHT: 3 + 1 + 3 (capped units) + 3 nodes = 10 → capped at 8
+    assert.equal(computeActions(Player.WITCH, Phase.NIGHT, ents, 3), 8);
   });
 });
 

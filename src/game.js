@@ -72,7 +72,7 @@ export const Player = Object.freeze({ HERO: 'hero', WITCH: 'witch' });
 
 // Hard caps on total actions per turn (after all bonuses).
 export const HERO_ACTION_CAP  = 8;
-export const WITCH_ACTION_CAP = 10;
+export const WITCH_ACTION_CAP = 8;
 
 // Calculate actions for a player at the start of their turn.
 // Hero  — base 3 + 1 in DAWN/DAY + 1 per survivor (cap +5) + 1 per held power node; hard cap 8
@@ -205,6 +205,7 @@ export class GameState {
     this.heroKills        = 0; // entities killed by hero side (combat + hazards)
     this.witchKills       = 0; // entities killed by witch side (combat + hazards)
     this.witchSummonCount = 0; // total summons performed by witch side
+    this.heroRevealedByHorn = false; // true when hero sounded horn this round
 
     // Cumulative node scoring: each dawn/dusk majority scores 1 point; first to 3 wins.
     this.nodeScore = { hero: 0, witch: 0 };
@@ -326,6 +327,7 @@ export class GameState {
     this.witchPlan        = null;
     this.heroReady        = false;
     this.witchReady       = false;
+    this.heroRevealedByHorn = false;
 
     // Power-node bonus: +1 action per node the faction controls
     const heroNodeBonus  = countHeldNodes('hero',  this.witchObjectives, this.entities);

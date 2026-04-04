@@ -9,6 +9,7 @@ import {
 } from './tiles.js';
 import { ENTITY_COLOR, EntityType, SurvivorAbility } from './entities.js';
 import { getVisibleEnemyHexes, getVisibleHeroHexes, sightRange, buildFogMovementHexes } from './actions.js';
+import { getFaction } from './factions.js';
 import { nodeController, Phase } from './game.js';
 
 // PAD_X/PAD_Y are now computed dynamically in _resize() as this._padX / this._padY.
@@ -1252,7 +1253,7 @@ export class Renderer {
     const visibleSet = new Set();
     for (const e of state.entities) {
       if (!e.alive || e.owner !== observerOwner) continue;
-      const range = sightRange(state.phase, e.ability === SurvivorAbility.SCOUT);
+      const range = getFaction(e.owner).getSightRange(state.phase, e.ability === SurvivorAbility.SCOUT);
       // Only iterate hexes within sight range of this entity (not entire map)
       const rMin = Math.max(0, e.row - range);
       const rMax = Math.min(MAP_ROWS - 1, e.row + range);

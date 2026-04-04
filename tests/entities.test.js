@@ -83,11 +83,11 @@ describe('Base stats — Wood Golem', () => {
 });
 
 describe('Base stats — Iron Golem', () => {
-  test('HP=5, ATK=3, DEF=4, owner=witch', () => {
+  test('HP=5, ATK=3, DEF=2, owner=witch', () => {
     const g = createIronGolem(0, 0);
     assert.equal(g.maxHp, 5);
     assert.equal(g.attack, 3);
-    assert.equal(g.defense, 4);
+    assert.equal(g.defense, 2);
     assert.equal(g.owner, 'witch');
     assert.equal(g.type, EntityType.IRON_GOLEM);
   });

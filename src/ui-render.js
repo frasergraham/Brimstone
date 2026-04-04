@@ -41,6 +41,8 @@ export function describePlanAction(action, entities, index = 0) {
       return `${who} equips ${action.weapon}`;
     case PlanActionType.USE_ABILITY:
       return `${who} uses ability`;
+    case PlanActionType.SOUND_HORN:
+      return `${who} sounds the horn`;
     default:
       return `Step ${index + 1}`;
   }
@@ -77,6 +79,8 @@ function _stepCostLabel(action, projShared, projWitch, projEntityItems) {
       if (!item || item.startsWith('weapon:')) return '';
       return `−1${RES_ICON[item] || item}`;
     }
+    case PlanActionType.SOUND_HORN:
+      return `−2${RES_ICON[ResourceType.FOOD]}`;
     default: return '';
   }
 }
@@ -178,6 +182,9 @@ export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entit
         } else if ((projShared[item] || 0) > 0) { projShared[item]--; }
         break;
       }
+      case PlanActionType.SOUND_HORN:
+        if ((projShared[ResourceType.FOOD] || 0) >= 2) projShared[ResourceType.FOOD] -= 2;
+        break;
     }
   });
 
@@ -327,6 +334,9 @@ function _advanceProjectedInventory(a, projShared, projWitch, projEntityItems) {
       } else if ((projShared[item] || 0) > 0) { projShared[item]--; }
       break;
     }
+    case PlanActionType.SOUND_HORN:
+      if ((projShared[ResourceType.FOOD] || 0) >= 2) projShared[ResourceType.FOOD] -= 2;
+      break;
   }
 }
 
