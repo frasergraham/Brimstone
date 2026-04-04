@@ -167,6 +167,14 @@ export function isAdminEmail(email) {
 }
 
 /**
+ * Explicitly set admin status for a player.
+ * Used by admin panel to grant/revoke admin on other players.
+ */
+export function setAdmin(playerId, isAdmin) {
+  _setAdmin.run(isAdmin ? 1 : 0, playerId);
+}
+
+/**
  * Grant admin if any of the player's linked emails are on the admin allow list.
  * Called after email linking to auto-promote eligible players.
  */

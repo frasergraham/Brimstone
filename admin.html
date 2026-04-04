@@ -3,33 +3,33 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Caleb's Hollow — Admin Panel</title>
+  <title>Brimstone Admin</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --bg:          #0d0f16;
-      --bg-panel:    #111520;
-      --bg-section:  #161b28;
-      --border:      #2a2040;
-      --text:        #d4c9b0;
-      --text-dim:    #7a7060;
-      --text-bright: #f0e8d0;
+      --bg:          #1a1a2e;
+      --bg-panel:    #1e1e3a;
+      --bg-section:  #22224a;
+      --border:      #333;
+      --text:        #eee;
+      --text-dim:    #999;
+      --text-bright: #fff;
+      --accent:      #7af;
+      --accent-dim:  #58a;
       --hero:        #d4a72c;
       --witch:       #9b59b6;
-      --day:         #f5c842;
-      --night:       #7b4fbb;
       --green:       #4caf7d;
       --red:         #c0392b;
-      --font-serif:  "Georgia", "Times New Roman", serif;
-      --font-mono:   "Courier New", monospace;
+      --yellow:      #e0c030;
+      --font:        monospace;
     }
 
     html, body {
       height: 100%;
       background: var(--bg);
       color: var(--text);
-      font-family: var(--font-serif);
+      font-family: var(--font);
       font-size: 14px;
       line-height: 1.5;
       overflow-y: auto;
@@ -41,37 +41,45 @@
       padding: 1.5rem 2rem 3rem;
     }
 
-    h1 {
-      font-size: 2rem;
-      letter-spacing: 0.2em;
-      color: var(--day);
-      text-shadow: 0 0 16px rgba(245,200,66,0.3);
-      margin-bottom: 0.25rem;
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.5rem;
     }
 
-    .subtitle {
-      color: var(--text-dim);
-      font-style: italic;
-      margin-bottom: 1.5rem;
+    header h1 {
+      font-size: 1.4rem;
+      letter-spacing: 0.15em;
+      color: var(--accent);
     }
+
+    header h1 span { color: var(--text-dim); font-size: 0.8rem; margin-left: 0.5rem; }
+
+    header a {
+      color: var(--text-dim);
+      text-decoration: none;
+      font-size: 0.85rem;
+      border: 1px solid var(--border);
+      padding: 0.3rem 0.75rem;
+    }
+    header a:hover { color: var(--text); border-color: var(--text-dim); }
 
     /* ── Stats bar ──────────────────────────────── */
     .stats-bar {
       display: flex;
-      gap: 1.5rem;
-      flex-wrap: wrap;
-      margin-bottom: 1.5rem;
+      gap: 1rem;
+      margin-bottom: 1rem;
     }
     .stat-box {
       background: var(--bg-section);
       border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 0.6rem 1.2rem;
-      min-width: 120px;
+      padding: 0.5rem 1rem;
       text-align: center;
+      flex: 1;
     }
-    .stat-box .label { font-size: 0.75rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.1em; }
-    .stat-box .value { font-size: 1.6rem; color: var(--text-bright); font-family: var(--font-mono); }
+    .stat-box .label { font-size: 0.7rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.1em; }
+    .stat-box .value { font-size: 1.4rem; color: var(--text-bright); }
 
     /* ── Tabs ───────────────────────────────────── */
     .tabs {
@@ -84,242 +92,250 @@
       background: none;
       border: none;
       color: var(--text-dim);
-      font-family: var(--font-serif);
-      font-size: 0.95rem;
-      padding: 0.6rem 1.25rem;
+      font-family: var(--font);
+      font-size: 0.85rem;
+      padding: 0.5rem 1rem;
       cursor: pointer;
       border-bottom: 2px solid transparent;
-      transition: color 0.15s, border-color 0.15s;
     }
     .tab-btn:hover { color: var(--text); }
-    .tab-btn.active {
-      color: var(--day);
-      border-bottom-color: var(--day);
-    }
+    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
 
     .tab-content { display: none; }
     .tab-content.active { display: block; }
 
     /* ── Tables ──────────────────────────────────── */
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.85rem;
-    }
-    th, td {
-      text-align: left;
-      padding: 0.5rem 0.75rem;
-      border-bottom: 1px solid var(--border);
-    }
-    th {
-      color: var(--text-dim);
-      font-weight: normal;
-      text-transform: uppercase;
-      font-size: 0.7rem;
-      letter-spacing: 0.1em;
-    }
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); }
+    th { color: var(--text-dim); font-weight: normal; text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.08em; }
     tr:hover td { background: rgba(255,255,255,0.02); }
+    tr.clickable { cursor: pointer; }
 
+    /* ── Badges ──────────────────────────────────── */
     .badge {
       display: inline-block;
-      padding: 0.1rem 0.5rem;
-      border-radius: 3px;
+      padding: 0.1rem 0.4rem;
       font-size: 0.75rem;
-      font-family: var(--font-mono);
     }
     .badge-hero  { background: rgba(212,167,44,0.15); color: var(--hero); }
     .badge-witch { background: rgba(155,89,182,0.15); color: var(--witch); }
     .badge-phase { background: rgba(255,255,255,0.06); color: var(--text-dim); }
     .badge-ai    { background: rgba(255,255,255,0.06); color: var(--text-dim); font-size: 0.7rem; }
+    .badge-source { background: rgba(119,170,255,0.1); color: var(--accent); }
+    .badge-admin { background: rgba(212,167,44,0.2); color: var(--hero); font-weight: bold; }
 
+    /* ── Buttons ─────────────────────────────────── */
     .btn {
       background: var(--bg-section);
       border: 1px solid var(--border);
       color: var(--text);
-      font-family: var(--font-serif);
-      font-size: 0.8rem;
-      padding: 0.3rem 0.75rem;
-      border-radius: 3px;
+      font-family: var(--font);
+      font-size: 0.78rem;
+      padding: 0.25rem 0.6rem;
       cursor: pointer;
-      transition: background 0.15s, border-color 0.15s;
     }
-    .btn:hover { background: var(--bg-panel); border-color: var(--text-dim); }
-    .btn-primary {
-      background: rgba(212,167,44,0.15);
-      border-color: var(--hero);
-      color: var(--hero);
-    }
-    .btn-primary:hover { background: rgba(212,167,44,0.25); }
+    .btn:hover { border-color: var(--text-dim); }
+    .btn-primary { border-color: var(--accent); color: var(--accent); }
+    .btn-primary:hover { background: rgba(119,170,255,0.1); }
+    .btn-admin { border-color: var(--hero); color: var(--hero); }
+    .btn-admin:hover { background: rgba(212,167,44,0.15); }
+    .btn-admin.active { background: rgba(212,167,44,0.2); color: var(--hero); font-weight: bold; }
+    .btn:disabled { opacity: 0.4; cursor: default; }
 
-    .empty-msg {
-      color: var(--text-dim);
-      font-style: italic;
-      padding: 1rem 0;
-    }
-
-    .refresh-row {
-      display: flex;
-      justify-content: flex-end;
-      margin-bottom: 0.75rem;
-    }
-
-    .player-list-entry { display: flex; align-items: center; gap: 0.3rem; }
-
-    .id-short {
-      font-family: var(--font-mono);
-      font-size: 0.75rem;
-      color: var(--text-dim);
-    }
-
+    .id-short { color: var(--text-dim); font-size: 0.75rem; }
     .time-ago { color: var(--text-dim); font-size: 0.8rem; }
+    .empty-msg { color: var(--text-dim); font-style: italic; padding: 1rem 0; }
 
-    /* ── Mobile ──────────────────────────── */
-    @media (max-width: 600px) {
-      .admin-wrap { padding: 1rem 0.75rem 2rem; }
-      h1 { font-size: 1.4rem; letter-spacing: 0.1em; }
-      .stats-bar { gap: 0.75rem; }
-      .stat-box { min-width: 0; flex: 1 1 70px; padding: 0.5rem 0.6rem; }
-      .stat-box .value { font-size: 1.3rem; }
-      .tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-      .tab-btn { padding: 0.5rem 0.75rem; font-size: 0.82rem; white-space: nowrap; }
-      .tab-content { overflow-x: auto; }
-      th, td { padding: 0.35rem 0.5rem; }
-      th { font-size: 0.65rem; }
-      .btn { min-height: 44px; padding: 0.5rem 0.75rem; font-size: 0.85rem; }
-      .refresh-row { flex-wrap: wrap; gap: 0.5rem; }
+    /* ── Toolbar rows ────────────────────────────── */
+    .toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.75rem;
+      gap: 0.5rem;
     }
+    .toolbar select {
+      background: var(--bg-section);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 0.8rem;
+      padding: 0.25rem 0.5rem;
+    }
+
+    /* ── Pagination ──────────────────────────────── */
+    .pagination {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 0.75rem;
+      margin-top: 0.75rem;
+      font-size: 0.82rem;
+      color: var(--text-dim);
+    }
+
+    /* ── Detail row (inline expansion) ───────────── */
+    .detail-row td {
+      background: var(--bg-panel);
+      padding: 0.75rem 1rem;
+    }
+    .detail-row .detail-meta { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; margin-bottom: 0.5rem; font-size: 0.8rem; }
+    .detail-row .detail-meta span { color: var(--text-dim); }
+    .detail-row .detail-meta strong { color: var(--text); }
+    .detail-row .detail-actions { margin-bottom: 0.5rem; display: flex; gap: 0.5rem; }
+    .detail-row .rounds-list { max-height: 200px; overflow-y: auto; font-size: 0.78rem; color: var(--text-dim); }
+    .detail-row .rounds-list div { padding: 0.15rem 0; border-bottom: 1px solid rgba(51,51,51,0.5); }
+
+    /* ── Player detail expansion ─────────────────── */
+    .player-detail td { background: var(--bg-panel); padding: 0.5rem 1rem; font-size: 0.78rem; }
+    .player-detail .identity-row { display: flex; gap: 1rem; align-items: center; padding: 0.2rem 0; }
+    .player-detail .device-row { display: flex; gap: 1rem; align-items: center; padding: 0.2rem 0; color: var(--text-dim); }
+
+    /* ── Cards (balance/campaign) ─────────────────── */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+    }
+    .card {
+      background: var(--bg-section);
+      border: 1px solid var(--border);
+      padding: 0.75rem 1rem;
+      text-align: center;
+    }
+    .card .value { font-size: 1.6rem; font-weight: bold; color: var(--text-bright); }
+    .card .label { color: var(--text-dim); font-size: 0.78rem; margin-top: 0.15rem; }
+    .card.hero .value  { color: var(--hero); }
+    .card.witch .value { color: var(--witch); }
+    .card.green .value { color: var(--green); }
+
+    /* ── Sections (balance/campaign) ──────────────── */
+    .section {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      padding: 1rem 1.25rem;
+      margin-bottom: 1rem;
+    }
+    .section h2 {
+      font-size: 0.95rem;
+      letter-spacing: 0.1em;
+      color: var(--accent);
+      margin-bottom: 0.6rem;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.4rem;
+    }
+
+    /* ── Bar chart ──────────────────────── */
+    .bar-row { display: flex; align-items: center; margin-bottom: 0.4rem; }
+    .bar-label { width: 120px; font-size: 0.8rem; color: var(--text-dim); flex-shrink: 0; }
+    .bar-track { flex: 1; height: 18px; background: var(--bg); overflow: hidden; margin: 0 0.6rem; }
+    .bar-fill { height: 100%; transition: width 0.4s ease; }
+    .bar-value { width: 70px; text-align: right; font-size: 0.8rem; color: var(--text-bright); }
+
+    .balance-meter { display: flex; align-items: center; gap: 0.6rem; margin: 0.75rem 0; }
+    .balance-meter .track { flex: 1; height: 22px; background: var(--bg); overflow: hidden; display: flex; }
+    .balance-meter .hero-fill { background: var(--hero); transition: width 0.4s ease; }
+    .balance-meter .witch-fill { background: var(--witch); transition: width 0.4s ease; }
+    .balance-meter .side-label { font-size: 0.85rem; font-weight: bold; min-width: 50px; }
+    .balance-meter .side-label.hero  { color: var(--hero); text-align: right; }
+    .balance-meter .side-label.witch { color: var(--witch); text-align: left; }
+
+    .health-badge { display: inline-block; padding: 0.1rem 0.4rem; font-size: 0.75rem; font-weight: bold; }
+    .health-badge.good    { background: #1a3a20; color: var(--green); }
+    .health-badge.warning { background: #3a3010; color: var(--yellow); }
+    .health-badge.bad     { background: #3a1515; color: var(--red); }
+
+    .note { color: var(--text-dim); font-size: 0.75rem; font-style: italic; margin-top: 0.4rem; }
+    .empty-state { text-align: center; color: var(--text-dim); font-style: italic; padding: 2rem 1rem; }
+    .recent-games { max-height: 400px; overflow-y: auto; }
   </style>
 </head>
 <body>
   <div class="admin-wrap">
-    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.5rem">
-      <h1>CALEB'S HOLLOW ADMIN</h1>
-      <a href="/" class="btn" style="text-decoration:none;font-size:0.85rem">Back to main menu</a>
-    </div>
-    <p class="subtitle" id="version-line">Loading... &mdash; <a href="/admin/stats" class="admin-nav-link" style="color:var(--hero)">Game Stats</a></p>
+    <header>
+      <h1>BRIMSTONE ADMIN <span id="version-line"></span></h1>
+      <a href="/">Back to main menu</a>
+    </header>
 
-    <div class="stats-bar" id="stats-bar">
+    <div class="stats-bar">
       <div class="stat-box"><div class="label">Connections</div><div class="value" id="stat-connections">-</div></div>
       <div class="stat-box"><div class="label">Active Games</div><div class="value" id="stat-rooms">-</div></div>
-      <div class="stat-box"><div class="label">Queue</div><div class="value" id="stat-queue">-</div></div>
       <div class="stat-box"><div class="label">Uptime</div><div class="value" id="stat-uptime">-</div></div>
     </div>
 
-    <div class="tabs">
-      <button class="tab-btn active" data-tab="tab-games">Active Games</button>
-      <button class="tab-btn" data-tab="tab-saves">Saved Games</button>
-      <button class="tab-btn" data-tab="tab-completed">Completed Games</button>
-      <button class="tab-btn" data-tab="tab-players">Players</button>
-    </div>
+    <nav class="tabs">
+      <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+      <button class="tab-btn" data-tab="games">All Games</button>
+      <button class="tab-btn" data-tab="players">Players</button>
+      <button class="tab-btn" data-tab="balance">Balance</button>
+      <button class="tab-btn" data-tab="campaign">Campaign</button>
+    </nav>
 
-    <!-- ── Active Games tab ─────────────────────────── -->
-    <div id="tab-games" class="tab-content active">
-      <div class="refresh-row"><button class="btn" id="refresh-rooms">Refresh</button></div>
-      <table id="rooms-table">
-        <thead>
-          <tr>
-            <th>Room</th>
-            <th>Players</th>
-            <th>Round</th>
-            <th>Phase</th>
-            <th>Status</th>
-            <th>Spectators</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="rooms-body"></tbody>
+    <!-- ── Dashboard ─────────────────────────────── -->
+    <div id="tab-dashboard" class="tab-content active">
+      <table>
+        <thead><tr>
+          <th>Room</th><th>Players</th><th>Round</th><th>Phase</th><th>Status</th><th>Spectators</th><th></th>
+        </tr></thead>
+        <tbody id="dashboard-body"></tbody>
       </table>
-      <p class="empty-msg" id="rooms-empty" style="display:none">No active games.</p>
+      <p class="empty-msg" id="dashboard-empty" style="display:none">No active games.</p>
     </div>
 
-    <!-- ── Saved Games tab ──────────────────────────── -->
-    <div id="tab-saves" class="tab-content">
-      <div class="refresh-row"><button class="btn" id="refresh-saves">Refresh</button></div>
-      <table id="saves-table">
-        <thead>
-          <tr>
-            <th>Save ID</th>
-            <th>Hero</th>
-            <th>Witch</th>
-            <th>Round</th>
-            <th>Phase</th>
-            <th>Version</th>
-            <th>Last Updated</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="saves-body"></tbody>
+    <!-- ── All Games ─────────────────────────────── -->
+    <div id="tab-games" class="tab-content">
+      <div class="toolbar">
+        <select id="games-source">
+          <option value="all">All Sources</option>
+          <option value="active">Active</option>
+          <option value="saved">Saved</option>
+          <option value="completed_mp">Completed (MP)</option>
+          <option value="completed_sp">Completed (SP)</option>
+        </select>
+        <button class="btn" id="games-refresh">Refresh</button>
+      </div>
+      <table>
+        <thead><tr>
+          <th>Source</th><th>Hero</th><th>Witch</th><th>Round</th><th>Winner</th><th>Mode</th><th>Players</th><th>Date</th>
+        </tr></thead>
+        <tbody id="games-body"></tbody>
       </table>
-      <p class="empty-msg" id="saves-empty" style="display:none">No saved games.</p>
+      <p class="empty-msg" id="games-empty" style="display:none">No games found.</p>
+      <div class="pagination" id="games-pagination"></div>
     </div>
 
-    <!-- ── Completed Games tab ─────────────────────── -->
-    <div id="tab-completed" class="tab-content">
-      <div class="refresh-row">
-        <div style="display:flex;gap:0.4rem;align-items:center">
-          <button class="btn completed-sub active" data-sub="mp">Online</button>
-          <button class="btn completed-sub" data-sub="sp">Single Player</button>
-        </div>
-        <button class="btn" id="refresh-completed">Refresh</button>
-      </div>
-
-      <!-- Online (MP) completed games -->
-      <div id="completed-sub-mp">
-        <table id="completed-table">
-          <thead>
-            <tr>
-              <th>Hero</th>
-              <th>Witch</th>
-              <th>Winner</th>
-              <th>Rounds</th>
-              <th>Mode</th>
-              <th>Pinned</th>
-              <th>Played</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="completed-body"></tbody>
-        </table>
-        <p class="empty-msg" id="completed-empty" style="display:none">No online completed games on record.</p>
-      </div>
-
-      <!-- Single-player uploaded games -->
-      <div id="completed-sub-sp" style="display:none">
-        <table id="sp-completed-table">
-          <thead>
-            <tr>
-              <th>Hero</th>
-              <th>Witch</th>
-              <th>Winner</th>
-              <th>Rounds</th>
-              <th>Mode</th>
-              <th>Uploaded</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="sp-completed-body"></tbody>
-        </table>
-        <p class="empty-msg" id="sp-completed-empty" style="display:none">No single-player uploads on record.</p>
-      </div>
-    </div>
-
-    <!-- ── Players tab ──────────────────────────────── -->
+    <!-- ── Players ───────────────────────────────── -->
     <div id="tab-players" class="tab-content">
-      <div class="refresh-row"><button class="btn" id="refresh-players">Refresh</button></div>
-      <table id="players-table">
-        <thead>
-          <tr>
-            <th>Username</th>
-            <th>Wins</th>
-            <th>Losses</th>
-            <th>Draws</th>
-            <th>Win %</th>
-            <th>Joined</th>
-          </tr>
-        </thead>
+      <div class="toolbar">
+        <span></span>
+        <button class="btn" id="players-refresh">Refresh</button>
+      </div>
+      <table>
+        <thead><tr>
+          <th>Username</th><th>ID</th><th>Identities</th><th>Wins</th><th>Losses</th><th>Draws</th><th>Win%</th><th>Admin</th><th>Joined</th>
+        </tr></thead>
         <tbody id="players-body"></tbody>
       </table>
       <p class="empty-msg" id="players-empty" style="display:none">No registered players.</p>
+    </div>
+
+    <!-- ── Balance ───────────────────────────────── -->
+    <div id="tab-balance" class="tab-content">
+      <div class="toolbar">
+        <span></span>
+        <button class="btn" style="border-color:var(--red);color:var(--red)" onclick="resetStats()">Reset All Stats</button>
+      </div>
+      <div id="balance-content"><p class="empty-state">Loading...</p></div>
+    </div>
+
+    <!-- ── Campaign ──────────────────────────────── -->
+    <div id="tab-campaign" class="tab-content">
+      <div class="toolbar">
+        <span></span>
+        <button class="btn" style="border-color:var(--red);color:var(--red)" onclick="resetStats()">Reset All Stats</button>
+      </div>
+      <div id="campaign-content"><p class="empty-state">Loading...</p></div>
     </div>
   </div>
 
@@ -328,6 +344,7 @@
 
     const _session = JSON.parse(localStorage.getItem('brimstone_session') || 'null');
     const _token = _session?.token;
+    let _myPlayerId = null;
 
     (async () => {
       if (!_token) { window.location.href = '/'; return; }
@@ -336,10 +353,11 @@
         if (!r.ok) { window.location.href = '/'; return; }
         const data = await r.json();
         if (!data.isAdmin) { window.location.href = '/'; return; }
+        _myPlayerId = data.id;
       } catch { window.location.href = '/'; }
     })();
 
-    // ── Helpers ──────────────────────────────────────────────────────────────────
+    // ── Shared helpers ──────────────────────────────────────────────────────────
 
     async function api(path) {
       const sep = path.includes('?') ? '&' : '?';
@@ -350,10 +368,23 @@
       return res.json();
     }
 
+    async function apiPost(path, body) {
+      const sep = path.includes('?') ? '&' : '?';
+      const url = _token ? `${path}${sep}token=${encodeURIComponent(_token)}` : path;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (res.status === 401 || res.status === 403) { window.location.href = '/'; return; }
+      return res.json();
+    }
+
     function timeAgo(unixSeconds) {
+      if (!unixSeconds) return '-';
       const diff = Math.floor(Date.now() / 1000) - unixSeconds;
-      if (diff < 60)   return `${diff}s ago`;
-      if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+      if (diff < 60)    return `${diff}s ago`;
+      if (diff < 3600)  return `${Math.floor(diff / 60)}m ago`;
       if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
       return `${Math.floor(diff / 86400)}d ago`;
     }
@@ -367,57 +398,152 @@
       return `${s}s`;
     }
 
-    function shortId(id) {
-      if (!id) return '-';
-      return id.slice(0, 8);
+    function shortId(id) { return id ? id.slice(0, 8) : '-'; }
+
+    function _esc(str) {
+      if (!str) return '';
+      const el = document.createElement('span');
+      el.textContent = str;
+      return el.innerHTML;
     }
 
-    // ── Tabs ────────────────────────────────────────────────────────────────────
+    function pct(n, total) { return total > 0 ? (n / total * 100).toFixed(1) : '0.0'; }
+
+    function fmtDuration(ms) {
+      if (!ms) return '--';
+      const s = Math.round(ms / 1000);
+      const m = Math.floor(s / 60);
+      return m > 0 ? `${m}m ${s % 60}s` : `${s}s`;
+    }
+
+    function balanceBadge(heroWinPct) {
+      if (heroWinPct >= 45 && heroWinPct <= 55) return '<span class="health-badge good">Balanced</span>';
+      if (heroWinPct >= 40 && heroWinPct <= 60) return '<span class="health-badge warning">Slightly skewed</span>';
+      return '<span class="health-badge bad">Imbalanced</span>';
+    }
+
+    function roundsBadge(avg) {
+      if (avg >= 15 && avg <= 25) return '<span class="health-badge good">Healthy</span>';
+      if (avg >= 10 && avg <= 30) return '<span class="health-badge warning">Acceptable</span>';
+      return '<span class="health-badge bad">Out of range</span>';
+    }
+
+    function winRateBadge(winPct) {
+      if (winPct >= 30 && winPct <= 70) return '<span class="health-badge good">Normal</span>';
+      if (winPct >= 15 && winPct <= 85) return '<span class="health-badge warning">Skewed</span>';
+      return '<span class="health-badge bad">Extreme</span>';
+    }
+
+    function card(value, label, cls = '') {
+      return `<div class="card ${cls}"><div class="value">${value}</div><div class="label">${label}</div></div>`;
+    }
+
+    function barRow(label, count, max, color, suffix) {
+      const w = max > 0 ? (count / max * 100) : 0;
+      return `<div class="bar-row">
+        <span class="bar-label">${label}</span>
+        <div class="bar-track"><div class="bar-fill" style="width:${w}%;background:${color}"></div></div>
+        <span class="bar-value">${count} (${suffix})</span>
+      </div>`;
+    }
+
+    function _countActions(steps) {
+      const counts = {};
+      for (const step of steps) {
+        // N-player format: playerEvents[]
+        if (step.playerEvents) {
+          for (const pe of step.playerEvents) {
+            const key = pe.faction || pe.playerId || 'unknown';
+            counts[key] = (counts[key] || 0) + (pe.events?.length || 0);
+          }
+        }
+        // Legacy 2-player format: heroEvents / witchEvents
+        if (step.heroEvents) counts['hero'] = (counts['hero'] || 0) + step.heroEvents.length;
+        if (step.witchEvents) counts['witch'] = (counts['witch'] || 0) + step.witchEvents.length;
+      }
+      return counts;
+    }
+
+    function formatRoundSummary(r, source) {
+      // Active game chronicle entries: { round, phase, resolvedAt, steps, entities, log }
+      if (r.round != null && r.steps) {
+        const steps = Array.isArray(r.steps) ? r.steps : [];
+        const counts = _countActions(steps);
+        const parts = Object.entries(counts).map(([k, v]) => `${k}: ${v} actions`);
+        return `Round ${r.round} (${_esc(r.phase || '')}) — ${parts.join(', ') || 'no actions'}`;
+      }
+
+      // DB rounds: { round_num, steps_json, pre_state_json }
+      if (r.round_num != null) {
+        let steps = [];
+        try { steps = JSON.parse(r.steps_json || '[]'); } catch {}
+        const counts = _countActions(steps);
+        const parts = Object.entries(counts).map(([k, v]) => `${k}: ${v} actions`);
+        let phase = '';
+        try { const st = JSON.parse(r.pre_state_json || '{}'); phase = st.phase || ''; } catch {}
+        return `Round ${r.round_num}${phase ? ` (${_esc(phase)})` : ''} — ${parts.join(', ') || 'no actions'}`;
+      }
+
+      return _esc(JSON.stringify(r));
+    }
+
+    // ── Tab system ──────────────────────────────────────────────────────────────
+
+    const _tabLoaded = {};
+    let _dashboardInterval = null;
+
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tabId));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.id === `tab-${tabId}`));
+
+      if (!_tabLoaded[tabId]) {
+        _tabLoaded[tabId] = true;
+        if (tabId === 'games')    loadAllGames(1);
+        if (tabId === 'players')  loadPlayersDetailed();
+        if (tabId === 'balance')  loadBalanceStats();
+        if (tabId === 'campaign') loadCampaignStats();
+      }
+
+      // Auto-refresh only on dashboard
+      if (tabId === 'dashboard') {
+        if (!_dashboardInterval) _dashboardInterval = setInterval(() => { loadStats(); loadRooms(); }, 10000);
+      } else {
+        if (_dashboardInterval) { clearInterval(_dashboardInterval); _dashboardInterval = null; }
+      }
+    }
 
     document.querySelectorAll('.tab-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-        btn.classList.add('active');
-        document.getElementById(btn.dataset.tab).classList.add('active');
-      });
+      btn.addEventListener('click', () => switchTab(btn.dataset.tab));
     });
 
-    // ── Stats ───────────────────────────────────────────────────────────────────
+    // ── Dashboard tab ───────────────────────────────────────────────────────────
 
     async function loadStats() {
       try {
         const stats = await api('/admin/api/stats');
-        document.getElementById('version-line').innerHTML = `v${stats.version} &mdash; <a href="/admin/stats" class="admin-nav-link" style="color:var(--hero)">Game Stats</a>`;
+        document.getElementById('version-line').textContent = `v${stats.version}`;
         document.getElementById('stat-connections').textContent = stats.connections;
         document.getElementById('stat-rooms').textContent = stats.activeRooms;
-        document.getElementById('stat-queue').textContent = stats.queueSize;
         document.getElementById('stat-uptime').textContent = formatUptime(stats.uptime);
-      } catch (e) {
-        document.getElementById('version-line').innerHTML = 'Failed to connect &mdash; <a href="/admin/stats" class="admin-nav-link" style="color:var(--hero)">Game Stats</a>';
+      } catch {
+        document.getElementById('version-line').textContent = '(offline)';
       }
     }
-
-    // ── Active Games ────────────────────────────────────────────────────────────
 
     async function loadRooms() {
       try {
         const rooms = await api('/admin/api/rooms');
-        const tbody = document.getElementById('rooms-body');
-        const empty = document.getElementById('rooms-empty');
+        const tbody = document.getElementById('dashboard-body');
+        const empty = document.getElementById('dashboard-empty');
 
-        if (rooms.length === 0) {
-          tbody.innerHTML = '';
-          empty.style.display = '';
-          return;
-        }
+        if (rooms.length === 0) { tbody.innerHTML = ''; empty.style.display = ''; return; }
         empty.style.display = 'none';
 
         tbody.innerHTML = rooms.map(r => {
           const players = r.players.map(p => {
-            const factionClass = p.faction === 'hero' ? 'badge-hero' : 'badge-witch';
-            const aiTag = p.isAI ? ' <span class="badge badge-ai">AI</span>' : '';
-            return `<span class="badge ${factionClass}">${_esc(p.name)}${aiTag}</span>`;
+            const cls = p.faction === 'hero' ? 'badge-hero' : 'badge-witch';
+            const ai = p.isAI ? ' <span class="badge badge-ai">AI</span>' : '';
+            return `<span class="badge ${cls}">${_esc(p.name)}${ai}</span>`;
           }).join(' ');
 
           const status = r.gameOver
@@ -442,198 +568,470 @@
       }
     }
 
-    // ── Saved Games ─────────────────────────────────────────────────────────────
+    function spectateRoom(roomId) {
+      window.open(`/spectate?room=${roomId}`, `spectate-${roomId}`);
+    }
 
-    async function loadSaves() {
+    // ── All Games tab ───────────────────────────────────────────────────────────
+
+    let _gamesPage = 1;
+
+    async function loadAllGames(page, source) {
+      _gamesPage = page || 1;
+      source = source || document.getElementById('games-source').value;
       try {
-        const saves = await api('/admin/api/saves');
-        const tbody = document.getElementById('saves-body');
-        const empty = document.getElementById('saves-empty');
+        const data = await api(`/admin/api/all-games?page=${_gamesPage}&limit=50&source=${source}`);
+        const tbody = document.getElementById('games-body');
+        const empty = document.getElementById('games-empty');
+        const pag   = document.getElementById('games-pagination');
 
-        if (saves.length === 0) {
+        if (data.games.length === 0) {
           tbody.innerHTML = '';
           empty.style.display = '';
+          pag.innerHTML = '';
           return;
         }
         empty.style.display = 'none';
 
-        tbody.innerHTML = saves.map(s => {
-          const heroName = s.hero_name || '-';
-          const witchName = s.witch_name || '-';
-          const updated = s.updated_at ? timeAgo(s.updated_at) : '-';
-
-          return `<tr>
-            <td><span class="id-short" title="${_esc(s.room_id)}">${shortId(s.room_id)}</span></td>
-            <td><span class="badge badge-hero">${_esc(heroName)}</span></td>
-            <td><span class="badge badge-witch">${_esc(witchName)}</span></td>
-            <td>${s.round}</td>
-            <td><span class="badge badge-phase">${_esc(s.phase)}</span></td>
-            <td>${_esc(s.game_version)}</td>
-            <td class="time-ago">${updated}</td>
-            <td><button class="btn btn-primary" onclick="activateSave('${_esc(s.room_id)}')">Activate</button></td>
+        tbody.innerHTML = data.games.map(g => {
+          const winner = g.winner
+            ? `<span class="badge badge-${g.winner === 'hero' ? 'hero' : 'witch'}">${g.winner}</span>`
+            : '-';
+          const players = g.total_players != null
+            ? `${g.human_players}/${g.total_players}`
+            : '-';
+          return `<tr class="clickable" data-game-id="${_esc(g.id)}" data-game-source="${_esc(g.source)}" onclick="toggleGameDetail(this)">
+            <td><span class="badge badge-source">${_esc(g.source)}</span></td>
+            <td><span class="badge badge-hero">${_esc(g.hero_name || '-')}</span></td>
+            <td><span class="badge badge-witch">${_esc(g.witch_name || '-')}</span></td>
+            <td>${g.round ?? '-'}${g.phase ? ` <span class="badge badge-phase">${_esc(g.phase)}</span>` : ''}</td>
+            <td>${winner}</td>
+            <td>${_esc(g.mode || '-')}</td>
+            <td>${players}</td>
+            <td class="time-ago">${timeAgo(g.created_at)}</td>
           </tr>`;
         }).join('');
+
+        // Pagination
+        const totalPages = Math.ceil(data.total / data.limit);
+        if (totalPages > 1) {
+          let ph = '';
+          if (_gamesPage > 1) ph += `<button class="btn" onclick="loadAllGames(${_gamesPage - 1})">Prev</button>`;
+          ph += `Page ${_gamesPage} of ${totalPages}`;
+          if (_gamesPage < totalPages) ph += `<button class="btn" onclick="loadAllGames(${_gamesPage + 1})">Next</button>`;
+          pag.innerHTML = ph;
+        } else {
+          pag.innerHTML = '';
+        }
       } catch (e) {
-        console.error('loadSaves error:', e);
+        console.error('loadAllGames error:', e);
+      }
+    }
+
+    async function toggleGameDetail(row) {
+      const next = row.nextElementSibling;
+      if (next && next.classList.contains('detail-row')) {
+        next.remove();
+        return;
+      }
+      // Remove any other open detail
+      document.querySelectorAll('#games-body .detail-row').forEach(r => r.remove());
+
+      const id = row.dataset.gameId;
+      const source = row.dataset.gameSource;
+
+      const detailTr = document.createElement('tr');
+      detailTr.className = 'detail-row';
+      detailTr.innerHTML = `<td colspan="8">Loading...</td>`;
+      row.after(detailTr);
+
+      try {
+        const data = await api(`/admin/api/game-detail/${encodeURIComponent(id)}?source=${source}`);
+        if (!data) { detailTr.innerHTML = '<td colspan="8">Not found.</td>'; return; }
+
+        const g = data.game;
+        let html = '<td colspan="8">';
+
+        // Metadata
+        html += '<div class="detail-meta">';
+        if (g.id || g.game_id || g.room_id) html += `<span>ID: <strong>${_esc(g.id || g.game_id || g.room_id)}</strong></span>`;
+        if (g.round || g.total_rounds) html += `<span>Rounds: <strong>${g.round || g.total_rounds}</strong></span>`;
+        if (g.phase) html += `<span>Phase: <strong>${_esc(g.phase)}</strong></span>`;
+        if (g.winner) html += `<span>Winner: <strong>${_esc(g.winner)}</strong></span>`;
+        if (g.win_reason) html += `<span>Reason: <strong>${_esc(g.win_reason)}</strong></span>`;
+        if (g.mode) html += `<span>Mode: <strong>${_esc(g.mode)}</strong></span>`;
+        if (g.game_version) html += `<span>Version: <strong>${_esc(g.game_version)}</strong></span>`;
+        html += '</div>';
+
+        // Actions
+        html += '<div class="detail-actions">';
+        if (data.canSpectate) {
+          html += `<button class="btn btn-primary" onclick="spectateRoom('${_esc(id)}')">Spectate</button>`;
+        }
+        if (source === 'saved') {
+          html += `<button class="btn btn-primary" onclick="activateSave('${_esc(id)}')">Activate</button>`;
+        }
+        if (source === 'completed_mp' || source === 'completed_sp') {
+          const replaySrc = source === 'completed_mp' ? 'mp' : 'sp';
+          html += `<a class="btn btn-primary" href="/replay?replayGame=${_esc(id)}&source=${replaySrc}" target="_blank">Replay</a>`;
+        }
+        html += '</div>';
+
+        // Rounds / turn history
+        if (data.rounds && data.rounds.length > 0) {
+          html += '<div class="rounds-list">';
+          for (const r of data.rounds) {
+            html += '<div>' + formatRoundSummary(r, source) + '</div>';
+          }
+          html += '</div>';
+        }
+
+        html += '</td>';
+        detailTr.innerHTML = html;
+      } catch (e) {
+        detailTr.innerHTML = `<td colspan="8">Error: ${_esc(e.message)}</td>`;
       }
     }
 
     async function activateSave(roomId) {
       try {
-        const sep = _token ? `?token=${encodeURIComponent(_token)}` : '';
-        const res = await fetch(`/admin/api/saves/${roomId}/activate${sep}`, { method: 'POST' });
-        const data = await res.json();
-        if (!res.ok) {
-          alert(data.error || 'Failed to activate save.');
-          return;
-        }
-        // Refresh both tabs — game moved from saves to active rooms
+        const data = await apiPost(`/admin/api/saves/${roomId}/activate`, {});
+        if (data.error) { alert(data.error); return; }
         loadRooms();
-        loadSaves();
         loadStats();
-        // Open spectator in new tab
+        if (_tabLoaded['games']) { _tabLoaded['games'] = false; loadAllGames(1); _tabLoaded['games'] = true; }
         spectateRoom(data.roomId);
       } catch (e) {
         alert('Network error activating save.');
       }
     }
 
-    // ── Players ─────────────────────────────────────────────────────────────────
+    document.getElementById('games-source').addEventListener('change', () => loadAllGames(1));
+    document.getElementById('games-refresh').addEventListener('click', () => loadAllGames(_gamesPage));
 
-    async function loadPlayers() {
+    // ── Players tab ─────────────────────────────────────────────────────────────
+
+    let _playersData = [];
+
+    async function loadPlayersDetailed() {
       try {
-        const players = await api('/admin/api/players');
+        _playersData = await api('/admin/api/players/detail');
         const tbody = document.getElementById('players-body');
         const empty = document.getElementById('players-empty');
 
-        if (players.length === 0) {
-          tbody.innerHTML = '';
-          empty.style.display = '';
-          return;
-        }
+        if (_playersData.length === 0) { tbody.innerHTML = ''; empty.style.display = ''; return; }
         empty.style.display = 'none';
 
-        tbody.innerHTML = players.map(p => {
-          const joined = p.created_at ? timeAgo(p.created_at) : '-';
-          return `<tr>
-            <td>${_esc(p.username)}</td>
-            <td>${p.wins}</td>
-            <td>${p.losses}</td>
-            <td>${p.draws}</td>
-            <td>${p.win_pct}%</td>
-            <td class="time-ago">${joined}</td>
-          </tr>`;
-        }).join('');
+        renderPlayers();
       } catch (e) {
-        console.error('loadPlayers error:', e);
+        console.error('loadPlayersDetailed error:', e);
       }
     }
 
-    // ── Spectate ────────────────────────────────────────────────────────────────
+    function renderPlayers() {
+      const tbody = document.getElementById('players-body');
+      tbody.innerHTML = _playersData.map(p => {
+        const idCount = p.identities.length;
+        const idSummary = idCount > 0 ? `${idCount} linked` : '-';
+        const adminBtn = p.is_admin
+          ? `<button class="btn btn-admin active" onclick="toggleAdmin('${_esc(p.id)}', true, event)"${p.id === _myPlayerId ? ' disabled title="Cannot remove own admin"' : ''}>ADMIN</button>`
+          : `<button class="btn btn-admin" onclick="toggleAdmin('${_esc(p.id)}', false, event)">grant</button>`;
+        const joined = p.created_at ? timeAgo(p.created_at) : '-';
 
-    function spectateRoom(roomId) {
-      window.open(`/spectate?room=${roomId}`, `spectate-${roomId}`);
+        return `<tr class="clickable" onclick="togglePlayerDetail('${_esc(p.id)}', this)">
+          <td>${_esc(p.username)}${p.discriminator ? `<span class="id-short">#${p.discriminator}</span>` : ''}</td>
+          <td><span class="id-short" title="${_esc(p.id)}">${shortId(p.id)}</span></td>
+          <td>${idSummary}</td>
+          <td>${p.wins}</td>
+          <td>${p.losses}</td>
+          <td>${p.draws}</td>
+          <td>${p.win_pct}%</td>
+          <td>${adminBtn}</td>
+          <td class="time-ago">${joined}</td>
+        </tr>`;
+      }).join('');
     }
 
-    // ── Escape helper ───────────────────────────────────────────────────────────
+    function togglePlayerDetail(playerId, row) {
+      const next = row.nextElementSibling;
+      if (next && next.classList.contains('player-detail')) {
+        next.remove();
+        return;
+      }
+      document.querySelectorAll('#players-body .player-detail').forEach(r => r.remove());
 
-    function _esc(str) {
-      if (!str) return '';
-      const el = document.createElement('span');
-      el.textContent = str;
-      return el.innerHTML;
-    }
+      const p = _playersData.find(x => x.id === playerId);
+      if (!p) return;
 
-    // ── Completed Games ──────────────────────────────────────────────────────────
+      const detailTr = document.createElement('tr');
+      detailTr.className = 'player-detail';
 
-    async function loadCompletedGames() {
-      await Promise.all([loadMpCompletedGames(), loadSpCompletedGames()]);
-    }
+      let html = '<td colspan="9">';
+      html += `<div><strong>Full ID:</strong> ${_esc(p.id)}</div>`;
+      html += `<div><strong>Token prefix:</strong> ${_esc(p.token_short)}</div>`;
 
-    async function loadMpCompletedGames() {
-      try {
-        const games = await api('/admin/api/completed-games');
-        const tbody = document.getElementById('completed-body');
-        const empty = document.getElementById('completed-empty');
-        if (!games.length) {
-          tbody.innerHTML = '';
-          empty.style.display = '';
-          return;
+      if (p.identities.length > 0) {
+        html += '<div style="margin-top:0.3rem"><strong>Identities:</strong></div>';
+        for (const i of p.identities) {
+          html += `<div class="identity-row"><span class="badge badge-phase">${_esc(i.provider)}</span> ${_esc(i.provider_id)}</div>`;
         }
-        empty.style.display = 'none';
-        tbody.innerHTML = games.map(g => {
-          const pinnedIcon = g.pinned ? '📌' : '';
-          const replayUrl  = `/replay?replayGame=${g.game_id}&source=mp`;
-          return `<tr>
-            <td>${g.hero_name || '—'}</td>
-            <td>${g.witch_name || '—'}</td>
-            <td>${g.winner} <small style="opacity:.6">${g.win_reason || ''}</small></td>
-            <td>${g.total_rounds}</td>
-            <td>${g.mode}</td>
-            <td>${pinnedIcon}</td>
-            <td>${timeAgo(g.created_at)}</td>
-            <td><a class="btn btn-sm" href="${replayUrl}" target="_blank">Replay</a></td>
-          </tr>`;
-        }).join('');
+      }
+
+      if (p.device_tokens.length > 0) {
+        html += '<div style="margin-top:0.3rem"><strong>Device Tokens:</strong></div>';
+        for (const dt of p.device_tokens) {
+          html += `<div class="device-row"><span class="badge badge-phase">${_esc(dt.platform)}</span> ${_esc(dt.device_token?.slice(0, 20))}...</div>`;
+        }
+      }
+
+      html += '</td>';
+      detailTr.innerHTML = html;
+      row.after(detailTr);
+    }
+
+    async function toggleAdmin(playerId, currentlyAdmin, event) {
+      event.stopPropagation();
+      const newState = !currentlyAdmin;
+      try {
+        const result = await apiPost(`/admin/api/players/${playerId}/admin`, { isAdmin: newState });
+        if (result.error) { alert(result.error); return; }
+        // Update local data and re-render
+        const p = _playersData.find(x => x.id === playerId);
+        if (p) p.is_admin = newState ? 1 : 0;
+        renderPlayers();
       } catch (e) {
-        console.error('loadMpCompletedGames error:', e);
+        alert('Failed to toggle admin.');
       }
     }
 
-    async function loadSpCompletedGames() {
+    document.getElementById('players-refresh').addEventListener('click', () => {
+      _tabLoaded['players'] = false;
+      loadPlayersDetailed();
+      _tabLoaded['players'] = true;
+    });
+
+    // ── Balance tab ─────────────────────────────────────────────────────────────
+
+    async function loadBalanceStats() {
       try {
-        const games = await api('/admin/api/sp/completed-games');
-        const tbody = document.getElementById('sp-completed-body');
-        const empty = document.getElementById('sp-completed-empty');
-        if (!games.length) {
-          tbody.innerHTML = '';
-          empty.style.display = '';
-          return;
-        }
-        empty.style.display = 'none';
-        tbody.innerHTML = games.map(g => {
-          const replayUrl = `/replay?replayGame=${g.game_id}&source=sp`;
-          return `<tr>
-            <td>${g.hero_name || '—'}</td>
-            <td>${g.witch_name || '—'}</td>
-            <td>${g.winner} <small style="opacity:.6">${g.win_reason || ''}</small></td>
-            <td>${g.total_rounds}</td>
-            <td>${g.mode}</td>
-            <td>${timeAgo(g.created_at)}</td>
-            <td><a class="btn btn-sm" href="${replayUrl}" target="_blank">Replay</a></td>
-          </tr>`;
-        }).join('');
+        const d = await api('/admin/api/game-stats/summary');
+        document.getElementById('balance-content').innerHTML = renderBalance(d);
       } catch (e) {
-        console.error('loadSpCompletedGames error:', e);
+        document.getElementById('balance-content').innerHTML = `<p class="empty-state">Failed to load: ${_esc(e.message)}</p>`;
+      }
+    }
+
+    function renderBalance(d) {
+      if (d.totalGames === 0) return '<p class="empty-state">No games recorded yet.</p>';
+
+      let html = '';
+
+      // Summary cards
+      html += '<div class="cards">';
+      html += card(d.totalGames, 'Total Games');
+      html += card(d.heroWins, 'Hero Wins', 'hero');
+      html += card(d.witchWins, 'Witch Wins', 'witch');
+      html += card(d.avgRounds, 'Avg Rounds', 'green');
+      html += card(d.avgHeroKills, 'Avg Hero Kills', 'hero');
+      html += card(d.avgWitchKills, 'Avg Witch Kills', 'witch');
+      html += '</div>';
+
+      // Balance meter
+      html += '<div class="section"><h2>Faction Balance</h2>';
+      html += `<div class="balance-meter">`;
+      html += `<span class="side-label hero">${d.heroWinPct}%</span>`;
+      html += `<div class="track"><div class="hero-fill" style="width:${d.heroWinPct}%"></div><div class="witch-fill" style="width:${d.witchWinPct}%"></div></div>`;
+      html += `<span class="side-label witch">${d.witchWinPct}%</span>`;
+      html += `</div>`;
+      html += `<p class="note">Target: 45-55% hero win rate. Current: ${balanceBadge(d.heroWinPct)}</p>`;
+      html += '</div>';
+
+      // Game length
+      html += '<div class="section"><h2>Game Length</h2>';
+      html += `<p>Average: <strong>${d.avgRounds}</strong> rounds (min ${d.minRounds}, max ${d.maxRounds}) ${roundsBadge(d.avgRounds)}</p>`;
+      html += '<p class="note">Target: 15-25 rounds per game.</p></div>';
+
+      // Win reasons
+      html += '<div class="section"><h2>Win Conditions</h2>';
+      const maxRC = Math.max(...d.byWinReason.map(r => r.count), 1);
+      for (const row of d.byWinReason) {
+        const p = pct(row.count, d.totalGames);
+        const color = row.win_reason.includes('hero') || row.win_reason.includes('HERO') ? 'var(--hero)' : 'var(--witch)';
+        html += barRow(row.win_reason, row.count, maxRC, color, `${p}%`);
+      }
+      const killWins = d.byWinReason.filter(r => r.win_reason.includes('slain') || r.win_reason.includes('SLAIN')).reduce((s, r) => s + r.count, 0);
+      html += `<p class="note">Kill-win share: ${pct(killWins, d.totalGames)}% (target: 40-60%)</p></div>`;
+
+      // Map sizes
+      html += '<div class="section"><h2>Map Sizes</h2>';
+      const maxMap = Math.max(...d.byMapSize.map(r => r.count), 1);
+      for (const row of d.byMapSize) html += barRow(row.map_size, row.count, maxMap, 'var(--green)', `${pct(row.count, d.totalGames)}%`);
+      html += '</div>';
+
+      // Game modes
+      html += '<div class="section"><h2>Game Modes</h2>';
+      const maxMode = Math.max(...d.byMode.map(r => r.count), 1);
+      for (const row of d.byMode) html += barRow(row.mode, row.count, maxMode, 'var(--accent)', `${pct(row.count, d.totalGames)}%`);
+      html += '</div>';
+
+      // Unit economy
+      html += '<div class="section"><h2>Unit Economy (averages)</h2>';
+      html += '<table><tr><th>Metric</th><th>Value</th></tr>';
+      html += `<tr><td>Hero kills per game</td><td style="color:var(--hero)">${d.avgHeroKills}</td></tr>`;
+      html += `<tr><td>Witch kills per game</td><td style="color:var(--witch)">${d.avgWitchKills}</td></tr>`;
+      html += `<tr><td>Survivors recruited</td><td style="color:var(--green)">${d.avgHeroSurvivors}</td></tr>`;
+      html += `<tr><td>Witch summons</td><td style="color:var(--witch)">${d.avgWitchSummons}</td></tr>`;
+      html += '</table></div>';
+
+      // Version breakdown
+      if (d.byVersion.length > 0) {
+        html += '<div class="section"><h2>Stats by Version</h2>';
+        html += '<table><tr><th>Version</th><th>Games</th><th>Hero Wins</th><th>Witch Wins</th><th>Hero %</th><th>Avg Rounds</th></tr>';
+        for (const v of d.byVersion) {
+          const vPct = pct(v.hero_wins, v.count);
+          html += `<tr><td>${v.game_version}</td><td>${v.count}</td><td style="color:var(--hero)">${v.hero_wins}</td><td style="color:var(--witch)">${v.witch_wins}</td><td>${vPct}% ${balanceBadge(parseFloat(vPct))}</td><td>${v.avg_rounds}</td></tr>`;
+        }
+        html += '</table></div>';
+      }
+
+      // AI matchups
+      if (d.byPersonality.length > 0) {
+        html += '<div class="section"><h2>AI Personality Matchups</h2>';
+        html += '<table><tr><th>Hero</th><th>Witch</th><th>Games</th><th>Hero Wins</th><th>Witch Wins</th><th>Hero %</th></tr>';
+        for (const m of d.byPersonality) {
+          const mPct = pct(m.hero_wins, m.count);
+          html += `<tr><td style="color:var(--hero)">${m.hero_personality}</td><td style="color:var(--witch)">${m.witch_personality}</td><td>${m.count}</td><td>${m.hero_wins}</td><td>${m.witch_wins}</td><td>${mPct}% ${balanceBadge(parseFloat(mPct))}</td></tr>`;
+        }
+        html += '</table></div>';
+      }
+
+      return html;
+    }
+
+    // ── Campaign tab ────────────────────────────────────────────────────────────
+
+    async function loadCampaignStats() {
+      try {
+        const d = await api('/admin/api/campaign-game-stats/summary');
+        document.getElementById('campaign-content').innerHTML = renderCampaign(d);
+      } catch (e) {
+        document.getElementById('campaign-content').innerHTML = `<p class="empty-state">Failed to load: ${_esc(e.message)}</p>`;
+      }
+    }
+
+    function renderCampaign(d) {
+      if (d.totalAttempts === 0) return '<p class="empty-state">No campaign games recorded yet.</p>';
+
+      const totalWins = d.byMission.reduce((s, m) => s + m.wins, 0);
+      const totalLosses = d.byMission.reduce((s, m) => s + m.losses, 0);
+      let html = '';
+
+      // Summary cards
+      html += '<div class="cards">';
+      html += card(d.totalAttempts, 'Total Attempts');
+      html += card(totalWins, 'Victories', 'hero');
+      html += card(totalLosses, 'Defeats', 'witch');
+      html += card(d.avgRounds, 'Avg Rounds', 'green');
+      html += card(d.avgHeroKills, 'Avg Kills', 'hero');
+      html += card(d.avgSurvivorsLost, 'Avg Survivors Lost');
+      html += '</div>';
+
+      // Win rate meter
+      const heroWinPct = parseFloat(pct(totalWins, d.totalAttempts));
+      const witchWinPct = parseFloat(pct(totalLosses, d.totalAttempts));
+      html += '<div class="section"><h2>Campaign Win Rate</h2>';
+      html += '<div class="balance-meter">';
+      html += `<span class="side-label hero">${heroWinPct}%</span>`;
+      html += `<div class="track"><div class="hero-fill" style="width:${heroWinPct}%"></div><div class="witch-fill" style="width:${witchWinPct}%"></div></div>`;
+      html += `<span class="side-label witch">${witchWinPct}%</span>`;
+      html += '</div>';
+      html += `<p class="note">Hero victory rate across all campaign missions. ${winRateBadge(heroWinPct)}</p></div>`;
+
+      // Per-mission breakdown
+      if (d.byMission.length > 0) {
+        html += '<div class="section"><h2>Mission Breakdown</h2>';
+        html += '<table><tr><th>Mission</th><th>Attempts</th><th>Wins</th><th>Losses</th><th>Win %</th><th>Avg Rounds</th><th>Avg Kills</th><th>Avg Lost</th><th>Avg Duration</th></tr>';
+        for (const m of d.byMission) {
+          const wp = pct(m.wins, m.attempts);
+          html += `<tr><td>${m.mission_title || m.mission_id}</td><td>${m.attempts}</td><td style="color:var(--hero)">${m.wins}</td><td style="color:var(--witch)">${m.losses}</td><td>${wp}% ${winRateBadge(parseFloat(wp))}</td><td>${m.avg_rounds}</td><td style="color:var(--hero)">${m.avg_hero_kills}</td><td style="color:var(--red)">${m.avg_survivors_lost}</td><td>${fmtDuration(m.avg_duration_ms)}</td></tr>`;
+        }
+        html += '</table></div>';
+      }
+
+      // Win reasons
+      if (d.byWinReason.length > 0) {
+        html += '<div class="section"><h2>Campaign Win Conditions</h2>';
+        const maxRC = Math.max(...d.byWinReason.map(r => r.count), 1);
+        for (const row of d.byWinReason) {
+          const p = pct(row.count, d.totalAttempts);
+          const color = row.win_reason.toLowerCase().includes('hero') ? 'var(--hero)' : 'var(--witch)';
+          html += barRow(row.win_reason, row.count, maxRC, color, `${p}%`);
+        }
+        html += '</div>';
+      }
+
+      // Campaign sessions
+      if (d.byCampaign.length > 0) {
+        html += '<div class="section"><h2>Campaign Sessions</h2>';
+        html += '<table><tr><th>Campaign ID</th><th>Attempts</th><th>Wins</th><th>Losses</th><th>Missions Tried</th></tr>';
+        for (const c of d.byCampaign) {
+          html += `<tr><td>${c.campaign_id}</td><td>${c.total_attempts}</td><td style="color:var(--hero)">${c.total_wins}</td><td style="color:var(--witch)">${c.total_losses}</td><td>${c.missions_attempted}</td></tr>`;
+        }
+        html += '</table></div>';
+      }
+
+      // Unit economy
+      html += '<div class="section"><h2>Campaign Unit Economy (averages)</h2>';
+      html += '<table><tr><th>Metric</th><th>Value</th></tr>';
+      html += `<tr><td>Hero kills per mission</td><td style="color:var(--hero)">${d.avgHeroKills}</td></tr>`;
+      html += `<tr><td>Witch kills per mission</td><td style="color:var(--witch)">${d.avgWitchKills}</td></tr>`;
+      html += `<tr><td>Survivors deployed</td><td style="color:var(--green)">${d.avgSurvivorsDeployed}</td></tr>`;
+      html += `<tr><td>Survivors lost</td><td style="color:var(--red)">${d.avgSurvivorsLost}</td></tr>`;
+      html += `<tr><td>Enemies spawned</td><td style="color:var(--witch)">${d.avgEnemiesSpawned}</td></tr>`;
+      html += '</table></div>';
+
+      // Recent games
+      if (d.recentGames && d.recentGames.length > 0) {
+        html += '<div class="section"><h2>Recent Campaign Games</h2>';
+        html += '<div class="recent-games">';
+        html += '<table><tr><th>Mission</th><th>Winner</th><th>Reason</th><th>Rounds</th><th>Kills</th><th>Survivors</th><th>Duration</th><th>Date</th></tr>';
+        for (const g of d.recentGames) {
+          const date = g.created_at ? new Date(g.created_at * 1000).toLocaleDateString() : '--';
+          const wc = g.winner === 'hero' ? 'var(--hero)' : 'var(--witch)';
+          html += `<tr><td>${g.mission_title || g.mission_id}</td><td style="color:${wc}">${g.winner}</td><td>${g.win_reason}</td><td>${g.rounds}</td><td>${g.hero_kills}</td><td>${g.survivors_deployed - g.survivors_lost}/${g.survivors_deployed}</td><td>${fmtDuration(g.duration_ms)}</td><td>${date}</td></tr>`;
+        }
+        html += '</table></div></div>';
+      }
+
+      return html;
+    }
+
+    // ── Reset stats ─────────────────────────────────────────────────────────────
+
+    async function resetStats() {
+      if (!confirm('This will dump all game stats and campaign stats to a file, then clear them. Continue?')) return;
+      try {
+        const result = await apiPost('/admin/api/reset-stats', {});
+        if (result.error) { alert(result.error); return; }
+        if (!result.dumped) { alert(result.reason); return; }
+        alert(`Dumped ${result.gameStatsCount} game stats + ${result.campaignStatsCount} campaign stats to ${result.file}`);
+        // Reload both tabs
+        _tabLoaded['balance'] = false;
+        _tabLoaded['campaign'] = false;
+        const active = document.querySelector('.tab-btn.active')?.dataset.tab;
+        if (active === 'balance') loadBalanceStats();
+        if (active === 'campaign') loadCampaignStats();
+      } catch (e) {
+        alert('Reset failed: ' + e.message);
       }
     }
 
     // ── Init ────────────────────────────────────────────────────────────────────
 
-    document.getElementById('refresh-rooms').addEventListener('click', () => { loadRooms(); loadStats(); });
-    document.getElementById('refresh-saves').addEventListener('click', loadSaves);
-    document.getElementById('refresh-players').addEventListener('click', loadPlayers);
-    document.getElementById('refresh-completed').addEventListener('click', loadCompletedGames);
-
-    // Sub-tab switching within Completed Games
-    document.querySelectorAll('.completed-sub').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('.completed-sub').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        const sub = btn.dataset.sub;
-        document.getElementById('completed-sub-mp').style.display = sub === 'mp' ? '' : 'none';
-        document.getElementById('completed-sub-sp').style.display = sub === 'sp' ? '' : 'none';
-      });
-    });
-
     loadStats();
     loadRooms();
-    loadSaves();
-    loadPlayers();
-    loadCompletedGames();
-
-    // Auto-refresh stats and rooms every 10 seconds
-    setInterval(() => { loadStats(); loadRooms(); }, 10000);
+    _tabLoaded['dashboard'] = true;
+    _dashboardInterval = setInterval(() => { loadStats(); loadRooms(); }, 10000);
   </script>
 </body>
 </html>
