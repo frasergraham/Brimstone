@@ -188,11 +188,11 @@ describe('Sound Horn action', () => {
       'Witch should not have SOUND_HORN');
   });
 
-  test('Sound Horn shows as unaffordable with < 2 food', () => {
+  test('Sound Horn shows as unaffordable with 0 food', () => {
     const state = freshState();
     const hero = createHero(3, 3);
     state.entities.push(hero);
-    state.inventory.shared.food = 1;
+    state.inventory.shared.food = 0;
 
     const actions = getValidActions(state, hero);
     const horn = actions.find(a => a.type === ActionType.SOUND_HORN);
@@ -200,7 +200,7 @@ describe('Sound Horn action', () => {
     assert.equal(horn.affordable, false);
   });
 
-  test('executeSoundHorn succeeds and deducts 2 food', () => {
+  test('executeSoundHorn succeeds and deducts 1 food', () => {
     const state = freshState();
     state.log = [];
     state.addLog = (msg, faction) => state.log.push({ msg, faction });
@@ -212,7 +212,7 @@ describe('Sound Horn action', () => {
     const result = executeSoundHorn(state, hero);
     assert.equal(result.success, true);
     assert.equal(result.cost, 1);
-    assert.equal(state.inventory.shared.food, 3);
+    assert.equal(state.inventory.shared.food, 4);
   });
 
   test('executeSoundHorn fails with insufficient food', () => {
@@ -221,7 +221,7 @@ describe('Sound Horn action', () => {
     const hero = createHero(3, 3);
     hero.owner = 'hero';
     state.entities.push(hero);
-    state.inventory.shared.food = 1;
+    state.inventory.shared.food = 0;
 
     const result = executeSoundHorn(state, hero);
     assert.equal(result.success, false);

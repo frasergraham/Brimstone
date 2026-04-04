@@ -517,7 +517,7 @@ async function _runLocalResolution(skipSummary = false) {
   // Show encounter dialogs for survivors spawned at power nodes during endRound
   if (ui && !_autoplay && state.nodeSpawnedSurvivors?.length) {
     for (const s of state.nodeSpawnedSurvivors) {
-      await new Promise(resolve => ui._showEncounterDialog(s, resolve));
+      await new Promise(resolve => ui._showEncounterDialog(s, resolve, 'power_node'));
     }
   }
 
@@ -1205,7 +1205,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (actor) ui._showLootFlashes(actor, result.lootItems ?? []);
       redrawFn();
       if (!_suppressDialogs && result.encounterSurvivor) {
-        await new Promise(resolve => ui._showEncounterDialog(result.encounterSurvivor, resolve));
+        await new Promise(resolve => ui._showEncounterDialog(result.encounterSurvivor, resolve, 'explore'));
       }
     }
 
@@ -1231,14 +1231,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (myPlayerId && actor?.ownerId !== myPlayerId) continue;
 
       if (!_suppressDialogs) {
-        // Show log messages as a result dialog (horn outcome)
-        if (result.log?.length) {
-          await new Promise(resolve =>
-            ui._showResultDialog(result.log, resolve, result.encounterSurvivor ?? null));
-        }
-        // Show encounter card if a survivor was found
         if (result.encounterSurvivor) {
-          await new Promise(resolve => ui._showEncounterDialog(result.encounterSurvivor, resolve));
+          // Survivor found — show encounter card only (no separate result dialog)
+          await new Promise(resolve => ui._showEncounterDialog(result.encounterSurvivor, resolve, 'horn'));
+        } else if (result.log?.length) {
+          // No survivor — show the "nothing found" result dialog
+          await new Promise(resolve => ui._showResultDialog(result.log, resolve));
         }
       }
     }

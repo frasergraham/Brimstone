@@ -324,7 +324,7 @@ export function getValidActions(state, actor) {
   // Sound Horn — hero leader only; costs 2 food, ranged survivor discovery
   if (actor.type === EntityType.HERO) {
     const food = (faction.getInventory(state)['food'] || 0);
-    actions.push({ type: ActionType.SOUND_HORN, affordable: food >= 2 });
+    actions.push({ type: ActionType.SOUND_HORN, affordable: food >= 1 });
   }
 
   // Herbs — available to any unit that carries them
@@ -982,12 +982,12 @@ export function executeSoundHorn(state, actor) {
 
   const inv = getFaction('hero').getInventory(state);
   const food = inv['food'] || 0;
-  if (food < 2) {
-    return { success: false, log: ['Not enough food (need 2).'] };
+  if (food < 1) {
+    return { success: false, log: ['Not enough food (need 1).'] };
   }
 
-  // Deduct 2 food
-  inv['food'] -= 2;
+  // Deduct 1 food
+  inv['food'] -= 1;
 
   // Reveal hero to all opponents for the rest of this round
   state.heroRevealedByHorn = true;
@@ -1010,7 +1010,7 @@ export function executeSoundHorn(state, actor) {
   let encounterLog = [];
   let encounterSurvivor = null;
 
-  if (candidates.length > 0 && Math.random() < 0.30) {
+  if (candidates.length > 0 && Math.random() < 0.40) {
     // Pick one at random
     const target = candidates[Math.floor(Math.random() * candidates.length)];
     const enc = _triggerSurvivorEncounter(state, actor, target.col, target.row);

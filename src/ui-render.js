@@ -80,7 +80,7 @@ function _stepCostLabel(action, projShared, projWitch, projEntityItems) {
       return `−1${RES_ICON[item] || item}`;
     }
     case PlanActionType.SOUND_HORN:
-      return `−2${RES_ICON[ResourceType.FOOD]}`;
+      return `−1${RES_ICON[ResourceType.FOOD]}`;
     default: return '';
   }
 }
@@ -183,7 +183,7 @@ export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entit
         break;
       }
       case PlanActionType.SOUND_HORN:
-        if ((projShared[ResourceType.FOOD] || 0) >= 2) projShared[ResourceType.FOOD] -= 2;
+        if ((projShared[ResourceType.FOOD] || 0) >= 1) projShared[ResourceType.FOOD] -= 1;
         break;
     }
   });
@@ -335,7 +335,7 @@ function _advanceProjectedInventory(a, projShared, projWitch, projEntityItems) {
       break;
     }
     case PlanActionType.SOUND_HORN:
-      if ((projShared[ResourceType.FOOD] || 0) >= 2) projShared[ResourceType.FOOD] -= 2;
+      if ((projShared[ResourceType.FOOD] || 0) >= 1) projShared[ResourceType.FOOD] -= 1;
       break;
   }
 }

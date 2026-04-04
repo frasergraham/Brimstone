@@ -205,7 +205,7 @@ export function computeProjectedInventory(state, plan) {
         break;
       }
       case PlanActionType.SOUND_HORN:
-        if ((shared[ResourceType.FOOD] || 0) >= 2) shared[ResourceType.FOOD] -= 2;
+        if ((shared[ResourceType.FOOD] || 0) >= 1) shared[ResourceType.FOOD] -= 1;
         break;
     }
   }
