@@ -17,6 +17,7 @@ import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType, groupPlanByEntity } from './planner.js';
 import { hexDistance, getNeighbors } from './hex.js';
 import { sightRange } from './actions.js';
+import { getFaction, allFactions } from './factions.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { MAP_SIZES } from './map.js';
@@ -363,7 +364,7 @@ function _startLocalPlanningPhase() {
   }
 
   const humanFaction = !state.heroIsAI ? 'hero' : 'witch';
-  const budget = humanFaction === 'hero' ? state.heroActionsLeft : state.witchActionsLeft;
+  const budget = getFaction(humanFaction).getActionsLeft(state);
 
   if (!state.heroIsAI && !state.witchIsAI) {
     // Human vs Human: hero plans first, then witch
@@ -417,10 +418,10 @@ async function _onLocalHumanPlanSubmit(faction, plan) {
 
   let bothReady = state.submitPlan(faction, plan);
   if (!bothReady) {
-    const aiPlan = faction === 'hero'
+    const aiFaction = getFaction(faction).getOpponentId();
+    const aiPlan = aiFaction === 'witch'
       ? (witchAI ? witchAI.generatePlan() : [])
       : (heroAI  ? heroAI.generatePlan()  : []);
-    const aiFaction = faction === 'hero' ? 'witch' : 'hero';
     bothReady = state.submitPlan(aiFaction, aiPlan);
   }
 
@@ -706,13 +707,10 @@ function _getBattleAllyEntities(actorSnap, targetSnap, entities) {
  */
 function _isFogVisible(col, row, humanFaction, entities, phase) {
   if (!humanFaction || state.fogOfWar === 'none') return true;
-  const friendlyOwner = humanFaction; // 'hero' or 'witch'
+  const faction = getFaction(humanFaction);
   for (const e of entities) {
-    if (!e.alive || e.owner !== friendlyOwner) continue;
-    // Witch always sees 2 hexes; hero uses phase-dependent sight range
-    const range = friendlyOwner === 'witch'
-      ? 2
-      : sightRange(phase, e.ability === 'scout');
+    if (!e.alive || e.owner !== humanFaction) continue;
+    const range = faction.getSightRange(phase, e.ability === 'scout');
     if (hexDistance(e.col, e.row, col, row) <= range) return true;
   }
   return false;
@@ -726,19 +724,19 @@ function _isFogVisible(col, row, humanFaction, entities, phase) {
 function _updateNodeDiscoveryDuringStep(gs, humanFaction, rend) {
   if (!gs.witchObjectives) return;
   for (const obj of gs.witchObjectives) {
-    // Check both factions — update discovery flags as entities move
-    for (const faction of ['hero', 'witch']) {
-      const seenKey = faction === 'hero' ? 'seenByHero' : 'seenByWitch';
+    // Check all factions — update discovery flags as entities move
+    for (const fac of allFactions()) {
+      const seenKey = fac.getNodeSeenKey();
       if (obj[seenKey]) continue; // already discovered
       const nowSeen = gs.entities.some(e => {
-        if (!e.alive || e.owner !== faction) return false;
-        const range = sightRange(gs.phase, e.ability === 'scout');
+        if (!e.alive || e.owner !== fac.id) return false;
+        const range = fac.getSightRange(gs.phase, e.ability === 'scout');
         return obj.hexes.some(h => hexDistance(e.col, e.row, h.col, h.row) <= range);
       });
       if (!nowSeen) continue;
       obj[seenKey] = true;
       // Trigger reveal animation if this is the human's faction
-      const isHuman = humanFaction === faction
+      const isHuman = humanFaction === fac.id
         || (!humanFaction && gs.fogOfWar === 'none'); // no fog — show for everyone
       if (isHuman && rend) {
         rend.addNodeRevealAnim(obj.hexes, obj.color ?? '#8800cc');
@@ -4779,7 +4777,7 @@ async function _applyOnlinePlanningPhase(payload) {
   }
 
   // Prefer per-player budget; fall back to legacy faction budget for old servers.
-  const budget = myActionsLeft ?? (mp.myFaction === 'hero' ? heroActionsLeft : witchActionsLeft);
+  const budget = myActionsLeft ?? getFaction(mp.myFaction).getActionsLeft({ heroActionsLeft, witchActionsLeft });
   ui.exitPlanningMode();
   if (players) ui._players = players;
   ui._hasReplayHistory = _onlineRoundHistory.length > 0;
@@ -4823,7 +4821,7 @@ async function _replayLastTurnInline() {
 
   // Restore planning mode with the saved plan
   const budget = state.playerActionsLeft?.get(mp?.myPlayerId)
-    ?? (mp?.myFaction === 'hero' ? state.heroActionsLeft : state.witchActionsLeft);
+    ?? (mp?.myFaction ? getFaction(mp.myFaction).getActionsLeft(state) : state.heroActionsLeft);
   ui._hasReplayHistory = _onlineRoundHistory.length > 0;
   ui.enterPlanningMode(mp.myFaction, budget, 0, { showPhaseModal: false });
   ui.onPlanSubmit = (plan) => mp.submitPlan(plan);

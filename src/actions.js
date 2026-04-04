@@ -154,7 +154,7 @@ function sameHexEnemies(state, entity) {
 // zone in full fog mode (theoretical movement, not actual legal moves).
 
 export function getFogReachableHexes(state, actor, posOverride = null) {
-  const hasHorse = actor.owner === 'hero' && (actor.items?.['horse'] || 0) > 0;
+  const hasHorse = getFaction(actor.owner).hasHorse(actor);
   const range    = hasHorse ? 2 : 1;
   const budget   = range * 2;
   const startCol = posOverride?.col ?? actor.col;
@@ -216,49 +216,43 @@ export function sightRange(phase, isScout = false) {
   return base + (isScout ? 1 : 0);
 }
 
-// Returns a Set of hexKeys where witch-side entities are visible to hero units.
-export function getVisibleEnemyHexes(state) {
+/**
+ * Returns a Set of hexKeys where opposing entities are visible to the given faction.
+ * Uses the faction's sight range (phase-dependent for hero, fixed for witch).
+ * @param {object} state - GameState
+ * @param {string} viewerFactionId - 'hero' or 'witch'
+ * @returns {Set<string>}
+ */
+export function getVisiblePositions(state, viewerFactionId) {
   const revealed = new Set();
-  for (const e of state.entities) {
-    if (!e.alive || e.owner !== 'hero') continue;
-    const range = sightRange(state.phase, e.ability === SurvivorAbility.SCOUT);
-    for (const we of state.entities) {
-      if (!we.alive || we.owner !== 'witch') continue;
-      if (hexDistance(e.col, e.row, we.col, we.row) <= range) {
-        revealed.add(hexKey(we.col, we.row));
-      }
-    }
-  }
-  return revealed;
-}
-
-// Returns a Set of hexKeys where hero-side entities are visible to witch units.
-// Witch sight is always 2 hexes regardless of day/night phase.
-// If the hero sounded the horn this round, all hero positions are revealed.
-export function getVisibleHeroHexes(state) {
-  const revealed = new Set();
+  const viewerFaction = getFaction(viewerFactionId);
+  const opponentId = viewerFaction.getOpponentId();
 
   // Sound Horn: hero revealed to all opponents for the rest of this round
-  if (state.heroRevealedByHorn) {
-    for (const he of state.entities) {
-      if (he.alive && he.owner === 'hero') {
-        revealed.add(hexKey(he.col, he.row));
+  if (state.heroRevealedByHorn && opponentId === 'hero') {
+    for (const e of state.entities) {
+      if (e.alive && e.owner === 'hero') {
+        revealed.add(hexKey(e.col, e.row));
       }
     }
   }
 
-  for (const we of state.entities) {
-    if (!we.alive || we.owner !== 'witch') continue;
-    const range = 2; // witch has fixed 2-hex sight in all phases
-    for (const he of state.entities) {
-      if (!he.alive || he.owner !== 'hero') continue;
-      if (hexDistance(we.col, we.row, he.col, he.row) <= range) {
-        revealed.add(hexKey(he.col, he.row));
+  for (const viewer of state.entities) {
+    if (!viewer.alive || viewer.owner !== viewerFactionId) continue;
+    const range = viewerFaction.getSightRange(state.phase, viewer.ability === SurvivorAbility.SCOUT);
+    for (const target of state.entities) {
+      if (!target.alive || target.owner !== opponentId) continue;
+      if (hexDistance(viewer.col, viewer.row, target.col, target.row) <= range) {
+        revealed.add(hexKey(target.col, target.row));
       }
     }
   }
   return revealed;
 }
+
+// Legacy wrappers — delegate to getVisiblePositions()
+export function getVisibleEnemyHexes(state) { return getVisiblePositions(state, 'hero'); }
+export function getVisibleHeroHexes(state)  { return getVisiblePositions(state, 'witch'); }
 
 // ── Validation ─────────────────────────────────────────────────────────────
 
@@ -266,16 +260,14 @@ export function getValidActions(state, actor) {
   const actions = [];
   const t = tile(state, actor.col, actor.row);
   const faction = getFaction(actor.owner);
-  const actorIsHero = actor.owner === 'hero';
 
   // Move — range 2 if actor has a horse in personal items, otherwise 1
-  const hasHorse = actor.owner === 'hero' && (actor.items?.['horse'] || 0) > 0;
+  const hasHorse = faction.hasHorse(actor);
   const moveTargets = getReachableHexes(state, actor, hasHorse ? 2 : 1);
   if (moveTargets.length) actions.push({ type: ActionType.MOVE, targets: moveTargets });
 
-  // Explore — available on any unexplored tile (witch minions cannot explore)
-  const isWitchMinion = actor.owner === 'witch' && actor.type !== EntityType.WITCH;
-  if (t && !t.explored && !isWitchMinion) {
+  // Explore — available on any unexplored tile; faction determines eligibility
+  if (t && !t.explored && faction.canExplore(actor)) {
     actions.push({ type: ActionType.EXPLORE, targets: [{ col: actor.col, row: actor.row }] });
   }
 
@@ -468,7 +460,7 @@ export function executeMove(state, actor, targetCol, targetRow) {
   const log = [];
 
   // Reachability check — road tiles cost half, so roads extend effective range.
-  const hasHorse = actor.owner === 'hero' && (actor.items?.['horse'] || 0) > 0;
+  const hasHorse = getFaction(actor.owner).hasHorse(actor);
   const reachable = getReachableHexes(state, actor, hasHorse ? 2 : 1);
   if (!reachable.some(h => h.col === targetCol && h.row === targetRow))
     return { success: false, log: [`Cannot reach (${targetCol},${targetRow}) from current position.`] };
@@ -707,8 +699,7 @@ export function executeBattle(state, actor, target) {
 
     if (killed) {
       log.push(`${target.displayName} is slain!`);
-      if (actor.owner === 'hero') state.heroKills++;
-      else if (actor.owner === 'witch') state.witchKills++;
+      getFaction(actor.owner).trackKill(state);
       state.entities = state.entities.filter(e => e.id !== target.id);
     } else if (damage > 0) {
       const label = damage >= 2 ? `${damage} damage (crushing blow!)` : `${damage} damage`;
@@ -721,8 +712,7 @@ export function executeBattle(state, actor, target) {
       splashKills = _applySplashDamage(state, target.col, target.row, [actor.id, target.id], log);
       for (const sk of splashKills) {
         if (sk.owner !== actor.owner) {
-          if (actor.owner === 'hero') state.heroKills++;
-          else if (actor.owner === 'witch') state.witchKills++;
+          getFaction(actor.owner).trackKill(state);
         }
       }
     }
@@ -736,8 +726,7 @@ export function executeBattle(state, actor, target) {
       log.push(`⚔ ${target.displayName} counter-attacks! ${actor.displayName} takes 1 damage.`);
       if (counterKilled) {
         log.push(`${actor.displayName} is slain by the counter!`);
-        if (target.owner === 'hero') state.heroKills++;
-        else if (target.owner === 'witch') state.witchKills++;
+        getFaction(target.owner).trackKill(state);
         state.entities = state.entities.filter(e => e.id !== actor.id);
 
         // Counter-kill splashes other units on the attacker's tile (exclude target)
@@ -745,8 +734,7 @@ export function executeBattle(state, actor, target) {
         splashKills.push(...counterSplash);
         for (const sk of counterSplash) {
           if (sk.owner !== target.owner) {
-            if (target.owner === 'hero') state.heroKills++;
-            else if (target.owner === 'witch') state.witchKills++;
+            getFaction(target.owner).trackKill(state);
           }
         }
       } else {
@@ -807,7 +795,8 @@ export function executeFortify(state, actor) {
 // auto-pick if the requested type is no longer affordable (e.g. plan mis-ordering).
 // The summoned unit always spawns on the actor's own tile.
 export function executeSummon(state, actor, requestedType = null) {
-  const inv     = state.inventory.witch;
+  const faction = getFaction(actor.owner);
+  const inv     = faction.getInventory(state);
   const ownerId = actor.ownerId;
   let summonedUnit, res, unitName;
 
@@ -849,7 +838,7 @@ export function executeSummon(state, actor, requestedType = null) {
     summonedUnit = createMinion(actor.col, actor.row, ownerId);
     unitName = 'Minion';
     state.entities.push(summonedUnit);
-    state.witchSummonCount++;
+    faction.trackSummon(state);
     return {
       success: true,
       log: [`${actor.displayName} raises a ${unitName}!`],
@@ -859,7 +848,7 @@ export function executeSummon(state, actor, requestedType = null) {
   }
 
   state.entities.push(summonedUnit);
-  state.witchSummonCount++;
+  faction.trackSummon(state);
   return { success: true, log: [`The witch raises a ${unitName}!`], cost: 1, spent: [{ type: res, amount: 2 }] };
 }
 
@@ -1038,8 +1027,7 @@ export function executeGuardStrike(state, guardian, target) {
   const log = [];
 
   // Phase bonus applies normally
-  let phaseBonus = 0;
-  if (state.phase === Phase.NIGHT && guardian.owner === 'witch') phaseBonus = 2;
+  const phaseBonus = getFaction(guardian.owner).getPhaseCombatBonus(state.phase);
 
   // Strip silver: temporarily zero attackBonus, restore after
   const savedAtkBonus = guardian.attackBonus;
@@ -1084,8 +1072,7 @@ export function executeGuardStrike(state, guardian, target) {
 
     if (killed) {
       log.push(`${target.displayName} is slain by the guard strike!`);
-      if (guardian.owner === 'hero') state.heroKills++;
-      else if (guardian.owner === 'witch') state.witchKills++;
+      getFaction(guardian.owner).trackKill(state);
       state.entities = state.entities.filter(e => e.id !== target.id);
     } else {
       const label = damage >= 2 ? `${damage} damage (crushing blow!)` : `${damage} damage`;
@@ -1098,8 +1085,7 @@ export function executeGuardStrike(state, guardian, target) {
       splashKills = _applySplashDamage(state, target.col, target.row, [guardian.id, target.id], log);
       for (const sk of splashKills) {
         if (sk.owner !== guardian.owner) {
-          if (guardian.owner === 'hero') state.heroKills++;
-          else if (guardian.owner === 'witch') state.witchKills++;
+          getFaction(guardian.owner).trackKill(state);
         }
       }
     }

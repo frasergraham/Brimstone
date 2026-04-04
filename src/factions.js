@@ -68,6 +68,14 @@ export class Faction {
   /** Defense fatigue penalty for units of this faction when defending */
   getDefenseFatigue(_defendCount) { return 0; }
 
+  // ── Kill / Summon Tracking ──
+
+  /** Increment the appropriate kill counter on state for this faction */
+  trackKill(_state) { /* default: nothing */ }
+
+  /** Increment the appropriate summon counter on state for this faction */
+  trackSummon(_state) { /* default: nothing */ }
+
   // ── End-of-Round Effects ──
 
   /**
@@ -99,6 +107,23 @@ export class Faction {
   canEquipHorse()  { return false; }
   /** Can units of this faction carry/equip weapons? */
   canEquipWeapon() { return false; }
+
+  /** Does this entity currently have a horse equipped? */
+  hasHorse(entity) {
+    return this.canEquipHorse() && (entity.items?.['horse'] || 0) > 0;
+  }
+
+  /** Can this entity perform the explore action? */
+  canExplore(_entity) { return true; }
+
+  /** Return the opposing faction's id */
+  getOpponentId() { throw new Error('Subclass must implement getOpponentId'); }
+
+  /** Return this faction's current action budget from game state */
+  getActionsLeft(_state) { throw new Error('Subclass must implement getActionsLeft'); }
+
+  /** Return the node discovery key used on objective objects (e.g. 'seenByHero') */
+  getNodeSeenKey() { throw new Error('Subclass must implement getNodeSeenKey'); }
 
   /**
    * Get the inventory object where this faction stores resources.
@@ -161,6 +186,12 @@ export class HeroFaction extends Faction {
   getDefenseFatigue(defendCount) {
     return Math.floor((defendCount || 0) / 2);
   }
+
+  trackKill(state) { state.heroKills++; }
+
+  getOpponentId() { return 'witch'; }
+  getActionsLeft(state) { return state.heroActionsLeft; }
+  getNodeSeenKey() { return 'seenByHero'; }
 
   // End-of-Round Effects
   applyEndOfRoundEffects(state) {
@@ -339,6 +370,15 @@ export class WitchFaction extends Faction {
   getPhaseCombatBonus(phase) {
     return phase === Phase.NIGHT ? 2 : 0;
   }
+
+  trackKill(state) { state.witchKills++; }
+  trackSummon(state) { state.witchSummonCount++; }
+
+  canExplore(entity) { return entity.type === EntityType.WITCH; }
+
+  getOpponentId() { return 'hero'; }
+  getActionsLeft(state) { return state.witchActionsLeft; }
+  getNodeSeenKey() { return 'seenByWitch'; }
 
   // Discovery & Loot
   createDiscoveryEntity(col, row, ownerId) {
