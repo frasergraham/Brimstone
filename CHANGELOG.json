@@ -1,5 +1,17 @@
 [
   {
+    "version": "1.3.12",
+    "date": "2026-04-04",
+    "summary": "Bug fixes",
+    "notes": [
+      "_lsGet was calling itself instead of localStorage.getItem",
+      "GC auth dialog race and remove seed admin test references",
+      "Remove hardcoded seed admin user, clean up on startup",
+      "Retry refreshPushToken if APNS token hasn't arrived yet",
+      "Add temporary /debug/players page for push token debugging"
+    ]
+  },
+  {
     "version": "1.3.11",
     "date": "2026-04-04",
     "summary": "New features, and bug fixes",
