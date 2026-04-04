@@ -38,6 +38,11 @@ const _insertNotif = db.prepare(`
 `);
 
 const _getUsername = db.prepare(`SELECT username FROM players WHERE id = ?`);
+const _getGC = db.prepare(`
+  SELECT 1 FROM player_identities
+  WHERE  player_id = ? AND provider = 'gamecenter'
+  LIMIT  1
+`);
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -58,7 +63,8 @@ function _record(roomId, playerId, type) {
 function _logNotifyAttempt(fn, playerId, roomId, opts) {
   const tokens = getDeviceTokens(playerId);
   const email = _getPlayerEmail(playerId);
-  console.log(`[Notify] ${fn} player=${playerId} room=${roomId} isAsync=${opts?.isAsync} devices=${tokens.length} tokens=[${tokens.map(t => t.token.slice(0, 8) + '…').join(',')}] email=${email || 'none'}`);
+  const tag = _playerTag(playerId);
+  console.log(`[Notify] ${fn} player=${playerId} name=${tag} room=${roomId} isAsync=${opts?.isAsync} devices=${tokens.length} tokens=[${tokens.map(t => t.token.slice(0, 8) + '…').join(',')}] email=${email || 'none'}`);
 }
 
 async function _sendEmail(to, subject, body) {
@@ -83,6 +89,13 @@ async function _sendEmail(to, subject, body) {
   } catch (err) {
     console.error('[Notify] Send error:', err.message);
   }
+}
+
+function _playerTag(playerId) {
+  const row = _getUsername.get(playerId);
+  const name = row?.username ?? 'unknown';
+  const isGC = !!_getGC.get(playerId);
+  return `${name}${isGC ? ' (GC)' : ''}`;
 }
 
 function _playerName(playerId) {
@@ -129,7 +142,7 @@ export async function notifyWaitingOnYou(playerId, gameInfo, opts) {
     });
   } else {
     const email = _getPlayerEmail(playerId);
-    if (!email) { console.log(`[Notify] no device tokens and no email for player=${playerId}, skipping`); return; }
+    if (!email) { console.log(`[Notify] no device tokens and no email for player=${playerId} name=${_playerTag(playerId)}, skipping`); return; }
     const url = `${_baseUrl()}/#game=${gameInfo.roomId}`;
     await _sendEmail(email,
       "Caleb's Hollow — Waiting on you!",
@@ -156,7 +169,7 @@ export async function notifyRoundReady(playerId, gameInfo, opts) {
     });
   } else {
     const email = _getPlayerEmail(playerId);
-    if (!email) { console.log(`[Notify] no device tokens and no email for player=${playerId}, skipping`); return; }
+    if (!email) { console.log(`[Notify] no device tokens and no email for player=${playerId} name=${_playerTag(playerId)}, skipping`); return; }
     const url = `${_baseUrl()}/#game=${gameInfo.roomId}`;
     await _sendEmail(email,
       `Caleb's Hollow — Round ${gameInfo.round} is ready`,
@@ -186,7 +199,7 @@ export async function notifyDeadlineApproaching(playerId, gameInfo, opts) {
     });
   } else {
     const email = _getPlayerEmail(playerId);
-    if (!email) { console.log(`[Notify] no device tokens and no email for player=${playerId}, skipping`); return; }
+    if (!email) { console.log(`[Notify] no device tokens and no email for player=${playerId} name=${_playerTag(playerId)}, skipping`); return; }
     const url = `${_baseUrl()}/#game=${gameInfo.roomId}`;
     await _sendEmail(email,
       "Caleb's Hollow — Deadline approaching",
@@ -215,7 +228,7 @@ export async function notifyGameOver(playerId, gameInfo, opts) {
     });
   } else {
     const email = _getPlayerEmail(playerId);
-    if (!email) { console.log(`[Notify] no device tokens and no email for player=${playerId}, skipping`); return; }
+    if (!email) { console.log(`[Notify] no device tokens and no email for player=${playerId} name=${_playerTag(playerId)}, skipping`); return; }
     const url = `${_baseUrl()}/#game=${gameInfo.roomId}`;
     await _sendEmail(email,
       "Caleb's Hollow — Game Over",
@@ -252,7 +265,7 @@ export async function notifyGameAbandoned(playerId, gameInfo) {
     });
   } else {
     const email = _getPlayerEmail(playerId);
-    if (!email) { console.log(`[Notify] no device tokens and no email for player=${playerId}, skipping`); return; }
+    if (!email) { console.log(`[Notify] no device tokens and no email for player=${playerId} name=${_playerTag(playerId)}, skipping`); return; }
     const opponent = _playerName(gameInfo.opponentId);
     await _sendEmail(email,
       "Caleb's Hollow — Game abandoned",
