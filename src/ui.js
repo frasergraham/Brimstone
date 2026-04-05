@@ -52,6 +52,10 @@ export class UIController {
     this._popupVisible    = false;   // tracks whether the action popup is shown
     this._selectedTile    = null;    // { col, row } — tile-only selection (no entity)
     this._arcCloseTimer   = null;    // setTimeout id for arc close animation
+    this._arcTrackingRaf  = null;    // rAF id for pan/zoom tracking loop
+    this._arcItems        = null;    // current arc item descriptors (for line drawing)
+    this._arcEntityCol    = null;    // hex col of arc menu origin
+    this._arcEntityRow    = null;    // hex row of arc menu origin
 
     this._touchStart  = null;
     this._pinchDist   = null;
@@ -1581,16 +1585,25 @@ export class UIController {
 
     popup.innerHTML = html;
 
-    // Position popup centered on entity
-    popup.style.left = screenPos.x + 'px';
-    popup.style.top  = screenPos.y + 'px';
-    popup.style.transform = 'none';
+    // Store arc state for pan/zoom tracking and canvas line drawing
+    this._arcEntityCol = effectiveEntity.col;
+    this._arcEntityRow = effectiveEntity.row;
+    this._arcItems = arcItems; // keep for line drawing
+
+    // Position popup centered on entity + set up connecting lines
+    _positionArcPopup(popup, this);
     popup.style.display = 'block';
 
     _attachPopupListeners(popup, this);
 
     // Trigger open animation on next frame
-    requestAnimationFrame(() => { popup.classList.add('arc-open'); });
+    requestAnimationFrame(() => {
+      popup.classList.add('arc-open');
+      this.onRedraw();
+    });
+
+    // Start tracking pan/zoom — reposition popup each frame while visible
+    _startArcTracking(this);
   }
 
   _showDisambigPopup() {
@@ -3613,6 +3626,11 @@ function _hideActionPopup(ui) {
   if (!p) return;
   // Clear any pending close timer
   if (ui && ui._arcCloseTimer) { clearTimeout(ui._arcCloseTimer); ui._arcCloseTimer = null; }
+  // Stop pan/zoom tracking loop
+  if (ui && ui._arcTrackingRaf) { cancelAnimationFrame(ui._arcTrackingRaf); ui._arcTrackingRaf = null; }
+  // Clear canvas connecting lines
+  if (ui?.renderer) { ui.renderer.arcMenuLines = null; }
+  if (ui) { ui._arcItems = null; ui._arcEntityCol = null; ui._arcEntityRow = null; }
   // Arc mode: animate close
   if (p.classList.contains('arc-open') && !p.classList.contains('popup-list-mode')) {
     p.classList.remove('arc-open');
@@ -3625,11 +3643,14 @@ function _hideActionPopup(ui) {
       if (ui) ui._arcCloseTimer = null;
     }, closeTime);
     if (ui) ui._arcCloseTimer = timer;
+    // Trigger redraw to clear canvas lines
+    ui?.onRedraw?.();
     return;
   }
   // List mode or not open: instant hide
   p.style.display = 'none';
   p.classList.remove('arc-open', 'arc-closing', 'popup-list-mode');
+  ui?.onRedraw?.();
 }
 
 /** Get the screen position (viewport px) of a selected entity, accounting for planning ghosts. */
@@ -3658,6 +3679,50 @@ function _getEntityScreenPos(ui, entity) {
     x: canvasRect.left + x * scale,
     y: canvasRect.top  + y * scale,
   };
+}
+
+/** Position the arc popup centered on the entity's screen position and set up canvas lines. */
+function _positionArcPopup(popup, ui) {
+  const col = ui._arcEntityCol;
+  const row = ui._arcEntityRow;
+  if (col == null || row == null) return;
+
+  const canvasRect = ui.canvas.getBoundingClientRect();
+  const { x, y }   = ui.renderer.hexToCanvasPos(col, row);
+  const scale       = canvasRect.width / ui.canvas.width;
+  const sx = canvasRect.left + x * scale;
+  const sy = canvasRect.top  + y * scale;
+
+  popup.style.left = sx + 'px';
+  popup.style.top  = sy + 'px';
+  popup.style.transform = 'none';
+
+  // Update renderer's arc menu lines for canvas drawing
+  if (ui._arcItems?.length) {
+    ui.renderer.arcMenuLines = {
+      col, row,
+      items: ui._arcItems.map(item => ({
+        x: Math.cos(item._angle) * 110, // ARC_RADIUS in screen px
+        y: Math.sin(item._angle) * 110,
+        color: item.color,
+      })),
+    };
+  }
+}
+
+/** Start a rAF loop that repositions the arc popup on every frame (tracks pan/zoom). */
+function _startArcTracking(ui) {
+  if (ui._arcTrackingRaf) return; // already running
+  const popup = document.getElementById('action-popup');
+  function tick() {
+    if (!popup || popup.style.display === 'none' || popup.classList.contains('popup-list-mode')) {
+      ui._arcTrackingRaf = null;
+      return;
+    }
+    _positionArcPopup(popup, ui);
+    ui._arcTrackingRaf = requestAnimationFrame(tick);
+  }
+  ui._arcTrackingRaf = requestAnimationFrame(tick);
 }
 
 function _positionPopup(popup, ui) {
