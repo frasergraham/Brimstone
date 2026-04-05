@@ -50,7 +50,7 @@ if (existsSync(WWW)) rmSync(WWW, { recursive: true });
 mkdirSync(WWW, { recursive: true });
 
 // Directories to copy (relative to project root)
-const dirs = ['src', 'assets', 'server'];
+const dirs = ['src', 'assets'];
 for (const dir of dirs) {
   cpSync(resolve(ROOT, dir), resolve(WWW, dir), { recursive: true });
 }

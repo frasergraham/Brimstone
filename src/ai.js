@@ -139,6 +139,7 @@ export class PlanSimState {
   constructor(realState, faction, playerId = null) {
     this.tiles            = realState.tiles;          // read-only reference
     this.phase            = realState.phase;
+    this.round            = realState.round ?? 1;
     this.witchObjectives  = realState.witchObjectives;
     this.nodeScore        = realState.nodeScore;
     this.fogOfWar         = realState.fogOfWar;
@@ -247,6 +248,71 @@ export class PlanSimState {
     if (e) e.guarding = (e.guarding || 0) + 1;
     this.actionsLeft--;
   }
+
+  applySoundHorn() {
+    const shared = this.inventory?.shared || {};
+    if ((shared['food'] || 0) >= 1) shared['food']--;
+    this.actionsLeft--;
+  }
+}
+
+// ── Scoring-phase helpers ───────────────────────────────────────────────────────
+// Scoring happens at DAWN (cycle pos 0) and DUSK (cycle pos 4).
+// Returns the number of rounds until the next scoring check (0 = this round).
+const CYCLE_LENGTH = 8;
+
+export function roundsUntilScoring(round) {
+  const r = ((round || 1) - 1) % CYCLE_LENGTH;
+  if (r === 0 || r === 4) return 0; // scoring this round (DAWN or DUSK)
+  if (r < 4) return 4 - r;          // rounds until DUSK
+  return CYCLE_LENGTH - r;           // rounds until next DAWN
+}
+
+// ── Node feasibility scoring ────────────────────────────────────────────────────
+// Evaluates how realistic it is for a faction to hold a given node.
+// Returns 0–1; higher = more feasible to contest/hold.
+
+export function scoreNodeFeasibility(node, myFaction, entities) {
+  const myUnits = entities.filter(e => e.alive && e.owner === myFaction);
+  const enemyUnits = entities.filter(e => e.alive && e.owner !== myFaction);
+
+  // Nearest friendly/enemy unit distance to node center
+  let myNearest = Infinity, enemyNearest = Infinity;
+  for (const e of myUnits) {
+    const d = hexDistance(e.col, e.row, node.obj.col, node.obj.row);
+    if (d < myNearest) myNearest = d;
+  }
+  for (const e of enemyUnits) {
+    const d = hexDistance(e.col, e.row, node.obj.col, node.obj.row);
+    if (d < enemyNearest) enemyNearest = d;
+  }
+
+  // Count units on node hexes
+  const nodeHexes = node.obj.hexes || [node.obj];
+  const isOnNodeHex = (e) => nodeHexes.some(h => h.col === e.col && h.row === e.row);
+  const myOnNode = myUnits.filter(isOnNodeHex).length;
+  const enemyOnNode = enemyUnits.filter(isOnNodeHex).length;
+
+  let score = 0.5;
+
+  // Already held by us with presence: very feasible to defend
+  if (node.controller === myFaction && myOnNode > 0) score += 0.3;
+
+  // Distance advantage: we're closer than enemy
+  if (myNearest < enemyNearest) score += 0.15;
+  else if (myNearest > enemyNearest + 2) score -= 0.25;
+
+  // Force advantage on node
+  if (myOnNode > enemyOnNode) score += 0.2;
+  else if (enemyOnNode > myOnNode + 1) score -= 0.25;
+
+  // Too far away with enemy presence — likely hopeless
+  if (myNearest > 5 && enemyOnNode > 0) score -= 0.35;
+
+  // Neutral and close — good opportunity
+  if (node.controller === 'neutral' && myNearest <= 2) score += 0.15;
+
+  return Math.max(0, Math.min(1, score));
 }
 
 // ── Personality registries ──────────────────────────────────────────────────────

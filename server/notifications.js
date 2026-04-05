@@ -259,6 +259,35 @@ export async function sendGameInvite(email, gameInfo) {
 }
 
 /**
+ * Notify a player that another player nudged them to take their turn.
+ * Uses 'nudge' notification type for dedup.
+ */
+export async function notifyNudge(playerId, gameInfo, opts) {
+  _logNotifyAttempt('notifyNudge', playerId, gameInfo.roomId, opts);
+  if (!_shouldSend(gameInfo.roomId, playerId, 'nudge')) { console.log(`[Notify] dedup suppressed nudge`); return; }
+  _record(gameInfo.roomId, playerId, 'nudge');
+
+  const from = gameInfo.fromName ?? 'A teammate';
+
+  if (hasDeviceTokens(playerId)) {
+    console.log(`[Notify] sending push for nudge to player=${playerId}`);
+    await sendPush(playerId, {
+      title: `${from} nudged you`,
+      body: "It's your turn to plan!",
+      roomId: gameInfo.roomId,
+    });
+  } else {
+    const email = _getPlayerEmail(playerId);
+    if (!email) { console.log(`[Notify] no device tokens and no email for player=${playerId} name=${_playerTag(playerId)}, skipping`); return; }
+    const url = `${_baseUrl()}/#game=${gameInfo.roomId}`;
+    await _sendEmail(email,
+      `Caleb's Hollow — ${from} nudged you!`,
+      `${from} is waiting for you to submit your plan.\n\nPlay your turn: ${url}`
+    );
+  }
+}
+
+/**
  * Notify a player that the game was abandoned due to inactivity.
  */
 export async function notifyGameAbandoned(playerId, gameInfo) {

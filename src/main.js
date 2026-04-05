@@ -1400,6 +1400,7 @@ function initOnline(mirrorState, myFaction, mpClient) {
 
   ui.mp         = mpClient;
   ui.myPlayerId = mpClient.myPlayerId ?? null;
+  ui._isAsync   = mpClient.isAsync ?? false;
   ui._players   = (state.players ?? []).map(p => ({ ...p, playerId: p.playerId ?? p.id }));
 
   redrawOnline();
@@ -5082,6 +5083,15 @@ function _createMpClient() {
       if (!isInGame() || !state) return;
       if (!state._takeoverMessages) state._takeoverMessages = [];
       state._takeoverMessages.push(`${playerName} resigned — replaced by AI`);
+    },
+
+    onNudged(msg) {
+      if (!isInGame()) return;
+      if (ui) ui._showNudgeToast(msg.fromName ?? 'Someone');
+    },
+
+    onNudgeAck(_msg) {
+      // No-op — UI already updated optimistically on click
     },
 
     onGamesUpdate() {
