@@ -1440,34 +1440,9 @@ export class UIController {
               color: '#c0392b', dis, attrs: 'data-action="attack_hex"' });
           }
           break;
-        case ActionType.SUMMON: {
-          const projWitch = projInv ? projInv.witch : state.inventory.witch;
-          const projMetal = projWitch[ResourceType.METAL] || 0;
-          const projWood  = projWitch[ResourceType.WOOD]  || 0;
-          const projTotal = Object.values(projWitch).reduce((s, v) => s + (v || 0), 0);
-          const projAffordable = {
-            [EntityType.IRON_GOLEM]: projMetal >= 2,
-            [EntityType.WOOD_GOLEM]: projWood  >= 2,
-            [EntityType.MINION]:     projTotal >= 2,
-          };
-          const SUMMON_SHORT = {
-            [EntityType.IRON_GOLEM]: 'Iron',
-            [EntityType.WOOD_GOLEM]: 'Wood',
-            [EntityType.MINION]:     'Minion',
-          };
-          const SUMMON_FULL = {
-            [EntityType.IRON_GOLEM]: 'Iron Golem (2 metal)',
-            [EntityType.WOOD_GOLEM]: 'Wood Golem (2 wood)',
-            [EntityType.MINION]:     'Minion (2 res)',
-          };
-          const st = action.summonType;
-          const canAfford = projAffordable[st] ?? action.affordable;
-          arcItems.push({ group: 'summon', label: SUMMON_SHORT[st] ?? 'Summon',
-            fullLabel: SUMMON_FULL[st] ?? 'Summon',
-            color: '#9b59b6', dis: !canAfford || dis,
-            attrs: `data-action="summon" data-summon-type="${st}"` });
+        case ActionType.SUMMON:
+          // Handled below — we always show all 3 summon types
           break;
-        }
         case ActionType.USE_ITEM:
           for (const item of action.usable) {
             if (this._planMode && item.item === ResourceType.FOOD) continue;
@@ -1512,6 +1487,24 @@ export class UIController {
             attrs: 'data-action="use_ability"' });
           break;
         }
+      }
+    }
+
+    // Always show all 3 summon types for the witch, greyed out if unaffordable
+    if (entity.type === EntityType.WITCH && actions.some(a => a.type === ActionType.SUMMON || a.type === ActionType.GUARD)) {
+      const projWitch = projInv ? projInv.witch : state.inventory.witch;
+      const projMetal = projWitch?.[ResourceType.METAL] || 0;
+      const projWood  = projWitch?.[ResourceType.WOOD]  || 0;
+      const projTotal = projWitch ? Object.values(projWitch).reduce((s, v) => s + (v || 0), 0) : 0;
+      const ALL_SUMMONS = [
+        { st: EntityType.IRON_GOLEM, label: 'Iron · 2⚙',  full: 'Iron Golem (2 metal)',  afford: projMetal >= 2 },
+        { st: EntityType.WOOD_GOLEM, label: 'Wood · 2🪵', full: 'Wood Golem (2 wood)',   afford: projWood >= 2 },
+        { st: EntityType.MINION,     label: 'Minion · 2res', full: 'Minion (2 any resource)', afford: projTotal >= 2 },
+      ];
+      for (const s of ALL_SUMMONS) {
+        arcItems.push({ group: 'summon', label: s.label, fullLabel: s.full,
+          color: '#9b59b6', dis: !s.afford || !hasAct,
+          attrs: `data-action="summon" data-summon-type="${s.st}"` });
       }
     }
 
@@ -1564,8 +1557,8 @@ export class UIController {
         ${disAttr} ${item.attrs}>${item.label}</button>`;
     }
 
-    // Add "Summon" label above the summon group if there are 2+ summon items
-    if (summonIndices.length >= 2) {
+    // Add "Summon" label above the summon group
+    if (summonIndices.length >= 1) {
       const firstIdx = summonIndices[0];
       const lastIdx  = summonIndices[summonIndices.length - 1];
       const midAngle = (arcItems[firstIdx]._angle + arcItems[lastIdx]._angle) / 2;
