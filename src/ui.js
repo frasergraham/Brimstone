@@ -2393,6 +2393,27 @@ export class UIController {
     continueBtn?.addEventListener('click', dismiss);
   }
 
+  /**
+   * Show a narrative story modal (campaign triggers).
+   * Returns a Promise that resolves when the player dismisses it.
+   */
+  showStoryModal(title, text) {
+    return new Promise(resolve => {
+      const el = this._el('story-modal');
+      if (!el) { resolve(); return; }
+      el.querySelector('.story-modal-title').textContent = title;
+      el.querySelector('.story-modal-text').textContent = text;
+      el.classList.add('visible');
+      const btn = this._el('story-modal-continue');
+      const handler = () => {
+        btn.removeEventListener('click', handler);
+        el.classList.remove('visible');
+        resolve();
+      };
+      btn.addEventListener('click', handler);
+    });
+  }
+
   // ── Dialogs ───────────────────────────────────────────────────────────────
 
   /** Show floating "+Item" text over a hex for each loot item found. */

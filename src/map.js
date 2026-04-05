@@ -119,7 +119,7 @@ export const MAP_SIZES = {
   },
 };
 
-function rng(seed) {
+export function rng(seed) {
   let s = seed | 0;
   return () => {
     s = (Math.imul(1664525, s) + 1013904223) | 0;
@@ -127,7 +127,7 @@ function rng(seed) {
   };
 }
 
-function _shuffle(arr, rand) {
+export function shuffle(arr, rand) {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(rand() * (i + 1));
     [arr[i], arr[j]] = [arr[j], arr[i]];
@@ -142,7 +142,7 @@ function _shuffle(arr, rand) {
 const MAX_ROAD_DEG = 3;
 const ROAD_DEG_PENALTY = 10; // extra cost per degree above the cap
 
-function bfsPath(tiles, startCol, startRow, endCol, endRow, rand, roadTiles = new Set()) {
+export function bfsPath(tiles, startCol, startRow, endCol, endRow, rand, roadTiles = new Set()) {
   const key = (c, r) => `${c},${r}`;
   const start = key(startCol, startRow);
   const end   = key(endCol, endRow);
@@ -202,7 +202,7 @@ function _pickSpread(rand, tiles, count, minDist, forbiddenKeys = new Set()) {
     if (t.col < 1 || t.col > MAP_COLS - 2 || t.row < 1 || t.row > MAP_ROWS - 2) continue;
     candidates.push({ col: t.col, row: t.row });
   }
-  _shuffle(candidates, rand);
+  shuffle(candidates, rand);
 
   const placed = [];
   for (const c of candidates) {
@@ -239,7 +239,7 @@ function _pickCornerBuildings(rand, tiles) {
       if (hasRiverNeighbor(t.col, t.row)) continue;
       cs.push(t);
     }
-    _shuffle(cs, rand);
+    shuffle(cs, rand);
     return cs[0] || null;
   };
 
@@ -254,8 +254,8 @@ function _pickCornerBuildings(rand, tiles) {
 // Build a lookup map from the generated river path (captured before tiles are mutated).
 // N-S river: row→col map.  E-W river: col→row map.
 // E-W rivers may have vertical detour tiles (two tiles in one column); the last row
-// per column wins, which is the exit position — correct for _riverSide().
-function _buildRiverMap(riverPath, riverEW = false) {
+// per column wins, which is the exit position — correct for riverSide().
+export function buildRiverMap(riverPath, riverEW = false) {
   const m = new Map();
   if (riverEW) {
     for (const { col, row } of riverPath) m.set(col, row);
@@ -269,7 +269,7 @@ function _buildRiverMap(riverPath, riverEW = false) {
 // N-S river: 'left' (west) or 'right' (east).
 // E-W river: 'left' (north/top) or 'right' (south/bottom).
 // Hexes at the exact river position are treated as 'right' (consistent tiebreak).
-function _riverSide(col, row, riverMap, riverEW = false) {
+export function riverSide(col, row, riverMap, riverEW = false) {
   if (riverEW) {
     const rr = riverMap.get(col);
     return (rr === undefined || row < rr) ? 'left' : 'right';
@@ -288,10 +288,10 @@ function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, river
     if (forbiddenKeys.has(k)) continue;
     if (t.col < 1 || t.col > MAP_COLS - 2 || t.row < 1 || t.row > MAP_ROWS - 2) continue;
     if (startPositions.some(sp => hexDistance(sp.col, sp.row, t.col, t.row) <= 3)) continue;
-    (_riverSide(t.col, t.row, riverMap, riverEW) === 'left' ? left : right).push({ col: t.col, row: t.row });
+    (riverSide(t.col, t.row, riverMap, riverEW) === 'left' ? left : right).push({ col: t.col, row: t.row });
   }
-  _shuffle(left, rand);
-  _shuffle(right, rand);
+  shuffle(left, rand);
+  shuffle(right, rand);
 
   const placed = [];
   const ok = c => !placed.some(p => hexDistance(p.col, p.row, c.col, c.row) < minDist);
@@ -301,7 +301,7 @@ function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, river
     const r = right.find(ok); if (r) placed.push(r);
   }
 
-  const rest = _shuffle([...left, ...right], rand);
+  const rest = shuffle([...left, ...right], rand);
   for (const c of rest) {
     if (placed.length >= count) break;
     if (!placed.some(p => p.col === c.col && p.row === c.row) && ok(c)) placed.push(c);
@@ -315,7 +315,7 @@ function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, river
 // Prefers a "triangle" (two neighbors that are also adjacent to each other).
 // startPositions: no satellite may be within 3 hexes of these.
 function _pickNodeCluster(rand, tiles, center, forbiddenKeys, startPositions = []) {
-  const neighbors = _shuffle(
+  const neighbors = shuffle(
     getNeighbors(center.col, center.row).filter(n => {
       const t = tiles.get(hexKey(n.col, n.row));
       if (!t || t.type === TileType.RIVER) return false;
@@ -373,7 +373,7 @@ function _placeVillageBuildings(rand, tiles, centerCol, centerRow, buildings, us
     if (dist >= 0 && dist <= RADIUS) candidates.push({ col: t.col, row: t.row, dist });
   }
   // Shuffle first so equal-distance tiles are randomly ordered, then stable-sort by distance
-  _shuffle(candidates, rand);
+  shuffle(candidates, rand);
   candidates.sort((a, b) => a.dist - b.dist);
 
   const placed = [];
@@ -407,7 +407,7 @@ function _generateVillages(rand, tiles, villageNames, minVillageDist, reservedKe
     if (t.col < 2 || t.col > MAP_COLS - 3 || t.row < 2 || t.row > MAP_ROWS - 3) continue;
     centerCandidates.push({ col: t.col, row: t.row });
   }
-  _shuffle(centerCandidates, rand);
+  shuffle(centerCandidates, rand);
 
   const minToCorner = Math.ceil(minVillageDist * 0.75); // slightly smaller buffer to corners
   const centers = [];
@@ -420,7 +420,7 @@ function _generateVillages(rand, tiles, villageNames, minVillageDist, reservedKe
   }
 
   // Shuffle template order per seed so village positions vary across seeds
-  const shuffledNames = _shuffle([...villageNames], rand);
+  const shuffledNames = shuffle([...villageNames], rand);
   const allPlacements = [];
   const villageGroups = []; // [{ root, members }] — used for two-tier road building
   for (let i = 0; i < centers.length; i++) {
@@ -440,7 +440,7 @@ function _generateVillages(rand, tiles, villageNames, minVillageDist, reservedKe
 //
 // Hex adjacency in odd-r offset means from an even row you can step to (col, row+1)
 // or (col-1, row+1); from an odd row to (col+1, row+1) or (col, row+1).
-function _generateRiver(rand) {
+export function generateRiverNS(rand) {
   const path = [];
   // Start in the middle third of the map, clamped to the safe river range
   const minStart = Math.max(2, Math.floor(MAP_COLS / 4));
@@ -472,7 +472,7 @@ function _generateRiver(rand) {
 // To avoid near-straight rivers, even-row hexes may insert a vertical detour step
 // (same column, row±1) to reach an odd row before continuing rightward.
 // This means some columns may contain two river tiles.
-function _generateRiverEW(rand) {
+export function generateRiverEW(rand) {
   const path = [];
   const minStart = Math.max(2, Math.floor(MAP_ROWS / 4));
   const rangeLen  = Math.max(1, Math.floor(MAP_ROWS / 2));
@@ -541,8 +541,8 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   // 2. Carve meandering river — randomly N-S or E-W.
   //    Capture path to build a positional lookup for later checks.
   const riverEW   = rand() < 0.5;
-  const riverPath = riverEW ? _generateRiverEW(rand) : _generateRiver(rand);
-  const riverMap  = _buildRiverMap(riverPath, riverEW);
+  const riverPath = riverEW ? generateRiverEW(rand) : generateRiverNS(rand);
+  const riverMap  = buildRiverMap(riverPath, riverEW);
   for (const { col, row } of riverPath) {
     const t = tiles.get(hexKey(col, row));
     if (t) t.type = TileType.RIVER;
@@ -603,7 +603,7 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
 
   // Guarantee minimum river crossings on the inter-village trunk
   {
-    const side = (col, row) => _riverSide(col, row, riverMap, riverEW);
+    const side = (col, row) => riverSide(col, row, riverMap, riverEW);
     const crossCount = interEdges.filter(e =>
       side(e.from.col, e.from.row) !== side(e.to.col, e.to.row)
     ).length;
@@ -719,11 +719,11 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
     for (const [, t] of tiles) {
       if (t.type === TileType.GRASS && t.col >= 1 && t.col <= MAP_COLS - 2) grassTiles.push(t);
     }
-    _shuffle(grassTiles, rand);
+    shuffle(grassTiles, rand);
     if (grassTiles.length === 0) break;
     const seedTile = grassTiles[0];
     seedTile.type = TileType.DIRT;
-    const spreadNeighbors = _shuffle(
+    const spreadNeighbors = shuffle(
       getNeighbors(seedTile.col, seedTile.row)
         .map(n => tiles.get(hexKey(n.col, n.row)))
         .filter(t => t && t.type === TileType.GRASS),

@@ -2482,6 +2482,7 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   /* Dialogs / modals: cap widths to viewport */
   .round-summary-card { min-width: 0; max-width: 90vw; padding: 1.2rem; }
   .phase-modal-card { min-width: 0; max-width: 90vw; padding: 1rem 1.2rem; }
+  .story-modal-card { min-width: 0; max-width: 90vw; padding: 1.2rem 1rem; }
   #encounter-card { min-width: 0; }
 
   /* Game menu: 44px touch targets */
@@ -3292,6 +3293,53 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 #phase-modal.phase-day   .phase-modal-card { border-color: rgba(245,200,66,0.5); }
 #phase-modal.phase-dusk  .phase-modal-card { border-color: rgba(180,60,0,0.5); }
 #phase-modal.phase-night .phase-modal-card { border-color: rgba(123,79,187,0.5); }
+
+/* ── Story modal (campaign narrative triggers) ──────────────────────── */
+
+#story-modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  align-items: center;
+  justify-content: center;
+  z-index: 89;
+}
+#story-modal.visible { display: flex; }
+
+.story-modal-card {
+  background: linear-gradient(160deg, #1a1510 0%, #0d0b08 100%);
+  border: 1px solid rgba(180, 140, 80, 0.4);
+  border-radius: 6px;
+  padding: 1.8rem 2.2rem;
+  min-width: 280px;
+  max-width: 400px;
+  text-align: center;
+  box-shadow: 0 0 40px rgba(120, 80, 20, 0.35), inset 0 0 60px rgba(0,0,0,0.3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+.story-modal-title {
+  font-size: 1rem;
+  font-weight: bold;
+  color: #d4a857;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.story-modal-text {
+  font-size: 0.82rem;
+  color: #c4b89a;
+  line-height: 1.65;
+  font-style: italic;
+}
+
+#story-modal-continue {
+  margin-top: 0.4rem;
+}
 
 /* ── Phase toast ─────────────────────────────────────────────────────── */
 .phase-toast {

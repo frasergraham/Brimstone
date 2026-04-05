@@ -28,6 +28,7 @@ import { createMinion, createZombie, createWoodGolem, createIronGolem, createSur
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
+import { processStoryTriggers } from './campaign/missions.js';
 import { requestNotificationPermission, notifyRoundReady, notifyWaitingOnYou, notifyDeadlineApproaching, notifyGameOver } from './notifications.js';
 
 // Stamp version into badge
@@ -363,6 +364,27 @@ function _startLocalPlanningPhase() {
     return;
   }
 
+  // Campaign story triggers — show before entering planning mode
+  if (_activeMissionDef?.storyTriggers && _activeCampaign) {
+    const events = processStoryTriggers(state, _activeMissionDef.storyTriggers, _activeCampaign.storyFlags);
+    if (events.length > 0) {
+      _showStorySequence(events).then(() => _enterLocalPlanningMode());
+      return;
+    }
+  }
+
+  _enterLocalPlanningMode();
+}
+
+/** Show a sequence of story modals, resolving when all are dismissed. */
+async function _showStorySequence(events) {
+  for (const ev of events) {
+    await ui.showStoryModal(ev.title, ev.text);
+  }
+}
+
+/** Enter planning mode after any pre-planning modals (story, phase) are done. */
+function _enterLocalPlanningMode() {
   const humanFaction = !state.heroIsAI ? 'hero' : 'witch';
   const budget = getFaction(humanFaction).getActionsLeft(state);
 
@@ -1926,7 +1948,12 @@ function _initCampaignMission(missionDef) {
 
   // Create game state
   state = new GameState(true, false, missionDef.mapSize, null, mapData);
-  state.fogOfWar = 'partial';
+  state.fogOfWar = 'full';
+
+  // Apply per-mission loot table overrides
+  if (missionDef.lootOverrides) {
+    state.lootOverrides = missionDef.lootOverrides;
+  }
 
   // Set custom victory delegate
   state.victoryDelegate = buildVictoryDelegate(missionDef.objectives);

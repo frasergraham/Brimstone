@@ -8,7 +8,7 @@ import { hexKey, getNeighbors } from '../src/hex.js';
 import {
   Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves,
 } from '../src/campaign/campaign.js';
-import { ObjectiveType } from '../src/campaign/missions.js';
+import { ObjectiveType, processStoryTriggers } from '../src/campaign/missions.js';
 import { CAMPAIGNS, getCampaignById } from '../src/campaign/campaign-registry.js';
 
 // ── Helper: localStorage mock for Node ──────────────────────────────────────
@@ -83,8 +83,8 @@ describe('Mission definitions', () => {
     }
   });
 
-  test('prologue campaign has 3 missions total', () => {
-    assert.equal(salemDef.missions.length, 3);
+  test('prologue campaign has 6 missions total', () => {
+    assert.equal(salemDef.missions.length, 6);
   });
 
   test('mission prerequisites form a valid chain', () => {
@@ -250,7 +250,7 @@ describe('Campaign class', () => {
   test('campaign stores campaignDef reference', () => {
     const c = new Campaign(salemDef);
     assert.equal(c.campaignDef.id, 'salem_prologue');
-    assert.equal(c.campaignDef.missions.length, 3);
+    assert.equal(c.campaignDef.missions.length, 6);
   });
 
   test('save slot defaults to campaign-{id}', () => {
@@ -295,10 +295,13 @@ describe('Campaign class', () => {
   test('getMissionList returns correct statuses', () => {
     const c = new Campaign(salemDef);
     const list = c.getMissionList();
-    assert.equal(list.length, 3);
-    assert.ok(list[0].available);
-    assert.ok(!list[1].available);
-    assert.ok(!list[2].available);
+    assert.equal(list.length, 6);
+    assert.ok(list[0].available);      // prologue — no prereqs
+    assert.ok(!list[1].available);     // gathering_survivors — needs prologue
+    assert.ok(!list[2].available);     // first_night — needs gathering_survivors
+    assert.ok(!list[3].available);     // river_crossing — needs first_night
+    assert.ok(!list[4].available);     // dark_ritual — needs river_crossing
+    assert.ok(!list[5].available);     // witchs_trail — needs dark_ritual
   });
 
   test('getMissionDef looks up from campaignDef missions', () => {
@@ -325,7 +328,7 @@ describe('Campaign class', () => {
       heroStats: { hp: 12, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} },
     });
     assert.ok(c.completedMissions.has('prologue'));
-    assert.equal(c.currentMission, 'first_night');
+    assert.equal(c.currentMission, 'gathering_survivors');
     assert.equal(c.roster.length, 1);
     assert.equal(c.roster[0].name, 'Martha');
   });
@@ -661,9 +664,143 @@ describe('maxDiscoverableSurvivors config', () => {
 // ── disableScoring on missions ─────────────────────────────────────────────
 
 describe('disableScoring on missions', () => {
-  test('all prologue missions have disableScoring set', () => {
+  test('all prologue missions have disableScoring set except dark_ritual', () => {
     for (const m of salemDef.missions) {
-      assert.equal(m.disableScoring, true, `${m.id} should have disableScoring: true`);
+      if (m.id === 'dark_ritual') {
+        assert.equal(m.disableScoring, false, 'dark_ritual uses node scoring');
+      } else {
+        assert.equal(m.disableScoring, true, `${m.id} should have disableScoring: true`);
+      }
     }
+  });
+});
+
+// ── New map builders ──────────────────────────────────────────────────────
+
+describe('new campaign map builders', () => {
+  for (const key of ['gathering_survivors', 'river_crossing', 'dark_ritual']) {
+    test(`${key} builder produces valid mapData`, () => {
+      const mapData = buildMap(key);
+      assert.ok(mapData.tiles instanceof Map, `${key}: tiles should be a Map`);
+      assert.ok(mapData.tiles.size > 0, `${key}: tiles should be non-empty`);
+      assert.ok(mapData.heroStart, `${key}: should have heroStart`);
+      assert.ok(mapData.witchStart, `${key}: should have witchStart`);
+      assert.ok(typeof mapData.cols === 'number', `${key}: should have cols`);
+      assert.ok(typeof mapData.rows === 'number', `${key}: should have rows`);
+      assert.ok(mapData.mapSize, `${key}: should have mapSize`);
+    });
+  }
+
+  test('river_crossing map is a wide corridor (17x9)', () => {
+    const mapData = buildMap('river_crossing');
+    assert.equal(mapData.cols, 17);
+    assert.equal(mapData.rows, 9);
+  });
+
+  test('dark_ritual has 2 power nodes', () => {
+    const mapData = buildMap('dark_ritual');
+    assert.equal(mapData.witchObjectives.length, 2);
+  });
+
+  test('gathering_survivors has no power nodes', () => {
+    const mapData = buildMap('gathering_survivors');
+    assert.equal(mapData.witchObjectives.length, 0);
+  });
+});
+
+// ── Story triggers ────────────────────────────────────────────────────────
+
+describe('processStoryTriggers', () => {
+  test('round trigger fires on correct round', () => {
+    const state = { round: 3, hero: { col: 0, row: 0 } };
+    const triggers = [
+      { type: 'round', round: 3, title: 'Test', text: 'Hello', flag: 'test_flag' },
+    ];
+    const flags = {};
+    const events = processStoryTriggers(state, triggers, flags);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].title, 'Test');
+    assert.ok(flags.test_flag);
+  });
+
+  test('round trigger does not fire on wrong round', () => {
+    const state = { round: 2, hero: { col: 0, row: 0 } };
+    const triggers = [
+      { type: 'round', round: 3, title: 'Test', text: 'Hello', flag: 'test_flag' },
+    ];
+    const events = processStoryTriggers(state, triggers, {});
+    assert.equal(events.length, 0);
+  });
+
+  test('area trigger fires when hero is on hex', () => {
+    const state = { round: 1, hero: { col: 5, row: 3 } };
+    const triggers = [
+      { type: 'area', hexes: [{ col: 5, row: 3 }], title: 'Found', text: 'Here', flag: 'area_flag' },
+    ];
+    const flags = {};
+    const events = processStoryTriggers(state, triggers, flags);
+    assert.equal(events.length, 1);
+    assert.ok(flags.area_flag);
+  });
+
+  test('flag prevents re-firing', () => {
+    const state = { round: 3, hero: { col: 0, row: 0 } };
+    const triggers = [
+      { type: 'round', round: 3, title: 'Test', text: 'Hello', flag: 'already_seen' },
+    ];
+    const flags = { already_seen: true };
+    const events = processStoryTriggers(state, triggers, flags);
+    assert.equal(events.length, 0);
+  });
+
+  test('returns empty for null triggers', () => {
+    const events = processStoryTriggers({}, null, {});
+    assert.equal(events.length, 0);
+  });
+});
+
+// ── Mission content validation ────────────────────────────────────────────
+
+describe('mission story triggers and loot overrides', () => {
+  test('all missions with storyTriggers have valid trigger structure', () => {
+    for (const m of salemDef.missions) {
+      if (!m.storyTriggers) continue;
+      for (const t of m.storyTriggers) {
+        assert.ok(t.type === 'round' || t.type === 'area', `${m.id}: trigger must be round or area`);
+        assert.ok(t.title, `${m.id}: trigger must have title`);
+        assert.ok(t.text, `${m.id}: trigger must have text`);
+        assert.ok(t.flag, `${m.id}: trigger must have flag`);
+        if (t.type === 'round') assert.ok(typeof t.round === 'number', `${m.id}: round trigger needs round`);
+        if (t.type === 'area') assert.ok(Array.isArray(t.hexes), `${m.id}: area trigger needs hexes`);
+      }
+    }
+  });
+
+  test('missions with lootOverrides have valid structure', () => {
+    for (const m of salemDef.missions) {
+      if (!m.lootOverrides) continue;
+      if (m.lootOverrides.remove) {
+        assert.ok(Array.isArray(m.lootOverrides.remove), `${m.id}: remove should be array`);
+      }
+    }
+  });
+
+  test('river_crossing has reach_hex objective', () => {
+    const m = salemDef.missions.find(m => m.id === 'river_crossing');
+    assert.equal(m.objectives.win.type, 'reach_hex');
+  });
+
+  test('dark_ritual has rounds_exceeded lose condition', () => {
+    const m = salemDef.missions.find(m => m.id === 'dark_ritual');
+    const loseConds = Array.isArray(m.objectives.lose) ? m.objectives.lose : [m.objectives.lose];
+    assert.ok(loseConds.some(l => l.type === 'rounds_exceeded'));
+  });
+
+  test('mission 6-step progression chain is valid', () => {
+    const ids = salemDef.missions.map(m => m.id);
+    assert.deepEqual(ids, [
+      'prologue', 'gathering_survivors', 'first_night',
+      'river_crossing', 'dark_ritual', 'witchs_trail',
+    ]);
   });
 });

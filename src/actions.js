@@ -536,10 +536,12 @@ export function executeExplore(state, actor) {
     actor.ability === SurvivorAbility.HERBALIST;
 
   if (t.type === TileType.BUILDING && t.building && BUILDING_LOOT[t.building]) {
-    _applyLoot(state, actor, rollLoot(BUILDING_LOOT[t.building]), log, lootItems);
+    const table = _effectiveLoot(state, 'buildings', t.building, BUILDING_LOOT[t.building]);
+    _applyLoot(state, actor, rollLoot(table), log, lootItems);
   } else {
-    const terrainTable = TERRAIN_LOOT[t.type] || TERRAIN_LOOT['grass'];
-    _applyLoot(state, actor, rollLoot(terrainTable), log, lootItems);
+    const baseTable = TERRAIN_LOOT[t.type] || TERRAIN_LOOT['grass'];
+    const table = _effectiveLoot(state, 'terrain', t.type, baseTable);
+    _applyLoot(state, actor, rollLoot(table), log, lootItems);
   }
 
   if (isHerbalist && actor.owner === 'hero') {
@@ -550,6 +552,17 @@ export function executeExplore(state, actor) {
 
   if (encounterLog.length) log.push(...encounterLog);
   return { success: true, log, cost: 1, lootItems, encounterLog, encounterSurvivor };
+}
+
+/** Resolve the effective loot table, applying per-mission overrides if present. */
+function _effectiveLoot(state, category, key, defaultTable) {
+  const ov = state.lootOverrides;
+  if (!ov) return defaultTable;
+  // Full table override for this specific building/terrain type
+  if (ov[category]?.[key]) return ov[category][key];
+  // Item removal filter
+  if (ov.remove) return defaultTable.filter(e => !ov.remove.includes(e.type));
+  return defaultTable;
 }
 
 function _applyLoot(state, actor, lootType, log, lootItems) {

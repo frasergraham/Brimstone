@@ -148,6 +148,10 @@ export class GameState {
     // Set<hexKey> per faction — persisted via state-sync.
     this.exploredHexes = { hero: new Set(), witch: new Set() };
 
+    // Per-mission loot table overrides (campaign only). null = use defaults.
+    // Shape: { remove?: string[], buildings?: {[key]: table}, terrain?: {[key]: table} }
+    this.lootOverrides = null;
+
     // ── Player registry (multiplayer) ──────────────────────────────────────
     // Each entry: { id, name, faction, isAI, leaderId }
     // Populated by addPlayer() for online games; pre-populated here for offline.
