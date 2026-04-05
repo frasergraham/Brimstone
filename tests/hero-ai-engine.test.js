@@ -83,7 +83,7 @@ function makeFakeState(overrides = {}) {
     inventory: overrides.inventory ?? {
       witch: {},
       hero: {},
-      shared: { [ResourceType.WOOD]: 2, [ResourceType.METAL]: 1 },
+      shared: { [ResourceType.WOOD]: 2, [ResourceType.METAL]: 1, [ResourceType.FOOD]: 2 },
     },
     entities,
   };
@@ -285,8 +285,21 @@ describe('scoreHeroGoals', () => {
   });
 
   test('dawn/dusk boosts CONTROL_NODES', () => {
-    const dayBoard = assessHeroBoard(makeHeroSim({ phase: Phase.DAY }));
-    const dawnBoard = assessHeroBoard(makeHeroSim({ phase: Phase.DAWN }));
+    // Use a round far from scoring and hero on one node to reduce base urgency,
+    // so the dawn/dusk multiplier difference is visible below the 1.0 clamp.
+    const heroOnNode = makeEntity({
+      id: 'hero1', col: 0, row: 3, hp: 10, maxHp: 10,
+      items: { [ResourceType.HERBS]: 1 },
+    });
+    const witch = makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 });
+    const dayBoard = assessHeroBoard(makeHeroSim({
+      phase: Phase.DAY, round: 2,
+      entities: [heroOnNode, witch],
+    }));
+    const dawnBoard = assessHeroBoard(makeHeroSim({
+      phase: Phase.DAWN, round: 9,
+      entities: [heroOnNode, witch],
+    }));
     const dayScores = scoreHeroGoals(dayBoard);
     const dawnScores = scoreHeroGoals(dawnBoard);
     assert.ok(dawnScores[HeroGoal.CONTROL_NODES] > dayScores[HeroGoal.CONTROL_NODES],

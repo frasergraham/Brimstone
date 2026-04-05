@@ -3,7 +3,7 @@
 //
 // Pipeline: EVALUATE → SCORE → ALLOCATE → GENERATE → ASSEMBLE
 
-import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, bestWitchObjective, nearestBuilding, WITCH_PERSONALITIES } from './ai.js';
+import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, bestWitchObjective, nearestBuilding, roundsUntilScoring, scoreNodeFeasibility, WITCH_PERSONALITIES } from './ai.js';
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
 import { EntityType } from './entities.js';
@@ -172,8 +172,13 @@ export function assessBoard(sim) {
     }
   }
 
+  // Scoring-phase timing
+  const round = sim.round;
+  const roundsToScoring = roundsUntilScoring(round);
+
   return {
     phase, isNight, isDay, isDawnOrDusk,
+    round, roundsToScoring,
     witch,
     witchHp: witch?.hp ?? 0,
     witchMaxHp: witch?.maxHp ?? witch?.hp ?? 1,
@@ -215,11 +220,13 @@ export function scoreGoals(board, goalWeights = null) {
   let control = 0.3;
   const uncovered = board.nodes.filter(n => n.controller !== 'witch' && !n.witchPresent).length;
   control += uncovered * 0.15;
-  if (board.heroScore >= 3) control += 0.3;
+  if (board.heroScore >= 3) control += 0.3;      // opponent at match point
   if (board.nodes.length > 0 && board.witchHeldCount === board.nodes.length - 1) control += 0.2;
   // Urgency: contest hero-held nodes — the more they hold, the higher the pressure
   if (board.heroHeldCount > 0) control += 0.2;
   if (board.heroHeldCount > board.witchHeldCount) control += 0.25;
+  // Phase-timing urgency: ramp up as scoring round approaches
+  if (board.roundsToScoring <= 1) control += 0.15;
   const controlMult = board.isDawnOrDusk ? 1.8 : 1.0;
   control = clamp01(clamp01(control) * controlMult);
 
@@ -512,12 +519,23 @@ export function genControlNodes(sim, board, budget) {
   if (budget <= 0 || !board.witch) return actions;
   let remaining = budget;
 
-  // Include uncovered/enemy-held nodes AND witch-held nodes with nearby threats
+  // Ally-claimed nodes to avoid (NvN coordination)
+  const allyClaimed = board.allyContext?.claimedNodes;
+
+  // Score each node for feasibility and sort by best opportunity
   const heroThreatenedNode = (n) => board.visibleHeroes.some(h =>
     hexDistance(h.col, h.row, n.obj.col, n.obj.row) <= 2
   );
+
   const targetNodes = board.nodes
     .filter(n => n.controller !== 'witch' || !n.witchPresent || n.heroPresent || heroThreatenedNode(n))
+    .map(n => ({
+      ...n,
+      feasibility: scoreNodeFeasibility(n, 'witch', sim.entities),
+      allyClaimed: allyClaimed ? n.obj.hexes?.some(h => allyClaimed.has(hexKey(h.col, h.row))) : false,
+    }))
+    // Skip truly hopeless nodes and ally-claimed nodes
+    .filter(n => n.feasibility >= 0.15 && !n.allyClaimed)
     .sort((a, b) => {
       // Priority: hero-held > neutral > witch-held-but-threatened, then by distance
       const aPrio = a.controller === 'hero' ? 0 : (a.controller === 'witch' && a.witchPresent ? 2 : 1);
@@ -809,16 +827,19 @@ function _fillGaps(plan, sim, board, witchEntity, remaining, prevPositions) {
     left--;
   }
 
-  // Move uncommitted minions toward nearest uncovered node
+  // Move uncommitted minions toward nearest feasible uncovered node
+  // (Minions cannot explore or summon — only move, battle, and guard)
   if (left > 0) {
-    const uncoveredNodes = board.nodes.filter(n => n.controller !== 'witch');
+    const uncoveredNodes = board.nodes
+      .filter(n => n.controller !== 'witch')
+      .filter(n => scoreNodeFeasibility(n, 'witch', sim.entities) >= 0.15);
     for (const minion of board.minions) {
       if (left <= 0) break;
       if (sim.unitCommitments.has(minion.id)) continue;
       const simMinion = sim.entities.find(e => e.id === minion.id);
       if (!simMinion) continue;
 
-      // Pick closest uncovered node
+      // Pick closest uncovered feasible node
       let bestNode = null, bestDist = Infinity;
       for (const n of uncoveredNodes) {
         const d = hexDistance(simMinion.col, simMinion.row, n.obj.col, n.obj.row);
@@ -850,6 +871,21 @@ function _fillGaps(plan, sim, board, witchEntity, remaining, prevPositions) {
   }
 }
 
+// ── NvN Ally Coordination ───────────────────────────────────────────────────
+// After a plan is generated, mark the node hexes targeted by this player's
+// MOVE actions so the next allied AI avoids the same targets.
+
+function _updateAllyClaimedNodes(plan, board, allyContext) {
+  for (const action of plan) {
+    if (action.type !== PlanActionType.MOVE) continue;
+    for (const node of board.nodes) {
+      if (node.obj.hexes?.some(h => h.col === action.toCol && h.row === action.toRow)) {
+        node.obj.hexes.forEach(h => allyContext.claimedNodes.add(hexKey(h.col, h.row)));
+      }
+    }
+  }
+}
+
 // ── WitchAIEngine ────────────────────────────────────────────────────────────
 
 export class WitchAIEngine {
@@ -868,6 +904,9 @@ export class WitchAIEngine {
   generatePlan(allyContext = null) {
     const sim = new EnginePlanSimState(this.state, 'witch', this.playerId);
     const board = assessBoard(sim);
+
+    // Attach ally context so generators can avoid duplicate targeting in NvN
+    board.allyContext = allyContext;
 
     // Leaderless mode: no witch entity (campaign missions with hasWitch: false).
     // Minions/zombies simply attack and chase hero units.
@@ -899,6 +938,11 @@ export class WitchAIEngine {
 
     // Stage 5: Assemble final plan
     const plan = assemblePlan(allActions, sim, board, this._prevPositions);
+
+    // Update ally context with our claimed node targets so subsequent allies pick differently
+    if (allyContext) {
+      _updateAllyClaimedNodes(plan, board, allyContext);
+    }
 
     // Update cross-turn memory
     for (const e of sim.entities) {

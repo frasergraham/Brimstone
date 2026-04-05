@@ -3,7 +3,7 @@
 //
 // Pipeline: EVALUATE → SCORE → ALLOCATE → GENERATE → ASSEMBLE
 
-import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, nearestBuilding, isOnNode, inBuilding, HERO_PERSONALITIES } from './ai.js';
+import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, nearestBuilding, isOnNode, inBuilding, roundsUntilScoring, scoreNodeFeasibility, HERO_PERSONALITIES } from './ai.js';
 import { EnginePlanSimState, allocateBudget, assemblePlan } from './ai-engine.js';
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
@@ -158,7 +158,8 @@ export function assessHeroBoard(sim) {
   // Hero inventory — personal items on hero entity
   const heroItems = hero?.items ? { ...hero.items } : {};
   const herbCount = heroItems[ResourceType.HERBS] || 0;
-  const foodCount = heroItems[ResourceType.FOOD] || 0;
+  // Food is in the shared inventory, not the hero's personal items
+  const foodCount = sim.inventory?.shared?.[ResourceType.FOOD] || 0;
 
   // Unequipped weapons (stored as 'weapon:sword' keys in hero.items)
   const heroWeapons = hero?.items
@@ -205,8 +206,13 @@ export function assessHeroBoard(sim) {
     }
   }
 
+  // Scoring-phase timing
+  const round = sim.round;
+  const roundsToScoring = roundsUntilScoring(round);
+
   return {
     phase, isNight, isDay, isDawnOrDusk,
+    round, roundsToScoring,
     hero,
     heroHp, heroMaxHp, heroHpRatio,
     survivors, survivorCount,
@@ -269,6 +275,14 @@ export function scoreHeroGoals(board, goalWeights = null) {
   const uncovered = board.nodes.filter(n => n.controller !== 'hero' && !n.heroPresent).length;
   control += uncovered * 0.15;
   if (board.witchHeldCount >= 2) control += 0.4;
+  // Score-differential awareness: hero needs to fight harder when behind
+  const scoreDiff = board.heroScore - board.witchScore;
+  if (scoreDiff < 0) control += 0.15;           // behind: try harder
+  if (scoreDiff <= -2) control += 0.15;          // way behind: desperate
+  if (board.witchScore >= 3) control += 0.3;     // opponent at match point
+  // Phase-timing urgency: ramp up as scoring round approaches
+  if (board.roundsToScoring <= 2) control += 0.25;
+  else if (board.roundsToScoring <= 3) control += 0.1;
   control = clamp01(clamp01(control) * phaseMult(HeroGoal.CONTROL_NODES, board));
 
   // EXPLORE
@@ -535,72 +549,89 @@ export function genControlNodes(sim, board, budget) {
   if (budget <= 0 || !board.hero) return actions;
   let remaining = budget;
 
+  // Ally-claimed nodes to avoid (NvN coordination)
+  const allyClaimed = board.allyContext?.claimedNodes;
+
   // Target nodes: uncovered or witch-held, plus hero-held with nearby threats
   const witchThreatensNode = (n) => sim.entities.some(e =>
     e.alive && e.owner === 'witch' &&
     hexDistance(e.col, e.row, n.obj.col, n.obj.row) <= 2
   );
+
   const targetNodes = board.nodes
     .filter(n => n.controller !== 'hero' || !n.heroPresent || witchThreatensNode(n))
+    .map(n => ({
+      ...n,
+      feasibility: scoreNodeFeasibility(n, 'hero', sim.entities),
+      allyClaimed: allyClaimed ? n.obj.hexes?.some(h => allyClaimed.has(hexKey(h.col, h.row))) : false,
+    }))
+    // Skip hopeless nodes and ally-claimed nodes
+    .filter(n => n.feasibility >= 0.1 && !n.allyClaimed)
     .sort((a, b) => {
-      const aOwned = a.controller === 'hero' && a.heroPresent ? 1 : 0;
-      const bOwned = b.controller === 'hero' && b.heroPresent ? 1 : 0;
-      if (aOwned !== bOwned) return aOwned - bOwned;
+      // Primary: feasibility (higher = better opportunity)
+      if (Math.abs(a.feasibility - b.feasibility) > 0.1) return b.feasibility - a.feasibility;
       return a.distToNearestHeroUnit - b.distToNearestHeroUnit;
     });
 
   for (const node of targetNodes) {
     if (remaining <= 0) break;
 
-    const unit = _closestUncommittedHero(sim, board, node.obj);
-    if (!unit) continue;
+    // Allow multiple units per high-feasibility node when scoring is imminent
+    const unitsForNode = (node.feasibility >= 0.6 && board.roundsToScoring <= 2) ? 2 : 1;
 
-    const simUnit = sim.entities.find(e => e.id === unit.id);
-    if (!simUnit) continue;
+    for (let u = 0; u < unitsForNode; u++) {
+      if (remaining <= 0) break;
 
-    // If unit is already on the node, guard if threatened
-    const onNode = node.obj.hexes
-      ? node.obj.hexes.some(h => h.col === simUnit.col && h.row === simUnit.row)
-      : (simUnit.col === node.obj.col && simUnit.row === node.obj.row);
+      const unit = _closestUncommittedHero(sim, board, node.obj);
+      if (!unit) break;
 
-    if (onNode) {
-      if (witchThreatensNode(node)) {
-        actions.push({
-          type: PlanActionType.GUARD, entityId: simUnit.id,
-          _priority: 4, _goal: HeroGoal.CONTROL_NODES,
-        });
-        sim.applyGuard(simUnit.id);
-        sim.unitCommitments.set(simUnit.id, HeroGoal.CONTROL_NODES);
-        remaining--;
+      const simUnit = sim.entities.find(e => e.id === unit.id);
+      if (!simUnit) break;
+
+      // If unit is already on the node, guard if threatened
+      const onNode = node.obj.hexes
+        ? node.obj.hexes.some(h => h.col === simUnit.col && h.row === simUnit.row)
+        : (simUnit.col === node.obj.col && simUnit.row === node.obj.row);
+
+      if (onNode) {
+        if (witchThreatensNode(node)) {
+          actions.push({
+            type: PlanActionType.GUARD, entityId: simUnit.id,
+            _priority: 4, _goal: HeroGoal.CONTROL_NODES,
+          });
+          sim.applyGuard(simUnit.id);
+          sim.unitCommitments.set(simUnit.id, HeroGoal.CONTROL_NODES);
+          remaining--;
+        }
+        continue;
       }
-      continue;
-    }
 
-    // Move toward node
-    sim.unitCommitments.set(simUnit.id, HeroGoal.CONTROL_NODES);
-    let stepsForUnit = Math.min(remaining, 3);
-    while (stepsForUnit > 0) {
-      const targetHex = node.obj.hexes
-        ? node.obj.hexes.reduce((best, h) => {
-            const d = hexDistance(simUnit.col, simUnit.row, h.col, h.row);
-            const bd = hexDistance(simUnit.col, simUnit.row, best.col, best.row);
-            return d < bd ? h : best;
-          }, node.obj.hexes[0])
-        : node.obj;
+      // Move toward node
+      sim.unitCommitments.set(simUnit.id, HeroGoal.CONTROL_NODES);
+      let stepsForUnit = Math.min(remaining, 3);
+      while (stepsForUnit > 0) {
+        const targetHex = node.obj.hexes
+          ? node.obj.hexes.reduce((best, h) => {
+              const d = hexDistance(simUnit.col, simUnit.row, h.col, h.row);
+              const bd = hexDistance(simUnit.col, simUnit.row, best.col, best.row);
+              return d < bd ? h : best;
+            }, node.obj.hexes[0])
+          : node.obj;
 
-      if (simUnit.col === targetHex.col && simUnit.row === targetHex.row) break;
+        if (simUnit.col === targetHex.col && simUnit.row === targetHex.row) break;
 
-      const step = roadStepToward(sim, simUnit, targetHex);
-      if (!step) break;
+        const step = roadStepToward(sim, simUnit, targetHex);
+        if (!step) break;
 
-      actions.push({
-        type: PlanActionType.MOVE, entityId: simUnit.id,
-        toCol: step.col, toRow: step.row,
-        _priority: 5, _goal: HeroGoal.CONTROL_NODES,
-      });
-      sim.applyMove(simUnit.id, step.col, step.row);
-      remaining--;
-      stepsForUnit--;
+        actions.push({
+          type: PlanActionType.MOVE, entityId: simUnit.id,
+          toCol: step.col, toRow: step.row,
+          _priority: 5, _goal: HeroGoal.CONTROL_NODES,
+        });
+        sim.applyMove(simUnit.id, step.col, step.row);
+        remaining--;
+        stepsForUnit--;
+      }
     }
   }
 
@@ -628,6 +659,19 @@ export function genExplore(sim, board, budget) {
       sim.applyExplore(board.hero.id);
       remaining--;
     }
+  }
+
+  // Sound Horn: spend 1 food + 1 AP to potentially recruit a hidden survivor within 4 hexes.
+  // Worth it when food available, hidden survivors likely exist (unexplored buildings remain),
+  // hero isn't critically injured, and we haven't already explored most of the map.
+  if (remaining > 0 && board.foodCount >= 1 && board.unexploredBuildings.length >= 2 &&
+      board.heroHpRatio > 0.3 && board.survivorCount < 3) {
+    actions.push({
+      type: PlanActionType.SOUND_HORN, entityId: board.hero.id,
+      _priority: 3, _goal: HeroGoal.EXPLORE,
+    });
+    sim.applySoundHorn();
+    remaining--;
   }
 
   // Move toward nearest unexplored building, then explore on arrival
@@ -759,6 +803,21 @@ export function genFortifyPosition(sim, board, budget, config = null) {
 
 // ── Hero gap-fill ───────────────────────────────────────────────────────────
 
+// ── NvN Ally Coordination ───────────────────────────────────────────────────
+// After a plan is generated, mark the node hexes targeted by this player's
+// MOVE actions so the next allied AI avoids the same targets.
+
+function _updateHeroAllyClaimedNodes(plan, board, allyContext) {
+  for (const action of plan) {
+    if (action.type !== PlanActionType.MOVE) continue;
+    for (const node of board.nodes) {
+      if (node.obj.hexes?.some(h => h.col === action.toCol && h.row === action.toRow)) {
+        node.obj.hexes.forEach(h => allyContext.claimedNodes.add(hexKey(h.col, h.row)));
+      }
+    }
+  }
+}
+
 // ── HeroAIEngine ────────────────────────────────────────────────────────────
 
 export class HeroAIEngine {
@@ -777,6 +836,9 @@ export class HeroAIEngine {
   generatePlan(allyContext = null) {
     const sim = new HeroEnginePlanSimState(this.state, this.playerId);
     const board = assessHeroBoard(sim);
+
+    // Attach ally context so generators can avoid duplicate targeting in NvN
+    board.allyContext = allyContext;
 
     // Leaderless mode: no hero entity (shouldn't normally happen, but be safe)
     if (!board.hero) return [];
@@ -814,6 +876,11 @@ export class HeroAIEngine {
         fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositions);
       }
     );
+
+    // Update ally context with our claimed node targets so subsequent allies pick differently
+    if (allyContext) {
+      _updateHeroAllyClaimedNodes(plan, board, allyContext);
+    }
 
     // Update cross-turn memory
     for (const e of sim.entities) {
@@ -910,9 +977,11 @@ export function fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositi
     }
   }
 
-  // Move uncommitted survivors toward nearest uncovered node
+  // Move uncommitted survivors toward nearest feasible uncovered node
   if (left > 0) {
-    const uncoveredNodes = board.nodes.filter(n => n.controller !== 'hero');
+    const uncoveredNodes = board.nodes
+      .filter(n => n.controller !== 'hero')
+      .filter(n => scoreNodeFeasibility(n, 'hero', sim.entities) >= 0.15);
     for (const s of board.survivors) {
       if (left <= 0) break;
       if (sim.unitCommitments.has(s.id)) continue;
