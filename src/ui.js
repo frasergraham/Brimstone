@@ -1540,16 +1540,14 @@ export class UIController {
       arcItems[i]._idx = i;
     }
 
-    // Generate arc item HTML
+    // Generate arc item HTML — initial positions use base radius (will be corrected before animating)
     let html = '';
     for (const item of arcItems) {
-      const x = Math.cos(item._angle) * ARC_RADIUS;
-      const y = Math.sin(item._angle) * ARC_RADIUS;
       const delay = item._idx * 30;
       const disAttr = item.dis ? 'disabled' : '';
       const freeCls = item.free ? ' arc-free' : '';
       html += `<button class="arc-item${freeCls}" title="${item.fullLabel}"
-        style="--arc-x:${x.toFixed(1)}px;--arc-y:${y.toFixed(1)}px;--arc-delay:${delay}ms;--arc-color:${item.color};--arc-hover:${item.color};--arc-glow:${item.color}33"
+        style="--arc-x:0px;--arc-y:0px;--arc-delay:${delay}ms;--arc-color:${item.color};--arc-hover:${item.color};--arc-glow:${item.color}33"
         ${disAttr} ${item.attrs}>${item.label}</button>`;
     }
 
@@ -1560,14 +1558,44 @@ export class UIController {
     this._arcEntityRow = effectiveEntity.row;
     this._arcItems = arcItems; // keep for line drawing
 
-    // Position popup centered on entity + set up connecting lines
+    // Position popup centered on entity
     _positionArcPopup(popup, this);
     popup.style.display = 'block';
 
+    // Measure buttons at full scale (they start at scale 0.3 but we need final size).
+    // Temporarily force full scale with no transition to measure, then reset.
+    const btns = popup.querySelectorAll('.arc-item');
+    for (const btn of btns) {
+      btn.style.transition = 'none';
+      btn.style.transform = 'translate(-50%, -50%) scale(1)';
+      btn.style.opacity = '0'; // keep invisible during measurement
+    }
+    // Force layout so measurements are accurate
+    popup.offsetHeight; // eslint-disable-line no-unused-expressions
+
+    // Resolve overlap-free radius using real button sizes
+    const finalR = _resolveArcLayout(popup, this, ARC_RADIUS);
+    this._arcRadius = finalR;
+    this._arcBaseR = ARC_RADIUS;
+
+    // Set final positions on CSS custom properties
+    for (let i = 0; i < arcItems.length && i < btns.length; i++) {
+      const fx = Math.cos(arcItems[i]._angle) * finalR;
+      const fy = Math.sin(arcItems[i]._angle) * finalR;
+      btns[i].style.setProperty('--arc-x', fx.toFixed(1) + 'px');
+      btns[i].style.setProperty('--arc-y', fy.toFixed(1) + 'px');
+    }
+
+    // Reset to pre-animation state (collapsed at center) then let CSS transition to final spot
+    for (const btn of btns) {
+      btn.style.transform = '';
+      btn.style.opacity = '';
+      btn.style.transition = '';
+    }
+
     _attachPopupListeners(popup, this);
 
-    // Trigger open animation on next frame; mark opening so layout resolver waits
-    this._arcOpenTime = performance.now();
+    // Trigger open animation on next frame — positions are already set, just animate
     requestAnimationFrame(() => {
       popup.classList.add('arc-open');
       this.onRedraw();
@@ -3730,24 +3758,27 @@ function _positionArcPopup(popup, ui) {
   popup.style.top  = sy + 'px';
   popup.style.transform = 'none';
 
-  // Update renderer's arc menu lines for canvas drawing
+  // Update renderer's arc menu lines and DOM positions for canvas drawing
   if (ui._arcItems?.length) {
-    // Recompute dynamic radius on each frame so it tracks zoom changes
+    // Recompute radius on zoom change (re-resolve overlap with current button sizes)
     const arcScale = canvasRect.width / ui.canvas.width;
     const hexPx = ui.renderer.hexSize * arcScale * ui.renderer.zoomLevel;
     const baseR = _baseArcRadius(hexPx);
-    // Skip overlap resolution during open animation (buttons scaling up gives wrong sizes)
-    const animating = ui._arcOpenTime && (performance.now() - ui._arcOpenTime < 350);
-    const arcR = animating ? (ui._arcRadius || baseR) : _resolveArcLayout(popup, ui, baseR);
-    ui._arcRadius = arcR;
-    // Update DOM arc item positions to match resolved radius
-    const arcBtns = popup.querySelectorAll('.arc-item');
-    for (let i = 0; i < ui._arcItems.length && i < arcBtns.length; i++) {
-      const ix = Math.cos(ui._arcItems[i]._angle) * arcR;
-      const iy = Math.sin(ui._arcItems[i]._angle) * arcR;
-      arcBtns[i].style.setProperty('--arc-x', ix.toFixed(1) + 'px');
-      arcBtns[i].style.setProperty('--arc-y', iy.toFixed(1) + 'px');
+    const prevR = ui._arcRadius || baseR;
+    // Only re-resolve if zoom changed enough to matter (base radius shifted)
+    if (Math.abs(baseR - (ui._arcBaseR || 0)) > 2) {
+      const arcR = _resolveArcLayout(popup, ui, baseR);
+      ui._arcRadius = arcR;
+      ui._arcBaseR = baseR;
+      const arcBtns = popup.querySelectorAll('.arc-item');
+      for (let i = 0; i < ui._arcItems.length && i < arcBtns.length; i++) {
+        const ix = Math.cos(ui._arcItems[i]._angle) * arcR;
+        const iy = Math.sin(ui._arcItems[i]._angle) * arcR;
+        arcBtns[i].style.setProperty('--arc-x', ix.toFixed(1) + 'px');
+        arcBtns[i].style.setProperty('--arc-y', iy.toFixed(1) + 'px');
+      }
     }
+    const arcR = ui._arcRadius || prevR;
     ui.renderer.arcMenuLines = {
       col, row,
       items: ui._arcItems.map(item => ({
