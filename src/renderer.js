@@ -974,8 +974,8 @@ export class Renderer {
     // Arc menu connecting lines (under the ⊕ indicator)
     this._drawArcMenuLines();
 
-    // AI debug overlay — goal-colored hex tints, node feasibility, unit goal labels
-    if (this.aiDebugOverlay) {
+    // AI debug overlay — only drawn when the debug panel is visible
+    if (this.aiDebugOverlay && this._isAIDebugPanelVisible()) {
       this._drawAIDebugOverlay();
     }
 
@@ -2180,6 +2180,12 @@ export class Renderer {
   // Renders hex goal tints, node feasibility badges, combat estimates,
   // and unit goal labels when the AI debugger is active.
 
+  /** Returns true when the AI debug DOM panel is visible (not hidden or collapsed). */
+  _isAIDebugPanelVisible() {
+    const panel = document.getElementById('ai-debug-panel');
+    return panel && panel.style.display !== 'none' && !panel.classList.contains('collapsed');
+  }
+
   _drawAIDebugOverlay() {
     const overlay = this.aiDebugOverlay;
     if (!overlay) return;
@@ -2190,22 +2196,74 @@ export class Renderer {
 
     ctx.save();
 
-    // 1. Hex goal tints — semi-transparent color wash per targeted hex
-    if (overlay.hexGoals) {
-      for (const [, entries] of overlay.hexGoals) {
-        // Use the highest-priority (lowest number) action's goal color
-        const best = entries.reduce((a, b) => (a.priority < b.priority ? a : b));
-        const color = overlay.goalColors?.[best.goal] || '#808080';
-        const { col, row } = best;
-        const { x, y } = this._toCanvas(col, row);
-        _traceHexPath(ctx, x, y, hs - 1);
-        ctx.fillStyle = _hexToRgba(color, 0.18);
+    // 1. Grey move arrows — same style as the planning overlay but grey
+    if (overlay.moveArrows?.length) {
+      // Destination circles
+      for (const arrow of overlay.moveArrows) {
+        const to = this._toCanvas(arrow.toCol, arrow.toRow);
+        const r  = hs * 0.32;
+        ctx.globalAlpha = 0.35;
+        ctx.beginPath();
+        ctx.arc(to.x, to.y, r, 0, Math.PI * 2);
+        ctx.fillStyle = '#888';
         ctx.fill();
-        // Thin border
-        ctx.strokeStyle = _hexToRgba(color, 0.45);
-        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+        ctx.lineWidth = 1.5;
         ctx.stroke();
+        ctx.globalAlpha = 1;
       }
+
+      // Arrows with step badges
+      overlay.moveArrows.forEach((arrow, i) => {
+        const from = this._toCanvas(arrow.fromCol, arrow.fromRow);
+        const to   = this._toCanvas(arrow.toCol,   arrow.toRow);
+
+        const dx = to.x - from.x;
+        const dy = to.y - from.y;
+        const len = Math.hypot(dx, dy);
+        if (len < 1) return;
+        const ux = dx / len;
+        const uy = dy / len;
+
+        const startX = from.x + ux * hs * 0.35;
+        const startY = from.y + uy * hs * 0.35;
+        const endX   = to.x   - ux * hs * 0.45;
+        const endY   = to.y   - uy * hs * 0.45;
+
+        // Dashed grey arrow line
+        ctx.strokeStyle = 'rgba(160,160,160,0.6)';
+        ctx.lineWidth   = 2;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(startX, startY);
+        ctx.lineTo(endX,   endY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Arrowhead
+        const headLen = hs * 0.22;
+        const angle   = Math.atan2(dy, dx);
+        ctx.strokeStyle = 'rgba(180,180,180,0.8)';
+        ctx.lineWidth   = 2;
+        ctx.beginPath();
+        ctx.moveTo(endX, endY);
+        ctx.lineTo(endX - headLen * Math.cos(angle - 0.4), endY - headLen * Math.sin(angle - 0.4));
+        ctx.moveTo(endX, endY);
+        ctx.lineTo(endX - headLen * Math.cos(angle + 0.4), endY - headLen * Math.sin(angle + 0.4));
+        ctx.stroke();
+
+        // Step number badge
+        const badgeR = hs * 0.22;
+        ctx.beginPath();
+        ctx.arc(to.x, to.y, badgeR, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(100,100,100,0.85)';
+        ctx.fill();
+        ctx.fillStyle    = '#fff';
+        ctx.font         = `bold ${Math.floor(badgeR * 1.1)}px sans-serif`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(arrow.stepNumber ?? (i + 1)), to.x, to.y + 0.5);
+      });
     }
 
     // 2. Node feasibility badges — score at each power node
@@ -2220,19 +2278,16 @@ export class Renderer {
         const { x, y } = this._toCanvas(n.col, n.row);
         const f = n.feasibility;
 
-        // Badge color based on feasibility
         const badgeColor = f > 0.5 ? '#40c070' : f > 0.25 ? '#e0c040' : '#e04040';
         const label = f.toFixed(2);
 
-        // Draw rounded rect badge below hex center
         const bw = fontSize * 2.2;
         const bh = fontSize * 1.3;
         const bx = x - bw / 2;
         const by = y + hs * 0.55;
-        const br = 3;
         ctx.fillStyle = 'rgba(0,0,0,0.7)';
         ctx.beginPath();
-        ctx.roundRect(bx, by, bw, bh, br);
+        ctx.roundRect(bx, by, bw, bh, 3);
         ctx.fill();
         ctx.strokeStyle = badgeColor;
         ctx.lineWidth = 1;
@@ -2262,7 +2317,6 @@ export class Renderer {
         const label = est.classification.slice(0, 5).toUpperCase();
         const color = classColors[est.classification] || '#888';
 
-        // Small badge above-right of hex center
         const bw = fontSize * 3;
         const bh = fontSize * 1.3;
         const bx = x + hs * 0.2 - bw / 2;
@@ -2278,7 +2332,6 @@ export class Renderer {
         ctx.fillStyle = color;
         ctx.fillText(label, bx + bw / 2, by + bh / 2);
 
-        // Also show favorability number
         const fav = est.favorability != null ? (est.favorability > 0 ? '+' : '') + est.favorability.toFixed(1) : '';
         if (fav) {
           ctx.font = `${Math.floor(fontSize * 0.85)}px sans-serif`;
@@ -2305,7 +2358,6 @@ export class Renderer {
         const label = goalName.replace(/_/g, ' ');
         const color = overlay.goalColors?.[goalName] || '#ccc';
 
-        // Background pill
         const tw = ctx.measureText(label).width + 6;
         const th = fontSize + 2;
         const tx = x - tw / 2;

@@ -71,6 +71,37 @@ export function buildHexGoalMap(actions) {
   return map;
 }
 
+// ── Move arrows ─────────────────────────────────────────────────────────────
+// Build arrow data for MOVE actions, chaining consecutive moves per entity
+// so the renderer can draw from→to arrows like the planning overlay.
+
+export function buildMoveArrows(actions, entities) {
+  // Track current position per entity (start from real positions)
+  const pos = new Map();
+  for (const e of entities) {
+    if (e.alive) pos.set(e.id, { col: e.col, row: e.row });
+  }
+
+  const arrows = [];
+  let stepNum = 0;
+  for (const a of actions) {
+    if (a.type !== 'MOVE' || a.toCol === undefined) continue;
+    const from = pos.get(a.entityId);
+    if (!from) continue;
+    stepNum++;
+    arrows.push({
+      entityId: a.entityId,
+      fromCol: from.col, fromRow: from.row,
+      toCol: a.toCol, toRow: a.toRow,
+      stepNumber: stepNum,
+      goal: a._goal || 'gap-fill',
+    });
+    // Update tracked position for chaining
+    pos.set(a.entityId, { col: a.toCol, row: a.toRow });
+  }
+  return arrows;
+}
+
 // ── Node feasibility map ────────────────────────────────────────────────────
 
 export function buildNodeFeasibilityMap(board) {

@@ -10,7 +10,7 @@ import { WitchAIEngine, estimateCombat } from './ai-engine.js';
 import { HeroAIEngine, estimateHeroCombat } from './hero-ai-engine.js';
 import {
   isAIDebugActive, setAIDebugActive, setAIDebugData, clearAIDebugData,
-  buildHexGoalMap, buildNodeFeasibilityMap, GOAL_COLORS,
+  buildHexGoalMap, buildMoveArrows, buildNodeFeasibilityMap, GOAL_COLORS,
   updateAIDebugPanel, hideAIDebugPanel,
 } from './ai-debug.js';
 import {
@@ -397,6 +397,7 @@ function _pushAIDebugData(aiEngine, faction) {
   // Build renderer overlay
   renderer.aiDebugOverlay = {
     hexGoals: buildHexGoalMap(dbg.actions),
+    moveArrows: buildMoveArrows(dbg.actions, state.entities),
     nodes: buildNodeFeasibilityMap(board),
     combatEstimates,
     unitCommitments: dbg.unitCommitments,

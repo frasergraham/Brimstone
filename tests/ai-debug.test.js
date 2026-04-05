@@ -16,7 +16,7 @@ import { HeroGoal, HeroAIEngine, HERO_PERSONALITY_CONFIGS } from '../src/hero-ai
 import {
   setAIDebugActive, isAIDebugActive,
   setAIDebugData, getAIDebugData, clearAIDebugData,
-  buildHexGoalMap, buildNodeFeasibilityMap,
+  buildHexGoalMap, buildMoveArrows, buildNodeFeasibilityMap,
   GOAL_COLORS,
 } from '../src/ai-debug.js';
 
@@ -170,6 +170,62 @@ describe('buildHexGoalMap', () => {
     ];
     const map = buildHexGoalMap(actions);
     assert.equal(map.get(hexKey(1, 1))[0].goal, 'gap-fill');
+  });
+});
+
+// ── buildMoveArrows ─────────────────────────────────────────────────────────
+
+describe('buildMoveArrows', () => {
+  test('builds arrows from MOVE actions with correct from/to', () => {
+    const entities = [
+      { id: 'w1', col: 0, row: 0, alive: true },
+    ];
+    const actions = [
+      { type: 'MOVE', entityId: 'w1', toCol: 1, toRow: 0, _goal: 'KILL_HERO', _priority: 5 },
+      { type: 'MOVE', entityId: 'w1', toCol: 2, toRow: 0, _goal: 'KILL_HERO', _priority: 5 },
+    ];
+    const arrows = buildMoveArrows(actions, entities);
+    assert.equal(arrows.length, 2);
+    // First arrow: from entity start to first move
+    assert.equal(arrows[0].fromCol, 0);
+    assert.equal(arrows[0].fromRow, 0);
+    assert.equal(arrows[0].toCol, 1);
+    assert.equal(arrows[0].toRow, 0);
+    // Second arrow: chained from first destination
+    assert.equal(arrows[1].fromCol, 1);
+    assert.equal(arrows[1].fromRow, 0);
+    assert.equal(arrows[1].toCol, 2);
+    assert.equal(arrows[1].toRow, 0);
+  });
+
+  test('assigns sequential step numbers', () => {
+    const entities = [{ id: 'w1', col: 0, row: 0, alive: true }];
+    const actions = [
+      { type: 'MOVE', entityId: 'w1', toCol: 1, toRow: 0 },
+      { type: 'MOVE', entityId: 'w1', toCol: 2, toRow: 0 },
+    ];
+    const arrows = buildMoveArrows(actions, entities);
+    assert.equal(arrows[0].stepNumber, 1);
+    assert.equal(arrows[1].stepNumber, 2);
+  });
+
+  test('skips non-MOVE actions', () => {
+    const entities = [{ id: 'w1', col: 0, row: 0, alive: true }];
+    const actions = [
+      { type: 'EXPLORE', entityId: 'w1', col: 0, row: 0 },
+      { type: 'MOVE', entityId: 'w1', toCol: 1, toRow: 0 },
+    ];
+    const arrows = buildMoveArrows(actions, entities);
+    assert.equal(arrows.length, 1);
+  });
+
+  test('preserves goal from action metadata', () => {
+    const entities = [{ id: 'w1', col: 0, row: 0, alive: true }];
+    const actions = [
+      { type: 'MOVE', entityId: 'w1', toCol: 1, toRow: 0, _goal: 'CONTROL_NODES' },
+    ];
+    const arrows = buildMoveArrows(actions, entities);
+    assert.equal(arrows[0].goal, 'CONTROL_NODES');
   });
 });
 
