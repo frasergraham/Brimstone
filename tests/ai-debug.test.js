@@ -448,7 +448,7 @@ describe('assemblePlan metadata stripping', () => {
       unexploredBuildings: [],
     };
     const actions = [
-      { type: PlanActionType.MOVE, entityId: 'witch1', toCol: 1, toRow: 0, _goal: Goal.KILL_HERO, _priority: 5 },
+      { type: PlanActionType.MOVE, entityId: 'witch1', toCol: 1, toRow: 0, _goal: Goal.BUILD_ARMY, _priority: 5 },
     ];
     const plan = assemblePlan(actions, sim, board, new Map());
     for (const a of plan) {
