@@ -1336,7 +1336,7 @@ export class UIController {
     popup.classList.remove('arc-open', 'arc-closing', 'popup-list-mode');
 
     // Unit picker mode (friendly units, defender targets, or enemy info)
-    // → use vertical list fallback
+    // → use arc portrait disambiguation
     const pickerUnits = this._pendingUnitPick?.units
       || this._pendingDefenderPick?.defenders
       || this._pendingEnemyPick?.units;
@@ -1344,25 +1344,8 @@ export class UIController {
       const actionTag = this._pendingDefenderPick ? 'pick_defender'
         : this._pendingEnemyPick ? 'pick_enemy'
         : 'pick_unit';
-      const header = this._pendingDefenderPick ? 'Choose your target:'
-        : this._pendingEnemyPick ? 'Which unit to inspect?'
-        : 'Which unit to select?';
-      let html = `<div class="popup-unit-name">${header}</div>`;
-      for (const u of pickerUnits) {
-        const col        = ENTITY_COLOR[u.type] || '#888';
-        const portraitId = u.type === 'survivor' ? Renderer.survivorAssetId(u.title) : u.type;
-        const src        = portraitId ? this.renderer.getPortraitDataURL(portraitId) : null;
-        const portrait   = src
-          ? `<img src="${src}" style="width:32px;height:32px;border-radius:50%;border:1.5px solid ${col};flex-shrink:0;margin-right:0.4rem;">`
-          : '';
-        html += `<button class="action-btn pick-unit" data-action="${actionTag}" data-unit-id="${u.id}"
-          style="border-left:3px solid ${col};display:flex;align-items:center;">${portrait}${u.displayName} — HP ${u.hp}/${u.maxHp}</button>`;
-      }
-      popup.classList.add('popup-list-mode');
-      popup.innerHTML = html;
-      _attachPopupListeners(popup, this);
-      _positionPopup(popup, this);
-      popup.style.display = 'block';
+      const originHex = { col: pickerUnits[0].col, row: pickerUnits[0].row };
+      this._showArcDisambig(pickerUnits, actionTag, originHex);
       return;
     }
 
@@ -1525,12 +1508,15 @@ export class UIController {
     const canvasRect = this.canvas.getBoundingClientRect();
     const canvasScale = canvasRect.width / this.canvas.width;
     const hexScreenPx = this.renderer.hexSize * canvasScale * this.renderer.zoomLevel;
-    const ITEM_GAP  = 40 * (Math.PI / 180); // uniform angular gap between all items
+    // Dynamic gap: keep items within a ~160° arc so the radius stays tight.
+    // With many items, narrow the gap rather than blowing out the radius.
+    const totalItems = arcItems.length;
+    const MAX_SPAN  = 160 * (Math.PI / 180);
+    const PREF_GAP  = 40  * (Math.PI / 180);
+    const ITEM_GAP  = totalItems <= 1 ? 0 : Math.min(PREF_GAP, MAX_SPAN / (totalItems - 1));
     const ARC_RADIUS = _baseArcRadius(hexScreenPx);
     this._arcRadius = ARC_RADIUS;
 
-    // Uniform spacing — no group gaps except summon items stay clustered
-    const totalItems = arcItems.length;
     const totalAngle = Math.max(0, totalItems - 1) * ITEM_GAP;
     const startAngle = centerAngle - totalAngle / 2;
 
@@ -1608,28 +1594,163 @@ export class UIController {
     _startArcTracking(this);
   }
 
-  _showDisambigPopup() {
+  /**
+   * Show an arc-based disambiguation menu with portrait items for each unit.
+   * @param {Array} units - entities to display as portrait arc items
+   * @param {string} actionTag - data-action value (pick_unit, pick_defender, pick_enemy)
+   * @param {{col:number, row:number}} originHex - hex to center the arc on
+   * @param {Array} [extraItems] - optional non-portrait arc items (e.g. "Move" button)
+   */
+  _showArcDisambig(units, actionTag, originHex, extraItems) {
     const popup = this._el('action-popup');
     if (this._arcCloseTimer) { clearTimeout(this._arcCloseTimer); this._arcCloseTimer = null; }
-    popup.classList.remove('arc-open', 'arc-closing');
-    popup.classList.add('popup-list-mode');
-    const { actor, hex, allies } = this._pendingDisambig;
-    let html = `<div class="popup-unit-name">Move or select?</div>`;
-    html += `<button class="action-btn" data-action="disambig_move">Move ${actor.displayName} here</button>`;
-    for (const u of allies) {
-      const col = ENTITY_COLOR[u.type] || '#888';
-      const portraitId = u.type === 'survivor' ? Renderer.survivorAssetId(u.title) : u.type;
-      const src = portraitId ? this.renderer.getPortraitDataURL(portraitId) : null;
-      const portrait = src
-        ? `<img src="${src}" style="width:32px;height:32px;border-radius:50%;border:1.5px solid ${col};flex-shrink:0;margin-right:0.4rem;">`
-        : '';
-      html += `<button class="action-btn pick-unit" data-action="pick_unit" data-unit-id="${u.id}"
-        style="border-left:3px solid ${col};display:flex;align-items:center;">${portrait}Select ${u.displayName}</button>`;
+    popup.classList.remove('arc-open', 'arc-closing', 'popup-list-mode');
+    this._popupVisible = true;
+
+    // Build arc items — extra items first, then portrait items for each unit
+    const arcItems = [];
+
+    if (extraItems) {
+      for (const ei of extraItems) {
+        arcItems.push({
+          group: 'disambig',
+          label: ei.label,
+          fullLabel: ei.label,
+          color: ei.color || '#888',
+          dis: false,
+          free: false,
+          attrs: `data-action="${ei.action}"`,
+          _portrait: false,
+        });
+      }
     }
+
+    for (const u of units) {
+      const col        = ENTITY_COLOR[u.type] || '#888';
+      const portraitId  = u.type === 'survivor' ? Renderer.survivorAssetId(u.title) : u.type;
+      const src         = portraitId ? this.renderer.getPortraitDataURL(portraitId) : null;
+      const pct         = u.maxHp > 0 ? u.hp / u.maxHp : 0;
+      const hpColor     = pct > 0.5 ? '#4caf50' : pct > 0.25 ? '#ff9800' : '#f44336';
+
+      const imgHtml = src
+        ? `<img class="arc-portrait-img" src="${src}">`
+        : `<div class="arc-portrait-img" style="display:flex;align-items:center;justify-content:center;font-size:1.2rem;background:rgba(20,16,32,0.8);">${u.displayName.charAt(0)}</div>`;
+
+      arcItems.push({
+        group: 'disambig',
+        label: `${imgHtml}<div class="arc-portrait-hp"><div class="arc-portrait-hp-fill" style="width:${(pct * 100).toFixed(0)}%;background:${hpColor};"></div></div><span class="arc-portrait-name">${u.displayName}</span>`,
+        fullLabel: `${u.displayName} — HP ${u.hp}/${u.maxHp}`,
+        color: col,
+        dis: false,
+        free: false,
+        attrs: `data-action="${actionTag}" data-unit-id="${u.id}"`,
+        _portrait: true,
+      });
+    }
+
+    // Compute arc geometry
+    const canvasRect = this.canvas.getBoundingClientRect();
+    const canvasScale = canvasRect.width / this.canvas.width;
+    const hexScreenPx = this.renderer.hexSize * canvasScale * this.renderer.zoomLevel;
+
+    // Decide direction: open to side with more space
+    const { x: hx, y: hy } = this.renderer.hexToCanvasPos(originHex.col, originHex.row);
+    const scale = canvasRect.width / this.canvas.width;
+    const screenX = canvasRect.left + hx * scale;
+    const openRight = screenX < window.innerWidth / 2;
+    const centerAngle = openRight ? 0 : Math.PI;
+
+    // Use a consistent target radius for portrait arcs — large enough that
+    // no button obscures the origin hex (so players can tap to dismiss).
+    // The closest edge of any button to center is (radius - halfSize); we
+    // need that to exceed the hex radius so the hex stays tappable.
+    const BASE_R = _baseArcRadius(hexScreenPx);
+    const hexTapZone = hexScreenPx * 0.55; // half-hex + small margin
+    // Portrait items are ~56×80px; worst-case half-diagonal ~50px
+    const PORTRAIT_CLEARANCE = 50;
+    const TARGET_R = Math.max(BASE_R, hexTapZone + PORTRAIT_CLEARANCE, 70);
+    this._arcRadius = TARGET_R;
+
+    // Compute angular gap dynamically: spread items evenly within a max arc
+    // span (~180°) so the radius stays consistent regardless of item count.
+    const totalItems = arcItems.length;
+    const MAX_SPAN = Math.PI; // 180° max arc span
+    const MIN_GAP  = 35 * (Math.PI / 180); // don't pack tighter than 35°
+    const ITEM_GAP = totalItems <= 1 ? 0
+      : Math.max(MIN_GAP, Math.min(MAX_SPAN / (totalItems - 1), 65 * (Math.PI / 180)));
+    const totalAngle = Math.max(0, totalItems - 1) * ITEM_GAP;
+    const startAngle = centerAngle - totalAngle / 2;
+
+    for (let i = 0; i < arcItems.length; i++) {
+      arcItems[i]._angle = openRight
+        ? startAngle + i * ITEM_GAP
+        : centerAngle + totalAngle / 2 - i * ITEM_GAP;
+      arcItems[i]._idx = i;
+    }
+
+    // Generate HTML
+    let html = '';
+    for (const item of arcItems) {
+      const delay = item._idx * 30;
+      const portraitCls = item._portrait ? ' arc-portrait' : '';
+      html += `<button class="arc-item${portraitCls}" title="${item.fullLabel}"
+        style="--arc-x:0px;--arc-y:0px;--arc-delay:${delay}ms;--arc-color:${item.color};--arc-hover:${item.color};--arc-glow:${item.color}33"
+        ${item.attrs}>${item.label}</button>`;
+    }
+
     popup.innerHTML = html;
-    _attachPopupListeners(popup, this);
-    _positionPopup(popup, this);
+
+    // Store arc state for pan/zoom tracking and canvas line drawing
+    this._arcEntityCol = originHex.col;
+    this._arcEntityRow = originHex.row;
+    this._arcItems = arcItems;
+
+    // Position popup centered on hex
+    _positionArcPopup(popup, this);
     popup.style.display = 'block';
+
+    // Measure buttons at full scale for overlap resolution
+    const btns = popup.querySelectorAll('.arc-item');
+    for (const btn of btns) {
+      btn.style.transition = 'none';
+      btn.style.transform = 'translate(-50%, -50%) scale(1)';
+      btn.style.opacity = '0';
+    }
+    popup.offsetHeight; // force layout
+
+    const finalR = _resolveArcLayout(popup, this, TARGET_R);
+    this._arcRadius = finalR;
+    this._arcBaseR = TARGET_R;
+
+    for (let i = 0; i < arcItems.length && i < btns.length; i++) {
+      const fx = Math.cos(arcItems[i]._angle) * finalR;
+      const fy = Math.sin(arcItems[i]._angle) * finalR;
+      btns[i].style.setProperty('--arc-x', fx.toFixed(1) + 'px');
+      btns[i].style.setProperty('--arc-y', fy.toFixed(1) + 'px');
+    }
+
+    // Reset to pre-animation state then let CSS transition to final spot
+    for (const btn of btns) {
+      btn.style.transform = '';
+      btn.style.opacity = '';
+      btn.style.transition = '';
+    }
+
+    _attachPopupListeners(popup, this);
+
+    requestAnimationFrame(() => {
+      popup.classList.add('arc-open');
+      this.onRedraw();
+    });
+
+    _startArcTracking(this);
+  }
+
+  _showDisambigPopup() {
+    const { actor, hex, allies } = this._pendingDisambig;
+    this._showArcDisambig(allies, 'pick_unit', hex, [
+      { label: `Move ${actor.displayName} \u279C`, action: 'disambig_move', color: ENTITY_COLOR[actor.type] || '#888' },
+    ]);
   }
 
   /** Re-evaluate affordability of arc items after a stackable action (summon/fortify). */
@@ -3719,9 +3840,9 @@ function _baseArcRadius(hexScreenPx) {
 }
 
 /**
- * Resolve arc layout so no buttons overlap.
+ * Resolve arc layout so no buttons overlap and none obscure the origin hex.
  * Starts at baseR, measures actual button rects, and pushes radius out
- * until all bounding boxes are clear of each other.
+ * until all bounding boxes are clear of each other and the hex tap zone.
  * Returns the final radius used.
  */
 function _resolveArcLayout(popup, ui, baseR) {
@@ -3735,6 +3856,26 @@ function _resolveArcLayout(popup, ui, baseR) {
   for (let i = 0; i < btns.length; i++) {
     const rect = btns[i].getBoundingClientRect();
     sizes.push({ w: rect.width, h: rect.height });
+  }
+
+  // Compute hex tap zone radius (half-hex + margin) so buttons never cover it
+  const canvasRect = ui.canvas.getBoundingClientRect();
+  const canvasScale = canvasRect.width / ui.canvas.width;
+  const hexScreenPx = ui.renderer.hexSize * canvasScale * ui.renderer.zoomLevel;
+  const hexTapZone = hexScreenPx * 0.55;
+
+  // Check if any button's bounding box overlaps the hex center tap zone
+  function obscuresHex(r) {
+    for (let i = 0; i < items.length; i++) {
+      const cx = Math.cos(items[i]._angle) * r;
+      const cy = Math.sin(items[i]._angle) * r;
+      const hw = sizes[i].w / 2, hh = sizes[i].h / 2;
+      // Closest point of button AABB to origin (0,0)
+      const nearX = Math.max(0, Math.abs(cx) - hw);
+      const nearY = Math.max(0, Math.abs(cy) - hh);
+      if (Math.sqrt(nearX * nearX + nearY * nearY) < hexTapZone) return true;
+    }
+    return false;
   }
 
   // Check if any pair of bounding boxes overlaps at a given radius
@@ -3757,10 +3898,14 @@ function _resolveArcLayout(popup, ui, baseR) {
     return false;
   }
 
-  // Start at base radius and step outward until no overlaps
+  // Only enforce hex-clearance for disambiguation arcs (portrait items) —
+  // regular action arcs don't need it and it would blow out their radius.
+  const hasPortraits = items.some(i => i._portrait);
+
+  // Start at base radius and step outward until no overlaps (and hex is clear for portrait arcs)
   let r = baseR;
   const MAX_R = 400; // safety cap
-  while (r < MAX_R && hasOverlap(r)) {
+  while (r < MAX_R && (hasOverlap(r) || (hasPortraits && obscuresHex(r)))) {
     r += 8;
   }
   return r;
