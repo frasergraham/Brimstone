@@ -1286,6 +1286,50 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       }
     }
 
+    // ── Phase 2a: empty-hex attack whiffs (lunge + "no enemy" floater) ───────
+    const whiffEvents = allStepEvents.filter(
+      ev => ev.type === ResEventType.ACTION_SKIP && ev.whiffTarget && ev.battleSnaps?.actorSnap
+    );
+    for (const ev of whiffEvents) {
+      const { actorSnap } = ev.battleSnaps;
+      const { col: tCol, row: tRow } = ev.whiffTarget;
+
+      // Visibility check — same logic as normal battles
+      const myUnit = myPlayerId && actorSnap.ownerId === myPlayerId;
+      const showForPlayer = myPlayerId
+        ? myUnit
+        : (!humanFaction || state.fogOfWar === 'none' || ev.faction === humanFaction);
+      if (!showForPlayer) continue;
+
+      if (!_autoplay) {
+        const speed = ui?.speedMode ?? 'cinematic';
+
+        // Lunge toward empty hex
+        const actorDisplay = state.entities.find(e => e.id === actorSnap.id);
+        const lungeFromCol = actorDisplay?.col ?? actorSnap.col;
+        const lungeFromRow = actorDisplay?.row ?? actorSnap.row;
+        renderer.addLungeAnim(
+          actorSnap.id,
+          lungeFromCol, lungeFromRow,
+          tCol, tRow,
+          actorSnap.type, actorSnap.owner, actorSnap.title ?? null,
+        );
+        redrawFn();
+        await _delay(speed === 'vfast' ? 140 : 280);
+
+        // "no enemy" floater on target hex
+        renderer.addFlash(tCol, tRow, 'no enemy', 'rgba(100,100,100,0.1)', 1000, 0.65, '#888');
+        redrawFn();
+        await _delay(speed === 'vfast' ? 200 : 400);
+
+        // Return lunge
+        renderer.returnAllLungeAnims();
+        if (speed === 'cinematic' || speed === 'step') await renderer.waitForAnimations();
+        redrawFn();
+      }
+      hadBattle = true;
+    }
+
     // ── Phase 2b: guard strike reactions ─────────────────────────────────────
     // Guard strikes are reactive attacks emitted as GUARD_STRIKE events.
     // Animate them the same way as normal battles: lunge, highlights, dialog/toast.
