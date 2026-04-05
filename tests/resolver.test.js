@@ -902,3 +902,38 @@ describe('resolvePlans — per-unit simultaneous execution', () => {
     assert.ok(allHeroCap.length > 0, 'BUDGET_CAP should fire when shared budget is exhausted');
   });
 });
+
+// ── BATTLE_HEX empty-hex whiff ────────────────────────────────────────────────
+
+describe('resolvePlans — BATTLE_HEX on empty hex returns skip with actorSnap and whiffTarget', () => {
+  test('skip event includes battleSnaps.actorSnap and whiffTarget when target hex is empty', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const target = emptyPassableNeighbor(state, hero);
+    assert.ok(target, 'Need an empty passable neighbor for this test');
+
+    // Ensure the target hex truly has no enemies
+    const enemiesOnTarget = state.entities.filter(
+      e => e.alive && e.owner !== 'hero' && e.col === target.col && e.row === target.row
+    );
+    assert.equal(enemiesOnTarget.length, 0, 'Target hex should have no enemies');
+
+    const heroPlan = [{
+      type: PlanActionType.BATTLE_HEX,
+      entityId: hero.id,
+      targetCol: target.col,
+      targetRow: target.row,
+    }];
+
+    const steps = resolvePlans(state, heroPlan, []);
+    const allHeroEvents = steps.flatMap(s => s.heroEvents);
+    const skipEv = allHeroEvents.find(e => e.type === ResEventType.ACTION_SKIP);
+    assert.ok(skipEv, 'Empty-hex BATTLE_HEX should produce an ACTION_SKIP event');
+    assert.ok(skipEv.battleSnaps, 'Skip event should include battleSnaps');
+    assert.ok(skipEv.battleSnaps.actorSnap, 'battleSnaps should include actorSnap');
+    assert.equal(skipEv.battleSnaps.actorSnap.id, hero.id, 'actorSnap should be the attacking entity');
+    assert.ok(skipEv.whiffTarget, 'Skip event should include whiffTarget');
+    assert.equal(skipEv.whiffTarget.col, target.col, 'whiffTarget.col should match target hex');
+    assert.equal(skipEv.whiffTarget.row, target.row, 'whiffTarget.row should match target hex');
+  });
+});
