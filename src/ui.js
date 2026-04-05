@@ -1395,16 +1395,16 @@ export class UIController {
         case ActionType.BATTLE:
           break; // handled via hex clicks
         case ActionType.EXPLORE:
-          arcItems.push({ group: 'scout', label: '🔍 Explore', fullLabel: '🔍 Explore tile',
+          arcItems.push({ group: 'scout', label: 'Explore', fullLabel: 'Explore tile',
             color: '#7eccd6', dis, attrs: 'data-action="explore"' });
           break;
         case ActionType.SOUND_HORN:
-          arcItems.push({ group: 'scout', label: '📯 Horn', fullLabel: '📯 Sound Horn (1 food)',
+          arcItems.push({ group: 'scout', label: 'Horn', fullLabel: 'Sound Horn (1 food)',
             color: '#7eccd6', dis: !action.affordable || dis, attrs: 'data-action="sound_horn"' });
           break;
         case ActionType.GUARD: {
           const charges = action.currentCharges || 0;
-          const lbl = charges > 0 ? `🛡 Guard +${charges + 1}` : '🛡 Guard';
+          const lbl = charges > 0 ? `Guard +${charges + 1}` : 'Guard';
           arcItems.push({ group: 'defense', label: lbl, fullLabel: lbl,
             color: '#8888cc', dis, attrs: 'data-action="guard"' });
           break;
@@ -1420,19 +1420,19 @@ export class UIController {
           const metalGain   = Math.min(4, cur + 2) - cur;
           const doublerGain = Math.min(4, cur + 2) - cur;
           const woodGain    = Math.min(4, cur + 1) - cur;
-          const shortLbl = hasMetal ? '⚙ Reinforce' : '🪵 Fortify';
+          const shortLbl = hasMetal ? 'Reinforce' : 'Fortify';
           const fullLbl = hasMetal
-            ? `⚙ Reinforce +${metalGain} DEF (1⚙)`
+            ? `Reinforce +${metalGain} DEF (1 metal)`
             : hasDoubler
-              ? `🪵 Fortify +${doublerGain} DEF ★ (1🪵)`
-              : `🪵 Fortify +${woodGain} DEF (1🪵)`;
+              ? `Fortify +${doublerGain} DEF (1 wood)`
+              : `Fortify +${woodGain} DEF (1 wood)`;
           arcItems.push({ group: 'defense', label: shortLbl, fullLabel: fullLbl,
             color: '#e0a832', dis: cantAfford || dis, attrs: 'data-action="fortify"' });
           break;
         }
         case ActionType.BATTLE_HEX:
           if (this._planMode) {
-            arcItems.push({ group: 'combat', label: '⚔ Attack', fullLabel: '⚔ Attack Hex',
+            arcItems.push({ group: 'combat', label: 'Attack', fullLabel: 'Attack Hex',
               color: '#c0392b', dis, attrs: 'data-action="attack_hex"' });
           }
           break;
@@ -1447,19 +1447,19 @@ export class UIController {
             [EntityType.MINION]:     projTotal >= 2,
           };
           const SUMMON_SHORT = {
-            [EntityType.IRON_GOLEM]: '🔩 Iron',
-            [EntityType.WOOD_GOLEM]: '🪵 Wood',
-            [EntityType.MINION]:     '🌑 Minion',
+            [EntityType.IRON_GOLEM]: 'Iron',
+            [EntityType.WOOD_GOLEM]: 'Wood',
+            [EntityType.MINION]:     'Minion',
           };
           const SUMMON_FULL = {
-            [EntityType.IRON_GOLEM]: '🔩 Iron Golem (2⚙)',
-            [EntityType.WOOD_GOLEM]: '🪵 Wood Golem (2🪵)',
-            [EntityType.MINION]:     '🌑 Minion (2 res)',
+            [EntityType.IRON_GOLEM]: 'Iron Golem (2 metal)',
+            [EntityType.WOOD_GOLEM]: 'Wood Golem (2 wood)',
+            [EntityType.MINION]:     'Minion (2 res)',
           };
           const st = action.summonType;
           const canAfford = projAffordable[st] ?? action.affordable;
-          arcItems.push({ group: 'summon', label: SUMMON_SHORT[st] ?? '🌑 Summon',
-            fullLabel: SUMMON_FULL[st] ?? '🌑 Summon',
+          arcItems.push({ group: 'summon', label: SUMMON_SHORT[st] ?? 'Summon',
+            fullLabel: SUMMON_FULL[st] ?? 'Summon',
             color: '#9b59b6', dis: !canAfford || dis,
             attrs: `data-action="summon" data-summon-type="${st}"` });
           break;
@@ -1476,27 +1476,29 @@ export class UIController {
                 if ((projInv.shared[item.item] || 0) < 1) itemDis = true;
               }
             }
-            arcItems.push({ group: 'items', label: item.label, fullLabel: item.label,
+            // Strip leading emoji from item labels
+            const cleanLabel = item.label.replace(/^[\p{Emoji_Presentation}\p{Extended_Pictographic}]\s*/u, '');
+            arcItems.push({ group: 'items', label: cleanLabel, fullLabel: item.label,
               color: '#b0b0b0', dis: itemDis,
               attrs: `data-action="use_item" data-item="${item.item}"` });
           }
           break;
         case ActionType.EQUIP_WEAPON:
           for (const w of action.weapons) {
-            arcItems.push({ group: 'items', label: `⚔ ${w.label}`, fullLabel: `⚔ Equip ${w.label}`,
+            arcItems.push({ group: 'items', label: w.label, fullLabel: `Equip ${w.label}`,
               color: '#b0b0b0', dis, attrs: `data-action="use_item" data-item="${w.key}"` });
           }
           break;
         case ActionType.USE_ABILITY: {
           const abilityLabels = {
-            [SurvivorAbility.HEAL]:    '❤ Heal',
-            [SurvivorAbility.INSPIRE]: '✦ Cry',
-            [SurvivorAbility.RALLY]:   '✦ Sermon',
+            [SurvivorAbility.HEAL]:    'Heal',
+            [SurvivorAbility.INSPIRE]: 'Battle Cry',
+            [SurvivorAbility.RALLY]:   'Sermon',
           };
           const fullLabels = {
-            [SurvivorAbility.HEAL]:    '❤ Tend Wounds',
-            [SurvivorAbility.INSPIRE]: '✦ Battle Cry',
-            [SurvivorAbility.RALLY]:   '✦ Holy Sermon',
+            [SurvivorAbility.HEAL]:    'Tend Wounds',
+            [SurvivorAbility.INSPIRE]: 'Battle Cry',
+            [SurvivorAbility.RALLY]:   'Holy Sermon',
           };
           const isFree = action.ability !== SurvivorAbility.HEAL;
           arcItems.push({ group: 'items',
@@ -1525,9 +1527,9 @@ export class UIController {
     // Decide direction: open to side with more space
     const openRight = screenPos.x < window.innerWidth / 2;
     const centerAngle = openRight ? 0 : Math.PI; // 0 = right, PI = left
-    const ARC_RADIUS = 85;
-    const GROUP_GAP = 18 * (Math.PI / 180); // gap between groups in radians
-    const ITEM_GAP  = 10 * (Math.PI / 180); // gap within group
+    const ARC_RADIUS = 100;
+    const GROUP_GAP = 22 * (Math.PI / 180); // gap between groups in radians
+    const ITEM_GAP  = 14 * (Math.PI / 180); // gap within group
 
     // Order groups
     const GROUP_ORDER = ['scout', 'defense', 'summon', 'combat', 'items'];
@@ -1537,11 +1539,18 @@ export class UIController {
       if (items.length > 0) groups.push(items);
     }
 
-    // Compute total angular span
+    // Compute total angular span needed
     const totalItems = arcItems.length;
     const totalGroups = groups.length;
     const totalAngle = (totalItems - 1) * ITEM_GAP + Math.max(0, totalGroups - 1) * GROUP_GAP;
-    const startAngle = centerAngle - totalAngle / 2;
+    // Clamp arc span so items don't wrap past ±90° from center
+    const maxSpan = 150 * (Math.PI / 180);
+    const clampedAngle = Math.min(totalAngle, maxSpan);
+    const startAngle = centerAngle - clampedAngle / 2;
+    // If we had to clamp, recompute effective gap
+    const effectiveItemGap = totalAngle > maxSpan
+      ? (clampedAngle - Math.max(0, totalGroups - 1) * GROUP_GAP) / Math.max(1, totalItems - 1)
+      : ITEM_GAP;
 
     // Assign angles to items
     let angle = startAngle;
@@ -1549,10 +1558,9 @@ export class UIController {
     for (let gi = 0; gi < groups.length; gi++) {
       if (gi > 0) angle += GROUP_GAP;
       for (let ii = 0; ii < groups[gi].length; ii++) {
-        if (ii > 0) angle += ITEM_GAP;
+        if (ii > 0) angle += effectiveItemGap;
         groups[gi][ii]._angle = angle;
         groups[gi][ii]._idx = idx++;
-        angle += 0; // gap added at next iteration
       }
     }
 

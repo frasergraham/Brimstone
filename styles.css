@@ -1757,8 +1757,16 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   transform: translate(-50%, -50%) scale(0.3);
   opacity: 0;
   pointer-events: auto;
+  /* Uniform size for all arc buttons */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  min-width: 68px;
+  height: 32px;
+  padding: 0 0.5rem;
+  box-sizing: border-box;
   white-space: nowrap;
-  padding: 0.3rem 0.55rem;
   font-family: var(--font-serif);
   font-size: 0.72rem;
   color: var(--text);
@@ -1769,7 +1777,6 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   cursor: pointer;
   transition: transform 200ms ease-out, opacity 200ms ease-out;
   transition-delay: var(--arc-delay, 0ms);
-  /* prevent text selection on double-tap */
   -webkit-user-select: none;
   user-select: none;
 }
