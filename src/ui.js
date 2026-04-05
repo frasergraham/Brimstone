@@ -3664,8 +3664,8 @@ function _computeArcRadius(hexScreenPx, itemCount, itemGap) {
   // Base radius: just touching the hex edge
   const baseR = hexScreenPx * 0.87 + 4;
   if (itemCount <= 1) return baseR;
-  // Minimum chord distance between adjacent items (px) — enough for button height
-  const MIN_SPACING = 44;
+  // Minimum chord distance between adjacent items (px) — covers button height + padding + border
+  const MIN_SPACING = 56;
   // chord = 2 * r * sin(gap/2); solve for r: r = MIN_SPACING / (2 * sin(gap/2))
   const minR = MIN_SPACING / (2 * Math.sin(itemGap / 2));
   return Math.max(baseR, minR);
