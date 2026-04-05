@@ -160,7 +160,7 @@ scripts/
   headless-mp-net.js # N-player network-based headless runner
   combat-sim.js     # Scenario matrix: hit rates, crush rates, expected damage
   ai-matrix.js      # Runs every hero personality vs every witch personality; renders result matrix
-  release.js        # Automated release: version bump, changelog generation, tag, fast-forward merge to master
+  release.js        # Automated release: version bump, changelog generation, tag, fast-forward merge to prod
 ```
 
 ---
@@ -350,6 +350,8 @@ Games are auto-persisted to SQLite (`data/brimstone.db`, override with `DB_PATH`
 ---
 
 ## Release Process
+
+**Branches:** `dev` is the main development branch. `prod` is the release/production branch. All work lands on `dev` first; releases fast-forward merge `dev` → `prod`.
 
 `scripts/release.js` automates releases: bumps version in `src/version.js`, generates release notes from commits (categorized as feat/fix/perf/refactor/chore/docs), updates `CHANGELOG.json`, creates a git tag, and fast-forward merges to prod. Enforces a dev-first workflow. Use `--dry-run` to preview.
 
