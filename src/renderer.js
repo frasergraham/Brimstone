@@ -278,6 +278,7 @@ export class Renderer {
    * Shows terrain colour fill, sprite texture, building overlay, and fortification ring.
    */
   getTileDataURL(tile, col, row, size = 28) {
+    if (!this._portraitCache) return null;
     const fortKey = tile.fortifyLevel || 0;
     const bldg = tile.building || '';
     const cacheKey = `tile_${tile.type}_${bldg}_${fortKey}@${size}`;
