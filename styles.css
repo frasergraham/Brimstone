@@ -3064,6 +3064,23 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   font-style: italic;
 }
 
+.ai-debug-resolution-section {
+  margin-top: 0.5rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid rgba(255,255,255,0.1);
+}
+.ai-debug-resolution-details {
+  margin-top: 0.3rem;
+  font-size: 0.65rem;
+  color: #999;
+  max-height: 6rem;
+  overflow-y: auto;
+}
+.ai-debug-resolution-line {
+  padding: 1px 0;
+  color: #c77;
+}
+
 .plan-panel {
   position: absolute;
   right: 0;

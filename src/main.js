@@ -415,6 +415,75 @@ function _pushAIDebugData(aiEngine, faction) {
   redraw();
 }
 
+/** After resolution, annotate the debug panel with what actually happened. */
+function _updateAIDebugResolutionOutcome(steps) {
+  // Collect all resolution events by faction
+  const outcomes = { hero: [], witch: [] };
+  for (const step of steps) {
+    for (const ev of (step.heroEvents ?? [])) {
+      outcomes.hero.push(ev);
+    }
+    for (const ev of (step.witchEvents ?? [])) {
+      outcomes.witch.push(ev);
+    }
+  }
+
+  // Update the debug panel with outcome annotations
+  const panel = document.getElementById('ai-debug-actions');
+  if (!panel) return;
+
+  // Add a resolution summary section
+  const aiFaction = !state.heroIsAI ? 'witch' : 'hero';
+  const events = outcomes[aiFaction];
+  if (events.length === 0) return;
+
+  const section = document.createElement('div');
+  section.className = 'ai-debug-resolution-section';
+  section.innerHTML = '<div class="ai-debug-section-title">Resolution Outcome</div>';
+
+  const okCount = events.filter(e => e.type === ResEventType.ACTION_OK).length;
+  const skipCount = events.filter(e => e.type === ResEventType.ACTION_SKIP).length;
+  const failCount = events.filter(e => e.type === ResEventType.ACTION_FAIL).length;
+  const capCount = events.filter(e => e.type === ResEventType.BUDGET_CAP).length;
+
+  const list = document.createElement('div');
+  list.className = 'ai-debug-kv-grid';
+  const rows = [
+    ['Executed', `${okCount}`],
+    ['Skipped', `${skipCount}`],
+    ['Failed', `${failCount}`],
+  ];
+  if (capCount > 0) rows.push(['Budget cap', `${capCount}`]);
+  for (const [label, value] of rows) {
+    const row = document.createElement('div');
+    row.className = 'ai-debug-kv-row';
+    row.innerHTML = `<span class="ai-debug-kv-label">${label}</span><span class="ai-debug-kv-value">${value}</span>`;
+    list.appendChild(row);
+  }
+  section.appendChild(list);
+
+  // Show details for skipped/failed actions
+  const problems = events.filter(e =>
+    e.type === ResEventType.ACTION_SKIP || e.type === ResEventType.ACTION_FAIL
+  );
+  if (problems.length > 0) {
+    const details = document.createElement('div');
+    details.className = 'ai-debug-resolution-details';
+    for (const ev of problems) {
+      const tag = ev.type === ResEventType.ACTION_SKIP ? 'SKIP' : 'FAIL';
+      const actionType = ev.action?.type ?? '?';
+      const reason = ev.reason ?? '';
+      const line = document.createElement('div');
+      line.className = 'ai-debug-resolution-line';
+      line.textContent = `[${tag}] ${actionType}: ${reason}`;
+      details.appendChild(line);
+    }
+    section.appendChild(details);
+  }
+
+  panel.appendChild(section);
+}
+
 function _clearAIDebug() {
   clearAIDebugData();
   if (renderer) {
@@ -601,6 +670,12 @@ async function _runLocalResolution(skipSummary = false) {
   }));
 
   await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+
+  // Update AI debug panel with resolution outcomes so the user can see
+  // which planned actions actually executed vs were skipped/failed
+  if (isAIDebugActive()) {
+    _updateAIDebugResolutionOutcome(steps);
+  }
 
   // Restore final explored state after animation completes.
   for (const [k, v] of postExplored) {
