@@ -1834,6 +1834,49 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   animation: arc-pulse 200ms ease-out;
 }
 
+/* ── Arc portrait items (disambiguation) ── */
+
+.arc-item.arc-portrait {
+  flex-direction: column;
+  padding: 0.25rem 0.4rem 0.2rem;
+  gap: 2px;
+  min-width: 56px;
+  text-align: center;
+}
+
+.arc-portrait-img {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 2px solid var(--arc-color, #3a2d58);
+  box-shadow: 0 0 6px var(--arc-glow, rgba(0,0,0,0.3));
+  pointer-events: none;
+}
+
+.arc-portrait-hp {
+  width: 40px;
+  height: 4px;
+  background: #333;
+  border-radius: 2px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.arc-portrait-hp-fill {
+  height: 100%;
+  border-radius: 2px;
+}
+
+.arc-portrait-name {
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 .popup-unit-name {
   font-size: 0.72rem;
   color: var(--text-dim);
