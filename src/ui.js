@@ -1527,9 +1527,14 @@ export class UIController {
     // Decide direction: open to side with more space
     const openRight = screenPos.x < window.innerWidth / 2;
     const centerAngle = openRight ? 0 : Math.PI; // 0 = right, PI = left
-    const ARC_RADIUS = 100;
-    const GROUP_GAP = 22 * (Math.PI / 180); // gap between groups in radians
-    const ITEM_GAP  = 14 * (Math.PI / 180); // gap within group
+
+    // Button width ~55px at this font size; at radius R the angular gap needed
+    // to avoid overlap is approx 2 * atan(buttonHalfWidth / R).
+    // With R=110 and button ~55px: atan(27.5/110) ≈ 14°, so use ~28° per item
+    // plus extra between groups.
+    const ARC_RADIUS = 110;
+    const ITEM_GAP  = 28 * (Math.PI / 180); // minimum angular gap between items
+    const GROUP_EXTRA = 10 * (Math.PI / 180); // additional gap between groups
 
     // Order groups
     const GROUP_ORDER = ['scout', 'defense', 'summon', 'combat', 'items'];
@@ -1539,26 +1544,23 @@ export class UIController {
       if (items.length > 0) groups.push(items);
     }
 
-    // Compute total angular span needed
+    // Compute total angular span
     const totalItems = arcItems.length;
     const totalGroups = groups.length;
-    const totalAngle = (totalItems - 1) * ITEM_GAP + Math.max(0, totalGroups - 1) * GROUP_GAP;
-    // Clamp arc span so items don't wrap past ±90° from center
-    const maxSpan = 150 * (Math.PI / 180);
-    const clampedAngle = Math.min(totalAngle, maxSpan);
-    const startAngle = centerAngle - clampedAngle / 2;
-    // If we had to clamp, recompute effective gap
-    const effectiveItemGap = totalAngle > maxSpan
-      ? (clampedAngle - Math.max(0, totalGroups - 1) * GROUP_GAP) / Math.max(1, totalItems - 1)
-      : ITEM_GAP;
+    const totalAngle = Math.max(0, totalItems - 1) * ITEM_GAP
+      + Math.max(0, totalGroups - 1) * GROUP_EXTRA;
+    const startAngle = centerAngle - totalAngle / 2;
 
     // Assign angles to items
     let angle = startAngle;
     let idx = 0;
     for (let gi = 0; gi < groups.length; gi++) {
-      if (gi > 0) angle += GROUP_GAP;
+      if (gi > 0) angle += GROUP_EXTRA;
       for (let ii = 0; ii < groups[gi].length; ii++) {
-        if (ii > 0) angle += effectiveItemGap;
+        if (ii > 0 || gi > 0) {
+          // Only add ITEM_GAP between items (GROUP_EXTRA is on top of it)
+          if (ii > 0) angle += ITEM_GAP;
+        }
         groups[gi][ii]._angle = angle;
         groups[gi][ii]._idx = idx++;
       }
