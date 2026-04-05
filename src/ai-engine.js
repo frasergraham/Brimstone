@@ -660,37 +660,39 @@ export function genControlNodes(sim, board, budget) {
       : (simUnit.col === node.obj.col && simUnit.row === node.obj.row);
 
     if (onNode) {
-      // Fight enemies on or adjacent to the node
-      const adjacentEnemy = board.visibleHeroes.find(h =>
+      // AGGRESSIVE: fight ALL enemies on or adjacent to the node
+      const adjacentEnemies = board.visibleHeroes.filter(h =>
         hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= 1
       );
-      if (adjacentEnemy && remaining > 0) {
-        const est = estimateCombat(simUnit, adjacentEnemy, board);
-        if (est.classification !== 'suicidal') {
+      for (const enemy of adjacentEnemies) {
+        if (remaining <= 0) break;
+        const est = estimateCombat(simUnit, enemy, board);
+        if (est.classification === 'suicidal') continue;
+        actions.push({
+          type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
+          targetId: enemy.id, targetCol: enemy.col, targetRow: enemy.row,
+          _priority: 3, _goal: Goal.CONTROL_NODES,
+        });
+        sim.applyBattle();
+        remaining--;
+      }
+      if (adjacentEnemies.length > 0) {
+        sim.unitCommitments.set(simUnit.id, Goal.CONTROL_NODES);
+      }
+      // Guard if threats nearby but couldn't attack
+      if (remaining > 0 && !sim.unitCommitments.has(simUnit.id)) {
+        const nearbyThreat = board.visibleHeroes.some(h =>
+          hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= 2
+        );
+        if (nearbyThreat) {
           actions.push({
-            type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
-            targetId: adjacentEnemy.id, targetCol: adjacentEnemy.col, targetRow: adjacentEnemy.row,
-            _priority: 3, _goal: Goal.CONTROL_NODES,
+            type: PlanActionType.GUARD, entityId: simUnit.id,
+            _priority: 4, _goal: Goal.CONTROL_NODES,
           });
-          sim.applyBattle();
+          sim.applyGuard(simUnit.id);
           sim.unitCommitments.set(simUnit.id, Goal.CONTROL_NODES);
           remaining--;
-          continue;
         }
-      }
-      // Guard if threats nearby
-      const nearbyThreat = board.visibleHeroes.some(h =>
-        hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= 2
-      );
-      if (nearbyThreat) {
-        actions.push({
-          type: PlanActionType.GUARD, entityId: simUnit.id,
-          _priority: 4, _goal: Goal.CONTROL_NODES,
-        });
-        sim.applyGuard(simUnit.id);
-        sim.unitCommitments.set(simUnit.id, Goal.CONTROL_NODES);
-        remaining--;
-        continue;
       }
       continue;
     }

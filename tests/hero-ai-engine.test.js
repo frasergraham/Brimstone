@@ -19,10 +19,8 @@ import {
   scoreHeroGoals,
   estimateHeroCombat,
   genProtectHero,
-  genSlayWitch,
   genControlNodes,
   genExplore,
-  genFortifyPosition,
   fillGapsHero,
 } from '../src/hero-ai-engine.js';
 import { PlanActionType } from '../src/planner.js';
@@ -244,17 +242,15 @@ describe('assessHeroBoard', () => {
 // ── scoreHeroGoals ──────────────────────────────────────────────────────────
 
 describe('scoreHeroGoals', () => {
-  test('returns scores for all 5 goals', () => {
+  test('returns scores for all 3 goals', () => {
     const sim = makeHeroSim();
     const board = assessHeroBoard(sim);
     const scores = scoreHeroGoals(board);
     const keys = Object.keys(scores);
-    assert.equal(keys.length, 5);
+    assert.equal(keys.length, 3);
     assert.ok(HeroGoal.PROTECT_HERO in scores);
-    assert.ok(HeroGoal.SLAY_WITCH in scores);
     assert.ok(HeroGoal.CONTROL_NODES in scores);
     assert.ok(HeroGoal.EXPLORE in scores);
-    assert.ok(HeroGoal.FORTIFY_POSITION in scores);
   });
 
   test('all scores are in [0, 1] range', () => {
@@ -264,22 +260,6 @@ describe('scoreHeroGoals', () => {
     for (const v of Object.values(scores)) {
       assert.ok(v >= 0 && v <= 1, `score ${v} out of [0,1] range`);
     }
-  });
-
-  test('night boosts FORTIFY_POSITION when in building', () => {
-    // Hero must be in a building for FORTIFY to be non-zero
-    const heroInBuilding = makeEntity({
-      id: 'hero1', type: EntityType.HERO, owner: 'hero',
-      col: 1, row: 1, hp: 10, maxHp: 10,
-      items: { [ResourceType.HERBS]: 1, [ResourceType.FOOD]: 2 },
-    });
-    const witch = makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 5, row: 4, hp: 8, maxHp: 8 });
-    const dayBoard = assessHeroBoard(makeHeroSim({ phase: Phase.DAY, entities: [heroInBuilding, witch] }));
-    const nightBoard = assessHeroBoard(makeHeroSim({ phase: Phase.NIGHT, entities: [heroInBuilding, witch] }));
-    const dayScores = scoreHeroGoals(dayBoard);
-    const nightScores = scoreHeroGoals(nightBoard);
-    assert.ok(nightScores[HeroGoal.FORTIFY_POSITION] > dayScores[HeroGoal.FORTIFY_POSITION],
-      `night FORTIFY (${nightScores[HeroGoal.FORTIFY_POSITION]}) should exceed day (${dayScores[HeroGoal.FORTIFY_POSITION]})`);
   });
 
   test('EXPLORE is high when no survivors', () => {
@@ -332,25 +312,6 @@ describe('scoreHeroGoals', () => {
       `injured PROTECT (${injuredScores[HeroGoal.PROTECT_HERO]}) should exceed healthy (${healthyScores[HeroGoal.PROTECT_HERO]})`);
   });
 
-  test('close witch boosts SLAY_WITCH', () => {
-    const farSim = makeHeroSim({
-      entities: [
-        makeEntity({ id: 'hero1', col: 0, row: 0, items: {} }),
-        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
-      ],
-    });
-    const closeSim = makeHeroSim({
-      entities: [
-        makeEntity({ id: 'hero1', col: 3, row: 3, items: {} }),
-        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 4, row: 3 }),
-      ],
-    });
-    const farScores = scoreHeroGoals(assessHeroBoard(farSim));
-    const closeScores = scoreHeroGoals(assessHeroBoard(closeSim));
-    assert.ok(closeScores[HeroGoal.SLAY_WITCH] > farScores[HeroGoal.SLAY_WITCH],
-      `close SLAY (${closeScores[HeroGoal.SLAY_WITCH]}) should exceed far (${farScores[HeroGoal.SLAY_WITCH]})`);
-  });
-
   test('goalWeights scale scores', () => {
     const sim = makeHeroSim();
     const board = assessHeroBoard(sim);
@@ -375,10 +336,8 @@ describe('allocateBudget with hero goals', () => {
   test('distributes budget across hero goals', () => {
     const scores = {
       [HeroGoal.PROTECT_HERO]: 0.5,
-      [HeroGoal.SLAY_WITCH]: 0.3,
       [HeroGoal.CONTROL_NODES]: 0.4,
       [HeroGoal.EXPLORE]: 0.6,
-      [HeroGoal.FORTIFY_POSITION]: 0.2,
     };
     const budget = allocateBudget(scores, 8);
     const total = Object.values(budget).reduce((s, v) => s + v, 0);
@@ -388,10 +347,8 @@ describe('allocateBudget with hero goals', () => {
   test('active goals get at least 2 AP (no thin allocations)', () => {
     const scores = {
       [HeroGoal.PROTECT_HERO]: 0.8,
-      [HeroGoal.SLAY_WITCH]: 0.3,
       [HeroGoal.CONTROL_NODES]: 0.3,
       [HeroGoal.EXPLORE]: 0.3,
-      [HeroGoal.FORTIFY_POSITION]: 0.3,
     };
     const budget = allocateBudget(scores, 12);
     for (const g of Object.keys(scores)) {
@@ -403,13 +360,10 @@ describe('allocateBudget with hero goals', () => {
   test('highest urgency goal gets most budget', () => {
     const scores = {
       [HeroGoal.PROTECT_HERO]: 0.1,
-      [HeroGoal.SLAY_WITCH]: 0.1,
       [HeroGoal.CONTROL_NODES]: 0.1,
       [HeroGoal.EXPLORE]: 0.9,
-      [HeroGoal.FORTIFY_POSITION]: 0.1,
     };
-    // Budget 18: enough for EXPLORE to get extra chunks over lower goals
-    const budget = allocateBudget(scores, 18);
+    const budget = allocateBudget(scores, 10);
     assert.ok(budget[HeroGoal.EXPLORE] > budget[HeroGoal.PROTECT_HERO],
       `EXPLORE (${budget[HeroGoal.EXPLORE]}) should exceed PROTECT (${budget[HeroGoal.PROTECT_HERO]})`);
   });
@@ -417,10 +371,8 @@ describe('allocateBudget with hero goals', () => {
   test('zero budget returns all zeros', () => {
     const scores = {
       [HeroGoal.PROTECT_HERO]: 0.5,
-      [HeroGoal.SLAY_WITCH]: 0.5,
       [HeroGoal.CONTROL_NODES]: 0.5,
       [HeroGoal.EXPLORE]: 0.5,
-      [HeroGoal.FORTIFY_POSITION]: 0.5,
     };
     const budget = allocateBudget(scores, 0);
     for (const v of Object.values(budget)) {
@@ -447,7 +399,7 @@ describe('HERO_PERSONALITY_CONFIGS', () => {
     }
   });
 
-  test('each config has weights for all 5 goals', () => {
+  test('each config has weights for all 3 goals', () => {
     for (const [name, cfg] of Object.entries(HERO_PERSONALITY_CONFIGS)) {
       for (const g of Object.values(HeroGoal)) {
         assert.ok(cfg.goalWeights[g] != null, `${name} missing weight for ${g}`);
@@ -460,9 +412,9 @@ describe('HERO_PERSONALITY_CONFIGS', () => {
     const board = assessHeroBoard(sim);
     const balanced = scoreHeroGoals(board, HERO_PERSONALITY_CONFIGS.balanced.goalWeights);
     const aggressive = scoreHeroGoals(board, HERO_PERSONALITY_CONFIGS.aggressive.goalWeights);
-    // Aggressive should weight SLAY_WITCH higher
-    assert.ok(aggressive[HeroGoal.SLAY_WITCH] >= balanced[HeroGoal.SLAY_WITCH],
-      `aggressive SLAY (${aggressive[HeroGoal.SLAY_WITCH]}) should be >= balanced (${balanced[HeroGoal.SLAY_WITCH]})`);
+    // Aggressive should weight CONTROL_NODES higher
+    assert.ok(aggressive[HeroGoal.CONTROL_NODES] >= balanced[HeroGoal.CONTROL_NODES],
+      `aggressive CONTROL (${aggressive[HeroGoal.CONTROL_NODES]}) should be >= balanced (${balanced[HeroGoal.CONTROL_NODES]})`);
   });
 });
 
@@ -631,7 +583,7 @@ describe('genProtectHero', () => {
 
 // ── genSlayWitch ────────────────────────────────────────────────────────────
 
-describe('genSlayWitch', () => {
+describe.skip('genSlayWitch (removed — merged into CONTROL_NODES combat)', () => {
   test('emits BATTLE_UNIT when hero adjacent to witch', () => {
     const sim = makeHeroEngineSim({
       entities: [
@@ -774,7 +726,7 @@ describe('genExplore', () => {
 
 // ── genFortifyPosition ──────────────────────────────────────────────────────
 
-describe('genFortifyPosition', () => {
+describe.skip('genFortifyPosition (removed — merged into EXPLORE and CONTROL_NODES)', () => {
   test('seeks shelter at night when not in building', () => {
     const sim = makeHeroEngineSim({
       phase: Phase.NIGHT,

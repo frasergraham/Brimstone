@@ -1,7 +1,12 @@
-// Hero AI Engine — 5-stage pipeline hero AI
+// Hero AI Engine — 3-goal simplified hero AI
 // All hero personalities are config-driven variants of this single engine.
 //
 // Pipeline: EVALUATE → SCORE → ALLOCATE → GENERATE → ASSEMBLE
+//
+// Goals:
+//   EXPLORE         — find survivors, loot buildings, sound horn, fortify shelter
+//   CONTROL_NODES   — hold power nodes, aggressively fight for them
+//   PROTECT_HERO    — flee when health low, use herbs, equip weapons
 
 import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, nearestBuilding, isOnNode, inBuilding, roundsUntilScoring, scoreNodeFeasibility, HERO_PERSONALITIES } from './ai.js';
 import { EnginePlanSimState, allocateBudget, assemblePlan } from './ai-engine.js';
@@ -14,10 +19,8 @@ import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
 // ── Goal names ───────────────────────────────────────────────────────────────
 
 export const HeroGoal = Object.freeze({
-  SLAY_WITCH:       'SLAY_WITCH',
-  CONTROL_NODES:    'CONTROL_NODES',
   EXPLORE:          'EXPLORE',
-  FORTIFY_POSITION: 'FORTIFY_POSITION',
+  CONTROL_NODES:    'CONTROL_NODES',
   PROTECT_HERO:     'PROTECT_HERO',
 });
 
@@ -33,17 +36,11 @@ function _heroSightBase(phase) {
 }
 
 // ── Personality configs ─────────────────────────────────────────────────────
-// goalWeights: post-scoring multipliers per goal (higher = more budget share)
-// engageFloor: minimum combat classification to attack
-//   'suicidal' → only skip suicidal; 'unfavorable' → need favorable+; 'favorable' → need overwhelming
-// shelterThreshold: HP ratio below which hero seeks shelter even during day
-// fortifyCapDay/Night: max fortification level to invest during day/night
 
 export const HERO_PERSONALITY_CONFIGS = Object.freeze({
   balanced: Object.freeze({
     goalWeights: Object.freeze({
-      [HeroGoal.SLAY_WITCH]: 1.0, [HeroGoal.CONTROL_NODES]: 1.0,
-      [HeroGoal.EXPLORE]: 1.0, [HeroGoal.FORTIFY_POSITION]: 1.0, [HeroGoal.PROTECT_HERO]: 1.0,
+      [HeroGoal.EXPLORE]: 1.0, [HeroGoal.CONTROL_NODES]: 1.0, [HeroGoal.PROTECT_HERO]: 1.0,
     }),
     engageFloor: 'unfavorable',
     shelterThreshold: 0.4,
@@ -52,8 +49,7 @@ export const HERO_PERSONALITY_CONFIGS = Object.freeze({
   }),
   aggressive: Object.freeze({
     goalWeights: Object.freeze({
-      [HeroGoal.SLAY_WITCH]: 2.0, [HeroGoal.CONTROL_NODES]: 0.6,
-      [HeroGoal.EXPLORE]: 0.5, [HeroGoal.FORTIFY_POSITION]: 0.4, [HeroGoal.PROTECT_HERO]: 0.6,
+      [HeroGoal.EXPLORE]: 0.6, [HeroGoal.CONTROL_NODES]: 1.5, [HeroGoal.PROTECT_HERO]: 0.5,
     }),
     engageFloor: 'suicidal',
     shelterThreshold: 0.2,
@@ -62,8 +58,7 @@ export const HERO_PERSONALITY_CONFIGS = Object.freeze({
   }),
   defensive: Object.freeze({
     goalWeights: Object.freeze({
-      [HeroGoal.SLAY_WITCH]: 0.4, [HeroGoal.CONTROL_NODES]: 1.5,
-      [HeroGoal.EXPLORE]: 0.8, [HeroGoal.FORTIFY_POSITION]: 2.0, [HeroGoal.PROTECT_HERO]: 1.5,
+      [HeroGoal.EXPLORE]: 0.8, [HeroGoal.CONTROL_NODES]: 1.2, [HeroGoal.PROTECT_HERO]: 1.5,
     }),
     engageFloor: 'unfavorable',
     shelterThreshold: 0.5,
@@ -72,8 +67,7 @@ export const HERO_PERSONALITY_CONFIGS = Object.freeze({
   }),
   explorer: Object.freeze({
     goalWeights: Object.freeze({
-      [HeroGoal.SLAY_WITCH]: 0.5, [HeroGoal.CONTROL_NODES]: 0.8,
-      [HeroGoal.EXPLORE]: 2.0, [HeroGoal.FORTIFY_POSITION]: 1.0, [HeroGoal.PROTECT_HERO]: 1.0,
+      [HeroGoal.EXPLORE]: 2.0, [HeroGoal.CONTROL_NODES]: 0.8, [HeroGoal.PROTECT_HERO]: 1.0,
     }),
     engageFloor: 'unfavorable',
     shelterThreshold: 0.5,
@@ -83,12 +77,10 @@ export const HERO_PERSONALITY_CONFIGS = Object.freeze({
 });
 
 // ── HeroEnginePlanSimState ───────────────────────────────────────────────────
-// Extends EnginePlanSimState with hero-specific resource ledger (shared inventory).
 
 export class HeroEnginePlanSimState extends EnginePlanSimState {
   constructor(realState, playerId = null) {
     super(realState, 'hero', playerId);
-    // Hero uses shared inventory (wood/metal for fortification), not witch inventory
     this.resourceLedger = JSON.parse(JSON.stringify(this.inventory.shared || {}));
   }
 }
@@ -99,24 +91,20 @@ export function assessHeroBoard(sim) {
   const hero = sim.hero;
   const phase = sim.phase;
 
-  // Phase info
   const isNight = phase === Phase.NIGHT;
   const isDay = phase === Phase.DAY;
   const isDawnOrDusk = phase === Phase.DAWN || phase === Phase.DUSK;
 
-  // Hero stats
   const heroHp = hero?.hp ?? 0;
   const heroMaxHp = hero?.maxHp ?? hero?.hp ?? 1;
   const heroHpRatio = hero ? heroHp / (heroMaxHp || 1) : 1;
 
-  // Survivors
   const survivors = sim.entities.filter(e =>
     e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR
   );
   const survivorCount = survivors.length;
 
-  // Fog-of-war awareness: filter enemies by what hero-side units can see.
-  // Hero sight range varies by phase (day=3, night=1, dawn/dusk=2, +1 for scouts).
+  // Fog-of-war awareness
   const heroSideUnits = sim.entities.filter(e => e.alive && e.owner === 'hero');
   function _heroCanSee(target) {
     return heroSideUnits.some(viewer => {
@@ -127,7 +115,6 @@ export function assessHeroBoard(sim) {
     });
   }
 
-  // Witch info — only visible if a hero-side unit can see her
   const witchEntity = sim.entities.find(e => e.alive && e.type === EntityType.WITCH);
   const witch = witchEntity && _heroCanSee(witchEntity) ? witchEntity : null;
   const witchVisible = !!witch;
@@ -138,7 +125,6 @@ export function assessHeroBoard(sim) {
     witchHpRatio = witch.hp / (witch.maxHp || witch.hp || 1);
   }
 
-  // Enemy units — only those visible to hero-side units
   const witchMinions = sim.entities.filter(e =>
     e.alive && e.owner === 'witch' && e.type !== EntityType.WITCH && _heroCanSee(e)
   );
@@ -150,20 +136,14 @@ export function assessHeroBoard(sim) {
     const heroPresent = obj.hexes
       ? obj.hexes.some(h => sim.entities.some(e => e.alive && e.owner === 'hero' && e.col === h.col && e.row === h.row))
       : sim.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row);
-    // Witch presence on nodes uses ALL entities — if a node is contested, the
-    // hero knows from the node controller. This isn't fog-cheating; it's inference.
     const allWitchUnits = sim.entities.filter(e => e.alive && e.owner === 'witch');
     const witchPresent = obj.hexes
       ? obj.hexes.some(h => allWitchUnits.some(e => e.col === h.col && e.row === h.row))
       : allWitchUnits.some(e => e.col === obj.col && e.row === obj.row);
 
-    // Distance from hero to this node
     let distToHero = Infinity;
-    if (hero) {
-      distToHero = hexDistance(hero.col, hero.row, obj.col, obj.row);
-    }
+    if (hero) distToHero = hexDistance(hero.col, hero.row, obj.col, obj.row);
 
-    // Distance from nearest hero unit (hero + survivors) to this node
     let distToNearestHeroUnit = Infinity;
     const heroUnits = sim.entities.filter(e => e.alive && e.owner === 'hero');
     for (const e of heroUnits) {
@@ -176,28 +156,22 @@ export function assessHeroBoard(sim) {
   const heroHeldCount = nodes.filter(n => n.controller === 'hero').length;
   const witchHeldCount = nodes.filter(n => n.controller === 'witch').length;
 
-  // Scores
   const heroScore = sim.nodeScore?.hero ?? 0;
   const witchScore = sim.nodeScore?.witch ?? 0;
 
-  // Hero inventory — personal items on hero entity
   const heroItems = hero?.items ? { ...hero.items } : {};
   const herbCount = heroItems[ResourceType.HERBS] || 0;
-  // Food is in the shared inventory, not the hero's personal items
   const foodCount = sim.inventory?.shared?.[ResourceType.FOOD] || 0;
 
-  // Unequipped weapons (stored as 'weapon:sword' keys in hero.items)
   const heroWeapons = hero?.items
     ? Object.keys(hero.items).filter(k => k.startsWith('weapon:') && hero.items[k] > 0)
     : [];
 
-  // Shared inventory (wood, metal for fortification)
   const shared = sim.inventory?.shared || {};
   const woodCount = shared[ResourceType.WOOD] || 0;
   const metalCount = shared[ResourceType.METAL] || 0;
   const sharedInventory = { ...shared };
 
-  // Unexplored buildings
   const unexploredBuildings = [];
   for (const [, t] of sim.tiles) {
     if (t.type === TileType.BUILDING) {
@@ -214,14 +188,12 @@ export function assessHeroBoard(sim) {
     }
   }
 
-  // Positional info
   const heroOnNode = hero ? isOnNode(sim, hero) : false;
   const heroInBuilding = hero ? inBuilding(sim, hero) : false;
   const heroTile = hero ? sim.tiles.get(hexKey(hero.col, hero.row)) : null;
   const heroTileExplored = heroTile ? (sim.isExplored ? sim.isExplored(heroTile.col, heroTile.row) : !!heroTile.explored) : true;
   const heroTileFortLevel = heroTile?.fortifyLevel || 0;
 
-  // Nearest visible enemy distance (only enemies hero-side can see)
   let nearestEnemyDist = Infinity;
   if (hero) {
     const allVisibleEnemies = [witch, ...witchMinions].filter(Boolean);
@@ -231,7 +203,6 @@ export function assessHeroBoard(sim) {
     }
   }
 
-  // Scoring-phase timing
   const round = sim.round;
   const roundsToScoring = roundsUntilScoring(round);
 
@@ -259,93 +230,53 @@ export function assessHeroBoard(sim) {
 
 function clamp01(v) { return Math.max(0, Math.min(1, v)); }
 
-// Phase multipliers: [night, day, dawnOrDusk]
-const PHASE_MULT = {
-  [HeroGoal.PROTECT_HERO]:     { night: 1.5, day: 0.8, dawnOrDusk: 1.0 },
-  [HeroGoal.SLAY_WITCH]:       { night: 0.5, day: 1.4, dawnOrDusk: 1.0 },
-  [HeroGoal.CONTROL_NODES]:    { night: 0.8, day: 1.0, dawnOrDusk: 1.8 },
-  [HeroGoal.EXPLORE]:          { night: 0.3, day: 1.5, dawnOrDusk: 1.0 },
-  [HeroGoal.FORTIFY_POSITION]: { night: 2.0, day: 0.5, dawnOrDusk: 1.5 },
-};
-
-function phaseMult(goal, board) {
-  const m = PHASE_MULT[goal];
-  if (board.isNight) return m.night;
-  if (board.isDay) return m.day;
-  return m.dawnOrDusk;
-}
-
 export function scoreHeroGoals(board, goalWeights = null) {
-  // PROTECT_HERO
+  // PROTECT_HERO — high when HP low or enemies near
   let protect = 0;
   if (board.heroHpRatio < 0.3) protect = 1.0;
   else if (board.heroHpRatio < 0.5) protect = 0.6;
   if (board.herbCount > 0 && board.heroHp < board.heroMaxHp) protect = Math.max(protect, 0.3);
   if (board.witchDistance <= 2 && board.heroHpRatio < 0.5) protect = 1.0;
-  protect = clamp01(protect * phaseMult(HeroGoal.PROTECT_HERO, board));
+  // Night makes protection more important
+  if (board.isNight) protect *= 1.5;
+  protect = clamp01(protect);
 
-  // SLAY_WITCH — only worth pursuing when visible, close, AND a real threat.
-  // If the witch is far away, zero — don't waste actions chasing across the map.
-  let slay = 0;
-  if (board.witchVisible) {
-    if (board.witchDistance <= 1) slay = 0.9;
-    else if (board.witchDistance <= 3) slay = 0.6;
-    // Beyond 3 hexes: only pursue if witch is wounded (finishable)
-    else if (board.witchDistance <= 5 && board.witchHpRatio < 0.4) slay = 0.3;
-    // else: too far, slay = 0
-    if (board.witchDistance <= 3 && board.witchHpRatio < 0.4) slay += 0.2;
-  }
-  slay = clamp01(clamp01(slay) * phaseMult(HeroGoal.SLAY_WITCH, board));
-
-  // CONTROL_NODES — dominant priority; hero needs bodies on nodes to win
-  let control = 0.7;
-  const uncovered = board.nodes.filter(n => n.controller !== 'hero' && !n.heroPresent).length;
-  control += uncovered * 0.1;
-  if (board.survivorCount >= 1) control += 0.2;  // have units to deploy
-  if (board.witchHeldCount >= 2) control += 0.3;
-  // Score-differential awareness: hero needs to fight harder when behind
-  const scoreDiff = board.heroScore - board.witchScore;
-  if (scoreDiff < 0) control += 0.15;           // behind: try harder
-  if (scoreDiff <= -2) control += 0.15;          // way behind: desperate
-  if (board.witchScore >= 3) control += 0.3;     // opponent at match point
-  // Phase-timing urgency: ramp up as scoring round approaches
-  if (board.roundsToScoring <= 2) control += 0.25;
-  else if (board.roundsToScoring <= 3) control += 0.1;
-  control = clamp01(clamp01(control) * phaseMult(HeroGoal.CONTROL_NODES, board));
-
-  // EXPLORE — high priority until we have survivors, then scales down
+  // EXPLORE — high when no survivors, scales down as army grows
   let explore = 0;
   const nodeCount = board.nodes.length || 3;
   if (board.survivorCount === 0) {
-    // Critical: no survivors — explore is the top priority
     explore = 1.0;
   } else if (board.survivorCount < nodeCount && board.unexploredBuildings.length > 0) {
-    // Have some survivors but need more — keep exploring
     explore = 0.6;
   } else {
-    // Have enough survivors or no buildings left — minimal explore
     explore = board.unexploredBuildings.length > 0 ? 0.15 : 0;
   }
   if (board.heroInBuilding && !board.heroTileExplored) explore += 0.3;
+  // Night reduces explore (dangerous), day boosts it
+  if (board.isNight) explore *= 0.3;
+  else if (board.isDay) explore *= 1.5;
   explore = clamp01(explore);
 
-  // FORTIFY_POSITION — only valuable when already in a building
-  let fortify = 0;
-  if (board.heroInBuilding) {
-    if (board.isNight || board.isDawnOrDusk) {
-      if (board.heroTileFortLevel < 3) fortify = 0.7;
-    } else if (board.heroTileFortLevel === 0) {
-      fortify = 0.3;
-    }
-  }
-  fortify = clamp01(fortify * phaseMult(HeroGoal.FORTIFY_POSITION, board));
+  // CONTROL_NODES — dominant priority, especially near scoring
+  let control = 0.7;
+  const uncovered = board.nodes.filter(n => n.controller !== 'hero' && !n.heroPresent).length;
+  control += uncovered * 0.1;
+  if (board.survivorCount >= 1) control += 0.2;
+  if (board.witchHeldCount >= 2) control += 0.3;
+  const scoreDiff = board.heroScore - board.witchScore;
+  if (scoreDiff < 0) control += 0.15;
+  if (scoreDiff <= -2) control += 0.15;
+  if (board.witchScore >= 3) control += 0.3;
+  if (board.roundsToScoring <= 2) control += 0.25;
+  else if (board.roundsToScoring <= 3) control += 0.1;
+  // Dawn/dusk boosts node control urgency
+  if (board.isDawnOrDusk) control *= 1.8;
+  control = clamp01(control);
 
   const scores = {
-    [HeroGoal.PROTECT_HERO]:     protect,
-    [HeroGoal.SLAY_WITCH]:       slay,
-    [HeroGoal.CONTROL_NODES]:    control,
-    [HeroGoal.EXPLORE]:          explore,
-    [HeroGoal.FORTIFY_POSITION]: fortify,
+    [HeroGoal.PROTECT_HERO]:  protect,
+    [HeroGoal.EXPLORE]:       explore,
+    [HeroGoal.CONTROL_NODES]: control,
   };
 
   // Apply personality goal weights
@@ -355,18 +286,13 @@ export function scoreHeroGoals(board, goalWeights = null) {
     }
   }
 
-  // Early-game explore focus: when no visible enemies and buildings remain,
-  // heavily prioritize exploration over defensive/passive goals.
-  // There's no reason to guard or fortify when nothing threatens you.
+  // Early-game explore focus: no enemies visible + buildings remain
   if (board.nearestEnemyDist > 4 && board.unexploredBuildings.length > 0) {
     scores[HeroGoal.EXPLORE] = clamp01(scores[HeroGoal.EXPLORE] + 0.4);
-    scores[HeroGoal.FORTIFY_POSITION] = Math.min(scores[HeroGoal.FORTIFY_POSITION], 0.1);
     scores[HeroGoal.PROTECT_HERO] = Math.min(scores[HeroGoal.PROTECT_HERO], 0.1);
   }
-  // During daytime with no enemies visible, suppress defensive goals
-  // (at night, fortification and protection are still valuable for attrition)
+  // Daytime with no enemies: suppress protection
   if (board.nearestEnemyDist === Infinity && board.isDay) {
-    scores[HeroGoal.FORTIFY_POSITION] = 0;
     scores[HeroGoal.PROTECT_HERO] = 0;
   }
 
@@ -374,19 +300,15 @@ export function scoreHeroGoals(board, goalWeights = null) {
 }
 
 // ── Combat estimation (hero-perspective) ─────────────────────────────────────
-// Same dice model as witch estimateCombat but with hero-correct gang-up units.
 
 export function estimateHeroCombat(attacker, defender, board) {
-  // Hero never gets night ATK bonus
   const nightBonus = 0;
 
-  // Attacker allies: hero-side units adjacent to the defender
   const allies = [board.hero, ...board.survivors].filter(e =>
     e && e.id !== attacker.id && hexDistance(e.col, e.row, defender.col, defender.row) <= 1
   );
   const gangUpDice = Math.min(allies.length, 3);
 
-  // Defender allies: witch-side units adjacent to the defender
   const defAllies = [board.witch, ...board.witchMinions].filter(e =>
     e && e.id !== defender.id && hexDistance(e.col, e.row, defender.col, defender.row) <= 1
   );
@@ -406,8 +328,6 @@ export function estimateHeroCombat(attacker, defender, board) {
   return { favorability, classification };
 }
 
-// ── Helper: engage floor check ──────────────────────────────────────────────
-
 function meetsEngageFloor(classification, floor) {
   if (floor === 'suicidal') return classification !== 'suicidal';
   if (floor === 'unfavorable') return classification === 'favorable' || classification === 'overwhelming';
@@ -417,9 +337,11 @@ function meetsEngageFloor(classification, floor) {
 
 // ── Helper: closest uncommitted hero unit to a target ───────────────────────
 
-function _closestUncommittedHero(sim, board, target) {
+function _closestUncommittedHero(sim, board, target, preferSurvivors = false) {
   let best = null, bestDist = Infinity;
-  const candidates = [board.hero, ...board.survivors].filter(e => e && e.alive);
+  const candidates = preferSurvivors
+    ? [...board.survivors, board.hero].filter(e => e && e.alive)
+    : [board.hero, ...board.survivors].filter(e => e && e.alive);
   for (const e of candidates) {
     if (sim.unitCommitments.has(e.id)) continue;
     const d = hexDistance(e.col, e.row, target.col, target.row);
@@ -427,8 +349,6 @@ function _closestUncommittedHero(sim, board, target) {
   }
   return best;
 }
-
-// ── Helper: nearest unexplored building ─────────────────────────────────────
 
 function _nearestUnexploredBuilding(sim, actor) {
   let best = null, bestDist = Infinity;
@@ -442,9 +362,8 @@ function _nearestUnexploredBuilding(sim, actor) {
   return best;
 }
 
-// ── Stage 4: Tactic Generators ──────────────────────────────────────────────
-
 // ── Generator: PROTECT_HERO ─────────────────────────────────────────────────
+// Flee when health low, use herbs, equip weapons.
 
 export function genProtectHero(sim, board, budget, config = null) {
   const actions = [];
@@ -471,9 +390,7 @@ export function genProtectHero(sim, board, budget, config = null) {
     });
   }
 
-  // High-priority: explore current building if unexplored (find survivors/loot).
-  // Always emitted regardless of PROTECT budget — exploring your current tile is too
-  // valuable to skip due to budget splits. Uses 1 AP from whichever goal has slack.
+  // Explore current building if unexplored (always worth doing)
   if (board.heroInBuilding && !sim.isExplored(heroEntity.col, heroEntity.row)) {
     actions.push({
       type: PlanActionType.EXPLORE, entityId: board.hero.id,
@@ -491,7 +408,6 @@ export function genProtectHero(sim, board, budget, config = null) {
       hexDistance(heroEntity.col, heroEntity.row, e.col, e.row) <= 2
     );
     if (nearbyEnemy) {
-      // Try to flee toward nearest building
       const shelter = nearestBuilding(sim, heroEntity);
       const fleeStep = shelter
         ? roadStepToward(sim, heroEntity, shelter)
@@ -509,72 +425,149 @@ export function genProtectHero(sim, board, budget, config = null) {
     }
   }
 
-  return actions;
-}
-
-// ── Generator: SLAY_WITCH ───────────────────────────────────────────────────
-
-export function genSlayWitch(sim, board, budget, config = null) {
-  const actions = [];
-  if (budget <= 0 || !board.hero || !board.witchVisible) return actions;
-  let remaining = budget;
-
-  const engageFloor = config?.engageFloor ?? 'unfavorable';
-  const heroEntity = sim.entities.find(e => e.id === board.hero.id);
-  if (!heroEntity) return actions;
-
-  // All hero-side units
-  const heroUnits = [heroEntity, ...sim.entities.filter(e =>
-    e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR
-  )];
-
-  // All enemy units (witch + minions)
-  const enemies = sim.entities.filter(e => e.alive && e.owner === 'witch');
-
-  // Battle: hero-side units adjacent to enemies
-  for (const unit of heroUnits) {
-    if (remaining <= 0) break;
-    if (sim.unitCommitments.has(unit.id)) continue;
-
-    for (const enemy of enemies) {
-      const dist = hexDistance(unit.col, unit.row, enemy.col, enemy.row);
-      if (dist <= 1) {
-        const est = estimateHeroCombat(unit, enemy, board);
-        if (!meetsEngageFloor(est.classification, engageFloor)) continue;
-
-        actions.push({
-          type: PlanActionType.BATTLE_UNIT, entityId: unit.id,
-          targetId: enemy.id, targetCol: enemy.col, targetRow: enemy.row,
-          _priority: 3, _goal: HeroGoal.SLAY_WITCH,
-        });
-        sim.applyBattle();
-        sim.unitCommitments.set(unit.id, HeroGoal.SLAY_WITCH);
-        remaining--;
-        break;
+  // Night shelter: move toward nearest building if not in one
+  if ((board.isNight || board.isDawnOrDusk) && !board.heroInBuilding && remaining > 0) {
+    if (!sim.unitCommitments.has(board.hero.id)) {
+      const shelter = nearestBuilding(sim, heroEntity);
+      if (shelter) {
+        let stepsLeft = Math.min(remaining, 2);
+        while (stepsLeft > 0) {
+          if (heroEntity.col === shelter.col && heroEntity.row === shelter.row) break;
+          const step = roadStepToward(sim, heroEntity, shelter);
+          if (!step) break;
+          actions.push({
+            type: PlanActionType.MOVE, entityId: board.hero.id,
+            toCol: step.col, toRow: step.row,
+            _priority: 2, _goal: HeroGoal.PROTECT_HERO,
+          });
+          sim.applyMove(board.hero.id, step.col, step.row);
+          remaining--;
+          stepsLeft--;
+        }
+        sim.unitCommitments.set(board.hero.id, HeroGoal.PROTECT_HERO);
       }
     }
   }
 
-  // Chase witch: move hero toward witch (multi-step)
-  if (remaining > 0 && !sim.unitCommitments.has(board.hero.id) && board.witch) {
-    const witchEntity = sim.entities.find(e => e.id === board.witch.id);
-    if (witchEntity) {
+  // Shelter survivors at night
+  if ((board.isNight || board.isDawnOrDusk) && remaining > 0) {
+    for (const s of board.survivors) {
+      if (remaining <= 0) break;
+      if (sim.unitCommitments.has(s.id)) continue;
+      const simS = sim.entities.find(e => e.id === s.id);
+      if (!simS) continue;
+      if (inBuilding(sim, simS)) continue;
+
+      const shelter = nearestBuilding(sim, simS);
+      if (!shelter) continue;
+      const step = roadStepToward(sim, simS, shelter);
+      if (!step) continue;
+
+      actions.push({
+        type: PlanActionType.MOVE, entityId: s.id,
+        toCol: step.col, toRow: step.row,
+        _priority: 2, _goal: HeroGoal.PROTECT_HERO,
+      });
+      sim.applyMove(s.id, step.col, step.row);
+      sim.unitCommitments.set(s.id, HeroGoal.PROTECT_HERO);
+      remaining--;
+    }
+  }
+
+  return actions;
+}
+
+// ── Generator: EXPLORE ──────────────────────────────────────────────────────
+// Find survivors, loot buildings, sound horn. Also fortify buildings.
+
+export function genExplore(sim, board, budget, config = null) {
+  const actions = [];
+  if (budget <= 0 || !board.hero) return actions;
+  let remaining = budget;
+
+  const heroEntity = sim.entities.find(e => e.id === board.hero.id);
+  if (!heroEntity) return actions;
+
+  // Explore current building if unexplored
+  if (!sim.isExplored(heroEntity.col, heroEntity.row) && !sim.unitCommitments.has(board.hero.id)) {
+    const tile = sim.tiles.get(hexKey(heroEntity.col, heroEntity.row));
+    if (tile && tile.type === TileType.BUILDING) {
+      actions.push({
+        type: PlanActionType.EXPLORE, entityId: board.hero.id,
+        _priority: 4, _goal: HeroGoal.EXPLORE,
+      });
+      sim.applyExplore(board.hero.id);
+      remaining--;
+    }
+  }
+
+  // Sound Horn: spend 1 food + 1 AP to recruit hidden survivors
+  const nodeCount = board.nodes.length || 3;
+  if (remaining > 0 && board.foodCount >= 1 && board.unexploredBuildings.length >= 1 &&
+      board.heroHpRatio > 0.2 && board.survivorCount < nodeCount) {
+    actions.push({
+      type: PlanActionType.SOUND_HORN, entityId: board.hero.id,
+      _priority: 3, _goal: HeroGoal.EXPLORE,
+    });
+    sim.applySoundHorn();
+    remaining--;
+  }
+
+  // Move toward nearest unexplored building, then explore on arrival
+  if (remaining > 0 && !sim.unitCommitments.has(board.hero.id)) {
+    const building = _nearestUnexploredBuilding(sim, heroEntity);
+    if (building) {
       let stepsLeft = Math.min(remaining, 3);
       while (stepsLeft > 0) {
-        if (hexDistance(heroEntity.col, heroEntity.row, witchEntity.col, witchEntity.row) <= 1) break;
-        const step = roadStepToward(sim, heroEntity, witchEntity);
+        if (heroEntity.col === building.col && heroEntity.row === building.row) {
+          actions.push({
+            type: PlanActionType.EXPLORE, entityId: board.hero.id,
+            _priority: 4, _goal: HeroGoal.EXPLORE,
+          });
+          sim.applyExplore(board.hero.id);
+          remaining--;
+          break;
+        }
+        const step = roadStepToward(sim, heroEntity, building);
         if (!step) break;
 
         actions.push({
           type: PlanActionType.MOVE, entityId: board.hero.id,
           toCol: step.col, toRow: step.row,
-          _priority: 5, _goal: HeroGoal.SLAY_WITCH,
+          _priority: 4, _goal: HeroGoal.EXPLORE,
         });
         sim.applyMove(board.hero.id, step.col, step.row);
         remaining--;
         stepsLeft--;
       }
-      sim.unitCommitments.set(board.hero.id, HeroGoal.SLAY_WITCH);
+      sim.unitCommitments.set(board.hero.id, HeroGoal.EXPLORE);
+    }
+  }
+
+  // Fortify current building if hero is in one and has resources
+  if (remaining > 0 && !sim.unitCommitments.has(board.hero.id)) {
+    const heroTile = sim.tiles.get(hexKey(heroEntity.col, heroEntity.row));
+    const fortifyCap = (board.isNight || board.isDawnOrDusk)
+      ? (config?.fortifyCapNight ?? 3)
+      : (config?.fortifyCapDay ?? 1);
+
+    if (heroTile && heroTile.type === TileType.BUILDING) {
+      const ledger = sim.resourceLedger;
+      while (remaining > 0 && (heroTile.fortifyLevel || 0) < fortifyCap) {
+        const hasWood = (ledger[ResourceType.WOOD] || 0) > 0;
+        const hasMetal = (ledger[ResourceType.METAL] || 0) > 0;
+        if (!hasWood && !hasMetal) break;
+
+        actions.push({
+          type: PlanActionType.FORTIFY, entityId: board.hero.id,
+          _priority: 5, _goal: HeroGoal.EXPLORE,
+        });
+        if (hasMetal) ledger[ResourceType.METAL]--;
+        else ledger[ResourceType.WOOD]--;
+        heroTile.fortifyLevel = (heroTile.fortifyLevel || 0) + 1;
+        sim.actionsLeft--;
+        remaining--;
+      }
     }
   }
 
@@ -582,16 +575,18 @@ export function genSlayWitch(sim, board, budget, config = null) {
 }
 
 // ── Generator: CONTROL_NODES ────────────────────────────────────────────────
+// Move units to nodes. Aggressively fight anyone on or adjacent to the node.
+// Fortify node buildings when occupying them.
 
-export function genControlNodes(sim, board, budget) {
+export function genControlNodes(sim, board, budget, config = null) {
   const actions = [];
   if (budget <= 0 || !board.hero) return actions;
   let remaining = budget;
 
-  // Ally-claimed nodes to avoid (NvN coordination)
   const allyClaimed = board.allyContext?.claimedNodes;
+  const engageFloor = config?.engageFloor ?? 'unfavorable';
 
-  // Target nodes: uncovered or witch-held, plus hero-held with nearby threats
+  // Witch-threatened node check
   const witchThreatensNode = (n) => sim.entities.some(e =>
     e.alive && e.owner === 'witch' &&
     hexDistance(e.col, e.row, n.obj.col, n.obj.row) <= 2
@@ -604,10 +599,8 @@ export function genControlNodes(sim, board, budget) {
       feasibility: scoreNodeFeasibility(n, 'hero', sim.entities),
       allyClaimed: allyClaimed ? n.obj.hexes?.some(h => allyClaimed.has(hexKey(h.col, h.row))) : false,
     }))
-    // Skip hopeless nodes and ally-claimed nodes
     .filter(n => n.feasibility >= 0.1 && !n.allyClaimed)
     .sort((a, b) => {
-      // Primary: feasibility (higher = better opportunity)
       if (Math.abs(a.feasibility - b.feasibility) > 0.1) return b.feasibility - a.feasibility;
       return a.distToNearestHeroUnit - b.distToNearestHeroUnit;
     });
@@ -615,32 +608,35 @@ export function genControlNodes(sim, board, budget) {
   for (const node of targetNodes) {
     if (remaining <= 0) break;
 
-    // Send 2 units to contested nodes (witch present or near scoring)
+    // Send 2 units to contested nodes
     const contested = node.witchPresent || (board.roundsToScoring <= 2 && node.feasibility >= 0.4);
     const unitsForNode = contested ? 2 : 1;
 
     for (let u = 0; u < unitsForNode; u++) {
       if (remaining <= 0) break;
 
-      const unit = _closestUncommittedHero(sim, board, node.obj);
+      // Prefer survivors for node duty
+      const unit = _closestUncommittedHero(sim, board, node.obj, true);
       if (!unit) break;
 
       const simUnit = sim.entities.find(e => e.id === unit.id);
       if (!simUnit) break;
 
-      // If unit is already on the node, fight ALL adjacent enemies
       const onNode = node.obj.hexes
         ? node.obj.hexes.some(h => h.col === simUnit.col && h.row === simUnit.row)
         : (simUnit.col === node.obj.col && simUnit.row === node.obj.row);
 
       if (onNode) {
-        // Fight all visible adjacent enemies at the node
-        const visibleWitchUnits = [board.witch, ...board.witchMinions].filter(Boolean);
-        const adjacentEnemies = visibleWitchUnits.filter(e =>
+        // AGGRESSIVE: fight ALL enemies on or adjacent to the node
+        const allEnemies = [board.witch, ...board.witchMinions].filter(Boolean);
+        const nearbyEnemies = allEnemies.filter(e =>
           hexDistance(e.col, e.row, simUnit.col, simUnit.row) <= 1
         );
-        for (const enemy of adjacentEnemies) {
+        for (const enemy of nearbyEnemies) {
           if (remaining <= 0) break;
+          const est = estimateHeroCombat(simUnit, enemy, board);
+          if (!meetsEngageFloor(est.classification, engageFloor)) continue;
+
           actions.push({
             type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
             targetId: enemy.id, targetCol: enemy.col, targetRow: enemy.row,
@@ -649,10 +645,37 @@ export function genControlNodes(sim, board, budget) {
           sim.applyBattle();
           remaining--;
         }
-        if (adjacentEnemies.length > 0) {
+        if (nearbyEnemies.length > 0) {
           sim.unitCommitments.set(simUnit.id, HeroGoal.CONTROL_NODES);
-        } else if (node.controller === 'witch' || witchThreatensNode(node)) {
-          // Guard on a contested node — guard strikes enemies arriving during resolution
+        }
+
+        // Fortify node building if on one and have resources
+        if (remaining > 0 && simUnit.type === EntityType.HERO) {
+          const nodeTile = sim.tiles.get(hexKey(simUnit.col, simUnit.row));
+          const fortifyCap = (board.isNight || board.isDawnOrDusk)
+            ? (config?.fortifyCapNight ?? 3)
+            : (config?.fortifyCapDay ?? 1);
+          if (nodeTile && nodeTile.type === TileType.BUILDING) {
+            const ledger = sim.resourceLedger;
+            while (remaining > 0 && (nodeTile.fortifyLevel || 0) < fortifyCap) {
+              const hasWood = (ledger[ResourceType.WOOD] || 0) > 0;
+              const hasMetal = (ledger[ResourceType.METAL] || 0) > 0;
+              if (!hasWood && !hasMetal) break;
+              actions.push({
+                type: PlanActionType.FORTIFY, entityId: simUnit.id,
+                _priority: 4, _goal: HeroGoal.CONTROL_NODES,
+              });
+              if (hasMetal) ledger[ResourceType.METAL]--;
+              else ledger[ResourceType.WOOD]--;
+              nodeTile.fortifyLevel = (nodeTile.fortifyLevel || 0) + 1;
+              sim.actionsLeft--;
+              remaining--;
+            }
+          }
+        }
+
+        // Guard if threats nearby but couldn't attack
+        if (remaining > 0 && !sim.unitCommitments.has(simUnit.id) && witchThreatensNode(node)) {
           actions.push({
             type: PlanActionType.GUARD, entityId: simUnit.id,
             _priority: 4, _goal: HeroGoal.CONTROL_NODES,
@@ -696,174 +719,7 @@ export function genControlNodes(sim, board, budget) {
   return actions;
 }
 
-// ── Generator: EXPLORE ──────────────────────────────────────────────────────
-
-export function genExplore(sim, board, budget) {
-  const actions = [];
-  if (budget <= 0 || !board.hero) return actions;
-  let remaining = budget;
-
-  const heroEntity = sim.entities.find(e => e.id === board.hero.id);
-  if (!heroEntity) return actions;
-
-  // Explore current building if unexplored
-  if (!sim.isExplored(heroEntity.col, heroEntity.row) && !sim.unitCommitments.has(board.hero.id)) {
-    const tile = sim.tiles.get(hexKey(heroEntity.col, heroEntity.row));
-    if (tile && tile.type === TileType.BUILDING) {
-      actions.push({
-        type: PlanActionType.EXPLORE, entityId: board.hero.id,
-        _priority: 4, _goal: HeroGoal.EXPLORE,
-      });
-      sim.applyExplore(board.hero.id);
-      remaining--;
-    }
-  }
-
-  // Sound Horn: spend 1 food + 1 AP to potentially recruit a hidden survivor within 4 hexes.
-  // Use it whenever food is available and we still need survivors.
-  const nodeCount = board.nodes.length || 3;
-  if (remaining > 0 && board.foodCount >= 1 && board.unexploredBuildings.length >= 1 &&
-      board.heroHpRatio > 0.2 && board.survivorCount < nodeCount) {
-    actions.push({
-      type: PlanActionType.SOUND_HORN, entityId: board.hero.id,
-      _priority: 3, _goal: HeroGoal.EXPLORE,
-    });
-    sim.applySoundHorn();
-    remaining--;
-  }
-
-  // Move toward nearest unexplored building, then explore on arrival
-  if (remaining > 0 && !sim.unitCommitments.has(board.hero.id)) {
-    const building = _nearestUnexploredBuilding(sim, heroEntity);
-    if (building) {
-      let stepsLeft = Math.min(remaining, 3);
-      while (stepsLeft > 0) {
-        if (heroEntity.col === building.col && heroEntity.row === building.row) {
-          // Arrived — explore
-          actions.push({
-            type: PlanActionType.EXPLORE, entityId: board.hero.id,
-            _priority: 4, _goal: HeroGoal.EXPLORE,
-          });
-          sim.applyExplore(board.hero.id);
-          remaining--;
-          break;
-        }
-        const step = roadStepToward(sim, heroEntity, building);
-        if (!step) break;
-
-        actions.push({
-          type: PlanActionType.MOVE, entityId: board.hero.id,
-          toCol: step.col, toRow: step.row,
-          _priority: 4, _goal: HeroGoal.EXPLORE,
-        });
-        sim.applyMove(board.hero.id, step.col, step.row);
-        remaining--;
-        stepsLeft--;
-      }
-      sim.unitCommitments.set(board.hero.id, HeroGoal.EXPLORE);
-    }
-  }
-
-  return actions;
-}
-
-// ── Generator: FORTIFY_POSITION ─────────────────────────────────────────────
-
-export function genFortifyPosition(sim, board, budget, config = null) {
-  const actions = [];
-  if (budget <= 0 || !board.hero) return actions;
-  let remaining = budget;
-
-  const heroEntity = sim.entities.find(e => e.id === board.hero.id);
-  if (!heroEntity) return actions;
-
-  const fortifyCap = board.isNight || board.isDawnOrDusk
-    ? (config?.fortifyCapNight ?? 3)
-    : (config?.fortifyCapDay ?? 1);
-
-  // Seek shelter: if night and hero not in a building, move to nearest building
-  if ((board.isNight || board.isDawnOrDusk) && !board.heroInBuilding && remaining > 0) {
-    if (!sim.unitCommitments.has(board.hero.id)) {
-      const shelter = nearestBuilding(sim, heroEntity);
-      if (shelter) {
-        let stepsLeft = Math.min(remaining, 3);
-        while (stepsLeft > 0) {
-          if (heroEntity.col === shelter.col && heroEntity.row === shelter.row) break;
-          const step = roadStepToward(sim, heroEntity, shelter);
-          if (!step) break;
-
-          actions.push({
-            type: PlanActionType.MOVE, entityId: board.hero.id,
-            toCol: step.col, toRow: step.row,
-            _priority: 2, _goal: HeroGoal.FORTIFY_POSITION,
-          });
-          sim.applyMove(board.hero.id, step.col, step.row);
-          remaining--;
-          stepsLeft--;
-        }
-        sim.unitCommitments.set(board.hero.id, HeroGoal.FORTIFY_POSITION);
-      }
-    }
-  }
-
-  // Fortify: if in building and below cap and has resources
-  const heroTile = sim.tiles.get(hexKey(heroEntity.col, heroEntity.row));
-  if (heroTile && heroTile.type === TileType.BUILDING && remaining > 0) {
-    const fortLevel = heroTile.fortifyLevel || 0;
-    const ledger = sim.resourceLedger;
-    while (remaining > 0 && (heroTile.fortifyLevel || 0) < fortifyCap) {
-      const hasWood = (ledger[ResourceType.WOOD] || 0) > 0;
-      const hasMetal = (ledger[ResourceType.METAL] || 0) > 0;
-      if (!hasWood && !hasMetal) break;
-
-      actions.push({
-        type: PlanActionType.FORTIFY, entityId: board.hero.id,
-        _priority: 2, _goal: HeroGoal.FORTIFY_POSITION,
-      });
-      // Deduct from resource ledger (prefer metal for stronger fortification)
-      if (hasMetal) ledger[ResourceType.METAL]--;
-      else ledger[ResourceType.WOOD]--;
-      heroTile.fortifyLevel = (heroTile.fortifyLevel || 0) + 1;
-      sim.actionsLeft--;
-      remaining--;
-    }
-  }
-
-  // Shelter survivors: move unsheltered survivors to nearest building at night
-  if ((board.isNight || board.isDawnOrDusk) && remaining > 0) {
-    for (const s of board.survivors) {
-      if (remaining <= 0) break;
-      if (sim.unitCommitments.has(s.id)) continue;
-
-      const simS = sim.entities.find(e => e.id === s.id);
-      if (!simS) continue;
-      if (inBuilding(sim, simS)) continue;
-
-      const shelter = nearestBuilding(sim, simS);
-      if (!shelter) continue;
-
-      const step = roadStepToward(sim, simS, shelter);
-      if (!step) continue;
-
-      actions.push({
-        type: PlanActionType.MOVE, entityId: s.id,
-        toCol: step.col, toRow: step.row,
-        _priority: 2, _goal: HeroGoal.FORTIFY_POSITION,
-      });
-      sim.applyMove(s.id, step.col, step.row);
-      sim.unitCommitments.set(s.id, HeroGoal.FORTIFY_POSITION);
-      remaining--;
-    }
-  }
-
-  return actions;
-}
-
-// ── Hero gap-fill ───────────────────────────────────────────────────────────
-
 // ── NvN Ally Coordination ───────────────────────────────────────────────────
-// After a plan is generated, mark the node hexes targeted by this player's
-// MOVE actions so the next allied AI avoids the same targets.
 
 function _updateHeroAllyClaimedNodes(plan, board, allyContext) {
   for (const action of plan) {
@@ -875,8 +731,6 @@ function _updateHeroAllyClaimedNodes(plan, board, allyContext) {
     }
   }
 }
-
-// ── Helper: reverse-lookup personality name from config object ──────────────
 
 function _heroPersonalityName(config) {
   for (const [name, cfg] of Object.entries(HERO_PERSONALITY_CONFIGS)) {
@@ -891,17 +745,14 @@ export class HeroAIEngine {
   constructor(state, onStateChange, thinkDelay = 600, playerId = null, config = null) {
     this.state = state;
     this.onStateChange = onStateChange;
-    this.onBattleResult = null; // unused in planning mode, but expected by consumers
+    this.onBattleResult = null;
     this.thinkDelay = thinkDelay;
     this.playerId = playerId;
     this.config = config ?? HERO_PERSONALITY_CONFIGS.balanced;
 
-    // Cross-turn anti-oscillation memory: Map<entityId, {col, row}>
     this._prevPositions = new Map();
 
-    /** When true, generatePlan() stores intermediate data on lastDebugData. */
     this.debugCapture = false;
-    /** @type {object|null} Debug snapshot from last generatePlan() call. */
     this.lastDebugData = null;
   }
 
@@ -909,42 +760,30 @@ export class HeroAIEngine {
     const sim = new HeroEnginePlanSimState(this.state, this.playerId);
     const board = assessHeroBoard(sim);
 
-    // Attach ally context so generators can avoid duplicate targeting in NvN
     board.allyContext = allyContext;
 
-    // Leaderless mode: no hero entity (shouldn't normally happen, but be safe)
     if (!board.hero) {
       this.lastDebugData = null;
       return [];
     }
 
     const cfg = this.config;
-
-    // Stage 2: Score goals
     const scores = scoreHeroGoals(board, cfg.goalWeights);
-
-    // Stage 3: Allocate budget across goals
     const budget = allocateBudget(scores, board.totalBudget);
 
-    // Stage 4: Run generators in priority order
-    // Each generator mutates sim state (positions, commitments, ledger)
-    // so later generators see the projected world.
-    const protectActions  = genProtectHero(sim, board, budget[HeroGoal.PROTECT_HERO], cfg);
-    const fortifyActions  = genFortifyPosition(sim, board, budget[HeroGoal.FORTIFY_POSITION], cfg);
-    const slayActions     = genSlayWitch(sim, board, budget[HeroGoal.SLAY_WITCH], cfg);
-    const controlActions  = genControlNodes(sim, board, budget[HeroGoal.CONTROL_NODES]);
-    const exploreActions  = genExplore(sim, board, budget[HeroGoal.EXPLORE]);
-
-    // Collect all generated actions
-    const allActions = [
-      ...protectActions,
-      ...fortifyActions,
-      ...slayActions,
-      ...controlActions,
-      ...exploreActions,
+    // Stage 4: Run generators ordered by budget (highest first)
+    const generators = [
+      { goal: HeroGoal.EXPLORE,       fn: () => genExplore(sim, board, budget[HeroGoal.EXPLORE], cfg) },
+      { goal: HeroGoal.CONTROL_NODES, fn: () => genControlNodes(sim, board, budget[HeroGoal.CONTROL_NODES], cfg) },
+      { goal: HeroGoal.PROTECT_HERO,  fn: () => genProtectHero(sim, board, budget[HeroGoal.PROTECT_HERO], cfg) },
     ];
+    generators.sort((a, b) => budget[b.goal] - budget[a.goal]);
 
-    // Capture debug data before assemblePlan strips metadata
+    const allActions = [];
+    for (const gen of generators) {
+      allActions.push(...gen.fn());
+    }
+
     if (this.debugCapture) {
       this.lastDebugData = {
         faction: 'hero',
@@ -952,13 +791,12 @@ export class HeroAIEngine {
         board,
         scores: { ...scores },
         budget: { ...budget },
-        actions: allActions.map(a => ({ ...a })),  // snapshot with _goal/_priority
+        actions: allActions.map(a => ({ ...a })),
         config: this.config,
         unitCommitments: new Map(sim.unitCommitments),
       };
     }
 
-    // Stage 5: Assemble final plan with hero-specific gap-fill
     const heroEntity = sim.entities.find(e => e.id === board.hero.id);
     const plan = assemblePlan(allActions, sim, board, this._prevPositions,
       (plan, sim, board, remaining, prevPositions) => {
@@ -966,12 +804,10 @@ export class HeroAIEngine {
       }
     );
 
-    // Update ally context with our claimed node targets so subsequent allies pick differently
     if (allyContext) {
       _updateHeroAllyClaimedNodes(plan, board, allyContext);
     }
 
-    // Update cross-turn memory
     for (const e of sim.entities) {
       if (e.alive && e.owner === 'hero') {
         this._prevPositions.set(e.id, { col: e.col, row: e.row });
@@ -984,14 +820,12 @@ export class HeroAIEngine {
 
 // ── Factory helper ──────────────────────────────────────────────────────────
 
-/** Create a HeroAIEngine with a named personality config. */
 export function createHeroAI(personality, state, onStateChange, thinkDelay = 600, playerId = null) {
   const cfg = HERO_PERSONALITY_CONFIGS[personality] ?? HERO_PERSONALITY_CONFIGS.balanced;
   return new HeroAIEngine(state, onStateChange, thinkDelay, playerId, cfg);
 }
 
 // ── Register all hero personalities ─────────────────────────────────────────
-// Each entry is a constructor-like function matching the (state, onChange, delay, playerId) interface.
 
 for (const name of Object.keys(HERO_PERSONALITY_CONFIGS)) {
   HERO_PERSONALITIES[name] = class extends HeroAIEngine {
@@ -1009,7 +843,7 @@ export function fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositi
   const nodeCount = board.nodes.length || 3;
   const needsSurvivors = board.survivorCount < nodeCount;
 
-  // 1. Guard if visible enemies are nearby (within 2 hexes)
+  // 1. Guard if visible enemies nearby
   if (left > 0 && heroEntity) {
     const visibleEnemies = [board.witch, ...board.witchMinions].filter(Boolean);
     const nearbyEnemy = visibleEnemies.some(e =>
@@ -1029,7 +863,7 @@ export function fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositi
     left--;
   }
 
-  // 2b. Sound Horn when food available and we need survivors
+  // 2b. Sound Horn
   if (left > 0 && heroEntity && board.foodCount >= 1 &&
       board.unexploredBuildings.length >= 1 && board.survivorCount < nodeCount) {
     plan.push({ type: PlanActionType.SOUND_HORN, entityId: heroEntity.id });
@@ -1037,7 +871,7 @@ export function fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositi
     left--;
   }
 
-  // 3. Early game: move hero toward buildings to find survivors
+  // 3. Move hero toward buildings to find survivors
   if (left > 0 && needsSurvivors && heroEntity && !sim.unitCommitments.has(heroEntity.id)) {
     const building = _nearestUnexploredBuilding(sim, heroEntity);
     if (building) {
@@ -1065,8 +899,7 @@ export function fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositi
 
   // 4. Move uncommitted survivors toward nearest uncovered node
   if (left > 0) {
-    const uncoveredNodes = board.nodes
-      .filter(n => n.controller !== 'hero' || !n.heroPresent);
+    const uncoveredNodes = board.nodes.filter(n => n.controller !== 'hero' || !n.heroPresent);
     for (const s of board.survivors) {
       if (left <= 0) break;
       if (sim.unitCommitments.has(s.id)) continue;
@@ -1120,8 +953,7 @@ export function fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositi
     }
   }
 
-  // 6. Last resort: move to an unexplored hex and explore it
-  //    Prefer buildings (where hidden survivors live) over random terrain.
+  // 6. Last resort: explore unexplored hexes (prefer buildings)
   while (left > 0 && heroEntity) {
     if (!sim.isExplored(heroEntity.col, heroEntity.row)) {
       plan.push({ type: PlanActionType.EXPLORE, entityId: heroEntity.id });
@@ -1129,7 +961,6 @@ export function fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositi
       left--;
       continue;
     }
-    // Prefer unexplored buildings, fall back to any unexplored hex
     let bestHex = null, bestDist = Infinity;
     let bestAnyHex = null, bestAnyDist = Infinity;
     for (const [, t] of sim.tiles) {
