@@ -913,15 +913,59 @@ function _fillGaps(plan, sim, board, witchEntity, remaining, prevPositions) {
     }
   }
 
-  // Guard with the witch only if visible enemies are nearby
-  if (left > 0) {
-    const nearbyEnemy = board.visibleHeroes.some(h =>
-      hexDistance(witchEntity.col, witchEntity.row, h.col, h.row) <= 3
-    );
-    if (nearbyEnemy) {
-      plan.push({ type: PlanActionType.GUARD, entityId: witchEntity.id });
-      left--;
+  // Move witch toward nearest node she's not on (if uncommitted and AP left)
+  if (left > 0 && !sim.unitCommitments.has(witchEntity.id)) {
+    const targetNodes = board.nodes
+      .filter(n => !n.witchPresent)
+      .sort((a, b) => {
+        const da = hexDistance(witchEntity.col, witchEntity.row, a.obj.col, a.obj.row);
+        const db = hexDistance(witchEntity.col, witchEntity.row, b.obj.col, b.obj.row);
+        return da - db;
+      });
+    if (targetNodes.length > 0) {
+      while (left > 0) {
+        const step = roadStepToward(sim, witchEntity, targetNodes[0].obj);
+        if (!step) break;
+        const prev = prevPositions.get(witchEntity.id);
+        if (prev && prev.col === step.col && prev.row === step.row) break;
+        plan.push({
+          type: PlanActionType.MOVE, entityId: witchEntity.id,
+          toCol: step.col, toRow: step.row,
+        });
+        sim.applyMove(witchEntity.id, step.col, step.row);
+        left--;
+      }
     }
+  }
+
+  // Last resort: move to an unexplored hex and explore it
+  while (left > 0) {
+    // If witch is on an unexplored hex, explore it
+    if (!sim.isExplored(witchEntity.col, witchEntity.row)) {
+      plan.push({ type: PlanActionType.EXPLORE, entityId: witchEntity.id });
+      sim.applyExplore(witchEntity.id);
+      left--;
+      continue;
+    }
+    // Find nearest unexplored hex and move toward it
+    let bestHex = null, bestDist = Infinity;
+    for (const [, t] of sim.tiles) {
+      if (sim.isExplored(t.col, t.row)) continue;
+      if (t.terrain === 'river') continue;
+      const d = hexDistance(witchEntity.col, witchEntity.row, t.col, t.row);
+      if (d < bestDist) { bestDist = d; bestHex = t; }
+    }
+    if (!bestHex) break; // everything explored, nothing to do
+    const step = roadStepToward(sim, witchEntity, bestHex);
+    if (!step) break;
+    const prev = prevPositions.get(witchEntity.id);
+    if (prev && prev.col === step.col && prev.row === step.row) break;
+    plan.push({
+      type: PlanActionType.MOVE, entityId: witchEntity.id,
+      toCol: step.col, toRow: step.row,
+    });
+    sim.applyMove(witchEntity.id, step.col, step.row);
+    left--;
   }
 }
 

@@ -266,22 +266,28 @@ describe('scoreHeroGoals', () => {
     }
   });
 
-  test('night boosts FORTIFY_POSITION', () => {
-    const dayBoard = assessHeroBoard(makeHeroSim({ phase: Phase.DAY }));
-    const nightBoard = assessHeroBoard(makeHeroSim({ phase: Phase.NIGHT }));
+  test('night boosts FORTIFY_POSITION when in building', () => {
+    // Hero must be in a building for FORTIFY to be non-zero
+    const heroInBuilding = makeEntity({
+      id: 'hero1', type: EntityType.HERO, owner: 'hero',
+      col: 1, row: 1, hp: 10, maxHp: 10,
+      items: { [ResourceType.HERBS]: 1, [ResourceType.FOOD]: 2 },
+    });
+    const witch = makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 5, row: 4, hp: 8, maxHp: 8 });
+    const dayBoard = assessHeroBoard(makeHeroSim({ phase: Phase.DAY, entities: [heroInBuilding, witch] }));
+    const nightBoard = assessHeroBoard(makeHeroSim({ phase: Phase.NIGHT, entities: [heroInBuilding, witch] }));
     const dayScores = scoreHeroGoals(dayBoard);
     const nightScores = scoreHeroGoals(nightBoard);
     assert.ok(nightScores[HeroGoal.FORTIFY_POSITION] > dayScores[HeroGoal.FORTIFY_POSITION],
       `night FORTIFY (${nightScores[HeroGoal.FORTIFY_POSITION]}) should exceed day (${dayScores[HeroGoal.FORTIFY_POSITION]})`);
   });
 
-  test('day boosts EXPLORE', () => {
-    const dayBoard = assessHeroBoard(makeHeroSim({ phase: Phase.DAY }));
-    const nightBoard = assessHeroBoard(makeHeroSim({ phase: Phase.NIGHT }));
-    const dayScores = scoreHeroGoals(dayBoard);
-    const nightScores = scoreHeroGoals(nightBoard);
-    assert.ok(dayScores[HeroGoal.EXPLORE] > nightScores[HeroGoal.EXPLORE],
-      `day EXPLORE (${dayScores[HeroGoal.EXPLORE]}) should exceed night (${nightScores[HeroGoal.EXPLORE]})`);
+  test('EXPLORE is high when no survivors', () => {
+    const board = assessHeroBoard(makeHeroSim({ phase: Phase.DAY }));
+    const scores = scoreHeroGoals(board);
+    // Hero starts with 0 survivors → explore should be very high to find them
+    assert.ok(scores[HeroGoal.EXPLORE] >= 0.8,
+      `EXPLORE (${scores[HeroGoal.EXPLORE]}) should be high when hero has no survivors`);
   });
 
   test('dawn/dusk boosts CONTROL_NODES', () => {

@@ -883,17 +883,27 @@ describe('assemblePlan', () => {
     assert.ok(plan.some(a => a.type === PlanActionType.SUMMON), 'SUMMON should be included');
   });
 
-  test('gap-fill adds guard when visible enemy nearby', () => {
-    // Place hero within witch sight range (2 hexes) so guard triggers
+  test('gap-fill moves and explores when budget remains', () => {
     const witch = makeEntity({ id: 'witch1', col: 0, row: 0 });
-    const hero = makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 1, row: 0, hp: 8, maxHp: 8 });
-    const sim = makeSim({ entities: [witch, hero] });
+    // Make some tiles unexplored so gap-fill has something to target
+    const tiles = new Map();
+    for (let c = 0; c < 5; c++) {
+      for (let r = 0; r < 5; r++) {
+        tiles.set(hexKey(c, r), {
+          col: c, row: r, type: TileType.GRASS, explored: c <= 1 && r === 0,
+          building: null, resource: null, fortifyLevel: 0,
+        });
+      }
+    }
+    const sim = makeSim({ entities: [witch], tiles });
     const board = assessBoard(sim);
-    // Empty actions = all budget is remaining → gap-fill should add guard
+    // Empty actions = all budget is remaining → gap-fill should move/explore
     const plan = assemblePlan([], sim, board, new Map());
     assert.ok(plan.length > 0, 'gap-fill should add fallback actions');
-    const guardAction = plan.find(a => a.type === PlanActionType.GUARD);
-    assert.ok(guardAction, 'should include GUARD when enemy is nearby');
+    const moveOrExplore = plan.filter(a =>
+      a.type === PlanActionType.MOVE || a.type === PlanActionType.EXPLORE
+    );
+    assert.ok(moveOrExplore.length > 0, 'should include MOVE or EXPLORE as fallback');
   });
 
   test('truncates to MAX_PLAN_LENGTH', () => {
