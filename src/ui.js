@@ -1508,12 +1508,15 @@ export class UIController {
     const canvasRect = this.canvas.getBoundingClientRect();
     const canvasScale = canvasRect.width / this.canvas.width;
     const hexScreenPx = this.renderer.hexSize * canvasScale * this.renderer.zoomLevel;
-    const ITEM_GAP  = 40 * (Math.PI / 180); // uniform angular gap between all items
+    // Dynamic gap: keep items within a ~160° arc so the radius stays tight.
+    // With many items, narrow the gap rather than blowing out the radius.
+    const totalItems = arcItems.length;
+    const MAX_SPAN  = 160 * (Math.PI / 180);
+    const PREF_GAP  = 40  * (Math.PI / 180);
+    const ITEM_GAP  = totalItems <= 1 ? 0 : Math.min(PREF_GAP, MAX_SPAN / (totalItems - 1));
     const ARC_RADIUS = _baseArcRadius(hexScreenPx);
     this._arcRadius = ARC_RADIUS;
 
-    // Uniform spacing — no group gaps except summon items stay clustered
-    const totalItems = arcItems.length;
     const totalAngle = Math.max(0, totalItems - 1) * ITEM_GAP;
     const startAngle = centerAngle - totalAngle / 2;
 
