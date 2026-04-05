@@ -1534,9 +1534,12 @@ export class UIController {
     const totalAngle = Math.max(0, totalItems - 1) * ITEM_GAP;
     const startAngle = centerAngle - totalAngle / 2;
 
-    // Assign angles uniformly
+    // Assign angles uniformly — keep top-to-bottom order consistent on both sides
     for (let i = 0; i < arcItems.length; i++) {
-      arcItems[i]._angle = startAngle + i * ITEM_GAP;
+      // When opening left (π), subtract so first item stays at top
+      arcItems[i]._angle = openRight
+        ? startAngle + i * ITEM_GAP
+        : centerAngle + totalAngle / 2 - i * ITEM_GAP;
       arcItems[i]._idx = i;
     }
 

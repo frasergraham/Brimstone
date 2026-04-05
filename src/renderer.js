@@ -1940,8 +1940,8 @@ export class Renderer {
       ctx.beginPath();
       ctx.moveTo(cx, cy);
       ctx.lineTo(tx, ty);
-      ctx.strokeStyle = item.color ? item.color + '35' : 'rgba(180,170,210,0.2)';
-      ctx.lineWidth   = 0.6;
+      ctx.strokeStyle = item.color ? item.color + '50' : 'rgba(180,170,210,0.3)';
+      ctx.lineWidth   = 1.5;
       ctx.stroke();
 
       // Small dot at the end
