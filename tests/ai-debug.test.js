@@ -16,7 +16,7 @@ import { HeroGoal, HeroAIEngine, HERO_PERSONALITY_CONFIGS } from '../src/hero-ai
 import {
   setAIDebugActive, isAIDebugActive,
   setAIDebugData, getAIDebugData, clearAIDebugData,
-  buildHexGoalMap, buildMoveArrows, buildNodeFeasibilityMap,
+  buildHexGoalMap, buildMoveArrows, buildIntentMarkers, buildNodeFeasibilityMap,
   GOAL_COLORS,
 } from '../src/ai-debug.js';
 
@@ -181,8 +181,8 @@ describe('buildMoveArrows', () => {
       { id: 'w1', col: 0, row: 0, alive: true },
     ];
     const actions = [
-      { type: 'MOVE', entityId: 'w1', toCol: 1, toRow: 0, _goal: 'KILL_HERO', _priority: 5 },
-      { type: 'MOVE', entityId: 'w1', toCol: 2, toRow: 0, _goal: 'KILL_HERO', _priority: 5 },
+      { type: 'move', entityId: 'w1', toCol: 1, toRow: 0, _goal: 'KILL_HERO', _priority: 5 },
+      { type: 'move', entityId: 'w1', toCol: 2, toRow: 0, _goal: 'KILL_HERO', _priority: 5 },
     ];
     const arrows = buildMoveArrows(actions, entities);
     assert.equal(arrows.length, 2);
@@ -201,8 +201,8 @@ describe('buildMoveArrows', () => {
   test('assigns sequential step numbers', () => {
     const entities = [{ id: 'w1', col: 0, row: 0, alive: true }];
     const actions = [
-      { type: 'MOVE', entityId: 'w1', toCol: 1, toRow: 0 },
-      { type: 'MOVE', entityId: 'w1', toCol: 2, toRow: 0 },
+      { type: 'move', entityId: 'w1', toCol: 1, toRow: 0 },
+      { type: 'move', entityId: 'w1', toCol: 2, toRow: 0 },
     ];
     const arrows = buildMoveArrows(actions, entities);
     assert.equal(arrows[0].stepNumber, 1);
@@ -213,7 +213,7 @@ describe('buildMoveArrows', () => {
     const entities = [{ id: 'w1', col: 0, row: 0, alive: true }];
     const actions = [
       { type: 'EXPLORE', entityId: 'w1', col: 0, row: 0 },
-      { type: 'MOVE', entityId: 'w1', toCol: 1, toRow: 0 },
+      { type: 'move', entityId: 'w1', toCol: 1, toRow: 0 },
     ];
     const arrows = buildMoveArrows(actions, entities);
     assert.equal(arrows.length, 1);
@@ -222,10 +222,72 @@ describe('buildMoveArrows', () => {
   test('preserves goal from action metadata', () => {
     const entities = [{ id: 'w1', col: 0, row: 0, alive: true }];
     const actions = [
-      { type: 'MOVE', entityId: 'w1', toCol: 1, toRow: 0, _goal: 'CONTROL_NODES' },
+      { type: 'move', entityId: 'w1', toCol: 1, toRow: 0, _goal: 'CONTROL_NODES' },
     ];
     const arrows = buildMoveArrows(actions, entities);
     assert.equal(arrows[0].goal, 'CONTROL_NODES');
+  });
+});
+
+// ── buildIntentMarkers ──────────────────────────────────────────────────────
+
+describe('buildIntentMarkers', () => {
+  test('creates node intent marker for CONTROL_NODES unit', () => {
+    const actions = [
+      { type: 'move', entityId: 'w1', toCol: 2, toRow: 2, _goal: 'CONTROL_NODES' },
+    ];
+    const board = {
+      nodes: [{ obj: { col: 4, row: 4 } }],
+      visibleHeroes: [],
+      unexploredBuildings: [],
+    };
+    const commitments = new Map([['w1', 'CONTROL_NODES']]);
+    const markers = buildIntentMarkers(actions, board, commitments, 'witch');
+    assert.equal(markers.length, 1);
+    assert.equal(markers[0].col, 4);
+    assert.equal(markers[0].row, 4);
+    assert.equal(markers[0].label, 'Node');
+  });
+
+  test('creates enemy intent marker for KILL_HERO unit', () => {
+    const actions = [
+      { type: 'move', entityId: 'w1', toCol: 3, toRow: 3, _goal: 'KILL_HERO' },
+    ];
+    const board = {
+      nodes: [],
+      visibleHeroes: [{ col: 5, row: 5, alive: true }],
+      unexploredBuildings: [],
+    };
+    const commitments = new Map([['w1', 'KILL_HERO']]);
+    const markers = buildIntentMarkers(actions, board, commitments, 'witch');
+    assert.equal(markers.length, 1);
+    assert.equal(markers[0].col, 5);
+    assert.equal(markers[0].row, 5);
+    assert.equal(markers[0].label, 'Hero');
+  });
+
+  test('skips units with no planned moves', () => {
+    const actions = [
+      { type: 'guard', entityId: 'w1', _goal: 'CONTROL_NODES' },
+    ];
+    const board = { nodes: [{ obj: { col: 3, row: 3 } }], visibleHeroes: [], unexploredBuildings: [] };
+    const commitments = new Map([['w1', 'CONTROL_NODES']]);
+    const markers = buildIntentMarkers(actions, board, commitments, 'witch');
+    assert.equal(markers.length, 0);
+  });
+
+  test('skips when unit has already reached target', () => {
+    const actions = [
+      { type: 'move', entityId: 'w1', toCol: 3, toRow: 3, _goal: 'CONTROL_NODES' },
+    ];
+    const board = {
+      nodes: [{ obj: { col: 3, row: 3 } }],
+      visibleHeroes: [],
+      unexploredBuildings: [],
+    };
+    const commitments = new Map([['w1', 'CONTROL_NODES']]);
+    const markers = buildIntentMarkers(actions, board, commitments, 'witch');
+    assert.equal(markers.length, 0); // already at the node
   });
 });
 

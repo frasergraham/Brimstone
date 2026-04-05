@@ -5,7 +5,7 @@
 // node feasibility, combat estimates) and renders overlays on the hex map
 // plus a left-sidebar info panel.
 
-import { hexKey } from './hex.js';
+import { hexKey, hexDistance } from './hex.js';
 import { describePlanAction } from './ui-render.js';
 
 // ── Goal color map ──────────────────────────────────────────────────────────
@@ -86,7 +86,7 @@ export function buildMoveArrows(actions, entities) {
   const arrows = [];
   let stepNum = 0;
   for (const a of actions) {
-    if (a.type !== 'MOVE' || a.toCol === undefined) continue;
+    if (a.type !== 'move' || a.toCol === undefined) continue;
     const from = pos.get(a.entityId);
     if (!from) continue;
     stepNum++;
@@ -103,7 +103,75 @@ export function buildMoveArrows(actions, entities) {
   return arrows;
 }
 
-// ── Node feasibility map ────────────────────────────────────────────────────
+// ── Intent markers ──────────────────────────────────────────────────────────
+// Derive the ultimate destination each unit is trying to reach, based on the
+// goal commitment and board state. Shows WHERE the AI wants to go, not just
+// how far it planned this turn.
+
+export function buildIntentMarkers(actions, board, unitCommitments, faction) {
+  if (!board) return [];
+  const markers = [];
+  const seen = new Set();
+
+  const enemies = faction === 'witch'
+    ? (board.visibleHeroes || [])
+    : [board.witch, ...(board.witchMinions || board.minions || [])].filter(e => e?.alive);
+  const nodes = board.nodes || [];
+  const unexplored = board.unexploredBuildings || [];
+
+  if (!unitCommitments) return markers;
+
+  for (const [entityId, goal] of unitCommitments) {
+    if (seen.has(entityId)) continue;
+    seen.add(entityId);
+
+    // Find the unit's projected end position (after all its planned moves)
+    let unitPos = null;
+    for (const a of actions) {
+      if (a.entityId === entityId && a.type === 'move' && a.toCol !== undefined) {
+        unitPos = { col: a.toCol, row: a.toRow };
+      }
+    }
+    if (!unitPos) continue;
+
+    let target = null;
+    let label = '';
+
+    if (goal === 'CONTROL_NODES') {
+      let bestDist = Infinity;
+      for (const n of nodes) {
+        const d = hexDistance(unitPos.col, unitPos.row, n.obj.col, n.obj.row);
+        if (d < bestDist) { bestDist = d; target = { col: n.obj.col, row: n.obj.row }; }
+      }
+      if (target && bestDist > 0) label = 'Node';
+      else target = null;
+    } else if (goal === 'KILL_HERO' || goal === 'SLAY_WITCH') {
+      let bestDist = Infinity;
+      for (const e of enemies) {
+        if (!e?.alive) continue;
+        const d = hexDistance(unitPos.col, unitPos.row, e.col, e.row);
+        if (d < bestDist) { bestDist = d; target = { col: e.col, row: e.row }; }
+      }
+      if (target && bestDist > 0) label = goal === 'KILL_HERO' ? 'Hero' : 'Witch';
+      else target = null;
+    } else if (goal === 'GATHER_RESOURCES' || goal === 'EXPLORE') {
+      let bestDist = Infinity;
+      for (const b of unexplored) {
+        const d = hexDistance(unitPos.col, unitPos.row, b.col, b.row);
+        if (d < bestDist) { bestDist = d; target = { col: b.col, row: b.row }; }
+      }
+      if (target && bestDist > 0) label = 'Explore';
+      else target = null;
+    }
+
+    if (target) {
+      markers.push({ entityId, col: target.col, row: target.row, goal, label });
+    }
+  }
+  return markers;
+}
+
+// ── Node feasibility map ──────────────────────────────────��─────────────────
 
 export function buildNodeFeasibilityMap(board) {
   if (!board?.nodes) return [];

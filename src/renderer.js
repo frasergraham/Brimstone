@@ -2266,6 +2266,38 @@ export class Renderer {
       });
     }
 
+    // 1b. Intent markers — pulsing rings at the AI's ultimate destination
+    if (overlay.intentMarkers?.length) {
+      for (const marker of overlay.intentMarkers) {
+        const { x, y } = this._toCanvas(marker.col, marker.row);
+        const color = overlay.goalColors?.[marker.goal] || '#888';
+        const r = hs * 0.6;
+
+        // Outer dashed ring
+        ctx.strokeStyle = _hexToRgba(color, 0.6);
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Inner fill
+        ctx.fillStyle = _hexToRgba(color, 0.1);
+        ctx.fill();
+
+        // Label below
+        if (marker.label) {
+          const fontSize = Math.max(8, Math.floor(hs * 0.26));
+          ctx.font = `bold ${fontSize}px sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'top';
+          ctx.fillStyle = _hexToRgba(color, 0.85);
+          ctx.fillText(marker.label, x, y + r + 2);
+        }
+      }
+    }
+
     // 2. Node feasibility badges — score at each power node
     if (overlay.nodes) {
       const fontSize = Math.max(9, Math.floor(hs * 0.32));
