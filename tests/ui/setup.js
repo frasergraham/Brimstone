@@ -142,6 +142,7 @@ export function makeFakeRenderer() {
     frameHexes()      {},
     _clampPan()       {},
     getPortraitDataURL() { return null; },
+    getTileDataURL() { return null; },
     hexToCanvasPos(col, row) { return { x: col * 50, y: row * 50 }; },
     canvasToHex()     { return { col: 0, row: 0 }; },
   };

@@ -1808,9 +1808,13 @@ export class UIController {
       };
       const icon = tile.building ? (BUILDING_ICON[tile.building] ?? '🏠') : (TERRAIN_ICON[tile.type] ?? '🌿');
       const label = tile.building ? (BUILDING_LABEL[tile.building] ?? 'Building') : (tile.type ?? 'terrain');
+      const tileSrc = this.renderer.getTileDataURL(tile, tileSelection.col, tileSelection.row, 56);
+      const tileImgHtml = tileSrc
+        ? `<img class="usb-terrain-hex" src="${tileSrc}" alt="">`
+        : `<span class="usb-icon" style="background:#3a4a3a;font-size:1.1rem">${icon}</span>`;
       bar.style.display = 'flex';
       bar.innerHTML = `
-        <span class="usb-icon" style="background:#3a4a3a;font-size:1.1rem">${icon}</span>
+        ${tileImgHtml}
         <span class="usb-tile-info">
           <span class="usb-tile-name">${label}</span>
           <span class="usb-tile-details">${terrainBadge}</span>
@@ -1854,11 +1858,16 @@ export class UIController {
       ? `<img class="usb-portrait" src="${src}" style="border-color:${color};" alt="">`
       : `<span class="usb-icon" style="background:${color}">${glyph}</span>`;
 
-    // Terrain badge for the entity's current hex
+    // Terrain row for the entity's current hex
     const entCol = this._planMode ? (this._getProjectedPos(entity.id)?.col ?? entity.col) : entity.col;
     const entRow = this._planMode ? (this._getProjectedPos(entity.id)?.row ?? entity.row) : entity.row;
     const tile = this.state.tiles.get(hexKey(entCol, entRow));
-    const terrainHtml = tile ? `<span class="usb-terrain">${_buildTerrainBadge(tile)}</span>` : '';
+    let terrainRowHtml = '';
+    if (tile) {
+      const tileSrc = this.renderer.getTileDataURL(tile, entCol, entRow, 56);
+      const tileImgHtml = tileSrc ? `<img class="usb-terrain-hex" src="${tileSrc}" alt="">` : '';
+      terrainRowHtml = `<span class="usb-terrain-row">${tileImgHtml}${_buildTerrainBadge(tile)}</span>`;
+    }
 
     bar.style.display = 'flex';
     bar.innerHTML = `
@@ -1876,8 +1885,8 @@ export class UIController {
           <span class="usb-stat">ATK <span class="usb-stat-val">${entity.attack}</span></span>
           <span class="usb-stat">DEF <span class="usb-stat-val">${entity.defense}</span></span>
           ${weaponLabel ? `<span class="usb-weapon">⚔ ${weaponLabel}</span>` : ''}
-          ${terrainHtml}
         </span>
+        ${terrainRowHtml}
       </span>
       <button class="usb-deselect-btn" title="Deselect unit">✕</button>
     `;

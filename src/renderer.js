@@ -273,6 +273,88 @@ export class Renderer {
     return url;
   }
 
+  /**
+   * Render a small hex tile thumbnail and return a cached data URL.
+   * Shows terrain colour fill, sprite texture, building overlay, and fortification ring.
+   */
+  getTileDataURL(tile, col, row, size = 28) {
+    const fortKey = tile.fortifyLevel || 0;
+    const bldg = tile.building || '';
+    const cacheKey = `tile_${tile.type}_${bldg}_${fortKey}@${size}`;
+    if (this._portraitCache.has(cacheKey)) return this._portraitCache.get(cacheKey);
+
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    const hs = size / 2;
+
+    // Hex fill colour
+    const color = tile.type === TileType.BUILDING
+      ? (BUILDING_COLOR[tile.building] || '#8a7a5a')
+      : (tile.type === 'road' || tile.type === 'river' || tile.type === 'bridge')
+        ? TILE_COLOR[TileType.GRASS]
+        : (TILE_COLOR[tile.type] || TILE_COLOR[TileType.GRASS]);
+    _traceHexPath(ctx, hs, hs, hs - 0.5);
+    ctx.fillStyle = color;
+    ctx.fill();
+
+    // Sprite texture (if tilemap available)
+    if (this._tilemapImg && this._spriteRects && TERRAIN_SPRITES[tile.type]) {
+      const baseType = tile.type === TileType.BUILDING ? TileType.DIRT
+        : (tile.type === 'road' || tile.type === 'river' || tile.type === 'bridge') ? TileType.GRASS
+        : tile.type;
+      const spriteId = this._pickVariant(baseType, col, row);
+      const rect = this._spriteRects.get(spriteId);
+      if (rect) {
+        ctx.save();
+        _traceHexPath(ctx, hs, hs, hs - 0.5);
+        ctx.clip();
+        ctx.drawImage(this._tilemapImg, rect.x, rect.y, rect.size, rect.size, 0, 0, size, size);
+        ctx.restore();
+      }
+    }
+
+    // Building overlay
+    if (tile.type === TileType.BUILDING && this._tilemapImg) {
+      const bldgRect = this._spriteRects?.get(tile.building);
+      if (bldgRect) {
+        ctx.save();
+        _traceHexPath(ctx, hs, hs, hs - 0.5);
+        ctx.clip();
+        ctx.drawImage(this._tilemapImg, bldgRect.x, bldgRect.y, bldgRect.size, bldgRect.size, 0, 0, size, size);
+        ctx.restore();
+      }
+    }
+
+    // Fortification ring
+    if (tile.fortifyLevel > 0) {
+      const lvl = tile.fortifyLevel;
+      const fortPalette = [
+        null,
+        [160, 100, 55],
+        [120, 135, 148],
+        [180, 196, 210],
+        [205, 165, 35],
+      ];
+      const [fr, fg, fb] = fortPalette[Math.min(lvl, 4)];
+      const alpha = Math.min(0.95, 0.5 + lvl * 0.12);
+      _traceHexPath(ctx, hs, hs, hs - 1);
+      ctx.strokeStyle = `rgba(${fr},${fg},${fb},${alpha})`;
+      ctx.lineWidth = Math.max(1.5, lvl * 1.2);
+      ctx.stroke();
+    }
+
+    // Hex outline
+    _traceHexPath(ctx, hs, hs, hs - 0.5);
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+
+    const url = c.toDataURL();
+    this._portraitCache.set(cacheKey, url);
+    return url;
+  }
+
   /** Map a survivor entity's title to its sprite asset id. */
   static survivorAssetId(title) {
     const MAP = {
