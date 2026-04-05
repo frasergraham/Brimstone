@@ -1693,17 +1693,13 @@ if (isNativeMobile) {
   });
 }
 
-// Show admin link and AI debug toggle for admin users
+// Show admin link for admin users
 {
   const _s = loadSession();
   if (_s?.is_admin) {
     const _adminLink = document.getElementById('admin-link');
     if (_adminLink) {
       _adminLink.style.display = '';
-    }
-    const _aiDebugOpt = document.getElementById('ai-debug-option');
-    if (_aiDebugOpt) {
-      _aiDebugOpt.style.display = '';
     }
   }
 }
