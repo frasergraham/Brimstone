@@ -394,3 +394,140 @@ Use these names consistently when modifying UI components.
 **Toasts** (auto-dismissed): Phase Toast, Score Toast, Battle Toast.
 
 **Key distinctions:** Overlay dims the canvas. Dialog requires interaction. Popup is a small context menu near a hex. Toast auto-dismisses. Cycle Bar (not "turn bar"). Node Status (not "score bar"). Unit Stats Bar (not "entity panel"). Cancel Bar (not "cancel button").
+
+---
+
+## AI Balance Baseline & Tuning Methodology
+
+**Last updated:** 2026-04-05 (after sound horn, scoring awareness, node feasibility, ally coordination improvements)
+
+### Baseline Metrics (500 1v1 games, Standard 13×13)
+
+| Metric | Value | Target |
+|--------|-------|--------|
+| Hero win rate | 48.8% | 38–62% (±12%) |
+| Witch win rate | 51.0% | 38–62% (±12%) |
+| Draws | 0.2% | — |
+| Kill wins | 37.2% | ≥20% |
+| Node wins | 61.2% | — |
+| Tiebreaks | 1.6% | <10% |
+| Mean rounds | 27.3 | 15–35 |
+| Median rounds | 25 | — |
+| Round cap hits | 1.6% | <5% |
+
+### Combat & Economy Baseline
+
+| Metric | Value |
+|--------|-------|
+| Hero battles/game | 6.4 |
+| Hero kills/game | 2.1 |
+| Witch battles/game | 6.7 |
+| Witch kills/game | 0.2 |
+| Hero HP at end | 12.0 |
+| Witch HP at end | 3.4 |
+| Peak hero survivors | 2.6 |
+| Peak witch minions | 4.1 |
+| Witch summons/game | 5.9 |
+| Hero fortifies/game | 1.8 |
+
+### Action Mix Baseline
+
+| Action | % of all actions |
+|--------|-----------------|
+| move | 47.6% |
+| guard | 31.0% |
+| explore | 10.4% |
+| battle-unit | 6.0% |
+| summon | 2.7% |
+| sound-horn | 1.0% |
+| fortify | 0.8% |
+| use-item | 0.6% |
+
+### Win Reason Breakdown
+
+| Reason | % |
+|--------|---|
+| Witch 3-point score | 41.6% |
+| Hero kills witch | 31.8% |
+| Hero 3-point score | 14.8% |
+| Witch kills hero | 5.4% |
+| Witch sweeps nodes | 3.6% |
+| Hero sweeps nodes | 1.2% |
+
+### 2v2 Baseline (100 games, Standard 13×13)
+
+| Metric | Value |
+|--------|-------|
+| Hero win rate | 47.0% |
+| Witch win rate | 53.0% |
+| Kill wins | 29.0% |
+| Node wins | 71.0% |
+| Mean rounds | 27.4 |
+
+### AI Architecture
+
+Both factions use a 5-stage pipeline: **EVALUATE → SCORE → ALLOCATE → GENERATE → ASSEMBLE**.
+
+| Stage | Function | Description |
+|-------|----------|-------------|
+| EVALUATE | `assessBoard()` / `assessHeroBoard()` | Snapshot of board state, distances, threats, resources |
+| SCORE | `scoreGoals()` / `scoreHeroGoals()` | Rate each goal 0–1 based on board state |
+| ALLOCATE | `allocateBudget()` / `allocateHeroBudget()` | Divide action budget across goals proportionally |
+| GENERATE | `gen*()` functions | Produce plan actions for each goal |
+| ASSEMBLE | `generatePlan()` | Merge, deduplicate, fill gaps |
+
+Key files: `src/ai-engine.js` (witch), `src/hero-ai-engine.js` (hero), `src/ai.js` (shared helpers, PlanSimState).
+
+### Current AI Features
+
+- **Scoring awareness:** Both AIs track `roundsUntilScoring()` and increase node control urgency near dawn/dusk scoring checkpoints.
+- **Score-differential urgency (hero only):** Hero AI increases node priority when behind in score. Deliberately omitted for witch to maintain balance (witch already has unit-count advantage at nodes).
+- **Node feasibility:** `scoreNodeFeasibility()` rates each node 0–1 based on distance advantage, force on/near the node, and current controller. Both AIs filter out hopeless nodes (hero threshold ≥0.1, witch threshold ≥0.15). Hero AI sorts nodes by feasibility; witch AI keeps priority-based sort (hero-held > neutral > threatened, then distance).
+- **Multi-unit node assignment (hero only):** Hero can send 2 units to a high-feasibility node (≥0.6) when scoring is ≤2 rounds away.
+- **Sound Horn:** Hero AI uses Sound Horn during exploration when food ≥1, ≥2 unexplored buildings, HP >30%, and <3 survivors.
+- **NvN ally coordination:** `allyContext.claimedNodes` prevents allied players from targeting the same nodes. Updated after each player's plan generation.
+- **Anti-oscillation:** Cross-turn memory (`previousPositions`) prevents units from returning to the hex they just left.
+
+### Tuning Methodology — How to Iterate on AI Balance
+
+Follow this process for any AI change. The goal is to stay within the balance targets while improving AI behavior.
+
+#### Step 1: Establish pre-change baseline
+```bash
+node scripts/headless.js 500 standard          # 1v1 baseline
+node scripts/headless.js 100 standard --players 2  # 2v2 baseline
+```
+Record Hero/Witch win rates, kill %, tiebreak %, mean rounds. Compare against the baseline table above.
+
+#### Step 2: Make changes and run quick validation
+```bash
+node scripts/headless.js 100 standard          # fast check — look for gross regressions
+```
+If win rate shifts >10% from baseline, investigate before scaling up.
+
+#### Step 3: Full validation
+```bash
+node scripts/headless.js 500 standard          # 1v1 — primary balance metric
+node scripts/headless.js 100 standard --players 2  # 2v2 — ally coordination check
+node scripts/ai-matrix.js 50                   # personality cross-balance
+```
+
+#### Step 4: Check balance targets
+| Metric | Target | Action if violated |
+|--------|--------|--------------------|
+| Win rate | 38–62% either side | Tune the stronger side down or weaker side up |
+| Tiebreaks | <10% | Games are stalling — check round cap, node contest logic |
+| Kill wins | ≥20% | Combat is too weak or nodes too dominant — check combat stats |
+| Mean rounds | 15–35 | Too short = snowball; too long = stalemate |
+| Round cap hits | <5% | Games aren't resolving — check AI aggression |
+
+#### Step 5: Asymmetric tuning
+Key lesson learned: applying the same improvement to both factions often helps one side more than the other due to asymmetric unit counts and playstyle.
+
+- **Witch has more units** → improvements to per-node force scoring or multi-unit assignment disproportionately help witch.
+- **Hero has stronger individuals** → improvements to combat targeting or kill-seeking help hero more.
+- **If witch is too strong:** remove/reduce witch-side bonuses first; add hero-side urgency bonuses; try asymmetric thresholds.
+- **If hero is too strong:** reduce hero urgency bonuses; give witch more scoring awareness; check if hero combat stats are too high.
+
+#### Step 6: Update this baseline
+After tuning is complete and balance is within targets, update the baseline tables above with new 500-game results. Include the date and a brief description of what changed.
