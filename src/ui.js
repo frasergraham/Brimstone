@@ -3620,15 +3620,13 @@ export class UIController {
 
 /** Build HTML for a terrain badge (used in unit stats bar). */
 function _buildTerrainBadge(tile) {
-  const TERRAIN_ICON = {
-    [TileType.GRASS]: '🌿', [TileType.FOREST]: '🌲', [TileType.DIRT]: '🪨',
-    [TileType.ROAD]: '🛤', [TileType.RIVER]: '💧', [TileType.BRIDGE]: '🌉',
-  };
   const parts = [];
-  const icon = tile.building ? (BUILDING_ICON[tile.building] ?? '🏠') : (TERRAIN_ICON[tile.type] ?? '');
   const label = tile.building ? (BUILDING_LABEL[tile.building] ?? 'Building') : (tile.type ?? '');
-  parts.push(`<span class="usb-terrain-icon">${icon}</span> ${label}`);
-  if (tile.explored && tile.fortifyLevel) {
+  parts.push(label);
+  if (tile.explored) {
+    parts.push('<span class="usb-terrain-explored">Explored</span>');
+  }
+  if (tile.fortifyLevel) {
     parts.push(`<span class="usb-terrain-fort">⚙ Fort +${tile.fortifyLevel}</span>`);
   }
   if (tile.powerNode) {

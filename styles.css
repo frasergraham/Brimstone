@@ -1096,7 +1096,7 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   border-radius: 3px;
   vertical-align: middle;
 }
-.usb-terrain-icon { font-size: 0.78rem; }
+.usb-terrain-explored { color: #7daf7d; }
 .usb-terrain-fort { color: var(--day); }
 .usb-terrain-node { color: #c89dff; }
 
