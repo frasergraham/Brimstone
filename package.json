@@ -1,6 +1,6 @@
 {
   "name": "calebs-hollow",
-  "version": "1.3.16",
+  "version": "1.3.17",
   "description": "Salem hex turn-based game with multiplayer",
   "main": "electron/main.js",
   "type": "module",
@@ -63,7 +63,7 @@
     "@capacitor/status-bar": "^8.0.2",
     "@parse/node-apn": "^6.5.0",
     "better-sqlite3": "^12.8.0",
-    "canvas": "^3.2.2",
+    "canvas": "^3.2.3",
     "electron-store": "^10.0.0",
     "electron-updater": "^6.0.0",
     "express": "^5.2.1",

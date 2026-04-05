@@ -19,8 +19,6 @@ import {
   genDefendWitch,
   genBuildArmy,
   genControlNodes,
-  genKillHero,
-  genGatherResources,
   assemblePlan,
   PERSONALITY_CONFIGS,
   WitchAIEngine,
@@ -112,15 +110,16 @@ describe('EnginePlanSimState', () => {
     assert.equal(witch.row, 0);
   });
 
-  test('applyMove accumulates multiple departed hexes', () => {
+  test('applyMove only records initial position as departed', () => {
     const sim = makeSim();
     const witch = sim.entities.find(e => e.type === EntityType.WITCH);
     sim.applyMove(witch.id, 1, 0);
     sim.applyMove(witch.id, 2, 0);
     const departed = sim.departedHexes.get(witch.id);
-    assert.equal(departed.size, 2);
+    // Only the initial hex (0,0) should be departed — intermediate stops
+    // must NOT be flagged or the anti-oscillation filter breaks multi-step moves.
+    assert.equal(departed.size, 1);
     assert.ok(departed.has(hexKey(0, 0)));
-    assert.ok(departed.has(hexKey(1, 0)));
   });
 
   test('resourceLedger is independent copy', () => {
@@ -274,7 +273,7 @@ function makeBoard(overrides = {}) {
     phase: Phase.NIGHT, isNight: true, isDay: false, isDawnOrDusk: false,
     witch: {}, witchHp: 10, witchMaxHp: 10, witchHpRatio: 1.0,
     minions: [], minionCount: 0, armyStrength: 0,
-    visibleHeroes: [{}], heroDistance: 5, heroHpRatio: 1.0,
+    visibleHeroes: [{}], heroDistance: 5, heroHpRatio: 1.0, enemiesNearWitch: 0,
     nodes: [], witchHeldCount: 0, heroHeldCount: 0,
     witchScore: 0, heroScore: 0,
     totalResources: 4, metalCount: 0, woodCount: 2, canAffordSummon: true, bestSummonType: EntityType.WOOD_GOLEM,
@@ -293,20 +292,6 @@ describe('scoreGoals', () => {
     }
   });
 
-  test('night boosts KILL_HERO vs day', () => {
-    const nightScores = scoreGoals(makeBoard({ isNight: true, isDay: false }));
-    const dayScores = scoreGoals(makeBoard({ isNight: false, isDay: true }));
-    assert.ok(nightScores[Goal.KILL_HERO] > dayScores[Goal.KILL_HERO],
-      `night KILL_HERO (${nightScores[Goal.KILL_HERO]}) should exceed day (${dayScores[Goal.KILL_HERO]})`);
-  });
-
-  test('day boosts GATHER_RESOURCES vs night', () => {
-    const dayScores = scoreGoals(makeBoard({ isNight: false, isDay: true }));
-    const nightScores = scoreGoals(makeBoard({ isNight: true, isDay: false }));
-    assert.ok(dayScores[Goal.GATHER_RESOURCES] > nightScores[Goal.GATHER_RESOURCES],
-      `day GATHER (${dayScores[Goal.GATHER_RESOURCES]}) should exceed night (${nightScores[Goal.GATHER_RESOURCES]})`);
-  });
-
   test('dawn/dusk boosts CONTROL_NODES', () => {
     const scoringScores = scoreGoals(makeBoard({ isDawnOrDusk: true, isNight: false, isDay: false }));
     const normalScores = scoreGoals(makeBoard({ isDawnOrDusk: false }));
@@ -319,20 +304,9 @@ describe('scoreGoals', () => {
     assert.equal(scores[Goal.DEFEND_WITCH], 1.0);
   });
 
-  test('no resources sets BUILD_ARMY to 0', () => {
-    const scores = scoreGoals(makeBoard({ canAffordSummon: false }));
-    assert.equal(scores[Goal.BUILD_ARMY], 0);
-  });
-
-  test('hero adjacent (dist 1) yields high KILL_HERO', () => {
-    const scores = scoreGoals(makeBoard({ heroDistance: 1 }));
-    assert.ok(scores[Goal.KILL_HERO] >= 0.7, `adjacent hero KILL_HERO should be high, got ${scores[Goal.KILL_HERO]}`);
-  });
-
-  test('wounded hero boosts KILL_HERO', () => {
-    const healthy = scoreGoals(makeBoard({ heroHpRatio: 1.0, heroDistance: 3 }));
-    const wounded = scoreGoals(makeBoard({ heroHpRatio: 0.3, heroDistance: 3 }));
-    assert.ok(wounded[Goal.KILL_HERO] > healthy[Goal.KILL_HERO]);
+  test('few minions with resources gives high BUILD_ARMY', () => {
+    const scores = scoreGoals(makeBoard({ minionCount: 0, canAffordSummon: true, unexploredBuildings: [{}] }));
+    assert.ok(scores[Goal.BUILD_ARMY] >= 0.7, `BUILD_ARMY should be high when no minions, got ${scores[Goal.BUILD_ARMY]}`);
   });
 
   test('hero score >= 3 boosts CONTROL_NODES', () => {
@@ -360,16 +334,16 @@ describe('scoreGoals', () => {
       `behind CONTROL (${behind[Goal.CONTROL_NODES]}) should exceed tied (${tied[Goal.CONTROL_NODES]})`);
   });
 
-  test('early-game focus: distant hero + unexplored buildings boosts GATHER_RESOURCES', () => {
-    const noBuildings = scoreGoals(makeBoard({ heroDistance: 8, unexploredBuildings: [] }));
-    const withBuildings = scoreGoals(makeBoard({ heroDistance: 8, unexploredBuildings: [{}] }));
-    assert.ok(withBuildings[Goal.GATHER_RESOURCES] > noBuildings[Goal.GATHER_RESOURCES],
-      `early-game GATHER (${withBuildings[Goal.GATHER_RESOURCES]}) should exceed baseline (${noBuildings[Goal.GATHER_RESOURCES]})`);
+  test('early-game focus: distant hero + unexplored buildings boosts BUILD_ARMY', () => {
+    const noBuildings = scoreGoals(makeBoard({ visibleHeroes: [], heroDistance: Infinity, unexploredBuildings: [] }));
+    const withBuildings = scoreGoals(makeBoard({ visibleHeroes: [], heroDistance: Infinity, unexploredBuildings: [{}] }));
+    assert.ok(withBuildings[Goal.BUILD_ARMY] > noBuildings[Goal.BUILD_ARMY],
+      `early-game BUILD_ARMY (${withBuildings[Goal.BUILD_ARMY]}) should exceed baseline (${noBuildings[Goal.BUILD_ARMY]})`);
   });
 
-  test('early-game focus: caps DEFEND_WITCH when hero is distant and buildings remain', () => {
+  test('early-game focus: caps DEFEND_WITCH when no enemies visible and buildings remain', () => {
     const scores = scoreGoals(makeBoard({
-      heroDistance: 8, unexploredBuildings: [{}],
+      visibleHeroes: [], heroDistance: Infinity, unexploredBuildings: [{}],
       witchHpRatio: 0.45, // would normally trigger some DEFEND
     }));
     assert.ok(scores[Goal.DEFEND_WITCH] <= 0.1,
@@ -377,11 +351,10 @@ describe('scoreGoals', () => {
   });
 
   test('early-game focus: does not activate when hero is close', () => {
-    const scores = scoreGoals(makeBoard({ heroDistance: 3, unexploredBuildings: [{}] }));
-    // GATHER should not get the +0.4 early-game bonus when hero is close
-    const noBonus = scoreGoals(makeBoard({ heroDistance: 3, unexploredBuildings: [] }));
-    // Scores should be similar (only the normal +0.1 for unexplored buildings)
-    const diff = scores[Goal.GATHER_RESOURCES] - noBonus[Goal.GATHER_RESOURCES];
+    const scores = scoreGoals(makeBoard({ heroDistance: 3, visibleHeroes: [{}], unexploredBuildings: [{}] }));
+    // BUILD_ARMY should not get the +0.4 early-game bonus when hero is visible
+    const noBonus = scoreGoals(makeBoard({ heroDistance: 3, visibleHeroes: [{}], unexploredBuildings: [] }));
+    const diff = scores[Goal.BUILD_ARMY] - noBonus[Goal.BUILD_ARMY];
     assert.ok(diff < 0.3, `nearby hero should not trigger early-game bonus, diff was ${diff}`);
   });
 });
@@ -391,10 +364,8 @@ describe('scoreGoals', () => {
 describe('allocateBudget', () => {
   test('allocations sum to totalBudget', () => {
     const scores = {
-      [Goal.KILL_HERO]: 0.7,
+      [Goal.BUILD_ARMY]: 0.7,
       [Goal.CONTROL_NODES]: 0.4,
-      [Goal.BUILD_ARMY]: 0.3,
-      [Goal.GATHER_RESOURCES]: 0.2,
       [Goal.DEFEND_WITCH]: 0.1,
     };
     const result = allocateBudget(scores, 6);
@@ -404,62 +375,52 @@ describe('allocateBudget', () => {
 
   test('goals below threshold get 0 AP', () => {
     const scores = {
-      [Goal.KILL_HERO]: 0.8,
+      [Goal.BUILD_ARMY]: 0.8,
       [Goal.CONTROL_NODES]: 0.01,  // below 0.05
-      [Goal.BUILD_ARMY]: 0.5,
-      [Goal.GATHER_RESOURCES]: 0.03,  // below 0.05
       [Goal.DEFEND_WITCH]: 0.0,
     };
     const result = allocateBudget(scores, 6);
     assert.equal(result[Goal.CONTROL_NODES], 0);
-    assert.equal(result[Goal.GATHER_RESOURCES], 0);
     assert.equal(result[Goal.DEFEND_WITCH], 0);
   });
 
-  test('each qualifying goal gets >= 1 AP', () => {
+  test('active goals get at least 2 AP (no thin allocations)', () => {
     const scores = {
-      [Goal.KILL_HERO]: 0.9,
-      [Goal.CONTROL_NODES]: 0.06,
-      [Goal.BUILD_ARMY]: 0.06,
-      [Goal.GATHER_RESOURCES]: 0.06,
-      [Goal.DEFEND_WITCH]: 0.06,
+      [Goal.BUILD_ARMY]: 0.9,
+      [Goal.CONTROL_NODES]: 0.5,
+      [Goal.DEFEND_WITCH]: 0.3,
     };
-    const result = allocateBudget(scores, 5);
+    const result = allocateBudget(scores, 9);
     for (const g of Object.values(Goal)) {
-      assert.ok(result[g] >= 1, `${g} should get >= 1 AP, got ${result[g]}`);
+      assert.ok(result[g] === 0 || result[g] >= 2,
+        `${g} should be 0 or >= 2 AP, got ${result[g]}`);
     }
   });
 
   test('single qualifying goal gets full budget', () => {
     const scores = {
-      [Goal.KILL_HERO]: 0.9,
+      [Goal.BUILD_ARMY]: 0.9,
       [Goal.CONTROL_NODES]: 0.0,
-      [Goal.BUILD_ARMY]: 0.0,
-      [Goal.GATHER_RESOURCES]: 0.0,
       [Goal.DEFEND_WITCH]: 0.0,
     };
     const result = allocateBudget(scores, 5);
-    assert.equal(result[Goal.KILL_HERO], 5);
+    assert.equal(result[Goal.BUILD_ARMY], 5);
   });
 
   test('no qualifying goals gives all to first goal', () => {
     const scores = {
-      [Goal.KILL_HERO]: 0.01,
+      [Goal.BUILD_ARMY]: 0.01,
       [Goal.CONTROL_NODES]: 0.0,
-      [Goal.BUILD_ARMY]: 0.0,
-      [Goal.GATHER_RESOURCES]: 0.0,
       [Goal.DEFEND_WITCH]: 0.0,
     };
     const result = allocateBudget(scores, 4);
-    assert.equal(result[Goal.KILL_HERO], 4);
+    assert.equal(result[Goal.BUILD_ARMY], 4);
   });
 
   test('zero budget gives all zeros', () => {
     const scores = {
-      [Goal.KILL_HERO]: 0.8,
+      [Goal.BUILD_ARMY]: 0.8,
       [Goal.CONTROL_NODES]: 0.5,
-      [Goal.BUILD_ARMY]: 0.3,
-      [Goal.GATHER_RESOURCES]: 0.2,
       [Goal.DEFEND_WITCH]: 0.1,
     };
     const result = allocateBudget(scores, 0);
@@ -470,15 +431,13 @@ describe('allocateBudget', () => {
 
   test('higher urgency gets more AP', () => {
     const scores = {
-      [Goal.KILL_HERO]: 0.9,
+      [Goal.BUILD_ARMY]: 0.9,
       [Goal.CONTROL_NODES]: 0.1,
-      [Goal.BUILD_ARMY]: 0.0,
-      [Goal.GATHER_RESOURCES]: 0.0,
       [Goal.DEFEND_WITCH]: 0.0,
     };
     const result = allocateBudget(scores, 10);
-    assert.ok(result[Goal.KILL_HERO] > result[Goal.CONTROL_NODES],
-      `KILL_HERO (${result[Goal.KILL_HERO]}) should get more than CONTROL_NODES (${result[Goal.CONTROL_NODES]})`);
+    assert.ok(result[Goal.BUILD_ARMY] > result[Goal.CONTROL_NODES],
+      `BUILD_ARMY (${result[Goal.BUILD_ARMY]}) should get more than CONTROL_NODES (${result[Goal.CONTROL_NODES]})`);
   });
 });
 
@@ -578,9 +537,9 @@ describe('genBuildArmy', () => {
       hero: {},
     }});
     const board = assessBoard(sim);
-    const actions = genBuildArmy(sim, board, 2);
-    assert.ok(actions.length > 0, 'should produce at least one summon');
-    assert.ok(actions.every(a => a.type === PlanActionType.SUMMON), 'all actions should be SUMMON');
+    const actions = genBuildArmy(sim, board, 4);
+    const summons = actions.filter(a => a.type === PlanActionType.SUMMON);
+    assert.ok(summons.length > 0, 'should produce at least one summon');
   });
 
   test('respects resource constraints (no overdraw)', () => {
@@ -591,17 +550,27 @@ describe('genBuildArmy', () => {
     const board = assessBoard(sim);
     const actions = genBuildArmy(sim, board, 5);
     // Only 2 wood = only 1 summon possible
-    assert.equal(actions.length, 1);
+    const summons = actions.filter(a => a.type === PlanActionType.SUMMON);
+    assert.equal(summons.length, 1);
   });
 
-  test('returns empty when cannot afford summon', () => {
-    const sim = makeSim({ inventory: {
-      witch: { [ResourceType.HERBS]: 1 },
-      hero: {},
-    }});
+  test('explores and moves when no resources for summon', () => {
+    const tiles = new Map();
+    for (let c = 0; c < 5; c++) {
+      for (let r = 0; r < 5; r++) {
+        tiles.set(hexKey(c, r), {
+          col: c, row: r, type: c > 1 ? TileType.GRASS : TileType.GRASS,
+          explored: c === 0 && r === 0, building: null, resource: null, fortifyLevel: 0,
+        });
+      }
+    }
+    tiles.set(hexKey(1, 0), { col: 1, row: 0, type: TileType.BUILDING, explored: false, building: 'inn', resource: null, fortifyLevel: 0 });
+    const sim = makeSim({ inventory: { witch: { [ResourceType.HERBS]: 0 }, hero: {} }, tiles });
     const board = assessBoard(sim);
     const actions = genBuildArmy(sim, board, 3);
-    assert.equal(actions.length, 0);
+    // Should move toward unexplored building and/or explore
+    const movesOrExplores = actions.filter(a => a.type === PlanActionType.MOVE || a.type === PlanActionType.EXPLORE);
+    assert.ok(movesOrExplores.length > 0, 'should move/explore when no resources');
   });
 
   test('respects army cap', () => {
@@ -664,16 +633,17 @@ describe('genControlNodes', () => {
     assert.ok(movedEntities.size >= 2, `should assign different units, got ${movedEntities.size}`);
   });
 
-  test('guards if on node with nearby threat', () => {
+  test('battles enemy adjacent to unit on node', () => {
     const node = { col: 1, row: 0, label: 'Node A', hexes: [{ col: 1, row: 0 }] };
     const minion = makeEntity({ id: 'm1', type: EntityType.MINION, owner: 'witch', col: 1, row: 0, hp: 2, maxHp: 2 });
     const witch = makeEntity({ id: 'witch1', col: 0, row: 0 });
+    // Hero adjacent (distance 1) to minion on node — should battle
     const hero = makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 2, row: 0, hp: 8, maxHp: 8 });
     const sim = makeSim({ entities: [witch, minion, hero], witchObjectives: [node] });
     const board = assessBoard(sim);
     const actions = genControlNodes(sim, board, 2);
-    const guardAction = actions.find(a => a.type === PlanActionType.GUARD && a.entityId === 'm1');
-    assert.ok(guardAction, 'should guard on node when hero is nearby');
+    const battleAction = actions.find(a => a.type === PlanActionType.BATTLE_UNIT && a.entityId === 'm1');
+    assert.ok(battleAction, 'should battle adjacent enemy on node');
   });
 
   test('returns empty with 0 budget', () => {
@@ -684,9 +654,11 @@ describe('genControlNodes', () => {
   });
 });
 
-// ── genKillHero ─────────────────────────────────────────────────────────────
+// ── genKillHero (REMOVED — goal no longer exists) ──────────────────────────
+// These tests are replaced with inline comments since KILL_HERO was merged
+// into CONTROL_NODES (battle at nodes) and gap-fill behavior.
 
-describe('genKillHero', () => {
+describe.skip('genKillHero (removed)', () => {
   test('battles adjacent hero', () => {
     const witch = makeEntity({ id: 'witch1', col: 1, row: 0 });
     const hero = makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 1, row: 1, hp: 8, maxHp: 8, attack: 3, defense: 2 });
@@ -710,9 +682,10 @@ describe('genKillHero', () => {
     assert.ok(!minionBattle, 'should skip suicidal minion battle');
   });
 
-  test('moves toward hero when not adjacent', () => {
+  test('moves toward hero when not adjacent but within sight', () => {
     const witch = makeEntity({ id: 'witch1', col: 0, row: 0 });
-    const hero = makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 4, row: 4, hp: 8, maxHp: 8, attack: 3, defense: 2 });
+    // Hero at distance 2 — within witch sight range
+    const hero = makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 2, row: 0, hp: 8, maxHp: 8, attack: 3, defense: 2 });
     const sim = makeSim({ entities: [witch, hero] });
     const board = assessBoard(sim);
     const actions = genKillHero(sim, board, 2);
@@ -728,9 +701,9 @@ describe('genKillHero', () => {
   });
 });
 
-// ── genGatherResources ──────────────────────────────────────────────────────
+// ── genGatherResources (REMOVED — merged into BUILD_ARMY) ──────────────────
 
-describe('genGatherResources', () => {
+describe.skip('genGatherResources (removed)', () => {
   test('explores current tile if unexplored', () => {
     const tiles = new Map();
     for (let c = 0; c < 5; c++) {
@@ -795,7 +768,7 @@ describe('assemblePlan', () => {
     const sim = makeSim();
     const board = assessBoard(sim);
     const actions = [
-      { type: PlanActionType.MOVE, entityId: 'witch1', toCol: 1, toRow: 0, _priority: 5, _goal: Goal.KILL_HERO },
+      { type: PlanActionType.MOVE, entityId: 'witch1', toCol: 1, toRow: 0, _priority: 5, _goal: Goal.BUILD_ARMY },
       { type: PlanActionType.SUMMON, entityId: 'witch1', _priority: 2, _goal: Goal.BUILD_ARMY },
       { type: PlanActionType.USE_ITEM, entityId: 'witch1', item: ResourceType.HERBS, _priority: 0, _goal: Goal.DEFEND_WITCH },
     ];
@@ -805,15 +778,15 @@ describe('assemblePlan', () => {
     assert.equal(plan[2].type, PlanActionType.MOVE);
   });
 
-  test('strips internal _priority and _goal metadata', () => {
+  test('preserves _priority and _goal metadata for debug overlay', () => {
     const sim = makeSim();
     const board = assessBoard(sim);
     const actions = [
       { type: PlanActionType.SUMMON, entityId: 'witch1', _priority: 2, _goal: Goal.BUILD_ARMY },
     ];
     const plan = assemblePlan(actions, sim, board, new Map());
-    assert.equal(plan[0]._priority, undefined);
-    assert.equal(plan[0]._goal, undefined);
+    assert.equal(plan[0]._priority, 2);
+    assert.equal(plan[0]._goal, Goal.BUILD_ARMY);
   });
 
   test('filters cross-turn oscillation (returning to previous position)', () => {
@@ -821,7 +794,7 @@ describe('assemblePlan', () => {
     const board = assessBoard(sim);
     const prevPositions = new Map([['witch1', { col: 1, row: 0 }]]);
     const actions = [
-      { type: PlanActionType.MOVE, entityId: 'witch1', toCol: 1, toRow: 0, _priority: 5, _goal: Goal.KILL_HERO },
+      { type: PlanActionType.MOVE, entityId: 'witch1', toCol: 1, toRow: 0, _priority: 5, _goal: Goal.BUILD_ARMY },
     ];
     const plan = assemblePlan(actions, sim, board, prevPositions);
     const oscillating = plan.find(a => a.type === PlanActionType.MOVE && a.toCol === 1 && a.toRow === 0);
@@ -834,18 +807,40 @@ describe('assemblePlan', () => {
     sim.departedHexes.set('witch1', new Set([hexKey(0, 0)]));
     const board = assessBoard(sim);
     const actions = [
-      { type: PlanActionType.MOVE, entityId: 'witch1', toCol: 0, toRow: 0, _priority: 5, _goal: Goal.KILL_HERO },
+      { type: PlanActionType.MOVE, entityId: 'witch1', toCol: 0, toRow: 0, _priority: 5, _goal: Goal.BUILD_ARMY },
     ];
     const plan = assemblePlan(actions, sim, board, new Map());
     const oscillating = plan.find(a => a.type === PlanActionType.MOVE && a.toCol === 0 && a.toRow === 0);
     assert.ok(!oscillating, 'should filter out move returning to departed hex');
   });
 
+  test('multi-step road moves preserve intermediate stops', () => {
+    const sim = makeSim();
+    const witch = sim.entities.find(e => e.type === EntityType.WITCH);
+    // Simulate a 3-step road journey: witch at (0,0) → (1,0) → (2,0)
+    // applyMove records only the initial hex as departed
+    sim.applyMove(witch.id, 1, 0); // depart (0,0), arrive (1,0)
+    sim.applyMove(witch.id, 2, 0); // depart (1,0), arrive (2,0)
+
+    const board = assessBoard(sim);
+    const actions = [
+      // These are the two sequential MOVE actions the AI generated
+      { type: PlanActionType.MOVE, entityId: witch.id, toCol: 1, toRow: 0, _priority: 2, _goal: Goal.BUILD_ARMY },
+      { type: PlanActionType.MOVE, entityId: witch.id, toCol: 2, toRow: 0, _priority: 2, _goal: Goal.BUILD_ARMY },
+    ];
+    const plan = assemblePlan(actions, sim, board, new Map());
+    const moves = plan.filter(a => a.type === PlanActionType.MOVE);
+    assert.equal(moves.length, 2,
+      'both sequential moves should survive — intermediate (1,0) must NOT be filtered as departed');
+    assert.equal(moves[0].toCol, 1);
+    assert.equal(moves[1].toCol, 2);
+  });
+
   test('deduplicates identical moves', () => {
     const sim = makeSim();
     const board = assessBoard(sim);
     const actions = [
-      { type: PlanActionType.MOVE, entityId: 'witch1', toCol: 1, toRow: 0, _priority: 3, _goal: Goal.KILL_HERO },
+      { type: PlanActionType.MOVE, entityId: 'witch1', toCol: 1, toRow: 0, _priority: 3, _goal: Goal.BUILD_ARMY },
       { type: PlanActionType.MOVE, entityId: 'witch1', toCol: 1, toRow: 0, _priority: 5, _goal: Goal.CONTROL_NODES },
     ];
     const plan = assemblePlan(actions, sim, board, new Map());
@@ -880,14 +875,27 @@ describe('assemblePlan', () => {
     assert.ok(plan.some(a => a.type === PlanActionType.SUMMON), 'SUMMON should be included');
   });
 
-  test('gap-fill adds guard when nothing else to do', () => {
-    const sim = makeSim();
+  test('gap-fill moves and explores when budget remains', () => {
+    const witch = makeEntity({ id: 'witch1', col: 0, row: 0 });
+    // Make some tiles unexplored so gap-fill has something to target
+    const tiles = new Map();
+    for (let c = 0; c < 5; c++) {
+      for (let r = 0; r < 5; r++) {
+        tiles.set(hexKey(c, r), {
+          col: c, row: r, type: TileType.GRASS, explored: c <= 1 && r === 0,
+          building: null, resource: null, fortifyLevel: 0,
+        });
+      }
+    }
+    const sim = makeSim({ entities: [witch], tiles });
     const board = assessBoard(sim);
-    // Empty actions = all budget is remaining → gap-fill should add something
+    // Empty actions = all budget is remaining → gap-fill should move/explore
     const plan = assemblePlan([], sim, board, new Map());
     assert.ok(plan.length > 0, 'gap-fill should add fallback actions');
-    const guardAction = plan.find(a => a.type === PlanActionType.GUARD);
-    assert.ok(guardAction, 'should include GUARD as fallback');
+    const moveOrExplore = plan.filter(a =>
+      a.type === PlanActionType.MOVE || a.type === PlanActionType.EXPLORE
+    );
+    assert.ok(moveOrExplore.length > 0, 'should include MOVE or EXPLORE as fallback');
   });
 
   test('truncates to MAX_PLAN_LENGTH', () => {
@@ -936,7 +944,7 @@ describe('WitchAIEngine.generatePlan (integration)', () => {
     }
   });
 
-  test('plan has no internal metadata (_priority, _goal)', () => {
+  test('plan preserves _priority and _goal metadata for debug', () => {
     const state = makeFakeState({
       inventory: { witch: { [ResourceType.WOOD]: 4 }, hero: {} },
       witchObjectives: [
@@ -945,10 +953,9 @@ describe('WitchAIEngine.generatePlan (integration)', () => {
     });
     const engine = new WitchAIEngine(state, () => {}, 0);
     const plan = engine.generatePlan();
-    for (const action of plan) {
-      assert.equal(action._priority, undefined, 'should strip _priority');
-      assert.equal(action._goal, undefined, 'should strip _goal');
-    }
+    // At least some actions should have goal metadata
+    const withGoal = plan.filter(a => a._goal != null);
+    assert.ok(withGoal.length > 0 || plan.length === 0, 'plan actions should have _goal metadata');
   });
 
   test('plan length does not exceed MAX_PLAN_LENGTH', () => {
@@ -1002,7 +1009,7 @@ describe('PERSONALITY_CONFIGS', () => {
       assert.ok(cfg.goalWeights, `${name} has goalWeights`);
       assert.equal(typeof cfg.fleeThreshold, 'number');
       assert.equal(typeof cfg.engageFloor, 'string');
-      // All 5 goals have weights
+      // All 3 goals have weights
       for (const g of Object.values(Goal)) {
         assert.equal(typeof cfg.goalWeights[g], 'number', `${name} has weight for ${g}`);
       }
@@ -1010,14 +1017,12 @@ describe('PERSONALITY_CONFIGS', () => {
   });
 
   test('goalWeights affect scoreGoals output', () => {
-    const board = makeBoard({ heroDistance: 2, isNight: true, witchHpRatio: 0.8 });
+    const board = makeBoard({ heroDistance: 2, isNight: true, witchHpRatio: 0.8, enemiesNearWitch: 0 });
     const baseScores = scoreGoals(board);
     const aggroScores = scoreGoals(board, PERSONALITY_CONFIGS.aggressive.goalWeights);
-    // Aggressive boosts KILL_HERO (x1.8) and reduces GATHER (x0.4)
-    assert.ok(aggroScores[Goal.KILL_HERO] >= baseScores[Goal.KILL_HERO],
-      'aggressive should boost KILL_HERO');
-    assert.ok(aggroScores[Goal.GATHER_RESOURCES] <= baseScores[Goal.GATHER_RESOURCES],
-      'aggressive should reduce GATHER_RESOURCES');
+    // Aggressive reduces DEFEND_WITCH (x0.5) vs balanced (x1.0)
+    assert.ok(aggroScores[Goal.DEFEND_WITCH] <= baseScores[Goal.DEFEND_WITCH],
+      'aggressive should reduce DEFEND_WITCH');
   });
 
   test('createWitchAI creates engine with named config', () => {

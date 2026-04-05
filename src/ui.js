@@ -50,6 +50,12 @@ export class UIController {
     this._pendingDefenderPick = null; // { defenders[], onPick(def) }
     this._pendingEnemyPick   = null;  // { units[] } — enemy info disambiguation
     this._popupVisible    = false;   // tracks whether the action popup is shown
+    this._selectedTile    = null;    // { col, row } — tile-only selection (no entity)
+    this._arcCloseTimer   = null;    // setTimeout id for arc close animation
+    this._arcTrackingRaf  = null;    // rAF id for pan/zoom tracking loop
+    this._arcItems        = null;    // current arc item descriptors (for line drawing)
+    this._arcEntityCol    = null;    // hex col of arc menu origin
+    this._arcEntityRow    = null;    // hex row of arc menu origin
 
     this._touchStart  = null;
     this._pinchDist   = null;
@@ -976,7 +982,9 @@ export class UIController {
           this.appMode === 'PLAYBACK' || this.appMode === 'PLANNING' ||
           this.appMode === 'SUBMITTED') return;
       this._clearSelection();
-      this._showTileDetail(hex);
+      // Show tile info in stats bar instead of overlay
+      this._selectedTile = { col: hex.col, row: hex.row };
+      this.renderer.selectedHex = { col: hex.col, row: hex.row };
       this._updateSidebar();
       this.onRedraw();
       return;
@@ -986,7 +994,8 @@ export class UIController {
     if (this._planMode && this._planSubmitted) {
       // Plan locked — read-only view
       this._clearSelection();
-      this._showTileDetail(hex);
+      this._selectedTile = { col: hex.col, row: hex.row };
+      this.renderer.selectedHex = { col: hex.col, row: hex.row };
       this._updateSidebar();
       this.onRedraw();
       return;
@@ -1065,7 +1074,10 @@ export class UIController {
         this._hideTileDetail();
         this._selectEnemyEntity(enemyEntities[0]);
       } else {
+        // Empty hex — show tile info in stats bar
         this._clearSelection();
+        this._selectedTile = { col: hex.col, row: hex.row };
+        this.renderer.selectedHex = { col: hex.col, row: hex.row };
       }
     } else if (clickedEntities.length === 1) {
       const entity = clickedEntities[0];
@@ -1073,7 +1085,7 @@ export class UIController {
         // Second tap → show popup; third tap → dismiss popup
         if (this._popupVisible) {
           this._popupVisible = false;
-          _hideActionPopup();
+          _hideActionPopup(this);
         } else {
           this._showActionPopup(entity);
           this._popupVisible = true;
@@ -1105,7 +1117,7 @@ export class UIController {
     this.onEntitySelected?.(entity);
     this._pendingUnitPick = null;
     this._popupVisible    = false;
-    _hideActionPopup();
+    _hideActionPopup(this);
 
     // In planning mode, valid actions and highlights must use the entity's
     // projected position (after earlier MOVE steps in the plan), not the real one.
@@ -1142,7 +1154,7 @@ export class UIController {
     this._popupVisible         = false;
     this._awaitingTarget       = null;
     this._validActions         = [];
-    _hideActionPopup();
+    _hideActionPopup(this);
 
     this.renderer.selectedHex      = { col: entity.col, row: entity.row };
     this.renderer.selectedEntityId = entity.id;
@@ -1160,6 +1172,7 @@ export class UIController {
 
   _clearSelection() {
     this._selectedEntity       = null;
+    this._selectedTile         = null;
     this._isEnemySelection     = false;
     this._awaitingTarget       = null;
     this._validActions         = [];
@@ -1171,7 +1184,7 @@ export class UIController {
     this.renderer.selectedHex      = null;
     this.renderer.selectedEntityId = null;
     this.renderer.highlightHexes   = [];
-    _hideActionPopup();
+    _hideActionPopup(this);
     this._hideTileDetail();
   }
 
@@ -1318,7 +1331,12 @@ export class UIController {
     const state = this.state;
     const popup = this._el('action-popup');
 
+    // Cancel any pending close animation
+    if (this._arcCloseTimer) { clearTimeout(this._arcCloseTimer); this._arcCloseTimer = null; }
+    popup.classList.remove('arc-open', 'arc-closing', 'popup-list-mode');
+
     // Unit picker mode (friendly units, defender targets, or enemy info)
+    // → use arc portrait disambiguation
     const pickerUnits = this._pendingUnitPick?.units
       || this._pendingDefenderPick?.defenders
       || this._pendingEnemyPick?.units;
@@ -1326,30 +1344,14 @@ export class UIController {
       const actionTag = this._pendingDefenderPick ? 'pick_defender'
         : this._pendingEnemyPick ? 'pick_enemy'
         : 'pick_unit';
-      const header = this._pendingDefenderPick ? 'Choose your target:'
-        : this._pendingEnemyPick ? 'Which unit to inspect?'
-        : 'Which unit to select?';
-      let html = `<div class="popup-unit-name">${header}</div>`;
-      for (const u of pickerUnits) {
-        const col        = ENTITY_COLOR[u.type] || '#888';
-        const portraitId = u.type === 'survivor' ? Renderer.survivorAssetId(u.title) : u.type;
-        const src        = portraitId ? this.renderer.getPortraitDataURL(portraitId) : null;
-        const portrait   = src
-          ? `<img src="${src}" style="width:32px;height:32px;border-radius:50%;border:1.5px solid ${col};flex-shrink:0;margin-right:0.4rem;">`
-          : '';
-        html += `<button class="action-btn pick-unit" data-action="${actionTag}" data-unit-id="${u.id}"
-          style="border-left:3px solid ${col};display:flex;align-items:center;">${portrait}${u.displayName} — HP ${u.hp}/${u.maxHp}</button>`;
-      }
-      popup.innerHTML = html;
-      _attachPopupListeners(popup, this);
-      _positionPopup(popup, this);
-      popup.style.display = 'block';
+      const originHex = { col: pickerUnits[0].col, row: pickerUnits[0].row };
+      this._showArcDisambig(pickerUnits, actionTag, originHex);
       return;
     }
 
     const ownerCheck = this._planMode ? this._planFaction : state.activePlayer;
     if (!entity || entity.owner !== ownerCheck || state.gameOver) {
-      _hideActionPopup();
+      _hideActionPopup(this);
       return;
     }
 
@@ -1369,34 +1371,35 @@ export class UIController {
     // In planning mode, always show actions (budget tracked separately)
     const hasAct  = this._planMode || state.actionsAvailable > 0;
 
-    let regularHtml = '';
-    let freeHtml    = '';
+    // Build a flat list of arc action descriptors, grouped by category
+    // Groups: scout, defense, summon, combat, items
+    const arcItems = [];
 
     for (const action of actions) {
-      const dis = !hasAct ? 'disabled' : '';
+      const dis = !hasAct;
       switch (action.type) {
         case ActionType.MOVE:
-          // Move is the default click action — no button needed
-          break;
-        case ActionType.EXPLORE:
-          regularHtml += btn('🔍 Explore', 'explore', dis, `data-action="explore"`);
-          break;
         case ActionType.BATTLE:
-          // Attack is triggered directly by clicking a red-highlighted visible-enemy hex — no popup button needed.
+          break; // handled via hex clicks
+        case ActionType.EXPLORE:
+          arcItems.push({ group: 'scout', label: 'Explore', fullLabel: 'Explore tile',
+            color: '#7eccd6', dis, attrs: 'data-action="explore"' });
           break;
-        case ActionType.BATTLE_HEX:
-          // "Attack Hex" — lets the player attack a hex that may be hidden by fog of war.
-          // Only show in planning mode (resolution handles the skip if the hex turns out empty).
-          if (this._planMode) {
-            regularHtml += btn('⚔ Attack Hex', 'battle-hex', dis, `data-action="attack_hex"`);
-          }
+        case ActionType.SOUND_HORN:
+          arcItems.push({ group: 'scout', label: 'Sound Horn', fullLabel: 'Sound Horn (1 food)',
+            color: '#7eccd6', dis: !action.affordable || dis, attrs: 'data-action="sound_horn"' });
           break;
+        case ActionType.GUARD: {
+          const charges = action.currentCharges || 0;
+          const lbl = charges > 0 ? `Guard +${charges + 1}` : 'Guard';
+          arcItems.push({ group: 'defense', label: lbl, fullLabel: lbl,
+            color: '#8888cc', dis, attrs: 'data-action="guard"' });
+          break;
+        }
         case ActionType.FORTIFY: {
-          // Use projected inventory in plan mode so queued fortifies reduce affordability
           const fortInv    = projInv ? projInv.shared : state.inventory.shared;
           const hasMetal   = (fortInv.metal || 0) > 0;
           const hasWood    = (fortInv.wood  || 0) > 0;
-          // Use action.affordable as fallback when projInv not available
           const cantAfford = projInv ? (!hasMetal && !hasWood) : !action.affordable;
           const hasDoubler = entity.type === EntityType.SURVIVOR && entity.ability === SurvivorAbility.FORTIFY_DOUBLE;
           const tileData   = state.tiles.get(hexKey(entity.col, entity.row));
@@ -1404,128 +1407,375 @@ export class UIController {
           const metalGain   = Math.min(4, cur + 2) - cur;
           const doublerGain = Math.min(4, cur + 2) - cur;
           const woodGain    = Math.min(4, cur + 1) - cur;
-          const lbl = hasMetal
-            ? `⚙ Reinforce +${metalGain} DEF (1⚙)`
+          const shortLbl = hasMetal ? 'Reinforce Hex' : 'Fortify Hex';
+          const fullLbl = hasMetal
+            ? `Reinforce +${metalGain} DEF (1 metal)`
             : hasDoubler
-              ? `🪵 Fortify +${doublerGain} DEF ★ (1🪵)`
-              : `🪵 Fortify +${woodGain} DEF (1🪵)`;
-          regularHtml += btn(lbl, 'fortify', (cantAfford || !hasAct) ? 'disabled' : '', `data-action="fortify"`);
+              ? `Fortify +${doublerGain} DEF (1 wood)`
+              : `Fortify +${woodGain} DEF (1 wood)`;
+          arcItems.push({ group: 'defense', label: shortLbl, fullLabel: fullLbl,
+            color: '#e0a832', dis: cantAfford || dis, attrs: 'data-action="fortify"' });
           break;
         }
-        case ActionType.GUARD:
-        {
-          const charges = action.currentCharges || 0;
-          const lbl = charges > 0 ? `🛡 Guard (+${charges + 1})` : '🛡 Guard';
-          regularHtml += btn(lbl, 'guard', dis, `data-action="guard"`);
-        }
-          break;
-        case ActionType.SOUND_HORN:
-        {
-          const hornDis = !action.affordable ? 'disabled' : dis;
-          regularHtml += btn('📯 Sound Horn', 'explore', hornDis, `data-action="sound_horn"`);
-        }
+        case ActionType.BATTLE_HEX:
+          if (this._planMode) {
+            arcItems.push({ group: 'combat', label: 'Attack Hex', fullLabel: 'Attack Hex',
+              color: '#c0392b', dis, attrs: 'data-action="attack_hex"' });
+          }
           break;
         case ActionType.SUMMON:
-          // Each SUMMON entry has a specific summonType — render all three as separate buttons.
-          // De-duplicate: only render the first time we hit a SUMMON action (we'll loop all three).
-          // (The loop handles this — each has a distinct summonType so we render each once.)
-          {
-            const projWitch = projInv ? projInv.witch : state.inventory.witch;
-            const projMetal = projWitch[ResourceType.METAL] || 0;
-            const projWood  = projWitch[ResourceType.WOOD]  || 0;
-            const projTotal = Object.values(projWitch).reduce((s, v) => s + (v || 0), 0);
-            const projAffordable = {
-              [EntityType.IRON_GOLEM]: projMetal >= 2,
-              [EntityType.WOOD_GOLEM]: projWood  >= 2,
-              [EntityType.MINION]:     projTotal >= 2,
-            };
-            const SUMMON_LABEL = {
-              [EntityType.IRON_GOLEM]: '🔩 Iron Golem (2⚙)',
-              [EntityType.WOOD_GOLEM]: '🪵 Wood Golem (2🪵)',
-              [EntityType.MINION]:     '🌑 Minion (2 res)',
-            };
-            const st = action.summonType;
-            const canAfford = projAffordable[st] ?? action.affordable;
-            const btnDis = (!canAfford || !hasAct) ? 'disabled' : '';
-            regularHtml += btn(SUMMON_LABEL[st] ?? '🌑 Summon', 'summon', btnDis, `data-action="summon" data-summon-type="${st}"`);
-          }
+          // Handled below — we always show all 3 summon types
           break;
         case ActionType.USE_ITEM:
           for (const item of action.usable) {
-            // Food is managed via the plan-panel food slots in planning mode.
             if (this._planMode && item.item === ResourceType.FOOD) continue;
-            // Disable if projected inventory can't cover this item
             let itemDis = dis;
             if (projInv) {
               if (item.item === ResourceType.HERBS) {
                 const eitems = projInv.entityItems[entity.id] ?? {};
-                if ((eitems[ResourceType.HERBS] || 0) < 1) itemDis = 'disabled';
+                if ((eitems[ResourceType.HERBS] || 0) < 1) itemDis = true;
               } else if (!item.item.startsWith('weapon:')) {
-                if ((projInv.shared[item.item] || 0) < 1) itemDis = 'disabled';
+                if ((projInv.shared[item.item] || 0) < 1) itemDis = true;
               }
             }
-            regularHtml += btn(item.label, 'item', itemDis, `data-action="use_item" data-item="${item.item}"`);
+            // Strip leading emoji from item labels
+            const cleanLabel = item.label.replace(/^[\p{Emoji_Presentation}\p{Extended_Pictographic}]\s*/u, '');
+            arcItems.push({ group: 'items', label: cleanLabel, fullLabel: item.label,
+              color: '#b0b0b0', dis: itemDis,
+              attrs: `data-action="use_item" data-item="${item.item}"` });
           }
           break;
         case ActionType.EQUIP_WEAPON:
           for (const w of action.weapons) {
-            regularHtml += btn(`⚔ Equip ${w.label}`, 'item', dis, `data-action="use_item" data-item="${w.key}"`);
+            arcItems.push({ group: 'items', label: w.label, fullLabel: `Equip ${w.label}`,
+              color: '#b0b0b0', dis, attrs: `data-action="use_item" data-item="${w.key}"` });
           }
           break;
         case ActionType.USE_ABILITY: {
           const abilityLabels = {
-            [SurvivorAbility.HEAL]:    '❤ Tend Wounds',
-            [SurvivorAbility.INSPIRE]: '✦ Battle Cry',
-            [SurvivorAbility.RALLY]:   '✦ Holy Sermon',
+            [SurvivorAbility.HEAL]:    'Tend Wounds',
+            [SurvivorAbility.INSPIRE]: 'Battle Cry',
+            [SurvivorAbility.RALLY]:   'Holy Sermon',
           };
-          const lbl    = abilityLabels[action.ability] || 'Use Ability';
+          const fullLabels = abilityLabels;
           const isFree = action.ability !== SurvivorAbility.HEAL;
-          if (isFree) {
-            freeHtml += btn(lbl, 'item ability free', '', `data-action="use_ability"`);
-          } else {
-            regularHtml += btn(lbl, 'item ability', !hasAct ? 'disabled' : '', `data-action="use_ability"`);
-          }
+          arcItems.push({ group: 'items',
+            label: abilityLabels[action.ability] || 'Ability',
+            fullLabel: fullLabels[action.ability] || 'Use Ability',
+            color: '#88eeff', dis: !isFree && dis, free: isFree,
+            attrs: 'data-action="use_ability"' });
           break;
         }
       }
     }
 
-    let html = regularHtml;
-    if (freeHtml) {
-      html += `<div class="popup-section-label">Free</div>`;
-      html += freeHtml;
+    // Always show all 3 summon types for the witch, greyed out if unaffordable
+    if (entity.type === EntityType.WITCH && actions.some(a => a.type === ActionType.SUMMON || a.type === ActionType.GUARD)) {
+      const projWitch = projInv ? projInv.witch : state.inventory.witch;
+      const projMetal = projWitch?.[ResourceType.METAL] || 0;
+      const projWood  = projWitch?.[ResourceType.WOOD]  || 0;
+      const projTotal = projWitch ? Object.values(projWitch).reduce((s, v) => s + (v || 0), 0) : 0;
+      const ALL_SUMMONS = [
+        { st: EntityType.IRON_GOLEM, label: 'Summon Iron Golem',  full: 'Summon Iron Golem (2 metal)',  afford: projMetal >= 2 },
+        { st: EntityType.WOOD_GOLEM, label: 'Summon Wood Golem', full: 'Summon Wood Golem (2 wood)',   afford: projWood >= 2 },
+        { st: EntityType.MINION,     label: 'Summon Minion',      full: 'Summon Minion (2 any resource)', afford: projTotal >= 2 },
+      ];
+      for (const s of ALL_SUMMONS) {
+        arcItems.push({ group: 'summon', label: s.label, fullLabel: s.full,
+          color: '#9b59b6', dis: !s.afford || !hasAct,
+          attrs: `data-action="summon" data-summon-type="${s.st}"` });
+      }
     }
-    // Show a no-op message if there's genuinely nothing to do
-    if (!html) html = `<div class="popup-unit-name">No actions available</div>`;
 
-    // Tile info always available — lets user inspect the current hex
-    html += btn('🗺 Tile Info', 'tile-info', '', `data-action="tile_info"`);
+    if (arcItems.length === 0) {
+      // Nothing to show — use list mode with a message
+      popup.classList.add('popup-list-mode');
+      popup.innerHTML = `<div class="popup-unit-name">No actions available</div>`;
+      _positionPopup(popup, this);
+      popup.style.display = 'block';
+      return;
+    }
+
+    // Compute arc geometry
+    const screenPos = _getEntityScreenPos(this, entity);
+    if (!screenPos) return;
+
+    // Decide direction: open to side with more space
+    const openRight = screenPos.x < window.innerWidth / 2;
+    const centerAngle = openRight ? 0 : Math.PI; // 0 = right, PI = left
+
+    // Compute initial arc radius (hex edge); overlap resolution happens in _positionArcPopup
+    const canvasRect = this.canvas.getBoundingClientRect();
+    const canvasScale = canvasRect.width / this.canvas.width;
+    const hexScreenPx = this.renderer.hexSize * canvasScale * this.renderer.zoomLevel;
+    // Dynamic gap: keep items within a ~160° arc so the radius stays tight.
+    // With many items, narrow the gap rather than blowing out the radius.
+    const totalItems = arcItems.length;
+    const MAX_SPAN  = 160 * (Math.PI / 180);
+    const PREF_GAP  = 40  * (Math.PI / 180);
+    const ITEM_GAP  = totalItems <= 1 ? 0 : Math.min(PREF_GAP, MAX_SPAN / (totalItems - 1));
+    const ARC_RADIUS = _baseArcRadius(hexScreenPx);
+    this._arcRadius = ARC_RADIUS;
+
+    const totalAngle = Math.max(0, totalItems - 1) * ITEM_GAP;
+    const startAngle = centerAngle - totalAngle / 2;
+
+    // Assign angles uniformly — keep top-to-bottom order consistent on both sides
+    for (let i = 0; i < arcItems.length; i++) {
+      // When opening left (π), subtract so first item stays at top
+      arcItems[i]._angle = openRight
+        ? startAngle + i * ITEM_GAP
+        : centerAngle + totalAngle / 2 - i * ITEM_GAP;
+      arcItems[i]._idx = i;
+    }
+
+    // Generate arc item HTML — initial positions use base radius (will be corrected before animating)
+    let html = '';
+    for (const item of arcItems) {
+      const delay = item._idx * 30;
+      const disAttr = item.dis ? 'disabled' : '';
+      const freeCls = item.free ? ' arc-free' : '';
+      html += `<button class="arc-item${freeCls}" title="${item.fullLabel}"
+        style="--arc-x:0px;--arc-y:0px;--arc-delay:${delay}ms;--arc-color:${item.color};--arc-hover:${item.color};--arc-glow:${item.color}33"
+        ${disAttr} ${item.attrs}>${item.label}</button>`;
+    }
 
     popup.innerHTML = html;
-    _attachPopupListeners(popup, this);
-    _positionPopup(popup, this);
+
+    // Store arc state for pan/zoom tracking and canvas line drawing
+    this._arcEntityCol = effectiveEntity.col;
+    this._arcEntityRow = effectiveEntity.row;
+    this._arcItems = arcItems; // keep for line drawing
+
+    // Position popup centered on entity
+    _positionArcPopup(popup, this);
     popup.style.display = 'block';
+
+    // Measure buttons at full scale (they start at scale 0.3 but we need final size).
+    // Temporarily force full scale with no transition to measure, then reset.
+    const btns = popup.querySelectorAll('.arc-item');
+    for (const btn of btns) {
+      btn.style.transition = 'none';
+      btn.style.transform = 'translate(-50%, -50%) scale(1)';
+      btn.style.opacity = '0'; // keep invisible during measurement
+    }
+    // Force layout so measurements are accurate
+    popup.offsetHeight; // eslint-disable-line no-unused-expressions
+
+    // Resolve overlap-free radius using real button sizes
+    const finalR = _resolveArcLayout(popup, this, ARC_RADIUS);
+    this._arcRadius = finalR;
+    this._arcBaseR = ARC_RADIUS;
+
+    // Set final positions on CSS custom properties
+    for (let i = 0; i < arcItems.length && i < btns.length; i++) {
+      const fx = Math.cos(arcItems[i]._angle) * finalR;
+      const fy = Math.sin(arcItems[i]._angle) * finalR;
+      btns[i].style.setProperty('--arc-x', fx.toFixed(1) + 'px');
+      btns[i].style.setProperty('--arc-y', fy.toFixed(1) + 'px');
+    }
+
+    // Reset to pre-animation state (collapsed at center) then let CSS transition to final spot
+    for (const btn of btns) {
+      btn.style.transform = '';
+      btn.style.opacity = '';
+      btn.style.transition = '';
+    }
+
+    _attachPopupListeners(popup, this);
+
+    // Trigger open animation on next frame — positions are already set, just animate
+    requestAnimationFrame(() => {
+      popup.classList.add('arc-open');
+      this.onRedraw();
+    });
+
+    // Start tracking pan/zoom — reposition popup each frame while visible
+    _startArcTracking(this);
+  }
+
+  /**
+   * Show an arc-based disambiguation menu with portrait items for each unit.
+   * @param {Array} units - entities to display as portrait arc items
+   * @param {string} actionTag - data-action value (pick_unit, pick_defender, pick_enemy)
+   * @param {{col:number, row:number}} originHex - hex to center the arc on
+   * @param {Array} [extraItems] - optional non-portrait arc items (e.g. "Move" button)
+   */
+  _showArcDisambig(units, actionTag, originHex, extraItems) {
+    const popup = this._el('action-popup');
+    if (this._arcCloseTimer) { clearTimeout(this._arcCloseTimer); this._arcCloseTimer = null; }
+    popup.classList.remove('arc-open', 'arc-closing', 'popup-list-mode');
+    this._popupVisible = true;
+
+    // Build arc items — extra items first, then portrait items for each unit
+    const arcItems = [];
+
+    if (extraItems) {
+      for (const ei of extraItems) {
+        arcItems.push({
+          group: 'disambig',
+          label: ei.label,
+          fullLabel: ei.label,
+          color: ei.color || '#888',
+          dis: false,
+          free: false,
+          attrs: `data-action="${ei.action}"`,
+          _portrait: false,
+        });
+      }
+    }
+
+    for (const u of units) {
+      const col        = ENTITY_COLOR[u.type] || '#888';
+      const portraitId  = u.type === 'survivor' ? Renderer.survivorAssetId(u.title) : u.type;
+      const src         = portraitId ? this.renderer.getPortraitDataURL(portraitId) : null;
+      const pct         = u.maxHp > 0 ? u.hp / u.maxHp : 0;
+      const hpColor     = pct > 0.5 ? '#4caf50' : pct > 0.25 ? '#ff9800' : '#f44336';
+
+      const imgHtml = src
+        ? `<img class="arc-portrait-img" src="${src}">`
+        : `<div class="arc-portrait-img" style="display:flex;align-items:center;justify-content:center;font-size:1.2rem;background:rgba(20,16,32,0.8);">${u.displayName.charAt(0)}</div>`;
+
+      arcItems.push({
+        group: 'disambig',
+        label: `${imgHtml}<div class="arc-portrait-hp"><div class="arc-portrait-hp-fill" style="width:${(pct * 100).toFixed(0)}%;background:${hpColor};"></div></div><span class="arc-portrait-name">${u.displayName}</span>`,
+        fullLabel: `${u.displayName} — HP ${u.hp}/${u.maxHp}`,
+        color: col,
+        dis: false,
+        free: false,
+        attrs: `data-action="${actionTag}" data-unit-id="${u.id}"`,
+        _portrait: true,
+      });
+    }
+
+    // Compute arc geometry
+    const canvasRect = this.canvas.getBoundingClientRect();
+    const canvasScale = canvasRect.width / this.canvas.width;
+    const hexScreenPx = this.renderer.hexSize * canvasScale * this.renderer.zoomLevel;
+
+    // Decide direction: open to side with more space
+    const { x: hx, y: hy } = this.renderer.hexToCanvasPos(originHex.col, originHex.row);
+    const scale = canvasRect.width / this.canvas.width;
+    const screenX = canvasRect.left + hx * scale;
+    const openRight = screenX < window.innerWidth / 2;
+    const centerAngle = openRight ? 0 : Math.PI;
+
+    // Use a consistent target radius for portrait arcs — large enough that
+    // no button obscures the origin hex (so players can tap to dismiss).
+    // The closest edge of any button to center is (radius - halfSize); we
+    // need that to exceed the hex radius so the hex stays tappable.
+    const BASE_R = _baseArcRadius(hexScreenPx);
+    const hexTapZone = hexScreenPx * 0.55; // half-hex + small margin
+    // Portrait items are ~56×80px; worst-case half-diagonal ~50px
+    const PORTRAIT_CLEARANCE = 50;
+    const TARGET_R = Math.max(BASE_R, hexTapZone + PORTRAIT_CLEARANCE, 70);
+    this._arcRadius = TARGET_R;
+
+    // Compute angular gap dynamically: spread items evenly within a max arc
+    // span (~180°) so the radius stays consistent regardless of item count.
+    const totalItems = arcItems.length;
+    const MAX_SPAN = Math.PI; // 180° max arc span
+    const MIN_GAP  = 35 * (Math.PI / 180); // don't pack tighter than 35°
+    const ITEM_GAP = totalItems <= 1 ? 0
+      : Math.max(MIN_GAP, Math.min(MAX_SPAN / (totalItems - 1), 65 * (Math.PI / 180)));
+    const totalAngle = Math.max(0, totalItems - 1) * ITEM_GAP;
+    const startAngle = centerAngle - totalAngle / 2;
+
+    for (let i = 0; i < arcItems.length; i++) {
+      arcItems[i]._angle = openRight
+        ? startAngle + i * ITEM_GAP
+        : centerAngle + totalAngle / 2 - i * ITEM_GAP;
+      arcItems[i]._idx = i;
+    }
+
+    // Generate HTML
+    let html = '';
+    for (const item of arcItems) {
+      const delay = item._idx * 30;
+      const portraitCls = item._portrait ? ' arc-portrait' : '';
+      html += `<button class="arc-item${portraitCls}" title="${item.fullLabel}"
+        style="--arc-x:0px;--arc-y:0px;--arc-delay:${delay}ms;--arc-color:${item.color};--arc-hover:${item.color};--arc-glow:${item.color}33"
+        ${item.attrs}>${item.label}</button>`;
+    }
+
+    popup.innerHTML = html;
+
+    // Store arc state for pan/zoom tracking and canvas line drawing
+    this._arcEntityCol = originHex.col;
+    this._arcEntityRow = originHex.row;
+    this._arcItems = arcItems;
+
+    // Position popup centered on hex
+    _positionArcPopup(popup, this);
+    popup.style.display = 'block';
+
+    // Measure buttons at full scale for overlap resolution
+    const btns = popup.querySelectorAll('.arc-item');
+    for (const btn of btns) {
+      btn.style.transition = 'none';
+      btn.style.transform = 'translate(-50%, -50%) scale(1)';
+      btn.style.opacity = '0';
+    }
+    popup.offsetHeight; // force layout
+
+    const finalR = _resolveArcLayout(popup, this, TARGET_R);
+    this._arcRadius = finalR;
+    this._arcBaseR = TARGET_R;
+
+    for (let i = 0; i < arcItems.length && i < btns.length; i++) {
+      const fx = Math.cos(arcItems[i]._angle) * finalR;
+      const fy = Math.sin(arcItems[i]._angle) * finalR;
+      btns[i].style.setProperty('--arc-x', fx.toFixed(1) + 'px');
+      btns[i].style.setProperty('--arc-y', fy.toFixed(1) + 'px');
+    }
+
+    // Reset to pre-animation state then let CSS transition to final spot
+    for (const btn of btns) {
+      btn.style.transform = '';
+      btn.style.opacity = '';
+      btn.style.transition = '';
+    }
+
+    _attachPopupListeners(popup, this);
+
+    requestAnimationFrame(() => {
+      popup.classList.add('arc-open');
+      this.onRedraw();
+    });
+
+    _startArcTracking(this);
   }
 
   _showDisambigPopup() {
-    const popup = this._el('action-popup');
     const { actor, hex, allies } = this._pendingDisambig;
-    let html = `<div class="popup-unit-name">Move or select?</div>`;
-    html += `<button class="action-btn" data-action="disambig_move">Move ${actor.displayName} here</button>`;
-    for (const u of allies) {
-      const col = ENTITY_COLOR[u.type] || '#888';
-      const portraitId = u.type === 'survivor' ? Renderer.survivorAssetId(u.title) : u.type;
-      const src = portraitId ? this.renderer.getPortraitDataURL(portraitId) : null;
-      const portrait = src
-        ? `<img src="${src}" style="width:32px;height:32px;border-radius:50%;border:1.5px solid ${col};flex-shrink:0;margin-right:0.4rem;">`
-        : '';
-      html += `<button class="action-btn pick-unit" data-action="pick_unit" data-unit-id="${u.id}"
-        style="border-left:3px solid ${col};display:flex;align-items:center;">${portrait}Select ${u.displayName}</button>`;
-    }
-    popup.innerHTML = html;
-    _attachPopupListeners(popup, this);
-    _positionPopup(popup, this);
-    popup.style.display = 'block';
+    this._showArcDisambig(allies, 'pick_unit', hex, [
+      { label: `Move ${actor.displayName} \u279C`, action: 'disambig_move', color: ENTITY_COLOR[actor.type] || '#888' },
+    ]);
+  }
+
+  /** Re-evaluate affordability of arc items after a stackable action (summon/fortify). */
+  _refreshArcAffordability() {
+    const popup = this._el('action-popup');
+    if (!popup || !popup.classList.contains('arc-open')) return;
+    const projInv = this._planMode ? computeProjectedInventory(this.state, interleavePlan(this._unitPlans)) : null;
+    if (!projInv) return;
+    popup.querySelectorAll('.arc-item[data-action="summon"]').forEach(btn => {
+      const st = btn.dataset.summonType;
+      const projWitch = projInv.witch;
+      const projMetal = projWitch[ResourceType.METAL] || 0;
+      const projWood  = projWitch[ResourceType.WOOD]  || 0;
+      const projTotal = Object.values(projWitch).reduce((s, v) => s + (v || 0), 0);
+      const affordable = st === EntityType.IRON_GOLEM ? projMetal >= 2
+        : st === EntityType.WOOD_GOLEM ? projWood >= 2
+        : projTotal >= 2;
+      btn.disabled = !affordable;
+    });
+    popup.querySelectorAll('.arc-item[data-action="fortify"]').forEach(btn => {
+      const shared = projInv.shared;
+      const hasMetal = (shared.metal || 0) > 0;
+      const hasWood  = (shared.wood  || 0) > 0;
+      btn.disabled = !hasMetal && !hasWood;
+    });
   }
 
   // ── Sidebar ───────────────────────────────────────────────────────────────
@@ -1545,6 +1795,36 @@ export class UIController {
     if (!bar) return;
 
     const entity = this._selectedEntity;
+    const tileSelection = this._selectedTile;
+
+    // Tile-only selection (no entity)
+    if (!entity && tileSelection) {
+      const tile = this.state.tiles.get(hexKey(tileSelection.col, tileSelection.row));
+      if (!tile) { bar.style.display = 'none'; return; }
+      const terrainBadge = _buildTerrainBadge(tile);
+      const TERRAIN_ICON = {
+        [TileType.GRASS]: '🌿', [TileType.FOREST]: '🌲', [TileType.DIRT]: '🪨',
+        [TileType.ROAD]: '🛤', [TileType.RIVER]: '💧', [TileType.BRIDGE]: '🌉',
+      };
+      const icon = tile.building ? (BUILDING_ICON[tile.building] ?? '🏠') : (TERRAIN_ICON[tile.type] ?? '🌿');
+      const label = tile.building ? (BUILDING_LABEL[tile.building] ?? 'Building') : (tile.type ?? 'terrain');
+      bar.style.display = 'flex';
+      bar.innerHTML = `
+        <span class="usb-icon" style="background:#3a4a3a;font-size:1.1rem">${icon}</span>
+        <span class="usb-tile-info">
+          <span class="usb-tile-name">${label}</span>
+          <span class="usb-tile-details">${terrainBadge}</span>
+        </span>
+        <button class="usb-deselect-btn" title="Deselect">✕</button>
+      `;
+      bar.querySelector('.usb-deselect-btn').addEventListener('click', () => {
+        this._clearSelection();
+        this._updateSidebar();
+        this.onRedraw();
+      });
+      return;
+    }
+
     if (!entity) {
       bar.style.display = 'none';
       return;
@@ -1574,6 +1854,12 @@ export class UIController {
       ? `<img class="usb-portrait" src="${src}" style="border-color:${color};" alt="">`
       : `<span class="usb-icon" style="background:${color}">${glyph}</span>`;
 
+    // Terrain badge for the entity's current hex
+    const entCol = this._planMode ? (this._getProjectedPos(entity.id)?.col ?? entity.col) : entity.col;
+    const entRow = this._planMode ? (this._getProjectedPos(entity.id)?.row ?? entity.row) : entity.row;
+    const tile = this.state.tiles.get(hexKey(entCol, entRow));
+    const terrainHtml = tile ? `<span class="usb-terrain">${_buildTerrainBadge(tile)}</span>` : '';
+
     bar.style.display = 'flex';
     bar.innerHTML = `
       ${portraitHtml}
@@ -1590,6 +1876,7 @@ export class UIController {
           <span class="usb-stat">ATK <span class="usb-stat-val">${entity.attack}</span></span>
           <span class="usb-stat">DEF <span class="usb-stat-val">${entity.defense}</span></span>
           ${weaponLabel ? `<span class="usb-weapon">⚔ ${weaponLabel}</span>` : ''}
+          ${terrainHtml}
         </span>
       </span>
       <button class="usb-deselect-btn" title="Deselect unit">✕</button>
@@ -1836,7 +2123,7 @@ export class UIController {
     if (action === 'disambig_move') {
       const disambig = this._pendingDisambig;
       this._pendingDisambig = null;
-      _hideActionPopup();
+      _hideActionPopup(this);
       if (!disambig) return;
       const { actor, hex } = disambig;
       this._awaitingTarget = null;
@@ -1850,23 +2137,38 @@ export class UIController {
       return;
     }
 
-    if (action === 'tile_info') {
-      _hideActionPopup();
-      this._popupVisible = false;
-      if (entity) this._showTileDetail({ col: entity.col, row: entity.row });
-      return;
-    }
-
     if (!entity || !this._planMode) return;
     if (entity.owner !== this._planFaction) return;
 
-    // Any action button click closes the popup
-    this._popupVisible = false;
+    // Stackable actions: keep the arc menu open, just pulse the button
+    const STACKABLE = new Set(['guard', 'summon', 'fortify']);
+    const isStackable = STACKABLE.has(action);
+
+    // Pulse the clicked arc item
+    const isArcItem = button.classList.contains('arc-item');
+    if (isArcItem) {
+      button.classList.remove('arc-pulse');
+      void button.offsetWidth; // force reflow to restart animation
+      button.classList.add('arc-pulse');
+    }
+
+    if (!isStackable) {
+      this._popupVisible = false;
+    }
+
+    // Helper: delayed hide — let the pulse animation finish (200ms) before closing
+    const delayedHide = () => {
+      if (isArcItem) {
+        setTimeout(() => _hideActionPopup(this), 220);
+      } else {
+        _hideActionPopup(this);
+      }
+    };
 
     switch (action) {
       case 'explore': {
-        _hideActionPopup();
         this._addToPlan({ type: PlanActionType.EXPLORE, entityId: entity.id });
+        delayedHide();
         if (entity.alive) this._selectEntity(entity);
         else this._clearSelection();
         this._updateSidebar(); this.onRedraw(); break;
@@ -1877,42 +2179,38 @@ export class UIController {
         break;
 
       case 'fortify': {
-        _hideActionPopup();
         this._addToPlan({ type: PlanActionType.FORTIFY, entityId: entity.id });
-        if (entity.alive) this._selectEntity(entity);
-        else this._clearSelection();
+        if (!isStackable) delayedHide();
+        else this._refreshArcAffordability();
         this._updateSidebar(); this.onRedraw(); break;
       }
 
       case 'guard': {
-        _hideActionPopup();
         this._addToPlan({ type: PlanActionType.GUARD, entityId: entity.id });
-        if (entity.alive) this._selectEntity(entity);
-        else this._clearSelection();
+        if (!isStackable) delayedHide();
         this._updateSidebar(); this.onRedraw(); break;
       }
 
       case 'sound_horn': {
-        _hideActionPopup();
         this._addToPlan({ type: PlanActionType.SOUND_HORN, entityId: entity.id });
+        delayedHide();
         if (entity.alive) this._selectEntity(entity);
         else this._clearSelection();
         this._updateSidebar(); this.onRedraw(); break;
       }
 
       case 'summon': {
-        _hideActionPopup();
         const summonType = button.dataset.summonType ?? null;
         this._addToPlan({ type: PlanActionType.SUMMON, entityId: entity.id, summonType: summonType ?? undefined });
-        if (entity.alive) this._selectEntity(entity);
-        else this._clearSelection();
+        if (!isStackable) delayedHide();
+        else this._refreshArcAffordability();
         this._updateSidebar();
         this.onRedraw();
         break;
       }
 
       case 'attack_hex': {
-        _hideActionPopup();
+        delayedHide();
         const bhAction = this._validActions.find(a => a.type === ActionType.BATTLE_HEX);
         const hexTargets = bhAction?.targets ?? [];
         this._awaitingTarget = { actionType: ActionType.BATTLE_HEX, actor: entity, hexTargets };
@@ -1924,17 +2222,16 @@ export class UIController {
       }
 
       case 'use_item': {
-        _hideActionPopup();
-        const item = button.dataset.item;
-        this._addToPlan({ type: PlanActionType.USE_ITEM, entityId: entity.id, item });
+        this._addToPlan({ type: PlanActionType.USE_ITEM, entityId: entity.id, item: button.dataset.item });
+        delayedHide();
         if (entity.alive) this._selectEntity(entity);
         else this._clearSelection();
         this._updateSidebar(); this.onRedraw(); break;
       }
 
       case 'use_ability': {
-        _hideActionPopup();
         this._addToPlan({ type: PlanActionType.USE_ABILITY, entityId: entity.id });
+        delayedHide();
         if (entity.alive) this._selectEntity(entity);
         else this._clearSelection();
         this._updateSidebar(); this.onRedraw(); break;
@@ -2215,6 +2512,27 @@ export class UIController {
       continueBtn?.removeEventListener('click', dismiss);
     };
     continueBtn?.addEventListener('click', dismiss);
+  }
+
+  /**
+   * Show a narrative story modal (campaign triggers).
+   * Returns a Promise that resolves when the player dismisses it.
+   */
+  showStoryModal(title, text) {
+    return new Promise(resolve => {
+      const el = this._el('story-modal');
+      if (!el) { resolve(); return; }
+      el.querySelector('.story-modal-title').textContent = title;
+      el.querySelector('.story-modal-text').textContent = text;
+      el.classList.add('visible');
+      const btn = this._el('story-modal-continue');
+      const handler = () => {
+        btn.removeEventListener('click', handler);
+        el.classList.remove('visible');
+        resolve();
+      };
+      btn.addEventListener('click', handler);
+    });
   }
 
   // ── Dialogs ───────────────────────────────────────────────────────────────
@@ -2849,7 +3167,9 @@ export class UIController {
             }
             kills.push(name);
           }
-          if (ev.result?.encounterSurvivor) {
+          if (ev.result?.encounterSurvivors?.length) {
+            survivors.push(...ev.result.encounterSurvivors);
+          } else if (ev.result?.encounterSurvivor) {
             survivors.push(ev.result.encounterSurvivor);
           }
           if (ev.action?.type === 'summon' && ev.result?.success) {
@@ -3289,6 +3609,25 @@ export class UIController {
 
 // ── Module-level helpers ───────────────────────────────────────────────────
 
+/** Build HTML for a terrain badge (used in unit stats bar). */
+function _buildTerrainBadge(tile) {
+  const TERRAIN_ICON = {
+    [TileType.GRASS]: '🌿', [TileType.FOREST]: '🌲', [TileType.DIRT]: '🪨',
+    [TileType.ROAD]: '🛤', [TileType.RIVER]: '💧', [TileType.BRIDGE]: '🌉',
+  };
+  const parts = [];
+  const icon = tile.building ? (BUILDING_ICON[tile.building] ?? '🏠') : (TERRAIN_ICON[tile.type] ?? '');
+  const label = tile.building ? (BUILDING_LABEL[tile.building] ?? 'Building') : (tile.type ?? '');
+  parts.push(`<span class="usb-terrain-icon">${icon}</span> ${label}`);
+  if (tile.explored && tile.fortifyLevel) {
+    parts.push(`<span class="usb-terrain-fort">⚙ Fort +${tile.fortifyLevel}</span>`);
+  }
+  if (tile.powerNode) {
+    parts.push(`<span class="usb-terrain-node">⬡ Power Node</span>`);
+  }
+  return parts.join(' · ');
+}
+
 /**
  * Format a countdown in seconds into a friendly string.
  * >= 1 day:  "2d 4h"
@@ -3436,9 +3775,205 @@ function _buildBreakdownHTML(snap, bd, side, total) {
   return parts.join('');
 }
 
-function _hideActionPopup() {
+function _hideActionPopup(ui) {
   const p = document.getElementById('action-popup');
-  if (p) p.style.display = 'none';
+  if (!p) return;
+  // Clear any pending close timer
+  if (ui && ui._arcCloseTimer) { clearTimeout(ui._arcCloseTimer); ui._arcCloseTimer = null; }
+  // Stop pan/zoom tracking loop
+  if (ui && ui._arcTrackingRaf) { cancelAnimationFrame(ui._arcTrackingRaf); ui._arcTrackingRaf = null; }
+  // Clear canvas connecting lines
+  if (ui?.renderer) { ui.renderer.arcMenuLines = null; }
+  if (ui) { ui._arcItems = null; ui._arcEntityCol = null; ui._arcEntityRow = null; }
+  // Arc mode: animate close
+  if (p.classList.contains('arc-open') && !p.classList.contains('popup-list-mode')) {
+    p.classList.remove('arc-open');
+    p.classList.add('arc-closing');
+    const itemCount = p.querySelectorAll('.arc-item').length;
+    const closeTime = 150 + itemCount * 20;
+    const timer = setTimeout(() => {
+      p.style.display = 'none';
+      p.classList.remove('arc-closing');
+      if (ui) ui._arcCloseTimer = null;
+    }, closeTime);
+    if (ui) ui._arcCloseTimer = timer;
+    // Trigger redraw to clear canvas lines
+    ui?.onRedraw?.();
+    return;
+  }
+  // List mode or not open: instant hide
+  p.style.display = 'none';
+  p.classList.remove('arc-open', 'arc-closing', 'popup-list-mode');
+  ui?.onRedraw?.();
+}
+
+/** Get the screen position (viewport px) of a selected entity, accounting for planning ghosts. */
+function _getEntityScreenPos(ui, entity) {
+  if (!entity) {
+    // For picker/disambig, try pending state
+    const target = ui._pendingUnitPick?.units[0]
+      || ui._pendingDefenderPick?.defenders[0]
+      || ui._pendingEnemyPick?.units[0];
+    if (!target) return null;
+    entity = target;
+  }
+  let displayCol = entity.col;
+  let displayRow = entity.row;
+  if (ui._pendingDisambig) {
+    displayCol = ui._pendingDisambig.hex.col;
+    displayRow = ui._pendingDisambig.hex.row;
+  } else if (ui._planMode && ui._selectedEntity) {
+    const proj = ui._getProjectedPos(ui._selectedEntity.id);
+    if (proj) { displayCol = proj.col; displayRow = proj.row; }
+  }
+  const canvasRect = ui.canvas.getBoundingClientRect();
+  const { x, y }   = ui.renderer.hexToCanvasPos(displayCol, displayRow);
+  const scale       = canvasRect.width / ui.canvas.width;
+  return {
+    x: canvasRect.left + x * scale,
+    y: canvasRect.top  + y * scale,
+  };
+}
+
+/** Compute arc radius: starts at hex edge, pushes out until items don't overlap. */
+/** Compute base arc radius (hex edge). */
+function _baseArcRadius(hexScreenPx) {
+  return hexScreenPx * 0.87 + 4;
+}
+
+/**
+ * Resolve arc layout so no buttons overlap and none obscure the origin hex.
+ * Starts at baseR, measures actual button rects, and pushes radius out
+ * until all bounding boxes are clear of each other and the hex tap zone.
+ * Returns the final radius used.
+ */
+function _resolveArcLayout(popup, ui, baseR) {
+  const items = ui._arcItems;
+  if (!items?.length) return baseR;
+  const btns = popup.querySelectorAll('.arc-item');
+  if (!btns.length) return baseR;
+
+  // Measure button dimensions (only need width/height, position is computed)
+  const sizes = [];
+  for (let i = 0; i < btns.length; i++) {
+    const rect = btns[i].getBoundingClientRect();
+    sizes.push({ w: rect.width, h: rect.height });
+  }
+
+  // Compute hex tap zone radius (half-hex + margin) so buttons never cover it
+  const canvasRect = ui.canvas.getBoundingClientRect();
+  const canvasScale = canvasRect.width / ui.canvas.width;
+  const hexScreenPx = ui.renderer.hexSize * canvasScale * ui.renderer.zoomLevel;
+  const hexTapZone = hexScreenPx * 0.55;
+
+  // Check if any button's bounding box overlaps the hex center tap zone
+  function obscuresHex(r) {
+    for (let i = 0; i < items.length; i++) {
+      const cx = Math.cos(items[i]._angle) * r;
+      const cy = Math.sin(items[i]._angle) * r;
+      const hw = sizes[i].w / 2, hh = sizes[i].h / 2;
+      // Closest point of button AABB to origin (0,0)
+      const nearX = Math.max(0, Math.abs(cx) - hw);
+      const nearY = Math.max(0, Math.abs(cy) - hh);
+      if (Math.sqrt(nearX * nearX + nearY * nearY) < hexTapZone) return true;
+    }
+    return false;
+  }
+
+  // Check if any pair of bounding boxes overlaps at a given radius
+  function hasOverlap(r) {
+    for (let i = 0; i < items.length; i++) {
+      const cx1 = Math.cos(items[i]._angle) * r;
+      const cy1 = Math.sin(items[i]._angle) * r;
+      const hw1 = sizes[i].w / 2, hh1 = sizes[i].h / 2;
+      for (let j = i + 1; j < items.length; j++) {
+        const cx2 = Math.cos(items[j]._angle) * r;
+        const cy2 = Math.sin(items[j]._angle) * r;
+        const hw2 = sizes[j].w / 2, hh2 = sizes[j].h / 2;
+        // AABB overlap check with 2px padding
+        if (Math.abs(cx1 - cx2) < hw1 + hw2 + 2 &&
+            Math.abs(cy1 - cy2) < hh1 + hh2 + 2) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Only enforce hex-clearance for disambiguation arcs (portrait items) —
+  // regular action arcs don't need it and it would blow out their radius.
+  const hasPortraits = items.some(i => i._portrait);
+
+  // Start at base radius and step outward until no overlaps (and hex is clear for portrait arcs)
+  let r = baseR;
+  const MAX_R = 400; // safety cap
+  while (r < MAX_R && (hasOverlap(r) || (hasPortraits && obscuresHex(r)))) {
+    r += 8;
+  }
+  return r;
+}
+
+/** Position the arc popup centered on the entity's screen position and set up canvas lines. */
+function _positionArcPopup(popup, ui) {
+  const col = ui._arcEntityCol;
+  const row = ui._arcEntityRow;
+  if (col == null || row == null) return;
+
+  const canvasRect = ui.canvas.getBoundingClientRect();
+  const { x, y }   = ui.renderer.hexToCanvasPos(col, row);
+  const scale       = canvasRect.width / ui.canvas.width;
+  const sx = canvasRect.left + x * scale;
+  const sy = canvasRect.top  + y * scale;
+
+  popup.style.left = sx + 'px';
+  popup.style.top  = sy + 'px';
+  popup.style.transform = 'none';
+
+  // Update renderer's arc menu lines and DOM positions for canvas drawing
+  if (ui._arcItems?.length) {
+    // Recompute radius on zoom change (re-resolve overlap with current button sizes)
+    const arcScale = canvasRect.width / ui.canvas.width;
+    const hexPx = ui.renderer.hexSize * arcScale * ui.renderer.zoomLevel;
+    const baseR = _baseArcRadius(hexPx);
+    const prevR = ui._arcRadius || baseR;
+    // Only re-resolve if zoom changed enough to matter (base radius shifted)
+    if (Math.abs(baseR - (ui._arcBaseR || 0)) > 2) {
+      const arcR = _resolveArcLayout(popup, ui, baseR);
+      ui._arcRadius = arcR;
+      ui._arcBaseR = baseR;
+      const arcBtns = popup.querySelectorAll('.arc-item');
+      for (let i = 0; i < ui._arcItems.length && i < arcBtns.length; i++) {
+        const ix = Math.cos(ui._arcItems[i]._angle) * arcR;
+        const iy = Math.sin(ui._arcItems[i]._angle) * arcR;
+        arcBtns[i].style.setProperty('--arc-x', ix.toFixed(1) + 'px');
+        arcBtns[i].style.setProperty('--arc-y', iy.toFixed(1) + 'px');
+      }
+    }
+    const arcR = ui._arcRadius || prevR;
+    ui.renderer.arcMenuLines = {
+      col, row,
+      items: ui._arcItems.map(item => ({
+        x: Math.cos(item._angle) * arcR,
+        y: Math.sin(item._angle) * arcR,
+        color: item.color,
+      })),
+    };
+  }
+}
+
+/** Start a rAF loop that repositions the arc popup on every frame (tracks pan/zoom). */
+function _startArcTracking(ui) {
+  if (ui._arcTrackingRaf) return; // already running
+  const popup = document.getElementById('action-popup');
+  function tick() {
+    if (!popup || popup.style.display === 'none' || popup.classList.contains('popup-list-mode')) {
+      ui._arcTrackingRaf = null;
+      return;
+    }
+    _positionArcPopup(popup, ui);
+    ui._arcTrackingRaf = requestAnimationFrame(tick);
+  }
+  ui._arcTrackingRaf = requestAnimationFrame(tick);
 }
 
 function _positionPopup(popup, ui) {
