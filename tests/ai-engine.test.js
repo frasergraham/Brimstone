@@ -110,15 +110,16 @@ describe('EnginePlanSimState', () => {
     assert.equal(witch.row, 0);
   });
 
-  test('applyMove accumulates multiple departed hexes', () => {
+  test('applyMove only records initial position as departed', () => {
     const sim = makeSim();
     const witch = sim.entities.find(e => e.type === EntityType.WITCH);
     sim.applyMove(witch.id, 1, 0);
     sim.applyMove(witch.id, 2, 0);
     const departed = sim.departedHexes.get(witch.id);
-    assert.equal(departed.size, 2);
+    // Only the initial hex (0,0) should be departed — intermediate stops
+    // must NOT be flagged or the anti-oscillation filter breaks multi-step moves.
+    assert.equal(departed.size, 1);
     assert.ok(departed.has(hexKey(0, 0)));
-    assert.ok(departed.has(hexKey(1, 0)));
   });
 
   test('resourceLedger is independent copy', () => {
@@ -811,6 +812,28 @@ describe('assemblePlan', () => {
     const plan = assemblePlan(actions, sim, board, new Map());
     const oscillating = plan.find(a => a.type === PlanActionType.MOVE && a.toCol === 0 && a.toRow === 0);
     assert.ok(!oscillating, 'should filter out move returning to departed hex');
+  });
+
+  test('multi-step road moves preserve intermediate stops', () => {
+    const sim = makeSim();
+    const witch = sim.entities.find(e => e.type === EntityType.WITCH);
+    // Simulate a 3-step road journey: witch at (0,0) → (1,0) → (2,0)
+    // applyMove records only the initial hex as departed
+    sim.applyMove(witch.id, 1, 0); // depart (0,0), arrive (1,0)
+    sim.applyMove(witch.id, 2, 0); // depart (1,0), arrive (2,0)
+
+    const board = assessBoard(sim);
+    const actions = [
+      // These are the two sequential MOVE actions the AI generated
+      { type: PlanActionType.MOVE, entityId: witch.id, toCol: 1, toRow: 0, _priority: 2, _goal: Goal.BUILD_ARMY },
+      { type: PlanActionType.MOVE, entityId: witch.id, toCol: 2, toRow: 0, _priority: 2, _goal: Goal.BUILD_ARMY },
+    ];
+    const plan = assemblePlan(actions, sim, board, new Map());
+    const moves = plan.filter(a => a.type === PlanActionType.MOVE);
+    assert.equal(moves.length, 2,
+      'both sequential moves should survive — intermediate (1,0) must NOT be filtered as departed');
+    assert.equal(moves[0].toCol, 1);
+    assert.equal(moves[1].toCol, 2);
   });
 
   test('deduplicates identical moves', () => {

@@ -74,10 +74,15 @@ export class EnginePlanSimState extends PlanSimState {
   applyMove(entityId, toCol, toRow) {
     const e = this.entities.find(e => e.id === entityId);
     if (e) {
+      // Only record the entity's INITIAL position as a departed hex.
+      // Recording every intermediate stop caused the anti-oscillation filter
+      // in assemblePlan to incorrectly reject forward moves along multi-step
+      // road paths (e.g. A→C→E: C was flagged as departed, so MOVE→C got
+      // filtered out, leaving only the unreachable MOVE→E).
       if (!this.departedHexes.has(entityId)) {
         this.departedHexes.set(entityId, new Set());
+        this.departedHexes.get(entityId).add(hexKey(e.col, e.row));
       }
-      this.departedHexes.get(entityId).add(hexKey(e.col, e.row));
     }
     super.applyMove(entityId, toCol, toRow);
   }
@@ -808,15 +813,23 @@ export function assemblePlan(allActions, sim, board, prevPositions, gapFillFn = 
   // 1. Sort by priority (lower = higher priority)
   const sorted = [...allActions].sort((a, b) => (a._priority ?? 99) - (b._priority ?? 99));
 
-  // 2. Anti-oscillation filter
-  const filtered = sorted.filter(action => {
-    if (action.type !== PlanActionType.MOVE) return true;
+  // 2. Anti-oscillation filter — remove from the END of each entity's chain
+  //    first, so earlier (higher-priority) moves in a sequence are preserved.
+  const removeSet = new Set();
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const action = sorted[i];
+    if (action.type !== PlanActionType.MOVE) continue;
     const departed = sim.departedHexes.get(action.entityId);
-    if (departed && departed.has(hexKey(action.toCol, action.toRow))) return false;
+    if (departed && departed.has(hexKey(action.toCol, action.toRow))) {
+      removeSet.add(i);
+      continue;
+    }
     const prev = prevPositions.get(action.entityId);
-    if (prev && prev.col === action.toCol && prev.row === action.toRow) return false;
-    return true;
-  });
+    if (prev && prev.col === action.toCol && prev.row === action.toRow) {
+      removeSet.add(i);
+    }
+  }
+  const filtered = sorted.filter((_, i) => !removeSet.has(i));
 
   // 3. Deduplicate
   const seen = new Set();
