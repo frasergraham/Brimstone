@@ -891,9 +891,10 @@ export class Renderer {
     // Only during resolution playback, not during planning
     if (!state.planningPhase) {
       const guardZoneKeys = new Set();
+      const hiddenFaction = humanIsHero ? 'witch' : (humanIsWitch ? 'hero' : null);
       for (const e of state.entities) {
         if (!e.alive || !(e.guarding > 0)) continue;
-        if (revealedHexes && !revealedHexes.has(hexKey(e.col, e.row))) continue;
+        if (revealedHexes && e.owner === hiddenFaction && !revealedHexes.has(hexKey(e.col, e.row))) continue;
         for (const n of getNeighbors(e.col, e.row)) {
           guardZoneKeys.add(hexKey(n.col, n.row));
         }
