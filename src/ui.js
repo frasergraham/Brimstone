@@ -2395,8 +2395,11 @@ export class UIController {
     const toast = document.createElement('div');
     toast.className = 'battle-toast' +
       (result.killed ? ' kill' : result.damage >= 2 ? ' crush' : '');
+    const splashNote = result.splashHits?.length
+      ? ` +💢${result.splashHits.length} splashed`
+      : '';
     toast.textContent =
-      `${actorSnap.name} → ${targetSnap.name}  [${result.attackRoll}v${result.defenseRoll}]  ${outcome}`;
+      `${actorSnap.name} → ${targetSnap.name}  [${result.attackRoll}v${result.defenseRoll}]  ${outcome}${splashNote}`;
     container.appendChild(toast);
 
     const displayMs = this.speedMode === 'vfast' ? 500
@@ -2734,6 +2737,9 @@ export class UIController {
     const outcome = this._el('battle-outcome');
     outcome.textContent = '';
     outcome.className   = 'battle-outcome';
+    // Remove stale splash damage line from previous battle
+    const oldSplash = dialog.querySelector('.battle-splash');
+    if (oldSplash) oldSplash.remove();
     footer.innerHTML    = this.autoplay ? '' : '<div class="result-dismiss">— click to continue —</div>';
 
     // Reset breakdown columns (hidden until dice settle)
@@ -2797,6 +2803,17 @@ export class UIController {
       } else {
         outcome.textContent = `🛡 ${targetSnap.name} defends!`;
         outcome.className   = 'battle-outcome miss';
+      }
+
+      // Splash damage line(s) below main outcome
+      if (result.splashHits?.length) {
+        const splashEl = document.createElement('div');
+        splashEl.className = 'battle-splash';
+        const lines = result.splashHits.map(h =>
+          h.killed ? `💢 ${h.name} is slain by splash!` : `💢 ${h.name} takes −1 splash damage`
+        );
+        splashEl.textContent = lines.join('  ·  ');
+        outcome.insertAdjacentElement('afterend', splashEl);
       }
 
       const fill = dialog.querySelector('.combatant-panel:last-of-type .combatant-hp-fill');

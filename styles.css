@@ -2230,6 +2230,13 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .battle-outcome.miss { color: var(--text-dim); }
 .battle-outcome.kill { color: #ff3333; }
 
+.battle-splash {
+  font-size: 0.85rem;
+  color: #e8a84c;
+  margin-bottom: 0.5rem;
+  letter-spacing: 0.02em;
+}
+
 .battle-footer {
   display: flex;
   flex-direction: column;
