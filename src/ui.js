@@ -3167,7 +3167,9 @@ export class UIController {
             }
             kills.push(name);
           }
-          if (ev.result?.encounterSurvivor) {
+          if (ev.result?.encounterSurvivors?.length) {
+            survivors.push(...ev.result.encounterSurvivors);
+          } else if (ev.result?.encounterSurvivor) {
             survivors.push(ev.result.encounterSurvivor);
           }
           if (ev.action?.type === 'summon' && ev.result?.success) {

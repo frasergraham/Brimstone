@@ -220,8 +220,8 @@ describe('Sound Horn AI generation', () => {
     assert.equal(hornActions.length, 0, 'should not sound horn without food');
   });
 
-  test('genExplore does NOT generate SOUND_HORN when few unexplored buildings', () => {
-    // Only 1 unexplored building (below threshold of 2)
+  test('genExplore does NOT generate SOUND_HORN when no unexplored buildings', () => {
+    // All buildings explored — no hidden survivors likely remain
     const tiles = new Map();
     for (let c = 0; c < 7; c++) {
       for (let r = 0; r < 7; r++) {
@@ -231,19 +231,15 @@ describe('Sound Horn AI generation', () => {
         });
       }
     }
-    tiles.set(hexKey(1, 1), {
-      col: 1, row: 1, type: TileType.BUILDING, explored: false,
-      building: 'house', resource: null, fortifyLevel: 0,
-    });
 
     const state = makeFakeState({ tiles });
     const sim = new HeroEnginePlanSimState(state);
     const board = assessHeroBoard(sim);
 
-    assert.equal(board.unexploredBuildings.length, 1, 'only 1 unexplored building');
+    assert.equal(board.unexploredBuildings.length, 0, 'no unexplored buildings');
     const actions = genExplore(sim, board, 3);
     const hornActions = actions.filter(a => a.type === PlanActionType.SOUND_HORN);
-    assert.equal(hornActions.length, 0, 'should not sound horn with too few unexplored buildings');
+    assert.equal(hornActions.length, 0, 'should not sound horn with no unexplored buildings');
   });
 
   test('applySoundHorn deducts food from shared inventory', () => {

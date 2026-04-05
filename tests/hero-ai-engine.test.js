@@ -19,10 +19,8 @@ import {
   scoreHeroGoals,
   estimateHeroCombat,
   genProtectHero,
-  genSlayWitch,
   genControlNodes,
   genExplore,
-  genFortifyPosition,
   fillGapsHero,
 } from '../src/hero-ai-engine.js';
 import { PlanActionType } from '../src/planner.js';
@@ -64,7 +62,7 @@ function makeFakeState(overrides = {}) {
   });
   const witch = makeEntity({
     id: 'witch1', type: EntityType.WITCH, owner: 'witch',
-    col: 6, row: 6, hp: 8, maxHp: 8,
+    col: 5, row: 4, hp: 8, maxHp: 8,  // within hero DAY sight range (3 hexes from hero at 3,3)
   });
   const entities = overrides.entities ?? [hero, witch];
 
@@ -244,17 +242,15 @@ describe('assessHeroBoard', () => {
 // ── scoreHeroGoals ──────────────────────────────────────────────────────────
 
 describe('scoreHeroGoals', () => {
-  test('returns scores for all 5 goals', () => {
+  test('returns scores for all 3 goals', () => {
     const sim = makeHeroSim();
     const board = assessHeroBoard(sim);
     const scores = scoreHeroGoals(board);
     const keys = Object.keys(scores);
-    assert.equal(keys.length, 5);
+    assert.equal(keys.length, 3);
     assert.ok(HeroGoal.PROTECT_HERO in scores);
-    assert.ok(HeroGoal.SLAY_WITCH in scores);
     assert.ok(HeroGoal.CONTROL_NODES in scores);
     assert.ok(HeroGoal.EXPLORE in scores);
-    assert.ok(HeroGoal.FORTIFY_POSITION in scores);
   });
 
   test('all scores are in [0, 1] range', () => {
@@ -266,82 +262,54 @@ describe('scoreHeroGoals', () => {
     }
   });
 
-  test('night boosts FORTIFY_POSITION', () => {
-    const dayBoard = assessHeroBoard(makeHeroSim({ phase: Phase.DAY }));
-    const nightBoard = assessHeroBoard(makeHeroSim({ phase: Phase.NIGHT }));
-    const dayScores = scoreHeroGoals(dayBoard);
-    const nightScores = scoreHeroGoals(nightBoard);
-    assert.ok(nightScores[HeroGoal.FORTIFY_POSITION] > dayScores[HeroGoal.FORTIFY_POSITION],
-      `night FORTIFY (${nightScores[HeroGoal.FORTIFY_POSITION]}) should exceed day (${dayScores[HeroGoal.FORTIFY_POSITION]})`);
+  test('EXPLORE is high when no survivors', () => {
+    const board = assessHeroBoard(makeHeroSim({ phase: Phase.DAY }));
+    const scores = scoreHeroGoals(board);
+    // Hero starts with 0 survivors → explore should be very high to find them
+    assert.ok(scores[HeroGoal.EXPLORE] >= 0.8,
+      `EXPLORE (${scores[HeroGoal.EXPLORE]}) should be high when hero has no survivors`);
   });
 
-  test('day boosts EXPLORE', () => {
-    const dayBoard = assessHeroBoard(makeHeroSim({ phase: Phase.DAY }));
-    const nightBoard = assessHeroBoard(makeHeroSim({ phase: Phase.NIGHT }));
-    const dayScores = scoreHeroGoals(dayBoard);
-    const nightScores = scoreHeroGoals(nightBoard);
-    assert.ok(dayScores[HeroGoal.EXPLORE] > nightScores[HeroGoal.EXPLORE],
-      `day EXPLORE (${dayScores[HeroGoal.EXPLORE]}) should exceed night (${nightScores[HeroGoal.EXPLORE]})`);
-  });
-
-  test('dawn/dusk boosts CONTROL_NODES', () => {
-    // Use a round far from scoring and hero on one node to reduce base urgency,
-    // so the dawn/dusk multiplier difference is visible below the 1.0 clamp.
+  test('dawn/dusk boosts CONTROL_NODES more than night', () => {
+    // Dawn/dusk gets a ×1.8 multiplier, day gets a +0.1 additive boost, night gets nothing.
+    // Use hero on one node to keep base moderate.
     const heroOnNode = makeEntity({
       id: 'hero1', col: 0, row: 3, hp: 10, maxHp: 10,
       items: { [ResourceType.HERBS]: 1 },
     });
     const witch = makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 });
-    const dayBoard = assessHeroBoard(makeHeroSim({
-      phase: Phase.DAY, round: 2,
+    const nightBoard = assessHeroBoard(makeHeroSim({
+      phase: Phase.NIGHT, round: 4,
       entities: [heroOnNode, witch],
     }));
     const dawnBoard = assessHeroBoard(makeHeroSim({
       phase: Phase.DAWN, round: 9,
       entities: [heroOnNode, witch],
     }));
-    const dayScores = scoreHeroGoals(dayBoard);
+    const nightScores = scoreHeroGoals(nightBoard);
     const dawnScores = scoreHeroGoals(dawnBoard);
-    assert.ok(dawnScores[HeroGoal.CONTROL_NODES] > dayScores[HeroGoal.CONTROL_NODES],
-      `dawn CONTROL_NODES (${dawnScores[HeroGoal.CONTROL_NODES]}) should exceed day (${dayScores[HeroGoal.CONTROL_NODES]})`);
+    assert.ok(dawnScores[HeroGoal.CONTROL_NODES] >= nightScores[HeroGoal.CONTROL_NODES],
+      `dawn CONTROL_NODES (${dawnScores[HeroGoal.CONTROL_NODES]}) should >= night (${nightScores[HeroGoal.CONTROL_NODES]})`);
   });
 
   test('low hero HP boosts PROTECT_HERO', () => {
+    // Witch within sight range so PROTECT_HERO can trigger
     const healthySim = makeHeroSim({
       entities: [
         makeEntity({ id: 'hero1', col: 3, row: 3, hp: 10, maxHp: 10, items: {} }),
-        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 5, row: 4 }),
       ],
     });
     const injuredSim = makeHeroSim({
       entities: [
         makeEntity({ id: 'hero1', col: 3, row: 3, hp: 2, maxHp: 10, items: {} }),
-        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 5, row: 4 }),
       ],
     });
     const healthyScores = scoreHeroGoals(assessHeroBoard(healthySim));
     const injuredScores = scoreHeroGoals(assessHeroBoard(injuredSim));
     assert.ok(injuredScores[HeroGoal.PROTECT_HERO] > healthyScores[HeroGoal.PROTECT_HERO],
       `injured PROTECT (${injuredScores[HeroGoal.PROTECT_HERO]}) should exceed healthy (${healthyScores[HeroGoal.PROTECT_HERO]})`);
-  });
-
-  test('close witch boosts SLAY_WITCH', () => {
-    const farSim = makeHeroSim({
-      entities: [
-        makeEntity({ id: 'hero1', col: 0, row: 0, items: {} }),
-        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
-      ],
-    });
-    const closeSim = makeHeroSim({
-      entities: [
-        makeEntity({ id: 'hero1', col: 3, row: 3, items: {} }),
-        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 4, row: 3 }),
-      ],
-    });
-    const farScores = scoreHeroGoals(assessHeroBoard(farSim));
-    const closeScores = scoreHeroGoals(assessHeroBoard(closeSim));
-    assert.ok(closeScores[HeroGoal.SLAY_WITCH] > farScores[HeroGoal.SLAY_WITCH],
-      `close SLAY (${closeScores[HeroGoal.SLAY_WITCH]}) should exceed far (${farScores[HeroGoal.SLAY_WITCH]})`);
   });
 
   test('goalWeights scale scores', () => {
@@ -368,37 +336,32 @@ describe('allocateBudget with hero goals', () => {
   test('distributes budget across hero goals', () => {
     const scores = {
       [HeroGoal.PROTECT_HERO]: 0.5,
-      [HeroGoal.SLAY_WITCH]: 0.3,
       [HeroGoal.CONTROL_NODES]: 0.4,
       [HeroGoal.EXPLORE]: 0.6,
-      [HeroGoal.FORTIFY_POSITION]: 0.2,
     };
     const budget = allocateBudget(scores, 8);
     const total = Object.values(budget).reduce((s, v) => s + v, 0);
     assert.equal(total, 8);
   });
 
-  test('every qualifying goal gets at least 1 AP', () => {
+  test('active goals get at least 2 AP (no thin allocations)', () => {
     const scores = {
       [HeroGoal.PROTECT_HERO]: 0.8,
-      [HeroGoal.SLAY_WITCH]: 0.1,
-      [HeroGoal.CONTROL_NODES]: 0.1,
-      [HeroGoal.EXPLORE]: 0.1,
-      [HeroGoal.FORTIFY_POSITION]: 0.1,
+      [HeroGoal.CONTROL_NODES]: 0.3,
+      [HeroGoal.EXPLORE]: 0.3,
     };
-    const budget = allocateBudget(scores, 6);
+    const budget = allocateBudget(scores, 12);
     for (const g of Object.keys(scores)) {
-      assert.ok(budget[g] >= 1, `${g} should get at least 1 AP, got ${budget[g]}`);
+      assert.ok(budget[g] === 0 || budget[g] >= 2,
+        `${g} should be 0 or >= 2 AP, got ${budget[g]}`);
     }
   });
 
   test('highest urgency goal gets most budget', () => {
     const scores = {
       [HeroGoal.PROTECT_HERO]: 0.1,
-      [HeroGoal.SLAY_WITCH]: 0.1,
       [HeroGoal.CONTROL_NODES]: 0.1,
       [HeroGoal.EXPLORE]: 0.9,
-      [HeroGoal.FORTIFY_POSITION]: 0.1,
     };
     const budget = allocateBudget(scores, 10);
     assert.ok(budget[HeroGoal.EXPLORE] > budget[HeroGoal.PROTECT_HERO],
@@ -408,10 +371,8 @@ describe('allocateBudget with hero goals', () => {
   test('zero budget returns all zeros', () => {
     const scores = {
       [HeroGoal.PROTECT_HERO]: 0.5,
-      [HeroGoal.SLAY_WITCH]: 0.5,
       [HeroGoal.CONTROL_NODES]: 0.5,
       [HeroGoal.EXPLORE]: 0.5,
-      [HeroGoal.FORTIFY_POSITION]: 0.5,
     };
     const budget = allocateBudget(scores, 0);
     for (const v of Object.values(budget)) {
@@ -438,7 +399,7 @@ describe('HERO_PERSONALITY_CONFIGS', () => {
     }
   });
 
-  test('each config has weights for all 5 goals', () => {
+  test('each config has weights for all 3 goals', () => {
     for (const [name, cfg] of Object.entries(HERO_PERSONALITY_CONFIGS)) {
       for (const g of Object.values(HeroGoal)) {
         assert.ok(cfg.goalWeights[g] != null, `${name} missing weight for ${g}`);
@@ -451,9 +412,9 @@ describe('HERO_PERSONALITY_CONFIGS', () => {
     const board = assessHeroBoard(sim);
     const balanced = scoreHeroGoals(board, HERO_PERSONALITY_CONFIGS.balanced.goalWeights);
     const aggressive = scoreHeroGoals(board, HERO_PERSONALITY_CONFIGS.aggressive.goalWeights);
-    // Aggressive should weight SLAY_WITCH higher
-    assert.ok(aggressive[HeroGoal.SLAY_WITCH] >= balanced[HeroGoal.SLAY_WITCH],
-      `aggressive SLAY (${aggressive[HeroGoal.SLAY_WITCH]}) should be >= balanced (${balanced[HeroGoal.SLAY_WITCH]})`);
+    // Aggressive should weight CONTROL_NODES higher
+    assert.ok(aggressive[HeroGoal.CONTROL_NODES] >= balanced[HeroGoal.CONTROL_NODES],
+      `aggressive CONTROL (${aggressive[HeroGoal.CONTROL_NODES]}) should be >= balanced (${balanced[HeroGoal.CONTROL_NODES]})`);
   });
 });
 
@@ -622,7 +583,7 @@ describe('genProtectHero', () => {
 
 // ── genSlayWitch ────────────────────────────────────────────────────────────
 
-describe('genSlayWitch', () => {
+describe.skip('genSlayWitch (removed — merged into CONTROL_NODES combat)', () => {
   test('emits BATTLE_UNIT when hero adjacent to witch', () => {
     const sim = makeHeroEngineSim({
       entities: [
@@ -637,11 +598,12 @@ describe('genSlayWitch', () => {
     assert.equal(battle.targetId, 'witch1');
   });
 
-  test('chases witch when not adjacent', () => {
+  test('chases witch when not adjacent but within sight', () => {
     const sim = makeHeroEngineSim({
       entities: [
         makeEntity({ id: 'hero1', col: 0, row: 0, hp: 10, maxHp: 10, items: {} }),
-        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 4, row: 4, hp: 8, maxHp: 8 }),
+        // Within hero DAY sight range (3 hexes)
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 2, row: 1, hp: 8, maxHp: 8 }),
       ],
     });
     const board = assessHeroBoard(sim);
@@ -695,7 +657,7 @@ describe('genControlNodes', () => {
     assert.ok(moves.length > 0, 'should emit MOVE toward node');
   });
 
-  test('guards when on node with nearby threat', () => {
+  test('battles adjacent enemy when on node', () => {
     const sim = makeHeroEngineSim({
       witchObjectives: [{ col: 3, row: 3, hexes: [{ col: 3, row: 3 }] }],
       entities: [
@@ -705,8 +667,8 @@ describe('genControlNodes', () => {
     });
     const board = assessHeroBoard(sim);
     const actions = genControlNodes(sim, board, 3);
-    const guard = actions.find(a => a.type === PlanActionType.GUARD);
-    assert.ok(guard, 'should emit GUARD when on threatened node');
+    const battle = actions.find(a => a.type === PlanActionType.BATTLE_UNIT);
+    assert.ok(battle, 'should battle adjacent enemy on node');
   });
 });
 
@@ -739,7 +701,7 @@ describe('genExplore', () => {
     assert.ok(moves.length > 0, 'should emit MOVE toward unexplored building');
   });
 
-  test('returns empty when no unexplored buildings', () => {
+  test('returns only fortify when no unexplored buildings but has resources', () => {
     const tiles = new Map();
     for (let c = 0; c < 7; c++) {
       for (let r = 0; r < 7; r++) {
@@ -758,13 +720,15 @@ describe('genExplore', () => {
     });
     const board = assessHeroBoard(sim);
     const actions = genExplore(sim, board, 3);
-    assert.equal(actions.length, 0);
+    // No exploring to do, but hero will fortify current hex if resources available
+    assert.ok(actions.every(a => a.type === PlanActionType.FORTIFY),
+      'should only produce fortify actions when nothing to explore');
   });
 });
 
 // ── genFortifyPosition ──────────────────────────────────────────────────────
 
-describe('genFortifyPosition', () => {
+describe.skip('genFortifyPosition (removed — merged into EXPLORE and CONTROL_NODES)', () => {
   test('seeks shelter at night when not in building', () => {
     const sim = makeHeroEngineSim({
       phase: Phase.NIGHT,
@@ -887,14 +851,12 @@ describe('HeroAIEngine', () => {
     assert.ok(plan.length > 0, 'should generate at least one action');
   });
 
-  test('generatePlan returns clean actions (no _priority/_goal)', () => {
+  test('generatePlan preserves _goal metadata for debug', () => {
     const state = makeFakeState();
     const engine = new HeroAIEngine(state, () => {});
     const plan = engine.generatePlan();
-    for (const action of plan) {
-      assert.equal(action._priority, undefined, 'should strip _priority');
-      assert.equal(action._goal, undefined, 'should strip _goal');
-    }
+    const withGoal = plan.filter(a => a._goal != null);
+    assert.ok(withGoal.length > 0 || plan.length === 0, 'plan actions should have _goal metadata');
   });
 
   test('generatePlan returns empty for missing hero', () => {

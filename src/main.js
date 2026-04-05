@@ -6,8 +6,13 @@ import { GameState, Player } from './game.js';
 import { Renderer }          from './renderer.js';
 import { UIController, UIMode } from './ui.js';
 import { WITCH_PERSONALITIES }   from './ai.js';
-import { WitchAIEngine } from './ai-engine.js';
-import { HeroAIEngine } from './hero-ai-engine.js';
+import { WitchAIEngine, estimateCombat } from './ai-engine.js';
+import { HeroAIEngine, estimateHeroCombat } from './hero-ai-engine.js';
+import {
+  isAIDebugActive, setAIDebugActive, setAIDebugData, clearAIDebugData,
+  buildHexGoalMap, buildMoveArrows, buildIntentMarkers, buildNodeFeasibilityMap,
+  GOAL_COLORS, updateAIDebugPanel, hideAIDebugPanel,
+} from './ai-debug.js';
 import {
   MultiplayerClient, MirrorState, loadSession, clearSession,
   checkEmailTokenInUrl, requestLinkEmail, requestEmailLogin, fetchIdentities,
@@ -171,6 +176,17 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
   const thinkDelay = autoplay ? 0 : undefined;
   witchAI = witchIsAI ? new WitchAIEngine(state, redraw, thinkDelay) : null;
   heroAI  = heroIsAI  ? new HeroAIEngine(state, redraw, thinkDelay)  : null;
+
+  // AI debugger: admin-only, single-player only
+  const aiDebugSel = document.getElementById('select-ai-debug');
+  if (aiDebugSel?.value === 'on' && !autoplay && (witchIsAI || heroIsAI)) {
+    setAIDebugActive(true);
+    state.fogOfWar = 'none';  // full visibility for debug
+    if (witchAI) witchAI.debugCapture = true;
+    if (heroAI)  heroAI.debugCapture = true;
+  } else {
+    setAIDebugActive(false);
+  }
 
   _setupLocalUI(canvas, witchAI, heroAI, autoplay);
 
@@ -339,6 +355,144 @@ function initTutorial() {
   _startLocalPlanningPhase();
 }
 
+// ── AI Debug data capture ────────────────────────────────────────────────────
+
+function _pushAIDebugData(aiEngine, faction) {
+  const dbg = aiEngine?.lastDebugData;
+  if (!dbg) return;
+
+  setAIDebugData(dbg);
+
+  // Build combat estimates for overlay
+  const combatEstimates = [];
+  const board = dbg.board;
+  if (board) {
+    const enemies = faction === 'witch' ? (board.visibleHeroes || []) : (board.witchMinions || []);
+    const myUnits = faction === 'witch'
+      ? [board.witch, ...(board.minions || [])].filter(Boolean)
+      : [board.hero, ...(board.survivors || [])].filter(Boolean);
+
+    for (const enemy of enemies) {
+      if (!enemy?.alive) continue;
+      // Estimate combat from nearest own unit
+      let bestEst = null;
+      for (const unit of myUnits) {
+        if (!unit?.alive) continue;
+        const est = faction === 'witch'
+          ? estimateCombat(unit, enemy, board)
+          : estimateHeroCombat(unit, enemy, board);
+        if (!bestEst || est.favorability > bestEst.favorability) {
+          bestEst = est;
+        }
+      }
+      if (bestEst) {
+        combatEstimates.push({
+          col: enemy.col, row: enemy.row,
+          ...bestEst,
+        });
+      }
+    }
+  }
+
+  // Build renderer overlay
+  renderer.aiDebugOverlay = {
+    hexGoals: buildHexGoalMap(dbg.actions),
+    moveArrows: buildMoveArrows(dbg.actions, state.entities),
+    intentMarkers: buildIntentMarkers(dbg.actions, board, dbg.unitCommitments, faction),
+    nodes: buildNodeFeasibilityMap(board),
+    combatEstimates,
+    unitCommitments: dbg.unitCommitments,
+    faction,
+    goalColors: GOAL_COLORS,
+  };
+
+  // Update DOM panel
+  updateAIDebugPanel(dbg, state.entities);
+  const debugPanel = document.getElementById('ai-debug-panel');
+  if (debugPanel && !debugPanel.classList.contains('collapsed')) {
+    renderer.insetLeft = 260;
+  }
+  redraw();
+}
+
+/** After resolution, annotate the debug panel with what actually happened. */
+function _updateAIDebugResolutionOutcome(steps) {
+  // Collect all resolution events by faction
+  const outcomes = { hero: [], witch: [] };
+  for (const step of steps) {
+    for (const ev of (step.heroEvents ?? [])) {
+      outcomes.hero.push(ev);
+    }
+    for (const ev of (step.witchEvents ?? [])) {
+      outcomes.witch.push(ev);
+    }
+  }
+
+  // Update the debug panel with outcome annotations
+  const panel = document.getElementById('ai-debug-actions');
+  if (!panel) return;
+
+  // Add a resolution summary section
+  const aiFaction = !state.heroIsAI ? 'witch' : 'hero';
+  const events = outcomes[aiFaction];
+  if (events.length === 0) return;
+
+  const section = document.createElement('div');
+  section.className = 'ai-debug-resolution-section';
+  section.innerHTML = '<div class="ai-debug-section-title">Resolution Outcome</div>';
+
+  const okCount = events.filter(e => e.type === ResEventType.ACTION_OK).length;
+  const skipCount = events.filter(e => e.type === ResEventType.ACTION_SKIP).length;
+  const failCount = events.filter(e => e.type === ResEventType.ACTION_FAIL).length;
+  const capCount = events.filter(e => e.type === ResEventType.BUDGET_CAP).length;
+
+  const list = document.createElement('div');
+  list.className = 'ai-debug-kv-grid';
+  const rows = [
+    ['Executed', `${okCount}`],
+    ['Skipped', `${skipCount}`],
+    ['Failed', `${failCount}`],
+  ];
+  if (capCount > 0) rows.push(['Budget cap', `${capCount}`]);
+  for (const [label, value] of rows) {
+    const row = document.createElement('div');
+    row.className = 'ai-debug-kv-row';
+    row.innerHTML = `<span class="ai-debug-kv-label">${label}</span><span class="ai-debug-kv-value">${value}</span>`;
+    list.appendChild(row);
+  }
+  section.appendChild(list);
+
+  // Show details for skipped/failed actions
+  const problems = events.filter(e =>
+    e.type === ResEventType.ACTION_SKIP || e.type === ResEventType.ACTION_FAIL
+  );
+  if (problems.length > 0) {
+    const details = document.createElement('div');
+    details.className = 'ai-debug-resolution-details';
+    for (const ev of problems) {
+      const tag = ev.type === ResEventType.ACTION_SKIP ? 'SKIP' : 'FAIL';
+      const actionType = ev.action?.type ?? '?';
+      const reason = ev.reason ?? '';
+      const line = document.createElement('div');
+      line.className = 'ai-debug-resolution-line';
+      line.textContent = `[${tag}] ${actionType}: ${reason}`;
+      details.appendChild(line);
+    }
+    section.appendChild(details);
+  }
+
+  panel.appendChild(section);
+}
+
+function _clearAIDebug() {
+  clearAIDebugData();
+  if (renderer) {
+    renderer.aiDebugOverlay = null;
+    renderer.insetLeft = 0;
+  }
+  hideAIDebugPanel();
+}
+
 // ── Local planning lifecycle ──────────────────────────────────────────────────
 
 function _startLocalPlanningPhase() {
@@ -444,6 +598,13 @@ async function _onLocalHumanPlanSubmit(faction, plan) {
     const aiPlan = aiFaction === 'witch'
       ? (witchAI ? witchAI.generatePlan() : [])
       : (heroAI  ? heroAI.generatePlan()  : []);
+
+    // Capture AI debug data after plan generation
+    if (isAIDebugActive()) {
+      const aiEngine = aiFaction === 'witch' ? witchAI : heroAI;
+      _pushAIDebugData(aiEngine, aiFaction);
+    }
+
     bothReady = state.submitPlan(aiFaction, aiPlan);
   }
 
@@ -454,6 +615,13 @@ async function _runLocalAutoResolution() {
   if (!state || state.gameOver) return;
   const heroPlan  = heroAI  ? heroAI.generatePlan()  : [];
   const witchPlan = witchAI ? witchAI.generatePlan() : [];
+
+  // Capture AI debug data for both sides in autoplay
+  if (isAIDebugActive()) {
+    if (heroAI)  _pushAIDebugData(heroAI, 'hero');
+    if (witchAI) _pushAIDebugData(witchAI, 'witch');
+  }
+
   state.submitPlan('hero',  heroPlan);
   state.submitPlan('witch', witchPlan);
   await _runLocalResolution();
@@ -502,6 +670,12 @@ async function _runLocalResolution(skipSummary = false) {
   }));
 
   await _animateResolutionSteps(steps, finalEntities, redraw, humanFaction, null);
+
+  // Update AI debug panel with resolution outcomes so the user can see
+  // which planned actions actually executed vs were skipped/failed
+  if (isAIDebugActive()) {
+    _updateAIDebugResolutionOutcome(steps);
+  }
 
   // Restore final explored state after animation completes.
   for (const [k, v] of postExplored) {
@@ -1251,9 +1425,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (myPlayerId && actor?.ownerId !== myPlayerId) continue;
 
       if (!_suppressDialogs) {
-        if (result.encounterSurvivor) {
-          // Survivor found — show encounter card only (no separate result dialog)
-          await new Promise(resolve => ui._showEncounterDialog(result.encounterSurvivor, resolve, 'horn'));
+        const survivors = result.encounterSurvivors || (result.encounterSurvivor ? [result.encounterSurvivor] : []);
+        if (survivors.length > 0) {
+          // Show encounter card for each survivor found
+          for (const s of survivors) {
+            await new Promise(resolve => ui._showEncounterDialog(s, resolve, 'horn'));
+          }
         } else if (result.log?.length) {
           // No survivor — show the "nothing found" result dialog
           await new Promise(resolve => ui._showResultDialog(result.log, resolve));
@@ -1596,7 +1773,7 @@ if (isNativeMobile) {
   });
 }
 
-// Show admin link only for admin users
+// Show admin link for admin users
 {
   const _s = loadSession();
   if (_s?.is_admin) {
@@ -1604,6 +1781,24 @@ if (isNativeMobile) {
     if (_adminLink) {
       _adminLink.style.display = '';
     }
+  }
+}
+
+// AI debug panel collapse toggle
+{
+  const _collapseBtn = document.getElementById('ai-debug-collapse');
+  if (_collapseBtn) {
+    _collapseBtn.addEventListener('click', () => {
+      const panel = document.getElementById('ai-debug-panel');
+      if (panel) {
+        panel.classList.toggle('collapsed');
+        _collapseBtn.textContent = panel.classList.contains('collapsed') ? '\u25B6' : '\u25C0';
+        if (renderer) {
+          renderer.insetLeft = panel.classList.contains('collapsed') ? 0 : 260;
+          redraw();
+        }
+      }
+    });
   }
 }
 
@@ -2204,6 +2399,10 @@ document.getElementById('btn-local-play-start').addEventListener('click', () => 
 function _doRestart() {
   // Disconnect from server if in online mode
   if (mp) { mp.disconnect(); mp = null; }
+
+  // Clean up AI debug state
+  _clearAIDebug();
+  setAIDebugActive(false);
 
   // Reset game objects so initOnline / init start fresh
   renderer = null;

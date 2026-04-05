@@ -291,6 +291,13 @@
               <option value="full">Full</option>
             </select>
           </div>
+          <div class="qp-option-row" id="ai-debug-option">
+            <span class="qp-option-label">AI Debugger</span>
+            <select id="select-ai-debug" class="setup-select">
+              <option value="off" selected>Off</option>
+              <option value="on">On</option>
+            </select>
+          </div>
         </div>
       </details>
 
@@ -911,6 +918,21 @@
       <div id="sp-ready-panel" style="display:none">
         <div class="sp-ready-header">📋 Planning</div>
         <div id="sp-ready-list"></div>
+      </div>
+
+      <!-- AI debug panel — left sidebar, admin-only -->
+      <div id="ai-debug-panel" class="ai-debug-panel" style="display:none">
+        <div class="ai-debug-header">
+          <span class="ai-debug-title">AI Debug</span>
+          <button id="ai-debug-collapse" class="ai-debug-collapse-btn" title="Collapse">&#x25C0;</button>
+        </div>
+        <div class="ai-debug-body">
+          <div id="ai-debug-faction-row" class="ai-debug-faction-row"></div>
+          <div id="ai-debug-goals"></div>
+          <div id="ai-debug-budget"></div>
+          <div id="ai-debug-board"></div>
+          <div id="ai-debug-actions"></div>
+        </div>
       </div>
 
       <!-- Plan panel — slides in during planning phase -->
