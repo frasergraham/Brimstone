@@ -105,8 +105,20 @@ export function assessBoard(sim) {
   const minionCount = minions.length;
   const armyStrength = minions.reduce((sum, e) => sum + e.hp, 0);
 
-  // Visible heroes (AI has full knowledge during planning)
-  const visibleHeroes = sim.entities.filter(e => e.alive && e.owner === 'hero');
+  // Visible heroes — filtered by fog-of-war awareness.
+  // Each hero is only "visible" if at least one witch-side unit can see it.
+  // Witch leader gets extended awareness (4) representing magical sense;
+  // minions use the standard faction sight (2).
+  const WITCH_LEADER_SIGHT = 4;
+  const WITCH_MINION_SIGHT = 2;
+  const allHeroes = sim.entities.filter(e => e.alive && e.owner === 'hero');
+  const witchSideUnits = sim.entities.filter(e => e.alive && e.owner === 'witch');
+  const visibleHeroes = allHeroes.filter(hero =>
+    witchSideUnits.some(w => {
+      const sight = w.type === EntityType.WITCH ? WITCH_LEADER_SIGHT : WITCH_MINION_SIGHT;
+      return hexDistance(w.col, w.row, hero.col, hero.row) <= sight;
+    })
+  );
 
   let heroDistance = Infinity;
   let heroHpRatio = 1;
@@ -128,9 +140,10 @@ export function assessBoard(sim) {
     const witchPresent = obj.hexes
       ? obj.hexes.some(h => sim.entities.some(e => e.alive && e.owner === 'witch' && e.col === h.col && e.row === h.row))
       : sim.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row);
+    // Only count hero presence on nodes if a hero is visible to witch-side units
     const heroPresent = obj.hexes
-      ? obj.hexes.some(h => sim.entities.some(e => e.alive && e.owner === 'hero' && e.col === h.col && e.row === h.row))
-      : sim.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row);
+      ? obj.hexes.some(h => visibleHeroes.some(e => e.col === h.col && e.row === h.row))
+      : visibleHeroes.some(e => e.col === obj.col && e.row === obj.row);
 
     // Distance from nearest witch unit to this node
     let distToNearest = Infinity;
@@ -206,13 +219,14 @@ export function scoreGoals(board, goalWeights = null) {
   if (board.heroDistance <= 3 && board.witchHpRatio < 0.5) defend = 1.0;
   defend = clamp01(defend);
 
-  // KILL_HERO
+  // KILL_HERO — only worth pursuing when hero is visible and close enough to matter.
+  // Beyond 5 hexes: zero. At 4-5: low awareness. At 1-3: serious intent.
   let kill = 0;
   if (board.heroDistance <= 1) kill = 0.8;
   else if (board.heroDistance <= 3) kill = 0.5;
-  else if (board.heroDistance <= 5) kill = 0.3;
-  else kill = 0.1;
-  if (board.heroHpRatio < 0.4) kill += 0.2;
+  else if (board.heroDistance <= 5) kill = 0.15;
+  // else: too far / not visible, kill = 0
+  if (board.heroDistance <= 3 && board.heroHpRatio < 0.4) kill += 0.2;
   const killMult = board.isNight ? 1.5 : board.isDay ? 0.6 : 1.0;
   kill = clamp01(clamp01(kill) * killMult);
 
@@ -282,14 +296,18 @@ export function scoreGoals(board, goalWeights = null) {
 const URGENCY_THRESHOLD = 0.05;
 
 export function allocateBudget(scores, totalBudget) {
+  const MIN_CHUNK = 3;
+
   const allGoals = Object.keys(scores);
   const result = {};
   for (const g of allGoals) result[g] = 0;
 
   if (totalBudget <= 0) return result;
 
-  // Filter qualifying goals
-  const qualifying = allGoals.filter(g => scores[g] > URGENCY_THRESHOLD);
+  // Filter qualifying goals, sorted by score descending
+  const qualifying = allGoals
+    .filter(g => scores[g] > URGENCY_THRESHOLD)
+    .sort((a, b) => scores[b] - scores[a]);
 
   if (qualifying.length === 0) {
     // Edge case: nothing qualifies — give all to first goal (faction default)
@@ -297,35 +315,43 @@ export function allocateBudget(scores, totalBudget) {
     return result;
   }
 
-  // Normalize
-  const totalUrgency = qualifying.reduce((s, g) => s + scores[g], 0);
+  // Limit active goals so each can get at least MIN_CHUNK actions.
+  // This prevents thin 1-action allocations that cause the AI to flip
+  // between goals without accomplishing anything.
+  const maxActive = Math.max(1, Math.floor(totalBudget / MIN_CHUNK));
+  const active = qualifying.slice(0, maxActive);
 
-  // Floor allocation
-  for (const g of qualifying) {
+  // Proportional allocation among active goals
+  const totalUrgency = active.reduce((s, g) => s + scores[g], 0);
+  for (const g of active) {
     result[g] = Math.floor((scores[g] / totalUrgency) * totalBudget);
   }
 
   // Distribute remainder to highest-urgency goals
-  let remainder = totalBudget - qualifying.reduce((s, g) => s + result[g], 0);
-  const sorted = [...qualifying].sort((a, b) => scores[b] - scores[a]);
+  let remainder = totalBudget - active.reduce((s, g) => s + result[g], 0);
   let i = 0;
   while (remainder > 0) {
-    result[sorted[i % sorted.length]]++;
+    result[active[i % active.length]]++;
     remainder--;
     i++;
   }
 
-  // Guarantee: every qualifying goal gets at least 1 AP
-  for (const g of qualifying) {
-    if (result[g] === 0) {
-      // Steal from lowest-urgency goal that has > 1
-      const donor = [...qualifying]
-        .sort((a, b) => scores[a] - scores[b])
-        .find(d => result[d] > 1);
-      if (donor) {
-        result[donor]--;
-        result[g] = 1;
+  // Enforce minimum: any active goal with < MIN_CHUNK gets boosted,
+  // stealing from the lowest-priority active goal that has surplus.
+  for (const g of active) {
+    if (result[g] > 0 && result[g] < MIN_CHUNK) {
+      const deficit = MIN_CHUNK - result[g];
+      // Find donor from bottom of priority list
+      for (let d = active.length - 1; d >= 0; d--) {
+        if (active[d] === g) continue;
+        const give = Math.min(deficit, result[active[d]] - MIN_CHUNK);
+        if (give > 0) {
+          result[active[d]] -= give;
+          result[g] += give;
+          if (result[g] >= MIN_CHUNK) break;
+        }
       }
+      // If still under minimum, can't help — leave as-is
     }
   }
 
@@ -864,10 +890,20 @@ function _fillGaps(plan, sim, board, witchEntity, remaining, prevPositions) {
     }
   }
 
-  // Guard with the witch if nothing else to do
+  // Guard with the witch only if visible enemies are nearby or on a power node
   if (left > 0) {
-    plan.push({ type: PlanActionType.GUARD, entityId: witchEntity.id });
-    left--;
+    const nearbyEnemy = board.visibleHeroes.some(h =>
+      hexDistance(witchEntity.col, witchEntity.row, h.col, h.row) <= 3
+    );
+    const onNode = board.nodes.some(n =>
+      n.obj.hexes
+        ? n.obj.hexes.some(h => h.col === witchEntity.col && h.row === witchEntity.row)
+        : (n.obj.col === witchEntity.col && n.obj.row === witchEntity.row)
+    );
+    if (nearbyEnemy || onNode) {
+      plan.push({ type: PlanActionType.GUARD, entityId: witchEntity.id });
+      left--;
+    }
   }
 }
 

@@ -43,15 +43,20 @@ function makeFakeState(overrides = {}) {
   }
 
   const witch = makeEntity({ id: 'witch1', col: 0, row: 0 });
+  const minion = makeEntity({
+    id: 'm1', type: EntityType.MINION, owner: 'witch',
+    col: 1, row: 0, hp: 2, maxHp: 2, attack: 1, defense: 0,
+    displayName: 'Minion',
+  });
   const hero = makeEntity({
     id: 'hero1', type: EntityType.HERO, owner: 'hero',
-    col: 6, row: 6, hp: 8, maxHp: 8, attack: 3, defense: 2,
+    col: 2, row: 0, hp: 8, maxHp: 8, attack: 3, defense: 2,  // within witch sight (2 hexes)
     displayName: 'Hero',
   });
 
   return {
     tiles,
-    phase: overrides.phase ?? Phase.NIGHT,
+    phase: overrides.phase ?? Phase.DAY,
     round: overrides.round ?? 6,
     witchObjectives: overrides.witchObjectives ?? [
       { col: 3, row: 3, hexes: [{ col: 3, row: 3 }], discovered: true },
@@ -59,10 +64,10 @@ function makeFakeState(overrides = {}) {
     nodeScore: overrides.nodeScore ?? { hero: 0, witch: 0 },
     fogOfWar: 'none',
     inventory: overrides.inventory ?? {
-      witch: { [ResourceType.HERBS]: 1, [ResourceType.WOOD]: 2, [ResourceType.METAL]: 0 },
+      witch: { [ResourceType.HERBS]: 1, [ResourceType.WOOD]: 2, [ResourceType.METAL]: 2 },
       hero: { [ResourceType.HERBS]: 1, [ResourceType.WOOD]: 0, [ResourceType.METAL]: 0 },
     },
-    entities: overrides.entities ?? [witch, hero],
+    entities: overrides.entities ?? [witch, minion, hero],
   };
 }
 

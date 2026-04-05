@@ -294,8 +294,8 @@ describe('scoreGoals', () => {
   });
 
   test('night boosts KILL_HERO vs day', () => {
-    const nightScores = scoreGoals(makeBoard({ isNight: true, isDay: false }));
-    const dayScores = scoreGoals(makeBoard({ isNight: false, isDay: true }));
+    const nightScores = scoreGoals(makeBoard({ isNight: true, isDay: false, heroDistance: 2 }));
+    const dayScores = scoreGoals(makeBoard({ isNight: false, isDay: true, heroDistance: 2 }));
     assert.ok(nightScores[Goal.KILL_HERO] > dayScores[Goal.KILL_HERO],
       `night KILL_HERO (${nightScores[Goal.KILL_HERO]}) should exceed day (${dayScores[Goal.KILL_HERO]})`);
   });
@@ -416,17 +416,18 @@ describe('allocateBudget', () => {
     assert.equal(result[Goal.DEFEND_WITCH], 0);
   });
 
-  test('each qualifying goal gets >= 1 AP', () => {
+  test('allocations are in chunks of 3 or more', () => {
     const scores = {
       [Goal.KILL_HERO]: 0.9,
-      [Goal.CONTROL_NODES]: 0.06,
-      [Goal.BUILD_ARMY]: 0.06,
-      [Goal.GATHER_RESOURCES]: 0.06,
-      [Goal.DEFEND_WITCH]: 0.06,
+      [Goal.CONTROL_NODES]: 0.5,
+      [Goal.BUILD_ARMY]: 0.3,
+      [Goal.GATHER_RESOURCES]: 0.2,
+      [Goal.DEFEND_WITCH]: 0.1,
     };
-    const result = allocateBudget(scores, 5);
+    const result = allocateBudget(scores, 9);
     for (const g of Object.values(Goal)) {
-      assert.ok(result[g] >= 1, `${g} should get >= 1 AP, got ${result[g]}`);
+      assert.ok(result[g] === 0 || result[g] >= 3,
+        `${g} should be 0 or >= 3 AP, got ${result[g]}`);
     }
   });
 
@@ -710,9 +711,10 @@ describe('genKillHero', () => {
     assert.ok(!minionBattle, 'should skip suicidal minion battle');
   });
 
-  test('moves toward hero when not adjacent', () => {
+  test('moves toward hero when not adjacent but within sight', () => {
     const witch = makeEntity({ id: 'witch1', col: 0, row: 0 });
-    const hero = makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 4, row: 4, hp: 8, maxHp: 8, attack: 3, defense: 2 });
+    // Hero at distance 2 — within witch sight range
+    const hero = makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 2, row: 0, hp: 8, maxHp: 8, attack: 3, defense: 2 });
     const sim = makeSim({ entities: [witch, hero] });
     const board = assessBoard(sim);
     const actions = genKillHero(sim, board, 2);
@@ -880,14 +882,17 @@ describe('assemblePlan', () => {
     assert.ok(plan.some(a => a.type === PlanActionType.SUMMON), 'SUMMON should be included');
   });
 
-  test('gap-fill adds guard when nothing else to do', () => {
-    const sim = makeSim();
+  test('gap-fill adds guard when visible enemy nearby', () => {
+    // Place hero within witch sight range (2 hexes) so guard triggers
+    const witch = makeEntity({ id: 'witch1', col: 0, row: 0 });
+    const hero = makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 1, row: 0, hp: 8, maxHp: 8 });
+    const sim = makeSim({ entities: [witch, hero] });
     const board = assessBoard(sim);
-    // Empty actions = all budget is remaining → gap-fill should add something
+    // Empty actions = all budget is remaining → gap-fill should add guard
     const plan = assemblePlan([], sim, board, new Map());
     assert.ok(plan.length > 0, 'gap-fill should add fallback actions');
     const guardAction = plan.find(a => a.type === PlanActionType.GUARD);
-    assert.ok(guardAction, 'should include GUARD as fallback');
+    assert.ok(guardAction, 'should include GUARD when enemy is nearby');
   });
 
   test('truncates to MAX_PLAN_LENGTH', () => {

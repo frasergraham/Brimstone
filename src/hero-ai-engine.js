@@ -23,6 +23,15 @@ export const HeroGoal = Object.freeze({
 
 const ALL_HERO_GOALS = Object.values(HeroGoal);
 
+// ── Hero sight range helper (phase-dependent) ─────────────────────────────
+function _heroSightBase(phase) {
+  switch (phase) {
+    case Phase.DAY:   return 3;
+    case Phase.NIGHT: return 1;
+    default:          return 2; // DAWN, DUSK
+  }
+}
+
 // ── Personality configs ─────────────────────────────────────────────────────
 // goalWeights: post-scoring multipliers per goal (higher = more budget share)
 // engageFloor: minimum combat classification to attack
@@ -106,8 +115,21 @@ export function assessHeroBoard(sim) {
   );
   const survivorCount = survivors.length;
 
-  // Witch info
-  const witch = sim.witch;
+  // Fog-of-war awareness: filter enemies by what hero-side units can see.
+  // Hero sight range varies by phase (day=3, night=1, dawn/dusk=2, +1 for scouts).
+  const heroSideUnits = sim.entities.filter(e => e.alive && e.owner === 'hero');
+  function _heroCanSee(target) {
+    return heroSideUnits.some(viewer => {
+      const range = viewer.type === EntityType.SURVIVOR && viewer.ability === 'scout'
+        ? _heroSightBase(phase) + 1
+        : _heroSightBase(phase);
+      return hexDistance(viewer.col, viewer.row, target.col, target.row) <= range;
+    });
+  }
+
+  // Witch info — only visible if a hero-side unit can see her
+  const witchEntity = sim.entities.find(e => e.alive && e.type === EntityType.WITCH);
+  const witch = witchEntity && _heroCanSee(witchEntity) ? witchEntity : null;
   const witchVisible = !!witch;
   let witchDistance = Infinity;
   let witchHpRatio = 1;
@@ -116,9 +138,9 @@ export function assessHeroBoard(sim) {
     witchHpRatio = witch.hp / (witch.maxHp || witch.hp || 1);
   }
 
-  // Enemy units (non-witch enemies)
+  // Enemy units — only those visible to hero-side units
   const witchMinions = sim.entities.filter(e =>
-    e.alive && e.owner === 'witch' && e.type !== EntityType.WITCH
+    e.alive && e.owner === 'witch' && e.type !== EntityType.WITCH && _heroCanSee(e)
   );
 
   // Node state
@@ -128,9 +150,11 @@ export function assessHeroBoard(sim) {
     const heroPresent = obj.hexes
       ? obj.hexes.some(h => sim.entities.some(e => e.alive && e.owner === 'hero' && e.col === h.col && e.row === h.row))
       : sim.entities.some(e => e.alive && e.owner === 'hero' && e.col === obj.col && e.row === obj.row);
+    // Only count witch presence on nodes if visible to hero-side units
+    const visibleWitchUnits = [witch, ...witchMinions].filter(Boolean);
     const witchPresent = obj.hexes
-      ? obj.hexes.some(h => sim.entities.some(e => e.alive && e.owner === 'witch' && e.col === h.col && e.row === h.row))
-      : sim.entities.some(e => e.alive && e.owner === 'witch' && e.col === obj.col && e.row === obj.row);
+      ? obj.hexes.some(h => visibleWitchUnits.some(e => e.col === h.col && e.row === h.row))
+      : visibleWitchUnits.some(e => e.col === obj.col && e.row === obj.row);
 
     // Distance from hero to this node
     let distToHero = Infinity;
@@ -196,11 +220,11 @@ export function assessHeroBoard(sim) {
   const heroTileExplored = heroTile ? (sim.isExplored ? sim.isExplored(heroTile.col, heroTile.row) : !!heroTile.explored) : true;
   const heroTileFortLevel = heroTile?.fortifyLevel || 0;
 
-  // Nearest enemy distance (any witch-owned entity)
+  // Nearest visible enemy distance (only enemies hero-side can see)
   let nearestEnemyDist = Infinity;
   if (hero) {
-    for (const e of sim.entities) {
-      if (!e.alive || e.owner !== 'witch') continue;
+    const allVisibleEnemies = [witch, ...witchMinions].filter(Boolean);
+    for (const e of allVisibleEnemies) {
       const d = hexDistance(hero.col, hero.row, e.col, e.row);
       if (d < nearestEnemyDist) nearestEnemyDist = d;
     }
@@ -259,14 +283,16 @@ export function scoreHeroGoals(board, goalWeights = null) {
   if (board.witchDistance <= 2 && board.heroHpRatio < 0.5) protect = 1.0;
   protect = clamp01(protect * phaseMult(HeroGoal.PROTECT_HERO, board));
 
-  // SLAY_WITCH
+  // SLAY_WITCH — only worth pursuing when visible, close, AND a real threat.
+  // If the witch is far away, zero — don't waste actions chasing across the map.
   let slay = 0;
   if (board.witchVisible) {
     if (board.witchDistance <= 1) slay = 0.9;
     else if (board.witchDistance <= 3) slay = 0.6;
-    else if (board.witchDistance <= 5) slay = 0.3;
-    else slay = 0.1;
-    if (board.witchHpRatio < 0.4) slay += 0.2;
+    // Beyond 3 hexes: only pursue if witch is wounded (finishable)
+    else if (board.witchDistance <= 5 && board.witchHpRatio < 0.4) slay = 0.3;
+    // else: too far, slay = 0
+    if (board.witchDistance <= 3 && board.witchHpRatio < 0.4) slay += 0.2;
   }
   slay = clamp01(clamp01(slay) * phaseMult(HeroGoal.SLAY_WITCH, board));
 
@@ -949,13 +975,14 @@ for (const name of Object.keys(HERO_PERSONALITY_CONFIGS)) {
 export function fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositions) {
   let left = remaining;
 
-  // Guard if enemies nearby
+  // Guard if visible enemies nearby, or if on a power node with nothing else to do
   if (left > 0 && heroEntity) {
-    const nearbyEnemy = sim.entities.some(e =>
-      e.alive && e.owner === 'witch' &&
+    const visibleEnemies = [board.witch, ...board.witchMinions].filter(Boolean);
+    const nearbyEnemy = visibleEnemies.some(e =>
       hexDistance(heroEntity.col, heroEntity.row, e.col, e.row) <= 2
     );
-    if (nearbyEnemy) {
+    const onNode = isOnNode(sim, heroEntity);
+    if (nearbyEnemy || onNode) {
       plan.push({ type: PlanActionType.GUARD, entityId: heroEntity.id });
       sim.applyGuard(heroEntity.id);
       left--;
@@ -972,10 +999,10 @@ export function fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositi
     }
   }
 
-  // Move hero toward nearest unexplored building if no enemies nearby
+  // Move hero toward nearest unexplored building if no visible enemies nearby
   if (left > 0 && heroEntity) {
-    const enemyNearby = sim.entities.some(e =>
-      e.alive && e.owner === 'witch' &&
+    const visibleEnemies = [board.witch, ...board.witchMinions].filter(Boolean);
+    const enemyNearby = visibleEnemies.some(e =>
       hexDistance(heroEntity.col, heroEntity.row, e.col, e.row) <= 4
     );
     if (!enemyNearby && board.unexploredBuildings.length > 0) {

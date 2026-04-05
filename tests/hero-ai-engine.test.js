@@ -64,7 +64,7 @@ function makeFakeState(overrides = {}) {
   });
   const witch = makeEntity({
     id: 'witch1', type: EntityType.WITCH, owner: 'witch',
-    col: 6, row: 6, hp: 8, maxHp: 8,
+    col: 5, row: 4, hp: 8, maxHp: 8,  // within hero DAY sight range (3 hexes from hero at 3,3)
   });
   const entities = overrides.entities ?? [hero, witch];
 
@@ -378,17 +378,18 @@ describe('allocateBudget with hero goals', () => {
     assert.equal(total, 8);
   });
 
-  test('every qualifying goal gets at least 1 AP', () => {
+  test('allocations are in chunks of 3 or more', () => {
     const scores = {
       [HeroGoal.PROTECT_HERO]: 0.8,
-      [HeroGoal.SLAY_WITCH]: 0.1,
-      [HeroGoal.CONTROL_NODES]: 0.1,
-      [HeroGoal.EXPLORE]: 0.1,
-      [HeroGoal.FORTIFY_POSITION]: 0.1,
+      [HeroGoal.SLAY_WITCH]: 0.3,
+      [HeroGoal.CONTROL_NODES]: 0.3,
+      [HeroGoal.EXPLORE]: 0.3,
+      [HeroGoal.FORTIFY_POSITION]: 0.3,
     };
-    const budget = allocateBudget(scores, 6);
+    const budget = allocateBudget(scores, 12);
     for (const g of Object.keys(scores)) {
-      assert.ok(budget[g] >= 1, `${g} should get at least 1 AP, got ${budget[g]}`);
+      assert.ok(budget[g] === 0 || budget[g] >= 3,
+        `${g} should be 0 or >= 3 AP, got ${budget[g]}`);
     }
   });
 
@@ -400,7 +401,8 @@ describe('allocateBudget with hero goals', () => {
       [HeroGoal.EXPLORE]: 0.9,
       [HeroGoal.FORTIFY_POSITION]: 0.1,
     };
-    const budget = allocateBudget(scores, 10);
+    // Budget 18: enough for EXPLORE to get extra chunks over lower goals
+    const budget = allocateBudget(scores, 18);
     assert.ok(budget[HeroGoal.EXPLORE] > budget[HeroGoal.PROTECT_HERO],
       `EXPLORE (${budget[HeroGoal.EXPLORE]}) should exceed PROTECT (${budget[HeroGoal.PROTECT_HERO]})`);
   });
@@ -637,11 +639,12 @@ describe('genSlayWitch', () => {
     assert.equal(battle.targetId, 'witch1');
   });
 
-  test('chases witch when not adjacent', () => {
+  test('chases witch when not adjacent but within sight', () => {
     const sim = makeHeroEngineSim({
       entities: [
         makeEntity({ id: 'hero1', col: 0, row: 0, hp: 10, maxHp: 10, items: {} }),
-        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 4, row: 4, hp: 8, maxHp: 8 }),
+        // Within hero DAY sight range (3 hexes)
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 2, row: 1, hp: 8, maxHp: 8 }),
       ],
     });
     const board = assessHeroBoard(sim);
