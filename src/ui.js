@@ -1521,7 +1521,14 @@ export class UIController {
     const openRight = screenPos.x < window.innerWidth / 2;
     const centerAngle = openRight ? 0 : Math.PI; // 0 = right, PI = left
 
-    const ARC_RADIUS = 150;
+    // Compute arc radius so buttons touch the hex edge
+    const canvasRect = this.canvas.getBoundingClientRect();
+    const canvasScale = canvasRect.width / this.canvas.width;
+    const hexScreenPx = this.renderer.hexSize * canvasScale * this.renderer.zoomLevel;
+    // Pointy-top hex: flat-to-flat radius is hexSize * sqrt(3)/2
+    // Add a small pad (4px) so labels just kiss the edge
+    const ARC_RADIUS = hexScreenPx * 0.87 + 4;
+    this._arcRadius = ARC_RADIUS;
     const ITEM_GAP  = 40 * (Math.PI / 180); // uniform angular gap between all items
 
     // Uniform spacing — no group gaps except summon items stay clustered
@@ -3672,11 +3679,24 @@ function _positionArcPopup(popup, ui) {
 
   // Update renderer's arc menu lines for canvas drawing
   if (ui._arcItems?.length) {
+    // Recompute dynamic radius on each frame so it tracks zoom changes
+    const arcScale = canvasRect.width / ui.canvas.width;
+    const hexPx = ui.renderer.hexSize * arcScale * ui.renderer.zoomLevel;
+    const arcR = hexPx * 0.87 + 4;
+    ui._arcRadius = arcR;
+    // Update DOM arc item positions to match new radius
+    const arcBtns = popup.querySelectorAll('.arc-item');
+    for (let i = 0; i < ui._arcItems.length && i < arcBtns.length; i++) {
+      const ix = Math.cos(ui._arcItems[i]._angle) * arcR;
+      const iy = Math.sin(ui._arcItems[i]._angle) * arcR;
+      arcBtns[i].style.setProperty('--arc-x', ix.toFixed(1) + 'px');
+      arcBtns[i].style.setProperty('--arc-y', iy.toFixed(1) + 'px');
+    }
     ui.renderer.arcMenuLines = {
       col, row,
       items: ui._arcItems.map(item => ({
-        x: Math.cos(item._angle) * 150, // ARC_RADIUS in screen px
-        y: Math.sin(item._angle) * 150,
+        x: Math.cos(item._angle) * arcR,
+        y: Math.sin(item._angle) * arcR,
         color: item.color,
       })),
     };
