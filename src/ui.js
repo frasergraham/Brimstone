@@ -3895,10 +3895,14 @@ function _resolveArcLayout(popup, ui, baseR) {
     return false;
   }
 
-  // Start at base radius and step outward until no overlaps and hex is clear
+  // Only enforce hex-clearance for disambiguation arcs (portrait items) —
+  // regular action arcs don't need it and it would blow out their radius.
+  const hasPortraits = items.some(i => i._portrait);
+
+  // Start at base radius and step outward until no overlaps (and hex is clear for portrait arcs)
   let r = baseR;
   const MAX_R = 400; // safety cap
-  while (r < MAX_R && (hasOverlap(r) || obscuresHex(r))) {
+  while (r < MAX_R && (hasOverlap(r) || (hasPortraits && obscuresHex(r)))) {
     r += 8;
   }
   return r;
