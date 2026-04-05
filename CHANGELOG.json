@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.3.15",
+    "date": "2026-04-05",
+    "summary": "Bug fixes",
+    "notes": [
+      "Revert COPY_PHASE_STRIP to NO for Release builds"
+    ]
+  },
+  {
     "version": "1.3.14",
     "date": "2026-04-05",
     "summary": "New features, bug fixes, and improvements",
