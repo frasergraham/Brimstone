@@ -28,7 +28,7 @@ import { pruneStaleAndIncompatibleSaves,
 import {
   createLobby, joinLobby, joinGame, browseLobby,
   setSlotAI, removeSlotAI, fillAllWithAI, startGame, leaveLobby, resignGame, sendSlotInvite as sendSlotInviteHandler,
-  handleAction, handleEndTurn, handlePlanSubmit,
+  handleAction, handleEndTurn, handlePlanSubmit, handleNudge,
   handleDisconnect, handleReconnect,
   resumeGame, adminResumeGame,
   getRoom,
@@ -1084,6 +1084,13 @@ function route(ws, cs, msg) {
     case 'submitPlan': {
       if (!cs.player || !cs.roomId) return;
       handlePlanSubmit(cs.player.id, cs.roomId, msg.plan ?? []);
+      break;
+    }
+
+    case 'nudge': {
+      if (!cs.player || !cs.roomId) return;
+      if (!msg.targetPlayerId) return;
+      handleNudge(cs.player.id, cs.roomId, msg.targetPlayerId);
       break;
     }
 

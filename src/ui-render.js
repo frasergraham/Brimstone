@@ -346,11 +346,16 @@ function _advanceProjectedInventory(a, projShared, projWitch, projEntityItems) {
  * Build the innerHTML for the #plan-players ready list.
  *
  * @param {Array<{ playerId: string, name: string, faction: string, _submitted?: boolean }>} players
+ * @param {{ myPlayerId?: string, nudgedSet?: Set<string> }} [nudgeCtx]
+ *   When provided, renders a nudge button for other human players who haven't submitted.
  * @returns {string}  HTML string.
  */
-export function buildPlayerStatusHtml(players) {
+export function buildPlayerStatusHtml(players, nudgeCtx) {
+  const myId    = nudgeCtx?.myPlayerId ?? null;
+  const nudged  = nudgeCtx?.nudgedSet ?? null;
   let html = '';
   for (const p of players) {
+    const pid       = p.playerId ?? p.id;
     const submitted = p._submitted ?? false;
     const icon      = submitted ? '✓' : '⋯';
     const cls       = submitted ? 'player-ready' : 'player-waiting';
@@ -364,10 +369,20 @@ export function buildPlayerStatusHtml(players) {
       : 'presence-offline';
     const presenceDot = (p.isAI || p.connected === undefined) ? ''
       : `<span class="presence-dot ${presenceCls}"></span>`;
+
+    // Nudge button: shown for other human players who haven't submitted
+    let nudgeBtn = '';
+    if (nudged && myId && pid !== myId && !p.isAI && !submitted) {
+      const already = nudged.has(pid);
+      nudgeBtn = already
+        ? `<button class="nudge-btn nudge-sent" disabled title="Nudge sent">👈</button>`
+        : `<button class="nudge-btn" data-nudge-id="${pid}" title="Nudge">👈</button>`;
+    }
+
     html += `<div class="plan-player-row ${cls}">
         <span class="plan-player-icon ${fCls}">${p.faction === 'hero' ? '⚔' : '✦'}</span>
         ${presenceDot}<span class="plan-player-name">${safeName}</span>
-        <span class="plan-player-status">${icon}</span>
+        ${nudgeBtn}<span class="plan-player-status">${icon}</span>
       </div>`;
   }
   return html;

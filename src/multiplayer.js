@@ -225,6 +225,9 @@ export class MultiplayerClient {
   /** Resign from an active game. */
   resignGame(roomId) { this._send({ type: 'resignGame', roomId }); }
 
+  /** Nudge another player to take their turn. */
+  sendNudge(targetPlayerId) { this._send({ type: 'nudge', targetPlayerId }); }
+
   /** Tell the server the player has backgrounded / foregrounded the app. */
   setInactive(inactive) { this._send({ type: 'setInactive', inactive }); }
 
@@ -376,6 +379,7 @@ export class MultiplayerClient {
         this.myFaction  = msg.faction;
         this.myPlayerId = msg.myPlayerId ?? null;
         this.roomId     = msg.roomId;
+        this.isAsync    = !!msg.isAsync;
         this.active     = true;
         // Register roomId with server so it can route actions to us
         this._send({ type: 'setRoom', roomId: msg.roomId });
@@ -386,6 +390,7 @@ export class MultiplayerClient {
         this.myFaction  = msg.faction;
         this.myPlayerId = msg.myPlayerId ?? null;
         this.roomId     = msg.roomId;
+        this.isAsync    = !!msg.isAsync;
         this.active     = true;
         this._send({ type: 'setRoom', roomId: msg.roomId });
         break;
@@ -451,6 +456,14 @@ export class MultiplayerClient {
 
       case 'playerResigned':
         this._opts.onPlayerResigned?.(msg);
+        break;
+
+      case 'nudged':
+        this._opts.onNudged?.(msg);
+        break;
+
+      case 'nudgeAck':
+        this._opts.onNudgeAck?.(msg);
         break;
 
       case 'resolutionComplete': {
