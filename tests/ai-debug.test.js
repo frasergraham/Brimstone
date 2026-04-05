@@ -434,8 +434,8 @@ describe('HeroAIEngine debug capture', () => {
 
 // ── assemblePlan still strips metadata in normal mode ───────────────────────
 
-describe('assemblePlan metadata stripping', () => {
-  test('strips _goal and _priority from returned plan', () => {
+describe('assemblePlan preserves metadata for debug', () => {
+  test('keeps _goal and _priority on returned plan', () => {
     const fakeState = makeFakeState();
     const sim = new EnginePlanSimState(fakeState, 'witch');
     const witchEntity = sim.entities.find(e => e.owner === 'witch');
@@ -451,9 +451,7 @@ describe('assemblePlan metadata stripping', () => {
       { type: PlanActionType.MOVE, entityId: 'witch1', toCol: 1, toRow: 0, _goal: Goal.BUILD_ARMY, _priority: 5 },
     ];
     const plan = assemblePlan(actions, sim, board, new Map());
-    for (const a of plan) {
-      assert.equal(a._goal, undefined, 'plan actions should not have _goal');
-      assert.equal(a._priority, undefined, 'plan actions should not have _priority');
-    }
+    assert.equal(plan[0]._goal, Goal.BUILD_ARMY);
+    assert.equal(plan[0]._priority, 5);
   });
 });

@@ -835,6 +835,14 @@ export class HeroAIEngine {
       allActions.push(...gen.fn());
     }
 
+    const heroEntity = sim.entities.find(e => e.id === board.hero.id);
+    const plan = assemblePlan(allActions, sim, board, this._prevPositions,
+      (plan, sim, board, remaining, prevPositions) => {
+        fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositions);
+      }
+    );
+
+    // Capture debug data AFTER assemblePlan so overlay matches actual execution
     if (this.debugCapture) {
       this.lastDebugData = {
         faction: 'hero',
@@ -842,18 +850,11 @@ export class HeroAIEngine {
         board,
         scores: { ...scores },
         budget: { ...budget },
-        actions: allActions.map(a => ({ ...a })),
+        actions: plan.map(a => ({ ...a })),
         config: this.config,
         unitCommitments: new Map(sim.unitCommitments),
       };
     }
-
-    const heroEntity = sim.entities.find(e => e.id === board.hero.id);
-    const plan = assemblePlan(allActions, sim, board, this._prevPositions,
-      (plan, sim, board, remaining, prevPositions) => {
-        fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositions);
-      }
-    );
 
     if (allyContext) {
       _updateHeroAllyClaimedNodes(plan, board, allyContext);

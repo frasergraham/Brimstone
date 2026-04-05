@@ -851,14 +851,12 @@ describe('HeroAIEngine', () => {
     assert.ok(plan.length > 0, 'should generate at least one action');
   });
 
-  test('generatePlan returns clean actions (no _priority/_goal)', () => {
+  test('generatePlan preserves _goal metadata for debug', () => {
     const state = makeFakeState();
     const engine = new HeroAIEngine(state, () => {});
     const plan = engine.generatePlan();
-    for (const action of plan) {
-      assert.equal(action._priority, undefined, 'should strip _priority');
-      assert.equal(action._goal, undefined, 'should strip _goal');
-    }
+    const withGoal = plan.filter(a => a._goal != null);
+    assert.ok(withGoal.length > 0 || plan.length === 0, 'plan actions should have _goal metadata');
   });
 
   test('generatePlan returns empty for missing hero', () => {

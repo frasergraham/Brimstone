@@ -862,13 +862,8 @@ export function assemblePlan(allActions, sim, board, prevPositions, gapFillFn = 
     }
   }
 
-  // 6. Strip internal metadata and truncate
-  const plan = budgetCapped.slice(0, MAX_PLAN_LENGTH).map(a => {
-    const clean = { ...a };
-    delete clean._priority;
-    delete clean._goal;
-    return clean;
-  });
+  // 6. Truncate to max plan length (keep _goal/_priority for debug visualization)
+  const plan = budgetCapped.slice(0, MAX_PLAN_LENGTH);
 
   return plan;
 }
@@ -1041,7 +1036,9 @@ export class WitchAIEngine {
       allActions.push(...gen.fn());
     }
 
-    // Capture debug data before assemblePlan strips metadata
+    const plan = assemblePlan(allActions, sim, board, this._prevPositions);
+
+    // Capture debug data AFTER assemblePlan so overlay matches actual execution
     if (this.debugCapture) {
       this.lastDebugData = {
         faction: 'witch',
@@ -1049,13 +1046,11 @@ export class WitchAIEngine {
         board,
         scores: { ...scores },
         budget: { ...budget },
-        actions: allActions.map(a => ({ ...a })),
+        actions: plan.map(a => ({ ...a })),
         config: this.config,
         unitCommitments: new Map(sim.unitCommitments),
       };
     }
-
-    const plan = assemblePlan(allActions, sim, board, this._prevPositions);
 
     if (allyContext) {
       _updateAllyClaimedNodes(plan, board, allyContext);

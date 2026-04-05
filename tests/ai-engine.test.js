@@ -777,15 +777,15 @@ describe('assemblePlan', () => {
     assert.equal(plan[2].type, PlanActionType.MOVE);
   });
 
-  test('strips internal _priority and _goal metadata', () => {
+  test('preserves _priority and _goal metadata for debug overlay', () => {
     const sim = makeSim();
     const board = assessBoard(sim);
     const actions = [
       { type: PlanActionType.SUMMON, entityId: 'witch1', _priority: 2, _goal: Goal.BUILD_ARMY },
     ];
     const plan = assemblePlan(actions, sim, board, new Map());
-    assert.equal(plan[0]._priority, undefined);
-    assert.equal(plan[0]._goal, undefined);
+    assert.equal(plan[0]._priority, 2);
+    assert.equal(plan[0]._goal, Goal.BUILD_ARMY);
   });
 
   test('filters cross-turn oscillation (returning to previous position)', () => {
@@ -921,7 +921,7 @@ describe('WitchAIEngine.generatePlan (integration)', () => {
     }
   });
 
-  test('plan has no internal metadata (_priority, _goal)', () => {
+  test('plan preserves _priority and _goal metadata for debug', () => {
     const state = makeFakeState({
       inventory: { witch: { [ResourceType.WOOD]: 4 }, hero: {} },
       witchObjectives: [
@@ -930,10 +930,9 @@ describe('WitchAIEngine.generatePlan (integration)', () => {
     });
     const engine = new WitchAIEngine(state, () => {}, 0);
     const plan = engine.generatePlan();
-    for (const action of plan) {
-      assert.equal(action._priority, undefined, 'should strip _priority');
-      assert.equal(action._goal, undefined, 'should strip _goal');
-    }
+    // At least some actions should have goal metadata
+    const withGoal = plan.filter(a => a._goal != null);
+    assert.ok(withGoal.length > 0 || plan.length === 0, 'plan actions should have _goal metadata');
   });
 
   test('plan length does not exceed MAX_PLAN_LENGTH', () => {
