@@ -1077,6 +1077,45 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 .usb-deselect-btn:hover { background: rgba(192,57,43,0.3); border-color: #e74c3c; color: #ff6b5b; }
 
+/* Terrain badge inside unit stats bar */
+.usb-terrain {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  padding: 0.1rem 0.4rem;
+  background: rgba(255,255,255,0.06);
+  border-radius: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.usb-terrain-icon { font-size: 0.78rem; }
+.usb-terrain-fort { color: var(--day); }
+.usb-terrain-node { color: #c89dff; }
+
+/* Tile-only selection (no entity) */
+.usb-tile-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  flex: 1;
+}
+.usb-tile-name {
+  font-weight: bold;
+  white-space: nowrap;
+  text-transform: capitalize;
+}
+.usb-tile-details {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
 #game-main {
   display: flex;
   flex: 1;
@@ -1661,23 +1700,37 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 #event-log::-webkit-scrollbar-track, #inventory-content::-webkit-scrollbar-track { background: transparent; }
 #event-log::-webkit-scrollbar-thumb, #inventory-content::-webkit-scrollbar-thumb { background: #2a2040; border-radius: 2px; }
 
-/* ── Action popup (floating above selected unit) ───────────────────────── */
+/* ── Action popup (arc menu + list fallback) ────────────────────────────── */
 
+/* Base: invisible positioning anchor for arc mode */
 #action-popup {
   display: none;
   position: fixed;
   z-index: 60;
+  width: 0;
+  height: 0;
+  overflow: visible;
+  background: none;
+  border: none;
+  padding: 0;
+  pointer-events: none;
+}
+
+/* List mode fallback (unit picker, disambig) — original vertical style */
+#action-popup.popup-list-mode {
   width: 172px;
+  height: auto;
   background: var(--bg-panel);
   border: 1px solid #3a2d58;
   border-radius: 5px;
   padding: 0.3rem 0.4rem 0.35rem;
   box-shadow: 0 6px 20px rgba(0,0,0,0.75), 0 0 0 1px rgba(255,255,255,0.04);
-  /* transform is set entirely from JS (above or below the unit) */
+  pointer-events: auto;
+  overflow: hidden;
 }
 
-/* downward caret (normal: popup is above the unit) */
-#action-popup::after {
+/* Caret only in list mode */
+#action-popup.popup-list-mode::after {
   content: '';
   position: absolute;
   bottom: -7px;
@@ -1688,14 +1741,94 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   border-bottom: none;
   border-top-color: #3a2d58;
 }
-
-/* upward caret (flipped: popup is below the unit) */
-#action-popup.flipped::after {
+#action-popup.popup-list-mode.flipped::after {
   top: -7px;
   bottom: auto;
   border-top: none;
   border-bottom: 7px solid #3a2d58;
   border-top-color: transparent;
+}
+
+/* ── Arc items ── */
+
+.arc-item {
+  position: absolute;
+  left: 0; top: 0;
+  transform: translate(-50%, -50%) scale(0.3);
+  opacity: 0;
+  pointer-events: auto;
+  white-space: nowrap;
+  padding: 0.3rem 0.55rem;
+  font-family: var(--font-serif);
+  font-size: 0.72rem;
+  color: var(--text);
+  background: rgba(20, 16, 32, 0.82);
+  border: 1.5px solid var(--arc-color, #3a2d58);
+  border-radius: 10px;
+  box-shadow: 0 3px 12px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.04);
+  cursor: pointer;
+  transition: transform 200ms ease-out, opacity 200ms ease-out;
+  transition-delay: var(--arc-delay, 0ms);
+  /* prevent text selection on double-tap */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Final open state — items fly to their arc position */
+#action-popup.arc-open .arc-item {
+  transform: translate(
+    calc(var(--arc-x, 0px) - 50%),
+    calc(var(--arc-y, 0px) - 50%)
+  ) scale(1);
+  opacity: 1;
+}
+
+/* Closing: faster ease-in back to center */
+#action-popup.arc-closing .arc-item {
+  transform: translate(-50%, -50%) scale(0.3);
+  opacity: 0;
+  transition-duration: 150ms;
+  transition-timing-function: ease-in;
+}
+
+.arc-item:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  filter: saturate(0.4);
+}
+#action-popup.arc-open .arc-item:disabled {
+  opacity: 0.3;
+}
+
+@media (hover: hover) {
+  .arc-item:hover:not(:disabled) {
+    transform: translate(
+      calc(var(--arc-x, 0px) - 50%),
+      calc(var(--arc-y, 0px) - 50%)
+    ) scale(1.1);
+    border-color: var(--arc-hover, #8a7ab8);
+    background: rgba(30, 24, 48, 0.92);
+    box-shadow: 0 3px 16px rgba(0,0,0,0.7), 0 0 8px var(--arc-glow, rgba(138,122,184,0.3));
+    z-index: 2;
+  }
+}
+
+/* Free action variant */
+.arc-item.arc-free {
+  --arc-color: #4caf7d;
+  --arc-hover: #6fd9a0;
+  --arc-glow: rgba(76,175,125,0.35);
+  color: #a0e8bc;
+}
+
+/* Selection pulse animation */
+@keyframes arc-pulse {
+  0%   { transform: translate(calc(var(--arc-x, 0px) - 50%), calc(var(--arc-y, 0px) - 50%)) scale(1); filter: brightness(1); }
+  40%  { transform: translate(calc(var(--arc-x, 0px) - 50%), calc(var(--arc-y, 0px) - 50%)) scale(1.18); filter: brightness(1.5); }
+  100% { transform: translate(calc(var(--arc-x, 0px) - 50%), calc(var(--arc-y, 0px) - 50%)) scale(1); filter: brightness(1); }
+}
+.arc-item.arc-pulse {
+  animation: arc-pulse 200ms ease-out;
 }
 
 .popup-unit-name {
