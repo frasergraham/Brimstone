@@ -1761,10 +1761,10 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   align-items: center;
   justify-content: center;
   white-space: nowrap;
-  padding: 0.15rem 0.4rem;
+  padding: 0.3rem 0.6rem;
   box-sizing: border-box;
   font-family: var(--font-serif);
-  font-size: 0.82rem;
+  font-size: 1.05rem;
   letter-spacing: 0.01em;
   color: var(--text);
   background: rgba(20, 16, 32, 0.78);

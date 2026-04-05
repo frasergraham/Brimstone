@@ -1521,8 +1521,8 @@ export class UIController {
     const openRight = screenPos.x < window.innerWidth / 2;
     const centerAngle = openRight ? 0 : Math.PI; // 0 = right, PI = left
 
-    const ARC_RADIUS = 130;
-    const ITEM_GAP  = 36 * (Math.PI / 180); // uniform angular gap between all items
+    const ARC_RADIUS = 150;
+    const ITEM_GAP  = 40 * (Math.PI / 180); // uniform angular gap between all items
 
     // Uniform spacing — no group gaps except summon items stay clustered
     const totalItems = arcItems.length;
@@ -3675,8 +3675,8 @@ function _positionArcPopup(popup, ui) {
     ui.renderer.arcMenuLines = {
       col, row,
       items: ui._arcItems.map(item => ({
-        x: Math.cos(item._angle) * 130, // ARC_RADIUS in screen px
-        y: Math.sin(item._angle) * 130,
+        x: Math.cos(item._angle) * 150, // ARC_RADIUS in screen px
+        y: Math.sin(item._angle) * 150,
         color: item.color,
       })),
     };
