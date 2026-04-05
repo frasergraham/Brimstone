@@ -85,6 +85,8 @@ export class UIController {
     this.myPlayerId     = null;    // UUID of the local player (null in offline mode)
     this._players       = [];      // full player roster [{playerId,name,faction,isAI}]
     this._countdownTimer = null;   // setInterval handle for countdown display
+    this._nudgedThisRound = new Set(); // player IDs nudged this round (reset on planning start)
+    this._isAsync       = false;   // true when in an async multiplayer game
 
     this._bindEvents();
   }
@@ -434,6 +436,17 @@ export class UIController {
     });
     _tap(this._el('plan-toggle-btn'), () => this._togglePlanPanel());
     _tap(this._el('plan-tab'),        () => this._togglePlanPanel());
+
+    // Delegated click handler for nudge buttons inside the player list
+    this._el('plan-players')?.addEventListener('click', e => {
+      const btn = e.target.closest('.nudge-btn');
+      if (!btn || btn.disabled) return;
+      const targetId = btn.dataset.nudgeId;
+      if (!targetId || !this.mp) return;
+      this.mp.sendNudge(targetId);
+      this._nudgedThisRound.add(targetId);
+      this._renderPlayerStatus();
+    });
   }
 
   _canvasPos(e) {
@@ -560,8 +573,9 @@ export class UIController {
     }
 
     // Multiplayer: reset submission status panel and start countdown.
-    // Clear previous-round submitted flags.
+    // Clear previous-round submitted flags and nudge state.
     if (this._players) this._players.forEach(p => { p._submitted = !!p.submitted; });
+    this._nudgedThisRound.clear();
     this._renderPlayerStatus();
     if (timeoutMs > 0) this._startCountdown(timeoutMs);
   }
@@ -601,7 +615,10 @@ export class UIController {
     }
 
     el.style.display = '';
-    el.innerHTML = buildPlayerStatusHtml(players);
+    const nudgeCtx = this._isAsync && this.myPlayerId
+      ? { myPlayerId: this.myPlayerId, nudgedSet: this._nudgedThisRound }
+      : undefined;
+    el.innerHTML = buildPlayerStatusHtml(players, nudgeCtx);
   }
 
   /** Called when the server notifies that another player has submitted. */
@@ -2046,6 +2063,24 @@ export class UIController {
     this._speedToastTimer = setTimeout(() => {
       toast.classList.add('speed-toast-out');
     }, 1500);
+  }
+
+  /** Show a brief toast when another player nudges us. */
+  _showNudgeToast(fromName) {
+    let toast = document.getElementById('nudge-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'nudge-toast';
+      toast.className = 'nudge-toast';
+      const wrapper = this._el('canvas-wrapper');
+      if (wrapper) wrapper.appendChild(toast);
+    }
+    toast.textContent = `${fromName} nudged you!`;
+    toast.classList.remove('nudge-toast-out');
+    clearTimeout(this._nudgeToastTimer);
+    this._nudgeToastTimer = setTimeout(() => {
+      toast.classList.add('nudge-toast-out');
+    }, 3000);
   }
 
   // ── Battle toast (minor skirmishes) ──────────────────────────────────────

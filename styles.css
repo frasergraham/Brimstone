@@ -3029,6 +3029,44 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .presence-inactive { background: #e8a735; }
 .presence-offline  { background: #666; }
 
+/* ── Nudge button ────────────────────────────────────────────────────── */
+.nudge-btn {
+  background: none;
+  border: 1px solid var(--text-dim);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 0.65rem;
+  padding: 0 0.3rem;
+  cursor: pointer;
+  line-height: 1.4;
+  flex-shrink: 0;
+  transition: opacity 0.2s;
+}
+.nudge-btn:hover:not(:disabled) { border-color: var(--text); }
+.nudge-btn.nudge-sent,
+.nudge-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* ── Nudge toast ─────────────────────────────────────────────────────── */
+.nudge-toast {
+  position: absolute;
+  top: 3.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(40, 30, 20, 0.92);
+  color: var(--text);
+  padding: 0.4rem 1rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  pointer-events: none;
+  z-index: 900;
+  opacity: 1;
+  transition: opacity 0.6s;
+}
+.nudge-toast-out { opacity: 0; }
+
 /* ── Plan food row ────────────────────────────────────────────────────── */
 .plan-food-row {
   display: flex;

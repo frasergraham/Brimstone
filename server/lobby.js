@@ -29,7 +29,7 @@ import { insertAsyncGame, getAsyncGame, getAsyncGameByCode,
          deleteAsyncGame }                       from './async-game.js';
 import { notifyWaitingOnYou, notifyRoundReady,
          notifyDeadlineApproaching, notifyGameOver,
-         notifyGameAbandoned, sendGameInvite,
+         notifyGameAbandoned, notifyNudge, sendGameInvite,
          shouldNotify }                          from './notifications.js';
 import db                                  from './db.js';
 import { VERSION }                         from '../src/version.js';
@@ -1333,6 +1333,7 @@ export function startGame(playerId, roomId) {
         myPlayerId: slot.playerId,
         players:    playerList,
         aiOpponent,
+        isAsync:    room.config.isAsync ?? false,
         openSlots:  room.openSlots.length,
       });
     }
@@ -1484,6 +1485,7 @@ export function joinGame(playerId, playerName, ws, codeOrId) {
     myPlayerId: playerId,
     players:    playerList,
     aiOpponent: room.players.some(s => s.isAI),
+    isAsync:    room.config.isAsync ?? false,
   });
 
   // Send state + planning phase info
@@ -1638,6 +1640,40 @@ export function handleAction(playerId, roomId, _actionType, _params) {
   if (!room) return;
   const seat = seatFor(room, playerId);
   send(seat?.ws, { type: 'error', message: 'Use submitPlan — simultaneous planning is active.' });
+}
+
+/** Handle a nudge request — one player asking another to take their turn. */
+export function handleNudge(senderId, roomId, targetPlayerId) {
+  const room = rooms.get(roomId);
+  if (!room || room.status !== 'playing') return;
+  if (!room.state.planningPhase) return;
+
+  const sender = seatFor(room, senderId);
+  if (!sender || sender.isAI) return;
+
+  const target = seatFor(room, targetPlayerId);
+  if (!target || target.isAI) return;
+  if (targetPlayerId === senderId) return;
+
+  // Don't nudge players who already submitted
+  if (room.state.playerReady?.get(targetPlayerId)) return;
+
+  // Send in-app WebSocket nudge to the target
+  _sendToPlayer?.(targetPlayerId, {
+    type: 'nudged',
+    fromPlayerId: senderId,
+    fromName: sender.name,
+    roomId,
+  });
+
+  // Send push/email notification (fire-and-forget)
+  notifyNudge(targetPlayerId, {
+    roomId,
+    fromName: sender.name,
+  }, _notifyOpts(room)).catch(() => {});
+
+  // Confirm to sender
+  send(sender.ws, { type: 'nudgeAck', targetPlayerId });
 }
 
 /** Handle a player disconnecting mid-game. */
@@ -1863,7 +1899,7 @@ export function handleReconnect(playerId, roomId, ws) {
 
     broadcastExcept(room, playerId, { type: 'opponentReconnected' });
     _broadcastPresence(room);
-    send(ws, { type: 'reconnected', faction: seat.faction, myPlayerId: playerId, roomId: room.id });
+    send(ws, { type: 'reconnected', faction: seat.faction, myPlayerId: playerId, roomId: room.id, isAsync: room.config.isAsync ?? false });
     send(ws, { type: 'stateUpdate', reason: 'reconnect', state: serializeState(room.state) });
 
     _sendReconnectPlanningState(room, playerId, ws);
@@ -1874,7 +1910,7 @@ export function handleReconnect(playerId, roomId, ws) {
   broadcastExcept(room, playerId, { type: 'opponentReconnected' });
   _broadcastPresence(room);
 
-  send(ws, { type: 'reconnected', faction: seat.faction, myPlayerId: playerId, roomId: room.id });
+  send(ws, { type: 'reconnected', faction: seat.faction, myPlayerId: playerId, roomId: room.id, isAsync: room.config.isAsync ?? false });
   send(ws, { type: 'stateUpdate', reason: 'reconnect', state: serializeState(room.state) });
 
   _sendReconnectPlanningState(room, playerId, ws);
