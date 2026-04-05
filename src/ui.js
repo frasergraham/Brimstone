@@ -1521,12 +1521,12 @@ export class UIController {
     const openRight = screenPos.x < window.innerWidth / 2;
     const centerAngle = openRight ? 0 : Math.PI; // 0 = right, PI = left
 
-    // Compute arc radius so buttons touch the hex edge
+    // Compute initial arc radius (hex edge); overlap resolution happens in _positionArcPopup
     const canvasRect = this.canvas.getBoundingClientRect();
     const canvasScale = canvasRect.width / this.canvas.width;
     const hexScreenPx = this.renderer.hexSize * canvasScale * this.renderer.zoomLevel;
     const ITEM_GAP  = 40 * (Math.PI / 180); // uniform angular gap between all items
-    const ARC_RADIUS = _computeArcRadius(hexScreenPx, arcItems.length, ITEM_GAP);
+    const ARC_RADIUS = _baseArcRadius(hexScreenPx);
     this._arcRadius = ARC_RADIUS;
 
     // Uniform spacing — no group gaps except summon items stay clustered
@@ -3660,15 +3660,57 @@ function _getEntityScreenPos(ui, entity) {
 }
 
 /** Compute arc radius: starts at hex edge, pushes out until items don't overlap. */
-function _computeArcRadius(hexScreenPx, itemCount, itemGap) {
-  // Base radius: just touching the hex edge
-  const baseR = hexScreenPx * 0.87 + 4;
-  if (itemCount <= 1) return baseR;
-  // Minimum chord distance between adjacent items (px) — covers button height + padding + border
-  const MIN_SPACING = 56;
-  // chord = 2 * r * sin(gap/2); solve for r: r = MIN_SPACING / (2 * sin(gap/2))
-  const minR = MIN_SPACING / (2 * Math.sin(itemGap / 2));
-  return Math.max(baseR, minR);
+/** Compute base arc radius (hex edge). */
+function _baseArcRadius(hexScreenPx) {
+  return hexScreenPx * 0.87 + 4;
+}
+
+/**
+ * Resolve arc layout so no buttons overlap.
+ * Starts at baseR, measures actual button rects, and pushes radius out
+ * until all bounding boxes are clear of each other.
+ * Returns the final radius used.
+ */
+function _resolveArcLayout(popup, ui, baseR) {
+  const items = ui._arcItems;
+  if (!items?.length) return baseR;
+  const btns = popup.querySelectorAll('.arc-item');
+  if (!btns.length) return baseR;
+
+  // Measure button dimensions (only need width/height, position is computed)
+  const sizes = [];
+  for (let i = 0; i < btns.length; i++) {
+    const rect = btns[i].getBoundingClientRect();
+    sizes.push({ w: rect.width, h: rect.height });
+  }
+
+  // Check if any pair of bounding boxes overlaps at a given radius
+  function hasOverlap(r) {
+    for (let i = 0; i < items.length; i++) {
+      const cx1 = Math.cos(items[i]._angle) * r;
+      const cy1 = Math.sin(items[i]._angle) * r;
+      const hw1 = sizes[i].w / 2, hh1 = sizes[i].h / 2;
+      for (let j = i + 1; j < items.length; j++) {
+        const cx2 = Math.cos(items[j]._angle) * r;
+        const cy2 = Math.sin(items[j]._angle) * r;
+        const hw2 = sizes[j].w / 2, hh2 = sizes[j].h / 2;
+        // AABB overlap check with 2px padding
+        if (Math.abs(cx1 - cx2) < hw1 + hw2 + 2 &&
+            Math.abs(cy1 - cy2) < hh1 + hh2 + 2) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Start at base radius and step outward until no overlaps
+  let r = baseR;
+  const MAX_R = 400; // safety cap
+  while (r < MAX_R && hasOverlap(r)) {
+    r += 8;
+  }
+  return r;
 }
 
 /** Position the arc popup centered on the entity's screen position and set up canvas lines. */
@@ -3692,10 +3734,10 @@ function _positionArcPopup(popup, ui) {
     // Recompute dynamic radius on each frame so it tracks zoom changes
     const arcScale = canvasRect.width / ui.canvas.width;
     const hexPx = ui.renderer.hexSize * arcScale * ui.renderer.zoomLevel;
-    const itemGap = 40 * (Math.PI / 180);
-    const arcR = _computeArcRadius(hexPx, ui._arcItems.length, itemGap);
+    const baseR = _baseArcRadius(hexPx);
+    const arcR = _resolveArcLayout(popup, ui, baseR);
     ui._arcRadius = arcR;
-    // Update DOM arc item positions to match new radius
+    // Update DOM arc item positions to match resolved radius
     const arcBtns = popup.querySelectorAll('.arc-item');
     for (let i = 0; i < ui._arcItems.length && i < arcBtns.length; i++) {
       const ix = Math.cos(ui._arcItems[i]._angle) * arcR;
