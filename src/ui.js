@@ -1657,11 +1657,20 @@ export class UIController {
     const openRight = screenX < window.innerWidth / 2;
     const centerAngle = openRight ? 0 : Math.PI;
 
-    const ITEM_GAP = 40 * (Math.PI / 180);
-    const ARC_RADIUS = _baseArcRadius(hexScreenPx);
-    this._arcRadius = ARC_RADIUS;
+    // Use a consistent target radius for portrait arcs — slightly larger than
+    // the base hex-edge radius so portraits don't crowd the hex, but capped so
+    // large item counts don't blow up.
+    const BASE_R = _baseArcRadius(hexScreenPx);
+    const TARGET_R = Math.max(BASE_R, 70);
+    this._arcRadius = TARGET_R;
 
+    // Compute angular gap dynamically: spread items evenly within a max arc
+    // span (~180°) so the radius stays consistent regardless of item count.
     const totalItems = arcItems.length;
+    const MAX_SPAN = Math.PI; // 180° max arc span
+    const MIN_GAP  = 35 * (Math.PI / 180); // don't pack tighter than 35°
+    const ITEM_GAP = totalItems <= 1 ? 0
+      : Math.max(MIN_GAP, Math.min(MAX_SPAN / (totalItems - 1), 65 * (Math.PI / 180)));
     const totalAngle = Math.max(0, totalItems - 1) * ITEM_GAP;
     const startAngle = centerAngle - totalAngle / 2;
 
@@ -1702,9 +1711,9 @@ export class UIController {
     }
     popup.offsetHeight; // force layout
 
-    const finalR = _resolveArcLayout(popup, this, ARC_RADIUS);
+    const finalR = _resolveArcLayout(popup, this, TARGET_R);
     this._arcRadius = finalR;
-    this._arcBaseR = ARC_RADIUS;
+    this._arcBaseR = TARGET_R;
 
     for (let i = 0; i < arcItems.length && i < btns.length; i++) {
       const fx = Math.cos(arcItems[i]._angle) * finalR;
