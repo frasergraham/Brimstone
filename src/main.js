@@ -1350,9 +1350,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (myPlayerId && actor?.ownerId !== myPlayerId) continue;
 
       if (!_suppressDialogs) {
-        if (result.encounterSurvivor) {
-          // Survivor found — show encounter card only (no separate result dialog)
-          await new Promise(resolve => ui._showEncounterDialog(result.encounterSurvivor, resolve, 'horn'));
+        const survivors = result.encounterSurvivors || (result.encounterSurvivor ? [result.encounterSurvivor] : []);
+        if (survivors.length > 0) {
+          // Show encounter card for each survivor found
+          for (const s of survivors) {
+            await new Promise(resolve => ui._showEncounterDialog(s, resolve, 'horn'));
+          }
         } else if (result.log?.length) {
           // No survivor — show the "nothing found" result dialog
           await new Promise(resolve => ui._showResultDialog(result.log, resolve));

@@ -16,7 +16,7 @@ import {
   EntityType,
   createHero, createWitch, createMinion, createIronGolem, createWoodGolem, createZombie,
 } from '../src/entities.js';
-import { ResourceType } from '../src/tiles.js';
+import { ResourceType, TileType } from '../src/tiles.js';
 import { hexKey } from '../src/hex.js';
 import { getFaction } from '../src/factions.js';
 
@@ -294,5 +294,54 @@ describe('Sound Horn action', () => {
     assert.ok(witchLog, 'Should have a witch-visible log entry');
     assert.ok(witchLog.msg.includes('horn') || witchLog.msg.includes('Horn'),
       'Witch log should mention the horn');
+  });
+
+  test('Sound Horn guarantees finding one survivor if hidden survivors in range', () => {
+    const state = freshState();
+    state.log = [];
+    state.addLog = (msg, faction) => state.log.push({ msg, faction });
+    const hero = createHero(3, 3);
+    hero.owner = 'hero';
+    state.entities.push(hero);
+    state.inventory.shared.food = 5;
+
+    // Place a hidden survivor at (3, 4) — within 4 hexes
+    const tile = state.tiles.get(hexKey(3, 4));
+    if (tile) {
+      tile.type = TileType.BUILDING;
+      tile.hiddenSurvivor = true;
+    } else {
+      state.tiles.set(hexKey(3, 4), {
+        col: 3, row: 4, type: TileType.BUILDING, explored: false,
+        hiddenSurvivor: true, terrain: 'grass',
+      });
+    }
+
+    // Run 20 times — should always find at least one survivor
+    let foundCount = 0;
+    for (let i = 0; i < 20; i++) {
+      // Reset state for each attempt
+      const s = freshState();
+      s.log = [];
+      s.addLog = (msg, faction) => s.log.push({ msg, faction });
+      const h = createHero(3, 3);
+      h.owner = 'hero';
+      s.entities.push(h);
+      s.inventory.shared.food = 5;
+      const t = s.tiles.get(hexKey(3, 4));
+      if (t) {
+        t.type = TileType.BUILDING;
+        t.hiddenSurvivor = true;
+      } else {
+        s.tiles.set(hexKey(3, 4), {
+          col: 3, row: 4, type: TileType.BUILDING, explored: false,
+          hiddenSurvivor: true, terrain: 'grass',
+        });
+      }
+      const result = executeSoundHorn(s, h);
+      if (result.encounterSurvivor) foundCount++;
+    }
+    assert.ok(foundCount === 20,
+      `Expected to find survivor every time, but only found ${foundCount}/20`);
   });
 });

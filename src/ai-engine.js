@@ -215,16 +215,18 @@ export function scoreGoals(board, goalWeights = null) {
   if (board.enemiesNearWitch > board.minionCount + 1) defend = Math.max(defend, 0.8);
   defend = clamp01(defend);
 
-  // BUILD_ARMY — high when few minions or resources available to spend
+  // BUILD_ARMY — high when few minions, drops off once nodes are covered
   let army = 0;
   const nodeCount = board.nodes.length || 3;
   if (board.minionCount < nodeCount) {
     // Fewer minions than nodes — need more bodies
     army = 0.8;
-  } else if (board.minionCount < nodeCount + 2) {
-    army = 0.5;
+  } else if (board.minionCount < nodeCount + 1) {
+    // One reserve minion
+    army = 0.4;
   } else {
-    army = 0.2;
+    // Enough minions — focus on nodes instead
+    army = 0.1;
   }
   // Boost if we have resources to spend but few minions
   if (board.canAffordSummon && board.minionCount < nodeCount) army = Math.max(army, 0.9);
@@ -233,22 +235,22 @@ export function scoreGoals(board, goalWeights = null) {
   army = clamp01(army);
 
   // CONTROL_NODES — based on uncovered/contested nodes
-  let control = 0.3;
+  let control = 0.4;
   const uncovered = board.nodes.filter(n => n.controller !== 'witch' || !n.witchPresent).length;
   const allCovered = uncovered === 0;
   control += uncovered * 0.15;
   if (board.heroScore >= 3) control += 0.3;
   if (board.heroHeldCount > 0) control += 0.2;
   if (board.heroHeldCount > board.witchHeldCount) control += 0.25;
-  if (board.roundsToScoring <= 1) control += 0.15;
+  if (board.roundsToScoring <= 2) control += 0.2;
+  else if (board.roundsToScoring <= 1) control += 0.15;
   const controlMult = board.isDawnOrDusk ? 1.8 : 1.0;
   control = clamp01(clamp01(control) * controlMult);
 
-  // If all nodes are covered with witch units, reduce control priority
-  // and shift budget back to army building
+  // If all nodes are covered with witch units, reduce control priority slightly
+  // but don't shift to army building — keep defending nodes
   if (allCovered) {
-    control *= 0.3;
-    army = Math.max(army, 0.5);
+    control *= 0.6;
   }
 
   const scores = {
@@ -264,8 +266,9 @@ export function scoreGoals(board, goalWeights = null) {
     }
   }
 
-  // Early-game focus: no enemies visible + unexplored buildings → build army
-  if (board.visibleHeroes.length === 0 && board.unexploredBuildings.length > 0) {
+  // Early-game focus: no enemies visible + unexplored buildings + few minions → build army
+  if (board.visibleHeroes.length === 0 && board.unexploredBuildings.length > 0 &&
+      board.minionCount < nodeCount + 1) {
     scores[Goal.BUILD_ARMY] = clamp01(scores[Goal.BUILD_ARMY] + 0.4);
     scores[Goal.DEFEND_WITCH] = Math.min(scores[Goal.DEFEND_WITCH], 0.1);
   }

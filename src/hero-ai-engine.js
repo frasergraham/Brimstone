@@ -258,19 +258,21 @@ export function scoreHeroGoals(board, goalWeights = null) {
   explore = clamp01(explore);
 
   // CONTROL_NODES — dominant priority, especially near scoring
-  let control = 0.7;
+  let control = 0.5;
   const uncovered = board.nodes.filter(n => n.controller !== 'hero' && !n.heroPresent).length;
   control += uncovered * 0.1;
-  if (board.survivorCount >= 1) control += 0.2;
+  if (board.survivorCount >= 1) control += 0.15;
   if (board.witchHeldCount >= 2) control += 0.3;
   const scoreDiff = board.heroScore - board.witchScore;
-  if (scoreDiff < 0) control += 0.15;
-  if (scoreDiff <= -2) control += 0.15;
+  if (scoreDiff < 0) control += 0.2;
+  if (scoreDiff <= -2) control += 0.2;
   if (board.witchScore >= 3) control += 0.3;
-  if (board.roundsToScoring <= 2) control += 0.25;
-  else if (board.roundsToScoring <= 3) control += 0.1;
+  if (board.roundsToScoring <= 2) control += 0.35;
+  else if (board.roundsToScoring <= 3) control += 0.15;
   // Dawn/dusk boosts node control urgency
   if (board.isDawnOrDusk) control *= 1.8;
+  // Day: hero is stronger — modest boost to node priority
+  else if (board.isDay) control += 0.1;
   control = clamp01(control);
 
   const scores = {
@@ -514,9 +516,11 @@ export function genExplore(sim, board, budget, config = null) {
   }
 
   // Move toward nearest unexplored building, then explore on arrival
+  // Fight enemies encountered along the way (opportunistic combat)
   if (remaining > 0 && !sim.unitCommitments.has(board.hero.id)) {
     const building = _nearestUnexploredBuilding(sim, heroEntity);
     if (building) {
+      const exploreEngageFloor = board.isDay ? 'suicidal' : (config?.engageFloor ?? 'unfavorable');
       let stepsLeft = Math.min(remaining, 3);
       while (stepsLeft > 0) {
         if (heroEntity.col === building.col && heroEntity.row === building.row) {
@@ -528,6 +532,27 @@ export function genExplore(sim, board, budget, config = null) {
           remaining--;
           break;
         }
+
+        // Opportunistic: fight adjacent enemies while exploring
+        const allEnemies = [board.witch, ...board.witchMinions].filter(Boolean);
+        const nearbyFoes = allEnemies.filter(e =>
+          hexDistance(e.col, e.row, heroEntity.col, heroEntity.row) <= 1
+        );
+        for (const enemy of nearbyFoes) {
+          if (remaining <= 0 || stepsLeft <= 0) break;
+          const est = estimateHeroCombat(heroEntity, enemy, board);
+          if (!meetsEngageFloor(est.classification, exploreEngageFloor)) continue;
+          actions.push({
+            type: PlanActionType.BATTLE_UNIT, entityId: board.hero.id,
+            targetId: enemy.id, targetCol: enemy.col, targetRow: enemy.row,
+            _priority: 3, _goal: HeroGoal.EXPLORE,
+          });
+          sim.applyBattle();
+          remaining--;
+          stepsLeft--;
+        }
+        if (remaining <= 0 || stepsLeft <= 0) break;
+
         const step = roadStepToward(sim, heroEntity, building);
         if (!step) break;
 
@@ -544,14 +569,17 @@ export function genExplore(sim, board, budget, config = null) {
     }
   }
 
-  // Fortify current building if hero is in one and has resources
+  // Fortify current position if hero has resources (only on buildings or node hexes)
   if (remaining > 0 && !sim.unitCommitments.has(board.hero.id)) {
     const heroTile = sim.tiles.get(hexKey(heroEntity.col, heroEntity.row));
     const fortifyCap = (board.isNight || board.isDawnOrDusk)
       ? (config?.fortifyCapNight ?? 3)
       : (config?.fortifyCapDay ?? 1);
+    const onNode = board.nodes.some(n =>
+      n.obj.hexes?.some(h => h.col === heroEntity.col && h.row === heroEntity.row)
+    );
 
-    if (heroTile && heroTile.type === TileType.BUILDING) {
+    if (heroTile && heroTile.type !== TileType.RIVER && (heroTile.type === TileType.BUILDING || onNode)) {
       const ledger = sim.resourceLedger;
       while (remaining > 0 && (heroTile.fortifyLevel || 0) < fortifyCap) {
         const hasWood = (ledger[ResourceType.WOOD] || 0) > 0;
@@ -584,13 +612,18 @@ export function genControlNodes(sim, board, budget, config = null) {
   let remaining = budget;
 
   const allyClaimed = board.allyContext?.claimedNodes;
-  const engageFloor = config?.engageFloor ?? 'unfavorable';
+  const configFloor = config?.engageFloor ?? 'unfavorable';
+  // During daytime, hero is stronger — attack aggressively at nodes even at bad odds
+  const engageFloor = board.isDay ? 'suicidal' : configFloor;
 
   // Witch-threatened node check
   const witchThreatensNode = (n) => sim.entities.some(e =>
     e.alive && e.owner === 'witch' &&
     hexDistance(e.col, e.row, n.obj.col, n.obj.row) <= 2
   );
+
+  // During daytime, contest nodes even if it looks hopeless — hero is stronger during day
+  const feasibilityFloor = board.isDay ? 0 : 0.05;
 
   const targetNodes = board.nodes
     .filter(n => n.controller !== 'hero' || !n.heroPresent || witchThreatensNode(n))
@@ -599,9 +632,9 @@ export function genControlNodes(sim, board, budget, config = null) {
       feasibility: scoreNodeFeasibility(n, 'hero', sim.entities),
       allyClaimed: allyClaimed ? n.obj.hexes?.some(h => allyClaimed.has(hexKey(h.col, h.row))) : false,
     }))
-    .filter(n => n.feasibility >= 0.1 && !n.allyClaimed)
+    .filter(n => n.feasibility >= feasibilityFloor && !n.allyClaimed)
     .sort((a, b) => {
-      if (Math.abs(a.feasibility - b.feasibility) > 0.1) return b.feasibility - a.feasibility;
+      // Sort by distance first — get to the nearest node, don't overthink feasibility
       return a.distToNearestHeroUnit - b.distToNearestHeroUnit;
     });
 
@@ -649,13 +682,13 @@ export function genControlNodes(sim, board, budget, config = null) {
           sim.unitCommitments.set(simUnit.id, HeroGoal.CONTROL_NODES);
         }
 
-        // Fortify node building if on one and have resources
-        if (remaining > 0 && simUnit.type === EntityType.HERO) {
+        // Fortify node hex if on one and have resources (any hero-side unit)
+        if (remaining > 0) {
           const nodeTile = sim.tiles.get(hexKey(simUnit.col, simUnit.row));
           const fortifyCap = (board.isNight || board.isDawnOrDusk)
             ? (config?.fortifyCapNight ?? 3)
             : (config?.fortifyCapDay ?? 1);
-          if (nodeTile && nodeTile.type === TileType.BUILDING) {
+          if (nodeTile && nodeTile.type !== TileType.RIVER) {
             const ledger = sim.resourceLedger;
             while (remaining > 0 && (nodeTile.fortifyLevel || 0) < fortifyCap) {
               const hasWood = (ledger[ResourceType.WOOD] || 0) > 0;
@@ -687,7 +720,7 @@ export function genControlNodes(sim, board, budget, config = null) {
         continue;
       }
 
-      // Move toward node
+      // Move toward node, fighting enemies encountered en route
       sim.unitCommitments.set(simUnit.id, HeroGoal.CONTROL_NODES);
       let stepsForUnit = Math.min(remaining, 3);
       while (stepsForUnit > 0) {
@@ -700,6 +733,26 @@ export function genControlNodes(sim, board, budget, config = null) {
           : node.obj;
 
         if (simUnit.col === targetHex.col && simUnit.row === targetHex.row) break;
+
+        // Fight adjacent enemies before moving
+        const allEnemies = [board.witch, ...board.witchMinions].filter(Boolean);
+        const adjacentEnemies = allEnemies.filter(e =>
+          hexDistance(e.col, e.row, simUnit.col, simUnit.row) <= 1
+        );
+        for (const enemy of adjacentEnemies) {
+          if (remaining <= 0 || stepsForUnit <= 0) break;
+          const est = estimateHeroCombat(simUnit, enemy, board);
+          if (!meetsEngageFloor(est.classification, engageFloor)) continue;
+          actions.push({
+            type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
+            targetId: enemy.id, targetCol: enemy.col, targetRow: enemy.row,
+            _priority: 3, _goal: HeroGoal.CONTROL_NODES,
+          });
+          sim.applyBattle();
+          remaining--;
+          stepsForUnit--;
+        }
+        if (remaining <= 0 || stepsForUnit <= 0) break;
 
         const step = roadStepToward(sim, simUnit, targetHex);
         if (!step) break;

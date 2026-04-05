@@ -1015,28 +1015,39 @@ export function executeSoundHorn(state, actor) {
     }
   }
 
-  let encounterLog = [];
-  let encounterSurvivor = null;
+  const encounterLog = [];
+  const encounterSurvivors = [];
 
-  if (candidates.length > 0 && Math.random() < 0.40) {
-    // Pick one at random
-    const target = candidates[Math.floor(Math.random() * candidates.length)];
-    const enc = _triggerSurvivorEncounter(state, actor, target.col, target.row);
-    if (enc) {
-      encounterLog = enc.encounterLog;
-      encounterSurvivor = enc.encounterSurvivor;
-    } else {
-      log.push('The horn call fades… no one answers.');
+  if (candidates.length > 0) {
+    // First survivor: guaranteed if any are within earshot
+    const idx1 = Math.floor(Math.random() * candidates.length);
+    const target1 = candidates[idx1];
+    const enc1 = _triggerSurvivorEncounter(state, actor, target1.col, target1.row);
+    if (enc1) {
+      encounterLog.push(...enc1.encounterLog);
+      if (enc1.encounterSurvivor) encounterSurvivors.push(enc1.encounterSurvivor);
     }
-  } else if (candidates.length === 0) {
-    log.push('No hidden souls stir within earshot.');
+
+    // Second survivor: 30% chance if more hidden survivors remain
+    const remaining = candidates.filter((_, i) => i !== idx1)
+      .filter(c => state.tiles.get(`${c.col},${c.row}`)?.hiddenSurvivor);
+    if (remaining.length > 0 && Math.random() < 0.30) {
+      const target2 = remaining[Math.floor(Math.random() * remaining.length)];
+      const enc2 = _triggerSurvivorEncounter(state, actor, target2.col, target2.row);
+      if (enc2) {
+        encounterLog.push(...enc2.encounterLog);
+        if (enc2.encounterSurvivor) encounterSurvivors.push(enc2.encounterSurvivor);
+      }
+    }
   } else {
-    log.push('The horn call fades… no one answers.');
+    log.push('No hidden souls stir within earshot.');
   }
 
   if (encounterLog.length) log.push(...encounterLog);
 
-  return { success: true, log, cost: 1, encounterLog, encounterSurvivor };
+  // Return first survivor for backward compat, plus full list
+  const encounterSurvivor = encounterSurvivors[0] || null;
+  return { success: true, log, cost: 1, encounterLog, encounterSurvivor, encounterSurvivors };
 }
 
 // Weakened reactive attack from a guarding unit.
