@@ -1566,7 +1566,8 @@ export class UIController {
 
     _attachPopupListeners(popup, this);
 
-    // Trigger open animation on next frame
+    // Trigger open animation on next frame; mark opening so layout resolver waits
+    this._arcOpenTime = performance.now();
     requestAnimationFrame(() => {
       popup.classList.add('arc-open');
       this.onRedraw();
@@ -3735,7 +3736,9 @@ function _positionArcPopup(popup, ui) {
     const arcScale = canvasRect.width / ui.canvas.width;
     const hexPx = ui.renderer.hexSize * arcScale * ui.renderer.zoomLevel;
     const baseR = _baseArcRadius(hexPx);
-    const arcR = _resolveArcLayout(popup, ui, baseR);
+    // Skip overlap resolution during open animation (buttons scaling up gives wrong sizes)
+    const animating = ui._arcOpenTime && (performance.now() - ui._arcOpenTime < 350);
+    const arcR = animating ? (ui._arcRadius || baseR) : _resolveArcLayout(popup, ui, baseR);
     ui._arcRadius = arcR;
     // Update DOM arc item positions to match resolved radius
     const arcBtns = popup.querySelectorAll('.arc-item');
