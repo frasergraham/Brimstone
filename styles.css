@@ -2329,6 +2329,11 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   padding: 2px 0;
 }
 
+.round-summary-events .summary-blocked {
+  color: var(--text-dim);
+  padding: 2px 0;
+}
+
 .round-summary-events .summary-kill {
   color: var(--red, #e05050);
   padding: 2px 0;

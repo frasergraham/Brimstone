@@ -259,6 +259,37 @@ describe('executeMove', () => {
   });
 });
 
+// ── executeMove — blockedBy field ────────────────────────────────────────────
+
+describe('executeMove — blockedBy field', () => {
+  test('blockedBy is null on successful unobstructed move', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const target = firstReachable(state, hero);
+    if (!target) return;
+    const r = executeMove(state, hero, target.col, target.row);
+    assert.equal(r.success, true);
+    assert.equal(r.blockedBy, null, 'blockedBy should be null when path is clear');
+  });
+
+  test('adjacent enemy hex is not reachable (blocked at source)', () => {
+    const state = freshState();
+    const hero = state.hero;
+    // Place a minion directly adjacent
+    const neighbor = getNeighbors(hero.col, hero.row).find(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && t.type !== TileType.RIVER;
+    });
+    if (!neighbor) return;
+    const minion = createMinion(neighbor.col, neighbor.row);
+    state.entities.push(minion);
+
+    const reachable = getReachableHexes(state, hero, 1);
+    const blocked = reachable.some(h => h.col === neighbor.col && h.row === neighbor.row);
+    assert.equal(blocked, false, 'Enemy-occupied hex should not be reachable');
+  });
+});
+
 // ── executeExplore ────────────────────────────────────────────────────────────
 
 describe('executeExplore', () => {

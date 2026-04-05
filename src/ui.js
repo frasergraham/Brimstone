@@ -3159,6 +3159,7 @@ export class UIController {
       const kills      = [];
       const survivors  = [];
       const summons    = [];
+      const blockedMoves = []; // movement interrupted by enemy
       const equipFinds = []; // dedicated lines for horse/weapon discoveries
       const foundRes   = {}; // icon → count  (from explore loot)
       const usedRes   = {}; // icon → count  (from summon/fortify/use-item)
@@ -3201,6 +3202,15 @@ export class UIController {
           if (ev.action?.type === 'summon' && ev.result?.success) {
             const logLine = ev.result?.log?.[0] ?? '';
             summons.push(logLine || 'Unit summoned');
+          }
+          // Movement blocked by enemy
+          if (ev.type === ResEventType.ACTION_OK &&
+              ev.action?.type === PlanActionType.MOVE &&
+              ev.result?.blockedBy) {
+            const actor = this.state.entities.find(e => e.id === ev.action.entityId);
+            const actorName = actor?.displayName ?? 'Unit';
+            const blockerName = ev.result.blockedBy.displayName ?? 'enemy';
+            blockedMoves.push({ actorName, blockerName });
           }
 
           // ── Resource tracking (player's faction only) ─────────────────
@@ -3287,6 +3297,10 @@ export class UIController {
         );
         for (const line of battleLines) {
           html += `<div class="summary-combat">${line}</div>`;
+        }
+
+        for (const bm of blockedMoves) {
+          html += `<div class="summary-blocked">\u26CC ${bm.actorName} movement blocked by ${bm.blockerName}</div>`;
         }
 
         for (const n of kills) {

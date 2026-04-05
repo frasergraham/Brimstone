@@ -503,6 +503,17 @@ export function executeMove(state, actor, targetCol, targetRow) {
   if (walkedPath.length === 0)
     return { success: false, log: ['The way is blocked.'] };
 
+  // Detect partial move blocked by enemy
+  let blockedBy = null;
+  if (walkedPath.length < fullPath.length) {
+    const nextStep = fullPath[walkedPath.length];
+    if (hasEnemy(state, actor, nextStep.col, nextStep.row)) {
+      blockedBy = state.entities.find(e =>
+        e.alive && e.owner !== actor.owner && e.col === nextStep.col && e.row === nextStep.row
+      ) ?? null;
+    }
+  }
+
   const finalStep = walkedPath[walkedPath.length - 1];
   const ft = tile(state, finalStep.col, finalStep.row);
   if (ft?.type === TileType.BUILDING) {
@@ -510,9 +521,12 @@ export function executeMove(state, actor, targetCol, targetRow) {
   } else {
     log.push(`${actor.displayName} moves to (${finalStep.col},${finalStep.row}).`);
   }
+  if (blockedBy) {
+    log.push(`${actor.displayName} movement blocked by ${blockedBy.displayName}.`);
+  }
   if (encounterLog.length) log.push(...encounterLog);
 
-  return { success: true, log, cost: 1, path: walkedPath, encounterLog, encounterSurvivor };
+  return { success: true, log, cost: 1, path: walkedPath, blockedBy, encounterLog, encounterSurvivor };
 }
 
 export function executeExplore(state, actor) {
