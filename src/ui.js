@@ -1532,43 +1532,24 @@ export class UIController {
     const openRight = screenPos.x < window.innerWidth / 2;
     const centerAngle = openRight ? 0 : Math.PI; // 0 = right, PI = left
 
-    // Button width ~55px at this font size; at radius R the angular gap needed
-    // to avoid overlap is approx 2 * atan(buttonHalfWidth / R).
-    // With R=110 and button ~55px: atan(27.5/110) ≈ 14°, so use ~28° per item
-    // plus extra between groups.
     const ARC_RADIUS = 110;
-    const ITEM_GAP  = 28 * (Math.PI / 180); // minimum angular gap between items
-    const GROUP_EXTRA = 10 * (Math.PI / 180); // additional gap between groups
+    const ITEM_GAP  = 28 * (Math.PI / 180); // uniform angular gap between all items
 
-    // Order groups
-    const GROUP_ORDER = ['scout', 'defense', 'summon', 'combat', 'items'];
-    const groups = [];
-    for (const g of GROUP_ORDER) {
-      const items = arcItems.filter(a => a.group === g);
-      if (items.length > 0) groups.push(items);
-    }
-
-    // Compute total angular span
+    // Uniform spacing — no group gaps except summon items stay clustered
     const totalItems = arcItems.length;
-    const totalGroups = groups.length;
-    const totalAngle = Math.max(0, totalItems - 1) * ITEM_GAP
-      + Math.max(0, totalGroups - 1) * GROUP_EXTRA;
+    const totalAngle = Math.max(0, totalItems - 1) * ITEM_GAP;
     const startAngle = centerAngle - totalAngle / 2;
 
-    // Assign angles to items
-    let angle = startAngle;
-    let idx = 0;
-    for (let gi = 0; gi < groups.length; gi++) {
-      if (gi > 0) angle += GROUP_EXTRA;
-      for (let ii = 0; ii < groups[gi].length; ii++) {
-        if (ii > 0 || gi > 0) {
-          // Only add ITEM_GAP between items (GROUP_EXTRA is on top of it)
-          if (ii > 0) angle += ITEM_GAP;
-        }
-        groups[gi][ii]._angle = angle;
-        groups[gi][ii]._idx = idx++;
-      }
+    // Assign angles uniformly
+    for (let i = 0; i < arcItems.length; i++) {
+      arcItems[i]._angle = startAngle + i * ITEM_GAP;
+      arcItems[i]._idx = i;
     }
+
+    // Find summon group range for the "Summon" label
+    const summonIndices = arcItems
+      .map((item, i) => item.group === 'summon' ? i : -1)
+      .filter(i => i >= 0);
 
     // Generate arc item HTML
     let html = '';
@@ -1581,6 +1562,20 @@ export class UIController {
       html += `<button class="arc-item${freeCls}" title="${item.fullLabel}"
         style="--arc-x:${x.toFixed(1)}px;--arc-y:${y.toFixed(1)}px;--arc-delay:${delay}ms;--arc-color:${item.color};--arc-hover:${item.color};--arc-glow:${item.color}33"
         ${disAttr} ${item.attrs}>${item.label}</button>`;
+    }
+
+    // Add "Summon" label above the summon group if there are 2+ summon items
+    if (summonIndices.length >= 2) {
+      const firstIdx = summonIndices[0];
+      const lastIdx  = summonIndices[summonIndices.length - 1];
+      const midAngle = (arcItems[firstIdx]._angle + arcItems[lastIdx]._angle) / 2;
+      // Place label further out from the arc, above the summon buttons
+      const labelR = ARC_RADIUS + 22;
+      const lx = Math.cos(midAngle) * labelR;
+      const ly = Math.sin(midAngle) * labelR - 14; // nudge up
+      const labelDelay = arcItems[firstIdx]._idx * 30;
+      html += `<span class="arc-group-label"
+        style="--arc-x:${lx.toFixed(1)}px;--arc-y:${ly.toFixed(1)}px;--arc-delay:${labelDelay}ms">Summon</span>`;
     }
 
     popup.innerHTML = html;

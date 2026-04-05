@@ -1940,13 +1940,13 @@ export class Renderer {
       ctx.beginPath();
       ctx.moveTo(cx, cy);
       ctx.lineTo(tx, ty);
-      ctx.strokeStyle = item.color ? item.color + '55' : 'rgba(180,170,210,0.3)';
-      ctx.lineWidth   = 1.2;
+      ctx.strokeStyle = item.color ? item.color + '35' : 'rgba(180,170,210,0.2)';
+      ctx.lineWidth   = 0.6;
       ctx.stroke();
 
       // Small dot at the end
       ctx.beginPath();
-      ctx.arc(tx, ty, 2, 0, Math.PI * 2);
+      ctx.arc(tx, ty, 1.5, 0, Math.PI * 2);
       ctx.fillStyle = item.color ? item.color + '88' : 'rgba(180,170,210,0.5)';
       ctx.fill();
     }
