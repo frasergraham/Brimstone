@@ -1525,11 +1525,9 @@ export class UIController {
     const canvasRect = this.canvas.getBoundingClientRect();
     const canvasScale = canvasRect.width / this.canvas.width;
     const hexScreenPx = this.renderer.hexSize * canvasScale * this.renderer.zoomLevel;
-    // Pointy-top hex: flat-to-flat radius is hexSize * sqrt(3)/2
-    // Add a small pad (4px) so labels just kiss the edge
-    const ARC_RADIUS = hexScreenPx * 0.87 + 4;
-    this._arcRadius = ARC_RADIUS;
     const ITEM_GAP  = 40 * (Math.PI / 180); // uniform angular gap between all items
+    const ARC_RADIUS = _computeArcRadius(hexScreenPx, arcItems.length, ITEM_GAP);
+    this._arcRadius = ARC_RADIUS;
 
     // Uniform spacing — no group gaps except summon items stay clustered
     const totalItems = arcItems.length;
@@ -3661,6 +3659,18 @@ function _getEntityScreenPos(ui, entity) {
   };
 }
 
+/** Compute arc radius: starts at hex edge, pushes out until items don't overlap. */
+function _computeArcRadius(hexScreenPx, itemCount, itemGap) {
+  // Base radius: just touching the hex edge
+  const baseR = hexScreenPx * 0.87 + 4;
+  if (itemCount <= 1) return baseR;
+  // Minimum chord distance between adjacent items (px) — enough for button height
+  const MIN_SPACING = 44;
+  // chord = 2 * r * sin(gap/2); solve for r: r = MIN_SPACING / (2 * sin(gap/2))
+  const minR = MIN_SPACING / (2 * Math.sin(itemGap / 2));
+  return Math.max(baseR, minR);
+}
+
 /** Position the arc popup centered on the entity's screen position and set up canvas lines. */
 function _positionArcPopup(popup, ui) {
   const col = ui._arcEntityCol;
@@ -3682,7 +3692,8 @@ function _positionArcPopup(popup, ui) {
     // Recompute dynamic radius on each frame so it tracks zoom changes
     const arcScale = canvasRect.width / ui.canvas.width;
     const hexPx = ui.renderer.hexSize * arcScale * ui.renderer.zoomLevel;
-    const arcR = hexPx * 0.87 + 4;
+    const itemGap = 40 * (Math.PI / 180);
+    const arcR = _computeArcRadius(hexPx, ui._arcItems.length, itemGap);
     ui._arcRadius = arcR;
     // Update DOM arc item positions to match new radius
     const arcBtns = popup.querySelectorAll('.arc-item');
