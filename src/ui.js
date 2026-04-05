@@ -2010,10 +2010,10 @@ export class UIController {
     const isStackable = STACKABLE.has(action);
 
     // Pulse the clicked arc item
-    if (button.classList.contains('arc-item')) {
+    const isArcItem = button.classList.contains('arc-item');
+    if (isArcItem) {
       button.classList.remove('arc-pulse');
-      // Force reflow to restart animation
-      void button.offsetWidth;
+      void button.offsetWidth; // force reflow to restart animation
       button.classList.add('arc-pulse');
     }
 
@@ -2021,10 +2021,19 @@ export class UIController {
       this._popupVisible = false;
     }
 
+    // Helper: delayed hide — let the pulse animation finish (200ms) before closing
+    const delayedHide = () => {
+      if (isArcItem) {
+        setTimeout(() => _hideActionPopup(this), 220);
+      } else {
+        _hideActionPopup(this);
+      }
+    };
+
     switch (action) {
       case 'explore': {
-        _hideActionPopup(this);
         this._addToPlan({ type: PlanActionType.EXPLORE, entityId: entity.id });
+        delayedHide();
         if (entity.alive) this._selectEntity(entity);
         else this._clearSelection();
         this._updateSidebar(); this.onRedraw(); break;
@@ -2036,20 +2045,20 @@ export class UIController {
 
       case 'fortify': {
         this._addToPlan({ type: PlanActionType.FORTIFY, entityId: entity.id });
-        if (!isStackable) _hideActionPopup(this);
+        if (!isStackable) delayedHide();
         else this._refreshArcAffordability();
         this._updateSidebar(); this.onRedraw(); break;
       }
 
       case 'guard': {
         this._addToPlan({ type: PlanActionType.GUARD, entityId: entity.id });
-        if (!isStackable) _hideActionPopup(this);
+        if (!isStackable) delayedHide();
         this._updateSidebar(); this.onRedraw(); break;
       }
 
       case 'sound_horn': {
-        _hideActionPopup(this);
         this._addToPlan({ type: PlanActionType.SOUND_HORN, entityId: entity.id });
+        delayedHide();
         if (entity.alive) this._selectEntity(entity);
         else this._clearSelection();
         this._updateSidebar(); this.onRedraw(); break;
@@ -2058,7 +2067,7 @@ export class UIController {
       case 'summon': {
         const summonType = button.dataset.summonType ?? null;
         this._addToPlan({ type: PlanActionType.SUMMON, entityId: entity.id, summonType: summonType ?? undefined });
-        if (!isStackable) _hideActionPopup(this);
+        if (!isStackable) delayedHide();
         else this._refreshArcAffordability();
         this._updateSidebar();
         this.onRedraw();
@@ -2066,7 +2075,7 @@ export class UIController {
       }
 
       case 'attack_hex': {
-        _hideActionPopup(this);
+        delayedHide();
         const bhAction = this._validActions.find(a => a.type === ActionType.BATTLE_HEX);
         const hexTargets = bhAction?.targets ?? [];
         this._awaitingTarget = { actionType: ActionType.BATTLE_HEX, actor: entity, hexTargets };
@@ -2078,17 +2087,16 @@ export class UIController {
       }
 
       case 'use_item': {
-        _hideActionPopup(this);
-        const item = button.dataset.item;
-        this._addToPlan({ type: PlanActionType.USE_ITEM, entityId: entity.id, item });
+        this._addToPlan({ type: PlanActionType.USE_ITEM, entityId: entity.id, item: button.dataset.item });
+        delayedHide();
         if (entity.alive) this._selectEntity(entity);
         else this._clearSelection();
         this._updateSidebar(); this.onRedraw(); break;
       }
 
       case 'use_ability': {
-        _hideActionPopup(this);
         this._addToPlan({ type: PlanActionType.USE_ABILITY, entityId: entity.id });
+        delayedHide();
         if (entity.alive) this._selectEntity(entity);
         else this._clearSelection();
         this._updateSidebar(); this.onRedraw(); break;
