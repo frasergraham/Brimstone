@@ -367,9 +367,9 @@ describe('scoreGoals', () => {
       `early-game GATHER (${withBuildings[Goal.GATHER_RESOURCES]}) should exceed baseline (${noBuildings[Goal.GATHER_RESOURCES]})`);
   });
 
-  test('early-game focus: caps DEFEND_WITCH when hero is distant and buildings remain', () => {
+  test('early-game focus: caps DEFEND_WITCH when no enemies visible and buildings remain', () => {
     const scores = scoreGoals(makeBoard({
-      heroDistance: 8, unexploredBuildings: [{}],
+      visibleHeroes: [], heroDistance: Infinity, unexploredBuildings: [{}],
       witchHpRatio: 0.45, // would normally trigger some DEFEND
     }));
     assert.ok(scores[Goal.DEFEND_WITCH] <= 0.1,
@@ -416,7 +416,7 @@ describe('allocateBudget', () => {
     assert.equal(result[Goal.DEFEND_WITCH], 0);
   });
 
-  test('allocations are in chunks of 3 or more', () => {
+  test('active goals get at least 2 AP (no thin allocations)', () => {
     const scores = {
       [Goal.KILL_HERO]: 0.9,
       [Goal.CONTROL_NODES]: 0.5,
@@ -426,8 +426,8 @@ describe('allocateBudget', () => {
     };
     const result = allocateBudget(scores, 9);
     for (const g of Object.values(Goal)) {
-      assert.ok(result[g] === 0 || result[g] >= 3,
-        `${g} should be 0 or >= 3 AP, got ${result[g]}`);
+      assert.ok(result[g] === 0 || result[g] >= 2,
+        `${g} should be 0 or >= 2 AP, got ${result[g]}`);
     }
   });
 
@@ -665,16 +665,17 @@ describe('genControlNodes', () => {
     assert.ok(movedEntities.size >= 2, `should assign different units, got ${movedEntities.size}`);
   });
 
-  test('guards if on node with nearby threat', () => {
+  test('battles enemy adjacent to unit on node', () => {
     const node = { col: 1, row: 0, label: 'Node A', hexes: [{ col: 1, row: 0 }] };
     const minion = makeEntity({ id: 'm1', type: EntityType.MINION, owner: 'witch', col: 1, row: 0, hp: 2, maxHp: 2 });
     const witch = makeEntity({ id: 'witch1', col: 0, row: 0 });
+    // Hero adjacent (distance 1) to minion on node — should battle
     const hero = makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 2, row: 0, hp: 8, maxHp: 8 });
     const sim = makeSim({ entities: [witch, minion, hero], witchObjectives: [node] });
     const board = assessBoard(sim);
     const actions = genControlNodes(sim, board, 2);
-    const guardAction = actions.find(a => a.type === PlanActionType.GUARD && a.entityId === 'm1');
-    assert.ok(guardAction, 'should guard on node when hero is nearby');
+    const battleAction = actions.find(a => a.type === PlanActionType.BATTLE_UNIT && a.entityId === 'm1');
+    assert.ok(battleAction, 'should battle adjacent enemy on node');
   });
 
   test('returns empty with 0 budget', () => {

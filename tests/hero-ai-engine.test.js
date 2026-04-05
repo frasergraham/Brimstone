@@ -307,16 +307,17 @@ describe('scoreHeroGoals', () => {
   });
 
   test('low hero HP boosts PROTECT_HERO', () => {
+    // Witch within sight range so PROTECT_HERO can trigger
     const healthySim = makeHeroSim({
       entities: [
         makeEntity({ id: 'hero1', col: 3, row: 3, hp: 10, maxHp: 10, items: {} }),
-        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 5, row: 4 }),
       ],
     });
     const injuredSim = makeHeroSim({
       entities: [
         makeEntity({ id: 'hero1', col: 3, row: 3, hp: 2, maxHp: 10, items: {} }),
-        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
+        makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 5, row: 4 }),
       ],
     });
     const healthyScores = scoreHeroGoals(assessHeroBoard(healthySim));
@@ -378,7 +379,7 @@ describe('allocateBudget with hero goals', () => {
     assert.equal(total, 8);
   });
 
-  test('allocations are in chunks of 3 or more', () => {
+  test('active goals get at least 2 AP (no thin allocations)', () => {
     const scores = {
       [HeroGoal.PROTECT_HERO]: 0.8,
       [HeroGoal.SLAY_WITCH]: 0.3,
@@ -388,8 +389,8 @@ describe('allocateBudget with hero goals', () => {
     };
     const budget = allocateBudget(scores, 12);
     for (const g of Object.keys(scores)) {
-      assert.ok(budget[g] === 0 || budget[g] >= 3,
-        `${g} should be 0 or >= 3 AP, got ${budget[g]}`);
+      assert.ok(budget[g] === 0 || budget[g] >= 2,
+        `${g} should be 0 or >= 2 AP, got ${budget[g]}`);
     }
   });
 
@@ -698,7 +699,7 @@ describe('genControlNodes', () => {
     assert.ok(moves.length > 0, 'should emit MOVE toward node');
   });
 
-  test('guards when on node with nearby threat', () => {
+  test('battles adjacent enemy when on node', () => {
     const sim = makeHeroEngineSim({
       witchObjectives: [{ col: 3, row: 3, hexes: [{ col: 3, row: 3 }] }],
       entities: [
@@ -708,8 +709,8 @@ describe('genControlNodes', () => {
     });
     const board = assessHeroBoard(sim);
     const actions = genControlNodes(sim, board, 3);
-    const guard = actions.find(a => a.type === PlanActionType.GUARD);
-    assert.ok(guard, 'should emit GUARD when on threatened node');
+    const battle = actions.find(a => a.type === PlanActionType.BATTLE_UNIT);
+    assert.ok(battle, 'should battle adjacent enemy on node');
   });
 });
 

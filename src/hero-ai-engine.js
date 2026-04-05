@@ -311,11 +311,13 @@ export function scoreHeroGoals(board, goalWeights = null) {
   else if (board.roundsToScoring <= 3) control += 0.1;
   control = clamp01(clamp01(control) * phaseMult(HeroGoal.CONTROL_NODES, board));
 
-  // EXPLORE
+  // EXPLORE — strong priority until we have enough survivors to cover nodes
   let explore = 0;
   if (board.unexploredBuildings.length > 0) explore = 0.6;
   if (board.unexploredBuildings.length >= 3) explore += 0.15;
-  if (board.survivorCount === 0) explore += 0.25;
+  const nodeCount = board.nodes.length || 3;
+  if (board.survivorCount < nodeCount) explore += 0.3;  // need more bodies for nodes
+  if (board.survivorCount === 0) explore += 0.2;         // critical: no survivors at all
   if (board.woodCount + board.metalCount < 2) explore += 0.2;
   if (board.heroInBuilding && !board.heroTileExplored) explore += 0.3;
   explore = clamp01(clamp01(explore) * phaseMult(HeroGoal.EXPLORE, board));
@@ -348,13 +350,19 @@ export function scoreHeroGoals(board, goalWeights = null) {
     }
   }
 
-  // Early-game explore focus: when no enemies are nearby and buildings remain,
+  // Early-game explore focus: when no visible enemies and buildings remain,
   // heavily prioritize exploration over defensive/passive goals.
   // There's no reason to guard or fortify when nothing threatens you.
   if (board.nearestEnemyDist > 4 && board.unexploredBuildings.length > 0) {
     scores[HeroGoal.EXPLORE] = clamp01(scores[HeroGoal.EXPLORE] + 0.4);
     scores[HeroGoal.FORTIFY_POSITION] = Math.min(scores[HeroGoal.FORTIFY_POSITION], 0.1);
     scores[HeroGoal.PROTECT_HERO] = Math.min(scores[HeroGoal.PROTECT_HERO], 0.1);
+  }
+  // During daytime with no enemies visible, suppress defensive goals
+  // (at night, fortification and protection are still valuable for attrition)
+  if (board.nearestEnemyDist === Infinity && board.isDay) {
+    scores[HeroGoal.FORTIFY_POSITION] = 0;
+    scores[HeroGoal.PROTECT_HERO] = 0;
   }
 
   return scores;
@@ -620,7 +628,24 @@ export function genControlNodes(sim, board, budget) {
         : (simUnit.col === node.obj.col && simUnit.row === node.obj.row);
 
       if (onNode) {
-        if (witchThreatensNode(node)) {
+        // Fight enemies on or adjacent to the node
+        const visibleWitchUnits = [board.witch, ...board.witchMinions].filter(Boolean);
+        const adjacentEnemy = visibleWitchUnits.find(e =>
+          hexDistance(e.col, e.row, simUnit.col, simUnit.row) <= 1
+        );
+        if (adjacentEnemy && remaining > 0) {
+          const est = estimateHeroCombat(simUnit, adjacentEnemy, board);
+          if (est.classification !== 'suicidal') {
+            actions.push({
+              type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
+              targetId: adjacentEnemy.id, targetCol: adjacentEnemy.col, targetRow: adjacentEnemy.row,
+              _priority: 3, _goal: HeroGoal.CONTROL_NODES,
+            });
+            sim.applyBattle();
+            sim.unitCommitments.set(simUnit.id, HeroGoal.CONTROL_NODES);
+            remaining--;
+          }
+        } else if (witchThreatensNode(node)) {
           actions.push({
             type: PlanActionType.GUARD, entityId: simUnit.id,
             _priority: 4, _goal: HeroGoal.CONTROL_NODES,
@@ -975,14 +1000,13 @@ for (const name of Object.keys(HERO_PERSONALITY_CONFIGS)) {
 export function fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositions) {
   let left = remaining;
 
-  // Guard if visible enemies nearby, or if on a power node with nothing else to do
+  // Guard only if visible enemies are nearby (within 2 hexes)
   if (left > 0 && heroEntity) {
     const visibleEnemies = [board.witch, ...board.witchMinions].filter(Boolean);
     const nearbyEnemy = visibleEnemies.some(e =>
       hexDistance(heroEntity.col, heroEntity.row, e.col, e.row) <= 2
     );
-    const onNode = isOnNode(sim, heroEntity);
-    if (nearbyEnemy || onNode) {
+    if (nearbyEnemy) {
       plan.push({ type: PlanActionType.GUARD, entityId: heroEntity.id });
       sim.applyGuard(heroEntity.id);
       left--;

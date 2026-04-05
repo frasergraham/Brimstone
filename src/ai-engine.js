@@ -244,12 +244,18 @@ export function scoreGoals(board, goalWeights = null) {
   const controlMult = board.isDawnOrDusk ? 1.8 : 1.0;
   control = clamp01(clamp01(control) * controlMult);
 
-  // BUILD_ARMY
+  // BUILD_ARMY — strong priority until army >= node count (need bodies on each node)
   let army = 0;
-  if (board.minionCount === 0) army = 0.7;
-  else if (board.minionCount <= 2) army = 0.5;
-  else if (board.minionCount <= 4) army = 0.3;
-  else army = 0.1;
+  const nodeCount = board.nodes.length || 3;
+  if (board.minionCount < nodeCount) {
+    // Critical: fewer minions than nodes — can't cover all nodes
+    army = 0.9;
+  } else if (board.minionCount < nodeCount + 2) {
+    // Comfortable: nodes covered, build reinforcements
+    army = 0.4;
+  } else {
+    army = 0.1;
+  }
   if (!board.canAffordSummon) army = 0;
   army = clamp01(army);
 
@@ -276,11 +282,9 @@ export function scoreGoals(board, goalWeights = null) {
     }
   }
 
-  // Early-game focus: when the hero is far away and unexplored buildings remain,
+  // Early-game focus: when no enemies are visible and unexplored buildings remain,
   // prioritize resource gathering and army building over passive defense.
-  // Mirrors the hero's early-game explore focus — no reason to turtle when
-  // there are no threats and resources to claim.
-  if (board.heroDistance > 4 && board.unexploredBuildings.length > 0) {
+  if (board.visibleHeroes.length === 0 && board.unexploredBuildings.length > 0) {
     scores[Goal.GATHER_RESOURCES] = clamp01(scores[Goal.GATHER_RESOURCES] + 0.4);
     scores[Goal.DEFEND_WITCH] = Math.min(scores[Goal.DEFEND_WITCH], 0.1);
     if (board.canAffordSummon) {
@@ -296,7 +300,7 @@ export function scoreGoals(board, goalWeights = null) {
 const URGENCY_THRESHOLD = 0.05;
 
 export function allocateBudget(scores, totalBudget) {
-  const MIN_CHUNK = 3;
+  const MIN_CHUNK = 2;
 
   const allGoals = Object.keys(scores);
   const result = {};
@@ -586,6 +590,25 @@ export function genControlNodes(sim, board, budget) {
       : (simUnit.col === node.obj.col && simUnit.row === node.obj.row);
 
     if (onNode) {
+      // Fight enemies on or adjacent to the node
+      const adjacentEnemy = board.visibleHeroes.find(h =>
+        hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= 1
+      );
+      if (adjacentEnemy && remaining > 0) {
+        const est = estimateCombat(simUnit, adjacentEnemy, board);
+        if (est.classification !== 'suicidal') {
+          actions.push({
+            type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
+            targetId: adjacentEnemy.id, targetCol: adjacentEnemy.col, targetRow: adjacentEnemy.row,
+            _priority: 3, _goal: Goal.CONTROL_NODES,
+          });
+          sim.applyBattle();
+          sim.unitCommitments.set(simUnit.id, Goal.CONTROL_NODES);
+          remaining--;
+          continue;
+        }
+      }
+      // Guard if threats nearby
       const nearbyThreat = board.visibleHeroes.some(h =>
         hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= 2
       );
@@ -853,11 +876,11 @@ function _fillGaps(plan, sim, board, witchEntity, remaining, prevPositions) {
     left--;
   }
 
-  // Move uncommitted minions toward nearest feasible uncovered node
+  // Move uncommitted minions toward nearest node that needs a witch presence
   // (Minions cannot explore or summon — only move, battle, and guard)
   if (left > 0) {
     const uncoveredNodes = board.nodes
-      .filter(n => n.controller !== 'witch')
+      .filter(n => !n.witchPresent)  // any node without a witch unit
       .filter(n => scoreNodeFeasibility(n, 'witch', sim.entities) >= 0.15);
     for (const minion of board.minions) {
       if (left <= 0) break;
@@ -890,17 +913,12 @@ function _fillGaps(plan, sim, board, witchEntity, remaining, prevPositions) {
     }
   }
 
-  // Guard with the witch only if visible enemies are nearby or on a power node
+  // Guard with the witch only if visible enemies are nearby
   if (left > 0) {
     const nearbyEnemy = board.visibleHeroes.some(h =>
       hexDistance(witchEntity.col, witchEntity.row, h.col, h.row) <= 3
     );
-    const onNode = board.nodes.some(n =>
-      n.obj.hexes
-        ? n.obj.hexes.some(h => h.col === witchEntity.col && h.row === witchEntity.row)
-        : (n.obj.col === witchEntity.col && n.obj.row === witchEntity.row)
-    );
-    if (nearbyEnemy || onNode) {
+    if (nearbyEnemy) {
       plan.push({ type: PlanActionType.GUARD, entityId: witchEntity.id });
       left--;
     }
