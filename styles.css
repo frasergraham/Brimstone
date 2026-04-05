@@ -2850,6 +2850,172 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   overflow: hidden;
 }
 
+/* ── AI Debug Panel ─────────────────────────────────────────────────────── */
+
+.ai-debug-panel {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: calc(260px + env(safe-area-inset-left));
+  background: rgba(13, 17, 23, 0.92);
+  border-right: 1px solid rgba(255,255,255,0.1);
+  display: flex;
+  flex-direction: column;
+  z-index: 30;
+  font-size: 0.78rem;
+  transition: width 0.2s ease;
+  overflow-y: auto;
+  color: #ccc;
+}
+.ai-debug-panel.collapsed {
+  width: 0;
+  border-right: none;
+  overflow: visible;
+}
+.ai-debug-panel.collapsed .ai-debug-body {
+  display: none;
+}
+
+.ai-debug-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  background: rgba(0,0,0,0.3);
+  flex-shrink: 0;
+}
+.ai-debug-title {
+  font-weight: bold;
+  font-size: 0.85rem;
+  color: #e0e0e0;
+  letter-spacing: 0.5px;
+}
+.ai-debug-collapse-btn {
+  background: none;
+  border: 1px solid rgba(255,255,255,0.15);
+  color: #aaa;
+  cursor: pointer;
+  font-size: 0.7rem;
+  padding: 2px 5px;
+  border-radius: 3px;
+}
+.ai-debug-collapse-btn:hover { color: #fff; background: rgba(255,255,255,0.1); }
+
+.ai-debug-body {
+  padding: 0.5rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.ai-debug-faction-row {
+  font-size: 0.9rem;
+  font-weight: bold;
+  color: #e8d8c0;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.ai-debug-section-title {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #888;
+  margin-bottom: 0.3rem;
+}
+
+/* Goal score bars */
+.ai-debug-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-bottom: 0.15rem;
+}
+.ai-debug-bar-label {
+  width: 80px;
+  font-size: 0.7rem;
+  color: #aaa;
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-debug-bar-track {
+  flex: 1;
+  height: 10px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.ai-debug-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+.ai-debug-bar-value {
+  width: 30px;
+  font-size: 0.7rem;
+  color: #999;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* Budget segmented bar */
+.ai-debug-seg-bar {
+  display: flex;
+  height: 18px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: rgba(255,255,255,0.06);
+}
+.ai-debug-seg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
+  font-weight: bold;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.7);
+  min-width: 14px;
+}
+
+.ai-debug-seg-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.6rem;
+  margin-top: 0.25rem;
+  font-size: 0.65rem;
+  color: #999;
+}
+.ai-debug-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.ai-debug-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Board state key-value grid */
+.ai-debug-kv-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 1px 0.5rem;
+  font-size: 0.72rem;
+}
+.ai-debug-kv-label {
+  color: #888;
+}
+.ai-debug-kv-value {
+  color: #ccc;
+  text-align: right;
+}
+
 .plan-panel {
   position: absolute;
   right: 0;

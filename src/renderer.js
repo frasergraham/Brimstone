@@ -128,6 +128,12 @@ export class Renderer {
     /** Arc menu connecting lines: { col, row, items: [{ x, y, color }] } or null. */
     this.arcMenuLines = null;
 
+    /**
+     * AI debug overlay data — set by main.js when AI debugger is active.
+     * @type {{ hexGoals: Map, nodes: Array, unitCommitments: Map, board: object, faction: string }|null}
+     */
+    this.aiDebugOverlay = null;
+
     // Zoom & pan
     this.zoomLevel  = 1.0;
     this._panX      = 0;
@@ -967,6 +973,11 @@ export class Renderer {
 
     // Arc menu connecting lines (under the ⊕ indicator)
     this._drawArcMenuLines();
+
+    // AI debug overlay — goal-colored hex tints, node feasibility, unit goal labels
+    if (this.aiDebugOverlay) {
+      this._drawAIDebugOverlay();
+    }
 
     // ⊕ indicator at ghost position (falls back to real position outside planning mode)
     if (this.selectedEntityId) {
@@ -2159,6 +2170,153 @@ export class Renderer {
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(label, bx, by + 0.5);
+      }
+    }
+
+    ctx.restore();
+  }
+
+  // ── AI Debug Overlay ────────────────────────────────────────────────────────
+  // Renders hex goal tints, node feasibility badges, combat estimates,
+  // and unit goal labels when the AI debugger is active.
+
+  _drawAIDebugOverlay() {
+    const overlay = this.aiDebugOverlay;
+    if (!overlay) return;
+
+    const ctx   = this.ctx;
+    const hs    = this.hexSize;
+    const state = this.state;
+
+    ctx.save();
+
+    // 1. Hex goal tints — semi-transparent color wash per targeted hex
+    if (overlay.hexGoals) {
+      for (const [, entries] of overlay.hexGoals) {
+        // Use the highest-priority (lowest number) action's goal color
+        const best = entries.reduce((a, b) => (a.priority < b.priority ? a : b));
+        const color = overlay.goalColors?.[best.goal] || '#808080';
+        const { col, row } = best;
+        const { x, y } = this._toCanvas(col, row);
+        _traceHexPath(ctx, x, y, hs - 1);
+        ctx.fillStyle = _hexToRgba(color, 0.18);
+        ctx.fill();
+        // Thin border
+        ctx.strokeStyle = _hexToRgba(color, 0.45);
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    }
+
+    // 2. Node feasibility badges — score at each power node
+    if (overlay.nodes) {
+      const fontSize = Math.max(9, Math.floor(hs * 0.32));
+      ctx.font = `bold ${fontSize}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      for (const n of overlay.nodes) {
+        if (n.feasibility == null) continue;
+        const { x, y } = this._toCanvas(n.col, n.row);
+        const f = n.feasibility;
+
+        // Badge color based on feasibility
+        const badgeColor = f > 0.5 ? '#40c070' : f > 0.25 ? '#e0c040' : '#e04040';
+        const label = f.toFixed(2);
+
+        // Draw rounded rect badge below hex center
+        const bw = fontSize * 2.2;
+        const bh = fontSize * 1.3;
+        const bx = x - bw / 2;
+        const by = y + hs * 0.55;
+        const br = 3;
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.beginPath();
+        ctx.roundRect(bx, by, bw, bh, br);
+        ctx.fill();
+        ctx.strokeStyle = badgeColor;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        ctx.fillStyle = badgeColor;
+        ctx.fillText(label, x, by + bh / 2);
+      }
+    }
+
+    // 3. Combat estimate badges — classification near enemy entities
+    if (overlay.combatEstimates) {
+      const fontSize = Math.max(8, Math.floor(hs * 0.26));
+      ctx.font = `bold ${fontSize}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      const classColors = {
+        overwhelming: '#40c070',
+        favorable:    '#80d080',
+        unfavorable:  '#e0a030',
+        suicidal:     '#e04040',
+      };
+
+      for (const est of overlay.combatEstimates) {
+        const { x, y } = this._toCanvas(est.col, est.row);
+        const label = est.classification.slice(0, 5).toUpperCase();
+        const color = classColors[est.classification] || '#888';
+
+        // Small badge above-right of hex center
+        const bw = fontSize * 3;
+        const bh = fontSize * 1.3;
+        const bx = x + hs * 0.2 - bw / 2;
+        const by = y - hs * 0.65;
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.beginPath();
+        ctx.roundRect(bx, by, bw, bh, 3);
+        ctx.fill();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        ctx.fillStyle = color;
+        ctx.fillText(label, bx + bw / 2, by + bh / 2);
+
+        // Also show favorability number
+        const fav = est.favorability != null ? (est.favorability > 0 ? '+' : '') + est.favorability.toFixed(1) : '';
+        if (fav) {
+          ctx.font = `${Math.floor(fontSize * 0.85)}px sans-serif`;
+          ctx.fillStyle = 'rgba(255,255,255,0.7)';
+          ctx.fillText(fav, bx + bw / 2, by + bh + fontSize * 0.6);
+          ctx.font = `bold ${fontSize}px sans-serif`;
+        }
+      }
+    }
+
+    // 4. Unit goal labels — small text above each AI entity showing its committed goal
+    if (overlay.unitCommitments && overlay.faction) {
+      const fontSize = Math.max(8, Math.floor(hs * 0.24));
+      ctx.font = `bold ${fontSize}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+
+      for (const e of state.entities) {
+        if (!e.alive || e.owner !== overlay.faction) continue;
+        const goalName = overlay.unitCommitments.get(e.id);
+        if (!goalName) continue;
+
+        const { x, y } = this._toCanvas(e.col, e.row);
+        const label = goalName.replace(/_/g, ' ');
+        const color = overlay.goalColors?.[goalName] || '#ccc';
+
+        // Background pill
+        const tw = ctx.measureText(label).width + 6;
+        const th = fontSize + 2;
+        const tx = x - tw / 2;
+        const ty = y - hs * 0.7 - th;
+        ctx.fillStyle = 'rgba(0,0,0,0.75)';
+        ctx.beginPath();
+        ctx.roundRect(tx, ty, tw, th, 2);
+        ctx.fill();
+
+        ctx.fillStyle = color;
+        ctx.fillText(label, x, ty + th - 1);
       }
     }
 

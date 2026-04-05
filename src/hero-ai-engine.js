@@ -818,6 +818,15 @@ function _updateHeroAllyClaimedNodes(plan, board, allyContext) {
   }
 }
 
+// ── Helper: reverse-lookup personality name from config object ──────────────
+
+function _heroPersonalityName(config) {
+  for (const [name, cfg] of Object.entries(HERO_PERSONALITY_CONFIGS)) {
+    if (cfg === config) return name;
+  }
+  return 'custom';
+}
+
 // ── HeroAIEngine ────────────────────────────────────────────────────────────
 
 export class HeroAIEngine {
@@ -831,6 +840,11 @@ export class HeroAIEngine {
 
     // Cross-turn anti-oscillation memory: Map<entityId, {col, row}>
     this._prevPositions = new Map();
+
+    /** When true, generatePlan() stores intermediate data on lastDebugData. */
+    this.debugCapture = false;
+    /** @type {object|null} Debug snapshot from last generatePlan() call. */
+    this.lastDebugData = null;
   }
 
   generatePlan(allyContext = null) {
@@ -841,7 +855,10 @@ export class HeroAIEngine {
     board.allyContext = allyContext;
 
     // Leaderless mode: no hero entity (shouldn't normally happen, but be safe)
-    if (!board.hero) return [];
+    if (!board.hero) {
+      this.lastDebugData = null;
+      return [];
+    }
 
     const cfg = this.config;
 
@@ -868,6 +885,20 @@ export class HeroAIEngine {
       ...controlActions,
       ...exploreActions,
     ];
+
+    // Capture debug data before assemblePlan strips metadata
+    if (this.debugCapture) {
+      this.lastDebugData = {
+        faction: 'hero',
+        personality: _heroPersonalityName(this.config),
+        board,
+        scores: { ...scores },
+        budget: { ...budget },
+        actions: allActions.map(a => ({ ...a })),  // snapshot with _goal/_priority
+        config: this.config,
+        unitCommitments: new Map(sim.unitCommitments),
+      };
+    }
 
     // Stage 5: Assemble final plan with hero-specific gap-fill
     const heroEntity = sim.entities.find(e => e.id === board.hero.id);

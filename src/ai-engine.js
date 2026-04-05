@@ -886,6 +886,15 @@ function _updateAllyClaimedNodes(plan, board, allyContext) {
   }
 }
 
+// ── Helper: reverse-lookup personality name from config object ──────────────
+
+function _personalityName(config) {
+  for (const [name, cfg] of Object.entries(PERSONALITY_CONFIGS)) {
+    if (cfg === config) return name;
+  }
+  return 'custom';
+}
+
 // ── WitchAIEngine ────────────────────────────────────────────────────────────
 
 export class WitchAIEngine {
@@ -899,6 +908,11 @@ export class WitchAIEngine {
 
     // Cross-turn anti-oscillation memory: Map<entityId, {col, row}>
     this._prevPositions = new Map();
+
+    /** When true, generatePlan() stores intermediate data on lastDebugData. */
+    this.debugCapture = false;
+    /** @type {object|null} Debug snapshot from last generatePlan() call. */
+    this.lastDebugData = null;
   }
 
   generatePlan(allyContext = null) {
@@ -911,6 +925,7 @@ export class WitchAIEngine {
     // Leaderless mode: no witch entity (campaign missions with hasWitch: false).
     // Minions/zombies simply attack and chase hero units.
     if (!board.witch) {
+      this.lastDebugData = null;
       return this._generateLeaderlessPlan(sim, board);
     }
 
@@ -935,6 +950,20 @@ export class WitchAIEngine {
       ...killActions,
       ...gatherActions,
     ];
+
+    // Capture debug data before assemblePlan strips metadata
+    if (this.debugCapture) {
+      this.lastDebugData = {
+        faction: 'witch',
+        personality: _personalityName(this.config),
+        board,
+        scores: { ...scores },
+        budget: { ...budget },
+        actions: allActions.map(a => ({ ...a })),  // snapshot with _goal/_priority
+        config: this.config,
+        unitCommitments: new Map(sim.unitCommitments),
+      };
+    }
 
     // Stage 5: Assemble final plan
     const plan = assemblePlan(allActions, sim, board, this._prevPositions);
