@@ -1657,11 +1657,15 @@ export class UIController {
     const openRight = screenX < window.innerWidth / 2;
     const centerAngle = openRight ? 0 : Math.PI;
 
-    // Use a consistent target radius for portrait arcs — slightly larger than
-    // the base hex-edge radius so portraits don't crowd the hex, but capped so
-    // large item counts don't blow up.
+    // Use a consistent target radius for portrait arcs — large enough that
+    // no button obscures the origin hex (so players can tap to dismiss).
+    // The closest edge of any button to center is (radius - halfSize); we
+    // need that to exceed the hex radius so the hex stays tappable.
     const BASE_R = _baseArcRadius(hexScreenPx);
-    const TARGET_R = Math.max(BASE_R, 70);
+    const hexTapZone = hexScreenPx * 0.55; // half-hex + small margin
+    // Portrait items are ~56×80px; worst-case half-diagonal ~50px
+    const PORTRAIT_CLEARANCE = 50;
+    const TARGET_R = Math.max(BASE_R, hexTapZone + PORTRAIT_CLEARANCE, 70);
     this._arcRadius = TARGET_R;
 
     // Compute angular gap dynamically: spread items evenly within a max arc
@@ -3833,9 +3837,9 @@ function _baseArcRadius(hexScreenPx) {
 }
 
 /**
- * Resolve arc layout so no buttons overlap.
+ * Resolve arc layout so no buttons overlap and none obscure the origin hex.
  * Starts at baseR, measures actual button rects, and pushes radius out
- * until all bounding boxes are clear of each other.
+ * until all bounding boxes are clear of each other and the hex tap zone.
  * Returns the final radius used.
  */
 function _resolveArcLayout(popup, ui, baseR) {
@@ -3849,6 +3853,26 @@ function _resolveArcLayout(popup, ui, baseR) {
   for (let i = 0; i < btns.length; i++) {
     const rect = btns[i].getBoundingClientRect();
     sizes.push({ w: rect.width, h: rect.height });
+  }
+
+  // Compute hex tap zone radius (half-hex + margin) so buttons never cover it
+  const canvasRect = ui.canvas.getBoundingClientRect();
+  const canvasScale = canvasRect.width / ui.canvas.width;
+  const hexScreenPx = ui.renderer.hexSize * canvasScale * ui.renderer.zoomLevel;
+  const hexTapZone = hexScreenPx * 0.55;
+
+  // Check if any button's bounding box overlaps the hex center tap zone
+  function obscuresHex(r) {
+    for (let i = 0; i < items.length; i++) {
+      const cx = Math.cos(items[i]._angle) * r;
+      const cy = Math.sin(items[i]._angle) * r;
+      const hw = sizes[i].w / 2, hh = sizes[i].h / 2;
+      // Closest point of button AABB to origin (0,0)
+      const nearX = Math.max(0, Math.abs(cx) - hw);
+      const nearY = Math.max(0, Math.abs(cy) - hh);
+      if (Math.sqrt(nearX * nearX + nearY * nearY) < hexTapZone) return true;
+    }
+    return false;
   }
 
   // Check if any pair of bounding boxes overlaps at a given radius
@@ -3871,10 +3895,10 @@ function _resolveArcLayout(popup, ui, baseR) {
     return false;
   }
 
-  // Start at base radius and step outward until no overlaps
+  // Start at base radius and step outward until no overlaps and hex is clear
   let r = baseR;
   const MAX_R = 400; // safety cap
-  while (r < MAX_R && hasOverlap(r)) {
+  while (r < MAX_R && (hasOverlap(r) || obscuresHex(r))) {
     r += 8;
   }
   return r;
