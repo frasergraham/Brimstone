@@ -1,0 +1,590 @@
+#!/usr/bin/env node
+// Full game-state renderer — renders map + entities + HUD info to a PNG buffer.
+// Used by headless.js --render mode to capture per-turn snapshots.
+//
+// Usage as module:  import { renderGameState } from './game-render.js';
+//                   const buf = renderGameState(state);
+
+import { createCanvas } from 'canvas';
+import {
+  setMapDimensions, hexToPixel, hexKey, getNeighbors, SQRT3,
+} from '../src/hex.js';
+import {
+  TileType, TILE_COLOR, BUILDING_COLOR, BUILDING_LABEL,
+} from '../src/tiles.js';
+import { EntityType, ENTITY_COLOR } from '../src/entities.js';
+import { nodeController, Phase } from '../src/game.js';
+import { MAP_SIZES } from '../src/map.js';
+
+// ── Hex geometry ──────────────────────────────────────────────────────────────
+
+function hexCorners(cx, cy, size) {
+  const pts = [];
+  for (let i = 0; i < 6; i++) {
+    const angle = (Math.PI / 180) * (60 * i - 30);
+    pts.push({ x: cx + size * Math.cos(angle), y: cy + size * Math.sin(angle) });
+  }
+  return pts;
+}
+
+const ENTITY_GLYPH = {
+  [EntityType.HERO]:       '\u2694',  // ⚔
+  [EntityType.WITCH]:      '\u2726',  // ✦
+  [EntityType.SURVIVOR]:   '\u263A',  // ☺
+  [EntityType.ZOMBIE]:     '\u2020',  // †
+  [EntityType.MINION]:     '\u2620',  // ☠
+  [EntityType.WOOD_GOLEM]: '\uD83E\uDEB5',  // 🪵
+  [EntityType.IRON_GOLEM]: '\u2699',  // ⚙
+};
+
+const PHASE_TINT = {
+  [Phase.DAWN]:  'rgba(30,40,70,0.20)',
+  [Phase.DAY]:   null,
+  [Phase.DUSK]:  'rgba(30,40,70,0.20)',
+  [Phase.NIGHT]: 'rgba(20,28,55,0.35)',
+};
+
+// ── Main render function ──────────────────────────────────────────────────────
+
+export function renderGameState(state, opts = {}) {
+  const hexSize = opts.hexSize ?? 36;
+  const chronicle = opts.chronicle ?? [];  // array of log entries for this round
+  const cfg = MAP_SIZES[state.mapSize] ?? MAP_SIZES.standard;
+  const { cols, rows } = cfg;
+  setMapDimensions(cols, rows);
+
+  const hs      = hexSize;
+  const apothem = hs * SQRT3 / 2;
+  const padX    = Math.ceil(hs * 1.5);
+  const padY    = Math.ceil(hs * 1.5);
+  const hudH    = 36; // space for HUD text at top
+
+  const mapW   = Math.ceil(hs * SQRT3 * (cols + 0.5)) + padX * 2;
+  const mapH   = Math.ceil(hs * 1.5 * rows + hs * 0.5) + padY * 2;
+
+  // Chronicle panel on the right — wide enough for readable text
+  const chronW  = chronicle.length > 0 ? 420 : 0;
+
+  const width  = mapW + chronW;
+  const height = mapH + hudH;
+
+  const canvas = createCanvas(width, height);
+  const ctx    = canvas.getContext('2d');
+
+  function toCanvas(col, row) {
+    const { x, y } = hexToPixel(col, row, hs);
+    return { x: x + padX, y: y + padY + hudH };
+  }
+
+  // ── Background ──────────────────────────────────────────────────────────────
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, width, height);
+
+  // ── HUD bar ─────────────────────────────────────────────────────────────────
+  ctx.fillStyle = '#161b22';
+  ctx.fillRect(0, 0, width, hudH);
+  ctx.strokeStyle = '#30363d';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, hudH); ctx.lineTo(width, hudH);
+  ctx.stroke();
+
+  const fontSize = Math.max(11, Math.floor(hs * 0.38));
+  ctx.font = `bold ${fontSize}px Georgia, serif`;
+  ctx.textBaseline = 'middle';
+  const hudY = hudH / 2;
+
+  // Round & phase
+  const phaseColors = { dawn: '#e8a838', day: '#f0d060', dusk: '#c87030', night: '#6070b0' };
+  ctx.fillStyle = '#c0b8a0';
+  ctx.textAlign = 'left';
+  ctx.fillText(`Round ${state.round}`, 10, hudY);
+
+  const phaseStr = (state.phase ?? 'day').toUpperCase();
+  ctx.fillStyle = phaseColors[state.phase] ?? '#c0b8a0';
+  ctx.fillText(phaseStr, 100, hudY);
+
+  // Node scores
+  const heroScore  = state.nodeScore?.hero  ?? 0;
+  const witchScore = state.nodeScore?.witch ?? 0;
+  ctx.textAlign = 'center';
+  ctx.fillStyle = ENTITY_COLOR[EntityType.HERO];
+  ctx.fillText(`Hero: ${heroScore}`, width / 2 - 60, hudY);
+  ctx.fillStyle = ENTITY_COLOR[EntityType.WITCH];
+  ctx.fillText(`Witch: ${witchScore}`, width / 2 + 60, hudY);
+
+  // Hero/witch HP
+  const hero  = state.entities.find(e => e.type === EntityType.HERO);
+  const witch = state.entities.find(e => e.type === EntityType.WITCH);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = ENTITY_COLOR[EntityType.HERO];
+  if (hero)  ctx.fillText(`HP ${hero.hp}/${hero.maxHp}`, width - 150, hudY);
+  ctx.fillStyle = ENTITY_COLOR[EntityType.WITCH];
+  if (witch) ctx.fillText(`HP ${witch.hp}/${witch.maxHp}`, width - 10, hudY);
+
+  // ── Pass 1: terrain hexes ───────────────────────────────────────────────────
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const tile = state.tiles.get(hexKey(c, r));
+      if (!tile) continue;
+      const { x, y } = toCanvas(c, r);
+      const corners  = hexCorners(x, y, hs - 1);
+
+      let color;
+      if (tile.type === TileType.BUILDING) {
+        color = BUILDING_COLOR[tile.building] ?? '#8a7a5a';
+      } else if (
+        tile.type === TileType.ROAD ||
+        tile.type === TileType.RIVER ||
+        tile.type === TileType.BRIDGE
+      ) {
+        color = TILE_COLOR[TileType.GRASS];
+      } else {
+        color = TILE_COLOR[tile.type] ?? TILE_COLOR[TileType.GRASS];
+      }
+
+      ctx.beginPath();
+      ctx.moveTo(corners[0].x, corners[0].y);
+      for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
+      ctx.closePath();
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.strokeStyle = '#111418';
+      ctx.lineWidth   = 0.8;
+      ctx.stroke();
+    }
+  }
+
+  // ── River layer ─────────────────────────────────────────────────────────────
+  const isWater = t => t && (t.type === TileType.RIVER || t.type === TileType.BRIDGE);
+
+  ctx.strokeStyle = TILE_COLOR[TileType.RIVER];
+  ctx.lineWidth   = hs * 0.52;
+  ctx.lineCap     = 'round';
+  ctx.lineJoin    = 'round';
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const tile = state.tiles.get(hexKey(c, r));
+      if (!tile || tile.type !== TileType.RIVER) continue;
+
+      const { x, y } = toCanvas(c, r);
+      const riverNbrs = getNeighbors(c, r).filter(n => isWater(state.tiles.get(hexKey(n.col, n.row))));
+
+      const edgeMids = riverNbrs.map(n => {
+        const { x: nx, y: ny } = toCanvas(n.col, n.row);
+        const dx = nx - x, dy = ny - y, d = Math.sqrt(dx * dx + dy * dy);
+        return { x: x + dx / d * apothem, y: y + dy / d * apothem };
+      });
+
+      ctx.beginPath();
+      if (riverNbrs.length >= 2) {
+        ctx.moveTo(edgeMids[0].x, edgeMids[0].y);
+        ctx.quadraticCurveTo(x, y, edgeMids[1].x, edgeMids[1].y);
+      } else if (riverNbrs.length === 1) {
+        const { x: nx, y: ny } = toCanvas(riverNbrs[0].col, riverNbrs[0].row);
+        const dx = nx - x, dy = ny - y, d = Math.sqrt(dx * dx + dy * dy);
+        ctx.moveTo(x - (dx / d) * apothem * 2, y - (dy / d) * apothem * 2);
+        ctx.quadraticCurveTo(x, y, edgeMids[0].x, edgeMids[0].y);
+      } else {
+        continue;
+      }
+      ctx.stroke();
+    }
+  }
+
+  ctx.lineCap  = 'butt';
+  ctx.lineJoin = 'miter';
+
+  // ── Road layer ──────────────────────────────────────────────────────────────
+  const isRoadLike = t => t && (
+    t.type === TileType.ROAD || t.type === TileType.BRIDGE || t.type === TileType.BUILDING
+  );
+
+  ctx.lineCap = 'round';
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const tile = state.tiles.get(hexKey(c, r));
+      if (!tile || (tile.type !== TileType.ROAD && tile.type !== TileType.BRIDGE)) continue;
+
+      const { x, y } = toCanvas(c, r);
+      const roadNbrs = [...tile.roadDirs].map(k => state.tiles.get(k)).filter(t => isRoadLike(t));
+      if (roadNbrs.length === 0) continue;
+
+      const edgeMids = roadNbrs.map(n => {
+        const { x: nx, y: ny } = toCanvas(n.col, n.row);
+        const dx = nx - x, dy = ny - y, d = Math.sqrt(dx * dx + dy * dy);
+        return { x: x + dx / d * apothem, y: y + dy / d * apothem };
+      });
+
+      // Bridge: draw river ribbon beneath
+      if (tile.type === TileType.BRIDGE) {
+        const waterNbrs = getNeighbors(c, r).filter(n => isWater(state.tiles.get(hexKey(n.col, n.row))));
+        if (waterNbrs.length >= 1) {
+          const wEdge = waterNbrs.map(n => {
+            const { x: nx, y: ny } = toCanvas(n.col, n.row);
+            const dx = nx - x, dy = ny - y, d = Math.sqrt(dx * dx + dy * dy);
+            return { x: x + dx / d * apothem, y: y + dy / d * apothem };
+          });
+          ctx.strokeStyle = TILE_COLOR[TileType.RIVER];
+          ctx.lineWidth   = hs * 0.52;
+          ctx.beginPath();
+          if (wEdge.length >= 2) {
+            ctx.moveTo(wEdge[0].x, wEdge[0].y);
+            ctx.quadraticCurveTo(x, y, wEdge[1].x, wEdge[1].y);
+          } else {
+            const { x: nx, y: ny } = toCanvas(waterNbrs[0].col, waterNbrs[0].row);
+            const dx = nx - x, dy = ny - y, d = Math.sqrt(dx * dx + dy * dy);
+            ctx.moveTo(x - (dx / d) * apothem * 2, y - (dy / d) * apothem * 2);
+            ctx.quadraticCurveTo(x, y, wEdge[0].x, wEdge[0].y);
+          }
+          ctx.stroke();
+        }
+      }
+
+      ctx.strokeStyle = TILE_COLOR[TileType.ROAD];
+      ctx.lineWidth   = hs * 0.42;
+
+      if (roadNbrs.length === 2) {
+        ctx.beginPath();
+        ctx.moveTo(edgeMids[0].x, edgeMids[0].y);
+        ctx.quadraticCurveTo(x, y, edgeMids[1].x, edgeMids[1].y);
+        ctx.stroke();
+      } else if (roadNbrs.length === 1) {
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(edgeMids[0].x, edgeMids[0].y);
+        ctx.stroke();
+      } else {
+        // Junction
+        const dirs = edgeMids.map(em => {
+          const dx = em.x - x, dy = em.y - y, d = Math.sqrt(dx * dx + dy * dy);
+          return { dx: dx / d, dy: dy / d };
+        });
+        let pA = 0, pB = 1, minDot = Infinity;
+        for (let i = 0; i < dirs.length; i++) {
+          for (let j = i + 1; j < dirs.length; j++) {
+            const dot = dirs[i].dx * dirs[j].dx + dirs[i].dy * dirs[j].dy;
+            if (dot < minDot) { minDot = dot; pA = i; pB = j; }
+          }
+        }
+        ctx.beginPath();
+        ctx.moveTo(edgeMids[pA].x, edgeMids[pA].y);
+        ctx.quadraticCurveTo(x, y, edgeMids[pB].x, edgeMids[pB].y);
+        ctx.stroke();
+        for (let i = 0; i < edgeMids.length; i++) {
+          if (i === pA || i === pB) continue;
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.lineTo(edgeMids[i].x, edgeMids[i].y);
+          ctx.stroke();
+        }
+      }
+
+      // Bridge railings
+      if (tile.type === TileType.BRIDGE && roadNbrs.length >= 2) {
+        const em0 = edgeMids[0], em1 = edgeMids[1];
+        const dx = em1.x - em0.x, dy = em1.y - em0.y;
+        const len = Math.sqrt(dx * dx + dy * dy);
+        const perpX = (-dy / len) * hs * 0.18;
+        const perpY = ( dx / len) * hs * 0.18;
+        ctx.strokeStyle = '#8a7a5a';
+        ctx.lineWidth   = Math.max(1, hs * 0.06);
+        for (const sign of [-1, 1]) {
+          ctx.beginPath();
+          ctx.moveTo(em0.x + perpX * sign, em0.y + perpY * sign);
+          ctx.quadraticCurveTo(
+            x + perpX * sign, y + perpY * sign,
+            em1.x + perpX * sign, em1.y + perpY * sign,
+          );
+          ctx.stroke();
+        }
+      }
+    }
+  }
+
+  ctx.lineCap = 'butt';
+
+  // ── Building labels ─────────────────────────────────────────────────────────
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const tile = state.tiles.get(hexKey(c, r));
+      if (!tile || tile.type !== TileType.BUILDING || !tile.building) continue;
+
+      const { x, y } = toCanvas(c, r);
+      const label = BUILDING_LABEL[tile.building] ?? tile.building;
+
+      ctx.fillStyle    = 'rgba(255,248,230,0.92)';
+      ctx.font         = `bold ${Math.max(7, Math.floor(hs * 0.22))}px Georgia, serif`;
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, x, y);
+    }
+  }
+
+  // ── Power nodes ─────────────────────────────────────────────────────────────
+  for (const obj of state.witchObjectives) {
+    // Determine controller for colouring
+    const ctrl = nodeController(obj, state.entities);
+    const ctrlColor = ctrl === 'hero' ? 'rgba(212,167,44,0.55)'
+      : ctrl === 'witch' ? 'rgba(155,89,182,0.55)'
+      : 'rgba(100,100,120,0.35)';
+
+    for (const h of obj.hexes) {
+      const { x, y } = toCanvas(h.col, h.row);
+      const grad = ctx.createRadialGradient(x, y, hs * 0.1, x, y, hs * 0.9);
+      grad.addColorStop(0, ctrlColor);
+      grad.addColorStop(1, ctrlColor.replace(/[\d.]+\)$/, '0)'));
+      ctx.fillStyle = grad;
+      const corners = hexCorners(x, y, hs - 1);
+      ctx.beginPath();
+      ctx.moveTo(corners[0].x, corners[0].y);
+      for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Symbol at centroid
+    let cx = 0, cy = 0;
+    for (const h of obj.hexes) {
+      const p = toCanvas(h.col, h.row);
+      cx += p.x; cy += p.y;
+    }
+    cx /= obj.hexes.length; cy /= obj.hexes.length;
+
+    ctx.fillStyle    = ctrl === 'hero' ? 'rgba(240,200,80,0.95)'
+      : ctrl === 'witch' ? 'rgba(200,160,255,0.95)'
+      : 'rgba(160,160,180,0.80)';
+    ctx.font         = `bold ${Math.floor(hs * 0.45)}px Georgia, serif`;
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('\u26E7', cx, cy - hs * 0.08); // ⛧
+
+    ctx.fillStyle    = 'rgba(220,180,255,0.85)';
+    ctx.font         = `bold ${Math.max(7, Math.floor(hs * 0.20))}px Georgia, serif`;
+    ctx.fillText(obj.label ?? 'Node', cx, cy + hs * 0.50);
+  }
+
+  // ── Player hex outlines ──────────────────────────────────────────────────────
+  // Build ownerId → color map from leader entities (mirrors renderer._playerColorMap)
+  const playerColorMap = new Map();
+  for (const e of state.entities) {
+    if (e.color && e.ownerId && (e.type === EntityType.HERO || e.type === EntityType.WITCH)) {
+      playerColorMap.set(e.ownerId, e.color);
+    }
+  }
+
+  // Map each occupied hex to the first entity's player/faction colour
+  const hexOutlines = new Map();
+  for (const e of state.entities) {
+    if (!e.alive) continue;
+    const key = hexKey(e.col, e.row);
+    if (hexOutlines.has(key)) continue;
+    const playerColor = e.ownerId ? playerColorMap.get(e.ownerId) : null;
+    const factionColor = e.owner === 'hero'
+      ? ENTITY_COLOR[EntityType.HERO]
+      : ENTITY_COLOR[EntityType.WITCH];
+    hexOutlines.set(key, playerColor ?? factionColor);
+  }
+
+  for (const [key, color] of hexOutlines) {
+    const [oc, or] = key.split(',').map(Number);
+    const { x: ox, y: oy } = toCanvas(oc, or);
+    const corners = hexCorners(ox, oy, hs - 1);
+    ctx.beginPath();
+    ctx.moveTo(corners[0].x, corners[0].y);
+    for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
+    ctx.closePath();
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.85;
+    ctx.lineWidth   = 2.5;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Entities ────────────────────────────────────────────────────────────────
+  // Group by hex
+  const entityByHex = new Map();
+  for (const e of state.entities) {
+    if (!e.alive) continue;
+    const key = hexKey(e.col, e.row);
+    const arr = entityByHex.get(key);
+    if (arr) arr.push(e); else entityByHex.set(key, [e]);
+  }
+
+  for (const [key, stack] of entityByHex) {
+    const [col, row] = key.split(',').map(Number);
+    const { x, y } = toCanvas(col, row);
+    const r      = stack.length === 1 ? hs * 0.42 : hs * 0.32;
+    const max    = Math.min(stack.length, 3);
+
+    for (let i = 0; i < max; i++) {
+      const entity = stack[i];
+      // Stack offset
+      let ox = 0, oy = 0;
+      if (max === 2) { ox = (i === 0 ? -6 : 6); }
+      else if (max === 3) {
+        if (i === 0) { ox = -7; oy = -3; }
+        else if (i === 1) { ox = 7; oy = -3; }
+        else { ox = 0; oy = 6; }
+      }
+      const ex = x + ox * (hs / 30);
+      const ey = y + oy * (hs / 30);
+
+      // Shadow
+      ctx.beginPath();
+      ctx.arc(ex + 2, ey + 2, r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fill();
+
+      // Base fill
+      const baseCol = entity.color ?? ENTITY_COLOR[entity.type];
+      ctx.beginPath();
+      ctx.arc(ex, ey, r, 0, Math.PI * 2);
+      ctx.fillStyle = baseCol;
+      ctx.fill();
+
+      // Border
+      ctx.beginPath();
+      ctx.arc(ex, ey, r, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+      ctx.lineWidth   = 1.5;
+      ctx.stroke();
+
+      // Glyph
+      const glyph = ENTITY_GLYPH[entity.type] ?? '?';
+      ctx.fillStyle    = '#ffffffdd';
+      ctx.font         = `bold ${Math.floor(r * 1.1)}px serif`;
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(glyph, ex, ey + 1);
+
+      // HP bar for major entities
+      if (entity.maxHp > 1) {
+        const barW = r * 2;
+        const barH = Math.max(2, hs * 0.08);
+        const bx   = ex - r;
+        const by   = ey + r + 2;
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(bx, by, barW, barH);
+        const pct = entity.hp / entity.maxHp;
+        const hpColor = pct > 0.5 ? '#4caf50' : pct > 0.25 ? '#ff9800' : '#f44336';
+        ctx.fillStyle = hpColor;
+        ctx.fillRect(bx, by, barW * pct, barH);
+      }
+    }
+
+    // Overflow badge
+    if (stack.length > 3) {
+      ctx.fillStyle    = 'rgba(255,255,255,0.85)';
+      ctx.font         = `bold ${Math.floor(hs * 0.28)}px sans-serif`;
+      ctx.textAlign    = 'right';
+      ctx.textBaseline = 'top';
+      ctx.fillText(`+${stack.length - 3}`, x + hs * 0.5, y - hs * 0.5);
+    }
+  }
+
+  // ── Phase tint ──────────────────────────────────────────────────────────────
+  const tint = PHASE_TINT[state.phase];
+  if (tint) {
+    ctx.fillStyle = tint;
+    ctx.fillRect(0, hudH, width, height - hudH);
+  }
+
+  // ── Game over banner ────────────────────────────────────────────────────────
+  if (state.gameOver && state.winner) {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0, mapH / 2 + hudH - 24, mapW, 48);
+    ctx.fillStyle = state.winner === 'hero' ? ENTITY_COLOR[EntityType.HERO] : ENTITY_COLOR[EntityType.WITCH];
+    ctx.font = `bold ${Math.floor(hs * 0.6)}px Georgia, serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const winText = `${state.winner.toUpperCase()} WINS — ${state.winReason ?? ''}`;
+    ctx.fillText(winText, mapW / 2, mapH / 2 + hudH);
+  }
+
+  // ── Chronicle panel ─────────────────────────────────────────────────────────
+  if (chronicle.length > 0) {
+    const panelX = mapW;
+    const lineH  = 22;
+    const padC   = 14;
+
+    // Panel background
+    ctx.fillStyle = '#10131a';
+    ctx.fillRect(panelX, 0, chronW, height);
+
+    // Panel header
+    ctx.fillStyle = '#161b22';
+    ctx.fillRect(panelX, 0, chronW, hudH);
+    ctx.strokeStyle = '#30363d';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(panelX, hudH); ctx.lineTo(panelX + chronW, hudH);
+    ctx.stroke();
+    // Vertical divider
+    ctx.beginPath();
+    ctx.moveTo(panelX, 0); ctx.lineTo(panelX, height);
+    ctx.stroke();
+
+    ctx.fillStyle    = '#c0b8a0';
+    ctx.font         = `bold 16px Georgia, serif`;
+    ctx.textAlign    = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Chronicle', panelX + padC, hudH / 2);
+
+    // Log entries
+    const logFont = '14px Georgia, serif';
+    ctx.font = logFont;
+    ctx.textBaseline = 'top';
+
+    const heroColor    = ENTITY_COLOR[EntityType.HERO];   // #d4a72c
+    const witchColor   = ENTITY_COLOR[EntityType.WITCH];  // #9b59b6
+    const neutralColor = '#a0a0a0';
+
+    let ly = hudH + padC;
+    const maxTextW = chronW - padC * 2;
+
+    for (const entry of chronicle) {
+      const text  = typeof entry === 'string' ? entry : entry.text;
+      const color = typeof entry === 'string'
+        ? neutralColor
+        : entry.color ?? (entry.owner === 'hero' ? heroColor
+          : entry.owner === 'witch' ? witchColor
+          : neutralColor);
+
+      // Word-wrap the text to fit the panel
+      const lines = _wrapText(ctx, text, maxTextW);
+      for (const line of lines) {
+        if (ly + lineH > height - padC) break; // ran out of space
+        ctx.fillStyle = color;
+        ctx.fillText(line, panelX + padC, ly);
+        ly += lineH;
+      }
+
+      if (ly + lineH > height - padC) break;
+    }
+  }
+
+  return canvas.toBuffer('image/png');
+}
+
+// ── Text wrapping helper ──────────────────────────────────────────────────────
+
+function _wrapText(ctx, text, maxWidth) {
+  const words = text.split(' ');
+  const lines = [];
+  let current = '';
+
+  for (const word of words) {
+    const test = current ? `${current} ${word}` : word;
+    if (ctx.measureText(test).width <= maxWidth) {
+      current = test;
+    } else {
+      if (current) lines.push(current);
+      current = word;
+    }
+  }
+  if (current) lines.push(current);
+  return lines.length ? lines : [''];
+}

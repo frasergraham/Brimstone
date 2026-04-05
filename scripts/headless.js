@@ -1,19 +1,35 @@
 #!/usr/bin/env node
-// Headless game runner — plays N AI vs AI games and reports balance stats.
-// Usage:  node scripts/headless.js [count] [size]   (defaults: 200, standard)
-// Sizes:  skirmish | standard | regional | campaign
-//
-// Uses the simultaneous planning model: generatePlan() + resolvePlans() + endRound(),
-// matching the actual local-vs-AI game loop exactly.
+/**
+ * Headless game runner — plays N AI vs AI games and reports balance stats.
+ * Supports 1v1 through 4v4 on any map size.
+ *
+ * Usage:
+ *   node scripts/headless.js [count] [size] [--players N]
+ *   node scripts/headless.js --render [size] [--players N] [outfile.gif]
+ *
+ * Examples:
+ *   node scripts/headless.js 200 standard              → 200 1v1 games on standard
+ *   node scripts/headless.js 50 campaign --players 4    → 50 4v4 games on campaign
+ *   node scripts/headless.js --render campaign --players 4  → render 4v4 campaign GIF
+ *   node scripts/headless.js --render skirmish out.gif  → render 1v1 skirmish GIF
+ *
+ * Sizes: skirmish | standard | regional | campaign
+ */
 
 import { GameState, WIN_REASON } from '../src/game.js';
 import { HeroAIEngine }          from '../src/hero-ai-engine.js';
 import { WitchAIEngine }        from '../src/ai-engine.js';
-import { resolvePlans, ResEventType } from '../server/resolver.js';
+import { resolvePlansMP, ResEventType } from '../server/resolver.js';
 import { PlanActionType }         from '../src/planner.js';
-import { MAP_SIZES }              from '../src/map.js';
+import { generateMultipleStarts, MAP_SIZES } from '../src/map.js';
+import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS } from '../src/entities.js';
 import { VERSION }                from '../src/version.js';
 import { randomUUID }             from 'crypto';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Optional: record stats to DB if available (fails silently if DB module not loadable)
 let recordGameStats = null;
@@ -22,57 +38,171 @@ try {
   recordGameStats = mod.recordGameStats;
 } catch { /* running without server deps — skip stats recording */ }
 
-const N       = parseInt(process.argv[2] ?? '200', 10);
-const MAP_SIZE = process.argv[3] ?? 'standard';
-if (isNaN(N) || N < 1) { console.error('Usage: node scripts/headless.js [count] [size]'); process.exit(1); }
+// ── CLI parsing ───────────────────────────────────────────────────────────────
+
+const RENDER_MODE = process.argv.includes('--render');
+
+// Extract --players N
+let PER_SIDE = 1;
+const playersIdx = process.argv.indexOf('--players');
+if (playersIdx !== -1 && process.argv[playersIdx + 1]) {
+  PER_SIDE = parseInt(process.argv[playersIdx + 1], 10);
+  if (PER_SIDE < 1 || PER_SIDE > 4) { console.error('--players must be 1–4'); process.exit(1); }
+}
+
+// Positional args (everything that isn't a flag or flag value)
+const flagSet = new Set(['--render', '--players']);
+const positionalArgs = [];
+for (let i = 2; i < process.argv.length; i++) {
+  if (flagSet.has(process.argv[i])) { if (process.argv[i] === '--players') i++; continue; }
+  positionalArgs.push(process.argv[i]);
+}
+
+let N, MAP_SIZE, RENDER_OUT;
+if (RENDER_MODE) {
+  MAP_SIZE   = positionalArgs[0] ?? 'standard';
+  RENDER_OUT = positionalArgs[1] ?? path.join(__dirname, `renders/game_${PER_SIDE}v${PER_SIDE}_${MAP_SIZE}_${Date.now()}.gif`);
+  N = 1;
+} else {
+  N        = parseInt(positionalArgs[0] ?? '200', 10);
+  MAP_SIZE = positionalArgs[1] ?? 'standard';
+  if (isNaN(N) || N < 1) {
+    console.error('Usage: node scripts/headless.js [count] [size] [--players N]');
+    console.error('       node scripts/headless.js --render [size] [--players N] [outfile.gif]');
+    process.exit(1);
+  }
+}
+
 if (!MAP_SIZES[MAP_SIZE]) {
   console.error(`Unknown map size "${MAP_SIZE}". Valid: ${Object.keys(MAP_SIZES).join(', ')}`);
   process.exit(1);
 }
 
-// Round cap scales with map area relative to standard (13×11=143)
+const TOTAL_PLAYERS = PER_SIDE * 2;
+const IS_MP = PER_SIDE > 1;
 const { cols, rows } = MAP_SIZES[MAP_SIZE];
 const MAX_ROUNDS = Math.ceil(48 * (cols * rows) / (13 * 11));
+const label = IS_MP
+  ? `${TOTAL_PLAYERS}-player (${PER_SIDE}v${PER_SIDE}) ${MAP_SIZES[MAP_SIZE].label}`
+  : `${MAP_SIZES[MAP_SIZE].label}`;
 
-// ── Per-game runner ────────────────────────────────────────────────────────────
+// ── Game state builder ────────────────────────────────────────────────────────
+
+function buildGameState() {
+  const state = new GameState(true, true, MAP_SIZE);
+
+  if (IS_MP) {
+    // Patch synthetic players to real UUIDs
+    const p0 = state.players[0]; // hero
+    const p1 = state.players[1]; // witch
+    const heroId0  = randomUUID();
+    const witchId0 = randomUUID();
+    p0.id = heroId0;  state.entities.find(e => e.id === p0.leaderId && e.owner === 'hero').ownerId  = heroId0;
+    p1.id = witchId0; state.entities.find(e => e.id === p1.leaderId && e.owner === 'witch').ownerId = witchId0;
+
+    const heroStart  = { col: state.hero.col,  row: state.hero.row  };
+    const witchStart = { col: state.witch.col, row: state.witch.row };
+
+    if (PER_SIDE > 1) {
+      const heroPositions = generateMultipleStarts(state.tiles, heroStart, PER_SIDE, 2, 6);
+      for (let i = 1; i < PER_SIDE; i++) {
+        const pos = heroPositions[i] ?? heroStart;
+        state.addPlayer(randomUUID(), `Hero${i + 1}`, 'hero', pos.col, pos.row, true);
+      }
+      const witchPositions = generateMultipleStarts(state.tiles, witchStart, PER_SIDE, 2, 6);
+      for (let i = 1; i < PER_SIDE; i++) {
+        const pos = witchPositions[i] ?? witchStart;
+        state.addPlayer(randomUUID(), `Witch${i + 1}`, 'witch', pos.col, pos.row, true);
+      }
+    }
+  }
+
+  // Assign per-player colors to leader entities (mirrors lobby.js _addSeat)
+  let heroIdx = 0, witchIdx = 0;
+  for (const p of state.players) {
+    const colors = p.faction === 'hero' ? HERO_PLAYER_COLORS : WITCH_PLAYER_COLORS;
+    const idx    = p.faction === 'hero' ? heroIdx++ : witchIdx++;
+    const leader = state.entities.find(e => e.id === p.leaderId);
+    if (leader) leader.color = colors[idx % colors.length];
+  }
+
+  return state;
+}
+
+// ── Ally context helpers (MP planning) ────────────────────────────────────────
+
+function buildAllyContext() {
+  return { claimedNodes: new Set(), allyPositions: [] };
+}
+
+function updateAllyContext(ctx, plan, leader) {
+  if (leader) ctx.allyPositions.push({ col: leader.col, row: leader.row });
+}
+
+// ── Per-round step: generate plans and resolve ────────────────────────────────
+
+function playRound(state, playerAIs) {
+  state.startPlanning();
+
+  const heroCtx  = buildAllyContext();
+  const witchCtx = buildAllyContext();
+  const playerEntries = [];
+  const ordered = [
+    ...state.players.filter(p => p.faction === 'hero'),
+    ...state.players.filter(p => p.faction === 'witch'),
+  ];
+  for (const p of ordered) {
+    const ai  = playerAIs.get(p.id);
+    const ctx = p.faction === 'hero' ? heroCtx : witchCtx;
+    const leader = state.entities.find(e => e.alive && e.ownerId === p.id &&
+      (e.type === 'hero' || e.type === 'witch'));
+    const plan = ai.generatePlan(IS_MP ? ctx : undefined);
+    updateAllyContext(ctx, plan, leader);
+    state.submitPlayerPlan(p.id, plan);
+    playerEntries.push({ playerId: p.id, faction: p.faction, plan });
+  }
+
+  let steps;
+  try {
+    steps = resolvePlansMP(state, playerEntries);
+  } catch (err) {
+    console.error(`Round ${state.round} resolution error:`, err.message);
+    steps = [];
+  }
+
+  state.endRound();
+  return steps;
+}
+
+// ── Per-game runner ───────────────────────────────────────────────────────────
 
 function runGame() {
-  const state   = new GameState(true, true, MAP_SIZE);
-  const witchAI = new WitchAIEngine(state, () => {}, 0);
-  const heroAI  = new HeroAIEngine(state,  () => {}, 0);
+  const state = buildGameState();
+
+  const playerAIs = new Map();
+  for (const p of state.players) {
+    const AIClass = p.faction === 'hero' ? HeroAIEngine : WitchAIEngine;
+    playerAIs.set(p.id, new AIClass(state, () => {}, 0, IS_MP ? p.id : undefined));
+  }
 
   const metrics = {
-    // Action-type tallies
-    actionCounts: { hero: {}, witch: {} },
-    // Combat
+    actionCounts: {},
     battlesHero: 0, battlesWitch: 0,
     killsByHero: 0, killsByWitch: 0,
-    // Exploration
     exploresHero: 0, exploresWitch: 0,
-    hexesExplored: new Set(),
-    // Resources found (parsed from explore log lines)
     found: { wood:0, metal:0, herbs:0, food:0, silver:0, scripture:0, weapons:0, horses:0, nothing:0 },
-    // Over-budget food consumed
     foodConsumedHero: 0, foodConsumedWitch: 0,
-    // Summoning / fortification
     summons: 0, fortifies: 0,
-    // Unit ecology — peak counts during the game
     peakSurvivors: 0, peakMinions: 0,
-    // Node checkpoints where each side scored
-    nodeScoreEvents: [],  // { round, winner: 'hero'|'witch', score }
-    // Attrition
-    attritionFinal: 0,
+    leaderDeaths: { hero: 0, witch: 0 },
   };
 
-  // ── Event analyser ──────────────────────────────────────────────────────────
-  function analyseEvents(events) {
+  function analyseEvents(events, faction) {
     for (const ev of events) {
       if (ev.type !== ResEventType.ACTION_OK) continue;
-      const { action, result, faction } = ev;
+      const { action, result } = ev;
 
-      // Action-type distribution
-      const tally = metrics.actionCounts[faction];
-      tally[action.type] = (tally[action.type] ?? 0) + 1;
+      metrics.actionCounts[action.type] = (metrics.actionCounts[action.type] ?? 0) + 1;
 
       switch (action.type) {
         case PlanActionType.BATTLE_UNIT:
@@ -85,8 +215,6 @@ function runGame() {
 
         case PlanActionType.EXPLORE: {
           if (faction === 'hero') metrics.exploresHero++; else metrics.exploresWitch++;
-          metrics.hexesExplored.add(`${action.entityId}@${action.col},${action.row}`);
-          // Resource detection from log text
           const log = (result?.log ?? []).join(' ').toLowerCase();
           const enc = (result?.encounterLog ?? []).join(' ').toLowerCase();
           const txt = log + ' ' + enc;
@@ -102,18 +230,11 @@ function runGame() {
           break;
         }
 
-        case PlanActionType.SUMMON:
-          metrics.summons++;
-          break;
-
-        case PlanActionType.FORTIFY:
-          metrics.fortifies++;
-          break;
-
+        case PlanActionType.SUMMON:  metrics.summons++;  break;
+        case PlanActionType.FORTIFY: metrics.fortifies++; break;
         default: break;
       }
 
-      // Over-budget food consumption (logged by resolver)
       const logTxt = (result?.log ?? []).join(' ');
       if (logTxt.includes('Rations consumed')) {
         if (faction === 'hero') metrics.foodConsumedHero++; else metrics.foodConsumedWitch++;
@@ -121,45 +242,34 @@ function runGame() {
     }
   }
 
-  // ── Main game loop ──────────────────────────────────────────────────────────
-  const prevScore = { hero: 0, witch: 0 };
-
   while (!state.gameOver && state.round <= MAX_ROUNDS) {
-    state.startPlanning();
-    const heroPlan  = heroAI.generatePlan();
-    const witchPlan = witchAI.generatePlan();
-    state.submitPlan('hero',  heroPlan);
-    state.submitPlan('witch', witchPlan);
-
-    const steps = resolvePlans(state, state.heroPlan, state.witchPlan);
+    const steps = playRound(state, playerAIs);
 
     for (const step of steps) {
-      analyseEvents(step.heroEvents  ?? []);
-      analyseEvents(step.witchEvents ?? []);
+      for (const pe of (step.playerEvents ?? [])) {
+        analyseEvents(pe.events ?? [], pe.faction);
+      }
     }
 
-    state.endRound();
-
-    // Sample ecology after each round
+    // Ecology snapshot
     const surv = state.entities.filter(e => e.alive && e.type === 'survivor').length;
     const mini = state.entities.filter(e => e.alive && e.owner === 'witch' && e.type !== 'witch').length;
     if (surv > metrics.peakSurvivors) metrics.peakSurvivors = surv;
     if (mini > metrics.peakMinions)   metrics.peakMinions   = mini;
+  }
 
-    // Record node-score events
-    if (state.nodeScore.hero > prevScore.hero) {
-      metrics.nodeScoreEvents.push({ round: state.round, side: 'hero', total: state.nodeScore.hero });
-      prevScore.hero = state.nodeScore.hero;
-    }
-    if (state.nodeScore.witch > prevScore.witch) {
-      metrics.nodeScoreEvents.push({ round: state.round, side: 'witch', total: state.nodeScore.witch });
-      prevScore.witch = state.nodeScore.witch;
+  // Count leader deaths (MP)
+  if (IS_MP) {
+    for (const p of state.players) {
+      const leaderAlive = state.entities.some(e => e.id === p.leaderId && e.alive);
+      if (!leaderAlive) {
+        if (p.faction === 'hero') metrics.leaderDeaths.hero++;
+        else                      metrics.leaderDeaths.witch++;
+      }
     }
   }
 
-  metrics.attritionFinal = state.attritionLevel;
-
-  // ── Tiebreak (same as before) ──────────────────────────────────────────────
+  // Tiebreak
   let winner    = state.winner;
   let winReason = state.winReason;
 
@@ -190,7 +300,7 @@ function runGame() {
   if (recordGameStats && winner !== 'draw') {
     try {
       recordGameStats({
-        id:                randomUUID(),  // imported from 'crypto' at top
+        id:                randomUUID(),
         mode:              'headless',
         map_size:          MAP_SIZE,
         winner,
@@ -203,8 +313,8 @@ function runGame() {
         witch_kills:       state.witchKills || 0,
         hero_survivors:    state.entities.filter(e => e.owner === 'hero' && e.type === 'survivor').length,
         witch_summons:     state.witchSummonCount || 0,
-        hero_personality:  heroAI.constructor.name,
-        witch_personality: witchAI.constructor.name,
+        hero_personality:  null,
+        witch_personality: null,
         hero_player_id:    null,
         witch_player_id:   null,
         game_version:      VERSION,
@@ -217,14 +327,76 @@ function runGame() {
   return {
     winner, winReason,
     rounds: state.round,
-    heroHp: state.hero.hp,  witchHp: state.witch.hp,
+    heroHp: state.hero?.hp ?? 0,
+    witchHp: state.witch?.hp ?? 0,
     nodeScore: { ...state.nodeScore },
     metrics,
     hitCap: state.round > MAX_ROUNDS,
   };
 }
 
-// ── Stat helpers ───────────────────────────────────────────────────────────────
+// ── Render mode ───────────────────────────────────────────────────────────────
+
+if (RENDER_MODE) {
+  const { renderGameState } = await import('./game-render.js');
+  const { createCanvas, loadImage } = await import('canvas');
+  const { default: GIFEncoder } = await import('gif-encoder-2');
+
+  console.log(`\nBrimstone render — ${label} — cap=${MAX_ROUNDS}r\n`);
+
+  const state = buildGameState();
+  const playerAIs = new Map();
+  for (const p of state.players) {
+    const AIClass = p.faction === 'hero' ? HeroAIEngine : WitchAIEngine;
+    playerAIs.set(p.id, new AIClass(state, () => {}, 0, IS_MP ? p.id : undefined));
+  }
+
+  const frames = [];
+  frames.push(renderGameState(state, { chronicle: [...state.log] }));
+
+  while (!state.gameOver && state.round <= MAX_ROUNDS) {
+    const logBefore = state.log.length;
+    playRound(state, playerAIs);
+    const roundLog = state.log.slice(logBefore);
+    frames.push(renderGameState(state, { chronicle: roundLog }));
+    process.stdout.write(`  Round ${state.round}… \r`);
+  }
+
+  // Final frame — hold longer
+  const lastLog = state.log.slice(-15);
+  frames.push(renderGameState(state, { chronicle: lastLog }));
+
+  console.log(`\n  ${frames.length} frames captured. Encoding GIF…`);
+
+  const firstImg = await loadImage(frames[0]);
+  const w = firstImg.width;
+  const h = firstImg.height;
+
+  const encoder = new GIFEncoder(w, h);
+  encoder.setDelay(800);
+  encoder.setRepeat(0);
+  encoder.setQuality(10);
+  encoder.start();
+
+  for (let i = 0; i < frames.length; i++) {
+    if (i === frames.length - 1) encoder.setDelay(3000);
+    const img    = await loadImage(frames[i]);
+    const canvas = createCanvas(w, h);
+    const ctx    = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    encoder.addFrame(ctx);
+  }
+
+  encoder.finish();
+
+  fs.mkdirSync(path.dirname(RENDER_OUT), { recursive: true });
+  fs.writeFileSync(RENDER_OUT, encoder.out.getData());
+  console.log(`  GIF saved → ${RENDER_OUT}  (${(fs.statSync(RENDER_OUT).size / 1024).toFixed(0)} KB)\n`);
+
+  process.exit(0);
+}
+
+// ── Stat helpers ──────────────────────────────────────────────────────────────
 
 function avg(arr) { return arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : 0; }
 function median(sorted) {
@@ -241,89 +413,83 @@ function percentile(sorted, p) {
   return sorted[Math.max(0, Math.ceil(sorted.length * p / 100) - 1)];
 }
 
-// ── Main ───────────────────────────────────────────────────────────────────────
+// ── Balance run ───────────────────────────────────────────────────────────────
 
-console.log(`\nBrimstone headless runner — ${N} games (planning model, cap=${MAX_ROUNDS} rounds)…\n`);
+console.log(`\nBrimstone headless — ${label} — ${N} games · cap=${MAX_ROUNDS}r…\n`);
 
 const results = [];
+const errors  = [];
 const startMs = Date.now();
 
 process.stdout.write('  Running ');
 for (let i = 0; i < N; i++) {
-  results.push(runGame());
+  try {
+    results.push(runGame());
+  } catch (err) {
+    errors.push({ game: i + 1, message: err.message, stack: err.stack });
+    results.push({ winner: 'error', winReason: err.message, rounds: 0, nodeScore: {}, metrics: {}, hitCap: false });
+  }
   if ((i + 1) % Math.max(1, Math.floor(N / 40)) === 0) process.stdout.write('█');
 }
 process.stdout.write('\n\n');
 
 const elapsed = ((Date.now() - startMs) / 1000).toFixed(1);
 
-// ── Aggregate ──────────────────────────────────────────────────────────────────
+// ── Aggregate ─────────────────────────────────────────────────────────────────
 
-const heroWins  = results.filter(r => r.winner === 'hero').length;
-const witchWins = results.filter(r => r.winner === 'witch').length;
-const draws     = results.filter(r => r.winner === 'draw').length;
-const tiebreaks = results.filter(r => r.winReason?.includes('tiebreak') || r.winReason?.includes('draw')).length;
+const valid     = results.filter(r => r.winner !== 'error');
+const nErrors   = results.length - valid.length;
+const heroWins  = valid.filter(r => r.winner === 'hero').length;
+const witchWins = valid.filter(r => r.winner === 'witch').length;
+const draws     = valid.filter(r => r.winner === 'draw').length;
 
-// Win condition categorisation
 function classify(r) {
   const wr = r.winReason ?? '';
   if (wr === WIN_REASON.WITCH_SLAIN || wr === WIN_REASON.HERO_SLAIN) return 'kill';
   if (wr.includes('tiebreak') || wr.includes('draw') || wr.includes('majority')) return 'tiebreak';
   return 'nodes';
 }
-const killWins  = results.filter(r => classify(r) === 'kill').length;
-const nodeWins  = results.filter(r => classify(r) === 'nodes').length;
-const tieWins   = results.filter(r => classify(r) === 'tiebreak').length;
+const killWins = valid.filter(r => classify(r) === 'kill').length;
+const nodeWins = valid.filter(r => classify(r) === 'nodes').length;
+const tieWins  = valid.filter(r => classify(r) === 'tiebreak').length;
 
-// Specific win-reason counts
 const conditionCounts = {};
-for (const r of results) {
+for (const r of valid) {
   const key = r.winReason ?? 'unknown';
   conditionCounts[key] = (conditionCounts[key] ?? 0) + 1;
 }
 
-// Game length
-const roundArr = results.map(r => r.rounds).sort((a, b) => a - b);
+const roundArr   = valid.map(r => r.rounds).sort((a, b) => a - b);
 const meanRounds = avg(roundArr);
 const medRounds  = median(roundArr);
 
-// HP at game end
-const heroHpArr  = results.map(r => r.heroHp);
-const witchHpArr = results.map(r => r.witchHp);
+function avgM(fn) { return avg(valid.map(fn)); }
 
-// Metric averages
-function avgM(fn) { return avg(results.map(fn)); }
+const avgExploresHero  = avgM(r => r.metrics.exploresHero  ?? 0);
+const avgExploresWitch = avgM(r => r.metrics.exploresWitch ?? 0);
+const avgBattlesHero   = avgM(r => r.metrics.battlesHero   ?? 0);
+const avgBattlesWitch  = avgM(r => r.metrics.battlesWitch  ?? 0);
+const avgKillsHero     = avgM(r => r.metrics.killsByHero   ?? 0);
+const avgKillsWitch    = avgM(r => r.metrics.killsByWitch  ?? 0);
+const avgSummons       = avgM(r => r.metrics.summons       ?? 0);
+const avgFortifies     = avgM(r => r.metrics.fortifies     ?? 0);
+const avgPeakSurv      = avgM(r => r.metrics.peakSurvivors ?? 0);
+const avgPeakMini      = avgM(r => r.metrics.peakMinions   ?? 0);
+const avgFoodH         = avgM(r => r.metrics.foodConsumedHero  ?? 0);
+const avgFoodW         = avgM(r => r.metrics.foodConsumedWitch ?? 0);
 
-const avgExploresHero  = avgM(r => r.metrics.exploresHero);
-const avgExploresWitch = avgM(r => r.metrics.exploresWitch);
-const avgBattlesHero   = avgM(r => r.metrics.battlesHero);
-const avgBattlesWitch  = avgM(r => r.metrics.battlesWitch);
-const avgKillsHero     = avgM(r => r.metrics.killsByHero);
-const avgKillsWitch    = avgM(r => r.metrics.killsByWitch);
-const avgSummons       = avgM(r => r.metrics.summons);
-const avgFortifies     = avgM(r => r.metrics.fortifies);
-const avgPeakSurv      = avgM(r => r.metrics.peakSurvivors);
-const avgPeakMini      = avgM(r => r.metrics.peakMinions);
-const avgFoodH         = avgM(r => r.metrics.foodConsumedHero);
-const avgFoodW         = avgM(r => r.metrics.foodConsumedWitch);
-
-// Resource totals (per game)
-const resKeys = ['wood','metal','herbs','food','silver','scripture','weapons','horses','nothing'];
+const resKeys  = ['wood','metal','herbs','food','silver','scripture','weapons','horses','nothing'];
 const avgFound = {};
-for (const k of resKeys) avgFound[k] = avgM(r => r.metrics.found[k]);
+for (const k of resKeys) avgFound[k] = avgM(r => r.metrics.found?.[k] ?? 0);
 
-// Action distribution (fraction of total actions)
 const actTypeTotals = {};
-for (const r of results) {
-  for (const [side, counts] of Object.entries(r.metrics.actionCounts)) {
-    for (const [type, n] of Object.entries(counts)) {
-      actTypeTotals[type] = (actTypeTotals[type] ?? 0) + n;
-    }
+for (const r of valid) {
+  for (const [type, n] of Object.entries(r.metrics.actionCounts ?? {})) {
+    actTypeTotals[type] = (actTypeTotals[type] ?? 0) + n;
   }
 }
 const totalActions = Object.values(actTypeTotals).reduce((s, v) => s + v, 0);
 
-// Round length histogram
 const bucketSize = 5;
 const buckets = {};
 for (const r of roundArr) {
@@ -332,26 +498,34 @@ for (const r of roundArr) {
 }
 const bucketKeys = Object.keys(buckets).map(Number).sort((a, b) => a - b);
 
-// ── Report ─────────────────────────────────────────────────────────────────────
+// ── Report ────────────────────────────────────────────────────────────────────
 
-const W    = 64;
+const W    = 66;
 const line = '─'.repeat(W);
 const row  = s => `║ ${s.padEnd(W - 2)} ║`;
 const hdr  = s => { console.log(`╠${line}╣`); console.log(row(s)); };
 
 console.log(`╔${line}╗`);
-console.log(row(`BRIMSTONE BALANCE REPORT — ${MAP_SIZES[MAP_SIZE].label} — ${N} games · ${elapsed}s · cap=${MAX_ROUNDS}r`));
+console.log(row(`BRIMSTONE BALANCE REPORT — ${label} — ${N} games · ${elapsed}s · cap=${MAX_ROUNDS}r`));
+
+if (nErrors > 0) {
+  hdr('ERRORS');
+  console.log(row(`  ⚠ ${nErrors} game(s) crashed`));
+  for (const e of errors.slice(0, 3)) {
+    console.log(row(`  Game ${e.game}: ${e.message.slice(0, 55)}`));
+  }
+}
 
 hdr('WIN RATES');
-console.log(row(` Hero  ${bar(heroWins,  N)}  ${String(heroWins).padStart(4)}  (${pct(heroWins,  N)}%)`));
-console.log(row(` Witch ${bar(witchWins, N)}  ${String(witchWins).padStart(4)}  (${pct(witchWins, N)}%)`));
+console.log(row(` Hero  ${bar(heroWins,  valid.length)}  ${String(heroWins).padStart(4)}  (${pct(heroWins,  valid.length)}%)`));
+console.log(row(` Witch ${bar(witchWins, valid.length)}  ${String(witchWins).padStart(4)}  (${pct(witchWins, valid.length)}%)`));
 if (draws > 0)
-  console.log(row(` Draw  ${bar(draws, N)}  ${String(draws).padStart(4)}  (${pct(draws, N)}%)`));
+  console.log(row(` Draw  ${bar(draws, valid.length)}  ${String(draws).padStart(4)}  (${pct(draws, valid.length)}%)`));
 
 hdr('WIN CONDITION MIX');
-console.log(row(` By kill  ${bar(killWins, N)}  ${String(killWins).padStart(4)}  (${pct(killWins, N)}%)`));
-console.log(row(` By nodes ${bar(nodeWins, N)}  ${String(nodeWins).padStart(4)}  (${pct(nodeWins, N)}%)`));
-console.log(row(` Tiebreak ${bar(tieWins,  N)}  ${String(tieWins).padStart(4)}  (${pct(tieWins,  N)}%)`));
+console.log(row(` By kill  ${bar(killWins, valid.length)}  ${String(killWins).padStart(4)}  (${pct(killWins, valid.length)}%)`));
+console.log(row(` By nodes ${bar(nodeWins, valid.length)}  ${String(nodeWins).padStart(4)}  (${pct(nodeWins, valid.length)}%)`));
+console.log(row(` Tiebreak ${bar(tieWins,  valid.length)}  ${String(tieWins).padStart(4)}  (${pct(tieWins,  valid.length)}%)`));
 
 hdr('WIN REASON DETAIL');
 const winLabels = {
@@ -364,34 +538,45 @@ const winLabels = {
   [WIN_REASON.SCORE_WITCH]:      'Witch 3-point score      ',
   [WIN_REASON.SCORE_HERO]:       'Hero 3-point score       ',
 };
-for (const [reason, count] of Object.entries(conditionCounts).sort((a, b) => b[1] - a[1])) {
-  const label = winLabels[reason] ?? reason.slice(0, 25).padEnd(25);
-  console.log(row(` ${label}  ${bar(count, N, 16)}  ${String(count).padStart(4)}  (${pct(count, N)}%)`));
+for (const [reason, count] of Object.entries(conditionCounts).sort((a, b) => b[1] - a[1]).slice(0, 10)) {
+  const rlabel = winLabels[reason] ?? reason.slice(0, 25).padEnd(25);
+  console.log(row(` ${rlabel}  ${bar(count, valid.length, 16)}  ${String(count).padStart(4)}  (${pct(count, valid.length)}%)`));
 }
 
 hdr('GAME LENGTH (rounds)');
-console.log(row(`  Mean ${fmt(meanRounds)}  /  Median ${medRounds}  /  Min ${roundArr[0]}  /  Max ${roundArr[roundArr.length-1]}`));
-console.log(row(`  p25=${percentile(roundArr,25)}  p50=${percentile(roundArr,50)}  p75=${percentile(roundArr,75)}  p95=${percentile(roundArr,95)}`));
-console.log(row(`  Games hitting round cap (${MAX_ROUNDS}): ${results.filter(r=>r.hitCap).length}  (${pct(results.filter(r=>r.hitCap).length, N)}%)`));
+if (roundArr.length > 0) {
+  console.log(row(`  Mean ${fmt(meanRounds)}  /  Median ${medRounds}  /  Min ${roundArr[0]}  /  Max ${roundArr[roundArr.length-1]}`));
+  console.log(row(`  p25=${percentile(roundArr,25)}  p50=${percentile(roundArr,50)}  p75=${percentile(roundArr,75)}  p95=${percentile(roundArr,95)}`));
+  console.log(row(`  Games hitting round cap (${MAX_ROUNDS}): ${valid.filter(r=>r.hitCap).length}  (${pct(valid.filter(r=>r.hitCap).length, valid.length)}%)`));
+}
 
-hdr(`LENGTH HISTOGRAM  (bucket=${bucketSize}r, target ≈25r)`);
+hdr(`LENGTH HISTOGRAM  (bucket=${bucketSize}r)`);
 for (const b of bucketKeys) {
   const count = buckets[b];
-  const label = `${String(b).padStart(3)}–${String(b + bucketSize - 1).padStart(3)}`;
-  const filled = Math.round((count / N) * 28);
-  console.log(row(`  ${label}  ${'█'.repeat(filled)}${'░'.repeat(28 - filled)}  ${pct(count, N).padStart(5)}%`));
+  const blabel = `${String(b).padStart(3)}–${String(b + bucketSize - 1).padStart(3)}`;
+  const filled = Math.round((count / valid.length) * 28);
+  console.log(row(`  ${blabel}  ${'█'.repeat(filled)}${'░'.repeat(28 - filled)}  ${pct(count, valid.length).padStart(5)}%`));
+}
+
+// Multi-leader mortality (MP only)
+if (IS_MP) {
+  hdr('MULTI-LEADER MORTALITY (avg per game)');
+  const avgHD = avg(valid.map(r => r.metrics.leaderDeaths?.hero  ?? 0));
+  const avgWD = avg(valid.map(r => r.metrics.leaderDeaths?.witch ?? 0));
+  console.log(row(`  Hero  leaders dead at end: ${fmt(avgHD)}  / ${PER_SIDE}  (${pct(avgHD, PER_SIDE)}%)`));
+  console.log(row(`  Witch leaders dead at end: ${fmt(avgWD)}  / ${PER_SIDE}  (${pct(avgWD, PER_SIDE)}%)`));
 }
 
 hdr('COMBAT (avg per game)');
 console.log(row(`  Hero battles   ${fmt(avgBattlesHero)}   kills ${fmt(avgKillsHero)}`));
 console.log(row(`  Witch battles  ${fmt(avgBattlesWitch)}   kills ${fmt(avgKillsWitch)}`));
-console.log(row(`  Avg hero HP at end:   ${fmt(avg(heroHpArr))}`));
-console.log(row(`  Avg witch HP at end:  ${fmt(avg(witchHpArr))}`));
+console.log(row(`  Avg hero HP at end:   ${fmt(avg(valid.map(r => r.heroHp)))}`));
+console.log(row(`  Avg witch HP at end:  ${fmt(avg(valid.map(r => r.witchHp)))}`));
 
 hdr('EXPLORATION (avg per game)');
 console.log(row(`  Hero explores   ${fmt(avgExploresHero)}   Witch explores   ${fmt(avgExploresWitch)}`));
 
-hdr('RESOURCES FOUND (avg per game across all explores)');
+hdr('RESOURCES FOUND (avg per game)');
 for (const k of resKeys.filter(k => k !== 'nothing')) {
   const a = avgFound[k];
   const filledN = Math.round(a * 3);
@@ -409,92 +594,69 @@ hdr('FOOD & OVER-BUDGET ACTIONS (avg per game)');
 console.log(row(`  Hero food-powered extra actions   ${fmt(avgFoodH)}`));
 console.log(row(`  Witch food-powered extra actions  ${fmt(avgFoodW)}`));
 
-hdr('ACTION MIX (% of all actions across all games)');
-const actOrder = [
-  PlanActionType.MOVE, PlanActionType.BATTLE_UNIT, PlanActionType.BATTLE_HEX,
-  PlanActionType.EXPLORE, PlanActionType.FORTIFY, PlanActionType.SUMMON,
-  PlanActionType.USE_ITEM, PlanActionType.EQUIP_WEAPON, PlanActionType.USE_ABILITY,
-];
-for (const type of actOrder) {
-  const count = actTypeTotals[type] ?? 0;
+hdr('ACTION MIX (% of all actions)');
+for (const [type, count] of Object.entries(actTypeTotals).sort((a, b) => b[1] - a[1])) {
   if (!count) continue;
   const filledN = Math.round((count / totalActions) * 28);
   console.log(row(`  ${type.padEnd(14)}  ${'█'.repeat(filledN)}${'░'.repeat(28-filledN)}  ${pct(count, totalActions)}%`));
 }
 
-// ── Balance analysis ───────────────────────────────────────────────────────────
+// ── Balance analysis ──────────────────────────────────────────────────────────
 
 hdr('BALANCE ANALYSIS');
 
 const issues = [];
 const suggestions = [];
 
-const heroPct  = heroWins / N;
-const witchPct = witchWins / N;
-const drawPct  = tieWins  / N;
-const tieRatio = (tieWins + draws) / N;
+if (nErrors > 0)
+  issues.push(`⚠ ${nErrors} game(s) crashed (${pct(nErrors, N)}%)`);
 
-if (Math.abs(heroPct - witchPct) > 0.12) {
-  const favoured = heroPct > witchPct ? 'Hero' : 'Witch';
-  const loser    = heroPct > witchPct ? 'Witch' : 'Hero';
-  issues.push(`⚠ Win rate imbalanced: ${favoured} wins ${pct(Math.max(heroPct,witchPct)*N,N)}% vs ${loser} ${pct(Math.min(heroPct,witchPct)*N,N)}%`);
-  if (heroPct > witchPct + 0.12) {
-    suggestions.push('• Hero too strong: reduce hero base ATK by 1, or reduce survivor action bonus rate');
-    suggestions.push('• Or buff witch: lower minion-per-action threshold from 2→1 minions, or raise minion HP to 3');
-  } else {
-    suggestions.push('• Witch too strong: reduce witch base actions (4→3), or make minion summoning cost 2 actions');
-    suggestions.push('• Or buff hero: increase hero base HP to 12, or reduce fatigue threshold');
+if (valid.length >= 10) {
+  const heroPctW  = heroWins / valid.length;
+  const witchPctW = witchWins / valid.length;
+  const tieRatio  = (tieWins + draws) / valid.length;
+
+  if (Math.abs(heroPctW - witchPctW) > 0.12) {
+    const favoured = heroPctW > witchPctW ? 'Hero' : 'Witch';
+    const loser    = heroPctW > witchPctW ? 'Witch' : 'Hero';
+    issues.push(`⚠ Win rate imbalanced: ${favoured} wins ${pct(Math.max(heroPctW,witchPctW)*valid.length,valid.length)}% vs ${loser} ${pct(Math.min(heroPctW,witchPctW)*valid.length,valid.length)}%`);
+    if (heroPctW > witchPctW + 0.12) {
+      suggestions.push('• Hero too strong: reduce hero base ATK, or reduce survivor action bonus');
+      suggestions.push('• Or buff witch: lower minion threshold, or raise minion HP');
+    } else {
+      suggestions.push('• Witch too strong: reduce witch base actions, or increase summon cost');
+      suggestions.push('• Or buff hero: increase hero base HP, or reduce fatigue');
+    }
   }
-}
 
-if (tieRatio > 0.10) {
-  issues.push(`⚠ Too many tiebreaks: ${pct(tieRatio * N, N)}% (target <10%)`);
-  suggestions.push('• Reduce MAX_ROUNDS or make scoring checkpoints more decisive (require 2 nodes not just majority)');
-  suggestions.push('• Increase attrition damage to force earlier decisive combat');
-}
+  if (tieRatio > 0.10) {
+    issues.push(`⚠ Too many tiebreaks: ${pct(tieRatio * valid.length, valid.length)}% (target <10%)`);
+    suggestions.push('• Increase attrition or reduce MAX_ROUNDS');
+  }
 
-if (killWins / N < 0.20) {
-  issues.push(`⚠ Too few kill victories: ${pct(killWins, N)}% (want ≥20%)`);
-  suggestions.push('• Lower hero/witch HP (10→8) to make combat more decisive');
-  suggestions.push('• Increase base attack stats or reduce defense');
-}
-if (nodeWins / N < 0.30) {
-  issues.push(`⚠ Too few node victories: ${pct(nodeWins, N)}% (want ≥30%)`);
-  suggestions.push('• Reduce score threshold from 3 to 2 cumulative points for faster node wins');
-  suggestions.push('• Make sweep-all-3-nodes victory more achievable (reduce node separation requirement)');
-}
+  if (killWins / valid.length < 0.20) {
+    issues.push(`⚠ Too few kill victories: ${pct(killWins, valid.length)}% (want ≥20%)`);
+    suggestions.push('• Lower HP pools or increase attack stats');
+  }
 
-if (meanRounds < 15) {
-  issues.push(`⚠ Games too short: mean ${fmt(meanRounds)} rounds (target ≈25)`);
-  suggestions.push('• Increase hero and witch HP pools');
-  suggestions.push('• Reduce attrition rate or hazard damage');
-}
-if (meanRounds > 30) {
-  issues.push(`⚠ Games too long: mean ${fmt(meanRounds)} rounds (target ≈25)`);
-  suggestions.push('• Reduce MAX_ROUNDS, or increase attrition damage ceiling above 3');
-  suggestions.push('• Make scoring checkpoints require fewer points (3→2) for faster decisive wins');
-}
-
-if (avgPeakSurv < 1.5) {
-  issues.push(`⚠ Survivors rarely recruited: avg peak ${fmt(avgPeakSurv)} (want ≥2)`);
-  suggestions.push('• Increase hidden survivor count (12→15), or raise survivor spawn probability at nodes (33%→50%)');
-}
-if (avgPeakMini < 2.0) {
-  issues.push(`⚠ Witch rarely builds a minion army: avg peak ${fmt(avgPeakMini)} (want ≥3)`);
-  suggestions.push('• Raise node spawn chance back to 50%, or reduce summon cost to free in NIGHT');
-}
-if (avgFortifies < 1.0) {
-  issues.push(`⚠ Fortification barely used: avg ${fmt(avgFortifies)} per game`);
-  suggestions.push('• Increase wood loot weight, or make FORTIFY free during DAY');
+  if (meanRounds < 15) {
+    issues.push(`⚠ Games too short: mean ${fmt(meanRounds)} rounds`);
+  }
+  if (meanRounds > 35) {
+    issues.push(`⚠ Games too long: mean ${fmt(meanRounds)} rounds`);
+    suggestions.push('• Increase attrition damage or reduce round cap');
+  }
 }
 
 if (issues.length === 0) {
   console.log(row('  ✓ Balance looks healthy within all targets.'));
 } else {
   for (const issue of issues) console.log(row(`  ${issue}`));
-  console.log(row(''));
-  console.log(row('  Suggestions:'));
-  for (const s of suggestions) console.log(row(`    ${s}`));
+  if (suggestions.length > 0) {
+    console.log(row(''));
+    console.log(row('  Suggestions:'));
+    for (const s of suggestions) console.log(row(`    ${s}`));
+  }
 }
 
 console.log(`╚${line}╝`);

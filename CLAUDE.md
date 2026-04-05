@@ -30,7 +30,7 @@ These directives apply to all code changes — follow them without exception.
 - Offline mode (`src/main.js`) and online mode (`server/lobby.js`) must stay in sync.
 - Any change to game rules, state shape, planning flow, or AI behaviour needs to be applied to **both** orchestration layers.
 - New state fields must be added to `server/state-sync.js` serialization or online mode will silently drop them.
-- After parity-sensitive changes, verify with `node scripts/headless-mp.js 100` in addition to the standard headless runner.
+- After parity-sensitive changes, verify with `node scripts/headless.js 100 standard --players 2` in addition to the standard headless runner.
 
 ---
 
@@ -56,7 +56,8 @@ npm start      # Python HTTP server fallback
 npm test       # Run all tests
 
 node scripts/headless.js [count] [size]   # AI-vs-AI balance testing; size: skirmish|standard|regional|campaign
-node scripts/headless-mp.js [count]       # N-player (2v2) AI balance runner
+node scripts/headless.js [count] [size] --players N  # N-player AI balance runner (1v1 to 4v4)
+node scripts/headless.js --render [size] [--players N] [out.gif]  # Render game as animated GIF
 node scripts/combat-sim.js [rounds]       # Combat stats report
 node scripts/ai-matrix.js [count]         # Every hero personality vs every witch personality matrix
 node scripts/release.js [patch|minor|major] [--dry-run]  # Bump version, tag, build+upload iOS to App Store Connect
@@ -156,7 +157,7 @@ server/
   leaderboard.js    # Win/loss recording and ranking
 scripts/
   headless.js       # Headless AI-vs-AI runner; supports 4 map sizes via argv; optionally records stats to DB
-  headless-mp.js    # N-player (2v2) headless balance runner
+  headless-mp-net.js # N-player network-based headless runner
   combat-sim.js     # Scenario matrix: hit rates, crush rates, expected damage
   ai-matrix.js      # Runs every hero personality vs every witch personality; renders result matrix
   release.js        # Automated release: version bump, changelog generation, tag, fast-forward merge to master
