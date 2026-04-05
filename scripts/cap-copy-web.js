@@ -50,9 +50,12 @@ if (existsSync(WWW)) rmSync(WWW, { recursive: true });
 mkdirSync(WWW, { recursive: true });
 
 // Directories to copy (relative to project root)
-const dirs = ['src', 'assets'];
+const dirs = ['src', 'assets', 'server'];
 for (const dir of dirs) {
-  cpSync(resolve(ROOT, dir), resolve(WWW, dir), { recursive: true });
+  cpSync(resolve(ROOT, dir), resolve(WWW, dir), {
+    recursive: true,
+    filter: (src) => !src.includes('/assets/generated'),
+  });
 }
 
 // Individual files
