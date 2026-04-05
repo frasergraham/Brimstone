@@ -6,6 +6,7 @@
 // plus a left-sidebar info panel.
 
 import { hexKey } from './hex.js';
+import { describePlanAction } from './ui-render.js';
 
 // ── Goal color map ──────────────────────────────────────────────────────────
 // Shared across witch and hero goals. Goals with the same semantic role share
@@ -120,8 +121,10 @@ export function buildNodeFeasibilityMap(board) {
 
 /**
  * Populate the #ai-debug-panel DOM with current debug data.
+ * @param {object} data - Debug snapshot from AI engine
+ * @param {Array} [entities] - Live entity list for action descriptions
  */
-export function updateAIDebugPanel(data) {
+export function updateAIDebugPanel(data, entities = []) {
   const panel = document.getElementById('ai-debug-panel');
   if (!panel || !data) return;
 
@@ -207,6 +210,13 @@ export function updateAIDebugPanel(data) {
     }
     boardEl.appendChild(grid);
   }
+
+  // Action list: grouped by unit, each action showing its goal
+  const actionsEl = document.getElementById('ai-debug-actions');
+  if (actionsEl && data.actions) {
+    actionsEl.innerHTML = '<div class="ai-debug-section-title">AI Actions</div>';
+    _renderActionList(actionsEl, data.actions, entities);
+  }
 }
 
 export function hideAIDebugPanel() {
@@ -252,4 +262,56 @@ function _buildBoardSummaryRows(faction, b) {
 
 function _pct(ratio) {
   return ratio != null ? `${(ratio * 100).toFixed(0)}%` : '?';
+}
+
+/**
+ * Render the AI's action list grouped by unit, each action tagged with its goal.
+ * Actions are sorted by priority (execution order), matching what assemblePlan produces.
+ */
+function _renderActionList(container, actions, entities) {
+  // Group actions by entityId, preserving priority order
+  const sorted = [...actions].sort((a, b) => (a._priority ?? 99) - (b._priority ?? 99));
+  const byUnit = new Map();
+  for (const a of sorted) {
+    const eid = a.entityId;
+    if (!byUnit.has(eid)) byUnit.set(eid, []);
+    byUnit.get(eid).push(a);
+  }
+
+  for (const [entityId, unitActions] of byUnit) {
+    const entity = entities.find(e => e.id === entityId);
+    const name = entity?.displayName ?? entityId;
+
+    const block = document.createElement('div');
+    block.className = 'ai-debug-unit-block';
+
+    // Unit header
+    const header = document.createElement('div');
+    header.className = 'ai-debug-unit-header';
+    header.textContent = name;
+    block.appendChild(header);
+
+    // Action rows
+    for (let i = 0; i < unitActions.length; i++) {
+      const a = unitActions[i];
+      const goal = a._goal || 'gap-fill';
+      const color = GOAL_COLORS[goal] || '#888';
+      const desc = describePlanAction(a, entities, i);
+      const goalTag = _goalLabel(goal);
+
+      const row = document.createElement('div');
+      row.className = 'ai-debug-action-row';
+      row.innerHTML =
+        `<span class="ai-debug-action-num">${i + 1}</span>` +
+        `<span class="ai-debug-action-desc">${desc}</span>` +
+        `<span class="ai-debug-action-goal" style="color:${color}">${goalTag}</span>`;
+      block.appendChild(row);
+    }
+
+    container.appendChild(block);
+  }
+
+  if (byUnit.size === 0) {
+    container.innerHTML += '<div class="ai-debug-action-empty">No actions generated</div>';
+  }
 }

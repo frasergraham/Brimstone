@@ -406,7 +406,7 @@ function _pushAIDebugData(aiEngine, faction) {
   };
 
   // Update DOM panel
-  updateAIDebugPanel(dbg);
+  updateAIDebugPanel(dbg, state.entities);
   const debugPanel = document.getElementById('ai-debug-panel');
   if (debugPanel && !debugPanel.classList.contains('collapsed')) {
     renderer.insetLeft = 260;
