@@ -1403,7 +1403,7 @@ export class UIController {
             color: '#7eccd6', dis, attrs: 'data-action="explore"' });
           break;
         case ActionType.SOUND_HORN:
-          arcItems.push({ group: 'scout', label: 'Horn', fullLabel: 'Sound Horn (1 food)',
+          arcItems.push({ group: 'scout', label: 'Sound Horn', fullLabel: 'Sound Horn (1 food)',
             color: '#7eccd6', dis: !action.affordable || dis, attrs: 'data-action="sound_horn"' });
           break;
         case ActionType.GUARD: {
@@ -1424,7 +1424,7 @@ export class UIController {
           const metalGain   = Math.min(4, cur + 2) - cur;
           const doublerGain = Math.min(4, cur + 2) - cur;
           const woodGain    = Math.min(4, cur + 1) - cur;
-          const shortLbl = hasMetal ? 'Reinforce' : 'Fortify';
+          const shortLbl = hasMetal ? 'Reinforce Hex' : 'Fortify Hex';
           const fullLbl = hasMetal
             ? `Reinforce +${metalGain} DEF (1 metal)`
             : hasDoubler
@@ -1436,7 +1436,7 @@ export class UIController {
         }
         case ActionType.BATTLE_HEX:
           if (this._planMode) {
-            arcItems.push({ group: 'combat', label: 'Attack', fullLabel: 'Attack Hex',
+            arcItems.push({ group: 'combat', label: 'Attack Hex', fullLabel: 'Attack Hex',
               color: '#c0392b', dis, attrs: 'data-action="attack_hex"' });
           }
           break;
@@ -1470,15 +1470,11 @@ export class UIController {
           break;
         case ActionType.USE_ABILITY: {
           const abilityLabels = {
-            [SurvivorAbility.HEAL]:    'Heal',
-            [SurvivorAbility.INSPIRE]: 'Battle Cry',
-            [SurvivorAbility.RALLY]:   'Sermon',
-          };
-          const fullLabels = {
             [SurvivorAbility.HEAL]:    'Tend Wounds',
             [SurvivorAbility.INSPIRE]: 'Battle Cry',
             [SurvivorAbility.RALLY]:   'Holy Sermon',
           };
+          const fullLabels = abilityLabels;
           const isFree = action.ability !== SurvivorAbility.HEAL;
           arcItems.push({ group: 'items',
             label: abilityLabels[action.ability] || 'Ability',
@@ -1497,9 +1493,9 @@ export class UIController {
       const projWood  = projWitch?.[ResourceType.WOOD]  || 0;
       const projTotal = projWitch ? Object.values(projWitch).reduce((s, v) => s + (v || 0), 0) : 0;
       const ALL_SUMMONS = [
-        { st: EntityType.IRON_GOLEM, label: 'Iron · 2⚙',  full: 'Iron Golem (2 metal)',  afford: projMetal >= 2 },
-        { st: EntityType.WOOD_GOLEM, label: 'Wood · 2🪵', full: 'Wood Golem (2 wood)',   afford: projWood >= 2 },
-        { st: EntityType.MINION,     label: 'Minion · 2res', full: 'Minion (2 any resource)', afford: projTotal >= 2 },
+        { st: EntityType.IRON_GOLEM, label: 'Summon Iron Golem',  full: 'Summon Iron Golem (2 metal)',  afford: projMetal >= 2 },
+        { st: EntityType.WOOD_GOLEM, label: 'Summon Wood Golem', full: 'Summon Wood Golem (2 wood)',   afford: projWood >= 2 },
+        { st: EntityType.MINION,     label: 'Summon Minion',      full: 'Summon Minion (2 any resource)', afford: projTotal >= 2 },
       ];
       for (const s of ALL_SUMMONS) {
         arcItems.push({ group: 'summon', label: s.label, fullLabel: s.full,
@@ -1525,8 +1521,8 @@ export class UIController {
     const openRight = screenPos.x < window.innerWidth / 2;
     const centerAngle = openRight ? 0 : Math.PI; // 0 = right, PI = left
 
-    const ARC_RADIUS = 110;
-    const ITEM_GAP  = 28 * (Math.PI / 180); // uniform angular gap between all items
+    const ARC_RADIUS = 130;
+    const ITEM_GAP  = 36 * (Math.PI / 180); // uniform angular gap between all items
 
     // Uniform spacing — no group gaps except summon items stay clustered
     const totalItems = arcItems.length;
@@ -1539,11 +1535,6 @@ export class UIController {
       arcItems[i]._idx = i;
     }
 
-    // Find summon group range for the "Summon" label
-    const summonIndices = arcItems
-      .map((item, i) => item.group === 'summon' ? i : -1)
-      .filter(i => i >= 0);
-
     // Generate arc item HTML
     let html = '';
     for (const item of arcItems) {
@@ -1555,20 +1546,6 @@ export class UIController {
       html += `<button class="arc-item${freeCls}" title="${item.fullLabel}"
         style="--arc-x:${x.toFixed(1)}px;--arc-y:${y.toFixed(1)}px;--arc-delay:${delay}ms;--arc-color:${item.color};--arc-hover:${item.color};--arc-glow:${item.color}33"
         ${disAttr} ${item.attrs}>${item.label}</button>`;
-    }
-
-    // Add "Summon" label above the summon group
-    if (summonIndices.length >= 1) {
-      const firstIdx = summonIndices[0];
-      const lastIdx  = summonIndices[summonIndices.length - 1];
-      const midAngle = (arcItems[firstIdx]._angle + arcItems[lastIdx]._angle) / 2;
-      // Place label further out from the arc, above the summon buttons
-      const labelR = ARC_RADIUS + 22;
-      const lx = Math.cos(midAngle) * labelR;
-      const ly = Math.sin(midAngle) * labelR - 14; // nudge up
-      const labelDelay = arcItems[firstIdx]._idx * 30;
-      html += `<span class="arc-group-label"
-        style="--arc-x:${lx.toFixed(1)}px;--arc-y:${ly.toFixed(1)}px;--arc-delay:${labelDelay}ms">Summon</span>`;
     }
 
     popup.innerHTML = html;
@@ -3698,8 +3675,8 @@ function _positionArcPopup(popup, ui) {
     ui.renderer.arcMenuLines = {
       col, row,
       items: ui._arcItems.map(item => ({
-        x: Math.cos(item._angle) * 110, // ARC_RADIUS in screen px
-        y: Math.sin(item._angle) * 110,
+        x: Math.cos(item._angle) * 130, // ARC_RADIUS in screen px
+        y: Math.sin(item._angle) * 130,
         color: item.color,
       })),
     };
