@@ -4482,6 +4482,130 @@ body.spectator-mode #game-screen   { display: flex !important; }
   padding: 0.2rem 0;
 }
 
+/* ── Campaign party roster cards ───────────────────────────────────────── */
+
+.campaign-party {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+
+.campaign-party-card {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 6px;
+  min-width: 180px;
+  flex: 1 1 180px;
+  max-width: 280px;
+}
+
+.campaign-party-card.hero {
+  border-color: rgba(212,167,44,0.3);
+  background: rgba(212,167,44,0.06);
+  flex: 1 1 220px;
+  max-width: 300px;
+}
+
+.cp-glyph {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+}
+
+.cp-info {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.cp-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cp-title {
+  font-size: 0.72rem;
+  color: var(--clr-dim, #888);
+  font-style: italic;
+}
+
+.cp-hp-track {
+  height: 6px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 3px;
+  margin: 3px 0;
+  overflow: hidden;
+}
+
+.cp-hp-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s;
+}
+
+.cp-stats {
+  font-size: 0.7rem;
+  color: var(--clr-dim, #999);
+  display: flex;
+  gap: 0.4rem;
+}
+
+.cp-ability {
+  font-size: 0.68rem;
+  color: var(--clr-dim, #777);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cp-hp-label {
+  font-size: 0.68rem;
+  color: var(--clr-dim, #999);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+/* Campaign deploy picker with cards */
+.campaign-survivor-pick {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.campaign-survivor-pick .campaign-party-card {
+  flex: 1;
+  max-width: none;
+  pointer-events: none;
+}
+
+/* Debrief heal bonus */
+.debrief-heal {
+  margin: 0.5rem 0;
+  padding: 0.4rem 0.6rem;
+  background: rgba(76,175,80,0.1);
+  border: 1px solid rgba(76,175,80,0.2);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: #4caf50;
+}
+
 /* ── Async game styles ──────────────────────────────────────────────────── */
 
 .async-code-display {
