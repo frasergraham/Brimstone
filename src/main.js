@@ -2161,8 +2161,9 @@ function _initCampaignMission(missionDef) {
     state.hero.items   = { ...hs.items };
   }
 
-  // Inject carried-over resources
+  // Inject carried-over resources (replaces faction defaults for campaign)
   if (_activeCampaign) {
+    state.inventory.shared = {};
     const res = { ...(_activeCampaign.resources || {}) };
     // Add mission starting resources
     if (missionDef.startingResources) {
