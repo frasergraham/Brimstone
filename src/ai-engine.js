@@ -458,6 +458,23 @@ export function genDefendWitch(sim, board, budget, config = null) {
   return actions;
 }
 
+// Pick an unexplored building for the witch to explore.
+// Prefers nearby buildings but adds randomness to avoid straight-line movement.
+function _pickExploreBuilding(sim, actor) {
+  const candidates = [];
+  for (const [, t] of sim.tiles) {
+    if (t.type !== TileType.BUILDING) continue;
+    if (sim.isExplored(t.col, t.row)) continue;
+    const d = hexDistance(actor.col, actor.row, t.col, t.row);
+    candidates.push({ tile: t, dist: d });
+  }
+  if (candidates.length === 0) return null;
+  // Sort by distance, then pick randomly from the closest few
+  candidates.sort((a, b) => a.dist - b.dist);
+  const pickFrom = Math.min(candidates.length, 3);
+  return candidates[Math.floor(Math.random() * pickFrom)].tile;
+}
+
 // ── Generator: BUILD_ARMY ───────────────────────────────────────────────────
 // Combination of exploring for resources and summoning troops.
 // Witch moves to unexplored areas, explores, summons when affordable.
@@ -499,10 +516,10 @@ export function genBuildArmy(sim, board, budget) {
     remaining -= postExplore.filter(a => a.type !== PlanActionType.USE_ITEM).length;
   }
 
-  // Phase 3: Move toward nearest unexplored building, then explore
+  // Phase 3: Move toward an unexplored building (prefer nearby, with some randomness)
   if (remaining > 0) {
-    const building = nearestBuilding(sim, witchEntity);
-    if (building && !sim.isExplored(building.col, building.row)) {
+    const building = _pickExploreBuilding(sim, witchEntity);
+    if (building) {
       let stepsLeft = Math.min(remaining, 3);
       while (stepsLeft > 0) {
         if (witchEntity.col === building.col && witchEntity.row === building.row) {
@@ -520,6 +537,27 @@ export function genBuildArmy(sim, board, budget) {
           remaining -= postArr.filter(a => a.type !== PlanActionType.USE_ITEM).length;
           break;
         }
+
+        // Opportunity attack while exploring (especially at night)
+        const nearbyFoes = board.visibleHeroes.filter(h =>
+          hexDistance(h.col, h.row, witchEntity.col, witchEntity.row) <= 1
+        );
+        for (const enemy of nearbyFoes) {
+          if (remaining <= 0 || stepsLeft <= 0) break;
+          const est = estimateCombat(witchEntity, enemy, board);
+          if (est.classification === 'suicidal') continue;
+          if (!board.isNight && est.classification === 'unfavorable') continue;
+          actions.push({
+            type: PlanActionType.BATTLE_UNIT, entityId: board.witch.id,
+            targetId: enemy.id, targetCol: enemy.col, targetRow: enemy.row,
+            _priority: 3, _goal: Goal.BUILD_ARMY,
+          });
+          sim.applyBattle();
+          remaining--;
+          stepsLeft--;
+        }
+        if (remaining <= 0 || stepsLeft <= 0) break;
+
         const step = roadStepToward(sim, witchEntity, building);
         if (!step) break;
 
@@ -533,7 +571,7 @@ export function genBuildArmy(sim, board, budget) {
         stepsLeft--;
       }
     } else {
-      // No unexplored buildings — move toward nearest unexplored hex
+      // No unexplored buildings — pick a random unexplored hex to wander toward
       while (remaining > 0) {
         if (!sim.isExplored(witchEntity.col, witchEntity.row)) {
           actions.push({
@@ -544,15 +582,25 @@ export function genBuildArmy(sim, board, budget) {
           remaining--;
           continue;
         }
-        let bestHex = null, bestDist = Infinity;
+        // Gather nearby unexplored hexes and pick one at random
+        const candidates = [];
         for (const [, t] of sim.tiles) {
           if (sim.isExplored(t.col, t.row)) continue;
           if (t.terrain === 'river') continue;
           const d = hexDistance(witchEntity.col, witchEntity.row, t.col, t.row);
-          if (d < bestDist) { bestDist = d; bestHex = t; }
+          if (d <= 5) candidates.push(t);
         }
-        if (!bestHex) break;
-        const step = roadStepToward(sim, witchEntity, bestHex);
+        // If nothing nearby, widen to all unexplored
+        if (candidates.length === 0) {
+          for (const [, t] of sim.tiles) {
+            if (sim.isExplored(t.col, t.row)) continue;
+            if (t.terrain === 'river') continue;
+            candidates.push(t);
+          }
+        }
+        if (candidates.length === 0) break;
+        const target = candidates[Math.floor(Math.random() * candidates.length)];
+        const step = roadStepToward(sim, witchEntity, target);
         if (!step) break;
 
         actions.push({
@@ -700,10 +748,31 @@ export function genControlNodes(sim, board, budget) {
       continue;
     }
 
-    // Move toward node
+    // Move toward node, attacking enemies encountered en route
     sim.unitCommitments.set(simUnit.id, Goal.CONTROL_NODES);
     let stepsForUnit = Math.min(remaining, 3);
     while (stepsForUnit > 0) {
+      // Opportunity attack: fight adjacent hero units while moving
+      const adjacentFoes = board.visibleHeroes.filter(h =>
+        hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= 1
+      );
+      for (const enemy of adjacentFoes) {
+        if (remaining <= 0 || stepsForUnit <= 0) break;
+        const est = estimateCombat(simUnit, enemy, board);
+        if (est.classification === 'suicidal') continue;
+        // At night, witch is stronger — attack even at unfavorable odds
+        if (!board.isNight && est.classification === 'unfavorable') continue;
+        actions.push({
+          type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
+          targetId: enemy.id, targetCol: enemy.col, targetRow: enemy.row,
+          _priority: 3, _goal: Goal.CONTROL_NODES,
+        });
+        sim.applyBattle();
+        remaining--;
+        stepsForUnit--;
+      }
+      if (remaining <= 0 || stepsForUnit <= 0) break;
+
       const targetHex = node.obj.hexes
         ? node.obj.hexes.reduce((best, h) => {
             const d = hexDistance(simUnit.col, simUnit.row, h.col, h.row);

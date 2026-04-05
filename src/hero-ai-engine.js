@@ -271,8 +271,6 @@ export function scoreHeroGoals(board, goalWeights = null) {
   else if (board.roundsToScoring <= 3) control += 0.15;
   // Dawn/dusk boosts node control urgency
   if (board.isDawnOrDusk) control *= 1.8;
-  // Day: hero is stronger — modest boost to node priority
-  else if (board.isDay) control += 0.1;
   control = clamp01(control);
 
   const scores = {
