@@ -125,6 +125,9 @@ export class Renderer {
     /** ID of the currently selected entity; drives the ⊕ indicator drawn above its hex. */
     this.selectedEntityId = null;
 
+    /** Arc menu connecting lines: { col, row, items: [{ x, y, color }] } or null. */
+    this.arcMenuLines = null;
+
     // Zoom & pan
     this.zoomLevel  = 1.0;
     this._panX      = 0;
@@ -961,6 +964,9 @@ export class Renderer {
     if (this.planGhostSteps?.length) {
       this._drawPlanOverlay(this.planGhostSteps);
     }
+
+    // Arc menu connecting lines (under the ⊕ indicator)
+    this._drawArcMenuLines();
 
     // ⊕ indicator at ghost position (falls back to real position outside planning mode)
     if (this.selectedEntityId) {
@@ -1883,41 +1889,68 @@ export class Renderer {
     // ⊕ indicator is now drawn in draw() at the ghost position — removed from here.
   }
 
-  /** Draw the ⊕ action-hint indicator above a hex position. */
+  /** Draw the ⊕ action-hint indicator centered over a hex position. */
   _drawSelectionIndicator(col, row) {
     const ctx = this.ctx;
     const hs  = this.hexSize;
     const { x, y } = this._toCanvas(col, row);
-    const ir = Math.max(5, hs * 0.17);
-    const ix = x + hs * 0.42;
-    const iy = y - hs * 0.58;
+    const ir = Math.max(6, hs * 0.22);
 
-    // Semi-transparent disc
+    // Draw centered over the unit
+    const ix = x;
+    const iy = y;
+
+    // Semi-transparent disc overlay
     ctx.beginPath();
     ctx.arc(ix, iy, ir, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255,255,255,0.42)';
+    ctx.fillStyle = 'rgba(255,255,255,0.28)';
     ctx.fill();
 
     // Thin border
-    ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
     ctx.lineWidth   = 0.8;
     ctx.stroke();
 
     // + glyph
-    ctx.fillStyle    = 'rgba(20,20,40,0.82)';
-    ctx.font         = `bold ${Math.floor(ir * 1.45)}px sans-serif`;
+    ctx.fillStyle    = 'rgba(255,255,255,0.75)';
+    ctx.font         = `bold ${Math.floor(ir * 1.3)}px sans-serif`;
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('+', ix, iy + 0.5);
+  }
 
-    // Specular arc at top-left of disc
-    ctx.beginPath();
-    ctx.arc(ix, iy, ir * 0.72, Math.PI * 1.1, Math.PI * 1.65);
-    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
-    ctx.lineWidth   = ir * 0.28;
-    ctx.lineCap     = 'round';
-    ctx.stroke();
-    ctx.lineCap     = 'butt';
+  /**
+   * Draw connecting lines from hex center to arc menu item positions.
+   * Called during draw() when arcMenuLines is set.
+   */
+  _drawArcMenuLines() {
+    if (!this.arcMenuLines) return;
+    const ctx = this.ctx;
+    const { col, row, items } = this.arcMenuLines;
+    const { x: cx, y: cy } = this._toCanvas(col, row);
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    for (const item of items) {
+      // item.x, item.y are offsets in screen px from the hex center;
+      // convert to canvas units by dividing by zoomLevel
+      const tx = cx + item.x / this.zoomLevel;
+      const ty = cy + item.y / this.zoomLevel;
+
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(tx, ty);
+      ctx.strokeStyle = item.color ? item.color + '35' : 'rgba(180,170,210,0.2)';
+      ctx.lineWidth   = 0.6;
+      ctx.stroke();
+
+      // Small dot at the end
+      ctx.beginPath();
+      ctx.arc(tx, ty, 1.5, 0, Math.PI * 2);
+      ctx.fillStyle = item.color ? item.color + '88' : 'rgba(180,170,210,0.5)';
+      ctx.fill();
+    }
+    ctx.restore();
   }
 
   /** Draw plan ghost overlay: ghost entities, summon icons, move arrows, attack arrows. */
