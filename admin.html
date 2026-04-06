@@ -291,7 +291,6 @@
           <option value="active">Active</option>
           <option value="saved">Saved</option>
           <option value="completed_mp">Completed (MP)</option>
-          <option value="completed_sp">Completed (SP)</option>
         </select>
         <button class="btn" id="games-refresh">Refresh</button>
       </div>
@@ -671,9 +670,8 @@
         if (source === 'saved') {
           html += `<button class="btn btn-primary" onclick="activateSave('${_esc(id)}')">Activate</button>`;
         }
-        if (source === 'completed_mp' || source === 'completed_sp') {
-          const replaySrc = source === 'completed_mp' ? 'mp' : 'sp';
-          html += `<a class="btn btn-primary" href="/replay?replayGame=${_esc(id)}&source=${replaySrc}" target="_blank">Replay</a>`;
+        if (source === 'completed_mp') {
+          html += `<a class="btn btn-primary" href="/replay?replayGame=${_esc(id)}&source=mp" target="_blank">Replay</a>`;
         }
         html += '</div>';
 
