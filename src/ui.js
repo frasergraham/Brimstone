@@ -1654,17 +1654,16 @@ export class UIController {
       arcItems[i]._idx = i;
     }
 
-    // Generate HTML
-    let html = '';
-    for (const item of arcItems) {
-      const delay = item._idx * 30;
-      const portraitCls = item._portrait ? ' arc-portrait' : '';
-      html += `<button class="arc-item${portraitCls}" title="${item.fullLabel}"
-        style="--arc-x:0px;--arc-y:0px;--arc-delay:${delay}ms;--arc-color:${item.color};--arc-hover:${item.color};--arc-glow:${item.color}33"
-        ${item.attrs}>${item.label}</button>`;
-    }
+    // Compute entity screen positions for canvas-origin animation
+    const entityPositions = this.renderer.getEntityScreenPositions(
+      originHex.col, originHex.row, units, canvasRect
+    );
+    // Build lookup: entityId → screen position
+    const posById = new Map(entityPositions.map(p => [p.entityId, p]));
 
-    popup.innerHTML = html;
+    // Hide entities from canvas and trigger redraw so they vanish
+    this.renderer.disambigHiddenIds = new Set(units.map(u => u.id));
+    this.onRedraw();
 
     // Store arc state for pan/zoom tracking and canvas line drawing
     this._arcEntityCol = originHex.col;
@@ -1672,8 +1671,49 @@ export class UIController {
     this._arcItems = arcItems;
     this._arcOpenRight = openRight;
 
-    // Position popup centered on hex
+    // Position popup centered on hex — need this first to compute relative offsets
     _positionArcPopup(popup, this);
+    const popupX = parseFloat(popup.style.left) || 0;
+    const popupY = parseFloat(popup.style.top) || 0;
+
+    // Compute start positions relative to popup anchor for each portrait item
+    // and store origins for close animation
+    this._disambigOrigins = [];
+    for (const item of arcItems) {
+      if (!item._portrait) continue;
+      const unitId = parseInt(item.attrs.match(/data-unit-id="(\d+)"/)?.[1]);
+      const pos = posById.get(unitId);
+      if (pos) {
+        item._startX = pos.screenX - popupX;
+        item._startY = pos.screenY - popupY;
+        item._startR = pos.screenR;
+        this._disambigOrigins.push({
+          entityId: unitId,
+          startX: item._startX,
+          startY: item._startY,
+          startR: pos.screenR,
+        });
+      }
+    }
+
+    // Generate HTML — portrait items get arc-from-canvas class with start position vars
+    let html = '';
+    for (const item of arcItems) {
+      const delay = item._idx * 30;
+      const isCanvas = item._portrait && item._startX != null;
+      const portraitCls = item._portrait ? ' arc-portrait' : '';
+      const canvasCls = isCanvas ? ' arc-from-canvas' : '';
+      // Portrait size: double the canvas entity circle diameter
+      const portraitSize = isCanvas ? Math.round(Math.max(44, Math.min(88, item._startR * 4))) : 44;
+      const startScale = isCanvas ? ((item._startR * 2) / portraitSize).toFixed(3) : '0.3';
+      const startX = isCanvas ? item._startX.toFixed(1) : '0';
+      const startY = isCanvas ? item._startY.toFixed(1) : '0';
+      html += `<button class="arc-item${portraitCls}${canvasCls}" title="${item.fullLabel}"
+        style="--arc-x:0px;--arc-y:0px;--arc-delay:${delay}ms;--arc-color:${item.color};--arc-hover:${item.color};--arc-glow:${item.color}33;--start-x:${startX}px;--start-y:${startY}px;--start-scale:${startScale};--portrait-size:${portraitSize}px"
+        ${item.attrs}>${item.label}</button>`;
+    }
+
+    popup.innerHTML = html;
     popup.style.display = 'block';
 
     // Measure buttons at full scale
@@ -3843,17 +3883,27 @@ function _hideActionPopup(ui) {
   if (ui && ui._arcTrackingRaf) { cancelAnimationFrame(ui._arcTrackingRaf); ui._arcTrackingRaf = null; }
   // Clear canvas connecting lines
   if (ui?.renderer) { ui.renderer.arcMenuLines = null; }
+  const hadDisambigOrigins = ui?._disambigOrigins?.length > 0;
   if (ui) { ui._arcItems = null; ui._arcEntityCol = null; ui._arcEntityRow = null; }
   // Arc mode: animate close
   if (p.classList.contains('arc-open') && !p.classList.contains('popup-list-mode')) {
     p.classList.remove('arc-open');
     p.classList.add('arc-closing');
     const itemCount = p.querySelectorAll('.arc-item').length;
-    const closeTime = 150 + itemCount * 20;
+    // Disambig close is longer: backdrop fades (60ms) then icon flies back (200ms)
+    const closeTime = hadDisambigOrigins ? 320 : 150 + itemCount * 20;
     const timer = setTimeout(() => {
       p.style.display = 'none';
       p.classList.remove('arc-closing');
-      if (ui) ui._arcCloseTimer = null;
+      if (ui) {
+        ui._arcCloseTimer = null;
+        // Unhide canvas entities after close animation finishes
+        if (ui.renderer?.disambigHiddenIds) {
+          ui.renderer.disambigHiddenIds = null;
+          ui.onRedraw?.();
+        }
+        ui._disambigOrigins = null;
+      }
     }, closeTime);
     if (ui) ui._arcCloseTimer = timer;
     // Trigger redraw to clear canvas lines
@@ -3863,6 +3913,13 @@ function _hideActionPopup(ui) {
   // List mode or not open: instant hide
   p.style.display = 'none';
   p.classList.remove('arc-open', 'arc-closing', 'popup-list-mode');
+  // Clear disambig state immediately for non-animated close
+  if (ui) {
+    if (ui.renderer?.disambigHiddenIds) {
+      ui.renderer.disambigHiddenIds = null;
+    }
+    ui._disambigOrigins = null;
+  }
   ui?.onRedraw?.();
 }
 
@@ -3980,6 +4037,43 @@ function _positionArcPopup(popup, ui) {
         color: item.color,
       })),
     };
+  }
+
+  // Update disambig canvas-origin positions on pan/zoom so close animation
+  // targets stay correct relative to the popup anchor
+  if (ui._disambigOrigins?.length && ui.renderer?.disambigHiddenIds) {
+    const units = [];
+    const state = ui.state || ui.renderer._lastState;
+    if (state?.entities) {
+      for (const o of ui._disambigOrigins) {
+        const e = state.entities.find(en => en.id === o.entityId);
+        if (e) units.push(e);
+      }
+    }
+    if (units.length) {
+      const positions = ui.renderer.getEntityScreenPositions(col, row, units, canvasRect);
+      const posById = new Map(positions.map(p => [p.entityId, p]));
+      const btns = popup.querySelectorAll('.arc-item.arc-from-canvas');
+      for (const btn of btns) {
+        const uid = parseInt(btn.dataset.unitId);
+        const pos = posById.get(uid);
+        if (pos) {
+          const relX = pos.screenX - sx;
+          const relY = pos.screenY - sy;
+          btn.style.setProperty('--start-x', relX.toFixed(1) + 'px');
+          btn.style.setProperty('--start-y', relY.toFixed(1) + 'px');
+        }
+      }
+      // Also update stored origins
+      for (const o of ui._disambigOrigins) {
+        const pos = posById.get(o.entityId);
+        if (pos) {
+          o.startX = pos.screenX - sx;
+          o.startY = pos.screenY - sy;
+          o.startR = pos.screenR;
+        }
+      }
+    }
   }
 }
 
