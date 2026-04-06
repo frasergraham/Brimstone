@@ -292,6 +292,7 @@ async function stitchTilemap(assets) {
     { label: 'Tiles',     items: assets.filter(a => a.category === 'tile')     },
     { label: 'Buildings', items: assets.filter(a => a.category === 'building') },
     { label: 'Units',     items: assets.filter(a => a.category === 'unit')     },
+    { label: 'Icons',     items: assets.filter(a => a.category === 'icon')     },
   ].filter(g => g.items.length > 0);
 
   // Calculate canvas dimensions

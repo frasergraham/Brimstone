@@ -902,6 +902,18 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .cycle-active.phase-dusk  { background: rgba(180,60,0,0.20);   color: #ff7744;      border-color: #c04020; }
 .cycle-active.phase-night { background: rgba(123,79,187,0.20); color: var(--night); border-color: var(--night); }
 
+.cycle-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+  pointer-events: none;
+}
+.cycle-active .cycle-icon {
+  width: 28px;
+  height: 28px;
+}
+
 .cycle-name {
   font-size: 0.6rem;
   font-weight: bold;

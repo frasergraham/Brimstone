@@ -1919,14 +1919,14 @@ export class UIController {
 
     // 8-step cycle — shared between header and cycle-bar
     const CYCLE_STEPS = [
-      { phase: 'dawn',  icon: '🌅', label: 'Dawn',  desc: 'Hero +1 action · node scoring · attrition rises' },
-      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Witch undead in the open suffer' },
-      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Witch undead in the open suffer' },
-      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Witch undead in the open suffer' },
-      { phase: 'dusk',  icon: '🌇', label: 'Dusk',  desc: 'Node scoring · seek cover before night' },
-      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
-      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
-      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
+      { phase: 'dawn',  sprite: 'cycle_dawn',  label: 'Dawn',  desc: 'Hero +1 action · node scoring · attrition rises' },
+      { phase: 'day',   sprite: 'cycle_day',   label: 'Day',   desc: 'Witch undead in the open suffer' },
+      { phase: 'day',   sprite: 'cycle_day',   label: 'Day',   desc: 'Witch undead in the open suffer' },
+      { phase: 'day',   sprite: 'cycle_day',   label: 'Day',   desc: 'Witch undead in the open suffer' },
+      { phase: 'dusk',  sprite: 'cycle_dusk',  label: 'Dusk',  desc: 'Node scoring · seek cover before night' },
+      { phase: 'night', sprite: 'cycle_night', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
+      { phase: 'night', sprite: 'cycle_night', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
+      { phase: 'night', sprite: 'cycle_night', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
     ];
 
     const roundInCycle = (state.round - 1) % 8;
@@ -1938,8 +1938,12 @@ export class UIController {
     if (cycleBar) {
       cycleBar.innerHTML = CYCLE_STEPS.map((step, i) => {
         const active = i === roundInCycle;
+        const imgSrc = this.renderer.getPortraitDataURL(step.sprite, 64);
+        const iconHtml = imgSrc
+          ? `<img class="cycle-icon" src="${imgSrc}" alt="${step.label}">`
+          : step.label.charAt(0);
         return `<div class="cycle-step phase-${step.phase} ${active ? 'cycle-active' : 'cycle-dim'}"
-                     title="${step.desc}">${step.icon}${active ? `<span class="cycle-name">${step.label}</span>` : ''}</div>`;
+                     title="${step.desc}">${iconHtml}${active ? `<span class="cycle-name">${step.label}</span>` : ''}</div>`;
       }).join('');
     }
 
