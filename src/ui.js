@@ -1654,15 +1654,20 @@ export class UIController {
       arcItems[i]._idx = i;
     }
 
-    // Compute entity screen positions for canvas-origin animation
+    // Compute entity screen positions at originHex for canvas-origin animation.
+    // All disambiguated entities are treated as a stack at originHex regardless
+    // of their real positions (in plan mode, entities may have ghost positions here).
     const entityPositions = this.renderer.getEntityScreenPositions(
       originHex.col, originHex.row, units, canvasRect
     );
-    // Build lookup: entityId → screen position
     const posById = new Map(entityPositions.map(p => [p.entityId, p]));
 
-    // Hide entities from canvas and trigger redraw so they vanish
-    this.renderer.disambigHiddenIds = new Set(units.map(u => u.id));
+    // Hide entities from canvas that are physically at originHex.
+    // Entities at ghost positions (moved earlier in the plan) stay visible
+    // at their real positions — the animation origin is at originHex regardless.
+    this.renderer.disambigHiddenIds = new Set(
+      units.filter(u => u.col === originHex.col && u.row === originHex.row).map(u => u.id)
+    );
     this.onRedraw();
 
     // Store arc state for pan/zoom tracking and canvas line drawing
@@ -4042,8 +4047,8 @@ function _positionArcPopup(popup, ui) {
   // Update disambig canvas-origin positions on pan/zoom so close animation
   // targets stay correct relative to the popup anchor
   if (ui._disambigOrigins?.length && ui.renderer?.disambigHiddenIds) {
-    const units = [];
     const state = ui.state || ui.renderer._lastState;
+    const units = [];
     if (state?.entities) {
       for (const o of ui._disambigOrigins) {
         const e = state.entities.find(en => en.id === o.entityId);
@@ -4052,11 +4057,11 @@ function _positionArcPopup(popup, ui) {
     }
     if (units.length) {
       const positions = ui.renderer.getEntityScreenPositions(col, row, units, canvasRect);
-      const posById = new Map(positions.map(p => [p.entityId, p]));
+      const posMap = new Map(positions.map(p => [p.entityId, p]));
       const btns = popup.querySelectorAll('.arc-item.arc-from-canvas');
       for (const btn of btns) {
         const uid = parseInt(btn.dataset.unitId);
-        const pos = posById.get(uid);
+        const pos = posMap.get(uid);
         if (pos) {
           const relX = pos.screenX - sx;
           const relY = pos.screenY - sy;
@@ -4064,14 +4069,9 @@ function _positionArcPopup(popup, ui) {
           btn.style.setProperty('--start-y', relY.toFixed(1) + 'px');
         }
       }
-      // Also update stored origins
       for (const o of ui._disambigOrigins) {
-        const pos = posById.get(o.entityId);
-        if (pos) {
-          o.startX = pos.screenX - sx;
-          o.startY = pos.screenY - sy;
-          o.startR = pos.screenR;
-        }
+        const pos = posMap.get(o.entityId);
+        if (pos) { o.startX = pos.screenX - sx; o.startY = pos.screenY - sy; o.startR = pos.screenR; }
       }
     }
   }

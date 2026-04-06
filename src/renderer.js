@@ -277,6 +277,24 @@ export class Renderer {
   }
 
   /**
+   * Compute screen position for a single entity at a specific hex,
+   * given its index within a stack of `stackTotal` entities.
+   */
+  getEntityScreenPos(col, row, entityId, stackIndex, stackTotal, canvasRect) {
+    const { x, y } = this._toCanvas(col, row);
+    const hs = this.hexSize;
+    const r  = stackTotal === 1 ? hs * 0.42 : hs * 0.32;
+    const scale = canvasRect.width / this.canvas.width;
+    const off = stackOffset(stackIndex, Math.min(stackTotal, 3));
+    const ex = x + off.x * (hs / 30);
+    const ey = y + off.y * (hs / 30);
+    const screenX = canvasRect.left + (ex * this.zoomLevel + this._panX) * scale;
+    const screenY = canvasRect.top  + (ey * this.zoomLevel + this._panY) * scale;
+    const screenR = r * this.zoomLevel * scale;
+    return { entityId, screenX, screenY, screenR };
+  }
+
+  /**
    * Draw the named sprite to an offscreen canvas and return a cached data URL
    * suitable for use as an <img src>.  Returns null if the tilemap isn't loaded
    * or the asset id is unknown.
