@@ -2,7 +2,7 @@
 
 ## Overview
 
-Polish and extend the Salem Prologue campaign from 3 to 6 missions with richer maps, full fog of war, a narrative story trigger system, and per-mission loot overrides.
+Polish and extend the Caleb's Hollow Prologue campaign from 3 to 6 missions with richer maps, full fog of war, a narrative story trigger system, and per-mission loot overrides.
 
 ## Goals
 
@@ -97,7 +97,7 @@ storyTriggers: [
 
 ### Remaining Work
 
-#### 5. Rewrite 3 existing map builders (`salem-prologue.js`)
+#### 5. Rewrite 3 existing map builders (`calebs-hollow-prologue.js`)
 
 Each existing builder needs to be rewritten to use the exported map helpers. The pattern:
 
@@ -189,7 +189,7 @@ waves: [
 lootOverrides: { remove: ['horse'] },
 storyTriggers: [
   { type: 'round', round: 1, title: 'A Grim Dawn',
-    text: 'The streets of Salem are eerily silent. Through the morning mist, you can make out shambling figures — the dead have risen. The Salem Inn stands behind you, its doors battered but holding. You must clear the village before nightfall.',
+    text: 'The streets of Caleb's Hollow are eerily silent. Through the morning mist, you can make out shambling figures — the dead have risen. The Caleb's Hollow Inn stands behind you, its doors battered but holding. You must clear the village before nightfall.',
     flag: 'prologue_intro' },
 ],
 ```
@@ -289,7 +289,7 @@ Each new mission needs a `buildXxxMap()` function.
 #### 8. Update campaign metadata
 
 ```javascript
-description: 'A cursed village, the walking dead, and a witch pulling the strings. Six missions stand between Salem and oblivion.',
+description: 'A cursed village, the walking dead, and a witch pulling the strings. Six missions stand between Caleb's Hollow and oblivion.',
 ```
 
 Update `requires` chains: prologue → gathering_survivors → first_night → river_crossing → dark_ritual → witchs_trail.
@@ -321,7 +321,7 @@ Update `requires` chains: prologue → gathering_survivors → first_night → r
 | `index.html` | **DONE** | Added `#story-modal` HTML element |
 | `styles.css` | **DONE** | Added story modal styles + mobile responsive |
 | `src/main.js` | **DONE** | Full fog, loot overrides, story trigger hooks, refactored planning phase |
-| `src/campaign/campaigns/salem-prologue.js` | **TODO** | Rewrite 3 map builders, add 3 new missions + builders, story triggers, loot overrides, waves |
+| `src/campaign/campaigns/calebs-hollow-prologue.js` | **TODO** | Rewrite 3 map builders, add 3 new missions + builders, story triggers, loot overrides, waves |
 | `tests/campaign.test.js` | **TODO** | Update mission count, add story/loot/new-mission tests |
 
 ---
@@ -346,7 +346,7 @@ Update `requires` chains: prologue → gathering_survivors → first_night → r
 
 The infrastructure (map helpers, loot overrides, story triggers, fog, UI) is all wired up. The remaining work is content authoring:
 
-1. Open `src/campaign/campaigns/salem-prologue.js`
+1. Open `src/campaign/campaigns/calebs-hollow-prologue.js`
 2. Import the new map helpers at the top
 3. Rewrite each `buildXxxMap()` function following the pattern in "Rewrite 3 existing map builders" above
 4. Add 3 new `buildXxxMap()` functions for the new missions

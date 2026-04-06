@@ -8,7 +8,7 @@ import { randomUUID } from 'crypto';
 function makeStats(overrides = {}) {
   return {
     id: randomUUID(),
-    campaign_id: 'salem_prologue',
+    campaign_id: 'calebs_hollow_prologue',
     mission_id: 'prologue',
     mission_title: 'The Awakening',
     winner: 'hero',
@@ -38,7 +38,7 @@ describe('campaign-game-stats DB module', () => {
     const found = rows.find(r => r.id === stats.id);
     assert.ok(found, 'inserted campaign stats should be retrievable');
     assert.equal(found.winner, 'hero');
-    assert.equal(found.campaign_id, 'salem_prologue');
+    assert.equal(found.campaign_id, 'calebs_hollow_prologue');
     assert.equal(found.mission_id, 'prologue');
     assert.equal(found.rounds, 6);
     assert.equal(found.hero_kills, 3);
@@ -47,10 +47,10 @@ describe('campaign-game-stats DB module', () => {
   test('getCampaignGameStats filters by campaign_id', () => {
     const id1 = randomUUID();
     const id2 = randomUUID();
-    recordCampaignGameStats(makeStats({ id: id1, campaign_id: 'salem_prologue' }));
+    recordCampaignGameStats(makeStats({ id: id1, campaign_id: 'calebs_hollow_prologue' }));
     recordCampaignGameStats(makeStats({ id: id2, campaign_id: 'other_campaign' }));
 
-    const results = getCampaignGameStats({ campaign_id: 'salem_prologue', limit: 1000 });
+    const results = getCampaignGameStats({ campaign_id: 'calebs_hollow_prologue', limit: 1000 });
     assert.ok(results.some(r => r.id === id1));
     assert.ok(!results.some(r => r.id === id2));
   });

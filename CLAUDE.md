@@ -36,7 +36,7 @@ These directives apply to all code changes — follow them without exception.
 
 ## Project Overview
 
-Browser-based, turn-based hex-grid strategy game set in cursed colonial New England (Salem). Two asymmetric factions — **Hero** vs **Witch** — fight across a procedurally-generated map.
+Browser-based, turn-based hex-grid strategy game set in cursed colonial New England (Caleb's Hollow). Two asymmetric factions — **Hero** vs **Witch** — fight across a procedurally-generated map.
 
 **Win conditions:**
 - Hero: slay the Witch, or hold more Power Nodes at enough dawn/dusk scoring checkpoints.

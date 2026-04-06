@@ -1,4 +1,4 @@
-// Procedural map generator for the Salem hex map
+// Procedural map generator for the Caleb's Hollow hex map
 import { MAP_COLS, MAP_ROWS, setMapDimensions, getNeighbors, hexKey, hexDistance } from './hex.js';
 import { Tile, TileType, BuildingType } from './tiles.js';
 
