@@ -1272,6 +1272,10 @@ describe('executeUseAbility — RALLY', () => {
 describe('Inventory stash separation', () => {
   test('hero stash (inventory.shared) and witch stash (inventory.witch) are independent', () => {
     const state = freshState();
+    // Clear starting resources so we can test independence cleanly
+    state.inventory.shared = {};
+    state.inventory.witch = {};
+
     // Populate both stashes with different resources
     state.inventory.shared[ResourceType.WOOD] = 3;
     state.inventory.shared[ResourceType.FOOD] = 1;
