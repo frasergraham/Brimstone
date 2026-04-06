@@ -467,9 +467,18 @@ export function executeMove(state, actor, targetCol, targetRow) {
 
   // Reachability check — road tiles cost half, so roads extend effective range.
   const hasHorse = getFaction(actor.owner).hasHorse(actor);
+  const maxSteps = hasHorse ? 4 : 2;
   const reachable = getReachableHexes(state, actor, hasHorse ? 2 : 1);
-  if (!reachable.some(h => h.col === targetCol && h.row === targetRow))
-    return { success: false, log: [`Cannot reach (${targetCol},${targetRow}) from current position.`] };
+  if (!reachable.some(h => h.col === targetCol && h.row === targetRow)) {
+    // When an enemy occupies the target (e.g. hidden by fog during planning),
+    // allow the move to proceed if the target is within step range so the unit
+    // walks as far as it can and stops before the enemy.
+    const enemyOnTarget = hasEnemy(state, actor, targetCol, targetRow);
+    const dist = hexDistance(actor.col, actor.row, targetCol, targetRow);
+    if (!enemyOnTarget || dist > maxSteps) {
+      return { success: false, log: [`Cannot reach (${targetCol},${targetRow}) from current position.`] };
+    }
+  }
 
   // Find the road-preferring path from current position to destination.
   const fullPath = findShortestPath(state, actor, targetCol, targetRow) ?? [{ col: targetCol, row: targetRow }];
@@ -477,7 +486,6 @@ export function executeMove(state, actor, targetCol, targetRow) {
   // Walk the path step by step; stop if an enemy blocks a mid-path hex.
   // Cap the number of hex steps to prevent long road-chain traversals when a
   // prior move in the plan failed and the entity is further away than expected.
-  const maxSteps = hasHorse ? 4 : 2;
   const walkedPath = [];
   const encounterLog = [];
   let encounterSurvivor = null;
@@ -500,8 +508,28 @@ export function executeMove(state, actor, targetCol, targetRow) {
     }
   }
 
-  if (walkedPath.length === 0)
+  if (walkedPath.length === 0) {
+    const blocker = (fullPath.length > 0)
+      ? state.entities.find(e =>
+          e.alive && e.owner !== actor.owner && e.col === fullPath[0].col && e.row === fullPath[0].row
+        ) ?? null
+      : null;
+    if (blocker) {
+      return { success: false, log: [`${actor.displayName} movement blocked by ${blocker.displayName}.`], blockedBy: blocker };
+    }
     return { success: false, log: ['The way is blocked.'] };
+  }
+
+  // Detect partial move blocked by enemy
+  let blockedBy = null;
+  if (walkedPath.length < fullPath.length) {
+    const nextStep = fullPath[walkedPath.length];
+    if (hasEnemy(state, actor, nextStep.col, nextStep.row)) {
+      blockedBy = state.entities.find(e =>
+        e.alive && e.owner !== actor.owner && e.col === nextStep.col && e.row === nextStep.row
+      ) ?? null;
+    }
+  }
 
   const finalStep = walkedPath[walkedPath.length - 1];
   const ft = tile(state, finalStep.col, finalStep.row);
@@ -510,9 +538,12 @@ export function executeMove(state, actor, targetCol, targetRow) {
   } else {
     log.push(`${actor.displayName} moves to (${finalStep.col},${finalStep.row}).`);
   }
+  if (blockedBy) {
+    log.push(`${actor.displayName} movement blocked by ${blockedBy.displayName}.`);
+  }
   if (encounterLog.length) log.push(...encounterLog);
 
-  return { success: true, log, cost: 1, path: walkedPath, encounterLog, encounterSurvivor };
+  return { success: true, log, cost: 1, path: walkedPath, blockedBy, encounterLog, encounterSurvivor };
 }
 
 export function executeExplore(state, actor) {

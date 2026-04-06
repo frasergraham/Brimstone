@@ -104,7 +104,7 @@ function runAction(state, action, faction, playerId = null) {
 
     case PlanActionType.MOVE: {
       const r = executeMove(state, entity, action.toCol, action.toRow);
-      if (!r.success) return { kind: 'fail', reason: r.log[0] };
+      if (!r.success) return { kind: 'fail', reason: r.log[0], blockedBy: r.blockedBy ?? null };
       return { kind: 'ok', result: r };
     }
 
@@ -308,10 +308,11 @@ function drainOneStep(state, queue, budget) {
       // Hard failure — skip this action but let remaining plan continue
       queue.shift();
       subEvents.push({
-        type:   ResEventType.ACTION_FAIL,
-        faction: budget.faction,
+        type:      ResEventType.ACTION_FAIL,
+        faction:   budget.faction,
         action,
-        reason: out.reason,
+        reason:    out.reason,
+        blockedBy: out.blockedBy ?? null,
       });
       // Loop: try the next action in the same step
     }
