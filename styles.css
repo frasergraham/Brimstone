@@ -972,8 +972,8 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 
 .usb-portrait {
-  width: 28px;
-  height: 28px;
+  width: 42px;
+  height: 42px;
   border-radius: 50%;
   border: 2px solid;
   flex-shrink: 0;
@@ -984,10 +984,10 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 42px;
+  height: 42px;
   border-radius: 50%;
-  font-size: 0.95rem;
+  font-size: 1.2rem;
   line-height: 1;
   flex-shrink: 0;
   color: #fff;
@@ -1077,20 +1077,26 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 .usb-deselect-btn:hover { background: rgba(192,57,43,0.3); border-color: #e74c3c; color: #ff6b5b; }
 
-/* Terrain badge inside unit stats bar */
-.usb-terrain {
+/* Terrain row — sits below unit stats as its own line */
+.usb-terrain-row {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
+  gap: 0.3rem;
   font-size: 0.68rem;
-  color: var(--text-dim);
-  padding: 0.1rem 0.4rem;
+  color: #c0b89a;
+  padding: 0.1rem 0.3rem;
   background: rgba(255,255,255,0.06);
   border-radius: 4px;
   white-space: nowrap;
-  flex-shrink: 0;
 }
-.usb-terrain-icon { font-size: 0.78rem; }
+.usb-terrain-hex {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+.usb-terrain-explored { color: #7daf7d; }
 .usb-terrain-fort { color: var(--day); }
 .usb-terrain-node { color: #c89dff; }
 
