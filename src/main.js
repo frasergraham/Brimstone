@@ -1982,6 +1982,8 @@ async function _showCampaignScreen(campaignDef) {
   showStep('campaign');
 }
 
+const _RESOURCE_ICONS = { wood: '🪵', metal: '⚙', herbs: '🌿', food: '🍞', silver: '⚔', scripture: '📜' };
+
 function _hpColor(hp, maxHp) {
   const pct = hp / maxHp;
   return pct > 0.6 ? '#4caf50' : pct > 0.3 ? '#ff9800' : '#f44336';
@@ -2073,11 +2075,14 @@ function _renderCampaignScreen() {
 
   // Party roster display (hero + survivors)
   rosterEl.style.display = '';
-  const resourcesLine = Object.entries(_activeCampaign.resources).filter(([,v]) => v > 0).map(([k,v]) => `${k}: ${v}`).join(' · ');
+  const resEntries = Object.entries(_activeCampaign.resources).filter(([,v]) => v > 0);
+  const resourcesHtml = resEntries.length
+    ? `<div class="campaign-resources">${resEntries.map(([k,v]) => `<span class="cr-item"><span class="cr-icon">${_RESOURCE_ICONS[k] || ''}</span><span class="cr-count">${v}</span><span class="cr-label">${k}</span></span>`).join('')}</div>`
+    : '';
   rosterEl.innerHTML =
     `<div class="campaign-roster-label">Your Party</div>` +
     _campaignPartyHTML(_activeCampaign.heroStats, _activeCampaign.roster) +
-    (resourcesLine ? `<div class="campaign-resources-label">${resourcesLine}</div>` : '');
+    resourcesHtml;
 
   // Mission list
   const missions = _activeCampaign.getMissionList();

@@ -4435,6 +4435,41 @@ body.spectator-mode #game-screen   { display: flex !important; }
   color: var(--clr-dim, #888);
 }
 
+.campaign-resources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: center;
+  margin-top: 0.4rem;
+}
+
+.cr-item {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.2rem 0.45rem;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 4px;
+  font-size: 0.72rem;
+}
+
+.cr-icon {
+  font-size: 0.8rem;
+  line-height: 1;
+}
+
+.cr-count {
+  font-weight: 700;
+  color: var(--clr-gold, #d4a72c);
+  font-size: 0.78rem;
+}
+
+.cr-label {
+  color: var(--clr-dim, #999);
+  text-transform: capitalize;
+}
+
 .campaign-deploy-roster {
   margin: 0.75rem 0;
 }
