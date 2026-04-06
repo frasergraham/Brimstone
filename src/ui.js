@@ -1351,10 +1351,19 @@ export class UIController {
       const actionTag = this._pendingDefenderPick ? 'pick_defender'
         : this._pendingEnemyPick ? 'pick_enemy'
         : 'pick_unit';
-      // In plan mode, entities may be at ghost positions — use the selected hex
-      // (which matches the clicked hex) rather than the entity's real position.
-      const selHex = this.renderer.selectedHex;
-      const originHex = selHex || { col: pickerUnits[0].col, row: pickerUnits[0].row };
+      // Determine origin hex for the arc popup:
+      // - Unit picker (clicking a hex with multiple friendlies): use selectedHex
+      //   which reflects the clicked hex (correct for ghost positions in plan mode).
+      // - Defender/enemy picker: use the targets' position (they share a hex).
+      //   In plan mode, use ghost position if available.
+      let originHex;
+      if (this._pendingUnitPick && this.renderer.selectedHex) {
+        originHex = this.renderer.selectedHex;
+      } else {
+        const u = pickerUnits[0];
+        const ghost = this._planMode ? this._getProjectedPos(u.id) : null;
+        originHex = ghost || { col: u.col, row: u.row };
+      }
       this._showArcDisambig(pickerUnits, actionTag, originHex);
       return;
     }
