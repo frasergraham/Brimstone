@@ -1,5 +1,35 @@
 [
   {
+    "version": "1.3.18",
+    "date": "2026-04-06",
+    "summary": "New features, bug fixes, and visual updates",
+    "notes": [
+      "Add mission info button and highlight reach_hex target on map",
+      "Use portrait icons for campaign party cards, make cards smaller and centered",
+      "Rich party roster display on campaign screen + mission heal bonus",
+      "Add starting resources for both factions",
+      "Block selection of fully-fogged hexes in full fog-of-war mode",
+      "Move showMissionInfoBtn call after _setupLocalUI creates ui",
+      "Add white-space pre-line to story modal for multi-line mission info",
+      "Deploy picker now uses portrait icons instead of glyph fallback",
+      "Guard zone highlight hidden by fog filter during resolution",
+      "Rich resource display with icons on campaign screen",
+      "Stack campaign party cards two-wide",
+      "Full game replay for campaign missions",
+      "Test to expect 0 discoverable survivors in mission one",
+      "Survivors from campaign mission one (The Awakening)",
+      "Fog scenario: unit walks partial path before enemy-occupied hex",
+      "Blocked movement not shown when enemy is on target hex (fog scenario)",
+      "Interrupted movement detection, log message, and turn summary",
+      "Portrait icon and brighten terrain row text",
+      "Emoji glyph from terrain badge, show explored and fortification status",
+      "GetTileDataURL against uninitialized portrait cache",
+      "Unit stats bar mobile overflow on fortified tiles",
+      "Splash damage results in battle dialog and toast",
+      "Lunge animation + \"no enemy\" floater when attacking empty hex"
+    ]
+  },
+  {
     "version": "1.3.17",
     "date": "2026-04-05",
     "summary": "New features, and bug fixes",
