@@ -648,10 +648,10 @@ describe('markRosterUsedByName', () => {
 // ── maxDiscoverableSurvivors config ────────────────────────────────────────
 
 describe('maxDiscoverableSurvivors config', () => {
-  test('missions 1 and 2 have maxDiscoverableSurvivors set to 2', () => {
+  test('mission 1 has no discoverable survivors, mission 2 has 2', () => {
     const m1 = salemDef.missions.find(m => m.id === 'prologue');
     const m2 = salemDef.missions.find(m => m.id === 'first_night');
-    assert.equal(m1.maxDiscoverableSurvivors, 2);
+    assert.equal(m1.maxDiscoverableSurvivors, 0);
     assert.equal(m2.maxDiscoverableSurvivors, 2);
   });
 
