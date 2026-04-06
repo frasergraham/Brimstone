@@ -1528,6 +1528,17 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       }
     }
 
+    // ── Phase 5: heal animation — green glow + HP floater ─────────────
+    for (const ev of events) {
+      const { action, result } = ev;
+      if (action.type !== PlanActionType.HEAL || !result?.success) continue;
+      const actor = step.entitySnapshot?.find(e => e.id === action.entityId);
+      if (actor) {
+        renderer.addNodeRevealAnim([{ col: actor.col, row: actor.row }], '#44cc66', { radiusMultiplier: 1.5, duration: 1000 });
+        renderer.addHpChangeFlash(actor.col, actor.row, 2);
+      }
+    }
+
     // Apply the full post-step entity state now that all dialogs for this step
     // have been shown.  This reveals HP changes, deaths, and new encounter
     // entities only after the player has seen the relevant dialog/animation.
