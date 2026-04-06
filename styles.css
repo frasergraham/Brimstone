@@ -972,8 +972,8 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 
 .usb-portrait {
-  width: 28px;
-  height: 28px;
+  width: 42px;
+  height: 42px;
   border-radius: 50%;
   border: 2px solid;
   flex-shrink: 0;
@@ -984,10 +984,10 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 42px;
+  height: 42px;
   border-radius: 50%;
-  font-size: 0.95rem;
+  font-size: 1.2rem;
   line-height: 1;
   flex-shrink: 0;
   color: #fff;
@@ -1083,15 +1083,15 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   align-items: center;
   gap: 0.3rem;
   font-size: 0.68rem;
-  color: var(--text-dim);
+  color: #c0b89a;
   padding: 0.1rem 0.3rem;
   background: rgba(255,255,255,0.06);
   border-radius: 4px;
   white-space: nowrap;
 }
 .usb-terrain-hex {
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   flex-shrink: 0;
   border-radius: 3px;
   vertical-align: middle;

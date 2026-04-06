@@ -1853,7 +1853,7 @@ export class UIController {
 
     // Portrait image with glyph fallback
     const assetId = _entityPortraitId(entity);
-    const src = assetId ? this.renderer.getPortraitDataURL(assetId, 56) : null;
+    const src = assetId ? this.renderer.getPortraitDataURL(assetId, 84) : null;
     const portraitHtml = src
       ? `<img class="usb-portrait" src="${src}" style="border-color:${color};" alt="">`
       : `<span class="usb-icon" style="background:${color}">${glyph}</span>`;
