@@ -551,7 +551,7 @@ export async function requestEmailLogin(email) {
  */
 export async function fetchIdentities(token) {
   try {
-    const res = await fetch(`/api/identities?token=${encodeURIComponent(token)}`);
+    const res = await fetch(`${window.BRIMSTONE_SERVER || ''}/api/identities?token=${encodeURIComponent(token)}`);
     if (res.status === 401) return null;
     if (!res.ok) return [];
     return await res.json();
