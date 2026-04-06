@@ -234,6 +234,11 @@ export class MultiplayerClient {
     this._send({ type: 'sendSlotInvite', roomId, slotIndex, email });
   }
 
+  /** Send push-notification invite to a Game Center friend. */
+  sendFriendInvite(roomId, targetPlayerId) {
+    this._send({ type: 'sendFriendInvite', roomId, targetPlayerId });
+  }
+
   /** Resign from an active game. */
   resignGame(roomId) { this._send({ type: 'resignGame', roomId }); }
 

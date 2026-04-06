@@ -105,7 +105,7 @@ export function pruneStaleTokens(maxAgeDays = 90) {
  * @param {string} playerId
  * @param {{ title: string, body: string, roomId?: string }} payload
  */
-export async function sendPush(playerId, { title, body, roomId }) {
+export async function sendPush(playerId, { title, body, roomId, joinCode }) {
   const tokens = _getTokens.all(playerId);
   if (tokens.length === 0) return;
 
@@ -121,6 +121,9 @@ export async function sendPush(playerId, { title, body, roomId }) {
   if (roomId) {
     note.threadId = roomId;
     note.payload  = { roomId };
+  }
+  if (joinCode) {
+    note.payload = { ...(note.payload || {}), joinCode };
   }
 
   const deviceTokens = tokens.map(t => t.token);

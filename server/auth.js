@@ -241,6 +241,23 @@ export function linkGameCenter(playerId, gameCenterId) {
   return { ok: true };
 }
 
+/**
+ * Given a list of Game Center gamePlayerIDs, return the matching Brimstone
+ * players (i.e. GC friends who also have the game and an account).
+ * Returns [{ gamePlayerID, playerId, username }].
+ */
+export function getPlayersByGameCenterIds(gamePlayerIDs) {
+  if (!Array.isArray(gamePlayerIDs) || gamePlayerIDs.length === 0) return [];
+  const ids = gamePlayerIDs.slice(0, 100); // cap to prevent abuse
+  const placeholders = ids.map(() => '?').join(',');
+  return db.prepare(`
+    SELECT pi.provider_id AS gamePlayerID, p.id AS playerId, p.username
+    FROM player_identities pi
+    JOIN players p ON p.id = pi.player_id
+    WHERE pi.provider = 'gamecenter' AND pi.provider_id IN (${placeholders})
+  `).all(...ids);
+}
+
 /** Sanitize a display name to a valid Brimstone username. */
 function _sanitizeUsername(raw) {
   return (raw || '').replace(/[^a-zA-Z0-9_\- ]/g, '').trim().slice(0, 20) || '';

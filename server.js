@@ -10,7 +10,7 @@ import {
   registerOrLogin, getPlayerByToken, getPlayerByEmail,
   linkEmail, loginByEmail, getPlayerIdentities, changeUsername,
   getOrCreateByEmail, getOrCreateByGameCenter, linkGameCenter,
-  setAdmin,
+  getPlayersByGameCenterIds, setAdmin,
 } from './server/auth.js';
 import { generateToken, verifyToken, sendMagicLinkEmail } from './server/magic-link.js';
 import { getLeaderboard }                    from './server/leaderboard.js';
@@ -25,7 +25,8 @@ import { pruneStaleAndIncompatibleSaves,
          getSaveRounds }                                   from './server/saves.js';
 import {
   createLobby, joinLobby, joinGame, browseLobby, claimSlot,
-  setSlotAI, removeSlotAI, fillAllWithAI, startGame, leaveLobby, resignGame, sendSlotInvite as sendSlotInviteHandler,
+  setSlotAI, removeSlotAI, fillAllWithAI, startGame, leaveLobby, resignGame,
+  sendSlotInvite as sendSlotInviteHandler, sendFriendInvite as sendFriendInviteHandler,
   handleAction, handleEndTurn, handlePlanSubmit, handleNudge,
   handleDisconnect, handleReconnect,
   resumeGame, adminResumeGame,
@@ -471,6 +472,21 @@ app.get('/api/identities', (req, res) => {
   const player = getPlayerByToken(token);
   if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
   res.json(getPlayerIdentities(player.id));
+});
+
+// Match Game Center friend IDs to registered Brimstone players
+app.post('/api/gc-friends', (req, res) => {
+  const token = req.body?.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
+
+  const { gamePlayerIDs } = req.body || {};
+  if (!Array.isArray(gamePlayerIDs)) {
+    res.status(400).json({ error: 'gamePlayerIDs array required.' });
+    return;
+  }
+  res.json(getPlayersByGameCenterIds(gamePlayerIDs));
 });
 
 // Change username (authenticated player)
@@ -1007,6 +1023,12 @@ function route(ws, cs, msg) {
     case 'sendSlotInvite': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
       sendSlotInviteHandler(cs.player, msg.roomId, msg.slotIndex, msg.email);
+      break;
+    }
+
+    case 'sendFriendInvite': {
+      if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
+      sendFriendInviteHandler(cs.player, msg.roomId, msg.targetPlayerId);
       break;
     }
 
