@@ -22,8 +22,6 @@ import { pruneStaleAndIncompatibleSaves,
          getCompletedGames, getCompletedGame, getCompletedGameRounds,
          pinCompletedGame, deleteCompletedGame,
          pruneExpiredCompletedGames, getAllCompletedGames,
-         createSpCompletedGame, getAllSpCompletedGames,
-         getSpCompletedGame, getSpCompletedGameRounds,
          getSaveRounds }                                   from './server/saves.js';
 import {
   createLobby, joinLobby, joinGame, browseLobby,
@@ -748,42 +746,6 @@ app.post('/admin/api/reset-stats', (req, res) => {
   if (!_requireAdmin(req, res)) return;
   const result = resetStats(VERSION);
   res.json(result);
-});
-
-// ── SP game uploads ───────────────────────────────────────────────────────────
-
-app.post('/api/sp/completed-games', express.json({ limit: '10mb' }), (req, res) => {
-  const { gameId, heroName, witchName, winner, winReason, totalRounds,
-          gameVersion, mode, rounds } = req.body ?? {};
-  if (!gameId || !winner || !Array.isArray(rounds)) {
-    res.status(400).json({ error: 'gameId, winner, and rounds are required.' });
-    return;
-  }
-  try {
-    createSpCompletedGame(gameId, { heroName, witchName, winner, winReason,
-      totalRounds, gameVersion, mode }, rounds);
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('SP upload error:', e);
-    res.status(500).json({ error: 'Failed to store game.' });
-  }
-});
-
-app.get('/admin/api/sp/completed-games', (req, res) => {
-  if (!_requireAdmin(req, res)) return;
-  res.json(getAllSpCompletedGames());
-});
-
-app.get('/admin/api/sp/completed-games/:gameId', (req, res) => {
-  if (!_requireAdmin(req, res)) return;
-  const game = getSpCompletedGame(req.params.gameId);
-  if (!game) { res.status(404).json({ error: 'Not found.' }); return; }
-  res.json(game);
-});
-
-app.get('/admin/api/sp/completed-games/:gameId/rounds', (req, res) => {
-  if (!_requireAdmin(req, res)) return;
-  res.json(getSpCompletedGameRounds(req.params.gameId));
 });
 
 // ── HTTP + WS server ─────────────────────────────────────────────────────────

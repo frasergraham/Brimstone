@@ -746,7 +746,6 @@ async function _runLocalResolution(skipSummary = false) {
         _recordLocalGameStats();
         if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
         _saveCompletedSpGame(state.winner, state.winReason);
-        _uploadSpGame(state.winner, state.winReason);
       }
     }
 
@@ -797,7 +796,6 @@ async function _runLocalResolution(skipSummary = false) {
       _recordLocalGameStats();
       if (_spSaveId) { _deleteSpSave(_spSaveId); _spSaveId = null; }
       _saveCompletedSpGame(state.winner, state.winReason);
-      _uploadSpGame(state.winner, state.winReason);
     }
     // Save game-over state — replay mutates `state` with intermediate round data
     const _goStateAP = { gameOver: true, winner: state.winner, winReason: state.winReason };
@@ -3593,40 +3591,6 @@ function _saveCompletedSpGame(winner, winReason) {
     try { localStorage.removeItem(`brimstone_completed_${g.id}`); } catch {}
   }
   _saveCompletedSpIndex(index.filter(g => !pruned.includes(g)));
-}
-
-/**
- * Fire-and-forget: upload the just-completed SP game to the server.
- * Silently swallows errors — local localStorage copy is always authoritative.
- */
-function _uploadSpGame(winner, winReason) {
-  if (!state || !_roundHistory.length) return;
-  const base = window.BRIMSTONE_SERVER || '';
-  if (!base && !location.hostname) return;  // no server configured
-
-  const mode    = !state.heroIsAI ? 'hvai' : !state.witchIsAI ? 'aivh' : 'aivai';
-  const gameId  = _genSaveId();
-  const payload = {
-    gameId,
-    heroName:    state.hero?.displayName  ?? 'Hero',
-    witchName:   state.witch?.displayName ?? 'Witch',
-    winner:      winner    ?? '',
-    winReason:   winReason ?? '',
-    totalRounds: state.round - 1,
-    gameVersion: VERSION,
-    mode,
-    rounds: _roundHistory.map(r => ({
-      roundNum: r.roundNum,
-      preState: typeof r.preState === 'string' ? r.preState : JSON.stringify(r.preState),
-      steps:    typeof r.steps    === 'string' ? r.steps    : JSON.stringify(r.steps),
-    })),
-  };
-
-  fetch(`${base}/api/sp/completed-games`, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify(payload),
-  }).catch(() => {});  // silently ignore network errors
 }
 
 /** Render the completed games tab on the SP setup screen. */

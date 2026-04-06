@@ -3,8 +3,7 @@ import db from './db.js';
 import { writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { getRooms, getRoom, getRoomChronicle } from './lobby.js';
-import { getSave, getSaveRounds, getCompletedGame, getCompletedGameRounds,
-         getSpCompletedGame, getSpCompletedGameRounds } from './saves.js';
+import { getSave, getSaveRounds, getCompletedGame, getCompletedGameRounds } from './saves.js';
 
 // ── Existing queries ────────────────────────────────────────────────────────
 
@@ -52,14 +51,6 @@ const _SOURCE_QUERIES = {
              FROM completed_games`,
     count:  `SELECT COUNT(*) AS cnt FROM completed_games`,
   },
-  completed_sp: {
-    select: `SELECT game_id AS id, 'completed_sp' AS source, hero_name, witch_name,
-                    total_rounds AS round, NULL AS phase, winner, win_reason,
-                    game_version, mode, NULL AS players_json,
-                    created_at AS updated_at, created_at
-             FROM sp_completed_games`,
-    count:  `SELECT COUNT(*) AS cnt FROM sp_completed_games`,
-  },
 };
 
 /**
@@ -100,7 +91,7 @@ export function getAllGamesPaginated({ page = 1, limit = 50, source = 'all' } = 
 
   // Build DB query from selected sources
   const sources = source === 'all'
-    ? ['saved', 'completed_mp', 'completed_sp']
+    ? ['saved', 'completed_mp']
     : [source];
 
   const selects = sources.map(s => _SOURCE_QUERIES[s]?.select).filter(Boolean);
@@ -164,12 +155,6 @@ export function getGameDetail(id, source) {
       const game = getCompletedGame(id);
       if (!game) return null;
       const rounds = getCompletedGameRounds(id);
-      return { game, rounds, canSpectate: false };
-    }
-    case 'completed_sp': {
-      const game = getSpCompletedGame(id);
-      if (!game) return null;
-      const rounds = getSpCompletedGameRounds(id);
       return { game, rounds, canSpectate: false };
     }
     default:
