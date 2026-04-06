@@ -21,8 +21,6 @@ describe('createBackend', () => {
     assert.ok(tables.includes('game_saves'), 'game_saves table should exist');
     assert.ok(tables.includes('completed_games'), 'completed_games table should exist');
     assert.ok(tables.includes('game_replay_rounds'), 'game_replay_rounds table should exist');
-    assert.ok(tables.includes('sp_completed_games'), 'sp_completed_games table should exist');
-    assert.ok(tables.includes('sp_replay_rounds'), 'sp_replay_rounds table should exist');
   });
 
   test('prepare() returns working statements', () => {

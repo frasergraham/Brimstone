@@ -35,6 +35,8 @@ export function describePlanAction(action, entities, index = 0) {
       return `${who} guards`;
     case PlanActionType.SUMMON:
       return `${who} summons`;
+    case PlanActionType.HEAL:
+      return `${who} heals`;
     case PlanActionType.USE_ITEM:
       return `${who} uses ${action.item}`;
     case PlanActionType.EQUIP_WEAPON:
@@ -74,6 +76,8 @@ function _stepCostLabel(action, projShared, projWitch, projEntityItems) {
       if ((projShared[ResourceType.METAL] || 0) > 0) return `−1${RES_ICON[ResourceType.METAL]}`;
       if ((projShared[ResourceType.WOOD]  || 0) > 0) return `−1${RES_ICON[ResourceType.WOOD]}`;
       return '';
+    case PlanActionType.HEAL:
+      return `−1${RES_ICON[ResourceType.HERBS]}`;
     case PlanActionType.USE_ITEM: {
       const item = action.item;
       if (!item || item.startsWith('weapon:')) return '';
@@ -173,13 +177,15 @@ export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entit
         if ((projShared[ResourceType.METAL] || 0) > 0) projShared[ResourceType.METAL]--;
         else if ((projShared[ResourceType.WOOD] || 0) > 0) projShared[ResourceType.WOOD]--;
         break;
+      case PlanActionType.HEAL: {
+        const eitems = projEntityItems[a.entityId];
+        if (eitems && (eitems[ResourceType.HERBS] || 0) > 0) eitems[ResourceType.HERBS]--;
+        break;
+      }
       case PlanActionType.USE_ITEM: {
         const item = a.item;
         if (!item || item.startsWith('weapon:')) break;
-        if (item === ResourceType.HERBS) {
-          const eitems = projEntityItems[a.entityId];
-          if (eitems && (eitems[item] || 0) > 0) eitems[item]--;
-        } else if ((projShared[item] || 0) > 0) { projShared[item]--; }
+        if ((projShared[item] || 0) > 0) { projShared[item]--; }
         break;
       }
       case PlanActionType.SOUND_HORN:
@@ -325,13 +331,15 @@ function _advanceProjectedInventory(a, projShared, projWitch, projEntityItems) {
       if ((projShared[ResourceType.METAL] || 0) > 0) projShared[ResourceType.METAL]--;
       else if ((projShared[ResourceType.WOOD] || 0) > 0) projShared[ResourceType.WOOD]--;
       break;
+    case PlanActionType.HEAL: {
+      const eitems = projEntityItems[a.entityId];
+      if (eitems && (eitems[ResourceType.HERBS] || 0) > 0) eitems[ResourceType.HERBS]--;
+      break;
+    }
     case PlanActionType.USE_ITEM: {
       const item = a.item;
       if (!item || item.startsWith('weapon:')) break;
-      if (item === ResourceType.HERBS) {
-        const eitems = projEntityItems[a.entityId];
-        if (eitems && (eitems[item] || 0) > 0) eitems[item]--;
-      } else if ((projShared[item] || 0) > 0) { projShared[item]--; }
+      if ((projShared[item] || 0) > 0) { projShared[item]--; }
       break;
     }
     case PlanActionType.SOUND_HORN:

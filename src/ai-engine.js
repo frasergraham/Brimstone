@@ -389,14 +389,15 @@ export function genDefendWitch(sim, board, budget, config = null) {
   if (budget <= 0 || !board.witch) return actions;
   let remaining = budget;
 
-  // Free action: use herbs if witch is injured
+  // Heal: use herbs if witch is injured (costs 1 action)
   const witchEntity = sim.entities.find(e => e.id === board.witch.id);
   const herbs = witchEntity?.items?.[ResourceType.HERBS] || 0;
-  if (herbs > 0 && board.witchHpRatio < 1.0) {
+  if (herbs > 0 && board.witchHpRatio < 1.0 && remaining > 0) {
     actions.push({
-      type: PlanActionType.USE_ITEM, entityId: board.witch.id,
-      item: ResourceType.HERBS, _priority: 0, _goal: Goal.DEFEND_WITCH,
+      type: PlanActionType.HEAL, entityId: board.witch.id,
+      _priority: 0, _goal: Goal.DEFEND_WITCH,
     });
+    remaining--;
   }
 
   // Flee away from nearest hero until out of sight

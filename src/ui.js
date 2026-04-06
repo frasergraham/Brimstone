@@ -1351,7 +1351,19 @@ export class UIController {
       const actionTag = this._pendingDefenderPick ? 'pick_defender'
         : this._pendingEnemyPick ? 'pick_enemy'
         : 'pick_unit';
-      const originHex = { col: pickerUnits[0].col, row: pickerUnits[0].row };
+      // Determine origin hex for the arc popup:
+      // - Unit picker (clicking a hex with multiple friendlies): use selectedHex
+      //   which reflects the clicked hex (correct for ghost positions in plan mode).
+      // - Defender/enemy picker: use the targets' position (they share a hex).
+      //   In plan mode, use ghost position if available.
+      let originHex;
+      if (this._pendingUnitPick && this.renderer.selectedHex) {
+        originHex = this.renderer.selectedHex;
+      } else {
+        const u = pickerUnits[0];
+        const ghost = this._planMode ? this._getProjectedPos(u.id) : null;
+        originHex = ghost || { col: u.col, row: u.row };
+      }
       this._showArcDisambig(pickerUnits, actionTag, originHex);
       return;
     }
@@ -1390,17 +1402,17 @@ export class UIController {
           break; // handled via hex clicks
         case ActionType.EXPLORE:
           arcItems.push({ group: 'scout', label: 'Explore', fullLabel: 'Explore tile',
-            color: '#7eccd6', dis, attrs: 'data-action="explore"' });
+            color: '#7eccd6', dis, cost: 1, attrs: 'data-action="explore"' });
           break;
         case ActionType.SOUND_HORN:
           arcItems.push({ group: 'scout', label: 'Sound Horn', fullLabel: 'Sound Horn (1 food)',
-            color: '#7eccd6', dis: !action.affordable || dis, attrs: 'data-action="sound_horn"' });
+            color: '#7eccd6', dis: !action.affordable || dis, cost: 1, resCost: '1🍞', attrs: 'data-action="sound_horn"' });
           break;
         case ActionType.GUARD: {
           const charges = action.currentCharges || 0;
           const lbl = charges > 0 ? `Guard +${charges + 1}` : 'Guard';
           arcItems.push({ group: 'defense', label: lbl, fullLabel: lbl,
-            color: '#8888cc', dis, attrs: 'data-action="guard"' });
+            color: '#8888cc', dis, cost: 1, attrs: 'data-action="guard"' });
           break;
         }
         case ActionType.FORTIFY: {
@@ -1415,47 +1427,57 @@ export class UIController {
           const doublerGain = Math.min(4, cur + 2) - cur;
           const woodGain    = Math.min(4, cur + 1) - cur;
           const shortLbl = hasMetal ? 'Reinforce Hex' : 'Fortify Hex';
+          const fortRes = hasMetal ? '1⚙' : '1🪵';
           const fullLbl = hasMetal
             ? `Reinforce +${metalGain} DEF (1 metal)`
             : hasDoubler
               ? `Fortify +${doublerGain} DEF (1 wood)`
               : `Fortify +${woodGain} DEF (1 wood)`;
           arcItems.push({ group: 'defense', label: shortLbl, fullLabel: fullLbl,
-            color: '#e0a832', dis: cantAfford || dis, attrs: 'data-action="fortify"' });
+            color: '#e0a832', dis: cantAfford || dis, cost: 1, resCost: fortRes, attrs: 'data-action="fortify"' });
           break;
         }
         case ActionType.BATTLE_HEX:
           if (this._planMode) {
             arcItems.push({ group: 'combat', label: 'Attack Hex', fullLabel: 'Attack Hex',
-              color: '#c0392b', dis, attrs: 'data-action="attack_hex"' });
+              color: '#c0392b', dis, cost: 1, attrs: 'data-action="attack_hex"' });
           }
           break;
         case ActionType.SUMMON:
           // Handled below — we always show all 3 summon types
           break;
+        case ActionType.HEAL: {
+          let healDis = dis || action.atFullHp;
+          if (projInv) {
+            const eitems = projInv.entityItems[entity.id] ?? {};
+            if ((eitems[ResourceType.HERBS] || 0) < 1) healDis = true;
+          }
+          arcItems.push({ group: 'items', label: 'Heal', fullLabel: action.atFullHp ? 'Already at full HP' : 'Herbs (heal 2 HP)',
+            color: '#55cc55', dis: healDis, cost: 1, resCost: '1🌿',
+            attrs: 'data-action="heal"' });
+          break;
+        }
         case ActionType.USE_ITEM:
           for (const item of action.usable) {
             if (this._planMode && item.item === ResourceType.FOOD) continue;
             let itemDis = dis;
             if (projInv) {
-              if (item.item === ResourceType.HERBS) {
-                const eitems = projInv.entityItems[entity.id] ?? {};
-                if ((eitems[ResourceType.HERBS] || 0) < 1) itemDis = true;
-              } else if (!item.item.startsWith('weapon:')) {
+              if (!item.item.startsWith('weapon:')) {
                 if ((projInv.shared[item.item] || 0) < 1) itemDis = true;
               }
             }
             // Strip leading emoji from item labels
             const cleanLabel = item.label.replace(/^[\p{Emoji_Presentation}\p{Extended_Pictographic}]\s*/u, '');
             arcItems.push({ group: 'items', label: cleanLabel, fullLabel: item.label,
-              color: '#b0b0b0', dis: itemDis,
+              color: '#b0b0b0', dis: itemDis, free: true, cost: 0,
               attrs: `data-action="use_item" data-item="${item.item}"` });
           }
           break;
         case ActionType.EQUIP_WEAPON:
           for (const w of action.weapons) {
             arcItems.push({ group: 'items', label: w.label, fullLabel: `Equip ${w.label}`,
-              color: '#b0b0b0', dis, attrs: `data-action="use_item" data-item="${w.key}"` });
+              color: '#b0b0b0', dis, free: true, cost: 0,
+              attrs: `data-action="use_item" data-item="${w.key}"` });
           }
           break;
         case ActionType.USE_ABILITY: {
@@ -1469,7 +1491,7 @@ export class UIController {
           arcItems.push({ group: 'items',
             label: abilityLabels[action.ability] || 'Ability',
             fullLabel: fullLabels[action.ability] || 'Use Ability',
-            color: '#88eeff', dis: !isFree && dis, free: isFree,
+            color: '#88eeff', dis: !isFree && dis, free: isFree, cost: isFree ? 0 : 1,
             attrs: 'data-action="use_ability"' });
           break;
         }
@@ -1483,13 +1505,13 @@ export class UIController {
       const projWood  = projWitch?.[ResourceType.WOOD]  || 0;
       const projTotal = projWitch ? Object.values(projWitch).reduce((s, v) => s + (v || 0), 0) : 0;
       const ALL_SUMMONS = [
-        { st: EntityType.IRON_GOLEM, label: 'Summon Iron Golem',  full: 'Summon Iron Golem (2 metal)',  afford: projMetal >= 2 },
-        { st: EntityType.WOOD_GOLEM, label: 'Summon Wood Golem', full: 'Summon Wood Golem (2 wood)',   afford: projWood >= 2 },
-        { st: EntityType.MINION,     label: 'Summon Minion',      full: 'Summon Minion (2 any resource)', afford: projTotal >= 2 },
+        { st: EntityType.IRON_GOLEM, label: 'Summon Iron Golem',  full: 'Summon Iron Golem (2 metal)',  afford: projMetal >= 2, res: '2⚙' },
+        { st: EntityType.WOOD_GOLEM, label: 'Summon Wood Golem', full: 'Summon Wood Golem (2 wood)',   afford: projWood >= 2, res: '2🪵' },
+        { st: EntityType.MINION,     label: 'Summon Minion',      full: 'Summon Minion (2 any resource)', afford: projTotal >= 2, res: '2 res' },
       ];
       for (const s of ALL_SUMMONS) {
         arcItems.push({ group: 'summon', label: s.label, fullLabel: s.full,
-          color: '#9b59b6', dis: !s.afford || !hasAct,
+          color: '#9b59b6', dis: !s.afford || !hasAct, cost: 1, resCost: s.res,
           attrs: `data-action="summon" data-summon-type="${s.st}"` });
       }
     }
@@ -1503,48 +1525,33 @@ export class UIController {
       return;
     }
 
-    // Compute arc geometry
+    // Compute arc layout — vertical stack with horizontal arc to avoid origin hex
     const screenPos = _getEntityScreenPos(this, entity);
     if (!screenPos) return;
 
-    // Decide direction: open to side with more space
     const openRight = screenPos.x < window.innerWidth / 2;
-    const centerAngle = openRight ? 0 : Math.PI; // 0 = right, PI = left
-
-    // Compute initial arc radius (hex edge); overlap resolution happens in _positionArcPopup
     const canvasRect = this.canvas.getBoundingClientRect();
     const canvasScale = canvasRect.width / this.canvas.width;
     const hexScreenPx = this.renderer.hexSize * canvasScale * this.renderer.zoomLevel;
-    // Dynamic gap: keep items within a ~160° arc so the radius stays tight.
-    // With many items, narrow the gap rather than blowing out the radius.
+
     const totalItems = arcItems.length;
-    const MAX_SPAN  = 160 * (Math.PI / 180);
-    const PREF_GAP  = 40  * (Math.PI / 180);
-    const ITEM_GAP  = totalItems <= 1 ? 0 : Math.min(PREF_GAP, MAX_SPAN / (totalItems - 1));
-    const ARC_RADIUS = _baseArcRadius(hexScreenPx);
-    this._arcRadius = ARC_RADIUS;
-
-    const totalAngle = Math.max(0, totalItems - 1) * ITEM_GAP;
-    const startAngle = centerAngle - totalAngle / 2;
-
-    // Assign angles uniformly — keep top-to-bottom order consistent on both sides
-    for (let i = 0; i < arcItems.length; i++) {
-      // When opening left (π), subtract so first item stays at top
-      arcItems[i]._angle = openRight
-        ? startAngle + i * ITEM_GAP
-        : centerAngle + totalAngle / 2 - i * ITEM_GAP;
+    for (let i = 0; i < totalItems; i++) {
       arcItems[i]._idx = i;
     }
 
-    // Generate arc item HTML — initial positions use base radius (will be corrected before animating)
+    // Generate arc item HTML — positions set after measurement
     let html = '';
     for (const item of arcItems) {
       const delay = item._idx * 30;
       const disAttr = item.dis ? 'disabled' : '';
       const freeCls = item.free ? ' arc-free' : '';
+      const resTag = item.resCost ? `<span class="arc-res-cost">${item.resCost}</span>` : '';
+      const costTag = item.free ? '<span class="arc-cost arc-cost-free">FREE</span>'
+        : item.cost === 1 ? '<span class="arc-cost">◆</span>'
+        : '';
       html += `<button class="arc-item${freeCls}" title="${item.fullLabel}"
         style="--arc-x:0px;--arc-y:0px;--arc-delay:${delay}ms;--arc-color:${item.color};--arc-hover:${item.color};--arc-glow:${item.color}33"
-        ${disAttr} ${item.attrs}>${item.label}</button>`;
+        ${disAttr} ${item.attrs}>${item.label}${resTag}${costTag}</button>`;
     }
 
     popup.innerHTML = html;
@@ -1552,37 +1559,26 @@ export class UIController {
     // Store arc state for pan/zoom tracking and canvas line drawing
     this._arcEntityCol = effectiveEntity.col;
     this._arcEntityRow = effectiveEntity.row;
-    this._arcItems = arcItems; // keep for line drawing
+    this._arcItems = arcItems;
+    this._arcOpenRight = openRight;
 
     // Position popup centered on entity
     _positionArcPopup(popup, this);
     popup.style.display = 'block';
 
-    // Measure buttons at full scale (they start at scale 0.3 but we need final size).
-    // Temporarily force full scale with no transition to measure, then reset.
+    // Measure buttons at full scale
     const btns = popup.querySelectorAll('.arc-item');
     for (const btn of btns) {
       btn.style.transition = 'none';
       btn.style.transform = 'translate(-50%, -50%) scale(1)';
-      btn.style.opacity = '0'; // keep invisible during measurement
+      btn.style.opacity = '0';
     }
-    // Force layout so measurements are accurate
-    popup.offsetHeight; // eslint-disable-line no-unused-expressions
+    popup.offsetHeight; // force layout
 
-    // Resolve overlap-free radius using real button sizes
-    const finalR = _resolveArcLayout(popup, this, ARC_RADIUS);
-    this._arcRadius = finalR;
-    this._arcBaseR = ARC_RADIUS;
+    // Compute positions: stack vertically with consistent gap, arc outward to clear hex
+    _computeArcPositions(popup, this, hexScreenPx);
 
-    // Set final positions on CSS custom properties
-    for (let i = 0; i < arcItems.length && i < btns.length; i++) {
-      const fx = Math.cos(arcItems[i]._angle) * finalR;
-      const fy = Math.sin(arcItems[i]._angle) * finalR;
-      btns[i].style.setProperty('--arc-x', fx.toFixed(1) + 'px');
-      btns[i].style.setProperty('--arc-y', fy.toFixed(1) + 'px');
-    }
-
-    // Reset to pre-animation state (collapsed at center) then let CSS transition to final spot
+    // Reset to pre-animation state then let CSS transition to final spot
     for (const btn of btns) {
       btn.style.transform = '';
       btn.style.opacity = '';
@@ -1655,68 +1651,89 @@ export class UIController {
       });
     }
 
-    // Compute arc geometry
+    // Compute layout
     const canvasRect = this.canvas.getBoundingClientRect();
     const canvasScale = canvasRect.width / this.canvas.width;
     const hexScreenPx = this.renderer.hexSize * canvasScale * this.renderer.zoomLevel;
 
-    // Decide direction: open to side with more space
-    const { x: hx, y: hy } = this.renderer.hexToCanvasPos(originHex.col, originHex.row);
+    const { x: hx } = this.renderer.hexToCanvasPos(originHex.col, originHex.row);
     const scale = canvasRect.width / this.canvas.width;
     const screenX = canvasRect.left + hx * scale;
     const openRight = screenX < window.innerWidth / 2;
-    const centerAngle = openRight ? 0 : Math.PI;
 
-    // Use a consistent target radius for portrait arcs — large enough that
-    // no button obscures the origin hex (so players can tap to dismiss).
-    // The closest edge of any button to center is (radius - halfSize); we
-    // need that to exceed the hex radius so the hex stays tappable.
-    const BASE_R = _baseArcRadius(hexScreenPx);
-    const hexTapZone = hexScreenPx * 0.55; // half-hex + small margin
-    // Portrait items are ~56×80px; worst-case half-diagonal ~50px
-    const PORTRAIT_CLEARANCE = 50;
-    const TARGET_R = Math.max(BASE_R, hexTapZone + PORTRAIT_CLEARANCE, 70);
-    this._arcRadius = TARGET_R;
-
-    // Compute angular gap dynamically: spread items evenly within a max arc
-    // span (~180°) so the radius stays consistent regardless of item count.
     const totalItems = arcItems.length;
-    const MAX_SPAN = Math.PI; // 180° max arc span
-    const MIN_GAP  = 35 * (Math.PI / 180); // don't pack tighter than 35°
-    const ITEM_GAP = totalItems <= 1 ? 0
-      : Math.max(MIN_GAP, Math.min(MAX_SPAN / (totalItems - 1), 65 * (Math.PI / 180)));
-    const totalAngle = Math.max(0, totalItems - 1) * ITEM_GAP;
-    const startAngle = centerAngle - totalAngle / 2;
-
-    for (let i = 0; i < arcItems.length; i++) {
-      arcItems[i]._angle = openRight
-        ? startAngle + i * ITEM_GAP
-        : centerAngle + totalAngle / 2 - i * ITEM_GAP;
+    for (let i = 0; i < totalItems; i++) {
       arcItems[i]._idx = i;
     }
 
-    // Generate HTML
-    let html = '';
-    for (const item of arcItems) {
-      const delay = item._idx * 30;
-      const portraitCls = item._portrait ? ' arc-portrait' : '';
-      html += `<button class="arc-item${portraitCls}" title="${item.fullLabel}"
-        style="--arc-x:0px;--arc-y:0px;--arc-delay:${delay}ms;--arc-color:${item.color};--arc-hover:${item.color};--arc-glow:${item.color}33"
-        ${item.attrs}>${item.label}</button>`;
-    }
+    // Compute entity screen positions at originHex for canvas-origin animation.
+    // All disambiguated entities are treated as a stack at originHex regardless
+    // of their real positions (in plan mode, entities may have ghost positions here).
+    const entityPositions = this.renderer.getEntityScreenPositions(
+      originHex.col, originHex.row, units, canvasRect
+    );
+    const posById = new Map(entityPositions.map(p => [p.entityId, p]));
 
-    popup.innerHTML = html;
+    // Hide entities from canvas that are physically at originHex.
+    // Entities at ghost positions (moved earlier in the plan) stay visible
+    // at their real positions — the animation origin is at originHex regardless.
+    this.renderer.disambigHiddenIds = new Set(
+      units.filter(u => u.col === originHex.col && u.row === originHex.row).map(u => u.id)
+    );
+    this.onRedraw();
 
     // Store arc state for pan/zoom tracking and canvas line drawing
     this._arcEntityCol = originHex.col;
     this._arcEntityRow = originHex.row;
     this._arcItems = arcItems;
+    this._arcOpenRight = openRight;
 
-    // Position popup centered on hex
+    // Position popup centered on hex — need this first to compute relative offsets
     _positionArcPopup(popup, this);
+    const popupX = parseFloat(popup.style.left) || 0;
+    const popupY = parseFloat(popup.style.top) || 0;
+
+    // Compute start positions relative to popup anchor for each portrait item
+    // and store origins for close animation
+    this._disambigOrigins = [];
+    for (const item of arcItems) {
+      if (!item._portrait) continue;
+      const unitId = parseInt(item.attrs.match(/data-unit-id="(\d+)"/)?.[1]);
+      const pos = posById.get(unitId);
+      if (pos) {
+        item._startX = pos.screenX - popupX;
+        item._startY = pos.screenY - popupY;
+        item._startR = pos.screenR;
+        this._disambigOrigins.push({
+          entityId: unitId,
+          startX: item._startX,
+          startY: item._startY,
+          startR: pos.screenR,
+        });
+      }
+    }
+
+    // Generate HTML — portrait items get arc-from-canvas class with start position vars
+    let html = '';
+    for (const item of arcItems) {
+      const delay = item._idx * 30;
+      const isCanvas = item._portrait && item._startX != null;
+      const portraitCls = item._portrait ? ' arc-portrait' : '';
+      const canvasCls = isCanvas ? ' arc-from-canvas' : '';
+      // Portrait size: double the canvas entity circle diameter
+      const portraitSize = isCanvas ? Math.round(Math.max(44, Math.min(88, item._startR * 4))) : 44;
+      const startScale = isCanvas ? ((item._startR * 2) / portraitSize).toFixed(3) : '0.3';
+      const startX = isCanvas ? item._startX.toFixed(1) : '0';
+      const startY = isCanvas ? item._startY.toFixed(1) : '0';
+      html += `<button class="arc-item${portraitCls}${canvasCls}" title="${item.fullLabel}"
+        style="--arc-x:0px;--arc-y:0px;--arc-delay:${delay}ms;--arc-color:${item.color};--arc-hover:${item.color};--arc-glow:${item.color}33;--start-x:${startX}px;--start-y:${startY}px;--start-scale:${startScale};--portrait-size:${portraitSize}px"
+        ${item.attrs}>${item.label}</button>`;
+    }
+
+    popup.innerHTML = html;
     popup.style.display = 'block';
 
-    // Measure buttons at full scale for overlap resolution
+    // Measure buttons at full scale
     const btns = popup.querySelectorAll('.arc-item');
     for (const btn of btns) {
       btn.style.transition = 'none';
@@ -1725,16 +1742,7 @@ export class UIController {
     }
     popup.offsetHeight; // force layout
 
-    const finalR = _resolveArcLayout(popup, this, TARGET_R);
-    this._arcRadius = finalR;
-    this._arcBaseR = TARGET_R;
-
-    for (let i = 0; i < arcItems.length && i < btns.length; i++) {
-      const fx = Math.cos(arcItems[i]._angle) * finalR;
-      const fy = Math.sin(arcItems[i]._angle) * finalR;
-      btns[i].style.setProperty('--arc-x', fx.toFixed(1) + 'px');
-      btns[i].style.setProperty('--arc-y', fy.toFixed(1) + 'px');
-    }
+    _computeArcPositions(popup, this, hexScreenPx);
 
     // Reset to pre-animation state then let CSS transition to final spot
     for (const btn of btns) {
@@ -2235,6 +2243,14 @@ export class UIController {
         this._updateSidebar();
         this.onRedraw();
         break;
+      }
+
+      case 'heal': {
+        this._addToPlan({ type: PlanActionType.HEAL, entityId: entity.id });
+        delayedHide();
+        if (entity.alive) this._selectEntity(entity);
+        else this._clearSelection();
+        this._updateSidebar(); this.onRedraw(); break;
       }
 
       case 'use_item': {
@@ -3074,7 +3090,17 @@ export class UIController {
     const stash   = isHero ? inv.shared : inv.witch;
     const label   = isHero ? '⚔ Supplies' : '🕯 Stores';
 
+    // Count herbs across all living entities of this faction
+    let totalHerbs = 0;
+    for (const e of state.entities) {
+      if (!e.alive || e.owner !== faction) continue;
+      totalHerbs += (e.items?.[ResourceType.HERBS] || 0);
+    }
+
     const entries = Object.entries(stash).filter(([, v]) => v > 0);
+    // Add herbs as a virtual entry if any entity carries them
+    if (totalHerbs > 0) entries.push([ResourceType.HERBS, totalHerbs]);
+
     const rows = entries.length
       ? entries.map(([k, v]) =>
           `<div class="inv-resource-row">
@@ -3874,17 +3900,27 @@ function _hideActionPopup(ui) {
   if (ui && ui._arcTrackingRaf) { cancelAnimationFrame(ui._arcTrackingRaf); ui._arcTrackingRaf = null; }
   // Clear canvas connecting lines
   if (ui?.renderer) { ui.renderer.arcMenuLines = null; }
+  const hadDisambigOrigins = ui?._disambigOrigins?.length > 0;
   if (ui) { ui._arcItems = null; ui._arcEntityCol = null; ui._arcEntityRow = null; }
   // Arc mode: animate close
   if (p.classList.contains('arc-open') && !p.classList.contains('popup-list-mode')) {
     p.classList.remove('arc-open');
     p.classList.add('arc-closing');
     const itemCount = p.querySelectorAll('.arc-item').length;
-    const closeTime = 150 + itemCount * 20;
+    // Disambig close is longer: backdrop fades (60ms) then icon flies back (200ms)
+    const closeTime = hadDisambigOrigins ? 320 : 150 + itemCount * 20;
     const timer = setTimeout(() => {
       p.style.display = 'none';
       p.classList.remove('arc-closing');
-      if (ui) ui._arcCloseTimer = null;
+      if (ui) {
+        ui._arcCloseTimer = null;
+        // Unhide canvas entities after close animation finishes
+        if (ui.renderer?.disambigHiddenIds) {
+          ui.renderer.disambigHiddenIds = null;
+          ui.onRedraw?.();
+        }
+        ui._disambigOrigins = null;
+      }
     }, closeTime);
     if (ui) ui._arcCloseTimer = timer;
     // Trigger redraw to clear canvas lines
@@ -3894,6 +3930,13 @@ function _hideActionPopup(ui) {
   // List mode or not open: instant hide
   p.style.display = 'none';
   p.classList.remove('arc-open', 'arc-closing', 'popup-list-mode');
+  // Clear disambig state immediately for non-animated close
+  if (ui) {
+    if (ui.renderer?.disambigHiddenIds) {
+      ui.renderer.disambigHiddenIds = null;
+    }
+    ui._disambigOrigins = null;
+  }
   ui?.onRedraw?.();
 }
 
@@ -3925,82 +3968,58 @@ function _getEntityScreenPos(ui, entity) {
   };
 }
 
-/** Compute arc radius: starts at hex edge, pushes out until items don't overlap. */
-/** Compute base arc radius (hex edge). */
-function _baseArcRadius(hexScreenPx) {
-  return hexScreenPx * 0.87 + 4;
-}
-
 /**
- * Resolve arc layout so no buttons overlap and none obscure the origin hex.
- * Starts at baseR, measures actual button rects, and pushes radius out
- * until all bounding boxes are clear of each other and the hex tap zone.
- * Returns the final radius used.
+ * Compute arc positions: stack items vertically with a consistent gap,
+ * then push each one out horizontally so nothing overlaps the origin hex.
  */
-function _resolveArcLayout(popup, ui, baseR) {
+function _computeArcPositions(popup, ui, hexScreenPx) {
   const items = ui._arcItems;
-  if (!items?.length) return baseR;
+  if (!items?.length) return;
   const btns = popup.querySelectorAll('.arc-item');
-  if (!btns.length) return baseR;
+  if (!btns.length) return;
+  const openRight = ui._arcOpenRight;
 
-  // Measure button dimensions (only need width/height, position is computed)
+  // Measure button heights
   const sizes = [];
   for (let i = 0; i < btns.length; i++) {
     const rect = btns[i].getBoundingClientRect();
     sizes.push({ w: rect.width, h: rect.height });
   }
 
-  // Compute hex tap zone radius (half-hex + margin) so buttons never cover it
-  const canvasRect = ui.canvas.getBoundingClientRect();
-  const canvasScale = canvasRect.width / ui.canvas.width;
-  const hexScreenPx = ui.renderer.hexSize * canvasScale * ui.renderer.zoomLevel;
-  const hexTapZone = hexScreenPx * 0.55;
+  // Vertical layout: consistent gap between items, centered on origin
+  const V_GAP = 6;
+  const totalHeight = sizes.reduce((s, sz) => s + sz.h, 0) + V_GAP * (sizes.length - 1);
+  let cy = -totalHeight / 2;
 
-  // Check if any button's bounding box overlaps the hex center tap zone
-  function obscuresHex(r) {
-    for (let i = 0; i < items.length; i++) {
-      const cx = Math.cos(items[i]._angle) * r;
-      const cy = Math.sin(items[i]._angle) * r;
-      const hw = sizes[i].w / 2, hh = sizes[i].h / 2;
-      // Closest point of button AABB to origin (0,0)
-      const nearX = Math.max(0, Math.abs(cx) - hw);
-      const nearY = Math.max(0, Math.abs(cy) - hh);
-      if (Math.sqrt(nearX * nearX + nearY * nearY) < hexTapZone) return true;
-    }
-    return false;
+  // Hex avoidance radius — items must clear this distance from center
+  const hexClear = hexScreenPx * 0.6 + 8;
+
+  for (let i = 0; i < items.length && i < btns.length; i++) {
+    const itemCy = cy + sizes[i].h / 2;
+
+    // Horizontal offset: push out so the inner edge of the button clears the hex.
+    // For items near the vertical center, push further out; items near top/bottom
+    // are already far from the hex and need less horizontal offset.
+    const vertDist = Math.abs(itemCy);
+    const halfW = sizes[i].w / 2;
+    const halfH = sizes[i].h / 2;
+    // Minimum x so the closest corner of the button clears the hex circle
+    const innerClear = Math.max(0, hexClear * hexClear - (Math.max(0, vertDist - halfH)) ** 2);
+    const minX = Math.sqrt(innerClear) + halfW;
+
+    const fx = openRight ? minX : -minX;
+    const fy = itemCy;
+
+    items[i]._x = fx;
+    items[i]._y = fy;
+    btns[i].style.setProperty('--arc-x', fx.toFixed(1) + 'px');
+    btns[i].style.setProperty('--arc-y', fy.toFixed(1) + 'px');
+
+    cy += sizes[i].h + V_GAP;
   }
 
-  // Check if any pair of bounding boxes overlaps at a given radius
-  function hasOverlap(r) {
-    for (let i = 0; i < items.length; i++) {
-      const cx1 = Math.cos(items[i]._angle) * r;
-      const cy1 = Math.sin(items[i]._angle) * r;
-      const hw1 = sizes[i].w / 2, hh1 = sizes[i].h / 2;
-      for (let j = i + 1; j < items.length; j++) {
-        const cx2 = Math.cos(items[j]._angle) * r;
-        const cy2 = Math.sin(items[j]._angle) * r;
-        const hw2 = sizes[j].w / 2, hh2 = sizes[j].h / 2;
-        // AABB overlap check with 2px padding
-        if (Math.abs(cx1 - cx2) < hw1 + hw2 + 2 &&
-            Math.abs(cy1 - cy2) < hh1 + hh2 + 2) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  // Only enforce hex-clearance for disambiguation arcs (portrait items) —
-  // regular action arcs don't need it and it would blow out their radius.
-  const hasPortraits = items.some(i => i._portrait);
-
-  // Start at base radius and step outward until no overlaps (and hex is clear for portrait arcs)
-  let r = baseR;
-  const MAX_R = 400; // safety cap
-  while (r < MAX_R && (hasOverlap(r) || (hasPortraits && obscuresHex(r)))) {
-    r += 8;
-  }
-  return r;
+  // Store radius estimate for canvas line drawing (distance to center of middle item)
+  ui._arcRadius = hexClear + 20;
 }
 
 /** Position the arc popup centered on the entity's screen position and set up canvas lines. */
@@ -4019,35 +4038,54 @@ function _positionArcPopup(popup, ui) {
   popup.style.top  = sy + 'px';
   popup.style.transform = 'none';
 
-  // Update renderer's arc menu lines and DOM positions for canvas drawing
+  // Recompute positions on zoom change
   if (ui._arcItems?.length) {
-    // Recompute radius on zoom change (re-resolve overlap with current button sizes)
-    const arcScale = canvasRect.width / ui.canvas.width;
-    const hexPx = ui.renderer.hexSize * arcScale * ui.renderer.zoomLevel;
-    const baseR = _baseArcRadius(hexPx);
-    const prevR = ui._arcRadius || baseR;
-    // Only re-resolve if zoom changed enough to matter (base radius shifted)
-    if (Math.abs(baseR - (ui._arcBaseR || 0)) > 2) {
-      const arcR = _resolveArcLayout(popup, ui, baseR);
-      ui._arcRadius = arcR;
-      ui._arcBaseR = baseR;
-      const arcBtns = popup.querySelectorAll('.arc-item');
-      for (let i = 0; i < ui._arcItems.length && i < arcBtns.length; i++) {
-        const ix = Math.cos(ui._arcItems[i]._angle) * arcR;
-        const iy = Math.sin(ui._arcItems[i]._angle) * arcR;
-        arcBtns[i].style.setProperty('--arc-x', ix.toFixed(1) + 'px');
-        arcBtns[i].style.setProperty('--arc-y', iy.toFixed(1) + 'px');
-      }
+    const hexPx = ui.renderer.hexSize * (canvasRect.width / ui.canvas.width) * ui.renderer.zoomLevel;
+    if (Math.abs(hexPx - (ui._arcHexPx || 0)) > 2) {
+      ui._arcHexPx = hexPx;
+      _computeArcPositions(popup, ui, hexPx);
     }
-    const arcR = ui._arcRadius || prevR;
+    // Update canvas line drawing data
     ui.renderer.arcMenuLines = {
       col, row,
       items: ui._arcItems.map(item => ({
-        x: Math.cos(item._angle) * arcR,
-        y: Math.sin(item._angle) * arcR,
+        x: item._x ?? 0,
+        y: item._y ?? 0,
         color: item.color,
       })),
     };
+  }
+
+  // Update disambig canvas-origin positions on pan/zoom so close animation
+  // targets stay correct relative to the popup anchor
+  if (ui._disambigOrigins?.length && ui.renderer?.disambigHiddenIds) {
+    const state = ui.state || ui.renderer._lastState;
+    const units = [];
+    if (state?.entities) {
+      for (const o of ui._disambigOrigins) {
+        const e = state.entities.find(en => en.id === o.entityId);
+        if (e) units.push(e);
+      }
+    }
+    if (units.length) {
+      const positions = ui.renderer.getEntityScreenPositions(col, row, units, canvasRect);
+      const posMap = new Map(positions.map(p => [p.entityId, p]));
+      const btns = popup.querySelectorAll('.arc-item.arc-from-canvas');
+      for (const btn of btns) {
+        const uid = parseInt(btn.dataset.unitId);
+        const pos = posMap.get(uid);
+        if (pos) {
+          const relX = pos.screenX - sx;
+          const relY = pos.screenY - sy;
+          btn.style.setProperty('--start-x', relX.toFixed(1) + 'px');
+          btn.style.setProperty('--start-y', relY.toFixed(1) + 'px');
+        }
+      }
+      for (const o of ui._disambigOrigins) {
+        const pos = posMap.get(o.entityId);
+        if (pos) { o.startX = pos.screenX - sx; o.startY = pos.screenY - sy; o.startR = pos.screenR; }
+      }
+    }
   }
 }
 

@@ -6,7 +6,7 @@
 
 import {
   executeMove, executeExplore, executeBattle,
-  executeFortify, executeSummon, executeUseItem, executeUseAbility,
+  executeFortify, executeSummon, executeHeal, executeUseItem, executeUseAbility,
   executeGuard, executeGuardStrike, executeSoundHorn,
 } from '../src/actions.js';
 import { EntityType } from '../src/entities.js';
@@ -201,6 +201,12 @@ function runAction(state, action, faction, playerId = null) {
 
     case PlanActionType.SUMMON: {
       const r = executeSummon(state, entity, action.summonType ?? null);
+      if (!r.success) return { kind: 'fail', reason: r.log[0] };
+      return { kind: 'ok', result: r };
+    }
+
+    case PlanActionType.HEAL: {
+      const r = executeHeal(state, entity);
       if (!r.success) return { kind: 'fail', reason: r.log[0] };
       return { kind: 'ok', result: r };
     }
