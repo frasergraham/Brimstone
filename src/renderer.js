@@ -951,6 +951,18 @@ export class Renderer {
       this._drawObjectiveSymbolAt(cx, cy, obj.label, state, obj);
     }
 
+    // Mission target hex (reach_hex objective) — rendered like a power node with a flag symbol
+    if (state.missionTargetHex) {
+      const mt = state.missionTargetHex;
+      const shouldDrawTarget = !fogActive || mt.seen;
+      if (shouldDrawTarget) {
+        const mtObj = { color: mt.color, hexes: [mt] };
+        this._drawObjectiveHexGlow(mt.col, mt.row, mtObj, state);
+        const { x, y } = this._toCanvas(mt.col, mt.row);
+        this._drawMissionTargetSymbol(x, y, mt);
+      }
+    }
+
     // Node reveal pulse animations — expanding glow rings on newly discovered nodes
     this._drawNodeRevealAnims();
 
@@ -1723,6 +1735,23 @@ export class Renderer {
     ctx.fillStyle = nodeColor + 'cc';
     ctx.font      = `${Math.max(6, Math.floor(hs * 0.2))}px sans-serif`;
     this._shadowText(label, x, y + hs * 0.35);
+  }
+
+  /** Draw a flag symbol for a mission target hex (reach_hex objective). */
+  _drawMissionTargetSymbol(x, y, mt) {
+    const ctx = this.ctx;
+    const hs  = this.hexSize;
+    ctx.shadowColor = mt.color;
+    ctx.shadowBlur  = 6;
+    ctx.fillStyle   = mt.color;
+    ctx.font        = `bold ${Math.floor(hs * 0.5)}px serif`;
+    ctx.textAlign   = 'center';
+    ctx.textBaseline = 'middle';
+    this._shadowText('⚑', x, y - hs * 0.15);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle  = mt.color + 'cc';
+    ctx.font       = `${Math.max(6, Math.floor(hs * 0.2))}px sans-serif`;
+    this._shadowText(mt.label, x, y + hs * 0.35);
   }
 
   /** Draw pulsing glow rings on recently revealed power nodes. */

@@ -138,6 +138,7 @@ function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
 
   ui = new UIController(canvas, state, renderer, localWitchAI, redraw, localHeroAI, autoplay);
   ui.onQuitToMenu = () => location.reload();
+  ui.showMissionInfoBtn(false); // hidden by default; campaign init enables it
 
   // Show resign option for single-player games (one side is AI)
   const isOneSided = !!(localWitchAI) !== !!(localHeroAI);
@@ -944,6 +945,27 @@ function _updateNodeDiscoveryDuringStep(gs, humanFaction, rend) {
         || (!humanFaction && gs.fogOfWar === 'none'); // no fog — show for everyone
       if (isHuman && rend) {
         rend.addNodeRevealAnim(obj.hexes, obj.color ?? '#8800cc');
+      }
+    }
+  }
+
+  // Mission target hex discovery (reach_hex objective)
+  const mt = gs.missionTargetHex;
+  if (mt && !mt.seen) {
+    const heroFac = allFactions().find(f => f.id === 'hero');
+    if (heroFac) {
+      const nowSeen = gs.entities.some(e => {
+        if (!e.alive || e.owner !== 'hero') return false;
+        const range = heroFac.getSightRange(gs.phase, e.ability === 'scout');
+        return hexDistance(e.col, e.row, mt.col, mt.row) <= range;
+      });
+      if (nowSeen) {
+        mt.seen = true;
+        const isHuman = humanFaction === 'hero'
+          || (!humanFaction && gs.fogOfWar === 'none');
+        if (isHuman && rend) {
+          rend.addNodeRevealAnim([{ col: mt.col, row: mt.row }], mt.color);
+        }
       }
     }
   }
@@ -2211,6 +2233,18 @@ function _objectiveDescription(obj) {
   }
 }
 
+function _showMissionInfoModal() {
+  if (!_activeMissionDef) return;
+  const def = _activeMissionDef;
+  const winDesc = _objectiveDescription(def.objectives?.win);
+  const loseObj = def.objectives?.lose;
+  const loseDesc = Array.isArray(loseObj)
+    ? loseObj.map(o => _objectiveDescription(o)).join('; ')
+    : _objectiveDescription(loseObj);
+  const text = `${def.briefing}\n\n☀ Victory: ${winDesc}\n💀 Defeat: ${loseDesc}`;
+  ui.showStoryModal(def.title, text);
+}
+
 function _createEnemyEntity(type, col, row) {
   switch (type) {
     case 'zombie':     return createZombie(col, row, 'witch');
@@ -2255,6 +2289,7 @@ function _initCampaignMission(missionDef) {
   _activeMissionDef = missionDef;
   _gameStartTime = Date.now();
   _spSaveId = null; // campaign uses its own save system
+  ui.showMissionInfoBtn(true);
 
   // Build map
   const builder = _activeCampaign.getMapBuilder(missionDef.mapBuilder);
@@ -2387,6 +2422,9 @@ function _initCampaignMission(missionDef) {
 
   _setupLocalUI(canvas, witchAI, null, false);
   _roundHistory = [];
+
+  // Wire mission info button callback
+  ui.onMissionInfo = () => _showMissionInfoModal();
 
   // Log victory conditions at mission start
   const winDesc = _objectiveDescription(missionDef.objectives?.win);

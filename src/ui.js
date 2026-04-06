@@ -304,6 +304,9 @@ export class UIController {
       const backdrop = this._el('game-menu-backdrop');
       if (backdrop) backdrop.style.display = 'none';
     };
+    this._el('mission-info-btn')?.addEventListener('click', () => {
+      this.onMissionInfo?.();
+    });
     this._el('menu-btn')?.addEventListener('click', () => {
       const backdrop = this._el('game-menu-backdrop');
       if (backdrop) backdrop.style.display = backdrop.style.display === 'none' ? 'flex' : 'none';
@@ -2524,6 +2527,12 @@ export class UIController {
       continueBtn?.removeEventListener('click', dismiss);
     };
     continueBtn?.addEventListener('click', dismiss);
+  }
+
+  /** Toggle visibility of the mission info header button. */
+  showMissionInfoBtn(visible) {
+    const btn = this._el('mission-info-btn');
+    if (btn) btn.style.display = visible ? '' : 'none';
   }
 
   /**
