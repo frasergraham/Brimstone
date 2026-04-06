@@ -373,13 +373,14 @@ export function genProtectHero(sim, board, budget, config = null) {
   const heroEntity = sim.entities.find(e => e.id === board.hero.id);
   if (!heroEntity) return actions;
 
-  // Free action: use herbs if injured
+  // Heal: use herbs if injured (costs 1 action)
   const herbs = heroEntity.items?.[ResourceType.HERBS] || 0;
-  if (herbs > 0 && board.heroHpRatio < 1.0) {
+  if (herbs > 0 && board.heroHpRatio < 1.0 && remaining > 0) {
     actions.push({
-      type: PlanActionType.USE_ITEM, entityId: board.hero.id,
-      item: ResourceType.HERBS, _priority: 0, _goal: HeroGoal.PROTECT_HERO,
+      type: PlanActionType.HEAL, entityId: board.hero.id,
+      _priority: 0, _goal: HeroGoal.PROTECT_HERO,
     });
+    remaining--;
   }
 
   // Free action: equip best unequipped weapon

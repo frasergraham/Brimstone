@@ -19,6 +19,7 @@ export const PlanActionType = Object.freeze({
   EXPLORE:      'explore',
   FORTIFY:      'fortify',
   SUMMON:       'summon',
+  HEAL:         'heal',
   USE_ITEM:     'use-item',
   EQUIP_WEAPON: 'equip-weapon',
   USE_ABILITY:  'use-ability',
@@ -193,15 +194,15 @@ export function computeProjectedInventory(state, plan) {
         if ((shared[ResourceType.METAL] || 0) > 0) shared[ResourceType.METAL]--;
         else if ((shared[ResourceType.WOOD] || 0) > 0) shared[ResourceType.WOOD]--;
         break;
+      case PlanActionType.HEAL: {
+        const eitems = entityItems[action.entityId];
+        if (eitems && (eitems[ResourceType.HERBS] || 0) > 0) eitems[ResourceType.HERBS]--;
+        break;
+      }
       case PlanActionType.USE_ITEM: {
         const item = action.item;
         if (!item || item.startsWith('weapon:')) break;
-        if (item === ResourceType.HERBS) {
-          const eitems = entityItems[action.entityId];
-          if (eitems && (eitems[item] || 0) > 0) eitems[item]--;
-        } else {
-          if ((shared[item] || 0) > 0) shared[item]--;
-        }
+        if ((shared[item] || 0) > 0) shared[item]--;
         break;
       }
       case PlanActionType.SOUND_HORN:
@@ -298,6 +299,7 @@ export function validatePlanAction(state, action, projectedPositions = null) {
     case PlanActionType.EXPLORE:
     case PlanActionType.FORTIFY:
     case PlanActionType.GUARD:
+    case PlanActionType.HEAL:
     case PlanActionType.USE_ABILITY:
     case PlanActionType.SOUND_HORN:
       return { valid: true };

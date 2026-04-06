@@ -16,6 +16,7 @@ export const ActionType = Object.freeze({
   BATTLE_HEX:   'battle_hex',  // Blind attack on a hex — for use through fog of war
   FORTIFY:      'fortify',
   SUMMON:       'summon',
+  HEAL:         'heal',
   USE_ITEM:     'use_item',
   EQUIP_WEAPON: 'equip_weapon',
   USE_ABILITY:  'use_ability',
@@ -325,11 +326,11 @@ export function getValidActions(state, actor) {
     actions.push({ type: ActionType.SOUND_HORN, affordable: food >= 1 });
   }
 
-  // Herbs — available to any unit that carries them
+  // Heal — available to any unit that carries herbs
   {
     const myItems = actor.items || {};
     if ((myItems[ResourceType.HERBS] || 0) > 0 && actor.hp < actor.maxHp) {
-      actions.push({ type: ActionType.USE_ITEM, usable: [{ item: ResourceType.HERBS, label: '🌿 Herbs (heal 2)', source: 'items' }] });
+      actions.push({ type: ActionType.HEAL });
     }
   }
 
@@ -911,6 +912,17 @@ export function executeSummon(state, actor, requestedType = null) {
   return { success: true, log: [`The witch raises a ${unitName}!`], cost: 1, spent: [{ type: res, amount: 2 }] };
 }
 
+export function executeHeal(state, actor) {
+  const myItems = actor.items || {};
+  if ((myItems[ResourceType.HERBS] || 0) < 1)
+    return { success: false, log: ['No herbs.'] };
+  if (actor.hp >= actor.maxHp)
+    return { success: false, log: [`${actor.displayName} is already at full health.`] };
+  myItems[ResourceType.HERBS]--;
+  actor.heal(1);
+  return { success: true, log: [`${actor.displayName} uses herbs. (+1 HP, now ${actor.hp}/${actor.maxHp})`], cost: 1 };
+}
+
 export function executeUseItem(state, actor, item) {
   // Weapon equip — from actor's personal items
   if (item.startsWith('weapon:')) {
@@ -921,15 +933,6 @@ export function executeUseItem(state, actor, item) {
     actor.equipWeapon(weaponType);
     const label = WEAPON_LABEL[weaponType] || weaponType;
     return { success: true, log: [`${actor.displayName} equips ${label}!`], cost: 0 };
-  }
-
-  // Herbs — from actor's personal items
-  if (item === ResourceType.HERBS) {
-    const myItems = actor.items || {};
-    if ((myItems[item] || 0) < 1) return { success: false, log: ['No herbs.'] };
-    myItems[item]--;
-    actor.heal(2);
-    return { success: true, log: [`${actor.displayName} uses herbs. Healed to ${actor.hp}/${actor.maxHp} HP.`], cost: 0 };
   }
 
   // Shared resources

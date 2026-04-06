@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { GameState, Phase, Player } from '../src/game.js';
 import {
   executeMove, executeExplore, executeBattle, executeFortify,
-  executeSummon, executeUseItem, executeUseAbility,
+  executeSummon, executeHeal, executeUseItem, executeUseAbility,
   getReachableHexes, sightRange, survivorFindMultiplier,
 } from '../src/actions.js';
 import {
@@ -1197,45 +1197,67 @@ describe('executeSummon', () => {
   });
 });
 
-// ── executeUseItem ────────────────────────────────────────────────────────────
-// Design (from CLAUDE.md):
-//   Herbs (free, heal 2)
-//   Food  (1 action, +1 action)  ← costs 1 AND gives 1 back = net 0
-//   Silver (free, +1 ATK)
-//   Scripture (free, ward)
-//   Weapon equip (free)
+// ── executeHeal ───────────────────────────────────────────────────────────────
 
-describe('executeUseItem — Herbs', () => {
-  test('herbs heal 2 HP and cost 0 actions', () => {
+describe('executeHeal', () => {
+  test('heals 1 HP, costs 1 action, consumes herbs', () => {
     const state = freshState();
     const hero = state.hero;
     hero.items[ResourceType.HERBS] = 1;
     hero.takeDamage(5);
     const hpBefore = hero.hp;
 
-    const r = executeUseItem(state, hero, ResourceType.HERBS);
+    const r = executeHeal(state, hero);
     assert.equal(r.success, true);
-    assert.equal(r.cost, 0, 'Herbs should be free (cost 0)');
-    assert.equal(hero.hp, Math.min(hero.maxHp, hpBefore + 2));
+    assert.equal(r.cost, 1, 'Heal should cost 1 action');
+    assert.equal(hero.hp, hpBefore + 1);
     assert.equal(hero.items[ResourceType.HERBS], 0, 'Herbs should be consumed');
   });
 
-  test('herbs fail when none in inventory', () => {
+  test('witch can heal too', () => {
+    const state = freshState();
+    const witch = state.witch;
+    witch.items[ResourceType.HERBS] = 1;
+    witch.takeDamage(3);
+    const hpBefore = witch.hp;
+
+    const r = executeHeal(state, witch);
+    assert.equal(r.success, true);
+    assert.equal(r.cost, 1);
+    assert.equal(witch.hp, hpBefore + 1);
+  });
+
+  test('fails when no herbs', () => {
     const state = freshState();
     state.hero.items[ResourceType.HERBS] = 0;
-    const r = executeUseItem(state, state.hero, ResourceType.HERBS);
+    state.hero.takeDamage(3);
+    const r = executeHeal(state, state.hero);
     assert.equal(r.success, false);
   });
 
-  test('herbs heal caps at maxHp', () => {
+  test('fails when already at full health', () => {
+    const state = freshState();
+    state.hero.items[ResourceType.HERBS] = 1;
+    const r = executeHeal(state, state.hero);
+    assert.equal(r.success, false);
+  });
+
+  test('heal caps at maxHp', () => {
     const state = freshState();
     const hero = state.hero;
     hero.items[ResourceType.HERBS] = 1;
     hero.takeDamage(1); // 1 below max
-    executeUseItem(state, hero, ResourceType.HERBS);
+    executeHeal(state, hero);
     assert.equal(hero.hp, hero.maxHp);
   });
 });
+
+// ── executeUseItem ────────────────────────────────────────────────────────────
+// Design:
+//   Food  (1 action, +1 action)  ← costs 1 AND gives 1 back = net 0
+//   Silver (free, +1 ATK)
+//   Scripture (free, ward)
+//   Weapon equip (free)
 
 describe('executeUseItem — Silver', () => {
   test('silver gives +1 attackBonus and costs 0', () => {

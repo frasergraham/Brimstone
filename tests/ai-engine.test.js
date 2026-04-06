@@ -485,15 +485,14 @@ describe('estimateCombat', () => {
 // ── genDefendWitch ──────────────────────────────────────────────────────────
 
 describe('genDefendWitch', () => {
-  test('produces USE_ITEM herbs when witch is injured', () => {
+  test('produces HEAL when witch is injured and has herbs', () => {
     const witch = makeEntity({ id: 'witch1', hp: 5, maxHp: 10, items: { [ResourceType.HERBS]: 1 } });
     const hero = makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 4, row: 4, hp: 8, maxHp: 8 });
     const sim = makeSim({ entities: [witch, hero] });
     const board = assessBoard(sim);
     const actions = genDefendWitch(sim, board, 2);
-    const herbAction = actions.find(a => a.type === PlanActionType.USE_ITEM);
-    assert.ok(herbAction, 'should emit USE_ITEM for herbs');
-    assert.equal(herbAction.item, ResourceType.HERBS);
+    const healAction = actions.find(a => a.type === PlanActionType.HEAL);
+    assert.ok(healAction, 'should emit HEAL action');
   });
 
   test('flees when witch HP critical', () => {
@@ -770,10 +769,10 @@ describe('assemblePlan', () => {
     const actions = [
       { type: PlanActionType.MOVE, entityId: 'witch1', toCol: 1, toRow: 0, _priority: 5, _goal: Goal.BUILD_ARMY },
       { type: PlanActionType.SUMMON, entityId: 'witch1', _priority: 2, _goal: Goal.BUILD_ARMY },
-      { type: PlanActionType.USE_ITEM, entityId: 'witch1', item: ResourceType.HERBS, _priority: 0, _goal: Goal.DEFEND_WITCH },
+      { type: PlanActionType.HEAL, entityId: 'witch1', _priority: 0, _goal: Goal.DEFEND_WITCH },
     ];
     const plan = assemblePlan(actions, sim, board, new Map());
-    assert.equal(plan[0].type, PlanActionType.USE_ITEM);
+    assert.equal(plan[0].type, PlanActionType.HEAL);
     assert.equal(plan[1].type, PlanActionType.SUMMON);
     assert.equal(plan[2].type, PlanActionType.MOVE);
   });
@@ -863,15 +862,15 @@ describe('assemblePlan', () => {
       `AP actions (${apActions.length}) should be near budget (${board.totalBudget})`);
   });
 
-  test('free actions (USE_ITEM) not counted against budget', () => {
+  test('free actions (EQUIP_WEAPON) not counted against budget', () => {
     const sim = makeSim();
     const board = assessBoard(sim);
     const actions = [
-      { type: PlanActionType.USE_ITEM, entityId: 'witch1', item: ResourceType.HERBS, _priority: 0, _goal: Goal.DEFEND_WITCH },
+      { type: PlanActionType.EQUIP_WEAPON, entityId: 'witch1', weapon: 'weapon:sword', _priority: 0, _goal: Goal.DEFEND_WITCH },
       { type: PlanActionType.SUMMON, entityId: 'witch1', _priority: 2, _goal: Goal.BUILD_ARMY },
     ];
     const plan = assemblePlan(actions, sim, board, new Map());
-    assert.ok(plan.some(a => a.type === PlanActionType.USE_ITEM), 'USE_ITEM should be included');
+    assert.ok(plan.some(a => a.type === PlanActionType.EQUIP_WEAPON), 'EQUIP_WEAPON should be included');
     assert.ok(plan.some(a => a.type === PlanActionType.SUMMON), 'SUMMON should be included');
   });
 

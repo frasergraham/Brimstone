@@ -1433,15 +1433,23 @@ export class UIController {
         case ActionType.SUMMON:
           // Handled below — we always show all 3 summon types
           break;
+        case ActionType.HEAL: {
+          let healDis = dis;
+          if (projInv) {
+            const eitems = projInv.entityItems[entity.id] ?? {};
+            if ((eitems[ResourceType.HERBS] || 0) < 1) healDis = true;
+          }
+          arcItems.push({ group: 'items', label: 'Heal', fullLabel: 'Herbs (heal 1 HP)',
+            color: '#55cc55', dis: healDis,
+            attrs: 'data-action="heal"' });
+          break;
+        }
         case ActionType.USE_ITEM:
           for (const item of action.usable) {
             if (this._planMode && item.item === ResourceType.FOOD) continue;
             let itemDis = dis;
             if (projInv) {
-              if (item.item === ResourceType.HERBS) {
-                const eitems = projInv.entityItems[entity.id] ?? {};
-                if ((eitems[ResourceType.HERBS] || 0) < 1) itemDis = true;
-              } else if (!item.item.startsWith('weapon:')) {
+              if (!item.item.startsWith('weapon:')) {
                 if ((projInv.shared[item.item] || 0) < 1) itemDis = true;
               }
             }
@@ -2235,6 +2243,14 @@ export class UIController {
         this._updateSidebar();
         this.onRedraw();
         break;
+      }
+
+      case 'heal': {
+        this._addToPlan({ type: PlanActionType.HEAL, entityId: entity.id });
+        delayedHide();
+        if (entity.alive) this._selectEntity(entity);
+        else this._clearSelection();
+        this._updateSidebar(); this.onRedraw(); break;
       }
 
       case 'use_item': {

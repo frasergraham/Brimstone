@@ -493,8 +493,8 @@ describe('genProtectHero', () => {
     });
     const board = assessHeroBoard(sim);
     const actions = genProtectHero(sim, board, 3);
-    const herbAction = actions.find(a => a.type === PlanActionType.USE_ITEM && a.item === ResourceType.HERBS);
-    assert.ok(herbAction, 'should emit USE_ITEM herbs');
+    const herbAction = actions.find(a => a.type === PlanActionType.HEAL);
+    assert.ok(herbAction, 'should emit HEAL action');
   });
 
   test('emits EQUIP_WEAPON when hero has unequipped weapon', () => {
