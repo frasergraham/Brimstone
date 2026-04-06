@@ -1435,12 +1435,12 @@ export class UIController {
           // Handled below — we always show all 3 summon types
           break;
         case ActionType.HEAL: {
-          let healDis = dis;
+          let healDis = dis || action.atFullHp;
           if (projInv) {
             const eitems = projInv.entityItems[entity.id] ?? {};
             if ((eitems[ResourceType.HERBS] || 0) < 1) healDis = true;
           }
-          arcItems.push({ group: 'items', label: 'Heal', fullLabel: 'Herbs (heal 2 HP)',
+          arcItems.push({ group: 'items', label: 'Heal', fullLabel: action.atFullHp ? 'Already at full HP' : 'Herbs (heal 2 HP)',
             color: '#55cc55', dis: healDis, cost: 1, resCost: '1🌿',
             attrs: 'data-action="heal"' });
           break;

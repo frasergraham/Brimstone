@@ -326,11 +326,12 @@ export function getValidActions(state, actor) {
     actions.push({ type: ActionType.SOUND_HORN, affordable: food >= 1 });
   }
 
-  // Heal — available to any unit that carries herbs
+  // Heal — available to any unit that carries herbs (shown even at full HP so
+  // players know they have herbs; disabled at full HP during execution)
   {
     const myItems = actor.items || {};
-    if ((myItems[ResourceType.HERBS] || 0) > 0 && actor.hp < actor.maxHp) {
-      actions.push({ type: ActionType.HEAL });
+    if ((myItems[ResourceType.HERBS] || 0) > 0) {
+      actions.push({ type: ActionType.HEAL, atFullHp: actor.hp >= actor.maxHp });
     }
   }
 
