@@ -47,7 +47,7 @@ export function countHeldNodes(faction, witchObjectives, entities) {
 // Win reason strings (shown in game-over overlay)
 export const WIN_REASON = {
   WITCH_SLAIN:      'The hero hunted down the witch and ended the curse!',
-  HERO_SLAIN:       'The hero fell in battle. Salem is lost to darkness.',
+  HERO_SLAIN:       'The hero fell in battle. Caleb\'s Hollow is lost to darkness.',
   NODES_WITCH:      'The witch seized all Power Nodes at dawn — the ritual is complete!',
   NODES_HERO:       'The hero held all Power Nodes at dawn — the witch\'s ritual is broken!',
   NODES_WITCH_DUSK: 'As dusk falls, the witch holds all Power Nodes — the ritual advances!',
@@ -200,9 +200,9 @@ export class GameState {
     this.activePlayer = Player.HERO;
     this.actionsLeft  = computeActions(Player.HERO, Phase.DAWN, []);
     this.log = [
-      `🌅 Dawn breaks over Salem. ${this.hero.displayName} stirs at the Inn.`,
+      `🌅 Dawn breaks over Caleb's Hollow. ${this.hero.displayName} stirs at the Inn.`,
       `Three Power Nodes: ${this.witchObjectives.map(o => o.label).join(', ')}.`,
-      `⚔ Hold 2+ nodes at each dawn/dusk to score. First to 4 points wins. Three cycles — then darkness claims Salem.`,
+      `⚔ Hold 2+ nodes at each dawn/dusk to score. First to 4 points wins. Three cycles — then darkness claims Caleb's Hollow.`,
     ];
 
     this.selectedEntity    = null;
@@ -510,14 +510,14 @@ export class GameState {
     if (this.witch !== null && this.factionEliminated('witch')) {
       this.winner    = 'hero';
       this.winReason = WIN_REASON.WITCH_SLAIN;
-      this.addLog(`☀ ${this.factionName('witch')} has been defeated! Salem is saved!`, 'hero');
+      this.addLog(`☀ ${this.factionName('witch')} has been defeated! Caleb's Hollow is saved!`, 'hero');
       return;
     }
     // All hero leaders eliminated → witches win
     if (this.factionEliminated('hero')) {
       this.winner    = 'witch';
       this.winReason = WIN_REASON.HERO_SLAIN;
-      this.addLog(`🌙 ${this.factionName('hero')} has fallen. Darkness descends on Salem forever…`, 'witch');
+      this.addLog(`🌙 ${this.factionName('hero')} has fallen. Darkness descends on Caleb's Hollow forever…`, 'witch');
     }
   }
 
@@ -565,7 +565,7 @@ export class GameState {
       this.winner    = 'witch';
       this.winReason = isDawn ? WIN_REASON.NODES_WITCH : WIN_REASON.NODES_WITCH_DUSK;
       this.addLog(isDawn
-        ? `🌙 As dawn breaks, ${this.factionName('witch')} holds all Power Nodes! Salem is lost…`
+        ? `🌙 As dawn breaks, ${this.factionName('witch')} holds all Power Nodes! Caleb's Hollow is lost…`
         : `🌙 As dusk falls, ${this.factionName('witch')} holds all Power Nodes! The ritual advances!`, 'witch');
       return;
     }
@@ -585,7 +585,7 @@ export class GameState {
       if (this.nodeScore.witch >= 4) {
         this.winner    = 'witch';
         this.winReason = WIN_REASON.SCORE_WITCH;
-        this.addLog(`🌙 ${this.factionName('witch')} has claimed three ritual moments — Salem falls to darkness!`, 'witch');
+        this.addLog(`🌙 ${this.factionName('witch')} has claimed three ritual moments — Caleb's Hollow falls to darkness!`, 'witch');
       }
     } else if (heroCount > witchCount) {
       this.nodeScore.hero++;
@@ -593,7 +593,7 @@ export class GameState {
       if (this.nodeScore.hero >= 4) {
         this.winner    = 'hero';
         this.winReason = WIN_REASON.SCORE_HERO;
-        this.addLog(`☀ ${this.factionName('hero')} has broken the ritual three times — Salem is saved!`, 'hero');
+        this.addLog(`☀ ${this.factionName('hero')} has broken the ritual three times — Caleb's Hollow is saved!`, 'hero');
       }
     } else {
       this.addLog(`⚖ At ${phaseLabel}: nodes tied (${witchCount}–${heroCount}). Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);

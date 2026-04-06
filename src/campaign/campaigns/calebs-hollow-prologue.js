@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// Campaign: The Salem Prologue
-// A 6-mission introductory arc set in cursed colonial Salem.
+// Campaign: The Caleb's Hollow Prologue
+// A 6-mission introductory arc set in cursed colonial Caleb's Hollow.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { Tile, TileType, BuildingType, ResourceType } from '../../tiles.js';
@@ -559,9 +559,9 @@ const MISSIONS = [
     id:       'prologue',
     title:    'The Awakening',
     chapter:  1,
-    briefing: `You awaken at the Salem Inn to the sound of screaming. The dead walk the streets — shambling corpses driven by an unseen malice. Grab what you can and clear the village before more arrive.`,
-    victoryText: `The last corpse crumbles to dust. Silence returns to Salem's streets, but you sense this is only the beginning. A survivor stumbles from the wreckage — together, you may stand a chance against what's coming.`,
-    defeatText:  `The dead overwhelm you. Salem falls before the fight even begins.`,
+    briefing: `You awaken at the Caleb's Hollow Inn to the sound of screaming. The dead walk the streets — shambling corpses driven by an unseen malice. Grab what you can and clear the village before more arrive.`,
+    victoryText: `The last corpse crumbles to dust. Silence returns to Caleb's Hollow's streets, but you sense this is only the beginning. A survivor stumbles from the wreckage — together, you may stand a chance against what's coming.`,
+    defeatText:  `The dead overwhelm you. Caleb's Hollow falls before the fight even begins.`,
 
     mapBuilder:      'prologue',
     mapSize:         'skirmish',
@@ -584,7 +584,7 @@ const MISSIONS = [
     maxDiscoverableSurvivors:  0,
 
     objectives: {
-      win:  { type: 'eliminate_all', reason: 'The streets of Salem are clear.' },
+      win:  { type: 'eliminate_all', reason: 'The streets of Caleb\'s Hollow are clear.' },
       lose: { type: 'hero_killed' },
     },
 
@@ -596,7 +596,7 @@ const MISSIONS = [
 
     storyTriggers: [
       { type: 'round', round: 1, title: 'A Grim Dawn',
-        text: 'The streets of Salem are eerily silent. Through the morning mist, you can make out shambling figures — the dead have risen. The Salem Inn stands behind you, its doors battered but holding. You must clear the village before nightfall.',
+        text: 'The streets of Caleb\'s Hollow are eerily silent. Through the morning mist, you can make out shambling figures — the dead have risen. The Caleb\'s Hollow Inn stands behind you, its doors battered but holding. You must clear the village before nightfall.',
         flag: 'prologue_intro' },
     ],
 
@@ -608,8 +608,8 @@ const MISSIONS = [
     id:       'gathering_survivors',
     title:    'Gathering Survivors',
     chapter:  1,
-    briefing: `The village is clear, but others may have survived. Smoke rises from distant buildings — signs of life, or something worse. Search Salem's outskirts and bring any survivors back before the dead return.`,
-    victoryText: `The last zombie falls. You've gathered a small band of survivors — frightened but determined. Together you fortify what remains of Salem, knowing the true horror still lurks beyond the tree line.`,
+    briefing: `The village is clear, but others may have survived. Smoke rises from distant buildings — signs of life, or something worse. Search Caleb's Hollow's outskirts and bring any survivors back before the dead return.`,
+    victoryText: `The last zombie falls. You've gathered a small band of survivors — frightened but determined. Together you fortify what remains of Caleb's Hollow, knowing the true horror still lurks beyond the tree line.`,
     defeatText:  `You searched too far and too recklessly. The dead found you before you found help.`,
 
     mapBuilder:      'gathering_survivors',
@@ -659,7 +659,7 @@ const MISSIONS = [
     chapter:  1,
     briefing: `Dusk falls and the dead grow bolder. Waves of corpses claw their way from the old graveyard. Barricade the village and survive until dawn — 10 rounds of relentless assault.`,
     victoryText: `Dawn breaks. The wave subsides, leaving the village battered but standing. Among the rubble, a new ally emerges — another survivor drawn to your fight.`,
-    defeatText:  `The dead breach your defenses. Salem is overrun.`,
+    defeatText:  `The dead breach your defenses. Caleb's Hollow is overrun.`,
 
     mapBuilder:      'first_night',
     mapSize:         'standard',
@@ -770,7 +770,7 @@ const MISSIONS = [
     chapter:  1,
     briefing: `Deep in the forest, two Power Nodes pulse with dark energy. Minions and golems guard them as part of an ongoing ritual. Capture the nodes before the ritual is complete — this is your first encounter with the witch's true power.`,
     victoryText: `The nodes dim as you wrest control. The ritual is broken — but the energy has already been channeled somewhere. The witch is preparing something far worse.`,
-    defeatText:  `The ritual is complete. Dark energy surges through the ley lines. Salem's fate is sealed.`,
+    defeatText:  `The ritual is complete. Dark energy surges through the ley lines. Caleb's Hollow's fate is sealed.`,
 
     mapBuilder:      'dark_ritual',
     mapSize:         'standard',
@@ -829,7 +829,7 @@ const MISSIONS = [
     chapter:  1,
     briefing: `The attacks aren't random — they're directed. A trail of dark magic leads deep into the forest to a clearing dominated by two Power Nodes. The witch must be stopped before her ritual is complete.`,
     victoryText: `The witch screams and dissolves into shadow. The Power Nodes dim. But you know she'll return — this was only the beginning of her plan.`,
-    defeatText:  `The witch's ritual is complete. Darkness engulfs Salem.`,
+    defeatText:  `The witch's ritual is complete. Darkness engulfs Caleb's Hollow.`,
 
     mapBuilder:      'witchs_trail',
     mapSize:         'standard',
@@ -878,9 +878,9 @@ const MISSIONS = [
 // ── Campaign definition ────────────────────────────────────────────────────
 
 export default {
-  id:          'salem_prologue',
+  id:          'calebs_hollow_prologue',
   title:       'Chapter 1 - Prologue',
-  description: 'A cursed village, the walking dead, and a witch pulling the strings. Six missions stand between Salem and oblivion.',
+  description: 'A cursed village, the walking dead, and a witch pulling the strings. Six missions stand between Caleb\'s Hollow and oblivion.',
   missions:    MISSIONS,
   mapBuilders: MAP_BUILDERS,
   firstMission: 'prologue',

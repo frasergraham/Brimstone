@@ -88,7 +88,7 @@ export function buildVictoryDelegate(objectives) {
             return {
               winner: 'hero',
               winReason: objectives.win.reason || 'The witch has been slain!',
-              log: '☀ The witch has been defeated! Salem is saved!',
+              log: '☀ The witch has been defeated! Caleb\'s Hollow is saved!',
             };
           }
           break;

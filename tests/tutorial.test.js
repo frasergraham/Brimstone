@@ -337,13 +337,6 @@ describe('TUTORIAL_STEPS', () => {
     assert.deepEqual(autoSteps.sort(), ['watch_r1', 'watch_r2', 'watch_r3'].sort());
   });
 
-  test('no references to Salem in any step body or title', () => {
-    for (const step of TUTORIAL_STEPS) {
-      assert.ok(!step.body.includes('Salem'),  `step ${step.id} body has no Salem reference`);
-      assert.ok(!step.title.includes('Salem'), `step ${step.id} title has no Salem reference`);
-    }
-  });
-
   test('combat_intro does not mention action menu for battle', () => {
     const step = TUTORIAL_STEPS.find(s => s.id === 'combat_intro');
     assert.ok(!step.body.includes('action menu'), 'should not reference action menu for attacking');

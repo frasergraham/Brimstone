@@ -22,10 +22,10 @@ globalThis.localStorage = {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-const salemDef = getCampaignById('salem_prologue');
+const hollowDef = getCampaignById('calebs_hollow_prologue');
 
 function buildMap(builderKey) {
-  return salemDef.mapBuilders[builderKey]();
+  return hollowDef.mapBuilders[builderKey]();
 }
 
 // ── Campaign registry ──────────────────────────────────────────────────────
@@ -48,8 +48,8 @@ describe('Campaign registry', () => {
   });
 
   test('getCampaignById returns matching campaign', () => {
-    assert.ok(salemDef);
-    assert.equal(salemDef.id, 'salem_prologue');
+    assert.ok(hollowDef);
+    assert.equal(hollowDef.id, 'calebs_hollow_prologue');
   });
 
   test('getCampaignById returns null for unknown ID', () => {
@@ -61,7 +61,7 @@ describe('Campaign registry', () => {
 
 describe('Mission definitions', () => {
   test('all missions have required fields', () => {
-    for (const m of salemDef.missions) {
+    for (const m of hollowDef.missions) {
       assert.ok(m.id, `mission missing id`);
       assert.ok(m.title, `${m.id} missing title`);
       assert.ok(m.briefing, `${m.id} missing briefing`);
@@ -72,8 +72,8 @@ describe('Mission definitions', () => {
   });
 
   test('all mission map builders exist and return valid mapData', () => {
-    for (const m of salemDef.missions) {
-      const builder = salemDef.mapBuilders[m.mapBuilder];
+    for (const m of hollowDef.missions) {
+      const builder = hollowDef.mapBuilders[m.mapBuilder];
       assert.ok(builder, `No builder for ${m.mapBuilder}`);
       const mapData = builder();
       assert.ok(mapData.tiles instanceof Map, `${m.id}: tiles is not a Map`);
@@ -84,12 +84,12 @@ describe('Mission definitions', () => {
   });
 
   test('prologue campaign has 6 missions total', () => {
-    assert.equal(salemDef.missions.length, 6);
+    assert.equal(hollowDef.missions.length, 6);
   });
 
   test('mission prerequisites form a valid chain', () => {
     const completed = new Set();
-    for (const m of salemDef.missions) {
+    for (const m of hollowDef.missions) {
       if (m.requires) {
         for (const req of m.requires) {
           assert.ok(completed.has(req), `${m.id} requires ${req} which hasn't appeared yet`);
@@ -100,7 +100,7 @@ describe('Mission definitions', () => {
   });
 
   test('firstMission matches the first mission id', () => {
-    assert.equal(salemDef.firstMission, salemDef.missions[0].id);
+    assert.equal(hollowDef.firstMission, hollowDef.missions[0].id);
   });
 });
 
@@ -241,35 +241,35 @@ describe('Campaign class', () => {
   });
 
   test('new campaign starts at firstMission with empty roster', () => {
-    const c = new Campaign(salemDef);
+    const c = new Campaign(hollowDef);
     assert.equal(c.currentMission, 'prologue');
     assert.equal(c.roster.length, 0);
     assert.equal(c.completedMissions.size, 0);
   });
 
   test('campaign stores campaignDef reference', () => {
-    const c = new Campaign(salemDef);
-    assert.equal(c.campaignDef.id, 'salem_prologue');
+    const c = new Campaign(hollowDef);
+    assert.equal(c.campaignDef.id, 'calebs_hollow_prologue');
     assert.equal(c.campaignDef.missions.length, 6);
   });
 
   test('save slot defaults to campaign-{id}', () => {
-    const c = new Campaign(salemDef);
-    assert.equal(c.saveSlot, 'campaign-salem_prologue');
+    const c = new Campaign(hollowDef);
+    assert.equal(c.saveSlot, 'campaign-calebs_hollow_prologue');
   });
 
   test('save slot can be overridden', () => {
-    const c = new Campaign(salemDef, 'custom-slot');
+    const c = new Campaign(hollowDef, 'custom-slot');
     assert.equal(c.saveSlot, 'custom-slot');
   });
 
   test('save and load round-trips', () => {
-    const c = new Campaign(salemDef);
+    const c = new Campaign(hollowDef);
     c.resources.herbs = 5;
     c.roster.push({ name: 'Abigail', hp: 3, maxHp: 4 });
     c.save();
 
-    const c2 = new Campaign(salemDef);
+    const c2 = new Campaign(hollowDef);
     const loaded = c2.load();
     assert.ok(loaded);
     assert.equal(c2.resources.herbs, 5);
@@ -278,14 +278,14 @@ describe('Campaign class', () => {
   });
 
   test('save includes campaignId', () => {
-    const c = new Campaign(salemDef);
+    const c = new Campaign(hollowDef);
     c.save();
-    const raw = JSON.parse(localStorage.getItem(`brimstone-campaign-salem_prologue`));
-    assert.equal(raw.campaignId, 'salem_prologue');
+    const raw = JSON.parse(localStorage.getItem(`brimstone-campaign-calebs_hollow_prologue`));
+    assert.equal(raw.campaignId, 'calebs_hollow_prologue');
   });
 
   test('delete clears save', () => {
-    const c = new Campaign(salemDef, 'test-del');
+    const c = new Campaign(hollowDef, 'test-del');
     c.save();
     assert.ok(Campaign.exists('test-del'));
     c.delete();
@@ -293,7 +293,7 @@ describe('Campaign class', () => {
   });
 
   test('getMissionList returns correct statuses', () => {
-    const c = new Campaign(salemDef);
+    const c = new Campaign(hollowDef);
     const list = c.getMissionList();
     assert.equal(list.length, 6);
     assert.ok(list[0].available);      // prologue — no prereqs
@@ -305,14 +305,14 @@ describe('Campaign class', () => {
   });
 
   test('getMissionDef looks up from campaignDef missions', () => {
-    const c = new Campaign(salemDef);
+    const c = new Campaign(hollowDef);
     const m = c.getMissionDef('prologue');
     assert.ok(m);
     assert.equal(m.title, 'The Awakening');
   });
 
   test('getMapBuilder returns builder from campaignDef', () => {
-    const c = new Campaign(salemDef);
+    const c = new Campaign(hollowDef);
     const builder = c.getMapBuilder('prologue');
     assert.equal(typeof builder, 'function');
     const mapData = builder();
@@ -320,7 +320,7 @@ describe('Campaign class', () => {
   });
 
   test('applyMissionResult advances campaign on victory', () => {
-    const c = new Campaign(salemDef);
+    const c = new Campaign(hollowDef);
     c.applyMissionResult('prologue', {
       won: true,
       survivors: [{ name: 'Martha', hp: 2, maxHp: 3, attack: 1, defense: 1 }],
@@ -334,7 +334,7 @@ describe('Campaign class', () => {
   });
 
   test('applyMissionResult applies rewards on victory', () => {
-    const c = new Campaign(salemDef);
+    const c = new Campaign(hollowDef);
     c.applyMissionResult('prologue', {
       won: true,
       survivors: [],
@@ -346,7 +346,7 @@ describe('Campaign class', () => {
   });
 
   test('applyMissionResult does not advance on defeat', () => {
-    const c = new Campaign(salemDef);
+    const c = new Campaign(hollowDef);
     c.applyMissionResult('prologue', {
       won: false,
       survivors: [],
@@ -358,7 +358,7 @@ describe('Campaign class', () => {
   });
 
   test('permadeath: dead survivors are removed from roster', () => {
-    const c = new Campaign(salemDef);
+    const c = new Campaign(hollowDef);
     c.roster = [
       { name: 'Alice', hp: 3, maxHp: 3 },
       { name: 'Bob', hp: 2, maxHp: 3 },
@@ -374,28 +374,28 @@ describe('Campaign class', () => {
   });
 
   test('isComplete returns false when missions remain', () => {
-    const c = new Campaign(salemDef);
+    const c = new Campaign(hollowDef);
     c.completedMissions.add('prologue');
     assert.ok(!c.isComplete());
   });
 
   test('isComplete returns true when all missions are completed', () => {
-    const c = new Campaign(salemDef);
-    for (const m of salemDef.missions) c.completedMissions.add(m.id);
+    const c = new Campaign(hollowDef);
+    for (const m of hollowDef.missions) c.completedMissions.add(m.id);
     assert.ok(c.isComplete());
   });
 
   test('static isCampaignCompleted returns false with no save', () => {
     localStorage.clear();
-    assert.ok(!Campaign.isCampaignCompleted(salemDef));
+    assert.ok(!Campaign.isCampaignCompleted(hollowDef));
   });
 
   test('static isCampaignCompleted returns true when all missions done', () => {
     localStorage.clear();
-    const c = new Campaign(salemDef);
-    for (const m of salemDef.missions) c.completedMissions.add(m.id);
+    const c = new Campaign(hollowDef);
+    for (const m of hollowDef.missions) c.completedMissions.add(m.id);
     c.save();
-    assert.ok(Campaign.isCampaignCompleted(salemDef));
+    assert.ok(Campaign.isCampaignCompleted(hollowDef));
     localStorage.clear();
   });
 });
@@ -506,7 +506,7 @@ describe('disableScoring', () => {
   });
 
   test('all prologue missions have disableScoring set', () => {
-    for (const m of salemDef.missions) {
+    for (const m of hollowDef.missions) {
       assert.equal(typeof m.disableScoring, 'boolean', `${m.id} missing disableScoring`);
     }
   });
@@ -516,13 +516,13 @@ describe('disableScoring', () => {
 
 describe('Roster balancing config', () => {
   test('witchs_trail mission has minSurvivors and maxSurvivors', () => {
-    const m = salemDef.missions.find(m => m.id === 'witchs_trail');
+    const m = hollowDef.missions.find(m => m.id === 'witchs_trail');
     assert.equal(m.minSurvivors, 1);
     assert.equal(m.maxSurvivors, 3);
   });
 
   test('minSurvivors <= maxSurvivors when both set', () => {
-    for (const m of salemDef.missions) {
+    for (const m of hollowDef.missions) {
       if (m.minSurvivors != null && m.maxSurvivors != null) {
         assert.ok(m.minSurvivors <= m.maxSurvivors,
           `${m.id}: minSurvivors (${m.minSurvivors}) > maxSurvivors (${m.maxSurvivors})`);
@@ -531,7 +531,7 @@ describe('Roster balancing config', () => {
   });
 
   test('maxSurvivors >= maxSurvivorsFromRoster when both set', () => {
-    for (const m of salemDef.missions) {
+    for (const m of hollowDef.missions) {
       if (m.maxSurvivors != null && m.maxSurvivorsFromRoster != null) {
         assert.ok(m.maxSurvivors >= m.maxSurvivorsFromRoster || m.maxSurvivorsFromRoster === 0,
           `${m.id}: maxSurvivors < maxSurvivorsFromRoster`);
@@ -540,7 +540,7 @@ describe('Roster balancing config', () => {
   });
 
   test('missions without min/max are valid (fields are optional)', () => {
-    const m = salemDef.missions.find(m => m.id === 'prologue');
+    const m = hollowDef.missions.find(m => m.id === 'prologue');
     // These fields are optional; should be undefined or null
     assert.ok(m.minSurvivors == null || typeof m.minSurvivors === 'number');
   });
@@ -649,14 +649,14 @@ describe('markRosterUsedByName', () => {
 
 describe('maxDiscoverableSurvivors config', () => {
   test('mission 1 has no discoverable survivors, mission 2 has 2', () => {
-    const m1 = salemDef.missions.find(m => m.id === 'prologue');
-    const m2 = salemDef.missions.find(m => m.id === 'first_night');
+    const m1 = hollowDef.missions.find(m => m.id === 'prologue');
+    const m2 = hollowDef.missions.find(m => m.id === 'first_night');
     assert.equal(m1.maxDiscoverableSurvivors, 0);
     assert.equal(m2.maxDiscoverableSurvivors, 2);
   });
 
   test('mission 3 does not restrict discoverable survivors', () => {
-    const m3 = salemDef.missions.find(m => m.id === 'witchs_trail');
+    const m3 = hollowDef.missions.find(m => m.id === 'witchs_trail');
     assert.equal(m3.maxDiscoverableSurvivors, undefined);
   });
 });
@@ -665,7 +665,7 @@ describe('maxDiscoverableSurvivors config', () => {
 
 describe('disableScoring on missions', () => {
   test('all prologue missions have disableScoring set except dark_ritual', () => {
-    for (const m of salemDef.missions) {
+    for (const m of hollowDef.missions) {
       if (m.id === 'dark_ritual') {
         assert.equal(m.disableScoring, false, 'dark_ritual uses node scoring');
       } else {
@@ -763,7 +763,7 @@ describe('processStoryTriggers', () => {
 
 describe('mission story triggers and loot overrides', () => {
   test('all missions with storyTriggers have valid trigger structure', () => {
-    for (const m of salemDef.missions) {
+    for (const m of hollowDef.missions) {
       if (!m.storyTriggers) continue;
       for (const t of m.storyTriggers) {
         assert.ok(t.type === 'round' || t.type === 'area', `${m.id}: trigger must be round or area`);
@@ -777,7 +777,7 @@ describe('mission story triggers and loot overrides', () => {
   });
 
   test('missions with lootOverrides have valid structure', () => {
-    for (const m of salemDef.missions) {
+    for (const m of hollowDef.missions) {
       if (!m.lootOverrides) continue;
       if (m.lootOverrides.remove) {
         assert.ok(Array.isArray(m.lootOverrides.remove), `${m.id}: remove should be array`);
@@ -786,18 +786,18 @@ describe('mission story triggers and loot overrides', () => {
   });
 
   test('river_crossing has reach_hex objective', () => {
-    const m = salemDef.missions.find(m => m.id === 'river_crossing');
+    const m = hollowDef.missions.find(m => m.id === 'river_crossing');
     assert.equal(m.objectives.win.type, 'reach_hex');
   });
 
   test('dark_ritual has rounds_exceeded lose condition', () => {
-    const m = salemDef.missions.find(m => m.id === 'dark_ritual');
+    const m = hollowDef.missions.find(m => m.id === 'dark_ritual');
     const loseConds = Array.isArray(m.objectives.lose) ? m.objectives.lose : [m.objectives.lose];
     assert.ok(loseConds.some(l => l.type === 'rounds_exceeded'));
   });
 
   test('mission 6-step progression chain is valid', () => {
-    const ids = salemDef.missions.map(m => m.id);
+    const ids = hollowDef.missions.map(m => m.id);
     assert.deepEqual(ids, [
       'prologue', 'gathering_survivors', 'first_night',
       'river_crossing', 'dark_ritual', 'witchs_trail',
@@ -805,7 +805,7 @@ describe('mission story triggers and loot overrides', () => {
   });
 
   test('all missions have healBonus defined', () => {
-    for (const m of salemDef.missions) {
+    for (const m of hollowDef.missions) {
       assert.ok(typeof m.healBonus === 'number', `${m.id} should have healBonus`);
       assert.ok(m.healBonus > 0, `${m.id} healBonus should be positive`);
     }
@@ -819,7 +819,7 @@ describe('healBonus on mission victory', () => {
 
   beforeEach(() => {
     localStorage.clear();
-    campaign = new Campaign(salemDef);
+    campaign = new Campaign(hollowDef);
   });
 
   test('heals hero and survivors on victory', () => {
@@ -897,7 +897,7 @@ describe('healBonus on mission victory', () => {
         hasWitch: false, disableScoring: true, maxSurvivorsFromRoster: 0,
         // no healBonus
       }],
-      mapBuilders: salemDef.mapBuilders,
+      mapBuilders: hollowDef.mapBuilders,
     };
     const c = new Campaign(customDef);
     c.heroStats = { hp: 5, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };

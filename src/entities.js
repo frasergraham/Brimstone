@@ -72,7 +72,7 @@ export const SURVIVOR_ROSTER = [
   {
     name: 'Mary Quinn',
     title: 'Nurse',
-    bio: "Kept half of Salem alive through the fever of '88.",
+    bio: "Kept half of Caleb's Hollow alive through the fever of '88.",
     maxHp: 5, attack: 1, defense: 3,
     ability: SurvivorAbility.HEAL,
     abilityLabel: 'Tend Wounds — heals the hero 1 HP (costs 1 action)',
@@ -200,7 +200,7 @@ export const SURVIVOR_ROSTER = [
   {
     name: 'Josiah Dane',
     title: 'Carpenter',
-    bio: "Built half the roofs in Salem. Knows timber like a brother.",
+    bio: "Built half the roofs in Caleb's Hollow. Knows timber like a brother.",
     maxHp: 5, attack: 2, defense: 2,
     ability: SurvivorAbility.FORTIFY_DOUBLE,
     abilityLabel: 'Master Builder — fortifies a building to full strength with just Wood',

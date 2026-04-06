@@ -2451,7 +2451,7 @@ export class UIController {
       ? 'Exposed survivors suffer 1 damage each night.'
       : `Exposed survivors now suffer ${level} damage each night.`;
     this._showResultDialog([
-      `🌑 The curse deepens — Salem's mystical energy grows stronger!`,
+      `🌑 The curse deepens — Caleb's Hollow's mystical energy grows stronger!`,
       ``,
       desc,
       `🌙 Night: survivors in the open take ${level} damage`,
