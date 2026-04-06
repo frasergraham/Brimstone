@@ -408,18 +408,21 @@ export class UIController {
       this.onRedraw();
     });
 
-    // Submit Plan button in header — becomes "Menu" after submission
+    // Submit Plan button in header — submit only (separate return-to-menu button)
     const _submitHandler = () => {
       if (this.state.gameOver) return;
-      if (this._planSubmitted) {
-        if (this.onReturnToMenu) this.onReturnToMenu();
-        return;
-      }
       if (this._planMode) this._doSubmitPlan();
     };
     this._el('end-turn-btn')?.addEventListener('click', _submitHandler);
     this._el('end-turn-btn')?.addEventListener('touchend', e => {
       e.preventDefault(); _submitHandler();
+    }, { passive: false });
+
+    // Return-to-menu button in header — shown only after plan submission
+    const _returnHandler = () => { if (this.onReturnToMenu) this.onReturnToMenu(); };
+    this._el('plan-return-btn')?.addEventListener('click', _returnHandler);
+    this._el('plan-return-btn')?.addEventListener('touchend', e => {
+      e.preventDefault(); _returnHandler();
     }, { passive: false });
 
     // Replay last turn button in header
@@ -520,6 +523,8 @@ export class UIController {
     if (clearBtn) clearBtn.style.display = '';
     const menuBtn = this._el('plan-menu-btn');
     if (menuBtn) menuBtn.style.display = 'none';
+    const returnBtn = this._el('plan-return-btn');
+    if (returnBtn) returnBtn.style.display = 'none';
 
     // Show replay button if there's history to replay
     const replayBtn = this._el('replay-turn-btn');
@@ -848,6 +853,7 @@ export class UIController {
     if (this._planSubmitted) return;
     this._stopCountdown();
     this._planSubmitted = true;
+    this._clearSelection();
 
     const panel = this._el('plan-panel');
     if (panel) panel.classList.add('plan-submitted');
@@ -2076,31 +2082,42 @@ export class UIController {
 
   _renderEndTurnBtn() {
     const btn = this._el('end-turn-btn');
+    const returnBtn = this._el('plan-return-btn');
     if (!btn) return;
     const state = this.state;
 
     if (!this._planMode) {
-      // Outside planning mode, hide the button entirely
+      // Outside planning mode, hide both buttons entirely
       btn.disabled = true;
       btn.style.display = 'none';
+      if (returnBtn) returnBtn.style.display = 'none';
       return;
     }
 
-    btn.style.display = '';
-    btn.disabled = state.gameOver;
-    btn.classList.toggle('urgent', !this._planSubmitted && !state.gameOver);
-    btn.classList.add('planning-active');
-    btn.title = this._planSubmitted ? 'Return to menu' : 'Submit Plan';
-    // Let the countdown timer own the text when it's running
-    if (!this._countdownTimer && !this._graceActive) {
-      btn.textContent = this._planSubmitted ? '← Menu' : '✓ Submit';
-    }
     // Hide when plan panel is expanded (not collapsed)
     const panel = this._el('plan-panel');
     const panelOpen = panel && panel.style.display !== 'none'
                    && !panel.classList.contains('collapsed');
-    btn.classList.toggle('plan-open', !!panelOpen);
-    btn.classList.toggle('plan-was-submitted', !!this._planSubmitted);
+
+    if (this._planSubmitted) {
+      // After submission: hide submit, show return-to-menu
+      btn.style.display = 'none';
+      if (returnBtn) {
+        returnBtn.style.display = panelOpen ? 'none' : '';
+      }
+    } else {
+      // During planning: show submit, hide return-to-menu
+      btn.style.display = '';
+      btn.disabled = state.gameOver;
+      btn.classList.toggle('urgent', !state.gameOver);
+      btn.classList.add('planning-active');
+      btn.title = 'Submit Plan';
+      if (!this._countdownTimer && !this._graceActive) {
+        btn.textContent = '✓ Submit';
+      }
+      btn.classList.toggle('plan-open', !!panelOpen);
+      if (returnBtn) returnBtn.style.display = 'none';
+    }
   }
 
   _handleActionButton(button) {
