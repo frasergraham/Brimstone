@@ -29,7 +29,7 @@ import { MAP_SIZES } from './map.js';
 import { buildTutorialMap, TUTORIAL_WAVES, TUTORIAL_FORCED_DICE } from './tutorial/tutorial-config.js';
 import { nodeController } from './game.js';
 import { TutorialConductor } from './tutorial.js';
-import { createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, setForcedDice, EntityType, markRosterUsedByName } from './entities.js';
+import { createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, setForcedDice, EntityType, markRosterUsedByName, ENTITY_COLOR } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
@@ -2024,13 +2024,90 @@ function _showCampaignSelectScreen() {
   showStep('campaign-select');
 }
 
-function _showCampaignScreen(campaignDef) {
+async function _showCampaignScreen(campaignDef) {
   if (campaignDef) {
     _activeCampaign = new Campaign(campaignDef);
     _activeCampaign.load();
   }
+  await _loadCampaignPortraits();
   _renderCampaignScreen();
   showStep('campaign');
+}
+
+const _RESOURCE_ICONS = { wood: '🪵', metal: '⚙', herbs: '🌿', food: '🍞', silver: '⚔', scripture: '📜' };
+
+function _hpColor(hp, maxHp) {
+  const pct = hp / maxHp;
+  return pct > 0.6 ? '#4caf50' : pct > 0.3 ? '#ff9800' : '#f44336';
+}
+
+// ── Lightweight portrait loader for campaign screens (no Renderer needed) ──
+const _campaignPortraits = { img: null, rects: null, cache: new Map(), loading: false };
+
+async function _loadCampaignPortraits() {
+  if (_campaignPortraits.img || _campaignPortraits.loading) return;
+  _campaignPortraits.loading = true;
+  const img = new Image();
+  await new Promise(resolve => {
+    img.onload = resolve;
+    img.onerror = resolve;
+    img.src = 'assets/tilemap.png';
+  });
+  if (img.naturalWidth) {
+    _campaignPortraits.img = img;
+    _campaignPortraits.rects = Renderer._buildSpriteRects().rects;
+  }
+  _campaignPortraits.loading = false;
+}
+
+function _getCampaignPortrait(assetId, size = 48) {
+  const p = _campaignPortraits;
+  if (!p.img || !p.rects) return null;
+  const rect = p.rects.get(assetId);
+  if (!rect) return null;
+  const key = `${assetId}@${size}`;
+  if (p.cache.has(key)) return p.cache.get(key);
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  c.getContext('2d').drawImage(p.img, rect.x, rect.y, rect.size, rect.size, 0, 0, size, size);
+  const url = c.toDataURL();
+  p.cache.set(key, url);
+  return url;
+}
+
+function _campaignCardHTML(name, title, assetId, color, hp, maxHp, attack, defense, ability, isHero) {
+  const hpPct = Math.round((hp / maxHp) * 100);
+  const hpClr = _hpColor(hp, maxHp);
+  const cls = isHero ? 'campaign-party-card hero' : 'campaign-party-card';
+  const portrait = _getCampaignPortrait(assetId, 48);
+  const iconHtml = portrait
+    ? `<img class="cp-portrait" src="${portrait}" style="border-color:${color}" alt="">`
+    : `<span class="cp-glyph" style="background:${color}">${isHero ? '⚔' : '☺'}</span>`;
+  return `<div class="${cls}">
+    ${iconHtml}
+    <div class="cp-info">
+      <div class="cp-name" style="color:${color}">${name}${title ? ` <span class="cp-title">${title}</span>` : ''}</div>
+      <div class="cp-hp-track"><div class="cp-hp-fill" style="width:${hpPct}%;background:${hpClr}"></div></div>
+      <div class="cp-stats">
+        <span>ATK ${attack}</span><span>DEF ${defense}</span>${ability ? `<span class="cp-ability">${ability}</span>` : ''}
+        <span class="cp-hp-label">${hp}/${maxHp}</span>
+      </div>
+    </div>
+  </div>`;
+}
+
+function _campaignPartyHTML(heroStats, roster) {
+  let html = '<div class="campaign-party">';
+  // Hero card
+  const weaponLabel = heroStats.weapon ? ` (${heroStats.weapon.name || heroStats.weapon})` : '';
+  html += _campaignCardHTML('Hero' + weaponLabel, null, 'hero', ENTITY_COLOR.hero, heroStats.hp, heroStats.maxHp, heroStats.attack, heroStats.defense, null, true);
+  // Survivor cards
+  for (const s of roster) {
+    const assetId = Renderer.survivorAssetId(s.title) || 'survivor_innkeeper';
+    html += _campaignCardHTML(s.name, s.title, assetId, s.color || ENTITY_COLOR.survivor, s.hp, s.maxHp, s.attack, s.defense, s.abilityLabel, false);
+  }
+  html += '</div>';
+  return html;
 }
 
 function _renderCampaignScreen() {
@@ -2048,16 +2125,16 @@ function _renderCampaignScreen() {
     titleEl.textContent = _activeCampaign.campaignDef.title;
   }
 
-  // Roster summary
-  if (_activeCampaign.roster.length > 0) {
-    rosterEl.style.display = '';
-    rosterEl.innerHTML = `<div class="campaign-roster-label">Roster: ${_activeCampaign.roster.length} survivor${_activeCampaign.roster.length !== 1 ? 's' : ''}</div>` +
-      `<div class="campaign-resources-label">` +
-      Object.entries(_activeCampaign.resources).filter(([,v]) => v > 0).map(([k,v]) => `${k}: ${v}`).join(' · ') +
-      `</div>`;
-  } else {
-    rosterEl.style.display = 'none';
-  }
+  // Party roster display (hero + survivors)
+  rosterEl.style.display = '';
+  const resEntries = Object.entries(_activeCampaign.resources).filter(([,v]) => v > 0);
+  const resourcesHtml = resEntries.length
+    ? `<div class="campaign-resources">${resEntries.map(([k,v]) => `<span class="cr-item"><span class="cr-icon">${_RESOURCE_ICONS[k] || ''}</span><span class="cr-count">${v}</span><span class="cr-label">${k}</span></span>`).join('')}</div>`
+    : '';
+  rosterEl.innerHTML =
+    `<div class="campaign-roster-label">Your Party</div>` +
+    _campaignPartyHTML(_activeCampaign.heroStats, _activeCampaign.roster) +
+    resourcesHtml;
 
   // Mission list
   const missions = _activeCampaign.getMissionList();
@@ -2109,12 +2186,13 @@ function _showMissionBriefing(missionId) {
   const pickerEl = document.getElementById('campaign-roster-picker');
   if (_activeCampaign.roster.length > 0 && missionDef.maxSurvivorsFromRoster > 0) {
     deployEl.style.display = '';
-    pickerEl.innerHTML = _activeCampaign.roster.map((s, i) => `
-      <label class="campaign-survivor-pick">
+    pickerEl.innerHTML = _activeCampaign.roster.map((s, i) => {
+      const assetId = Renderer.survivorAssetId(s.title) || 'survivor_innkeeper';
+      return `<label class="campaign-survivor-pick">
         <input type="checkbox" data-idx="${i}" ${i < missionDef.maxSurvivorsFromRoster ? 'checked' : ''}>
-        <span>${s.name} (${s.ability}) HP:${s.hp}/${s.maxHp}</span>
-      </label>
-    `).join('');
+        ${_campaignCardHTML(s.name, s.title, assetId, s.color || ENTITY_COLOR.survivor, s.hp, s.maxHp, s.attack, s.defense, s.abilityLabel, false)}
+      </label>`;
+    }).join('');
   } else {
     deployEl.style.display = 'none';
   }
@@ -2365,14 +2443,21 @@ function _handleCampaignMissionEnd() {
     <div>Survivors remaining: ${survivors.length}</div>
   `;
 
-  // Roster status
-  const rosterEl = document.getElementById('debrief-roster');
-  if (survivors.length > 0) {
-    rosterEl.innerHTML = '<h3>Surviving Roster</h3>' +
-      survivors.map(s => `<div class="debrief-survivor">${s.name} — HP: ${s.hp}/${s.maxHp}</div>`).join('');
-  } else {
-    rosterEl.innerHTML = '';
+  // Heal bonus notice
+  if (won && missionDef.healBonus) {
+    statsEl.insertAdjacentHTML('afterend',
+      `<div class="debrief-heal">✦ Rest bonus: all survivors healed +${missionDef.healBonus} HP</div>`);
   }
+
+  // Roster status — rich party cards
+  const rosterEl = document.getElementById('debrief-roster');
+  const heroSnap = state.hero ? {
+    hp: state.hero.hp, maxHp: state.hero.maxHp,
+    attack: state.hero.attack, defense: state.hero.defense,
+    weapon: state.hero.weapon,
+  } : _activeCampaign.heroStats;
+  rosterEl.innerHTML = '<h3>Surviving Roster</h3>' +
+    _campaignPartyHTML(heroSnap, survivors);
 
   // Clean up game state
   renderer = null; ui = null; witchAI = null; heroAI = null;
