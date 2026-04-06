@@ -1513,40 +1513,21 @@ export class UIController {
       return;
     }
 
-    // Compute arc geometry
+    // Compute arc layout — vertical stack with horizontal arc to avoid origin hex
     const screenPos = _getEntityScreenPos(this, entity);
     if (!screenPos) return;
 
-    // Decide direction: open to side with more space
     const openRight = screenPos.x < window.innerWidth / 2;
-    const centerAngle = openRight ? 0 : Math.PI; // 0 = right, PI = left
-
-    // Compute initial arc radius (hex edge); overlap resolution happens in _positionArcPopup
     const canvasRect = this.canvas.getBoundingClientRect();
     const canvasScale = canvasRect.width / this.canvas.width;
     const hexScreenPx = this.renderer.hexSize * canvasScale * this.renderer.zoomLevel;
-    // Dynamic gap: keep items within a ~160° arc so the radius stays tight.
-    // With many items, narrow the gap rather than blowing out the radius.
+
     const totalItems = arcItems.length;
-    const MAX_SPAN  = 160 * (Math.PI / 180);
-    const PREF_GAP  = 40  * (Math.PI / 180);
-    const ITEM_GAP  = totalItems <= 1 ? 0 : Math.min(PREF_GAP, MAX_SPAN / (totalItems - 1));
-    const ARC_RADIUS = _baseArcRadius(hexScreenPx);
-    this._arcRadius = ARC_RADIUS;
-
-    const totalAngle = Math.max(0, totalItems - 1) * ITEM_GAP;
-    const startAngle = centerAngle - totalAngle / 2;
-
-    // Assign angles uniformly — keep top-to-bottom order consistent on both sides
-    for (let i = 0; i < arcItems.length; i++) {
-      // When opening left (π), subtract so first item stays at top
-      arcItems[i]._angle = openRight
-        ? startAngle + i * ITEM_GAP
-        : centerAngle + totalAngle / 2 - i * ITEM_GAP;
+    for (let i = 0; i < totalItems; i++) {
       arcItems[i]._idx = i;
     }
 
-    // Generate arc item HTML — initial positions use base radius (will be corrected before animating)
+    // Generate arc item HTML — positions set after measurement
     let html = '';
     for (const item of arcItems) {
       const delay = item._idx * 30;
@@ -1566,37 +1547,26 @@ export class UIController {
     // Store arc state for pan/zoom tracking and canvas line drawing
     this._arcEntityCol = effectiveEntity.col;
     this._arcEntityRow = effectiveEntity.row;
-    this._arcItems = arcItems; // keep for line drawing
+    this._arcItems = arcItems;
+    this._arcOpenRight = openRight;
 
     // Position popup centered on entity
     _positionArcPopup(popup, this);
     popup.style.display = 'block';
 
-    // Measure buttons at full scale (they start at scale 0.3 but we need final size).
-    // Temporarily force full scale with no transition to measure, then reset.
+    // Measure buttons at full scale
     const btns = popup.querySelectorAll('.arc-item');
     for (const btn of btns) {
       btn.style.transition = 'none';
       btn.style.transform = 'translate(-50%, -50%) scale(1)';
-      btn.style.opacity = '0'; // keep invisible during measurement
+      btn.style.opacity = '0';
     }
-    // Force layout so measurements are accurate
-    popup.offsetHeight; // eslint-disable-line no-unused-expressions
+    popup.offsetHeight; // force layout
 
-    // Resolve overlap-free radius using real button sizes
-    const finalR = _resolveArcLayout(popup, this, ARC_RADIUS);
-    this._arcRadius = finalR;
-    this._arcBaseR = ARC_RADIUS;
+    // Compute positions: stack vertically with consistent gap, arc outward to clear hex
+    _computeArcPositions(popup, this, hexScreenPx);
 
-    // Set final positions on CSS custom properties
-    for (let i = 0; i < arcItems.length && i < btns.length; i++) {
-      const fx = Math.cos(arcItems[i]._angle) * finalR;
-      const fy = Math.sin(arcItems[i]._angle) * finalR;
-      btns[i].style.setProperty('--arc-x', fx.toFixed(1) + 'px');
-      btns[i].style.setProperty('--arc-y', fy.toFixed(1) + 'px');
-    }
-
-    // Reset to pre-animation state (collapsed at center) then let CSS transition to final spot
+    // Reset to pre-animation state then let CSS transition to final spot
     for (const btn of btns) {
       btn.style.transform = '';
       btn.style.opacity = '';
@@ -1669,43 +1639,18 @@ export class UIController {
       });
     }
 
-    // Compute arc geometry
+    // Compute layout
     const canvasRect = this.canvas.getBoundingClientRect();
     const canvasScale = canvasRect.width / this.canvas.width;
     const hexScreenPx = this.renderer.hexSize * canvasScale * this.renderer.zoomLevel;
 
-    // Decide direction: open to side with more space
-    const { x: hx, y: hy } = this.renderer.hexToCanvasPos(originHex.col, originHex.row);
+    const { x: hx } = this.renderer.hexToCanvasPos(originHex.col, originHex.row);
     const scale = canvasRect.width / this.canvas.width;
     const screenX = canvasRect.left + hx * scale;
     const openRight = screenX < window.innerWidth / 2;
-    const centerAngle = openRight ? 0 : Math.PI;
 
-    // Use a consistent target radius for portrait arcs — large enough that
-    // no button obscures the origin hex (so players can tap to dismiss).
-    // The closest edge of any button to center is (radius - halfSize); we
-    // need that to exceed the hex radius so the hex stays tappable.
-    const BASE_R = _baseArcRadius(hexScreenPx);
-    const hexTapZone = hexScreenPx * 0.55; // half-hex + small margin
-    // Portrait items are ~56×80px; worst-case half-diagonal ~50px
-    const PORTRAIT_CLEARANCE = 50;
-    const TARGET_R = Math.max(BASE_R, hexTapZone + PORTRAIT_CLEARANCE, 70);
-    this._arcRadius = TARGET_R;
-
-    // Compute angular gap dynamically: spread items evenly within a max arc
-    // span (~180°) so the radius stays consistent regardless of item count.
     const totalItems = arcItems.length;
-    const MAX_SPAN = Math.PI; // 180° max arc span
-    const MIN_GAP  = 35 * (Math.PI / 180); // don't pack tighter than 35°
-    const ITEM_GAP = totalItems <= 1 ? 0
-      : Math.max(MIN_GAP, Math.min(MAX_SPAN / (totalItems - 1), 65 * (Math.PI / 180)));
-    const totalAngle = Math.max(0, totalItems - 1) * ITEM_GAP;
-    const startAngle = centerAngle - totalAngle / 2;
-
-    for (let i = 0; i < arcItems.length; i++) {
-      arcItems[i]._angle = openRight
-        ? startAngle + i * ITEM_GAP
-        : centerAngle + totalAngle / 2 - i * ITEM_GAP;
+    for (let i = 0; i < totalItems; i++) {
       arcItems[i]._idx = i;
     }
 
@@ -1725,12 +1670,13 @@ export class UIController {
     this._arcEntityCol = originHex.col;
     this._arcEntityRow = originHex.row;
     this._arcItems = arcItems;
+    this._arcOpenRight = openRight;
 
     // Position popup centered on hex
     _positionArcPopup(popup, this);
     popup.style.display = 'block';
 
-    // Measure buttons at full scale for overlap resolution
+    // Measure buttons at full scale
     const btns = popup.querySelectorAll('.arc-item');
     for (const btn of btns) {
       btn.style.transition = 'none';
@@ -1739,16 +1685,7 @@ export class UIController {
     }
     popup.offsetHeight; // force layout
 
-    const finalR = _resolveArcLayout(popup, this, TARGET_R);
-    this._arcRadius = finalR;
-    this._arcBaseR = TARGET_R;
-
-    for (let i = 0; i < arcItems.length && i < btns.length; i++) {
-      const fx = Math.cos(arcItems[i]._angle) * finalR;
-      const fy = Math.sin(arcItems[i]._angle) * finalR;
-      btns[i].style.setProperty('--arc-x', fx.toFixed(1) + 'px');
-      btns[i].style.setProperty('--arc-y', fy.toFixed(1) + 'px');
-    }
+    _computeArcPositions(popup, this, hexScreenPx);
 
     // Reset to pre-animation state then let CSS transition to final spot
     for (const btn of btns) {
@@ -3957,82 +3894,58 @@ function _getEntityScreenPos(ui, entity) {
   };
 }
 
-/** Compute arc radius: starts at hex edge, pushes out until items don't overlap. */
-/** Compute base arc radius (hex edge). */
-function _baseArcRadius(hexScreenPx) {
-  return hexScreenPx * 0.87 + 4;
-}
-
 /**
- * Resolve arc layout so no buttons overlap and none obscure the origin hex.
- * Starts at baseR, measures actual button rects, and pushes radius out
- * until all bounding boxes are clear of each other and the hex tap zone.
- * Returns the final radius used.
+ * Compute arc positions: stack items vertically with a consistent gap,
+ * then push each one out horizontally so nothing overlaps the origin hex.
  */
-function _resolveArcLayout(popup, ui, baseR) {
+function _computeArcPositions(popup, ui, hexScreenPx) {
   const items = ui._arcItems;
-  if (!items?.length) return baseR;
+  if (!items?.length) return;
   const btns = popup.querySelectorAll('.arc-item');
-  if (!btns.length) return baseR;
+  if (!btns.length) return;
+  const openRight = ui._arcOpenRight;
 
-  // Measure button dimensions (only need width/height, position is computed)
+  // Measure button heights
   const sizes = [];
   for (let i = 0; i < btns.length; i++) {
     const rect = btns[i].getBoundingClientRect();
     sizes.push({ w: rect.width, h: rect.height });
   }
 
-  // Compute hex tap zone radius (half-hex + margin) so buttons never cover it
-  const canvasRect = ui.canvas.getBoundingClientRect();
-  const canvasScale = canvasRect.width / ui.canvas.width;
-  const hexScreenPx = ui.renderer.hexSize * canvasScale * ui.renderer.zoomLevel;
-  const hexTapZone = hexScreenPx * 0.55;
+  // Vertical layout: consistent gap between items, centered on origin
+  const V_GAP = 6;
+  const totalHeight = sizes.reduce((s, sz) => s + sz.h, 0) + V_GAP * (sizes.length - 1);
+  let cy = -totalHeight / 2;
 
-  // Check if any button's bounding box overlaps the hex center tap zone
-  function obscuresHex(r) {
-    for (let i = 0; i < items.length; i++) {
-      const cx = Math.cos(items[i]._angle) * r;
-      const cy = Math.sin(items[i]._angle) * r;
-      const hw = sizes[i].w / 2, hh = sizes[i].h / 2;
-      // Closest point of button AABB to origin (0,0)
-      const nearX = Math.max(0, Math.abs(cx) - hw);
-      const nearY = Math.max(0, Math.abs(cy) - hh);
-      if (Math.sqrt(nearX * nearX + nearY * nearY) < hexTapZone) return true;
-    }
-    return false;
+  // Hex avoidance radius — items must clear this distance from center
+  const hexClear = hexScreenPx * 0.6 + 8;
+
+  for (let i = 0; i < items.length && i < btns.length; i++) {
+    const itemCy = cy + sizes[i].h / 2;
+
+    // Horizontal offset: push out so the inner edge of the button clears the hex.
+    // For items near the vertical center, push further out; items near top/bottom
+    // are already far from the hex and need less horizontal offset.
+    const vertDist = Math.abs(itemCy);
+    const halfW = sizes[i].w / 2;
+    const halfH = sizes[i].h / 2;
+    // Minimum x so the closest corner of the button clears the hex circle
+    const innerClear = Math.max(0, hexClear * hexClear - (Math.max(0, vertDist - halfH)) ** 2);
+    const minX = Math.sqrt(innerClear) + halfW;
+
+    const fx = openRight ? minX : -minX;
+    const fy = itemCy;
+
+    items[i]._x = fx;
+    items[i]._y = fy;
+    btns[i].style.setProperty('--arc-x', fx.toFixed(1) + 'px');
+    btns[i].style.setProperty('--arc-y', fy.toFixed(1) + 'px');
+
+    cy += sizes[i].h + V_GAP;
   }
 
-  // Check if any pair of bounding boxes overlaps at a given radius
-  function hasOverlap(r) {
-    for (let i = 0; i < items.length; i++) {
-      const cx1 = Math.cos(items[i]._angle) * r;
-      const cy1 = Math.sin(items[i]._angle) * r;
-      const hw1 = sizes[i].w / 2, hh1 = sizes[i].h / 2;
-      for (let j = i + 1; j < items.length; j++) {
-        const cx2 = Math.cos(items[j]._angle) * r;
-        const cy2 = Math.sin(items[j]._angle) * r;
-        const hw2 = sizes[j].w / 2, hh2 = sizes[j].h / 2;
-        // AABB overlap check with 2px padding
-        if (Math.abs(cx1 - cx2) < hw1 + hw2 + 2 &&
-            Math.abs(cy1 - cy2) < hh1 + hh2 + 2) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  // Only enforce hex-clearance for disambiguation arcs (portrait items) —
-  // regular action arcs don't need it and it would blow out their radius.
-  const hasPortraits = items.some(i => i._portrait);
-
-  // Start at base radius and step outward until no overlaps (and hex is clear for portrait arcs)
-  let r = baseR;
-  const MAX_R = 400; // safety cap
-  while (r < MAX_R && (hasOverlap(r) || (hasPortraits && obscuresHex(r)))) {
-    r += 8;
-  }
-  return r;
+  // Store radius estimate for canvas line drawing (distance to center of middle item)
+  ui._arcRadius = hexClear + 20;
 }
 
 /** Position the arc popup centered on the entity's screen position and set up canvas lines. */
@@ -4051,32 +3964,19 @@ function _positionArcPopup(popup, ui) {
   popup.style.top  = sy + 'px';
   popup.style.transform = 'none';
 
-  // Update renderer's arc menu lines and DOM positions for canvas drawing
+  // Recompute positions on zoom change
   if (ui._arcItems?.length) {
-    // Recompute radius on zoom change (re-resolve overlap with current button sizes)
-    const arcScale = canvasRect.width / ui.canvas.width;
-    const hexPx = ui.renderer.hexSize * arcScale * ui.renderer.zoomLevel;
-    const baseR = _baseArcRadius(hexPx);
-    const prevR = ui._arcRadius || baseR;
-    // Only re-resolve if zoom changed enough to matter (base radius shifted)
-    if (Math.abs(baseR - (ui._arcBaseR || 0)) > 2) {
-      const arcR = _resolveArcLayout(popup, ui, baseR);
-      ui._arcRadius = arcR;
-      ui._arcBaseR = baseR;
-      const arcBtns = popup.querySelectorAll('.arc-item');
-      for (let i = 0; i < ui._arcItems.length && i < arcBtns.length; i++) {
-        const ix = Math.cos(ui._arcItems[i]._angle) * arcR;
-        const iy = Math.sin(ui._arcItems[i]._angle) * arcR;
-        arcBtns[i].style.setProperty('--arc-x', ix.toFixed(1) + 'px');
-        arcBtns[i].style.setProperty('--arc-y', iy.toFixed(1) + 'px');
-      }
+    const hexPx = ui.renderer.hexSize * (canvasRect.width / ui.canvas.width) * ui.renderer.zoomLevel;
+    if (Math.abs(hexPx - (ui._arcHexPx || 0)) > 2) {
+      ui._arcHexPx = hexPx;
+      _computeArcPositions(popup, ui, hexPx);
     }
-    const arcR = ui._arcRadius || prevR;
+    // Update canvas line drawing data
     ui.renderer.arcMenuLines = {
       col, row,
       items: ui._arcItems.map(item => ({
-        x: Math.cos(item._angle) * arcR,
-        y: Math.sin(item._angle) * arcR,
+        x: item._x ?? 0,
+        y: item._y ?? 0,
         color: item.color,
       })),
     };
