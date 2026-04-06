@@ -1394,7 +1394,7 @@ export class UIController {
           break;
         case ActionType.SOUND_HORN:
           arcItems.push({ group: 'scout', label: 'Sound Horn', fullLabel: 'Sound Horn (1 food)',
-            color: '#7eccd6', dis: !action.affordable || dis, cost: 1, attrs: 'data-action="sound_horn"' });
+            color: '#7eccd6', dis: !action.affordable || dis, cost: 1, resCost: '1🍞', attrs: 'data-action="sound_horn"' });
           break;
         case ActionType.GUARD: {
           const charges = action.currentCharges || 0;
@@ -1415,13 +1415,14 @@ export class UIController {
           const doublerGain = Math.min(4, cur + 2) - cur;
           const woodGain    = Math.min(4, cur + 1) - cur;
           const shortLbl = hasMetal ? 'Reinforce Hex' : 'Fortify Hex';
+          const fortRes = hasMetal ? '1⚙' : '1🪵';
           const fullLbl = hasMetal
             ? `Reinforce +${metalGain} DEF (1 metal)`
             : hasDoubler
               ? `Fortify +${doublerGain} DEF (1 wood)`
               : `Fortify +${woodGain} DEF (1 wood)`;
           arcItems.push({ group: 'defense', label: shortLbl, fullLabel: fullLbl,
-            color: '#e0a832', dis: cantAfford || dis, cost: 1, attrs: 'data-action="fortify"' });
+            color: '#e0a832', dis: cantAfford || dis, cost: 1, resCost: fortRes, attrs: 'data-action="fortify"' });
           break;
         }
         case ActionType.BATTLE_HEX:
@@ -1440,7 +1441,7 @@ export class UIController {
             if ((eitems[ResourceType.HERBS] || 0) < 1) healDis = true;
           }
           arcItems.push({ group: 'items', label: 'Heal', fullLabel: 'Herbs (heal 2 HP)',
-            color: '#55cc55', dis: healDis, cost: 1,
+            color: '#55cc55', dis: healDis, cost: 1, resCost: '1🌿',
             attrs: 'data-action="heal"' });
           break;
         }
@@ -1492,13 +1493,13 @@ export class UIController {
       const projWood  = projWitch?.[ResourceType.WOOD]  || 0;
       const projTotal = projWitch ? Object.values(projWitch).reduce((s, v) => s + (v || 0), 0) : 0;
       const ALL_SUMMONS = [
-        { st: EntityType.IRON_GOLEM, label: 'Summon Iron Golem',  full: 'Summon Iron Golem (2 metal)',  afford: projMetal >= 2 },
-        { st: EntityType.WOOD_GOLEM, label: 'Summon Wood Golem', full: 'Summon Wood Golem (2 wood)',   afford: projWood >= 2 },
-        { st: EntityType.MINION,     label: 'Summon Minion',      full: 'Summon Minion (2 any resource)', afford: projTotal >= 2 },
+        { st: EntityType.IRON_GOLEM, label: 'Summon Iron Golem',  full: 'Summon Iron Golem (2 metal)',  afford: projMetal >= 2, res: '2⚙' },
+        { st: EntityType.WOOD_GOLEM, label: 'Summon Wood Golem', full: 'Summon Wood Golem (2 wood)',   afford: projWood >= 2, res: '2🪵' },
+        { st: EntityType.MINION,     label: 'Summon Minion',      full: 'Summon Minion (2 any resource)', afford: projTotal >= 2, res: '2 res' },
       ];
       for (const s of ALL_SUMMONS) {
         arcItems.push({ group: 'summon', label: s.label, fullLabel: s.full,
-          color: '#9b59b6', dis: !s.afford || !hasAct, cost: 1,
+          color: '#9b59b6', dis: !s.afford || !hasAct, cost: 1, resCost: s.res,
           attrs: `data-action="summon" data-summon-type="${s.st}"` });
       }
     }
@@ -1551,12 +1552,13 @@ export class UIController {
       const delay = item._idx * 30;
       const disAttr = item.dis ? 'disabled' : '';
       const freeCls = item.free ? ' arc-free' : '';
+      const resTag = item.resCost ? `<span class="arc-res-cost">${item.resCost}</span>` : '';
       const costTag = item.free ? '<span class="arc-cost arc-cost-free">FREE</span>'
         : item.cost === 1 ? '<span class="arc-cost">◆</span>'
         : '';
       html += `<button class="arc-item${freeCls}" title="${item.fullLabel}"
         style="--arc-x:0px;--arc-y:0px;--arc-delay:${delay}ms;--arc-color:${item.color};--arc-hover:${item.color};--arc-glow:${item.color}33"
-        ${disAttr} ${item.attrs}>${item.label}${costTag}</button>`;
+        ${disAttr} ${item.attrs}>${item.label}${resTag}${costTag}</button>`;
     }
 
     popup.innerHTML = html;
@@ -3094,7 +3096,17 @@ export class UIController {
     const stash   = isHero ? inv.shared : inv.witch;
     const label   = isHero ? '⚔ Supplies' : '🕯 Stores';
 
+    // Count herbs across all living entities of this faction
+    let totalHerbs = 0;
+    for (const e of state.entities) {
+      if (!e.alive || e.owner !== faction) continue;
+      totalHerbs += (e.items?.[ResourceType.HERBS] || 0);
+    }
+
     const entries = Object.entries(stash).filter(([, v]) => v > 0);
+    // Add herbs as a virtual entry if any entity carries them
+    if (totalHerbs > 0) entries.push([ResourceType.HERBS, totalHerbs]);
+
     const rows = entries.length
       ? entries.map(([k, v]) =>
           `<div class="inv-resource-row">

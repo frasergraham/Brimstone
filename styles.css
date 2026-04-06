@@ -1830,6 +1830,15 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   color: #a0e8bc;
 }
 
+.arc-res-cost {
+  display: inline-block;
+  margin-left: 0.3em;
+  font-size: 0.7em;
+  opacity: 0.65;
+  vertical-align: middle;
+  color: #e8c84a;
+}
+
 .arc-cost {
   display: inline-block;
   margin-left: 0.3em;
