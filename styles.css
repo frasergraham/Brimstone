@@ -3622,6 +3622,7 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   color: #c4b89a;
   line-height: 1.65;
   font-style: italic;
+  white-space: pre-line;
 }
 
 #story-modal-continue {
