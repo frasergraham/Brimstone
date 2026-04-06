@@ -272,11 +272,12 @@ describe('executeMove — blockedBy field', () => {
     assert.equal(r.blockedBy, null, 'blockedBy should be null when path is clear');
   });
 
-  test('enemy on target hex: fails with blockedBy set', () => {
+  test('enemy on adjacent hex: move fails, hero stays put', () => {
     const state = freshState();
     const hero = state.hero;
-    // Place a minion on an adjacent passable hex (simulates fog: planned during
-    // planning when enemy was hidden, resolved when enemy is revealed)
+    const origCol = hero.col;
+    const origRow = hero.row;
+    // Place a minion directly adjacent — no room to walk before the enemy
     const neighbor = getNeighbors(hero.col, hero.row).find(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
       return t && t.type !== TileType.RIVER;
@@ -286,28 +287,55 @@ describe('executeMove — blockedBy field', () => {
     state.entities.push(minion);
 
     const r = executeMove(state, hero, neighbor.col, neighbor.row);
-    assert.equal(r.success, false, 'Move to enemy-occupied hex should fail');
+    assert.equal(r.success, false, 'Move to adjacent enemy hex should fail (nowhere to walk)');
     assert.ok(r.blockedBy, 'blockedBy should reference the blocking enemy');
-    assert.equal(r.blockedBy.id, minion.id, 'blockedBy should be the minion');
+    assert.equal(r.blockedBy.id, minion.id);
     assert.ok(r.log.some(l => l.includes('movement blocked by')),
-      'Log should mention movement was blocked');
+      'Log should mention blocked by enemy');
+    assert.equal(hero.col, origCol, 'Hero should not have moved');
+    assert.equal(hero.row, origRow);
   });
 
-  test('enemy on target hex: hero does not move', () => {
+  test('enemy 2 hexes away: hero walks 1 hex then stops', () => {
     const state = freshState();
     const hero = state.hero;
-    const origCol = hero.col;
-    const origRow = hero.row;
-    const neighbor = getNeighbors(hero.col, hero.row).find(n => {
+    // Set up a road chain so hero can reach 2 hexes
+    const n1 = getNeighbors(hero.col, hero.row).find(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
       return t && t.type !== TileType.RIVER;
     });
-    if (!neighbor) return;
-    state.entities.push(createMinion(neighbor.col, neighbor.row));
+    if (!n1) return;
+    // Find a neighbor of n1 that is NOT the hero's hex and is passable
+    const n2 = getNeighbors(n1.col, n1.row).find(n => {
+      if (n.col === hero.col && n.row === hero.row) return false;
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && t.type !== TileType.RIVER;
+    });
+    if (!n2) return;
 
-    executeMove(state, hero, neighbor.col, neighbor.row);
-    assert.equal(hero.col, origCol, 'Hero should not have moved');
-    assert.equal(hero.row, origRow, 'Hero should not have moved');
+    // Make both hexes roads so they're within movement budget
+    const t1 = state.tiles.get(hexKey(n1.col, n1.row));
+    const t2 = state.tiles.get(hexKey(n2.col, n2.row));
+    const heroTile = state.tiles.get(hexKey(hero.col, hero.row));
+    if (t1) { t1.type = TileType.ROAD; t1.building = null; t1.hiddenSurvivor = false; }
+    if (t2) { t2.type = TileType.ROAD; t2.building = null; t2.hiddenSurvivor = false; }
+    if (heroTile) { heroTile.type = TileType.ROAD; heroTile.building = null; }
+
+    // Remove other entities that might block
+    state.entities = state.entities.filter(e => e.id === hero.id);
+
+    // Place enemy on n2 (2 hexes away)
+    const minion = createMinion(n2.col, n2.row);
+    state.entities.push(minion);
+
+    const r = executeMove(state, hero, n2.col, n2.row);
+    assert.equal(r.success, true, 'Partial move should succeed (walked 1 hex)');
+    assert.equal(hero.col, n1.col, 'Hero should stop at intermediate hex');
+    assert.equal(hero.row, n1.row);
+    assert.ok(r.blockedBy, 'blockedBy should reference the blocking enemy');
+    assert.equal(r.blockedBy.id, minion.id);
+    assert.ok(r.log.some(l => l.includes('movement blocked by')),
+      'Log should mention blocked by enemy');
   });
 });
 

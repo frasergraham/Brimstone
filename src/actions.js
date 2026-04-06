@@ -467,16 +467,17 @@ export function executeMove(state, actor, targetCol, targetRow) {
 
   // Reachability check — road tiles cost half, so roads extend effective range.
   const hasHorse = getFaction(actor.owner).hasHorse(actor);
+  const maxSteps = hasHorse ? 4 : 2;
   const reachable = getReachableHexes(state, actor, hasHorse ? 2 : 1);
   if (!reachable.some(h => h.col === targetCol && h.row === targetRow)) {
-    // Check if an enemy on the target hex is the reason it's unreachable
-    const blocker = state.entities.find(e =>
-      e.alive && e.owner !== actor.owner && e.col === targetCol && e.row === targetRow
-    ) ?? null;
-    if (blocker) {
-      return { success: false, log: [`${actor.displayName} movement blocked by ${blocker.displayName}.`], blockedBy: blocker };
+    // When an enemy occupies the target (e.g. hidden by fog during planning),
+    // allow the move to proceed if the target is within step range so the unit
+    // walks as far as it can and stops before the enemy.
+    const enemyOnTarget = hasEnemy(state, actor, targetCol, targetRow);
+    const dist = hexDistance(actor.col, actor.row, targetCol, targetRow);
+    if (!enemyOnTarget || dist > maxSteps) {
+      return { success: false, log: [`Cannot reach (${targetCol},${targetRow}) from current position.`] };
     }
-    return { success: false, log: [`Cannot reach (${targetCol},${targetRow}) from current position.`] };
   }
 
   // Find the road-preferring path from current position to destination.
@@ -485,7 +486,6 @@ export function executeMove(state, actor, targetCol, targetRow) {
   // Walk the path step by step; stop if an enemy blocks a mid-path hex.
   // Cap the number of hex steps to prevent long road-chain traversals when a
   // prior move in the plan failed and the entity is further away than expected.
-  const maxSteps = hasHorse ? 4 : 2;
   const walkedPath = [];
   const encounterLog = [];
   let encounterSurvivor = null;

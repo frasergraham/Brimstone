@@ -1004,13 +1004,11 @@ describe('movement interrupted by enemy during resolution', () => {
     }
   });
 
-  test('move to enemy-occupied hex fails with blockedBy in ACTION_FAIL event', () => {
-    // Simulates fog scenario: hero planned to move to a hex with a hidden enemy.
-    // During resolution the enemy is there and blocks the move entirely.
+  test('move to adjacent enemy hex: fails with blockedBy in ACTION_FAIL', () => {
+    // Adjacent enemy — hero can't walk at all (0 intermediate hexes)
     const state = freshState();
     const hero = state.hero;
 
-    // Find a passable adjacent hex and place a minion on it
     const neighbor = getNeighbors(hero.col, hero.row).find(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
       return t && t.type !== TileType.RIVER && t.type !== 'river';
@@ -1019,18 +1017,11 @@ describe('movement interrupted by enemy during resolution', () => {
     const minion = createMinion(neighbor.col, neighbor.row);
     state.entities.push(minion);
 
-    // Hero tries to move to the enemy-occupied hex
     const heroPlan = [
       { type: PlanActionType.MOVE, entityId: hero.id, toCol: neighbor.col, toRow: neighbor.row },
     ];
-    const witchPlan = [];
 
-    const steps = resolvePlans(state, heroPlan, witchPlan);
-
-    // Hero should not have moved
-    assert.equal(hero.col, state.hero.col, 'Hero should not move');
-
-    // Find the hero move event
+    const steps = resolvePlans(state, heroPlan, []);
     const heroMoveEvents = steps.flatMap(s => s.heroEvents ?? [])
       .filter(e => e.action?.type === PlanActionType.MOVE);
     assert.ok(heroMoveEvents.length > 0, 'Should have a hero move event');
@@ -1038,7 +1029,60 @@ describe('movement interrupted by enemy during resolution', () => {
     const moveEv = heroMoveEvents[0];
     assert.equal(moveEv.type, ResEventType.ACTION_FAIL, 'Should be ACTION_FAIL');
     assert.ok(moveEv.blockedBy, 'ACTION_FAIL should have blockedBy set');
-    assert.equal(moveEv.blockedBy.id, minion.id, 'blockedBy should reference the minion');
-    assert.ok(moveEv.reason.includes('movement blocked by'), 'Reason should mention blocked by enemy');
+    assert.equal(moveEv.blockedBy.id, minion.id);
+    assert.ok(moveEv.reason.includes('movement blocked by'));
+  });
+
+  test('move to enemy hex 2 away: walks 1 hex then stops (fog scenario)', () => {
+    // Simulates fog: hero planned to move to a hex 2 away with a hidden enemy.
+    // Hero should walk 1 hex and stop before the enemy.
+    const state = freshState();
+    const hero = state.hero;
+
+    // Find two consecutive passable hexes from hero
+    const n1 = getNeighbors(hero.col, hero.row).find(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && t.type !== TileType.RIVER && t.type !== 'river';
+    });
+    assert.ok(n1, 'Need a passable neighbor');
+    const n2 = getNeighbors(n1.col, n1.row).find(n => {
+      if (n.col === hero.col && n.row === hero.row) return false;
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && t.type !== TileType.RIVER && t.type !== 'river';
+    });
+    assert.ok(n2, 'Need a second passable neighbor');
+
+    // Make hexes roads so they're within movement budget
+    for (const h of [{ col: hero.col, row: hero.row }, n1, n2]) {
+      const t = state.tiles.get(hexKey(h.col, h.row));
+      if (t) { t.type = TileType.ROAD; t.building = null; t.hiddenSurvivor = false; }
+    }
+
+    // Remove other entities except hero, place enemy on n2
+    state.entities = state.entities.filter(e => e.id === hero.id);
+    const minion = createMinion(n2.col, n2.row);
+    state.entities.push(minion);
+
+    const origCol = hero.col;
+    const origRow = hero.row;
+    const heroPlan = [
+      { type: PlanActionType.MOVE, entityId: hero.id, toCol: n2.col, toRow: n2.row },
+    ];
+
+    const steps = resolvePlans(state, heroPlan, []);
+    const heroMoveEvents = steps.flatMap(s => s.heroEvents ?? [])
+      .filter(e => e.action?.type === PlanActionType.MOVE);
+    assert.ok(heroMoveEvents.length > 0, 'Should have a hero move event');
+
+    const moveEv = heroMoveEvents[0];
+    assert.equal(moveEv.type, ResEventType.ACTION_OK, 'Should be ACTION_OK (partial move)');
+    assert.ok(moveEv.result.blockedBy, 'blockedBy should reference the blocking enemy');
+    assert.equal(moveEv.result.blockedBy.id, minion.id);
+    assert.ok(moveEv.result.log.some(l => l.includes('movement blocked by')),
+      'Log should mention blocked by enemy');
+    // Hero should have moved to n1 (1 hex), not n2
+    assert.equal(hero.col, n1.col, 'Hero should stop at intermediate hex');
+    assert.equal(hero.row, n1.row);
+    assert.ok(hero.col !== origCol || hero.row !== origRow, 'Hero should have moved from starting position');
   });
 });
