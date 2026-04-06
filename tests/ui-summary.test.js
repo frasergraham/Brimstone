@@ -523,3 +523,29 @@ describe('resource tracking scoping in summary', () => {
     assert.ok(!shouldTrackResource(exploreEv, 'witch'));
   });
 });
+
+// ── Campaign replay button suppression ─────────────────────────────────────
+
+// Mirrors the game-over button rendering logic in _showResolutionSummary
+function shouldShowReplayFullButton(hasFullReplay, isCampaign) {
+  return hasFullReplay && !isCampaign;
+}
+
+describe('campaign replay button suppression', () => {
+  test('non-campaign game with replay history shows replay button', () => {
+    assert.ok(shouldShowReplayFullButton(true, false));
+  });
+
+  test('campaign game with replay history hides replay button', () => {
+    assert.ok(!shouldShowReplayFullButton(true, true));
+  });
+
+  test('no replay history hides replay button regardless', () => {
+    assert.ok(!shouldShowReplayFullButton(false, false));
+    assert.ok(!shouldShowReplayFullButton(false, true));
+  });
+
+  test('isCampaign undefined (backwards compat) shows replay button', () => {
+    assert.ok(shouldShowReplayFullButton(true, undefined));
+  });
+});

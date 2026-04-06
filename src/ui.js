@@ -3165,7 +3165,7 @@ export class UIController {
       const el = this._el('round-summary');
       if (!el) { resolve('next'); return; }
 
-      const { prevScore, prevNodes, humanFaction, fogOfWar, gameOver, winner, winReason, hasFullReplay } = opts;
+      const { prevScore, prevNodes, humanFaction, fogOfWar, gameOver, winner, winReason, hasFullReplay, isCampaign } = opts;
 
       // Collect kills, survivors found, summons, and resource flows from steps.
       // Fog-of-war filtering: skip opponent-only events the player can't see.
@@ -3506,7 +3506,7 @@ export class UIController {
         gameOverBtns.className = 'round-summary-gameover-btns';
         gameOverBtns.innerHTML =
           `<button class="plan-btn primary" data-action="restart">Return to Menu</button>` +
-          (hasFullReplay ? `<button class="plan-btn secondary" data-action="replay-full">Replay Full Game</button>` : '');
+          (hasFullReplay && !isCampaign ? `<button class="plan-btn secondary" data-action="replay-full">Replay Full Game</button>` : '');
         actionsEl.appendChild(gameOverBtns);
       } else if (nextBtn) {
         nextBtn.style.display = '';
