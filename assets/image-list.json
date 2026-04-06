@@ -506,6 +506,26 @@
         "prompt": "A salt-crusted colonial fisherman, oilskin coat and heavy boots, carries a gaff hook, rope-burned hands, wind-scoured face with deep-set determined eyes. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
       "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+    },
+    {
+      "id": "cycle_dawn",
+      "name": "Dawn",
+      "category": "icon"
+    },
+    {
+      "id": "cycle_day",
+      "name": "Day",
+      "category": "icon"
+    },
+    {
+      "id": "cycle_dusk",
+      "name": "Dusk",
+      "category": "icon"
+    },
+    {
+      "id": "cycle_night",
+      "name": "Night",
+      "category": "icon"
     }
   ]
 }

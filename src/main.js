@@ -134,6 +134,7 @@ function _genSaveId() {
 function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
   renderer = new Renderer(canvas, state);
   renderer.resize();
+  renderer.onImagesLoaded = () => { if (ui) ui._renderTurnInfo(); };
   renderer.loadImages();
 
   ui = new UIController(canvas, state, renderer, localWitchAI, redraw, localHeroAI, autoplay);
@@ -1667,6 +1668,7 @@ function initOnline(mirrorState, myFaction, mpClient) {
 
   renderer = new Renderer(canvas, state);
   renderer.resize();
+  renderer.onImagesLoaded = () => { if (ui) ui._renderTurnInfo(); };
   renderer.loadImages();
 
   // No local AI — all turns handled server-side
@@ -5889,6 +5891,7 @@ function initSpectator(roomId) {
     const canvas = document.getElementById('game-canvas');
     renderer = new Renderer(canvas, mirrorState);
     renderer.resize();
+    renderer.onImagesLoaded = () => { if (ui) ui._renderTurnInfo(); };
     renderer.loadImages();
     ui = new UIController(canvas, mirrorState, renderer, null, () => renderer.draw(), null, false);
     ui.setMode(UIMode.SPECTATOR);

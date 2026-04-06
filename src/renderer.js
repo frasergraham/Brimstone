@@ -205,6 +205,7 @@ export class Renderer {
        'survivor_tanner','survivor_chandler','survivor_goodwife',
        'survivor_constable','survivor_weaver','survivor_carpenter',
        'survivor_apothecary','survivor_fisherman'],
+      ['cycle_dawn','cycle_day','cycle_dusk','cycle_night'],
     ];
 
     const rects = new Map();
@@ -252,6 +253,7 @@ export class Renderer {
     this._variantCounts  = variantCounts;
     this._portraitCache = new Map();
     this.draw();
+    if (this.onImagesLoaded) this.onImagesLoaded();
   }
 
   /**
