@@ -2134,12 +2134,13 @@ function _showMissionBriefing(missionId) {
   const pickerEl = document.getElementById('campaign-roster-picker');
   if (_activeCampaign.roster.length > 0 && missionDef.maxSurvivorsFromRoster > 0) {
     deployEl.style.display = '';
-    pickerEl.innerHTML = _activeCampaign.roster.map((s, i) => `
-      <label class="campaign-survivor-pick">
+    pickerEl.innerHTML = _activeCampaign.roster.map((s, i) => {
+      const assetId = Renderer.survivorAssetId(s.title) || 'survivor_innkeeper';
+      return `<label class="campaign-survivor-pick">
         <input type="checkbox" data-idx="${i}" ${i < missionDef.maxSurvivorsFromRoster ? 'checked' : ''}>
-        ${_campaignCardHTML(s.name, s.title, '☺', s.color || ENTITY_COLOR.survivor, s.hp, s.maxHp, s.attack, s.defense, s.abilityLabel, false)}
-      </label>
-    `).join('');
+        ${_campaignCardHTML(s.name, s.title, assetId, s.color || ENTITY_COLOR.survivor, s.hp, s.maxHp, s.attack, s.defense, s.abilityLabel, false)}
+      </label>`;
+    }).join('');
   } else {
     deployEl.style.display = 'none';
   }
