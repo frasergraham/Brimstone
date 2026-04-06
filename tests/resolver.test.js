@@ -999,6 +999,46 @@ describe('movement interrupted by enemy during resolution', () => {
     } else {
       // Fully blocked — couldn't move at all (hero on only path to destination)
       assert.equal(moveEv.type, ResEventType.ACTION_FAIL, 'Should be ACTION_FAIL when fully blocked');
+      // blockedBy is only set when enemy is on the target hex itself, not when
+      // they merely block the route. This is the "path blocked" case.
     }
+  });
+
+  test('move to enemy-occupied hex fails with blockedBy in ACTION_FAIL event', () => {
+    // Simulates fog scenario: hero planned to move to a hex with a hidden enemy.
+    // During resolution the enemy is there and blocks the move entirely.
+    const state = freshState();
+    const hero = state.hero;
+
+    // Find a passable adjacent hex and place a minion on it
+    const neighbor = getNeighbors(hero.col, hero.row).find(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && t.type !== TileType.RIVER && t.type !== 'river';
+    });
+    assert.ok(neighbor, 'Need an adjacent passable hex');
+    const minion = createMinion(neighbor.col, neighbor.row);
+    state.entities.push(minion);
+
+    // Hero tries to move to the enemy-occupied hex
+    const heroPlan = [
+      { type: PlanActionType.MOVE, entityId: hero.id, toCol: neighbor.col, toRow: neighbor.row },
+    ];
+    const witchPlan = [];
+
+    const steps = resolvePlans(state, heroPlan, witchPlan);
+
+    // Hero should not have moved
+    assert.equal(hero.col, state.hero.col, 'Hero should not move');
+
+    // Find the hero move event
+    const heroMoveEvents = steps.flatMap(s => s.heroEvents ?? [])
+      .filter(e => e.action?.type === PlanActionType.MOVE);
+    assert.ok(heroMoveEvents.length > 0, 'Should have a hero move event');
+
+    const moveEv = heroMoveEvents[0];
+    assert.equal(moveEv.type, ResEventType.ACTION_FAIL, 'Should be ACTION_FAIL');
+    assert.ok(moveEv.blockedBy, 'ACTION_FAIL should have blockedBy set');
+    assert.equal(moveEv.blockedBy.id, minion.id, 'blockedBy should reference the minion');
+    assert.ok(moveEv.reason.includes('movement blocked by'), 'Reason should mention blocked by enemy');
   });
 });

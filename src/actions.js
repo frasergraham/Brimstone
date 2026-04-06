@@ -468,8 +468,16 @@ export function executeMove(state, actor, targetCol, targetRow) {
   // Reachability check — road tiles cost half, so roads extend effective range.
   const hasHorse = getFaction(actor.owner).hasHorse(actor);
   const reachable = getReachableHexes(state, actor, hasHorse ? 2 : 1);
-  if (!reachable.some(h => h.col === targetCol && h.row === targetRow))
+  if (!reachable.some(h => h.col === targetCol && h.row === targetRow)) {
+    // Check if an enemy on the target hex is the reason it's unreachable
+    const blocker = state.entities.find(e =>
+      e.alive && e.owner !== actor.owner && e.col === targetCol && e.row === targetRow
+    ) ?? null;
+    if (blocker) {
+      return { success: false, log: [`${actor.displayName} movement blocked by ${blocker.displayName}.`], blockedBy: blocker };
+    }
     return { success: false, log: [`Cannot reach (${targetCol},${targetRow}) from current position.`] };
+  }
 
   // Find the road-preferring path from current position to destination.
   const fullPath = findShortestPath(state, actor, targetCol, targetRow) ?? [{ col: targetCol, row: targetRow }];
@@ -500,8 +508,17 @@ export function executeMove(state, actor, targetCol, targetRow) {
     }
   }
 
-  if (walkedPath.length === 0)
+  if (walkedPath.length === 0) {
+    const blocker = (fullPath.length > 0)
+      ? state.entities.find(e =>
+          e.alive && e.owner !== actor.owner && e.col === fullPath[0].col && e.row === fullPath[0].row
+        ) ?? null
+      : null;
+    if (blocker) {
+      return { success: false, log: [`${actor.displayName} movement blocked by ${blocker.displayName}.`], blockedBy: blocker };
+    }
     return { success: false, log: ['The way is blocked.'] };
+  }
 
   // Detect partial move blocked by enemy
   let blockedBy = null;

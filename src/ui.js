@@ -3203,13 +3203,22 @@ export class UIController {
             const logLine = ev.result?.log?.[0] ?? '';
             summons.push(logLine || 'Unit summoned');
           }
-          // Movement blocked by enemy
+          // Movement blocked by enemy — partial move (ACTION_OK with blockedBy)
           if (ev.type === ResEventType.ACTION_OK &&
               ev.action?.type === PlanActionType.MOVE &&
               ev.result?.blockedBy) {
             const actor = this.state.entities.find(e => e.id === ev.action.entityId);
             const actorName = actor?.displayName ?? 'Unit';
             const blockerName = ev.result.blockedBy.displayName ?? 'enemy';
+            blockedMoves.push({ actorName, blockerName });
+          }
+          // Movement blocked by enemy — full block (ACTION_FAIL with blockedBy)
+          if (ev.type === ResEventType.ACTION_FAIL &&
+              ev.action?.type === PlanActionType.MOVE &&
+              ev.blockedBy) {
+            const actor = this.state.entities.find(e => e.id === ev.action.entityId);
+            const actorName = actor?.displayName ?? 'Unit';
+            const blockerName = ev.blockedBy.displayName ?? 'enemy';
             blockedMoves.push({ actorName, blockerName });
           }
 

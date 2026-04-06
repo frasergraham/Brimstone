@@ -272,10 +272,11 @@ describe('executeMove — blockedBy field', () => {
     assert.equal(r.blockedBy, null, 'blockedBy should be null when path is clear');
   });
 
-  test('adjacent enemy hex is not reachable (blocked at source)', () => {
+  test('enemy on target hex: fails with blockedBy set', () => {
     const state = freshState();
     const hero = state.hero;
-    // Place a minion directly adjacent
+    // Place a minion on an adjacent passable hex (simulates fog: planned during
+    // planning when enemy was hidden, resolved when enemy is revealed)
     const neighbor = getNeighbors(hero.col, hero.row).find(n => {
       const t = state.tiles.get(hexKey(n.col, n.row));
       return t && t.type !== TileType.RIVER;
@@ -284,9 +285,29 @@ describe('executeMove — blockedBy field', () => {
     const minion = createMinion(neighbor.col, neighbor.row);
     state.entities.push(minion);
 
-    const reachable = getReachableHexes(state, hero, 1);
-    const blocked = reachable.some(h => h.col === neighbor.col && h.row === neighbor.row);
-    assert.equal(blocked, false, 'Enemy-occupied hex should not be reachable');
+    const r = executeMove(state, hero, neighbor.col, neighbor.row);
+    assert.equal(r.success, false, 'Move to enemy-occupied hex should fail');
+    assert.ok(r.blockedBy, 'blockedBy should reference the blocking enemy');
+    assert.equal(r.blockedBy.id, minion.id, 'blockedBy should be the minion');
+    assert.ok(r.log.some(l => l.includes('movement blocked by')),
+      'Log should mention movement was blocked');
+  });
+
+  test('enemy on target hex: hero does not move', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const origCol = hero.col;
+    const origRow = hero.row;
+    const neighbor = getNeighbors(hero.col, hero.row).find(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && t.type !== TileType.RIVER;
+    });
+    if (!neighbor) return;
+    state.entities.push(createMinion(neighbor.col, neighbor.row));
+
+    executeMove(state, hero, neighbor.col, neighbor.row);
+    assert.equal(hero.col, origCol, 'Hero should not have moved');
+    assert.equal(hero.row, origRow, 'Hero should not have moved');
   });
 });
 
