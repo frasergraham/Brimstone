@@ -14,7 +14,7 @@ import {
   createHero, createWitch, createMinion, createZombie, createSurvivor, resetRoster,
 } from '../src/entities.js';
 import { TileType, BuildingType, ResourceType, WeaponType } from '../src/tiles.js';
-import { hexKey, getNeighbors } from '../src/hex.js';
+import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import { applyPostRoundEffects } from '../src/post-round-effects.js';
 
 function freshState() {
@@ -299,27 +299,22 @@ describe('executeMove — blockedBy field', () => {
   test('enemy 2 hexes away: hero walks 1 hex then stops', () => {
     const state = freshState();
     const hero = state.hero;
-    // Set up a road chain so hero can reach 2 hexes
-    const n1 = getNeighbors(hero.col, hero.row).find(n => {
-      const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== TileType.RIVER;
-    });
-    if (!n1) return;
-    // Find a neighbor of n1 that is NOT the hero's hex and is passable
-    const n2 = getNeighbors(n1.col, n1.row).find(n => {
-      if (n.col === hero.col && n.row === hero.row) return false;
-      const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== TileType.RIVER;
-    });
-    if (!n2) return;
 
-    // Make both hexes roads so they're within movement budget
-    const t1 = state.tiles.get(hexKey(n1.col, n1.row));
-    const t2 = state.tiles.get(hexKey(n2.col, n2.row));
-    const heroTile = state.tiles.get(hexKey(hero.col, hero.row));
-    if (t1) { t1.type = TileType.ROAD; t1.building = null; t1.hiddenSurvivor = false; }
-    if (t2) { t2.type = TileType.ROAD; t2.building = null; t2.hiddenSurvivor = false; }
-    if (heroTile) { heroTile.type = TileType.ROAD; heroTile.building = null; }
+    // Use deterministic coordinates: (6,2) → (7,2) → (8,2) — guaranteed
+    // neighbors in even-row odd-r offset hex grid.
+    const heroPos = { col: 6, row: 2 };
+    const n1 = { col: 7, row: 2 };
+    const n2 = { col: 8, row: 2 };
+
+    // Make all three hexes roads so they're within movement budget
+    for (const h of [heroPos, n1, n2]) {
+      const t = state.tiles.get(hexKey(h.col, h.row));
+      if (t) { t.type = TileType.ROAD; t.building = null; t.hiddenSurvivor = false; }
+    }
+
+    // Place hero at known position
+    hero.col = heroPos.col;
+    hero.row = heroPos.row;
 
     // Remove other entities that might block
     state.entities = state.entities.filter(e => e.id === hero.id);

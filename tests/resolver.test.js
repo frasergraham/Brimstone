@@ -11,7 +11,7 @@ import {
   Entity, EntityType, createMinion, createZombie, createSurvivor,
 } from '../src/entities.js';
 import { TileType, ResourceType } from '../src/tiles.js';
-import { hexKey, getNeighbors } from '../src/hex.js';
+import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import { getReachableHexes, executeMove } from '../src/actions.js';
 
 function freshState() {
@@ -1039,24 +1039,21 @@ describe('movement interrupted by enemy during resolution', () => {
     const state = freshState();
     const hero = state.hero;
 
-    // Find two consecutive passable hexes from hero
-    const n1 = getNeighbors(hero.col, hero.row).find(n => {
-      const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== TileType.RIVER && t.type !== 'river';
-    });
-    assert.ok(n1, 'Need a passable neighbor');
-    const n2 = getNeighbors(n1.col, n1.row).find(n => {
-      if (n.col === hero.col && n.row === hero.row) return false;
-      const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== TileType.RIVER && t.type !== 'river';
-    });
-    assert.ok(n2, 'Need a second passable neighbor');
+    // Use deterministic coordinates: (6,2) → (7,2) → (8,2) — guaranteed
+    // neighbors in even-row odd-r offset hex grid.
+    const heroPos = { col: 6, row: 2 };
+    const n1 = { col: 7, row: 2 };
+    const n2 = { col: 8, row: 2 };
 
     // Make hexes roads so they're within movement budget
-    for (const h of [{ col: hero.col, row: hero.row }, n1, n2]) {
+    for (const h of [heroPos, n1, n2]) {
       const t = state.tiles.get(hexKey(h.col, h.row));
       if (t) { t.type = TileType.ROAD; t.building = null; t.hiddenSurvivor = false; }
     }
+
+    // Place hero at known position
+    hero.col = heroPos.col;
+    hero.row = heroPos.row;
 
     // Remove other entities except hero, place enemy on n2
     state.entities = state.entities.filter(e => e.id === hero.id);
