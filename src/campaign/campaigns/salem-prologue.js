@@ -183,10 +183,9 @@ function buildPrologueMap() {
   // Dirt patches
   scatterDirt(tiles, 3, rand, COLS);
 
-  // Resources + survivors
+  // Resources
   setResource(tiles, 1, 5, ResourceType.HERBS);
   setResource(tiles, 5, 3, ResourceType.WOOD);
-  setHiddenSurvivor(tiles, 4, 5);
 
   return {
     tiles,
@@ -194,7 +193,7 @@ function buildPrologueMap() {
     heroStart:      { col: 2, row: 7 },
     witchStart:     { col: 7, row: 1 },
     mapSize:        'skirmish',
-    survivorCounts: { buildings: 1, terrain: 0 },
+    survivorCounts: { buildings: 0, terrain: 0 },
     cols: COLS,
     rows: ROWS,
   };
@@ -582,7 +581,7 @@ const MISSIONS = [
 
     maxSurvivorsFromRoster:    0,
     missionSurvivors:          1,
-    maxDiscoverableSurvivors:  2,
+    maxDiscoverableSurvivors:  0,
 
     objectives: {
       win:  { type: 'eliminate_all', reason: 'The streets of Salem are clear.' },
