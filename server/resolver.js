@@ -104,7 +104,7 @@ function runAction(state, action, faction, playerId = null) {
 
     case PlanActionType.MOVE: {
       const r = executeMove(state, entity, action.toCol, action.toRow);
-      if (!r.success) return { kind: 'fail', reason: r.log[0] };
+      if (!r.success) return { kind: 'fail', reason: r.log[0], blockedBy: r.blockedBy ?? null };
       return { kind: 'ok', result: r };
     }
 
@@ -158,7 +158,15 @@ function runAction(state, action, faction, playerId = null) {
         e => e.alive && e.owner !== faction &&
              e.col === action.targetCol && e.row === action.targetRow
       );
-      if (enemies.length === 0) return { kind: 'skip', reason: 'No enemy on target hex.' };
+      if (enemies.length === 0) {
+        const actorSnap = snapEntity(entity);
+        return {
+          kind: 'skip',
+          reason: 'No enemy on target hex.',
+          battleSnaps: { actorSnap },
+          whiffTarget: { col: action.targetCol, row: action.targetRow },
+        };
+      }
 
       // Pick a random enemy when multiple units occupy the hex
       const target     = enemies[Math.floor(Math.random() * enemies.length)];
@@ -287,10 +295,12 @@ function drainOneStep(state, queue, budget) {
     } else if (out.kind === 'skip') {
       queue.shift(); // free skip — advance pointer without charging budget
       subEvents.push({
-        type:    ResEventType.ACTION_SKIP,
-        faction: budget.faction,
+        type:        ResEventType.ACTION_SKIP,
+        faction:     budget.faction,
         action,
-        reason:  out.reason,
+        reason:      out.reason,
+        battleSnaps: out.battleSnaps ?? null,
+        whiffTarget: out.whiffTarget ?? null,
       });
       // Loop: try the next action in the same step
 
@@ -298,10 +308,11 @@ function drainOneStep(state, queue, budget) {
       // Hard failure — skip this action but let remaining plan continue
       queue.shift();
       subEvents.push({
-        type:   ResEventType.ACTION_FAIL,
-        faction: budget.faction,
+        type:      ResEventType.ACTION_FAIL,
+        faction:   budget.faction,
         action,
-        reason: out.reason,
+        reason:    out.reason,
+        blockedBy: out.blockedBy ?? null,
       });
       // Loop: try the next action in the same step
     }

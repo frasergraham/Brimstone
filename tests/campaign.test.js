@@ -648,10 +648,10 @@ describe('markRosterUsedByName', () => {
 // ── maxDiscoverableSurvivors config ────────────────────────────────────────
 
 describe('maxDiscoverableSurvivors config', () => {
-  test('missions 1 and 2 have maxDiscoverableSurvivors set to 2', () => {
+  test('mission 1 has no discoverable survivors, mission 2 has 2', () => {
     const m1 = salemDef.missions.find(m => m.id === 'prologue');
     const m2 = salemDef.missions.find(m => m.id === 'first_night');
-    assert.equal(m1.maxDiscoverableSurvivors, 2);
+    assert.equal(m1.maxDiscoverableSurvivors, 0);
     assert.equal(m2.maxDiscoverableSurvivors, 2);
   });
 
@@ -802,5 +802,118 @@ describe('mission story triggers and loot overrides', () => {
       'prologue', 'gathering_survivors', 'first_night',
       'river_crossing', 'dark_ritual', 'witchs_trail',
     ]);
+  });
+
+  test('all missions have healBonus defined', () => {
+    for (const m of salemDef.missions) {
+      assert.ok(typeof m.healBonus === 'number', `${m.id} should have healBonus`);
+      assert.ok(m.healBonus > 0, `${m.id} healBonus should be positive`);
+    }
+  });
+});
+
+// ── healBonus ─────────────────────────────────────────────────────────────
+
+describe('healBonus on mission victory', () => {
+  let campaign;
+
+  beforeEach(() => {
+    localStorage.clear();
+    campaign = new Campaign(salemDef);
+  });
+
+  test('heals hero and survivors on victory', () => {
+    // Set up damaged hero and roster
+    campaign.heroStats = { hp: 5, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };
+    campaign.roster = [
+      { name: 'A', title: 'Test', bio: '', ability: 'BRAWLER', abilityLabel: 'Strong', color: '#fff', hp: 1, maxHp: 4, attack: 1, defense: 1, weapon: null, items: {} },
+      { name: 'B', title: 'Test', bio: '', ability: 'HEAL', abilityLabel: 'Healer', color: '#fff', hp: 3, maxHp: 5, attack: 1, defense: 1, weapon: null, items: {} },
+    ];
+
+    // Prologue mission has healBonus: 2
+    campaign.applyMissionResult('prologue', {
+      won: true,
+      survivors: campaign.roster,
+      heroStats: { ...campaign.heroStats },
+      resources: {},
+      flags: {},
+    });
+
+    assert.equal(campaign.heroStats.hp, 7); // 5 + 2
+    assert.equal(campaign.roster[0].hp, 3); // 1 + 2
+    assert.equal(campaign.roster[1].hp, 5); // 3 + 2, capped at maxHp
+  });
+
+  test('does not heal on defeat', () => {
+    campaign.heroStats = { hp: 5, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };
+    campaign.roster = [
+      { name: 'A', title: 'Test', bio: '', ability: 'BRAWLER', abilityLabel: 'Strong', color: '#fff', hp: 1, maxHp: 4, attack: 1, defense: 1, weapon: null, items: {} },
+    ];
+
+    campaign.applyMissionResult('prologue', {
+      won: false,
+      survivors: campaign.roster,
+      heroStats: { ...campaign.heroStats },
+      resources: {},
+      flags: {},
+    });
+
+    assert.equal(campaign.heroStats.hp, 5); // unchanged
+    assert.equal(campaign.roster[0].hp, 1); // unchanged
+  });
+
+  test('heal is capped at maxHp', () => {
+    // Use first_night which has healBonus: 3
+    campaign.completedMissions.add('prologue');
+    campaign.completedMissions.add('gathering_survivors');
+    campaign.heroStats = { hp: 13, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };
+    campaign.roster = [
+      { name: 'A', title: 'Test', bio: '', ability: 'BRAWLER', abilityLabel: 'Strong', color: '#fff', hp: 4, maxHp: 4, attack: 1, defense: 1, weapon: null, items: {} },
+    ];
+
+    campaign.applyMissionResult('first_night', {
+      won: true,
+      survivors: campaign.roster,
+      heroStats: { ...campaign.heroStats },
+      resources: {},
+      flags: {},
+    });
+
+    assert.equal(campaign.heroStats.hp, 14); // 13 + 3 capped at 14
+    assert.equal(campaign.roster[0].hp, 4); // already full, stays at 4
+  });
+
+  test('no healBonus field means no healing', () => {
+    // Create a campaign with a mission that has no healBonus
+    const customDef = {
+      id: 'test_campaign',
+      title: 'Test',
+      description: 'Test',
+      firstMission: 'test_mission',
+      prerequisiteCampaign: null,
+      missions: [{
+        id: 'test_mission', title: 'Test', briefing: 'Test',
+        mapBuilder: 'prologue', objectives: { win: { type: 'eliminate_all' }, lose: { type: 'hero_killed' } },
+        hasWitch: false, disableScoring: true, maxSurvivorsFromRoster: 0,
+        // no healBonus
+      }],
+      mapBuilders: salemDef.mapBuilders,
+    };
+    const c = new Campaign(customDef);
+    c.heroStats = { hp: 5, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };
+    c.roster = [
+      { name: 'A', title: 'Test', bio: '', ability: 'BRAWLER', abilityLabel: 'Strong', color: '#fff', hp: 2, maxHp: 4, attack: 1, defense: 1, weapon: null, items: {} },
+    ];
+
+    c.applyMissionResult('test_mission', {
+      won: true,
+      survivors: c.roster,
+      heroStats: { ...c.heroStats },
+      resources: {},
+      flags: {},
+    });
+
+    assert.equal(c.heroStats.hp, 5); // no change
+    assert.equal(c.roster[0].hp, 2); // no change
   });
 });

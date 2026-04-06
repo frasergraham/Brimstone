@@ -176,11 +176,18 @@ export class GameState {
       this.players.push({ id: 'witch', name: witchName, faction: 'witch', isAI: witchIsAI, leaderId: this.witch.id });
     }
 
-    this.inventory = { shared: {}, witch: {} };
+    this.inventory = {
+      shared: { ...getFaction('hero').getStartingResources() },
+      witch:  { ...getFaction('witch').getStartingResources() },
+    };
 
     this.mapSize       = mapData.mapSize;
     this._survivorCounts = mapData.survivorCounts;
     this.witchObjectives = mapData.witchObjectives;
+    this.missionTargetHex = mapData.targetHex
+      ? { col: mapData.targetHex.col, row: mapData.targetHex.row,
+          color: '#d4a857', label: 'Objective', seen: false }
+      : null;
     this._heroStart  = { col: mapData.heroStart.col,  row: mapData.heroStart.row };
     this._witchStart = mapData.witchStart
       ? { col: mapData.witchStart.col, row: mapData.witchStart.row }

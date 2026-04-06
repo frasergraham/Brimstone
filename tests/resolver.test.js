@@ -902,3 +902,187 @@ describe('resolvePlans — per-unit simultaneous execution', () => {
     assert.ok(allHeroCap.length > 0, 'BUDGET_CAP should fire when shared budget is exhausted');
   });
 });
+
+// ── BATTLE_HEX empty-hex whiff ────────────────────────────────────────────────
+
+describe('resolvePlans — BATTLE_HEX on empty hex returns skip with actorSnap and whiffTarget', () => {
+  test('skip event includes battleSnaps.actorSnap and whiffTarget when target hex is empty', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const target = emptyPassableNeighbor(state, hero);
+    assert.ok(target, 'Need an empty passable neighbor for this test');
+
+    // Ensure the target hex truly has no enemies
+    const enemiesOnTarget = state.entities.filter(
+      e => e.alive && e.owner !== 'hero' && e.col === target.col && e.row === target.row
+    );
+    assert.equal(enemiesOnTarget.length, 0, 'Target hex should have no enemies');
+
+    const heroPlan = [{
+      type: PlanActionType.BATTLE_HEX,
+      entityId: hero.id,
+      targetCol: target.col,
+      targetRow: target.row,
+    }];
+
+    const steps = resolvePlans(state, heroPlan, []);
+    const allHeroEvents = steps.flatMap(s => s.heroEvents);
+    const skipEv = allHeroEvents.find(e => e.type === ResEventType.ACTION_SKIP);
+    assert.ok(skipEv, 'Empty-hex BATTLE_HEX should produce an ACTION_SKIP event');
+    assert.ok(skipEv.battleSnaps, 'Skip event should include battleSnaps');
+    assert.ok(skipEv.battleSnaps.actorSnap, 'battleSnaps should include actorSnap');
+    assert.equal(skipEv.battleSnaps.actorSnap.id, hero.id, 'actorSnap should be the attacking entity');
+    assert.ok(skipEv.whiffTarget, 'Skip event should include whiffTarget');
+    assert.equal(skipEv.whiffTarget.col, target.col, 'whiffTarget.col should match target hex');
+    assert.equal(skipEv.whiffTarget.row, target.row, 'whiffTarget.row should match target hex');
+  });
+});
+
+// ── Movement interrupted by enemy ──────────────────────────────────────────
+// When one faction's move places a unit on a hex that another faction's unit
+// was about to traverse, the second unit should stop before the blocked hex.
+
+describe('movement interrupted by enemy during resolution', () => {
+  test('witch minion stops before hero that moved into path', () => {
+    const state = freshState();
+    const hero = state.hero;
+
+    // Set up a horizontal road chain at row 2: cols 2–7
+    for (let c = 2; c <= 7; c++) {
+      const k = hexKey(c, 2);
+      const t = state.tiles.get(k);
+      if (t) { t.type = TileType.ROAD; t.building = null; t.fortifyLevel = 0; t.hiddenSurvivor = false; }
+    }
+
+    // Place hero at col 3 (one step from col 4)
+    hero.col = 3;
+    hero.row = 2;
+
+    // Create a witch minion at col 5 — plans to move to col 3 (through col 4)
+    const minion = createMinion(5, 2);
+    state.entities = state.entities.filter(e => e.id === hero.id || e.id === state.witch.id);
+    state.entities.push(minion);
+
+    // Move witch out of the way so she doesn't interfere
+    state.witch.col = 0;
+    state.witch.row = 0;
+
+    // Hero plan: move to col 4
+    const heroPlan = [
+      { type: PlanActionType.MOVE, entityId: hero.id, toCol: 4, toRow: 2 },
+    ];
+    // Witch plan: minion moves to col 3 (path: col 5 → col 4 → col 3)
+    const witchPlan = [
+      { type: PlanActionType.MOVE, entityId: minion.id, toCol: 3, toRow: 2 },
+    ];
+
+    const steps = resolvePlans(state, heroPlan, witchPlan);
+
+    // Hero resolves first → hero moves to col 4
+    // Then witch's minion tries to move to col 3 via col 4 → blocked by hero at col 4
+    // Minion should NOT have reached col 3
+    assert.notEqual(minion.col, 3, 'Minion should not reach col 3 (hero blocking at col 4)');
+
+    // Find the witch move event to check for blockedBy
+    const witchMoveEvents = steps.flatMap(s => s.witchEvents ?? [])
+      .filter(e => e.action?.type === PlanActionType.MOVE && e.action?.entityId === minion.id);
+
+    assert.ok(witchMoveEvents.length > 0, 'Should have a witch move event');
+    const moveEv = witchMoveEvents[0];
+
+    // The move might succeed partially (blockedBy set) or fail entirely
+    if (moveEv.type === ResEventType.ACTION_OK) {
+      // Partial move — unit moved some hexes but was blocked
+      assert.ok(moveEv.result.blockedBy, 'blockedBy should be set when movement interrupted by enemy');
+      assert.ok(moveEv.result.log.some(l => l.includes('movement blocked by')),
+        'Log should mention movement was blocked');
+    } else {
+      // Fully blocked — couldn't move at all (hero on only path to destination)
+      assert.equal(moveEv.type, ResEventType.ACTION_FAIL, 'Should be ACTION_FAIL when fully blocked');
+      // blockedBy is only set when enemy is on the target hex itself, not when
+      // they merely block the route. This is the "path blocked" case.
+    }
+  });
+
+  test('move to adjacent enemy hex: fails with blockedBy in ACTION_FAIL', () => {
+    // Adjacent enemy — hero can't walk at all (0 intermediate hexes)
+    const state = freshState();
+    const hero = state.hero;
+
+    const neighbor = getNeighbors(hero.col, hero.row).find(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && t.type !== TileType.RIVER && t.type !== 'river';
+    });
+    assert.ok(neighbor, 'Need an adjacent passable hex');
+    const minion = createMinion(neighbor.col, neighbor.row);
+    state.entities.push(minion);
+
+    const heroPlan = [
+      { type: PlanActionType.MOVE, entityId: hero.id, toCol: neighbor.col, toRow: neighbor.row },
+    ];
+
+    const steps = resolvePlans(state, heroPlan, []);
+    const heroMoveEvents = steps.flatMap(s => s.heroEvents ?? [])
+      .filter(e => e.action?.type === PlanActionType.MOVE);
+    assert.ok(heroMoveEvents.length > 0, 'Should have a hero move event');
+
+    const moveEv = heroMoveEvents[0];
+    assert.equal(moveEv.type, ResEventType.ACTION_FAIL, 'Should be ACTION_FAIL');
+    assert.ok(moveEv.blockedBy, 'ACTION_FAIL should have blockedBy set');
+    assert.equal(moveEv.blockedBy.id, minion.id);
+    assert.ok(moveEv.reason.includes('movement blocked by'));
+  });
+
+  test('move to enemy hex 2 away: walks 1 hex then stops (fog scenario)', () => {
+    // Simulates fog: hero planned to move to a hex 2 away with a hidden enemy.
+    // Hero should walk 1 hex and stop before the enemy.
+    const state = freshState();
+    const hero = state.hero;
+
+    // Find two consecutive passable hexes from hero
+    const n1 = getNeighbors(hero.col, hero.row).find(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && t.type !== TileType.RIVER && t.type !== 'river';
+    });
+    assert.ok(n1, 'Need a passable neighbor');
+    const n2 = getNeighbors(n1.col, n1.row).find(n => {
+      if (n.col === hero.col && n.row === hero.row) return false;
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && t.type !== TileType.RIVER && t.type !== 'river';
+    });
+    assert.ok(n2, 'Need a second passable neighbor');
+
+    // Make hexes roads so they're within movement budget
+    for (const h of [{ col: hero.col, row: hero.row }, n1, n2]) {
+      const t = state.tiles.get(hexKey(h.col, h.row));
+      if (t) { t.type = TileType.ROAD; t.building = null; t.hiddenSurvivor = false; }
+    }
+
+    // Remove other entities except hero, place enemy on n2
+    state.entities = state.entities.filter(e => e.id === hero.id);
+    const minion = createMinion(n2.col, n2.row);
+    state.entities.push(minion);
+
+    const origCol = hero.col;
+    const origRow = hero.row;
+    const heroPlan = [
+      { type: PlanActionType.MOVE, entityId: hero.id, toCol: n2.col, toRow: n2.row },
+    ];
+
+    const steps = resolvePlans(state, heroPlan, []);
+    const heroMoveEvents = steps.flatMap(s => s.heroEvents ?? [])
+      .filter(e => e.action?.type === PlanActionType.MOVE);
+    assert.ok(heroMoveEvents.length > 0, 'Should have a hero move event');
+
+    const moveEv = heroMoveEvents[0];
+    assert.equal(moveEv.type, ResEventType.ACTION_OK, 'Should be ACTION_OK (partial move)');
+    assert.ok(moveEv.result.blockedBy, 'blockedBy should reference the blocking enemy');
+    assert.equal(moveEv.result.blockedBy.id, minion.id);
+    assert.ok(moveEv.result.log.some(l => l.includes('movement blocked by')),
+      'Log should mention blocked by enemy');
+    // Hero should have moved to n1 (1 hex), not n2
+    assert.equal(hero.col, n1.col, 'Hero should stop at intermediate hex');
+    assert.equal(hero.row, n1.row);
+    assert.ok(hero.col !== origCol || hero.row !== origRow, 'Hero should have moved from starting position');
+  });
+});

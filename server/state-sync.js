@@ -100,6 +100,11 @@ export function serializeState(state) {
       seenByWitch: o.seenByWitch ?? false,
       prevCtrl:    o.prevCtrl    ?? 'neutral',
     })),
+    missionTargetHex:     state.missionTargetHex
+      ? { col: state.missionTargetHex.col, row: state.missionTargetHex.row,
+          color: state.missionTargetHex.color, label: state.missionTargetHex.label,
+          seen: state.missionTargetHex.seen ?? false }
+      : null,
     inventory:            JSON.parse(JSON.stringify(state.inventory)),
     postRoundEvents:      [...(state.postRoundEvents || [])],
     nodeSpawnedSurvivors: [...(state.nodeSpawnedSurvivors || [])],
@@ -186,6 +191,11 @@ export function deserializeState(snap) {
     seenByWitch: o.seenByWitch ?? false,
     prevCtrl:    o.prevCtrl    ?? 'neutral',
   }));
+  state.missionTargetHex     = snap.missionTargetHex
+    ? { col: snap.missionTargetHex.col, row: snap.missionTargetHex.row,
+        color: snap.missionTargetHex.color, label: snap.missionTargetHex.label,
+        seen: snap.missionTargetHex.seen ?? false }
+    : null;
   state.inventory            = JSON.parse(JSON.stringify(snap.inventory));
   state.postRoundEvents      = [...(snap.postRoundEvents || [])];
   state.nodeSpawnedSurvivors = [...(snap.nodeSpawnedSurvivors || [])];

@@ -134,6 +134,9 @@ export class Faction {
     throw new Error('Subclass must implement getInventory');
   }
 
+  /** Starting resources for this faction's inventory at game start */
+  getStartingResources() { return {}; }
+
   /** Log message when this faction finds a resource */
   getResourceFoundLog(_actor, _lootType) { return ''; }
 
@@ -316,6 +319,8 @@ export class HeroFaction extends Faction {
 
   getInventory(state) { return state.inventory.shared; }
 
+  getStartingResources() { return { [ResourceType.FOOD]: 2 }; }
+
   getResourceFoundLog(actor, _lootType) {
     return `Found ${_lootType}! Added to shared supplies.`;
   }
@@ -401,6 +406,8 @@ export class WitchFaction extends Faction {
   }
 
   getInventory(state) { return state.inventory.witch; }
+
+  getStartingResources() { return { [ResourceType.WOOD]: 2, [ResourceType.METAL]: 2 }; }
 
   getResourceFoundLog(actor, lootType) {
     return `${actor.displayName} secures ${lootType} for dark rituals.`;

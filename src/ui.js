@@ -6,6 +6,7 @@ import { Phase, Player, PHASE_ICON, nodeController, countHeldNodes } from './gam
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
 import {
   ActionType, getValidActions, getVisibleEnemyHexes, getVisibleHeroHexes,
+  buildFogMovementHexes,
 } from './actions.js';
 import { PlanActionType, computeGhostState, computeProjectedInventory, interleavePlan } from './planner.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
@@ -304,6 +305,9 @@ export class UIController {
       const backdrop = this._el('game-menu-backdrop');
       if (backdrop) backdrop.style.display = 'none';
     };
+    this._el('mission-info-btn')?.addEventListener('click', () => {
+      this.onMissionInfo?.();
+    });
     this._el('menu-btn')?.addEventListener('click', () => {
       const backdrop = this._el('game-menu-backdrop');
       if (backdrop) backdrop.style.display = backdrop.style.display === 'none' ? 'flex' : 'none';
@@ -964,6 +968,9 @@ export class UIController {
     const { x, y } = this._canvasPos(e);
     const hex = this._canvasToHex(x, y);
     if (hex.col < 0 || hex.col >= MAP_COLS || hex.row < 0 || hex.row >= MAP_ROWS) return;
+
+    // Full fog: clicking a fully black (unexplored) hex does nothing.
+    if (this._isFullyFogged(hex.col, hex.row)) return;
 
     // Spectators: view tile/unit info only — no actions or planning
     if (this.spectator) {
@@ -1808,9 +1815,13 @@ export class UIController {
       };
       const icon = tile.building ? (BUILDING_ICON[tile.building] ?? '🏠') : (TERRAIN_ICON[tile.type] ?? '🌿');
       const label = tile.building ? (BUILDING_LABEL[tile.building] ?? 'Building') : (tile.type ?? 'terrain');
+      const tileSrc = this.renderer.getTileDataURL(tile, tileSelection.col, tileSelection.row, 56);
+      const tileImgHtml = tileSrc
+        ? `<img class="usb-terrain-hex" src="${tileSrc}" alt="">`
+        : `<span class="usb-icon" style="background:#3a4a3a;font-size:1.1rem">${icon}</span>`;
       bar.style.display = 'flex';
       bar.innerHTML = `
-        <span class="usb-icon" style="background:#3a4a3a;font-size:1.1rem">${icon}</span>
+        ${tileImgHtml}
         <span class="usb-tile-info">
           <span class="usb-tile-name">${label}</span>
           <span class="usb-tile-details">${terrainBadge}</span>
@@ -1849,16 +1860,21 @@ export class UIController {
 
     // Portrait image with glyph fallback
     const assetId = _entityPortraitId(entity);
-    const src = assetId ? this.renderer.getPortraitDataURL(assetId, 56) : null;
+    const src = assetId ? this.renderer.getPortraitDataURL(assetId, 84) : null;
     const portraitHtml = src
       ? `<img class="usb-portrait" src="${src}" style="border-color:${color};" alt="">`
       : `<span class="usb-icon" style="background:${color}">${glyph}</span>`;
 
-    // Terrain badge for the entity's current hex
+    // Terrain row for the entity's current hex
     const entCol = this._planMode ? (this._getProjectedPos(entity.id)?.col ?? entity.col) : entity.col;
     const entRow = this._planMode ? (this._getProjectedPos(entity.id)?.row ?? entity.row) : entity.row;
     const tile = this.state.tiles.get(hexKey(entCol, entRow));
-    const terrainHtml = tile ? `<span class="usb-terrain">${_buildTerrainBadge(tile)}</span>` : '';
+    let terrainRowHtml = '';
+    if (tile) {
+      const tileSrc = this.renderer.getTileDataURL(tile, entCol, entRow, 56);
+      const tileImgHtml = tileSrc ? `<img class="usb-terrain-hex" src="${tileSrc}" alt="">` : '';
+      terrainRowHtml = `<span class="usb-terrain-row">${tileImgHtml}${_buildTerrainBadge(tile)}</span>`;
+    }
 
     bar.style.display = 'flex';
     bar.innerHTML = `
@@ -1876,8 +1892,8 @@ export class UIController {
           <span class="usb-stat">ATK <span class="usb-stat-val">${entity.attack}</span></span>
           <span class="usb-stat">DEF <span class="usb-stat-val">${entity.defense}</span></span>
           ${weaponLabel ? `<span class="usb-weapon">⚔ ${weaponLabel}</span>` : ''}
-          ${terrainHtml}
         </span>
+        ${terrainRowHtml}
       </span>
       <button class="usb-deselect-btn" title="Deselect unit">✕</button>
     `;
@@ -2395,8 +2411,11 @@ export class UIController {
     const toast = document.createElement('div');
     toast.className = 'battle-toast' +
       (result.killed ? ' kill' : result.damage >= 2 ? ' crush' : '');
+    const splashNote = result.splashHits?.length
+      ? ` +💢${result.splashHits.length} splashed`
+      : '';
     toast.textContent =
-      `${actorSnap.name} → ${targetSnap.name}  [${result.attackRoll}v${result.defenseRoll}]  ${outcome}`;
+      `${actorSnap.name} → ${targetSnap.name}  [${result.attackRoll}v${result.defenseRoll}]  ${outcome}${splashNote}`;
     container.appendChild(toast);
 
     const displayMs = this.speedMode === 'vfast' ? 500
@@ -2512,6 +2531,12 @@ export class UIController {
       continueBtn?.removeEventListener('click', dismiss);
     };
     continueBtn?.addEventListener('click', dismiss);
+  }
+
+  /** Toggle visibility of the mission info header button. */
+  showMissionInfoBtn(visible) {
+    const btn = this._el('mission-info-btn');
+    if (btn) btn.style.display = visible ? '' : 'none';
   }
 
   /**
@@ -2734,6 +2759,9 @@ export class UIController {
     const outcome = this._el('battle-outcome');
     outcome.textContent = '';
     outcome.className   = 'battle-outcome';
+    // Remove stale splash damage line from previous battle
+    const oldSplash = dialog.querySelector('.battle-splash');
+    if (oldSplash) oldSplash.remove();
     footer.innerHTML    = this.autoplay ? '' : '<div class="result-dismiss">— click to continue —</div>';
 
     // Reset breakdown columns (hidden until dice settle)
@@ -2797,6 +2825,17 @@ export class UIController {
       } else {
         outcome.textContent = `🛡 ${targetSnap.name} defends!`;
         outcome.className   = 'battle-outcome miss';
+      }
+
+      // Splash damage line(s) below main outcome
+      if (result.splashHits?.length) {
+        const splashEl = document.createElement('div');
+        splashEl.className = 'battle-splash';
+        const lines = result.splashHits.map(h =>
+          h.killed ? `💢 ${h.name} is slain by splash!` : `💢 ${h.name} takes −1 splash damage`
+        );
+        splashEl.textContent = lines.join('  ·  ');
+        outcome.insertAdjacentElement('afterend', splashEl);
       }
 
       const fill = dialog.querySelector('.combatant-panel:last-of-type .combatant-hp-fill');
@@ -3126,13 +3165,14 @@ export class UIController {
       const el = this._el('round-summary');
       if (!el) { resolve('next'); return; }
 
-      const { prevScore, prevNodes, humanFaction, fogOfWar, gameOver, winner, winReason, hasFullReplay } = opts;
+      const { prevScore, prevNodes, humanFaction, fogOfWar, gameOver, winner, winReason, hasFullReplay, isCampaign } = opts;
 
       // Collect kills, survivors found, summons, and resource flows from steps.
       // Fog-of-war filtering: skip opponent-only events the player can't see.
       const kills      = [];
       const survivors  = [];
       const summons    = [];
+      const blockedMoves = []; // movement interrupted by enemy
       const equipFinds = []; // dedicated lines for horse/weapon discoveries
       const foundRes   = {}; // icon → count  (from explore loot)
       const usedRes   = {}; // icon → count  (from summon/fortify/use-item)
@@ -3175,6 +3215,24 @@ export class UIController {
           if (ev.action?.type === 'summon' && ev.result?.success) {
             const logLine = ev.result?.log?.[0] ?? '';
             summons.push(logLine || 'Unit summoned');
+          }
+          // Movement blocked by enemy — partial move (ACTION_OK with blockedBy)
+          if (ev.type === ResEventType.ACTION_OK &&
+              ev.action?.type === PlanActionType.MOVE &&
+              ev.result?.blockedBy) {
+            const actor = this.state.entities.find(e => e.id === ev.action.entityId);
+            const actorName = actor?.displayName ?? 'Unit';
+            const blockerName = ev.result.blockedBy.displayName ?? 'enemy';
+            blockedMoves.push({ actorName, blockerName });
+          }
+          // Movement blocked by enemy — full block (ACTION_FAIL with blockedBy)
+          if (ev.type === ResEventType.ACTION_FAIL &&
+              ev.action?.type === PlanActionType.MOVE &&
+              ev.blockedBy) {
+            const actor = this.state.entities.find(e => e.id === ev.action.entityId);
+            const actorName = actor?.displayName ?? 'Unit';
+            const blockerName = ev.blockedBy.displayName ?? 'enemy';
+            blockedMoves.push({ actorName, blockerName });
           }
 
           // ── Resource tracking (player's faction only) ─────────────────
@@ -3261,6 +3319,10 @@ export class UIController {
         );
         for (const line of battleLines) {
           html += `<div class="summary-combat">${line}</div>`;
+        }
+
+        for (const bm of blockedMoves) {
+          html += `<div class="summary-blocked">\u26CC ${bm.actorName} movement blocked by ${bm.blockerName}</div>`;
         }
 
         for (const n of kills) {
@@ -3444,7 +3506,7 @@ export class UIController {
         gameOverBtns.className = 'round-summary-gameover-btns';
         gameOverBtns.innerHTML =
           `<button class="plan-btn primary" data-action="restart">Return to Menu</button>` +
-          (hasFullReplay ? `<button class="plan-btn secondary" data-action="replay-full">Replay Full Game</button>` : '');
+          (hasFullReplay && !isCampaign ? `<button class="plan-btn secondary" data-action="replay-full">Replay Full Game</button>` : '');
         actionsEl.appendChild(gameOverBtns);
       } else if (nextBtn) {
         nextBtn.style.display = '';
@@ -3601,6 +3663,36 @@ export class UIController {
     this.onRedraw?.();
   }
 
+  /** True when (col,row) is fully black under full fog-of-war. */
+  _isFullyFogged(col, row) {
+    const state = this.state;
+    if (state.fogOfWar !== 'full') return false;
+
+    const myFaction    = state.myFaction;
+    const humanIsHero  = myFaction ? myFaction === 'hero'  : (state.witchIsAI && !state.heroIsAI);
+    const humanIsWitch = myFaction ? myFaction === 'witch' : (state.heroIsAI  && !state.witchIsAI);
+    const observerOwner = humanIsHero ? 'hero' : (humanIsWitch ? 'witch' : null);
+    if (!observerOwner) return false;
+
+    const k = hexKey(col, row);
+
+    // In sight range?
+    const sightSet = this.renderer._buildFogVisibleHexes(observerOwner);
+    if (sightSet.has(k)) return false;
+
+    // In movement-reachable set?
+    const lastStep = this.renderer.planGhostSteps?.at(-1);
+    const projectedPositions = lastStep?.positions ?? null;
+    const moveSet = buildFogMovementHexes(state, observerOwner, projectedPositions);
+    if (moveSet.has(k)) return false;
+
+    // Previously explored?
+    const explored = state.exploredHexes?.[observerOwner];
+    if (explored?.has(k)) return false;
+
+    return true;
+  }
+
   refresh() {
     this._updateSidebar();
     this.onRedraw();
@@ -3611,15 +3703,13 @@ export class UIController {
 
 /** Build HTML for a terrain badge (used in unit stats bar). */
 function _buildTerrainBadge(tile) {
-  const TERRAIN_ICON = {
-    [TileType.GRASS]: '🌿', [TileType.FOREST]: '🌲', [TileType.DIRT]: '🪨',
-    [TileType.ROAD]: '🛤', [TileType.RIVER]: '💧', [TileType.BRIDGE]: '🌉',
-  };
   const parts = [];
-  const icon = tile.building ? (BUILDING_ICON[tile.building] ?? '🏠') : (TERRAIN_ICON[tile.type] ?? '');
   const label = tile.building ? (BUILDING_LABEL[tile.building] ?? 'Building') : (tile.type ?? '');
-  parts.push(`<span class="usb-terrain-icon">${icon}</span> ${label}`);
-  if (tile.explored && tile.fortifyLevel) {
+  parts.push(label);
+  if (tile.explored) {
+    parts.push('<span class="usb-terrain-explored">Explored</span>');
+  }
+  if (tile.fortifyLevel) {
     parts.push(`<span class="usb-terrain-fort">⚙ Fort +${tile.fortifyLevel}</span>`);
   }
   if (tile.powerNode) {

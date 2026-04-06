@@ -308,6 +308,15 @@ export class Campaign {
       }
     }
 
+    // Apply heal bonus on victory
+    if (result.won && missionDef?.healBonus) {
+      const bonus = missionDef.healBonus;
+      this.heroStats.hp = Math.min(this.heroStats.hp + bonus, this.heroStats.maxHp);
+      for (const s of this.roster) {
+        s.hp = Math.min(s.hp + bonus, s.maxHp);
+      }
+    }
+
     // Apply mission rewards on victory
     if (result.won && missionDef?.rewards) {
       for (const [key, val] of Object.entries(missionDef.rewards)) {

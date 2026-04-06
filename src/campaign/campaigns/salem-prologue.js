@@ -183,10 +183,9 @@ function buildPrologueMap() {
   // Dirt patches
   scatterDirt(tiles, 3, rand, COLS);
 
-  // Resources + survivors
+  // Resources
   setResource(tiles, 1, 5, ResourceType.HERBS);
   setResource(tiles, 5, 3, ResourceType.WOOD);
-  setHiddenSurvivor(tiles, 4, 5);
 
   return {
     tiles,
@@ -194,7 +193,7 @@ function buildPrologueMap() {
     heroStart:      { col: 2, row: 7 },
     witchStart:     { col: 7, row: 1 },
     mapSize:        'skirmish',
-    survivorCounts: { buildings: 1, terrain: 0 },
+    survivorCounts: { buildings: 0, terrain: 0 },
     cols: COLS,
     rows: ROWS,
   };
@@ -582,7 +581,7 @@ const MISSIONS = [
 
     maxSurvivorsFromRoster:    0,
     missionSurvivors:          1,
-    maxDiscoverableSurvivors:  2,
+    maxDiscoverableSurvivors:  0,
 
     objectives: {
       win:  { type: 'eliminate_all', reason: 'The streets of Salem are clear.' },
@@ -591,6 +590,7 @@ const MISSIONS = [
 
     startingResources: { food: 1, herbs: 1, wood: 1 },
     rewards:           { herbs: 2, food: 1, wood: 1 },
+    healBonus:         2,
 
     lootOverrides: { remove: ['horse'] },
 
@@ -638,6 +638,7 @@ const MISSIONS = [
 
     startingResources: { food: 1, herbs: 1 },
     rewards:           { food: 2, herbs: 1, wood: 2 },
+    healBonus:         2,
 
     storyTriggers: [
       { type: 'round', round: 1, title: 'Voices in the Fog',
@@ -688,6 +689,7 @@ const MISSIONS = [
 
     startingResources: { wood: 3, metal: 1 },
     rewards:           { wood: 2, metal: 1, food: 2 },
+    healBonus:         3,
 
     lootOverrides: {
       remove: ['horse'],
@@ -747,6 +749,7 @@ const MISSIONS = [
 
     startingResources: { food: 2, wood: 1 },
     rewards:           { metal: 2, wood: 1, herbs: 1 },
+    healBonus:         3,
 
     storyTriggers: [
       { type: 'round', round: 1, title: 'The Long Road',
@@ -803,6 +806,7 @@ const MISSIONS = [
 
     startingResources: { metal: 1, food: 1 },
     rewards:           { silver: 1, scripture: 1, metal: 1 },
+    healBonus:         4,
 
     lootOverrides: { remove: ['horse'] },
 
@@ -856,6 +860,7 @@ const MISSIONS = [
 
     startingResources: {},
     rewards:           { metal: 2, silver: 1, scripture: 1 },
+    healBonus:         4,
 
     storyTriggers: [
       { type: 'round', round: 1, title: 'Into the Dark',

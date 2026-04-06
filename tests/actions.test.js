@@ -259,6 +259,86 @@ describe('executeMove', () => {
   });
 });
 
+// ── executeMove — blockedBy field ────────────────────────────────────────────
+
+describe('executeMove — blockedBy field', () => {
+  test('blockedBy is null on successful unobstructed move', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const target = firstReachable(state, hero);
+    if (!target) return;
+    const r = executeMove(state, hero, target.col, target.row);
+    assert.equal(r.success, true);
+    assert.equal(r.blockedBy, null, 'blockedBy should be null when path is clear');
+  });
+
+  test('enemy on adjacent hex: move fails, hero stays put', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const origCol = hero.col;
+    const origRow = hero.row;
+    // Place a minion directly adjacent — no room to walk before the enemy
+    const neighbor = getNeighbors(hero.col, hero.row).find(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && t.type !== TileType.RIVER;
+    });
+    if (!neighbor) return;
+    const minion = createMinion(neighbor.col, neighbor.row);
+    state.entities.push(minion);
+
+    const r = executeMove(state, hero, neighbor.col, neighbor.row);
+    assert.equal(r.success, false, 'Move to adjacent enemy hex should fail (nowhere to walk)');
+    assert.ok(r.blockedBy, 'blockedBy should reference the blocking enemy');
+    assert.equal(r.blockedBy.id, minion.id);
+    assert.ok(r.log.some(l => l.includes('movement blocked by')),
+      'Log should mention blocked by enemy');
+    assert.equal(hero.col, origCol, 'Hero should not have moved');
+    assert.equal(hero.row, origRow);
+  });
+
+  test('enemy 2 hexes away: hero walks 1 hex then stops', () => {
+    const state = freshState();
+    const hero = state.hero;
+    // Set up a road chain so hero can reach 2 hexes
+    const n1 = getNeighbors(hero.col, hero.row).find(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && t.type !== TileType.RIVER;
+    });
+    if (!n1) return;
+    // Find a neighbor of n1 that is NOT the hero's hex and is passable
+    const n2 = getNeighbors(n1.col, n1.row).find(n => {
+      if (n.col === hero.col && n.row === hero.row) return false;
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && t.type !== TileType.RIVER;
+    });
+    if (!n2) return;
+
+    // Make both hexes roads so they're within movement budget
+    const t1 = state.tiles.get(hexKey(n1.col, n1.row));
+    const t2 = state.tiles.get(hexKey(n2.col, n2.row));
+    const heroTile = state.tiles.get(hexKey(hero.col, hero.row));
+    if (t1) { t1.type = TileType.ROAD; t1.building = null; t1.hiddenSurvivor = false; }
+    if (t2) { t2.type = TileType.ROAD; t2.building = null; t2.hiddenSurvivor = false; }
+    if (heroTile) { heroTile.type = TileType.ROAD; heroTile.building = null; }
+
+    // Remove other entities that might block
+    state.entities = state.entities.filter(e => e.id === hero.id);
+
+    // Place enemy on n2 (2 hexes away)
+    const minion = createMinion(n2.col, n2.row);
+    state.entities.push(minion);
+
+    const r = executeMove(state, hero, n2.col, n2.row);
+    assert.equal(r.success, true, 'Partial move should succeed (walked 1 hex)');
+    assert.equal(hero.col, n1.col, 'Hero should stop at intermediate hex');
+    assert.equal(hero.row, n1.row);
+    assert.ok(r.blockedBy, 'blockedBy should reference the blocking enemy');
+    assert.equal(r.blockedBy.id, minion.id);
+    assert.ok(r.log.some(l => l.includes('movement blocked by')),
+      'Log should mention blocked by enemy');
+  });
+});
+
 // ── executeExplore ────────────────────────────────────────────────────────────
 
 describe('executeExplore', () => {
@@ -819,6 +899,84 @@ describe('executeBattle — splash damage', () => {
     const r = executeBattle(state, hero, minion);
     assert.ok(Array.isArray(r.splashKills), 'splashKills should be an array');
   });
+
+  test('splashHits field is always present', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const minion = createMinion(hero.col, hero.row);
+    state.entities.push(minion);
+    const r = executeBattle(state, hero, minion);
+    assert.ok(Array.isArray(r.splashHits), 'splashHits should be an array');
+  });
+
+  test('splashHits contains bystander info on crush/kill', () => {
+    const state = freshState();
+    const hero = state.hero;
+    hero.attackBonus = 100; // guarantee crush
+    const minion = createMinion(hero.col, hero.row);
+    minion.hp = 1; minion.maxHp = 1;
+    state.entities.push(minion);
+
+    const bystander = createMinion(hero.col, hero.row);
+    bystander.hp = 5; bystander.maxHp = 5;
+    state.entities.push(bystander);
+
+    const r = executeBattle(state, hero, minion);
+    if (r.killed || (r.hit && r.attackRoll >= 2 * r.defenseRoll)) {
+      assert.ok(r.splashHits.length > 0, 'splashHits should contain bystander');
+      const hit = r.splashHits.find(h => h.id === bystander.id);
+      assert.ok(hit, 'splashHits should include the bystander');
+      assert.equal(hit.name, bystander.displayName, 'splashHit should have name');
+      assert.equal(hit.col, bystander.col, 'splashHit should have col');
+      assert.equal(hit.row, bystander.row, 'splashHit should have row');
+      assert.equal(typeof hit.killed, 'boolean', 'splashHit should have killed flag');
+    }
+  });
+
+  test('splashHits marks killed bystanders correctly', () => {
+    const state = freshState();
+    const hero = state.hero;
+    hero.attackBonus = 100;
+    const minion = createMinion(hero.col, hero.row);
+    minion.hp = 1; minion.maxHp = 1;
+    state.entities.push(minion);
+
+    // 1 HP bystander should die from splash
+    const fragile = createMinion(hero.col, hero.row);
+    fragile.hp = 1; fragile.maxHp = 1;
+    state.entities.push(fragile);
+
+    const r = executeBattle(state, hero, minion);
+    if (r.killed) {
+      const hit = r.splashHits.find(h => h.id === fragile.id);
+      assert.ok(hit, 'splashHits should include the fragile bystander');
+      assert.equal(hit.killed, true, 'fragile bystander should be marked killed');
+    }
+  });
+
+  test('splashHits is empty when no splash occurs', () => {
+    const state = freshState();
+    const hero = state.hero;
+    hero.attack = 1;
+    hero.attackBonus = 0;
+    const minion = createMinion(hero.col, hero.row);
+    minion.hp = 50; minion.maxHp = 50;
+    minion.defense = 0;
+    state.entities.push(minion);
+
+    const bystander = createMinion(hero.col, hero.row);
+    bystander.hp = 5; bystander.maxHp = 5;
+    state.entities.push(bystander);
+
+    for (let i = 0; i < 20; i++) {
+      minion.hp = 50;
+      bystander.hp = 5;
+      const r = executeBattle(state, hero, minion);
+      if (r.hit && r.attackRoll < 2 * r.defenseRoll && !r.killed) {
+        assert.deepStrictEqual(r.splashHits, [], 'splashHits should be empty on normal hit');
+      }
+    }
+  });
 });
 
 // ── executeFortify ────────────────────────────────────────────────────────────
@@ -1272,6 +1430,10 @@ describe('executeUseAbility — RALLY', () => {
 describe('Inventory stash separation', () => {
   test('hero stash (inventory.shared) and witch stash (inventory.witch) are independent', () => {
     const state = freshState();
+    // Clear starting resources so we can test independence cleanly
+    state.inventory.shared = {};
+    state.inventory.witch = {};
+
     // Populate both stashes with different resources
     state.inventory.shared[ResourceType.WOOD] = 3;
     state.inventory.shared[ResourceType.FOOD] = 1;

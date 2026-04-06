@@ -273,6 +273,89 @@ export class Renderer {
     return url;
   }
 
+  /**
+   * Render a small hex tile thumbnail and return a cached data URL.
+   * Shows terrain colour fill, sprite texture, building overlay, and fortification ring.
+   */
+  getTileDataURL(tile, col, row, size = 28) {
+    if (!this._portraitCache) return null;
+    const fortKey = tile.fortifyLevel || 0;
+    const bldg = tile.building || '';
+    const cacheKey = `tile_${tile.type}_${bldg}_${fortKey}@${size}`;
+    if (this._portraitCache.has(cacheKey)) return this._portraitCache.get(cacheKey);
+
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    const hs = size / 2;
+
+    // Hex fill colour
+    const color = tile.type === TileType.BUILDING
+      ? (BUILDING_COLOR[tile.building] || '#8a7a5a')
+      : (tile.type === 'road' || tile.type === 'river' || tile.type === 'bridge')
+        ? TILE_COLOR[TileType.GRASS]
+        : (TILE_COLOR[tile.type] || TILE_COLOR[TileType.GRASS]);
+    _traceHexPath(ctx, hs, hs, hs - 0.5);
+    ctx.fillStyle = color;
+    ctx.fill();
+
+    // Sprite texture (if tilemap available)
+    if (this._tilemapImg && this._spriteRects && TERRAIN_SPRITES[tile.type]) {
+      const baseType = tile.type === TileType.BUILDING ? TileType.DIRT
+        : (tile.type === 'road' || tile.type === 'river' || tile.type === 'bridge') ? TileType.GRASS
+        : tile.type;
+      const spriteId = this._pickVariant(baseType, col, row);
+      const rect = this._spriteRects.get(spriteId);
+      if (rect) {
+        ctx.save();
+        _traceHexPath(ctx, hs, hs, hs - 0.5);
+        ctx.clip();
+        ctx.drawImage(this._tilemapImg, rect.x, rect.y, rect.size, rect.size, 0, 0, size, size);
+        ctx.restore();
+      }
+    }
+
+    // Building overlay
+    if (tile.type === TileType.BUILDING && this._tilemapImg) {
+      const bldgRect = this._spriteRects?.get(tile.building);
+      if (bldgRect) {
+        ctx.save();
+        _traceHexPath(ctx, hs, hs, hs - 0.5);
+        ctx.clip();
+        ctx.drawImage(this._tilemapImg, bldgRect.x, bldgRect.y, bldgRect.size, bldgRect.size, 0, 0, size, size);
+        ctx.restore();
+      }
+    }
+
+    // Fortification ring
+    if (tile.fortifyLevel > 0) {
+      const lvl = tile.fortifyLevel;
+      const fortPalette = [
+        null,
+        [160, 100, 55],
+        [120, 135, 148],
+        [180, 196, 210],
+        [205, 165, 35],
+      ];
+      const [fr, fg, fb] = fortPalette[Math.min(lvl, 4)];
+      const alpha = Math.min(0.95, 0.5 + lvl * 0.12);
+      _traceHexPath(ctx, hs, hs, hs - 1);
+      ctx.strokeStyle = `rgba(${fr},${fg},${fb},${alpha})`;
+      ctx.lineWidth = Math.max(1.5, lvl * 1.2);
+      ctx.stroke();
+    }
+
+    // Hex outline
+    _traceHexPath(ctx, hs, hs, hs - 0.5);
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+
+    const url = c.toDataURL();
+    this._portraitCache.set(cacheKey, url);
+    return url;
+  }
+
   /** Map a survivor entity's title to its sprite asset id. */
   static survivorAssetId(title) {
     const MAP = {
@@ -868,6 +951,18 @@ export class Renderer {
       this._drawObjectiveSymbolAt(cx, cy, obj.label, state, obj);
     }
 
+    // Mission target hex (reach_hex objective) — rendered like a power node with a flag symbol
+    if (state.missionTargetHex) {
+      const mt = state.missionTargetHex;
+      const shouldDrawTarget = !fogActive || mt.seen;
+      if (shouldDrawTarget) {
+        const mtObj = { color: mt.color, hexes: [mt] };
+        this._drawObjectiveHexGlow(mt.col, mt.row, mtObj, state);
+        const { x, y } = this._toCanvas(mt.col, mt.row);
+        this._drawMissionTargetSymbol(x, y, mt);
+      }
+    }
+
     // Node reveal pulse animations — expanding glow rings on newly discovered nodes
     this._drawNodeRevealAnims();
 
@@ -891,9 +986,10 @@ export class Renderer {
     // Only during resolution playback, not during planning
     if (!state.planningPhase) {
       const guardZoneKeys = new Set();
+      const hiddenFaction = humanIsHero ? 'witch' : (humanIsWitch ? 'hero' : null);
       for (const e of state.entities) {
         if (!e.alive || !(e.guarding > 0)) continue;
-        if (revealedHexes && !revealedHexes.has(hexKey(e.col, e.row))) continue;
+        if (revealedHexes && e.owner === hiddenFaction && !revealedHexes.has(hexKey(e.col, e.row))) continue;
         for (const n of getNeighbors(e.col, e.row)) {
           guardZoneKeys.add(hexKey(n.col, n.row));
         }
@@ -1639,6 +1735,23 @@ export class Renderer {
     ctx.fillStyle = nodeColor + 'cc';
     ctx.font      = `${Math.max(6, Math.floor(hs * 0.2))}px sans-serif`;
     this._shadowText(label, x, y + hs * 0.35);
+  }
+
+  /** Draw a flag symbol for a mission target hex (reach_hex objective). */
+  _drawMissionTargetSymbol(x, y, mt) {
+    const ctx = this.ctx;
+    const hs  = this.hexSize;
+    ctx.shadowColor = mt.color;
+    ctx.shadowBlur  = 6;
+    ctx.fillStyle   = mt.color;
+    ctx.font        = `bold ${Math.floor(hs * 0.5)}px serif`;
+    ctx.textAlign   = 'center';
+    ctx.textBaseline = 'middle';
+    this._shadowText('⚑', x, y - hs * 0.15);
+    ctx.shadowBlur = 0;
+    ctx.fillStyle  = mt.color + 'cc';
+    ctx.font       = `${Math.max(6, Math.floor(hs * 0.2))}px sans-serif`;
+    this._shadowText(mt.label, x, y + hs * 0.35);
   }
 
   /** Draw pulsing glow rings on recently revealed power nodes. */

@@ -467,9 +467,18 @@ export function executeMove(state, actor, targetCol, targetRow) {
 
   // Reachability check — road tiles cost half, so roads extend effective range.
   const hasHorse = getFaction(actor.owner).hasHorse(actor);
+  const maxSteps = hasHorse ? 4 : 2;
   const reachable = getReachableHexes(state, actor, hasHorse ? 2 : 1);
-  if (!reachable.some(h => h.col === targetCol && h.row === targetRow))
-    return { success: false, log: [`Cannot reach (${targetCol},${targetRow}) from current position.`] };
+  if (!reachable.some(h => h.col === targetCol && h.row === targetRow)) {
+    // When an enemy occupies the target (e.g. hidden by fog during planning),
+    // allow the move to proceed if the target is within step range so the unit
+    // walks as far as it can and stops before the enemy.
+    const enemyOnTarget = hasEnemy(state, actor, targetCol, targetRow);
+    const dist = hexDistance(actor.col, actor.row, targetCol, targetRow);
+    if (!enemyOnTarget || dist > maxSteps) {
+      return { success: false, log: [`Cannot reach (${targetCol},${targetRow}) from current position.`] };
+    }
+  }
 
   // Find the road-preferring path from current position to destination.
   const fullPath = findShortestPath(state, actor, targetCol, targetRow) ?? [{ col: targetCol, row: targetRow }];
@@ -477,7 +486,6 @@ export function executeMove(state, actor, targetCol, targetRow) {
   // Walk the path step by step; stop if an enemy blocks a mid-path hex.
   // Cap the number of hex steps to prevent long road-chain traversals when a
   // prior move in the plan failed and the entity is further away than expected.
-  const maxSteps = hasHorse ? 4 : 2;
   const walkedPath = [];
   const encounterLog = [];
   let encounterSurvivor = null;
@@ -500,8 +508,28 @@ export function executeMove(state, actor, targetCol, targetRow) {
     }
   }
 
-  if (walkedPath.length === 0)
+  if (walkedPath.length === 0) {
+    const blocker = (fullPath.length > 0)
+      ? state.entities.find(e =>
+          e.alive && e.owner !== actor.owner && e.col === fullPath[0].col && e.row === fullPath[0].row
+        ) ?? null
+      : null;
+    if (blocker) {
+      return { success: false, log: [`${actor.displayName} movement blocked by ${blocker.displayName}.`], blockedBy: blocker };
+    }
     return { success: false, log: ['The way is blocked.'] };
+  }
+
+  // Detect partial move blocked by enemy
+  let blockedBy = null;
+  if (walkedPath.length < fullPath.length) {
+    const nextStep = fullPath[walkedPath.length];
+    if (hasEnemy(state, actor, nextStep.col, nextStep.row)) {
+      blockedBy = state.entities.find(e =>
+        e.alive && e.owner !== actor.owner && e.col === nextStep.col && e.row === nextStep.row
+      ) ?? null;
+    }
+  }
 
   const finalStep = walkedPath[walkedPath.length - 1];
   const ft = tile(state, finalStep.col, finalStep.row);
@@ -510,9 +538,12 @@ export function executeMove(state, actor, targetCol, targetRow) {
   } else {
     log.push(`${actor.displayName} moves to (${finalStep.col},${finalStep.row}).`);
   }
+  if (blockedBy) {
+    log.push(`${actor.displayName} movement blocked by ${blockedBy.displayName}.`);
+  }
   if (encounterLog.length) log.push(...encounterLog);
 
-  return { success: true, log, cost: 1, path: walkedPath, encounterLog, encounterSurvivor };
+  return { success: true, log, cost: 1, path: walkedPath, blockedBy, encounterLog, encounterSurvivor };
 }
 
 export function executeExplore(state, actor) {
@@ -621,23 +652,28 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
 
 // Splash damage: when a unit is crushed or killed, all other units on the same
 // tile (except those in excludeIds) take 1 damage.  Does NOT chain — splash
-// kills do not trigger further splashes.  Returns array of killed entity info.
+// kills do not trigger further splashes.
+// Returns { splashKills, splashHits } — splashHits includes every bystander
+// that took damage (with name, position, and whether they died).
 function _applySplashDamage(state, col, row, excludeIds, log) {
   const excludeSet = new Set(excludeIds);
   const bystanders = state.entities.filter(
     e => e.alive && e.col === col && e.row === row && !excludeSet.has(e.id)
   );
   const splashKills = [];
+  const splashHits  = [];
   for (const b of bystanders) {
     const wasKilled = b.takeDamage(1);
     log.push(`💢 ${b.displayName} caught in the blast — takes 1 splash damage! (${b.hp}/${b.maxHp} HP)`);
+    splashHits.push({ id: b.id, name: b.displayName, owner: b.owner, type: b.type,
+                      ownerId: b.ownerId, killed: !!wasKilled, col: b.col, row: b.row });
     if (wasKilled) {
       log.push(`${b.displayName} is slain by splash damage!`);
       splashKills.push({ id: b.id, owner: b.owner, type: b.type, ownerId: b.ownerId });
       state.entities = state.entities.filter(e => e.id !== b.id);
     }
   }
-  return splashKills;
+  return { splashKills, splashHits };
 }
 
 export function executeBattle(state, actor, target) {
@@ -696,6 +732,7 @@ export function executeBattle(state, actor, target) {
   let counterDmg = 0;          // damage dealt to attacker (counter)
   let fortDamaged = 0;         // fort levels lost this combat (1 if defender took any damage)
   let splashKills = [];         // entities killed by splash damage
+  let splashHits  = [];         // all entities that took splash damage (killed or not)
   const isCrush  = hit && attackRoll >= 2 * defenseRoll;
 
   if (hit) {
@@ -728,7 +765,9 @@ export function executeBattle(state, actor, target) {
 
     // Splash damage: crush or kill splashes all other units on the target's tile
     if (isCrush || killed) {
-      splashKills = _applySplashDamage(state, target.col, target.row, [actor.id, target.id], log);
+      const splash = _applySplashDamage(state, target.col, target.row, [actor.id, target.id], log);
+      splashKills = splash.splashKills;
+      splashHits  = splash.splashHits;
       for (const sk of splashKills) {
         if (sk.owner !== actor.owner) {
           getFaction(actor.owner).trackKill(state);
@@ -750,8 +789,9 @@ export function executeBattle(state, actor, target) {
 
         // Counter-kill splashes other units on the attacker's tile (exclude target)
         const counterSplash = _applySplashDamage(state, actor.col, actor.row, [target.id, actor.id], log);
-        splashKills.push(...counterSplash);
-        for (const sk of counterSplash) {
+        splashKills.push(...counterSplash.splashKills);
+        splashHits.push(...counterSplash.splashHits);
+        for (const sk of counterSplash.splashKills) {
           if (sk.owner !== target.owner) {
             getFaction(target.owner).trackKill(state);
           }
@@ -766,7 +806,7 @@ export function executeBattle(state, actor, target) {
     success: true, log, cost: 1,
     attackRoll, defenseRoll, hit, killed,
     margin, damage, counterDmg, fortDamaged,
-    attackerAllies, defenderAllies, splashKills,
+    attackerAllies, defenderAllies, splashKills, splashHits,
     breakdown: {
       atkBaseDie, defBaseDie,
       atkExtraDice, defExtraDice,
@@ -1083,6 +1123,7 @@ export function executeGuardStrike(state, guardian, target) {
   let killed = false;
   let damage = 0;
   let splashKills = [];
+  let splashHits  = [];
   const isCrush = hit && attackRoll >= 2 * defenseRoll;
 
   if (hit) {
@@ -1112,7 +1153,9 @@ export function executeGuardStrike(state, guardian, target) {
 
     // Splash damage on crush or kill
     if (isCrush || killed) {
-      splashKills = _applySplashDamage(state, target.col, target.row, [guardian.id, target.id], log);
+      const splash = _applySplashDamage(state, target.col, target.row, [guardian.id, target.id], log);
+      splashKills = splash.splashKills;
+      splashHits  = splash.splashHits;
       for (const sk of splashKills) {
         if (sk.owner !== guardian.owner) {
           getFaction(guardian.owner).trackKill(state);
@@ -1126,7 +1169,7 @@ export function executeGuardStrike(state, guardian, target) {
 
   return {
     success: true, log, cost: 0, guardStrike: true,
-    attackRoll, defenseRoll, hit, killed, margin, damage, splashKills,
+    attackRoll, defenseRoll, hit, killed, margin, damage, splashKills, splashHits,
     breakdown: {
       atkBaseDie, defBaseDie,
       atkExtraDice: [], defExtraDice: [],

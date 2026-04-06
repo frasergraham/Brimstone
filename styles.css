@@ -972,8 +972,8 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 
 .usb-portrait {
-  width: 28px;
-  height: 28px;
+  width: 42px;
+  height: 42px;
   border-radius: 50%;
   border: 2px solid;
   flex-shrink: 0;
@@ -984,10 +984,10 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 42px;
+  height: 42px;
   border-radius: 50%;
-  font-size: 0.95rem;
+  font-size: 1.2rem;
   line-height: 1;
   flex-shrink: 0;
   color: #fff;
@@ -1077,20 +1077,26 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 .usb-deselect-btn:hover { background: rgba(192,57,43,0.3); border-color: #e74c3c; color: #ff6b5b; }
 
-/* Terrain badge inside unit stats bar */
-.usb-terrain {
+/* Terrain row — sits below unit stats as its own line */
+.usb-terrain-row {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
+  gap: 0.3rem;
   font-size: 0.68rem;
-  color: var(--text-dim);
-  padding: 0.1rem 0.4rem;
+  color: #c0b89a;
+  padding: 0.1rem 0.3rem;
   background: rgba(255,255,255,0.06);
   border-radius: 4px;
   white-space: nowrap;
-  flex-shrink: 0;
 }
-.usb-terrain-icon { font-size: 0.78rem; }
+.usb-terrain-hex {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+.usb-terrain-explored { color: #7daf7d; }
 .usb-terrain-fort { color: var(--day); }
 .usb-terrain-node { color: #c89dff; }
 
@@ -2230,6 +2236,13 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .battle-outcome.miss { color: var(--text-dim); }
 .battle-outcome.kill { color: #ff3333; }
 
+.battle-splash {
+  font-size: 0.85rem;
+  color: #e8a84c;
+  margin-bottom: 0.5rem;
+  letter-spacing: 0.02em;
+}
+
 .battle-footer {
   display: flex;
   flex-direction: column;
@@ -2313,6 +2326,11 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 
 .round-summary-events .summary-combat {
   color: var(--day, #d4a72c);
+  padding: 2px 0;
+}
+
+.round-summary-events .summary-blocked {
+  color: var(--text-dim);
   padding: 2px 0;
 }
 
@@ -3609,6 +3627,7 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   color: #c4b89a;
   line-height: 1.65;
   font-style: italic;
+  white-space: pre-line;
 }
 
 #story-modal-continue {
@@ -4435,6 +4454,41 @@ body.spectator-mode #game-screen   { display: flex !important; }
   color: var(--clr-dim, #888);
 }
 
+.campaign-resources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: center;
+  margin-top: 0.4rem;
+}
+
+.cr-item {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.2rem 0.45rem;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 4px;
+  font-size: 0.72rem;
+}
+
+.cr-icon {
+  font-size: 0.8rem;
+  line-height: 1;
+}
+
+.cr-count {
+  font-weight: 700;
+  color: var(--clr-gold, #d4a72c);
+  font-size: 0.78rem;
+}
+
+.cr-label {
+  color: var(--clr-dim, #999);
+  text-transform: capitalize;
+}
+
 .campaign-deploy-roster {
   margin: 0.75rem 0;
 }
@@ -4442,12 +4496,6 @@ body.spectator-mode #game-screen   { display: flex !important; }
 .campaign-deploy-roster h3 {
   font-size: 0.95rem;
   margin-bottom: 0.4rem;
-}
-
-.campaign-roster-picker {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
 }
 
 .campaign-survivor-pick {
@@ -4480,6 +4528,145 @@ body.spectator-mode #game-screen   { display: flex !important; }
 .debrief-survivor {
   font-size: 0.85rem;
   padding: 0.2rem 0;
+}
+
+/* ── Campaign party roster cards ───────────────────────────────────────── */
+
+.campaign-party {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.5rem;
+  justify-content: center;
+}
+
+.campaign-party-card {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.4rem;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 5px;
+  min-width: 130px;
+  flex: 1 1 calc(50% - 0.35rem);
+  max-width: calc(50% - 0.18rem);
+}
+
+.campaign-party-card.hero {
+  border-color: rgba(212,167,44,0.3);
+  background: rgba(212,167,44,0.06);
+}
+
+.cp-portrait {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1.5px solid #888;
+  flex-shrink: 0;
+  object-fit: cover;
+}
+
+.cp-glyph {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  flex-shrink: 0;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+}
+
+.cp-info {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.cp-name {
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cp-title {
+  font-size: 0.62rem;
+  color: var(--clr-dim, #888);
+  font-style: italic;
+}
+
+.cp-hp-track {
+  height: 4px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 2px;
+  margin: 2px 0;
+  overflow: hidden;
+}
+
+.cp-hp-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s;
+}
+
+.cp-stats {
+  font-size: 0.62rem;
+  color: var(--clr-dim, #999);
+  display: flex;
+  gap: 0.3rem;
+}
+
+.cp-ability {
+  font-size: 0.58rem;
+  color: var(--clr-dim, #777);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cp-hp-label {
+  font-size: 0.58rem;
+  color: var(--clr-dim, #999);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+/* Campaign deploy picker with cards */
+.campaign-survivor-pick {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.campaign-survivor-pick .campaign-party-card {
+  flex: 1;
+  max-width: 240px;
+  pointer-events: none;
+}
+
+.campaign-roster-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+/* Debrief heal bonus */
+.debrief-heal {
+  margin: 0.5rem 0;
+  padding: 0.4rem 0.6rem;
+  background: rgba(76,175,80,0.1);
+  border: 1px solid rgba(76,175,80,0.2);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: #4caf50;
 }
 
 /* ── Async game styles ──────────────────────────────────────────────────── */
