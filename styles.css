@@ -1830,6 +1830,20 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   color: #a0e8bc;
 }
 
+.arc-cost {
+  display: inline-block;
+  margin-left: 0.3em;
+  font-size: 0.7em;
+  opacity: 0.7;
+  vertical-align: middle;
+}
+
+.arc-cost-free {
+  color: #a0e8bc;
+  font-weight: bold;
+  letter-spacing: 0.03em;
+}
+
 /* Selection pulse animation */
 @keyframes arc-pulse {
   0%   { transform: translate(calc(var(--arc-x, 0px) - 50%), calc(var(--arc-y, 0px) - 50%)) scale(1); filter: brightness(1); }

@@ -1200,7 +1200,7 @@ describe('executeSummon', () => {
 // ── executeHeal ───────────────────────────────────────────────────────────────
 
 describe('executeHeal', () => {
-  test('heals 1 HP, costs 1 action, consumes herbs', () => {
+  test('heals 2 HP, costs 1 action, consumes herbs', () => {
     const state = freshState();
     const hero = state.hero;
     hero.items[ResourceType.HERBS] = 1;
@@ -1210,7 +1210,7 @@ describe('executeHeal', () => {
     const r = executeHeal(state, hero);
     assert.equal(r.success, true);
     assert.equal(r.cost, 1, 'Heal should cost 1 action');
-    assert.equal(hero.hp, hpBefore + 1);
+    assert.equal(hero.hp, hpBefore + 2);
     assert.equal(hero.items[ResourceType.HERBS], 0, 'Herbs should be consumed');
   });
 
@@ -1224,7 +1224,7 @@ describe('executeHeal', () => {
     const r = executeHeal(state, witch);
     assert.equal(r.success, true);
     assert.equal(r.cost, 1);
-    assert.equal(witch.hp, hpBefore + 1);
+    assert.equal(witch.hp, hpBefore + 2);
   });
 
   test('fails when no herbs', () => {

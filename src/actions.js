@@ -919,8 +919,8 @@ export function executeHeal(state, actor) {
   if (actor.hp >= actor.maxHp)
     return { success: false, log: [`${actor.displayName} is already at full health.`] };
   myItems[ResourceType.HERBS]--;
-  actor.heal(1);
-  return { success: true, log: [`${actor.displayName} uses herbs. (+1 HP, now ${actor.hp}/${actor.maxHp})`], cost: 1 };
+  actor.heal(2);
+  return { success: true, log: [`${actor.displayName} uses herbs. (+2 HP, now ${actor.hp}/${actor.maxHp})`], cost: 1 };
 }
 
 export function executeUseItem(state, actor, item) {

@@ -1390,17 +1390,17 @@ export class UIController {
           break; // handled via hex clicks
         case ActionType.EXPLORE:
           arcItems.push({ group: 'scout', label: 'Explore', fullLabel: 'Explore tile',
-            color: '#7eccd6', dis, attrs: 'data-action="explore"' });
+            color: '#7eccd6', dis, cost: 1, attrs: 'data-action="explore"' });
           break;
         case ActionType.SOUND_HORN:
           arcItems.push({ group: 'scout', label: 'Sound Horn', fullLabel: 'Sound Horn (1 food)',
-            color: '#7eccd6', dis: !action.affordable || dis, attrs: 'data-action="sound_horn"' });
+            color: '#7eccd6', dis: !action.affordable || dis, cost: 1, attrs: 'data-action="sound_horn"' });
           break;
         case ActionType.GUARD: {
           const charges = action.currentCharges || 0;
           const lbl = charges > 0 ? `Guard +${charges + 1}` : 'Guard';
           arcItems.push({ group: 'defense', label: lbl, fullLabel: lbl,
-            color: '#8888cc', dis, attrs: 'data-action="guard"' });
+            color: '#8888cc', dis, cost: 1, attrs: 'data-action="guard"' });
           break;
         }
         case ActionType.FORTIFY: {
@@ -1421,13 +1421,13 @@ export class UIController {
               ? `Fortify +${doublerGain} DEF (1 wood)`
               : `Fortify +${woodGain} DEF (1 wood)`;
           arcItems.push({ group: 'defense', label: shortLbl, fullLabel: fullLbl,
-            color: '#e0a832', dis: cantAfford || dis, attrs: 'data-action="fortify"' });
+            color: '#e0a832', dis: cantAfford || dis, cost: 1, attrs: 'data-action="fortify"' });
           break;
         }
         case ActionType.BATTLE_HEX:
           if (this._planMode) {
             arcItems.push({ group: 'combat', label: 'Attack Hex', fullLabel: 'Attack Hex',
-              color: '#c0392b', dis, attrs: 'data-action="attack_hex"' });
+              color: '#c0392b', dis, cost: 1, attrs: 'data-action="attack_hex"' });
           }
           break;
         case ActionType.SUMMON:
@@ -1439,8 +1439,8 @@ export class UIController {
             const eitems = projInv.entityItems[entity.id] ?? {};
             if ((eitems[ResourceType.HERBS] || 0) < 1) healDis = true;
           }
-          arcItems.push({ group: 'items', label: 'Heal', fullLabel: 'Herbs (heal 1 HP)',
-            color: '#55cc55', dis: healDis,
+          arcItems.push({ group: 'items', label: 'Heal', fullLabel: 'Herbs (heal 2 HP)',
+            color: '#55cc55', dis: healDis, cost: 1,
             attrs: 'data-action="heal"' });
           break;
         }
@@ -1456,14 +1456,15 @@ export class UIController {
             // Strip leading emoji from item labels
             const cleanLabel = item.label.replace(/^[\p{Emoji_Presentation}\p{Extended_Pictographic}]\s*/u, '');
             arcItems.push({ group: 'items', label: cleanLabel, fullLabel: item.label,
-              color: '#b0b0b0', dis: itemDis,
+              color: '#b0b0b0', dis: itemDis, free: true, cost: 0,
               attrs: `data-action="use_item" data-item="${item.item}"` });
           }
           break;
         case ActionType.EQUIP_WEAPON:
           for (const w of action.weapons) {
             arcItems.push({ group: 'items', label: w.label, fullLabel: `Equip ${w.label}`,
-              color: '#b0b0b0', dis, attrs: `data-action="use_item" data-item="${w.key}"` });
+              color: '#b0b0b0', dis, free: true, cost: 0,
+              attrs: `data-action="use_item" data-item="${w.key}"` });
           }
           break;
         case ActionType.USE_ABILITY: {
@@ -1477,7 +1478,7 @@ export class UIController {
           arcItems.push({ group: 'items',
             label: abilityLabels[action.ability] || 'Ability',
             fullLabel: fullLabels[action.ability] || 'Use Ability',
-            color: '#88eeff', dis: !isFree && dis, free: isFree,
+            color: '#88eeff', dis: !isFree && dis, free: isFree, cost: isFree ? 0 : 1,
             attrs: 'data-action="use_ability"' });
           break;
         }
@@ -1497,7 +1498,7 @@ export class UIController {
       ];
       for (const s of ALL_SUMMONS) {
         arcItems.push({ group: 'summon', label: s.label, fullLabel: s.full,
-          color: '#9b59b6', dis: !s.afford || !hasAct,
+          color: '#9b59b6', dis: !s.afford || !hasAct, cost: 1,
           attrs: `data-action="summon" data-summon-type="${s.st}"` });
       }
     }
@@ -1550,9 +1551,12 @@ export class UIController {
       const delay = item._idx * 30;
       const disAttr = item.dis ? 'disabled' : '';
       const freeCls = item.free ? ' arc-free' : '';
+      const costTag = item.free ? '<span class="arc-cost arc-cost-free">FREE</span>'
+        : item.cost === 1 ? '<span class="arc-cost">◆</span>'
+        : '';
       html += `<button class="arc-item${freeCls}" title="${item.fullLabel}"
         style="--arc-x:0px;--arc-y:0px;--arc-delay:${delay}ms;--arc-color:${item.color};--arc-hover:${item.color};--arc-glow:${item.color}33"
-        ${disAttr} ${item.attrs}>${item.label}</button>`;
+        ${disAttr} ${item.attrs}>${item.label}${costTag}</button>`;
     }
 
     popup.innerHTML = html;

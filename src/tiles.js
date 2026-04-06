@@ -28,7 +28,7 @@ export const BuildingType = Object.freeze({
 });
 
 export const ResourceType = Object.freeze({
-  HERBS:     'herbs',     // Hero: heal 1 HP
+  HERBS:     'herbs',     // Heal 2 HP (costs 1 action)
   SILVER:    'silver',    // Hero: +1 attack for next battle
   WOOD:      'wood',      // Fortify a building (+1 def) or raise Wood Golem
   METAL:     'metal',     // Reinforce a building (+2 def) or raise Iron Golem
