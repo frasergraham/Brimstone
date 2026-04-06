@@ -2289,7 +2289,6 @@ function _initCampaignMission(missionDef) {
   _activeMissionDef = missionDef;
   _gameStartTime = Date.now();
   _spSaveId = null; // campaign uses its own save system
-  ui.showMissionInfoBtn(true);
 
   // Build map
   const builder = _activeCampaign.getMapBuilder(missionDef.mapBuilder);
@@ -2424,6 +2423,7 @@ function _initCampaignMission(missionDef) {
   _roundHistory = [];
 
   // Wire mission info button callback
+  ui.showMissionInfoBtn(true);
   ui.onMissionInfo = () => _showMissionInfoModal();
 
   // Log victory conditions at mission start
