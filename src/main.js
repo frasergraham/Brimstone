@@ -759,6 +759,7 @@ async function _runLocalResolution(skipSummary = false) {
         prevScore, prevNodes, humanFaction, fogOfWar: state.fogOfWar,
         gameOver: _goState.gameOver, winner: _goState.winner, winReason: _goState.winReason,
         hasFullReplay: _roundHistory.length > 0,
+        isCampaign: !!(_activeCampaign && _activeMissionDef),
       });
       if (action === 'replay') {
         state.entities = preReplayEntities;
@@ -807,6 +808,7 @@ async function _runLocalResolution(skipSummary = false) {
         prevScore, prevNodes, humanFaction: null, fogOfWar: 'none',
         gameOver: true, winner: _goStateAP.winner, winReason: _goStateAP.winReason,
         hasFullReplay: _roundHistory.length > 0,
+        isCampaign: !!(_activeCampaign && _activeMissionDef),
       });
       if (action === 'replay') {
         state.entities = preReplayEntities;
