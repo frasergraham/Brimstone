@@ -819,6 +819,84 @@ describe('executeBattle — splash damage', () => {
     const r = executeBattle(state, hero, minion);
     assert.ok(Array.isArray(r.splashKills), 'splashKills should be an array');
   });
+
+  test('splashHits field is always present', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const minion = createMinion(hero.col, hero.row);
+    state.entities.push(minion);
+    const r = executeBattle(state, hero, minion);
+    assert.ok(Array.isArray(r.splashHits), 'splashHits should be an array');
+  });
+
+  test('splashHits contains bystander info on crush/kill', () => {
+    const state = freshState();
+    const hero = state.hero;
+    hero.attackBonus = 100; // guarantee crush
+    const minion = createMinion(hero.col, hero.row);
+    minion.hp = 1; minion.maxHp = 1;
+    state.entities.push(minion);
+
+    const bystander = createMinion(hero.col, hero.row);
+    bystander.hp = 5; bystander.maxHp = 5;
+    state.entities.push(bystander);
+
+    const r = executeBattle(state, hero, minion);
+    if (r.killed || (r.hit && r.attackRoll >= 2 * r.defenseRoll)) {
+      assert.ok(r.splashHits.length > 0, 'splashHits should contain bystander');
+      const hit = r.splashHits.find(h => h.id === bystander.id);
+      assert.ok(hit, 'splashHits should include the bystander');
+      assert.equal(hit.name, bystander.displayName, 'splashHit should have name');
+      assert.equal(hit.col, bystander.col, 'splashHit should have col');
+      assert.equal(hit.row, bystander.row, 'splashHit should have row');
+      assert.equal(typeof hit.killed, 'boolean', 'splashHit should have killed flag');
+    }
+  });
+
+  test('splashHits marks killed bystanders correctly', () => {
+    const state = freshState();
+    const hero = state.hero;
+    hero.attackBonus = 100;
+    const minion = createMinion(hero.col, hero.row);
+    minion.hp = 1; minion.maxHp = 1;
+    state.entities.push(minion);
+
+    // 1 HP bystander should die from splash
+    const fragile = createMinion(hero.col, hero.row);
+    fragile.hp = 1; fragile.maxHp = 1;
+    state.entities.push(fragile);
+
+    const r = executeBattle(state, hero, minion);
+    if (r.killed) {
+      const hit = r.splashHits.find(h => h.id === fragile.id);
+      assert.ok(hit, 'splashHits should include the fragile bystander');
+      assert.equal(hit.killed, true, 'fragile bystander should be marked killed');
+    }
+  });
+
+  test('splashHits is empty when no splash occurs', () => {
+    const state = freshState();
+    const hero = state.hero;
+    hero.attack = 1;
+    hero.attackBonus = 0;
+    const minion = createMinion(hero.col, hero.row);
+    minion.hp = 50; minion.maxHp = 50;
+    minion.defense = 0;
+    state.entities.push(minion);
+
+    const bystander = createMinion(hero.col, hero.row);
+    bystander.hp = 5; bystander.maxHp = 5;
+    state.entities.push(bystander);
+
+    for (let i = 0; i < 20; i++) {
+      minion.hp = 50;
+      bystander.hp = 5;
+      const r = executeBattle(state, hero, minion);
+      if (r.hit && r.attackRoll < 2 * r.defenseRoll && !r.killed) {
+        assert.deepStrictEqual(r.splashHits, [], 'splashHits should be empty on normal hit');
+      }
+    }
+  });
 });
 
 // ── executeFortify ────────────────────────────────────────────────────────────
