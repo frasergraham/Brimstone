@@ -4444,12 +4444,6 @@ body.spectator-mode #game-screen   { display: flex !important; }
   margin-bottom: 0.4rem;
 }
 
-.campaign-roster-picker {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-}
-
 .campaign-survivor-pick {
   display: flex;
   align-items: center;
@@ -4487,38 +4481,48 @@ body.spectator-mode #game-screen   { display: flex !important; }
 .campaign-party {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-bottom: 0.6rem;
+  gap: 0.35rem;
+  margin-bottom: 0.5rem;
+  justify-content: center;
 }
 
 .campaign-party-card {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.4rem 0.6rem;
+  gap: 0.35rem;
+  padding: 0.25rem 0.4rem;
   background: rgba(255,255,255,0.04);
   border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 6px;
-  min-width: 180px;
-  flex: 1 1 180px;
-  max-width: 280px;
+  border-radius: 5px;
+  min-width: 140px;
+  flex: 0 1 160px;
+  max-width: 200px;
 }
 
 .campaign-party-card.hero {
   border-color: rgba(212,167,44,0.3);
   background: rgba(212,167,44,0.06);
-  flex: 1 1 220px;
-  max-width: 300px;
+  flex: 0 1 180px;
+  max-width: 220px;
+}
+
+.cp-portrait {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1.5px solid #888;
+  flex-shrink: 0;
+  object-fit: cover;
 }
 
 .cp-glyph {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.9rem;
+  font-size: 0.75rem;
   flex-shrink: 0;
   color: #fff;
   text-shadow: 0 1px 2px rgba(0,0,0,0.5);
@@ -4531,7 +4535,7 @@ body.spectator-mode #game-screen   { display: flex !important; }
 }
 
 .cp-name {
-  font-size: 0.82rem;
+  font-size: 0.72rem;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -4539,34 +4543,34 @@ body.spectator-mode #game-screen   { display: flex !important; }
 }
 
 .cp-title {
-  font-size: 0.72rem;
+  font-size: 0.62rem;
   color: var(--clr-dim, #888);
   font-style: italic;
 }
 
 .cp-hp-track {
-  height: 6px;
+  height: 4px;
   background: rgba(255,255,255,0.08);
-  border-radius: 3px;
-  margin: 3px 0;
+  border-radius: 2px;
+  margin: 2px 0;
   overflow: hidden;
 }
 
 .cp-hp-fill {
   height: 100%;
-  border-radius: 3px;
+  border-radius: 2px;
   transition: width 0.3s;
 }
 
 .cp-stats {
-  font-size: 0.7rem;
+  font-size: 0.62rem;
   color: var(--clr-dim, #999);
   display: flex;
-  gap: 0.4rem;
+  gap: 0.3rem;
 }
 
 .cp-ability {
-  font-size: 0.68rem;
+  font-size: 0.58rem;
   color: var(--clr-dim, #777);
   white-space: nowrap;
   overflow: hidden;
@@ -4574,7 +4578,7 @@ body.spectator-mode #game-screen   { display: flex !important; }
 }
 
 .cp-hp-label {
-  font-size: 0.68rem;
+  font-size: 0.58rem;
   color: var(--clr-dim, #999);
   margin-left: auto;
   white-space: nowrap;
@@ -4591,8 +4595,15 @@ body.spectator-mode #game-screen   { display: flex !important; }
 
 .campaign-survivor-pick .campaign-party-card {
   flex: 1;
-  max-width: none;
+  max-width: 240px;
   pointer-events: none;
+}
+
+.campaign-roster-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  align-items: center;
 }
 
 /* Debrief heal bonus */

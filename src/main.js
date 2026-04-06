@@ -1972,11 +1972,12 @@ function _showCampaignSelectScreen() {
   showStep('campaign-select');
 }
 
-function _showCampaignScreen(campaignDef) {
+async function _showCampaignScreen(campaignDef) {
   if (campaignDef) {
     _activeCampaign = new Campaign(campaignDef);
     _activeCampaign.load();
   }
+  await _loadCampaignPortraits();
   _renderCampaignScreen();
   showStep('campaign');
 }
@@ -1986,12 +1987,50 @@ function _hpColor(hp, maxHp) {
   return pct > 0.6 ? '#4caf50' : pct > 0.3 ? '#ff9800' : '#f44336';
 }
 
-function _campaignCardHTML(name, title, glyph, color, hp, maxHp, attack, defense, ability, isHero) {
+// ── Lightweight portrait loader for campaign screens (no Renderer needed) ──
+const _campaignPortraits = { img: null, rects: null, cache: new Map(), loading: false };
+
+async function _loadCampaignPortraits() {
+  if (_campaignPortraits.img || _campaignPortraits.loading) return;
+  _campaignPortraits.loading = true;
+  const img = new Image();
+  await new Promise(resolve => {
+    img.onload = resolve;
+    img.onerror = resolve;
+    img.src = 'assets/tilemap.png';
+  });
+  if (img.naturalWidth) {
+    _campaignPortraits.img = img;
+    _campaignPortraits.rects = Renderer._buildSpriteRects().rects;
+  }
+  _campaignPortraits.loading = false;
+}
+
+function _getCampaignPortrait(assetId, size = 48) {
+  const p = _campaignPortraits;
+  if (!p.img || !p.rects) return null;
+  const rect = p.rects.get(assetId);
+  if (!rect) return null;
+  const key = `${assetId}@${size}`;
+  if (p.cache.has(key)) return p.cache.get(key);
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  c.getContext('2d').drawImage(p.img, rect.x, rect.y, rect.size, rect.size, 0, 0, size, size);
+  const url = c.toDataURL();
+  p.cache.set(key, url);
+  return url;
+}
+
+function _campaignCardHTML(name, title, assetId, color, hp, maxHp, attack, defense, ability, isHero) {
   const hpPct = Math.round((hp / maxHp) * 100);
   const hpClr = _hpColor(hp, maxHp);
   const cls = isHero ? 'campaign-party-card hero' : 'campaign-party-card';
+  const portrait = _getCampaignPortrait(assetId, 48);
+  const iconHtml = portrait
+    ? `<img class="cp-portrait" src="${portrait}" style="border-color:${color}" alt="">`
+    : `<span class="cp-glyph" style="background:${color}">${isHero ? '⚔' : '☺'}</span>`;
   return `<div class="${cls}">
-    <span class="cp-glyph" style="background:${color}">${glyph}</span>
+    ${iconHtml}
     <div class="cp-info">
       <div class="cp-name" style="color:${color}">${name}${title ? ` <span class="cp-title">${title}</span>` : ''}</div>
       <div class="cp-hp-track"><div class="cp-hp-fill" style="width:${hpPct}%;background:${hpClr}"></div></div>
@@ -2007,10 +2046,11 @@ function _campaignPartyHTML(heroStats, roster) {
   let html = '<div class="campaign-party">';
   // Hero card
   const weaponLabel = heroStats.weapon ? ` (${heroStats.weapon.name || heroStats.weapon})` : '';
-  html += _campaignCardHTML('Hero' + weaponLabel, null, '⚔', ENTITY_COLOR.hero, heroStats.hp, heroStats.maxHp, heroStats.attack, heroStats.defense, null, true);
+  html += _campaignCardHTML('Hero' + weaponLabel, null, 'hero', ENTITY_COLOR.hero, heroStats.hp, heroStats.maxHp, heroStats.attack, heroStats.defense, null, true);
   // Survivor cards
   for (const s of roster) {
-    html += _campaignCardHTML(s.name, s.title, '☺', s.color || ENTITY_COLOR.survivor, s.hp, s.maxHp, s.attack, s.defense, s.abilityLabel, false);
+    const assetId = Renderer.survivorAssetId(s.title) || 'survivor_innkeeper';
+    html += _campaignCardHTML(s.name, s.title, assetId, s.color || ENTITY_COLOR.survivor, s.hp, s.maxHp, s.attack, s.defense, s.abilityLabel, false);
   }
   html += '</div>';
   return html;
