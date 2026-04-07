@@ -1,6 +1,9 @@
 name: Electron Build
 
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       publish:
