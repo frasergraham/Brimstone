@@ -2218,10 +2218,13 @@ function _campaignCardHTML(name, title, assetId, color, hp, maxHp, attack, defen
 function _survivorCardHTML(s, idx, actionBtn) {
   const assetId = Renderer.survivorAssetId(s.title) || 'survivor_innkeeper';
   const card = _campaignCardHTML(s.name, s.title, assetId, s.color || ENTITY_COLOR.survivor, s.hp, s.maxHp, s.attack, s.defense, s.abilityLabel, false);
-  if (!actionBtn) return card;
+  if (idx == null) return card;
+  const btnHtml = actionBtn
+    ? `<button class="roster-action-btn ${actionBtn.cls}" data-idx="${idx}" title="${actionBtn.title}">${actionBtn.label}</button>`
+    : '';
   return `<div class="roster-row" data-idx="${idx}">
     ${card}
-    <button class="roster-action-btn ${actionBtn.cls}" data-idx="${idx}" title="${actionBtn.title}">${actionBtn.label}</button>
+    ${btnHtml}
   </div>`;
 }
 
