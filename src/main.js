@@ -2038,6 +2038,7 @@ let _activeCampaign  = null;  // Campaign instance (persists across missions)
 let _activeMissionDef = null; // Current mission definition
 let _campaignSelectedMission = null; // Mission ID selected on campaign screen
 let _campaignUnlocked = false; // Admin: bypass mission prerequisites
+let _activeRosterIndices = []; // Indices into _activeCampaign.roster that are "active" (will deploy)
 
 // ── Campaign mid-mission save/resume ──────────────────────────────────────────
 
@@ -2214,6 +2215,16 @@ function _campaignCardHTML(name, title, assetId, color, hp, maxHp, attack, defen
   </div>`;
 }
 
+function _survivorCardHTML(s, idx, actionBtn) {
+  const assetId = Renderer.survivorAssetId(s.title) || 'survivor_innkeeper';
+  const card = _campaignCardHTML(s.name, s.title, assetId, s.color || ENTITY_COLOR.survivor, s.hp, s.maxHp, s.attack, s.defense, s.abilityLabel, false);
+  if (!actionBtn) return card;
+  return `<div class="roster-row" data-idx="${idx}">
+    ${card}
+    <button class="roster-action-btn ${actionBtn.cls}" data-idx="${idx}" title="${actionBtn.title}">${actionBtn.label}</button>
+  </div>`;
+}
+
 function _campaignPartyHTML(heroStats, roster) {
   let html = '<div class="campaign-party">';
   // Hero card
@@ -2221,11 +2232,94 @@ function _campaignPartyHTML(heroStats, roster) {
   html += _campaignCardHTML('Hero' + weaponLabel, null, 'hero', ENTITY_COLOR.hero, heroStats.hp, heroStats.maxHp, heroStats.attack, heroStats.defense, null, true);
   // Survivor cards
   for (const s of roster) {
-    const assetId = Renderer.survivorAssetId(s.title) || 'survivor_innkeeper';
-    html += _campaignCardHTML(s.name, s.title, assetId, s.color || ENTITY_COLOR.survivor, s.hp, s.maxHp, s.attack, s.defense, s.abilityLabel, false);
+    html += _survivorCardHTML(s);
   }
   html += '</div>';
   return html;
+}
+
+/**
+ * Render the party view with Active/Reserve sections for mission deployment.
+ * Active survivors will deploy; reserve stays behind.
+ * @param {object} heroStats
+ * @param {Array} roster - full campaign roster
+ * @param {number} maxActive - max survivors in active group (from mission def)
+ */
+function _renderDeployRoster(heroStats, roster, maxActive) {
+  const rosterEl = document.getElementById('campaign-roster-summary');
+  const activeCount = _activeRosterIndices.length;
+  const canAddMore = activeCount < maxActive;
+
+  let html = '<div class="campaign-roster-label">Your Party</div>';
+
+  // Hero card (always active)
+  html += '<div class="campaign-party">';
+  const weaponLabel = heroStats.weapon ? ` (${heroStats.weapon.name || heroStats.weapon})` : '';
+  html += _campaignCardHTML('Hero' + weaponLabel, null, 'hero', ENTITY_COLOR.hero, heroStats.hp, heroStats.maxHp, heroStats.attack, heroStats.defense, null, true);
+  html += '</div>';
+
+  if (roster.length === 0) {
+    rosterEl.innerHTML = html;
+    return;
+  }
+
+  // Active section
+  if (maxActive > 0) {
+    html += `<div class="roster-section-label active-label">Active <span class="roster-count">${activeCount}/${maxActive}</span></div>`;
+    if (_activeRosterIndices.length === 0) {
+      html += '<div class="roster-empty">No survivors selected</div>';
+    }
+    for (const idx of _activeRosterIndices) {
+      const s = roster[idx];
+      if (!s) continue;
+      html += _survivorCardHTML(s, idx, { label: '−', cls: 'roster-demote', title: 'Move to reserve' });
+    }
+  }
+
+  // Reserve section
+  const reserveIndices = roster.map((_, i) => i).filter(i => !_activeRosterIndices.includes(i));
+  if (reserveIndices.length > 0 || maxActive === 0) {
+    html += `<div class="roster-section-label reserve-label">Reserve</div>`;
+    for (const idx of reserveIndices) {
+      const s = roster[idx];
+      if (!s) continue;
+      const btn = maxActive > 0 && canAddMore
+        ? { label: '+', cls: 'roster-promote', title: 'Move to active' }
+        : null;
+      html += _survivorCardHTML(s, idx, btn);
+    }
+  }
+
+  // Admin: add random survivor
+  html += `<button id="btn-admin-add-survivor" class="admin-btn admin-add-btn" title="Add random survivor (testing)" style="margin-top:0.3rem">+</button>`;
+
+  rosterEl.innerHTML = html;
+
+  // Wire +/- buttons
+  rosterEl.querySelectorAll('.roster-promote').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx);
+      if (_activeRosterIndices.length < maxActive && !_activeRosterIndices.includes(idx)) {
+        _activeRosterIndices.push(idx);
+        _renderDeployRoster(heroStats, roster, maxActive);
+      }
+    });
+  });
+  rosterEl.querySelectorAll('.roster-demote').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx);
+      _activeRosterIndices = _activeRosterIndices.filter(i => i !== idx);
+      _renderDeployRoster(heroStats, roster, maxActive);
+    });
+  });
+
+  // Admin add survivor
+  document.getElementById('btn-admin-add-survivor')?.addEventListener('click', () => {
+    const s = createSurvivor(0, 0, 'hero');
+    _activeCampaign.roster.push(snapshotSurvivor(s));
+    _activeCampaign.save();
+    _renderDeployRoster(heroStats, _activeCampaign.roster, maxActive);
+  });
 }
 
 function _renderCampaignScreen() {
@@ -2254,7 +2348,6 @@ function _renderCampaignScreen() {
     _campaignPartyHTML(_activeCampaign.heroStats, _activeCampaign.roster) +
     resourcesHtml;
 
-  // Admin: add random survivor to roster
   document.getElementById('btn-admin-add-survivor')?.addEventListener('click', () => {
     const s = createSurvivor(0, 0, 'hero');
     _activeCampaign.roster.push(snapshotSurvivor(s));
@@ -2330,21 +2423,13 @@ function _showMissionBriefing(missionId) {
     <div class="campaign-obj"><span class="campaign-obj-icon">💀</span> <strong>Defeat:</strong> ${loseDesc}</div>
   `;
 
-  // Deploy roster (if campaign has survivors and mission allows them)
-  const deployEl = document.getElementById('campaign-deploy-roster');
-  const pickerEl = document.getElementById('campaign-roster-picker');
-  if (_activeCampaign.roster.length > 0 && missionDef.maxSurvivorsFromRoster > 0) {
-    deployEl.style.display = '';
-    pickerEl.innerHTML = _activeCampaign.roster.map((s, i) => {
-      const assetId = Renderer.survivorAssetId(s.title) || 'survivor_innkeeper';
-      return `<label class="campaign-survivor-pick">
-        <input type="checkbox" data-idx="${i}" ${i < missionDef.maxSurvivorsFromRoster ? 'checked' : ''}>
-        ${_campaignCardHTML(s.name, s.title, assetId, s.color || ENTITY_COLOR.survivor, s.hp, s.maxHp, s.attack, s.defense, s.abilityLabel, false)}
-      </label>`;
-    }).join('');
-  } else {
-    deployEl.style.display = 'none';
-  }
+  // Switch roster summary into Active/Reserve deploy mode
+  const maxActive = missionDef.maxSurvivorsFromRoster ?? 0;
+  // Default: fill active slots from the front of the roster
+  _activeRosterIndices = _activeCampaign.roster
+    .map((_, i) => i)
+    .slice(0, maxActive);
+  _renderDeployRoster(_activeCampaign.heroStats, _activeCampaign.roster, maxActive);
 }
 
 function _objectiveDescription(obj) {
@@ -2470,11 +2555,9 @@ function _initCampaignMission(missionDef) {
     Object.assign(state.inventory.shared, res);
   }
 
-  // Deploy carried-over survivors from roster
+  // Deploy carried-over survivors from roster (uses active/reserve selection)
   if (_activeCampaign && missionDef.maxSurvivorsFromRoster > 0) {
-    const pickerEl = document.getElementById('campaign-roster-picker');
-    const checked = pickerEl ? [...pickerEl.querySelectorAll('input:checked')].map(cb => parseInt(cb.dataset.idx)) : [];
-    const toDeploy = checked.slice(0, missionDef.maxSurvivorsFromRoster);
+    const toDeploy = _activeRosterIndices.slice(0, missionDef.maxSurvivorsFromRoster);
     // Place survivors near hero start
     const heroStart = mapData.heroStart;
     const neighbors = getNeighbors(heroStart.col, heroStart.row);
