@@ -3604,7 +3604,7 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 /* ── Nudge toast ─────────────────────────────────────────────────────── */
 .nudge-toast {
   position: absolute;
-  top: 3.5rem;
+  top: 33%;
   left: 50%;
   transform: translateX(-50%);
   background: rgba(40, 30, 20, 0.92);
@@ -3622,7 +3622,7 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 /* ── Plan toast (budget / cap warnings) ──────────────────────────────── */
 .plan-toast {
   position: absolute;
-  top: 3.5rem;
+  top: 33%;
   left: 50%;
   transform: translateX(-50%);
   background: rgba(60, 30, 10, 0.94);

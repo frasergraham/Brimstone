@@ -1,5 +1,4 @@
-// Tests for plan action cap (1.5× budget, but never less than budget + food)
-// and toast warnings.
+// Tests for plan action cap (1.5× (budget + food)) and toast warnings.
 
 import { describe, test, before } from 'node:test';
 import assert from 'node:assert/strict';
@@ -47,43 +46,33 @@ function planLength(ui) {
 // ── Plan cap ──────────────────────────────────────────────────────────────────
 
 describe('plan action cap', () => {
-  test('cap is 1.5× budget when no food (rounded up)', () => {
-    const { ui } = makeUI(4, 0);  // cap = max(ceil(4*1.5), 4+0) = 6
+  test('cap is ceil(1.5× (budget + food)) with no food', () => {
+    const { ui } = makeUI(4, 0);  // cap = ceil(4 * 1.5) = 6
     addMoves(ui, 6);
     assert.equal(planLength(ui), 6);
 
-    // 7th should be rejected
     ui._addToPlan({ type: PlanActionType.MOVE, entityId: 'hero1', toCol: 99, toRow: 0 });
     assert.equal(planLength(ui), 6, 'should not exceed cap');
   });
 
-  test('cap with odd budget rounds up', () => {
-    const { ui } = makeUI(3, 0);  // cap = max(ceil(3*1.5), 3) = 5
+  test('cap includes food in the calculation', () => {
+    // budget=4, food=2 → ceil((4+2)*1.5) = 9
+    const { ui } = makeUI(4, 2);
+    addMoves(ui, 9);
+    assert.equal(planLength(ui), 9);
+
+    ui._addToPlan({ type: PlanActionType.MOVE, entityId: 'hero1', toCol: 99, toRow: 0 });
+    assert.equal(planLength(ui), 9, 'should not exceed ceil(1.5 * (budget+food))');
+  });
+
+  test('cap with odd total rounds up', () => {
+    // budget=3, food=0 → ceil(3*1.5) = 5
+    const { ui } = makeUI(3, 0);
     addMoves(ui, 5);
     assert.equal(planLength(ui), 5);
 
     ui._addToPlan({ type: PlanActionType.MOVE, entityId: 'hero1', toCol: 99, toRow: 0 });
     assert.equal(planLength(ui), 5, 'cap should be ceil(3*1.5) = 5');
-  });
-
-  test('cap extends to budget + food when food exceeds 1.5× buffer', () => {
-    // budget=4, food=5 → max(ceil(6), 4+5) = max(6, 9) = 9
-    const { ui } = makeUI(4, 5);
-    addMoves(ui, 9);
-    assert.equal(planLength(ui), 9, 'should allow budget + food actions');
-
-    ui._addToPlan({ type: PlanActionType.MOVE, entityId: 'hero1', toCol: 99, toRow: 0 });
-    assert.equal(planLength(ui), 9, 'should not exceed budget + food');
-  });
-
-  test('cap uses 1.5× when food is small', () => {
-    // budget=4, food=1 → max(ceil(6), 4+1) = max(6, 5) = 6
-    const { ui } = makeUI(4, 1);
-    addMoves(ui, 6);
-    assert.equal(planLength(ui), 6);
-
-    ui._addToPlan({ type: PlanActionType.MOVE, entityId: 'hero1', toCol: 99, toRow: 0 });
-    assert.equal(planLength(ui), 6, '1.5× cap should apply when food is small');
   });
 
   test('free actions (USE_ITEM) do not count toward cap', () => {
@@ -132,14 +121,14 @@ describe('plan toast warnings', () => {
   });
 
   test('toast shown when plan hits the cap', () => {
-    const { ui } = makeUI(4, 10);  // budget 4, food 10 → cap = max(6, 14) = 14
+    const { ui } = makeUI(4, 2);  // budget 4, food 2 → cap = ceil(6*1.5) = 9
     const toasts = [];
     ui._showPlanToast = (msg) => toasts.push(msg);
 
-    addMoves(ui, 13);
+    addMoves(ui, 8);
     toasts.length = 0;
 
-    // 14th action hits the cap
+    // 9th action hits the cap
     ui._addToPlan({ type: PlanActionType.MOVE, entityId: 'hero1', toCol: 20, toRow: 0 });
     assert.ok(toasts.length > 0, 'should show toast(s) at cap');
   });
