@@ -25,6 +25,7 @@ export const GOAL_COLORS = Object.freeze({
   EXPLORE:          '#40c070',
   FORTIFY_POSITION: '#e0a030',
   PROTECT_HERO:     '#e0c040',
+  HUNT_WITCH:       '#e04060',
   // Fallback
   'gap-fill':       '#808080',
 });
