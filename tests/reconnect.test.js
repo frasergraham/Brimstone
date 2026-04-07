@@ -1,7 +1,8 @@
 // Tests for WebSocket reconnect with exponential backoff.
 //
 // Verifies the MultiplayerClient retry logic: backoff delays, max retries,
-// reset on successful open, and cleanup on intentional disconnect.
+// reset on successful open, cleanup on intentional disconnect, and
+// reconnection stuck-state prevention.
 
 import { describe, test, before } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,7 +13,8 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root      = join(__dirname, '..');
 
-const mpSource = readFileSync(join(root, 'src', 'multiplayer.js'), 'utf8');
+const mpSource   = readFileSync(join(root, 'src', 'multiplayer.js'), 'utf8');
+const mainSource = readFileSync(join(root, 'src', 'main.js'), 'utf8');
 
 // ── Source-level checks ──────────────────────────────────────────────────────
 
@@ -91,6 +93,127 @@ describe('reconnect backoff — source inspection', () => {
     assert.ok(
       mpSource.includes('Unable to reconnect') || mpSource.includes('Please refresh'),
       '_scheduleReconnect should show a final error when retries are exhausted',
+    );
+  });
+
+  // ── Fix 1: overlay hiding moved to server confirmation ─────────────────────
+
+  test('_onOpen does NOT call onReconnected (overlay stays until server confirms)', () => {
+    const idx = mpSource.indexOf('_onOpen() {');
+    assert.ok(idx !== -1, '_onOpen method must exist');
+    const body = mpSource.slice(idx, idx + 400);
+    assert.ok(
+      !body.includes('onReconnected'),
+      '_onOpen must NOT call onReconnected — overlay should stay visible until server sends reconnected message',
+    );
+  });
+
+  test('reconnected message handler calls onReconnected', () => {
+    const idx = mpSource.indexOf("case 'reconnected':");
+    assert.ok(idx !== -1, 'reconnected case must exist in _route');
+    const body = mpSource.slice(idx, idx + 500);
+    assert.ok(
+      body.includes('onReconnected'),
+      'reconnected message handler must call onReconnected to hide the overlay',
+    );
+  });
+
+  // ── Fix 3: auth failure during reconnect ───────────────────────────────────
+
+  test('authError while active triggers onDisconnectFatal', () => {
+    const idx = mpSource.indexOf("case 'authError':");
+    assert.ok(idx !== -1, 'authError case must exist');
+    const body = mpSource.slice(idx, idx + 400);
+    assert.ok(
+      body.includes('this.active') && body.includes('onDisconnectFatal'),
+      'authError must check this.active and call onDisconnectFatal for in-game auth failures',
+    );
+  });
+
+  // ── Fix 4: silent _reconnect() failures ────────────────────────────────────
+
+  test('_reconnect fires onDisconnectFatal when player or URL is missing', () => {
+    const idx = mpSource.indexOf('_reconnect() {');
+    assert.ok(idx !== -1, '_reconnect method must exist');
+    const body = mpSource.slice(idx, idx + 400);
+    assert.ok(
+      body.includes('onDisconnectFatal'),
+      '_reconnect must call onDisconnectFatal when it cannot proceed (no player or URL)',
+    );
+  });
+
+  // ── Fix 5: hard timeout safety net ─────────────────────────────────────────
+
+  test('RECONNECT_HARD_TIMEOUT is defined', () => {
+    assert.ok(
+      mpSource.includes('RECONNECT_HARD_TIMEOUT'),
+      'multiplayer.js must define RECONNECT_HARD_TIMEOUT',
+    );
+  });
+
+  test('_reconnectDeadline is initialized in constructor', () => {
+    const idx = mpSource.indexOf('constructor(');
+    assert.ok(idx !== -1, 'constructor must exist');
+    const body = mpSource.slice(idx, idx + 800);
+    assert.ok(
+      body.includes('_reconnectDeadline'),
+      'constructor must initialize _reconnectDeadline',
+    );
+  });
+
+  test('_scheduleReconnect checks hard deadline', () => {
+    const idx = mpSource.indexOf('_scheduleReconnect() {');
+    assert.ok(idx !== -1, '_scheduleReconnect must exist');
+    const body = mpSource.slice(idx, idx + 600);
+    assert.ok(
+      body.includes('_reconnectDeadline'),
+      '_scheduleReconnect must check the hard timeout deadline',
+    );
+  });
+
+  test('reconnected message clears _reconnectDeadline', () => {
+    const idx = mpSource.indexOf("case 'reconnected':");
+    assert.ok(idx !== -1);
+    const body = mpSource.slice(idx, idx + 500);
+    assert.ok(
+      body.includes('_reconnectDeadline = 0'),
+      'reconnected handler must clear _reconnectDeadline',
+    );
+  });
+
+  // ── Fix 6: menu-level silent reconnection ──────────────────────────────────
+
+  test('_onClose attempts silent reconnect when not active but authenticated', () => {
+    const idx = mpSource.indexOf('_onClose() {');
+    assert.ok(idx !== -1, '_onClose method must exist');
+    const body = mpSource.slice(idx, idx + 400);
+    assert.ok(
+      body.includes('this._player') && body.includes('_reconnect'),
+      '_onClose should attempt silent reconnect for menu-level disconnects when player exists',
+    );
+  });
+});
+
+// ── Fix 2: in-game error escape hatch (main.js) ─────────────────────────────
+
+describe('reconnect stuck-state prevention — main.js', () => {
+  test('onError checks reconnect overlay visibility for in-game errors', () => {
+    const idx = mainSource.indexOf('onError(msg)');
+    assert.ok(idx !== -1, 'onError handler must exist');
+    const body = mainSource.slice(idx, idx + 600);
+    assert.ok(
+      body.includes('reconnect-overlay'),
+      'onError must check reconnect overlay visibility to detect reconnection failures',
+    );
+  });
+
+  test('onError calls _showOnlineScreen when reconnection fails in-game', () => {
+    const idx = mainSource.indexOf('onError(msg)');
+    assert.ok(idx !== -1);
+    const body = mainSource.slice(idx, idx + 600);
+    assert.ok(
+      body.includes('_showOnlineScreen'),
+      'onError must call _showOnlineScreen to wipe state and return to menu on reconnection failure',
     );
   });
 });
