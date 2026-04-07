@@ -26,7 +26,19 @@ These directives apply to all code changes — follow them without exception.
 - Compare results against the balance targets output by the scripts.
 - Document simulation results in the PR/commit message if they differ meaningfully from baseline.
 
-### 4. Online and offline parity
+### 4. Keep technical docs current
+- Detailed technical documentation lives in `docs/`. When making architectural changes, update the relevant doc:
+  - `docs/01-architecture-overview.md` — system diagrams, design principles, tech stack
+  - `docs/02-module-dependencies.md` — import graph, dependency layers, cross-boundary imports
+  - `docs/03-state-machines.md` — AppMode, phase cycle, turn lifecycle, victory conditions
+  - `docs/04-network-protocol.md` — WebSocket messages, room lifecycle, reconnection, REST API
+  - `docs/05-game-systems.md` — entities, combat, actions, tiles, resources, map generation, rendering
+  - `docs/06-ai-architecture.md` — 5-stage pipeline, goals, personalities, combat estimation
+  - `docs/07-data-persistence.md` — database schema, serialization, save/resume, auth
+- **When to update:** Adding/removing modules, changing state machine transitions, adding WebSocket message types, modifying the DB schema, changing AI goals or pipeline stages, adding new entity types or action types.
+- **When not to update:** Bug fixes, tuning constants, CSS changes, or other changes that don't alter the architecture described in the docs.
+
+### 5. Online and offline parity
 - Offline mode (`src/main.js`) and online mode (`server/lobby.js`) must stay in sync.
 - Any change to game rules, state shape, planning flow, or AI behaviour needs to be applied to **both** orchestration layers.
 - New state fields must be added to `server/state-sync.js` serialization or online mode will silently drop them.
@@ -124,6 +136,7 @@ npm run electron:build:win     # Build Windows distributable
 ## Directory Structure
 
 ```
+docs/               # Technical documentation (see docs/*.md for architecture, state machines, protocols, etc.)
 index.html          # Single-page shell with all UI overlay elements
 admin-stats.html    # Admin dashboard for game analytics and balance metrics
 styles.css          # Dark gothic theme; CSS custom properties on :root
