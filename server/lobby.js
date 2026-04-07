@@ -830,6 +830,15 @@ function _checkTimeoutTakeovers(room) {
     if (seat.isAI) continue;
     const count = room.consecutiveTimeouts[seat.playerId] || 0;
     if (count >= 2) {
+      // Don't take over the last human player — an all-AI game with nobody
+      // watching is pointless. Let them keep playing (or the room will
+      // hibernate naturally when they disconnect).
+      const humanCount = room.players.filter(s => !s.isAI).length;
+      if (humanCount <= 1) {
+        console.log(`[room ${room.id}] ${seat.name} (${seat.playerId}) — ${count} consecutive timeouts — skipping takeover (last human).`);
+        continue;
+      }
+
       const playerName = seat.name;
       const playerId   = seat.playerId;
       console.log(`[room ${room.id}] ${playerName} (${playerId}) — ${count} consecutive timeouts — AI takeover.`);
@@ -2736,6 +2745,7 @@ export function pruneAsyncGames() {
 
 /** Exported for testing only. */
 export { _serializeEvents as serializeEventsForTest };
+export { _checkTimeoutTakeovers as checkTimeoutTakeoversForTest };
 
 /** Get async games list for a player (for REST endpoint). */
 export { getAsyncGamesForPlayer };
