@@ -19,6 +19,7 @@ export const GOAL_COLORS = Object.freeze({
   BUILD_ARMY:       '#a040e0',
   GATHER_RESOURCES: '#40c070',
   DEFEND_WITCH:     '#e0c040',
+  HUNT_HEROES:      '#e06040',
   // Hero goals
   SLAY_WITCH:       '#e04040',
   EXPLORE:          '#40c070',
