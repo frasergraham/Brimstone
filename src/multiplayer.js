@@ -190,8 +190,17 @@ export class MultiplayerClient {
   /** Create a new game lobby. config: { fog, mapSize, playersPerSide, isPrivate } */
   createLobby(config = {}) { this._send({ type: 'createLobby', ...config }); }
 
-  /** Join a lobby by room ID (public) or 6-char code (private). */
-  joinLobby(codeOrId)      { this._send({ type: 'joinLobby', codeOrId }); }
+  /** Join a lobby by room ID (public) or 6-char code (private). Optional slotIndex for invite deep-links. */
+  joinLobby(codeOrId, slotIndex) {
+    const msg = { type: 'joinLobby', codeOrId };
+    if (slotIndex != null) msg.slotIndex = slotIndex;
+    this._send(msg);
+  }
+
+  /** Claim (or switch to) an empty slot in the lobby. */
+  claimSlot(roomId, slotIndex) {
+    this._send({ type: 'claimSlot', roomId, slotIndex });
+  }
 
   /** Join an active game during round 1 (late join). Uses room ID or code. */
   joinGame(codeOrId)       { this._send({ type: 'joinGame', codeOrId }); }

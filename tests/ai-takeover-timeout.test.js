@@ -4,7 +4,7 @@ import { describe, test, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import db from '../server/db.js';
 import {
-  createLobby, joinLobby, fillAllWithAI, startGame,
+  createLobby, joinLobby, fillAllWithAI, startGame, claimSlot,
   handlePlanSubmit, getRooms, getRoom,
   checkTimeoutTakeoversForTest,
 } from '../server/lobby.js';
@@ -54,6 +54,7 @@ describe('AI takeover after consecutive timeouts', () => {
     });
     const lobbyMsg = ws.findMsg('lobbyJoined');
     const roomId = lobbyMsg.lobby.id;
+    claimSlot(playerId, roomId, 0);
     fillAllWithAI(playerId, roomId);
     startGame(playerId, roomId);
 
@@ -72,6 +73,7 @@ describe('AI takeover after consecutive timeouts', () => {
     });
     const lobbyMsg = ws.findMsg('lobbyJoined');
     const roomId = lobbyMsg.lobby.id;
+    claimSlot(playerId, roomId, 0);
     fillAllWithAI(playerId, roomId);
     startGame(playerId, roomId);
 
@@ -95,6 +97,7 @@ describe('AI takeover after consecutive timeouts', () => {
     });
     const lobbyMsg = ws.findMsg('lobbyJoined');
     const roomId = lobbyMsg.lobby.id;
+    claimSlot(playerId, roomId, 0);
     fillAllWithAI(playerId, roomId);
     startGame(playerId, roomId);
 
@@ -125,6 +128,8 @@ describe('AI takeover after consecutive timeouts', () => {
     const lobbyMsg = ws1.findMsg('lobbyJoined');
     const roomId = lobbyMsg.lobby.id;
     joinLobby(p2, 'Hero2', ws2, roomId);
+    claimSlot(p1, roomId, 0); // hero slot 1
+    claimSlot(p2, roomId, 1); // hero slot 2
     fillAllWithAI(p1, roomId);
     startGame(p1, roomId);
 
