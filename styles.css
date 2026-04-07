@@ -4557,6 +4557,32 @@ body.spectator-mode #game-screen   { display: flex !important; }
   font-size: 0.8rem;
   color: var(--clr-dim, #888);
 }
+.campaign-mission-status.in-progress {
+  color: #e8a735;
+  font-weight: bold;
+}
+.admin-btn {
+  color: var(--clr-dim, #666) !important;
+  font-size: 0.75rem !important;
+  opacity: 0.4;
+  transition: opacity 0.2s;
+}
+.admin-btn:hover { opacity: 1; }
+.admin-add-btn {
+  display: inline-block;
+  width: 1.5rem;
+  height: 1.5rem;
+  line-height: 1.4rem;
+  text-align: center;
+  font-size: 1rem !important;
+  border-radius: 50%;
+  border: 1px solid var(--clr-dim, #666);
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  vertical-align: middle;
+  margin-left: 0.4rem;
+}
 
 .campaign-briefing {
   max-width: 480px;
@@ -4642,22 +4668,7 @@ body.spectator-mode #game-screen   { display: flex !important; }
   text-transform: capitalize;
 }
 
-.campaign-deploy-roster {
-  margin: 0.75rem 0;
-}
-
-.campaign-deploy-roster h3 {
-  font-size: 0.95rem;
-  margin-bottom: 0.4rem;
-}
-
-.campaign-survivor-pick {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.85rem;
-  cursor: pointer;
-}
+/* (campaign-deploy-roster removed — replaced by Active/Reserve roster) */
 
 /* Debrief screen */
 .debrief-stats {
@@ -4789,26 +4800,69 @@ body.spectator-mode #game-screen   { display: flex !important; }
   white-space: nowrap;
 }
 
-/* Campaign deploy picker with cards */
-.campaign-survivor-pick {
+/* ── Roster Active/Reserve sections ──────────────────────────────────── */
+.roster-section-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0.5rem 0 0.25rem;
+  padding-bottom: 0.15rem;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.roster-section-label.active-label { color: var(--clr-gold, #d4a72c); }
+.roster-section-label.reserve-label { color: var(--clr-dim, #888); }
+.roster-count {
+  font-weight: 400;
+  font-size: 0.7rem;
+  opacity: 0.7;
+}
+.roster-row {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  font-size: 0.85rem;
-  cursor: pointer;
+  gap: 0.3rem;
+  margin-bottom: 0.2rem;
 }
-
-.campaign-survivor-pick .campaign-party-card {
+.roster-row .campaign-party-card {
   flex: 1;
-  max-width: 240px;
-  pointer-events: none;
+  max-width: none;
 }
-
-.campaign-roster-picker {
+.roster-action-btn {
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.15);
+  background: rgba(255,255,255,0.06);
+  color: #ccc;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
   display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
   align-items: center;
+  justify-content: center;
+  transition: background 0.15s, border-color 0.15s;
+  padding: 0;
+}
+.roster-action-btn:hover {
+  background: rgba(255,255,255,0.12);
+  border-color: rgba(255,255,255,0.25);
+}
+.roster-action-btn.roster-promote {
+  color: var(--clr-gold, #d4a72c);
+  border-color: rgba(212,167,44,0.3);
+}
+.roster-action-btn.roster-promote:hover {
+  background: rgba(212,167,44,0.15);
+}
+.roster-action-btn.roster-demote {
+  color: var(--clr-dim, #999);
+}
+.roster-empty {
+  font-size: 0.75rem;
+  color: var(--clr-dim, #666);
+  font-style: italic;
+  padding: 0.2rem 0;
 }
 
 /* Debrief heal bonus */

@@ -734,6 +734,11 @@ async function _runLocalResolution(skipSummary = false) {
   // Persist single-player progress to localStorage
   _saveSpGame();
 
+  // Persist campaign mid-mission progress
+  if (_activeCampaign && _activeMissionDef && !state.gameOver) {
+    _saveCampaignMission();
+  }
+
   // Accumulate round for full-game replay
   if (!_autoplay) {
     _roundHistory.push({
@@ -2042,6 +2047,85 @@ document.getElementById('btn-singleplayer-back').addEventListener('click', () =>
 let _activeCampaign  = null;  // Campaign instance (persists across missions)
 let _activeMissionDef = null; // Current mission definition
 let _campaignSelectedMission = null; // Mission ID selected on campaign screen
+let _campaignUnlocked = false; // Admin: bypass mission prerequisites
+let _activeRosterIndices = []; // Indices into _activeCampaign.roster that are "active" (will deploy)
+
+// ── Campaign mid-mission save/resume ──────────────────────────────────────────
+
+function _campaignMissionSaveKey(campaignId, missionId) {
+  return `brimstone_campaign_mission_${campaignId}_${missionId}`;
+}
+
+function _saveCampaignMission() {
+  if (!_activeCampaign || !_activeMissionDef || !state) return;
+  const key = _campaignMissionSaveKey(_activeCampaign.campaignDef.id, _activeMissionDef.id);
+  const data = {
+    campaignId:     _activeCampaign.campaignDef.id,
+    saveSlot:       _activeCampaign.saveSlot,
+    missionId:      _activeMissionDef.id,
+    state:          serializeState(state),
+    roundHistory:   _roundHistory,
+    updatedAt:      Date.now(),
+  };
+  try { localStorage.setItem(key, JSON.stringify(data)); } catch {}
+}
+
+function _loadCampaignMissionSave(campaignId, missionId) {
+  const key = _campaignMissionSaveKey(campaignId, missionId);
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch { return null; }
+}
+
+function _deleteCampaignMissionSave(campaignId, missionId) {
+  const key = _campaignMissionSaveKey(campaignId, missionId);
+  try { localStorage.removeItem(key); } catch {}
+}
+
+function _resumeCampaignMission(missionId) {
+  const save = _loadCampaignMissionSave(_activeCampaign.campaignDef.id, missionId);
+  if (!save) return;
+
+  const missionDef = _activeCampaign.getMissionDef(missionId);
+  if (!missionDef) return;
+
+  _activeMissionDef = missionDef;
+  _gameStartTime = Date.now();
+  _spSaveId = null;
+
+  const existingState = deserializeState(save.state);
+  _roundHistory = save.roundHistory || [];
+
+  // Reconstruct campaign-specific state
+  existingState.victoryDelegate = buildVictoryDelegate(missionDef.objectives);
+  existingState.fogOfWar = existingState.fogOfWar || 'full';
+  if (missionDef.lootOverrides) existingState.lootOverrides = missionDef.lootOverrides;
+  if (missionDef.aiBudgetBonus) existingState.campaignAIBudgetBonus = missionDef.aiBudgetBonus;
+
+  // Hide setup, show game
+  document.getElementById('setup-screen').style.display = 'none';
+  document.getElementById('game-screen').style.display = 'flex';
+  const canvas = document.getElementById('game-canvas');
+
+  state = existingState;
+
+  // Set up AI with correct personality
+  const AIClass = WITCH_PERSONALITIES[missionDef.aiPersonality] ?? WitchAIEngine;
+  witchAI = new AIClass(state, redraw);
+  heroAI = null;
+
+  _setupLocalUI(canvas, witchAI, null, false);
+
+  // Wire mission info button
+  ui.showMissionInfoBtn(true);
+  ui.onMissionInfo = () => _showMissionInfoModal();
+
+  redraw();
+  requestAnimationFrame(() => { renderer.resize(); redraw(); });
+  _startLocalPlanningPhase();
+}
 
 function _showCampaignSelectScreen() {
   const listEl = document.getElementById('campaign-select-list');
@@ -2141,6 +2225,19 @@ function _campaignCardHTML(name, title, assetId, color, hp, maxHp, attack, defen
   </div>`;
 }
 
+function _survivorCardHTML(s, idx, actionBtn) {
+  const assetId = Renderer.survivorAssetId(s.title) || 'survivor_innkeeper';
+  const card = _campaignCardHTML(s.name, s.title, assetId, s.color || ENTITY_COLOR.survivor, s.hp, s.maxHp, s.attack, s.defense, s.abilityLabel, false);
+  if (idx == null) return card;
+  const btnHtml = actionBtn
+    ? `<button class="roster-action-btn ${actionBtn.cls}" data-idx="${idx}" title="${actionBtn.title}">${actionBtn.label}</button>`
+    : '';
+  return `<div class="roster-row" data-idx="${idx}">
+    ${card}
+    ${btnHtml}
+  </div>`;
+}
+
 function _campaignPartyHTML(heroStats, roster) {
   let html = '<div class="campaign-party">';
   // Hero card
@@ -2148,11 +2245,94 @@ function _campaignPartyHTML(heroStats, roster) {
   html += _campaignCardHTML('Hero' + weaponLabel, null, 'hero', ENTITY_COLOR.hero, heroStats.hp, heroStats.maxHp, heroStats.attack, heroStats.defense, null, true);
   // Survivor cards
   for (const s of roster) {
-    const assetId = Renderer.survivorAssetId(s.title) || 'survivor_innkeeper';
-    html += _campaignCardHTML(s.name, s.title, assetId, s.color || ENTITY_COLOR.survivor, s.hp, s.maxHp, s.attack, s.defense, s.abilityLabel, false);
+    html += _survivorCardHTML(s);
   }
   html += '</div>';
   return html;
+}
+
+/**
+ * Render the party view with Active/Reserve sections for mission deployment.
+ * Active survivors will deploy; reserve stays behind.
+ * @param {object} heroStats
+ * @param {Array} roster - full campaign roster
+ * @param {number} maxActive - max survivors in active group (from mission def)
+ */
+function _renderDeployRoster(heroStats, roster, maxActive) {
+  const rosterEl = document.getElementById('campaign-roster-summary');
+  const activeCount = _activeRosterIndices.length;
+  const canAddMore = activeCount < maxActive;
+
+  let html = '<div class="campaign-roster-label">Your Party</div>';
+
+  // Hero card (always active)
+  html += '<div class="campaign-party">';
+  const weaponLabel = heroStats.weapon ? ` (${heroStats.weapon.name || heroStats.weapon})` : '';
+  html += _campaignCardHTML('Hero' + weaponLabel, null, 'hero', ENTITY_COLOR.hero, heroStats.hp, heroStats.maxHp, heroStats.attack, heroStats.defense, null, true);
+  html += '</div>';
+
+  if (roster.length === 0) {
+    rosterEl.innerHTML = html;
+    return;
+  }
+
+  // Active section
+  if (maxActive > 0) {
+    html += `<div class="roster-section-label active-label">Active <span class="roster-count">${activeCount}/${maxActive}</span></div>`;
+    if (_activeRosterIndices.length === 0) {
+      html += '<div class="roster-empty">No survivors selected</div>';
+    }
+    for (const idx of _activeRosterIndices) {
+      const s = roster[idx];
+      if (!s) continue;
+      html += _survivorCardHTML(s, idx, { label: '−', cls: 'roster-demote', title: 'Move to reserve' });
+    }
+  }
+
+  // Reserve section
+  const reserveIndices = roster.map((_, i) => i).filter(i => !_activeRosterIndices.includes(i));
+  if (reserveIndices.length > 0 || maxActive === 0) {
+    html += `<div class="roster-section-label reserve-label">Reserve</div>`;
+    for (const idx of reserveIndices) {
+      const s = roster[idx];
+      if (!s) continue;
+      const btn = maxActive > 0 && canAddMore
+        ? { label: '+', cls: 'roster-promote', title: 'Move to active' }
+        : null;
+      html += _survivorCardHTML(s, idx, btn);
+    }
+  }
+
+  // Admin: add random survivor
+  html += `<button id="btn-admin-add-survivor" class="admin-btn admin-add-btn" title="Add random survivor (testing)" style="margin-top:0.3rem">+</button>`;
+
+  rosterEl.innerHTML = html;
+
+  // Wire +/- buttons
+  rosterEl.querySelectorAll('.roster-promote').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx);
+      if (_activeRosterIndices.length < maxActive && !_activeRosterIndices.includes(idx)) {
+        _activeRosterIndices.push(idx);
+        _renderDeployRoster(heroStats, roster, maxActive);
+      }
+    });
+  });
+  rosterEl.querySelectorAll('.roster-demote').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx);
+      _activeRosterIndices = _activeRosterIndices.filter(i => i !== idx);
+      _renderDeployRoster(heroStats, roster, maxActive);
+    });
+  });
+
+  // Admin add survivor
+  document.getElementById('btn-admin-add-survivor')?.addEventListener('click', () => {
+    const s = createSurvivor(0, 0, 'hero');
+    _activeCampaign.roster.push(snapshotSurvivor(s));
+    _activeCampaign.save();
+    _renderDeployRoster(heroStats, _activeCampaign.roster, maxActive);
+  });
 }
 
 function _renderCampaignScreen() {
@@ -2177,19 +2357,34 @@ function _renderCampaignScreen() {
     ? `<div class="campaign-resources">${resEntries.map(([k,v]) => `<span class="cr-item"><span class="cr-icon">${_RESOURCE_ICONS[k] || ''}</span><span class="cr-count">${v}</span><span class="cr-label">${k}</span></span>`).join('')}</div>`
     : '';
   rosterEl.innerHTML =
-    `<div class="campaign-roster-label">Your Party</div>` +
+    `<div class="campaign-roster-label">Your Party <button id="btn-admin-add-survivor" class="admin-btn admin-add-btn" title="Add random survivor (testing)">+</button></div>` +
     _campaignPartyHTML(_activeCampaign.heroStats, _activeCampaign.roster) +
     resourcesHtml;
 
+  document.getElementById('btn-admin-add-survivor')?.addEventListener('click', () => {
+    const s = createSurvivor(0, 0, 'hero');
+    _activeCampaign.roster.push(snapshotSurvivor(s));
+    _activeCampaign.save();
+    _renderCampaignScreen();
+  });
+
   // Mission list
   const missions = _activeCampaign.getMissionList();
+  const campaignId = _activeCampaign.campaignDef.id;
   listEl.innerHTML = missions.map(m => {
-    const cls = m.completed ? 'campaign-mission completed' : m.available ? 'campaign-mission available' : 'campaign-mission locked';
-    const icon = m.completed ? '✓' : m.available ? '→' : '🔒';
+    const unlocked = _campaignUnlocked || m.available;
+    const cls = m.completed ? 'campaign-mission completed' : unlocked ? 'campaign-mission available' : 'campaign-mission locked';
+    const icon = m.completed ? '✓' : unlocked ? '→' : '🔒';
+    const hasSave = _loadCampaignMissionSave(campaignId, m.id) !== null;
+    const statusLabel = m.completed
+      ? '<span class="campaign-mission-status">Complete</span>'
+      : hasSave
+        ? '<span class="campaign-mission-status in-progress">In Progress</span>'
+        : '';
     return `<div class="${cls}" data-mission="${m.id}">
       <span class="campaign-mission-icon">${icon}</span>
       <span class="campaign-mission-name">${m.title}</span>
-      ${m.completed ? '<span class="campaign-mission-status">Complete</span>' : ''}
+      ${statusLabel}
     </div>`;
   }).join('');
 
@@ -2217,6 +2412,21 @@ function _showMissionBriefing(missionId) {
   document.getElementById('campaign-mission-title').textContent = missionDef.title;
   document.getElementById('campaign-mission-text').textContent = missionDef.briefing;
 
+  // Show Resume/Restart buttons if a mid-mission save exists
+  const hasMissionSave = _loadCampaignMissionSave(_activeCampaign.campaignDef.id, missionId) !== null;
+  const startBtn = document.getElementById('btn-start-mission');
+  const resumeBtn = document.getElementById('btn-resume-mission');
+  const restartBtn = document.getElementById('btn-restart-mission');
+  if (hasMissionSave) {
+    startBtn.style.display = 'none';
+    resumeBtn.style.display = '';
+    restartBtn.style.display = '';
+  } else {
+    startBtn.style.display = '';
+    resumeBtn.style.display = 'none';
+    restartBtn.style.display = 'none';
+  }
+
   // Objectives
   const objEl = document.getElementById('campaign-objectives');
   const winDesc = _objectiveDescription(missionDef.objectives.win);
@@ -2226,21 +2436,13 @@ function _showMissionBriefing(missionId) {
     <div class="campaign-obj"><span class="campaign-obj-icon">💀</span> <strong>Defeat:</strong> ${loseDesc}</div>
   `;
 
-  // Deploy roster (if campaign has survivors and mission allows them)
-  const deployEl = document.getElementById('campaign-deploy-roster');
-  const pickerEl = document.getElementById('campaign-roster-picker');
-  if (_activeCampaign.roster.length > 0 && missionDef.maxSurvivorsFromRoster > 0) {
-    deployEl.style.display = '';
-    pickerEl.innerHTML = _activeCampaign.roster.map((s, i) => {
-      const assetId = Renderer.survivorAssetId(s.title) || 'survivor_innkeeper';
-      return `<label class="campaign-survivor-pick">
-        <input type="checkbox" data-idx="${i}" ${i < missionDef.maxSurvivorsFromRoster ? 'checked' : ''}>
-        ${_campaignCardHTML(s.name, s.title, assetId, s.color || ENTITY_COLOR.survivor, s.hp, s.maxHp, s.attack, s.defense, s.abilityLabel, false)}
-      </label>`;
-    }).join('');
-  } else {
-    deployEl.style.display = 'none';
-  }
+  // Switch roster summary into Active/Reserve deploy mode
+  const maxActive = missionDef.maxSurvivorsFromRoster ?? 0;
+  // Default: fill active slots from the front of the roster
+  _activeRosterIndices = _activeCampaign.roster
+    .map((_, i) => i)
+    .slice(0, maxActive);
+  _renderDeployRoster(_activeCampaign.heroStats, _activeCampaign.roster, maxActive);
 }
 
 function _objectiveDescription(obj) {
@@ -2332,6 +2534,11 @@ function _initCampaignMission(missionDef) {
   state = new GameState(true, false, missionDef.mapSize, null, mapData);
   state.fogOfWar = 'full';
 
+  // Campaign AI budget bonus for harder waves
+  if (missionDef.aiBudgetBonus) {
+    state.campaignAIBudgetBonus = missionDef.aiBudgetBonus;
+  }
+
   // Apply per-mission loot table overrides
   if (missionDef.lootOverrides) {
     state.lootOverrides = missionDef.lootOverrides;
@@ -2361,11 +2568,9 @@ function _initCampaignMission(missionDef) {
     Object.assign(state.inventory.shared, res);
   }
 
-  // Deploy carried-over survivors from roster
+  // Deploy carried-over survivors from roster (uses active/reserve selection)
   if (_activeCampaign && missionDef.maxSurvivorsFromRoster > 0) {
-    const pickerEl = document.getElementById('campaign-roster-picker');
-    const checked = pickerEl ? [...pickerEl.querySelectorAll('input:checked')].map(cb => parseInt(cb.dataset.idx)) : [];
-    const toDeploy = checked.slice(0, missionDef.maxSurvivorsFromRoster);
+    const toDeploy = _activeRosterIndices.slice(0, missionDef.maxSurvivorsFromRoster);
     // Place survivors near hero start
     const heroStart = mapData.heroStart;
     const neighbors = getNeighbors(heroStart.col, heroStart.row);
@@ -2463,6 +2668,9 @@ function _initCampaignMission(missionDef) {
 function _handleCampaignMissionEnd() {
   if (!_activeCampaign || !_activeMissionDef || !state) return;
 
+  // Delete mid-mission save on completion (win or lose)
+  _deleteCampaignMissionSave(_activeCampaign.campaignDef.id, _activeMissionDef.id);
+
   // Record campaign-specific stats before cleaning up
   _recordCampaignGameStats();
 
@@ -2470,9 +2678,14 @@ function _handleCampaignMissionEnd() {
   const missionDef = _activeMissionDef;
 
   // Gather surviving survivors for roster (permadeath: dead ones are lost)
-  const survivors = state.entities
+  // Include both deployed survivors who lived AND roster members who weren't deployed
+  const deployedSurvivors = state.entities
     .filter(e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR)
     .map(e => snapshotSurvivor(e));
+  const deployedNames = new Set(deployedSurvivors.map(s => s.name));
+  // Keep roster members who weren't deployed (they stayed behind safely)
+  const undeployed = _activeCampaign.roster.filter(s => !deployedNames.has(s.name));
+  const survivors = [...deployedSurvivors, ...undeployed];
 
   // Apply mission result to campaign state
   _activeCampaign.applyMissionResult(missionDef.id, {
@@ -2541,6 +2754,22 @@ document.getElementById('btn-start-mission')   .addEventListener('click', () => 
   if (!_campaignSelectedMission) return;
   const missionDef = _activeCampaign.getMissionDef(_campaignSelectedMission);
   if (missionDef) _initCampaignMission(missionDef);
+});
+document.getElementById('btn-resume-mission')  .addEventListener('click', () => {
+  if (!_campaignSelectedMission) return;
+  _resumeCampaignMission(_campaignSelectedMission);
+});
+document.getElementById('btn-restart-mission') .addEventListener('click', () => {
+  if (!_campaignSelectedMission) return;
+  _deleteCampaignMissionSave(_activeCampaign.campaignDef.id, _campaignSelectedMission);
+  const missionDef = _activeCampaign.getMissionDef(_campaignSelectedMission);
+  if (missionDef) _initCampaignMission(missionDef);
+});
+document.getElementById('btn-admin-unlock')    .addEventListener('click', () => {
+  _campaignUnlocked = !_campaignUnlocked;
+  const btn = document.getElementById('btn-admin-unlock');
+  btn.textContent = _campaignUnlocked ? '🔒 Lock' : '🔓 Unlock All';
+  _renderCampaignScreen();
 });
 document.getElementById('btn-debrief-continue').addEventListener('click', () => {
   _showCampaignScreen();

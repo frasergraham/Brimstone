@@ -113,6 +113,7 @@ export function serializeState(state) {
     mapCols,
     mapRows,
     mapSize:              state.mapSize ?? 'standard',
+    campaignAIBudgetBonus: state.campaignAIBudgetBonus ?? 0,
     tiles,
     entities,
   };
@@ -214,6 +215,7 @@ export function deserializeState(snap) {
   state.witchKills           = snap.witchKills       ?? 0;
   state.witchSummonCount     = snap.witchSummonCount ?? 0;
   state.heroRevealedByHorn   = snap.heroRevealedByHorn ?? false;
+  state.campaignAIBudgetBonus = snap.campaignAIBudgetBonus ?? 0;
 
   // ── Planning fields — reset to clean pre-planning state ──────────────────
   state.planningPhase    = false;
