@@ -5665,6 +5665,15 @@ async function _playReconnectReplay(replay) {
 function _serverWsUrl() {
   // Allow override via global (set by server when serving the page, for production)
   if (window.BRIMSTONE_WS) return window.BRIMSTONE_WS;
+  // Electron uses a custom protocol where location.host is "." — never valid for WS.
+  // Derive from BRIMSTONE_SERVER if available, otherwise fall back to location.
+  if (window.BRIMSTONE_SERVER) {
+    try {
+      const url = new URL(window.BRIMSTONE_SERVER);
+      url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+      return url.href.replace(/\/$/, '');
+    } catch { /* fall through */ }
+  }
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${protocol}//${location.host}`;
 }
