@@ -726,6 +726,11 @@ async function _runLocalResolution(skipSummary = false) {
   // Persist single-player progress to localStorage
   _saveSpGame();
 
+  // Persist campaign mid-mission progress
+  if (_activeCampaign && _activeMissionDef && !state.gameOver) {
+    _saveCampaignMission();
+  }
+
   // Accumulate round for full-game replay
   if (!_autoplay) {
     _roundHistory.push({
@@ -2032,6 +2037,84 @@ document.getElementById('btn-singleplayer-back').addEventListener('click', () =>
 let _activeCampaign  = null;  // Campaign instance (persists across missions)
 let _activeMissionDef = null; // Current mission definition
 let _campaignSelectedMission = null; // Mission ID selected on campaign screen
+let _campaignUnlocked = false; // Admin: bypass mission prerequisites
+
+// ── Campaign mid-mission save/resume ──────────────────────────────────────────
+
+function _campaignMissionSaveKey(campaignId, missionId) {
+  return `brimstone_campaign_mission_${campaignId}_${missionId}`;
+}
+
+function _saveCampaignMission() {
+  if (!_activeCampaign || !_activeMissionDef || !state) return;
+  const key = _campaignMissionSaveKey(_activeCampaign.campaignDef.id, _activeMissionDef.id);
+  const data = {
+    campaignId:     _activeCampaign.campaignDef.id,
+    saveSlot:       _activeCampaign.saveSlot,
+    missionId:      _activeMissionDef.id,
+    state:          serializeState(state),
+    roundHistory:   _roundHistory,
+    updatedAt:      Date.now(),
+  };
+  try { localStorage.setItem(key, JSON.stringify(data)); } catch {}
+}
+
+function _loadCampaignMissionSave(campaignId, missionId) {
+  const key = _campaignMissionSaveKey(campaignId, missionId);
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch { return null; }
+}
+
+function _deleteCampaignMissionSave(campaignId, missionId) {
+  const key = _campaignMissionSaveKey(campaignId, missionId);
+  try { localStorage.removeItem(key); } catch {}
+}
+
+function _resumeCampaignMission(missionId) {
+  const save = _loadCampaignMissionSave(_activeCampaign.campaignDef.id, missionId);
+  if (!save) return;
+
+  const missionDef = _activeCampaign.getMissionDef(missionId);
+  if (!missionDef) return;
+
+  _activeMissionDef = missionDef;
+  _gameStartTime = Date.now();
+  _spSaveId = null;
+
+  const existingState = deserializeState(save.state);
+  _roundHistory = save.roundHistory || [];
+
+  // Reconstruct campaign-specific state
+  existingState.victoryDelegate = buildVictoryDelegate(missionDef.objectives);
+  existingState.fogOfWar = existingState.fogOfWar || 'full';
+  if (missionDef.lootOverrides) existingState.lootOverrides = missionDef.lootOverrides;
+  if (missionDef.aiBudgetBonus) existingState.campaignAIBudgetBonus = missionDef.aiBudgetBonus;
+
+  // Hide setup, show game
+  document.getElementById('setup-screen').style.display = 'none';
+  document.getElementById('game-screen').style.display = 'flex';
+  const canvas = document.getElementById('game-canvas');
+
+  state = existingState;
+
+  // Set up AI with correct personality
+  const AIClass = WITCH_PERSONALITIES[missionDef.aiPersonality] ?? WitchAIEngine;
+  witchAI = new AIClass(state, redraw);
+  heroAI = null;
+
+  _setupLocalUI(canvas, witchAI, null, false);
+
+  // Wire mission info button
+  ui.showMissionInfoBtn(true);
+  ui.onMissionInfo = () => _showMissionInfoModal();
+
+  redraw();
+  requestAnimationFrame(() => { renderer.resize(); redraw(); });
+  _startLocalPlanningPhase();
+}
 
 function _showCampaignSelectScreen() {
   const listEl = document.getElementById('campaign-select-list');
@@ -2167,19 +2250,35 @@ function _renderCampaignScreen() {
     ? `<div class="campaign-resources">${resEntries.map(([k,v]) => `<span class="cr-item"><span class="cr-icon">${_RESOURCE_ICONS[k] || ''}</span><span class="cr-count">${v}</span><span class="cr-label">${k}</span></span>`).join('')}</div>`
     : '';
   rosterEl.innerHTML =
-    `<div class="campaign-roster-label">Your Party</div>` +
+    `<div class="campaign-roster-label">Your Party <button id="btn-admin-add-survivor" class="admin-btn admin-add-btn" title="Add random survivor (testing)">+</button></div>` +
     _campaignPartyHTML(_activeCampaign.heroStats, _activeCampaign.roster) +
     resourcesHtml;
 
+  // Admin: add random survivor to roster
+  document.getElementById('btn-admin-add-survivor')?.addEventListener('click', () => {
+    const s = createSurvivor(0, 0, 'hero');
+    _activeCampaign.roster.push(snapshotSurvivor(s));
+    _activeCampaign.save();
+    _renderCampaignScreen();
+  });
+
   // Mission list
   const missions = _activeCampaign.getMissionList();
+  const campaignId = _activeCampaign.campaignDef.id;
   listEl.innerHTML = missions.map(m => {
-    const cls = m.completed ? 'campaign-mission completed' : m.available ? 'campaign-mission available' : 'campaign-mission locked';
-    const icon = m.completed ? '✓' : m.available ? '→' : '🔒';
+    const unlocked = _campaignUnlocked || m.available;
+    const cls = m.completed ? 'campaign-mission completed' : unlocked ? 'campaign-mission available' : 'campaign-mission locked';
+    const icon = m.completed ? '✓' : unlocked ? '→' : '🔒';
+    const hasSave = _loadCampaignMissionSave(campaignId, m.id) !== null;
+    const statusLabel = m.completed
+      ? '<span class="campaign-mission-status">Complete</span>'
+      : hasSave
+        ? '<span class="campaign-mission-status in-progress">In Progress</span>'
+        : '';
     return `<div class="${cls}" data-mission="${m.id}">
       <span class="campaign-mission-icon">${icon}</span>
       <span class="campaign-mission-name">${m.title}</span>
-      ${m.completed ? '<span class="campaign-mission-status">Complete</span>' : ''}
+      ${statusLabel}
     </div>`;
   }).join('');
 
@@ -2206,6 +2305,21 @@ function _showMissionBriefing(missionId) {
 
   document.getElementById('campaign-mission-title').textContent = missionDef.title;
   document.getElementById('campaign-mission-text').textContent = missionDef.briefing;
+
+  // Show Resume/Restart buttons if a mid-mission save exists
+  const hasMissionSave = _loadCampaignMissionSave(_activeCampaign.campaignDef.id, missionId) !== null;
+  const startBtn = document.getElementById('btn-start-mission');
+  const resumeBtn = document.getElementById('btn-resume-mission');
+  const restartBtn = document.getElementById('btn-restart-mission');
+  if (hasMissionSave) {
+    startBtn.style.display = 'none';
+    resumeBtn.style.display = '';
+    restartBtn.style.display = '';
+  } else {
+    startBtn.style.display = '';
+    resumeBtn.style.display = 'none';
+    restartBtn.style.display = 'none';
+  }
 
   // Objectives
   const objEl = document.getElementById('campaign-objectives');
@@ -2321,6 +2435,11 @@ function _initCampaignMission(missionDef) {
   // Create game state
   state = new GameState(true, false, missionDef.mapSize, null, mapData);
   state.fogOfWar = 'full';
+
+  // Campaign AI budget bonus for harder waves
+  if (missionDef.aiBudgetBonus) {
+    state.campaignAIBudgetBonus = missionDef.aiBudgetBonus;
+  }
 
   // Apply per-mission loot table overrides
   if (missionDef.lootOverrides) {
@@ -2453,6 +2572,9 @@ function _initCampaignMission(missionDef) {
 function _handleCampaignMissionEnd() {
   if (!_activeCampaign || !_activeMissionDef || !state) return;
 
+  // Delete mid-mission save on completion (win or lose)
+  _deleteCampaignMissionSave(_activeCampaign.campaignDef.id, _activeMissionDef.id);
+
   // Record campaign-specific stats before cleaning up
   _recordCampaignGameStats();
 
@@ -2531,6 +2653,22 @@ document.getElementById('btn-start-mission')   .addEventListener('click', () => 
   if (!_campaignSelectedMission) return;
   const missionDef = _activeCampaign.getMissionDef(_campaignSelectedMission);
   if (missionDef) _initCampaignMission(missionDef);
+});
+document.getElementById('btn-resume-mission')  .addEventListener('click', () => {
+  if (!_campaignSelectedMission) return;
+  _resumeCampaignMission(_campaignSelectedMission);
+});
+document.getElementById('btn-restart-mission') .addEventListener('click', () => {
+  if (!_campaignSelectedMission) return;
+  _deleteCampaignMissionSave(_activeCampaign.campaignDef.id, _campaignSelectedMission);
+  const missionDef = _activeCampaign.getMissionDef(_campaignSelectedMission);
+  if (missionDef) _initCampaignMission(missionDef);
+});
+document.getElementById('btn-admin-unlock')    .addEventListener('click', () => {
+  _campaignUnlocked = !_campaignUnlocked;
+  const btn = document.getElementById('btn-admin-unlock');
+  btn.textContent = _campaignUnlocked ? '🔒 Lock' : '🔓 Unlock All';
+  _renderCampaignScreen();
 });
 document.getElementById('btn-debrief-continue').addEventListener('click', () => {
   _showCampaignScreen();

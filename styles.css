@@ -4527,6 +4527,32 @@ body.spectator-mode #game-screen   { display: flex !important; }
   font-size: 0.8rem;
   color: var(--clr-dim, #888);
 }
+.campaign-mission-status.in-progress {
+  color: #e8a735;
+  font-weight: bold;
+}
+.admin-btn {
+  color: var(--clr-dim, #666) !important;
+  font-size: 0.75rem !important;
+  opacity: 0.4;
+  transition: opacity 0.2s;
+}
+.admin-btn:hover { opacity: 1; }
+.admin-add-btn {
+  display: inline-block;
+  width: 1.5rem;
+  height: 1.5rem;
+  line-height: 1.4rem;
+  text-align: center;
+  font-size: 1rem !important;
+  border-radius: 50%;
+  border: 1px solid var(--clr-dim, #666);
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  vertical-align: middle;
+  margin-left: 0.4rem;
+}
 
 .campaign-briefing {
   max-width: 480px;

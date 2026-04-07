@@ -203,7 +203,7 @@ export function assessBoard(sim) {
     witchScore, heroScore,
     totalResources, metalCount, woodCount, canAffordSummon, bestSummonType,
     unexploredBuildings,
-    totalBudget: sim.actionsLeft,
+    totalBudget: sim.actionsLeft + (sim.campaignAIBudgetBonus ?? 0),
   };
 }
 
@@ -1079,46 +1079,95 @@ export class WitchAIEngine {
     return plan;
   }
 
-  /** Leaderless plan: no witch on the map (campaign missions). */
+  /** Leaderless plan: no witch on the map (campaign missions).
+   *  Multi-pass approach: attack, move-then-attack, move toward target.
+   *  Units can act multiple times per turn if budget allows.
+   */
   _generateLeaderlessPlan(sim, board) {
     const plan = [];
     const minions = sim.entities.filter(e => e.alive && e.owner === 'witch' && !e.id.startsWith('sim-'));
     if (minions.length === 0) return plan;
 
-    const heroes = board.visibleHeroes;
-    const target = heroes[0] ?? sim.entities.find(e => e.alive && e.owner === 'hero');
+    const allHeroes = sim.entities.filter(e => e.alive && e.owner === 'hero');
     let remaining = board.totalBudget;
 
+    // Helper: pick the weakest adjacent hero target for gang-up
+    const pickTarget = (m) => {
+      const adj = allHeroes.filter(h => h.alive && hexDistance(m.col, m.row, h.col, h.row) <= 1);
+      if (adj.length === 0) return null;
+      // Prefer colocated, then lowest HP
+      const colocated = adj.find(h => h.col === m.col && h.row === m.row);
+      if (colocated) return colocated;
+      adj.sort((a, b) => a.hp - b.hp);
+      return adj[0];
+    };
+
+    // Track which minions have acted this pass
+    const acted = new Set();
+
+    // Pass 1: Attack — all minions adjacent to heroes attack (prioritize weakest)
     for (const m of minions) {
-      if (remaining <= 0) break;
-      const colocated = heroes.find(h => h.col === m.col && h.row === m.row);
-      if (colocated) {
+      if (remaining <= 0 || plan.length >= MAX_PLAN_LENGTH) break;
+      const target = pickTarget(m);
+      if (target) {
         plan.push({ type: PlanActionType.BATTLE_UNIT, entityId: m.id,
-          targetId: colocated.id, targetCol: colocated.col, targetRow: colocated.row });
+          targetId: target.id, targetCol: target.col, targetRow: target.row });
         sim.applyBattle();
         remaining--;
-        continue;
-      }
-      const adj = heroes.find(h => hexDistance(m.col, m.row, h.col, h.row) === 1);
-      if (adj) {
-        plan.push({ type: PlanActionType.BATTLE_UNIT, entityId: m.id,
-          targetId: adj.id, targetCol: adj.col, targetRow: adj.row });
-        sim.applyBattle();
-        remaining--;
+        acted.add(m.id);
       }
     }
 
-    if (target) {
+    // Pass 2: Move-then-attack — minions 2 hexes from a hero move adjacent then attack
+    for (const m of minions) {
+      if (remaining < 2 || plan.length >= MAX_PLAN_LENGTH - 1) break;
+      if (acted.has(m.id)) continue;
+      // Find a hero exactly 2 hexes away
+      const nearHero = allHeroes
+        .filter(h => h.alive && hexDistance(m.col, m.row, h.col, h.row) === 2)
+        .sort((a, b) => a.hp - b.hp)[0];
+      if (!nearHero) continue;
+      const step = roadStepToward(sim, m, nearHero);
+      if (step && hexDistance(step.col, step.row, nearHero.col, nearHero.row) <= 1) {
+        plan.push({ type: PlanActionType.MOVE, entityId: m.id,
+          toCol: step.col, toRow: step.row });
+        sim.applyMove(m.id, step.col, step.row);
+        remaining--;
+        plan.push({ type: PlanActionType.BATTLE_UNIT, entityId: m.id,
+          targetId: nearHero.id, targetCol: nearHero.col, targetRow: nearHero.row });
+        sim.applyBattle();
+        remaining--;
+        acted.add(m.id);
+      }
+    }
+
+    // Pass 3: Move toward nearest hero (for minions that haven't acted yet)
+    const primaryTarget = allHeroes.filter(h => h.alive).sort((a, b) => a.hp - b.hp)[0];
+    if (primaryTarget) {
       for (const m of minions) {
         if (remaining <= 0 || plan.length >= MAX_PLAN_LENGTH) break;
-        if (plan.some(a => a.entityId === m.id)) continue;
-        const step = roadStepToward(sim, m, target);
+        if (acted.has(m.id)) continue;
+        const step = roadStepToward(sim, m, primaryTarget);
         if (step) {
           plan.push({ type: PlanActionType.MOVE, entityId: m.id,
             toCol: step.col, toRow: step.row });
           sim.applyMove(m.id, step.col, step.row);
           remaining--;
+          acted.add(m.id);
         }
+      }
+    }
+
+    // Pass 4: Second actions — minions that already moved can attack if now adjacent,
+    // or minions that already attacked can attack again (gang-up / double strike)
+    for (const m of minions) {
+      if (remaining <= 0 || plan.length >= MAX_PLAN_LENGTH) break;
+      const target = pickTarget(m);
+      if (target) {
+        plan.push({ type: PlanActionType.BATTLE_UNIT, entityId: m.id,
+          targetId: target.id, targetCol: target.col, targetRow: target.row });
+        sim.applyBattle();
+        remaining--;
       }
     }
 

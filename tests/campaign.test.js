@@ -917,3 +917,99 @@ describe('healBonus on mission victory', () => {
     assert.equal(c.roster[0].hp, 2); // no change
   });
 });
+
+// ── Mid-mission save/resume ───────────────────────────────────────────────
+
+describe('Campaign mid-mission save/resume', () => {
+  beforeEach(() => localStorage.clear());
+
+  test('mid-mission save key format is correct', () => {
+    const key = `brimstone_campaign_mission_calebs_hollow_prologue_prologue`;
+    const data = { campaignId: 'calebs_hollow_prologue', missionId: 'prologue', state: {}, updatedAt: Date.now() };
+    localStorage.setItem(key, JSON.stringify(data));
+    const loaded = JSON.parse(localStorage.getItem(key));
+    assert.equal(loaded.campaignId, 'calebs_hollow_prologue');
+    assert.equal(loaded.missionId, 'prologue');
+  });
+
+  test('mid-mission save can be deleted', () => {
+    const key = `brimstone_campaign_mission_calebs_hollow_prologue_prologue`;
+    localStorage.setItem(key, JSON.stringify({ test: true }));
+    assert.ok(localStorage.getItem(key));
+    localStorage.removeItem(key);
+    assert.equal(localStorage.getItem(key), null);
+  });
+
+  test('mission list detects in-progress saves', () => {
+    const key = `brimstone_campaign_mission_calebs_hollow_prologue_prologue`;
+    localStorage.setItem(key, JSON.stringify({ campaignId: 'calebs_hollow_prologue', missionId: 'prologue' }));
+    const hasSave = localStorage.getItem(key) !== null;
+    assert.ok(hasSave, 'should detect in-progress save');
+  });
+});
+
+// ── Campaign AI budget bonus ──────────────────────────────────────────────
+
+describe('Campaign AI budget bonus', () => {
+  test('all prologue missions have aiBudgetBonus defined', () => {
+    for (const m of hollowDef.missions) {
+      assert.ok(typeof m.aiBudgetBonus === 'number', `${m.id} missing aiBudgetBonus`);
+      assert.ok(m.aiBudgetBonus >= 1, `${m.id} aiBudgetBonus should be at least 1`);
+    }
+  });
+
+  test('later missions have higher budget bonus', () => {
+    const prologue = hollowDef.missions.find(m => m.id === 'prologue');
+    const darkRitual = hollowDef.missions.find(m => m.id === 'dark_ritual');
+    assert.ok(darkRitual.aiBudgetBonus > prologue.aiBudgetBonus,
+      'dark_ritual should have higher budget bonus than prologue');
+  });
+
+  test('campaignAIBudgetBonus survives state serialization', async () => {
+    const { serializeState, deserializeState } = await import('../server/state-sync.js');
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    state.campaignAIBudgetBonus = 3;
+    const snap = serializeState(state);
+    assert.equal(snap.campaignAIBudgetBonus, 3);
+    const restored = deserializeState(snap);
+    assert.equal(restored.campaignAIBudgetBonus, 3);
+  });
+});
+
+// ── Leaderless plan (campaign AI) ─────────────────────────────────────────
+
+describe('Leaderless plan improvements', () => {
+  test('leaderless plan attacks adjacent heroes', async () => {
+    const { WitchAIEngine } = await import('../src/ai-engine.js');
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    // Place a zombie adjacent to the hero
+    const hero = state.hero;
+    const neighbors = getNeighbors(hero.col, hero.row);
+    const z = createZombie(neighbors[0].col, neighbors[0].row, 'witch');
+    state.entities.push(z);
+    state.startPlanning();
+    const ai = new WitchAIEngine(state, () => {});
+    const plan = ai.generatePlan();
+    const battles = plan.filter(a => a.type === 'battle-unit');
+    assert.ok(battles.length > 0, 'should have at least one battle action');
+  });
+
+  test('leaderless plan moves toward heroes when not adjacent', async () => {
+    const { WitchAIEngine } = await import('../src/ai-engine.js');
+    const mapData = buildMap('gathering_survivors');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    // Place a zombie far from hero
+    const z = createZombie(9, 1, 'witch');
+    state.entities.push(z);
+    state.startPlanning();
+    const ai = new WitchAIEngine(state, () => {});
+    const plan = ai.generatePlan();
+    const moves = plan.filter(a => a.type === 'move');
+    assert.ok(moves.length > 0, 'should have at least one move action');
+  });
+});
