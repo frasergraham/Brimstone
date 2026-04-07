@@ -578,6 +578,7 @@ const MISSIONS = [
       { round: 5, units: [{ type: 'zombie', spawnAt: 'map_edge' }, { type: 'zombie', spawnAt: 'map_edge' }] },
     ],
     aiPersonality: 'balanced',
+    aiBudgetBonus: 1,
 
     maxSurvivorsFromRoster:    0,
     missionSurvivors:          1,
@@ -626,6 +627,7 @@ const MISSIONS = [
       { round: 6, units: [{ type: 'zombie', spawnAt: 'map_edge' }, { type: 'zombie', spawnAt: 'map_edge' }] },
     ],
     aiPersonality: 'balanced',
+    aiBudgetBonus: 1,
 
     maxSurvivorsFromRoster:    0,
     missionSurvivors:          2,
@@ -677,6 +679,7 @@ const MISSIONS = [
       { round: 9,  units: [{ type: 'zombie', spawnAt: 'graveyard' }, { type: 'minion', spawnAt: 'map_edge' }, { type: 'zombie', spawnAt: 'map_edge' }] },
     ],
     aiPersonality: 'aggressive',
+    aiBudgetBonus: 2,
 
     maxSurvivorsFromRoster:    2,
     missionSurvivors:          1,
@@ -734,6 +737,7 @@ const MISSIONS = [
       { round: 10, units: [{ type: 'wood_golem', spawnAt: 'map_edge' }] },
     ],
     aiPersonality: 'aggressive',
+    aiBudgetBonus: 2,
 
     maxSurvivorsFromRoster:    2,
     missionSurvivors:          1,
@@ -790,6 +794,7 @@ const MISSIONS = [
       { round: 12, units: [{ type: 'iron_golem', spawnAt: 'map_edge' }] },
     ],
     aiPersonality: 'hoarder',
+    aiBudgetBonus: 3,
 
     maxSurvivorsFromRoster:    3,
     missionSurvivors:          1,
@@ -847,6 +852,7 @@ const MISSIONS = [
       { round: 10, units: [{ type: 'minion', spawnAt: 'map_edge' }, { type: 'wood_golem', spawnAt: 'graveyard' }] },
     ],
     aiPersonality: 'swarm',
+    aiBudgetBonus: 2,
 
     maxSurvivorsFromRoster: 3,
     missionSurvivors:       1,

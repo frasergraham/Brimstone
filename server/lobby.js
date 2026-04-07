@@ -31,6 +31,7 @@ import { notifyWaitingOnYou, notifyRoundReady,
          notifyDeadlineApproaching, notifyGameOver,
          notifyGameAbandoned, notifyNudge, sendGameInvite,
          shouldNotify }                          from './notifications.js';
+import { sendPush }                              from './push.js';
 import db                                  from './db.js';
 import { VERSION }                         from '../src/version.js';
 import { generateMultipleStarts }          from '../src/map.js';
@@ -313,6 +314,7 @@ function createRoom(config = {}) {
     spectators:       new Set(),
     chronicle:        [],
     replayRounds:     [],   // { roundNum, preStateJson, stepsJson }[]
+    unassigned:       [],  // { playerId, name, _ws } — players who haven't picked a slot yet
     usedAINames:      new Set(),
     createdAt:        Date.now(),
   };
@@ -344,20 +346,25 @@ function _lobbyPublic(room) {
     hostPlayerId:     room.hostPlayerId,
     config:           { ...room.config },
     slots:            room.slots.map(s => ({ ...s })),
+    unassigned:       (room.unassigned || []).map(u => ({ playerId: u.playerId, name: u.name })),
     createdAt:        room.createdAt,
-    participantCount: room.slots.filter(s => s.status === 'human').length,
+    participantCount: room.slots.filter(s => s.status === 'human').length +
+                      (room.unassigned || []).length,
     roomStatus:       room.status,       // 'lobby' or 'playing'
     openSlots:        room.openSlots?.length ?? 0,
   };
 }
 
-/** Send a lobbyUpdate to every human participant in a lobby room. */
+/** Send a lobbyUpdate to every human participant in a lobby room (including unassigned). */
 function broadcastLobbyUpdate(room) {
   const payload = { type: 'lobbyUpdate', lobby: _lobbyPublic(room) };
   for (const slot of room.slots) {
     if (slot.status === 'human' && slot._ws) {
       send(slot._ws, payload);
     }
+  }
+  for (const u of (room.unassigned || [])) {
+    if (u._ws) send(u._ws, payload);
   }
 }
 
@@ -403,6 +410,45 @@ function destroyRoom(room) {
   room.spectators.clear();
   rooms.delete(room.id);
   codeToRoom.delete(room.code);
+}
+
+// ── Orphaned room cleanup ────────────────────────────────────────────────────
+
+const ORPHAN_LOBBY_AGE_MS = 60_000; // lobbies must be older than this to be pruned
+
+/**
+ * Periodic safety-net sweep that destroys or hibernates rooms with no connected
+ * humans that slipped through normal disconnect handling (e.g. host disconnected
+ * before the client sent `setRoom`).
+ */
+export function pruneOrphanedRooms() {
+  const now = Date.now();
+  for (const room of rooms.values()) {
+    if (room.status === 'lobby') {
+      // Don't prune lobbies that were just created — give the client time to connect
+      if (now - room.createdAt < ORPHAN_LOBBY_AGE_MS) continue;
+      // Check if any human slot or unassigned player has a live WebSocket
+      const hasLiveHuman = room.slots.some(
+        s => s.status === 'human' && s._ws && s._ws.readyState === 1
+      ) || (room.unassigned || []).some(
+        u => u._ws && u._ws.readyState === 1
+      );
+      if (!hasLiveHuman) {
+        console.log(`[pruneOrphanedRooms] destroying orphaned lobby ${room.id} (age ${Math.round((now - room.createdAt) / 1000)}s, no live humans).`);
+        destroyRoom(room);
+      }
+    } else if (room.status === 'playing') {
+      // Playing room with no human seats (all taken over by AI) and no cleanup
+      // timer already running. Note: isAI is only set to true after AI takeover
+      // from 2 consecutive missed deadlines — idle human players in async games
+      // keep isAI=false and are NOT affected by this check.
+      const hasHuman = room.players.some(s => !s.isAI);
+      if (!hasHuman && !room.allHumansGoneTimer) {
+        console.log(`[pruneOrphanedRooms] hibernating orphaned game ${room.id} (no humans, no cleanup timer).`);
+        _hibernateRoom(room);
+      }
+    }
+  }
 }
 
 // ── Planning timer ────────────────────────────────────────────────────────────
@@ -793,6 +839,15 @@ function _checkTimeoutTakeovers(room) {
     if (seat.isAI) continue;
     const count = room.consecutiveTimeouts[seat.playerId] || 0;
     if (count >= 2) {
+      // Don't take over the last human player — an all-AI game with nobody
+      // watching is pointless. Let them keep playing (or the room will
+      // hibernate naturally when they disconnect).
+      const humanCount = room.players.filter(s => !s.isAI).length;
+      if (humanCount <= 1) {
+        console.log(`[room ${room.id}] ${seat.name} (${seat.playerId}) — ${count} consecutive timeouts — skipping takeover (last human).`);
+        continue;
+      }
+
       const playerName = seat.name;
       const playerId   = seat.playerId;
       console.log(`[room ${room.id}] ${playerName} (${playerId}) — ${count} consecutive timeouts — AI takeover.`);
@@ -1109,20 +1164,18 @@ export function createLobby(playerId, playerName, ws, config = {}) {
   room.hostPlayerId = playerId;
   room.slots        = _buildSlots(pps);
 
-  // Host takes the first hero slot
-  const heroSlot = room.slots.find(s => s.faction === 'hero');
-  heroSlot.status   = 'human';
-  heroSlot.playerId = playerId;
-  heroSlot.name     = playerName;
-  heroSlot._ws      = ws;
+  // Host starts unassigned — they pick a slot in the lobby UI
+  room.unassigned.push({ playerId, name: playerName, _ws: ws });
 
   send(ws, { type: 'lobbyJoined', lobby: _lobbyPublic(room) });
+  return room.id;
 }
 
 /**
  * Join an existing lobby by room ID (public) or 6-char code (private).
+ * Returns the room ID on success, or null on error/redirect.
  */
-export function joinLobby(playerId, playerName, ws, codeOrId) {
+export function joinLobby(playerId, playerName, ws, codeOrId, slotIndex) {
   // Look up by code first, then by direct ID
   const byCode   = codeOrId?.length === 6 ? codeToRoom.get(codeOrId.toUpperCase()) : null;
   const roomId   = byCode ?? codeOrId;
@@ -1130,38 +1183,53 @@ export function joinLobby(playerId, playerName, ws, codeOrId) {
 
   if (!room || (room.status !== 'lobby' && room.status !== 'playing')) {
     send(ws, { type: 'error', message: 'Lobby not found or already started.' });
-    return;
+    return null;
   }
 
   // If the game already started, redirect to late-join flow
   if (room.status === 'playing') {
     joinGame(playerId, playerName, ws, codeOrId);
-    return;
+    return null;
   }
 
-  // Prevent duplicate joins
-  if (room.slots.some(s => s.playerId === playerId)) {
+  // Prevent duplicate joins (check both slots and unassigned)
+  if (room.slots.some(s => s.playerId === playerId) ||
+      (room.unassigned || []).some(u => u.playerId === playerId)) {
     send(ws, { type: 'error', message: 'You are already in this lobby.' });
-    return;
+    return null;
   }
 
-  // Find first empty slot (witch side preferred for 1v1 parity, then hero)
-  const emptySlot =
-    room.slots.find(s => s.status === 'empty' && s.faction === 'witch') ??
-    room.slots.find(s => s.status === 'empty');
-
-  if (!emptySlot) {
+  // Check lobby capacity (slots + unassigned)
+  const totalHumans = room.slots.filter(s => s.status === 'human').length +
+                      (room.unassigned || []).length;
+  const totalSlots  = room.slots.length;
+  if (totalHumans >= totalSlots) {
     send(ws, { type: 'error', message: 'Lobby is full.' });
-    return;
+    return null;
   }
 
-  emptySlot.status   = 'human';
-  emptySlot.playerId = playerId;
-  emptySlot.name     = playerName;
-  emptySlot._ws      = ws;
+  // If invited to a specific slot, place directly in it
+  if (slotIndex != null) {
+    const slot = room.slots[slotIndex];
+    if (slot && slot.status === 'empty') {
+      slot.status   = 'human';
+      slot.playerId = playerId;
+      slot.name     = playerName;
+      slot._ws      = ws;
+      send(ws, { type: 'lobbyJoined', lobby: _lobbyPublic(room) });
+      broadcastLobbyUpdate(room);
+      return room.id;
+    }
+    // Slot taken or invalid — fall through to unassigned
+  }
+
+  // Player joins as unassigned — they pick a slot in the lobby UI
+  room.unassigned.push({ playerId, name: playerName, _ws: ws });
 
   send(ws, { type: 'lobbyJoined', lobby: _lobbyPublic(room) });
   broadcastLobbyUpdate(room);
+  return room.id;
+  return room.id;
 }
 
 /** Return a list of public lobbies (not yet started) and active games with open slots. */
@@ -1229,12 +1297,69 @@ export function fillAllWithAI(playerId, roomId, personality) {
   if (!room || room.status !== 'lobby') { return; }
   if (room.hostPlayerId !== playerId)   { return; }
 
+  // Block if any humans haven't picked a slot yet
+  if ((room.unassigned || []).length > 0) {
+    const hostWs = room.slots.find(s => s.playerId === playerId)?._ws ??
+                   (room.unassigned || []).find(u => u.playerId === playerId)?._ws;
+    if (hostWs) send(hostWs, { type: 'error', message: 'All players must pick a side first.' });
+    return;
+  }
+
   for (let i = 0; i < room.slots.length; i++) {
     if (room.slots[i].status === 'empty') {
       setSlotAI(playerId, roomId, i, personality ?? 'random');
     }
   }
   // broadcastLobbyUpdate is called by each setSlotAI — fire one final authoritative update
+  broadcastLobbyUpdate(room);
+}
+
+/**
+ * Player claims (or switches to) an empty slot.
+ * If they're unassigned, moves them into the slot.
+ * If they're in another slot, frees the old slot and claims the new one.
+ */
+export function claimSlot(playerId, roomId, slotIndex) {
+  const room = rooms.get(roomId);
+  if (!room || room.status !== 'lobby') { return; }
+
+  const slot = room.slots[slotIndex];
+  if (!slot || slot.status !== 'empty') {
+    const ws = (room.unassigned || []).find(u => u.playerId === playerId)?._ws ??
+               room.slots.find(s => s.playerId === playerId)?._ws;
+    if (ws) send(ws, { type: 'error', message: 'That slot is not available.' });
+    return;
+  }
+
+  // Check if player is unassigned
+  const uIdx = (room.unassigned || []).findIndex(u => u.playerId === playerId);
+  let playerName, playerWs;
+
+  if (uIdx >= 0) {
+    // Move from unassigned to slot
+    const entry = room.unassigned[uIdx];
+    playerName  = entry.name;
+    playerWs    = entry._ws;
+    room.unassigned.splice(uIdx, 1);
+  } else {
+    // Switch from an existing slot
+    const oldSlot = room.slots.find(s => s.playerId === playerId && s.status === 'human');
+    if (!oldSlot) { return; } // player not in this lobby
+    playerName = oldSlot.name;
+    playerWs   = oldSlot._ws;
+    // Free old slot
+    oldSlot.status   = 'empty';
+    oldSlot.playerId = null;
+    oldSlot.name     = null;
+    oldSlot._ws      = null;
+  }
+
+  // Claim the new slot
+  slot.status   = 'human';
+  slot.playerId = playerId;
+  slot.name     = playerName;
+  slot._ws      = playerWs;
+
   broadcastLobbyUpdate(room);
 }
 
@@ -1247,7 +1372,15 @@ export function startGame(playerId, roomId) {
   if (!room || room.status !== 'lobby') { return; }
   if (room.hostPlayerId !== playerId)   { return; }
 
-  // Must have at least one human player
+  // All humans must have picked a slot
+  if ((room.unassigned || []).length > 0) {
+    const hostWs = room.slots.find(s => s.playerId === playerId)?._ws ??
+                   (room.unassigned || []).find(u => u.playerId === playerId)?._ws;
+    if (hostWs) send(hostWs, { type: 'error', message: 'All players must pick a side before starting.' });
+    return;
+  }
+
+  // Must have at least one human player in a slot
   if (!room.slots.some(s => s.status === 'human')) {
     const hostSlot = room.slots.find(s => s.playerId === playerId);
     send(hostSlot?._ws, { type: 'error', message: 'At least one player is required.' });
@@ -1355,17 +1488,29 @@ export function leaveLobby(playerId, roomId) {
         send(slot._ws, { type: 'error', message: 'The host left the lobby.' });
       }
     }
+    for (const u of (room.unassigned || [])) {
+      if (u._ws && u.playerId !== playerId) {
+        send(u._ws, { type: 'error', message: 'The host left the lobby.' });
+      }
+    }
     destroyRoom(room);
     return;
   }
 
-  // Non-host — reset their slot to empty
+  // Non-host — remove from slot or unassigned list
   const slot = room.slots.find(s => s.playerId === playerId);
   if (slot) {
     slot.status   = 'empty';
     slot.playerId = null;
     slot.name     = null;
     slot._ws      = null;
+    broadcastLobbyUpdate(room);
+    return;
+  }
+
+  const uIdx = (room.unassigned || []).findIndex(u => u.playerId === playerId);
+  if (uIdx >= 0) {
+    room.unassigned.splice(uIdx, 1);
     broadcastLobbyUpdate(room);
   }
 }
@@ -1596,6 +1741,25 @@ export function sendSlotInvite(player, roomId, slotIndex, email) {
     roomId: room.id,
     code: joinKey,
     hostName: player.username ?? 'A player',
+  }).catch(() => {});
+}
+
+/**
+ * Send a push-notification invite to a Game Center friend. Host-only.
+ * The push payload includes a joinCode so the recipient deep-links into the lobby.
+ */
+export function sendFriendInvite(player, roomId, targetPlayerId) {
+  const room = rooms.get(roomId);
+  if (!room || room.status !== 'lobby') return;
+  if (room.hostPlayerId !== player.id) return;
+  if (!targetPlayerId || typeof targetPlayerId !== 'string') return;
+
+  const joinCode = room.isPrivate ? room.code : room.id;
+  sendPush(targetPlayerId, {
+    title: `${player.username ?? 'A player'} invited you!`,
+    body: "Join their game of Caleb's Hollow",
+    roomId: room.id,
+    joinCode,
   }).catch(() => {});
 }
 
@@ -2696,6 +2860,7 @@ export function pruneAsyncGames() {
 
 /** Exported for testing only. */
 export { _serializeEvents as serializeEventsForTest };
+export { _checkTimeoutTakeovers as checkTimeoutTakeoversForTest };
 
 /** Get async games list for a player (for REST endpoint). */
 export { getAsyncGamesForPlayer };

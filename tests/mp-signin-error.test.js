@@ -21,7 +21,7 @@ describe('multiplayer onError handler ordering', () => {
     // Extract the onError handler body (allowing nested braces)
     const onErrorStart = mainJs.indexOf('onError(msg) {');
     assert.ok(onErrorStart !== -1, 'onError handler must exist');
-    const afterStart = mainJs.slice(onErrorStart, onErrorStart + 500);
+    const afterStart = mainJs.slice(onErrorStart, onErrorStart + 800);
 
     // _showOnlineScreen() must appear before _onlineError(msg) in the handler
     const showIdx = afterStart.indexOf('_showOnlineScreen()');

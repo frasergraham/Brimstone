@@ -242,15 +242,16 @@ describe('assessHeroBoard', () => {
 // ── scoreHeroGoals ──────────────────────────────────────────────────────────
 
 describe('scoreHeroGoals', () => {
-  test('returns scores for all 3 goals', () => {
+  test('returns scores for all 4 goals', () => {
     const sim = makeHeroSim();
     const board = assessHeroBoard(sim);
     const scores = scoreHeroGoals(board);
     const keys = Object.keys(scores);
-    assert.equal(keys.length, 3);
+    assert.equal(keys.length, 4);
     assert.ok(HeroGoal.PROTECT_HERO in scores);
     assert.ok(HeroGoal.CONTROL_NODES in scores);
     assert.ok(HeroGoal.EXPLORE in scores);
+    assert.ok(HeroGoal.HUNT_WITCH in scores);
   });
 
   test('all scores are in [0, 1] range', () => {
@@ -458,7 +459,7 @@ describe('estimateHeroCombat', () => {
     assert.ok(result.favorability > 0, `expected positive favorability, got ${result.favorability}`);
   });
 
-  test('hero gets no night bonus', () => {
+  test('hero is weaker at night vs witch (witch gets night bonus)', () => {
     const sim = makeHeroSim({
       phase: Phase.NIGHT,
       entities: [
@@ -476,7 +477,7 @@ describe('estimateHeroCombat', () => {
     const nightBoard = assessHeroBoard(sim);
     const dayResult = estimateHeroCombat(dayBoard.hero, dayBoard.witch, dayBoard);
     const nightResult = estimateHeroCombat(nightBoard.hero, nightBoard.witch, nightBoard);
-    assert.equal(dayResult.favorability, nightResult.favorability, 'hero combat should not change at night');
+    assert.ok(nightResult.favorability < dayResult.favorability, 'hero should be weaker at night vs witch');
   });
 });
 
@@ -791,7 +792,7 @@ describe.skip('genFortifyPosition (removed — merged into EXPLORE and CONTROL_N
 // ── fillGapsHero ────────────────────────────────────────────────────────────
 
 describe('fillGapsHero', () => {
-  test('adds guard when enemies nearby', () => {
+  test('attacks adjacent enemies in gap fill', () => {
     const sim = makeHeroEngineSim({
       entities: [
         makeEntity({ id: 'hero1', col: 3, row: 3, hp: 10, maxHp: 10, items: {} }),
@@ -802,8 +803,8 @@ describe('fillGapsHero', () => {
     const heroEntity = sim.entities.find(e => e.id === 'hero1');
     const plan = [];
     fillGapsHero(plan, sim, board, heroEntity, 2, new Map());
-    const guard = plan.find(a => a.type === PlanActionType.GUARD);
-    assert.ok(guard, 'should add GUARD when enemy nearby');
+    const battle = plan.find(a => a.type === PlanActionType.BATTLE_UNIT);
+    assert.ok(battle, 'should attack adjacent enemy in gap fill');
   });
 
   test('adds guard fallback when nothing else to do', () => {

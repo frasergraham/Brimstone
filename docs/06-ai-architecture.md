@@ -1,0 +1,348 @@
+# AI Architecture
+
+## Overview
+
+Both factions use a shared 5-stage pipeline architecture for plan generation. The AI calls the same `actions.js` functions as human players — no special rules or cheats.
+
+Key files:
+- `src/ai.js` — Shared helpers, `PlanSimState`, personality registries
+- `src/ai-engine.js` — Witch AI (`WitchAIEngine`)
+- `src/hero-ai-engine.js` — Hero AI (`HeroAIEngine`)
+
+---
+
+## 5-Stage Pipeline
+
+Both `WitchAIEngine` and `HeroAIEngine` follow the same pipeline:
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                                                                  │
+│  Stage 1: EVALUATE                                               │
+│  assessBoard() / assessHeroBoard()                               │
+│  ──────────────────────────────                                  │
+│  Snapshot the board: unit positions, distances, threats,         │
+│  resources, node state, scoring timing, visible enemies          │
+│                                                                  │
+│  Output: board object (read-only analysis)                       │
+│                                                                  │
+└──────────────────────────────┬───────────────────────────────────┘
+                               │
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                                                                  │
+│  Stage 2: SCORE                                                  │
+│  scoreGoals() / scoreHeroGoals()                                 │
+│  ──────────────────────────────                                  │
+│  Rate each goal 0.0 — 1.0 based on board state.                 │
+│  Higher = more urgent.                                           │
+│                                                                  │
+│  Witch goals: BUILD_ARMY, CONTROL_NODES, DEFEND_WITCH            │
+│  Hero goals:  EXPLORE, CONTROL_NODES, PROTECT_HERO               │
+│                                                                  │
+│  Output: { goal → score } map                                    │
+│                                                                  │
+└──────────────────────────────┬───────────────────────────────────┘
+                               │
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                                                                  │
+│  Stage 3: ALLOCATE                                               │
+│  allocateBudget(scores, totalBudget)                             │
+│  ────────────────────────────────                                │
+│  Divide the action budget across goals proportionally.           │
+│  Filter goals below urgency threshold (0.05).                    │
+│  Enforce minimum 2 actions per active goal.                      │
+│                                                                  │
+│  Output: { goal → actionCount } map                              │
+│                                                                  │
+└──────────────────────────────┬───────────────────────────────────┘
+                               │
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                                                                  │
+│  Stage 4: GENERATE                                               │
+│  gen*() functions (one per goal)                                 │
+│  ──────────────────────────────                                  │
+│  Produce PlanAction[] for each goal within its budget.           │
+│  Uses PlanSimState to project moves without mutating real state. │
+│                                                                  │
+│  Witch: genBuildArmy(), genControlNodes(), genDefendWitch()      │
+│  Hero:  genExplore(), genControlNodes(), genProtectHero()        │
+│                                                                  │
+│  Output: PlanAction[] per goal (with priority tags)              │
+│                                                                  │
+└──────────────────────────────┬───────────────────────────────────┘
+                               │
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                                                                  │
+│  Stage 5: ASSEMBLE                                               │
+│  assemblePlan(allActions, sim, board, prevPositions)              │
+│  ─────────────────────────────────────────────────               │
+│  1. Sort by priority (lower = first)                             │
+│  2. Anti-oscillation filter (remove returns to just-left hexes)  │
+│  3. Deduplicate by action key                                    │
+│  4. Enforce action point budget                                  │
+│  5. Gap-fill with exploratory movement & node coverage           │
+│  6. Truncate to MAX_PLAN_LENGTH (12)                             │
+│                                                                  │
+│  Output: final PlanAction[] submitted for resolution             │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Witch AI Goals
+
+### DEFEND_WITCH
+**Trigger:** Low HP (<30%), outnumbered near hero
+**Actions:** Heal if herbs available, flee from threats, interpose minions between witch and hero
+
+### BUILD_ARMY
+**Trigger:** Few minions, high resources, unexplored buildings
+**Actions:** Summon units (prioritize iron golem > wood golem > minion by affordability), explore buildings, move toward unexplored areas
+
+### CONTROL_NODES
+**Trigger:** Uncontrolled nodes, approaching scoring checkpoint, hero holding nodes
+**Actions:** Move minions to nodes, fight adjacent enemies at nodes, guard when threatened
+
+### Goal Scoring Factors
+
+```
+DEFEND_WITCH score:
+  ├── High at low witch HP (<30%)
+  ├── High when outnumbered near hero
+  └── Boosted when hero is adjacent
+
+BUILD_ARMY score:
+  ├── High when minion count < node count
+  ├── Boosted by available resources
+  └── Boosted by unexplored buildings
+
+CONTROL_NODES score:
+  ├── Scales with uncaptured nodes
+  ├── Boosted near dawn/dusk scoring
+  └── Boosted when behind in score
+```
+
+---
+
+## Hero AI Goals
+
+### PROTECT_HERO
+**Trigger:** Low HP, enemies nearby, night phase
+**Actions:** Heal, equip weapon, flee if HP critically low, shelter at night
+
+### EXPLORE
+**Trigger:** Few survivors, unexplored buildings, daylight
+**Actions:** Explore current hex, sound horn (recruit), move to buildings, fortify
+
+### CONTROL_NODES
+**Trigger:** Always active (0.5 base score), scoring proximity, contested nodes
+**Actions:** Send hero + survivors to nodes, fight enemies en route, fortify node buildings
+
+### Goal Scoring Factors
+
+```
+PROTECT_HERO score:
+  ├── High at low HP (<30%)
+  ├── Boosted with herbs available
+  ├── Boosted when enemies near
+  └── Higher at night
+
+EXPLORE score:
+  ├── High when no survivors (needs recruiting)
+  ├── Scales with unexplored buildings
+  └── Boosted during daylight
+
+CONTROL_NODES score:
+  ├── Base 0.5 (always somewhat important)
+  ├── Scales with contested node count
+  ├── Boosted near scoring checkpoints
+  └── Boosted when behind in score (score-differential urgency)
+```
+
+---
+
+## Personality System
+
+Each faction has 3 personality variants that adjust goal weights and engagement thresholds.
+
+### Witch Personalities
+
+```
+              BUILD_ARMY  CONTROL_NODES  DEFEND_WITCH  fleeThreshold
+  ┌──────────┬──────────┬──────────────┬─────────────┬──────────────┐
+  │ Balanced │   1.0    │     1.0      │     1.0     │    0.30      │
+  │Aggressive│   0.8    │     0.6      │     0.5     │    0.15      │
+  │  Swarm   │   1.5    │     1.2      │     1.3     │    0.40      │
+  └──────────┴──────────┴──────────────┴─────────────┴──────────────┘
+```
+
+- **Balanced (default):** Equal attention to all goals
+- **Aggressive (Berserker):** Low flee threshold, less defensive, combative
+- **Swarm:** Heavy army building, defensive, produces many cheap minions
+
+### Hero Personalities
+
+```
+              EXPLORE  CONTROL_NODES  PROTECT_HERO  engageFloor
+  ┌──────────┬────────┬──────────────┬─────────────┬────────────┐
+  │ Balanced │  1.0   │     1.0      │     1.0     │unfavorable │
+  │Aggressive│  0.6   │     1.5      │     0.5     │  suicidal  │
+  │Defensive │  0.8   │     1.2      │     1.5     │unfavorable │
+  │ Explorer │  2.0   │     0.8      │     1.0     │unfavorable │
+  └──────────┴────────┴──────────────┴─────────────┴────────────┘
+```
+
+- **Balanced (Sentinel):** Even split across goals
+- **Aggressive (Berserker):** Fights everything, low self-preservation
+- **Defensive:** Higher protection priority, cautious combat
+- **Explorer (Scavenger):** Maximal exploration, resource gathering first
+
+### Engagement Floor
+
+Controls combat risk tolerance:
+
+```
+  suicidal    → attack unless combat is suicidal (≤-3 margin)
+  unfavorable → attack only if favorable or overwhelming
+  favorable   → attack only if overwhelming (>+3 margin)
+```
+
+---
+
+## Combat Estimation
+
+Both AIs estimate combat outcomes before committing:
+
+```
+estimateCombat(attacker, defender, board):
+
+  Expected ATK = attacker.attack + 3.5 (avg d6)
+                + gang-up dice × 2
+                + night bonus (witch only)
+                + weapon bonus
+
+  Expected DEF = defender.defense + 3.5 (avg d6)
+                + fortification
+                + weapon bonus
+
+  Margin = ATK - DEF
+
+  Classification:
+    margin > +3  → 'overwhelming'
+    margin > 0   → 'favorable'
+    margin > -3  → 'unfavorable'
+    margin ≤ -3  → 'suicidal'
+```
+
+---
+
+## PlanSimState
+
+A lightweight clone of `GameState` used during plan generation. Allows the AI to project moves without mutating the real game state.
+
+```
+PlanSimState
+  ├── tiles (reference — not cloned)
+  ├── entities (shallow clone, alive only)
+  ├── phase, round, inventory
+  ├── hero / witch (leader references)
+  ├── actionsLeft (budget tracking)
+  ├── _explored Set (in-plan explored tiles)
+  └── _justLeft (anti-oscillation memory)
+
+Methods:
+  applyMove(entity, col, row)      Update position in projection
+  applyBattle(attacker, defender)   Estimate outcome, deduct HP
+  applyExplore(entity)             Mark hex explored in projection
+  applySummon(type)                Deduct resources, add entity
+  applyGuard(entity)               Set guarding state
+  applySoundHorn(entity)           Mark horn used
+```
+
+### EnginePlanSimState (extends PlanSimState)
+
+Used by `WitchAIEngine` and `HeroAIEngine` with additional tracking:
+
+```
+EnginePlanSimState
+  ├── departedHexes Map     Track unit departure points (anti-oscillation)
+  ├── unitCommitments Map   Lock unit to goal (prevent double-assignment)
+  └── resourceLedger        Independent copy for projected spending
+```
+
+---
+
+## Multiplayer AI Coordination
+
+In N-player games (2v2, 3v3, 4v4), ally AIs coordinate via `allyContext`:
+
+```
+Player 1 generates plan
+  → claims nodes A, B in allyContext.claimedNodes
+
+Player 2 generates plan
+  → sees A, B already claimed
+  → targets node C instead (or assists at A/B if needed)
+
+Player 3 generates plan
+  → sees A, B, C claimed
+  → fills gaps or supports weakest position
+```
+
+This prevents multiple ally AIs from sending all their units to the same node.
+
+---
+
+## Anti-Oscillation
+
+Cross-turn memory prevents units from ping-ponging between hexes:
+
+```
+Round N:   unit at hex A → moves to hex B
+Round N+1: previousPositions[unit] = A
+           assemblePlan() filters out moves back to A
+           unit continues forward instead of returning
+```
+
+---
+
+## Scoring Awareness
+
+Both AIs track `roundsUntilScoring()` and adjust behavior near dawn/dusk:
+
+```
+Rounds to scoring:  4+  → normal behavior
+                    2-3 → increased node urgency
+                    0-1 → maximum node priority
+
+Hero-specific:  score-differential urgency
+  If hero behind in score → CONTROL_NODES priority boosted further
+  (Deliberately NOT applied to witch — witch already has unit-count advantage)
+```
+
+---
+
+## Node Feasibility
+
+`scoreNodeFeasibility(node, myFaction, entities)` rates each node 0–1:
+
+```
+Factors:
+  ├── Distance advantage (closer = higher)
+  ├── Force on/near node (own units present = higher)
+  └── Current controller (uncontrolled = higher)
+
+Thresholds:
+  Hero:  filter out nodes below 0.1 feasibility
+  Witch: filter out nodes below 0.15 feasibility
+
+Hero sorts by:  feasibility score (most winnable first)
+Witch sorts by: priority (hero-held > neutral > threatened, then distance)
+```
+
+When scoring is ≤2 rounds away and a node has feasibility ≥0.6, the hero AI can send 2 units to that node for a stronger claim.

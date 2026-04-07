@@ -66,6 +66,32 @@ describe('replay finalEntities — Entity getter-only properties', () => {
     }, TypeError, 'assigning to getter-only alive should throw');
   });
 
+  test('serializeState omits alive — plain entities used as finalEntities are invisible to renderer', () => {
+    // serializeState intentionally omits `alive` (Entity derives it from hp).
+    // When these plain objects are used as finalEntities during replay, the
+    // renderer checks `entity.alive` and skips entities where it's undefined.
+    const gs = new GameState(true, true);
+    const snap = serializeState(gs);
+
+    // Simulate the replay path: JSON-parsed preState entities are plain objects
+    const plainEntities = snap.entities;
+    for (const e of plainEntities) {
+      assert.equal(e.alive, undefined,
+        `serializeState should omit alive, but entity ${e.id} has alive=${e.alive}`);
+      // This is the bug: renderer does `if (!entity.alive) continue;` which
+      // skips all entities because undefined is falsy.
+      assert.ok(e.hp > 0, 'entity should be alive by hp');
+    }
+
+    // After _patchAlive, entities should have alive = true
+    for (const e of plainEntities) {
+      if (e.alive === undefined) e.alive = e.hp > 0;
+    }
+    for (const e of plainEntities) {
+      assert.equal(e.alive, true, 'patched entity should have alive = true');
+    }
+  });
+
   test('stripping getter-derived props before Object.assign succeeds', () => {
     const entity = Object.create(Entity.prototype);
     Object.assign(entity, {

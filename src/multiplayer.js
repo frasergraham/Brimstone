@@ -10,8 +10,9 @@ import { registerPushNotifications, unregisterPushToken } from './platform.js';
 
 // ── Reconnect constants ──────────────────────────────────────────────────────
 
-const RECONNECT_BASE_MS   = 3000;
-const RECONNECT_MAX_TRIES = 3;
+const RECONNECT_BASE_MS       = 3000;
+const RECONNECT_MAX_TRIES     = 3;
+const RECONNECT_HARD_TIMEOUT  = 30_000; // absolute wall-clock limit for all reconnect attempts
 
 // ── MirrorEntity ─────────────────────────────────────────────────────────────
 
@@ -139,6 +140,7 @@ export class MultiplayerClient {
     this._pendingBattle = null; // battle result waiting to be shown after server state arrives
     this._reconnectAttempt = 0;
     this._reconnectTimer   = null;
+    this._reconnectDeadline = 0;   // hard wall-clock limit for reconnection attempts
     this._boundOnClose     = null; // stored so we can removeEventListener before replacing the WS
   }
 
@@ -166,6 +168,7 @@ export class MultiplayerClient {
     this.active = false;
     if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
     this._reconnectAttempt = 0;
+    this._reconnectDeadline = 0;
     this._ws?.close();
   }
 
@@ -187,8 +190,17 @@ export class MultiplayerClient {
   /** Create a new game lobby. config: { fog, mapSize, playersPerSide, isPrivate } */
   createLobby(config = {}) { this._send({ type: 'createLobby', ...config }); }
 
-  /** Join a lobby by room ID (public) or 6-char code (private). */
-  joinLobby(codeOrId)      { this._send({ type: 'joinLobby', codeOrId }); }
+  /** Join a lobby by room ID (public) or 6-char code (private). Optional slotIndex for invite deep-links. */
+  joinLobby(codeOrId, slotIndex) {
+    const msg = { type: 'joinLobby', codeOrId };
+    if (slotIndex != null) msg.slotIndex = slotIndex;
+    this._send(msg);
+  }
+
+  /** Claim (or switch to) an empty slot in the lobby. */
+  claimSlot(roomId, slotIndex) {
+    this._send({ type: 'claimSlot', roomId, slotIndex });
+  }
 
   /** Join an active game during round 1 (late join). Uses room ID or code. */
   joinGame(codeOrId)       { this._send({ type: 'joinGame', codeOrId }); }
@@ -222,6 +234,11 @@ export class MultiplayerClient {
     this._send({ type: 'sendSlotInvite', roomId, slotIndex, email });
   }
 
+  /** Send push-notification invite to a Game Center friend. */
+  sendFriendInvite(roomId, targetPlayerId) {
+    this._send({ type: 'sendFriendInvite', roomId, targetPlayerId });
+  }
+
   /** Resign from an active game. */
   resignGame(roomId) { this._send({ type: 'resignGame', roomId }); }
 
@@ -242,7 +259,7 @@ export class MultiplayerClient {
   /** Force an immediate reconnect (e.g. when returning from background). */
   reconnectNow() {
     if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
-    // Set attempt to 1 so _onOpen knows this is a reconnect and fires onReconnected
+    if (!this._reconnectDeadline) this._reconnectDeadline = Date.now() + RECONNECT_HARD_TIMEOUT;
     this._reconnectAttempt = 1;
     this._reconnect();
   }
@@ -279,26 +296,35 @@ export class MultiplayerClient {
   }
 
   _onOpen() {
-    const wasReconnecting = this._reconnectAttempt > 0;
     this._reconnectAttempt = 0;
     if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
     // Flush queued messages
     for (const str of this._queue) this._ws.send(str);
     this._queue = [];
-    if (wasReconnecting) this._opts.onReconnected?.();
+    // Note: overlay is NOT hidden here — we wait for the server's 'reconnected'
+    // message to confirm we actually rejoined the room (see _route).
   }
 
   _onClose() {
     if (this.active) {
       this._opts.onDisconnected?.();
       this._scheduleReconnect();
+    } else if (this._player) {
+      // Menu-level disconnect: silently re-establish connection so lobby
+      // actions keep working. No overlay shown.
+      this._reconnect();
     }
   }
 
   _scheduleReconnect() {
-    if (this._reconnectAttempt >= RECONNECT_MAX_TRIES) {
+    // Start the hard deadline on first disconnect
+    if (!this._reconnectDeadline) {
+      this._reconnectDeadline = Date.now() + RECONNECT_HARD_TIMEOUT;
+    }
+    if (this._reconnectAttempt >= RECONNECT_MAX_TRIES || Date.now() >= this._reconnectDeadline) {
       this._opts.onDisconnectFatal?.('Unable to reconnect to the server.');
       this._reconnectAttempt = 0;
+      this._reconnectDeadline = 0;
       return;
     }
     const delay = RECONNECT_BASE_MS * (2 ** this._reconnectAttempt);
@@ -309,9 +335,14 @@ export class MultiplayerClient {
   }
 
   _reconnect() {
-    if (!this._player) return;
-    const url = this._ws?.url;
-    if (!url) return;
+    if (!this._player || !this._ws?.url) {
+      // Unrecoverable — can't reconnect without credentials or server URL
+      this._reconnectAttempt = 0;
+      this._reconnectDeadline = 0;
+      this._opts.onDisconnectFatal?.('Unable to reconnect to the server.');
+      return;
+    }
+    const url = this._ws.url;
     this.connect(url);
     // Re-authenticate and attempt to rejoin room
     this.auth({ token: this._player.token, roomId: this.roomId });
@@ -347,7 +378,14 @@ export class MultiplayerClient {
         break;
 
       case 'authError':
-        this._opts.onError?.(msg.message);
+        if (this.active) {
+          // Auth failed while trying to reconnect to a game — fatal
+          this.active = false;
+          this._reconnectDeadline = 0;
+          this._opts.onDisconnectFatal?.('Session expired. Please sign in again.');
+        } else {
+          this._opts.onError?.(msg.message);
+        }
         break;
 
       case 'leaderboard':
@@ -392,7 +430,9 @@ export class MultiplayerClient {
         this.roomId     = msg.roomId;
         this.isAsync    = !!msg.isAsync;
         this.active     = true;
+        this._reconnectDeadline = 0;
         this._send({ type: 'setRoom', roomId: msg.roomId });
+        this._opts.onReconnected?.();
         break;
 
       case 'playerSubmitted':

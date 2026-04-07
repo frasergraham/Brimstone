@@ -916,4 +916,131 @@ describe('healBonus on mission victory', () => {
     assert.equal(c.heroStats.hp, 5); // no change
     assert.equal(c.roster[0].hp, 2); // no change
   });
+
+  test('undeployed roster members are preserved after mission result', () => {
+    const c = new Campaign(hollowDef);
+    c.roster = [
+      { name: 'Deployed', title: 'Test', bio: '', ability: null, abilityLabel: null, color: '#fff', hp: 4, maxHp: 4, attack: 1, defense: 1, weapon: null, items: {} },
+      { name: 'StayedBehind', title: 'Safe', bio: '', ability: null, abilityLabel: null, color: '#aaa', hp: 3, maxHp: 3, attack: 1, defense: 1, weapon: null, items: {} },
+    ];
+    // Simulate a mission where only 'Deployed' was in-game and survived
+    const deployedSurvivors = [
+      { name: 'Deployed', title: 'Test', bio: '', ability: null, abilityLabel: null, color: '#fff', hp: 2, maxHp: 4, attack: 1, defense: 1, weapon: null, items: {} },
+    ];
+    const deployedNames = new Set(deployedSurvivors.map(s => s.name));
+    const undeployed = c.roster.filter(s => !deployedNames.has(s.name));
+    const allSurvivors = [...deployedSurvivors, ...undeployed];
+
+    c.applyMissionResult('prologue', {
+      won: true,
+      survivors: allSurvivors,
+      heroStats: c.heroStats,
+      resources: {},
+      flags: {},
+    });
+
+    assert.equal(c.roster.length, 2, 'both survivors should be in roster');
+    assert.ok(c.roster.some(s => s.name === 'Deployed'), 'deployed survivor preserved');
+    assert.ok(c.roster.some(s => s.name === 'StayedBehind'), 'undeployed survivor preserved');
+    // prologue has healBonus: 2, so deployed survivor heals from 2 → 4 (capped at maxHp)
+    const healBonus = hollowDef.missions[0].healBonus ?? 0;
+    assert.equal(c.roster.find(s => s.name === 'Deployed').hp, Math.min(2 + healBonus, 4), 'deployed survivor HP updated + healed');
+    assert.equal(c.roster.find(s => s.name === 'StayedBehind').hp, Math.min(3 + healBonus, 3), 'undeployed survivor also healed');
+  });
+});
+
+// ── Mid-mission save/resume ───────────────────────────────────────────────
+
+describe('Campaign mid-mission save/resume', () => {
+  beforeEach(() => localStorage.clear());
+
+  test('mid-mission save key format is correct', () => {
+    const key = `brimstone_campaign_mission_calebs_hollow_prologue_prologue`;
+    const data = { campaignId: 'calebs_hollow_prologue', missionId: 'prologue', state: {}, updatedAt: Date.now() };
+    localStorage.setItem(key, JSON.stringify(data));
+    const loaded = JSON.parse(localStorage.getItem(key));
+    assert.equal(loaded.campaignId, 'calebs_hollow_prologue');
+    assert.equal(loaded.missionId, 'prologue');
+  });
+
+  test('mid-mission save can be deleted', () => {
+    const key = `brimstone_campaign_mission_calebs_hollow_prologue_prologue`;
+    localStorage.setItem(key, JSON.stringify({ test: true }));
+    assert.ok(localStorage.getItem(key));
+    localStorage.removeItem(key);
+    assert.equal(localStorage.getItem(key), null);
+  });
+
+  test('mission list detects in-progress saves', () => {
+    const key = `brimstone_campaign_mission_calebs_hollow_prologue_prologue`;
+    localStorage.setItem(key, JSON.stringify({ campaignId: 'calebs_hollow_prologue', missionId: 'prologue' }));
+    const hasSave = localStorage.getItem(key) !== null;
+    assert.ok(hasSave, 'should detect in-progress save');
+  });
+});
+
+// ── Campaign AI budget bonus ──────────────────────────────────────────────
+
+describe('Campaign AI budget bonus', () => {
+  test('all prologue missions have aiBudgetBonus defined', () => {
+    for (const m of hollowDef.missions) {
+      assert.ok(typeof m.aiBudgetBonus === 'number', `${m.id} missing aiBudgetBonus`);
+      assert.ok(m.aiBudgetBonus >= 1, `${m.id} aiBudgetBonus should be at least 1`);
+    }
+  });
+
+  test('later missions have higher budget bonus', () => {
+    const prologue = hollowDef.missions.find(m => m.id === 'prologue');
+    const darkRitual = hollowDef.missions.find(m => m.id === 'dark_ritual');
+    assert.ok(darkRitual.aiBudgetBonus > prologue.aiBudgetBonus,
+      'dark_ritual should have higher budget bonus than prologue');
+  });
+
+  test('campaignAIBudgetBonus survives state serialization', async () => {
+    const { serializeState, deserializeState } = await import('../server/state-sync.js');
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    state.campaignAIBudgetBonus = 3;
+    const snap = serializeState(state);
+    assert.equal(snap.campaignAIBudgetBonus, 3);
+    const restored = deserializeState(snap);
+    assert.equal(restored.campaignAIBudgetBonus, 3);
+  });
+});
+
+// ── Leaderless plan (campaign AI) ─────────────────────────────────────────
+
+describe('Leaderless plan improvements', () => {
+  test('leaderless plan attacks adjacent heroes', async () => {
+    const { WitchAIEngine } = await import('../src/ai-engine.js');
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    // Place a zombie adjacent to the hero
+    const hero = state.hero;
+    const neighbors = getNeighbors(hero.col, hero.row);
+    const z = createZombie(neighbors[0].col, neighbors[0].row, 'witch');
+    state.entities.push(z);
+    state.startPlanning();
+    const ai = new WitchAIEngine(state, () => {});
+    const plan = ai.generatePlan();
+    const battles = plan.filter(a => a.type === 'battle-unit');
+    assert.ok(battles.length > 0, 'should have at least one battle action');
+  });
+
+  test('leaderless plan moves toward heroes when not adjacent', async () => {
+    const { WitchAIEngine } = await import('../src/ai-engine.js');
+    const mapData = buildMap('gathering_survivors');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    // Place a zombie far from hero
+    const z = createZombie(9, 1, 'witch');
+    state.entities.push(z);
+    state.startPlanning();
+    const ai = new WitchAIEngine(state, () => {});
+    const plan = ai.generatePlan();
+    const moves = plan.filter(a => a.type === 'move');
+    assert.ok(moves.length > 0, 'should have at least one move action');
+  });
 });

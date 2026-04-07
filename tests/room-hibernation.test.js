@@ -4,7 +4,7 @@ import { describe, test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import db from '../server/db.js';
 import {
-  createLobby, fillAllWithAI, startGame,
+  createLobby, fillAllWithAI, startGame, claimSlot,
   resumeGame, getRooms, getRoom, getActiveRoomsForPlayer,
 } from '../server/lobby.js';
 import { getSave } from '../server/saves.js';
@@ -45,6 +45,7 @@ function createTestGame(playerId = 'test-hibernate-p1') {
   });
   const lobbyMsg = ws.findMsg('lobbyJoined');
   const roomId = lobbyMsg.lobby.id;
+  claimSlot(playerId, roomId, 0);
   fillAllWithAI(playerId, roomId);
   startGame(playerId, roomId);
   const matchMsg = ws.findMsg('matchFound');

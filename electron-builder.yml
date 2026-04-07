@@ -29,6 +29,7 @@ files:
       - "!node_modules/undici/**"
       - "!node_modules/https-proxy-agent/**"
       - "!node_modules/sharp/**"
+      - "!assets/generated/**"
   - "server/resolver.js"
   - "server/state-sync.js"
 

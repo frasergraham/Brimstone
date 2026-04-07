@@ -10,7 +10,7 @@ import {
   registerOrLogin, getPlayerByToken, getPlayerByEmail,
   linkEmail, loginByEmail, getPlayerIdentities, changeUsername,
   getOrCreateByEmail, getOrCreateByGameCenter, linkGameCenter,
-  setAdmin,
+  getPlayersByGameCenterIds, setAdmin,
 } from './server/auth.js';
 import { generateToken, verifyToken, sendMagicLinkEmail } from './server/magic-link.js';
 import { getLeaderboard }                    from './server/leaderboard.js';
@@ -24,8 +24,9 @@ import { pruneStaleAndIncompatibleSaves,
          pruneExpiredCompletedGames, getAllCompletedGames,
          getSaveRounds }                                   from './server/saves.js';
 import {
-  createLobby, joinLobby, joinGame, browseLobby,
-  setSlotAI, removeSlotAI, fillAllWithAI, startGame, leaveLobby, resignGame, sendSlotInvite as sendSlotInviteHandler,
+  createLobby, joinLobby, joinGame, browseLobby, claimSlot,
+  setSlotAI, removeSlotAI, fillAllWithAI, startGame, leaveLobby, resignGame,
+  sendSlotInvite as sendSlotInviteHandler, sendFriendInvite as sendFriendInviteHandler,
   handleAction, handleEndTurn, handlePlanSubmit, handleNudge,
   handleDisconnect, handleReconnect,
   resumeGame, adminResumeGame,
@@ -39,6 +40,7 @@ import {
   getAsyncGamesForPlayer,
   // Unified system
   checkDeadlines, checkApproachingDeadlines, migrateAsyncGames,
+  pruneOrphanedRooms,
   broadcastPresenceForPlayer,
   setSendToPlayer,
 } from './server/lobby.js';
@@ -55,6 +57,7 @@ import { upsertDeviceToken, deleteDeviceToken, pruneStaleTokens } from './server
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT      = process.env.PORT || 3000;
+const ADMIN_OPEN = process.env.ADMIN_OPEN === '1' || process.env.ADMIN_OPEN === 'true';
 
 // ── Express ──────────────────────────────────────────────────────────────────
 
@@ -471,6 +474,21 @@ app.get('/api/identities', (req, res) => {
   res.json(getPlayerIdentities(player.id));
 });
 
+// Match Game Center friend IDs to registered Brimstone players
+app.post('/api/gc-friends', (req, res) => {
+  const token = req.body?.token || req.headers['x-token'];
+  if (!token) { res.status(401).json({ error: 'Token required.' }); return; }
+  const player = getPlayerByToken(token);
+  if (!player) { res.status(401).json({ error: 'Invalid token.' }); return; }
+
+  const { gamePlayerIDs } = req.body || {};
+  if (!Array.isArray(gamePlayerIDs)) {
+    res.status(400).json({ error: 'gamePlayerIDs array required.' });
+    return;
+  }
+  res.json(getPlayersByGameCenterIds(gamePlayerIDs));
+});
+
 // Change username (authenticated player)
 app.post('/api/account/username', (req, res) => {
   const token = req.body?.token || req.headers['x-token'];
@@ -503,6 +521,7 @@ function _requireVerifiedEmail(player, res) {
 }
 
 function _requireAdmin(req, res) {
+  if (ADMIN_OPEN) return { id: 'open', is_admin: 1 };
   const player = _requireAuth(req, res);
   if (!player) return null;
   if (!player.is_admin) {
@@ -515,6 +534,7 @@ function _requireAdmin(req, res) {
 // ── Admin status check (used by client to show/hide admin link) ──────────────
 
 app.get('/api/me/admin', (req, res) => {
+  if (ADMIN_OPEN) { res.json({ isAdmin: true }); return; }
   const player = _requireAuth(req, res);
   if (!player) return;
   res.json({ isAdmin: !!player.is_admin });
@@ -927,13 +947,21 @@ function route(ws, cs, msg) {
     // ── Lobby ─────────────────────────────────────────────────────────────
     case 'createLobby': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
-      createLobby(cs.player.id, cs.player.username, ws, msg);
+      const createdRoomId = createLobby(cs.player.id, cs.player.username, ws, msg);
+      if (createdRoomId) { cs.roomId = createdRoomId; ws._roomId = createdRoomId; }
       break;
     }
 
     case 'joinLobby': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
-      joinLobby(cs.player.id, cs.player.username, ws, msg.codeOrId);
+      const joinedRoomId = joinLobby(cs.player.id, cs.player.username, ws, msg.codeOrId, msg.slotIndex);
+      if (joinedRoomId) { cs.roomId = joinedRoomId; ws._roomId = joinedRoomId; }
+      break;
+    }
+
+    case 'claimSlot': {
+      if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
+      claimSlot(cs.player.id, msg.roomId, msg.slotIndex);
       break;
     }
 
@@ -995,6 +1023,12 @@ function route(ws, cs, msg) {
     case 'sendSlotInvite': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
       sendSlotInviteHandler(cs.player, msg.roomId, msg.slotIndex, msg.email);
+      break;
+    }
+
+    case 'sendFriendInvite': {
+      if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
+      sendFriendInviteHandler(cs.player, msg.roomId, msg.targetPlayerId);
       break;
     }
 
@@ -1088,7 +1122,7 @@ function route(ws, cs, msg) {
 
     // ── Admin / spectator ─────────────────────────────────────────────────
     case 'adminSpectateRoom': {
-      if (!cs.player?.is_admin) { send(ws, { type: 'error', message: 'Admin access required.' }); return; }
+      if (!ADMIN_OPEN && !cs.player?.is_admin) { send(ws, { type: 'error', message: 'Admin access required.' }); return; }
       if (!msg.roomId) { send(ws, { type: 'error', message: 'roomId required.' }); return; }
       const joined = subscribeSpectator(msg.roomId, ws);
       if (!joined) {
@@ -1100,7 +1134,7 @@ function route(ws, cs, msg) {
     }
 
     case 'adminUnspectateRoom': {
-      if (!cs.player?.is_admin) { send(ws, { type: 'error', message: 'Admin access required.' }); return; }
+      if (!ADMIN_OPEN && !cs.player?.is_admin) { send(ws, { type: 'error', message: 'Admin access required.' }); return; }
       const rid = msg.roomId;
       if (rid) {
         unsubscribeSpectator(ws, rid);
@@ -1150,4 +1184,5 @@ server.listen(PORT, () => {
   checkDeadlines(); // catch any unified deadlines that expired while server was down
   setInterval(checkDeadlines, 30_000); // check every 30 seconds
   setInterval(checkApproachingDeadlines, 60_000); // check approaching deadlines every minute
+  setInterval(pruneOrphanedRooms, 30_000); // clean up orphaned rooms every 30 seconds
 });

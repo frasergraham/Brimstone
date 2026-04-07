@@ -318,6 +318,10 @@ canvas { touch-action: pan-x pan-y; }
 .setup-card-wide {
   width: min(600px, 96vw);
 }
+/* ── Lobby card — slightly wider than default to fit 2-column slots ──── */
+.setup-card-lobby {
+  width: min(520px, 96vw);
+}
 
 /* ── Setup card scroll for tall content ─────────────────────────────────── */
 .setup-card {
@@ -552,6 +556,60 @@ canvas { touch-action: pan-x pan-y; }
   border-radius: 4px;
 }
 
+/* Unassigned players section */
+.lobby-unassigned {
+  background: rgba(218,165,32,0.08);
+  border: 1px dashed rgba(218,165,32,0.3);
+  border-radius: 6px;
+  padding: 0.6rem 0.7rem;
+  margin-bottom: 0.75rem;
+  text-align: center;
+}
+.lobby-unassigned-label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--clr-gold, #daa520);
+  margin-bottom: 0.4rem;
+}
+.lobby-unassigned-players {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.4rem;
+}
+.lobby-unassigned-chip {
+  display: inline-block;
+  font-size: 0.82rem;
+  color: var(--text);
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 12px;
+  padding: 0.2rem 0.6rem;
+}
+.lobby-unassigned-chip.you {
+  border-color: var(--clr-gold, #daa520);
+  color: var(--clr-gold, #daa520);
+}
+.lobby-unassigned-chip em {
+  color: var(--text-dim);
+  font-size: 0.75rem;
+}
+
+/* Claimable (empty) slot — whole row clickable to join/switch */
+.lobby-slot-row.claimable {
+  cursor: pointer;
+  border: 1px dashed rgba(255,255,255,0.15);
+  border-radius: 4px;
+  padding: 0.25rem 0.4rem;
+  margin-bottom: 0.3rem;
+  transition: border-color 0.15s, background 0.15s;
+}
+.lobby-slot-row.claimable:hover {
+  border-color: var(--clr-gold, #daa520);
+  background: rgba(218,165,32,0.08);
+}
+
 /* ── How to Play body ────────────────────────────────────────────────────── */
 .howtoplay-body {
   text-align: left;
@@ -765,8 +823,8 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .end-turn-header.planning-active.countdown-urgent {
   animation: btn-pulse 0.5s ease-in-out infinite alternate;
 }
-/* Hide header submit when plan panel is expanded (but keep menu button visible after submission) */
-.end-turn-header.plan-open:not(.plan-was-submitted) {
+/* Hide header submit when plan panel is expanded */
+.end-turn-header.plan-open {
   display: none;
 }
 
@@ -901,6 +959,18 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .cycle-active.phase-day   { background: rgba(245,200,66,0.15); color: var(--day);   border-color: var(--day); }
 .cycle-active.phase-dusk  { background: rgba(180,60,0,0.20);   color: #ff7744;      border-color: #c04020; }
 .cycle-active.phase-night { background: rgba(123,79,187,0.20); color: var(--night); border-color: var(--night); }
+
+.cycle-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+  pointer-events: none;
+}
+.cycle-active .cycle-icon {
+  width: 28px;
+  height: 28px;
+}
 
 .cycle-name {
   font-size: 0.6rem;
@@ -1158,6 +1228,7 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   z-index: 10;
   /* Hide on genuine touch-only devices (shown again if mouse is detected) */
   pointer-events: auto;
+  transition: left 0.2s ease;
 }
 
 .zoom-btn {
@@ -1218,11 +1289,26 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   }
 }
 
+/* ── Chronicle toggle (top-left, independent of zoom controls) ─────────── */
+
+.chronicle-toggle-btn {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 11;
+  transition: left 0.2s ease;
+}
+
+/* Shift map controls right when AI debug panel is open */
+.ai-debug-open .zoom-controls     { left: 272px; }
+.ai-debug-open .chronicle-toggle-btn { left: 268px; }
+.ai-debug-open #chronicle-mini    { left: 268px; }
+
 /* ── Mini chronicle (top-left HUD) ──────────────────────────────────────── */
 
 #chronicle-mini {
   position: absolute;
-  top: 8px;
+  top: 50px;
   left: 8px;
   max-width: 340px;
   pointer-events: none;
@@ -1230,6 +1316,7 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   display: flex;
   flex-direction: column;
   gap: 2px;
+  transition: left 0.2s ease;
 }
 .chronicle-mini-btn {
   pointer-events: auto;
@@ -1284,22 +1371,11 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .chronicle-sidebar-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0.55rem 0.75rem;
+  gap: 0.5rem;
+  padding: 0.4rem 0.75rem;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
-
-#chronicle-sidebar-close {
-  background: none;
-  border: none;
-  color: var(--text-dim);
-  font-size: 1.1rem;
-  cursor: pointer;
-  padding: 0.15rem 0.4rem;
-  line-height: 1;
-}
-#chronicle-sidebar-close:hover { color: var(--text-bright); }
 
 #chronicle-sidebar-log {
   flex: 1;
@@ -2660,6 +2736,47 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   /* Game menu: 44px touch targets */
   .game-menu-btn { min-height: 44px; display: flex; align-items: center; justify-content: center; }
 
+  /* Lobby: stack faction columns vertically on narrow screens */
+  .lobby-factions {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+  .lobby-faction-col {
+    padding: 0.5rem 0.6rem;
+  }
+  .lobby-slot-row {
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+  .lobby-slot-actions {
+    flex-basis: 100%;
+    flex-wrap: wrap;
+  }
+  .lobby-personality-select {
+    max-width: none;
+    flex: 1;
+  }
+
+  /* Invite popup: full-width on mobile */
+  .slot-invite-popup {
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .slot-invite-popup input[type="email"] {
+    width: 100%;
+    box-sizing: border-box;
+    font-size: 1rem;
+    min-height: 44px;
+  }
+  .slot-invite-popup .setup-btn {
+    min-height: 44px;
+  }
+
+  /* Unassigned section tighter on mobile */
+  .lobby-unassigned {
+    padding: 0.5rem;
+  }
+
 }
 
 /* ── Online / Multiplayer ─────────────────────────────────────────────────── */
@@ -2882,6 +2999,28 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   background: var(--bg-panel); border: 1px solid var(--border);
   border-radius: 4px; padding: 0.5rem;
   margin-top: 0.3rem; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+}
+
+/* Game Center friends section inside invite popup */
+.gc-friends-section {
+  max-height: 8rem; overflow-y: auto;
+  margin-bottom: 0.4rem; padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+.gc-friends-loading {
+  font-size: 0.75rem; color: var(--text-dim); font-style: italic;
+}
+.gc-friend-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.15rem 0; gap: 0.3rem;
+}
+.gc-friend-name {
+  font-size: 0.8rem; color: var(--text); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; flex: 1;
+}
+.gc-friend-invite-btn {
+  font-size: 0.7rem !important; padding: 0.15rem 0.5rem !important;
+  flex-shrink: 0;
 }
 
 /* Clickable joinable game entries */
@@ -3592,7 +3731,7 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 /* ── Nudge toast ─────────────────────────────────────────────────────── */
 .nudge-toast {
   position: absolute;
-  top: 3.5rem;
+  top: 33%;
   left: 50%;
   transform: translateX(-50%);
   background: rgba(40, 30, 20, 0.92);
@@ -3606,6 +3745,30 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   transition: opacity 0.6s;
 }
 .nudge-toast-out { opacity: 0; }
+
+/* ── Plan toast (budget / cap warnings) ──────────────────────────────── */
+.plan-toast {
+  position: absolute;
+  top: 33%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(60, 30, 10, 0.94);
+  color: #f0d090;
+  border: 1px solid rgba(200, 140, 40, 0.5);
+  padding: 0.45rem 1.1rem;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  pointer-events: none;
+  z-index: 900;
+  opacity: 1;
+  transition: opacity 0.6s;
+  animation: plan-toast-in 0.2s ease;
+}
+.plan-toast-out { opacity: 0; }
+@keyframes plan-toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
 
 /* ── Plan food row ────────────────────────────────────────────────────── */
 .plan-food-row {
@@ -4515,6 +4678,32 @@ body.spectator-mode #game-screen   { display: flex !important; }
   font-size: 0.8rem;
   color: var(--clr-dim, #888);
 }
+.campaign-mission-status.in-progress {
+  color: #e8a735;
+  font-weight: bold;
+}
+.admin-btn {
+  color: var(--clr-dim, #666) !important;
+  font-size: 0.75rem !important;
+  opacity: 0.4;
+  transition: opacity 0.2s;
+}
+.admin-btn:hover { opacity: 1; }
+.admin-add-btn {
+  display: inline-block;
+  width: 1.5rem;
+  height: 1.5rem;
+  line-height: 1.4rem;
+  text-align: center;
+  font-size: 1rem !important;
+  border-radius: 50%;
+  border: 1px solid var(--clr-dim, #666);
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  vertical-align: middle;
+  margin-left: 0.4rem;
+}
 
 .campaign-briefing {
   max-width: 480px;
@@ -4600,22 +4789,7 @@ body.spectator-mode #game-screen   { display: flex !important; }
   text-transform: capitalize;
 }
 
-.campaign-deploy-roster {
-  margin: 0.75rem 0;
-}
-
-.campaign-deploy-roster h3 {
-  font-size: 0.95rem;
-  margin-bottom: 0.4rem;
-}
-
-.campaign-survivor-pick {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.85rem;
-  cursor: pointer;
-}
+/* (campaign-deploy-roster removed — replaced by Active/Reserve roster) */
 
 /* Debrief screen */
 .debrief-stats {
@@ -4747,26 +4921,69 @@ body.spectator-mode #game-screen   { display: flex !important; }
   white-space: nowrap;
 }
 
-/* Campaign deploy picker with cards */
-.campaign-survivor-pick {
+/* ── Roster Active/Reserve sections ──────────────────────────────────── */
+.roster-section-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0.5rem 0 0.25rem;
+  padding-bottom: 0.15rem;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.roster-section-label.active-label { color: var(--clr-gold, #d4a72c); }
+.roster-section-label.reserve-label { color: var(--clr-dim, #888); }
+.roster-count {
+  font-weight: 400;
+  font-size: 0.7rem;
+  opacity: 0.7;
+}
+.roster-row {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  font-size: 0.85rem;
-  cursor: pointer;
+  gap: 0.3rem;
+  margin-bottom: 0.2rem;
 }
-
-.campaign-survivor-pick .campaign-party-card {
+.roster-row .campaign-party-card {
   flex: 1;
-  max-width: 240px;
-  pointer-events: none;
+  max-width: none;
 }
-
-.campaign-roster-picker {
+.roster-action-btn {
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.15);
+  background: rgba(255,255,255,0.06);
+  color: #ccc;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
   display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
   align-items: center;
+  justify-content: center;
+  transition: background 0.15s, border-color 0.15s;
+  padding: 0;
+}
+.roster-action-btn:hover {
+  background: rgba(255,255,255,0.12);
+  border-color: rgba(255,255,255,0.25);
+}
+.roster-action-btn.roster-promote {
+  color: var(--clr-gold, #d4a72c);
+  border-color: rgba(212,167,44,0.3);
+}
+.roster-action-btn.roster-promote:hover {
+  background: rgba(212,167,44,0.15);
+}
+.roster-action-btn.roster-demote {
+  color: var(--clr-dim, #999);
+}
+.roster-empty {
+  font-size: 0.75rem;
+  color: var(--clr-dim, #666);
+  font-style: italic;
+  padding: 0.2rem 0;
 }
 
 /* Debrief heal bonus */

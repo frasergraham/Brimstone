@@ -1,5 +1,5 @@
 // Entry point: wires all modules, setup screen flow, resize
-import { onInactiveChange, tryGameCenterAuth, isNativeMobile, refreshPushToken } from './platform.js'; // must be first — sets server globals for Capacitor builds
+import { onInactiveChange, tryGameCenterAuth, isNativeMobile, refreshPushToken, loadGameCenterFriends, shareInvite } from './platform.js'; // must be first — sets server globals for Capacitor builds
 import { AppMode, getMode, setMode, isInGame, isAnimating, shouldBufferMessages, onModeChange } from './app-mode.js';
 import { initServerSelector } from './server-selector.js';
 import { GameState, Player } from './game.js';
@@ -113,8 +113,23 @@ function _resetPlayback() {
   _playback.jumpToEnd = false;
 }
 
+/** Ensure plain-object entities have `alive` (omitted by serializeState, needed by renderer). */
+function _patchAlive(entities) {
+  for (const e of entities) {
+    if (e.alive === undefined) e.alive = e.hp > 0;
+  }
+  return entities;
+}
+
 // Keep UIController.appMode in sync with the centralized mode.
 onModeChange((newMode) => { if (ui) ui.appMode = newMode; });
+
+/** Return the correct base URL for shareable links (invite, join, etc.).
+ *  Inside Capacitor, location.origin is "capacitor://localhost" — useless for
+ *  links shared with other people. Use BRIMSTONE_SERVER when available. */
+function _linkOrigin() {
+  return window.BRIMSTONE_SERVER || `${location.origin}${location.pathname}`;
+}
 
 // ── Local game init ───────────────────────────────────────────────────────────
 
@@ -134,6 +149,7 @@ function _genSaveId() {
 function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
   renderer = new Renderer(canvas, state);
   renderer.resize();
+  renderer.onImagesLoaded = () => { if (ui) ui._renderTurnInfo(); };
   renderer.loadImages();
 
   ui = new UIController(canvas, state, renderer, localWitchAI, redraw, localHeroAI, autoplay);
@@ -724,6 +740,11 @@ async function _runLocalResolution(skipSummary = false) {
 
   // Persist single-player progress to localStorage
   _saveSpGame();
+
+  // Persist campaign mid-mission progress
+  if (_activeCampaign && _activeMissionDef && !state.gameOver) {
+    _saveCampaignMission();
+  }
 
   // Accumulate round for full-game replay
   if (!_autoplay) {
@@ -1667,6 +1688,7 @@ function initOnline(mirrorState, myFaction, mpClient) {
 
   renderer = new Renderer(canvas, state);
   renderer.resize();
+  renderer.onImagesLoaded = () => { if (ui) ui._renderTurnInfo(); };
   renderer.loadImages();
 
   // No local AI — all turns handled server-side
@@ -1878,6 +1900,8 @@ if (isNativeMobile) {
       if (panel) {
         panel.classList.toggle('collapsed');
         _collapseBtn.textContent = panel.classList.contains('collapsed') ? '\u25B6' : '\u25C0';
+        const wrapper = document.getElementById('canvas-wrapper');
+        if (wrapper) wrapper.classList.toggle('ai-debug-open', !panel.classList.contains('collapsed'));
         if (renderer) {
           renderer.insetLeft = panel.classList.contains('collapsed') ? 0 : 260;
           redraw();
@@ -2030,6 +2054,85 @@ document.getElementById('btn-singleplayer-back').addEventListener('click', () =>
 let _activeCampaign  = null;  // Campaign instance (persists across missions)
 let _activeMissionDef = null; // Current mission definition
 let _campaignSelectedMission = null; // Mission ID selected on campaign screen
+let _campaignUnlocked = false; // Admin: bypass mission prerequisites
+let _activeRosterIndices = []; // Indices into _activeCampaign.roster that are "active" (will deploy)
+
+// ── Campaign mid-mission save/resume ──────────────────────────────────────────
+
+function _campaignMissionSaveKey(campaignId, missionId) {
+  return `brimstone_campaign_mission_${campaignId}_${missionId}`;
+}
+
+function _saveCampaignMission() {
+  if (!_activeCampaign || !_activeMissionDef || !state) return;
+  const key = _campaignMissionSaveKey(_activeCampaign.campaignDef.id, _activeMissionDef.id);
+  const data = {
+    campaignId:     _activeCampaign.campaignDef.id,
+    saveSlot:       _activeCampaign.saveSlot,
+    missionId:      _activeMissionDef.id,
+    state:          serializeState(state),
+    roundHistory:   _roundHistory,
+    updatedAt:      Date.now(),
+  };
+  try { localStorage.setItem(key, JSON.stringify(data)); } catch {}
+}
+
+function _loadCampaignMissionSave(campaignId, missionId) {
+  const key = _campaignMissionSaveKey(campaignId, missionId);
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch { return null; }
+}
+
+function _deleteCampaignMissionSave(campaignId, missionId) {
+  const key = _campaignMissionSaveKey(campaignId, missionId);
+  try { localStorage.removeItem(key); } catch {}
+}
+
+function _resumeCampaignMission(missionId) {
+  const save = _loadCampaignMissionSave(_activeCampaign.campaignDef.id, missionId);
+  if (!save) return;
+
+  const missionDef = _activeCampaign.getMissionDef(missionId);
+  if (!missionDef) return;
+
+  _activeMissionDef = missionDef;
+  _gameStartTime = Date.now();
+  _spSaveId = null;
+
+  const existingState = deserializeState(save.state);
+  _roundHistory = save.roundHistory || [];
+
+  // Reconstruct campaign-specific state
+  existingState.victoryDelegate = buildVictoryDelegate(missionDef.objectives);
+  existingState.fogOfWar = existingState.fogOfWar || 'full';
+  if (missionDef.lootOverrides) existingState.lootOverrides = missionDef.lootOverrides;
+  if (missionDef.aiBudgetBonus) existingState.campaignAIBudgetBonus = missionDef.aiBudgetBonus;
+
+  // Hide setup, show game
+  document.getElementById('setup-screen').style.display = 'none';
+  document.getElementById('game-screen').style.display = 'flex';
+  const canvas = document.getElementById('game-canvas');
+
+  state = existingState;
+
+  // Set up AI with correct personality
+  const AIClass = WITCH_PERSONALITIES[missionDef.aiPersonality] ?? WitchAIEngine;
+  witchAI = new AIClass(state, redraw);
+  heroAI = null;
+
+  _setupLocalUI(canvas, witchAI, null, false);
+
+  // Wire mission info button
+  ui.showMissionInfoBtn(true);
+  ui.onMissionInfo = () => _showMissionInfoModal();
+
+  redraw();
+  requestAnimationFrame(() => { renderer.resize(); redraw(); });
+  _startLocalPlanningPhase();
+}
 
 function _showCampaignSelectScreen() {
   const listEl = document.getElementById('campaign-select-list');
@@ -2129,6 +2232,19 @@ function _campaignCardHTML(name, title, assetId, color, hp, maxHp, attack, defen
   </div>`;
 }
 
+function _survivorCardHTML(s, idx, actionBtn) {
+  const assetId = Renderer.survivorAssetId(s.title) || 'survivor_innkeeper';
+  const card = _campaignCardHTML(s.name, s.title, assetId, s.color || ENTITY_COLOR.survivor, s.hp, s.maxHp, s.attack, s.defense, s.abilityLabel, false);
+  if (idx == null) return card;
+  const btnHtml = actionBtn
+    ? `<button class="roster-action-btn ${actionBtn.cls}" data-idx="${idx}" title="${actionBtn.title}">${actionBtn.label}</button>`
+    : '';
+  return `<div class="roster-row" data-idx="${idx}">
+    ${card}
+    ${btnHtml}
+  </div>`;
+}
+
 function _campaignPartyHTML(heroStats, roster) {
   let html = '<div class="campaign-party">';
   // Hero card
@@ -2136,11 +2252,94 @@ function _campaignPartyHTML(heroStats, roster) {
   html += _campaignCardHTML('Hero' + weaponLabel, null, 'hero', ENTITY_COLOR.hero, heroStats.hp, heroStats.maxHp, heroStats.attack, heroStats.defense, null, true);
   // Survivor cards
   for (const s of roster) {
-    const assetId = Renderer.survivorAssetId(s.title) || 'survivor_innkeeper';
-    html += _campaignCardHTML(s.name, s.title, assetId, s.color || ENTITY_COLOR.survivor, s.hp, s.maxHp, s.attack, s.defense, s.abilityLabel, false);
+    html += _survivorCardHTML(s);
   }
   html += '</div>';
   return html;
+}
+
+/**
+ * Render the party view with Active/Reserve sections for mission deployment.
+ * Active survivors will deploy; reserve stays behind.
+ * @param {object} heroStats
+ * @param {Array} roster - full campaign roster
+ * @param {number} maxActive - max survivors in active group (from mission def)
+ */
+function _renderDeployRoster(heroStats, roster, maxActive) {
+  const rosterEl = document.getElementById('campaign-roster-summary');
+  const activeCount = _activeRosterIndices.length;
+  const canAddMore = activeCount < maxActive;
+
+  let html = '<div class="campaign-roster-label">Your Party</div>';
+
+  // Hero card (always active)
+  html += '<div class="campaign-party">';
+  const weaponLabel = heroStats.weapon ? ` (${heroStats.weapon.name || heroStats.weapon})` : '';
+  html += _campaignCardHTML('Hero' + weaponLabel, null, 'hero', ENTITY_COLOR.hero, heroStats.hp, heroStats.maxHp, heroStats.attack, heroStats.defense, null, true);
+  html += '</div>';
+
+  if (roster.length === 0) {
+    rosterEl.innerHTML = html;
+    return;
+  }
+
+  // Active section
+  if (maxActive > 0) {
+    html += `<div class="roster-section-label active-label">Active <span class="roster-count">${activeCount}/${maxActive}</span></div>`;
+    if (_activeRosterIndices.length === 0) {
+      html += '<div class="roster-empty">No survivors selected</div>';
+    }
+    for (const idx of _activeRosterIndices) {
+      const s = roster[idx];
+      if (!s) continue;
+      html += _survivorCardHTML(s, idx, { label: '−', cls: 'roster-demote', title: 'Move to reserve' });
+    }
+  }
+
+  // Reserve section
+  const reserveIndices = roster.map((_, i) => i).filter(i => !_activeRosterIndices.includes(i));
+  if (reserveIndices.length > 0 || maxActive === 0) {
+    html += `<div class="roster-section-label reserve-label">Reserve</div>`;
+    for (const idx of reserveIndices) {
+      const s = roster[idx];
+      if (!s) continue;
+      const btn = maxActive > 0 && canAddMore
+        ? { label: '+', cls: 'roster-promote', title: 'Move to active' }
+        : null;
+      html += _survivorCardHTML(s, idx, btn);
+    }
+  }
+
+  // Admin: add random survivor
+  html += `<button id="btn-admin-add-survivor" class="admin-btn admin-add-btn" title="Add random survivor (testing)" style="margin-top:0.3rem">+</button>`;
+
+  rosterEl.innerHTML = html;
+
+  // Wire +/- buttons
+  rosterEl.querySelectorAll('.roster-promote').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx);
+      if (_activeRosterIndices.length < maxActive && !_activeRosterIndices.includes(idx)) {
+        _activeRosterIndices.push(idx);
+        _renderDeployRoster(heroStats, roster, maxActive);
+      }
+    });
+  });
+  rosterEl.querySelectorAll('.roster-demote').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx);
+      _activeRosterIndices = _activeRosterIndices.filter(i => i !== idx);
+      _renderDeployRoster(heroStats, roster, maxActive);
+    });
+  });
+
+  // Admin add survivor
+  document.getElementById('btn-admin-add-survivor')?.addEventListener('click', () => {
+    const s = createSurvivor(0, 0, 'hero');
+    _activeCampaign.roster.push(snapshotSurvivor(s));
+    _activeCampaign.save();
+    _renderDeployRoster(heroStats, _activeCampaign.roster, maxActive);
+  });
 }
 
 function _renderCampaignScreen() {
@@ -2165,19 +2364,34 @@ function _renderCampaignScreen() {
     ? `<div class="campaign-resources">${resEntries.map(([k,v]) => `<span class="cr-item"><span class="cr-icon">${_RESOURCE_ICONS[k] || ''}</span><span class="cr-count">${v}</span><span class="cr-label">${k}</span></span>`).join('')}</div>`
     : '';
   rosterEl.innerHTML =
-    `<div class="campaign-roster-label">Your Party</div>` +
+    `<div class="campaign-roster-label">Your Party <button id="btn-admin-add-survivor" class="admin-btn admin-add-btn" title="Add random survivor (testing)">+</button></div>` +
     _campaignPartyHTML(_activeCampaign.heroStats, _activeCampaign.roster) +
     resourcesHtml;
 
+  document.getElementById('btn-admin-add-survivor')?.addEventListener('click', () => {
+    const s = createSurvivor(0, 0, 'hero');
+    _activeCampaign.roster.push(snapshotSurvivor(s));
+    _activeCampaign.save();
+    _renderCampaignScreen();
+  });
+
   // Mission list
   const missions = _activeCampaign.getMissionList();
+  const campaignId = _activeCampaign.campaignDef.id;
   listEl.innerHTML = missions.map(m => {
-    const cls = m.completed ? 'campaign-mission completed' : m.available ? 'campaign-mission available' : 'campaign-mission locked';
-    const icon = m.completed ? '✓' : m.available ? '→' : '🔒';
+    const unlocked = _campaignUnlocked || m.available;
+    const cls = m.completed ? 'campaign-mission completed' : unlocked ? 'campaign-mission available' : 'campaign-mission locked';
+    const icon = m.completed ? '✓' : unlocked ? '→' : '🔒';
+    const hasSave = _loadCampaignMissionSave(campaignId, m.id) !== null;
+    const statusLabel = m.completed
+      ? '<span class="campaign-mission-status">Complete</span>'
+      : hasSave
+        ? '<span class="campaign-mission-status in-progress">In Progress</span>'
+        : '';
     return `<div class="${cls}" data-mission="${m.id}">
       <span class="campaign-mission-icon">${icon}</span>
       <span class="campaign-mission-name">${m.title}</span>
-      ${m.completed ? '<span class="campaign-mission-status">Complete</span>' : ''}
+      ${statusLabel}
     </div>`;
   }).join('');
 
@@ -2205,6 +2419,21 @@ function _showMissionBriefing(missionId) {
   document.getElementById('campaign-mission-title').textContent = missionDef.title;
   document.getElementById('campaign-mission-text').textContent = missionDef.briefing;
 
+  // Show Resume/Restart buttons if a mid-mission save exists
+  const hasMissionSave = _loadCampaignMissionSave(_activeCampaign.campaignDef.id, missionId) !== null;
+  const startBtn = document.getElementById('btn-start-mission');
+  const resumeBtn = document.getElementById('btn-resume-mission');
+  const restartBtn = document.getElementById('btn-restart-mission');
+  if (hasMissionSave) {
+    startBtn.style.display = 'none';
+    resumeBtn.style.display = '';
+    restartBtn.style.display = '';
+  } else {
+    startBtn.style.display = '';
+    resumeBtn.style.display = 'none';
+    restartBtn.style.display = 'none';
+  }
+
   // Objectives
   const objEl = document.getElementById('campaign-objectives');
   const winDesc = _objectiveDescription(missionDef.objectives.win);
@@ -2214,21 +2443,13 @@ function _showMissionBriefing(missionId) {
     <div class="campaign-obj"><span class="campaign-obj-icon">💀</span> <strong>Defeat:</strong> ${loseDesc}</div>
   `;
 
-  // Deploy roster (if campaign has survivors and mission allows them)
-  const deployEl = document.getElementById('campaign-deploy-roster');
-  const pickerEl = document.getElementById('campaign-roster-picker');
-  if (_activeCampaign.roster.length > 0 && missionDef.maxSurvivorsFromRoster > 0) {
-    deployEl.style.display = '';
-    pickerEl.innerHTML = _activeCampaign.roster.map((s, i) => {
-      const assetId = Renderer.survivorAssetId(s.title) || 'survivor_innkeeper';
-      return `<label class="campaign-survivor-pick">
-        <input type="checkbox" data-idx="${i}" ${i < missionDef.maxSurvivorsFromRoster ? 'checked' : ''}>
-        ${_campaignCardHTML(s.name, s.title, assetId, s.color || ENTITY_COLOR.survivor, s.hp, s.maxHp, s.attack, s.defense, s.abilityLabel, false)}
-      </label>`;
-    }).join('');
-  } else {
-    deployEl.style.display = 'none';
-  }
+  // Switch roster summary into Active/Reserve deploy mode
+  const maxActive = missionDef.maxSurvivorsFromRoster ?? 0;
+  // Default: fill active slots from the front of the roster
+  _activeRosterIndices = _activeCampaign.roster
+    .map((_, i) => i)
+    .slice(0, maxActive);
+  _renderDeployRoster(_activeCampaign.heroStats, _activeCampaign.roster, maxActive);
 }
 
 function _objectiveDescription(obj) {
@@ -2320,6 +2541,11 @@ function _initCampaignMission(missionDef) {
   state = new GameState(true, false, missionDef.mapSize, null, mapData);
   state.fogOfWar = 'full';
 
+  // Campaign AI budget bonus for harder waves
+  if (missionDef.aiBudgetBonus) {
+    state.campaignAIBudgetBonus = missionDef.aiBudgetBonus;
+  }
+
   // Apply per-mission loot table overrides
   if (missionDef.lootOverrides) {
     state.lootOverrides = missionDef.lootOverrides;
@@ -2349,11 +2575,9 @@ function _initCampaignMission(missionDef) {
     Object.assign(state.inventory.shared, res);
   }
 
-  // Deploy carried-over survivors from roster
+  // Deploy carried-over survivors from roster (uses active/reserve selection)
   if (_activeCampaign && missionDef.maxSurvivorsFromRoster > 0) {
-    const pickerEl = document.getElementById('campaign-roster-picker');
-    const checked = pickerEl ? [...pickerEl.querySelectorAll('input:checked')].map(cb => parseInt(cb.dataset.idx)) : [];
-    const toDeploy = checked.slice(0, missionDef.maxSurvivorsFromRoster);
+    const toDeploy = _activeRosterIndices.slice(0, missionDef.maxSurvivorsFromRoster);
     // Place survivors near hero start
     const heroStart = mapData.heroStart;
     const neighbors = getNeighbors(heroStart.col, heroStart.row);
@@ -2451,6 +2675,9 @@ function _initCampaignMission(missionDef) {
 function _handleCampaignMissionEnd() {
   if (!_activeCampaign || !_activeMissionDef || !state) return;
 
+  // Delete mid-mission save on completion (win or lose)
+  _deleteCampaignMissionSave(_activeCampaign.campaignDef.id, _activeMissionDef.id);
+
   // Record campaign-specific stats before cleaning up
   _recordCampaignGameStats();
 
@@ -2458,9 +2685,14 @@ function _handleCampaignMissionEnd() {
   const missionDef = _activeMissionDef;
 
   // Gather surviving survivors for roster (permadeath: dead ones are lost)
-  const survivors = state.entities
+  // Include both deployed survivors who lived AND roster members who weren't deployed
+  const deployedSurvivors = state.entities
     .filter(e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR)
     .map(e => snapshotSurvivor(e));
+  const deployedNames = new Set(deployedSurvivors.map(s => s.name));
+  // Keep roster members who weren't deployed (they stayed behind safely)
+  const undeployed = _activeCampaign.roster.filter(s => !deployedNames.has(s.name));
+  const survivors = [...deployedSurvivors, ...undeployed];
 
   // Apply mission result to campaign state
   _activeCampaign.applyMissionResult(missionDef.id, {
@@ -2529,6 +2761,22 @@ document.getElementById('btn-start-mission')   .addEventListener('click', () => 
   if (!_campaignSelectedMission) return;
   const missionDef = _activeCampaign.getMissionDef(_campaignSelectedMission);
   if (missionDef) _initCampaignMission(missionDef);
+});
+document.getElementById('btn-resume-mission')  .addEventListener('click', () => {
+  if (!_campaignSelectedMission) return;
+  _resumeCampaignMission(_campaignSelectedMission);
+});
+document.getElementById('btn-restart-mission') .addEventListener('click', () => {
+  if (!_campaignSelectedMission) return;
+  _deleteCampaignMissionSave(_activeCampaign.campaignDef.id, _campaignSelectedMission);
+  const missionDef = _activeCampaign.getMissionDef(_campaignSelectedMission);
+  if (missionDef) _initCampaignMission(missionDef);
+});
+document.getElementById('btn-admin-unlock')    .addEventListener('click', () => {
+  _campaignUnlocked = !_campaignUnlocked;
+  const btn = document.getElementById('btn-admin-unlock');
+  btn.textContent = _campaignUnlocked ? '🔒 Lock' : '🔓 Unlock All';
+  _renderCampaignScreen();
 });
 document.getElementById('btn-debrief-continue').addEventListener('click', () => {
   _showCampaignScreen();
@@ -3862,11 +4110,11 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
         const nextData = typeof rounds[i + 1].preState === 'string'
           ? JSON.parse(rounds[i + 1].preState)
           : rounds[i + 1].preState;
-        finalEntities = nextData.entities ?? preState.entities;
+        finalEntities = _patchAlive(nextData.entities ?? preState.entities);
       } else {
         // Last round: use saved post-resolution entities if present (captures actual
         // combat outcomes), otherwise fall back to preState entities.
-        finalEntities = round.finalEntities ?? preState.entities;
+        finalEntities = _patchAlive(round.finalEntities ?? preState.entities);
       }
 
       const stepsRaw = typeof round.steps === 'string' ? JSON.parse(round.steps) : round.steps;
@@ -4312,7 +4560,7 @@ document.getElementById('btn-async-copy-code')?.addEventListener('click', () => 
 
 document.getElementById('btn-async-copy-link')?.addEventListener('click', () => {
   const code = document.getElementById('async-game-code').textContent;
-  const inviteUrl = `${location.origin}${location.pathname}#invite=${encodeURIComponent(code)}`;
+  const inviteUrl = `${_linkOrigin()}#invite=${encodeURIComponent(code)}`;
   navigator.clipboard?.writeText(inviteUrl);
   const btn = document.getElementById('btn-async-copy-link');
   btn.textContent = 'Copied!';
@@ -4431,20 +4679,21 @@ let _authDialogCallback = null;
 
 function _checkGameDeepLink() {
   const hash = window.location.hash;
-  const joinMatch = hash.match(/^#join=(.+)$/);
+  const joinMatch = hash.match(/^#join=([^&]+)(?:&slot=(\d+))?$/);
   if (!joinMatch) return false;
 
   window.history.replaceState(null, '', window.location.pathname + window.location.search);
   const codeOrId = decodeURIComponent(joinMatch[1]);
+  const slotIndex = joinMatch[2] != null ? Number(joinMatch[2]) : undefined;
 
   // Ensure authenticated, then join the lobby
   const session = loadSession();
   if (session) {
-    _ensureAuthed(() => mp.joinLobby(codeOrId));
+    _ensureAuthed(() => mp.joinLobby(codeOrId, slotIndex));
   } else {
     // No session — show the auth dialog so the user can pick a username first
     _showAuthDialog(() => {
-      _ensureAuthed(() => mp.joinLobby(codeOrId));
+      _ensureAuthed(() => mp.joinLobby(codeOrId, slotIndex));
     });
   }
   return true;
@@ -4560,7 +4809,7 @@ function _renderLobby(lobby) {
 
   // Invite link — use code for private games, room ID for public
   const joinKey = (lobby.isPrivate && lobby.code) ? lobby.code : lobby.id;
-  const inviteUrl = `${location.origin}${location.pathname}#join=${encodeURIComponent(joinKey)}`;
+  const inviteUrl = `${_linkOrigin()}#join=${encodeURIComponent(joinKey)}`;
   const copyBtn = document.getElementById('btn-lobby-copy-link');
   const copiedEl = document.getElementById('lobby-link-copied');
   copiedEl.style.display = 'none';
@@ -4584,6 +4833,20 @@ function _renderLobby(lobby) {
     });
   });
 
+  // Share button (iOS native only) — add/remove dynamically
+  const linkWrap = document.getElementById('lobby-invite-link-wrap');
+  linkWrap?.querySelector('.lobby-share-btn')?.remove();
+  if (isNativeMobile && linkWrap) {
+    const shareBtn = document.createElement('button');
+    shareBtn.className = 'setup-btn lobby-share-btn';
+    shareBtn.style.cssText = 'font-size:0.8rem;margin-left:0.3rem';
+    shareBtn.textContent = '↗ Share';
+    shareBtn.addEventListener('click', () => {
+      shareInvite("Join my game of Caleb's Hollow!", inviteUrl);
+    });
+    linkWrap.insertBefore(shareBtn, copiedEl);
+  }
+
   // Config summary
   const pps  = lobby.config?.playersPerSide ?? 1;
   const size = lobby.config?.mapSize ?? 'standard';
@@ -4592,12 +4855,33 @@ function _renderLobby(lobby) {
   document.getElementById('lobby-config-summary').textContent =
     `${pps}v${pps} · ${size.charAt(0).toUpperCase() + size.slice(1)} · ${fog}`;
 
+  // Derive state
+  const myId          = mp?.player?.id;
+  const isHost        = lobby.hostPlayerId === myId;
+  const unassigned    = lobby.unassigned || [];
+  const meUnassigned  = unassigned.some(u => u.playerId === myId);
+  const meInSlot      = lobby.slots.some(s => s.playerId === myId && s.status === 'human');
+  const canClaimSlot  = meUnassigned || meInSlot; // can click empty slots to join/switch
+
   // Slots grid
-  const myId    = mp?.player?.id;
-  const isHost  = lobby.hostPlayerId === myId;
-  const grid    = document.getElementById('lobby-slots-grid');
+  const grid = document.getElementById('lobby-slots-grid');
   grid.innerHTML = '';
 
+  // Unassigned players section
+  if (unassigned.length > 0) {
+    const unassignedSection = document.createElement('div');
+    unassignedSection.className = 'lobby-unassigned';
+    const names = unassigned.map(u => {
+      const isMe = u.playerId === myId;
+      return `<span class="lobby-unassigned-chip${isMe ? ' you' : ''}">${_esc(u.name)}${isMe ? ' <em>(you)</em>' : ''}</span>`;
+    }).join(' ');
+    unassignedSection.innerHTML =
+      `<div class="lobby-unassigned-label">Pick a side</div>` +
+      `<div class="lobby-unassigned-players">${names}</div>`;
+    grid.appendChild(unassignedSection);
+  }
+
+  // Faction columns
   const heroSlots  = lobby.slots.filter(s => s.faction === 'hero');
   const witchSlots = lobby.slots.filter(s => s.faction === 'witch');
 
@@ -4617,7 +4901,6 @@ function _renderLobby(lobby) {
         const isMe = slot.playerId === myId;
         row.innerHTML = `<span class="lobby-slot-name">${_esc(slot.name)}${isMe ? ' <em>(you)</em>' : ''}</span>`;
       } else if (slot.status === 'ai') {
-        const label = _PERSONALITY_LABELS[slot.personality] ?? 'Balanced';
         row.innerHTML = `<span class="lobby-slot-name ai-slot">🤖 ${_esc(slot.name ?? 'AI')}</span>`;
         if (isHost) {
           const removeBtn = document.createElement('button');
@@ -4629,8 +4912,19 @@ function _renderLobby(lobby) {
           row.appendChild(removeBtn);
         }
       } else {
-        // empty slot
-        row.innerHTML = `<span class="lobby-slot-name empty-slot">Waiting…</span>`;
+        // empty slot — clickable by current player to claim/switch
+        row.innerHTML = `<span class="lobby-slot-name empty-slot">Open</span>`;
+        if (canClaimSlot) {
+          row.classList.add('claimable');
+          row.addEventListener('click', (e) => {
+            // Don't trigger when clicking host action buttons inside the row
+            if (e.target.closest('.lobby-slot-actions')) return;
+            const idx = lobby.slots.indexOf(slot);
+            mp.claimSlot(lobby.id, idx);
+          });
+        }
+
+        // Host actions (invite + AI selector) — shown below the slot row
         if (isHost) {
           const slotActions = document.createElement('div');
           slotActions.className = 'lobby-slot-actions';
@@ -4654,8 +4948,8 @@ function _renderLobby(lobby) {
             ['random', ...personalities].map(p => {
               const isWitch = slot.faction === 'witch';
               const disabled = !isWitch && p !== 'random' && p !== 'balanced';
-              const label = p === 'random' ? 'Random' : (_PERSONALITY_LABELS[p] ?? p);
-              return `<option value="${p}"${disabled ? ' disabled style="color:#666"' : ''}>${disabled ? `${label} (soon)` : label}</option>`;
+              const lbl = p === 'random' ? 'Random' : (_PERSONALITY_LABELS[p] ?? p);
+              return `<option value="${p}"${disabled ? ' disabled style="color:#666"' : ''}>${disabled ? `${lbl} (soon)` : lbl}</option>`;
             }).join('');
           select.addEventListener('change', () => {
             if (!select.value) return;
@@ -4673,22 +4967,25 @@ function _renderLobby(lobby) {
   }
   grid.appendChild(container);
 
-  // Start button — host only; enabled when at least one human is present
-  const startBtn = document.getElementById('btn-lobby-start');
+  // Buttons — host only
+  const startBtn    = document.getElementById('btn-lobby-start');
   const populateBtn = document.getElementById('btn-lobby-populate-ai');
-  const hasEmpty = lobby.slots.some(s => s.status === 'empty');
+  const hasEmpty    = lobby.slots.some(s => s.status === 'empty');
 
   if (isHost) {
-    startBtn.style.display = '';
+    startBtn.style.display    = '';
     populateBtn.style.display = '';
-    startBtn.disabled = false;
+    // Disable start/populate while anyone is unassigned
+    const blocked = unassigned.length > 0;
+    startBtn.disabled    = blocked;
+    populateBtn.disabled = blocked;
+    populateBtn.title    = blocked ? 'All players must pick a side first' : '';
   } else {
-    // Non-host players can't start or populate AI
-    startBtn.style.display = 'none';
+    startBtn.style.display    = 'none';
     populateBtn.style.display = 'none';
   }
 
-  // Late-join hint below the buttons
+  // Hint below the buttons
   let hintEl = document.getElementById('lobby-open-slots-hint');
   if (!hintEl) {
     hintEl = document.createElement('p');
@@ -4698,7 +4995,10 @@ function _renderLobby(lobby) {
     grid.parentNode.insertBefore(hintEl, grid.nextSibling?.nextSibling);
   }
 
-  if (isHost && hasEmpty) {
+  if (unassigned.length > 0) {
+    hintEl.textContent = 'All players must pick a side before the game can start.';
+    hintEl.style.display = '';
+  } else if (isHost && hasEmpty) {
     hintEl.textContent = 'You can start now — empty slots stay open for others to join during the first turn. Unclaimed slots become AI at the deadline.';
     hintEl.style.display = '';
   } else if (!isHost) {
@@ -4714,19 +5014,31 @@ function _showSlotInvitePopup(lobby, slotIndex, faction, anchorEl) {
   document.querySelector('.slot-invite-popup')?.remove();
 
   const joinKey = (lobby.isPrivate && lobby.code) ? lobby.code : lobby.id;
-  const deepLink = `${location.origin}${location.pathname}#join=${encodeURIComponent(joinKey)}&slot=${slotIndex}`;
+  const deepLink = `${_linkOrigin()}#join=${encodeURIComponent(joinKey)}&slot=${slotIndex}`;
 
   const popup = document.createElement('div');
   popup.className = 'slot-invite-popup';
+
+  // -- GC friends section (iOS only, loaded async) --
+  let friendsSection = '';
+  if (isNativeMobile) {
+    friendsSection = '<div class="gc-friends-section"><span class="gc-friends-loading">Loading friends…</span></div>';
+  }
+
   popup.innerHTML = `
+    ${friendsSection}
     <input type="email" class="setup-input" placeholder="Email address" autocomplete="email"
            style="font-size:0.8rem;margin:0">
     <div style="display:flex;gap:0.3rem;margin-top:0.3rem">
       <button class="setup-btn primary" style="font-size:0.75rem;flex:1">Send</button>
       <button class="setup-btn" style="font-size:0.75rem;flex:1">Copy Link</button>
+      ${isNativeMobile ? '<button class="setup-btn" style="font-size:0.75rem;flex:1">Share</button>' : ''}
     </div>
   `;
-  const [sendBtn, copyBtn] = popup.querySelectorAll('button');
+  const buttons = popup.querySelectorAll('button');
+  const sendBtn = buttons[0];
+  const copyBtn = buttons[1];
+  const shareBtn = isNativeMobile ? buttons[2] : null;
   const emailInput = popup.querySelector('input');
 
   sendBtn.addEventListener('click', () => {
@@ -4744,8 +5056,19 @@ function _showSlotInvitePopup(lobby, slotIndex, faction, anchorEl) {
     setTimeout(() => popup.remove(), 1500);
   });
 
+  if (shareBtn) {
+    shareBtn.addEventListener('click', () => {
+      shareInvite("Join my game of Caleb's Hollow!", deepLink);
+    });
+  }
+
   anchorEl.parentElement.appendChild(popup);
   emailInput.focus();
+
+  // -- Load GC friends async --
+  if (isNativeMobile) {
+    _loadFriendsIntoPopup(popup, lobby);
+  }
 
   // Close on outside click
   const dismiss = (e) => {
@@ -4755,6 +5078,56 @@ function _showSlotInvitePopup(lobby, slotIndex, faction, anchorEl) {
     }
   };
   setTimeout(() => document.addEventListener('click', dismiss), 0);
+}
+
+/** Async helper: fetch GC friends, match against server, render into popup. */
+async function _loadFriendsIntoPopup(popup, lobby) {
+  const section = popup.querySelector('.gc-friends-section');
+  if (!section) return;
+
+  try {
+    const gcFriends = await loadGameCenterFriends();
+    // If popup was removed while we were loading, bail out
+    if (!popup.isConnected) return;
+
+    if (gcFriends.length === 0) {
+      section.remove();
+      return;
+    }
+
+    // Match GC IDs against registered Brimstone players
+    const base = window.BRIMSTONE_SERVER || '';
+    const session = JSON.parse(localStorage.getItem('brimstone_session') || 'null');
+    const res = await fetch(`${base}/api/gc-friends`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-token': session?.token || '' },
+      body: JSON.stringify({ gamePlayerIDs: gcFriends.map(f => f.gamePlayerID) }),
+    });
+    if (!popup.isConnected) return;
+
+    if (!res.ok) { section.remove(); return; }
+    const matches = await res.json();
+    if (!matches.length) { section.remove(); return; }
+
+    section.innerHTML = '';
+    for (const friend of matches) {
+      const row = document.createElement('div');
+      row.className = 'gc-friend-row';
+      row.innerHTML = `<span class="gc-friend-name">${_esc(friend.username)}</span>`;
+      const btn = document.createElement('button');
+      btn.className = 'setup-btn primary gc-friend-invite-btn';
+      btn.textContent = 'Invite';
+      btn.addEventListener('click', () => {
+        mp.sendFriendInvite(lobby.id, friend.playerId);
+        btn.textContent = 'Invited!';
+        btn.disabled = true;
+      });
+      row.appendChild(btn);
+      section.appendChild(row);
+    }
+  } catch {
+    section?.remove();
+  }
 }
 
 document.getElementById('btn-lobby-populate-ai').addEventListener('click', () => {
@@ -5710,6 +6083,17 @@ function _createMpClient() {
       // Ignore errors after intentional sign-out / disconnect
       if (!mp) return;
 
+      // If we're in-game and the reconnect overlay is visible, this is a
+      // fatal reconnection failure (e.g. "Game is no longer active").
+      // Wipe clean and return to the menu.
+      const reconnOverlay = document.getElementById('reconnect-overlay');
+      if (state && reconnOverlay?.style.display !== 'none') {
+        reconnOverlay.style.display = 'none';
+        _showOnlineScreen();
+        _onlineError(msg);
+        return;
+      }
+
       // Only show errors on setup screens (pre-game).
       // In-game connection errors are handled by the reconnect overlay.
       if (!state || document.getElementById('setup-screen').style.display !== 'none') {
@@ -5889,6 +6273,7 @@ function initSpectator(roomId) {
     const canvas = document.getElementById('game-canvas');
     renderer = new Renderer(canvas, mirrorState);
     renderer.resize();
+    renderer.onImagesLoaded = () => { if (ui) ui._renderTurnInfo(); };
     renderer.loadImages();
     ui = new UIController(canvas, mirrorState, renderer, null, () => renderer.draw(), null, false);
     ui.setMode(UIMode.SPECTATOR);

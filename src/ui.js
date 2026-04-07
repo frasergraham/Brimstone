@@ -8,7 +8,7 @@ import {
   ActionType, getValidActions, getVisibleEnemyHexes, getVisibleHeroHexes,
   buildFogMovementHexes,
 } from './actions.js';
-import { PlanActionType, computeGhostState, computeProjectedInventory, interleavePlan } from './planner.js';
+import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan } from './planner.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
@@ -384,8 +384,8 @@ export class UIController {
     this._el('chronicle-overlay')?.addEventListener('click', e => {
       if (e.target === this._el('chronicle-overlay')) this._setChronicleMode('none');
     });
-    this._el('chronicle-sidebar-close')?.addEventListener('click', () => {
-      this._setChronicleMode('none');
+    this._el('chronicle-sidebar-toggle')?.addEventListener('click', () => {
+      this._cycleChronicle();
     });
 
 
@@ -408,18 +408,21 @@ export class UIController {
       this.onRedraw();
     });
 
-    // Submit Plan button in header — becomes "Menu" after submission
+    // Submit Plan button in header — submit only (separate return-to-menu button)
     const _submitHandler = () => {
       if (this.state.gameOver) return;
-      if (this._planSubmitted) {
-        if (this.onReturnToMenu) this.onReturnToMenu();
-        return;
-      }
       if (this._planMode) this._doSubmitPlan();
     };
     this._el('end-turn-btn')?.addEventListener('click', _submitHandler);
     this._el('end-turn-btn')?.addEventListener('touchend', e => {
       e.preventDefault(); _submitHandler();
+    }, { passive: false });
+
+    // Return-to-menu button in header — shown only after plan submission
+    const _returnHandler = () => { if (this.onReturnToMenu) this.onReturnToMenu(); };
+    this._el('plan-return-btn')?.addEventListener('click', _returnHandler);
+    this._el('plan-return-btn')?.addEventListener('touchend', e => {
+      e.preventDefault(); _returnHandler();
     }, { passive: false });
 
     // Replay last turn button in header
@@ -520,6 +523,8 @@ export class UIController {
     if (clearBtn) clearBtn.style.display = '';
     const menuBtn = this._el('plan-menu-btn');
     if (menuBtn) menuBtn.style.display = 'none';
+    const returnBtn = this._el('plan-return-btn');
+    if (returnBtn) returnBtn.style.display = 'none';
 
     // Show replay button if there's history to replay
     const replayBtn = this._el('replay-turn-btn');
@@ -811,6 +816,35 @@ export class UIController {
   /** Add one action to the per-unit plan queue. */
   _addToPlan(action) {
     if (this._planSubmitted) return;
+
+    // ── Plan cap: 1.5× (budget + food) — prevent runaway queues ────────
+    const isFreeAction = action.type === PlanActionType.EQUIP_WEAPON
+                      || action.type === PlanActionType.USE_ITEM;
+    if (!isFreeAction) {
+      const flatPlan = interleavePlan(this._unitPlans);
+      const currentCost = flatPlan.filter(a => actionCosts(a.type)).length;
+      const foodAvailable = (this.state.inventory?.shared?.[ResourceType.FOOD] || 0);
+      const cap = Math.ceil((this._planBudget + foodAvailable) * 1.5);
+
+      if (currentCost >= cap) {
+        this._showPlanToast('Plan is full — no more actions can be added.');
+        return;
+      }
+
+      const newCost = currentCost + 1;
+      if (newCost > this._planBudget && newCost <= this._planBudget + foodAvailable) {
+        this._showPlanToast('Over budget — this action will consume food.');
+      } else if (newCost > this._planBudget + foodAvailable) {
+        this._showPlanToast('Over budget & food — this action may not execute.');
+      }
+
+      // Check if plan is now full after adding
+      if (newCost >= cap) {
+        // Defer so the "food" toast above doesn't get immediately replaced
+        setTimeout(() => this._showPlanToast('Plan is full — cap reached.'), 100);
+      }
+    }
+
     if (!this._unitPlans.has(action.entityId)) {
       this._unitPlans.set(action.entityId, []);
     }
@@ -848,6 +882,7 @@ export class UIController {
     if (this._planSubmitted) return;
     this._stopCountdown();
     this._planSubmitted = true;
+    this._clearSelection();
 
     const panel = this._el('plan-panel');
     if (panel) panel.classList.add('plan-submitted');
@@ -1919,14 +1954,14 @@ export class UIController {
 
     // 8-step cycle — shared between header and cycle-bar
     const CYCLE_STEPS = [
-      { phase: 'dawn',  icon: '🌅', label: 'Dawn',  desc: 'Hero +1 action · node scoring · attrition rises' },
-      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Witch undead in the open suffer' },
-      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Witch undead in the open suffer' },
-      { phase: 'day',   icon: '☀️',  label: 'Day',   desc: 'Witch undead in the open suffer' },
-      { phase: 'dusk',  icon: '🌇', label: 'Dusk',  desc: 'Node scoring · seek cover before night' },
-      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
-      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
-      { phase: 'night', icon: '🌙', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
+      { phase: 'dawn',  sprite: 'cycle_dawn',  label: 'Dawn',  desc: 'Hero +1 action · node scoring · attrition rises' },
+      { phase: 'day',   sprite: 'cycle_day',   label: 'Day',   desc: 'Witch undead in the open suffer' },
+      { phase: 'day',   sprite: 'cycle_day',   label: 'Day',   desc: 'Witch undead in the open suffer' },
+      { phase: 'day',   sprite: 'cycle_day',   label: 'Day',   desc: 'Witch undead in the open suffer' },
+      { phase: 'dusk',  sprite: 'cycle_dusk',  label: 'Dusk',  desc: 'Node scoring · seek cover before night' },
+      { phase: 'night', sprite: 'cycle_night', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
+      { phase: 'night', sprite: 'cycle_night', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
+      { phase: 'night', sprite: 'cycle_night', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
     ];
 
     const roundInCycle = (state.round - 1) % 8;
@@ -1938,8 +1973,12 @@ export class UIController {
     if (cycleBar) {
       cycleBar.innerHTML = CYCLE_STEPS.map((step, i) => {
         const active = i === roundInCycle;
+        const imgSrc = this.renderer.getPortraitDataURL(step.sprite, 64);
+        const iconHtml = imgSrc
+          ? `<img class="cycle-icon" src="${imgSrc}" alt="${step.label}">`
+          : step.label.charAt(0);
         return `<div class="cycle-step phase-${step.phase} ${active ? 'cycle-active' : 'cycle-dim'}"
-                     title="${step.desc}">${step.icon}${active ? `<span class="cycle-name">${step.label}</span>` : ''}</div>`;
+                     title="${step.desc}">${iconHtml}${active ? `<span class="cycle-name">${step.label}</span>` : ''}</div>`;
       }).join('');
     }
 
@@ -2072,31 +2111,42 @@ export class UIController {
 
   _renderEndTurnBtn() {
     const btn = this._el('end-turn-btn');
+    const returnBtn = this._el('plan-return-btn');
     if (!btn) return;
     const state = this.state;
 
     if (!this._planMode) {
-      // Outside planning mode, hide the button entirely
+      // Outside planning mode, hide both buttons entirely
       btn.disabled = true;
       btn.style.display = 'none';
+      if (returnBtn) returnBtn.style.display = 'none';
       return;
     }
 
-    btn.style.display = '';
-    btn.disabled = state.gameOver;
-    btn.classList.toggle('urgent', !this._planSubmitted && !state.gameOver);
-    btn.classList.add('planning-active');
-    btn.title = this._planSubmitted ? 'Return to menu' : 'Submit Plan';
-    // Let the countdown timer own the text when it's running
-    if (!this._countdownTimer && !this._graceActive) {
-      btn.textContent = this._planSubmitted ? '← Menu' : '✓ Submit';
-    }
     // Hide when plan panel is expanded (not collapsed)
     const panel = this._el('plan-panel');
     const panelOpen = panel && panel.style.display !== 'none'
                    && !panel.classList.contains('collapsed');
-    btn.classList.toggle('plan-open', !!panelOpen);
-    btn.classList.toggle('plan-was-submitted', !!this._planSubmitted);
+
+    if (this._planSubmitted) {
+      // After submission: hide submit, show return-to-menu
+      btn.style.display = 'none';
+      if (returnBtn) {
+        returnBtn.style.display = panelOpen ? 'none' : '';
+      }
+    } else {
+      // During planning: show submit, hide return-to-menu
+      btn.style.display = '';
+      btn.disabled = state.gameOver;
+      btn.classList.toggle('urgent', !state.gameOver);
+      btn.classList.add('planning-active');
+      btn.title = 'Submit Plan';
+      if (!this._countdownTimer && !this._graceActive) {
+        btn.textContent = '✓ Submit';
+      }
+      btn.classList.toggle('plan-open', !!panelOpen);
+      if (returnBtn) returnBtn.style.display = 'none';
+    }
   }
 
   _handleActionButton(button) {
@@ -2392,6 +2442,24 @@ export class UIController {
     this._speedToastTimer = setTimeout(() => {
       toast.classList.add('speed-toast-out');
     }, 1500);
+  }
+
+  /** Show a plan-related toast (food warning, plan full). */
+  _showPlanToast(text) {
+    let toast = document.getElementById('plan-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'plan-toast';
+      toast.className = 'plan-toast';
+      const wrapper = this._el('canvas-wrapper');
+      if (wrapper) wrapper.appendChild(toast);
+    }
+    toast.textContent = text;
+    toast.classList.remove('plan-toast-out');
+    clearTimeout(this._planToastTimer);
+    this._planToastTimer = setTimeout(() => {
+      toast.classList.add('plan-toast-out');
+    }, 3000);
   }
 
   /** Show a brief toast when another player nudges us. */
@@ -3062,6 +3130,9 @@ export class UIController {
     this._chronicleMode = mode;
     const sidebar = this._el('chronicle-sidebar');
     if (sidebar) sidebar.style.display = mode === 'full' ? 'flex' : 'none';
+    // Hide standalone button when full sidebar is open (button lives in sidebar header instead)
+    const standaloneBtn = this._el('chronicle-toggle');
+    if (standaloneBtn) standaloneBtn.style.display = mode === 'full' ? 'none' : '';
     this._renderMiniChronicle();
     if (mode === 'full') this._renderSidebarLog();
     // Update renderer inset so framing avoids the sidebar area

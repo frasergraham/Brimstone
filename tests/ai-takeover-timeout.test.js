@@ -4,8 +4,9 @@ import { describe, test, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import db from '../server/db.js';
 import {
-  createLobby, fillAllWithAI, startGame,
+  createLobby, joinLobby, fillAllWithAI, startGame, claimSlot,
   handlePlanSubmit, getRooms, getRoom,
+  checkTimeoutTakeoversForTest,
 } from '../server/lobby.js';
 
 function mockWs() {
@@ -53,6 +54,7 @@ describe('AI takeover after consecutive timeouts', () => {
     });
     const lobbyMsg = ws.findMsg('lobbyJoined');
     const roomId = lobbyMsg.lobby.id;
+    claimSlot(playerId, roomId, 0);
     fillAllWithAI(playerId, roomId);
     startGame(playerId, roomId);
 
@@ -71,6 +73,7 @@ describe('AI takeover after consecutive timeouts', () => {
     });
     const lobbyMsg = ws.findMsg('lobbyJoined');
     const roomId = lobbyMsg.lobby.id;
+    claimSlot(playerId, roomId, 0);
     fillAllWithAI(playerId, roomId);
     startGame(playerId, roomId);
 
@@ -84,26 +87,65 @@ describe('AI takeover after consecutive timeouts', () => {
     assert.equal(room.consecutiveTimeouts[playerId], 0);
   });
 
-  test('_checkTimeoutTakeovers triggers at 2 consecutive timeouts', () => {
+  test('last human player is never taken over by AI', () => {
     const ws = mockWs();
     const playerId = 'test-takeover-p3';
-    createLobby(playerId, 'TakeoverHero', ws, {
+    createLobby(playerId, 'LastHuman', ws, {
       playersPerSide: 1,
       mapSize: 'skirmish',
       fog: 'none',
     });
     const lobbyMsg = ws.findMsg('lobbyJoined');
     const roomId = lobbyMsg.lobby.id;
+    claimSlot(playerId, roomId, 0);
     fillAllWithAI(playerId, roomId);
     startGame(playerId, roomId);
 
     const room = getRoom(roomId);
-    // Simulate 2 consecutive timeouts
+    // Simulate 2 consecutive timeouts — normally enough for takeover
     room.consecutiveTimeouts[playerId] = 2;
 
-    // Verify the player is human before
+    checkTimeoutTakeoversForTest(room);
+
+    // Should still be human — they're the only human player
     const seat = room.players.find(s => s.playerId === playerId);
     assert.ok(seat, 'player seat should exist');
-    assert.equal(seat.isAI, false, 'should be human before takeover');
+    assert.equal(seat.isAI, false, 'last human should NOT be taken over');
+    // Counter should NOT be cleared (takeover was skipped, not performed)
+    assert.equal(room.consecutiveTimeouts[playerId], 2, 'timeout counter preserved');
+  });
+
+  test('non-last human is taken over after 2 consecutive timeouts', () => {
+    const ws1 = mockWs();
+    const ws2 = mockWs();
+    const p1 = 'test-takeover-p4';
+    const p2 = 'test-takeover-p5';
+    createLobby(p1, 'Hero1', ws1, {
+      playersPerSide: 2,
+      mapSize: 'skirmish',
+      fog: 'none',
+    });
+    const lobbyMsg = ws1.findMsg('lobbyJoined');
+    const roomId = lobbyMsg.lobby.id;
+    joinLobby(p2, 'Hero2', ws2, roomId);
+    claimSlot(p1, roomId, 0); // hero slot 1
+    claimSlot(p2, roomId, 1); // hero slot 2
+    fillAllWithAI(p1, roomId);
+    startGame(p1, roomId);
+
+    const room = getRoom(roomId);
+    // Both humans have 2 consecutive timeouts
+    room.consecutiveTimeouts[p1] = 2;
+    room.consecutiveTimeouts[p2] = 0;
+
+    // p1 is not the last human (p2 is also human), so takeover should happen
+    checkTimeoutTakeoversForTest(room);
+
+    const seat1 = room.players.find(s => s.playerId === p1);
+    assert.equal(seat1, undefined, 'p1 seat should be replaced by AI');
+    // p2 should still be human
+    const seat2 = room.players.find(s => s.playerId === p2);
+    assert.ok(seat2, 'p2 seat should still exist');
+    assert.equal(seat2.isAI, false, 'p2 should still be human');
   });
 });

@@ -3,7 +3,8 @@
 import { describe, test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import db from '../server/db.js';
-import { getAllPlayers, getAllSaves, getSaveWithState } from '../server/admin.js';
+import { getAllPlayers, getAllSaves, getSaveWithState, getAllGamesPaginated } from '../server/admin.js';
+import { createCompletedGame, deleteCompletedGame } from '../server/saves.js';
 import { upsertSave, deleteSave } from '../server/saves.js';
 import { getRooms, getRoom } from '../server/lobby.js';
 import { GameState } from '../src/game.js';
@@ -212,5 +213,77 @@ describe('admin data shape contracts', () => {
     assert.ok('updated_at' in found);
     assert.ok('created_at' in found);
     deleteSave('test-shape-save');
+  });
+});
+
+// ── getAllGamesPaginated — players array ─────────────────────────────────────
+
+describe('getAllGamesPaginated players array', () => {
+  const GAME_ID = 'test-admin-players-1';
+  const ROOM_ID = 'test-admin-players-room';
+
+  beforeEach(() => {
+    cleanUp();
+    // Clean up any leftover completed game from prior runs
+    try { db.prepare('DELETE FROM completed_games WHERE game_id = ?').run(GAME_ID); } catch {}
+    try { db.prepare('DELETE FROM completed_game_rounds WHERE game_id = ?').run(GAME_ID); } catch {}
+  });
+
+  afterEach(() => {
+    try { db.prepare('DELETE FROM completed_games WHERE game_id = ?').run(GAME_ID); } catch {}
+    try { db.prepare('DELETE FROM completed_game_rounds WHERE game_id = ?').run(GAME_ID); } catch {}
+  });
+
+  test('completed games include parsed players array with AI tags', () => {
+    const players = [
+      { playerId: 'p1', name: 'Alice', faction: 'hero', isAI: false },
+      { playerId: 'p2', name: 'Bob', faction: 'hero', isAI: false },
+      { playerId: 'p3', name: 'WitchBot', faction: 'witch', isAI: true },
+      { playerId: 'p4', name: 'EvilBot', faction: 'witch', isAI: true },
+    ];
+    createCompletedGame(GAME_ID, ROOM_ID, {
+      heroPlayerId: 'p1',
+      witchPlayerId: 'p3',
+      heroName: 'Alice',
+      witchName: 'WitchBot',
+      winner: 'hero',
+      winReason: 'Witch slain',
+      totalRounds: 10,
+      gameVersion: 'v0.0.0-test',
+      mode: '2v2',
+      playersJson: JSON.stringify(players),
+    }, []);
+
+    const result = getAllGamesPaginated({ source: 'completed_mp', limit: 100 });
+    const game = result.games.find(g => g.id === GAME_ID);
+    assert.ok(game, 'Test game should appear in results');
+
+    // Should have players array instead of just counts
+    assert.ok(Array.isArray(game.players), 'game.players should be an array');
+    assert.equal(game.players.length, 4, 'Should have all 4 players');
+
+    // Verify player details are present
+    const alice = game.players.find(p => p.name === 'Alice');
+    assert.ok(alice, 'Alice should be in players');
+    assert.equal(alice.faction, 'hero');
+    assert.equal(alice.isAI, false);
+
+    const witchBot = game.players.find(p => p.name === 'WitchBot');
+    assert.ok(witchBot, 'WitchBot should be in players');
+    assert.equal(witchBot.faction, 'witch');
+    assert.equal(witchBot.isAI, true);
+
+    // Counts should still be present
+    assert.equal(game.human_players, 2);
+    assert.equal(game.total_players, 4);
+  });
+
+  test('games without players_json get empty players array', () => {
+    const result = getAllGamesPaginated({ source: 'saved', limit: 1 });
+    // Even if no saved games, the structure should work
+    assert.ok(Array.isArray(result.games));
+    for (const g of result.games) {
+      assert.ok(Array.isArray(g.players), 'Every game should have a players array');
+    }
   });
 });

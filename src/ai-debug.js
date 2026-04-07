@@ -19,11 +19,13 @@ export const GOAL_COLORS = Object.freeze({
   BUILD_ARMY:       '#a040e0',
   GATHER_RESOURCES: '#40c070',
   DEFEND_WITCH:     '#e0c040',
+  HUNT_HEROES:      '#e06040',
   // Hero goals
   SLAY_WITCH:       '#e04040',
   EXPLORE:          '#40c070',
   FORTIFY_POSITION: '#e0a030',
   PROTECT_HERO:     '#e0c040',
+  HUNT_WITCH:       '#e04060',
   // Fallback
   'gap-fill':       '#808080',
 });
@@ -197,6 +199,8 @@ export function updateAIDebugPanel(data, entities = []) {
   if (!panel || !data) return;
 
   panel.style.display = '';
+  const wrapper = document.getElementById('canvas-wrapper');
+  if (wrapper && !panel.classList.contains('collapsed')) wrapper.classList.add('ai-debug-open');
 
   // Faction + personality header
   const factionRow = document.getElementById('ai-debug-faction-row');
@@ -290,6 +294,8 @@ export function updateAIDebugPanel(data, entities = []) {
 export function hideAIDebugPanel() {
   const panel = document.getElementById('ai-debug-panel');
   if (panel) panel.style.display = 'none';
+  const wrapper = document.getElementById('canvas-wrapper');
+  if (wrapper) wrapper.classList.remove('ai-debug-open');
 }
 
 // ── Internal helpers ────────────────────────────────────────────────────────

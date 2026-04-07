@@ -216,18 +216,17 @@
         <h2 id="campaign-mission-title" class="campaign-mission-title"></h2>
         <p id="campaign-mission-text" class="campaign-mission-text"></p>
         <div id="campaign-objectives" class="campaign-objectives"></div>
-        <div id="campaign-deploy-roster" class="campaign-deploy-roster" style="display:none">
-          <h3>Deploy Survivors</h3>
-          <div id="campaign-roster-picker" class="campaign-roster-picker"></div>
-        </div>
         <div class="setup-buttons" style="margin-top:1rem">
           <button id="btn-start-mission" class="setup-btn primary">Begin Mission</button>
+          <button id="btn-resume-mission" class="setup-btn primary" style="display:none">Resume Mission</button>
+          <button id="btn-restart-mission" class="setup-btn" style="display:none">Restart</button>
           <button id="btn-briefing-back" class="setup-btn">← Back</button>
         </div>
       </div>
       <div id="campaign-nav" class="setup-buttons" style="margin-top:1rem">
         <button id="btn-campaign-back" class="setup-btn">← Back</button>
         <button id="btn-delete-campaign" class="setup-btn" style="color:var(--clr-dim);font-size:0.85rem">Start Over</button>
+        <button id="btn-admin-unlock" class="setup-btn admin-btn">🔓 Unlock All</button>
       </div>
     </div>
 
@@ -682,7 +681,7 @@
   </div>
 
   <!-- ── Online: Game Lobby (pre-start slot management) ───────── -->
-  <div id="setup-step-lobby" class="setup-card" style="display:none">
+  <div id="setup-step-lobby" class="setup-card setup-card-lobby" style="display:none">
     <h1 class="title" style="font-size:2rem">GAME LOBBY</h1>
     <div id="lobby-code-wrap" style="display:none" class="setup-lore">
       <p>Private game — share this code:<br>
@@ -826,7 +825,8 @@
       <!-- End Turn lives in the header, next to the action diamonds -->
       <button id="mission-info-btn" class="header-icon-btn" title="Mission Info" style="display:none">📜</button>
       <button id="replay-turn-btn" class="header-icon-btn" title="Replay last turn" style="display:none">▶</button>
-      <button id="end-turn-btn" class="header-icon-btn end-turn-header" title="End Turn">↩</button>
+      <button id="end-turn-btn" class="header-icon-btn end-turn-header" title="Submit Plan">↩</button>
+      <button id="plan-return-btn" class="header-icon-btn end-turn-header" title="Return to menu" style="display:none">← Menu</button>
       <button id="menu-btn" class="header-icon-btn" title="Menu">☰</button>
     </header>
     <!-- In-game menu modal -->
@@ -848,8 +848,8 @@
       <!-- Chronicle sidebar: left panel shown in 'full' chronicle mode -->
       <div id="chronicle-sidebar" style="display:none">
         <div class="chronicle-sidebar-header">
-          <span class="chronicle-title">📜 Chronicle</span>
-          <button id="chronicle-sidebar-close" title="Close chronicle">✕</button>
+          <button id="chronicle-sidebar-toggle" class="zoom-btn" title="Toggle chronicle">…</button>
+          <span class="chronicle-title">Chronicle</span>
         </div>
         <div id="chronicle-sidebar-log"></div>
       </div>
@@ -878,9 +878,8 @@
           <button id="zoom-fit" class="zoom-btn" title="Fit map">⛶</button>
           <button id="zoom-me"  class="zoom-btn" title="Focus on my units">⊙</button>
           <button id="speed-toggle" class="zoom-btn" title="Battle speed">⚡</button>
-          <button id="chronicle-toggle" class="zoom-btn" title="Toggle chronicle">📜</button>
-          <button id="map-options-toggle" class="zoom-btn" title="Map options">⚙</button>
-          <!-- Map options popup -->
+          <!-- Map options button hidden — kept for future debug use -->
+          <button id="map-options-toggle" class="zoom-btn" title="Map options" style="display:none">⚙</button>
           <div id="map-options-popup" class="speed-popup" style="display:none">
             <label class="map-option-row">
               <input type="checkbox" id="opt-tile-images" checked>
@@ -911,6 +910,8 @@
             </button>
           </div>
         </div>
+        <!-- Chronicle toggle button — top-left of map -->
+        <button id="chronicle-toggle" class="zoom-btn chronicle-toggle-btn" title="Toggle chronicle">…</button>
         <!-- Mini chronicle: last 5 log messages, top-left overlay -->
         <div id="chronicle-mini"></div>
       </div>
