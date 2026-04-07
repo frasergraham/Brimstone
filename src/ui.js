@@ -812,20 +812,20 @@ export class UIController {
   _addToPlan(action) {
     if (this._planSubmitted) return;
 
-    // ── Plan cap: 1.5× action budget ──────────────────────────────────────
+    // ── Plan cap: 1.5× action budget (but never less than budget + food) ──
     const isFreeAction = action.type === PlanActionType.EQUIP_WEAPON
                       || action.type === PlanActionType.USE_ITEM;
     if (!isFreeAction) {
       const flatPlan = interleavePlan(this._unitPlans);
       const currentCost = flatPlan.filter(a => actionCosts(a.type)).length;
-      const cap = Math.ceil(this._planBudget * 1.5);
+      const foodAvailable = (this.state.inventory?.shared?.[ResourceType.FOOD] || 0);
+      const cap = Math.max(Math.ceil(this._planBudget * 1.5), this._planBudget + foodAvailable);
 
       if (currentCost >= cap) {
         this._showPlanToast('Plan is full — no more actions can be added.');
         return;
       }
 
-      const foodAvailable = (this.state.inventory?.shared?.[ResourceType.FOOD] || 0);
       const newCost = currentCost + 1;
       if (newCost > this._planBudget && newCost <= this._planBudget + foodAvailable) {
         this._showPlanToast('Over budget — this action will consume food.');
