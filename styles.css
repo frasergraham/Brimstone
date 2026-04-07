@@ -3001,6 +3001,28 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   margin-top: 0.3rem; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
 }
 
+/* Game Center friends section inside invite popup */
+.gc-friends-section {
+  max-height: 8rem; overflow-y: auto;
+  margin-bottom: 0.4rem; padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+.gc-friends-loading {
+  font-size: 0.75rem; color: var(--text-dim); font-style: italic;
+}
+.gc-friend-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.15rem 0; gap: 0.3rem;
+}
+.gc-friend-name {
+  font-size: 0.8rem; color: var(--text); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; flex: 1;
+}
+.gc-friend-invite-btn {
+  font-size: 0.7rem !important; padding: 0.15rem 0.5rem !important;
+  flex-shrink: 0;
+}
+
 /* Clickable joinable game entries */
 .save-entry-joinable {
   cursor: pointer; transition: border-color 0.15s;

@@ -1,5 +1,5 @@
 // Entry point: wires all modules, setup screen flow, resize
-import { onInactiveChange, tryGameCenterAuth, isNativeMobile, refreshPushToken } from './platform.js'; // must be first — sets server globals for Capacitor builds
+import { onInactiveChange, tryGameCenterAuth, isNativeMobile, refreshPushToken, loadGameCenterFriends, shareInvite } from './platform.js'; // must be first — sets server globals for Capacitor builds
 import { AppMode, getMode, setMode, isInGame, isAnimating, shouldBufferMessages, onModeChange } from './app-mode.js';
 import { initServerSelector } from './server-selector.js';
 import { GameState, Player } from './game.js';
@@ -123,6 +123,13 @@ function _patchAlive(entities) {
 
 // Keep UIController.appMode in sync with the centralized mode.
 onModeChange((newMode) => { if (ui) ui.appMode = newMode; });
+
+/** Return the correct base URL for shareable links (invite, join, etc.).
+ *  Inside Capacitor, location.origin is "capacitor://localhost" — useless for
+ *  links shared with other people. Use BRIMSTONE_SERVER when available. */
+function _linkOrigin() {
+  return window.BRIMSTONE_SERVER || `${location.origin}${location.pathname}`;
+}
 
 // ── Local game init ───────────────────────────────────────────────────────────
 
@@ -4553,7 +4560,7 @@ document.getElementById('btn-async-copy-code')?.addEventListener('click', () => 
 
 document.getElementById('btn-async-copy-link')?.addEventListener('click', () => {
   const code = document.getElementById('async-game-code').textContent;
-  const inviteUrl = `${location.origin}${location.pathname}#invite=${encodeURIComponent(code)}`;
+  const inviteUrl = `${_linkOrigin()}#invite=${encodeURIComponent(code)}`;
   navigator.clipboard?.writeText(inviteUrl);
   const btn = document.getElementById('btn-async-copy-link');
   btn.textContent = 'Copied!';
@@ -4802,7 +4809,7 @@ function _renderLobby(lobby) {
 
   // Invite link — use code for private games, room ID for public
   const joinKey = (lobby.isPrivate && lobby.code) ? lobby.code : lobby.id;
-  const inviteUrl = `${location.origin}${location.pathname}#join=${encodeURIComponent(joinKey)}`;
+  const inviteUrl = `${_linkOrigin()}#join=${encodeURIComponent(joinKey)}`;
   const copyBtn = document.getElementById('btn-lobby-copy-link');
   const copiedEl = document.getElementById('lobby-link-copied');
   copiedEl.style.display = 'none';
@@ -4825,6 +4832,20 @@ function _renderLobby(lobby) {
       setTimeout(() => { copiedEl.style.display = 'none'; }, 2000);
     });
   });
+
+  // Share button (iOS native only) — add/remove dynamically
+  const linkWrap = document.getElementById('lobby-invite-link-wrap');
+  linkWrap?.querySelector('.lobby-share-btn')?.remove();
+  if (isNativeMobile && linkWrap) {
+    const shareBtn = document.createElement('button');
+    shareBtn.className = 'setup-btn lobby-share-btn';
+    shareBtn.style.cssText = 'font-size:0.8rem;margin-left:0.3rem';
+    shareBtn.textContent = '↗ Share';
+    shareBtn.addEventListener('click', () => {
+      shareInvite("Join my game of Caleb's Hollow!", inviteUrl);
+    });
+    linkWrap.insertBefore(shareBtn, copiedEl);
+  }
 
   // Config summary
   const pps  = lobby.config?.playersPerSide ?? 1;
@@ -4993,19 +5014,31 @@ function _showSlotInvitePopup(lobby, slotIndex, faction, anchorEl) {
   document.querySelector('.slot-invite-popup')?.remove();
 
   const joinKey = (lobby.isPrivate && lobby.code) ? lobby.code : lobby.id;
-  const deepLink = `${location.origin}${location.pathname}#join=${encodeURIComponent(joinKey)}&slot=${slotIndex}`;
+  const deepLink = `${_linkOrigin()}#join=${encodeURIComponent(joinKey)}&slot=${slotIndex}`;
 
   const popup = document.createElement('div');
   popup.className = 'slot-invite-popup';
+
+  // -- GC friends section (iOS only, loaded async) --
+  let friendsSection = '';
+  if (isNativeMobile) {
+    friendsSection = '<div class="gc-friends-section"><span class="gc-friends-loading">Loading friends…</span></div>';
+  }
+
   popup.innerHTML = `
+    ${friendsSection}
     <input type="email" class="setup-input" placeholder="Email address" autocomplete="email"
            style="font-size:0.8rem;margin:0">
     <div style="display:flex;gap:0.3rem;margin-top:0.3rem">
       <button class="setup-btn primary" style="font-size:0.75rem;flex:1">Send</button>
       <button class="setup-btn" style="font-size:0.75rem;flex:1">Copy Link</button>
+      ${isNativeMobile ? '<button class="setup-btn" style="font-size:0.75rem;flex:1">Share</button>' : ''}
     </div>
   `;
-  const [sendBtn, copyBtn] = popup.querySelectorAll('button');
+  const buttons = popup.querySelectorAll('button');
+  const sendBtn = buttons[0];
+  const copyBtn = buttons[1];
+  const shareBtn = isNativeMobile ? buttons[2] : null;
   const emailInput = popup.querySelector('input');
 
   sendBtn.addEventListener('click', () => {
@@ -5023,8 +5056,19 @@ function _showSlotInvitePopup(lobby, slotIndex, faction, anchorEl) {
     setTimeout(() => popup.remove(), 1500);
   });
 
+  if (shareBtn) {
+    shareBtn.addEventListener('click', () => {
+      shareInvite("Join my game of Caleb's Hollow!", deepLink);
+    });
+  }
+
   anchorEl.parentElement.appendChild(popup);
   emailInput.focus();
+
+  // -- Load GC friends async --
+  if (isNativeMobile) {
+    _loadFriendsIntoPopup(popup, lobby);
+  }
 
   // Close on outside click
   const dismiss = (e) => {
@@ -5034,6 +5078,56 @@ function _showSlotInvitePopup(lobby, slotIndex, faction, anchorEl) {
     }
   };
   setTimeout(() => document.addEventListener('click', dismiss), 0);
+}
+
+/** Async helper: fetch GC friends, match against server, render into popup. */
+async function _loadFriendsIntoPopup(popup, lobby) {
+  const section = popup.querySelector('.gc-friends-section');
+  if (!section) return;
+
+  try {
+    const gcFriends = await loadGameCenterFriends();
+    // If popup was removed while we were loading, bail out
+    if (!popup.isConnected) return;
+
+    if (gcFriends.length === 0) {
+      section.remove();
+      return;
+    }
+
+    // Match GC IDs against registered Brimstone players
+    const base = window.BRIMSTONE_SERVER || '';
+    const session = JSON.parse(localStorage.getItem('brimstone_session') || 'null');
+    const res = await fetch(`${base}/api/gc-friends`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-token': session?.token || '' },
+      body: JSON.stringify({ gamePlayerIDs: gcFriends.map(f => f.gamePlayerID) }),
+    });
+    if (!popup.isConnected) return;
+
+    if (!res.ok) { section.remove(); return; }
+    const matches = await res.json();
+    if (!matches.length) { section.remove(); return; }
+
+    section.innerHTML = '';
+    for (const friend of matches) {
+      const row = document.createElement('div');
+      row.className = 'gc-friend-row';
+      row.innerHTML = `<span class="gc-friend-name">${_esc(friend.username)}</span>`;
+      const btn = document.createElement('button');
+      btn.className = 'setup-btn primary gc-friend-invite-btn';
+      btn.textContent = 'Invite';
+      btn.addEventListener('click', () => {
+        mp.sendFriendInvite(lobby.id, friend.playerId);
+        btn.textContent = 'Invited!';
+        btn.disabled = true;
+      });
+      row.appendChild(btn);
+      section.appendChild(row);
+    }
+  } catch {
+    section?.remove();
+  }
 }
 
 document.getElementById('btn-lobby-populate-ai').addEventListener('click', () => {

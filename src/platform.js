@@ -172,6 +172,40 @@ export async function tryGameCenterAuth() {
   return null;
 }
 
+/**
+ * Load the authenticated player's Game Center friends who also have the game.
+ * Returns [{ gamePlayerID, displayName, alias }] or [] on failure / non-iOS.
+ */
+export async function loadGameCenterFriends() {
+  if (!isNativeMobile) return [];
+  try {
+    const GameCenter = window.Capacitor?.Plugins?.GameCenterPlugin;
+    if (!GameCenter) return [];
+    const result = await GameCenter.loadFriends();
+    return result?.friends ?? [];
+  } catch (e) {
+    console.warn('[platform] Failed to load GC friends:', e);
+    return [];
+  }
+}
+
+/**
+ * Open the native iOS share sheet with the given text and URL.
+ * Returns true if the share sheet was presented, false otherwise.
+ */
+export async function shareInvite(text, url) {
+  if (!isNativeMobile) return false;
+  try {
+    const GameCenter = window.Capacitor?.Plugins?.GameCenterPlugin;
+    if (!GameCenter?.shareInvite) return false;
+    await GameCenter.shareInvite({ text, url });
+    return true;
+  } catch (e) {
+    console.warn('[platform] Share failed:', e);
+    return false;
+  }
+}
+
 // ── App background/foreground detection ─────────────────────────────────────
 // Notifies the server so it can send push notifications to backgrounded players
 // instead of assuming an open WebSocket means the player is paying attention.
@@ -276,12 +310,19 @@ export async function registerPushNotifications() {
       console.warn('[Push] Registration failed:', err);
     });
 
-    // Handle notification tap — deep-link to the game
+    // Handle notification tap — deep-link to the game or lobby
     PushNotifications.addListener('pushNotificationActionPerformed', ({ notification }) => {
-      const roomId = notification?.data?.roomId;
-      if (roomId) {
-        window.location.hash = `game=${roomId}`;
+      const joinCode = notification?.data?.joinCode;
+      if (joinCode) {
+        // Friend invite → join lobby
+        window.location.hash = `join=${joinCode}`;
         window.dispatchEvent(new HashChangeEvent('hashchange'));
+      } else {
+        const roomId = notification?.data?.roomId;
+        if (roomId) {
+          window.location.hash = `game=${roomId}`;
+          window.dispatchEvent(new HashChangeEvent('hashchange'));
+        }
       }
     });
 

@@ -31,6 +31,7 @@ import { notifyWaitingOnYou, notifyRoundReady,
          notifyDeadlineApproaching, notifyGameOver,
          notifyGameAbandoned, notifyNudge, sendGameInvite,
          shouldNotify }                          from './notifications.js';
+import { sendPush }                              from './push.js';
 import db                                  from './db.js';
 import { VERSION }                         from '../src/version.js';
 import { generateMultipleStarts }          from '../src/map.js';
@@ -1740,6 +1741,25 @@ export function sendSlotInvite(player, roomId, slotIndex, email) {
     roomId: room.id,
     code: joinKey,
     hostName: player.username ?? 'A player',
+  }).catch(() => {});
+}
+
+/**
+ * Send a push-notification invite to a Game Center friend. Host-only.
+ * The push payload includes a joinCode so the recipient deep-links into the lobby.
+ */
+export function sendFriendInvite(player, roomId, targetPlayerId) {
+  const room = rooms.get(roomId);
+  if (!room || room.status !== 'lobby') return;
+  if (room.hostPlayerId !== player.id) return;
+  if (!targetPlayerId || typeof targetPlayerId !== 'string') return;
+
+  const joinCode = room.isPrivate ? room.code : room.id;
+  sendPush(targetPlayerId, {
+    title: `${player.username ?? 'A player'} invited you!`,
+    body: "Join their game of Caleb's Hollow",
+    roomId: room.id,
+    joinCode,
   }).catch(() => {});
 }
 
