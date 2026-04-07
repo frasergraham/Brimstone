@@ -1,5 +1,14 @@
 [
   {
+    "version": "1.3.22",
+    "date": "2026-04-07",
+    "summary": "Bug fixes",
+    "notes": [
+      "Electron WS fallback to BRIMSTONE_SERVER when location.host is invalid",
+      "Game marketing blurb"
+    ]
+  },
+  {
     "version": "1.3.21",
     "date": "2026-04-07",
     "summary": "Bug fixes",

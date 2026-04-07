@@ -68,7 +68,7 @@ async function _initServerUrl() {
   if (window.electronAPI?.getServerUrl && !window.BRIMSTONE_SERVER) {
     try {
       const url = await window.electronAPI.getServerUrl();
-      if (url) _applyServerUrl(url);
+      _applyServerUrl(url || FALLBACK_SERVER);
     } catch { /* ignore */ }
   }
 
