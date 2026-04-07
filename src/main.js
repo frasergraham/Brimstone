@@ -4662,20 +4662,16 @@ function _renderLobby(lobby) {
           row.appendChild(removeBtn);
         }
       } else {
-        // empty slot — claimable by current player or host actions
+        // empty slot — clickable by current player to claim/switch
+        row.innerHTML = `<span class="lobby-slot-name empty-slot">Open</span>`;
         if (canClaimSlot) {
           row.classList.add('claimable');
-          const joinBtn = document.createElement('button');
-          joinBtn.className = 'setup-btn lobby-claim-btn';
-          joinBtn.textContent = meInSlot ? 'Switch here' : 'Join';
-          joinBtn.addEventListener('click', () => {
+          row.addEventListener('click', (e) => {
+            // Don't trigger when clicking host action buttons inside the row
+            if (e.target.closest('.lobby-slot-actions')) return;
             const idx = lobby.slots.indexOf(slot);
             mp.claimSlot(lobby.id, idx);
           });
-          row.innerHTML = `<span class="lobby-slot-name empty-slot">Open</span>`;
-          row.appendChild(joinBtn);
-        } else {
-          row.innerHTML = `<span class="lobby-slot-name empty-slot">Open</span>`;
         }
 
         // Host actions (invite + AI selector) — shown below the slot row

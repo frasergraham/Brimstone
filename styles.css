@@ -318,6 +318,10 @@ canvas { touch-action: pan-x pan-y; }
 .setup-card-wide {
   width: min(600px, 96vw);
 }
+/* ── Lobby card — slightly wider than default to fit 2-column slots ──── */
+.setup-card-lobby {
+  width: min(520px, 96vw);
+}
 
 /* ── Setup card scroll for tall content ─────────────────────────────────── */
 .setup-card {
@@ -592,7 +596,7 @@ canvas { touch-action: pan-x pan-y; }
   font-size: 0.75rem;
 }
 
-/* Claimable (empty) slot — clickable by current player */
+/* Claimable (empty) slot — whole row clickable to join/switch */
 .lobby-slot-row.claimable {
   cursor: pointer;
   border: 1px dashed rgba(255,255,255,0.15);
@@ -604,12 +608,6 @@ canvas { touch-action: pan-x pan-y; }
 .lobby-slot-row.claimable:hover {
   border-color: var(--clr-gold, #daa520);
   background: rgba(218,165,32,0.08);
-}
-.lobby-claim-btn {
-  font-size: 0.75rem;
-  padding: 0.2rem 0.5rem;
-  min-width: unset;
-  white-space: nowrap;
 }
 
 /* ── How to Play body ────────────────────────────────────────────────────── */
@@ -2777,13 +2775,6 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   /* Unassigned section tighter on mobile */
   .lobby-unassigned {
     padding: 0.5rem;
-  }
-
-  /* Claim button larger touch target on mobile */
-  .lobby-claim-btn {
-    font-size: 0.85rem;
-    padding: 0.35rem 0.7rem;
-    min-height: 36px;
   }
 
 }
