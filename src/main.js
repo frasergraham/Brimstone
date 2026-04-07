@@ -113,6 +113,14 @@ function _resetPlayback() {
   _playback.jumpToEnd = false;
 }
 
+/** Ensure plain-object entities have `alive` (omitted by serializeState, needed by renderer). */
+function _patchAlive(entities) {
+  for (const e of entities) {
+    if (e.alive === undefined) e.alive = e.hp > 0;
+  }
+  return entities;
+}
+
 // Keep UIController.appMode in sync with the centralized mode.
 onModeChange((newMode) => { if (ui) ui.appMode = newMode; });
 
@@ -3864,11 +3872,11 @@ async function _replayFullGame(rounds, winner, winReason, heroName, witchName, r
         const nextData = typeof rounds[i + 1].preState === 'string'
           ? JSON.parse(rounds[i + 1].preState)
           : rounds[i + 1].preState;
-        finalEntities = nextData.entities ?? preState.entities;
+        finalEntities = _patchAlive(nextData.entities ?? preState.entities);
       } else {
         // Last round: use saved post-resolution entities if present (captures actual
         // combat outcomes), otherwise fall back to preState entities.
-        finalEntities = round.finalEntities ?? preState.entities;
+        finalEntities = _patchAlive(round.finalEntities ?? preState.entities);
       }
 
       const stepsRaw = typeof round.steps === 'string' ? JSON.parse(round.steps) : round.steps;
