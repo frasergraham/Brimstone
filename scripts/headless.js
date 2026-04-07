@@ -338,9 +338,11 @@ function runGame() {
 // ── Render mode ───────────────────────────────────────────────────────────────
 
 if (RENDER_MODE) {
-  const { renderGameState } = await import('./game-render.js');
+  const { renderGameState, loadTilemap } = await import('./game-render.js');
   const { createCanvas, loadImage } = await import('canvas');
   const { default: GIFEncoder } = await import('gif-encoder-2');
+
+  await loadTilemap(path.join(__dirname, '..', 'assets', 'tilemap.png'));
 
   console.log(`\nBrimstone render — ${label} — cap=${MAX_ROUNDS}r\n`);
 
