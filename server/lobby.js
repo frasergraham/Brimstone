@@ -405,6 +405,43 @@ function destroyRoom(room) {
   codeToRoom.delete(room.code);
 }
 
+// ── Orphaned room cleanup ────────────────────────────────────────────────────
+
+const ORPHAN_LOBBY_AGE_MS = 60_000; // lobbies must be older than this to be pruned
+
+/**
+ * Periodic safety-net sweep that destroys or hibernates rooms with no connected
+ * humans that slipped through normal disconnect handling (e.g. host disconnected
+ * before the client sent `setRoom`).
+ */
+export function pruneOrphanedRooms() {
+  const now = Date.now();
+  for (const room of rooms.values()) {
+    if (room.status === 'lobby') {
+      // Don't prune lobbies that were just created — give the client time to connect
+      if (now - room.createdAt < ORPHAN_LOBBY_AGE_MS) continue;
+      // Check if any human slot has a live WebSocket
+      const hasLiveHuman = room.slots.some(
+        s => s.status === 'human' && s._ws && s._ws.readyState === 1
+      );
+      if (!hasLiveHuman) {
+        console.log(`[pruneOrphanedRooms] destroying orphaned lobby ${room.id} (age ${Math.round((now - room.createdAt) / 1000)}s, no live humans).`);
+        destroyRoom(room);
+      }
+    } else if (room.status === 'playing') {
+      // Playing room with no human seats (all taken over by AI) and no cleanup
+      // timer already running. Note: isAI is only set to true after AI takeover
+      // from 2 consecutive missed deadlines — idle human players in async games
+      // keep isAI=false and are NOT affected by this check.
+      const hasHuman = room.players.some(s => !s.isAI);
+      if (!hasHuman && !room.allHumansGoneTimer) {
+        console.log(`[pruneOrphanedRooms] hibernating orphaned game ${room.id} (no humans, no cleanup timer).`);
+        _hibernateRoom(room);
+      }
+    }
+  }
+}
+
 // ── Planning timer ────────────────────────────────────────────────────────────
 
 function _startPlanningTimer(room) {
@@ -793,6 +830,15 @@ function _checkTimeoutTakeovers(room) {
     if (seat.isAI) continue;
     const count = room.consecutiveTimeouts[seat.playerId] || 0;
     if (count >= 2) {
+      // Don't take over the last human player — an all-AI game with nobody
+      // watching is pointless. Let them keep playing (or the room will
+      // hibernate naturally when they disconnect).
+      const humanCount = room.players.filter(s => !s.isAI).length;
+      if (humanCount <= 1) {
+        console.log(`[room ${room.id}] ${seat.name} (${seat.playerId}) — ${count} consecutive timeouts — skipping takeover (last human).`);
+        continue;
+      }
+
       const playerName = seat.name;
       const playerId   = seat.playerId;
       console.log(`[room ${room.id}] ${playerName} (${playerId}) — ${count} consecutive timeouts — AI takeover.`);
@@ -1117,10 +1163,12 @@ export function createLobby(playerId, playerName, ws, config = {}) {
   heroSlot._ws      = ws;
 
   send(ws, { type: 'lobbyJoined', lobby: _lobbyPublic(room) });
+  return room.id;
 }
 
 /**
  * Join an existing lobby by room ID (public) or 6-char code (private).
+ * Returns the room ID on success, or null on error/redirect.
  */
 export function joinLobby(playerId, playerName, ws, codeOrId) {
   // Look up by code first, then by direct ID
@@ -1130,19 +1178,19 @@ export function joinLobby(playerId, playerName, ws, codeOrId) {
 
   if (!room || (room.status !== 'lobby' && room.status !== 'playing')) {
     send(ws, { type: 'error', message: 'Lobby not found or already started.' });
-    return;
+    return null;
   }
 
   // If the game already started, redirect to late-join flow
   if (room.status === 'playing') {
     joinGame(playerId, playerName, ws, codeOrId);
-    return;
+    return null;
   }
 
   // Prevent duplicate joins
   if (room.slots.some(s => s.playerId === playerId)) {
     send(ws, { type: 'error', message: 'You are already in this lobby.' });
-    return;
+    return null;
   }
 
   // Find first empty slot (witch side preferred for 1v1 parity, then hero)
@@ -1152,7 +1200,7 @@ export function joinLobby(playerId, playerName, ws, codeOrId) {
 
   if (!emptySlot) {
     send(ws, { type: 'error', message: 'Lobby is full.' });
-    return;
+    return null;
   }
 
   emptySlot.status   = 'human';
@@ -1162,6 +1210,7 @@ export function joinLobby(playerId, playerName, ws, codeOrId) {
 
   send(ws, { type: 'lobbyJoined', lobby: _lobbyPublic(room) });
   broadcastLobbyUpdate(room);
+  return room.id;
 }
 
 /** Return a list of public lobbies (not yet started) and active games with open slots. */
@@ -2696,6 +2745,7 @@ export function pruneAsyncGames() {
 
 /** Exported for testing only. */
 export { _serializeEvents as serializeEventsForTest };
+export { _checkTimeoutTakeovers as checkTimeoutTakeoversForTest };
 
 /** Get async games list for a player (for REST endpoint). */
 export { getAsyncGamesForPlayer };

@@ -39,6 +39,7 @@ import {
   getAsyncGamesForPlayer,
   // Unified system
   checkDeadlines, checkApproachingDeadlines, migrateAsyncGames,
+  pruneOrphanedRooms,
   broadcastPresenceForPlayer,
   setSendToPlayer,
 } from './server/lobby.js';
@@ -927,13 +928,15 @@ function route(ws, cs, msg) {
     // ── Lobby ─────────────────────────────────────────────────────────────
     case 'createLobby': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
-      createLobby(cs.player.id, cs.player.username, ws, msg);
+      const createdRoomId = createLobby(cs.player.id, cs.player.username, ws, msg);
+      if (createdRoomId) { cs.roomId = createdRoomId; ws._roomId = createdRoomId; }
       break;
     }
 
     case 'joinLobby': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
-      joinLobby(cs.player.id, cs.player.username, ws, msg.codeOrId);
+      const joinedRoomId = joinLobby(cs.player.id, cs.player.username, ws, msg.codeOrId);
+      if (joinedRoomId) { cs.roomId = joinedRoomId; ws._roomId = joinedRoomId; }
       break;
     }
 
@@ -1150,4 +1153,5 @@ server.listen(PORT, () => {
   checkDeadlines(); // catch any unified deadlines that expired while server was down
   setInterval(checkDeadlines, 30_000); // check every 30 seconds
   setInterval(checkApproachingDeadlines, 60_000); // check approaching deadlines every minute
+  setInterval(pruneOrphanedRooms, 30_000); // clean up orphaned rooms every 30 seconds
 });
