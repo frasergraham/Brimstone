@@ -271,9 +271,12 @@ describe('assessBoard', () => {
 function makeBoard(overrides = {}) {
   return {
     phase: Phase.NIGHT, isNight: true, isDay: false, isDawnOrDusk: false,
+    round: 5, roundsToScoring: 5,
     witch: {}, witchHp: 10, witchMaxHp: 10, witchHpRatio: 1.0,
     minions: [], minionCount: 0, armyStrength: 0,
     visibleHeroes: [{}], heroDistance: 5, heroHpRatio: 1.0, enemiesNearWitch: 0,
+    heroLeader: null, heroSurvivors: [], visibleSurvivors: [], woundedEnemies: [],
+    witchArmyTotal: 1, minionsNearWitch: 0, canSweepNodes: false,
     nodes: [], witchHeldCount: 0, heroHeldCount: 0,
     witchScore: 0, heroScore: 0,
     totalResources: 4, metalCount: 0, woodCount: 2, canAffordSummon: true, bestSummonType: EntityType.WOOD_GOLEM,
@@ -299,7 +302,7 @@ describe('scoreGoals', () => {
       `dawn/dusk CONTROL (${scoringScores[Goal.CONTROL_NODES]}) should exceed normal (${normalScores[Goal.CONTROL_NODES]})`);
   });
 
-  test('witch HP < 30% sets DEFEND_WITCH to 1.0', () => {
+  test('witch HP < 25% sets DEFEND_WITCH to 1.0', () => {
     const scores = scoreGoals(makeBoard({ witchHpRatio: 0.2 }));
     assert.equal(scores[Goal.DEFEND_WITCH], 1.0);
   });
@@ -389,9 +392,10 @@ describe('allocateBudget', () => {
       [Goal.BUILD_ARMY]: 0.9,
       [Goal.CONTROL_NODES]: 0.5,
       [Goal.DEFEND_WITCH]: 0.3,
+      [Goal.HUNT_HEROES]: 0.4,
     };
     const result = allocateBudget(scores, 9);
-    for (const g of Object.values(Goal)) {
+    for (const g of Object.keys(scores)) {
       assert.ok(result[g] === 0 || result[g] >= 2,
         `${g} should be 0 or >= 2 AP, got ${result[g]}`);
     }
@@ -422,9 +426,10 @@ describe('allocateBudget', () => {
       [Goal.BUILD_ARMY]: 0.8,
       [Goal.CONTROL_NODES]: 0.5,
       [Goal.DEFEND_WITCH]: 0.1,
+      [Goal.HUNT_HEROES]: 0.3,
     };
     const result = allocateBudget(scores, 0);
-    for (const g of Object.values(Goal)) {
+    for (const g of Object.keys(scores)) {
       assert.equal(result[g], 0);
     }
   });
@@ -573,10 +578,10 @@ describe('genBuildArmy', () => {
   });
 
   test('respects army cap', () => {
-    // Day phase has cap of 5, create 5 existing minions
+    // Day phase has cap of 7, create 7 existing minions
     const entities = [
       makeEntity({ id: 'witch1', col: 0, row: 0 }),
-      ...Array.from({ length: 5 }, (_, i) =>
+      ...Array.from({ length: 7 }, (_, i) =>
         makeEntity({ id: `m${i}`, type: EntityType.MINION, owner: 'witch', col: i + 1, row: 0, hp: 2, maxHp: 2 })
       ),
       makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 4, row: 4, hp: 8, maxHp: 8 }),
@@ -588,7 +593,7 @@ describe('genBuildArmy', () => {
     });
     const board = assessBoard(sim);
     const actions = genBuildArmy(sim, board, 3);
-    assert.equal(actions.length, 0, 'should not summon when at day army cap (5)');
+    assert.equal(actions.length, 0, 'should not summon when at day army cap (7)');
   });
 
   test('deducts from resource ledger correctly', () => {
@@ -1051,7 +1056,7 @@ describe('personality-varied behavior', () => {
       minions: [],
     });
 
-    // Balanced flees at 0.3 → 0.2 < 0.3 → should flee
+    // Balanced flees at 0.2 → 0.2 <= 0.2 → should flee
     const balancedActions = genDefendWitch(sim, board, 3, PERSONALITY_CONFIGS.balanced);
     const fleeBalanced = balancedActions.some(a => a.type === PlanActionType.MOVE && a._goal === Goal.DEFEND_WITCH);
     assert.ok(fleeBalanced, 'balanced should flee at 20% HP');

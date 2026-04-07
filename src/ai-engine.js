@@ -21,6 +21,7 @@ export const Goal = Object.freeze({
   BUILD_ARMY:       'BUILD_ARMY',
   CONTROL_NODES:    'CONTROL_NODES',
   DEFEND_WITCH:     'DEFEND_WITCH',
+  HUNT_HEROES:      'HUNT_HEROES',
 });
 
 const ALL_GOALS = Object.values(Goal);
@@ -33,23 +34,23 @@ const ALL_GOALS = Object.values(Goal);
 export const PERSONALITY_CONFIGS = Object.freeze({
   balanced: Object.freeze({
     goalWeights: Object.freeze({
-      [Goal.BUILD_ARMY]: 1.0, [Goal.CONTROL_NODES]: 1.0, [Goal.DEFEND_WITCH]: 1.0,
+      [Goal.BUILD_ARMY]: 1.2, [Goal.CONTROL_NODES]: 1.4, [Goal.DEFEND_WITCH]: 0.6, [Goal.HUNT_HEROES]: 1.0,
     }),
-    fleeThreshold: 0.3,
+    fleeThreshold: 0.2,
     engageFloor: 'suicidal',
   }),
   aggressive: Object.freeze({
     goalWeights: Object.freeze({
-      [Goal.BUILD_ARMY]: 0.8, [Goal.CONTROL_NODES]: 0.6, [Goal.DEFEND_WITCH]: 0.5,
+      [Goal.BUILD_ARMY]: 1.0, [Goal.CONTROL_NODES]: 1.3, [Goal.DEFEND_WITCH]: 0.3, [Goal.HUNT_HEROES]: 1.3,
     }),
     fleeThreshold: 0.15,
     engageFloor: 'suicidal',
   }),
   swarm: Object.freeze({
     goalWeights: Object.freeze({
-      [Goal.BUILD_ARMY]: 1.5, [Goal.CONTROL_NODES]: 1.2, [Goal.DEFEND_WITCH]: 1.3,
+      [Goal.BUILD_ARMY]: 1.5, [Goal.CONTROL_NODES]: 1.4, [Goal.DEFEND_WITCH]: 0.6, [Goal.HUNT_HEROES]: 0.9,
     }),
-    fleeThreshold: 0.4,
+    fleeThreshold: 0.2,
     engageFloor: 'unfavorable',
   }),
 });
@@ -155,6 +156,7 @@ export function assessBoard(sim) {
   });
   const witchHeldCount = nodes.filter(n => n.controller === 'witch').length;
   const heroHeldCount = nodes.filter(n => n.controller === 'hero').length;
+  const heroOnNodeCount = nodes.filter(n => n.heroPresent).length;
 
   // Scores
   const witchScore = sim.nodeScore?.witch ?? 0;
@@ -190,6 +192,28 @@ export function assessBoard(sim) {
     hexDistance(witch.col, witch.row, h.col, h.row) <= 3
   ).length : 0;
 
+  // Hero survivors vs hero leader — for HUNT_HEROES targeting
+  const heroLeader = allHeroes.find(h => h.type === EntityType.HERO);
+  const heroSurvivors = allHeroes.filter(h => h.type !== EntityType.HERO);
+  const visibleSurvivors = visibleHeroes.filter(h => h.type !== EntityType.HERO);
+
+  // Wounded visible enemies (below 50% HP) — prime targets for focus-fire
+  const woundedEnemies = visibleHeroes.filter(h =>
+    h.hp / (h.maxHp || h.hp || 1) < 0.5
+  );
+
+  // Total witch army size including leader
+  const witchArmyTotal = minionCount + (witch ? 1 : 0);
+
+  // Nearby minions to witch for protection assessment
+  const minionsNearWitch = witch ? minions.filter(m =>
+    hexDistance(m.col, m.row, witch.col, witch.row) <= 2
+  ).length : 0;
+
+  // Sweep detection: can witch potentially hold all 3 nodes this scoring phase?
+  const canSweepNodes = roundsToScoring <= 2 && witchHeldCount >= 2 &&
+    nodes.some(n => n.controller !== 'witch' && n.distToNearest <= roundsToScoring + 1);
+
   return {
     phase, isNight, isDay, isDawnOrDusk,
     round, roundsToScoring,
@@ -199,7 +223,9 @@ export function assessBoard(sim) {
     witchHpRatio: witch ? witch.hp / (witch.maxHp || witch.hp || 1) : 1,
     minions, minionCount, armyStrength,
     visibleHeroes, heroDistance, heroHpRatio, enemiesNearWitch,
-    nodes, witchHeldCount, heroHeldCount,
+    heroLeader, heroSurvivors, visibleSurvivors, woundedEnemies,
+    witchArmyTotal, minionsNearWitch, canSweepNodes,
+    nodes, witchHeldCount, heroHeldCount, heroOnNodeCount,
     witchScore, heroScore,
     totalResources, metalCount, woodCount, canAffordSummon, bestSummonType,
     unexploredBuildings,
@@ -212,56 +238,95 @@ export function assessBoard(sim) {
 function clamp01(v) { return Math.max(0, Math.min(1, v)); }
 
 export function scoreGoals(board, goalWeights = null) {
-  // DEFEND_WITCH — high when HP low or outnumbered near hero
+  // DEFEND_WITCH — protect the witch; she's the win condition
   let defend = 0;
-  if (board.witchHpRatio < 0.3) defend = 1.0;
-  else if (board.witchHpRatio < 0.5) defend = 0.6;
-  if (board.heroDistance <= 2 && board.witchHpRatio < 0.5) defend = 1.0;
-  if (board.enemiesNearWitch > board.minionCount + 1) defend = Math.max(defend, 0.8);
+  const hasArmyProtection = board.minionsNearWitch >= 2;
+  if (!hasArmyProtection) {
+    if (board.witchHpRatio < 0.25) defend = 1.0;
+    else if (board.witchHpRatio < 0.4) defend = 0.6;
+    else if (board.witchHpRatio < 0.5) defend = 0.3;
+    if (board.heroDistance <= 2 && board.witchHpRatio < 0.5) defend = Math.max(defend, 0.8);
+    if (board.enemiesNearWitch > board.minionCount + 1) defend = Math.max(defend, 0.7);
+  } else {
+    // With army nearby, only flee at critical HP
+    if (board.witchHpRatio < 0.2) defend = 0.5;
+  }
   defend = clamp01(defend);
 
-  // BUILD_ARMY — high when few minions, drops off once nodes are covered
+  // BUILD_ARMY — always want more units; more bodies = more gang-up = more kills
   let army = 0;
   const nodeCount = board.nodes.length || 3;
   if (board.minionCount < nodeCount) {
-    // Fewer minions than nodes — need more bodies
-    army = 0.8;
-  } else if (board.minionCount < nodeCount + 1) {
-    // One reserve minion
-    army = 0.4;
+    army = 0.9; // urgent: fewer bodies than nodes
+  } else if (board.minionCount < nodeCount + 2) {
+    army = 0.6; // still want reserves for hunting + node control
+  } else if (board.minionCount < nodeCount + 3) {
+    army = 0.35; // building toward overwhelming force
   } else {
-    // Enough minions — focus on nodes instead
-    army = 0.1;
+    army = 0.15; // large army — shift to using it
   }
-  // Boost if we have resources to spend but few minions
-  if (board.canAffordSummon && board.minionCount < nodeCount) army = Math.max(army, 0.9);
+  // Always summon if affordable — bodies are always useful
+  if (board.canAffordSummon) army = Math.max(army, 0.75);
   // If no resources and nothing to explore, army building is less useful
   if (!board.canAffordSummon && board.unexploredBuildings.length === 0) army *= 0.3;
+  // Early game: high priority to build up before hero gets survivors
+  if (board.round <= 4 && board.minionCount < 3) army = Math.max(army, 0.9);
   army = clamp01(army);
 
-  // CONTROL_NODES — based on uncovered/contested nodes
-  let control = 0.4;
+  // CONTROL_NODES — the primary witch win condition; always high priority
+  let control = 0.45; // base — bonuses push it higher based on game state
   const uncovered = board.nodes.filter(n => n.controller !== 'witch' || !n.witchPresent).length;
   const allCovered = uncovered === 0;
-  control += uncovered * 0.15;
+  control += uncovered * 0.1;
   if (board.heroScore >= 3) control += 0.3;
   if (board.heroHeldCount > 0) control += 0.2;
   if (board.heroHeldCount > board.witchHeldCount) control += 0.25;
-  if (board.roundsToScoring <= 2) control += 0.2;
-  else if (board.roundsToScoring <= 1) control += 0.15;
+  // Enemies physically standing on nodes — urgent, must contest aggressively
+  if (board.heroOnNodeCount > 0) control += 0.3;
+  // Scoring urgency — ramp up as scoring approaches
+  if (board.roundsToScoring <= 3) control += 0.1;
+  if (board.roundsToScoring <= 2) control += 0.15;
+  if (board.roundsToScoring <= 1) control += 0.15;
+  // Sweep detection — go all-in for instant win
+  if (board.canSweepNodes) control = 1.0;
+  // When ahead, press advantage; when behind, urgency is even higher
+  if (board.witchScore > board.heroScore) control += 0.1;
+  if (board.witchScore >= 3) control += 0.1; // one more point to win
   const controlMult = board.isDawnOrDusk ? 1.8 : 1.0;
   control = clamp01(clamp01(control) * controlMult);
 
-  // If all nodes are covered with witch units, reduce control priority slightly
-  // but don't shift to army building — keep defending nodes
-  if (allCovered) {
-    control *= 0.6;
+  if (allCovered && !board.canSweepNodes) {
+    control *= 0.8; // maintain defense, don't drop priority
   }
+
+  // HUNT_HEROES — proactively seek and destroy hero units
+  // Primary value: kill survivors to cripple hero action budget, and kill hero for instant win.
+  let hunt = 0;
+  if (board.visibleHeroes.length > 0) {
+    hunt = 0.4;
+    // Wounded enemies are prime targets — finish them off for guaranteed value
+    if (board.woundedEnemies.length > 0) hunt = Math.max(hunt, 0.8);
+    // Visible survivors = action budget to steal; each kill = -1 hero action
+    if (board.visibleSurvivors.length > 0) hunt = Math.max(hunt, 0.65);
+    // Night advantage: +2 ATK, hero blind — hunt aggressively
+    if (board.isNight) hunt += 0.15;
+    // Hero leader is low HP — go for the kill win
+    if (board.heroHpRatio < 0.4 && board.heroDistance <= 4) hunt = Math.max(hunt, 0.95);
+    // Gang-up opportunity: multiple witch units near an enemy
+    const gangUpReady = board.visibleHeroes.some(h =>
+      board.minions.filter(m => hexDistance(m.col, m.row, h.col, h.row) <= 2).length >= 2
+    );
+    if (gangUpReady) hunt = Math.max(hunt, 0.75);
+    // Suppress at scoring time — but only partially, kills still matter
+    if (board.roundsToScoring <= 1) hunt *= 0.5;
+  }
+  hunt = clamp01(hunt);
 
   const scores = {
     [Goal.DEFEND_WITCH]:  defend,
     [Goal.BUILD_ARMY]:    army,
     [Goal.CONTROL_NODES]: control,
+    [Goal.HUNT_HEROES]:   hunt,
   };
 
   // Apply personality goal weights
@@ -276,7 +341,9 @@ export function scoreGoals(board, goalWeights = null) {
       board.minionCount < nodeCount + 1) {
     scores[Goal.BUILD_ARMY] = clamp01(scores[Goal.BUILD_ARMY] + 0.4);
     scores[Goal.DEFEND_WITCH] = Math.min(scores[Goal.DEFEND_WITCH], 0.1);
+    scores[Goal.HUNT_HEROES] = 0; // no targets visible
   }
+
 
   return scores;
 }
@@ -352,10 +419,18 @@ export function estimateCombat(attacker, defender, board) {
   ).length;
   const defAllyDice = Math.min(defAllyCount, 3);
 
-  const expectedAtk = (attacker.attack || 0) + 3.5 + nightBonus + gangUpDice * 2;
-  const expectedDef = (defender.defense || 0) + 3.5 + defAllyDice * 2;
+  // Include fortification and stat bonuses for accurate estimation
+  const fortBonus = defender.fortification || 0;
+  const atkBonus = attacker.attackBonus || 0;
+  const defBonus = defender.defenseBonus || 0;
+
+  const expectedAtk = (attacker.attack || 0) + atkBonus + 3.5 + nightBonus + gangUpDice * 2;
+  const expectedDef = (defender.defense || 0) + defBonus + fortBonus + 3.5 + defAllyDice * 2;
 
   const favorability = expectedAtk - expectedDef;
+
+  // Expected damage for kill estimation
+  const expectedDamage = favorability > 0 ? (favorability > 3 ? 2 : 1) : 0;
 
   let classification;
   if (favorability > 3)       classification = 'overwhelming';
@@ -363,7 +438,7 @@ export function estimateCombat(attacker, defender, board) {
   else if (favorability > -3) classification = 'unfavorable';
   else                        classification = 'suicidal';
 
-  return { favorability, classification };
+  return { favorability, classification, expectedDamage, gangUpCount };
 }
 
 // ── Helper: pick uncommitted unit closest to a target ───────────────────────
@@ -400,10 +475,14 @@ export function genDefendWitch(sim, board, budget, config = null) {
     remaining--;
   }
 
-  // Flee away from nearest hero until out of sight
-  const fleeThreshold = config?.fleeThreshold ?? 0.3;
-  const shouldFlee = (board.witchHpRatio < fleeThreshold) ||
-    (board.enemiesNearWitch > board.minionCount + 1);
+  // Flee away from nearest hero — but only when genuinely in danger
+  const fleeThreshold = config?.fleeThreshold ?? 0.2;
+  const hasArmyProtection = board.minionsNearWitch >= 3;
+  // With army protection, only flee at critical HP; without, use normal threshold
+  const shouldFlee = hasArmyProtection
+    ? (board.witchHpRatio < 0.15)
+    : ((board.witchHpRatio <= fleeThreshold) ||
+       (board.enemiesNearWitch > board.minionCount + 1));
 
   if (shouldFlee && board.visibleHeroes.length > 0 && remaining > 0) {
     const nearestHero = board.visibleHeroes.reduce((best, h) => {
@@ -434,18 +513,21 @@ export function genDefendWitch(sim, board, budget, config = null) {
     }
   }
 
-  // Interpose nearest minion between witch and hero threat
+  // Interpose minions between witch and hero threat — move up to 2 nearby minions
   if (board.heroDistance <= 3 && board.minions.length > 0 && remaining > 0) {
     const nearestHero = board.visibleHeroes[0];
     if (nearestHero) {
-      let guard = null, guardDist = Infinity;
-      for (const m of board.minions) {
-        if (sim.unitCommitments.has(m.id)) continue;
-        const d = hexDistance(m.col, m.row, board.witch.col, board.witch.row);
-        if (d < guardDist) { guardDist = d; guard = m; }
-      }
-      if (guard) {
+      // Find closest uncommitted minions
+      const guards = board.minions
+        .filter(m => !sim.unitCommitments.has(m.id))
+        .map(m => ({ m, d: hexDistance(m.col, m.row, board.witch.col, board.witch.row) }))
+        .sort((a, b) => a.d - b.d)
+        .slice(0, 2);
+
+      for (const { m: guard } of guards) {
+        if (remaining <= 0) break;
         const simGuard = sim.entities.find(e => e.id === guard.id);
+        if (!simGuard) continue;
         const step = roadStepToward(sim, simGuard, witchEntity);
         if (step) {
           actions.push({
@@ -456,6 +538,121 @@ export function genDefendWitch(sim, board, budget, config = null) {
           sim.applyMove(guard.id, step.col, step.row);
           sim.unitCommitments.set(guard.id, Goal.DEFEND_WITCH);
           remaining--;
+        }
+      }
+    }
+  }
+
+  return actions;
+}
+
+// ── Generator: HUNT_HEROES ─────────────────────────────────────────────────
+// Proactively seek and destroy hero units — especially survivors — to cripple
+// hero action budget. Coordinates gang-up attacks for maximum damage.
+
+export function genHuntHeroes(sim, board, budget) {
+  const actions = [];
+  if (budget <= 0 || board.visibleHeroes.length === 0) return actions;
+  let remaining = budget;
+
+  // Score each visible enemy as a target
+  const targets = board.visibleHeroes.map(h => {
+    const hpRatio = h.hp / (h.maxHp || h.hp || 1);
+    const isSurvivor = h.type !== EntityType.HERO;
+    // Priority: wounded > survivors > hero leader
+    let priority = 0;
+    if (h.hp <= 2) priority += 5; // can likely kill in one hit
+    if (hpRatio < 0.5) priority += 3; // wounded — finish off
+    if (isSurvivor) priority += 2; // killing = removing hero action
+    if (hpRatio < 0.3) priority += 2; // critically wounded
+    // Prefer targets with nearby witch units (gang-up ready)
+    const nearbyMinions = board.minions.filter(m =>
+      hexDistance(m.col, m.row, h.col, h.row) <= 2
+    );
+    priority += nearbyMinions.length; // more nearby = easier kill
+    return { entity: h, priority, nearbyMinions, isSurvivor, hpRatio };
+  }).sort((a, b) => b.priority - a.priority);
+
+  // Track which units we've already assigned to attack targets
+  const assignedUnits = new Set();
+
+  for (const target of targets) {
+    if (remaining <= 0) break;
+
+    // Find uncommitted witch units closest to this target
+    const availableUnits = [board.witch, ...board.minions]
+      .filter(e => e && e.alive && !sim.unitCommitments.has(e.id) && !assignedUnits.has(e.id))
+      .map(e => ({
+        entity: e,
+        dist: hexDistance(e.col, e.row, target.entity.col, target.entity.row),
+      }))
+      .sort((a, b) => a.dist - b.dist);
+
+    if (availableUnits.length === 0) continue;
+
+    // Send up to 3 units toward this target (gang-up coordination)
+    const maxAttackers = Math.min(3, availableUnits.length);
+    let attackersAssigned = 0;
+
+    for (let i = 0; i < maxAttackers && remaining > 0; i++) {
+      const { entity: unit, dist } = availableUnits[i];
+      const simUnit = sim.entities.find(e => e.id === unit.id);
+      if (!simUnit) continue;
+
+      // If adjacent — attack directly
+      if (dist <= 1) {
+        const est = estimateCombat(simUnit, target.entity, board);
+        // For hunting, accept unfavorable odds too — attrition wins
+        if (est.classification !== 'suicidal') {
+          actions.push({
+            type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
+            targetId: target.entity.id, targetCol: target.entity.col, targetRow: target.entity.row,
+            _priority: 1, _goal: Goal.HUNT_HEROES,
+          });
+          sim.applyBattle();
+          sim.unitCommitments.set(simUnit.id, Goal.HUNT_HEROES);
+          assignedUnits.add(simUnit.id);
+          remaining--;
+          attackersAssigned++;
+          continue;
+        }
+      }
+
+      // If close (within reach this turn) — move toward target then attack
+      if (dist <= 4) {
+        sim.unitCommitments.set(simUnit.id, Goal.HUNT_HEROES);
+        assignedUnits.add(simUnit.id);
+        attackersAssigned++;
+
+        let stepsLeft = Math.min(remaining, 3);
+        while (stepsLeft > 0) {
+          const curDist = hexDistance(simUnit.col, simUnit.row, target.entity.col, target.entity.row);
+          if (curDist <= 1) {
+            // Adjacent — attack
+            const est = estimateCombat(simUnit, target.entity, board);
+            if (est.classification !== 'suicidal') {
+              actions.push({
+                type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
+                targetId: target.entity.id, targetCol: target.entity.col, targetRow: target.entity.row,
+                _priority: 1, _goal: Goal.HUNT_HEROES,
+              });
+              sim.applyBattle();
+              remaining--;
+            }
+            break;
+          }
+
+          const step = roadStepToward(sim, simUnit, target.entity);
+          if (!step) break;
+
+          actions.push({
+            type: PlanActionType.MOVE, entityId: simUnit.id,
+            toCol: step.col, toRow: step.row,
+            _priority: 2, _goal: Goal.HUNT_HEROES,
+          });
+          sim.applyMove(simUnit.id, step.col, step.row);
+          remaining--;
+          stepsLeft--;
         }
       }
     }
@@ -626,7 +823,7 @@ export function genBuildArmy(sim, board, budget) {
 function _trySummons(actions, sim, board, remaining) {
   if (!board.witch || remaining <= 0) return actions;
 
-  const armyCap = (board.isNight || board.phase === Phase.DUSK) ? 8 : 5;
+  const armyCap = (board.isNight || board.phase === Phase.DUSK) ? 10 : 7;
   let currentArmy = board.minionCount;
 
   while (remaining > 0 && currentArmy < armyCap) {
@@ -694,7 +891,7 @@ export function genControlNodes(sim, board, budget) {
       feasibility: scoreNodeFeasibility(n, 'witch', sim.entities),
       allyClaimed: allyClaimed ? n.obj.hexes?.some(h => allyClaimed.has(hexKey(h.col, h.row))) : false,
     }))
-    .filter(n => n.feasibility >= 0.15 && !n.allyClaimed)
+    .filter(n => n.feasibility >= 0.1 && !n.allyClaimed)
     .sort((a, b) => {
       const aPrio = a.controller === 'hero' ? 0 : (a.controller === 'witch' && a.witchPresent ? 2 : 1);
       const bPrio = b.controller === 'hero' ? 0 : (b.controller === 'witch' && b.witchPresent ? 2 : 1);
@@ -702,104 +899,120 @@ export function genControlNodes(sim, board, budget) {
       return a.distToNearest - b.distToNearest;
     });
 
+  // Determine how many units to send per node — overwhelming force wins
+  const scoringImminent = board.roundsToScoring <= 2;
+  const unitsPerNode = board.canSweepNodes ? 4 :
+                       (scoringImminent ? 3 :
+                       (board.roundsToScoring <= 4 ? 2 : 1));
+  const maxStepsPerUnit = scoringImminent ? 4 : 3;
+
   for (const node of targetNodes) {
     if (remaining <= 0) break;
 
-    // Prefer minions for node control (witch should be exploring/summoning)
-    const unit = _closestUncommitted(sim, board, node.obj, true);
-    if (!unit) continue;
+    // Send multiple units — use our calculated unitsPerNode but also boost for enemy presence
+    const enemyOnNode = node.heroPresent;
+    const effectiveUnits = Math.max(unitsPerNode, enemyOnNode ? 3 : 1);
 
-    const simUnit = sim.entities.find(e => e.id === unit.id);
-    if (!simUnit) continue;
+    for (let u = 0; u < effectiveUnits; u++) {
+      if (remaining <= 0) break;
 
-    const onNode = node.obj.hexes
-      ? node.obj.hexes.some(h => h.col === simUnit.col && h.row === simUnit.row)
-      : (simUnit.col === node.obj.col && simUnit.row === node.obj.row);
+      const unit = _closestUncommitted(sim, board, node.obj, true);
+      if (!unit) break;
 
-    if (onNode) {
-      // AGGRESSIVE: fight ALL enemies on or adjacent to the node
-      const adjacentEnemies = board.visibleHeroes.filter(h =>
-        hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= 1
-      );
-      for (const enemy of adjacentEnemies) {
-        if (remaining <= 0) break;
-        const est = estimateCombat(simUnit, enemy, board);
-        if (est.classification === 'suicidal') continue;
-        actions.push({
-          type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
-          targetId: enemy.id, targetCol: enemy.col, targetRow: enemy.row,
-          _priority: 3, _goal: Goal.CONTROL_NODES,
-        });
-        sim.applyBattle();
-        remaining--;
-      }
-      if (adjacentEnemies.length > 0) {
-        sim.unitCommitments.set(simUnit.id, Goal.CONTROL_NODES);
-      }
-      // Guard if threats nearby but couldn't attack
-      if (remaining > 0 && !sim.unitCommitments.has(simUnit.id)) {
-        const nearbyThreat = board.visibleHeroes.some(h =>
-          hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= 2
+      const simUnit = sim.entities.find(e => e.id === unit.id);
+      if (!simUnit) continue;
+
+      const onNode = node.obj.hexes
+        ? node.obj.hexes.some(h => h.col === simUnit.col && h.row === simUnit.row)
+        : (simUnit.col === node.obj.col && simUnit.row === node.obj.row);
+
+      if (onNode) {
+        // AGGRESSIVE: fight ALL enemies on or adjacent to the node — always
+        const adjacentEnemies = board.visibleHeroes.filter(h =>
+          hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= 1
         );
-        if (nearbyThreat) {
+        for (const enemy of adjacentEnemies) {
+          if (remaining <= 0) break;
+          // At a power node, always fight — no combat gate
           actions.push({
-            type: PlanActionType.GUARD, entityId: simUnit.id,
-            _priority: 4, _goal: Goal.CONTROL_NODES,
+            type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
+            targetId: enemy.id, targetCol: enemy.col, targetRow: enemy.row,
+            _priority: enemyOnNode ? 2 : 3, _goal: Goal.CONTROL_NODES,
           });
-          sim.applyGuard(simUnit.id);
-          sim.unitCommitments.set(simUnit.id, Goal.CONTROL_NODES);
+          sim.applyBattle();
           remaining--;
         }
+        if (adjacentEnemies.length > 0) {
+          sim.unitCommitments.set(simUnit.id, Goal.CONTROL_NODES);
+        }
+        // Guard if threats nearby but couldn't attack
+        if (remaining > 0 && !sim.unitCommitments.has(simUnit.id)) {
+          const nearbyThreat = board.visibleHeroes.some(h =>
+            hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= 2
+          );
+          if (nearbyThreat) {
+            actions.push({
+              type: PlanActionType.GUARD, entityId: simUnit.id,
+              _priority: 4, _goal: Goal.CONTROL_NODES,
+            });
+            sim.applyGuard(simUnit.id);
+            sim.unitCommitments.set(simUnit.id, Goal.CONTROL_NODES);
+            remaining--;
+          }
+        }
+        continue;
       }
-      continue;
-    }
 
-    // Move toward node, attacking enemies encountered en route
-    sim.unitCommitments.set(simUnit.id, Goal.CONTROL_NODES);
-    let stepsForUnit = Math.min(remaining, 3);
-    while (stepsForUnit > 0) {
-      // Opportunity attack: fight adjacent hero units while moving
-      const adjacentFoes = board.visibleHeroes.filter(h =>
-        hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= 1
-      );
-      for (const enemy of adjacentFoes) {
+      // Move toward node, attacking enemies encountered en route
+      sim.unitCommitments.set(simUnit.id, Goal.CONTROL_NODES);
+      let stepsForUnit = Math.min(remaining, maxStepsPerUnit);
+      while (stepsForUnit > 0) {
+        // Opportunity attack: fight adjacent hero units while moving
+        const adjacentFoes = board.visibleHeroes.filter(h =>
+          hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= 1
+        );
+        for (const enemy of adjacentFoes) {
+          if (remaining <= 0 || stepsForUnit <= 0) break;
+          const est = estimateCombat(simUnit, enemy, board);
+          // Heading to enemy-occupied node: fight at any odds
+          if (enemyOnNode) {
+            // Always fight when converging on a contested node
+          } else {
+            if (est.classification === 'suicidal') continue;
+          }
+          actions.push({
+            type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
+            targetId: enemy.id, targetCol: enemy.col, targetRow: enemy.row,
+            _priority: enemyOnNode ? 2 : 3, _goal: Goal.CONTROL_NODES,
+          });
+          sim.applyBattle();
+          remaining--;
+          stepsForUnit--;
+        }
         if (remaining <= 0 || stepsForUnit <= 0) break;
-        const est = estimateCombat(simUnit, enemy, board);
-        if (est.classification === 'suicidal') continue;
-        // At night, witch is stronger — attack even at unfavorable odds
-        if (!board.isNight && est.classification === 'unfavorable') continue;
+
+        const targetHex = node.obj.hexes
+          ? node.obj.hexes.reduce((best, h) => {
+              const d = hexDistance(simUnit.col, simUnit.row, h.col, h.row);
+              const bd = hexDistance(simUnit.col, simUnit.row, best.col, best.row);
+              return d < bd ? h : best;
+            }, node.obj.hexes[0])
+          : node.obj;
+
+        if (simUnit.col === targetHex.col && simUnit.row === targetHex.row) break;
+
+        const step = roadStepToward(sim, simUnit, targetHex);
+        if (!step) break;
+
         actions.push({
-          type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
-          targetId: enemy.id, targetCol: enemy.col, targetRow: enemy.row,
-          _priority: 3, _goal: Goal.CONTROL_NODES,
+          type: PlanActionType.MOVE, entityId: simUnit.id,
+          toCol: step.col, toRow: step.row,
+          _priority: 4, _goal: Goal.CONTROL_NODES,
         });
-        sim.applyBattle();
+        sim.applyMove(simUnit.id, step.col, step.row);
         remaining--;
         stepsForUnit--;
       }
-      if (remaining <= 0 || stepsForUnit <= 0) break;
-
-      const targetHex = node.obj.hexes
-        ? node.obj.hexes.reduce((best, h) => {
-            const d = hexDistance(simUnit.col, simUnit.row, h.col, h.row);
-            const bd = hexDistance(simUnit.col, simUnit.row, best.col, best.row);
-            return d < bd ? h : best;
-          }, node.obj.hexes[0])
-        : node.obj;
-
-      if (simUnit.col === targetHex.col && simUnit.row === targetHex.row) break;
-
-      const step = roadStepToward(sim, simUnit, targetHex);
-      if (!step) break;
-
-      actions.push({
-        type: PlanActionType.MOVE, entityId: simUnit.id,
-        toCol: step.col, toRow: step.row,
-        _priority: 4, _goal: Goal.CONTROL_NODES,
-      });
-      sim.applyMove(simUnit.id, step.col, step.row);
-      remaining--;
-      stepsForUnit--;
     }
   }
 
@@ -885,18 +1098,58 @@ export function assemblePlan(allActions, sim, board, prevPositions, gapFillFn = 
 function _fillGaps(plan, sim, board, witchEntity, remaining, prevPositions) {
   let left = remaining;
 
-  // Explore current hex if unexplored
-  if (left > 0 && !sim.isExplored(witchEntity.col, witchEntity.row)) {
-    plan.push({ type: PlanActionType.EXPLORE, entityId: witchEntity.id });
-    sim.applyExplore(witchEntity.id);
-    left--;
+  // Priority 1: Move uncommitted units toward visible enemies (hunt)
+  if (left > 0 && board.visibleHeroes.length > 0) {
+    for (const minion of board.minions) {
+      if (left <= 0) break;
+      if (sim.unitCommitments.has(minion.id)) continue;
+      const simMinion = sim.entities.find(e => e.id === minion.id);
+      if (!simMinion) continue;
+
+      // Find nearest visible enemy
+      let nearestEnemy = null, nearestDist = Infinity;
+      for (const h of board.visibleHeroes) {
+        const d = hexDistance(simMinion.col, simMinion.row, h.col, h.row);
+        if (d < nearestDist) { nearestDist = d; nearestEnemy = h; }
+      }
+      if (!nearestEnemy || nearestDist > 5) continue;
+
+      // If adjacent, attack
+      if (nearestDist <= 1) {
+        const est = estimateCombat(simMinion, nearestEnemy, board);
+        if (est.classification !== 'suicidal') {
+          plan.push({
+            type: PlanActionType.BATTLE_UNIT, entityId: simMinion.id,
+            targetId: nearestEnemy.id, targetCol: nearestEnemy.col, targetRow: nearestEnemy.row,
+            _goal: Goal.HUNT_HEROES,
+          });
+          sim.applyBattle();
+          sim.unitCommitments.set(simMinion.id, 'gap-fill');
+          left--;
+          continue;
+        }
+      }
+
+      const step = roadStepToward(sim, simMinion, nearestEnemy);
+      if (!step) continue;
+      const prev = prevPositions.get(minion.id);
+      if (prev && prev.col === step.col && prev.row === step.row) continue;
+
+      plan.push({
+        type: PlanActionType.MOVE, entityId: simMinion.id,
+        toCol: step.col, toRow: step.row,
+      });
+      sim.applyMove(simMinion.id, step.col, step.row);
+      sim.unitCommitments.set(simMinion.id, 'gap-fill');
+      left--;
+    }
   }
 
-  // Move uncommitted minions toward nearest uncovered node
+  // Priority 2: Move uncommitted minions toward nearest uncovered node
   if (left > 0) {
     const uncoveredNodes = board.nodes
       .filter(n => !n.witchPresent)
-      .filter(n => scoreNodeFeasibility(n, 'witch', sim.entities) >= 0.15);
+      .filter(n => scoreNodeFeasibility(n, 'witch', sim.entities) >= 0.1);
     for (const minion of board.minions) {
       if (left <= 0) break;
       if (sim.unitCommitments.has(minion.id)) continue;
@@ -926,7 +1179,14 @@ function _fillGaps(plan, sim, board, witchEntity, remaining, prevPositions) {
     }
   }
 
-  // Move witch toward nearest uncovered node if uncommitted
+  // Priority 3: Explore current hex if unexplored
+  if (left > 0 && !sim.isExplored(witchEntity.col, witchEntity.row)) {
+    plan.push({ type: PlanActionType.EXPLORE, entityId: witchEntity.id });
+    sim.applyExplore(witchEntity.id);
+    left--;
+  }
+
+  // Priority 4: Move witch toward nearest uncovered node if uncommitted
   if (left > 0 && !sim.unitCommitments.has(witchEntity.id)) {
     const targetNodes = board.nodes
       .filter(n => !n.witchPresent)
@@ -1036,14 +1296,17 @@ export class WitchAIEngine {
     const scores = scoreGoals(board, cfg.goalWeights);
     const budget = allocateBudget(scores, board.totalBudget);
 
-    // Stage 4: Run generators ordered by budget (highest budget first)
+    // Stage 4: Run generators in strategic order:
+    // 1. DEFEND first (flee actions are urgent)
+    // 2. BUILD_ARMY (summons create units for other goals to use)
+    // 3. CONTROL_NODES (primary win condition)
+    // 4. HUNT_HEROES (use remaining uncommitted units)
     const generators = [
+      { goal: Goal.DEFEND_WITCH,  fn: () => genDefendWitch(sim, board, budget[Goal.DEFEND_WITCH], cfg) },
       { goal: Goal.BUILD_ARMY,    fn: () => genBuildArmy(sim, board, budget[Goal.BUILD_ARMY]) },
       { goal: Goal.CONTROL_NODES, fn: () => genControlNodes(sim, board, budget[Goal.CONTROL_NODES]) },
-      { goal: Goal.DEFEND_WITCH,  fn: () => genDefendWitch(sim, board, budget[Goal.DEFEND_WITCH], cfg) },
+      { goal: Goal.HUNT_HEROES,   fn: () => genHuntHeroes(sim, board, budget[Goal.HUNT_HEROES]) },
     ];
-    // Sort by allocated budget descending — highest budget goal generates first
-    generators.sort((a, b) => budget[b.goal] - budget[a.goal]);
 
     const allActions = [];
     for (const gen of generators) {
