@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 
 import {
   createLobby, joinLobby, joinGame, fillAllWithAI, startGame,
-  getRooms, getRoom,
+  claimSlot, getRooms, getRoom,
 } from '../server/lobby.js';
 import db from '../server/db.js';
 
@@ -56,6 +56,9 @@ function createGameWithOpenSlot(hostId = 'host-1') {
   const lobbyMsg = ws.findMsg('lobbyJoined');
   const roomId = lobbyMsg.lobby.id;
 
+  // Host must claim hero slot before starting
+  claimSlot(hostId, roomId, 0);
+
   // Start without filling the witch slot
   startGame(hostId, roomId);
 
@@ -95,6 +98,7 @@ describe('late-join: startGame with empty slots', () => {
     const ws = mockWs();
     createLobby('host-empty', 'Host', ws, { playersPerSide: 1, mapSize: 'skirmish' });
     const lobbyMsg = ws.findMsg('lobbyJoined');
+    claimSlot('host-empty', lobbyMsg.lobby.id, 0);
     // This shouldn't happen in practice (host auto-fills slot), but verify guard
     const room = getRoom(lobbyMsg.lobby.id);
     assert.ok(room, 'room should exist');

@@ -8,7 +8,7 @@ import { describe, test, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  createLobby, fillAllWithAI, startGame,
+  createLobby, fillAllWithAI, startGame, claimSlot,
   handleDisconnect, handleReconnect, resumeGame,
   handlePlanSubmit,
   getActiveRoomsForPlayer, getRooms, getRoom,
@@ -41,6 +41,7 @@ function createTestGame(playerId = 'test-player-1') {
   const lobbyMsg = ws.findMsg('lobbyJoined');
   const roomId = lobbyMsg.lobby.id;
 
+  claimSlot(playerId, roomId, 0);
   fillAllWithAI(playerId, roomId);
   startGame(playerId, roomId);
 

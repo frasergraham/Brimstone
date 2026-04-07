@@ -293,10 +293,18 @@ async function runGame(port, gameNum, totalGames) {
     });
     await host.waitFor('lobbyJoined');
 
-    // Other clients join via room ID
+    // Host claims first hero slot
+    host.send({ type: 'claimSlot', roomId: host.roomId, slotIndex: 0 });
+    await host.waitFor('lobbyUpdate');
+
+    // Other clients join via room ID and claim slots
     for (let i = 1; i < clients.length; i++) {
       clients[i].send({ type: 'joinLobby', codeOrId: host.roomId });
       await clients[i].waitFor('lobbyJoined');
+      // Assign to hero slots (1..pps-1) then witch slots (pps..)
+      const slotIndex = i;
+      clients[i].send({ type: 'claimSlot', roomId: host.roomId, slotIndex });
+      await clients[i].waitFor('lobbyUpdate');
     }
 
     // Enable auto-play on all clients
@@ -357,8 +365,15 @@ async function runDisconnectTest(port, label, disconnectTiming) {
     heroBot.send({ type: 'createLobby', playersPerSide: 1, mapSize: 'skirmish', isPrivate: true, turnIntervalMs: 3000 });
     await heroBot.waitFor('lobbyJoined');
 
+    // Hero claims hero slot (0), witch claims witch slot (1)
+    heroBot.send({ type: 'claimSlot', roomId: heroBot.roomId, slotIndex: 0 });
+    await heroBot.waitFor('lobbyUpdate');
+
     witchBot.send({ type: 'joinLobby', codeOrId: heroBot.roomId });
     await witchBot.waitFor('lobbyJoined');
+
+    witchBot.send({ type: 'claimSlot', roomId: heroBot.roomId, slotIndex: 1 });
+    await witchBot.waitFor('lobbyUpdate');
 
     heroBot._autoPlay  = true;
     witchBot._autoPlay = true;

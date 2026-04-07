@@ -552,6 +552,66 @@ canvas { touch-action: pan-x pan-y; }
   border-radius: 4px;
 }
 
+/* Unassigned players section */
+.lobby-unassigned {
+  background: rgba(218,165,32,0.08);
+  border: 1px dashed rgba(218,165,32,0.3);
+  border-radius: 6px;
+  padding: 0.6rem 0.7rem;
+  margin-bottom: 0.75rem;
+  text-align: center;
+}
+.lobby-unassigned-label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--clr-gold, #daa520);
+  margin-bottom: 0.4rem;
+}
+.lobby-unassigned-players {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.4rem;
+}
+.lobby-unassigned-chip {
+  display: inline-block;
+  font-size: 0.82rem;
+  color: var(--text);
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 12px;
+  padding: 0.2rem 0.6rem;
+}
+.lobby-unassigned-chip.you {
+  border-color: var(--clr-gold, #daa520);
+  color: var(--clr-gold, #daa520);
+}
+.lobby-unassigned-chip em {
+  color: var(--text-dim);
+  font-size: 0.75rem;
+}
+
+/* Claimable (empty) slot — clickable by current player */
+.lobby-slot-row.claimable {
+  cursor: pointer;
+  border: 1px dashed rgba(255,255,255,0.15);
+  border-radius: 4px;
+  padding: 0.25rem 0.4rem;
+  margin-bottom: 0.3rem;
+  transition: border-color 0.15s, background 0.15s;
+}
+.lobby-slot-row.claimable:hover {
+  border-color: var(--clr-gold, #daa520);
+  background: rgba(218,165,32,0.08);
+}
+.lobby-claim-btn {
+  font-size: 0.75rem;
+  padding: 0.2rem 0.5rem;
+  min-width: unset;
+  white-space: nowrap;
+}
+
 /* ── How to Play body ────────────────────────────────────────────────────── */
 .howtoplay-body {
   text-align: left;
@@ -2677,6 +2737,54 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 
   /* Game menu: 44px touch targets */
   .game-menu-btn { min-height: 44px; display: flex; align-items: center; justify-content: center; }
+
+  /* Lobby: stack faction columns vertically on narrow screens */
+  .lobby-factions {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+  .lobby-faction-col {
+    padding: 0.5rem 0.6rem;
+  }
+  .lobby-slot-row {
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+  .lobby-slot-actions {
+    flex-basis: 100%;
+    flex-wrap: wrap;
+  }
+  .lobby-personality-select {
+    max-width: none;
+    flex: 1;
+  }
+
+  /* Invite popup: full-width on mobile */
+  .slot-invite-popup {
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .slot-invite-popup input[type="email"] {
+    width: 100%;
+    box-sizing: border-box;
+    font-size: 1rem;
+    min-height: 44px;
+  }
+  .slot-invite-popup .setup-btn {
+    min-height: 44px;
+  }
+
+  /* Unassigned section tighter on mobile */
+  .lobby-unassigned {
+    padding: 0.5rem;
+  }
+
+  /* Claim button larger touch target on mobile */
+  .lobby-claim-btn {
+    font-size: 0.85rem;
+    padding: 0.35rem 0.7rem;
+    min-height: 36px;
+  }
 
 }
 

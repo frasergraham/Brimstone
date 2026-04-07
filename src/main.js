@@ -4443,20 +4443,21 @@ let _authDialogCallback = null;
 
 function _checkGameDeepLink() {
   const hash = window.location.hash;
-  const joinMatch = hash.match(/^#join=(.+)$/);
+  const joinMatch = hash.match(/^#join=([^&]+)(?:&slot=(\d+))?$/);
   if (!joinMatch) return false;
 
   window.history.replaceState(null, '', window.location.pathname + window.location.search);
   const codeOrId = decodeURIComponent(joinMatch[1]);
+  const slotIndex = joinMatch[2] != null ? Number(joinMatch[2]) : undefined;
 
   // Ensure authenticated, then join the lobby
   const session = loadSession();
   if (session) {
-    _ensureAuthed(() => mp.joinLobby(codeOrId));
+    _ensureAuthed(() => mp.joinLobby(codeOrId, slotIndex));
   } else {
     // No session — show the auth dialog so the user can pick a username first
     _showAuthDialog(() => {
-      _ensureAuthed(() => mp.joinLobby(codeOrId));
+      _ensureAuthed(() => mp.joinLobby(codeOrId, slotIndex));
     });
   }
   return true;
@@ -4604,12 +4605,33 @@ function _renderLobby(lobby) {
   document.getElementById('lobby-config-summary').textContent =
     `${pps}v${pps} · ${size.charAt(0).toUpperCase() + size.slice(1)} · ${fog}`;
 
+  // Derive state
+  const myId          = mp?.player?.id;
+  const isHost        = lobby.hostPlayerId === myId;
+  const unassigned    = lobby.unassigned || [];
+  const meUnassigned  = unassigned.some(u => u.playerId === myId);
+  const meInSlot      = lobby.slots.some(s => s.playerId === myId && s.status === 'human');
+  const canClaimSlot  = meUnassigned || meInSlot; // can click empty slots to join/switch
+
   // Slots grid
-  const myId    = mp?.player?.id;
-  const isHost  = lobby.hostPlayerId === myId;
-  const grid    = document.getElementById('lobby-slots-grid');
+  const grid = document.getElementById('lobby-slots-grid');
   grid.innerHTML = '';
 
+  // Unassigned players section
+  if (unassigned.length > 0) {
+    const unassignedSection = document.createElement('div');
+    unassignedSection.className = 'lobby-unassigned';
+    const names = unassigned.map(u => {
+      const isMe = u.playerId === myId;
+      return `<span class="lobby-unassigned-chip${isMe ? ' you' : ''}">${_esc(u.name)}${isMe ? ' <em>(you)</em>' : ''}</span>`;
+    }).join(' ');
+    unassignedSection.innerHTML =
+      `<div class="lobby-unassigned-label">Pick a side</div>` +
+      `<div class="lobby-unassigned-players">${names}</div>`;
+    grid.appendChild(unassignedSection);
+  }
+
+  // Faction columns
   const heroSlots  = lobby.slots.filter(s => s.faction === 'hero');
   const witchSlots = lobby.slots.filter(s => s.faction === 'witch');
 
@@ -4629,7 +4651,6 @@ function _renderLobby(lobby) {
         const isMe = slot.playerId === myId;
         row.innerHTML = `<span class="lobby-slot-name">${_esc(slot.name)}${isMe ? ' <em>(you)</em>' : ''}</span>`;
       } else if (slot.status === 'ai') {
-        const label = _PERSONALITY_LABELS[slot.personality] ?? 'Balanced';
         row.innerHTML = `<span class="lobby-slot-name ai-slot">🤖 ${_esc(slot.name ?? 'AI')}</span>`;
         if (isHost) {
           const removeBtn = document.createElement('button');
@@ -4641,8 +4662,23 @@ function _renderLobby(lobby) {
           row.appendChild(removeBtn);
         }
       } else {
-        // empty slot
-        row.innerHTML = `<span class="lobby-slot-name empty-slot">Waiting…</span>`;
+        // empty slot — claimable by current player or host actions
+        if (canClaimSlot) {
+          row.classList.add('claimable');
+          const joinBtn = document.createElement('button');
+          joinBtn.className = 'setup-btn lobby-claim-btn';
+          joinBtn.textContent = meInSlot ? 'Switch here' : 'Join';
+          joinBtn.addEventListener('click', () => {
+            const idx = lobby.slots.indexOf(slot);
+            mp.claimSlot(lobby.id, idx);
+          });
+          row.innerHTML = `<span class="lobby-slot-name empty-slot">Open</span>`;
+          row.appendChild(joinBtn);
+        } else {
+          row.innerHTML = `<span class="lobby-slot-name empty-slot">Open</span>`;
+        }
+
+        // Host actions (invite + AI selector) — shown below the slot row
         if (isHost) {
           const slotActions = document.createElement('div');
           slotActions.className = 'lobby-slot-actions';
@@ -4666,8 +4702,8 @@ function _renderLobby(lobby) {
             ['random', ...personalities].map(p => {
               const isWitch = slot.faction === 'witch';
               const disabled = !isWitch && p !== 'random' && p !== 'balanced';
-              const label = p === 'random' ? 'Random' : (_PERSONALITY_LABELS[p] ?? p);
-              return `<option value="${p}"${disabled ? ' disabled style="color:#666"' : ''}>${disabled ? `${label} (soon)` : label}</option>`;
+              const lbl = p === 'random' ? 'Random' : (_PERSONALITY_LABELS[p] ?? p);
+              return `<option value="${p}"${disabled ? ' disabled style="color:#666"' : ''}>${disabled ? `${lbl} (soon)` : lbl}</option>`;
             }).join('');
           select.addEventListener('change', () => {
             if (!select.value) return;
@@ -4685,22 +4721,25 @@ function _renderLobby(lobby) {
   }
   grid.appendChild(container);
 
-  // Start button — host only; enabled when at least one human is present
-  const startBtn = document.getElementById('btn-lobby-start');
+  // Buttons — host only
+  const startBtn    = document.getElementById('btn-lobby-start');
   const populateBtn = document.getElementById('btn-lobby-populate-ai');
-  const hasEmpty = lobby.slots.some(s => s.status === 'empty');
+  const hasEmpty    = lobby.slots.some(s => s.status === 'empty');
 
   if (isHost) {
-    startBtn.style.display = '';
+    startBtn.style.display    = '';
     populateBtn.style.display = '';
-    startBtn.disabled = false;
+    // Disable start/populate while anyone is unassigned
+    const blocked = unassigned.length > 0;
+    startBtn.disabled    = blocked;
+    populateBtn.disabled = blocked;
+    populateBtn.title    = blocked ? 'All players must pick a side first' : '';
   } else {
-    // Non-host players can't start or populate AI
-    startBtn.style.display = 'none';
+    startBtn.style.display    = 'none';
     populateBtn.style.display = 'none';
   }
 
-  // Late-join hint below the buttons
+  // Hint below the buttons
   let hintEl = document.getElementById('lobby-open-slots-hint');
   if (!hintEl) {
     hintEl = document.createElement('p');
@@ -4710,7 +4749,10 @@ function _renderLobby(lobby) {
     grid.parentNode.insertBefore(hintEl, grid.nextSibling?.nextSibling);
   }
 
-  if (isHost && hasEmpty) {
+  if (unassigned.length > 0) {
+    hintEl.textContent = 'All players must pick a side before the game can start.';
+    hintEl.style.display = '';
+  } else if (isHost && hasEmpty) {
     hintEl.textContent = 'You can start now — empty slots stay open for others to join during the first turn. Unclaimed slots become AI at the deadline.';
     hintEl.style.display = '';
   } else if (!isHost) {
