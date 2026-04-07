@@ -346,9 +346,11 @@
     let _myPlayerId = null;
 
     (async () => {
-      if (!_token) { window.location.href = '/'; return; }
       try {
-        const r = await fetch(`/api/me/admin?token=${encodeURIComponent(_token)}`);
+        const url = _token
+          ? `/api/me/admin?token=${encodeURIComponent(_token)}`
+          : '/api/me/admin';
+        const r = await fetch(url);
         if (!r.ok) { window.location.href = '/'; return; }
         const data = await r.json();
         if (!data.isAdmin) { window.location.href = '/'; return; }
