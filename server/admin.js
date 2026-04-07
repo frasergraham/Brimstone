@@ -39,7 +39,7 @@ const _SOURCE_QUERIES = {
   saved: {
     select: `SELECT room_id AS id, 'saved' AS source, hero_name, witch_name, round, phase,
                     NULL AS winner, NULL AS win_reason, game_version, NULL AS mode,
-                    NULL AS players_json, updated_at, created_at
+                    players_json, updated_at, created_at
              FROM game_saves`,
     count:  `SELECT COUNT(*) AS cnt FROM game_saves`,
   },
@@ -77,6 +77,7 @@ export function getAllGamesPaginated({ page = 1, limit = 50, source = 'all' } = 
         win_reason:   null,
         game_version: null,
         mode:         null,
+        players:      r.players.map(p => ({ name: p.name, faction: p.faction, isAI: !!p.isAI })),
         human_players: humanPlayers,
         total_players: totalPlayers,
         updated_at:   Math.floor(r.createdAt / 1000),
@@ -108,12 +109,13 @@ export function getAllGamesPaginated({ page = 1, limit = 50, source = 'all' } = 
   const games = rawGames.map(g => {
     if (g.players_json) {
       try {
-        const players = JSON.parse(g.players_json);
-        g.human_players = players.filter(p => !p.isAI).length;
-        g.total_players = players.length;
-      } catch { /* ignore parse errors */ }
+        g.players = JSON.parse(g.players_json);
+        g.human_players = g.players.filter(p => !p.isAI).length;
+        g.total_players = g.players.length;
+      } catch { g.players = []; }
     }
     delete g.players_json;
+    g.players ??= [];
     g.human_players ??= null;
     g.total_players ??= null;
     return g;

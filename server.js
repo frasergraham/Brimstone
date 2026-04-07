@@ -56,6 +56,7 @@ import { upsertDeviceToken, deleteDeviceToken, pruneStaleTokens } from './server
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT      = process.env.PORT || 3000;
+const ADMIN_OPEN = process.env.ADMIN_OPEN === '1' || process.env.ADMIN_OPEN === 'true';
 
 // ── Express ──────────────────────────────────────────────────────────────────
 
@@ -504,6 +505,7 @@ function _requireVerifiedEmail(player, res) {
 }
 
 function _requireAdmin(req, res) {
+  if (ADMIN_OPEN) return { id: 'open', is_admin: 1 };
   const player = _requireAuth(req, res);
   if (!player) return null;
   if (!player.is_admin) {
@@ -516,6 +518,7 @@ function _requireAdmin(req, res) {
 // ── Admin status check (used by client to show/hide admin link) ──────────────
 
 app.get('/api/me/admin', (req, res) => {
+  if (ADMIN_OPEN) { res.json({ isAdmin: true }); return; }
   const player = _requireAuth(req, res);
   if (!player) return;
   res.json({ isAdmin: !!player.is_admin });
@@ -1091,7 +1094,7 @@ function route(ws, cs, msg) {
 
     // ── Admin / spectator ─────────────────────────────────────────────────
     case 'adminSpectateRoom': {
-      if (!cs.player?.is_admin) { send(ws, { type: 'error', message: 'Admin access required.' }); return; }
+      if (!ADMIN_OPEN && !cs.player?.is_admin) { send(ws, { type: 'error', message: 'Admin access required.' }); return; }
       if (!msg.roomId) { send(ws, { type: 'error', message: 'roomId required.' }); return; }
       const joined = subscribeSpectator(msg.roomId, ws);
       if (!joined) {
@@ -1103,7 +1106,7 @@ function route(ws, cs, msg) {
     }
 
     case 'adminUnspectateRoom': {
-      if (!cs.player?.is_admin) { send(ws, { type: 'error', message: 'Admin access required.' }); return; }
+      if (!ADMIN_OPEN && !cs.player?.is_admin) { send(ws, { type: 'error', message: 'Admin access required.' }); return; }
       const rid = msg.roomId;
       if (rid) {
         unsubscribeSpectator(ws, rid);

@@ -296,7 +296,7 @@
       </div>
       <table>
         <thead><tr>
-          <th>Source</th><th>Hero</th><th>Witch</th><th>Round</th><th>Winner</th><th>Mode</th><th>Players</th><th>Date</th>
+          <th>Source</th><th>Players</th><th>Round</th><th>Winner</th><th>Mode</th><th>Date</th>
         </tr></thead>
         <tbody id="games-body"></tbody>
       </table>
@@ -346,9 +346,11 @@
     let _myPlayerId = null;
 
     (async () => {
-      if (!_token) { window.location.href = '/'; return; }
       try {
-        const r = await fetch(`/api/me/admin?token=${encodeURIComponent(_token)}`);
+        const url = _token
+          ? `/api/me/admin?token=${encodeURIComponent(_token)}`
+          : '/api/me/admin';
+        const r = await fetch(url);
         if (!r.ok) { window.location.href = '/'; return; }
         const data = await r.json();
         if (!data.isAdmin) { window.location.href = '/'; return; }
@@ -596,17 +598,26 @@
           const winner = g.winner
             ? `<span class="badge badge-${g.winner === 'hero' ? 'hero' : 'witch'}">${g.winner}</span>`
             : '-';
-          const players = g.total_players != null
-            ? `${g.human_players}/${g.total_players}`
-            : '-';
+          let playersHtml;
+          if (g.players && g.players.length > 0) {
+            playersHtml = g.players.map(p => {
+              const cls = p.faction === 'hero' ? 'badge-hero' : 'badge-witch';
+              const ai = p.isAI ? ' <span class="badge badge-ai">AI</span>' : '';
+              return `<span class="badge ${cls}">${_esc(p.name)}${ai}</span>`;
+            }).join(' ');
+          } else {
+            // Fallback for games without players array
+            const parts = [];
+            if (g.hero_name) parts.push(`<span class="badge badge-hero">${_esc(g.hero_name)}</span>`);
+            if (g.witch_name) parts.push(`<span class="badge badge-witch">${_esc(g.witch_name)}</span>`);
+            playersHtml = parts.length > 0 ? parts.join(' ') : '-';
+          }
           return `<tr class="clickable" data-game-id="${_esc(g.id)}" data-game-source="${_esc(g.source)}" onclick="toggleGameDetail(this)">
             <td><span class="badge badge-source">${_esc(g.source)}</span></td>
-            <td><span class="badge badge-hero">${_esc(g.hero_name || '-')}</span></td>
-            <td><span class="badge badge-witch">${_esc(g.witch_name || '-')}</span></td>
+            <td>${playersHtml}</td>
             <td>${g.round ?? '-'}${g.phase ? ` <span class="badge badge-phase">${_esc(g.phase)}</span>` : ''}</td>
             <td>${winner}</td>
             <td>${_esc(g.mode || '-')}</td>
-            <td>${players}</td>
             <td class="time-ago">${timeAgo(g.created_at)}</td>
           </tr>`;
         }).join('');
@@ -641,15 +652,15 @@
 
       const detailTr = document.createElement('tr');
       detailTr.className = 'detail-row';
-      detailTr.innerHTML = `<td colspan="8">Loading...</td>`;
+      detailTr.innerHTML = `<td colspan="6">Loading...</td>`;
       row.after(detailTr);
 
       try {
         const data = await api(`/admin/api/game-detail/${encodeURIComponent(id)}?source=${source}`);
-        if (!data) { detailTr.innerHTML = '<td colspan="8">Not found.</td>'; return; }
+        if (!data) { detailTr.innerHTML = '<td colspan="6">Not found.</td>'; return; }
 
         const g = data.game;
-        let html = '<td colspan="8">';
+        let html = '<td colspan="6">';
 
         // Metadata
         html += '<div class="detail-meta">';
@@ -687,7 +698,7 @@
         html += '</td>';
         detailTr.innerHTML = html;
       } catch (e) {
-        detailTr.innerHTML = `<td colspan="8">Error: ${_esc(e.message)}</td>`;
+        detailTr.innerHTML = `<td colspan="6">Error: ${_esc(e.message)}</td>`;
       }
     }
 
