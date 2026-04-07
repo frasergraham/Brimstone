@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.3.21",
+    "date": "2026-04-07",
+    "summary": "Bug fixes",
+    "notes": [
+      "Electron server selector shows \".\" + headless renderer uses tilemap sprites"
+    ]
+  },
+  {
     "version": "1.3.20",
     "date": "2026-04-07",
     "summary": "New features, and bug fixes",
