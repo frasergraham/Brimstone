@@ -8,7 +8,7 @@ import {
   ActionType, getValidActions, getVisibleEnemyHexes, getVisibleHeroHexes,
   buildFogMovementHexes,
 } from './actions.js';
-import { PlanActionType, computeGhostState, computeProjectedInventory, interleavePlan } from './planner.js';
+import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan } from './planner.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
@@ -816,6 +816,35 @@ export class UIController {
   /** Add one action to the per-unit plan queue. */
   _addToPlan(action) {
     if (this._planSubmitted) return;
+
+    // ── Plan cap: 1.5× (budget + food) — prevent runaway queues ────────
+    const isFreeAction = action.type === PlanActionType.EQUIP_WEAPON
+                      || action.type === PlanActionType.USE_ITEM;
+    if (!isFreeAction) {
+      const flatPlan = interleavePlan(this._unitPlans);
+      const currentCost = flatPlan.filter(a => actionCosts(a.type)).length;
+      const foodAvailable = (this.state.inventory?.shared?.[ResourceType.FOOD] || 0);
+      const cap = Math.ceil((this._planBudget + foodAvailable) * 1.5);
+
+      if (currentCost >= cap) {
+        this._showPlanToast('Plan is full — no more actions can be added.');
+        return;
+      }
+
+      const newCost = currentCost + 1;
+      if (newCost > this._planBudget && newCost <= this._planBudget + foodAvailable) {
+        this._showPlanToast('Over budget — this action will consume food.');
+      } else if (newCost > this._planBudget + foodAvailable) {
+        this._showPlanToast('Over budget & food — this action may not execute.');
+      }
+
+      // Check if plan is now full after adding
+      if (newCost >= cap) {
+        // Defer so the "food" toast above doesn't get immediately replaced
+        setTimeout(() => this._showPlanToast('Plan is full — cap reached.'), 100);
+      }
+    }
+
     if (!this._unitPlans.has(action.entityId)) {
       this._unitPlans.set(action.entityId, []);
     }
@@ -2413,6 +2442,24 @@ export class UIController {
     this._speedToastTimer = setTimeout(() => {
       toast.classList.add('speed-toast-out');
     }, 1500);
+  }
+
+  /** Show a plan-related toast (food warning, plan full). */
+  _showPlanToast(text) {
+    let toast = document.getElementById('plan-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'plan-toast';
+      toast.className = 'plan-toast';
+      const wrapper = this._el('canvas-wrapper');
+      if (wrapper) wrapper.appendChild(toast);
+    }
+    toast.textContent = text;
+    toast.classList.remove('plan-toast-out');
+    clearTimeout(this._planToastTimer);
+    this._planToastTimer = setTimeout(() => {
+      toast.classList.add('plan-toast-out');
+    }, 3000);
   }
 
   /** Show a brief toast when another player nudges us. */
