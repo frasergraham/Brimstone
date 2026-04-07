@@ -64,6 +64,14 @@ async function _initServerUrl() {
     return;
   }
 
+  // ── Electron — ensure preload async IPC has resolved ─────────────────────
+  if (window.electronAPI?.getServerUrl && !window.BRIMSTONE_SERVER) {
+    try {
+      const url = await window.electronAPI.getServerUrl();
+      if (url) _applyServerUrl(url);
+    } catch { /* ignore */ }
+  }
+
   // ── Web (browser) — honour localStorage override ─────────────────────────
   if (!isNativeMobile && !window.electronAPI && !window.BRIMSTONE_SERVER) {
     const stored = _lsGet('brimstone_server_url');

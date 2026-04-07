@@ -15,6 +15,38 @@ import {
 import { EntityType, ENTITY_COLOR } from '../src/entities.js';
 import { nodeController, Phase } from '../src/game.js';
 import { MAP_SIZES } from '../src/map.js';
+import { Renderer } from '../src/renderer.js';
+
+// ── Tilemap sprite support ───────────────────────────────────────────────────
+
+let _tilemapImg = null;
+let _spriteRects = null;
+let _variantCounts = null;
+
+export async function loadTilemap(tilemapPath = 'assets/tilemap.png') {
+  try {
+    const { loadImage } = await import('canvas');
+    _tilemapImg = await loadImage(tilemapPath);
+    const result = Renderer._buildSpriteRects();
+    _spriteRects = result.rects;
+    _variantCounts = result.variantCounts;
+  } catch {
+    _tilemapImg = null;
+  }
+}
+
+function _pickVariant(baseType, col, row) {
+  const count = _variantCounts?.get(baseType) ?? 0;
+  if (count > 0) {
+    const variant = ((col * 7 + row * 13 + col * row) % count) + 1;
+    return `${baseType}_${variant}`;
+  }
+  return baseType;
+}
+
+function _survivorAssetId(title) {
+  return Renderer.survivorAssetId(title);
+}
 
 // ── Hex geometry ──────────────────────────────────────────────────────────────
 
@@ -149,6 +181,26 @@ export function renderGameState(state, opts = {}) {
       ctx.closePath();
       ctx.fillStyle = color;
       ctx.fill();
+
+      if (_tilemapImg && _spriteRects) {
+        const baseType = tile.type === TileType.BUILDING ? TileType.DIRT
+          : (tile.type === TileType.ROAD || tile.type === TileType.RIVER || tile.type === TileType.BRIDGE) ? TileType.GRASS
+          : tile.type;
+        const spriteId = _pickVariant(baseType, c, r);
+        const rect = _spriteRects.get(spriteId);
+        if (rect) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.moveTo(corners[0].x, corners[0].y);
+          for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
+          ctx.closePath();
+          ctx.clip();
+          ctx.drawImage(_tilemapImg, rect.x, rect.y, rect.size, rect.size,
+            x - hs, y - hs, hs * 2, hs * 2);
+          ctx.restore();
+        }
+      }
+
       ctx.strokeStyle = '#111418';
       ctx.lineWidth   = 0.8;
       ctx.stroke();
@@ -306,20 +358,29 @@ export function renderGameState(state, opts = {}) {
 
   ctx.lineCap = 'butt';
 
-  // ── Building labels ─────────────────────────────────────────────────────────
+  // ── Building sprites / labels ────────────────────────────────────────────────
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const tile = state.tiles.get(hexKey(c, r));
       if (!tile || tile.type !== TileType.BUILDING || !tile.building) continue;
 
       const { x, y } = toCanvas(c, r);
-      const label = BUILDING_LABEL[tile.building] ?? tile.building;
 
-      ctx.fillStyle    = 'rgba(255,248,230,0.92)';
-      ctx.font         = `bold ${Math.max(7, Math.floor(hs * 0.22))}px Georgia, serif`;
-      ctx.textAlign    = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(label, x, y);
+      if (_tilemapImg && _spriteRects) {
+        const bRect = _spriteRects.get(tile.building);
+        if (bRect) {
+          const bSize = hs * 1.4;
+          ctx.drawImage(_tilemapImg, bRect.x, bRect.y, bRect.size, bRect.size,
+            x - bSize / 2, y - bSize / 2, bSize, bSize);
+        }
+      } else {
+        const label = BUILDING_LABEL[tile.building] ?? tile.building;
+        ctx.fillStyle    = 'rgba(255,248,230,0.92)';
+        ctx.font         = `bold ${Math.max(7, Math.floor(hs * 0.22))}px Georgia, serif`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, x, y);
+      }
     }
   }
 
@@ -327,22 +388,33 @@ export function renderGameState(state, opts = {}) {
   for (const obj of state.witchObjectives) {
     // Determine controller for colouring
     const ctrl = nodeController(obj, state.entities);
-    const ctrlColor = ctrl === 'hero' ? 'rgba(212,167,44,0.55)'
-      : ctrl === 'witch' ? 'rgba(155,89,182,0.55)'
-      : 'rgba(100,100,120,0.35)';
+    const ctrlFill = ctrl === 'hero' ? 'rgba(212,167,44,0.40)'
+      : ctrl === 'witch' ? 'rgba(155,89,182,0.40)'
+      : 'rgba(140,120,200,0.25)';
+    const ctrlStroke = ctrl === 'hero' ? 'rgba(240,200,60,0.90)'
+      : ctrl === 'witch' ? 'rgba(200,130,255,0.90)'
+      : 'rgba(180,170,220,0.70)';
 
     for (const h of obj.hexes) {
       const { x, y } = toCanvas(h.col, h.row);
-      const grad = ctx.createRadialGradient(x, y, hs * 0.1, x, y, hs * 0.9);
-      grad.addColorStop(0, ctrlColor);
-      grad.addColorStop(1, ctrlColor.replace(/[\d.]+\)$/, '0)'));
-      ctx.fillStyle = grad;
       const corners = hexCorners(x, y, hs - 1);
+
+      // Glow fill
+      const grad = ctx.createRadialGradient(x, y, 0, x, y, hs);
+      grad.addColorStop(0, ctrlFill);
+      grad.addColorStop(0.7, ctrlFill);
+      grad.addColorStop(1, ctrlFill.replace(/[\d.]+\)$/, '0)'));
       ctx.beginPath();
       ctx.moveTo(corners[0].x, corners[0].y);
       for (let i = 1; i < 6; i++) ctx.lineTo(corners[i].x, corners[i].y);
       ctx.closePath();
+      ctx.fillStyle = grad;
       ctx.fill();
+
+      // Bold hex outline
+      ctx.strokeStyle = ctrlStroke;
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
     }
 
     // Symbol at centroid
@@ -353,17 +425,25 @@ export function renderGameState(state, opts = {}) {
     }
     cx /= obj.hexes.length; cy /= obj.hexes.length;
 
-    ctx.fillStyle    = ctrl === 'hero' ? 'rgba(240,200,80,0.95)'
-      : ctrl === 'witch' ? 'rgba(200,160,255,0.95)'
-      : 'rgba(160,160,180,0.80)';
-    ctx.font         = `bold ${Math.floor(hs * 0.45)}px Georgia, serif`;
-    ctx.textAlign    = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('\u26E7', cx, cy - hs * 0.08); // ⛧
+    // Dark backing circle for readability
+    ctx.beginPath();
+    ctx.arc(cx, cy, hs * 0.42, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fill();
 
-    ctx.fillStyle    = 'rgba(220,180,255,0.85)';
-    ctx.font         = `bold ${Math.max(7, Math.floor(hs * 0.20))}px Georgia, serif`;
-    ctx.fillText(obj.label ?? 'Node', cx, cy + hs * 0.50);
+    ctx.fillStyle = ctrl === 'hero' ? '#f0d050'
+      : ctrl === 'witch' ? '#d0a0ff'
+      : '#c0b8d8';
+    ctx.font = `bold ${Math.floor(hs * 0.55)}px Georgia, serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('\u26E7', cx, cy); // ⛧
+
+    ctx.fillStyle = ctrl === 'hero' ? 'rgba(240,200,80,0.95)'
+      : ctrl === 'witch' ? 'rgba(220,180,255,0.95)'
+      : 'rgba(200,190,220,0.85)';
+    ctx.font = `bold ${Math.max(8, Math.floor(hs * 0.22))}px Georgia, serif`;
+    ctx.fillText(obj.label ?? 'Node', cx, cy + hs * 0.55);
   }
 
   // ── Player hex outlines ──────────────────────────────────────────────────────
@@ -438,12 +518,33 @@ export function renderGameState(state, opts = {}) {
       ctx.fillStyle = 'rgba(0,0,0,0.45)';
       ctx.fill();
 
-      // Base fill
-      const baseCol = entity.color ?? ENTITY_COLOR[entity.type];
-      ctx.beginPath();
-      ctx.arc(ex, ey, r, 0, Math.PI * 2);
-      ctx.fillStyle = baseCol;
-      ctx.fill();
+      // Portrait sprite or color fill
+      const portraitKey = entity.type === EntityType.SURVIVOR
+        ? _survivorAssetId(entity.title) : entity.type;
+      const pRect = portraitKey ? _spriteRects?.get(portraitKey) : null;
+
+      if (pRect && _tilemapImg) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(ex, ey, r, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.drawImage(_tilemapImg, pRect.x, pRect.y, pRect.size, pRect.size,
+          ex - r, ey - r, r * 2, r * 2);
+        ctx.restore();
+      } else {
+        const baseCol = entity.color ?? ENTITY_COLOR[entity.type];
+        ctx.beginPath();
+        ctx.arc(ex, ey, r, 0, Math.PI * 2);
+        ctx.fillStyle = baseCol;
+        ctx.fill();
+
+        const glyph = ENTITY_GLYPH[entity.type] ?? '?';
+        ctx.fillStyle    = '#ffffffdd';
+        ctx.font         = `bold ${Math.floor(r * 1.1)}px serif`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(glyph, ex, ey + 1);
+      }
 
       // Border
       ctx.beginPath();
@@ -451,14 +552,6 @@ export function renderGameState(state, opts = {}) {
       ctx.strokeStyle = 'rgba(255,255,255,0.7)';
       ctx.lineWidth   = 1.5;
       ctx.stroke();
-
-      // Glyph
-      const glyph = ENTITY_GLYPH[entity.type] ?? '?';
-      ctx.fillStyle    = '#ffffffdd';
-      ctx.font         = `bold ${Math.floor(r * 1.1)}px serif`;
-      ctx.textAlign    = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(glyph, ex, ey + 1);
 
       // HP bar for major entities
       if (entity.maxHp > 1) {

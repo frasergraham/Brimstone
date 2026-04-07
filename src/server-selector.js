@@ -20,12 +20,21 @@ const THIS_SERVER  = '';
  * Initialise the server selector UI.
  * @param {boolean} serverDevMode - devMode flag from the server's /api/config
  */
-export function initServerSelector(serverDevMode = false) {
+export async function initServerSelector(serverDevMode = false) {
   // Always show the server selector for now
   // if (!serverDevMode && !isDevMode) return;
 
   const setupScreen = document.getElementById('setup-screen');
   if (!setupScreen) return;
+
+  // In Electron, BRIMSTONE_SERVER may not be set yet (async preload race).
+  // Await the electron API to ensure we have the correct server URL.
+  if (window.electronAPI?.getServerUrl && !window.BRIMSTONE_SERVER) {
+    try {
+      const url = await window.electronAPI.getServerUrl();
+      if (url) window.BRIMSTONE_SERVER = url;
+    } catch { /* ignore */ }
+  }
 
   const storedUrl   = localStorage.getItem('brimstone_server_url');
   const isCustomUrl = !!storedUrl; // any stored override means user chose something
@@ -91,6 +100,11 @@ function _thisServerLabel() {
   try {
     if (window.BRIMSTONE_SERVER) {
       return new URL(window.BRIMSTONE_SERVER).hostname;
+    }
+    // Electron uses a custom protocol (calebshollow://) so location.hostname
+    // is just "." — fall back to a sensible default.
+    if (location.protocol === 'calebshollow:' || location.hostname === '.') {
+      return 'calebshollow.com';
     }
     return location.hostname === 'localhost'
       ? `localhost:${location.port}`
