@@ -384,8 +384,8 @@ export class UIController {
     this._el('chronicle-overlay')?.addEventListener('click', e => {
       if (e.target === this._el('chronicle-overlay')) this._setChronicleMode('none');
     });
-    this._el('chronicle-sidebar-close')?.addEventListener('click', () => {
-      this._setChronicleMode('none');
+    this._el('chronicle-sidebar-toggle')?.addEventListener('click', () => {
+      this._cycleChronicle();
     });
 
 
@@ -3130,6 +3130,9 @@ export class UIController {
     this._chronicleMode = mode;
     const sidebar = this._el('chronicle-sidebar');
     if (sidebar) sidebar.style.display = mode === 'full' ? 'flex' : 'none';
+    // Hide standalone button when full sidebar is open (button lives in sidebar header instead)
+    const standaloneBtn = this._el('chronicle-toggle');
+    if (standaloneBtn) standaloneBtn.style.display = mode === 'full' ? 'none' : '';
     this._renderMiniChronicle();
     if (mode === 'full') this._renderSidebarLog();
     // Update renderer inset so framing avoids the sidebar area

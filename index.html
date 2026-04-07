@@ -849,8 +849,8 @@
       <!-- Chronicle sidebar: left panel shown in 'full' chronicle mode -->
       <div id="chronicle-sidebar" style="display:none">
         <div class="chronicle-sidebar-header">
-          <span class="chronicle-title">📜 Chronicle</span>
-          <button id="chronicle-sidebar-close" title="Close chronicle">✕</button>
+          <button id="chronicle-sidebar-toggle" class="zoom-btn" title="Toggle chronicle">…</button>
+          <span class="chronicle-title">Chronicle</span>
         </div>
         <div id="chronicle-sidebar-log"></div>
       </div>
@@ -879,7 +879,6 @@
           <button id="zoom-fit" class="zoom-btn" title="Fit map">⛶</button>
           <button id="zoom-me"  class="zoom-btn" title="Focus on my units">⊙</button>
           <button id="speed-toggle" class="zoom-btn" title="Battle speed">⚡</button>
-          <button id="chronicle-toggle" class="zoom-btn" title="Toggle chronicle">📜</button>
           <!-- Map options button hidden — kept for future debug use -->
           <button id="map-options-toggle" class="zoom-btn" title="Map options" style="display:none">⚙</button>
           <div id="map-options-popup" class="speed-popup" style="display:none">
@@ -912,6 +911,8 @@
             </button>
           </div>
         </div>
+        <!-- Chronicle toggle button — top-left of map -->
+        <button id="chronicle-toggle" class="zoom-btn chronicle-toggle-btn" title="Toggle chronicle">…</button>
         <!-- Mini chronicle: last 5 log messages, top-left overlay -->
         <div id="chronicle-mini"></div>
       </div>

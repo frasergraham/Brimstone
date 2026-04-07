@@ -1888,6 +1888,8 @@ if (isNativeMobile) {
       if (panel) {
         panel.classList.toggle('collapsed');
         _collapseBtn.textContent = panel.classList.contains('collapsed') ? '\u25B6' : '\u25C0';
+        const wrapper = document.getElementById('canvas-wrapper');
+        if (wrapper) wrapper.classList.toggle('ai-debug-open', !panel.classList.contains('collapsed'));
         if (renderer) {
           renderer.insetLeft = panel.classList.contains('collapsed') ? 0 : 260;
           redraw();
