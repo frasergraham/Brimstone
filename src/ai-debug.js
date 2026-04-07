@@ -197,6 +197,8 @@ export function updateAIDebugPanel(data, entities = []) {
   if (!panel || !data) return;
 
   panel.style.display = '';
+  const wrapper = document.getElementById('canvas-wrapper');
+  if (wrapper && !panel.classList.contains('collapsed')) wrapper.classList.add('ai-debug-open');
 
   // Faction + personality header
   const factionRow = document.getElementById('ai-debug-faction-row');
@@ -290,6 +292,8 @@ export function updateAIDebugPanel(data, entities = []) {
 export function hideAIDebugPanel() {
   const panel = document.getElementById('ai-debug-panel');
   if (panel) panel.style.display = 'none';
+  const wrapper = document.getElementById('canvas-wrapper');
+  if (wrapper) wrapper.classList.remove('ai-debug-open');
 }
 
 // ── Internal helpers ────────────────────────────────────────────────────────

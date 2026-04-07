@@ -1170,6 +1170,7 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   z-index: 10;
   /* Hide on genuine touch-only devices (shown again if mouse is detected) */
   pointer-events: auto;
+  transition: left 0.2s ease;
 }
 
 .zoom-btn {
@@ -1230,11 +1231,26 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   }
 }
 
+/* ── Chronicle toggle (top-left, independent of zoom controls) ─────────── */
+
+.chronicle-toggle-btn {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 11;
+  transition: left 0.2s ease;
+}
+
+/* Shift map controls right when AI debug panel is open */
+.ai-debug-open .zoom-controls     { left: 272px; }
+.ai-debug-open .chronicle-toggle-btn { left: 268px; }
+.ai-debug-open #chronicle-mini    { left: 268px; }
+
 /* ── Mini chronicle (top-left HUD) ──────────────────────────────────────── */
 
 #chronicle-mini {
   position: absolute;
-  top: 8px;
+  top: 50px;
   left: 8px;
   max-width: 340px;
   pointer-events: none;
@@ -1242,6 +1258,7 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   display: flex;
   flex-direction: column;
   gap: 2px;
+  transition: left 0.2s ease;
 }
 .chronicle-mini-btn {
   pointer-events: auto;
