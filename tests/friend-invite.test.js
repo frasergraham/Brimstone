@@ -14,10 +14,11 @@ import {
 const GC_PREFIX = 'GC:test-fi-';
 
 function cleanUp() {
+  db.prepare('DELETE FROM device_tokens WHERE player_id IN (SELECT id FROM players WHERE username LIKE ?)')
+    .run('test-fi-%');
   db.prepare('DELETE FROM player_identities WHERE provider = ? AND provider_id LIKE ?')
     .run('gamecenter', `${GC_PREFIX}%`);
   db.prepare('DELETE FROM players WHERE username LIKE ?').run('test-fi-%');
-  db.prepare('DELETE FROM device_tokens WHERE player_id LIKE ?').run('test-fi-%');
 }
 
 before(cleanUp);
