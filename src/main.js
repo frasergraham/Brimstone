@@ -2582,9 +2582,14 @@ function _handleCampaignMissionEnd() {
   const missionDef = _activeMissionDef;
 
   // Gather surviving survivors for roster (permadeath: dead ones are lost)
-  const survivors = state.entities
+  // Include both deployed survivors who lived AND roster members who weren't deployed
+  const deployedSurvivors = state.entities
     .filter(e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR)
     .map(e => snapshotSurvivor(e));
+  const deployedNames = new Set(deployedSurvivors.map(s => s.name));
+  // Keep roster members who weren't deployed (they stayed behind safely)
+  const undeployed = _activeCampaign.roster.filter(s => !deployedNames.has(s.name));
+  const survivors = [...deployedSurvivors, ...undeployed];
 
   // Apply mission result to campaign state
   _activeCampaign.applyMissionResult(missionDef.id, {

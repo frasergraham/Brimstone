@@ -916,6 +916,37 @@ describe('healBonus on mission victory', () => {
     assert.equal(c.heroStats.hp, 5); // no change
     assert.equal(c.roster[0].hp, 2); // no change
   });
+
+  test('undeployed roster members are preserved after mission result', () => {
+    const c = new Campaign(hollowDef);
+    c.roster = [
+      { name: 'Deployed', title: 'Test', bio: '', ability: null, abilityLabel: null, color: '#fff', hp: 4, maxHp: 4, attack: 1, defense: 1, weapon: null, items: {} },
+      { name: 'StayedBehind', title: 'Safe', bio: '', ability: null, abilityLabel: null, color: '#aaa', hp: 3, maxHp: 3, attack: 1, defense: 1, weapon: null, items: {} },
+    ];
+    // Simulate a mission where only 'Deployed' was in-game and survived
+    const deployedSurvivors = [
+      { name: 'Deployed', title: 'Test', bio: '', ability: null, abilityLabel: null, color: '#fff', hp: 2, maxHp: 4, attack: 1, defense: 1, weapon: null, items: {} },
+    ];
+    const deployedNames = new Set(deployedSurvivors.map(s => s.name));
+    const undeployed = c.roster.filter(s => !deployedNames.has(s.name));
+    const allSurvivors = [...deployedSurvivors, ...undeployed];
+
+    c.applyMissionResult('prologue', {
+      won: true,
+      survivors: allSurvivors,
+      heroStats: c.heroStats,
+      resources: {},
+      flags: {},
+    });
+
+    assert.equal(c.roster.length, 2, 'both survivors should be in roster');
+    assert.ok(c.roster.some(s => s.name === 'Deployed'), 'deployed survivor preserved');
+    assert.ok(c.roster.some(s => s.name === 'StayedBehind'), 'undeployed survivor preserved');
+    // prologue has healBonus: 2, so deployed survivor heals from 2 → 4 (capped at maxHp)
+    const healBonus = hollowDef.missions[0].healBonus ?? 0;
+    assert.equal(c.roster.find(s => s.name === 'Deployed').hp, Math.min(2 + healBonus, 4), 'deployed survivor HP updated + healed');
+    assert.equal(c.roster.find(s => s.name === 'StayedBehind').hp, Math.min(3 + healBonus, 3), 'undeployed survivor also healed');
+  });
 });
 
 // ── Mid-mission save/resume ───────────────────────────────────────────────
