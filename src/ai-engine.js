@@ -155,6 +155,7 @@ export function assessBoard(sim) {
   });
   const witchHeldCount = nodes.filter(n => n.controller === 'witch').length;
   const heroHeldCount = nodes.filter(n => n.controller === 'hero').length;
+  const heroOnNodeCount = nodes.filter(n => n.heroPresent).length;
 
   // Scores
   const witchScore = sim.nodeScore?.witch ?? 0;
@@ -199,7 +200,7 @@ export function assessBoard(sim) {
     witchHpRatio: witch ? witch.hp / (witch.maxHp || witch.hp || 1) : 1,
     minions, minionCount, armyStrength,
     visibleHeroes, heroDistance, heroHpRatio, enemiesNearWitch,
-    nodes, witchHeldCount, heroHeldCount,
+    nodes, witchHeldCount, heroHeldCount, heroOnNodeCount,
     witchScore, heroScore,
     totalResources, metalCount, woodCount, canAffordSummon, bestSummonType,
     unexploredBuildings,
@@ -247,6 +248,8 @@ export function scoreGoals(board, goalWeights = null) {
   if (board.heroScore >= 3) control += 0.3;
   if (board.heroHeldCount > 0) control += 0.2;
   if (board.heroHeldCount > board.witchHeldCount) control += 0.25;
+  // Enemies physically standing on nodes — urgent, must contest aggressively
+  if (board.heroOnNodeCount > 0) control += 0.3;
   if (board.roundsToScoring <= 2) control += 0.2;
   else if (board.roundsToScoring <= 1) control += 0.15;
   const controlMult = board.isDawnOrDusk ? 1.8 : 1.0;
@@ -705,101 +708,113 @@ export function genControlNodes(sim, board, budget) {
   for (const node of targetNodes) {
     if (remaining <= 0) break;
 
-    // Prefer minions for node control (witch should be exploring/summoning)
-    const unit = _closestUncommitted(sim, board, node.obj, true);
-    if (!unit) continue;
+    // Send multiple units to enemy-occupied nodes — swarm them
+    const enemyOnNode = node.heroPresent;
+    const unitsForNode = enemyOnNode ? 3 : (heroThreatenedNode(node) ? 2 : 1);
 
-    const simUnit = sim.entities.find(e => e.id === unit.id);
-    if (!simUnit) continue;
+    for (let u = 0; u < unitsForNode; u++) {
+      if (remaining <= 0) break;
 
-    const onNode = node.obj.hexes
-      ? node.obj.hexes.some(h => h.col === simUnit.col && h.row === simUnit.row)
-      : (simUnit.col === node.obj.col && simUnit.row === node.obj.row);
+      // Prefer minions for node control (witch should be exploring/summoning)
+      const unit = _closestUncommitted(sim, board, node.obj, true);
+      if (!unit) break;
 
-    if (onNode) {
-      // AGGRESSIVE: fight ALL enemies on or adjacent to the node
-      const adjacentEnemies = board.visibleHeroes.filter(h =>
-        hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= 1
-      );
-      for (const enemy of adjacentEnemies) {
-        if (remaining <= 0) break;
-        const est = estimateCombat(simUnit, enemy, board);
-        if (est.classification === 'suicidal') continue;
-        actions.push({
-          type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
-          targetId: enemy.id, targetCol: enemy.col, targetRow: enemy.row,
-          _priority: 3, _goal: Goal.CONTROL_NODES,
-        });
-        sim.applyBattle();
-        remaining--;
-      }
-      if (adjacentEnemies.length > 0) {
-        sim.unitCommitments.set(simUnit.id, Goal.CONTROL_NODES);
-      }
-      // Guard if threats nearby but couldn't attack
-      if (remaining > 0 && !sim.unitCommitments.has(simUnit.id)) {
-        const nearbyThreat = board.visibleHeroes.some(h =>
-          hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= 2
+      const simUnit = sim.entities.find(e => e.id === unit.id);
+      if (!simUnit) break;
+
+      const onNode = node.obj.hexes
+        ? node.obj.hexes.some(h => h.col === simUnit.col && h.row === simUnit.row)
+        : (simUnit.col === node.obj.col && simUnit.row === node.obj.row);
+
+      if (onNode) {
+        // AGGRESSIVE: fight ALL enemies on or adjacent to the node — always
+        const adjacentEnemies = board.visibleHeroes.filter(h =>
+          hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= 1
         );
-        if (nearbyThreat) {
+        for (const enemy of adjacentEnemies) {
+          if (remaining <= 0) break;
+          // At a power node, always fight — no combat gate
           actions.push({
-            type: PlanActionType.GUARD, entityId: simUnit.id,
-            _priority: 4, _goal: Goal.CONTROL_NODES,
+            type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
+            targetId: enemy.id, targetCol: enemy.col, targetRow: enemy.row,
+            _priority: enemyOnNode ? 2 : 3, _goal: Goal.CONTROL_NODES,
           });
-          sim.applyGuard(simUnit.id);
-          sim.unitCommitments.set(simUnit.id, Goal.CONTROL_NODES);
+          sim.applyBattle();
           remaining--;
         }
+        if (adjacentEnemies.length > 0) {
+          sim.unitCommitments.set(simUnit.id, Goal.CONTROL_NODES);
+        }
+        // Guard if threats nearby but couldn't attack
+        if (remaining > 0 && !sim.unitCommitments.has(simUnit.id)) {
+          const nearbyThreat = board.visibleHeroes.some(h =>
+            hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= 2
+          );
+          if (nearbyThreat) {
+            actions.push({
+              type: PlanActionType.GUARD, entityId: simUnit.id,
+              _priority: 4, _goal: Goal.CONTROL_NODES,
+            });
+            sim.applyGuard(simUnit.id);
+            sim.unitCommitments.set(simUnit.id, Goal.CONTROL_NODES);
+            remaining--;
+          }
+        }
+        continue;
       }
-      continue;
-    }
 
-    // Move toward node, attacking enemies encountered en route
-    sim.unitCommitments.set(simUnit.id, Goal.CONTROL_NODES);
-    let stepsForUnit = Math.min(remaining, 3);
-    while (stepsForUnit > 0) {
-      // Opportunity attack: fight adjacent hero units while moving
-      const adjacentFoes = board.visibleHeroes.filter(h =>
-        hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= 1
-      );
-      for (const enemy of adjacentFoes) {
+      // Move toward node, attacking enemies encountered en route
+      sim.unitCommitments.set(simUnit.id, Goal.CONTROL_NODES);
+      let stepsForUnit = Math.min(remaining, 3);
+      while (stepsForUnit > 0) {
+        // Opportunity attack: fight adjacent hero units while moving
+        const adjacentFoes = board.visibleHeroes.filter(h =>
+          hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= 1
+        );
+        for (const enemy of adjacentFoes) {
+          if (remaining <= 0 || stepsForUnit <= 0) break;
+          const est = estimateCombat(simUnit, enemy, board);
+          // Heading to enemy-occupied node: fight at any odds
+          if (enemyOnNode) {
+            // Always fight when converging on a contested node
+          } else {
+            if (est.classification === 'suicidal') continue;
+            // At night, witch is stronger — attack even at unfavorable odds
+            if (!board.isNight && est.classification === 'unfavorable') continue;
+          }
+          actions.push({
+            type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
+            targetId: enemy.id, targetCol: enemy.col, targetRow: enemy.row,
+            _priority: enemyOnNode ? 2 : 3, _goal: Goal.CONTROL_NODES,
+          });
+          sim.applyBattle();
+          remaining--;
+          stepsForUnit--;
+        }
         if (remaining <= 0 || stepsForUnit <= 0) break;
-        const est = estimateCombat(simUnit, enemy, board);
-        if (est.classification === 'suicidal') continue;
-        // At night, witch is stronger — attack even at unfavorable odds
-        if (!board.isNight && est.classification === 'unfavorable') continue;
+
+        const targetHex = node.obj.hexes
+          ? node.obj.hexes.reduce((best, h) => {
+              const d = hexDistance(simUnit.col, simUnit.row, h.col, h.row);
+              const bd = hexDistance(simUnit.col, simUnit.row, best.col, best.row);
+              return d < bd ? h : best;
+            }, node.obj.hexes[0])
+          : node.obj;
+
+        if (simUnit.col === targetHex.col && simUnit.row === targetHex.row) break;
+
+        const step = roadStepToward(sim, simUnit, targetHex);
+        if (!step) break;
+
         actions.push({
-          type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
-          targetId: enemy.id, targetCol: enemy.col, targetRow: enemy.row,
-          _priority: 3, _goal: Goal.CONTROL_NODES,
+          type: PlanActionType.MOVE, entityId: simUnit.id,
+          toCol: step.col, toRow: step.row,
+          _priority: 4, _goal: Goal.CONTROL_NODES,
         });
-        sim.applyBattle();
+        sim.applyMove(simUnit.id, step.col, step.row);
         remaining--;
         stepsForUnit--;
       }
-      if (remaining <= 0 || stepsForUnit <= 0) break;
-
-      const targetHex = node.obj.hexes
-        ? node.obj.hexes.reduce((best, h) => {
-            const d = hexDistance(simUnit.col, simUnit.row, h.col, h.row);
-            const bd = hexDistance(simUnit.col, simUnit.row, best.col, best.row);
-            return d < bd ? h : best;
-          }, node.obj.hexes[0])
-        : node.obj;
-
-      if (simUnit.col === targetHex.col && simUnit.row === targetHex.row) break;
-
-      const step = roadStepToward(sim, simUnit, targetHex);
-      if (!step) break;
-
-      actions.push({
-        type: PlanActionType.MOVE, entityId: simUnit.id,
-        toCol: step.col, toRow: step.row,
-        _priority: 4, _goal: Goal.CONTROL_NODES,
-      });
-      sim.applyMove(simUnit.id, step.col, step.row);
-      remaining--;
-      stepsForUnit--;
     }
   }
 
