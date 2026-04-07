@@ -156,6 +156,7 @@ export function assessBoard(sim) {
   });
   const witchHeldCount = nodes.filter(n => n.controller === 'witch').length;
   const heroHeldCount = nodes.filter(n => n.controller === 'hero').length;
+  const heroOnNodeCount = nodes.filter(n => n.heroPresent).length;
 
   // Scores
   const witchScore = sim.nodeScore?.witch ?? 0;
@@ -224,7 +225,7 @@ export function assessBoard(sim) {
     visibleHeroes, heroDistance, heroHpRatio, enemiesNearWitch,
     heroLeader, heroSurvivors, visibleSurvivors, woundedEnemies,
     witchArmyTotal, minionsNearWitch, canSweepNodes,
-    nodes, witchHeldCount, heroHeldCount,
+    nodes, witchHeldCount, heroHeldCount, heroOnNodeCount,
     witchScore, heroScore,
     totalResources, metalCount, woodCount, canAffordSummon, bestSummonType,
     unexploredBuildings,
@@ -280,6 +281,8 @@ export function scoreGoals(board, goalWeights = null) {
   if (board.heroScore >= 3) control += 0.3;
   if (board.heroHeldCount > 0) control += 0.2;
   if (board.heroHeldCount > board.witchHeldCount) control += 0.25;
+  // Enemies physically standing on nodes — urgent, must contest aggressively
+  if (board.heroOnNodeCount > 0) control += 0.3;
   // Scoring urgency — ramp up as scoring approaches
   if (board.roundsToScoring <= 3) control += 0.1;
   if (board.roundsToScoring <= 2) control += 0.15;
@@ -906,8 +909,11 @@ export function genControlNodes(sim, board, budget) {
   for (const node of targetNodes) {
     if (remaining <= 0) break;
 
-    // Send multiple units to each node for overwhelming force
-    for (let u = 0; u < unitsPerNode; u++) {
+    // Send multiple units — use our calculated unitsPerNode but also boost for enemy presence
+    const enemyOnNode = node.heroPresent;
+    const effectiveUnits = Math.max(unitsPerNode, enemyOnNode ? 3 : 1);
+
+    for (let u = 0; u < effectiveUnits; u++) {
       if (remaining <= 0) break;
 
       const unit = _closestUncommitted(sim, board, node.obj, true);
@@ -921,18 +927,17 @@ export function genControlNodes(sim, board, budget) {
         : (simUnit.col === node.obj.col && simUnit.row === node.obj.row);
 
       if (onNode) {
-        // AGGRESSIVE: fight ALL enemies on or adjacent to the node
+        // AGGRESSIVE: fight ALL enemies on or adjacent to the node — always
         const adjacentEnemies = board.visibleHeroes.filter(h =>
           hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= 1
         );
         for (const enemy of adjacentEnemies) {
           if (remaining <= 0) break;
-          const est = estimateCombat(simUnit, enemy, board);
-          if (est.classification === 'suicidal') continue;
+          // At a power node, always fight — no combat gate
           actions.push({
             type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
             targetId: enemy.id, targetCol: enemy.col, targetRow: enemy.row,
-            _priority: 3, _goal: Goal.CONTROL_NODES,
+            _priority: enemyOnNode ? 2 : 3, _goal: Goal.CONTROL_NODES,
           });
           sim.applyBattle();
           remaining--;
@@ -969,12 +974,16 @@ export function genControlNodes(sim, board, budget) {
         for (const enemy of adjacentFoes) {
           if (remaining <= 0 || stepsForUnit <= 0) break;
           const est = estimateCombat(simUnit, enemy, board);
-          if (est.classification === 'suicidal') continue;
-          // Attack at unfavorable odds — attrition favors witch
+          // Heading to enemy-occupied node: fight at any odds
+          if (enemyOnNode) {
+            // Always fight when converging on a contested node
+          } else {
+            if (est.classification === 'suicidal') continue;
+          }
           actions.push({
             type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
             targetId: enemy.id, targetCol: enemy.col, targetRow: enemy.row,
-            _priority: 3, _goal: Goal.CONTROL_NODES,
+            _priority: enemyOnNode ? 2 : 3, _goal: Goal.CONTROL_NODES,
           });
           sim.applyBattle();
           remaining--;

@@ -640,9 +640,10 @@ export function genControlNodes(sim, board, budget, config = null) {
   for (const node of targetNodes) {
     if (remaining <= 0) break;
 
-    // Send 2 units to contested nodes
-    const contested = node.witchPresent || (board.roundsToScoring <= 2 && node.feasibility >= 0.4);
-    const unitsForNode = contested ? 2 : 1;
+    // Send multiple units to enemy-occupied nodes
+    const enemyOnNode = node.witchPresent;
+    const contested = enemyOnNode || (board.roundsToScoring <= 2 && node.feasibility >= 0.4);
+    const unitsForNode = enemyOnNode ? 3 : (contested ? 2 : 1);
 
     for (let u = 0; u < unitsForNode; u++) {
       if (remaining <= 0) break;
@@ -659,20 +660,18 @@ export function genControlNodes(sim, board, budget, config = null) {
         : (simUnit.col === node.obj.col && simUnit.row === node.obj.row);
 
       if (onNode) {
-        // AGGRESSIVE: fight ALL enemies on or adjacent to the node
+        // AGGRESSIVE: fight ALL enemies on or adjacent to the node — always
         const allEnemies = [board.witch, ...board.witchMinions].filter(Boolean);
         const nearbyEnemies = allEnemies.filter(e =>
           hexDistance(e.col, e.row, simUnit.col, simUnit.row) <= 1
         );
         for (const enemy of nearbyEnemies) {
           if (remaining <= 0) break;
-          const est = estimateHeroCombat(simUnit, enemy, board);
-          if (!meetsEngageFloor(est.classification, engageFloor)) continue;
-
+          // At a power node, always fight — no combat gate
           actions.push({
             type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
             targetId: enemy.id, targetCol: enemy.col, targetRow: enemy.row,
-            _priority: 3, _goal: HeroGoal.CONTROL_NODES,
+            _priority: enemyOnNode ? 2 : 3, _goal: HeroGoal.CONTROL_NODES,
           });
           sim.applyBattle();
           remaining--;
@@ -740,12 +739,15 @@ export function genControlNodes(sim, board, budget, config = null) {
         );
         for (const enemy of adjacentEnemies) {
           if (remaining <= 0 || stepsForUnit <= 0) break;
-          const est = estimateHeroCombat(simUnit, enemy, board);
-          if (!meetsEngageFloor(est.classification, engageFloor)) continue;
+          // Heading to enemy-occupied node: fight at any odds
+          if (!enemyOnNode) {
+            const est = estimateHeroCombat(simUnit, enemy, board);
+            if (!meetsEngageFloor(est.classification, engageFloor)) continue;
+          }
           actions.push({
             type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
             targetId: enemy.id, targetCol: enemy.col, targetRow: enemy.row,
-            _priority: 3, _goal: HeroGoal.CONTROL_NODES,
+            _priority: enemyOnNode ? 2 : 3, _goal: HeroGoal.CONTROL_NODES,
           });
           sim.applyBattle();
           remaining--;
