@@ -429,7 +429,10 @@ export function pruneOrphanedRooms() {
         destroyRoom(room);
       }
     } else if (room.status === 'playing') {
-      // Playing room with no humans and no cleanup timer already running
+      // Playing room with no human seats (all taken over by AI) and no cleanup
+      // timer already running. Note: isAI is only set to true after AI takeover
+      // from 2 consecutive missed deadlines — idle human players in async games
+      // keep isAI=false and are NOT affected by this check.
       const hasHuman = room.players.some(s => !s.isAI);
       if (!hasHuman && !room.allHumansGoneTimer) {
         console.log(`[pruneOrphanedRooms] hibernating orphaned game ${room.id} (no humans, no cleanup timer).`);
