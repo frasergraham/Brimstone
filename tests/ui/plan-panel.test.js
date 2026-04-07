@@ -102,6 +102,14 @@ describe('enterPlanningMode', () => {
     ui.enterPlanningMode('hero', 3);
     assert.equal(ui._planMode, true);
   });
+
+  test('hides plan-return-btn on enter', () => {
+    const { ui, els } = makeUI();
+    els['plan-return-btn'].style.display = ''; // pre-show
+    ui.enterPlanningMode('hero', 3);
+    assert.equal(els['plan-return-btn'].style.display, 'none',
+      'plan-return-btn should be hidden when entering planning mode');
+  });
 });
 
 // ── exitPlanningMode ──────────────────────────────────────────────────────────
@@ -224,6 +232,34 @@ describe('_doSubmitPlan', () => {
     const opponent = ui._players.find(p => p.playerId === 'opponent-456');
     assert.ok(!opponent._submitted,
       'opponent entry should remain un-submitted');
+  });
+
+  test('clears selection on submit', () => {
+    const { ui } = makeUI();
+    ui.enterPlanningMode('hero', 3);
+    ui._selectedEntity = { id: 'hero-1', col: 0, row: 0 };
+    ui._doSubmitPlan();
+    assert.equal(ui._selectedEntity, null,
+      'selected entity should be cleared after submit');
+  });
+
+  test('hides end-turn-btn after submit', () => {
+    const { ui, els } = makeUI();
+    ui.enterPlanningMode('hero', 3);
+    ui._doSubmitPlan();
+    assert.equal(els['end-turn-btn'].style.display, 'none',
+      'end-turn-btn should be hidden after submission');
+  });
+
+  test('shows plan-return-btn after submit', () => {
+    const { ui, els } = makeUI();
+    // Collapse the panel so the return button isn't hidden by plan-open logic
+    els['plan-panel'].classList.add('collapsed');
+    ui.enterPlanningMode('hero', 3);
+    els['plan-panel'].classList.add('collapsed');
+    ui._doSubmitPlan();
+    assert.equal(els['plan-return-btn'].style.display, '',
+      'plan-return-btn should be visible after submission');
   });
 });
 

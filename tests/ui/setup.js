@@ -209,6 +209,7 @@ export function createElementsBag(overrides = {}) {
     'plan-panel','plan-tab','plan-tab-count','plan-toggle-btn',
     'plan-steps','plan-budget-badge','plan-status','plan-players',
     'plan-food-row','plan-submit-btn','plan-clear-btn','plan-inventory',
+    'plan-menu-btn','plan-return-btn','replay-turn-btn',
     'grace-dialog','grace-seconds','grace-submit-current','grace-submit-empty',
     'unit-stats-bar','action-popup','cancel-action-btn','cancel-wrap','target-hint',
     'chronicle-close','chronicle-overlay','chronicle-sidebar-close',

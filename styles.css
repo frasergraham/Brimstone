@@ -765,8 +765,8 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .end-turn-header.planning-active.countdown-urgent {
   animation: btn-pulse 0.5s ease-in-out infinite alternate;
 }
-/* Hide header submit when plan panel is expanded (but keep menu button visible after submission) */
-.end-turn-header.plan-open:not(.plan-was-submitted) {
+/* Hide header submit when plan panel is expanded */
+.end-turn-header.plan-open {
   display: none;
 }
 
