@@ -1313,22 +1313,11 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .chronicle-sidebar-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0.55rem 0.75rem;
+  gap: 0.5rem;
+  padding: 0.4rem 0.75rem;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
-
-#chronicle-sidebar-close {
-  background: none;
-  border: none;
-  color: var(--text-dim);
-  font-size: 1.1rem;
-  cursor: pointer;
-  padding: 0.15rem 0.4rem;
-  line-height: 1;
-}
-#chronicle-sidebar-close:hover { color: var(--text-bright); }
 
 #chronicle-sidebar-log {
   flex: 1;
