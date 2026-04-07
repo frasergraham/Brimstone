@@ -426,9 +426,11 @@ export function pruneOrphanedRooms() {
     if (room.status === 'lobby') {
       // Don't prune lobbies that were just created — give the client time to connect
       if (now - room.createdAt < ORPHAN_LOBBY_AGE_MS) continue;
-      // Check if any human slot has a live WebSocket
+      // Check if any human slot or unassigned player has a live WebSocket
       const hasLiveHuman = room.slots.some(
         s => s.status === 'human' && s._ws && s._ws.readyState === 1
+      ) || (room.unassigned || []).some(
+        u => u._ws && u._ws.readyState === 1
       );
       if (!hasLiveHuman) {
         console.log(`[pruneOrphanedRooms] destroying orphaned lobby ${room.id} (age ${Math.round((now - room.createdAt) / 1000)}s, no live humans).`);

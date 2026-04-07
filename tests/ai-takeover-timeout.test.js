@@ -128,6 +128,8 @@ describe('AI takeover after consecutive timeouts', () => {
     const lobbyMsg = ws1.findMsg('lobbyJoined');
     const roomId = lobbyMsg.lobby.id;
     joinLobby(p2, 'Hero2', ws2, roomId);
+    claimSlot(p1, roomId, 0); // hero slot 1
+    claimSlot(p2, roomId, 1); // hero slot 2
     fillAllWithAI(p1, roomId);
     startGame(p1, roomId);
 

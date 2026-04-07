@@ -4,7 +4,7 @@ import { describe, test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import db from '../server/db.js';
 import {
-  createLobby, joinLobby, fillAllWithAI, startGame,
+  createLobby, joinLobby, fillAllWithAI, startGame, claimSlot,
   getRooms, getRoom, browseLobby, pruneOrphanedRooms,
   handleDisconnect,
 } from '../server/lobby.js';
@@ -146,6 +146,7 @@ describe('orphaned room cleanup', () => {
       playersPerSide: 1, mapSize: 'skirmish', fog: 'none',
       turnIntervalMs: 86400000,
     });
+    claimSlot('test-orphan-p1', roomId, 0);
     fillAllWithAI('test-orphan-p1', roomId);
     startGame('test-orphan-p1', roomId);
 
