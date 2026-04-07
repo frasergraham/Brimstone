@@ -5712,6 +5712,17 @@ function _createMpClient() {
       // Ignore errors after intentional sign-out / disconnect
       if (!mp) return;
 
+      // If we're in-game and the reconnect overlay is visible, this is a
+      // fatal reconnection failure (e.g. "Game is no longer active").
+      // Wipe clean and return to the menu.
+      const reconnOverlay = document.getElementById('reconnect-overlay');
+      if (state && reconnOverlay?.style.display !== 'none') {
+        reconnOverlay.style.display = 'none';
+        _showOnlineScreen();
+        _onlineError(msg);
+        return;
+      }
+
       // Only show errors on setup screens (pre-game).
       // In-game connection errors are handled by the reconnect overlay.
       if (!state || document.getElementById('setup-screen').style.display !== 'none') {
