@@ -61,6 +61,7 @@ jobs:
 
       - name: Build, sign, notarize, and publish (macOS)
         if: matrix.platform == 'mac'
+        timeout-minutes: 15
         run: npm run electron:build:mac -- --publish ${{ (github.ref_type == 'tag' || inputs.publish) && 'always' || 'never' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
