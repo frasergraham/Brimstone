@@ -1628,6 +1628,29 @@ onInactiveChange((inactive) => {
   }
 });
 
+// Battle countdown timer (in-game)
+let _battleCountdownTimer = null;
+function _updateBattleCountdown() {
+  const el = document.getElementById('battle-countdown');
+  if (!el) return;
+  if (!state || state.gameMode !== 'battle' || !state.battleConfig?.endsAt) {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = '';
+  el.textContent = 'Battle ends in: ' + _formatTimeRemaining(state.battleConfig.endsAt);
+}
+function _startBattleCountdownTimer() {
+  if (_battleCountdownTimer) clearInterval(_battleCountdownTimer);
+  _updateBattleCountdown();
+  _battleCountdownTimer = setInterval(_updateBattleCountdown, 60_000);
+}
+function _stopBattleCountdownTimer() {
+  if (_battleCountdownTimer) { clearInterval(_battleCountdownTimer); _battleCountdownTimer = null; }
+  const el = document.getElementById('battle-countdown');
+  if (el) el.style.display = 'none';
+}
+
 function initOnline(mirrorState, myFaction, mpClient) {
   setMode(AppMode.PLANNING);
   state    = mirrorState;
@@ -1660,6 +1683,9 @@ function initOnline(mirrorState, myFaction, mpClient) {
   ui.myPlayerId = mpClient.myPlayerId ?? null;
   ui._isAsync   = mpClient.isAsync ?? false;
   ui._players   = (state.players ?? []).map(p => ({ ...p, playerId: p.playerId ?? p.id }));
+
+  // Start battle countdown if in battle mode
+  if (state.gameMode === 'battle') _startBattleCountdownTimer();
 
   redrawOnline();
 
@@ -1698,6 +1724,7 @@ const stepCampaignSelect = document.getElementById('setup-step-campaign-select')
 const stepCampaign     = document.getElementById('setup-step-campaign');
 const stepDebrief      = document.getElementById('setup-step-debrief');
 const stepMultiplayer  = document.getElementById('setup-step-multiplayer');
+const stepBattle       = document.getElementById('setup-step-battle');
 const stepOnline       = document.getElementById('setup-step-online');
 const stepAsync        = document.getElementById('setup-step-async');
 const stepLocalPlay    = document.getElementById('setup-step-local-play');
@@ -1721,6 +1748,7 @@ function showStep(step) {
   stepCampaign      .style.display = step === 'campaign'        ? '' : 'none';
   stepDebrief       .style.display = step === 'debrief'         ? '' : 'none';
   stepMultiplayer   .style.display = step === 'multiplayer'     ? '' : 'none';
+  if (stepBattle) stepBattle.style.display = step === 'battle' ? '' : 'none';
   stepOnline        .style.display = step === 'online'          ? '' : 'none';
   stepAsync         .style.display = step === 'async'           ? '' : 'none';
   stepLocalPlay     .style.display = step === 'local-play'      ? '' : 'none';
@@ -4424,6 +4452,92 @@ function _showAsyncScreen() {
 }
 
 document.getElementById('btn-mp-async')?.addEventListener('click', () => _showAsyncScreen());
+
+// ── Battle for Caleb's Hollow menu ───────────────────────────────────────────
+
+function _formatTimeRemaining(unixSeconds) {
+  const diff = unixSeconds - Math.floor(Date.now() / 1000);
+  if (diff <= 0) return 'Ended';
+  const days  = Math.floor(diff / 86400);
+  const hours = Math.floor((diff % 86400) / 3600);
+  const mins  = Math.floor((diff % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h remaining`;
+  if (hours > 0) return `${hours}h ${mins}m remaining`;
+  return `${mins}m remaining`;
+}
+
+async function _showBattleScreen() {
+  showStep('battle');
+  const statusLine   = document.getElementById('battle-status-line');
+  const scoreLine    = document.getElementById('battle-score-line');
+  const countdownLine = document.getElementById('battle-countdown-line');
+  const playersLine  = document.getElementById('battle-players-line');
+  const joinBtn      = document.getElementById('btn-battle-join');
+  const spectateBtn  = document.getElementById('btn-battle-spectate');
+
+  statusLine.textContent = 'Loading...';
+  scoreLine.style.display = 'none';
+  countdownLine.style.display = 'none';
+  playersLine.style.display = 'none';
+  joinBtn.style.display = 'none';
+  spectateBtn.style.display = 'none';
+
+  try {
+    const res = await fetch('/api/battle-status');
+    const status = await res.json();
+    if (!status) {
+      statusLine.textContent = 'No active battle. A new one starts each Monday.';
+      return;
+    }
+
+    statusLine.textContent = `Round ${status.round} — Battle in progress`;
+    scoreLine.style.display = '';
+    document.getElementById('battle-hero-score').textContent = status.heroScore;
+    document.getElementById('battle-witch-score').textContent = status.witchScore;
+
+    countdownLine.style.display = '';
+    countdownLine.textContent = _formatTimeRemaining(status.endsAt);
+
+    playersLine.style.display = '';
+    playersLine.textContent = `Heroes: ${status.heroCount}/${status.maxPerSide} | Witches: ${status.witchCount}/${status.maxPerSide}`;
+
+    if (status.isFull) {
+      spectateBtn.style.display = '';
+    } else {
+      joinBtn.style.display = '';
+    }
+    // Store roomId for join/spectate handlers
+    joinBtn.dataset.roomId = status.roomId;
+    spectateBtn.dataset.roomId = status.roomId;
+  } catch (err) {
+    statusLine.textContent = 'Could not load battle status.';
+  }
+}
+
+document.getElementById('btn-mp-battle')?.addEventListener('click', () => _showBattleScreen());
+document.getElementById('btn-battle-back')?.addEventListener('click', () => showStep('multiplayer'));
+document.getElementById('btn-battle-join')?.addEventListener('click', function() {
+  const roomId = this.dataset.roomId;
+  if (!roomId) return;
+  const wsUrl = _serverWsUrl();
+  if (!mp) {
+    mp = _createMpClient();
+    mp.connect(wsUrl);
+  } else if (!mp.connected) {
+    mp.connect(wsUrl);
+  }
+  // Wait for connection then send joinBattle
+  const _tryJoin = () => {
+    if (mp?.connected) { mp.send({ type: 'joinBattle', roomId }); return; }
+    setTimeout(_tryJoin, 200);
+  };
+  _tryJoin();
+});
+document.getElementById('btn-battle-spectate')?.addEventListener('click', function() {
+  const roomId = this.dataset.roomId;
+  if (!roomId) return;
+  initSpectator(roomId);
+});
 
 document.getElementById('btn-online-back').addEventListener('click', () => {
   if (mp) { mp.disconnect(); mp = null; }

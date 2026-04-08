@@ -318,11 +318,38 @@
       <h1 class="title" style="font-size:2rem;margin-bottom:1rem">MULTIPLAYER</h1>
       <div class="setup-lore"><p>Choose how you want to play.</p></div>
       <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.75rem">
+        <button id="btn-mp-battle" class="setup-btn primary" style="width:290px;text-align:left;position:relative">
+          <span style="display:block;font-size:1rem">The Battle for Caleb's Hollow</span>
+          <span id="battle-subtitle" style="display:block;font-size:0.7rem;opacity:0.7;margin-top:2px">Persistent 10v10 — one week, one winner.</span>
+        </button>
         <button id="btn-mp-online" class="setup-btn" style="width:260px">🌐 Online Multiplayer</button>
         <button id="btn-mp-local"  class="setup-btn"         style="width:260px">🎮 Local Pass &amp; Play</button>
       </div>
       <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
         <button id="btn-multiplayer-back" class="setup-btn">← Back</button>
+      </div>
+    </div>
+
+    <!-- ── Battle for Caleb's Hollow ─────────────────────────────── -->
+    <div id="setup-step-battle" class="setup-card" style="display:none">
+      <h1 class="title" style="font-size:1.8rem;margin-bottom:0.5rem">THE BATTLE FOR CALEB'S HOLLOW</h1>
+      <div class="setup-lore" style="margin-bottom:0.75rem">
+        <p>A persistent 10v10 battle that runs for one full week. Join either faction and fight for control of five Power Nodes. Scoring happens every round. The faction with the most points when time runs out wins.</p>
+      </div>
+      <div id="battle-info" style="text-align:center;margin-bottom:0.75rem">
+        <div id="battle-status-line" style="color:var(--muted);font-size:0.85rem">Loading...</div>
+        <div id="battle-score-line" style="font-size:1.1rem;margin-top:0.25rem;display:none">
+          <span style="color:var(--hero)">Heroes: <strong id="battle-hero-score">0</strong></span>
+          <span style="margin:0 0.5rem;color:var(--muted)">|</span>
+          <span style="color:var(--witch)">Witches: <strong id="battle-witch-score">0</strong></span>
+        </div>
+        <div id="battle-countdown-line" style="font-size:0.85rem;color:var(--muted);margin-top:0.25rem;display:none"></div>
+        <div id="battle-players-line" style="font-size:0.8rem;color:var(--muted);margin-top:0.25rem;display:none"></div>
+      </div>
+      <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.5rem">
+        <button id="btn-battle-join"     class="setup-btn primary" style="width:220px;display:none">Join Battle</button>
+        <button id="btn-battle-spectate" class="setup-btn"         style="width:220px;display:none">Spectate</button>
+        <button id="btn-battle-back"     class="setup-btn"         style="width:220px">← Back</button>
       </div>
     </div>
 
@@ -979,6 +1006,9 @@
       <div id="score-bar-content"></div>
       <span class="score-bar-faction witch-faction">Witch ✦</span>
     </div>
+
+    <!-- Battle mode countdown — visible only during Battle for Caleb's Hollow -->
+    <div id="battle-countdown" style="display:none"></div>
 
     <!-- Floating cancel pill — appears during battle/summon targeting -->
     <div id="cancel-wrap">

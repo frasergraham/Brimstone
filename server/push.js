@@ -90,6 +90,12 @@ export function hasDeviceTokens(playerId) {
   return _getTokens.all(playerId).length > 0;
 }
 
+/** Return all distinct player IDs that have at least one device token. */
+export function getAllPlayerIdsWithTokens() {
+  const rows = db.prepare('SELECT DISTINCT player_id FROM device_tokens').all();
+  return rows.map(r => r.player_id);
+}
+
 export function pruneStaleTokens(maxAgeDays = 90) {
   const cutoff = Math.floor(Date.now() / 1000) - (maxAgeDays * 86400);
   const result = _prune.run(cutoff);

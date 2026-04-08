@@ -63,7 +63,7 @@ export function serializeState(state) {
     actionsLeft:          state.actionsLeft,
     witchIsAI:            state.witchIsAI,
     heroIsAI:             state.heroIsAI,
-    // Players registry (multiplayer)
+    // Players registry (multiplayer) — spread includes respawnRound if present
     players:              (state.players ?? []).map(p => ({ ...p })),
     // Simultaneous-turn planning fields
     planningPhase:        state.planningPhase   ?? false,
@@ -87,6 +87,8 @@ export function serializeState(state) {
     heroRevealedByHorn:   state.heroRevealedByHorn ?? false,
     nodeScore:            { ...state.nodeScore },
     disableScoring:       !!state.disableScoring,
+    gameMode:             state.gameMode ?? 'standard',
+    battleConfig:         state.battleConfig ? { ...state.battleConfig } : null,
     maxDiscoverableSurvivors: state.maxDiscoverableSurvivors ?? null,
     discoveredSurvivorCount:  state.discoveredSurvivorCount ?? 0,
     log:                  [...state.log],
@@ -216,6 +218,8 @@ export function deserializeState(snap) {
   state.witchSummonCount     = snap.witchSummonCount ?? 0;
   state.heroRevealedByHorn   = snap.heroRevealedByHorn ?? false;
   state.campaignAIBudgetBonus = snap.campaignAIBudgetBonus ?? 0;
+  state.gameMode             = snap.gameMode ?? 'standard';
+  state.battleConfig         = snap.battleConfig ? { ...snap.battleConfig } : null;
 
   // ── Planning fields — reset to clean pre-planning state ──────────────────
   state.planningPhase    = false;

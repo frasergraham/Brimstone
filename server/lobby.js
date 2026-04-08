@@ -1,6 +1,6 @@
 // Lobby: room lifecycle, server-side AI, action dispatch
 import { randomUUID } from 'crypto';
-import { GameState, Player } from '../src/game.js';
+import { GameState, Player, GameMode } from '../src/game.js';
 import { HERO_PERSONALITIES, WITCH_PERSONALITIES } from '../src/ai.js';
 import { WitchAIEngine } from '../src/ai-engine.js';
 import { HeroAIEngine } from '../src/hero-ai-engine.js';
@@ -34,7 +34,7 @@ import { notifyWaitingOnYou, notifyRoundReady,
 import { sendPush }                              from './push.js';
 import db                                  from './db.js';
 import { VERSION }                         from '../src/version.js';
-import { generateMultipleStarts }          from '../src/map.js';
+import { generateMultipleStarts, generateBattleStarts } from '../src/map.js';
 import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS } from '../src/entities.js';
 import { pickAIName }                              from '../src/ai-names.js';
 
@@ -300,9 +300,10 @@ function createRoom(config = {}) {
       fog:              config.fog ?? 'partial',
       mapSize:          config.mapSize ?? 'standard',
       nodeCount:        config.nodeCount ?? null,
-      playersPerSide:   Math.max(1, Math.min(4, (config.playersPerSide | 0) || 1)),
+      playersPerSide:   Math.max(1, Math.min(config.isBattle ? 10 : 4, (config.playersPerSide | 0) || 1)),
       turnIntervalMs:   Math.max(Math.min(TURN_TIMEOUT_MS, 30_000), Math.min(259_200_000, Number(config.turnIntervalMs) || TURN_TIMEOUT_MS)),
       isAsync:          !!config.isAsync,
+      isBattle:         !!config.isBattle,
     },
     consecutiveTimeouts: {},  // playerId → consecutive empty-plan timeout count
     slots:            [],
@@ -325,8 +326,8 @@ function createRoom(config = {}) {
 }
 
 /** Build an ordered slot array for the given players-per-side count. */
-function _buildSlots(playersPerSide) {
-  const pps   = Math.max(1, Math.min(4, playersPerSide | 0));
+function _buildSlots(playersPerSide, isBattle = false) {
+  const pps   = Math.max(1, Math.min(isBattle ? 10 : 4, playersPerSide | 0));
   const slots = [];
   for (let i = 0; i < pps; i++) {
     slots.push({ faction: 'hero', seatIndex: i, status: 'empty', playerId: null, name: null, personality: null });
@@ -835,6 +836,8 @@ function _executeResolution(room) {
  * If so, replace them with AI and notify all players.
  */
 function _checkTimeoutTakeovers(room) {
+  // Battle mode: no AI takeover — players who miss deadlines just do nothing
+  if (room.config.isBattle) return;
   for (const seat of [...room.players]) {
     if (seat.isAI) continue;
     const count = room.consecutiveTimeouts[seat.playerId] || 0;
@@ -1151,7 +1154,9 @@ function checkAndHandleGameOver(room) {
  * Create a new lobby room. The host fills the first hero slot.
  */
 export function createLobby(playerId, playerName, ws, config = {}) {
-  const pps  = Math.max(1, Math.min(4, (config.playersPerSide | 0) || 1));
+  const isBattle = !!config.isBattle;
+  const maxPPS   = isBattle ? 10 : 4;
+  const pps      = Math.max(1, Math.min(maxPPS, (config.playersPerSide | 0) || 1));
   const room = createRoom({
     fog:            config.fog ?? 'partial',
     mapSize:        config.mapSize ?? 'standard',
@@ -1159,10 +1164,11 @@ export function createLobby(playerId, playerName, ws, config = {}) {
     playersPerSide: pps,
     turnIntervalMs: config.turnIntervalMs,
     isAsync:        config.isAsync ?? false,
+    isBattle,
   });
   room.isPrivate    = config.isPrivate ?? false;
   room.hostPlayerId = playerId;
-  room.slots        = _buildSlots(pps);
+  room.slots        = _buildSlots(pps, isBattle);
 
   // Host starts unassigned — they pick a slot in the lobby UI
   room.unassigned.push({ playerId, name: playerName, _ws: ws });
@@ -2815,6 +2821,181 @@ function _finishAsyncGame(roomId, game, state, serializedSteps, finalState) {
       roomId, winner: state.winner, winReason: state.winReason,
     }, { isAsync: true }).catch(() => {});
   }
+}
+
+// ── Battle for Caleb's Hollow ────────────────────────────────────────────────
+
+/**
+ * Create a new Battle for Caleb's Hollow room.
+ * Called by the battle scheduler on server startup / weekly cron.
+ * Returns the room ID.
+ *
+ * @param {{ endsAt: number, battleDeadlineHour?: number }} battleOpts
+ */
+export function createBattleRoom(battleOpts = {}) {
+  const endsAt = battleOpts.endsAt ?? Math.floor(Date.now() / 1000) + 7 * 86400;
+  const room = createRoom({
+    fog:            'partial',
+    mapSize:        'campaign',
+    nodeCount:      5,
+    playersPerSide: 10,
+    isAsync:        true,
+    isBattle:       true,
+    // Daily deadline is handled by the battle scheduler, not turnIntervalMs
+    turnIntervalMs: 86_400_000,
+  });
+  room.status = 'playing';  // battles skip the lobby phase
+  room.isPrivate = false;
+
+  // Initialize GameState with battle mode config
+  const state = new GameState(false, false, 'campaign', 5);
+  state.fogOfWar   = 'partial';
+  state.gameMode   = GameMode.BATTLE;
+  state.battleConfig = { endsAt, maxPlayersPerSide: 10 };
+  room.state = state;
+
+  // No slots pre-built — players join dynamically via joinBattle()
+  room.slots = [];
+  room.openSlotPlayerIds = new Set();
+  room.openSlots = [];
+
+  console.log(`[battle] Created Battle room ${room.id} (ends at ${new Date(endsAt * 1000).toISOString()})`);
+  return room.id;
+}
+
+/**
+ * Join an active Battle for Caleb's Hollow room.
+ * Assigns the player to the undermanned faction and spawns their leader.
+ * Can be called at any round (not limited to Round 1).
+ *
+ * @returns {{ roomId: string, faction: string }|null}
+ */
+export function joinBattle(playerId, playerName, ws, roomId) {
+  const room = rooms.get(roomId);
+  if (!room || !room.config.isBattle) {
+    send(ws, { type: 'error', message: 'No active Battle found.' });
+    return null;
+  }
+
+  // Check if player is already in the battle
+  const existingSeat = room.players.find(s => s.playerId === playerId);
+  if (existingSeat) {
+    // Reconnect flow
+    existingSeat.ws = ws;
+    send(ws, { type: 'reconnected', faction: existingSeat.faction, myPlayerId: playerId, roomId: room.id, isAsync: true });
+    broadcastState(room, 'reconnect');
+    return { roomId: room.id, faction: existingSeat.faction };
+  }
+
+  // Count current players per faction
+  const heroCount  = room.players.filter(s => s.faction === 'hero').length;
+  const witchCount = room.players.filter(s => s.faction === 'witch').length;
+
+  // Check capacity
+  const maxPPS = room.state.battleConfig?.maxPlayersPerSide ?? 10;
+  if (heroCount >= maxPPS && witchCount >= maxPPS) {
+    send(ws, { type: 'error', message: 'Battle is full. You may spectate instead.' });
+    return null;
+  }
+
+  // Assign to undermanned faction (tie-break: hero first)
+  let faction;
+  if (heroCount <= witchCount && heroCount < maxPPS) faction = 'hero';
+  else if (witchCount < maxPPS) faction = 'witch';
+  else faction = 'hero';
+
+  // Generate spawn position
+  const starts = generateBattleStarts(room.state.tiles, faction, 1);
+  if (!starts.length) {
+    send(ws, { type: 'error', message: 'No available spawn position.' });
+    return null;
+  }
+  const spawn = starts[0];
+
+  // Add player to game state
+  const leader = room.state.addPlayer(playerId, playerName, faction, spawn.col, spawn.row, false);
+
+  // Assign player color
+  const factionPlayers = room.state.players.filter(p => p.faction === faction);
+  const colorIndex = factionPlayers.length - 1;
+  const colors = faction === 'hero' ? HERO_PLAYER_COLORS : WITCH_PLAYER_COLORS;
+  leader.color = colors[colorIndex % colors.length];
+
+  // Add seat to room
+  room.players.push({
+    playerId,
+    ws,
+    name: playerName,
+    faction,
+    isAI: false,
+    ai: null,
+    personality: null,
+  });
+
+  // If we're in a planning phase, set the player as not-ready with a budget
+  if (room.state.planningPhase) {
+    room.state.playerReady.set(playerId, false);
+    // Give a base budget of 3 — the full calculation happens at startPlanning()
+    room.state.playerActionsLeft.set(playerId, 3);
+  }
+
+  // Notify the joining player
+  send(ws, {
+    type:       'matchFound',
+    roomId:     room.id,
+    faction,
+    myPlayerId: playerId,
+    players:    _buildPlayerList(room),
+    aiOpponent: false,
+    isAsync:    true,
+    isBattle:   true,
+  });
+
+  broadcastState(room, 'playerJoined');
+
+  // Broadcast to existing players
+  broadcastExcept(room, playerId, {
+    type: 'playerJoinedBattle',
+    playerId,
+    playerName,
+    faction,
+  });
+
+  console.log(`[battle] ${playerName} joined Battle ${room.id} as ${faction} (${heroCount + (faction === 'hero' ? 1 : 0)}v${witchCount + (faction === 'witch' ? 1 : 0)})`);
+  return { roomId: room.id, faction };
+}
+
+/**
+ * Get the active battle room, if any.
+ * @returns {Room|null}
+ */
+export function getActiveBattleRoom() {
+  for (const [, room] of rooms) {
+    if (room.config.isBattle && room.status === 'playing') return room;
+  }
+  return null;
+}
+
+/**
+ * Get battle status for the multiplayer menu.
+ * Returns null if no active battle, or a summary object.
+ */
+export function getBattleStatus() {
+  const room = getActiveBattleRoom();
+  if (!room) return null;
+  const state = room.state;
+  return {
+    roomId:      room.id,
+    heroCount:   room.players.filter(s => s.faction === 'hero').length,
+    witchCount:  room.players.filter(s => s.faction === 'witch').length,
+    maxPerSide:  state.battleConfig?.maxPlayersPerSide ?? 10,
+    heroScore:   state.nodeScore?.hero ?? 0,
+    witchScore:  state.nodeScore?.witch ?? 0,
+    round:       state.round,
+    endsAt:      state.battleConfig?.endsAt ?? 0,
+    isFull:      room.players.filter(s => s.faction === 'hero').length >= (state.battleConfig?.maxPlayersPerSide ?? 10)
+              && room.players.filter(s => s.faction === 'witch').length >= (state.battleConfig?.maxPlayersPerSide ?? 10),
+  };
 }
 
 // ── Async deadline checker ──────────────────────────────────────────────────

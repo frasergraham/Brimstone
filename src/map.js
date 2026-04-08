@@ -802,3 +802,54 @@ export function generateMultipleStarts(tiles, primaryStart, count, minSep = 2, s
 
   return placed;
 }
+
+/**
+ * Generate spawn positions for battle mode.
+ * Heroes spawn in the leftmost 3 columns; witches in the rightmost 3.
+ * Returns `count` positions spread at least `minSep` hexes apart.
+ *
+ * @param {Map<string,Tile>} tiles
+ * @param {'hero'|'witch'} faction
+ * @param {number} count
+ * @param {number} [minSep=2]
+ * @returns {{ col: number, row: number }[]}
+ */
+export function generateBattleStarts(tiles, faction, count, minSep = 2) {
+  const cols = faction === 'hero'
+    ? [0, 1, 2]
+    : [MAP_COLS - 3, MAP_COLS - 2, MAP_COLS - 1];
+
+  // Collect all passable candidate tiles in the faction's starting columns
+  const candidates = [];
+  for (const [, t] of tiles) {
+    if (!cols.includes(t.col)) continue;
+    if (t.type === TileType.RIVER) continue;
+    candidates.push({ col: t.col, row: t.row });
+  }
+
+  // Shuffle deterministically (caller can seed via tiles order)
+  for (let i = candidates.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+  }
+
+  // Greedily pick positions that respect minSep
+  const placed = [];
+  for (const cand of candidates) {
+    if (placed.length >= count) break;
+    const tooClose = placed.some(p => hexDistance(cand.col, cand.row, p.col, p.row) < minSep);
+    if (!tooClose) placed.push({ col: cand.col, row: cand.row });
+  }
+
+  // If not enough (tiny map), relax separation
+  if (placed.length < count) {
+    for (const cand of candidates) {
+      if (placed.length >= count) break;
+      if (!placed.some(p => p.col === cand.col && p.row === cand.row)) {
+        placed.push({ col: cand.col, row: cand.row });
+      }
+    }
+  }
+
+  return placed;
+}

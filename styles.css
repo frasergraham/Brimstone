@@ -773,6 +773,21 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .score-pip.witch          { background: transparent; border-color: rgba(155,89,182,0.35); }
 .score-pip.witch.filled   { background: var(--witch); border-color: #b370d4; box-shadow: 0 0 4px rgba(155,89,182,0.6); }
 
+/* Battle mode: numeric score */
+.battle-score { justify-content: center; min-width: 2rem; }
+.score-num { font-weight: bold; font-size: 0.95rem; letter-spacing: 0.5px; }
+.score-num.hero  { color: var(--hero); }
+.score-num.witch { color: var(--witch); }
+
+/* Battle mode: in-game countdown */
+#battle-countdown {
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--muted);
+  padding: 2px 0;
+  background: rgba(0,0,0,0.5);
+}
+
 /* ── Header icon buttons (chronicle, inventory, end-turn) ──────────────── */
 
 .header-icon-btn {

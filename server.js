@@ -43,7 +43,9 @@ import {
   pruneOrphanedRooms,
   broadcastPresenceForPlayer,
   setSendToPlayer,
+  joinBattle, getBattleStatus,
 } from './server/lobby.js';
+import { ensureBattleExists, checkBattleLifecycle } from './server/battle-scheduler.js';
 import {
   getAllPlayers, getAllSaves, getSaveWithState,
   getAllGamesPaginated, getGameDetail, getAllPlayersDetailed, resetStats,
@@ -114,6 +116,11 @@ app.get('/api/config', (_req, res) => {
   const payload = { modes: getGameModeConfig() };
   if (getDevMode()) payload.devMode = true;
   res.json(payload);
+});
+
+// REST: Battle for Caleb's Hollow status
+app.get('/api/battle-status', (_req, res) => {
+  res.json(getBattleStatus());
 });
 
 // REST: Railway environment auto-discovery for the server selector
@@ -971,6 +978,18 @@ function route(ws, cs, msg) {
       break;
     }
 
+    case 'joinBattle': {
+      if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
+      const battleResult = joinBattle(cs.player.id, cs.player.username, ws, msg.roomId);
+      if (battleResult) { cs.roomId = battleResult.roomId; ws._roomId = battleResult.roomId; }
+      break;
+    }
+
+    case 'getBattleStatus': {
+      send(ws, { type: 'battleStatus', status: getBattleStatus() });
+      break;
+    }
+
     case 'browseLobby': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
       send(ws, { type: 'lobbyList', rooms: browseLobby() });
@@ -1185,4 +1204,8 @@ server.listen(PORT, () => {
   setInterval(checkDeadlines, 30_000); // check every 30 seconds
   setInterval(checkApproachingDeadlines, 60_000); // check approaching deadlines every minute
   setInterval(pruneOrphanedRooms, 30_000); // clean up orphaned rooms every 30 seconds
+
+  // Battle for Caleb's Hollow: ensure a battle exists and check lifecycle
+  try { ensureBattleExists(); } catch (err) { console.error('[battle-scheduler]', err); }
+  setInterval(checkBattleLifecycle, 30_000);
 });

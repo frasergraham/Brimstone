@@ -2095,7 +2095,7 @@ export class UIController {
     const state = this.state;
 
     const { html, title } = buildObjectivesHtml(
-      state.witchObjectives, state.entities, state.nodeScore,
+      state.witchObjectives, state.entities, state.nodeScore, state.gameMode,
     );
 
     el.innerHTML = html;

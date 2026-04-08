@@ -288,6 +288,34 @@ export async function notifyNudge(playerId, gameInfo, opts) {
 }
 
 /**
+ * Notify a player in a Battle that the daily deadline is approaching.
+ * Uses 'battle_deadline' notification type for dedup.
+ */
+export async function notifyBattleDeadlineApproaching(playerId, gameInfo, opts) {
+  _logNotifyAttempt('notifyBattleDeadlineApproaching', playerId, gameInfo.roomId, opts);
+  if (!_shouldSend(gameInfo.roomId, playerId, 'battle_deadline')) return;
+  _record(gameInfo.roomId, playerId, 'battle_deadline');
+
+  const mins = gameInfo.minutesLeft ?? 60;
+
+  if (hasDeviceTokens(playerId)) {
+    await sendPush(playerId, {
+      title: 'Battle deadline approaching',
+      body: `You have ~${mins} minutes to submit your plan for The Battle for Caleb's Hollow!`,
+      roomId: gameInfo.roomId,
+    });
+  } else {
+    const email = _getPlayerEmail(playerId);
+    if (!email) return;
+    const url = `${_baseUrl()}/#game=${gameInfo.roomId}`;
+    await _sendEmail(email,
+      "Caleb's Hollow — Battle deadline approaching",
+      `You have ~${mins} minutes to submit your plan for The Battle for Caleb's Hollow!\n\nPlay your turn: ${url}`
+    );
+  }
+}
+
+/**
  * Notify a player that the game was abandoned due to inactivity.
  */
 export async function notifyGameAbandoned(playerId, gameInfo) {
