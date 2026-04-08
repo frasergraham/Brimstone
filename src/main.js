@@ -1638,7 +1638,7 @@ function _updateBattleCountdown() {
     return;
   }
   el.style.display = '';
-  el.textContent = 'Battle ends in: ' + _formatTimeRemaining(state.battleConfig.endsAt);
+  el.textContent = 'Battle ends in ' + _formatTimeRemaining(state.battleConfig.endsAt);
 }
 function _startBattleCountdownTimer() {
   if (_battleCountdownTimer) clearInterval(_battleCountdownTimer);
@@ -4461,9 +4461,9 @@ function _formatTimeRemaining(unixSeconds) {
   const days  = Math.floor(diff / 86400);
   const hours = Math.floor((diff % 86400) / 3600);
   const mins  = Math.floor((diff % 3600) / 60);
-  if (days > 0) return `${days}d ${hours}h remaining`;
-  if (hours > 0) return `${hours}h ${mins}m remaining`;
-  return `${mins}m remaining`;
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return `${mins}m`;
 }
 
 async function _showBattleScreen() {
@@ -4515,7 +4515,7 @@ async function _showBattleScreen() {
 
     // Countdown
     countdownLine.style.display = '';
-    countdownLine.textContent = _formatTimeRemaining(status.endsAt);
+    countdownLine.textContent = 'Ends in ' + _formatTimeRemaining(status.endsAt);
 
     // Player counts
     playersLine.style.display = '';
