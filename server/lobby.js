@@ -30,6 +30,7 @@ import { insertAsyncGame, getAsyncGame, getAsyncGameByCode,
 import { notifyWaitingOnYou, notifyRoundReady,
          notifyDeadlineApproaching, notifyGameOver,
          notifyGameAbandoned, notifyNudge, sendGameInvite,
+         notifyBattleDeadlineApproaching,
          shouldNotify }                          from './notifications.js';
 import { sendPush }                              from './push.js';
 import db                                  from './db.js';
@@ -3115,6 +3116,7 @@ export function checkDeadlines() {
  * unsubmitted players. Called periodically by the server.
  */
 export function checkApproachingDeadlines() {
+  // Standard async games: 10-minute warning
   let games;
   try {
     games = getApproachingDeadlineGames(600_000); // 10 minutes
@@ -3127,6 +3129,7 @@ export function checkApproachingDeadlines() {
     try {
       const config = row.config_json ? JSON.parse(row.config_json) : {};
       if (!config.isAsync) continue;
+      if (config.isBattle) continue; // battle has its own wider window below
 
       const minutesLeft = Math.max(1, Math.round((row.turn_deadline - Date.now() / 1000) / 60));
       const plans = getPlanStatus(row.room_id, row.round);
@@ -3139,6 +3142,34 @@ export function checkApproachingDeadlines() {
       }
     } catch (err) {
       console.error(`[checkApproachingDeadlines] room ${row.room_id} error:`, err);
+    }
+  }
+
+  // Battle mode: 1-hour warning
+  let battleGames;
+  try {
+    battleGames = getApproachingDeadlineGames(3_600_000); // 60 minutes
+  } catch (err) {
+    console.error('[checkApproachingDeadlines] battle query error:', err);
+    return;
+  }
+
+  for (const row of battleGames) {
+    try {
+      const config = row.config_json ? JSON.parse(row.config_json) : {};
+      if (!config.isBattle) continue;
+
+      const minutesLeft = Math.max(1, Math.round((row.turn_deadline - Date.now() / 1000) / 60));
+      const plans = getPlanStatus(row.room_id, row.round);
+
+      for (const p of plans) {
+        if (p.submitted_at) continue;
+        notifyBattleDeadlineApproaching(p.player_id, {
+          roomId: row.room_id, minutesLeft,
+        }, { isAsync: true }).catch(() => {});
+      }
+    } catch (err) {
+      console.error(`[checkApproachingDeadlines] battle room ${row.room_id} error:`, err);
     }
   }
 }

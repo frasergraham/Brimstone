@@ -4,6 +4,7 @@
 
 import { createBattleRoom, getActiveBattleRoom, getBattleStatus } from './lobby.js';
 import { sendPush, getAllPlayerIdsWithTokens } from './push.js';
+import { notifyBattleEnded } from './notifications.js';
 
 // ── Time helpers ────────────────────────────────────────────────────────────
 
@@ -94,6 +95,19 @@ export function checkBattleLifecycle() {
   if (endsAt && Math.floor(Date.now() / 1000) >= endsAt && !room.state.winner) {
     console.log(`[battle-scheduler] Battle ${room.id} has expired, triggering final checkVictory`);
     room.state.checkVictory();
+
+    // Notify all battle participants that the battle has ended
+    const gameInfo = {
+      roomId: room.id,
+      winner: room.state.winner,
+      heroScore: room.state.nodeScore?.hero ?? 0,
+      witchScore: room.state.nodeScore?.witch ?? 0,
+    };
+    for (const seat of room.players) {
+      if (!seat.isAI) {
+        notifyBattleEnded(seat.playerId, gameInfo).catch(() => {});
+      }
+    }
     // The next cycle of checkBattleLifecycle will see no active battle and create a new one
   }
 }
