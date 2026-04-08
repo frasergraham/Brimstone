@@ -2650,6 +2650,7 @@ function _initCampaignMission(missionDef) {
         // Clean up game state and return to chapter select
         document.getElementById('game-screen').style.display = 'none';
         document.getElementById('setup-screen').style.display = '';
+        setMode(AppMode.MENU);
         renderer = null; ui = null; witchAI = null; heroAI = null;
         _missionConductor = null;
         _activeMissionDef = null;
