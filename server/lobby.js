@@ -680,6 +680,19 @@ function _submitPlayerPlan(room, playerId, plan, isTimeout = false) {
   }
 
   if (allReady) {
+    // Battle mode: don't resolve until both factions have at least one player.
+    // The solo player's plan stays submitted; resolution triggers when an
+    // opponent joins and submits, or at the daily deadline.
+    if (room.config.isBattle) {
+      const hasHero  = room.players.some(s => s.faction === 'hero');
+      const hasWitch = room.players.some(s => s.faction === 'witch');
+      if (!hasHero || !hasWitch) {
+        console.log(`[battle] All plans in but only one faction present — waiting for opponent`);
+        // Restart the deadline timer so the room doesn't sit forever
+        if (!room.turnTimer) _startPlanningTimer(room);
+        return;
+      }
+    }
     _executeResolution(room);
   }
 }
