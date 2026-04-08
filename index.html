@@ -245,17 +245,18 @@
     <div id="setup-step-singleplayer" class="setup-card" style="display:none">
       <h1 class="title" style="font-size:2rem;margin-bottom:1rem">QUICK PLAY</h1>
 
-      <!-- Map size (primary choice) -->
-      <div class="setup-options" style="margin-bottom:0.75rem">
-        <label class="setup-option-label">
-          Map size
-          <select id="select-map-size" class="setup-select">
-            <option value="skirmish">Skirmish</option>
-            <option value="standard" selected>Standard</option>
-            <option value="regional">Regional</option>
-            <option value="campaign">Campaign</option>
-          </select>
-        </label>
+      <!-- In-progress and completed local saves -->
+      <div class="active-games-section" style="margin-top:0.75rem">
+        <div class="saves-tab-bar">
+          <button class="saves-tab active" data-target="sp-saves-list">In Progress</button>
+          <button class="saves-tab"        data-target="sp-completed-list">Completed</button>
+        </div>
+        <div id="sp-saves-list" class="saves-list">
+          <p class="saves-empty">No saved games.</p>
+        </div>
+        <div id="sp-completed-list" class="saves-list" style="display:none">
+          <p class="saves-empty">No completed games yet.</p>
+        </div>
       </div>
 
       <!-- Faction toggle -->
@@ -269,10 +270,19 @@
         <button id="btn-start-qp" class="setup-btn primary" style="width:180px">Start Game</button>
       </div>
 
-      <!-- Expandable advanced options -->
+      <!-- Expandable game options -->
       <details class="qp-advanced">
-        <summary class="qp-advanced-summary">Advanced Options</summary>
+        <summary class="qp-advanced-summary">Game Options</summary>
         <div class="qp-options-list">
+          <div class="qp-option-row">
+            <span class="qp-option-label">Map Size</span>
+            <select id="select-map-size" class="setup-select">
+              <option value="skirmish">Skirmish</option>
+              <option value="standard" selected>Standard</option>
+              <option value="regional">Regional</option>
+              <option value="campaign">Campaign</option>
+            </select>
+          </div>
           <div class="qp-option-row">
             <span class="qp-option-label">Power Nodes</span>
             <select id="select-node-count" class="setup-select">
@@ -299,20 +309,6 @@
           </div>
         </div>
       </details>
-
-      <!-- In-progress and completed local saves -->
-      <div class="active-games-section" style="margin-top:0.75rem">
-        <div class="saves-tab-bar">
-          <button class="saves-tab active" data-target="sp-saves-list">In Progress</button>
-          <button class="saves-tab"        data-target="sp-completed-list">Completed</button>
-        </div>
-        <div id="sp-saves-list" class="saves-list">
-          <p class="saves-empty">No saved games.</p>
-        </div>
-        <div id="sp-completed-list" class="saves-list" style="display:none">
-          <p class="saves-empty">No completed games yet.</p>
-        </div>
-      </div>
 
       <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
         <button id="btn-singleplayer-back" class="setup-btn">← Back</button>
@@ -582,41 +578,6 @@
     <h1 class="title" style="font-size:2rem">CREATE GAME</h1>
     <div class="cg-options">
       <div class="cg-option-row">
-        <span class="cg-option-label">Map size</span>
-        <select id="cg-map-size" class="setup-select">
-          <option value="skirmish">Skirmish (9×9)</option>
-          <option value="standard" selected>Standard (13×11)</option>
-          <option value="regional">Regional (17×13)</option>
-          <option value="campaign">Campaign (21×15)</option>
-        </select>
-      </div>
-      <div class="cg-option-row">
-        <span class="cg-option-label">Power nodes</span>
-        <select id="cg-node-count" class="setup-select">
-          <option value="2">2</option>
-          <option value="3" selected>3</option>
-          <option value="4">4</option>
-          <option value="5">5</option>
-        </select>
-      </div>
-      <div class="cg-option-row">
-        <span class="cg-option-label">Players per side</span>
-        <div class="pps-pills">
-          <label class="pps-pill"><input type="radio" name="cg-pps" value="1" checked><span>1v1</span></label>
-          <label class="pps-pill"><input type="radio" name="cg-pps" value="2"><span>2v2</span></label>
-          <label class="pps-pill"><input type="radio" name="cg-pps" value="3"><span>3v3</span></label>
-          <label class="pps-pill"><input type="radio" name="cg-pps" value="4"><span>4v4</span></label>
-        </div>
-      </div>
-      <div class="cg-option-row">
-        <span class="cg-option-label">Fog of war</span>
-        <select id="cg-fog" class="setup-select">
-          <option value="none">None</option>
-          <option value="partial" selected>Partial</option>
-          <option value="full">Full</option>
-        </select>
-      </div>
-      <div class="cg-option-row">
         <span class="cg-option-label">Mode</span>
         <div class="pps-pills">
           <label class="pps-pill"><input type="radio" name="cg-mode" value="live" checked>
@@ -628,20 +589,13 @@
         </div>
       </div>
       <div class="cg-option-row">
-        <span class="cg-option-label">Turn timeout</span>
-        <select id="cg-turn-timeout-live" class="setup-select">
-          <option value="60000">1 Minute</option>
-          <option value="90000" selected>90 Seconds</option>
-          <option value="180000">3 Minutes</option>
-          <option value="300000">5 Minutes</option>
-        </select>
-        <select id="cg-turn-timeout-async" class="setup-select" style="display:none">
-          <option value="3600000">1 Hour</option>
-          <option value="21600000">6 Hours</option>
-          <option value="43200000" selected>12 Hours</option>
-          <option value="86400000">1 Day</option>
-          <option value="259200000">3 Days</option>
-        </select>
+        <span class="cg-option-label">Players per side</span>
+        <div class="pps-pills">
+          <label class="pps-pill"><input type="radio" name="cg-pps" value="1" checked><span>1v1</span></label>
+          <label class="pps-pill"><input type="radio" name="cg-pps" value="2"><span>2v2</span></label>
+          <label class="pps-pill"><input type="radio" name="cg-pps" value="3"><span>3v3</span></label>
+          <label class="pps-pill"><input type="radio" name="cg-pps" value="4"><span>4v4</span></label>
+        </div>
       </div>
       <div class="cg-option-row">
         <span class="cg-option-label">Private game</span>
@@ -652,6 +606,53 @@
         <span class="cg-option-hint">Invite only — share a code</span>
       </div>
     </div>
+    <details class="qp-advanced">
+      <summary class="qp-advanced-summary">Game Options</summary>
+      <div class="qp-options-list">
+        <div class="cg-option-row">
+          <span class="cg-option-label">Map size</span>
+          <select id="cg-map-size" class="setup-select">
+            <option value="skirmish">Skirmish (9×9)</option>
+            <option value="standard" selected>Standard (13×11)</option>
+            <option value="regional">Regional (17×13)</option>
+            <option value="campaign">Campaign (21×15)</option>
+          </select>
+        </div>
+        <div class="cg-option-row">
+          <span class="cg-option-label">Power nodes</span>
+          <select id="cg-node-count" class="setup-select">
+            <option value="2">2</option>
+            <option value="3" selected>3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+          </select>
+        </div>
+        <div class="cg-option-row">
+          <span class="cg-option-label">Fog of war</span>
+          <select id="cg-fog" class="setup-select">
+            <option value="none">None</option>
+            <option value="partial" selected>Partial</option>
+            <option value="full">Full</option>
+          </select>
+        </div>
+        <div class="cg-option-row">
+          <span class="cg-option-label">Turn timeout</span>
+          <select id="cg-turn-timeout-live" class="setup-select">
+            <option value="60000">1 Minute</option>
+            <option value="90000" selected>90 Seconds</option>
+            <option value="180000">3 Minutes</option>
+            <option value="300000">5 Minutes</option>
+          </select>
+          <select id="cg-turn-timeout-async" class="setup-select" style="display:none">
+            <option value="3600000">1 Hour</option>
+            <option value="21600000">6 Hours</option>
+            <option value="43200000" selected>12 Hours</option>
+            <option value="86400000">1 Day</option>
+            <option value="259200000">3 Days</option>
+          </select>
+        </div>
+      </div>
+    </details>
     <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
       <button id="btn-create-game-back" class="setup-btn">← Back</button>
       <button id="btn-create-game-confirm" class="setup-btn primary">Create →</button>
