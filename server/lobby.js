@@ -2914,6 +2914,7 @@ export function joinBattle(playerId, playerName, ws, roomId) {
     existingSeat.ws = ws;
     send(ws, { type: 'reconnected', faction: existingSeat.faction, myPlayerId: playerId, roomId: room.id, isAsync: true });
     broadcastState(room, 'reconnect');
+    _sendReconnectPlanningState(room, playerId, ws);
     return { roomId: room.id, faction: existingSeat.faction };
   }
 
