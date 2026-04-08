@@ -116,9 +116,9 @@ describe('buildTutorialMap', () => {
     assert.equal(witchObjectives[0].hexes.length, 3);
   });
 
-  test('power node is always visible (seenByHero and seenByWitch)', () => {
+  test('power node starts hidden from hero (discovered via proximity in round 4)', () => {
     const { witchObjectives } = buildTutorialMap();
-    assert.equal(witchObjectives[0].seenByHero,  true);
+    assert.equal(witchObjectives[0].seenByHero,  false);
     assert.equal(witchObjectives[0].seenByWitch, true);
   });
 
@@ -204,8 +204,8 @@ describe('setForcedDice', () => {
 // ── TUTORIAL_STEPS definitions ────────────────────────────────────────────────
 
 describe('TUTORIAL_STEPS', () => {
-  test('has 24 steps', () => {
-    assert.equal(TUTORIAL_STEPS.length, 24);
+  test('has 29 steps', () => {
+    assert.equal(TUTORIAL_STEPS.length, 29);
   });
 
   test('first step id is "welcome"', () => {
@@ -278,8 +278,9 @@ describe('TUTORIAL_STEPS', () => {
     assert.ok(TUTORIAL_STEPS[dn].spotlight?.selector?.includes('cycle-bar'), 'spotlights cycle-bar');
   });
 
-  test('survivor steps exist in correct order', () => {
-    const ids = ['watch_r2', 'day_night', 'survivor_intro', 'move_to_house', 'explore_house', 'submit_r3', 'watch_r3'];
+  test('survivor and smithy steps exist in correct order', () => {
+    const ids = ['watch_r2', 'day_night', 'survivor_intro', 'move_to_house', 'explore_house',
+      'submit_r3', 'watch_r3', 'night_warning', 'multi_select', 'smithy_intro', 'submit_r4', 'watch_r4'];
     const indices = ids.map(id => TUTORIAL_STEPS.findIndex(s => s.id === id));
     for (let i = 1; i < indices.length; i++) {
       assert.ok(indices[i] > indices[i - 1], `${ids[i]} comes after ${ids[i - 1]}`);
@@ -302,19 +303,19 @@ describe('TUTORIAL_STEPS', () => {
     assert.equal(step.trigger?.actionType, PlanActionType.EXPLORE);
   });
 
-  test('explanation steps exist after watch_r3 including guard', () => {
-    const r3  = TUTORIAL_STEPS.findIndex(s => s.id === 'watch_r3');
-    const ms  = TUTORIAL_STEPS.findIndex(s => s.id === 'multi_select');
-    const ft  = TUTORIAL_STEPS.findIndex(s => s.id === 'fortify');
+  test('explanation steps exist after watch_r4 including guard', () => {
+    const r4  = TUTORIAL_STEPS.findIndex(s => s.id === 'watch_r4');
+    const nd  = TUTORIAL_STEPS.findIndex(s => s.id === 'node_discovered');
     const st  = TUTORIAL_STEPS.findIndex(s => s.id === 'score_tracker');
+    const ft  = TUTORIAL_STEPS.findIndex(s => s.id === 'fortify');
     const gd  = TUTORIAL_STEPS.findIndex(s => s.id === 'guard');
-    assert.ok(ms > r3,  'multi_select after watch_r3');
-    assert.ok(ft > ms,  'fortify after multi_select');
-    assert.ok(st > ft,  'score_tracker after fortify');
-    assert.ok(gd > st,  'guard after score_tracker');
-    assert.equal(TUTORIAL_STEPS[ms].trigger, 'click');
-    assert.equal(TUTORIAL_STEPS[ft].trigger, 'click');
+    assert.ok(nd > r4,  'node_discovered after watch_r4');
+    assert.ok(st > nd,  'score_tracker after node_discovered');
+    assert.ok(ft > st,  'fortify after score_tracker');
+    assert.ok(gd > ft,  'guard after fortify');
+    assert.equal(TUTORIAL_STEPS[nd].trigger, 'click');
     assert.equal(TUTORIAL_STEPS[st].trigger, 'click');
+    assert.equal(TUTORIAL_STEPS[ft].trigger, 'click');
     assert.equal(TUTORIAL_STEPS[gd].trigger, 'click');
   });
 
@@ -332,9 +333,9 @@ describe('TUTORIAL_STEPS', () => {
     assert.ok(step.spotlight?.selector?.includes('score-bar'), 'spotlights score-bar');
   });
 
-  test('auto-trigger steps are watch_r1, watch_r2, watch_r3 only', () => {
+  test('auto-trigger steps are watch_r1, watch_r2, watch_r3, watch_r4 only', () => {
     const autoSteps = TUTORIAL_STEPS.filter(s => s.trigger === 'auto').map(s => s.id);
-    assert.deepEqual(autoSteps.sort(), ['watch_r1', 'watch_r2', 'watch_r3'].sort());
+    assert.deepEqual(autoSteps.sort(), ['watch_r1', 'watch_r2', 'watch_r3', 'watch_r4'].sort());
   });
 
   test('combat_intro does not mention action menu for battle', () => {
@@ -468,11 +469,12 @@ describe('TUTORIAL_CONDUCTOR_CONFIG', () => {
     assert.equal(typeof TUTORIAL_CONDUCTOR_CONFIG.maxPlanningRounds, 'number', 'maxPlanningRounds is a number');
   });
 
-  test('roundStepMap maps rounds 1-3 to known step IDs', () => {
+  test('roundStepMap maps rounds 1-4 to known step IDs', () => {
     const map = TUTORIAL_CONDUCTOR_CONFIG.roundStepMap;
     assert.equal(map[1], 'combat_intro');
     assert.equal(map[2], 'survivor_intro');
-    assert.equal(map[3], 'multi_select');
+    assert.equal(map[3], 'night_warning');
+    assert.equal(map[4], 'node_discovered');
   });
 
   test('forcedDice entry for round 1 matches TUTORIAL_FORCED_DICE', () => {
@@ -481,8 +483,8 @@ describe('TUTORIAL_CONDUCTOR_CONFIG', () => {
     assert.deepEqual(entry.dice, TUTORIAL_FORCED_DICE);
   });
 
-  test('maxPlanningRounds is 3', () => {
-    assert.equal(TUTORIAL_CONDUCTOR_CONFIG.maxPlanningRounds, 3);
+  test('maxPlanningRounds is 4', () => {
+    assert.equal(TUTORIAL_CONDUCTOR_CONFIG.maxPlanningRounds, 4);
   });
 
   test('witchPlanProvider returns [] for round 0 with empty witchPlan step', () => {

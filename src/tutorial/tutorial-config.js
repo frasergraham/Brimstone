@@ -119,13 +119,14 @@ export function buildTutorialMap() {
   setResource(tiles, 5, 3, ResourceType.WOOD);
 
   // ── Power Node — cluster at (4,4),(5,4),(4,5) ───────────────────────────
+  // Hidden initially — discovered when hero moves to Blacksmith in round 4
   const witchObjectives = [
     {
       col: 4, row: 4,
       label: 'The Crossroads',
       hexes: [{ col: 4, row: 4 }, { col: 5, row: 4 }, { col: 4, row: 5 }],
       color: NODE_COLORS[0],
-      seenByHero:  true,
+      seenByHero:  false,
       seenByWitch: true,
       prevCtrl: 'neutral',
     },
@@ -366,8 +367,17 @@ export const TUTORIAL_STEPS = [
     witchPlan: null,
   },
 
-  // ── Explanation steps (onPlanningPhaseStart jumps here when _round === 3) ──
+  // ── Round 4: Blacksmith + Power Node discovery (onPlanningPhaseStart jumps here when _round === 3) ──
 
+  {
+    id: 'night_warning',
+    title: 'Beware the Night',
+    body: 'Survivors who are not inside a building or on a fortified tile will take damage when night falls. Keep your allies sheltered or fortify their position before dusk.',
+    trigger: 'click',
+    spotlight: null,
+    tooltipPos: 'center',
+    witchPlan: null,
+  },
   {
     id: 'multi_select',
     title: 'Multiple Units on a Hex',
@@ -378,20 +388,59 @@ export const TUTORIAL_STEPS = [
     witchPlan: null,
   },
   {
-    id: 'fortify',
-    title: 'Fortification',
-    body: 'When night falls, enemies grow stronger. Fortifications help defend your position.\n\nSpend wood or metal to fortify a tile. Buildings already start with a fortification level of 1.',
-    trigger: 'click',
+    id: 'smithy_intro',
+    title: 'Explore Further',
+    body: 'There\'s a Blacksmith to the east. Move your Hero there — you may find supplies, and the road beyond holds something important.',
+    trigger: { type: 'action_queued', actionType: PlanActionType.MOVE },
+    spotlight: { type: 'hex', col: 5, row: 5 },
+    tooltipPos: 'bottom-left',
+    witchPlan: null,
+  },
+  {
+    id: 'submit_r4',
+    title: 'Submit Your Plan',
+    body: 'Submit your plan. Your hero will head to the Blacksmith.',
+    trigger: { type: 'plan_submitted' },
+    spotlight: { type: 'element', selector: '#plan-submit-btn' },
+    tooltipPos: 'bottom-left',
+    witchPlan: [],
+  },
+  {
+    id: 'watch_r4',
+    title: 'The Road East',
+    body: 'Your hero travels the road to the Blacksmith.',
+    trigger: 'auto',
     spotlight: null,
-    tooltipPos: 'center',
+    tooltipPos: 'bottom-left',
+    witchPlan: null,
+  },
+
+  // ── Explanation steps (onPlanningPhaseStart jumps here when _round === 4) ──
+
+  {
+    id: 'node_discovered',
+    title: 'Power Node Discovered!',
+    body: 'A Power Node glows nearby. These are key strategic points on the map — controlling them is one way to win.\n\nWhichever side has more units on a node controls it. At Dawn and Dusk scoring checkpoints, the side controlling a majority of nodes scores a point. Four points wins the game.',
+    trigger: 'click',
+    spotlight: { type: 'hex', col: 4, row: 4 },
+    tooltipPos: 'bottom-left',
     witchPlan: null,
   },
   {
     id: 'score_tracker',
     title: 'Score Tracker',
-    body: 'Power nodes appear on the map. Whichever side has more units on a power node controls it.\n\nThe pips at the bottom of the screen show who controls which nodes. At Dawn and Dusk, the side controlling a majority of nodes scores a point — four points wins the game.\n\nYou can also win by holding ALL the nodes at Dawn or Dusk, or by killing the enemy leader.',
+    body: 'The pips at the bottom of the screen show who controls which nodes.\n\nYou can also win by holding ALL nodes at Dawn or Dusk, or by killing the enemy leader.',
     trigger: 'click',
     spotlight: { type: 'element', selector: '#score-bar', arrow: 'down' },
+    tooltipPos: 'center',
+    witchPlan: null,
+  },
+  {
+    id: 'fortify',
+    title: 'Fortification',
+    body: 'When night falls, enemies grow stronger. Fortifications help defend your position.\n\nSpend wood or metal to fortify a tile. Buildings already start with a fortification level of 1.',
+    trigger: 'click',
+    spotlight: null,
     tooltipPos: 'center',
     witchPlan: null,
   },
@@ -448,9 +497,10 @@ export const TUTORIAL_CONDUCTOR_CONFIG = {
   roundStepMap: {
     1: 'combat_intro',
     2: 'survivor_intro',
-    3: 'multi_select',
+    3: 'night_warning',
+    4: 'node_discovered',
   },
   witchPlanProvider: _tutorialWitchPlanProvider,
   forcedDice: [{ round: 1, dice: TUTORIAL_FORCED_DICE }],
-  maxPlanningRounds: 3,
+  maxPlanningRounds: 4,
 };
