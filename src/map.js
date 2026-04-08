@@ -117,6 +117,35 @@ export const MAP_SIZES = {
     bridgeMax: 6,
     minBridges: 3,
   },
+  /** 2x Campaign — used exclusively for The Battle for Caleb's Hollow. */
+  battle: {
+    label: 'Battle (42×42)',
+    cols: 42, rows: 42,
+    villages: ['market', 'parish', 'harbor', 'garrison', 'farmstead',
+               'market', 'parish', 'harbor', 'garrison', 'farmstead'],
+    minVillageDist: 8,
+    forestSeeds: [
+      // Corners
+      {col:0,row:0},{col:1,row:2},{col:40,row:1},{col:41,row:0},
+      {col:41,row:10},{col:0,row:16},{col:1,row:26},{col:41,row:22},
+      // Mid edges
+      {col:0,row:8},{col:41,row:5},{col:0,row:34},{col:41,row:38},
+      {col:20,row:0},{col:20,row:41},{col:10,row:41},{col:32,row:41},
+      // Interior scatter
+      {col:10,row:6},{col:22,row:6},{col:34,row:8},{col:8,row:14},
+      {col:28,row:12},{col:14,row:20},{col:30,row:18},{col:6,row:28},
+      {col:20,row:22},{col:36,row:26},{col:12,row:34},{col:26,row:32},
+      {col:18,row:38},{col:34,row:36},{col:4,row:40},{col:38,row:40},
+      {col:16,row:10},{col:26,row:16},{col:8,row:22},{col:34,row:30},
+      {col:2,row:38},{col:40,row:34},{col:22,row:28},{col:10,row:18},
+      {col:30,row:6},{col:14,row:14},{col:38,row:16},{col:4,row:20},
+      {col:24,row:38},{col:36,row:10},{col:6,row:10},{col:32,row:22},
+    ],
+    nodeCount: 5, nodeCountMin: 3, nodeCountMax: 7,
+    survivorCounts: { buildings: 28, terrain: 8 },
+    bridgeMax: 10,
+    minBridges: 5,
+  },
 };
 
 export function rng(seed) {

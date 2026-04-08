@@ -2837,7 +2837,7 @@ export function createBattleRoom(battleOpts = {}) {
   const endsAt = battleOpts.endsAt ?? Math.floor(Date.now() / 1000) + 7 * 86400;
   const room = createRoom({
     fog:            'partial',
-    mapSize:        'campaign',
+    mapSize:        'battle',
     nodeCount:      5,
     playersPerSide: 10,
     isAsync:        true,
@@ -2848,11 +2848,19 @@ export function createBattleRoom(battleOpts = {}) {
   room.status = 'playing';  // battles skip the lobby phase
   room.isPrivate = false;
 
-  // Initialize GameState with battle mode config
-  const state = new GameState(false, false, 'campaign', 5);
+  // Initialize GameState with battle-sized map (42×42)
+  const state = new GameState(false, false, 'battle', 5);
   state.fogOfWar   = 'partial';
   state.gameMode   = GameMode.BATTLE;
   state.battleConfig = { endsAt, maxPlayersPerSide: 10 };
+
+  // Remove the default hero/witch entities and player entries created by the
+  // constructor — battle mode players join dynamically via joinBattle().
+  state.entities = [];
+  state.players  = [];
+  state.hero     = null;
+  state.witch    = null;
+
   room.state = state;
 
   // No slots pre-built — players join dynamically via joinBattle()
@@ -2933,13 +2941,6 @@ export function joinBattle(playerId, playerName, ws, roomId) {
     personality: null,
   });
 
-  // If we're in a planning phase, set the player as not-ready with a budget
-  if (room.state.planningPhase) {
-    room.state.playerReady.set(playerId, false);
-    // Give a base budget of 3 — the full calculation happens at startPlanning()
-    room.state.playerActionsLeft.set(playerId, 3);
-  }
-
   // Notify the joining player
   send(ws, {
     type:       'matchFound',
@@ -2961,6 +2962,10 @@ export function joinBattle(playerId, playerName, ws, roomId) {
     playerName,
     faction,
   });
+
+  // Start (or restart) the planning phase so the new player gets a plan panel.
+  // This recalculates budgets for everyone and sends planningPhase messages.
+  _startPlanningPhase(room);
 
   console.log(`[battle] ${playerName} joined Battle ${room.id} as ${faction} (${heroCount + (faction === 'hero' ? 1 : 0)}v${witchCount + (faction === 'witch' ? 1 : 0)})`);
   return { roomId: room.id, faction };
