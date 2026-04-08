@@ -3054,13 +3054,32 @@ function _renderSaves(saves) {
                    : 'View';
     const btnClass = s.action_needed ? 'setup-btn primary' : 'setup-btn';
 
+    // Waiting badge + submission count for in-progress games
+    let statusBadge = '';
+    let plansMeta = '';
+    if (s.status === 'playing' && s.players_total > 0) {
+      const remaining = s.players_total - (s.players_submitted ?? 0);
+      if (!s.action_needed) {
+        // We submitted — show "Waiting" badge
+        statusBadge = ` <span class="async-badge async-badge-waiting">${remaining > 0 ? remaining + ' left' : 'Waiting'}</span>`;
+      } else if (s.players_submitted > 0) {
+        // Our turn, but others have submitted — show count
+        statusBadge = ` <span class="async-badge async-badge-turn">${s.players_submitted}/${s.players_total} in</span>`;
+      }
+      // Show deadline in meta line
+      if (s.turn_deadline) {
+        const deadline = _timeRemaining(s.turn_deadline);
+        if (deadline) plansMeta = ` · ${deadline}`;
+      }
+    }
+
     const entry = document.createElement('div');
     entry.className = 'save-entry' + (s.action_needed ? ' save-action-needed' : '');
     entry.innerHTML = `
       ${s.action_needed ? '<span class="save-dot"></span>' : ''}
       <div class="save-entry-info">
-        <div class="save-entry-title">${title}</div>
-        <div class="save-entry-meta">Round ${s.round || 1} · ${phaseLabel || 'Lobby'} · ${_esc(mapLabel)}${ago ? ' · ' + ago : ''}</div>
+        <div class="save-entry-title">${title}${statusBadge}</div>
+        <div class="save-entry-meta">Round ${s.round || 1} · ${phaseLabel || 'Lobby'} · ${_esc(mapLabel)}${plansMeta}${ago ? ' · ' + ago : ''}</div>
       </div>
       <button class="${_esc(btnClass)}">${btnLabel}</button>
       <button class="save-resign-btn" title="Resign">✕</button>
