@@ -672,8 +672,9 @@ app.get('/admin/api/battle', (req, res) => {
   const players = room ? room.players.map(s => ({
     playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI,
     connected: !!(s.ws?.readyState === 1),
+    submitted: !!room.state?.playerReady?.get(s.playerId),
   })) : [];
-  res.json({ ...status, players });
+  res.json({ ...status, planningPhase: !!room?.state?.planningPhase, players });
 });
 
 app.post('/admin/api/battle/end', (req, res) => {

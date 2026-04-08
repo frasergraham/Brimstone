@@ -301,7 +301,7 @@
         </div>
         <h3 style="margin:0.5rem 0">Players (<span id="ba-hero-count">0</span> heroes, <span id="ba-witch-count">0</span> witches)</h3>
         <table>
-          <thead><tr><th>Name</th><th>Faction</th><th>Connected</th></tr></thead>
+          <thead><tr><th>Name</th><th>Faction</th><th>Connected</th><th>Submitted</th></tr></thead>
           <tbody id="ba-players-body"></tbody>
         </table>
         <div style="margin-top:1rem">
@@ -641,10 +641,16 @@
           const conn = p.connected
             ? '<span style="color:var(--green)">Yes</span>'
             : '<span style="color:var(--text-dim)">No</span>';
+          const sub = !data.planningPhase
+            ? '<span style="color:var(--text-dim)">—</span>'
+            : p.submitted
+              ? '<span style="color:var(--green)">✓</span>'
+              : '<span style="color:var(--yellow)">Pending</span>';
           return `<tr>
             <td>${_esc(p.name)}</td>
             <td><span class="badge ${fcls}">${_esc(p.faction)}</span></td>
             <td>${conn}</td>
+            <td>${sub}</td>
           </tr>`;
         }).join('');
       } catch (e) {
