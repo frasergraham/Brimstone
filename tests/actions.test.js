@@ -381,7 +381,7 @@ describe('executeExplore', () => {
     assert.equal(t.explored, true);
   });
 
-  test('HERBALIST survivor also receives 1 herb on explore', () => {
+  test('HERBALIST survivor also adds 1 herb to shared supplies on explore', () => {
     const state = freshState();
     // Create a proper herbalist entity
     const herbalist = new Entity(EntityType.SURVIVOR, 'hero', state.hero.col, state.hero.row);
@@ -391,11 +391,11 @@ describe('executeExplore', () => {
     const t = state.tiles.get(hexKey(herbalist.col, herbalist.row));
     t.explored = false;
 
-    const herbsBefore = herbalist.items[ResourceType.HERBS] ?? 0;
+    const herbsBefore = state.inventory.shared[ResourceType.HERBS] ?? 0;
     executeExplore(state, herbalist);
-    const herbsAfter = herbalist.items[ResourceType.HERBS] ?? 0;
+    const herbsAfter = state.inventory.shared[ResourceType.HERBS] ?? 0;
 
-    assert.ok(herbsAfter >= herbsBefore + 1, 'HERBALIST should gain at least 1 herb on explore (from HERBALIST bonus, possibly more from loot)');
+    assert.ok(herbsAfter >= herbsBefore + 1, 'HERBALIST should add at least 1 herb to shared supplies on explore');
   });
 
   test('non-HERBALIST survivor does NOT receive a bonus herb', () => {
@@ -1195,10 +1195,10 @@ describe('executeSummon', () => {
 // ── executeHeal ───────────────────────────────────────────────────────────────
 
 describe('executeHeal', () => {
-  test('heals 2 HP, costs 1 action, consumes herbs', () => {
+  test('heals 2 HP, costs 1 action, consumes herbs from shared inventory', () => {
     const state = freshState();
     const hero = state.hero;
-    hero.items[ResourceType.HERBS] = 1;
+    state.inventory.shared[ResourceType.HERBS] = 1;
     hero.takeDamage(5);
     const hpBefore = hero.hp;
 
@@ -1206,13 +1206,13 @@ describe('executeHeal', () => {
     assert.equal(r.success, true);
     assert.equal(r.cost, 1, 'Heal should cost 1 action');
     assert.equal(hero.hp, hpBefore + 2);
-    assert.equal(hero.items[ResourceType.HERBS], 0, 'Herbs should be consumed');
+    assert.equal(state.inventory.shared[ResourceType.HERBS], 0, 'Herbs should be consumed from shared inventory');
   });
 
-  test('witch can heal too', () => {
+  test('witch can heal too (from witch inventory)', () => {
     const state = freshState();
     const witch = state.witch;
-    witch.items[ResourceType.HERBS] = 1;
+    state.inventory.witch[ResourceType.HERBS] = 1;
     witch.takeDamage(3);
     const hpBefore = witch.hp;
 
@@ -1220,11 +1220,12 @@ describe('executeHeal', () => {
     assert.equal(r.success, true);
     assert.equal(r.cost, 1);
     assert.equal(witch.hp, hpBefore + 2);
+    assert.equal(state.inventory.witch[ResourceType.HERBS], 0, 'Herbs consumed from witch inventory');
   });
 
-  test('fails when no herbs', () => {
+  test('fails when no herbs in faction inventory', () => {
     const state = freshState();
-    state.hero.items[ResourceType.HERBS] = 0;
+    state.inventory.shared[ResourceType.HERBS] = 0;
     state.hero.takeDamage(3);
     const r = executeHeal(state, state.hero);
     assert.equal(r.success, false);
@@ -1232,7 +1233,7 @@ describe('executeHeal', () => {
 
   test('fails when already at full health', () => {
     const state = freshState();
-    state.hero.items[ResourceType.HERBS] = 1;
+    state.inventory.shared[ResourceType.HERBS] = 1;
     const r = executeHeal(state, state.hero);
     assert.equal(r.success, false);
   });
@@ -1240,10 +1241,46 @@ describe('executeHeal', () => {
   test('heal caps at maxHp', () => {
     const state = freshState();
     const hero = state.hero;
-    hero.items[ResourceType.HERBS] = 1;
+    state.inventory.shared[ResourceType.HERBS] = 1;
     hero.takeDamage(1); // 1 below max
     executeHeal(state, hero);
     assert.equal(hero.hp, hero.maxHp);
+  });
+
+  test('survivor heals using shared herbs', () => {
+    const state = freshState();
+    const survivor = new Entity(EntityType.SURVIVOR, 'hero', state.hero.col, state.hero.row);
+    survivor.items = {};
+    state.entities.push(survivor);
+    state.inventory.shared[ResourceType.HERBS] = 1;
+    survivor.takeDamage(3);
+    const hpBefore = survivor.hp;
+
+    const r = executeHeal(state, survivor);
+    assert.equal(r.success, true);
+    assert.equal(r.cost, 1);
+    assert.equal(survivor.hp, hpBefore + 2);
+    assert.equal(state.inventory.shared[ResourceType.HERBS], 0, 'Herbs consumed from shared inventory');
+  });
+
+  test('hero and survivor share the same herb pool', () => {
+    const state = freshState();
+    const survivor = new Entity(EntityType.SURVIVOR, 'hero', state.hero.col, state.hero.row);
+    survivor.items = {};
+    state.entities.push(survivor);
+    state.inventory.shared[ResourceType.HERBS] = 1;
+
+    state.hero.takeDamage(3);
+    survivor.takeDamage(3);
+
+    // Hero uses the shared herb
+    const r1 = executeHeal(state, state.hero);
+    assert.equal(r1.success, true);
+    assert.equal(state.inventory.shared[ResourceType.HERBS], 0);
+
+    // Survivor can't heal — no herbs left
+    const r2 = executeHeal(state, survivor);
+    assert.equal(r2.success, false);
   });
 });
 

@@ -178,8 +178,9 @@ export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entit
         else if ((projShared[ResourceType.WOOD] || 0) > 0) projShared[ResourceType.WOOD]--;
         break;
       case PlanActionType.HEAL: {
-        const eitems = projEntityItems[a.entityId];
-        if (eitems && (eitems[ResourceType.HERBS] || 0) > 0) eitems[ResourceType.HERBS]--;
+        const healEnt = entities.find(e => e.id === a.entityId);
+        const healPool = healEnt?.owner === 'witch' ? projWitch : projShared;
+        if ((healPool[ResourceType.HERBS] || 0) > 0) healPool[ResourceType.HERBS]--;
         break;
       }
       case PlanActionType.USE_ITEM: {
@@ -262,7 +263,7 @@ export function buildUnitPlanBlocksHtml(unitPlans, budget, foodAvailable, submit
       costLabels.set(key, initialInv ? _stepCostLabel(a, projShared, projWitch, projEntityItems) : '');
 
       // Advance projected inventory
-      _advanceProjectedInventory(a, projShared, projWitch, projEntityItems);
+      _advanceProjectedInventory(a, projShared, projWitch, projEntityItems, entities);
     }
     if (!any) break;
     step++;
@@ -314,7 +315,7 @@ export function buildUnitPlanBlocksHtml(unitPlans, budget, foodAvailable, submit
 }
 
 /** Advance projected inventory for one action (shared between flat and per-unit renderers). */
-function _advanceProjectedInventory(a, projShared, projWitch, projEntityItems) {
+function _advanceProjectedInventory(a, projShared, projWitch, projEntityItems, entities) {
   switch (a.type) {
     case PlanActionType.SUMMON:
       if ((projWitch[ResourceType.METAL] || 0) >= 2) { projWitch[ResourceType.METAL] -= 2; }
@@ -332,8 +333,9 @@ function _advanceProjectedInventory(a, projShared, projWitch, projEntityItems) {
       else if ((projShared[ResourceType.WOOD] || 0) > 0) projShared[ResourceType.WOOD]--;
       break;
     case PlanActionType.HEAL: {
-      const eitems = projEntityItems[a.entityId];
-      if (eitems && (eitems[ResourceType.HERBS] || 0) > 0) eitems[ResourceType.HERBS]--;
+      const healEnt = entities?.find(e => e.id === a.entityId);
+      const healPool = healEnt?.owner === 'witch' ? projWitch : projShared;
+      if ((healPool[ResourceType.HERBS] || 0) > 0) healPool[ResourceType.HERBS]--;
       break;
     }
     case PlanActionType.USE_ITEM: {

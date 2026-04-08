@@ -1484,8 +1484,8 @@ export class UIController {
         case ActionType.HEAL: {
           let healDis = dis || action.atFullHp;
           if (projInv) {
-            const eitems = projInv.entityItems[entity.id] ?? {};
-            if ((eitems[ResourceType.HERBS] || 0) < 1) healDis = true;
+            const healPool = entity.owner === 'witch' ? projInv.witch : projInv.shared;
+            if ((healPool[ResourceType.HERBS] || 0) < 1) healDis = true;
           }
           arcItems.push({ group: 'items', label: 'Heal', fullLabel: action.atFullHp ? 'Already at full HP' : 'Herbs (heal 2 HP)',
             color: '#55cc55', dis: healDis, cost: 1, resCost: '1🌿',
@@ -3161,16 +3161,7 @@ export class UIController {
     const stash   = isHero ? inv.shared : inv.witch;
     const label   = isHero ? '⚔ Supplies' : '🕯 Stores';
 
-    // Count herbs across all living entities of this faction
-    let totalHerbs = 0;
-    for (const e of state.entities) {
-      if (!e.alive || e.owner !== faction) continue;
-      totalHerbs += (e.items?.[ResourceType.HERBS] || 0);
-    }
-
     const entries = Object.entries(stash).filter(([, v]) => v > 0);
-    // Add herbs as a virtual entry if any entity carries them
-    if (totalHerbs > 0) entries.push([ResourceType.HERBS, totalHerbs]);
 
     const rows = entries.length
       ? entries.map(([k, v]) =>
