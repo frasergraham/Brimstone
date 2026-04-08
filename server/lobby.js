@@ -680,6 +680,18 @@ function _submitPlayerPlan(room, playerId, plan, isTimeout = false) {
   }
 
   if (allReady) {
+    // Battle mode round 1: wait for at least one player per faction.
+    // If the deadline expired with only one faction, reset planning so the
+    // timer restarts and the room keeps waiting for the other side.
+    if (room.config.isBattle && room.state.round === 1) {
+      const hasHero  = room.players.some(s => s.faction === 'hero'  && !s.isAI);
+      const hasWitch = room.players.some(s => s.faction === 'witch' && !s.isAI);
+      if (!hasHero || !hasWitch) {
+        console.log(`[battle] Round 1 — still waiting for both factions (hero=${hasHero}, witch=${hasWitch}), resetting planning`);
+        _startPlanningPhase(room);
+        return;
+      }
+    }
     _executeResolution(room);
   }
 }
