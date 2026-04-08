@@ -35,7 +35,7 @@ export function todayDeadlinePST() {
   return Math.floor(deadline.getTime() / 1000);
 }
 
-/** Get this Sunday at 8pm PST as the battle end time (7 days from Monday start). */
+/** Get the next Sunday at 8pm PST as the battle end time. */
 function _sundayEndPST() {
   const now = _nowPST();
   const day = now.getDay(); // 0=Sun
@@ -78,29 +78,23 @@ export function ensureBattleExists() {
 
 /**
  * Periodic check — called every 30 seconds by the main deadline loop.
- * Handles:
- * 1. Creating new battles when the previous one ends
- * 2. Checking if the current battle has expired
+ * Ensures there is always exactly one active battle on the server.
+ * When a battle expires, it triggers game-over and immediately creates the next one.
  */
 export function checkBattleLifecycle() {
   const room = getActiveBattleRoom();
   if (!room) {
-    // No active battle — check if we should create one
-    const now = _nowPST();
-    const day = now.getDay();
-    const hour = now.getHours();
-    // Auto-create on Monday between midnight and 1am PST
-    if (day === 1 && hour < 1) {
-      ensureBattleExists();
-    }
+    // No active battle — create one immediately (ends next Sunday 8pm PST)
+    ensureBattleExists();
     return;
   }
 
   // Check if the battle has expired
   const endsAt = room.state?.battleConfig?.endsAt;
-  if (endsAt && Math.floor(Date.now() / 1000) >= endsAt) {
+  if (endsAt && Math.floor(Date.now() / 1000) >= endsAt && !room.state.winner) {
     console.log(`[battle-scheduler] Battle ${room.id} has expired, triggering final checkVictory`);
     room.state.checkVictory();
+    // The next cycle of checkBattleLifecycle will see no active battle and create a new one
   }
 }
 
