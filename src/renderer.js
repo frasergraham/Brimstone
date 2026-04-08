@@ -804,9 +804,14 @@ export class Renderer {
     const wrapper = this.canvas.parentElement;
     const wrapW = wrapper?.clientWidth  ?? this.canvas.width;
     const wrapH = wrapper?.clientHeight ?? this.canvas.height;
-    // Content dimensions at current zoom
-    const contentW = this.canvas.width  * this.zoomLevel;
-    const contentH = this.canvas.height * this.zoomLevel;
+    // Content dimensions at current zoom — use the actual map pixel extent
+    // (not just canvas size) so large maps can be fully panned.
+    const hs = this.hexSize;
+    const z  = this.zoomLevel;
+    const mapW = SQRT3 * hs * (MAP_COLS + 0.5) * z;
+    const mapH = (1.5 * MAP_ROWS + 0.5) * hs * z;
+    const contentW = Math.max(this.canvas.width * z, mapW);
+    const contentH = Math.max(this.canvas.height * z, mapH);
     // Allow panning beyond the map edges so any hex (including edge hexes)
     // can be centered in the viewport.  The margin is ~40% of the viewport.
     const marginX = wrapW * 0.4;
