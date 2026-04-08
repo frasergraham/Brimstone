@@ -5798,10 +5798,19 @@ async function _applyOnlinePlanningPhase(payload) {
 
   // Prefer per-player budget; fall back to legacy faction budget for old servers.
   const budget = myActionsLeft ?? getFaction(mp.myFaction).getActionsLeft({ heroActionsLeft, witchActionsLeft });
-  ui.exitPlanningMode();
   if (players) ui._players = players;
   ui._hasReplayHistory = _onlineRoundHistory.length > 0;
-  ui.enterPlanningMode(mp.myFaction, budget, timeoutMs ?? 0);
+  if (ui._planMode && ui._planFaction === mp.myFaction && !ui._planSubmitted) {
+    // Already in planning for the same faction — just update budget and countdown
+    // without the disruptive exit/enter cycle that briefly clears _planMode.
+    ui._planBudget = budget;
+    if (timeoutMs > 0) ui._startCountdown(timeoutMs);
+    ui._renderPlayerStatus();
+    ui._renderPlanPanel();
+  } else {
+    ui.exitPlanningMode();
+    ui.enterPlanningMode(mp.myFaction, budget, timeoutMs ?? 0);
+  }
   ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
   ui.onReturnToMenu = () => _showOnlineScreen();
   ui.onReplayLastTurn = () => _replayLastTurnInline();
