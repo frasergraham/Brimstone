@@ -212,9 +212,13 @@ function _sendReconnectPlanningState(room, playerId, ws) {
   const myPlan = planRows.find(r => r.player_id === playerId && r.plan_json);
   const submittedPlan = myPlan ? JSON.parse(myPlan.plan_json) : null;
 
-  // Only send replay if the player hasn't submitted yet — if they submitted,
-  // they were in the game when the round resolved and already saw it.
-  const lastReplay = submittedPlan ? null : _getLastUnwatchedReplay(room);
+  // Only send replay if the player hasn't submitted yet AND was in the game
+  // for the previous round. Battle joins/rejoins skip the replay — the player
+  // wasn't present for that round and replaying it causes a buffering loop.
+  let lastReplay = null;
+  if (!submittedPlan && !room.config.isBattle) {
+    lastReplay = _getLastUnwatchedReplay(room);
+  }
 
   // Compute remaining time for the countdown timer
   let timeoutMs = 0;
