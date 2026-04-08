@@ -4551,19 +4551,9 @@ document.getElementById('btn-battle-back')?.addEventListener('click', () => show
 document.getElementById('btn-battle-join')?.addEventListener('click', function() {
   const roomId = this.dataset.roomId;
   if (!roomId) return;
-  const wsUrl = _serverWsUrl();
-  if (!mp) {
-    mp = _createMpClient();
-    mp.connect(wsUrl);
-  } else if (!mp.connected) {
-    mp.connect(wsUrl);
-  }
-  // Wait for connection then join
-  const _tryJoin = () => {
-    if (mp?.connected) { mp.joinBattle(roomId); return; }
-    setTimeout(_tryJoin, 200);
-  };
-  _tryJoin();
+  _ensureAuthed(() => {
+    mp.joinBattle(roomId);
+  });
 });
 document.getElementById('btn-battle-spectate')?.addEventListener('click', function() {
   const roomId = this.dataset.roomId;
