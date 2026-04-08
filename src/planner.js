@@ -195,8 +195,9 @@ export function computeProjectedInventory(state, plan) {
         else if ((shared[ResourceType.WOOD] || 0) > 0) shared[ResourceType.WOOD]--;
         break;
       case PlanActionType.HEAL: {
-        const eitems = entityItems[action.entityId];
-        if (eitems && (eitems[ResourceType.HERBS] || 0) > 0) eitems[ResourceType.HERBS]--;
+        const healEntity = (state.entities ?? []).find(e => e.id === action.entityId);
+        const pool = healEntity?.owner === 'witch' ? witch : shared;
+        if ((pool[ResourceType.HERBS] || 0) > 0) pool[ResourceType.HERBS]--;
         break;
       }
       case PlanActionType.USE_ITEM: {

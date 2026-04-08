@@ -167,7 +167,7 @@ export function assessHeroBoard(sim) {
   const witchScore = sim.nodeScore?.witch ?? 0;
 
   const heroItems = hero?.items ? { ...hero.items } : {};
-  const herbCount = heroItems[ResourceType.HERBS] || 0;
+  const herbCount = sim.inventory?.shared?.[ResourceType.HERBS] || 0;
   const foodCount = sim.inventory?.shared?.[ResourceType.FOOD] || 0;
 
   const heroWeapons = hero?.items
@@ -405,14 +405,31 @@ export function genProtectHero(sim, board, budget, config = null) {
   const heroEntity = sim.entities.find(e => e.id === board.hero.id);
   if (!heroEntity) return actions;
 
-  // Heal: use herbs if injured (costs 1 action)
-  const herbs = heroEntity.items?.[ResourceType.HERBS] || 0;
+  // Heal: use herbs if hero injured (costs 1 action, from shared supply)
+  let herbs = sim.inventory?.shared?.[ResourceType.HERBS] || 0;
   if (herbs > 0 && board.heroHpRatio < 1.0 && remaining > 0) {
     actions.push({
       type: PlanActionType.HEAL, entityId: board.hero.id,
       _priority: 0, _goal: HeroGoal.PROTECT_HERO,
     });
     remaining--;
+    herbs--;
+  }
+
+  // Heal injured survivors with remaining shared herbs
+  if (herbs > 0 && remaining > 0) {
+    const injuredSurvivors = board.survivors
+      .filter(s => s.hp < s.maxHp)
+      .sort((a, b) => (a.hp / a.maxHp) - (b.hp / b.maxHp)); // most injured first
+    for (const s of injuredSurvivors) {
+      if (herbs <= 0 || remaining <= 0) break;
+      actions.push({
+        type: PlanActionType.HEAL, entityId: s.id,
+        _priority: 1, _goal: HeroGoal.PROTECT_HERO,
+      });
+      remaining--;
+      herbs--;
+    }
   }
 
   // Free action: equip best unequipped weapon
@@ -517,8 +534,8 @@ export function genExplore(sim, board, budget, config = null) {
   const heroEntity = sim.entities.find(e => e.id === board.hero.id);
   if (!heroEntity) return actions;
 
-  // Always use herbs when injured — too valuable to skip
-  const herbs = heroEntity.items?.[ResourceType.HERBS] || 0;
+  // Always use herbs when injured — too valuable to skip (from shared supply)
+  const herbs = sim.inventory?.shared?.[ResourceType.HERBS] || 0;
   if (herbs > 0 && board.heroHpRatio < 0.8 && remaining > 0) {
     actions.push({
       type: PlanActionType.HEAL, entityId: board.hero.id,

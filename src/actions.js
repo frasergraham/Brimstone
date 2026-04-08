@@ -326,11 +326,11 @@ export function getValidActions(state, actor) {
     actions.push({ type: ActionType.SOUND_HORN, affordable: food >= 1 });
   }
 
-  // Heal — available to any unit that carries herbs (shown even at full HP so
-  // players know they have herbs; disabled at full HP during execution)
+  // Heal — available to any unit whose faction has herbs (shown even at full HP
+  // so players know herbs exist; disabled at full HP during execution)
   {
-    const myItems = actor.items || {};
-    if ((myItems[ResourceType.HERBS] || 0) > 0) {
+    const healInv = faction.getInventory(state);
+    if ((healInv[ResourceType.HERBS] || 0) > 0) {
       actions.push({ type: ActionType.HEAL, atFullHp: actor.hp >= actor.maxHp });
     }
   }
@@ -578,7 +578,8 @@ export function executeExplore(state, actor) {
   }
 
   if (isHerbalist && actor.owner === 'hero') {
-    actor.items[ResourceType.HERBS] = (actor.items[ResourceType.HERBS] || 0) + 1;
+    const herbInv = getFaction(actor.owner).getInventory(state);
+    herbInv[ResourceType.HERBS] = (herbInv[ResourceType.HERBS] || 0) + 1;
     log.push(`${actor.displayName}'s keen eye also finds Herbs!`);
     lootItems.push('+🌿');
   }
@@ -635,9 +636,10 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
   }
 
   if (lootType === ResourceType.HERBS) {
-    // Herbs are per-unit (potions) — any faction can carry and use them
-    actor.items[lootType] = (actor.items[lootType] || 0) + 1;
-    log.push(`Found Herbs! Added to ${actor.displayName}'s pack.`);
+    // Herbs go to faction shared inventory — any allied unit can use them
+    const inv = faction.getInventory(state);
+    inv[lootType] = (inv[lootType] || 0) + 1;
+    log.push(`${actor.displayName} found Herbs! Added to supplies.`);
     lootItems?.push('+🌿');
     return;
   }
@@ -914,12 +916,12 @@ export function executeSummon(state, actor, requestedType = null) {
 }
 
 export function executeHeal(state, actor) {
-  const myItems = actor.items || {};
-  if ((myItems[ResourceType.HERBS] || 0) < 1)
+  const inv = getFaction(actor.owner).getInventory(state);
+  if ((inv[ResourceType.HERBS] || 0) < 1)
     return { success: false, log: ['No herbs.'] };
   if (actor.hp >= actor.maxHp)
     return { success: false, log: [`${actor.displayName} is already at full health.`] };
-  myItems[ResourceType.HERBS]--;
+  inv[ResourceType.HERBS]--;
   actor.heal(2);
   return { success: true, log: [`${actor.displayName} uses herbs. (+2 HP, now ${actor.hp}/${actor.maxHp})`], cost: 1 };
 }
