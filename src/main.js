@@ -1511,6 +1511,17 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       const actor = step.entitySnapshot?.find(e => e.id === action.entityId);
       if (!actor) continue;
 
+      // Frame camera on all hero units — the horn reveals them to the opponent
+      if (!_autoplay) {
+        const hornTargets = step.entitySnapshot
+          .filter(e => e.alive && e.owner === 'hero')
+          .map(e => ({ col: e.col, row: e.row }));
+        if (hornTargets.length) {
+          renderer.frameHexes(hornTargets, { paddingHexes: 3, maxZoom: 1.8, duration: 400 });
+          await _delay(420);
+        }
+      }
+
       // Gold expanding ring showing the 4-hex horn range
       renderer.addNodeRevealAnim(
         [{ col: actor.col, row: actor.row }], '#d4a72c',
