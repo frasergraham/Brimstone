@@ -652,15 +652,20 @@ export class Renderer {
     let panX = offX + visW / 2 - cx * z;
     let panY = H / 2 - cy * z;
 
-    // Clamp using the actual map extent (not canvas size) — critical for large maps
-    // where the grid exceeds the canvas dimensions.
+    // Clamp using the same logic as _clampPan — accounts for _padX which
+    // can be deeply negative on large maps (42×42).
     const mapW = SQRT3 * hs * (MAP_COLS + 0.5) * z;
     const mapH = (1.5 * MAP_ROWS + 0.5) * hs * z;
     const contentW = Math.max(fullW * z, mapW);
     const contentH = Math.max(H * z, mapH);
-    const margin = fullW * 0.1;
-    panX = Math.max(fullW - contentW - margin, Math.min(margin, panX));
-    panY = Math.max(H - contentH - margin, Math.min(margin, panY));
+    const padXz = this._padX * z;
+    const padYz = this._padY * z;
+    const maxPanX = -padXz + fullW * 0.5;
+    const maxPanY = -padYz + H * 0.5;
+    const minPanX = fullW - contentW - padXz - fullW * 0.5;
+    const minPanY = H - contentH - padYz - H * 0.5;
+    panX = Math.max(minPanX, Math.min(maxPanX, panX));
+    panY = Math.max(minPanY, Math.min(maxPanY, panY));
 
     return { zoom: z, panX, panY };
   }
