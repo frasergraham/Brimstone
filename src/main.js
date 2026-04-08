@@ -4594,9 +4594,13 @@ document.getElementById('btn-battle-back')?.addEventListener('click', () => show
 document.getElementById('btn-battle-join')?.addEventListener('click', function() {
   const roomId = this.dataset.roomId;
   if (!roomId) return;
-  // Clear any stale roomId so _ensureAuthed doesn't trigger a reconnect
-  // via auth({roomId}) — we want joinBattle to handle it.
-  if (mp) mp.roomId = null;
+  // Tear down any existing game UI so initOnline gets the clean path
+  state = null; renderer = null; ui = null;
+  _stopBattleCountdownTimer();
+  document.getElementById('game-screen').style.display = 'none';
+  // Clear stale roomId so _ensureAuthed doesn't trigger a reconnect
+  // via auth({roomId}) — joinBattle handles everything.
+  if (mp) { mp.roomId = null; mp.active = false; }
   _ensureAuthed(() => {
     mp.joinBattle(roomId);
   });

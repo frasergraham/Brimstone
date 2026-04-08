@@ -3008,22 +3008,61 @@ export function joinBattle(playerId, playerName, ws, roomId) {
     return null;
   }
 
-  // Check if player is already in the battle
+  // ── Reconnect: existing player returning ──────────────────────────────
   const existingSeat = room.players.find(s => s.playerId === playerId);
   if (existingSeat) {
-    // Reconnect flow
     existingSeat.ws = ws;
-    send(ws, { type: 'reconnected', faction: existingSeat.faction, myPlayerId: playerId, roomId: room.id, isAsync: true });
-    broadcastState(room, 'reconnect');
-    _sendReconnectPlanningState(room, playerId, ws);
-    return { roomId: room.id, faction: existingSeat.faction };
+    const faction = existingSeat.faction;
+
+    // Use matchFound (same as initial join) — this is the reliable game-entry
+    // path that always triggers initOnline on the client. Avoids the fragile
+    // reconnected → broadcastState → planningPhase multi-message dance.
+    send(ws, {
+      type:       'matchFound',
+      roomId:     room.id,
+      faction,
+      myPlayerId: playerId,
+      players:    _buildPlayerList(room),
+      aiOpponent: false,
+      isAsync:    true,
+      isBattle:   true,
+    });
+    send(ws, { type: 'stateUpdate', reason: 'battleReconnect', state: serializeState(room.state) });
+
+    // Send planning state if in planning phase
+    if (room.state.planningPhase && !room.state.resolving) {
+      const budget = room.state.playerActionsLeft?.get(playerId)
+        ?? (faction === 'hero' ? room.state.heroActionsLeft : room.state.witchActionsLeft);
+      const planRows = getPlanStatus(room.id, room.state.round);
+      const myPlan = planRows.find(r => r.player_id === playerId && r.plan_json);
+      const submittedPlan = myPlan ? JSON.parse(myPlan.plan_json) : null;
+
+      let timeoutMs = 0;
+      if (room.turnDeadline) {
+        const remaining = room.turnDeadline - Math.floor(Date.now() / 1000);
+        if (remaining > 0) timeoutMs = remaining * 1000;
+      }
+
+      send(ws, {
+        type:            'planningPhase',
+        myActionsLeft:   budget,
+        heroActionsLeft:  room.state.heroActionsLeft,
+        witchActionsLeft: room.state.witchActionsLeft,
+        timeoutMs,
+        players:          _buildPlayerList(room),
+        submittedPlan,
+      });
+    }
+
+    _broadcastPresence(room);
+    console.log(`[battle] ${playerName} reconnected to battle ${room.id} as ${faction}`);
+    return { roomId: room.id, faction };
   }
 
-  // Count current players per faction
+  // ── New player joining ────────────────────────────────────────────────
   const heroCount  = room.players.filter(s => s.faction === 'hero').length;
   const witchCount = room.players.filter(s => s.faction === 'witch').length;
 
-  // Check capacity
   const maxPPS = room.state.battleConfig?.maxPlayersPerSide ?? 10;
   if (heroCount >= maxPPS && witchCount >= maxPPS) {
     send(ws, { type: 'error', message: 'Battle is full. You may spectate instead.' });
@@ -3036,35 +3075,23 @@ export function joinBattle(playerId, playerName, ws, roomId) {
   else if (witchCount < maxPPS) faction = 'witch';
   else faction = 'hero';
 
-  // Generate spawn position
   const starts = generateBattleStarts(room.state.tiles, faction, 1);
   if (!starts.length) {
     send(ws, { type: 'error', message: 'No available spawn position.' });
     return null;
   }
-  const spawn = starts[0];
 
-  // Add player to game state
-  const leader = room.state.addPlayer(playerId, playerName, faction, spawn.col, spawn.row, false);
-
-  // Assign player color
+  const leader = room.state.addPlayer(playerId, playerName, faction, starts[0].col, starts[0].row, false);
   const factionPlayers = room.state.players.filter(p => p.faction === faction);
-  const colorIndex = factionPlayers.length - 1;
   const colors = faction === 'hero' ? HERO_PLAYER_COLORS : WITCH_PLAYER_COLORS;
-  leader.color = colors[colorIndex % colors.length];
+  leader.color = colors[(factionPlayers.length - 1) % colors.length];
 
-  // Add seat to room
   room.players.push({
-    playerId,
-    ws,
-    name: playerName,
-    faction,
-    isAI: false,
-    ai: null,
-    personality: null,
+    playerId, ws, name: playerName, faction,
+    isAI: false, ai: null, personality: null,
   });
 
-  // Notify the joining player
+  // Send matchFound → stateUpdate → planningPhase — same clean sequence as reconnect
   send(ws, {
     type:       'matchFound',
     roomId:     room.id,
@@ -3076,38 +3103,39 @@ export function joinBattle(playerId, playerName, ws, roomId) {
     isBattle:   true,
   });
 
+  // Notify existing players
+  broadcastExcept(room, playerId, {
+    type: 'playerJoinedBattle', playerId, playerName, faction,
+  });
   broadcastState(room, 'playerJoined');
 
-  // Broadcast to existing players
-  broadcastExcept(room, playerId, {
-    type: 'playerJoinedBattle',
-    playerId,
-    playerName,
-    faction,
-  });
-
-  // Ensure the new player enters a planning phase.
+  // Ensure the new player enters a planning phase
   if (room.state.planningPhase) {
-    // Already in planning — add the new player to the existing phase without
-    // resetting other players' submitted plans.
+    // Already in planning — add the new player to the existing phase
     room.state.playerReady.set(playerId, false);
     const nb = countHeldNodes(faction, room.state.witchObjectives, room.state.entities);
     room.state.playerActionsLeft.set(playerId, computeActionsForPlayer(playerId, faction, room.state.phase, room.state.entities, nb));
 
-    const timeoutMs = room.config.turnIntervalMs ?? TURN_TIMEOUT_MS;
+    let timeoutMs = 0;
+    if (room.turnDeadline) {
+      const remaining = room.turnDeadline - Math.floor(Date.now() / 1000);
+      if (remaining > 0) timeoutMs = remaining * 1000;
+    }
+
     send(ws, {
-      type:          'planningPhase',
-      myActionsLeft: room.state.playerActionsLeft.get(playerId) ?? 0,
+      type:            'planningPhase',
+      myActionsLeft:   room.state.playerActionsLeft.get(playerId) ?? 0,
       heroActionsLeft:  room.state.heroActionsLeft,
       witchActionsLeft: room.state.witchActionsLeft,
       timeoutMs,
-      players:       _buildPlayerList(room),
+      players:          _buildPlayerList(room),
     });
   } else {
-    // Not yet in planning (first player to join) — start a fresh planning phase.
+    // First player — start a fresh planning phase
     _startPlanningPhase(room);
   }
 
+  _broadcastPresence(room);
   console.log(`[battle] ${playerName} joined Battle ${room.id} as ${faction} (${heroCount + (faction === 'hero' ? 1 : 0)}v${witchCount + (faction === 'witch' ? 1 : 0)})`);
   return { roomId: room.id, faction };
 }
