@@ -65,7 +65,7 @@ const MAP_BUILDERS = {
 
 export default {
   id:          'prologue',
-  title:       'Prologue',
+  title:       'Prologue (Tutorial)',
   description: 'A hero on the road to Caleb\'s Hollow encounters darkness for the first time. Learn the fundamentals of survival.',
   missions:    MISSIONS,
   mapBuilders: MAP_BUILDERS,

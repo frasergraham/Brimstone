@@ -506,7 +506,7 @@ describe('Prologue campaign', async () => {
 
   test('has expected campaign shape', () => {
     assert.equal(prologue.id, 'prologue');
-    assert.equal(prologue.title, 'Prologue');
+    assert.equal(prologue.title, 'Prologue (Tutorial)');
     assert.equal(prologue.prerequisiteCampaign, null);
     assert.equal(prologue.firstMission, 'tutorial');
   });

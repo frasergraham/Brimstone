@@ -516,6 +516,11 @@ function _enterLocalPlanningMode() {
  * witch plan, then both resolve together.  No resolution summary modal is shown.
  */
 async function _onConductorPlanSubmit(heroPlan) {
+  // Block premature submit — conductor must be on a plan_submitted step
+  if (_missionConductor && !_missionConductor.canSubmitPlan()) {
+    return;
+  }
+
   ui.exitPlanningMode();
   _missionConductor?.onPlanSubmitted();
 
@@ -2110,6 +2115,13 @@ async function _showCampaignScreen(campaignDef) {
   await _loadCampaignPortraits();
   _renderCampaignScreen();
   showStep('campaign');
+
+  // Single-mission campaigns skip the mission list and go straight to briefing
+  if (_activeCampaign?.campaignDef?.missions?.length === 1) {
+    const missionId = _activeCampaign.campaignDef.missions[0].id;
+    _campaignSelectedMission = missionId;
+    _showMissionBriefing(missionId);
+  }
 }
 
 const _RESOURCE_ICONS = { wood: '🪵', metal: '⚙', herbs: '🌿', food: '🍞', silver: '⚔', scripture: '📜' };
@@ -2402,8 +2414,9 @@ function _objectiveDescription(obj) {
     case 'survive_rounds': return `Survive ${obj.rounds} rounds`;
     case 'reach_hex':      return 'Reach the objective hex';
     case 'slay_witch':     return 'Slay the witch';
-    case 'control_nodes':  return 'Control the Power Nodes';
-    default:               return obj.type;
+    case 'control_nodes':       return 'Control the Power Nodes';
+    case 'conductor_complete':  return obj.reason || 'Complete the mission';
+    default:                    return obj.type;
   }
 }
 

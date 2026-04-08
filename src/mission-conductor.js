@@ -95,6 +95,17 @@ export class MissionConductor {
     return max == null || this._round < max;
   }
 
+  /**
+   * Whether the player is allowed to submit their plan right now.
+   * Returns true only when the current step expects plan_submitted trigger,
+   * preventing the player from skipping required action steps.
+   */
+  canSubmitPlan() {
+    const step = this._steps[this._step];
+    if (!step) return true; // no step = no restriction
+    return step.trigger?.type === 'plan_submitted';
+  }
+
   /** Called by ui.onEntitySelected when the player clicks a unit. */
   onEntitySelected(entity) {
     const step = this._steps[this._step];
