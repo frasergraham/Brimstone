@@ -4619,12 +4619,23 @@ body.spectator-mode #game-screen   { display: flex !important; }
   border-color: var(--clr-dim);
   background: none;
 }
+.campaign-select-item.disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.campaign-select-item.disabled:hover {
+  border-color: var(--clr-dim);
+  background: none;
+}
 
 .campaign-select-badge {
   font-size: 0.75rem;
   color: var(--clr-dim);
   margin-top: 0.35rem;
   font-style: italic;
+}
+.campaign-select-badge.coming-soon {
+  color: var(--clr-gold, #d4a853);
 }
 
 .campaign-mission-list {

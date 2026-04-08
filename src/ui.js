@@ -74,8 +74,10 @@ export class UIController {
     this.spectator         = false;
     // When true, suppress phase modals and auto-select — used for tutorial mode
     this.tutorialMode      = false;
-    // When true, block all map clicks (set by TutorialConductor during dialog steps)
+    // When true, block all map clicks (set by MissionConductor during dialog steps)
     this.tutorialClickBlocked = false;
+    // When true, block the plan submit button (set by MissionConductor until plan_submitted step)
+    this.tutorialSubmitBlocked = false;
 
     // ── App mode (set by main.js via onModeChange) ───────────────────────────
     this.appMode        = 'MENU';  // mirrors AppMode enum from app-mode.js
@@ -925,6 +927,7 @@ export class UIController {
   /** Submit the current plan (flattened to interleaved PlanAction[]). */
   _doSubmitPlan() {
     if (this._planSubmitted) return;
+    if (this.tutorialSubmitBlocked) return;
     this.markPlanSubmitted();
     if (this.onPlanSubmit) this.onPlanSubmit(interleavePlan(this._unitPlans));
   }

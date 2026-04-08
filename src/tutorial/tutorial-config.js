@@ -1,8 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// Tutorial Configuration
-// Self-contained tutorial definition following the campaign config pattern.
+// Tutorial / Prologue Configuration
+// Self-contained tutorial definition used by the Prologue campaign.
 // Contains the tutorial map builder, step definitions, wave config,
-// and forced dice settings. NOT registered as a campaign.
+// forced dice settings, and MissionConductor config.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { Tile, TileType, BuildingType, ResourceType } from '../tiles.js';
@@ -118,14 +118,16 @@ export function buildTutorialMap() {
   setResource(tiles, 1, 5, ResourceType.HERBS);
   setResource(tiles, 5, 3, ResourceType.WOOD);
 
-  // ── Power Node — cluster at (4,4),(5,4),(4,5) ───────────────────────────
+  // ── Power Node — cluster at (7,5),(7,4),(8,5) ───────────────────────────
+  // East of Blacksmith. Hidden initially — only within hero's sight range
+  // once they reach the Blacksmith (5,5) in round 4 (DAY sight = 3).
   const witchObjectives = [
     {
-      col: 4, row: 4,
+      col: 7, row: 5,
       label: 'The Crossroads',
-      hexes: [{ col: 4, row: 4 }, { col: 5, row: 4 }, { col: 4, row: 5 }],
+      hexes: [{ col: 7, row: 5 }, { col: 7, row: 4 }, { col: 8, row: 5 }],
       color: NODE_COLORS[0],
-      seenByHero:  true,
+      seenByHero:  false,
       seenByWitch: true,
       prevCtrl: 'neutral',
     },
@@ -170,7 +172,7 @@ export const TUTORIAL_FORCED_DICE = [6, 1];
 //   trigger     — what advances the step:
 //                   'click'        → "Got it →" button
 //                   'auto'         → advances automatically via onPlanningPhaseStart
-//                   'start_game'   → shows "Start a Real Game →" button
+//                   'complete'     → final step button (label from buttonLabel field)
 //                   { type: 'entity_selected', entityType }
 //                   { type: 'action_queued',   actionType }
 //                   { type: 'plan_submitted' }
@@ -179,6 +181,7 @@ export const TUTORIAL_FORCED_DICE = [6, 1];
 //                   { type: 'hex',     col, row }
 //                   { type: 'element', selector, arrow: 'up'|'down'|'left'|'right' (optional) }
 //   tooltipPos  — 'center' | 'bottom-left' | 'bottom-right'
+//   buttonLabel — custom button text for 'complete' trigger steps
 //   witchPlan   — scripted witch plan for this round (null = N/A)
 
 export const TUTORIAL_STEPS = [
@@ -186,8 +189,8 @@ export const TUTORIAL_STEPS = [
 
   {
     id: 'welcome',
-    title: "Welcome to Caleb's Hollow",
-    body: 'A hero arrives in a cursed town. Dark forces stir in the shadows.\n\nYou play as the ⚔ Hero. Let\'s learn the core mechanics in a few minutes.',
+    title: 'The Road to Caleb\'s Hollow',
+    body: 'On the road to Caleb\'s Hollow, shadows stir in the forest. Something is not right.\n\nYou play as the ⚔ Hero. Let\'s learn the core mechanics in a few minutes.',
     trigger: 'click',
     spotlight: null,
     tooltipPos: 'center',
@@ -273,8 +276,8 @@ export const TUTORIAL_STEPS = [
 
   {
     id: 'combat_intro',
-    title: 'A Minion Appears!',
-    body: 'A witch\'s minion has emerged from the shadows next to your hero!\n\nClick on the enemy to attack it.',
+    title: 'A Minion Blocks the Road!',
+    body: 'A witch\'s minion has emerged from the tree line ahead, blocking your path.\n\nClick on the enemy to attack it.',
     trigger: { type: 'action_queued', actionType: PlanActionType.BATTLE_UNIT },
     spotlight: { type: 'hex', col: 3, row: 5 },
     tooltipPos: 'bottom-left',
@@ -365,8 +368,17 @@ export const TUTORIAL_STEPS = [
     witchPlan: null,
   },
 
-  // ── Explanation steps (onPlanningPhaseStart jumps here when _round === 3) ──
+  // ── Round 4: Blacksmith + Power Node discovery (onPlanningPhaseStart jumps here when _round === 3) ──
 
+  {
+    id: 'night_warning',
+    title: 'Beware the Night',
+    body: 'Survivors who are not inside a building or on a fortified tile will take damage when night falls. Keep your allies sheltered or fortify their position before dusk.',
+    trigger: 'click',
+    spotlight: null,
+    tooltipPos: 'center',
+    witchPlan: null,
+  },
   {
     id: 'multi_select',
     title: 'Multiple Units on a Hex',
@@ -377,20 +389,59 @@ export const TUTORIAL_STEPS = [
     witchPlan: null,
   },
   {
-    id: 'fortify',
-    title: 'Fortification',
-    body: 'When night falls, enemies grow stronger. Fortifications help defend your position.\n\nSpend wood or metal to fortify a tile. Buildings already start with a fortification level of 1.',
-    trigger: 'click',
+    id: 'smithy_intro',
+    title: 'Explore Further',
+    body: 'There\'s a Blacksmith to the east. Move your Hero there — you may find supplies, and the road beyond holds something important.',
+    trigger: { type: 'action_queued', actionType: PlanActionType.MOVE },
+    spotlight: { type: 'hex', col: 5, row: 5 },
+    tooltipPos: 'bottom-left',
+    witchPlan: null,
+  },
+  {
+    id: 'submit_r4',
+    title: 'Submit Your Plan',
+    body: 'Submit your plan. Your hero will head to the Blacksmith.',
+    trigger: { type: 'plan_submitted' },
+    spotlight: { type: 'element', selector: '#plan-submit-btn' },
+    tooltipPos: 'bottom-left',
+    witchPlan: [],
+  },
+  {
+    id: 'watch_r4',
+    title: 'The Road East',
+    body: 'Your hero travels the road to the Blacksmith.',
+    trigger: 'auto',
     spotlight: null,
-    tooltipPos: 'center',
+    tooltipPos: 'bottom-left',
+    witchPlan: null,
+  },
+
+  // ── Explanation steps (onPlanningPhaseStart jumps here when _round === 4) ──
+
+  {
+    id: 'node_discovered',
+    title: 'Power Node Discovered!',
+    body: 'A Power Node glows nearby. These are key strategic points on the map — controlling them is one way to win.\n\nWhichever side has more units on a node controls it. At Dawn and Dusk scoring checkpoints, the side controlling a majority of nodes scores a point. Four points wins the game.',
+    trigger: 'click',
+    spotlight: { type: 'hex', col: 7, row: 5 },
+    tooltipPos: 'bottom-left',
     witchPlan: null,
   },
   {
     id: 'score_tracker',
     title: 'Score Tracker',
-    body: 'Power nodes appear on the map. Whichever side has more units on a power node controls it.\n\nThe pips at the bottom of the screen show who controls which nodes. At Dawn and Dusk, the side controlling a majority of nodes scores a point — four points wins the game.\n\nYou can also win by holding ALL the nodes at Dawn or Dusk, or by killing the enemy leader.',
+    body: 'The pips at the bottom of the screen show who controls which nodes.\n\nYou can also win by holding ALL nodes at Dawn or Dusk, or by killing the enemy leader.',
     trigger: 'click',
     spotlight: { type: 'element', selector: '#score-bar', arrow: 'down' },
+    tooltipPos: 'center',
+    witchPlan: null,
+  },
+  {
+    id: 'fortify',
+    title: 'Fortification',
+    body: 'When night falls, enemies grow stronger. Fortifications help defend your position.\n\nSpend wood or metal to fortify a tile. Buildings already start with a fortification level of 1.',
+    trigger: 'click',
+    spotlight: null,
     tooltipPos: 'center',
     witchPlan: null,
   },
@@ -406,10 +457,51 @@ export const TUTORIAL_STEPS = [
   {
     id: 'complete',
     title: 'You\'re Ready!',
-    body: 'That\'s the core loop: plan actions, submit, watch resolution, repeat.\n\nExplore buildings for weapons and survivors, fortify positions, and control the Power Nodes.\n\nGood luck out there.',
-    trigger: 'start_game',
+    body: 'That\'s the core loop: plan actions, submit, watch resolution, repeat.\n\nExplore buildings for weapons and survivors, fortify positions, and control the Power Nodes.\n\nCaleb\'s Hollow awaits.',
+    trigger: 'complete',
+    buttonLabel: 'Continue to Caleb\'s Hollow →',
     spotlight: null,
     tooltipPos: 'center',
     witchPlan: null,
   },
 ];
+
+// ── MissionConductor configuration for the tutorial/prologue mission ─────
+
+/**
+ * Provides the scripted witch plan for each tutorial round.
+ * Round 0: witch idles (plan from step's witchPlan field).
+ * Round 1: minion attacks the hero (minion was spawned by wave after round 1).
+ * Round 2+: witch idles.
+ */
+function _tutorialWitchPlanProvider(round, state, currentStep) {
+  if (round === 0) {
+    return currentStep?.witchPlan ?? [];
+  }
+  if (round === 1) {
+    const minion = state.entities.find(
+      e => e.type === EntityType.MINION && e.owner === 'witch' && e.alive
+    );
+    const hero = state.entities.find(e => e.type === EntityType.HERO && e.alive);
+    if (minion && hero) {
+      return [{
+        type: PlanActionType.BATTLE_UNIT,
+        entityId: minion.id, targetId: hero.id,
+        targetCol: hero.col, targetRow: hero.row,
+      }];
+    }
+  }
+  return [];
+}
+
+export const TUTORIAL_CONDUCTOR_CONFIG = {
+  roundStepMap: {
+    1: 'combat_intro',
+    2: 'survivor_intro',
+    3: 'night_warning',
+    4: 'node_discovered',
+  },
+  witchPlanProvider: _tutorialWitchPlanProvider,
+  forcedDice: [{ round: 1, dice: TUTORIAL_FORCED_DICE }],
+  maxPlanningRounds: 4,
+};

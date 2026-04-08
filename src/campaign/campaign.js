@@ -30,7 +30,7 @@ export function snapshotSurvivor(entity) {
  */
 export function buildVictoryDelegate(objectives) {
   return (state) => {
-    // Check lose condition first
+    // Check lose condition first (may be null for tutorial/conductor missions)
     if (objectives.lose) {
       switch (objectives.lose.type) {
         case 'hero_killed':
@@ -94,6 +94,9 @@ export function buildVictoryDelegate(objectives) {
           break;
         case 'control_nodes':
           // Standard node scoring — delegate to existing logic (return null to let it run)
+          return null;
+        case 'conductor_complete':
+          // MissionConductor handles completion directly — never auto-trigger victory
           return null;
       }
     }
