@@ -2540,6 +2540,9 @@ function _initCampaignMission(missionDef) {
   _gameStartTime = Date.now();
   _spSaveId = null; // campaign uses its own save system
 
+  // Persist pre-mission campaign state so defeat can restore from it
+  _activeCampaign.save();
+
   // Build map
   const builder = _activeCampaign.getMapBuilder(missionDef.mapBuilder);
   if (!builder) { console.error('No map builder for', missionDef.mapBuilder); return; }
@@ -2702,28 +2705,32 @@ function _handleCampaignMissionEnd() {
   const won = state.winner === 'hero';
   const missionDef = _activeMissionDef;
 
-  // Gather surviving survivors for roster (permadeath: dead ones are lost)
-  // Include both deployed survivors who lived AND roster members who weren't deployed
-  const deployedSurvivors = state.entities
-    .filter(e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR)
-    .map(e => snapshotSurvivor(e));
-  const deployedNames = new Set(deployedSurvivors.map(s => s.name));
-  // Keep roster members who weren't deployed (they stayed behind safely)
-  const undeployed = _activeCampaign.roster.filter(s => !deployedNames.has(s.name));
-  const survivors = [...deployedSurvivors, ...undeployed];
+  let survivors;
+  if (won) {
+    // Gather surviving survivors for roster (permadeath: dead ones are lost)
+    // Include both deployed survivors who lived AND roster members who weren't deployed
+    const deployedSurvivors = state.entities
+      .filter(e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR)
+      .map(e => snapshotSurvivor(e));
+    const deployedNames = new Set(deployedSurvivors.map(s => s.name));
+    const undeployed = _activeCampaign.roster.filter(s => !deployedNames.has(s.name));
+    survivors = [...deployedSurvivors, ...undeployed];
 
-  // Apply mission result to campaign state
-  _activeCampaign.applyMissionResult(missionDef.id, {
-    won,
-    survivors,
-    resources: { ...state.inventory.shared },
-    heroStats: state.hero ? {
-      hp: state.hero.hp, maxHp: state.hero.maxHp,
-      attack: state.hero.attack, defense: state.hero.defense,
-      weapon: state.hero.weapon, items: { ...state.hero.items },
-    } : _activeCampaign.heroStats,
-    flags: {},
-  });
+    _activeCampaign.applyMissionResult(missionDef.id, {
+      won,
+      survivors,
+      resources: { ...state.inventory.shared },
+      heroStats: state.hero ? {
+        hp: state.hero.hp, maxHp: state.hero.maxHp,
+        attack: state.hero.attack, defense: state.hero.defense,
+        weapon: state.hero.weapon, items: { ...state.hero.items },
+      } : _activeCampaign.heroStats,
+      flags: {},
+    });
+  } else {
+    // Defeat: restore party to pre-mission state (no permadeath, no stat changes)
+    survivors = _activeCampaign.roster;
+  }
 
   // Show debrief screen
   document.getElementById('game-screen').style.display = 'none';
@@ -2750,12 +2757,13 @@ function _handleCampaignMissionEnd() {
 
   // Roster status — rich party cards
   const rosterEl = document.getElementById('debrief-roster');
-  const heroSnap = state.hero ? {
+  const heroSnap = won && state.hero ? {
     hp: state.hero.hp, maxHp: state.hero.maxHp,
     attack: state.hero.attack, defense: state.hero.defense,
     weapon: state.hero.weapon,
   } : _activeCampaign.heroStats;
-  rosterEl.innerHTML = '<h3>Surviving Roster</h3>' +
+  const rosterHeading = won ? 'Surviving Roster' : 'Party Restored';
+  rosterEl.innerHTML = `<h3>${rosterHeading}</h3>` +
     _campaignPartyHTML(heroSnap, survivors);
 
   // Clean up game state

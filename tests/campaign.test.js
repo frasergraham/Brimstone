@@ -1044,3 +1044,110 @@ describe('Leaderless plan improvements', () => {
     assert.ok(moves.length > 0, 'should have at least one move action');
   });
 });
+
+// ── Mission failure preserves party state ────────────────────────────────
+
+describe('Mission failure preserves party state', () => {
+  beforeEach(() => localStorage.clear());
+
+  test('defeat preserves roster (no permadeath on failure)', () => {
+    const c = new Campaign(hollowDef);
+    c.roster = [
+      { name: 'Alice', title: 'Scout', bio: '', ability: null, abilityLabel: null, color: '#fff', hp: 3, maxHp: 3, attack: 1, defense: 1, weapon: null, items: {} },
+      { name: 'Bob', title: 'Guard', bio: '', ability: null, abilityLabel: null, color: '#aaa', hp: 2, maxHp: 3, attack: 1, defense: 1, weapon: null, items: {} },
+    ];
+    c.save();
+
+    // Simulate defeat: only Alice survived, Bob died in battle
+    c.applyMissionResult('prologue', {
+      won: false,
+      survivors: [{ name: 'Alice', title: 'Scout', bio: '', ability: null, abilityLabel: null, color: '#fff', hp: 1, maxHp: 3, attack: 1, defense: 1, weapon: null, items: {} }],
+      resources: {},
+      heroStats: { hp: 0, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} },
+    });
+
+    assert.equal(c.roster.length, 2, 'both roster members should be preserved on defeat');
+    assert.ok(c.roster.some(s => s.name === 'Alice'), 'Alice should still be in roster');
+    assert.ok(c.roster.some(s => s.name === 'Bob'), 'Bob should still be in roster (not permadeath on defeat)');
+  });
+
+  test('defeat preserves hero stats (no dead hero carry-over)', () => {
+    const c = new Campaign(hollowDef);
+    c.heroStats = { hp: 14, maxHp: 14, attack: 3, defense: 2, weapon: 'sword', items: { herbs: 2 } };
+    c.save();
+
+    // Simulate defeat: hero died (hp: 0)
+    c.applyMissionResult('prologue', {
+      won: false,
+      survivors: [],
+      resources: {},
+      heroStats: { hp: 0, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} },
+    });
+
+    assert.equal(c.heroStats.hp, 14, 'hero HP should be preserved at pre-mission value');
+    assert.equal(c.heroStats.weapon, 'sword', 'hero weapon should be preserved');
+    assert.deepEqual(c.heroStats.items, { herbs: 2 }, 'hero items should be preserved');
+  });
+
+  test('defeat preserves resources (no spent resources carry-over)', () => {
+    const c = new Campaign(hollowDef);
+    c.resources = { wood: 5, metal: 3, herbs: 2, food: 4, silver: 1, scripture: 0 };
+    c.save();
+
+    // Simulate defeat: resources were spent during mission
+    c.applyMissionResult('prologue', {
+      won: false,
+      survivors: [],
+      resources: { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0 },
+      heroStats: { hp: 0, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} },
+    });
+
+    assert.equal(c.resources.wood, 5, 'wood should be preserved');
+    assert.equal(c.resources.metal, 3, 'metal should be preserved');
+    assert.equal(c.resources.herbs, 2, 'herbs should be preserved');
+    assert.equal(c.resources.food, 4, 'food should be preserved');
+  });
+
+  test('defeat preserves story flags (no in-mission flags carry-over)', () => {
+    const c = new Campaign(hollowDef);
+    c.storyFlags = { intro_seen: true };
+    c.save();
+
+    // Simulate defeat: new flags were set during mission
+    c.applyMissionResult('prologue', {
+      won: false,
+      survivors: [],
+      resources: {},
+      heroStats: { hp: 0, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} },
+      flags: { mid_mission_event: true },
+    });
+
+    assert.ok(c.storyFlags.intro_seen, 'pre-existing flags should be preserved');
+    assert.equal(c.storyFlags.mid_mission_event, undefined, 'in-mission flags should not carry over on defeat');
+  });
+
+  test('victory still applies permadeath and state changes', () => {
+    const c = new Campaign(hollowDef);
+    c.roster = [
+      { name: 'Alice', title: 'Scout', bio: '', ability: null, abilityLabel: null, color: '#fff', hp: 3, maxHp: 3, attack: 1, defense: 1, weapon: null, items: {} },
+      { name: 'Bob', title: 'Guard', bio: '', ability: null, abilityLabel: null, color: '#aaa', hp: 2, maxHp: 3, attack: 1, defense: 1, weapon: null, items: {} },
+    ];
+    c.heroStats = { hp: 14, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };
+    c.save();
+
+    // Victory: only Alice survived
+    c.applyMissionResult('prologue', {
+      won: true,
+      survivors: [{ name: 'Alice', title: 'Scout', bio: '', ability: null, abilityLabel: null, color: '#fff', hp: 1, maxHp: 3, attack: 1, defense: 1, weapon: null, items: {} }],
+      resources: { wood: 1 },
+      heroStats: { hp: 10, maxHp: 14, attack: 3, defense: 2, weapon: 'axe', items: {} },
+    });
+
+    assert.equal(c.roster.length, 1, 'only surviving roster member on victory');
+    assert.equal(c.roster[0].name, 'Alice');
+    assert.equal(c.heroStats.hp, 12, 'hero HP updated + healBonus (prologue healBonus=2)');
+    assert.equal(c.heroStats.weapon, 'axe', 'hero weapon updated on victory');
+    assert.equal(c.resources.wood, 2, 'resources updated on victory (1 carry-forward + 1 reward)');
+    assert.ok(c.completedMissions.has('prologue'), 'mission completed');
+  });
+});
