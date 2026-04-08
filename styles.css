@@ -3090,6 +3090,12 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .setup-session-name {
   color: var(--muted);
   font-size: 0.82rem;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+.setup-session-name:hover {
+  color: var(--text);
+  text-decoration: underline;
 }
 .setup-signout-btn {
   background: none;
