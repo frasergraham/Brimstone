@@ -2639,11 +2639,21 @@ function _initCampaignMission(missionDef) {
     const conductorConfig = {
       ...missionDef.conductorConfig,
       onComplete: () => {
-        // Trigger mission victory via the campaign debrief flow
+        // Mark mission as complete and return to story mode
         state.gameOver = true;
         state.winner   = 'hero';
         state.winReason = missionDef.objectives?.win?.reason || 'Mission complete.';
-        _handleCampaignMissionEnd();
+        _activeCampaign.applyMissionResult(missionDef.id, {
+          won: true, survivors: [], resources: {},
+          heroStats: _activeCampaign.heroStats, flags: {},
+        });
+        // Clean up game state and return to chapter select
+        document.getElementById('game-screen').style.display = 'none';
+        document.getElementById('setup-screen').style.display = '';
+        renderer = null; ui = null; witchAI = null; heroAI = null;
+        _missionConductor = null;
+        _activeMissionDef = null;
+        _showCampaignSelectScreen();
       },
     };
 

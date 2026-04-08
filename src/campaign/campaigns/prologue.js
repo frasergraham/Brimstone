@@ -24,7 +24,7 @@ const MISSIONS = [
 
     hasWitch:        false,
     noWitch:         true,
-    disableScoring:  true,
+    disableScoring:  false,
     isTutorial:      true,
 
     // MissionConductor integration
