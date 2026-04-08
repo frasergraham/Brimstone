@@ -454,3 +454,34 @@ describe('header submit button', () => {
     ui._stopCountdown();
   });
 });
+
+// ── destroy() cleans up event listeners ──────────────────────────────────────
+
+describe('destroy', () => {
+  test('aborts the events AbortController signal', () => {
+    const { ui } = makeUI();
+    assert.equal(ui._eventsAC.signal.aborted, false,
+      'signal should not be aborted before destroy()');
+
+    ui.destroy();
+
+    assert.equal(ui._eventsAC.signal.aborted, true,
+      'signal should be aborted after destroy()');
+  });
+
+  test('cleans up countdown timers', () => {
+    const { ui } = makeUI();
+    ui.enterPlanningMode('hero', 3, 60000);
+    assert.ok(ui._countdownTimer !== null, 'countdown should be running');
+
+    ui.destroy();
+
+    assert.equal(ui._countdownTimer, null, 'countdown should be stopped after destroy()');
+  });
+
+  test('multiple destroy() calls do not throw', () => {
+    const { ui } = makeUI();
+    ui.destroy();
+    ui.destroy(); // should not throw
+  });
+});

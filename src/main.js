@@ -147,6 +147,11 @@ function _genSaveId() {
  * Called by both init() and _startFromState() so neither can forget a callback.
  */
 function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
+  // Tear down previous UIController so its stale event listeners don't fire
+  // on shared DOM elements (plan-submit-btn, end-turn-btn, etc.), which would
+  // submit an empty plan from the old instance's _unitPlans.
+  if (ui) ui.destroy();
+
   renderer = new Renderer(canvas, state);
   renderer.resize();
   renderer.onImagesLoaded = () => { if (ui) ui._renderTurnInfo(); };
@@ -1685,6 +1690,8 @@ function initOnline(mirrorState, myFaction, mpClient) {
 
   document.getElementById('setup-screen').style.display = 'none';
   document.getElementById('game-screen').style.display  = 'flex';
+
+  if (ui) ui.destroy();
 
   renderer = new Renderer(canvas, state);
   renderer.resize();
@@ -6279,6 +6286,7 @@ function initSpectator(roomId) {
   }
 
   function _initSpectatorUI(mirrorState) {
+    if (ui) ui.destroy();
     const canvas = document.getElementById('game-canvas');
     renderer = new Renderer(canvas, mirrorState);
     renderer.resize();

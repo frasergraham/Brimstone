@@ -95,7 +95,18 @@ export class UIController {
     this._nudgedThisRound = new Set(); // player IDs nudged this round (reset on planning start)
     this._isAsync       = false;   // true when in an async multiplayer game
 
+    // AbortController for all event listeners bound in _bindEvents().
+    // Calling destroy() aborts this signal, removing every listener at once.
+    this._eventsAC = new AbortController();
+
     this._bindEvents();
+  }
+
+  /** Remove all event listeners and clean up timers. Call before discarding. */
+  destroy() {
+    this._eventsAC.abort();
+    this._stopCountdown();
+    this._dismissGraceDialog();
   }
 
   // ── Element access ───────────────────────────────────────────────────────────
@@ -133,18 +144,20 @@ export class UIController {
   }
 
   _bindEvents() {
-    this.canvas.addEventListener('mousemove', e => this._onMouseMove(e));
-    this.canvas.addEventListener('click',     e => this._onClick(e));
+    const sig = { signal: this._eventsAC.signal };
+
+    this.canvas.addEventListener('mousemove', e => this._onMouseMove(e), sig);
+    this.canvas.addEventListener('click',     e => this._onClick(e), sig);
     this.canvas.addEventListener('mouseleave', () => {
       this.renderer.hoveredHex = null;
       this._mouseDown = null;
       this._didDragPan = false;
       this.onRedraw();
       if (!this._selectedEntity) this._updateSidebar();
-    });
+    }, sig);
 
     // Scroll wheel is disabled over the canvas (zoom via buttons instead)
-    this.canvas.addEventListener('wheel', e => { e.preventDefault(); }, { passive: false });
+    this.canvas.addEventListener('wheel', e => { e.preventDefault(); }, { passive: false, ...sig });
 
     // Mouse drag-to-pan (desktop)
     this.canvas.addEventListener('mousedown', e => {
@@ -152,14 +165,14 @@ export class UIController {
       this._mouseDown  = { clientX: e.clientX, clientY: e.clientY };
       this._didDragPan = false;
       this.canvas.style.cursor = 'grabbing';
-    });
+    }, sig);
     // Listen on document so releasing outside the canvas always clears drag state
     document.addEventListener('mouseup', () => {
       if (this._mouseDown) {
         this._mouseDown = null;
         this.canvas.style.cursor = '';
       }
-    });
+    }, sig);
 
     // Zoom control buttons (+, −, fit)
     const zoomStep = 1.25;
@@ -168,13 +181,13 @@ export class UIController {
       const cy = this.canvas.height / 2;
       this.renderer.setZoom(this.renderer.zoomLevel * zoomStep, cx, cy);
       this.onRedraw();
-    });
+    }, sig);
     this._el('zoom-out')?.addEventListener('click', () => {
       const cx = this.canvas.width  / 2;
       const cy = this.canvas.height / 2;
       this.renderer.setZoom(this.renderer.zoomLevel / zoomStep, cx, cy);
       this.onRedraw();
-    });
+    }, sig);
     this._lastFitTapTime = 0;
     this._el('zoom-fit')?.addEventListener('click', () => {
       const now = Date.now();
@@ -196,7 +209,7 @@ export class UIController {
         this.renderer.resetView();
         this.onRedraw();
       }
-    });
+    }, sig);
     this._el('zoom-me')?.addEventListener('click', () => {
       if (this._selectedEntity && this._selectedEntity.alive) {
         // Zoom to selected unit
@@ -209,38 +222,38 @@ export class UIController {
         if (units.length > 0) this.renderer.frameHexes(units, { maxZoom: 1.8, paddingHexes: 2.5, duration: 400 });
       }
       this.onRedraw();
-    });
+    }, sig);
     this._el('speed-toggle')?.addEventListener('click', (e) => {
       e.stopPropagation();
       this._toggleSpeedPopup();
-    });
+    }, sig);
     // Speed popup option clicks
     this._el('speed-popup')?.addEventListener('click', (e) => {
       const btn = e.target.closest('.speed-option');
       if (btn) this._setSpeed(btn.dataset.mode);
-    });
+    }, sig);
     // Step-by-step continue bar click
-    this._el('step-continue-bar')?.addEventListener('click', () => this._clearStepContinue());
+    this._el('step-continue-bar')?.addEventListener('click', () => this._clearStepContinue(), sig);
 
     // Close speed popup on outside click
     document.addEventListener('click', () => {
       this._closeSpeedPopup();
       this._closeMapOptionsPopup();
-    });
+    }, sig);
 
     // Chronicle toggle in map controls area
-    this._el('chronicle-toggle')?.addEventListener('click', () => this._cycleChronicle());
+    this._el('chronicle-toggle')?.addEventListener('click', () => this._cycleChronicle(), sig);
 
     // Map options toggle
     this._el('map-options-toggle')?.addEventListener('click', (e) => {
       e.stopPropagation();
       this._toggleMapOptionsPopup();
-    });
-    this._el('map-options-popup')?.addEventListener('click', (e) => e.stopPropagation());
+    }, sig);
+    this._el('map-options-popup')?.addEventListener('click', (e) => e.stopPropagation(), sig);
     this._el('opt-tile-images')?.addEventListener('change', (e) => {
       this.renderer.useTileImages = e.target.checked;
       this.renderer.draw();
-    });
+    }, sig);
 
     // Touch: tap, drag-to-pan, pinch-to-zoom (mobile)
     this.canvas.addEventListener('touchstart', e => {
@@ -255,7 +268,7 @@ export class UIController {
         this._pinchDist  = null;
         this._isDragging = false;
       }
-    }, { passive: false });
+    }, { passive: false, ...sig });
 
     this.canvas.addEventListener('touchmove', e => {
       e.preventDefault();
@@ -287,7 +300,7 @@ export class UIController {
           this.onRedraw();
         }
       }
-    }, { passive: false });
+    }, { passive: false, ...sig });
 
     this.canvas.addEventListener('touchend', e => {
       e.preventDefault();
@@ -298,7 +311,7 @@ export class UIController {
       this._touchStart = null;
       this._pinchDist  = null;
       this._isDragging = false;
-    }, { passive: false });
+    }, { passive: false, ...sig });
 
     // In-game menu modal
     const closeMenu = () => {
@@ -307,31 +320,31 @@ export class UIController {
     };
     this._el('mission-info-btn')?.addEventListener('click', () => {
       this.onMissionInfo?.();
-    });
+    }, sig);
     this._el('menu-btn')?.addEventListener('click', () => {
       const backdrop = this._el('game-menu-backdrop');
       if (backdrop) backdrop.style.display = backdrop.style.display === 'none' ? 'flex' : 'none';
-    });
-    this._el('menu-close-btn')?.addEventListener('click', closeMenu);
+    }, sig);
+    this._el('menu-close-btn')?.addEventListener('click', closeMenu, sig);
     this._el('menu-replay-turn-btn')?.addEventListener('click', () => {
       closeMenu();
       this.onReplayLastTurn?.();
-    });
+    }, sig);
     this._el('menu-quit-btn')?.addEventListener('click', () => {
       closeMenu();
       this.onQuitToMenu?.();
-    });
+    }, sig);
     this._el('menu-resign-btn')?.addEventListener('click', () => {
       closeMenu();
       this.onResignGame?.();
-    });
+    }, sig);
     // Close on backdrop click (not modal itself)
     this._el('game-menu-backdrop')?.addEventListener('click', e => {
       if (e.target === this._el('game-menu-backdrop')) closeMenu();
-    });
+    }, sig);
     this._el('game-menu-backdrop')?.addEventListener('touchstart', e => {
       if (e.target === this._el('game-menu-backdrop')) closeMenu();
-    }, { passive: true });
+    }, { passive: true, ...sig });
 
     // Edge swipe: swipe left from right edge opens plan panel, swipe right closes it
     this._edgeSwipe = null;
@@ -346,14 +359,14 @@ export class UIController {
       if (t.clientX >= window.innerWidth - edgeZone || !isCollapsed) {
         this._edgeSwipe = { startX: t.clientX, startY: t.clientY, collapsed: isCollapsed };
       }
-    }, { passive: true });
+    }, { passive: true, ...sig });
     document.addEventListener('touchmove', e => {
       if (!this._edgeSwipe) return;
       const t = e.touches[0];
       const dy = Math.abs(t.clientY - this._edgeSwipe.startY);
       // Cancel if vertical movement exceeds horizontal (scrolling)
       if (dy > 60) { this._edgeSwipe = null; }
-    }, { passive: true });
+    }, { passive: true, ...sig });
     document.addEventListener('touchend', e => {
       if (!this._edgeSwipe) return;
       const t = e.changedTouches[0];
@@ -374,26 +387,26 @@ export class UIController {
         this._renderEndTurnBtn();
       }
       this._edgeSwipe = null;
-    }, { passive: true });
+    }, { passive: true, ...sig });
 
     // Chronicle: three-state button lives inside #chronicle-mini (wired on each render).
     // chronicle-close / chronicle-sidebar-close close back to 'none'.
     this._el('chronicle-close')?.addEventListener('click', () => {
       this._setChronicleMode('none');
-    });
+    }, sig);
     this._el('chronicle-overlay')?.addEventListener('click', e => {
       if (e.target === this._el('chronicle-overlay')) this._setChronicleMode('none');
-    });
+    }, sig);
     this._el('chronicle-sidebar-toggle')?.addEventListener('click', () => {
       this._cycleChronicle();
-    });
+    }, sig);
 
 
     // Tile zoom close
-    this._el('tile-zoom-close')?.addEventListener('click', () => this._hideTileDetail());
+    this._el('tile-zoom-close')?.addEventListener('click', () => this._hideTileDetail(), sig);
     this._el('tile-zoom-overlay')?.addEventListener('click', e => {
       if (e.target === this._el('tile-zoom-overlay')) this._hideTileDetail();
-    });
+    }, sig);
 
     // Cancel-action pill (floating over canvas during battle/summon targeting)
     this._el('cancel-action-btn')?.addEventListener('click', () => {
@@ -406,36 +419,36 @@ export class UIController {
       }
       this._updateSidebar();
       this.onRedraw();
-    });
+    }, sig);
 
     // Submit Plan button in header — submit only (separate return-to-menu button)
     const _submitHandler = () => {
       if (this.state.gameOver) return;
       if (this._planMode) this._doSubmitPlan();
     };
-    this._el('end-turn-btn')?.addEventListener('click', _submitHandler);
+    this._el('end-turn-btn')?.addEventListener('click', _submitHandler, sig);
     this._el('end-turn-btn')?.addEventListener('touchend', e => {
       e.preventDefault(); _submitHandler();
-    }, { passive: false });
+    }, { passive: false, ...sig });
 
     // Return-to-menu button in header — shown only after plan submission
     const _returnHandler = () => { if (this.onReturnToMenu) this.onReturnToMenu(); };
-    this._el('plan-return-btn')?.addEventListener('click', _returnHandler);
+    this._el('plan-return-btn')?.addEventListener('click', _returnHandler, sig);
     this._el('plan-return-btn')?.addEventListener('touchend', e => {
       e.preventDefault(); _returnHandler();
-    }, { passive: false });
+    }, { passive: false, ...sig });
 
     // Replay last turn button in header
     const _replayHandler = () => { if (this.onReplayLastTurn) this.onReplayLastTurn(); };
-    this._el('replay-turn-btn')?.addEventListener('click', _replayHandler);
+    this._el('replay-turn-btn')?.addEventListener('click', _replayHandler, sig);
     this._el('replay-turn-btn')?.addEventListener('touchend', e => {
       e.preventDefault(); _replayHandler();
-    }, { passive: false });
+    }, { passive: false, ...sig });
 
     // Plan panel buttons — touchend for instant mobile response
     const _tap = (el, fn) => {
-      el?.addEventListener('click', fn);
-      el?.addEventListener('touchend', e => { e.preventDefault(); fn(); }, { passive: false });
+      el?.addEventListener('click', fn, sig);
+      el?.addEventListener('touchend', e => { e.preventDefault(); fn(); }, { passive: false, ...sig });
     };
     _tap(this._el('plan-submit-btn'), () => this._doSubmitPlan());
     _tap(this._el('plan-menu-btn'), () => { if (this.onReturnToMenu) this.onReturnToMenu(); });
@@ -459,7 +472,7 @@ export class UIController {
       this.mp.sendNudge(targetId);
       this._nudgedThisRound.add(targetId);
       this._renderPlayerStatus();
-    });
+    }, sig);
   }
 
   _canvasPos(e) {
@@ -2116,9 +2129,10 @@ export class UIController {
     const state = this.state;
 
     if (!this._planMode) {
-      // Outside planning mode, hide both buttons entirely
+      // Outside planning mode, hide both buttons entirely and clear classes
       btn.disabled = true;
       btn.style.display = 'none';
+      btn.classList.remove('planning-active', 'urgent', 'plan-open', 'countdown-urgent');
       if (returnBtn) returnBtn.style.display = 'none';
       return;
     }
