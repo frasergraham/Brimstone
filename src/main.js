@@ -516,11 +516,6 @@ function _enterLocalPlanningMode() {
  * witch plan, then both resolve together.  No resolution summary modal is shown.
  */
 async function _onConductorPlanSubmit(heroPlan) {
-  // Block premature submit — conductor must be on a plan_submitted step
-  if (_missionConductor && !_missionConductor.canSubmitPlan()) {
-    return;
-  }
-
   ui.exitPlanningMode();
   _missionConductor?.onPlanSubmitted();
 

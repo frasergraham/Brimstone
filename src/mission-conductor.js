@@ -181,7 +181,10 @@ export class MissionConductor {
     this._clearSpotlight();
     if (this._tooltip) this._tooltip.style.display = 'none';
     if (this.renderer) this.renderer.tutorialSpotlightHex = null;
-    if (this.ui) this.ui.tutorialClickBlocked = false;
+    if (this.ui) {
+      this.ui.tutorialClickBlocked = false;
+      this.ui.tutorialSubmitBlocked = false;
+    }
   }
 
   // ── Private ─────────────────────────────────────────────────────────────────
@@ -216,9 +219,11 @@ export class MissionConductor {
     }
 
     // Block map clicks during dialog steps (waiting for button)
+    // Block submit button until conductor reaches a plan_submitted step
     if (this.ui) {
       const isDialogStep = (step.trigger === 'click' || step.trigger === 'complete');
       this.ui.tutorialClickBlocked = isDialogStep;
+      this.ui.tutorialSubmitBlocked = step.trigger?.type !== 'plan_submitted';
     }
 
     // Spotlight
