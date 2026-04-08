@@ -4558,9 +4558,9 @@ document.getElementById('btn-battle-join')?.addEventListener('click', function()
   } else if (!mp.connected) {
     mp.connect(wsUrl);
   }
-  // Wait for connection then send joinBattle
+  // Wait for connection then join
   const _tryJoin = () => {
-    if (mp?.connected) { mp.send({ type: 'joinBattle', roomId }); return; }
+    if (mp?.connected) { mp.joinBattle(roomId); return; }
     setTimeout(_tryJoin, 200);
   };
   _tryJoin();
