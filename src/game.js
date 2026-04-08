@@ -566,7 +566,7 @@ export class GameState {
       this.winReason = isDawn ? WIN_REASON.NODES_WITCH : WIN_REASON.NODES_WITCH_DUSK;
       this.addLog(isDawn
         ? `🌙 As dawn breaks, ${this.factionName('witch')} holds all Power Nodes! Caleb's Hollow is lost…`
-        : `🌙 As dusk falls, ${this.factionName('witch')} holds all Power Nodes! The ritual advances!`, 'witch');
+        : `🌙 As dusk falls, ${this.factionName('witch')} holds all Power Nodes! The ritual advances!`);
       return;
     }
     if (heroCount === nodeCount) {
@@ -574,26 +574,26 @@ export class GameState {
       this.winReason = isDawn ? WIN_REASON.NODES_HERO : WIN_REASON.NODES_HERO_DUSK;
       this.addLog(isDawn
         ? `☀ At dawn, ${this.factionName('hero')} holds all Power Nodes! ${this.factionName('witch')}'s ritual is broken!`
-        : `☀ As dusk falls, ${this.factionName('hero')} holds all Power Nodes! The ritual is disrupted!`, 'hero');
+        : `☀ As dusk falls, ${this.factionName('hero')} holds all Power Nodes! The ritual is disrupted!`);
       return;
     }
 
     // Scoring: whoever controls more nodes scores 1 point (ties score nothing)
     if (witchCount > heroCount) {
       this.nodeScore.witch++;
-      this.addLog(`🌙 At ${phaseLabel}: ${this.factionName('witch')} leads ${witchCount}–${heroCount}. Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`, 'witch');
+      this.addLog(`🌙 At ${phaseLabel}: ${this.factionName('witch')} leads ${witchCount}–${heroCount}. Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);
       if (this.nodeScore.witch >= 4) {
         this.winner    = 'witch';
         this.winReason = WIN_REASON.SCORE_WITCH;
-        this.addLog(`🌙 ${this.factionName('witch')} has claimed three ritual moments — Caleb's Hollow falls to darkness!`, 'witch');
+        this.addLog(`🌙 ${this.factionName('witch')} has claimed three ritual moments — Caleb's Hollow falls to darkness!`);
       }
     } else if (heroCount > witchCount) {
       this.nodeScore.hero++;
-      this.addLog(`☀ At ${phaseLabel}: ${this.factionName('hero')} leads ${heroCount}–${witchCount}. Score — Hero ${this.nodeScore.hero} / Witch ${this.nodeScore.witch}`, 'hero');
+      this.addLog(`☀ At ${phaseLabel}: ${this.factionName('hero')} leads ${heroCount}–${witchCount}. Score — Hero ${this.nodeScore.hero} / Witch ${this.nodeScore.witch}`);
       if (this.nodeScore.hero >= 4) {
         this.winner    = 'hero';
         this.winReason = WIN_REASON.SCORE_HERO;
-        this.addLog(`☀ ${this.factionName('hero')} has broken the ritual three times — Caleb's Hollow is saved!`, 'hero');
+        this.addLog(`☀ ${this.factionName('hero')} has broken the ritual three times — Caleb's Hollow is saved!`);
       }
     } else {
       this.addLog(`⚖ At ${phaseLabel}: nodes tied (${witchCount}–${heroCount}). Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);
