@@ -2522,6 +2522,9 @@ function _initCampaignMission(missionDef) {
   _gameStartTime = Date.now();
   _spSaveId = null; // campaign uses its own save system
 
+  // Persist pre-mission campaign state so defeat can restore from it
+  _activeCampaign.save();
+
   // Build map
   const builder = _activeCampaign.getMapBuilder(missionDef.mapBuilder);
   if (!builder) { console.error('No map builder for', missionDef.mapBuilder); return; }
