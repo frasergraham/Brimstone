@@ -16,28 +16,43 @@ function _nowPST() {
   return new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
 }
 
-/** Get today's 8pm PST as a Unix timestamp (seconds). */
-export function todayDeadlinePST() {
+/**
+ * Get the next battle deadline — noon or midnight PST, whichever comes first.
+ * Returns a Unix timestamp (seconds).
+ */
+export function nextBattleDeadlinePST() {
   const now = _nowPST();
-  const deadline = new Date(now);
-  deadline.setHours(20, 0, 0, 0);
-  if (now >= deadline) {
-    deadline.setDate(deadline.getDate() + 1);
-  }
-  return Math.floor(deadline.getTime() / 1000);
+  const today = new Date(now);
+
+  // Try noon today
+  const noon = new Date(today);
+  noon.setHours(12, 0, 0, 0);
+  if (now < noon) return Math.floor(noon.getTime() / 1000);
+
+  // Try midnight tonight (= start of tomorrow)
+  const midnight = new Date(today);
+  midnight.setDate(midnight.getDate() + 1);
+  midnight.setHours(0, 0, 0, 0);
+  return Math.floor(midnight.getTime() / 1000);
 }
 
-/** Get the next Sunday at 8pm PST as the battle end time. */
-function _sundayEndPST() {
+/**
+ * Get the battle end time — the second Sunday at midnight PST from now.
+ * Battles run for ~2 weeks.
+ */
+function _battleEndPST() {
   const now = _nowPST();
   const day = now.getDay(); // 0=Sun
   const daysUntilSunday = day === 0 ? 0 : 7 - day;
   const sunday = new Date(now);
   sunday.setDate(sunday.getDate() + daysUntilSunday);
-  sunday.setHours(20, 0, 0, 0);
+  sunday.setHours(0, 0, 0, 0); // midnight Sunday
+  // If we're already past this Sunday midnight, the first Sunday is next week
   if (now >= sunday) {
     sunday.setDate(sunday.getDate() + 7);
   }
+  // Add another week to get the SECOND Sunday
+  sunday.setDate(sunday.getDate() + 7);
   return Math.floor(sunday.getTime() / 1000);
 }
 
@@ -85,7 +100,7 @@ export function ensureBattleExists() {
   }
 
   // Nothing to recover — create fresh
-  const endsAt = _sundayEndPST();
+  const endsAt = _battleEndPST();
   const roomId = createBattleRoom({ endsAt });
   console.log(`[battle-scheduler] Created new battle ${roomId}, ends ${new Date(endsAt * 1000).toISOString()}`);
 
@@ -221,7 +236,7 @@ async function _notifyBattleStarted(roomId) {
     try {
       await sendPush(playerId, {
         title: 'The Battle for Caleb\'s Hollow has begun!',
-        body: 'A new week-long 10v10 battle awaits. Join now and fight for your faction!',
+        body: 'A new two-week 10v10 battle awaits. Turns at noon and midnight. Join now!',
         roomId,
       });
     } catch {

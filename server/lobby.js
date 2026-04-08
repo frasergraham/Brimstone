@@ -2863,8 +2863,8 @@ export function createBattleRoom(battleOpts = {}) {
     playersPerSide: 10,
     isAsync:        true,
     isBattle:       true,
-    // Daily deadline is handled by the battle scheduler, not turnIntervalMs
-    turnIntervalMs: 86_400_000,
+    // Twice-daily deadline (noon + midnight PST) — 12 hours per turn
+    turnIntervalMs: 43_200_000,
   });
   room.status = 'playing';  // battles skip the lobby phase
   room.isPrivate = false;
