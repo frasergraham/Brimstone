@@ -639,7 +639,8 @@ export class UIController {
     if (!el) return;
 
     const players = this._players ?? [];
-    if (players.length <= 1) {
+    // Hide player list for 1v1 standard games; always show for battle mode
+    if (players.length <= 1 && this.state?.gameMode !== 'battle') {
       el.style.display = 'none';
       return;
     }

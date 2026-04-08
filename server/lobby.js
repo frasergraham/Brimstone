@@ -688,6 +688,10 @@ function _submitPlayerPlan(room, playerId, plan, isTimeout = false) {
       const hasWitch = room.players.some(s => s.faction === 'witch');
       if (!hasHero || !hasWitch) {
         console.log(`[battle] All plans in but only one faction present — waiting for opponent`);
+        // Keep the state in planning so joining players enter the right branch.
+        // submitPlayerPlan already set planningPhase=false; restore it.
+        room.state.planningPhase = true;
+        room.state.resolving     = false;
         // Restart the deadline timer so the room doesn't sit forever
         if (!room.turnTimer) _startPlanningTimer(room);
         return;
