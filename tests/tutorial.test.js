@@ -1,10 +1,10 @@
-// Tests for tutorial mode: map generation, conductor step logic, witch plan scripting.
+// Tests for tutorial/prologue mode: map generation, conductor step logic, witch plan scripting.
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildTutorialMap, TUTORIAL_STEPS, TUTORIAL_WAVES, TUTORIAL_FORCED_DICE } from '../src/tutorial/tutorial-config.js';
+import { buildTutorialMap, TUTORIAL_STEPS, TUTORIAL_WAVES, TUTORIAL_FORCED_DICE, TUTORIAL_CONDUCTOR_CONFIG } from '../src/tutorial/tutorial-config.js';
 import { GameState } from '../src/game.js';
-import { TutorialConductor } from '../src/tutorial.js';
+import { MissionConductor } from '../src/mission-conductor.js';
 import { EntityType, setForcedDice, Entity } from '../src/entities.js';
 import { hexKey, MAP_COLS, MAP_ROWS } from '../src/hex.js';
 import { TileType, BuildingType } from '../src/tiles.js';
@@ -212,10 +212,10 @@ describe('TUTORIAL_STEPS', () => {
     assert.equal(TUTORIAL_STEPS[0].id, 'welcome');
   });
 
-  test('last step id is "complete" with trigger "start_game"', () => {
+  test('last step id is "complete" with trigger "complete"', () => {
     const last = TUTORIAL_STEPS[TUTORIAL_STEPS.length - 1];
     assert.equal(last.id,      'complete');
-    assert.equal(last.trigger, 'start_game');
+    assert.equal(last.trigger, 'complete');
   });
 
   test('all steps have required fields', () => {
@@ -360,9 +360,9 @@ describe('TUTORIAL_WAVES', () => {
   });
 });
 
-// ── TutorialConductor step gating ────────────────────────────────────────────
+// ── MissionConductor step gating ─────────────────────────────────────────────
 
-describe('TutorialConductor logic (no DOM)', () => {
+describe('MissionConductor logic (no DOM)', () => {
   test('TUTORIAL_STEPS step indices are consistent', () => {
     // Verify the step index lookups used in onPlanningPhaseStart() are valid
     const r1Idx      = TUTORIAL_STEPS.findIndex(s => s.id === 'watch_r1');
@@ -443,10 +443,10 @@ describe('TutorialConductor logic (no DOM)', () => {
     }
   });
 
-  test('click and start_game steps should block map clicks; action-gated steps should not', () => {
+  test('click and complete steps should block map clicks; action-gated steps should not', () => {
     for (const step of TUTORIAL_STEPS) {
       const t = step.trigger;
-      if (t === 'click' || t === 'start_game') {
+      if (t === 'click' || t === 'complete') {
         // These dialog steps should block map interaction
         assert.ok(true, `${step.id} (trigger=${t}) blocks clicks`);
       } else {
@@ -455,5 +455,83 @@ describe('TutorialConductor logic (no DOM)', () => {
           `${step.id} has valid non-blocking trigger`);
       }
     }
+  });
+});
+
+// ── TUTORIAL_CONDUCTOR_CONFIG ────────────────────────────────────────────────
+
+describe('TUTORIAL_CONDUCTOR_CONFIG', () => {
+  test('has required config fields', () => {
+    assert.ok(TUTORIAL_CONDUCTOR_CONFIG.roundStepMap, 'has roundStepMap');
+    assert.ok(typeof TUTORIAL_CONDUCTOR_CONFIG.witchPlanProvider === 'function', 'witchPlanProvider is a function');
+    assert.ok(Array.isArray(TUTORIAL_CONDUCTOR_CONFIG.forcedDice), 'forcedDice is an array');
+    assert.equal(typeof TUTORIAL_CONDUCTOR_CONFIG.maxPlanningRounds, 'number', 'maxPlanningRounds is a number');
+  });
+
+  test('roundStepMap maps rounds 1-3 to known step IDs', () => {
+    const map = TUTORIAL_CONDUCTOR_CONFIG.roundStepMap;
+    assert.equal(map[1], 'combat_intro');
+    assert.equal(map[2], 'survivor_intro');
+    assert.equal(map[3], 'multi_select');
+  });
+
+  test('forcedDice entry for round 1 matches TUTORIAL_FORCED_DICE', () => {
+    const entry = TUTORIAL_CONDUCTOR_CONFIG.forcedDice.find(e => e.round === 1);
+    assert.ok(entry, 'forcedDice entry for round 1 exists');
+    assert.deepEqual(entry.dice, TUTORIAL_FORCED_DICE);
+  });
+
+  test('maxPlanningRounds is 3', () => {
+    assert.equal(TUTORIAL_CONDUCTOR_CONFIG.maxPlanningRounds, 3);
+  });
+
+  test('witchPlanProvider returns [] for round 0 with empty witchPlan step', () => {
+    const fakeState = { entities: [] };
+    const fakeStep = { witchPlan: [] };
+    const plan = TUTORIAL_CONDUCTOR_CONFIG.witchPlanProvider(0, fakeState, fakeStep);
+    assert.deepEqual(plan, []);
+  });
+
+  test('witchPlanProvider returns [] for round 3+ (idle)', () => {
+    const fakeState = { entities: [] };
+    const plan = TUTORIAL_CONDUCTOR_CONFIG.witchPlanProvider(3, fakeState, null);
+    assert.deepEqual(plan, []);
+  });
+});
+
+// ── Prologue campaign definition ─────────────────────────────────────────────
+
+describe('Prologue campaign', async () => {
+  const { default: prologue } = await import('../src/campaign/campaigns/prologue.js');
+
+  test('has expected campaign shape', () => {
+    assert.equal(prologue.id, 'prologue');
+    assert.equal(prologue.title, 'Prologue');
+    assert.equal(prologue.prerequisiteCampaign, null);
+    assert.equal(prologue.firstMission, 'tutorial');
+  });
+
+  test('has exactly one mission', () => {
+    assert.equal(prologue.missions.length, 1);
+    assert.equal(prologue.missions[0].id, 'tutorial');
+  });
+
+  test('mission has conductorSteps and conductorConfig', () => {
+    const m = prologue.missions[0];
+    assert.ok(Array.isArray(m.conductorSteps), 'conductorSteps is an array');
+    assert.ok(m.conductorConfig, 'conductorConfig exists');
+    assert.ok(m.conductorConfig.roundStepMap, 'conductorConfig has roundStepMap');
+  });
+
+  test('mission uses tutorial waves', () => {
+    const m = prologue.missions[0];
+    assert.ok(Array.isArray(m.waves), 'waves is an array');
+    assert.equal(m.waves.length, 1);
+  });
+
+  test('mission has conductor_complete objective', () => {
+    const m = prologue.missions[0];
+    assert.equal(m.objectives.win.type, 'conductor_complete');
+    assert.equal(m.objectives.lose, null);
   });
 });

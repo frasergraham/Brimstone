@@ -26,9 +26,8 @@ import { getFaction, allFactions } from './factions.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { MAP_SIZES } from './map.js';
-import { buildTutorialMap, TUTORIAL_WAVES, TUTORIAL_FORCED_DICE } from './tutorial/tutorial-config.js';
 import { nodeController } from './game.js';
-import { TutorialConductor } from './tutorial.js';
+import { MissionConductor } from './mission-conductor.js';
 import { createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, setForcedDice, EntityType, markRosterUsedByName, ENTITY_COLOR } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves } from './campaign/campaign.js';
@@ -45,7 +44,6 @@ document.getElementById('version-badge').textContent = `v${BUILD_VERSION}`;
 const _MODE_BUTTON_MAP = {
   singleplayer: 'btn-single-player',
   multiplayer:  'btn-multiplayer',
-  tutorial:     'btn-tutorial',
   story:        'btn-story-mode',
   quickplay:    'btn-quick-play',
   local:        'btn-local-pass-play',
@@ -88,7 +86,7 @@ let _autoplay  = false;
 // _inGame and _resolving replaced by AppMode state machine (src/app-mode.js)
 let _pendingPlanningPhase = null; // buffered onPlanningPhase payload received during animation
 let _pendingSubmissions   = [];   // buffered playerSubmitted messages received during animation
-let _tutorialConductor = null;    // non-null while a tutorial session is active
+let _missionConductor = null;     // non-null while a conductor-driven mission is active
 let _gameStartTime = null;        // wall-clock timestamp for game duration tracking
 
 // ── Round-history for full-game replay ───────────────────────────────────────
@@ -174,7 +172,7 @@ function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
 function init(witchIsAI, heroIsAI, autoplay = false) {
   _autoplay = autoplay;
   _gameStartTime = Date.now();
-  _tutorialConductor = null; // ensure tutorial state is cleared for normal games
+  _missionConductor = null; // ensure conductor state is cleared for normal games
   _roundHistory = [];
   // Assign a fresh save ID for this game (only used for single-player saves)
   _spSaveId = _genSaveId();
@@ -313,63 +311,6 @@ function _recordCampaignGameStats() {
       localStorage.setItem('brimstone_campaign_stats', JSON.stringify(local));
     } catch { /* storage full or unavailable — silently discard */ }
   });
-}
-
-// ── Tutorial mode ─────────────────────────────────────────────────────────────
-
-function initTutorial() {
-  _autoplay  = false;
-  _spSaveId  = null; // no save for tutorial
-  const canvas = document.getElementById('game-canvas');
-
-  document.getElementById('setup-screen').style.display = 'none';
-  document.getElementById('game-screen').style.display  = 'flex';
-
-  // Build the fixed tutorial map and inject it into a new GameState.
-  // witchIsAI = false so we can drive the witch plan ourselves via TutorialConductor.
-  // noWitch = true so no witch entity is created.
-  const mapData = buildTutorialMap();
-  state = new GameState(false, false, 'tutorial', null, mapData);
-
-  // Disable fog of war — tutorial should be fully visible.
-  state.fogOfWar = 'none';
-
-  // Guarantee a survivor in the HOUSE at (2,3) for the round-3 exploration demo.
-  const houseTile = state.tiles.get(_hexKey(2, 3));
-  if (houseTile) houseTile.hiddenSurvivor = true;
-
-  // No AI helpers for tutorial — TutorialConductor drives the witch plan.
-  witchAI = null;
-  heroAI  = null;
-
-  _setupLocalUI(canvas, null, null, false);
-
-  // Suppress phase modals and hero auto-select during the tutorial.
-  ui.tutorialMode = true;
-
-  // Wire tutorial callbacks into UIController.
-  ui.onPlanActionAdded = (action) => _tutorialConductor?.onActionQueued(action);
-  ui.onEntitySelected  = (entity) => _tutorialConductor?.onEntitySelected(entity);
-
-  // Suppress the resolution summary modal — tutorial has its own flow.
-  const _origOnPlanSubmit = null; // will be set per-round below
-
-  redraw();
-
-  requestAnimationFrame(() => {
-    renderer.resize();
-    const heroEntity = state.entities.find(e => e.type === 'hero');
-    if (heroEntity) {
-      renderer.frameHexes([heroEntity], { maxZoom: 2.2, paddingHexes: 3, duration: 500 });
-    }
-    redraw();
-  });
-
-  // Create conductor after UI is set up so renderer reference is valid.
-  _tutorialConductor = new TutorialConductor(state, ui, renderer, redraw);
-  _tutorialConductor.start();
-
-  _startLocalPlanningPhase();
 }
 
 // ── AI Debug data capture ────────────────────────────────────────────────────
@@ -523,15 +464,15 @@ function _startLocalPlanningPhase() {
     return;
   }
 
-  // Tutorial mode: hero always plans; conductor provides scripted witch plan.
-  if (_tutorialConductor) {
-    _tutorialConductor.onPlanningPhaseStart();
-    // After round 3 (survivor rescue) the tutorial is in explanation-only mode —
+  // Conductor-driven mission: hero always plans; conductor provides scripted opponent plan.
+  if (_missionConductor) {
+    _missionConductor.onPlanningPhaseStart();
+    // After maxPlanningRounds the conductor enters explanation-only mode —
     // no more planning rounds.  We still call onPlanningPhaseStart so the conductor
     // can advance to the explanation steps, but we don't enter planning mode.
-    if (_tutorialConductor._round >= 3) return;
+    if (!_missionConductor.shouldPlan()) return;
     ui.enterPlanningMode('hero', state.heroActionsLeft);
-    ui.onPlanSubmit = (heroPlan) => _onTutorialPlanSubmit(heroPlan);
+    ui.onPlanSubmit = (heroPlan) => _onConductorPlanSubmit(heroPlan);
     return;
   }
 
@@ -571,22 +512,21 @@ function _enterLocalPlanningMode() {
 }
 
 /**
- * Tutorial plan submit: hero submits, conductor provides scripted witch plan,
- * then both resolve together.  No resolution summary modal is shown.
+ * Conductor-driven plan submit: hero submits, conductor provides scripted
+ * witch plan, then both resolve together.  No resolution summary modal is shown.
  */
-async function _onTutorialPlanSubmit(heroPlan) {
+async function _onConductorPlanSubmit(heroPlan) {
   ui.exitPlanningMode();
-  _tutorialConductor?.onPlanSubmitted();
+  _missionConductor?.onPlanSubmitted();
 
-  // Round 2 (combat round): force deterministic dice so the tutorial can
-  // describe the outcome reliably.
-  // Hero (ATK 3) attacks Minion (DEF 0): die=6 → atk=9, die=1 → def=1 → crush 2 dmg → kills minion
-  if (_tutorialConductor?._round === 1) {
-    setForcedDice(...TUTORIAL_FORCED_DICE);
+  // Apply forced dice if configured for this round
+  const forcedDice = _missionConductor?.getForcedDice();
+  if (forcedDice) {
+    setForcedDice(...forcedDice);
   }
 
   state.submitPlan('hero', heroPlan);
-  const witchPlan = _tutorialConductor ? _tutorialConductor.getWitchPlan() : [];
+  const witchPlan = _missionConductor ? _missionConductor.getWitchPlan() : [];
   state.submitPlan('witch', witchPlan);
 
   await _runLocalResolution(true /* skipSummary */);
@@ -700,8 +640,8 @@ async function _runLocalResolution(skipSummary = false) {
     if (t) t.explored = v;
   }
 
-  // Notify tutorial conductor that resolution animation has finished.
-  if (_tutorialConductor) _tutorialConductor.onResolutionComplete();
+  // Notify mission conductor that resolution animation has finished.
+  if (_missionConductor) _missionConductor.onResolutionComplete();
 
   // Add aggregate battle summary to the log before endRound inserts phase entries
   const summaryLines = compileTurnBattleSummary(steps, state.entities, ResEventType, PlanActionType);
@@ -719,12 +659,6 @@ async function _runLocalResolution(skipSummary = false) {
   // Campaign wave spawning: inject new enemies after each round
   if (_activeMissionDef?.waves) {
     const waveLogs = processWaves(state, _activeMissionDef.waves, _createEnemyEntity);
-    for (const msg of waveLogs) state.addLog(msg);
-  }
-
-  // Tutorial wave spawning: minion appears after round 1
-  if (_tutorialConductor) {
-    const waveLogs = processWaves(state, TUTORIAL_WAVES, _createEnemyEntity);
     for (const msg of waveLogs) state.addLog(msg);
   }
 
@@ -1808,8 +1742,13 @@ document.getElementById('btn-quick-play')    .addEventListener('click', () => _s
 document.getElementById('btn-story-mode')    .addEventListener('click', () => _showCampaignSelectScreen());
 document.getElementById('btn-sp-choice-back').addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-multiplayer')  .addEventListener('click', () => _showOnlineScreen());
-document.getElementById('btn-tutorial')     .addEventListener('click', () => initTutorial());
 document.getElementById('btn-how-to-play')  .addEventListener('click', () => showStep('howtoplay'));
+
+// "Play the Tutorial" button in How to Play navigates to Story Mode → Prologue
+document.getElementById('btn-play-tutorial')?.addEventListener('click', () => {
+  const prologue = getCampaignById('prologue');
+  if (prologue) _showCampaignScreen(prologue);
+});
 document.getElementById('btn-options')      .addEventListener('click', () => showStep('options'));
 document.getElementById('btn-account')      .addEventListener('click', () => { _initAccountPage(); showStep('account'); });
 document.getElementById('btn-howtoplay-back').addEventListener('click', () => showStep('mode'));
@@ -2137,20 +2076,23 @@ function _resumeCampaignMission(missionId) {
 function _showCampaignSelectScreen() {
   const listEl = document.getElementById('campaign-select-list');
   listEl.innerHTML = CAMPAIGNS.map(c => {
-    const hasSave = Campaign.exists(`campaign-${c.id}`);
-    const locked = c.prerequisiteCampaign
+    const disabled = c.disabled === true;
+    const hasSave = !disabled && Campaign.exists(`campaign-${c.id}`);
+    const locked = disabled || (c.prerequisiteCampaign
       ? !Campaign.isCampaignCompleted(getCampaignById(c.prerequisiteCampaign))
-      : false;
-    const cls = `campaign-select-item${locked ? ' locked' : ''}`;
+      : false);
+    const cls = `campaign-select-item${disabled ? ' disabled' : locked ? ' locked' : ''}`;
+    const titlePrefix = disabled ? '' : locked ? '🔒 ' : '';
     return `<div class="${cls}" data-campaign="${c.id}">
-      <div class="campaign-select-title">${locked ? '🔒 ' : ''}${c.title}</div>
+      <div class="campaign-select-title">${titlePrefix}${c.title}</div>
       <div class="campaign-select-desc">${c.description}</div>
       ${hasSave ? '<div class="campaign-select-badge">Save found</div>' : ''}
-      ${locked ? '<div class="campaign-select-badge">Complete the previous chapter to unlock</div>' : ''}
+      ${disabled ? '<div class="campaign-select-badge coming-soon">Coming Soon</div>' : ''}
+      ${!disabled && locked ? '<div class="campaign-select-badge">Complete the previous chapter to unlock</div>' : ''}
     </div>`;
   }).join('');
 
-  listEl.querySelectorAll('.campaign-select-item:not(.locked)').forEach(el => {
+  listEl.querySelectorAll('.campaign-select-item:not(.locked):not(.disabled)').forEach(el => {
     el.addEventListener('click', () => {
       const def = getCampaignById(el.dataset.campaign);
       if (def) _showCampaignScreen(def);
@@ -2537,9 +2479,11 @@ function _initCampaignMission(missionDef) {
   document.getElementById('game-screen').style.display = 'flex';
   const canvas = document.getElementById('game-canvas');
 
-  // Create game state
-  state = new GameState(true, false, missionDef.mapSize, null, mapData);
-  state.fogOfWar = 'full';
+  // Create game state — conductor-driven missions use witchIsAI=false since
+  // the conductor provides scripted witch plans directly.
+  const witchIsAI = !missionDef.conductorSteps;
+  state = new GameState(witchIsAI, false, missionDef.mapSize, null, mapData);
+  state.fogOfWar = missionDef.isTutorial ? 'none' : 'full';
 
   // Campaign AI budget bonus for harder waves
   if (missionDef.aiBudgetBonus) {
@@ -2649,13 +2593,66 @@ function _initCampaignMission(missionDef) {
     }
   }
 
-  // Set up AI
-  const AIClass = WITCH_PERSONALITIES[missionDef.aiPersonality] ?? WitchAIEngine;
-  witchAI = new AIClass(state, redraw);
-  heroAI = null;
+  // Set up AI — conductor-driven missions don't use witch AI
+  if (missionDef.conductorSteps) {
+    witchAI = null;
+    heroAI  = null;
+  } else {
+    const AIClass = WITCH_PERSONALITIES[missionDef.aiPersonality] ?? WitchAIEngine;
+    witchAI = new AIClass(state, redraw);
+    heroAI = null;
+  }
 
   _setupLocalUI(canvas, witchAI, null, false);
   _roundHistory = [];
+
+  // ── MissionConductor setup for guided missions ────────────────────────────
+  if (missionDef.conductorSteps) {
+    // Suppress phase modals and hero auto-select during conducted missions
+    ui.tutorialMode = true;
+
+    // Guarantee tutorial-specific map state
+    if (missionDef.isTutorial) {
+      const houseTile = state.tiles.get(_hexKey(2, 3));
+      if (houseTile) houseTile.hiddenSurvivor = true;
+    }
+
+    // Wire conductor callbacks into UIController
+    ui.onPlanActionAdded = (action) => _missionConductor?.onActionQueued(action);
+    ui.onEntitySelected  = (entity) => _missionConductor?.onEntitySelected(entity);
+
+    // Build conductor config with completion callback
+    const conductorConfig = {
+      ...missionDef.conductorConfig,
+      onComplete: () => {
+        // Trigger mission victory via the campaign debrief flow
+        state.gameOver = true;
+        state.winner   = 'hero';
+        state.winReason = missionDef.objectives?.win?.reason || 'Mission complete.';
+        _handleCampaignMissionEnd();
+      },
+    };
+
+    _missionConductor = new MissionConductor(
+      state, ui, renderer, redraw,
+      missionDef.conductorSteps,
+      conductorConfig,
+    );
+
+    redraw();
+    requestAnimationFrame(() => {
+      renderer.resize();
+      const heroEntity = state.entities.find(e => e.type === 'hero');
+      if (heroEntity) {
+        renderer.frameHexes([heroEntity], { maxZoom: 2.2, paddingHexes: 3, duration: 500 });
+      }
+      redraw();
+    });
+
+    _missionConductor.start();
+    _startLocalPlanningPhase();
+    return;
+  }
 
   // Wire mission info button callback
   ui.showMissionInfoBtn(true);
@@ -2742,6 +2739,7 @@ function _handleCampaignMissionEnd() {
 
   // Clean up game state
   renderer = null; ui = null; witchAI = null; heroAI = null;
+  _missionConductor = null;
   _activeMissionDef = null;
 
   showStep('debrief');

@@ -1,8 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// Tutorial Configuration
-// Self-contained tutorial definition following the campaign config pattern.
+// Tutorial / Prologue Configuration
+// Self-contained tutorial definition used by the Prologue campaign.
 // Contains the tutorial map builder, step definitions, wave config,
-// and forced dice settings. NOT registered as a campaign.
+// forced dice settings, and MissionConductor config.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { Tile, TileType, BuildingType, ResourceType } from '../tiles.js';
@@ -170,7 +170,7 @@ export const TUTORIAL_FORCED_DICE = [6, 1];
 //   trigger     — what advances the step:
 //                   'click'        → "Got it →" button
 //                   'auto'         → advances automatically via onPlanningPhaseStart
-//                   'start_game'   → shows "Start a Real Game →" button
+//                   'complete'     → final step button (label from buttonLabel field)
 //                   { type: 'entity_selected', entityType }
 //                   { type: 'action_queued',   actionType }
 //                   { type: 'plan_submitted' }
@@ -179,6 +179,7 @@ export const TUTORIAL_FORCED_DICE = [6, 1];
 //                   { type: 'hex',     col, row }
 //                   { type: 'element', selector, arrow: 'up'|'down'|'left'|'right' (optional) }
 //   tooltipPos  — 'center' | 'bottom-left' | 'bottom-right'
+//   buttonLabel — custom button text for 'complete' trigger steps
 //   witchPlan   — scripted witch plan for this round (null = N/A)
 
 export const TUTORIAL_STEPS = [
@@ -186,8 +187,8 @@ export const TUTORIAL_STEPS = [
 
   {
     id: 'welcome',
-    title: "Welcome to Caleb's Hollow",
-    body: 'A hero arrives in a cursed town. Dark forces stir in the shadows.\n\nYou play as the ⚔ Hero. Let\'s learn the core mechanics in a few minutes.',
+    title: 'The Road to Caleb\'s Hollow',
+    body: 'On the road to Caleb\'s Hollow, shadows stir in the forest. Something is not right.\n\nYou play as the ⚔ Hero. Let\'s learn the core mechanics in a few minutes.',
     trigger: 'click',
     spotlight: null,
     tooltipPos: 'center',
@@ -273,8 +274,8 @@ export const TUTORIAL_STEPS = [
 
   {
     id: 'combat_intro',
-    title: 'A Minion Appears!',
-    body: 'A witch\'s minion has emerged from the shadows next to your hero!\n\nClick on the enemy to attack it.',
+    title: 'A Minion Blocks the Road!',
+    body: 'A witch\'s minion has emerged from the tree line ahead, blocking your path.\n\nClick on the enemy to attack it.',
     trigger: { type: 'action_queued', actionType: PlanActionType.BATTLE_UNIT },
     spotlight: { type: 'hex', col: 3, row: 5 },
     tooltipPos: 'bottom-left',
@@ -406,10 +407,50 @@ export const TUTORIAL_STEPS = [
   {
     id: 'complete',
     title: 'You\'re Ready!',
-    body: 'That\'s the core loop: plan actions, submit, watch resolution, repeat.\n\nExplore buildings for weapons and survivors, fortify positions, and control the Power Nodes.\n\nGood luck out there.',
-    trigger: 'start_game',
+    body: 'That\'s the core loop: plan actions, submit, watch resolution, repeat.\n\nExplore buildings for weapons and survivors, fortify positions, and control the Power Nodes.\n\nCaleb\'s Hollow awaits.',
+    trigger: 'complete',
+    buttonLabel: 'Continue to Caleb\'s Hollow →',
     spotlight: null,
     tooltipPos: 'center',
     witchPlan: null,
   },
 ];
+
+// ── MissionConductor configuration for the tutorial/prologue mission ─────
+
+/**
+ * Provides the scripted witch plan for each tutorial round.
+ * Round 0: witch idles (plan from step's witchPlan field).
+ * Round 1: minion attacks the hero (minion was spawned by wave after round 1).
+ * Round 2+: witch idles.
+ */
+function _tutorialWitchPlanProvider(round, state, currentStep) {
+  if (round === 0) {
+    return currentStep?.witchPlan ?? [];
+  }
+  if (round === 1) {
+    const minion = state.entities.find(
+      e => e.type === EntityType.MINION && e.owner === 'witch' && e.alive
+    );
+    const hero = state.entities.find(e => e.type === EntityType.HERO && e.alive);
+    if (minion && hero) {
+      return [{
+        type: PlanActionType.BATTLE_UNIT,
+        entityId: minion.id, targetId: hero.id,
+        targetCol: hero.col, targetRow: hero.row,
+      }];
+    }
+  }
+  return [];
+}
+
+export const TUTORIAL_CONDUCTOR_CONFIG = {
+  roundStepMap: {
+    1: 'combat_intro',
+    2: 'survivor_intro',
+    3: 'multi_select',
+  },
+  witchPlanProvider: _tutorialWitchPlanProvider,
+  forcedDice: [{ round: 1, dice: TUTORIAL_FORCED_DICE }],
+  maxPlanningRounds: 3,
+};

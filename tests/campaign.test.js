@@ -42,7 +42,10 @@ describe('Campaign registry', () => {
       assert.ok(c.description, `${c.id} missing description`);
       assert.ok(Array.isArray(c.missions), `${c.id} missing missions array`);
       assert.ok(c.mapBuilders, `${c.id} missing mapBuilders`);
-      assert.ok(c.firstMission, `${c.id} missing firstMission`);
+      // Disabled (coming soon) campaigns don't need firstMission or populated missions
+      if (!c.disabled) {
+        assert.ok(c.firstMission, `${c.id} missing firstMission`);
+      }
       assert.ok('prerequisiteCampaign' in c, `${c.id} missing prerequisiteCampaign field`);
     }
   });
