@@ -1768,7 +1768,7 @@ document.getElementById('btn-play-tutorial')?.addEventListener('click', () => {
   if (prologue) _showCampaignScreen(prologue);
 });
 document.getElementById('btn-options')      .addEventListener('click', () => showStep('options'));
-document.getElementById('btn-account')      .addEventListener('click', () => { _initAccountPage(); showStep('account'); });
+document.getElementById('setup-session-name').addEventListener('click', () => { _initAccountPage(); showStep('account'); });
 document.getElementById('btn-howtoplay-back').addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-options-back') .addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-account-back') .addEventListener('click', () => showStep('mode'));
@@ -5479,18 +5479,22 @@ function _signOut() {
 
 function _updateSessionBar() {
   const session = loadSession();
-  const bar     = document.getElementById('setup-session-bar');
+  const nameEl  = document.getElementById('setup-session-name');
+  const btn     = document.getElementById('btn-setup-signout');
   if (session) {
-    document.getElementById('setup-session-name').textContent = session.username;
-    bar.style.display = '';
+    nameEl.textContent = session.username;
+    btn.textContent    = 'Sign Out';
   } else {
-    bar.style.display = 'none';
+    nameEl.textContent = '';
+    btn.textContent    = 'Sign In';
   }
 }
 
 // ── Persistent sign-out (footer bar) ────────────────────────────────────────
 
 document.getElementById('btn-setup-signout').addEventListener('click', async () => {
+  // If not logged in, the button reads "Sign In" — navigate to account page
+  if (!loadSession()) { _initAccountPage(); showStep('account'); return; }
   // Warn if the account has no recovery method (no email, no Game Center)
   if (!_gcCredentials) {
     const session = loadSession();
