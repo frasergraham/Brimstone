@@ -45,7 +45,7 @@ import {
   setSendToPlayer,
   joinBattle, getBattleStatus,
 } from './server/lobby.js';
-import { ensureBattleExists, checkBattleLifecycle } from './server/battle-scheduler.js';
+import { ensureBattleExists, checkBattleLifecycle, endBattleEarly } from './server/battle-scheduler.js';
 import {
   getAllPlayers, getAllSaves, getSaveWithState,
   getAllGamesPaginated, getGameDetail, getAllPlayersDetailed, resetStats,
@@ -654,6 +654,26 @@ app.get('/admin/api/rooms/:id/chronicle', (req, res) => {
   const chronicle = getRoomChronicle(req.params.id);
   if (chronicle === null) { res.status(404).json({ error: 'Room not found.' }); return; }
   res.json(chronicle);
+});
+
+// Battle admin endpoints
+app.get('/admin/api/battle', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  const status = getBattleStatus();
+  if (!status) { res.json(null); return; }
+  // Enrich with full player list
+  const room = getRoom(status.roomId);
+  const players = room ? room.players.map(s => ({
+    playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI,
+    connected: !!(s.ws?.readyState === 1),
+  })) : [];
+  res.json({ ...status, players });
+});
+
+app.post('/admin/api/battle/end', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  const newRoomId = endBattleEarly();
+  res.json({ ended: true, newRoomId });
 });
 
 app.get('/admin/api/queue', (req, res) => {

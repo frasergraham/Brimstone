@@ -127,19 +127,38 @@ export function getLastSaveRound(roomId) {
  */
 export function pruneStaleAndIncompatibleSaves(currentVersion) {
   const cutoff = Math.floor(Date.now() / 1000) - SAVE_MAX_AGE_DAYS * 86400;
-  // Collect room IDs that will be pruned so we can clean up their replay rounds
+  // Collect room IDs that will be pruned so we can clean up their replay rounds.
+  // Exempt battle rooms (config_json contains isBattle) — they run for a full week.
   const staleRooms = db.prepare(`
     SELECT room_id FROM game_saves
-    WHERE updated_at < ? OR game_version != ?
+    WHERE (updated_at < ? OR game_version != ?)
+      AND COALESCE(json_extract(config_json, '$.isBattle'), 0) != 1
   `).all(cutoff, currentVersion);
   for (const { room_id } of staleRooms) {
     _deleteSaveRounds.run(room_id);
   }
   const { changes } = db.prepare(`
     DELETE FROM game_saves
-    WHERE updated_at < ? OR game_version != ?
+    WHERE (updated_at < ? OR game_version != ?)
+      AND COALESCE(json_extract(config_json, '$.isBattle'), 0) != 1
   `).run(cutoff, currentVersion);
   return changes;
+}
+
+/**
+ * Find all battle-mode saves in the DB (for recovery on server startup).
+ * Returns rows with full state_json for reconstruction.
+ */
+export function getActiveBattleSaves() {
+  return db.prepare(`
+    SELECT * FROM game_saves
+    WHERE status = 'playing'
+      AND json_extract(config_json, '$.isBattle') = 1
+    ORDER BY updated_at DESC
+  `).all().map(row => {
+    try { row.state = JSON.parse(row.state_json); } catch { row.state = null; }
+    return row;
+  });
 }
 
 /**

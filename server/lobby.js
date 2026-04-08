@@ -402,7 +402,7 @@ function _addSeat(room, playerId, ws, name, faction, isAI, ai = null) {
   }
 }
 
-function destroyRoom(room) {
+export function destroyRoom(room) {
   if (room.turnTimer) clearTimeout(room.turnTimer);
   if (room.allHumansGoneTimer) clearTimeout(room.allHumansGoneTimer);
   for (const t of room.disconnectTimers.values()) clearTimeout(t);
@@ -1688,7 +1688,7 @@ export function resignGame(playerId, roomId, ws) {
   let room = rooms.get(roomId);
   if (!room) {
     // Try recovering from DB
-    room = _recoverRoom(roomId);
+    room = recoverRoom(roomId);
   }
   if (!room || !room.state) {
     send(ws, { type: 'error', message: 'Game not found.' });
@@ -1917,7 +1917,7 @@ function _checkAllHumansGone(room) {
 
 /**
  * Persist room state to DB and remove from in-memory rooms Map.
- * The room can be recovered later via _recoverRoom().
+ * The room can be recovered later via recoverRoom().
  */
 function _hibernateRoom(room) {
   if (!room.state) return;
@@ -1958,7 +1958,7 @@ function _hibernateRoom(room) {
 /**
  * Recover a hibernated room from DB. Returns the restored room or null.
  */
-function _recoverRoom(roomId) {
+export function recoverRoom(roomId) {
   const save = getSave(roomId);
   if (!save || save.status === 'finished') return null;
   if (save.game_version !== VERSION) return null;
@@ -2120,7 +2120,7 @@ export function getRoom(roomId) {
 
 /** Lightweight summary of every active room (no full state). */
 export function getRooms() {
-  return [...rooms.values()].map(room => ({
+  return [...rooms.values()].filter(room => !room.config.isBattle).map(room => ({
     id:             room.id,
     code:           room.code,
     status:         room.status,
@@ -2338,7 +2338,7 @@ export function resumeGame(playerId, ws, roomId) {
   }
 
   // Try recovering the room from DB (hibernated game)
-  const room = _recoverRoom(roomId);
+  const room = recoverRoom(roomId);
   if (room) {
     const rejoined = handleReconnect(playerId, roomId, ws);
     if (rejoined) {
@@ -3137,7 +3137,7 @@ export function checkDeadlines() {
       // Skip if room is already active in memory (timer handles it)
       if (rooms.has(roomId)) continue;
 
-      const room = _recoverRoom(roomId);
+      const room = recoverRoom(roomId);
       if (!room) continue;
 
       // If room was saved between rounds, start planning first
