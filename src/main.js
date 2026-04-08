@@ -1687,6 +1687,17 @@ function initOnline(mirrorState, myFaction, mpClient) {
   // Start battle countdown if in battle mode
   if (state.gameMode === 'battle') _startBattleCountdownTimer();
 
+  // If the game is already in a planning phase (e.g. reconnecting to a battle),
+  // enter planning mode immediately. A separate planningPhase message may also
+  // arrive and will call enterPlanningMode again (which is safe — it resets).
+  if (state.planningPhase && mpClient.myFaction) {
+    const budget = (mpClient.myFaction === 'hero' ? state.heroActionsLeft : state.witchActionsLeft) || 3;
+    ui.enterPlanningMode(mpClient.myFaction, budget, 0);
+    ui.onPlanSubmit = (plan) => mpClient.submitPlan(plan);
+    ui.onReturnToMenu = () => _showOnlineScreen();
+    ui.onReplayLastTurn = () => _replayLastTurnInline();
+  }
+
   redrawOnline();
 
   requestAnimationFrame(() => {
@@ -4583,6 +4594,9 @@ document.getElementById('btn-battle-back')?.addEventListener('click', () => show
 document.getElementById('btn-battle-join')?.addEventListener('click', function() {
   const roomId = this.dataset.roomId;
   if (!roomId) return;
+  // Clear any stale roomId so _ensureAuthed doesn't trigger a reconnect
+  // via auth({roomId}) — we want joinBattle to handle it.
+  if (mp) mp.roomId = null;
   _ensureAuthed(() => {
     mp.joinBattle(roomId);
   });
