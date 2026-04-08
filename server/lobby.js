@@ -216,12 +216,19 @@ function _sendReconnectPlanningState(room, playerId, ws) {
   // they were in the game when the round resolved and already saw it.
   const lastReplay = submittedPlan ? null : _getLastUnwatchedReplay(room);
 
+  // Compute remaining time for the countdown timer
+  let timeoutMs = 0;
+  if (room.turnDeadline) {
+    const remaining = room.turnDeadline - Math.floor(Date.now() / 1000);
+    if (remaining > 0) timeoutMs = remaining * 1000;
+  }
+
   send(ws, {
     type:            'planningPhase',
     myActionsLeft:   budget,
     heroActionsLeft:  room.state.heroActionsLeft,
     witchActionsLeft: room.state.witchActionsLeft,
-    timeoutMs:        0,
+    timeoutMs,
     players:          _buildPlayerList(room),
     submittedPlan,
     lastReplay,
@@ -2076,8 +2083,12 @@ export function recoverRoom(roomId) {
 
 /** Handle a player reconnecting. */
 export function handleReconnect(playerId, roomId, ws) {
-  const room = rooms.get(roomId);
-  if (!room) return false;
+  let room = rooms.get(roomId);
+  if (!room) {
+    // Room not in memory — try recovering from DB (e.g. after server restart)
+    room = recoverRoom(roomId);
+    if (!room) return false;
+  }
 
   // Find seat by current playerId or by originalPlayerId (AI-taken-over seats)
   let seat = seatFor(room, playerId);
