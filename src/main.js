@@ -1787,7 +1787,7 @@ document.getElementById('btn-single-player').addEventListener('click', () => sho
 document.getElementById('btn-quick-play')    .addEventListener('click', () => _showSinglePlayerScreen());
 document.getElementById('btn-story-mode')    .addEventListener('click', () => _showCampaignSelectScreen());
 document.getElementById('btn-sp-choice-back').addEventListener('click', () => showStep('mode'));
-document.getElementById('btn-multiplayer')  .addEventListener('click', () => _showOnlineScreen());
+document.getElementById('btn-multiplayer')  .addEventListener('click', () => showStep('multiplayer'));
 document.getElementById('btn-how-to-play')  .addEventListener('click', () => showStep('howtoplay'));
 
 // "Play the Tutorial" button in How to Play navigates to Story Mode → Prologue
@@ -4514,6 +4514,9 @@ async function _showBattleScreen() {
   }
 }
 
+document.getElementById('btn-mp-online')?.addEventListener('click', () => _showOnlineScreen());
+document.getElementById('btn-mp-local')?.addEventListener('click', () => showStep('local-play'));
+document.getElementById('btn-multiplayer-back')?.addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-mp-battle')?.addEventListener('click', () => _showBattleScreen());
 document.getElementById('btn-battle-back')?.addEventListener('click', () => showStep('multiplayer'));
 document.getElementById('btn-battle-join')?.addEventListener('click', function() {
@@ -4542,7 +4545,7 @@ document.getElementById('btn-battle-spectate')?.addEventListener('click', functi
 document.getElementById('btn-online-back').addEventListener('click', () => {
   if (mp) { mp.disconnect(); mp = null; }
   renderer = null; ui = null; state = null;
-  showStep('mode');
+  showStep('multiplayer');
   _updateMultiplayerBadge();
 });
 document.getElementById('btn-async-back')?.addEventListener('click', () => {
