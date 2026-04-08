@@ -118,13 +118,14 @@ export function buildTutorialMap() {
   setResource(tiles, 1, 5, ResourceType.HERBS);
   setResource(tiles, 5, 3, ResourceType.WOOD);
 
-  // ── Power Node — cluster at (4,4),(5,4),(4,5) ───────────────────────────
-  // Hidden initially — discovered when hero moves to Blacksmith in round 4
+  // ── Power Node — cluster at (7,5),(7,4),(8,5) ───────────────────────────
+  // East of Blacksmith. Hidden initially — only within hero's sight range
+  // once they reach the Blacksmith (5,5) in round 4 (DAY sight = 3).
   const witchObjectives = [
     {
-      col: 4, row: 4,
+      col: 7, row: 5,
       label: 'The Crossroads',
-      hexes: [{ col: 4, row: 4 }, { col: 5, row: 4 }, { col: 4, row: 5 }],
+      hexes: [{ col: 7, row: 5 }, { col: 7, row: 4 }, { col: 8, row: 5 }],
       color: NODE_COLORS[0],
       seenByHero:  false,
       seenByWitch: true,
@@ -422,7 +423,7 @@ export const TUTORIAL_STEPS = [
     title: 'Power Node Discovered!',
     body: 'A Power Node glows nearby. These are key strategic points on the map — controlling them is one way to win.\n\nWhichever side has more units on a node controls it. At Dawn and Dusk scoring checkpoints, the side controlling a majority of nodes scores a point. Four points wins the game.',
     trigger: 'click',
-    spotlight: { type: 'hex', col: 4, row: 4 },
+    spotlight: { type: 'hex', col: 7, row: 5 },
     tooltipPos: 'bottom-left',
     witchPlan: null,
   },

@@ -40,7 +40,7 @@ const MISSIONS = [
 
     maxSurvivorsFromRoster:    0,
     missionSurvivors:          0,
-    maxDiscoverableSurvivors:  0,
+    maxDiscoverableSurvivors:  1,
 
     objectives: {
       win:  { type: 'conductor_complete', reason: 'You have learned the fundamentals of survival.' },

@@ -104,11 +104,11 @@ describe('buildTutorialMap', () => {
     assert.equal(mapData.noWitch, true);
   });
 
-  test('single power node exists', () => {
+  test('single power node exists east of Blacksmith', () => {
     const { witchObjectives } = buildTutorialMap();
     assert.equal(witchObjectives.length, 1);
-    assert.equal(witchObjectives[0].col, 4);
-    assert.equal(witchObjectives[0].row, 4);
+    assert.equal(witchObjectives[0].col, 7);
+    assert.equal(witchObjectives[0].row, 5);
   });
 
   test('power node cluster has exactly 3 hexes', () => {
