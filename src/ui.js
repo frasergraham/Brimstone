@@ -68,8 +68,8 @@ export class UIController {
     this._battleInterval   = null; // dice animation interval — cleared on new dialog
     this.speedMode         = this._loadDefaultSpeed(); // 'step' | 'cinematic' | 'fast' | 'vfast'
     this._stepResolve      = null;        // set while waiting for click-to-advance in step mode
-    // Start with chronicle hidden on small screens (≤768px)
-    this._chronicleMode    = window.innerWidth <= 768 ? 'none' : 'mini'; // 'none' | 'mini' | 'full'
+    // Start with chronicle hidden by default
+    this._chronicleMode    = 'none'; // 'none' | 'mini' | 'full'
     // When true, disable all planning/action UI — used for spectator mode
     this.spectator         = false;
     // When true, suppress phase modals and auto-select — used for tutorial mode

@@ -534,12 +534,6 @@ export function executeMove(state, actor, targetCol, targetRow) {
   }
 
   const finalStep = walkedPath[walkedPath.length - 1];
-  const ft = tile(state, finalStep.col, finalStep.row);
-  if (ft?.type === TileType.BUILDING) {
-    log.push(`${actor.displayName} enters the ${ft.building || 'building'}.`);
-  } else {
-    log.push(`${actor.displayName} moves to (${finalStep.col},${finalStep.row}).`);
-  }
   if (blockedBy) {
     log.push(`${actor.displayName} movement blocked by ${blockedBy.displayName}.`);
   }
