@@ -577,6 +577,7 @@ function _clearTurnTimer(room) {
  */
 function _startPlanningPhase(room, keepDeadline = false) {
   if (room.state.gameOver) return;
+  room.state.updateNodeDiscovery();
   room.state.updateExploredHexes();
   room.state.startPlanning();
 

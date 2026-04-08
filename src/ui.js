@@ -2073,27 +2073,31 @@ export class UIController {
     }
 
     // Online mode: if we reach here without plan mode or resolving, the client
-    // may be in a transient state (e.g. between exitPlanningMode and enterPlanningMode)
-    // or genuinely stuck. Debounce: wait 2 seconds, then check again and recover.
+    // may be in a transient state (summary, animation) or genuinely stuck.
+    // Only attempt recovery if we're supposed to be in PLANNING mode.
     if (this.mp) {
-      el.innerHTML = `<span class="turn-line" style="color:var(--muted)">Syncing…</span>`;
-      if (!this._stateRecoveryPending) {
+      if (this.appMode === 'PLANNING' && !this._stateRecoveryPending) {
         this._stateRecoveryPending = true;
         // Delay before requesting state — gives enterPlanningMode time to fire
         this._stateRecoveryTimer = setTimeout(() => {
           this._stateRecoveryPending = false;
-          // Re-check: if we're now in plan mode or resolving, all is well
-          if (this._planMode || this.state.resolving) return;
+          if (this._planMode || this.state.resolving || this.appMode !== 'PLANNING') return;
           console.warn('[ui] Invalid online state — requesting state refresh.');
           this.mp._send({ type: 'requestState' });
           // If still stuck after another 5 seconds, bail to menu
           this._stateRecoveryTimer = setTimeout(() => {
-            if (!this._planMode && !this.state.resolving) {
+            if (!this._planMode && !this.state.resolving && this.appMode === 'PLANNING') {
               console.error('[ui] State recovery failed — returning to menu');
               if (this.onQuitToMenu) this.onQuitToMenu();
             }
           }, 5000);
         }, 2000);
+      }
+      // Show appropriate label based on current app mode
+      if (this.appMode === 'SUMMARY') {
+        el.innerHTML = `<span class="turn-line">Round Summary</span>`;
+      } else {
+        el.innerHTML = `<span class="turn-line" style="color:var(--muted)">Syncing…</span>`;
       }
       return;
     }
