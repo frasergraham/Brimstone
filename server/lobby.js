@@ -1765,6 +1765,57 @@ export function resignGame(playerId, roomId, ws) {
   const playerName = seat.name ?? 'A player';
   const faction    = seat.faction;
 
+  // ── Battle mode: free the slot, scatter units, allow rejoin later ──────
+  if (room.config.isBattle) {
+    // Scatter the player's units (survivors to buildings, summons vanish)
+    room.state.scatterPlayerUnits(playerId);
+
+    // Remove the leader entity
+    room.state.entities = room.state.entities.filter(
+      e => e.ownerId !== playerId || (e.type !== 'hero' && e.type !== 'witch')
+    );
+
+    // Remove from state.players
+    room.state.players = room.state.players.filter(p => p.id !== playerId);
+
+    // Auto-ready if in planning so they don't block resolution
+    if (room.state.planningPhase) {
+      room.state.playerReady.set(playerId, true);
+      room.state.playerPlans.set(playerId, []);
+      room.state.playerActionsLeft.delete(playerId);
+    }
+
+    // Remove their seat from the room
+    room.players = room.players.filter(s => s.playerId !== playerId);
+
+    const msg = { type: 'playerResigned', playerId, playerName };
+    broadcast(room, msg);
+    broadcastToSpectators(room, msg);
+    broadcastState(room, 'resign');
+    _broadcastPresence(room);
+
+    room.state.addLog(`💨 ${playerName} has left the battle.`);
+
+    send(ws, { type: 'resigned', roomId });
+    console.log(`[battle] ${playerName} resigned from battle ${room.id}`);
+
+    // Check if all plans are now ready (the resigned player was the last holdout)
+    if (room.state.planningPhase) {
+      const allReady = [...room.state.playerReady.values()].every(Boolean);
+      if (allReady && room.players.length > 0) {
+        const hasHero  = room.players.some(s => s.faction === 'hero');
+        const hasWitch = room.players.some(s => s.faction === 'witch');
+        if (hasHero && hasWitch) {
+          room.state.planningPhase = false;
+          room.state.resolving     = true;
+          _executeResolution(room);
+        }
+      }
+    }
+    return;
+  }
+
+  // ── Standard game resign ──────────────────────────────────────────────
   // Check if there are other humans on the same side
   const otherHumansOnSide = room.players.filter(
     s => s.faction === faction && !s.isAI && s.playerId !== playerId
