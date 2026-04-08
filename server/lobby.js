@@ -1912,21 +1912,7 @@ export function handlePlanSubmit(playerId, roomId, plan) {
   if (state.playerReady.get(playerId)) { send(seat.ws, { type: 'error', message: 'Plan already submitted.' }); return; }
   if (!Array.isArray(plan)) { send(seat.ws, { type: 'error', message: 'Invalid plan format.' }); return; }
 
-  // Reset the planning timer each time a plan comes in
-  _startPlanningTimer(room);
-
   _submitPlayerPlan(room, playerId, plan);
-
-  // Notify all human players that the deadline has been extended
-  // (submitted players also need this to keep their waiting countdown accurate)
-  if (room.state.planningPhase) {
-    const timeoutMs = room.config.turnIntervalMs ?? TURN_TIMEOUT_MS;
-    for (const seat of room.players) {
-      if (!seat.isAI) {
-        send(seat.ws, { type: 'timerReset', timeoutMs });
-      }
-    }
-  }
 }
 
 /** Legacy handler — kept for clients that submit via the old 'endTurn' message. */
