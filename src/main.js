@@ -680,8 +680,8 @@ async function _runLocalResolution(skipSummary = false) {
   // Persist single-player progress to localStorage
   _saveSpGame();
 
-  // Persist campaign mid-mission progress
-  if (_activeCampaign && _activeMissionDef && !state.gameOver) {
+  // Persist campaign mid-mission progress (skip conductor-driven missions like the tutorial)
+  if (_activeCampaign && _activeMissionDef && !state.gameOver && !_missionConductor) {
     _saveCampaignMission();
   }
 
@@ -2069,6 +2069,9 @@ function _resumeCampaignMission(missionId) {
 
   _setupLocalUI(canvas, witchAI, null, false);
 
+  // Hide chronicle by default for story mode
+  ui._setChronicleMode('none');
+
   // Wire mission info button
   ui.showMissionInfoBtn(true);
   ui.onMissionInfo = () => _showMissionInfoModal();
@@ -2618,6 +2621,9 @@ function _initCampaignMission(missionDef) {
 
   _setupLocalUI(canvas, witchAI, null, false);
   _roundHistory = [];
+
+  // Hide chronicle by default for story mode — less clutter during narrative
+  ui._setChronicleMode('none');
 
   // ── MissionConductor setup for guided missions ────────────────────────────
   if (missionDef.conductorSteps) {
