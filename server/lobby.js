@@ -44,6 +44,16 @@ const RECONNECT_GRACE_MS = parseInt(process.env.RECONNECT_GRACE_MS, 10) || 60_00
 const TURN_TIMEOUT_MS    = parseInt(process.env.TURN_TIMEOUT_MS, 10)    || 90_000;
 const ROUND_DELAY_MS     = parseInt(process.env.ROUND_DELAY_MS, 10)     || 4000;
 const CHRONICLE_MAX      = 100;    // max rounds retained per room in the chronicle
+const BATTLE_ADVANCE_THRESHOLD_S = 30 * 60; // 30 minutes — if less than this until deadline, advance to next
+
+/** Next battle turn deadline: noon or midnight PST, whichever is soonest. */
+function _nextBattleDeadline() {
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+  const noon = new Date(now); noon.setHours(12, 0, 0, 0);
+  if (now < noon) return Math.floor(noon.getTime() / 1000);
+  const midnight = new Date(now); midnight.setDate(midnight.getDate() + 1); midnight.setHours(0, 0, 0, 0);
+  return Math.floor(midnight.getTime() / 1000);
+}
 
 // ── Player notification callback (injected by server.js to avoid circular imports) ──
 
@@ -455,13 +465,44 @@ export function pruneOrphanedRooms() {
 
 // ── Planning timer ────────────────────────────────────────────────────────────
 
-function _startPlanningTimer(room) {
+function _startPlanningTimer(room, keepDeadline = false) {
   _clearTurnTimer(room);
   if (room.state.gameOver) return;
 
-  const timeoutMs = room.config.turnIntervalMs ?? TURN_TIMEOUT_MS;
+  if (room.config.isBattle) {
+    // Battle mode: use wall-clock deadlines (noon / midnight PST).
+    // keepDeadline=true means all players submitted early and we're reusing
+    // the existing deadline (unless it's < 30min away, in which case advance).
+    const now = Math.floor(Date.now() / 1000);
 
-  // Store the deadline in the room for background checker (hibernated rooms)
+    if (keepDeadline && room.turnDeadline) {
+      const remaining = room.turnDeadline - now;
+      if (remaining > BATTLE_ADVANCE_THRESHOLD_S) {
+        // > 30min left — keep the same deadline
+        const timeoutMs = Math.max(1000, remaining * 1000);
+        room.turnTimer = setTimeout(() => {
+          room.turnTimer = null;
+          if (room.state.gameOver || !room.state.planningPhase) return;
+          _autoSubmitMissingPlans(room);
+        }, timeoutMs);
+        return;
+      }
+      // < 30min left — fall through to advance to next deadline
+    }
+
+    const nextDeadline = _nextBattleDeadline();
+    room.turnDeadline = nextDeadline;
+    const timeoutMs = Math.max(1000, (nextDeadline - now) * 1000);
+    room.turnTimer = setTimeout(() => {
+      room.turnTimer = null;
+      if (room.state.gameOver || !room.state.planningPhase) return;
+      _autoSubmitMissingPlans(room);
+    }, timeoutMs);
+    return;
+  }
+
+  // Standard games: relative timeout from now
+  const timeoutMs = room.config.turnIntervalMs ?? TURN_TIMEOUT_MS;
   room.turnDeadline = Math.floor(Date.now() / 1000) + Math.ceil(timeoutMs / 1000);
 
   room.turnTimer = setTimeout(() => {
@@ -520,8 +561,10 @@ function _clearTurnTimer(room) {
 
 // ── Simultaneous planning helpers ─────────────────────────────────────────────
 
-/** Begin a new planning phase: reset plans, compute per-player budgets, broadcast, kick AI. */
-function _startPlanningPhase(room) {
+/** Begin a new planning phase: reset plans, compute per-player budgets, broadcast, kick AI.
+ *  @param {boolean} [keepDeadline] — if true, reuse the current deadline (battle early-submit)
+ */
+function _startPlanningPhase(room, keepDeadline = false) {
   if (room.state.gameOver) return;
   room.state.updateExploredHexes();
   room.state.startPlanning();
@@ -555,7 +598,7 @@ function _startPlanningPhase(room) {
     });
   }
 
-  _startPlanningTimer(room);
+  _startPlanningTimer(room, keepDeadline);
   _runAIPlanSubmission(room);
 
   // Let admin spectators know a new planning phase has started
@@ -697,6 +740,9 @@ function _submitPlayerPlan(room, playerId, plan, isTimeout = false) {
         return;
       }
     }
+    // Track whether this was an early submission (all players beat the deadline)
+    // so the next planning phase can decide whether to keep or advance the deadline.
+    room._earlySubmit = !isTimeout;
     _executeResolution(room);
   }
 }
@@ -834,7 +880,9 @@ function _executeResolution(room) {
   if (!state.gameOver) {
     // Check for consecutive timeout AI takeover before next planning phase
     _checkTimeoutTakeovers(room);
-    setTimeout(() => _startPlanningPhase(room), ROUND_DELAY_MS);
+    const keepDeadline = !!room._earlySubmit && room.config.isBattle;
+    room._earlySubmit = false;
+    setTimeout(() => _startPlanningPhase(room, keepDeadline), ROUND_DELAY_MS);
 
     // Notify disconnected human players that a new round is ready
     const opts = _notifyOpts(room);
