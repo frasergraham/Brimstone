@@ -4498,15 +4498,15 @@ async function _showBattleScreen() {
   statusLine.textContent = 'Loading...';
 
   try {
-    const res = await fetch('/api/battle-status');
+    const url = session?.token
+      ? `/api/battle-status?token=${encodeURIComponent(session.token)}`
+      : '/api/battle-status';
+    const res = await fetch(url);
     const status = await res.json();
     if (!status) {
       statusLine.textContent = 'No active battle right now. A new one will begin soon.';
       return;
     }
-
-    // Status headline
-    statusLine.textContent = 'Battle in progress';
 
     // Score
     scoreLine.style.display = '';
@@ -4525,14 +4525,23 @@ async function _showBattleScreen() {
     roundLine.style.display = '';
     roundLine.textContent = `Round ${status.round}`;
 
-    // Action buttons
-    if (status.isFull) {
-      spectateBtn.style.display = '';
-    } else {
-      joinBtn.style.display = '';
-    }
+    // Action buttons — show context-appropriate option
     joinBtn.dataset.roomId = status.roomId;
     spectateBtn.dataset.roomId = status.roomId;
+
+    if (status.joined) {
+      // Already in this battle — show "Return to Battle" instead of "Join"
+      statusLine.textContent = `You are fighting as ${status.myFaction === 'hero' ? 'Hero' : 'Witch'}`;
+      joinBtn.style.display = '';
+      joinBtn.textContent = 'Return to Battle';
+    } else if (status.isFull) {
+      statusLine.textContent = 'Battle is full';
+      spectateBtn.style.display = '';
+    } else {
+      statusLine.textContent = 'Battle in progress';
+      joinBtn.style.display = '';
+      joinBtn.textContent = 'Join the Battle';
+    }
   } catch (err) {
     statusLine.textContent = 'Could not load battle status.';
   }

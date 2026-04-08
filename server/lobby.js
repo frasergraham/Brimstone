@@ -1257,6 +1257,7 @@ export function browseLobby() {
   const results = [];
   for (const r of rooms.values()) {
     if (r.isPrivate) continue;
+    if (r.config.isBattle) continue;  // battle has its own menu entry
     if (r.status === 'lobby') {
       results.push(_lobbyPublic(r));
     } else if (r.status === 'playing' && r.openSlots?.length > 0) {
@@ -2147,6 +2148,7 @@ export function getActiveRoomsForPlayer(playerId) {
   for (const room of rooms.values()) {
     if (room.status !== 'playing') continue;
     if (room.state?.gameOver) continue;
+    if (room.config.isBattle) continue;  // battle games shown via getBattleStatus, not here
     const seat = room.players.find(
       s => s.playerId === playerId || s.originalPlayerId === playerId
     );
@@ -2196,8 +2198,9 @@ export function getActiveRoomsForPlayer(playerId) {
     for (const g of dbGames) {
       if (seenRoomIds.has(g.room_id)) continue;
       // Extract fields from config_json
+      let cfg = {};
       try {
-        const cfg = JSON.parse(g.config_json || '{}');
+        cfg = JSON.parse(g.config_json || '{}');
         g.is_async = cfg.isAsync ?? false;
         g.map_size = cfg.mapSize ?? 'standard';
         g.players_per_side = cfg.playersPerSide ?? 1;
@@ -2206,6 +2209,7 @@ export function getActiveRoomsForPlayer(playerId) {
         g.map_size = 'standard';
         g.players_per_side = 1;
       }
+      if (cfg.isBattle) continue;  // battle games shown via getBattleStatus
       delete g.config_json;
       // Compute action_needed and submission counts from plan status
       if (g.status === 'playing') {
@@ -3017,10 +3021,11 @@ export function getActiveBattleRoom() {
  * Get battle status for the multiplayer menu.
  * Returns null if no active battle, or a summary object.
  */
-export function getBattleStatus() {
+export function getBattleStatus(playerId = null) {
   const room = getActiveBattleRoom();
   if (!room) return null;
   const state = room.state;
+  const seat = playerId ? room.players.find(s => s.playerId === playerId) : null;
   return {
     roomId:      room.id,
     heroCount:   room.players.filter(s => s.faction === 'hero').length,
@@ -3032,6 +3037,9 @@ export function getBattleStatus() {
     endsAt:      state.battleConfig?.endsAt ?? 0,
     isFull:      room.players.filter(s => s.faction === 'hero').length >= (state.battleConfig?.maxPlayersPerSide ?? 10)
               && room.players.filter(s => s.faction === 'witch').length >= (state.battleConfig?.maxPlayersPerSide ?? 10),
+    // Player-specific fields
+    joined:      !!seat,
+    myFaction:   seat?.faction ?? null,
   };
 }
 

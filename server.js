@@ -119,8 +119,17 @@ app.get('/api/config', (_req, res) => {
 });
 
 // REST: Battle for Caleb's Hollow status
-app.get('/api/battle-status', (_req, res) => {
-  res.json(getBattleStatus());
+app.get('/api/battle-status', (req, res) => {
+  // Try to extract player ID from session token for player-specific fields
+  let playerId = null;
+  const token = req.query.token || req.headers['x-session-token'];
+  if (token) {
+    try {
+      const row = db.prepare('SELECT id FROM players WHERE token = ?').get(token);
+      if (row) playerId = row.id;
+    } catch { /* ignore */ }
+  }
+  res.json(getBattleStatus(playerId));
 });
 
 // REST: Railway environment auto-discovery for the server selector
@@ -986,7 +995,7 @@ function route(ws, cs, msg) {
     }
 
     case 'getBattleStatus': {
-      send(ws, { type: 'battleStatus', status: getBattleStatus() });
+      send(ws, { type: 'battleStatus', status: getBattleStatus(cs.player?.id) });
       break;
     }
 
