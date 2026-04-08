@@ -291,6 +291,21 @@ export function getCompletedGames(playerId) {
 }
 
 /**
+ * List all completed battle games (newest first, up to `limit`).
+ */
+export function getCompletedBattles(limit = 20) {
+  return db.prepare(`
+    SELECT game_id, room_id, hero_name, witch_name,
+           winner, win_reason, total_rounds, game_version, mode,
+           players_json, created_at
+    FROM   completed_games
+    WHERE  mode = 'battle'
+    ORDER  BY created_at DESC
+    LIMIT  ?
+  `).all(limit);
+}
+
+/**
  * Return all rounds for a completed game, ordered by round number.
  * Each row: { round_num, pre_state_json, steps_json }
  */

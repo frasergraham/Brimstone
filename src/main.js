@@ -4545,6 +4545,29 @@ async function _showBattleScreen() {
   } catch (err) {
     statusLine.textContent = 'Could not load battle status.';
   }
+
+  // Fetch past battle replays
+  try {
+    const historyEl = document.getElementById('battle-history');
+    const listEl    = document.getElementById('battle-history-list');
+    const histRes = await fetch('/api/battle-history');
+    const battles = await histRes.json();
+    if (battles && battles.length > 0) {
+      historyEl.style.display = '';
+      listEl.innerHTML = battles.map(b => {
+        const date = new Date(b.created_at * 1000).toLocaleDateString();
+        const winner = b.winner === 'hero' ? 'Heroes' : b.winner === 'witch' ? 'Witches' : 'Draw';
+        return `<div style="margin:0.25rem 0">
+          <a href="/replay?replayGame=${encodeURIComponent(b.game_id)}&source=mp" target="_blank"
+             style="color:var(--accent);text-decoration:underline;cursor:pointer">
+            ${date} — ${winner} won (${b.total_rounds} rounds)
+          </a>
+        </div>`;
+      }).join('');
+    } else {
+      historyEl.style.display = 'none';
+    }
+  } catch { /* ignore */ }
 }
 
 // Sign-in button on the battle screen — reuse the same sign-in flow as online

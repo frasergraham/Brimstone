@@ -5,7 +5,9 @@
 import { createBattleRoom, getActiveBattleRoom, recoverRoom, destroyRoom } from './lobby.js';
 import { sendPush, getAllPlayerIdsWithTokens } from './push.js';
 import { notifyBattleEnded } from './notifications.js';
-import { getActiveBattleSaves, deleteSave } from './saves.js';
+import { getActiveBattleSaves, deleteSave, createCompletedGame, getSaveRounds } from './saves.js';
+import { randomUUID } from 'crypto';
+import { VERSION } from '../src/version.js';
 
 // ── Time helpers ────────────────────────────────────────────────────────────
 
@@ -133,13 +135,11 @@ function _endBattle(room) {
   console.log(`[battle-scheduler] Battle ${room.id} ending`);
 
   // Force the time-based victory check
-  // Temporarily set endsAt to the past so _checkBattleEnd fires
   const origEndsAt = room.state.battleConfig?.endsAt;
   if (room.state.battleConfig) {
     room.state.battleConfig.endsAt = Math.floor(Date.now() / 1000) - 1;
   }
   room.state.checkVictory();
-  // Restore endsAt for any serialization that follows
   if (room.state.battleConfig) {
     room.state.battleConfig.endsAt = origEndsAt;
   }
@@ -157,7 +157,49 @@ function _endBattle(room) {
     }
   }
 
-  // Clean up the save
+  // Save as a completed game with full replay for later viewing.
+  // Replay rounds may be in memory (replayRounds) or only in DB (save_replay_rounds).
+  try {
+    let rounds = room.replayRounds ?? [];
+    if (rounds.length === 0) {
+      // Recovered room — replay rounds are in the DB, not in memory
+      const dbRounds = getSaveRounds(room.id);
+      rounds = dbRounds.map(r => ({
+        roundNum:     r.round_num,
+        preStateJson: r.pre_state_json,
+        stepsJson:    r.steps_json,
+      }));
+    }
+
+    if (rounds.length > 0) {
+      const gameId = randomUUID();
+      const firstHero  = room.players.find(s => s.faction === 'hero'  && !s.isAI);
+      const firstWitch = room.players.find(s => s.faction === 'witch' && !s.isAI);
+      const heroName   = room.players.find(s => s.faction === 'hero')?.name  ?? '';
+      const witchName  = room.players.find(s => s.faction === 'witch')?.name ?? '';
+
+      createCompletedGame(gameId, room.id, {
+        heroPlayerId:  firstHero?.playerId  ?? null,
+        witchPlayerId: firstWitch?.playerId ?? null,
+        heroName,
+        witchName,
+        winner:      room.state.winner      ?? '',
+        winReason:   room.state.winReason   ?? '',
+        totalRounds: room.state.round - 1,
+        gameVersion: VERSION,
+        mode:        'battle',
+        playersJson: JSON.stringify(room.players.map(s => ({
+          playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI,
+        }))),
+      }, rounds);
+
+      console.log(`[battle-scheduler] Saved completed battle ${gameId} (${rounds.length} rounds)`);
+    }
+  } catch (err) {
+    console.error(`[battle-scheduler] createCompletedGame error:`, err);
+  }
+
+  // Clean up the in-progress save
   try { deleteSave(room.id); } catch {}
 
   // Destroy the room

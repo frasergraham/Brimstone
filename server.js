@@ -22,7 +22,7 @@ import { pruneStaleAndIncompatibleSaves,
          getCompletedGames, getCompletedGame, getCompletedGameRounds,
          pinCompletedGame, deleteCompletedGame,
          pruneExpiredCompletedGames, getAllCompletedGames,
-         getSaveRounds }                                   from './server/saves.js';
+         getSaveRounds, getCompletedBattles }              from './server/saves.js';
 import {
   createLobby, joinLobby, joinGame, browseLobby, claimSlot,
   setSlotAI, removeSlotAI, fillAllWithAI, startGame, leaveLobby, resignGame,
@@ -130,6 +130,12 @@ app.get('/api/battle-status', (req, res) => {
     } catch { /* ignore */ }
   }
   res.json(getBattleStatus(playerId));
+});
+
+// REST: Past battle replays
+app.get('/api/battle-history', (_req, res) => {
+  try { res.json(getCompletedBattles(20)); }
+  catch { res.json([]); }
 });
 
 // REST: Railway environment auto-discovery for the server selector
