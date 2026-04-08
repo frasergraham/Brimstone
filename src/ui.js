@@ -529,6 +529,9 @@ export class UIController {
     this._planFaction      = faction;
     this._planBudget       = budget;
     this._unitPlans        = new Map();
+    // Clear state-recovery flag if a recovery was pending
+    this._stateRecoveryPending = false;
+    if (this._stateRecoveryTimer) { clearTimeout(this._stateRecoveryTimer); this._stateRecoveryTimer = null; }
     this._planSubmitted    = false;
 
     // Reset footer buttons
@@ -2069,6 +2072,27 @@ export class UIController {
       return;
     }
 
+    // Online mode: if we reach here without plan mode or resolving, the client
+    // is in an invalid state. Request a state refresh from the server.
+    if (this.mp) {
+      el.innerHTML = `<span class="turn-line" style="color:var(--muted)">Syncing…</span>`;
+      if (!this._stateRecoveryPending) {
+        this._stateRecoveryPending = true;
+        console.warn('[ui] Invalid online state — not planning or resolving. Requesting state refresh.');
+        this.mp._send({ type: 'requestState' });
+        // If we don't recover within 5 seconds, bail to menu
+        this._stateRecoveryTimer = setTimeout(() => {
+          if (!this._planMode && !this.state.resolving) {
+            console.error('[ui] State recovery failed — returning to menu');
+            if (this.onQuitToMenu) this.onQuitToMenu();
+          }
+          this._stateRecoveryPending = false;
+        }, 5000);
+      }
+      return;
+    }
+
+    // Offline / local mode: show legacy sequential-turn display
     const glyph  = state.activePlayer === 'hero' ? '⚔' : '✦';
     const player = state.activePlayer === 'hero' ? 'Hero' : 'Witch';
     const isAI   = (state.activePlayer === 'witch' && state.witchIsAI) ||
