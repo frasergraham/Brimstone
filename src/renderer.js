@@ -652,11 +652,15 @@ export class Renderer {
     let panX = offX + visW / 2 - cx * z;
     let panY = H / 2 - cy * z;
 
-    // Clamp so the map doesn't drift off-screen
-    const minPanX = Math.min(0, fullW - fullW * z);
-    const minPanY = Math.min(0, H - H * z);
-    panX = Math.max(minPanX, Math.min(0, panX));
-    panY = Math.max(minPanY, Math.min(0, panY));
+    // Clamp using the actual map extent (not canvas size) — critical for large maps
+    // where the grid exceeds the canvas dimensions.
+    const mapW = SQRT3 * hs * (MAP_COLS + 0.5) * z;
+    const mapH = (1.5 * MAP_ROWS + 0.5) * hs * z;
+    const contentW = Math.max(fullW * z, mapW);
+    const contentH = Math.max(H * z, mapH);
+    const margin = fullW * 0.1;
+    panX = Math.max(fullW - contentW - margin, Math.min(margin, panX));
+    panY = Math.max(H - contentH - margin, Math.min(margin, panY));
 
     return { zoom: z, panX, panY };
   }
@@ -812,14 +816,19 @@ export class Renderer {
     const mapH = (1.5 * MAP_ROWS + 0.5) * hs * z;
     const contentW = Math.max(this.canvas.width * z, mapW);
     const contentH = Math.max(this.canvas.height * z, mapH);
-    // Allow panning beyond the map edges so any hex (including edge hexes)
-    // can be centered in the viewport.  The margin is ~40% of the viewport.
-    const marginX = wrapW * 0.4;
-    const marginY = wrapH * 0.4;
-    const minX = Math.min(0, wrapW - contentW) - marginX;
-    const minY = Math.min(0, wrapH - contentH) - marginY;
-    this._panX = Math.max(minX, Math.min(marginX, this._panX));
-    this._panY = Math.max(minY, Math.min(marginY, this._panY));
+
+    // Margin: allow any hex (including edge hexes) to be centered in the viewport.
+    // Account for _padX offset which can be negative on large maps.
+    const padXz = this._padX * z;
+    const padYz = this._padY * z;
+    // Max pan: leftmost map edge can reach right side of viewport
+    const maxPanX = -padXz + wrapW * 0.5;
+    const maxPanY = -padYz + wrapH * 0.5;
+    // Min pan: rightmost map edge can reach left side of viewport
+    const minPanX = wrapW - contentW - padXz - wrapW * 0.5;
+    const minPanY = wrapH - contentH - padYz - wrapH * 0.5;
+    this._panX = Math.max(minPanX, Math.min(maxPanX, this._panX));
+    this._panY = Math.max(minPanY, Math.min(maxPanY, this._panY));
   }
 
   // ── Viewport culling ────────────────────────────────────────────────────
