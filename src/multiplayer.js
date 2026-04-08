@@ -79,6 +79,8 @@ export class MirrorState {
     s.heroActionsLeft      = snap.heroActionsLeft  ?? 0;
     s.witchActionsLeft     = snap.witchActionsLeft ?? 0;
     s.players              = (snap.players ?? []).map(p => ({ ...p }));
+    s.gameMode             = snap.gameMode ?? 'standard';
+    s.battleConfig         = snap.battleConfig ?? null;
 
     // Reconstruct tiles as a Map keyed by "col,row"
     s.tiles = new Map();

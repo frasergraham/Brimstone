@@ -1,6 +1,6 @@
 // Lobby: room lifecycle, server-side AI, action dispatch
 import { randomUUID } from 'crypto';
-import { GameState, Player, GameMode } from '../src/game.js';
+import { GameState, Player, GameMode, computeActionsForPlayer, countHeldNodes } from '../src/game.js';
 import { HERO_PERSONALITIES, WITCH_PERSONALITIES } from '../src/ai.js';
 import { WitchAIEngine } from '../src/ai-engine.js';
 import { HeroAIEngine } from '../src/hero-ai-engine.js';
@@ -680,18 +680,6 @@ function _submitPlayerPlan(room, playerId, plan, isTimeout = false) {
   }
 
   if (allReady) {
-    // Battle mode round 1: wait for at least one player per faction.
-    // If the deadline expired with only one faction, reset planning so the
-    // timer restarts and the room keeps waiting for the other side.
-    if (room.config.isBattle && room.state.round === 1) {
-      const hasHero  = room.players.some(s => s.faction === 'hero'  && !s.isAI);
-      const hasWitch = room.players.some(s => s.faction === 'witch' && !s.isAI);
-      if (!hasHero || !hasWitch) {
-        console.log(`[battle] Round 1 — still waiting for both factions (hero=${hasHero}, witch=${hasWitch}), resetting planning`);
-        _startPlanningPhase(room);
-        return;
-      }
-    }
     _executeResolution(room);
   }
 }
@@ -2975,9 +2963,27 @@ export function joinBattle(playerId, playerName, ws, roomId) {
     faction,
   });
 
-  // Start (or restart) the planning phase so the new player gets a plan panel.
-  // This recalculates budgets for everyone and sends planningPhase messages.
-  _startPlanningPhase(room);
+  // Ensure the new player enters a planning phase.
+  if (room.state.planningPhase) {
+    // Already in planning — add the new player to the existing phase without
+    // resetting other players' submitted plans.
+    room.state.playerReady.set(playerId, false);
+    const nb = countHeldNodes(faction, room.state.witchObjectives, room.state.entities);
+    room.state.playerActionsLeft.set(playerId, computeActionsForPlayer(playerId, faction, room.state.phase, room.state.entities, nb));
+
+    const timeoutMs = room.config.turnIntervalMs ?? TURN_TIMEOUT_MS;
+    send(ws, {
+      type:          'planningPhase',
+      myActionsLeft: room.state.playerActionsLeft.get(playerId) ?? 0,
+      heroActionsLeft:  room.state.heroActionsLeft,
+      witchActionsLeft: room.state.witchActionsLeft,
+      timeoutMs,
+      players:       _buildPlayerList(room),
+    });
+  } else {
+    // Not yet in planning (first player to join) — start a fresh planning phase.
+    _startPlanningPhase(room);
+  }
 
   console.log(`[battle] ${playerName} joined Battle ${room.id} as ${faction} (${heroCount + (faction === 'hero' ? 1 : 0)}v${witchCount + (faction === 'witch' ? 1 : 0)})`);
   return { roomId: room.id, faction };
