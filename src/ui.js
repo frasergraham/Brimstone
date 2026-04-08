@@ -654,6 +654,35 @@ export class UIController {
     const p = this._players?.find(pl => (pl.playerId ?? pl.id) === playerId);
     if (p) p._submitted = true;
     this._renderPlayerStatus();
+    if (this._planSubmitted) this._updateWaitingStatus();
+  }
+
+  /**
+   * Update #plan-status with waiting message, optional player count, and countdown.
+   * Called on submission, on playerSubmitted events, and from the countdown tick.
+   * @param {number} [totalSecs] - seconds remaining; omit to derive from _countdownEnd
+   */
+  _updateWaitingStatus(totalSecs) {
+    const status = this._el('plan-status');
+    if (!status) return;
+
+    // Build player-count fragment: "2/4" if multiplayer
+    const players = this._players ?? [];
+    const total = players.length;
+    const submitted = players.filter(p => p._submitted).length;
+    const countPart = total > 1 ? `${submitted}/${total}` : '';
+
+    // Build countdown fragment
+    if (totalSecs === undefined && this._countdownEnd) {
+      totalSecs = Math.max(0, Math.ceil((this._countdownEnd - Date.now()) / 1000));
+    }
+    const timePart = totalSecs > 0 ? _formatCountdown(totalSecs) : '';
+
+    // Assemble: "Waiting for opponents… 2/4 · 1:23"
+    let text = 'Waiting for opponents\u2026';
+    const details = [countPart, timePart].filter(Boolean).join(' \u00b7 ');
+    if (details) text += ' ' + details;
+    status.textContent = text;
   }
 
   /** Called when the server broadcasts updated player presence. */
@@ -700,6 +729,16 @@ export class UIController {
       const remaining = Math.max(0, end - Date.now());
       const totalSecs = Math.ceil(remaining / 1000);
       const pct  = (remaining / timeoutMs) * 100;
+
+      if (this._planSubmitted) {
+        // After submission: show countdown in plan-status text instead of buttons
+        this._updateWaitingStatus(totalSecs);
+        if (remaining <= 0) {
+          this._stopCountdownTimer();
+        }
+        return;
+      }
+
       const label = totalSecs > 0 ? `\u2713 Submit ${_formatCountdown(totalSecs)}` : '\u2713 Submit';
 
       submitBtn.style.setProperty('--progress', pct + '%');
@@ -724,7 +763,7 @@ export class UIController {
 
   /** Reset the countdown to a new deadline (called when the server extends the timer). */
   resetCountdown(timeoutMs) {
-    if (this._planMode && !this._planSubmitted && timeoutMs > 0) {
+    if (this._planMode && timeoutMs > 0) {
       this._startCountdown(timeoutMs);
     }
   }
@@ -893,15 +932,14 @@ export class UIController {
   /** Mark the plan as submitted (read-only wait state) without firing onPlanSubmit. */
   markPlanSubmitted() {
     if (this._planSubmitted) return;
-    this._stopCountdown();
     this._planSubmitted = true;
     this._clearSelection();
 
     const panel = this._el('plan-panel');
     if (panel) panel.classList.add('plan-submitted');
 
-    const status = this._el('plan-status');
-    if (status) status.textContent = 'Waiting for opponents…';
+    // Update waiting status text (countdown will keep ticking via _startCountdown)
+    this._updateWaitingStatus();
 
     // Mark ourselves as submitted in the player list so the status panel updates.
     const me = this._players?.find(p => (p.playerId ?? p.id) === this.myPlayerId);

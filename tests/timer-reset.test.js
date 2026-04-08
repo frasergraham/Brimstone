@@ -69,7 +69,7 @@ describe('resetCountdown', () => {
     ui._stopCountdown();
   });
 
-  test('is a no-op when plan is already submitted', () => {
+  test('restarts countdown when plan is already submitted (waiting state)', () => {
     const { ui, els } = makeUI();
     ui.enterPlanningMode('hero', 3, 30_000);
     // Simulate submit — sets _planSubmitted = true
@@ -78,9 +78,13 @@ describe('resetCountdown', () => {
 
     ui.resetCountdown(90_000);
 
-    const btn = els['plan-submit-btn'];
-    assert.equal(btn.style._props['--progress'], undefined,
-      '--progress should not be set after submit');
+    // Countdown should restart so the waiting player sees the updated deadline.
+    // After submission the timer ticks in plan-status, not the submit button,
+    // but _countdownEnd should be set proving a countdown is active.
+    assert.ok(ui._countdownEnd != null,
+      '_countdownEnd should be set after resetCountdown while submitted');
+
+    ui._stopCountdown();
   });
 
   test('is a no-op when not in planning mode', () => {
@@ -144,13 +148,15 @@ describe('server lobby.js timerReset broadcast', () => {
     );
   });
 
-  test('timerReset only sent to non-ready players', () => {
+  test('timerReset sent to all human players (including submitted)', () => {
     const fnStart = lobbyJs.indexOf('export function handlePlanSubmit');
     const section = lobbyJs.slice(fnStart, fnStart + 1200);
 
+    // timerReset is now sent to all non-AI players so submitted players
+    // can keep their waiting countdown accurate.
     assert.ok(
-      section.includes('playerReady.get(seat.playerId)'),
-      'timerReset broadcast must check playerReady to exclude already-submitted players',
+      section.includes('!seat.isAI'),
+      'timerReset broadcast must send to all non-AI players',
     );
   });
 

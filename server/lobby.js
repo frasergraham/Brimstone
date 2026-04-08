@@ -1782,11 +1782,12 @@ export function handlePlanSubmit(playerId, roomId, plan) {
 
   _submitPlayerPlan(room, playerId, plan);
 
-  // Notify remaining players that the deadline has been extended
+  // Notify all human players that the deadline has been extended
+  // (submitted players also need this to keep their waiting countdown accurate)
   if (room.state.planningPhase) {
     const timeoutMs = room.config.turnIntervalMs ?? TURN_TIMEOUT_MS;
     for (const seat of room.players) {
-      if (!room.state.playerReady.get(seat.playerId)) {
+      if (!seat.isAI) {
         send(seat.ws, { type: 'timerReset', timeoutMs });
       }
     }
@@ -2137,6 +2138,14 @@ export function getActiveRoomsForPlayer(playerId) {
     const actionNeeded = room.state.planningPhase &&
       !room.state.playerReady?.get(playerId) &&
       !seat.isAI;
+    // Count submissions for in-progress display
+    const humanPlayers = room.players.filter(s => !s.isAI);
+    let playersSubmitted = 0;
+    if (room.state.planningPhase && room.state.playerReady) {
+      for (const s of humanPlayers) {
+        if (room.state.playerReady.get(s.playerId)) playersSubmitted++;
+      }
+    }
     results.push({
       room_id:          room.id,
       hero_name:        heroName,
@@ -2153,6 +2162,8 @@ export function getActiveRoomsForPlayer(playerId) {
       updated_at:       Math.floor(Date.now() / 1000),
       status:           room.status,
       action_needed:    actionNeeded,
+      players_submitted: playersSubmitted,
+      players_total:    humanPlayers.length,
       players_json:     JSON.stringify(room.players.map(s => ({
         playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI,
       }))),
@@ -2176,15 +2187,23 @@ export function getActiveRoomsForPlayer(playerId) {
         g.players_per_side = 1;
       }
       delete g.config_json;
-      // Compute action_needed from plan status
+      // Compute action_needed and submission counts from plan status
       if (g.status === 'playing') {
         try {
           const plans = getPlanStatus(g.room_id, g.round);
           const myPlan = plans.find(p => p.player_id === playerId);
           g.action_needed = myPlan ? !myPlan.submitted_at : true;
-        } catch { g.action_needed = true; }
+          g.players_submitted = plans.filter(p => p.submitted_at).length;
+          g.players_total = plans.length;
+        } catch {
+          g.action_needed = true;
+          g.players_submitted = 0;
+          g.players_total = 0;
+        }
       } else {
         g.action_needed = false;
+        g.players_submitted = 0;
+        g.players_total = 0;
       }
       results.push(g);
     }
