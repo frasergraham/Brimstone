@@ -2073,21 +2073,27 @@ export class UIController {
     }
 
     // Online mode: if we reach here without plan mode or resolving, the client
-    // is in an invalid state. Request a state refresh from the server.
+    // may be in a transient state (e.g. between exitPlanningMode and enterPlanningMode)
+    // or genuinely stuck. Debounce: wait 2 seconds, then check again and recover.
     if (this.mp) {
       el.innerHTML = `<span class="turn-line" style="color:var(--muted)">Syncing…</span>`;
       if (!this._stateRecoveryPending) {
         this._stateRecoveryPending = true;
-        console.warn('[ui] Invalid online state — not planning or resolving. Requesting state refresh.');
-        this.mp._send({ type: 'requestState' });
-        // If we don't recover within 5 seconds, bail to menu
+        // Delay before requesting state — gives enterPlanningMode time to fire
         this._stateRecoveryTimer = setTimeout(() => {
-          if (!this._planMode && !this.state.resolving) {
-            console.error('[ui] State recovery failed — returning to menu');
-            if (this.onQuitToMenu) this.onQuitToMenu();
-          }
           this._stateRecoveryPending = false;
-        }, 5000);
+          // Re-check: if we're now in plan mode or resolving, all is well
+          if (this._planMode || this.state.resolving) return;
+          console.warn('[ui] Invalid online state — requesting state refresh.');
+          this.mp._send({ type: 'requestState' });
+          // If still stuck after another 5 seconds, bail to menu
+          this._stateRecoveryTimer = setTimeout(() => {
+            if (!this._planMode && !this.state.resolving) {
+              console.error('[ui] State recovery failed — returning to menu');
+              if (this.onQuitToMenu) this.onQuitToMenu();
+            }
+          }, 5000);
+        }, 2000);
       }
       return;
     }
