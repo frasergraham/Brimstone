@@ -4468,45 +4468,69 @@ function _formatTimeRemaining(unixSeconds) {
 
 async function _showBattleScreen() {
   showStep('battle');
+
+  const session      = loadSession();
+  const signedOut    = document.getElementById('battle-signed-out');
+  const battleInfo   = document.getElementById('battle-info');
   const statusLine   = document.getElementById('battle-status-line');
   const scoreLine    = document.getElementById('battle-score-line');
   const countdownLine = document.getElementById('battle-countdown-line');
   const playersLine  = document.getElementById('battle-players-line');
+  const roundLine    = document.getElementById('battle-round-line');
   const joinBtn      = document.getElementById('btn-battle-join');
   const spectateBtn  = document.getElementById('btn-battle-spectate');
 
-  statusLine.textContent = 'Loading...';
+  // Reset all dynamic elements
+  joinBtn.style.display = 'none';
+  spectateBtn.style.display = 'none';
   scoreLine.style.display = 'none';
   countdownLine.style.display = 'none';
   playersLine.style.display = 'none';
-  joinBtn.style.display = 'none';
-  spectateBtn.style.display = 'none';
+  roundLine.style.display = 'none';
+
+  if (!session) {
+    signedOut.style.display = '';
+    battleInfo.style.display = 'none';
+    return;
+  }
+  signedOut.style.display = 'none';
+  battleInfo.style.display = '';
+  statusLine.textContent = 'Loading...';
 
   try {
     const res = await fetch('/api/battle-status');
     const status = await res.json();
     if (!status) {
-      statusLine.textContent = 'No active battle. A new one starts each Monday.';
+      statusLine.textContent = 'No active battle right now. A new one will begin soon.';
       return;
     }
 
-    statusLine.textContent = `Round ${status.round} — Battle in progress`;
+    // Status headline
+    statusLine.textContent = 'Battle in progress';
+
+    // Score
     scoreLine.style.display = '';
     document.getElementById('battle-hero-score').textContent = status.heroScore;
     document.getElementById('battle-witch-score').textContent = status.witchScore;
 
+    // Countdown
     countdownLine.style.display = '';
     countdownLine.textContent = _formatTimeRemaining(status.endsAt);
 
+    // Player counts
     playersLine.style.display = '';
-    playersLine.textContent = `Heroes: ${status.heroCount}/${status.maxPerSide} | Witches: ${status.witchCount}/${status.maxPerSide}`;
+    playersLine.textContent = `${status.heroCount} heroes vs ${status.witchCount} witches`;
 
+    // Round info
+    roundLine.style.display = '';
+    roundLine.textContent = `Round ${status.round}`;
+
+    // Action buttons
     if (status.isFull) {
       spectateBtn.style.display = '';
     } else {
       joinBtn.style.display = '';
     }
-    // Store roomId for join/spectate handlers
     joinBtn.dataset.roomId = status.roomId;
     spectateBtn.dataset.roomId = status.roomId;
   } catch (err) {
@@ -4514,10 +4538,15 @@ async function _showBattleScreen() {
   }
 }
 
+// Sign-in button on the battle screen — reuse the same sign-in flow as online
+document.getElementById('btn-battle-signin')?.addEventListener('click', () => {
+  showStep('account');
+});
+
 document.getElementById('btn-mp-online')?.addEventListener('click', () => _showOnlineScreen());
 document.getElementById('btn-mp-local')?.addEventListener('click', () => showStep('local-play'));
 document.getElementById('btn-multiplayer-back')?.addEventListener('click', () => showStep('mode'));
-document.getElementById('btn-mp-battle')?.addEventListener('click', () => _showBattleScreen());
+document.getElementById('btn-battle-main')?.addEventListener('click', () => _showBattleScreen());
 document.getElementById('btn-battle-back')?.addEventListener('click', () => showStep('multiplayer'));
 document.getElementById('btn-battle-join')?.addEventListener('click', function() {
   const roomId = this.dataset.roomId;

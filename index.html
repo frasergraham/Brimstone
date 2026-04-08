@@ -20,6 +20,7 @@
       <h1 class="title">CALEB'S HOLLOW</h1>
       <div class="setup-buttons" style="flex-direction:column;align-items:center">
         <button id="btn-single-player" class="setup-btn" style="width:200px">⚔ Single Player</button>
+        <button id="btn-battle-main" class="setup-btn primary" style="width:200px;position:relative">The Battle<span id="battle-badge" class="mp-badge" style="display:none"></span></button>
         <button id="btn-multiplayer"   class="setup-btn" style="width:200px;position:relative">🌐 Multiplayer<span id="mp-badge" class="mp-badge" style="display:none"></span></button>
         <button id="btn-how-to-play"   class="setup-btn" style="width:200px">How to Play</button>
       </div>
@@ -318,10 +319,6 @@
       <h1 class="title" style="font-size:2rem;margin-bottom:1rem">MULTIPLAYER</h1>
       <div class="setup-lore"><p>Choose how you want to play.</p></div>
       <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.75rem">
-        <button id="btn-mp-battle" class="setup-btn primary" style="width:290px;text-align:left;position:relative">
-          <span style="display:block;font-size:1rem">The Battle for Caleb's Hollow</span>
-          <span id="battle-subtitle" style="display:block;font-size:0.7rem;opacity:0.7;margin-top:2px">Persistent 10v10 — one week, one winner.</span>
-        </button>
         <button id="btn-mp-online" class="setup-btn" style="width:260px">🌐 Online Multiplayer</button>
         <button id="btn-mp-local"  class="setup-btn"         style="width:260px">🎮 Local Pass &amp; Play</button>
       </div>
@@ -334,20 +331,36 @@
     <div id="setup-step-battle" class="setup-card" style="display:none">
       <h1 class="title" style="font-size:1.8rem;margin-bottom:0.5rem">THE BATTLE FOR CALEB'S HOLLOW</h1>
       <div class="setup-lore" style="margin-bottom:0.75rem">
-        <p>A persistent 10v10 battle that runs for one full week. Join either faction and fight for control of five Power Nodes. Scoring happens every round. The faction with the most points when time runs out wins.</p>
+        <p>A persistent 10v10 battle that runs for one full week. Join either faction and fight for control of five Power Nodes. Points are scored every round. The faction leading when time runs out wins.</p>
       </div>
-      <div id="battle-info" style="text-align:center;margin-bottom:0.75rem">
+
+      <!-- Not signed in -->
+      <div id="battle-signed-out" style="display:none;text-align:center;margin-bottom:0.75rem">
+        <div class="setup-lore"><p>Sign in to join the battle.</p></div>
+        <button id="btn-battle-signin" class="setup-btn primary" style="margin-top:0.4rem">Sign In</button>
+      </div>
+
+      <!-- Battle status (signed in) -->
+      <div id="battle-info" style="text-align:center;margin-bottom:0.75rem;display:none">
         <div id="battle-status-line" style="color:var(--muted);font-size:0.85rem">Loading...</div>
-        <div id="battle-score-line" style="font-size:1.1rem;margin-top:0.25rem;display:none">
-          <span style="color:var(--hero)">Heroes: <strong id="battle-hero-score">0</strong></span>
-          <span style="margin:0 0.5rem;color:var(--muted)">|</span>
-          <span style="color:var(--witch)">Witches: <strong id="battle-witch-score">0</strong></span>
+
+        <!-- Score display -->
+        <div id="battle-score-line" style="font-size:1.2rem;margin-top:0.5rem;display:none">
+          <span style="color:var(--hero)">Heroes <strong id="battle-hero-score" style="font-size:1.5rem">0</strong></span>
+          <span style="margin:0 0.75rem;color:var(--muted);font-size:0.9rem">vs</span>
+          <span style="color:var(--witch)"><strong id="battle-witch-score" style="font-size:1.5rem">0</strong> Witches</span>
         </div>
-        <div id="battle-countdown-line" style="font-size:0.85rem;color:var(--muted);margin-top:0.25rem;display:none"></div>
-        <div id="battle-players-line" style="font-size:0.8rem;color:var(--muted);margin-top:0.25rem;display:none"></div>
+
+        <!-- Time remaining -->
+        <div id="battle-countdown-line" style="font-size:0.9rem;color:var(--muted);margin-top:0.5rem;display:none"></div>
+
+        <!-- Player counts and round -->
+        <div id="battle-players-line" style="font-size:0.8rem;color:var(--muted);margin-top:0.35rem;display:none"></div>
+        <div id="battle-round-line" style="font-size:0.8rem;color:var(--muted);margin-top:0.15rem;display:none"></div>
       </div>
+
       <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.5rem">
-        <button id="btn-battle-join"     class="setup-btn primary" style="width:220px;display:none">Join Battle</button>
+        <button id="btn-battle-join"     class="setup-btn primary" style="width:220px;display:none">Join the Battle</button>
         <button id="btn-battle-spectate" class="setup-btn"         style="width:220px;display:none">Spectate</button>
         <button id="btn-battle-back"     class="setup-btn"         style="width:220px">← Back</button>
       </div>
