@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Headless game runner — plays N AI vs AI games and reports balance stats.
- * Supports 1v1 through 4v4 on any map size.
+ * Supports 1v1 through 4v4 on any map size, plus 10v10 battle mode.
  *
  * Usage:
  *   node scripts/headless.js [count] [size] [--players N]
@@ -10,19 +10,21 @@
  * Examples:
  *   node scripts/headless.js 200 standard              → 200 1v1 games on standard
  *   node scripts/headless.js 50 campaign --players 4    → 50 4v4 games on campaign
+ *   node scripts/headless.js 10 battle --players 10     → 10 10v10 games on battle (42×42)
  *   node scripts/headless.js --render campaign --players 4  → render 4v4 campaign GIF
  *   node scripts/headless.js --render skirmish out.gif  → render 1v1 skirmish GIF
  *
- * Sizes: skirmish | standard | regional | campaign
+ * Sizes: skirmish | standard | regional | campaign | battle
  */
 
-import { GameState, WIN_REASON } from '../src/game.js';
+import { GameState, GameMode, WIN_REASON, nodeController } from '../src/game.js';
 import { HeroAIEngine }          from '../src/hero-ai-engine.js';
 import { WitchAIEngine }        from '../src/ai-engine.js';
 import { resolvePlansMP, ResEventType } from '../server/resolver.js';
 import { PlanActionType }         from '../src/planner.js';
-import { generateMultipleStarts, MAP_SIZES } from '../src/map.js';
+import { generateMultipleStarts, generateBattleStarts, MAP_SIZES } from '../src/map.js';
 import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS } from '../src/entities.js';
+import { serializeState }         from '../server/state-sync.js';
 import { VERSION }                from '../src/version.js';
 import { randomUUID }             from 'crypto';
 import fs from 'fs';
@@ -42,12 +44,13 @@ try {
 
 const RENDER_MODE = process.argv.includes('--render');
 
-// Extract --players N
+// Extract --players N (validated after MAP_SIZE is known — battle allows up to 10)
 let PER_SIDE = 1;
+let PER_SIDE_EXPLICIT = false;
 const playersIdx = process.argv.indexOf('--players');
 if (playersIdx !== -1 && process.argv[playersIdx + 1]) {
   PER_SIDE = parseInt(process.argv[playersIdx + 1], 10);
-  if (PER_SIDE < 1 || PER_SIDE > 4) { console.error('--players must be 1–4'); process.exit(1); }
+  PER_SIDE_EXPLICIT = true;
 }
 
 // Positional args (everything that isn't a flag or flag value)
@@ -78,6 +81,18 @@ if (!MAP_SIZES[MAP_SIZE]) {
   process.exit(1);
 }
 
+const IS_BATTLE = MAP_SIZE === 'battle';
+
+// Default battle mode to 10v10 if --players not specified
+if (IS_BATTLE && !PER_SIDE_EXPLICIT) PER_SIDE = 10;
+
+// Validate player count against map mode
+const maxPPS = IS_BATTLE ? 10 : 4;
+if (PER_SIDE < 1 || PER_SIDE > maxPPS) {
+  console.error(`--players must be 1–${maxPPS} for ${MAP_SIZE} maps`);
+  process.exit(1);
+}
+
 const TOTAL_PLAYERS = PER_SIDE * 2;
 const IS_MP = PER_SIDE > 1;
 const { cols, rows } = MAP_SIZES[MAP_SIZE];
@@ -91,8 +106,31 @@ const label = IS_MP
 function buildGameState() {
   const state = new GameState(true, true, MAP_SIZE);
 
-  if (IS_MP) {
-    // Patch synthetic players to real UUIDs
+  if (IS_BATTLE) {
+    // Battle mode: set game mode and config (mirrors lobby.js createBattle)
+    state.gameMode     = GameMode.BATTLE;
+    state.battleConfig = { endsAt: 0, maxPlayersPerSide: PER_SIDE };
+
+    // Remove default hero/witch from constructor — battle adds all players via addPlayer
+    state.entities.length = 0;
+    state.players.length  = 0;
+    state.hero  = null;
+    state.witch = null;
+
+    // Generate start positions using battle-specific placement (faction edge columns)
+    const heroStarts  = generateBattleStarts(state.tiles, 'hero',  PER_SIDE, 2);
+    const witchStarts = generateBattleStarts(state.tiles, 'witch', PER_SIDE, 2);
+
+    for (let i = 0; i < PER_SIDE; i++) {
+      const hp = heroStarts[i] ?? heroStarts[0];
+      state.addPlayer(randomUUID(), `Hero${i + 1}`, 'hero', hp.col, hp.row, true);
+    }
+    for (let i = 0; i < PER_SIDE; i++) {
+      const wp = witchStarts[i] ?? witchStarts[0];
+      state.addPlayer(randomUUID(), `Witch${i + 1}`, 'witch', wp.col, wp.row, true);
+    }
+  } else if (IS_MP) {
+    // Standard multiplayer: patch synthetic players and add extras
     const p0 = state.players[0]; // hero
     const p1 = state.players[1]; // witch
     const heroId0  = randomUUID();
@@ -151,7 +189,13 @@ function playRound(state, playerAIs) {
     ...state.players.filter(p => p.faction === 'hero'),
     ...state.players.filter(p => p.faction === 'witch'),
   ];
+
+  // ── Plan generation (timed) ───────────────────────────────────────────────
+  const planGenStart = performance.now();
   for (const p of ordered) {
+    // Battle mode: skip dead players (auto-readied by startPlanning)
+    if (state.playerReady.get(p.id)) continue;
+
     const ai  = playerAIs.get(p.id);
     const ctx = p.faction === 'hero' ? heroCtx : witchCtx;
     const leader = state.entities.find(e => e.alive && e.ownerId === p.id &&
@@ -161,7 +205,10 @@ function playRound(state, playerAIs) {
     state.submitPlayerPlan(p.id, plan);
     playerEntries.push({ playerId: p.id, faction: p.faction, plan });
   }
+  const planGenMs = performance.now() - planGenStart;
 
+  // ── Resolution (timed) ────────────────────────────────────────────────────
+  const resolveStart = performance.now();
   let steps;
   try {
     steps = resolvePlansMP(state, playerEntries);
@@ -169,9 +216,14 @@ function playRound(state, playerAIs) {
     console.error(`Round ${state.round} resolution error:`, err.message);
     steps = [];
   }
+  const resolveMs = performance.now() - resolveStart;
+
+  // ── Measure payload size (serialized state + steps = what the server sends) ─
+  const payloadBytes = Buffer.byteLength(JSON.stringify(steps), 'utf8');
+  const stateBytes   = Buffer.byteLength(JSON.stringify(serializeState(state)), 'utf8');
 
   state.endRound();
-  return steps;
+  return { steps, planGenMs, resolveMs, payloadBytes, stateBytes, totalPlans: playerEntries.length };
 }
 
 // ── Per-game runner ───────────────────────────────────────────────────────────
@@ -195,6 +247,15 @@ function runGame() {
     summons: 0, fortifies: 0,
     peakSurvivors: 0, peakMinions: 0,
     leaderDeaths: { hero: 0, witch: 0 },
+    firstBattleRound: null,  // round when first battle action occurs
+    // Per-node tracking: how many rounds each node was held by each faction
+    nodeHistory:     [],    // populated at end of game
+    // Performance metrics (per-round arrays)
+    planGenTimes:    [],   // ms to generate all plans for a round
+    resolveTimes:    [],   // ms to resolve all plans for a round
+    stepsPayloads:   [],   // bytes: JSON-serialized resolution steps
+    statePayloads:   [],   // bytes: JSON-serialized full state snapshot
+    peakEntities:    0,    // max entity count observed
   };
 
   function analyseEvents(events, faction) {
@@ -211,6 +272,7 @@ function runGame() {
           if (result?.killed) {
             if (faction === 'hero') metrics.killsByHero++; else metrics.killsByWitch++;
           }
+          if (metrics.firstBattleRound === null) metrics.firstBattleRound = state.round;
           break;
 
         case PlanActionType.EXPLORE: {
@@ -242,21 +304,44 @@ function runGame() {
     }
   }
 
-  while (!state.gameOver && state.round <= MAX_ROUNDS) {
-    const steps = playRound(state, playerAIs);
+  const nodeRoundCtrl = {};  // nodeIndex → { hero, witch, neutral, contested, firstContested }
 
-    for (const step of steps) {
+  while (!state.gameOver && state.round <= MAX_ROUNDS) {
+    const roundResult = playRound(state, playerAIs);
+
+    // Collect performance metrics
+    metrics.planGenTimes.push(roundResult.planGenMs);
+    metrics.resolveTimes.push(roundResult.resolveMs);
+    metrics.stepsPayloads.push(roundResult.payloadBytes);
+    metrics.statePayloads.push(roundResult.stateBytes);
+
+    for (const step of roundResult.steps) {
       for (const pe of (step.playerEvents ?? [])) {
         analyseEvents(pe.events ?? [], pe.faction);
       }
     }
 
     // Ecology snapshot
+    const entityCount = state.entities.filter(e => e.alive).length;
+    if (entityCount > metrics.peakEntities) metrics.peakEntities = entityCount;
     const surv = state.entities.filter(e => e.alive && e.type === 'survivor').length;
     const mini = state.entities.filter(e => e.alive && e.owner === 'witch' && e.type !== 'witch').length;
     if (surv > metrics.peakSurvivors) metrics.peakSurvivors = surv;
     if (mini > metrics.peakMinions)   metrics.peakMinions   = mini;
+
+    // Node control snapshot
+    for (let ni = 0; ni < state.witchObjectives.length; ni++) {
+      if (!nodeRoundCtrl[ni]) nodeRoundCtrl[ni] = { hero: 0, witch: 0, neutral: 0, contested: 0, firstContested: null };
+      const ctrl = nodeController(state.witchObjectives[ni], state.entities);
+      nodeRoundCtrl[ni][ctrl]++;
+      if (ctrl !== 'neutral' && nodeRoundCtrl[ni].firstContested === null) {
+        nodeRoundCtrl[ni].firstContested = state.round;
+      }
+    }
   }
+
+  // Store node history
+  metrics.nodeHistory = Object.values(nodeRoundCtrl);
 
   // Count leader deaths (MP)
   if (IS_MP) {
@@ -358,7 +443,7 @@ if (RENDER_MODE) {
 
   while (!state.gameOver && state.round <= MAX_ROUNDS) {
     const logBefore = state.log.length;
-    playRound(state, playerAIs);
+    playRound(state, playerAIs);  // ignore perf metrics in render mode
     const roundLog = state.log.slice(logBefore);
     frames.push(renderGameState(state, { chronicle: roundLog }));
     process.stdout.write(`  Round ${state.round}… \r`);
@@ -500,6 +585,24 @@ for (const r of roundArr) {
 }
 const bucketKeys = Object.keys(buckets).map(Number).sort((a, b) => a - b);
 
+// ── Performance metrics aggregation ──────────────────────────────────────────
+
+// Flatten all per-round arrays across games
+const allPlanGenMs   = valid.flatMap(r => r.metrics.planGenTimes  ?? []);
+const allResolveMs   = valid.flatMap(r => r.metrics.resolveTimes  ?? []);
+const allStepsBytes  = valid.flatMap(r => r.metrics.stepsPayloads ?? []);
+const allStateBytes  = valid.flatMap(r => r.metrics.statePayloads ?? []);
+const allPeakEnts    = valid.map(r => r.metrics.peakEntities ?? 0);
+
+function sortedCopy(arr) { return [...arr].sort((a, b) => a - b); }
+
+const planGenSorted   = sortedCopy(allPlanGenMs);
+const resolveSorted   = sortedCopy(allResolveMs);
+const stepsBytesSorted = sortedCopy(allStepsBytes);
+const stateBytesSorted = sortedCopy(allStateBytes);
+
+function fmtKB(bytes) { return (bytes / 1024).toFixed(1); }
+
 // ── Report ────────────────────────────────────────────────────────────────────
 
 const W    = 66;
@@ -572,8 +675,68 @@ if (IS_MP) {
 hdr('COMBAT (avg per game)');
 console.log(row(`  Hero battles   ${fmt(avgBattlesHero)}   kills ${fmt(avgKillsHero)}`));
 console.log(row(`  Witch battles  ${fmt(avgBattlesWitch)}   kills ${fmt(avgKillsWitch)}`));
+console.log(row(`  Total battles  ${fmt(avgBattlesHero + avgBattlesWitch)}   total kills ${fmt(avgKillsHero + avgKillsWitch)}`));
 console.log(row(`  Avg hero HP at end:   ${fmt(avg(valid.map(r => r.heroHp)))}`));
 console.log(row(`  Avg witch HP at end:  ${fmt(avg(valid.map(r => r.witchHp)))}`));
+
+// First battle timing
+const firstBattleRounds = valid.map(r => r.metrics.firstBattleRound).filter(r => r !== null);
+if (firstBattleRounds.length > 0) {
+  const fbSorted = [...firstBattleRounds].sort((a, b) => a - b);
+  console.log(row(`  First battle on round: mean ${fmt(avg(firstBattleRounds))}  median ${median(fbSorted)}  min ${fbSorted[0]}  max ${fbSorted[fbSorted.length-1]}`));
+  const neverFought = valid.length - firstBattleRounds.length;
+  if (neverFought > 0) console.log(row(`  Games with zero battles: ${neverFought}`));
+}
+
+// Node contestation
+{
+  const nodeCount = valid[0]?.metrics.nodeHistory?.length ?? 0;
+  if (nodeCount > 0) {
+    hdr(`NODE CONTESTATION  (${nodeCount} nodes)`);
+    // Per-node: what % of rounds was it held by hero/witch/neutral/contested
+    const avgNodeStats = [];
+    for (let ni = 0; ni < nodeCount; ni++) {
+      const stats = { hero: [], witch: [], neutral: [], contested: [], firstContested: [] };
+      for (const r of valid) {
+        const nh = r.metrics.nodeHistory?.[ni];
+        if (!nh) continue;
+        const total = nh.hero + nh.witch + nh.neutral + nh.contested;
+        if (total === 0) continue;
+        stats.hero.push(nh.hero / total);
+        stats.witch.push(nh.witch / total);
+        stats.neutral.push(nh.neutral / total);
+        stats.contested.push(nh.contested / total);
+        if (nh.firstContested !== null) stats.firstContested.push(nh.firstContested);
+      }
+      avgNodeStats.push({
+        hero:      avg(stats.hero),
+        witch:     avg(stats.witch),
+        neutral:   avg(stats.neutral),
+        contested: avg(stats.contested),
+        avgFirstContested: stats.firstContested.length ? avg(stats.firstContested) : null,
+        everContested: stats.firstContested.length / valid.length,
+      });
+    }
+
+    for (let ni = 0; ni < nodeCount; ni++) {
+      const s = avgNodeStats[ni];
+      const fc = s.avgFirstContested !== null ? `first reached r${Math.round(s.avgFirstContested)}` : 'never reached';
+      console.log(row(`  Node ${ni + 1}: hero ${pct(s.hero,1)}%  witch ${pct(s.witch,1)}%  neutral ${pct(s.neutral,1)}%  contested ${pct(s.contested,1)}%`));
+      console.log(row(`         ${fc} · reached in ${pct(s.everContested,1)}% of games`));
+    }
+
+    // Summary: how many nodes see action
+    const avgNodesReached = avg(valid.map(r => {
+      return (r.metrics.nodeHistory ?? []).filter(nh => nh.firstContested !== null).length;
+    }));
+    const allNodesReached = valid.filter(r => {
+      return (r.metrics.nodeHistory ?? []).every(nh => nh.firstContested !== null);
+    }).length;
+    console.log(row(``));
+    console.log(row(`  Avg nodes reached per game: ${fmt(avgNodesReached)} / ${nodeCount}`));
+    console.log(row(`  Games where ALL nodes reached: ${allNodesReached} / ${valid.length}  (${pct(allNodesReached, valid.length)}%)`));
+  }
+}
 
 hdr('EXPLORATION (avg per game)');
 console.log(row(`  Hero explores   ${fmt(avgExploresHero)}   Witch explores   ${fmt(avgExploresWitch)}`));
@@ -601,6 +764,31 @@ for (const [type, count] of Object.entries(actTypeTotals).sort((a, b) => b[1] - 
   if (!count) continue;
   const filledN = Math.round((count / totalActions) * 28);
   console.log(row(`  ${type.padEnd(14)}  ${'█'.repeat(filledN)}${'░'.repeat(28-filledN)}  ${pct(count, totalActions)}%`));
+}
+
+// ── Performance metrics ──────────────────────────────────────────────────────
+
+if (planGenSorted.length > 0) {
+  hdr(`TURN PROCESSING TIME  (${allPlanGenMs.length} rounds across ${valid.length} games)`);
+  console.log(row(`  Plan generation (${TOTAL_PLAYERS} AI plans per round):`));
+  console.log(row(`    Mean ${fmt(avg(allPlanGenMs))}ms  Median ${fmt(median(planGenSorted))}ms  p95 ${fmt(percentile(planGenSorted,95))}ms  Max ${fmt(planGenSorted[planGenSorted.length-1])}ms`));
+  console.log(row(`  Resolution (lockstep execution):`));
+  console.log(row(`    Mean ${fmt(avg(allResolveMs))}ms  Median ${fmt(median(resolveSorted))}ms  p95 ${fmt(percentile(resolveSorted,95))}ms  Max ${fmt(resolveSorted[resolveSorted.length-1])}ms`));
+  const totalPerRound = allPlanGenMs.map((p, i) => p + allResolveMs[i]);
+  const totalSorted = sortedCopy(totalPerRound);
+  console.log(row(`  Total per round (plan + resolve):`));
+  console.log(row(`    Mean ${fmt(avg(totalPerRound))}ms  Median ${fmt(median(totalSorted))}ms  p95 ${fmt(percentile(totalSorted,95))}ms  Max ${fmt(totalSorted[totalSorted.length-1])}ms`));
+
+  hdr('ROUND PAYLOAD SIZE');
+  console.log(row(`  Resolution steps (per round):`));
+  console.log(row(`    Mean ${fmtKB(avg(allStepsBytes))} KB  Median ${fmtKB(median(stepsBytesSorted))} KB  p95 ${fmtKB(percentile(stepsBytesSorted,95))} KB  Max ${fmtKB(stepsBytesSorted[stepsBytesSorted.length-1])} KB`));
+  console.log(row(`  Full state snapshot (per round):`));
+  console.log(row(`    Mean ${fmtKB(avg(allStateBytes))} KB  Median ${fmtKB(median(stateBytesSorted))} KB  p95 ${fmtKB(percentile(stateBytesSorted,95))} KB  Max ${fmtKB(stateBytesSorted[stateBytesSorted.length-1])} KB`));
+  const totalPayload = allStepsBytes.map((s, i) => s + allStateBytes[i]);
+  const totalPayloadSorted = sortedCopy(totalPayload);
+  console.log(row(`  Combined (steps + state):`));
+  console.log(row(`    Mean ${fmtKB(avg(totalPayload))} KB  Median ${fmtKB(median(totalPayloadSorted))} KB  p95 ${fmtKB(percentile(totalPayloadSorted,95))} KB  Max ${fmtKB(totalPayloadSorted[totalPayloadSorted.length-1])} KB`));
+  console.log(row(`  Peak live entities (across all games): ${Math.max(...allPeakEnts)}`));
 }
 
 // ── Balance analysis ──────────────────────────────────────────────────────────
