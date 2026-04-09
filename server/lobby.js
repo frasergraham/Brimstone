@@ -245,14 +245,11 @@ function _sendReconnectPlanningState(room, playerId, ws) {
   const budget = room.state.playerActionsLeft?.get(playerId)
     ?? (seat?.faction === 'hero' ? room.state.heroActionsLeft : room.state.witchActionsLeft);
 
-  // Only send submittedPlan if the server considers this player submitted.
-  // The DB may have stale plans from before a restart.
-  let submittedPlan = null;
-  if (room.state.playerReady.get(playerId)) {
-    const planRows = getPlanStatus(room.id, room.state.round);
-    const myPlan = planRows.find(r => r.player_id === playerId && r.plan_json);
-    submittedPlan = myPlan ? JSON.parse(myPlan.plan_json) : null;
-  }
+  // Send the player's submitted plan if they've already submitted this round.
+  const isReady = !!room.state.playerReady.get(playerId);
+  const submittedPlan = isReady
+    ? (room.state.playerPlans.get(playerId) ?? null)
+    : null;
 
   // Only send replay if the player hasn't submitted yet AND was in the game
   // for the previous round. Battle joins/rejoins skip the replay — the player
@@ -2179,13 +2176,21 @@ export function recoverRoom(roomId) {
     }
   }
 
-  // Restore submitted plans from DB (non-battle only — battle rooms save
-  // in planning state with no submitted plans, so there's nothing to restore).
-  if (!savedConfig.isBattle) {
+  // Ensure we're in a valid planning state with correct budgets.
+  // startPlanning() resets plans, computes per-player action budgets,
+  // and sets planningPhase = true.
+  if (!state.gameOver) {
+    state.planningPhase = true;
+    state.resolving = false;
+    state.startPlanning();
+
+    // Restore submitted plans from DB — if a player submitted before the
+    // restart, their plan should still count. submitPlayerPlan sets
+    // playerReady = true for each restored player.
     try {
       const planRows = getPlanStatus(roomId, state.round);
       for (const row of planRows) {
-        if (row.plan_json !== null) {
+        if (row.plan_json !== null && row.submitted_at) {
           const plan = JSON.parse(row.plan_json);
           try { state.submitPlayerPlan(row.player_id, plan); } catch {}
         }
@@ -2193,20 +2198,19 @@ export function recoverRoom(roomId) {
     } catch (err) {
       console.error(`[recoverRoom ${roomId}] restore plans error:`, err);
     }
-  }
 
-  // Ensure we're in a valid planning state with correct budgets.
-  // startPlanning() resets plans, computes per-player action budgets,
-  // and sets planningPhase = true. This handles both normal recovery
-  // (state was saved in planning) and corrupt states (stuck resolving).
-  if (!state.gameOver) {
-    state.planningPhase = true;  // ensure startPlanning doesn't bail
-    state.resolving = false;
-    state.startPlanning();
-    // Clear stale plan status from DB so reconnecting players don't get
-    // told they've already submitted when the server reset their plans.
-    try { clearPlanStatus(roomId, state.round); } catch {}
-    _startPlanningTimer(room);
+    // If all plans were restored and everyone is ready, resolve immediately.
+    // Otherwise start the planning timer for remaining players.
+    const allReady = state.players.length > 0 &&
+      [...state.playerReady.values()].every(Boolean);
+    if (allReady && !state.gameOver) {
+      // Don't resolve inline during recovery — let the first player connection
+      // trigger it naturally via _submitPlayerPlan → _executeResolution.
+      // Just leave the state as-is (planningPhase=false, resolving=true).
+      console.log(`[recoverRoom ${roomId}] all plans restored — ready to resolve on next connect`);
+    } else {
+      _startPlanningTimer(room);
+    }
   }
 
   console.log(`[room ${roomId}] recovered from DB (round ${state.round}, phase ${state.phase}).`);
@@ -3123,15 +3127,11 @@ export function joinBattle(playerId, playerName, ws, roomId) {
       const budget = room.state.playerActionsLeft?.get(playerId)
         ?? (faction === 'hero' ? room.state.heroActionsLeft : room.state.witchActionsLeft);
 
-      // Only send submittedPlan if the server considers this player submitted.
-      // The DB (game_plan_status) may have stale plans from before a server restart
-      // that were cleared by startPlanning() on recovery.
-      let submittedPlan = null;
-      if (room.state.playerReady.get(playerId)) {
-        const planRows = getPlanStatus(room.id, room.state.round);
-        const myPlan = planRows.find(r => r.player_id === playerId && r.plan_json);
-        submittedPlan = myPlan ? JSON.parse(myPlan.plan_json) : null;
-      }
+      // Send submitted plan if the player already submitted this round.
+      const isReady = !!room.state.playerReady.get(playerId);
+      const submittedPlan = isReady
+        ? (room.state.playerPlans.get(playerId) ?? null)
+        : null;
 
       let timeoutMs = 0;
       if (room.turnDeadline) {
