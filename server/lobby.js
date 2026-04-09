@@ -245,10 +245,14 @@ function _sendReconnectPlanningState(room, playerId, ws) {
   const budget = room.state.playerActionsLeft?.get(playerId)
     ?? (seat?.faction === 'hero' ? room.state.heroActionsLeft : room.state.witchActionsLeft);
 
-  // Check if this player already submitted a plan
-  const planRows = getPlanStatus(room.id, room.state.round);
-  const myPlan = planRows.find(r => r.player_id === playerId && r.plan_json);
-  const submittedPlan = myPlan ? JSON.parse(myPlan.plan_json) : null;
+  // Only send submittedPlan if the server considers this player submitted.
+  // The DB may have stale plans from before a restart.
+  let submittedPlan = null;
+  if (room.state.playerReady.get(playerId)) {
+    const planRows = getPlanStatus(room.id, room.state.round);
+    const myPlan = planRows.find(r => r.player_id === playerId && r.plan_json);
+    submittedPlan = myPlan ? JSON.parse(myPlan.plan_json) : null;
+  }
 
   // Only send replay if the player hasn't submitted yet AND was in the game
   // for the previous round. Battle joins/rejoins skip the replay — the player
@@ -2199,6 +2203,9 @@ export function recoverRoom(roomId) {
     state.planningPhase = true;  // ensure startPlanning doesn't bail
     state.resolving = false;
     state.startPlanning();
+    // Clear stale plan status from DB so reconnecting players don't get
+    // told they've already submitted when the server reset their plans.
+    try { clearPlanStatus(roomId, state.round); } catch {}
     _startPlanningTimer(room);
   }
 
@@ -3115,9 +3122,16 @@ export function joinBattle(playerId, playerName, ws, roomId) {
     if (room.state.planningPhase && !room.state.resolving) {
       const budget = room.state.playerActionsLeft?.get(playerId)
         ?? (faction === 'hero' ? room.state.heroActionsLeft : room.state.witchActionsLeft);
-      const planRows = getPlanStatus(room.id, room.state.round);
-      const myPlan = planRows.find(r => r.player_id === playerId && r.plan_json);
-      const submittedPlan = myPlan ? JSON.parse(myPlan.plan_json) : null;
+
+      // Only send submittedPlan if the server considers this player submitted.
+      // The DB (game_plan_status) may have stale plans from before a server restart
+      // that were cleared by startPlanning() on recovery.
+      let submittedPlan = null;
+      if (room.state.playerReady.get(playerId)) {
+        const planRows = getPlanStatus(room.id, room.state.round);
+        const myPlan = planRows.find(r => r.player_id === playerId && r.plan_json);
+        submittedPlan = myPlan ? JSON.parse(myPlan.plan_json) : null;
+      }
 
       let timeoutMs = 0;
       if (room.turnDeadline) {
