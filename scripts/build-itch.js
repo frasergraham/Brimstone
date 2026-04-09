@@ -2,8 +2,8 @@
 /**
  * scripts/build-itch.js
  *
- * Build a single-player-only zip for itch.io web hosting.
- * Copies client files, injects a script to hide multiplayer UI,
+ * Build a zip for itch.io web hosting.
+ * Copies client files, stubs native-only modules,
  * and zips the result.
  *
  * Usage:
@@ -76,24 +76,8 @@ function cpDir(src, dest) {
 
 const ITCH_PATCH = `
 <script>
-// itch.io single-player build — disable multiplayer UI
+// itch.io build flag
 window.BRIMSTONE_ITCH = true;
-document.addEventListener('DOMContentLoaded', () => {
-  const hide = [
-    'btn-multiplayer',
-    'setup-step-multiplayer',
-    'setup-step-online',
-    'setup-step-async',
-    'setup-step-local-play',
-  ];
-  for (const id of hide) {
-    const el = document.getElementById(id);
-    if (el) el.style.display = 'none';
-  }
-  // Hide server selector
-  const ss = document.getElementById('server-selector');
-  if (ss) ss.style.display = 'none';
-});
 </script>
 `;
 
@@ -111,14 +95,15 @@ export const isNativeMobile = false;
 export const isDevMode = false;
 export function onInactiveChange() {}
 export async function tryGameCenterAuth() { return null; }
-export function refreshPushToken() {}
+export async function refreshPushToken() {}
+export async function unregisterPushToken() {}
 export async function loadGameCenterFriends() { return []; }
 export async function shareInvite() { return false; }
 export async function registerPushNotifications() {}
 `;
 fs.writeFileSync(path.join(TEMP, 'src', 'platform.js'), platformStub);
 
-// ── Stub out server-selector.js ─────────────────────────────────────────────
+// ── Stub out server-selector.js (dev-only feature, needs /api/environments) ─
 
 const selectorStub = `// Stub for itch.io build — no server selector
 export function initServerSelector() {}
@@ -129,6 +114,10 @@ fs.writeFileSync(path.join(TEMP, 'src', 'server-selector.js'), selectorStub);
 
 const notifStub = `// Stub for itch.io build
 export function requestNotificationPermission() {}
+export function notifyRoundReady() {}
+export function notifyWaitingOnYou() {}
+export function notifyDeadlineApproaching() {}
+export function notifyGameOver() {}
 `;
 const notifPath = path.join(TEMP, 'src', 'notifications.js');
 if (fs.existsSync(notifPath)) fs.writeFileSync(notifPath, notifStub);
