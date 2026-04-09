@@ -1080,6 +1080,8 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   font-size: 1rem;
   color: var(--day);
   letter-spacing: 0.1em;
+  position: relative;
+  cursor: pointer;
 }
 .actions-remaining .bonus { color: var(--green); font-size: 0.8rem; margin-left: 4px; }
 
@@ -3851,84 +3853,24 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 
 /* ── Phase start modal ────────────────────────────────────────────────── */
 
-#phase-modal {
+/* ── Budget breakdown popup (action pips click) ─────────────────────── */
+#budget-breakdown {
   display: none;
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.55);
-  align-items: center;
-  justify-content: center;
-  z-index: 88;
-}
-#phase-modal.visible { display: flex; }
-
-.phase-modal-card {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 1.4rem 2rem;
-  min-width: 260px;
-  max-width: 360px;
-  text-align: center;
-  box-shadow: 0 0 36px rgba(80, 40, 120, 0.45);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.phase-modal-icon {
-  font-size: 2.2rem;
-  line-height: 1.2;
-}
-
-.phase-modal-title {
-  font-size: 0.85rem;
-  font-weight: bold;
-  color: var(--text-bright);
-  letter-spacing: 0.06em;
-  margin-bottom: 0.2rem;
-}
-
-.phase-modal-effects {
-  font-size: 0.75rem;
-  color: var(--text-dim);
-  line-height: 1.55;
-}
-
-.phase-modal-budget {
+  padding: 0.6rem 0.9rem;
+  min-width: 180px;
+  max-width: 260px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  z-index: 95;
   font-size: 0.78rem;
   color: var(--text);
-  margin-top: 0.3rem;
-  padding: 0.35rem 0.8rem;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  width: 100%;
 }
-
-.action-pip-row {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.2rem;
-  margin-bottom: 0.15rem;
-}
-
-.action-pip {
-  color: var(--gold, #c8a84b);
-  font-size: 1rem;
-  line-height: 1;
-}
-
-#phase-modal-continue {
-  margin-top: 0.5rem;
-}
-
-/* Phase accent colours on the card border */
-#phase-modal.phase-dawn  .phase-modal-card { border-color: rgba(255,140,0,0.5); }
-#phase-modal.phase-day   .phase-modal-card { border-color: rgba(245,200,66,0.5); }
-#phase-modal.phase-dusk  .phase-modal-card { border-color: rgba(180,60,0,0.5); }
-#phase-modal.phase-night .phase-modal-card { border-color: rgba(123,79,187,0.5); }
+#budget-breakdown.visible { display: block; }
 
 /* ── Story modal (campaign narrative triggers) ──────────────────────── */
 
@@ -4053,6 +3995,14 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 .summary-node.hero-text  { color: var(--hero); }
 .summary-node.witch-text { color: var(--witch); }
+.summary-phase-effects {
+  text-align: center;
+  font-size: 0.72rem;
+  color: rgba(255,255,255,0.5);
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
 .summary-game-over {
   border-bottom: 1px solid rgba(255,255,255,0.15);
   margin-bottom: 0.6rem;

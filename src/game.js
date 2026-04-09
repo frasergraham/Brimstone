@@ -119,7 +119,7 @@ const PHASE_ICON = {
   [Phase.NIGHT]: '🌙',
 };
 
-export { PHASE_ICON };
+export { PHASE_ICON, phaseForRound };
 
 export class GameState {
   /**

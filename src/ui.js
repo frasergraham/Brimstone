@@ -2,7 +2,7 @@
 import { hexKey, hexToPixel, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType } from './tiles.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
-import { Phase, Player, PHASE_ICON, nodeController, countHeldNodes } from './game.js';
+import { Phase, Player, PHASE_ICON, phaseForRound, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
 import {
   ActionType, getValidActions, getVisibleEnemyHexes, getVisibleHeroHexes,
@@ -524,7 +524,7 @@ export class UIController {
    * @param {'hero'|'witch'} faction  Which faction the human controls.
    * @param {number} budget           Action budget for this round.
    */
-  enterPlanningMode(faction, budget, timeoutMs = 0, { showPhaseModal = true } = {}) {
+  enterPlanningMode(faction, budget, timeoutMs = 0) {
     console.log(`[ui] enterPlanningMode: faction=${faction} budget=${budget} timeoutMs=${timeoutMs}`);
     this._planMode         = true;
     this._planFaction      = faction;
@@ -602,7 +602,7 @@ export class UIController {
 
     // Show a dismissible phase-info modal so the player always knows current conditions.
     // Skip when re-entering planning after an inline replay (player already saw it this round).
-    if (showPhaseModal && !this.tutorialMode) this._showPhaseModal(faction, budget);
+    // Phase info is now shown in the merged resolution summary dialog
 
     // If attrition just increased, show a blocking popup after the toast settles.
     if (this.state.attritionChanged && this.state.attritionLevel > 0) {
@@ -2072,8 +2072,10 @@ export class UIController {
         el.innerHTML = `
           <span class="turn-faction player-${faction}">${glyph}</span>
           <span class="actions-label">Actions</span>
-          <div class="actions-remaining" title="Actions budget">${diamonds}</div>
+          <div class="actions-remaining" title="Tap for breakdown">${diamonds}</div>
         `;
+        const pipsEl = el.querySelector('.actions-remaining');
+        if (pipsEl) pipsEl.addEventListener('click', () => this._showBudgetBreakdown());
       }
       return;
     }
@@ -2629,95 +2631,88 @@ export class UIController {
     ], () => {});
   }
 
-  // ── Phase toast ──────────────────────────────────────────────────────────
+  // ── Budget breakdown popup ───────────────────────────────────────────────
 
-  _showPhaseModal(faction, budget) {
-    if (this.tutorialMode) return;
+  /** Show a small popup with the action budget breakdown (triggered by tapping action pips). */
+  _dismissBudgetBreakdown() {
+    const el = this._el('budget-breakdown');
+    if (el) el.classList.remove('visible');
+    if (this._budgetDismiss) {
+      document.removeEventListener('click', this._budgetDismiss, true);
+      this._budgetDismiss = null;
+    }
+  }
 
+  _showBudgetBreakdown() {
+    const el = this._el('budget-breakdown');
+    if (!el || !this._planMode) return;
+
+    // Toggle off
+    if (el.classList.contains('visible')) {
+      this._dismissBudgetBreakdown();
+      return;
+    }
+
+    // Reparent into the actions-remaining div so absolute positioning anchors correctly
+    const pipsEl = document.querySelector('.actions-remaining');
+    if (pipsEl && el.parentElement !== pipsEl) pipsEl.appendChild(el);
+
+    const faction = this._planFaction;
     const phase = this.state.phase;
-    const PHASE_INFO = {
-      dawn:  { icon: '🌅', label: 'Dawn',  lines: ['Hero gains +1 action · Attrition rises', 'Power Nodes scored · Tiles reset'] },
-      day:   { icon: '☀️',  label: 'Day',   lines: ['Build & fortify', 'Witch undead in the open suffer'] },
-      dusk:  { icon: '🌇', label: 'Dusk',  lines: ['Power Nodes scored · Seek shelter', 'Night approaches…'] },
-      night: { icon: '🌙', label: 'Night', lines: ['Witch +2 ATK · Raise undead', 'Survivors in the open suffer'] },
-    };
-    const info = PHASE_INFO[phase];
-    if (!info) return;
-
-    const el = this._el('phase-modal');
-    if (!el) return;
-
-    // Compute action breakdown for display
-    const actions  = budget ?? (faction === 'hero' ? this.state.heroActionsLeft : this.state.witchActionsLeft) ?? 0;
+    const phaseIcon = PHASE_ICON[phase] ?? '';
+    const phaseLabel = phase ? phase.charAt(0).toUpperCase() + phase.slice(1) : '';
+    const actions = this._planBudget ?? 0;
     const entities = this.state.entities;
     const inventory = this.state.inventory;
     const stash = faction === 'hero' ? inventory?.shared : inventory?.witch;
     const foodCount = stash?.food ?? 0;
 
-    // Build line-item rows: { label, value }
     const rows = [];
     if (faction === 'hero') {
-      const base = 3;
       const timeBonus     = (phase === 'day' || phase === 'dawn') ? 1 : 0;
       const survivorCount = entities.filter(e => e.alive && e.owner === 'hero' && e.type !== 'hero').length;
       const survivorBonus = Math.min(survivorCount, 5);
-      rows.push({ label: 'Base', value: base });
-      if (timeBonus)     rows.push({ label: `${info.icon} ${info.label} bonus`, value: timeBonus });
+      rows.push({ label: 'Base', value: 3 });
+      if (timeBonus)     rows.push({ label: `${phaseIcon} ${phaseLabel} bonus`, value: timeBonus });
       if (survivorBonus) rows.push({ label: `☺ Survivor${survivorBonus !== 1 ? 's' : ''} (${survivorCount})`, value: survivorBonus });
     } else {
-      const base = 3;
       const timeBonus = phase === 'night' ? 1 : 0;
       const unitCount = entities.filter(e => e.alive && e.owner === 'witch' && e.type !== 'witch').length;
       const unitBonus = Math.min(unitCount, 3);
-      rows.push({ label: 'Base', value: base });
-      if (timeBonus) rows.push({ label: `${info.icon} ${info.label} bonus`, value: timeBonus });
+      rows.push({ label: 'Base', value: 3 });
+      if (timeBonus) rows.push({ label: `${phaseIcon} ${phaseLabel} bonus`, value: timeBonus });
       if (unitBonus) rows.push({ label: `☠ Minion${unitBonus !== 1 ? 's' : ''} (${unitCount})`, value: unitBonus });
     }
-    // Power node bonus: +1 action per held node
     const nodeBonus = countHeldNodes(faction, this.state.witchObjectives ?? [], entities);
     if (nodeBonus) {
       rows.push({ label: `◆ Power Node${nodeBonus !== 1 ? 's' : ''} (${nodeBonus})`, value: nodeBonus });
     }
 
-    // Set content
-    const iconEl    = el.querySelector('.phase-modal-icon');
-    const titleEl   = el.querySelector('.phase-modal-title');
-    const effectsEl = el.querySelector('.phase-modal-effects');
-    const budgetEl  = el.querySelector('.phase-modal-budget');
-    if (iconEl)    iconEl.textContent   = info.icon;
-    if (titleEl)   titleEl.textContent  = `${info.label} — Round ${this.state.round}`;
-    if (effectsEl) effectsEl.innerHTML  = info.lines.map(l => `<div>${l}</div>`).join('');
-    if (budgetEl) {
-      const pips = Array.from({ length: actions }, () =>
-        `<span class="action-pip">◆</span>`
-      ).join('');
-
-      let breakdownHtml = '<div class="action-breakdown-table">';
-      for (const r of rows) {
-        breakdownHtml += `<div class="abkd-row"><span class="abkd-label">${r.label}</span><span class="abkd-val">+${r.value}</span></div>`;
-      }
-      breakdownHtml += `<hr class="abkd-divider">`;
-      breakdownHtml += `<div class="abkd-row abkd-total"><span class="abkd-label">Total</span><span class="abkd-val">${actions}</span></div>`;
-      if (foodCount > 0) {
-        breakdownHtml += `<div class="abkd-row abkd-food"><span class="abkd-label">🍞 Food ×${foodCount}</span><span class="abkd-val">(extra actions)</span></div>`;
-      }
-      breakdownHtml += '</div>';
-
-      budgetEl.innerHTML =
-        `<div class="action-pip-row">${pips}</div>` +
-        breakdownHtml;
+    let html = '<div class="action-breakdown-table">';
+    for (const r of rows) {
+      html += `<div class="abkd-row"><span class="abkd-label">${r.label}</span><span class="abkd-val">+${r.value}</span></div>`;
     }
+    html += `<hr class="abkd-divider">`;
+    html += `<div class="abkd-row abkd-total"><span class="abkd-label">Total</span><span class="abkd-val">${actions}</span></div>`;
+    if (foodCount > 0) {
+      html += `<div class="abkd-row abkd-food"><span class="abkd-label">🍞 Food ×${foodCount}</span><span class="abkd-val">(extra actions)</span></div>`;
+    }
+    html += '</div>';
+    el.innerHTML = html;
+    el.classList.add('visible');
 
-    // Set phase accent class
-    el.className = `visible phase-${phase}`;
-
-    // Dismiss only on button click — no auto-dismiss, no backdrop click
-    const continueBtn = this._el('phase-modal-continue');
-    const dismiss = () => {
-      el.classList.remove('visible');
-      continueBtn?.removeEventListener('click', dismiss);
+    // Dismiss on click outside (but not on the pips themselves — that's handled by toggle above)
+    this._budgetDismiss = (e) => {
+      // Ignore clicks on the pips trigger — the toggle handles those
+      if (pipsEl?.contains(e.target)) return;
+      this._dismissBudgetBreakdown();
     };
-    continueBtn?.addEventListener('click', dismiss);
+    // Use setTimeout so the current click event finishes before the listener activates
+    setTimeout(() => {
+      if (el.classList.contains('visible')) {
+        document.addEventListener('click', this._budgetDismiss, true);
+      }
+    }, 0);
   }
 
   /** Toggle visibility of the mission info header button. */
@@ -3492,11 +3487,28 @@ export class UIController {
             titleEl.textContent = winner === humanFaction ? 'Victory!' : 'Defeat';
           }
         } else {
-          titleEl.textContent = `Round ${roundNum ?? ''} complete`;
+          // Show the upcoming phase + round instead of "Round N complete"
+          const nextRound = (roundNum ?? 0) + 1;
+          const nextPhase = phaseForRound(nextRound);
+          const icon = PHASE_ICON[nextPhase] ?? '';
+          titleEl.textContent = `${icon} ${nextPhase.charAt(0).toUpperCase() + nextPhase.slice(1)} — Round ${nextRound}`;
         }
       }
       if (eventsEl) {
         let html = '';
+
+        // Phase effects line for the upcoming turn (non-game-over only)
+        if (!gameOver) {
+          const PHASE_EFFECTS = {
+            dawn:  'Hero gains +1 action · Power Nodes scored',
+            day:   'Build & fortify · Witch undead in the open suffer',
+            dusk:  'Power Nodes scored · Night approaches',
+            night: 'Witch +2 ATK · Survivors in the open suffer',
+          };
+          const nextPhase = phaseForRound((roundNum ?? 0) + 1);
+          const fx = PHASE_EFFECTS[nextPhase];
+          if (fx) html += `<div class="summary-phase-effects">${fx}</div>`;
+        }
 
         // Game-over: insert win reason at the TOP so it's immediately visible
         if (gameOver && winReason) {
@@ -3701,7 +3713,7 @@ export class UIController {
         actionsEl.appendChild(gameOverBtns);
       } else if (nextBtn) {
         nextBtn.style.display = '';
-        nextBtn.textContent   = 'Next Turn →';
+        nextBtn.textContent   = 'Plan Turn →';
       }
 
       el.classList.add('visible');
