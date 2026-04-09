@@ -22,7 +22,8 @@ import { pruneStaleAndIncompatibleSaves,
          getCompletedGames, getCompletedGame, getCompletedGameRounds,
          pinCompletedGame, deleteCompletedGame,
          pruneExpiredCompletedGames, getAllCompletedGames,
-         getSaveRounds, getCompletedBattles }              from './server/saves.js';
+         getSaveRounds, getCompletedBattles,
+         getCompletedBattlesForPlayer }                    from './server/saves.js';
 import {
   createLobby, joinLobby, joinGame, browseLobby, claimSlot,
   setSlotAI, removeSlotAI, fillAllWithAI, startGame, leaveLobby, resignGame,
@@ -133,7 +134,7 @@ app.get('/api/battle-status', (req, res) => {
   res.json(getBattleStatus(playerId));
 });
 
-// REST: Past battle replays
+// REST: Past battle replays — only shows battles the requesting player participated in
 app.get('/api/battle-history', (req, res) => {
   try {
     let playerId = null;
@@ -144,10 +145,11 @@ app.get('/api/battle-history', (req, res) => {
         if (row) playerId = row.id;
       } catch { /* ignore */ }
     }
-    const battles = getCompletedBattles(20);
-    // Annotate each battle with the requesting player's faction (if they participated)
+    if (!playerId) { res.json([]); return; }
+    const battles = getCompletedBattlesForPlayer(playerId, 20);
+    // Annotate each battle with the requesting player's faction
     for (const b of battles) {
-      if (playerId && b.players_json) {
+      if (b.players_json) {
         try {
           const players = JSON.parse(b.players_json);
           const me = players.find(p => p.playerId === playerId);
@@ -688,14 +690,17 @@ app.get('/admin/api/battle', (req, res) => {
   if (!_requireAdmin(req, res)) return;
   const status = getBattleStatus();
   if (!status) { res.json(null); return; }
-  // Enrich with full player list
-  const room = getRoom(status.roomId);
-  const players = room ? room.players.map(s => ({
-    playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI,
-    connected: !!(s.ws?.readyState === 1),
-    submitted: !!room.state?.playerReady?.get(s.playerId),
-  })) : [];
-  res.json({ ...status, planningPhase: !!room?.state?.planningPhase, players });
+  // Enrich each battle summary with full player list
+  const enriched = status.battles.map(b => {
+    const room = getRoom(b.roomId);
+    const players = room ? room.players.map(s => ({
+      playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI,
+      connected: !!(s.ws?.readyState === 1),
+      submitted: !!room.state?.playerReady?.get(s.playerId),
+    })) : [];
+    return { ...b, planningPhase: !!room?.state?.planningPhase, players };
+  });
+  res.json({ ...status, battles: enriched });
 });
 
 app.post('/admin/api/battle/end', (req, res) => {
