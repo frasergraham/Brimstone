@@ -1694,7 +1694,7 @@ function initOnline(mirrorState, myFaction, mpClient) {
     const budget = (mpClient.myFaction === 'hero' ? state.heroActionsLeft : state.witchActionsLeft) || 3;
     ui.enterPlanningMode(mpClient.myFaction, budget, 0);
     ui.onPlanSubmit = (plan) => mpClient.submitPlan(plan);
-    ui.onReturnToMenu = () => _showOnlineScreen();
+    ui.onReturnToMenu = () => { location.reload(); };
     ui.onReplayLastTurn = () => _replayLastTurnInline();
   }
 
@@ -1734,7 +1734,6 @@ const stepSinglePlayer = document.getElementById('setup-step-singleplayer');
 const stepCampaignSelect = document.getElementById('setup-step-campaign-select');
 const stepCampaign     = document.getElementById('setup-step-campaign');
 const stepDebrief      = document.getElementById('setup-step-debrief');
-const stepMultiplayer  = document.getElementById('setup-step-multiplayer');
 const stepBattle       = document.getElementById('setup-step-battle');
 const stepOnline       = document.getElementById('setup-step-online');
 const stepAsync        = document.getElementById('setup-step-async');
@@ -1758,7 +1757,6 @@ function showStep(step) {
   stepCampaignSelect.style.display = step === 'campaign-select' ? '' : 'none';
   stepCampaign      .style.display = step === 'campaign'        ? '' : 'none';
   stepDebrief       .style.display = step === 'debrief'         ? '' : 'none';
-  stepMultiplayer   .style.display = step === 'multiplayer'     ? '' : 'none';
   if (stepBattle) stepBattle.style.display = step === 'battle' ? '' : 'none';
   stepOnline        .style.display = step === 'online'          ? '' : 'none';
   stepAsync         .style.display = step === 'async'           ? '' : 'none';
@@ -1779,7 +1777,7 @@ function showStep(step) {
   const _stepEl = {
     'mode': stepMode, 'sp-choice': stepSpChoice, 'singleplayer': stepSinglePlayer,
     'campaign-select': stepCampaignSelect, 'campaign': stepCampaign, 'debrief': stepDebrief,
-    'multiplayer': stepMultiplayer, 'online': stepOnline, 'async': stepAsync,
+    'online': stepOnline, 'async': stepAsync,
     'local-play': stepLocalPlay, 'howtoplay': stepHowto, 'options': stepOptions,
     'changelog': stepChangelog, 'account': stepAccount, 'waiting': stepWaiting,
     'create-game': stepCreateGame, 'join-game': stepJoinGame, 'lobby': stepLobby,
@@ -1798,7 +1796,7 @@ document.getElementById('btn-single-player').addEventListener('click', () => sho
 document.getElementById('btn-quick-play')    .addEventListener('click', () => _showSinglePlayerScreen());
 document.getElementById('btn-story-mode')    .addEventListener('click', () => _showCampaignSelectScreen());
 document.getElementById('btn-sp-choice-back').addEventListener('click', () => showStep('mode'));
-document.getElementById('btn-multiplayer')  .addEventListener('click', () => showStep('multiplayer'));
+document.getElementById('btn-multiplayer')  .addEventListener('click', () => _showOnlineScreen());
 document.getElementById('btn-how-to-play')  .addEventListener('click', () => showStep('howtoplay'));
 
 // "Play the Tutorial" button in How to Play navigates to Story Mode → Prologue
@@ -4586,11 +4584,8 @@ document.getElementById('btn-battle-signin')?.addEventListener('click', () => {
   showStep('account');
 });
 
-document.getElementById('btn-mp-online')?.addEventListener('click', () => _showOnlineScreen());
-document.getElementById('btn-mp-local')?.addEventListener('click', () => showStep('local-play'));
-document.getElementById('btn-multiplayer-back')?.addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-battle-main')?.addEventListener('click', () => _showBattleScreen());
-document.getElementById('btn-battle-back')?.addEventListener('click', () => showStep('multiplayer'));
+document.getElementById('btn-battle-back')?.addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-battle-join')?.addEventListener('click', function() {
   const roomId = this.dataset.roomId;
   if (!roomId) return;
@@ -4614,7 +4609,7 @@ document.getElementById('btn-battle-spectate')?.addEventListener('click', functi
 document.getElementById('btn-online-back').addEventListener('click', () => {
   if (mp) { mp.disconnect(); mp = null; }
   renderer = null; ui = null; state = null;
-  showStep('multiplayer');
+  showStep('mode');
   _updateMultiplayerBadge();
 });
 document.getElementById('btn-async-back')?.addEventListener('click', () => {
@@ -5816,7 +5811,7 @@ async function _applyOnlinePlanningPhase(payload) {
     ui.enterPlanningMode(mp.myFaction, budget, timeoutMs ?? 0);
   }
   ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
-  ui.onReturnToMenu = () => _showOnlineScreen();
+  ui.onReturnToMenu = () => { location.reload(); };
   ui.onReplayLastTurn = () => _replayLastTurnInline();
 
   // Restore submitted plan on reconnect — show what was already submitted
@@ -5858,7 +5853,7 @@ async function _replayLastTurnInline() {
   ui._hasReplayHistory = _onlineRoundHistory.length > 0;
   ui.enterPlanningMode(mp.myFaction, budget, 0, { showPhaseModal: false });
   ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
-  ui.onReturnToMenu = () => _showOnlineScreen();
+  ui.onReturnToMenu = () => { location.reload(); };
   ui.onReplayLastTurn = () => _replayLastTurnInline();
 
   // Restore the plan
