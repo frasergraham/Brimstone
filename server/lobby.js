@@ -3345,6 +3345,16 @@ export function getBattleStatus(playerId = null) {
     endsAt:      state.battleConfig?.endsAt ?? 0,
     isFull:      room.players.filter(s => s.faction === 'hero').length >= (state.battleConfig?.maxPlayersPerSide ?? 10)
               && room.players.filter(s => s.faction === 'witch').length >= (state.battleConfig?.maxPlayersPerSide ?? 10),
+    // Player list with submission status
+    players: room.players.map(s => ({
+      playerId:  s.playerId,
+      name:      s.name,
+      faction:   s.faction,
+      isAI:      s.isAI,
+      submitted: !!state.playerReady?.get(s.playerId),
+      connected: s.isAI || !!(s.ws?.readyState === 1),
+      active:    s.isAI || !!(s.ws?.readyState === 1 && !s.ws._inactive),
+    })),
     // Player-specific fields
     joined:      !!seat,
     myFaction:   seat?.faction ?? null,

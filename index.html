@@ -336,26 +336,32 @@
 
       <!-- Battle status (signed in) -->
       <div id="battle-info" style="text-align:center;margin-bottom:0.75rem;display:none">
-        <div id="battle-status-line" style="color:var(--muted);font-size:0.85rem">Loading...</div>
+        <div id="battle-status-line" style="color:var(--text-dim);font-size:0.85rem">Loading...</div>
 
-        <!-- Your status box (when joined) -->
-        <div id="battle-my-status" style="display:none;margin:0.5rem auto;padding:0.4rem 0.75rem;border:1px solid var(--muted);border-radius:6px;max-width:280px;font-size:0.8rem">
-          <div id="battle-my-deadline" style="color:var(--muted)"></div>
-          <div id="battle-my-plan-status" style="margin-top:0.15rem"></div>
+        <!-- Your status (when joined) -->
+        <div id="battle-my-status" class="battle-box" style="display:none">
+          <div class="battle-label">Your Status</div>
+          <div id="battle-my-faction" style="font-size:0.9rem;margin-bottom:0.2rem"></div>
+          <div id="battle-my-plan-status" style="font-size:0.82rem"></div>
+          <div id="battle-my-deadline" style="font-size:0.78rem;color:var(--text-dim);margin-top:0.15rem"></div>
         </div>
 
-        <!-- Score display -->
-        <div id="battle-score-line" style="margin-top:0.5rem;display:none">
-          <div style="font-size:0.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:0.15rem">Current Score</div>
-          <span style="color:var(--hero);font-size:1.2rem">Heroes <strong id="battle-hero-score" style="font-size:1.5rem">0</strong></span>
-          <span style="margin:0 0.75rem;color:var(--muted);font-size:0.9rem">vs</span>
-          <span style="color:var(--witch);font-size:1.2rem"><strong id="battle-witch-score" style="font-size:1.5rem">0</strong> Witches</span>
+        <!-- Game info -->
+        <div id="battle-game-info" class="battle-box" style="display:none">
+          <div class="battle-label">Current Score</div>
+          <div class="battle-menu-score">
+            <span class="hero">⚔ <strong id="battle-hero-score">0</strong></span>
+            <span class="sep">—</span>
+            <span class="witch"><strong id="battle-witch-score">0</strong> ✦</span>
+          </div>
+          <div class="battle-meta" id="battle-meta-line"></div>
         </div>
 
-        <!-- Time remaining + player counts + round -->
-        <div id="battle-countdown-line" style="font-size:0.9rem;color:var(--muted);margin-top:0.5rem;display:none"></div>
-        <div id="battle-players-line" style="font-size:0.8rem;color:var(--muted);margin-top:0.35rem;display:none"></div>
-        <div id="battle-round-line" style="font-size:0.8rem;color:var(--muted);margin-top:0.15rem;display:none"></div>
+        <!-- Players (collapsible, default open) -->
+        <details class="qp-advanced" id="battle-players-section" style="display:none;max-width:320px" open>
+          <summary class="qp-advanced-summary">Players</summary>
+          <div id="battle-players-list" style="margin-top:0.4rem;text-align:left"></div>
+        </details>
       </div>
 
       <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.5rem">
@@ -364,19 +370,19 @@
         <button id="btn-battle-back"     class="setup-btn"         style="width:220px">← Back</button>
       </div>
 
-      <!-- Past battles -->
-      <div id="battle-history" style="display:none;margin-top:1rem">
-        <h3 style="font-size:0.9rem;color:var(--muted);margin-bottom:0.5rem;text-align:center">Past Battles</h3>
-        <table id="battle-history-table" style="width:100%;font-size:0.8rem;border-collapse:collapse">
-          <thead><tr style="color:var(--muted);border-bottom:1px solid var(--muted)">
-            <th style="text-align:left;padding:0.25rem">Date</th>
-            <th style="text-align:left;padding:0.25rem">Result</th>
-            <th style="text-align:right;padding:0.25rem">Rounds</th>
-            <th style="padding:0.25rem"></th>
+      <!-- Past battles (collapsible, default closed) -->
+      <details class="qp-advanced" id="battle-history" style="display:none;margin-top:0.75rem;max-width:340px">
+        <summary class="qp-advanced-summary">Past Battles</summary>
+        <table style="width:100%;font-size:0.78rem;border-collapse:collapse;margin-top:0.4rem">
+          <thead><tr style="color:var(--text-dim);border-bottom:1px solid var(--border)">
+            <th style="text-align:left;padding:0.3rem">Date</th>
+            <th style="text-align:left;padding:0.3rem">Result</th>
+            <th style="text-align:right;padding:0.3rem">Rounds</th>
+            <th style="padding:0.3rem"></th>
           </tr></thead>
           <tbody id="battle-history-body"></tbody>
         </table>
-      </div>
+      </details>
     </div>
 
     <!-- ── Online Multiplayer ─────────────────────────────────────── -->

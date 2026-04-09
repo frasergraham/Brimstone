@@ -18,6 +18,7 @@ import {
   checkEmailTokenInUrl, requestLinkEmail, requestEmailLogin, fetchIdentities,
 } from './multiplayer.js';
 import { VERSION, BUILD_VERSION } from './version.js';
+import { buildPlayerStatusHtml } from './ui-render.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType, groupPlanByEntity } from './planner.js';
 import { hexDistance, getNeighbors } from './hex.js';
@@ -4478,24 +4479,19 @@ function _formatTimeRemaining(unixSeconds) {
 async function _showBattleScreen() {
   showStep('battle');
 
-  const session      = loadSession();
-  const signedOut    = document.getElementById('battle-signed-out');
-  const battleInfo   = document.getElementById('battle-info');
-  const statusLine   = document.getElementById('battle-status-line');
-  const scoreLine    = document.getElementById('battle-score-line');
-  const countdownLine = document.getElementById('battle-countdown-line');
-  const playersLine  = document.getElementById('battle-players-line');
-  const roundLine    = document.getElementById('battle-round-line');
-  const joinBtn      = document.getElementById('btn-battle-join');
-  const spectateBtn  = document.getElementById('btn-battle-spectate');
+  const session    = loadSession();
+  const signedOut  = document.getElementById('battle-signed-out');
+  const battleInfo = document.getElementById('battle-info');
+  const statusLine = document.getElementById('battle-status-line');
+  const joinBtn    = document.getElementById('btn-battle-join');
+  const spectateBtn = document.getElementById('btn-battle-spectate');
 
-  // Reset all dynamic elements
+  // Reset dynamic elements
   joinBtn.style.display = 'none';
   spectateBtn.style.display = 'none';
-  scoreLine.style.display = 'none';
-  countdownLine.style.display = 'none';
-  playersLine.style.display = 'none';
-  roundLine.style.display = 'none';
+  document.getElementById('battle-my-status').style.display = 'none';
+  document.getElementById('battle-game-info').style.display = 'none';
+  document.getElementById('battle-players-section').style.display = 'none';
 
   if (!session) {
     signedOut.style.display = '';
@@ -4519,66 +4515,83 @@ async function _showBattleScreen() {
       return;
     }
 
-    // Score
-    scoreLine.style.display = '';
+    // Game info box
+    const gameInfo = document.getElementById('battle-game-info');
+    gameInfo.style.display = '';
     document.getElementById('battle-hero-score').textContent = status.heroScore;
     document.getElementById('battle-witch-score').textContent = status.witchScore;
-
-    // Countdown
-    countdownLine.style.display = '';
-    countdownLine.textContent = 'Ends in ' + _formatTimeRemaining(status.endsAt);
-
-    // Player counts (correct pluralization)
-    playersLine.style.display = '';
     const hLabel = status.heroCount === 1 ? 'hero' : 'heroes';
     const wLabel = status.witchCount === 1 ? 'witch' : 'witches';
-    playersLine.textContent = `${status.heroCount} ${hLabel} vs ${status.witchCount} ${wLabel}`;
+    document.getElementById('battle-meta-line').textContent =
+      `Round ${status.round} · ${status.heroCount} ${hLabel} vs ${status.witchCount} ${wLabel} · Ends in ${_formatTimeRemaining(status.endsAt)}`;
 
-    // Round info
-    roundLine.style.display = '';
-    roundLine.textContent = `Round ${status.round}`;
-
-    // Action buttons + status line
+    // Action buttons
     joinBtn.dataset.roomId = status.roomId;
     spectateBtn.dataset.roomId = status.roomId;
 
-    const myStatusBox = document.getElementById('battle-my-status');
-
     if (status.joined) {
-      statusLine.textContent = `You are fighting as ${status.myFaction === 'hero' ? 'Hero' : 'Witch'}`;
+      statusLine.textContent = '';
+
+      // Your status box
+      const myBox = document.getElementById('battle-my-status');
+      myBox.style.display = '';
+      const fIcon = status.myFaction === 'hero' ? '⚔' : '✦';
+      const fName = status.myFaction === 'hero' ? 'Hero' : 'Witch';
+      document.getElementById('battle-my-faction').innerHTML =
+        `<span style="color:var(--${status.myFaction})">${fIcon} Fighting as ${fName}</span>`;
+      if (status.mySubmitted) {
+        document.getElementById('battle-my-plan-status').innerHTML =
+          '<span style="color:var(--green)">✓ Plan submitted</span>';
+      } else {
+        document.getElementById('battle-my-plan-status').innerHTML =
+          '<span style="color:var(--day)">⚠ Plan not yet submitted</span>';
+      }
+      if (status.turnDeadline) {
+        document.getElementById('battle-my-deadline').textContent =
+          '⏱ Deadline in ' + _formatTimeRemaining(status.turnDeadline);
+      }
+
       joinBtn.style.display = '';
       joinBtn.textContent = 'Return to Battle';
 
-      // Show your status box with deadline and plan status
-      myStatusBox.style.display = '';
-      const deadlineEl = document.getElementById('battle-my-deadline');
-      const planEl     = document.getElementById('battle-my-plan-status');
-      if (status.turnDeadline) {
-        deadlineEl.textContent = 'Next deadline: ' + _formatTimeRemaining(status.turnDeadline);
-      } else {
-        deadlineEl.textContent = '';
+      // Player list (collapsible)
+      const playersSection = document.getElementById('battle-players-section');
+      if (status.players?.length > 0) {
+        playersSection.style.display = '';
+        const playerData = status.players.map(p => ({
+          playerId: p.playerId, name: p.name, faction: p.faction,
+          isAI: p.isAI, _submitted: p.submitted,
+          connected: p.connected, active: p.active,
+        }));
+        const myPlayerId = mp?.myPlayerId ?? session?.id ?? null;
+        const nudgeCtx = myPlayerId ? { myPlayerId, nudgedSet: new Set() } : undefined;
+        document.getElementById('battle-players-list').innerHTML = buildPlayerStatusHtml(playerData, nudgeCtx);
+
+        // Wire nudge buttons
+        document.getElementById('battle-players-list').addEventListener('click', (e) => {
+          const btn = e.target.closest('.nudge-btn[data-nudge-id]');
+          if (!btn || btn.disabled) return;
+          const targetId = btn.dataset.nudgeId;
+          if (mp?.connected) {
+            mp.sendNudge(targetId);
+            btn.disabled = true;
+            btn.classList.add('nudge-sent');
+          }
+        });
       }
-      if (status.mySubmitted) {
-        planEl.innerHTML = '<span style="color:var(--hero)">Plan submitted for this round</span>';
-      } else {
-        planEl.innerHTML = '<span style="color:#e0c030">Plan not yet submitted</span>';
-      }
+    } else if (status.isFull) {
+      statusLine.textContent = 'Battle is full';
+      spectateBtn.style.display = '';
     } else {
-      myStatusBox.style.display = 'none';
-      if (status.isFull) {
-        statusLine.textContent = 'Battle is full';
-        spectateBtn.style.display = '';
-      } else {
-        statusLine.textContent = 'Battle in progress';
-        joinBtn.style.display = '';
-        joinBtn.textContent = 'Join the Battle';
-      }
+      statusLine.textContent = 'Battle in progress — join a faction!';
+      joinBtn.style.display = '';
+      joinBtn.textContent = 'Join the Battle';
     }
   } catch (err) {
     statusLine.textContent = 'Could not load battle status.';
   }
 
-  // Update the main menu badge — yellow if you need to submit a turn
+  // Update main menu badge
   const badge = document.getElementById('battle-badge');
   if (badge) {
     if (_battleStatus?.joined && !_battleStatus.mySubmitted) {
@@ -4589,7 +4602,7 @@ async function _showBattleScreen() {
     }
   }
 
-  // Fetch past battle replays
+  // Past battles (collapsible table, default closed)
   try {
     const historyEl = document.getElementById('battle-history');
     const bodyEl    = document.getElementById('battle-history-body');
@@ -4599,27 +4612,22 @@ async function _showBattleScreen() {
       historyEl.style.display = '';
       bodyEl.innerHTML = battles.map(b => {
         const date = new Date(b.created_at * 1000).toLocaleDateString();
-        let result;
-        if (b.winner === 'draw') {
-          result = 'Draw';
-        } else {
-          const winnerLabel = b.winner === 'hero' ? 'Heroes' : 'Witches';
-          result = `${winnerLabel} won`;
-        }
-        // Check if the current player was on the winning side
-        let myResult = '';
+        const result = b.winner === 'draw' ? 'Draw'
+          : (b.winner === 'hero' ? 'Heroes won' : 'Witches won');
+        // Color-code rows based on player's faction
+        let rowClass = '';
         if (b._myFaction) {
-          if (b.winner === 'draw') myResult = '';
-          else if (b.winner === b._myFaction) myResult = ' <span style="color:var(--hero)">Victory</span>';
-          else myResult = ' <span style="color:var(--muted)">Defeat</span>';
+          if (b.winner !== 'draw') {
+            rowClass = b.winner === b._myFaction ? 'battle-history-win' : 'battle-history-loss';
+          }
         }
-        return `<tr style="border-bottom:1px solid rgba(255,255,255,0.05)">
-          <td style="padding:0.25rem">${date}</td>
-          <td style="padding:0.25rem">${result}${myResult}</td>
-          <td style="padding:0.25rem;text-align:right">${b.total_rounds}</td>
-          <td style="padding:0.25rem;text-align:right">
+        return `<tr class="${rowClass}" style="border-bottom:1px solid rgba(255,255,255,0.04)">
+          <td style="padding:0.3rem">${date}</td>
+          <td style="padding:0.3rem">${result}</td>
+          <td style="padding:0.3rem;text-align:right">${b.total_rounds}</td>
+          <td style="padding:0.3rem;text-align:right">
             <a href="/replay?replayGame=${encodeURIComponent(b.game_id)}&source=mp" target="_blank"
-               style="color:var(--accent);text-decoration:none;font-size:0.75rem">Replay</a>
+               class="setup-btn" style="padding:0.15rem 0.5rem;font-size:0.7rem">Replay</a>
           </td>
         </tr>`;
       }).join('');

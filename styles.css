@@ -779,6 +779,38 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .score-num.hero  { color: var(--hero); }
 .score-num.witch { color: var(--witch); }
 
+/* Battle menu screen */
+.battle-box {
+  background: var(--bg-section);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin: 0.5rem auto;
+  max-width: 320px;
+  text-align: center;
+}
+.battle-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin-bottom: 0.25rem;
+}
+.battle-menu-score {
+  font-size: 1.3rem;
+  margin: 0.25rem 0;
+}
+.battle-menu-score .hero { color: var(--hero); }
+.battle-menu-score .witch { color: var(--witch); }
+.battle-menu-score .sep { color: var(--text-dim); margin: 0 0.5rem; font-size: 0.9rem; }
+.battle-meta {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  margin-top: 0.35rem;
+}
+.battle-history-win  { background: rgba(76,175,125,0.08); }
+.battle-history-loss { background: rgba(192,57,43,0.08); }
+
 /* Battle mode: in-game countdown */
 #battle-countdown {
   text-align: center;
