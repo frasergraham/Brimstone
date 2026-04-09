@@ -983,8 +983,61 @@ function _executeResolution(room) {
  * If so, replace them with AI and notify all players.
  */
 function _checkTimeoutTakeovers(room) {
-  // Battle mode: no AI takeover — players who miss deadlines just do nothing
-  if (room.config.isBattle) return;
+  if (room.config.isBattle) {
+    // Battle mode: kick players who miss 2 consecutive deadlines.
+    // Same as resign — scatter units, free the slot, they can rejoin later.
+    for (const seat of [...room.players]) {
+      if (seat.isAI) continue;
+      const count = room.consecutiveTimeouts[seat.playerId] || 0;
+      if (count < 2) continue;
+
+      const playerName = seat.name;
+      const playerId   = seat.playerId;
+      const faction    = seat.faction;
+      console.log(`[battle] ${playerName} (${playerId}) — ${count} consecutive timeouts — kicked from battle.`);
+
+      // Scatter units (survivors to buildings, summons vanish)
+      room.state.scatterPlayerUnits(playerId);
+
+      // Remove leader entity
+      room.state.entities = room.state.entities.filter(
+        e => e.ownerId !== playerId || (e.type !== 'hero' && e.type !== 'witch')
+      );
+
+      // Remove from state.players and room.players
+      room.state.players = room.state.players.filter(p => p.id !== playerId);
+      room.players = room.players.filter(s => s.playerId !== playerId);
+
+      room.state.addLog(`💨 ${playerName} was removed from the battle for inactivity.`);
+      _appendChronicle(room, {
+        round: room.state.round, phase: room.state.phase,
+        event: 'playerKicked', playerName, faction, timestamp: Date.now(),
+      });
+
+      // Notify remaining players
+      const msg = { type: 'playerResigned', playerId, playerName };
+      broadcast(room, msg);
+      broadcastToSpectators(room, msg);
+
+      // Notify the kicked player
+      send(seat.ws, { type: 'resigned', roomId: room.id, kicked: true });
+
+      // Push notification
+      try {
+        sendPush(playerId, {
+          title: 'Removed from the Battle',
+          body: 'You were removed for missing 2 consecutive deadlines. You can rejoin anytime.',
+          roomId: room.id,
+        }).catch(() => {});
+      } catch { /* ignore */ }
+
+      delete room.consecutiveTimeouts[playerId];
+    }
+    _broadcastPresence(room);
+    return;
+  }
+
+  // Standard games: AI takeover after 2 consecutive timeouts
   for (const seat of [...room.players]) {
     if (seat.isAI) continue;
     const count = room.consecutiveTimeouts[seat.playerId] || 0;
