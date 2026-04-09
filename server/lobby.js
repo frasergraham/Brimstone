@@ -3043,6 +3043,17 @@ export function joinBattle(playerId, playerName, ws, roomId) {
       _startPlanningPhase(room);
     }
 
+    // Collect replay history for the "replay last turn" button.
+    let priorRounds = room.replayRounds ?? [];
+    if (priorRounds.length === 0) {
+      try {
+        const dbRounds = getSaveRounds(room.id);
+        priorRounds = dbRounds.map(r => ({
+          roundNum: r.round_num, preStateJson: r.pre_state_json, stepsJson: r.steps_json,
+        }));
+      } catch { /* ignore */ }
+    }
+
     // Use matchFound — the reliable game-entry path.
     send(ws, {
       type:       'matchFound',
@@ -3053,6 +3064,8 @@ export function joinBattle(playerId, playerName, ws, roomId) {
       aiOpponent: false,
       isAsync:    true,
       isBattle:   true,
+      resumed:    true,
+      priorRounds,
     });
     send(ws, { type: 'stateUpdate', reason: 'battleReconnect', state: serializeState(room.state) });
 
