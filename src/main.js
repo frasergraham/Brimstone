@@ -5816,7 +5816,9 @@ async function _applyOnlinePlanningPhase(payload) {
   ui.onReplayLastTurn = () => _replayLastTurnInline();
 
   // Restore submitted plan on reconnect — show what was already submitted
-  if (submittedPlan && submittedPlan.length > 0) {
+  if (submittedPlan != null) {
+    // Restore the submitted plan actions (if any) and mark as submitted.
+    // An empty plan (submittedPlan = []) is still a valid submission.
     for (const action of submittedPlan) {
       if (action.entityId) {
         if (!ui._unitPlans.has(action.entityId)) ui._unitPlans.set(action.entityId, []);
@@ -6211,7 +6213,7 @@ function _createMpClient() {
     },
 
     onPlanningPhase(payload) {
-      console.log(`[mp] onPlanningPhase: budget=${payload.myActionsLeft} timeout=${payload.timeoutMs} hasSubmittedPlan=${!!(payload.submittedPlan?.length)} inGame=${isInGame()} hasUI=${!!ui} mode=${getMode()}`);
+      console.log(`[mp] onPlanningPhase: budget=${payload.myActionsLeft} timeout=${payload.timeoutMs} submittedPlan=${payload.submittedPlan != null ? payload.submittedPlan.length + ' actions' : 'null'} inGame=${isInGame()} hasUI=${!!ui} mode=${getMode()}`);
       if (!isInGame() || !ui || !mp) return;
       if (shouldBufferMessages()) {
         console.log(`[mp] onPlanningPhase → buffered (mode=${getMode()})`);
