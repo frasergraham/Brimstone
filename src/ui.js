@@ -534,6 +534,10 @@ export class UIController {
     if (this._stateRecoveryTimer) { clearTimeout(this._stateRecoveryTimer); this._stateRecoveryTimer = null; }
     this._planSubmitted    = false;
 
+    // Clear stale waiting status text from previous round/session
+    const statusEl = this._el('plan-status');
+    if (statusEl) statusEl.textContent = '';
+
     // Reset footer buttons
     const submitBtn = this._el('plan-submit-btn');
     if (submitBtn) submitBtn.style.display = '';

@@ -633,7 +633,14 @@ function _startPlanningPhase(room, keepDeadline = false) {
 
   broadcastState(room, 'planningPhase');
 
-  const timeoutMs = room.config.turnIntervalMs ?? TURN_TIMEOUT_MS;
+  // Compute actual remaining time for the client countdown.
+  // For battle rooms this is time until the wall-clock deadline (noon/midnight),
+  // not the config interval.
+  let timeoutMs = room.config.turnIntervalMs ?? TURN_TIMEOUT_MS;
+  if (room.turnDeadline) {
+    const remaining = room.turnDeadline - Math.floor(Date.now() / 1000);
+    if (remaining > 0) timeoutMs = remaining * 1000;
+  }
 
   // Send planning-phase message to each player individually so each gets their own budget
   for (const seat of room.players) {
