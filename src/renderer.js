@@ -150,6 +150,9 @@ export class Renderer {
     // Death burst animations: [{col, row, color, startTime, duration}]
     this._deathAnims = [];
 
+    // Fade-out animations for killed entities: Map<entityId, {startTime, duration}>
+    this._fadeOutAnims = new Map();
+
     // Move animations: sliding entity icons
     this._moveAnims = [];
 
@@ -439,6 +442,20 @@ export class Renderer {
     this._startAnimLoop();
   }
 
+  /** Fade out a killed entity's sprite over the given duration. */
+  addFadeOutAnim(entityId, duration = 600) {
+    this._fadeOutAnims.set(entityId, { startTime: Date.now(), duration });
+    this._startAnimLoop();
+  }
+
+  /** Returns current opacity for an entity (1.0 if not fading, 0.0 when fully faded). */
+  getFadeOutOpacity(entityId) {
+    const anim = this._fadeOutAnims.get(entityId);
+    if (!anim) return 1;
+    const t = (Date.now() - anim.startTime) / anim.duration;
+    return Math.max(0, 1 - t);
+  }
+
   /** Pulsing glow animation on a node cluster — used when a power node is first revealed. */
   addNodeRevealAnim(hexes, color, { radiusMultiplier = 2, duration = 2000 } = {}) {
     this._nodeRevealAnims.push({
@@ -522,6 +539,7 @@ export class Renderer {
     this._moveAnims              = [];
     this._flashes                = [];
     this._deathAnims             = [];
+    this._fadeOutAnims           = new Map();
     this._lungeAnims             = [];
     this._battleCombatantHexes   = [];
     this._battleAllyHexes        = [];
@@ -584,6 +602,7 @@ export class Renderer {
       const alive = this._moveAnims.some(a => now < a.startTime + a.duration)
                  || this._flashes.some(f => now < f.endTime)
                  || this._deathAnims.some(a => now < a.startTime + a.duration)
+                 || [...this._fadeOutAnims.values()].some(a => now < a.startTime + a.duration)
                  || this._lungeAnims.some(a => !a.settled || a.returning)
                  || this._nodeRevealAnims.some(a => now < a.startTime + a.duration)
                  || !!this._zoomAnim;
@@ -609,6 +628,7 @@ export class Renderer {
         const alive = this._moveAnims.some(a => now < a.startTime + a.duration)
                    || this._flashes.some(f => now < f.endTime)
                    || this._deathAnims.some(a => now < a.startTime + a.duration)
+                   || [...this._fadeOutAnims.values()].some(a => now < a.startTime + a.duration)
                    || this._lungeAnims.some(a => !a.settled || a.returning)
                    || this._nodeRevealAnims.some(a => now < a.startTime + a.duration)
                    || !!this._zoomAnim;
@@ -1934,6 +1954,12 @@ export class Renderer {
       const ex = x + offsets.x * (hs / 30);
       const ey = y + offsets.y * (hs / 30);
 
+      // Apply fade-out opacity for dying entities
+      const fadeOpacity = this.getFadeOutOpacity(entity.id);
+      if (fadeOpacity <= 0) continue; // fully faded — skip drawing
+      const fading = fadeOpacity < 1;
+      if (fading) { ctx.save(); ctx.globalAlpha = fadeOpacity; }
+
       // Drop shadow — offset slightly for lift effect
       ctx.beginPath();
       ctx.arc(ex + 2, ey + 2, r, 0, Math.PI * 2);
@@ -2061,6 +2087,8 @@ export class Renderer {
         ctx.textBaseline = 'middle';
         ctx.fillText(String(entity.guarding), bx, by + 0.5);
       }
+
+      if (fading) ctx.restore();
     }
 
     if (stack.length > 3) {

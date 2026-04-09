@@ -818,6 +818,7 @@ function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
   if (result?.killed) {
     const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
     renderer.addDeathAnim(targetSnap.col, targetSnap.row, deadColor);
+    renderer.addFadeOutAnim(targetSnap.id, 600);
   }
   // Splash damage floaters
   for (const sh of result?.splashHits ?? []) {
@@ -825,6 +826,7 @@ function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
     if (sh.killed) {
       const deadColor = sh.owner === 'hero' ? '#d4a72c' : '#9b59b6';
       renderer.addDeathAnim(sh.col, sh.row, deadColor);
+      renderer.addFadeOutAnim(sh.id, 600);
     }
   }
   redrawFn();
