@@ -3348,6 +3348,8 @@ export function getBattleStatus(playerId = null) {
     // Player-specific fields
     joined:      !!seat,
     myFaction:   seat?.faction ?? null,
+    mySubmitted: seat ? !!state.playerReady?.get(seat.playerId) : false,
+    turnDeadline: room.turnDeadline ?? null,
   };
 }
 

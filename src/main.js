@@ -4506,12 +4506,14 @@ async function _showBattleScreen() {
   battleInfo.style.display = '';
   statusLine.textContent = 'Loading...';
 
+  let _battleStatus = null;
   try {
     const url = session?.token
       ? `/api/battle-status?token=${encodeURIComponent(session.token)}`
       : '/api/battle-status';
     const res = await fetch(url);
-    const status = await res.json();
+    _battleStatus = await res.json();
+    const status = _battleStatus;
     if (!status) {
       statusLine.textContent = 'No active battle right now. A new one will begin soon.';
       return;
@@ -4526,52 +4528,100 @@ async function _showBattleScreen() {
     countdownLine.style.display = '';
     countdownLine.textContent = 'Ends in ' + _formatTimeRemaining(status.endsAt);
 
-    // Player counts
+    // Player counts (correct pluralization)
     playersLine.style.display = '';
-    playersLine.textContent = `${status.heroCount} heroes vs ${status.witchCount} witches`;
+    const hLabel = status.heroCount === 1 ? 'hero' : 'heroes';
+    const wLabel = status.witchCount === 1 ? 'witch' : 'witches';
+    playersLine.textContent = `${status.heroCount} ${hLabel} vs ${status.witchCount} ${wLabel}`;
 
     // Round info
     roundLine.style.display = '';
     roundLine.textContent = `Round ${status.round}`;
 
-    // Action buttons — show context-appropriate option
+    // Action buttons + status line
     joinBtn.dataset.roomId = status.roomId;
     spectateBtn.dataset.roomId = status.roomId;
 
+    const myStatusBox = document.getElementById('battle-my-status');
+
     if (status.joined) {
-      // Already in this battle — show "Return to Battle" instead of "Join"
       statusLine.textContent = `You are fighting as ${status.myFaction === 'hero' ? 'Hero' : 'Witch'}`;
       joinBtn.style.display = '';
       joinBtn.textContent = 'Return to Battle';
-    } else if (status.isFull) {
-      statusLine.textContent = 'Battle is full';
-      spectateBtn.style.display = '';
+
+      // Show your status box with deadline and plan status
+      myStatusBox.style.display = '';
+      const deadlineEl = document.getElementById('battle-my-deadline');
+      const planEl     = document.getElementById('battle-my-plan-status');
+      if (status.turnDeadline) {
+        deadlineEl.textContent = 'Next deadline: ' + _formatTimeRemaining(status.turnDeadline);
+      } else {
+        deadlineEl.textContent = '';
+      }
+      if (status.mySubmitted) {
+        planEl.innerHTML = '<span style="color:var(--hero)">Plan submitted for this round</span>';
+      } else {
+        planEl.innerHTML = '<span style="color:#e0c030">Plan not yet submitted</span>';
+      }
     } else {
-      statusLine.textContent = 'Battle in progress';
-      joinBtn.style.display = '';
-      joinBtn.textContent = 'Join the Battle';
+      myStatusBox.style.display = 'none';
+      if (status.isFull) {
+        statusLine.textContent = 'Battle is full';
+        spectateBtn.style.display = '';
+      } else {
+        statusLine.textContent = 'Battle in progress';
+        joinBtn.style.display = '';
+        joinBtn.textContent = 'Join the Battle';
+      }
     }
   } catch (err) {
     statusLine.textContent = 'Could not load battle status.';
   }
 
+  // Update the main menu badge — yellow if you need to submit a turn
+  const badge = document.getElementById('battle-badge');
+  if (badge) {
+    if (_battleStatus?.joined && !_battleStatus.mySubmitted) {
+      badge.style.display = '';
+      badge.textContent = '!';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+
   // Fetch past battle replays
   try {
     const historyEl = document.getElementById('battle-history');
-    const listEl    = document.getElementById('battle-history-list');
-    const histRes = await fetch('/api/battle-history');
+    const bodyEl    = document.getElementById('battle-history-body');
+    const histRes = await fetch(`/api/battle-history${session?.token ? '?token=' + encodeURIComponent(session.token) : ''}`);
     const battles = await histRes.json();
     if (battles && battles.length > 0) {
       historyEl.style.display = '';
-      listEl.innerHTML = battles.map(b => {
+      bodyEl.innerHTML = battles.map(b => {
         const date = new Date(b.created_at * 1000).toLocaleDateString();
-        const winner = b.winner === 'hero' ? 'Heroes' : b.winner === 'witch' ? 'Witches' : 'Draw';
-        return `<div style="margin:0.25rem 0">
-          <a href="/replay?replayGame=${encodeURIComponent(b.game_id)}&source=mp" target="_blank"
-             style="color:var(--accent);text-decoration:underline;cursor:pointer">
-            ${date} — ${winner} won (${b.total_rounds} rounds)
-          </a>
-        </div>`;
+        let result;
+        if (b.winner === 'draw') {
+          result = 'Draw';
+        } else {
+          const winnerLabel = b.winner === 'hero' ? 'Heroes' : 'Witches';
+          result = `${winnerLabel} won`;
+        }
+        // Check if the current player was on the winning side
+        let myResult = '';
+        if (b._myFaction) {
+          if (b.winner === 'draw') myResult = '';
+          else if (b.winner === b._myFaction) myResult = ' <span style="color:var(--hero)">Victory</span>';
+          else myResult = ' <span style="color:var(--muted)">Defeat</span>';
+        }
+        return `<tr style="border-bottom:1px solid rgba(255,255,255,0.05)">
+          <td style="padding:0.25rem">${date}</td>
+          <td style="padding:0.25rem">${result}${myResult}</td>
+          <td style="padding:0.25rem;text-align:right">${b.total_rounds}</td>
+          <td style="padding:0.25rem;text-align:right">
+            <a href="/replay?replayGame=${encodeURIComponent(b.game_id)}&source=mp" target="_blank"
+               style="color:var(--accent);text-decoration:none;font-size:0.75rem">Replay</a>
+          </td>
+        </tr>`;
       }).join('');
     } else {
       historyEl.style.display = 'none';
@@ -4963,6 +5013,25 @@ window.addEventListener('hashchange', () => {
 });
 _fetchMainMenuAsyncGames();
 _updateMultiplayerBadge();
+_updateBattleBadge();
+
+/** Check if the player needs to submit a battle turn and show badge on main menu. */
+async function _updateBattleBadge() {
+  const badge = document.getElementById('battle-badge');
+  if (!badge) return;
+  const session = loadSession();
+  if (!session?.token) { badge.style.display = 'none'; return; }
+  try {
+    const res = await fetch(`/api/battle-status?token=${encodeURIComponent(session.token)}`);
+    const status = await res.json();
+    if (status?.joined && !status.mySubmitted) {
+      badge.style.display = '';
+      badge.textContent = '!';
+    } else {
+      badge.style.display = 'none';
+    }
+  } catch { badge.style.display = 'none'; }
+}
 
 /**
  * Fetch active games count and show a badge on the Multiplayer button

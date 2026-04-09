@@ -133,9 +133,29 @@ app.get('/api/battle-status', (req, res) => {
 });
 
 // REST: Past battle replays
-app.get('/api/battle-history', (_req, res) => {
-  try { res.json(getCompletedBattles(20)); }
-  catch { res.json([]); }
+app.get('/api/battle-history', (req, res) => {
+  try {
+    let playerId = null;
+    const token = req.query.token || req.headers['x-session-token'];
+    if (token) {
+      try {
+        const row = db.prepare('SELECT id FROM players WHERE token = ?').get(token);
+        if (row) playerId = row.id;
+      } catch { /* ignore */ }
+    }
+    const battles = getCompletedBattles(20);
+    // Annotate each battle with the requesting player's faction (if they participated)
+    for (const b of battles) {
+      if (playerId && b.players_json) {
+        try {
+          const players = JSON.parse(b.players_json);
+          const me = players.find(p => p.playerId === playerId);
+          if (me) b._myFaction = me.faction;
+        } catch { /* ignore */ }
+      }
+    }
+    res.json(battles);
+  } catch { res.json([]); }
 });
 
 // REST: Railway environment auto-discovery for the server selector
