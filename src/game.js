@@ -403,9 +403,11 @@ export class GameState {
 
     const heroNB  = heroNodeBonus  ? ` (incl. +${heroNodeBonus} node)` : '';
     const witchNB = witchNodeBonus ? ` (incl. +${witchNodeBonus} node)` : '';
+    const heroBB  = battleBonus.hero  ? ` (+${battleBonus.hero} underdog)` : '';
+    const witchBB = battleBonus.witch ? ` (+${battleBonus.witch} underdog)` : '';
     this.addLog(
-      `📋 Planning phase — Hero: ${this.heroActionsLeft} actions${heroNB}, ` +
-      `Witch: ${this.witchActionsLeft} actions${witchNB}.`
+      `📋 Planning phase — Hero: ${this.heroActionsLeft} actions${heroNB}${heroBB}, ` +
+      `Witch: ${this.witchActionsLeft} actions${witchNB}${witchBB}.`
     );
   }
 
