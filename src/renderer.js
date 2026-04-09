@@ -794,7 +794,10 @@ export class Renderer {
   setZoom(newZoom, focalX, focalY) {
     if (this.viewLocked) return;
     this._zoomAnim = null; // cancel any auto-framing animation on manual input
-    newZoom = Math.max(0.5, Math.min(4.0, newZoom));
+    // Scale max zoom so large maps can zoom in to the same effective hex size
+    // as small maps. Target: hexSize * maxZoom ≈ 96px (same as standard at 4×).
+    const maxZoom = Math.max(4.0, Math.ceil(96 / Math.max(1, this.hexSize)));
+    newZoom = Math.max(0.5, Math.min(maxZoom, newZoom));
     const ratio  = newZoom / this.zoomLevel;
     this._panX   = focalX - ratio * (focalX - this._panX);
     this._panY   = focalY - ratio * (focalY - this._panY);
