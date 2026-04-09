@@ -28,17 +28,27 @@ function mockWs() {
   return ws;
 }
 
+/** Track all room IDs created during tests so we can clean up battle rooms
+ *  (getRooms() filters them out). */
+const _testRoomIds = [];
+
+function _cleanUpRoom(room) {
+  if (!room) return;
+  if (room.state) room.state.winner = 'hero';
+  if (room.turnTimer) { clearTimeout(room.turnTimer); room.turnTimer = null; }
+  if (room.allHumansGoneTimer) { clearTimeout(room.allHumansGoneTimer); room.allHumansGoneTimer = null; }
+  for (const t of room.disconnectTimers.values()) clearTimeout(t);
+  for (const t of room.takeoverTimers.values()) clearTimeout(t);
+  room.disconnectTimers.clear();
+  room.takeoverTimers.clear();
+}
+
 function cleanUpRooms() {
-  for (const r of getRooms()) {
-    const room = getRoom(r.id);
-    if (room) {
-      if (room.state) room.state.winner = 'hero'; // stop AI planning chains
-      if (room.turnTimer) clearTimeout(room.turnTimer);
-      if (room.allHumansGoneTimer) clearTimeout(room.allHumansGoneTimer);
-      for (const t of room.disconnectTimers.values()) clearTimeout(t);
-      for (const t of room.takeoverTimers.values()) clearTimeout(t);
-    }
-  }
+  // Clean standard rooms
+  for (const r of getRooms()) _cleanUpRoom(getRoom(r.id));
+  // Clean battle rooms tracked by ID
+  for (const id of _testRoomIds) _cleanUpRoom(getRoom(id));
+  _testRoomIds.length = 0;
   try {
     db.prepare("DELETE FROM game_plan_status WHERE room_id LIKE '%'").run();
     db.prepare("DELETE FROM game_saves WHERE room_id LIKE '%'").run();
@@ -48,6 +58,7 @@ function cleanUpRooms() {
 /** Create a battle room, join two players, and advance one round via empty plans. */
 function createBattleAndAdvance() {
   const roomId = createBattleRoom({ endsAt: Math.floor(Date.now() / 1000) + 86400 });
+  _testRoomIds.push(roomId);
   const room = getRoom(roomId);
 
   // Need to start planning before players can join
@@ -117,6 +128,7 @@ describe('battle mode reconnect replay', () => {
 
   test('joinedAtRound is set correctly on new battle seats', () => {
     const roomId = createBattleRoom({ endsAt: Math.floor(Date.now() / 1000) + 86400 });
+    _testRoomIds.push(roomId);
     const room = getRoom(roomId);
     room.state.startPlanning();
 
