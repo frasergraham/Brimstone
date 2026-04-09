@@ -366,3 +366,40 @@ const iosVersion = iosBuild ? newVersion : pbxproj.match(/MARKETING_VERSION = ([
   console.log(`\n✔ iOS build uploaded to App Store Connect (iOS ${iosVersion}, build ${newBuildNum}).`);
   console.log('  It should appear in TestFlight within a few minutes.');
 }
+
+// ── itch.io upload via butler ───────────────────────────────────────────────
+
+const ITCH_GAME = 'twistedweasel/calebs-hollow';
+const ITCH_ZIP  = resolve(ROOT, 'dist', 'calebs-hollow-itch.zip');
+
+{
+  function run(cmd) {
+    console.log(`\n$ ${cmd}`);
+    execSync(cmd, { cwd: ROOT, stdio: 'inherit' });
+  }
+
+  // Check butler is available
+  let butlerPath;
+  try {
+    butlerPath = execSync('which butler', { encoding: 'utf8' }).trim();
+  } catch {
+    // Check common local install path
+    const localButler = resolve(process.env.HOME, '.local/bin/butler');
+    try {
+      execSync(`"${localButler}" version`, { encoding: 'utf8' });
+      butlerPath = localButler;
+    } catch {
+      console.log('\n⚠ butler not found — skipping itch.io upload.');
+      console.log('  Install: https://itch.io/docs/butler/');
+      process.exit(0);
+    }
+  }
+
+  console.log('\n── itch.io: building web zip ──');
+  run('node scripts/build-itch.js');
+
+  console.log('\n── itch.io: pushing to itch.io ──');
+  run(`"${butlerPath}" push "${ITCH_ZIP}" ${ITCH_GAME}:html5 --userversion ${newVersion}`);
+
+  console.log(`\n✔ itch.io build pushed (${ITCH_GAME}:html5 v${newVersion}).`);
+}
