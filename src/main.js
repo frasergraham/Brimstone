@@ -18,6 +18,7 @@ import {
   checkEmailTokenInUrl, requestLinkEmail, requestEmailLogin, fetchIdentities,
 } from './multiplayer.js';
 import { VERSION, BUILD_VERSION } from './version.js';
+import { buildPlayerStatusHtml } from './ui-render.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType, groupPlanByEntity } from './planner.js';
 import { hexDistance, getNeighbors } from './hex.js';
@@ -1628,6 +1629,29 @@ onInactiveChange((inactive) => {
   }
 });
 
+// Battle countdown timer (in-game)
+let _battleCountdownTimer = null;
+function _updateBattleCountdown() {
+  const el = document.getElementById('battle-countdown');
+  if (!el) return;
+  if (!state || state.gameMode !== 'battle' || !state.battleConfig?.endsAt) {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = '';
+  el.textContent = 'Battle ends in ' + _formatTimeRemaining(state.battleConfig.endsAt);
+}
+function _startBattleCountdownTimer() {
+  if (_battleCountdownTimer) clearInterval(_battleCountdownTimer);
+  _updateBattleCountdown();
+  _battleCountdownTimer = setInterval(_updateBattleCountdown, 60_000);
+}
+function _stopBattleCountdownTimer() {
+  if (_battleCountdownTimer) { clearInterval(_battleCountdownTimer); _battleCountdownTimer = null; }
+  const el = document.getElementById('battle-countdown');
+  if (el) el.style.display = 'none';
+}
+
 function initOnline(mirrorState, myFaction, mpClient) {
   setMode(AppMode.PLANNING);
   state    = mirrorState;
@@ -1660,6 +1684,20 @@ function initOnline(mirrorState, myFaction, mpClient) {
   ui.myPlayerId = mpClient.myPlayerId ?? null;
   ui._isAsync   = mpClient.isAsync ?? false;
   ui._players   = (state.players ?? []).map(p => ({ ...p, playerId: p.playerId ?? p.id }));
+
+  // Start battle countdown if in battle mode
+  if (state.gameMode === 'battle') _startBattleCountdownTimer();
+
+  // If the game is already in a planning phase (e.g. reconnecting to a battle),
+  // enter planning mode immediately. A separate planningPhase message may also
+  // arrive and will call enterPlanningMode again (which is safe — it resets).
+  if (state.planningPhase && mpClient.myFaction) {
+    const budget = (mpClient.myFaction === 'hero' ? state.heroActionsLeft : state.witchActionsLeft) || 3;
+    ui.enterPlanningMode(mpClient.myFaction, budget, 0);
+    ui.onPlanSubmit = (plan) => mpClient.submitPlan(plan);
+    ui.onReturnToMenu = () => { location.reload(); };
+    ui.onReplayLastTurn = () => _replayLastTurnInline();
+  }
 
   redrawOnline();
 
@@ -1697,7 +1735,7 @@ const stepSinglePlayer = document.getElementById('setup-step-singleplayer');
 const stepCampaignSelect = document.getElementById('setup-step-campaign-select');
 const stepCampaign     = document.getElementById('setup-step-campaign');
 const stepDebrief      = document.getElementById('setup-step-debrief');
-const stepMultiplayer  = document.getElementById('setup-step-multiplayer');
+const stepBattle       = document.getElementById('setup-step-battle');
 const stepOnline       = document.getElementById('setup-step-online');
 const stepAsync        = document.getElementById('setup-step-async');
 const stepLocalPlay    = document.getElementById('setup-step-local-play');
@@ -1720,7 +1758,7 @@ function showStep(step) {
   stepCampaignSelect.style.display = step === 'campaign-select' ? '' : 'none';
   stepCampaign      .style.display = step === 'campaign'        ? '' : 'none';
   stepDebrief       .style.display = step === 'debrief'         ? '' : 'none';
-  stepMultiplayer   .style.display = step === 'multiplayer'     ? '' : 'none';
+  if (stepBattle) stepBattle.style.display = step === 'battle' ? '' : 'none';
   stepOnline        .style.display = step === 'online'          ? '' : 'none';
   stepAsync         .style.display = step === 'async'           ? '' : 'none';
   stepLocalPlay     .style.display = step === 'local-play'      ? '' : 'none';
@@ -1740,7 +1778,7 @@ function showStep(step) {
   const _stepEl = {
     'mode': stepMode, 'sp-choice': stepSpChoice, 'singleplayer': stepSinglePlayer,
     'campaign-select': stepCampaignSelect, 'campaign': stepCampaign, 'debrief': stepDebrief,
-    'multiplayer': stepMultiplayer, 'online': stepOnline, 'async': stepAsync,
+    'online': stepOnline, 'async': stepAsync,
     'local-play': stepLocalPlay, 'howtoplay': stepHowto, 'options': stepOptions,
     'changelog': stepChangelog, 'account': stepAccount, 'waiting': stepWaiting,
     'create-game': stepCreateGame, 'join-game': stepJoinGame, 'lobby': stepLobby,
@@ -4425,6 +4463,210 @@ function _showAsyncScreen() {
 
 document.getElementById('btn-mp-async')?.addEventListener('click', () => _showAsyncScreen());
 
+// ── Battle for Caleb's Hollow menu ───────────────────────────────────────────
+
+function _formatTimeRemaining(unixSeconds) {
+  const diff = unixSeconds - Math.floor(Date.now() / 1000);
+  if (diff <= 0) return 'Ended';
+  const days  = Math.floor(diff / 86400);
+  const hours = Math.floor((diff % 86400) / 3600);
+  const mins  = Math.floor((diff % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return `${mins}m`;
+}
+
+async function _showBattleScreen() {
+  showStep('battle');
+
+  const session    = loadSession();
+  const signedOut  = document.getElementById('battle-signed-out');
+  const battleInfo = document.getElementById('battle-info');
+  const statusLine = document.getElementById('battle-status-line');
+  const joinBtn    = document.getElementById('btn-battle-join');
+  const spectateBtn = document.getElementById('btn-battle-spectate');
+
+  // Reset dynamic elements
+  joinBtn.style.display = 'none';
+  spectateBtn.style.display = 'none';
+  document.getElementById('battle-my-status').style.display = 'none';
+  document.getElementById('battle-game-info').style.display = 'none';
+  document.getElementById('battle-players-section').style.display = 'none';
+
+  if (!session) {
+    signedOut.style.display = '';
+    battleInfo.style.display = 'none';
+    return;
+  }
+  signedOut.style.display = 'none';
+  battleInfo.style.display = '';
+  statusLine.textContent = 'Loading...';
+
+  let _battleStatus = null;
+  try {
+    const url = session?.token
+      ? `/api/battle-status?token=${encodeURIComponent(session.token)}`
+      : '/api/battle-status';
+    const res = await fetch(url);
+    _battleStatus = await res.json();
+    const status = _battleStatus;
+    if (!status) {
+      statusLine.textContent = 'No active battle right now. A new one will begin soon.';
+      return;
+    }
+
+    // Game info box
+    const gameInfo = document.getElementById('battle-game-info');
+    gameInfo.style.display = '';
+    document.getElementById('battle-hero-score').textContent = status.heroScore;
+    document.getElementById('battle-witch-score').textContent = status.witchScore;
+    const hLabel = status.heroCount === 1 ? 'hero' : 'heroes';
+    const wLabel = status.witchCount === 1 ? 'witch' : 'witches';
+    document.getElementById('battle-meta-line').textContent =
+      `Round ${status.round} · ${status.heroCount} ${hLabel} vs ${status.witchCount} ${wLabel} · Ends in ${_formatTimeRemaining(status.endsAt)}`;
+
+    // Action buttons
+    joinBtn.dataset.roomId = status.roomId;
+    spectateBtn.dataset.roomId = status.roomId;
+
+    if (status.joined) {
+      statusLine.textContent = '';
+
+      // Your status box
+      const myBox = document.getElementById('battle-my-status');
+      myBox.style.display = '';
+      const fIcon = status.myFaction === 'hero' ? '⚔' : '✦';
+      const fName = status.myFaction === 'hero' ? 'Hero' : 'Witch';
+      document.getElementById('battle-my-faction').innerHTML =
+        `<span style="color:var(--${status.myFaction})">${fIcon} Fighting as ${fName}</span>`;
+      if (status.mySubmitted) {
+        document.getElementById('battle-my-plan-status').innerHTML =
+          '<span style="color:var(--green)">✓ Plan submitted</span>';
+      } else {
+        document.getElementById('battle-my-plan-status').innerHTML =
+          '<span style="color:var(--day)">⚠ Plan not yet submitted</span>';
+      }
+      if (status.turnDeadline) {
+        const deadlineEl = document.getElementById('battle-my-deadline');
+        const secsLeft = status.turnDeadline - Math.floor(Date.now() / 1000);
+        deadlineEl.textContent = '⏱ Deadline in ' + _formatTimeRemaining(status.turnDeadline);
+        deadlineEl.style.color = secsLeft <= 1800 ? 'var(--red)' : 'var(--text-dim)';
+      }
+
+      joinBtn.style.display = '';
+      joinBtn.textContent = 'Return to Battle';
+
+      // Player list (collapsible)
+      const playersSection = document.getElementById('battle-players-section');
+      if (status.players?.length > 0) {
+        playersSection.style.display = '';
+        const playerData = status.players.map(p => ({
+          playerId: p.playerId, name: p.name, faction: p.faction,
+          isAI: p.isAI, _submitted: p.submitted,
+          connected: p.connected, active: p.active,
+        }));
+        const myPlayerId = mp?.myPlayerId ?? session?.id ?? null;
+        const nudgeCtx = myPlayerId ? { myPlayerId, nudgedSet: new Set() } : undefined;
+        document.getElementById('battle-players-list').innerHTML = buildPlayerStatusHtml(playerData, nudgeCtx);
+
+        // Wire nudge buttons
+        document.getElementById('battle-players-list').addEventListener('click', (e) => {
+          const btn = e.target.closest('.nudge-btn[data-nudge-id]');
+          if (!btn || btn.disabled) return;
+          const targetId = btn.dataset.nudgeId;
+          if (mp?.connected) {
+            mp.sendNudge(targetId);
+            btn.disabled = true;
+            btn.classList.add('nudge-sent');
+          }
+        });
+      }
+    } else if (status.isFull) {
+      statusLine.textContent = 'Battle is full';
+      spectateBtn.style.display = '';
+    } else {
+      statusLine.textContent = 'Battle in progress — join a faction!';
+      joinBtn.style.display = '';
+      joinBtn.textContent = 'Join the Battle';
+    }
+  } catch (err) {
+    statusLine.textContent = 'Could not load battle status.';
+  }
+
+  // Update main menu badge
+  const badge = document.getElementById('battle-badge');
+  if (badge) {
+    if (_battleStatus?.joined && !_battleStatus.mySubmitted) {
+      badge.style.display = '';
+      badge.textContent = '!';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+
+  // Past battles (collapsible table, default closed)
+  try {
+    const historyEl = document.getElementById('battle-history');
+    const bodyEl    = document.getElementById('battle-history-body');
+    const histRes = await fetch(`/api/battle-history${session?.token ? '?token=' + encodeURIComponent(session.token) : ''}`);
+    const battles = await histRes.json();
+    if (battles && battles.length > 0) {
+      historyEl.style.display = '';
+      bodyEl.innerHTML = battles.map(b => {
+        const date = new Date(b.created_at * 1000).toLocaleDateString();
+        const result = b.winner === 'draw' ? 'Draw'
+          : (b.winner === 'hero' ? 'Heroes won' : 'Witches won');
+        // Color-code rows based on player's faction
+        let rowClass = '';
+        if (b._myFaction) {
+          if (b.winner !== 'draw') {
+            rowClass = b.winner === b._myFaction ? 'battle-history-win' : 'battle-history-loss';
+          }
+        }
+        return `<tr class="${rowClass}" style="border-bottom:1px solid rgba(255,255,255,0.04)">
+          <td style="padding:0.3rem">${date}</td>
+          <td style="padding:0.3rem">${result}</td>
+          <td style="padding:0.3rem;text-align:right">${b.total_rounds}</td>
+          <td style="padding:0.3rem;text-align:right">
+            <a href="/replay?replayGame=${encodeURIComponent(b.game_id)}&source=mp" target="_blank"
+               class="setup-btn" style="padding:0.15rem 0.5rem;font-size:0.7rem">Replay</a>
+          </td>
+        </tr>`;
+      }).join('');
+    } else {
+      historyEl.style.display = 'none';
+    }
+  } catch { /* ignore */ }
+}
+
+// Sign-in button on the battle screen — reuse the same sign-in flow as online
+document.getElementById('btn-battle-signin')?.addEventListener('click', () => {
+  showStep('account');
+});
+
+document.getElementById('btn-battle-main')?.addEventListener('click', () => _showBattleScreen());
+document.getElementById('btn-battle-back')?.addEventListener('click', () => showStep('mode'));
+document.getElementById('btn-battle-join')?.addEventListener('click', function() {
+  const roomId = this.dataset.roomId;
+  if (!roomId) return;
+  // Tear down everything — kill any in-flight reconnect, destroy old UI
+  if (ui) ui.destroy();
+  state = null; renderer = null; ui = null;
+  _stopBattleCountdownTimer();
+  document.getElementById('game-screen').style.display = 'none';
+  // Disconnect the old mp client entirely to cancel any pending reconnect
+  // that could race with joinBattle and create duplicate handlers.
+  if (mp) { mp.disconnect(); mp = null; }
+  _ensureAuthed(() => {
+    mp.joinBattle(roomId);
+  });
+});
+document.getElementById('btn-battle-spectate')?.addEventListener('click', function() {
+  const roomId = this.dataset.roomId;
+  if (!roomId) return;
+  initSpectator(roomId);
+});
+
 document.getElementById('btn-online-back').addEventListener('click', () => {
   if (mp) { mp.disconnect(); mp = null; }
   renderer = null; ui = null; state = null;
@@ -4781,6 +5023,25 @@ window.addEventListener('hashchange', () => {
 });
 _fetchMainMenuAsyncGames();
 _updateMultiplayerBadge();
+_updateBattleBadge();
+
+/** Check if the player needs to submit a battle turn and show badge on main menu. */
+async function _updateBattleBadge() {
+  const badge = document.getElementById('battle-badge');
+  if (!badge) return;
+  const session = loadSession();
+  if (!session?.token) { badge.style.display = 'none'; return; }
+  try {
+    const res = await fetch(`/api/battle-status?token=${encodeURIComponent(session.token)}`);
+    const status = await res.json();
+    if (status?.joined && !status.mySubmitted) {
+      badge.style.display = '';
+      badge.textContent = '!';
+    } else {
+      badge.style.display = 'none';
+    }
+  } catch { badge.style.display = 'none'; }
+}
 
 /**
  * Fetch active games count and show a badge on the Multiplayer button
@@ -5616,16 +5877,27 @@ async function _applyOnlinePlanningPhase(payload) {
 
   // Prefer per-player budget; fall back to legacy faction budget for old servers.
   const budget = myActionsLeft ?? getFaction(mp.myFaction).getActionsLeft({ heroActionsLeft, witchActionsLeft });
-  ui.exitPlanningMode();
   if (players) ui._players = players;
   ui._hasReplayHistory = _onlineRoundHistory.length > 0;
-  ui.enterPlanningMode(mp.myFaction, budget, timeoutMs ?? 0);
+  if (ui._planMode && ui._planFaction === mp.myFaction && !ui._planSubmitted) {
+    console.log(`[mp] _applyOnlinePlanningPhase: fast path (already planning, budget=${budget})`);
+    ui._planBudget = budget;
+    if (timeoutMs > 0) ui._startCountdown(timeoutMs);
+    ui._renderPlayerStatus();
+    ui._renderPlanPanel();
+  } else {
+    console.log(`[mp] _applyOnlinePlanningPhase: full enter (planMode=${ui._planMode} submitted=${ui._planSubmitted} budget=${budget})`);
+    ui.exitPlanningMode();
+    ui.enterPlanningMode(mp.myFaction, budget, timeoutMs ?? 0);
+  }
   ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
-  ui.onReturnToMenu = () => _showOnlineScreen();
+  ui.onReturnToMenu = () => { location.reload(); };
   ui.onReplayLastTurn = () => _replayLastTurnInline();
 
   // Restore submitted plan on reconnect — show what was already submitted
-  if (submittedPlan && submittedPlan.length > 0) {
+  if (submittedPlan != null) {
+    // Restore the submitted plan actions (if any) and mark as submitted.
+    // An empty plan (submittedPlan = []) is still a valid submission.
     for (const action of submittedPlan) {
       if (action.entityId) {
         if (!ui._unitPlans.has(action.entityId)) ui._unitPlans.set(action.entityId, []);
@@ -5663,7 +5935,7 @@ async function _replayLastTurnInline() {
   ui._hasReplayHistory = _onlineRoundHistory.length > 0;
   ui.enterPlanningMode(mp.myFaction, budget, 0, { showPhaseModal: false });
   ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
-  ui.onReturnToMenu = () => _showOnlineScreen();
+  ui.onReturnToMenu = () => { location.reload(); };
   ui.onReplayLastTurn = () => _replayLastTurnInline();
 
   // Restore the plan
@@ -5753,25 +6025,30 @@ function _serverWsUrl() {
 function _createMpClient() {
   return new MultiplayerClient({
     onState(mirrorState) {
+      console.log(`[mp] onState: reason=${mirrorState._reason ?? '?'} round=${mirrorState.round} planning=${mirrorState.planningPhase} resolving=${mirrorState.resolving} hasUI=${!!ui} hasRenderer=${!!renderer} active=${mp?.active}`);
       if (!renderer || !ui) {
-        // Game not started yet — only init if the player actively joined a game.
-        // mp.active is set true by matchFound/reconnected, cleared by clearRoom().
         if (mp?.active) {
           try {
-            mirrorState.myFaction = mp.myFaction; // used by renderer for per-player fog
+            console.log(`[mp] onState → initOnline (faction=${mp.myFaction})`);
+            mirrorState.myFaction = mp.myFaction;
             initOnline(mirrorState, mp.myFaction, mp);
           } catch (err) {
             console.error('initOnline failed:', err);
             _onlineError(`Failed to start game: ${err.message}`);
             _showOnlineScreen();
           }
+        } else {
+          console.log(`[mp] onState ignored — mp.active is false`);
         }
         return;
       }
 
-      // Suppress state pushes while animating or showing summary — animation owns state.entities.
-      if (shouldBufferMessages()) return;
+      if (shouldBufferMessages()) {
+        console.log(`[mp] onState buffered (shouldBuffer=true, mode=${getMode()})`);
+        return;
+      }
 
+      console.log(`[mp] onState → in-place update`);
       // Already in game — update in-place (keeps renderer pan/zoom)
 
       // Snapshot entity positions before update so we can animate moves
@@ -6015,9 +6292,10 @@ function _createMpClient() {
     },
 
     onPlanningPhase(payload) {
+      console.log(`[mp] onPlanningPhase: budget=${payload.myActionsLeft} timeout=${payload.timeoutMs} submittedPlan=${payload.submittedPlan != null ? payload.submittedPlan.length + ' actions' : 'null'} inGame=${isInGame()} hasUI=${!!ui} mode=${getMode()}`);
       if (!isInGame() || !ui || !mp) return;
-      // If animating or showing summary, defer until it finishes.
       if (shouldBufferMessages()) {
+        console.log(`[mp] onPlanningPhase → buffered (mode=${getMode()})`);
         _pendingPlanningPhase = payload;
         return;
       }

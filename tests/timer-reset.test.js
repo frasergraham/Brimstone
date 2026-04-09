@@ -133,40 +133,27 @@ describe('MultiplayerClient timerReset routing', () => {
 
 // ── Server-side broadcast (source inspection) ────────────────────────────────
 
-describe('server lobby.js timerReset broadcast', () => {
+describe('server lobby.js handlePlanSubmit does not reset timer', () => {
   const lobbyJs = readFileSync(join(root, 'server', 'lobby.js'), 'utf8');
 
-  test('handlePlanSubmit broadcasts timerReset after _submitPlayerPlan', () => {
-    // Find the handlePlanSubmit function body
+  test('handlePlanSubmit does not broadcast timerReset', () => {
     const fnStart = lobbyJs.indexOf('export function handlePlanSubmit');
     assert.ok(fnStart !== -1, 'handlePlanSubmit must exist');
     const section = lobbyJs.slice(fnStart, fnStart + 1200);
 
     assert.ok(
-      section.includes("type: 'timerReset'"),
-      'handlePlanSubmit must broadcast a timerReset message',
+      !section.includes("type: 'timerReset'"),
+      'handlePlanSubmit must NOT broadcast timerReset — deadlines are fixed',
     );
   });
 
-  test('timerReset sent to all human players (including submitted)', () => {
+  test('handlePlanSubmit does not call _startPlanningTimer', () => {
     const fnStart = lobbyJs.indexOf('export function handlePlanSubmit');
-    const section = lobbyJs.slice(fnStart, fnStart + 1200);
-
-    // timerReset is now sent to all non-AI players so submitted players
-    // can keep their waiting countdown accurate.
-    assert.ok(
-      section.includes('!seat.isAI'),
-      'timerReset broadcast must send to all non-AI players',
-    );
-  });
-
-  test('timerReset guarded by planningPhase check', () => {
-    const fnStart = lobbyJs.indexOf('export function handlePlanSubmit');
-    const section = lobbyJs.slice(fnStart, fnStart + 1200);
+    const section = lobbyJs.slice(fnStart, fnStart + 500);
 
     assert.ok(
-      section.includes('room.state.planningPhase'),
-      'timerReset broadcast must be guarded by planningPhase check',
+      !section.includes('_startPlanningTimer'),
+      'handlePlanSubmit must NOT reset the planning timer on each submission',
     );
   });
 });

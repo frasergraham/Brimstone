@@ -529,7 +529,14 @@ export class UIController {
     this._planFaction      = faction;
     this._planBudget       = budget;
     this._unitPlans        = new Map();
+    // Clear state-recovery flag if a recovery was pending
+    this._stateRecoveryPending = false;
+    if (this._stateRecoveryTimer) { clearTimeout(this._stateRecoveryTimer); this._stateRecoveryTimer = null; }
     this._planSubmitted    = false;
+
+    // Clear stale waiting status text from previous round/session
+    const statusEl = this._el('plan-status');
+    if (statusEl) statusEl.textContent = '';
 
     // Reset footer buttons
     const submitBtn = this._el('plan-submit-btn');
@@ -639,7 +646,8 @@ export class UIController {
     if (!el) return;
 
     const players = this._players ?? [];
-    if (players.length <= 1) {
+    // Hide player list for 1v1 standard games; always show for battle mode
+    if (players.length <= 1 && this.state?.gameMode !== 'battle') {
       el.style.display = 'none';
       return;
     }
@@ -2068,6 +2076,37 @@ export class UIController {
       return;
     }
 
+    // Online mode: if we reach here without plan mode or resolving, the client
+    // may be in a transient state (summary, animation) or genuinely stuck.
+    // Only attempt recovery if we're supposed to be in PLANNING mode.
+    if (this.mp) {
+      if (this.appMode === 'PLANNING' && !this._stateRecoveryPending) {
+        this._stateRecoveryPending = true;
+        // Delay before requesting state — gives enterPlanningMode time to fire
+        this._stateRecoveryTimer = setTimeout(() => {
+          this._stateRecoveryPending = false;
+          if (this._planMode || this.state.resolving || this.appMode !== 'PLANNING') return;
+          console.warn('[ui] Invalid online state — requesting state refresh.');
+          this.mp._send({ type: 'requestState' });
+          // If still stuck after another 5 seconds, bail to menu
+          this._stateRecoveryTimer = setTimeout(() => {
+            if (!this._planMode && !this.state.resolving && this.appMode === 'PLANNING') {
+              console.error('[ui] State recovery failed — returning to menu');
+              if (this.onQuitToMenu) this.onQuitToMenu();
+            }
+          }, 5000);
+        }, 2000);
+      }
+      // Show appropriate label based on current app mode
+      if (this.appMode === 'SUMMARY') {
+        el.innerHTML = `<span class="turn-line">Round Summary</span>`;
+      } else {
+        el.innerHTML = `<span class="turn-line" style="color:var(--muted)">Syncing…</span>`;
+      }
+      return;
+    }
+
+    // Offline / local mode: show legacy sequential-turn display
     const glyph  = state.activePlayer === 'hero' ? '⚔' : '✦';
     const player = state.activePlayer === 'hero' ? 'Hero' : 'Witch';
     const isAI   = (state.activePlayer === 'witch' && state.witchIsAI) ||
@@ -2095,7 +2134,7 @@ export class UIController {
     const state = this.state;
 
     const { html, title } = buildObjectivesHtml(
-      state.witchObjectives, state.entities, state.nodeScore,
+      state.witchObjectives, state.entities, state.nodeScore, state.gameMode,
     );
 
     el.innerHTML = html;

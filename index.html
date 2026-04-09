@@ -19,8 +19,16 @@
     <div id="setup-step-mode" class="setup-card">
       <h1 class="title">CALEB'S HOLLOW</h1>
       <div class="setup-buttons" style="flex-direction:column;align-items:center">
-        <button id="btn-single-player" class="setup-btn" style="width:200px">⚔ Single Player</button>
-        <button id="btn-multiplayer"   class="setup-btn" style="width:200px;position:relative">🌐 Multiplayer<span id="mp-badge" class="mp-badge" style="display:none"></span></button>
+        <button id="btn-battle-main" class="setup-btn" style="width:240px;position:relative;text-align:center">
+          Battle for Caleb's Hollow
+          <span style="display:block;font-size:0.65rem;opacity:0.6;margin-top:2px">A persistent large scale multiplayer battle</span>
+          <span id="battle-badge" class="mp-badge" style="display:none"></span>
+        </button>
+      </div>
+      <div class="menu-separator"></div>
+      <div class="setup-buttons" style="flex-direction:column;align-items:center">
+        <button id="btn-single-player" class="setup-btn" style="width:200px">Single Player</button>
+        <button id="btn-multiplayer"   class="setup-btn" style="width:200px;position:relative">Multiplayer<span id="mp-badge" class="mp-badge" style="display:none"></span></button>
         <button id="btn-how-to-play"   class="setup-btn" style="width:200px">How to Play</button>
       </div>
       <div class="menu-separator"></div>
@@ -313,17 +321,68 @@
       </div>
     </div>
 
-    <!-- Multiplayer -->
-    <div id="setup-step-multiplayer" class="setup-card" style="display:none">
-      <h1 class="title" style="font-size:2rem;margin-bottom:1rem">MULTIPLAYER</h1>
-      <div class="setup-lore"><p>Choose how you want to play.</p></div>
-      <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.75rem">
-        <button id="btn-mp-online" class="setup-btn" style="width:260px">🌐 Online Multiplayer</button>
-        <button id="btn-mp-local"  class="setup-btn"         style="width:260px">🎮 Local Pass &amp; Play</button>
+    <!-- ── Battle for Caleb's Hollow ─────────────────────────────── -->
+    <div id="setup-step-battle" class="setup-card" style="display:none">
+      <h1 class="title" style="font-size:1.8rem;margin-bottom:0.5rem">THE BATTLE FOR CALEB'S HOLLOW</h1>
+      <div class="setup-lore" style="margin-bottom:0.75rem">
+        <p>A persistent 10v10 battle that runs for two weeks. Turns resolve at noon and midnight. Join either faction and fight for control of five Power Nodes. Points are scored every round. The faction leading when time runs out wins.</p>
       </div>
-      <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
-        <button id="btn-multiplayer-back" class="setup-btn">← Back</button>
+
+      <!-- Not signed in -->
+      <div id="battle-signed-out" style="display:none;text-align:center;margin-bottom:0.75rem">
+        <div class="setup-lore"><p>Sign in to join the battle.</p></div>
+        <button id="btn-battle-signin" class="setup-btn primary" style="margin-top:0.4rem">Sign In</button>
       </div>
+
+      <!-- Battle status (signed in) -->
+      <div id="battle-info" style="text-align:center;margin-bottom:0.75rem;display:none">
+        <div id="battle-status-line" style="color:var(--text-dim);font-size:0.85rem">Loading...</div>
+
+        <!-- Your status (when joined) -->
+        <div id="battle-my-status" class="battle-box" style="display:none">
+          <div class="battle-label">Your Status</div>
+          <div id="battle-my-faction" style="font-size:0.9rem;margin-bottom:0.2rem"></div>
+          <div id="battle-my-plan-status" style="font-size:0.82rem"></div>
+          <div id="battle-my-deadline" style="font-size:0.78rem;color:var(--text-dim);margin-top:0.15rem"></div>
+        </div>
+
+        <!-- Game info -->
+        <div id="battle-game-info" class="battle-box" style="display:none">
+          <div class="battle-label">Current Score</div>
+          <div class="battle-menu-score">
+            <span class="hero">⚔ <strong id="battle-hero-score">0</strong></span>
+            <span class="sep">—</span>
+            <span class="witch"><strong id="battle-witch-score">0</strong> ✦</span>
+          </div>
+          <div class="battle-meta" id="battle-meta-line"></div>
+        </div>
+
+        <!-- Players (collapsible, default open) -->
+        <details class="qp-advanced" id="battle-players-section" style="display:none;max-width:320px" open>
+          <summary class="qp-advanced-summary">Players</summary>
+          <div id="battle-players-list" style="margin-top:0.4rem;text-align:left"></div>
+        </details>
+      </div>
+
+      <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.5rem">
+        <button id="btn-battle-join"     class="setup-btn primary" style="width:220px;display:none">Join the Battle</button>
+        <button id="btn-battle-spectate" class="setup-btn"         style="width:220px;display:none">Spectate</button>
+        <button id="btn-battle-back"     class="setup-btn"         style="width:220px">← Back</button>
+      </div>
+
+      <!-- Past battles (collapsible, default closed) -->
+      <details class="qp-advanced" id="battle-history" style="display:none;margin-top:0.75rem;max-width:340px">
+        <summary class="qp-advanced-summary">Past Battles</summary>
+        <table style="width:100%;font-size:0.78rem;border-collapse:collapse;margin-top:0.4rem">
+          <thead><tr style="color:var(--text-dim);border-bottom:1px solid var(--border)">
+            <th style="text-align:left;padding:0.3rem">Date</th>
+            <th style="text-align:left;padding:0.3rem">Result</th>
+            <th style="text-align:right;padding:0.3rem">Rounds</th>
+            <th style="padding:0.3rem"></th>
+          </tr></thead>
+          <tbody id="battle-history-body"></tbody>
+        </table>
+      </details>
     </div>
 
     <!-- ── Online Multiplayer ─────────────────────────────────────── -->
@@ -979,6 +1038,9 @@
       <div id="score-bar-content"></div>
       <span class="score-bar-faction witch-faction">Witch ✦</span>
     </div>
+
+    <!-- Battle mode countdown — visible only during Battle for Caleb's Hollow -->
+    <div id="battle-countdown" style="display:none"></div>
 
     <!-- Floating cancel pill — appears during battle/summon targeting -->
     <div id="cancel-wrap">

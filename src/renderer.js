@@ -652,11 +652,20 @@ export class Renderer {
     let panX = offX + visW / 2 - cx * z;
     let panY = H / 2 - cy * z;
 
-    // Clamp so the map doesn't drift off-screen
-    const minPanX = Math.min(0, fullW - fullW * z);
-    const minPanY = Math.min(0, H - H * z);
-    panX = Math.max(minPanX, Math.min(0, panX));
-    panY = Math.max(minPanY, Math.min(0, panY));
+    // Clamp using the same logic as _clampPan — accounts for _padX which
+    // can be deeply negative on large maps (42×42).
+    const mapW = SQRT3 * hs * (MAP_COLS + 0.5) * z;
+    const mapH = (1.5 * MAP_ROWS + 0.5) * hs * z;
+    const contentW = Math.max(fullW * z, mapW);
+    const contentH = Math.max(H * z, mapH);
+    const padXz = this._padX * z;
+    const padYz = this._padY * z;
+    const maxPanX = -padXz + fullW * 0.5;
+    const maxPanY = -padYz + H * 0.5;
+    const minPanX = fullW - contentW - padXz - fullW * 0.5;
+    const minPanY = H - contentH - padYz - H * 0.5;
+    panX = Math.max(minPanX, Math.min(maxPanX, panX));
+    panY = Math.max(minPanY, Math.min(maxPanY, panY));
 
     return { zoom: z, panX, panY };
   }
@@ -785,7 +794,10 @@ export class Renderer {
   setZoom(newZoom, focalX, focalY) {
     if (this.viewLocked) return;
     this._zoomAnim = null; // cancel any auto-framing animation on manual input
-    newZoom = Math.max(0.5, Math.min(4.0, newZoom));
+    // Scale max zoom so large maps can zoom in to the same effective hex size
+    // as small maps. Target: hexSize * maxZoom ≈ 96px (same as standard at 4×).
+    const maxZoom = Math.max(4.0, Math.ceil(96 / Math.max(1, this.hexSize)));
+    newZoom = Math.max(0.5, Math.min(maxZoom, newZoom));
     const ratio  = newZoom / this.zoomLevel;
     this._panX   = focalX - ratio * (focalX - this._panX);
     this._panY   = focalY - ratio * (focalY - this._panY);
@@ -804,17 +816,27 @@ export class Renderer {
     const wrapper = this.canvas.parentElement;
     const wrapW = wrapper?.clientWidth  ?? this.canvas.width;
     const wrapH = wrapper?.clientHeight ?? this.canvas.height;
-    // Content dimensions at current zoom
-    const contentW = this.canvas.width  * this.zoomLevel;
-    const contentH = this.canvas.height * this.zoomLevel;
-    // Allow panning beyond the map edges so any hex (including edge hexes)
-    // can be centered in the viewport.  The margin is ~40% of the viewport.
-    const marginX = wrapW * 0.4;
-    const marginY = wrapH * 0.4;
-    const minX = Math.min(0, wrapW - contentW) - marginX;
-    const minY = Math.min(0, wrapH - contentH) - marginY;
-    this._panX = Math.max(minX, Math.min(marginX, this._panX));
-    this._panY = Math.max(minY, Math.min(marginY, this._panY));
+    // Content dimensions at current zoom — use the actual map pixel extent
+    // (not just canvas size) so large maps can be fully panned.
+    const hs = this.hexSize;
+    const z  = this.zoomLevel;
+    const mapW = SQRT3 * hs * (MAP_COLS + 0.5) * z;
+    const mapH = (1.5 * MAP_ROWS + 0.5) * hs * z;
+    const contentW = Math.max(this.canvas.width * z, mapW);
+    const contentH = Math.max(this.canvas.height * z, mapH);
+
+    // Margin: allow any hex (including edge hexes) to be centered in the viewport.
+    // Account for _padX offset which can be negative on large maps.
+    const padXz = this._padX * z;
+    const padYz = this._padY * z;
+    // Max pan: leftmost map edge can reach right side of viewport
+    const maxPanX = -padXz + wrapW * 0.5;
+    const maxPanY = -padYz + wrapH * 0.5;
+    // Min pan: rightmost map edge can reach left side of viewport
+    const minPanX = wrapW - contentW - padXz - wrapW * 0.5;
+    const minPanY = wrapH - contentH - padYz - wrapH * 0.5;
+    this._panX = Math.max(minPanX, Math.min(maxPanX, this._panX));
+    this._panY = Math.max(minPanY, Math.min(maxPanY, this._panY));
   }
 
   // ── Viewport culling ────────────────────────────────────────────────────

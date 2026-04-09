@@ -79,6 +79,8 @@ export class MirrorState {
     s.heroActionsLeft      = snap.heroActionsLeft  ?? 0;
     s.witchActionsLeft     = snap.witchActionsLeft ?? 0;
     s.players              = (snap.players ?? []).map(p => ({ ...p }));
+    s.gameMode             = snap.gameMode ?? 'standard';
+    s.battleConfig         = snap.battleConfig ?? null;
 
     // Reconstruct tiles as a Map keyed by "col,row"
     s.tiles = new Map();
@@ -155,6 +157,9 @@ export class MultiplayerClient {
       if (this._boundOnClose) this._ws.removeEventListener('close', this._boundOnClose);
       this._ws.close();
     }
+    // Clear stale queued messages from failed connection attempts —
+    // they'll be re-queued by the caller (e.g. _reconnect sends auth).
+    this._queue = [];
     this._boundOnClose = () => this._onClose();
     this._ws = new WebSocket(serverUrl);
 
@@ -204,6 +209,9 @@ export class MultiplayerClient {
 
   /** Join an active game during round 1 (late join). Uses room ID or code. */
   joinGame(codeOrId)       { this._send({ type: 'joinGame', codeOrId }); }
+
+  /** Join the active Battle for Caleb's Hollow. */
+  joinBattle(roomId)       { this._send({ type: 'joinBattle', roomId }); }
 
   /** Request the list of open public lobbies. */
   browseLobby()            { this._send({ type: 'browseLobby' }); }
@@ -296,16 +304,15 @@ export class MultiplayerClient {
   }
 
   _onOpen() {
+    console.log(`[mp] _onOpen: queued=${this._queue.length} active=${this.active} roomId=${this.roomId}`);
     this._reconnectAttempt = 0;
     if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
-    // Flush queued messages
     for (const str of this._queue) this._ws.send(str);
     this._queue = [];
-    // Note: overlay is NOT hidden here — we wait for the server's 'reconnected'
-    // message to confirm we actually rejoined the room (see _route).
   }
 
   _onClose() {
+    console.log(`[mp] _onClose: active=${this.active} roomId=${this.roomId}`);
     if (this.active) {
       this._opts.onDisconnected?.();
       this._scheduleReconnect();
@@ -336,15 +343,14 @@ export class MultiplayerClient {
 
   _reconnect() {
     if (!this._player || !this._ws?.url) {
-      // Unrecoverable — can't reconnect without credentials or server URL
       this._reconnectAttempt = 0;
       this._reconnectDeadline = 0;
       this._opts.onDisconnectFatal?.('Unable to reconnect to the server.');
       return;
     }
+    console.log(`[mp] _reconnect attempt=${this._reconnectAttempt} roomId=${this.roomId} active=${this.active}`);
     const url = this._ws.url;
     this.connect(url);
-    // Re-authenticate and attempt to rejoin room
     this.auth({ token: this._player.token, roomId: this.roomId });
   }
 
@@ -414,17 +420,18 @@ export class MultiplayerClient {
         break;
 
       case 'matchFound':
+        console.log(`[mp] matchFound: faction=${msg.faction} roomId=${msg.roomId} isBattle=${msg.isBattle} resumed=${msg.resumed}`);
         this.myFaction  = msg.faction;
         this.myPlayerId = msg.myPlayerId ?? null;
         this.roomId     = msg.roomId;
         this.isAsync    = !!msg.isAsync;
         this.active     = true;
-        // Register roomId with server so it can route actions to us
         this._send({ type: 'setRoom', roomId: msg.roomId });
         this._opts.onMatchFound?.(msg);
         break;
 
       case 'reconnected':
+        console.log(`[mp] reconnected: faction=${msg.faction} roomId=${msg.roomId}`);
         this.myFaction  = msg.faction;
         this.myPlayerId = msg.myPlayerId ?? null;
         this.roomId     = msg.roomId;

@@ -288,6 +288,64 @@ export async function notifyNudge(playerId, gameInfo, opts) {
 }
 
 /**
+ * Notify a player in a Battle that the daily deadline is approaching.
+ * Uses 'battle_deadline' notification type for dedup.
+ */
+export async function notifyBattleDeadlineApproaching(playerId, gameInfo, opts) {
+  _logNotifyAttempt('notifyBattleDeadlineApproaching', playerId, gameInfo.roomId, opts);
+  if (!_shouldSend(gameInfo.roomId, playerId, 'battle_deadline')) return;
+  _record(gameInfo.roomId, playerId, 'battle_deadline');
+
+  const mins = gameInfo.minutesLeft ?? 60;
+
+  if (hasDeviceTokens(playerId)) {
+    await sendPush(playerId, {
+      title: 'Battle deadline approaching',
+      body: `You have ~${mins} minutes to submit your plan for The Battle for Caleb's Hollow!`,
+      roomId: gameInfo.roomId,
+    });
+  } else {
+    const email = _getPlayerEmail(playerId);
+    if (!email) return;
+    const url = `${_baseUrl()}/#game=${gameInfo.roomId}`;
+    await _sendEmail(email,
+      "Caleb's Hollow — Battle deadline approaching",
+      `You have ~${mins} minutes to submit your plan for The Battle for Caleb's Hollow!\n\nPlay your turn: ${url}`
+    );
+  }
+}
+
+/**
+ * Notify a player that The Battle for Caleb's Hollow has ended.
+ * Uses 'battle_ended' notification type for dedup.
+ */
+export async function notifyBattleEnded(playerId, gameInfo) {
+  _logNotifyAttempt('notifyBattleEnded', playerId, gameInfo.roomId, { isAsync: true });
+  if (!_shouldSend(gameInfo.roomId, playerId, 'battle_ended')) return;
+  _record(gameInfo.roomId, playerId, 'battle_ended');
+
+  const winner = gameInfo.winner === 'hero' ? 'Heroes' : gameInfo.winner === 'witch' ? 'Witches' : 'Neither side';
+  const body = gameInfo.winner === 'draw'
+    ? `The Battle for Caleb's Hollow ended in a draw! ${gameInfo.heroScore}–${gameInfo.witchScore}`
+    : `${winner} win The Battle for Caleb's Hollow! ${gameInfo.heroScore}–${gameInfo.witchScore}`;
+
+  if (hasDeviceTokens(playerId)) {
+    await sendPush(playerId, {
+      title: 'The Battle has ended!',
+      body,
+      roomId: gameInfo.roomId,
+    });
+  } else {
+    const email = _getPlayerEmail(playerId);
+    if (!email) return;
+    await _sendEmail(email,
+      "Caleb's Hollow — The Battle has ended!",
+      `${body}\n\nSee the results: ${_baseUrl()}`
+    );
+  }
+}
+
+/**
  * Notify a player that the game was abandoned due to inactivity.
  */
 export async function notifyGameAbandoned(playerId, gameInfo) {

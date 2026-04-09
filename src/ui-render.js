@@ -408,8 +408,7 @@ export function buildPlayerStatusHtml(players, nudgeCtx) {
  * @param {{ hero: number, witch: number }} nodeScore
  * @returns {{ html: string, title: string }}
  */
-export function buildObjectivesHtml(witchObjectives, entities, nodeScore) {
-  const scoreMax = 4;
+export function buildObjectivesHtml(witchObjectives, entities, nodeScore, gameMode = 'standard') {
   let nodeDots  = '';
   let witchCount = 0, heroCount = 0;
 
@@ -424,16 +423,31 @@ export function buildObjectivesHtml(witchObjectives, entities, nodeScore) {
     nodeDots += `<span class="node-dot ${cls}" title="${obj.label ?? ''}" style="border-color:${nodeColor}"></span>`;
   }
 
-  const score     = nodeScore ?? { hero: 0, witch: 0 };
-  const heroPips  = Array.from({ length: scoreMax }, (_, i) =>
-    `<span class="score-pip hero${i < score.hero ? ' filled' : ''}"></span>`).join('');
-  const witchPips = Array.from({ length: scoreMax }, (_, i) =>
-    `<span class="score-pip witch${i < score.witch ? ' filled' : ''}"></span>`).join('');
+  const score = nodeScore ?? { hero: 0, witch: 0 };
+  let html;
 
-  const html =
-    `<span class="score-track hero-track" title="Hero score: ${score.hero}/4">${heroPips}</span>` +
-    `<span class="node-dots-group">${nodeDots}</span>` +
-    `<span class="score-track witch-track" title="Witch score: ${score.witch}/4">${witchPips}</span>`;
+  if (gameMode === 'battle') {
+    // Battle mode: numeric score display (unbounded)
+    html =
+      `<span class="score-track hero-track battle-score" title="Hero score: ${score.hero}">` +
+        `<span class="score-num hero">${score.hero}</span>` +
+      `</span>` +
+      `<span class="node-dots-group">${nodeDots}</span>` +
+      `<span class="score-track witch-track battle-score" title="Witch score: ${score.witch}">` +
+        `<span class="score-num witch">${score.witch}</span>` +
+      `</span>`;
+  } else {
+    // Standard mode: pip-based score display (max 4)
+    const scoreMax = 4;
+    const heroPips  = Array.from({ length: scoreMax }, (_, i) =>
+      `<span class="score-pip hero${i < score.hero ? ' filled' : ''}"></span>`).join('');
+    const witchPips = Array.from({ length: scoreMax }, (_, i) =>
+      `<span class="score-pip witch${i < score.witch ? ' filled' : ''}"></span>`).join('');
+    html =
+      `<span class="score-track hero-track" title="Hero score: ${score.hero}/4">${heroPips}</span>` +
+      `<span class="node-dots-group">${nodeDots}</span>` +
+      `<span class="score-track witch-track" title="Witch score: ${score.witch}/4">${witchPips}</span>`;
+  }
 
   const title = witchCount === witchObjectives.length ? '⚠ Witch controls all nodes!'
               : heroCount  === witchObjectives.length ? '★ Hero controls all nodes!'
