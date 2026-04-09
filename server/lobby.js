@@ -629,14 +629,14 @@ function _startPlanningPhase(room, keepDeadline = false) {
     })),
   });
 
-  // Persist state now — always saved with planningPhase: true so recovery
+  // Persist state — always saved with planningPhase: true so recovery
   // never loads a room stuck between rounds.
-  _persistBattleSave(room);
+  _persistRoomSave(room);
 }
 
-/** Persist the current battle room state to DB for crash-recovery. */
-function _persistBattleSave(room) {
-  if (!room.config.isBattle) return;
+/** Persist the current room state to DB for crash-recovery.
+ *  Called from _startPlanningPhase so the saved state always has planningPhase: true. */
+function _persistRoomSave(room) {
   if (room.state.gameOver) return;
   try {
     const snap = serializeState(room.state);
@@ -837,41 +837,6 @@ function _executeResolution(room) {
     console.error(`[room ${room.id}] clearPlanStatus error:`, err);
   }
 
-  // Persist after every round for crash-recovery / hibernation reconnect.
-  // Battle rooms skip this — they save in _startPlanningPhase instead,
-  // ensuring the saved state always has planningPhase: true.
-  if (!state.gameOver && !room.config.isBattle) {
-    try {
-      const firstHero  = room.players.find(s => s.faction === 'hero'  && !s.isAI);
-      const firstWitch = room.players.find(s => s.faction === 'witch' && !s.isAI);
-      const heroName   = room.players.find(s => s.faction === 'hero')?.name  ?? '';
-      const witchName  = room.players.find(s => s.faction === 'witch')?.name ?? '';
-      upsertSave(
-        room.id,
-        firstHero?.playerId  ?? null,
-        firstWitch?.playerId ?? null,
-        heroName,
-        witchName,
-        finalState,
-        {
-          turnIntervalMs:      room.config.turnIntervalMs,
-          consecutiveTimeouts: room.consecutiveTimeouts,
-          config:              room.config,
-          players:             room.players.map(s => ({
-            playerId: s.playerId, name: s.name, faction: s.faction,
-            isAI: s.isAI, personality: s.personality ?? null,
-            originalPlayerId: s.originalPlayerId ?? null,
-          })),
-          isPrivate: room.isPrivate,
-          code:      room.code,
-          status:    'playing',
-        },
-      );
-    } catch (err) {
-      console.error(`[room ${room.id}] upsertSave error:`, err);
-    }
-  }
-
   // Serialize steps for the wire — playerEvents instead of heroEvents/witchEvents
   const serializedSteps = steps.map(step => ({
     stepIndex:      step.stepIndex,
@@ -924,11 +889,14 @@ function _executeResolution(room) {
   });
 
   if (!state.gameOver) {
-    // Check for consecutive timeout AI takeover before next planning phase
     _checkTimeoutTakeovers(room);
     const keepDeadline = !!room._earlySubmit && room.config.isBattle;
     room._earlySubmit = false;
-    setTimeout(() => _startPlanningPhase(room, keepDeadline), ROUND_DELAY_MS);
+
+    // No server-side delay — resolve → startPlanning → save is atomic.
+    // The client buffers the resolution animation via shouldBufferMessages()
+    // and applies the planning phase when ready.
+    _startPlanningPhase(room, keepDeadline);
 
     // Notify disconnected human players that a new round is ready
     const opts = _notifyOpts(room);
@@ -2159,6 +2127,18 @@ export function recoverRoom(roomId) {
     }
   } catch (err) {
     console.error(`[recoverRoom ${roomId}] restore plans error:`, err);
+  }
+
+  // Ensure planning is active. The saved state should always have
+  // planningPhase: true (we save in _startPlanningPhase), but belt-and-suspenders.
+  if (!state.gameOver && !state.planningPhase && !state.resolving) {
+    console.log(`[recoverRoom ${roomId}] room not in planning — starting fresh phase`);
+    state.planningPhase = true;
+    state.resolving = false;
+  }
+  // Restart the deadline timer for the current planning phase
+  if (!state.gameOver && state.planningPhase) {
+    _startPlanningTimer(room);
   }
 
   console.log(`[room ${roomId}] recovered from DB (round ${state.round}, phase ${state.phase}).`);
