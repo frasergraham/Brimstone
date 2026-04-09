@@ -525,6 +525,7 @@ export class UIController {
    * @param {number} budget           Action budget for this round.
    */
   enterPlanningMode(faction, budget, timeoutMs = 0, { showPhaseModal = true } = {}) {
+    console.log(`[ui] enterPlanningMode: faction=${faction} budget=${budget} timeoutMs=${timeoutMs}`);
     this._planMode         = true;
     this._planFaction      = faction;
     this._planBudget       = budget;
@@ -724,6 +725,7 @@ export class UIController {
 
   /** Start a countdown timer — progress bar on submit button + floating button. */
   _startCountdown(timeoutMs) {
+    console.log(`[ui] _startCountdown: timeoutMs=${timeoutMs}`);
     this._stopCountdown();
     const submitBtn = this._el('plan-submit-btn');
     if (!submitBtn) return;
@@ -831,6 +833,7 @@ export class UIController {
     }, { signal: ac.signal });
 
     this._el('grace-submit-empty')?.addEventListener('click', () => {
+      console.log('[ui] grace-submit-empty clicked — clearing plan');
       this._dismissGraceDialog();
       this._unitPlans = new Map();
       this._doSubmitPlan();
@@ -854,6 +857,7 @@ export class UIController {
       }
 
       if (left <= 0) {
+        console.log('[ui] grace timer expired — auto-submitting current plan');
         this._dismissGraceDialog();
         this._doSubmitPlan(); // default: submit current plan
       }
@@ -911,6 +915,7 @@ export class UIController {
       this._unitPlans.set(action.entityId, []);
     }
     this._unitPlans.get(action.entityId).push(action);
+    console.log(`[ui] _addPlanAction: type=${action.type} entityId=${action.entityId} totalActions=${[...this._unitPlans.values()].reduce((n, q) => n + q.length, 0)}`);
     this.onPlanActionAdded?.(action);
     this._refreshPlanOverlay();
     this._renderPlanPanel();
@@ -936,8 +941,10 @@ export class UIController {
   _doSubmitPlan() {
     if (this._planSubmitted) return;
     if (this.tutorialSubmitBlocked) return;
+    const plan = interleavePlan(this._unitPlans);
+    console.log(`[ui] _doSubmitPlan: ${plan.length} actions [${plan.map(a => a.type).join(', ')}]`);
     this.markPlanSubmitted();
-    if (this.onPlanSubmit) this.onPlanSubmit(interleavePlan(this._unitPlans));
+    if (this.onPlanSubmit) this.onPlanSubmit(plan);
   }
 
   /** Mark the plan as submitted (read-only wait state) without firing onPlanSubmit. */

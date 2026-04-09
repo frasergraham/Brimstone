@@ -895,6 +895,15 @@ function _executeResolution(room) {
 
   if (room.config.isBattle) {
     console.log(`[battle] Resolution complete: ${steps.length} steps, gameOver=${state.gameOver}`);
+    for (const step of steps) {
+      for (const pe of step.playerEvents) {
+        for (const ev of pe.events) {
+          const act = ev.action;
+          const tag = act ? `${act.type} entity=${act.entityId?.slice(0,8)}` : '?';
+          console.log(`  step ${step.stepIndex} ${pe.faction}: ${ev.type} ${tag}${ev.reason ? ` — ${ev.reason}` : ''}`);
+        }
+      }
+    }
   }
 
   // Add aggregate battle summary to log before endRound (so it serialises into finalState)

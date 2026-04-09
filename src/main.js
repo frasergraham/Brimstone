@@ -5883,13 +5883,13 @@ async function _applyOnlinePlanningPhase(payload) {
   if (players) ui._players = players;
   ui._hasReplayHistory = _onlineRoundHistory.length > 0;
   if (ui._planMode && ui._planFaction === mp.myFaction && !ui._planSubmitted) {
-    console.log(`[mp] _applyOnlinePlanningPhase: fast path (already planning, budget=${budget})`);
+    console.log(`[mp] _applyOnlinePlanningPhase: fast path (already planning, budget=${budget} timeoutMs=${timeoutMs})`);
     ui._planBudget = budget;
     if (timeoutMs > 0) ui._startCountdown(timeoutMs);
     ui._renderPlayerStatus();
     ui._renderPlanPanel();
   } else {
-    console.log(`[mp] _applyOnlinePlanningPhase: full enter (planMode=${ui._planMode} submitted=${ui._planSubmitted} budget=${budget})`);
+    console.log(`[mp] _applyOnlinePlanningPhase: full enter (planMode=${ui._planMode} submitted=${ui._planSubmitted} budget=${budget} timeoutMs=${timeoutMs})`);
     ui.exitPlanningMode();
     ui.enterPlanningMode(mp.myFaction, budget, timeoutMs ?? 0);
   }
