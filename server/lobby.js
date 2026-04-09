@@ -1800,6 +1800,14 @@ export function resignGame(playerId, roomId, ws) {
     _broadcastPresence(room);
 
     room.state.addLog(`💨 ${playerName} has left the battle.`);
+    _appendChronicle(room, {
+      round:    room.state.round,
+      phase:    room.state.phase,
+      event:    'playerResigned',
+      playerName,
+      faction,
+      timestamp: Date.now(),
+    });
 
     send(ws, { type: 'resigned', roomId });
     console.log(`[battle] ${playerName} resigned from battle ${room.id}`);
@@ -3136,6 +3144,19 @@ export function joinBattle(playerId, playerName, ws, roomId) {
   }
 
   _broadcastPresence(room);
+
+  // Log and chronicle the join
+  const factionLabel = faction === 'hero' ? 'Hero' : 'Witch';
+  room.state.addLog(`⚡ ${playerName} has joined the battle as ${factionLabel}!`);
+  _appendChronicle(room, {
+    round:    room.state.round,
+    phase:    room.state.phase,
+    event:    'playerJoined',
+    playerName,
+    faction,
+    timestamp: Date.now(),
+  });
+
   console.log(`[battle] ${playerName} joined Battle ${room.id} as ${faction} (${heroCount + (faction === 'hero' ? 1 : 0)}v${witchCount + (faction === 'witch' ? 1 : 0)})`);
   return { roomId: room.id, faction };
 }
