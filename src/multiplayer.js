@@ -157,6 +157,9 @@ export class MultiplayerClient {
       if (this._boundOnClose) this._ws.removeEventListener('close', this._boundOnClose);
       this._ws.close();
     }
+    // Clear stale queued messages from failed connection attempts —
+    // they'll be re-queued by the caller (e.g. _reconnect sends auth).
+    this._queue = [];
     this._boundOnClose = () => this._onClose();
     this._ws = new WebSocket(serverUrl);
 
