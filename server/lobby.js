@@ -628,6 +628,38 @@ function _startPlanningPhase(room, keepDeadline = false) {
       actionsLeft:  room.state.playerActionsLeft?.get(s.playerId) ?? 0,
     })),
   });
+
+  // Persist state now — always saved with planningPhase: true so recovery
+  // never loads a room stuck between rounds.
+  _persistBattleSave(room);
+}
+
+/** Persist the current battle room state to DB for crash-recovery. */
+function _persistBattleSave(room) {
+  if (!room.config.isBattle) return;
+  if (room.state.gameOver) return;
+  try {
+    const snap = serializeState(room.state);
+    const firstHero  = room.players.find(s => s.faction === 'hero'  && !s.isAI);
+    const firstWitch = room.players.find(s => s.faction === 'witch' && !s.isAI);
+    const heroName   = room.players.find(s => s.faction === 'hero')?.name  ?? '';
+    const witchName  = room.players.find(s => s.faction === 'witch')?.name ?? '';
+    upsertSave(room.id, firstHero?.playerId ?? null, firstWitch?.playerId ?? null,
+      heroName, witchName, snap, {
+        turnDeadline:        room.turnDeadline,
+        turnIntervalMs:      room.config.turnIntervalMs,
+        consecutiveTimeouts: room.consecutiveTimeouts,
+        config:              room.config,
+        players:             room.players.map(s => ({
+          playerId: s.playerId, name: s.name, faction: s.faction,
+          isAI: s.isAI, personality: s.personality ?? null,
+          originalPlayerId: s.originalPlayerId ?? null,
+        })),
+        isPrivate: room.isPrivate, code: room.code, status: 'playing',
+      });
+  } catch (err) {
+    console.error(`[room ${room.id}] _persistBattleSave error:`, err);
+  }
 }
 
 /** Generate and submit plans for every AI seat, staggered by a short random delay.
@@ -3022,9 +3054,14 @@ export function joinBattle(playerId, playerName, ws, roomId) {
     existingSeat.ws = ws;
     const faction = existingSeat.faction;
 
-    // Use matchFound (same as initial join) — this is the reliable game-entry
-    // path that always triggers initOnline on the client. Avoids the fragile
-    // reconnected → broadcastState → planningPhase multi-message dance.
+    // If the room is in a dead state (not planning, not resolving, not over),
+    // kick off a planning phase. This happens when the room was recovered from
+    // DB after being saved between rounds.
+    if (!room.state.planningPhase && !room.state.resolving && !room.state.gameOver) {
+      _startPlanningPhase(room);
+    }
+
+    // Use matchFound — the reliable game-entry path.
     send(ws, {
       type:       'matchFound',
       roomId:     room.id,
@@ -3117,7 +3154,12 @@ export function joinBattle(playerId, playerName, ws, roomId) {
   });
   broadcastState(room, 'playerJoined');
 
-  // Ensure the new player enters a planning phase
+  // Ensure the room is in planning (may have been saved between rounds)
+  if (!room.state.planningPhase && !room.state.resolving && !room.state.gameOver) {
+    _startPlanningPhase(room);
+  }
+
+  // Add the new player to the planning phase
   if (room.state.planningPhase) {
     // Already in planning — add the new player to the existing phase
     room.state.playerReady.set(playerId, false);

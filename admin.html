@@ -661,7 +661,7 @@
     document.getElementById('btn-end-battle').addEventListener('click', async () => {
       if (!confirm('End the current battle early? This will score the game and start a new one.')) return;
       try {
-        const result = await api('/admin/api/battle/end', { method: 'POST' });
+        const result = await apiPost('/admin/api/battle/end', {});
         alert(`Battle ended. New battle: ${result.newRoomId ? shortId(result.newRoomId) : 'none'}`);
         _tabLoaded.battle = false;
         loadBattle();
