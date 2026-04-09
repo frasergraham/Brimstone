@@ -2170,22 +2170,14 @@ export function recoverRoom(roomId) {
     }
   }
 
-  // Ensure we're in a valid state: planning or gameOver.
-  // If somehow stuck (resolving without a resolver running, or between rounds),
-  // force into planning.
-  if (!state.gameOver && !state.planningPhase) {
-    console.log(`[recoverRoom ${roomId}] forcing planningPhase (was resolving=${state.resolving})`);
-    state.planningPhase = true;
+  // Ensure we're in a valid planning state with correct budgets.
+  // startPlanning() resets plans, computes per-player action budgets,
+  // and sets planningPhase = true. This handles both normal recovery
+  // (state was saved in planning) and corrupt states (stuck resolving).
+  if (!state.gameOver) {
+    state.planningPhase = true;  // ensure startPlanning doesn't bail
     state.resolving = false;
-    // Reset any stale ready/plan state
-    for (const p of state.players) {
-      state.playerReady.set(p.id, false);
-      state.playerPlans.set(p.id, []);
-    }
-  }
-
-  // Restart the deadline timer
-  if (!state.gameOver && state.planningPhase) {
+    state.startPlanning();
     _startPlanningTimer(room);
   }
 
