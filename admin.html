@@ -526,6 +526,7 @@
     function switchTab(tabId) {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tabId));
       document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.id === `tab-${tabId}`));
+      location.hash = tabId;
 
       if (!_tabLoaded[tabId]) {
         _tabLoaded[tabId] = true;
@@ -1134,10 +1135,8 @@
 
     // ── Init ────────────────────────────────────────────────────────────────────
 
-    loadStats();
-    loadRooms();
-    _tabLoaded['dashboard'] = true;
-    _dashboardInterval = setInterval(() => { loadStats(); loadRooms(); }, 10000);
+    const _savedTab = location.hash.replace('#', '') || 'dashboard';
+    switchTab(_savedTab);
   </script>
 </body>
 </html>
