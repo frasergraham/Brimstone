@@ -4547,8 +4547,10 @@ async function _showBattleScreen() {
           '<span style="color:var(--day)">⚠ Plan not yet submitted</span>';
       }
       if (status.turnDeadline) {
-        document.getElementById('battle-my-deadline').textContent =
-          '⏱ Deadline in ' + _formatTimeRemaining(status.turnDeadline);
+        const deadlineEl = document.getElementById('battle-my-deadline');
+        const secsLeft = status.turnDeadline - Math.floor(Date.now() / 1000);
+        deadlineEl.textContent = '⏱ Deadline in ' + _formatTimeRemaining(status.turnDeadline);
+        deadlineEl.style.color = secsLeft <= 1800 ? 'var(--red)' : 'var(--text-dim)';
       }
 
       joinBtn.style.display = '';
