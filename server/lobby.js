@@ -619,6 +619,7 @@ function _startPlanningPhase(room, keepDeadline = false) {
   room.state.updateNodeDiscovery();
   room.state.updateExploredHexes();
   room.state.startPlanning();
+  room._nudgesThisRound = new Set(); // reset nudge tracking for the new round
 
   // Build the submission-status array for clients: who is in the game and their faction
   const playerList = _buildPlayerList(room);
@@ -2059,7 +2060,8 @@ export function handleAction(playerId, roomId, _actionType, _params) {
   send(seat?.ws, { type: 'error', message: 'Use submitPlan — simultaneous planning is active.' });
 }
 
-/** Handle a nudge request — one player asking another to take their turn. */
+/** Handle a nudge request — one player asking another to take their turn.
+ *  Limited to once per sender→target per round. */
 export function handleNudge(senderId, roomId, targetPlayerId) {
   const room = rooms.get(roomId);
   if (!room || room.status !== 'playing') return;
@@ -2074,6 +2076,12 @@ export function handleNudge(senderId, roomId, targetPlayerId) {
 
   // Don't nudge players who already submitted
   if (room.state.playerReady?.get(targetPlayerId)) return;
+
+  // Once per sender→target per round
+  if (!room._nudgesThisRound) room._nudgesThisRound = new Set();
+  const key = `${senderId}→${targetPlayerId}`;
+  if (room._nudgesThisRound.has(key)) return;
+  room._nudgesThisRound.add(key);
 
   // Send in-app WebSocket nudge to the target
   _sendToPlayer?.(targetPlayerId, {
