@@ -65,11 +65,12 @@ const ADMIN_OPEN = process.env.ADMIN_OPEN === '1' || process.env.ADMIN_OPEN === 
 
 const app = express();
 
-// CORS — allow Capacitor native shells (capacitor://localhost, http://localhost)
+// CORS — allow Capacitor native shells (capacitor://localhost, http://localhost, calebshollow://)
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && (
     origin.startsWith('capacitor://') ||
+    origin.startsWith('calebshollow://') ||
     origin.startsWith('http://localhost')
   )) {
     res.setHeader('Access-Control-Allow-Origin', origin);

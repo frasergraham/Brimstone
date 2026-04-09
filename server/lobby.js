@@ -252,10 +252,11 @@ function _sendReconnectPlanningState(room, playerId, ws) {
     : null;
 
   // Only send replay if the player hasn't submitted yet AND was in the game
-  // for the previous round. Battle joins/rejoins skip the replay — the player
-  // wasn't present for that round and replaying it causes a buffering loop.
+  // for the previous round. New battle joiners skip the replay — they weren't
+  // present for that round.
   let lastReplay = null;
-  if (!submittedPlan && !room.config.isBattle) {
+  const wasPresent = (seat?.joinedAtRound ?? 0) < room.state.round;
+  if (!submittedPlan && wasPresent) {
     lastReplay = _getLastUnwatchedReplay(room);
   }
 
@@ -701,6 +702,7 @@ function _persistRoomSave(room) {
           playerId: s.playerId, name: s.name, faction: s.faction,
           isAI: s.isAI, personality: s.personality ?? null,
           originalPlayerId: s.originalPlayerId ?? null,
+          joinedAtRound: s.joinedAtRound ?? null,
         })),
         isPrivate: room.isPrivate, code: room.code, status: 'playing',
       });
@@ -2183,6 +2185,7 @@ function _hibernateRoom(room) {
           playerId: s.playerId, name: s.name, faction: s.faction,
           isAI: s.isAI, personality: s.personality ?? null,
           originalPlayerId: s.originalPlayerId ?? null,
+          joinedAtRound: s.joinedAtRound ?? null,
         })),
         isPrivate: room.isPrivate,
         code:      room.code,
@@ -2239,6 +2242,7 @@ export function recoverRoom(roomId) {
       personality: p.personality ?? null,
     };
     if (p.originalPlayerId) seat.originalPlayerId = p.originalPlayerId;
+    if (p.joinedAtRound != null) seat.joinedAtRound = p.joinedAtRound;
     room.players.push(seat);
 
     // Create AI engine for AI seats
@@ -3212,6 +3216,10 @@ export function joinBattle(playerId, playerName, ws, roomId) {
         if (remaining > 0) timeoutMs = remaining * 1000;
       }
 
+      // Send replay if player was present for the previous round
+      const wasPresent = (existingSeat.joinedAtRound ?? 0) < room.state.round;
+      const lastReplay = (!submittedPlan && wasPresent) ? _getLastUnwatchedReplay(room) : null;
+
       send(ws, {
         type:            'planningPhase',
         myActionsLeft:   budget,
@@ -3220,6 +3228,7 @@ export function joinBattle(playerId, playerName, ws, roomId) {
         timeoutMs,
         players:          _buildPlayerList(room),
         submittedPlan,
+        lastReplay,
       });
     }
 
@@ -3258,6 +3267,7 @@ export function joinBattle(playerId, playerName, ws, roomId) {
   room.players.push({
     playerId, ws, name: playerName, faction,
     isAI: false, ai: null, personality: null,
+    joinedAtRound: room.state.round,
   });
 
   // Send matchFound → stateUpdate → planningPhase — same clean sequence as reconnect

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-web:
     runs-on: ubuntu-latest
 
     permissions:
@@ -34,3 +34,82 @@ jobs:
         with:
           name: calebs-hollow-itch
           path: dist/calebs-hollow-itch.zip
+
+  upload-itch:
+    needs: [build-web]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download web build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: calebs-hollow-itch
+          path: dist/
+
+      - name: Install butler
+        run: |
+          curl -L -o butler.zip "https://broth.itch.zone/butler/linux-amd64/LATEST/archive/default"
+          unzip butler.zip -d butler-bin
+          chmod +x butler-bin/butler
+          echo "$PWD/butler-bin" >> $GITHUB_PATH
+          butler-bin/butler version
+
+      - name: Push web build to itch.io
+        run: butler push dist/calebs-hollow-itch.zip twistedweasel/calebs-hollow:html5 --userversion "$VERSION"
+        env:
+          BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
+
+      # Download desktop builds from the GitHub Release (uploaded by the Electron Build workflow)
+      - name: Download desktop builds from GitHub Release
+        if: github.ref_type == 'tag'
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          echo "Waiting for Electron builds to appear in release $TAG..."
+          mkdir -p desktop/
+          # Poll for up to 30 minutes (Electron builds take ~10-15 min)
+          for i in $(seq 1 60); do
+            ASSETS=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null || echo "")
+            DMG=$(echo "$ASSETS" | grep -i '\.dmg$' | head -1 || true)
+            EXE=$(echo "$ASSETS" | grep -i '\.exe$' | head -1 || true)
+            if [ -n "$DMG" ] && [ -n "$EXE" ]; then
+              echo "Found DMG: $DMG"
+              echo "Found EXE: $EXE"
+              gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "*.dmg" --dir desktop/
+              gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "*.exe" --dir desktop/
+              break
+            fi
+            echo "  Waiting for desktop builds... ($i/60)"
+            sleep 30
+          done
+          ls -lh desktop/ || echo "No desktop builds found"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push macOS build to itch.io
+        if: github.ref_type == 'tag'
+        run: |
+          DMG=$(find desktop/ -name "*.dmg" -type f 2>/dev/null | head -1)
+          if [ -n "$DMG" ]; then
+            echo "Pushing $DMG"
+            butler push "$DMG" twistedweasel/calebs-hollow:mac --userversion "$VERSION"
+          else
+            echo "::warning::No .dmg found — skipping macOS itch.io upload"
+          fi
+        env:
+          BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+          VERSION: ${{ github.ref_name }}
+
+      - name: Push Windows build to itch.io
+        if: github.ref_type == 'tag'
+        run: |
+          EXE=$(find desktop/ -name "*.exe" -type f 2>/dev/null | head -1)
+          if [ -n "$EXE" ]; then
+            echo "Pushing $EXE"
+            butler push "$EXE" twistedweasel/calebs-hollow:windows --userversion "$VERSION"
+          else
+            echo "::warning::No .exe found — skipping Windows itch.io upload"
+          fi
+        env:
+          BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+          VERSION: ${{ github.ref_name }}
