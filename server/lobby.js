@@ -17,7 +17,8 @@ import { upsertSave, deleteSave, getSave,
          getPlanStatus, clearPlanStatus,
          clearAllPlanStatus, getExpiredDeadlineGames,
          getApproachingDeadlineGames,
-         getActiveGamesForPlayer }                      from './saves.js';
+         getActiveGamesForPlayer,
+         isVersionCompatible }                            from './saves.js';
 import { insertAsyncGame, getAsyncGame, getAsyncGameByCode,
          getAsyncGamesForPlayer, activateAsyncGame,
          updateAsyncGameState, finishAsyncGame,
@@ -34,7 +35,7 @@ import { notifyWaitingOnYou, notifyRoundReady,
          shouldNotify }                          from './notifications.js';
 import { sendPush }                              from './push.js';
 import db                                  from './db.js';
-import { VERSION }                         from '../src/version.js';
+import { VERSION, SAVE_VERSION }            from '../src/version.js';
 import { generateMultipleStarts, generateBattleStarts } from '../src/map.js';
 import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS } from '../src/entities.js';
 import { pickAIName }                              from '../src/ai-names.js';
@@ -570,7 +571,14 @@ function _autoSubmitMissingPlans(room) {
   // Close the late-join window: fill any remaining open slots with AI
   _closeOpenSlots(room);
 
+  // Snapshot the round — resolution can fire synchronously when a submit
+  // makes allReady=true, advancing to a new round mid-loop.  If that happens,
+  // stop submitting so we don't accidentally auto-submit into the *next* round
+  // (which races with _runAIPlanSubmission and causes double-submit errors).
+  const round = room.state.round;
+
   for (const seat of room.players) {
+    if (room.state.round !== round) break;
     if (!room.state.playerReady.get(seat.playerId)) {
       if (!seat.isAI) {
         send(seat.ws, { type: 'error', message: 'Planning time expired — an empty plan was submitted.' });
@@ -705,6 +713,7 @@ function _persistRoomSave(room) {
           joinedAtRound: s.joinedAtRound ?? null,
         })),
         isPrivate: room.isPrivate, code: room.code, status: 'playing',
+        saveVersion: SAVE_VERSION,
       });
   } catch (err) {
     console.error(`[room ${room.id}] _persistBattleSave error:`, err);
@@ -1048,10 +1057,17 @@ function _checkTimeoutTakeovers(room) {
     const count = room.consecutiveTimeouts[seat.playerId] || 0;
     if (count >= 2) {
       // Don't take over the last human player — an all-AI game with nobody
-      // watching is pointless. Let them keep playing (or the room will
-      // hibernate naturally when they disconnect).
+      // watching is pointless. But if they're disconnected and have timed out
+      // 3+ rounds in a row, hibernate the room so it stops spinning.
       const humanCount = room.players.filter(s => !s.isAI).length;
       if (humanCount <= 1) {
+        const ws = seat.ws;
+        const connected = ws && ws.readyState === 1 && !ws._inactive;
+        if (!connected && count >= 3) {
+          console.log(`[room ${room.id}] ${seat.name} (${seat.playerId}) — ${count} consecutive timeouts, not connected — hibernating room.`);
+          _hibernateRoom(room);
+          return;
+        }
         console.log(`[room ${room.id}] ${seat.name} (${seat.playerId}) — ${count} consecutive timeouts — skipping takeover (last human).`);
         continue;
       }
@@ -2190,6 +2206,7 @@ function _hibernateRoom(room) {
         isPrivate: room.isPrivate,
         code:      room.code,
         status:    'playing',
+        saveVersion: SAVE_VERSION,
       },
     );
   } catch (err) {
@@ -2204,7 +2221,7 @@ function _hibernateRoom(room) {
 export function recoverRoom(roomId) {
   const save = getSave(roomId);
   if (!save || save.status === 'finished') return null;
-  if (save.game_version !== VERSION) return null;
+  if (!isVersionCompatible(save.game_version, VERSION, save.save_version, SAVE_VERSION)) return null;
 
   let state;
   try {
@@ -2565,7 +2582,7 @@ export function adminResumeGame(savedRoomId) {
   const save = getSave(savedRoomId);
   if (!save) return { ok: false, error: 'No save found.', status: 404 };
 
-  if (save.game_version !== VERSION) {
+  if (!isVersionCompatible(save.game_version, VERSION, save.save_version, SAVE_VERSION)) {
     return { ok: false, error: `Save is from v${save.game_version}; server is v${VERSION}. Cannot resume.`, status: 400 };
   }
 
@@ -3623,6 +3640,7 @@ export function migrateAsyncGames() {
             isPrivate: 1,
             code:      g.code,
             status:    'playing',
+            saveVersion: SAVE_VERSION,
           },
         );
 

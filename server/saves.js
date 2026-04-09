@@ -4,16 +4,31 @@ import db from './db.js';
 
 const SAVE_MAX_AGE_DAYS = 3;
 
+/** Check if a save's version is compatible with the running server.
+ *  Uses SAVE_VERSION (integer) when present in the save; falls back to
+ *  major.minor comparison for saves created before SAVE_VERSION was added. */
+export function isVersionCompatible(saveVersion, currentVersion, saveSaveVersion, currentSaveVersion) {
+  // If the save has a SAVE_VERSION field, use it (exact integer match)
+  if (saveSaveVersion != null && currentSaveVersion != null) {
+    return saveSaveVersion === currentSaveVersion;
+  }
+  // Legacy fallback: compare major.minor of the game version string
+  if (!saveVersion || !currentVersion) return false;
+  const [sMaj, sMin] = saveVersion.split('.');
+  const [cMaj, cMin] = currentVersion.split('.');
+  return sMaj === cMaj && sMin === cMin;
+}
+
 const _upsert = db.prepare(`
   INSERT INTO game_saves
     (room_id, hero_player_id, witch_player_id, hero_name, witch_name,
-     round, phase, game_version, state_json,
+     round, phase, game_version, save_version, state_json,
      turn_deadline, turn_interval_ms, consecutive_timeouts,
      config_json, players_json, is_private, code, status,
      updated_at, created_at)
   VALUES
     (@roomId, @heroPlayerId, @witchPlayerId, @heroName, @witchName,
-     @round, @phase, @gameVersion, @stateJson,
+     @round, @phase, @gameVersion, @saveVersion, @stateJson,
      @turnDeadline, @turnIntervalMs, @consecutiveTimeouts,
      @configJson, @playersJson, @isPrivate, @code, @status,
      unixepoch(), unixepoch())
@@ -21,6 +36,7 @@ const _upsert = db.prepare(`
     round                = excluded.round,
     phase                = excluded.phase,
     game_version         = excluded.game_version,
+    save_version         = excluded.save_version,
     state_json           = excluded.state_json,
     turn_deadline        = excluded.turn_deadline,
     turn_interval_ms     = excluded.turn_interval_ms,
@@ -85,6 +101,7 @@ export function upsertSave(roomId, heroPlayerId, witchPlayerId, heroName, witchN
     round:               serializedState.round,
     phase:               serializedState.phase,
     gameVersion:         serializedState.version,
+    saveVersion:         extra.saveVersion ?? null,
     stateJson:           JSON.stringify(serializedState),
     turnDeadline:        extra.turnDeadline        ?? null,
     turnIntervalMs:      extra.turnIntervalMs       ?? 90000,
@@ -121,27 +138,32 @@ export function getLastSaveRound(roomId) {
 /**
  * Remove stale saves on server startup:
  *   - any save idle for more than SAVE_MAX_AGE_DAYS days
- *   - any save from a different game version (schema may be incompatible)
+ *   - any save from a different major.minor version (schema may be incompatible)
+ *     Patch-only bumps (e.g. 1.3.24 → 1.3.25) are compatible and kept.
  *
  * Returns the number of rows pruned.
  */
-export function pruneStaleAndIncompatibleSaves(currentVersion) {
+export function pruneStaleAndIncompatibleSaves(currentVersion, currentSaveVersion) {
   const cutoff = Math.floor(Date.now() / 1000) - SAVE_MAX_AGE_DAYS * 86400;
-  // Collect room IDs that will be pruned so we can clean up their replay rounds.
-  // Exempt battle rooms (config_json contains isBattle) — they run for a full week.
-  const staleRooms = db.prepare(`
-    SELECT room_id FROM game_saves
-    WHERE (updated_at < ? OR game_version != ?)
-      AND COALESCE(json_extract(config_json, '$.isBattle'), 0) != 1
-  `).all(cutoff, currentVersion);
-  for (const { room_id } of staleRooms) {
+  // Fetch non-battle candidates, then filter in JS for save-version-aware check.
+  const candidates = db.prepare(`
+    SELECT room_id, game_version, save_version, updated_at FROM game_saves
+    WHERE COALESCE(json_extract(config_json, '$.isBattle'), 0) != 1
+  `).all();
+
+  const roomsToPrune = candidates.filter(row =>
+    row.updated_at < cutoff ||
+    !isVersionCompatible(row.game_version, currentVersion, row.save_version, currentSaveVersion)
+  );
+  if (roomsToPrune.length === 0) return 0;
+
+  for (const { room_id } of roomsToPrune) {
     _deleteSaveRounds.run(room_id);
   }
-  const { changes } = db.prepare(`
-    DELETE FROM game_saves
-    WHERE (updated_at < ? OR game_version != ?)
-      AND COALESCE(json_extract(config_json, '$.isBattle'), 0) != 1
-  `).run(cutoff, currentVersion);
+  const placeholders = roomsToPrune.map(() => '?').join(',');
+  const { changes } = db.prepare(
+    `DELETE FROM game_saves WHERE room_id IN (${placeholders})`
+  ).run(...roomsToPrune.map(r => r.room_id));
   return changes;
 }
 

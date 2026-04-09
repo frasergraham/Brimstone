@@ -24,6 +24,7 @@ export const SCHEMA_SQL = `
     round                 INTEGER NOT NULL DEFAULT 1,
     phase                 TEXT NOT NULL DEFAULT 'dawn',
     game_version          TEXT NOT NULL,
+    save_version          INTEGER,
     state_json            TEXT NOT NULL,
     turn_deadline         INTEGER,
     turn_interval_ms      INTEGER NOT NULL DEFAULT 90000,
