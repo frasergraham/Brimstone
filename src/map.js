@@ -117,6 +117,35 @@ export const MAP_SIZES = {
     bridgeMax: 6,
     minBridges: 3,
   },
+  /** 2x Campaign — used exclusively for The Battle for Caleb's Hollow. */
+  battle: {
+    label: 'Battle (42×42)',
+    cols: 42, rows: 42,
+    villages: ['market', 'parish', 'harbor', 'garrison', 'farmstead',
+               'market', 'parish', 'harbor', 'garrison', 'farmstead'],
+    minVillageDist: 8,
+    forestSeeds: [
+      // Corners
+      {col:0,row:0},{col:1,row:2},{col:40,row:1},{col:41,row:0},
+      {col:41,row:10},{col:0,row:16},{col:1,row:26},{col:41,row:22},
+      // Mid edges
+      {col:0,row:8},{col:41,row:5},{col:0,row:34},{col:41,row:38},
+      {col:20,row:0},{col:20,row:41},{col:10,row:41},{col:32,row:41},
+      // Interior scatter
+      {col:10,row:6},{col:22,row:6},{col:34,row:8},{col:8,row:14},
+      {col:28,row:12},{col:14,row:20},{col:30,row:18},{col:6,row:28},
+      {col:20,row:22},{col:36,row:26},{col:12,row:34},{col:26,row:32},
+      {col:18,row:38},{col:34,row:36},{col:4,row:40},{col:38,row:40},
+      {col:16,row:10},{col:26,row:16},{col:8,row:22},{col:34,row:30},
+      {col:2,row:38},{col:40,row:34},{col:22,row:28},{col:10,row:18},
+      {col:30,row:6},{col:14,row:14},{col:38,row:16},{col:4,row:20},
+      {col:24,row:38},{col:36,row:10},{col:6,row:10},{col:32,row:22},
+    ],
+    nodeCount: 5, nodeCountMin: 3, nodeCountMax: 7,
+    survivorCounts: { buildings: 28, terrain: 8 },
+    bridgeMax: 10,
+    minBridges: 5,
+  },
 };
 
 export function rng(seed) {
@@ -281,12 +310,14 @@ export function riverSide(col, row, riverMap, riverEW = false) {
 // Like _pickSpread but guarantees at least one node on each side of the river
 // when count >= 2 and both sides have valid candidates.
 // startPositions: array of {col,row} — no node center may be within 3 hexes of these.
-function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, riverMap, riverEW = false, startPositions = []) {
+function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, riverMap, riverEW = false, startPositions = [], nodeColRange = null) {
+  const colMin = nodeColRange?.min ?? 1;
+  const colMax = nodeColRange?.max ?? (MAP_COLS - 2);
   const left = [], right = [];
   for (const [k, t] of tiles) {
     if (t.type !== TileType.GRASS) continue;
     if (forbiddenKeys.has(k)) continue;
-    if (t.col < 1 || t.col > MAP_COLS - 2 || t.row < 1 || t.row > MAP_ROWS - 2) continue;
+    if (t.col < colMin || t.col > colMax || t.row < 1 || t.row > MAP_ROWS - 2) continue;
     if (startPositions.some(sp => hexDistance(sp.col, sp.row, t.col, t.row) <= 3)) continue;
     (riverSide(t.col, t.row, riverMap, riverEW) === 'left' ? left : right).push({ col: t.col, row: t.row });
   }
@@ -747,7 +778,11 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   const resolvedNodeCount = (nodeCountOverride != null)
     ? Math.max(cfg.nodeCountMin ?? 1, Math.min(cfg.nodeCountMax ?? cfg.nodeCount, nodeCountOverride))
     : cfg.nodeCount;
-  const objPositions = _pickNodesAcrossRiver(rand, tiles, resolvedNodeCount, 4, buildingKeys, riverMap, riverEW, startPositions);
+  // Battle maps: restrict nodes to the middle 2/3 of the map (away from spawn columns)
+  const nodeColRange = mapSize === 'battle'
+    ? { min: Math.floor(cfg.cols / 6), max: Math.floor(cfg.cols * 5 / 6) }
+    : null;
+  const objPositions = _pickNodesAcrossRiver(rand, tiles, resolvedNodeCount, 4, buildingKeys, riverMap, riverEW, startPositions, nodeColRange);
   const witchObjectives = objPositions.map((pos, i) => ({
     col: pos.col, row: pos.row,
     label: WITCH_OBJECTIVE_LABELS[i] ?? `Power Node ${i + 1}`,
@@ -799,6 +834,57 @@ export function generateMultipleStarts(tiles, primaryStart, count, minSep = 2, s
 
   // If we still don't have enough (map is tiny), repeat primary start for overflow
   while (placed.length < count) placed.push({ col: primaryStart.col, row: primaryStart.row });
+
+  return placed;
+}
+
+/**
+ * Generate spawn positions for battle mode.
+ * Heroes spawn in the leftmost 3 columns; witches in the rightmost 3.
+ * Returns `count` positions spread at least `minSep` hexes apart.
+ *
+ * @param {Map<string,Tile>} tiles
+ * @param {'hero'|'witch'} faction
+ * @param {number} count
+ * @param {number} [minSep=2]
+ * @returns {{ col: number, row: number }[]}
+ */
+export function generateBattleStarts(tiles, faction, count, minSep = 2) {
+  const cols = faction === 'hero'
+    ? [0, 1, 2]
+    : [MAP_COLS - 3, MAP_COLS - 2, MAP_COLS - 1];
+
+  // Collect all passable candidate tiles in the faction's starting columns
+  const candidates = [];
+  for (const [, t] of tiles) {
+    if (!cols.includes(t.col)) continue;
+    if (t.type === TileType.RIVER) continue;
+    candidates.push({ col: t.col, row: t.row });
+  }
+
+  // Shuffle deterministically (caller can seed via tiles order)
+  for (let i = candidates.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+  }
+
+  // Greedily pick positions that respect minSep
+  const placed = [];
+  for (const cand of candidates) {
+    if (placed.length >= count) break;
+    const tooClose = placed.some(p => hexDistance(cand.col, cand.row, p.col, p.row) < minSep);
+    if (!tooClose) placed.push({ col: cand.col, row: cand.row });
+  }
+
+  // If not enough (tiny map), relax separation
+  if (placed.length < count) {
+    for (const cand of candidates) {
+      if (placed.length >= count) break;
+      if (!placed.some(p => p.col === cand.col && p.row === cand.row)) {
+        placed.push({ col: cand.col, row: cand.row });
+      }
+    }
+  }
 
   return placed;
 }

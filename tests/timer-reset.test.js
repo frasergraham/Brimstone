@@ -69,7 +69,7 @@ describe('resetCountdown', () => {
     ui._stopCountdown();
   });
 
-  test('is a no-op when plan is already submitted', () => {
+  test('restarts countdown when plan is already submitted (waiting state)', () => {
     const { ui, els } = makeUI();
     ui.enterPlanningMode('hero', 3, 30_000);
     // Simulate submit — sets _planSubmitted = true
@@ -78,9 +78,13 @@ describe('resetCountdown', () => {
 
     ui.resetCountdown(90_000);
 
-    const btn = els['plan-submit-btn'];
-    assert.equal(btn.style._props['--progress'], undefined,
-      '--progress should not be set after submit');
+    // Countdown should restart so the waiting player sees the updated deadline.
+    // After submission the timer ticks in plan-status, not the submit button,
+    // but _countdownEnd should be set proving a countdown is active.
+    assert.ok(ui._countdownEnd != null,
+      '_countdownEnd should be set after resetCountdown while submitted');
+
+    ui._stopCountdown();
   });
 
   test('is a no-op when not in planning mode', () => {
@@ -129,38 +133,27 @@ describe('MultiplayerClient timerReset routing', () => {
 
 // ── Server-side broadcast (source inspection) ────────────────────────────────
 
-describe('server lobby.js timerReset broadcast', () => {
+describe('server lobby.js handlePlanSubmit does not reset timer', () => {
   const lobbyJs = readFileSync(join(root, 'server', 'lobby.js'), 'utf8');
 
-  test('handlePlanSubmit broadcasts timerReset after _submitPlayerPlan', () => {
-    // Find the handlePlanSubmit function body
+  test('handlePlanSubmit does not broadcast timerReset', () => {
     const fnStart = lobbyJs.indexOf('export function handlePlanSubmit');
     assert.ok(fnStart !== -1, 'handlePlanSubmit must exist');
     const section = lobbyJs.slice(fnStart, fnStart + 1200);
 
     assert.ok(
-      section.includes("type: 'timerReset'"),
-      'handlePlanSubmit must broadcast a timerReset message',
+      !section.includes("type: 'timerReset'"),
+      'handlePlanSubmit must NOT broadcast timerReset — deadlines are fixed',
     );
   });
 
-  test('timerReset only sent to non-ready players', () => {
+  test('handlePlanSubmit does not call _startPlanningTimer', () => {
     const fnStart = lobbyJs.indexOf('export function handlePlanSubmit');
-    const section = lobbyJs.slice(fnStart, fnStart + 1200);
+    const section = lobbyJs.slice(fnStart, fnStart + 500);
 
     assert.ok(
-      section.includes('playerReady.get(seat.playerId)'),
-      'timerReset broadcast must check playerReady to exclude already-submitted players',
-    );
-  });
-
-  test('timerReset guarded by planningPhase check', () => {
-    const fnStart = lobbyJs.indexOf('export function handlePlanSubmit');
-    const section = lobbyJs.slice(fnStart, fnStart + 1200);
-
-    assert.ok(
-      section.includes('room.state.planningPhase'),
-      'timerReset broadcast must be guarded by planningPhase check',
+      !section.includes('_startPlanningTimer'),
+      'handlePlanSubmit must NOT reset the planning timer on each submission',
     );
   });
 });

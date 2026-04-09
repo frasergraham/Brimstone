@@ -885,7 +885,7 @@ const MISSIONS = [
 
 export default {
   id:          'calebs_hollow_prologue',
-  title:       'Chapter 1 - Prologue',
+  title:       'Chapter 1 - Welcome to Caleb\'s Hollow',
   description: 'A cursed village, the walking dead, and a witch pulling the strings. Six missions stand between Caleb\'s Hollow and oblivion.',
   missions:    MISSIONS,
   mapBuilders: MAP_BUILDERS,

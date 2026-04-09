@@ -22,7 +22,7 @@ import { pruneStaleAndIncompatibleSaves,
          getCompletedGames, getCompletedGame, getCompletedGameRounds,
          pinCompletedGame, deleteCompletedGame,
          pruneExpiredCompletedGames, getAllCompletedGames,
-         getSaveRounds }                                   from './server/saves.js';
+         getSaveRounds, getCompletedBattles }              from './server/saves.js';
 import {
   createLobby, joinLobby, joinGame, browseLobby, claimSlot,
   setSlotAI, removeSlotAI, fillAllWithAI, startGame, leaveLobby, resignGame,
@@ -43,7 +43,9 @@ import {
   pruneOrphanedRooms,
   broadcastPresenceForPlayer,
   setSendToPlayer,
+  joinBattle, getBattleStatus,
 } from './server/lobby.js';
+import { ensureBattleExists, checkBattleLifecycle, endBattleEarly } from './server/battle-scheduler.js';
 import {
   getAllPlayers, getAllSaves, getSaveWithState,
   getAllGamesPaginated, getGameDetail, getAllPlayersDetailed, resetStats,
@@ -114,6 +116,46 @@ app.get('/api/config', (_req, res) => {
   const payload = { modes: getGameModeConfig() };
   if (getDevMode()) payload.devMode = true;
   res.json(payload);
+});
+
+// REST: Battle for Caleb's Hollow status
+app.get('/api/battle-status', (req, res) => {
+  // Try to extract player ID from session token for player-specific fields
+  let playerId = null;
+  const token = req.query.token || req.headers['x-session-token'];
+  if (token) {
+    try {
+      const row = db.prepare('SELECT id FROM players WHERE token = ?').get(token);
+      if (row) playerId = row.id;
+    } catch { /* ignore */ }
+  }
+  res.json(getBattleStatus(playerId));
+});
+
+// REST: Past battle replays
+app.get('/api/battle-history', (req, res) => {
+  try {
+    let playerId = null;
+    const token = req.query.token || req.headers['x-session-token'];
+    if (token) {
+      try {
+        const row = db.prepare('SELECT id FROM players WHERE token = ?').get(token);
+        if (row) playerId = row.id;
+      } catch { /* ignore */ }
+    }
+    const battles = getCompletedBattles(20);
+    // Annotate each battle with the requesting player's faction (if they participated)
+    for (const b of battles) {
+      if (playerId && b.players_json) {
+        try {
+          const players = JSON.parse(b.players_json);
+          const me = players.find(p => p.playerId === playerId);
+          if (me) b._myFaction = me.faction;
+        } catch { /* ignore */ }
+      }
+    }
+    res.json(battles);
+  } catch { res.json([]); }
 });
 
 // REST: Railway environment auto-discovery for the server selector
@@ -640,6 +682,27 @@ app.get('/admin/api/rooms/:id/chronicle', (req, res) => {
   res.json(chronicle);
 });
 
+// Battle admin endpoints
+app.get('/admin/api/battle', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  const status = getBattleStatus();
+  if (!status) { res.json(null); return; }
+  // Enrich with full player list
+  const room = getRoom(status.roomId);
+  const players = room ? room.players.map(s => ({
+    playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI,
+    connected: !!(s.ws?.readyState === 1),
+    submitted: !!room.state?.playerReady?.get(s.playerId),
+  })) : [];
+  res.json({ ...status, planningPhase: !!room?.state?.planningPhase, players });
+});
+
+app.post('/admin/api/battle/end', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  const newRoomId = endBattleEarly();
+  res.json({ ended: true, newRoomId });
+});
+
 app.get('/admin/api/queue', (req, res) => {
   if (!_requireAdmin(req, res)) return;
   res.json(getQueue());
@@ -971,6 +1034,18 @@ function route(ws, cs, msg) {
       break;
     }
 
+    case 'joinBattle': {
+      if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
+      const battleResult = joinBattle(cs.player.id, cs.player.username, ws, msg.roomId);
+      if (battleResult) { cs.roomId = battleResult.roomId; ws._roomId = battleResult.roomId; }
+      break;
+    }
+
+    case 'getBattleStatus': {
+      send(ws, { type: 'battleStatus', status: getBattleStatus(cs.player?.id) });
+      break;
+    }
+
     case 'browseLobby': {
       if (!cs.player) { send(ws, { type: 'error', message: 'Not authenticated.' }); return; }
       send(ws, { type: 'lobbyList', rooms: browseLobby() });
@@ -1185,4 +1260,8 @@ server.listen(PORT, () => {
   setInterval(checkDeadlines, 30_000); // check every 30 seconds
   setInterval(checkApproachingDeadlines, 60_000); // check approaching deadlines every minute
   setInterval(pruneOrphanedRooms, 30_000); // clean up orphaned rooms every 30 seconds
+
+  // Battle for Caleb's Hollow: ensure a battle exists and check lifecycle
+  try { ensureBattleExists(); } catch (err) { console.error('[battle-scheduler]', err); }
+  setInterval(checkBattleLifecycle, 30_000);
 });

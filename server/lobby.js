@@ -1,6 +1,6 @@
 // Lobby: room lifecycle, server-side AI, action dispatch
 import { randomUUID } from 'crypto';
-import { GameState, Player } from '../src/game.js';
+import { GameState, Player, GameMode, computeActionsForPlayer, countHeldNodes } from '../src/game.js';
 import { HERO_PERSONALITIES, WITCH_PERSONALITIES } from '../src/ai.js';
 import { WitchAIEngine } from '../src/ai-engine.js';
 import { HeroAIEngine } from '../src/hero-ai-engine.js';
@@ -30,11 +30,12 @@ import { insertAsyncGame, getAsyncGame, getAsyncGameByCode,
 import { notifyWaitingOnYou, notifyRoundReady,
          notifyDeadlineApproaching, notifyGameOver,
          notifyGameAbandoned, notifyNudge, sendGameInvite,
+         notifyBattleDeadlineApproaching,
          shouldNotify }                          from './notifications.js';
 import { sendPush }                              from './push.js';
 import db                                  from './db.js';
 import { VERSION }                         from '../src/version.js';
-import { generateMultipleStarts }          from '../src/map.js';
+import { generateMultipleStarts, generateBattleStarts } from '../src/map.js';
 import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS } from '../src/entities.js';
 import { pickAIName }                              from '../src/ai-names.js';
 
@@ -43,6 +44,54 @@ const RECONNECT_GRACE_MS = parseInt(process.env.RECONNECT_GRACE_MS, 10) || 60_00
 const TURN_TIMEOUT_MS    = parseInt(process.env.TURN_TIMEOUT_MS, 10)    || 90_000;
 const ROUND_DELAY_MS     = parseInt(process.env.ROUND_DELAY_MS, 10)     || 4000;
 const CHRONICLE_MAX      = 100;    // max rounds retained per room in the chronicle
+const BATTLE_ADVANCE_THRESHOLD_S = 30 * 60; // 30 minutes — if less than this until deadline, advance to next
+
+/** Next battle turn deadline: noon or midnight PST, whichever is soonest.
+ *  Returns a Unix timestamp (seconds) in true UTC. */
+function _nextBattleDeadline() {
+  // Get current PST hours/date by formatting to PST then parsing components
+  const pstStr = new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles', hour12: false });
+  const [datePart, timePart] = pstStr.split(', ');
+  const [month, day, year] = datePart.split('/').map(Number);
+  const [hours] = timePart.split(':').map(Number);
+
+  // Build target times as ISO strings in America/Los_Angeles
+  // Use Intl.DateTimeFormat to get the UTC offset for PST/PDT
+  const nowMs = Date.now();
+
+  // Next noon PST: if before noon PST, target is today noon; else tomorrow noon
+  // Next midnight PST: if before midnight (always true if we got past noon check), tomorrow midnight
+  // We test both and return whichever is sooner and still in the future
+
+  const tryTarget = (targetHour, daysAhead) => {
+    // Construct a date string in PST: "YYYY-MM-DDThh:00:00" and resolve via Date
+    const d = new Date(pstStr);
+    d.setDate(d.getDate() + daysAhead);
+    d.setHours(targetHour, 0, 0, 0);
+    // Convert back to true UTC by round-tripping through toLocaleString
+    // This is imprecise. Instead, compute offset from a known reference.
+    return Math.floor(d.getTime() / 1000);
+  };
+
+  // Simpler approach: compute using the offset between local JS time and PST
+  const utcNow = new Date();
+  const pstNow = new Date(utcNow.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+  const offsetMs = utcNow.getTime() - pstNow.getTime(); // UTC - PST_as_local = offset
+
+  // Build noon and midnight in PST, convert to UTC
+  const todayNoonPST = new Date(pstNow);
+  todayNoonPST.setHours(12, 0, 0, 0);
+  const todayNoonUTC = new Date(todayNoonPST.getTime() + offsetMs);
+  if (todayNoonUTC.getTime() > nowMs) {
+    return Math.floor(todayNoonUTC.getTime() / 1000);
+  }
+
+  const tomorrowMidnightPST = new Date(pstNow);
+  tomorrowMidnightPST.setDate(tomorrowMidnightPST.getDate() + 1);
+  tomorrowMidnightPST.setHours(0, 0, 0, 0);
+  const tomorrowMidnightUTC = new Date(tomorrowMidnightPST.getTime() + offsetMs);
+  return Math.floor(tomorrowMidnightUTC.getTime() / 1000);
+}
 
 // ── Player notification callback (injected by server.js to avoid circular imports) ──
 
@@ -196,21 +245,33 @@ function _sendReconnectPlanningState(room, playerId, ws) {
   const budget = room.state.playerActionsLeft?.get(playerId)
     ?? (seat?.faction === 'hero' ? room.state.heroActionsLeft : room.state.witchActionsLeft);
 
-  // Check if this player already submitted a plan
-  const planRows = getPlanStatus(room.id, room.state.round);
-  const myPlan = planRows.find(r => r.player_id === playerId && r.plan_json);
-  const submittedPlan = myPlan ? JSON.parse(myPlan.plan_json) : null;
+  // Send the player's submitted plan if they've already submitted this round.
+  const isReady = !!room.state.playerReady.get(playerId);
+  const submittedPlan = isReady
+    ? (room.state.playerPlans.get(playerId) ?? null)
+    : null;
 
-  // Only send replay if the player hasn't submitted yet — if they submitted,
-  // they were in the game when the round resolved and already saw it.
-  const lastReplay = submittedPlan ? null : _getLastUnwatchedReplay(room);
+  // Only send replay if the player hasn't submitted yet AND was in the game
+  // for the previous round. Battle joins/rejoins skip the replay — the player
+  // wasn't present for that round and replaying it causes a buffering loop.
+  let lastReplay = null;
+  if (!submittedPlan && !room.config.isBattle) {
+    lastReplay = _getLastUnwatchedReplay(room);
+  }
+
+  // Compute remaining time for the countdown timer
+  let timeoutMs = 0;
+  if (room.turnDeadline) {
+    const remaining = room.turnDeadline - Math.floor(Date.now() / 1000);
+    if (remaining > 0) timeoutMs = remaining * 1000;
+  }
 
   send(ws, {
     type:            'planningPhase',
     myActionsLeft:   budget,
     heroActionsLeft:  room.state.heroActionsLeft,
     witchActionsLeft: room.state.witchActionsLeft,
-    timeoutMs:        0,
+    timeoutMs,
     players:          _buildPlayerList(room),
     submittedPlan,
     lastReplay,
@@ -300,9 +361,10 @@ function createRoom(config = {}) {
       fog:              config.fog ?? 'partial',
       mapSize:          config.mapSize ?? 'standard',
       nodeCount:        config.nodeCount ?? null,
-      playersPerSide:   Math.max(1, Math.min(4, (config.playersPerSide | 0) || 1)),
+      playersPerSide:   Math.max(1, Math.min(config.isBattle ? 10 : 4, (config.playersPerSide | 0) || 1)),
       turnIntervalMs:   Math.max(Math.min(TURN_TIMEOUT_MS, 30_000), Math.min(259_200_000, Number(config.turnIntervalMs) || TURN_TIMEOUT_MS)),
       isAsync:          !!config.isAsync,
+      isBattle:         !!config.isBattle,
     },
     consecutiveTimeouts: {},  // playerId → consecutive empty-plan timeout count
     slots:            [],
@@ -325,8 +387,8 @@ function createRoom(config = {}) {
 }
 
 /** Build an ordered slot array for the given players-per-side count. */
-function _buildSlots(playersPerSide) {
-  const pps   = Math.max(1, Math.min(4, playersPerSide | 0));
+function _buildSlots(playersPerSide, isBattle = false) {
+  const pps   = Math.max(1, Math.min(isBattle ? 10 : 4, playersPerSide | 0));
   const slots = [];
   for (let i = 0; i < pps; i++) {
     slots.push({ faction: 'hero', seatIndex: i, status: 'empty', playerId: null, name: null, personality: null });
@@ -400,7 +462,7 @@ function _addSeat(room, playerId, ws, name, faction, isAI, ai = null) {
   }
 }
 
-function destroyRoom(room) {
+export function destroyRoom(room) {
   if (room.turnTimer) clearTimeout(room.turnTimer);
   if (room.allHumansGoneTimer) clearTimeout(room.allHumansGoneTimer);
   for (const t of room.disconnectTimers.values()) clearTimeout(t);
@@ -453,13 +515,44 @@ export function pruneOrphanedRooms() {
 
 // ── Planning timer ────────────────────────────────────────────────────────────
 
-function _startPlanningTimer(room) {
+function _startPlanningTimer(room, keepDeadline = false) {
   _clearTurnTimer(room);
   if (room.state.gameOver) return;
 
-  const timeoutMs = room.config.turnIntervalMs ?? TURN_TIMEOUT_MS;
+  if (room.config.isBattle) {
+    // Battle mode: use wall-clock deadlines (noon / midnight PST).
+    // keepDeadline=true means all players submitted early and we're reusing
+    // the existing deadline (unless it's < 30min away, in which case advance).
+    const now = Math.floor(Date.now() / 1000);
 
-  // Store the deadline in the room for background checker (hibernated rooms)
+    if (keepDeadline && room.turnDeadline) {
+      const remaining = room.turnDeadline - now;
+      if (remaining > BATTLE_ADVANCE_THRESHOLD_S) {
+        // > 30min left — keep the same deadline
+        const timeoutMs = Math.max(1000, remaining * 1000);
+        room.turnTimer = setTimeout(() => {
+          room.turnTimer = null;
+          if (room.state.gameOver || !room.state.planningPhase) return;
+          _autoSubmitMissingPlans(room);
+        }, timeoutMs);
+        return;
+      }
+      // < 30min left — fall through to advance to next deadline
+    }
+
+    const nextDeadline = _nextBattleDeadline();
+    room.turnDeadline = nextDeadline;
+    const timeoutMs = Math.max(1000, (nextDeadline - now) * 1000);
+    room.turnTimer = setTimeout(() => {
+      room.turnTimer = null;
+      if (room.state.gameOver || !room.state.planningPhase) return;
+      _autoSubmitMissingPlans(room);
+    }, timeoutMs);
+    return;
+  }
+
+  // Standard games: relative timeout from now
+  const timeoutMs = room.config.turnIntervalMs ?? TURN_TIMEOUT_MS;
   room.turnDeadline = Math.floor(Date.now() / 1000) + Math.ceil(timeoutMs / 1000);
 
   room.turnTimer = setTimeout(() => {
@@ -518,11 +611,15 @@ function _clearTurnTimer(room) {
 
 // ── Simultaneous planning helpers ─────────────────────────────────────────────
 
-/** Begin a new planning phase: reset plans, compute per-player budgets, broadcast, kick AI. */
-function _startPlanningPhase(room) {
+/** Begin a new planning phase: reset plans, compute per-player budgets, broadcast, kick AI.
+ *  @param {boolean} [keepDeadline] — if true, reuse the current deadline (battle early-submit)
+ */
+function _startPlanningPhase(room, keepDeadline = false) {
   if (room.state.gameOver) return;
+  room.state.updateNodeDiscovery();
   room.state.updateExploredHexes();
   room.state.startPlanning();
+  room._nudgesThisRound = new Set(); // reset nudge tracking for the new round
 
   // Build the submission-status array for clients: who is in the game and their faction
   const playerList = _buildPlayerList(room);
@@ -537,7 +634,14 @@ function _startPlanningPhase(room) {
 
   broadcastState(room, 'planningPhase');
 
-  const timeoutMs = room.config.turnIntervalMs ?? TURN_TIMEOUT_MS;
+  // Compute actual remaining time for the client countdown.
+  // For battle rooms this is time until the wall-clock deadline (noon/midnight),
+  // not the config interval.
+  let timeoutMs = room.config.turnIntervalMs ?? TURN_TIMEOUT_MS;
+  if (room.turnDeadline) {
+    const remaining = room.turnDeadline - Math.floor(Date.now() / 1000);
+    if (remaining > 0) timeoutMs = remaining * 1000;
+  }
 
   // Send planning-phase message to each player individually so each gets their own budget
   for (const seat of room.players) {
@@ -553,7 +657,7 @@ function _startPlanningPhase(room) {
     });
   }
 
-  _startPlanningTimer(room);
+  _startPlanningTimer(room, keepDeadline);
   _runAIPlanSubmission(room);
 
   // Let admin spectators know a new planning phase has started
@@ -571,6 +675,38 @@ function _startPlanningPhase(room) {
       actionsLeft:  room.state.playerActionsLeft?.get(s.playerId) ?? 0,
     })),
   });
+
+  // Persist state — always saved with planningPhase: true so recovery
+  // never loads a room stuck between rounds.
+  _persistRoomSave(room);
+}
+
+/** Persist the current room state to DB for crash-recovery.
+ *  Called from _startPlanningPhase so the saved state always has planningPhase: true. */
+function _persistRoomSave(room) {
+  if (room.state.gameOver) return;
+  try {
+    const snap = serializeState(room.state);
+    const firstHero  = room.players.find(s => s.faction === 'hero'  && !s.isAI);
+    const firstWitch = room.players.find(s => s.faction === 'witch' && !s.isAI);
+    const heroName   = room.players.find(s => s.faction === 'hero')?.name  ?? '';
+    const witchName  = room.players.find(s => s.faction === 'witch')?.name ?? '';
+    upsertSave(room.id, firstHero?.playerId ?? null, firstWitch?.playerId ?? null,
+      heroName, witchName, snap, {
+        turnDeadline:        room.turnDeadline,
+        turnIntervalMs:      room.config.turnIntervalMs,
+        consecutiveTimeouts: room.consecutiveTimeouts,
+        config:              room.config,
+        players:             room.players.map(s => ({
+          playerId: s.playerId, name: s.name, faction: s.faction,
+          isAI: s.isAI, personality: s.personality ?? null,
+          originalPlayerId: s.originalPlayerId ?? null,
+        })),
+        isPrivate: room.isPrivate, code: room.code, status: 'playing',
+      });
+  } catch (err) {
+    console.error(`[room ${room.id}] _persistBattleSave error:`, err);
+  }
 }
 
 /** Generate and submit plans for every AI seat, staggered by a short random delay.
@@ -625,6 +761,10 @@ function _runAIPlanSubmission(room) {
 function _submitPlayerPlan(room, playerId, plan, isTimeout = false) {
   if (!room.state.planningPhase) return;
 
+  if (room.config.isBattle) {
+    console.log(`[battle] _submitPlayerPlan: player=${playerId} plan=${plan.length} actions, isTimeout=${isTimeout}, round=${room.state.round}`);
+  }
+
   let allReady;
   try {
     allReady = room.state.submitPlayerPlan(playerId, plan);
@@ -677,7 +817,33 @@ function _submitPlayerPlan(room, playerId, plan, isTimeout = false) {
     }
   }
 
+  if (room.config.isBattle) {
+    const readyCount = [...room.state.playerReady.values()].filter(Boolean).length;
+    const totalCount = room.state.playerReady.size;
+    console.log(`[battle] After submit: allReady=${allReady} ready=${readyCount}/${totalCount} planningPhase=${room.state.planningPhase} resolving=${room.state.resolving}`);
+  }
+
   if (allReady) {
+    // Battle mode: don't resolve until both factions have at least one player.
+    // The solo player's plan stays submitted; resolution triggers when an
+    // opponent joins and submits, or at the daily deadline.
+    if (room.config.isBattle) {
+      const hasHero  = room.players.some(s => s.faction === 'hero');
+      const hasWitch = room.players.some(s => s.faction === 'witch');
+      if (!hasHero || !hasWitch) {
+        console.log(`[battle] All plans in but only one faction present — waiting for opponent`);
+        // Keep the state in planning so joining players enter the right branch.
+        // submitPlayerPlan already set planningPhase=false; restore it.
+        room.state.planningPhase = true;
+        room.state.resolving     = false;
+        // Restart the deadline timer so the room doesn't sit forever
+        if (!room.turnTimer) _startPlanningTimer(room);
+        return;
+      }
+    }
+    // Track whether this was an early submission (all players beat the deadline)
+    // so the next planning phase can decide whether to keep or advance the deadline.
+    room._earlySubmit = !isTimeout;
     _executeResolution(room);
   }
 }
@@ -698,6 +864,13 @@ function _executeResolution(room) {
     });
   }
 
+  if (room.config.isBattle) {
+    console.log(`[battle] _executeResolution: round=${state.round} phase=${state.phase} players=${playerEntries.length}`);
+    for (const pe of playerEntries) {
+      console.log(`  ${pe.faction} ${pe.playerId}: ${pe.plan.length} actions [${pe.plan.map(a => a.type).join(', ')}]`);
+    }
+  }
+
   // Snapshot state BEFORE resolution for full-game replay
   const preStateJson = JSON.stringify(serializeState(state));
 
@@ -707,6 +880,10 @@ function _executeResolution(room) {
   } catch (err) {
     console.error(`[room ${room.id}] resolvePlansMP error:`, err);
     steps = [];
+  }
+
+  if (room.config.isBattle) {
+    console.log(`[battle] Resolution complete: ${steps.length} steps, gameOver=${state.gameOver}`);
   }
 
   // Add aggregate battle summary to log before endRound (so it serialises into finalState)
@@ -726,39 +903,6 @@ function _executeResolution(room) {
     clearPlanStatus(room.id, state.round - 1);  // endRound() already incremented
   } catch (err) {
     console.error(`[room ${room.id}] clearPlanStatus error:`, err);
-  }
-
-  // Persist after every round for crash-recovery / hibernation reconnect
-  if (!state.gameOver) {
-    try {
-      const firstHero  = room.players.find(s => s.faction === 'hero'  && !s.isAI);
-      const firstWitch = room.players.find(s => s.faction === 'witch' && !s.isAI);
-      const heroName   = room.players.find(s => s.faction === 'hero')?.name  ?? '';
-      const witchName  = room.players.find(s => s.faction === 'witch')?.name ?? '';
-      upsertSave(
-        room.id,
-        firstHero?.playerId  ?? null,
-        firstWitch?.playerId ?? null,
-        heroName,
-        witchName,
-        finalState,
-        {
-          turnIntervalMs:      room.config.turnIntervalMs,
-          consecutiveTimeouts: room.consecutiveTimeouts,
-          config:              room.config,
-          players:             room.players.map(s => ({
-            playerId: s.playerId, name: s.name, faction: s.faction,
-            isAI: s.isAI, personality: s.personality ?? null,
-            originalPlayerId: s.originalPlayerId ?? null,
-          })),
-          isPrivate: room.isPrivate,
-          code:      room.code,
-          status:    'playing',
-        },
-      );
-    } catch (err) {
-      console.error(`[room ${room.id}] upsertSave error:`, err);
-    }
   }
 
   // Serialize steps for the wire — playerEvents instead of heroEvents/witchEvents
@@ -813,9 +957,14 @@ function _executeResolution(room) {
   });
 
   if (!state.gameOver) {
-    // Check for consecutive timeout AI takeover before next planning phase
     _checkTimeoutTakeovers(room);
-    setTimeout(() => _startPlanningPhase(room), ROUND_DELAY_MS);
+    const keepDeadline = !!room._earlySubmit && room.config.isBattle;
+    room._earlySubmit = false;
+
+    // No server-side delay — resolve → startPlanning → save is atomic.
+    // The client buffers the resolution animation via shouldBufferMessages()
+    // and applies the planning phase when ready.
+    _startPlanningPhase(room, keepDeadline);
 
     // Notify disconnected human players that a new round is ready
     const opts = _notifyOpts(room);
@@ -835,6 +984,63 @@ function _executeResolution(room) {
  * If so, replace them with AI and notify all players.
  */
 function _checkTimeoutTakeovers(room) {
+  if (room.config.isBattle) {
+    // Battle mode: kick players who miss 2 consecutive deadlines.
+    // Same as resign — scatter units, free the slot, they can rejoin later.
+    for (const seat of [...room.players]) {
+      if (seat.isAI) continue;
+      const count = room.consecutiveTimeouts[seat.playerId] || 0;
+      if (count < 2) continue;
+
+      const playerName = seat.name;
+      const playerId   = seat.playerId;
+      const faction    = seat.faction;
+      console.log(`[battle] ${playerName} (${playerId}) — ${count} consecutive timeouts — kicked from battle.`);
+
+      // Scatter units (survivors to buildings, summons vanish)
+      room.state.scatterPlayerUnits(playerId);
+
+      // Remove leader entity
+      room.state.entities = room.state.entities.filter(
+        e => e.ownerId !== playerId || (e.type !== 'hero' && e.type !== 'witch')
+      );
+
+      // Remove from state.players and room.players
+      room.state.players = room.state.players.filter(p => p.id !== playerId);
+      room.players = room.players.filter(s => s.playerId !== playerId);
+
+      room.state.addLog(`💨 ${playerName} was removed from the battle for inactivity.`);
+      _appendChronicle(room, {
+        round: room.state.round, phase: room.state.phase,
+        event: 'playerKicked', playerName, faction, timestamp: Date.now(),
+      });
+
+      // Notify remaining players
+      const msg = { type: 'playerResigned', playerId, playerName };
+      broadcast(room, msg);
+      broadcastToSpectators(room, msg);
+
+      // Notify the kicked player
+      send(seat.ws, { type: 'resigned', roomId: room.id, kicked: true });
+
+      // Push notification
+      try {
+        sendPush(playerId, {
+          title: 'Removed from the Battle',
+          body: 'You were removed for missing 2 consecutive deadlines. You can rejoin anytime.',
+          roomId: room.id,
+        }).catch(() => {});
+      } catch { /* ignore */ }
+
+      delete room.consecutiveTimeouts[playerId];
+    }
+    _broadcastPresence(room);
+    // Persist so kicks survive a server restart
+    _persistRoomSave(room);
+    return;
+  }
+
+  // Standard games: AI takeover after 2 consecutive timeouts
   for (const seat of [...room.players]) {
     if (seat.isAI) continue;
     const count = room.consecutiveTimeouts[seat.playerId] || 0;
@@ -1151,7 +1357,9 @@ function checkAndHandleGameOver(room) {
  * Create a new lobby room. The host fills the first hero slot.
  */
 export function createLobby(playerId, playerName, ws, config = {}) {
-  const pps  = Math.max(1, Math.min(4, (config.playersPerSide | 0) || 1));
+  const isBattle = !!config.isBattle;
+  const maxPPS   = isBattle ? 10 : 4;
+  const pps      = Math.max(1, Math.min(maxPPS, (config.playersPerSide | 0) || 1));
   const room = createRoom({
     fog:            config.fog ?? 'partial',
     mapSize:        config.mapSize ?? 'standard',
@@ -1159,10 +1367,11 @@ export function createLobby(playerId, playerName, ws, config = {}) {
     playersPerSide: pps,
     turnIntervalMs: config.turnIntervalMs,
     isAsync:        config.isAsync ?? false,
+    isBattle,
   });
   room.isPrivate    = config.isPrivate ?? false;
   room.hostPlayerId = playerId;
-  room.slots        = _buildSlots(pps);
+  room.slots        = _buildSlots(pps, isBattle);
 
   // Host starts unassigned — they pick a slot in the lobby UI
   room.unassigned.push({ playerId, name: playerName, _ws: ws });
@@ -1237,6 +1446,7 @@ export function browseLobby() {
   const results = [];
   for (const r of rooms.values()) {
     if (r.isPrivate) continue;
+    if (r.config.isBattle) continue;  // battle has its own menu entry
     if (r.status === 'lobby') {
       results.push(_lobbyPublic(r));
     } else if (r.status === 'playing' && r.openSlots?.length > 0) {
@@ -1663,7 +1873,7 @@ export function resignGame(playerId, roomId, ws) {
   let room = rooms.get(roomId);
   if (!room) {
     // Try recovering from DB
-    room = _recoverRoom(roomId);
+    room = recoverRoom(roomId);
   }
   if (!room || !room.state) {
     send(ws, { type: 'error', message: 'Game not found.' });
@@ -1685,6 +1895,68 @@ export function resignGame(playerId, roomId, ws) {
   const playerName = seat.name ?? 'A player';
   const faction    = seat.faction;
 
+  // ── Battle mode: free the slot, scatter units, allow rejoin later ──────
+  if (room.config.isBattle) {
+    // Scatter the player's units (survivors to buildings, summons vanish)
+    room.state.scatterPlayerUnits(playerId);
+
+    // Remove the leader entity
+    room.state.entities = room.state.entities.filter(
+      e => e.ownerId !== playerId || (e.type !== 'hero' && e.type !== 'witch')
+    );
+
+    // Remove from state.players
+    room.state.players = room.state.players.filter(p => p.id !== playerId);
+
+    // Auto-ready if in planning so they don't block resolution
+    if (room.state.planningPhase) {
+      room.state.playerReady.set(playerId, true);
+      room.state.playerPlans.set(playerId, []);
+      room.state.playerActionsLeft.delete(playerId);
+    }
+
+    // Remove their seat from the room
+    room.players = room.players.filter(s => s.playerId !== playerId);
+
+    const msg = { type: 'playerResigned', playerId, playerName };
+    broadcast(room, msg);
+    broadcastToSpectators(room, msg);
+    broadcastState(room, 'resign');
+    _broadcastPresence(room);
+
+    room.state.addLog(`💨 ${playerName} has left the battle.`);
+    _appendChronicle(room, {
+      round:    room.state.round,
+      phase:    room.state.phase,
+      event:    'playerResigned',
+      playerName,
+      faction,
+      timestamp: Date.now(),
+    });
+
+    send(ws, { type: 'resigned', roomId });
+    console.log(`[battle] ${playerName} resigned from battle ${room.id}`);
+
+    // Persist immediately so the resign survives a server restart
+    _persistRoomSave(room);
+
+    // Check if all plans are now ready (the resigned player was the last holdout)
+    if (room.state.planningPhase) {
+      const allReady = [...room.state.playerReady.values()].every(Boolean);
+      if (allReady && room.players.length > 0) {
+        const hasHero  = room.players.some(s => s.faction === 'hero');
+        const hasWitch = room.players.some(s => s.faction === 'witch');
+        if (hasHero && hasWitch) {
+          room.state.planningPhase = false;
+          room.state.resolving     = true;
+          _executeResolution(room);
+        }
+      }
+    }
+    return;
+  }
+
+  // ── Standard game resign ──────────────────────────────────────────────
   // Check if there are other humans on the same side
   const otherHumansOnSide = room.players.filter(
     s => s.faction === faction && !s.isAI && s.playerId !== playerId
@@ -1777,20 +2049,7 @@ export function handlePlanSubmit(playerId, roomId, plan) {
   if (state.playerReady.get(playerId)) { send(seat.ws, { type: 'error', message: 'Plan already submitted.' }); return; }
   if (!Array.isArray(plan)) { send(seat.ws, { type: 'error', message: 'Invalid plan format.' }); return; }
 
-  // Reset the planning timer each time a plan comes in
-  _startPlanningTimer(room);
-
   _submitPlayerPlan(room, playerId, plan);
-
-  // Notify remaining players that the deadline has been extended
-  if (room.state.planningPhase) {
-    const timeoutMs = room.config.turnIntervalMs ?? TURN_TIMEOUT_MS;
-    for (const seat of room.players) {
-      if (!room.state.playerReady.get(seat.playerId)) {
-        send(seat.ws, { type: 'timerReset', timeoutMs });
-      }
-    }
-  }
 }
 
 /** Legacy handler — kept for clients that submit via the old 'endTurn' message. */
@@ -1806,7 +2065,8 @@ export function handleAction(playerId, roomId, _actionType, _params) {
   send(seat?.ws, { type: 'error', message: 'Use submitPlan — simultaneous planning is active.' });
 }
 
-/** Handle a nudge request — one player asking another to take their turn. */
+/** Handle a nudge request — one player asking another to take their turn.
+ *  Limited to once per sender→target per round. */
 export function handleNudge(senderId, roomId, targetPlayerId) {
   const room = rooms.get(roomId);
   if (!room || room.status !== 'playing') return;
@@ -1821,6 +2081,12 @@ export function handleNudge(senderId, roomId, targetPlayerId) {
 
   // Don't nudge players who already submitted
   if (room.state.playerReady?.get(targetPlayerId)) return;
+
+  // Once per sender→target per round
+  if (!room._nudgesThisRound) room._nudgesThisRound = new Set();
+  const key = `${senderId}→${targetPlayerId}`;
+  if (room._nudgesThisRound.has(key)) return;
+  room._nudgesThisRound.add(key);
 
   // Send in-app WebSocket nudge to the target
   _sendToPlayer?.(targetPlayerId, {
@@ -1891,7 +2157,7 @@ function _checkAllHumansGone(room) {
 
 /**
  * Persist room state to DB and remove from in-memory rooms Map.
- * The room can be recovered later via _recoverRoom().
+ * The room can be recovered later via recoverRoom().
  */
 function _hibernateRoom(room) {
   if (!room.state) return;
@@ -1932,7 +2198,7 @@ function _hibernateRoom(room) {
 /**
  * Recover a hibernated room from DB. Returns the restored room or null.
  */
-function _recoverRoom(roomId) {
+export function recoverRoom(roomId) {
   const save = getSave(roomId);
   if (!save || save.status === 'finished') return null;
   if (save.game_version !== VERSION) return null;
@@ -1983,17 +2249,41 @@ function _recoverRoom(roomId) {
     }
   }
 
-  // Restore submitted plans from DB
-  try {
-    const planRows = getPlanStatus(roomId, state.round);
-    for (const row of planRows) {
-      if (row.plan_json !== null) {
-        const plan = JSON.parse(row.plan_json);
-        try { state.submitPlayerPlan(row.player_id, plan); } catch {}
+  // Ensure we're in a valid planning state with correct budgets.
+  // startPlanning() resets plans, computes per-player action budgets,
+  // and sets planningPhase = true.
+  if (!state.gameOver) {
+    state.planningPhase = true;
+    state.resolving = false;
+    state.startPlanning();
+
+    // Restore submitted plans from DB — if a player submitted before the
+    // restart, their plan should still count. submitPlayerPlan sets
+    // playerReady = true for each restored player.
+    try {
+      const planRows = getPlanStatus(roomId, state.round);
+      for (const row of planRows) {
+        if (row.plan_json !== null && row.submitted_at) {
+          const plan = JSON.parse(row.plan_json);
+          try { state.submitPlayerPlan(row.player_id, plan); } catch {}
+        }
       }
+    } catch (err) {
+      console.error(`[recoverRoom ${roomId}] restore plans error:`, err);
     }
-  } catch (err) {
-    console.error(`[recoverRoom ${roomId}] restore plans error:`, err);
+
+    // If all plans were restored and everyone is ready, resolve immediately.
+    // Otherwise start the planning timer for remaining players.
+    const allReady = state.players.length > 0 &&
+      [...state.playerReady.values()].every(Boolean);
+    if (allReady && !state.gameOver) {
+      // Don't resolve inline during recovery — let the first player connection
+      // trigger it naturally via _submitPlayerPlan → _executeResolution.
+      // Just leave the state as-is (planningPhase=false, resolving=true).
+      console.log(`[recoverRoom ${roomId}] all plans restored — ready to resolve on next connect`);
+    } else {
+      _startPlanningTimer(room);
+    }
   }
 
   console.log(`[room ${roomId}] recovered from DB (round ${state.round}, phase ${state.phase}).`);
@@ -2002,8 +2292,12 @@ function _recoverRoom(roomId) {
 
 /** Handle a player reconnecting. */
 export function handleReconnect(playerId, roomId, ws) {
-  const room = rooms.get(roomId);
-  if (!room) return false;
+  let room = rooms.get(roomId);
+  if (!room) {
+    // Room not in memory — try recovering from DB (e.g. after server restart)
+    room = recoverRoom(roomId);
+    if (!room) return false;
+  }
 
   // Find seat by current playerId or by originalPlayerId (AI-taken-over seats)
   let seat = seatFor(room, playerId);
@@ -2094,7 +2388,7 @@ export function getRoom(roomId) {
 
 /** Lightweight summary of every active room (no full state). */
 export function getRooms() {
-  return [...rooms.values()].map(room => ({
+  return [...rooms.values()].filter(room => !room.config.isBattle).map(room => ({
     id:             room.id,
     code:           room.code,
     status:         room.status,
@@ -2126,6 +2420,7 @@ export function getActiveRoomsForPlayer(playerId) {
   for (const room of rooms.values()) {
     if (room.status !== 'playing') continue;
     if (room.state?.gameOver) continue;
+    if (room.config.isBattle) continue;  // battle games shown via getBattleStatus, not here
     const seat = room.players.find(
       s => s.playerId === playerId || s.originalPlayerId === playerId
     );
@@ -2137,6 +2432,14 @@ export function getActiveRoomsForPlayer(playerId) {
     const actionNeeded = room.state.planningPhase &&
       !room.state.playerReady?.get(playerId) &&
       !seat.isAI;
+    // Count submissions for in-progress display
+    const humanPlayers = room.players.filter(s => !s.isAI);
+    let playersSubmitted = 0;
+    if (room.state.planningPhase && room.state.playerReady) {
+      for (const s of humanPlayers) {
+        if (room.state.playerReady.get(s.playerId)) playersSubmitted++;
+      }
+    }
     results.push({
       room_id:          room.id,
       hero_name:        heroName,
@@ -2153,6 +2456,8 @@ export function getActiveRoomsForPlayer(playerId) {
       updated_at:       Math.floor(Date.now() / 1000),
       status:           room.status,
       action_needed:    actionNeeded,
+      players_submitted: playersSubmitted,
+      players_total:    humanPlayers.length,
       players_json:     JSON.stringify(room.players.map(s => ({
         playerId: s.playerId, name: s.name, faction: s.faction, isAI: s.isAI,
       }))),
@@ -2165,8 +2470,9 @@ export function getActiveRoomsForPlayer(playerId) {
     for (const g of dbGames) {
       if (seenRoomIds.has(g.room_id)) continue;
       // Extract fields from config_json
+      let cfg = {};
       try {
-        const cfg = JSON.parse(g.config_json || '{}');
+        cfg = JSON.parse(g.config_json || '{}');
         g.is_async = cfg.isAsync ?? false;
         g.map_size = cfg.mapSize ?? 'standard';
         g.players_per_side = cfg.playersPerSide ?? 1;
@@ -2175,16 +2481,25 @@ export function getActiveRoomsForPlayer(playerId) {
         g.map_size = 'standard';
         g.players_per_side = 1;
       }
+      if (cfg.isBattle) continue;  // battle games shown via getBattleStatus
       delete g.config_json;
-      // Compute action_needed from plan status
+      // Compute action_needed and submission counts from plan status
       if (g.status === 'playing') {
         try {
           const plans = getPlanStatus(g.room_id, g.round);
           const myPlan = plans.find(p => p.player_id === playerId);
           g.action_needed = myPlan ? !myPlan.submitted_at : true;
-        } catch { g.action_needed = true; }
+          g.players_submitted = plans.filter(p => p.submitted_at).length;
+          g.players_total = plans.length;
+        } catch {
+          g.action_needed = true;
+          g.players_submitted = 0;
+          g.players_total = 0;
+        }
       } else {
         g.action_needed = false;
+        g.players_submitted = 0;
+        g.players_total = 0;
       }
       results.push(g);
     }
@@ -2291,7 +2606,7 @@ export function resumeGame(playerId, ws, roomId) {
   }
 
   // Try recovering the room from DB (hibernated game)
-  const room = _recoverRoom(roomId);
+  const room = recoverRoom(roomId);
   if (room) {
     const rejoined = handleReconnect(playerId, roomId, ws);
     if (rejoined) {
@@ -2798,6 +3113,273 @@ function _finishAsyncGame(roomId, game, state, serializedSteps, finalState) {
   }
 }
 
+// ── Battle for Caleb's Hollow ────────────────────────────────────────────────
+
+/**
+ * Create a new Battle for Caleb's Hollow room.
+ * Called by the battle scheduler on server startup / weekly cron.
+ * Returns the room ID.
+ *
+ * @param {{ endsAt: number, battleDeadlineHour?: number }} battleOpts
+ */
+export function createBattleRoom(battleOpts = {}) {
+  const endsAt = battleOpts.endsAt ?? Math.floor(Date.now() / 1000) + 7 * 86400;
+  const room = createRoom({
+    fog:            'partial',
+    mapSize:        'battle',
+    nodeCount:      5,
+    playersPerSide: 10,
+    isAsync:        true,
+    isBattle:       true,
+    // Twice-daily deadline (noon + midnight PST) — 12 hours per turn
+    turnIntervalMs: 43_200_000,
+  });
+  room.status = 'playing';  // battles skip the lobby phase
+  room.isPrivate = false;
+
+  // Initialize GameState with battle-sized map (42×42)
+  const state = new GameState(false, false, 'battle', 5);
+  state.fogOfWar   = 'partial';
+  state.gameMode   = GameMode.BATTLE;
+  state.battleConfig = { endsAt, maxPlayersPerSide: 10 };
+
+  // Remove the default hero/witch entities and player entries created by the
+  // constructor — battle mode players join dynamically via joinBattle().
+  state.entities = [];
+  state.players  = [];
+  state.hero     = null;
+  state.witch    = null;
+
+  room.state = state;
+
+  // No slots pre-built — players join dynamically via joinBattle()
+  room.slots = [];
+  room.openSlotPlayerIds = new Set();
+  room.openSlots = [];
+
+  console.log(`[battle] Created Battle room ${room.id} (ends at ${new Date(endsAt * 1000).toISOString()})`);
+  return room.id;
+}
+
+/**
+ * Join an active Battle for Caleb's Hollow room.
+ * Assigns the player to the undermanned faction and spawns their leader.
+ * Can be called at any round (not limited to Round 1).
+ *
+ * @returns {{ roomId: string, faction: string }|null}
+ */
+export function joinBattle(playerId, playerName, ws, roomId) {
+  const room = rooms.get(roomId);
+  if (!room || !room.config.isBattle) {
+    send(ws, { type: 'error', message: 'No active Battle found.' });
+    return null;
+  }
+
+  // ── Reconnect: existing player returning ──────────────────────────────
+  const existingSeat = room.players.find(s => s.playerId === playerId);
+  if (existingSeat) {
+    existingSeat.ws = ws;
+    const faction = existingSeat.faction;
+
+    // Use matchFound — the reliable game-entry path.
+    // Room should already be in planning (saved that way, or forced by recoverRoom).
+    send(ws, {
+      type:       'matchFound',
+      roomId:     room.id,
+      faction,
+      myPlayerId: playerId,
+      players:    _buildPlayerList(room),
+      aiOpponent: false,
+      isAsync:    true,
+      isBattle:   true,
+    });
+    send(ws, { type: 'stateUpdate', reason: 'battleReconnect', state: serializeState(room.state) });
+
+    // Send planning state if in planning phase
+    if (room.state.planningPhase && !room.state.resolving) {
+      const budget = room.state.playerActionsLeft?.get(playerId)
+        ?? (faction === 'hero' ? room.state.heroActionsLeft : room.state.witchActionsLeft);
+
+      // Send submitted plan if the player already submitted this round.
+      const isReady = !!room.state.playerReady.get(playerId);
+      const submittedPlan = isReady
+        ? (room.state.playerPlans.get(playerId) ?? null)
+        : null;
+
+      let timeoutMs = 0;
+      if (room.turnDeadline) {
+        const remaining = room.turnDeadline - Math.floor(Date.now() / 1000);
+        if (remaining > 0) timeoutMs = remaining * 1000;
+      }
+
+      send(ws, {
+        type:            'planningPhase',
+        myActionsLeft:   budget,
+        heroActionsLeft:  room.state.heroActionsLeft,
+        witchActionsLeft: room.state.witchActionsLeft,
+        timeoutMs,
+        players:          _buildPlayerList(room),
+        submittedPlan,
+      });
+    }
+
+    _broadcastPresence(room);
+    console.log(`[battle] ${playerName} reconnected to battle ${room.id} as ${faction}`);
+    return { roomId: room.id, faction };
+  }
+
+  // ── New player joining ────────────────────────────────────────────────
+  const heroCount  = room.players.filter(s => s.faction === 'hero').length;
+  const witchCount = room.players.filter(s => s.faction === 'witch').length;
+
+  const maxPPS = room.state.battleConfig?.maxPlayersPerSide ?? 10;
+  if (heroCount >= maxPPS && witchCount >= maxPPS) {
+    send(ws, { type: 'error', message: 'Battle is full. You may spectate instead.' });
+    return null;
+  }
+
+  // Assign to undermanned faction (tie-break: hero first)
+  let faction;
+  if (heroCount <= witchCount && heroCount < maxPPS) faction = 'hero';
+  else if (witchCount < maxPPS) faction = 'witch';
+  else faction = 'hero';
+
+  const starts = generateBattleStarts(room.state.tiles, faction, 1);
+  if (!starts.length) {
+    send(ws, { type: 'error', message: 'No available spawn position.' });
+    return null;
+  }
+
+  const leader = room.state.addPlayer(playerId, playerName, faction, starts[0].col, starts[0].row, false);
+  const factionPlayers = room.state.players.filter(p => p.faction === faction);
+  const colors = faction === 'hero' ? HERO_PLAYER_COLORS : WITCH_PLAYER_COLORS;
+  leader.color = colors[(factionPlayers.length - 1) % colors.length];
+
+  room.players.push({
+    playerId, ws, name: playerName, faction,
+    isAI: false, ai: null, personality: null,
+  });
+
+  // Send matchFound → stateUpdate → planningPhase — same clean sequence as reconnect
+  send(ws, {
+    type:       'matchFound',
+    roomId:     room.id,
+    faction,
+    myPlayerId: playerId,
+    players:    _buildPlayerList(room),
+    aiOpponent: false,
+    isAsync:    true,
+    isBattle:   true,
+  });
+
+  // Notify existing players
+  broadcastExcept(room, playerId, {
+    type: 'playerJoinedBattle', playerId, playerName, faction,
+  });
+  broadcastState(room, 'playerJoined');
+
+  // Ensure the room is in planning (may have been saved between rounds)
+  if (!room.state.planningPhase && !room.state.resolving && !room.state.gameOver) {
+    _startPlanningPhase(room);
+  }
+
+  // Add the new player to the planning phase
+  if (room.state.planningPhase) {
+    // Already in planning — add the new player to the existing phase
+    room.state.playerReady.set(playerId, false);
+    const nb = countHeldNodes(faction, room.state.witchObjectives, room.state.entities);
+    room.state.playerActionsLeft.set(playerId, computeActionsForPlayer(playerId, faction, room.state.phase, room.state.entities, nb));
+
+    let timeoutMs = 0;
+    if (room.turnDeadline) {
+      const remaining = room.turnDeadline - Math.floor(Date.now() / 1000);
+      if (remaining > 0) timeoutMs = remaining * 1000;
+    }
+
+    send(ws, {
+      type:            'planningPhase',
+      myActionsLeft:   room.state.playerActionsLeft.get(playerId) ?? 0,
+      heroActionsLeft:  room.state.heroActionsLeft,
+      witchActionsLeft: room.state.witchActionsLeft,
+      timeoutMs,
+      players:          _buildPlayerList(room),
+    });
+  } else {
+    // First player — start a fresh planning phase
+    _startPlanningPhase(room);
+  }
+
+  _broadcastPresence(room);
+
+  // Log and chronicle the join
+  const factionLabel = faction === 'hero' ? 'Hero' : 'Witch';
+  room.state.addLog(`⚡ ${playerName} has joined the battle as ${factionLabel}!`);
+  _appendChronicle(room, {
+    round:    room.state.round,
+    phase:    room.state.phase,
+    event:    'playerJoined',
+    playerName,
+    faction,
+    timestamp: Date.now(),
+  });
+
+  console.log(`[battle] ${playerName} joined Battle ${room.id} as ${faction} (${heroCount + (faction === 'hero' ? 1 : 0)}v${witchCount + (faction === 'witch' ? 1 : 0)})`);
+
+  // Persist so the new player survives a server restart
+  _persistRoomSave(room);
+
+  return { roomId: room.id, faction };
+}
+
+/**
+ * Get the active battle room, if any.
+ * @returns {Room|null}
+ */
+export function getActiveBattleRoom() {
+  for (const [, room] of rooms) {
+    if (room.config.isBattle && room.status === 'playing') return room;
+  }
+  return null;
+}
+
+/**
+ * Get battle status for the multiplayer menu.
+ * Returns null if no active battle, or a summary object.
+ */
+export function getBattleStatus(playerId = null) {
+  const room = getActiveBattleRoom();
+  if (!room) return null;
+  const state = room.state;
+  const seat = playerId ? room.players.find(s => s.playerId === playerId) : null;
+  return {
+    roomId:      room.id,
+    heroCount:   room.players.filter(s => s.faction === 'hero').length,
+    witchCount:  room.players.filter(s => s.faction === 'witch').length,
+    maxPerSide:  state.battleConfig?.maxPlayersPerSide ?? 10,
+    heroScore:   state.nodeScore?.hero ?? 0,
+    witchScore:  state.nodeScore?.witch ?? 0,
+    round:       state.round,
+    endsAt:      state.battleConfig?.endsAt ?? 0,
+    isFull:      room.players.filter(s => s.faction === 'hero').length >= (state.battleConfig?.maxPlayersPerSide ?? 10)
+              && room.players.filter(s => s.faction === 'witch').length >= (state.battleConfig?.maxPlayersPerSide ?? 10),
+    // Player list with submission status
+    players: room.players.map(s => ({
+      playerId:  s.playerId,
+      name:      s.name,
+      faction:   s.faction,
+      isAI:      s.isAI,
+      submitted: !!state.playerReady?.get(s.playerId),
+      connected: s.isAI || !!(s.ws?.readyState === 1),
+      active:    s.isAI || !!(s.ws?.readyState === 1 && !s.ws._inactive),
+    })),
+    // Player-specific fields
+    joined:      !!seat,
+    myFaction:   seat?.faction ?? null,
+    mySubmitted: seat ? !!state.playerReady?.get(seat.playerId) : false,
+    turnDeadline: room.turnDeadline ?? null,
+  };
+}
+
 // ── Async deadline checker ──────────────────────────────────────────────────
 
 /**
@@ -2887,7 +3469,7 @@ export function checkDeadlines() {
       // Skip if room is already active in memory (timer handles it)
       if (rooms.has(roomId)) continue;
 
-      const room = _recoverRoom(roomId);
+      const room = recoverRoom(roomId);
       if (!room) continue;
 
       // If room was saved between rounds, start planning first
@@ -2915,6 +3497,7 @@ export function checkDeadlines() {
  * unsubmitted players. Called periodically by the server.
  */
 export function checkApproachingDeadlines() {
+  // Standard async games: 10-minute warning
   let games;
   try {
     games = getApproachingDeadlineGames(600_000); // 10 minutes
@@ -2927,6 +3510,7 @@ export function checkApproachingDeadlines() {
     try {
       const config = row.config_json ? JSON.parse(row.config_json) : {};
       if (!config.isAsync) continue;
+      if (config.isBattle) continue; // battle has its own wider window below
 
       const minutesLeft = Math.max(1, Math.round((row.turn_deadline - Date.now() / 1000) / 60));
       const plans = getPlanStatus(row.room_id, row.round);
@@ -2939,6 +3523,34 @@ export function checkApproachingDeadlines() {
       }
     } catch (err) {
       console.error(`[checkApproachingDeadlines] room ${row.room_id} error:`, err);
+    }
+  }
+
+  // Battle mode: 1-hour warning
+  let battleGames;
+  try {
+    battleGames = getApproachingDeadlineGames(3_600_000); // 60 minutes
+  } catch (err) {
+    console.error('[checkApproachingDeadlines] battle query error:', err);
+    return;
+  }
+
+  for (const row of battleGames) {
+    try {
+      const config = row.config_json ? JSON.parse(row.config_json) : {};
+      if (!config.isBattle) continue;
+
+      const minutesLeft = Math.max(1, Math.round((row.turn_deadline - Date.now() / 1000) / 60));
+      const plans = getPlanStatus(row.room_id, row.round);
+
+      for (const p of plans) {
+        if (p.submitted_at) continue;
+        notifyBattleDeadlineApproaching(p.player_id, {
+          roomId: row.room_id, minutesLeft,
+        }, { isAsync: true }).catch(() => {});
+      }
+    } catch (err) {
+      console.error(`[checkApproachingDeadlines] battle room ${row.room_id} error:`, err);
     }
   }
 }

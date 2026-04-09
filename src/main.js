@@ -18,6 +18,7 @@ import {
   checkEmailTokenInUrl, requestLinkEmail, requestEmailLogin, fetchIdentities,
 } from './multiplayer.js';
 import { VERSION, BUILD_VERSION } from './version.js';
+import { buildPlayerStatusHtml } from './ui-render.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType, groupPlanByEntity } from './planner.js';
 import { hexDistance, getNeighbors } from './hex.js';
@@ -26,9 +27,8 @@ import { getFaction, allFactions } from './factions.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { MAP_SIZES } from './map.js';
-import { buildTutorialMap, TUTORIAL_WAVES, TUTORIAL_FORCED_DICE } from './tutorial/tutorial-config.js';
 import { nodeController } from './game.js';
-import { TutorialConductor } from './tutorial.js';
+import { MissionConductor } from './mission-conductor.js';
 import { createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, setForcedDice, EntityType, markRosterUsedByName, ENTITY_COLOR } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves } from './campaign/campaign.js';
@@ -45,7 +45,6 @@ document.getElementById('version-badge').textContent = `v${BUILD_VERSION}`;
 const _MODE_BUTTON_MAP = {
   singleplayer: 'btn-single-player',
   multiplayer:  'btn-multiplayer',
-  tutorial:     'btn-tutorial',
   story:        'btn-story-mode',
   quickplay:    'btn-quick-play',
   local:        'btn-local-pass-play',
@@ -88,7 +87,7 @@ let _autoplay  = false;
 // _inGame and _resolving replaced by AppMode state machine (src/app-mode.js)
 let _pendingPlanningPhase = null; // buffered onPlanningPhase payload received during animation
 let _pendingSubmissions   = [];   // buffered playerSubmitted messages received during animation
-let _tutorialConductor = null;    // non-null while a tutorial session is active
+let _missionConductor = null;     // non-null while a conductor-driven mission is active
 let _gameStartTime = null;        // wall-clock timestamp for game duration tracking
 
 // ── Round-history for full-game replay ───────────────────────────────────────
@@ -147,6 +146,11 @@ function _genSaveId() {
  * Called by both init() and _startFromState() so neither can forget a callback.
  */
 function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
+  // Tear down previous UIController so its stale event listeners don't fire
+  // on shared DOM elements (plan-submit-btn, end-turn-btn, etc.), which would
+  // submit an empty plan from the old instance's _unitPlans.
+  if (ui) ui.destroy();
+
   renderer = new Renderer(canvas, state);
   renderer.resize();
   renderer.onImagesLoaded = () => { if (ui) ui._renderTurnInfo(); };
@@ -174,7 +178,7 @@ function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
 function init(witchIsAI, heroIsAI, autoplay = false) {
   _autoplay = autoplay;
   _gameStartTime = Date.now();
-  _tutorialConductor = null; // ensure tutorial state is cleared for normal games
+  _missionConductor = null; // ensure conductor state is cleared for normal games
   _roundHistory = [];
   // Assign a fresh save ID for this game (only used for single-player saves)
   _spSaveId = _genSaveId();
@@ -313,63 +317,6 @@ function _recordCampaignGameStats() {
       localStorage.setItem('brimstone_campaign_stats', JSON.stringify(local));
     } catch { /* storage full or unavailable — silently discard */ }
   });
-}
-
-// ── Tutorial mode ─────────────────────────────────────────────────────────────
-
-function initTutorial() {
-  _autoplay  = false;
-  _spSaveId  = null; // no save for tutorial
-  const canvas = document.getElementById('game-canvas');
-
-  document.getElementById('setup-screen').style.display = 'none';
-  document.getElementById('game-screen').style.display  = 'flex';
-
-  // Build the fixed tutorial map and inject it into a new GameState.
-  // witchIsAI = false so we can drive the witch plan ourselves via TutorialConductor.
-  // noWitch = true so no witch entity is created.
-  const mapData = buildTutorialMap();
-  state = new GameState(false, false, 'tutorial', null, mapData);
-
-  // Disable fog of war — tutorial should be fully visible.
-  state.fogOfWar = 'none';
-
-  // Guarantee a survivor in the HOUSE at (2,3) for the round-3 exploration demo.
-  const houseTile = state.tiles.get(_hexKey(2, 3));
-  if (houseTile) houseTile.hiddenSurvivor = true;
-
-  // No AI helpers for tutorial — TutorialConductor drives the witch plan.
-  witchAI = null;
-  heroAI  = null;
-
-  _setupLocalUI(canvas, null, null, false);
-
-  // Suppress phase modals and hero auto-select during the tutorial.
-  ui.tutorialMode = true;
-
-  // Wire tutorial callbacks into UIController.
-  ui.onPlanActionAdded = (action) => _tutorialConductor?.onActionQueued(action);
-  ui.onEntitySelected  = (entity) => _tutorialConductor?.onEntitySelected(entity);
-
-  // Suppress the resolution summary modal — tutorial has its own flow.
-  const _origOnPlanSubmit = null; // will be set per-round below
-
-  redraw();
-
-  requestAnimationFrame(() => {
-    renderer.resize();
-    const heroEntity = state.entities.find(e => e.type === 'hero');
-    if (heroEntity) {
-      renderer.frameHexes([heroEntity], { maxZoom: 2.2, paddingHexes: 3, duration: 500 });
-    }
-    redraw();
-  });
-
-  // Create conductor after UI is set up so renderer reference is valid.
-  _tutorialConductor = new TutorialConductor(state, ui, renderer, redraw);
-  _tutorialConductor.start();
-
-  _startLocalPlanningPhase();
 }
 
 // ── AI Debug data capture ────────────────────────────────────────────────────
@@ -523,15 +470,15 @@ function _startLocalPlanningPhase() {
     return;
   }
 
-  // Tutorial mode: hero always plans; conductor provides scripted witch plan.
-  if (_tutorialConductor) {
-    _tutorialConductor.onPlanningPhaseStart();
-    // After round 3 (survivor rescue) the tutorial is in explanation-only mode —
+  // Conductor-driven mission: hero always plans; conductor provides scripted opponent plan.
+  if (_missionConductor) {
+    _missionConductor.onPlanningPhaseStart();
+    // After maxPlanningRounds the conductor enters explanation-only mode —
     // no more planning rounds.  We still call onPlanningPhaseStart so the conductor
     // can advance to the explanation steps, but we don't enter planning mode.
-    if (_tutorialConductor._round >= 3) return;
+    if (!_missionConductor.shouldPlan()) return;
     ui.enterPlanningMode('hero', state.heroActionsLeft);
-    ui.onPlanSubmit = (heroPlan) => _onTutorialPlanSubmit(heroPlan);
+    ui.onPlanSubmit = (heroPlan) => _onConductorPlanSubmit(heroPlan);
     return;
   }
 
@@ -571,22 +518,21 @@ function _enterLocalPlanningMode() {
 }
 
 /**
- * Tutorial plan submit: hero submits, conductor provides scripted witch plan,
- * then both resolve together.  No resolution summary modal is shown.
+ * Conductor-driven plan submit: hero submits, conductor provides scripted
+ * witch plan, then both resolve together.  No resolution summary modal is shown.
  */
-async function _onTutorialPlanSubmit(heroPlan) {
+async function _onConductorPlanSubmit(heroPlan) {
   ui.exitPlanningMode();
-  _tutorialConductor?.onPlanSubmitted();
+  _missionConductor?.onPlanSubmitted();
 
-  // Round 2 (combat round): force deterministic dice so the tutorial can
-  // describe the outcome reliably.
-  // Hero (ATK 3) attacks Minion (DEF 0): die=6 → atk=9, die=1 → def=1 → crush 2 dmg → kills minion
-  if (_tutorialConductor?._round === 1) {
-    setForcedDice(...TUTORIAL_FORCED_DICE);
+  // Apply forced dice if configured for this round
+  const forcedDice = _missionConductor?.getForcedDice();
+  if (forcedDice) {
+    setForcedDice(...forcedDice);
   }
 
   state.submitPlan('hero', heroPlan);
-  const witchPlan = _tutorialConductor ? _tutorialConductor.getWitchPlan() : [];
+  const witchPlan = _missionConductor ? _missionConductor.getWitchPlan() : [];
   state.submitPlan('witch', witchPlan);
 
   await _runLocalResolution(true /* skipSummary */);
@@ -700,8 +646,8 @@ async function _runLocalResolution(skipSummary = false) {
     if (t) t.explored = v;
   }
 
-  // Notify tutorial conductor that resolution animation has finished.
-  if (_tutorialConductor) _tutorialConductor.onResolutionComplete();
+  // Notify mission conductor that resolution animation has finished.
+  if (_missionConductor) _missionConductor.onResolutionComplete();
 
   // Add aggregate battle summary to the log before endRound inserts phase entries
   const summaryLines = compileTurnBattleSummary(steps, state.entities, ResEventType, PlanActionType);
@@ -722,12 +668,6 @@ async function _runLocalResolution(skipSummary = false) {
     for (const msg of waveLogs) state.addLog(msg);
   }
 
-  // Tutorial wave spawning: minion appears after round 1
-  if (_tutorialConductor) {
-    const waveLogs = processWaves(state, TUTORIAL_WAVES, _createEnemyEntity);
-    for (const msg of waveLogs) state.addLog(msg);
-  }
-
   // Show encounter dialogs for survivors spawned at power nodes during endRound
   if (ui && !_autoplay && state.nodeSpawnedSurvivors?.length) {
     for (const s of state.nodeSpawnedSurvivors) {
@@ -741,8 +681,8 @@ async function _runLocalResolution(skipSummary = false) {
   // Persist single-player progress to localStorage
   _saveSpGame();
 
-  // Persist campaign mid-mission progress
-  if (_activeCampaign && _activeMissionDef && !state.gameOver) {
+  // Persist campaign mid-mission progress (skip conductor-driven missions like the tutorial)
+  if (_activeCampaign && _activeMissionDef && !state.gameOver && !_missionConductor) {
     _saveCampaignMission();
   }
 
@@ -1506,6 +1446,17 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       const actor = step.entitySnapshot?.find(e => e.id === action.entityId);
       if (!actor) continue;
 
+      // Frame camera on all hero units — the horn reveals them to the opponent
+      if (!_autoplay) {
+        const hornTargets = step.entitySnapshot
+          .filter(e => e.alive && e.owner === 'hero')
+          .map(e => ({ col: e.col, row: e.row }));
+        if (hornTargets.length) {
+          renderer.frameHexes(hornTargets, { paddingHexes: 3, maxZoom: 1.8, duration: 400 });
+          await _delay(420);
+        }
+      }
+
       // Gold expanding ring showing the 4-hex horn range
       renderer.addNodeRevealAnim(
         [{ col: actor.col, row: actor.row }], '#d4a72c',
@@ -1678,6 +1629,29 @@ onInactiveChange((inactive) => {
   }
 });
 
+// Battle countdown timer (in-game)
+let _battleCountdownTimer = null;
+function _updateBattleCountdown() {
+  const el = document.getElementById('battle-countdown');
+  if (!el) return;
+  if (!state || state.gameMode !== 'battle' || !state.battleConfig?.endsAt) {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = '';
+  el.textContent = 'Battle ends in ' + _formatTimeRemaining(state.battleConfig.endsAt);
+}
+function _startBattleCountdownTimer() {
+  if (_battleCountdownTimer) clearInterval(_battleCountdownTimer);
+  _updateBattleCountdown();
+  _battleCountdownTimer = setInterval(_updateBattleCountdown, 60_000);
+}
+function _stopBattleCountdownTimer() {
+  if (_battleCountdownTimer) { clearInterval(_battleCountdownTimer); _battleCountdownTimer = null; }
+  const el = document.getElementById('battle-countdown');
+  if (el) el.style.display = 'none';
+}
+
 function initOnline(mirrorState, myFaction, mpClient) {
   setMode(AppMode.PLANNING);
   state    = mirrorState;
@@ -1685,6 +1659,8 @@ function initOnline(mirrorState, myFaction, mpClient) {
 
   document.getElementById('setup-screen').style.display = 'none';
   document.getElementById('game-screen').style.display  = 'flex';
+
+  if (ui) ui.destroy();
 
   renderer = new Renderer(canvas, state);
   renderer.resize();
@@ -1708,6 +1684,20 @@ function initOnline(mirrorState, myFaction, mpClient) {
   ui.myPlayerId = mpClient.myPlayerId ?? null;
   ui._isAsync   = mpClient.isAsync ?? false;
   ui._players   = (state.players ?? []).map(p => ({ ...p, playerId: p.playerId ?? p.id }));
+
+  // Start battle countdown if in battle mode
+  if (state.gameMode === 'battle') _startBattleCountdownTimer();
+
+  // If the game is already in a planning phase (e.g. reconnecting to a battle),
+  // enter planning mode immediately. A separate planningPhase message may also
+  // arrive and will call enterPlanningMode again (which is safe — it resets).
+  if (state.planningPhase && mpClient.myFaction) {
+    const budget = (mpClient.myFaction === 'hero' ? state.heroActionsLeft : state.witchActionsLeft) || 3;
+    ui.enterPlanningMode(mpClient.myFaction, budget, 0);
+    ui.onPlanSubmit = (plan) => mpClient.submitPlan(plan);
+    ui.onReturnToMenu = () => { location.reload(); };
+    ui.onReplayLastTurn = () => _replayLastTurnInline();
+  }
 
   redrawOnline();
 
@@ -1745,7 +1735,7 @@ const stepSinglePlayer = document.getElementById('setup-step-singleplayer');
 const stepCampaignSelect = document.getElementById('setup-step-campaign-select');
 const stepCampaign     = document.getElementById('setup-step-campaign');
 const stepDebrief      = document.getElementById('setup-step-debrief');
-const stepMultiplayer  = document.getElementById('setup-step-multiplayer');
+const stepBattle       = document.getElementById('setup-step-battle');
 const stepOnline       = document.getElementById('setup-step-online');
 const stepAsync        = document.getElementById('setup-step-async');
 const stepLocalPlay    = document.getElementById('setup-step-local-play');
@@ -1768,7 +1758,7 @@ function showStep(step) {
   stepCampaignSelect.style.display = step === 'campaign-select' ? '' : 'none';
   stepCampaign      .style.display = step === 'campaign'        ? '' : 'none';
   stepDebrief       .style.display = step === 'debrief'         ? '' : 'none';
-  stepMultiplayer   .style.display = step === 'multiplayer'     ? '' : 'none';
+  if (stepBattle) stepBattle.style.display = step === 'battle' ? '' : 'none';
   stepOnline        .style.display = step === 'online'          ? '' : 'none';
   stepAsync         .style.display = step === 'async'           ? '' : 'none';
   stepLocalPlay     .style.display = step === 'local-play'      ? '' : 'none';
@@ -1788,7 +1778,7 @@ function showStep(step) {
   const _stepEl = {
     'mode': stepMode, 'sp-choice': stepSpChoice, 'singleplayer': stepSinglePlayer,
     'campaign-select': stepCampaignSelect, 'campaign': stepCampaign, 'debrief': stepDebrief,
-    'multiplayer': stepMultiplayer, 'online': stepOnline, 'async': stepAsync,
+    'online': stepOnline, 'async': stepAsync,
     'local-play': stepLocalPlay, 'howtoplay': stepHowto, 'options': stepOptions,
     'changelog': stepChangelog, 'account': stepAccount, 'waiting': stepWaiting,
     'create-game': stepCreateGame, 'join-game': stepJoinGame, 'lobby': stepLobby,
@@ -1808,10 +1798,15 @@ document.getElementById('btn-quick-play')    .addEventListener('click', () => _s
 document.getElementById('btn-story-mode')    .addEventListener('click', () => _showCampaignSelectScreen());
 document.getElementById('btn-sp-choice-back').addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-multiplayer')  .addEventListener('click', () => _showOnlineScreen());
-document.getElementById('btn-tutorial')     .addEventListener('click', () => initTutorial());
 document.getElementById('btn-how-to-play')  .addEventListener('click', () => showStep('howtoplay'));
+
+// "Play the Tutorial" button in How to Play navigates to Story Mode → Prologue
+document.getElementById('btn-play-tutorial')?.addEventListener('click', () => {
+  const prologue = getCampaignById('prologue');
+  if (prologue) _showCampaignScreen(prologue);
+});
 document.getElementById('btn-options')      .addEventListener('click', () => showStep('options'));
-document.getElementById('btn-account')      .addEventListener('click', () => { _initAccountPage(); showStep('account'); });
+document.getElementById('setup-session-name').addEventListener('click', () => { _initAccountPage(); showStep('account'); });
 document.getElementById('btn-howtoplay-back').addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-options-back') .addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-account-back') .addEventListener('click', () => showStep('mode'));
@@ -2125,6 +2120,9 @@ function _resumeCampaignMission(missionId) {
 
   _setupLocalUI(canvas, witchAI, null, false);
 
+  // Hide chronicle by default for story mode
+  ui._setChronicleMode('none');
+
   // Wire mission info button
   ui.showMissionInfoBtn(true);
   ui.onMissionInfo = () => _showMissionInfoModal();
@@ -2137,20 +2135,23 @@ function _resumeCampaignMission(missionId) {
 function _showCampaignSelectScreen() {
   const listEl = document.getElementById('campaign-select-list');
   listEl.innerHTML = CAMPAIGNS.map(c => {
-    const hasSave = Campaign.exists(`campaign-${c.id}`);
-    const locked = c.prerequisiteCampaign
+    const disabled = c.disabled === true;
+    const hasSave = !disabled && Campaign.exists(`campaign-${c.id}`);
+    const locked = disabled || (c.prerequisiteCampaign
       ? !Campaign.isCampaignCompleted(getCampaignById(c.prerequisiteCampaign))
-      : false;
-    const cls = `campaign-select-item${locked ? ' locked' : ''}`;
+      : false);
+    const cls = `campaign-select-item${disabled ? ' disabled' : locked ? ' locked' : ''}`;
+    const titlePrefix = disabled ? '' : locked ? '🔒 ' : '';
     return `<div class="${cls}" data-campaign="${c.id}">
-      <div class="campaign-select-title">${locked ? '🔒 ' : ''}${c.title}</div>
+      <div class="campaign-select-title">${titlePrefix}${c.title}</div>
       <div class="campaign-select-desc">${c.description}</div>
       ${hasSave ? '<div class="campaign-select-badge">Save found</div>' : ''}
-      ${locked ? '<div class="campaign-select-badge">Complete the previous chapter to unlock</div>' : ''}
+      ${disabled ? '<div class="campaign-select-badge coming-soon">Coming Soon</div>' : ''}
+      ${!disabled && locked ? '<div class="campaign-select-badge">Complete the previous chapter to unlock</div>' : ''}
     </div>`;
   }).join('');
 
-  listEl.querySelectorAll('.campaign-select-item:not(.locked)').forEach(el => {
+  listEl.querySelectorAll('.campaign-select-item:not(.locked):not(.disabled)').forEach(el => {
     el.addEventListener('click', () => {
       const def = getCampaignById(el.dataset.campaign);
       if (def) _showCampaignScreen(def);
@@ -2168,6 +2169,13 @@ async function _showCampaignScreen(campaignDef) {
   await _loadCampaignPortraits();
   _renderCampaignScreen();
   showStep('campaign');
+
+  // Single-mission campaigns skip the mission list and go straight to briefing
+  if (_activeCampaign?.campaignDef?.missions?.length === 1) {
+    const missionId = _activeCampaign.campaignDef.missions[0].id;
+    _campaignSelectedMission = missionId;
+    _showMissionBriefing(missionId);
+  }
 }
 
 const _RESOURCE_ICONS = { wood: '🪵', metal: '⚙', herbs: '🌿', food: '🍞', silver: '⚔', scripture: '📜' };
@@ -2460,8 +2468,9 @@ function _objectiveDescription(obj) {
     case 'survive_rounds': return `Survive ${obj.rounds} rounds`;
     case 'reach_hex':      return 'Reach the objective hex';
     case 'slay_witch':     return 'Slay the witch';
-    case 'control_nodes':  return 'Control the Power Nodes';
-    default:               return obj.type;
+    case 'control_nodes':       return 'Control the Power Nodes';
+    case 'conductor_complete':  return obj.reason || 'Complete the mission';
+    default:                    return obj.type;
   }
 }
 
@@ -2522,6 +2531,9 @@ function _initCampaignMission(missionDef) {
   _gameStartTime = Date.now();
   _spSaveId = null; // campaign uses its own save system
 
+  // Persist pre-mission campaign state so defeat can restore from it
+  _activeCampaign.save();
+
   // Build map
   const builder = _activeCampaign.getMapBuilder(missionDef.mapBuilder);
   if (!builder) { console.error('No map builder for', missionDef.mapBuilder); return; }
@@ -2537,9 +2549,11 @@ function _initCampaignMission(missionDef) {
   document.getElementById('game-screen').style.display = 'flex';
   const canvas = document.getElementById('game-canvas');
 
-  // Create game state
-  state = new GameState(true, false, missionDef.mapSize, null, mapData);
-  state.fogOfWar = 'full';
+  // Create game state — conductor-driven missions use witchIsAI=false since
+  // the conductor provides scripted witch plans directly.
+  const witchIsAI = !missionDef.conductorSteps;
+  state = new GameState(witchIsAI, false, missionDef.mapSize, null, mapData);
+  state.fogOfWar = missionDef.isTutorial ? 'none' : 'full';
 
   // Campaign AI budget bonus for harder waves
   if (missionDef.aiBudgetBonus) {
@@ -2649,13 +2663,80 @@ function _initCampaignMission(missionDef) {
     }
   }
 
-  // Set up AI
-  const AIClass = WITCH_PERSONALITIES[missionDef.aiPersonality] ?? WitchAIEngine;
-  witchAI = new AIClass(state, redraw);
-  heroAI = null;
+  // Set up AI — conductor-driven missions don't use witch AI
+  if (missionDef.conductorSteps) {
+    witchAI = null;
+    heroAI  = null;
+  } else {
+    const AIClass = WITCH_PERSONALITIES[missionDef.aiPersonality] ?? WitchAIEngine;
+    witchAI = new AIClass(state, redraw);
+    heroAI = null;
+  }
 
   _setupLocalUI(canvas, witchAI, null, false);
   _roundHistory = [];
+
+  // Hide chronicle by default for story mode — less clutter during narrative
+  ui._setChronicleMode('none');
+
+  // ── MissionConductor setup for guided missions ────────────────────────────
+  if (missionDef.conductorSteps) {
+    // Suppress phase modals and hero auto-select during conducted missions
+    ui.tutorialMode = true;
+
+    // Guarantee tutorial-specific map state
+    if (missionDef.isTutorial) {
+      const houseTile = state.tiles.get(_hexKey(2, 3));
+      if (houseTile) houseTile.hiddenSurvivor = true;
+    }
+
+    // Wire conductor callbacks into UIController
+    ui.onPlanActionAdded = (action) => _missionConductor?.onActionQueued(action);
+    ui.onEntitySelected  = (entity) => _missionConductor?.onEntitySelected(entity);
+
+    // Build conductor config with completion callback
+    const conductorConfig = {
+      ...missionDef.conductorConfig,
+      onComplete: () => {
+        // Mark mission as complete and return to story mode
+        state.gameOver = true;
+        state.winner   = 'hero';
+        state.winReason = missionDef.objectives?.win?.reason || 'Mission complete.';
+        _activeCampaign.applyMissionResult(missionDef.id, {
+          won: true, survivors: [], resources: {},
+          heroStats: _activeCampaign.heroStats, flags: {},
+        });
+        // Clean up game state and return to chapter select
+        document.getElementById('game-screen').style.display = 'none';
+        document.getElementById('setup-screen').style.display = '';
+        setMode(AppMode.MENU);
+        renderer = null; ui = null; witchAI = null; heroAI = null;
+        _missionConductor = null;
+        _activeMissionDef = null;
+        _showCampaignSelectScreen();
+      },
+    };
+
+    _missionConductor = new MissionConductor(
+      state, ui, renderer, redraw,
+      missionDef.conductorSteps,
+      conductorConfig,
+    );
+
+    redraw();
+    requestAnimationFrame(() => {
+      renderer.resize();
+      const heroEntity = state.entities.find(e => e.type === 'hero');
+      if (heroEntity) {
+        renderer.frameHexes([heroEntity], { maxZoom: 2.2, paddingHexes: 3, duration: 500 });
+      }
+      redraw();
+    });
+
+    _missionConductor.start();
+    _startLocalPlanningPhase();
+    return;
+  }
 
   // Wire mission info button callback
   ui.showMissionInfoBtn(true);
@@ -2684,28 +2765,32 @@ function _handleCampaignMissionEnd() {
   const won = state.winner === 'hero';
   const missionDef = _activeMissionDef;
 
-  // Gather surviving survivors for roster (permadeath: dead ones are lost)
-  // Include both deployed survivors who lived AND roster members who weren't deployed
-  const deployedSurvivors = state.entities
-    .filter(e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR)
-    .map(e => snapshotSurvivor(e));
-  const deployedNames = new Set(deployedSurvivors.map(s => s.name));
-  // Keep roster members who weren't deployed (they stayed behind safely)
-  const undeployed = _activeCampaign.roster.filter(s => !deployedNames.has(s.name));
-  const survivors = [...deployedSurvivors, ...undeployed];
+  let survivors;
+  if (won) {
+    // Gather surviving survivors for roster (permadeath: dead ones are lost)
+    // Include both deployed survivors who lived AND roster members who weren't deployed
+    const deployedSurvivors = state.entities
+      .filter(e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR)
+      .map(e => snapshotSurvivor(e));
+    const deployedNames = new Set(deployedSurvivors.map(s => s.name));
+    const undeployed = _activeCampaign.roster.filter(s => !deployedNames.has(s.name));
+    survivors = [...deployedSurvivors, ...undeployed];
 
-  // Apply mission result to campaign state
-  _activeCampaign.applyMissionResult(missionDef.id, {
-    won,
-    survivors,
-    resources: { ...state.inventory.shared },
-    heroStats: state.hero ? {
-      hp: state.hero.hp, maxHp: state.hero.maxHp,
-      attack: state.hero.attack, defense: state.hero.defense,
-      weapon: state.hero.weapon, items: { ...state.hero.items },
-    } : _activeCampaign.heroStats,
-    flags: {},
-  });
+    _activeCampaign.applyMissionResult(missionDef.id, {
+      won,
+      survivors,
+      resources: { ...state.inventory.shared },
+      heroStats: state.hero ? {
+        hp: state.hero.hp, maxHp: state.hero.maxHp,
+        attack: state.hero.attack, defense: state.hero.defense,
+        weapon: state.hero.weapon, items: { ...state.hero.items },
+      } : _activeCampaign.heroStats,
+      flags: {},
+    });
+  } else {
+    // Defeat: restore party to pre-mission state (no permadeath, no stat changes)
+    survivors = _activeCampaign.roster;
+  }
 
   // Show debrief screen
   document.getElementById('game-screen').style.display = 'none';
@@ -2732,16 +2817,18 @@ function _handleCampaignMissionEnd() {
 
   // Roster status — rich party cards
   const rosterEl = document.getElementById('debrief-roster');
-  const heroSnap = state.hero ? {
+  const heroSnap = won && state.hero ? {
     hp: state.hero.hp, maxHp: state.hero.maxHp,
     attack: state.hero.attack, defense: state.hero.defense,
     weapon: state.hero.weapon,
   } : _activeCampaign.heroStats;
-  rosterEl.innerHTML = '<h3>Surviving Roster</h3>' +
+  const rosterHeading = won ? 'Surviving Roster' : 'Party Restored';
+  rosterEl.innerHTML = `<h3>${rosterHeading}</h3>` +
     _campaignPartyHTML(heroSnap, survivors);
 
   // Clean up game state
   renderer = null; ui = null; witchAI = null; heroAI = null;
+  _missionConductor = null;
   _activeMissionDef = null;
 
   showStep('debrief');
@@ -3054,13 +3141,32 @@ function _renderSaves(saves) {
                    : 'View';
     const btnClass = s.action_needed ? 'setup-btn primary' : 'setup-btn';
 
+    // Waiting badge + submission count for in-progress games
+    let statusBadge = '';
+    let plansMeta = '';
+    if (s.status === 'playing' && s.players_total > 0) {
+      const remaining = s.players_total - (s.players_submitted ?? 0);
+      if (!s.action_needed) {
+        // We submitted — show "Waiting" badge
+        statusBadge = ` <span class="async-badge async-badge-waiting">${remaining > 0 ? remaining + ' left' : 'Waiting'}</span>`;
+      } else if (s.players_submitted > 0) {
+        // Our turn, but others have submitted — show count
+        statusBadge = ` <span class="async-badge async-badge-turn">${s.players_submitted}/${s.players_total} in</span>`;
+      }
+      // Show deadline in meta line
+      if (s.turn_deadline) {
+        const deadline = _timeRemaining(s.turn_deadline);
+        if (deadline) plansMeta = ` · ${deadline}`;
+      }
+    }
+
     const entry = document.createElement('div');
     entry.className = 'save-entry' + (s.action_needed ? ' save-action-needed' : '');
     entry.innerHTML = `
       ${s.action_needed ? '<span class="save-dot"></span>' : ''}
       <div class="save-entry-info">
-        <div class="save-entry-title">${title}</div>
-        <div class="save-entry-meta">Round ${s.round || 1} · ${phaseLabel || 'Lobby'} · ${_esc(mapLabel)}${ago ? ' · ' + ago : ''}</div>
+        <div class="save-entry-title">${title}${statusBadge}</div>
+        <div class="save-entry-meta">Round ${s.round || 1} · ${phaseLabel || 'Lobby'} · ${_esc(mapLabel)}${plansMeta}${ago ? ' · ' + ago : ''}</div>
       </div>
       <button class="${_esc(btnClass)}">${btnLabel}</button>
       <button class="save-resign-btn" title="Resign">✕</button>
@@ -4357,6 +4463,210 @@ function _showAsyncScreen() {
 
 document.getElementById('btn-mp-async')?.addEventListener('click', () => _showAsyncScreen());
 
+// ── Battle for Caleb's Hollow menu ───────────────────────────────────────────
+
+function _formatTimeRemaining(unixSeconds) {
+  const diff = unixSeconds - Math.floor(Date.now() / 1000);
+  if (diff <= 0) return 'Ended';
+  const days  = Math.floor(diff / 86400);
+  const hours = Math.floor((diff % 86400) / 3600);
+  const mins  = Math.floor((diff % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return `${mins}m`;
+}
+
+async function _showBattleScreen() {
+  showStep('battle');
+
+  const session    = loadSession();
+  const signedOut  = document.getElementById('battle-signed-out');
+  const battleInfo = document.getElementById('battle-info');
+  const statusLine = document.getElementById('battle-status-line');
+  const joinBtn    = document.getElementById('btn-battle-join');
+  const spectateBtn = document.getElementById('btn-battle-spectate');
+
+  // Reset dynamic elements
+  joinBtn.style.display = 'none';
+  spectateBtn.style.display = 'none';
+  document.getElementById('battle-my-status').style.display = 'none';
+  document.getElementById('battle-game-info').style.display = 'none';
+  document.getElementById('battle-players-section').style.display = 'none';
+
+  if (!session) {
+    signedOut.style.display = '';
+    battleInfo.style.display = 'none';
+    return;
+  }
+  signedOut.style.display = 'none';
+  battleInfo.style.display = '';
+  statusLine.textContent = 'Loading...';
+
+  let _battleStatus = null;
+  try {
+    const url = session?.token
+      ? `/api/battle-status?token=${encodeURIComponent(session.token)}`
+      : '/api/battle-status';
+    const res = await fetch(url);
+    _battleStatus = await res.json();
+    const status = _battleStatus;
+    if (!status) {
+      statusLine.textContent = 'No active battle right now. A new one will begin soon.';
+      return;
+    }
+
+    // Game info box
+    const gameInfo = document.getElementById('battle-game-info');
+    gameInfo.style.display = '';
+    document.getElementById('battle-hero-score').textContent = status.heroScore;
+    document.getElementById('battle-witch-score').textContent = status.witchScore;
+    const hLabel = status.heroCount === 1 ? 'hero' : 'heroes';
+    const wLabel = status.witchCount === 1 ? 'witch' : 'witches';
+    document.getElementById('battle-meta-line').textContent =
+      `Round ${status.round} · ${status.heroCount} ${hLabel} vs ${status.witchCount} ${wLabel} · Ends in ${_formatTimeRemaining(status.endsAt)}`;
+
+    // Action buttons
+    joinBtn.dataset.roomId = status.roomId;
+    spectateBtn.dataset.roomId = status.roomId;
+
+    if (status.joined) {
+      statusLine.textContent = '';
+
+      // Your status box
+      const myBox = document.getElementById('battle-my-status');
+      myBox.style.display = '';
+      const fIcon = status.myFaction === 'hero' ? '⚔' : '✦';
+      const fName = status.myFaction === 'hero' ? 'Hero' : 'Witch';
+      document.getElementById('battle-my-faction').innerHTML =
+        `<span style="color:var(--${status.myFaction})">${fIcon} Fighting as ${fName}</span>`;
+      if (status.mySubmitted) {
+        document.getElementById('battle-my-plan-status').innerHTML =
+          '<span style="color:var(--green)">✓ Plan submitted</span>';
+      } else {
+        document.getElementById('battle-my-plan-status').innerHTML =
+          '<span style="color:var(--day)">⚠ Plan not yet submitted</span>';
+      }
+      if (status.turnDeadline) {
+        const deadlineEl = document.getElementById('battle-my-deadline');
+        const secsLeft = status.turnDeadline - Math.floor(Date.now() / 1000);
+        deadlineEl.textContent = '⏱ Deadline in ' + _formatTimeRemaining(status.turnDeadline);
+        deadlineEl.style.color = secsLeft <= 1800 ? 'var(--red)' : 'var(--text-dim)';
+      }
+
+      joinBtn.style.display = '';
+      joinBtn.textContent = 'Return to Battle';
+
+      // Player list (collapsible)
+      const playersSection = document.getElementById('battle-players-section');
+      if (status.players?.length > 0) {
+        playersSection.style.display = '';
+        const playerData = status.players.map(p => ({
+          playerId: p.playerId, name: p.name, faction: p.faction,
+          isAI: p.isAI, _submitted: p.submitted,
+          connected: p.connected, active: p.active,
+        }));
+        const myPlayerId = mp?.myPlayerId ?? session?.id ?? null;
+        const nudgeCtx = myPlayerId ? { myPlayerId, nudgedSet: new Set() } : undefined;
+        document.getElementById('battle-players-list').innerHTML = buildPlayerStatusHtml(playerData, nudgeCtx);
+
+        // Wire nudge buttons
+        document.getElementById('battle-players-list').addEventListener('click', (e) => {
+          const btn = e.target.closest('.nudge-btn[data-nudge-id]');
+          if (!btn || btn.disabled) return;
+          const targetId = btn.dataset.nudgeId;
+          if (mp?.connected) {
+            mp.sendNudge(targetId);
+            btn.disabled = true;
+            btn.classList.add('nudge-sent');
+          }
+        });
+      }
+    } else if (status.isFull) {
+      statusLine.textContent = 'Battle is full';
+      spectateBtn.style.display = '';
+    } else {
+      statusLine.textContent = 'Battle in progress — join a faction!';
+      joinBtn.style.display = '';
+      joinBtn.textContent = 'Join the Battle';
+    }
+  } catch (err) {
+    statusLine.textContent = 'Could not load battle status.';
+  }
+
+  // Update main menu badge
+  const badge = document.getElementById('battle-badge');
+  if (badge) {
+    if (_battleStatus?.joined && !_battleStatus.mySubmitted) {
+      badge.style.display = '';
+      badge.textContent = '!';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+
+  // Past battles (collapsible table, default closed)
+  try {
+    const historyEl = document.getElementById('battle-history');
+    const bodyEl    = document.getElementById('battle-history-body');
+    const histRes = await fetch(`/api/battle-history${session?.token ? '?token=' + encodeURIComponent(session.token) : ''}`);
+    const battles = await histRes.json();
+    if (battles && battles.length > 0) {
+      historyEl.style.display = '';
+      bodyEl.innerHTML = battles.map(b => {
+        const date = new Date(b.created_at * 1000).toLocaleDateString();
+        const result = b.winner === 'draw' ? 'Draw'
+          : (b.winner === 'hero' ? 'Heroes won' : 'Witches won');
+        // Color-code rows based on player's faction
+        let rowClass = '';
+        if (b._myFaction) {
+          if (b.winner !== 'draw') {
+            rowClass = b.winner === b._myFaction ? 'battle-history-win' : 'battle-history-loss';
+          }
+        }
+        return `<tr class="${rowClass}" style="border-bottom:1px solid rgba(255,255,255,0.04)">
+          <td style="padding:0.3rem">${date}</td>
+          <td style="padding:0.3rem">${result}</td>
+          <td style="padding:0.3rem;text-align:right">${b.total_rounds}</td>
+          <td style="padding:0.3rem;text-align:right">
+            <a href="/replay?replayGame=${encodeURIComponent(b.game_id)}&source=mp" target="_blank"
+               class="setup-btn" style="padding:0.15rem 0.5rem;font-size:0.7rem">Replay</a>
+          </td>
+        </tr>`;
+      }).join('');
+    } else {
+      historyEl.style.display = 'none';
+    }
+  } catch { /* ignore */ }
+}
+
+// Sign-in button on the battle screen — reuse the same sign-in flow as online
+document.getElementById('btn-battle-signin')?.addEventListener('click', () => {
+  showStep('account');
+});
+
+document.getElementById('btn-battle-main')?.addEventListener('click', () => _showBattleScreen());
+document.getElementById('btn-battle-back')?.addEventListener('click', () => showStep('mode'));
+document.getElementById('btn-battle-join')?.addEventListener('click', function() {
+  const roomId = this.dataset.roomId;
+  if (!roomId) return;
+  // Tear down everything — kill any in-flight reconnect, destroy old UI
+  if (ui) ui.destroy();
+  state = null; renderer = null; ui = null;
+  _stopBattleCountdownTimer();
+  document.getElementById('game-screen').style.display = 'none';
+  // Disconnect the old mp client entirely to cancel any pending reconnect
+  // that could race with joinBattle and create duplicate handlers.
+  if (mp) { mp.disconnect(); mp = null; }
+  _ensureAuthed(() => {
+    mp.joinBattle(roomId);
+  });
+});
+document.getElementById('btn-battle-spectate')?.addEventListener('click', function() {
+  const roomId = this.dataset.roomId;
+  if (!roomId) return;
+  initSpectator(roomId);
+});
+
 document.getElementById('btn-online-back').addEventListener('click', () => {
   if (mp) { mp.disconnect(); mp = null; }
   renderer = null; ui = null; state = null;
@@ -4713,6 +5023,25 @@ window.addEventListener('hashchange', () => {
 });
 _fetchMainMenuAsyncGames();
 _updateMultiplayerBadge();
+_updateBattleBadge();
+
+/** Check if the player needs to submit a battle turn and show badge on main menu. */
+async function _updateBattleBadge() {
+  const badge = document.getElementById('battle-badge');
+  if (!badge) return;
+  const session = loadSession();
+  if (!session?.token) { badge.style.display = 'none'; return; }
+  try {
+    const res = await fetch(`/api/battle-status?token=${encodeURIComponent(session.token)}`);
+    const status = await res.json();
+    if (status?.joined && !status.mySubmitted) {
+      badge.style.display = '';
+      badge.textContent = '!';
+    } else {
+      badge.style.display = 'none';
+    }
+  } catch { badge.style.display = 'none'; }
+}
 
 /**
  * Fetch active games count and show a badge on the Multiplayer button
@@ -5411,18 +5740,22 @@ function _signOut() {
 
 function _updateSessionBar() {
   const session = loadSession();
-  const bar     = document.getElementById('setup-session-bar');
+  const nameEl  = document.getElementById('setup-session-name');
+  const btn     = document.getElementById('btn-setup-signout');
   if (session) {
-    document.getElementById('setup-session-name').textContent = session.username;
-    bar.style.display = '';
+    nameEl.textContent = session.username;
+    btn.textContent    = 'Sign Out';
   } else {
-    bar.style.display = 'none';
+    nameEl.textContent = '';
+    btn.textContent    = 'Sign In';
   }
 }
 
 // ── Persistent sign-out (footer bar) ────────────────────────────────────────
 
 document.getElementById('btn-setup-signout').addEventListener('click', async () => {
+  // If not logged in, the button reads "Sign In" — navigate to account page
+  if (!loadSession()) { _initAccountPage(); showStep('account'); return; }
   // Warn if the account has no recovery method (no email, no Game Center)
   if (!_gcCredentials) {
     const session = loadSession();
@@ -5544,16 +5877,27 @@ async function _applyOnlinePlanningPhase(payload) {
 
   // Prefer per-player budget; fall back to legacy faction budget for old servers.
   const budget = myActionsLeft ?? getFaction(mp.myFaction).getActionsLeft({ heroActionsLeft, witchActionsLeft });
-  ui.exitPlanningMode();
   if (players) ui._players = players;
   ui._hasReplayHistory = _onlineRoundHistory.length > 0;
-  ui.enterPlanningMode(mp.myFaction, budget, timeoutMs ?? 0);
+  if (ui._planMode && ui._planFaction === mp.myFaction && !ui._planSubmitted) {
+    console.log(`[mp] _applyOnlinePlanningPhase: fast path (already planning, budget=${budget})`);
+    ui._planBudget = budget;
+    if (timeoutMs > 0) ui._startCountdown(timeoutMs);
+    ui._renderPlayerStatus();
+    ui._renderPlanPanel();
+  } else {
+    console.log(`[mp] _applyOnlinePlanningPhase: full enter (planMode=${ui._planMode} submitted=${ui._planSubmitted} budget=${budget})`);
+    ui.exitPlanningMode();
+    ui.enterPlanningMode(mp.myFaction, budget, timeoutMs ?? 0);
+  }
   ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
-  ui.onReturnToMenu = () => _showOnlineScreen();
+  ui.onReturnToMenu = () => { location.reload(); };
   ui.onReplayLastTurn = () => _replayLastTurnInline();
 
   // Restore submitted plan on reconnect — show what was already submitted
-  if (submittedPlan && submittedPlan.length > 0) {
+  if (submittedPlan != null) {
+    // Restore the submitted plan actions (if any) and mark as submitted.
+    // An empty plan (submittedPlan = []) is still a valid submission.
     for (const action of submittedPlan) {
       if (action.entityId) {
         if (!ui._unitPlans.has(action.entityId)) ui._unitPlans.set(action.entityId, []);
@@ -5591,7 +5935,7 @@ async function _replayLastTurnInline() {
   ui._hasReplayHistory = _onlineRoundHistory.length > 0;
   ui.enterPlanningMode(mp.myFaction, budget, 0, { showPhaseModal: false });
   ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
-  ui.onReturnToMenu = () => _showOnlineScreen();
+  ui.onReturnToMenu = () => { location.reload(); };
   ui.onReplayLastTurn = () => _replayLastTurnInline();
 
   // Restore the plan
@@ -5681,25 +6025,30 @@ function _serverWsUrl() {
 function _createMpClient() {
   return new MultiplayerClient({
     onState(mirrorState) {
+      console.log(`[mp] onState: reason=${mirrorState._reason ?? '?'} round=${mirrorState.round} planning=${mirrorState.planningPhase} resolving=${mirrorState.resolving} hasUI=${!!ui} hasRenderer=${!!renderer} active=${mp?.active}`);
       if (!renderer || !ui) {
-        // Game not started yet — only init if the player actively joined a game.
-        // mp.active is set true by matchFound/reconnected, cleared by clearRoom().
         if (mp?.active) {
           try {
-            mirrorState.myFaction = mp.myFaction; // used by renderer for per-player fog
+            console.log(`[mp] onState → initOnline (faction=${mp.myFaction})`);
+            mirrorState.myFaction = mp.myFaction;
             initOnline(mirrorState, mp.myFaction, mp);
           } catch (err) {
             console.error('initOnline failed:', err);
             _onlineError(`Failed to start game: ${err.message}`);
             _showOnlineScreen();
           }
+        } else {
+          console.log(`[mp] onState ignored — mp.active is false`);
         }
         return;
       }
 
-      // Suppress state pushes while animating or showing summary — animation owns state.entities.
-      if (shouldBufferMessages()) return;
+      if (shouldBufferMessages()) {
+        console.log(`[mp] onState buffered (shouldBuffer=true, mode=${getMode()})`);
+        return;
+      }
 
+      console.log(`[mp] onState → in-place update`);
       // Already in game — update in-place (keeps renderer pan/zoom)
 
       // Snapshot entity positions before update so we can animate moves
@@ -5943,9 +6292,10 @@ function _createMpClient() {
     },
 
     onPlanningPhase(payload) {
+      console.log(`[mp] onPlanningPhase: budget=${payload.myActionsLeft} timeout=${payload.timeoutMs} submittedPlan=${payload.submittedPlan != null ? payload.submittedPlan.length + ' actions' : 'null'} inGame=${isInGame()} hasUI=${!!ui} mode=${getMode()}`);
       if (!isInGame() || !ui || !mp) return;
-      // If animating or showing summary, defer until it finishes.
       if (shouldBufferMessages()) {
+        console.log(`[mp] onPlanningPhase → buffered (mode=${getMode()})`);
         _pendingPlanningPhase = payload;
         return;
       }
@@ -6279,6 +6629,7 @@ function initSpectator(roomId) {
   }
 
   function _initSpectatorUI(mirrorState) {
+    if (ui) ui.destroy();
     const canvas = document.getElementById('game-canvas');
     renderer = new Renderer(canvas, mirrorState);
     renderer.resize();

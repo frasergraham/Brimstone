@@ -411,15 +411,11 @@ describe('resolvePlans — log entries tagged with faction', () => {
   test('hero action logs are tagged with "hero" owner', () => {
     const state = freshState();
     const hero = state.hero;
-    const reachable = getReachableHexes(state, hero, 1);
-    if (!reachable.length) return;
 
     state.log = [];
     resolvePlans(state, [{
-      type: PlanActionType.MOVE,
+      type: PlanActionType.EXPLORE,
       entityId: hero.id,
-      toCol: reachable[0].col,
-      toRow: reachable[0].row,
     }], []);
 
     // At least one log entry should be tagged with 'hero'
@@ -430,15 +426,11 @@ describe('resolvePlans — log entries tagged with faction', () => {
   test('witch action logs are tagged with "witch" owner', () => {
     const state = freshState();
     const witch = state.witch;
-    const reachable = getReachableHexes(state, witch, 1);
-    if (!reachable.length) return;
 
     state.log = [];
     resolvePlans(state, [], [{
-      type: PlanActionType.MOVE,
+      type: PlanActionType.EXPLORE,
       entityId: witch.id,
-      toCol: reachable[0].col,
-      toRow: reachable[0].row,
     }]);
 
     const tagged = state.log.filter(e => typeof e === 'object' && e.owner === 'witch');

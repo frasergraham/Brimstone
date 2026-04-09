@@ -1,6 +1,6 @@
 {
   "name": "calebs-hollow",
-  "version": "1.3.22",
+  "version": "1.3.23",
   "description": "Caleb's Hollow hex turn-based game with multiplayer",
   "main": "electron/main.js",
   "type": "module",
@@ -25,6 +25,7 @@
     "assets:test": "node scripts/generate-assets.js --test",
     "assets:gen": "node scripts/generate-assets.js",
     "assets:stitch": "node scripts/generate-assets.js --stitch-only",
+    "build:itch": "node scripts/build-itch.js",
     "electron:dev": "electron . --env=dev",
     "electron:dev:prod": "electron . --env=prod",
     "electron:package": "electron-builder --publish never",

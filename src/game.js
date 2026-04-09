@@ -44,6 +44,12 @@ export function countHeldNodes(faction, witchObjectives, entities) {
   return count;
 }
 
+// Game mode enum — 'standard' for regular games, 'battle' for persistent weekly battles.
+export const GameMode = Object.freeze({
+  STANDARD: 'standard',
+  BATTLE:   'battle',
+});
+
 // Win reason strings (shown in game-over overlay)
 export const WIN_REASON = {
   WITCH_SLAIN:      'The hero hunted down the witch and ended the curse!',
@@ -54,6 +60,9 @@ export const WIN_REASON = {
   NODES_HERO_DUSK:  'As dusk falls, the hero holds all Power Nodes — the witch\'s ritual is disrupted!',
   SCORE_WITCH:      'The witch dominates the Power Nodes across three cycles — the ritual is complete!',
   SCORE_HERO:       'The hero holds the Power Nodes through the darkness — the curse is broken!',
+  BATTLE_HERO:      'The week-long Battle for Caleb\'s Hollow ends — the heroes prevail!',
+  BATTLE_WITCH:     'The week-long Battle for Caleb\'s Hollow ends — the witches claim victory!',
+  BATTLE_DRAW:      'The Battle for Caleb\'s Hollow ends in a stalemate — neither side prevails.',
 };
 
 // ── Phase cycle ─────────────────────────────────────────────────────────────
@@ -227,6 +236,15 @@ export class GameState {
     this.maxDiscoverableSurvivors = mapDataOverride?.maxDiscoverableSurvivors ?? null;
     this.discoveredSurvivorCount  = 0;
 
+    // ── Game mode ──────────────────────────────────────────────────────────
+    // 'standard' = normal game; 'battle' = persistent weekly Battle for Caleb's Hollow.
+    this.gameMode = mapDataOverride?.gameMode ?? GameMode.STANDARD;
+
+    // Battle-mode config (only meaningful when gameMode === 'battle').
+    // endsAt: unix timestamp (seconds) when the week-long battle ends.
+    // maxPlayersPerSide: hard cap on players per faction.
+    this.battleConfig = mapDataOverride?.battleConfig ?? null;
+
     // ── Campaign / custom victory ──────────────────────────────────────────
     // When set, checked first by checkVictory(). Return { winner, winReason, log? } or null.
     this.victoryDelegate = null;
@@ -352,18 +370,88 @@ export class GameState {
     this.playerPlans       = new Map();
     this.playerReady       = new Map();
     this.playerActionsLeft = new Map();
+
+    // Battle mode: spawn respawning players before computing budgets
+    if (this.gameMode === GameMode.BATTLE) {
+      this._spawnRespawningPlayers();
+    }
+
+    // Battle mode: compute faction imbalance bonus
+    // Each player on the smaller faction gets +1 per missing-player deficit
+    let battleBonus = { hero: 0, witch: 0 };
+    if (this.gameMode === GameMode.BATTLE) {
+      const heroAlive  = this.players.filter(p => p.faction === 'hero'  && this.getLeader(p.id)).length;
+      const witchAlive = this.players.filter(p => p.faction === 'witch' && this.getLeader(p.id)).length;
+      const diff = Math.abs(heroAlive - witchAlive);
+      if (heroAlive < witchAlive) battleBonus.hero  = diff;
+      if (witchAlive < heroAlive) battleBonus.witch = diff;
+    }
+
     for (const p of this.players) {
+      // Battle mode: skip dead players (no leader alive, not respawning this round)
+      if (this.gameMode === GameMode.BATTLE && !this.getLeader(p.id)) {
+        this.playerReady.set(p.id, true); // auto-ready (can't plan)
+        this.playerActionsLeft.set(p.id, 0);
+        continue;
+      }
       this.playerReady.set(p.id, false);
       const nb = p.faction === Player.HERO ? heroNodeBonus : witchNodeBonus;
-      this.playerActionsLeft.set(p.id, computeActionsForPlayer(p.id, p.faction, this.phase, this.entities, nb));
+      let budget = computeActionsForPlayer(p.id, p.faction, this.phase, this.entities, nb);
+      budget += battleBonus[p.faction] ?? 0;
+      this.playerActionsLeft.set(p.id, budget);
     }
 
     const heroNB  = heroNodeBonus  ? ` (incl. +${heroNodeBonus} node)` : '';
     const witchNB = witchNodeBonus ? ` (incl. +${witchNodeBonus} node)` : '';
+    const heroBB  = battleBonus.hero  ? ` (+${battleBonus.hero} underdog)` : '';
+    const witchBB = battleBonus.witch ? ` (+${battleBonus.witch} underdog)` : '';
     this.addLog(
-      `📋 Planning phase — Hero: ${this.heroActionsLeft} actions${heroNB}, ` +
-      `Witch: ${this.witchActionsLeft} actions${witchNB}.`
+      `📋 Planning phase — Hero: ${this.heroActionsLeft} actions${heroNB}${heroBB}, ` +
+      `Witch: ${this.witchActionsLeft} actions${witchNB}${witchBB}.`
     );
+  }
+
+  /**
+   * Battle mode: spawn fresh leaders for players who requested respawn last round.
+   * Called at the start of each planning phase.
+   */
+  _spawnRespawningPlayers() {
+    for (const p of this.players) {
+      if (p.respawnRound && p.respawnRound <= this.round) {
+        // Pick a spawn position in the faction's starting columns
+        const spawnPos = this._pickBattleSpawn(p.faction);
+        if (spawnPos) {
+          const leader = p.faction === Player.HERO
+            ? createHero(spawnPos.col, spawnPos.row, p.id)
+            : createWitch(spawnPos.col, spawnPos.row, p.id);
+          leader.name = p.name;
+          this.entities.push(leader);
+          p.leaderId = leader.id;
+          this.addLog(`⚡ ${p.name} has rejoined the battle!`);
+        }
+        delete p.respawnRound;
+      }
+    }
+  }
+
+  /**
+   * Pick a passable tile in the faction's starting columns for battle-mode spawns.
+   * Heroes: leftmost 3 columns. Witches: rightmost 3 columns.
+   */
+  _pickBattleSpawn(faction) {
+    const cols = faction === 'hero'
+      ? [0, 1, 2]
+      : [MAP_COLS - 3, MAP_COLS - 2, MAP_COLS - 1];
+    const candidates = [];
+    for (const [, t] of this.tiles) {
+      if (!cols.includes(t.col)) continue;
+      if (t.type === TileType.RIVER) continue;
+      // Avoid tiles occupied by other entities
+      const occupied = this.entities.some(e => e.alive && e.col === t.col && e.row === t.row);
+      if (!occupied) candidates.push({ col: t.col, row: t.row });
+    }
+    if (candidates.length === 0) return null;
+    return candidates[Math.floor(Math.random() * candidates.length)];
   }
 
   /**
@@ -469,6 +557,12 @@ export class GameState {
       if (!this.disableScoring) this._checkNodeObjectives(Phase.DUSK);
     }
 
+    // Battle mode: score every round (not just dawn/dusk)
+    if (this.gameMode === GameMode.BATTLE && !this.disableScoring
+        && this.phase !== Phase.DAWN && this.phase !== Phase.DUSK) {
+      this._checkBattleNodeScoring();
+    }
+
     this.checkVictory();
   }
 
@@ -506,6 +600,13 @@ export class GameState {
         return;
       }
     }
+
+    // Battle mode: check time-based end condition only (no kill wins)
+    if (this.gameMode === GameMode.BATTLE) {
+      this._checkBattleEnd();
+      return;
+    }
+
     // All witch leaders eliminated → heroes win (skip if no witch in this game)
     if (this.witch !== null && this.factionEliminated('witch')) {
       this.winner    = 'hero';
@@ -522,21 +623,84 @@ export class GameState {
   }
 
   /**
+   * Battle mode end-of-week check.
+   * Called by checkVictory() — the battle ends when the current time passes endsAt.
+   * The server also checks this; the client trusts the server's authoritative timing.
+   */
+  _checkBattleEnd() {
+    if (!this.battleConfig?.endsAt) return;
+    const now = Math.floor(Date.now() / 1000);
+    if (now < this.battleConfig.endsAt) return;
+
+    const hs = this.nodeScore.hero;
+    const ws = this.nodeScore.witch;
+    if (hs > ws) {
+      this.winner    = 'hero';
+      this.winReason = WIN_REASON.BATTLE_HERO;
+      this.addLog(`☀ The Battle for Caleb's Hollow ends! Heroes win ${hs}–${ws}!`, 'hero');
+    } else if (ws > hs) {
+      this.winner    = 'witch';
+      this.winReason = WIN_REASON.BATTLE_WITCH;
+      this.addLog(`🌙 The Battle for Caleb's Hollow ends! Witches win ${ws}–${hs}!`, 'witch');
+    } else {
+      // Tiebreak: faction with more living leaders
+      const heroAlive  = this.players.filter(p => p.faction === 'hero'  && this.getLeader(p.id)).length;
+      const witchAlive = this.players.filter(p => p.faction === 'witch' && this.getLeader(p.id)).length;
+      if (heroAlive > witchAlive) {
+        this.winner    = 'hero';
+        this.winReason = WIN_REASON.BATTLE_HERO;
+        this.addLog(`☀ The Battle ends tied ${hs}–${ws}, but more heroes stand — they win!`, 'hero');
+      } else if (witchAlive > heroAlive) {
+        this.winner    = 'witch';
+        this.winReason = WIN_REASON.BATTLE_WITCH;
+        this.addLog(`🌙 The Battle ends tied ${ws}–${hs}, but more witches remain — they win!`, 'witch');
+      } else {
+        this.winner    = 'draw';
+        this.winReason = WIN_REASON.BATTLE_DRAW;
+        this.addLog(`⚖ The Battle for Caleb's Hollow ends in a ${hs}–${ws} draw!`);
+      }
+    }
+  }
+
+  /**
    * Scatter all units owned by the given player when their leader is killed.
-   * Survivors are reset to hidden-survivor tiles; summons are removed.
    * Called by the resolver immediately when a leader entity is slain.
+   *
+   * Standard mode:
+   *   Survivors → hidden-survivor at current hex; summons removed.
+   *
+   * Battle mode:
+   *   Survivors → hidden-survivor at nearest building (full HP).
+   *   Zombies   → hidden-survivor at nearest building (converted back to discoverable).
+   *   Minions/Golems → removed.
    */
   scatterPlayerUnits(ownerId) {
+    const isBattle = this.gameMode === GameMode.BATTLE;
     const toScatter = this.entities.filter(
       e => e.ownerId === ownerId && e.type !== EntityType.HERO && e.type !== EntityType.WITCH
     );
     for (const unit of toScatter) {
-      if (unit.type === EntityType.SURVIVOR) {
-        // Return to the map as a hidden survivor — discovered fresh by whoever steps on it next
-        const t = this.tiles.get(hexKey(unit.col, unit.row));
-        if (t) t.hiddenSurvivor = true;
+      if (isBattle) {
+        // Battle mode: survivors and zombies go to nearest building as hidden survivors
+        if (unit.type === EntityType.SURVIVOR || unit.type === EntityType.ZOMBIE) {
+          const buildingTile = this._findNearestBuilding(unit.col, unit.row);
+          if (buildingTile) {
+            buildingTile.hiddenSurvivor = true;
+          } else {
+            // Fallback: hide at current position
+            const t = this.tiles.get(hexKey(unit.col, unit.row));
+            if (t) t.hiddenSurvivor = true;
+          }
+        }
+        // Minions and golems just vanish in battle mode (same as standard)
+      } else {
+        // Standard mode: survivors return to current hex
+        if (unit.type === EntityType.SURVIVOR) {
+          const t = this.tiles.get(hexKey(unit.col, unit.row));
+          if (t) t.hiddenSurvivor = true;
+        }
       }
-      // Remove all owned units (summons just disappear; survivors become hidden again)
+      // Remove the entity
       this.entities = this.entities.filter(e => e.id !== unit.id);
     }
     const player = this.players.find(p => p.id === ownerId);
@@ -548,7 +712,33 @@ export class GameState {
     }
   }
 
+  /**
+   * Find the nearest tile with a building to the given position (BFS).
+   * Returns the tile object or null if none found.
+   */
+  _findNearestBuilding(col, row) {
+    const visited = new Set();
+    const queue = [{ col, row, dist: 0 }];
+    visited.add(hexKey(col, row));
+
+    while (queue.length > 0) {
+      const { col: c, row: r } = queue.shift();
+      const t = this.tiles.get(hexKey(c, r));
+      if (t && t.building) return t;
+
+      for (const n of getNeighbors(c, r)) {
+        const nk = hexKey(n.col, n.row);
+        if (visited.has(nk)) continue;
+        if (!this.tiles.has(nk)) continue;
+        visited.add(nk);
+        queue.push({ col: n.col, row: n.row });
+      }
+    }
+    return null;
+  }
+
   _checkNodeObjectives(phase) {
+    const isBattle   = this.gameMode === GameMode.BATTLE;
     const isDawn     = phase === Phase.DAWN;
     const phaseLabel = isDawn ? 'dawn' : 'dusk';
     const nodeCount  = this.witchObjectives.length;
@@ -560,43 +750,67 @@ export class GameState {
       if (ctrl === 'hero')  heroCount++;
     }
 
-    // Instant win: sweep all nodes
-    if (witchCount === nodeCount) {
+    // Instant win: sweep all nodes (disabled in battle mode)
+    if (!isBattle && witchCount === nodeCount) {
       this.winner    = 'witch';
       this.winReason = isDawn ? WIN_REASON.NODES_WITCH : WIN_REASON.NODES_WITCH_DUSK;
       this.addLog(isDawn
         ? `🌙 As dawn breaks, ${this.factionName('witch')} holds all Power Nodes! Caleb's Hollow is lost…`
-        : `🌙 As dusk falls, ${this.factionName('witch')} holds all Power Nodes! The ritual advances!`, 'witch');
+        : `🌙 As dusk falls, ${this.factionName('witch')} holds all Power Nodes! The ritual advances!`);
       return;
     }
-    if (heroCount === nodeCount) {
+    if (!isBattle && heroCount === nodeCount) {
       this.winner    = 'hero';
       this.winReason = isDawn ? WIN_REASON.NODES_HERO : WIN_REASON.NODES_HERO_DUSK;
       this.addLog(isDawn
         ? `☀ At dawn, ${this.factionName('hero')} holds all Power Nodes! ${this.factionName('witch')}'s ritual is broken!`
-        : `☀ As dusk falls, ${this.factionName('hero')} holds all Power Nodes! The ritual is disrupted!`, 'hero');
+        : `☀ As dusk falls, ${this.factionName('hero')} holds all Power Nodes! The ritual is disrupted!`);
       return;
     }
 
     // Scoring: whoever controls more nodes scores 1 point (ties score nothing)
     if (witchCount > heroCount) {
       this.nodeScore.witch++;
-      this.addLog(`🌙 At ${phaseLabel}: ${this.factionName('witch')} leads ${witchCount}–${heroCount}. Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`, 'witch');
-      if (this.nodeScore.witch >= 4) {
+      this.addLog(`🌙 At ${phaseLabel}: ${this.factionName('witch')} leads ${witchCount}–${heroCount}. Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);
+      // Score threshold win (disabled in battle mode — runs until time expires)
+      if (!isBattle && this.nodeScore.witch >= 4) {
         this.winner    = 'witch';
         this.winReason = WIN_REASON.SCORE_WITCH;
-        this.addLog(`🌙 ${this.factionName('witch')} has claimed three ritual moments — Caleb's Hollow falls to darkness!`, 'witch');
+        this.addLog(`🌙 ${this.factionName('witch')} has claimed three ritual moments — Caleb's Hollow falls to darkness!`);
       }
     } else if (heroCount > witchCount) {
       this.nodeScore.hero++;
-      this.addLog(`☀ At ${phaseLabel}: ${this.factionName('hero')} leads ${heroCount}–${witchCount}. Score — Hero ${this.nodeScore.hero} / Witch ${this.nodeScore.witch}`, 'hero');
-      if (this.nodeScore.hero >= 4) {
+      this.addLog(`☀ At ${phaseLabel}: ${this.factionName('hero')} leads ${heroCount}–${witchCount}. Score — Hero ${this.nodeScore.hero} / Witch ${this.nodeScore.witch}`);
+      if (!isBattle && this.nodeScore.hero >= 4) {
         this.winner    = 'hero';
         this.winReason = WIN_REASON.SCORE_HERO;
-        this.addLog(`☀ ${this.factionName('hero')} has broken the ritual three times — Caleb's Hollow is saved!`, 'hero');
+        this.addLog(`☀ ${this.factionName('hero')} has broken the ritual three times — Caleb's Hollow is saved!`);
       }
     } else {
       this.addLog(`⚖ At ${phaseLabel}: nodes tied (${witchCount}–${heroCount}). Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);
+    }
+  }
+
+  /**
+   * Battle mode: score node control on non-dawn/dusk rounds.
+   * Same logic as _checkNodeObjectives but with generic round-based labels.
+   */
+  _checkBattleNodeScoring() {
+    let witchCount = 0, heroCount = 0;
+    for (const obj of this.witchObjectives) {
+      const ctrl = nodeController(obj, this.entities);
+      if (ctrl === 'witch') witchCount++;
+      if (ctrl === 'hero')  heroCount++;
+    }
+
+    if (witchCount > heroCount) {
+      this.nodeScore.witch++;
+      this.addLog(`🌙 Round ${this.round}: Witches lead nodes ${witchCount}–${heroCount}. Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`, 'witch');
+    } else if (heroCount > witchCount) {
+      this.nodeScore.hero++;
+      this.addLog(`☀ Round ${this.round}: Heroes lead nodes ${heroCount}–${witchCount}. Score — Hero ${this.nodeScore.hero} / Witch ${this.nodeScore.witch}`, 'hero');
+    } else {
+      this.addLog(`⚖ Round ${this.round}: nodes tied (${witchCount}–${heroCount}). Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);
     }
   }
 

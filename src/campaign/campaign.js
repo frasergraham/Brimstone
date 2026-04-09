@@ -30,7 +30,7 @@ export function snapshotSurvivor(entity) {
  */
 export function buildVictoryDelegate(objectives) {
   return (state) => {
-    // Check lose condition first
+    // Check lose condition first (may be null for tutorial/conductor missions)
     if (objectives.lose) {
       switch (objectives.lose.type) {
         case 'hero_killed':
@@ -94,6 +94,9 @@ export function buildVictoryDelegate(objectives) {
           break;
         case 'control_nodes':
           // Standard node scoring — delegate to existing logic (return null to let it run)
+          return null;
+        case 'conductor_complete':
+          // MissionConductor handles completion directly — never auto-trigger victory
           return null;
       }
     }
@@ -277,12 +280,13 @@ export class Campaign {
    * @param {object} result - { won, survivors[], resources, heroStats, flags }
    */
   applyMissionResult(missionId, result) {
+    // On defeat: no state changes — party is restored to pre-mission state
+    if (!result.won) return;
+
     const missionDef = this.getMissionDef(missionId);
 
-    if (result.won) {
-      this.completedMissions.add(missionId);
-      this.currentMission = this.getNextMission() ?? missionId;
-    }
+    this.completedMissions.add(missionId);
+    this.currentMission = this.getNextMission() ?? missionId;
 
     // Permadeath: replace roster with only surviving survivors
     if (result.survivors) {
@@ -308,8 +312,8 @@ export class Campaign {
       }
     }
 
-    // Apply heal bonus on victory
-    if (result.won && missionDef?.healBonus) {
+    // Apply heal bonus
+    if (missionDef?.healBonus) {
       const bonus = missionDef.healBonus;
       this.heroStats.hp = Math.min(this.heroStats.hp + bonus, this.heroStats.maxHp);
       for (const s of this.roster) {
@@ -317,8 +321,8 @@ export class Campaign {
       }
     }
 
-    // Apply mission rewards on victory
-    if (result.won && missionDef?.rewards) {
+    // Apply mission rewards
+    if (missionDef?.rewards) {
       for (const [key, val] of Object.entries(missionDef.rewards)) {
         this.resources[key] = (this.resources[key] ?? 0) + val;
       }
