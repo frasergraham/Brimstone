@@ -11,29 +11,38 @@ import { VERSION } from '../src/version.js';
 
 // ── Time helpers ────────────────────────────────────────────────────────────
 
-/** Get the current time in America/Los_Angeles. */
-function _nowPST() {
-  return new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+/**
+ * Get the PST "now" and the UTC offset for America/Los_Angeles.
+ * Returns { pstNow: Date (local-shifted), offsetMs: number (UTC - PST) }
+ */
+function _pstContext() {
+  const utcNow = new Date();
+  const pstNow = new Date(utcNow.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+  const offsetMs = utcNow.getTime() - pstNow.getTime();
+  return { pstNow, offsetMs };
+}
+
+/** Convert a PST-local Date to a true UTC Unix timestamp (seconds). */
+function _pstToUnix(pstDate, offsetMs) {
+  return Math.floor((pstDate.getTime() + offsetMs) / 1000);
 }
 
 /**
  * Get the next battle deadline — noon or midnight PST, whichever comes first.
- * Returns a Unix timestamp (seconds).
+ * Returns a Unix timestamp (seconds) in true UTC.
  */
 export function nextBattleDeadlinePST() {
-  const now = _nowPST();
-  const today = new Date(now);
+  const { pstNow, offsetMs } = _pstContext();
 
-  // Try noon today
-  const noon = new Date(today);
+  const noon = new Date(pstNow);
   noon.setHours(12, 0, 0, 0);
-  if (now < noon) return Math.floor(noon.getTime() / 1000);
+  const noonUnix = _pstToUnix(noon, offsetMs);
+  if (noonUnix > Math.floor(Date.now() / 1000)) return noonUnix;
 
-  // Try midnight tonight (= start of tomorrow)
-  const midnight = new Date(today);
+  const midnight = new Date(pstNow);
   midnight.setDate(midnight.getDate() + 1);
   midnight.setHours(0, 0, 0, 0);
-  return Math.floor(midnight.getTime() / 1000);
+  return _pstToUnix(midnight, offsetMs);
 }
 
 /**
@@ -41,19 +50,18 @@ export function nextBattleDeadlinePST() {
  * Battles run for ~2 weeks.
  */
 function _battleEndPST() {
-  const now = _nowPST();
-  const day = now.getDay(); // 0=Sun
+  const { pstNow, offsetMs } = _pstContext();
+  const day = pstNow.getDay(); // 0=Sun
   const daysUntilSunday = day === 0 ? 0 : 7 - day;
-  const sunday = new Date(now);
+  const sunday = new Date(pstNow);
   sunday.setDate(sunday.getDate() + daysUntilSunday);
-  sunday.setHours(0, 0, 0, 0); // midnight Sunday
-  // If we're already past this Sunday midnight, the first Sunday is next week
-  if (now >= sunday) {
+  sunday.setHours(0, 0, 0, 0); // midnight Sunday PST
+  if (pstNow >= sunday) {
     sunday.setDate(sunday.getDate() + 7);
   }
-  // Add another week to get the SECOND Sunday
+  // Second Sunday
   sunday.setDate(sunday.getDate() + 7);
-  return Math.floor(sunday.getTime() / 1000);
+  return _pstToUnix(sunday, offsetMs);
 }
 
 // ── Battle lifecycle ────────────────────────────────────────────────────────
@@ -81,6 +89,13 @@ export function ensureBattleExists() {
         const cfg = JSON.parse(save.config_json || '{}');
         const battleConfig = save.state?.battleConfig;
         if (battleConfig?.endsAt && Math.floor(Date.now() / 1000) < battleConfig.endsAt) {
+          // Sanity check: discard corrupted saves (e.g. from a resolution loop)
+          const MAX_BATTLE_ROUNDS = 60; // 2 per day × 14 days + margin
+          if (save.state?.round > MAX_BATTLE_ROUNDS) {
+            console.warn(`[battle-scheduler] Discarding corrupted battle save ${save.room_id} (round ${save.state.round})`);
+            deleteSave(save.room_id);
+            continue;
+          }
           const room = recoverRoom(save.room_id);
           if (room) {
             console.log(`[battle-scheduler] Recovered battle ${room.id} from DB (round ${room.state.round})`);

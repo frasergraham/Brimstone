@@ -46,13 +46,51 @@ const ROUND_DELAY_MS     = parseInt(process.env.ROUND_DELAY_MS, 10)     || 4000;
 const CHRONICLE_MAX      = 100;    // max rounds retained per room in the chronicle
 const BATTLE_ADVANCE_THRESHOLD_S = 30 * 60; // 30 minutes — if less than this until deadline, advance to next
 
-/** Next battle turn deadline: noon or midnight PST, whichever is soonest. */
+/** Next battle turn deadline: noon or midnight PST, whichever is soonest.
+ *  Returns a Unix timestamp (seconds) in true UTC. */
 function _nextBattleDeadline() {
-  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
-  const noon = new Date(now); noon.setHours(12, 0, 0, 0);
-  if (now < noon) return Math.floor(noon.getTime() / 1000);
-  const midnight = new Date(now); midnight.setDate(midnight.getDate() + 1); midnight.setHours(0, 0, 0, 0);
-  return Math.floor(midnight.getTime() / 1000);
+  // Get current PST hours/date by formatting to PST then parsing components
+  const pstStr = new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles', hour12: false });
+  const [datePart, timePart] = pstStr.split(', ');
+  const [month, day, year] = datePart.split('/').map(Number);
+  const [hours] = timePart.split(':').map(Number);
+
+  // Build target times as ISO strings in America/Los_Angeles
+  // Use Intl.DateTimeFormat to get the UTC offset for PST/PDT
+  const nowMs = Date.now();
+
+  // Next noon PST: if before noon PST, target is today noon; else tomorrow noon
+  // Next midnight PST: if before midnight (always true if we got past noon check), tomorrow midnight
+  // We test both and return whichever is sooner and still in the future
+
+  const tryTarget = (targetHour, daysAhead) => {
+    // Construct a date string in PST: "YYYY-MM-DDThh:00:00" and resolve via Date
+    const d = new Date(pstStr);
+    d.setDate(d.getDate() + daysAhead);
+    d.setHours(targetHour, 0, 0, 0);
+    // Convert back to true UTC by round-tripping through toLocaleString
+    // This is imprecise. Instead, compute offset from a known reference.
+    return Math.floor(d.getTime() / 1000);
+  };
+
+  // Simpler approach: compute using the offset between local JS time and PST
+  const utcNow = new Date();
+  const pstNow = new Date(utcNow.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+  const offsetMs = utcNow.getTime() - pstNow.getTime(); // UTC - PST_as_local = offset
+
+  // Build noon and midnight in PST, convert to UTC
+  const todayNoonPST = new Date(pstNow);
+  todayNoonPST.setHours(12, 0, 0, 0);
+  const todayNoonUTC = new Date(todayNoonPST.getTime() + offsetMs);
+  if (todayNoonUTC.getTime() > nowMs) {
+    return Math.floor(todayNoonUTC.getTime() / 1000);
+  }
+
+  const tomorrowMidnightPST = new Date(pstNow);
+  tomorrowMidnightPST.setDate(tomorrowMidnightPST.getDate() + 1);
+  tomorrowMidnightPST.setHours(0, 0, 0, 0);
+  const tomorrowMidnightUTC = new Date(tomorrowMidnightPST.getTime() + offsetMs);
+  return Math.floor(tomorrowMidnightUTC.getTime() / 1000);
 }
 
 // ── Player notification callback (injected by server.js to avoid circular imports) ──
