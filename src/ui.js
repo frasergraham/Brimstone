@@ -2064,6 +2064,7 @@ export class UIController {
       } else {
         el.innerHTML = `
           <span class="turn-faction player-${faction}">${glyph}</span>
+          <span class="actions-label">Actions</span>
           <div class="actions-remaining" title="Actions budget">${diamonds}</div>
         `;
       }
@@ -2119,6 +2120,7 @@ export class UIController {
     el.innerHTML = `
       <span class="turn-faction player-${state.activePlayer}">${glyph}</span>
       <span class="turn-line">${player}'s Turn ${isAI ? '<span class="ai-badge">AI</span>' : ''}</span>
+      <span class="actions-label">Actions</span>
       <div class="actions-remaining">${diamonds}</div>
     `;
   }

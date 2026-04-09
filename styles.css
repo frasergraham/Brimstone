@@ -685,7 +685,8 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 #game-header {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
   padding: 0.4rem 0.75rem;
   padding-top: max(0.4rem, env(safe-area-inset-top));
   padding-left: max(0.75rem, env(safe-area-inset-left));
@@ -703,12 +704,26 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   flex-shrink: 0;
 }
 
+#header-cycle-group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
 #turn-info {
   display: flex;
   align-items: center;
   gap: 0.6rem;
   flex: 1;
   min-width: 0;
+}
+
+.header-buttons {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
 }
 
 /* ── Score bar — bottom strip showing Power Nodes + score track ──────── */
@@ -960,29 +975,22 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   margin-bottom: 0.25rem;
 }
 
-/* Always-visible 8-step day/night strip below the header */
+/* 8-step day/night cycle icons — inline within header */
 #cycle-bar {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 4px;
-  padding: 0.25rem 0.5rem;
-  background: rgba(13,17,23,0.92);
-  border-bottom: 1px solid rgba(255,255,255,0.07);
+  gap: 3px;
   flex-shrink: 0;
 }
 
-/* Day N · Round M label row below the cycle bar */
+/* Day N · Round M label — inline within header */
 #round-label {
-  text-align: center;
-  font-size: 0.68rem;
+  font-size: 0.65rem;
   color: #b8ac98;
   letter-spacing: 0.06em;
-  opacity: 1;
-  padding: 0.1rem 0.5rem 0.2rem;
-  background: rgba(13,17,23,0.88);
-  border-bottom: 1px solid rgba(255,255,255,0.05);
+  white-space: nowrap;
   flex-shrink: 0;
+  opacity: 0.85;
 }
 
 .cycle-step {
@@ -1008,15 +1016,15 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .cycle-active.phase-night { background: rgba(123,79,187,0.20); color: var(--night); border-color: var(--night); }
 
 .cycle-icon {
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   object-fit: cover;
   pointer-events: none;
 }
 .cycle-active .cycle-icon {
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
 }
 
 .cycle-name {
@@ -1058,6 +1066,14 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   padding: 0 0.3rem;
   border-radius: 2px;
   vertical-align: middle;
+}
+
+.actions-label {
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
 }
 
 .actions-remaining {
@@ -2723,9 +2739,10 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   /* Whole game fits in one viewport — no page-level scroll */
   #game-screen { height: 100dvh; }
 
-  /* Header: tighter */
-  #game-header { padding: max(0.35rem, env(safe-area-inset-top)) max(0.75rem, env(safe-area-inset-right)) 0.35rem max(0.75rem, env(safe-area-inset-left)); gap: 0.5rem; flex-shrink: 0; }
+  /* Header: tighter, cycle group wraps to own row */
+  #game-header { padding: max(0.35rem, env(safe-area-inset-top)) max(0.75rem, env(safe-area-inset-right)) 0.35rem max(0.75rem, env(safe-area-inset-left)); gap: 0.3rem 0.5rem; flex-shrink: 0; }
   .header-title { display: none; }
+  #header-cycle-group { order: -1; width: 100%; justify-content: center; }
   #turn-info { flex-wrap: wrap; gap: 0.3rem 0.6rem; }
   .phase-hint { display: none; }
 
