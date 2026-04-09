@@ -310,12 +310,14 @@ export function riverSide(col, row, riverMap, riverEW = false) {
 // Like _pickSpread but guarantees at least one node on each side of the river
 // when count >= 2 and both sides have valid candidates.
 // startPositions: array of {col,row} — no node center may be within 3 hexes of these.
-function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, riverMap, riverEW = false, startPositions = []) {
+function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, riverMap, riverEW = false, startPositions = [], nodeColRange = null) {
+  const colMin = nodeColRange?.min ?? 1;
+  const colMax = nodeColRange?.max ?? (MAP_COLS - 2);
   const left = [], right = [];
   for (const [k, t] of tiles) {
     if (t.type !== TileType.GRASS) continue;
     if (forbiddenKeys.has(k)) continue;
-    if (t.col < 1 || t.col > MAP_COLS - 2 || t.row < 1 || t.row > MAP_ROWS - 2) continue;
+    if (t.col < colMin || t.col > colMax || t.row < 1 || t.row > MAP_ROWS - 2) continue;
     if (startPositions.some(sp => hexDistance(sp.col, sp.row, t.col, t.row) <= 3)) continue;
     (riverSide(t.col, t.row, riverMap, riverEW) === 'left' ? left : right).push({ col: t.col, row: t.row });
   }
@@ -776,7 +778,11 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   const resolvedNodeCount = (nodeCountOverride != null)
     ? Math.max(cfg.nodeCountMin ?? 1, Math.min(cfg.nodeCountMax ?? cfg.nodeCount, nodeCountOverride))
     : cfg.nodeCount;
-  const objPositions = _pickNodesAcrossRiver(rand, tiles, resolvedNodeCount, 4, buildingKeys, riverMap, riverEW, startPositions);
+  // Battle maps: restrict nodes to the middle 2/3 of the map (away from spawn columns)
+  const nodeColRange = mapSize === 'battle'
+    ? { min: Math.floor(cfg.cols / 6), max: Math.floor(cfg.cols * 5 / 6) }
+    : null;
+  const objPositions = _pickNodesAcrossRiver(rand, tiles, resolvedNodeCount, 4, buildingKeys, riverMap, riverEW, startPositions, nodeColRange);
   const witchObjectives = objPositions.map((pos, i) => ({
     col: pos.col, row: pos.row,
     label: WITCH_OBJECTIVE_LABELS[i] ?? `Power Node ${i + 1}`,
