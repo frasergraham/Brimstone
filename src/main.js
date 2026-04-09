@@ -4589,13 +4589,14 @@ document.getElementById('btn-battle-back')?.addEventListener('click', () => show
 document.getElementById('btn-battle-join')?.addEventListener('click', function() {
   const roomId = this.dataset.roomId;
   if (!roomId) return;
-  // Tear down any existing game UI so initOnline gets the clean path
+  // Tear down everything — kill any in-flight reconnect, destroy old UI
+  if (ui) ui.destroy();
   state = null; renderer = null; ui = null;
   _stopBattleCountdownTimer();
   document.getElementById('game-screen').style.display = 'none';
-  // Clear stale roomId so _ensureAuthed doesn't trigger a reconnect
-  // via auth({roomId}) — joinBattle handles everything.
-  if (mp) { mp.roomId = null; mp.active = false; }
+  // Disconnect the old mp client entirely to cancel any pending reconnect
+  // that could race with joinBattle and create duplicate handlers.
+  if (mp) { mp.disconnect(); mp = null; }
   _ensureAuthed(() => {
     mp.joinBattle(roomId);
   });
