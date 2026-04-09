@@ -17,7 +17,7 @@
  * Sizes: skirmish | standard | regional | campaign | battle
  */
 
-import { GameState, GameMode, WIN_REASON } from '../src/game.js';
+import { GameState, GameMode, WIN_REASON, nodeController } from '../src/game.js';
 import { HeroAIEngine }          from '../src/hero-ai-engine.js';
 import { WitchAIEngine }        from '../src/ai-engine.js';
 import { resolvePlansMP, ResEventType } from '../server/resolver.js';
@@ -247,6 +247,9 @@ function runGame() {
     summons: 0, fortifies: 0,
     peakSurvivors: 0, peakMinions: 0,
     leaderDeaths: { hero: 0, witch: 0 },
+    firstBattleRound: null,  // round when first battle action occurs
+    // Per-node tracking: how many rounds each node was held by each faction
+    nodeHistory:     [],    // populated at end of game
     // Performance metrics (per-round arrays)
     planGenTimes:    [],   // ms to generate all plans for a round
     resolveTimes:    [],   // ms to resolve all plans for a round
@@ -269,6 +272,7 @@ function runGame() {
           if (result?.killed) {
             if (faction === 'hero') metrics.killsByHero++; else metrics.killsByWitch++;
           }
+          if (metrics.firstBattleRound === null) metrics.firstBattleRound = state.round;
           break;
 
         case PlanActionType.EXPLORE: {
@@ -300,6 +304,8 @@ function runGame() {
     }
   }
 
+  const nodeRoundCtrl = {};  // nodeIndex → { hero, witch, neutral, contested, firstContested }
+
   while (!state.gameOver && state.round <= MAX_ROUNDS) {
     const roundResult = playRound(state, playerAIs);
 
@@ -322,7 +328,20 @@ function runGame() {
     const mini = state.entities.filter(e => e.alive && e.owner === 'witch' && e.type !== 'witch').length;
     if (surv > metrics.peakSurvivors) metrics.peakSurvivors = surv;
     if (mini > metrics.peakMinions)   metrics.peakMinions   = mini;
+
+    // Node control snapshot
+    for (let ni = 0; ni < state.witchObjectives.length; ni++) {
+      if (!nodeRoundCtrl[ni]) nodeRoundCtrl[ni] = { hero: 0, witch: 0, neutral: 0, contested: 0, firstContested: null };
+      const ctrl = nodeController(state.witchObjectives[ni], state.entities);
+      nodeRoundCtrl[ni][ctrl]++;
+      if (ctrl !== 'neutral' && nodeRoundCtrl[ni].firstContested === null) {
+        nodeRoundCtrl[ni].firstContested = state.round;
+      }
+    }
   }
+
+  // Store node history
+  metrics.nodeHistory = Object.values(nodeRoundCtrl);
 
   // Count leader deaths (MP)
   if (IS_MP) {
@@ -656,8 +675,68 @@ if (IS_MP) {
 hdr('COMBAT (avg per game)');
 console.log(row(`  Hero battles   ${fmt(avgBattlesHero)}   kills ${fmt(avgKillsHero)}`));
 console.log(row(`  Witch battles  ${fmt(avgBattlesWitch)}   kills ${fmt(avgKillsWitch)}`));
+console.log(row(`  Total battles  ${fmt(avgBattlesHero + avgBattlesWitch)}   total kills ${fmt(avgKillsHero + avgKillsWitch)}`));
 console.log(row(`  Avg hero HP at end:   ${fmt(avg(valid.map(r => r.heroHp)))}`));
 console.log(row(`  Avg witch HP at end:  ${fmt(avg(valid.map(r => r.witchHp)))}`));
+
+// First battle timing
+const firstBattleRounds = valid.map(r => r.metrics.firstBattleRound).filter(r => r !== null);
+if (firstBattleRounds.length > 0) {
+  const fbSorted = [...firstBattleRounds].sort((a, b) => a - b);
+  console.log(row(`  First battle on round: mean ${fmt(avg(firstBattleRounds))}  median ${median(fbSorted)}  min ${fbSorted[0]}  max ${fbSorted[fbSorted.length-1]}`));
+  const neverFought = valid.length - firstBattleRounds.length;
+  if (neverFought > 0) console.log(row(`  Games with zero battles: ${neverFought}`));
+}
+
+// Node contestation
+{
+  const nodeCount = valid[0]?.metrics.nodeHistory?.length ?? 0;
+  if (nodeCount > 0) {
+    hdr(`NODE CONTESTATION  (${nodeCount} nodes)`);
+    // Per-node: what % of rounds was it held by hero/witch/neutral/contested
+    const avgNodeStats = [];
+    for (let ni = 0; ni < nodeCount; ni++) {
+      const stats = { hero: [], witch: [], neutral: [], contested: [], firstContested: [] };
+      for (const r of valid) {
+        const nh = r.metrics.nodeHistory?.[ni];
+        if (!nh) continue;
+        const total = nh.hero + nh.witch + nh.neutral + nh.contested;
+        if (total === 0) continue;
+        stats.hero.push(nh.hero / total);
+        stats.witch.push(nh.witch / total);
+        stats.neutral.push(nh.neutral / total);
+        stats.contested.push(nh.contested / total);
+        if (nh.firstContested !== null) stats.firstContested.push(nh.firstContested);
+      }
+      avgNodeStats.push({
+        hero:      avg(stats.hero),
+        witch:     avg(stats.witch),
+        neutral:   avg(stats.neutral),
+        contested: avg(stats.contested),
+        avgFirstContested: stats.firstContested.length ? avg(stats.firstContested) : null,
+        everContested: stats.firstContested.length / valid.length,
+      });
+    }
+
+    for (let ni = 0; ni < nodeCount; ni++) {
+      const s = avgNodeStats[ni];
+      const fc = s.avgFirstContested !== null ? `first reached r${Math.round(s.avgFirstContested)}` : 'never reached';
+      console.log(row(`  Node ${ni + 1}: hero ${pct(s.hero,1)}%  witch ${pct(s.witch,1)}%  neutral ${pct(s.neutral,1)}%  contested ${pct(s.contested,1)}%`));
+      console.log(row(`         ${fc} · reached in ${pct(s.everContested,1)}% of games`));
+    }
+
+    // Summary: how many nodes see action
+    const avgNodesReached = avg(valid.map(r => {
+      return (r.metrics.nodeHistory ?? []).filter(nh => nh.firstContested !== null).length;
+    }));
+    const allNodesReached = valid.filter(r => {
+      return (r.metrics.nodeHistory ?? []).every(nh => nh.firstContested !== null);
+    }).length;
+    console.log(row(``));
+    console.log(row(`  Avg nodes reached per game: ${fmt(avgNodesReached)} / ${nodeCount}`));
+    console.log(row(`  Games where ALL nodes reached: ${allNodesReached} / ${valid.length}  (${pct(allNodesReached, valid.length)}%)`));
+  }
+}
 
 hdr('EXPLORATION (avg per game)');
 console.log(row(`  Hero explores   ${fmt(avgExploresHero)}   Witch explores   ${fmt(avgExploresWitch)}`));
