@@ -2116,27 +2116,37 @@ export function recoverRoom(roomId) {
     }
   }
 
-  // Restore submitted plans from DB
-  try {
-    const planRows = getPlanStatus(roomId, state.round);
-    for (const row of planRows) {
-      if (row.plan_json !== null) {
-        const plan = JSON.parse(row.plan_json);
-        try { state.submitPlayerPlan(row.player_id, plan); } catch {}
+  // Restore submitted plans from DB (non-battle only — battle rooms save
+  // in planning state with no submitted plans, so there's nothing to restore).
+  if (!savedConfig.isBattle) {
+    try {
+      const planRows = getPlanStatus(roomId, state.round);
+      for (const row of planRows) {
+        if (row.plan_json !== null) {
+          const plan = JSON.parse(row.plan_json);
+          try { state.submitPlayerPlan(row.player_id, plan); } catch {}
+        }
       }
+    } catch (err) {
+      console.error(`[recoverRoom ${roomId}] restore plans error:`, err);
     }
-  } catch (err) {
-    console.error(`[recoverRoom ${roomId}] restore plans error:`, err);
   }
 
-  // Ensure planning is active. The saved state should always have
-  // planningPhase: true (we save in _startPlanningPhase), but belt-and-suspenders.
-  if (!state.gameOver && !state.planningPhase && !state.resolving) {
-    console.log(`[recoverRoom ${roomId}] room not in planning — starting fresh phase`);
+  // Ensure we're in a valid state: planning or gameOver.
+  // If somehow stuck (resolving without a resolver running, or between rounds),
+  // force into planning.
+  if (!state.gameOver && !state.planningPhase) {
+    console.log(`[recoverRoom ${roomId}] forcing planningPhase (was resolving=${state.resolving})`);
     state.planningPhase = true;
     state.resolving = false;
+    // Reset any stale ready/plan state
+    for (const p of state.players) {
+      state.playerReady.set(p.id, false);
+      state.playerPlans.set(p.id, []);
+    }
   }
-  // Restart the deadline timer for the current planning phase
+
+  // Restart the deadline timer
   if (!state.gameOver && state.planningPhase) {
     _startPlanningTimer(room);
   }
@@ -3036,25 +3046,8 @@ export function joinBattle(playerId, playerName, ws, roomId) {
     existingSeat.ws = ws;
     const faction = existingSeat.faction;
 
-    // If the room is in a dead state (not planning, not resolving, not over),
-    // kick off a planning phase. This happens when the room was recovered from
-    // DB after being saved between rounds.
-    if (!room.state.planningPhase && !room.state.resolving && !room.state.gameOver) {
-      _startPlanningPhase(room);
-    }
-
-    // Collect replay history for the "replay last turn" button.
-    let priorRounds = room.replayRounds ?? [];
-    if (priorRounds.length === 0) {
-      try {
-        const dbRounds = getSaveRounds(room.id);
-        priorRounds = dbRounds.map(r => ({
-          roundNum: r.round_num, preStateJson: r.pre_state_json, stepsJson: r.steps_json,
-        }));
-      } catch { /* ignore */ }
-    }
-
     // Use matchFound — the reliable game-entry path.
+    // Room should already be in planning (saved that way, or forced by recoverRoom).
     send(ws, {
       type:       'matchFound',
       roomId:     room.id,
@@ -3064,8 +3057,6 @@ export function joinBattle(playerId, playerName, ws, roomId) {
       aiOpponent: false,
       isAsync:    true,
       isBattle:   true,
-      resumed:    true,
-      priorRounds,
     });
     send(ws, { type: 'stateUpdate', reason: 'battleReconnect', state: serializeState(room.state) });
 
