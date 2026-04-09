@@ -1035,6 +1035,8 @@ function _checkTimeoutTakeovers(room) {
       delete room.consecutiveTimeouts[playerId];
     }
     _broadcastPresence(room);
+    // Persist so kicks survive a server restart
+    _persistRoomSave(room);
     return;
   }
 
@@ -1934,6 +1936,9 @@ export function resignGame(playerId, roomId, ws) {
 
     send(ws, { type: 'resigned', roomId });
     console.log(`[battle] ${playerName} resigned from battle ${room.id}`);
+
+    // Persist immediately so the resign survives a server restart
+    _persistRoomSave(room);
 
     // Check if all plans are now ready (the resigned player was the last holdout)
     if (room.state.planningPhase) {
@@ -3319,6 +3324,10 @@ export function joinBattle(playerId, playerName, ws, roomId) {
   });
 
   console.log(`[battle] ${playerName} joined Battle ${room.id} as ${faction} (${heroCount + (faction === 'hero' ? 1 : 0)}v${witchCount + (faction === 'witch' ? 1 : 0)})`);
+
+  // Persist so the new player survives a server restart
+  _persistRoomSave(room);
+
   return { roomId: room.id, faction };
 }
 
