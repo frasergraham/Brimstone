@@ -14,7 +14,7 @@ import {
 } from '../server/saves.js';
 import { GameState } from '../src/game.js';
 import { serializeState } from '../server/state-sync.js';
-import { VERSION } from '../src/version.js';
+import { VERSION, SAVE_VERSION } from '../src/version.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -116,7 +116,7 @@ describe('pruneStaleAndIncompatibleSaves cleans up rounds', () => {
     appendSaveRound(roomId, 2, '{}', '[]');
 
     assert.equal(getSaveRounds(roomId).length, 2);
-    pruneStaleAndIncompatibleSaves(VERSION);
+    pruneStaleAndIncompatibleSaves(VERSION, SAVE_VERSION);
     assert.equal(getSaveRounds(roomId).length, 0);
   });
 });

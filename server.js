@@ -5,7 +5,7 @@ import { createServer }    from 'http';
 import { join, dirname }   from 'path';
 import { fileURLToPath }   from 'url';
 
-import { VERSION, BUILD_VERSION } from './src/version.js';
+import { VERSION, BUILD_VERSION, SAVE_VERSION } from './src/version.js';
 import {
   registerOrLogin, getPlayerByToken, getPlayerByEmail,
   linkEmail, loginByEmail, getPlayerIdentities, changeUsername,
@@ -1241,7 +1241,7 @@ function _publicPlayer(p) {
 
 server.listen(PORT, () => {
   console.log(`Caleb's Hollow v${BUILD_VERSION} listening on port ${PORT}`);
-  const pruned = pruneStaleAndIncompatibleSaves(VERSION);
+  const pruned = pruneStaleAndIncompatibleSaves(VERSION, SAVE_VERSION);
   if (pruned > 0) console.log(`Pruned ${pruned} stale/incompatible save(s).`);
   const prunedCompleted = pruneExpiredCompletedGames();
   if (prunedCompleted > 0) console.log(`Pruned ${prunedCompleted} expired completed game(s).`);
