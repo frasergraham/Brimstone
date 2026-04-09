@@ -752,6 +752,10 @@ function _runAIPlanSubmission(room) {
 function _submitPlayerPlan(room, playerId, plan, isTimeout = false) {
   if (!room.state.planningPhase) return;
 
+  if (room.config.isBattle) {
+    console.log(`[battle] _submitPlayerPlan: player=${playerId} plan=${plan.length} actions, isTimeout=${isTimeout}, round=${room.state.round}`);
+  }
+
   let allReady;
   try {
     allReady = room.state.submitPlayerPlan(playerId, plan);
@@ -804,6 +808,12 @@ function _submitPlayerPlan(room, playerId, plan, isTimeout = false) {
     }
   }
 
+  if (room.config.isBattle) {
+    const readyCount = [...room.state.playerReady.values()].filter(Boolean).length;
+    const totalCount = room.state.playerReady.size;
+    console.log(`[battle] After submit: allReady=${allReady} ready=${readyCount}/${totalCount} planningPhase=${room.state.planningPhase} resolving=${room.state.resolving}`);
+  }
+
   if (allReady) {
     // Battle mode: don't resolve until both factions have at least one player.
     // The solo player's plan stays submitted; resolution triggers when an
@@ -845,6 +855,13 @@ function _executeResolution(room) {
     });
   }
 
+  if (room.config.isBattle) {
+    console.log(`[battle] _executeResolution: round=${state.round} phase=${state.phase} players=${playerEntries.length}`);
+    for (const pe of playerEntries) {
+      console.log(`  ${pe.faction} ${pe.playerId}: ${pe.plan.length} actions [${pe.plan.map(a => a.type).join(', ')}]`);
+    }
+  }
+
   // Snapshot state BEFORE resolution for full-game replay
   const preStateJson = JSON.stringify(serializeState(state));
 
@@ -854,6 +871,10 @@ function _executeResolution(room) {
   } catch (err) {
     console.error(`[room ${room.id}] resolvePlansMP error:`, err);
     steps = [];
+  }
+
+  if (room.config.isBattle) {
+    console.log(`[battle] Resolution complete: ${steps.length} steps, gameOver=${state.gameOver}`);
   }
 
   // Add aggregate battle summary to log before endRound (so it serialises into finalState)
