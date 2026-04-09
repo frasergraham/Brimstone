@@ -837,8 +837,10 @@ function _executeResolution(room) {
     console.error(`[room ${room.id}] clearPlanStatus error:`, err);
   }
 
-  // Persist after every round for crash-recovery / hibernation reconnect
-  if (!state.gameOver) {
+  // Persist after every round for crash-recovery / hibernation reconnect.
+  // Battle rooms skip this — they save in _startPlanningPhase instead,
+  // ensuring the saved state always has planningPhase: true.
+  if (!state.gameOver && !room.config.isBattle) {
     try {
       const firstHero  = room.players.find(s => s.faction === 'hero'  && !s.isAI);
       const firstWitch = room.players.find(s => s.faction === 'witch' && !s.isAI);
