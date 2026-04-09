@@ -4504,9 +4504,10 @@ async function _showBattleScreen() {
 
   let _battleStatus = null;
   try {
+    const base = window.BRIMSTONE_SERVER || '';
     const url = session?.token
-      ? `/api/battle-status?token=${encodeURIComponent(session.token)}`
-      : '/api/battle-status';
+      ? `${base}/api/battle-status?token=${encodeURIComponent(session.token)}`
+      : `${base}/api/battle-status`;
     const res = await fetch(url);
     _battleStatus = await res.json();
     const status = _battleStatus;
@@ -4608,7 +4609,7 @@ async function _showBattleScreen() {
   try {
     const historyEl = document.getElementById('battle-history');
     const bodyEl    = document.getElementById('battle-history-body');
-    const histRes = await fetch(`/api/battle-history${session?.token ? '?token=' + encodeURIComponent(session.token) : ''}`);
+    const histRes = await fetch(`${window.BRIMSTONE_SERVER || ''}/api/battle-history${session?.token ? '?token=' + encodeURIComponent(session.token) : ''}`);
     const battles = await histRes.json();
     if (battles && battles.length > 0) {
       historyEl.style.display = '';
@@ -5032,7 +5033,7 @@ async function _updateBattleBadge() {
   const session = loadSession();
   if (!session?.token) { badge.style.display = 'none'; return; }
   try {
-    const res = await fetch(`/api/battle-status?token=${encodeURIComponent(session.token)}`);
+    const res = await fetch(`${window.BRIMSTONE_SERVER || ''}/api/battle-status?token=${encodeURIComponent(session.token)}`);
     const status = await res.json();
     if (status?.joined && !status.mySubmitted) {
       badge.style.display = '';

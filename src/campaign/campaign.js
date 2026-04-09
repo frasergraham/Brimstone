@@ -353,7 +353,7 @@ export class Campaign {
       updatedAt:         this.updatedAt,
     };
     try {
-      const res = await fetch(`/api/campaign-saves/${this.saveSlot}`, {
+      const res = await fetch(`${window.BRIMSTONE_SERVER || ''}/api/campaign-saves/${this.saveSlot}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', 'x-token': token },
         body: JSON.stringify({ state: data }),
@@ -368,7 +368,7 @@ export class Campaign {
   async syncFromServer(token) {
     if (!token) return { ok: false, error: 'No token' };
     try {
-      const res = await fetch(`/api/campaign-saves/${this.saveSlot}`, {
+      const res = await fetch(`${window.BRIMSTONE_SERVER || ''}/api/campaign-saves/${this.saveSlot}`, {
         headers: { 'x-token': token },
       });
       if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
