@@ -5801,13 +5801,13 @@ async function _applyOnlinePlanningPhase(payload) {
   if (players) ui._players = players;
   ui._hasReplayHistory = _onlineRoundHistory.length > 0;
   if (ui._planMode && ui._planFaction === mp.myFaction && !ui._planSubmitted) {
-    // Already in planning for the same faction — just update budget and countdown
-    // without the disruptive exit/enter cycle that briefly clears _planMode.
+    console.log(`[mp] _applyOnlinePlanningPhase: fast path (already planning, budget=${budget})`);
     ui._planBudget = budget;
     if (timeoutMs > 0) ui._startCountdown(timeoutMs);
     ui._renderPlayerStatus();
     ui._renderPlanPanel();
   } else {
+    console.log(`[mp] _applyOnlinePlanningPhase: full enter (planMode=${ui._planMode} submitted=${ui._planSubmitted} budget=${budget})`);
     ui.exitPlanningMode();
     ui.enterPlanningMode(mp.myFaction, budget, timeoutMs ?? 0);
   }
@@ -5944,25 +5944,30 @@ function _serverWsUrl() {
 function _createMpClient() {
   return new MultiplayerClient({
     onState(mirrorState) {
+      console.log(`[mp] onState: reason=${mirrorState._reason ?? '?'} round=${mirrorState.round} planning=${mirrorState.planningPhase} resolving=${mirrorState.resolving} hasUI=${!!ui} hasRenderer=${!!renderer} active=${mp?.active}`);
       if (!renderer || !ui) {
-        // Game not started yet — only init if the player actively joined a game.
-        // mp.active is set true by matchFound/reconnected, cleared by clearRoom().
         if (mp?.active) {
           try {
-            mirrorState.myFaction = mp.myFaction; // used by renderer for per-player fog
+            console.log(`[mp] onState → initOnline (faction=${mp.myFaction})`);
+            mirrorState.myFaction = mp.myFaction;
             initOnline(mirrorState, mp.myFaction, mp);
           } catch (err) {
             console.error('initOnline failed:', err);
             _onlineError(`Failed to start game: ${err.message}`);
             _showOnlineScreen();
           }
+        } else {
+          console.log(`[mp] onState ignored — mp.active is false`);
         }
         return;
       }
 
-      // Suppress state pushes while animating or showing summary — animation owns state.entities.
-      if (shouldBufferMessages()) return;
+      if (shouldBufferMessages()) {
+        console.log(`[mp] onState buffered (shouldBuffer=true, mode=${getMode()})`);
+        return;
+      }
 
+      console.log(`[mp] onState → in-place update`);
       // Already in game — update in-place (keeps renderer pan/zoom)
 
       // Snapshot entity positions before update so we can animate moves
@@ -6206,9 +6211,10 @@ function _createMpClient() {
     },
 
     onPlanningPhase(payload) {
+      console.log(`[mp] onPlanningPhase: budget=${payload.myActionsLeft} timeout=${payload.timeoutMs} hasSubmittedPlan=${!!(payload.submittedPlan?.length)} inGame=${isInGame()} hasUI=${!!ui} mode=${getMode()}`);
       if (!isInGame() || !ui || !mp) return;
-      // If animating or showing summary, defer until it finishes.
       if (shouldBufferMessages()) {
+        console.log(`[mp] onPlanningPhase → buffered (mode=${getMode()})`);
         _pendingPlanningPhase = payload;
         return;
       }

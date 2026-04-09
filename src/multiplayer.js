@@ -301,16 +301,15 @@ export class MultiplayerClient {
   }
 
   _onOpen() {
+    console.log(`[mp] _onOpen: queued=${this._queue.length} active=${this.active} roomId=${this.roomId}`);
     this._reconnectAttempt = 0;
     if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
-    // Flush queued messages
     for (const str of this._queue) this._ws.send(str);
     this._queue = [];
-    // Note: overlay is NOT hidden here — we wait for the server's 'reconnected'
-    // message to confirm we actually rejoined the room (see _route).
   }
 
   _onClose() {
+    console.log(`[mp] _onClose: active=${this.active} roomId=${this.roomId}`);
     if (this.active) {
       this._opts.onDisconnected?.();
       this._scheduleReconnect();
@@ -341,15 +340,14 @@ export class MultiplayerClient {
 
   _reconnect() {
     if (!this._player || !this._ws?.url) {
-      // Unrecoverable — can't reconnect without credentials or server URL
       this._reconnectAttempt = 0;
       this._reconnectDeadline = 0;
       this._opts.onDisconnectFatal?.('Unable to reconnect to the server.');
       return;
     }
+    console.log(`[mp] _reconnect attempt=${this._reconnectAttempt} roomId=${this.roomId} active=${this.active}`);
     const url = this._ws.url;
     this.connect(url);
-    // Re-authenticate and attempt to rejoin room
     this.auth({ token: this._player.token, roomId: this.roomId });
   }
 
@@ -419,17 +417,18 @@ export class MultiplayerClient {
         break;
 
       case 'matchFound':
+        console.log(`[mp] matchFound: faction=${msg.faction} roomId=${msg.roomId} isBattle=${msg.isBattle} resumed=${msg.resumed}`);
         this.myFaction  = msg.faction;
         this.myPlayerId = msg.myPlayerId ?? null;
         this.roomId     = msg.roomId;
         this.isAsync    = !!msg.isAsync;
         this.active     = true;
-        // Register roomId with server so it can route actions to us
         this._send({ type: 'setRoom', roomId: msg.roomId });
         this._opts.onMatchFound?.(msg);
         break;
 
       case 'reconnected':
+        console.log(`[mp] reconnected: faction=${msg.faction} roomId=${msg.roomId}`);
         this.myFaction  = msg.faction;
         this.myPlayerId = msg.myPlayerId ?? null;
         this.roomId     = msg.roomId;
