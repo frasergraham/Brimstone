@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.3.28",
+    "date": "2026-04-10",
+    "summary": "Bug fixes",
+    "notes": [
+      "Remove global MAP_COLS/MAP_ROWS bounds from getNeighbors"
+    ]
+  },
+  {
     "version": "1.3.27",
     "date": "2026-04-10",
     "summary": "New features, and bug fixes",
