@@ -976,6 +976,7 @@ function _executeResolution(room) {
   room.phase = RoomPhase.RESOLVING;
   const state = room.state;
 
+
   // Build the playerEntries array for resolvePlansMP
   const playerEntries = [];
   for (const [playerId, plan] of state.playerPlans) {

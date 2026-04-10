@@ -17,11 +17,13 @@ const DIRS_ODD  = [[-1,0],[0,-1],[1,-1],[1,0],[1,1],[0,1]];
 
 export function getNeighbors(col, row) {
   const dirs = row % 2 === 0 ? DIRS_EVEN : DIRS_ODD;
+  // Only filter negative coords (which are never valid in any map size).
+  // Callers check tile existence for upper-bound validity, so we don't
+  // need the global MAP_COLS/MAP_ROWS bounds here — those globals are
+  // shared across all games on the server and can't be trusted.
   return dirs
     .map(([dc, dr]) => ({ col: col + dc, row: row + dr }))
-    .filter(({ col: c, row: r }) =>
-      c >= 0 && c < MAP_COLS && r >= 0 && r < MAP_ROWS
-    );
+    .filter(({ col: c, row: r }) => c >= 0 && r >= 0);
 }
 
 export function offsetToAxial(col, row) {
