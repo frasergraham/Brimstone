@@ -3262,8 +3262,13 @@ function _resignLocalGame(humanFaction) {
       winReason: state.winReason,
       humanFaction,
       hasFullReplay: _roundHistory.length > 0,
-    }).then(choice => {
-      if (choice === 'restart') location.reload();
+    }).then(async (choice) => {
+      if (choice === 'replay-full' && _roundHistory.length > 0) {
+        await _replayFullGame(_roundHistory, winnerFaction, state.winReason,
+          state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch',
+          () => renderer.draw(state, ui));
+      }
+      location.reload();
     });
   });
 
