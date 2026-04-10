@@ -1,5 +1,36 @@
 [
   {
+    "version": "1.3.32",
+    "date": "2026-04-10",
+    "summary": "New features, bug fixes, and improvements",
+    "notes": [
+      "Load all games into memory at startup, disable hibernation",
+      "Add SubmitGuard to prevent duplicate submit button handler registration",
+      "Add round validation to plan submissions, allow overwriting empty plans",
+      "Load admin dashboard stats and rooms immediately on tab switch",
+      "Allow admin panel and auth endpoints through readiness gate",
+      "Remove dead ActionType.END_TURN",
+      "Remove Player enum usage from source files",
+      "Extract campaign UI helpers from main.js",
+      "Remove duplicate groupByEntity, add plan double-submit guard",
+      "Create src/theme.js as centralized faction color registry",
+      "Extract popup positioning from ui.js to src/ui-popup.js",
+      "Extract async game rooms from lobby.js",
+      "Extract playback engine from main.js to src/playback.js",
+      "Create BaseAIEngine class, eliminate duplicated pipeline",
+      "Add faction capability methods, replace hardcoded checks",
+      "Generalize exploredHexes and node discovery to N-faction",
+      "Generalize hardcoded 2-faction data structures",
+      "\"feat: add SubmitGuard to prevent duplicate submit button handler registration\"",
+      "\"chore: sync package-lock.json version to 1.3.31\"",
+      "Update package-lock.json from npm install",
+      "Sync package-lock.json version to 1.3.31",
+      "Update refactor.md with final implementation progress",
+      "Update refactor.md with implementation progress",
+      "Add architecture review and refactor roadmap"
+    ]
+  },
+  {
     "version": "1.3.31",
     "date": "2026-04-10",
     "summary": "Bug fixes",
