@@ -184,6 +184,21 @@ export function getActiveBattleSaves() {
 }
 
 /**
+ * Return all saves with status 'playing' or 'lobby' (for bulk recovery at startup).
+ * Returns rows with full state_json parsed.
+ */
+export function getAllPlayingSaves() {
+  return db.prepare(`
+    SELECT * FROM game_saves
+    WHERE status IN ('playing', 'lobby')
+    ORDER BY updated_at DESC
+  `).all().map(row => {
+    try { row.state = JSON.parse(row.state_json); } catch { row.state = null; }
+    return row;
+  });
+}
+
+/**
  * List all in-progress saves that involve a given human player ID.
  * Returns lightweight rows (no state_json) sorted newest-first.
  */

@@ -247,18 +247,11 @@ export const ENTITY_COLOR = {
   [EntityType.IRON_GOLEM]: '#607D8B',
 };
 
-// Per-player color palettes for multiplayer — indexed by faction slot (0–9).
-// Chosen for clear readability at small hex-circle size on a dark background.
-// Hero side: 10 warm-toned colors from gold through amber, orange, and bronze
-// Witch side: 10 cool/purple-toned colors from purple through orchid, violet, and magenta
-export const HERO_PLAYER_COLORS  = [
-  '#d4a72c', '#f07020', '#e8d040', '#8b6018', '#ff9944',
-  '#c8e020', '#e09060', '#ffcc00', '#b87830', '#f0a868',
-];
-export const WITCH_PLAYER_COLORS = [
-  '#9b59b6', '#d980fa', '#6c3483', '#e040a0', '#8844cc',
-  '#c060e0', '#a020f0', '#d070b0', '#7b2fbe', '#e888d8',
-];
+// Per-player color palettes — canonical source is src/theme.js (FACTION_THEME).
+// Re-exported here for backward compatibility with existing imports.
+import { FACTION_THEME } from './theme.js';
+export const HERO_PLAYER_COLORS  = FACTION_THEME.hero.playerColors;
+export const WITCH_PLAYER_COLORS = FACTION_THEME.witch.playerColors;
 
 // Six shades per witch-unit type — cycled as units are created so each
 // individual unit gets a distinct arrow/circle colour on the plan overlay.

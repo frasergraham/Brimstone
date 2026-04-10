@@ -80,8 +80,7 @@ function makeFakeState(overrides = {}) {
     fogOfWar: 'none',
     inventory: overrides.inventory ?? {
       witch: {},
-      hero: {},
-      shared: { [ResourceType.WOOD]: 2, [ResourceType.METAL]: 1, [ResourceType.FOOD]: 2, [ResourceType.HERBS]: 1 },
+      hero: { [ResourceType.WOOD]: 2, [ResourceType.METAL]: 1, [ResourceType.FOOD]: 2, [ResourceType.HERBS]: 1 },
     },
     entities,
   };

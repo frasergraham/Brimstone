@@ -86,13 +86,14 @@ export function getAllGamesPaginated({ page = 1, limit = 50, source = 'all' } = 
     });
   }
 
-  if (source === 'active') {
+  // 'saved' returns the same as 'active' since all games are now loaded into memory
+  if (source === 'active' || source === 'saved') {
     return { games: activeGames, total: activeGames.length, page: 1, limit };
   }
 
-  // Build DB query from selected sources
+  // Build DB query from selected sources (only 'completed_mp' remains for DB queries)
   const sources = source === 'all'
-    ? ['saved', 'completed_mp']
+    ? ['completed_mp']
     : [source];
 
   const selects = sources.map(s => _SOURCE_QUERIES[s]?.select).filter(Boolean);
@@ -146,10 +147,17 @@ export function getGameDetail(id, source) {
       return { game: summary, rounds: chronicle, canSpectate: true };
     }
     case 'saved': {
+      // With all games in memory, try the active room first
+      const room = getRoom(id);
+      if (room) {
+        const summary = getRooms().find(r => r.id === id);
+        const chronicle = getRoomChronicle(id) ?? [];
+        return { game: summary, rounds: chronicle, canSpectate: true };
+      }
+      // Fallback to DB (shouldn't normally happen)
       const save = getSave(id);
       if (!save) return null;
       const rounds = getSaveRounds(id);
-      // Strip state_json from the response (can be huge)
       const { state_json, ...meta } = save;
       return { game: meta, rounds, canSpectate: false };
     }

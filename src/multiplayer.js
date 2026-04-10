@@ -283,8 +283,8 @@ export class MultiplayerClient {
   }
 
   /** Submit the player's plan for the current round. */
-  submitPlan(plan) {
-    this._send({ type: 'submitPlan', plan });
+  submitPlan(plan, round) {
+    this._send({ type: 'submitPlan', plan, round });
   }
 
   /** Request the server to restore a saved game by its room ID. */

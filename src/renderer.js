@@ -8,8 +8,9 @@ import {
   TileType, TILE_COLOR, BUILDING_COLOR, BUILDING_LABEL, BUILDING_ICON,
 } from './tiles.js';
 import { ENTITY_COLOR, EntityType, SurvivorAbility } from './entities.js';
-import { getVisibleEnemyHexes, getVisibleHeroHexes, sightRange, buildFogMovementHexes } from './actions.js';
+import { getVisiblePositions, sightRange, buildFogMovementHexes } from './actions.js';
 import { getFaction } from './factions.js';
+import { getFactionTheme, NEUTRAL_NODE_FILL } from './theme.js';
 import { nodeController, Phase } from './game.js';
 
 // PAD_X/PAD_Y are now computed dynamically in _resize() as this._padX / this._padY.
@@ -962,8 +963,8 @@ export class Renderer {
     const fogActive = state.fogOfWar !== 'none';
     let revealedHexes = null;
     if (fogActive) {
-      if (humanIsHero)  revealedHexes = getVisibleEnemyHexes(state); // hero sees witch
-      if (humanIsWitch) revealedHexes = getVisibleHeroHexes(state);  // witch sees hero
+      const myFaction = humanIsHero ? 'hero' : humanIsWitch ? 'witch' : null;
+      if (myFaction) revealedHexes = getVisiblePositions(state, myFaction);
     }
 
     // Full set of hexes the observer can see (used to cull animations in fog).
@@ -1017,10 +1018,10 @@ export class Renderer {
 
     // Objective glows and symbols — only drawn once a node has been discovered
     for (const obj of state.witchObjectives) {
+      const myFactionId = humanIsHero ? 'hero' : humanIsWitch ? 'witch' : null;
       const shouldDraw = !fogActive
-        || (humanIsHero  && obj.seenByHero)
-        || (humanIsWitch && obj.seenByWitch)
-        || (!humanIsHero && !humanIsWitch); // AI vs AI / spectator
+        || (myFactionId && obj[getFaction(myFactionId).getNodeSeenKey()])
+        || !myFactionId; // AI vs AI / spectator
       if (!shouldDraw) continue;
       for (const h of obj.hexes) {
         this._drawObjectiveHexGlow(h.col, h.row, obj, state);
@@ -1764,10 +1765,8 @@ export class Renderer {
     const nodeColor = obj.color ?? '#8800cc';
     // Faction-tinted overlay
     const factionOverlay =
-      ctrl === 'hero'      ? 'rgba(50,120,220,0.18)'  :
-      ctrl === 'witch'     ? 'rgba(180,0,80,0.18)'    :
-      ctrl === 'contested' ? 'rgba(200,140,0,0.18)'   :
-                             null;
+      ctrl === 'contested' ? 'rgba(200,140,0,0.18)' :
+      (ctrl !== 'neutral'  ? getFactionTheme(ctrl).nodeFill : null);
     const { x, y } = this._toCanvas(col, row);
     const hs = this.hexSize;
     const ctx = this.ctx;
@@ -1803,10 +1802,9 @@ export class Renderer {
 
     // Symbol uses node color; faction glow tints the outline
     const glowColor =
-      ctrl === 'witch'     ? '#ff4444' :
-      ctrl === 'hero'      ? '#4488ff' :
       ctrl === 'contested' ? '#ffaa00' :
-                             nodeColor;
+      ctrl === 'neutral'   ? nodeColor :
+                             getFactionTheme(ctrl).highlight;
 
     ctx.shadowColor = glowColor;
     ctx.shadowBlur  = ctrl === 'neutral' ? 4 : 8;
@@ -2195,7 +2193,7 @@ export class Renderer {
         if (e.id === entityId) { entityType = e.type; entityOwner = e.owner; break; }
       }
       const entityObj = this.state?.entities.find(e => e.id === entityId);
-      const color = entityObj?.color ?? ENTITY_COLOR[entityType] ?? (entityOwner === 'witch' ? '#9b59b6' : '#d4a72c');
+      const color = entityObj?.color ?? ENTITY_COLOR[entityType] ?? getFactionTheme(entityOwner).primary;
 
       ctx.globalAlpha = 0.4;
       ctx.beginPath();

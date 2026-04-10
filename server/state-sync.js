@@ -73,10 +73,9 @@ export function serializeState(state) {
     heroActionsLeft:      state.heroActionsLeft  ?? 0,
     witchActionsLeft:     state.witchActionsLeft ?? 0,
     fogOfWar:             state.fogOfWar,
-    exploredHexes: {
-      hero:  [...(state.exploredHexes?.hero  ?? [])],
-      witch: [...(state.exploredHexes?.witch ?? [])],
-    },
+    exploredHexes: Object.fromEntries(
+      Object.entries(state.exploredHexes ?? {}).map(([k, v]) => [k, [...(v ?? [])]])
+    ),
     winner:               state.winner,
     winReason:            state.winReason,
     attritionLevel:       state.attritionLevel,
@@ -207,16 +206,24 @@ export function deserializeState(snap) {
         seen: snap.missionTargetHex.seen ?? false }
     : null;
   state.inventory            = JSON.parse(JSON.stringify(snap.inventory));
+  // Backward compat: rename 'shared' → 'hero' for saves predating the refactor.
+  if (state.inventory.shared && !state.inventory.hero) {
+    state.inventory.hero = state.inventory.shared;
+    delete state.inventory.shared;
+  }
   state.postRoundEvents      = [...(snap.postRoundEvents || [])];
   state.nodeSpawnedSurvivors = [...(snap.nodeSpawnedSurvivors || [])];
   // Backward compat: old saves stored fogOfWar as boolean
   state.fogOfWar             = typeof snap.fogOfWar === 'boolean'
     ? (snap.fogOfWar ? 'partial' : 'none')
     : (snap.fogOfWar ?? 'none');
-  state.exploredHexes = {
-    hero:  new Set(snap.exploredHexes?.hero  ?? []),
-    witch: new Set(snap.exploredHexes?.witch ?? []),
-  };
+  // Restore per-faction explored hex Sets. Backward compat: if missing, keep the
+  // constructor's defaults (which initializes empty Sets for all registered factions).
+  if (snap.exploredHexes) {
+    for (const [k, v] of Object.entries(snap.exploredHexes)) {
+      state.exploredHexes[k] = new Set(v ?? []);
+    }
+  }
   state.mapSize              = snap.mapSize   ?? 'standard';
   state.winner               = snap.winner    ?? null;
   state.winReason            = snap.winReason ?? null;

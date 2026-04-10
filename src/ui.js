@@ -2,10 +2,10 @@
 import { hexKey, hexToPixel, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType } from './tiles.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
-import { Phase, Player, PHASE_ICON, phaseForRound, nodeController, countHeldNodes } from './game.js';
+import { Phase, PHASE_ICON, phaseForRound, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
 import {
-  ActionType, getValidActions, getVisibleEnemyHexes, getVisibleHeroHexes,
+  ActionType, getValidActions, getVisiblePositions,
   buildFogMovementHexes,
 } from './actions.js';
 import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan } from './planner.js';
@@ -13,6 +13,11 @@ import { compileTurnBattleSummary } from './battle-utils.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
 import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml } from './ui-render.js';
+import {
+  hideActionPopup, getEntityScreenPos, computeArcPositions,
+  positionArcPopup, startArcTracking, positionPopup,
+  attachPopupListeners, touchDist,
+} from './ui-popup.js';
 
 /** Enum of UI operating modes. */
 export const UIMode = Object.freeze({ LOCAL: 'local', ONLINE: 'online', SPECTATOR: 'spectator' });
@@ -260,7 +265,7 @@ export class UIController {
     // Touch: tap, drag-to-pan, pinch-to-zoom (mobile)
     this.canvas.addEventListener('touchstart', e => {
       if (e.touches.length === 2) {
-        this._pinchDist  = _touchDist(e.touches[0], e.touches[1]);
+        this._pinchDist  = touchDist(e.touches[0], e.touches[1]);
         this._touchStart = null;
         this._isDragging = false;
         e.preventDefault();
@@ -276,7 +281,7 @@ export class UIController {
       e.preventDefault();
       if (this.renderer.viewLocked) return;
       if (e.touches.length === 2 && this._pinchDist !== null) {
-        const newDist = _touchDist(e.touches[0], e.touches[1]);
+        const newDist = touchDist(e.touches[0], e.touches[1]);
         const midCX  = (e.touches[0].clientX + e.touches[1].clientX) / 2;
         const midCY  = (e.touches[0].clientY + e.touches[1].clientY) / 2;
         const { x, y } = this._canvasPos({ clientX: midCX, clientY: midCY });
@@ -889,7 +894,7 @@ export class UIController {
     if (!isFreeAction) {
       const flatPlan = interleavePlan(this._unitPlans);
       const currentCost = flatPlan.filter(a => actionCosts(a.type)).length;
-      const foodAvailable = (this.state.inventory?.shared?.[ResourceType.FOOD] || 0);
+      const foodAvailable = (this.state.inventory?.hero?.[ResourceType.FOOD] || 0);
       const cap = Math.ceil((this._planBudget + foodAvailable) * 1.5);
 
       if (currentCost >= cap) {
@@ -985,7 +990,7 @@ export class UIController {
     if (budgeEl) budgeEl.textContent = `${Math.max(0, remaining)} left`;
 
     // Food is auto-applied to over-budget actions until exhausted.
-    const foodAvailable = (this.state.inventory?.shared?.[ResourceType.FOOD] || 0);
+    const foodAvailable = (this.state.inventory?.hero?.[ResourceType.FOOD] || 0);
 
     const initialInv = computeProjectedInventory(this.state, []);
     stepsEl.innerHTML = buildUnitPlanBlocksHtml(
@@ -1022,7 +1027,7 @@ export class UIController {
     const tabCount = this._el('plan-tab-count');
     if (tabCount) {
       tabCount.textContent = budgetCost;
-      const foodAvail = this.state?.inventory?.shared?.[ResourceType.FOOD] || 0;
+      const foodAvail = this.state?.inventory?.hero?.[ResourceType.FOOD] || 0;
       if (budgetCost > this._planBudget + foodAvail) {
         tabCount.className = 'plan-tab-count plan-tab-over';
       } else if (budgetCost > this._planBudget) {
@@ -1196,7 +1201,7 @@ export class UIController {
         // Second tap → show popup; third tap → dismiss popup
         if (this._popupVisible) {
           this._popupVisible = false;
-          _hideActionPopup(this);
+          hideActionPopup(this);
         } else {
           this._showActionPopup(entity);
           this._popupVisible = true;
@@ -1228,7 +1233,7 @@ export class UIController {
     this.onEntitySelected?.(entity);
     this._pendingUnitPick = null;
     this._popupVisible    = false;
-    _hideActionPopup(this);
+    hideActionPopup(this);
 
     // In planning mode, valid actions and highlights must use the entity's
     // projected position (after earlier MOVE steps in the plan), not the real one.
@@ -1265,7 +1270,7 @@ export class UIController {
     this._popupVisible         = false;
     this._awaitingTarget       = null;
     this._validActions         = [];
-    _hideActionPopup(this);
+    hideActionPopup(this);
 
     this.renderer.selectedHex      = { col: entity.col, row: entity.row };
     this.renderer.selectedEntityId = entity.id;
@@ -1295,7 +1300,7 @@ export class UIController {
     this.renderer.selectedHex      = null;
     this.renderer.selectedEntityId = null;
     this.renderer.highlightHexes   = [];
-    _hideActionPopup(this);
+    hideActionPopup(this);
     this._hideTileDetail();
   }
 
@@ -1315,9 +1320,7 @@ export class UIController {
         const state = this.state;
         let visTargets = b.targets;
         if (state.fogOfWar !== 'none' && this._selectedEntity) {
-          const visHexes = this._selectedEntity.owner === 'hero'
-            ? getVisibleEnemyHexes(state)
-            : getVisibleHeroHexes(state);
+          const visHexes = getVisiblePositions(state, this._selectedEntity.owner);
           visTargets = b.targets.filter(t => visHexes.has(hexKey(t.col, t.row)));
         }
         renderer.highlightHexes = renderer.highlightHexes.concat(
@@ -1330,9 +1333,7 @@ export class UIController {
         const state = this.state;
         let visTargets = a.targets;
         if (state.fogOfWar !== 'none' && this._selectedEntity) {
-          const visHexes = this._selectedEntity.owner === 'hero'
-            ? getVisibleEnemyHexes(state)
-            : getVisibleHeroHexes(state);
+          const visHexes = getVisiblePositions(state, this._selectedEntity.owner);
           visTargets = a.targets.filter(t => visHexes.has(hexKey(t.col, t.row)));
         }
         renderer.highlightHexes = visTargets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,60,60,0.55)' }));
@@ -1474,7 +1475,7 @@ export class UIController {
 
     const ownerCheck = this._planMode ? this._planFaction : state.activePlayer;
     if (!entity || entity.owner !== ownerCheck || state.gameOver) {
-      _hideActionPopup(this);
+      hideActionPopup(this);
       return;
     }
 
@@ -1520,7 +1521,7 @@ export class UIController {
           break;
         }
         case ActionType.FORTIFY: {
-          const fortInv    = projInv ? projInv.shared : state.inventory.shared;
+          const fortInv    = projInv ? projInv.hero : state.inventory.hero;
           const hasMetal   = (fortInv.metal || 0) > 0;
           const hasWood    = (fortInv.wood  || 0) > 0;
           const cantAfford = projInv ? (!hasMetal && !hasWood) : !action.affordable;
@@ -1553,7 +1554,7 @@ export class UIController {
         case ActionType.HEAL: {
           let healDis = dis || action.atFullHp;
           if (projInv) {
-            const healPool = entity.owner === 'witch' ? projInv.witch : projInv.shared;
+            const healPool = entity.owner === 'witch' ? projInv.witch : projInv.hero;
             if ((healPool[ResourceType.HERBS] || 0) < 1) healDis = true;
           }
           arcItems.push({ group: 'items', label: 'Heal', fullLabel: action.atFullHp ? 'Already at full HP' : 'Herbs (heal 2 HP)',
@@ -1567,7 +1568,7 @@ export class UIController {
             let itemDis = dis;
             if (projInv) {
               if (!item.item.startsWith('weapon:')) {
-                if ((projInv.shared[item.item] || 0) < 1) itemDis = true;
+                if ((projInv.hero[item.item] || 0) < 1) itemDis = true;
               }
             }
             // Strip leading emoji from item labels
@@ -1624,13 +1625,13 @@ export class UIController {
       // Nothing to show — use list mode with a message
       popup.classList.add('popup-list-mode');
       popup.innerHTML = `<div class="popup-unit-name">No actions available</div>`;
-      _positionPopup(popup, this);
+      positionPopup(popup, this);
       popup.style.display = 'block';
       return;
     }
 
     // Compute arc layout — vertical stack with horizontal arc to avoid origin hex
-    const screenPos = _getEntityScreenPos(this, entity);
+    const screenPos = getEntityScreenPos(this, entity);
     if (!screenPos) return;
 
     const openRight = screenPos.x < window.innerWidth / 2;
@@ -1667,7 +1668,7 @@ export class UIController {
     this._arcOpenRight = openRight;
 
     // Position popup centered on entity
-    _positionArcPopup(popup, this);
+    positionArcPopup(popup, this);
     popup.style.display = 'block';
 
     // Measure buttons at full scale
@@ -1680,7 +1681,7 @@ export class UIController {
     popup.offsetHeight; // force layout
 
     // Compute positions: stack vertically with consistent gap, arc outward to clear hex
-    _computeArcPositions(popup, this, hexScreenPx);
+    computeArcPositions(popup, this, hexScreenPx);
 
     // Reset to pre-animation state then let CSS transition to final spot
     for (const btn of btns) {
@@ -1689,7 +1690,7 @@ export class UIController {
       btn.style.transition = '';
     }
 
-    _attachPopupListeners(popup, this);
+    attachPopupListeners(popup, this);
 
     // Trigger open animation on next frame — positions are already set, just animate
     requestAnimationFrame(() => {
@@ -1698,7 +1699,7 @@ export class UIController {
     });
 
     // Start tracking pan/zoom — reposition popup each frame while visible
-    _startArcTracking(this);
+    startArcTracking(this);
   }
 
   /**
@@ -1793,7 +1794,7 @@ export class UIController {
     this._arcOpenRight = openRight;
 
     // Position popup centered on hex — need this first to compute relative offsets
-    _positionArcPopup(popup, this);
+    positionArcPopup(popup, this);
     const popupX = parseFloat(popup.style.left) || 0;
     const popupY = parseFloat(popup.style.top) || 0;
 
@@ -1846,7 +1847,7 @@ export class UIController {
     }
     popup.offsetHeight; // force layout
 
-    _computeArcPositions(popup, this, hexScreenPx);
+    computeArcPositions(popup, this, hexScreenPx);
 
     // Reset to pre-animation state then let CSS transition to final spot
     for (const btn of btns) {
@@ -1855,14 +1856,14 @@ export class UIController {
       btn.style.transition = '';
     }
 
-    _attachPopupListeners(popup, this);
+    attachPopupListeners(popup, this);
 
     requestAnimationFrame(() => {
       popup.classList.add('arc-open');
       this.onRedraw();
     });
 
-    _startArcTracking(this);
+    startArcTracking(this);
   }
 
   _showDisambigPopup() {
@@ -1890,7 +1891,7 @@ export class UIController {
       btn.disabled = !affordable;
     });
     popup.querySelectorAll('.arc-item[data-action="fortify"]').forEach(btn => {
-      const shared = projInv.shared;
+      const shared = projInv.hero;
       const hasMetal = (shared.metal || 0) > 0;
       const hasWood  = (shared.wood  || 0) > 0;
       btn.disabled = !hasMetal && !hasWood;
@@ -2302,7 +2303,7 @@ export class UIController {
     if (action === 'disambig_move') {
       const disambig = this._pendingDisambig;
       this._pendingDisambig = null;
-      _hideActionPopup(this);
+      hideActionPopup(this);
       if (!disambig) return;
       const { actor, hex } = disambig;
       this._awaitingTarget = null;
@@ -2338,9 +2339,9 @@ export class UIController {
     // Helper: delayed hide — let the pulse animation finish (200ms) before closing
     const delayedHide = () => {
       if (isArcItem) {
-        setTimeout(() => _hideActionPopup(this), 220);
+        setTimeout(() => hideActionPopup(this), 220);
       } else {
-        _hideActionPopup(this);
+        hideActionPopup(this);
       }
     };
 
@@ -2664,7 +2665,7 @@ export class UIController {
     const actions = this._planBudget ?? 0;
     const entities = this.state.entities;
     const inventory = this.state.inventory;
-    const stash = faction === 'hero' ? inventory?.shared : inventory?.witch;
+    const stash = faction === 'hero' ? inventory?.hero : inventory?.witch;
     const foodCount = stash?.food ?? 0;
 
     const rows = [];
@@ -3253,10 +3254,10 @@ export class UIController {
     if (!el) return;
 
     const state   = this.state;
-    const faction = this._planFaction ?? (state.activePlayer === Player.HERO ? 'hero' : 'witch');
+    const faction = this._planFaction ?? (state.activePlayer === 'hero' ? 'hero' : 'witch');
     const isHero  = faction === 'hero';
     const inv     = state.inventory;
-    const stash   = isHero ? inv.shared : inv.witch;
+    const stash   = isHero ? inv.hero : inv.witch;
     const label   = isHero ? '⚔ Supplies' : '🕯 Stores';
 
     const entries = Object.entries(stash).filter(([, v]) => v > 0);
@@ -3945,18 +3946,12 @@ function btn(label, cls, disabled = '', extra = '') {
 
 function _visibleUnitsAt(state, col, row) {
   if (state.fogOfWar === 'none') return state.entities.filter(e => e.alive && e.col === col && e.row === row);
-  const myFaction    = state.myFaction;
-  const humanIsHero  = myFaction ? myFaction === 'hero'  : (state.witchIsAI && !state.heroIsAI);
-  const humanIsWitch = myFaction ? myFaction === 'witch' : (state.heroIsAI  && !state.witchIsAI);
-  const revealed = humanIsHero  ? getVisibleEnemyHexes(state)
-                 : humanIsWitch ? getVisibleHeroHexes(state)
-                 : null;
+  const myFaction = state.myFaction
+    ?? (state.witchIsAI && !state.heroIsAI ? 'hero' : state.heroIsAI && !state.witchIsAI ? 'witch' : null);
+  const revealed = myFaction ? getVisiblePositions(state, myFaction) : null;
   return state.entities.filter(e => {
     if (!e.alive || e.col !== col || e.row !== row) return false;
-    if (revealed) {
-      const hiddenOwner = humanIsHero ? 'witch' : 'hero';
-      if (e.owner === hiddenOwner) return revealed.has(hexKey(col, row));
-    }
+    if (revealed && e.owner !== myFaction) return revealed.has(hexKey(col, row));
     return true;
   });
 }
@@ -4068,290 +4063,3 @@ function _buildBreakdownHTML(snap, bd, side, total) {
   return parts.join('');
 }
 
-function _hideActionPopup(ui) {
-  const p = document.getElementById('action-popup');
-  if (!p) return;
-  // Clear any pending close timer
-  if (ui && ui._arcCloseTimer) { clearTimeout(ui._arcCloseTimer); ui._arcCloseTimer = null; }
-  // Stop pan/zoom tracking loop
-  if (ui && ui._arcTrackingRaf) { cancelAnimationFrame(ui._arcTrackingRaf); ui._arcTrackingRaf = null; }
-  // Clear canvas connecting lines
-  if (ui?.renderer) { ui.renderer.arcMenuLines = null; }
-  const hadDisambigOrigins = ui?._disambigOrigins?.length > 0;
-  if (ui) { ui._arcItems = null; ui._arcEntityCol = null; ui._arcEntityRow = null; }
-  // Arc mode: animate close
-  if (p.classList.contains('arc-open') && !p.classList.contains('popup-list-mode')) {
-    p.classList.remove('arc-open');
-    p.classList.add('arc-closing');
-    const itemCount = p.querySelectorAll('.arc-item').length;
-    // Disambig close is longer: backdrop fades (60ms) then icon flies back (200ms)
-    const closeTime = hadDisambigOrigins ? 320 : 150 + itemCount * 20;
-    const timer = setTimeout(() => {
-      p.style.display = 'none';
-      p.classList.remove('arc-closing');
-      if (ui) {
-        ui._arcCloseTimer = null;
-        // Unhide canvas entities after close animation finishes
-        if (ui.renderer?.disambigHiddenIds) {
-          ui.renderer.disambigHiddenIds = null;
-          ui.onRedraw?.();
-        }
-        ui._disambigOrigins = null;
-      }
-    }, closeTime);
-    if (ui) ui._arcCloseTimer = timer;
-    // Trigger redraw to clear canvas lines
-    ui?.onRedraw?.();
-    return;
-  }
-  // List mode or not open: instant hide
-  p.style.display = 'none';
-  p.classList.remove('arc-open', 'arc-closing', 'popup-list-mode');
-  // Clear disambig state immediately for non-animated close
-  if (ui) {
-    if (ui.renderer?.disambigHiddenIds) {
-      ui.renderer.disambigHiddenIds = null;
-    }
-    ui._disambigOrigins = null;
-  }
-  ui?.onRedraw?.();
-}
-
-/** Get the screen position (viewport px) of a selected entity, accounting for planning ghosts. */
-function _getEntityScreenPos(ui, entity) {
-  if (!entity) {
-    // For picker/disambig, try pending state
-    const target = ui._pendingUnitPick?.units[0]
-      || ui._pendingDefenderPick?.defenders[0]
-      || ui._pendingEnemyPick?.units[0];
-    if (!target) return null;
-    entity = target;
-  }
-  let displayCol = entity.col;
-  let displayRow = entity.row;
-  if (ui._pendingDisambig) {
-    displayCol = ui._pendingDisambig.hex.col;
-    displayRow = ui._pendingDisambig.hex.row;
-  } else if (ui._planMode && ui._selectedEntity) {
-    const proj = ui._getProjectedPos(ui._selectedEntity.id);
-    if (proj) { displayCol = proj.col; displayRow = proj.row; }
-  }
-  const canvasRect = ui.canvas.getBoundingClientRect();
-  const { x, y }   = ui.renderer.hexToCanvasPos(displayCol, displayRow);
-  const scale       = canvasRect.width / ui.canvas.width;
-  return {
-    x: canvasRect.left + x * scale,
-    y: canvasRect.top  + y * scale,
-  };
-}
-
-/**
- * Compute arc positions: stack items vertically with a consistent gap,
- * then push each one out horizontally so nothing overlaps the origin hex.
- */
-function _computeArcPositions(popup, ui, hexScreenPx) {
-  const items = ui._arcItems;
-  if (!items?.length) return;
-  const btns = popup.querySelectorAll('.arc-item');
-  if (!btns.length) return;
-  const openRight = ui._arcOpenRight;
-
-  // Measure button heights
-  const sizes = [];
-  for (let i = 0; i < btns.length; i++) {
-    const rect = btns[i].getBoundingClientRect();
-    sizes.push({ w: rect.width, h: rect.height });
-  }
-
-  // Vertical layout: consistent gap between items, centered on origin
-  const V_GAP = 6;
-  const totalHeight = sizes.reduce((s, sz) => s + sz.h, 0) + V_GAP * (sizes.length - 1);
-  let cy = -totalHeight / 2;
-
-  // Hex avoidance radius — items must clear this distance from center
-  const hexClear = hexScreenPx * 0.6 + 8;
-
-  for (let i = 0; i < items.length && i < btns.length; i++) {
-    const itemCy = cy + sizes[i].h / 2;
-
-    // Horizontal offset: push out so the inner edge of the button clears the hex.
-    // For items near the vertical center, push further out; items near top/bottom
-    // are already far from the hex and need less horizontal offset.
-    const vertDist = Math.abs(itemCy);
-    const halfW = sizes[i].w / 2;
-    const halfH = sizes[i].h / 2;
-    // Minimum x so the closest corner of the button clears the hex circle
-    const innerClear = Math.max(0, hexClear * hexClear - (Math.max(0, vertDist - halfH)) ** 2);
-    const minX = Math.sqrt(innerClear) + halfW;
-
-    const fx = openRight ? minX : -minX;
-    const fy = itemCy;
-
-    items[i]._x = fx;
-    items[i]._y = fy;
-    btns[i].style.setProperty('--arc-x', fx.toFixed(1) + 'px');
-    btns[i].style.setProperty('--arc-y', fy.toFixed(1) + 'px');
-
-    cy += sizes[i].h + V_GAP;
-  }
-
-  // Store radius estimate for canvas line drawing (distance to center of middle item)
-  ui._arcRadius = hexClear + 20;
-}
-
-/** Position the arc popup centered on the entity's screen position and set up canvas lines. */
-function _positionArcPopup(popup, ui) {
-  const col = ui._arcEntityCol;
-  const row = ui._arcEntityRow;
-  if (col == null || row == null) return;
-
-  const canvasRect = ui.canvas.getBoundingClientRect();
-  const { x, y }   = ui.renderer.hexToCanvasPos(col, row);
-  const scale       = canvasRect.width / ui.canvas.width;
-  const sx = canvasRect.left + x * scale;
-  const sy = canvasRect.top  + y * scale;
-
-  popup.style.left = sx + 'px';
-  popup.style.top  = sy + 'px';
-  popup.style.transform = 'none';
-
-  // Recompute positions on zoom change
-  if (ui._arcItems?.length) {
-    const hexPx = ui.renderer.hexSize * (canvasRect.width / ui.canvas.width) * ui.renderer.zoomLevel;
-    if (Math.abs(hexPx - (ui._arcHexPx || 0)) > 2) {
-      ui._arcHexPx = hexPx;
-      _computeArcPositions(popup, ui, hexPx);
-    }
-    // Update canvas line drawing data
-    ui.renderer.arcMenuLines = {
-      col, row,
-      items: ui._arcItems.map(item => ({
-        x: item._x ?? 0,
-        y: item._y ?? 0,
-        color: item.color,
-      })),
-    };
-  }
-
-  // Update disambig canvas-origin positions on pan/zoom so close animation
-  // targets stay correct relative to the popup anchor
-  if (ui._disambigOrigins?.length && ui.renderer?.disambigHiddenIds) {
-    const state = ui.state || ui.renderer._lastState;
-    const units = [];
-    if (state?.entities) {
-      for (const o of ui._disambigOrigins) {
-        const e = state.entities.find(en => en.id === o.entityId);
-        if (e) units.push(e);
-      }
-    }
-    if (units.length) {
-      const positions = ui.renderer.getEntityScreenPositions(col, row, units, canvasRect);
-      const posMap = new Map(positions.map(p => [p.entityId, p]));
-      const btns = popup.querySelectorAll('.arc-item.arc-from-canvas');
-      for (const btn of btns) {
-        const uid = parseInt(btn.dataset.unitId);
-        const pos = posMap.get(uid);
-        if (pos) {
-          const relX = pos.screenX - sx;
-          const relY = pos.screenY - sy;
-          btn.style.setProperty('--start-x', relX.toFixed(1) + 'px');
-          btn.style.setProperty('--start-y', relY.toFixed(1) + 'px');
-        }
-      }
-      for (const o of ui._disambigOrigins) {
-        const pos = posMap.get(o.entityId);
-        if (pos) { o.startX = pos.screenX - sx; o.startY = pos.screenY - sy; o.startR = pos.screenR; }
-      }
-    }
-  }
-}
-
-/** Start a rAF loop that repositions the arc popup on every frame (tracks pan/zoom). */
-function _startArcTracking(ui) {
-  if (ui._arcTrackingRaf) return; // already running
-  const popup = document.getElementById('action-popup');
-  function tick() {
-    if (!popup || popup.style.display === 'none' || popup.classList.contains('popup-list-mode')) {
-      ui._arcTrackingRaf = null;
-      return;
-    }
-    _positionArcPopup(popup, ui);
-    ui._arcTrackingRaf = requestAnimationFrame(tick);
-  }
-  ui._arcTrackingRaf = requestAnimationFrame(tick);
-}
-
-function _positionPopup(popup, ui) {
-  if (!ui._selectedEntity && !ui._pendingUnitPick && !ui._pendingDefenderPick && !ui._pendingEnemyPick) return;
-  const target = ui._selectedEntity
-    || ui._pendingUnitPick?.units[0]
-    || ui._pendingDefenderPick?.defenders[0]
-    || ui._pendingEnemyPick?.units[0];
-  if (!target) return;
-
-  // Measure popup height while invisible so we can fit it in the viewport
-  popup.style.visibility = 'hidden';
-  popup.style.display    = 'block';
-  const popupH = popup.offsetHeight || 180;
-  popup.style.display    = 'none';
-  popup.style.visibility = '';
-
-  const POPUP_W = 210;
-  const GAP     = 10;
-
-  // In planning mode, show popup at the entity's projected (ghost) position
-  let displayCol = target.col;
-  let displayRow = target.row;
-  if (ui._pendingDisambig) {
-    // Disambiguation popup: show at the clicked hex, not the selected entity
-    displayCol = ui._pendingDisambig.hex.col;
-    displayRow = ui._pendingDisambig.hex.row;
-  } else if (ui._planMode && ui._selectedEntity) {
-    const proj = ui._getProjectedPos(ui._selectedEntity.id);
-    if (proj) { displayCol = proj.col; displayRow = proj.row; }
-  }
-
-  const canvasRect = ui.canvas.getBoundingClientRect();
-  const { x, y }   = ui.renderer.hexToCanvasPos(displayCol, displayRow);
-  const scale       = canvasRect.width / ui.canvas.width;
-  const screenX     = canvasRect.left + x * scale;
-  const screenY     = canvasRect.top  + y * scale;
-  const hs          = ui.renderer.hexSize * scale;
-
-  // Horizontal: centre on unit, clamped within viewport
-  popup.style.left      = Math.max(8, Math.min(screenX - POPUP_W / 2, window.innerWidth  - POPUP_W - 8)) + 'px';
-  popup.style.transform = 'none';
-
-  // Vertical: prefer above the hex, flip below when there isn't enough room
-  const hexTop     = screenY - hs * 0.55;
-  const hexBot     = screenY + hs * 0.55;
-  const spaceAbove = hexTop - GAP;
-  const showBelow  = spaceAbove < popupH + 8;
-
-  if (showBelow) {
-    popup.classList.add('flipped');
-    // Clamp so it doesn't run off the bottom
-    popup.style.top = Math.min(hexBot + GAP, window.innerHeight - popupH - 8) + 'px';
-  } else {
-    popup.classList.remove('flipped');
-    // Clamp so it doesn't run off the top
-    popup.style.top = Math.max(8, hexTop - GAP - popupH) + 'px';
-  }
-}
-
-function _attachPopupListeners(popup, ui) {
-  popup.querySelectorAll('button[data-action]').forEach(b => {
-    b.addEventListener('click', () => ui._handleActionButton(b));
-    // On mobile, the synthesized click after touchend can be delayed or
-    // swallowed (e.g. iOS treats the first tap on a newly-visible element
-    // as a focus event).  Fire directly on touchend for instant response.
-    b.addEventListener('touchend', e => {
-      e.preventDefault();
-      ui._handleActionButton(b);
-    }, { passive: false });
-  });
-}
-
-function _touchDist(t1, t2) {
-  return Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
-}

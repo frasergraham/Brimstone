@@ -45,7 +45,7 @@ import {
   broadcastPresenceForPlayer,
   setSendToPlayer,
   joinBattle, getBattleStatus,
-  forceEndGame,
+  forceEndGame, loadAllRooms, nukeGame,
 } from './server/lobby.js';
 import { ensureBattleExists, checkBattleLifecycle, endBattleEarly } from './server/battle-scheduler.js';
 import {
@@ -62,6 +62,9 @@ import { upsertDeviceToken, deleteDeviceToken, pruneStaleTokens } from './server
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT      = process.env.PORT || 3000;
 const ADMIN_OPEN = process.env.ADMIN_OPEN === '1' || process.env.ADMIN_OPEN === 'true';
+
+/** Set to true once all saved games have been loaded into memory. */
+let _serverReady = false;
 
 // ── Express ──────────────────────────────────────────────────────────────────
 
@@ -84,6 +87,20 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
+
+// Readiness gate — reject game API requests until all games are loaded into memory.
+// Admin endpoints and auth checks pass through so the admin panel works during startup.
+app.use((req, res, next) => {
+  if (_serverReady) { next(); return; }
+  // Allow through: health, admin panel, auth, static assets
+  if (req.path === '/health' || req.path.startsWith('/admin/api/') ||
+      req.path === '/api/me/admin' || req.path === '/api/config' ||
+      !req.path.startsWith('/api/')) {
+    next();
+    return;
+  }
+  res.status(503).json({ error: 'Server is starting up. Please try again shortly.' });
+});
 
 // Block direct static access to admin HTML files — they're served via auth-gated routes
 app.use((req, res, next) => {
@@ -787,6 +804,16 @@ app.post('/admin/api/games/:id/force-end', (req, res) => {
   res.json({ ok: true });
 });
 
+app.delete('/admin/api/games/:id/nuke', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  const result = nukeGame(req.params.id);
+  if (!result.ok) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+  res.json({ ok: true });
+});
+
 app.get('/admin/api/completed-games', (req, res) => {
   if (!_requireAdmin(req, res)) return;
   res.json(getAllCompletedGames());
@@ -903,6 +930,11 @@ function clientState(ws) {
 // ── WebSocket message router ──────────────────────────────────────────────────
 
 wss.on('connection', ws => {
+  if (!_serverReady) {
+    ws.send(JSON.stringify({ type: 'error', message: 'Server is starting up.' }));
+    ws.close(1013, 'Server starting');
+    return;
+  }
   const cs = clientState(ws);
   ws._isAlive = true;
   ws.on('pong', () => { ws._isAlive = true; });
@@ -1174,7 +1206,7 @@ function route(ws, cs, msg) {
 
     case 'submitPlan': {
       if (!cs.player || !cs.roomId) return;
-      handlePlanSubmit(cs.player.id, cs.roomId, msg.plan ?? []);
+      handlePlanSubmit(cs.player.id, cs.roomId, msg.plan ?? [], msg.round);
       break;
     }
 
@@ -1260,11 +1292,22 @@ function _publicPlayer(p) {
 
 server.listen(PORT, () => {
   console.log(`Caleb's Hollow v${BUILD_VERSION} listening on port ${PORT}`);
+
+  // Phase 1: Prune stale data
   const pruned = pruneStaleAndIncompatibleSaves(VERSION, SAVE_VERSION);
   if (pruned > 0) console.log(`Pruned ${pruned} stale/incompatible save(s).`);
   const prunedCompleted = pruneExpiredCompletedGames();
   if (prunedCompleted > 0) console.log(`Pruned ${prunedCompleted} expired completed game(s).`);
 
+  // Phase 2: Load all saved games into memory
+  const loadedCount = loadAllRooms();
+  console.log(`Loaded ${loadedCount} game(s) from DB into memory.`);
+
+  // Phase 3: Mark server as ready — clients can now connect
+  _serverReady = true;
+  console.log('Server ready — accepting connections.');
+
+  // Phase 4: Start periodic maintenance
   // Async game maintenance (legacy — will be fully removed in future)
   pruneAsyncGames();
   checkAsyncDeadlines(); // catch any deadlines that expired while server was down

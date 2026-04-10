@@ -125,7 +125,8 @@ export function computeGhostState(state, plan) {
       // Fall back to auto-pick from current inventory for legacy/AI plans without a type.
       let summonType = action.summonType ?? null;
       if (!summonType) {
-        const inv = state.inventory?.witch ?? {};
+        const ownerFaction = (state.entities ?? []).find(e => e.id === action.entityId)?.owner ?? 'witch';
+        const inv = state.inventory?.[ownerFaction] ?? {};
         summonType = (inv[ResourceType.METAL] || 0) >= 2 ? EntityType.IRON_GOLEM
                    : (inv[ResourceType.WOOD]  || 0) >= 2 ? EntityType.WOOD_GOLEM
                    : EntityType.MINION;
@@ -158,12 +159,12 @@ export function computeGhostState(state, plan) {
 // Simulates resource consumption across a plan so the UI can show per-step costs
 // and grey out actions the player will no longer be able to afford.
 //
-// Returns { shared, witch, entityItems } — plain objects (shallow clones of state
-// inventory values).  Does NOT mutate the real state.
+// Returns { hero, witch, entityItems } — plain objects (shallow clones of state
+// inventory values keyed by faction id).  Does NOT mutate the real state.
 
 export function computeProjectedInventory(state, plan) {
-  const shared = { ...(state.inventory?.shared ?? {}) };
-  const witch  = { ...(state.inventory?.witch  ?? {}) };
+  const hero   = { ...(state.inventory?.hero  ?? {}) };
+  const witch  = { ...(state.inventory?.witch ?? {}) };
   // Per-entity personal items (herbs, weapons)
   const entityItems = {};
   for (const e of (state.entities ?? [])) {
@@ -191,28 +192,28 @@ export function computeProjectedInventory(state, plan) {
       }
       case PlanActionType.FORTIFY:
         // Metal preferred, then wood — mirrors executeFortify
-        if ((shared[ResourceType.METAL] || 0) > 0) shared[ResourceType.METAL]--;
-        else if ((shared[ResourceType.WOOD] || 0) > 0) shared[ResourceType.WOOD]--;
+        if ((hero[ResourceType.METAL] || 0) > 0) hero[ResourceType.METAL]--;
+        else if ((hero[ResourceType.WOOD] || 0) > 0) hero[ResourceType.WOOD]--;
         break;
       case PlanActionType.HEAL: {
         const healEntity = (state.entities ?? []).find(e => e.id === action.entityId);
-        const pool = healEntity?.owner === 'witch' ? witch : shared;
+        const pool = healEntity?.owner === 'witch' ? witch : hero;
         if ((pool[ResourceType.HERBS] || 0) > 0) pool[ResourceType.HERBS]--;
         break;
       }
       case PlanActionType.USE_ITEM: {
         const item = action.item;
         if (!item || item.startsWith('weapon:')) break;
-        if ((shared[item] || 0) > 0) shared[item]--;
+        if ((hero[item] || 0) > 0) hero[item]--;
         break;
       }
       case PlanActionType.SOUND_HORN:
-        if ((shared[ResourceType.FOOD] || 0) >= 1) shared[ResourceType.FOOD] -= 1;
+        if ((hero[ResourceType.FOOD] || 0) >= 1) hero[ResourceType.FOOD] -= 1;
         break;
     }
   }
 
-  return { shared, witch, entityItems };
+  return { hero, witch, entityItems };
 }
 
 // ── Per-unit plan grouping and interleaving ─────────────────────────────────
