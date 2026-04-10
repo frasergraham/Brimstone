@@ -533,6 +533,7 @@
 
       // Auto-refresh only on dashboard
       if (tabId === 'dashboard') {
+        loadStats(); loadRooms();
         if (!_dashboardInterval) _dashboardInterval = setInterval(() => { loadStats(); loadRooms(); }, 10000);
       } else {
         if (_dashboardInterval) { clearInterval(_dashboardInterval); _dashboardInterval = null; }
