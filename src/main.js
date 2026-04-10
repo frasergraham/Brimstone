@@ -1690,16 +1690,8 @@ function initOnline(mirrorState, myFaction, mpClient) {
   // Start battle countdown if in battle mode
   if (state.gameMode === 'battle') _startBattleCountdownTimer();
 
-  // If the game is already in a planning phase (e.g. reconnecting to a battle),
-  // enter planning mode immediately. A separate planningPhase message may also
-  // arrive and will call enterPlanningMode again (which is safe — it resets).
-  if (state.planningPhase && mpClient.myFaction) {
-    const budget = (mpClient.myFaction === 'hero' ? state.heroActionsLeft : state.witchActionsLeft) || 3;
-    ui.enterPlanningMode(mpClient.myFaction, budget, 0);
-    ui.onPlanSubmit = (plan) => mpClient.submitPlan(plan);
-    ui.onReturnToMenu = () => { location.reload(); };
-    ui.onReplayLastTurn = () => _replayLastTurnInline();
-  }
+  // Planning mode entry is handled by the gameJoined handler — it has the
+  // correct budget, deadline, and replay data. Don't enter planning here.
 
   redrawOnline();
 
@@ -3270,8 +3262,13 @@ function _resignLocalGame(humanFaction) {
       winReason: state.winReason,
       humanFaction,
       hasFullReplay: _roundHistory.length > 0,
-    }).then(choice => {
-      if (choice === 'restart') location.reload();
+    }).then(async (choice) => {
+      if (choice === 'replay-full' && _roundHistory.length > 0) {
+        await _replayFullGame(_roundHistory, winnerFaction, state.winReason,
+          state.hero?.displayName ?? 'Hero', state.witch?.displayName ?? 'Witch',
+          () => renderer.draw(state, ui));
+      }
+      location.reload();
     });
   });
 
@@ -5874,6 +5871,7 @@ async function _applyOnlinePlanningPhase(payload) {
   }
 
   // If we have a replay from the last round, play it before entering planning
+  const hadReplay = !!lastReplay;
   if (lastReplay) {
     await _playReconnectReplay(lastReplay);
   }
@@ -5883,13 +5881,14 @@ async function _applyOnlinePlanningPhase(payload) {
   if (players) ui._players = players;
   ui._hasReplayHistory = _onlineRoundHistory.length > 0;
   if (ui._planMode && ui._planFaction === mp.myFaction && !ui._planSubmitted) {
-    console.log(`[mp] _applyOnlinePlanningPhase: fast path (already planning, budget=${budget})`);
+    console.log(`[mp] _applyOnlinePlanningPhase: fast path (already planning, budget=${budget} timeoutMs=${timeoutMs})`);
     ui._planBudget = budget;
     if (timeoutMs > 0) ui._startCountdown(timeoutMs);
     ui._renderPlayerStatus();
     ui._renderPlanPanel();
+    // Phase info is now in the merged resolution summary — no separate modal
   } else {
-    console.log(`[mp] _applyOnlinePlanningPhase: full enter (planMode=${ui._planMode} submitted=${ui._planSubmitted} budget=${budget})`);
+    console.log(`[mp] _applyOnlinePlanningPhase: full enter (planMode=${ui._planMode} submitted=${ui._planSubmitted} budget=${budget} timeoutMs=${timeoutMs})`);
     ui.exitPlanningMode();
     ui.enterPlanningMode(mp.myFaction, budget, timeoutMs ?? 0);
   }
@@ -5936,7 +5935,7 @@ async function _replayLastTurnInline() {
   const budget = state.playerActionsLeft?.get(mp?.myPlayerId)
     ?? (mp?.myFaction ? getFaction(mp.myFaction).getActionsLeft(state) : state.heroActionsLeft);
   ui._hasReplayHistory = _onlineRoundHistory.length > 0;
-  ui.enterPlanningMode(mp.myFaction, budget, 0, { showPhaseModal: false });
+  ui.enterPlanningMode(mp.myFaction, budget, 0);
   ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
   ui.onReturnToMenu = () => { location.reload(); };
   ui.onReplayLastTurn = () => _replayLastTurnInline();
@@ -6432,6 +6431,96 @@ function _createMpClient() {
           _pendingSubmissions = [];
         }
       });
+    },
+
+    // ── Unified message handlers ─────────────────────────────────
+    onGameJoined(payload) {
+      const { mirror, faction, playerId, round, lastRound, players, isBattle, isAsync, gameOver } = payload;
+      console.log(`[mp] onGameJoined: faction=${faction} round=${mirror.round} budget=${round.budget} gameOver=${gameOver} hasUI=${!!ui} mode=${ui ? getMode() : 'none'}`);
+
+      // If we're already in-game and animating/viewing a resolution, ignore this
+      // message — it's a resync from a heartbeat and the animation will handle
+      // the transition back to planning.
+      if (ui && renderer && shouldBufferMessages()) {
+        console.log(`[mp] onGameJoined: ignored during ${getMode()} — animation/summary in progress`);
+        return;
+      }
+
+      mirror.myFaction = faction;
+
+      // Initialize or update the game view
+      if (!renderer || !ui) {
+        try {
+          initOnline(mirror, faction, mp);
+        } catch (err) {
+          console.error('initOnline failed:', err);
+          _onlineError(`Failed to start game: ${err.message}`);
+          _showOnlineScreen();
+          return;
+        }
+      } else {
+        // Already in game — update state in-place (resync)
+        Object.assign(state, mirror);
+        state.myFaction = faction;
+      }
+
+      // Skip replay if we're already in-game at the same round (heartbeat resync)
+      const isResync = ui && renderer && state && state.round === mirror.round && ui._planMode;
+
+      // Set up planning mode with the correct budget and deadline
+      if (!gameOver) {
+        if (players) ui._players = players;
+        ui._hasReplayHistory = _onlineRoundHistory.length > 0;
+
+        // Play last round replay if available and this isn't a same-round resync
+        if (lastRound && !round.submittedPlan && !isResync) {
+          _playReconnectReplay(lastRound).then(() => {
+            ui._hasReplayHistory = _onlineRoundHistory.length > 0;
+            ui.enterPlanningMode(faction, round.budget, round.deadline ?? 0);
+            ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
+            ui.onReturnToMenu = () => { location.reload(); };
+            ui.onReplayLastTurn = () => _replayLastTurnInline();
+          });
+        } else {
+          ui.enterPlanningMode(faction, round.budget, round.deadline ?? 0);
+          ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
+          ui.onReturnToMenu = () => { location.reload(); };
+          ui.onReplayLastTurn = () => _replayLastTurnInline();
+        }
+
+        // Restore submitted plan if reconnecting with an already-submitted plan
+        if (round.submittedPlan) {
+          for (const action of round.submittedPlan) {
+            if (action.entityId) {
+              if (!ui._unitPlans.has(action.entityId)) ui._unitPlans.set(action.entityId, []);
+              ui._unitPlans.get(action.entityId).push(action);
+            }
+          }
+          ui._refreshPlanOverlay();
+          ui._renderPlanPanel();
+          ui.markPlanSubmitted();
+          setMode(AppMode.SUBMITTED);
+        }
+
+        // Show who has already submitted
+        if (round.playersReady) {
+          for (const p of round.playersReady) {
+            ui._onPlayerSubmitted?.(p.playerId, p.name, p.faction);
+          }
+        }
+      }
+
+      redrawOnline();
+    },
+
+    onRoundResolved(payload) {
+      // For now, defer to the legacy onResolutionComplete handler.
+      // The roundResolved message carries the same steps + finalState,
+      // plus next-round planning data — but the legacy handler already
+      // buffers the planningPhase message and applies it after animation.
+      // Full integration will be done in a future pass.
+      console.log(`[mp] onRoundResolved: round=${payload.finalState?.round} gameOver=${payload.gameOver}`);
+      // No-op for now — legacy resolutionComplete + planningPhase handle this
     },
 
     // ── Async game callbacks ─────────────────────────────────────

@@ -116,6 +116,13 @@ export function serializeState(state) {
     mapRows,
     mapSize:              state.mapSize ?? 'standard',
     campaignAIBudgetBonus: state.campaignAIBudgetBonus ?? 0,
+    // Per-player planning state (multiplayer) — serialized so hibernated saves
+    // don't lose submitted plans.  Maps are converted to plain objects for JSON.
+    planning: (state.playerPlans?.size > 0 || state.playerReady?.size > 0) ? {
+      plans:   Object.fromEntries(state.playerPlans   ?? new Map()),
+      ready:   Object.fromEntries(state.playerReady   ?? new Map()),
+      budgets: Object.fromEntries(state.playerActionsLeft ?? new Map()),
+    } : null,
     tiles,
     entities,
   };
@@ -221,19 +228,28 @@ export function deserializeState(snap) {
   state.gameMode             = snap.gameMode ?? 'standard';
   state.battleConfig         = snap.battleConfig ? { ...snap.battleConfig } : null;
 
-  // ── Planning fields — reset to clean pre-planning state ──────────────────
-  state.planningPhase    = false;
-  state.resolving        = false;
+  // ── Planning fields ──────────────────────────────────────────────────────
+  state.planningPhase    = snap.planningPhase ?? false;
+  state.resolving        = snap.resolving     ?? false;
   state.heroPlan         = null;
   state.witchPlan        = null;
-  state.heroReady        = false;
-  state.witchReady       = false;
+  state.heroReady        = snap.heroReady     ?? false;
+  state.witchReady       = snap.witchReady    ?? false;
   state.heroActionsLeft  = snap.heroActionsLeft  ?? 0;
   state.witchActionsLeft = snap.witchActionsLeft ?? 0;
-  state.playerPlans       = new Map();
-  state.playerReady       = new Map();
-  state.playerActionsLeft = new Map();
-  state.planningDeadline  = null;
+  state.planningDeadline = null;
+
+  // Restore per-player planning data if serialized (new saves); otherwise
+  // leave empty Maps for the caller (recoverRoom) to populate from DB.
+  if (snap.planning) {
+    state.playerPlans       = new Map(Object.entries(snap.planning.plans   ?? {}));
+    state.playerReady       = new Map(Object.entries(snap.planning.ready   ?? {}).map(([k, v]) => [k, !!v]));
+    state.playerActionsLeft = new Map(Object.entries(snap.planning.budgets ?? {}).map(([k, v]) => [k, Number(v)]));
+  } else {
+    state.playerPlans       = new Map();
+    state.playerReady       = new Map();
+    state.playerActionsLeft = new Map();
+  }
 
   return state;
 }

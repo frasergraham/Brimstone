@@ -421,6 +421,7 @@ export class MultiplayerClient {
 
       case 'matchFound':
         console.log(`[mp] matchFound: faction=${msg.faction} roomId=${msg.roomId} isBattle=${msg.isBattle} resumed=${msg.resumed}`);
+        if (this._gameJoinedHandled) break; // gameJoined already handled this
         this.myFaction  = msg.faction;
         this.myPlayerId = msg.myPlayerId ?? null;
         this.roomId     = msg.roomId;
@@ -432,6 +433,7 @@ export class MultiplayerClient {
 
       case 'reconnected':
         console.log(`[mp] reconnected: faction=${msg.faction} roomId=${msg.roomId}`);
+        if (this._gameJoinedHandled) break;
         this.myFaction  = msg.faction;
         this.myPlayerId = msg.myPlayerId ?? null;
         this.roomId     = msg.roomId;
@@ -448,6 +450,7 @@ export class MultiplayerClient {
 
       case 'stateUpdate':
       case 'actionResult': {
+        if (this._gameJoinedHandled) break; // gameJoined already delivered the state
         const mirror = MirrorState.fromSnapshot(msg.state);
         // If a battle result is pending, deliver it before the state update
         if (this._pendingBattle) {
@@ -486,8 +489,56 @@ export class MultiplayerClient {
         break;
 
       case 'planningPhase':
-        this._opts.onPlanningPhase?.(msg);
+        // Legacy — ignored if gameJoined already handled this round
+        if (!this._gameJoinedHandled) {
+          this._opts.onPlanningPhase?.(msg);
+        }
         break;
+
+      case 'gameJoined': {
+        // Unified message: replaces matchFound + stateUpdate + planningPhase.
+        // Sets _gameJoinedHandled to suppress the legacy sequence that follows.
+        this._gameJoinedHandled = true;
+        this._reconnectDeadline = 0;
+        this._reconnectAttempt  = 0;
+        this._send({ type: 'setRoom', roomId: msg.roomId });
+        const mirror = MirrorState.fromSnapshot(msg.gameState);
+        this.roomId      = msg.roomId;
+        this.myPlayerId  = msg.myPlayerId;
+        this.myFaction   = msg.myFaction;
+        this.active      = true;
+        // Hide reconnect overlay — we're back in the game
+        this._opts.onReconnected?.();
+        this._opts.onGameJoined?.({
+          mirror,
+          roomId:    msg.roomId,
+          playerId:  msg.myPlayerId,
+          faction:   msg.myFaction,
+          round:     msg.round,
+          lastRound: msg.lastRound,
+          players:   msg.players,
+          isBattle:  msg.isBattle,
+          isAsync:   msg.isAsync,
+          gameOver:  msg.gameOver,
+        });
+        break;
+      }
+
+      case 'roundResolved': {
+        // Unified message: replaces resolutionComplete + planningPhase.
+        // Reset the gameJoined suppression — legacy messages for this round are done.
+        this._gameJoinedHandled = false;
+        const mirror = MirrorState.fromSnapshot(msg.gameState);
+        this._opts.onRoundResolved?.({
+          steps:     msg.steps,
+          finalState: mirror,
+          round:     msg.round,
+          lastRound: msg.lastRound,
+          players:   msg.players,
+          gameOver:  msg.gameOver,
+        });
+        break;
+      }
 
       case 'opponentReady':
         this._opts.onOpponentReady?.();
@@ -514,6 +565,9 @@ export class MultiplayerClient {
         break;
 
       case 'resolutionComplete': {
+        // Reset the gameJoined suppression — a new round cycle is starting
+        // and the legacy planningPhase message that follows must not be suppressed.
+        this._gameJoinedHandled = false;
         const mirror = MirrorState.fromSnapshot(msg.finalState);
         this._opts.onResolutionComplete?.({ steps: msg.steps, finalState: mirror });
         break;
