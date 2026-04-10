@@ -281,7 +281,7 @@ describe('resolvePlans — food extends budget', () => {
 
     // With food: budget+1 MOVE actions should NOT produce BUDGET_CAP
     // (food funds the one extra step). Without food it would cap.
-    state.inventory.shared[ResourceType.FOOD] = 1;
+    state.inventory.hero[ResourceType.FOOD] = 1;
     const heroActionsLeft = state.actionsLeft; // base budget
 
     // Build exactly budget+1 alternating moves
@@ -304,7 +304,7 @@ describe('resolvePlans — food extends budget', () => {
     assert.ok(!hasCap, 'BUDGET_CAP should not fire when food covers the extra action');
 
     // Food should be consumed from shared inventory
-    assert.equal(state.inventory.shared[ResourceType.FOOD], 0, 'Food should be consumed');
+    assert.equal(state.inventory.hero[ResourceType.FOOD], 0, 'Food should be consumed');
   });
 });
 

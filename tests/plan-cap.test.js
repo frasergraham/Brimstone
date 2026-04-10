@@ -25,7 +25,7 @@ before(async () => {
 });
 
 function makeUI(budget = 4, food = 0) {
-  const state    = makeState({ inventory: { shared: { food } } });
+  const state    = makeState({ inventory: { hero: { food } } });
   const renderer = makeFakeRenderer();
   const els      = createElementsBag();
   const ui = new UIController(fakeCanvas, state, renderer, null, () => {}, null, false, els);

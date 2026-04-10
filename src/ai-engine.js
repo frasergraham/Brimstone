@@ -69,7 +69,7 @@ export class EnginePlanSimState extends PlanSimState {
     this.unitCommitments = new Map();
 
     // Independent copy of witch inventory for tracking projected spend
-    this.resourceLedger = JSON.parse(JSON.stringify(this.inventory.witch));
+    this.resourceLedger = JSON.parse(JSON.stringify(this.inventory[this._faction]));
   }
 
   applyMove(entityId, toCol, toRow) {
@@ -235,7 +235,7 @@ export function assessBoard(sim) {
 
 // ── Stage 2: Goal Scoring ────────────────────────────────────────────────────
 
-function clamp01(v) { return Math.max(0, Math.min(1, v)); }
+export function clamp01(v) { return Math.max(0, Math.min(1, v)); }
 
 export function scoreGoals(board, goalWeights = null) {
   // DEFEND_WITCH — protect the witch; she's the win condition
@@ -1242,7 +1242,7 @@ function _fillGaps(plan, sim, board, witchEntity, remaining, prevPositions) {
 
 // ── NvN Ally Coordination ───────────────────────────────────────────────────
 
-function _updateAllyClaimedNodes(plan, board, allyContext) {
+export function updateAllyClaimedNodes(plan, board, allyContext) {
   for (const action of plan) {
     if (action.type !== PlanActionType.MOVE) continue;
     for (const node of board.nodes) {
@@ -1255,23 +1255,28 @@ function _updateAllyClaimedNodes(plan, board, allyContext) {
 
 // ── Helper: reverse-lookup personality name from config object ──────────────
 
-function _personalityName(config) {
-  for (const [name, cfg] of Object.entries(PERSONALITY_CONFIGS)) {
+export function personalityName(config, configMap) {
+  for (const [name, cfg] of Object.entries(configMap)) {
     if (cfg === config) return name;
   }
   return 'custom';
 }
 
-// ── WitchAIEngine ────────────────────────────────────────────────────────────
+// ── BaseAIEngine ─────────────────────────────────────────────────────────────
+// Common pipeline shared by all faction AI engines.
+// Subclasses override: faction, defaultConfig, configMap, createSim,
+// assessBoard, scoreGoals, getGenerators, getGapFillFn, getLeader.
 
-export class WitchAIEngine {
-  constructor(state, onStateChange, thinkDelay = 600, playerId = null, config = null) {
+export class BaseAIEngine {
+  constructor(state, onStateChange, thinkDelay, playerId, config, faction, defaultConfig, configMap) {
     this.state = state;
     this.onStateChange = onStateChange;
     this.onBattleResult = null;
     this.thinkDelay = thinkDelay;
     this.playerId = playerId;
-    this.config = config ?? PERSONALITY_CONFIGS.balanced;
+    this.config = config ?? defaultConfig;
+    this.faction = faction;
+    this._configMap = configMap;
 
     this._prevPositions = new Map();
 
@@ -1281,45 +1286,58 @@ export class WitchAIEngine {
     this.lastDebugData = null;
   }
 
+  /** Create the sim state for this faction. Override for custom sim classes. */
+  createSim() {
+    return new EnginePlanSimState(this.state, this.faction, this.playerId);
+  }
+
+  /** Evaluate the board for this faction. Must override. */
+  assessBoard(_sim) { throw new Error('Subclass must implement assessBoard'); }
+
+  /** Score goals for this faction. Must override. */
+  scoreGoals(_board, _goalWeights) { throw new Error('Subclass must implement scoreGoals'); }
+
+  /** Return ordered generator list [{goal, fn}]. Must override. */
+  getGenerators(_sim, _board, _budget, _cfg) { throw new Error('Subclass must implement getGenerators'); }
+
+  /** Return the gap-fill callback (or null for default witch _fillGaps). */
+  getGapFillFn(_sim, _board) { return null; }
+
+  /** Return the leader entity from the board, or null. Must override. */
+  getLeader(_board) { throw new Error('Subclass must implement getLeader'); }
+
+  /** Generate a plan when no leader exists (campaign). Override or return []. */
+  generateLeaderlessPlan(_sim, _board) { return []; }
+
   generatePlan(allyContext = null) {
-    const sim = new EnginePlanSimState(this.state, 'witch', this.playerId);
-    const board = assessBoard(sim);
+    const sim = this.createSim();
+    const board = this.assessBoard(sim);
 
     board.allyContext = allyContext;
 
-    if (!board.witch) {
+    const leader = this.getLeader(board);
+    if (!leader) {
       this.lastDebugData = null;
-      return this._generateLeaderlessPlan(sim, board);
+      return this.generateLeaderlessPlan(sim, board);
     }
 
     const cfg = this.config;
-    const scores = scoreGoals(board, cfg.goalWeights);
+    const scores = this.scoreGoals(board, cfg.goalWeights);
     const budget = allocateBudget(scores, board.totalBudget);
 
-    // Stage 4: Run generators in strategic order:
-    // 1. DEFEND first (flee actions are urgent)
-    // 2. BUILD_ARMY (summons create units for other goals to use)
-    // 3. CONTROL_NODES (primary win condition)
-    // 4. HUNT_HEROES (use remaining uncommitted units)
-    const generators = [
-      { goal: Goal.DEFEND_WITCH,  fn: () => genDefendWitch(sim, board, budget[Goal.DEFEND_WITCH], cfg) },
-      { goal: Goal.BUILD_ARMY,    fn: () => genBuildArmy(sim, board, budget[Goal.BUILD_ARMY]) },
-      { goal: Goal.CONTROL_NODES, fn: () => genControlNodes(sim, board, budget[Goal.CONTROL_NODES]) },
-      { goal: Goal.HUNT_HEROES,   fn: () => genHuntHeroes(sim, board, budget[Goal.HUNT_HEROES]) },
-    ];
-
+    const generators = this.getGenerators(sim, board, budget, cfg);
     const allActions = [];
     for (const gen of generators) {
       allActions.push(...gen.fn());
     }
 
-    const plan = assemblePlan(allActions, sim, board, this._prevPositions);
+    const plan = assemblePlan(allActions, sim, board, this._prevPositions,
+      this.getGapFillFn(sim, board));
 
-    // Capture debug data AFTER assemblePlan so overlay matches actual execution
     if (this.debugCapture) {
       this.lastDebugData = {
-        faction: 'witch',
-        personality: _personalityName(this.config),
+        faction: this.faction,
+        personality: personalityName(this.config, this._configMap),
         board,
         scores: { ...scores },
         budget: { ...budget },
@@ -1330,16 +1348,42 @@ export class WitchAIEngine {
     }
 
     if (allyContext) {
-      _updateAllyClaimedNodes(plan, board, allyContext);
+      updateAllyClaimedNodes(plan, board, allyContext);
     }
 
     for (const e of sim.entities) {
-      if (e.alive && e.owner === 'witch') {
+      if (e.alive && e.owner === this.faction) {
         this._prevPositions.set(e.id, { col: e.col, row: e.row });
       }
     }
 
     return plan;
+  }
+}
+
+// ── WitchAIEngine ────────────────────────────────────────────────────────────
+
+export class WitchAIEngine extends BaseAIEngine {
+  constructor(state, onStateChange, thinkDelay = 600, playerId = null, config = null) {
+    super(state, onStateChange, thinkDelay, playerId, config,
+      'witch', PERSONALITY_CONFIGS.balanced, PERSONALITY_CONFIGS);
+  }
+
+  assessBoard(sim) { return assessBoard(sim); }
+  scoreGoals(board, goalWeights) { return scoreGoals(board, goalWeights); }
+  getLeader(board) { return board.witch; }
+
+  getGenerators(sim, board, budget, cfg) {
+    return [
+      { goal: Goal.DEFEND_WITCH,  fn: () => genDefendWitch(sim, board, budget[Goal.DEFEND_WITCH], cfg) },
+      { goal: Goal.BUILD_ARMY,    fn: () => genBuildArmy(sim, board, budget[Goal.BUILD_ARMY]) },
+      { goal: Goal.CONTROL_NODES, fn: () => genControlNodes(sim, board, budget[Goal.CONTROL_NODES]) },
+      { goal: Goal.HUNT_HEROES,   fn: () => genHuntHeroes(sim, board, budget[Goal.HUNT_HEROES]) },
+    ];
+  }
+
+  generateLeaderlessPlan(sim, board) {
+    return this._generateLeaderlessPlan(sim, board);
   }
 
   /** Leaderless plan: no witch on the map (campaign missions).

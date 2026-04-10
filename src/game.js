@@ -10,23 +10,34 @@ import { getFaction, allFactions } from './factions.js';
 /**
  * Determine which faction controls a power node cluster based on majority hex occupation.
  * Multiple units on the same hex count as one occupied hex.
- * @returns {'hero'|'witch'|'contested'|'neutral'}
+ * @returns {string} faction id of controller, or 'contested' | 'neutral'
  */
 export function nodeController(obj, entities) {
   const hexSet = new Set(obj.hexes.map(h => hexKey(h.col, h.row)));
-  const heroHexes  = new Set();
-  const witchHexes = new Set();
+  // Build per-faction sets of occupied hexes
+  const factionHexes = new Map(); // factionId → Set<hexKey>
   for (const e of entities) {
     if (!e.alive) continue;
     const k = hexKey(e.col, e.row);
     if (!hexSet.has(k)) continue;
-    if (e.owner === 'hero')  heroHexes.add(k);
-    if (e.owner === 'witch') witchHexes.add(k);
+    if (!factionHexes.has(e.owner)) factionHexes.set(e.owner, new Set());
+    factionHexes.get(e.owner).add(k);
   }
-  if (heroHexes.size > witchHexes.size)  return 'hero';
-  if (witchHexes.size > heroHexes.size)  return 'witch';
-  if (heroHexes.size === 0) return 'neutral';
-  return 'contested';
+  if (factionHexes.size === 0) return 'neutral';
+  // Find faction(s) with the most occupied hexes
+  let bestFaction = null;
+  let bestCount = 0;
+  let tied = false;
+  for (const [faction, hexes] of factionHexes) {
+    if (hexes.size > bestCount) {
+      bestFaction = faction;
+      bestCount = hexes.size;
+      tied = false;
+    } else if (hexes.size === bestCount) {
+      tied = true;
+    }
+  }
+  return tied ? 'contested' : bestFaction;
 }
 
 /**
@@ -77,11 +88,8 @@ export const Phase = Object.freeze({
   NIGHT: 'night',
 });
 
+/** @deprecated Use string literals 'hero'/'witch' or getFaction(id) instead. */
 export const Player = Object.freeze({ HERO: 'hero', WITCH: 'witch' });
-
-// Hard caps on total actions per turn (after all bonuses).
-export const HERO_ACTION_CAP  = 8;
-export const WITCH_ACTION_CAP = 8;
 
 // Calculate actions for a player at the start of their turn.
 // Hero  — base 3 + 1 in DAWN/DAY + 1 per survivor (cap +5) + 1 per held power node; hard cap 8
@@ -154,8 +162,8 @@ export class GameState {
     this.fogOfWar = (witchIsAI || heroIsAI) ? 'partial' : 'none';
 
     // Hexes that have been seen at least once per faction (full fog memory).
-    // Set<hexKey> per faction — persisted via state-sync.
-    this.exploredHexes = { hero: new Set(), witch: new Set() };
+    // { [factionId]: Set<hexKey> } — persisted via state-sync.
+    this.exploredHexes = Object.fromEntries(allFactions().map(f => [f.id, new Set()]));
 
     // Per-mission loot table overrides (campaign only). null = use defaults.
     // Shape: { remove?: string[], buildings?: {[key]: table}, terrain?: {[key]: table} }
@@ -186,8 +194,8 @@ export class GameState {
     }
 
     this.inventory = {
-      shared: { ...getFaction('hero').getStartingResources() },
-      witch:  { ...getFaction('witch').getStartingResources() },
+      hero:  { ...getFaction('hero').getStartingResources() },
+      witch: { ...getFaction('witch').getStartingResources() },
     };
 
     this.mapSize       = mapData.mapSize;
@@ -206,8 +214,8 @@ export class GameState {
 
     this.round        = 1;
     this.phase        = Phase.DAWN;
-    this.activePlayer = Player.HERO;
-    this.actionsLeft  = computeActions(Player.HERO, Phase.DAWN, []);
+    this.activePlayer = 'hero';
+    this.actionsLeft  = computeActions('hero', Phase.DAWN, []);
     this.log = [
       `🌅 Dawn breaks over Caleb's Hollow. ${this.hero.displayName} stirs at the Inn.`,
       `Three Power Nodes: ${this.witchObjectives.map(o => o.label).join(', ')}.`,
@@ -303,15 +311,15 @@ export class GameState {
    * @param {boolean} isAI
    */
   addPlayer(playerId, name, faction, col, row, isAI = false) {
-    const leader = faction === Player.HERO
+    const leader = faction === 'hero'
       ? createHero(col, row, playerId)
       : createWitch(col, row, playerId);
     leader.name = name;
     this.entities.push(leader);
     this.players.push({ id: playerId, name, faction, isAI, leaderId: leader.id });
     // Keep legacy singleton refs pointing at the first hero/witch for offline compat
-    if (faction === Player.HERO  && !this.hero)  this.hero  = leader;
-    if (faction === Player.WITCH && !this.witch) this.witch = leader;
+    if (faction === 'hero'  && !this.hero)  this.hero  = leader;
+    if (faction === 'witch' && !this.witch) this.witch = leader;
     return leader;
   }
 
@@ -363,8 +371,8 @@ export class GameState {
     const witchNodeBonus = countHeldNodes('witch', this.witchObjectives, this.entities);
 
     // Legacy faction-level budgets (offline mode)
-    this.heroActionsLeft  = computeActions(Player.HERO,  this.phase, this.entities, heroNodeBonus);
-    this.witchActionsLeft = computeActions(Player.WITCH, this.phase, this.entities, witchNodeBonus);
+    this.heroActionsLeft  = computeActions('hero',  this.phase, this.entities, heroNodeBonus);
+    this.witchActionsLeft = computeActions('witch', this.phase, this.entities, witchNodeBonus);
 
     // Per-player budgets (multiplayer)
     this.playerPlans       = new Map();
@@ -395,7 +403,7 @@ export class GameState {
         continue;
       }
       this.playerReady.set(p.id, false);
-      const nb = p.faction === Player.HERO ? heroNodeBonus : witchNodeBonus;
+      const nb = p.faction === 'hero' ? heroNodeBonus : witchNodeBonus;
       let budget = computeActionsForPlayer(p.id, p.faction, this.phase, this.entities, nb);
       budget += battleBonus[p.faction] ?? 0;
       this.playerActionsLeft.set(p.id, budget);
@@ -421,7 +429,7 @@ export class GameState {
         // Pick a spawn position in the faction's starting columns
         const spawnPos = this._pickBattleSpawn(p.faction);
         if (spawnPos) {
-          const leader = p.faction === Player.HERO
+          const leader = p.faction === 'hero'
             ? createHero(spawnPos.col, spawnPos.row, p.id)
             : createWitch(spawnPos.col, spawnPos.row, p.id);
           leader.name = p.name;
@@ -462,7 +470,7 @@ export class GameState {
    */
   submitPlan(faction, plan) {
     if (!this.planningPhase) throw new Error('Not in planning phase.');
-    if (faction === Player.HERO) {
+    if (faction === 'hero') {
       this.heroPlan  = plan;
       this.heroReady = true;
       this.addLog(`⚔ Hero submits their plan (${plan.length} step${plan.length !== 1 ? 's' : ''}).`);
@@ -843,19 +851,12 @@ export class GameState {
    */
   updateNodeDiscovery() {
     for (const obj of this.witchObjectives) {
-      if (!obj.seenByHero) {
-        const heroFaction = getFaction('hero');
-        obj.seenByHero = this.entities.some(e => {
-          if (!e.alive || e.owner !== 'hero') return false;
-          const range = heroFaction.getSightRange(this.phase, e.ability === SurvivorAbility.SCOUT);
-          return obj.hexes.some(h => hexDistance(e.col, e.row, h.col, h.row) <= range);
-        });
-      }
-      if (!obj.seenByWitch) {
-        const witchFaction = getFaction('witch');
-        obj.seenByWitch = this.entities.some(e => {
-          if (!e.alive || e.owner !== 'witch') return false;
-          const range = witchFaction.getSightRange(this.phase, false);
+      for (const fac of allFactions()) {
+        const key = fac.getNodeSeenKey();
+        if (obj[key]) continue; // already discovered
+        obj[key] = this.entities.some(e => {
+          if (!e.alive || e.owner !== fac.id) return false;
+          const range = fac.getSightRange(this.phase, e.ability === SurvivorAbility.SCOUT);
           return obj.hexes.some(h => hexDistance(e.col, e.row, h.col, h.row) <= range);
         });
       }

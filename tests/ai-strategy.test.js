@@ -89,8 +89,7 @@ function makeFakeState(overrides = {}) {
     fogOfWar: 'none',
     inventory: overrides.inventory ?? {
       witch: { [ResourceType.WOOD]: 2, [ResourceType.METAL]: 0 },
-      hero: {},
-      shared: { [ResourceType.WOOD]: 2, [ResourceType.METAL]: 1, [ResourceType.FOOD]: 3 },
+      hero: { [ResourceType.WOOD]: 2, [ResourceType.METAL]: 1, [ResourceType.FOOD]: 3 },
     },
     entities,
   };
@@ -208,8 +207,7 @@ describe('Sound Horn AI generation', () => {
     const state = makeFakeState({
       inventory: {
         witch: {},
-        hero: {},
-        shared: { [ResourceType.WOOD]: 2, [ResourceType.METAL]: 1, [ResourceType.FOOD]: 0 },
+        hero: { [ResourceType.WOOD]: 2, [ResourceType.METAL]: 1, [ResourceType.FOOD]: 0 },
       },
     });
     const sim = new HeroEnginePlanSimState(state);
@@ -245,12 +243,12 @@ describe('Sound Horn AI generation', () => {
   test('applySoundHorn deducts food from shared inventory', () => {
     const state = makeFakeState();
     const sim = new PlanSimState(state, 'hero');
-    const foodBefore = sim.inventory.shared[ResourceType.FOOD];
+    const foodBefore = sim.inventory.hero[ResourceType.FOOD];
     const budgetBefore = sim.actionsLeft;
 
     sim.applySoundHorn();
 
-    assert.equal(sim.inventory.shared[ResourceType.FOOD], foodBefore - 1);
+    assert.equal(sim.inventory.hero[ResourceType.FOOD], foodBefore - 1);
     assert.equal(sim.actionsLeft, budgetBefore - 1);
   });
 });
@@ -494,21 +492,19 @@ describe('Board foodCount from shared inventory', () => {
     const state = makeFakeState({
       inventory: {
         witch: {},
-        hero: {},
-        shared: { [ResourceType.FOOD]: 5, [ResourceType.WOOD]: 1 },
+        hero: { [ResourceType.FOOD]: 5, [ResourceType.WOOD]: 1 },
       },
     });
     const sim = new HeroEnginePlanSimState(state);
     const board = assessHeroBoard(sim);
-    assert.equal(board.foodCount, 5, 'foodCount should come from shared inventory');
+    assert.equal(board.foodCount, 5, 'foodCount should come from hero inventory');
   });
 
-  test('assessHeroBoard foodCount is 0 when no food in shared', () => {
+  test('assessHeroBoard foodCount is 0 when no food in hero inventory', () => {
     const state = makeFakeState({
       inventory: {
         witch: {},
-        hero: {},
-        shared: { [ResourceType.WOOD]: 1 },
+        hero: { [ResourceType.WOOD]: 1 },
       },
     });
     const sim = new HeroEnginePlanSimState(state);

@@ -5,11 +5,11 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   GameState, Phase, Player, computeActions, countHeldNodes, WIN_REASON,
-  HERO_ACTION_CAP, WITCH_ACTION_CAP,
 } from '../src/game.js';
 import { EntityType, createMinion, resetRoster } from '../src/entities.js';
 import { hexKey } from '../src/hex.js';
 import { TileType } from '../src/tiles.js';
+import { getFaction } from '../src/factions.js';
 
 // ── Phase cycle ───────────────────────────────────────────────────────────────
 // Design: 8-round cycle: DAWN(1) → DAY(3) → DUSK(1) → NIGHT(3)
@@ -715,11 +715,11 @@ describe('computeActions — nodeBonus', () => {
 
 describe('computeActions — hard caps', () => {
   test('hero cap is 8', () => {
-    assert.equal(HERO_ACTION_CAP, 8);
+    assert.equal(getFaction('hero').actionCap, 8);
   });
 
   test('witch cap is 8', () => {
-    assert.equal(WITCH_ACTION_CAP, 8);
+    assert.equal(getFaction('witch').actionCap, 8);
   });
 
   test('hero capped at 8 even with max survivors + time + nodes', () => {

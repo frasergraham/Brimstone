@@ -426,7 +426,7 @@ describe('Fortify allowed on node hexes', () => {
     const obj = state.witchObjectives[0];
     state.hero.col = obj.hexes[0].col;
     state.hero.row = obj.hexes[0].row;
-    state.inventory.shared['wood'] = 5;
+    state.inventory.hero['wood'] = 5;
     const result = executeFortify(state, state.hero);
     assert.equal(result.success, true, 'Fortify on center hex should succeed');
   });
@@ -438,7 +438,7 @@ describe('Fortify allowed on node hexes', () => {
     if (!satellite) return; // degenerate cluster, skip
     state.hero.col = satellite.col;
     state.hero.row = satellite.row;
-    state.inventory.shared['wood'] = 5;
+    state.inventory.hero['wood'] = 5;
     const result = executeFortify(state, state.hero);
     assert.equal(result.success, true, 'Fortify on satellite hex should succeed');
   });
@@ -448,7 +448,7 @@ describe('Fortify allowed on node hexes', () => {
     const obj = state.witchObjectives[0];
     state.hero.col = obj.hexes[0].col;
     state.hero.row = obj.hexes[0].row;
-    state.inventory.shared['wood'] = 5;
+    state.inventory.hero['wood'] = 5;
     const actions = getValidActions(state, state.hero);
     const hasFortify = actions.some(a => a.type === 'fortify');
     assert.equal(hasFortify, true, 'FORTIFY should be available on node hex');
