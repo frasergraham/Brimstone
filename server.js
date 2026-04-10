@@ -88,11 +88,14 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-// Readiness gate — reject API & admin requests until all games are loaded into memory
+// Readiness gate — reject game API requests until all games are loaded into memory.
+// Admin endpoints and auth checks pass through so the admin panel works during startup.
 app.use((req, res, next) => {
   if (_serverReady) { next(); return; }
-  // Allow health check and static assets through during startup
-  if (req.path === '/health' || (!req.path.startsWith('/api/') && !req.path.startsWith('/admin/api/'))) {
+  // Allow through: health, admin panel, auth, static assets
+  if (req.path === '/health' || req.path.startsWith('/admin/api/') ||
+      req.path === '/api/me/admin' || req.path === '/api/config' ||
+      !req.path.startsWith('/api/')) {
     next();
     return;
   }
