@@ -37,6 +37,7 @@ const _testRoomIds = [];
 function _cleanUpRoom(room) {
   if (!room) return;
   if (room.state) room.state.winner = 'hero';
+  room.status = 'finished'; // prevent getActiveBattleRooms() from seeing it
   if (room.turnTimer) { clearTimeout(room.turnTimer); room.turnTimer = null; }
   if (room.allHumansGoneTimer) { clearTimeout(room.allHumansGoneTimer); room.allHumansGoneTimer = null; }
   for (const t of room.disconnectTimers.values()) clearTimeout(t);
