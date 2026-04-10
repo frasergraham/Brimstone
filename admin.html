@@ -782,6 +782,9 @@
         if (source === 'completed_mp') {
           html += `<a class="btn btn-primary" href="/replay?replayGame=${_esc(id)}&source=mp" target="_blank">Replay</a>`;
         }
+        if (source === 'active' || source === 'saved') {
+          html += `<button class="btn" style="color:#c44;border-color:#c44" onclick="forceEndGame('${_esc(id)}','${_esc(source)}')">End Game</button>`;
+        }
         html += '</div>';
 
         // Rounds / turn history
@@ -810,6 +813,23 @@
         spectateRoom(data.roomId);
       } catch (e) {
         alert('Network error activating save.');
+      }
+    }
+
+    async function forceEndGame(gameId, source) {
+      const winner = prompt('Winner? (hero / witch / draw)', 'draw');
+      if (winner === null) return; // cancelled
+      if (!['hero', 'witch', 'draw'].includes(winner)) { alert('Must be hero, witch, or draw.'); return; }
+      if (!confirm(`Force-end game ${gameId} with winner = ${winner}?`)) return;
+      try {
+        const data = await apiPost(`/admin/api/games/${gameId}/force-end?source=${source}&winner=${winner}`, {});
+        if (data.error) { alert(data.error); return; }
+        alert('Game ended.');
+        loadAllGames(_gamesPage);
+        loadRooms();
+        loadStats();
+      } catch (e) {
+        alert('Network error ending game.');
       }
     }
 

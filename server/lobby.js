@@ -2793,6 +2793,63 @@ export function adminResumeGame(savedRoomId) {
 }
 
 /**
+ * Admin: force-end a game. Works for active (in-memory) and saved (hibernated) games.
+ * Declares a winner (or draw), notifies connected players, cleans up completely.
+ * @param {string} gameId - room ID
+ * @param {'active'|'saved'} source - where the game lives
+ * @param {'hero'|'witch'|'draw'} winner - who wins
+ * @returns {{ ok: boolean, error?: string }}
+ */
+export function forceEndGame(gameId, source, winner = 'draw') {
+  if (source === 'active') {
+    const room = rooms.get(gameId);
+    if (!room) return { ok: false, error: 'Room not found.' };
+
+    room.state.gameOver  = true;
+    room.state.winner    = winner === 'draw' ? null : winner;
+    room.state.winReason = 'Game ended by admin.';
+    room.phase = RoomPhase.FINISHED;
+
+    // Notify connected players
+    const snap = serializeState(room.state);
+    broadcast(room, { type: 'stateUpdate', reason: 'adminForceEnd', state: snap });
+
+    // Record stats and clean up (same as normal game-over)
+    try { clearAllPlanStatus(room.id); } catch {}
+    try { deleteSave(room.id); } catch {}
+
+    // Destroy after a brief delay so clients receive the final state
+    setTimeout(() => {
+      if (rooms.has(gameId)) destroyRoom(rooms.get(gameId));
+    }, 2000);
+
+    console.log(`[admin] force-ended active game ${gameId} — winner: ${winner}`);
+    return { ok: true };
+  }
+
+  if (source === 'saved') {
+    const save = getSave(gameId);
+    if (!save) return { ok: false, error: 'Save not found.' };
+
+    // Mark the save as finished so it's never recovered
+    try {
+      upsertSave(gameId, save.hero_player_id, save.witch_player_id,
+        save.hero_name, save.witch_name, save.state,
+        { status: 'finished' });
+    } catch (err) {
+      return { ok: false, error: `Failed to update save: ${err.message}` };
+    }
+
+    try { clearAllPlanStatus(gameId); } catch {}
+
+    console.log(`[admin] force-ended saved game ${gameId} — winner: ${winner}`);
+    return { ok: true };
+  }
+
+  return { ok: false, error: `Cannot end games with source '${source}'.` };
+}
+
+/**
  * Rejoin a game. Tries in-memory first; falls back to DB recovery.
  */
 export function resumeGame(playerId, ws, roomId) {

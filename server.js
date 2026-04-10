@@ -44,6 +44,7 @@ import {
   broadcastPresenceForPlayer,
   setSendToPlayer,
   joinBattle, getBattleStatus,
+  forceEndGame,
 } from './server/lobby.js';
 import { ensureBattleExists, checkBattleLifecycle, endBattleEarly } from './server/battle-scheduler.js';
 import {
@@ -766,6 +767,19 @@ app.post('/admin/api/saves/:roomId/activate', (req, res) => {
     return;
   }
   res.json({ ok: true, roomId: result.roomId });
+});
+
+app.post('/admin/api/games/:id/force-end', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  const id     = req.params.id;
+  const source = req.query.source ?? 'active';
+  const winner = req.query.winner ?? 'draw';
+  const result = forceEndGame(id, source, winner);
+  if (!result.ok) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+  res.json({ ok: true });
 });
 
 app.get('/admin/api/completed-games', (req, res) => {
