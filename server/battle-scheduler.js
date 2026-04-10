@@ -81,39 +81,47 @@ export function ensureBattleExists() {
     return existing.id;
   }
 
-  // Try recovering from DB
+  // Try recovering from DB — only recover ONE battle room (the newest).
+  // If multiple saves exist, clean up the extras to prevent duplication.
   try {
     const battleSaves = getActiveBattleSaves();
-    let recoveredAny = false;
+    let recovered = null;
+
     for (const save of battleSaves) {
       try {
         const battleConfig = save.state?.battleConfig;
-        if (battleConfig?.endsAt && Math.floor(Date.now() / 1000) < battleConfig.endsAt) {
-          // Sanity check: discard corrupted saves (e.g. from a resolution loop)
-          const MAX_BATTLE_ROUNDS = 60; // 2 per day × 14 days + margin
-          if (save.state?.round > MAX_BATTLE_ROUNDS) {
-            console.warn(`[battle-scheduler] Discarding corrupted battle save ${save.room_id} (round ${save.state.round})`);
-            deleteSave(save.room_id);
-            continue;
-          }
-          const room = recoverRoom(save.room_id);
-          if (room) {
-            console.log(`[battle-scheduler] Recovered battle ${room.id} from DB (round ${room.state.round})`);
-            recoveredAny = true;
-          }
-        } else {
-          // Expired battle in DB — clean it up
+        if (!battleConfig?.endsAt || Math.floor(Date.now() / 1000) >= battleConfig.endsAt) {
           console.log(`[battle-scheduler] Pruning expired battle save ${save.room_id}`);
           deleteSave(save.room_id);
+          continue;
+        }
+
+        // Sanity check: discard corrupted saves (e.g. from a resolution loop)
+        const MAX_BATTLE_ROUNDS = 60;
+        if (save.state?.round > MAX_BATTLE_ROUNDS) {
+          console.warn(`[battle-scheduler] Discarding corrupted battle save ${save.room_id} (round ${save.state.round})`);
+          deleteSave(save.room_id);
+          continue;
+        }
+
+        if (recovered) {
+          // Already recovered one — delete duplicates
+          console.log(`[battle-scheduler] Deleting duplicate battle save ${save.room_id}`);
+          deleteSave(save.room_id);
+          continue;
+        }
+
+        const room = recoverRoom(save.room_id);
+        if (room) {
+          console.log(`[battle-scheduler] Recovered battle ${room.id} from DB (round ${room.state.round})`);
+          recovered = room;
         }
       } catch (err) {
         console.error(`[battle-scheduler] Failed to recover battle ${save.room_id}:`, err);
       }
     }
-    if (recoveredAny) {
-      const first = getActiveBattleRoom();
-      return first?.id ?? null;
-    }
+
+    if (recovered) return recovered.id;
   } catch (err) {
     console.error('[battle-scheduler] Failed to query battle saves:', err);
   }
@@ -134,6 +142,17 @@ export function ensureBattleExists() {
 export function checkBattleLifecycle() {
   const battleRooms = getActiveBattleRooms();
   if (battleRooms.length === 0) {
+    // Before creating a new battle, check if one exists in the DB (hibernated).
+    // Without this check, a recovered-then-hibernated room causes a duplicate
+    // creation every 30 seconds.
+    try {
+      const battleSaves = getActiveBattleSaves();
+      const hasLiveSave = battleSaves.some(s => {
+        const endsAt = s.state?.battleConfig?.endsAt;
+        return endsAt && Math.floor(Date.now() / 1000) < endsAt;
+      });
+      if (hasLiveSave) return; // hibernated battle exists — don't create a duplicate
+    } catch {}
     ensureBattleExists();
     return;
   }
