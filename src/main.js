@@ -35,6 +35,14 @@ import { hexKey as _hexKey } from './hex.js';
 import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
 import { processStoryTriggers } from './campaign/missions.js';
+import {
+  campaignMissionSaveKey, loadCampaignMissionSave, deleteCampaignMissionSave,
+  RESOURCE_ICONS as _RESOURCE_ICONS, hpColor as _hpColor,
+  loadCampaignPortraits as _loadCampaignPortraits, getCampaignPortrait as _getCampaignPortrait,
+  campaignCardHTML as _campaignCardHTML, survivorCardHTML as _survivorCardHTML,
+  campaignPartyHTML as _campaignPartyHTML, objectiveDescription as _objectiveDescription,
+  departureMessage as _departureMessage, arrivalMessage as _arrivalMessage,
+} from './campaign/campaign-ui.js';
 import { requestNotificationPermission, notifyRoundReady, notifyWaitingOnYou, notifyDeadlineApproaching, notifyGameOver } from './notifications.js';
 
 // Stamp version into badge
@@ -2001,13 +2009,10 @@ let _activeRosterIndices = []; // Indices into _activeCampaign.roster that are "
 
 // ── Campaign mid-mission save/resume ──────────────────────────────────────────
 
-function _campaignMissionSaveKey(campaignId, missionId) {
-  return `brimstone_campaign_mission_${campaignId}_${missionId}`;
-}
 
 function _saveCampaignMission() {
   if (!_activeCampaign || !_activeMissionDef || !state) return;
-  const key = _campaignMissionSaveKey(_activeCampaign.campaignDef.id, _activeMissionDef.id);
+  const key = campaignMissionSaveKey(_activeCampaign.campaignDef.id, _activeMissionDef.id);
   const data = {
     campaignId:     _activeCampaign.campaignDef.id,
     saveSlot:       _activeCampaign.saveSlot,
@@ -2019,22 +2024,9 @@ function _saveCampaignMission() {
   try { localStorage.setItem(key, JSON.stringify(data)); } catch {}
 }
 
-function _loadCampaignMissionSave(campaignId, missionId) {
-  const key = _campaignMissionSaveKey(campaignId, missionId);
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return null;
-    return JSON.parse(raw);
-  } catch { return null; }
-}
-
-function _deleteCampaignMissionSave(campaignId, missionId) {
-  const key = _campaignMissionSaveKey(campaignId, missionId);
-  try { localStorage.removeItem(key); } catch {}
-}
 
 function _resumeCampaignMission(missionId) {
-  const save = _loadCampaignMissionSave(_activeCampaign.campaignDef.id, missionId);
+  const save = loadCampaignMissionSave(_activeCampaign.campaignDef.id, missionId);
   if (!save) return;
 
   const missionDef = _activeCampaign.getMissionDef(missionId);
@@ -2125,93 +2117,6 @@ async function _showCampaignScreen(campaignDef) {
   }
 }
 
-const _RESOURCE_ICONS = { wood: '🪵', metal: '⚙', herbs: '🌿', food: '🍞', silver: '⚔', scripture: '📜' };
-
-function _hpColor(hp, maxHp) {
-  const pct = hp / maxHp;
-  return pct > 0.6 ? '#4caf50' : pct > 0.3 ? '#ff9800' : '#f44336';
-}
-
-// ── Lightweight portrait loader for campaign screens (no Renderer needed) ──
-const _campaignPortraits = { img: null, rects: null, cache: new Map(), loading: false };
-
-async function _loadCampaignPortraits() {
-  if (_campaignPortraits.img || _campaignPortraits.loading) return;
-  _campaignPortraits.loading = true;
-  const img = new Image();
-  await new Promise(resolve => {
-    img.onload = resolve;
-    img.onerror = resolve;
-    img.src = 'assets/tilemap.png';
-  });
-  if (img.naturalWidth) {
-    _campaignPortraits.img = img;
-    _campaignPortraits.rects = Renderer._buildSpriteRects().rects;
-  }
-  _campaignPortraits.loading = false;
-}
-
-function _getCampaignPortrait(assetId, size = 48) {
-  const p = _campaignPortraits;
-  if (!p.img || !p.rects) return null;
-  const rect = p.rects.get(assetId);
-  if (!rect) return null;
-  const key = `${assetId}@${size}`;
-  if (p.cache.has(key)) return p.cache.get(key);
-  const c = document.createElement('canvas');
-  c.width = c.height = size;
-  c.getContext('2d').drawImage(p.img, rect.x, rect.y, rect.size, rect.size, 0, 0, size, size);
-  const url = c.toDataURL();
-  p.cache.set(key, url);
-  return url;
-}
-
-function _campaignCardHTML(name, title, assetId, color, hp, maxHp, attack, defense, ability, isHero) {
-  const hpPct = Math.round((hp / maxHp) * 100);
-  const hpClr = _hpColor(hp, maxHp);
-  const cls = isHero ? 'campaign-party-card hero' : 'campaign-party-card';
-  const portrait = _getCampaignPortrait(assetId, 48);
-  const iconHtml = portrait
-    ? `<img class="cp-portrait" src="${portrait}" style="border-color:${color}" alt="">`
-    : `<span class="cp-glyph" style="background:${color}">${isHero ? '⚔' : '☺'}</span>`;
-  return `<div class="${cls}">
-    ${iconHtml}
-    <div class="cp-info">
-      <div class="cp-name" style="color:${color}">${name}${title ? ` <span class="cp-title">${title}</span>` : ''}</div>
-      <div class="cp-hp-track"><div class="cp-hp-fill" style="width:${hpPct}%;background:${hpClr}"></div></div>
-      <div class="cp-stats">
-        <span>ATK ${attack}</span><span>DEF ${defense}</span>${ability ? `<span class="cp-ability">${ability}</span>` : ''}
-        <span class="cp-hp-label">${hp}/${maxHp}</span>
-      </div>
-    </div>
-  </div>`;
-}
-
-function _survivorCardHTML(s, idx, actionBtn) {
-  const assetId = Renderer.survivorAssetId(s.title) || 'survivor_innkeeper';
-  const card = _campaignCardHTML(s.name, s.title, assetId, s.color || ENTITY_COLOR.survivor, s.hp, s.maxHp, s.attack, s.defense, s.abilityLabel, false);
-  if (idx == null) return card;
-  const btnHtml = actionBtn
-    ? `<button class="roster-action-btn ${actionBtn.cls}" data-idx="${idx}" title="${actionBtn.title}">${actionBtn.label}</button>`
-    : '';
-  return `<div class="roster-row" data-idx="${idx}">
-    ${card}
-    ${btnHtml}
-  </div>`;
-}
-
-function _campaignPartyHTML(heroStats, roster) {
-  let html = '<div class="campaign-party">';
-  // Hero card
-  const weaponLabel = heroStats.weapon ? ` (${heroStats.weapon.name || heroStats.weapon})` : '';
-  html += _campaignCardHTML('Hero' + weaponLabel, null, 'hero', ENTITY_COLOR.hero, heroStats.hp, heroStats.maxHp, heroStats.attack, heroStats.defense, null, true);
-  // Survivor cards
-  for (const s of roster) {
-    html += _survivorCardHTML(s);
-  }
-  html += '</div>';
-  return html;
-}
 
 /**
  * Render the party view with Active/Reserve sections for mission deployment.
@@ -2337,7 +2242,7 @@ function _renderCampaignScreen() {
     const unlocked = _campaignUnlocked || m.available;
     const cls = m.completed ? 'campaign-mission completed' : unlocked ? 'campaign-mission available' : 'campaign-mission locked';
     const icon = m.completed ? '✓' : unlocked ? '→' : '🔒';
-    const hasSave = _loadCampaignMissionSave(campaignId, m.id) !== null;
+    const hasSave = loadCampaignMissionSave(campaignId, m.id) !== null;
     const statusLabel = m.completed
       ? '<span class="campaign-mission-status">Complete</span>'
       : hasSave
@@ -2375,7 +2280,7 @@ function _showMissionBriefing(missionId) {
   document.getElementById('campaign-mission-text').textContent = missionDef.briefing;
 
   // Show Resume/Restart buttons if a mid-mission save exists
-  const hasMissionSave = _loadCampaignMissionSave(_activeCampaign.campaignDef.id, missionId) !== null;
+  const hasMissionSave = loadCampaignMissionSave(_activeCampaign.campaignDef.id, missionId) !== null;
   const startBtn = document.getElementById('btn-start-mission');
   const resumeBtn = document.getElementById('btn-resume-mission');
   const restartBtn = document.getElementById('btn-restart-mission');
@@ -2407,19 +2312,6 @@ function _showMissionBriefing(missionId) {
   _renderDeployRoster(_activeCampaign.heroStats, _activeCampaign.roster, maxActive);
 }
 
-function _objectiveDescription(obj) {
-  if (!obj) return 'None';
-  switch (obj.type) {
-    case 'eliminate_all':  return 'Eliminate all enemies';
-    case 'hero_killed':    return 'Don\'t let the hero fall';
-    case 'survive_rounds': return `Survive ${obj.rounds} rounds`;
-    case 'reach_hex':      return 'Reach the objective hex';
-    case 'slay_witch':     return 'Slay the witch';
-    case 'control_nodes':       return 'Control the Power Nodes';
-    case 'conductor_complete':  return obj.reason || 'Complete the mission';
-    default:                    return obj.type;
-  }
-}
 
 function _showMissionInfoModal() {
   if (!_activeMissionDef) return;
@@ -2443,35 +2335,6 @@ function _createEnemyEntity(type, col, row) {
   }
 }
 
-const _DEPARTURE_MESSAGES = [
-  name => `${name} left town to search for supplies in the outlying farms.`,
-  name => `${name} slipped away at dawn to scout the old trade road.`,
-  name => `${name} volunteered to warn the neighboring settlement.`,
-  name => `${name} departed to tend to a wounded traveler found on the road.`,
-  name => `${name} set off alone to bury the dead in the churchyard.`,
-  name => `${name} vanished into the fog — perhaps the strain was too much.`,
-  name => `${name} headed south, hoping to find reinforcements.`,
-  name => `${name} left to guard the bridge crossing overnight.`,
-];
-
-const _ARRIVAL_MESSAGES = [
-  name => `${name} wanders into town, weary but willing to fight.`,
-  name => `${name} stumbles out of the tree line, clutching a makeshift weapon.`,
-  name => `${name} emerges from the cellar of a ruined house and joins you.`,
-  name => `A voice calls from the fog — ${name} steps forward, ready for battle.`,
-  name => `${name} was hiding in the church. Hearing your approach, they join the cause.`,
-  name => `${name} arrives breathless, having fled the horrors to the north.`,
-  name => `The door of the inn creaks open — ${name} has been waiting for someone to lead.`,
-  name => `${name} crawls from the wreckage of a collapsed barn, bruised but alive.`,
-];
-
-function _departureMessage(name) {
-  return _DEPARTURE_MESSAGES[Math.floor(Math.random() * _DEPARTURE_MESSAGES.length)](name);
-}
-
-function _arrivalMessage(name) {
-  return _ARRIVAL_MESSAGES[Math.floor(Math.random() * _ARRIVAL_MESSAGES.length)](name);
-}
 
 function _initCampaignMission(missionDef) {
   _activeMissionDef = missionDef;
@@ -2704,7 +2567,7 @@ function _handleCampaignMissionEnd() {
   if (!_activeCampaign || !_activeMissionDef || !state) return;
 
   // Delete mid-mission save on completion (win or lose)
-  _deleteCampaignMissionSave(_activeCampaign.campaignDef.id, _activeMissionDef.id);
+  deleteCampaignMissionSave(_activeCampaign.campaignDef.id, _activeMissionDef.id);
 
   // Record campaign-specific stats before cleaning up
   _recordCampaignGameStats();
@@ -2802,7 +2665,7 @@ document.getElementById('btn-resume-mission')  .addEventListener('click', () => 
 });
 document.getElementById('btn-restart-mission') .addEventListener('click', () => {
   if (!_campaignSelectedMission) return;
-  _deleteCampaignMissionSave(_activeCampaign.campaignDef.id, _campaignSelectedMission);
+  deleteCampaignMissionSave(_activeCampaign.campaignDef.id, _campaignSelectedMission);
   const missionDef = _activeCampaign.getMissionDef(_campaignSelectedMission);
   if (missionDef) _initCampaignMission(missionDef);
 });
