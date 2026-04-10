@@ -3429,13 +3429,42 @@ export function createBattleRoom(battleOpts = {}) {
  * Assigns the player to the undermanned faction and spawns their leader.
  * Can be called at any round (not limited to Round 1).
  *
+ * If roomId is provided, joins that specific room (for reconnect / "Return to Battle").
+ * If roomId is omitted, auto-selects the best available room or creates a new one.
+ *
  * @returns {{ roomId: string, faction: string }|null}
  */
 export function joinBattle(playerId, playerName, ws, roomId) {
-  const room = rooms.get(roomId);
+  let room;
+  if (roomId) {
+    room = rooms.get(roomId);
+  }
+
+  // If no specific room (or invalid roomId), check if the player is already in a battle
   if (!room || !room.config.isBattle) {
-    send(ws, { type: 'error', message: 'No active Battle found.' });
-    return null;
+    const battleRooms = getActiveBattleRooms();
+    for (const br of battleRooms) {
+      if (br.players.find(s => s.playerId === playerId)) {
+        room = br;
+        break;
+      }
+    }
+  }
+
+  // Still no room — auto-select the best available or create a new one
+  if (!room || !room.config.isBattle) {
+    room = pickBestBattleRoom();
+    if (!room) {
+      // All rooms full — create a new one with the same endsAt
+      const existing = getActiveBattleRoom();
+      const endsAt = existing?.state?.battleConfig?.endsAt ?? undefined;
+      const newRoomId = createBattleRoom({ endsAt });
+      room = rooms.get(newRoomId);
+      if (!room) {
+        send(ws, { type: 'error', message: 'Could not create a new Battle room.' });
+        return null;
+      }
+    }
   }
 
   // ── Reconnect: existing player returning ──────────────────────────────
@@ -3619,7 +3648,7 @@ export function joinBattle(playerId, playerName, ws, roomId) {
 }
 
 /**
- * Get the active battle room, if any.
+ * Get the first active battle room, if any.
  * @returns {Room|null}
  */
 export function getActiveBattleRoom() {
@@ -3630,40 +3659,127 @@ export function getActiveBattleRoom() {
 }
 
 /**
+ * Get all active battle rooms.
+ * @returns {Room[]}
+ */
+export function getActiveBattleRooms() {
+  const result = [];
+  for (const [, room] of rooms) {
+    if (room.config.isBattle && room.status === 'playing') result.push(room);
+  }
+  return result;
+}
+
+/**
+ * Pick the best battle room for a new player to join.
+ * Prefers rooms with fewer open slots (more populated), then better faction balance.
+ * @returns {Room|null} — null if all rooms are full.
+ */
+export function pickBestBattleRoom() {
+  const battleRooms = getActiveBattleRooms();
+  const candidates = [];
+  for (const room of battleRooms) {
+    const maxPPS = room.state?.battleConfig?.maxPlayersPerSide ?? 10;
+    const heroCount = room.players.filter(s => s.faction === 'hero').length;
+    const witchCount = room.players.filter(s => s.faction === 'witch').length;
+    if (heroCount < maxPPS || witchCount < maxPPS) {
+      const openSlots = (maxPPS - heroCount) + (maxPPS - witchCount);
+      const imbalance = Math.abs(heroCount - witchCount);
+      candidates.push({ room, openSlots, imbalance });
+    }
+  }
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => {
+    if (a.openSlots !== b.openSlots) return a.openSlots - b.openSlots;
+    return a.imbalance - b.imbalance;
+  });
+  return candidates[0].room;
+}
+
+/** Build a per-room summary object for the battle status API. */
+function _battleRoomSummary(room) {
+  const state = room.state;
+  const maxPPS = state?.battleConfig?.maxPlayersPerSide ?? 10;
+  const heroCount = room.players.filter(s => s.faction === 'hero').length;
+  const witchCount = room.players.filter(s => s.faction === 'witch').length;
+  return {
+    roomId:     room.id,
+    heroCount,
+    witchCount,
+    maxPerSide: maxPPS,
+    heroScore:  state?.nodeScore?.hero ?? 0,
+    witchScore: state?.nodeScore?.witch ?? 0,
+    round:      state?.round ?? 0,
+    openSlots:  (maxPPS - heroCount) + (maxPPS - witchCount),
+    isFull:     heroCount >= maxPPS && witchCount >= maxPPS,
+  };
+}
+
+/**
  * Get battle status for the multiplayer menu.
- * Returns null if no active battle, or a summary object.
+ * Returns null if no active battles, or a multi-room summary.
  */
 export function getBattleStatus(playerId = null) {
-  const room = getActiveBattleRoom();
-  if (!room) return null;
-  const state = room.state;
-  const seat = playerId ? room.players.find(s => s.playerId === playerId) : null;
+  const battleRooms = getActiveBattleRooms();
+  if (battleRooms.length === 0) return null;
+
+  // Build per-room summaries
+  const battles = battleRooms.map(r => _battleRoomSummary(r));
+
+  // Shared endsAt (all rooms share the same battle period)
+  const endsAt = battleRooms[0].state?.battleConfig?.endsAt ?? 0;
+
+  // Aggregate counts across all rooms
+  let totalHeroes = 0, totalWitches = 0, allFull = true;
+  for (const b of battles) {
+    totalHeroes += b.heroCount;
+    totalWitches += b.witchCount;
+    if (!b.isFull) allFull = false;
+  }
+
+  // Find the player's battle (if any)
+  let myBattle = null;
+  if (playerId) {
+    for (const room of battleRooms) {
+      const seat = room.players.find(s => s.playerId === playerId);
+      if (seat) {
+        const state = room.state;
+        myBattle = {
+          roomId:      room.id,
+          heroCount:   room.players.filter(s => s.faction === 'hero').length,
+          witchCount:  room.players.filter(s => s.faction === 'witch').length,
+          maxPerSide:  state?.battleConfig?.maxPlayersPerSide ?? 10,
+          heroScore:   state?.nodeScore?.hero ?? 0,
+          witchScore:  state?.nodeScore?.witch ?? 0,
+          round:       state?.round ?? 0,
+          endsAt,
+          players: room.players.map(s => ({
+            playerId:  s.playerId,
+            name:      s.name,
+            faction:   s.faction,
+            isAI:      s.isAI,
+            submitted: !!state?.playerReady?.get(s.playerId),
+            connected: s.isAI || !!(s.ws?.readyState === 1),
+            active:    s.isAI || !!(s.ws?.readyState === 1 && !s.ws._inactive),
+          })),
+          joined:      true,
+          myFaction:   seat.faction,
+          mySubmitted: !!state?.playerReady?.get(seat.playerId),
+          turnDeadline: room.turnDeadline ?? null,
+        };
+        break;
+      }
+    }
+  }
+
   return {
-    roomId:      room.id,
-    heroCount:   room.players.filter(s => s.faction === 'hero').length,
-    witchCount:  room.players.filter(s => s.faction === 'witch').length,
-    maxPerSide:  state.battleConfig?.maxPlayersPerSide ?? 10,
-    heroScore:   state.nodeScore?.hero ?? 0,
-    witchScore:  state.nodeScore?.witch ?? 0,
-    round:       state.round,
-    endsAt:      state.battleConfig?.endsAt ?? 0,
-    isFull:      room.players.filter(s => s.faction === 'hero').length >= (state.battleConfig?.maxPlayersPerSide ?? 10)
-              && room.players.filter(s => s.faction === 'witch').length >= (state.battleConfig?.maxPlayersPerSide ?? 10),
-    // Player list with submission status
-    players: room.players.map(s => ({
-      playerId:  s.playerId,
-      name:      s.name,
-      faction:   s.faction,
-      isAI:      s.isAI,
-      submitted: !!state.playerReady?.get(s.playerId),
-      connected: s.isAI || !!(s.ws?.readyState === 1),
-      active:    s.isAI || !!(s.ws?.readyState === 1 && !s.ws._inactive),
-    })),
-    // Player-specific fields
-    joined:      !!seat,
-    myFaction:   seat?.faction ?? null,
-    mySubmitted: seat ? !!state.playerReady?.get(seat.playerId) : false,
-    turnDeadline: room.turnDeadline ?? null,
+    totalBattles: battles.length,
+    totalHeroes,
+    totalWitches,
+    endsAt,
+    allFull,
+    battles,
+    myBattle,
   };
 }
 

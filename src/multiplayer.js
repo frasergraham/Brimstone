@@ -210,8 +210,8 @@ export class MultiplayerClient {
   /** Join an active game during round 1 (late join). Uses room ID or code. */
   joinGame(codeOrId)       { this._send({ type: 'joinGame', codeOrId }); }
 
-  /** Join the active Battle for Caleb's Hollow. */
-  joinBattle(roomId)       { this._send({ type: 'joinBattle', roomId }); }
+  /** Join a Battle for Caleb's Hollow. If roomId is omitted, server auto-selects. */
+  joinBattle(roomId)       { this._send({ type: 'joinBattle', roomId: roomId || undefined }); }
 
   /** Request the list of open public lobbies. */
   browseLobby()            { this._send({ type: 'browseLobby' }); }
