@@ -293,19 +293,14 @@
       </div>
       <div id="battle-admin-info" style="display:none">
         <div style="display:flex;gap:2rem;flex-wrap:wrap;margin-bottom:1rem">
-          <div class="stat-box"><div class="label">Room ID</div><div class="value" id="ba-room-id">-</div></div>
-          <div class="stat-box"><div class="label">Round</div><div class="value" id="ba-round">-</div></div>
-          <div class="stat-box"><div class="label">Hero Score</div><div class="value" style="color:var(--hero)" id="ba-hero-score">-</div></div>
-          <div class="stat-box"><div class="label">Witch Score</div><div class="value" style="color:var(--witch)" id="ba-witch-score">-</div></div>
+          <div class="stat-box"><div class="label">Active Battles</div><div class="value" id="ba-total-battles">-</div></div>
+          <div class="stat-box"><div class="label">Total Heroes</div><div class="value" style="color:var(--hero)" id="ba-total-heroes">-</div></div>
+          <div class="stat-box"><div class="label">Total Witches</div><div class="value" style="color:var(--witch)" id="ba-total-witches">-</div></div>
           <div class="stat-box"><div class="label">Ends</div><div class="value" id="ba-ends-at">-</div></div>
         </div>
-        <h3 style="margin:0.5rem 0">Players (<span id="ba-hero-count">0</span> heroes, <span id="ba-witch-count">0</span> witches)</h3>
-        <table>
-          <thead><tr><th>Name</th><th>Faction</th><th>Connected</th><th>Submitted</th></tr></thead>
-          <tbody id="ba-players-body"></tbody>
-        </table>
+        <div id="ba-rooms-container"></div>
         <div style="margin-top:1rem">
-          <button class="btn btn-danger" id="btn-end-battle">End Battle Early</button>
+          <button class="btn btn-danger" id="btn-end-battle">End All Battles Early</button>
         </div>
       </div>
       <div id="battle-admin-none" style="display:none">
@@ -607,6 +602,42 @@
 
     // ── Battle tab ─────────────────────────────────────────────────────────────
 
+    function _renderBattleRoom(b, idx) {
+      const playerRows = (b.players || []).map(p => {
+        const fcls = p.faction === 'hero' ? 'badge-hero' : 'badge-witch';
+        const conn = p.connected
+          ? '<span style="color:var(--green)">Yes</span>'
+          : '<span style="color:var(--text-dim)">No</span>';
+        const sub = !b.planningPhase
+          ? '<span style="color:var(--text-dim)">—</span>'
+          : p.submitted
+            ? '<span style="color:var(--green)">✓</span>'
+            : '<span style="color:var(--yellow)">Pending</span>';
+        return `<tr>
+          <td>${_esc(p.name)}</td>
+          <td><span class="badge ${fcls}">${_esc(p.faction)}</span></td>
+          <td>${conn}</td>
+          <td>${sub}</td>
+        </tr>`;
+      }).join('');
+
+      return `
+        <div style="border:1px solid var(--border);border-radius:6px;padding:0.75rem;margin-bottom:1rem">
+          <div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:0.5rem">
+            <div class="stat-box"><div class="label">Room</div><div class="value" title="${_esc(b.roomId)}">${shortId(b.roomId)}</div></div>
+            <div class="stat-box"><div class="label">Round</div><div class="value">${b.round}</div></div>
+            <div class="stat-box"><div class="label">Hero Score</div><div class="value" style="color:var(--hero)">${b.heroScore}</div></div>
+            <div class="stat-box"><div class="label">Witch Score</div><div class="value" style="color:var(--witch)">${b.witchScore}</div></div>
+            <div class="stat-box"><div class="label">Slots</div><div class="value">${b.isFull ? 'Full' : b.openSlots + ' open'}</div></div>
+          </div>
+          <h4 style="margin:0.3rem 0">Players (${b.heroCount} heroes, ${b.witchCount} witches)</h4>
+          <table>
+            <thead><tr><th>Name</th><th>Faction</th><th>Connected</th><th>Submitted</th></tr></thead>
+            <tbody>${playerRows}</tbody>
+          </table>
+        </div>`;
+    }
+
     async function loadBattle() {
       const statusEl = document.getElementById('battle-admin-status');
       const infoEl   = document.getElementById('battle-admin-info');
@@ -614,7 +645,7 @@
 
       try {
         const data = await api('/admin/api/battle');
-        if (!data) {
+        if (!data || !data.battles || data.battles.length === 0) {
           statusEl.style.display = 'none';
           infoEl.style.display = 'none';
           noneEl.style.display = '';
@@ -625,49 +656,29 @@
         noneEl.style.display = 'none';
         infoEl.style.display = '';
 
-        document.getElementById('ba-room-id').textContent = shortId(data.roomId);
-        document.getElementById('ba-room-id').title = data.roomId;
-        document.getElementById('ba-round').textContent = data.round;
-        document.getElementById('ba-hero-score').textContent = data.heroScore;
-        document.getElementById('ba-witch-score').textContent = data.witchScore;
-        document.getElementById('ba-hero-count').textContent = data.heroCount;
-        document.getElementById('ba-witch-count').textContent = data.witchCount;
+        document.getElementById('ba-total-battles').textContent = data.totalBattles;
+        document.getElementById('ba-total-heroes').textContent = data.totalHeroes;
+        document.getElementById('ba-total-witches').textContent = data.totalWitches;
 
         const endsDate = new Date(data.endsAt * 1000);
         document.getElementById('ba-ends-at').textContent = endsDate.toLocaleString();
 
-        const tbody = document.getElementById('ba-players-body');
-        tbody.innerHTML = (data.players || []).map(p => {
-          const fcls = p.faction === 'hero' ? 'badge-hero' : 'badge-witch';
-          const conn = p.connected
-            ? '<span style="color:var(--green)">Yes</span>'
-            : '<span style="color:var(--text-dim)">No</span>';
-          const sub = !data.planningPhase
-            ? '<span style="color:var(--text-dim)">—</span>'
-            : p.submitted
-              ? '<span style="color:var(--green)">✓</span>'
-              : '<span style="color:var(--yellow)">Pending</span>';
-          return `<tr>
-            <td>${_esc(p.name)}</td>
-            <td><span class="badge ${fcls}">${_esc(p.faction)}</span></td>
-            <td>${conn}</td>
-            <td>${sub}</td>
-          </tr>`;
-        }).join('');
+        const container = document.getElementById('ba-rooms-container');
+        container.innerHTML = data.battles.map((b, i) => _renderBattleRoom(b, i)).join('');
       } catch (e) {
         statusEl.innerHTML = `<p style="color:var(--red)">Error loading battle status.</p>`;
       }
     }
 
     document.getElementById('btn-end-battle').addEventListener('click', async () => {
-      if (!confirm('End the current battle early? This will score the game and start a new one.')) return;
+      if (!confirm('End ALL active battles early? This will score every game and start a new one.')) return;
       try {
         const result = await apiPost('/admin/api/battle/end', {});
-        alert(`Battle ended. New battle: ${result.newRoomId ? shortId(result.newRoomId) : 'none'}`);
+        alert(`Battles ended. New battle: ${result.newRoomId ? shortId(result.newRoomId) : 'none'}`);
         _tabLoaded.battle = false;
         loadBattle();
       } catch (e) {
-        alert('Failed to end battle: ' + e.message);
+        alert('Failed to end battles: ' + e.message);
       }
     });
 
