@@ -2,7 +2,7 @@
 import { onInactiveChange, tryGameCenterAuth, isNativeMobile, refreshPushToken, loadGameCenterFriends, shareInvite } from './platform.js'; // must be first — sets server globals for Capacitor builds
 import { AppMode, getMode, setMode, isInGame, isAnimating, shouldBufferMessages, onModeChange } from './app-mode.js';
 import { initServerSelector } from './server-selector.js';
-import { GameState, Player } from './game.js';
+import { GameState } from './game.js';
 import { Renderer }          from './renderer.js';
 import { UIController, UIMode } from './ui.js';
 import { WITCH_PERSONALITIES }   from './ai.js';

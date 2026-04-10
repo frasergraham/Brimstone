@@ -4,7 +4,7 @@
 import { getNeighbors, hexDistance, hexKey } from './hex.js';
 import { TileType } from './tiles.js';
 import { EntityType } from './entities.js';
-import { Phase, computeActions, computeActionsForPlayer, Player, nodeController, countHeldNodes } from './game.js';
+import { Phase, computeActions, computeActionsForPlayer, nodeController, countHeldNodes } from './game.js';
 import { getReachableHexes } from './actions.js';
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
@@ -179,7 +179,7 @@ export class PlanSimState {
       this.witch = this.entities.find(e => e.type === EntityType.WITCH) ?? null;
       const nb = countHeldNodes(faction, realState.witchObjectives ?? [], this.entities);
       this.actionsLeft = computeActions(
-        faction === 'hero' ? Player.HERO : Player.WITCH,
+        faction,
         realState.phase,
         this.entities,
         nb,

@@ -2,7 +2,7 @@
 import { hexKey, hexToPixel, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType } from './tiles.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
-import { Phase, Player, PHASE_ICON, phaseForRound, nodeController, countHeldNodes } from './game.js';
+import { Phase, PHASE_ICON, phaseForRound, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
 import {
   ActionType, getValidActions, getVisiblePositions,
@@ -3254,7 +3254,7 @@ export class UIController {
     if (!el) return;
 
     const state   = this.state;
-    const faction = this._planFaction ?? (state.activePlayer === Player.HERO ? 'hero' : 'witch');
+    const faction = this._planFaction ?? (state.activePlayer === 'hero' ? 'hero' : 'witch');
     const isHero  = faction === 'hero';
     const inv     = state.inventory;
     const stash   = isHero ? inv.hero : inv.witch;

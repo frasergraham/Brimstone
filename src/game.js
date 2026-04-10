@@ -88,6 +88,7 @@ export const Phase = Object.freeze({
   NIGHT: 'night',
 });
 
+/** @deprecated Use string literals 'hero'/'witch' or getFaction(id) instead. */
 export const Player = Object.freeze({ HERO: 'hero', WITCH: 'witch' });
 
 // Calculate actions for a player at the start of their turn.
@@ -213,8 +214,8 @@ export class GameState {
 
     this.round        = 1;
     this.phase        = Phase.DAWN;
-    this.activePlayer = Player.HERO;
-    this.actionsLeft  = computeActions(Player.HERO, Phase.DAWN, []);
+    this.activePlayer = 'hero';
+    this.actionsLeft  = computeActions('hero', Phase.DAWN, []);
     this.log = [
       `🌅 Dawn breaks over Caleb's Hollow. ${this.hero.displayName} stirs at the Inn.`,
       `Three Power Nodes: ${this.witchObjectives.map(o => o.label).join(', ')}.`,
@@ -310,15 +311,15 @@ export class GameState {
    * @param {boolean} isAI
    */
   addPlayer(playerId, name, faction, col, row, isAI = false) {
-    const leader = faction === Player.HERO
+    const leader = faction === 'hero'
       ? createHero(col, row, playerId)
       : createWitch(col, row, playerId);
     leader.name = name;
     this.entities.push(leader);
     this.players.push({ id: playerId, name, faction, isAI, leaderId: leader.id });
     // Keep legacy singleton refs pointing at the first hero/witch for offline compat
-    if (faction === Player.HERO  && !this.hero)  this.hero  = leader;
-    if (faction === Player.WITCH && !this.witch) this.witch = leader;
+    if (faction === 'hero'  && !this.hero)  this.hero  = leader;
+    if (faction === 'witch' && !this.witch) this.witch = leader;
     return leader;
   }
 
@@ -370,8 +371,8 @@ export class GameState {
     const witchNodeBonus = countHeldNodes('witch', this.witchObjectives, this.entities);
 
     // Legacy faction-level budgets (offline mode)
-    this.heroActionsLeft  = computeActions(Player.HERO,  this.phase, this.entities, heroNodeBonus);
-    this.witchActionsLeft = computeActions(Player.WITCH, this.phase, this.entities, witchNodeBonus);
+    this.heroActionsLeft  = computeActions('hero',  this.phase, this.entities, heroNodeBonus);
+    this.witchActionsLeft = computeActions('witch', this.phase, this.entities, witchNodeBonus);
 
     // Per-player budgets (multiplayer)
     this.playerPlans       = new Map();
@@ -402,7 +403,7 @@ export class GameState {
         continue;
       }
       this.playerReady.set(p.id, false);
-      const nb = p.faction === Player.HERO ? heroNodeBonus : witchNodeBonus;
+      const nb = p.faction === 'hero' ? heroNodeBonus : witchNodeBonus;
       let budget = computeActionsForPlayer(p.id, p.faction, this.phase, this.entities, nb);
       budget += battleBonus[p.faction] ?? 0;
       this.playerActionsLeft.set(p.id, budget);
@@ -428,7 +429,7 @@ export class GameState {
         // Pick a spawn position in the faction's starting columns
         const spawnPos = this._pickBattleSpawn(p.faction);
         if (spawnPos) {
-          const leader = p.faction === Player.HERO
+          const leader = p.faction === 'hero'
             ? createHero(spawnPos.col, spawnPos.row, p.id)
             : createWitch(spawnPos.col, spawnPos.row, p.id);
           leader.name = p.name;
@@ -469,7 +470,7 @@ export class GameState {
    */
   submitPlan(faction, plan) {
     if (!this.planningPhase) throw new Error('Not in planning phase.');
-    if (faction === Player.HERO) {
+    if (faction === 'hero') {
       this.heroPlan  = plan;
       this.heroReady = true;
       this.addLog(`⚔ Hero submits their plan (${plan.length} step${plan.length !== 1 ? 's' : ''}).`);
