@@ -344,59 +344,106 @@ These are easily externalized into a theme/flavor config file but aren't blockin
 
 ## Implementation Progress
 
-### Completed
+_Last updated: 2026-04-10_
 
-**Finding 1 — Hardcoded Two-Faction Assumption:**
-- Removed `HERO_ACTION_CAP`, `WITCH_ACTION_CAP` (use `Faction.actionCap`)
-- Removed `getVisibleEnemyHexes` / `getVisibleHeroHexes` (callers use `getVisiblePositions`)
-- Generalized `nodeController()` to N-faction via `Map<factionId, Set>`
-- Renamed `inventory.shared` → `inventory.hero` (keyed by faction ID)
-- Generalized `exploredHexes` init via `allFactions()` and node discovery via `faction.getNodeSeenKey()`
-- Added `Faction.canDiscoverNPCs()`, replaced hardcoded hero checks in actions.js
-- Replaced `EntityType.HERO` checks in heal/inspire/rally with `getFaction(owner).leaderType`
-- Backward-compat migration for old saves in `deserializeState()`
-- Reduced hardcoded `=== 'hero'`/`=== 'witch'` from 258 to ~246 across 23 files
+### Finding 1 — Hardcoded Two-Faction Assumption: DONE
 
-**Finding 2 — Duplicated AI Engine Code:**
-- Created `BaseAIEngine` class with common 5-stage pipeline
-- `WitchAIEngine` and `HeroAIEngine` extend it, overriding 7 methods
-- Exported shared `clamp01`, `allocateBudget`, `personalityName`, `updateAllyClaimedNodes`
-- Adding a 3rd faction AI = ~40 lines of overrides + faction generators (was 1,200+)
+All structural data-structure blockers resolved. Core game engine is now N-faction ready.
 
-**Finding 3 — God Classes:**
-- Extracted `src/playback.js` (304 LOC) from `main.js` — full-game replay engine
-- Extracted `server/async-game-rooms.js` (519 LOC) from `lobby.js` — async game lifecycle
-- Extracted `src/ui-popup.js` (263 LOC) from `ui.js` — arc menu positioning
-- `main.js`: 6,842 → 6,578 LOC | `lobby.js`: 4,066 → 3,590 LOC | `ui.js`: 4,347 → 4,065 LOC
+- `nodeController()` generalized to N-faction via `Map<factionId, Set>` instead of hardcoded `heroHexes`/`witchHexes`
+- `inventory.shared` renamed to `inventory.hero` — inventory keyed by faction ID, naturally extensible
+- `exploredHexes` initialized dynamically from `allFactions()` instead of hardcoded `{hero, witch}`
+- Node discovery (`updateNodeDiscovery`) iterates `allFactions()` using `faction.getNodeSeenKey()`
+- Added `Faction.canDiscoverNPCs()` — replaced hardcoded `owner === 'hero'` in discovery cap, herbalist, and survivor count tracking
+- Heal/inspire/rally abilities use `getFaction(actor.owner).leaderType` instead of `EntityType.HERO`
+- Removed `HERO_ACTION_CAP`, `WITCH_ACTION_CAP` (superseded by `Faction.actionCap`)
+- Removed `getVisibleEnemyHexes`/`getVisibleHeroHexes` (callers use `getVisiblePositions(state, factionId)`)
+- Backward-compat migration in `deserializeState()` for old saves with `inventory.shared`
+- `exploredHexes` deserialization gracefully handles missing keys (old saves keep constructor defaults)
 
-**Finding 4 — Theme Colors Scattered:**
-- Created `src/theme.js` with `FACTION_THEME` — per-faction primary, highlight, nodeFill, playerColors
-- Renderer uses `getFactionTheme(ctrl)` instead of inline hex strings
-- `HERO_PLAYER_COLORS` / `WITCH_PLAYER_COLORS` re-export from theme.js
+**~150 string-literal faction checks remain** across `main.js` (42), `lobby.js` (78), `ui.js` (24), and the AI engines (27). These are mostly:
+- Display-layer references (UI icons, colors, labels)
+- Lobby slot management and matchmaking
+- AI engine faction-specific goal scoring and generators
 
-**Finding 6 — Dead Code:**
-- Removed duplicate `groupByEntity()` from resolver.js (imports from planner.js)
+These will naturally shrink as those areas get refactored for other reasons, but are not structural blockers for N-faction support.
 
-**Finding 7 — Race Conditions:**
-- Added `playerReady.get(playerId)` guard at top of `_submitPlayerPlan()` to prevent double-submission
+### Finding 2 — Duplicated AI Engine Code: DONE
 
-### Remaining
+- Created `BaseAIEngine` class in `ai-engine.js` with the common 5-stage pipeline (`generatePlan()`, debug capture, ally coordination, prev-position tracking)
+- `WitchAIEngine` and `HeroAIEngine` extend it, overriding 7 methods: `createSim()`, `assessBoard()`, `scoreGoals()`, `getLeader()`, `getGenerators()`, `getGapFillFn()`, `generateLeaderlessPlan()`
+- Shared utilities exported: `clamp01`, `allocateBudget`, `assemblePlan`, `personalityName`, `updateAllyClaimedNodes`
+- **Adding a 3rd faction AI now requires ~40 lines of class overrides + faction-specific generators**, down from duplicating 1,200+ LOC
+- Side-effect personality registration kept as-is (well-tested, low risk) — can be converted to explicit registration later if needed
 
-**Finding 3 — God Classes (incremental):**
-- Battle rooms (~400 LOC in lobby.js) — deeply coupled to room lifecycle internals
-- Campaign setup (~800 LOC in main.js) — integrated with game resolution loop
-- Resolution summary (~400 LOC in ui.js) — large method, could become standalone
+### Finding 3 — God Classes: PARTIAL
 
-**Finding 5 — Module-Level Mutable State:**
-- `_nextId`, `_forcedDice`, `_usedRosterIndices` in entities.js are process-global
-- Moving into GameState requires passing state to entity factory functions (invasive)
+Four modules extracted, reducing the three largest files by ~1,160 LOC combined:
 
-**Finding 8 — Theme-Coupled Narrative:**
-- "Caleb's Hollow" strings in game.js log messages and WIN_REASON
-- Survivor roster with colonial New England bios
-- Low priority; externalize to a flavor config when re-theming is needed
+| Extracted module | LOC | Source | What it contains |
+|-----------------|-----|--------|-----------------|
+| `src/playback.js` | 304 | `main.js` | Full-game replay engine (play/pause/ff/back/stop loop, playback state, delay utility) |
+| `server/async-game-rooms.js` | 519 | `lobby.js` | Async game lifecycle (create, join, connect, submit, resolve, finish) |
+| `src/ui-popup.js` | 263 | `ui.js` | Arc menu and popup positioning (hide, position, track, attach listeners, touch distance) |
+| `src/campaign/campaign-ui.js` | 164 | `main.js` | Campaign save/load utilities, HTML card generators, portrait loader, flavor messages |
 
-**Finding 9 — Circular Import:**
-- `game.js` ↔ `factions.js` via Phase enum
-- Works correctly today (Phase is simple frozen enum)
-- Low priority; would require updating 25+ import statements
+**Current sizes:**
+
+| File | Before | After | Change |
+|------|--------|-------|--------|
+| `src/main.js` | 6,842 | 6,441 | −401 |
+| `server/lobby.js` | 4,066 | 3,590 | −476 |
+| `src/ui.js` | 4,347 | 4,065 | −282 |
+
+### Finding 4 — Theme Colors Scattered: DONE
+
+- Created `src/theme.js` with `FACTION_THEME` object — per-faction `primary`, `highlight`, `nodeFill`, and `playerColors`
+- Renderer uses `getFactionTheme(ctrl)` for node fills, glow colors, and entity fallback colors
+- `HERO_PLAYER_COLORS`/`WITCH_PLAYER_COLORS` in `entities.js` re-export from `theme.js`
+- Adding a new faction's colors = one new entry in `FACTION_THEME`
+
+### Finding 6 — Dead Code: PARTIAL
+
+- Removed `HERO_ACTION_CAP`, `WITCH_ACTION_CAP` — superseded by `Faction.actionCap`
+- Removed `getVisibleEnemyHexes()`, `getVisibleHeroHexes()` — replaced by `getVisiblePositions()`
+- Removed duplicate `groupByEntity()` from `resolver.js` — imports `groupPlanByEntity` from `planner.js`
+- Removed dead `ActionType.END_TURN` value
+- Deprecated `Player` enum — usage removed from all source files, kept in tests only
+
+### Finding 7 — Race Conditions: DONE
+
+- Added `playerReady.get(playerId)` early-return guard at top of `_submitPlayerPlan()` to prevent the timeout + manual submit race condition
+
+---
+
+## Remaining Work
+
+### Finding 3 — God Classes (further extractions)
+
+These are viable but require more preparation than the completed extractions:
+
+**Battle rooms from `lobby.js`** (~400 LOC): `createBattleRoom`, `joinBattle`, `getActiveBattleRoom(s)`, `pickBestBattleRoom`, `getBattleStatus`. Blocked by deep coupling to room lifecycle internals — these functions call `createRoom`, `_appendChronicle`, `_broadcastPresence`, `_buildGameJoinedMessage`, `_persistRoomSave`, `_startPlanningPhase`. Would require exporting those helpers from lobby.js first, or refactoring lobby.js into a room-operations module.
+
+**Campaign orchestration from `main.js`** (~500 LOC): `_initCampaignMission` and `_handleCampaignMissionEnd` modify module-level `state`, `renderer`, `ui`, `witchAI`, `heroAI` and call `_setupLocalUI()`, `_startLocalPlanningPhase()`, `redraw()`. These are deeply integrated with the game loop. Would need an event-based architecture or a context/callback injection pattern to extract cleanly.
+
+**Resolution summary from `ui.js`** (~393 LOC): `_showResolutionSummary` is the largest single method. It's already cohesive and self-contained — extraction would only move it to a separate file without improving the class structure. Lower value than the other extractions.
+
+### Finding 5 — Module-Level Mutable State
+
+`_nextId`, `_forcedDice`, and `_usedRosterIndices` in `entities.js` are process-global. On the server, concurrent games share the same entity ID counter. The existing `bumpEntityId()` and `resetRoster()` functions manage this but are fragile.
+
+Moving these into `GameState` requires changing every entity factory function (`createHero`, `createWitch`, `createSurvivor`, etc.) to accept a state or ID-counter parameter. This is a correctness issue under server load but invasive to implement.
+
+### Finding 6 — Dead Code (remaining)
+
+**`ActionType` vs `PlanActionType` overlap**: Both define action identifiers with slightly different names (`BATTLE` vs `BATTLE_UNIT`). `ActionType` is used in 211 places across 10 files (UI action dispatch). `PlanActionType` is used in the planner and resolver (plan queue). They serve different roles (real-time UI vs plan queue) so consolidation requires careful analysis of which enum each caller should use. High churn, moderate value.
+
+**Silent `.catch(() => {})` patterns** in `lobby.js`: Multiple broadcast calls swallow errors silently. Should log the failure at minimum.
+
+### Finding 8 — Theme-Coupled Narrative
+
+"Caleb's Hollow" is hardcoded in `game.js` log messages (`WIN_REASON` strings, phase change messages, opening narration) and the 16-character survivor roster in `entities.js`. Only matters when re-theming the engine for a different setting. Externalize to a flavor/theme config file when the need arises.
+
+### Finding 9 — Circular Import
+
+`game.js` ↔ `factions.js` via `Phase` enum. Works correctly today because `Phase` is a simple frozen enum evaluated at parse time. Would require moving `Phase` to a shared `constants.js` and updating 25+ import statements. Low risk, low priority.
