@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.3.30",
+    "date": "2026-04-10",
+    "summary": "Bug fixes",
+    "notes": [
+      "Prevent duplicate battle rooms on server restart"
+    ]
+  },
+  {
     "version": "1.3.29",
     "date": "2026-04-10",
     "summary": "New features, and bug fixes",
