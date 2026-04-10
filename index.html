@@ -879,13 +879,18 @@
 
     <header id="game-header">
       <span class="header-title">CALEB'S HOLLOW</span>
+      <div id="header-cycle-group">
+        <div id="cycle-bar"></div>
+        <span id="round-label"></span>
+      </div>
       <div id="turn-info"></div>
-      <!-- End Turn lives in the header, next to the action diamonds -->
-      <button id="mission-info-btn" class="header-icon-btn" title="Mission Info" style="display:none">📜</button>
-      <button id="replay-turn-btn" class="header-icon-btn" title="Replay last turn" style="display:none">▶</button>
-      <button id="end-turn-btn" class="header-icon-btn end-turn-header" title="Submit Plan">↩</button>
-      <button id="plan-return-btn" class="header-icon-btn end-turn-header" title="Return to menu" style="display:none">← Menu</button>
-      <button id="menu-btn" class="header-icon-btn" title="Menu">☰</button>
+      <div class="header-buttons">
+        <button id="mission-info-btn" class="header-icon-btn" title="Mission Info" style="display:none">📜</button>
+        <button id="replay-turn-btn" class="header-icon-btn" title="Replay last turn" style="display:none">▶</button>
+        <button id="end-turn-btn" class="header-icon-btn end-turn-header" title="Submit Plan">↩</button>
+        <button id="plan-return-btn" class="header-icon-btn end-turn-header" title="Return to menu" style="display:none">← Menu</button>
+        <button id="menu-btn" class="header-icon-btn" title="Menu">☰</button>
+      </div>
     </header>
     <!-- In-game menu modal -->
     <div id="game-menu-backdrop" class="game-menu-backdrop" style="display:none">
@@ -898,9 +903,6 @@
         <div id="menu-version" class="game-menu-version"></div>
       </div>
     </div>
-    <!-- Cycle bar: always-visible 8-step day/night strip -->
-    <div id="cycle-bar"></div>
-    <div id="round-label"></div>
 
     <main id="game-main">
       <!-- Chronicle sidebar: left panel shown in 'full' chronicle mode -->
@@ -1103,16 +1105,8 @@
   <!-- ── Battle toast container ───────────────────────────────────── -->
   <div id="battle-toast-container" class="battle-toast-container"></div>
 
-  <!-- ── Phase start modal ────────────────────────────────────────── -->
-  <div id="phase-modal">
-    <div class="phase-modal-card">
-      <div class="phase-modal-icon"></div>
-      <div class="phase-modal-title"></div>
-      <div class="phase-modal-effects"></div>
-      <div class="phase-modal-budget"></div>
-      <button id="phase-modal-continue" class="plan-btn primary">Plan →</button>
-    </div>
-  </div>
+  <!-- ── Budget breakdown popup (triggered by tapping action pips) ── -->
+  <div id="budget-breakdown"></div>
 
   <!-- ── Story modal (campaign narrative triggers) ────────────────── -->
   <div id="story-modal">

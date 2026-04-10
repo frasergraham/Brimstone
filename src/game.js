@@ -119,7 +119,7 @@ const PHASE_ICON = {
   [Phase.NIGHT]: '🌙',
 };
 
-export { PHASE_ICON };
+export { PHASE_ICON, phaseForRound };
 
 export class GameState {
   /**
@@ -486,10 +486,16 @@ export class GameState {
    * @returns {boolean} true when ALL players have submitted
    */
   submitPlayerPlan(playerId, plan) {
-    if (!this.planningPhase) throw new Error('Not in planning phase.');
+    // Note: the planningPhase guard is intentionally removed here — the server
+    // uses room.phase (RoomPhase enum) as the single source of truth.  Checking
+    // state.planningPhase caused desync crashes when the legacy flag drifted
+    // out of sync with room.phase.
     const player = this.players.find(p => p.id === playerId);
     if (!player) throw new Error(`Unknown player: ${playerId}`);
-    if (this.playerReady.get(playerId)) throw new Error('Plan already submitted.');
+    if (this.playerReady.get(playerId)) {
+      // Silently ignore duplicate submissions instead of throwing
+      return [...this.playerReady.values()].every(Boolean);
+    }
 
     this.playerPlans.set(playerId, plan);
     this.playerReady.set(playerId, true);
@@ -497,12 +503,7 @@ export class GameState {
     const icon = player.faction === 'hero' ? '⚔' : '✦';
     this.addLog(`${icon} ${player.name} submits their plan (${plan.length} step${plan.length !== 1 ? 's' : ''}).`);
 
-    const allReady = [...this.playerReady.values()].every(Boolean);
-    if (allReady) {
-      this.planningPhase = false;
-      this.resolving     = true;
-    }
-    return allReady;
+    return [...this.playerReady.values()].every(Boolean);
   }
 
   /** True if every registered player has submitted their plan. */

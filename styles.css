@@ -685,7 +685,8 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 #game-header {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
   padding: 0.4rem 0.75rem;
   padding-top: max(0.4rem, env(safe-area-inset-top));
   padding-left: max(0.75rem, env(safe-area-inset-left));
@@ -703,12 +704,26 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   flex-shrink: 0;
 }
 
+#header-cycle-group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
 #turn-info {
   display: flex;
   align-items: center;
   gap: 0.6rem;
   flex: 1;
   min-width: 0;
+}
+
+.header-buttons {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
 }
 
 /* ── Score bar — bottom strip showing Power Nodes + score track ──────── */
@@ -960,29 +975,22 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   margin-bottom: 0.25rem;
 }
 
-/* Always-visible 8-step day/night strip below the header */
+/* 8-step day/night cycle icons — inline within header */
 #cycle-bar {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 4px;
-  padding: 0.25rem 0.5rem;
-  background: rgba(13,17,23,0.92);
-  border-bottom: 1px solid rgba(255,255,255,0.07);
+  gap: 3px;
   flex-shrink: 0;
 }
 
-/* Day N · Round M label row below the cycle bar */
+/* Day N · Round M label — inline within header */
 #round-label {
-  text-align: center;
-  font-size: 0.68rem;
+  font-size: 0.65rem;
   color: #b8ac98;
   letter-spacing: 0.06em;
-  opacity: 1;
-  padding: 0.1rem 0.5rem 0.2rem;
-  background: rgba(13,17,23,0.88);
-  border-bottom: 1px solid rgba(255,255,255,0.05);
+  white-space: nowrap;
   flex-shrink: 0;
+  opacity: 0.85;
 }
 
 .cycle-step {
@@ -1008,15 +1016,15 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .cycle-active.phase-night { background: rgba(123,79,187,0.20); color: var(--night); border-color: var(--night); }
 
 .cycle-icon {
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   object-fit: cover;
   pointer-events: none;
 }
 .cycle-active .cycle-icon {
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
 }
 
 .cycle-name {
@@ -1060,10 +1068,20 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   vertical-align: middle;
 }
 
+.actions-label {
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
 .actions-remaining {
   font-size: 1rem;
   color: var(--day);
   letter-spacing: 0.1em;
+  position: relative;
+  cursor: pointer;
 }
 .actions-remaining .bonus { color: var(--green); font-size: 0.8rem; margin-left: 4px; }
 
@@ -2723,9 +2741,10 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   /* Whole game fits in one viewport — no page-level scroll */
   #game-screen { height: 100dvh; }
 
-  /* Header: tighter */
-  #game-header { padding: max(0.35rem, env(safe-area-inset-top)) max(0.75rem, env(safe-area-inset-right)) 0.35rem max(0.75rem, env(safe-area-inset-left)); gap: 0.5rem; flex-shrink: 0; }
+  /* Header: tighter, cycle group wraps to own row */
+  #game-header { padding: max(0.35rem, env(safe-area-inset-top)) max(0.75rem, env(safe-area-inset-right)) 0.35rem max(0.75rem, env(safe-area-inset-left)); gap: 0.3rem 0.5rem; flex-shrink: 0; }
   .header-title { display: none; }
+  #header-cycle-group { order: -1; width: 100%; justify-content: center; }
   #turn-info { flex-wrap: wrap; gap: 0.3rem 0.6rem; }
   .phase-hint { display: none; }
 
@@ -3834,84 +3853,24 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 
 /* ── Phase start modal ────────────────────────────────────────────────── */
 
-#phase-modal {
+/* ── Budget breakdown popup (action pips click) ─────────────────────── */
+#budget-breakdown {
   display: none;
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.55);
-  align-items: center;
-  justify-content: center;
-  z-index: 88;
-}
-#phase-modal.visible { display: flex; }
-
-.phase-modal-card {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 1.4rem 2rem;
-  min-width: 260px;
-  max-width: 360px;
-  text-align: center;
-  box-shadow: 0 0 36px rgba(80, 40, 120, 0.45);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.phase-modal-icon {
-  font-size: 2.2rem;
-  line-height: 1.2;
-}
-
-.phase-modal-title {
-  font-size: 0.85rem;
-  font-weight: bold;
-  color: var(--text-bright);
-  letter-spacing: 0.06em;
-  margin-bottom: 0.2rem;
-}
-
-.phase-modal-effects {
-  font-size: 0.75rem;
-  color: var(--text-dim);
-  line-height: 1.55;
-}
-
-.phase-modal-budget {
+  padding: 0.6rem 0.9rem;
+  min-width: 180px;
+  max-width: 260px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  z-index: 95;
   font-size: 0.78rem;
   color: var(--text);
-  margin-top: 0.3rem;
-  padding: 0.35rem 0.8rem;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  width: 100%;
 }
-
-.action-pip-row {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.2rem;
-  margin-bottom: 0.15rem;
-}
-
-.action-pip {
-  color: var(--gold, #c8a84b);
-  font-size: 1rem;
-  line-height: 1;
-}
-
-#phase-modal-continue {
-  margin-top: 0.5rem;
-}
-
-/* Phase accent colours on the card border */
-#phase-modal.phase-dawn  .phase-modal-card { border-color: rgba(255,140,0,0.5); }
-#phase-modal.phase-day   .phase-modal-card { border-color: rgba(245,200,66,0.5); }
-#phase-modal.phase-dusk  .phase-modal-card { border-color: rgba(180,60,0,0.5); }
-#phase-modal.phase-night .phase-modal-card { border-color: rgba(123,79,187,0.5); }
+#budget-breakdown.visible { display: block; }
 
 /* ── Story modal (campaign narrative triggers) ──────────────────────── */
 
@@ -4036,6 +3995,14 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 .summary-node.hero-text  { color: var(--hero); }
 .summary-node.witch-text { color: var(--witch); }
+.summary-phase-effects {
+  text-align: center;
+  font-size: 0.72rem;
+  color: rgba(255,255,255,0.5);
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
 .summary-game-over {
   border-bottom: 1px solid rgba(255,255,255,0.15);
   margin-bottom: 0.6rem;

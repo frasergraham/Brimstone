@@ -40,6 +40,16 @@ import { generateMultipleStarts, generateBattleStarts } from '../src/map.js';
 import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS } from '../src/entities.js';
 import { pickAIName }                              from '../src/ai-names.js';
 
+// ── Room phase enum ─────────────────────────────────────────────────────────
+// Single source of truth for where a room is in its lifecycle.
+// Replaces the scattered state.planningPhase / state.resolving / room.status flags.
+export const RoomPhase = Object.freeze({
+  LOBBY:     'lobby',
+  PLANNING:  'planning',
+  RESOLVING: 'resolving',
+  FINISHED:  'finished',
+});
+
 // ── Constants ────────────────────────────────────────────────────────────────
 const RECONNECT_GRACE_MS = parseInt(process.env.RECONNECT_GRACE_MS, 10) || 60_000;
 const TURN_TIMEOUT_MS    = parseInt(process.env.TURN_TIMEOUT_MS, 10)    || 90_000;
@@ -240,7 +250,7 @@ export function broadcastPresenceForPlayer(playerId) {
 
 /** Send planning-phase state to a reconnecting player, including their submitted plan. */
 function _sendReconnectPlanningState(room, playerId, ws) {
-  if (!room.state.planningPhase || room.state.resolving) return;
+  if (room.phase !== RoomPhase.PLANNING) return;
 
   const seat = seatFor(room, playerId);
   const budget = room.state.playerActionsLeft?.get(playerId)
@@ -311,6 +321,92 @@ function _getLastUnwatchedReplay(room) {
   return null;
 }
 
+// ── Unified messages ────────────────────────────────────────────────────────
+// gameJoined: single message sent on connect/reconnect with everything the
+//             client needs — replaces matchFound + stateUpdate + planningPhase
+// roundResolved: sent after resolution with steps + post-resolution state +
+//                next round's planning params — replaces resolutionComplete + planningPhase
+
+/**
+ * Build a `gameJoined` message for a player entering/re-entering a game.
+ */
+function _buildGameJoinedMessage(room, playerId, faction) {
+  const seat = seatFor(room, playerId);
+  const budget = room.state.playerActionsLeft?.get(playerId) ?? 0;
+  const isReady = !!room.state.playerReady?.get(playerId);
+  const submittedPlan = isReady ? (room.state.playerPlans?.get(playerId) ?? null) : null;
+  const playersReady = [];
+  for (const s of room.players) {
+    if (room.state.playerReady?.get(s.playerId)) {
+      playersReady.push({ playerId: s.playerId, name: s.name, faction: s.faction });
+    }
+  }
+
+  let deadline = null;
+  if (room.turnDeadline) {
+    const remaining = room.turnDeadline - Math.floor(Date.now() / 1000);
+    if (remaining > 0) deadline = remaining * 1000;
+  }
+
+  // Include last round replay if the player hasn't submitted and was present
+  let lastRound = null;
+  const wasPresent = (seat?.joinedAtRound ?? 0) < room.state.round;
+  if (!submittedPlan && wasPresent) {
+    lastRound = _getLastUnwatchedReplay(room);
+  }
+
+  return {
+    type: 'gameJoined',
+    roomId: room.id,
+    myPlayerId: playerId,
+    myFaction: faction,
+    gameState: serializeState(room.state),
+    round: {
+      budget,
+      deadline,
+      submittedPlan,
+      playersReady,
+    },
+    lastRound,
+    players: _buildPlayerList(room),
+    isBattle: !!room.config.isBattle,
+    isAsync: !!room.config.isAsync,
+    gameOver: !!room.state.gameOver,
+  };
+}
+
+/**
+ * Build a per-player `roundResolved` message after resolution completes.
+ */
+function _buildRoundResolvedMessage(room, playerId, serializedSteps, finalState) {
+  const budget = room.state.playerActionsLeft?.get(playerId) ?? 0;
+  let deadline = null;
+  if (room.turnDeadline) {
+    const remaining = room.turnDeadline - Math.floor(Date.now() / 1000);
+    if (remaining > 0) deadline = remaining * 1000;
+  }
+
+  // Last round = the round that just resolved (most recent entry in replayRounds)
+  const lastEntry = room.replayRounds[room.replayRounds.length - 1] ?? null;
+
+  return {
+    type: 'roundResolved',
+    steps: serializedSteps,
+    gameState: finalState,
+    round: {
+      budget,
+      deadline,
+    },
+    lastRound: lastEntry ? {
+      roundNum: lastEntry.roundNum,
+      preStateJson: lastEntry.preStateJson,
+      stepsJson: lastEntry.stepsJson,
+    } : null,
+    players: _buildPlayerList(room),
+    gameOver: !!room.state.gameOver,
+  };
+}
+
 /** Append a chronicle entry and trim to CHRONICLE_MAX. */
 function _appendChronicle(room, entry) {
   room.chronicle.push(entry);
@@ -356,7 +452,8 @@ function createRoom(config = {}) {
   const room = {
     id,
     code,
-    status:           'lobby',
+    phase:            RoomPhase.LOBBY,
+    status:           'lobby',       // legacy — kept in sync with phase for backward compat
     isPrivate:        false,
     hostPlayerId:     null,
     config: {
@@ -534,7 +631,7 @@ function _startPlanningTimer(room, keepDeadline = false) {
         const timeoutMs = Math.max(1000, remaining * 1000);
         room.turnTimer = setTimeout(() => {
           room.turnTimer = null;
-          if (room.state.gameOver || !room.state.planningPhase) return;
+          if (room.phase !== RoomPhase.PLANNING) return;
           _autoSubmitMissingPlans(room);
         }, timeoutMs);
         return;
@@ -547,7 +644,7 @@ function _startPlanningTimer(room, keepDeadline = false) {
     const timeoutMs = Math.max(1000, (nextDeadline - now) * 1000);
     room.turnTimer = setTimeout(() => {
       room.turnTimer = null;
-      if (room.state.gameOver || !room.state.planningPhase) return;
+      if (room.phase !== RoomPhase.PLANNING) return;
       _autoSubmitMissingPlans(room);
     }, timeoutMs);
     return;
@@ -559,7 +656,7 @@ function _startPlanningTimer(room, keepDeadline = false) {
 
   room.turnTimer = setTimeout(() => {
     room.turnTimer = null;
-    if (room.state.gameOver || !room.state.planningPhase) return;
+    if (room.phase !== RoomPhase.PLANNING) return;
     _autoSubmitMissingPlans(room);
   }, timeoutMs);
 }
@@ -625,6 +722,7 @@ function _clearTurnTimer(room) {
  */
 function _startPlanningPhase(room, keepDeadline = false) {
   if (room.state.gameOver) return;
+  room.phase = RoomPhase.PLANNING;
   room.state.updateNodeDiscovery();
   room.state.updateExploredHexes();
   room.state.startPlanning();
@@ -684,6 +782,17 @@ function _startPlanningPhase(room, keepDeadline = false) {
       actionsLeft:  room.state.playerActionsLeft?.get(s.playerId) ?? 0,
     })),
   });
+
+  // Send unified roundResolved message if this planning phase follows a resolution
+  if (room._pendingResolutionSteps) {
+    const steps = room._pendingResolutionSteps;
+    const fs = room._pendingResolutionFinalState;
+    for (const seat of room.players) {
+      send(seat.ws, _buildRoundResolvedMessage(room, seat.playerId, steps, fs));
+    }
+    room._pendingResolutionSteps = null;
+    room._pendingResolutionFinalState = null;
+  }
 
   // Persist state — always saved with planningPhase: true so recovery
   // never loads a room stuck between rounds.
@@ -746,7 +855,7 @@ function _runAIPlanSubmission(room) {
     const ctx = faction === 'hero' ? heroCtx : witchCtx;
     setTimeout(() => {
       if (!rooms.has(room.id)) return;
-      if (room.state.gameOver || !room.state.planningPhase) return;
+      if (room.phase !== RoomPhase.PLANNING) return;
       let plan;
       try {
         plan = ai.generatePlan(ctx);
@@ -770,10 +879,11 @@ function _runAIPlanSubmission(room) {
  * @param {boolean} [isTimeout] — true when auto-submitted due to deadline expiry
  */
 function _submitPlayerPlan(room, playerId, plan, isTimeout = false) {
-  if (!room.state.planningPhase) return;
+  if (room.phase !== RoomPhase.PLANNING) return;
 
   if (room.config.isBattle) {
-    console.log(`[battle] _submitPlayerPlan: player=${playerId} plan=${plan.length} actions, isTimeout=${isTimeout}, round=${room.state.round}`);
+    const readyBefore = [...room.state.playerReady.entries()].map(([k, v]) => `${k.slice(0,8)}=${v}`).join(', ');
+    console.log(`[battle] _submitPlayerPlan: player=${playerId.slice(0,8)} plan=${plan.length} actions, isTimeout=${isTimeout}, round=${room.state.round}, readyBefore={${readyBefore}}`);
   }
 
   let allReady;
@@ -845,6 +955,7 @@ function _submitPlayerPlan(room, playerId, plan, isTimeout = false) {
         console.log(`[battle] All plans in but only one faction present — waiting for opponent`);
         // Keep the state in planning so joining players enter the right branch.
         // submitPlayerPlan already set planningPhase=false; restore it.
+        room.phase               = RoomPhase.PLANNING;
         room.state.planningPhase = true;
         room.state.resolving     = false;
         // Restart the deadline timer so the room doesn't sit forever
@@ -862,6 +973,7 @@ function _submitPlayerPlan(room, playerId, plan, isTimeout = false) {
 /** Run the N-player resolver, advance state, and broadcast the result. */
 function _executeResolution(room) {
   _clearTurnTimer(room);
+  room.phase = RoomPhase.RESOLVING;
   const state = room.state;
 
   // Build the playerEntries array for resolvePlansMP
@@ -895,6 +1007,18 @@ function _executeResolution(room) {
 
   if (room.config.isBattle) {
     console.log(`[battle] Resolution complete: ${steps.length} steps, gameOver=${state.gameOver}`);
+    for (const step of steps) {
+      for (const pe of step.playerEvents) {
+        for (const ev of pe.events) {
+          const act = ev.action;
+          const entity = state.entities.find(e => e.id === act?.entityId);
+          const pos = entity ? `@(${entity.col},${entity.row})` : '';
+          const target = act?.toCol != null ? `→(${act.toCol},${act.toRow})` : '';
+          const tag = act ? `${act.type} entity=${act.entityId?.slice(0,8)}${pos}${target}` : '?';
+          console.log(`  step ${step.stepIndex} ${pe.faction}: ${ev.type} ${tag}${ev.reason ? ` — ${ev.reason}` : ''}`);
+        }
+      }
+    }
   }
 
   // Add aggregate battle summary to log before endRound (so it serialises into finalState)
@@ -944,6 +1068,11 @@ function _executeResolution(room) {
     }
   }
 
+  // Store serialized steps for the unified roundResolved message (sent after planning starts)
+  room._pendingResolutionSteps = serializedSteps;
+  room._pendingResolutionFinalState = finalState;
+
+  // Legacy message — kept for old clients
   const resolutionMsg = { type: 'resolutionComplete', steps: serializedSteps, finalState };
   broadcast(room, resolutionMsg);
   broadcastToSpectators(room, resolutionMsg);
@@ -1270,6 +1399,7 @@ function broadcastState(room, reason = 'update') {
 
 function checkAndHandleGameOver(room) {
   if (!room.state.gameOver) return;
+  room.phase = RoomPhase.FINISHED;
 
   const winner = room.state.winner;
   // Don't broadcast a stateUpdate here — the game-over state is already
@@ -1631,6 +1761,7 @@ export function startGame(playerId, roomId) {
   state.fogOfWar   = room.config.fog;
   room.state       = state;
   room.status      = 'playing';
+  room.phase       = RoomPhase.PLANNING;  // game starts in planning
 
   // Set of placeholder AI playerIds — these should NOT submit plans while
   // their slots remain open for late-joining humans.
@@ -1702,6 +1833,13 @@ export function startGame(playerId, roomId) {
 
   broadcastState(room, 'start');
   _startPlanningPhase(room);
+
+  // Send unified gameJoined to each human player (after planning starts so budgets are ready)
+  for (const slot of room.slots) {
+    if (slot.status === 'human' && slot._ws) {
+      send(slot._ws, _buildGameJoinedMessage(room, slot.playerId, slot.faction));
+    }
+  }
 }
 
 /** Player leaves a lobby before the game starts. */
@@ -1768,7 +1906,7 @@ export function joinGame(playerId, playerName, ws, codeOrId) {
     send(ws, { type: 'error', message: 'No open slots available.' });
     return;
   }
-  if (room.state.round !== 1 || !room.state.planningPhase) {
+  if (room.state.round !== 1 || room.phase !== RoomPhase.PLANNING) {
     send(ws, { type: 'error', message: 'Join window has closed.' });
     return;
   }
@@ -1927,7 +2065,7 @@ export function resignGame(playerId, roomId, ws) {
     room.state.players = room.state.players.filter(p => p.id !== playerId);
 
     // Auto-ready if in planning so they don't block resolution
-    if (room.state.planningPhase) {
+    if (room.phase === RoomPhase.PLANNING) {
       room.state.playerReady.set(playerId, true);
       room.state.playerPlans.set(playerId, []);
       room.state.playerActionsLeft.delete(playerId);
@@ -1959,7 +2097,7 @@ export function resignGame(playerId, roomId, ws) {
     _persistRoomSave(room);
 
     // Check if all plans are now ready (the resigned player was the last holdout)
-    if (room.state.planningPhase) {
+    if (room.phase === RoomPhase.PLANNING) {
       const allReady = [...room.state.playerReady.values()].every(Boolean);
       if (allReady && room.players.length > 0) {
         const hasHero  = room.players.some(s => s.faction === 'hero');
@@ -1989,7 +2127,7 @@ export function resignGame(playerId, roomId, ws) {
     broadcastToSpectators(room, msg);
 
     // If we're in planning and the now-AI seat hasn't submitted, auto-generate a plan
-    if (room.state.planningPhase && !room.state.resolving) {
+    if (room.phase === RoomPhase.PLANNING) {
       _runAIPlanSubmission(room);
     }
 
@@ -2063,7 +2201,7 @@ export function handlePlanSubmit(playerId, roomId, plan) {
 
   const state = room.state;
   if (state.gameOver) { send(seat.ws, { type: 'error', message: 'Game is over.' }); return; }
-  if (!state.planningPhase) { send(seat.ws, { type: 'error', message: 'Not in planning phase.' }); return; }
+  if (room.phase !== RoomPhase.PLANNING) { send(seat.ws, { type: 'error', message: 'Not in planning phase.' }); return; }
   if (state.playerReady.get(playerId)) { send(seat.ws, { type: 'error', message: 'Plan already submitted.' }); return; }
   if (!Array.isArray(plan)) { send(seat.ws, { type: 'error', message: 'Invalid plan format.' }); return; }
 
@@ -2087,8 +2225,7 @@ export function handleAction(playerId, roomId, _actionType, _params) {
  *  Limited to once per sender→target per round. */
 export function handleNudge(senderId, roomId, targetPlayerId) {
   const room = rooms.get(roomId);
-  if (!room || room.status !== 'playing') return;
-  if (!room.state.planningPhase) return;
+  if (!room || room.phase !== RoomPhase.PLANNING) return;
 
   const sender = seatFor(room, senderId);
   if (!sender || sender.isAI) return;
@@ -2145,32 +2282,23 @@ export function handleDisconnect(playerId, roomId) {
 }
 
 /**
- * If no human players remain connected in the room, start a timer to
- * hibernate the room (evict from memory, keep in DB for reconnect).
- * Short-timeout games (< 1 hour) get the legacy 60s destruction timer.
- * Long-timeout games hibernate immediately so the DB deadline checker handles them.
+ * If no human players remain connected in the room, start a grace timer
+ * then hibernate (evict from memory, keep in DB for reconnect).
+ * All game types use the same RECONNECT_GRACE_MS window.
  */
 function _checkAllHumansGone(room) {
   const hasHuman = room.players.some(s => !s.isAI);
   if (hasHuman) return;
   if (room.allHumansGoneTimer) return; // already ticking
 
-  const isLongTimeout = (room.config.turnIntervalMs ?? TURN_TIMEOUT_MS) >= 3_600_000;
-
-  if (isLongTimeout) {
-    // Hibernate immediately — the background deadline checker handles resolution
-    console.log(`[room ${room.id}] all humans gone — hibernating (long timeout).`);
-    _hibernateRoom(room);
-  } else {
-    console.log(`[room ${room.id}] all humans gone — starting ${RECONNECT_GRACE_MS / 1000}s destruction timer.`);
-    room.allHumansGoneTimer = setTimeout(() => {
-      const r = rooms.get(room.id);
-      if (!r) return;
-      if (r.players.some(s => !s.isAI)) { r.allHumansGoneTimer = null; return; }
-      console.log(`[room ${room.id}] destruction timer expired — hibernating room.`);
-      _hibernateRoom(r);
-    }, RECONNECT_GRACE_MS);
-  }
+  console.log(`[room ${room.id}] all humans gone — starting ${RECONNECT_GRACE_MS / 1000}s hibernation timer.`);
+  room.allHumansGoneTimer = setTimeout(() => {
+    const r = rooms.get(room.id);
+    if (!r) return;
+    if (r.players.some(s => !s.isAI)) { r.allHumansGoneTimer = null; return; }
+    console.log(`[room ${room.id}] hibernation timer expired — hibernating room.`);
+    _hibernateRoom(r);
+  }, RECONNECT_GRACE_MS);
 }
 
 /**
@@ -2179,6 +2307,13 @@ function _checkAllHumansGone(room) {
  */
 function _hibernateRoom(room) {
   if (!room.state) return;
+  // Clean up transient flags so recovered state starts in a valid planning state.
+  // Resolution is synchronous and should never be interrupted, but defend against it.
+  if (room.phase === RoomPhase.RESOLVING || room.state.resolving) {
+    console.log(`[room ${room.id}] hibernating with resolving=true — clearing`);
+    room.state.resolving = false;
+    room.phase = RoomPhase.PLANNING;
+  }
   try {
     const finalState = serializeState(room.state);
     const firstHero  = room.players.find(s => s.faction === 'hero'  && !s.isAI);
@@ -2235,17 +2370,19 @@ export function recoverRoom(roomId) {
   const savedConfig  = JSON.parse(save.config_json || '{}');
 
   const room = createRoom(savedConfig);
-  // Override the generated ID/code with the saved ones
+  // Override the generated ID/code with the saved ones.
+  // Remove the placeholder entry createRoom added — we'll register the room
+  // under the real ID only after recovery is complete (prevents clients from
+  // connecting to a half-initialized room).
   rooms.delete(room.id);
   codeToRoom.delete(room.code);
   room.id     = roomId;
   room.code   = save.code || room.code;
   room.state  = state;
   room.status = 'playing';
+  room.phase  = state.gameOver ? RoomPhase.FINISHED : RoomPhase.PLANNING;
   room.isPrivate = !!save.is_private;
   room.consecutiveTimeouts = JSON.parse(save.consecutive_timeouts || '{}');
-  rooms.set(room.id, room);
-  if (room.code) codeToRoom.set(room.code, room.id);
 
   // Reconstruct seats from saved players
   for (const p of savedPlayers) {
@@ -2271,41 +2408,79 @@ export function recoverRoom(roomId) {
   }
 
   // Ensure we're in a valid planning state with correct budgets.
-  // startPlanning() resets plans, computes per-player action budgets,
-  // and sets planningPhase = true.
   if (!state.gameOver) {
-    state.planningPhase = true;
-    state.resolving = false;
-    state.startPlanning();
+    const hasSerializedPlanning = state.playerPlans.size > 0 || state.playerReady.size > 0;
 
-    // Restore submitted plans from DB — if a player submitted before the
-    // restart, their plan should still count. submitPlayerPlan sets
-    // playerReady = true for each restored player.
-    try {
-      const planRows = getPlanStatus(roomId, state.round);
-      for (const row of planRows) {
-        if (row.plan_json !== null && row.submitted_at) {
-          const plan = JSON.parse(row.plan_json);
-          try { state.submitPlayerPlan(row.player_id, plan); } catch {}
+    if (hasSerializedPlanning) {
+      // New saves: planning data was restored by deserializeState().
+      // Ensure the flags are correct.
+      state.planningPhase = true;
+      state.resolving = false;
+
+      // The save may have been written before all plans were submitted
+      // (e.g. AI submits after _persistRoomSave). Check the DB for any
+      // plans submitted after the snapshot and merge them in.
+      try {
+        const planRows = getPlanStatus(roomId, state.round);
+        for (const row of planRows) {
+          if (row.plan_json !== null && row.submitted_at && !state.playerReady.get(row.player_id)) {
+            const plan = JSON.parse(row.plan_json);
+            try { state.submitPlayerPlan(row.player_id, plan); } catch {}
+          }
         }
+      } catch (err) {
+        console.error(`[recoverRoom ${roomId}] merge DB plans error:`, err);
       }
-    } catch (err) {
-      console.error(`[recoverRoom ${roomId}] restore plans error:`, err);
+
+      console.log(`[recoverRoom ${roomId}] planning data restored from save+DB (${state.playerReady.size} players, ${[...state.playerReady.values()].filter(Boolean).length} ready)`);
+    } else {
+      // Old saves: planning data not serialized — reconstruct from DB.
+      state.planningPhase = true;
+      state.resolving = false;
+      state.startPlanning();
+
+      try {
+        const planRows = getPlanStatus(roomId, state.round);
+        for (const row of planRows) {
+          if (row.plan_json !== null && row.submitted_at) {
+            const plan = JSON.parse(row.plan_json);
+            try { state.submitPlayerPlan(row.player_id, plan); } catch {}
+          }
+        }
+      } catch (err) {
+        console.error(`[recoverRoom ${roomId}] restore plans from DB error:`, err);
+      }
+      console.log(`[recoverRoom ${roomId}] planning data restored from DB (${state.playerReady.size} players, ${[...state.playerReady.values()].filter(Boolean).length} ready)`);
     }
 
     // If all plans were restored and everyone is ready, resolve immediately.
     // Otherwise start the planning timer for remaining players.
     const allReady = state.players.length > 0 &&
       [...state.playerReady.values()].every(Boolean);
-    if (allReady && !state.gameOver) {
-      // Don't resolve inline during recovery — let the first player connection
-      // trigger it naturally via _submitPlayerPlan → _executeResolution.
-      // Just leave the state as-is (planningPhase=false, resolving=true).
+
+    // Battle mode: don't mark as ready to resolve if only one faction has players.
+    // The solo player's plan stays submitted; resolution triggers when an
+    // opponent joins and submits (same logic as _submitPlayerPlan).
+    const battleBlocked = room.config.isBattle && (
+      !room.players.some(s => s.faction === 'hero') ||
+      !room.players.some(s => s.faction === 'witch')
+    );
+
+    if (allReady && !state.gameOver && !battleBlocked) {
+      // All plans restored — mark as ready to resolve. Resolution will trigger
+      // when the first player connects (via _submitPlayerPlan → _executeResolution).
+      state.planningPhase = false;
+      state.resolving = true;
+      room.phase = RoomPhase.RESOLVING;
       console.log(`[recoverRoom ${roomId}] all plans restored — ready to resolve on next connect`);
     } else {
       _startPlanningTimer(room);
     }
   }
+
+  // Room is fully initialized — register it so clients can find it.
+  rooms.set(room.id, room);
+  if (room.code) codeToRoom.set(room.code, room.id);
 
   console.log(`[room ${roomId}] recovered from DB (round ${state.round}, phase ${state.phase}).`);
   return room;
@@ -2378,9 +2553,12 @@ export function handleReconnect(playerId, roomId, ws) {
 
     broadcastExcept(room, playerId, { type: 'opponentReconnected' });
     _broadcastPresence(room);
+
+    // Unified message — client should prefer this over the legacy sequence
+    send(ws, _buildGameJoinedMessage(room, playerId, seat.faction));
+    // Legacy messages — kept for old clients
     send(ws, { type: 'reconnected', faction: seat.faction, myPlayerId: playerId, roomId: room.id, isAsync: room.config.isAsync ?? false });
     send(ws, { type: 'stateUpdate', reason: 'reconnect', state: serializeState(room.state) });
-
     _sendReconnectPlanningState(room, playerId, ws);
     return true;
   }
@@ -2389,9 +2567,11 @@ export function handleReconnect(playerId, roomId, ws) {
   broadcastExcept(room, playerId, { type: 'opponentReconnected' });
   _broadcastPresence(room);
 
+  // Unified message — client should prefer this over the legacy sequence
+  send(ws, _buildGameJoinedMessage(room, playerId, seat.faction));
+  // Legacy messages — kept for old clients
   send(ws, { type: 'reconnected', faction: seat.faction, myPlayerId: playerId, roomId: room.id, isAsync: room.config.isAsync ?? false });
   send(ws, { type: 'stateUpdate', reason: 'reconnect', state: serializeState(room.state) });
-
   _sendReconnectPlanningState(room, playerId, ws);
   return true;
 }
@@ -2450,13 +2630,13 @@ export function getActiveRoomsForPlayer(playerId) {
     const heroName  = room.players.find(s => s.faction === 'hero')?.name  ?? '';
     const witchName = room.players.find(s => s.faction === 'witch')?.name ?? '';
     // Check if this player still needs to submit a plan
-    const actionNeeded = room.state.planningPhase &&
+    const actionNeeded = room.phase === RoomPhase.PLANNING &&
       !room.state.playerReady?.get(playerId) &&
       !seat.isAI;
     // Count submissions for in-progress display
     const humanPlayers = room.players.filter(s => !s.isAI);
     let playersSubmitted = 0;
-    if (room.state.planningPhase && room.state.playerReady) {
+    if (room.phase === RoomPhase.PLANNING && room.state.playerReady) {
       for (const s of humanPlayers) {
         if (room.state.playerReady.get(s.playerId)) playersSubmitted++;
       }
@@ -2613,13 +2793,72 @@ export function adminResumeGame(savedRoomId) {
 }
 
 /**
+ * Admin: force-end a game. Works for active (in-memory) and saved (hibernated) games.
+ * Declares a winner (or draw), notifies connected players, cleans up completely.
+ * @param {string} gameId - room ID
+ * @param {'active'|'saved'} source - where the game lives
+ * @param {'hero'|'witch'|'draw'} winner - who wins
+ * @returns {{ ok: boolean, error?: string }}
+ */
+export function forceEndGame(gameId, source, winner = 'draw') {
+  if (source === 'active') {
+    const room = rooms.get(gameId);
+    if (!room) return { ok: false, error: 'Room not found.' };
+
+    room.state.gameOver  = true;
+    room.state.winner    = winner === 'draw' ? null : winner;
+    room.state.winReason = 'Game ended by admin.';
+    room.phase = RoomPhase.FINISHED;
+
+    // Notify connected players
+    const snap = serializeState(room.state);
+    broadcast(room, { type: 'stateUpdate', reason: 'adminForceEnd', state: snap });
+
+    // Record stats and clean up (same as normal game-over)
+    try { clearAllPlanStatus(room.id); } catch {}
+    try { deleteSave(room.id); } catch {}
+
+    // Destroy after a brief delay so clients receive the final state
+    setTimeout(() => {
+      if (rooms.has(gameId)) destroyRoom(rooms.get(gameId));
+    }, 2000);
+
+    console.log(`[admin] force-ended active game ${gameId} — winner: ${winner}`);
+    return { ok: true };
+  }
+
+  if (source === 'saved') {
+    const save = getSave(gameId);
+    if (!save) return { ok: false, error: 'Save not found.' };
+
+    // Mark the save as finished so it's never recovered
+    try {
+      upsertSave(gameId, save.hero_player_id, save.witch_player_id,
+        save.hero_name, save.witch_name, save.state,
+        { status: 'finished' });
+    } catch (err) {
+      return { ok: false, error: `Failed to update save: ${err.message}` };
+    }
+
+    try { clearAllPlanStatus(gameId); } catch {}
+
+    console.log(`[admin] force-ended saved game ${gameId} — winner: ${winner}`);
+    return { ok: true };
+  }
+
+  return { ok: false, error: `Cannot end games with source '${source}'.` };
+}
+
+/**
  * Rejoin a game. Tries in-memory first; falls back to DB recovery.
  */
 export function resumeGame(playerId, ws, roomId) {
   if (rooms.has(roomId)) {
     const room = rooms.get(roomId);
-    // If room was saved between rounds, start planning before reconnecting
-    if (!room.state.planningPhase && !room.state.gameOver && !room.state.resolving) {
+    // If room isn't in planning (e.g. stuck in resolving or between rounds), fix it
+    if (room.phase !== RoomPhase.PLANNING && room.phase !== RoomPhase.FINISHED) {
+      console.log(`[room ${roomId}] resumeGame: phase=${room.phase} — forcing planning`);
+      room.state.resolving = false;
       _startPlanningPhase(room);
     }
     const rejoined = handleReconnect(playerId, roomId, ws);
@@ -2631,13 +2870,14 @@ export function resumeGame(playerId, ws, roomId) {
   if (room) {
     const rejoined = handleReconnect(playerId, roomId, ws);
     if (rejoined) {
-      if (room.state.planningPhase && !room.state.resolving) {
+      if (room.phase === RoomPhase.PLANNING) {
         // Already in planning — restart timer and kick AI plans
         _startPlanningTimer(room);
         _runAIPlanSubmission(room);
-      } else if (!room.state.gameOver) {
-        // Room was saved between rounds (after endRound, before startPlanning).
-        // Kick off a fresh planning phase so the client isn't stuck.
+      } else if (room.phase !== RoomPhase.FINISHED) {
+        // Stuck in resolving or between rounds — force planning
+        console.log(`[room ${roomId}] resumeGame (DB recovery): phase=${room.phase} — forcing planning`);
+        room.state.resolving = false;
         _startPlanningPhase(room);
       }
       return;
@@ -3156,6 +3396,7 @@ export function createBattleRoom(battleOpts = {}) {
     turnIntervalMs: 43_200_000,
   });
   room.status = 'playing';  // battles skip the lobby phase
+  room.phase  = RoomPhase.PLANNING;
   room.isPrivate = false;
 
   // Initialize GameState with battle-sized map (42×42)
@@ -3202,8 +3443,15 @@ export function joinBattle(playerId, playerName, ws, roomId) {
     existingSeat.ws = ws;
     const faction = existingSeat.faction;
 
+    // If room isn't in planning (e.g. stuck in resolving after restart),
+    // force it back to planning so the player can act.
+    if (room.phase !== RoomPhase.PLANNING && room.phase !== RoomPhase.FINISHED) {
+      console.log(`[battle] reconnect: room ${room.id} phase=${room.phase} — forcing planning`);
+      room.state.resolving = false;
+      _startPlanningPhase(room);
+    }
+
     // Use matchFound — the reliable game-entry path.
-    // Room should already be in planning (saved that way, or forced by recoverRoom).
     send(ws, {
       type:       'matchFound',
       roomId:     room.id,
@@ -3215,9 +3463,11 @@ export function joinBattle(playerId, playerName, ws, roomId) {
       isBattle:   true,
     });
     send(ws, { type: 'stateUpdate', reason: 'battleReconnect', state: serializeState(room.state) });
+    // Unified message
+    send(ws, _buildGameJoinedMessage(room, playerId, faction));
 
     // Send planning state if in planning phase
-    if (room.state.planningPhase && !room.state.resolving) {
+    if (room.phase === RoomPhase.PLANNING) {
       const budget = room.state.playerActionsLeft?.get(playerId)
         ?? (faction === 'hero' ? room.state.heroActionsLeft : room.state.witchActionsLeft);
 
@@ -3305,14 +3555,19 @@ export function joinBattle(playerId, playerName, ws, roomId) {
   });
   broadcastState(room, 'playerJoined');
 
-  // Ensure the room is in planning (may have been saved between rounds)
-  if (!room.state.planningPhase && !room.state.resolving && !room.state.gameOver) {
+  // Ensure the room is in planning (may have been saved between rounds or
+  // stuck in resolving after a server restart).
+  if (room.phase !== RoomPhase.PLANNING && room.phase !== RoomPhase.FINISHED) {
+    console.log(`[battle] new player join: room ${room.id} phase=${room.phase} — forcing planning`);
+    room.state.resolving = false;
     _startPlanningPhase(room);
   }
 
   // Add the new player to the planning phase
-  if (room.state.planningPhase) {
+  if (room.phase === RoomPhase.PLANNING) {
     // Already in planning — add the new player to the existing phase
+    const readyBefore = [...room.state.playerReady.entries()].map(([k, v]) => `${k.slice(0,8)}=${v}`).join(', ');
+    console.log(`[battle] adding player ${playerId.slice(0,8)} to planning, readyBefore={${readyBefore}}`);
     room.state.playerReady.set(playerId, false);
     const nb = countHeldNodes(faction, room.state.witchObjectives, room.state.entities);
     room.state.playerActionsLeft.set(playerId, computeActionsForPlayer(playerId, faction, room.state.phase, room.state.entities, nb));
@@ -3323,6 +3578,7 @@ export function joinBattle(playerId, playerName, ws, roomId) {
       if (remaining > 0) timeoutMs = remaining * 1000;
     }
 
+    // Legacy planningPhase message
     send(ws, {
       type:            'planningPhase',
       myActionsLeft:   room.state.playerActionsLeft.get(playerId) ?? 0,
@@ -3331,9 +3587,12 @@ export function joinBattle(playerId, playerName, ws, roomId) {
       timeoutMs,
       players:          _buildPlayerList(room),
     });
+    // Unified message
+    send(ws, _buildGameJoinedMessage(room, playerId, faction));
   } else {
     // First player — start a fresh planning phase
     _startPlanningPhase(room);
+    send(ws, _buildGameJoinedMessage(room, playerId, faction));
   }
 
   _broadcastPresence(room);
@@ -3499,12 +3758,13 @@ export function checkDeadlines() {
       const room = recoverRoom(roomId);
       if (!room) continue;
 
-      // If room was saved between rounds, start planning first
-      if (!room.state.planningPhase && !room.state.gameOver) {
+      // If room isn't in planning, force it
+      if (room.phase !== RoomPhase.PLANNING && room.phase !== RoomPhase.FINISHED) {
+        room.state.resolving = false;
         _startPlanningPhase(room);
       }
 
-      if (room.state.planningPhase && !room.state.resolving) {
+      if (room.phase === RoomPhase.PLANNING) {
         console.log(`[room ${roomId}] deadline expired — auto-submitting empty plans.`);
         _autoSubmitMissingPlans(room);
       }
