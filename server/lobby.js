@@ -882,7 +882,8 @@ function _submitPlayerPlan(room, playerId, plan, isTimeout = false) {
   if (room.phase !== RoomPhase.PLANNING) return;
 
   if (room.config.isBattle) {
-    console.log(`[battle] _submitPlayerPlan: player=${playerId} plan=${plan.length} actions, isTimeout=${isTimeout}, round=${room.state.round}`);
+    const readyBefore = [...room.state.playerReady.entries()].map(([k, v]) => `${k.slice(0,8)}=${v}`).join(', ');
+    console.log(`[battle] _submitPlayerPlan: player=${playerId.slice(0,8)} plan=${plan.length} actions, isTimeout=${isTimeout}, round=${room.state.round}, readyBefore={${readyBefore}}`);
   }
 
   let allReady;
@@ -2456,7 +2457,16 @@ export function recoverRoom(roomId) {
     // Otherwise start the planning timer for remaining players.
     const allReady = state.players.length > 0 &&
       [...state.playerReady.values()].every(Boolean);
-    if (allReady && !state.gameOver) {
+
+    // Battle mode: don't mark as ready to resolve if only one faction has players.
+    // The solo player's plan stays submitted; resolution triggers when an
+    // opponent joins and submits (same logic as _submitPlayerPlan).
+    const battleBlocked = room.config.isBattle && (
+      !room.players.some(s => s.faction === 'hero') ||
+      !room.players.some(s => s.faction === 'witch')
+    );
+
+    if (allReady && !state.gameOver && !battleBlocked) {
       // All plans restored — mark as ready to resolve. Resolution will trigger
       // when the first player connects (via _submitPlayerPlan → _executeResolution).
       state.planningPhase = false;
@@ -3499,6 +3509,8 @@ export function joinBattle(playerId, playerName, ws, roomId) {
   // Add the new player to the planning phase
   if (room.phase === RoomPhase.PLANNING) {
     // Already in planning — add the new player to the existing phase
+    const readyBefore = [...room.state.playerReady.entries()].map(([k, v]) => `${k.slice(0,8)}=${v}`).join(', ');
+    console.log(`[battle] adding player ${playerId.slice(0,8)} to planning, readyBefore={${readyBefore}}`);
     room.state.playerReady.set(playerId, false);
     const nb = countHeldNodes(faction, room.state.witchObjectives, room.state.entities);
     room.state.playerActionsLeft.set(playerId, computeActionsForPlayer(playerId, faction, room.state.phase, room.state.entities, nb));

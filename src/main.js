@@ -1690,16 +1690,8 @@ function initOnline(mirrorState, myFaction, mpClient) {
   // Start battle countdown if in battle mode
   if (state.gameMode === 'battle') _startBattleCountdownTimer();
 
-  // If the game is already in a planning phase (e.g. reconnecting to a battle),
-  // enter planning mode immediately but suppress the phase modal — the
-  // planningPhase message arriving right after will show it (after any replay).
-  if (state.planningPhase && mpClient.myFaction) {
-    const budget = (mpClient.myFaction === 'hero' ? state.heroActionsLeft : state.witchActionsLeft) || 3;
-    ui.enterPlanningMode(mpClient.myFaction, budget, 0);
-    ui.onPlanSubmit = (plan) => mpClient.submitPlan(plan);
-    ui.onReturnToMenu = () => { location.reload(); };
-    ui.onReplayLastTurn = () => _replayLastTurnInline();
-  }
+  // Planning mode entry is handled by the gameJoined handler — it has the
+  // correct budget, deadline, and replay data. Don't enter planning here.
 
   redrawOnline();
 
@@ -6478,6 +6470,7 @@ function _createMpClient() {
         // Play last round replay if available and this isn't a same-round resync
         if (lastRound && !round.submittedPlan && !isResync) {
           _playReconnectReplay(lastRound).then(() => {
+            ui._hasReplayHistory = _onlineRoundHistory.length > 0;
             ui.enterPlanningMode(faction, round.budget, round.deadline ?? 0);
             ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
             ui.onReturnToMenu = () => { location.reload(); };

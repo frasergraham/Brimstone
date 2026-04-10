@@ -3,7 +3,6 @@
 // Checks for expired battles and triggers end-of-week scoring.
 
 import { createBattleRoom, getActiveBattleRoom, recoverRoom, destroyRoom } from './lobby.js';
-import { sendPush, getAllPlayerIdsWithTokens } from './push.js';
 import { notifyBattleEnded } from './notifications.js';
 import { getActiveBattleSaves, deleteSave, createCompletedGame, getSaveRounds } from './saves.js';
 import { randomUUID } from 'crypto';
@@ -118,10 +117,6 @@ export function ensureBattleExists() {
   const endsAt = _battleEndPST();
   const roomId = createBattleRoom({ endsAt });
   console.log(`[battle-scheduler] Created new battle ${roomId}, ends ${new Date(endsAt * 1000).toISOString()}`);
-
-  _notifyBattleStarted(roomId).catch(err =>
-    console.error('[battle-scheduler] Failed to send battle start notifications:', err)
-  );
 
   return roomId;
 }
@@ -238,25 +233,3 @@ function _endBattle(room) {
 
 // ── Push notifications ──────────────────────────────────────────────────────
 
-async function _notifyBattleStarted(roomId) {
-  let playerIds;
-  try {
-    playerIds = getAllPlayerIdsWithTokens();
-  } catch {
-    console.log('[battle-scheduler] Could not query device tokens for broadcast');
-    return;
-  }
-
-  for (const playerId of playerIds) {
-    try {
-      await sendPush(playerId, {
-        title: 'The Battle for Caleb\'s Hollow has begun!',
-        body: 'A new two-week 10v10 battle awaits. Turns at noon and midnight. Join now!',
-        roomId,
-      });
-    } catch {
-      // Individual push failures are non-fatal
-    }
-  }
-  console.log(`[battle-scheduler] Sent battle-started notification to ${playerIds.length} players`);
-}
