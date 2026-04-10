@@ -116,6 +116,9 @@ export class Faction {
   /** Can this entity perform the explore action? */
   canExplore(_entity) { return true; }
 
+  /** Can this faction discover and recruit NPCs (survivors) through exploration? */
+  canDiscoverNPCs() { return false; }
+
   /** Return the opposing faction's id */
   getOpponentId() { throw new Error('Subclass must implement getOpponentId'); }
 
@@ -316,6 +319,7 @@ export class HeroFaction extends Faction {
 
   canEquipHorse()  { return true; }
   canEquipWeapon() { return true; }
+  canDiscoverNPCs() { return true; }
 
   getInventory(state) { return state.inventory.hero; }
 

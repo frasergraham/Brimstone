@@ -373,24 +373,26 @@ export function getValidActions(state, actor) {
 function _buildAbilityAction(state, actor) {
   switch (actor.ability) {
     case SurvivorAbility.HEAL: {
-      // Check for a co-located hero owned by the same player (or any hero-faction leader)
-      const heroHere = state.entities.find(e =>
-        e.alive && e.type === EntityType.HERO &&
+      // Check for a co-located faction leader (owned by same player or same faction)
+      const actorFaction = getFaction(actor.owner);
+      const leaderHere = state.entities.find(e =>
+        e.alive && e.type === actorFaction.leaderType &&
         e.col === actor.col && e.row === actor.row &&
-        (e.ownerId === actor.ownerId || e.owner === 'hero') &&
+        (e.ownerId === actor.ownerId || e.owner === actor.owner) &&
         e.hp < e.maxHp
       );
-      if (!heroHere) return null;
+      if (!leaderHere) return null;
       return { type: ActionType.USE_ABILITY, ability: SurvivorAbility.HEAL };
     }
     case SurvivorAbility.INSPIRE: {
-      // Only available when a hero is on the same hex
-      const heroHere = state.entities.some(e =>
-        e.alive && e.type === EntityType.HERO &&
+      // Only available when faction leader is on the same hex
+      const actorFaction = getFaction(actor.owner);
+      const leaderHere = state.entities.some(e =>
+        e.alive && e.type === actorFaction.leaderType &&
         e.col === actor.col && e.row === actor.row &&
-        (e.ownerId === actor.ownerId || e.owner === 'hero')
+        (e.ownerId === actor.ownerId || e.owner === actor.owner)
       );
-      if (!heroHere) return null;
+      if (!leaderHere) return null;
       return { type: ActionType.USE_ABILITY, ability: SurvivorAbility.INSPIRE };
     }
     case SurvivorAbility.RALLY:
@@ -433,8 +435,8 @@ function _triggerSurvivorEncounter(state, actor, col, row) {
   const st = tile(state, col, row);
   if (!st?.hiddenSurvivor) return null;
 
-  // Campaign cap: skip encounter if hero side already found max survivors
-  if (actor.owner === 'hero' &&
+  // Campaign cap: skip encounter if faction already found max discoverable NPCs
+  if (getFaction(actor.owner).canDiscoverNPCs() &&
       state.maxDiscoverableSurvivors != null &&
       state.discoveredSurvivorCount >= state.maxDiscoverableSurvivors) {
     st.hiddenSurvivor = false;
@@ -449,7 +451,7 @@ function _triggerSurvivorEncounter(state, actor, col, row) {
   const faction = getFaction(actor.owner);
   const entity = faction.createDiscoveryEntity(col, row, actor.ownerId);
   state.entities.push(entity);
-  if (actor.owner === 'hero') {
+  if (getFaction(actor.owner).canDiscoverNPCs()) {
     state.discoveredSurvivorCount = (state.discoveredSurvivorCount || 0) + 1;
   }
   const result = faction.buildDiscoveryResult(entity);
@@ -567,7 +569,7 @@ export function executeExplore(state, actor) {
     _applyLoot(state, actor, rollLoot(table), log, lootItems);
   }
 
-  if (isHerbalist && actor.owner === 'hero') {
+  if (isHerbalist && getFaction(actor.owner).canDiscoverNPCs()) {
     const herbInv = getFaction(actor.owner).getInventory(state);
     herbInv[ResourceType.HERBS] = (herbInv[ResourceType.HERBS] || 0) + 1;
     log.push(`${actor.displayName}'s keen eye also finds Herbs!`);
@@ -957,44 +959,46 @@ export function executeUseAbility(state, actor) {
 
   switch (actor.ability) {
     case SurvivorAbility.HEAL: {
-      // Heal the hero-type entity owned by the same player on the same hex.
-      // Falls back to any hero-faction leader co-located (covers 1v1 offline).
-      const hero = state.entities.find(e =>
-        e.alive && e.type === EntityType.HERO &&
+      // Heal the faction leader on the same hex (owned by same player or same faction).
+      const leaderType = getFaction(actor.owner).leaderType;
+      const leader = state.entities.find(e =>
+        e.alive && e.type === leaderType &&
         e.col === actor.col && e.row === actor.row &&
-        (e.ownerId === actor.ownerId || e.owner === 'hero')
+        (e.ownerId === actor.ownerId || e.owner === actor.owner)
       );
-      if (!hero)
-        return { success: false, log: ['A hero must be on the same hex.'] };
-      if (hero.hp >= hero.maxHp)
-        return { success: false, log: ['Hero is already at full health.'] };
-      hero.heal(1);
-      log.push(`${actor.displayName} tends ${hero.displayName}'s wounds. (+1 HP, now ${hero.hp}/${hero.maxHp})`);
+      if (!leader)
+        return { success: false, log: ['A leader must be on the same hex.'] };
+      if (leader.hp >= leader.maxHp)
+        return { success: false, log: ['Leader is already at full health.'] };
+      leader.heal(1);
+      log.push(`${actor.displayName} tends ${leader.displayName}'s wounds. (+1 HP, now ${leader.hp}/${leader.maxHp})`);
       return { success: true, log, cost: 1 };
     }
 
     case SurvivorAbility.INSPIRE: {
-      // Inspire the hero-type entity owned by the same player on the same hex.
-      const hero = state.entities.find(e =>
-        e.alive && e.type === EntityType.HERO &&
+      // Inspire the faction leader on the same hex.
+      const leaderType = getFaction(actor.owner).leaderType;
+      const leader = state.entities.find(e =>
+        e.alive && e.type === leaderType &&
         e.col === actor.col && e.row === actor.row &&
-        (e.ownerId === actor.ownerId || e.owner === 'hero')
+        (e.ownerId === actor.ownerId || e.owner === actor.owner)
       );
-      if (!hero)
-        return { success: false, log: ['A hero must be on the same hex.'] };
-      hero.attackBonus += 1;
-      log.push(`${actor.displayName} rallies ${hero.displayName}! (+1 ATK this battle)`);
+      if (!leader)
+        return { success: false, log: ['A leader must be on the same hex.'] };
+      leader.attackBonus += 1;
+      log.push(`${actor.displayName} rallies ${leader.displayName}! (+1 ATK this battle)`);
       return { success: true, log, cost: 0 };
     }
 
     case SurvivorAbility.RALLY: {
       // Return budgetBonus so both offline and multiplayer resolvers can apply it
       // per-player without touching the shared state.actionsLeft.
-      const rallyHero = state.entities.find(e =>
-        e.alive && e.type === EntityType.HERO &&
-        (e.ownerId === actor.ownerId || e.owner === 'hero')
+      const leaderType = getFaction(actor.owner).leaderType;
+      const rallyLeader = state.entities.find(e =>
+        e.alive && e.type === leaderType &&
+        (e.ownerId === actor.ownerId || e.owner === actor.owner)
       );
-      log.push(`${actor.displayName}'s words fortify ${rallyHero?.displayName ?? 'the hero'}'s spirit! (+1 action)`);
+      log.push(`${actor.displayName}'s words fortify ${rallyLeader?.displayName ?? 'the leader'}'s spirit! (+1 action)`);
       return { success: true, log, cost: 0, budgetBonus: 1 };
     }
 
