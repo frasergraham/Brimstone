@@ -1010,7 +1010,10 @@ function _executeResolution(room) {
       for (const pe of step.playerEvents) {
         for (const ev of pe.events) {
           const act = ev.action;
-          const tag = act ? `${act.type} entity=${act.entityId?.slice(0,8)}` : '?';
+          const entity = state.entities.find(e => e.id === act?.entityId);
+          const pos = entity ? `@(${entity.col},${entity.row})` : '';
+          const target = act?.toCol != null ? `→(${act.toCol},${act.toRow})` : '';
+          const tag = act ? `${act.type} entity=${act.entityId?.slice(0,8)}${pos}${target}` : '?';
           console.log(`  step ${step.stepIndex} ${pe.faction}: ${ev.type} ${tag}${ev.reason ? ` — ${ev.reason}` : ''}`);
         }
       }

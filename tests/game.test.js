@@ -596,14 +596,14 @@ describe('submitPlayerPlan (multiplayer)', () => {
     assert.equal(r2, true, 'ready after both submissions in round 2');
   });
 
-  test('double submission throws in the same round', () => {
+  test('double submission is silently ignored', () => {
     const { state, witchId } = makeMultiplayerState();
     state.startPlanning();
-    state.submitPlayerPlan(witchId, []);
-    assert.throws(
-      () => state.submitPlayerPlan(witchId, []),
-      /already submitted/i,
-    );
+    state.submitPlayerPlan(witchId, [{ type: 'move', entityId: 'e1', toCol: 1, toRow: 1 }]);
+    // Second submission is ignored — returns current allReady without changing the plan
+    const result = state.submitPlayerPlan(witchId, []);
+    assert.equal(state.playerPlans.get(witchId).length, 1, 'original plan preserved');
+    assert.equal(typeof result, 'boolean');
   });
 
   test('submitting for unknown playerId throws', () => {
