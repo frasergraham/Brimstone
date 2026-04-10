@@ -13,6 +13,7 @@ const root      = join(__dirname, '..');
 
 const serverSource = readFileSync(join(root, 'server.js'), 'utf8');
 const lobbySource  = readFileSync(join(root, 'server', 'lobby.js'), 'utf8');
+const asyncRoomsSource = readFileSync(join(root, 'server', 'async-game-rooms.js'), 'utf8');
 const mpSource     = readFileSync(join(root, 'src', 'multiplayer.js'), 'utf8');
 const mainSource   = readFileSync(join(root, 'src', 'main.js'), 'utf8');
 
@@ -96,20 +97,20 @@ describe('server/lobby.js — gamesUpdate notifications', () => {
   });
 
   test('sends gamesUpdate after async plan submission', () => {
-    const asyncPlanArea = lobbySource.indexOf("type: 'asyncPlanAccepted'");
-    const nextNotify = lobbySource.indexOf('_notifyGamesUpdate', asyncPlanArea);
+    const asyncPlanArea = asyncRoomsSource.indexOf("type: 'asyncPlanAccepted'");
+    const nextNotify = asyncRoomsSource.indexOf('_notifyGamesUpdate', asyncPlanArea);
     assert.ok(
       asyncPlanArea > -1 && nextNotify > -1 && nextNotify - asyncPlanArea < 300,
-      'lobby.js should call _notifyGamesUpdate near async plan acceptance',
+      'async-game-rooms.js should call _notifyGamesUpdate near async plan acceptance',
     );
   });
 
   test('sends gamesUpdate after async round resolution', () => {
-    const asyncResArea = lobbySource.indexOf('_asyncBroadcast(roomId, resolutionMsg)');
-    const nextNotify = lobbySource.indexOf('_notifyGamesUpdate', asyncResArea);
+    const asyncResArea = asyncRoomsSource.indexOf('_asyncBroadcast(roomId, resolutionMsg)');
+    const nextNotify = asyncRoomsSource.indexOf('_notifyGamesUpdate', asyncResArea);
     assert.ok(
       asyncResArea > -1 && nextNotify > -1 && nextNotify - asyncResArea < 200,
-      'lobby.js should call _notifyGamesUpdate near async resolution broadcast',
+      'async-game-rooms.js should call _notifyGamesUpdate near async resolution broadcast',
     );
   });
 });
