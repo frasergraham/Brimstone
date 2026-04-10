@@ -342,39 +342,61 @@ These are easily externalized into a theme/flavor config file but aren't blockin
 
 ---
 
-## Summary: Priority Roadmap
+## Implementation Progress
 
-### Must-do before N-faction support
-1. Generalize inventory, node control, state-sync to use faction ID maps instead of hardcoded hero/witch fields (Finding 1, Phase 1)
-2. Replace hardcoded faction checks in actions.js/game.js with Faction method calls (Finding 1, Phase 2)
-3. Create shared AI engine base class to avoid duplicating 1,200+ LOC per new faction (Finding 2)
+### Completed
 
-### Should-do for maintainability
-4. Create `src/theme.js` as single color source of truth (Finding 4)
-5. Move entity globals into GameState (Finding 5)
-6. Clean up dead code and redundant enums (Finding 6)
-7. Add double-submission guards in lobby.js (Finding 7)
+**Finding 1 — Hardcoded Two-Faction Assumption:**
+- Removed `HERO_ACTION_CAP`, `WITCH_ACTION_CAP` (use `Faction.actionCap`)
+- Removed `getVisibleEnemyHexes` / `getVisibleHeroHexes` (callers use `getVisiblePositions`)
+- Generalized `nodeController()` to N-faction via `Map<factionId, Set>`
+- Renamed `inventory.shared` → `inventory.hero` (keyed by faction ID)
+- Generalized `exploredHexes` init via `allFactions()` and node discovery via `faction.getNodeSeenKey()`
+- Added `Faction.canDiscoverNPCs()`, replaced hardcoded hero checks in actions.js
+- Replaced `EntityType.HERO` checks in heal/inspire/rally with `getFaction(owner).leaderType`
+- Backward-compat migration for old saves in `deserializeState()`
+- Reduced hardcoded `=== 'hero'`/`=== 'witch'` from 258 to ~246 across 23 files
 
-### Nice-to-have
-8. Decompose god classes incrementally (Finding 3) — highest effort, do over time
-9. Externalize theme narrative into config (Finding 8)
-10. Extract shared enums to break circular import (Finding 9)
+**Finding 2 — Duplicated AI Engine Code:**
+- Created `BaseAIEngine` class with common 5-stage pipeline
+- `WitchAIEngine` and `HeroAIEngine` extend it, overriding 7 methods
+- Exported shared `clamp01`, `allocateBudget`, `personalityName`, `updateAllyClaimedNodes`
+- Adding a 3rd faction AI = ~40 lines of overrides + faction generators (was 1,200+)
 
-### Estimated total effort
-- N-faction readiness (items 1-3): ~2 weeks
-- Maintainability (items 4-7): ~1 week
-- Full cleanup (items 8-10): ongoing, incremental
+**Finding 3 — God Classes:**
+- Extracted `src/playback.js` (304 LOC) from `main.js` — full-game replay engine
+- Extracted `server/async-game-rooms.js` (519 LOC) from `lobby.js` — async game lifecycle
+- Extracted `src/ui-popup.js` (263 LOC) from `ui.js` — arc menu positioning
+- `main.js`: 6,842 → 6,578 LOC | `lobby.js`: 4,066 → 3,590 LOC | `ui.js`: 4,347 → 4,065 LOC
 
----
+**Finding 4 — Theme Colors Scattered:**
+- Created `src/theme.js` with `FACTION_THEME` — per-faction primary, highlight, nodeFill, playerColors
+- Renderer uses `getFactionTheme(ctrl)` instead of inline hex strings
+- `HERO_PLAYER_COLORS` / `WITCH_PLAYER_COLORS` re-export from theme.js
 
-## Verification
+**Finding 6 — Dead Code:**
+- Removed duplicate `groupByEntity()` from resolver.js (imports from planner.js)
 
-After implementing changes, validate with:
-```bash
-npm test                                          # all tests pass
-node scripts/headless.js 500 standard             # 1v1 balance unchanged
-node scripts/headless.js 100 standard --players 2 # 2v2 balance unchanged
-node scripts/ai-matrix.js 50                      # personality cross-balance
-```
+**Finding 7 — Race Conditions:**
+- Added `playerReady.get(playerId)` guard at top of `_submitPlayerPlan()` to prevent double-submission
 
-For N-faction verification, add a stub 3rd faction and run headless simulations to confirm the engine handles >2 factions without crashes.
+### Remaining
+
+**Finding 3 — God Classes (incremental):**
+- Battle rooms (~400 LOC in lobby.js) — deeply coupled to room lifecycle internals
+- Campaign setup (~800 LOC in main.js) — integrated with game resolution loop
+- Resolution summary (~400 LOC in ui.js) — large method, could become standalone
+
+**Finding 5 — Module-Level Mutable State:**
+- `_nextId`, `_forcedDice`, `_usedRosterIndices` in entities.js are process-global
+- Moving into GameState requires passing state to entity factory functions (invasive)
+
+**Finding 8 — Theme-Coupled Narrative:**
+- "Caleb's Hollow" strings in game.js log messages and WIN_REASON
+- Survivor roster with colonial New England bios
+- Low priority; externalize to a flavor config when re-theming is needed
+
+**Finding 9 — Circular Import:**
+- `game.js` ↔ `factions.js` via Phase enum
+- Works correctly today (Phase is simple frozen enum)
+- Low priority; would require updating 25+ import statements
