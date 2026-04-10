@@ -1,5 +1,26 @@
 [
   {
+    "version": "1.3.27",
+    "date": "2026-04-10",
+    "summary": "New features, and bug fixes",
+    "notes": [
+      "Admin force-end game button",
+      "Simplify state management and merge turn dialogs",
+      "Add auto-turn bot script and battle mode debug logging",
+      "Fade out killed units during turn resolution",
+      "Add first-battle-round and node contestation metrics to headless",
+      "Add battle mode (10v10) support and performance metrics to headless runner",
+      "Replay full game button works after resign",
+      "Battle mode state fixes and cleanup",
+      "Remove planningPhase guard from submitPlayerPlan",
+      "Cycle bar and round label into header bar, clarify action pips",
+      "Admin tab selection via URL hash",
+      "Include package-lock.json version bump",
+      "Update package-lock.json version to match package.json",
+      "Sync package-lock.json version to 1.3.26"
+    ]
+  },
+  {
     "version": "1.3.26",
     "date": "2026-04-09",
     "summary": "Bug fixes",
