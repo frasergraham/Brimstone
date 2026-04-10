@@ -1,5 +1,17 @@
 [
   {
+    "version": "1.3.29",
+    "date": "2026-04-10",
+    "summary": "New features, and bug fixes",
+    "notes": [
+      "Update admin panel to display multiple battle rooms",
+      "Support multiple concurrent battle rooms",
+      "Use per-type dedup windows for deadline push notifications",
+      "Clean up battle room status in test teardown",
+      "Sync package-lock.json version to 1.3.28"
+    ]
+  },
+  {
     "version": "1.3.28",
     "date": "2026-04-10",
     "summary": "Bug fixes",
