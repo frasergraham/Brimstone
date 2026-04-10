@@ -17,7 +17,7 @@ import { upsertSave, deleteSave, getSave,
          getPlanStatus, clearPlanStatus,
          clearAllPlanStatus, getExpiredDeadlineGames,
          getApproachingDeadlineGames,
-         getActiveGamesForPlayer,
+         getActiveGamesForPlayer, getAllPlayingSaves,
          isVersionCompatible }                            from './saves.js';
 import { insertAsyncGame, getAsyncGame, getAsyncGameByCode,
          getAsyncGamesForPlayer, activateAsyncGame,
@@ -56,6 +56,10 @@ const TURN_TIMEOUT_MS    = parseInt(process.env.TURN_TIMEOUT_MS, 10)    || 90_00
 const ROUND_DELAY_MS     = parseInt(process.env.ROUND_DELAY_MS, 10)     || 4000;
 const CHRONICLE_MAX      = 100;    // max rounds retained per room in the chronicle
 const BATTLE_ADVANCE_THRESHOLD_S = 30 * 60; // 30 minutes — if less than this until deadline, advance to next
+
+/** When true, rooms are never evicted from memory. Games stay loaded and the
+ *  save system only persists snapshots for crash recovery. */
+const HIBERNATION_DISABLED = true;
 
 /** Next battle turn deadline: noon or midnight PST, whichever is soonest.
  *  Returns a Unix timestamp (seconds) in true UTC. */
@@ -599,6 +603,7 @@ export function pruneOrphanedRooms() {
         destroyRoom(room);
       }
     } else if (room.status === 'playing') {
+      if (HIBERNATION_DISABLED) continue; // games stay in memory regardless
       // Playing room with no human seats (all taken over by AI) and no cleanup
       // timer already running. Note: isAI is only set to true after AI takeover
       // from 2 consecutive missed deadlines — idle human players in async games
@@ -2310,6 +2315,7 @@ export function handleDisconnect(playerId, roomId) {
  * All game types use the same RECONNECT_GRACE_MS window.
  */
 function _checkAllHumansGone(room) {
+  if (HIBERNATION_DISABLED) return; // games stay in memory regardless
   const hasHuman = room.players.some(s => !s.isAI);
   if (hasHuman) return;
   if (room.allHumansGoneTimer) return; // already ticking
@@ -2330,6 +2336,12 @@ function _checkAllHumansGone(room) {
  */
 function _hibernateRoom(room) {
   if (!room.state) return;
+  if (HIBERNATION_DISABLED) {
+    // In always-in-memory mode, persist the save for crash recovery
+    // but do NOT destroy the room from memory.
+    _persistRoomSave(room);
+    return;
+  }
   // Clean up transient flags so recovered state starts in a valid planning state.
   // Resolution is synchronous and should never be interrupted, but defend against it.
   if (room.phase === RoomPhase.RESOLVING || room.state.resolving) {
@@ -2507,6 +2519,33 @@ export function recoverRoom(roomId) {
 
   console.log(`[room ${roomId}] recovered from DB (round ${state.round}, phase ${state.phase}).`);
   return room;
+}
+
+/**
+ * Load all saved games into memory at startup.
+ * Calls recoverRoom() for each, skipping any that fail.
+ * Returns the count of successfully loaded rooms.
+ */
+export function loadAllRooms() {
+  const saves = getAllPlayingSaves();
+  let loaded = 0;
+  let skipped = 0;
+  for (const save of saves) {
+    if (rooms.has(save.room_id)) { skipped++; continue; }
+    try {
+      const room = recoverRoom(save.room_id);
+      if (room) {
+        loaded++;
+      } else {
+        skipped++;
+      }
+    } catch (err) {
+      console.error(`[loadAllRooms] failed to recover ${save.room_id}:`, err);
+      skipped++;
+    }
+  }
+  console.log(`[loadAllRooms] loaded ${loaded} rooms, skipped ${skipped}.`);
+  return loaded;
 }
 
 /** Handle a player reconnecting. */
@@ -2688,8 +2727,8 @@ export function getActiveRoomsForPlayer(playerId) {
     });
   }
 
-  // DB-hibernated games
-  try {
+  // DB-hibernated games (only needed when hibernation is active)
+  if (!HIBERNATION_DISABLED) try {
     const dbGames = getActiveGamesForPlayer(playerId);
     for (const g of dbGames) {
       if (seenRoomIds.has(g.room_id)) continue;
@@ -2828,8 +2867,7 @@ export function forceEndGame(gameId, source, winner = 'draw') {
     const room = rooms.get(gameId);
     if (!room) return { ok: false, error: 'Room not found.' };
 
-    room.state.gameOver  = true;
-    room.state.winner    = winner === 'draw' ? null : winner;
+    room.state.winner    = winner === 'draw' ? 'draw' : winner;
     room.state.winReason = 'Game ended by admin.';
     room.phase = RoomPhase.FINISHED;
 
@@ -2870,6 +2908,39 @@ export function forceEndGame(gameId, source, winner = 'draw') {
   }
 
   return { ok: false, error: `Cannot end games with source '${source}'.` };
+}
+
+/**
+ * Admin: completely delete a game from all storage.
+ * Notifies connected clients, removes from rooms Map, and deletes from all DB tables.
+ */
+export function nukeGame(gameId) {
+  const room = rooms.get(gameId);
+  if (room) {
+    // Notify connected players so their clients show game-over
+    if (room.state) {
+      room.state.winner    = 'draw';
+      room.state.winReason = 'Game deleted by admin.';
+      room.phase = RoomPhase.FINISHED;
+      const snap = serializeState(room.state);
+      broadcast(room, { type: 'stateUpdate', reason: 'adminForceEnd', state: snap });
+    }
+    // Destroy after a brief delay so clients receive the final state
+    setTimeout(() => {
+      if (rooms.has(gameId)) destroyRoom(rooms.get(gameId));
+    }, 2000);
+  }
+
+  // Remove from all DB tables
+  try { clearAllPlanStatus(gameId); } catch (err) {
+    console.error(`[nukeGame] clearAllPlanStatus error for ${gameId}:`, err);
+  }
+  try { deleteSave(gameId); } catch (err) {
+    console.error(`[nukeGame] deleteSave error for ${gameId}:`, err);
+  }
+
+  console.log(`[admin] nuked game ${gameId}`);
+  return { ok: true };
 }
 
 /**

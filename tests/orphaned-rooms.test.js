@@ -140,7 +140,7 @@ describe('orphaned room cleanup', () => {
     assert.ok(!afterList.some(r => r.id === roomId), 'orphaned lobby should NOT be in browse list after prune');
   });
 
-  test('pruneOrphanedRooms hibernates playing room with all-AI and no timer', () => {
+  test('pruneOrphanedRooms keeps playing room in memory when hibernation is disabled', () => {
     const ws = mockWs();
     const roomId = createLobby('test-orphan-p1', 'Host', ws, {
       playersPerSide: 1, mapSize: 'skirmish', fog: 'none',
@@ -158,8 +158,7 @@ describe('orphaned room cleanup', () => {
 
     pruneOrphanedRooms();
 
-    assert.equal(getRoom(roomId), null, 'room should be evicted from memory');
-    const save = getSave(roomId);
-    assert.ok(save, 'room should be hibernated to DB');
+    // With HIBERNATION_DISABLED, room stays in memory
+    assert.ok(getRoom(roomId), 'room should remain in memory when hibernation is disabled');
   });
 });
