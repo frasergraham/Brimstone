@@ -161,8 +161,8 @@ export class GameState {
     this.fogOfWar = (witchIsAI || heroIsAI) ? 'partial' : 'none';
 
     // Hexes that have been seen at least once per faction (full fog memory).
-    // Set<hexKey> per faction — persisted via state-sync.
-    this.exploredHexes = { hero: new Set(), witch: new Set() };
+    // { [factionId]: Set<hexKey> } — persisted via state-sync.
+    this.exploredHexes = Object.fromEntries(allFactions().map(f => [f.id, new Set()]));
 
     // Per-mission loot table overrides (campaign only). null = use defaults.
     // Shape: { remove?: string[], buildings?: {[key]: table}, terrain?: {[key]: table} }
@@ -850,19 +850,12 @@ export class GameState {
    */
   updateNodeDiscovery() {
     for (const obj of this.witchObjectives) {
-      if (!obj.seenByHero) {
-        const heroFaction = getFaction('hero');
-        obj.seenByHero = this.entities.some(e => {
-          if (!e.alive || e.owner !== 'hero') return false;
-          const range = heroFaction.getSightRange(this.phase, e.ability === SurvivorAbility.SCOUT);
-          return obj.hexes.some(h => hexDistance(e.col, e.row, h.col, h.row) <= range);
-        });
-      }
-      if (!obj.seenByWitch) {
-        const witchFaction = getFaction('witch');
-        obj.seenByWitch = this.entities.some(e => {
-          if (!e.alive || e.owner !== 'witch') return false;
-          const range = witchFaction.getSightRange(this.phase, false);
+      for (const fac of allFactions()) {
+        const key = fac.getNodeSeenKey();
+        if (obj[key]) continue; // already discovered
+        obj[key] = this.entities.some(e => {
+          if (!e.alive || e.owner !== fac.id) return false;
+          const range = fac.getSightRange(this.phase, e.ability === SurvivorAbility.SCOUT);
           return obj.hexes.some(h => hexDistance(e.col, e.row, h.col, h.row) <= range);
         });
       }

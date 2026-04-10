@@ -1017,10 +1017,10 @@ export class Renderer {
 
     // Objective glows and symbols — only drawn once a node has been discovered
     for (const obj of state.witchObjectives) {
+      const myFactionId = humanIsHero ? 'hero' : humanIsWitch ? 'witch' : null;
       const shouldDraw = !fogActive
-        || (humanIsHero  && obj.seenByHero)
-        || (humanIsWitch && obj.seenByWitch)
-        || (!humanIsHero && !humanIsWitch); // AI vs AI / spectator
+        || (myFactionId && obj[getFaction(myFactionId).getNodeSeenKey()])
+        || !myFactionId; // AI vs AI / spectator
       if (!shouldDraw) continue;
       for (const h of obj.hexes) {
         this._drawObjectiveHexGlow(h.col, h.row, obj, state);
