@@ -10,7 +10,7 @@
 //   HUNT_WITCH      — seek and destroy the witch for kill wins
 
 import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, nearestBuilding, isOnNode, inBuilding, roundsUntilScoring, scoreNodeFeasibility, HERO_PERSONALITIES } from './ai.js';
-import { EnginePlanSimState, allocateBudget, assemblePlan } from './ai-engine.js';
+import { EnginePlanSimState, BaseAIEngine, allocateBudget, assemblePlan, clamp01, updateAllyClaimedNodes, personalityName } from './ai-engine.js';
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
 import { EntityType } from './entities.js';
@@ -235,8 +235,6 @@ export function assessHeroBoard(sim) {
 }
 
 // ── Stage 2: Goal Scoring ────────────────────────────────────────────────────
-
-function clamp01(v) { return Math.max(0, Math.min(1, v)); }
 
 export function scoreHeroGoals(board, goalWeights = null) {
   // PROTECT_HERO — only when genuinely critical (hero has 14HP, hard to kill)
@@ -948,103 +946,37 @@ export function genHuntWitch(sim, board, budget) {
 
 // ── NvN Ally Coordination ───────────────────────────────────────────────────
 
-function _updateHeroAllyClaimedNodes(plan, board, allyContext) {
-  for (const action of plan) {
-    if (action.type !== PlanActionType.MOVE) continue;
-    for (const node of board.nodes) {
-      if (node.obj.hexes?.some(h => h.col === action.toCol && h.row === action.toRow)) {
-        node.obj.hexes.forEach(h => allyContext.claimedNodes.add(hexKey(h.col, h.row)));
-      }
-    }
-  }
-}
-
-function _heroPersonalityName(config) {
-  for (const [name, cfg] of Object.entries(HERO_PERSONALITY_CONFIGS)) {
-    if (cfg === config) return name;
-  }
-  return 'custom';
-}
-
 // ── HeroAIEngine ────────────────────────────────────────────────────────────
 
-export class HeroAIEngine {
+export class HeroAIEngine extends BaseAIEngine {
   constructor(state, onStateChange, thinkDelay = 600, playerId = null, config = null) {
-    this.state = state;
-    this.onStateChange = onStateChange;
-    this.onBattleResult = null;
-    this.thinkDelay = thinkDelay;
-    this.playerId = playerId;
-    this.config = config ?? HERO_PERSONALITY_CONFIGS.balanced;
-
-    this._prevPositions = new Map();
-
-    this.debugCapture = false;
-    this.lastDebugData = null;
+    super(state, onStateChange, thinkDelay, playerId, config,
+      'hero', HERO_PERSONALITY_CONFIGS.balanced, HERO_PERSONALITY_CONFIGS);
   }
 
-  generatePlan(allyContext = null) {
-    const sim = new HeroEnginePlanSimState(this.state, this.playerId);
-    const board = assessHeroBoard(sim);
+  createSim() {
+    return new HeroEnginePlanSimState(this.state, this.playerId);
+  }
 
-    board.allyContext = allyContext;
+  assessBoard(sim) { return assessHeroBoard(sim); }
+  scoreGoals(board, goalWeights) { return scoreHeroGoals(board, goalWeights); }
+  getLeader(board) { return board.hero; }
 
-    if (!board.hero) {
-      this.lastDebugData = null;
-      return [];
-    }
-
-    const cfg = this.config;
-    const scores = scoreHeroGoals(board, cfg.goalWeights);
-    const budget = allocateBudget(scores, board.totalBudget);
-
-    // Stage 4: Strategic generator ordering
-    // PROTECT first (survival), then CONTROL (primary win condition gets first pick of units),
-    // then EXPLORE (build army with remaining budget), then HUNT (opportunistic)
-    const generators = [
+  getGenerators(sim, board, budget, cfg) {
+    return [
       { goal: HeroGoal.PROTECT_HERO,  fn: () => genProtectHero(sim, board, budget[HeroGoal.PROTECT_HERO], cfg) },
       { goal: HeroGoal.CONTROL_NODES, fn: () => genControlNodes(sim, board, budget[HeroGoal.CONTROL_NODES], cfg) },
       { goal: HeroGoal.EXPLORE,       fn: () => genExplore(sim, board, budget[HeroGoal.EXPLORE], cfg) },
       { goal: HeroGoal.HUNT_WITCH,    fn: () => genHuntWitch(sim, board, budget[HeroGoal.HUNT_WITCH]) },
     ];
+  }
 
-    const allActions = [];
-    for (const gen of generators) {
-      allActions.push(...gen.fn());
-    }
-
-    const heroEntity = sim.entities.find(e => e.id === board.hero.id);
-    const plan = assemblePlan(allActions, sim, board, this._prevPositions,
-      (plan, sim, board, remaining, prevPositions) => {
-        fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositions);
-      }
-    );
-
-    // Capture debug data AFTER assemblePlan so overlay matches actual execution
-    if (this.debugCapture) {
-      this.lastDebugData = {
-        faction: 'hero',
-        personality: _heroPersonalityName(this.config),
-        board,
-        scores: { ...scores },
-        budget: { ...budget },
-        actions: plan.map(a => ({ ...a })),
-        config: this.config,
-        unitCommitments: new Map(sim.unitCommitments),
-      };
-    }
-
-    if (allyContext) {
-      _updateHeroAllyClaimedNodes(plan, board, allyContext);
-    }
-
-    for (const e of sim.entities) {
-      if (e.alive && e.owner === 'hero') {
-        this._prevPositions.set(e.id, { col: e.col, row: e.row });
-      }
-    }
-
-    return plan;
+  getGapFillFn(sim, board) {
+    const heroEntity = sim.entities.find(e => e.id === board.hero?.id);
+    if (!heroEntity) return null;
+    return (plan, sim, board, remaining, prevPositions) => {
+      fillGapsHero(plan, sim, board, heroEntity, remaining, prevPositions);
+    };
   }
 }
 
