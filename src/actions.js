@@ -22,7 +22,6 @@ export const ActionType = Object.freeze({
   USE_ABILITY:  'use_ability',
   GUARD:        'guard',
   SOUND_HORN:   'sound_horn',
-  END_TURN:     'end_turn',
 });
 
 // ── Helpers ────────────────────────────────────────────────────────────────
