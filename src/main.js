@@ -4515,52 +4515,55 @@ async function _showBattleScreen() {
       return;
     }
 
-    // Game info box
-    const gameInfo = document.getElementById('battle-game-info');
-    gameInfo.style.display = '';
-    document.getElementById('battle-hero-score').textContent = status.heroScore;
-    document.getElementById('battle-witch-score').textContent = status.witchScore;
-    const hLabel = status.heroCount === 1 ? 'hero' : 'heroes';
-    const wLabel = status.witchCount === 1 ? 'witch' : 'witches';
-    document.getElementById('battle-meta-line').textContent =
-      `Round ${status.round} · ${status.heroCount} ${hLabel} vs ${status.witchCount} ${wLabel} · Ends in ${_formatTimeRemaining(status.endsAt)}`;
+    const my = status.myBattle; // player's own battle room, or null
 
-    // Action buttons
-    joinBtn.dataset.roomId = status.roomId;
-    spectateBtn.dataset.roomId = status.roomId;
-
-    if (status.joined) {
+    if (my) {
+      // ── Player is in a battle ─────────────────────────────────────────
       statusLine.textContent = '';
+
+      // Game info box — show the player's battle
+      const gameInfo = document.getElementById('battle-game-info');
+      gameInfo.style.display = '';
+      document.getElementById('battle-hero-score').textContent = my.heroScore;
+      document.getElementById('battle-witch-score').textContent = my.witchScore;
+      const hLabel = my.heroCount === 1 ? 'hero' : 'heroes';
+      const wLabel = my.witchCount === 1 ? 'witch' : 'witches';
+      const battlesNote = status.totalBattles > 1 ? ` · ${status.totalBattles} battles active` : '';
+      document.getElementById('battle-meta-line').textContent =
+        `Round ${my.round} · ${my.heroCount} ${hLabel} vs ${my.witchCount} ${wLabel} · Ends in ${_formatTimeRemaining(status.endsAt)}${battlesNote}`;
 
       // Your status box
       const myBox = document.getElementById('battle-my-status');
       myBox.style.display = '';
-      const fIcon = status.myFaction === 'hero' ? '⚔' : '✦';
-      const fName = status.myFaction === 'hero' ? 'Hero' : 'Witch';
+      const fIcon = my.myFaction === 'hero' ? '⚔' : '✦';
+      const fName = my.myFaction === 'hero' ? 'Hero' : 'Witch';
       document.getElementById('battle-my-faction').innerHTML =
-        `<span style="color:var(--${status.myFaction})">${fIcon} Fighting as ${fName}</span>`;
-      if (status.mySubmitted) {
+        `<span style="color:var(--${my.myFaction})">${fIcon} Fighting as ${fName}</span>`;
+      if (my.mySubmitted) {
         document.getElementById('battle-my-plan-status').innerHTML =
           '<span style="color:var(--green)">✓ Plan submitted</span>';
       } else {
         document.getElementById('battle-my-plan-status').innerHTML =
           '<span style="color:var(--day)">⚠ Plan not yet submitted</span>';
       }
-      if (status.turnDeadline) {
+      if (my.turnDeadline) {
         const deadlineEl = document.getElementById('battle-my-deadline');
-        const secsLeft = status.turnDeadline - Math.floor(Date.now() / 1000);
-        deadlineEl.textContent = '⏱ Deadline in ' + _formatTimeRemaining(status.turnDeadline);
+        const secsLeft = my.turnDeadline - Math.floor(Date.now() / 1000);
+        deadlineEl.textContent = '⏱ Deadline in ' + _formatTimeRemaining(my.turnDeadline);
         deadlineEl.style.color = secsLeft <= 1800 ? 'var(--red)' : 'var(--text-dim)';
       }
 
+      // Action buttons
+      joinBtn.dataset.roomId = my.roomId;
+      spectateBtn.dataset.roomId = my.roomId;
       joinBtn.style.display = '';
       joinBtn.textContent = 'Return to Battle';
 
       // Player list (collapsible)
       const playersSection = document.getElementById('battle-players-section');
-      if (status.players?.length > 0) {
+      if (my.players?.length > 0) {
         playersSection.style.display = '';
-        const playerData = status.players.map(p => ({
+        const playerData = my.players.map(p => ({
           playerId: p.playerId, name: p.name, faction: p.faction,
           isAI: p.isAI, _submitted: p.submitted,
           connected: p.connected, active: p.active,
@@ -4581,11 +4584,24 @@ async function _showBattleScreen() {
           }
         });
       }
-    } else if (status.isFull) {
-      statusLine.textContent = 'Battle is full';
+    } else if (status.allFull) {
+      // ── All battles are full ──────────────────────────────────────────
+      const n = status.totalBattles;
+      statusLine.textContent = `${n} battle${n !== 1 ? 's' : ''} in progress — all full`;
       spectateBtn.style.display = '';
+      // Pick any room for spectating
+      if (status.battles.length > 0) spectateBtn.dataset.roomId = status.battles[0].roomId;
     } else {
-      statusLine.textContent = 'Battle in progress — join a faction!';
+      // ── Player can join ───────────────────────────────────────────────
+      const n = status.totalBattles;
+      const totalPlayers = status.totalHeroes + status.totalWitches;
+      if (n > 0) {
+        statusLine.textContent = `${n} battle${n !== 1 ? 's' : ''} in progress (${totalPlayers} players) — join a faction!`;
+      } else {
+        statusLine.textContent = 'Battle in progress — join a faction!';
+      }
+      // No roomId — server will auto-select the best room
+      joinBtn.dataset.roomId = '';
       joinBtn.style.display = '';
       joinBtn.textContent = 'Join the Battle';
     }
@@ -4596,7 +4612,7 @@ async function _showBattleScreen() {
   // Update main menu badge
   const badge = document.getElementById('battle-badge');
   if (badge) {
-    if (_battleStatus?.joined && !_battleStatus.mySubmitted) {
+    if (_battleStatus?.myBattle && !_battleStatus.myBattle.mySubmitted) {
       badge.style.display = '';
       badge.textContent = '!';
     } else {
@@ -4647,8 +4663,7 @@ document.getElementById('btn-battle-signin')?.addEventListener('click', () => {
 document.getElementById('btn-battle-main')?.addEventListener('click', () => _showBattleScreen());
 document.getElementById('btn-battle-back')?.addEventListener('click', () => showStep('mode'));
 document.getElementById('btn-battle-join')?.addEventListener('click', function() {
-  const roomId = this.dataset.roomId;
-  if (!roomId) return;
+  const roomId = this.dataset.roomId || null;  // empty string → null for auto-select
   // Tear down everything — kill any in-flight reconnect, destroy old UI
   if (ui) ui.destroy();
   state = null; renderer = null; ui = null;
@@ -5034,7 +5049,7 @@ async function _updateBattleBadge() {
   try {
     const res = await fetch(`${window.BRIMSTONE_SERVER || ''}/api/battle-status?token=${encodeURIComponent(session.token)}`);
     const status = await res.json();
-    if (status?.joined && !status.mySubmitted) {
+    if (status?.myBattle && !status.myBattle.mySubmitted) {
       badge.style.display = '';
       badge.textContent = '!';
     } else {

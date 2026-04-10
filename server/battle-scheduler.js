@@ -1,8 +1,10 @@
-// Battle for Caleb's Hollow — weekly game lifecycle scheduler.
+// Battle for Caleb's Hollow — battle lifecycle scheduler.
 // Creates a new battle room on startup (recovering from DB if possible).
-// Checks for expired battles and triggers end-of-week scoring.
+// Supports multiple concurrent battle rooms — new rooms are created on demand
+// when existing rooms fill up. All rooms share the same endsAt deadline.
+// Checks for expired battles and triggers end-of-period scoring.
 
-import { createBattleRoom, getActiveBattleRoom, recoverRoom, destroyRoom } from './lobby.js';
+import { createBattleRoom, getActiveBattleRoom, getActiveBattleRooms, recoverRoom, destroyRoom } from './lobby.js';
 import { notifyBattleEnded } from './notifications.js';
 import { getActiveBattleSaves, deleteSave, createCompletedGame, getSaveRounds } from './saves.js';
 import { randomUUID } from 'crypto';
@@ -66,7 +68,7 @@ function _battleEndPST() {
 // ── Battle lifecycle ────────────────────────────────────────────────────────
 
 /**
- * Ensure a battle room exists in memory.
+ * Ensure at least one battle room exists in memory.
  * 1. Check in-memory rooms first.
  * 2. Try to recover from DB (survives server restarts).
  * 3. If nothing found, create a fresh one.
@@ -82,10 +84,9 @@ export function ensureBattleExists() {
   // Try recovering from DB
   try {
     const battleSaves = getActiveBattleSaves();
+    let recoveredAny = false;
     for (const save of battleSaves) {
-      // Check if the battle hasn't expired
       try {
-        const cfg = JSON.parse(save.config_json || '{}');
         const battleConfig = save.state?.battleConfig;
         if (battleConfig?.endsAt && Math.floor(Date.now() / 1000) < battleConfig.endsAt) {
           // Sanity check: discard corrupted saves (e.g. from a resolution loop)
@@ -98,7 +99,7 @@ export function ensureBattleExists() {
           const room = recoverRoom(save.room_id);
           if (room) {
             console.log(`[battle-scheduler] Recovered battle ${room.id} from DB (round ${room.state.round})`);
-            return room.id;
+            recoveredAny = true;
           }
         } else {
           // Expired battle in DB — clean it up
@@ -108,6 +109,10 @@ export function ensureBattleExists() {
       } catch (err) {
         console.error(`[battle-scheduler] Failed to recover battle ${save.room_id}:`, err);
       }
+    }
+    if (recoveredAny) {
+      const first = getActiveBattleRoom();
+      return first?.id ?? null;
     }
   } catch (err) {
     console.error('[battle-scheduler] Failed to query battle saves:', err);
@@ -123,32 +128,46 @@ export function ensureBattleExists() {
 
 /**
  * Periodic check — called every 30 seconds.
- * Ensures there is always exactly one active battle on the server.
+ * Ensures there is always at least one active battle on the server.
+ * When the battle period expires, ends ALL active battle rooms and creates a new one.
  */
 export function checkBattleLifecycle() {
-  const room = getActiveBattleRoom();
-  if (!room) {
+  const battleRooms = getActiveBattleRooms();
+  if (battleRooms.length === 0) {
     ensureBattleExists();
     return;
   }
 
-  const endsAt = room.state?.battleConfig?.endsAt;
-  if (endsAt && Math.floor(Date.now() / 1000) >= endsAt && !room.state.winner) {
-    _endBattle(room);
+  // Check if any battles have expired
+  const now = Math.floor(Date.now() / 1000);
+  let anyExpired = false;
+  for (const room of battleRooms) {
+    const endsAt = room.state?.battleConfig?.endsAt;
+    if (endsAt && now >= endsAt && !room.state.winner) {
+      _endBattle(room);
+      anyExpired = true;
+    }
+  }
+
+  // If we ended all battles, create a fresh one
+  if (anyExpired && getActiveBattleRooms().length === 0) {
+    ensureBattleExists();
   }
 }
 
 /**
- * Admin action: forcibly end the current battle and start a new one.
+ * Admin action: forcibly end all active battles and start a new one.
  * Triggers all end-of-battle flows (scoring, notifications, cleanup).
- * Returns the new battle's roomId, or null if no active battle.
+ * Returns the new battle's roomId, or null if no active battles.
  */
 export function endBattleEarly() {
-  const room = getActiveBattleRoom();
-  if (!room) return null;
+  const battleRooms = getActiveBattleRooms();
+  if (battleRooms.length === 0) return null;
 
-  console.log(`[battle-scheduler] Admin ending battle ${room.id} early`);
-  _endBattle(room);
+  for (const room of battleRooms) {
+    console.log(`[battle-scheduler] Admin ending battle ${room.id} early`);
+    _endBattle(room);
+  }
 
   // Create the next battle immediately
   return ensureBattleExists();
@@ -230,6 +249,3 @@ function _endBattle(room) {
   // Destroy the room
   destroyRoom(room);
 }
-
-// ── Push notifications ──────────────────────────────────────────────────────
-
