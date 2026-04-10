@@ -5491,7 +5491,7 @@ async function _applyOnlinePlanningPhase(payload) {
     ui.exitPlanningMode();
     ui.enterPlanningMode(mp.myFaction, budget, timeoutMs ?? 0);
   }
-  ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
+  ui.onPlanSubmit = (plan) => mp.submitPlan(plan, state.round);
   ui.onReturnToMenu = () => { location.reload(); };
   ui.onReplayLastTurn = () => _replayLastTurnInline();
 
@@ -5535,7 +5535,7 @@ async function _replayLastTurnInline() {
     ?? (mp?.myFaction ? getFaction(mp.myFaction).getActionsLeft(state) : state.heroActionsLeft);
   ui._hasReplayHistory = _onlineRoundHistory.length > 0;
   ui.enterPlanningMode(mp.myFaction, budget, 0);
-  ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
+  ui.onPlanSubmit = (plan) => mp.submitPlan(plan, state.round);
   ui.onReturnToMenu = () => { location.reload(); };
   ui.onReplayLastTurn = () => _replayLastTurnInline();
 
@@ -6076,13 +6076,13 @@ function _createMpClient() {
           _playReconnectReplay(lastRound).then(() => {
             ui._hasReplayHistory = _onlineRoundHistory.length > 0;
             ui.enterPlanningMode(faction, round.budget, round.deadline ?? 0);
-            ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
+            ui.onPlanSubmit = (plan) => mp.submitPlan(plan, state.round);
             ui.onReturnToMenu = () => { location.reload(); };
             ui.onReplayLastTurn = () => _replayLastTurnInline();
           });
         } else {
           ui.enterPlanningMode(faction, round.budget, round.deadline ?? 0);
-          ui.onPlanSubmit = (plan) => mp.submitPlan(plan);
+          ui.onPlanSubmit = (plan) => mp.submitPlan(plan, state.round);
           ui.onReturnToMenu = () => { location.reload(); };
           ui.onReplayLastTurn = () => _replayLastTurnInline();
         }
