@@ -11,22 +11,13 @@ import {
 } from '../src/actions.js';
 import { EntityType } from '../src/entities.js';
 import { hexDistance, getNeighbors, hexKey } from '../src/hex.js';
-import { PlanActionType, snapEntity } from '../src/planner.js';
+import { PlanActionType, snapEntity, groupPlanByEntity } from '../src/planner.js';
 import { Phase, countHeldNodes } from '../src/game.js';
 import { ResourceType } from '../src/tiles.js';
 import { getFaction } from '../src/factions.js';
 
-// ── Per-unit queue grouping ──────────────────────────────────────────────────
-// Groups a flat PlanAction[] into per-entity queues for simultaneous execution.
-
-function groupByEntity(plan) {
-  const map = new Map();
-  for (const action of (plan ?? [])) {
-    if (!map.has(action.entityId)) map.set(action.entityId, []);
-    map.get(action.entityId).push(action);
-  }
-  return map;
-}
+// groupByEntity removed — now uses groupPlanByEntity from planner.js
+const groupByEntity = groupPlanByEntity;
 
 // ── Event types ──────────────────────────────────────────────────────────────
 

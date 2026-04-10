@@ -880,6 +880,8 @@ function _runAIPlanSubmission(room) {
  */
 function _submitPlayerPlan(room, playerId, plan, isTimeout = false) {
   if (room.phase !== RoomPhase.PLANNING) return;
+  // Guard against double-submission (timeout + manual submit racing)
+  if (room.state.playerReady?.get(playerId)) return;
 
   if (room.config.isBattle) {
     const readyBefore = [...room.state.playerReady.entries()].map(([k, v]) => `${k.slice(0,8)}=${v}`).join(', ');
