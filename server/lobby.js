@@ -2195,7 +2195,7 @@ export function sendFriendInvite(player, roomId, targetPlayerId) {
 }
 
 /** Handle a plan submission from a player. */
-export function handlePlanSubmit(playerId, roomId, plan) {
+export function handlePlanSubmit(playerId, roomId, plan, round) {
   const room = rooms.get(roomId);
   if (!room || !room.state) return;
 
@@ -2205,7 +2205,27 @@ export function handlePlanSubmit(playerId, roomId, plan) {
   const state = room.state;
   if (state.gameOver) { send(seat.ws, { type: 'error', message: 'Game is over.' }); return; }
   if (room.phase !== RoomPhase.PLANNING) { send(seat.ws, { type: 'error', message: 'Not in planning phase.' }); return; }
-  if (state.playerReady.get(playerId)) { send(seat.ws, { type: 'error', message: 'Plan already submitted.' }); return; }
+
+  // Reject stale-round submissions (client sent plan for an earlier round)
+  if (round != null && round !== state.round) {
+    console.warn(`[room ${roomId}] Rejected stale plan from ${playerId}: client round=${round}, server round=${state.round}`);
+    send(seat.ws, { type: 'error', message: `Stale plan rejected (round ${round}, current ${state.round}).` });
+    return;
+  }
+
+  // Allow overwriting a previously submitted empty plan with a populated one
+  if (state.playerReady.get(playerId)) {
+    const existingPlan = state.playerPlans.get(playerId);
+    if (existingPlan && existingPlan.length === 0 && plan.length > 0) {
+      console.log(`[room ${roomId}] Overwriting empty plan for ${playerId} with ${plan.length} actions (round=${state.round})`);
+      state.playerPlans.set(playerId, plan);
+      try { upsertPlanStatus(roomId, playerId, state.round, plan); } catch (_) { /* best-effort */ }
+      return;
+    }
+    send(seat.ws, { type: 'error', message: 'Plan already submitted.' });
+    return;
+  }
+
   if (!Array.isArray(plan)) { send(seat.ws, { type: 'error', message: 'Invalid plan format.' }); return; }
 
   _submitPlayerPlan(room, playerId, plan);

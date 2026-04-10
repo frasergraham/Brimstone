@@ -1174,7 +1174,7 @@ function route(ws, cs, msg) {
 
     case 'submitPlan': {
       if (!cs.player || !cs.roomId) return;
-      handlePlanSubmit(cs.player.id, cs.roomId, msg.plan ?? []);
+      handlePlanSubmit(cs.player.id, cs.roomId, msg.plan ?? [], msg.round);
       break;
     }
 
