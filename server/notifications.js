@@ -9,7 +9,16 @@ import { sendPush, hasDeviceTokens, getDeviceTokens } from './push.js';
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const EMAIL_FROM     = process.env.EMAIL_FROM || "Caleb's Hollow <noreply@calebshollow.com>";
-const DEDUP_WINDOW_S = 10; // 10 seconds — don't resend same notification type
+const DEDUP_WINDOW_S = 10; // 10 seconds — default for most notification types
+
+// Per-type dedup windows.  Deadline notifications are checked every 60s by
+// checkApproachingDeadlines(), so the window must be at least as wide as the
+// approach query window to avoid sending a push every poll cycle.
+export const DEDUP_WINDOWS = Object.freeze({
+  default:              DEDUP_WINDOW_S,
+  deadline_approaching: 600,   // 10 minutes — matches standard approach window
+  battle_deadline:      3600,  // 60 minutes — matches battle approach window
+});
 
 function _baseUrl() {
   if (process.env.BASE_URL) return process.env.BASE_URL;
@@ -52,7 +61,8 @@ function _getPlayerEmail(playerId) {
 }
 
 function _shouldSend(roomId, playerId, type) {
-  const cutoff = Math.floor(Date.now() / 1000) - DEDUP_WINDOW_S;
+  const windowS = DEDUP_WINDOWS[type] ?? DEDUP_WINDOWS.default;
+  const cutoff = Math.floor(Date.now() / 1000) - windowS;
   return !_recentNotif.get(roomId, playerId, type, cutoff);
 }
 
