@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.3.31",
+    "date": "2026-04-10",
+    "summary": "Bug fixes",
+    "notes": [
+      "Restore multi-battle recovery, keep hibernation race fix"
+    ]
+  },
+  {
     "version": "1.3.30",
     "date": "2026-04-10",
     "summary": "Bug fixes",

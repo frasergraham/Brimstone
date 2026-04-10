@@ -81,11 +81,11 @@ export function ensureBattleExists() {
     return existing.id;
   }
 
-  // Try recovering from DB — only recover ONE battle room (the newest).
-  // If multiple saves exist, clean up the extras to prevent duplication.
+  // Try recovering from DB — recover all valid battle saves (multiple
+  // concurrent battle rooms is intentional when rooms fill up).
   try {
     const battleSaves = getActiveBattleSaves();
-    let recovered = null;
+    let recoveredAny = false;
 
     for (const save of battleSaves) {
       try {
@@ -104,24 +104,20 @@ export function ensureBattleExists() {
           continue;
         }
 
-        if (recovered) {
-          // Already recovered one — delete duplicates
-          console.log(`[battle-scheduler] Deleting duplicate battle save ${save.room_id}`);
-          deleteSave(save.room_id);
-          continue;
-        }
-
         const room = recoverRoom(save.room_id);
         if (room) {
           console.log(`[battle-scheduler] Recovered battle ${room.id} from DB (round ${room.state.round})`);
-          recovered = room;
+          recoveredAny = true;
         }
       } catch (err) {
         console.error(`[battle-scheduler] Failed to recover battle ${save.room_id}:`, err);
       }
     }
 
-    if (recovered) return recovered.id;
+    if (recoveredAny) {
+      const first = getActiveBattleRoom();
+      return first?.id ?? null;
+    }
   } catch (err) {
     console.error('[battle-scheduler] Failed to query battle saves:', err);
   }
