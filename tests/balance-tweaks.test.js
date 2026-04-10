@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { GameState, Phase, Player } from '../src/game.js';
 import {
   ActionType, getValidActions, executeSoundHorn,
-  getVisibleHeroHexes,
+  getVisiblePositions,
 } from '../src/actions.js';
 import {
   EntityType,
@@ -170,7 +170,7 @@ describe('Sound Horn action', () => {
     const state = freshState();
     const hero = createHero(3, 3);
     state.entities.push(hero);
-    state.inventory.shared.food = 5;
+    state.inventory.hero.food = 5;
 
     const actions = getValidActions(state, hero);
     const horn = actions.find(a => a.type === ActionType.SOUND_HORN);
@@ -192,7 +192,7 @@ describe('Sound Horn action', () => {
     const state = freshState();
     const hero = createHero(3, 3);
     state.entities.push(hero);
-    state.inventory.shared.food = 0;
+    state.inventory.hero.food = 0;
 
     const actions = getValidActions(state, hero);
     const horn = actions.find(a => a.type === ActionType.SOUND_HORN);
@@ -207,12 +207,12 @@ describe('Sound Horn action', () => {
     const hero = createHero(3, 3);
     hero.owner = 'hero';
     state.entities.push(hero);
-    state.inventory.shared.food = 5;
+    state.inventory.hero.food = 5;
 
     const result = executeSoundHorn(state, hero);
     assert.equal(result.success, true);
     assert.equal(result.cost, 1);
-    assert.equal(state.inventory.shared.food, 4);
+    assert.equal(state.inventory.hero.food, 4);
   });
 
   test('executeSoundHorn fails with insufficient food', () => {
@@ -221,7 +221,7 @@ describe('Sound Horn action', () => {
     const hero = createHero(3, 3);
     hero.owner = 'hero';
     state.entities.push(hero);
-    state.inventory.shared.food = 0;
+    state.inventory.hero.food = 0;
 
     const result = executeSoundHorn(state, hero);
     assert.equal(result.success, false);
@@ -234,7 +234,7 @@ describe('Sound Horn action', () => {
     const hero = createHero(3, 3);
     hero.owner = 'hero';
     state.entities.push(hero);
-    state.inventory.shared.food = 5;
+    state.inventory.hero.food = 5;
 
     assert.equal(state.heroRevealedByHorn, false);
     executeSoundHorn(state, hero);
@@ -246,13 +246,13 @@ describe('Sound Horn action', () => {
     state.addLog = () => {};
     const witch = createWitch(3, 3);
     state.entities.push(witch);
-    state.inventory.shared.food = 5;
+    state.inventory.hero.food = 5;
 
     const result = executeSoundHorn(state, witch);
     assert.equal(result.success, false);
   });
 
-  test('heroRevealedByHorn makes hero visible to witch via getVisibleHeroHexes', () => {
+  test('heroRevealedByHorn makes hero visible to witch via getVisiblePositions', () => {
     const state = freshState();
     // Place hero far from all witch units
     const hero = createHero(10, 10);
@@ -264,12 +264,12 @@ describe('Sound Horn action', () => {
 
     // Without horn, hero should not be visible (distance > 2)
     state.heroRevealedByHorn = false;
-    const hidden = getVisibleHeroHexes(state);
+    const hidden = getVisiblePositions(state, 'witch');
     assert.ok(!hidden.has(hexKey(10, 10)), 'Hero should be hidden without horn');
 
     // With horn, hero should be visible
     state.heroRevealedByHorn = true;
-    const visible = getVisibleHeroHexes(state);
+    const visible = getVisiblePositions(state, 'witch');
     assert.ok(visible.has(hexKey(10, 10)), 'Hero should be visible with horn');
   });
 
@@ -287,7 +287,7 @@ describe('Sound Horn action', () => {
     const hero = createHero(3, 3);
     hero.owner = 'hero';
     state.entities.push(hero);
-    state.inventory.shared.food = 5;
+    state.inventory.hero.food = 5;
 
     executeSoundHorn(state, hero);
     const witchLog = logs.find(l => l.faction === 'witch');
@@ -303,7 +303,7 @@ describe('Sound Horn action', () => {
     const hero = createHero(3, 3);
     hero.owner = 'hero';
     state.entities.push(hero);
-    state.inventory.shared.food = 5;
+    state.inventory.hero.food = 5;
 
     // Place a hidden survivor at (3, 4) — within 4 hexes
     const tile = state.tiles.get(hexKey(3, 4));
@@ -327,7 +327,7 @@ describe('Sound Horn action', () => {
       const h = createHero(3, 3);
       h.owner = 'hero';
       s.entities.push(h);
-      s.inventory.shared.food = 5;
+      s.inventory.hero.food = 5;
       const t = s.tiles.get(hexKey(3, 4));
       if (t) {
         t.type = TileType.BUILDING;

@@ -317,7 +317,7 @@ export class HeroFaction extends Faction {
   canEquipHorse()  { return true; }
   canEquipWeapon() { return true; }
 
-  getInventory(state) { return state.inventory.shared; }
+  getInventory(state) { return state.inventory.hero; }
 
   getStartingResources() { return { [ResourceType.FOOD]: 2 }; }
 

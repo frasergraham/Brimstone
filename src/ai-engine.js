@@ -69,7 +69,7 @@ export class EnginePlanSimState extends PlanSimState {
     this.unitCommitments = new Map();
 
     // Independent copy of witch inventory for tracking projected spend
-    this.resourceLedger = JSON.parse(JSON.stringify(this.inventory.witch));
+    this.resourceLedger = JSON.parse(JSON.stringify(this.inventory[this._faction]));
   }
 
   applyMove(entityId, toCol, toRow) {

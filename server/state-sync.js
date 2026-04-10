@@ -207,6 +207,11 @@ export function deserializeState(snap) {
         seen: snap.missionTargetHex.seen ?? false }
     : null;
   state.inventory            = JSON.parse(JSON.stringify(snap.inventory));
+  // Backward compat: rename 'shared' → 'hero' for saves predating the refactor.
+  if (state.inventory.shared && !state.inventory.hero) {
+    state.inventory.hero = state.inventory.shared;
+    delete state.inventory.shared;
+  }
   state.postRoundEvents      = [...(snap.postRoundEvents || [])];
   state.nodeSpawnedSurvivors = [...(snap.nodeSpawnedSurvivors || [])];
   // Backward compat: old saves stored fogOfWar as boolean

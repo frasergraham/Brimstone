@@ -32,8 +32,8 @@ describe('food floater position — acting entity lookup', () => {
 
     // Give hero food so the resolver can auto-consume it
     if (!state.inventory) state.inventory = {};
-    if (!state.inventory.shared) state.inventory.shared = {};
-    state.inventory.shared[ResourceType.FOOD] = 1;
+    if (!state.inventory.hero) state.inventory.hero = {};
+    state.inventory.hero[ResourceType.FOOD] = 1;
 
     // Build a plan with more moves than the hero's budget so that the last
     // move triggers food consumption.  Budget = budgetFor(state, 'hero').

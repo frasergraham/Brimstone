@@ -25,7 +25,7 @@ function makeTinyState(fogOfWar = 'partial') {
     exploredHexes: { hero: new Set(), witch: new Set() },
     fogOfWar,
     heroRevealedByHorn: false,
-    inventory: { shared: {}, witch: {} },
+    inventory: { hero: {}, witch: {} },
     actionBudget: { hero: 3, witch: 3 },
   };
   for (let row = 0; row < 7; row++) {

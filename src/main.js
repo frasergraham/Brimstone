@@ -2572,7 +2572,7 @@ function _initCampaignMission(missionDef) {
 
   // Inject carried-over resources (replaces faction defaults for campaign)
   if (_activeCampaign) {
-    state.inventory.shared = {};
+    state.inventory.hero = {};
     const res = { ...(_activeCampaign.resources || {}) };
     // Add mission starting resources
     if (missionDef.startingResources) {
@@ -2580,7 +2580,7 @@ function _initCampaignMission(missionDef) {
         res[k] = (res[k] || 0) + v;
       }
     }
-    Object.assign(state.inventory.shared, res);
+    Object.assign(state.inventory.hero, res);
   }
 
   // Deploy carried-over survivors from roster (uses active/reserve selection)
@@ -2773,7 +2773,7 @@ function _handleCampaignMissionEnd() {
     _activeCampaign.applyMissionResult(missionDef.id, {
       won,
       survivors,
-      resources: { ...state.inventory.shared },
+      resources: { ...state.inventory.hero },
       heroStats: state.hero ? {
         hp: state.hero.hp, maxHp: state.hero.maxHp,
         attack: state.hero.attack, defense: state.hero.defense,

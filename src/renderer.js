@@ -8,7 +8,7 @@ import {
   TileType, TILE_COLOR, BUILDING_COLOR, BUILDING_LABEL, BUILDING_ICON,
 } from './tiles.js';
 import { ENTITY_COLOR, EntityType, SurvivorAbility } from './entities.js';
-import { getVisibleEnemyHexes, getVisibleHeroHexes, sightRange, buildFogMovementHexes } from './actions.js';
+import { getVisiblePositions, sightRange, buildFogMovementHexes } from './actions.js';
 import { getFaction } from './factions.js';
 import { nodeController, Phase } from './game.js';
 
@@ -962,8 +962,8 @@ export class Renderer {
     const fogActive = state.fogOfWar !== 'none';
     let revealedHexes = null;
     if (fogActive) {
-      if (humanIsHero)  revealedHexes = getVisibleEnemyHexes(state); // hero sees witch
-      if (humanIsWitch) revealedHexes = getVisibleHeroHexes(state);  // witch sees hero
+      const myFaction = humanIsHero ? 'hero' : humanIsWitch ? 'witch' : null;
+      if (myFaction) revealedHexes = getVisiblePositions(state, myFaction);
     }
 
     // Full set of hexes the observer can see (used to cull animations in fog).

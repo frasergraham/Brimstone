@@ -223,16 +223,16 @@ export class PlanSimState {
     this.actionsLeft--;
   }
 
-  applySummon(witch) {
-    const col = witch?.col ?? 0;
-    const row = witch?.row ?? 0;
+  applySummon(leader) {
+    const col = leader?.col ?? 0;
+    const row = leader?.row ?? 0;
     this.entities.push({
       id: `sim-${this.entities.length}`,
-      type: EntityType.MINION, owner: 'witch',
+      type: EntityType.MINION, owner: this._faction,
       col, row, alive: true, hp: 2,
     });
-    // Spend 2 resources from witch inventory (drain largest stacks first)
-    const inv = this.inventory.witch;
+    // Spend 2 resources from faction inventory (drain largest stacks first)
+    const inv = this.inventory[this._faction];
     const keys = Object.keys(inv).filter(k => inv[k] > 0).sort((a, b) => inv[b] - inv[a]);
     let remaining = 2;
     for (const k of keys) {
@@ -251,8 +251,8 @@ export class PlanSimState {
   }
 
   applySoundHorn() {
-    const shared = this.inventory?.shared || {};
-    if ((shared['food'] || 0) >= 1) shared['food']--;
+    const inv = this.inventory?.hero || {};
+    if ((inv['food'] || 0) >= 1) inv['food']--;
     this.actionsLeft--;
   }
 }

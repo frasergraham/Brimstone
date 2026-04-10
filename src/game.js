@@ -10,23 +10,34 @@ import { getFaction, allFactions } from './factions.js';
 /**
  * Determine which faction controls a power node cluster based on majority hex occupation.
  * Multiple units on the same hex count as one occupied hex.
- * @returns {'hero'|'witch'|'contested'|'neutral'}
+ * @returns {string} faction id of controller, or 'contested' | 'neutral'
  */
 export function nodeController(obj, entities) {
   const hexSet = new Set(obj.hexes.map(h => hexKey(h.col, h.row)));
-  const heroHexes  = new Set();
-  const witchHexes = new Set();
+  // Build per-faction sets of occupied hexes
+  const factionHexes = new Map(); // factionId → Set<hexKey>
   for (const e of entities) {
     if (!e.alive) continue;
     const k = hexKey(e.col, e.row);
     if (!hexSet.has(k)) continue;
-    if (e.owner === 'hero')  heroHexes.add(k);
-    if (e.owner === 'witch') witchHexes.add(k);
+    if (!factionHexes.has(e.owner)) factionHexes.set(e.owner, new Set());
+    factionHexes.get(e.owner).add(k);
   }
-  if (heroHexes.size > witchHexes.size)  return 'hero';
-  if (witchHexes.size > heroHexes.size)  return 'witch';
-  if (heroHexes.size === 0) return 'neutral';
-  return 'contested';
+  if (factionHexes.size === 0) return 'neutral';
+  // Find faction(s) with the most occupied hexes
+  let bestFaction = null;
+  let bestCount = 0;
+  let tied = false;
+  for (const [faction, hexes] of factionHexes) {
+    if (hexes.size > bestCount) {
+      bestFaction = faction;
+      bestCount = hexes.size;
+      tied = false;
+    } else if (hexes.size === bestCount) {
+      tied = true;
+    }
+  }
+  return tied ? 'contested' : bestFaction;
 }
 
 /**
@@ -78,10 +89,6 @@ export const Phase = Object.freeze({
 });
 
 export const Player = Object.freeze({ HERO: 'hero', WITCH: 'witch' });
-
-// Hard caps on total actions per turn (after all bonuses).
-export const HERO_ACTION_CAP  = 8;
-export const WITCH_ACTION_CAP = 8;
 
 // Calculate actions for a player at the start of their turn.
 // Hero  — base 3 + 1 in DAWN/DAY + 1 per survivor (cap +5) + 1 per held power node; hard cap 8
@@ -186,8 +193,8 @@ export class GameState {
     }
 
     this.inventory = {
-      shared: { ...getFaction('hero').getStartingResources() },
-      witch:  { ...getFaction('witch').getStartingResources() },
+      hero:  { ...getFaction('hero').getStartingResources() },
+      witch: { ...getFaction('witch').getStartingResources() },
     };
 
     this.mapSize       = mapData.mapSize;

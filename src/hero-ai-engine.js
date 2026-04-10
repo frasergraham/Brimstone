@@ -83,7 +83,7 @@ export const HERO_PERSONALITY_CONFIGS = Object.freeze({
 export class HeroEnginePlanSimState extends EnginePlanSimState {
   constructor(realState, playerId = null) {
     super(realState, 'hero', playerId);
-    this.resourceLedger = JSON.parse(JSON.stringify(this.inventory.shared || {}));
+    this.resourceLedger = JSON.parse(JSON.stringify(this.inventory.hero || {}));
   }
 }
 
@@ -167,14 +167,14 @@ export function assessHeroBoard(sim) {
   const witchScore = sim.nodeScore?.witch ?? 0;
 
   const heroItems = hero?.items ? { ...hero.items } : {};
-  const herbCount = sim.inventory?.shared?.[ResourceType.HERBS] || 0;
-  const foodCount = sim.inventory?.shared?.[ResourceType.FOOD] || 0;
+  const herbCount = sim.inventory?.hero?.[ResourceType.HERBS] || 0;
+  const foodCount = sim.inventory?.hero?.[ResourceType.FOOD] || 0;
 
   const heroWeapons = hero?.items
     ? Object.keys(hero.items).filter(k => k.startsWith('weapon:') && hero.items[k] > 0)
     : [];
 
-  const shared = sim.inventory?.shared || {};
+  const shared = sim.inventory?.hero || {};
   const woodCount = shared[ResourceType.WOOD] || 0;
   const metalCount = shared[ResourceType.METAL] || 0;
   const sharedInventory = { ...shared };
@@ -406,7 +406,7 @@ export function genProtectHero(sim, board, budget, config = null) {
   if (!heroEntity) return actions;
 
   // Heal: use herbs if hero injured (costs 1 action, from shared supply)
-  let herbs = sim.inventory?.shared?.[ResourceType.HERBS] || 0;
+  let herbs = sim.inventory?.hero?.[ResourceType.HERBS] || 0;
   if (herbs > 0 && board.heroHpRatio < 1.0 && remaining > 0) {
     actions.push({
       type: PlanActionType.HEAL, entityId: board.hero.id,
@@ -535,7 +535,7 @@ export function genExplore(sim, board, budget, config = null) {
   if (!heroEntity) return actions;
 
   // Always use herbs when injured — too valuable to skip (from shared supply)
-  const herbs = sim.inventory?.shared?.[ResourceType.HERBS] || 0;
+  const herbs = sim.inventory?.hero?.[ResourceType.HERBS] || 0;
   if (herbs > 0 && board.heroHpRatio < 0.8 && remaining > 0) {
     actions.push({
       type: PlanActionType.HEAL, entityId: board.hero.id,

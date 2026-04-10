@@ -254,10 +254,6 @@ export function getVisiblePositions(state, viewerFactionId) {
   return revealed;
 }
 
-// Legacy wrappers — delegate to getVisiblePositions()
-export function getVisibleEnemyHexes(state) { return getVisiblePositions(state, 'hero'); }
-export function getVisibleHeroHexes(state)  { return getVisiblePositions(state, 'witch'); }
-
 // ── Validation ─────────────────────────────────────────────────────────────
 
 export function getValidActions(state, actor) {
@@ -338,7 +334,7 @@ export function getValidActions(state, actor) {
   // Use item (faction-gated shared items)
   if (faction.canUseItems()) {
     const usable = [];
-    const shared  = state.inventory.shared;
+    const shared  = state.inventory.hero;
     const myItems = actor.items || {};
 
     // Shared resources
@@ -820,7 +816,7 @@ export function executeFortify(state, actor) {
   const t = tile(state, actor.col, actor.row);
   if (!t || t.type === TileType.RIVER) return { success: false, log: ['Cannot fortify here.'] };
   if (t.fortifyLevel >= 4) return { success: false, log: ['Cannot fortify further.'] };
-  const shared     = state.inventory.shared;
+  const shared     = state.inventory.hero;
   const metalCount = (shared[ResourceType.METAL] || 0);
   const woodCount  = (shared[ResourceType.WOOD]  || 0);
 
@@ -933,7 +929,7 @@ export function executeUseItem(state, actor, item) {
   }
 
   // Shared resources
-  const shared = state.inventory.shared;
+  const shared = state.inventory.hero;
   if ((shared[item] || 0) < 1) return { success: false, log: ['Item not available.'] };
   shared[item]--;
   const log = [];

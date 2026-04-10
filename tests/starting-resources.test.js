@@ -37,7 +37,7 @@ describe('Faction starting resources', () => {
 describe('GameState starting inventory', () => {
   test('Fresh game state has hero food in shared inventory', () => {
     const state = freshState();
-    assert.equal(state.inventory.shared[ResourceType.FOOD], 2);
+    assert.equal(state.inventory.hero[ResourceType.FOOD], 2);
   });
 
   test('Fresh game state has witch wood and metal', () => {
@@ -50,7 +50,7 @@ describe('GameState starting inventory', () => {
     const state = freshState();
     const snap = serializeState(state);
     const restored = deserializeState(snap);
-    assert.equal(restored.inventory.shared[ResourceType.FOOD], 2);
+    assert.equal(restored.inventory.hero[ResourceType.FOOD], 2);
     assert.equal(restored.inventory.witch[ResourceType.WOOD], 2);
     assert.equal(restored.inventory.witch[ResourceType.METAL], 2);
   });

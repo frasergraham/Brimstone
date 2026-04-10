@@ -5,7 +5,7 @@ import { EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
 import { Phase, Player, PHASE_ICON, phaseForRound, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
 import {
-  ActionType, getValidActions, getVisibleEnemyHexes, getVisibleHeroHexes,
+  ActionType, getValidActions, getVisiblePositions,
   buildFogMovementHexes,
 } from './actions.js';
 import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan } from './planner.js';
@@ -889,7 +889,7 @@ export class UIController {
     if (!isFreeAction) {
       const flatPlan = interleavePlan(this._unitPlans);
       const currentCost = flatPlan.filter(a => actionCosts(a.type)).length;
-      const foodAvailable = (this.state.inventory?.shared?.[ResourceType.FOOD] || 0);
+      const foodAvailable = (this.state.inventory?.hero?.[ResourceType.FOOD] || 0);
       const cap = Math.ceil((this._planBudget + foodAvailable) * 1.5);
 
       if (currentCost >= cap) {
@@ -985,7 +985,7 @@ export class UIController {
     if (budgeEl) budgeEl.textContent = `${Math.max(0, remaining)} left`;
 
     // Food is auto-applied to over-budget actions until exhausted.
-    const foodAvailable = (this.state.inventory?.shared?.[ResourceType.FOOD] || 0);
+    const foodAvailable = (this.state.inventory?.hero?.[ResourceType.FOOD] || 0);
 
     const initialInv = computeProjectedInventory(this.state, []);
     stepsEl.innerHTML = buildUnitPlanBlocksHtml(
@@ -1022,7 +1022,7 @@ export class UIController {
     const tabCount = this._el('plan-tab-count');
     if (tabCount) {
       tabCount.textContent = budgetCost;
-      const foodAvail = this.state?.inventory?.shared?.[ResourceType.FOOD] || 0;
+      const foodAvail = this.state?.inventory?.hero?.[ResourceType.FOOD] || 0;
       if (budgetCost > this._planBudget + foodAvail) {
         tabCount.className = 'plan-tab-count plan-tab-over';
       } else if (budgetCost > this._planBudget) {
@@ -1315,9 +1315,7 @@ export class UIController {
         const state = this.state;
         let visTargets = b.targets;
         if (state.fogOfWar !== 'none' && this._selectedEntity) {
-          const visHexes = this._selectedEntity.owner === 'hero'
-            ? getVisibleEnemyHexes(state)
-            : getVisibleHeroHexes(state);
+          const visHexes = getVisiblePositions(state, this._selectedEntity.owner);
           visTargets = b.targets.filter(t => visHexes.has(hexKey(t.col, t.row)));
         }
         renderer.highlightHexes = renderer.highlightHexes.concat(
@@ -1330,9 +1328,7 @@ export class UIController {
         const state = this.state;
         let visTargets = a.targets;
         if (state.fogOfWar !== 'none' && this._selectedEntity) {
-          const visHexes = this._selectedEntity.owner === 'hero'
-            ? getVisibleEnemyHexes(state)
-            : getVisibleHeroHexes(state);
+          const visHexes = getVisiblePositions(state, this._selectedEntity.owner);
           visTargets = a.targets.filter(t => visHexes.has(hexKey(t.col, t.row)));
         }
         renderer.highlightHexes = visTargets.map(t => ({ col: t.col, row: t.row, color: 'rgba(220,60,60,0.55)' }));
@@ -1520,7 +1516,7 @@ export class UIController {
           break;
         }
         case ActionType.FORTIFY: {
-          const fortInv    = projInv ? projInv.shared : state.inventory.shared;
+          const fortInv    = projInv ? projInv.hero : state.inventory.hero;
           const hasMetal   = (fortInv.metal || 0) > 0;
           const hasWood    = (fortInv.wood  || 0) > 0;
           const cantAfford = projInv ? (!hasMetal && !hasWood) : !action.affordable;
@@ -1553,7 +1549,7 @@ export class UIController {
         case ActionType.HEAL: {
           let healDis = dis || action.atFullHp;
           if (projInv) {
-            const healPool = entity.owner === 'witch' ? projInv.witch : projInv.shared;
+            const healPool = entity.owner === 'witch' ? projInv.witch : projInv.hero;
             if ((healPool[ResourceType.HERBS] || 0) < 1) healDis = true;
           }
           arcItems.push({ group: 'items', label: 'Heal', fullLabel: action.atFullHp ? 'Already at full HP' : 'Herbs (heal 2 HP)',
@@ -1567,7 +1563,7 @@ export class UIController {
             let itemDis = dis;
             if (projInv) {
               if (!item.item.startsWith('weapon:')) {
-                if ((projInv.shared[item.item] || 0) < 1) itemDis = true;
+                if ((projInv.hero[item.item] || 0) < 1) itemDis = true;
               }
             }
             // Strip leading emoji from item labels
@@ -1890,7 +1886,7 @@ export class UIController {
       btn.disabled = !affordable;
     });
     popup.querySelectorAll('.arc-item[data-action="fortify"]').forEach(btn => {
-      const shared = projInv.shared;
+      const shared = projInv.hero;
       const hasMetal = (shared.metal || 0) > 0;
       const hasWood  = (shared.wood  || 0) > 0;
       btn.disabled = !hasMetal && !hasWood;
@@ -2664,7 +2660,7 @@ export class UIController {
     const actions = this._planBudget ?? 0;
     const entities = this.state.entities;
     const inventory = this.state.inventory;
-    const stash = faction === 'hero' ? inventory?.shared : inventory?.witch;
+    const stash = faction === 'hero' ? inventory?.hero : inventory?.witch;
     const foodCount = stash?.food ?? 0;
 
     const rows = [];
@@ -3256,7 +3252,7 @@ export class UIController {
     const faction = this._planFaction ?? (state.activePlayer === Player.HERO ? 'hero' : 'witch');
     const isHero  = faction === 'hero';
     const inv     = state.inventory;
-    const stash   = isHero ? inv.shared : inv.witch;
+    const stash   = isHero ? inv.hero : inv.witch;
     const label   = isHero ? '⚔ Supplies' : '🕯 Stores';
 
     const entries = Object.entries(stash).filter(([, v]) => v > 0);
@@ -3945,18 +3941,12 @@ function btn(label, cls, disabled = '', extra = '') {
 
 function _visibleUnitsAt(state, col, row) {
   if (state.fogOfWar === 'none') return state.entities.filter(e => e.alive && e.col === col && e.row === row);
-  const myFaction    = state.myFaction;
-  const humanIsHero  = myFaction ? myFaction === 'hero'  : (state.witchIsAI && !state.heroIsAI);
-  const humanIsWitch = myFaction ? myFaction === 'witch' : (state.heroIsAI  && !state.witchIsAI);
-  const revealed = humanIsHero  ? getVisibleEnemyHexes(state)
-                 : humanIsWitch ? getVisibleHeroHexes(state)
-                 : null;
+  const myFaction = state.myFaction
+    ?? (state.witchIsAI && !state.heroIsAI ? 'hero' : state.heroIsAI && !state.witchIsAI ? 'witch' : null);
+  const revealed = myFaction ? getVisiblePositions(state, myFaction) : null;
   return state.entities.filter(e => {
     if (!e.alive || e.col !== col || e.row !== row) return false;
-    if (revealed) {
-      const hiddenOwner = humanIsHero ? 'witch' : 'hero';
-      if (e.owner === hiddenOwner) return revealed.has(hexKey(col, row));
-    }
+    if (revealed && e.owner !== myFaction) return revealed.has(hexKey(col, row));
     return true;
   });
 }

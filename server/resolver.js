@@ -254,9 +254,9 @@ function drainOneStep(state, queue, budget) {
   // food-powered action so the animation layer can show the floater at the
   // right moment.
   if (budget.remaining <= 0 && queue.length > 0) {
-    const shared = state.inventory?.shared ?? {};
-    if ((shared[ResourceType.FOOD] || 0) > 0) {
-      shared[ResourceType.FOOD]--;
+    const heroInv = state.inventory?.hero ?? {};
+    if ((heroInv[ResourceType.FOOD] || 0) > 0) {
+      heroInv[ResourceType.FOOD]--;
       budget.remaining += 1;
       state.addLog(`🍞 Rations consumed — pressing on beyond the action limit.`, budget.faction);
       subEvents.push({ type: ResEventType.FOOD_CONSUMED, faction: budget.faction });
