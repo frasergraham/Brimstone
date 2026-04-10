@@ -10,6 +10,7 @@ import {
 } from './actions.js';
 import { PlanActionType, actionCosts, computeGhostState, computeProjectedInventory, interleavePlan } from './planner.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
+import { SubmitGuard } from './submit-guard.js';
 import { ResEventType } from '../server/resolver.js';
 import { collectUIElements } from './ui-elements.js';
 import { buildPlanStepsHtml, buildUnitPlanBlocksHtml, buildPlayerStatusHtml, buildObjectivesHtml } from './ui-render.js';
@@ -105,6 +106,7 @@ export class UIController {
     // AbortController for all event listeners bound in _bindEvents().
     // Calling destroy() aborts this signal, removing every listener at once.
     this._eventsAC = new AbortController();
+    this._submitGuard = new SubmitGuard();
 
     this._bindEvents();
   }
@@ -112,6 +114,7 @@ export class UIController {
   /** Remove all event listeners and clean up timers. Call before discarding. */
   destroy() {
     this._eventsAC.abort();
+    this._submitGuard.reset();
     this._stopCountdown();
     this._dismissGraceDialog();
   }
@@ -433,10 +436,14 @@ export class UIController {
       if (this.state.gameOver) return;
       if (this._planMode) this._doSubmitPlan();
     };
-    this._el('end-turn-btn')?.addEventListener('click', _submitHandler, sig);
-    this._el('end-turn-btn')?.addEventListener('touchend', e => {
-      e.preventDefault(); _submitHandler();
-    }, { passive: false, ...sig });
+    this._submitGuard.addEventListener(
+      this._el('end-turn-btn'), 'click', _submitHandler, sig
+    );
+    this._submitGuard.addEventListener(
+      this._el('end-turn-btn'), 'touchend',
+      e => { e.preventDefault(); _submitHandler(); },
+      { passive: false, ...sig }
+    );
 
     // Return-to-menu button in header — shown only after plan submission
     const _returnHandler = () => { if (this.onReturnToMenu) this.onReturnToMenu(); };
@@ -457,7 +464,14 @@ export class UIController {
       el?.addEventListener('click', fn, sig);
       el?.addEventListener('touchend', e => { e.preventDefault(); fn(); }, { passive: false, ...sig });
     };
-    _tap(this._el('plan-submit-btn'), () => this._doSubmitPlan());
+    this._submitGuard.addEventListener(
+      this._el('plan-submit-btn'), 'click', () => this._doSubmitPlan(), sig
+    );
+    this._submitGuard.addEventListener(
+      this._el('plan-submit-btn'), 'touchend',
+      e => { e.preventDefault(); this._doSubmitPlan(); },
+      { passive: false, ...sig }
+    );
     _tap(this._el('plan-menu-btn'), () => { if (this.onReturnToMenu) this.onReturnToMenu(); });
     _tap(this._el('plan-clear-btn'),  () => {
       if (this._planSubmitted) return;
