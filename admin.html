@@ -313,8 +313,7 @@
       <div class="toolbar">
         <select id="games-source">
           <option value="all">All Sources</option>
-          <option value="active">Active</option>
-          <option value="saved">Saved</option>
+          <option value="active">Active (In Memory)</option>
           <option value="completed_mp">Completed (MP)</option>
         </select>
         <button class="btn" id="games-refresh">Refresh</button>
@@ -795,6 +794,7 @@
         }
         if (source === 'active' || source === 'saved') {
           html += `<button class="btn" style="color:#c44;border-color:#c44" onclick="forceEndGame('${_esc(id)}','${_esc(source)}')">End Game</button>`;
+          html += `<button class="btn" style="color:#f00;border-color:#f00;margin-left:8px" onclick="nukeGame('${_esc(id)}')">Nuke</button>`;
         }
         html += '</div>';
 
@@ -841,6 +841,25 @@
         loadStats();
       } catch (e) {
         alert('Network error ending game.');
+      }
+    }
+
+    async function nukeGame(gameId) {
+      if (!confirm(`PERMANENTLY DELETE game ${gameId}? This cannot be undone.`)) return;
+      if (!confirm('Are you really sure? This deletes ALL data for this game.')) return;
+      try {
+        const resp = await fetch(`/admin/api/games/${gameId}/nuke`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json', 'x-token': _token },
+        });
+        const data = await resp.json();
+        if (data.error) { alert(data.error); return; }
+        alert('Game nuked.');
+        loadAllGames(_gamesPage);
+        loadRooms();
+        loadStats();
+      } catch (e) {
+        alert('Network error nuking game.');
       }
     }
 
