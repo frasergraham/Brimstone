@@ -213,19 +213,25 @@ const UNIT_GLYPH = {
 /**
  * Build plan panel HTML with visually distinct blocks per unit.
  *
- * @param {Map<string, Array>} unitPlans  Map of entityId → PlanAction[].
- * @param {number}  budget           Total action budget for this round.
- * @param {number}  foodAvailable    Total food rations in inventory.
- * @param {boolean} submitted        Whether the plan has been locked in.
- * @param {Array}   entities         Live entity array (for name lookups).
- * @param {object}  [initialInv]     Starting inventory snapshot.
+ * Renders a row for every controllable unit (even units with zero queued
+ * actions), highlighting the currently selected unit. This lets the plan panel
+ * double as a unit selector.
+ *
+ * @param {Map<string, Array>} unitPlans       Map of entityId → PlanAction[].
+ * @param {number}  budget                     Total action budget for this round.
+ * @param {number}  foodAvailable              Total food rations in inventory.
+ * @param {boolean} submitted                  Whether the plan has been locked in.
+ * @param {Array}   entities                   Live entity array (for name lookups).
+ * @param {object}  [initialInv]               Starting inventory snapshot.
+ * @param {Array}   [controllableUnits]        Every unit the local player controls, in display order.
+ * @param {string}  [selectedEntityId]         Id of the currently selected unit (for highlight).
+ * @param {Map<string,string>} [portraitMap]   entityId → portrait data URL (optional; falls back to glyph).
  * @returns {string}  HTML string safe to assign to stepsEl.innerHTML.
  */
-export function buildUnitPlanBlocksHtml(unitPlans, budget, foodAvailable, submitted, entities, initialInv) {
-  if (!unitPlans || unitPlans.size === 0) {
-    return `<div class="plan-step"><span class="plan-step-desc" style="color:var(--muted)">No actions queued — click units to add</span></div>`;
-  }
-
+export function buildUnitPlanBlocksHtml(
+  unitPlans, budget, foodAvailable, submitted, entities, initialInv,
+  controllableUnits, selectedEntityId, portraitMap,
+) {
   // Pre-compute budget state and cost labels by walking actions in interleaved
   // order (matching resolution execution order).  Store results keyed by
   // "entityId:stepIdx" for lookup during per-unit rendering.
@@ -241,14 +247,15 @@ export function buildUnitPlanBlocksHtml(unitPlans, budget, foodAvailable, submit
     }
   }
 
+  const unitPlansMap = unitPlans ?? new Map();
   let runningCost = 0;
   let foodUsed    = 0;
-  const unitIds = [...unitPlans.keys()];
+  const unitIds = [...unitPlansMap.keys()];
   let step = 0;
-  while (true) {
+  while (unitIds.length > 0) {
     let any = false;
     for (const eid of unitIds) {
-      const actions = unitPlans.get(eid);
+      const actions = unitPlansMap.get(eid);
       if (step >= actions.length) continue;
       any = true;
       const a = actions[step];
@@ -269,44 +276,75 @@ export function buildUnitPlanBlocksHtml(unitPlans, budget, foodAvailable, submit
     step++;
   }
 
+  // Determine the render order. Prefer the full controllable-units list so
+  // units without actions still appear; fall back to unitPlans keys otherwise.
+  let renderOrder;
+  if (controllableUnits && controllableUnits.length > 0) {
+    const ids = controllableUnits.map(e => e.id);
+    // Tail on any unit that has queued actions but isn't in the controllable
+    // list (e.g. just-killed unit with pending plan steps) so actions never vanish.
+    for (const id of unitPlansMap.keys()) {
+      if (!ids.includes(id)) ids.push(id);
+    }
+    renderOrder = ids;
+  } else {
+    renderOrder = [...unitPlansMap.keys()];
+  }
+
+  if (renderOrder.length === 0) {
+    return `<div class="plan-step"><span class="plan-step-desc" style="color:var(--muted)">No units to command</span></div>`;
+  }
+
   // Render per-unit blocks
   let html = '';
 
-  for (const [entityId, actions] of unitPlans) {
+  for (const entityId of renderOrder) {
     const entity = entities.find(e => e.id === entityId);
     const glyph  = entity ? (UNIT_GLYPH[entity.type] || '?') : '?';
     const color  = entity ? (ENTITY_COLOR[entity.type] || '#aaa') : '#aaa';
     const name   = entity?.displayName ?? 'Unit';
+    const actions = unitPlansMap.get(entityId) ?? [];
     const count  = actions.filter(a =>
       a.type !== PlanActionType.EQUIP_WEAPON && a.type !== PlanActionType.USE_ITEM
     ).length;
+    const isSelected = entityId === selectedEntityId;
+    const selectedCls = isSelected ? ' plan-unit-selected' : '';
 
-    html += `<div class="plan-unit-block" data-entity-id="${entityId}">`;
+    const portraitSrc = portraitMap?.get(entityId);
+    const avatarHtml = portraitSrc
+      ? `<img class="plan-step-avatar" src="${portraitSrc}" style="border-color:${color}" alt="">`
+      : `<span class="plan-step-avatar" style="background:${color}">${glyph}</span>`;
+
+    html += `<div class="plan-unit-block${selectedCls}" data-entity-id="${entityId}">`;
     html += `<div class="plan-unit-header">`;
-    html += `<span class="plan-step-avatar" style="background:${color}">${glyph}</span>`;
+    html += avatarHtml;
     html += `<span class="plan-unit-name">${name}</span>`;
     html += `<span class="plan-unit-count">${count} action${count !== 1 ? 's' : ''}</span>`;
     html += `</div>`;
     html += `<div class="plan-unit-steps">`;
 
-    actions.forEach((a, idx) => {
-      const key  = `${entityId}:${idx}`;
-      const bst  = budgetState.get(key) ?? 'ok';
-      const cls  = bst === 'food' ? ' food-powered' : bst === 'over' ? ' over-budget' : '';
-      const desc = describePlanAction(a, entities, idx);
-      const foodTag = bst === 'food' ? ` <span class="plan-food-tag">🍞</span>` : '';
-      const rmBtn   = submitted
-        ? ''
-        : `<button class="plan-step-remove" data-entity-id="${entityId}" data-step-idx="${idx}" title="Remove">✕</button>`;
-      const costLbl = costLabels.get(key) ?? '';
-      const costTag = costLbl ? ` <span class="plan-step-cost">${costLbl}</span>` : '';
+    if (actions.length === 0) {
+      html += `<div class="plan-step plan-step-empty"><span class="plan-step-desc">No actions queued</span></div>`;
+    } else {
+      actions.forEach((a, idx) => {
+        const key  = `${entityId}:${idx}`;
+        const bst  = budgetState.get(key) ?? 'ok';
+        const cls  = bst === 'food' ? ' food-powered' : bst === 'over' ? ' over-budget' : '';
+        const desc = describePlanAction(a, entities, idx);
+        const foodTag = bst === 'food' ? ` <span class="plan-food-tag">🍞</span>` : '';
+        const rmBtn   = submitted
+          ? ''
+          : `<button class="plan-step-remove" data-entity-id="${entityId}" data-step-idx="${idx}" title="Remove">✕</button>`;
+        const costLbl = costLabels.get(key) ?? '';
+        const costTag = costLbl ? ` <span class="plan-step-cost">${costLbl}</span>` : '';
 
-      html += `<div class="plan-step${cls}">
-          <span class="plan-step-num">${idx + 1}</span>
-          <span class="plan-step-desc" title="${desc}">${desc}${foodTag}${costTag}</span>
-          ${rmBtn}
-        </div>`;
-    });
+        html += `<div class="plan-step${cls}">
+            <span class="plan-step-num">${idx + 1}</span>
+            <span class="plan-step-desc" title="${desc}">${desc}${foodTag}${costTag}</span>
+            ${rmBtn}
+          </div>`;
+      });
+    }
 
     html += `</div></div>`;
   }

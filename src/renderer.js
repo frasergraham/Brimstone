@@ -1056,7 +1056,7 @@ export class Renderer {
 
     // Highlights
     for (const h of this.highlightHexes) {
-      this._drawHighlight(h.col, h.row, h.color || 'rgba(100,200,100,0.25)');
+      this._drawHighlight(h.col, h.row, h.color || 'rgba(100,200,100,0.15)');
     }
 
     // Battle highlights (combatants = bright red, assisting allies = faint red)
@@ -1100,7 +1100,7 @@ export class Renderer {
           : ENTITY_COLOR[EntityType.WITCH];
         selColor = _hexToRgba(playerColor ?? factionColor, 0.95);
       }
-      this._drawOutline(this.selectedHex.col, this.selectedHex.row, selColor, 3, true);
+      this._drawOutline(this.selectedHex.col, this.selectedHex.row, selColor, 2, true);
     }
     if (this.hoveredHex) {
       this._drawOutline(this.hoveredHex.col, this.hoveredHex.row, 'rgba(255,255,255,0.3)', 1);
@@ -1559,8 +1559,12 @@ export class Renderer {
       : null;
     for (const [k, color] of hexColors) {
       const [col, row] = k.split(',').map(Number);
-      const isSelected = k === selKey;
-      this._drawOutline(col, row, _hexToRgba(color, 0.85), isSelected ? 3 : 2, true);
+      // Skip the selected hex here — the main render loop draws a separate,
+      // glowing selected-hex outline on top that would otherwise fight with
+      // this one. Keep ownership outlines flat (no glow) and semi-transparent
+      // so they're informative without being visually overbearing.
+      if (k === selKey) continue;
+      this._drawOutline(col, row, _hexToRgba(color, 0.55), 2, false);
     }
   }
 
@@ -1894,7 +1898,7 @@ export class Renderer {
     } else {
       ctx.strokeStyle = color.replace(/,\s*[\d.]+\)$/, ', 0.9)');
     }
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = 1;
     ctx.stroke();
   }
 
