@@ -44,6 +44,7 @@ import {
   departureMessage as _departureMessage, arrivalMessage as _arrivalMessage,
 } from './campaign/campaign-ui.js';
 import { requestNotificationPermission, notifyRoundReady, notifyWaitingOnYou, notifyDeadlineApproaching, notifyGameOver } from './notifications.js';
+import { mmSortRows, mmFormatRow } from './main-menu-games.js';
 
 // Stamp version into badge
 document.getElementById('version-badge').textContent = `v${BUILD_VERSION}`;
@@ -1707,6 +1708,15 @@ const stepAsyncCreated = document.getElementById('setup-step-async-created');
 const stepAsyncJoin    = document.getElementById('setup-step-async-join');
 
 function showStep(step) {
+  // Refresh or tear down the main-menu games list depending on whether we're
+  // entering or leaving the mode card.
+  if (step === 'mode') {
+    // Fire-and-forget — the function handles its own loading/empty states.
+    try { _fetchMainMenuGames?.(); } catch {}
+  } else {
+    _stopMmCountdown?.();
+  }
+
   stepMode          .style.display = step === 'mode'            ? '' : 'none';
   stepSpChoice      .style.display = step === 'sp-choice'       ? '' : 'none';
   stepSinglePlayer  .style.display = step === 'singleplayer'    ? '' : 'none';
@@ -3260,6 +3270,256 @@ function _timeRemaining(deadlineUnixSecs) {
   return `${m}m left`;
 }
 
+// ── Main menu active games list ─────────────────────────────────────────────
+//
+// Fetches /api/games + /api/battle-status in parallel, merges into a single
+// list sorted by urgency (most urgent first), and renders up to 5 rows at
+// the top of the mode card.
+
+let _mmCountdownTimer = null;
+
+function _stopMmCountdown() {
+  if (_mmCountdownTimer) {
+    clearInterval(_mmCountdownTimer);
+    _mmCountdownTimer = null;
+  }
+}
+
+function _tickMmCountdowns() {
+  const nodes = document.querySelectorAll('#mm-games-list .mm-countdown[data-deadline]');
+  if (!nodes.length) { _stopMmCountdown(); return; }
+  for (const el of nodes) {
+    const deadline = Number(el.dataset.deadline);
+    if (!deadline) continue;
+    const text = _timeRemaining(deadline);
+    el.textContent = text;
+    if (text === 'expired') el.classList.add('expired');
+    else el.classList.remove('expired');
+  }
+}
+
+/**
+ * Refresh the main-menu active games list. Also updates the Battle button
+ * badge and the Multiplayer button badge as a side effect so we only hit
+ * the server twice per refresh.
+ */
+async function _fetchMainMenuGames() {
+  const section  = document.getElementById('mm-games-section');
+  const signinEl = document.getElementById('mm-games-signin');
+  const list     = document.getElementById('mm-games-list');
+  if (!section || !signinEl || !list) return;
+
+  const session = loadSession();
+  if (!session) {
+    section.style.display = 'none';
+    signinEl.style.display = '';
+    _stopMmCountdown();
+    // Clear downstream badges — caller is signed out
+    const battleBadge = document.getElementById('battle-badge');
+    if (battleBadge) battleBadge.style.display = 'none';
+    const mpBadge = document.getElementById('mp-badge');
+    if (mpBadge) mpBadge.style.display = 'none';
+    return;
+  }
+  signinEl.style.display = 'none';
+
+  const base = window.BRIMSTONE_SERVER || '';
+  const token = encodeURIComponent(session.token);
+
+  let games = [];
+  let battleStatus = null;
+  try {
+    const [gamesRes, battleRes] = await Promise.all([
+      fetch(`${base}/api/games?token=${token}`).then(r => r.ok ? r.json() : []),
+      fetch(`${base}/api/battle-status?token=${token}`).then(r => r.ok ? r.json() : null),
+    ]);
+    if (Array.isArray(gamesRes)) games = gamesRes;
+    battleStatus = battleRes;
+  } catch {
+    section.style.display = '';
+    list.innerHTML = '<p class="mm-games-empty">Could not load games (offline?).</p>';
+    return;
+  }
+
+  // Normalize regular games to the shared row shape.
+  const rows = games.map(s => {
+    const pps = s.players_per_side ?? 1;
+    let title;
+    if (pps <= 1) {
+      const myFaction = s.hero_player_id === session?.id ? 'hero' : 'witch';
+      const oppName = myFaction === 'hero' ? (s.witch_name || 'Witch') : (s.hero_name || 'Hero');
+      const sym = myFaction === 'hero' ? '⚔' : '✦';
+      title = `${sym} vs ${oppName}`;
+    } else {
+      title = `${pps}v${pps} Game`;
+    }
+    return {
+      kind: 'game',
+      room_id: s.room_id,
+      title,
+      round: s.round,
+      phase: s.phase,
+      action_needed: !!s.action_needed,
+      turn_deadline: s.turn_deadline,
+      players_submitted: s.players_submitted ?? 0,
+      players_total: s.players_total ?? 0,
+      players_per_side: pps,
+      map_size: s.map_size ?? 'standard',
+      updated_at: s.updated_at ?? 0,
+      status: s.status,
+    };
+  });
+
+  // Synthesize a battle row if there's an active battle.
+  if (battleStatus?.myBattle) {
+    const b = battleStatus.myBattle;
+    const pps = b.maxPerSide ?? 10;
+    const submitted = (b.players ?? []).filter(p => !p.isAI && p.submitted).length;
+    const total = (b.players ?? []).filter(p => !p.isAI).length;
+    rows.push({
+      kind: 'battle',
+      room_id: b.roomId,
+      title: '⚔✦ Battle for Caleb\'s Hollow',
+      round: b.round,
+      phase: undefined,
+      action_needed: !b.mySubmitted,
+      turn_deadline: b.turnDeadline ?? null,
+      players_submitted: submitted,
+      players_total: total,
+      players_per_side: pps,
+      map_size: undefined,
+      updated_at: Math.floor(Date.now() / 1000),
+      status: 'playing',
+    });
+  } else if (battleStatus?.battles?.length) {
+    // A battle exists but the user hasn't joined — show as an invite.
+    rows.push({
+      kind: 'battle-invite',
+      room_id: null,
+      title: '⚔✦ Battle for Caleb\'s Hollow',
+      round: null,
+      phase: undefined,
+      action_needed: false,
+      turn_deadline: null,
+      players_submitted: 0,
+      players_total: 0,
+      players_per_side: battleStatus.battles[0].maxPerSide ?? 10,
+      map_size: undefined,
+      updated_at: Math.floor(Date.now() / 1000),
+      status: 'invite',
+    });
+  }
+
+  // Update battle badge side effect (replaces _updateBattleBadge).
+  const battleBadge = document.getElementById('battle-badge');
+  if (battleBadge) {
+    if (battleStatus?.myBattle && !battleStatus.myBattle.mySubmitted) {
+      battleBadge.style.display = '';
+      battleBadge.textContent = '!';
+    } else {
+      battleBadge.style.display = 'none';
+    }
+  }
+  // Update multiplayer badge side effect.
+  const mpBadge = document.getElementById('mp-badge');
+  if (mpBadge) {
+    const count = games.filter(s => s.action_needed).length;
+    if (count > 0) {
+      mpBadge.textContent = String(count);
+      mpBadge.style.display = '';
+    } else {
+      mpBadge.style.display = 'none';
+    }
+  }
+
+  _renderMainMenuGames(rows);
+}
+
+function _renderMainMenuGames(rows) {
+  const section = document.getElementById('mm-games-section');
+  const list    = document.getElementById('mm-games-list');
+  const viewAll = document.getElementById('mm-view-all');
+  if (!section || !list) return;
+
+  section.style.display = '';
+
+  if (!rows.length) {
+    list.innerHTML = '<p class="mm-games-empty">No games in progress — create one below.</p>';
+    if (viewAll) viewAll.style.display = 'none';
+    _stopMmCountdown();
+    return;
+  }
+
+  const sorted = mmSortRows(rows);
+  const totalCount = sorted.length;
+  const visible = sorted.slice(0, 5);
+
+  list.innerHTML = '';
+  let anyDeadline = false;
+
+  for (const row of visible) {
+    const view = mmFormatRow(row);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = view.classes.join(' ');
+
+    const line1 = document.createElement('div');
+    line1.className = 'mm-game-row-line1';
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'mm-game-title';
+    titleSpan.textContent = view.title;
+    line1.appendChild(titleSpan);
+
+    if (view.showTurnBadge) {
+      const badge = document.createElement('span');
+      badge.className = 'mm-badge-turn';
+      badge.textContent = 'YOUR TURN';
+      line1.appendChild(badge);
+    }
+    if (view.deadline) {
+      anyDeadline = true;
+      const cd = document.createElement('span');
+      cd.className = 'mm-countdown';
+      cd.dataset.deadline = String(view.deadline);
+      cd.textContent = _timeRemaining(view.deadline);
+      if (cd.textContent === 'expired') cd.classList.add('expired');
+      line1.appendChild(cd);
+    }
+
+    const line2 = document.createElement('div');
+    line2.className = 'mm-game-row-line2';
+    line2.textContent = view.meta;
+
+    btn.appendChild(line1);
+    btn.appendChild(line2);
+
+    // Click routing
+    btn.addEventListener('click', () => {
+      if (row.kind === 'battle' || row.kind === 'battle-invite') {
+        _showBattleScreen();
+      } else if (row.room_id) {
+        _resumeSave(row.room_id);
+      }
+    });
+
+    list.appendChild(btn);
+  }
+
+  // "View all" link when more than 5
+  if (viewAll) {
+    if (totalCount > 5) {
+      viewAll.style.display = '';
+      viewAll.onclick = (e) => { e.preventDefault(); _showOnlineScreen(); };
+    } else {
+      viewAll.style.display = 'none';
+    }
+  }
+
+  // Start / restart countdown timer
+  _stopMmCountdown();
+  if (anyDeadline) _mmCountdownTimer = setInterval(_tickMmCountdowns, 1000);
+}
+
 /**
  * Fetch async games that need the player's attention and show them
  * in the main menu notification box.
@@ -4239,9 +4499,11 @@ async function _showBattleScreen() {
   } catch { /* ignore */ }
 }
 
-// Sign-in button on the battle screen — reuse the same sign-in flow as online
+// Sign-in button on the battle screen — open the auth dialog and return to
+// the battle screen on success (previous behavior routed to Account and
+// never came back).
 document.getElementById('btn-battle-signin')?.addEventListener('click', () => {
-  showStep('account');
+  _showAuthDialog(() => _showBattleScreen());
 });
 
 document.getElementById('btn-battle-main')?.addEventListener('click', () => _showBattleScreen());
@@ -4620,9 +4882,14 @@ function _checkGameDeepLink() {
 window.addEventListener('hashchange', () => {
   _checkAsyncDeepLink();
 });
-_fetchMainMenuAsyncGames();
-_updateMultiplayerBadge();
-_updateBattleBadge();
+// Unified main-menu refresh — fetches games + battle status in parallel
+// and updates the main menu list + multiplayer/battle badges as side effects.
+_fetchMainMenuGames();
+
+// Wire the mode-card sign-in button (only present after the menu redesign).
+document.getElementById('btn-mm-signin')?.addEventListener('click', () => {
+  _showAuthDialog(() => _fetchMainMenuGames());
+});
 
 /** Check if the player needs to submit a battle turn and show badge on main menu. */
 async function _updateBattleBadge() {
@@ -5204,7 +5471,31 @@ function _showAuthDialogUI(onSuccess) {
   document.getElementById('auth-email-input').value = '';
   document.getElementById('auth-error').style.display = 'none';
   document.getElementById('auth-email-status').style.display = 'none';
+
+  // Reset the email login section to hidden — it's only revealed when the
+  // server reports the username is already linked to an email.
+  const emailSection = document.getElementById('auth-email-section');
+  if (emailSection) emailSection.style.display = 'none';
+  const linkedHint = document.getElementById('auth-linked-hint');
+  if (linkedHint) { linkedHint.style.display = 'none'; linkedHint.textContent = ''; }
+
   dlg.classList.add('visible');
+}
+
+/**
+ * Reveal the email login section inside the auth dialog. Called when the
+ * server reports the chosen username is already linked to an email — the
+ * real owner must sign in via magic link instead.
+ */
+function _revealAuthEmailSection() {
+  const emailSection = document.getElementById('auth-email-section');
+  if (emailSection) emailSection.style.display = '';
+  const linkedHint = document.getElementById('auth-linked-hint');
+  if (linkedHint) {
+    linkedHint.textContent = 'This username is linked to an email. Use email login below.';
+    linkedHint.style.display = '';
+  }
+  document.getElementById('auth-email-input')?.focus();
 }
 
 function _hideAuthDialog() {
@@ -5398,18 +5689,22 @@ document.getElementById('btn-async-signin')?.addEventListener('click', () => {
 
 // (Email login is now handled by the auth dialog)
 
-function _onlineError(msg) {
+function _onlineError(msg, raw) {
   // Show error in the auth dialog if visible, otherwise ignore
   const authErr = document.getElementById('auth-error');
   if (authErr) {
     authErr.textContent = msg;
     authErr.style.display = '';
   }
-  // If username is taken, scroll the email section into view so the user
-  // can immediately sign in with their linked email
-  if (msg && msg.includes('already taken')) {
-    const emailInput = document.getElementById('auth-email-input');
-    if (emailInput) emailInput.focus();
+  // Username is linked to an email on another account — reveal the email
+  // login section so the real owner can sign in via magic link.
+  if (raw?.err_code === 'username_linked') {
+    _revealAuthEmailSection();
+    return;
+  }
+  // Legacy string fallback (older server builds / cached PWAs).
+  if (msg && msg.includes && msg.includes('already taken')) {
+    _revealAuthEmailSection();
   }
 }
 
@@ -6129,7 +6424,7 @@ function _createMpClient() {
     onAsyncPlanStatus(msg)  { _handleAsyncPlanStatus(msg); },
     onAsyncOpponentJoined(msg) { _handleAsyncOpponentJoined(msg); },
 
-    onError(msg) {
+    onError(msg, raw) {
       // Ignore errors after intentional sign-out / disconnect
       if (!mp) return;
 
@@ -6140,7 +6435,15 @@ function _createMpClient() {
       if (state && reconnOverlay?.style.display !== 'none') {
         reconnOverlay.style.display = 'none';
         _showOnlineScreen();
-        _onlineError(msg);
+        _onlineError(msg, raw);
+        return;
+      }
+
+      // If the auth dialog is visible, show the error in-place without
+      // navigating away — keeps the user on their calling screen.
+      const authDlg = document.getElementById('auth-dialog');
+      if (authDlg?.classList.contains('visible')) {
+        _onlineError(msg, raw);
         return;
       }
 
@@ -6152,7 +6455,7 @@ function _createMpClient() {
         } else {
           _showOnlineScreen();
         }
-        _onlineError(msg);
+        _onlineError(msg, raw);
       }
     },
 

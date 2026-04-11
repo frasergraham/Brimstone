@@ -198,9 +198,9 @@ describe('reconnect backoff — source inspection', () => {
 
 describe('reconnect stuck-state prevention — main.js', () => {
   test('onError checks reconnect overlay visibility for in-game errors', () => {
-    const idx = mainSource.indexOf('onError(msg)');
+    const idx = mainSource.search(/onError\(msg(?:,\s*raw)?\)\s*\{/);
     assert.ok(idx !== -1, 'onError handler must exist');
-    const body = mainSource.slice(idx, idx + 600);
+    const body = mainSource.slice(idx, idx + 1200);
     assert.ok(
       body.includes('reconnect-overlay'),
       'onError must check reconnect overlay visibility to detect reconnection failures',
@@ -208,9 +208,9 @@ describe('reconnect stuck-state prevention — main.js', () => {
   });
 
   test('onError calls _showOnlineScreen when reconnection fails in-game', () => {
-    const idx = mainSource.indexOf('onError(msg)');
+    const idx = mainSource.search(/onError\(msg(?:,\s*raw)?\)\s*\{/);
     assert.ok(idx !== -1);
-    const body = mainSource.slice(idx, idx + 600);
+    const body = mainSource.slice(idx, idx + 1200);
     assert.ok(
       body.includes('_showOnlineScreen'),
       'onError must call _showOnlineScreen to wipe state and return to menu on reconnection failure',

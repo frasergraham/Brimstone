@@ -1003,7 +1003,7 @@ function route(ws, cs, msg) {
     case 'auth': {
       const result = registerOrLogin({ username: msg.username, token: msg.token });
       if (!result.ok) {
-        send(ws, { type: 'authError', message: result.error });
+        send(ws, { type: 'authError', message: result.error, err_code: result.err_code });
         return;
       }
       cs.player = result.player;

@@ -3028,6 +3028,106 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   font-size: 0.85rem;
 }
 
+/* ── Main menu active games list ────────────────────────────────────────── */
+#mm-games-section {
+  margin: 0.75rem 0 1rem;
+  text-align: left;
+  max-width: 360px;
+  align-self: center;
+  width: 100%;
+}
+.mm-games-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.3rem;
+}
+.mm-view-all {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.mm-view-all:hover { color: var(--clr-gold, #daa520); }
+#mm-games-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.mm-game-row {
+  display: block;
+  width: 100%;
+  background: var(--bg-section);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 0.45rem 0.65rem;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.mm-game-row:hover { border-color: var(--clr-gold, #daa520); }
+.mm-game-row.mm-game-action { border-color: var(--clr-gold, #daa520); }
+.mm-game-row-line1 {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--text-bright);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mm-game-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mm-game-row-line2 {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  margin-top: 0.1rem;
+}
+.mm-badge-turn {
+  background: var(--clr-gold, #daa520);
+  color: #000;
+  font-size: 0.6rem;
+  font-weight: bold;
+  letter-spacing: 0.05em;
+  padding: 0.1rem 0.35rem;
+  border-radius: 2px;
+  box-shadow: 0 0 6px var(--clr-gold, #daa520);
+  flex-shrink: 0;
+}
+.mm-countdown {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.mm-countdown.expired { color: #c44; }
+.mm-game-battle {
+  border: 1px solid #c44;
+  box-shadow: 0 0 10px rgba(220, 60, 60, 0.35);
+  background: linear-gradient(90deg, rgba(80, 0, 0, 0.35), rgba(30, 0, 0, 0.15));
+}
+.mm-game-battle:hover {
+  border-color: #f3c96b;
+  box-shadow: 0 0 12px rgba(243, 201, 107, 0.45);
+}
+.mm-game-battle .mm-game-title { color: #f3c96b; }
+.mm-games-empty {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  font-style: italic;
+  text-align: center;
+  padding: 0.4rem 0;
+}
+
 /* Multiplayer badge on main menu button */
 .mp-badge {
   position: absolute; top: -6px; right: -6px;

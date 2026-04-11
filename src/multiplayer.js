@@ -390,7 +390,9 @@ export class MultiplayerClient {
           this._reconnectDeadline = 0;
           this._opts.onDisconnectFatal?.('Session expired. Please sign in again.');
         } else {
-          this._opts.onError?.(msg.message);
+          // Pass the full message payload as second arg so callers can read
+          // structured fields like err_code without breaking the legacy string API.
+          this._opts.onError?.(msg.message, msg);
         }
         break;
 

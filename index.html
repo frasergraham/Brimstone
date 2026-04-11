@@ -18,6 +18,22 @@
     <!-- Welcome screen -->
     <div id="setup-step-mode" class="setup-card">
       <h1 class="title">CALEB'S HOLLOW</h1>
+
+      <!-- Active games list (signed-in users only) -->
+      <div id="mm-games-section" style="display:none">
+        <div class="mm-games-header">
+          <span class="active-games-label">Your Games</span>
+          <a id="mm-view-all" class="mm-view-all" style="display:none">View all →</a>
+        </div>
+        <div id="mm-games-list"></div>
+      </div>
+
+      <!-- Signed-out prompt for the games list -->
+      <div id="mm-games-signin" style="display:none;text-align:center;margin:0.5rem 0 0.75rem">
+        <p class="setup-hint" style="margin-bottom:0.5rem">Sign in to see your active games.</p>
+        <button id="btn-mm-signin" class="setup-btn primary" style="width:200px">Sign In</button>
+      </div>
+
       <div class="setup-buttons" style="flex-direction:column;align-items:center">
         <button id="btn-battle-main" class="setup-btn" style="width:240px;position:relative;text-align:center">
           Battle for Caleb's Hollow
@@ -617,13 +633,24 @@
         <h2 class="auth-dialog-title">SIGN IN</h2>
         <input id="auth-username" class="setup-input" type="text"
                placeholder="Enter a username…" maxlength="20" autocomplete="off">
+        <p id="auth-explainer" class="setup-hint" style="margin-top:0.5rem;text-align:center">
+          This is passwordless — pick any name. To sign in from another device later,
+          link an email in Account.
+        </p>
         <button id="btn-auth-signin" class="setup-btn primary" style="margin-top:0.4rem;width:100%;max-width:320px">Sign In</button>
-        <div class="email-login-divider" style="margin:0.6rem 0;font-size:0.75rem;opacity:0.6">— or sign in with email —</div>
-        <input id="auth-email-input" class="setup-input" type="email"
-               placeholder="your@email.com" autocomplete="email">
-        <button id="btn-auth-email-login" class="setup-btn secondary" style="margin-top:0.4rem;width:100%;max-width:320px">Send Login Link</button>
-        <p id="auth-email-status" class="setup-hint" style="display:none"></p>
         <p id="auth-error" class="setup-error" style="display:none"></p>
+
+        <!-- Email login section (hidden by default; revealed when the server reports
+             the username is already linked to an email) -->
+        <div id="auth-email-section" style="display:none">
+          <p id="auth-linked-hint" class="setup-hint" style="display:none;text-align:center;margin-top:0.6rem"></p>
+          <div class="email-login-divider" style="margin:0.6rem 0;font-size:0.75rem;opacity:0.6;text-align:center">— sign in with email —</div>
+          <input id="auth-email-input" class="setup-input" type="email"
+                 placeholder="your@email.com" autocomplete="email">
+          <button id="btn-auth-email-login" class="setup-btn secondary" style="margin-top:0.4rem;width:100%;max-width:320px">Send Login Link</button>
+          <p id="auth-email-status" class="setup-hint" style="display:none"></p>
+        </div>
+
         <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
           <button id="btn-auth-cancel" class="setup-btn secondary">Cancel</button>
         </div>
