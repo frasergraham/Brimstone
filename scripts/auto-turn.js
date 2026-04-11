@@ -64,8 +64,9 @@ function saveEntries(entries) {
 }
 
 function upsertEntry(entries, { server, gameId, username, token, playerId, faction, status, round }) {
-  const key = `${server}|${gameId}|${token}`;
-  const idx = entries.findIndex(e => `${e.server}|${e.gameId}|${e.token}` === key);
+  // Dedup by token — each bot has a unique token tied to one game.
+  // This lets us upgrade gameId from a CLI alias (e.g. "-h") to the real room UUID.
+  const idx = entries.findIndex(e => e.server === server && e.token === token);
   const entry = {
     server,
     gameId,
@@ -192,6 +193,8 @@ function runSingle({ serverUrl, gameId, playerName, savedToken }) {
     let gameState = null;
     let planSubmitted = false;
     let username = playerName;
+    let roomId = gameId;   // upgraded to canonical UUID once matchFound/reconnected arrives
+    let joinedLobby = false;
 
     function log(msg) {
       console.log(`[auto-turn] ${msg}`);
@@ -212,7 +215,7 @@ function runSingle({ serverUrl, gameId, playerName, savedToken }) {
     function updateFile(status, round) {
       const entries = upsertEntry(loadEntries(), {
         server: serverUrl,
-        gameId,
+        gameId: roomId,
         username,
         token: authToken,
         playerId,
@@ -249,9 +252,6 @@ function runSingle({ serverUrl, gameId, playerName, savedToken }) {
       }
       send(ws, authMsg);
     });
-
-    let roomId = gameId;   // may be updated by server responses
-    let joinedLobby = false;
 
     function tryJoin() {
       if (savedToken) {
