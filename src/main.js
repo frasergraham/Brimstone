@@ -3473,27 +3473,6 @@ async function _fetchAllGames() {
     });
   }
 
-  // Legacy badge side-effects (kept for in-game screens that still consult them).
-  const battleBadge = document.getElementById('battle-badge');
-  if (battleBadge) {
-    if (battleStatus?.myBattle && !battleStatus.myBattle.mySubmitted) {
-      battleBadge.style.display = '';
-      battleBadge.textContent = '!';
-    } else {
-      battleBadge.style.display = 'none';
-    }
-  }
-  const mpBadge = document.getElementById('mp-badge');
-  if (mpBadge) {
-    const count = games.filter(s => s.action_needed).length;
-    if (count > 0) {
-      mpBadge.textContent = String(count);
-      mpBadge.style.display = '';
-    } else {
-      mpBadge.style.display = 'none';
-    }
-  }
-
   return { rows, signedIn: true, hadOnlineFetch };
 }
 
