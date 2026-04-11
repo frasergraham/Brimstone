@@ -126,13 +126,12 @@ describe('mmFormatRow', () => {
       round: 5,
       turn_deadline: Math.floor(NOW / 1000) + 3600,
       action_needed: true,
-      players_submitted: 4,
-      players_total: 10,
+      players_count: 10,
     });
     assert.ok(view.classes.includes('mm-game-battle'));
     assert.ok(view.classes.includes('mm-game-action'));
-    assert.ok(view.meta.includes('10v10 Battle'));
     assert.ok(view.meta.includes('Round 5'));
+    assert.ok(view.meta.includes('10 players'));
     assert.equal(view.showTurnBadge, true);
     assert.equal(view.deadline, Math.floor(NOW / 1000) + 3600);
   });
@@ -167,5 +166,56 @@ describe('mmFormatRow', () => {
   test('title is preserved verbatim', () => {
     const view = mmFormatRow(row({ title: '⚔ vs Zelda' }));
     assert.equal(view.title, '⚔ vs Zelda');
+  });
+
+  test('local-sp save is marked with mm-game-local class', () => {
+    const view = mmFormatRow({
+      kind: 'local-sp',
+      title: '⚔ vs AI (Hero)',
+      round: 5,
+      phase: 'night',
+      map_size: 'standard',
+    });
+    assert.ok(view.classes.includes('mm-game-local'));
+    assert.ok(!view.classes.includes('mm-game-battle'));
+    assert.ok(view.meta.includes('Round 5'));
+    assert.ok(view.meta.includes('Local'));
+    assert.equal(view.showTurnBadge, false);
+  });
+
+  test('local-campaign save shows Campaign in meta', () => {
+    const view = mmFormatRow({
+      kind: 'local-campaign',
+      title: '📖 The Witch-Finder',
+      round: 3,
+      phase: 'day',
+    });
+    assert.ok(view.classes.includes('mm-game-local'));
+    assert.ok(view.meta.includes('Campaign'));
+    assert.ok(view.meta.includes('Round 3'));
+  });
+
+  test('simplified battle row shows N players instead of submission count', () => {
+    const view = mmFormatRow({
+      kind: 'battle',
+      title: '⚔✦ Battle',
+      round: 7,
+      players_count: 14,
+      turn_deadline: null,
+    });
+    assert.ok(view.meta.includes('14 players'));
+    assert.ok(view.meta.includes('Round 7'));
+    assert.ok(!view.meta.includes('/'), 'should not show submission count');
+  });
+
+  test('completed-sp row shows win reason and rounds for replays', () => {
+    const view = mmFormatRow({
+      kind: 'completed-sp',
+      title: '⚔ Hero wins',
+      win_reason: 'Hero kills witch',
+      total_rounds: 23,
+    });
+    assert.ok(view.meta.includes('Hero kills witch'));
+    assert.ok(view.meta.includes('23 rounds'));
   });
 });

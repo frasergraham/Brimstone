@@ -3056,20 +3056,56 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   gap: 0.3rem;
 }
 .mm-game-row {
-  display: block;
+  display: flex;
+  align-items: stretch;
   width: 100%;
   background: var(--bg-section);
   border: 1px solid var(--border);
   border-radius: 2px;
-  padding: 0.45rem 0.65rem;
   color: inherit;
   font: inherit;
   text-align: left;
-  cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
 }
 .mm-game-row:hover { border-color: var(--clr-gold, #daa520); }
 .mm-game-row.mm-game-action { border-color: var(--clr-gold, #daa520); }
+.mm-game-row-body {
+  flex: 1;
+  min-width: 0;
+  padding: 0.45rem 0.65rem;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.mm-game-row-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding-right: 0.35rem;
+  gap: 0.25rem;
+}
+.mm-action-btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.95rem;
+  padding: 0.2rem 0.4rem;
+  opacity: 0.5;
+  transition: opacity 0.15s, color 0.15s;
+  line-height: 1;
+}
+.mm-action-btn:hover { opacity: 1; }
+.mm-action-btn.mm-action-delete:hover { color: #c44; }
+.mm-game-local {
+  border-color: rgba(110, 170, 220, 0.6);
+  background: linear-gradient(90deg, rgba(20, 50, 80, 0.3), rgba(10, 25, 45, 0.15));
+}
+.mm-game-local .mm-game-title { color: #aac8ec; }
+.mm-game-local:hover { border-color: #aac8ec; }
 .mm-game-row-line1 {
   display: flex;
   align-items: center;
