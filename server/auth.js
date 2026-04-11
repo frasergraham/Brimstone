@@ -9,6 +9,10 @@ const ADMIN_EMAILS = ['frasergraham@me.com'];
 const _getByToken = db.prepare('SELECT * FROM players WHERE token = ?');
 const _getById    = db.prepare('SELECT * FROM players WHERE id = ?');
 const _getByNameDisc = db.prepare('SELECT id FROM players WHERE username = ? COLLATE NOCASE AND discriminator = ?');
+const _getAllByName = db.prepare('SELECT id FROM players WHERE username = ? COLLATE NOCASE');
+const _hasEmailForPlayer = db.prepare(
+  "SELECT 1 FROM player_identities WHERE player_id = ? AND provider = 'email' LIMIT 1"
+);
 const _insert     = db.prepare('INSERT INTO players (id, username, discriminator, token) VALUES (?, ?, ?, ?)');
 
 /** Generate a random 4-digit discriminator (1000–9999) that is unique for the given username. */
@@ -58,6 +62,17 @@ export function registerOrLogin({ username, token } = {}) {
   }
   if (!/^[a-zA-Z0-9_\- ]+$/.test(name)) {
     return { ok: false, error: 'Username may only contain letters, numbers, spaces, hyphens, and underscores.' };
+  }
+
+  // Block username reuse when an existing account with this name has a linked
+  // email identity — the real owner must sign in via email rather than let a
+  // stranger squat on their display name.
+  if (isUsernameLinkedToEmail(name)) {
+    return {
+      ok: false,
+      err_code: 'username_linked',
+      error: 'This username is linked to an email. Please sign in with email instead.',
+    };
   }
 
   const disc     = _randomDiscriminator(name);
@@ -129,6 +144,17 @@ export function linkEmail(playerId, email) {
   _insertIdentity.run(playerId, 'email', normalised);
   grantAdminIfEligible(playerId);
   return { ok: true };
+}
+
+/**
+ * Return true if any existing player with this exact username (case-insensitive)
+ * has a linked email identity. Used by registerOrLogin to block squatters.
+ */
+export function isUsernameLinkedToEmail(username) {
+  const name = (username || '').trim();
+  if (!name) return false;
+  const rows = _getAllByName.all(name);
+  return rows.some(r => !!_hasEmailForPlayer.get(r.id));
 }
 
 /**

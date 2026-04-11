@@ -44,6 +44,7 @@ import {
   departureMessage as _departureMessage, arrivalMessage as _arrivalMessage,
 } from './campaign/campaign-ui.js';
 import { requestNotificationPermission, notifyRoundReady, notifyWaitingOnYou, notifyDeadlineApproaching, notifyGameOver } from './notifications.js';
+import { mmSortRows, mmFormatRow } from './main-menu-games.js';
 
 // Stamp version into badge
 document.getElementById('version-badge').textContent = `v${BUILD_VERSION}`;
@@ -1705,8 +1706,19 @@ const stepLobby        = document.getElementById('setup-step-lobby');
 const stepAsyncCreate  = document.getElementById('setup-step-async-create');
 const stepAsyncCreated = document.getElementById('setup-step-async-created');
 const stepAsyncJoin    = document.getElementById('setup-step-async-join');
+const stepNewGame      = document.getElementById('setup-step-newgame');
+const stepReplays      = document.getElementById('setup-step-replays');
 
 function showStep(step) {
+  // Refresh or tear down the main-menu games list depending on whether we're
+  // entering or leaving the mode card.
+  if (step === 'mode') {
+    // Fire-and-forget — the function handles its own loading/empty states.
+    try { _fetchMainMenuGames?.(); } catch {}
+  } else {
+    _stopMmCountdown?.();
+  }
+
   stepMode          .style.display = step === 'mode'            ? '' : 'none';
   stepSpChoice      .style.display = step === 'sp-choice'       ? '' : 'none';
   stepSinglePlayer  .style.display = step === 'singleplayer'    ? '' : 'none';
@@ -1728,6 +1740,8 @@ function showStep(step) {
   stepAsyncCreate   .style.display = step === 'async-create'    ? '' : 'none';
   stepAsyncCreated  .style.display = step === 'async-created'   ? '' : 'none';
   stepAsyncJoin     .style.display = step === 'async-join'      ? '' : 'none';
+  if (stepNewGame) stepNewGame.style.display = step === 'newgame' ? '' : 'none';
+  if (stepReplays) stepReplays.style.display = step === 'replays' ? '' : 'none';
 
   // Move the session bar into the active card so it sits at its bottom
   const _stepEl = {
@@ -1738,6 +1752,7 @@ function showStep(step) {
     'changelog': stepChangelog, 'account': stepAccount, 'waiting': stepWaiting,
     'create-game': stepCreateGame, 'join-game': stepJoinGame, 'lobby': stepLobby,
     'async-create': stepAsyncCreate, 'async-created': stepAsyncCreated, 'async-join': stepAsyncJoin,
+    'newgame': stepNewGame, 'replays': stepReplays,
   }[step];
   const sessionBar = document.getElementById('setup-session-bar');
   if (_stepEl && sessionBar) _stepEl.appendChild(sessionBar);
@@ -1748,12 +1763,22 @@ let _currentLobby = null;
 
 // ── Welcome screen buttons ────────────────────────────────────────────────────
 
-document.getElementById('btn-single-player').addEventListener('click', () => showStep('sp-choice'));
-document.getElementById('btn-quick-play')    .addEventListener('click', () => _showSinglePlayerScreen());
-document.getElementById('btn-story-mode')    .addEventListener('click', () => _showCampaignSelectScreen());
-document.getElementById('btn-sp-choice-back').addEventListener('click', () => showStep('mode'));
-document.getElementById('btn-multiplayer')  .addEventListener('click', () => _showOnlineScreen());
-document.getElementById('btn-how-to-play')  .addEventListener('click', () => showStep('howtoplay'));
+document.getElementById('btn-new-game')     ?.addEventListener('click', () => showStep('newgame'));
+document.getElementById('btn-replays')      ?.addEventListener('click', () => _showReplaysScreen());
+document.getElementById('btn-newgame-back') ?.addEventListener('click', () => showStep('mode'));
+document.getElementById('btn-replays-back') ?.addEventListener('click', () => showStep('mode'));
+
+// New Game submenu buttons
+document.getElementById('btn-ng-battle')  ?.addEventListener('click', () => _showBattleScreen());
+document.getElementById('btn-ng-campaign')?.addEventListener('click', () => _showCampaignSelectScreen());
+document.getElementById('btn-ng-vsai')    ?.addEventListener('click', () => _showSinglePlayerScreen());
+document.getElementById('btn-ng-online')  ?.addEventListener('click', () => _showOnlineScreen());
+
+// Legacy buttons (retained where the DOM still carries them — e.g. sp-choice card):
+document.getElementById('btn-quick-play')    ?.addEventListener('click', () => _showSinglePlayerScreen());
+document.getElementById('btn-story-mode')    ?.addEventListener('click', () => _showCampaignSelectScreen());
+document.getElementById('btn-sp-choice-back')?.addEventListener('click', () => showStep('mode'));
+document.getElementById('btn-how-to-play')   ?.addEventListener('click', () => showStep('howtoplay'));
 
 // "Play the Tutorial" button in How to Play navigates to Story Mode → Prologue
 document.getElementById('btn-play-tutorial')?.addEventListener('click', () => {
@@ -1991,7 +2016,6 @@ if (window.electronAPI) {
 function _showSinglePlayerScreen() {
   showStep('singleplayer');
   _renderSpSaves();
-  _renderCompletedSpGames();
 }
 
 document.getElementById('btn-singleplayer-back').addEventListener('click', () => {
@@ -2811,39 +2835,22 @@ function _deleteSpSave(id) {
   try { localStorage.removeItem('brimstone_sp_history_' + id); } catch {}
 }
 
-/** Render the in-progress saves list on the Single Player screen. */
+/** Render the in-progress saves list on the vs. AI screen using mm-row style. */
 function _renderSpSaves() {
   const list = document.getElementById('sp-saves-list');
   if (!list) return;
-  const saves = _loadSpSaves();
-  if (!saves.length) {
-    list.innerHTML = '<p class="saves-empty">No saved games.</p>';
-    return;
-  }
-  list.innerHTML = '';
-  const modeLabels = { hero: '⚔ vs AI (Hero)', witch: '✦ vs AI (Witch)', 'two-players': '👥 Two Players' };
-  const phaseLabel = { dawn: '🌅 Dawn', day: '☀ Day', dusk: '🌇 Dusk', night: '🌙 Night' };
-  for (const s of saves) {
-    const ago = _timeAgo(s.updatedAt);
-    const entry = document.createElement('div');
-    entry.className = 'save-entry';
-    entry.innerHTML = `
-      <div class="save-entry-info">
-        <div class="save-entry-title">${modeLabels[s.mode] ?? s.mode}</div>
-        <div class="save-entry-meta">Round ${s.round} · ${phaseLabel[s.phase] ?? s.phase} · ${_esc(s.mapSize)} · ${ago}</div>
-      </div>
-      <div style="display:flex;gap:0.4rem">
-        <button class="setup-btn primary sp-resume-btn">Resume</button>
-        <button class="setup-btn sp-delete-btn" title="Delete save">✕</button>
-      </div>
-    `;
-    entry.querySelector('.sp-resume-btn').addEventListener('click', () => _resumeSpSave(s));
-    entry.querySelector('.sp-delete-btn').addEventListener('click', () => {
-      _deleteSpSave(s.id);
-      _renderSpSaves();
-    });
-    list.appendChild(entry);
-  }
+  const rows = _localSpRows();
+  _renderMmList(list, rows, {
+    emptyHtml: '<p class="mm-games-empty">No saved games.</p>',
+    actionsFor: (row) => [
+      {
+        icon: '✕',
+        title: 'Delete save',
+        className: 'mm-action-delete',
+        onClick: () => { _deleteSpSave(row.room_id); _renderSpSaves(); },
+      },
+    ],
+  });
 }
 
 let _spSaveId = null;
@@ -2886,107 +2893,42 @@ function _startFromState(existingState, mode, existingHistory) {
   _startLocalPlanningPhase();
 }
 
-// ── Active games (inline in New Game screen) ──────────────────────────────────
+// ── Active games list — used by the Online screen (filtered mm-row style) ────
+//
+// Shows the same mm-game-row format as the main menu, filtered to online games
+// + battle, with a ✕ resign button per row. Reuses the shared _fetchAllGames
+// and _renderMmList helpers.
 
-function _fetchActiveSaves() {
+async function _fetchActiveSaves() {
   const list = document.getElementById('active-games-list');
   if (!list) return;
-  list.innerHTML = '<p class="saves-empty">Loading…</p>';
+  list.innerHTML = '<p class="mm-games-empty">Loading…</p>';
 
   const session = loadSession();
   if (!session) {
-    list.innerHTML = '<p class="saves-empty">Sign in to see your active games.</p>';
+    list.innerHTML = '<p class="mm-games-empty">Sign in to see your active games.</p>';
     return;
   }
 
-  const base = window.BRIMSTONE_SERVER || '';
-  fetch(`${base}/api/games?token=${encodeURIComponent(session.token)}`)
-    .then(r => r.json())
-    .then(saves => _renderSaves(saves))
-    .catch(() => {
-      list.innerHTML = '<p class="saves-empty">Could not load saves (offline?).</p>';
+  try {
+    const { rows } = await _fetchAllGames();
+    _renderMmList(list, rows, {
+      filter: (row) => row.kind === 'game' || row.kind === 'battle' || row.kind === 'battle-invite',
+      emptyHtml: '<p class="mm-games-empty">No games in progress.</p>',
+      actionsFor: (row) => {
+        if (row.kind === 'game' && row.room_id) {
+          return [{
+            icon: '✕',
+            title: 'Resign',
+            className: 'mm-action-delete',
+            onClick: () => _confirmResign(row.room_id),
+          }];
+        }
+        return undefined;
+      },
     });
-}
-
-function _renderSaves(saves) {
-  const list = document.getElementById('active-games-list');
-  const session = loadSession();
-
-  if (!saves.length) {
-    list.innerHTML = '<p class="saves-empty">No games in progress.</p>';
-    return;
-  }
-
-  // Sort: action-needed first (your turn), then waiting, then lobby
-  saves.sort((a, b) => {
-    const priority = (s) => {
-      if (s.status === 'lobby') return 2;
-      if (s.action_needed) return 0;
-      return 1;
-    };
-    return priority(a) - priority(b);
-  });
-
-  list.innerHTML = '';
-  for (const s of saves) {
-    const pps = s.players_per_side ?? 1;
-    const phaseLabel = { dawn: '🌅 Dawn', day: '☀ Day', dusk: '🌇 Dusk', night: '🌙 Night' }[s.phase] ?? s.phase;
-    const mapLabel = (s.map_size ?? 'standard').charAt(0).toUpperCase() + (s.map_size ?? 'standard').slice(1);
-    const ago = s.updated_at ? _timeAgo(s.updated_at) : '';
-
-    // Title: "1v1 vs Name" for 1v1, "NvN Game" for larger
-    let title;
-    if (pps <= 1) {
-      const myFaction = s.hero_player_id === session?.id ? 'hero' : 'witch';
-      const oppName = myFaction === 'hero' ? (s.witch_name || 'Witch') : (s.hero_name || 'Hero');
-      const sym = myFaction === 'hero' ? '⚔' : '✦';
-      title = `${sym} vs ${_esc(oppName)}`;
-    } else {
-      title = `${pps}v${pps} Game`;
-    }
-
-    // Button label
-    const btnLabel = s.status === 'lobby' ? 'View'
-                   : s.action_needed      ? 'Plan Turn'
-                   : 'View';
-    const btnClass = s.action_needed ? 'setup-btn primary' : 'setup-btn';
-
-    // Waiting badge + submission count for in-progress games
-    let statusBadge = '';
-    let plansMeta = '';
-    if (s.status === 'playing' && s.players_total > 0) {
-      const remaining = s.players_total - (s.players_submitted ?? 0);
-      if (!s.action_needed) {
-        // We submitted — show "Waiting" badge
-        statusBadge = ` <span class="async-badge async-badge-waiting">${remaining > 0 ? remaining + ' left' : 'Waiting'}</span>`;
-      } else if (s.players_submitted > 0) {
-        // Our turn, but others have submitted — show count
-        statusBadge = ` <span class="async-badge async-badge-turn">${s.players_submitted}/${s.players_total} in</span>`;
-      }
-      // Show deadline in meta line
-      if (s.turn_deadline) {
-        const deadline = _timeRemaining(s.turn_deadline);
-        if (deadline) plansMeta = ` · ${deadline}`;
-      }
-    }
-
-    const entry = document.createElement('div');
-    entry.className = 'save-entry' + (s.action_needed ? ' save-action-needed' : '');
-    entry.innerHTML = `
-      ${s.action_needed ? '<span class="save-dot"></span>' : ''}
-      <div class="save-entry-info">
-        <div class="save-entry-title">${title}${statusBadge}</div>
-        <div class="save-entry-meta">Round ${s.round || 1} · ${phaseLabel || 'Lobby'} · ${_esc(mapLabel)}${plansMeta}${ago ? ' · ' + ago : ''}</div>
-      </div>
-      <button class="${_esc(btnClass)}">${btnLabel}</button>
-      <button class="save-resign-btn" title="Resign">✕</button>
-    `;
-    entry.querySelector('.' + (s.action_needed ? 'primary' : 'setup-btn') + ':not(.save-resign-btn)').addEventListener('click', () => _resumeSave(s.room_id));
-    entry.querySelector('.save-resign-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      _confirmResign(s.room_id);
-    });
-    list.appendChild(entry);
+  } catch {
+    list.innerHTML = '<p class="mm-games-empty">Could not load saves (offline?).</p>';
   }
 }
 
@@ -3258,6 +3200,489 @@ function _timeRemaining(deadlineUnixSecs) {
   if (d >= 1) return `${d}d ${h}h left`;
   if (h >= 1) return `${h}h ${m}m left`;
   return `${m}m left`;
+}
+
+// ── Main menu active games list ─────────────────────────────────────────────
+//
+// The main menu, vs. AI, Online, and Replays pages all share the same row
+// rendering via `_buildMmRow`. `_fetchAllGames` gathers rows from every source
+// (local SP saves, campaign missions, online games, battle); callers filter and
+// add per-row actions (resign, pin, delete).
+
+let _mmCountdownTimer = null;
+
+function _stopMmCountdown() {
+  if (_mmCountdownTimer) {
+    clearInterval(_mmCountdownTimer);
+    _mmCountdownTimer = null;
+  }
+}
+
+function _tickMmCountdowns() {
+  const nodes = document.querySelectorAll('.mm-countdown[data-deadline]');
+  if (!nodes.length) { _stopMmCountdown(); return; }
+  for (const el of nodes) {
+    const deadline = Number(el.dataset.deadline);
+    if (!deadline) continue;
+    const text = _timeRemaining(deadline);
+    el.textContent = text;
+    if (text === 'expired') el.classList.add('expired');
+    else el.classList.remove('expired');
+  }
+}
+
+/**
+ * Build a single DOM row element for the shared mm-game-row rendering.
+ *
+ * @param {Object} row      — normalized row object (see main-menu-games.js)
+ * @param {Object} [opts]
+ * @param {() => void} [opts.onClick]  — click handler for the row body
+ * @param {Array<{icon, title, className?, onClick}>} [opts.actions]  — extra buttons
+ */
+function _buildMmRow(row, opts = {}) {
+  const view = mmFormatRow(row);
+
+  const wrap = document.createElement('div');
+  wrap.className = view.classes.join(' ');
+
+  const body = document.createElement('button');
+  body.type = 'button';
+  body.className = 'mm-game-row-body';
+
+  const line1 = document.createElement('div');
+  line1.className = 'mm-game-row-line1';
+  const titleSpan = document.createElement('span');
+  titleSpan.className = 'mm-game-title';
+  titleSpan.textContent = view.title;
+  line1.appendChild(titleSpan);
+
+  if (view.showTurnBadge) {
+    const badge = document.createElement('span');
+    badge.className = 'mm-badge-turn';
+    badge.textContent = 'YOUR TURN';
+    line1.appendChild(badge);
+  }
+  if (view.deadline) {
+    const cd = document.createElement('span');
+    cd.className = 'mm-countdown';
+    cd.dataset.deadline = String(view.deadline);
+    cd.textContent = _timeRemaining(view.deadline);
+    if (cd.textContent === 'expired') cd.classList.add('expired');
+    line1.appendChild(cd);
+  }
+
+  const line2 = document.createElement('div');
+  line2.className = 'mm-game-row-line2';
+  line2.textContent = view.meta;
+
+  body.appendChild(line1);
+  body.appendChild(line2);
+  body.addEventListener('click', opts.onClick || (() => _mmDefaultRowClick(row)));
+
+  wrap.appendChild(body);
+
+  if (opts.actions?.length) {
+    const actionsWrap = document.createElement('div');
+    actionsWrap.className = 'mm-game-row-actions';
+    for (const action of opts.actions) {
+      const ab = document.createElement('button');
+      ab.type = 'button';
+      ab.className = 'mm-action-btn ' + (action.className || '');
+      ab.title = action.title || '';
+      ab.textContent = action.icon;
+      ab.addEventListener('click', (e) => { e.stopPropagation(); action.onClick(); });
+      actionsWrap.appendChild(ab);
+    }
+    wrap.appendChild(actionsWrap);
+  }
+
+  return wrap;
+}
+
+/**
+ * Default click handler for a row — routes based on kind to the right flow.
+ */
+function _mmDefaultRowClick(row) {
+  switch (row.kind) {
+    case 'battle':
+    case 'battle-invite':
+      _showBattleScreen();
+      return;
+    case 'local-sp':
+      if (row._spSave) _resumeSpSave(row._spSave);
+      return;
+    case 'local-campaign':
+      if (row._campaignDef) _showCampaignScreen(row._campaignDef);
+      return;
+    case 'completed-sp':
+      if (row._completedData) _startSpReplay(row._completedData);
+      return;
+    case 'completed-mp':
+      if (row._replayMeta) _mmStartMpReplay(row._replayMeta);
+      return;
+    case 'game':
+    default:
+      if (row.room_id) _resumeSave(row.room_id);
+      return;
+  }
+}
+
+/**
+ * Load local SP save rows (from localStorage). Always available, no login.
+ */
+function _localSpRows() {
+  const saves = _loadSpSaves();
+  const modeLabels = {
+    hero: '⚔ vs AI (Hero)',
+    witch: '✦ vs AI (Witch)',
+    'two-players': '👥 Two Players',
+  };
+  return saves.map(s => ({
+    kind: 'local-sp',
+    room_id: s.id,
+    title: modeLabels[s.mode] ?? s.mode,
+    round: s.round,
+    phase: s.phase,
+    action_needed: false,
+    turn_deadline: null,
+    map_size: s.mapSize ?? 'standard',
+    updated_at: s.updatedAt ?? 0,
+    is_local: true,
+    _spSave: s,
+  }));
+}
+
+/**
+ * Load campaign mid-mission saves. Scans known campaigns for in-progress saves.
+ */
+function _localCampaignRows() {
+  const rows = [];
+  try {
+    for (const camp of CAMPAIGNS) {
+      if (camp.disabled) continue;
+      // Scan missions for any that have a save file
+      const missions = camp.missions || [];
+      for (const m of missions) {
+        const save = loadCampaignMissionSave(camp.id, m.id);
+        if (!save) continue;
+        rows.push({
+          kind: 'local-campaign',
+          room_id: `${camp.id}/${m.id}`,
+          title: `📖 ${m.title || m.id}`,
+          round: null,
+          phase: null,
+          action_needed: false,
+          turn_deadline: null,
+          updated_at: save.updatedAt ? Math.floor(save.updatedAt / 1000) : 0,
+          is_local: true,
+          _campaignDef: camp,
+          _missionDef: m,
+        });
+      }
+    }
+  } catch {}
+  return rows;
+}
+
+/**
+ * Gather all rows: local SP + campaign + online games + battle. Returns
+ * { rows, signedIn, hadOnlineFetch } — caller filters/sorts/renders.
+ */
+async function _fetchAllGames() {
+  const rows = [..._localSpRows(), ..._localCampaignRows()];
+
+  const session = loadSession();
+  if (!session) {
+    return { rows, signedIn: false, hadOnlineFetch: false };
+  }
+
+  const base = window.BRIMSTONE_SERVER || '';
+  const token = encodeURIComponent(session.token);
+
+  let games = [];
+  let battleStatus = null;
+  let hadOnlineFetch = true;
+  try {
+    const [gamesRes, battleRes] = await Promise.all([
+      fetch(`${base}/api/games?token=${token}`).then(r => r.ok ? r.json() : []),
+      fetch(`${base}/api/battle-status?token=${token}`).then(r => r.ok ? r.json() : null),
+    ]);
+    if (Array.isArray(gamesRes)) games = gamesRes;
+    battleStatus = battleRes;
+  } catch {
+    hadOnlineFetch = false;
+  }
+
+  for (const s of games) {
+    const pps = s.players_per_side ?? 1;
+    let title;
+    if (pps <= 1) {
+      const myFaction = s.hero_player_id === session?.id ? 'hero' : 'witch';
+      const oppName = myFaction === 'hero' ? (s.witch_name || 'Witch') : (s.hero_name || 'Hero');
+      const sym = myFaction === 'hero' ? '⚔' : '✦';
+      title = `${sym} vs ${oppName}`;
+    } else {
+      title = `${pps}v${pps} Game`;
+    }
+    rows.push({
+      kind: 'game',
+      room_id: s.room_id,
+      title,
+      round: s.round,
+      phase: s.phase,
+      action_needed: !!s.action_needed,
+      turn_deadline: s.turn_deadline,
+      players_submitted: s.players_submitted ?? 0,
+      players_total: s.players_total ?? 0,
+      players_per_side: pps,
+      map_size: s.map_size ?? 'standard',
+      updated_at: s.updated_at ?? 0,
+      status: s.status,
+    });
+  }
+
+  // Synthesize a battle row if there's an active battle.
+  if (battleStatus?.myBattle) {
+    const b = battleStatus.myBattle;
+    const pps = b.maxPerSide ?? 10;
+    const playersCount = (b.players ?? []).filter(p => !p.isAI).length;
+    rows.push({
+      kind: 'battle',
+      room_id: b.roomId,
+      title: '⚔✦ Battle for Caleb\'s Hollow',
+      round: b.round,
+      action_needed: !b.mySubmitted,
+      turn_deadline: b.turnDeadline ?? null,
+      players_count: playersCount,
+      players_per_side: pps,
+      updated_at: Math.floor(Date.now() / 1000),
+      status: 'playing',
+    });
+  } else if (battleStatus?.battles?.length) {
+    // A battle exists but the user hasn't joined — show as an invite.
+    rows.push({
+      kind: 'battle-invite',
+      room_id: null,
+      title: '⚔✦ Battle for Caleb\'s Hollow',
+      round: null,
+      action_needed: false,
+      turn_deadline: null,
+      players_per_side: battleStatus.battles[0].maxPerSide ?? 10,
+      updated_at: Math.floor(Date.now() / 1000),
+      status: 'invite',
+    });
+  }
+
+  return { rows, signedIn: true, hadOnlineFetch };
+}
+
+/**
+ * Render a list of mm-rows into a target element, optionally with filter and
+ * per-row action buttons. Restarts the countdown timer if any deadlines are
+ * present.
+ *
+ * @param {HTMLElement} listEl
+ * @param {Array<Object>} rows
+ * @param {Object} [opts]
+ * @param {(row: Object) => boolean} [opts.filter]
+ * @param {(row: Object) => Array} [opts.actionsFor]
+ * @param {number} [opts.maxRows]
+ * @param {string} [opts.emptyHtml]
+ */
+function _renderMmList(listEl, rows, opts = {}) {
+  if (!listEl) return;
+  const { filter, actionsFor, maxRows, emptyHtml } = opts;
+  let filtered = filter ? rows.filter(filter) : rows;
+  filtered = mmSortRows(filtered);
+  if (maxRows && filtered.length > maxRows) filtered = filtered.slice(0, maxRows);
+
+  listEl.innerHTML = '';
+  if (!filtered.length) {
+    listEl.innerHTML = emptyHtml || '<p class="mm-games-empty">No games.</p>';
+    return;
+  }
+
+  for (const row of filtered) {
+    const actions = actionsFor ? actionsFor(row) : undefined;
+    listEl.appendChild(_buildMmRow(row, { actions }));
+  }
+}
+
+/**
+ * Refresh the main-menu active games list.
+ *
+ * Local saves + campaign missions are always loaded. Online games are only
+ * fetched when signed in; a "sign in to see online games" hint appears below
+ * the list when not signed in.
+ */
+async function _fetchMainMenuGames() {
+  const list     = document.getElementById('mm-games-list');
+  const signinEl = document.getElementById('mm-games-signin');
+  if (!list) return;
+
+  const { rows, signedIn } = await _fetchAllGames();
+
+  if (signinEl) signinEl.style.display = signedIn ? 'none' : '';
+
+  _renderMmList(list, rows, {
+    maxRows: 5,
+    emptyHtml: '<p class="mm-games-empty">No games in progress — tap New Game below.</p>',
+  });
+
+  // Restart the countdown timer if any visible rows have deadlines
+  _stopMmCountdown();
+  if (list.querySelector('.mm-countdown[data-deadline]')) {
+    _mmCountdownTimer = setInterval(_tickMmCountdowns, 1000);
+  }
+}
+
+/**
+ * Show the Replays top-level screen. Merges SP local completed games and MP
+ * online completed games into a single mm-style list with pin/delete buttons.
+ */
+async function _showReplaysScreen() {
+  showStep('replays');
+  const list = document.getElementById('mm-replays-list');
+  if (!list) return;
+  list.innerHTML = '<p class="mm-games-empty">Loading…</p>';
+
+  const rows = [];
+
+  // Local SP completed games
+  try {
+    _pruneCompletedSpGames();
+    const index = _loadCompletedSpIndex();
+    const modeLabels = { hero: '⚔ vs AI', witch: '✦ vs AI', 'two-players': '👥 Two Players' };
+    for (const g of index) {
+      const winnerLabel = g.winner === 'hero' ? 'Hero wins' : 'Witch wins';
+      rows.push({
+        kind: 'completed-sp',
+        room_id: g.id,
+        title: `${modeLabels[g.mode] ?? g.mode} — ${winnerLabel}${g.pinned ? ' 📌' : ''}`,
+        win_reason: g.winReason,
+        total_rounds: g.totalRounds,
+        action_needed: false,
+        turn_deadline: null,
+        updated_at: g.createdAt ?? 0,
+        is_local: true,
+        _completedMeta: g,
+      });
+    }
+  } catch {}
+
+  // Online MP completed games (only if signed in)
+  const session = loadSession();
+  if (session) {
+    try {
+      const base = window.BRIMSTONE_SERVER || '';
+      const res = await fetch(`${base}/api/completed-games?token=${encodeURIComponent(session.token)}`);
+      if (res.ok) {
+        const games = await res.json();
+        for (const g of games) {
+          let players = [];
+          try { players = JSON.parse(g.players_json || '[]'); } catch {}
+          const pps = players.length > 0 ? players.filter(p => p.faction === 'hero').length : 1;
+          let myFaction;
+          if (players.length > 0) {
+            const mySeat = players.find(p => p.playerId === session?.id);
+            myFaction = mySeat?.faction ?? 'hero';
+          } else {
+            myFaction = g.hero_player_id === session?.id ? 'hero' : 'witch';
+          }
+          const resultLabel = g.winner === myFaction ? 'Victory' : 'Defeat';
+          const winnerIcon  = g.winner === 'hero' ? '⚔' : '✦';
+          const title = pps > 1
+            ? `${winnerIcon} ${pps}v${pps} — ${resultLabel}`
+            : `${winnerIcon} ${g.hero_name} vs ${g.witch_name} — ${resultLabel}`;
+          rows.push({
+            kind: 'completed-mp',
+            room_id: g.game_id,
+            title: title + (g.pinned ? ' 📌' : ''),
+            win_reason: g.win_reason,
+            total_rounds: g.total_rounds,
+            action_needed: false,
+            turn_deadline: null,
+            updated_at: g.created_at ?? 0,
+            _replayMeta: g,
+          });
+        }
+      }
+    } catch {}
+  }
+
+  _renderMmList(list, rows, {
+    emptyHtml: '<p class="mm-games-empty">No completed games yet.</p>',
+    actionsFor: (row) => {
+      if (row.kind === 'completed-sp') {
+        const meta = row._completedMeta;
+        return [
+          {
+            icon: meta.pinned ? '📌' : '📎',
+            title: meta.pinned ? 'Unpin' : 'Pin to keep',
+            onClick: () => { _pinCompletedSpGame(meta.id, !meta.pinned); _showReplaysScreen(); },
+          },
+          {
+            icon: '✕',
+            title: 'Delete',
+            className: 'mm-action-delete',
+            onClick: () => { _deleteCompletedSpGame(meta.id); _showReplaysScreen(); },
+          },
+        ];
+      }
+      if (row.kind === 'completed-mp') {
+        const meta = row._replayMeta;
+        const base = window.BRIMSTONE_SERVER || '';
+        const token = session?.token;
+        return [
+          {
+            icon: meta.pinned ? '📌' : '📎',
+            title: meta.pinned ? 'Unpin' : 'Pin to keep',
+            onClick: async () => {
+              await fetch(
+                `${base}/api/completed-games/${encodeURIComponent(meta.game_id)}/pin?token=${encodeURIComponent(token)}`,
+                {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ pinned: !meta.pinned }),
+                }
+              );
+              _showReplaysScreen();
+            },
+          },
+          {
+            icon: '✕',
+            title: 'Delete',
+            className: 'mm-action-delete',
+            onClick: async () => {
+              await fetch(
+                `${base}/api/completed-games/${encodeURIComponent(meta.game_id)}?token=${encodeURIComponent(token)}`,
+                { method: 'DELETE' }
+              );
+              _showReplaysScreen();
+            },
+          },
+        ];
+      }
+      return undefined;
+    },
+  });
+}
+
+/**
+ * Start an MP completed-game replay — fetches rounds then plays via playback.
+ */
+async function _mmStartMpReplay(gameMeta) {
+  const session = loadSession();
+  if (!session) return;
+  const base = window.BRIMSTONE_SERVER || '';
+  try {
+    const rounds = await fetch(
+      `${base}/api/completed-games/${encodeURIComponent(gameMeta.game_id)}/rounds?token=${encodeURIComponent(session.token)}`
+    ).then(r => r.json());
+    await _startMpReplay(rounds, gameMeta);
+  } catch {
+    alert('Could not load replay data.');
+  }
 }
 
 /**
@@ -4239,9 +4664,11 @@ async function _showBattleScreen() {
   } catch { /* ignore */ }
 }
 
-// Sign-in button on the battle screen — reuse the same sign-in flow as online
+// Sign-in button on the battle screen — open the auth dialog and return to
+// the battle screen on success (previous behavior routed to Account and
+// never came back).
 document.getElementById('btn-battle-signin')?.addEventListener('click', () => {
-  showStep('account');
+  _showAuthDialog(() => _showBattleScreen());
 });
 
 document.getElementById('btn-battle-main')?.addEventListener('click', () => _showBattleScreen());
@@ -4620,9 +5047,14 @@ function _checkGameDeepLink() {
 window.addEventListener('hashchange', () => {
   _checkAsyncDeepLink();
 });
-_fetchMainMenuAsyncGames();
-_updateMultiplayerBadge();
-_updateBattleBadge();
+// Unified main-menu refresh — fetches games + battle status in parallel
+// and updates the main menu list + multiplayer/battle badges as side effects.
+_fetchMainMenuGames();
+
+// Wire the mode-card sign-in button (only present after the menu redesign).
+document.getElementById('btn-mm-signin')?.addEventListener('click', () => {
+  _showAuthDialog(() => _fetchMainMenuGames());
+});
 
 /** Check if the player needs to submit a battle turn and show badge on main menu. */
 async function _updateBattleBadge() {
@@ -5204,7 +5636,31 @@ function _showAuthDialogUI(onSuccess) {
   document.getElementById('auth-email-input').value = '';
   document.getElementById('auth-error').style.display = 'none';
   document.getElementById('auth-email-status').style.display = 'none';
+
+  // Reset the email login section to hidden — it's only revealed when the
+  // server reports the username is already linked to an email.
+  const emailSection = document.getElementById('auth-email-section');
+  if (emailSection) emailSection.style.display = 'none';
+  const linkedHint = document.getElementById('auth-linked-hint');
+  if (linkedHint) { linkedHint.style.display = 'none'; linkedHint.textContent = ''; }
+
   dlg.classList.add('visible');
+}
+
+/**
+ * Reveal the email login section inside the auth dialog. Called when the
+ * server reports the chosen username is already linked to an email — the
+ * real owner must sign in via magic link instead.
+ */
+function _revealAuthEmailSection() {
+  const emailSection = document.getElementById('auth-email-section');
+  if (emailSection) emailSection.style.display = '';
+  const linkedHint = document.getElementById('auth-linked-hint');
+  if (linkedHint) {
+    linkedHint.textContent = 'This username is linked to an email. Use email login below.';
+    linkedHint.style.display = '';
+  }
+  document.getElementById('auth-email-input')?.focus();
 }
 
 function _hideAuthDialog() {
@@ -5379,12 +5835,10 @@ document.getElementById('btn-setup-signout').addEventListener('click', async () 
   _initMpStep();
   _initAsyncStep();
   _initAccountPage();
-  document.getElementById('active-games-list').innerHTML =
-    '<p class="saves-empty">Sign in to see your active games.</p>';
-  document.getElementById('mp-completed-list').innerHTML =
-    '<p class="saves-empty">Sign in to see completed games.</p>';
-  document.getElementById('async-games-list').innerHTML =
-    '<p class="saves-empty">Sign in to see async games.</p>';
+  const activeList = document.getElementById('active-games-list');
+  if (activeList) activeList.innerHTML = '<p class="mm-games-empty">Sign in to see your active games.</p>';
+  const asyncList = document.getElementById('async-games-list');
+  if (asyncList) asyncList.innerHTML = '<p class="saves-empty">Sign in to see async games.</p>';
 });
 
 // ── Async sign-in ───────────────────────────────────────────────────────────
@@ -5398,18 +5852,22 @@ document.getElementById('btn-async-signin')?.addEventListener('click', () => {
 
 // (Email login is now handled by the auth dialog)
 
-function _onlineError(msg) {
+function _onlineError(msg, raw) {
   // Show error in the auth dialog if visible, otherwise ignore
   const authErr = document.getElementById('auth-error');
   if (authErr) {
     authErr.textContent = msg;
     authErr.style.display = '';
   }
-  // If username is taken, scroll the email section into view so the user
-  // can immediately sign in with their linked email
-  if (msg && msg.includes('already taken')) {
-    const emailInput = document.getElementById('auth-email-input');
-    if (emailInput) emailInput.focus();
+  // Username is linked to an email on another account — reveal the email
+  // login section so the real owner can sign in via magic link.
+  if (raw?.err_code === 'username_linked') {
+    _revealAuthEmailSection();
+    return;
+  }
+  // Legacy string fallback (older server builds / cached PWAs).
+  if (msg && msg.includes && msg.includes('already taken')) {
+    _revealAuthEmailSection();
   }
 }
 
@@ -6129,7 +6587,7 @@ function _createMpClient() {
     onAsyncPlanStatus(msg)  { _handleAsyncPlanStatus(msg); },
     onAsyncOpponentJoined(msg) { _handleAsyncOpponentJoined(msg); },
 
-    onError(msg) {
+    onError(msg, raw) {
       // Ignore errors after intentional sign-out / disconnect
       if (!mp) return;
 
@@ -6140,7 +6598,15 @@ function _createMpClient() {
       if (state && reconnOverlay?.style.display !== 'none') {
         reconnOverlay.style.display = 'none';
         _showOnlineScreen();
-        _onlineError(msg);
+        _onlineError(msg, raw);
+        return;
+      }
+
+      // If the auth dialog is visible, show the error in-place without
+      // navigating away — keeps the user on their calling screen.
+      const authDlg = document.getElementById('auth-dialog');
+      if (authDlg?.classList.contains('visible')) {
+        _onlineError(msg, raw);
         return;
       }
 
@@ -6152,7 +6618,7 @@ function _createMpClient() {
         } else {
           _showOnlineScreen();
         }
-        _onlineError(msg);
+        _onlineError(msg, raw);
       }
     },
 
