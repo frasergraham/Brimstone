@@ -50,10 +50,16 @@ export function swapState(refs, newState) {
 
 /**
  * Delay utility that respects playback pause/abort/speed flags.
- * Outside PLAYBACK mode, behaves as a plain setTimeout.
+ *
+ * Outside PLAYBACK mode, behaves as a plain setTimeout — UNLESS `jumpToEnd`
+ * or `aborted` is set (e.g. inline "Replay last turn" has a skip button),
+ * in which case we still poll so the skip takes effect mid-delay.
  */
 export function playbackDelay(ms) {
-  if (getMode() !== AppMode.PLAYBACK) return new Promise(resolve => setTimeout(resolve, ms));
+  const inPlayback = getMode() === AppMode.PLAYBACK;
+  if (!inPlayback && !playback.jumpToEnd && !playback.aborted) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
 
   // During replay: poll every ≤50 ms so pause/abort/back take effect immediately.
   const effective = playback.speedMult > 0 ? ms / playback.speedMult : ms;

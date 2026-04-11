@@ -68,6 +68,11 @@ const _getLastSaveRound = db.prepare(`
   ORDER  BY round_num DESC
   LIMIT  1
 `);
+const _getSaveRound = db.prepare(`
+  SELECT round_num, pre_state_json, steps_json
+  FROM   save_replay_rounds
+  WHERE  room_id = ? AND round_num = ?
+`);
 
 const _listByPlayer = db.prepare(`
   SELECT room_id, hero_player_id, witch_player_id, hero_name, witch_name,
@@ -133,6 +138,11 @@ export function getSaveRounds(roomId) {
 /** Retrieve just the most recent replay round for a save. Returns null if none. */
 export function getLastSaveRound(roomId) {
   return _getLastSaveRound.get(roomId) ?? null;
+}
+
+/** Retrieve a specific round's replay data. Returns null if not found. */
+export function getSaveRound(roomId, roundNum) {
+  return _getSaveRound.get(roomId, roundNum) ?? null;
 }
 
 /**

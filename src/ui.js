@@ -3924,6 +3924,58 @@ export class UIController {
   }
 
   /**
+   * Show a minimal "SKIP only" HUD during any inline replay animation
+   * (initial resolution, "Replay last turn", summary-dialog replay, etc.).
+   * Reuses the full-game replay HUD shell but hides every button except
+   * the "jump to end" one, which is relabelled "SKIP".
+   * @param {Function} onSkip — called when the skip button is pressed
+   */
+  showInlineReplayHUD(onSkip) {
+    const hud = this._el('replay-hud');
+    if (!hud) return;
+    hud.style.display = 'flex';
+    hud.classList.add('replay-hud-skip-only');
+    for (const action of ['back', 'play', 'pause', 'ff', 'vff', 'stop']) {
+      const btn = document.getElementById(`replay-${action}-btn`);
+      if (btn) btn.style.display = 'none';
+    }
+    const endBtn = document.getElementById('replay-end-btn');
+    if (endBtn) {
+      endBtn.style.display = '';
+      // Remember the original glyph so hideInlineReplayHUD can restore it.
+      if (this._replayEndBtnOriginalText === undefined) {
+        this._replayEndBtnOriginalText = endBtn.textContent;
+      }
+      endBtn.textContent = 'SKIP';
+      endBtn.title = 'Skip replay';
+      endBtn.onclick = () => onSkip?.();
+    }
+    this._inlineReplayActive = true;
+  }
+
+  /** Hide the inline skip-only replay HUD and restore button visibility. */
+  hideInlineReplayHUD() {
+    const hud = this._el('replay-hud');
+    if (hud) {
+      hud.style.display = 'none';
+      hud.classList.remove('replay-hud-skip-only');
+    }
+    for (const action of ['back', 'play', 'pause', 'ff', 'vff', 'end', 'stop']) {
+      const btn = document.getElementById(`replay-${action}-btn`);
+      if (btn) btn.style.display = '';
+    }
+    const endBtn = document.getElementById('replay-end-btn');
+    if (endBtn) {
+      // Restore the original glyph (defaults to ⇥ if we never saw one)
+      endBtn.textContent = this._replayEndBtnOriginalText ?? '\u21E5';
+      endBtn.title = 'Jump to end';
+      endBtn.onclick = null;
+    }
+    this._replayEndBtnOriginalText = undefined;
+    this._inlineReplayActive = false;
+  }
+
+  /**
    * Show a confirmation dialog during replay when stop is pressed.
    * @returns {Promise<'exit'|'cancel'>}
    */

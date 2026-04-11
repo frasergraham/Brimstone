@@ -27,6 +27,7 @@ import { getFaction, allFactions } from './factions.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { playback, resetPlayback, replayFullGame, playbackDelay, swapState, patchAlive } from './playback.js';
+import { ReplayCache } from './replay-cache.js';
 import { MAP_SIZES } from './map.js';
 import { nodeController } from './game.js';
 import { MissionConductor } from './mission-conductor.js';
@@ -105,6 +106,74 @@ let _gameStartTime = null;        // wall-clock timestamp for game duration trac
 let _roundHistory        = [];  // SP offline:  { roundNum, preState, steps }[]
 let _onlineRoundHistory  = [];  // MP online:   { roundNum, preState, steps }[]
 // Playback state imported from ./playback.js (playback, resetPlayback, etc.)
+
+// ── Replay cache (round-keyed) + pending server fetches ─────────────────────
+// Used by "Replay last turn" to look up a replay by exact round number,
+// falling back to the server if missing.
+const _replayCache = new ReplayCache();
+/** @type {Map<number, {resolve:Function, reject:Function, timer:any}>} */
+const _replayRequests = new Map();
+let _inlineReplayInFlight = false;
+
+/**
+ * Central helper: cache a replay entry by roundNum, and keep the legacy
+ * chronological `_onlineRoundHistory` array in sync (used by full-game
+ * PLAYBACK). Idempotent on roundNum so callers can invoke it freely.
+ */
+function _cacheReplay(entry) {
+  if (!entry || typeof entry.roundNum !== 'number') return;
+  _replayCache.set(entry);
+  const tail = _onlineRoundHistory[_onlineRoundHistory.length - 1];
+  if (!tail || tail.roundNum !== entry.roundNum) {
+    _onlineRoundHistory.push({
+      roundNum: entry.roundNum,
+      preState: entry.preStateJson,
+      steps:    entry.stepsJson,
+    });
+  }
+}
+
+/** Send a requestReplay to the server, resolving when replayData matches. */
+function _requestReplayFromServer(roomId, roundNum) {
+  return new Promise((resolve, reject) => {
+    if (!mp) { reject(new Error('no connection')); return; }
+    const prev = _replayRequests.get(roundNum);
+    if (prev) {
+      clearTimeout(prev.timer);
+      prev.reject(new Error('superseded'));
+    }
+    const timer = setTimeout(() => {
+      _replayRequests.delete(roundNum);
+      reject(new Error('timeout'));
+    }, 10_000);
+    _replayRequests.set(roundNum, { resolve, reject, timer });
+    mp.requestReplay(roomId, roundNum);
+  });
+}
+
+function _handleReplayData(msg) {
+  const entry = {
+    roundNum:     msg.roundNum,
+    preStateJson: msg.preStateJson,
+    stepsJson:    msg.stepsJson,
+  };
+  _cacheReplay(entry);
+  const pending = _replayRequests.get(msg.roundNum);
+  if (pending) {
+    clearTimeout(pending.timer);
+    _replayRequests.delete(msg.roundNum);
+    pending.resolve(entry);
+  }
+}
+
+function _handleReplayError(msg) {
+  const pending = _replayRequests.get(msg.roundNum);
+  if (pending) {
+    clearTimeout(pending.timer);
+    _replayRequests.delete(msg.roundNum);
+    pending.reject(new Error(msg.reason || 'replayError'));
+  }
+}
 
 // Keep UIController.appMode in sync with the centralized mode.
 onModeChange((newMode) => { if (ui) ui.appMode = newMode; });
@@ -927,6 +996,15 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     humanFaction, myPlayerId,
     flags: { goBack: playback.goBack, aborted: playback.aborted, jumpToEnd: playback.jumpToEnd, _autoplay },
   });
+
+  // Show the skip button whenever a replay is animating, EXCEPT during full
+  // PLAYBACK mode (which has its own HUD with its own skip control). We
+  // detect full PLAYBACK via ui._replayOnControl because the first step
+  // animation sets mode to RESOLVING, clobbering getMode()-based checks.
+  const skipHudActive = !_autoplay && ui && !ui._replayOnControl;
+  if (skipHudActive) {
+    ui.showInlineReplayHUD?.(() => { playback.jumpToEnd = true; });
+  }
   setMode(AppMode.RESOLVING);
   for (let i = 0; i < steps.length; i++) {
     // During replay: if BACK or STOP was pressed, abort remaining steps immediately
@@ -1566,6 +1644,15 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   // Skip the final redraw during replay navigation (caller will render the target preState).
   if (!playback.goBack && !playback.aborted && !playback.jumpToEnd) {
     redrawFn();
+  }
+  // Inline replay cleanup: hide the SKIP HUD and clear jumpToEnd so the
+  // next animation doesn't inherit the flag and auto-skip. Only do this
+  // in the inline case — full PLAYBACK's outer loop (src/playback.js)
+  // relies on jumpToEnd persisting across the animation call to route
+  // the viewer to the end-of-replay hold screen.
+  if (skipHudActive) {
+    ui?.hideInlineReplayHUD?.();
+    playback.jumpToEnd = false;
   }
   // Mode transition is caller's responsibility
 }
@@ -4002,6 +4089,8 @@ function _updateAsyncReplayBtn() {
 async function _asyncWatchLastTurn(lastRound) {
   if (!lastRound || !state || !renderer || !ui) return;
 
+  resetPlayback();
+
   const { preState, steps, postState } = lastRound;
 
   // ── Debug: log replay data so we can verify the server is sending actions ──
@@ -4060,6 +4149,12 @@ async function _asyncWatchLastTurn(lastRound) {
   await ui._triggerPostRoundEffects();
   redrawOnline();
 
+  // If skip was pressed mid-animation, bail out entirely (skip summary)
+  if (playback.jumpToEnd) {
+    resetPlayback();
+    return;
+  }
+
   // Show resolution summary with replay support
   if (ui && _asyncFaction) {
     setMode(AppMode.RESOLVING);
@@ -4095,6 +4190,8 @@ async function _asyncWatchLastTurn(lastRound) {
     } while (action === 'replay');
     setMode(AppMode.PLANNING);
   }
+
+  resetPlayback();
 }
 
 function _handleAsyncPlanStatus(msg) {
@@ -5969,39 +6066,80 @@ async function _applyOnlinePlanningPhase(payload) {
   }
 }
 
-/** Replay the last resolved round inline (triggered by header button). */
+/**
+ * Replay the last resolved round inline (triggered by header button).
+ *
+ * Looks up round (state.round - 1) from the client cache; on a miss,
+ * fetches it from the server via requestReplay. This guarantees the
+ * replay always matches the turn the player is currently waiting to see.
+ */
 async function _replayLastTurnInline() {
-  if (!_onlineRoundHistory.length || !ui || !state || !renderer || isAnimating()) return;
+  if (!ui || !state || !renderer || isAnimating() || _inlineReplayInFlight) return;
+  const targetRound = state.round - 1;
+  if (targetRound < 1) return;
 
-  // Save current plan state so we can restore it after replay
-  const savedPlans = new Map(ui._unitPlans);
-  const wasSubmitted = ui._planSubmitted;
+  _inlineReplayInFlight = true;
+  try {
+    // 1. Look up in cache first
+    let entry = _replayCache.get(targetRound);
 
-  const last = _onlineRoundHistory[_onlineRoundHistory.length - 1];
-  // Remove from history temporarily so _playReconnectReplay doesn't double-add it
-  _onlineRoundHistory.pop();
+    // 2. Cache miss → fetch from server
+    if (!entry) {
+      if (!mp?.roomId) {
+        console.warn('[replay] cache miss with no server connection');
+        return;
+      }
+      try {
+        entry = await _requestReplayFromServer(mp.roomId, targetRound);
+      } catch (err) {
+        console.warn('[replay] fetch failed:', err?.message || err);
+        return;
+      }
+    }
+    if (!entry || entry.roundNum !== targetRound) {
+      console.warn(`[replay] no valid replay for round ${targetRound}`);
+      return;
+    }
 
-  ui.exitPlanningMode();
-  await _playReconnectReplay({
-    roundNum:     last.roundNum,
-    preStateJson: last.preState,
-    stepsJson:    last.steps,
-  });
+    // Save current plan state so we can restore it after replay
+    const savedPlans     = new Map(ui._unitPlans);
+    const wasSubmitted   = ui._planSubmitted;
+    // Snapshot the countdown deadline BEFORE exitPlanningMode nukes it, so
+    // we can restart the countdown with the correct remaining time.
+    const savedCountdownEnd = ui._countdownEnd ?? null;
 
-  // Restore planning mode with the saved plan
-  const budget = state.playerActionsLeft?.get(mp?.myPlayerId)
-    ?? (mp?.myFaction ? getFaction(mp.myFaction).getActionsLeft(state) : state.heroActionsLeft);
-  ui._hasReplayHistory = _onlineRoundHistory.length > 0;
-  ui.enterPlanningMode(mp.myFaction, budget, 0);
-  ui.onPlanSubmit = (plan) => mp.submitPlan(plan, state.round);
-  ui.onReturnToMenu = () => { location.reload(); };
-  ui.onReplayLastTurn = () => _replayLastTurnInline();
+    ui.exitPlanningMode();
+    resetPlayback();
+    try {
+      await _playReconnectReplay({
+        roundNum:     entry.roundNum,
+        preStateJson: entry.preStateJson,
+        stepsJson:    entry.stepsJson,
+      });
+    } finally {
+      resetPlayback();
+    }
 
-  // Restore the plan
-  ui._unitPlans = savedPlans;
-  ui._refreshPlanOverlay();
-  ui._renderPlanPanel();
-  if (wasSubmitted) ui.markPlanSubmitted();
+    // Restore planning mode with the saved plan + remaining countdown time
+    const budget = state.playerActionsLeft?.get(mp?.myPlayerId)
+      ?? (mp?.myFaction ? getFaction(mp.myFaction).getActionsLeft(state) : state.heroActionsLeft);
+    const remainingMs = savedCountdownEnd
+      ? Math.max(0, savedCountdownEnd - Date.now())
+      : 0;
+    ui._hasReplayHistory = _onlineRoundHistory.length > 0;
+    ui.enterPlanningMode(mp.myFaction, budget, remainingMs);
+    ui.onPlanSubmit = (plan) => mp.submitPlan(plan, state.round);
+    ui.onReturnToMenu = () => { location.reload(); };
+    ui.onReplayLastTurn = () => _replayLastTurnInline();
+
+    // Restore the plan
+    ui._unitPlans = savedPlans;
+    ui._refreshPlanOverlay();
+    ui._renderPlanPanel();
+    if (wasSubmitted) ui.markPlanSubmitted();
+  } finally {
+    _inlineReplayInFlight = false;
+  }
 }
 
 /** Play the last round's resolution replay on reconnect. */
@@ -6034,11 +6172,18 @@ async function _playReconnectReplay(replay) {
   state.entities = currentEntities;
 
   // Store in round history for "replay full game"
-  _onlineRoundHistory.push({
-    roundNum: replay.roundNum,
-    preState: replay.preStateJson,
-    steps:    replay.stepsJson,
+  // Cache for round-keyed lookup + legacy full-game replay array
+  _cacheReplay({
+    roundNum:     replay.roundNum,
+    preStateJson: replay.preStateJson,
+    stepsJson:    replay.stepsJson,
   });
+
+  // If the user hit "skip" mid-animation, bail out: snap to final state and
+  // skip the post-round summary entirely.
+  if (playback.jumpToEnd) {
+    return;
+  }
 
   // Show summary
   await ui._triggerPostRoundEffects();
@@ -6195,12 +6340,21 @@ function _createMpClient() {
 
     onMatchFound({ roomId, faction, opponentName, aiOpponent, resumed, myPlayerId, players, priorRounds }) {
       // Reset online round history for this game, restoring prior rounds on resume
+      _replayCache.clear();
       if (resumed && priorRounds?.length) {
         _onlineRoundHistory = priorRounds.map(r => ({
           roundNum: r.roundNum,
           preState: r.preStateJson,
           steps:    r.stepsJson,
         }));
+        // Seed the round-keyed cache from restored rounds.
+        for (const r of priorRounds) {
+          _replayCache.set({
+            roundNum:     r.roundNum,
+            preStateJson: r.preStateJson,
+            stepsJson:    r.stepsJson,
+          });
+        }
       } else {
         _onlineRoundHistory = [];
       }
@@ -6398,11 +6552,11 @@ function _createMpClient() {
         state.witch     = finalState.witch;
         state.myFaction = mp?.myFaction;
 
-        // Accumulate round for full-game replay
-        _onlineRoundHistory.push({
-          roundNum:  _onlineRoundNum,
-          preState:  _onlinePreStateJson,
-          steps:     JSON.stringify(steps),
+        // Accumulate round for full-game replay + round-keyed cache
+        _cacheReplay({
+          roundNum:     _onlineRoundNum,
+          preStateJson: _onlinePreStateJson,
+          stepsJson:    JSON.stringify(steps),
         });
 
         // Mirror the same post-resolution side effects as the local path.
@@ -6586,6 +6740,9 @@ function _createMpClient() {
     onAsyncResolution(msg)  { _handleAsyncResolution(msg); },
     onAsyncPlanStatus(msg)  { _handleAsyncPlanStatus(msg); },
     onAsyncOpponentJoined(msg) { _handleAsyncOpponentJoined(msg); },
+
+    onReplayData(msg)  { _handleReplayData(msg); },
+    onReplayError(msg) { _handleReplayError(msg); },
 
     onError(msg, raw) {
       // Ignore errors after intentional sign-out / disconnect
