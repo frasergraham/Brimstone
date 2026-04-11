@@ -109,6 +109,59 @@ describe('UIController.hideInlineReplayHUD', () => {
   });
 });
 
+// ── Countdown deadline is preserved across inline replay ────────────────────
+//
+// Regression: after clicking "Replay last turn", _replayLastTurnInline()
+// called exitPlanningMode() (which nukes _countdownEnd) and then
+// enterPlanningMode(..., 0), leaving the submit button without a timer.
+// The fix snapshots _countdownEnd before exit and passes the remaining
+// time into the re-entry.
+
+describe('countdown deadline preserved across exitPlanningMode', () => {
+  test('_countdownEnd survives a snapshot -> exit -> re-enter cycle', () => {
+    const ui = makeUI();
+    ui.enterPlanningMode('hero', 3, 60_000);
+    const deadline = ui._countdownEnd;
+    assert.ok(deadline, '_countdownEnd should be set by enterPlanningMode(timeoutMs>0)');
+    assert.ok(deadline > Date.now(), 'deadline should be in the future');
+
+    // Snapshot deadline (mimics _replayLastTurnInline)
+    const savedCountdownEnd = ui._countdownEnd;
+
+    // exitPlanningMode clears _countdownEnd
+    ui.exitPlanningMode();
+    assert.equal(ui._countdownEnd, null, 'exitPlanningMode clears _countdownEnd');
+
+    // Re-enter with the remaining time from the snapshot
+    const remainingMs = Math.max(0, savedCountdownEnd - Date.now());
+    assert.ok(remainingMs > 0 && remainingMs <= 60_000,
+      `remainingMs should be between 0 and 60s, got ${remainingMs}`);
+    ui.enterPlanningMode('hero', 3, remainingMs);
+
+    // _countdownEnd should be set again, close to the original deadline
+    assert.ok(ui._countdownEnd, 'countdown restarted');
+    const drift = Math.abs(ui._countdownEnd - savedCountdownEnd);
+    assert.ok(drift < 500,
+      `restored deadline should be within 500ms of original, got drift=${drift}ms`);
+
+    ui.exitPlanningMode();
+  });
+
+  test('remainingMs of 0 leaves countdown unstarted (matches inline-replay on game with no timer)', () => {
+    const ui = makeUI();
+    ui.enterPlanningMode('hero', 3, 0);
+    assert.ok(!ui._countdownEnd, 'no countdown when timeoutMs=0');
+    // Simulating the post-replay restore path with savedCountdownEnd=null
+    const savedCountdownEnd = ui._countdownEnd ?? null;
+    ui.exitPlanningMode();
+    const remainingMs = savedCountdownEnd
+      ? Math.max(0, savedCountdownEnd - Date.now())
+      : 0;
+    ui.enterPlanningMode('hero', 3, remainingMs);
+    assert.ok(!ui._countdownEnd, 'still no countdown after replay');
+  });
+});
+
 // ── playbackDelay honors jumpToEnd outside PLAYBACK mode ─────────────────────
 
 describe('playbackDelay respects jumpToEnd in RESOLVING mode', () => {

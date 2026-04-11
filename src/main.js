@@ -6087,8 +6087,11 @@ async function _replayLastTurnInline() {
     }
 
     // Save current plan state so we can restore it after replay
-    const savedPlans   = new Map(ui._unitPlans);
-    const wasSubmitted = ui._planSubmitted;
+    const savedPlans     = new Map(ui._unitPlans);
+    const wasSubmitted   = ui._planSubmitted;
+    // Snapshot the countdown deadline BEFORE exitPlanningMode nukes it, so
+    // we can restart the countdown with the correct remaining time.
+    const savedCountdownEnd = ui._countdownEnd ?? null;
 
     ui.exitPlanningMode();
     resetPlayback();
@@ -6104,11 +6107,14 @@ async function _replayLastTurnInline() {
       resetPlayback();
     }
 
-    // Restore planning mode with the saved plan
+    // Restore planning mode with the saved plan + remaining countdown time
     const budget = state.playerActionsLeft?.get(mp?.myPlayerId)
       ?? (mp?.myFaction ? getFaction(mp.myFaction).getActionsLeft(state) : state.heroActionsLeft);
+    const remainingMs = savedCountdownEnd
+      ? Math.max(0, savedCountdownEnd - Date.now())
+      : 0;
     ui._hasReplayHistory = _onlineRoundHistory.length > 0;
-    ui.enterPlanningMode(mp.myFaction, budget, 0);
+    ui.enterPlanningMode(mp.myFaction, budget, remainingMs);
     ui.onPlanSubmit = (plan) => mp.submitPlan(plan, state.round);
     ui.onReturnToMenu = () => { location.reload(); };
     ui.onReplayLastTurn = () => _replayLastTurnInline();
