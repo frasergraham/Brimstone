@@ -3924,9 +3924,10 @@ export class UIController {
   }
 
   /**
-   * Show a minimal "skip only" HUD during inline "Replay last turn".
+   * Show a minimal "SKIP only" HUD during any inline replay animation
+   * (initial resolution, "Replay last turn", summary-dialog replay, etc.).
    * Reuses the full-game replay HUD shell but hides every button except
-   * the "jump to end" one, which doubles as a skip button.
+   * the "jump to end" one, which is relabelled "SKIP".
    * @param {Function} onSkip — called when the skip button is pressed
    */
   showInlineReplayHUD(onSkip) {
@@ -3941,6 +3942,11 @@ export class UIController {
     const endBtn = document.getElementById('replay-end-btn');
     if (endBtn) {
       endBtn.style.display = '';
+      // Remember the original glyph so hideInlineReplayHUD can restore it.
+      if (this._replayEndBtnOriginalText === undefined) {
+        this._replayEndBtnOriginalText = endBtn.textContent;
+      }
+      endBtn.textContent = 'SKIP';
       endBtn.title = 'Skip replay';
       endBtn.onclick = () => onSkip?.();
     }
@@ -3960,9 +3966,12 @@ export class UIController {
     }
     const endBtn = document.getElementById('replay-end-btn');
     if (endBtn) {
+      // Restore the original glyph (defaults to ⇥ if we never saw one)
+      endBtn.textContent = this._replayEndBtnOriginalText ?? '\u21E5';
       endBtn.title = 'Jump to end';
       endBtn.onclick = null;
     }
+    this._replayEndBtnOriginalText = undefined;
     this._inlineReplayActive = false;
   }
 

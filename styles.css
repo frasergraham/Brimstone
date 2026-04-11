@@ -4419,13 +4419,33 @@ img.plan-step-avatar {
   color: #ffaaaa;
 }
 
-/* Inline "Replay last turn" — single-button skip HUD */
+/* Inline replay — single-button SKIP HUD.
+   Floats at the very top of the canvas, semi-transparent so it doesn't
+   obscure the action animation beneath it. */
+#replay-hud.replay-hud-skip-only {
+  top: 2px;
+  padding: 0.15rem 0.45rem;
+  background: rgba(13, 10, 22, 0.55);
+  border-color: rgba(170, 130, 255, 0.35);
+  opacity: 0.8;
+  transition: opacity 0.18s;
+}
+#replay-hud.replay-hud-skip-only:hover {
+  opacity: 1;
+}
 #replay-hud.replay-hud-skip-only .replay-controls {
   justify-content: center;
 }
 #replay-hud.replay-hud-skip-only #replay-end-btn {
-  font-size: 1rem;
-  padding: 0.3rem 0.9rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 0.22rem 0.9rem;
+  background: rgba(170, 130, 255, 0.18);
+  color: var(--text-bright);
+}
+#replay-hud.replay-hud-skip-only #replay-end-btn:hover {
+  background: rgba(170, 130, 255, 0.35);
 }
 
 /* Replay exit confirmation dialog */

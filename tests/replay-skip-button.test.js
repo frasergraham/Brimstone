@@ -63,6 +63,7 @@ describe('UIController.showInlineReplayHUD', () => {
     const ui = makeUI();
     // Pre-state: everything visible (normal full-HUD look)
     for (const id of hudIds) mocks._elements[id].style.display = '';
+    mocks._elements['replay-end-btn'].textContent = '\u21E5';
 
     ui.showInlineReplayHUD(() => {});
 
@@ -72,8 +73,9 @@ describe('UIController.showInlineReplayHUD', () => {
                       'replay-ff-btn', 'replay-vff-btn', 'replay-stop-btn']) {
       assert.equal(mocks._elements[id].style.display, 'none', `${id} should be hidden`);
     }
-    // The skip button (#replay-end-btn) is still visible
+    // The skip button (#replay-end-btn) is still visible, relabelled "SKIP"
     assert.equal(mocks._elements['replay-end-btn'].style.display, '');
+    assert.equal(mocks._elements['replay-end-btn'].textContent, 'SKIP');
     assert.equal(mocks._elements['replay-end-btn'].title, 'Skip replay');
   });
 
@@ -92,9 +94,13 @@ describe('UIController.showInlineReplayHUD', () => {
 });
 
 describe('UIController.hideInlineReplayHUD', () => {
-  test('hides the HUD and restores button visibility', () => {
+  test('hides the HUD and restores button visibility + original glyph', () => {
     const ui = makeUI();
+    mocks._elements['replay-end-btn'].textContent = '\u21E5';  // original glyph
     ui.showInlineReplayHUD(() => {});
+    // Sanity: the label was replaced with SKIP
+    assert.equal(mocks._elements['replay-end-btn'].textContent, 'SKIP');
+
     ui.hideInlineReplayHUD();
 
     assert.equal(mocks._elements['replay-hud'].style.display, 'none');
@@ -103,7 +109,8 @@ describe('UIController.hideInlineReplayHUD', () => {
       assert.equal(mocks._elements[id].style.display, '',
         `${id} should be visible after hideInlineReplayHUD`);
     }
-    // Skip button's title restored, onclick cleared
+    // Original glyph restored, title reset, onclick cleared
+    assert.equal(mocks._elements['replay-end-btn'].textContent, '\u21E5');
     assert.equal(mocks._elements['replay-end-btn'].title, 'Jump to end');
     assert.equal(mocks._elements['replay-end-btn'].onclick, null);
   });

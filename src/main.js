@@ -996,6 +996,15 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     humanFaction, myPlayerId,
     flags: { goBack: playback.goBack, aborted: playback.aborted, jumpToEnd: playback.jumpToEnd, _autoplay },
   });
+
+  // Show the skip button whenever a replay is animating, EXCEPT during full
+  // PLAYBACK mode (which has its own HUD with its own skip control). We
+  // detect full PLAYBACK via ui._replayOnControl because the first step
+  // animation sets mode to RESOLVING, clobbering getMode()-based checks.
+  const skipHudActive = !_autoplay && ui && !ui._replayOnControl;
+  if (skipHudActive) {
+    ui.showInlineReplayHUD?.(() => { playback.jumpToEnd = true; });
+  }
   setMode(AppMode.RESOLVING);
   for (let i = 0; i < steps.length; i++) {
     // During replay: if BACK or STOP was pressed, abort remaining steps immediately
@@ -1636,6 +1645,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   if (!playback.goBack && !playback.aborted && !playback.jumpToEnd) {
     redrawFn();
   }
+  // Hide the skip HUD now that animation is done.
+  if (skipHudActive) ui?.hideInlineReplayHUD?.();
   // Mode transition is caller's responsibility
 }
 
@@ -4072,7 +4083,6 @@ async function _asyncWatchLastTurn(lastRound) {
   if (!lastRound || !state || !renderer || !ui) return;
 
   resetPlayback();
-  ui.showInlineReplayHUD?.(() => { playback.jumpToEnd = true; });
 
   const { preState, steps, postState } = lastRound;
 
@@ -4134,7 +4144,6 @@ async function _asyncWatchLastTurn(lastRound) {
 
   // If skip was pressed mid-animation, bail out entirely (skip summary)
   if (playback.jumpToEnd) {
-    ui.hideInlineReplayHUD?.();
     resetPlayback();
     return;
   }
@@ -4175,7 +4184,6 @@ async function _asyncWatchLastTurn(lastRound) {
     setMode(AppMode.PLANNING);
   }
 
-  ui.hideInlineReplayHUD?.();
   resetPlayback();
 }
 
@@ -6095,7 +6103,6 @@ async function _replayLastTurnInline() {
 
     ui.exitPlanningMode();
     resetPlayback();
-    ui.showInlineReplayHUD?.(() => { playback.jumpToEnd = true; });
     try {
       await _playReconnectReplay({
         roundNum:     entry.roundNum,
@@ -6103,7 +6110,6 @@ async function _replayLastTurnInline() {
         stepsJson:    entry.stepsJson,
       });
     } finally {
-      ui.hideInlineReplayHUD?.();
       resetPlayback();
     }
 
