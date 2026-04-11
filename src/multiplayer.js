@@ -292,6 +292,11 @@ export class MultiplayerClient {
     this._send({ type: 'resumeSave', roomId });
   }
 
+  /** Request the replay data for a specific round (cache miss). */
+  requestReplay(roomId, roundNum) {
+    this._send({ type: 'requestReplay', roomId, roundNum });
+  }
+
   // ── Internal ───────────────────────────────────────────────────────────────
 
   _send(obj) {
@@ -577,6 +582,14 @@ export class MultiplayerClient {
 
       case 'gamesUpdate':
         this._opts.onGamesUpdate?.();
+        break;
+
+      case 'replayData':
+        this._opts.onReplayData?.(msg);
+        break;
+
+      case 'replayError':
+        this._opts.onReplayError?.(msg);
         break;
 
       case 'error':

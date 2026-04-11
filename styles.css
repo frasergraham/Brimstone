@@ -4419,6 +4419,15 @@ img.plan-step-avatar {
   color: #ffaaaa;
 }
 
+/* Inline "Replay last turn" — single-button skip HUD */
+#replay-hud.replay-hud-skip-only .replay-controls {
+  justify-content: center;
+}
+#replay-hud.replay-hud-skip-only #replay-end-btn {
+  font-size: 1rem;
+  padding: 0.3rem 0.9rem;
+}
+
 /* Replay exit confirmation dialog */
 .replay-exit-overlay {
   position: fixed;

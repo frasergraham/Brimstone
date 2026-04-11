@@ -12,7 +12,7 @@ import { compileTurnBattleSummary }        from '../src/battle-utils.js';
 import { PlanActionType }                  from '../src/planner.js';
 import { upsertSave, deleteSave, getSave,
          createCompletedGame, appendSaveRound,
-         getSaveRounds, getLastSaveRound,
+         getSaveRounds, getLastSaveRound, getSaveRound,
          insertPlanStatusRows, upsertPlanStatus,
          getPlanStatus, clearPlanStatus,
          clearAllPlanStatus, getExpiredDeadlineGames,
@@ -301,28 +301,42 @@ function _sendReconnectPlanningState(room, playerId, ws) {
   }
 }
 
-/** Get the last round's replay data for reconnecting players. */
-function _getLastUnwatchedReplay(room) {
-  // Try in-memory first
-  if (room.replayRounds.length > 0) {
-    const last = room.replayRounds[room.replayRounds.length - 1];
+/**
+ * Fetch a specific round's replay data (in-memory first, then DB).
+ * Returns null if the round is not available.
+ */
+export function getReplayForRound(room, roundNum) {
+  if (!room || typeof roundNum !== 'number') return null;
+  const mem = room.replayRounds?.find(r => r.roundNum === roundNum);
+  if (mem) {
     return {
-      roundNum:     last.roundNum,
-      preStateJson: last.preStateJson,
-      stepsJson:    last.stepsJson,
+      roundNum:     mem.roundNum,
+      preStateJson: mem.preStateJson,
+      stepsJson:    mem.stepsJson,
     };
   }
-  // Fall back to DB
-  const dbRounds = getSaveRounds(room.id);
-  if (dbRounds.length > 0) {
-    const last = dbRounds[dbRounds.length - 1];
+  const row = getSaveRound(room.id, roundNum);
+  if (row) {
     return {
-      roundNum:     last.round_num,
-      preStateJson: last.pre_state_json,
-      stepsJson:    last.steps_json,
+      roundNum:     row.round_num,
+      preStateJson: row.pre_state_json,
+      stepsJson:    row.steps_json,
     };
   }
   return null;
+}
+
+/**
+ * Get the "last completed round" replay for reconnecting players.
+ *
+ * Explicitly looks up `state.round - 1` rather than trusting
+ * `replayRounds[length-1]` — this guards against desync bugs where the
+ * tail of the array doesn't match the round the player is waiting to see.
+ */
+function _getLastUnwatchedReplay(room) {
+  const targetRound = (room.state?.round ?? 1) - 1;
+  if (targetRound < 1) return null;
+  return getReplayForRound(room, targetRound);
 }
 
 // ── Unified messages ────────────────────────────────────────────────────────

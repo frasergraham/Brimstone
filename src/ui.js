@@ -3924,6 +3924,49 @@ export class UIController {
   }
 
   /**
+   * Show a minimal "skip only" HUD during inline "Replay last turn".
+   * Reuses the full-game replay HUD shell but hides every button except
+   * the "jump to end" one, which doubles as a skip button.
+   * @param {Function} onSkip — called when the skip button is pressed
+   */
+  showInlineReplayHUD(onSkip) {
+    const hud = this._el('replay-hud');
+    if (!hud) return;
+    hud.style.display = 'flex';
+    hud.classList.add('replay-hud-skip-only');
+    for (const action of ['back', 'play', 'pause', 'ff', 'vff', 'stop']) {
+      const btn = document.getElementById(`replay-${action}-btn`);
+      if (btn) btn.style.display = 'none';
+    }
+    const endBtn = document.getElementById('replay-end-btn');
+    if (endBtn) {
+      endBtn.style.display = '';
+      endBtn.title = 'Skip replay';
+      endBtn.onclick = () => onSkip?.();
+    }
+    this._inlineReplayActive = true;
+  }
+
+  /** Hide the inline skip-only replay HUD and restore button visibility. */
+  hideInlineReplayHUD() {
+    const hud = this._el('replay-hud');
+    if (hud) {
+      hud.style.display = 'none';
+      hud.classList.remove('replay-hud-skip-only');
+    }
+    for (const action of ['back', 'play', 'pause', 'ff', 'vff', 'end', 'stop']) {
+      const btn = document.getElementById(`replay-${action}-btn`);
+      if (btn) btn.style.display = '';
+    }
+    const endBtn = document.getElementById('replay-end-btn');
+    if (endBtn) {
+      endBtn.title = 'Jump to end';
+      endBtn.onclick = null;
+    }
+    this._inlineReplayActive = false;
+  }
+
+  /**
    * Show a confirmation dialog during replay when stop is pressed.
    * @returns {Promise<'exit'|'cancel'>}
    */
