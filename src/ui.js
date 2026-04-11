@@ -993,9 +993,23 @@ export class UIController {
     const foodAvailable = (this.state.inventory?.hero?.[ResourceType.FOOD] || 0);
 
     const initialInv = computeProjectedInventory(this.state, []);
+
+    // Gather controllable units + build a portrait map so the plan panel can
+    // show a row for every unit the local player owns (even units with zero
+    // queued actions) and use actual portraits instead of glyphs.
+    const controllable = this._getControllableUnits();
+    const portraitMap = new Map();
+    for (const e of controllable) {
+      const assetId = _entityPortraitId(e);
+      if (assetId && this.renderer) {
+        portraitMap.set(e.id, this.renderer.getPortraitDataURL(assetId, 48));
+      }
+    }
+
     stepsEl.innerHTML = buildUnitPlanBlocksHtml(
       this._unitPlans, this._planBudget, foodAvailable,
       this._planSubmitted, this.state.entities ?? [], initialInv,
+      controllable, this._selectedEntity?.id ?? null, portraitMap,
     );
 
     // Attach remove listeners — per-unit: data-entity-id + data-step-idx
@@ -1014,6 +1028,21 @@ export class UIController {
         // Refresh highlights for the selected entity after plan changes
         if (this._selectedEntity) this._selectEntity(this._selectedEntity);
         this.onRedraw();
+      });
+    });
+
+    // Click on a unit block → select that unit on the map.
+    stepsEl.querySelectorAll('.plan-unit-block').forEach(block => {
+      block.addEventListener('click', e => {
+        // Don't steal clicks meant for the per-step remove ✕.
+        if (e.target.closest('.plan-step-remove')) return;
+        const id = block.dataset.entityId;
+        const entity = this.state.entities.find(x => x.id === id && x.alive);
+        if (!entity) return;
+        this._selectEntity(entity);
+        this._updateSidebar();
+        this.onRedraw();
+        this._centerOnEntity(entity);
       });
     });
 
@@ -1043,6 +1072,11 @@ export class UIController {
     if (toggleBtn && panel) {
       toggleBtn.textContent = panel.classList.contains('collapsed') ? '▶' : '◀';
     }
+    // Update the side-tab +/- affordance to match collapsed state
+    const tabToggle = this._el('plan-tab-toggle');
+    if (tabToggle && panel) {
+      tabToggle.textContent = panel.classList.contains('collapsed') ? '+' : '\u2212';
+    }
 
     // Render inventory section at the bottom of the plan panel
     this._renderInventory();
@@ -1056,6 +1090,8 @@ export class UIController {
     const isCollapsed = panel.classList.contains('collapsed');
     const toggleBtn = this._el('plan-toggle-btn');
     if (toggleBtn) toggleBtn.textContent = isCollapsed ? '▶' : '◀';
+    const tabToggle = this._el('plan-tab-toggle');
+    if (tabToggle) tabToggle.textContent = isCollapsed ? '+' : '\u2212';
     this._syncPlanInset();
     this._renderEndTurnBtn();
   }
@@ -1259,6 +1295,9 @@ export class UIController {
       this._awaitingTarget = null;
     }
     this._updateHighlights();
+    // Refresh the plan panel so its selection highlight tracks the selected
+    // unit. Only during planning mode (when the panel is visible).
+    if (this._planMode) this._renderPlanPanel();
     // Popup is NOT shown here — user taps the unit a second time to open it
   }
 
@@ -1286,6 +1325,57 @@ export class UIController {
     return steps[steps.length - 1].positions.get(entityId) ?? null;
   }
 
+  /**
+   * Return the list of alive entities the local player can control in the
+   * current context, in a stable order (by id). Mirrors the owner filter used
+   * by _handleSelection so the cycle/plan-panel lists match what tapping the
+   * canvas would select.
+   */
+  _getControllableUnits() {
+    const state = this.state;
+    if (!state) return [];
+    const ownerFilter = this._planMode ? this._planFaction : state.activePlayer;
+    const list = state.entities.filter(e => {
+      if (!e.alive || e.owner !== ownerFilter) return false;
+      if (this.myPlayerId && e.ownerId && e.ownerId !== this.myPlayerId) return false;
+      return true;
+    });
+    list.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+    return list;
+  }
+
+  /** Cycle the selected unit forward (+1) or backward (-1) through controllable units. */
+  _cycleSelection(dir) {
+    const list = this._getControllableUnits();
+    if (list.length === 0) return;
+    const currentId = this._selectedEntity?.id;
+    let idx = list.findIndex(e => e.id === currentId);
+    if (idx < 0) idx = 0;
+    else idx = (idx + dir + list.length) % list.length;
+    const next = list[idx];
+    this._selectEntity(next);
+    this._updateSidebar();
+    this.onRedraw();
+    this._centerOnEntity(next);
+  }
+
+  /**
+   * Smoothly pan the camera to center on the given entity without changing
+   * zoom. Used when the player picks a unit via the cycle arrows or the
+   * plan panel — both of which are "jump to this unit" affordances.
+   */
+  _centerOnEntity(entity) {
+    if (!entity || !this.renderer?.frameHexes) return;
+    const proj = this._planMode ? this._getProjectedPos(entity.id) : null;
+    const col = proj?.col ?? entity.col;
+    const row = proj?.row ?? entity.row;
+    this.renderer.frameHexes([{ col, row }], {
+      paddingHexes: 5,
+      maxZoom: this.renderer.zoomLevel,
+      duration: 300,
+    });
+  }
+
   _clearSelection() {
     this._selectedEntity       = null;
     this._selectedTile         = null;
@@ -1302,6 +1392,8 @@ export class UIController {
     this.renderer.highlightHexes   = [];
     hideActionPopup(this);
     this._hideTileDetail();
+    // Refresh plan panel so selection highlight clears from the unit rows.
+    if (this._planMode) this._renderPlanPanel();
   }
 
   _updateHighlights() {
@@ -1369,26 +1461,10 @@ export class UIController {
         return;
       }
 
-      // Disambiguation: if the target hex has a selectable friendly unit, ask
-      // whether the player wants to move there or select that unit instead.
-      const ownerFilter = this._planMode ? this._planFaction : state.activePlayer;
-      const lastGhostPos = this._planMode
-        ? this.renderer?.planGhostSteps?.at(-1)?.positions
-        : null;
-      const alliesAtHex = state.entities.filter(e => {
-        if (!e.alive || e.owner !== ownerFilter || e.id === actor.id) return false;
-        if (this.myPlayerId && e.ownerId && e.ownerId !== this.myPlayerId) return false;
-        const pos = (this._planMode && lastGhostPos?.get(e.id)) || { col: e.col, row: e.row };
-        return pos.col === hex.col && pos.row === hex.row;
-      });
-
-      if (alliesAtHex.length > 0) {
-        // Show disambiguation popup
-        this._pendingDisambig = { actor, hex, allies: alliesAtHex };
-        this._showDisambigPopup();
-        return;
-      }
-
+      // Clicking any hex with a valid MOVE target is treated as a move, even
+      // if the hex contains an allied unit. (The move-disambiguation popup is
+      // intentionally skipped — see _pendingDisambig / _showDisambigPopup which
+      // are kept around but no longer triggered from the move path.)
       this._awaitingTarget = null;
       this.renderer.highlightHexes = [];
 
@@ -1978,6 +2054,20 @@ export class UIController {
       ? `<img class="usb-portrait" src="${src}" style="border-color:${color};" alt="">`
       : `<span class="usb-icon" style="background:${color}">${glyph}</span>`;
 
+    // Cycle arrows — only when viewing a controllable friendly unit and there
+    // are multiple controllable units to cycle between.
+    const ownerFilter = this._planMode ? this._planFaction : this.state.activePlayer;
+    const isMine = entity.owner === ownerFilter &&
+      (!this.myPlayerId || !entity.ownerId || entity.ownerId === this.myPlayerId);
+    const showCycle = isMine && !this._isEnemySelection
+      && this._getControllableUnits().length > 1;
+    const cyclePrevHtml = showCycle
+      ? `<button class="usb-cycle-btn usb-cycle-prev" title="Previous unit">\u2039</button>`
+      : '';
+    const cycleNextHtml = showCycle
+      ? `<button class="usb-cycle-btn usb-cycle-next" title="Next unit">\u203A</button>`
+      : '';
+
     // Terrain row for the entity's current hex
     const entCol = this._planMode ? (this._getProjectedPos(entity.id)?.col ?? entity.col) : entity.col;
     const entRow = this._planMode ? (this._getProjectedPos(entity.id)?.row ?? entity.row) : entity.row;
@@ -1991,7 +2081,9 @@ export class UIController {
 
     bar.style.display = 'flex';
     bar.innerHTML = `
+      ${cyclePrevHtml}
       ${portraitHtml}
+      ${cycleNextHtml}
       <span class="usb-info">
         <span class="usb-name" style="color:${color}">${entity.displayName}</span>
         <span class="usb-details">
@@ -2015,6 +2107,8 @@ export class UIController {
       this._updateSidebar();
       this.onRedraw();
     });
+    bar.querySelector('.usb-cycle-prev')?.addEventListener('click', () => this._cycleSelection(-1));
+    bar.querySelector('.usb-cycle-next')?.addEventListener('click', () => this._cycleSelection(+1));
   }
 
   _renderTurnInfo() {

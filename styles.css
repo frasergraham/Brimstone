@@ -1200,17 +1200,42 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .usb-deselect-btn {
   margin-left: 0.2rem;
   flex-shrink: 0;
-  background: rgba(192,57,43,0.15);
-  border: 1px solid rgba(192,57,43,0.5);
+  background: #c0392b;
+  border: 2px solid #e74c3c;
   border-radius: 4px;
-  color: #e74c3c;
-  font-size: 1rem;
-  padding: 0.15rem 0.45rem;
+  color: #fff;
+  font-size: 1.25rem;
+  padding: 0.25rem 0.6rem;
   cursor: pointer;
   line-height: 1.2;
   font-weight: bold;
+  box-shadow: 0 0 6px rgba(231,76,60,0.45);
 }
-.usb-deselect-btn:hover { background: rgba(192,57,43,0.3); border-color: #e74c3c; color: #ff6b5b; }
+.usb-deselect-btn:hover {
+  background: #e74c3c;
+  border-color: #ff6b5b;
+  color: #fff;
+  box-shadow: 0 0 10px rgba(231,76,60,0.75);
+}
+
+.usb-cycle-btn {
+  flex-shrink: 0;
+  background: rgba(212,167,44,0.12);
+  border: 1px solid rgba(212,167,44,0.4);
+  border-radius: 4px;
+  color: #d4a72c;
+  font-size: 1.3rem;
+  padding: 0.1rem 0.45rem;
+  cursor: pointer;
+  line-height: 1;
+  font-weight: bold;
+}
+.usb-cycle-btn:hover {
+  background: rgba(212,167,44,0.28);
+  border-color: #d4a72c;
+  color: #f5c842;
+  box-shadow: 0 0 6px rgba(212,167,44,0.5);
+}
 
 /* Terrain row — sits below unit stats as its own line */
 .usb-terrain-row {
@@ -3505,15 +3530,13 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   border-radius: 6px 0 0 6px;
   color: #ccc;
   font-size: 0.7rem;
-  padding: 0.35rem 0.25rem;
+  padding: 0.4rem 0.3rem;
   cursor: pointer;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.2rem;
+  gap: 0.45rem;
   line-height: 1;
-  writing-mode: vertical-rl;
-  text-orientation: mixed;
   letter-spacing: 0.02em;
 }
 @media (hover: hover) {
@@ -3522,13 +3545,34 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 .plan-tab-label {
   white-space: nowrap;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+}
+.plan-tab-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--day, #d4a72c);
+  background: rgba(13,17,23,0.85);
+  border: 1px solid rgba(212,167,44,0.55);
+  border-radius: 4px;
+}
+@media (hover: hover) {
+  .plan-tab:hover .plan-tab-toggle {
+    border-color: var(--day, #d4a72c);
+    background: rgba(40,50,60,0.97);
+  }
 }
 .plan-tab-count {
   font-size: 0.65rem;
   font-weight: 700;
   min-width: 0.9rem;
   text-align: center;
-  writing-mode: horizontal-tb;
 }
 .plan-tab-ok   { color: #4caf7d; }
 .plan-tab-food { color: #c8a030; }
@@ -3690,10 +3734,23 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 /* ── Per-unit plan blocks ─────────────────────────────────────────────── */
 .plan-unit-block {
   border: 1px solid rgba(255,255,255,0.1);
+  border-left: 3px solid rgba(255,255,255,0.1);
   border-radius: 6px;
   margin: 0.3rem 0.5rem;
   background: rgba(255,255,255,0.02);
   overflow: hidden;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.plan-unit-block:hover {
+  background: rgba(255,255,255,0.05);
+  border-color: rgba(255,255,255,0.2);
+}
+.plan-unit-block.plan-unit-selected {
+  border-color: rgba(212,167,44,0.55);
+  border-left-color: var(--day, #d4a72c);
+  background: rgba(212,167,44,0.10);
+  box-shadow: 0 0 8px rgba(212,167,44,0.25);
 }
 .plan-unit-header {
   display: flex;
@@ -3719,6 +3776,16 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 .plan-unit-steps .plan-step:last-child {
   border-bottom: none;
+}
+.plan-step.plan-step-empty .plan-step-desc {
+  color: var(--muted);
+  font-style: italic;
+  font-size: 0.68rem;
+}
+/* Portrait <img> variant of plan-step-avatar (glyph span uses the same class) */
+img.plan-step-avatar {
+  border: 1px solid rgba(255,255,255,0.2);
+  object-fit: cover;
 }
 
 /* ── Grace dialog (timeout expiry) ───────────────────────────────────── */
