@@ -1042,6 +1042,7 @@ export class UIController {
         this._selectEntity(entity);
         this._updateSidebar();
         this.onRedraw();
+        this._centerOnEntity(entity);
       });
     });
 
@@ -1351,9 +1352,28 @@ export class UIController {
     let idx = list.findIndex(e => e.id === currentId);
     if (idx < 0) idx = 0;
     else idx = (idx + dir + list.length) % list.length;
-    this._selectEntity(list[idx]);
+    const next = list[idx];
+    this._selectEntity(next);
     this._updateSidebar();
     this.onRedraw();
+    this._centerOnEntity(next);
+  }
+
+  /**
+   * Smoothly pan the camera to center on the given entity without changing
+   * zoom. Used when the player picks a unit via the cycle arrows or the
+   * plan panel — both of which are "jump to this unit" affordances.
+   */
+  _centerOnEntity(entity) {
+    if (!entity || !this.renderer?.frameHexes) return;
+    const proj = this._planMode ? this._getProjectedPos(entity.id) : null;
+    const col = proj?.col ?? entity.col;
+    const row = proj?.row ?? entity.row;
+    this.renderer.frameHexes([{ col, row }], {
+      paddingHexes: 5,
+      maxZoom: this.renderer.zoomLevel,
+      duration: 300,
+    });
   }
 
   _clearSelection() {

@@ -3530,15 +3530,13 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   border-radius: 6px 0 0 6px;
   color: #ccc;
   font-size: 0.7rem;
-  padding: 0.35rem 0.25rem;
+  padding: 0.4rem 0.3rem;
   cursor: pointer;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.2rem;
+  gap: 0.45rem;
   line-height: 1;
-  writing-mode: vertical-rl;
-  text-orientation: mixed;
   letter-spacing: 0.02em;
 }
 @media (hover: hover) {
@@ -3547,21 +3545,34 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 .plan-tab-label {
   white-space: nowrap;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
 }
 .plan-tab-toggle {
-  writing-mode: horizontal-tb;
-  font-size: 1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  font-size: 1.1rem;
   font-weight: 700;
   line-height: 1;
   color: var(--day, #d4a72c);
-  margin-bottom: 0.1rem;
+  background: rgba(13,17,23,0.85);
+  border: 1px solid rgba(212,167,44,0.55);
+  border-radius: 4px;
+}
+@media (hover: hover) {
+  .plan-tab:hover .plan-tab-toggle {
+    border-color: var(--day, #d4a72c);
+    background: rgba(40,50,60,0.97);
+  }
 }
 .plan-tab-count {
   font-size: 0.65rem;
   font-weight: 700;
   min-width: 0.9rem;
   text-align: center;
-  writing-mode: horizontal-tb;
 }
 .plan-tab-ok   { color: #4caf7d; }
 .plan-tab-food { color: #c8a030; }
