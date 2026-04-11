@@ -103,9 +103,15 @@ const _pruneOrphanPlans = db.prepare(`
   DELETE FROM async_plan_status
   WHERE room_id NOT IN (SELECT room_id FROM async_games)
 `);
+// NOTE: async_notifications is shared between the legacy async_games system
+// and the unified game_saves system (both call _record() via server/notifications.js).
+// This prune must preserve rows for rooms that live in EITHER table — otherwise
+// every server restart wipes dedup records for unified multiplayer games, and
+// the next checkApproachingDeadlines() cycle re-fires an already-sent push.
 const _pruneOrphanNotifs = db.prepare(`
   DELETE FROM async_notifications
   WHERE room_id NOT IN (SELECT room_id FROM async_games)
+    AND room_id NOT IN (SELECT room_id FROM game_saves)
 `);
 
 // ── Plan status statements ──────────────────────────────────────────────────
