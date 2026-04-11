@@ -3607,14 +3607,7 @@ export function checkApproachingDeadlines() {
  * Called once at startup. Skips games that already have a game_saves row.
  */
 export function migrateAsyncGames() {
-  let rows;
-  try {
-    rows = db.prepare(
-      `SELECT * FROM async_games WHERE status IN ('playing', 'waiting')`
-    ).all();
-  } catch {
-    return 0; // table doesn't exist or is empty
-  }
+  const rows = db.async.listForMigration();
 
   let migrated = 0;
   for (const g of rows) {
@@ -3663,27 +3656,21 @@ export function migrateAsyncGames() {
         );
 
         // Copy plan status rows
-        try {
-          const plans = db.prepare(
-            `SELECT * FROM async_plan_status WHERE room_id = ?`
-          ).all(g.room_id);
-          for (const p of plans) {
-            try {
-              const planData = p.plan_json ? JSON.parse(p.plan_json) : null;
-              if (planData) {
-                upsertPlanStatus(g.room_id, p.player_id, p.round, planData);
-              }
-            } catch {}
-          }
-        } catch {}
+        const plans = db.async.listPlansForRoom(g.room_id);
+        for (const p of plans) {
+          try {
+            const planData = p.plan_json ? JSON.parse(p.plan_json) : null;
+            if (planData) {
+              upsertPlanStatus(g.room_id, p.player_id, p.round, planData);
+            }
+          } catch {}
+        }
 
         migrated++;
       }
 
       // Mark async game as migrated by setting status
-      try {
-        db.prepare(`UPDATE async_games SET status = 'migrated' WHERE room_id = ?`).run(g.room_id);
-      } catch {}
+      db.async.markMigrated(g.room_id);
     } catch (err) {
       console.error(`[migration] Error migrating async game ${g.room_id}:`, err);
     }

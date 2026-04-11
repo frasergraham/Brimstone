@@ -27,47 +27,20 @@ function _baseUrl() {
   return `http://localhost:${port}`;
 }
 
-// ── Prepared statements ─────────────────────────────────────────────────────
-
-const _getEmail = db.prepare(`
-  SELECT provider_id FROM player_identities
-  WHERE  player_id = ? AND provider = 'email'
-  LIMIT  1
-`);
-
-const _recentNotif = db.prepare(`
-  SELECT 1 FROM async_notifications
-  WHERE  room_id = ? AND player_id = ? AND type = ? AND sent_at > ?
-  LIMIT  1
-`);
-
-const _insertNotif = db.prepare(`
-  INSERT INTO async_notifications (room_id, player_id, type)
-  VALUES (?, ?, ?)
-`);
-
-const _getUsername = db.prepare(`SELECT username FROM players WHERE id = ?`);
-const _getGC = db.prepare(`
-  SELECT 1 FROM player_identities
-  WHERE  player_id = ? AND provider = 'gamecenter'
-  LIMIT  1
-`);
-
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 function _getPlayerEmail(playerId) {
-  const row = _getEmail.get(playerId);
-  return row ? row.provider_id : null;
+  return db.identities.getEmailForPlayer(playerId);
 }
 
 function _shouldSend(roomId, playerId, type) {
   const windowS = DEDUP_WINDOWS[type] ?? DEDUP_WINDOWS.default;
-  const cutoff = Math.floor(Date.now() / 1000) - windowS;
-  return !_recentNotif.get(roomId, playerId, type, cutoff);
+  const sinceUnixSeconds = Math.floor(Date.now() / 1000) - windowS;
+  return !db.notifications.hasRecent({ roomId, playerId, type, sinceUnixSeconds });
 }
 
 function _record(roomId, playerId, type) {
-  _insertNotif.run(roomId, playerId, type);
+  db.notifications.record({ roomId, playerId, type });
 }
 
 function _logNotifyAttempt(fn, playerId, roomId, opts) {
@@ -102,14 +75,14 @@ async function _sendEmail(to, subject, body) {
 }
 
 function _playerTag(playerId) {
-  const row = _getUsername.get(playerId);
+  const row = db.players.getById(playerId);
   const name = row?.username ?? 'unknown';
-  const isGC = !!_getGC.get(playerId);
+  const isGC = db.identities.hasGameCenter(playerId);
   return `${name}${isGC ? ' (GC)' : ''}`;
 }
 
 function _playerName(playerId) {
-  const row = _getUsername.get(playerId);
+  const row = db.players.getById(playerId);
   return row?.username ?? 'your opponent';
 }
 

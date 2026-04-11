@@ -358,7 +358,19 @@ Games are auto-persisted to SQLite (`data/brimstone.db`, override with `DB_PATH`
 
 ## Database Layer
 
-`server/db-backend.js` wraps `better-sqlite3` behind a minimal interface (`prepare`, `exec`, `close`). `server/db.js` is a slim singleton creating the default backend. `server/schema.js` contains all DDL. The abstraction supports in-memory databases for testing without changing consumer code.
+All DB access lives in `server/db/` behind a high-level repository API grouped by domain (`db.players`, `db.saves`, `db.gameStats`, etc.) — no `server/*.js` consumer writes SQL. `server/db.js` is a compat shim that re-exports `server/db/index.js`, which picks a backend based on the `DB_BACKEND` environment variable:
+
+- **`DB_BACKEND=sqlite`** (default) — `better-sqlite3`, WAL mode, path from `DB_PATH`, bootstrapped and migrated by `server/db/sqlite/client.js`.
+- **`DB_BACKEND=postgres`** — `pg-native` (synchronous libpq bindings), connection string from `DATABASE_URL`, bootstrapped by `server/db/postgres/client.js`. Requires the optional dep `pg-native` and `libpq-dev` at build time. The `citext` extension is auto-created on startup.
+
+`server/db/schema.js` keeps the SQLite DDL as the source of truth and derives the Postgres DDL via deterministic regex transforms (`unixepoch()` → `EXTRACT(EPOCH FROM NOW())::BIGINT`, `INTEGER PRIMARY KEY AUTOINCREMENT` → `BIGSERIAL PRIMARY KEY`, `COLLATE NOCASE` → `CITEXT`). Each domain module has two copies — one under `sqlite/` and one under `postgres/` — with dialect-appropriate SQL. The domain set is: `players, identities, magicTokens, saves, saveReplayRounds, completedGames, plans, async, gameStats, campaignStats, campaignSaves, deviceTokens, notifications, admin`.
+
+`db.prepare()` / `db.exec()` are retained as SQLite-only escape hatches for legacy test cleanup (`tests/*.test.js`); the Postgres backend deliberately does not expose them. `tests/db-postgres.test.js` exercises the Postgres backend against a live DB specified by `PG_TEST_URL` (skipped when unset).
+
+To run the server against a local Postgres:
+```bash
+DB_BACKEND=postgres DATABASE_URL=postgresql://user:pass@host:5432/db npm run dev
+```
 
 ---
 

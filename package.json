@@ -73,5 +73,8 @@
     "https-proxy-agent": "^8.0.0",
     "undici": "^7.24.6",
     "ws": "^8.20.0"
+  },
+  "optionalDependencies": {
+    "pg-native": "^3.7.0"
   }
 }
