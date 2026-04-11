@@ -1645,8 +1645,15 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   if (!playback.goBack && !playback.aborted && !playback.jumpToEnd) {
     redrawFn();
   }
-  // Hide the skip HUD now that animation is done.
-  if (skipHudActive) ui?.hideInlineReplayHUD?.();
+  // Inline replay cleanup: hide the SKIP HUD and clear jumpToEnd so the
+  // next animation doesn't inherit the flag and auto-skip. Only do this
+  // in the inline case — full PLAYBACK's outer loop (src/playback.js)
+  // relies on jumpToEnd persisting across the animation call to route
+  // the viewer to the end-of-replay hold screen.
+  if (skipHudActive) {
+    ui?.hideInlineReplayHUD?.();
+    playback.jumpToEnd = false;
+  }
   // Mode transition is caller's responsibility
 }
 
