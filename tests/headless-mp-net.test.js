@@ -21,15 +21,15 @@ function run(args, timeoutMs = 90_000) {
 
 describe('headless-mp-net', () => {
   test('1v1 game completes successfully', async () => {
-    const { code, stdout } = await run(['1', '1', '--no-disconnect']);
-    assert.equal(code, 0, `Expected exit code 0, got ${code}.\nOutput:\n${stdout}`);
+    const { code, stdout, stderr } = await run(['1', '1', '--no-disconnect']);
+    assert.equal(code, 0, `Expected exit code 0, got ${code}.\nSTDOUT:\n${stdout}\nSTDERR:\n${stderr}`);
     assert.match(stdout, /completed/i, 'Output should mention completed');
     assert.match(stdout, /0 errors/, 'Should have 0 errors');
   });
 
   test('disconnect test completes successfully', async () => {
-    const { code, stdout } = await run(['0', '1'], 120_000);
-    assert.equal(code, 0, `Expected exit code 0, got ${code}.\nOutput:\n${stdout}`);
+    const { code, stdout, stderr } = await run(['0', '1'], 120_000);
+    assert.equal(code, 0, `Expected exit code 0, got ${code}.\nSTDOUT:\n${stdout}\nSTDERR:\n${stderr}`);
     assert.match(stdout, /reconnected/, 'Output should show reconnection');
     assert.match(stdout, /0 errors/, 'Should have 0 errors');
   });
