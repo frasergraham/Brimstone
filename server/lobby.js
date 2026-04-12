@@ -317,17 +317,19 @@ export function getReplayForRound(room, roundNum) {
   const mem = room.replayRounds?.find(r => r.roundNum === roundNum);
   if (mem) {
     return {
-      roundNum:     mem.roundNum,
-      preStateJson: mem.preStateJson,
-      stepsJson:    mem.stepsJson,
+      roundNum:          mem.roundNum,
+      preStateJson:      mem.preStateJson,
+      stepsJson:         mem.stepsJson,
+      finalEntitiesJson: mem.finalEntitiesJson ?? null,
     };
   }
   const row = getSaveRound(room.id, roundNum);
   if (row) {
     return {
-      roundNum:     row.round_num,
-      preStateJson: row.pre_state_json,
-      stepsJson:    row.steps_json,
+      roundNum:          row.round_num,
+      preStateJson:      row.pre_state_json,
+      stepsJson:         row.steps_json,
+      finalEntitiesJson: null,  // save rounds never store final entities
     };
   }
   return null;
@@ -423,9 +425,10 @@ function _buildRoundResolvedMessage(room, playerId, serializedSteps, finalState)
       deadline,
     },
     lastRound: lastEntry ? {
-      roundNum: lastEntry.roundNum,
-      preStateJson: lastEntry.preStateJson,
-      stepsJson: lastEntry.stepsJson,
+      roundNum:          lastEntry.roundNum,
+      preStateJson:      lastEntry.preStateJson,
+      stepsJson:         lastEntry.stepsJson,
+      finalEntitiesJson: lastEntry.finalEntitiesJson ?? null,
     } : null,
     players: _buildPlayerList(room),
     gameOver: !!room.state.gameOver,
@@ -1086,6 +1089,11 @@ function _executeResolution(room) {
     preStateJson,
     stepsJson:   JSON.stringify(serializedSteps),
   };
+  // For the game-over round, include final entity state so replays can show
+  // the outcome (deaths, positions) instead of falling back to preState.
+  if (state.gameOver) {
+    roundEntry.finalEntitiesJson = JSON.stringify(finalState.entities);
+  }
   room.replayRounds.push(roundEntry);
 
   // Persist the round to the DB so resumed games retain full replay history
@@ -2534,11 +2542,23 @@ export function recoverRoom(roomId) {
     }
   }
 
+  // Restore replay rounds from DB so full-game replays include pre-save history.
+  try {
+    const savedRounds = getSaveRounds(roomId);
+    room.replayRounds = savedRounds.map(r => ({
+      roundNum:     r.round_num,
+      preStateJson: r.pre_state_json,
+      stepsJson:    r.steps_json,
+    }));
+  } catch (err) {
+    console.error(`[recoverRoom ${roomId}] getSaveRounds error:`, err);
+  }
+
   // Room is fully initialized — register it so clients can find it.
   rooms.set(room.id, room);
   if (room.code) codeToRoom.set(room.code, room.id);
 
-  console.log(`[room ${roomId}] recovered from DB (round ${state.round}, phase ${state.phase}).`);
+  console.log(`[room ${roomId}] recovered from DB (round ${state.round}, phase ${state.phase}, ${room.replayRounds.length} replay rounds restored).`);
   return room;
 }
 

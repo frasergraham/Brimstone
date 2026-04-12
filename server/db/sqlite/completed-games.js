@@ -12,8 +12,8 @@ const _insertCompleted = prepare(`
 `);
 
 const _insertReplayRound = prepare(`
-  INSERT OR IGNORE INTO game_replay_rounds (game_id, round_num, pre_state_json, steps_json)
-  VALUES (@gameId, @roundNum, @preStateJson, @stepsJson)
+  INSERT OR IGNORE INTO game_replay_rounds (game_id, round_num, pre_state_json, steps_json, final_entities_json)
+  VALUES (@gameId, @roundNum, @preStateJson, @stepsJson, @finalEntitiesJson)
 `);
 
 const _listByPlayer = prepare(`
@@ -26,7 +26,7 @@ const _listByPlayer = prepare(`
 `);
 
 const _listRounds = prepare(`
-  SELECT round_num, pre_state_json, steps_json
+  SELECT round_num, pre_state_json, steps_json, final_entities_json
   FROM   game_replay_rounds
   WHERE  game_id = ?
   ORDER  BY round_num ASC
@@ -98,10 +98,11 @@ export const completedGames = {
       _insertCompleted.run(meta);
       for (const r of rounds) {
         _insertReplayRound.run({
-          gameId:       meta.gameId,
-          roundNum:     r.roundNum,
-          preStateJson: r.preStateJson,
-          stepsJson:    r.stepsJson,
+          gameId:            meta.gameId,
+          roundNum:          r.roundNum,
+          preStateJson:      r.preStateJson,
+          stepsJson:         r.stepsJson,
+          finalEntitiesJson: r.finalEntitiesJson ?? null,
         });
       }
     });
