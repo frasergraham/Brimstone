@@ -50,13 +50,18 @@ describe('loadAllRooms', () => {
     startGame('test-mem-p1', roomId);
 
     // Verify game is in memory and has a save
-    assert.ok(getRoom(roomId), 'room should exist in memory after start');
+    const roomBefore = getRoom(roomId);
+    assert.ok(roomBefore, 'room should exist in memory after start');
     const save = getSave(roomId);
     assert.ok(save, 'save should exist in DB after start');
 
-    // loadAllRooms should skip rooms already in memory
-    const count = loadAllRooms();
-    assert.equal(count, 0, 'should load 0 new rooms when all are already in memory');
+    // loadAllRooms should skip rooms already in memory — verify our room is
+    // untouched. (Using object identity rather than a total count keeps the
+    // test resilient when other tests run in parallel and write saves to the
+    // shared DB file.)
+    loadAllRooms();
+    assert.equal(getRoom(roomId), roomBefore,
+      'room in memory should not be replaced when loadAllRooms runs');
   });
 
   test('getAllPlayingSaves returns active saves', () => {
