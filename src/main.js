@@ -33,7 +33,7 @@ import { nodeController } from './game.js';
 import { MissionConductor } from './mission-conductor.js';
 import { createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, setForcedDice, EntityType, markRosterUsedByName, ENTITY_COLOR } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
-import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves } from './campaign/campaign.js';
+import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
 import { processStoryTriggers } from './campaign/missions.js';
 import {
@@ -2667,14 +2667,10 @@ function _handleCampaignMissionEnd() {
 
   let survivors;
   if (won) {
-    // Gather surviving survivors for roster (permadeath: dead ones are lost)
-    // Include both deployed survivors who lived AND roster members who weren't deployed
-    const deployedSurvivors = state.entities
-      .filter(e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR)
-      .map(e => snapshotSurvivor(e));
-    const deployedNames = new Set(deployedSurvivors.map(s => s.name));
-    const undeployed = _activeCampaign.roster.filter(s => !deployedNames.has(s.name));
-    survivors = [...deployedSurvivors, ...undeployed];
+    // Gather surviving survivors for roster (permadeath: dead ones are lost).
+    // Roster members who were deployed and died are dropped; undeployed
+    // members are preserved; alive deployed members are snapshotted.
+    survivors = reconcileRosterAfterMission(_activeCampaign.roster, state.entities);
 
     _activeCampaign.applyMissionResult(missionDef.id, {
       won,

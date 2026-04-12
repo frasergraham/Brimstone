@@ -25,6 +25,34 @@ export function snapshotSurvivor(entity) {
 }
 
 /**
+ * Build the post-mission roster for a victorious campaign mission.
+ *
+ * Permadeath rule: any roster survivor who was deployed and died in the
+ * mission is removed from the party. Undeployed roster members carry over
+ * untouched. Deployed-and-alive survivors have their post-mission stats
+ * snapshotted.
+ *
+ * The "deployed" set is built from ALL survivor entities — alive or dead —
+ * so a dead deployed survivor is not silently restored from the pre-mission
+ * roster.
+ *
+ * @param {object[]} preMissionRoster  Snapshot-style roster as it was before the mission.
+ * @param {object[]} entities          state.entities after the mission ended.
+ * @returns {object[]}                 New roster: live deployed + undeployed.
+ */
+export function reconcileRosterAfterMission(preMissionRoster, entities) {
+  const deployedNames = new Set();
+  const deployedSurvivors = [];
+  for (const e of entities) {
+    if (e.owner !== 'hero' || e.type !== 'survivor') continue;
+    deployedNames.add(e.name);
+    if (e.alive) deployedSurvivors.push(snapshotSurvivor(e));
+  }
+  const undeployed = preMissionRoster.filter(s => !deployedNames.has(s.name));
+  return [...deployedSurvivors, ...undeployed];
+}
+
+/**
  * Build victory/defeat delegate function from mission objectives.
  * Returns a function (state) => { winner, winReason, log } | null.
  */
