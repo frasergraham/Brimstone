@@ -123,11 +123,15 @@ function _cacheReplay(entry) {
   _replayCache.set(entry);
   const tail = _onlineRoundHistory[_onlineRoundHistory.length - 1];
   if (!tail || tail.roundNum !== entry.roundNum) {
-    _onlineRoundHistory.push({
+    const histEntry = {
       roundNum: entry.roundNum,
       preState: entry.preStateJson,
       steps:    entry.stepsJson,
-    });
+    };
+    if (entry.finalEntitiesJson) {
+      histEntry.finalEntities = JSON.parse(entry.finalEntitiesJson);
+    }
+    _onlineRoundHistory.push(histEntry);
   }
 }
 
@@ -4361,8 +4365,17 @@ function _swapState(newState) {
 
 async function _replayFullGame(rounds, winner, winReason, heroName, witchName, redrawFn, opts = {}) {
   const refs = _replayRefs();
+  // Wrap the animation function so the module-level `state` stays in sync
+  // with refs.state.  playback.js calls swapState(refs, preState) before each
+  // round, which updates refs.state / renderer.state / ui.state but can't
+  // touch the module-level variable.  _animateResolutionSteps reads/writes
+  // that variable directly, so we must sync it before every invocation.
+  const syncedAnimateFn = async (...args) => {
+    state = refs.state;
+    return _animateResolutionSteps(...args);
+  };
   await replayFullGame(refs, rounds, winner, winReason, heroName, witchName,
-    _animateResolutionSteps, redrawFn ?? redraw, opts);
+    syncedAnimateFn, redrawFn ?? redraw, opts);
   // Sync module-level state back from refs (replayFullGame swaps it internally)
   state = refs.state;
 }
@@ -4489,11 +4502,12 @@ async function _startMpReplay(rounds, gameMeta) {
     renderer.resize();
     redraw();
 
-    // Convert server round format { round_num, pre_state_json, steps_json } → replay format
+    // Convert server round format { round_num, pre_state_json, steps_json, final_entities_json } → replay format
     const replayRounds = rounds.map(r => ({
-      roundNum: r.round_num,
-      preState: r.pre_state_json,
-      steps:    r.steps_json,
+      roundNum:      r.round_num,
+      preState:      r.pre_state_json,
+      steps:         r.steps_json,
+      finalEntities: r.final_entities_json ? JSON.parse(r.final_entities_json) : undefined,
     }));
 
     await _replayFullGame(replayRounds, gameMeta.winner, gameMeta.win_reason,
@@ -6518,9 +6532,10 @@ function _createMpClient() {
 
         // Accumulate round for full-game replay + round-keyed cache
         _cacheReplay({
-          roundNum:     _onlineRoundNum,
-          preStateJson: _onlinePreStateJson,
-          stepsJson:    JSON.stringify(steps),
+          roundNum:          _onlineRoundNum,
+          preStateJson:      _onlinePreStateJson,
+          stepsJson:         JSON.stringify(steps),
+          finalEntitiesJson: state.gameOver ? JSON.stringify(finalEntities) : undefined,
         });
 
         // Mirror the same post-resolution side effects as the local path.
@@ -6991,13 +7006,7 @@ async function _loadAdminReplay(gameId, source = 'mp') {
 
     if (!rounds.length) { alert('No replay rounds found for this game.'); return; }
 
-    const replayRounds = rounds.map(r => ({
-      roundNum: r.round_num,
-      preState: r.pre_state_json,
-      steps:    r.steps_json,
-    }));
-
-    await _startMpReplay(replayRounds, meta);
+    await _startMpReplay(rounds, meta);
   } catch (e) {
     console.error('Admin replay load error:', e);
     alert('Could not load replay data.');

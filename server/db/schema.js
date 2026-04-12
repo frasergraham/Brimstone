@@ -67,10 +67,11 @@ export const SCHEMA_SQL_SQLITE = `
   );
 
   CREATE TABLE IF NOT EXISTS game_replay_rounds (
-    game_id        TEXT NOT NULL,
-    round_num      INTEGER NOT NULL,
-    pre_state_json TEXT NOT NULL,
-    steps_json     TEXT NOT NULL,
+    game_id              TEXT NOT NULL,
+    round_num            INTEGER NOT NULL,
+    pre_state_json       TEXT NOT NULL,
+    steps_json           TEXT NOT NULL,
+    final_entities_json  TEXT,
     PRIMARY KEY (game_id, round_num)
   );
 

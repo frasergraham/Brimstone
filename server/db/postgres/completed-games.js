@@ -21,10 +21,10 @@ export const completedGames = {
       ]);
       for (const r of rounds) {
         runMutation(`
-          INSERT INTO game_replay_rounds (game_id, round_num, pre_state_json, steps_json)
-          VALUES ($1, $2, $3, $4)
+          INSERT INTO game_replay_rounds (game_id, round_num, pre_state_json, steps_json, final_entities_json)
+          VALUES ($1, $2, $3, $4, $5)
           ON CONFLICT (game_id, round_num) DO NOTHING
-        `, [meta.gameId, r.roundNum, r.preStateJson, r.stepsJson]);
+        `, [meta.gameId, r.roundNum, r.preStateJson, r.stepsJson, r.finalEntitiesJson ?? null]);
       }
     });
     run();
@@ -42,7 +42,7 @@ export const completedGames = {
   },
   listRounds(gameId) {
     return query(`
-      SELECT round_num, pre_state_json, steps_json
+      SELECT round_num, pre_state_json, steps_json, final_entities_json
       FROM   game_replay_rounds
       WHERE  game_id = $1
       ORDER  BY round_num ASC

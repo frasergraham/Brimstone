@@ -56,6 +56,10 @@ function _open() {
   // Bootstrap the schema. `CREATE TABLE IF NOT EXISTS` + `CREATE EXTENSION IF NOT EXISTS`
   // make this idempotent across restarts.
   c.querySync(getSchemaSql('postgres'));
+
+  // Migrations for existing databases (idempotent — IF NOT EXISTS avoids errors).
+  try { c.querySync('ALTER TABLE game_replay_rounds ADD COLUMN IF NOT EXISTS final_entities_json TEXT'); } catch {}
+
   return c;
 }
 

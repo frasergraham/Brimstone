@@ -12,6 +12,7 @@ import {
   getSaveRounds,
   pruneStaleAndIncompatibleSaves,
 } from '../server/saves.js';
+import { recoverRoom, getRooms, getRoom } from '../server/lobby.js';
 import { GameState } from '../src/game.js';
 import { serializeState } from '../server/state-sync.js';
 import { VERSION, SAVE_VERSION } from '../src/version.js';
@@ -118,5 +119,79 @@ describe('pruneStaleAndIncompatibleSaves cleans up rounds', () => {
     assert.equal(getSaveRounds(roomId).length, 2);
     pruneStaleAndIncompatibleSaves(VERSION, SAVE_VERSION);
     assert.equal(getSaveRounds(roomId).length, 0);
+  });
+});
+
+// ── recoverRoom restores replayRounds from DB ───────────────────────────────
+
+describe('recoverRoom restores replayRounds from DB', () => {
+  beforeEach(cleanUp);
+
+  function destroyRecoveredRoom(roomId) {
+    const room = getRoom(roomId);
+    if (!room) return;
+    if (room.turnTimer) { clearTimeout(room.turnTimer); room.turnTimer = null; }
+    for (const t of room.disconnectTimers?.values() ?? []) clearTimeout(t);
+    for (const t of room.takeoverTimers?.values() ?? []) clearTimeout(t);
+    room.disconnectTimers?.clear();
+    room.takeoverTimers?.clear();
+    // Remove from rooms map
+    for (const r of getRooms()) {
+      if (r.id === roomId) {
+        const map = getRooms();
+        // getRooms returns values(); we need to remove from the underlying Map
+        break;
+      }
+    }
+  }
+
+  test('replay rounds are restored from save_replay_rounds on recovery', () => {
+    const roomId = 'test-recover-' + randomUUID();
+    const gs = new GameState(false, false);
+    gs.round = 4;  // pretend we're on round 4
+    const serialized = serializeState(gs);
+
+    // Create a save with some state
+    upsertSave(roomId, 'p-hero', 'p-witch', 'Hero', 'Witch', serialized, {
+      gameVersion: VERSION,
+      saveVersion: SAVE_VERSION,
+    });
+
+    // Add 3 rounds of replay data
+    appendSaveRound(roomId, 1, '{"round":1}', '[{"step":1}]');
+    appendSaveRound(roomId, 2, '{"round":2}', '[{"step":2}]');
+    appendSaveRound(roomId, 3, '{"round":3}', '[{"step":3}]');
+
+    // Recover the room
+    const room = recoverRoom(roomId);
+    assert.ok(room, 'room should be recovered');
+    assert.equal(room.replayRounds.length, 3, 'should restore 3 replay rounds');
+    assert.equal(room.replayRounds[0].roundNum, 1);
+    assert.equal(room.replayRounds[1].roundNum, 2);
+    assert.equal(room.replayRounds[2].roundNum, 3);
+    assert.equal(room.replayRounds[0].preStateJson, '{"round":1}');
+    assert.equal(room.replayRounds[2].stepsJson, '[{"step":3}]');
+
+    // Clean up — destroy the room
+    destroyRecoveredRoom(roomId);
+    deleteSave(roomId);
+  });
+
+  test('room recovers with empty replayRounds if DB has none', () => {
+    const roomId = 'test-recover-empty-' + randomUUID();
+    const gs = new GameState(false, false);
+    const serialized = serializeState(gs);
+
+    upsertSave(roomId, 'p-hero', 'p-witch', 'Hero', 'Witch', serialized, {
+      gameVersion: VERSION,
+      saveVersion: SAVE_VERSION,
+    });
+
+    const room = recoverRoom(roomId);
+    assert.ok(room, 'room should be recovered');
+    assert.equal(room.replayRounds.length, 0, 'should have 0 replay rounds');
+
+    destroyRecoveredRoom(roomId);
+    deleteSave(roomId);
   });
 });
