@@ -365,6 +365,20 @@ All DB access lives in `server/db/` behind a high-level repository API grouped b
 
 `server/db/schema.js` keeps the SQLite DDL as the source of truth and derives the Postgres DDL via deterministic regex transforms (`unixepoch()` → `EXTRACT(EPOCH FROM NOW())::BIGINT`, `INTEGER PRIMARY KEY AUTOINCREMENT` → `BIGSERIAL PRIMARY KEY`, `COLLATE NOCASE` → `CITEXT`). Each domain module has two copies — one under `sqlite/` and one under `postgres/` — with dialect-appropriate SQL. The domain set is: `players, identities, magicTokens, saves, saveReplayRounds, completedGames, plans, async, gameStats, campaignStats, campaignSaves, deviceTokens, notifications, admin`.
 
+### Parity rule — keep the two backends in sync
+
+**Any change to one backend MUST be applied to the other in the same commit.** The two implementations are intentionally duplicated (rather than built behind a SQL-dialect translator) so each dialect can be read and tuned independently, but that means drift is the main failure mode. When you add a method, change a query, fix a bug, or add a new domain:
+
+1. Edit the SQLite module under `server/db/sqlite/<domain>.js`.
+2. Edit the corresponding Postgres module under `server/db/postgres/<domain>.js` with dialect-appropriate SQL (`$1, $2` placeholders, `EXTRACT(EPOCH FROM NOW())::BIGINT` for timestamps, `(col::jsonb ->> 'key')::int` for JSON paths, explicit `ON CONFLICT … DO NOTHING/UPDATE` for upserts, `CITEXT` column behavior instead of `COLLATE NOCASE`, `GREATEST(a, b)` instead of scalar `MAX(a, b)`, `(x IS NOT NULL)::int` for boolean-as-int columns, appended `RETURNING 1` on DML where `.changes` is read).
+3. If the method's return shape needs column-name normalization (e.g. BIGINT timestamps coming back as numbers), verify the Postgres client's `pg-types` parsers cover it.
+4. Run **both** test suites before committing:
+   - `npm test` — SQLite
+   - `PG_TEST_URL=postgresql://… node --test tests/db-postgres.test.js` — Postgres integration
+5. Never merge a PR that touches `server/db/sqlite/` without a matching change under `server/db/postgres/` (or vice versa). Review the diff as a pair.
+
+If a change is genuinely SQLite-only (e.g. a legacy migration block in `sqlite/client.js`), add a comment explaining why it has no Postgres counterpart.
+
 `db.prepare()` / `db.exec()` are retained as SQLite-only escape hatches for legacy test cleanup (`tests/*.test.js`); the Postgres backend deliberately does not expose them. `tests/db-postgres.test.js` exercises the Postgres backend against a live DB specified by `PG_TEST_URL` (skipped when unset).
 
 To run the server against a local Postgres:
