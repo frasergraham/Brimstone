@@ -19,6 +19,9 @@
  *   node scripts/auto-turn.js abc123 ws://localhost:3000              # local server
  *   node scripts/auto-turn.js abc123 --name MyBot                     # prod, custom name
  *   node scripts/auto-turn.js abc123 ws://localhost:3000 --token T    # local, saved token
+ *   node scripts/auto-turn.js abc123 --llm ollama:llama3              # use local LLM
+ *   node scripts/auto-turn.js abc123 --llm claude:sonnet              # use Claude API
+ *   node scripts/auto-turn.js abc123 --llm openai:gpt-4              # use OpenAI-compatible API
  *   node scripts/auto-turn.js --all
  */
 
@@ -26,6 +29,7 @@ import WebSocket from 'ws';
 import { deserializeState } from '../server/state-sync.js';
 import { WitchAIEngine } from '../src/ai-engine.js';
 import { HeroAIEngine } from '../src/hero-ai-engine.js';
+import { serializeGameStateForLLM, serializePlanForLLM, parsePlanFromLLM } from './training-data.js';
 import { randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -49,6 +53,121 @@ function pickBotName() {
   return BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)];
 }
 
+// ── LLM plan generation ───────────────────────────────────────────────────
+
+const LLM_PROMPT_FILE = path.join(__dirname, 'llm-prompt.txt');
+let _llmSystemPrompt = null;
+
+function getLLMSystemPrompt() {
+  if (!_llmSystemPrompt) {
+    _llmSystemPrompt = fs.readFileSync(LLM_PROMPT_FILE, 'utf8');
+  }
+  return _llmSystemPrompt;
+}
+
+/**
+ * Generate a plan using an LLM backend.
+ * @param {string} provider - 'ollama', 'claude', or 'openai'
+ * @param {string} model - model name (e.g. 'llama3', 'sonnet', 'gpt-4')
+ * @param {object} gameState - deserialized GameState
+ * @param {string} faction - 'hero' or 'witch'
+ * @param {Array} history - previous turn history entries
+ * @returns {Promise<import('../src/planner.js').PlanAction[]>}
+ */
+async function llmGeneratePlan(provider, model, gameState, faction, history = []) {
+  const systemPrompt = getLLMSystemPrompt();
+  const statePrompt = serializeGameStateForLLM(gameState, faction);
+
+  // Build history context from previous turns
+  let historySection = '';
+  if (history.length > 0) {
+    const historyLines = [];
+    for (const h of history) {
+      historyLines.push(`--- Round ${h.round} (${h.phase}) ---`);
+      historyLines.push(`Your plan:\n${h.plan}`);
+      if (h.log?.length > 0) {
+        historyLines.push(`What happened:\n${h.log.join('\n')}`);
+      }
+    }
+    historySection = `\n--- PREVIOUS TURNS ---\n\n${historyLines.join('\n')}\n`;
+  }
+
+  const fullPrompt = `${systemPrompt}\n${historySection}\n--- CURRENT GAME STATE ---\n\n${statePrompt}\n\nYou are playing as ${faction.toUpperCase()}. Plan your actions:`;
+
+  let responseText;
+
+  if (provider === 'ollama') {
+    const url = process.env.OLLAMA_URL ?? 'http://localhost:11434';
+    const res = await fetch(`${url}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, prompt: fullPrompt, stream: false }),
+    });
+    if (!res.ok) throw new Error(`Ollama error: ${res.status} ${await res.text()}`);
+    const data = await res.json();
+    responseText = data.response;
+
+  } else if (provider === 'claude') {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) throw new Error('ANTHROPIC_API_KEY env var required for claude provider');
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: model === 'sonnet' ? 'claude-sonnet-4-20250514' :
+               model === 'haiku'  ? 'claude-haiku-4-5-20251001' :
+               model === 'opus'   ? 'claude-opus-4-20250514' : model,
+        max_tokens: 1024,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: `${statePrompt}\n\nYou are playing as ${faction.toUpperCase()}. Plan your actions:` }],
+      }),
+    });
+    if (!res.ok) throw new Error(`Claude API error: ${res.status} ${await res.text()}`);
+    const data = await res.json();
+    responseText = data.content?.[0]?.text ?? '';
+
+  } else if (provider === 'openai') {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) throw new Error('OPENAI_API_KEY env var required for openai provider');
+    const baseUrl = process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1';
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: `${statePrompt}\n\nYou are playing as ${faction.toUpperCase()}. Plan your actions:` },
+        ],
+        max_tokens: 1024,
+      }),
+    });
+    if (!res.ok) throw new Error(`OpenAI API error: ${res.status} ${await res.text()}`);
+    const data = await res.json();
+    responseText = data.choices?.[0]?.message?.content ?? '';
+
+  } else {
+    throw new Error(`Unknown LLM provider: ${provider}. Use ollama, claude, or openai.`);
+  }
+
+  // Show strategy and reasoning (everything before PLAN:)
+  const planIdx = responseText.indexOf('PLAN:');
+  if (planIdx >= 0) {
+    console.log(`\n[llm] Strategy & reasoning:\n${responseText.slice(0, planIdx).trim()}\n`);
+    console.log(`[llm] Plan:\n${responseText.slice(planIdx + 5).trim()}\n`);
+  } else {
+    console.log(`[llm] Raw response:\n${responseText}\n`);
+  }
+  return parsePlanFromLLM(responseText, gameState, faction);
+}
+
 // ── .auto-turn persistence ─────────────────────────────────────────────────
 
 function loadEntries() {
@@ -63,7 +182,7 @@ function saveEntries(entries) {
   fs.writeFileSync(STATE_FILE, JSON.stringify(entries, null, 2) + '\n');
 }
 
-function upsertEntry(entries, { server, gameId, username, token, playerId, faction, status, round }) {
+function upsertEntry(entries, { server, gameId, username, token, playerId, faction, status, round, turnHistory }) {
   // Dedup by token — each bot has a unique token tied to one game.
   // This lets us upgrade gameId from a CLI alias (e.g. "-h") to the real room UUID.
   const idx = entries.findIndex(e => e.server === server && e.token === token);
@@ -80,7 +199,17 @@ function upsertEntry(entries, { server, gameId, username, token, playerId, facti
   };
   if (idx >= 0) {
     entries[idx] = { ...entries[idx], ...entry };
+    // Append turn history if provided (don't overwrite existing)
+    if (turnHistory) {
+      if (!entries[idx].turnHistory) entries[idx].turnHistory = [];
+      entries[idx].turnHistory.push(...turnHistory);
+      // Keep last 10 rounds of history to prevent unbounded growth
+      if (entries[idx].turnHistory.length > 10) {
+        entries[idx].turnHistory = entries[idx].turnHistory.slice(-10);
+      }
+    }
   } else {
+    if (turnHistory) entry.turnHistory = turnHistory;
     entries.push(entry);
   }
   return entries;
@@ -98,7 +227,7 @@ function getFlag(name) {
 }
 
 /** Flags that consume the next arg as their value. */
-const VALUE_FLAGS = new Set(['--name', '--token']);
+const VALUE_FLAGS = new Set(['--name', '--token', '--llm']);
 
 function getPositional() {
   const result = [];
@@ -169,15 +298,16 @@ if (hasFlag('--all')) {
   const serverUrl = positional[1] ?? DEFAULT_SERVER;
   const playerName = getFlag('--name') ?? pickBotName();
   const savedToken = getFlag('--token');
+  const llmFlag = getFlag('--llm');  // e.g. "ollama:llama3", "claude:sonnet"
 
   if (!gameId) {
-    console.error('Usage: node scripts/auto-turn.js <game-id> [server-url] [--name <name>] [--token <token>]');
+    console.error('Usage: node scripts/auto-turn.js <game-id> [server-url] [--name <name>] [--token <token>] [--llm provider:model]');
     console.error('       node scripts/auto-turn.js --all');
     console.error('       node scripts/auto-turn.js --list');
     process.exit(1);
   }
 
-  runSingle({ serverUrl, gameId, playerName, savedToken }).catch(err => {
+  runSingle({ serverUrl, gameId, playerName, savedToken, llmFlag }).catch(err => {
     console.error(`[auto-turn] Fatal: ${err.message}`);
     process.exit(1);
   });
@@ -185,7 +315,7 @@ if (hasFlag('--all')) {
 
 // ── Core logic ──────────────────────────────────────────────────────────────
 
-function runSingle({ serverUrl, gameId, playerName, savedToken }) {
+function runSingle({ serverUrl, gameId, playerName, savedToken, llmFlag = null }) {
   return new Promise((resolve, reject) => {
     let playerId = null;
     let authToken = savedToken ?? null;
@@ -212,7 +342,7 @@ function runSingle({ serverUrl, gameId, playerName, savedToken }) {
       }
     }
 
-    function updateFile(status, round) {
+    function updateFile(status, round, turnHistory = null) {
       const entries = upsertEntry(loadEntries(), {
         server: serverUrl,
         gameId: roomId,
@@ -222,18 +352,56 @@ function runSingle({ serverUrl, gameId, playerName, savedToken }) {
         faction,
         status,
         round,
+        turnHistory,
       });
       saveEntries(entries);
     }
 
-    function submitPlanAndExit(ws) {
-      if (!gameState || !faction || planSubmitted) return;
+    /** Load turn history from .auto-turn for this game */
+    function loadTurnHistory() {
+      const entries = loadEntries();
+      const entry = entries.find(e => e.server === serverUrl && e.token === (savedToken ?? authToken));
+      return entry?.turnHistory ?? [];
+    }
 
-      const plan = buildAI(gameState).generatePlan();
+    async function submitPlanAndExit(ws) {
+      if (!gameState || !faction || planSubmitted) return;
+      planSubmitted = true;  // set immediately to prevent duplicate calls during async LLM wait
+
+      let plan;
+      let planText = null;
+      if (llmFlag) {
+        const [provider, model] = llmFlag.split(':');
+        if (!provider || !model) {
+          log(`Invalid --llm flag: ${llmFlag} (expected provider:model)`);
+          ws.close();
+          return;
+        }
+        try {
+          const history = loadTurnHistory();
+          log(`Generating plan via ${provider}:${model} (${history.length} turns of history) ...`);
+          plan = await llmGeneratePlan(provider, model, gameState, faction, history);
+          planText = serializePlanForLLM(plan, gameState);
+        } catch (err) {
+          log(`LLM error: ${err.message} — falling back to built-in AI`);
+          plan = buildAI(gameState).generatePlan();
+        }
+      } else {
+        plan = buildAI(gameState).generatePlan();
+      }
+
       log(`Submitting plan with ${plan.length} actions (round ${gameState.round})`);
       send(ws, { type: 'submitPlan', plan });
-      planSubmitted = true;
-      updateFile('active', gameState.round);
+
+      // Save turn history for LLM context in future turns
+      const turnEntry = {
+        round: gameState.round,
+        phase: gameState.phase,
+        plan: planText ?? serializePlanForLLM(plan, gameState),
+        // Include recent game log entries (last ~10 lines from this session)
+        log: (gameState.log ?? []).slice(-10),
+      };
+      updateFile('active', gameState.round, [turnEntry]);
       log('Plan submitted. Disconnecting.');
       ws.close();
     }
@@ -378,8 +546,14 @@ function runSingle({ serverUrl, gameId, playerName, savedToken }) {
         case 'error': {
           log(`Server error: ${msg.message}`);
           // Chain fallbacks: resumeSave → joinLobby → joinBattle → joinGame
+          // When reconnecting with a saved token, don't fall through to joinBattle
+          // (which auto-assigns to a random room) — the game is just gone.
           if (msg.message === 'Game is no longer active.' && savedToken && !joinedLobby) {
-            log('Resume failed — trying joinLobby...');
+            log('Game no longer active — marking as gone.');
+            updateFile('gone', null);
+            ws.close();
+          } else if (msg.message === 'Game is no longer active.' && !savedToken) {
+            log('Game not active — trying joinLobby...');
             send(ws, { type: 'joinLobby', codeOrId: gameId });
           } else if (msg.message === 'Lobby not found or already started.' ||
                      msg.message === 'No open slots available.') {
