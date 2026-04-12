@@ -71,8 +71,8 @@ export class UIController {
 
     this._lastPostRoundKey = '';   // deduplicates post-round effect animations across state updates
     this._battleInterval   = null; // dice animation interval — cleared on new dialog
-    this.speedMode         = this._loadDefaultSpeed(); // 'step' | 'cinematic' | 'fast' | 'vfast'
-    this._stepResolve      = null;        // set while waiting for click-to-advance in step mode
+    this._autoDismissTimer = null; // battle dialog auto-dismiss timer — cleared on new dialog
+    this.speedMode         = this._loadDefaultSpeed(); // 'cinematic' | 'fast' | 'vfast'
     // Start with chronicle hidden by default
     this._chronicleMode    = 'none'; // 'none' | 'mini' | 'full'
     // When true, disable all planning/action UI — used for spectator mode
@@ -239,8 +239,6 @@ export class UIController {
       const btn = e.target.closest('.speed-option');
       if (btn) this._setSpeed(btn.dataset.mode);
     }, sig);
-    // Step-by-step continue bar click
-    this._el('step-continue-bar')?.addEventListener('click', () => this._clearStepContinue(), sig);
 
     // Close speed popup on outside click
     document.addEventListener('click', () => {
@@ -1106,7 +1104,6 @@ export class UIController {
 
   _onClick(e) {
     if (this._didDragPan) { this._didDragPan = false; return; }
-    if (this._stepResolve) { this._stepResolve(); return; }
     if (this.tutorialClickBlocked) return;
     if (this.state.gameOver) return;
 
@@ -2567,7 +2564,7 @@ export class UIController {
 
   // ── Speed popup ───────────────────────────────────────────────────────────
 
-  static SPEED_LABELS = { step: 'Step by Step', cinematic: 'Cinematic', fast: 'Fast', vfast: 'Very Fast' };
+  static SPEED_LABELS = { cinematic: 'Cinematic', fast: 'Fast', vfast: 'Very Fast' };
 
   _loadDefaultSpeed() {
     try {
@@ -2616,22 +2613,6 @@ export class UIController {
       btn.className = `zoom-btn speed-${mode}`;
     }
     this._showSpeedToast(`⚡ ${UIController.SPEED_LABELS[mode]}`);
-  }
-
-  _waitForStep() {
-    return new Promise(resolve => {
-      const bar = this._el('step-continue-bar');
-      if (bar) bar.style.display = 'flex';
-      this._stepResolve = () => {
-        if (bar) bar.style.display = 'none';
-        this._stepResolve = null;
-        resolve();
-      };
-    });
-  }
-
-  _clearStepContinue() {
-    if (this._stepResolve) this._stepResolve();
   }
 
   _showSpeedToast(text) {
@@ -3006,8 +2987,9 @@ export class UIController {
   }
 
   _showBattleDialog(actorSnap, targetSnap, result, onDismiss, onRematch = null) {
-    // Cancel any in-flight dice animation from a previous battle dialog
-    if (this._battleInterval) { clearInterval(this._battleInterval); this._battleInterval = null; }
+    // Cancel any in-flight dice animation or auto-dismiss from a previous battle dialog
+    if (this._battleInterval)  { clearInterval(this._battleInterval);  this._battleInterval  = null; }
+    if (this._autoDismissTimer) { clearTimeout(this._autoDismissTimer); this._autoDismissTimer = null; }
 
     const dialog = this._el('battle-dialog');
     const footer = this._el('battle-footer');
@@ -3046,7 +3028,10 @@ export class UIController {
     // Remove stale splash damage line from previous battle
     const oldSplash = dialog.querySelector('.battle-splash');
     if (oldSplash) oldSplash.remove();
-    footer.innerHTML    = this.autoplay ? '' : '<div class="result-dismiss">— click to continue —</div>';
+    footer.innerHTML    = (this.autoplay || this.speedMode !== 'cinematic')
+      ? ''
+      : '<div class="result-dismiss">— click to skip —</div>' +
+        '<button class="battle-enable-fast" type="button">⏩ Click to enable fast mode and skip battle dialogs</button>';
 
     // Reset breakdown columns (hidden until dice settle)
     const atkBkd = this._el('battle-atk-breakdown');
@@ -3057,7 +3042,14 @@ export class UIController {
     dialog.style.display = 'flex';
     const card = dialog.querySelector('.battle-card');
 
+    // Guards a stale dismiss closure from mutating a later dialog's state if
+    // leaked listeners fire after this dialog is gone.
+    let _dismissed = false;
     const dismiss = () => {
+      if (_dismissed) return;
+      _dismissed = true;
+      if (this._autoDismissTimer) { clearTimeout(this._autoDismissTimer); this._autoDismissTimer = null; }
+      if (this._battleInterval)   { clearInterval(this._battleInterval);  this._battleInterval   = null; }
       dialog.style.display = 'none';
       dialog.removeEventListener('click', dismiss);
       card?.removeEventListener('click', dismiss);
@@ -3067,6 +3059,19 @@ export class UIController {
     const keyDismiss = e => {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') dismiss();
     };
+
+    // "Click to enable fast mode" button in the footer — flips speedMode to
+    // 'fast' so future battles use the toast/floater path, and dismisses the
+    // current dialog. stopPropagation prevents the outer dialog click-to-skip
+    // handler (which is attached later once dice settle) from double-firing.
+    const enableFastBtn = footer.querySelector('.battle-enable-fast');
+    if (enableFastBtn) {
+      enableFastBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        this._setSpeed('fast');
+        dismiss();
+      });
+    }
 
     // Shared: populate result into the dialog once dice are "settled"
     const revealResult = () => {
@@ -3149,7 +3154,12 @@ export class UIController {
         rematchBtn.disabled = !hasActs;
         rematchBtn.addEventListener('click', e => {
           e.stopPropagation();
+          if (_dismissed) return;
+          _dismissed = true;
+          if (this._autoDismissTimer) { clearTimeout(this._autoDismissTimer); this._autoDismissTimer = null; }
           dialog.style.display = 'none';
+          dialog.removeEventListener('click', dismiss);
+          card?.removeEventListener('click', dismiss);
           document.removeEventListener('keydown', keyDismiss);
           onRematch();
         });
@@ -3174,7 +3184,7 @@ export class UIController {
       revealResult();
       setTimeout(dismiss, 800);
     } else {
-      // Cinematic: animated dice roll, manual click to dismiss
+      // Cinematic: animated dice roll, click to skip or auto-dismiss after a few seconds
       atkDie.textContent = '?';
       defDie.textContent = '?';
       atkDie.className   = 'die-display rolling';
@@ -3191,11 +3201,17 @@ export class UIController {
           revealResult();
         }
       }, 55);
-      // Allow dismiss only after dice settle
+      // Wire click/key dismiss and schedule auto-dismiss once dice settle.
+      // Give more time when a rematch button is present AND enabled so the
+      // user can decide whether to press "Battle Again".
       setTimeout(() => {
+        if (_dismissed) return;  // dialog already closed (e.g. via enable-fast-mode button)
         dialog.addEventListener('click', dismiss);
         card?.addEventListener('click', dismiss);
         document.addEventListener('keydown', keyDismiss);
+        const hasEnabledRematch = onRematch && this.state.actionsAvailable > 0;
+        const autoMs = hasEnabledRematch ? 5000 : 3000;
+        this._autoDismissTimer = setTimeout(dismiss, autoMs);
       }, maxTicks * 55 + 200);
     }
   }
@@ -3759,8 +3775,8 @@ export class UIController {
       // Render replay-speed dropdown (compact single-button toggle + popup)
       const speedRowEl = this._el('round-summary-speed-row');
       if (speedRowEl) {
-        const SPEED_ICONS = { step: '👆', cinematic: '🎬', fast: '⏩', vfast: '⏭' };
-        const SPEED_DESCS = { step: 'Click to advance each action', cinematic: 'Dialog for important battles', fast: 'Cinematic pace, no popups', vfast: '1.5× speed, no popups' };
+        const SPEED_ICONS = { cinematic: '🎬', fast: '⏩', vfast: '⏭' };
+        const SPEED_DESCS = { cinematic: 'Dialog for important battles', fast: 'Cinematic pace, no popups', vfast: '1.5× speed, no popups' };
         const modes = Object.entries(UIController.SPEED_LABELS);
 
         speedRowEl.innerHTML =

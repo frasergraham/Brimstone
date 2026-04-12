@@ -2544,6 +2544,26 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   cursor: not-allowed;
 }
 
+.battle-enable-fast {
+  margin-top: 0.2rem;
+  background: none;
+  border: 1px solid rgba(245, 200, 66, 0.35);
+  border-radius: 4px;
+  color: rgba(245, 200, 66, 0.78);
+  font-size: 0.7rem;
+  font-family: inherit;
+  letter-spacing: 0.04em;
+  padding: 0.35rem 0.65rem;
+  cursor: pointer;
+  pointer-events: all;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.battle-enable-fast:hover {
+  background: rgba(245, 200, 66, 0.12);
+  color: #f5c842;
+  border-color: rgba(245, 200, 66, 0.75);
+}
+
 /* ── End Turn urgent highlight ─────────────────────────────────────────── */
 
 .action-btn.end-turn.urgent {
@@ -4275,11 +4295,7 @@ img.plan-step-avatar {
 }
 
 /* Speed toggle button active states */
-.zoom-btn.speed-step     { color: #aa88ff; border-color: rgba(170, 136, 255, 0.6); }
-.zoom-btn.speed-full     { color: #88ccff; border-color: rgba(136, 204, 255, 0.6); }
-.zoom-btn.speed-basic    { color: #88eebb; border-color: rgba(136, 238, 187, 0.6); }
 .zoom-btn.speed-fast     { color: #f5c842; border-color: rgba(245, 200, 66, 0.6); }
-.zoom-btn.speed-instant  { color: #e05050; border-color: rgba(220, 80,  80, 0.6); }
 
 /* Speed popup — appears above speed toggle button */
 .speed-popup {
@@ -4506,32 +4522,6 @@ img.plan-step-avatar {
 .saves-tab.active {
   color: var(--hero);
   border-bottom-color: var(--hero);
-}
-
-/* Step-by-step continue bar — shown at bottom of canvas waiting for user click */
-#step-continue-bar {
-  position: absolute;
-  bottom: 60px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(13, 10, 22, 0.92);
-  border: 1px solid rgba(170, 130, 255, 0.5);
-  border-radius: 20px;
-  padding: 0.45rem 1.2rem;
-  font-size: 0.83rem;
-  color: #c8b8e8;
-  cursor: pointer;
-  z-index: 25;
-  align-items: center;
-  gap: 0.4rem;
-  pointer-events: auto;
-  user-select: none;
-  white-space: nowrap;
-  animation: step-bar-pulse 1.4s ease-in-out infinite;
-}
-@keyframes step-bar-pulse {
-  0%, 100% { opacity: 0.7;  border-color: rgba(170, 130, 255, 0.4); }
-  50%       { opacity: 1.0;  border-color: rgba(200, 160, 255, 0.85); }
 }
 
 /* Admin link on welcome screen */

@@ -554,11 +554,6 @@
           Sets the playback speed when entering any game. You can still change it in-game.
         </p>
         <div id="options-speed-buttons" style="display:flex;flex-direction:column;gap:0.25rem">
-          <button class="speed-option" data-mode="step">
-            <span class="speed-option-icon">👆</span>
-            <span class="speed-option-label">Step by Step</span>
-            <span class="speed-option-desc">Click to advance each action</span>
-          </button>
           <button class="speed-option" data-mode="cinematic">
             <span class="speed-option-icon">🎬</span>
             <span class="speed-option-label">Cinematic</span>
@@ -953,8 +948,6 @@
       </div>
       <div id="canvas-wrapper">
         <canvas id="game-canvas"></canvas>
-        <!-- Step-by-step continue bar: shown during step mode resolution -->
-        <div id="step-continue-bar" style="display:none">👆 Click to advance</div>
         <!-- Replay HUD: shown during full-game replay -->
         <div id="replay-hud" style="display:none">
           <div class="replay-controls">
@@ -986,11 +979,6 @@
           </div>
           <!-- Speed mode picker popup -->
           <div id="speed-popup" class="speed-popup" style="display:none">
-            <button class="speed-option" data-mode="step">
-              <span class="speed-option-icon">👆</span>
-              <span class="speed-option-label">Step by Step</span>
-              <span class="speed-option-desc">Click to advance each action</span>
-            </button>
             <button class="speed-option" data-mode="cinematic">
               <span class="speed-option-icon">🎬</span>
               <span class="speed-option-label">Cinematic</span>
