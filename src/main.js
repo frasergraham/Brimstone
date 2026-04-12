@@ -54,12 +54,10 @@ document.getElementById('version-badge').textContent = `v${BUILD_VERSION}`;
 // Fetches /api/config to determine which game modes are enabled/disabled/hidden.
 // Maps mode keys to the button IDs they control.
 const _MODE_BUTTON_MAP = {
-  singleplayer: 'btn-single-player',
-  multiplayer:  'btn-multiplayer',
-  story:        'btn-story-mode',
-  quickplay:    'btn-quick-play',
-  local:        'btn-local-pass-play',
-  async:        'btn-mp-async',
+  singleplayer: 'btn-ng-vsai',
+  multiplayer:  'btn-ng-online',
+  story:        'btn-ng-campaign',
+  battle:       'btn-ng-battle',
 };
 
 function _applyModeConfig(modes) {
@@ -1763,7 +1761,6 @@ window.addEventListener('resize', () => {
 // ── Setup screen ──────────────────────────────────────────────────────────────
 
 const stepMode         = document.getElementById('setup-step-mode');
-const stepSpChoice     = document.getElementById('setup-step-sp-choice');
 const stepSinglePlayer = document.getElementById('setup-step-singleplayer');
 const stepCampaignSelect = document.getElementById('setup-step-campaign-select');
 const stepCampaign     = document.getElementById('setup-step-campaign');
@@ -1771,7 +1768,6 @@ const stepDebrief      = document.getElementById('setup-step-debrief');
 const stepBattle       = document.getElementById('setup-step-battle');
 const stepOnline       = document.getElementById('setup-step-online');
 const stepAsync        = document.getElementById('setup-step-async');
-const stepLocalPlay    = document.getElementById('setup-step-local-play');
 const stepHowto        = document.getElementById('setup-step-howtoplay');
 const stepOptions      = document.getElementById('setup-step-options');
 const stepChangelog    = document.getElementById('setup-step-changelog');
@@ -1797,7 +1793,6 @@ function showStep(step) {
   }
 
   stepMode          .style.display = step === 'mode'            ? '' : 'none';
-  stepSpChoice      .style.display = step === 'sp-choice'       ? '' : 'none';
   stepSinglePlayer  .style.display = step === 'singleplayer'    ? '' : 'none';
   stepCampaignSelect.style.display = step === 'campaign-select' ? '' : 'none';
   stepCampaign      .style.display = step === 'campaign'        ? '' : 'none';
@@ -1805,7 +1800,6 @@ function showStep(step) {
   if (stepBattle) stepBattle.style.display = step === 'battle' ? '' : 'none';
   stepOnline        .style.display = step === 'online'          ? '' : 'none';
   stepAsync         .style.display = step === 'async'           ? '' : 'none';
-  stepLocalPlay     .style.display = step === 'local-play'      ? '' : 'none';
   stepHowto         .style.display = step === 'howtoplay'       ? '' : 'none';
   stepOptions       .style.display = step === 'options'         ? '' : 'none';
   stepChangelog     .style.display = step === 'changelog'       ? '' : 'none';
@@ -1822,10 +1816,10 @@ function showStep(step) {
 
   // Move the session bar into the active card so it sits at its bottom
   const _stepEl = {
-    'mode': stepMode, 'sp-choice': stepSpChoice, 'singleplayer': stepSinglePlayer,
+    'mode': stepMode, 'singleplayer': stepSinglePlayer,
     'campaign-select': stepCampaignSelect, 'campaign': stepCampaign, 'debrief': stepDebrief,
     'online': stepOnline, 'async': stepAsync,
-    'local-play': stepLocalPlay, 'howtoplay': stepHowto, 'options': stepOptions,
+    'howtoplay': stepHowto, 'options': stepOptions,
     'changelog': stepChangelog, 'account': stepAccount, 'waiting': stepWaiting,
     'create-game': stepCreateGame, 'join-game': stepJoinGame, 'lobby': stepLobby,
     'async-create': stepAsyncCreate, 'async-created': stepAsyncCreated, 'async-join': stepAsyncJoin,
@@ -1850,12 +1844,7 @@ document.getElementById('btn-ng-battle')  ?.addEventListener('click', () => _sho
 document.getElementById('btn-ng-campaign')?.addEventListener('click', () => _showCampaignSelectScreen());
 document.getElementById('btn-ng-vsai')    ?.addEventListener('click', () => _showSinglePlayerScreen());
 document.getElementById('btn-ng-online')  ?.addEventListener('click', () => _showOnlineScreen());
-
-// Legacy buttons (retained where the DOM still carries them — e.g. sp-choice card):
-document.getElementById('btn-quick-play')    ?.addEventListener('click', () => _showSinglePlayerScreen());
-document.getElementById('btn-story-mode')    ?.addEventListener('click', () => _showCampaignSelectScreen());
-document.getElementById('btn-sp-choice-back')?.addEventListener('click', () => showStep('mode'));
-document.getElementById('btn-how-to-play')   ?.addEventListener('click', () => showStep('howtoplay'));
+document.getElementById('btn-how-to-play')?.addEventListener('click', () => showStep('howtoplay'));
 
 // "Play the Tutorial" button in How to Play navigates to Story Mode → Prologue
 document.getElementById('btn-play-tutorial')?.addEventListener('click', () => {
@@ -2097,7 +2086,7 @@ function _showSinglePlayerScreen() {
 
 document.getElementById('btn-singleplayer-back').addEventListener('click', () => {
   renderer = null; ui = null; state = null;
-  showStep('sp-choice');
+  showStep('newgame');
 });
 
 // ── Campaign / Story Mode ─────────────────────────────────────────────────────
@@ -2746,7 +2735,7 @@ function _handleCampaignMissionEnd() {
 }
 
 // Campaign event listeners
-document.getElementById('btn-campaign-select-back').addEventListener('click', () => showStep('sp-choice'));
+document.getElementById('btn-campaign-select-back').addEventListener('click', () => showStep('newgame'));
 document.getElementById('btn-campaign-back')   .addEventListener('click', () => _showCampaignSelectScreen());
 document.getElementById('btn-briefing-back')   .addEventListener('click', () => _renderCampaignScreen());
 document.getElementById('btn-delete-campaign')  .addEventListener('click', () => {
@@ -2815,18 +2804,6 @@ document.getElementById('btn-faction-witch').addEventListener('click', () => {
 document.getElementById('btn-start-qp').addEventListener('click', () => {
   if (_qpFaction === 'hero') init(true, false);
   else init(false, true);
-});
-
-// Local Pass & Play (from multiplayer screen)
-document.getElementById('btn-local-play-start').addEventListener('click', () => {
-  // Override single-player config selects with local-play values before calling init
-  const mapSel  = document.getElementById('select-map-size');
-  const nodeSel = document.getElementById('select-node-count');
-  const fogSel  = document.getElementById('select-fog-of-war');
-  if (mapSel)  mapSel.value  = document.getElementById('local-map-size').value;
-  if (nodeSel) nodeSel.value = document.getElementById('local-node-count').value;
-  if (fogSel)  fogSel.value  = document.getElementById('local-fog').value;
-  init(false, false);
 });
 
 function _doRestart() {
@@ -2914,11 +2891,13 @@ function _deleteSpSave(id) {
 
 /** Render the in-progress saves list on the vs. AI screen using mm-row style. */
 function _renderSpSaves() {
-  const list = document.getElementById('sp-saves-list');
+  const list    = document.getElementById('sp-saves-list');
+  const section = document.getElementById('mm-sp-section');
   if (!list) return;
   const rows = _localSpRows();
+  if (section) section.style.display = rows.length ? '' : 'none';
   _renderMmList(list, rows, {
-    emptyHtml: '<p class="mm-games-empty">No saved games.</p>',
+    emptyHtml: '',
     actionsFor: (row) => [
       {
         icon: '✕',
@@ -2977,21 +2956,25 @@ function _startFromState(existingState, mode, existingHistory) {
 // and _renderMmList helpers.
 
 async function _fetchActiveSaves() {
-  const list = document.getElementById('active-games-list');
+  const list    = document.getElementById('active-games-list');
+  const section = document.getElementById('mp-games-section');
   if (!list) return;
-  list.innerHTML = '<p class="mm-games-empty">Loading…</p>';
 
   const session = loadSession();
   if (!session) {
-    list.innerHTML = '<p class="mm-games-empty">Sign in to see your active games.</p>';
+    if (section) section.style.display = 'none';
     return;
   }
 
   try {
     const { rows } = await _fetchAllGames();
+    const filtered = rows.filter(
+      (row) => row.kind === 'game' || row.kind === 'battle' || row.kind === 'battle-invite',
+    );
+    if (section) section.style.display = filtered.length ? '' : 'none';
     _renderMmList(list, rows, {
       filter: (row) => row.kind === 'game' || row.kind === 'battle' || row.kind === 'battle-invite',
-      emptyHtml: '<p class="mm-games-empty">No games in progress.</p>',
+      emptyHtml: '',
       actionsFor: (row) => {
         if (row.kind === 'game' && row.room_id) {
           return [{
@@ -3005,7 +2988,7 @@ async function _fetchActiveSaves() {
       },
     });
   } catch {
-    list.innerHTML = '<p class="mm-games-empty">Could not load saves (offline?).</p>';
+    if (section) section.style.display = 'none';
   }
 }
 
@@ -3593,17 +3576,20 @@ function _renderMmList(listEl, rows, opts = {}) {
  * the list when not signed in.
  */
 async function _fetchMainMenuGames() {
-  const list     = document.getElementById('mm-games-list');
-  const signinEl = document.getElementById('mm-games-signin');
+  const list    = document.getElementById('mm-games-list');
+  const section = document.getElementById('mm-games-section');
   if (!list) return;
 
-  const { rows, signedIn } = await _fetchAllGames();
+  const { rows } = await _fetchAllGames();
 
-  if (signinEl) signinEl.style.display = signedIn ? 'none' : '';
+  // Hide the entire section when there are no games at all. (Signed-out users
+  // simply see no online games — the persistent footer "Sign In" button is the
+  // single sign-in entry point.)
+  if (section) section.style.display = rows.length ? '' : 'none';
 
   _renderMmList(list, rows, {
     maxRows: 5,
-    emptyHtml: '<p class="mm-games-empty">No games in progress — tap New Game below.</p>',
+    emptyHtml: '',
   });
 
   // Restart the countdown timer if any visible rows have deadlines
@@ -4556,8 +4542,6 @@ function _showAsyncScreen() {
   }
 }
 
-document.getElementById('btn-mp-async')?.addEventListener('click', () => _showAsyncScreen());
-
 // ── Battle for Caleb's Hollow menu ───────────────────────────────────────────
 
 function _formatTimeRemaining(unixSeconds) {
@@ -4788,14 +4772,11 @@ document.getElementById('btn-online-back').addEventListener('click', () => {
   _updateMultiplayerBadge();
 });
 document.getElementById('btn-async-back')?.addEventListener('click', () => {
-  showStep('multiplayer');
+  showStep('mode');
   _updateMultiplayerBadge();
 });
 document.getElementById('btn-async-refresh')?.addEventListener('click', () => {
   _fetchAsyncGames();
-});
-document.getElementById('btn-local-play-back').addEventListener('click', () => {
-  showStep('multiplayer');
 });
 
 // ── Online flow ───────────────────────────────────────────────────────────────
@@ -5138,11 +5119,6 @@ window.addEventListener('hashchange', () => {
 // Unified main-menu refresh — fetches games + battle status in parallel
 // and updates the main menu list + multiplayer/battle badges as side effects.
 _fetchMainMenuGames();
-
-// Wire the mode-card sign-in button (only present after the menu redesign).
-document.getElementById('btn-mm-signin')?.addEventListener('click', () => {
-  _showAuthDialog(() => _fetchMainMenuGames());
-});
 
 /** Check if the player needs to submit a battle turn and show badge on main menu. */
 async function _updateBattleBadge() {
@@ -5603,7 +5579,8 @@ function _initMpStep() {
   if (session) {
     signedOut.style.display    = 'none';
     actionBtns.style.display   = '';
-    if (gamesSection) gamesSection.style.display = '';
+    // mp-games-section visibility is managed by _fetchActiveSaves based on
+    // whether the player actually has any active games to show.
   } else {
     signedOut.style.display    = '';
     actionBtns.style.display   = 'none';

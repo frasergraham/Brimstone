@@ -121,6 +121,15 @@ canvas { touch-action: pan-x pan-y; }
 .setup-btn.primary     { border-color: var(--day); color: var(--day); }
 .setup-btn.primary:hover { background: #1e1a10; }
 
+.ng-section-label {
+  text-align: center;
+  font-size: 0.78rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 0.15rem;
+}
+
 /* ── Server selector (dev-mode only) ──────────────────────────────────── */
 #server-selector {
   position: absolute;
@@ -3074,17 +3083,22 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 
 /* ── Main menu active games list ────────────────────────────────────────── */
-#mm-games-section {
-  margin: 0.75rem 0 1rem;
+#mm-games-section,
+.mm-games-box {
+  margin: 0.75rem 0 1.5rem;
   text-align: left;
   max-width: 360px;
   align-self: center;
   width: 100%;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.15);
 }
 .mm-games-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   margin-bottom: 0.3rem;
 }
 .mm-view-all {
