@@ -27,12 +27,6 @@
         <div id="mm-games-list"></div>
       </div>
 
-      <!-- Signed-out prompt: shown below the list when not signed in -->
-      <div id="mm-games-signin" style="display:none;text-align:center;margin:0.5rem 0 0.75rem">
-        <p class="setup-hint" style="margin-bottom:0.4rem">Sign in to see online games.</p>
-        <button id="btn-mm-signin" class="setup-btn secondary" style="width:200px">Sign In</button>
-      </div>
-
       <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.4rem;margin-top:0.75rem">
         <button id="btn-new-game"    class="setup-btn primary" style="width:200px">New Game</button>
         <button id="btn-how-to-play" class="setup-btn" style="width:200px">How to Play</button>
@@ -235,19 +229,6 @@
       </div>
       <div class="setup-buttons" style="margin-top:1.5rem;margin-bottom:0">
         <button id="btn-howtoplay-back" class="setup-btn">← Back</button>
-      </div>
-    </div>
-
-    <!-- Single Player Mode Choice -->
-    <div id="setup-step-sp-choice" class="setup-card" style="display:none">
-      <h1 class="title" style="font-size:2rem;margin-bottom:0.5rem">SINGLE PLAYER</h1>
-      <div class="setup-lore"><p>Choose your path into Caleb's Hollow.</p></div>
-      <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.75rem">
-        <button id="btn-story-mode" class="setup-btn" style="width:220px">📖 Story Mode</button>
-        <button id="btn-quick-play" class="setup-btn" style="width:220px">⚔ Quick Play</button>
-      </div>
-      <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
-        <button id="btn-sp-choice-back" class="setup-btn">← Back</button>
       </div>
     </div>
 
@@ -477,44 +458,6 @@
 
       <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
         <button id="btn-async-back" class="setup-btn">← Back</button>
-      </div>
-    </div>
-
-    <!-- ── Local Pass & Play ──────────────────────────────────────── -->
-    <div id="setup-step-local-play" class="setup-card" style="display:none">
-      <h1 class="title" style="font-size:2rem">LOCAL PASS &amp; PLAY</h1>
-      <div class="setup-lore"><p>Two players share one screen, taking turns on the same device.</p></div>
-      <div class="cg-options">
-        <div class="cg-option-row">
-          <span class="cg-option-label">Map size</span>
-          <select id="local-map-size" class="setup-select">
-            <option value="skirmish">Skirmish (9×9)</option>
-            <option value="standard" selected>Standard (13×11)</option>
-            <option value="regional">Regional (17×13)</option>
-            <option value="campaign">Campaign (21×15)</option>
-          </select>
-        </div>
-        <div class="cg-option-row">
-          <span class="cg-option-label">Power Nodes</span>
-          <select id="local-node-count" class="setup-select">
-            <option value="2">2</option>
-            <option value="3" selected>3</option>
-            <option value="4">4</option>
-            <option value="5">5</option>
-          </select>
-        </div>
-        <div class="cg-option-row">
-          <span class="cg-option-label">Fog of War</span>
-          <select id="local-fog" class="setup-select">
-            <option value="none" selected>None</option>
-            <option value="partial">Partial</option>
-            <option value="full">Full</option>
-          </select>
-        </div>
-      </div>
-      <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
-        <button id="btn-local-play-back" class="setup-btn">← Back</button>
-        <button id="btn-local-play-start" class="setup-btn primary">Start Game</button>
       </div>
     </div>
 
