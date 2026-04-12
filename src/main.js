@@ -4671,6 +4671,7 @@ async function _showBattleScreen() {
         playersSection.style.display = '';
         const playerData = my.players.map(p => ({
           playerId: p.playerId, name: p.name, faction: p.faction,
+          color: p.color,
           isAI: p.isAI, _submitted: p.submitted,
           connected: p.connected, active: p.active,
         }));
