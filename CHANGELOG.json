@@ -1,5 +1,37 @@
 [
   {
+    "version": "1.3.33",
+    "date": "2026-04-12",
+    "summary": "New features, bug fixes, and improvements",
+    "notes": [
+      "LLM training data generation and AI player support",
+      "Add \"enable fast mode\" button to battle dialog",
+      "Color plan-panel player names to match map unit outlines",
+      "Add Postgres backend behind a repository-style data-access API",
+      "Allow selecting ally units for view-only inspection in MP",
+      "Show SKIP button on every replay animation, not just \"Replay last turn\"",
+      "Camera centering on unit cycle + boxed plan-tab toggle",
+      "Streamline unit selection and lighten hex outlines",
+      "Redesign main menu with active games list, fix sign-in flow",
+      "Ignore fog-hidden enemies when building plan actions",
+      "Drop dead deployed survivors from campaign roster on victory",
+      "Eliminate three flaky tests from the suite",
+      "Clear playback.jumpToEnd after inline replay so SKIP doesn't persist",
+      "Preserve countdown deadline across inline \"Replay last turn\"",
+      "Validate round number for \"Replay last turn\" + add skip button",
+      "Remove spurious \"!\" badge from main menu top-right",
+      "Improve auto-turn entry dedup and variable scoping",
+      "Preserve unified-game dedup records across server restart",
+      "Remove step-by-step playback mode + auto-dismiss battle dialog",
+      "Simplify main menu structure, unify games list, add Replays",
+      "Box and label active games lists on SP and Online screens",
+      "Clean up legacy menus and fix inconsistent back buttons",
+      "Polish main menu welcome card and new-game submenu",
+      "Sync package-lock.json version to 1.3.32",
+      "Require SQLite+Postgres backend parity in CLAUDE.md"
+    ]
+  },
+  {
     "version": "1.3.32",
     "date": "2026-04-10",
     "summary": "New features, bug fixes, and improvements",

@@ -71,8 +71,8 @@ export class UIController {
 
     this._lastPostRoundKey = '';   // deduplicates post-round effect animations across state updates
     this._battleInterval   = null; // dice animation interval — cleared on new dialog
-    this.speedMode         = this._loadDefaultSpeed(); // 'step' | 'cinematic' | 'fast' | 'vfast'
-    this._stepResolve      = null;        // set while waiting for click-to-advance in step mode
+    this._autoDismissTimer = null; // battle dialog auto-dismiss timer — cleared on new dialog
+    this.speedMode         = this._loadDefaultSpeed(); // 'cinematic' | 'fast' | 'vfast'
     // Start with chronicle hidden by default
     this._chronicleMode    = 'none'; // 'none' | 'mini' | 'full'
     // When true, disable all planning/action UI — used for spectator mode
@@ -239,8 +239,6 @@ export class UIController {
       const btn = e.target.closest('.speed-option');
       if (btn) this._setSpeed(btn.dataset.mode);
     }, sig);
-    // Step-by-step continue bar click
-    this._el('step-continue-bar')?.addEventListener('click', () => this._clearStepContinue(), sig);
 
     // Close speed popup on outside click
     document.addEventListener('click', () => {
@@ -993,9 +991,23 @@ export class UIController {
     const foodAvailable = (this.state.inventory?.hero?.[ResourceType.FOOD] || 0);
 
     const initialInv = computeProjectedInventory(this.state, []);
+
+    // Gather controllable units + build a portrait map so the plan panel can
+    // show a row for every unit the local player owns (even units with zero
+    // queued actions) and use actual portraits instead of glyphs.
+    const controllable = this._getControllableUnits();
+    const portraitMap = new Map();
+    for (const e of controllable) {
+      const assetId = _entityPortraitId(e);
+      if (assetId && this.renderer) {
+        portraitMap.set(e.id, this.renderer.getPortraitDataURL(assetId, 48));
+      }
+    }
+
     stepsEl.innerHTML = buildUnitPlanBlocksHtml(
       this._unitPlans, this._planBudget, foodAvailable,
       this._planSubmitted, this.state.entities ?? [], initialInv,
+      controllable, this._selectedEntity?.id ?? null, portraitMap,
     );
 
     // Attach remove listeners — per-unit: data-entity-id + data-step-idx
@@ -1014,6 +1026,21 @@ export class UIController {
         // Refresh highlights for the selected entity after plan changes
         if (this._selectedEntity) this._selectEntity(this._selectedEntity);
         this.onRedraw();
+      });
+    });
+
+    // Click on a unit block → select that unit on the map.
+    stepsEl.querySelectorAll('.plan-unit-block').forEach(block => {
+      block.addEventListener('click', e => {
+        // Don't steal clicks meant for the per-step remove ✕.
+        if (e.target.closest('.plan-step-remove')) return;
+        const id = block.dataset.entityId;
+        const entity = this.state.entities.find(x => x.id === id && x.alive);
+        if (!entity) return;
+        this._selectEntity(entity);
+        this._updateSidebar();
+        this.onRedraw();
+        this._centerOnEntity(entity);
       });
     });
 
@@ -1043,6 +1070,11 @@ export class UIController {
     if (toggleBtn && panel) {
       toggleBtn.textContent = panel.classList.contains('collapsed') ? '▶' : '◀';
     }
+    // Update the side-tab +/- affordance to match collapsed state
+    const tabToggle = this._el('plan-tab-toggle');
+    if (tabToggle && panel) {
+      tabToggle.textContent = panel.classList.contains('collapsed') ? '+' : '\u2212';
+    }
 
     // Render inventory section at the bottom of the plan panel
     this._renderInventory();
@@ -1056,6 +1088,8 @@ export class UIController {
     const isCollapsed = panel.classList.contains('collapsed');
     const toggleBtn = this._el('plan-toggle-btn');
     if (toggleBtn) toggleBtn.textContent = isCollapsed ? '▶' : '◀';
+    const tabToggle = this._el('plan-tab-toggle');
+    if (tabToggle) tabToggle.textContent = isCollapsed ? '+' : '\u2212';
     this._syncPlanInset();
     this._renderEndTurnBtn();
   }
@@ -1070,7 +1104,6 @@ export class UIController {
 
   _onClick(e) {
     if (this._didDragPan) { this._didDragPan = false; return; }
-    if (this._stepResolve) { this._stepResolve(); return; }
     if (this.tutorialClickBlocked) return;
     if (this.state.gameOver) return;
 
@@ -1174,21 +1207,28 @@ export class UIController {
     });
 
     if (clickedEntities.length === 0) {
-      // No friendly units — check for visible enemy units (view-only selection)
-      const enemyEntities = _visibleUnitsAt(state, hex.col, hex.row)
-        .filter(e => e.owner !== ownerFilter);
-      if (enemyEntities.length > 1) {
+      // No controllable units — check for any visible non-controllable units
+      // (enemies OR allied teammates' units in N-player MP) for view-only selection.
+      const viewOnlyEntities = _visibleUnitsAt(state, hex.col, hex.row)
+        .filter(e => {
+          // Enemy faction → always view-only
+          if (e.owner !== ownerFilter) return true;
+          // Same faction but a different player → ally, view-only
+          if (this.myPlayerId && e.ownerId && e.ownerId !== this.myPlayerId) return true;
+          return false;
+        });
+      if (viewOnlyEntities.length > 1) {
         this._hideTileDetail();
         this._selectedEntity       = null;
         this._popupVisible         = true;
         this._validActions         = [];
         this.renderer.selectedHex    = { col: hex.col, row: hex.row };
         this.renderer.highlightHexes = [];
-        this._pendingEnemyPick = { units: enemyEntities };
+        this._pendingEnemyPick = { units: viewOnlyEntities };
         this._showActionPopup(null);
-      } else if (enemyEntities.length === 1) {
+      } else if (viewOnlyEntities.length === 1) {
         this._hideTileDetail();
-        this._selectEnemyEntity(enemyEntities[0]);
+        this._selectEnemyEntity(viewOnlyEntities[0]);
       } else {
         // Empty hex — show tile info in stats bar
         this._clearSelection();
@@ -1259,6 +1299,9 @@ export class UIController {
       this._awaitingTarget = null;
     }
     this._updateHighlights();
+    // Refresh the plan panel so its selection highlight tracks the selected
+    // unit. Only during planning mode (when the panel is visible).
+    if (this._planMode) this._renderPlanPanel();
     // Popup is NOT shown here — user taps the unit a second time to open it
   }
 
@@ -1286,6 +1329,57 @@ export class UIController {
     return steps[steps.length - 1].positions.get(entityId) ?? null;
   }
 
+  /**
+   * Return the list of alive entities the local player can control in the
+   * current context, in a stable order (by id). Mirrors the owner filter used
+   * by _handleSelection so the cycle/plan-panel lists match what tapping the
+   * canvas would select.
+   */
+  _getControllableUnits() {
+    const state = this.state;
+    if (!state) return [];
+    const ownerFilter = this._planMode ? this._planFaction : state.activePlayer;
+    const list = state.entities.filter(e => {
+      if (!e.alive || e.owner !== ownerFilter) return false;
+      if (this.myPlayerId && e.ownerId && e.ownerId !== this.myPlayerId) return false;
+      return true;
+    });
+    list.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+    return list;
+  }
+
+  /** Cycle the selected unit forward (+1) or backward (-1) through controllable units. */
+  _cycleSelection(dir) {
+    const list = this._getControllableUnits();
+    if (list.length === 0) return;
+    const currentId = this._selectedEntity?.id;
+    let idx = list.findIndex(e => e.id === currentId);
+    if (idx < 0) idx = 0;
+    else idx = (idx + dir + list.length) % list.length;
+    const next = list[idx];
+    this._selectEntity(next);
+    this._updateSidebar();
+    this.onRedraw();
+    this._centerOnEntity(next);
+  }
+
+  /**
+   * Smoothly pan the camera to center on the given entity without changing
+   * zoom. Used when the player picks a unit via the cycle arrows or the
+   * plan panel — both of which are "jump to this unit" affordances.
+   */
+  _centerOnEntity(entity) {
+    if (!entity || !this.renderer?.frameHexes) return;
+    const proj = this._planMode ? this._getProjectedPos(entity.id) : null;
+    const col = proj?.col ?? entity.col;
+    const row = proj?.row ?? entity.row;
+    this.renderer.frameHexes([{ col, row }], {
+      paddingHexes: 5,
+      maxZoom: this.renderer.zoomLevel,
+      duration: 300,
+    });
+  }
+
   _clearSelection() {
     this._selectedEntity       = null;
     this._selectedTile         = null;
@@ -1302,6 +1396,8 @@ export class UIController {
     this.renderer.highlightHexes   = [];
     hideActionPopup(this);
     this._hideTileDetail();
+    // Refresh plan panel so selection highlight clears from the unit rows.
+    if (this._planMode) this._renderPlanPanel();
   }
 
   _updateHighlights() {
@@ -1369,26 +1465,10 @@ export class UIController {
         return;
       }
 
-      // Disambiguation: if the target hex has a selectable friendly unit, ask
-      // whether the player wants to move there or select that unit instead.
-      const ownerFilter = this._planMode ? this._planFaction : state.activePlayer;
-      const lastGhostPos = this._planMode
-        ? this.renderer?.planGhostSteps?.at(-1)?.positions
-        : null;
-      const alliesAtHex = state.entities.filter(e => {
-        if (!e.alive || e.owner !== ownerFilter || e.id === actor.id) return false;
-        if (this.myPlayerId && e.ownerId && e.ownerId !== this.myPlayerId) return false;
-        const pos = (this._planMode && lastGhostPos?.get(e.id)) || { col: e.col, row: e.row };
-        return pos.col === hex.col && pos.row === hex.row;
-      });
-
-      if (alliesAtHex.length > 0) {
-        // Show disambiguation popup
-        this._pendingDisambig = { actor, hex, allies: alliesAtHex };
-        this._showDisambigPopup();
-        return;
-      }
-
+      // Clicking any hex with a valid MOVE target is treated as a move, even
+      // if the hex contains an allied unit. (The move-disambiguation popup is
+      // intentionally skipped — see _pendingDisambig / _showDisambigPopup which
+      // are kept around but no longer triggered from the move path.)
       this._awaitingTarget = null;
       this.renderer.highlightHexes = [];
 
@@ -1978,6 +2058,20 @@ export class UIController {
       ? `<img class="usb-portrait" src="${src}" style="border-color:${color};" alt="">`
       : `<span class="usb-icon" style="background:${color}">${glyph}</span>`;
 
+    // Cycle arrows — only when viewing a controllable friendly unit and there
+    // are multiple controllable units to cycle between.
+    const ownerFilter = this._planMode ? this._planFaction : this.state.activePlayer;
+    const isMine = entity.owner === ownerFilter &&
+      (!this.myPlayerId || !entity.ownerId || entity.ownerId === this.myPlayerId);
+    const showCycle = isMine && !this._isEnemySelection
+      && this._getControllableUnits().length > 1;
+    const cyclePrevHtml = showCycle
+      ? `<button class="usb-cycle-btn usb-cycle-prev" title="Previous unit">\u2039</button>`
+      : '';
+    const cycleNextHtml = showCycle
+      ? `<button class="usb-cycle-btn usb-cycle-next" title="Next unit">\u203A</button>`
+      : '';
+
     // Terrain row for the entity's current hex
     const entCol = this._planMode ? (this._getProjectedPos(entity.id)?.col ?? entity.col) : entity.col;
     const entRow = this._planMode ? (this._getProjectedPos(entity.id)?.row ?? entity.row) : entity.row;
@@ -1991,7 +2085,9 @@ export class UIController {
 
     bar.style.display = 'flex';
     bar.innerHTML = `
+      ${cyclePrevHtml}
       ${portraitHtml}
+      ${cycleNextHtml}
       <span class="usb-info">
         <span class="usb-name" style="color:${color}">${entity.displayName}</span>
         <span class="usb-details">
@@ -2015,6 +2111,8 @@ export class UIController {
       this._updateSidebar();
       this.onRedraw();
     });
+    bar.querySelector('.usb-cycle-prev')?.addEventListener('click', () => this._cycleSelection(-1));
+    bar.querySelector('.usb-cycle-next')?.addEventListener('click', () => this._cycleSelection(+1));
   }
 
   _renderTurnInfo() {
@@ -2466,7 +2564,7 @@ export class UIController {
 
   // ── Speed popup ───────────────────────────────────────────────────────────
 
-  static SPEED_LABELS = { step: 'Step by Step', cinematic: 'Cinematic', fast: 'Fast', vfast: 'Very Fast' };
+  static SPEED_LABELS = { cinematic: 'Cinematic', fast: 'Fast', vfast: 'Very Fast' };
 
   _loadDefaultSpeed() {
     try {
@@ -2515,22 +2613,6 @@ export class UIController {
       btn.className = `zoom-btn speed-${mode}`;
     }
     this._showSpeedToast(`⚡ ${UIController.SPEED_LABELS[mode]}`);
-  }
-
-  _waitForStep() {
-    return new Promise(resolve => {
-      const bar = this._el('step-continue-bar');
-      if (bar) bar.style.display = 'flex';
-      this._stepResolve = () => {
-        if (bar) bar.style.display = 'none';
-        this._stepResolve = null;
-        resolve();
-      };
-    });
-  }
-
-  _clearStepContinue() {
-    if (this._stepResolve) this._stepResolve();
   }
 
   _showSpeedToast(text) {
@@ -2905,8 +2987,9 @@ export class UIController {
   }
 
   _showBattleDialog(actorSnap, targetSnap, result, onDismiss, onRematch = null) {
-    // Cancel any in-flight dice animation from a previous battle dialog
-    if (this._battleInterval) { clearInterval(this._battleInterval); this._battleInterval = null; }
+    // Cancel any in-flight dice animation or auto-dismiss from a previous battle dialog
+    if (this._battleInterval)  { clearInterval(this._battleInterval);  this._battleInterval  = null; }
+    if (this._autoDismissTimer) { clearTimeout(this._autoDismissTimer); this._autoDismissTimer = null; }
 
     const dialog = this._el('battle-dialog');
     const footer = this._el('battle-footer');
@@ -2945,7 +3028,10 @@ export class UIController {
     // Remove stale splash damage line from previous battle
     const oldSplash = dialog.querySelector('.battle-splash');
     if (oldSplash) oldSplash.remove();
-    footer.innerHTML    = this.autoplay ? '' : '<div class="result-dismiss">— click to continue —</div>';
+    footer.innerHTML    = (this.autoplay || this.speedMode !== 'cinematic')
+      ? ''
+      : '<div class="result-dismiss">— click to skip —</div>' +
+        '<button class="battle-enable-fast" type="button">⏩ Click to enable fast mode and skip battle dialogs</button>';
 
     // Reset breakdown columns (hidden until dice settle)
     const atkBkd = this._el('battle-atk-breakdown');
@@ -2956,7 +3042,14 @@ export class UIController {
     dialog.style.display = 'flex';
     const card = dialog.querySelector('.battle-card');
 
+    // Guards a stale dismiss closure from mutating a later dialog's state if
+    // leaked listeners fire after this dialog is gone.
+    let _dismissed = false;
     const dismiss = () => {
+      if (_dismissed) return;
+      _dismissed = true;
+      if (this._autoDismissTimer) { clearTimeout(this._autoDismissTimer); this._autoDismissTimer = null; }
+      if (this._battleInterval)   { clearInterval(this._battleInterval);  this._battleInterval   = null; }
       dialog.style.display = 'none';
       dialog.removeEventListener('click', dismiss);
       card?.removeEventListener('click', dismiss);
@@ -2966,6 +3059,19 @@ export class UIController {
     const keyDismiss = e => {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') dismiss();
     };
+
+    // "Click to enable fast mode" button in the footer — flips speedMode to
+    // 'fast' so future battles use the toast/floater path, and dismisses the
+    // current dialog. stopPropagation prevents the outer dialog click-to-skip
+    // handler (which is attached later once dice settle) from double-firing.
+    const enableFastBtn = footer.querySelector('.battle-enable-fast');
+    if (enableFastBtn) {
+      enableFastBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        this._setSpeed('fast');
+        dismiss();
+      });
+    }
 
     // Shared: populate result into the dialog once dice are "settled"
     const revealResult = () => {
@@ -3048,7 +3154,12 @@ export class UIController {
         rematchBtn.disabled = !hasActs;
         rematchBtn.addEventListener('click', e => {
           e.stopPropagation();
+          if (_dismissed) return;
+          _dismissed = true;
+          if (this._autoDismissTimer) { clearTimeout(this._autoDismissTimer); this._autoDismissTimer = null; }
           dialog.style.display = 'none';
+          dialog.removeEventListener('click', dismiss);
+          card?.removeEventListener('click', dismiss);
           document.removeEventListener('keydown', keyDismiss);
           onRematch();
         });
@@ -3073,7 +3184,7 @@ export class UIController {
       revealResult();
       setTimeout(dismiss, 800);
     } else {
-      // Cinematic: animated dice roll, manual click to dismiss
+      // Cinematic: animated dice roll, click to skip or auto-dismiss after a few seconds
       atkDie.textContent = '?';
       defDie.textContent = '?';
       atkDie.className   = 'die-display rolling';
@@ -3090,11 +3201,17 @@ export class UIController {
           revealResult();
         }
       }, 55);
-      // Allow dismiss only after dice settle
+      // Wire click/key dismiss and schedule auto-dismiss once dice settle.
+      // Give more time when a rematch button is present AND enabled so the
+      // user can decide whether to press "Battle Again".
       setTimeout(() => {
+        if (_dismissed) return;  // dialog already closed (e.g. via enable-fast-mode button)
         dialog.addEventListener('click', dismiss);
         card?.addEventListener('click', dismiss);
         document.addEventListener('keydown', keyDismiss);
+        const hasEnabledRematch = onRematch && this.state.actionsAvailable > 0;
+        const autoMs = hasEnabledRematch ? 5000 : 3000;
+        this._autoDismissTimer = setTimeout(dismiss, autoMs);
       }, maxTicks * 55 + 200);
     }
   }
@@ -3184,14 +3301,22 @@ export class UIController {
     // ── Units ──
     const visible  = _visibleUnitsAt(state, hex.col, hex.row);
     const planOwner = this._planMode ? this._planFaction : state.activePlayer;
-    const myUnits  = visible.filter(u => u.owner === planOwner);
-    const foeUnits = visible.filter(u => u.owner !== planOwner);
-    const unitsEl  = this._el('tile-zoom-units');
+    const isAllyUnit = (u) =>
+      u.owner === planOwner &&
+      this.myPlayerId && u.ownerId && u.ownerId !== this.myPlayerId;
+    const myUnits   = visible.filter(u =>
+      u.owner === planOwner && !isAllyUnit(u));
+    const allyUnits = visible.filter(u => isAllyUnit(u));
+    const foeUnits  = visible.filter(u => u.owner !== planOwner);
+    const unitsEl   = this._el('tile-zoom-units');
 
     if (unitsEl) {
       let html = '';
       if (visible.length) html += `<div class="tile-units-heading">Units</div>`;
       for (const u of myUnits) {
+        html += _unitCardHTML(u, { renderer: this.renderer, selectable: true });
+      }
+      for (const u of allyUnits) {
         html += _unitCardHTML(u, { renderer: this.renderer, selectable: true });
       }
       for (const u of foeUnits) {
@@ -3203,7 +3328,8 @@ export class UIController {
           const unit = state.entities.find(e => e.id === card.dataset.unitId);
           if (unit) {
             this._hideTileDetail();
-            this._selectEntity(unit);
+            if (isAllyUnit(unit)) this._selectEnemyEntity(unit);
+            else                  this._selectEntity(unit);
             this._updateSidebar();
             this.onRedraw();
           }
@@ -3649,8 +3775,8 @@ export class UIController {
       // Render replay-speed dropdown (compact single-button toggle + popup)
       const speedRowEl = this._el('round-summary-speed-row');
       if (speedRowEl) {
-        const SPEED_ICONS = { step: '👆', cinematic: '🎬', fast: '⏩', vfast: '⏭' };
-        const SPEED_DESCS = { step: 'Click to advance each action', cinematic: 'Dialog for important battles', fast: 'Cinematic pace, no popups', vfast: '1.5× speed, no popups' };
+        const SPEED_ICONS = { cinematic: '🎬', fast: '⏩', vfast: '⏭' };
+        const SPEED_DESCS = { cinematic: 'Dialog for important battles', fast: 'Cinematic pace, no popups', vfast: '1.5× speed, no popups' };
         const modes = Object.entries(UIController.SPEED_LABELS);
 
         speedRowEl.innerHTML =
@@ -3827,6 +3953,58 @@ export class UIController {
       this.renderer.viewLocked = this._preReplayViewLocked ?? false;
       this._updateFitBtnLockState();
     }
+  }
+
+  /**
+   * Show a minimal "SKIP only" HUD during any inline replay animation
+   * (initial resolution, "Replay last turn", summary-dialog replay, etc.).
+   * Reuses the full-game replay HUD shell but hides every button except
+   * the "jump to end" one, which is relabelled "SKIP".
+   * @param {Function} onSkip — called when the skip button is pressed
+   */
+  showInlineReplayHUD(onSkip) {
+    const hud = this._el('replay-hud');
+    if (!hud) return;
+    hud.style.display = 'flex';
+    hud.classList.add('replay-hud-skip-only');
+    for (const action of ['back', 'play', 'pause', 'ff', 'vff', 'stop']) {
+      const btn = document.getElementById(`replay-${action}-btn`);
+      if (btn) btn.style.display = 'none';
+    }
+    const endBtn = document.getElementById('replay-end-btn');
+    if (endBtn) {
+      endBtn.style.display = '';
+      // Remember the original glyph so hideInlineReplayHUD can restore it.
+      if (this._replayEndBtnOriginalText === undefined) {
+        this._replayEndBtnOriginalText = endBtn.textContent;
+      }
+      endBtn.textContent = 'SKIP';
+      endBtn.title = 'Skip replay';
+      endBtn.onclick = () => onSkip?.();
+    }
+    this._inlineReplayActive = true;
+  }
+
+  /** Hide the inline skip-only replay HUD and restore button visibility. */
+  hideInlineReplayHUD() {
+    const hud = this._el('replay-hud');
+    if (hud) {
+      hud.style.display = 'none';
+      hud.classList.remove('replay-hud-skip-only');
+    }
+    for (const action of ['back', 'play', 'pause', 'ff', 'vff', 'end', 'stop']) {
+      const btn = document.getElementById(`replay-${action}-btn`);
+      if (btn) btn.style.display = '';
+    }
+    const endBtn = document.getElementById('replay-end-btn');
+    if (endBtn) {
+      // Restore the original glyph (defaults to ⇥ if we never saw one)
+      endBtn.textContent = this._replayEndBtnOriginalText ?? '\u21E5';
+      endBtn.title = 'Jump to end';
+      endBtn.onclick = null;
+    }
+    this._replayEndBtnOriginalText = undefined;
+    this._inlineReplayActive = false;
   }
 
   /**

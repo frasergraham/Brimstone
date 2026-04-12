@@ -157,7 +157,11 @@ describe('Battle mode death/scatter', () => {
   test('standard mode: survivors scatter to current hex', () => {
     const state = new GameState(true, true);
     state.gameMode = GameMode.STANDARD;
-    const surv = createSurvivor(state.hero.col, state.hero.row + 1, 'hero');
+    // Pick a valid neighbor of the hero — random maps mean hero.row + 1 may be off-map.
+    const neighbors = getNeighbors(state.hero.col, state.hero.row);
+    const spot = neighbors.find(n => state.tiles.has(hexKey(n.col, n.row)));
+    assert.ok(spot, 'hero should have at least one in-bounds neighbor');
+    const surv = createSurvivor(spot.col, spot.row, 'hero');
     state.entities.push(surv);
     state.scatterPlayerUnits('hero');
     const tile = state.tiles.get(hexKey(surv.col, surv.row));

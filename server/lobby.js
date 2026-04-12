@@ -12,7 +12,7 @@ import { compileTurnBattleSummary }        from '../src/battle-utils.js';
 import { PlanActionType }                  from '../src/planner.js';
 import { upsertSave, deleteSave, getSave,
          createCompletedGame, appendSaveRound,
-         getSaveRounds, getLastSaveRound,
+         getSaveRounds, getLastSaveRound, getSaveRound,
          insertPlanStatusRows, upsertPlanStatus,
          getPlanStatus, clearPlanStatus,
          clearAllPlanStatus, getExpiredDeadlineGames,
@@ -223,10 +223,17 @@ function _buildPlayerList(room) {
   return room.players.map(s => {
     const wsOpen = s.ws?.readyState === 1;
     const inThisRoom = s.ws?._roomId === room.id;
+    // Look up the leader entity's color so clients can render names in the
+    // same per-player color used for map unit outlines.
+    const statePlayer = room.state.players.find(p => p.id === s.playerId);
+    const leader = statePlayer
+      ? room.state.entities.find(e => e.id === statePlayer.leaderId)
+      : null;
     return {
       playerId:  s.playerId,
       name:      s.name,
       faction:   s.faction,
+      color:     leader?.color ?? null,
       isAI:      s.isAI,
       connected: s.isAI || wsOpen,
       active:    s.isAI || (wsOpen && !s.ws._inactive && inThisRoom),
@@ -301,28 +308,42 @@ function _sendReconnectPlanningState(room, playerId, ws) {
   }
 }
 
-/** Get the last round's replay data for reconnecting players. */
-function _getLastUnwatchedReplay(room) {
-  // Try in-memory first
-  if (room.replayRounds.length > 0) {
-    const last = room.replayRounds[room.replayRounds.length - 1];
+/**
+ * Fetch a specific round's replay data (in-memory first, then DB).
+ * Returns null if the round is not available.
+ */
+export function getReplayForRound(room, roundNum) {
+  if (!room || typeof roundNum !== 'number') return null;
+  const mem = room.replayRounds?.find(r => r.roundNum === roundNum);
+  if (mem) {
     return {
-      roundNum:     last.roundNum,
-      preStateJson: last.preStateJson,
-      stepsJson:    last.stepsJson,
+      roundNum:     mem.roundNum,
+      preStateJson: mem.preStateJson,
+      stepsJson:    mem.stepsJson,
     };
   }
-  // Fall back to DB
-  const dbRounds = getSaveRounds(room.id);
-  if (dbRounds.length > 0) {
-    const last = dbRounds[dbRounds.length - 1];
+  const row = getSaveRound(room.id, roundNum);
+  if (row) {
     return {
-      roundNum:     last.round_num,
-      preStateJson: last.pre_state_json,
-      stepsJson:    last.steps_json,
+      roundNum:     row.round_num,
+      preStateJson: row.pre_state_json,
+      stepsJson:    row.steps_json,
     };
   }
   return null;
+}
+
+/**
+ * Get the "last completed round" replay for reconnecting players.
+ *
+ * Explicitly looks up `state.round - 1` rather than trusting
+ * `replayRounds[length-1]` — this guards against desync bugs where the
+ * tail of the array doesn't match the round the player is waiting to see.
+ */
+function _getLastUnwatchedReplay(room) {
+  const targetRound = (room.state?.round ?? 1) - 1;
+  if (targetRound < 1) return null;
+  return getReplayForRound(room, targetRound);
 }
 
 // ── Unified messages ────────────────────────────────────────────────────────
@@ -3593,14 +3614,7 @@ export function checkApproachingDeadlines() {
  * Called once at startup. Skips games that already have a game_saves row.
  */
 export function migrateAsyncGames() {
-  let rows;
-  try {
-    rows = db.prepare(
-      `SELECT * FROM async_games WHERE status IN ('playing', 'waiting')`
-    ).all();
-  } catch {
-    return 0; // table doesn't exist or is empty
-  }
+  const rows = db.async.listForMigration();
 
   let migrated = 0;
   for (const g of rows) {
@@ -3649,27 +3663,21 @@ export function migrateAsyncGames() {
         );
 
         // Copy plan status rows
-        try {
-          const plans = db.prepare(
-            `SELECT * FROM async_plan_status WHERE room_id = ?`
-          ).all(g.room_id);
-          for (const p of plans) {
-            try {
-              const planData = p.plan_json ? JSON.parse(p.plan_json) : null;
-              if (planData) {
-                upsertPlanStatus(g.room_id, p.player_id, p.round, planData);
-              }
-            } catch {}
-          }
-        } catch {}
+        const plans = db.async.listPlansForRoom(g.room_id);
+        for (const p of plans) {
+          try {
+            const planData = p.plan_json ? JSON.parse(p.plan_json) : null;
+            if (planData) {
+              upsertPlanStatus(g.room_id, p.player_id, p.round, planData);
+            }
+          } catch {}
+        }
 
         migrated++;
       }
 
       // Mark async game as migrated by setting status
-      try {
-        db.prepare(`UPDATE async_games SET status = 'migrated' WHERE room_id = ?`).run(g.room_id);
-      } catch {}
+      db.async.markMigrated(g.room_id);
     } catch (err) {
       console.error(`[migration] Error migrating async game ${g.room_id}:`, err);
     }

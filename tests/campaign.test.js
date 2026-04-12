@@ -7,6 +7,7 @@ import { EntityType, createMinion, createZombie, createSurvivor, markRosterUsedB
 import { hexKey, getNeighbors } from '../src/hex.js';
 import {
   Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves,
+  reconcileRosterAfterMission,
 } from '../src/campaign/campaign.js';
 import { ObjectiveType, processStoryTriggers } from '../src/campaign/missions.js';
 import { CAMPAIGNS, getCampaignById } from '../src/campaign/campaign-registry.js';
@@ -1127,6 +1128,75 @@ describe('Mission failure preserves party state', () => {
 
     assert.ok(c.storyFlags.intro_seen, 'pre-existing flags should be preserved');
     assert.equal(c.storyFlags.mid_mission_event, undefined, 'in-mission flags should not carry over on defeat');
+  });
+
+  test('dead deployed survivor is removed from roster on victory', () => {
+    // Regression: previously, a survivor who died during a winning mission
+    // was silently restored from the pre-mission roster because the
+    // "undeployed" filter looked only at alive-at-end names.
+    const c = new Campaign(hollowDef);
+    c.roster = [
+      { name: 'Alice', title: 'Scout', bio: '', ability: null, abilityLabel: null, color: '#fff', hp: 3, maxHp: 3, attack: 1, defense: 1, weapon: null, items: {} },
+      { name: 'Bob',   title: 'Guard', bio: '', ability: null, abilityLabel: null, color: '#aaa', hp: 3, maxHp: 3, attack: 1, defense: 1, weapon: null, items: {} },
+    ];
+
+    // Simulate end-of-mission state.entities: Alice alive, Bob was deployed but died.
+    const entities = [
+      { owner: 'hero', type: 'survivor', name: 'Alice', title: 'Scout', bio: '', ability: null, abilityLabel: null, color: '#fff', hp: 1, maxHp: 3, attack: 1, defense: 1, weapon: null, items: {}, alive: true },
+      { owner: 'hero', type: 'survivor', name: 'Bob',   title: 'Guard', bio: '', ability: null, abilityLabel: null, color: '#aaa', hp: 0, maxHp: 3, attack: 1, defense: 1, weapon: null, items: {}, alive: false },
+    ];
+    const survivors = reconcileRosterAfterMission(c.roster, entities);
+
+    c.applyMissionResult('prologue', {
+      won: true,
+      survivors,
+      resources: {},
+      heroStats: { hp: 10, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} },
+    });
+
+    assert.equal(c.roster.length, 1, 'dead survivor should be dropped from roster');
+    assert.equal(c.roster[0].name, 'Alice');
+    assert.ok(!c.roster.some(s => s.name === 'Bob'), 'Bob should not be resurrected from pre-mission roster');
+  });
+
+  test('reconcileRosterAfterMission keeps undeployed, drops dead deployed, keeps alive deployed', () => {
+    const roster = [
+      { name: 'Alice', hp: 3, maxHp: 3 },
+      { name: 'Bob',   hp: 2, maxHp: 3 },
+      { name: 'Carol', hp: 3, maxHp: 3 }, // never deployed — stays behind
+    ];
+    const entities = [
+      // Alice deployed and survived with reduced HP
+      { owner: 'hero', type: 'survivor', name: 'Alice', hp: 1, maxHp: 3, attack: 1, defense: 1, weapon: null, items: {}, alive: true },
+      // Bob deployed and died
+      { owner: 'hero', type: 'survivor', name: 'Bob',   hp: 0, maxHp: 3, attack: 1, defense: 1, weapon: null, items: {}, alive: false },
+      // Hero and an enemy are also in the entity list — must be ignored
+      { owner: 'hero',  type: 'hero',    name: null, hp: 10, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {}, alive: true },
+      { owner: 'witch', type: 'zombie',  name: null, hp: 0,  maxHp: 2,  attack: 1, defense: 1, weapon: null, items: {}, alive: false },
+    ];
+
+    const result = reconcileRosterAfterMission(roster, entities);
+
+    const names = result.map(s => s.name).sort();
+    assert.deepEqual(names, ['Alice', 'Carol'], 'only Alice (survived) and Carol (undeployed) remain');
+    assert.equal(result.find(s => s.name === 'Alice').hp, 1, 'Alice HP taken from end-of-mission entity');
+    assert.equal(result.find(s => s.name === 'Carol').hp, 3, 'Carol HP taken from pre-mission roster');
+  });
+
+  test('reconcileRosterAfterMission handles empty roster and no survivor entities', () => {
+    const result = reconcileRosterAfterMission([], [
+      { owner: 'hero', type: 'hero', name: null, hp: 10, maxHp: 14, alive: true },
+    ]);
+    assert.deepEqual(result, []);
+  });
+
+  test('reconcileRosterAfterMission drops a roster survivor with the same name even if only dead deployed copy exists', () => {
+    const roster = [{ name: 'Ghost', hp: 3, maxHp: 3 }];
+    const entities = [
+      { owner: 'hero', type: 'survivor', name: 'Ghost', hp: 0, maxHp: 3, attack: 1, defense: 1, weapon: null, items: {}, alive: false },
+    ];
+    const result = reconcileRosterAfterMission(roster, entities);
+    assert.equal(result.length, 0, 'Ghost died in mission — gone from roster');
   });
 
   test('victory still applies permadeath and state changes', () => {

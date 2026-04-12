@@ -46,6 +46,7 @@ import {
   setSendToPlayer,
   joinBattle, getBattleStatus,
   forceEndGame, loadAllRooms, nukeGame,
+  getReplayForRound,
 } from './server/lobby.js';
 import { ensureBattleExists, checkBattleLifecycle, endBattleEarly } from './server/battle-scheduler.js';
 import {
@@ -1003,7 +1004,7 @@ function route(ws, cs, msg) {
     case 'auth': {
       const result = registerOrLogin({ username: msg.username, token: msg.token });
       if (!result.ok) {
-        send(ws, { type: 'authError', message: result.error });
+        send(ws, { type: 'authError', message: result.error, err_code: result.err_code });
         return;
       }
       cs.player = result.player;
@@ -1163,6 +1164,53 @@ function route(ws, cs, msg) {
     case 'requestState': {
       if (!cs.player || !cs.roomId) return;
       resumeGame(cs.player.id, ws, cs.roomId);
+      break;
+    }
+
+    // ── Fetch a specific round's replay (for "Replay last turn" cache miss)
+    case 'requestReplay': {
+      const reqRoundNum = Number(msg.roundNum);
+      if (!cs.player || !cs.roomId || cs.roomId !== msg.roomId) {
+        send(ws, { type: 'replayError', roomId: msg.roomId, roundNum: reqRoundNum,
+                   reason: 'notAuthorized' });
+        return;
+      }
+      const room = getRoom(cs.roomId);
+      if (!room) {
+        send(ws, { type: 'replayError', roomId: msg.roomId, roundNum: reqRoundNum,
+                   reason: 'notFound' });
+        return;
+      }
+      const seat = room.players.find(s => s.playerId === cs.player.id);
+      if (!seat) {
+        send(ws, { type: 'replayError', roomId: msg.roomId, roundNum: reqRoundNum,
+                   reason: 'notAuthorized' });
+        return;
+      }
+      if (!Number.isInteger(reqRoundNum) || reqRoundNum < 1 || reqRoundNum >= (room.state?.round ?? 1)) {
+        send(ws, { type: 'replayError', roomId: msg.roomId, roundNum: reqRoundNum,
+                   reason: 'invalidRound' });
+        return;
+      }
+      // Battle mode: late-joiners can't fetch rounds from before they joined
+      if ((seat.joinedAtRound ?? 0) > reqRoundNum) {
+        send(ws, { type: 'replayError', roomId: msg.roomId, roundNum: reqRoundNum,
+                   reason: 'notAuthorized' });
+        return;
+      }
+      const entry = getReplayForRound(room, reqRoundNum);
+      if (!entry) {
+        send(ws, { type: 'replayError', roomId: msg.roomId, roundNum: reqRoundNum,
+                   reason: 'notFound' });
+        return;
+      }
+      send(ws, {
+        type:         'replayData',
+        roomId:       msg.roomId,
+        roundNum:     entry.roundNum,
+        preStateJson: entry.preStateJson,
+        stepsJson:    entry.stepsJson,
+      });
       break;
     }
 

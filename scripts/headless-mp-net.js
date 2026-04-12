@@ -215,7 +215,7 @@ class BotClient {
 
 // ── Server lifecycle ────────────────────────────────────────────────────────
 
-function startServer() {
+function startServerOnce() {
   const port = 30000 + Math.floor(Math.random() * 20000);
   return new Promise((resolve, reject) => {
     const child = spawn('node', ['server.js'], {
@@ -232,6 +232,7 @@ function startServer() {
     });
 
     let started = false;
+    let stderrBuf = '';
     const startTimeout = setTimeout(() => {
       if (!started) { child.kill(); reject(new Error('Server start timeout')); }
     }, 15_000);
@@ -246,12 +247,34 @@ function startServer() {
       }
     });
     child.stderr.on('data', (data) => {
+      stderrBuf += data.toString();
       if (VERBOSE) process.stderr.write(`  [server:err] ${data}`);
     });
     child.on('exit', (code) => {
-      if (!started) { clearTimeout(startTimeout); reject(new Error(`Server exited with code ${code}`)); }
+      if (!started) {
+        clearTimeout(startTimeout);
+        const detail = stderrBuf ? ` — ${stderrBuf.split('\n').slice(0, 3).join(' ')}` : '';
+        reject(new Error(`Server exited with code ${code}${detail}`));
+      }
     });
   });
+}
+
+// Retry startServer up to a few times — random port collisions can cause
+// EADDRINUSE when many test processes run in parallel against the shared port
+// range, and the server currently doesn't handle that gracefully.
+async function startServer(attempts = 5) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await startServerOnce();
+    } catch (err) {
+      lastErr = err;
+      if (VERBOSE) console.log(`  [server start] attempt ${i + 1}/${attempts} failed: ${err.message}`);
+      await sleep(200 * (i + 1));
+    }
+  }
+  throw lastErr;
 }
 
 async function waitForHealth(port, retries = 20) {

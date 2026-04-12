@@ -18,26 +18,68 @@
     <!-- Welcome screen -->
     <div id="setup-step-mode" class="setup-card">
       <h1 class="title">CALEB'S HOLLOW</h1>
-      <div class="setup-buttons" style="flex-direction:column;align-items:center">
-        <button id="btn-battle-main" class="setup-btn" style="width:240px;position:relative;text-align:center">
-          Battle for Caleb's Hollow
-          <span style="display:block;font-size:0.65rem;opacity:0.6;margin-top:2px">A persistent large scale multiplayer battle</span>
-          <span id="battle-badge" class="mp-badge" style="display:none"></span>
-        </button>
+
+      <!-- Active games list — always shown, includes local + online -->
+      <div id="mm-games-section">
+        <div class="mm-games-header">
+          <span class="active-games-label">My Active Games</span>
+        </div>
+        <div id="mm-games-list"></div>
       </div>
-      <div class="menu-separator"></div>
-      <div class="setup-buttons" style="flex-direction:column;align-items:center">
-        <button id="btn-single-player" class="setup-btn" style="width:200px">Single Player</button>
-        <button id="btn-multiplayer"   class="setup-btn" style="width:200px;position:relative">Multiplayer<span id="mp-badge" class="mp-badge" style="display:none"></span></button>
-        <button id="btn-how-to-play"   class="setup-btn" style="width:200px">How to Play</button>
+
+      <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.4rem;margin-top:0.75rem">
+        <button id="btn-new-game"    class="setup-btn primary" style="width:200px">New Game</button>
+        <button id="btn-how-to-play" class="setup-btn" style="width:200px">How to Play</button>
+        <button id="btn-options"     class="setup-btn" style="width:200px">Options</button>
+        <button id="btn-replays"     class="setup-btn" style="width:200px">Replays</button>
       </div>
-      <div class="menu-separator"></div>
-      <div class="setup-buttons" style="flex-direction:column;align-items:center;margin-top:0">
-        <button id="btn-options"       class="setup-btn" style="width:200px">Options</button>
-      </div>
-      <!-- Async games box removed — games listed in Multiplayer section -->
+
       <div style="margin-top:1.25rem;text-align:center">
         <a href="/admin" class="admin-link" id="admin-link" style="display:none">Admin</a>
+      </div>
+    </div>
+
+    <!-- New Game submenu -->
+    <div id="setup-step-newgame" class="setup-card" style="display:none">
+      <h1 class="title" style="font-size:2rem">NEW GAME</h1>
+
+      <div class="ng-section-label" style="margin-top:0.75rem">Local Single Player</div>
+      <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.5rem;margin-top:0.4rem;margin-bottom:0">
+        <button id="btn-ng-campaign" class="setup-btn" style="width:260px;text-align:center">
+          Single Player Campaign
+          <span style="display:block;font-size:0.65rem;opacity:0.6;margin-top:2px">Story missions with persistent roster</span>
+        </button>
+        <button id="btn-ng-vsai"     class="setup-btn" style="width:260px;text-align:center">
+          vs. AI
+          <span style="display:block;font-size:0.65rem;opacity:0.6;margin-top:2px">Quick skirmish against the computer</span>
+        </button>
+      </div>
+
+      <div class="ng-section-label" style="margin-top:1.25rem">Online Multiplayer</div>
+      <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.5rem;margin-top:0.4rem;margin-bottom:0">
+        <button id="btn-ng-battle"   class="setup-btn" style="width:260px;position:relative;text-align:center">
+          Join the Battle for Caleb's Hollow
+          <span style="display:block;font-size:0.65rem;opacity:0.6;margin-top:2px">Persistent large-scale multiplayer battle</span>
+        </button>
+        <button id="btn-ng-online"   class="setup-btn" style="width:260px;text-align:center">
+          Online Multiplayer
+          <span style="display:block;font-size:0.65rem;opacity:0.6;margin-top:2px">Play against humans online</span>
+        </button>
+      </div>
+
+      <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
+        <button id="btn-newgame-back" class="setup-btn">← Back</button>
+      </div>
+    </div>
+
+    <!-- Replays — top-level screen showing all completed games -->
+    <div id="setup-step-replays" class="setup-card" style="display:none">
+      <h1 class="title" style="font-size:2rem">REPLAYS</h1>
+      <div id="mm-replays-section" style="margin-top:0.5rem">
+        <div id="mm-replays-list"></div>
+      </div>
+      <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
+        <button id="btn-replays-back" class="setup-btn">← Back</button>
       </div>
     </div>
 
@@ -190,22 +232,9 @@
       </div>
     </div>
 
-    <!-- Single Player Mode Choice -->
-    <div id="setup-step-sp-choice" class="setup-card" style="display:none">
-      <h1 class="title" style="font-size:2rem;margin-bottom:0.5rem">SINGLE PLAYER</h1>
-      <div class="setup-lore"><p>Choose your path into Caleb's Hollow.</p></div>
-      <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.75rem">
-        <button id="btn-story-mode" class="setup-btn" style="width:220px">📖 Story Mode</button>
-        <button id="btn-quick-play" class="setup-btn" style="width:220px">⚔ Quick Play</button>
-      </div>
-      <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
-        <button id="btn-sp-choice-back" class="setup-btn">← Back</button>
-      </div>
-    </div>
-
     <!-- Campaign: Story Selection -->
     <div id="setup-step-campaign-select" class="setup-card setup-card-wide" style="display:none">
-      <h1 class="title" style="font-size:2rem;margin-bottom:0.5rem">STORY MODE</h1>
+      <h1 class="title" style="font-size:2rem;margin-bottom:0.5rem">SINGLE PLAYER CAMPAIGN</h1>
       <div class="setup-lore"><p>Choose a story to play.</p></div>
       <div id="campaign-select-list" class="campaign-select-list"></div>
       <div class="setup-buttons" style="margin-top:1rem">
@@ -247,22 +276,16 @@
       </div>
     </div>
 
-    <!-- Single Player: Quick Play -->
+    <!-- Single Player: vs. AI (quick skirmish) -->
     <div id="setup-step-singleplayer" class="setup-card" style="display:none">
-      <h1 class="title" style="font-size:2rem;margin-bottom:1rem">QUICK PLAY</h1>
+      <h1 class="title" style="font-size:2rem;margin-bottom:1rem">VS. AI</h1>
 
-      <!-- In-progress and completed local saves -->
-      <div class="active-games-section" style="margin-top:0.75rem">
-        <div class="saves-tab-bar">
-          <button class="saves-tab active" data-target="sp-saves-list">In Progress</button>
-          <button class="saves-tab"        data-target="sp-completed-list">Completed</button>
+      <!-- In-progress local saves (completed games live in Replays) -->
+      <div id="mm-sp-section" class="mm-games-box">
+        <div class="mm-games-header">
+          <span class="active-games-label">My Local Games</span>
         </div>
-        <div id="sp-saves-list" class="saves-list">
-          <p class="saves-empty">No saved games.</p>
-        </div>
-        <div id="sp-completed-list" class="saves-list" style="display:none">
-          <p class="saves-empty">No completed games yet.</p>
-        </div>
+        <div id="sp-saves-list"></div>
       </div>
 
       <!-- Faction toggle -->
@@ -394,14 +417,12 @@
         <button id="btn-mp-signin" class="setup-btn primary" style="margin-top:0.4rem">Sign In</button>
       </div>
 
-      <!-- Active and completed online games (hidden until signed in) -->
-      <div id="mp-games-section" class="active-games-section" style="display:none;margin-top:0.75rem">
-        <div class="saves-tab-bar">
-          <button class="saves-tab active" data-target="active-games-list">In Progress</button>
-          <button class="saves-tab"        data-target="mp-completed-list">Completed</button>
+      <!-- Active online games (hidden until signed in; completed live in Replays) -->
+      <div id="mp-games-section" class="mm-games-box" style="display:none">
+        <div class="mm-games-header">
+          <span class="active-games-label">My Online Games</span>
         </div>
-        <div id="active-games-list" class="saves-list"></div>
-        <div id="mp-completed-list" class="saves-list" style="display:none"></div>
+        <div id="active-games-list"></div>
       </div>
 
       <!-- Online action buttons (shown after sign-in) -->
@@ -443,44 +464,6 @@
 
       <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
         <button id="btn-async-back" class="setup-btn">← Back</button>
-      </div>
-    </div>
-
-    <!-- ── Local Pass & Play ──────────────────────────────────────── -->
-    <div id="setup-step-local-play" class="setup-card" style="display:none">
-      <h1 class="title" style="font-size:2rem">LOCAL PASS &amp; PLAY</h1>
-      <div class="setup-lore"><p>Two players share one screen, taking turns on the same device.</p></div>
-      <div class="cg-options">
-        <div class="cg-option-row">
-          <span class="cg-option-label">Map size</span>
-          <select id="local-map-size" class="setup-select">
-            <option value="skirmish">Skirmish (9×9)</option>
-            <option value="standard" selected>Standard (13×11)</option>
-            <option value="regional">Regional (17×13)</option>
-            <option value="campaign">Campaign (21×15)</option>
-          </select>
-        </div>
-        <div class="cg-option-row">
-          <span class="cg-option-label">Power Nodes</span>
-          <select id="local-node-count" class="setup-select">
-            <option value="2">2</option>
-            <option value="3" selected>3</option>
-            <option value="4">4</option>
-            <option value="5">5</option>
-          </select>
-        </div>
-        <div class="cg-option-row">
-          <span class="cg-option-label">Fog of War</span>
-          <select id="local-fog" class="setup-select">
-            <option value="none" selected>None</option>
-            <option value="partial">Partial</option>
-            <option value="full">Full</option>
-          </select>
-        </div>
-      </div>
-      <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
-        <button id="btn-local-play-back" class="setup-btn">← Back</button>
-        <button id="btn-local-play-start" class="setup-btn primary">Start Game</button>
       </div>
     </div>
 
@@ -527,11 +510,6 @@
           Sets the playback speed when entering any game. You can still change it in-game.
         </p>
         <div id="options-speed-buttons" style="display:flex;flex-direction:column;gap:0.25rem">
-          <button class="speed-option" data-mode="step">
-            <span class="speed-option-icon">👆</span>
-            <span class="speed-option-label">Step by Step</span>
-            <span class="speed-option-desc">Click to advance each action</span>
-          </button>
           <button class="speed-option" data-mode="cinematic">
             <span class="speed-option-icon">🎬</span>
             <span class="speed-option-label">Cinematic</span>
@@ -617,13 +595,24 @@
         <h2 class="auth-dialog-title">SIGN IN</h2>
         <input id="auth-username" class="setup-input" type="text"
                placeholder="Enter a username…" maxlength="20" autocomplete="off">
+        <p id="auth-explainer" class="setup-hint" style="margin-top:0.5rem;text-align:center">
+          This is passwordless — pick any name. To sign in from another device later,
+          link an email in Account.
+        </p>
         <button id="btn-auth-signin" class="setup-btn primary" style="margin-top:0.4rem;width:100%;max-width:320px">Sign In</button>
-        <div class="email-login-divider" style="margin:0.6rem 0;font-size:0.75rem;opacity:0.6">— or sign in with email —</div>
-        <input id="auth-email-input" class="setup-input" type="email"
-               placeholder="your@email.com" autocomplete="email">
-        <button id="btn-auth-email-login" class="setup-btn secondary" style="margin-top:0.4rem;width:100%;max-width:320px">Send Login Link</button>
-        <p id="auth-email-status" class="setup-hint" style="display:none"></p>
         <p id="auth-error" class="setup-error" style="display:none"></p>
+
+        <!-- Email login section (hidden by default; revealed when the server reports
+             the username is already linked to an email) -->
+        <div id="auth-email-section" style="display:none">
+          <p id="auth-linked-hint" class="setup-hint" style="display:none;text-align:center;margin-top:0.6rem"></p>
+          <div class="email-login-divider" style="margin:0.6rem 0;font-size:0.75rem;opacity:0.6;text-align:center">— sign in with email —</div>
+          <input id="auth-email-input" class="setup-input" type="email"
+                 placeholder="your@email.com" autocomplete="email">
+          <button id="btn-auth-email-login" class="setup-btn secondary" style="margin-top:0.4rem;width:100%;max-width:320px">Send Login Link</button>
+          <p id="auth-email-status" class="setup-hint" style="display:none"></p>
+        </div>
+
         <div class="setup-buttons" style="margin-top:1rem;margin-bottom:0">
           <button id="btn-auth-cancel" class="setup-btn secondary">Cancel</button>
         </div>
@@ -915,8 +904,6 @@
       </div>
       <div id="canvas-wrapper">
         <canvas id="game-canvas"></canvas>
-        <!-- Step-by-step continue bar: shown during step mode resolution -->
-        <div id="step-continue-bar" style="display:none">👆 Click to advance</div>
         <!-- Replay HUD: shown during full-game replay -->
         <div id="replay-hud" style="display:none">
           <div class="replay-controls">
@@ -948,11 +935,6 @@
           </div>
           <!-- Speed mode picker popup -->
           <div id="speed-popup" class="speed-popup" style="display:none">
-            <button class="speed-option" data-mode="step">
-              <span class="speed-option-icon">👆</span>
-              <span class="speed-option-label">Step by Step</span>
-              <span class="speed-option-desc">Click to advance each action</span>
-            </button>
             <button class="speed-option" data-mode="cinematic">
               <span class="speed-option-icon">🎬</span>
               <span class="speed-option-label">Cinematic</span>
@@ -1001,7 +983,7 @@
       <div id="plan-panel" class="plan-panel" style="display:none">
         <!-- Collapse tab — always visible so the panel can be reopened -->
         <button id="plan-tab" class="plan-tab" title="Toggle plan panel">
-          <span class="plan-tab-label">Action Plan</span><span id="plan-tab-count" class="plan-tab-count"></span>
+          <span class="plan-tab-label">Action Plan</span><span id="plan-tab-toggle" class="plan-tab-toggle">+</span><span id="plan-tab-count" class="plan-tab-count"></span>
         </button>
         <div class="plan-panel-header">
           <span class="plan-panel-title">📋 Your Plan</span>

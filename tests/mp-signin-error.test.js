@@ -17,15 +17,15 @@ const mainJs = readFileSync(resolve(__dirname, '..', 'src', 'main.js'), 'utf8');
 describe('multiplayer onError handler ordering', () => {
   test('_onlineError is called after the screen show functions in the onError handler', () => {
     // The onError handler calls _showOnlineScreen() or _showAsyncScreen() which
-    // internally call _initMpStep()/_initAsyncStep(), then calls _onlineError(msg).
+    // internally call _initMpStep()/_initAsyncStep(), then calls _onlineError(msg, raw).
     // Extract the onError handler body (allowing nested braces)
-    const onErrorStart = mainJs.indexOf('onError(msg) {');
+    const onErrorStart = mainJs.search(/onError\(msg(?:,\s*raw)?\)\s*\{/);
     assert.ok(onErrorStart !== -1, 'onError handler must exist');
-    const afterStart = mainJs.slice(onErrorStart, onErrorStart + 800);
+    const afterStart = mainJs.slice(onErrorStart, onErrorStart + 1200);
 
-    // _showOnlineScreen() must appear before _onlineError(msg) in the handler
+    // _showOnlineScreen() must appear before _onlineError(msg, ...) in the handler
     const showIdx = afterStart.indexOf('_showOnlineScreen()');
-    const errIdx  = afterStart.indexOf('_onlineError(msg)');
+    const errIdx  = afterStart.search(/_onlineError\(msg/);
     assert.ok(showIdx !== -1, 'onError handler must call _showOnlineScreen()');
     assert.ok(errIdx  !== -1, 'onError handler must call _onlineError(msg)');
     assert.ok(

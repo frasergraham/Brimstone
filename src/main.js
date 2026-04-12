@@ -27,12 +27,13 @@ import { getFaction, allFactions } from './factions.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { playback, resetPlayback, replayFullGame, playbackDelay, swapState, patchAlive } from './playback.js';
+import { ReplayCache } from './replay-cache.js';
 import { MAP_SIZES } from './map.js';
 import { nodeController } from './game.js';
 import { MissionConductor } from './mission-conductor.js';
 import { createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, setForcedDice, EntityType, markRosterUsedByName, ENTITY_COLOR } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
-import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves } from './campaign/campaign.js';
+import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
 import { processStoryTriggers } from './campaign/missions.js';
 import {
@@ -44,6 +45,7 @@ import {
   departureMessage as _departureMessage, arrivalMessage as _arrivalMessage,
 } from './campaign/campaign-ui.js';
 import { requestNotificationPermission, notifyRoundReady, notifyWaitingOnYou, notifyDeadlineApproaching, notifyGameOver } from './notifications.js';
+import { mmSortRows, mmFormatRow } from './main-menu-games.js';
 
 // Stamp version into badge
 document.getElementById('version-badge').textContent = `v${BUILD_VERSION}`;
@@ -52,12 +54,10 @@ document.getElementById('version-badge').textContent = `v${BUILD_VERSION}`;
 // Fetches /api/config to determine which game modes are enabled/disabled/hidden.
 // Maps mode keys to the button IDs they control.
 const _MODE_BUTTON_MAP = {
-  singleplayer: 'btn-single-player',
-  multiplayer:  'btn-multiplayer',
-  story:        'btn-story-mode',
-  quickplay:    'btn-quick-play',
-  local:        'btn-local-pass-play',
-  async:        'btn-mp-async',
+  singleplayer: 'btn-ng-vsai',
+  multiplayer:  'btn-ng-online',
+  story:        'btn-ng-campaign',
+  battle:       'btn-ng-battle',
 };
 
 function _applyModeConfig(modes) {
@@ -104,6 +104,74 @@ let _gameStartTime = null;        // wall-clock timestamp for game duration trac
 let _roundHistory        = [];  // SP offline:  { roundNum, preState, steps }[]
 let _onlineRoundHistory  = [];  // MP online:   { roundNum, preState, steps }[]
 // Playback state imported from ./playback.js (playback, resetPlayback, etc.)
+
+// ── Replay cache (round-keyed) + pending server fetches ─────────────────────
+// Used by "Replay last turn" to look up a replay by exact round number,
+// falling back to the server if missing.
+const _replayCache = new ReplayCache();
+/** @type {Map<number, {resolve:Function, reject:Function, timer:any}>} */
+const _replayRequests = new Map();
+let _inlineReplayInFlight = false;
+
+/**
+ * Central helper: cache a replay entry by roundNum, and keep the legacy
+ * chronological `_onlineRoundHistory` array in sync (used by full-game
+ * PLAYBACK). Idempotent on roundNum so callers can invoke it freely.
+ */
+function _cacheReplay(entry) {
+  if (!entry || typeof entry.roundNum !== 'number') return;
+  _replayCache.set(entry);
+  const tail = _onlineRoundHistory[_onlineRoundHistory.length - 1];
+  if (!tail || tail.roundNum !== entry.roundNum) {
+    _onlineRoundHistory.push({
+      roundNum: entry.roundNum,
+      preState: entry.preStateJson,
+      steps:    entry.stepsJson,
+    });
+  }
+}
+
+/** Send a requestReplay to the server, resolving when replayData matches. */
+function _requestReplayFromServer(roomId, roundNum) {
+  return new Promise((resolve, reject) => {
+    if (!mp) { reject(new Error('no connection')); return; }
+    const prev = _replayRequests.get(roundNum);
+    if (prev) {
+      clearTimeout(prev.timer);
+      prev.reject(new Error('superseded'));
+    }
+    const timer = setTimeout(() => {
+      _replayRequests.delete(roundNum);
+      reject(new Error('timeout'));
+    }, 10_000);
+    _replayRequests.set(roundNum, { resolve, reject, timer });
+    mp.requestReplay(roomId, roundNum);
+  });
+}
+
+function _handleReplayData(msg) {
+  const entry = {
+    roundNum:     msg.roundNum,
+    preStateJson: msg.preStateJson,
+    stepsJson:    msg.stepsJson,
+  };
+  _cacheReplay(entry);
+  const pending = _replayRequests.get(msg.roundNum);
+  if (pending) {
+    clearTimeout(pending.timer);
+    _replayRequests.delete(msg.roundNum);
+    pending.resolve(entry);
+  }
+}
+
+function _handleReplayError(msg) {
+  const pending = _replayRequests.get(msg.roundNum);
+  if (pending) {
+    clearTimeout(pending.timer);
+    _replayRequests.delete(msg.roundNum);
+    pending.reject(new Error(msg.reason || 'replayError'));
+  }
+}
 
 // Keep UIController.appMode in sync with the centralized mode.
 onModeChange((newMode) => { if (ui) ui.appMode = newMode; });
@@ -926,6 +994,15 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     humanFaction, myPlayerId,
     flags: { goBack: playback.goBack, aborted: playback.aborted, jumpToEnd: playback.jumpToEnd, _autoplay },
   });
+
+  // Show the skip button whenever a replay is animating, EXCEPT during full
+  // PLAYBACK mode (which has its own HUD with its own skip control). We
+  // detect full PLAYBACK via ui._replayOnControl because the first step
+  // animation sets mode to RESOLVING, clobbering getMode()-based checks.
+  const skipHudActive = !_autoplay && ui && !ui._replayOnControl;
+  if (skipHudActive) {
+    ui.showInlineReplayHUD?.(() => { playback.jumpToEnd = true; });
+  }
   setMode(AppMode.RESOLVING);
   for (let i = 0; i < steps.length; i++) {
     // During replay: if BACK or STOP was pressed, abort remaining steps immediately
@@ -973,12 +1050,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     if (!_autoplay) {
       const _cspd = ui?.speedMode ?? 'cinematic';
       {
-        // In cinematic/step modes, battles get per-battle dialog framing
+        // In cinematic mode, battles get per-battle dialog framing
         // (with insetRight=500). To avoid a "yoyo" (centered frame → dialog
         // reframe), detect the first visible battle and apply the dialog
         // inset directly in this step-level frame, so the camera lands in the
         // final position from the start.
-        const hasBattleDialogFraming = (_cspd === 'cinematic' || _cspd === 'step');
+        const hasBattleDialogFraming = (_cspd === 'cinematic');
         let firstBattleTargets = null;
         let firstBattleFrameKey = null;
         if (hasBattleDialogFraming) {
@@ -1033,13 +1110,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
           }
         }
         if (frameTargets.length) {
-          const _isStep = _cspd === 'step';
           renderer.frameHexes(frameTargets, {
-            paddingHexes: firstBattleTargets ? 2.5 : (_isStep ? 1.5 : 3.0),
-            maxZoom:      _isStep ? 3.5 : 2.0,
-            duration:     _isStep ? 400 : 250,
+            paddingHexes: firstBattleTargets ? 2.5 : 3.0,
+            maxZoom:      2.0,
+            duration:     250,
           });
-          await playbackDelay(_isStep ? 400 : (_cspd === 'vfast' ? 140 : 280));
+          await playbackDelay(_cspd === 'vfast' ? 140 : 280);
         }
       }
     }
@@ -1205,8 +1281,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               redrawFn();
             }
 
-            // ── Step 3: Dialog (cinematic/step) or toast+floater (fast/vfast) ─
-            if (speed === 'cinematic' || speed === 'step') {
+            // ── Step 3: Dialog (cinematic) or toast+floater (fast/vfast) ─
+            if (speed === 'cinematic') {
               // Full dialog for every battle — no significance filter.
               // Offset camera so the map is visible beside the docked dialog.
               // Skip the reframe if the camera is already positioned for these
@@ -1248,7 +1324,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             // ── Step 4: Clear highlights, animate lunge return ───────────────
             renderer.clearBattleHighlights();
             renderer.returnAllLungeAnims(); // slide entity back rather than snap
-            if (speed === 'cinematic' || speed === 'step') await renderer.waitForAnimations();
+            if (speed === 'cinematic') await renderer.waitForAnimations();
             redrawFn();
 
           } else {
@@ -1302,7 +1378,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
         // Return lunge
         renderer.returnAllLungeAnims();
-        if (speed === 'cinematic' || speed === 'step') await renderer.waitForAnimations();
+        if (speed === 'cinematic') await renderer.waitForAnimations();
         redrawFn();
       }
       hadBattle = true;
@@ -1350,7 +1426,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         );
         redrawFn();
 
-        if (speed === 'cinematic' || speed === 'step') {
+        if (speed === 'cinematic') {
           // Reuse the same frame-key tracking from Phase 2 so guard strikes
           // at the same position as a preceding regular battle skip reframing.
           const frameKey = `${actorSnap.col},${actorSnap.row}|${targetSnap.col},${targetSnap.row}`;
@@ -1384,7 +1460,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         // Clear highlights, return lunge
         renderer.clearBattleHighlights();
         renderer.returnAllLungeAnims();
-        if (speed === 'cinematic' || speed === 'step') await renderer.waitForAnimations();
+        if (speed === 'cinematic') await renderer.waitForAnimations();
         redrawFn();
 
       } else {
@@ -1536,20 +1612,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     if (hadMove || hadBattle) {
       if (!_autoplay) {
         const _spd2 = ui?.speedMode ?? 'cinematic';
-        if (_spd2 === 'step') {
-          await ui._waitForStep();
-        } else {
-          await playbackDelay(_spd2 === 'vfast' ? (hadMove ? 150 : 125) : hadMove ? 300 : 250);
-        }
+        await playbackDelay(_spd2 === 'vfast' ? (hadMove ? 150 : 125) : hadMove ? 300 : 250);
       }
     } else if (events.length > 0 && !_autoplay) {
       // Non-visual actions (fortify, use_item, etc.) — brief pause so resolution feels deliberate.
       const _spd3 = ui?.speedMode ?? 'cinematic';
-      if (_spd3 === 'step') {
-        await ui._waitForStep();
-      } else {
-        await playbackDelay(_spd3 === 'vfast' ? 75 : 150);
-      }
+      await playbackDelay(_spd3 === 'vfast' ? 75 : 150);
     }
   }
 
@@ -1560,11 +1628,19 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   }
 
   // Restore the authoritative final state.
-  ui?._clearStepContinue();
   state.entities = finalEntities;
   // Skip the final redraw during replay navigation (caller will render the target preState).
   if (!playback.goBack && !playback.aborted && !playback.jumpToEnd) {
     redrawFn();
+  }
+  // Inline replay cleanup: hide the SKIP HUD and clear jumpToEnd so the
+  // next animation doesn't inherit the flag and auto-skip. Only do this
+  // in the inline case — full PLAYBACK's outer loop (src/playback.js)
+  // relies on jumpToEnd persisting across the animation call to route
+  // the viewer to the end-of-replay hold screen.
+  if (skipHudActive) {
+    ui?.hideInlineReplayHUD?.();
+    playback.jumpToEnd = false;
   }
   // Mode transition is caller's responsibility
 }
@@ -1685,7 +1761,6 @@ window.addEventListener('resize', () => {
 // ── Setup screen ──────────────────────────────────────────────────────────────
 
 const stepMode         = document.getElementById('setup-step-mode');
-const stepSpChoice     = document.getElementById('setup-step-sp-choice');
 const stepSinglePlayer = document.getElementById('setup-step-singleplayer');
 const stepCampaignSelect = document.getElementById('setup-step-campaign-select');
 const stepCampaign     = document.getElementById('setup-step-campaign');
@@ -1693,7 +1768,6 @@ const stepDebrief      = document.getElementById('setup-step-debrief');
 const stepBattle       = document.getElementById('setup-step-battle');
 const stepOnline       = document.getElementById('setup-step-online');
 const stepAsync        = document.getElementById('setup-step-async');
-const stepLocalPlay    = document.getElementById('setup-step-local-play');
 const stepHowto        = document.getElementById('setup-step-howtoplay');
 const stepOptions      = document.getElementById('setup-step-options');
 const stepChangelog    = document.getElementById('setup-step-changelog');
@@ -1705,10 +1779,20 @@ const stepLobby        = document.getElementById('setup-step-lobby');
 const stepAsyncCreate  = document.getElementById('setup-step-async-create');
 const stepAsyncCreated = document.getElementById('setup-step-async-created');
 const stepAsyncJoin    = document.getElementById('setup-step-async-join');
+const stepNewGame      = document.getElementById('setup-step-newgame');
+const stepReplays      = document.getElementById('setup-step-replays');
 
 function showStep(step) {
+  // Refresh or tear down the main-menu games list depending on whether we're
+  // entering or leaving the mode card.
+  if (step === 'mode') {
+    // Fire-and-forget — the function handles its own loading/empty states.
+    try { _fetchMainMenuGames?.(); } catch {}
+  } else {
+    _stopMmCountdown?.();
+  }
+
   stepMode          .style.display = step === 'mode'            ? '' : 'none';
-  stepSpChoice      .style.display = step === 'sp-choice'       ? '' : 'none';
   stepSinglePlayer  .style.display = step === 'singleplayer'    ? '' : 'none';
   stepCampaignSelect.style.display = step === 'campaign-select' ? '' : 'none';
   stepCampaign      .style.display = step === 'campaign'        ? '' : 'none';
@@ -1716,7 +1800,6 @@ function showStep(step) {
   if (stepBattle) stepBattle.style.display = step === 'battle' ? '' : 'none';
   stepOnline        .style.display = step === 'online'          ? '' : 'none';
   stepAsync         .style.display = step === 'async'           ? '' : 'none';
-  stepLocalPlay     .style.display = step === 'local-play'      ? '' : 'none';
   stepHowto         .style.display = step === 'howtoplay'       ? '' : 'none';
   stepOptions       .style.display = step === 'options'         ? '' : 'none';
   stepChangelog     .style.display = step === 'changelog'       ? '' : 'none';
@@ -1728,16 +1811,19 @@ function showStep(step) {
   stepAsyncCreate   .style.display = step === 'async-create'    ? '' : 'none';
   stepAsyncCreated  .style.display = step === 'async-created'   ? '' : 'none';
   stepAsyncJoin     .style.display = step === 'async-join'      ? '' : 'none';
+  if (stepNewGame) stepNewGame.style.display = step === 'newgame' ? '' : 'none';
+  if (stepReplays) stepReplays.style.display = step === 'replays' ? '' : 'none';
 
   // Move the session bar into the active card so it sits at its bottom
   const _stepEl = {
-    'mode': stepMode, 'sp-choice': stepSpChoice, 'singleplayer': stepSinglePlayer,
+    'mode': stepMode, 'singleplayer': stepSinglePlayer,
     'campaign-select': stepCampaignSelect, 'campaign': stepCampaign, 'debrief': stepDebrief,
     'online': stepOnline, 'async': stepAsync,
-    'local-play': stepLocalPlay, 'howtoplay': stepHowto, 'options': stepOptions,
+    'howtoplay': stepHowto, 'options': stepOptions,
     'changelog': stepChangelog, 'account': stepAccount, 'waiting': stepWaiting,
     'create-game': stepCreateGame, 'join-game': stepJoinGame, 'lobby': stepLobby,
     'async-create': stepAsyncCreate, 'async-created': stepAsyncCreated, 'async-join': stepAsyncJoin,
+    'newgame': stepNewGame, 'replays': stepReplays,
   }[step];
   const sessionBar = document.getElementById('setup-session-bar');
   if (_stepEl && sessionBar) _stepEl.appendChild(sessionBar);
@@ -1748,12 +1834,17 @@ let _currentLobby = null;
 
 // ── Welcome screen buttons ────────────────────────────────────────────────────
 
-document.getElementById('btn-single-player').addEventListener('click', () => showStep('sp-choice'));
-document.getElementById('btn-quick-play')    .addEventListener('click', () => _showSinglePlayerScreen());
-document.getElementById('btn-story-mode')    .addEventListener('click', () => _showCampaignSelectScreen());
-document.getElementById('btn-sp-choice-back').addEventListener('click', () => showStep('mode'));
-document.getElementById('btn-multiplayer')  .addEventListener('click', () => _showOnlineScreen());
-document.getElementById('btn-how-to-play')  .addEventListener('click', () => showStep('howtoplay'));
+document.getElementById('btn-new-game')     ?.addEventListener('click', () => showStep('newgame'));
+document.getElementById('btn-replays')      ?.addEventListener('click', () => _showReplaysScreen());
+document.getElementById('btn-newgame-back') ?.addEventListener('click', () => showStep('mode'));
+document.getElementById('btn-replays-back') ?.addEventListener('click', () => showStep('mode'));
+
+// New Game submenu buttons
+document.getElementById('btn-ng-battle')  ?.addEventListener('click', () => _showBattleScreen());
+document.getElementById('btn-ng-campaign')?.addEventListener('click', () => _showCampaignSelectScreen());
+document.getElementById('btn-ng-vsai')    ?.addEventListener('click', () => _showSinglePlayerScreen());
+document.getElementById('btn-ng-online')  ?.addEventListener('click', () => _showOnlineScreen());
+document.getElementById('btn-how-to-play')?.addEventListener('click', () => showStep('howtoplay'));
 
 // "Play the Tutorial" button in How to Play navigates to Story Mode → Prologue
 document.getElementById('btn-play-tutorial')?.addEventListener('click', () => {
@@ -1771,7 +1862,7 @@ document.getElementById('reconnect-back').addEventListener('click', () => locati
 // ── Default game speed option ─────────────────────────────────────────────────
 {
   const SPEED_KEY = 'brimstone-default-speed';
-  const validSpeeds = ['step', 'cinematic', 'fast', 'vfast'];
+  const validSpeeds = ['cinematic', 'fast', 'vfast'];
   const container = document.getElementById('options-speed-buttons');
 
   // Highlight the saved (or default) speed on load
@@ -1991,12 +2082,11 @@ if (window.electronAPI) {
 function _showSinglePlayerScreen() {
   showStep('singleplayer');
   _renderSpSaves();
-  _renderCompletedSpGames();
 }
 
 document.getElementById('btn-singleplayer-back').addEventListener('click', () => {
   renderer = null; ui = null; state = null;
-  showStep('sp-choice');
+  showStep('newgame');
 });
 
 // ── Campaign / Story Mode ─────────────────────────────────────────────────────
@@ -2577,14 +2667,10 @@ function _handleCampaignMissionEnd() {
 
   let survivors;
   if (won) {
-    // Gather surviving survivors for roster (permadeath: dead ones are lost)
-    // Include both deployed survivors who lived AND roster members who weren't deployed
-    const deployedSurvivors = state.entities
-      .filter(e => e.alive && e.owner === 'hero' && e.type === EntityType.SURVIVOR)
-      .map(e => snapshotSurvivor(e));
-    const deployedNames = new Set(deployedSurvivors.map(s => s.name));
-    const undeployed = _activeCampaign.roster.filter(s => !deployedNames.has(s.name));
-    survivors = [...deployedSurvivors, ...undeployed];
+    // Gather surviving survivors for roster (permadeath: dead ones are lost).
+    // Roster members who were deployed and died are dropped; undeployed
+    // members are preserved; alive deployed members are snapshotted.
+    survivors = reconcileRosterAfterMission(_activeCampaign.roster, state.entities);
 
     _activeCampaign.applyMissionResult(missionDef.id, {
       won,
@@ -2645,7 +2731,7 @@ function _handleCampaignMissionEnd() {
 }
 
 // Campaign event listeners
-document.getElementById('btn-campaign-select-back').addEventListener('click', () => showStep('sp-choice'));
+document.getElementById('btn-campaign-select-back').addEventListener('click', () => showStep('newgame'));
 document.getElementById('btn-campaign-back')   .addEventListener('click', () => _showCampaignSelectScreen());
 document.getElementById('btn-briefing-back')   .addEventListener('click', () => _renderCampaignScreen());
 document.getElementById('btn-delete-campaign')  .addEventListener('click', () => {
@@ -2714,18 +2800,6 @@ document.getElementById('btn-faction-witch').addEventListener('click', () => {
 document.getElementById('btn-start-qp').addEventListener('click', () => {
   if (_qpFaction === 'hero') init(true, false);
   else init(false, true);
-});
-
-// Local Pass & Play (from multiplayer screen)
-document.getElementById('btn-local-play-start').addEventListener('click', () => {
-  // Override single-player config selects with local-play values before calling init
-  const mapSel  = document.getElementById('select-map-size');
-  const nodeSel = document.getElementById('select-node-count');
-  const fogSel  = document.getElementById('select-fog-of-war');
-  if (mapSel)  mapSel.value  = document.getElementById('local-map-size').value;
-  if (nodeSel) nodeSel.value = document.getElementById('local-node-count').value;
-  if (fogSel)  fogSel.value  = document.getElementById('local-fog').value;
-  init(false, false);
 });
 
 function _doRestart() {
@@ -2811,39 +2885,24 @@ function _deleteSpSave(id) {
   try { localStorage.removeItem('brimstone_sp_history_' + id); } catch {}
 }
 
-/** Render the in-progress saves list on the Single Player screen. */
+/** Render the in-progress saves list on the vs. AI screen using mm-row style. */
 function _renderSpSaves() {
-  const list = document.getElementById('sp-saves-list');
+  const list    = document.getElementById('sp-saves-list');
+  const section = document.getElementById('mm-sp-section');
   if (!list) return;
-  const saves = _loadSpSaves();
-  if (!saves.length) {
-    list.innerHTML = '<p class="saves-empty">No saved games.</p>';
-    return;
-  }
-  list.innerHTML = '';
-  const modeLabels = { hero: '⚔ vs AI (Hero)', witch: '✦ vs AI (Witch)', 'two-players': '👥 Two Players' };
-  const phaseLabel = { dawn: '🌅 Dawn', day: '☀ Day', dusk: '🌇 Dusk', night: '🌙 Night' };
-  for (const s of saves) {
-    const ago = _timeAgo(s.updatedAt);
-    const entry = document.createElement('div');
-    entry.className = 'save-entry';
-    entry.innerHTML = `
-      <div class="save-entry-info">
-        <div class="save-entry-title">${modeLabels[s.mode] ?? s.mode}</div>
-        <div class="save-entry-meta">Round ${s.round} · ${phaseLabel[s.phase] ?? s.phase} · ${_esc(s.mapSize)} · ${ago}</div>
-      </div>
-      <div style="display:flex;gap:0.4rem">
-        <button class="setup-btn primary sp-resume-btn">Resume</button>
-        <button class="setup-btn sp-delete-btn" title="Delete save">✕</button>
-      </div>
-    `;
-    entry.querySelector('.sp-resume-btn').addEventListener('click', () => _resumeSpSave(s));
-    entry.querySelector('.sp-delete-btn').addEventListener('click', () => {
-      _deleteSpSave(s.id);
-      _renderSpSaves();
-    });
-    list.appendChild(entry);
-  }
+  const rows = _localSpRows();
+  if (section) section.style.display = rows.length ? '' : 'none';
+  _renderMmList(list, rows, {
+    emptyHtml: '',
+    actionsFor: (row) => [
+      {
+        icon: '✕',
+        title: 'Delete save',
+        className: 'mm-action-delete',
+        onClick: () => { _deleteSpSave(row.room_id); _renderSpSaves(); },
+      },
+    ],
+  });
 }
 
 let _spSaveId = null;
@@ -2886,107 +2945,46 @@ function _startFromState(existingState, mode, existingHistory) {
   _startLocalPlanningPhase();
 }
 
-// ── Active games (inline in New Game screen) ──────────────────────────────────
+// ── Active games list — used by the Online screen (filtered mm-row style) ────
+//
+// Shows the same mm-game-row format as the main menu, filtered to online games
+// + battle, with a ✕ resign button per row. Reuses the shared _fetchAllGames
+// and _renderMmList helpers.
 
-function _fetchActiveSaves() {
-  const list = document.getElementById('active-games-list');
+async function _fetchActiveSaves() {
+  const list    = document.getElementById('active-games-list');
+  const section = document.getElementById('mp-games-section');
   if (!list) return;
-  list.innerHTML = '<p class="saves-empty">Loading…</p>';
 
   const session = loadSession();
   if (!session) {
-    list.innerHTML = '<p class="saves-empty">Sign in to see your active games.</p>';
+    if (section) section.style.display = 'none';
     return;
   }
 
-  const base = window.BRIMSTONE_SERVER || '';
-  fetch(`${base}/api/games?token=${encodeURIComponent(session.token)}`)
-    .then(r => r.json())
-    .then(saves => _renderSaves(saves))
-    .catch(() => {
-      list.innerHTML = '<p class="saves-empty">Could not load saves (offline?).</p>';
+  try {
+    const { rows } = await _fetchAllGames();
+    const filtered = rows.filter(
+      (row) => row.kind === 'game' || row.kind === 'battle' || row.kind === 'battle-invite',
+    );
+    if (section) section.style.display = filtered.length ? '' : 'none';
+    _renderMmList(list, rows, {
+      filter: (row) => row.kind === 'game' || row.kind === 'battle' || row.kind === 'battle-invite',
+      emptyHtml: '',
+      actionsFor: (row) => {
+        if (row.kind === 'game' && row.room_id) {
+          return [{
+            icon: '✕',
+            title: 'Resign',
+            className: 'mm-action-delete',
+            onClick: () => _confirmResign(row.room_id),
+          }];
+        }
+        return undefined;
+      },
     });
-}
-
-function _renderSaves(saves) {
-  const list = document.getElementById('active-games-list');
-  const session = loadSession();
-
-  if (!saves.length) {
-    list.innerHTML = '<p class="saves-empty">No games in progress.</p>';
-    return;
-  }
-
-  // Sort: action-needed first (your turn), then waiting, then lobby
-  saves.sort((a, b) => {
-    const priority = (s) => {
-      if (s.status === 'lobby') return 2;
-      if (s.action_needed) return 0;
-      return 1;
-    };
-    return priority(a) - priority(b);
-  });
-
-  list.innerHTML = '';
-  for (const s of saves) {
-    const pps = s.players_per_side ?? 1;
-    const phaseLabel = { dawn: '🌅 Dawn', day: '☀ Day', dusk: '🌇 Dusk', night: '🌙 Night' }[s.phase] ?? s.phase;
-    const mapLabel = (s.map_size ?? 'standard').charAt(0).toUpperCase() + (s.map_size ?? 'standard').slice(1);
-    const ago = s.updated_at ? _timeAgo(s.updated_at) : '';
-
-    // Title: "1v1 vs Name" for 1v1, "NvN Game" for larger
-    let title;
-    if (pps <= 1) {
-      const myFaction = s.hero_player_id === session?.id ? 'hero' : 'witch';
-      const oppName = myFaction === 'hero' ? (s.witch_name || 'Witch') : (s.hero_name || 'Hero');
-      const sym = myFaction === 'hero' ? '⚔' : '✦';
-      title = `${sym} vs ${_esc(oppName)}`;
-    } else {
-      title = `${pps}v${pps} Game`;
-    }
-
-    // Button label
-    const btnLabel = s.status === 'lobby' ? 'View'
-                   : s.action_needed      ? 'Plan Turn'
-                   : 'View';
-    const btnClass = s.action_needed ? 'setup-btn primary' : 'setup-btn';
-
-    // Waiting badge + submission count for in-progress games
-    let statusBadge = '';
-    let plansMeta = '';
-    if (s.status === 'playing' && s.players_total > 0) {
-      const remaining = s.players_total - (s.players_submitted ?? 0);
-      if (!s.action_needed) {
-        // We submitted — show "Waiting" badge
-        statusBadge = ` <span class="async-badge async-badge-waiting">${remaining > 0 ? remaining + ' left' : 'Waiting'}</span>`;
-      } else if (s.players_submitted > 0) {
-        // Our turn, but others have submitted — show count
-        statusBadge = ` <span class="async-badge async-badge-turn">${s.players_submitted}/${s.players_total} in</span>`;
-      }
-      // Show deadline in meta line
-      if (s.turn_deadline) {
-        const deadline = _timeRemaining(s.turn_deadline);
-        if (deadline) plansMeta = ` · ${deadline}`;
-      }
-    }
-
-    const entry = document.createElement('div');
-    entry.className = 'save-entry' + (s.action_needed ? ' save-action-needed' : '');
-    entry.innerHTML = `
-      ${s.action_needed ? '<span class="save-dot"></span>' : ''}
-      <div class="save-entry-info">
-        <div class="save-entry-title">${title}${statusBadge}</div>
-        <div class="save-entry-meta">Round ${s.round || 1} · ${phaseLabel || 'Lobby'} · ${_esc(mapLabel)}${plansMeta}${ago ? ' · ' + ago : ''}</div>
-      </div>
-      <button class="${_esc(btnClass)}">${btnLabel}</button>
-      <button class="save-resign-btn" title="Resign">✕</button>
-    `;
-    entry.querySelector('.' + (s.action_needed ? 'primary' : 'setup-btn') + ':not(.save-resign-btn)').addEventListener('click', () => _resumeSave(s.room_id));
-    entry.querySelector('.save-resign-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      _confirmResign(s.room_id);
-    });
-    list.appendChild(entry);
+  } catch {
+    if (section) section.style.display = 'none';
   }
 }
 
@@ -3258,6 +3256,492 @@ function _timeRemaining(deadlineUnixSecs) {
   if (d >= 1) return `${d}d ${h}h left`;
   if (h >= 1) return `${h}h ${m}m left`;
   return `${m}m left`;
+}
+
+// ── Main menu active games list ─────────────────────────────────────────────
+//
+// The main menu, vs. AI, Online, and Replays pages all share the same row
+// rendering via `_buildMmRow`. `_fetchAllGames` gathers rows from every source
+// (local SP saves, campaign missions, online games, battle); callers filter and
+// add per-row actions (resign, pin, delete).
+
+let _mmCountdownTimer = null;
+
+function _stopMmCountdown() {
+  if (_mmCountdownTimer) {
+    clearInterval(_mmCountdownTimer);
+    _mmCountdownTimer = null;
+  }
+}
+
+function _tickMmCountdowns() {
+  const nodes = document.querySelectorAll('.mm-countdown[data-deadline]');
+  if (!nodes.length) { _stopMmCountdown(); return; }
+  for (const el of nodes) {
+    const deadline = Number(el.dataset.deadline);
+    if (!deadline) continue;
+    const text = _timeRemaining(deadline);
+    el.textContent = text;
+    if (text === 'expired') el.classList.add('expired');
+    else el.classList.remove('expired');
+  }
+}
+
+/**
+ * Build a single DOM row element for the shared mm-game-row rendering.
+ *
+ * @param {Object} row      — normalized row object (see main-menu-games.js)
+ * @param {Object} [opts]
+ * @param {() => void} [opts.onClick]  — click handler for the row body
+ * @param {Array<{icon, title, className?, onClick}>} [opts.actions]  — extra buttons
+ */
+function _buildMmRow(row, opts = {}) {
+  const view = mmFormatRow(row);
+
+  const wrap = document.createElement('div');
+  wrap.className = view.classes.join(' ');
+
+  const body = document.createElement('button');
+  body.type = 'button';
+  body.className = 'mm-game-row-body';
+
+  const line1 = document.createElement('div');
+  line1.className = 'mm-game-row-line1';
+  const titleSpan = document.createElement('span');
+  titleSpan.className = 'mm-game-title';
+  titleSpan.textContent = view.title;
+  line1.appendChild(titleSpan);
+
+  if (view.showTurnBadge) {
+    const badge = document.createElement('span');
+    badge.className = 'mm-badge-turn';
+    badge.textContent = 'YOUR TURN';
+    line1.appendChild(badge);
+  }
+  if (view.deadline) {
+    const cd = document.createElement('span');
+    cd.className = 'mm-countdown';
+    cd.dataset.deadline = String(view.deadline);
+    cd.textContent = _timeRemaining(view.deadline);
+    if (cd.textContent === 'expired') cd.classList.add('expired');
+    line1.appendChild(cd);
+  }
+
+  const line2 = document.createElement('div');
+  line2.className = 'mm-game-row-line2';
+  line2.textContent = view.meta;
+
+  body.appendChild(line1);
+  body.appendChild(line2);
+  body.addEventListener('click', opts.onClick || (() => _mmDefaultRowClick(row)));
+
+  wrap.appendChild(body);
+
+  if (opts.actions?.length) {
+    const actionsWrap = document.createElement('div');
+    actionsWrap.className = 'mm-game-row-actions';
+    for (const action of opts.actions) {
+      const ab = document.createElement('button');
+      ab.type = 'button';
+      ab.className = 'mm-action-btn ' + (action.className || '');
+      ab.title = action.title || '';
+      ab.textContent = action.icon;
+      ab.addEventListener('click', (e) => { e.stopPropagation(); action.onClick(); });
+      actionsWrap.appendChild(ab);
+    }
+    wrap.appendChild(actionsWrap);
+  }
+
+  return wrap;
+}
+
+/**
+ * Default click handler for a row — routes based on kind to the right flow.
+ */
+function _mmDefaultRowClick(row) {
+  switch (row.kind) {
+    case 'battle':
+    case 'battle-invite':
+      _showBattleScreen();
+      return;
+    case 'local-sp':
+      if (row._spSave) _resumeSpSave(row._spSave);
+      return;
+    case 'local-campaign':
+      if (row._campaignDef) _showCampaignScreen(row._campaignDef);
+      return;
+    case 'completed-sp':
+      if (row._completedData) _startSpReplay(row._completedData);
+      return;
+    case 'completed-mp':
+      if (row._replayMeta) _mmStartMpReplay(row._replayMeta);
+      return;
+    case 'game':
+    default:
+      if (row.room_id) _resumeSave(row.room_id);
+      return;
+  }
+}
+
+/**
+ * Load local SP save rows (from localStorage). Always available, no login.
+ */
+function _localSpRows() {
+  const saves = _loadSpSaves();
+  const modeLabels = {
+    hero: '⚔ vs AI (Hero)',
+    witch: '✦ vs AI (Witch)',
+    'two-players': '👥 Two Players',
+  };
+  return saves.map(s => ({
+    kind: 'local-sp',
+    room_id: s.id,
+    title: modeLabels[s.mode] ?? s.mode,
+    round: s.round,
+    phase: s.phase,
+    action_needed: false,
+    turn_deadline: null,
+    map_size: s.mapSize ?? 'standard',
+    updated_at: s.updatedAt ?? 0,
+    is_local: true,
+    _spSave: s,
+  }));
+}
+
+/**
+ * Load campaign mid-mission saves. Scans known campaigns for in-progress saves.
+ */
+function _localCampaignRows() {
+  const rows = [];
+  try {
+    for (const camp of CAMPAIGNS) {
+      if (camp.disabled) continue;
+      // Scan missions for any that have a save file
+      const missions = camp.missions || [];
+      for (const m of missions) {
+        const save = loadCampaignMissionSave(camp.id, m.id);
+        if (!save) continue;
+        rows.push({
+          kind: 'local-campaign',
+          room_id: `${camp.id}/${m.id}`,
+          title: `📖 ${m.title || m.id}`,
+          round: null,
+          phase: null,
+          action_needed: false,
+          turn_deadline: null,
+          updated_at: save.updatedAt ? Math.floor(save.updatedAt / 1000) : 0,
+          is_local: true,
+          _campaignDef: camp,
+          _missionDef: m,
+        });
+      }
+    }
+  } catch {}
+  return rows;
+}
+
+/**
+ * Gather all rows: local SP + campaign + online games + battle. Returns
+ * { rows, signedIn, hadOnlineFetch } — caller filters/sorts/renders.
+ */
+async function _fetchAllGames() {
+  const rows = [..._localSpRows(), ..._localCampaignRows()];
+
+  const session = loadSession();
+  if (!session) {
+    return { rows, signedIn: false, hadOnlineFetch: false };
+  }
+
+  const base = window.BRIMSTONE_SERVER || '';
+  const token = encodeURIComponent(session.token);
+
+  let games = [];
+  let battleStatus = null;
+  let hadOnlineFetch = true;
+  try {
+    const [gamesRes, battleRes] = await Promise.all([
+      fetch(`${base}/api/games?token=${token}`).then(r => r.ok ? r.json() : []),
+      fetch(`${base}/api/battle-status?token=${token}`).then(r => r.ok ? r.json() : null),
+    ]);
+    if (Array.isArray(gamesRes)) games = gamesRes;
+    battleStatus = battleRes;
+  } catch {
+    hadOnlineFetch = false;
+  }
+
+  for (const s of games) {
+    const pps = s.players_per_side ?? 1;
+    let title;
+    if (pps <= 1) {
+      const myFaction = s.hero_player_id === session?.id ? 'hero' : 'witch';
+      const oppName = myFaction === 'hero' ? (s.witch_name || 'Witch') : (s.hero_name || 'Hero');
+      const sym = myFaction === 'hero' ? '⚔' : '✦';
+      title = `${sym} vs ${oppName}`;
+    } else {
+      title = `${pps}v${pps} Game`;
+    }
+    rows.push({
+      kind: 'game',
+      room_id: s.room_id,
+      title,
+      round: s.round,
+      phase: s.phase,
+      action_needed: !!s.action_needed,
+      turn_deadline: s.turn_deadline,
+      players_submitted: s.players_submitted ?? 0,
+      players_total: s.players_total ?? 0,
+      players_per_side: pps,
+      map_size: s.map_size ?? 'standard',
+      updated_at: s.updated_at ?? 0,
+      status: s.status,
+    });
+  }
+
+  // Synthesize a battle row if there's an active battle.
+  if (battleStatus?.myBattle) {
+    const b = battleStatus.myBattle;
+    const pps = b.maxPerSide ?? 10;
+    const playersCount = (b.players ?? []).filter(p => !p.isAI).length;
+    rows.push({
+      kind: 'battle',
+      room_id: b.roomId,
+      title: '⚔✦ Battle for Caleb\'s Hollow',
+      round: b.round,
+      action_needed: !b.mySubmitted,
+      turn_deadline: b.turnDeadline ?? null,
+      players_count: playersCount,
+      players_per_side: pps,
+      updated_at: Math.floor(Date.now() / 1000),
+      status: 'playing',
+    });
+  } else if (battleStatus?.battles?.length) {
+    // A battle exists but the user hasn't joined — show as an invite.
+    rows.push({
+      kind: 'battle-invite',
+      room_id: null,
+      title: '⚔✦ Battle for Caleb\'s Hollow',
+      round: null,
+      action_needed: false,
+      turn_deadline: null,
+      players_per_side: battleStatus.battles[0].maxPerSide ?? 10,
+      updated_at: Math.floor(Date.now() / 1000),
+      status: 'invite',
+    });
+  }
+
+  return { rows, signedIn: true, hadOnlineFetch };
+}
+
+/**
+ * Render a list of mm-rows into a target element, optionally with filter and
+ * per-row action buttons. Restarts the countdown timer if any deadlines are
+ * present.
+ *
+ * @param {HTMLElement} listEl
+ * @param {Array<Object>} rows
+ * @param {Object} [opts]
+ * @param {(row: Object) => boolean} [opts.filter]
+ * @param {(row: Object) => Array} [opts.actionsFor]
+ * @param {number} [opts.maxRows]
+ * @param {string} [opts.emptyHtml]
+ */
+function _renderMmList(listEl, rows, opts = {}) {
+  if (!listEl) return;
+  const { filter, actionsFor, maxRows, emptyHtml } = opts;
+  let filtered = filter ? rows.filter(filter) : rows;
+  filtered = mmSortRows(filtered);
+  if (maxRows && filtered.length > maxRows) filtered = filtered.slice(0, maxRows);
+
+  listEl.innerHTML = '';
+  if (!filtered.length) {
+    listEl.innerHTML = emptyHtml || '<p class="mm-games-empty">No games.</p>';
+    return;
+  }
+
+  for (const row of filtered) {
+    const actions = actionsFor ? actionsFor(row) : undefined;
+    listEl.appendChild(_buildMmRow(row, { actions }));
+  }
+}
+
+/**
+ * Refresh the main-menu active games list.
+ *
+ * Local saves + campaign missions are always loaded. Online games are only
+ * fetched when signed in; a "sign in to see online games" hint appears below
+ * the list when not signed in.
+ */
+async function _fetchMainMenuGames() {
+  const list    = document.getElementById('mm-games-list');
+  const section = document.getElementById('mm-games-section');
+  if (!list) return;
+
+  const { rows } = await _fetchAllGames();
+
+  // Hide the entire section when there are no games at all. (Signed-out users
+  // simply see no online games — the persistent footer "Sign In" button is the
+  // single sign-in entry point.)
+  if (section) section.style.display = rows.length ? '' : 'none';
+
+  _renderMmList(list, rows, {
+    maxRows: 5,
+    emptyHtml: '',
+  });
+
+  // Restart the countdown timer if any visible rows have deadlines
+  _stopMmCountdown();
+  if (list.querySelector('.mm-countdown[data-deadline]')) {
+    _mmCountdownTimer = setInterval(_tickMmCountdowns, 1000);
+  }
+}
+
+/**
+ * Show the Replays top-level screen. Merges SP local completed games and MP
+ * online completed games into a single mm-style list with pin/delete buttons.
+ */
+async function _showReplaysScreen() {
+  showStep('replays');
+  const list = document.getElementById('mm-replays-list');
+  if (!list) return;
+  list.innerHTML = '<p class="mm-games-empty">Loading…</p>';
+
+  const rows = [];
+
+  // Local SP completed games
+  try {
+    _pruneCompletedSpGames();
+    const index = _loadCompletedSpIndex();
+    const modeLabels = { hero: '⚔ vs AI', witch: '✦ vs AI', 'two-players': '👥 Two Players' };
+    for (const g of index) {
+      const winnerLabel = g.winner === 'hero' ? 'Hero wins' : 'Witch wins';
+      rows.push({
+        kind: 'completed-sp',
+        room_id: g.id,
+        title: `${modeLabels[g.mode] ?? g.mode} — ${winnerLabel}${g.pinned ? ' 📌' : ''}`,
+        win_reason: g.winReason,
+        total_rounds: g.totalRounds,
+        action_needed: false,
+        turn_deadline: null,
+        updated_at: g.createdAt ?? 0,
+        is_local: true,
+        _completedMeta: g,
+      });
+    }
+  } catch {}
+
+  // Online MP completed games (only if signed in)
+  const session = loadSession();
+  if (session) {
+    try {
+      const base = window.BRIMSTONE_SERVER || '';
+      const res = await fetch(`${base}/api/completed-games?token=${encodeURIComponent(session.token)}`);
+      if (res.ok) {
+        const games = await res.json();
+        for (const g of games) {
+          let players = [];
+          try { players = JSON.parse(g.players_json || '[]'); } catch {}
+          const pps = players.length > 0 ? players.filter(p => p.faction === 'hero').length : 1;
+          let myFaction;
+          if (players.length > 0) {
+            const mySeat = players.find(p => p.playerId === session?.id);
+            myFaction = mySeat?.faction ?? 'hero';
+          } else {
+            myFaction = g.hero_player_id === session?.id ? 'hero' : 'witch';
+          }
+          const resultLabel = g.winner === myFaction ? 'Victory' : 'Defeat';
+          const winnerIcon  = g.winner === 'hero' ? '⚔' : '✦';
+          const title = pps > 1
+            ? `${winnerIcon} ${pps}v${pps} — ${resultLabel}`
+            : `${winnerIcon} ${g.hero_name} vs ${g.witch_name} — ${resultLabel}`;
+          rows.push({
+            kind: 'completed-mp',
+            room_id: g.game_id,
+            title: title + (g.pinned ? ' 📌' : ''),
+            win_reason: g.win_reason,
+            total_rounds: g.total_rounds,
+            action_needed: false,
+            turn_deadline: null,
+            updated_at: g.created_at ?? 0,
+            _replayMeta: g,
+          });
+        }
+      }
+    } catch {}
+  }
+
+  _renderMmList(list, rows, {
+    emptyHtml: '<p class="mm-games-empty">No completed games yet.</p>',
+    actionsFor: (row) => {
+      if (row.kind === 'completed-sp') {
+        const meta = row._completedMeta;
+        return [
+          {
+            icon: meta.pinned ? '📌' : '📎',
+            title: meta.pinned ? 'Unpin' : 'Pin to keep',
+            onClick: () => { _pinCompletedSpGame(meta.id, !meta.pinned); _showReplaysScreen(); },
+          },
+          {
+            icon: '✕',
+            title: 'Delete',
+            className: 'mm-action-delete',
+            onClick: () => { _deleteCompletedSpGame(meta.id); _showReplaysScreen(); },
+          },
+        ];
+      }
+      if (row.kind === 'completed-mp') {
+        const meta = row._replayMeta;
+        const base = window.BRIMSTONE_SERVER || '';
+        const token = session?.token;
+        return [
+          {
+            icon: meta.pinned ? '📌' : '📎',
+            title: meta.pinned ? 'Unpin' : 'Pin to keep',
+            onClick: async () => {
+              await fetch(
+                `${base}/api/completed-games/${encodeURIComponent(meta.game_id)}/pin?token=${encodeURIComponent(token)}`,
+                {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ pinned: !meta.pinned }),
+                }
+              );
+              _showReplaysScreen();
+            },
+          },
+          {
+            icon: '✕',
+            title: 'Delete',
+            className: 'mm-action-delete',
+            onClick: async () => {
+              await fetch(
+                `${base}/api/completed-games/${encodeURIComponent(meta.game_id)}?token=${encodeURIComponent(token)}`,
+                { method: 'DELETE' }
+              );
+              _showReplaysScreen();
+            },
+          },
+        ];
+      }
+      return undefined;
+    },
+  });
+}
+
+/**
+ * Start an MP completed-game replay — fetches rounds then plays via playback.
+ */
+async function _mmStartMpReplay(gameMeta) {
+  const session = loadSession();
+  if (!session) return;
+  const base = window.BRIMSTONE_SERVER || '';
+  try {
+    const rounds = await fetch(
+      `${base}/api/completed-games/${encodeURIComponent(gameMeta.game_id)}/rounds?token=${encodeURIComponent(session.token)}`
+    ).then(r => r.json());
+    await _startMpReplay(rounds, gameMeta);
+  } catch {
+    alert('Could not load replay data.');
+  }
 }
 
 /**
@@ -3577,6 +4061,8 @@ function _updateAsyncReplayBtn() {
 async function _asyncWatchLastTurn(lastRound) {
   if (!lastRound || !state || !renderer || !ui) return;
 
+  resetPlayback();
+
   const { preState, steps, postState } = lastRound;
 
   // ── Debug: log replay data so we can verify the server is sending actions ──
@@ -3635,6 +4121,12 @@ async function _asyncWatchLastTurn(lastRound) {
   await ui._triggerPostRoundEffects();
   redrawOnline();
 
+  // If skip was pressed mid-animation, bail out entirely (skip summary)
+  if (playback.jumpToEnd) {
+    resetPlayback();
+    return;
+  }
+
   // Show resolution summary with replay support
   if (ui && _asyncFaction) {
     setMode(AppMode.RESOLVING);
@@ -3670,6 +4162,8 @@ async function _asyncWatchLastTurn(lastRound) {
     } while (action === 'replay');
     setMode(AppMode.PLANNING);
   }
+
+  resetPlayback();
 }
 
 function _handleAsyncPlanStatus(msg) {
@@ -4044,8 +4538,6 @@ function _showAsyncScreen() {
   }
 }
 
-document.getElementById('btn-mp-async')?.addEventListener('click', () => _showAsyncScreen());
-
 // ── Battle for Caleb's Hollow menu ───────────────────────────────────────────
 
 function _formatTimeRemaining(unixSeconds) {
@@ -4149,6 +4641,7 @@ async function _showBattleScreen() {
         playersSection.style.display = '';
         const playerData = my.players.map(p => ({
           playerId: p.playerId, name: p.name, faction: p.faction,
+          color: p.color,
           isAI: p.isAI, _submitted: p.submitted,
           connected: p.connected, active: p.active,
         }));
@@ -4239,9 +4732,11 @@ async function _showBattleScreen() {
   } catch { /* ignore */ }
 }
 
-// Sign-in button on the battle screen — reuse the same sign-in flow as online
+// Sign-in button on the battle screen — open the auth dialog and return to
+// the battle screen on success (previous behavior routed to Account and
+// never came back).
 document.getElementById('btn-battle-signin')?.addEventListener('click', () => {
-  showStep('account');
+  _showAuthDialog(() => _showBattleScreen());
 });
 
 document.getElementById('btn-battle-main')?.addEventListener('click', () => _showBattleScreen());
@@ -4273,14 +4768,11 @@ document.getElementById('btn-online-back').addEventListener('click', () => {
   _updateMultiplayerBadge();
 });
 document.getElementById('btn-async-back')?.addEventListener('click', () => {
-  showStep('multiplayer');
+  showStep('mode');
   _updateMultiplayerBadge();
 });
 document.getElementById('btn-async-refresh')?.addEventListener('click', () => {
   _fetchAsyncGames();
-});
-document.getElementById('btn-local-play-back').addEventListener('click', () => {
-  showStep('multiplayer');
 });
 
 // ── Online flow ───────────────────────────────────────────────────────────────
@@ -4620,9 +5112,9 @@ function _checkGameDeepLink() {
 window.addEventListener('hashchange', () => {
   _checkAsyncDeepLink();
 });
-_fetchMainMenuAsyncGames();
-_updateMultiplayerBadge();
-_updateBattleBadge();
+// Unified main-menu refresh — fetches games + battle status in parallel
+// and updates the main menu list + multiplayer/battle badges as side effects.
+_fetchMainMenuGames();
 
 /** Check if the player needs to submit a battle turn and show badge on main menu. */
 async function _updateBattleBadge() {
@@ -5083,7 +5575,8 @@ function _initMpStep() {
   if (session) {
     signedOut.style.display    = 'none';
     actionBtns.style.display   = '';
-    if (gamesSection) gamesSection.style.display = '';
+    // mp-games-section visibility is managed by _fetchActiveSaves based on
+    // whether the player actually has any active games to show.
   } else {
     signedOut.style.display    = '';
     actionBtns.style.display   = 'none';
@@ -5204,7 +5697,31 @@ function _showAuthDialogUI(onSuccess) {
   document.getElementById('auth-email-input').value = '';
   document.getElementById('auth-error').style.display = 'none';
   document.getElementById('auth-email-status').style.display = 'none';
+
+  // Reset the email login section to hidden — it's only revealed when the
+  // server reports the username is already linked to an email.
+  const emailSection = document.getElementById('auth-email-section');
+  if (emailSection) emailSection.style.display = 'none';
+  const linkedHint = document.getElementById('auth-linked-hint');
+  if (linkedHint) { linkedHint.style.display = 'none'; linkedHint.textContent = ''; }
+
   dlg.classList.add('visible');
+}
+
+/**
+ * Reveal the email login section inside the auth dialog. Called when the
+ * server reports the chosen username is already linked to an email — the
+ * real owner must sign in via magic link instead.
+ */
+function _revealAuthEmailSection() {
+  const emailSection = document.getElementById('auth-email-section');
+  if (emailSection) emailSection.style.display = '';
+  const linkedHint = document.getElementById('auth-linked-hint');
+  if (linkedHint) {
+    linkedHint.textContent = 'This username is linked to an email. Use email login below.';
+    linkedHint.style.display = '';
+  }
+  document.getElementById('auth-email-input')?.focus();
 }
 
 function _hideAuthDialog() {
@@ -5379,12 +5896,10 @@ document.getElementById('btn-setup-signout').addEventListener('click', async () 
   _initMpStep();
   _initAsyncStep();
   _initAccountPage();
-  document.getElementById('active-games-list').innerHTML =
-    '<p class="saves-empty">Sign in to see your active games.</p>';
-  document.getElementById('mp-completed-list').innerHTML =
-    '<p class="saves-empty">Sign in to see completed games.</p>';
-  document.getElementById('async-games-list').innerHTML =
-    '<p class="saves-empty">Sign in to see async games.</p>';
+  const activeList = document.getElementById('active-games-list');
+  if (activeList) activeList.innerHTML = '<p class="mm-games-empty">Sign in to see your active games.</p>';
+  const asyncList = document.getElementById('async-games-list');
+  if (asyncList) asyncList.innerHTML = '<p class="saves-empty">Sign in to see async games.</p>';
 });
 
 // ── Async sign-in ───────────────────────────────────────────────────────────
@@ -5398,18 +5913,22 @@ document.getElementById('btn-async-signin')?.addEventListener('click', () => {
 
 // (Email login is now handled by the auth dialog)
 
-function _onlineError(msg) {
+function _onlineError(msg, raw) {
   // Show error in the auth dialog if visible, otherwise ignore
   const authErr = document.getElementById('auth-error');
   if (authErr) {
     authErr.textContent = msg;
     authErr.style.display = '';
   }
-  // If username is taken, scroll the email section into view so the user
-  // can immediately sign in with their linked email
-  if (msg && msg.includes('already taken')) {
-    const emailInput = document.getElementById('auth-email-input');
-    if (emailInput) emailInput.focus();
+  // Username is linked to an email on another account — reveal the email
+  // login section so the real owner can sign in via magic link.
+  if (raw?.err_code === 'username_linked') {
+    _revealAuthEmailSection();
+    return;
+  }
+  // Legacy string fallback (older server builds / cached PWAs).
+  if (msg && msg.includes && msg.includes('already taken')) {
+    _revealAuthEmailSection();
   }
 }
 
@@ -5511,39 +6030,80 @@ async function _applyOnlinePlanningPhase(payload) {
   }
 }
 
-/** Replay the last resolved round inline (triggered by header button). */
+/**
+ * Replay the last resolved round inline (triggered by header button).
+ *
+ * Looks up round (state.round - 1) from the client cache; on a miss,
+ * fetches it from the server via requestReplay. This guarantees the
+ * replay always matches the turn the player is currently waiting to see.
+ */
 async function _replayLastTurnInline() {
-  if (!_onlineRoundHistory.length || !ui || !state || !renderer || isAnimating()) return;
+  if (!ui || !state || !renderer || isAnimating() || _inlineReplayInFlight) return;
+  const targetRound = state.round - 1;
+  if (targetRound < 1) return;
 
-  // Save current plan state so we can restore it after replay
-  const savedPlans = new Map(ui._unitPlans);
-  const wasSubmitted = ui._planSubmitted;
+  _inlineReplayInFlight = true;
+  try {
+    // 1. Look up in cache first
+    let entry = _replayCache.get(targetRound);
 
-  const last = _onlineRoundHistory[_onlineRoundHistory.length - 1];
-  // Remove from history temporarily so _playReconnectReplay doesn't double-add it
-  _onlineRoundHistory.pop();
+    // 2. Cache miss → fetch from server
+    if (!entry) {
+      if (!mp?.roomId) {
+        console.warn('[replay] cache miss with no server connection');
+        return;
+      }
+      try {
+        entry = await _requestReplayFromServer(mp.roomId, targetRound);
+      } catch (err) {
+        console.warn('[replay] fetch failed:', err?.message || err);
+        return;
+      }
+    }
+    if (!entry || entry.roundNum !== targetRound) {
+      console.warn(`[replay] no valid replay for round ${targetRound}`);
+      return;
+    }
 
-  ui.exitPlanningMode();
-  await _playReconnectReplay({
-    roundNum:     last.roundNum,
-    preStateJson: last.preState,
-    stepsJson:    last.steps,
-  });
+    // Save current plan state so we can restore it after replay
+    const savedPlans     = new Map(ui._unitPlans);
+    const wasSubmitted   = ui._planSubmitted;
+    // Snapshot the countdown deadline BEFORE exitPlanningMode nukes it, so
+    // we can restart the countdown with the correct remaining time.
+    const savedCountdownEnd = ui._countdownEnd ?? null;
 
-  // Restore planning mode with the saved plan
-  const budget = state.playerActionsLeft?.get(mp?.myPlayerId)
-    ?? (mp?.myFaction ? getFaction(mp.myFaction).getActionsLeft(state) : state.heroActionsLeft);
-  ui._hasReplayHistory = _onlineRoundHistory.length > 0;
-  ui.enterPlanningMode(mp.myFaction, budget, 0);
-  ui.onPlanSubmit = (plan) => mp.submitPlan(plan, state.round);
-  ui.onReturnToMenu = () => { location.reload(); };
-  ui.onReplayLastTurn = () => _replayLastTurnInline();
+    ui.exitPlanningMode();
+    resetPlayback();
+    try {
+      await _playReconnectReplay({
+        roundNum:     entry.roundNum,
+        preStateJson: entry.preStateJson,
+        stepsJson:    entry.stepsJson,
+      });
+    } finally {
+      resetPlayback();
+    }
 
-  // Restore the plan
-  ui._unitPlans = savedPlans;
-  ui._refreshPlanOverlay();
-  ui._renderPlanPanel();
-  if (wasSubmitted) ui.markPlanSubmitted();
+    // Restore planning mode with the saved plan + remaining countdown time
+    const budget = state.playerActionsLeft?.get(mp?.myPlayerId)
+      ?? (mp?.myFaction ? getFaction(mp.myFaction).getActionsLeft(state) : state.heroActionsLeft);
+    const remainingMs = savedCountdownEnd
+      ? Math.max(0, savedCountdownEnd - Date.now())
+      : 0;
+    ui._hasReplayHistory = _onlineRoundHistory.length > 0;
+    ui.enterPlanningMode(mp.myFaction, budget, remainingMs);
+    ui.onPlanSubmit = (plan) => mp.submitPlan(plan, state.round);
+    ui.onReturnToMenu = () => { location.reload(); };
+    ui.onReplayLastTurn = () => _replayLastTurnInline();
+
+    // Restore the plan
+    ui._unitPlans = savedPlans;
+    ui._refreshPlanOverlay();
+    ui._renderPlanPanel();
+    if (wasSubmitted) ui.markPlanSubmitted();
+  } finally {
+    _inlineReplayInFlight = false;
+  }
 }
 
 /** Play the last round's resolution replay on reconnect. */
@@ -5576,11 +6136,18 @@ async function _playReconnectReplay(replay) {
   state.entities = currentEntities;
 
   // Store in round history for "replay full game"
-  _onlineRoundHistory.push({
-    roundNum: replay.roundNum,
-    preState: replay.preStateJson,
-    steps:    replay.stepsJson,
+  // Cache for round-keyed lookup + legacy full-game replay array
+  _cacheReplay({
+    roundNum:     replay.roundNum,
+    preStateJson: replay.preStateJson,
+    stepsJson:    replay.stepsJson,
   });
+
+  // If the user hit "skip" mid-animation, bail out: snap to final state and
+  // skip the post-round summary entirely.
+  if (playback.jumpToEnd) {
+    return;
+  }
 
   // Show summary
   await ui._triggerPostRoundEffects();
@@ -5737,12 +6304,21 @@ function _createMpClient() {
 
     onMatchFound({ roomId, faction, opponentName, aiOpponent, resumed, myPlayerId, players, priorRounds }) {
       // Reset online round history for this game, restoring prior rounds on resume
+      _replayCache.clear();
       if (resumed && priorRounds?.length) {
         _onlineRoundHistory = priorRounds.map(r => ({
           roundNum: r.roundNum,
           preState: r.preStateJson,
           steps:    r.stepsJson,
         }));
+        // Seed the round-keyed cache from restored rounds.
+        for (const r of priorRounds) {
+          _replayCache.set({
+            roundNum:     r.roundNum,
+            preStateJson: r.preStateJson,
+            stepsJson:    r.stepsJson,
+          });
+        }
       } else {
         _onlineRoundHistory = [];
       }
@@ -5940,11 +6516,11 @@ function _createMpClient() {
         state.witch     = finalState.witch;
         state.myFaction = mp?.myFaction;
 
-        // Accumulate round for full-game replay
-        _onlineRoundHistory.push({
-          roundNum:  _onlineRoundNum,
-          preState:  _onlinePreStateJson,
-          steps:     JSON.stringify(steps),
+        // Accumulate round for full-game replay + round-keyed cache
+        _cacheReplay({
+          roundNum:     _onlineRoundNum,
+          preStateJson: _onlinePreStateJson,
+          stepsJson:    JSON.stringify(steps),
         });
 
         // Mirror the same post-resolution side effects as the local path.
@@ -6129,7 +6705,10 @@ function _createMpClient() {
     onAsyncPlanStatus(msg)  { _handleAsyncPlanStatus(msg); },
     onAsyncOpponentJoined(msg) { _handleAsyncOpponentJoined(msg); },
 
-    onError(msg) {
+    onReplayData(msg)  { _handleReplayData(msg); },
+    onReplayError(msg) { _handleReplayError(msg); },
+
+    onError(msg, raw) {
       // Ignore errors after intentional sign-out / disconnect
       if (!mp) return;
 
@@ -6140,7 +6719,15 @@ function _createMpClient() {
       if (state && reconnOverlay?.style.display !== 'none') {
         reconnOverlay.style.display = 'none';
         _showOnlineScreen();
-        _onlineError(msg);
+        _onlineError(msg, raw);
+        return;
+      }
+
+      // If the auth dialog is visible, show the error in-place without
+      // navigating away — keeps the user on their calling screen.
+      const authDlg = document.getElementById('auth-dialog');
+      if (authDlg?.classList.contains('visible')) {
+        _onlineError(msg, raw);
         return;
       }
 
@@ -6152,7 +6739,7 @@ function _createMpClient() {
         } else {
           _showOnlineScreen();
         }
-        _onlineError(msg);
+        _onlineError(msg, raw);
       }
     },
 

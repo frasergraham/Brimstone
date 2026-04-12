@@ -1,7 +1,8 @@
 // All table definitions in one place.
-// To add a new table, append a CREATE TABLE IF NOT EXISTS statement below.
+// SQLite is the source of truth; the Postgres DDL is derived from it via a
+// deterministic transform so the two dialects stay in lockstep.
 
-export const SCHEMA_SQL = `
+export const SCHEMA_SQL_SQLITE = `
   CREATE TABLE IF NOT EXISTS players (
     id            TEXT PRIMARY KEY,
     username      TEXT NOT NULL COLLATE NOCASE,
@@ -205,3 +206,27 @@ export const SCHEMA_SQL = `
     created_at        INTEGER NOT NULL DEFAULT (unixepoch())
   );
 `;
+
+/** Derive Postgres DDL from the SQLite source via deterministic string transforms. */
+function toPostgresSchema(sqlite) {
+  // 1. Autoincrement → BIGSERIAL
+  let pg = sqlite.replace(/INTEGER PRIMARY KEY AUTOINCREMENT/g, 'BIGSERIAL PRIMARY KEY');
+  // 2. Timestamp defaults: (unixepoch()) → (EXTRACT(EPOCH FROM NOW())::BIGINT)
+  pg = pg.replace(/INTEGER\s+NOT\s+NULL\s+DEFAULT\s+\(unixepoch\(\)\)/g,
+                  'BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::BIGINT)');
+  // 3. Case-insensitive text → CITEXT (only players.username today)
+  pg = pg.replace(/TEXT\s+NOT\s+NULL\s+COLLATE\s+NOCASE/g, 'CITEXT NOT NULL');
+  // 4. Strip any lingering COLLATE NOCASE
+  pg = pg.replace(/\s+COLLATE\s+NOCASE/g, '');
+  // 5. Prepend CITEXT extension
+  return 'CREATE EXTENSION IF NOT EXISTS citext;\n' + pg;
+}
+
+export const SCHEMA_SQL_POSTGRES = toPostgresSchema(SCHEMA_SQL_SQLITE);
+
+/** Return the schema DDL for the given dialect (`'sqlite'` | `'postgres'`). */
+export function getSchemaSql(dialect) {
+  if (dialect === 'sqlite')   return SCHEMA_SQL_SQLITE;
+  if (dialect === 'postgres') return SCHEMA_SQL_POSTGRES;
+  throw new Error(`Unknown DB dialect: ${dialect}`);
+}

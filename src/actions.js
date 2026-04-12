@@ -273,11 +273,19 @@ export function getValidActions(state, actor) {
     actions.push({ type: ActionType.EXPLORE, targets: [{ col: actor.col, row: actor.row }] });
   }
 
-  // Battle — targets visible enemies (UI applies fog filter on highlights)
-  const battleTargets = [
+  // Battle — targets visible enemies only. Under fog of war, enemies the
+  // actor's faction cannot currently see are filtered out so plan mode never
+  // generates an attack against a hidden target. Players can still strike at
+  // fogged hexes via the explicit BATTLE_HEX action below.
+  // visibleHexes is already computed above (reused from move-reachability) and
+  // is non-null iff fog is active.
+  let battleTargets = [
     ...sameHexEnemies(state, actor),
     ...adjacentEnemies(state, actor),
   ];
+  if (visibleHexes) {
+    battleTargets = battleTargets.filter(e => visibleHexes.has(hexKey(e.col, e.row)));
+  }
   if (battleTargets.length) actions.push({ type: ActionType.BATTLE, targets: battleTargets });
 
   // Battle Hex — blind attack on any adjacent non-river hex (for attacking through fog).

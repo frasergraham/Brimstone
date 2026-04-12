@@ -26,6 +26,7 @@ import { generateMultipleStarts, generateBattleStarts, MAP_SIZES } from '../src/
 import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS } from '../src/entities.js';
 import { serializeState }         from '../server/state-sync.js';
 import { VERSION }                from '../src/version.js';
+import { serializeGameStateForLLM, serializePlanForLLM } from './training-data.js';
 import { randomUUID }             from 'crypto';
 import fs from 'fs';
 import path from 'path';
@@ -43,6 +44,8 @@ try {
 // ── CLI parsing ───────────────────────────────────────────────────────────────
 
 const RENDER_MODE = process.argv.includes('--render');
+const TRAINING_DATA_IDX = process.argv.indexOf('--training-data');
+const TRAINING_DATA_FILE = TRAINING_DATA_IDX !== -1 ? process.argv[TRAINING_DATA_IDX + 1] : null;
 
 // Extract --players N (validated after MAP_SIZE is known — battle allows up to 10)
 let PER_SIDE = 1;
@@ -54,7 +57,7 @@ if (playersIdx !== -1 && process.argv[playersIdx + 1]) {
 }
 
 // Positional args (everything that isn't a flag or flag value)
-const flagSet = new Set(['--render', '--players']);
+const flagSet = new Set(['--render', '--players', '--training-data']);
 const positionalArgs = [];
 for (let i = 2; i < process.argv.length; i++) {
   if (flagSet.has(process.argv[i])) { if (process.argv[i] === '--players') i++; continue; }
@@ -179,7 +182,7 @@ function updateAllyContext(ctx, plan, leader) {
 
 // ── Per-round step: generate plans and resolve ────────────────────────────────
 
-function playRound(state, playerAIs) {
+function playRound(state, playerAIs, trainingExamples = null) {
   state.startPlanning();
 
   const heroCtx  = buildAllyContext();
@@ -196,6 +199,9 @@ function playRound(state, playerAIs) {
     // Battle mode: skip dead players (auto-readied by startPlanning)
     if (state.playerReady.get(p.id)) continue;
 
+    // Capture pre-plan state for training data (before plan changes any projections)
+    const statePrompt = trainingExamples ? serializeGameStateForLLM(state, p.faction) : null;
+
     const ai  = playerAIs.get(p.id);
     const ctx = p.faction === 'hero' ? heroCtx : witchCtx;
     const leader = state.entities.find(e => e.alive && e.ownerId === p.id &&
@@ -204,6 +210,21 @@ function playRound(state, playerAIs) {
     updateAllyContext(ctx, plan, leader);
     state.submitPlayerPlan(p.id, plan);
     playerEntries.push({ playerId: p.id, faction: p.faction, plan });
+
+    // Store training example (winner/total_rounds filled in after game ends)
+    if (trainingExamples && plan.length > 0) {
+      trainingExamples.push({
+        prompt: statePrompt,
+        completion: serializePlanForLLM(plan, state),
+        metadata: {
+          round: state.round,
+          faction: p.faction,
+          phase: state.phase,
+          budget: state.playerActionsLeft.get(p.id) ?? 0,
+          actions: plan.length,
+        },
+      });
+    }
   }
   const planGenMs = performance.now() - planGenStart;
 
@@ -305,9 +326,10 @@ function runGame() {
   }
 
   const nodeRoundCtrl = {};  // nodeIndex → { hero, witch, neutral, contested, firstContested }
+  const trainingExamples = TRAINING_DATA_FILE ? [] : null;
 
   while (!state.gameOver && state.round <= MAX_ROUNDS) {
-    const roundResult = playRound(state, playerAIs);
+    const roundResult = playRound(state, playerAIs, trainingExamples);
 
     // Collect performance metrics
     metrics.planGenTimes.push(roundResult.planGenMs);
@@ -407,6 +429,17 @@ function runGame() {
         duration_ms:       null,
       });
     } catch { /* non-critical — skip */ }
+  }
+
+  // Write training data examples for this game
+  if (trainingExamples && trainingExamples.length > 0) {
+    const gameId = randomUUID();
+    for (const ex of trainingExamples) {
+      ex.metadata.game_id = gameId;
+      ex.metadata.winner = winner;
+      ex.metadata.total_rounds = state.round;
+      fs.appendFileSync(TRAINING_DATA_FILE, JSON.stringify(ex) + '\n');
+    }
   }
 
   return {
