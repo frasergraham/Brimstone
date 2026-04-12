@@ -223,10 +223,17 @@ function _buildPlayerList(room) {
   return room.players.map(s => {
     const wsOpen = s.ws?.readyState === 1;
     const inThisRoom = s.ws?._roomId === room.id;
+    // Look up the leader entity's color so clients can render names in the
+    // same per-player color used for map unit outlines.
+    const statePlayer = room.state.players.find(p => p.id === s.playerId);
+    const leader = statePlayer
+      ? room.state.entities.find(e => e.id === statePlayer.leaderId)
+      : null;
     return {
       playerId:  s.playerId,
       name:      s.name,
       faction:   s.faction,
+      color:     leader?.color ?? null,
       isAI:      s.isAI,
       connected: s.isAI || wsOpen,
       active:    s.isAI || (wsOpen && !s.ws._inactive && inThisRoom),

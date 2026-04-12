@@ -221,6 +221,49 @@ describe('buildPlayerStatusHtml', () => {
     assert.ok(!html.includes('<script>'), 'raw <script> should be escaped');
     assert.ok(html.includes('&lt;script&gt;'), 'should use HTML entities');
   });
+
+  test('per-player color is applied to name and icon when present', () => {
+    const players = [{ playerId: 'p1', name: 'Alice', faction: 'hero', color: '#d4a72c' }];
+    const html = buildPlayerStatusHtml(players);
+    // Both the icon span and the name span should get an inline color style.
+    const matches = html.match(/style="color: #d4a72c"/g) ?? [];
+    assert.equal(matches.length, 2, 'color applied to both icon and name spans');
+    // Faction class is still present as a semantic marker / fallback.
+    assert.ok(html.includes('faction-hero'), 'faction class still present alongside inline color');
+  });
+
+  test('missing color falls back to faction CSS class only', () => {
+    const players = [{ playerId: 'p1', name: 'Alice', faction: 'hero' }];
+    const html = buildPlayerStatusHtml(players);
+    assert.ok(!html.includes('style="color:'), 'no inline color style when color absent');
+    assert.ok(html.includes('faction-hero'), 'faction class fallback present');
+  });
+
+  test('null color falls back to faction CSS class only', () => {
+    const players = [{ playerId: 'p1', name: 'Alice', faction: 'witch', color: null }];
+    const html = buildPlayerStatusHtml(players);
+    assert.ok(!html.includes('style="color:'), 'null color does not produce inline style');
+    assert.ok(html.includes('faction-witch'), 'faction class fallback present');
+  });
+
+  test('invalid color values are rejected (injection defense)', () => {
+    const badColors = [
+      '"><script>alert(1)</script>',
+      'red; background:url(evil)',
+      'javascript:alert(1)',
+      '#xyz',
+      '#12',
+      'rgb(255,0,0)',
+      '#1234567890',
+    ];
+    for (const bad of badColors) {
+      const players = [{ playerId: 'p1', name: 'Alice', faction: 'hero', color: bad }];
+      const html = buildPlayerStatusHtml(players);
+      assert.ok(!html.includes(bad), `bad color "${bad}" should not appear in output`);
+      assert.ok(!html.includes('<script>'), 'no raw <script> leaks through');
+      assert.ok(!html.includes('style="color:'), `no inline color style for bad value "${bad}"`);
+    }
+  });
 });
 
 // ── buildObjectivesHtml ───────────────────────────────────────────────────────

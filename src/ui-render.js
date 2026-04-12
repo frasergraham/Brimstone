@@ -390,10 +390,13 @@ function _advanceProjectedInventory(a, projShared, projWitch, projEntityItems, e
 
 // ── Player status panel HTML ──────────────────────────────────────────────────
 
+/** Strict hex-color validator — guarantees no CSS/HTML injection via inline style. */
+const PLAYER_COLOR_RE = /^#[0-9a-fA-F]{3,8}$/;
+
 /**
  * Build the innerHTML for the #plan-players ready list.
  *
- * @param {Array<{ playerId: string, name: string, faction: string, _submitted?: boolean }>} players
+ * @param {Array<{ playerId: string, name: string, faction: string, color?: string|null, _submitted?: boolean }>} players
  * @param {{ myPlayerId?: string, nudgedSet?: Set<string> }} [nudgeCtx]
  *   When provided, renders a nudge button for other human players who haven't submitted.
  * @returns {string}  HTML string.
@@ -411,6 +414,10 @@ export function buildPlayerStatusHtml(players, nudgeCtx) {
     const fCls      = p.faction === 'hero' ? 'faction-hero' : 'faction-witch';
     const safeName  = String(label)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // Per-player color (matches map unit outlines). Validated to prevent injection —
+    // falls back to the faction CSS class when absent or invalid.
+    const safeColor  = (p.color && PLAYER_COLOR_RE.test(p.color)) ? p.color : null;
+    const colorStyle = safeColor ? ` style="color: ${safeColor}"` : '';
     // Presence dot: green = active, yellow = connected but backgrounded, grey = disconnected
     const presenceCls = p.active ? 'presence-active'
       : p.connected ? 'presence-inactive'
@@ -428,8 +435,8 @@ export function buildPlayerStatusHtml(players, nudgeCtx) {
     }
 
     html += `<div class="plan-player-row ${cls}">
-        <span class="plan-player-icon ${fCls}">${p.faction === 'hero' ? '⚔' : '✦'}</span>
-        ${presenceDot}<span class="plan-player-name">${safeName}</span>
+        <span class="plan-player-icon ${fCls}"${colorStyle}>${p.faction === 'hero' ? '⚔' : '✦'}</span>
+        ${presenceDot}<span class="plan-player-name"${colorStyle}>${safeName}</span>
         ${nudgeBtn}<span class="plan-player-status">${icon}</span>
       </div>`;
   }
