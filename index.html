@@ -22,7 +22,7 @@
       <!-- Active games list — always shown, includes local + online -->
       <div id="mm-games-section">
         <div class="mm-games-header">
-          <span class="active-games-label">Your Games</span>
+          <span class="active-games-label">My Active Games</span>
         </div>
         <div id="mm-games-list"></div>
       </div>
@@ -48,11 +48,9 @@
     <!-- New Game submenu -->
     <div id="setup-step-newgame" class="setup-card" style="display:none">
       <h1 class="title" style="font-size:2rem">NEW GAME</h1>
-      <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.5rem;margin-top:0.75rem">
-        <button id="btn-ng-battle"   class="setup-btn" style="width:260px;position:relative;text-align:center">
-          Join the Battle for Caleb's Hollow
-          <span style="display:block;font-size:0.65rem;opacity:0.6;margin-top:2px">Persistent large-scale multiplayer battle</span>
-        </button>
+
+      <div class="ng-section-label" style="margin-top:0.75rem">Local Single Player</div>
+      <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.5rem;margin-top:0.4rem;margin-bottom:0">
         <button id="btn-ng-campaign" class="setup-btn" style="width:260px;text-align:center">
           Single Player Campaign
           <span style="display:block;font-size:0.65rem;opacity:0.6;margin-top:2px">Story missions with persistent roster</span>
@@ -61,11 +59,20 @@
           vs. AI
           <span style="display:block;font-size:0.65rem;opacity:0.6;margin-top:2px">Quick skirmish against the computer</span>
         </button>
+      </div>
+
+      <div class="ng-section-label" style="margin-top:1.25rem">Online Multiplayer</div>
+      <div class="setup-buttons" style="flex-direction:column;align-items:center;gap:0.5rem;margin-top:0.4rem;margin-bottom:0">
+        <button id="btn-ng-battle"   class="setup-btn" style="width:260px;position:relative;text-align:center">
+          Join the Battle for Caleb's Hollow
+          <span style="display:block;font-size:0.65rem;opacity:0.6;margin-top:2px">Persistent large-scale multiplayer battle</span>
+        </button>
         <button id="btn-ng-online"   class="setup-btn" style="width:260px;text-align:center">
           Online Multiplayer
           <span style="display:block;font-size:0.65rem;opacity:0.6;margin-top:2px">Play against humans online</span>
         </button>
       </div>
+
       <div class="setup-buttons" style="margin-top:1.25rem;margin-bottom:0">
         <button id="btn-newgame-back" class="setup-btn">← Back</button>
       </div>

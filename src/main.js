@@ -3604,6 +3604,7 @@ function _renderMmList(listEl, rows, opts = {}) {
  */
 async function _fetchMainMenuGames() {
   const list     = document.getElementById('mm-games-list');
+  const section  = document.getElementById('mm-games-section');
   const signinEl = document.getElementById('mm-games-signin');
   if (!list) return;
 
@@ -3611,9 +3612,12 @@ async function _fetchMainMenuGames() {
 
   if (signinEl) signinEl.style.display = signedIn ? 'none' : '';
 
+  // Hide the entire section when there are no games at all.
+  if (section) section.style.display = rows.length ? '' : 'none';
+
   _renderMmList(list, rows, {
     maxRows: 5,
-    emptyHtml: '<p class="mm-games-empty">No games in progress — tap New Game below.</p>',
+    emptyHtml: '',
   });
 
   // Restart the countdown timer if any visible rows have deadlines
