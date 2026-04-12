@@ -17,7 +17,7 @@ beforeEach(() => {
 });
 
 // Mirror the logic from UIController._loadDefaultSpeed
-const VALID_SPEEDS = { step: true, cinematic: true, fast: true, vfast: true };
+const VALID_SPEEDS = { cinematic: true, fast: true, vfast: true };
 function loadDefaultSpeed() {
   try {
     const saved = localStorage.getItem('brimstone-default-speed');
@@ -41,9 +41,11 @@ describe('default game speed', () => {
     assert.equal(loadDefaultSpeed(), 'vfast');
   });
 
-  test('returns stored step speed', () => {
+  test('legacy step preference falls back to cinematic', () => {
+    // Users who had "step" mode selected before it was removed should now
+    // get cinematic. We don't scrub the stored value — fallback happens at read time.
     localStorage.setItem('brimstone-default-speed', 'step');
-    assert.equal(loadDefaultSpeed(), 'step');
+    assert.equal(loadDefaultSpeed(), 'cinematic');
   });
 
   test('falls back to cinematic for invalid value', () => {

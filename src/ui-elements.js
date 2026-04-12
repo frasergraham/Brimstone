@@ -17,7 +17,6 @@ export function collectUIElements(doc = document) {
     'zoom-me':                 g('zoom-me'),
     'speed-toggle':            g('speed-toggle'),
     'speed-popup':             g('speed-popup'),
-    'step-continue-bar':       g('step-continue-bar'),
     'canvas-wrapper':          g('canvas-wrapper'),
 
     // ── Header / menu ─────────────────────────────────────────────────────

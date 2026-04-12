@@ -1052,12 +1052,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     if (!_autoplay) {
       const _cspd = ui?.speedMode ?? 'cinematic';
       {
-        // In cinematic/step modes, battles get per-battle dialog framing
+        // In cinematic mode, battles get per-battle dialog framing
         // (with insetRight=500). To avoid a "yoyo" (centered frame → dialog
         // reframe), detect the first visible battle and apply the dialog
         // inset directly in this step-level frame, so the camera lands in the
         // final position from the start.
-        const hasBattleDialogFraming = (_cspd === 'cinematic' || _cspd === 'step');
+        const hasBattleDialogFraming = (_cspd === 'cinematic');
         let firstBattleTargets = null;
         let firstBattleFrameKey = null;
         if (hasBattleDialogFraming) {
@@ -1112,13 +1112,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
           }
         }
         if (frameTargets.length) {
-          const _isStep = _cspd === 'step';
           renderer.frameHexes(frameTargets, {
-            paddingHexes: firstBattleTargets ? 2.5 : (_isStep ? 1.5 : 3.0),
-            maxZoom:      _isStep ? 3.5 : 2.0,
-            duration:     _isStep ? 400 : 250,
+            paddingHexes: firstBattleTargets ? 2.5 : 3.0,
+            maxZoom:      2.0,
+            duration:     250,
           });
-          await playbackDelay(_isStep ? 400 : (_cspd === 'vfast' ? 140 : 280));
+          await playbackDelay(_cspd === 'vfast' ? 140 : 280);
         }
       }
     }
@@ -1284,8 +1283,8 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
               redrawFn();
             }
 
-            // ── Step 3: Dialog (cinematic/step) or toast+floater (fast/vfast) ─
-            if (speed === 'cinematic' || speed === 'step') {
+            // ── Step 3: Dialog (cinematic) or toast+floater (fast/vfast) ─
+            if (speed === 'cinematic') {
               // Full dialog for every battle — no significance filter.
               // Offset camera so the map is visible beside the docked dialog.
               // Skip the reframe if the camera is already positioned for these
@@ -1327,7 +1326,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             // ── Step 4: Clear highlights, animate lunge return ───────────────
             renderer.clearBattleHighlights();
             renderer.returnAllLungeAnims(); // slide entity back rather than snap
-            if (speed === 'cinematic' || speed === 'step') await renderer.waitForAnimations();
+            if (speed === 'cinematic') await renderer.waitForAnimations();
             redrawFn();
 
           } else {
@@ -1381,7 +1380,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
         // Return lunge
         renderer.returnAllLungeAnims();
-        if (speed === 'cinematic' || speed === 'step') await renderer.waitForAnimations();
+        if (speed === 'cinematic') await renderer.waitForAnimations();
         redrawFn();
       }
       hadBattle = true;
@@ -1429,7 +1428,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         );
         redrawFn();
 
-        if (speed === 'cinematic' || speed === 'step') {
+        if (speed === 'cinematic') {
           // Reuse the same frame-key tracking from Phase 2 so guard strikes
           // at the same position as a preceding regular battle skip reframing.
           const frameKey = `${actorSnap.col},${actorSnap.row}|${targetSnap.col},${targetSnap.row}`;
@@ -1463,7 +1462,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         // Clear highlights, return lunge
         renderer.clearBattleHighlights();
         renderer.returnAllLungeAnims();
-        if (speed === 'cinematic' || speed === 'step') await renderer.waitForAnimations();
+        if (speed === 'cinematic') await renderer.waitForAnimations();
         redrawFn();
 
       } else {
@@ -1615,20 +1614,12 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     if (hadMove || hadBattle) {
       if (!_autoplay) {
         const _spd2 = ui?.speedMode ?? 'cinematic';
-        if (_spd2 === 'step') {
-          await ui._waitForStep();
-        } else {
-          await playbackDelay(_spd2 === 'vfast' ? (hadMove ? 150 : 125) : hadMove ? 300 : 250);
-        }
+        await playbackDelay(_spd2 === 'vfast' ? (hadMove ? 150 : 125) : hadMove ? 300 : 250);
       }
     } else if (events.length > 0 && !_autoplay) {
       // Non-visual actions (fortify, use_item, etc.) — brief pause so resolution feels deliberate.
       const _spd3 = ui?.speedMode ?? 'cinematic';
-      if (_spd3 === 'step') {
-        await ui._waitForStep();
-      } else {
-        await playbackDelay(_spd3 === 'vfast' ? 75 : 150);
-      }
+      await playbackDelay(_spd3 === 'vfast' ? 75 : 150);
     }
   }
 
@@ -1639,7 +1630,6 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
   }
 
   // Restore the authoritative final state.
-  ui?._clearStepContinue();
   state.entities = finalEntities;
   // Skip the final redraw during replay navigation (caller will render the target preState).
   if (!playback.goBack && !playback.aborted && !playback.jumpToEnd) {
@@ -1883,7 +1873,7 @@ document.getElementById('reconnect-back').addEventListener('click', () => locati
 // ── Default game speed option ─────────────────────────────────────────────────
 {
   const SPEED_KEY = 'brimstone-default-speed';
-  const validSpeeds = ['step', 'cinematic', 'fast', 'vfast'];
+  const validSpeeds = ['cinematic', 'fast', 'vfast'];
   const container = document.getElementById('options-speed-buttons');
 
   // Highlight the saved (or default) speed on load
