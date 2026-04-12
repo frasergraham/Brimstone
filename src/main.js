@@ -2901,11 +2901,13 @@ function _deleteSpSave(id) {
 
 /** Render the in-progress saves list on the vs. AI screen using mm-row style. */
 function _renderSpSaves() {
-  const list = document.getElementById('sp-saves-list');
+  const list    = document.getElementById('sp-saves-list');
+  const section = document.getElementById('mm-sp-section');
   if (!list) return;
   const rows = _localSpRows();
+  if (section) section.style.display = rows.length ? '' : 'none';
   _renderMmList(list, rows, {
-    emptyHtml: '<p class="mm-games-empty">No saved games.</p>',
+    emptyHtml: '',
     actionsFor: (row) => [
       {
         icon: '✕',
@@ -2964,21 +2966,25 @@ function _startFromState(existingState, mode, existingHistory) {
 // and _renderMmList helpers.
 
 async function _fetchActiveSaves() {
-  const list = document.getElementById('active-games-list');
+  const list    = document.getElementById('active-games-list');
+  const section = document.getElementById('mp-games-section');
   if (!list) return;
-  list.innerHTML = '<p class="mm-games-empty">Loading…</p>';
 
   const session = loadSession();
   if (!session) {
-    list.innerHTML = '<p class="mm-games-empty">Sign in to see your active games.</p>';
+    if (section) section.style.display = 'none';
     return;
   }
 
   try {
     const { rows } = await _fetchAllGames();
+    const filtered = rows.filter(
+      (row) => row.kind === 'game' || row.kind === 'battle' || row.kind === 'battle-invite',
+    );
+    if (section) section.style.display = filtered.length ? '' : 'none';
     _renderMmList(list, rows, {
       filter: (row) => row.kind === 'game' || row.kind === 'battle' || row.kind === 'battle-invite',
-      emptyHtml: '<p class="mm-games-empty">No games in progress.</p>',
+      emptyHtml: '',
       actionsFor: (row) => {
         if (row.kind === 'game' && row.room_id) {
           return [{
@@ -2992,7 +2998,7 @@ async function _fetchActiveSaves() {
       },
     });
   } catch {
-    list.innerHTML = '<p class="mm-games-empty">Could not load saves (offline?).</p>';
+    if (section) section.style.display = 'none';
   }
 }
 
@@ -5582,7 +5588,8 @@ function _initMpStep() {
   if (session) {
     signedOut.style.display    = 'none';
     actionBtns.style.display   = '';
-    if (gamesSection) gamesSection.style.display = '';
+    // mp-games-section visibility is managed by _fetchActiveSaves based on
+    // whether the player actually has any active games to show.
   } else {
     signedOut.style.display    = '';
     actionBtns.style.display   = 'none';
