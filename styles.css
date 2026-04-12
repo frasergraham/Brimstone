@@ -2544,6 +2544,26 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   cursor: not-allowed;
 }
 
+.battle-enable-fast {
+  margin-top: 0.2rem;
+  background: none;
+  border: 1px solid rgba(245, 200, 66, 0.35);
+  border-radius: 4px;
+  color: rgba(245, 200, 66, 0.78);
+  font-size: 0.7rem;
+  font-family: inherit;
+  letter-spacing: 0.04em;
+  padding: 0.35rem 0.65rem;
+  cursor: pointer;
+  pointer-events: all;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.battle-enable-fast:hover {
+  background: rgba(245, 200, 66, 0.12);
+  color: #f5c842;
+  border-color: rgba(245, 200, 66, 0.75);
+}
+
 /* ── End Turn urgent highlight ─────────────────────────────────────────── */
 
 .action-btn.end-turn.urgent {

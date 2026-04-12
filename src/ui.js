@@ -3030,7 +3030,8 @@ export class UIController {
     if (oldSplash) oldSplash.remove();
     footer.innerHTML    = (this.autoplay || this.speedMode !== 'cinematic')
       ? ''
-      : '<div class="result-dismiss">— click to skip —</div>';
+      : '<div class="result-dismiss">— click to skip —</div>' +
+        '<button class="battle-enable-fast" type="button">⏩ Click to enable fast mode and skip battle dialogs</button>';
 
     // Reset breakdown columns (hidden until dice settle)
     const atkBkd = this._el('battle-atk-breakdown');
@@ -3041,7 +3042,12 @@ export class UIController {
     dialog.style.display = 'flex';
     const card = dialog.querySelector('.battle-card');
 
+    // Guards a stale dismiss closure from mutating a later dialog's state if
+    // leaked listeners fire after this dialog is gone.
+    let _dismissed = false;
     const dismiss = () => {
+      if (_dismissed) return;
+      _dismissed = true;
       if (this._autoDismissTimer) { clearTimeout(this._autoDismissTimer); this._autoDismissTimer = null; }
       if (this._battleInterval)   { clearInterval(this._battleInterval);  this._battleInterval   = null; }
       dialog.style.display = 'none';
@@ -3053,6 +3059,19 @@ export class UIController {
     const keyDismiss = e => {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') dismiss();
     };
+
+    // "Click to enable fast mode" button in the footer — flips speedMode to
+    // 'fast' so future battles use the toast/floater path, and dismisses the
+    // current dialog. stopPropagation prevents the outer dialog click-to-skip
+    // handler (which is attached later once dice settle) from double-firing.
+    const enableFastBtn = footer.querySelector('.battle-enable-fast');
+    if (enableFastBtn) {
+      enableFastBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        this._setSpeed('fast');
+        dismiss();
+      });
+    }
 
     // Shared: populate result into the dialog once dice are "settled"
     const revealResult = () => {
@@ -3135,6 +3154,8 @@ export class UIController {
         rematchBtn.disabled = !hasActs;
         rematchBtn.addEventListener('click', e => {
           e.stopPropagation();
+          if (_dismissed) return;
+          _dismissed = true;
           if (this._autoDismissTimer) { clearTimeout(this._autoDismissTimer); this._autoDismissTimer = null; }
           dialog.style.display = 'none';
           dialog.removeEventListener('click', dismiss);
@@ -3184,6 +3205,7 @@ export class UIController {
       // Give more time when a rematch button is present AND enabled so the
       // user can decide whether to press "Battle Again".
       setTimeout(() => {
+        if (_dismissed) return;  // dialog already closed (e.g. via enable-fast-mode button)
         dialog.addEventListener('click', dismiss);
         card?.addEventListener('click', dismiss);
         document.addEventListener('keydown', keyDismiss);
