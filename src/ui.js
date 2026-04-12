@@ -1210,21 +1210,28 @@ export class UIController {
     });
 
     if (clickedEntities.length === 0) {
-      // No friendly units — check for visible enemy units (view-only selection)
-      const enemyEntities = _visibleUnitsAt(state, hex.col, hex.row)
-        .filter(e => e.owner !== ownerFilter);
-      if (enemyEntities.length > 1) {
+      // No controllable units — check for any visible non-controllable units
+      // (enemies OR allied teammates' units in N-player MP) for view-only selection.
+      const viewOnlyEntities = _visibleUnitsAt(state, hex.col, hex.row)
+        .filter(e => {
+          // Enemy faction → always view-only
+          if (e.owner !== ownerFilter) return true;
+          // Same faction but a different player → ally, view-only
+          if (this.myPlayerId && e.ownerId && e.ownerId !== this.myPlayerId) return true;
+          return false;
+        });
+      if (viewOnlyEntities.length > 1) {
         this._hideTileDetail();
         this._selectedEntity       = null;
         this._popupVisible         = true;
         this._validActions         = [];
         this.renderer.selectedHex    = { col: hex.col, row: hex.row };
         this.renderer.highlightHexes = [];
-        this._pendingEnemyPick = { units: enemyEntities };
+        this._pendingEnemyPick = { units: viewOnlyEntities };
         this._showActionPopup(null);
-      } else if (enemyEntities.length === 1) {
+      } else if (viewOnlyEntities.length === 1) {
         this._hideTileDetail();
-        this._selectEnemyEntity(enemyEntities[0]);
+        this._selectEnemyEntity(viewOnlyEntities[0]);
       } else {
         // Empty hex — show tile info in stats bar
         this._clearSelection();
@@ -3278,14 +3285,22 @@ export class UIController {
     // ── Units ──
     const visible  = _visibleUnitsAt(state, hex.col, hex.row);
     const planOwner = this._planMode ? this._planFaction : state.activePlayer;
-    const myUnits  = visible.filter(u => u.owner === planOwner);
-    const foeUnits = visible.filter(u => u.owner !== planOwner);
-    const unitsEl  = this._el('tile-zoom-units');
+    const isAllyUnit = (u) =>
+      u.owner === planOwner &&
+      this.myPlayerId && u.ownerId && u.ownerId !== this.myPlayerId;
+    const myUnits   = visible.filter(u =>
+      u.owner === planOwner && !isAllyUnit(u));
+    const allyUnits = visible.filter(u => isAllyUnit(u));
+    const foeUnits  = visible.filter(u => u.owner !== planOwner);
+    const unitsEl   = this._el('tile-zoom-units');
 
     if (unitsEl) {
       let html = '';
       if (visible.length) html += `<div class="tile-units-heading">Units</div>`;
       for (const u of myUnits) {
+        html += _unitCardHTML(u, { renderer: this.renderer, selectable: true });
+      }
+      for (const u of allyUnits) {
         html += _unitCardHTML(u, { renderer: this.renderer, selectable: true });
       }
       for (const u of foeUnits) {
@@ -3297,7 +3312,8 @@ export class UIController {
           const unit = state.entities.find(e => e.id === card.dataset.unitId);
           if (unit) {
             this._hideTileDetail();
-            this._selectEntity(unit);
+            if (isAllyUnit(unit)) this._selectEnemyEntity(unit);
+            else                  this._selectEntity(unit);
             this._updateSidebar();
             this.onRedraw();
           }
