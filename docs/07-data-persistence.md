@@ -4,47 +4,133 @@
 
 ### Stack
 
-- **Engine:** SQLite via `better-sqlite3` (synchronous, WAL mode)
-- **Abstraction:** `server/db-backend.js` wraps better-sqlite3 behind a minimal interface
-- **Singleton:** `server/db.js` creates the default backend
-- **Schema:** `server/schema.js` contains all DDL (table definitions)
-- **Storage:** `data/brimstone.db` (configurable via `DB_PATH` env var)
+Brimstone supports two storage backends selected at startup by the `DB_BACKEND`
+environment variable:
 
-### Architecture
+- **SQLite (default)** — `better-sqlite3`, synchronous, WAL mode, stored in
+  `data/brimstone.db` (configurable via `DB_PATH`). No extra setup required.
+- **Postgres** — `pg-native` (libpq sync bindings), fully synchronous,
+  connection string in `DATABASE_URL`. Requires the optional dep `pg-native`
+  (and `libpq-dev` at build time) plus the `citext` extension.
+
+Both backends expose the **same high-level data-access API** — consumers call
+`db.players.getByToken(...)`, `db.saves.upsert(...)`, etc. and never see SQL.
+
+### Layout (`server/db/`)
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│  Consumer modules                                        │
-│  (auth, saves, leaderboard, game-stats, push, etc.)      │
-│                                                          │
-│  All import:  import db from './db.js'                   │
-│  All call:    db.prepare(sql).run(...)                   │
-│               db.prepare(sql).get(...)                   │
-│               db.prepare(sql).all(...)                   │
-└──────────────────────────┬───────────────────────────────┘
-                           │
-                           ▼
-┌──────────────────────────────────────────────────────────┐
-│  db.js (singleton)                                       │
-│  Creates default DbBackend with DB_PATH or in-memory     │
-└──────────────────────────┬───────────────────────────────┘
-                           │
-                           ▼
-┌──────────────────────────────────────────────────────────┐
-│  db-backend.js (DbBackend class)                         │
-│  ├── prepare(sql) → Statement                            │
-│  ├── exec(sql)    → run raw SQL                          │
-│  ├── close()      → close connection                     │
-│  └── constructor runs schema.js DDL on init              │
-└──────────────────────────┬───────────────────────────────┘
-                           │
-                           ▼
-┌──────────────────────────────────────────────────────────┐
-│  better-sqlite3 (npm)                                    │
-│  WAL mode enabled for concurrent read/write              │
-│  Supports in-memory databases for testing                │
-└──────────────────────────────────────────────────────────┘
+server/
+  db.js                      ← compat shim, re-exports db/index.js
+  db/
+    index.js                 ← backend-selection singleton (DB_BACKEND switch)
+    schema.js                ← DDL source of truth + sqlite→postgres transform
+    sqlite/
+      client.js              ← shared better-sqlite3 handle, migrations
+      players.js             ← each domain is a file, declaring prepared
+      saves.js                 statements at module load
+      save-replay-rounds.js
+      completed-games.js
+      plans.js
+      async.js
+      identities.js
+      magic-tokens.js
+      game-stats.js
+      campaign-stats.js
+      campaign-saves.js
+      device-tokens.js
+      notifications.js
+      admin.js
+      index.js               ← aggregates all domains into the `db` object
+    postgres/
+      client.js              ← lazy pg-native client, sync query/runMutation
+      <same domain files>    ← Postgres-dialect SQL for each domain
+      index.js
 ```
+
+### Data-access API shape
+
+```js
+import db from './db/index.js';       // or './db.js' (compat shim)
+
+db.players.getByToken(token);         // → row | null
+db.players.insert({ id, username, discriminator, token });
+db.saves.upsert({ roomId, stateJson, … });
+db.saves.get(roomId);                 // row with parsed `.state`
+db.gameStats.insert(stats);
+db.gameStats.countTotal();            // → number
+db.plans.listForRound(roomId, round); // → rows
+db.transaction(fn);                   // → callable that wraps fn in a tx
+```
+
+Every method is **synchronous**. Return rows are plain objects with identical
+column names across backends. Booleans are stored as `0`/`1` integers on both
+sides. BIGINT columns (unix timestamps) come back as `Number` on both sides.
+
+### Backend selection
+
+```js
+// server/db/index.js
+const backend = (process.env.DB_BACKEND || 'sqlite').toLowerCase();
+if (backend === 'postgres') db = (await import('./postgres/index.js')).default;
+else                        db = (await import('./sqlite/index.js')).default;
+```
+
+Running with the SQLite default:
+
+```bash
+DB_PATH=./data/brimstone.db npm run dev
+```
+
+Running against Postgres:
+
+```bash
+DB_BACKEND=postgres \
+DATABASE_URL=postgresql://user:pass@localhost:5432/brimstone \
+npm run dev
+```
+
+### Postgres setup
+
+1. Install libpq dev headers (required to compile `pg-native`):
+   ```bash
+   # Debian/Ubuntu
+   sudo apt-get install -y libpq-dev
+   # macOS
+   brew install libpq
+   ```
+2. Install the optional dep: `npm install pg-native`.
+3. Create a database; the `citext` extension must be installable (standard
+   contrib, already available on `postgres:16`).
+4. Point the server at it:
+   ```bash
+   DB_BACKEND=postgres DATABASE_URL=postgresql://user:pass@host:5432/dbname \
+     npm run dev
+   ```
+
+The schema (including `CREATE EXTENSION IF NOT EXISTS citext` and all
+`CREATE TABLE IF NOT EXISTS` statements) is applied idempotently on every
+startup by `server/db/postgres/client.js`.
+
+### Dialect handling
+
+`server/db/schema.js` keeps the SQLite DDL as the source of truth and derives
+the Postgres DDL via deterministic regex transforms:
+
+- `INTEGER PRIMARY KEY AUTOINCREMENT` → `BIGSERIAL PRIMARY KEY`
+- `INTEGER NOT NULL DEFAULT (unixepoch())` → `BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())::BIGINT)`
+- `TEXT NOT NULL COLLATE NOCASE` → `CITEXT NOT NULL` (with `CREATE EXTENSION IF NOT EXISTS citext;` prepended)
+
+Domain modules write native SQL for each dialect — the Postgres copies use
+`$1, $2` placeholders, `EXTRACT(EPOCH FROM NOW())::BIGINT` for timestamps,
+`ON CONFLICT … DO UPDATE` for upserts, and `(config_json::jsonb ->> 'isBattle')::int`
+for JSON path extraction.
+
+### Testing
+
+- `npm test` runs the full SQLite suite.
+- `PG_TEST_URL=postgresql://user:pass@host:5432/db node --test tests/db-postgres.test.js`
+  runs the Postgres integration suite. When `PG_TEST_URL` is unset the suite
+  is skipped, so `npm test` stays green on dev machines without Postgres.
 
 ---
 
@@ -349,15 +435,19 @@ Players can link email and Game Center identities for cross-device access. Magic
 │  └────────────────────┬───────────────────────┘  │
 │                       │                          │
 │  ┌────────────────────┴───────────────────────┐  │
-│  │           db.js → db-backend.js            │  │
-│  │              better-sqlite3                │  │
-│  └────────────────────┬───────────────────────┘  │
-│                       │                          │
-└───────────────────────┼──────────────────────────┘
-                        │
-                        ▼
-                 ┌──────────────┐
-                 │ brimstone.db │
-                 │   (SQLite)   │
-                 └──────────────┘
+│  │     db.js → db/index.js (backend switch)   │  │
+│  │  ┌──────────────┐     ┌──────────────────┐ │  │
+│  │  │ sqlite/*.js  │ OR  │  postgres/*.js   │ │  │
+│  │  │ better-      │     │  pg-native       │ │  │
+│  │  │ sqlite3      │     │  (libpq sync)    │ │  │
+│  │  └──────┬───────┘     └────────┬─────────┘ │  │
+│  └─────────┼────────────────────── ┼───────────┘  │
+│            │                       │              │
+└────────────┼───────────────────────┼──────────────┘
+             │                       │
+             ▼                       ▼
+     ┌──────────────┐         ┌──────────────────┐
+     │ brimstone.db │         │ Postgres 13+ +   │
+     │   (SQLite)   │         │ citext extension │
+     └──────────────┘         └──────────────────┘
 ```

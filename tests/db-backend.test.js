@@ -1,73 +1,68 @@
-// Tests for the database backend abstraction layer.
+// Tests for the high-level SQLite db API. The shared data/brimstone.db file
+// is reused across tests — we scope inserts with unique ids and clean them up
+// after.
 
 import { describe, test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { createBackend } from '../server/db-backend.js';
+import db from '../server/db.js';
 
-describe('createBackend', () => {
-  let backend;
+const PREFIX = `db-api-test-${process.pid}-${Date.now()}`;
 
-  after(() => { if (backend) backend.close(); });
+function cleanup() {
+  db.prepare(`DELETE FROM device_tokens WHERE player_id LIKE '${PREFIX}%'`).run();
+  db.prepare(`DELETE FROM player_identities WHERE player_id LIKE '${PREFIX}%'`).run();
+  db.prepare(`DELETE FROM game_saves WHERE room_id LIKE '${PREFIX}%'`).run();
+  db.prepare(`DELETE FROM save_replay_rounds WHERE room_id LIKE '${PREFIX}%'`).run();
+  db.prepare(`DELETE FROM players WHERE id LIKE '${PREFIX}%'`).run();
+}
 
-  test('creates an in-memory backend with all schema tables', () => {
-    backend = createBackend(':memory:');
+after(cleanup);
 
-    const tables = backend
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-      .all()
-      .map(r => r.name);
-
-    assert.ok(tables.includes('players'), 'players table should exist');
-    assert.ok(tables.includes('game_saves'), 'game_saves table should exist');
-    assert.ok(tables.includes('completed_games'), 'completed_games table should exist');
-    assert.ok(tables.includes('game_replay_rounds'), 'game_replay_rounds table should exist');
+describe('SQLite db API', () => {
+  test('exposes the expected domain namespaces', () => {
+    for (const ns of [
+      'players', 'identities', 'magicTokens', 'saves', 'saveReplayRounds',
+      'completedGames', 'plans', 'async', 'gameStats', 'campaignStats',
+      'campaignSaves', 'deviceTokens', 'notifications', 'admin',
+    ]) {
+      assert.ok(db[ns], `missing namespace: ${ns}`);
+    }
+    assert.equal(typeof db.transaction, 'function');
   });
 
-  test('prepare() returns working statements', () => {
-    backend = createBackend(':memory:');
-
-    backend.prepare(
-      "INSERT INTO players (id, username, token) VALUES (?, ?, ?)"
-    ).run('id-1', 'alice', 'tok-1');
-
-    const row = backend.prepare('SELECT * FROM players WHERE id = ?').get('id-1');
-    assert.equal(row.username, 'alice');
-    assert.equal(row.token, 'tok-1');
+  test('players.insert + players.getById round-trips', () => {
+    const id = `${PREFIX}-p1`;
+    db.players.insert({ id, username: `${PREFIX}-alice`, discriminator: 1234, token: `${PREFIX}-tok-1` });
+    const row = db.players.getById(id);
+    assert.equal(row.username, `${PREFIX}-alice`);
     assert.equal(row.wins, 0);
+    assert.equal(row.is_admin, 0);
   });
 
-  test('exec() runs raw SQL', () => {
-    backend = createBackend(':memory:');
-
-    const before = backend.prepare('SELECT count(*) AS n FROM players').get().n;
-    backend.exec("INSERT INTO players (id, username, token) VALUES ('e1', 'bob', 'tok-e1')");
-    const after_ = backend.prepare('SELECT count(*) AS n FROM players').get().n;
-    assert.equal(after_ - before, 1);
-    const bob = backend.prepare("SELECT * FROM players WHERE id = 'e1'").get();
-    assert.equal(bob.username, 'bob');
+  test('players.getByToken returns the same row', () => {
+    const id = `${PREFIX}-p2`;
+    db.players.insert({ id, username: `${PREFIX}-bob`, discriminator: 5678, token: `${PREFIX}-tok-2` });
+    const row = db.players.getByToken(`${PREFIX}-tok-2`);
+    assert.equal(row.id, id);
   });
 
   test('transaction() wraps operations atomically', () => {
-    backend = createBackend(':memory:');
-
-    const insertTwo = backend.transaction((a, b) => {
-      backend.prepare("INSERT INTO players (id, username, token) VALUES (?, ?, ?)").run(a.id, a.name, a.token);
-      backend.prepare("INSERT INTO players (id, username, token) VALUES (?, ?, ?)").run(b.id, b.name, b.token);
+    const runBoth = db.transaction(() => {
+      db.players.insert({ id: `${PREFIX}-t1`, username: `${PREFIX}-txn1`, discriminator: 1111, token: `${PREFIX}-txn-tok-1` });
+      db.players.insert({ id: `${PREFIX}-t2`, username: `${PREFIX}-txn2`, discriminator: 2222, token: `${PREFIX}-txn-tok-2` });
     });
-
-    const before = backend.prepare('SELECT count(*) AS n FROM players').get().n;
-
-    insertTwo(
-      { id: 't1', name: 'txn-alice', token: 'tok-t1' },
-      { id: 't2', name: 'txn-bob',   token: 'tok-t2' }
-    );
-
-    const count = backend.prepare('SELECT count(*) AS n FROM players').get().n;
-    assert.equal(count - before, 2);
+    runBoth();
+    assert.ok(db.players.getById(`${PREFIX}-t1`));
+    assert.ok(db.players.getById(`${PREFIX}-t2`));
   });
 
-  test('close() shuts down without error', () => {
-    const b = createBackend(':memory:');
-    assert.doesNotThrow(() => b.close());
+  test('deviceTokens.upsert is idempotent', () => {
+    const id = `${PREFIX}-dt1`;
+    db.players.insert({ id, username: `${PREFIX}-dtuser`, discriminator: 9999, token: `${PREFIX}-dt-tok` });
+    db.deviceTokens.upsert({ playerId: id, token: 'device-a', platform: 'ios' });
+    db.deviceTokens.upsert({ playerId: id, token: 'device-a', platform: 'ios' });
+    const tokens = db.deviceTokens.listForPlayer(id);
+    assert.equal(tokens.length, 1);
+    assert.equal(tokens[0].token, 'device-a');
   });
 });

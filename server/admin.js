@@ -1,4 +1,5 @@
 // Admin API helpers — query functions for the admin panel.
+// All SQL delegated to server/db/*.
 import db from './db.js';
 import { writeFileSync } from 'fs';
 import { dirname, join } from 'path';
@@ -9,23 +10,12 @@ import { getSave, getSaveRounds, getCompletedGame, getCompletedGameRounds } from
 
 /** All registered players with full stats, newest first. */
 export function getAllPlayers(limit = 500) {
-  return db.prepare(`
-    SELECT id, username, wins, losses, draws, created_at,
-           ROUND(CAST(wins AS REAL) / MAX(wins + losses + draws, 1) * 100, 1) AS win_pct
-    FROM   players
-    ORDER  BY wins DESC, created_at DESC
-    LIMIT  ?
-  `).all(limit);
+  return db.players.listTop(limit);
 }
 
 /** All persisted saves — lightweight rows (no state_json), newest-first. */
 export function getAllSaves() {
-  return db.prepare(`
-    SELECT room_id, hero_player_id, witch_player_id, hero_name, witch_name,
-           round, phase, game_version, updated_at, created_at
-    FROM   game_saves
-    ORDER  BY updated_at DESC
-  `).all();
+  return db.saves.listAdmin();
 }
 
 /** Full save row for a specific room, with state_json parsed to an object. */
@@ -34,24 +24,6 @@ export function getSaveWithState(roomId) {
 }
 
 // ── Paginated all-games query ───────────────────────────────────────────────
-
-const _SOURCE_QUERIES = {
-  saved: {
-    select: `SELECT room_id AS id, 'saved' AS source, hero_name, witch_name, round, phase,
-                    NULL AS winner, NULL AS win_reason, game_version, NULL AS mode,
-                    players_json, updated_at, created_at
-             FROM game_saves`,
-    count:  `SELECT COUNT(*) AS cnt FROM game_saves`,
-  },
-  completed_mp: {
-    select: `SELECT game_id AS id, 'completed_mp' AS source, hero_name, witch_name,
-                    total_rounds AS round, NULL AS phase, winner, win_reason,
-                    game_version, mode, players_json,
-                    created_at AS updated_at, created_at
-             FROM completed_games`,
-    count:  `SELECT COUNT(*) AS cnt FROM completed_games`,
-  },
-};
 
 /**
  * Paginated listing of all games across sources.
@@ -91,22 +63,12 @@ export function getAllGamesPaginated({ page = 1, limit = 50, source = 'all' } = 
     return { games: activeGames, total: activeGames.length, page: 1, limit };
   }
 
-  // Build DB query from selected sources (only 'completed_mp' remains for DB queries)
-  const sources = source === 'all'
-    ? ['completed_mp']
-    : [source];
-
-  const selects = sources.map(s => _SOURCE_QUERIES[s]?.select).filter(Boolean);
-  const counts  = sources.map(s => _SOURCE_QUERIES[s]?.count).filter(Boolean);
-
-  if (selects.length === 0) {
+  // Only 'completed_mp' remains for DB queries
+  if (source !== 'all' && source !== 'completed_mp') {
     return { games: activeGames, total: activeGames.length, page: 1, limit };
   }
 
-  const unionSelect = selects.join(' UNION ALL ') + ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
-  const unionCount  = counts.join(' UNION ALL ');
-
-  const rawGames = db.prepare(unionSelect).all(limit, offset);
+  const rawGames = db.admin.listCompletedPage({ limit, offset });
   const games = rawGames.map(g => {
     if (g.players_json) {
       try {
@@ -121,8 +83,7 @@ export function getAllGamesPaginated({ page = 1, limit = 50, source = 'all' } = 
     g.total_players ??= null;
     return g;
   });
-  const countRows = db.prepare(`SELECT SUM(cnt) AS total FROM (${unionCount})`).get();
-  const dbTotal = countRows?.total ?? 0;
+  const dbTotal = db.admin.countCompleted();
 
   // On page 1, prepend active games
   const allGames = page === 1 ? [...activeGames, ...games] : games;
@@ -147,14 +108,12 @@ export function getGameDetail(id, source) {
       return { game: summary, rounds: chronicle, canSpectate: true };
     }
     case 'saved': {
-      // With all games in memory, try the active room first
       const room = getRoom(id);
       if (room) {
         const summary = getRooms().find(r => r.id === id);
         const chronicle = getRoomChronicle(id) ?? [];
         return { game: summary, rounds: chronicle, canSpectate: true };
       }
-      // Fallback to DB (shouldn't normally happen)
       const save = getSave(id);
       if (!save) return null;
       const rounds = getSaveRounds(id);
@@ -176,28 +135,12 @@ export function getGameDetail(id, source) {
 
 /**
  * All players with identities and device tokens.
- * Replaces the old unauthenticated /debug/players route.
  */
 export function getAllPlayersDetailed() {
-  const players = db.prepare(`
-    SELECT p.id, p.username, p.discriminator, p.token, p.wins, p.losses, p.draws,
-           p.is_admin, p.created_at,
-           ROUND(CAST(p.wins AS REAL) / MAX(p.wins + p.losses + p.draws, 1) * 100, 1) AS win_pct
-    FROM players p
-    ORDER BY p.created_at DESC
-  `).all();
+  const players = db.players.listDetailed();
+  const identities = db.identities.listAll();
+  const deviceTokens = db.deviceTokens.listAll();
 
-  const identities = db.prepare(`
-    SELECT player_id, provider, provider_id, created_at
-    FROM player_identities
-  `).all();
-
-  const deviceTokens = db.prepare(`
-    SELECT player_id, token AS device_token, platform, updated_at
-    FROM device_tokens
-  `).all();
-
-  // Group by player
   const idMap = new Map();
   const dtMap = new Map();
   for (const i of identities) {
@@ -224,8 +167,8 @@ export function getAllPlayersDetailed() {
  * then truncate both tables. Returns the dump file path.
  */
 export function resetStats(version) {
-  const gameStats = db.prepare('SELECT * FROM game_stats').all();
-  const campaignStats = db.prepare('SELECT * FROM campaign_game_stats').all();
+  const gameStats = db.gameStats.listAll();
+  const campaignStats = db.campaignStats.listAll();
 
   if (gameStats.length === 0 && campaignStats.length === 0) {
     return { dumped: false, reason: 'No stats to reset.' };
@@ -249,8 +192,8 @@ export function resetStats(version) {
 
   writeFileSync(dumpPath, JSON.stringify(dump, null, 2));
 
-  db.prepare('DELETE FROM game_stats').run();
-  db.prepare('DELETE FROM campaign_game_stats').run();
+  db.gameStats.truncate();
+  db.campaignStats.truncate();
 
   return { dumped: true, file: filename, gameStatsCount: gameStats.length, campaignStatsCount: campaignStats.length };
 }
