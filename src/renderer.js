@@ -1694,8 +1694,64 @@ export class Renderer {
           ctx.lineWidth   = hs * 0.42;
         }
 
+        // ── For bridges, select the primary crossing pair ─────────────────
+        // The crossing pair is the road exits most perpendicular to the
+        // river flow (inferred from water neighbour directions).
+        let primaryA = 0, primaryB = Math.min(1, edgeMids.length - 1);
+        if (tile.type === TileType.BRIDGE && edgeMids.length >= 2) {
+          const bWaterNbrs = getNeighbors(col, row).filter(n => {
+            const t = tiles.get(hexKey(n.col, n.row));
+            return t && (t.type === TileType.RIVER || t.type === TileType.BRIDGE);
+          });
+          const edgeDirs = edgeMids.map(em => {
+            const dx = em.x - x, dy = em.y - y;
+            const d = Math.sqrt(dx * dx + dy * dy) || 1;
+            return { dx: dx / d, dy: dy / d };
+          });
+          if (bWaterNbrs.length >= 1) {
+            let wdx = 0, wdy = 0;
+            for (const wn of bWaterNbrs) {
+              const { x: wx, y: wy } = this._toCanvas(wn.col, wn.row);
+              wdx += wx - x; wdy += wy - y;
+            }
+            const wl = Math.sqrt(wdx * wdx + wdy * wdy) || 1;
+            wdx /= wl; wdy /= wl;
+            // Pick pair most perpendicular to water (highest |cross product|)
+            let best = -Infinity;
+            for (let i = 0; i < edgeDirs.length; i++) {
+              for (let j = i + 1; j < edgeDirs.length; j++) {
+                const s = Math.abs(edgeDirs[i].dx * wdy - edgeDirs[i].dy * wdx)
+                        + Math.abs(edgeDirs[j].dx * wdy - edgeDirs[j].dy * wdx);
+                if (s > best) { best = s; primaryA = i; primaryB = j; }
+              }
+            }
+          } else {
+            // No water neighbours — fall back to most-opposing pair
+            let minDot = Infinity;
+            for (let i = 0; i < edgeDirs.length; i++) {
+              for (let j = i + 1; j < edgeDirs.length; j++) {
+                const dot = edgeDirs[i].dx * edgeDirs[j].dx + edgeDirs[i].dy * edgeDirs[j].dy;
+                if (dot < minDot) { minDot = dot; primaryA = i; primaryB = j; }
+              }
+            }
+          }
+        }
+
         // ── Road strip ────────────────────────────────────────────────────
-        if (roadNbrs.length === 2) {
+        if (tile.type === TileType.BRIDGE && edgeMids.length >= 2) {
+          // Bridge: draw crossing bezier along the primary pair, spokes for branches
+          ctx.beginPath();
+          ctx.moveTo(edgeMids[primaryA].x, edgeMids[primaryA].y);
+          ctx.quadraticCurveTo(x, y, edgeMids[primaryB].x, edgeMids[primaryB].y);
+          ctx.stroke();
+          for (let i = 0; i < edgeMids.length; i++) {
+            if (i === primaryA || i === primaryB) continue;
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(edgeMids[i].x, edgeMids[i].y);
+            ctx.stroke();
+          }
+        } else if (roadNbrs.length === 2) {
           // Smooth bezier through-road
           ctx.beginPath();
           ctx.moveTo(edgeMids[0].x, edgeMids[0].y);
@@ -1733,9 +1789,9 @@ export class Renderer {
           }
         }
 
-        // ── Bridge railings (bezier curves matching the road curve) ───────
-        if (tile.type === TileType.BRIDGE && roadNbrs.length >= 2) {
-          const em0 = edgeMids[0], em1 = edgeMids[1];
+        // ── Bridge railings (bezier curves matching the crossing pair) ─────
+        if (tile.type === TileType.BRIDGE && edgeMids.length >= 2) {
+          const em0 = edgeMids[primaryA], em1 = edgeMids[primaryB];
           // Perpendicular offset based on overall road direction
           const dx = em1.x - em0.x, dy = em1.y - em0.y;
           const len = Math.sqrt(dx * dx + dy * dy);
