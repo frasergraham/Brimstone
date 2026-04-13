@@ -129,6 +129,10 @@ describe('SUBMITTED mode multi-unit picker', () => {
     const minion = createMinion(witch.col, witch.row);
     state.entities.push(minion);
 
+    // Stub _showActionPopup to avoid the rAF-based arc animation loop
+    // which hangs tests. We only need to verify the state is set correctly.
+    ui._showActionPopup = () => {};
+
     ui._handleViewOnlyClick({ col: witch.col, row: witch.row });
 
     assert.ok(ui._pendingEnemyPick, 'should set _pendingEnemyPick for disambiguation');
