@@ -2603,7 +2603,6 @@ function _initCampaignMission(missionDef) {
       ...missionDef.conductorConfig,
       onComplete: () => {
         // Mark mission as complete and return to story mode
-        state.gameOver = true;
         state.winner   = 'hero';
         state.winReason = missionDef.objectives?.win?.reason || 'Mission complete.';
         _activeCampaign.applyMissionResult(missionDef.id, {
