@@ -2907,7 +2907,11 @@ function _renderSpSaves() {
         icon: '✕',
         title: 'Delete save',
         className: 'mm-action-delete',
-        onClick: () => { _deleteSpSave(row.room_id); _renderSpSaves(); },
+        onClick: () => {
+          if (!confirm('Delete this saved game? This cannot be undone.')) return;
+          _deleteSpSave(row.room_id);
+          _renderSpSaves();
+        },
       },
     ],
   });
@@ -2986,6 +2990,18 @@ async function _fetchActiveSaves() {
             title: 'Resign',
             className: 'mm-action-delete',
             onClick: () => _confirmResign(row.room_id),
+          }];
+        }
+        if (row.kind === 'battle' && row.room_id) {
+          return [{
+            icon: '✕',
+            title: 'Quit battle',
+            className: 'mm-action-delete',
+            onClick: () => {
+              if (!confirm('Quit the battle? This cannot be undone.')) return;
+              _ensureAuthed(() => mp.resignGame(row.room_id));
+              setTimeout(_fetchActiveSaves, 500);
+            },
           }];
         }
         return undefined;
@@ -3402,7 +3418,7 @@ function _mmDefaultRowClick(row) {
 
 /**
  * Return per-row action buttons for the main menu game list.
- * Mirrors the resign/delete buttons shown on dedicated SP and Online screens.
+ * Every action prompts for confirmation with a contextual message.
  */
 function _mmGameListActions(row) {
   switch (row.kind) {
@@ -3411,14 +3427,19 @@ function _mmGameListActions(row) {
         icon: '✕',
         title: 'Delete save',
         className: 'mm-action-delete',
-        onClick: () => { _deleteSpSave(row.room_id); _fetchMainMenuGames(); },
+        onClick: () => {
+          if (!confirm('Delete this saved game? This cannot be undone.')) return;
+          _deleteSpSave(row.room_id);
+          _fetchMainMenuGames();
+        },
       }];
     case 'local-campaign':
       return [{
         icon: '✕',
-        title: 'Delete save',
+        title: 'Abandon mission progress',
         className: 'mm-action-delete',
         onClick: () => {
+          if (!confirm('Abandon mission progress? This cannot be undone.')) return;
           if (row._campaignDef && row._missionDef) {
             deleteCampaignMissionSave(row._campaignDef.id, row._missionDef.id);
           }
@@ -3432,6 +3453,20 @@ function _mmGameListActions(row) {
           title: 'Resign',
           className: 'mm-action-delete',
           onClick: () => { _confirmResignFromMenu(row.room_id); },
+        }];
+      }
+      return undefined;
+    case 'battle':
+      if (row.room_id) {
+        return [{
+          icon: '✕',
+          title: 'Quit battle',
+          className: 'mm-action-delete',
+          onClick: () => {
+            if (!confirm('Quit the battle? This cannot be undone.')) return;
+            _ensureAuthed(() => mp.resignGame(row.room_id));
+            setTimeout(_fetchMainMenuGames, 500);
+          },
         }];
       }
       return undefined;
