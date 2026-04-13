@@ -79,6 +79,19 @@ describe('mmUrgencyScore', () => {
     const idle = row({ updated_at: Math.floor(NOW / 1000) });
     assert.ok(mmUrgencyScore(battle, NOW) < mmUrgencyScore(idle, NOW));
   });
+
+  test('campaign-next row sorts alongside idle rows by updated_at', () => {
+    const campaignNext = {
+      kind: 'campaign-next',
+      action_needed: false,
+      turn_deadline: null,
+      updated_at: Math.floor(NOW / 1000) - 100,
+    };
+    const recentIdle = row({ updated_at: Math.floor(NOW / 1000) - 10 });
+    const staleIdle  = row({ updated_at: Math.floor(NOW / 1000) - 10_000 });
+    assert.ok(mmUrgencyScore(recentIdle, NOW) < mmUrgencyScore(campaignNext, NOW));
+    assert.ok(mmUrgencyScore(campaignNext, NOW) < mmUrgencyScore(staleIdle, NOW));
+  });
 });
 
 // ── mmSortRows ──────────────────────────────────────────────────────────────
@@ -217,5 +230,26 @@ describe('mmFormatRow', () => {
     });
     assert.ok(view.meta.includes('Hero kills witch'));
     assert.ok(view.meta.includes('23 rounds'));
+  });
+
+  test('campaign-next row shows Campaign and next mission title in meta', () => {
+    const view = mmFormatRow({
+      kind: 'campaign-next',
+      title: '📖 Caleb\'s Hollow Prologue',
+      _nextMissionTitle: 'The First Night',
+    });
+    assert.ok(view.classes.includes('mm-game-local'));
+    assert.ok(view.meta.includes('Campaign'));
+    assert.ok(view.meta.includes('The First Night'));
+    assert.equal(view.showTurnBadge, false);
+  });
+
+  test('campaign-next row without _nextMissionTitle shows Campaign only', () => {
+    const view = mmFormatRow({
+      kind: 'campaign-next',
+      title: '📖 Caleb\'s Hollow Prologue',
+    });
+    assert.ok(view.meta.includes('Campaign'));
+    assert.equal(view.meta, 'Campaign');
   });
 });

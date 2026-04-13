@@ -2194,7 +2194,7 @@ function _showCampaignSelectScreen() {
   showStep('campaign-select');
 }
 
-async function _showCampaignScreen(campaignDef) {
+async function _showCampaignScreen(campaignDef, autoMissionId) {
   if (campaignDef) {
     _activeCampaign = new Campaign(campaignDef);
     _activeCampaign.load();
@@ -2203,8 +2203,12 @@ async function _showCampaignScreen(campaignDef) {
   _renderCampaignScreen();
   showStep('campaign');
 
-  // Single-mission campaigns skip the mission list and go straight to briefing
-  if (_activeCampaign?.campaignDef?.missions?.length === 1) {
+  // Auto-navigate to a specific mission briefing (e.g. from main menu game list)
+  if (autoMissionId) {
+    _campaignSelectedMission = autoMissionId;
+    _showMissionBriefing(autoMissionId);
+  } else if (_activeCampaign?.campaignDef?.missions?.length === 1) {
+    // Single-mission campaigns skip the mission list and go straight to briefing
     const missionId = _activeCampaign.campaignDef.missions[0].id;
     _campaignSelectedMission = missionId;
     _showMissionBriefing(missionId);
@@ -2852,7 +2856,7 @@ function _saveSpSaves(saves) {
 
 /** Persist the current single-player game state to localStorage. */
 function _saveSpGame() {
-  if (!state || state.gameOver || _autoplay) return;
+  if (!state || state.gameOver || _autoplay || !_spSaveId) return;
   const saves = _loadSpSaves();
   const existing = saves.findIndex(s => s.id === _spSaveId);
   const mode = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : 'two-players';
@@ -2902,7 +2906,11 @@ function _renderSpSaves() {
         icon: '✕',
         title: 'Delete save',
         className: 'mm-action-delete',
-        onClick: () => { _deleteSpSave(row.room_id); _renderSpSaves(); },
+        onClick: () => {
+          if (!confirm('Delete this saved game? This cannot be undone.')) return;
+          _deleteSpSave(row.room_id);
+          _renderSpSaves();
+        },
       },
     ],
   });
@@ -2983,6 +2991,18 @@ async function _fetchActiveSaves() {
             onClick: () => _confirmResign(row.room_id),
           }];
         }
+        if (row.kind === 'battle' && row.room_id) {
+          return [{
+            icon: '✕',
+            title: 'Quit battle',
+            className: 'mm-action-delete',
+            onClick: () => {
+              if (!confirm('Quit the battle? This cannot be undone.')) return;
+              _ensureAuthed(() => mp.resignGame(row.room_id));
+              setTimeout(_fetchActiveSaves, 500);
+            },
+          }];
+        }
         return undefined;
       },
     });
@@ -2996,6 +3016,12 @@ function _confirmResign(roomId) {
   _ensureAuthed(() => mp.resignGame(roomId));
   // Refresh the list after a short delay
   setTimeout(_fetchActiveSaves, 500);
+}
+
+function _confirmResignFromMenu(roomId) {
+  if (!confirm('Are you sure you want to resign? This cannot be undone.')) return;
+  _ensureAuthed(() => mp.resignGame(roomId));
+  setTimeout(_fetchMainMenuGames, 500);
 }
 
 /**
@@ -3373,6 +3399,9 @@ function _mmDefaultRowClick(row) {
     case 'local-campaign':
       if (row._campaignDef) _showCampaignScreen(row._campaignDef);
       return;
+    case 'campaign-next':
+      if (row._campaignDef) _showCampaignScreen(row._campaignDef, row._nextMissionId);
+      return;
     case 'completed-sp':
       if (row._completedData) _startSpReplay(row._completedData);
       return;
@@ -3387,10 +3416,69 @@ function _mmDefaultRowClick(row) {
 }
 
 /**
+ * Return per-row action buttons for the main menu game list.
+ * Every action prompts for confirmation with a contextual message.
+ */
+function _mmGameListActions(row) {
+  switch (row.kind) {
+    case 'local-sp':
+      return [{
+        icon: '✕',
+        title: 'Delete save',
+        className: 'mm-action-delete',
+        onClick: () => {
+          if (!confirm('Delete this saved game? This cannot be undone.')) return;
+          _deleteSpSave(row.room_id);
+          _fetchMainMenuGames();
+        },
+      }];
+    case 'local-campaign':
+      return [{
+        icon: '✕',
+        title: 'Abandon mission progress',
+        className: 'mm-action-delete',
+        onClick: () => {
+          if (!confirm('Abandon mission progress? This cannot be undone.')) return;
+          if (row._campaignDef && row._missionDef) {
+            deleteCampaignMissionSave(row._campaignDef.id, row._missionDef.id);
+          }
+          _fetchMainMenuGames();
+        },
+      }];
+    case 'game':
+      if (row.room_id) {
+        return [{
+          icon: '✕',
+          title: 'Resign',
+          className: 'mm-action-delete',
+          onClick: () => { _confirmResignFromMenu(row.room_id); },
+        }];
+      }
+      return undefined;
+    case 'battle':
+      if (row.room_id) {
+        return [{
+          icon: '✕',
+          title: 'Quit battle',
+          className: 'mm-action-delete',
+          onClick: () => {
+            if (!confirm('Quit the battle? This cannot be undone.')) return;
+            _ensureAuthed(() => mp.resignGame(row.room_id));
+            setTimeout(_fetchMainMenuGames, 500);
+          },
+        }];
+      }
+      return undefined;
+    default:
+      return undefined;
+  }
+}
+
+/**
  * Load local SP save rows (from localStorage). Always available, no login.
  */
 function _localSpRows() {
-  const saves = _loadSpSaves();
+  const saves = _loadSpSaves().filter(s => s.id); // skip stale null-id campaign ghosts
   const modeLabels = {
     hero: '⚔ vs AI (Hero)',
     witch: '✦ vs AI (Witch)',
@@ -3412,18 +3500,25 @@ function _localSpRows() {
 }
 
 /**
- * Load campaign mid-mission saves. Scans known campaigns for in-progress saves.
+ * Load campaign rows for the game list. Includes:
+ * 1. Mid-mission saves (kind: 'local-campaign') — a mission is in progress
+ * 2. Next-mission entries (kind: 'campaign-next') — campaign has progress and
+ *    a next mission is available but not yet started
  */
 function _localCampaignRows() {
   const rows = [];
   try {
     for (const camp of CAMPAIGNS) {
       if (camp.disabled) continue;
-      // Scan missions for any that have a save file
       const missions = camp.missions || [];
+      // Track which missions have mid-mission saves
+      const hasMidMissionSave = new Set();
+
+      // 1. Scan missions for any that have a mid-mission save file
       for (const m of missions) {
         const save = loadCampaignMissionSave(camp.id, m.id);
         if (!save) continue;
+        hasMidMissionSave.add(m.id);
         rows.push({
           kind: 'local-campaign',
           room_id: `${camp.id}/${m.id}`,
@@ -3438,6 +3533,31 @@ function _localCampaignRows() {
           _missionDef: m,
         });
       }
+
+      // 2. If campaign has progress and a next mission is available (no mid-
+      //    mission save for it), show a "campaign-next" entry so the player
+      //    can jump straight to the party select / briefing screen.
+      const c = new Campaign(camp);
+      if (!c.load()) continue;        // no save → no progress
+      if (c.isComplete()) continue;    // all missions done
+      const nextId = c.getNextMission();
+      if (!nextId) continue;
+      if (hasMidMissionSave.has(nextId)) continue; // already shown above
+      const mDef = c.getMissionDef(nextId);
+      if (!mDef) continue;
+      rows.push({
+        kind: 'campaign-next',
+        room_id: `${camp.id}/${nextId}`,
+        title: `📖 ${camp.title}`,
+        action_needed: false,
+        turn_deadline: null,
+        updated_at: c.updatedAt ? Math.floor(c.updatedAt / 1000) : 0,
+        is_local: true,
+        _campaignDef: camp,
+        _missionDef: mDef,
+        _nextMissionId: nextId,
+        _nextMissionTitle: mDef.title || nextId,
+      });
     }
   } catch {}
   return rows;
@@ -3589,6 +3709,7 @@ async function _fetchMainMenuGames() {
   _renderMmList(list, rows, {
     maxRows: 5,
     emptyHtml: '',
+    actionsFor: (row) => _mmGameListActions(row),
   });
 
   // Restart the countdown timer if any visible rows have deadlines
