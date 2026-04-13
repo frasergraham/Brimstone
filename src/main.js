@@ -2857,7 +2857,7 @@ function _saveSpSaves(saves) {
 
 /** Persist the current single-player game state to localStorage. */
 function _saveSpGame() {
-  if (!state || state.gameOver || _autoplay) return;
+  if (!state || state.gameOver || _autoplay || !_spSaveId) return;
   const saves = _loadSpSaves();
   const existing = saves.findIndex(s => s.id === _spSaveId);
   const mode = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : 'two-players';
@@ -3444,7 +3444,7 @@ function _mmGameListActions(row) {
  * Load local SP save rows (from localStorage). Always available, no login.
  */
 function _localSpRows() {
-  const saves = _loadSpSaves();
+  const saves = _loadSpSaves().filter(s => s.id); // skip stale null-id campaign ghosts
   const modeLabels = {
     hero: '⚔ vs AI (Hero)',
     witch: '✦ vs AI (Witch)',
