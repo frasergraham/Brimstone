@@ -5,7 +5,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { generateMap, bfsPath, rng, MAP_SIZES } from '../src/map.js';
+import { generateMap, bfsPath, rng, MAP_SIZES, buildRiverMap, riverSide } from '../src/map.js';
 import { TileType, Tile } from '../src/tiles.js';
 import { hexKey, hexDistance, getNeighbors, MAP_COLS, MAP_ROWS } from '../src/hex.js';
 
@@ -95,6 +95,62 @@ describe('Power node spacing', () => {
           `Seed ${seed}: duplicate node at ${k}`);
         seen.add(k);
       }
+    }
+  });
+});
+
+// ── River-Side Building & Node Balance ────────────────────────────────────────
+
+describe('River-side balance', () => {
+  test('buildings never exceed 85% on one side (standard+ maps)', () => {
+    const sizes = ['standard', 'regional', 'campaign'];
+    for (const size of sizes) {
+      for (let seed = 0; seed < 30; seed++) {
+        const { tiles } = generateMap(seed, size);
+        const rp = [];
+        for (const t of tiles.values()) {
+          if (t.type === TileType.RIVER || t.type === TileType.BRIDGE) rp.push({ col: t.col, row: t.row });
+        }
+        const cols = new Set(rp.map(r => r.col));
+        const rows = new Set(rp.map(r => r.row));
+        const ew = cols.size > rows.size;
+        const rm = buildRiverMap(rp, ew);
+
+        let bLeft = 0, bRight = 0;
+        for (const t of tiles.values()) {
+          if (t.type === TileType.BUILDING) {
+            (riverSide(t.col, t.row, rm, ew) === 'left') ? bLeft++ : bRight++;
+          }
+        }
+        const total = bLeft + bRight;
+        if (total === 0) continue;
+        const pct = Math.max(bLeft, bRight) / total * 100;
+        assert.ok(pct <= 86,
+          `Seed ${seed}, ${size}: building skew ${Math.round(pct)}% ` +
+          `(L${bLeft}/R${bRight}) exceeds 85%`);
+      }
+    }
+  });
+
+  test('power nodes are distributed across both river sides (count >= 2)', () => {
+    for (let seed = 0; seed < 30; seed++) {
+      const { tiles, witchObjectives } = generateMap(seed, 'standard');
+      if (witchObjectives.length < 2) continue;
+      const rp = [];
+      for (const t of tiles.values()) {
+        if (t.type === TileType.RIVER || t.type === TileType.BRIDGE) rp.push({ col: t.col, row: t.row });
+      }
+      const cols = new Set(rp.map(r => r.col));
+      const rows = new Set(rp.map(r => r.row));
+      const ew = cols.size > rows.size;
+      const rm = buildRiverMap(rp, ew);
+
+      let nLeft = 0, nRight = 0;
+      for (const obj of witchObjectives) {
+        (riverSide(obj.col, obj.row, rm, ew) === 'left') ? nLeft++ : nRight++;
+      }
+      assert.ok(nLeft >= 1 && nRight >= 1,
+        `Seed ${seed}: nodes L${nLeft}/R${nRight} — should have at least 1 on each side`);
     }
   });
 });
