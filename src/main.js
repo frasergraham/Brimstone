@@ -2567,7 +2567,10 @@ function _initCampaignMission(missionDef) {
   if (missionDef.enemyUnits) {
     for (const enemy of missionDef.enemyUnits) {
       const e = _createEnemyEntity(enemy.type, enemy.col, enemy.row);
-      if (e) state.entities.push(e);
+      if (e) {
+        if (enemy.overrides) Object.assign(e, enemy.overrides);
+        state.entities.push(e);
+      }
     }
   }
 

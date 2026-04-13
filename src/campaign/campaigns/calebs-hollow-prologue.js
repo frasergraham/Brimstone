@@ -569,16 +569,15 @@ const MISSIONS = [
     hasWitch:        false,
     disableScoring:  true,
     enemyUnits: [
-      { type: 'zombie', col: 3, row: 2 },
-      { type: 'zombie', col: 6, row: 5 },
-      { type: 'zombie', col: 5, row: 7 },
+      { type: 'zombie', col: 3, row: 2, overrides: { attack: 1 } },
+      { type: 'zombie', col: 6, row: 5, overrides: { attack: 1 } },
     ],
     waves: [
-      { round: 3, units: [{ type: 'zombie', spawnAt: 'map_edge' }] },
-      { round: 5, units: [{ type: 'zombie', spawnAt: 'map_edge' }, { type: 'zombie', spawnAt: 'map_edge' }] },
+      { round: 3, units: [{ type: 'zombie', spawnAt: 'map_edge', overrides: { attack: 1 } }] },
+      { round: 5, units: [{ type: 'zombie', spawnAt: 'map_edge', overrides: { attack: 1 } }] },
     ],
     aiPersonality: 'balanced',
-    aiBudgetBonus: 1,
+    aiBudgetBonus: 0,
 
     maxSurvivorsFromRoster:    0,
     missionSurvivors:          1,

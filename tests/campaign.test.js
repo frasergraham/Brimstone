@@ -475,6 +475,55 @@ describe('Wave spawner', () => {
 
     assert.equal(state.entities.length, initialCount + 1);
   });
+
+  test('processWaves applies per-unit stat overrides', () => {
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    state.round = 2;
+
+    const waves = [
+      { round: 2, units: [{ type: 'zombie', spawnAt: { col: 4, row: 4 }, overrides: { attack: 1 } }] },
+    ];
+
+    const createFn = (type, col, row) => createZombie(col, row, 'witch');
+    processWaves(state, waves, createFn);
+
+    const spawned = state.entities.filter(e => e.owner === 'witch');
+    assert.equal(spawned.length, 1);
+    assert.equal(spawned[0].attack, 1, 'zombie attack should be overridden to 1');
+    assert.equal(spawned[0].hp, 2, 'zombie HP should remain at default');
+  });
+});
+
+// ── Mission 1 balance ───────────────────────────────────────────────────────
+
+describe('Mission 1 (The Awakening) balance', () => {
+  const mission1 = hollowDef.missions.find(m => m.id === 'prologue');
+
+  test('has 2 initial enemy units', () => {
+    assert.equal(mission1.enemyUnits.length, 2);
+  });
+
+  test('total enemies across all waves is 2', () => {
+    const waveCount = mission1.waves.reduce((sum, w) => sum + w.units.length, 0);
+    assert.equal(waveCount, 2);
+  });
+
+  test('all enemies have attack override of 1', () => {
+    for (const eu of mission1.enemyUnits) {
+      assert.equal(eu.overrides?.attack, 1, `initial enemy at (${eu.col},${eu.row}) should have attack 1`);
+    }
+    for (const wave of mission1.waves) {
+      for (const u of wave.units) {
+        assert.equal(u.overrides?.attack, 1, `wave ${wave.round} enemy should have attack 1`);
+      }
+    }
+  });
+
+  test('aiBudgetBonus is 0', () => {
+    assert.equal(mission1.aiBudgetBonus, 0);
+  });
 });
 
 // ── Disable scoring ─────────────────────────────────────────────────────────
@@ -989,7 +1038,7 @@ describe('Campaign AI budget bonus', () => {
   test('all prologue missions have aiBudgetBonus defined', () => {
     for (const m of hollowDef.missions) {
       assert.ok(typeof m.aiBudgetBonus === 'number', `${m.id} missing aiBudgetBonus`);
-      assert.ok(m.aiBudgetBonus >= 1, `${m.id} aiBudgetBonus should be at least 1`);
+      assert.ok(m.aiBudgetBonus >= 0, `${m.id} aiBudgetBonus should be at least 0`);
     }
   });
 
