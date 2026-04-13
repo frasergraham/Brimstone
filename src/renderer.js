@@ -934,27 +934,7 @@ export class Renderer {
     // Viewport culling — only draw hexes visible on screen
     const vr = this._getVisibleRange();
 
-    // Pass 1: terrain tiles (grass, forest, dirt, road bg, river bg, bridges)
-    for (let row = vr.minRow; row <= vr.maxRow; row++) {
-      for (let col = vr.minCol; col <= vr.maxCol; col++) {
-        const t = state.tiles.get(hexKey(col, row));
-        if (t && t.type !== TileType.BUILDING) this._drawTile(col, row);
-      }
-    }
-
-    // River first (water), then roads on top (bridge deck above the water)
-    this._drawRiverLayer();
-    this._drawRoadLayer();
-
-    // Pass 2: building tiles drawn over roads/rivers so no bleed-through
-    for (let row = vr.minRow; row <= vr.maxRow; row++) {
-      for (let col = vr.minCol; col <= vr.maxCol; col++) {
-        const t = state.tiles.get(hexKey(col, row));
-        if (t && t.type === TileType.BUILDING) this._drawTile(col, row);
-      }
-    }
-
-    // Visibility: compute once for fog layer + entity pass + outlines.
+    // Visibility: compute once for fog layer + entity pass + outlines + terrain culling.
     // In local AI games, perspective is from the human side (witchIsAI / heroIsAI).
     // In online PvP/AI games, state.myFaction is set by the client to their faction.
     const myFaction    = state.myFaction;  // 'hero' | 'witch' | undefined
@@ -976,11 +956,53 @@ export class Renderer {
       fogVisibleHexes = this._buildFogVisibleHexes(observerOwner);
     }
 
-    // Fog of war layer
+    // For full fog, compute the set of "known" hexes (sight + movement + explored).
+    // Unseen hexes outside this set are not rendered at all — the dark canvas
+    // background shows through instead of painting an opaque black overlay.
+    let fogKnownHexes = null;
+    if (fogActive && state.fogOfWar === 'full' && fogVisibleHexes) {
+      const observerOwner = humanIsHero ? 'hero' : 'witch';
+      const lastStep = this.planGhostSteps?.at(-1);
+      const projectedPositions = lastStep?.positions ?? null;
+      const moveSet = buildFogMovementHexes(state, observerOwner, projectedPositions);
+      const explored = state.exploredHexes?.[observerOwner];
+      // Update explored hex memory with current sight + movement sets
+      if (explored) {
+        for (const k of fogVisibleHexes) explored.add(k);
+        for (const k of moveSet) explored.add(k);
+      }
+      fogKnownHexes = new Set(fogVisibleHexes);
+      for (const k of moveSet) fogKnownHexes.add(k);
+      if (explored) for (const k of explored) fogKnownHexes.add(k);
+    }
+
+    // Pass 1: terrain tiles (grass, forest, dirt, road bg, river bg, bridges)
+    for (let row = vr.minRow; row <= vr.maxRow; row++) {
+      for (let col = vr.minCol; col <= vr.maxCol; col++) {
+        if (fogKnownHexes && !fogKnownHexes.has(hexKey(col, row))) continue;
+        const t = state.tiles.get(hexKey(col, row));
+        if (t && t.type !== TileType.BUILDING) this._drawTile(col, row);
+      }
+    }
+
+    // River first (water), then roads on top (bridge deck above the water)
+    this._drawRiverLayer(fogKnownHexes);
+    this._drawRoadLayer(fogKnownHexes);
+
+    // Pass 2: building tiles drawn over roads/rivers so no bleed-through
+    for (let row = vr.minRow; row <= vr.maxRow; row++) {
+      for (let col = vr.minCol; col <= vr.maxCol; col++) {
+        if (fogKnownHexes && !fogKnownHexes.has(hexKey(col, row))) continue;
+        const t = state.tiles.get(hexKey(col, row));
+        if (t && t.type === TileType.BUILDING) this._drawTile(col, row);
+      }
+    }
+
+    // Fog of war layer (dim overlay for partial/explored hexes; unseen hexes already skipped above)
     if (fogActive) {
       const observerOwner = humanIsHero ? 'hero' : (humanIsWitch ? 'witch' : null);
       if (observerOwner) {
-        this._drawFogLayer(observerOwner, state.fogOfWar, fogVisibleHexes, vr);
+        this._drawFogLayer(observerOwner, state.fogOfWar, fogVisibleHexes, vr, fogKnownHexes);
       }
     }
 
@@ -1470,7 +1492,7 @@ export class Renderer {
     return visibleSet;
   }
 
-  _drawFogLayer(observerOwner, mode, sightSet, vr) {
+  _drawFogLayer(observerOwner, mode, sightSet, vr, fogKnownHexes) {
     const ctx   = this.ctx;
     const hs    = this.hexSize;
     const state = this.state;
@@ -1486,30 +1508,16 @@ export class Renderer {
       return;
     }
 
-    // Full fog: three tiers — bright / dimmed / black
-    // Get projected positions from plan ghost overlay for dynamic fog during planning
-    const lastStep = this.planGhostSteps?.at(-1);
-    const projectedPositions = lastStep?.positions ?? null;
-    const moveSet = buildFogMovementHexes(state, observerOwner, projectedPositions);
-    const explored = state.exploredHexes?.[observerOwner];
-
-    // Update explored hex memory with current sight + movement sets
-    if (explored) {
-      for (const k of sightSet) explored.add(k);
-      for (const k of moveSet)  explored.add(k);
-    }
-
+    // Full fog: two tiers — bright (no overlay) / dimmed.
+    // Unseen hexes are not rendered at all (terrain passes skip them),
+    // so the dark canvas background shows through naturally.
     for (let row = vr.minRow; row <= vr.maxRow; row++) {
       for (let col = vr.minCol; col <= vr.maxCol; col++) {
         const k = hexKey(col, row);
         if (sightSet.has(k)) continue; // bright — no overlay
-        if (moveSet.has(k) || explored?.has(k)) {
-          // Dimmed — terrain visible but darkened
-          this._fillFogHex(col, row, hs, 'rgba(0,0,0,0.55)');
-        } else {
-          // Black — hex not rendered (opaque overlay hides terrain)
-          this._fillFogHex(col, row, hs, 'rgba(0,0,0,1.0)');
-        }
+        if (fogKnownHexes && !fogKnownHexes.has(k)) continue; // unseen — not rendered
+        // Dimmed — terrain visible but darkened (explored / movement range)
+        this._fillFogHex(col, row, hs, 'rgba(0,0,0,0.55)');
       }
     }
   }
@@ -1571,7 +1579,7 @@ export class Renderer {
   // Draw the river as smooth bezier flows through each RIVER and BRIDGE tile.
   // Endpoints (row 0 / row MAP_ROWS-1) extend their bezier off-screen so the
   // river appears to flow in from and out to the edge of the map.
-  _drawRiverLayer() {
+  _drawRiverLayer(fogKnownHexes) {
     const ctx     = this.ctx;
     const tiles   = this.state.tiles;
     const hs      = this.hexSize;
@@ -1586,6 +1594,7 @@ export class Renderer {
 
     for (let row = 0; row < MAP_ROWS; row++) {
       for (let col = 0; col < MAP_COLS; col++) {
+        if (fogKnownHexes && !fogKnownHexes.has(hexKey(col, row))) continue;
         const tile = tiles.get(hexKey(col, row));
         // Bridges handle their own water+road layering in _drawRoadLayer
         if (!tile || tile.type !== TileType.RIVER) continue;
@@ -1630,7 +1639,7 @@ export class Renderer {
   // Draw road strips as directional paths on ROAD and BRIDGE tiles.
   // Roads connect to road/bridge/building neighbours, capped at 3 connections
   // (T-junction max).  Bridges additionally draw railing lines over the water.
-  _drawRoadLayer() {
+  _drawRoadLayer(fogKnownHexes) {
     const ctx     = this.ctx;
     const tiles   = this.state.tiles;
     const hs      = this.hexSize;
@@ -1644,6 +1653,7 @@ export class Renderer {
 
     for (let row = 0; row < MAP_ROWS; row++) {
       for (let col = 0; col < MAP_COLS; col++) {
+        if (fogKnownHexes && !fogKnownHexes.has(hexKey(col, row))) continue;
         const tile = tiles.get(hexKey(col, row));
         if (!tile || (tile.type !== TileType.ROAD && tile.type !== TileType.BRIDGE)) continue;
 
