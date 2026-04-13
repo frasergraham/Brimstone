@@ -1128,25 +1128,16 @@ export class UIController {
     // falling through to tile-detail which blocks all UI interaction.
     if (!this._planMode) {
       if (this.appMode === 'RESOLVING' || this.appMode === 'SUMMARY' ||
-          this.appMode === 'PLAYBACK' || this.appMode === 'PLANNING' ||
-          this.appMode === 'SUBMITTED') return;
-      this._clearSelection();
-      // Show tile info in stats bar instead of overlay
-      this._selectedTile = { col: hex.col, row: hex.row };
-      this.renderer.selectedHex = { col: hex.col, row: hex.row };
-      this._updateSidebar();
-      this.onRedraw();
+          this.appMode === 'PLAYBACK' || this.appMode === 'PLANNING') return;
+      // SUBMITTED or MENU: view-only unit inspection + tile info
+      this._handleViewOnlyClick(hex);
       return;
     }
 
     // During planning, same click-to-select/target flow — but actions go to plan queue
     if (this._planMode && this._planSubmitted) {
-      // Plan locked — read-only view
-      this._clearSelection();
-      this._selectedTile = { col: hex.col, row: hex.row };
-      this.renderer.selectedHex = { col: hex.col, row: hex.row };
-      this._updateSidebar();
-      this.onRedraw();
+      // Plan locked — view-only unit inspection + tile info
+      this._handleViewOnlyClick(hex);
       return;
     }
 
@@ -1263,6 +1254,37 @@ export class UIController {
       this._showActionPopup(null);
     }
 
+    this._updateSidebar();
+    this.onRedraw();
+  }
+
+  /** View-only click handler — select units for inspection or show tile info. No actions. */
+  _handleViewOnlyClick(hex) {
+    // Tap already-selected entity's hex → deselect
+    if (this._selectedEntity &&
+        hex.col === this._selectedEntity.col && hex.row === this._selectedEntity.row) {
+      this._clearSelection();
+      this._updateSidebar();
+      this.onRedraw();
+      return;
+    }
+    this._clearSelection();
+    const viewUnits = _visibleUnitsAt(this.state, hex.col, hex.row);
+    if (viewUnits.length > 1) {
+      // Multiple units on hex — show picker popup
+      this._popupVisible = true;
+      this._validActions = [];
+      this.renderer.selectedHex = { col: hex.col, row: hex.row };
+      this.renderer.highlightHexes = [];
+      this._pendingEnemyPick = { units: viewUnits };
+      this._showActionPopup(null);
+    } else if (viewUnits.length === 1) {
+      this._selectEnemyEntity(viewUnits[0]);
+    } else {
+      // Empty hex — show tile info
+      this._selectedTile = { col: hex.col, row: hex.row };
+      this.renderer.selectedHex = { col: hex.col, row: hex.row };
+    }
     this._updateSidebar();
     this.onRedraw();
   }
