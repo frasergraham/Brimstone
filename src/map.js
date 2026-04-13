@@ -60,7 +60,7 @@ export const MAP_SIZES = {
       {col:8,row:3},{col:0,row:4},{col:1,row:7},{col:8,row:6},
       {col:4,row:2},{col:5,row:6},
     ],
-    nodeCount: 2, nodeCountMin: 1, nodeCountMax: 3,
+    nodeCount: 1, nodeCountMin: 1, nodeCountMax: 3,
     survivorCounts: { buildings: 4, terrain: 1 },
     bridgeMax: 2,
     minBridges: 1,
@@ -171,7 +171,7 @@ export function shuffle(arr, rand) {
 const MAX_ROAD_DEG = 3;
 const ROAD_DEG_PENALTY = 10; // extra cost per degree above the cap
 
-export function bfsPath(tiles, startCol, startRow, endCol, endRow, rand, roadTiles = new Set()) {
+export function bfsPath(tiles, startCol, startRow, endCol, endRow, rand, roadTiles = new Set(), blockRiver = false) {
   const key = (c, r) => `${c},${r}`;
   const start = key(startCol, startRow);
   const end   = key(endCol, endRow);
@@ -197,7 +197,9 @@ export function bfsPath(tiles, startCol, startRow, endCol, endRow, rand, roadTil
 
     for (const n of getNeighbors(col, row).sort(() => rand() - 0.5)) {
       const nk = key(n.col, n.row);
-      if (!tiles.get(nk)) continue;
+      const nTile = tiles.get(nk);
+      if (!nTile) continue;
+      if (blockRiver && nTile.type === TileType.RIVER) continue;
       const deg = roadDeg(n.col, n.row);
       const step = 1 + Math.max(0, deg - (MAX_ROAD_DEG - 1)) * ROAD_DEG_PENALTY;
       const nc = cost + step;
@@ -315,7 +317,7 @@ function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, river
   const colMax = nodeColRange?.max ?? (MAP_COLS - 2);
   const left = [], right = [];
   for (const [k, t] of tiles) {
-    if (t.type !== TileType.GRASS) continue;
+    if (t.type === TileType.RIVER || t.type === TileType.BRIDGE || t.type === TileType.BUILDING) continue;
     if (forbiddenKeys.has(k)) continue;
     if (t.col < colMin || t.col > colMax || t.row < 1 || t.row > MAP_ROWS - 2) continue;
     if (startPositions.some(sp => hexDistance(sp.col, sp.row, t.col, t.row) <= 3)) continue;
@@ -338,8 +340,7 @@ function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, river
     if (!placed.some(p => p.col === c.col && p.row === c.row) && ok(c)) placed.push(c);
   }
 
-  while (placed.length < count) placed.push({ col: 1, row: 1 });
-  return placed.slice(0, count);
+  return placed;
 }
 
 // Pick 2 satellite hexes adjacent to center to form a 3-hex cluster.
@@ -382,6 +383,56 @@ function _pickNodeCluster(rand, tiles, center, forbiddenKeys, startPositions = [
   if (neighbors.length >= 2) return [{ col: center.col, row: center.row }, neighbors[0], neighbors[1]];
   if (neighbors.length === 1) return [{ col: center.col, row: center.row }, neighbors[0], { col: center.col, row: center.row }];
   return [{ col: center.col, row: center.row }, { col: center.col, row: center.row }, { col: center.col, row: center.row }];
+}
+
+// Pick river tiles suitable as bridge crossings — tiles with passable land on both
+// sides of the river.  Returns up to `maxCount` positions, well-spaced along the
+// river, preferring tiles close to key settlement points.
+function _pickRiverCrossings(rand, tiles, riverPath, riverMap, riverEW, keyPoints, minCount, maxCount) {
+  const candidates = [];
+  for (let idx = 0; idx < riverPath.length; idx++) {
+    const { col, row } = riverPath[idx];
+    const neighbors = getNeighbors(col, row);
+    const leftNbrs = neighbors.filter(n => {
+      const t = tiles.get(hexKey(n.col, n.row));
+      return t && t.type !== TileType.RIVER && riverSide(n.col, n.row, riverMap, riverEW) === 'left';
+    });
+    const rightNbrs = neighbors.filter(n => {
+      const t = tiles.get(hexKey(n.col, n.row));
+      return t && t.type !== TileType.RIVER && riverSide(n.col, n.row, riverMap, riverEW) === 'right';
+    });
+    if (leftNbrs.length === 0 || rightNbrs.length === 0) continue;
+
+    const minKeyDist = keyPoints.length > 0
+      ? Math.min(...keyPoints.map(kp => hexDistance(kp.col, kp.row, col, row)))
+      : 0;
+    candidates.push({ col, row, idx, score: minKeyDist });
+  }
+
+  // Sort by proximity to key points (closest first), random tiebreak
+  shuffle(candidates, rand);
+  candidates.sort((a, b) => a.score - b.score);
+
+  // Greedily pick well-spaced crossings along the river path
+  const minSpacing = Math.max(3, Math.floor(riverPath.length / (maxCount + 1)));
+  const picked = [];
+  for (const c of candidates) {
+    if (picked.length >= maxCount) break;
+    if (picked.some(p => Math.abs(p.idx - c.idx) < minSpacing)) continue;
+    picked.push(c);
+  }
+
+  // Relax spacing to reach minCount if needed
+  if (picked.length < minCount) {
+    for (const c of candidates) {
+      if (picked.length >= minCount) break;
+      if (picked.some(p => p.col === c.col && p.row === c.row)) continue;
+      if (picked.some(p => Math.abs(p.idx - c.idx) < 2)) continue;
+      picked.push(c);
+    }
+  }
+
+  return picked;
 }
 
 // Place one village's buildings in a compact cluster around a center hex.
@@ -609,8 +660,19 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
     for (const m of members) roadEdges.push({ from: root, to: m });
   }
 
-  // Tier 2: MST on key points
+  // Tier 2: MST on key points + pre-selected river crossings
   const keyPoints = [...cornerPlacements, ...villageGroups.map(v => v.root)];
+
+  // Pre-select river crossing points and convert them to bridges.
+  // Adding crossings as key points in the MST ensures roads route through them
+  // rather than dead-ending at the river when the bridge cap is reached.
+  const crossings = _pickRiverCrossings(rand, tiles, riverPath, riverMap, riverEW, keyPoints, cfg.minBridges ?? 1, cfg.bridgeMax);
+  for (const c of crossings) {
+    const t = tiles.get(hexKey(c.col, c.row));
+    if (t) t.type = TileType.BRIDGE;
+  }
+  keyPoints.push(...crossings);
+
   const nk = keyPoints.length;
   const interEdges = [];
   if (nk > 1) {
@@ -632,50 +694,13 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
     }
   }
 
-  // Guarantee minimum river crossings on the inter-village trunk
-  {
-    const side = (col, row) => riverSide(col, row, riverMap, riverEW);
-    const crossCount = interEdges.filter(e =>
-      side(e.from.col, e.from.row) !== side(e.to.col, e.to.row)
-    ).length;
-    if (crossCount < cfg.minBridges) {
-      const leftK  = keyPoints.filter(k => side(k.col, k.row) === 'left');
-      const rightK = keyPoints.filter(k => side(k.col, k.row) === 'right');
-      const extra  = [];
-      for (const l of leftK) {
-        for (const r of rightK) {
-          if (interEdges.some(e => (e.from === l && e.to === r) || (e.from === r && e.to === l))) continue;
-          extra.push({ from: l, to: r, d: hexDistance(l.col, l.row, r.col, r.row) });
-        }
-      }
-      extra.sort((a, b) => a.d - b.d);
-      const chosen = [];
-      for (const e of extra) {
-        if (chosen.length >= cfg.minBridges - crossCount) break;
-        // Space bridges along the perpendicular axis to the river
-        const midPos = riverEW
-          ? (e.from.col + e.to.col) / 2
-          : (e.from.row + e.to.row) / 2;
-        const cMidPos = c => riverEW
-          ? (c.from.col + c.to.col) / 2
-          : (c.from.row + c.to.row) / 2;
-        if (!chosen.some(c => Math.abs(cMidPos(c) - midPos) < 2)) {
-          chosen.push(e); interEdges.push(e);
-        }
-      }
-      for (const e of extra) {
-        if (interEdges.filter(e2 => side(e2.from.col, e2.from.row) !== side(e2.to.col, e2.to.row)).length >= cfg.minBridges) break;
-        if (!interEdges.includes(e)) interEdges.push(e);
-      }
-    }
-  }
-
   roadEdges.push(...interEdges);
 
-  let bridgesPlaced = 0;
   // Tracks which tiles are already road/bridge so the weighted BFS can
   // penalise over-used hubs and route around them.
   const roadTiles = new Set();
+  // Seed roadTiles with pre-placed bridges so BFS considers them connected
+  for (const c of crossings) roadTiles.add(hexKey(c.col, c.row));
   const placeRoad = path => {
     for (let i = 0; i < path.length; i++) {
       const { col, row } = path[i];
@@ -684,9 +709,7 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
       if (t.type === TileType.GRASS || t.type === TileType.DIRT || t.type === TileType.FOREST) {
         t.type = TileType.ROAD;
         roadTiles.add(hexKey(col, row));
-      } else if (t.type === TileType.RIVER && bridgesPlaced < cfg.bridgeMax) {
-        t.type = TileType.BRIDGE;
-        bridgesPlaced++;
+      } else if (t.type === TileType.BRIDGE) {
         roadTiles.add(hexKey(col, row));
       }
       // Record bidirectional connectivity so the renderer and floodConnected
@@ -723,7 +746,7 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
 
   for (const { from, to } of roadEdges) {
     if (floodConnected(from, to)) continue;
-    placeRoad(bfsPath(tiles, from.col, from.row, to.col, to.row, rand, roadTiles));
+    placeRoad(bfsPath(tiles, from.col, from.row, to.col, to.row, rand, roadTiles, true));
   }
 
   // 5. Grow forest clusters from seeds
