@@ -2952,6 +2952,84 @@ export function forceEndGame(gameId, source, winner = 'draw') {
 }
 
 /**
+ * Admin: kick a player from a battle game. Same effect as resign —
+ * scatters their units, frees the slot, and notifies remaining players.
+ * Only works for active battle-mode rooms.
+ * @param {string} roomId
+ * @param {string} playerId
+ * @returns {{ ok: boolean, error?: string }}
+ */
+export function adminKickPlayer(roomId, playerId) {
+  const room = rooms.get(roomId);
+  if (!room) return { ok: false, error: 'Room not found.' };
+  if (!room.config.isBattle) return { ok: false, error: 'Kick is only supported for battle-mode games.' };
+  if (room.state?.gameOver) return { ok: false, error: 'Game is already over.' };
+
+  const seat = room.players.find(s => s.playerId === playerId);
+  if (!seat) return { ok: false, error: 'Player not found in this game.' };
+
+  const playerName = seat.name ?? 'A player';
+  const faction    = seat.faction;
+
+  // Scatter units (survivors to buildings, summons vanish)
+  room.state.scatterPlayerUnits(playerId);
+
+  // Remove leader entity
+  room.state.entities = room.state.entities.filter(
+    e => e.ownerId !== playerId || (e.type !== 'hero' && e.type !== 'witch')
+  );
+
+  // Remove from state.players and room.players
+  room.state.players = room.state.players.filter(p => p.id !== playerId);
+
+  // Auto-ready if in planning so they don't block resolution
+  if (room.phase === RoomPhase.PLANNING) {
+    room.state.playerReady.set(playerId, true);
+    room.state.playerPlans.set(playerId, []);
+    room.state.playerActionsLeft.delete(playerId);
+  }
+
+  room.players = room.players.filter(s => s.playerId !== playerId);
+
+  room.state.addLog(`💨 ${playerName} was removed from the battle by an admin.`);
+  _appendChronicle(room, {
+    round: room.state.round, phase: room.state.phase,
+    event: 'playerKicked', playerName, faction, timestamp: Date.now(),
+  });
+
+  // Notify remaining players and spectators
+  const msg = { type: 'playerResigned', playerId, playerName };
+  broadcast(room, msg);
+  broadcastToSpectators(room, msg);
+  broadcastState(room, 'admin-kick');
+  _broadcastPresence(room);
+
+  // Notify the kicked player if they're connected
+  send(seat.ws, { type: 'resigned', roomId: room.id, kicked: true });
+
+  // Persist immediately
+  _persistRoomSave(room);
+
+  console.log(`[admin] kicked ${playerName} (${playerId}) from battle ${room.id}`);
+
+  // Check if all plans are now ready
+  if (room.phase === RoomPhase.PLANNING) {
+    const allReady = [...room.state.playerReady.values()].every(Boolean);
+    if (allReady && room.players.length > 0) {
+      const hasHero  = room.players.some(s => s.faction === 'hero');
+      const hasWitch = room.players.some(s => s.faction === 'witch');
+      if (hasHero && hasWitch) {
+        room.state.planningPhase = false;
+        room.state.resolving     = true;
+        _executeResolution(room);
+      }
+    }
+  }
+
+  return { ok: true };
+}
+
+/**
  * Admin: completely delete a game from all storage.
  * Notifies connected clients, removes from rooms Map, and deletes from all DB tables.
  */

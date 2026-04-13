@@ -414,6 +414,16 @@
       return `${Math.floor(diff / 86400)}d ago`;
     }
 
+    function formatDate(unixSeconds) {
+      if (!unixSeconds) return '-';
+      const d = new Date(unixSeconds * 1000);
+      const mo  = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      const hr  = String(d.getHours()).padStart(2, '0');
+      const mn  = String(d.getMinutes()).padStart(2, '0');
+      return `${d.getFullYear()}-${mo}-${day} ${hr}:${mn}`;
+    }
+
     function formatUptime(seconds) {
       const h = Math.floor(seconds / 3600);
       const m = Math.floor((seconds % 3600) / 60);
@@ -600,6 +610,21 @@
       window.open(`/spectate?room=${roomId}`, `spectate-${roomId}`);
     }
 
+    async function kickPlayer(roomId, playerId, playerName) {
+      if (!confirm(`Kick ${playerName} from this battle? Their units will be scattered and their slot freed.`)) return;
+      try {
+        const result = await apiPost('/admin/api/battle/kick', { roomId, playerId });
+        if (result.ok) {
+          _tabLoaded.battle = false;
+          loadBattle();
+        } else {
+          alert('Kick failed: ' + (result.error || 'Unknown error'));
+        }
+      } catch (e) {
+        alert('Kick failed: ' + e.message);
+      }
+    }
+
     // ── Battle tab ─────────────────────────────────────────────────────────────
 
     function _renderBattleRoom(b, idx) {
@@ -613,11 +638,14 @@
           : p.submitted
             ? '<span style="color:var(--green)">✓</span>'
             : '<span style="color:var(--yellow)">Pending</span>';
+        const kick = p.isAI ? '' :
+          `<button class="btn btn-danger" onclick="kickPlayer('${_esc(b.roomId)}','${_esc(p.playerId)}','${_esc(p.name)}')">Kick</button>`;
         return `<tr>
           <td>${_esc(p.name)}</td>
           <td><span class="badge ${fcls}">${_esc(p.faction)}</span></td>
           <td>${conn}</td>
           <td>${sub}</td>
+          <td>${kick}</td>
         </tr>`;
       }).join('');
 
@@ -630,9 +658,12 @@
             <div class="stat-box"><div class="label">Witch Score</div><div class="value" style="color:var(--witch)">${b.witchScore}</div></div>
             <div class="stat-box"><div class="label">Slots</div><div class="value">${b.isFull ? 'Full' : b.openSlots + ' open'}</div></div>
           </div>
-          <h4 style="margin:0.3rem 0">Players (${b.heroCount} heroes, ${b.witchCount} witches)</h4>
+          <div style="margin:0.5rem 0;display:flex;align-items:center;gap:0.75rem">
+            <h4 style="margin:0">Players (${b.heroCount} heroes, ${b.witchCount} witches)</h4>
+            <button class="btn btn-primary" onclick="spectateRoom('${_esc(b.roomId)}')">Spectate</button>
+          </div>
           <table>
-            <thead><tr><th>Name</th><th>Faction</th><th>Connected</th><th>Submitted</th></tr></thead>
+            <thead><tr><th>Name</th><th>Faction</th><th>Connected</th><th>Submitted</th><th></th></tr></thead>
             <tbody>${playerRows}</tbody>
           </table>
         </div>`;
@@ -727,7 +758,7 @@
             <td>${g.round ?? '-'}${g.phase ? ` <span class="badge badge-phase">${_esc(g.phase)}</span>` : ''}</td>
             <td>${winner}</td>
             <td>${_esc(g.mode || '-')}</td>
-            <td class="time-ago">${timeAgo(g.created_at)}</td>
+            <td class="time-ago" title="${timeAgo(g.created_at)}">${formatDate(g.created_at)}</td>
           </tr>`;
         }).join('');
 

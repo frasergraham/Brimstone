@@ -45,7 +45,7 @@ import {
   broadcastPresenceForPlayer,
   setSendToPlayer,
   joinBattle, getBattleStatus,
-  forceEndGame, loadAllRooms, nukeGame,
+  forceEndGame, loadAllRooms, nukeGame, adminKickPlayer,
   getReplayForRound,
 } from './server/lobby.js';
 import { ensureBattleExists, checkBattleLifecycle, endBattleEarly } from './server/battle-scheduler.js';
@@ -726,6 +726,15 @@ app.post('/admin/api/battle/end', (req, res) => {
   if (!_requireAdmin(req, res)) return;
   const newRoomId = endBattleEarly();
   res.json({ ended: true, newRoomId });
+});
+
+app.post('/admin/api/battle/kick', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  const { roomId, playerId } = req.body;
+  if (!roomId || !playerId) { res.status(400).json({ error: 'roomId and playerId required.' }); return; }
+  const result = adminKickPlayer(roomId, playerId);
+  if (!result.ok) { res.status(400).json({ error: result.error }); return; }
+  res.json({ ok: true });
 });
 
 app.get('/admin/api/queue', (req, res) => {
