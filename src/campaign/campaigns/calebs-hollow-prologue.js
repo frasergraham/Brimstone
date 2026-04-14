@@ -302,17 +302,8 @@ function buildFirstNightMap() {
   setResource(tiles, 3, 8, ResourceType.FOOD);
   setResource(tiles, 2, 4, ResourceType.WOOD);
 
-  const witchObjectives = [
-    {
-      col: 4, row: 7,
-      label: 'Village Square',
-      hexes: [{ col: 4, row: 7 }, { col: 3, row: 7 }, { col: 5, row: 7 }],
-      color: NODE_COLORS[0],
-      seenByHero: true,
-      seenByWitch: true,
-      prevCtrl: 'neutral',
-    },
-  ];
+  // No power nodes — survival mission, not a node contest.
+  const witchObjectives = [];
 
   return {
     tiles,

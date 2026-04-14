@@ -236,9 +236,13 @@ export class GameState {
     this.actionsLeft  = computeActions('hero', Phase.DAWN, []);
     this.log = [
       `🌅 Dawn breaks over Caleb's Hollow. ${this.hero.displayName} stirs at the Inn.`,
-      `${this.witchObjectives.length} Power Node${this.witchObjectives.length !== 1 ? 's' : ''}: ${this.witchObjectives.map(o => o.label).join(', ')}.`,
-      `⚔ Hold 2+ nodes at each dawn/dusk to score. First to 4 points wins. Three cycles — then darkness claims Caleb's Hollow.`,
     ];
+    if (this.witchObjectives.length > 0) {
+      this.log.push(
+        `${this.witchObjectives.length} Power Node${this.witchObjectives.length !== 1 ? 's' : ''}: ${this.witchObjectives.map(o => o.label).join(', ')}.`,
+        `⚔ Hold 2+ nodes at each dawn/dusk to score. First to 4 points wins. Three cycles — then darkness claims Caleb's Hollow.`,
+      );
+    }
 
     this.selectedEntity    = null;
     this.pendingAction     = null;
