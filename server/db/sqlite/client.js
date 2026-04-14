@@ -68,6 +68,8 @@ function _runMigrations(db) {
 
   try { db.exec("ALTER TABLE completed_games ADD COLUMN players_json TEXT NOT NULL DEFAULT '[]'"); } catch {}
 
+  try { db.exec('ALTER TABLE game_replay_rounds ADD COLUMN final_entities_json TEXT'); } catch {}
+
   {
     const tableInfo = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='players'").get();
     const needsMigration = tableInfo?.sql?.includes('TEXT UNIQUE NOT NULL COLLATE NOCASE');

@@ -2,7 +2,7 @@
 import { hexKey, hexToPixel, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType } from './tiles.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
-import { Phase, PHASE_ICON, phaseForRound, nodeController, countHeldNodes } from './game.js';
+import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
 import {
   ActionType, getValidActions, getVisiblePositions,
@@ -1128,25 +1128,16 @@ export class UIController {
     // falling through to tile-detail which blocks all UI interaction.
     if (!this._planMode) {
       if (this.appMode === 'RESOLVING' || this.appMode === 'SUMMARY' ||
-          this.appMode === 'PLAYBACK' || this.appMode === 'PLANNING' ||
-          this.appMode === 'SUBMITTED') return;
-      this._clearSelection();
-      // Show tile info in stats bar instead of overlay
-      this._selectedTile = { col: hex.col, row: hex.row };
-      this.renderer.selectedHex = { col: hex.col, row: hex.row };
-      this._updateSidebar();
-      this.onRedraw();
+          this.appMode === 'PLAYBACK' || this.appMode === 'PLANNING') return;
+      // SUBMITTED or MENU: view-only unit inspection + tile info
+      this._handleViewOnlyClick(hex);
       return;
     }
 
     // During planning, same click-to-select/target flow — but actions go to plan queue
     if (this._planMode && this._planSubmitted) {
-      // Plan locked — read-only view
-      this._clearSelection();
-      this._selectedTile = { col: hex.col, row: hex.row };
-      this.renderer.selectedHex = { col: hex.col, row: hex.row };
-      this._updateSidebar();
-      this.onRedraw();
+      // Plan locked — view-only unit inspection + tile info
+      this._handleViewOnlyClick(hex);
       return;
     }
 
@@ -1263,6 +1254,37 @@ export class UIController {
       this._showActionPopup(null);
     }
 
+    this._updateSidebar();
+    this.onRedraw();
+  }
+
+  /** View-only click handler — select units for inspection or show tile info. No actions. */
+  _handleViewOnlyClick(hex) {
+    // Tap already-selected entity's hex → deselect
+    if (this._selectedEntity &&
+        hex.col === this._selectedEntity.col && hex.row === this._selectedEntity.row) {
+      this._clearSelection();
+      this._updateSidebar();
+      this.onRedraw();
+      return;
+    }
+    this._clearSelection();
+    const viewUnits = _visibleUnitsAt(this.state, hex.col, hex.row);
+    if (viewUnits.length > 1) {
+      // Multiple units on hex — show picker popup
+      this._popupVisible = true;
+      this._validActions = [];
+      this.renderer.selectedHex = { col: hex.col, row: hex.row };
+      this.renderer.highlightHexes = [];
+      this._pendingEnemyPick = { units: viewUnits };
+      this._showActionPopup(null);
+    } else if (viewUnits.length === 1) {
+      this._selectEnemyEntity(viewUnits[0]);
+    } else {
+      // Empty hex — show tile info
+      this._selectedTile = { col: hex.col, row: hex.row };
+      this.renderer.selectedHex = { col: hex.col, row: hex.row };
+    }
     this._updateSidebar();
     this.onRedraw();
   }
@@ -1813,6 +1835,18 @@ export class UIController {
       }
     }
 
+    // Count queued attacks per target entity ID (for defender badges)
+    const attacksPerTarget = new Map();
+    if (actionTag === 'pick_defender') {
+      for (const [, queue] of this._unitPlans) {
+        for (const a of queue) {
+          if (a.type === PlanActionType.BATTLE_UNIT && a.targetId) {
+            attacksPerTarget.set(a.targetId, (attacksPerTarget.get(a.targetId) ?? 0) + 1);
+          }
+        }
+      }
+    }
+
     for (const u of units) {
       const col        = ENTITY_COLOR[u.type] || '#888';
       const portraitId  = u.type === 'survivor' ? Renderer.survivorAssetId(u.title) : u.type;
@@ -1824,9 +1858,14 @@ export class UIController {
         ? `<img class="arc-portrait-img" src="${src}">`
         : `<div class="arc-portrait-img" style="display:flex;align-items:center;justify-content:center;font-size:1.2rem;background:rgba(20,16,32,0.8);">${u.displayName.charAt(0)}</div>`;
 
+      const atkCount = attacksPerTarget.get(u.id) ?? 0;
+      const badgeHtml = atkCount > 0
+        ? `<span class="arc-portrait-badge">\u00d7${atkCount}</span>`
+        : '';
+
       arcItems.push({
         group: 'disambig',
-        label: `${imgHtml}<div class="arc-portrait-hp"><div class="arc-portrait-hp-fill" style="width:${(pct * 100).toFixed(0)}%;background:${hpColor};"></div></div><span class="arc-portrait-name">${u.displayName}</span>`,
+        label: `<div class="arc-portrait-img-wrap">${imgHtml}${badgeHtml}</div><div class="arc-portrait-hp"><div class="arc-portrait-hp-fill" style="width:${(pct * 100).toFixed(0)}%;background:${hpColor};"></div></div><span class="arc-portrait-name">${u.displayName}</span>`,
         fullLabel: `${u.displayName} — HP ${u.hp}/${u.maxHp}`,
         color: col,
         dis: false,
@@ -2120,21 +2159,22 @@ export class UIController {
     const el    = this._el('turn-info');
     if (!el) return;
 
-    // 8-step cycle — shared between header and cycle-bar
-    const CYCLE_STEPS = [
-      { phase: 'dawn',  sprite: 'cycle_dawn',  label: 'Dawn',  desc: 'Hero +1 action · node scoring · attrition rises' },
-      { phase: 'day',   sprite: 'cycle_day',   label: 'Day',   desc: 'Witch undead in the open suffer' },
-      { phase: 'day',   sprite: 'cycle_day',   label: 'Day',   desc: 'Witch undead in the open suffer' },
-      { phase: 'day',   sprite: 'cycle_day',   label: 'Day',   desc: 'Witch undead in the open suffer' },
-      { phase: 'dusk',  sprite: 'cycle_dusk',  label: 'Dusk',  desc: 'Node scoring · seek cover before night' },
-      { phase: 'night', sprite: 'cycle_night', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
-      { phase: 'night', sprite: 'cycle_night', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
-      { phase: 'night', sprite: 'cycle_night', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
-    ];
+    // Derive cycle steps from custom cycleConfig or use the default 8-step cycle
+    const PHASE_META = {
+      dawn:  { sprite: 'cycle_dawn',  label: 'Dawn',  desc: 'Hero +1 action · node scoring · attrition rises' },
+      day:   { sprite: 'cycle_day',   label: 'Day',   desc: 'Witch undead in the open suffer' },
+      dusk:  { sprite: 'cycle_dusk',  label: 'Dusk',  desc: 'Node scoring · seek cover before night' },
+      night: { sprite: 'cycle_night', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
+    };
+    const cyclePhases = state.cycleConfig?.phases ?? DEFAULT_CYCLE_PHASES;
+    const CYCLE_STEPS = cyclePhases.map(p => ({ phase: p, ...PHASE_META[p] }));
 
-    const roundInCycle = (state.round - 1) % 8;
-    const cycle        = Math.ceil(state.round / 8);
-    const roundLabel   = `Day ${cycle} · Round ${roundInCycle + 1}`;
+    const cycleLen     = CYCLE_STEPS.length;
+    const roundInCycle = (state.round - 1) % cycleLen;
+    const cycle        = Math.ceil(state.round / cycleLen);
+    const roundLabel   = state.cycleConfig && !state.cycleConfig.loop
+      ? `Round ${state.round} of ${cyclePhases.length}`
+      : `Day ${cycle} · Round ${roundInCycle + 1}`;
 
     // Render always-visible cycle bar (compact icon row)
     const cycleBar = this._el('cycle-bar');
@@ -3616,7 +3656,7 @@ export class UIController {
         } else {
           // Show the upcoming phase + round instead of "Round N complete"
           const nextRound = (roundNum ?? 0) + 1;
-          const nextPhase = phaseForRound(nextRound);
+          const nextPhase = phaseForRound(nextRound, this.state?.cycleConfig);
           const icon = PHASE_ICON[nextPhase] ?? '';
           titleEl.textContent = `${icon} ${nextPhase.charAt(0).toUpperCase() + nextPhase.slice(1)} — Round ${nextRound}`;
         }
@@ -3632,7 +3672,7 @@ export class UIController {
             dusk:  'Power Nodes scored · Night approaches',
             night: 'Witch +2 ATK · Survivors in the open suffer',
           };
-          const nextPhase = phaseForRound((roundNum ?? 0) + 1);
+          const nextPhase = phaseForRound((roundNum ?? 0) + 1, this.state?.cycleConfig);
           const fx = PHASE_EFFECTS[nextPhase];
           if (fx) html += `<div class="summary-phase-effects">${fx}</div>`;
         }

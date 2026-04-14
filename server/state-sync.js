@@ -88,6 +88,9 @@ export function serializeState(state) {
     disableScoring:       !!state.disableScoring,
     gameMode:             state.gameMode ?? 'standard',
     battleConfig:         state.battleConfig ? { ...state.battleConfig } : null,
+    cycleConfig:          state.cycleConfig
+      ? { phases: [...state.cycleConfig.phases], loop: state.cycleConfig.loop }
+      : null,
     maxDiscoverableSurvivors: state.maxDiscoverableSurvivors ?? null,
     discoveredSurvivorCount:  state.discoveredSurvivorCount ?? 0,
     log:                  [...state.log],
@@ -234,6 +237,9 @@ export function deserializeState(snap) {
   state.campaignAIBudgetBonus = snap.campaignAIBudgetBonus ?? 0;
   state.gameMode             = snap.gameMode ?? 'standard';
   state.battleConfig         = snap.battleConfig ? { ...snap.battleConfig } : null;
+  state.cycleConfig          = snap.cycleConfig
+    ? { phases: [...snap.cycleConfig.phases], loop: snap.cycleConfig.loop }
+    : null;
 
   // ── Planning fields ──────────────────────────────────────────────────────
   state.planningPhase    = snap.planningPhase ?? false;

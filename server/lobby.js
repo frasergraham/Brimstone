@@ -317,17 +317,19 @@ export function getReplayForRound(room, roundNum) {
   const mem = room.replayRounds?.find(r => r.roundNum === roundNum);
   if (mem) {
     return {
-      roundNum:     mem.roundNum,
-      preStateJson: mem.preStateJson,
-      stepsJson:    mem.stepsJson,
+      roundNum:          mem.roundNum,
+      preStateJson:      mem.preStateJson,
+      stepsJson:         mem.stepsJson,
+      finalEntitiesJson: mem.finalEntitiesJson ?? null,
     };
   }
   const row = getSaveRound(room.id, roundNum);
   if (row) {
     return {
-      roundNum:     row.round_num,
-      preStateJson: row.pre_state_json,
-      stepsJson:    row.steps_json,
+      roundNum:          row.round_num,
+      preStateJson:      row.pre_state_json,
+      stepsJson:         row.steps_json,
+      finalEntitiesJson: null,  // save rounds never store final entities
     };
   }
   return null;
@@ -423,9 +425,10 @@ function _buildRoundResolvedMessage(room, playerId, serializedSteps, finalState)
       deadline,
     },
     lastRound: lastEntry ? {
-      roundNum: lastEntry.roundNum,
-      preStateJson: lastEntry.preStateJson,
-      stepsJson: lastEntry.stepsJson,
+      roundNum:          lastEntry.roundNum,
+      preStateJson:      lastEntry.preStateJson,
+      stepsJson:         lastEntry.stepsJson,
+      finalEntitiesJson: lastEntry.finalEntitiesJson ?? null,
     } : null,
     players: _buildPlayerList(room),
     gameOver: !!room.state.gameOver,
@@ -1086,6 +1089,11 @@ function _executeResolution(room) {
     preStateJson,
     stepsJson:   JSON.stringify(serializedSteps),
   };
+  // For the game-over round, include final entity state so replays can show
+  // the outcome (deaths, positions) instead of falling back to preState.
+  if (state.gameOver) {
+    roundEntry.finalEntitiesJson = JSON.stringify(finalState.entities);
+  }
   room.replayRounds.push(roundEntry);
 
   // Persist the round to the DB so resumed games retain full replay history
@@ -2534,11 +2542,23 @@ export function recoverRoom(roomId) {
     }
   }
 
+  // Restore replay rounds from DB so full-game replays include pre-save history.
+  try {
+    const savedRounds = getSaveRounds(roomId);
+    room.replayRounds = savedRounds.map(r => ({
+      roundNum:     r.round_num,
+      preStateJson: r.pre_state_json,
+      stepsJson:    r.steps_json,
+    }));
+  } catch (err) {
+    console.error(`[recoverRoom ${roomId}] getSaveRounds error:`, err);
+  }
+
   // Room is fully initialized — register it so clients can find it.
   rooms.set(room.id, room);
   if (room.code) codeToRoom.set(room.code, room.id);
 
-  console.log(`[room ${roomId}] recovered from DB (round ${state.round}, phase ${state.phase}).`);
+  console.log(`[room ${roomId}] recovered from DB (round ${state.round}, phase ${state.phase}, ${room.replayRounds.length} replay rounds restored).`);
   return room;
 }
 
@@ -2929,6 +2949,84 @@ export function forceEndGame(gameId, source, winner = 'draw') {
   }
 
   return { ok: false, error: `Cannot end games with source '${source}'.` };
+}
+
+/**
+ * Admin: kick a player from a battle game. Same effect as resign —
+ * scatters their units, frees the slot, and notifies remaining players.
+ * Only works for active battle-mode rooms.
+ * @param {string} roomId
+ * @param {string} playerId
+ * @returns {{ ok: boolean, error?: string }}
+ */
+export function adminKickPlayer(roomId, playerId) {
+  const room = rooms.get(roomId);
+  if (!room) return { ok: false, error: 'Room not found.' };
+  if (!room.config.isBattle) return { ok: false, error: 'Kick is only supported for battle-mode games.' };
+  if (room.state?.gameOver) return { ok: false, error: 'Game is already over.' };
+
+  const seat = room.players.find(s => s.playerId === playerId);
+  if (!seat) return { ok: false, error: 'Player not found in this game.' };
+
+  const playerName = seat.name ?? 'A player';
+  const faction    = seat.faction;
+
+  // Scatter units (survivors to buildings, summons vanish)
+  room.state.scatterPlayerUnits(playerId);
+
+  // Remove leader entity
+  room.state.entities = room.state.entities.filter(
+    e => e.ownerId !== playerId || (e.type !== 'hero' && e.type !== 'witch')
+  );
+
+  // Remove from state.players and room.players
+  room.state.players = room.state.players.filter(p => p.id !== playerId);
+
+  // Auto-ready if in planning so they don't block resolution
+  if (room.phase === RoomPhase.PLANNING) {
+    room.state.playerReady.set(playerId, true);
+    room.state.playerPlans.set(playerId, []);
+    room.state.playerActionsLeft.delete(playerId);
+  }
+
+  room.players = room.players.filter(s => s.playerId !== playerId);
+
+  room.state.addLog(`💨 ${playerName} was removed from the battle by an admin.`);
+  _appendChronicle(room, {
+    round: room.state.round, phase: room.state.phase,
+    event: 'playerKicked', playerName, faction, timestamp: Date.now(),
+  });
+
+  // Notify remaining players and spectators
+  const msg = { type: 'playerResigned', playerId, playerName };
+  broadcast(room, msg);
+  broadcastToSpectators(room, msg);
+  broadcastState(room, 'admin-kick');
+  _broadcastPresence(room);
+
+  // Notify the kicked player if they're connected
+  send(seat.ws, { type: 'resigned', roomId: room.id, kicked: true });
+
+  // Persist immediately
+  _persistRoomSave(room);
+
+  console.log(`[admin] kicked ${playerName} (${playerId}) from battle ${room.id}`);
+
+  // Check if all plans are now ready
+  if (room.phase === RoomPhase.PLANNING) {
+    const allReady = [...room.state.playerReady.values()].every(Boolean);
+    if (allReady && room.players.length > 0) {
+      const hasHero  = room.players.some(s => s.faction === 'hero');
+      const hasWitch = room.players.some(s => s.faction === 'witch');
+      if (hasHero && hasWitch) {
+        room.state.planningPhase = false;
+        room.state.resolving     = true;
+        _executeResolution(room);
+      }
+    }
+  }
+
+  return { ok: true };
 }
 
 /**

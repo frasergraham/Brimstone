@@ -60,7 +60,7 @@ export const MAP_SIZES = {
       {col:8,row:3},{col:0,row:4},{col:1,row:7},{col:8,row:6},
       {col:4,row:2},{col:5,row:6},
     ],
-    nodeCount: 2, nodeCountMin: 1, nodeCountMax: 3,
+    nodeCount: 1, nodeCountMin: 1, nodeCountMax: 3,
     survivorCounts: { buildings: 4, terrain: 1 },
     bridgeMax: 2,
     minBridges: 1,
@@ -171,7 +171,7 @@ export function shuffle(arr, rand) {
 const MAX_ROAD_DEG = 3;
 const ROAD_DEG_PENALTY = 10; // extra cost per degree above the cap
 
-export function bfsPath(tiles, startCol, startRow, endCol, endRow, rand, roadTiles = new Set()) {
+export function bfsPath(tiles, startCol, startRow, endCol, endRow, rand, roadTiles = new Set(), blockRiver = false) {
   const key = (c, r) => `${c},${r}`;
   const start = key(startCol, startRow);
   const end   = key(endCol, endRow);
@@ -197,7 +197,9 @@ export function bfsPath(tiles, startCol, startRow, endCol, endRow, rand, roadTil
 
     for (const n of getNeighbors(col, row).sort(() => rand() - 0.5)) {
       const nk = key(n.col, n.row);
-      if (!tiles.get(nk)) continue;
+      const nTile = tiles.get(nk);
+      if (!nTile) continue;
+      if (blockRiver && nTile.type === TileType.RIVER) continue;
       const deg = roadDeg(n.col, n.row);
       const step = 1 + Math.max(0, deg - (MAX_ROAD_DEG - 1)) * ROAD_DEG_PENALTY;
       const nc = cost + step;
@@ -315,7 +317,7 @@ function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, river
   const colMax = nodeColRange?.max ?? (MAP_COLS - 2);
   const left = [], right = [];
   for (const [k, t] of tiles) {
-    if (t.type !== TileType.GRASS) continue;
+    if (t.type === TileType.RIVER || t.type === TileType.BRIDGE || t.type === TileType.BUILDING) continue;
     if (forbiddenKeys.has(k)) continue;
     if (t.col < colMin || t.col > colMax || t.row < 1 || t.row > MAP_ROWS - 2) continue;
     if (startPositions.some(sp => hexDistance(sp.col, sp.row, t.col, t.row) <= 3)) continue;
@@ -338,8 +340,7 @@ function _pickNodesAcrossRiver(rand, tiles, count, minDist, forbiddenKeys, river
     if (!placed.some(p => p.col === c.col && p.row === c.row) && ok(c)) placed.push(c);
   }
 
-  while (placed.length < count) placed.push({ col: 1, row: 1 });
-  return placed.slice(0, count);
+  return placed;
 }
 
 // Pick 2 satellite hexes adjacent to center to form a 3-hex cluster.
@@ -384,6 +385,56 @@ function _pickNodeCluster(rand, tiles, center, forbiddenKeys, startPositions = [
   return [{ col: center.col, row: center.row }, { col: center.col, row: center.row }, { col: center.col, row: center.row }];
 }
 
+// Pick river tiles suitable as bridge crossings — tiles with passable land on both
+// sides of the river.  Returns up to `maxCount` positions, well-spaced along the
+// river, preferring tiles close to key settlement points.
+function _pickRiverCrossings(rand, tiles, riverPath, riverMap, riverEW, keyPoints, minCount, maxCount) {
+  const candidates = [];
+  for (let idx = 0; idx < riverPath.length; idx++) {
+    const { col, row } = riverPath[idx];
+    const neighbors = getNeighbors(col, row);
+    const leftNbrs = neighbors.filter(n => {
+      const t = tiles.get(hexKey(n.col, n.row));
+      return t && t.type !== TileType.RIVER && riverSide(n.col, n.row, riverMap, riverEW) === 'left';
+    });
+    const rightNbrs = neighbors.filter(n => {
+      const t = tiles.get(hexKey(n.col, n.row));
+      return t && t.type !== TileType.RIVER && riverSide(n.col, n.row, riverMap, riverEW) === 'right';
+    });
+    if (leftNbrs.length === 0 || rightNbrs.length === 0) continue;
+
+    const minKeyDist = keyPoints.length > 0
+      ? Math.min(...keyPoints.map(kp => hexDistance(kp.col, kp.row, col, row)))
+      : 0;
+    candidates.push({ col, row, idx, score: minKeyDist });
+  }
+
+  // Sort by proximity to key points (closest first), random tiebreak
+  shuffle(candidates, rand);
+  candidates.sort((a, b) => a.score - b.score);
+
+  // Greedily pick well-spaced crossings along the river path
+  const minSpacing = Math.max(3, Math.floor(riverPath.length / (maxCount + 1)));
+  const picked = [];
+  for (const c of candidates) {
+    if (picked.length >= maxCount) break;
+    if (picked.some(p => Math.abs(p.idx - c.idx) < minSpacing)) continue;
+    picked.push(c);
+  }
+
+  // Relax spacing to reach minCount if needed
+  if (picked.length < minCount) {
+    for (const c of candidates) {
+      if (picked.length >= minCount) break;
+      if (picked.some(p => p.col === c.col && p.row === c.row)) continue;
+      if (picked.some(p => Math.abs(p.idx - c.idx) < 2)) continue;
+      picked.push(c);
+    }
+  }
+
+  return picked;
+}
+
 // Place one village's buildings in a compact cluster around a center hex.
 // Buildings are sorted closest-first (with seeded random tiebreaking) and
 // placed with MIN_SEP gaps so the result reads as a dense but walkable hamlet.
@@ -424,7 +475,9 @@ function _placeVillageBuildings(rand, tiles, centerCol, centerRow, buildings, us
 // Pick N well-spread village center positions then fill each from its archetype.
 // Village centers are kept minVillageDist apart from each other and from the
 // reserved corner buildings (INN / GRAVEYARD).
-function _generateVillages(rand, tiles, villageNames, minVillageDist, reservedKeys) {
+// riverMap/riverEW are used to ensure villages are distributed across the river
+// (at least 1 on each side when 2+ villages are being placed).
+function _generateVillages(rand, tiles, villageNames, minVillageDist, reservedKeys, riverMap, riverEW) {
   const usedKeys = new Set(reservedKeys);
   const reservedPositions = [...reservedKeys].map(k => {
     const [col, row] = k.split(',').map(Number);
@@ -441,13 +494,42 @@ function _generateVillages(rand, tiles, villageNames, minVillageDist, reservedKe
   shuffle(centerCandidates, rand);
 
   const minToCorner = Math.ceil(minVillageDist * 0.75); // slightly smaller buffer to corners
+  const ok = c => !centers.some(p => hexDistance(p.col, p.row, c.col, c.row) < minVillageDist) &&
+                  !reservedPositions.some(p => hexDistance(p.col, p.row, c.col, c.row) < minToCorner);
+
+  // Split candidates by river side for balanced placement
+  const leftCands  = centerCandidates.filter(c => riverSide(c.col, c.row, riverMap, riverEW) === 'left');
+  const rightCands = centerCandidates.filter(c => riverSide(c.col, c.row, riverMap, riverEW) === 'right');
+
   const centers = [];
+  const target = villageNames.length;
+
+  // Guarantee at least 1 village on each side when placing 2+ villages
+  if (target >= 2 && leftCands.length > 0 && rightCands.length > 0) {
+    const l = leftCands.find(ok);
+    if (l) centers.push(l);
+    const r = rightCands.find(ok);
+    if (r) centers.push(r);
+  }
+
+  // Cap: at most half (rounded up) of village centers on one side (keeps buildings ≤80%)
+  const maxPerSide = Math.ceil(target / 2);
+  const sideOf = c => riverSide(c.col, c.row, riverMap, riverEW);
+  const countSide = side => centers.filter(p => sideOf(p) === side).length;
+
+  // Fill remaining, respecting the per-side cap
   for (const c of centerCandidates) {
-    if (centers.length >= villageNames.length) break;
-    const tooClose =
-      centers.some(p => hexDistance(p.col, p.row, c.col, c.row) < minVillageDist) ||
-      reservedPositions.some(p => hexDistance(p.col, p.row, c.col, c.row) < minToCorner);
-    if (!tooClose) centers.push(c);
+    if (centers.length >= target) break;
+    if (centers.some(p => p.col === c.col && p.row === c.row)) continue;
+    if (!ok(c)) continue;
+    if (countSide(sideOf(c)) >= maxPerSide) continue;
+    centers.push(c);
+  }
+  // Fallback: if per-side cap was too restrictive, fill without cap
+  for (const c of centerCandidates) {
+    if (centers.length >= target) break;
+    if (centers.some(p => p.col === c.col && p.row === c.row)) continue;
+    if (ok(c)) centers.push(c);
   }
 
   // Shuffle template order per seed so village positions vary across seeds
@@ -473,11 +555,14 @@ function _generateVillages(rand, tiles, villageNames, minVillageDist, reservedKe
 // or (col-1, row+1); from an odd row to (col+1, row+1) or (col, row+1).
 export function generateRiverNS(rand) {
   const path = [];
-  // Start in the middle third of the map, clamped to the safe river range
-  const minStart = Math.max(2, Math.floor(MAP_COLS / 4));
-  const rangeLen  = Math.max(1, Math.floor(MAP_COLS / 2));
+  // Start in the middle range, clamped to the safe river corridor.
+  // Buffer from each edge guarantees enough land for buildings on both sides.
+  const buf = MAP_COLS >= 12 ? 4 : 3;
+  const minStart = Math.max(buf, Math.floor(MAP_COLS / 4));
+  const maxStart = MAP_COLS - 1 - buf;
+  const rangeLen  = Math.max(1, maxStart - minStart + 1);
   const startCol  = minStart + Math.floor(rand() * rangeLen);
-  let col = Math.min(startCol, MAP_COLS - 3);
+  let col = Math.min(startCol, maxStart);
 
   for (let row = 0; row < MAP_ROWS; row++) {
     path.push({ col, row });
@@ -488,8 +573,8 @@ export function generateRiverNS(rand) {
       const optA = isEven ? col     : col + 1; // "straight"
       const optB = isEven ? col - 1 : col;     // "drift"
       // Clamp both to safe range and pick randomly
-      const a = Math.max(2, Math.min(MAP_COLS - 3, optA));
-      const b = Math.max(2, Math.min(MAP_COLS - 3, optB));
+      const a = Math.max(buf, Math.min(MAP_COLS - 1 - buf, optA));
+      const b = Math.max(buf, Math.min(MAP_COLS - 1 - buf, optB));
       col = (rand() < 0.5) ? a : b;
     }
   }
@@ -505,10 +590,13 @@ export function generateRiverNS(rand) {
 // This means some columns may contain two river tiles.
 export function generateRiverEW(rand) {
   const path = [];
-  const minStart = Math.max(2, Math.floor(MAP_ROWS / 4));
-  const rangeLen  = Math.max(1, Math.floor(MAP_ROWS / 2));
+  // Buffer from each edge guarantees enough land for buildings on both sides.
+  const buf = MAP_ROWS >= 12 ? 4 : 3;
+  const minStart = Math.max(buf, Math.floor(MAP_ROWS / 4));
+  const maxStart = MAP_ROWS - 1 - buf;
+  const rangeLen  = Math.max(1, maxStart - minStart + 1);
   const startRow  = minStart + Math.floor(rand() * rangeLen);
-  let row = Math.min(startRow, MAP_ROWS - 3);
+  let row = Math.min(startRow, maxStart);
 
   for (let col = 0; col < MAP_COLS; col++) {
     path.push({ col, row });
@@ -516,7 +604,7 @@ export function generateRiverEW(rand) {
     if (col < MAP_COLS - 1) {
       if (row % 2 === 1) {
         // Odd row: three rightward neighbors — pick freely
-        const opts = [row - 1, row, row + 1].filter(r => r >= 2 && r <= MAP_ROWS - 3);
+        const opts = [row - 1, row, row + 1].filter(r => r >= buf && r <= MAP_ROWS - 1 - buf);
         row = opts[Math.floor(rand() * opts.length)];
       } else {
         // Even row: only (col+1, row) is rightward, but we can detour vertically
@@ -526,8 +614,8 @@ export function generateRiverEW(rand) {
         if (rand() < 0.45) {
           const up   = row - 1;
           const down = row + 1;
-          const canUp   = up >= 2;
-          const canDown = down <= MAP_ROWS - 3;
+          const canUp   = up >= buf;
+          const canDown = down <= MAP_ROWS - 1 - buf;
           let target;
           if (canUp && canDown) {
             target = rand() < 0.5 ? up : down;
@@ -583,7 +671,7 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   const cornerPlacements = _pickCornerBuildings(rand, tiles);
   const cornerKeys       = new Set(cornerPlacements.map(b => hexKey(b.col, b.row)));
   const { allPlacements: villagePlacements, villageGroups } =
-    _generateVillages(rand, tiles, cfg.villages, cfg.minVillageDist, cornerKeys);
+    _generateVillages(rand, tiles, cfg.villages, cfg.minVillageDist, cornerKeys, riverMap, riverEW);
   const buildingPlacements = [...cornerPlacements, ...villagePlacements];
   for (const { col, row, building } of buildingPlacements) {
     const t = tiles.get(hexKey(col, row));
@@ -609,8 +697,19 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
     for (const m of members) roadEdges.push({ from: root, to: m });
   }
 
-  // Tier 2: MST on key points
+  // Tier 2: MST on key points + pre-selected river crossings
   const keyPoints = [...cornerPlacements, ...villageGroups.map(v => v.root)];
+
+  // Pre-select river crossing points and convert them to bridges.
+  // Adding crossings as key points in the MST ensures roads route through them
+  // rather than dead-ending at the river when the bridge cap is reached.
+  const crossings = _pickRiverCrossings(rand, tiles, riverPath, riverMap, riverEW, keyPoints, cfg.minBridges ?? 1, cfg.bridgeMax);
+  for (const c of crossings) {
+    const t = tiles.get(hexKey(c.col, c.row));
+    if (t) t.type = TileType.BRIDGE;
+  }
+  keyPoints.push(...crossings);
+
   const nk = keyPoints.length;
   const interEdges = [];
   if (nk > 1) {
@@ -632,50 +731,13 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
     }
   }
 
-  // Guarantee minimum river crossings on the inter-village trunk
-  {
-    const side = (col, row) => riverSide(col, row, riverMap, riverEW);
-    const crossCount = interEdges.filter(e =>
-      side(e.from.col, e.from.row) !== side(e.to.col, e.to.row)
-    ).length;
-    if (crossCount < cfg.minBridges) {
-      const leftK  = keyPoints.filter(k => side(k.col, k.row) === 'left');
-      const rightK = keyPoints.filter(k => side(k.col, k.row) === 'right');
-      const extra  = [];
-      for (const l of leftK) {
-        for (const r of rightK) {
-          if (interEdges.some(e => (e.from === l && e.to === r) || (e.from === r && e.to === l))) continue;
-          extra.push({ from: l, to: r, d: hexDistance(l.col, l.row, r.col, r.row) });
-        }
-      }
-      extra.sort((a, b) => a.d - b.d);
-      const chosen = [];
-      for (const e of extra) {
-        if (chosen.length >= cfg.minBridges - crossCount) break;
-        // Space bridges along the perpendicular axis to the river
-        const midPos = riverEW
-          ? (e.from.col + e.to.col) / 2
-          : (e.from.row + e.to.row) / 2;
-        const cMidPos = c => riverEW
-          ? (c.from.col + c.to.col) / 2
-          : (c.from.row + c.to.row) / 2;
-        if (!chosen.some(c => Math.abs(cMidPos(c) - midPos) < 2)) {
-          chosen.push(e); interEdges.push(e);
-        }
-      }
-      for (const e of extra) {
-        if (interEdges.filter(e2 => side(e2.from.col, e2.from.row) !== side(e2.to.col, e2.to.row)).length >= cfg.minBridges) break;
-        if (!interEdges.includes(e)) interEdges.push(e);
-      }
-    }
-  }
-
   roadEdges.push(...interEdges);
 
-  let bridgesPlaced = 0;
   // Tracks which tiles are already road/bridge so the weighted BFS can
   // penalise over-used hubs and route around them.
   const roadTiles = new Set();
+  // Seed roadTiles with pre-placed bridges so BFS considers them connected
+  for (const c of crossings) roadTiles.add(hexKey(c.col, c.row));
   const placeRoad = path => {
     for (let i = 0; i < path.length; i++) {
       const { col, row } = path[i];
@@ -684,9 +746,7 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
       if (t.type === TileType.GRASS || t.type === TileType.DIRT || t.type === TileType.FOREST) {
         t.type = TileType.ROAD;
         roadTiles.add(hexKey(col, row));
-      } else if (t.type === TileType.RIVER && bridgesPlaced < cfg.bridgeMax) {
-        t.type = TileType.BRIDGE;
-        bridgesPlaced++;
+      } else if (t.type === TileType.BRIDGE) {
         roadTiles.add(hexKey(col, row));
       }
       // Record bidirectional connectivity so the renderer and floodConnected
@@ -723,7 +783,7 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
 
   for (const { from, to } of roadEdges) {
     if (floodConnected(from, to)) continue;
-    placeRoad(bfsPath(tiles, from.col, from.row, to.col, to.row, rand, roadTiles));
+    placeRoad(bfsPath(tiles, from.col, from.row, to.col, to.row, rand, roadTiles, true));
   }
 
   // 5. Grow forest clusters from seeds

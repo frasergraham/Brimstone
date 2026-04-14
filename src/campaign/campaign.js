@@ -147,6 +147,7 @@ export function processWaves(state, waves, createEnemyFn) {
       if (!pos) continue;
       const entity = createEnemyFn(unit.type, pos.col, pos.row);
       if (entity) {
+        if (unit.overrides) Object.assign(entity, unit.overrides);
         state.entities.push(entity);
         logs.push(`🌑 ${entity.displayName} emerges from the shadows!`);
       }

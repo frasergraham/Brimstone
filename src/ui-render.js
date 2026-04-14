@@ -430,8 +430,8 @@ export function buildPlayerStatusHtml(players, nudgeCtx) {
     if (nudged && myId && pid !== myId && !p.isAI && !submitted) {
       const already = nudged.has(pid);
       nudgeBtn = already
-        ? `<button class="nudge-btn nudge-sent" disabled title="Nudge sent">👈</button>`
-        : `<button class="nudge-btn" data-nudge-id="${pid}" title="Nudge">👈</button>`;
+        ? `<button class="nudge-btn nudge-sent" disabled title="Nudge sent">NUDGE</button>`
+        : `<button class="nudge-btn" data-nudge-id="${pid}" title="Nudge">NUDGE</button>`;
     }
 
     html += `<div class="plan-player-row ${cls}">

@@ -85,7 +85,7 @@ function capitalize(s) {
 export function mmFormatRow(row) {
   const classes = ['mm-game-row'];
   if (row.kind === 'battle' || row.kind === 'battle-invite') classes.push('mm-game-battle');
-  if (row.is_local || row.kind === 'local-sp' || row.kind === 'local-campaign') {
+  if (row.is_local || row.kind === 'local-sp' || row.kind === 'local-campaign' || row.kind === 'campaign-next') {
     classes.push('mm-game-local');
   }
   if (row.action_needed) classes.push('mm-game-action');
@@ -116,6 +116,10 @@ export function mmFormatRow(row) {
     parts.push('Campaign');
     if (row.round != null) parts.push(`Round ${row.round}`);
     if (row.phase) parts.push(PHASE_LABELS[row.phase] ?? row.phase);
+  } else if (row.kind === 'campaign-next') {
+    // Campaign with a next mission ready to play
+    parts.push('Campaign');
+    if (row._nextMissionTitle) parts.push(row._nextMissionTitle);
   } else if (row.kind === 'completed-sp') {
     // Completed local game (for the Replays page)
     if (row.win_reason) parts.push(row.win_reason);

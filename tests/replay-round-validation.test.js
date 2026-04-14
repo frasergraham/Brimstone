@@ -62,6 +62,17 @@ describe('getReplayForRound (server/lobby.js)', () => {
   beforeEach(cleanUpRooms);
   afterEach(cleanUpRooms);
 
+  test('passes through finalEntitiesJson from in-memory entries', () => {
+    const room = makeFakeRoom([
+      { roundNum: 1, preStateJson: '{"r":1}', stepsJson: '[1]' },
+      { roundNum: 2, preStateJson: '{"r":2}', stepsJson: '[2]', finalEntitiesJson: '[{"id":"e1"}]' },
+    ], 3);
+    const entry1 = getReplayForRound(room, 1);
+    assert.equal(entry1.finalEntitiesJson, null, 'non-final round should have null');
+    const entry2 = getReplayForRound(room, 2);
+    assert.equal(entry2.finalEntitiesJson, '[{"id":"e1"}]', 'final round should pass through');
+  });
+
   test('returns the matching in-memory entry by roundNum', () => {
     const room = makeFakeRoom([
       { roundNum: 1, preStateJson: '{"r":1}', stepsJson: '[1]' },

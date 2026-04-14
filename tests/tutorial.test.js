@@ -537,3 +537,27 @@ describe('Prologue campaign', async () => {
     assert.equal(m.objectives.lose, null);
   });
 });
+
+// ── gameOver is getter-only on GameState (regression: tutorial onComplete) ───
+
+describe('GameState.gameOver is computed from winner', () => {
+  test('gameOver is false when winner is null', () => {
+    const mapData = buildTutorialMap();
+    const state = new GameState(false, false, 'tutorial', null, mapData);
+    assert.equal(state.winner, null);
+    assert.equal(state.gameOver, false);
+  });
+
+  test('setting winner makes gameOver true', () => {
+    const mapData = buildTutorialMap();
+    const state = new GameState(false, false, 'tutorial', null, mapData);
+    state.winner = 'hero';
+    assert.equal(state.gameOver, true);
+  });
+
+  test('assigning state.gameOver directly throws TypeError (getter-only)', () => {
+    const mapData = buildTutorialMap();
+    const state = new GameState(false, false, 'tutorial', null, mapData);
+    assert.throws(() => { state.gameOver = true; }, TypeError);
+  });
+});

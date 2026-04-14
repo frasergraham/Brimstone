@@ -140,6 +140,7 @@ export class PlanSimState {
     this.tiles            = realState.tiles;          // read-only reference
     this.phase            = realState.phase;
     this.round            = realState.round ?? 1;
+    this.cycleConfig      = realState.cycleConfig ?? null;
     this.witchObjectives  = realState.witchObjectives;
     this.nodeScore        = realState.nodeScore;
     this.fogOfWar         = realState.fogOfWar;
@@ -260,13 +261,27 @@ export class PlanSimState {
 // ── Scoring-phase helpers ───────────────────────────────────────────────────────
 // Scoring happens at DAWN (cycle pos 0) and DUSK (cycle pos 4).
 // Returns the number of rounds until the next scoring check (0 = this round).
+// When cycleConfig is provided (campaign missions), scans the custom phase array.
 const CYCLE_LENGTH = 8;
 
-export function roundsUntilScoring(round) {
-  const r = ((round || 1) - 1) % CYCLE_LENGTH;
-  if (r === 0 || r === 4) return 0; // scoring this round (DAWN or DUSK)
-  if (r < 4) return 4 - r;          // rounds until DUSK
-  return CYCLE_LENGTH - r;           // rounds until next DAWN
+export function roundsUntilScoring(round, cycleConfig = null) {
+  if (!cycleConfig) {
+    const r = ((round || 1) - 1) % CYCLE_LENGTH;
+    if (r === 0 || r === 4) return 0; // scoring this round (DAWN or DUSK)
+    if (r < 4) return 4 - r;          // rounds until DUSK
+    return CYCLE_LENGTH - r;           // rounds until next DAWN
+  }
+  const { phases, loop } = cycleConfig;
+  const len = phases.length;
+  const currentIdx = loop ? ((round || 1) - 1) % len : (round || 1) - 1;
+  if (currentIdx >= len) return Infinity;
+  if (phases[currentIdx] === 'dawn' || phases[currentIdx] === 'dusk') return 0;
+  for (let offset = 1; offset < len; offset++) {
+    const i = loop ? (currentIdx + offset) % len : currentIdx + offset;
+    if (i >= len) return Infinity;
+    if (phases[i] === 'dawn' || phases[i] === 'dusk') return offset;
+  }
+  return Infinity;
 }
 
 // ── Node feasibility scoring ────────────────────────────────────────────────────

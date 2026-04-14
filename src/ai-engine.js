@@ -185,7 +185,7 @@ export function assessBoard(sim) {
 
   // Scoring-phase timing
   const round = sim.round;
-  const roundsToScoring = roundsUntilScoring(round);
+  const roundsToScoring = roundsUntilScoring(round, sim.cycleConfig);
 
   // Count enemy units near witch for outnumbered check
   const enemiesNearWitch = witch ? visibleHeroes.filter(h =>

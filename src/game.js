@@ -77,7 +77,8 @@ export const WIN_REASON = {
 };
 
 // ── Phase cycle ─────────────────────────────────────────────────────────────
-// One full cycle = 8 rounds: DAWN(1) → DAY(3) → DUSK(1) → NIGHT(3)
+// Default cycle = 8 rounds: DAWN(1) → DAY(3) → DUSK(1) → NIGHT(3)
+// Campaign missions may override this with a custom cycleConfig.
 // Attrition schedule lives in src/post-round-effects.js (attritionForCycle).
 const CYCLE_LENGTH = 8;
 
@@ -87,6 +88,17 @@ export const Phase = Object.freeze({
   DUSK:  'dusk',
   NIGHT: 'night',
 });
+
+/** Default 8-step phase sequence — used when no custom cycleConfig is set. */
+export const DEFAULT_CYCLE_PHASES = Object.freeze([
+  Phase.DAWN, Phase.DAY, Phase.DAY, Phase.DAY,
+  Phase.DUSK, Phase.NIGHT, Phase.NIGHT, Phase.NIGHT,
+]);
+
+/** Effective cycle length, respecting custom cycleConfig if present. */
+export function getCycleLength(cycleConfig = null) {
+  return cycleConfig?.phases?.length ?? CYCLE_LENGTH;
+}
 
 /** @deprecated Use string literals 'hero'/'witch' or getFaction(id) instead. */
 export const Player = Object.freeze({ HERO: 'hero', WITCH: 'witch' });
@@ -112,12 +124,18 @@ export function computeActionsForPlayer(playerId, faction, phase, entities, node
   return factionObj.computeBudget(phase, extras, nodeBonus);
 }
 
-function phaseForRound(round) {
-  const r = (round - 1) % CYCLE_LENGTH;
-  if (r === 0)            return Phase.DAWN;
-  if (r >= 1 && r <= 3)  return Phase.DAY;
-  if (r === 4)            return Phase.DUSK;
-  return Phase.NIGHT;
+function phaseForRound(round, cycleConfig = null) {
+  if (!cycleConfig) {
+    const r = (round - 1) % CYCLE_LENGTH;
+    if (r === 0)            return Phase.DAWN;
+    if (r >= 1 && r <= 3)  return Phase.DAY;
+    if (r === 4)            return Phase.DUSK;
+    return Phase.NIGHT;
+  }
+  const { phases, loop } = cycleConfig;
+  const idx = round - 1;
+  if (loop) return phases[idx % phases.length];
+  return phases[Math.min(idx, phases.length - 1)];
 }
 
 const PHASE_ICON = {
@@ -127,7 +145,7 @@ const PHASE_ICON = {
   [Phase.NIGHT]: '🌙',
 };
 
-export { PHASE_ICON, phaseForRound };
+export { PHASE_ICON, phaseForRound, CYCLE_LENGTH };
 
 export class GameState {
   /**
@@ -218,7 +236,7 @@ export class GameState {
     this.actionsLeft  = computeActions('hero', Phase.DAWN, []);
     this.log = [
       `🌅 Dawn breaks over Caleb's Hollow. ${this.hero.displayName} stirs at the Inn.`,
-      `Three Power Nodes: ${this.witchObjectives.map(o => o.label).join(', ')}.`,
+      `${this.witchObjectives.length} Power Node${this.witchObjectives.length !== 1 ? 's' : ''}: ${this.witchObjectives.map(o => o.label).join(', ')}.`,
       `⚔ Hold 2+ nodes at each dawn/dusk to score. First to 4 points wins. Three cycles — then darkness claims Caleb's Hollow.`,
     ];
 
@@ -256,6 +274,10 @@ export class GameState {
     // ── Campaign / custom victory ──────────────────────────────────────────
     // When set, checked first by checkVictory(). Return { winner, winReason, log? } or null.
     this.victoryDelegate = null;
+
+    // Custom phase cycle (campaign missions). null = use default 8-step cycle.
+    // Shape: { phases: string[], loop: boolean }
+    this.cycleConfig = null;
 
     // Attrition level: hazard damage dealt to exposed units (see attritionForCycle).
     this.attritionLevel    = 1;
@@ -536,7 +558,7 @@ export class GameState {
     this.entities.forEach(e => e.resetTurn());
     this.round++;
     const prevPhase = this.phase;
-    this.phase = phaseForRound(this.round);
+    this.phase = phaseForRound(this.round, this.cycleConfig);
 
     if (this.phase !== prevPhase) {
       this._announcePhaseChange(prevPhase, this.phase);
@@ -550,7 +572,8 @@ export class GameState {
     this.postRoundEvents = applyPostRoundEffects(this);
 
     if (this.phase === Phase.DAWN) {
-      const cycle    = Math.ceil(this.round / CYCLE_LENGTH);
+      const effectiveCycleLength = this.cycleConfig?.phases?.length ?? CYCLE_LENGTH;
+      const cycle    = Math.ceil(this.round / effectiveCycleLength);
       const newLevel = attritionForCycle(cycle);
       this.attritionChanged = newLevel !== this.attritionLevel;
       this.attritionLevel   = newLevel;

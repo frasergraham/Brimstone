@@ -102,6 +102,27 @@ describe('createCompletedGame', () => {
     const count = db.prepare('SELECT COUNT(*) as n FROM completed_games WHERE game_id = ?').get(id).n;
     assert.equal(count, 1);
   });
+
+  test('stores finalEntitiesJson for game-over round', () => {
+    const id = 'test-' + randomUUID();
+    const p  = makePlayer('create-fe');
+    const state = new GameState(true, false);
+    const round1 = makeRound(1, state);
+    const round2 = makeRound(2, state);
+    // Simulate game-over round with finalEntities
+    round2.finalEntitiesJson = JSON.stringify([
+      { id: 'e1', col: 3, row: 4, hp: 10, type: 'hero', owner: 'hero' },
+    ]);
+    createGame(id, p.id, null, [round1, round2]);
+
+    const rows = getCompletedGameRounds(id);
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].final_entities_json, null);
+    assert.ok(rows[1].final_entities_json, 'Last round should have final_entities_json');
+    const parsed = JSON.parse(rows[1].final_entities_json);
+    assert.equal(parsed[0].id, 'e1');
+    assert.equal(parsed[0].col, 3);
+  });
 });
 
 // ── getCompletedGames ─────────────────────────────────────────────────────────
