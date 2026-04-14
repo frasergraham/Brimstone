@@ -63,6 +63,9 @@ export class UIController {
     this._arcEntityCol    = null;    // hex col of arc menu origin
     this._arcEntityRow    = null;    // hex row of arc menu origin
 
+    this._undoBtnRaf      = null;    // rAF id for undo-button pan/zoom tracking
+    this._pendingUndoPick = null;    // { entityIds[] } — disambig in flight
+
     this._touchStart  = null;
     this._pinchDist   = null;
     this._isDragging  = false;
@@ -623,6 +626,7 @@ export class UIController {
 
   /** Exit planning mode (called after resolution completes). */
   exitPlanningMode() {
+    this._stopUndoBtnTracking();
     this._planMode      = false;
     // NOTE: _planSubmitted is intentionally NOT reset here. It guards against
     // a double-fire of the submit button (touchend + click on mobile, or a
@@ -930,6 +934,8 @@ export class UIController {
     this.onPlanActionAdded?.(action);
     this._refreshPlanOverlay();
     this._renderPlanPanel();
+    this._refreshUndoButtons();
+    this._startUndoBtnTracking();
   }
 
   /** Recompute ghost overlay from the current plan and push to renderer. */
@@ -948,6 +954,162 @@ export class UIController {
     this.renderer.planGhostSteps = steps;
   }
 
+  /**
+   * Group every planned unit by the hex where their LAST action resolves.
+   * Used to place floating [UNDO] buttons above each unit's projected end hex.
+   * @returns {Array<{col:number,row:number,entityIds:any[]}>} buckets keyed by end hex.
+   */
+  _computeLastActionHexes() {
+    if (!this._planMode || this._planSubmitted) return [];
+
+    const out = new Map(); // "col,row" -> { col, row, entityIds: [] }
+    const steps = this.renderer?.planGhostSteps;
+    const finalPositions = steps?.length ? steps[steps.length - 1].positions : null;
+
+    for (const [entityId, queue] of this._unitPlans) {
+      if (!queue || queue.length < 1) continue;
+
+      let pos = finalPositions?.get(entityId) ?? null;
+      if (!pos) {
+        const ent = this.state?.entities?.find(e => e.id === entityId);
+        if (ent) pos = { col: ent.col, row: ent.row };
+      }
+      if (!pos) continue;
+
+      const key = `${pos.col},${pos.row}`;
+      let bucket = out.get(key);
+      if (!bucket) {
+        bucket = { col: pos.col, row: pos.row, entityIds: [] };
+        out.set(key, bucket);
+      }
+      bucket.entityIds.push(entityId);
+    }
+    return [...out.values()];
+  }
+
+  /** Render (or clear) floating UNDO buttons for the current plan state. */
+  _refreshUndoButtons() {
+    const layer = this._el('undo-button-layer');
+    if (!layer) return;
+
+    if (!this._planMode || this._planSubmitted || !this.renderer || !this.canvas) {
+      if ((layer.childNodes?.length ?? 0)) layer.innerHTML = '';
+      return;
+    }
+
+    const buckets = this._computeLastActionHexes();
+    if (buckets.length === 0) {
+      if ((layer.childNodes?.length ?? 0)) layer.innerHTML = '';
+      return;
+    }
+
+    const canvasRect = this.canvas.getBoundingClientRect();
+    const scale = canvasRect.width / this.canvas.width;
+    const hexScreenPx = this.renderer.hexSize * scale * this.renderer.zoomLevel;
+
+    // Rebuild — bucket count is tiny (≤ faction unit count).
+    layer.innerHTML = '';
+    for (const b of buckets) {
+      const { x, y } = this.renderer.hexToCanvasPos(b.col, b.row);
+      const sx = canvasRect.left + x * scale;
+      const sy = canvasRect.top  + y * scale - hexScreenPx * 0.85;
+
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'undo-float-btn';
+      btn.textContent = 'UNDO';
+      btn.style.left = `${sx}px`;
+      btn.style.top  = `${sy}px`;
+      const bucketRef = b; // capture
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._onUndoButtonClicked(bucketRef);
+      });
+      btn.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        this._onUndoButtonClicked(bucketRef);
+      }, { passive: false });
+      layer.appendChild(btn);
+    }
+  }
+
+  /** Dispatch an undo click — single unit → undo; multiple → disambig popup. */
+  _onUndoButtonClicked(bucket) {
+    if (!bucket || !bucket.entityIds || bucket.entityIds.length === 0) return;
+    if (bucket.entityIds.length === 1) {
+      this._undoLastActionFor(bucket.entityIds[0]);
+    } else {
+      this._showUndoDisambig(bucket);
+    }
+  }
+
+  /** Pop the last planned action for the given entity and refresh UI. */
+  _undoLastActionFor(entityId) {
+    const queue = this._unitPlans.get(entityId);
+    if (!queue || queue.length === 0) return;
+    queue.pop();
+    if (queue.length === 0) this._unitPlans.delete(entityId);
+
+    // Spec: clicking undo also deselects the unit.
+    this._clearSelection();
+    this._refreshPlanOverlay();
+    this._renderPlanPanel();
+    this._refreshUndoButtons();
+    this.onRedraw();
+  }
+
+  /** Show the arc disambig popup for choosing which unit to undo on a shared hex. */
+  _showUndoDisambig(bucket) {
+    const units = bucket.entityIds
+      .map(id => this.state?.entities?.find(e => e.id === id))
+      .filter(u => u);
+    if (units.length === 0) return;
+    this._pendingUndoPick = { entityIds: bucket.entityIds.slice() };
+    this._showArcDisambig(units, 'undo_pick', { col: bucket.col, row: bucket.row }, [
+      { label: 'Undo', action: 'undo_cancel', color: '#d23c3c' },
+    ]);
+  }
+
+  /**
+   * RAF loop: keep undo buttons pinned to their hexes during pan/zoom.
+   * Self-terminates when the plan becomes empty or planning mode exits —
+   * re-started on demand by `_refreshUndoButtons()` whenever buttons are drawn.
+   */
+  _startUndoBtnTracking() {
+    if (this._undoBtnRaf) return;
+    const tick = () => {
+      this._undoBtnRaf = null;
+      if (!this._planMode || this._planSubmitted) {
+        const layer = this._el('undo-button-layer');
+        if (layer && (layer.childNodes?.length ?? 0)) layer.innerHTML = '';
+        return;
+      }
+      // If there are no buttons to show, stop the loop — _refreshUndoButtons()
+      // will restart it the next time a plan action is added.
+      if (this._unitPlans.size === 0) {
+        const layer = this._el('undo-button-layer');
+        if (layer && (layer.childNodes?.length ?? 0)) layer.innerHTML = '';
+        return;
+      }
+      this._refreshUndoButtons();
+      // Only keep ticking while there are buttons on screen.
+      const layer = this._el('undo-button-layer');
+      if (layer && (layer.childNodes?.length ?? 0) > 0) {
+        this._undoBtnRaf = requestAnimationFrame(tick);
+      }
+    };
+    this._undoBtnRaf = requestAnimationFrame(tick);
+  }
+
+  _stopUndoBtnTracking() {
+    if (this._undoBtnRaf) {
+      cancelAnimationFrame(this._undoBtnRaf);
+      this._undoBtnRaf = null;
+    }
+    const layer = this._el('undo-button-layer');
+    if (layer && (layer.childNodes?.length ?? 0)) layer.innerHTML = '';
+  }
+
   /** Submit the current plan (flattened to interleaved PlanAction[]). */
   _doSubmitPlan() {
     if (this._planSubmitted) return;
@@ -962,6 +1124,7 @@ export class UIController {
   markPlanSubmitted() {
     if (this._planSubmitted) return;
     this._planSubmitted = true;
+    this._stopUndoBtnTracking();
     this._clearSelection();
 
     const panel = this._el('plan-panel');
@@ -1031,6 +1194,7 @@ export class UIController {
         }
         this._refreshPlanOverlay();
         this._renderPlanPanel();
+        this._refreshUndoButtons();
         // Refresh highlights for the selected entity after plan changes
         if (this._selectedEntity) this._selectEntity(this._selectedEntity);
         this.onRedraw();
@@ -2425,6 +2589,24 @@ export class UIController {
       if (unit) this._selectEntity(unit);
       this._updateSidebar();
       this.onRedraw();
+      return;
+    }
+
+    if (action === 'undo_pick') {
+      const pick = this._pendingUndoPick;
+      this._pendingUndoPick = null;
+      hideActionPopup(this);
+      if (!pick) return;
+      const rawId = button.dataset.unitId;
+      // Entity IDs in _unitPlans may be numbers or strings; dataset values are strings.
+      const entityId = pick.entityIds.find(id => String(id) === String(rawId)) ?? rawId;
+      this._undoLastActionFor(entityId);
+      return;
+    }
+
+    if (action === 'undo_cancel') {
+      this._pendingUndoPick = null;
+      hideActionPopup(this);
       return;
     }
 
