@@ -282,6 +282,72 @@ function _pickCornerBuildings(rand, tiles) {
   return result;
 }
 
+// Battle mode: place 5 INNs on one side of the river and 5 GRAVEYARDs on the other.
+// Buildings are spread out, avoid edges and center, and get connected to the road network.
+function _placeBattleSpawnBuildings(rand, tiles, riverMap, riverEW) {
+  const innSide  = rand() < 0.5 ? 'left' : 'right';
+  const gravSide = innSide === 'left' ? 'right' : 'left';
+
+  const EDGE_MARGIN = 3;
+  const hasRiverNeighbor = (col, row) =>
+    getNeighbors(col, row).some(n => tiles.get(hexKey(n.col, n.row))?.type === TileType.RIVER);
+
+  // Collect candidates on each side — exclude edges and center third of map
+  const collectCandidates = (side) => {
+    const cands = [];
+    for (const [, t] of tiles) {
+      if (t.type !== TileType.GRASS) continue;
+      if (t.col < EDGE_MARGIN || t.col > MAP_COLS - 1 - EDGE_MARGIN) continue;
+      if (t.row < EDGE_MARGIN || t.row > MAP_ROWS - 1 - EDGE_MARGIN) continue;
+      if (hasRiverNeighbor(t.col, t.row)) continue;
+      if (riverSide(t.col, t.row, riverMap, riverEW) !== side) continue;
+      // Exclude center third — buildings should be away from the middle
+      if (riverEW) {
+        // E-W river splits top/bottom; exclude center rows
+        const centerMin = Math.floor(MAP_ROWS / 3);
+        const centerMax = Math.floor(MAP_ROWS * 2 / 3);
+        if (t.row >= centerMin && t.row <= centerMax) continue;
+      } else {
+        // N-S river splits left/right; exclude center columns
+        const centerMin = Math.floor(MAP_COLS / 3);
+        const centerMax = Math.floor(MAP_COLS * 2 / 3);
+        if (t.col >= centerMin && t.col <= centerMax) continue;
+      }
+      cands.push({ col: t.col, row: t.row });
+    }
+    return cands;
+  };
+
+  const pickSpread = (cands, count, minDist) => {
+    shuffle(cands, rand);
+    const placed = [];
+    for (const c of cands) {
+      if (placed.length >= count) break;
+      if (placed.some(p => hexDistance(p.col, p.row, c.col, c.row) < minDist)) continue;
+      placed.push(c);
+    }
+    // Relax separation if not enough found
+    if (placed.length < count) {
+      for (const c of cands) {
+        if (placed.length >= count) break;
+        if (!placed.some(p => p.col === c.col && p.row === c.row)) placed.push(c);
+      }
+    }
+    return placed;
+  };
+
+  const innCands  = collectCandidates(innSide);
+  const gravCands = collectCandidates(gravSide);
+
+  const innPositions  = pickSpread(innCands,  5, 5);
+  const gravPositions = pickSpread(gravCands, 5, 5);
+
+  const result = [];
+  for (const p of innPositions)  result.push({ col: p.col, row: p.row, building: BuildingType.INN });
+  for (const p of gravPositions) result.push({ col: p.col, row: p.row, building: BuildingType.GRAVEYARD });
+  return result;
+}
+
 // Build a lookup map from the generated river path (captured before tiles are mutated).
 // N-S river: row→col map.  E-W river: col→row map.
 // E-W rivers may have vertical detour tiles (two tiles in one column); the last row
@@ -667,8 +733,11 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
     if (t) t.type = TileType.RIVER;
   }
 
-  // 3. Place INN and GRAVEYARD in opposite corners, then scatter remaining buildings
-  const cornerPlacements = _pickCornerBuildings(rand, tiles);
+  // 3. Place INN and GRAVEYARD — battle maps get 5+5 faction buildings on opposite
+  //    river sides; other maps use single INN/GRAVEYARD in opposite corners.
+  const cornerPlacements = mapSize === 'battle'
+    ? _placeBattleSpawnBuildings(rand, tiles, riverMap, riverEW)
+    : _pickCornerBuildings(rand, tiles);
   const cornerKeys       = new Set(cornerPlacements.map(b => hexKey(b.col, b.row)));
   const { allPlacements: villagePlacements, villageGroups } =
     _generateVillages(rand, tiles, cfg.villages, cfg.minVillageDist, cornerKeys, riverMap, riverEW);
@@ -900,49 +969,75 @@ export function generateMultipleStarts(tiles, primaryStart, count, minSep = 2, s
 
 /**
  * Generate spawn positions for battle mode.
- * Heroes spawn in the leftmost 3 columns; witches in the rightmost 3.
- * Returns `count` positions spread at least `minSep` hexes apart.
+ * First N players (up to building count) spawn at faction buildings (INN for hero,
+ * GRAVEYARD for witch). Beyond that, overflow players get a neighboring tile of each
+ * building, cycling through the sequence.
  *
  * @param {Map<string,Tile>} tiles
  * @param {'hero'|'witch'} faction
  * @param {number} count
- * @param {number} [minSep=2]
+ * @param {number} [minSep=2]  (kept for API compat; not used by building-based logic)
  * @returns {{ col: number, row: number }[]}
  */
 export function generateBattleStarts(tiles, faction, count, minSep = 2) {
-  const cols = faction === 'hero'
-    ? [0, 1, 2]
-    : [MAP_COLS - 3, MAP_COLS - 2, MAP_COLS - 1];
+  const targetBuilding = faction === 'hero' ? BuildingType.INN : BuildingType.GRAVEYARD;
 
-  // Collect all passable candidate tiles in the faction's starting columns
-  const candidates = [];
+  // Find all faction buildings on the map
+  const buildings = [];
   for (const [, t] of tiles) {
-    if (!cols.includes(t.col)) continue;
-    if (t.type === TileType.RIVER) continue;
-    candidates.push({ col: t.col, row: t.row });
+    if (t.type === TileType.BUILDING && t.building === targetBuilding) {
+      buildings.push({ col: t.col, row: t.row });
+    }
   }
 
-  // Shuffle deterministically (caller can seed via tiles order)
-  for (let i = candidates.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
-  }
-
-  // Greedily pick positions that respect minSep
-  const placed = [];
-  for (const cand of candidates) {
-    if (placed.length >= count) break;
-    const tooClose = placed.some(p => hexDistance(cand.col, cand.row, p.col, p.row) < minSep);
-    if (!tooClose) placed.push({ col: cand.col, row: cand.row });
-  }
-
-  // If not enough (tiny map), relax separation
-  if (placed.length < count) {
+  // Fallback: if no faction buildings found (e.g. non-battle map), use edge-column logic
+  if (buildings.length === 0) {
+    const cols = faction === 'hero' ? [0, 1, 2] : [MAP_COLS - 3, MAP_COLS - 2, MAP_COLS - 1];
+    const candidates = [];
+    for (const [, t] of tiles) {
+      if (!cols.includes(t.col)) continue;
+      if (t.type === TileType.RIVER) continue;
+      candidates.push({ col: t.col, row: t.row });
+    }
+    for (let i = candidates.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+    }
+    const placed = [];
     for (const cand of candidates) {
       if (placed.length >= count) break;
-      if (!placed.some(p => p.col === cand.col && p.row === cand.row)) {
+      if (!placed.some(p => hexDistance(cand.col, cand.row, p.col, p.row) < minSep)) {
         placed.push({ col: cand.col, row: cand.row });
       }
+    }
+    return placed;
+  }
+
+  const placed = [];
+  const usedKeys = new Set();
+
+  for (let i = 0; i < count; i++) {
+    const bldg = buildings[i % buildings.length];
+    if (i < buildings.length) {
+      // First pass: spawn at the building itself
+      placed.push({ col: bldg.col, row: bldg.row });
+      usedKeys.add(hexKey(bldg.col, bldg.row));
+    } else {
+      // Overflow: pick a passable neighbor of the building not already used
+      const neighbors = getNeighbors(bldg.col, bldg.row);
+      let found = false;
+      for (const n of neighbors) {
+        const k = hexKey(n.col, n.row);
+        if (usedKeys.has(k)) continue;
+        const t = tiles.get(k);
+        if (!t || t.type === TileType.RIVER) continue;
+        placed.push({ col: n.col, row: n.row });
+        usedKeys.add(k);
+        found = true;
+        break;
+      }
+      // Fallback: place at the building itself
+      if (!found) placed.push({ col: bldg.col, row: bldg.row });
     }
   }
 
