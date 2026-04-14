@@ -1,5 +1,35 @@
 [
   {
+    "version": "1.3.34",
+    "date": "2026-04-14",
+    "summary": "New features, and bug fixes",
+    "notes": [
+      "Show per-unit attack count badges on defender picker radial menu",
+      "Hide unseen hexes in full fog instead of rendering black overlay",
+      "Balance buildings and nodes across river sides",
+      "Allow view-only unit selection while waiting for opponents",
+      "Admin battle controls — kick player, spectate, and game dates",
+      "Stub _showActionPopup in multi-unit test to prevent rAF hang",
+      "Render bridge road/railings along river-crossing direction",
+      "Tutorial completion now returns to menu",
+      "Prevent power node overlap and road dead-ends at river",
+      "Repair full-game replay — truncation, flickering, and missing final state",
+      "Nudge emoji with text button label",
+      "Custom mission phase cycles for campaign narrative control",
+      "Duplicate exploration results showing in floater",
+      "Campaign mission 1 easier: fewer and weaker zombies",
+      "Contextual confirmation prompts to all game list X buttons",
+      "Campaign missions leaking into the SP saves list",
+      "Package-lock.json version to 1.3.33",
+      "Campaign next mission and quit/resign buttons in main menu game list",
+      "Sync package-lock.json version to 1.3.33",
+      "Sync package-lock.json version to 1.3.33",
+      "Sync package-lock.json",
+      "Sync package-lock.json version to 1.3.33",
+      "Sync package-lock.json"
+    ]
+  },
+  {
     "version": "1.3.33",
     "date": "2026-04-12",
     "summary": "New features, bug fixes, and improvements",
