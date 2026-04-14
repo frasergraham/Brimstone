@@ -3,7 +3,7 @@
 import { describe, test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { GameState, Phase, phaseForRound, getCycleLength, DEFAULT_CYCLE_PHASES } from '../src/game.js';
-import { EntityType, createMinion, createZombie, createSurvivor, markRosterUsedByName, resetRoster, SURVIVOR_ROSTER } from '../src/entities.js';
+import { EntityType, createMinion, createZombie, createWoodGolem, createSurvivor, markRosterUsedByName, resetRoster, SURVIVOR_ROSTER } from '../src/entities.js';
 import { hexKey, getNeighbors } from '../src/hex.js';
 import {
   Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves,
@@ -496,6 +496,85 @@ describe('Wave spawner', () => {
     assert.equal(spawned[0].attack, 1, 'zombie attack should be overridden to 1');
     assert.equal(spawned[0].hp, 2, 'zombie HP should remain at default');
   });
+
+  test('hero_kills trigger fires when heroKills >= count', () => {
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    state.round = 1;
+    state.heroKills = 2;
+
+    const waves = [
+      {
+        id: 'golem-awakens',
+        trigger: 'hero_kills',
+        count: 3,
+        units: [{ type: 'wood_golem', spawnAt: { col: 4, row: 4 }, overrides: { maxHp: 2, hp: 2, attack: 1, defense: 1 } }],
+      },
+    ];
+    const createFn = (type, col, row) => createWoodGolem(col, row, 'witch');
+
+    // Below threshold: no spawn
+    const logs1 = processWaves(state, waves, createFn);
+    assert.equal(state.entities.filter(e => e.type === EntityType.WOOD_GOLEM).length, 0);
+    assert.equal(logs1.length, 0);
+
+    // Threshold met: spawn
+    state.heroKills = 3;
+    const logs2 = processWaves(state, waves, createFn);
+    const golems = state.entities.filter(e => e.type === EntityType.WOOD_GOLEM);
+    assert.equal(golems.length, 1);
+    assert.equal(golems[0].hp, 2);
+    assert.equal(golems[0].attack, 1);
+    assert.equal(golems[0].defense, 1);
+    assert.equal(logs2.length, 1);
+  });
+
+  test('hero_kills trigger only fires once', () => {
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    state.round = 1;
+    state.heroKills = 5;
+
+    const waves = [
+      {
+        id: 'golem-awakens',
+        trigger: 'hero_kills',
+        count: 3,
+        units: [{ type: 'wood_golem', spawnAt: { col: 4, row: 4 }, overrides: { maxHp: 2, hp: 2, attack: 1, defense: 1 } }],
+      },
+    ];
+    const createFn = (type, col, row) => createWoodGolem(col, row, 'witch');
+
+    processWaves(state, waves, createFn);
+    processWaves(state, waves, createFn);
+    processWaves(state, waves, createFn);
+
+    const golems = state.entities.filter(e => e.type === EntityType.WOOD_GOLEM);
+    assert.equal(golems.length, 1, 'kill-triggered wave should only fire once');
+  });
+
+  test('processWaves uses unit.spawnLog when provided', () => {
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    state.round = 2;
+
+    const waves = [
+      {
+        round: 2,
+        units: [{
+          type: 'zombie',
+          spawnAt: { col: 4, row: 4 },
+          spawnLog: '🗿 A custom message!',
+        }],
+      },
+    ];
+    const createFn = (type, col, row) => createZombie(col, row, 'witch');
+    const logs = processWaves(state, waves, createFn);
+    assert.equal(logs[0], '🗿 A custom message!');
+  });
 });
 
 // ── Mission 1 balance ───────────────────────────────────────────────────────
@@ -503,24 +582,42 @@ describe('Wave spawner', () => {
 describe('Mission 1 (The Awakening) balance', () => {
   const mission1 = hollowDef.missions.find(m => m.id === 'prologue');
 
-  test('has 2 initial enemy units', () => {
-    assert.equal(mission1.enemyUnits.length, 2);
+  test('has 3 initial zombies (enough to trigger the golem)', () => {
+    assert.equal(mission1.enemyUnits.length, 3);
+    for (const eu of mission1.enemyUnits) {
+      assert.equal(eu.type, 'zombie');
+    }
   });
 
-  test('total enemies across all waves is 2', () => {
-    const waveCount = mission1.waves.reduce((sum, w) => sum + w.units.length, 0);
-    assert.equal(waveCount, 2);
-  });
-
-  test('all enemies have attack override of 1', () => {
+  test('initial zombies have attack override of 1', () => {
     for (const eu of mission1.enemyUnits) {
       assert.equal(eu.overrides?.attack, 1, `initial enemy at (${eu.col},${eu.row}) should have attack 1`);
     }
-    for (const wave of mission1.waves) {
-      for (const u of wave.units) {
-        assert.equal(u.overrides?.attack, 1, `wave ${wave.round} enemy should have attack 1`);
-      }
-    }
+  });
+
+  test('single kill-triggered wave spawns a weakened wood golem after 3 kills', () => {
+    assert.equal(mission1.waves.length, 1);
+    const wave = mission1.waves[0];
+    assert.equal(wave.trigger, 'hero_kills');
+    assert.equal(wave.count, 3);
+    assert.equal(wave.units.length, 1);
+    const unit = wave.units[0];
+    assert.equal(unit.type, 'wood_golem');
+    // Weaker than the standard wood golem (maxHp 3, attack 2, defense 3).
+    assert.equal(unit.overrides.maxHp, 2);
+    assert.equal(unit.overrides.hp, 2);
+    assert.equal(unit.overrides.attack, 1);
+    assert.equal(unit.overrides.defense, 1);
+  });
+
+  test('phase cycle is daytime-only', () => {
+    assert.deepEqual(mission1.phaseCycle.phases, ['dawn', 'day', 'day', 'day']);
+    assert.equal(mission1.phaseCycle.loop, true);
+  });
+
+  test('win condition is eliminate_all, lose condition is hero_killed', () => {
+    assert.equal(mission1.objectives.win.type, 'eliminate_all');
+    assert.equal(mission1.objectives.lose.type, 'hero_killed');
   });
 
   test('aiBudgetBonus is 0', () => {

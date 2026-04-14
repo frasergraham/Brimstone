@@ -559,8 +559,8 @@ const MISSIONS = [
     id:       'prologue',
     title:    'The Awakening',
     chapter:  1,
-    briefing: `You awaken at the Caleb's Hollow Inn to the sound of screaming. The dead walk the streets — shambling corpses driven by an unseen malice. Grab what you can and clear the village before more arrive.`,
-    victoryText: `The last corpse crumbles to dust. Silence returns to Caleb's Hollow's streets, but you sense this is only the beginning. A survivor stumbles from the wreckage — together, you may stand a chance against what's coming.`,
+    briefing: `You awaken at the Caleb's Hollow Inn to the sound of screaming. Shambling corpses stagger through the streets — but something worse stirs behind them, a crude thing of wood and bone answering to their blood. Cut down the dead and face what rises in their wake.`,
+    victoryText: `The golem crumbles into splintered timber and dust. Silence returns to Caleb's Hollow's streets, but you sense this is only the beginning. A survivor stumbles from the wreckage — together, you may stand a chance against what's coming.`,
     defeatText:  `The dead overwhelm you. Caleb's Hollow falls before the fight even begins.`,
 
     // Daytime only — the opening mission takes place entirely in daylight.
@@ -577,10 +577,20 @@ const MISSIONS = [
     enemyUnits: [
       { type: 'zombie', col: 3, row: 2, overrides: { attack: 1 } },
       { type: 'zombie', col: 6, row: 5, overrides: { attack: 1 } },
+      { type: 'zombie', col: 4, row: 6, overrides: { attack: 1 } },
     ],
     waves: [
-      { round: 3, units: [{ type: 'zombie', spawnAt: 'map_edge', overrides: { attack: 1 } }] },
-      { round: 5, units: [{ type: 'zombie', spawnAt: 'map_edge', overrides: { attack: 1 } }] },
+      {
+        id: 'golem-awakens',
+        trigger: 'hero_kills',
+        count: 3,
+        units: [{
+          type: 'wood_golem',
+          spawnAt: 'map_edge',
+          overrides: { maxHp: 2, hp: 2, attack: 1, defense: 1 },
+          spawnLog: '🗿 A crude wood-and-bone golem lurches out of the alley!',
+        }],
+      },
     ],
     aiPersonality: 'balanced',
     aiBudgetBonus: 0,
@@ -590,7 +600,7 @@ const MISSIONS = [
     maxDiscoverableSurvivors:  0,
 
     objectives: {
-      win:  { type: 'eliminate_all', reason: 'The streets of Caleb\'s Hollow are clear.' },
+      win:  { type: 'eliminate_all', reason: "The golem shatters — Caleb's Hollow is silent again." },
       lose: { type: 'hero_killed' },
     },
 

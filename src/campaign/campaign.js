@@ -141,7 +141,18 @@ export function processWaves(state, waves, createEnemyFn) {
   if (!waves) return [];
   const logs = [];
   for (const wave of waves) {
-    if (wave.round !== state.round) continue;
+    // Round-based trigger (legacy)
+    if (wave.round !== undefined && wave.round !== state.round) continue;
+
+    // Kill-count trigger — fires once when state.heroKills crosses threshold
+    if (wave.trigger === 'hero_kills') {
+      if ((state.heroKills ?? 0) < wave.count) continue;
+      if (!state._firedWaves) state._firedWaves = new Set();
+      const key = wave.id ?? `kills:${wave.count}`;
+      if (state._firedWaves.has(key)) continue;
+      state._firedWaves.add(key);
+    }
+
     for (const unit of wave.units) {
       const pos = resolveSpawnPosition(state, unit.spawnAt);
       if (!pos) continue;
@@ -149,7 +160,7 @@ export function processWaves(state, waves, createEnemyFn) {
       if (entity) {
         if (unit.overrides) Object.assign(entity, unit.overrides);
         state.entities.push(entity);
-        logs.push(`🌑 ${entity.displayName} emerges from the shadows!`);
+        logs.push(unit.spawnLog ?? `🌑 ${entity.displayName} emerges from the shadows!`);
       }
     }
   }
