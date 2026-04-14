@@ -3858,6 +3858,34 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   flex-shrink: 0;
 }
 .plan-step-remove:hover { color: #ff3333; }
+
+/* Floating UNDO buttons above each unit's final planned hex */
+#undo-button-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 55;
+}
+.undo-float-btn {
+  position: fixed;
+  transform: translate(-50%, -100%);
+  pointer-events: auto;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #ffd8d8;
+  background: rgba(120, 20, 20, 0.88);
+  border: 1px solid #ff5a5a;
+  border-radius: 10px;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.6);
+  user-select: none;
+  white-space: nowrap;
+  font-family: inherit;
+}
+.undo-float-btn:hover { background: rgba(180, 30, 30, 0.95); color: #fff; }
+.undo-float-btn:active { transform: translate(-50%, -100%) scale(0.95); }
 .plan-panel-footer {
   display: flex;
   gap: 0.4rem;
