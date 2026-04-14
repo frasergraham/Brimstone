@@ -453,8 +453,31 @@ function _pickNodeCluster(rand, tiles, center, forbiddenKeys, startPositions = [
 
 // Pick river tiles suitable as bridge crossings — tiles with passable land on both
 // sides of the river.  Returns up to `maxCount` positions, well-spaced along the
-// river, preferring tiles close to key settlement points.
+// river, preferring tiles close to key settlement points.  Each returned crossing
+// includes specific `leftBank` and `rightBank` neighbour tiles so the road planner
+// can ensure both banks become part of the road graph.
 function _pickRiverCrossings(rand, tiles, riverPath, riverMap, riverEW, keyPoints, minCount, maxCount) {
+  // Rank a bank candidate: prefer already-connected tiles, then clean terrain,
+  // then proximity to key settlement points (lower score = better).
+  const bankRank = (n) => {
+    const t = tiles.get(hexKey(n.col, n.row));
+    if (!t) return 999;
+    let typeRank;
+    switch (t.type) {
+      case TileType.ROAD:
+      case TileType.BRIDGE:
+      case TileType.BUILDING: typeRank = 0; break;
+      case TileType.GRASS:
+      case TileType.DIRT:     typeRank = 1; break;
+      case TileType.FOREST:   typeRank = 2; break;
+      default:                typeRank = 3;
+    }
+    const minKeyDist = keyPoints.length > 0
+      ? Math.min(...keyPoints.map(kp => hexDistance(kp.col, kp.row, n.col, n.row)))
+      : 0;
+    return typeRank * 100 + minKeyDist;
+  };
+
   const candidates = [];
   for (let idx = 0; idx < riverPath.length; idx++) {
     const { col, row } = riverPath[idx];
@@ -469,10 +492,30 @@ function _pickRiverCrossings(rand, tiles, riverPath, riverMap, riverEW, keyPoint
     });
     if (leftNbrs.length === 0 || rightNbrs.length === 0) continue;
 
+    // Pick the best bank on each side (deterministic via shuffle then sort).
+    shuffle(leftNbrs, rand);
+    shuffle(rightNbrs, rand);
+    leftNbrs.sort((a, b) => bankRank(a) - bankRank(b));
+    rightNbrs.sort((a, b) => bankRank(a) - bankRank(b));
+
+    // Try to find a left/right bank pair that are NOT hex-adjacent to each other.
+    // Adjacent banks indicate the river doesn't truly separate them at this tile
+    // (tight bend or pocket) so the bridge wouldn't actually span anything.
+    let leftBank = null, rightBank = null;
+    outer: for (const l of leftNbrs) {
+      for (const r of rightNbrs) {
+        if (hexDistance(l.col, l.row, r.col, r.row) >= 2) {
+          leftBank = l; rightBank = r;
+          break outer;
+        }
+      }
+    }
+    if (!leftBank || !rightBank) continue;
+
     const minKeyDist = keyPoints.length > 0
       ? Math.min(...keyPoints.map(kp => hexDistance(kp.col, kp.row, col, row)))
       : 0;
-    candidates.push({ col, row, idx, score: minKeyDist });
+    candidates.push({ col, row, idx, score: minKeyDist, leftBank, rightBank });
   }
 
   // Sort by proximity to key points (closest first), random tiebreak
@@ -770,14 +813,24 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   const keyPoints = [...cornerPlacements, ...villageGroups.map(v => v.root)];
 
   // Pre-select river crossing points and convert them to bridges.
-  // Adding crossings as key points in the MST ensures roads route through them
-  // rather than dead-ending at the river when the bridge cap is reached.
+  // Each crossing also carries a chosen leftBank/rightBank — passable land
+  // tiles on opposite sides of the river.  We add BOTH banks (not the bridge
+  // tile itself) as MST key points so the spanning tree is forced to route a
+  // road to each side.  An explicit leftBank→rightBank edge is then queued
+  // first so BFS routes across the bridge before any other settlement edges.
   const crossings = _pickRiverCrossings(rand, tiles, riverPath, riverMap, riverEW, keyPoints, cfg.minBridges ?? 1, cfg.bridgeMax);
   for (const c of crossings) {
     const t = tiles.get(hexKey(c.col, c.row));
     if (t) t.type = TileType.BRIDGE;
   }
-  keyPoints.push(...crossings);
+
+  // Track index ranges so the MST can pre-union same-bridge bank pairs.
+  const bankPairIndices = [];
+  for (const c of crossings) {
+    const li = keyPoints.length; keyPoints.push(c.leftBank);
+    const ri = keyPoints.length; keyPoints.push(c.rightBank);
+    bankPairIndices.push([li, ri]);
+  }
 
   const nk = keyPoints.length;
   const interEdges = [];
@@ -791,15 +844,26 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
     allEdges.sort((a, b) => a.d - b.d);
     const parent = Array.from({ length: nk }, (_, i) => i);
     const find = i => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+    // Pre-union bank pairs of the same bridge so the MST doesn't waste a
+    // separate edge reconnecting them — the explicit bridgeBankEdges below
+    // already guarantee that connection.
+    for (const [li, ri] of bankPairIndices) {
+      const a = find(li), b = find(ri);
+      if (a !== b) parent[a] = b;
+    }
     for (const { i, j } of allEdges) {
       if (find(i) !== find(j)) {
         parent[find(i)] = find(j);
         interEdges.push({ from: keyPoints[i], to: keyPoints[j] });
-        if (interEdges.length === nk - 1) break;
       }
     }
   }
 
+  // Prepend bank-to-bank edges so each bridge is routed through first while
+  // the road grid is still empty (giving BFS a clean shortest path).
+  for (const c of crossings) {
+    roadEdges.push({ from: c.leftBank, to: c.rightBank });
+  }
   roadEdges.push(...interEdges);
 
   // Tracks which tiles are already road/bridge so the weighted BFS can
@@ -853,6 +917,28 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
   for (const { from, to } of roadEdges) {
     if (floodConnected(from, to)) continue;
     placeRoad(bfsPath(tiles, from.col, from.row, to.col, to.row, rand, roadTiles, true));
+  }
+
+  // 4b. Bridge repair pass — guarantee every bridge has a road tile adjacent
+  // on each bank.  Step 2 (bank-to-bank MST edges) normally handles this, but
+  // an MST edge re-routed through other roads can leave one bank unconnected.
+  for (const c of crossings) {
+    const bridgeTile = tiles.get(hexKey(c.col, c.row));
+    if (!bridgeTile || bridgeTile.type !== TileType.BRIDGE) continue;
+    const hasRoadNeighborOnBankSide = (bank) => {
+      for (const nk of bridgeTile.roadDirs) {
+        const [nc, nr] = nk.split(',').map(Number);
+        if (nc === bank.col && nr === bank.row) return true;
+        if (hexDistance(nc, nr, bank.col, bank.row) <= 1) return true;
+      }
+      return false;
+    };
+    if (!hasRoadNeighborOnBankSide(c.leftBank)) {
+      placeRoad(bfsPath(tiles, c.col, c.row, c.leftBank.col, c.leftBank.row, rand, roadTiles, true));
+    }
+    if (!hasRoadNeighborOnBankSide(c.rightBank)) {
+      placeRoad(bfsPath(tiles, c.col, c.row, c.rightBank.col, c.rightBank.row, rand, roadTiles, true));
+    }
   }
 
   // 5. Grow forest clusters from seeds

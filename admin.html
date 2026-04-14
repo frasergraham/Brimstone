@@ -274,6 +274,7 @@
       <button class="tab-btn" data-tab="players">Players</button>
       <button class="tab-btn" data-tab="balance">Balance</button>
       <button class="tab-btn" data-tab="campaign">Campaign</button>
+      <button class="tab-btn" data-tab="map-test">Map Test</button>
     </nav>
 
     <!-- ── Dashboard ─────────────────────────────── -->
@@ -442,6 +443,40 @@
         <button class="btn" style="border-color:var(--red);color:var(--red)" onclick="resetStats()">Reset All Stats</button>
       </div>
       <div id="campaign-content"><p class="empty-state">Loading...</p></div>
+    </div>
+
+    <!-- ── Map Test ──────────────────────────────── -->
+    <div id="tab-map-test" class="tab-content">
+      <div class="section">
+        <h2>Map Generation Preview</h2>
+        <p style="color:var(--text-dim);font-size:0.8rem;margin-bottom:0.6rem">
+          Generate and render a map for visual spot-checking.  Pick a size and click Refresh for a new seed.
+        </p>
+        <div class="toolbar">
+          <div style="display:flex;gap:0.5rem;align-items:center">
+            <label style="font-size:0.78rem;color:var(--text-dim)">Size
+              <select id="map-test-size" style="background:var(--bg-section);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:0.78rem;padding:0.2rem 0.4rem;margin-left:0.3rem">
+                <option value="skirmish">Skirmish (9×9)</option>
+                <option value="standard" selected>Standard (13×13)</option>
+                <option value="regional">Regional (17×17)</option>
+                <option value="campaign">Campaign (21×21)</option>
+              </select>
+            </label>
+            <label style="font-size:0.78rem;color:var(--text-dim)">Seed
+              <input id="map-test-seed" type="number" placeholder="(random)" style="background:var(--bg-section);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:0.78rem;padding:0.2rem 0.4rem;width:140px;margin-left:0.3rem">
+            </label>
+          </div>
+          <div style="display:flex;gap:0.4rem">
+            <button class="btn btn-primary" id="map-test-refresh">Refresh (new seed)</button>
+            <button class="btn" id="map-test-rerender">Re-render seed</button>
+          </div>
+        </div>
+        <div id="map-test-status" style="font-size:0.78rem;color:var(--text-dim);margin-bottom:0.5rem"></div>
+        <div style="background:var(--bg);border:1px solid var(--border);padding:0.5rem;text-align:center;overflow:auto">
+          <img id="map-test-image" alt="map preview" style="max-width:100%;display:none">
+          <div id="map-test-empty" style="color:var(--text-dim);padding:2rem">Click Refresh to generate a map.</div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -623,6 +658,7 @@
         if (tabId === 'players')       loadPlayersDetailed();
         if (tabId === 'balance')       loadBalanceStats();
         if (tabId === 'campaign')      loadCampaignStats();
+        if (tabId === 'map-test')      initMapTest();
       }
 
       // Auto-refresh only on dashboard
@@ -1504,6 +1540,44 @@
       } catch (e) {
         alert('Reset failed: ' + e.message);
       }
+    }
+
+    // ── Map Test tab ────────────────────────────────────────────────────────────
+    // Generates a fresh map server-side and shows the rendered PNG for visual
+    // spot-checking (bridge placement, road connectivity, etc.).
+
+    let _mapTestSeed = null;
+
+    function _renderMapTest(seed) {
+      const size = document.getElementById('map-test-size').value;
+      const img    = document.getElementById('map-test-image');
+      const empty  = document.getElementById('map-test-empty');
+      const status = document.getElementById('map-test-status');
+      _mapTestSeed = seed;
+      document.getElementById('map-test-seed').value = seed;
+      status.textContent = `Generating ${size} map (seed ${seed})...`;
+      empty.style.display = 'none';
+      const tokenParam = _token ? `&token=${encodeURIComponent(_token)}` : '';
+      const url = `/admin/api/map-render?seed=${seed}&size=${encodeURIComponent(size)}${tokenParam}&_t=${Date.now()}`;
+      img.onload  = () => { status.textContent = `${size} · seed ${seed}`; img.style.display = ''; };
+      img.onerror = () => { status.textContent = `Failed to render map (seed ${seed})`; img.style.display = 'none'; empty.style.display = ''; };
+      img.src = url;
+    }
+
+    function initMapTest() {
+      document.getElementById('map-test-refresh').addEventListener('click', () => {
+        _renderMapTest(Math.floor(Math.random() * 2_000_000_000));
+      });
+      document.getElementById('map-test-rerender').addEventListener('click', () => {
+        const seedInput = document.getElementById('map-test-seed').value.trim();
+        const seed = seedInput === '' ? (_mapTestSeed ?? Date.now()) : parseInt(seedInput, 10);
+        _renderMapTest(seed);
+      });
+      document.getElementById('map-test-size').addEventListener('change', () => {
+        if (_mapTestSeed != null) _renderMapTest(_mapTestSeed);
+      });
+      // Render an initial map on first open
+      _renderMapTest(Math.floor(Math.random() * 2_000_000_000));
     }
 
     // ── Init ────────────────────────────────────────────────────────────────────

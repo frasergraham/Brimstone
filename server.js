@@ -909,6 +909,24 @@ app.post('/admin/api/reset-stats', (req, res) => {
   res.json(result);
 });
 
+// Map preview — generates a map and returns a PNG render.
+// Used by the admin "Map Test" tab for visual spot-checking of map generation.
+app.get('/admin/api/map-render', async (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  try {
+    const { renderMapToBuffer } = await import('./scripts/map-render.js');
+    const seed = parseInt(req.query.seed, 10) || Date.now();
+    const size = (req.query.size && typeof req.query.size === 'string') ? req.query.size : 'standard';
+    const buf = renderMapToBuffer(seed, size);
+    res.set('Content-Type', 'image/png');
+    res.set('Cache-Control', 'no-store');
+    res.send(buf);
+  } catch (e) {
+    console.error('map-render error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── Remote AI Battle admin endpoints ─────────────────────────────────────────
 // Add admin-controlled AI players to existing battle rooms.
 
