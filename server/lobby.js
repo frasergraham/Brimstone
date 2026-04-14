@@ -878,6 +878,8 @@ function _runAIPlanSubmission(room) {
     // Skip placeholder AIs holding open slots — they don't plan until the
     // join window closes (at which point _autoSubmitMissingPlans handles them).
     if (room.openSlotPlayerIds?.has(seat.playerId)) continue;
+    // Skip admin-controlled AI — plans are generated manually via the admin panel.
+    if (seat.adminControlled) continue;
     const delay = 300 + offset + Math.floor(Math.random() * 350);
     offset += 400;
     const { playerId, faction, ai } = seat;
@@ -3783,6 +3785,190 @@ export function migrateAsyncGames() {
 
   if (migrated > 0) console.log(`[migration] Migrated ${migrated} async game(s) to unified system.`);
   return migrated;
+}
+
+// ── Remote AI battle helpers ────────────────────────────────────────────────
+// Used by the admin panel / CLI to add admin-controlled AI players to existing
+// battle rooms.  These AI seats have `adminControlled = true` so
+// _runAIPlanSubmission skips them — turns are triggered manually.
+
+/**
+ * Add an admin-controlled AI player to an existing battle room.
+ * @param {string} roomId
+ * @param {string} faction  - 'hero' | 'witch'
+ * @param {object} [opts]
+ * @param {string} [opts.personality] - AI personality key
+ * @param {string} [opts.name]       - Display name override
+ * @returns {{ ok: boolean, playerId?: string, error?: string }}
+ */
+export function addRemoteAI(roomId, faction, opts = {}) {
+  const room = rooms.get(roomId);
+  if (!room) return { ok: false, error: 'Room not found.' };
+  if (!room.config.isBattle) return { ok: false, error: 'Remote AI is only supported for battle rooms.' };
+  if (room.state?.gameOver) return { ok: false, error: 'Game is already over.' };
+
+  if (faction !== 'hero' && faction !== 'witch') {
+    return { ok: false, error: 'Faction must be "hero" or "witch".' };
+  }
+
+  const maxPPS = room.state.battleConfig?.maxPlayersPerSide ?? 10;
+  const factionCount = room.players.filter(s => s.faction === faction).length;
+  if (factionCount >= maxPPS) {
+    return { ok: false, error: `${faction} side is full (${maxPPS} max).` };
+  }
+
+  const playerId = `ai-${faction}-${randomUUID().slice(0, 8)}`;
+  const usedNames = new Set(room.players.map(s => s.name));
+  const name = opts.name || pickAIName(faction, usedNames);
+
+  // Spawn on the map
+  const starts = generateBattleStarts(room.state.tiles, faction, 1);
+  if (!starts.length) return { ok: false, error: 'No available spawn position.' };
+  const leader = room.state.addPlayer(playerId, name, faction, starts[0].col, starts[0].row, true);
+  const colors = faction === 'hero' ? HERO_PLAYER_COLORS : WITCH_PLAYER_COLORS;
+  leader.color = colors[factionCount % colors.length];
+
+  // Create AI engine
+  const ai = _makeAI(room, faction, playerId, opts.personality ?? null);
+
+  // Create an admin-controlled seat
+  room.players.push({
+    playerId, ws: null, name, faction,
+    isAI: true, ai, personality: opts.personality ?? 'balanced',
+    adminControlled: true,
+    joinedAtRound: room.state.round,
+  });
+
+  // If currently in planning, add budget for the new player
+  if (room.phase === RoomPhase.PLANNING) {
+    room.state.playerReady.set(playerId, false);
+    room.state.playerPlans.set(playerId, null);
+    const nodeBonus = countHeldNodes(faction, room.state.witchObjectives, room.state.entities);
+    const budget = computeActionsForPlayer(playerId, faction, room.state.phase, room.state.entities, nodeBonus);
+    room.state.playerActionsLeft.set(playerId, budget);
+  }
+
+  broadcastState(room, 'remote-ai-added');
+  _broadcastPresence(room);
+  _persistRoomSave(room);
+
+  console.log(`[remote-ai] Added admin-controlled ${faction} AI "${name}" (${opts.personality ?? 'balanced'}) to room ${room.id.slice(0, 8)}`);
+  return { ok: true, playerId, name };
+}
+
+/**
+ * Generate and submit a plan for an admin-controlled AI player.
+ * @param {string} roomId
+ * @param {string} playerId
+ * @returns {{ ok: boolean, plan?: Array, error?: string }}
+ */
+export function generateRemoteAIPlan(roomId, playerId) {
+  const room = rooms.get(roomId);
+  if (!room) return { ok: false, error: 'Room not found.' };
+  if (room.phase !== RoomPhase.PLANNING) return { ok: false, error: `Room is not in planning phase (current: ${room.phase}).` };
+  if (room.state.playerReady?.get(playerId)) return { ok: false, error: 'Plan already submitted for this round.' };
+
+  const seat = room.players.find(s => s.playerId === playerId);
+  if (!seat) return { ok: false, error: 'Player not found.' };
+  if (!seat.adminControlled) return { ok: false, error: 'Player is not admin-controlled.' };
+  if (!seat.ai) return { ok: false, error: 'No AI engine on this seat.' };
+
+  // Build ally context from already-submitted plans on this faction
+  const allyContext = { claimedNodes: new Set(), allyPositions: [] };
+  for (const s of room.players) {
+    if (s.faction !== seat.faction || s.playerId === playerId) continue;
+    if (room.state.playerReady?.get(s.playerId)) {
+      const leader = room.state.entities.find(
+        e => e.alive && e.ownerId === s.playerId && (e.type === 'hero' || e.type === 'witch')
+      );
+      if (leader) allyContext.allyPositions.push({ col: leader.col, row: leader.row });
+    }
+  }
+
+  let plan;
+  try {
+    plan = seat.ai.generatePlan(allyContext);
+  } catch (err) {
+    console.error(`[remote-ai] Plan generation error for ${seat.name}:`, err);
+    return { ok: false, error: `Plan generation failed: ${err.message}` };
+  }
+
+  _submitPlayerPlan(room, playerId, plan);
+
+  console.log(`[remote-ai] Generated ${plan.length} actions for ${seat.name} (round ${room.state.round})`);
+  return { ok: true, plan };
+}
+
+/**
+ * Submit an externally-generated plan (e.g. from an LLM) for an admin-controlled player.
+ */
+export function submitRemoteAIPlan(roomId, playerId, plan) {
+  const room = rooms.get(roomId);
+  if (!room) return { ok: false, error: 'Room not found.' };
+  if (room.phase !== RoomPhase.PLANNING) return { ok: false, error: 'Room is not in planning phase.' };
+  if (room.state.playerReady?.get(playerId)) return { ok: false, error: 'Plan already submitted.' };
+
+  const seat = room.players.find(s => s.playerId === playerId);
+  if (!seat) return { ok: false, error: 'Player not found.' };
+  if (!seat.adminControlled) return { ok: false, error: 'Player is not admin-controlled.' };
+
+  _submitPlayerPlan(room, playerId, plan);
+  return { ok: true };
+}
+
+/**
+ * Resign an admin-controlled AI player from a battle room.
+ * Re-uses the same scatter+remove logic as adminKickPlayer.
+ */
+export function resignRemoteAI(roomId, playerId) {
+  const room = rooms.get(roomId);
+  if (!room) return { ok: false, error: 'Room not found.' };
+
+  const seat = room.players.find(s => s.playerId === playerId);
+  if (!seat) return { ok: false, error: 'Player not found.' };
+  if (!seat.adminControlled) return { ok: false, error: 'Player is not admin-controlled.' };
+
+  // Use the existing admin kick flow
+  return adminKickPlayer(roomId, playerId);
+}
+
+/**
+ * List all admin-controlled AI players across all active battle rooms.
+ * @returns {{ roomId: string, players: object[] }[]}
+ */
+export function listRemoteAIs() {
+  const results = [];
+  for (const room of rooms.values()) {
+    if (!room.config.isBattle) continue;
+    const remotes = room.players
+      .filter(s => s.adminControlled)
+      .map(s => ({
+        playerId:    s.playerId,
+        name:        s.name,
+        faction:     s.faction,
+        personality: s.personality ?? 'balanced',
+        submitted:   !!room.state?.playerReady?.get(s.playerId),
+        leader:      _remoteLeaderSummary(room.state, s.playerId),
+        entityCount: room.state.entities.filter(e => e.alive && e.ownerId === s.playerId).length,
+      }));
+    if (remotes.length > 0) {
+      results.push({
+        roomId: room.id,
+        round:  room.state.round,
+        phase:  room.phase,
+        remotes,
+      });
+    }
+  }
+  return results;
+}
+
+function _remoteLeaderSummary(state, playerId) {
+  const p = state.players.find(pl => pl.id === playerId);
+  if (!p) return null;
+  const leader = state.entities.find(e => e.id === p.leaderId && e.alive);
+  if (!leader) return { alive: false };
+  return { alive: true, hp: leader.hp, maxHp: leader.maxHp, col: leader.col, row: leader.row };
 }
 
 // ── Async session helpers ───────────────────────────────────────────────────

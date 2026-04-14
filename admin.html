@@ -269,6 +269,7 @@
     <nav class="tabs">
       <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
       <button class="tab-btn" data-tab="battle">Battle</button>
+      <button class="tab-btn" data-tab="remote-battle">Remote Battle</button>
       <button class="tab-btn" data-tab="games">All Games</button>
       <button class="tab-btn" data-tab="players">Players</button>
       <button class="tab-btn" data-tab="balance">Balance</button>
@@ -305,6 +306,88 @@
       </div>
       <div id="battle-admin-none" style="display:none">
         <p>No active battle. The next one will be created automatically.</p>
+      </div>
+    </div>
+
+    <!-- ── Remote Battle ─────────────────────────── -->
+    <div id="tab-remote-battle" class="tab-content">
+      <!-- Room picker -->
+      <div class="section" id="rb-rooms-section">
+        <h2>Active Battle Rooms</h2>
+        <p style="color:var(--text-dim);font-size:0.8rem;margin-bottom:0.75rem">Add admin-controlled AI players to an existing battle. Their turns are only taken when you click "Take Turn".</p>
+        <div id="rb-rooms-list"><p class="empty-state">Loading...</p></div>
+      </div>
+
+      <!-- Room detail (shown when a room is selected) -->
+      <div class="section" id="rb-detail-section" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <h2 id="rb-detail-title">Battle Room</h2>
+          <button class="btn" onclick="rbBackToList()">Back to Rooms</button>
+        </div>
+
+        <div style="display:flex;gap:1rem;flex-wrap:wrap;margin:0.75rem 0">
+          <div class="stat-box"><div class="label">Round</div><div class="value" id="rb-round">-</div></div>
+          <div class="stat-box"><div class="label">Room Phase</div><div class="value" id="rb-phase">-</div></div>
+          <div class="stat-box"><div class="label">Game Phase</div><div class="value" id="rb-game-phase">-</div></div>
+          <div class="stat-box"><div class="label">Players</div><div class="value" id="rb-player-count">-</div></div>
+        </div>
+
+        <!-- Add remote AI form -->
+        <div id="rb-add-player-form" style="margin-bottom:1rem;padding:0.75rem;background:var(--bg);border:1px solid var(--border)">
+          <div style="font-size:0.82rem;color:var(--accent);margin-bottom:0.5rem;font-weight:bold">Add Remote AI Player</div>
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:flex-end">
+            <label style="font-size:0.75rem;color:var(--text-dim)">Faction
+              <select id="rb-add-faction" style="display:block;background:var(--bg-section);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:0.78rem;padding:0.2rem 0.4rem">
+                <option value="hero">Hero</option>
+                <option value="witch">Witch</option>
+              </select>
+            </label>
+            <label style="font-size:0.75rem;color:var(--text-dim)">Type
+              <select id="rb-add-type" onchange="rbToggleLLMFields()" style="display:block;background:var(--bg-section);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:0.78rem;padding:0.2rem 0.4rem">
+                <option value="ai">Built-in AI</option>
+                <option value="llm">Hosted LLM</option>
+              </select>
+            </label>
+            <label style="font-size:0.75rem;color:var(--text-dim)">Personality
+              <select id="rb-add-personality" style="display:block;background:var(--bg-section);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:0.78rem;padding:0.2rem 0.4rem">
+              </select>
+            </label>
+            <label style="font-size:0.75rem;color:var(--text-dim)">Name (optional)
+              <input id="rb-add-name" type="text" placeholder="auto" style="display:block;background:var(--bg-section);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:0.78rem;padding:0.2rem 0.4rem;width:120px">
+            </label>
+            <button class="btn btn-primary" onclick="rbAddPlayer()">Add</button>
+          </div>
+          <!-- LLM fields (hidden by default) -->
+          <div id="rb-llm-fields" style="display:none;margin-top:0.5rem">
+            <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:flex-end">
+              <label style="font-size:0.75rem;color:var(--text-dim)">LLM Endpoint URL
+                <input id="rb-add-llm-endpoint" type="text" placeholder="https://api.example.com/generate" style="display:block;background:var(--bg-section);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:0.78rem;padding:0.2rem 0.4rem;width:320px">
+              </label>
+            </div>
+            <label style="font-size:0.75rem;color:var(--text-dim);margin-top:0.4rem;display:block">Prompt Template (optional — use {{FACTION}}, {{ROUND}}, {{BUDGET}})
+              <textarea id="rb-add-llm-prompt" rows="3" style="display:block;width:100%;background:var(--bg-section);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:0.78rem;padding:0.3rem 0.5rem;resize:vertical"></textarea>
+            </label>
+          </div>
+        </div>
+
+        <!-- All players in room -->
+        <div style="margin-bottom:1rem">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.4rem">
+            <div style="font-size:0.82rem;color:var(--accent);font-weight:bold">All Players</div>
+            <button class="btn btn-primary" onclick="rbTakeAllTurns()" id="rb-btn-take-all">Take All Remote Turns</button>
+          </div>
+          <table>
+            <thead><tr>
+              <th>Name</th><th>Faction</th><th>Type</th><th>Info</th><th>Leader</th><th>Units</th><th>Submitted</th><th>Actions</th>
+            </tr></thead>
+            <tbody id="rb-roster-body"></tbody>
+          </table>
+        </div>
+
+        <!-- Game log -->
+        <div style="font-size:0.82rem;color:var(--accent);margin-bottom:0.4rem;font-weight:bold">Recent Log</div>
+        <div id="rb-log" style="max-height:200px;overflow-y:auto;font-size:0.78rem;color:var(--text-dim);background:var(--bg);padding:0.5rem;border:1px solid var(--border)">
+        </div>
       </div>
     </div>
 
@@ -534,11 +617,12 @@
 
       if (!_tabLoaded[tabId]) {
         _tabLoaded[tabId] = true;
-        if (tabId === 'battle')   loadBattle();
-        if (tabId === 'games')    loadAllGames(1);
-        if (tabId === 'players')  loadPlayersDetailed();
-        if (tabId === 'balance')  loadBalanceStats();
-        if (tabId === 'campaign') loadCampaignStats();
+        if (tabId === 'battle')        loadBattle();
+        if (tabId === 'remote-battle') rbLoadList();
+        if (tabId === 'games')         loadAllGames(1);
+        if (tabId === 'players')       loadPlayersDetailed();
+        if (tabId === 'balance')       loadBalanceStats();
+        if (tabId === 'campaign')      loadCampaignStats();
       }
 
       // Auto-refresh only on dashboard
@@ -1193,6 +1277,213 @@
       }
 
       return html;
+    }
+
+    // ── Remote Battle tab ────────────────────────────────────────────────────────
+    // Manages admin-controlled AI players in existing battle rooms.
+
+    let _rbSelectedRoomId = null;
+    let _rbPersonalities = { hero: [], witch: [] };
+    let _rbRefreshInterval = null;
+
+    async function rbLoadList() {
+      try {
+        _rbPersonalities = await api('/admin/api/remote-battle/personalities');
+      } catch { _rbPersonalities = { hero: ['balanced'], witch: ['balanced'] }; }
+      rbUpdatePersonalityDropdown();
+
+      try {
+        const rooms = await api('/admin/api/remote-battle/rooms');
+        const el = document.getElementById('rb-rooms-list');
+        if (!rooms || rooms.length === 0) {
+          el.innerHTML = '<p class="empty-state">No active battle rooms. A battle will be created automatically by the scheduler.</p>';
+          return;
+        }
+        let html = '<table><thead><tr><th>Room</th><th>Round</th><th>Phase</th><th>Heroes</th><th>Witches</th><th>Remote AIs</th><th></th></tr></thead><tbody>';
+        for (const r of rooms) {
+          html += `<tr class="clickable" onclick="rbSelectRoom('${_esc(r.roomId)}')">
+            <td class="id-short">${_esc(r.roomId.slice(0, 8))}</td>
+            <td>${r.round}</td>
+            <td>${_esc(r.phase)}</td>
+            <td style="color:var(--hero)">${r.heroCount}/${r.maxPerSide}</td>
+            <td style="color:var(--witch)">${r.witchCount}/${r.maxPerSide}</td>
+            <td>${r.remoteAIs}</td>
+            <td><button class="btn btn-primary" onclick="event.stopPropagation();rbSelectRoom('${_esc(r.roomId)}')">Manage</button></td>
+          </tr>`;
+        }
+        html += '</tbody></table>';
+        el.innerHTML = html;
+      } catch (e) {
+        document.getElementById('rb-rooms-list').innerHTML = `<p style="color:var(--red)">Error: ${_esc(e.message)}</p>`;
+      }
+    }
+
+    async function rbSelectRoom(roomId) {
+      _rbSelectedRoomId = roomId;
+      document.getElementById('rb-rooms-section').style.display = 'none';
+      document.getElementById('rb-detail-section').style.display = 'block';
+      await rbRefreshDetail();
+      if (_rbRefreshInterval) clearInterval(_rbRefreshInterval);
+      _rbRefreshInterval = setInterval(rbRefreshDetail, 5000);
+    }
+
+    function rbBackToList() {
+      _rbSelectedRoomId = null;
+      document.getElementById('rb-rooms-section').style.display = '';
+      document.getElementById('rb-detail-section').style.display = 'none';
+      if (_rbRefreshInterval) { clearInterval(_rbRefreshInterval); _rbRefreshInterval = null; }
+      _tabLoaded['remote-battle'] = false;
+      rbLoadList();
+    }
+
+    async function rbRefreshDetail() {
+      if (!_rbSelectedRoomId) return;
+      try {
+        const b = await api(`/admin/api/remote-battle/${_rbSelectedRoomId}`);
+        if (!b) { rbBackToList(); return; }
+        rbRenderDetail(b);
+      } catch (e) {
+        console.error('rbRefreshDetail error:', e);
+      }
+    }
+
+    function rbRenderDetail(b) {
+      document.getElementById('rb-detail-title').textContent = `Battle Room ${b.roomId.slice(0, 8)}`;
+      document.getElementById('rb-round').textContent = b.round;
+      document.getElementById('rb-phase').textContent = b.phase;
+      document.getElementById('rb-game-phase').textContent = b.gamePhase || '-';
+      document.getElementById('rb-player-count').textContent = `${b.heroCount}H / ${b.witchCount}W`;
+
+      const isPlanning = b.phase === 'planning';
+
+      // Roster — shows ALL players, with actions only for admin-controlled ones
+      const tbody = document.getElementById('rb-roster-body');
+      let html = '';
+      for (const r of b.allPlayers) {
+        const fc = r.faction === 'hero' ? 'var(--hero)' : 'var(--witch)';
+        const leaderInfo = r.leader?.alive
+          ? `HP ${r.leader.hp}/${r.leader.maxHp} (${r.leader.col},${r.leader.row})`
+          : 'Dead';
+        const submittedBadge = r.submitted
+          ? '<span style="color:var(--green)">Yes</span>'
+          : '<span style="color:var(--text-dim)">No</span>';
+
+        let typeLabel;
+        if (r.adminControlled) {
+          typeLabel = r.type === 'llm'
+            ? '<span class="badge-ai" style="color:var(--accent)">Remote LLM</span>'
+            : `<span class="badge-ai" style="color:var(--accent)">Remote AI</span>`;
+        } else if (r.isAI) {
+          typeLabel = '<span class="badge-ai">Auto AI</span>';
+        } else {
+          typeLabel = '<span style="color:var(--green)">Human</span>';
+        }
+
+        const info = r.personality ? _esc(r.personality) : (r.llmEndpoint ? _esc(r.llmEndpoint.slice(0, 30)) : '-');
+
+        let actions = '';
+        if (r.adminControlled && !b.gameOver) {
+          if (isPlanning && !r.submitted) {
+            actions += `<button class="btn" onclick="rbTakeTurn('${r.playerId}')">Take Turn</button> `;
+          }
+          actions += `<button class="btn btn-danger" onclick="rbResign('${r.playerId}')">Resign</button>`;
+        }
+
+        html += `<tr>
+          <td>${_esc(r.name)}</td>
+          <td style="color:${fc}">${r.faction}</td>
+          <td>${typeLabel}</td>
+          <td style="font-size:0.75rem">${info}</td>
+          <td style="font-size:0.75rem">${leaderInfo}</td>
+          <td>${r.entityCount}</td>
+          <td>${submittedBadge}</td>
+          <td>${actions}</td>
+        </tr>`;
+      }
+      tbody.innerHTML = html;
+
+      // Take All button — only if there are unsubmitted admin-controlled players
+      const hasUnsubmitted = b.allPlayers.some(p => p.adminControlled && !p.submitted);
+      document.getElementById('rb-btn-take-all').disabled = !isPlanning || !hasUnsubmitted;
+
+      // Hide add form if game over
+      document.getElementById('rb-add-player-form').style.display = b.gameOver ? 'none' : '';
+
+      // Log
+      const logEl = document.getElementById('rb-log');
+      logEl.innerHTML = (b.log || []).map(l => `<div>${_esc(l)}</div>`).join('');
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function rbUpdatePersonalityDropdown() {
+      const factionSel = document.getElementById('rb-add-faction');
+      const persSel = document.getElementById('rb-add-personality');
+      const faction = factionSel.value;
+      const list = _rbPersonalities[faction] || ['balanced'];
+      persSel.innerHTML = list.map(p => `<option value="${_esc(p)}">${_esc(p)}</option>`).join('');
+    }
+    document.getElementById('rb-add-faction')?.addEventListener('change', rbUpdatePersonalityDropdown);
+
+    function rbToggleLLMFields() {
+      const type = document.getElementById('rb-add-type').value;
+      document.getElementById('rb-llm-fields').style.display = type === 'llm' ? '' : 'none';
+      document.getElementById('rb-add-personality').parentElement.style.display = type === 'ai' ? '' : 'none';
+    }
+
+    async function rbAddPlayer() {
+      const faction = document.getElementById('rb-add-faction').value;
+      const type = document.getElementById('rb-add-type').value;
+      const personality = document.getElementById('rb-add-personality').value;
+      const name = document.getElementById('rb-add-name').value.trim() || undefined;
+      const llmEndpoint = document.getElementById('rb-add-llm-endpoint')?.value.trim() || undefined;
+      const llmPrompt = document.getElementById('rb-add-llm-prompt')?.value.trim() || undefined;
+
+      try {
+        const result = await apiPost(`/admin/api/remote-battle/${_rbSelectedRoomId}/add-player`, {
+          faction, type, personality: type === 'ai' ? personality : undefined,
+          name, llmEndpoint, llmPrompt,
+        });
+        if (result.ok) {
+          rbRefreshDetail();
+        } else {
+          alert(result.error || 'Failed to add player.');
+        }
+      } catch (e) { alert('Error: ' + e.message); }
+    }
+
+    async function rbTakeTurn(playerId) {
+      try {
+        const result = await apiPost(`/admin/api/remote-battle/${_rbSelectedRoomId}/take-turn/${playerId}`, {});
+        if (result.ok) {
+          rbRefreshDetail();
+        } else {
+          alert(result.error || 'Failed to generate turn.');
+        }
+      } catch (e) { alert('Error: ' + e.message); }
+    }
+
+    async function rbTakeAllTurns() {
+      document.getElementById('rb-btn-take-all').disabled = true;
+      try {
+        const result = await apiPost(`/admin/api/remote-battle/${_rbSelectedRoomId}/take-all-turns`, {});
+        if (result.ok) {
+          rbRefreshDetail();
+        } else {
+          alert(result.error || 'Failed to generate turns.');
+        }
+      } catch (e) { alert('Error: ' + e.message); }
+    }
+
+    async function rbResign(playerId) {
+      if (!confirm('Resign this player? Their units will be scattered.')) return;
+      try {
+        const result = await apiPost(`/admin/api/remote-battle/${_rbSelectedRoomId}/resign/${playerId}`, {});
+        if (result.ok) {
+          rbRefreshDetail();
+        } else {
+          alert(result.error || 'Failed to resign player.');
+        }
+      } catch (e) { alert('Error: ' + e.message); }
     }
 
     // ── Reset stats ─────────────────────────────────────────────────────────────
