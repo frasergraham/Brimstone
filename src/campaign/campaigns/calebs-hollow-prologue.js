@@ -402,50 +402,53 @@ function buildDarkRitualMap() {
   const rand = rng(666);
   const tiles = makeTiles(COLS, ROWS);
 
-  // River (N-S)
-  const riverPath = generateRiverNS(rand);
-  carveRiver(tiles, riverPath);
+  // No river — deep forest. One landmark building only: the hero's starting
+  // shelter on the south edge.
+  setBuilding(tiles, 1, 10, BuildingType.HOUSE, 0);
 
-  // Buildings
-  setBuilding(tiles, 2, 10, BuildingType.INN, 1);
-  setBuilding(tiles, 4, 8, BuildingType.CHURCH, 0);
-  setBuilding(tiles, 10, 2, BuildingType.GRAVEYARD, 0);
-  setBuilding(tiles, 7, 5, BuildingType.WATCHTOWER, 0);
-  setBuilding(tiles, 3, 5, BuildingType.HOUSE, 0);
-  setBuilding(tiles, 9, 8, BuildingType.BLACKSMITH, 0);
-
-  // MST roads
-  const bldgs = [
-    { col: 2, row: 10 }, { col: 4, row: 8 }, { col: 10, row: 2 },
-    { col: 7, row: 5 }, { col: 3, row: 5 }, { col: 9, row: 8 },
-  ];
-  buildRoadNetwork(tiles, bldgs, rand, 2);
-
-  // Dense forests (ritual theme)
+  // Dense forest blankets most of the map. No road network.
   growForests(tiles, [
-    { col: 5, row: 3 }, { col: 8, row: 3 },
-    { col: 1, row: 3 }, { col: 11, row: 7 },
-    { col: 6, row: 9 }, { col: 0, row: 7 },
-    { col: 11, row: 11 }, { col: 3, row: 1 },
-  ], rand, 0.75, 0.45);
+    // North band
+    { col: 1, row: 1 }, { col: 4, row: 1 }, { col: 8, row: 1 }, { col: 11, row: 1 },
+    // Mid-upper band (around the first clearing)
+    { col: 2, row: 3 }, { col: 8, row: 3 }, { col: 11, row: 3 },
+    // Middle band (between clearings)
+    { col: 0, row: 5 }, { col: 2, row: 6 }, { col: 6, row: 5 }, { col: 7, row: 7 },
+    { col: 11, row: 5 },
+    // Lower band (around the second clearing)
+    { col: 3, row: 7 }, { col: 8, row: 8 }, { col: 11, row: 8 },
+    // South band
+    { col: 0, row: 11 }, { col: 5, row: 11 }, { col: 9, row: 10 }, { col: 12, row: 11 },
+  ], rand, 0.85, 0.55);
 
-  // Dirt
-  scatterDirt(tiles, 4, rand, COLS);
+  // Carve three clearings: hero start, Ritual Circle, Dark Altar.
+  const clearings = [
+    { col: 1, row: 10 }, { col: 2, row: 10 }, // hero start clearing
+    { col: 5, row: 4 }, { col: 4, row: 4 }, { col: 5, row: 3 }, { col: 6, row: 4 }, { col: 5, row: 5 }, // Ritual Circle
+    { col: 9, row: 6 }, { col: 10, row: 6 }, { col: 9, row: 5 }, { col: 8, row: 6 }, { col: 9, row: 7 }, // Dark Altar
+  ];
+  for (const { col, row } of clearings) {
+    const t = tiles.get(hexKey(col, row));
+    if (t && t.type === TileType.FOREST) t.type = TileType.GRASS;
+  }
 
-  // Resources
-  setResource(tiles, 3, 9, ResourceType.METAL);
-  setResource(tiles, 8, 4, ResourceType.HERBS);
-  setResource(tiles, 6, 7, ResourceType.WOOD);
-  setHiddenSurvivor(tiles, 7, 5);
+  // Dirt scatter for visual texture.
+  scatterDirt(tiles, 3, rand, COLS);
 
-  // Two power nodes
+  // Resources — one herbs cache in each node clearing so the hero has a
+  // reason to push through.
+  setResource(tiles, 4, 4, ResourceType.HERBS);
+  setResource(tiles, 10, 6, ResourceType.HERBS);
+
+  // Two power nodes — visible to the hero from turn 1 so the objective is
+  // obvious.
   const witchObjectives = [
     {
       col: 5, row: 4,
       label: 'Ritual Circle',
       hexes: [{ col: 5, row: 4 }, { col: 4, row: 4 }, { col: 5, row: 3 }],
       color: NODE_COLORS[0],
-      seenByHero: false,
+      seenByHero: true,
       seenByWitch: true,
       prevCtrl: 'neutral',
     },
@@ -454,7 +457,7 @@ function buildDarkRitualMap() {
       label: 'Dark Altar',
       hexes: [{ col: 9, row: 6 }, { col: 10, row: 6 }, { col: 9, row: 5 }],
       color: NODE_COLORS[1],
-      seenByHero: false,
+      seenByHero: true,
       seenByWitch: true,
       prevCtrl: 'neutral',
     },
@@ -466,7 +469,7 @@ function buildDarkRitualMap() {
     heroStart:      { col: 2, row: 10 },
     witchStart:     { col: 10, row: 2 },
     mapSize:        'standard',
-    survivorCounts: { buildings: 1, terrain: 0 },
+    survivorCounts: { buildings: 0, terrain: 0 },
     cols: COLS,
     rows: ROWS,
   };
@@ -928,56 +931,99 @@ const MISSIONS = [
     id:       'dark_ritual',
     title:    'Dark Ritual',
     chapter:  1,
-    briefing: `Deep in the forest, two Power Nodes pulse with dark energy. Minions and golems guard them as part of an ongoing ritual. Capture the nodes before the ritual is complete — this is your first encounter with the witch's true power.`,
-    victoryText: `The nodes dim as you wrest control. The ritual is broken — but the energy has already been channeled somewhere. The witch is preparing something far worse.`,
-    defeatText:  `The ritual is complete. Dark energy surges through the ley lines. Caleb's Hollow's fate is sealed.`,
+    briefing: `Deep in the forest the trees themselves hum with dark energy. Two Power Nodes pulse in clearings ahead; her thralls stand thick around them. Drive every last one of her forces off both nodes before dawn — or the ritual tips past recovery.`,
+    victoryText: `Dawn breaks. The nodes dim and the forest exhales. Her ritual dies in the dark between the trees.`,
+    defeatText:  `Dawn breaks on a grove still choked with shadow. The ritual holds; her power only grows.`,
 
     mapBuilder:      'dark_ritual',
     mapSize:         'standard',
 
-    hasWitch:        false,
-    disableScoring:  false,   // standard node scoring
+    hasWitch:        false,    // witch is narrative-only on this mission
+    disableScoring:  true,     // we run our own win check, not dawn/dusk scoring
+
+    // 10 rounds: start in daytime, end on dawn.
+    // 3 day → 1 dusk → 5 night → 1 dawn.
+    phaseCycle: {
+      phases: ['day','day','day','dusk','night','night','night','night','night','dawn'],
+      loop:   false,
+    },
+
     enemyUnits: [
-      { type: 'minion', col: 5, row: 3 },
-      { type: 'minion', col: 10, row: 5 },
-      { type: 'minion', col: 8, row: 7 },
-      { type: 'wood_golem', col: 9, row: 3 },
+      // Heavy garrison on the first clearing (Ritual Circle at 5,4).
+      { type: 'minion',     col: 5, row: 4 },
+      { type: 'minion',     col: 4, row: 4 },
+      { type: 'minion',     col: 5, row: 3 },
+      { type: 'wood_golem', col: 5, row: 4 },
+      // Heavy garrison on the second clearing (Dark Altar at 9,6).
+      { type: 'minion',     col: 9, row: 6 },
+      { type: 'minion',     col: 10, row: 6 },
+      { type: 'minion',     col: 9, row: 5 },
+      { type: 'wood_golem', col: 9, row: 6 },
+      // Loose patrols in the forest between.
+      { type: 'minion',     col: 7, row: 5 },
+      { type: 'minion',     col: 7, row: 7 },
     ],
     waves: [
-      { round: 3,  units: [{ type: 'minion', spawnAt: 'map_edge' }] },
-      { round: 6,  units: [{ type: 'minion', spawnAt: 'map_edge' }, { type: 'minion', spawnAt: 'map_edge' }] },
-      { round: 9,  units: [{ type: 'wood_golem', spawnAt: 'map_edge' }] },
-      { round: 12, units: [{ type: 'iron_golem', spawnAt: 'map_edge' }] },
+      // Reinforcements — keep pressure on from the far edges.
+      { round: 4, units: [
+        { type: 'minion', spawnAt: 'map_edge' },
+        { type: 'minion', spawnAt: 'map_edge' },
+      ] },
+      { round: 7, units: [{ type: 'minion', spawnAt: 'map_edge' }] },
+      // Second-clearing ambush — the witch flees, leaves golems behind.
+      {
+        id: 'witch-flees',
+        trigger: 'area',
+        hexes: [
+          { col: 9, row: 6 }, { col: 10, row: 6 }, { col: 9, row: 5 },
+          { col: 8, row: 6 }, { col: 9, row: 7 }, { col: 10, row: 5 },
+        ],
+        units: [
+          { type: 'wood_golem', spawnAt: { col: 11, row: 6 },
+            spawnLog: '🗿 A wood golem crashes out of the thicket to cover her escape!' },
+          { type: 'wood_golem', spawnAt: { col: 9, row: 8 },
+            spawnLog: '🗿 Another golem lurches between you and the altar!' },
+          { type: 'wood_golem', spawnAt: { col: 10, row: 4 },
+            spawnLog: '🗿 A third golem blocks the path she took into the shadows!' },
+        ],
+      },
     ],
     aiPersonality: 'hoarder',
     aiBudgetBonus: 3,
 
     maxSurvivorsFromRoster:    3,
-    missionSurvivors:          1,
+    missionSurvivors:          0,
     minSurvivors:              1,
-    maxDiscoverableSurvivors:  1,
+    maxDiscoverableSurvivors:  0,
 
     objectives: {
-      win:  { type: 'control_nodes', reason: 'The ritual is disrupted. The Power Nodes answer to you now.' },
+      win:  { type: 'witch_denied_nodes', phase: 'dawn',
+              reason: 'Dawn breaks — the nodes are free of her grasp.' },
       lose: [
         { type: 'hero_killed' },
-        { type: 'rounds_exceeded', rounds: 20, reason: 'The ritual is complete. Darkness surges forth.' },
+        { type: 'witch_holds_node', phase: 'dawn',
+          reason: 'Dawn breaks — the witch still holds a node. The ritual completes.' },
       ],
     },
 
-    startingResources: { metal: 1, food: 1 },
+    startingResources: { metal: 1, food: 2 },
     rewards:           { silver: 1, scripture: 1, metal: 1 },
     healBonus:         4,
 
     lootOverrides: { remove: ['horse'] },
 
     storyTriggers: [
-      { type: 'round', round: 1, title: 'Dark Energy',
-        text: 'The air hums with unnatural power. Ahead, two clearings glow with a sickly purple light — Power Nodes, conduits for the witch\'s dark magic. Golems and minions patrol the perimeter. You must seize control before the ritual reaches its crescendo.',
+      { type: 'round', round: 1, title: 'Into the Grove',
+        text: 'Two clearings ahead pulse with purple light. Her garrison is thick around both. Dawn is all that stands between the ritual and its climax — you must drive her forces off both nodes before the sun returns.',
         flag: 'dark_ritual_start' },
-      { type: 'round', round: 4, title: 'The Ritual Grows',
-        text: 'The ground trembles. Dark tendrils of energy arc between the nodes, growing brighter with each passing moment. Time is running out.',
-        flag: 'ritual_grows' },
+      { type: 'area',
+        hexes: [
+          { col: 9, row: 6 }, { col: 10, row: 6 }, { col: 9, row: 5 },
+          { col: 8, row: 6 }, { col: 9, row: 7 }, { col: 10, row: 5 },
+        ],
+        title: 'The Witch Flees',
+        text: 'At the second clearing you meet her eyes across the altar. For a heartbeat she stares — then she melts into the dark, leaving her golems to choke your path. Finish them. Finish the ritual.',
+        flag: 'witch_flees' },
     ],
 
     requires: ['river_crossing'],

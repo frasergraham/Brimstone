@@ -464,6 +464,82 @@ describe('Victory delegate', () => {
     });
   });
 
+  // witch_denied_nodes / witch_holds_node — Mission 5 win/lose pair
+  describe('witch_denied_nodes / witch_holds_node (Mission 5)', () => {
+    function buildRitualState() {
+      const mapData = buildMap('dark_ritual');
+      mapData.noWitch = true;
+      const state = new GameState(true, false, 'standard', null, mapData);
+      state.disableScoring = true;
+      // Clean slate so we can control node occupancy precisely.
+      state.entities = state.entities.filter(e => e.type === 'hero');
+      return state;
+    }
+
+    test('witch_denied_nodes wins at target phase when witch holds no node', () => {
+      const delegate = buildVictoryDelegate({
+        win: { type: 'witch_denied_nodes', phase: 'dawn' },
+      });
+      const state = buildRitualState();
+      state.phase = Phase.DAWN;
+      // No witch units on any node.
+      const result = delegate(state);
+      assert.ok(result);
+      assert.equal(result.winner, 'hero');
+    });
+
+    test('witch_denied_nodes does not win on a non-target phase', () => {
+      const delegate = buildVictoryDelegate({
+        win: { type: 'witch_denied_nodes', phase: 'dawn' },
+      });
+      const state = buildRitualState();
+      state.phase = Phase.NIGHT;
+      assert.equal(delegate(state), null);
+    });
+
+    test('witch_denied_nodes does not win while witch still holds a node', () => {
+      const delegate = buildVictoryDelegate({
+        win: { type: 'witch_denied_nodes', phase: 'dawn' },
+      });
+      const state = buildRitualState();
+      state.phase = Phase.DAWN;
+      // Plant a witch unit on the Ritual Circle.
+      state.entities.push(createMinion(5, 4, 'witch'));
+      assert.equal(delegate(state), null);
+    });
+
+    test('witch_holds_node loses at target phase when witch still holds a node', () => {
+      const delegate = buildVictoryDelegate({
+        lose: { type: 'witch_holds_node', phase: 'dawn' },
+      });
+      const state = buildRitualState();
+      state.phase = Phase.DAWN;
+      state.entities.push(createMinion(5, 4, 'witch'));
+      const result = delegate(state);
+      assert.ok(result);
+      assert.equal(result.winner, 'witch');
+    });
+
+    test('witch_holds_node does not fire before the target phase', () => {
+      const delegate = buildVictoryDelegate({
+        lose: { type: 'witch_holds_node', phase: 'dawn' },
+      });
+      const state = buildRitualState();
+      state.phase = Phase.NIGHT;
+      state.entities.push(createMinion(5, 4, 'witch'));
+      assert.equal(delegate(state), null);
+    });
+
+    test('witch_holds_node does not fire when witch holds zero nodes', () => {
+      const delegate = buildVictoryDelegate({
+        lose: { type: 'witch_holds_node', phase: 'dawn' },
+      });
+      const state = buildRitualState();
+      state.phase = Phase.DAWN;
+      assert.equal(delegate(state), null);
+    });
+  });
+
   // Array lose conditions — Mission 2 combines hero_killed + phase_without_survivors
   test('lose array: first matching condition fires', () => {
     const delegate = buildVictoryDelegate({
@@ -799,6 +875,75 @@ describe('Wave spawner', () => {
     assert.equal(golems.length, 1, 'kill-triggered wave should only fire once');
   });
 
+  test('area trigger fires when hero stands on a listed hex', () => {
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    state.round = 1;
+    state.hero.col = 4; state.hero.row = 4;
+
+    const waves = [
+      {
+        id: 'area-ambush',
+        trigger: 'area',
+        hexes: [{ col: 4, row: 4 }, { col: 5, row: 4 }],
+        units: [{ type: 'wood_golem', spawnAt: { col: 3, row: 3 } }],
+      },
+    ];
+    const createFn = (type, col, row) => createWoodGolem(col, row, 'witch');
+
+    const logs = processWaves(state, waves, createFn);
+    const golems = state.entities.filter(e => e.type === EntityType.WOOD_GOLEM);
+    assert.equal(golems.length, 1);
+    assert.equal(logs.length, 1);
+  });
+
+  test('area trigger does not fire when hero is off the hex set', () => {
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    state.round = 1;
+    state.hero.col = 0; state.hero.row = 0;
+
+    const waves = [
+      {
+        id: 'area-ambush',
+        trigger: 'area',
+        hexes: [{ col: 4, row: 4 }, { col: 5, row: 4 }],
+        units: [{ type: 'wood_golem', spawnAt: { col: 3, row: 3 } }],
+      },
+    ];
+    const createFn = (type, col, row) => createWoodGolem(col, row, 'witch');
+
+    processWaves(state, waves, createFn);
+    assert.equal(state.entities.filter(e => e.type === EntityType.WOOD_GOLEM).length, 0);
+  });
+
+  test('area trigger only fires once', () => {
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    state.round = 1;
+    state.hero.col = 4; state.hero.row = 4;
+
+    const waves = [
+      {
+        id: 'area-ambush',
+        trigger: 'area',
+        hexes: [{ col: 4, row: 4 }],
+        units: [{ type: 'wood_golem', spawnAt: { col: 3, row: 3 } }],
+      },
+    ];
+    const createFn = (type, col, row) => createWoodGolem(col, row, 'witch');
+
+    processWaves(state, waves, createFn);
+    processWaves(state, waves, createFn);
+    processWaves(state, waves, createFn);
+
+    const golems = state.entities.filter(e => e.type === EntityType.WOOD_GOLEM);
+    assert.equal(golems.length, 1, 'area-triggered wave should only fire once');
+  });
+
   test('processWaves uses unit.spawnLog when provided', () => {
     const mapData = buildMap('prologue');
     mapData.noWitch = true;
@@ -1065,13 +1210,9 @@ describe('maxDiscoverableSurvivors config', () => {
 // ── disableScoring on missions ─────────────────────────────────────────────
 
 describe('disableScoring on missions', () => {
-  test('all prologue missions have disableScoring set except dark_ritual', () => {
+  test('all prologue missions have disableScoring: true', () => {
     for (const m of hollowDef.missions) {
-      if (m.id === 'dark_ritual') {
-        assert.equal(m.disableScoring, false, 'dark_ritual uses node scoring');
-      } else {
-        assert.equal(m.disableScoring, true, `${m.id} should have disableScoring: true`);
-      }
+      assert.equal(m.disableScoring, true, `${m.id} should have disableScoring: true`);
     }
   });
 });
@@ -1192,10 +1333,10 @@ describe('mission story triggers and loot overrides', () => {
     assert.ok(Array.isArray(m.objectives.win.hexes) && m.objectives.win.hexes.length >= 3);
   });
 
-  test('dark_ritual has rounds_exceeded lose condition', () => {
+  test('dark_ritual has witch_holds_node lose condition', () => {
     const m = hollowDef.missions.find(m => m.id === 'dark_ritual');
     const loseConds = Array.isArray(m.objectives.lose) ? m.objectives.lose : [m.objectives.lose];
-    assert.ok(loseConds.some(l => l.type === 'rounds_exceeded'));
+    assert.ok(loseConds.some(l => l.type === 'witch_holds_node'));
   });
 
   test('mission 6-step progression chain is valid', () => {
@@ -2004,6 +2145,97 @@ describe('Mission 4 (The River Crossing) balance', () => {
     }
     assert.ok(herbsNearChurch >= 4,
       `expected 4 herb caches near the church, found ${herbsNearChurch}`);
+  });
+});
+
+// ── Mission 5 balance ───────────────────────────────────────────────────────
+
+describe('Mission 5 (Dark Ritual) balance', () => {
+  const mission5 = hollowDef.missions.find(m => m.id === 'dark_ritual');
+
+  test('phase cycle is 10 rounds, 3 day → 1 dusk → 5 night → 1 dawn, non-looping', () => {
+    assert.ok(mission5.phaseCycle);
+    assert.deepEqual(mission5.phaseCycle.phases, [
+      'day','day','day','dusk','night','night','night','night','night','dawn',
+    ]);
+    assert.equal(mission5.phaseCycle.loop, false);
+    assert.equal(mission5.phaseCycle.phases.length, 10);
+  });
+
+  test('uses witch_denied_nodes at dawn as the win condition', () => {
+    assert.equal(mission5.objectives.win.type, 'witch_denied_nodes');
+    assert.equal(mission5.objectives.win.phase, 'dawn');
+  });
+
+  test('lose conditions include hero_killed and witch_holds_node at dawn', () => {
+    assert.ok(Array.isArray(mission5.objectives.lose));
+    const types = mission5.objectives.lose.map(l => l.type);
+    assert.ok(types.includes('hero_killed'));
+    const holds = mission5.objectives.lose.find(l => l.type === 'witch_holds_node');
+    assert.ok(holds, 'lose should include witch_holds_node');
+    assert.equal(holds.phase, 'dawn');
+  });
+
+  test('witch starts with a heavy garrison on each node', () => {
+    const mapData = buildMap('dark_ritual');
+    const nodeHexKeys = new Set();
+    for (const obj of mapData.witchObjectives) {
+      for (const h of obj.hexes) nodeHexKeys.add(`${h.col},${h.row}`);
+    }
+    // At least 3 pre-placed enemy units per node cluster.
+    for (const obj of mapData.witchObjectives) {
+      const clusterKeys = new Set(obj.hexes.map(h => `${h.col},${h.row}`));
+      const onNode = mission5.enemyUnits.filter(u => clusterKeys.has(`${u.col},${u.row}`));
+      assert.ok(onNode.length >= 3,
+        `expected >=3 enemies on node "${obj.label}", got ${onNode.length}`);
+    }
+  });
+
+  test('has an area-triggered golem ambush at the second clearing', () => {
+    const ambush = mission5.waves.find(w => w.trigger === 'area');
+    assert.ok(ambush, 'should have an area-triggered wave');
+    assert.ok(ambush.hexes && ambush.hexes.length > 0, 'ambush should have hex list');
+    const golems = ambush.units.filter(u => u.type === 'wood_golem');
+    assert.ok(golems.length >= 3, `expected >=3 golems in ambush, got ${golems.length}`);
+    // Ambush hex set should include at least one Dark Altar hex.
+    const altarHexes = new Set(['9,6', '10,6', '9,5']);
+    assert.ok(ambush.hexes.some(h => altarHexes.has(`${h.col},${h.row}`)),
+      'ambush hex set should overlap the Dark Altar');
+  });
+
+  test('removes horses from loot', () => {
+    assert.ok(mission5.lootOverrides?.remove?.includes('horse'),
+      'Mission 5 must override loot to remove horses');
+  });
+
+  test('disables node scoring (custom win check runs instead)', () => {
+    assert.equal(mission5.disableScoring, true);
+  });
+
+  test('map is forest-dominant with no river and minimal buildings', () => {
+    const mapData = buildMap('dark_ritual');
+    let forest = 0, river = 0, building = 0, grass = 0;
+    for (const [, tile] of mapData.tiles) {
+      if (tile.type === 'forest')   forest++;
+      if (tile.type === 'river')    river++;
+      if (tile.type === 'building') building++;
+      if (tile.type === 'grass')    grass++;
+    }
+    assert.equal(river, 0, 'dark_ritual map should have no river');
+    assert.ok(building <= 2, `expected ≤2 buildings, got ${building}`);
+    assert.ok(forest > grass, `expected forest-dominant map (forest ${forest} > grass ${grass})`);
+  });
+
+  test('map has two power nodes with distinct clearings', () => {
+    const mapData = buildMap('dark_ritual');
+    assert.equal(mapData.witchObjectives.length, 2);
+    // Both node centre hexes should be passable (not forest, not building).
+    for (const obj of mapData.witchObjectives) {
+      const t = mapData.tiles.get(`${obj.col},${obj.row}`);
+      assert.ok(t, `node hex (${obj.col},${obj.row}) missing`);
+      assert.notEqual(t.type, 'forest', `node hex (${obj.col},${obj.row}) should not be forest`);
+      assert.notEqual(t.type, 'building', `node hex (${obj.col},${obj.row}) should not be a building`);
+    }
   });
 });
 

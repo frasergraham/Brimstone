@@ -1,6 +1,8 @@
 // Campaign state management — persistence, roster, resources, progression.
 // Stored in localStorage; optionally synced to server for verified users.
 
+import { countHeldNodes } from '../game.js';
+
 const SAVE_VERSION = 1;
 
 /**
@@ -131,6 +133,18 @@ function _checkLoseCondition(cond, state) {
         };
       }
       return null;
+    case 'witch_holds_node': {
+      // Fails when the witch still controls ≥1 power node at the target phase.
+      // Pair with `witch_denied_nodes` win.
+      if (cond.phase && state.phase !== cond.phase) return null;
+      if (!state.witchObjectives || state.witchObjectives.length === 0) return null;
+      if (countHeldNodes('witch', state.witchObjectives, state.entities) === 0) return null;
+      return {
+        winner: 'witch',
+        winReason: cond.reason || 'The witch holds a node at dawn.',
+        log: '🌑 Dawn breaks and her power still pulses through the grove.',
+      };
+    }
   }
   return null;
 }
@@ -220,6 +234,18 @@ function _checkWinCondition(cond, state) {
         log: '☀ The whole party has made it through.',
       };
     }
+    case 'witch_denied_nodes': {
+      // Win when the witch controls zero power nodes at the target phase.
+      // Pair with `witch_holds_node` lose.
+      if (cond.phase && state.phase !== cond.phase) return null;
+      if (!state.witchObjectives || state.witchObjectives.length === 0) return null;
+      if (countHeldNodes('witch', state.witchObjectives, state.entities) !== 0) return null;
+      return {
+        winner: 'hero',
+        winReason: cond.reason || 'The witch has been denied at every node.',
+        log: '☀ Dawn breaks over silent nodes — the ritual is broken!',
+      };
+    }
     case 'control_nodes':
       // Standard node scoring — delegate to existing logic (return null to let it run)
       return DEFERRED;
@@ -247,6 +273,17 @@ export function processWaves(state, waves, createEnemyFn) {
       if ((state.heroKills ?? 0) < wave.count) continue;
       if (!state._firedWaves) state._firedWaves = new Set();
       const key = wave.id ?? `kills:${wave.count}`;
+      if (state._firedWaves.has(key)) continue;
+      state._firedWaves.add(key);
+    }
+
+    // Area trigger — fires once when hero stands on any listed hex
+    if (wave.trigger === 'area') {
+      const hero = state.hero;
+      if (!hero) continue;
+      if (!wave.hexes?.some(h => h.col === hero.col && h.row === hero.row)) continue;
+      if (!state._firedWaves) state._firedWaves = new Set();
+      const key = wave.id ?? `area:${wave.hexes[0].col},${wave.hexes[0].row}`;
       if (state._firedWaves.has(key)) continue;
       state._firedWaves.add(key);
     }
