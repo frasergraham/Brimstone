@@ -540,6 +540,16 @@ app.get('/invite', (req, res) => {
   }
 });
 
+// Join link: redirect to hash-based deep link for client-side lobby join
+app.get('/join', (req, res) => {
+  const code = (req.query.code || '').trim();
+  if (!code) { res.status(400).send('Missing game code.'); return; }
+  const slot = req.query.slot;
+  let hash = `#join=${encodeURIComponent(code)}`;
+  if (slot != null && slot !== '') hash += `&slot=${encodeURIComponent(slot)}`;
+  res.redirect(`/${hash}`);
+});
+
 // Get linked identities for the authenticated player
 app.get('/api/identities', (req, res) => {
   const token = req.query.token || req.headers['x-token'];

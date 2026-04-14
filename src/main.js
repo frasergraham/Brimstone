@@ -5269,7 +5269,7 @@ function _checkGameDeepLink() {
 
 // Handle deep links from push notification taps (sets hash then fires hashchange)
 window.addEventListener('hashchange', () => {
-  _checkAsyncDeepLink();
+  _checkGameDeepLink() || _checkAsyncDeepLink();
 });
 // Unified main-menu refresh — fetches games + battle status in parallel
 // and updates the main menu list + multiplayer/battle badges as side effects.
@@ -5388,7 +5388,7 @@ function _renderLobby(lobby) {
 
   // Invite link — use code for private games, room ID for public
   const joinKey = (lobby.isPrivate && lobby.code) ? lobby.code : lobby.id;
-  const inviteUrl = `${_linkOrigin()}#join=${encodeURIComponent(joinKey)}`;
+  const inviteUrl = new URL(`/join?code=${encodeURIComponent(joinKey)}`, _linkOrigin()).href;
   const copyBtn = document.getElementById('btn-lobby-copy-link');
   const copiedEl = document.getElementById('lobby-link-copied');
   copiedEl.style.display = 'none';
@@ -5593,7 +5593,7 @@ function _showSlotInvitePopup(lobby, slotIndex, faction, anchorEl) {
   document.querySelector('.slot-invite-popup')?.remove();
 
   const joinKey = (lobby.isPrivate && lobby.code) ? lobby.code : lobby.id;
-  const deepLink = `${_linkOrigin()}#join=${encodeURIComponent(joinKey)}&slot=${slotIndex}`;
+  const deepLink = new URL(`/join?code=${encodeURIComponent(joinKey)}&slot=${slotIndex}`, _linkOrigin()).href;
 
   const popup = document.createElement('div');
   popup.className = 'slot-invite-popup';
