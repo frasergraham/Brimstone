@@ -1835,6 +1835,18 @@ export class UIController {
       }
     }
 
+    // Count queued attacks per target entity ID (for defender badges)
+    const attacksPerTarget = new Map();
+    if (actionTag === 'pick_defender') {
+      for (const [, queue] of this._unitPlans) {
+        for (const a of queue) {
+          if (a.type === PlanActionType.BATTLE_UNIT && a.targetId) {
+            attacksPerTarget.set(a.targetId, (attacksPerTarget.get(a.targetId) ?? 0) + 1);
+          }
+        }
+      }
+    }
+
     for (const u of units) {
       const col        = ENTITY_COLOR[u.type] || '#888';
       const portraitId  = u.type === 'survivor' ? Renderer.survivorAssetId(u.title) : u.type;
@@ -1846,9 +1858,14 @@ export class UIController {
         ? `<img class="arc-portrait-img" src="${src}">`
         : `<div class="arc-portrait-img" style="display:flex;align-items:center;justify-content:center;font-size:1.2rem;background:rgba(20,16,32,0.8);">${u.displayName.charAt(0)}</div>`;
 
+      const atkCount = attacksPerTarget.get(u.id) ?? 0;
+      const badgeHtml = atkCount > 0
+        ? `<span class="arc-portrait-badge">\u00d7${atkCount}</span>`
+        : '';
+
       arcItems.push({
         group: 'disambig',
-        label: `${imgHtml}<div class="arc-portrait-hp"><div class="arc-portrait-hp-fill" style="width:${(pct * 100).toFixed(0)}%;background:${hpColor};"></div></div><span class="arc-portrait-name">${u.displayName}</span>`,
+        label: `<div class="arc-portrait-img-wrap">${imgHtml}${badgeHtml}</div><div class="arc-portrait-hp"><div class="arc-portrait-hp-fill" style="width:${(pct * 100).toFixed(0)}%;background:${hpColor};"></div></div><span class="arc-portrait-name">${u.displayName}</span>`,
         fullLabel: `${u.displayName} — HP ${u.hp}/${u.maxHp}`,
         color: col,
         dis: false,

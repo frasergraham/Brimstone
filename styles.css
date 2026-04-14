@@ -2048,6 +2048,32 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   text-align: center;
 }
 
+.arc-portrait-img-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.arc-portrait-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: rgba(180, 30, 30, 0.85);
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: bold;
+  line-height: 18px;
+  text-align: center;
+  pointer-events: none;
+  z-index: 1;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
 .arc-portrait-img {
   width: 44px;
   height: 44px;
