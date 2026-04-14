@@ -179,6 +179,17 @@ function _checkWinCondition(cond, state) {
       }
       return null;
     }
+    case 'survive_with_party': {
+      // Win when the target phase is reached with the hero alive and enough
+      // survivors still standing. Pair with `phase_without_survivors` lose.
+      if (state.phase !== cond.phase) return null;
+      if (_heroSurvivorCount(state) < cond.survivors) return null;
+      return {
+        winner: 'hero',
+        winReason: cond.reason || 'You and your companions survived until dawn.',
+        log: '☀ Dawn breaks — you have survived the night.',
+      };
+    }
     case 'control_nodes':
       // Standard node scoring — delegate to existing logic (return null to let it run)
       return DEFERRED;
@@ -241,15 +252,24 @@ function resolveSpawnPosition(state, spawnAt) {
     return { col: t.col, row: t.row };
   }
   if (spawnAt === 'map_edge') {
-    // Pick a random walkable border hex
+    // Pick a random passable tile along any of the four outer edges.
+    let maxCol = 0, maxRow = 0;
+    for (const [, tile] of state.tiles) {
+      if (tile.col > maxCol) maxCol = tile.col;
+      if (tile.row > maxRow) maxRow = tile.row;
+    }
     const edges = [];
     for (const [, tile] of state.tiles) {
-      if (tile.col === 0 || tile.row === 0 || tile.type === 'river') continue;
-      // Rough edge check
-      if (tile.col <= 1 || tile.row <= 1) edges.push(tile);
+      const isEdge = tile.col === 0 || tile.col === maxCol
+                  || tile.row === 0 || tile.row === maxRow;
+      if (!isEdge) continue;
+      if (tile.type === 'river') continue;
+      if (tile.type === 'building') continue;
+      edges.push(tile);
     }
     if (edges.length === 0) return null;
-    return edges[Math.floor(Math.random() * edges.length)];
+    const t = edges[Math.floor(Math.random() * edges.length)];
+    return { col: t.col, row: t.row };
   }
   return null;
 }

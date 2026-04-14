@@ -2522,13 +2522,18 @@ function _initCampaignMission(missionDef) {
   // Deploy carried-over survivors from roster (uses active/reserve selection)
   if (_activeCampaign && missionDef.maxSurvivorsFromRoster > 0) {
     const toDeploy = _activeRosterIndices.slice(0, missionDef.maxSurvivorsFromRoster);
-    // Place survivors near hero start
+    // Place survivors at explicit start positions if the mission specifies
+    // them; otherwise fall back to neighbors of the hero's start tile.
     const heroStart = mapData.heroStart;
+    const explicitSpots = missionDef.survivorStartPositions
+      ? [...missionDef.survivorStartPositions]
+      : null;
     const neighbors = getNeighbors(heroStart.col, heroStart.row);
-    for (let i = 0; i < toDeploy.length && i < neighbors.length; i++) {
+    const spots = explicitSpots ?? neighbors;
+    for (let i = 0; i < toDeploy.length && i < spots.length; i++) {
       const rosterEntry = _activeCampaign.roster[toDeploy[i]];
       if (!rosterEntry) continue;
-      const n = neighbors[i];
+      const n = spots[i];
       const s = createSurvivor(n.col, n.row, 'hero');
       // Restore stats from roster
       s.name = rosterEntry.name;
@@ -2573,8 +2578,14 @@ function _initCampaignMission(missionDef) {
     ).length;
     if (currentCount < min) {
       const heroStart = mapData.heroStart;
-      const spots = getNeighbors(heroStart.col, heroStart.row)
-        .filter(n => !state.entities.some(e => e.col === n.col && e.row === n.row));
+      // Prefer unoccupied explicit start positions; otherwise fall back to
+      // neighbors of the hero's start tile.
+      const candidates = missionDef.survivorStartPositions
+        ? [...missionDef.survivorStartPositions]
+        : getNeighbors(heroStart.col, heroStart.row);
+      const spots = candidates.filter(
+        n => !state.entities.some(e => e.col === n.col && e.row === n.row)
+      );
       for (let i = currentCount; i < min && spots.length > 0; i++) {
         const spot = spots.shift();
         const s = createSurvivor(spot.col, spot.row, 'hero');

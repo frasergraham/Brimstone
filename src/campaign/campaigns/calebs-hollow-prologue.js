@@ -294,11 +294,13 @@ function buildFirstNightMap() {
   // Dirt patches
   scatterDirt(tiles, 5, rand, COLS);
 
-  // Resources + survivor
+  // Resources clustered in and around the starting buildings — the village
+  // is holed up for the night. No hidden survivors on this mission: the
+  // mission deploys a fixed party via survivorStartPositions.
   setResource(tiles, 5, 8, ResourceType.WOOD);
   setResource(tiles, 1, 7, ResourceType.HERBS);
-  setResource(tiles, 8, 7, ResourceType.FOOD);
-  setHiddenSurvivor(tiles, 6, 6);
+  setResource(tiles, 3, 8, ResourceType.FOOD);
+  setResource(tiles, 2, 4, ResourceType.WOOD);
 
   const witchObjectives = [
     {
@@ -699,9 +701,16 @@ const MISSIONS = [
     id:       'first_night',
     title:    'The First Night',
     chapter:  1,
-    briefing: `Dusk falls and the dead grow bolder. Waves of corpses claw their way from the old graveyard. Barricade the village and survive until dawn — 10 rounds of relentless assault.`,
+    briefing: `Dusk falls on Caleb's Hollow. You and your companions shelter in the old inn, church and house while waves of corpses claw their way from the graveyard and the tree line. Hold out until dawn — one dusk turn, five long nights, and the light returns.`,
     victoryText: `Dawn breaks. The wave subsides, leaving the village battered but standing. Among the rubble, a new ally emerges — another survivor drawn to your fight.`,
     defeatText:  `The dead breach your defenses. Caleb's Hollow is overrun.`,
+
+    // One dusk turn, five nights, then dawn on round 7 — the victory
+    // check fires as soon as dawn arrives.
+    phaseCycle: {
+      phases: ['dusk', 'night', 'night', 'night', 'night', 'night', 'dawn'],
+      loop: false,
+    },
 
     mapBuilder:      'first_night',
     mapSize:         'standard',
@@ -712,22 +721,68 @@ const MISSIONS = [
       { type: 'zombie', col: 10, row: 2 },
       { type: 'zombie', col: 11, row: 4 },
     ],
+    // Enemies come in heavy and from multiple directions, pressing in
+    // around the buildings where the party is holed up.
     waves: [
-      { round: 3,  units: [{ type: 'zombie', spawnAt: 'graveyard' }, { type: 'zombie', spawnAt: 'graveyard' }] },
-      { round: 5,  units: [{ type: 'zombie', spawnAt: 'graveyard' }, { type: 'minion', spawnAt: 'map_edge' }] },
-      { round: 7,  units: [{ type: 'zombie', spawnAt: 'graveyard' }, { type: 'zombie', spawnAt: 'graveyard' }, { type: 'minion', spawnAt: 'map_edge' }] },
-      { round: 9,  units: [{ type: 'zombie', spawnAt: 'graveyard' }, { type: 'minion', spawnAt: 'map_edge' }, { type: 'zombie', spawnAt: 'map_edge' }] },
+      { round: 1, units: [
+        { type: 'zombie', spawnAt: 'graveyard' },
+      ] },
+      { round: 2, units: [
+        { type: 'zombie', spawnAt: 'graveyard' },
+        { type: 'zombie', spawnAt: 'graveyard' },
+        { type: 'zombie', spawnAt: 'map_edge' },
+      ] },
+      { round: 3, units: [
+        { type: 'zombie', spawnAt: 'graveyard' },
+        { type: 'zombie', spawnAt: 'graveyard' },
+        { type: 'minion', spawnAt: 'map_edge' },
+      ] },
+      { round: 4, units: [
+        { type: 'zombie', spawnAt: 'graveyard' },
+        { type: 'zombie', spawnAt: 'graveyard' },
+        { type: 'minion', spawnAt: 'map_edge' },
+        { type: 'minion', spawnAt: 'map_edge' },
+      ] },
+      { round: 5, units: [
+        { type: 'zombie', spawnAt: 'graveyard' },
+        { type: 'zombie', spawnAt: 'graveyard' },
+        { type: 'zombie', spawnAt: 'map_edge' },
+      ] },
+      { round: 6, units: [
+        { type: 'zombie', spawnAt: 'map_edge' },
+      ] },
     ],
     aiPersonality: 'aggressive',
     aiBudgetBonus: 2,
 
+    // Guarantee a full party of two companions at the start of the night.
     maxSurvivorsFromRoster:    2,
-    missionSurvivors:          1,
-    maxDiscoverableSurvivors:  2,
+    missionSurvivors:          0,
+    maxDiscoverableSurvivors:  0,
+    minSurvivors:              2,
+    // Place the hero's companions in nearby buildings (church + house)
+    // instead of spilling them onto roads around the inn.
+    survivorStartPositions: [
+      { col: 3, row: 6 }, // church
+      { col: 1, row: 6 }, // house
+    ],
 
     objectives: {
-      win:  { type: 'survive_rounds', rounds: 10, reason: 'You survived the night. Dawn brings hope.' },
-      lose: { type: 'hero_killed' },
+      win: {
+        type: 'survive_with_party',
+        phase: 'dawn',
+        survivors: 2,
+        reason: 'You and your companions held out until dawn.',
+      },
+      lose: [
+        { type: 'hero_killed' },
+        {
+          type: 'phase_without_survivors',
+          phase: 'dawn',
+          survivors: 2,
+          reason: 'Dawn came too late — the village fell with you.',
+        },
+      ],
     },
 
     startingResources: { wood: 3, metal: 1 },
@@ -743,8 +798,8 @@ const MISSIONS = [
       { type: 'round', round: 1, title: 'Darkness Falls',
         text: 'The sun dips below the treeline and the temperature drops. From the direction of the old graveyard, you hear the scraping of earth and the crack of coffin wood. They are coming.',
         flag: 'first_night_start' },
-      { type: 'round', round: 5, title: 'The Witching Hour',
-        text: 'Midnight. The attacks intensify. Something more than zombies stirs in the darkness — you catch a glimpse of unnatural movement at the tree line. Whatever drives these dead, it is close.',
+      { type: 'round', round: 4, title: 'The Witching Hour',
+        text: 'The dead of night. The attacks intensify — they come from every side now, scratching at the walls and shutters. Hold the line. Dawn is still hours away.',
         flag: 'witching_hour' },
     ],
 

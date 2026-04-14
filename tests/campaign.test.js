@@ -343,6 +343,47 @@ describe('Victory delegate', () => {
     });
   });
 
+  // survive_with_party — Mission 3 win type
+  describe('survive_with_party win type', () => {
+    function buildNightState() {
+      const mapData = buildMap('first_night');
+      const state = new GameState(true, false, 'standard', null, mapData);
+      return state;
+    }
+
+    test('wins at dawn with 2+ survivors', () => {
+      const delegate = buildVictoryDelegate({
+        win: { type: 'survive_with_party', phase: 'dawn', survivors: 2 },
+      });
+      const state = buildNightState();
+      state.entities.push(makeHeroSurvivor(2, 8), makeHeroSurvivor(3, 6));
+      state.phase = Phase.DAWN;
+      const result = delegate(state);
+      assert.ok(result);
+      assert.equal(result.winner, 'hero');
+    });
+
+    test('does not win before dawn even with full party', () => {
+      const delegate = buildVictoryDelegate({
+        win: { type: 'survive_with_party', phase: 'dawn', survivors: 2 },
+      });
+      const state = buildNightState();
+      state.entities.push(makeHeroSurvivor(2, 8), makeHeroSurvivor(3, 6));
+      state.phase = Phase.NIGHT;
+      assert.equal(delegate(state), null);
+    });
+
+    test('does not win at dawn with only 1 survivor', () => {
+      const delegate = buildVictoryDelegate({
+        win: { type: 'survive_with_party', phase: 'dawn', survivors: 2 },
+      });
+      const state = buildNightState();
+      state.entities.push(makeHeroSurvivor(2, 8));
+      state.phase = Phase.DAWN;
+      assert.equal(delegate(state), null);
+    });
+  });
+
   // Array lose conditions — Mission 2 combines hero_killed + phase_without_survivors
   test('lose array: first matching condition fires', () => {
     const delegate = buildVictoryDelegate({
@@ -923,16 +964,21 @@ describe('markRosterUsedByName', () => {
 // ── maxDiscoverableSurvivors config ────────────────────────────────────────
 
 describe('maxDiscoverableSurvivors config', () => {
-  test('mission 1 has no discoverable survivors, mission 2 has 2', () => {
+  test('mission 1 has no discoverable survivors, mission 2 allows up to 3', () => {
     const m1 = hollowDef.missions.find(m => m.id === 'prologue');
-    const m2 = hollowDef.missions.find(m => m.id === 'first_night');
+    const m2 = hollowDef.missions.find(m => m.id === 'gathering_survivors');
     assert.equal(m1.maxDiscoverableSurvivors, 0);
-    assert.equal(m2.maxDiscoverableSurvivors, 2);
+    assert.equal(m2.maxDiscoverableSurvivors, 3);
   });
 
-  test('mission 3 does not restrict discoverable survivors', () => {
-    const m3 = hollowDef.missions.find(m => m.id === 'witchs_trail');
-    assert.equal(m3.maxDiscoverableSurvivors, undefined);
+  test('mission 3 does not offer discoverable survivors (fixed-party siege)', () => {
+    const m3 = hollowDef.missions.find(m => m.id === 'first_night');
+    assert.equal(m3.maxDiscoverableSurvivors, 0);
+  });
+
+  test('later missions do not restrict discoverable survivors', () => {
+    const late = hollowDef.missions.find(m => m.id === 'witchs_trail');
+    assert.equal(late.maxDiscoverableSurvivors, undefined);
   });
 });
 
@@ -1735,3 +1781,105 @@ function offsetHexDistance(a, b) {
   const dq = A.q - B.q, dr = A.r - B.r;
   return (Math.abs(dq) + Math.abs(dq + dr) + Math.abs(dr)) / 2;
 }
+
+// ── Mission 3 balance ───────────────────────────────────────────────────────
+
+describe('Mission 3 (The First Night) balance', () => {
+  const mission3 = hollowDef.missions.find(m => m.id === 'first_night');
+
+  test('phase cycle is one dusk + five nights + one dawn (non-looping)', () => {
+    assert.ok(mission3.phaseCycle, 'first_night should have phaseCycle');
+    assert.deepEqual(mission3.phaseCycle.phases,
+      ['dusk', 'night', 'night', 'night', 'night', 'night', 'dawn']);
+    assert.equal(mission3.phaseCycle.loop, false);
+  });
+
+  test('uses survive_with_party win at dawn with 2 survivors', () => {
+    assert.equal(mission3.objectives.win.type, 'survive_with_party');
+    assert.equal(mission3.objectives.win.phase, 'dawn');
+    assert.equal(mission3.objectives.win.survivors, 2);
+  });
+
+  test('lose conditions include hero_killed and phase_without_survivors at dawn', () => {
+    assert.ok(Array.isArray(mission3.objectives.lose));
+    const types = mission3.objectives.lose.map(l => l.type);
+    assert.ok(types.includes('hero_killed'));
+    const pws = mission3.objectives.lose.find(l => l.type === 'phase_without_survivors');
+    assert.ok(pws);
+    assert.equal(pws.phase, 'dawn');
+    assert.equal(pws.survivors, 2);
+  });
+
+  test('guarantees a party of two via minSurvivors and maxSurvivorsFromRoster', () => {
+    assert.equal(mission3.minSurvivors, 2);
+    assert.equal(mission3.maxSurvivorsFromRoster, 2);
+    // No hidden-survivor discovery — the night is a fixed-party defense.
+    assert.equal(mission3.missionSurvivors, 0);
+    assert.equal(mission3.maxDiscoverableSurvivors, 0);
+  });
+
+  test('survivorStartPositions points into town buildings (church + house)', () => {
+    const positions = mission3.survivorStartPositions;
+    assert.ok(Array.isArray(positions) && positions.length >= 2);
+    const mapData = buildMap('first_night');
+    for (const pos of positions) {
+      const tile = mapData.tiles.get(`${pos.col},${pos.row}`);
+      assert.ok(tile, `survivor start (${pos.col},${pos.row}) must exist on map`);
+      assert.equal(tile.type, 'building',
+        `survivor start (${pos.col},${pos.row}) should be a building tile`);
+    }
+  });
+
+  test('map includes resources clustered in town for the starting party', () => {
+    const mapData = buildMap('first_night');
+    const resources = [];
+    for (const [, tile] of mapData.tiles) {
+      if (tile.resource) resources.push({ col: tile.col, row: tile.row, kind: tile.resource });
+    }
+    assert.ok(resources.length >= 3, 'first_night map should include at least 3 resources');
+  });
+
+  test('enemy wave count — heavy swarm across dusk + five nights', () => {
+    // Round 7 is dawn; no wave needed there. Waves should cover rounds 1-6.
+    const waveRounds = mission3.waves.map(w => w.round);
+    for (const r of [1, 2, 3, 4, 5, 6]) {
+      assert.ok(waveRounds.includes(r), `should have a wave in round ${r}`);
+    }
+    const total = mission3.waves.reduce((sum, w) => sum + w.units.length, 0);
+    assert.ok(total >= 12, `expected heavy swarm (>=12 wave spawns), got ${total}`);
+  });
+});
+
+// ── resolveSpawnPosition map_edge ──────────────────────────────────────────
+
+describe('processWaves map_edge spawn covers all four edges', () => {
+  test('spawns can land on col=0, col=max, row=0, and row=max', () => {
+    const mapData = buildMap('first_night');
+    const state = new GameState(true, false, 'standard', null, mapData);
+
+    let maxCol = 0, maxRow = 0;
+    for (const [, t] of state.tiles) {
+      if (t.col > maxCol) maxCol = t.col;
+      if (t.row > maxRow) maxRow = t.row;
+    }
+    const edgeHits = { left: 0, right: 0, top: 0, bottom: 0 };
+
+    // Use a deterministic seed via Math.random shim? Just sample many times.
+    for (let i = 0; i < 200; i++) {
+      state.round = 1;
+      const before = state.entities.length;
+      processWaves(state, [{ round: 1, units: [{ type: 'zombie', spawnAt: 'map_edge' }] }],
+        (_type, col, row) => createZombie(col, row, 'witch'));
+      const spawned = state.entities[before];
+      if (!spawned) continue;
+      if (spawned.col === 0) edgeHits.left++;
+      if (spawned.col === maxCol) edgeHits.right++;
+      if (spawned.row === 0) edgeHits.top++;
+      if (spawned.row === maxRow) edgeHits.bottom++;
+    }
+    assert.ok(edgeHits.left > 0, 'never spawned on west edge');
+    assert.ok(edgeHits.right > 0, 'never spawned on east edge');
+    assert.ok(edgeHits.top > 0, 'never spawned on north edge');
+    assert.ok(edgeHits.bottom > 0, 'never spawned on south edge');
+  });
+});
