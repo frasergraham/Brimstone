@@ -1462,11 +1462,24 @@ export class Renderer {
         this._shadowText(BUILDING_ICON[tile.building] || '?', x, y - hs * 0.10);
       }
 
-      ctx.fillStyle    = 'rgba(255,248,230,0.92)';
-      ctx.font         = `bold ${Math.max(7, Math.floor(hs * 0.25))}px "Georgia", serif`;
-      ctx.textAlign    = 'center';
-      ctx.textBaseline = 'middle';
-      this._shadowText(BUILDING_LABEL[tile.building] || tile.building, x, y + hs * 0.58);
+      // Building names crowd neighbouring hexes at low zoom. Fade them in
+      // smoothly based on the effective on-screen hex size so they only
+      // appear once there's room to read them.
+      const effectiveHex = hs * this.zoomLevel;
+      const LABEL_FADE_START = 40;
+      const LABEL_FADE_END   = 60;
+      const labelAlpha = Math.max(0, Math.min(1,
+        (effectiveHex - LABEL_FADE_START) / (LABEL_FADE_END - LABEL_FADE_START)));
+      if (labelAlpha > 0) {
+        const prevAlpha = ctx.globalAlpha;
+        ctx.globalAlpha = prevAlpha * labelAlpha;
+        ctx.fillStyle    = 'rgba(255,248,230,0.92)';
+        ctx.font         = `bold ${Math.max(7, Math.floor(hs * 0.25))}px "Georgia", serif`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        this._shadowText(BUILDING_LABEL[tile.building] || tile.building, x, y + hs * 0.58);
+        ctx.globalAlpha = prevAlpha;
+      }
     }
   }
 
