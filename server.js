@@ -58,6 +58,20 @@ import { deleteAsyncGame as _deleteAsyncGame,
          getAsyncGameByCode }                  from './server/async-game.js';
 import { serializeState } from './server/state-sync.js';
 import { getGameModeConfig, getDevMode } from './server/game-mode-config.js';
+import {
+  createBattle as createRemoteBattle,
+  addPlayer as addRemoteBattlePlayer,
+  resignPlayer as resignRemoteBattlePlayer,
+  startBattle as startRemoteBattle,
+  generateTurn as generateRemoteBattleTurn,
+  generateAllTurns as generateAllRemoteBattleTurns,
+  submitCustomPlan as submitRemoteBattlePlan,
+  resolveRound as resolveRemoteBattleRound,
+  getBattleStatus as getRemoteBattleStatus,
+  listBattles as listRemoteBattles,
+  getPersonalities as getRemoteBattlePersonalities,
+  deleteBattle as deleteRemoteBattle,
+} from './server/remote-battle.js';
 import { upsertDeviceToken, deleteDeviceToken, pruneStaleTokens } from './server/push.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -885,6 +899,88 @@ app.post('/admin/api/players/:playerId/admin', express.json(), (req, res) => {
 app.post('/admin/api/reset-stats', (req, res) => {
   if (!_requireAdmin(req, res)) return;
   const result = resetStats(VERSION);
+  res.json(result);
+});
+
+// ── Remote Battle admin endpoints ────────────────────────────────────────────
+
+app.get('/admin/api/remote-battle/personalities', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  res.json({
+    hero:  getRemoteBattlePersonalities('hero'),
+    witch: getRemoteBattlePersonalities('witch'),
+  });
+});
+
+app.get('/admin/api/remote-battle', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  res.json(listRemoteBattles());
+});
+
+app.post('/admin/api/remote-battle', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  const { name, mapSize, playersPerSide } = req.body;
+  const battle = createRemoteBattle({ name, mapSize, playersPerSide });
+  res.json({ ok: true, battle: { id: battle.id, name: battle.name } });
+});
+
+app.get('/admin/api/remote-battle/:id', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  const status = getRemoteBattleStatus(req.params.id);
+  if (!status) { res.status(404).json({ error: 'Remote battle not found.' }); return; }
+  res.json(status);
+});
+
+app.delete('/admin/api/remote-battle/:id', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  const result = deleteRemoteBattle(req.params.id);
+  res.json(result);
+});
+
+app.post('/admin/api/remote-battle/:id/add-player', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  const { faction, type, personality, name, llmEndpoint, llmPrompt } = req.body;
+  const result = addRemoteBattlePlayer(req.params.id, {
+    faction, type, personality, name, llmEndpoint, llmPrompt,
+  });
+  res.json(result);
+});
+
+app.post('/admin/api/remote-battle/:id/resign/:playerId', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  const result = resignRemoteBattlePlayer(req.params.id, req.params.playerId);
+  res.json(result);
+});
+
+app.post('/admin/api/remote-battle/:id/start', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  const result = startRemoteBattle(req.params.id);
+  res.json(result);
+});
+
+app.post('/admin/api/remote-battle/:id/take-turn/:playerId', async (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  const result = await generateRemoteBattleTurn(req.params.id, req.params.playerId);
+  res.json(result);
+});
+
+app.post('/admin/api/remote-battle/:id/take-all-turns', async (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  const result = await generateAllRemoteBattleTurns(req.params.id);
+  res.json(result);
+});
+
+app.post('/admin/api/remote-battle/:id/submit-plan/:playerId', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  const { plan } = req.body;
+  if (!Array.isArray(plan)) { res.status(400).json({ ok: false, error: 'plan must be an array.' }); return; }
+  const result = submitRemoteBattlePlan(req.params.id, req.params.playerId, plan);
+  res.json(result);
+});
+
+app.post('/admin/api/remote-battle/:id/resolve', (req, res) => {
+  if (!_requireAdmin(req, res)) return;
+  const result = resolveRemoteBattleRound(req.params.id);
   res.json(result);
 });
 
