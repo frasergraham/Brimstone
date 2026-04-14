@@ -2,7 +2,7 @@
 import { onInactiveChange, tryGameCenterAuth, isNativeMobile, refreshPushToken, loadGameCenterFriends, shareInvite } from './platform.js'; // must be first — sets server globals for Capacitor builds
 import { AppMode, getMode, setMode, isInGame, isAnimating, shouldBufferMessages, onModeChange } from './app-mode.js';
 import { initServerSelector } from './server-selector.js';
-import { GameState } from './game.js';
+import { GameState, phaseForRound } from './game.js';
 import { Renderer }          from './renderer.js';
 import { UIController, UIMode } from './ui.js';
 import { WITCH_PERSONALITIES }   from './ai.js';
@@ -2462,6 +2462,15 @@ function _initCampaignMission(missionDef) {
   const witchIsAI = !missionDef.conductorSteps;
   state = new GameState(witchIsAI, false, missionDef.mapSize, null, mapData);
   state.fogOfWar = missionDef.isTutorial ? 'none' : 'full';
+
+  // Apply custom phase cycle from mission definition
+  if (missionDef.phaseCycle) {
+    state.cycleConfig = {
+      phases: [...missionDef.phaseCycle.phases],
+      loop: missionDef.phaseCycle.loop !== false,
+    };
+    state.phase = phaseForRound(1, state.cycleConfig);
+  }
 
   // Campaign AI budget bonus for harder waves
   if (missionDef.aiBudgetBonus) {

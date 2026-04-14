@@ -23,11 +23,24 @@ const PHASE_EFFECTS = {
 
 const CYCLE_LENGTH = 8;
 
-function roundsUntilScoring(round) {
-  const pos = (round - 1) % CYCLE_LENGTH;
-  // Dawn at pos 0, Dusk at pos 4
-  if (pos < 4) return 4 - pos; // rounds until dusk
-  return CYCLE_LENGTH - pos;   // rounds until next dawn
+function roundsUntilScoring(round, cycleConfig = null) {
+  if (!cycleConfig) {
+    const pos = (round - 1) % CYCLE_LENGTH;
+    // Dawn at pos 0, Dusk at pos 4
+    if (pos < 4) return 4 - pos; // rounds until dusk
+    return CYCLE_LENGTH - pos;   // rounds until next dawn
+  }
+  const { phases, loop } = cycleConfig;
+  const len = phases.length;
+  const currentIdx = loop ? ((round || 1) - 1) % len : (round || 1) - 1;
+  if (currentIdx >= len) return Infinity;
+  if (phases[currentIdx] === 'dawn' || phases[currentIdx] === 'dusk') return 0;
+  for (let offset = 1; offset < len; offset++) {
+    const i = loop ? (currentIdx + offset) % len : currentIdx + offset;
+    if (i >= len) return Infinity;
+    if (phases[i] === 'dawn' || phases[i] === 'dusk') return offset;
+  }
+  return Infinity;
 }
 
 // ── Entity description ──────────────────────────────────────────────────────
@@ -131,8 +144,8 @@ export function serializeGameStateForLLM(state, faction) {
   lines.push(`ROUND ${state.round} | ${state.phase.toUpperCase()} | Score: Hero ${state.nodeScore?.hero ?? 0} - Witch ${state.nodeScore?.witch ?? 0} | Budget: ${budget} actions`);
   lines.push(`Phase effects: ${PHASE_EFFECTS[state.phase] ?? 'None'}`);
 
-  const scoringIn = roundsUntilScoring(state.round);
-  const nextScoringPhase = phaseForRound(state.round + scoringIn);
+  const scoringIn = roundsUntilScoring(state.round, state.cycleConfig);
+  const nextScoringPhase = phaseForRound(state.round + scoringIn, state.cycleConfig);
   lines.push(`Next scoring: ${scoringIn} round${scoringIn !== 1 ? 's' : ''} (${nextScoringPhase})`);
   lines.push('');
 
