@@ -563,6 +563,12 @@ const MISSIONS = [
     victoryText: `The last corpse crumbles to dust. Silence returns to Caleb's Hollow's streets, but you sense this is only the beginning. A survivor stumbles from the wreckage — together, you may stand a chance against what's coming.`,
     defeatText:  `The dead overwhelm you. Caleb's Hollow falls before the fight even begins.`,
 
+    // Daytime only — the opening mission takes place entirely in daylight.
+    phaseCycle: {
+      phases: ['dawn', 'day', 'day', 'day'],
+      loop: true,
+    },
+
     mapBuilder:      'prologue',
     mapSize:         'skirmish',
 
@@ -611,6 +617,12 @@ const MISSIONS = [
     briefing: `The village is clear, but others may have survived. Smoke rises from distant buildings — signs of life, or something worse. Search Caleb's Hollow's outskirts and bring any survivors back before the dead return.`,
     victoryText: `The last zombie falls. You've gathered a small band of survivors — frightened but determined. Together you fortify what remains of Caleb's Hollow, knowing the true horror still lurks beyond the tree line.`,
     defeatText:  `You searched too far and too recklessly. The dead found you before you found help.`,
+
+    // Starts in daytime, progresses into nighttime — a single day-night cycle.
+    phaseCycle: {
+      phases: ['dawn', 'day', 'day', 'day', 'dusk', 'night', 'night', 'night'],
+      loop: false,
+    },
 
     mapBuilder:      'gathering_survivors',
     mapSize:         'skirmish',

@@ -2,7 +2,7 @@
 
 import { describe, test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { GameState, Phase } from '../src/game.js';
+import { GameState, Phase, phaseForRound, getCycleLength, DEFAULT_CYCLE_PHASES } from '../src/game.js';
 import { EntityType, createMinion, createZombie, createSurvivor, markRosterUsedByName, resetRoster, SURVIVOR_ROSTER } from '../src/entities.js';
 import { hexKey, getNeighbors } from '../src/hex.js';
 import {
@@ -11,6 +11,8 @@ import {
 } from '../src/campaign/campaign.js';
 import { ObjectiveType, processStoryTriggers } from '../src/campaign/missions.js';
 import { CAMPAIGNS, getCampaignById } from '../src/campaign/campaign-registry.js';
+import { roundsUntilScoring } from '../src/ai.js';
+import { serializeState, deserializeState } from '../server/state-sync.js';
 
 // ── Helper: localStorage mock for Node ──────────────────────────────────────
 const _store = {};
@@ -1271,5 +1273,192 @@ describe('Mission failure preserves party state', () => {
     assert.equal(c.heroStats.weapon, 'axe', 'hero weapon updated on victory');
     assert.equal(c.resources.wood, 2, 'resources updated on victory (1 carry-forward + 1 reward)');
     assert.ok(c.completedMissions.has('prologue'), 'mission completed');
+  });
+});
+
+// ── Custom phase cycles ────────────────────────────────────────────────────
+
+describe('Custom phase cycles', () => {
+  const daytimeLoop = { phases: ['dawn', 'day', 'day', 'day'], loop: true };
+  const dayNightFixed = {
+    phases: ['dawn', 'day', 'day', 'day', 'dusk', 'night', 'night', 'night'],
+    loop: false,
+  };
+
+  describe('phaseForRound with looping custom cycle', () => {
+    test('round 1 = dawn', () => {
+      assert.equal(phaseForRound(1, daytimeLoop), 'dawn');
+    });
+    test('rounds 2-4 = day', () => {
+      assert.equal(phaseForRound(2, daytimeLoop), 'day');
+      assert.equal(phaseForRound(3, daytimeLoop), 'day');
+      assert.equal(phaseForRound(4, daytimeLoop), 'day');
+    });
+    test('wraps: round 5 = dawn again', () => {
+      assert.equal(phaseForRound(5, daytimeLoop), 'dawn');
+    });
+    test('wraps: round 8 = day', () => {
+      assert.equal(phaseForRound(8, daytimeLoop), 'day');
+    });
+    test('wraps: round 9 = dawn (3rd cycle)', () => {
+      assert.equal(phaseForRound(9, daytimeLoop), 'dawn');
+    });
+  });
+
+  describe('phaseForRound with fixed custom cycle', () => {
+    test('round 1 = dawn', () => {
+      assert.equal(phaseForRound(1, dayNightFixed), 'dawn');
+    });
+    test('round 5 = dusk', () => {
+      assert.equal(phaseForRound(5, dayNightFixed), 'dusk');
+    });
+    test('round 8 = night (last phase)', () => {
+      assert.equal(phaseForRound(8, dayNightFixed), 'night');
+    });
+    test('round 9 clamps to last phase (night)', () => {
+      assert.equal(phaseForRound(9, dayNightFixed), 'night');
+    });
+    test('round 20 still clamps to night', () => {
+      assert.equal(phaseForRound(20, dayNightFixed), 'night');
+    });
+  });
+
+  describe('phaseForRound without cycleConfig uses default', () => {
+    test('null cycleConfig uses hardcoded 8-step cycle', () => {
+      assert.equal(phaseForRound(1, null), 'dawn');
+      assert.equal(phaseForRound(2, null), 'day');
+      assert.equal(phaseForRound(5, null), 'dusk');
+      assert.equal(phaseForRound(6, null), 'night');
+      assert.equal(phaseForRound(9, null), 'dawn');
+    });
+  });
+
+  describe('getCycleLength', () => {
+    test('returns 8 for null cycleConfig', () => {
+      assert.equal(getCycleLength(null), 8);
+    });
+    test('returns custom length', () => {
+      assert.equal(getCycleLength(daytimeLoop), 4);
+      assert.equal(getCycleLength(dayNightFixed), 8);
+    });
+  });
+
+  describe('roundsUntilScoring with daytime-only looping cycle', () => {
+    test('round 1 (dawn) = scoring now', () => {
+      assert.equal(roundsUntilScoring(1, daytimeLoop), 0);
+    });
+    test('round 2 (day) = 3 rounds until next dawn', () => {
+      assert.equal(roundsUntilScoring(2, daytimeLoop), 3);
+    });
+    test('round 4 (day) = 1 round until next dawn', () => {
+      assert.equal(roundsUntilScoring(4, daytimeLoop), 1);
+    });
+    test('round 5 (dawn, wrapped) = scoring now', () => {
+      assert.equal(roundsUntilScoring(5, daytimeLoop), 0);
+    });
+  });
+
+  describe('roundsUntilScoring with fixed day-night cycle', () => {
+    test('round 1 (dawn) = scoring now', () => {
+      assert.equal(roundsUntilScoring(1, dayNightFixed), 0);
+    });
+    test('round 2 (day) = 3 until dusk', () => {
+      assert.equal(roundsUntilScoring(2, dayNightFixed), 3);
+    });
+    test('round 5 (dusk) = scoring now', () => {
+      assert.equal(roundsUntilScoring(5, dayNightFixed), 0);
+    });
+    test('round 6 (night) = Infinity (no more scoring in fixed cycle)', () => {
+      assert.equal(roundsUntilScoring(6, dayNightFixed), Infinity);
+    });
+    test('round 9 (past end) = Infinity', () => {
+      assert.equal(roundsUntilScoring(9, dayNightFixed), Infinity);
+    });
+  });
+
+  describe('roundsUntilScoring without cycleConfig uses default', () => {
+    test('round 1 = 0 (dawn)', () => {
+      assert.equal(roundsUntilScoring(1, null), 0);
+    });
+    test('round 2 = 3 (until dusk at round 5)', () => {
+      assert.equal(roundsUntilScoring(2, null), 3);
+    });
+  });
+
+  describe('GameState endRound with custom cycle', () => {
+    test('looping daytime cycle stays in day phases', () => {
+      const state = new GameState(true, false, 'skirmish');
+      state.cycleConfig = { ...daytimeLoop, phases: [...daytimeLoop.phases] };
+      state.phase = phaseForRound(1, state.cycleConfig);
+      state.disableScoring = true;
+
+      const phases = [state.phase];
+      for (let i = 0; i < 8; i++) {
+        state.endRound();
+        phases.push(state.phase);
+      }
+      // 9 phases total: rounds 1..9
+      assert.deepEqual(phases, [
+        'dawn', 'day', 'day', 'day',   // cycle 1
+        'dawn', 'day', 'day', 'day',   // cycle 2
+        'dawn',                          // cycle 3 start
+      ]);
+    });
+
+    test('fixed cycle clamps to last phase after exhaustion', () => {
+      const state = new GameState(true, false, 'skirmish');
+      state.cycleConfig = { ...dayNightFixed, phases: [...dayNightFixed.phases] };
+      state.phase = phaseForRound(1, state.cycleConfig);
+      state.disableScoring = true;
+
+      for (let i = 0; i < 9; i++) {
+        state.endRound();
+      }
+      // Round 10, past the 8-phase fixed cycle — should clamp to 'night'
+      assert.equal(state.round, 10);
+      assert.equal(state.phase, 'night');
+    });
+  });
+
+  describe('cycleConfig serialization round-trip', () => {
+    test('looping cycle survives serialize/deserialize', () => {
+      const state = new GameState(true, false, 'skirmish');
+      state.cycleConfig = { phases: ['dawn', 'day', 'day', 'day'], loop: true };
+
+      const snap = serializeState(state);
+      assert.deepEqual(snap.cycleConfig, { phases: ['dawn', 'day', 'day', 'day'], loop: true });
+
+      const restored = deserializeState(snap);
+      assert.deepEqual(restored.cycleConfig, { phases: ['dawn', 'day', 'day', 'day'], loop: true });
+    });
+
+    test('null cycleConfig survives serialize/deserialize', () => {
+      const state = new GameState(true, false, 'skirmish');
+      assert.equal(state.cycleConfig, null);
+
+      const snap = serializeState(state);
+      assert.equal(snap.cycleConfig, null);
+
+      const restored = deserializeState(snap);
+      assert.equal(restored.cycleConfig, null);
+    });
+  });
+
+  describe('mission definitions have phaseCycle', () => {
+    const missions = hollowDef.missions;
+
+    test('prologue mission has daytime-only looping cycle', () => {
+      const prologue = missions.find(m => m.id === 'prologue');
+      assert.ok(prologue.phaseCycle, 'prologue should have phaseCycle');
+      assert.deepEqual(prologue.phaseCycle.phases, ['dawn', 'day', 'day', 'day']);
+      assert.equal(prologue.phaseCycle.loop, true);
+    });
+
+    test('gathering_survivors mission has day-to-night fixed cycle', () => {
+      const gs = missions.find(m => m.id === 'gathering_survivors');
+      assert.ok(gs.phaseCycle, 'gathering_survivors should have phaseCycle');
+      assert.deepEqual(gs.phaseCycle.phases, ['dawn', 'day', 'day', 'day', 'dusk', 'night', 'night', 'night']);
+      assert.equal(gs.phaseCycle.loop, false);
+    });
   });
 });

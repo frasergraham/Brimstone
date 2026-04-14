@@ -211,7 +211,7 @@ export function assessHeroBoard(sim) {
   }
 
   const round = sim.round;
-  const roundsToScoring = roundsUntilScoring(round);
+  const roundsToScoring = roundsUntilScoring(round, sim.cycleConfig);
 
   return {
     phase, isNight, isDay, isDawnOrDusk,

@@ -2,7 +2,7 @@
 import { hexKey, hexToPixel, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType } from './tiles.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
-import { Phase, PHASE_ICON, phaseForRound, nodeController, countHeldNodes } from './game.js';
+import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
 import {
   ActionType, getValidActions, getVisiblePositions,
@@ -2159,21 +2159,22 @@ export class UIController {
     const el    = this._el('turn-info');
     if (!el) return;
 
-    // 8-step cycle — shared between header and cycle-bar
-    const CYCLE_STEPS = [
-      { phase: 'dawn',  sprite: 'cycle_dawn',  label: 'Dawn',  desc: 'Hero +1 action · node scoring · attrition rises' },
-      { phase: 'day',   sprite: 'cycle_day',   label: 'Day',   desc: 'Witch undead in the open suffer' },
-      { phase: 'day',   sprite: 'cycle_day',   label: 'Day',   desc: 'Witch undead in the open suffer' },
-      { phase: 'day',   sprite: 'cycle_day',   label: 'Day',   desc: 'Witch undead in the open suffer' },
-      { phase: 'dusk',  sprite: 'cycle_dusk',  label: 'Dusk',  desc: 'Node scoring · seek cover before night' },
-      { phase: 'night', sprite: 'cycle_night', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
-      { phase: 'night', sprite: 'cycle_night', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
-      { phase: 'night', sprite: 'cycle_night', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
-    ];
+    // Derive cycle steps from custom cycleConfig or use the default 8-step cycle
+    const PHASE_META = {
+      dawn:  { sprite: 'cycle_dawn',  label: 'Dawn',  desc: 'Hero +1 action · node scoring · attrition rises' },
+      day:   { sprite: 'cycle_day',   label: 'Day',   desc: 'Witch undead in the open suffer' },
+      dusk:  { sprite: 'cycle_dusk',  label: 'Dusk',  desc: 'Node scoring · seek cover before night' },
+      night: { sprite: 'cycle_night', label: 'Night', desc: 'Witch +2 ATK · Survivors in the open suffer' },
+    };
+    const cyclePhases = state.cycleConfig?.phases ?? DEFAULT_CYCLE_PHASES;
+    const CYCLE_STEPS = cyclePhases.map(p => ({ phase: p, ...PHASE_META[p] }));
 
-    const roundInCycle = (state.round - 1) % 8;
-    const cycle        = Math.ceil(state.round / 8);
-    const roundLabel   = `Day ${cycle} · Round ${roundInCycle + 1}`;
+    const cycleLen     = CYCLE_STEPS.length;
+    const roundInCycle = (state.round - 1) % cycleLen;
+    const cycle        = Math.ceil(state.round / cycleLen);
+    const roundLabel   = state.cycleConfig && !state.cycleConfig.loop
+      ? `Round ${state.round} of ${cyclePhases.length}`
+      : `Day ${cycle} · Round ${roundInCycle + 1}`;
 
     // Render always-visible cycle bar (compact icon row)
     const cycleBar = this._el('cycle-bar');
@@ -3655,7 +3656,7 @@ export class UIController {
         } else {
           // Show the upcoming phase + round instead of "Round N complete"
           const nextRound = (roundNum ?? 0) + 1;
-          const nextPhase = phaseForRound(nextRound);
+          const nextPhase = phaseForRound(nextRound, this.state?.cycleConfig);
           const icon = PHASE_ICON[nextPhase] ?? '';
           titleEl.textContent = `${icon} ${nextPhase.charAt(0).toUpperCase() + nextPhase.slice(1)} — Round ${nextRound}`;
         }
@@ -3671,7 +3672,7 @@ export class UIController {
             dusk:  'Power Nodes scored · Night approaches',
             night: 'Witch +2 ATK · Survivors in the open suffer',
           };
-          const nextPhase = phaseForRound((roundNum ?? 0) + 1);
+          const nextPhase = phaseForRound((roundNum ?? 0) + 1, this.state?.cycleConfig);
           const fx = PHASE_EFFECTS[nextPhase];
           if (fx) html += `<div class="summary-phase-effects">${fx}</div>`;
         }
