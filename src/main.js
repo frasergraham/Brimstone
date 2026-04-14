@@ -1484,6 +1484,13 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     // Only show dialogs for entities this player directly controls; other players'
     // units on the same team resolve silently.
     // In offline/solo mode myPlayerId is null so we fall back to faction filtering.
+
+    // Clear loot flashes from previous steps so only this step's explore
+    // results are visible (flashes last 1800ms but inter-step delay is <300ms).
+    let hadExplore = false;
+    const hasExploreEvents = events.some(ev => ev.action?.type === PlanActionType.EXPLORE && ev.result?.log?.length);
+    if (hasExploreEvents) renderer.clearFlashes();
+
     for (const ev of events) {
       const { action, result } = ev;
       if (action.type !== PlanActionType.EXPLORE) continue;
@@ -1498,11 +1505,17 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (humanFaction && ev.faction !== humanFaction) continue;
       const actor = explorer;
       if (myPlayerId && actor?.ownerId !== myPlayerId) continue;
-      if (actor) ui._showLootFlashes(actor, result.lootItems ?? []);
+      if (actor) { ui._showLootFlashes(actor, result.lootItems ?? []); hadExplore = true; }
       redrawFn();
       if (!_suppressDialogs && result.encounterSurvivor) {
         await new Promise(resolve => ui._showEncounterDialog(result.encounterSurvivor, resolve, 'explore'));
       }
+    }
+    // Wait for loot flashes so they're fully visible before the next step
+    // starts a new explore and clears them.
+    if (hadExplore && !_autoplay) {
+      const _espd = ui?.speedMode ?? 'cinematic';
+      await playbackDelay(_espd === 'vfast' ? 300 : _espd === 'fast' ? 600 : 1200);
     }
 
     // ── Phase 3b: Sound Horn — horn flash + survivor encounter ────────────

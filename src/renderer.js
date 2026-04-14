@@ -535,6 +535,9 @@ export class Renderer {
     this._lungeAnims = [];
   }
 
+  /** Clear only hex flash overlays (loot floaters, HP text, etc.). */
+  clearFlashes() { this._flashes = []; }
+
   /** Clear all in-flight canvas animations (moves, flashes, deaths, lunges, battle highlights, zoom). */
   clearAnimations() {
     this._moveAnims              = [];
