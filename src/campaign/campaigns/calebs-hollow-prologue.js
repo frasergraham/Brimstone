@@ -236,13 +236,13 @@ function buildGatheringSurvivorsMap() {
   // Dirt patches
   scatterDirt(tiles, 4, rand, COLS);
 
-  // Resources + survivors
+  // Resources + survivors — one survivor near the hero start, two further away.
   setResource(tiles, 2, 7, ResourceType.FOOD);
   setResource(tiles, 6, 4, ResourceType.HERBS);
   setResource(tiles, 8, 5, ResourceType.WOOD);
-  setHiddenSurvivor(tiles, 5, 5);   // church
-  setHiddenSurvivor(tiles, 8, 7);   // barn
-  setHiddenSurvivor(tiles, 3, 3);   // house
+  setHiddenSurvivor(tiles, 4, 7);   // apothecary — close to inn at (1,9)
+  setHiddenSurvivor(tiles, 3, 3);   // house — across the map
+  setHiddenSurvivor(tiles, 8, 7);   // barn — far east
 
   return {
     tiles,
@@ -294,23 +294,16 @@ function buildFirstNightMap() {
   // Dirt patches
   scatterDirt(tiles, 5, rand, COLS);
 
-  // Resources + survivor
+  // Resources clustered in and around the starting buildings — the village
+  // is holed up for the night. No hidden survivors on this mission: the
+  // mission deploys a fixed party via survivorStartPositions.
   setResource(tiles, 5, 8, ResourceType.WOOD);
   setResource(tiles, 1, 7, ResourceType.HERBS);
-  setResource(tiles, 8, 7, ResourceType.FOOD);
-  setHiddenSurvivor(tiles, 6, 6);
+  setResource(tiles, 3, 8, ResourceType.FOOD);
+  setResource(tiles, 2, 4, ResourceType.WOOD);
 
-  const witchObjectives = [
-    {
-      col: 4, row: 7,
-      label: 'Village Square',
-      hexes: [{ col: 4, row: 7 }, { col: 3, row: 7 }, { col: 5, row: 7 }],
-      color: NODE_COLORS[0],
-      seenByHero: true,
-      seenByWitch: true,
-      prevCtrl: 'neutral',
-    },
-  ];
+  // No power nodes — survival mission, not a node contest.
+  const witchObjectives = [];
 
   return {
     tiles,
@@ -330,47 +323,55 @@ function buildRiverCrossingMap() {
   const rand = rng(314);
   const tiles = makeTiles(COLS, ROWS);
 
-  // N-S river cutting across near the east end (col ~12)
-  // Hand-placed for the narrow corridor shape
-  const riverCol = 12;
+  // N-S river cutting the map roughly in half (cols 9-12 with drift).
+  const riverCol = 10;
   const riverPath = [];
   for (let row = 0; row < ROWS; row++) {
     const drift = Math.floor(rand() * 3) - 1;
-    const col = Math.max(10, Math.min(14, riverCol + drift));
+    const col = Math.max(9, Math.min(12, riverCol + drift));
     riverPath.push({ col, row });
   }
   carveRiver(tiles, riverPath);
   const riverMap = buildRiverMap(riverPath, false);
 
-  // Buildings
+  // Buildings — hero party starts on the west bank, the church waits on
+  // the far east bank as the objective.
   setBuilding(tiles, 1, 4, BuildingType.INN, 1);          // west start
   setBuilding(tiles, 5, 3, BuildingType.HOUSE, 0);
-  setBuilding(tiles, 8, 5, BuildingType.BLACKSMITH, 0);
+  setBuilding(tiles, 7, 5, BuildingType.BLACKSMITH, 0);
   setBuilding(tiles, 14, 2, BuildingType.GRAVEYARD, 0);    // far side
-  setBuilding(tiles, 15, 6, BuildingType.WATCHTOWER, 0);   // far side
+  setBuilding(tiles, 15, 4, BuildingType.CHURCH, 1);       // far side — objective
 
-  // MST roads
+  // MST roads — ensures bridges get placed crossing the river.
   const bldgs = [
-    { col: 1, row: 4 }, { col: 5, row: 3 }, { col: 8, row: 5 },
-    { col: 14, row: 2 }, { col: 15, row: 6 },
+    { col: 1, row: 4 }, { col: 5, row: 3 }, { col: 7, row: 5 },
+    { col: 14, row: 2 }, { col: 15, row: 4 },
   ];
   buildRoadNetwork(tiles, bldgs, rand, 2);
 
-  // Dense forest flanking the road
+  // Dense forest flanking the road, giving zombies cover to swarm the banks.
   growForests(tiles, [
     { col: 3, row: 1 }, { col: 6, row: 7 },
     { col: 4, row: 6 }, { col: 9, row: 1 },
     { col: 7, row: 7 }, { col: 2, row: 0 },
-    { col: 10, row: 7 }, { col: 15, row: 1 },
+    { col: 10, row: 7 }, { col: 13, row: 7 },
+    { col: 13, row: 0 },
   ], rand, 0.65, 0.35);
 
   // Dirt
   scatterDirt(tiles, 3, rand, COLS);
 
-  // Resources
+  // Resources — 4 herbs clustered around the church on the far bank
+  // (the "healing stockpile" the survivor has been hoarding). A little
+  // food and wood on the approach for the long crossing.
   setResource(tiles, 3, 5, ResourceType.FOOD);
   setResource(tiles, 7, 2, ResourceType.WOOD);
-  setHiddenSurvivor(tiles, 8, 5);
+  setResource(tiles, 15, 3, ResourceType.HERBS);
+  setResource(tiles, 15, 5, ResourceType.HERBS);
+  setResource(tiles, 16, 3, ResourceType.HERBS);
+  setResource(tiles, 16, 5, ResourceType.HERBS);
+  // The survivor is holed up inside the church itself.
+  setHiddenSurvivor(tiles, 15, 4);
 
   return {
     tiles,
@@ -381,8 +382,8 @@ function buildRiverCrossingMap() {
     survivorCounts: { buildings: 1, terrain: 0 },
     cols: COLS,
     rows: ROWS,
-    // reach_hex objective uses this
-    targetHex: { col: 16, row: 4 },
+    // reach_hex objective uses this (legacy / fallback display)
+    targetHex: { col: 15, row: 4 },
   };
 }
 
@@ -392,50 +393,53 @@ function buildDarkRitualMap() {
   const rand = rng(666);
   const tiles = makeTiles(COLS, ROWS);
 
-  // River (N-S)
-  const riverPath = generateRiverNS(rand);
-  carveRiver(tiles, riverPath);
+  // No river — deep forest. One landmark building only: the hero's starting
+  // shelter on the south edge.
+  setBuilding(tiles, 1, 10, BuildingType.HOUSE, 0);
 
-  // Buildings
-  setBuilding(tiles, 2, 10, BuildingType.INN, 1);
-  setBuilding(tiles, 4, 8, BuildingType.CHURCH, 0);
-  setBuilding(tiles, 10, 2, BuildingType.GRAVEYARD, 0);
-  setBuilding(tiles, 7, 5, BuildingType.WATCHTOWER, 0);
-  setBuilding(tiles, 3, 5, BuildingType.HOUSE, 0);
-  setBuilding(tiles, 9, 8, BuildingType.BLACKSMITH, 0);
-
-  // MST roads
-  const bldgs = [
-    { col: 2, row: 10 }, { col: 4, row: 8 }, { col: 10, row: 2 },
-    { col: 7, row: 5 }, { col: 3, row: 5 }, { col: 9, row: 8 },
-  ];
-  buildRoadNetwork(tiles, bldgs, rand, 2);
-
-  // Dense forests (ritual theme)
+  // Dense forest blankets most of the map. No road network.
   growForests(tiles, [
-    { col: 5, row: 3 }, { col: 8, row: 3 },
-    { col: 1, row: 3 }, { col: 11, row: 7 },
-    { col: 6, row: 9 }, { col: 0, row: 7 },
-    { col: 11, row: 11 }, { col: 3, row: 1 },
-  ], rand, 0.75, 0.45);
+    // North band
+    { col: 1, row: 1 }, { col: 4, row: 1 }, { col: 8, row: 1 }, { col: 11, row: 1 },
+    // Mid-upper band (around the first clearing)
+    { col: 2, row: 3 }, { col: 8, row: 3 }, { col: 11, row: 3 },
+    // Middle band (between clearings)
+    { col: 0, row: 5 }, { col: 2, row: 6 }, { col: 6, row: 5 }, { col: 7, row: 7 },
+    { col: 11, row: 5 },
+    // Lower band (around the second clearing)
+    { col: 3, row: 7 }, { col: 8, row: 8 }, { col: 11, row: 8 },
+    // South band
+    { col: 0, row: 11 }, { col: 5, row: 11 }, { col: 9, row: 10 }, { col: 12, row: 11 },
+  ], rand, 0.85, 0.55);
 
-  // Dirt
-  scatterDirt(tiles, 4, rand, COLS);
+  // Carve three clearings: hero start, Ritual Circle, Dark Altar.
+  const clearings = [
+    { col: 1, row: 10 }, { col: 2, row: 10 }, // hero start clearing
+    { col: 5, row: 4 }, { col: 4, row: 4 }, { col: 5, row: 3 }, { col: 6, row: 4 }, { col: 5, row: 5 }, // Ritual Circle
+    { col: 9, row: 6 }, { col: 10, row: 6 }, { col: 9, row: 5 }, { col: 8, row: 6 }, { col: 9, row: 7 }, // Dark Altar
+  ];
+  for (const { col, row } of clearings) {
+    const t = tiles.get(hexKey(col, row));
+    if (t && t.type === TileType.FOREST) t.type = TileType.GRASS;
+  }
 
-  // Resources
-  setResource(tiles, 3, 9, ResourceType.METAL);
-  setResource(tiles, 8, 4, ResourceType.HERBS);
-  setResource(tiles, 6, 7, ResourceType.WOOD);
-  setHiddenSurvivor(tiles, 7, 5);
+  // Dirt scatter for visual texture.
+  scatterDirt(tiles, 3, rand, COLS);
 
-  // Two power nodes
+  // Resources — one herbs cache in each node clearing so the hero has a
+  // reason to push through.
+  setResource(tiles, 4, 4, ResourceType.HERBS);
+  setResource(tiles, 10, 6, ResourceType.HERBS);
+
+  // Two power nodes — visible to the hero from turn 1 so the objective is
+  // obvious.
   const witchObjectives = [
     {
       col: 5, row: 4,
       label: 'Ritual Circle',
       hexes: [{ col: 5, row: 4 }, { col: 4, row: 4 }, { col: 5, row: 3 }],
       color: NODE_COLORS[0],
-      seenByHero: false,
+      seenByHero: true,
       seenByWitch: true,
       prevCtrl: 'neutral',
     },
@@ -444,7 +448,7 @@ function buildDarkRitualMap() {
       label: 'Dark Altar',
       hexes: [{ col: 9, row: 6 }, { col: 10, row: 6 }, { col: 9, row: 5 }],
       color: NODE_COLORS[1],
-      seenByHero: false,
+      seenByHero: true,
       seenByWitch: true,
       prevCtrl: 'neutral',
     },
@@ -456,7 +460,7 @@ function buildDarkRitualMap() {
     heroStart:      { col: 2, row: 10 },
     witchStart:     { col: 10, row: 2 },
     mapSize:        'standard',
-    survivorCounts: { buildings: 1, terrain: 0 },
+    survivorCounts: { buildings: 0, terrain: 0 },
     cols: COLS,
     rows: ROWS,
   };
@@ -559,8 +563,8 @@ const MISSIONS = [
     id:       'prologue',
     title:    'The Awakening',
     chapter:  1,
-    briefing: `You awaken at the Caleb's Hollow Inn to the sound of screaming. The dead walk the streets — shambling corpses driven by an unseen malice. Grab what you can and clear the village before more arrive.`,
-    victoryText: `The last corpse crumbles to dust. Silence returns to Caleb's Hollow's streets, but you sense this is only the beginning. A survivor stumbles from the wreckage — together, you may stand a chance against what's coming.`,
+    briefing: `You awaken at the Caleb's Hollow Inn to the sound of screaming. Shambling corpses stagger through the streets — but something worse stirs behind them, a crude thing of wood and bone answering to their blood. Cut down the dead and face what rises in their wake.`,
+    victoryText: `The golem crumbles into splintered timber and dust. Silence returns to Caleb's Hollow's streets, but you sense this is only the beginning. A survivor stumbles from the wreckage — together, you may stand a chance against what's coming.`,
     defeatText:  `The dead overwhelm you. Caleb's Hollow falls before the fight even begins.`,
 
     // Daytime only — the opening mission takes place entirely in daylight.
@@ -577,10 +581,20 @@ const MISSIONS = [
     enemyUnits: [
       { type: 'zombie', col: 3, row: 2, overrides: { attack: 1 } },
       { type: 'zombie', col: 6, row: 5, overrides: { attack: 1 } },
+      { type: 'zombie', col: 4, row: 6, overrides: { attack: 1 } },
     ],
     waves: [
-      { round: 3, units: [{ type: 'zombie', spawnAt: 'map_edge', overrides: { attack: 1 } }] },
-      { round: 5, units: [{ type: 'zombie', spawnAt: 'map_edge', overrides: { attack: 1 } }] },
+      {
+        id: 'golem-awakens',
+        trigger: 'hero_kills',
+        count: 3,
+        units: [{
+          type: 'wood_golem',
+          spawnAt: 'map_edge',
+          overrides: { maxHp: 2, hp: 2, attack: 1, defense: 1 },
+          spawnLog: '🗿 A crude wood-and-bone golem lurches out of the alley!',
+        }],
+      },
     ],
     aiPersonality: 'balanced',
     aiBudgetBonus: 0,
@@ -590,7 +604,7 @@ const MISSIONS = [
     maxDiscoverableSurvivors:  0,
 
     objectives: {
-      win:  { type: 'eliminate_all', reason: 'The streets of Caleb\'s Hollow are clear.' },
+      win:  { type: 'eliminate_all', reason: "The golem shatters — Caleb's Hollow is silent again." },
       lose: { type: 'hero_killed' },
     },
 
@@ -614,13 +628,15 @@ const MISSIONS = [
     id:       'gathering_survivors',
     title:    'Gathering Survivors',
     chapter:  1,
-    briefing: `The village is clear, but others may have survived. Smoke rises from distant buildings — signs of life, or something worse. Search Caleb's Hollow's outskirts and bring any survivors back before the dead return.`,
+    briefing: `The village is clear, but others may have survived. Smoke rises from distant buildings — signs of life, or something worse. Find at least two survivors and thin the pack of dead before dusk. If night falls while you still search alone, you will not see the dawn.`,
     victoryText: `The last zombie falls. You've gathered a small band of survivors — frightened but determined. Together you fortify what remains of Caleb's Hollow, knowing the true horror still lurks beyond the tree line.`,
     defeatText:  `You searched too far and too recklessly. The dead found you before you found help.`,
 
-    // Starts in daytime, progresses into nighttime — a single day-night cycle.
+    // Six daytime turns (dawn + 5 day) then dusk on the seventh turn. The
+    // mission resolves at dusk — win if two survivors are in hand, lose
+    // otherwise.
     phaseCycle: {
-      phases: ['dawn', 'day', 'day', 'day', 'dusk', 'night', 'night', 'night'],
+      phases: ['dawn', 'day', 'day', 'day', 'day', 'day', 'dusk'],
       loop: false,
     },
 
@@ -635,7 +651,7 @@ const MISSIONS = [
     ],
     waves: [
       { round: 3, units: [{ type: 'zombie', spawnAt: 'map_edge' }] },
-      { round: 6, units: [{ type: 'zombie', spawnAt: 'map_edge' }, { type: 'zombie', spawnAt: 'map_edge' }] },
+      { round: 5, units: [{ type: 'zombie', spawnAt: 'map_edge' }, { type: 'zombie', spawnAt: 'map_edge' }] },
     ],
     aiPersonality: 'balanced',
     aiBudgetBonus: 1,
@@ -645,8 +661,22 @@ const MISSIONS = [
     maxDiscoverableSurvivors:  3,
 
     objectives: {
-      win:  { type: 'eliminate_all', reason: 'The area is secure. Your band of survivors grows.' },
-      lose: { type: 'hero_killed' },
+      win: {
+        type: 'gather_and_survive',
+        survivors: 2,
+        kills: 4,
+        phaseFallback: 'dusk',
+        reason: 'The survivors are safe — Caleb\'s Hollow holds out another night.',
+      },
+      lose: [
+        { type: 'hero_killed' },
+        {
+          type: 'phase_without_survivors',
+          phase: 'dusk',
+          survivors: 2,
+          reason: 'Night fell before you found enough survivors.',
+        },
+      ],
     },
 
     startingResources: { food: 1, herbs: 1 },
@@ -655,11 +685,14 @@ const MISSIONS = [
 
     storyTriggers: [
       { type: 'round', round: 1, title: 'Voices in the Fog',
-        text: 'Through the morning haze you hear voices — desperate, frightened. Others survived the night. You must reach them before the dead do.',
+        text: 'Through the morning haze you hear voices — desperate, frightened. Others survived the night. Find at least two of them and cut down the dead before dusk.',
         flag: 'gathering_intro' },
-      { type: 'area', hexes: [{ col: 5, row: 5 }], title: 'Sanctuary',
-        text: 'The church doors are barricaded from the inside. You call out and hear weeping — then the scrape of wood as the barricade is removed. A survivor emerges, pale but alive.',
-        flag: 'found_church' },
+      { type: 'round', round: 6, title: 'The Light is Fading',
+        text: 'Long shadows stretch across the square. This is the last of the daylight — when dusk falls you will be out of time. Hurry.',
+        flag: 'gathering_last_day' },
+      { type: 'area', hexes: [{ col: 4, row: 7 }], title: 'Sanctuary',
+        text: 'The apothecary\'s door is barricaded from the inside. You call out and hear weeping — then the scrape of wood as the barricade is removed. A survivor emerges, pale but alive.',
+        flag: 'found_apothecary' },
     ],
 
     requires: ['prologue'],
@@ -670,35 +703,108 @@ const MISSIONS = [
     id:       'first_night',
     title:    'The First Night',
     chapter:  1,
-    briefing: `Dusk falls and the dead grow bolder. Waves of corpses claw their way from the old graveyard. Barricade the village and survive until dawn — 10 rounds of relentless assault.`,
+    briefing: `Dusk falls on Caleb's Hollow. You and your companions shelter in the old inn, church and house while waves of corpses claw their way from the graveyard and the tree line. Hold out until dawn — one dusk turn, five long nights, and the light returns.`,
     victoryText: `Dawn breaks. The wave subsides, leaving the village battered but standing. Among the rubble, a new ally emerges — another survivor drawn to your fight.`,
     defeatText:  `The dead breach your defenses. Caleb's Hollow is overrun.`,
+
+    // One dusk turn, five nights, then dawn on round 7 — the victory
+    // check fires as soon as dawn arrives.
+    phaseCycle: {
+      phases: ['dusk', 'night', 'night', 'night', 'night', 'night', 'dawn'],
+      loop: false,
+    },
 
     mapBuilder:      'first_night',
     mapSize:         'standard',
 
     hasWitch:        false,
     disableScoring:  true,
+    // Pre-placed enemies are ALREADY on the town's doorstep at mission start,
+    // including two minions so the first night isn't just a zombie warm-up.
     enemyUnits: [
-      { type: 'zombie', col: 10, row: 2 },
-      { type: 'zombie', col: 11, row: 4 },
+      { type: 'minion', col: 5, row: 7 },   // right next to the blacksmith
+      { type: 'minion', col: 3, row: 5 },   // between apothecary and church
+      { type: 'zombie', col: 6, row: 5 },   // east of the watchtower
+      { type: 'zombie', col: 0, row: 7 },   // west of the house
+      { type: 'zombie', col: 10, row: 2 },  // distant graveyard shambler
+      { type: 'zombie', col: 11, row: 4 },  // distant graveyard shambler
     ],
+    // Every round spawns a wave adjacent to town — and a minion arrives from
+    // the very first night. Pressure escalates through the cycle.
     waves: [
-      { round: 3,  units: [{ type: 'zombie', spawnAt: 'graveyard' }, { type: 'zombie', spawnAt: 'graveyard' }] },
-      { round: 5,  units: [{ type: 'zombie', spawnAt: 'graveyard' }, { type: 'minion', spawnAt: 'map_edge' }] },
-      { round: 7,  units: [{ type: 'zombie', spawnAt: 'graveyard' }, { type: 'zombie', spawnAt: 'graveyard' }, { type: 'minion', spawnAt: 'map_edge' }] },
-      { round: 9,  units: [{ type: 'zombie', spawnAt: 'graveyard' }, { type: 'minion', spawnAt: 'map_edge' }, { type: 'zombie', spawnAt: 'map_edge' }] },
+      // Round 1 (dusk): two scouts arrive from north and south.
+      { round: 1, units: [
+        { type: 'zombie', spawnAt: { col: 1, row: 4 } },
+        { type: 'zombie', spawnAt: { col: 4, row: 9 } },
+      ] },
+      // Round 2 (NIGHT 1): first real assault — minion + three zombies.
+      { round: 2, units: [
+        { type: 'minion', spawnAt: { col: 0, row: 7 } },
+        { type: 'zombie', spawnAt: { col: 1, row: 4 } },
+        { type: 'zombie', spawnAt: { col: 5, row: 4 } },
+        { type: 'zombie', spawnAt: { col: 5, row: 7 } },
+      ] },
+      // Round 3 (night 2): western push, second minion.
+      { round: 3, units: [
+        { type: 'minion', spawnAt: { col: 3, row: 5 } },
+        { type: 'zombie', spawnAt: { col: 0, row: 6 } },
+        { type: 'zombie', spawnAt: { col: 0, row: 8 } },
+        { type: 'zombie', spawnAt: { col: 4, row: 9 } },
+      ] },
+      // Round 4 (night 3): eastern push, two minions.
+      { round: 4, units: [
+        { type: 'minion', spawnAt: { col: 5, row: 6 } },
+        { type: 'minion', spawnAt: { col: 5, row: 7 } },
+        { type: 'zombie', spawnAt: { col: 6, row: 5 } },
+        { type: 'zombie', spawnAt: { col: 6, row: 9 } },
+      ] },
+      // Round 5 (night 4): heaviest — all directions, two minions.
+      { round: 5, units: [
+        { type: 'minion', spawnAt: { col: 5, row: 4 } },
+        { type: 'minion', spawnAt: { col: 6, row: 5 } },
+        { type: 'zombie', spawnAt: { col: 1, row: 4 } },
+        { type: 'zombie', spawnAt: { col: 0, row: 7 } },
+        { type: 'zombie', spawnAt: { col: 4, row: 9 } },
+      ] },
+      // Round 6 (night 5): final desperate push before dawn.
+      { round: 6, units: [
+        { type: 'minion', spawnAt: { col: 4, row: 8 } },
+        { type: 'minion', spawnAt: { col: 5, row: 7 } },
+        { type: 'zombie', spawnAt: { col: 0, row: 8 } },
+        { type: 'zombie', spawnAt: { col: 6, row: 5 } },
+      ] },
     ],
     aiPersonality: 'aggressive',
     aiBudgetBonus: 2,
 
+    // Guarantee a full party of two companions at the start of the night.
     maxSurvivorsFromRoster:    2,
-    missionSurvivors:          1,
-    maxDiscoverableSurvivors:  2,
+    missionSurvivors:          0,
+    maxDiscoverableSurvivors:  0,
+    minSurvivors:              2,
+    // Place the hero's companions in nearby buildings (church + house)
+    // instead of spilling them onto roads around the inn.
+    survivorStartPositions: [
+      { col: 3, row: 6 }, // church
+      { col: 1, row: 6 }, // house
+    ],
 
     objectives: {
-      win:  { type: 'survive_rounds', rounds: 10, reason: 'You survived the night. Dawn brings hope.' },
-      lose: { type: 'hero_killed' },
+      win: {
+        type: 'survive_with_party',
+        phase: 'dawn',
+        survivors: 2,
+        reason: 'You and your companions held out until dawn.',
+      },
+      lose: [
+        { type: 'hero_killed' },
+        {
+          type: 'phase_without_survivors',
+          phase: 'dawn',
+          survivors: 2,
+          reason: 'Dawn came too late — the village fell with you.',
+        },
+      ],
     },
 
     startingResources: { wood: 3, metal: 1 },
@@ -714,8 +820,8 @@ const MISSIONS = [
       { type: 'round', round: 1, title: 'Darkness Falls',
         text: 'The sun dips below the treeline and the temperature drops. From the direction of the old graveyard, you hear the scraping of earth and the crack of coffin wood. They are coming.',
         flag: 'first_night_start' },
-      { type: 'round', round: 5, title: 'The Witching Hour',
-        text: 'Midnight. The attacks intensify. Something more than zombies stirs in the darkness — you catch a glimpse of unnatural movement at the tree line. Whatever drives these dead, it is close.',
+      { type: 'round', round: 4, title: 'The Witching Hour',
+        text: 'The dead of night. The attacks intensify — they come from every side now, scratching at the walls and shutters. Hold the line. Dawn is still hours away.',
         flag: 'witching_hour' },
     ],
 
@@ -727,38 +833,87 @@ const MISSIONS = [
     id:       'river_crossing',
     title:    'The River Crossing',
     chapter:  1,
-    briefing: `Intelligence points to a witch encampment beyond the river. The only way across is a pair of narrow bridges, and the dead patrol the road. Fight through the forest gauntlet and cross before reinforcements arrive.`,
-    victoryText: `You made it across. The far bank is quiet — for now. But the trail of dark magic grows stronger. The witch's lair cannot be far.`,
-    defeatText:  `The dead hold the crossing. You retreat, bloodied and beaten.`,
+    briefing: `A survivor holed up in the old river church sends word: they have herbs and news of the witch, but the dead swarm the banks in daylight. You and your two companions must cut a path east, cross the bridges, and get every one of you inside the church. No one is left behind.`,
+    victoryText: `The church doors close behind you and the last bar slams into place. Inside, the survivor hands you a bundle of bitter-smelling herbs and a scrap of a witch-mark. The trail is getting warmer.`,
+    defeatText:  `The dead close the gap on the bridge. One of you does not make it. You retreat to the west bank with nothing but a warning.`,
+
+    // Daylight only — the dead swarm the crossing but dusk never falls.
+    phaseCycle: {
+      phases: ['dawn', 'day', 'day', 'day'],
+      loop: true,
+    },
 
     mapBuilder:      'river_crossing',
     mapSize:         'standard',
 
     hasWitch:        false,
     disableScoring:  true,
+
+    // Heavy opposition: zombies and minions swarming the banks, bridges and
+    // forest flanks.
     enemyUnits: [
-      { type: 'zombie', col: 6, row: 3 },
-      { type: 'zombie', col: 9, row: 5 },
-      { type: 'zombie', col: 11, row: 4 },
-      { type: 'minion', col: 13, row: 4 },
+      { type: 'zombie', col: 5,  row: 6 },
+      { type: 'zombie', col: 6,  row: 3 },
+      { type: 'zombie', col: 8,  row: 4 },
+      { type: 'zombie', col: 9,  row: 6 },
+      { type: 'minion', col: 11, row: 3 },
+      { type: 'minion', col: 12, row: 5 },
+      { type: 'zombie', col: 13, row: 4 },
+      { type: 'zombie', col: 14, row: 6 },
+      { type: 'minion', col: 14, row: 3 },
     ],
     waves: [
-      { round: 4,  units: [{ type: 'zombie', spawnAt: 'map_edge' }] },
-      { round: 7,  units: [{ type: 'minion', spawnAt: 'map_edge' }, { type: 'zombie', spawnAt: 'map_edge' }] },
-      { round: 10, units: [{ type: 'wood_golem', spawnAt: 'map_edge' }] },
+      { round: 2, units: [
+        { type: 'zombie', spawnAt: 'graveyard' },
+        { type: 'zombie', spawnAt: 'map_edge' },
+      ] },
+      { round: 4, units: [
+        { type: 'zombie', spawnAt: 'graveyard' },
+        { type: 'minion', spawnAt: 'map_edge' },
+        { type: 'zombie', spawnAt: 'map_edge' },
+      ] },
+      { round: 6, units: [
+        { type: 'minion', spawnAt: 'graveyard' },
+        { type: 'zombie', spawnAt: 'map_edge' },
+      ] },
+      { round: 8, units: [
+        { type: 'zombie', spawnAt: 'map_edge' },
+        { type: 'minion', spawnAt: 'map_edge' },
+      ] },
     ],
     aiPersonality: 'aggressive',
     aiBudgetBonus: 2,
 
+    // Start with a full party of two companions. They die = mission failed.
     maxSurvivorsFromRoster:    2,
+    minSurvivors:              2,
     missionSurvivors:          1,
     maxDiscoverableSurvivors:  1,
+    survivorStartPositions: [
+      { col: 2, row: 4 }, // just east of the inn
+      { col: 1, row: 5 }, // south of the inn
+    ],
 
     objectives: {
-      win:  { type: 'reach_hex', col: 16, row: 4, reason: 'You crossed the river. The witch\'s trail leads deeper into the wilderness.' },
+      win: {
+        type: 'all_party_at_hexes',
+        // Church + immediate neighbors on the far bank. Every living party
+        // member (hero + survivors) must be standing on one of these hexes.
+        hexes: [
+          { col: 15, row: 4 }, // church
+          { col: 14, row: 4 },
+          { col: 16, row: 4 },
+          { col: 15, row: 3 },
+          { col: 15, row: 5 },
+        ],
+        reason: 'You and your companions reached the river church together.',
+      },
       lose: [
         { type: 'hero_killed' },
-        { type: 'rounds_exceeded', rounds: 15, reason: 'Reinforcements arrived. The crossing is lost.' },
+        { type: 'survivors_below', count: 2,
+          reason: 'A companion fell — the party is broken.' },
+        { type: 'rounds_exceeded', rounds: 15,
+          reason: 'Reinforcements arrived. The crossing is lost.' },
       ],
     },
 
@@ -766,12 +921,16 @@ const MISSIONS = [
     rewards:           { metal: 2, wood: 1, herbs: 1 },
     healBonus:         3,
 
+    // Horses never appear on this mission — the swamp-river terrain and
+    // swarming dead make riding a non-starter.
+    lootOverrides: { remove: ['horse'] },
+
     storyTriggers: [
       { type: 'round', round: 1, title: 'The Long Road',
-        text: 'A narrow trail leads east through dense forest. The river glints in the distance — your only way forward. But the dead have been here. Fresh tracks in the mud, broken branches, the stench of decay.',
+        text: 'A narrow trail leads east through dense forest. The river glints in the distance — your only way forward. The dead have been here, and there are many of them. Stay close — no one is left behind on this road.',
         flag: 'river_start' },
-      { type: 'area', hexes: [{ col: 12, row: 3 }, { col: 12, row: 4 }, { col: 12, row: 5 }, { col: 11, row: 4 }], title: 'The Crossing',
-        text: 'The bridge is ancient, its timbers groaning under your weight. On the far bank, shadows move between the trees. You grip your weapon tighter and step forward.',
+      { type: 'area', hexes: [{ col: 10, row: 3 }, { col: 10, row: 4 }, { col: 10, row: 5 }, { col: 11, row: 4 }], title: 'The Crossing',
+        text: 'The bridge is ancient, its timbers groaning under your weight. On the far bank, shadows move between the trees. You grip your weapon tighter and step forward — together.',
         flag: 'at_bridge' },
     ],
 
@@ -783,56 +942,99 @@ const MISSIONS = [
     id:       'dark_ritual',
     title:    'Dark Ritual',
     chapter:  1,
-    briefing: `Deep in the forest, two Power Nodes pulse with dark energy. Minions and golems guard them as part of an ongoing ritual. Capture the nodes before the ritual is complete — this is your first encounter with the witch's true power.`,
-    victoryText: `The nodes dim as you wrest control. The ritual is broken — but the energy has already been channeled somewhere. The witch is preparing something far worse.`,
-    defeatText:  `The ritual is complete. Dark energy surges through the ley lines. Caleb's Hollow's fate is sealed.`,
+    briefing: `Deep in the forest the trees themselves hum with dark energy. Two Power Nodes pulse in clearings ahead; her thralls stand thick around them. Drive every last one of her forces off both nodes before dawn — or the ritual tips past recovery.`,
+    victoryText: `Dawn breaks. The nodes dim and the forest exhales. Her ritual dies in the dark between the trees.`,
+    defeatText:  `Dawn breaks on a grove still choked with shadow. The ritual holds; her power only grows.`,
 
     mapBuilder:      'dark_ritual',
     mapSize:         'standard',
 
-    hasWitch:        false,
-    disableScoring:  false,   // standard node scoring
+    hasWitch:        false,    // witch is narrative-only on this mission
+    disableScoring:  true,     // we run our own win check, not dawn/dusk scoring
+
+    // 10 rounds: start in daytime, end on dawn.
+    // 3 day → 1 dusk → 5 night → 1 dawn.
+    phaseCycle: {
+      phases: ['day','day','day','dusk','night','night','night','night','night','dawn'],
+      loop:   false,
+    },
+
     enemyUnits: [
-      { type: 'minion', col: 5, row: 3 },
-      { type: 'minion', col: 10, row: 5 },
-      { type: 'minion', col: 8, row: 7 },
-      { type: 'wood_golem', col: 9, row: 3 },
+      // Heavy garrison on the first clearing (Ritual Circle at 5,4).
+      { type: 'minion',     col: 5, row: 4 },
+      { type: 'minion',     col: 4, row: 4 },
+      { type: 'minion',     col: 5, row: 3 },
+      { type: 'wood_golem', col: 5, row: 4 },
+      // Heavy garrison on the second clearing (Dark Altar at 9,6).
+      { type: 'minion',     col: 9, row: 6 },
+      { type: 'minion',     col: 10, row: 6 },
+      { type: 'minion',     col: 9, row: 5 },
+      { type: 'wood_golem', col: 9, row: 6 },
+      // Loose patrols in the forest between.
+      { type: 'minion',     col: 7, row: 5 },
+      { type: 'minion',     col: 7, row: 7 },
     ],
     waves: [
-      { round: 3,  units: [{ type: 'minion', spawnAt: 'map_edge' }] },
-      { round: 6,  units: [{ type: 'minion', spawnAt: 'map_edge' }, { type: 'minion', spawnAt: 'map_edge' }] },
-      { round: 9,  units: [{ type: 'wood_golem', spawnAt: 'map_edge' }] },
-      { round: 12, units: [{ type: 'iron_golem', spawnAt: 'map_edge' }] },
+      // Reinforcements — keep pressure on from the far edges.
+      { round: 4, units: [
+        { type: 'minion', spawnAt: 'map_edge' },
+        { type: 'minion', spawnAt: 'map_edge' },
+      ] },
+      { round: 7, units: [{ type: 'minion', spawnAt: 'map_edge' }] },
+      // Second-clearing ambush — the witch flees, leaves golems behind.
+      {
+        id: 'witch-flees',
+        trigger: 'area',
+        hexes: [
+          { col: 9, row: 6 }, { col: 10, row: 6 }, { col: 9, row: 5 },
+          { col: 8, row: 6 }, { col: 9, row: 7 }, { col: 10, row: 5 },
+        ],
+        units: [
+          { type: 'wood_golem', spawnAt: { col: 11, row: 6 },
+            spawnLog: '🗿 A wood golem crashes out of the thicket to cover her escape!' },
+          { type: 'wood_golem', spawnAt: { col: 9, row: 8 },
+            spawnLog: '🗿 Another golem lurches between you and the altar!' },
+          { type: 'wood_golem', spawnAt: { col: 10, row: 4 },
+            spawnLog: '🗿 A third golem blocks the path she took into the shadows!' },
+        ],
+      },
     ],
     aiPersonality: 'hoarder',
     aiBudgetBonus: 3,
 
     maxSurvivorsFromRoster:    3,
-    missionSurvivors:          1,
+    missionSurvivors:          0,
     minSurvivors:              1,
-    maxDiscoverableSurvivors:  1,
+    maxDiscoverableSurvivors:  0,
 
     objectives: {
-      win:  { type: 'control_nodes', reason: 'The ritual is disrupted. The Power Nodes answer to you now.' },
+      win:  { type: 'witch_denied_nodes', phase: 'dawn',
+              reason: 'Dawn breaks — the nodes are free of her grasp.' },
       lose: [
         { type: 'hero_killed' },
-        { type: 'rounds_exceeded', rounds: 20, reason: 'The ritual is complete. Darkness surges forth.' },
+        { type: 'witch_holds_node', phase: 'dawn',
+          reason: 'Dawn breaks — the witch still holds a node. The ritual completes.' },
       ],
     },
 
-    startingResources: { metal: 1, food: 1 },
+    startingResources: { metal: 1, food: 2 },
     rewards:           { silver: 1, scripture: 1, metal: 1 },
     healBonus:         4,
 
     lootOverrides: { remove: ['horse'] },
 
     storyTriggers: [
-      { type: 'round', round: 1, title: 'Dark Energy',
-        text: 'The air hums with unnatural power. Ahead, two clearings glow with a sickly purple light — Power Nodes, conduits for the witch\'s dark magic. Golems and minions patrol the perimeter. You must seize control before the ritual reaches its crescendo.',
+      { type: 'round', round: 1, title: 'Into the Grove',
+        text: 'Two clearings ahead pulse with purple light. Her garrison is thick around both. Dawn is all that stands between the ritual and its climax — you must drive her forces off both nodes before the sun returns.',
         flag: 'dark_ritual_start' },
-      { type: 'round', round: 4, title: 'The Ritual Grows',
-        text: 'The ground trembles. Dark tendrils of energy arc between the nodes, growing brighter with each passing moment. Time is running out.',
-        flag: 'ritual_grows' },
+      { type: 'area',
+        hexes: [
+          { col: 9, row: 6 }, { col: 10, row: 6 }, { col: 9, row: 5 },
+          { col: 8, row: 6 }, { col: 9, row: 7 }, { col: 10, row: 5 },
+        ],
+        title: 'The Witch Flees',
+        text: 'At the second clearing you meet her eyes across the altar. For a heartbeat she stares — then she melts into the dark, leaving her golems to choke your path. Finish them. Finish the ritual.',
+        flag: 'witch_flees' },
     ],
 
     requires: ['river_crossing'],

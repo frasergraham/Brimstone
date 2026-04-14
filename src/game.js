@@ -236,9 +236,13 @@ export class GameState {
     this.actionsLeft  = computeActions('hero', Phase.DAWN, []);
     this.log = [
       `🌅 Dawn breaks over Caleb's Hollow. ${this.hero.displayName} stirs at the Inn.`,
-      `${this.witchObjectives.length} Power Node${this.witchObjectives.length !== 1 ? 's' : ''}: ${this.witchObjectives.map(o => o.label).join(', ')}.`,
-      `⚔ Hold 2+ nodes at each dawn/dusk to score. First to 4 points wins. Three cycles — then darkness claims Caleb's Hollow.`,
     ];
+    if (this.witchObjectives.length > 0) {
+      this.log.push(
+        `${this.witchObjectives.length} Power Node${this.witchObjectives.length !== 1 ? 's' : ''}: ${this.witchObjectives.map(o => o.label).join(', ')}.`,
+        `⚔ Hold 2+ nodes at each dawn/dusk to score. First to 4 points wins. Three cycles — then darkness claims Caleb's Hollow.`,
+      );
+    }
 
     this.selectedEntity    = null;
     this.pendingAction     = null;
@@ -624,6 +628,15 @@ export class GameState {
     if (this.gameMode === GameMode.BATTLE && !this.disableScoring
         && this.phase !== Phase.DAWN && this.phase !== Phase.DUSK) {
       this._checkBattleNodeScoring();
+    }
+
+    // Campaign wave processor — runs BEFORE checkVictory so triggered spawns
+    // (e.g. Mission 1's kill-triggered golem) can pre-empt an `eliminate_all`
+    // win that would otherwise fire when the last existing enemy dies on the
+    // same round the wave should spawn. Non-campaign games don't set this.
+    if (this._waveProcessor) {
+      const waveLogs = this._waveProcessor();
+      if (waveLogs) for (const msg of waveLogs) this.addLog(msg);
     }
 
     this.checkVictory();
