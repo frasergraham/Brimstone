@@ -121,6 +121,16 @@ function _checkLoseCondition(cond, state) {
         };
       }
       return null;
+    case 'survivors_below':
+      // Fails at any time the hero faction has fewer than `count` survivors alive.
+      if (_heroSurvivorCount(state) < cond.count) {
+        return {
+          winner: 'witch',
+          winReason: cond.reason || 'A companion has fallen — the party is broken.',
+          log: '💔 The party is broken.',
+        };
+      }
+      return null;
   }
   return null;
 }
@@ -188,6 +198,26 @@ function _checkWinCondition(cond, state) {
         winner: 'hero',
         winReason: cond.reason || 'You and your companions survived until dawn.',
         log: '☀ Dawn breaks — you have survived the night.',
+      };
+    }
+    case 'all_party_at_hexes': {
+      // Win when every living hero-faction party member (hero + survivors) stands
+      // on one of the listed target hexes.
+      const party = state.entities.filter(e =>
+        e.alive && e.owner === 'hero' &&
+        (e.type === 'hero' || e.type === 'survivor')
+      );
+      if (party.length === 0) return null;
+      const hexes = cond.hexes;
+      if (!hexes || hexes.length === 0) return null;
+      const allThere = party.every(p =>
+        hexes.some(h => h.col === p.col && h.row === p.row)
+      );
+      if (!allThere) return null;
+      return {
+        winner: 'hero',
+        winReason: cond.reason || 'The party has reached the target.',
+        log: '☀ The whole party has made it through.',
       };
     }
     case 'control_nodes':

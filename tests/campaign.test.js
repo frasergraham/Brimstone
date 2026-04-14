@@ -384,6 +384,86 @@ describe('Victory delegate', () => {
     });
   });
 
+  // all_party_at_hexes — Mission 4 win type
+  describe('all_party_at_hexes win type', () => {
+    function buildCrossingState() {
+      const mapData = buildMap('river_crossing');
+      mapData.noWitch = true;
+      const state = new GameState(true, false, 'standard', null, mapData);
+      return state;
+    }
+
+    const winCond = {
+      type: 'all_party_at_hexes',
+      hexes: [{ col: 15, row: 4 }, { col: 14, row: 4 }, { col: 15, row: 3 }, { col: 15, row: 5 }],
+    };
+
+    test('wins when hero and both survivors stand on target hexes', () => {
+      const delegate = buildVictoryDelegate({ win: winCond });
+      const state = buildCrossingState();
+      state.hero.col = 15; state.hero.row = 4;
+      const s1 = makeHeroSurvivor(14, 4);
+      const s2 = makeHeroSurvivor(15, 3);
+      state.entities.push(s1, s2);
+      const result = delegate(state);
+      assert.ok(result);
+      assert.equal(result.winner, 'hero');
+    });
+
+    test('does not win if any party member is not on target hexes', () => {
+      const delegate = buildVictoryDelegate({ win: winCond });
+      const state = buildCrossingState();
+      state.hero.col = 15; state.hero.row = 4;
+      state.entities.push(makeHeroSurvivor(14, 4));
+      state.entities.push(makeHeroSurvivor(5, 3)); // still on west bank
+      assert.equal(delegate(state), null);
+    });
+
+    test('dead party members do not block the win', () => {
+      const delegate = buildVictoryDelegate({ win: winCond });
+      const state = buildCrossingState();
+      state.hero.col = 15; state.hero.row = 4;
+      state.entities.push(makeHeroSurvivor(14, 4));
+      const dead = makeHeroSurvivor(3, 3);
+      dead.hp = 0;
+      state.entities.push(dead);
+      // Note: with the survivors_below lose guard we would never actually
+      // reach this state, but the win check itself should ignore dead party
+      // members.
+      const result = delegate(state);
+      assert.ok(result);
+      assert.equal(result.winner, 'hero');
+    });
+  });
+
+  // survivors_below — Mission 4 lose type
+  describe('survivors_below lose type', () => {
+    test('triggers whenever survivor count drops below threshold', () => {
+      const delegate = buildVictoryDelegate({
+        lose: { type: 'survivors_below', count: 2 },
+      });
+      const mapData = buildMap('river_crossing');
+      mapData.noWitch = true;
+      const state = new GameState(true, false, 'standard', null, mapData);
+      state.entities.push(makeHeroSurvivor(2, 4));
+      // Only 1 survivor — should trigger loss immediately.
+      const result = delegate(state);
+      assert.ok(result);
+      assert.equal(result.winner, 'witch');
+    });
+
+    test('does not trigger when the threshold is met', () => {
+      const delegate = buildVictoryDelegate({
+        lose: { type: 'survivors_below', count: 2 },
+      });
+      const mapData = buildMap('river_crossing');
+      mapData.noWitch = true;
+      const state = new GameState(true, false, 'standard', null, mapData);
+      state.entities.push(makeHeroSurvivor(2, 4), makeHeroSurvivor(1, 5));
+      assert.equal(delegate(state), null);
+    });
+  });
+
   // Array lose conditions — Mission 2 combines hero_killed + phase_without_survivors
   test('lose array: first matching condition fires', () => {
     const delegate = buildVictoryDelegate({
@@ -1106,9 +1186,10 @@ describe('mission story triggers and loot overrides', () => {
     }
   });
 
-  test('river_crossing has reach_hex objective', () => {
+  test('river_crossing uses all_party_at_hexes objective', () => {
     const m = hollowDef.missions.find(m => m.id === 'river_crossing');
-    assert.equal(m.objectives.win.type, 'reach_hex');
+    assert.equal(m.objectives.win.type, 'all_party_at_hexes');
+    assert.ok(Array.isArray(m.objectives.win.hexes) && m.objectives.win.hexes.length >= 3);
   });
 
   test('dark_ritual has rounds_exceeded lose condition', () => {
@@ -1847,6 +1928,82 @@ describe('Mission 3 (The First Night) balance', () => {
     }
     const total = mission3.waves.reduce((sum, w) => sum + w.units.length, 0);
     assert.ok(total >= 12, `expected heavy swarm (>=12 wave spawns), got ${total}`);
+  });
+});
+
+// ── Mission 4 balance ───────────────────────────────────────────────────────
+
+describe('Mission 4 (The River Crossing) balance', () => {
+  const mission4 = hollowDef.missions.find(m => m.id === 'river_crossing');
+
+  test('uses all_party_at_hexes win centred on the far-bank church', () => {
+    assert.equal(mission4.objectives.win.type, 'all_party_at_hexes');
+    const hexes = mission4.objectives.win.hexes;
+    assert.ok(hexes.some(h => h.col === 15 && h.row === 4),
+      'target hex set must include the church at (15,4)');
+    assert.ok(hexes.length >= 3, 'target hex set should include the church and neighbors');
+  });
+
+  test('lose conditions include hero_killed and survivors_below(2)', () => {
+    assert.ok(Array.isArray(mission4.objectives.lose));
+    const types = mission4.objectives.lose.map(l => l.type);
+    assert.ok(types.includes('hero_killed'));
+    const below = mission4.objectives.lose.find(l => l.type === 'survivors_below');
+    assert.ok(below, 'lose should include survivors_below');
+    assert.equal(below.count, 2);
+  });
+
+  test('phase cycle is daytime-only (dawn + day)', () => {
+    assert.ok(mission4.phaseCycle);
+    assert.deepEqual(mission4.phaseCycle.phases, ['dawn', 'day', 'day', 'day']);
+    assert.equal(mission4.phaseCycle.loop, true);
+  });
+
+  test('starts with a guaranteed party of two survivors', () => {
+    assert.equal(mission4.maxSurvivorsFromRoster, 2);
+    assert.equal(mission4.minSurvivors, 2);
+    assert.ok(Array.isArray(mission4.survivorStartPositions));
+    assert.equal(mission4.survivorStartPositions.length, 2);
+  });
+
+  test('removes horses from loot', () => {
+    assert.ok(mission4.lootOverrides?.remove?.includes('horse'),
+      'Mission 4 must override loot to remove horses');
+  });
+
+  test('river area is swarming — at least 8 pre-placed enemies plus waves', () => {
+    assert.ok(mission4.enemyUnits.length >= 8,
+      `expected a swarming river (>=8 initial enemies), got ${mission4.enemyUnits.length}`);
+    const waveTotal = mission4.waves.reduce((sum, w) => sum + w.units.length, 0);
+    assert.ok(waveTotal >= 6,
+      `expected meaningful reinforcement waves (>=6 total spawns), got ${waveTotal}`);
+    const types = new Set([
+      ...mission4.enemyUnits.map(u => u.type),
+      ...mission4.waves.flatMap(w => w.units.map(u => u.type)),
+    ]);
+    assert.ok(types.has('zombie'), 'enemy mix should include zombies');
+    assert.ok(types.has('minion'), 'enemy mix should include minions');
+  });
+
+  test('map places a church on the far bank with 4 herbs clustered nearby', () => {
+    const mapData = buildMap('river_crossing');
+    const church = mapData.tiles.get('15,4');
+    assert.ok(church);
+    assert.equal(church.type, 'building');
+    assert.equal(church.building, 'church');
+    // The church tile itself conceals the final survivor.
+    assert.ok(church.hiddenSurvivor, 'church should hide a survivor to rescue');
+
+    // Count herb resources within 2 hexes of the church.
+    let herbsNearChurch = 0;
+    for (const [, tile] of mapData.tiles) {
+      if (tile.resource !== 'herbs') continue;
+      const dx = tile.col - 15, dy = tile.row - 4;
+      const dist = Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dx + dy));
+      if (dist <= 2) herbsNearChurch++;
+    }
+    assert.ok(herbsNearChurch >= 4,
+      `expected 4 herb caches near the church, found ${herbsNearChurch}`);
   });
 });
 

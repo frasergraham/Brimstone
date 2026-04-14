@@ -332,47 +332,55 @@ function buildRiverCrossingMap() {
   const rand = rng(314);
   const tiles = makeTiles(COLS, ROWS);
 
-  // N-S river cutting across near the east end (col ~12)
-  // Hand-placed for the narrow corridor shape
-  const riverCol = 12;
+  // N-S river cutting the map roughly in half (cols 9-12 with drift).
+  const riverCol = 10;
   const riverPath = [];
   for (let row = 0; row < ROWS; row++) {
     const drift = Math.floor(rand() * 3) - 1;
-    const col = Math.max(10, Math.min(14, riverCol + drift));
+    const col = Math.max(9, Math.min(12, riverCol + drift));
     riverPath.push({ col, row });
   }
   carveRiver(tiles, riverPath);
   const riverMap = buildRiverMap(riverPath, false);
 
-  // Buildings
+  // Buildings — hero party starts on the west bank, the church waits on
+  // the far east bank as the objective.
   setBuilding(tiles, 1, 4, BuildingType.INN, 1);          // west start
   setBuilding(tiles, 5, 3, BuildingType.HOUSE, 0);
-  setBuilding(tiles, 8, 5, BuildingType.BLACKSMITH, 0);
+  setBuilding(tiles, 7, 5, BuildingType.BLACKSMITH, 0);
   setBuilding(tiles, 14, 2, BuildingType.GRAVEYARD, 0);    // far side
-  setBuilding(tiles, 15, 6, BuildingType.WATCHTOWER, 0);   // far side
+  setBuilding(tiles, 15, 4, BuildingType.CHURCH, 1);       // far side — objective
 
-  // MST roads
+  // MST roads — ensures bridges get placed crossing the river.
   const bldgs = [
-    { col: 1, row: 4 }, { col: 5, row: 3 }, { col: 8, row: 5 },
-    { col: 14, row: 2 }, { col: 15, row: 6 },
+    { col: 1, row: 4 }, { col: 5, row: 3 }, { col: 7, row: 5 },
+    { col: 14, row: 2 }, { col: 15, row: 4 },
   ];
   buildRoadNetwork(tiles, bldgs, rand, 2);
 
-  // Dense forest flanking the road
+  // Dense forest flanking the road, giving zombies cover to swarm the banks.
   growForests(tiles, [
     { col: 3, row: 1 }, { col: 6, row: 7 },
     { col: 4, row: 6 }, { col: 9, row: 1 },
     { col: 7, row: 7 }, { col: 2, row: 0 },
-    { col: 10, row: 7 }, { col: 15, row: 1 },
+    { col: 10, row: 7 }, { col: 13, row: 7 },
+    { col: 13, row: 0 },
   ], rand, 0.65, 0.35);
 
   // Dirt
   scatterDirt(tiles, 3, rand, COLS);
 
-  // Resources
+  // Resources — 4 herbs clustered around the church on the far bank
+  // (the "healing stockpile" the survivor has been hoarding). A little
+  // food and wood on the approach for the long crossing.
   setResource(tiles, 3, 5, ResourceType.FOOD);
   setResource(tiles, 7, 2, ResourceType.WOOD);
-  setHiddenSurvivor(tiles, 8, 5);
+  setResource(tiles, 15, 3, ResourceType.HERBS);
+  setResource(tiles, 15, 5, ResourceType.HERBS);
+  setResource(tiles, 16, 3, ResourceType.HERBS);
+  setResource(tiles, 16, 5, ResourceType.HERBS);
+  // The survivor is holed up inside the church itself.
+  setHiddenSurvivor(tiles, 15, 4);
 
   return {
     tiles,
@@ -383,8 +391,8 @@ function buildRiverCrossingMap() {
     survivorCounts: { buildings: 1, terrain: 0 },
     cols: COLS,
     rows: ROWS,
-    // reach_hex objective uses this
-    targetHex: { col: 16, row: 4 },
+    // reach_hex objective uses this (legacy / fallback display)
+    targetHex: { col: 15, row: 4 },
   };
 }
 
@@ -811,38 +819,87 @@ const MISSIONS = [
     id:       'river_crossing',
     title:    'The River Crossing',
     chapter:  1,
-    briefing: `Intelligence points to a witch encampment beyond the river. The only way across is a pair of narrow bridges, and the dead patrol the road. Fight through the forest gauntlet and cross before reinforcements arrive.`,
-    victoryText: `You made it across. The far bank is quiet — for now. But the trail of dark magic grows stronger. The witch's lair cannot be far.`,
-    defeatText:  `The dead hold the crossing. You retreat, bloodied and beaten.`,
+    briefing: `A survivor holed up in the old river church sends word: they have herbs and news of the witch, but the dead swarm the banks in daylight. You and your two companions must cut a path east, cross the bridges, and get every one of you inside the church. No one is left behind.`,
+    victoryText: `The church doors close behind you and the last bar slams into place. Inside, the survivor hands you a bundle of bitter-smelling herbs and a scrap of a witch-mark. The trail is getting warmer.`,
+    defeatText:  `The dead close the gap on the bridge. One of you does not make it. You retreat to the west bank with nothing but a warning.`,
+
+    // Daylight only — the dead swarm the crossing but dusk never falls.
+    phaseCycle: {
+      phases: ['dawn', 'day', 'day', 'day'],
+      loop: true,
+    },
 
     mapBuilder:      'river_crossing',
     mapSize:         'standard',
 
     hasWitch:        false,
     disableScoring:  true,
+
+    // Heavy opposition: zombies and minions swarming the banks, bridges and
+    // forest flanks.
     enemyUnits: [
-      { type: 'zombie', col: 6, row: 3 },
-      { type: 'zombie', col: 9, row: 5 },
-      { type: 'zombie', col: 11, row: 4 },
-      { type: 'minion', col: 13, row: 4 },
+      { type: 'zombie', col: 5,  row: 6 },
+      { type: 'zombie', col: 6,  row: 3 },
+      { type: 'zombie', col: 8,  row: 4 },
+      { type: 'zombie', col: 9,  row: 6 },
+      { type: 'minion', col: 11, row: 3 },
+      { type: 'minion', col: 12, row: 5 },
+      { type: 'zombie', col: 13, row: 4 },
+      { type: 'zombie', col: 14, row: 6 },
+      { type: 'minion', col: 14, row: 3 },
     ],
     waves: [
-      { round: 4,  units: [{ type: 'zombie', spawnAt: 'map_edge' }] },
-      { round: 7,  units: [{ type: 'minion', spawnAt: 'map_edge' }, { type: 'zombie', spawnAt: 'map_edge' }] },
-      { round: 10, units: [{ type: 'wood_golem', spawnAt: 'map_edge' }] },
+      { round: 2, units: [
+        { type: 'zombie', spawnAt: 'graveyard' },
+        { type: 'zombie', spawnAt: 'map_edge' },
+      ] },
+      { round: 4, units: [
+        { type: 'zombie', spawnAt: 'graveyard' },
+        { type: 'minion', spawnAt: 'map_edge' },
+        { type: 'zombie', spawnAt: 'map_edge' },
+      ] },
+      { round: 6, units: [
+        { type: 'minion', spawnAt: 'graveyard' },
+        { type: 'zombie', spawnAt: 'map_edge' },
+      ] },
+      { round: 8, units: [
+        { type: 'zombie', spawnAt: 'map_edge' },
+        { type: 'minion', spawnAt: 'map_edge' },
+      ] },
     ],
     aiPersonality: 'aggressive',
     aiBudgetBonus: 2,
 
+    // Start with a full party of two companions. They die = mission failed.
     maxSurvivorsFromRoster:    2,
+    minSurvivors:              2,
     missionSurvivors:          1,
     maxDiscoverableSurvivors:  1,
+    survivorStartPositions: [
+      { col: 2, row: 4 }, // just east of the inn
+      { col: 1, row: 5 }, // south of the inn
+    ],
 
     objectives: {
-      win:  { type: 'reach_hex', col: 16, row: 4, reason: 'You crossed the river. The witch\'s trail leads deeper into the wilderness.' },
+      win: {
+        type: 'all_party_at_hexes',
+        // Church + immediate neighbors on the far bank. Every living party
+        // member (hero + survivors) must be standing on one of these hexes.
+        hexes: [
+          { col: 15, row: 4 }, // church
+          { col: 14, row: 4 },
+          { col: 16, row: 4 },
+          { col: 15, row: 3 },
+          { col: 15, row: 5 },
+        ],
+        reason: 'You and your companions reached the river church together.',
+      },
       lose: [
         { type: 'hero_killed' },
-        { type: 'rounds_exceeded', rounds: 15, reason: 'Reinforcements arrived. The crossing is lost.' },
+        { type: 'survivors_below', count: 2,
+          reason: 'A companion fell — the party is broken.' },
+        { type: 'rounds_exceeded', rounds: 15,
+          reason: 'Reinforcements arrived. The crossing is lost.' },
       ],
     },
 
@@ -850,12 +907,16 @@ const MISSIONS = [
     rewards:           { metal: 2, wood: 1, herbs: 1 },
     healBonus:         3,
 
+    // Horses never appear on this mission — the swamp-river terrain and
+    // swarming dead make riding a non-starter.
+    lootOverrides: { remove: ['horse'] },
+
     storyTriggers: [
       { type: 'round', round: 1, title: 'The Long Road',
-        text: 'A narrow trail leads east through dense forest. The river glints in the distance — your only way forward. But the dead have been here. Fresh tracks in the mud, broken branches, the stench of decay.',
+        text: 'A narrow trail leads east through dense forest. The river glints in the distance — your only way forward. The dead have been here, and there are many of them. Stay close — no one is left behind on this road.',
         flag: 'river_start' },
-      { type: 'area', hexes: [{ col: 12, row: 3 }, { col: 12, row: 4 }, { col: 12, row: 5 }, { col: 11, row: 4 }], title: 'The Crossing',
-        text: 'The bridge is ancient, its timbers groaning under your weight. On the far bank, shadows move between the trees. You grip your weapon tighter and step forward.',
+      { type: 'area', hexes: [{ col: 10, row: 3 }, { col: 10, row: 4 }, { col: 10, row: 5 }, { col: 11, row: 4 }], title: 'The Crossing',
+        text: 'The bridge is ancient, its timbers groaning under your weight. On the far bank, shadows move between the trees. You grip your weapon tighter and step forward — together.',
         flag: 'at_bridge' },
     ],
 
