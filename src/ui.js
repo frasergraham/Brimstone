@@ -624,7 +624,15 @@ export class UIController {
   /** Exit planning mode (called after resolution completes). */
   exitPlanningMode() {
     this._planMode      = false;
-    this._planSubmitted = false;
+    // NOTE: _planSubmitted is intentionally NOT reset here. It guards against
+    // a double-fire of the submit button (touchend + click on mobile, or a
+    // fast double-click) — the offline/campaign plan-submit handler calls
+    // exitPlanningMode synchronously before state.submitPlan returns, so
+    // resetting here would let the stray second tap fire _doSubmitPlan again
+    // with a cleared _unitPlans, producing a "0 steps" submit and sometimes
+    // a "Not in planning phase" throw. enterPlanningMode() resets
+    // _planSubmitted at the start of the next round, which is the correct
+    // lifecycle for the flag.
     this._unitPlans     = new Map();
     this._planFaction   = null;
 

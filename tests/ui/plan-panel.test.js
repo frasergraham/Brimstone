@@ -210,6 +210,32 @@ describe('_doSubmitPlan', () => {
     assert.equal(callCount, 1, 'onPlanSubmit should only fire once');
   });
 
+  test('second submit after exitPlanningMode is a no-op (mobile double-fire guard)', () => {
+    // Regression: in offline/campaign mode the onPlanSubmit handler calls
+    // ui.exitPlanningMode() synchronously. A stray second tap (touchend + click
+    // both firing on mobile, or a fast double-click) would then land on the
+    // post-exit state and fire _doSubmitPlan AGAIN with a cleared _unitPlans,
+    // resulting in a "0 steps" submission and sometimes a
+    // "Not in planning phase" throw from state.submitPlan.
+    const { ui } = makeUI();
+    ui.enterPlanningMode('hero', 3);
+    ui._unitPlans = new Map([['h1', [{ type: 'explore', entityId: 'h1' }]]]);
+
+    const received = [];
+    ui.onPlanSubmit = (plan) => {
+      received.push(plan);
+      // Simulate the offline handler behaviour: exit planning mode immediately
+      // (this is what _onLocalHumanPlanSubmit does).
+      ui.exitPlanningMode();
+    };
+
+    ui._doSubmitPlan();
+    ui._doSubmitPlan(); // double-fire from touchend+click on mobile
+
+    assert.equal(received.length, 1,
+      'onPlanSubmit must fire exactly once even when exitPlanningMode runs between taps');
+  });
+
   test('marks local player as submitted in _players using playerId', () => {
     // Regression: player objects use `playerId` (not `id`), so the find must
     // use p.playerId.  Previously p.id was used, so the local player's row
