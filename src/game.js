@@ -465,23 +465,54 @@ export class GameState {
   }
 
   /**
-   * Pick a passable tile in the faction's starting columns for battle-mode spawns.
-   * Heroes: leftmost 3 columns. Witches: rightmost 3 columns.
+   * Pick a spawn tile at a faction building for battle-mode respawns.
+   * Heroes respawn at INNs; witches at GRAVEYARDs.
+   * Prefers unoccupied building tiles; falls back to a neighbor of a building.
    */
   _pickBattleSpawn(faction) {
-    const cols = faction === 'hero'
-      ? [0, 1, 2]
-      : [MAP_COLS - 3, MAP_COLS - 2, MAP_COLS - 1];
-    const candidates = [];
+    const targetBuilding = faction === 'hero' ? BuildingType.INN : BuildingType.GRAVEYARD;
+    const buildings = [];
     for (const [, t] of this.tiles) {
-      if (!cols.includes(t.col)) continue;
-      if (t.type === TileType.RIVER) continue;
-      // Avoid tiles occupied by other entities
-      const occupied = this.entities.some(e => e.alive && e.col === t.col && e.row === t.row);
-      if (!occupied) candidates.push({ col: t.col, row: t.row });
+      if (t.type === TileType.BUILDING && t.building === targetBuilding) {
+        buildings.push({ col: t.col, row: t.row });
+      }
     }
-    if (candidates.length === 0) return null;
-    return candidates[Math.floor(Math.random() * candidates.length)];
+
+    // Fallback to edge-column logic if no faction buildings exist
+    if (buildings.length === 0) {
+      const cols = faction === 'hero' ? [0, 1, 2] : [MAP_COLS - 3, MAP_COLS - 2, MAP_COLS - 1];
+      const candidates = [];
+      for (const [, t] of this.tiles) {
+        if (!cols.includes(t.col) || t.type === TileType.RIVER) continue;
+        const occupied = this.entities.some(e => e.alive && e.col === t.col && e.row === t.row);
+        if (!occupied) candidates.push({ col: t.col, row: t.row });
+      }
+      return candidates.length ? candidates[Math.floor(Math.random() * candidates.length)] : null;
+    }
+
+    // Shuffle buildings for randomness
+    for (let i = buildings.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [buildings[i], buildings[j]] = [buildings[j], buildings[i]];
+    }
+
+    // Prefer an unoccupied building tile
+    for (const b of buildings) {
+      const occupied = this.entities.some(e => e.alive && e.col === b.col && e.row === b.row);
+      if (!occupied) return b;
+    }
+
+    // All buildings occupied — pick an unoccupied neighbor of any building
+    for (const b of buildings) {
+      for (const n of getNeighbors(b.col, b.row)) {
+        const t = this.tiles.get(hexKey(n.col, n.row));
+        if (!t || t.type === TileType.RIVER) continue;
+        const occupied = this.entities.some(e => e.alive && e.col === n.col && e.row === n.row);
+        if (!occupied) return { col: n.col, row: n.row };
+      }
+    }
+
+    return buildings[0]; // last resort
   }
 
   /**

@@ -293,30 +293,93 @@ describe('Battle mode respawn', () => {
 
 // ── Map generation: battle starts ─────────────────────────────────────────────
 
+function freshBattleMapState() {
+  const state = new GameState(false, false, 'battle', 5);
+  state.gameMode = GameMode.BATTLE;
+  state.battleConfig = { endsAt: Math.floor(Date.now() / 1000) + 86400, maxPlayersPerSide: 10 };
+  return state;
+}
+
+describe('Battle map building placement', () => {
+  test('battle map has 5 INNs and 5 GRAVEYARDs', () => {
+    const state = freshBattleMapState();
+    const inns = [];
+    const graveyards = [];
+    for (const [, t] of state.tiles) {
+      if (t.type === TileType.BUILDING && t.building === BuildingType.INN) inns.push(t);
+      if (t.type === TileType.BUILDING && t.building === BuildingType.GRAVEYARD) graveyards.push(t);
+    }
+    assert.equal(inns.length, 5, `expected 5 INNs, got ${inns.length}`);
+    assert.equal(graveyards.length, 5, `expected 5 GRAVEYARDs, got ${graveyards.length}`);
+  });
+
+  test('INNs and GRAVEYARDs are separated spatially', () => {
+    const state = freshBattleMapState();
+    // Collect average positions of INNs vs GRAVEYARDs
+    const inns = [];
+    const graveyards = [];
+    for (const [, t] of state.tiles) {
+      if (t.type === TileType.BUILDING && t.building === BuildingType.INN) inns.push(t);
+      if (t.type === TileType.BUILDING && t.building === BuildingType.GRAVEYARD) graveyards.push(t);
+    }
+    const avgCol = arr => arr.reduce((s, t) => s + t.col, 0) / arr.length;
+    const avgRow = arr => arr.reduce((s, t) => s + t.row, 0) / arr.length;
+    const innAvgCol = avgCol(inns), innAvgRow = avgRow(inns);
+    const gravAvgCol = avgCol(graveyards), gravAvgRow = avgRow(graveyards);
+    // The two groups should be significantly separated (on opposite river sides)
+    const colDiff = Math.abs(innAvgCol - gravAvgCol);
+    const rowDiff = Math.abs(innAvgRow - gravAvgRow);
+    const separation = Math.max(colDiff, rowDiff);
+    assert.ok(separation > 5, `INNs and GRAVEYARDs should be well separated (diff=${separation.toFixed(1)})`);
+  });
+});
+
 describe('generateBattleStarts', () => {
-  test('hero starts are in leftmost 3 columns', () => {
-    const state = freshBattleState();
+  test('hero starts are at INN buildings', () => {
+    const state = freshBattleMapState();
     const starts = generateBattleStarts(state.tiles, 'hero', 5);
-    assert.ok(starts.length >= 1, 'should return at least one start');
+    assert.equal(starts.length, 5, 'should return 5 starts');
     for (const s of starts) {
-      assert.ok(s.col <= 2, `hero start col ${s.col} should be <= 2`);
+      const t = state.tiles.get(hexKey(s.col, s.row));
+      assert.ok(t, `tile at ${s.col},${s.row} should exist`);
+      assert.equal(t.building, BuildingType.INN, `hero start at ${s.col},${s.row} should be an INN`);
     }
   });
 
-  test('witch starts are in rightmost 3 columns', () => {
-    const state = freshBattleState();
+  test('witch starts are at GRAVEYARD buildings', () => {
+    const state = freshBattleMapState();
     const starts = generateBattleStarts(state.tiles, 'witch', 5);
-    assert.ok(starts.length >= 1, 'should return at least one start');
+    assert.equal(starts.length, 5, 'should return 5 starts');
     for (const s of starts) {
-      assert.ok(s.col >= MAP_COLS - 3, `witch start col ${s.col} should be >= ${MAP_COLS - 3}`);
+      const t = state.tiles.get(hexKey(s.col, s.row));
+      assert.ok(t, `tile at ${s.col},${s.row} should exist`);
+      assert.equal(t.building, BuildingType.GRAVEYARD, `witch start at ${s.col},${s.row} should be a GRAVEYARD`);
+    }
+  });
+
+  test('overflow players get neighbor tiles', () => {
+    const state = freshBattleMapState();
+    const starts = generateBattleStarts(state.tiles, 'hero', 8);
+    assert.equal(starts.length, 8, 'should return 8 starts');
+    // First 5 are at buildings
+    for (let i = 0; i < 5; i++) {
+      const t = state.tiles.get(hexKey(starts[i].col, starts[i].row));
+      assert.equal(t.building, BuildingType.INN, `start ${i} should be an INN`);
+    }
+    // Overflow (6-8) should be neighbors of one of the INNs
+    for (let i = 5; i < 8; i++) {
+      const s = starts[i];
+      const bldgIdx = i % 5;
+      const bldg = starts[bldgIdx];
+      const dist = hexDistance(s.col, s.row, bldg.col, bldg.row);
+      assert.ok(dist <= 1, `overflow start ${i} should be adjacent to building ${bldgIdx} (dist=${dist})`);
     }
   });
 
   test('returns requested count when possible', () => {
-    const state = freshBattleState();
+    const state = freshBattleMapState();
     const starts = generateBattleStarts(state.tiles, 'hero', 10);
-    // On a 21×21 campaign map, 3 columns should have plenty of space
-    assert.ok(starts.length >= 5, `should return at least 5 starts, got ${starts.length}`);
+    assert.equal(starts.length, 10, `should return 10 starts, got ${starts.length}`);
   });
 });
 
