@@ -236,13 +236,13 @@ function buildGatheringSurvivorsMap() {
   // Dirt patches
   scatterDirt(tiles, 4, rand, COLS);
 
-  // Resources + survivors
+  // Resources + survivors — one survivor near the hero start, two further away.
   setResource(tiles, 2, 7, ResourceType.FOOD);
   setResource(tiles, 6, 4, ResourceType.HERBS);
   setResource(tiles, 8, 5, ResourceType.WOOD);
-  setHiddenSurvivor(tiles, 5, 5);   // church
-  setHiddenSurvivor(tiles, 8, 7);   // barn
-  setHiddenSurvivor(tiles, 3, 3);   // house
+  setHiddenSurvivor(tiles, 4, 7);   // apothecary — close to inn at (1,9)
+  setHiddenSurvivor(tiles, 3, 3);   // house — across the map
+  setHiddenSurvivor(tiles, 8, 7);   // barn — far east
 
   return {
     tiles,
@@ -624,13 +624,15 @@ const MISSIONS = [
     id:       'gathering_survivors',
     title:    'Gathering Survivors',
     chapter:  1,
-    briefing: `The village is clear, but others may have survived. Smoke rises from distant buildings — signs of life, or something worse. Search Caleb's Hollow's outskirts and bring any survivors back before the dead return.`,
+    briefing: `The village is clear, but others may have survived. Smoke rises from distant buildings — signs of life, or something worse. Find at least two survivors and thin the pack of dead before dusk. If night falls while you still search alone, you will not see the dawn.`,
     victoryText: `The last zombie falls. You've gathered a small band of survivors — frightened but determined. Together you fortify what remains of Caleb's Hollow, knowing the true horror still lurks beyond the tree line.`,
     defeatText:  `You searched too far and too recklessly. The dead found you before you found help.`,
 
-    // Starts in daytime, progresses into nighttime — a single day-night cycle.
+    // Six daytime turns (dawn + 5 day) then dusk on the seventh turn. The
+    // mission resolves at dusk — win if two survivors are in hand, lose
+    // otherwise.
     phaseCycle: {
-      phases: ['dawn', 'day', 'day', 'day', 'dusk', 'night', 'night', 'night'],
+      phases: ['dawn', 'day', 'day', 'day', 'day', 'day', 'dusk'],
       loop: false,
     },
 
@@ -645,7 +647,7 @@ const MISSIONS = [
     ],
     waves: [
       { round: 3, units: [{ type: 'zombie', spawnAt: 'map_edge' }] },
-      { round: 6, units: [{ type: 'zombie', spawnAt: 'map_edge' }, { type: 'zombie', spawnAt: 'map_edge' }] },
+      { round: 5, units: [{ type: 'zombie', spawnAt: 'map_edge' }, { type: 'zombie', spawnAt: 'map_edge' }] },
     ],
     aiPersonality: 'balanced',
     aiBudgetBonus: 1,
@@ -655,8 +657,22 @@ const MISSIONS = [
     maxDiscoverableSurvivors:  3,
 
     objectives: {
-      win:  { type: 'eliminate_all', reason: 'The area is secure. Your band of survivors grows.' },
-      lose: { type: 'hero_killed' },
+      win: {
+        type: 'gather_and_survive',
+        survivors: 2,
+        kills: 4,
+        phaseFallback: 'dusk',
+        reason: 'The survivors are safe — Caleb\'s Hollow holds out another night.',
+      },
+      lose: [
+        { type: 'hero_killed' },
+        {
+          type: 'phase_without_survivors',
+          phase: 'dusk',
+          survivors: 2,
+          reason: 'Night fell before you found enough survivors.',
+        },
+      ],
     },
 
     startingResources: { food: 1, herbs: 1 },
@@ -665,11 +681,14 @@ const MISSIONS = [
 
     storyTriggers: [
       { type: 'round', round: 1, title: 'Voices in the Fog',
-        text: 'Through the morning haze you hear voices — desperate, frightened. Others survived the night. You must reach them before the dead do.',
+        text: 'Through the morning haze you hear voices — desperate, frightened. Others survived the night. Find at least two of them and cut down the dead before dusk.',
         flag: 'gathering_intro' },
-      { type: 'area', hexes: [{ col: 5, row: 5 }], title: 'Sanctuary',
-        text: 'The church doors are barricaded from the inside. You call out and hear weeping — then the scrape of wood as the barricade is removed. A survivor emerges, pale but alive.',
-        flag: 'found_church' },
+      { type: 'round', round: 6, title: 'The Light is Fading',
+        text: 'Long shadows stretch across the square. This is the last of the daylight — when dusk falls you will be out of time. Hurry.',
+        flag: 'gathering_last_day' },
+      { type: 'area', hexes: [{ col: 4, row: 7 }], title: 'Sanctuary',
+        text: 'The apothecary\'s door is barricaded from the inside. You call out and hear weeping — then the scrape of wood as the barricade is removed. A survivor emerges, pale but alive.',
+        flag: 'found_apothecary' },
     ],
 
     requires: ['prologue'],

@@ -158,6 +158,13 @@ describe('GameState no-witch mode', () => {
 
 // ── Victory delegate ────────────────────────────────────────────────────────
 
+/** Create a survivor entity owned by the hero faction (matches in-game discovery). */
+function makeHeroSurvivor(col, row) {
+  const s = createSurvivor(col, row, 'hero');
+  s.owner = 'hero';
+  return s;
+}
+
 describe('Victory delegate', () => {
   test('eliminate_all triggers when all witch entities dead', () => {
     const delegate = buildVictoryDelegate({
@@ -236,6 +243,122 @@ describe('Victory delegate', () => {
     });
     state.checkVictory();
     assert.equal(state.winner, 'hero');
+  });
+
+  // gather_and_survive — Mission 2 win type
+  describe('gather_and_survive win type', () => {
+    function buildGatherState() {
+      const mapData = buildMap('gathering_survivors');
+      mapData.noWitch = true;
+      const state = new GameState(true, false, 'skirmish', null, mapData);
+      state.heroKills = 0;
+      return state;
+    }
+
+    test('does not win with only 1 survivor', () => {
+      const delegate = buildVictoryDelegate({
+        win: { type: 'gather_and_survive', survivors: 2, kills: 4, phaseFallback: 'dusk' },
+      });
+      const state = buildGatherState();
+      state.entities.push(makeHeroSurvivor(2, 2));
+      state.heroKills = 10;
+      assert.equal(delegate(state), null);
+    });
+
+    test('wins when survivor count AND kill quota are met', () => {
+      const delegate = buildVictoryDelegate({
+        win: { type: 'gather_and_survive', survivors: 2, kills: 4, phaseFallback: 'dusk' },
+      });
+      const state = buildGatherState();
+      state.entities.push(makeHeroSurvivor(2, 2), makeHeroSurvivor(3, 3));
+      state.heroKills = 4;
+      const result = delegate(state);
+      assert.ok(result);
+      assert.equal(result.winner, 'hero');
+    });
+
+    test('wins when survivor count met and phase fallback reached, even without kills', () => {
+      const delegate = buildVictoryDelegate({
+        win: { type: 'gather_and_survive', survivors: 2, kills: 4, phaseFallback: 'dusk' },
+      });
+      const state = buildGatherState();
+      state.entities.push(makeHeroSurvivor(2, 2), makeHeroSurvivor(3, 3));
+      state.heroKills = 0;
+      state.phase = Phase.DUSK;
+      const result = delegate(state);
+      assert.ok(result);
+      assert.equal(result.winner, 'hero');
+    });
+
+    test('does not count dead survivors', () => {
+      const delegate = buildVictoryDelegate({
+        win: { type: 'gather_and_survive', survivors: 2, kills: 4, phaseFallback: 'dusk' },
+      });
+      const state = buildGatherState();
+      const s1 = makeHeroSurvivor(2, 2);
+      const s2 = makeHeroSurvivor(3, 3);
+      s2.hp = 0; // alive is a getter (hp > 0)
+      state.entities.push(s1, s2);
+      state.heroKills = 10;
+      assert.equal(delegate(state), null);
+    });
+  });
+
+  // phase_without_survivors — Mission 2 lose type
+  describe('phase_without_survivors lose type', () => {
+    test('loses at dusk when survivors < threshold', () => {
+      const delegate = buildVictoryDelegate({
+        lose: { type: 'phase_without_survivors', phase: 'dusk', survivors: 2 },
+      });
+      const mapData = buildMap('gathering_survivors');
+      mapData.noWitch = true;
+      const state = new GameState(true, false, 'skirmish', null, mapData);
+      state.phase = Phase.DUSK;
+      const result = delegate(state);
+      assert.ok(result);
+      assert.equal(result.winner, 'witch');
+    });
+
+    test('does not lose at dusk when survivors meet threshold', () => {
+      const delegate = buildVictoryDelegate({
+        lose: { type: 'phase_without_survivors', phase: 'dusk', survivors: 2 },
+      });
+      const mapData = buildMap('gathering_survivors');
+      mapData.noWitch = true;
+      const state = new GameState(true, false, 'skirmish', null, mapData);
+      state.phase = Phase.DUSK;
+      state.entities.push(makeHeroSurvivor(2, 2), makeHeroSurvivor(3, 3));
+      assert.equal(delegate(state), null);
+    });
+
+    test('does not trigger before the target phase', () => {
+      const delegate = buildVictoryDelegate({
+        lose: { type: 'phase_without_survivors', phase: 'dusk', survivors: 2 },
+      });
+      const mapData = buildMap('gathering_survivors');
+      mapData.noWitch = true;
+      const state = new GameState(true, false, 'skirmish', null, mapData);
+      state.phase = Phase.DAY;
+      assert.equal(delegate(state), null);
+    });
+  });
+
+  // Array lose conditions — Mission 2 combines hero_killed + phase_without_survivors
+  test('lose array: first matching condition fires', () => {
+    const delegate = buildVictoryDelegate({
+      lose: [
+        { type: 'hero_killed' },
+        { type: 'phase_without_survivors', phase: 'dusk', survivors: 2 },
+      ],
+    });
+    const mapData = buildMap('gathering_survivors');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+    // Dusk with 0 survivors should still trigger the second condition
+    state.phase = Phase.DUSK;
+    const result = delegate(state);
+    assert.ok(result);
+    assert.equal(result.winner, 'witch');
   });
 });
 
@@ -1551,11 +1674,64 @@ describe('Custom phase cycles', () => {
       assert.equal(prologue.phaseCycle.loop, true);
     });
 
-    test('gathering_survivors mission has day-to-night fixed cycle', () => {
+    test('gathering_survivors mission has six daytime turns ending at dusk', () => {
       const gs = missions.find(m => m.id === 'gathering_survivors');
       assert.ok(gs.phaseCycle, 'gathering_survivors should have phaseCycle');
-      assert.deepEqual(gs.phaseCycle.phases, ['dawn', 'day', 'day', 'day', 'dusk', 'night', 'night', 'night']);
+      assert.deepEqual(gs.phaseCycle.phases, ['dawn', 'day', 'day', 'day', 'day', 'day', 'dusk']);
       assert.equal(gs.phaseCycle.loop, false);
     });
   });
 });
+
+// ── Mission 2 balance ───────────────────────────────────────────────────────
+
+describe('Mission 2 (Gathering Survivors) balance', () => {
+  const mission2 = hollowDef.missions.find(m => m.id === 'gathering_survivors');
+
+  test('uses gather_and_survive win type with 2 survivors / 4 kills / dusk fallback', () => {
+    assert.equal(mission2.objectives.win.type, 'gather_and_survive');
+    assert.equal(mission2.objectives.win.survivors, 2);
+    assert.equal(mission2.objectives.win.kills, 4);
+    assert.equal(mission2.objectives.win.phaseFallback, 'dusk');
+  });
+
+  test('lose conditions include hero_killed and phase_without_survivors at dusk', () => {
+    assert.ok(Array.isArray(mission2.objectives.lose));
+    const types = mission2.objectives.lose.map(l => l.type);
+    assert.ok(types.includes('hero_killed'));
+    const pws = mission2.objectives.lose.find(l => l.type === 'phase_without_survivors');
+    assert.ok(pws);
+    assert.equal(pws.phase, 'dusk');
+    assert.equal(pws.survivors, 2);
+  });
+
+  test('story trigger fires on round 6 warning of impending night', () => {
+    const lastDay = mission2.storyTriggers.find(t => t.round === 6);
+    assert.ok(lastDay, 'Mission 2 should have a round-6 warning trigger');
+    assert.ok(/dusk|night|fading|time/i.test(lastDay.text + lastDay.title),
+      'warning trigger text should mention the coming night');
+  });
+
+  test('map places three survivors: one near the hero start, two further away', () => {
+    const mapData = buildMap('gathering_survivors');
+    const survivorTiles = [];
+    for (const [, tile] of mapData.tiles) {
+      if (tile.hiddenSurvivor) survivorTiles.push({ col: tile.col, row: tile.row });
+    }
+    assert.equal(survivorTiles.length, 3, 'should have 3 hidden survivors on the map');
+
+    const distances = survivorTiles.map(t => offsetHexDistance(mapData.heroStart, t));
+    const near = distances.filter(d => d <= 4);
+    const far  = distances.filter(d => d >= 5);
+    assert.ok(near.length >= 1, 'at least one survivor should be within 4 hexes of the hero start');
+    assert.ok(far.length >= 2, 'at least two survivors should be 5+ hexes from the hero start');
+  });
+});
+
+/** Odd-r offset → axial → cube distance between two hex coords. */
+function offsetHexDistance(a, b) {
+  const toAxial = ({ col, row }) => ({ q: col - ((row - (row & 1)) >> 1), r: row });
+  const A = toAxial(a), B = toAxial(b);
+  const dq = A.q - B.q, dr = A.r - B.r;
+  return (Math.abs(dq) + Math.abs(dq + dr) + Math.abs(dr)) / 2;
+}

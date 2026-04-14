@@ -55,81 +55,138 @@ export function reconcileRosterAfterMission(preMissionRoster, entities) {
 /**
  * Build victory/defeat delegate function from mission objectives.
  * Returns a function (state) => { winner, winReason, log } | null.
+ *
+ * `objectives.win` and `objectives.lose` may each be either a single condition
+ * object or an array of conditions. When an array is given, the first matching
+ * condition wins — lose conditions are checked before win conditions.
  */
 export function buildVictoryDelegate(objectives) {
   return (state) => {
-    // Check lose condition first (may be null for tutorial/conductor missions)
+    // Check lose condition(s) first (may be null for tutorial/conductor missions)
     if (objectives.lose) {
-      switch (objectives.lose.type) {
-        case 'hero_killed':
-          if (state.factionEliminated('hero')) {
-            return {
-              winner: 'witch',
-              winReason: objectives.lose.reason || 'The hero has fallen.',
-              log: '💀 The hero has been slain…',
-            };
-          }
-          break;
-        case 'rounds_exceeded':
-          if (state.round > objectives.lose.rounds) {
-            return {
-              winner: 'witch',
-              winReason: objectives.lose.reason || `Failed to complete the mission in ${objectives.lose.rounds} rounds.`,
-              log: `⏳ Time ran out — the mission is lost.`,
-            };
-          }
-          break;
+      const loseConds = Array.isArray(objectives.lose) ? objectives.lose : [objectives.lose];
+      for (const cond of loseConds) {
+        const result = _checkLoseCondition(cond, state);
+        if (result) return result;
       }
     }
-    // Check win condition
+    // Check win condition(s)
     if (objectives.win) {
-      switch (objectives.win.type) {
-        case 'eliminate_all':
-          if (state.entities.filter(e => e.owner === 'witch' && e.alive).length === 0) {
-            return {
-              winner: 'hero',
-              winReason: objectives.win.reason || 'All enemies have been eliminated.',
-              log: '☀ Every last enemy has been vanquished!',
-            };
-          }
-          break;
-        case 'survive_rounds':
-          if (state.round > objectives.win.rounds) {
-            return {
-              winner: 'hero',
-              winReason: objectives.win.reason || `Survived ${objectives.win.rounds} rounds.`,
-              log: `☀ You held the line! The darkness recedes… for now.`,
-            };
-          }
-          break;
-        case 'reach_hex':
-          if (state.hero?.col === objectives.win.col && state.hero?.row === objectives.win.row) {
-            return {
-              winner: 'hero',
-              winReason: objectives.win.reason || 'Reached the objective.',
-              log: '☀ The hero has reached the objective!',
-            };
-          }
-          break;
-        case 'slay_witch':
-          if (state.factionEliminated('witch')) {
-            return {
-              winner: 'hero',
-              winReason: objectives.win.reason || 'The witch has been slain!',
-              log: '☀ The witch has been defeated! Caleb\'s Hollow is saved!',
-            };
-          }
-          break;
-        case 'control_nodes':
-          // Standard node scoring — delegate to existing logic (return null to let it run)
-          return null;
-        case 'conductor_complete':
-          // MissionConductor handles completion directly — never auto-trigger victory
-          return null;
+      const winConds = Array.isArray(objectives.win) ? objectives.win : [objectives.win];
+      for (const cond of winConds) {
+        const result = _checkWinCondition(cond, state);
+        if (result === null) continue;     // condition not met — try next
+        if (result === DEFERRED) return null; // let external systems resolve
+        return result;
       }
     }
     return null; // no victory yet
   };
+}
+
+// Sentinel returned by a win condition that should defer to external systems
+// (e.g. standard node scoring, conductor missions) instead of resolving now.
+const DEFERRED = Symbol('victory-deferred');
+
+function _heroSurvivorCount(state) {
+  return state.entities.filter(e => e.type === 'survivor' && e.owner === 'hero' && e.alive).length;
+}
+
+function _checkLoseCondition(cond, state) {
+  switch (cond.type) {
+    case 'hero_killed':
+      if (state.factionEliminated('hero')) {
+        return {
+          winner: 'witch',
+          winReason: cond.reason || 'The hero has fallen.',
+          log: '💀 The hero has been slain…',
+        };
+      }
+      return null;
+    case 'rounds_exceeded':
+      if (state.round > cond.rounds) {
+        return {
+          winner: 'witch',
+          winReason: cond.reason || `Failed to complete the mission in ${cond.rounds} rounds.`,
+          log: `⏳ Time ran out — the mission is lost.`,
+        };
+      }
+      return null;
+    case 'phase_without_survivors':
+      if (state.phase === cond.phase && _heroSurvivorCount(state) < cond.survivors) {
+        return {
+          winner: 'witch',
+          winReason: cond.reason || `Night fell before you gathered enough survivors.`,
+          log: `🌒 The light fades and you stand alone — the mission is lost.`,
+        };
+      }
+      return null;
+  }
+  return null;
+}
+
+function _checkWinCondition(cond, state) {
+  switch (cond.type) {
+    case 'eliminate_all':
+      if (state.entities.filter(e => e.owner === 'witch' && e.alive).length === 0) {
+        return {
+          winner: 'hero',
+          winReason: cond.reason || 'All enemies have been eliminated.',
+          log: '☀ Every last enemy has been vanquished!',
+        };
+      }
+      return null;
+    case 'survive_rounds':
+      if (state.round > cond.rounds) {
+        return {
+          winner: 'hero',
+          winReason: cond.reason || `Survived ${cond.rounds} rounds.`,
+          log: `☀ You held the line! The darkness recedes… for now.`,
+        };
+      }
+      return null;
+    case 'reach_hex':
+      if (state.hero?.col === cond.col && state.hero?.row === cond.row) {
+        return {
+          winner: 'hero',
+          winReason: cond.reason || 'Reached the objective.',
+          log: '☀ The hero has reached the objective!',
+        };
+      }
+      return null;
+    case 'slay_witch':
+      if (state.factionEliminated('witch')) {
+        return {
+          winner: 'hero',
+          winReason: cond.reason || 'The witch has been slain!',
+          log: '☀ The witch has been defeated! Caleb\'s Hollow is saved!',
+        };
+      }
+      return null;
+    case 'gather_and_survive': {
+      // Win when enough survivors are gathered AND either the kill quota is met
+      // or the fallback phase has been reached.
+      const survivors = _heroSurvivorCount(state);
+      if (survivors < cond.survivors) return null;
+      const killsOk = cond.kills == null || (state.heroKills ?? 0) >= cond.kills;
+      const phaseOk = cond.phaseFallback && state.phase === cond.phaseFallback;
+      if (killsOk || phaseOk) {
+        return {
+          winner: 'hero',
+          winReason: cond.reason || 'Survivors gathered — the mission is a success.',
+          log: '☀ The survivors are safe!',
+        };
+      }
+      return null;
+    }
+    case 'control_nodes':
+      // Standard node scoring — delegate to existing logic (return null to let it run)
+      return DEFERRED;
+    case 'conductor_complete':
+      // MissionConductor handles completion directly — never auto-trigger victory
+      return DEFERRED;
+  }
+  return null;
 }
 
 /**
