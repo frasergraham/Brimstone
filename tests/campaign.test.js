@@ -2100,6 +2100,41 @@ describe('Mission 3 (The First Night) balance', () => {
     const total = mission3.waves.reduce((sum, w) => sum + w.units.length, 0);
     assert.ok(total >= 12, `expected heavy swarm (>=12 wave spawns), got ${total}`);
   });
+
+  test('minions arrive from night 1 and every night after', () => {
+    // Round 2 is the first full night (round 1 is dusk). The party should
+    // face at least one minion from night 1 onward every round.
+    for (const r of [2, 3, 4, 5, 6]) {
+      const wave = mission3.waves.find(w => w.round === r);
+      assert.ok(wave, `round ${r} should have a wave`);
+      const minionCount = wave.units.filter(u => u.type === 'minion').length;
+      assert.ok(minionCount >= 1,
+        `round ${r} wave should include >=1 minion, got ${minionCount}`);
+    }
+  });
+
+  test('pre-placed enemies stand right by the town (not strewn across the map)', () => {
+    // Every pre-placed enemy should be within 2 hexes of at least one town
+    // building, except up to 2 distant graveyard shamblers allowed for flavor.
+    const mapData = buildMap('first_night');
+    const buildings = [];
+    for (const [, tile] of mapData.tiles) {
+      if (tile.type === 'building' && tile.building !== 'graveyard') {
+        buildings.push({ col: tile.col, row: tile.row });
+      }
+    }
+    const distant = mission3.enemyUnits.filter(u => {
+      const minDist = Math.min(...buildings.map(b => offsetHexDistance(u, b)));
+      return minDist > 2;
+    });
+    assert.ok(distant.length <= 2,
+      `at most 2 distant shamblers allowed; found ${distant.length}`);
+    // And at least one minion should be pre-placed — so the party is
+    // threatened from turn 1 by a sturdy attacker.
+    const minions = mission3.enemyUnits.filter(u => u.type === 'minion');
+    assert.ok(minions.length >= 1,
+      `expected >=1 pre-placed minion, got ${minions.length}`);
+  });
 });
 
 // ── Mission 4 balance ───────────────────────────────────────────────────────

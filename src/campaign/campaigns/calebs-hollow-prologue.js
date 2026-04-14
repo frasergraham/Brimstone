@@ -719,55 +719,59 @@ const MISSIONS = [
 
     hasWitch:        false,
     disableScoring:  true,
-    // Pre-placed scouts at the edge of town so the first night's threat is
-    // visible immediately — plus a couple of distant stragglers as flavor.
+    // Pre-placed enemies are ALREADY on the town's doorstep at mission start,
+    // including two minions so the first night isn't just a zombie warm-up.
     enemyUnits: [
-      { type: 'zombie', col: 6, row: 5 },   // east side, by the watchtower
-      { type: 'zombie', col: 0, row: 7 },   // west side, past the house
-      { type: 'zombie', col: 10, row: 2 },  // graveyard shambler
-      { type: 'zombie', col: 11, row: 4 },  // graveyard shambler
+      { type: 'minion', col: 5, row: 7 },   // right next to the blacksmith
+      { type: 'minion', col: 3, row: 5 },   // between apothecary and church
+      { type: 'zombie', col: 6, row: 5 },   // east of the watchtower
+      { type: 'zombie', col: 0, row: 7 },   // west of the house
+      { type: 'zombie', col: 10, row: 2 },  // distant graveyard shambler
+      { type: 'zombie', col: 11, row: 4 },  // distant graveyard shambler
     ],
-    // Enemies spawn ADJACENT to town every night, alternating the direction
-    // of attack so the party can't fortify a single chokepoint.
+    // Every round spawns a wave adjacent to town — and a minion arrives from
+    // the very first night. Pressure escalates through the cycle.
     waves: [
-      // Round 1 (dusk): two scouts arriving at opposite edges of town.
+      // Round 1 (dusk): two scouts arrive from north and south.
       { round: 1, units: [
-        { type: 'zombie', spawnAt: { col: 1, row: 4 } },   // N of house
-        { type: 'zombie', spawnAt: { col: 4, row: 9 } },   // S by the barn
+        { type: 'zombie', spawnAt: { col: 1, row: 4 } },
+        { type: 'zombie', spawnAt: { col: 4, row: 9 } },
       ] },
-      // Round 2 (night 1): push from north.
+      // Round 2 (NIGHT 1): first real assault — minion + three zombies.
       { round: 2, units: [
+        { type: 'minion', spawnAt: { col: 0, row: 7 } },
         { type: 'zombie', spawnAt: { col: 1, row: 4 } },
         { type: 'zombie', spawnAt: { col: 5, row: 4 } },
-        { type: 'zombie', spawnAt: { col: 3, row: 9 } },
+        { type: 'zombie', spawnAt: { col: 5, row: 7 } },
       ] },
-      // Round 3 (night 2): pressure from west with a minion.
+      // Round 3 (night 2): western push, second minion.
       { round: 3, units: [
+        { type: 'minion', spawnAt: { col: 3, row: 5 } },
         { type: 'zombie', spawnAt: { col: 0, row: 6 } },
         { type: 'zombie', spawnAt: { col: 0, row: 8 } },
         { type: 'zombie', spawnAt: { col: 4, row: 9 } },
-        { type: 'minion', spawnAt: { col: 0, row: 7 } },
       ] },
-      // Round 4 (night 3): pressure from east with a minion.
+      // Round 4 (night 3): eastern push, two minions.
       { round: 4, units: [
-        { type: 'zombie', spawnAt: { col: 6, row: 5 } },
-        { type: 'zombie', spawnAt: { col: 5, row: 7 } },
-        { type: 'zombie', spawnAt: { col: 6, row: 9 } },
         { type: 'minion', spawnAt: { col: 5, row: 6 } },
+        { type: 'minion', spawnAt: { col: 5, row: 7 } },
+        { type: 'zombie', spawnAt: { col: 6, row: 5 } },
+        { type: 'zombie', spawnAt: { col: 6, row: 9 } },
       ] },
-      // Round 5 (night 4): heaviest wave — all directions, two minions.
+      // Round 5 (night 4): heaviest — all directions, two minions.
       { round: 5, units: [
+        { type: 'minion', spawnAt: { col: 5, row: 4 } },
+        { type: 'minion', spawnAt: { col: 6, row: 5 } },
         { type: 'zombie', spawnAt: { col: 1, row: 4 } },
         { type: 'zombie', spawnAt: { col: 0, row: 7 } },
         { type: 'zombie', spawnAt: { col: 4, row: 9 } },
-        { type: 'minion', spawnAt: { col: 5, row: 4 } },
-        { type: 'minion', spawnAt: { col: 6, row: 5 } },
       ] },
-      // Round 6 (night 5): final push before dawn.
+      // Round 6 (night 5): final desperate push before dawn.
       { round: 6, units: [
-        { type: 'zombie', spawnAt: { col: 6, row: 5 } },
-        { type: 'zombie', spawnAt: { col: 0, row: 8 } },
         { type: 'minion', spawnAt: { col: 4, row: 8 } },
+        { type: 'minion', spawnAt: { col: 5, row: 7 } },
+        { type: 'zombie', spawnAt: { col: 0, row: 8 } },
+        { type: 'zombie', spawnAt: { col: 6, row: 5 } },
       ] },
     ],
     aiPersonality: 'aggressive',
