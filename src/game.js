@@ -595,6 +595,15 @@ export class GameState {
       this._checkBattleNodeScoring();
     }
 
+    // Campaign wave processor — runs BEFORE checkVictory so triggered spawns
+    // (e.g. Mission 1's kill-triggered golem) can pre-empt an `eliminate_all`
+    // win that would otherwise fire when the last existing enemy dies on the
+    // same round the wave should spawn. Non-campaign games don't set this.
+    if (this._waveProcessor) {
+      const waveLogs = this._waveProcessor();
+      if (waveLogs) for (const msg of waveLogs) this.addLog(msg);
+    }
+
     this.checkVictory();
   }
 

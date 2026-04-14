@@ -1012,6 +1012,36 @@ describe('Mission 1 (The Awakening) balance', () => {
   test('aiBudgetBonus is 0', () => {
     assert.equal(mission1.aiBudgetBonus, 0);
   });
+
+  test('killing the last zombie spawns the golem before victory fires', () => {
+    // Regression: the 3rd zombie kill used to trigger eliminate_all because
+    // the wave spawn ran AFTER endRound's checkVictory. The fix moves wave
+    // processing inside endRound so the golem spawns before victory is
+    // evaluated.
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+
+    // Install the mission-1 wave processor (same hook main.js uses).
+    state._waveProcessor = () => processWaves(
+      state, mission1.waves,
+      (type, col, row) => createWoodGolem(col, row, 'witch'),
+    );
+    state.victoryDelegate = buildVictoryDelegate(mission1.objectives);
+
+    // Simulate: all 3 initial zombies killed this round, heroKills == 3.
+    // No witch units remain on the board yet; the golem should spawn inside
+    // endRound and prevent eliminate_all from triggering.
+    state.entities = state.entities.filter(e => e.owner !== 'witch');
+    state.heroKills = 3;
+
+    state.endRound();
+
+    assert.equal(state.winner, null, 'should not have won yet — golem just spawned');
+    assert.equal(state.gameOver, false, 'game should still be in progress');
+    const golems = state.entities.filter(e => e.type === EntityType.WOOD_GOLEM);
+    assert.equal(golems.length, 1, 'weakened wood golem should have spawned');
+  });
 });
 
 // ── Disable scoring ─────────────────────────────────────────────────────────

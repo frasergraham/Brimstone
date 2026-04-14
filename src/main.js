@@ -717,13 +717,10 @@ async function _runLocalResolution(skipSummary = false) {
   state.updateNodeDiscovery();
   state.checkAndLogNodeControlChanges();
   state.updateExploredHexes();
+  // endRound() internally invokes state._waveProcessor (set during mission
+  // load) before checkVictory, so triggered wave spawns can pre-empt an
+  // otherwise-firing eliminate_all win.
   state.endRound();
-
-  // Campaign wave spawning: inject new enemies after each round
-  if (_activeMissionDef?.waves) {
-    const waveLogs = processWaves(state, _activeMissionDef.waves, _createEnemyEntity);
-    for (const msg of waveLogs) state.addLog(msg);
-  }
 
   // Show encounter dialogs for survivors spawned at power nodes during endRound
   if (ui && !_autoplay && state.nodeSpawnedSurvivors?.length) {
@@ -2148,6 +2145,10 @@ function _resumeCampaignMission(missionId) {
 
   // Reconstruct campaign-specific state
   existingState.victoryDelegate = buildVictoryDelegate(missionDef.objectives);
+  if (missionDef.waves) {
+    existingState._waveProcessor = () =>
+      processWaves(existingState, missionDef.waves, _createEnemyEntity);
+  }
   existingState.fogOfWar = existingState.fogOfWar || 'full';
   if (missionDef.lootOverrides) existingState.lootOverrides = missionDef.lootOverrides;
   if (missionDef.aiBudgetBonus) existingState.campaignAIBudgetBonus = missionDef.aiBudgetBonus;
@@ -2497,6 +2498,13 @@ function _initCampaignMission(missionDef) {
 
   // Set custom victory delegate
   state.victoryDelegate = buildVictoryDelegate(missionDef.objectives);
+
+  // Install the mission's wave processor (runs inside endRound before
+  // checkVictory so triggered spawns can pre-empt a premature win).
+  if (missionDef.waves) {
+    state._waveProcessor = () =>
+      processWaves(state, missionDef.waves, _createEnemyEntity);
+  }
 
   // Inject carried-over hero stats
   if (_activeCampaign && _activeCampaign.heroStats) {
