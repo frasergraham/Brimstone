@@ -1,32 +1,24 @@
 #!/usr/bin/env node
-// CLI for remote-battle management.
-// Uses the same helper functions as the admin panel.
+// CLI for managing admin-controlled AI players in existing battle rooms.
 //
 // Usage:
-//   node scripts/remote-battle.js create [--name "My Battle"] [--map standard] [--players 2]
-//   node scripts/remote-battle.js list
-//   node scripts/remote-battle.js status <battleId>
-//   node scripts/remote-battle.js add-player <battleId> --faction hero [--type ai] [--personality balanced]
-//   node scripts/remote-battle.js add-player <battleId> --faction witch --type llm --endpoint https://...
-//   node scripts/remote-battle.js start <battleId>
-//   node scripts/remote-battle.js take-turn <battleId> <playerId>
-//   node scripts/remote-battle.js take-all-turns <battleId>
-//   node scripts/remote-battle.js resolve <battleId>
-//   node scripts/remote-battle.js resign <battleId> <playerId>
-//   node scripts/remote-battle.js auto <battleId> [--rounds 10]
-//   node scripts/remote-battle.js personalities
+//   node scripts/remote-battle.js rooms                              # list active battle rooms
+//   node scripts/remote-battle.js status <roomId>                    # show room detail
+//   node scripts/remote-battle.js add <roomId> --faction hero [--type ai] [--personality balanced]
+//   node scripts/remote-battle.js add <roomId> --faction witch --type llm --endpoint https://...
+//   node scripts/remote-battle.js take-turn <roomId> <playerId>      # generate + submit plan for one player
+//   node scripts/remote-battle.js take-all <roomId>                  # generate plans for all remote AIs
+//   node scripts/remote-battle.js resign <roomId> <playerId>         # remove a remote AI from the battle
+//   node scripts/remote-battle.js personalities                      # list available AI personalities
 
 import {
-  createBattle,
-  addPlayer,
-  resignPlayer,
-  startBattle,
-  generateTurn,
-  generateAllTurns,
-  resolveRound,
-  getBattleStatus,
-  listBattles,
   getPersonalities,
+  listBattleRooms,
+  addPlayer,
+  takeTurn,
+  takeAllTurns,
+  resignPlayer,
+  getRoomRemoteStatus,
 } from '../server/remote-battle.js';
 
 const args = process.argv.slice(2);
@@ -38,29 +30,28 @@ function getFlag(name, defaultVal = null) {
   return args[idx + 1];
 }
 
-function hasFlag(name) {
-  return args.includes(`--${name}`);
-}
-
-function printStatus(status) {
-  console.log(`\n  Battle: ${status.name} (${status.id.slice(0, 8)})`);
-  console.log(`  Phase: ${status.phase}  |  Round: ${status.round}  |  Game Phase: ${status.currentPhase || '-'}`);
-  if (status.gameOver) {
-    console.log(`  GAME OVER — Winner: ${status.winner} (${status.winReason})`);
+function printStatus(b) {
+  console.log(`\n  Room: ${b.roomId.slice(0, 8)}`);
+  console.log(`  Round: ${b.round}  |  Phase: ${b.phase}  |  Game Phase: ${b.gamePhase || '-'}`);
+  console.log(`  Players: ${b.heroCount}H / ${b.witchCount}W (max ${b.maxPerSide} per side)`);
+  if (b.gameOver) {
+    console.log(`  GAME OVER — Winner: ${b.winner} (${b.winReason})`);
   }
-  if (status.nodeScore) {
-    console.log(`  Score — Hero: ${status.nodeScore.hero}  Witch: ${status.nodeScore.witch}`);
+  if (b.nodeScore) {
+    console.log(`  Score — Hero: ${b.nodeScore.hero}  Witch: ${b.nodeScore.witch}`);
   }
-  console.log(`\n  Roster:`);
-  for (const r of status.roster) {
-    const plan = r.hasPlan ? `[${r.planLength} actions]` : '[no plan]';
-    const leader = r.leader?.alive ? `HP ${r.leader.hp}/${r.leader.maxHp}` : (r.status === 'resigned' ? 'resigned' : 'dead');
-    const typeInfo = r.type === 'llm' ? 'LLM' : (r.personality || 'balanced');
-    console.log(`    ${r.faction.padEnd(5)} ${r.name.padEnd(20)} ${typeInfo.padEnd(12)} ${leader.padEnd(12)} ${r.entityCount} units  ${plan}  [${r.status}]`);
+  console.log(`\n  All Players:`);
+  for (const r of b.allPlayers) {
+    const ctrl = r.adminControlled ? '* ' : '  ';
+    const typeTag = r.adminControlled ? (r.type === 'llm' ? 'remote-llm' : 'remote-ai') : (r.isAI ? 'auto-ai' : 'human');
+    const sub = r.submitted ? 'submitted' : 'pending';
+    const leader = r.leader?.alive ? `HP ${r.leader.hp}/${r.leader.maxHp}` : 'dead';
+    console.log(`  ${ctrl}${r.faction.padEnd(5)} ${r.name.padEnd(20)} ${typeTag.padEnd(12)} ${(r.personality || '-').padEnd(12)} ${leader.padEnd(12)} ${r.entityCount} units  [${sub}]`);
   }
-  if (status.log.length > 0) {
+  console.log(`\n  (* = admin-controlled)`);
+  if (b.log.length > 0) {
     console.log(`\n  Recent log:`);
-    for (const l of status.log.slice(-10)) console.log(`    ${l}`);
+    for (const l of b.log.slice(-10)) console.log(`    ${l}`);
   }
   console.log('');
 }
@@ -69,18 +60,14 @@ async function main() {
   if (!command || command === 'help') {
     console.log(`
 Usage:
-  node scripts/remote-battle.js create [--name "..."] [--map standard] [--players 2]
-  node scripts/remote-battle.js list
-  node scripts/remote-battle.js status <battleId>
-  node scripts/remote-battle.js add-player <battleId> --faction hero [--type ai] [--personality balanced]
-  node scripts/remote-battle.js add-player <battleId> --faction witch --type llm --endpoint https://...
-  node scripts/remote-battle.js start <battleId>
-  node scripts/remote-battle.js take-turn <battleId> [playerId]
-  node scripts/remote-battle.js take-all-turns <battleId>
-  node scripts/remote-battle.js resolve <battleId>
-  node scripts/remote-battle.js resign <battleId> <playerId>
-  node scripts/remote-battle.js auto <battleId> [--rounds 10]
-  node scripts/remote-battle.js personalities
+  node scripts/remote-battle.js rooms                                # list active battle rooms
+  node scripts/remote-battle.js status <roomId>                      # show room detail + all players
+  node scripts/remote-battle.js add <roomId> --faction hero [--type ai] [--personality balanced]
+  node scripts/remote-battle.js add <roomId> --faction witch --type llm --endpoint https://...
+  node scripts/remote-battle.js take-turn <roomId> <playerId>        # generate + submit one player's turn
+  node scripts/remote-battle.js take-all <roomId>                    # generate turns for all remote AIs
+  node scripts/remote-battle.js resign <roomId> <playerId>           # remove a remote AI from the battle
+  node scripts/remote-battle.js personalities                        # list available AI personalities
 `);
     return;
   }
@@ -91,44 +78,34 @@ Usage:
     return;
   }
 
-  if (command === 'create') {
-    const battle = createBattle({
-      name:           getFlag('name'),
-      mapSize:        getFlag('map', 'standard'),
-      playersPerSide: parseInt(getFlag('players', '2'), 10),
-    });
-    console.log(`Created: ${battle.name} (${battle.id})`);
-    return;
-  }
-
-  if (command === 'list') {
-    const all = listBattles();
-    if (all.length === 0) { console.log('No remote battles.'); return; }
-    console.log(`\n${'ID'.padEnd(10)} ${'Name'.padEnd(30)} ${'Map'.padEnd(10)} ${'Round'.padEnd(6)} ${'Phase'.padEnd(12)} ${'Players'.padEnd(8)} Winner`);
-    for (const b of all) {
-      console.log(`${b.id.slice(0, 8).padEnd(10)} ${b.name.padEnd(30)} ${b.mapSize.padEnd(10)} ${String(b.round).padEnd(6)} ${b.phase.padEnd(12)} ${String(b.rosterCount).padEnd(8)} ${b.winner || '-'}`);
+  if (command === 'rooms') {
+    const rooms = listBattleRooms();
+    if (rooms.length === 0) { console.log('No active battle rooms.'); return; }
+    console.log(`\n${'Room'.padEnd(10)} ${'Round'.padEnd(6)} ${'Phase'.padEnd(12)} ${'Heroes'.padEnd(8)} ${'Witches'.padEnd(8)} ${'Remote AIs'}`);
+    for (const r of rooms) {
+      console.log(`${r.roomId.slice(0, 8).padEnd(10)} ${String(r.round).padEnd(6)} ${r.phase.padEnd(12)} ${`${r.heroCount}/${r.maxPerSide}`.padEnd(8)} ${`${r.witchCount}/${r.maxPerSide}`.padEnd(8)} ${r.remoteAIs}`);
     }
     console.log('');
     return;
   }
 
-  const battleId = args[1];
-  if (!battleId) {
-    console.error('Error: battleId required. Use "list" to see available battles.');
+  const roomId = args[1];
+  if (!roomId) {
+    console.error('Error: roomId required. Use "rooms" to see active battle rooms.');
     process.exit(1);
   }
 
   if (command === 'status') {
-    const status = getBattleStatus(battleId);
-    if (!status) { console.error('Battle not found.'); process.exit(1); }
+    const status = getRoomRemoteStatus(roomId);
+    if (!status) { console.error('Battle room not found.'); process.exit(1); }
     printStatus(status);
     return;
   }
 
-  if (command === 'add-player') {
+  if (command === 'add') {
     const faction = getFlag('faction');
     if (!faction) { console.error('--faction required (hero or witch)'); process.exit(1); }
-    const result = addPlayer(battleId, {
+    const result = addPlayer(roomId, {
       faction,
       type:        getFlag('type', 'ai'),
       personality: getFlag('personality', 'balanced'),
@@ -137,20 +114,7 @@ Usage:
       llmPrompt:   getFlag('prompt'),
     });
     if (result.ok) {
-      console.log(`Added ${faction} player: ${result.playerId}`);
-    } else {
-      console.error('Error:', result.error);
-      process.exit(1);
-    }
-    return;
-  }
-
-  if (command === 'start') {
-    const result = startBattle(battleId);
-    if (result.ok) {
-      console.log('Battle started!');
-      const status = getBattleStatus(battleId);
-      if (status) printStatus(status);
+      console.log(`Added remote ${result.type || 'ai'} ${faction}: ${result.name} (${result.playerId})`);
     } else {
       console.error('Error:', result.error);
       process.exit(1);
@@ -161,7 +125,7 @@ Usage:
   if (command === 'take-turn') {
     const playerId = args[2];
     if (!playerId) { console.error('playerId required.'); process.exit(1); }
-    const result = await generateTurn(battleId, playerId);
+    const result = await takeTurn(roomId, playerId);
     if (result.ok) {
       console.log(`Generated ${result.plan.length} actions.`);
     } else {
@@ -171,25 +135,16 @@ Usage:
     return;
   }
 
-  if (command === 'take-all-turns') {
-    const result = await generateAllTurns(battleId);
+  if (command === 'take-all') {
+    const result = await takeAllTurns(roomId);
     if (result.ok) {
-      for (const r of result.results) {
-        console.log(`  ${r.name}: ${r.ok ? `${r.plan.length} actions` : r.error}`);
+      if (result.results.length === 0) {
+        console.log('No remote AI players need turns.');
+      } else {
+        for (const r of result.results) {
+          console.log(`  ${r.name}: ${r.ok ? `${r.plan.length} actions` : r.error}`);
+        }
       }
-    } else {
-      console.error('Error:', result.error);
-      process.exit(1);
-    }
-    return;
-  }
-
-  if (command === 'resolve') {
-    const result = resolveRound(battleId);
-    if (result.ok) {
-      console.log(`Resolved! (${result.steps.length} steps)`);
-      const status = getBattleStatus(battleId);
-      if (status) printStatus(status);
     } else {
       console.error('Error:', result.error);
       process.exit(1);
@@ -200,50 +155,13 @@ Usage:
   if (command === 'resign') {
     const playerId = args[2];
     if (!playerId) { console.error('playerId required.'); process.exit(1); }
-    const result = resignPlayer(battleId, playerId);
+    const result = resignPlayer(roomId, playerId);
     if (result.ok) {
-      console.log('Player resigned.');
+      console.log('Player resigned from battle.');
     } else {
       console.error('Error:', result.error);
       process.exit(1);
     }
-    return;
-  }
-
-  if (command === 'auto') {
-    // Run N rounds automatically: generate all turns, resolve, repeat
-    const maxRounds = parseInt(getFlag('rounds', '10'), 10);
-    const status = getBattleStatus(battleId);
-    if (!status) { console.error('Battle not found.'); process.exit(1); }
-
-    // Start if still in setup
-    if (status.phase === 'setup') {
-      const startResult = startBattle(battleId);
-      if (!startResult.ok) { console.error('Start error:', startResult.error); process.exit(1); }
-      console.log('Battle started.');
-    }
-
-    for (let i = 0; i < maxRounds; i++) {
-      const current = getBattleStatus(battleId);
-      if (!current || current.gameOver) {
-        console.log(current?.gameOver ? `Game over at round ${current.round}! Winner: ${current.winner}` : 'Battle ended.');
-        break;
-      }
-
-      console.log(`--- Round ${current.round} ---`);
-      const genResult = await generateAllTurns(battleId);
-      if (!genResult.ok) { console.error('Turn generation error:', genResult.error); break; }
-      for (const r of genResult.results) {
-        console.log(`  ${r.name}: ${r.ok ? `${r.plan.length} actions` : r.error}`);
-      }
-
-      const resResult = resolveRound(battleId);
-      if (!resResult.ok) { console.error('Resolution error:', resResult.error); break; }
-      console.log(`  Resolved (${resResult.steps.length} steps)`);
-    }
-
-    const finalStatus = getBattleStatus(battleId);
-    if (finalStatus) printStatus(finalStatus);
     return;
   }
 

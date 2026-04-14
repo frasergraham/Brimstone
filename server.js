@@ -59,18 +59,15 @@ import { deleteAsyncGame as _deleteAsyncGame,
 import { serializeState } from './server/state-sync.js';
 import { getGameModeConfig, getDevMode } from './server/game-mode-config.js';
 import {
-  createBattle as createRemoteBattle,
-  addPlayer as addRemoteBattlePlayer,
-  resignPlayer as resignRemoteBattlePlayer,
-  startBattle as startRemoteBattle,
-  generateTurn as generateRemoteBattleTurn,
-  generateAllTurns as generateAllRemoteBattleTurns,
-  submitCustomPlan as submitRemoteBattlePlan,
-  resolveRound as resolveRemoteBattleRound,
-  getBattleStatus as getRemoteBattleStatus,
-  listBattles as listRemoteBattles,
   getPersonalities as getRemoteBattlePersonalities,
-  deleteBattle as deleteRemoteBattle,
+  listBattleRooms as listRemoteBattleRooms,
+  addPlayer as addRemoteBattlePlayer,
+  takeTurn as takeRemoteBattleTurn,
+  takeAllTurns as takeAllRemoteBattleTurns,
+  submitPlan as submitRemoteBattlePlan,
+  resignPlayer as resignRemoteBattlePlayer,
+  getRemoteAIStatus,
+  getRoomRemoteStatus,
 } from './server/remote-battle.js';
 import { upsertDeviceToken, deleteDeviceToken, pruneStaleTokens } from './server/push.js';
 
@@ -902,7 +899,8 @@ app.post('/admin/api/reset-stats', (req, res) => {
   res.json(result);
 });
 
-// ── Remote Battle admin endpoints ────────────────────────────────────────────
+// ── Remote AI Battle admin endpoints ─────────────────────────────────────────
+// Add admin-controlled AI players to existing battle rooms.
 
 app.get('/admin/api/remote-battle/personalities', (req, res) => {
   if (!_requireAdmin(req, res)) return;
@@ -912,75 +910,55 @@ app.get('/admin/api/remote-battle/personalities', (req, res) => {
   });
 });
 
-app.get('/admin/api/remote-battle', (req, res) => {
+app.get('/admin/api/remote-battle/rooms', (req, res) => {
   if (!_requireAdmin(req, res)) return;
-  res.json(listRemoteBattles());
+  res.json(listRemoteBattleRooms());
 });
 
-app.post('/admin/api/remote-battle', (req, res) => {
+app.get('/admin/api/remote-battle/status', (req, res) => {
   if (!_requireAdmin(req, res)) return;
-  const { name, mapSize, playersPerSide } = req.body;
-  const battle = createRemoteBattle({ name, mapSize, playersPerSide });
-  res.json({ ok: true, battle: { id: battle.id, name: battle.name } });
+  res.json(getRemoteAIStatus());
 });
 
-app.get('/admin/api/remote-battle/:id', (req, res) => {
+app.get('/admin/api/remote-battle/:roomId', (req, res) => {
   if (!_requireAdmin(req, res)) return;
-  const status = getRemoteBattleStatus(req.params.id);
-  if (!status) { res.status(404).json({ error: 'Remote battle not found.' }); return; }
+  const status = getRoomRemoteStatus(req.params.roomId);
+  if (!status) { res.status(404).json({ error: 'Battle room not found.' }); return; }
   res.json(status);
 });
 
-app.delete('/admin/api/remote-battle/:id', (req, res) => {
-  if (!_requireAdmin(req, res)) return;
-  const result = deleteRemoteBattle(req.params.id);
-  res.json(result);
-});
-
-app.post('/admin/api/remote-battle/:id/add-player', (req, res) => {
+app.post('/admin/api/remote-battle/:roomId/add-player', (req, res) => {
   if (!_requireAdmin(req, res)) return;
   const { faction, type, personality, name, llmEndpoint, llmPrompt } = req.body;
-  const result = addRemoteBattlePlayer(req.params.id, {
+  const result = addRemoteBattlePlayer(req.params.roomId, {
     faction, type, personality, name, llmEndpoint, llmPrompt,
   });
   res.json(result);
 });
 
-app.post('/admin/api/remote-battle/:id/resign/:playerId', (req, res) => {
+app.post('/admin/api/remote-battle/:roomId/take-turn/:playerId', async (req, res) => {
   if (!_requireAdmin(req, res)) return;
-  const result = resignRemoteBattlePlayer(req.params.id, req.params.playerId);
+  const result = await takeRemoteBattleTurn(req.params.roomId, req.params.playerId);
   res.json(result);
 });
 
-app.post('/admin/api/remote-battle/:id/start', (req, res) => {
+app.post('/admin/api/remote-battle/:roomId/take-all-turns', async (req, res) => {
   if (!_requireAdmin(req, res)) return;
-  const result = startRemoteBattle(req.params.id);
+  const result = await takeAllRemoteBattleTurns(req.params.roomId);
   res.json(result);
 });
 
-app.post('/admin/api/remote-battle/:id/take-turn/:playerId', async (req, res) => {
-  if (!_requireAdmin(req, res)) return;
-  const result = await generateRemoteBattleTurn(req.params.id, req.params.playerId);
-  res.json(result);
-});
-
-app.post('/admin/api/remote-battle/:id/take-all-turns', async (req, res) => {
-  if (!_requireAdmin(req, res)) return;
-  const result = await generateAllRemoteBattleTurns(req.params.id);
-  res.json(result);
-});
-
-app.post('/admin/api/remote-battle/:id/submit-plan/:playerId', (req, res) => {
+app.post('/admin/api/remote-battle/:roomId/submit-plan/:playerId', (req, res) => {
   if (!_requireAdmin(req, res)) return;
   const { plan } = req.body;
   if (!Array.isArray(plan)) { res.status(400).json({ ok: false, error: 'plan must be an array.' }); return; }
-  const result = submitRemoteBattlePlan(req.params.id, req.params.playerId, plan);
+  const result = submitRemoteBattlePlan(req.params.roomId, req.params.playerId, plan);
   res.json(result);
 });
 
-app.post('/admin/api/remote-battle/:id/resolve', (req, res) => {
+app.post('/admin/api/remote-battle/:roomId/resign/:playerId', (req, res) => {
   if (!_requireAdmin(req, res)) return;
-  const result = resolveRemoteBattleRound(req.params.id);
+  const result = resignRemoteBattlePlayer(req.params.roomId, req.params.playerId);
   res.json(result);
 });
 
