@@ -4,7 +4,7 @@
 // Sizes:  skirmish | standard | regional | campaign
 // Exports renderMapToBuffer(seed, mapSize) → Buffer for use by map-validator.js
 
-import { createCanvas } from 'canvas';
+import { createCanvas, registerFont } from 'canvas';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -18,6 +18,24 @@ import {
 } from '../src/tiles.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Register a bundled serif font so building/node labels render reliably.
+// node-canvas v3 on macOS does not always resolve "Georgia, serif" through
+// fontconfig; without this, ASCII labels can render as missing-glyph tofu
+// boxes.  Using the bundled DejaVu Serif Bold guarantees full Latin coverage
+// on every host (Linux server, macOS dev laptop, CI runners).
+const _fontPath = path.join(__dirname, '..', 'assets', 'fonts', 'DejaVuSerif-Bold.ttf');
+const FONT_FAMILY = 'BrimstoneSerif';
+let _fontRegistered = false;
+function _ensureFontRegistered() {
+  if (_fontRegistered) return;
+  try {
+    if (fs.existsSync(_fontPath)) {
+      registerFont(_fontPath, { family: FONT_FAMILY, weight: 'bold' });
+    }
+  } catch { /* fall back to system serif */ }
+  _fontRegistered = true;
+}
 
 // ── Hex geometry ──────────────────────────────────────────────────────────────
 
@@ -35,6 +53,8 @@ function hexCorners(cx, cy, size) {
 export function renderMapToBuffer(seed, mapSize = 'standard') {
   const cfg = MAP_SIZES[mapSize];
   if (!cfg) throw new Error(`Unknown map size "${mapSize}". Valid: ${Object.keys(MAP_SIZES).join(', ')}`);
+
+  _ensureFontRegistered();
 
   const { cols, rows } = cfg;
   setMapDimensions(cols, rows);
@@ -258,7 +278,7 @@ export function renderMapToBuffer(seed, mapSize = 'standard') {
       const label = BUILDING_LABEL[tile.building] ?? tile.building;
 
       ctx.fillStyle    = 'rgba(255,248,230,0.92)';
-      ctx.font         = `bold ${Math.max(7, Math.floor(hs * 0.22))}px Georgia, serif`;
+      ctx.font         = `bold ${Math.max(7, Math.floor(hs * 0.22))}px ${FONT_FAMILY}, Georgia, serif`;
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(label, x, y);
@@ -283,14 +303,14 @@ export function renderMapToBuffer(seed, mapSize = 'standard') {
 
     // Glyph
     ctx.fillStyle    = 'rgba(200,160,255,0.95)';
-    ctx.font         = `bold ${Math.floor(hs * 0.45)}px Georgia, serif`;
+    ctx.font         = `bold ${Math.floor(hs * 0.45)}px ${FONT_FAMILY}, Georgia, serif`;
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('⛧', x, y - hs * 0.08);
 
     // Label
     ctx.fillStyle    = 'rgba(220,180,255,0.85)';
-    ctx.font         = `bold ${Math.max(7, Math.floor(hs * 0.20))}px Georgia, serif`;
+    ctx.font         = `bold ${Math.max(7, Math.floor(hs * 0.20))}px ${FONT_FAMILY}, Georgia, serif`;
     ctx.fillText(obj.label ?? 'Node', x, y + hs * 0.50);
   }
 
@@ -311,7 +331,7 @@ export function renderMapToBuffer(seed, mapSize = 'standard') {
     ctx.stroke();
 
     ctx.fillStyle    = color;
-    ctx.font         = `bold ${Math.floor(hs * 0.38)}px Georgia, serif`;
+    ctx.font         = `bold ${Math.floor(hs * 0.38)}px ${FONT_FAMILY}, Georgia, serif`;
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(glyph, x, y);
@@ -327,7 +347,7 @@ export function renderMapToBuffer(seed, mapSize = 'standard') {
     { color: 'rgba(200,160,255,0.95)', glyph: '⛧', label: 'Power node' },
   ];
   const lx = 8, ly = height - 8;
-  ctx.font = `${Math.max(9, Math.floor(hs * 0.28))}px Georgia, serif`;
+  ctx.font = `${Math.max(9, Math.floor(hs * 0.28))}px ${FONT_FAMILY}, Georgia, serif`;
   ctx.textBaseline = 'bottom';
   let lxOff = lx;
   for (const item of legendItems) {
@@ -339,7 +359,7 @@ export function renderMapToBuffer(seed, mapSize = 'standard') {
 
   // Size + seed label (top-right)
   ctx.fillStyle    = 'rgba(180,170,150,0.75)';
-  ctx.font         = `${Math.max(9, Math.floor(hs * 0.26))}px Georgia, serif`;
+  ctx.font         = `${Math.max(9, Math.floor(hs * 0.26))}px ${FONT_FAMILY}, Georgia, serif`;
   ctx.textAlign    = 'right';
   ctx.textBaseline = 'top';
   ctx.fillText(`${mapSize}  seed:${seed}`, width - 8, 6);
