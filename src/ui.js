@@ -1,6 +1,6 @@
 // UI controller: handles canvas clicks, sidepanel updates, action buttons
 import { hexKey, hexToPixel, MAP_COLS, MAP_ROWS } from './hex.js';
-import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType } from './tiles.js';
+import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus } from './tiles.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
 import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
@@ -1802,16 +1802,16 @@ export class UIController {
           const hasDoubler = entity.type === EntityType.SURVIVOR && entity.ability === SurvivorAbility.FORTIFY_DOUBLE;
           const tileData   = state.tiles.get(hexKey(entity.col, entity.row));
           const cur        = tileData ? tileData.fortifyLevel : 0;
-          const metalGain   = Math.min(4, cur + 2) - cur;
-          const doublerGain = Math.min(4, cur + 2) - cur;
-          const woodGain    = Math.min(4, cur + 1) - cur;
+          const metalGain   = Math.min(MAX_FORTIFY_LEVEL, cur + 2) - cur;
+          const doublerGain = Math.min(MAX_FORTIFY_LEVEL, cur + 2) - cur;
+          const woodGain    = Math.min(MAX_FORTIFY_LEVEL, cur + 1) - cur;
           const shortLbl = hasMetal ? 'Reinforce Hex' : 'Fortify Hex';
           const fortRes = hasMetal ? '1⚙' : '1🪵';
           const fullLbl = hasMetal
-            ? `Reinforce +${metalGain} DEF (1 metal)`
+            ? `Reinforce +${metalGain} lvl (1 metal)`
             : hasDoubler
-              ? `Fortify +${doublerGain} DEF (1 wood)`
-              : `Fortify +${woodGain} DEF (1 wood)`;
+              ? `Fortify +${doublerGain} lvl (1 wood)`
+              : `Fortify +${woodGain} lvl (1 wood)`;
           arcItems.push({ group: 'defense', label: shortLbl, fullLabel: fullLbl,
             color: '#e0a832', dis: cantAfford || dis, cost: 1, resCost: fortRes, attrs: 'data-action="fortify"' });
           break;
@@ -3518,9 +3518,12 @@ export class UIController {
       linesHtml += `<div class="tile-zoom-info-line node">⚔ Power Node (${obj.label}) — ${ctrlStr}</div>`;
     }
     if (tile.explored && tile.fortifyLevel) {
-      const fl = tile.fortifyLevel >= 3 ? `⚙⚙ Heavily Reinforced (+${tile.fortifyLevel} DEF)`
-               : tile.fortifyLevel >= 2 ? `⚙ Metal Reinforced (+${tile.fortifyLevel} DEF)`
-               : `🪵 Fortified (+${tile.fortifyLevel} DEF)`;
+      const { attack: fAtk, defense: fDef } = getFortifyCombatBonus(tile.fortifyLevel);
+      const bonusStr = fAtk > 0 ? `+${fAtk} ATT, +${fDef} DEF` : `+${fDef} DEF`;
+      const fl = tile.fortifyLevel >= 5 ? `⚙⚙⚙ Bastion (lvl ${tile.fortifyLevel}: ${bonusStr})`
+               : tile.fortifyLevel >= 3 ? `⚙⚙ Heavily Reinforced (lvl ${tile.fortifyLevel}: ${bonusStr})`
+               : tile.fortifyLevel >= 2 ? `⚙ Metal Reinforced (lvl ${tile.fortifyLevel}: ${bonusStr})`
+               : `🪵 Fortified (lvl ${tile.fortifyLevel}: ${bonusStr})`;
       linesHtml += `<div class="tile-zoom-info-line fortified">${fl}</div>`;
     }
     if (!tile.explored) linesHtml += `<div class="tile-zoom-info-line">— unexplored —</div>`;
@@ -4322,7 +4325,7 @@ function _buildTerrainBadge(tile) {
     parts.push('<span class="usb-terrain-explored">Explored</span>');
   }
   if (tile.fortifyLevel) {
-    parts.push(`<span class="usb-terrain-fort">⚙ Fort +${tile.fortifyLevel}</span>`);
+    parts.push(`<span class="usb-terrain-fort">⚙ Fort lvl ${tile.fortifyLevel}</span>`);
   }
   if (tile.powerNode) {
     parts.push(`<span class="usb-terrain-node">⬡ Power Node</span>`);
@@ -4452,6 +4455,7 @@ function _buildBreakdownHTML(snap, bd, side, total) {
     if (snap.attackBonus) parts.push(row('🪙 Silver', snap.attackBonus));
     if (bd.phaseBonus)    parts.push(row('🌙 Night', bd.phaseBonus));
     if (bd.atkStaffBonus) parts.push(row('⚕ Staff (undead)', bd.atkStaffBonus));
+    if (bd.atkFortAtkBonus) parts.push(row('🏰 Fort ATT', bd.atkFortAtkBonus));
     bd.atkExtraDice.forEach((r, i) => {
       parts.push(row(`${bd.atkAllyNames[i] ?? 'Ally'} (D3)`, r, true));
     });
@@ -4459,7 +4463,7 @@ function _buildBreakdownHTML(snap, bd, side, total) {
     parts.push(row('Base d6', bd.defBaseDie, true));
     parts.push(row(`${snap.name} DEF`, snap.defense));
     if (snap.defenseBonus) parts.push(row('🛡 Bonus DEF', snap.defenseBonus));
-    if (bd.fortBonus) parts.push(row(`🏰 Fort ×${bd.fortBonus}`, bd.fortBonus));
+    if (bd.fortBonus) parts.push(row('🏰 Fort DEF', bd.fortBonus));
     if (bd.fatiguePenalty) parts.push(row('😓 Fatigue', -bd.fatiguePenalty));
     bd.defExtraDice.forEach((r, i) => {
       parts.push(row(`${bd.defAllyNames[i] ?? 'Ally'} (D3)`, r, true));

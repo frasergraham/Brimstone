@@ -95,10 +95,12 @@ describe('fortification colour palette', () => {
     [120, 135, 148],
     [180, 196, 210],
     [205, 165,  35],
+    [230, 190,  55],
+    [255, 220,  90],
   ];
 
-  test('has entries for levels 1–4', () => {
-    for (let lvl = 1; lvl <= 4; lvl++) {
+  test('has entries for levels 1–6', () => {
+    for (let lvl = 1; lvl <= 6; lvl++) {
       const entry = fortPalette[lvl];
       assert.ok(Array.isArray(entry), `level ${lvl} should have a colour entry`);
       assert.strictEqual(entry.length, 3, `level ${lvl} entry should be [r,g,b]`);
@@ -109,7 +111,7 @@ describe('fortification colour palette', () => {
   });
 
   test('colours are visually distinct (each level differs from the previous)', () => {
-    for (let lvl = 2; lvl <= 4; lvl++) {
+    for (let lvl = 2; lvl <= 6; lvl++) {
       const prev = fortPalette[lvl - 1];
       const curr = fortPalette[lvl];
       const diff = prev.reduce((sum, ch, i) => sum + Math.abs(ch - curr[i]), 0);

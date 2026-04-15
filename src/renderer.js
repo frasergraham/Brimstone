@@ -378,13 +378,15 @@ export class Renderer {
       const lvl = tile.fortifyLevel;
       const fortPalette = [
         null,
-        [160, 100, 55],
+        [160, 100,  55],
         [120, 135, 148],
         [180, 196, 210],
-        [205, 165, 35],
+        [205, 165,  35],
+        [230, 190,  55],
+        [255, 220,  90],
       ];
-      const [fr, fg, fb] = fortPalette[Math.min(lvl, 4)];
-      const alpha = Math.min(0.95, 0.5 + lvl * 0.12);
+      const [fr, fg, fb] = fortPalette[Math.min(lvl, 6)];
+      const alpha = Math.min(0.95, 0.5 + lvl * 0.08);
       _traceHexPath(ctx, hs, hs, hs - 1);
       ctx.strokeStyle = `rgba(${fr},${fg},${fb},${alpha})`;
       ctx.lineWidth = Math.max(1.5, lvl * 1.2);
@@ -1423,10 +1425,12 @@ export class Renderer {
         [120, 135, 148],   // 2 — rough stone
         [180, 196, 210],   // 3 — dressed silver steel
         [205, 165,  35],   // 4 — iron-gilt ramparts
+        [230, 190,  55],   // 5 — gilded bulwark
+        [255, 220,  90],   // 6 — radiant bastion
       ];
-      const [fr, fg, fb] = fortPalette[Math.min(lvl, 4)];
-      const alpha = Math.min(0.95, 0.5 + lvl * 0.12);
-      const lw    = lvl * 2;
+      const [fr, fg, fb] = fortPalette[Math.min(lvl, 6)];
+      const alpha = Math.min(0.95, 0.5 + lvl * 0.08);
+      const lw    = Math.min(lvl * 2, 12);
 
       _traceHexPath(ctx, x, y, fillSize);
 
