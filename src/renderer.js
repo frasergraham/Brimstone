@@ -617,21 +617,27 @@ export class Renderer {
    * Each entity with ≥1 MOVE gets a looping path:
    *   [origin, dest1, dest2, ..., destN]
    *
-   * Cycle = forward segments (origin→dest1→...→destN) + a hold at destN,
-   * then teleport back to origin and repeat. No smooth wrap from destN to
-   * origin (that would look like the ghost jumping across the map).
+   * Cycle (in units of stepDurationMs):
+   *   [0, originHold)                   → hold at origin
+   *   [originHold, originHold+segs)     → animate forward segment i
+   *   [originHold+segs, cycleSteps)     → hold at destN
+   *   then wrap → teleport back to origin (no smooth return).
+   *
+   * The origin hold makes the post-teleport restart visually obvious —
+   * without it, the ghost snaps to origin and immediately starts moving,
+   * which can read as continuous motion.
    *
    * When the plan changes (new move added, undo, reroute), the phase is
-   * seeded to the start of the hold — so the ghost appears AT the newest
-   * destination instantly, pauses there, then replays the full path.
-   * This gives the player unambiguous confirmation that their new move
-   * registered against the intended unit.
+   * seeded to the start of the destN hold — so the ghost appears AT the
+   * newest destination instantly, pauses there, teleports back to origin,
+   * pauses briefly, then replays the whole path.
    */
   _updatePlanGhostAnim(steps) {
     const prev = this._planGhostAnim;
     const next = new Map();
-    const stepDurationMs = 650;
-    const holdSteps = 1.2;  // hold at destN for 1.2 × stepDurationMs
+    const stepDurationMs = 550;
+    const originHoldSteps = 0.6;
+    const destHoldSteps   = 1.1;
     const now = Date.now();
 
     // Group MOVE arrows by entityId: path = [origin, dest1, dest2, ...].
@@ -658,12 +664,15 @@ export class Renderer {
         // Unchanged plan — preserve phase so the ghost doesn't stutter.
         startTime = old.startTime;
       } else {
-        // New / changed plan — seed phase = segments so we land at the
-        // start of the hold, i.e. ghost is at destN. It stays there for
-        // holdSteps × stepDurationMs, then resets to origin and replays.
-        startTime = now - segments * stepDurationMs;
+        // New / changed plan — seed phase to the start of the destN hold
+        // so the ghost appears AT the newest destination immediately.
+        const seed = originHoldSteps + segments;
+        startTime = now - seed * stepDurationMs;
       }
-      next.set(id, { path, pathKey: key, startTime, stepDurationMs, holdSteps });
+      next.set(id, {
+        path, pathKey: key, startTime,
+        stepDurationMs, originHoldSteps, destHoldSteps,
+      });
     }
 
     this._planGhostAnim = next;
@@ -2352,51 +2361,71 @@ export class Renderer {
       const entityOwner = entity.owner;
       const color = entity.color ?? ENTITY_COLOR[entityType] ?? getFactionTheme(entityOwner).primary;
 
-      // Cycle structure (in units of stepDurationMs):
-      //   phase ∈ [0, segments)           → animating forward segment i
-      //   phase ∈ [segments, cycleSteps)  → hold at destN
-      // then wrap: teleport back to origin. We do NOT smoothly interpolate
-      // from destN → origin — that would look like the ghost flying across
-      // the map along a path the player never planned.
-      const segments   = path.length - 1;
-      const cycleSteps = segments + anim.holdSteps;
-      const elapsed    = Math.max(0, now - anim.startTime);
-      const phase      = (elapsed / anim.stepDurationMs) % cycleSteps;
+      // Cycle (in units of stepDurationMs):
+      //   [0, originHold)                 → hold at origin
+      //   [originHold, originHold+segs)   → animate segment i
+      //   [originHold+segs, cycleSteps)   → hold at destN
+      //   wrap → teleport back to origin (no smooth return segment)
+      const segments = path.length - 1;
+      const originHold = anim.originHoldSteps;
+      const destHold   = anim.destHoldSteps;
+      const cycleSteps = originHold + segments + destHold;
+      const elapsed = Math.max(0, now - anim.startTime);
+      const phase   = (elapsed / anim.stepDurationMs) % cycleSteps;
 
       let p;
-      if (phase < segments) {
-        // Interpolate in PIXEL space between consecutive hexes. (col, row)
-        // lerp drifts off hex centers on the odd-r offset grid.
-        const i    = Math.floor(phase);
-        const t    = phase - i;
+      if (phase < originHold) {
+        // Hold at origin (post-teleport pause, makes the jump obvious).
+        const first = path[0];
+        p = this._toCanvas(first.col, first.row);
+      } else if (phase < originHold + segments) {
+        // Animate forward. Interpolate in PIXEL space — (col, row) lerp
+        // drifts off hex centers on the odd-r offset grid.
+        const segPhase = phase - originHold;
+        const i    = Math.floor(segPhase);
+        const t    = segPhase - i;
         const from = path[i];
         const to   = path[i + 1];
         const a    = this._toCanvas(from.col, from.row);
         const b    = this._toCanvas(to.col,   to.row);
         p = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
       } else {
-        // Hold at the final destination.
+        // Hold at destN before teleporting back.
         const last = path[path.length - 1];
         p = this._toCanvas(last.col, last.row);
       }
 
+      // Look up sprite portrait (same path _drawEntityStack uses).
+      const portraitKey = entityType === EntityType.SURVIVOR
+        ? Renderer.survivorAssetId(entity.title)
+        : entityType;
+      const pRect = portraitKey ? this._spriteRects?.get(portraitKey) : null;
+      const havePortrait = !!(pRect && this._tilemapImg);
+
       ctx.save();
       ctx.globalAlpha = 0.8;
 
-      // Dark fill disc for contrast behind the glyph.
+      // Dark disc backing for contrast (thin, mostly hidden by portrait).
       ctx.beginPath();
       ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
       ctx.fillStyle = 'rgba(20,20,20,0.55)';
       ctx.fill();
 
-      // Colored ring in the unit's player color.
-      ctx.strokeStyle = color;
-      ctx.lineWidth   = 2;
-      ctx.stroke();
-
-      // Grayscale glyph. `filter: grayscale(100%)` desaturates color emojis
-      // (🪵 wood golem, ⚙ iron golem); `fillStyle` handles monochrome glyphs.
-      if (entityType) {
+      if (havePortrait) {
+        // Grayscale portrait image clipped to the ghost disc.
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.filter = 'grayscale(100%)';
+        ctx.drawImage(
+          this._tilemapImg,
+          pRect.x, pRect.y, pRect.size, pRect.size,
+          p.x - r, p.y - r, r * 2, r * 2,
+        );
+        ctx.restore();
+      } else if (entityType) {
+        // Fallback: grayscale glyph if no sprite.
         ctx.filter       = 'grayscale(100%)';
         ctx.fillStyle    = '#e8e8e8';
         ctx.font         = `${Math.floor(r * 1.1)}px sans-serif`;
@@ -2404,6 +2433,15 @@ export class Renderer {
         ctx.textBaseline = 'middle';
         ctx.fillText(entityGlyph(entityType), p.x, p.y + 1);
       }
+
+      // Colored ring in the unit's player color (draw on top of portrait).
+      ctx.filter      = 'none';
+      ctx.strokeStyle = color;
+      ctx.lineWidth   = 2;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.stroke();
+
       ctx.restore();
     }
 
