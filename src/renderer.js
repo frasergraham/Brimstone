@@ -615,19 +615,23 @@ export class Renderer {
   /**
    * Rebuild per-unit plan-ghost animation state from ghost steps.
    * Each entity with ≥1 MOVE gets a looping path:
-   *   [origin, dest1, dest2, ..., destN] → loops back to origin.
-   * The origin comes from the first MOVE's `arrow.fromCol/fromRow`, which
-   * `computeGhostState()` seeds from the entity's live position.
+   *   [origin, dest1, dest2, ..., destN]
    *
-   * When the plan changes (new move added, undo, etc.), the animation jumps
-   * to the newest destination so the player gets immediate feedback that the
-   * move registered against the intended unit. The path is only preserved
-   * intact (phase-preserving) when it's byte-identical to the previous one.
+   * Cycle = forward segments (origin→dest1→...→destN) + a hold at destN,
+   * then teleport back to origin and repeat. No smooth wrap from destN to
+   * origin (that would look like the ghost jumping across the map).
+   *
+   * When the plan changes (new move added, undo, reroute), the phase is
+   * seeded to the start of the hold — so the ghost appears AT the newest
+   * destination instantly, pauses there, then replays the full path.
+   * This gives the player unambiguous confirmation that their new move
+   * registered against the intended unit.
    */
   _updatePlanGhostAnim(steps) {
     const prev = this._planGhostAnim;
     const next = new Map();
     const stepDurationMs = 650;
+    const holdSteps = 1.2;  // hold at destN for 1.2 × stepDurationMs
     const now = Date.now();
 
     // Group MOVE arrows by entityId: path = [origin, dest1, dest2, ...].
@@ -648,17 +652,18 @@ export class Renderer {
     for (const [id, path] of paths) {
       const key = path.map(p => `${p.col},${p.row}`).join('|');
       const old = prev.get(id);
+      const segments = path.length - 1;
       let startTime;
       if (old && old.pathKey === key) {
         // Unchanged plan — preserve phase so the ghost doesn't stutter.
         startTime = old.startTime;
       } else {
-        // New / changed plan — jump ghost to the newest destination so the
-        // player sees which unit they just planned a move for.
-        // Phase index = path.length - 1 lands at path[length-1] with t=0.
-        startTime = now - (path.length - 1) * stepDurationMs;
+        // New / changed plan — seed phase = segments so we land at the
+        // start of the hold, i.e. ghost is at destN. It stays there for
+        // holdSteps × stepDurationMs, then resets to origin and replays.
+        startTime = now - segments * stepDurationMs;
       }
-      next.set(id, { path, pathKey: key, startTime, stepDurationMs });
+      next.set(id, { path, pathKey: key, startTime, stepDurationMs, holdSteps });
     }
 
     this._planGhostAnim = next;
@@ -2347,19 +2352,33 @@ export class Renderer {
       const entityOwner = entity.owner;
       const color = entity.color ?? ENTITY_COLOR[entityType] ?? getFactionTheme(entityOwner).primary;
 
-      // Interpolate in PIXEL space between consecutive path hexes. Interpolating
-      // in (col, row) offset-coords zig-zags because odd/even rows are shifted
-      // horizontally on the pointy-top hex grid.
-      const elapsed = Math.max(0, now - anim.startTime);
-      const phase   = (elapsed / anim.stepDurationMs) % path.length;
-      const i       = Math.floor(phase);
-      const t       = phase - i;
-      const from    = path[i];
-      const to      = path[(i + 1) % path.length];
-      const fromP   = this._toCanvas(from.col, from.row);
-      const toP     = this._toCanvas(to.col,   to.row);
-      const p = { x: fromP.x + (toP.x - fromP.x) * t,
-                  y: fromP.y + (toP.y - fromP.y) * t };
+      // Cycle structure (in units of stepDurationMs):
+      //   phase ∈ [0, segments)           → animating forward segment i
+      //   phase ∈ [segments, cycleSteps)  → hold at destN
+      // then wrap: teleport back to origin. We do NOT smoothly interpolate
+      // from destN → origin — that would look like the ghost flying across
+      // the map along a path the player never planned.
+      const segments   = path.length - 1;
+      const cycleSteps = segments + anim.holdSteps;
+      const elapsed    = Math.max(0, now - anim.startTime);
+      const phase      = (elapsed / anim.stepDurationMs) % cycleSteps;
+
+      let p;
+      if (phase < segments) {
+        // Interpolate in PIXEL space between consecutive hexes. (col, row)
+        // lerp drifts off hex centers on the odd-r offset grid.
+        const i    = Math.floor(phase);
+        const t    = phase - i;
+        const from = path[i];
+        const to   = path[i + 1];
+        const a    = this._toCanvas(from.col, from.row);
+        const b    = this._toCanvas(to.col,   to.row);
+        p = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+      } else {
+        // Hold at the final destination.
+        const last = path[path.length - 1];
+        p = this._toCanvas(last.col, last.row);
+      }
 
       ctx.save();
       ctx.globalAlpha = 0.8;
