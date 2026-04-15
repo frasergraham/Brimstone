@@ -1007,12 +1007,23 @@ export class UIController {
     const scale = canvasRect.width / this.canvas.width;
     const hexScreenPx = this.renderer.hexSize * scale * this.renderer.zoomLevel;
 
+    // Suppress buttons that would draw behind the plan panel (visible only).
+    const planPanel = this._el('plan-panel');
+    let panelLeft = Infinity;
+    if (planPanel && typeof planPanel.getBoundingClientRect === 'function') {
+      const pr = planPanel.getBoundingClientRect();
+      if (pr && pr.width > 0 && pr.height > 0) panelLeft = pr.left;
+    }
+
     // Rebuild — bucket count is tiny (≤ faction unit count).
     layer.innerHTML = '';
     for (const b of buckets) {
       const { x, y } = this.renderer.hexToCanvasPos(b.col, b.row);
       const sx = canvasRect.left + x * scale;
       const sy = canvasRect.top  + y * scale - hexScreenPx * 0.85;
+
+      // Skip buttons that would visually overlap the expanded plan panel.
+      if (sx >= panelLeft) continue;
 
       const btn = document.createElement('button');
       btn.type = 'button';
