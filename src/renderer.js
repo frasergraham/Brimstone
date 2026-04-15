@@ -118,7 +118,14 @@ export class Renderer {
     this.hoveredHex     = null;
 
     /** Ghost overlay steps from computeGhostState(). null = no overlay. */
-    this.planGhostSteps = null;
+    this._planGhostSteps = null;
+
+    /**
+     * Per-unit plan-ghost animation state.
+     * Map<entityId, { path:[{col,row}], startTime:number, stepDurationMs:number }>.
+     * Ghost icon cycles through `path` during planning mode.
+     */
+    this._planGhostAnim = new Map();
 
     /** Tutorial spotlight: pulsing ring drawn over this hex. null = inactive. */
     this.tutorialSpotlightHex = null;
@@ -597,6 +604,59 @@ export class Renderer {
     }
   }
 
+  /** Ghost overlay steps from computeGhostState(). Setter also refreshes per-unit ghost animation state. */
+  get planGhostSteps() { return this._planGhostSteps; }
+  set planGhostSteps(steps) {
+    this._planGhostSteps = steps;
+    this._updatePlanGhostAnim(steps);
+    if (this._planGhostAnim.size > 0) this._startAnimLoop();
+  }
+
+  /**
+   * Rebuild per-unit plan-ghost animation state from ghost steps.
+   * Each entity with ≥1 MOVE gets a looping path through its planned destinations.
+   * When a unit gains a new MOVE step, the animation jumps to the newest step
+   * so the player gets immediate feedback that the move registered.
+   */
+  _updatePlanGhostAnim(steps) {
+    const prev = this._planGhostAnim;
+    const next = new Map();
+    const stepDurationMs = 650;
+    const now = Date.now();
+
+    // Group move destinations by entityId in plan order.
+    const paths = new Map(); // entityId -> [{col,row}...]
+    if (Array.isArray(steps)) {
+      for (const s of steps) {
+        if (!s.arrow) continue;
+        const id = s.arrow.entityId;
+        const arr = paths.get(id) ?? [];
+        arr.push({ col: s.arrow.toCol, row: s.arrow.toRow });
+        paths.set(id, arr);
+      }
+    }
+
+    for (const [id, path] of paths) {
+      const old = prev.get(id);
+      let startTime;
+      if (!old || path.length < old.path.length) {
+        // New unit, or plan shortened (undo) — restart at step 0.
+        startTime = now;
+      } else if (path.length > old.path.length) {
+        // New move was added — jump to that newest step.
+        // Phase math: step index = floor((elapsed / stepDurationMs) % path.length).
+        // We want current step = path.length - 1.
+        startTime = now - (path.length - 1) * stepDurationMs;
+      } else {
+        // Same length; preserve existing phase.
+        startTime = old.startTime;
+      }
+      next.set(id, { path, startTime, stepDurationMs });
+    }
+
+    this._planGhostAnim = next;
+  }
+
   /** Keep calling draw() until all animations have expired. */
   _startAnimLoop() {
     if (this._animFramePending) return;
@@ -609,7 +669,8 @@ export class Renderer {
                  || [...this._fadeOutAnims.values()].some(a => now < a.startTime + a.duration)
                  || this._lungeAnims.some(a => !a.settled || a.returning)
                  || this._nodeRevealAnims.some(a => now < a.startTime + a.duration)
-                 || !!this._zoomAnim;
+                 || !!this._zoomAnim
+                 || this._planGhostAnim.size > 0;
       this.draw();
       if (alive) {
         requestAnimationFrame(loop);
@@ -2263,42 +2324,64 @@ export class Renderer {
     ctx.lineCap  = 'round';
     ctx.lineJoin = 'round';
 
-    // ── Layer 1: Ghost entity circles at move destinations ───────────────────
+    // ── Layer 1: Animated per-unit ghost icons cycling through planned moves ─
+    // One grayscale ghost glyph per unit with planned MOVEs, looping through
+    // its destinations. Helps players confirm "which unit am I planning for?".
     const moveSteps = ghostSteps.filter(s => s.arrow !== null);
-    for (const step of moveSteps) {
-      const arrow = step.arrow;
-      const to    = this._toCanvas(arrow.toCol, arrow.toRow);
-      const r     = hs * 0.32;
+    const now = Date.now();
+    const r = hs * 0.32;
+    for (const [entityId, anim] of this._planGhostAnim) {
+      const path = anim.path;
+      if (!path || path.length === 0) continue;
 
-      // Find entity type/owner for color
-      const entityId = arrow.entityId;
-      // Look up entity from last step positions where it was moved
-      let entityType  = null;
-      let entityOwner = null;
-      for (const e of (this.state?.entities ?? [])) {
-        if (e.id === entityId) { entityType = e.type; entityOwner = e.owner; break; }
+      const entity = this.state?.entities.find(e => e.id === entityId);
+      if (!entity) continue;
+      const entityType  = entity.type;
+      const entityOwner = entity.owner;
+      const color = entity.color ?? ENTITY_COLOR[entityType] ?? getFactionTheme(entityOwner).primary;
+
+      // Interpolate between consecutive destinations (loop wraps around).
+      let col, row;
+      if (path.length === 1) {
+        col = path[0].col;
+        row = path[0].row;
+      } else {
+        const elapsed   = Math.max(0, now - anim.startTime);
+        const phase     = (elapsed / anim.stepDurationMs) % path.length;
+        const i         = Math.floor(phase);
+        const t         = phase - i;
+        const from      = path[i];
+        const to        = path[(i + 1) % path.length];
+        col = from.col + (to.col - from.col) * t;
+        row = from.row + (to.row - from.row) * t;
       }
-      const entityObj = this.state?.entities.find(e => e.id === entityId);
-      const color = entityObj?.color ?? ENTITY_COLOR[entityType] ?? getFactionTheme(entityOwner).primary;
+      const p = this._toCanvas(col, row);
 
-      ctx.globalAlpha = 0.4;
+      ctx.save();
+      ctx.globalAlpha = 0.8;
+
+      // Dark fill disc for contrast behind the glyph.
       ctx.beginPath();
-      ctx.arc(to.x, to.y, r, 0, Math.PI * 2);
-      ctx.fillStyle = color;
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(20,20,20,0.55)';
       ctx.fill();
-      ctx.strokeStyle = 'rgba(255,255,255,0.6)';
-      ctx.lineWidth = 1.5;
+
+      // Colored ring in the unit's player color.
+      ctx.strokeStyle = color;
+      ctx.lineWidth   = 2;
       ctx.stroke();
 
+      // Grayscale glyph. `filter: grayscale(100%)` desaturates color emojis
+      // (🪵 wood golem, ⚙ iron golem); `fillStyle` handles monochrome glyphs.
       if (entityType) {
-        ctx.globalAlpha = 0.55;
-        ctx.fillStyle   = '#fff';
-        ctx.font        = `${Math.floor(r * 1.1)}px sans-serif`;
+        ctx.filter       = 'grayscale(100%)';
+        ctx.fillStyle    = '#e8e8e8';
+        ctx.font         = `${Math.floor(r * 1.1)}px sans-serif`;
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(entityGlyph(entityType), to.x, to.y + 1);
+        ctx.fillText(entityGlyph(entityType), p.x, p.y + 1);
       }
-      ctx.globalAlpha = 1;
+      ctx.restore();
     }
 
     // ── Layer 2: Translucent summon icons at summon hexes ────────────────────
