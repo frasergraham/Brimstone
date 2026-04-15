@@ -1,0 +1,16 @@
+DejaVuSerif-Bold.ttf
+====================
+DejaVu Serif Bold, version 2.37 (or as shipped on the source system).
+
+Source: https://dejavu-fonts.github.io/
+
+License: DejaVu Fonts License (free for any use, including embedding,
+modification, and redistribution).  See full license text at:
+  https://dejavu-fonts.github.io/License.html
+
+The font is bundled here so the server-side map renderer
+(scripts/map-render.js, used by the admin Map Test tab) produces
+consistent labels regardless of which serif fonts are installed on the
+host system.  Without it, node-canvas v3 on macOS could fall back to a
+font without basic Latin glyphs and render labels as missing-glyph
+"tofu" boxes.
