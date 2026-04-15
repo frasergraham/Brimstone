@@ -62,7 +62,7 @@ export const MAP_SIZES = {
     ],
     nodeCount: 1, nodeCountMin: 1, nodeCountMax: 3,
     survivorCounts: { buildings: 4, terrain: 1 },
-    bridgeMax: 2,
+    bridgeMax: 1,
     minBridges: 1,
   },
   standard: {
@@ -78,8 +78,8 @@ export const MAP_SIZES = {
     ],
     nodeCount: 3, nodeCountMin: 2, nodeCountMax: 5,
     survivorCounts: { buildings: 7, terrain: 1 },
-    bridgeMax: 4,
-    minBridges: 2,
+    bridgeMax: 2,
+    minBridges: 1,
   },
   regional: {
     label: 'Regional (17×17)',
@@ -95,8 +95,8 @@ export const MAP_SIZES = {
     ],
     nodeCount: 3, nodeCountMin: 2, nodeCountMax: 6,
     survivorCounts: { buildings: 10, terrain: 2 },
-    bridgeMax: 5,
-    minBridges: 2,
+    bridgeMax: 2,
+    minBridges: 1,
   },
   campaign: {
     label: 'Campaign (21×21)',
@@ -114,8 +114,8 @@ export const MAP_SIZES = {
     ],
     nodeCount: 3, nodeCountMin: 2, nodeCountMax: 7,
     survivorCounts: { buildings: 13, terrain: 3 },
-    bridgeMax: 6,
-    minBridges: 3,
+    bridgeMax: 3,
+    minBridges: 1,
   },
   /** 2x Campaign — used exclusively for The Battle for Caleb's Hollow. */
   battle: {
@@ -814,22 +814,19 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
 
   // Pre-select river crossing points and convert them to bridges.
   // Each crossing also carries a chosen leftBank/rightBank — passable land
-  // tiles on opposite sides of the river.  We add BOTH banks (not the bridge
-  // tile itself) as MST key points so the spanning tree is forced to route a
-  // road to each side.  An explicit leftBank→rightBank edge is then queued
-  // first so BFS routes across the bridge before any other settlement edges.
+  // tiles on opposite sides of the river.  We add BOTH banks as MST key
+  // points so the spanning tree is forced to connect each side individually,
+  // rather than letting a bridge become a one-sided MST leaf.  An explicit
+  // leftBank→rightBank edge is queued first so BFS routes the actual river
+  // crossing through the bridge while the road grid is still empty.
   const crossings = _pickRiverCrossings(rand, tiles, riverPath, riverMap, riverEW, keyPoints, cfg.minBridges ?? 1, cfg.bridgeMax);
   for (const c of crossings) {
     const t = tiles.get(hexKey(c.col, c.row));
     if (t) t.type = TileType.BRIDGE;
   }
 
-  // Track index ranges so the MST can pre-union same-bridge bank pairs.
-  const bankPairIndices = [];
   for (const c of crossings) {
-    const li = keyPoints.length; keyPoints.push(c.leftBank);
-    const ri = keyPoints.length; keyPoints.push(c.rightBank);
-    bankPairIndices.push([li, ri]);
+    keyPoints.push(c.leftBank, c.rightBank);
   }
 
   const nk = keyPoints.length;
@@ -844,17 +841,11 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
     allEdges.sort((a, b) => a.d - b.d);
     const parent = Array.from({ length: nk }, (_, i) => i);
     const find = i => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
-    // Pre-union bank pairs of the same bridge so the MST doesn't waste a
-    // separate edge reconnecting them — the explicit bridgeBankEdges below
-    // already guarantee that connection.
-    for (const [li, ri] of bankPairIndices) {
-      const a = find(li), b = find(ri);
-      if (a !== b) parent[a] = b;
-    }
     for (const { i, j } of allEdges) {
       if (find(i) !== find(j)) {
         parent[find(i)] = find(j);
         interEdges.push({ from: keyPoints[i], to: keyPoints[j] });
+        if (interEdges.length === nk - 1) break;
       }
     }
   }
@@ -919,25 +910,55 @@ export function generateMap(seed = Date.now(), mapSize = 'standard', nodeCountOv
     placeRoad(bfsPath(tiles, from.col, from.row, to.col, to.row, rand, roadTiles, true));
   }
 
-  // 4b. Bridge repair pass — guarantee every bridge has a road tile adjacent
-  // on each bank.  Step 2 (bank-to-bank MST edges) normally handles this, but
-  // an MST edge re-routed through other roads can leave one bank unconnected.
-  for (const c of crossings) {
-    const bridgeTile = tiles.get(hexKey(c.col, c.row));
-    if (!bridgeTile || bridgeTile.type !== TileType.BRIDGE) continue;
-    const hasRoadNeighborOnBankSide = (bank) => {
-      for (const nk of bridgeTile.roadDirs) {
-        const [nc, nr] = nk.split(',').map(Number);
-        if (nc === bank.col && nr === bank.row) return true;
-        if (hexDistance(nc, nr, bank.col, bank.row) <= 1) return true;
-      }
-      return false;
-    };
-    if (!hasRoadNeighborOnBankSide(c.leftBank)) {
-      placeRoad(bfsPath(tiles, c.col, c.row, c.leftBank.col, c.leftBank.row, rand, roadTiles, true));
+  // 4b. Bridge audit & stub-road cleanup.
+  // Iteratively (a) prune ROAD tiles that became dead-ends (degree ≤ 1 and
+  // not adjacent to a building), and (b) revert BRIDGE tiles to RIVER if
+  // their roadDirs no longer reach both river banks.  Both steps can cascade
+  // — pruning a stub may orphan a bridge, and reverting a bridge may orphan
+  // more stubs — so we loop until stable.
+  const isAdjacentToBuilding = (col, row) => {
+    for (const n of getNeighbors(col, row)) {
+      const nt = tiles.get(hexKey(n.col, n.row));
+      if (nt && nt.type === TileType.BUILDING) return true;
     }
-    if (!hasRoadNeighborOnBankSide(c.rightBank)) {
-      placeRoad(bfsPath(tiles, c.col, c.row, c.rightBank.col, c.rightBank.row, rand, roadTiles, true));
+    return false;
+  };
+
+  let changed = true;
+  let iters = 0;
+  while (changed && iters++ < 20) {
+    changed = false;
+
+    // Prune stub roads (degree ≤ 1, not next to a building).
+    for (const t of tiles.values()) {
+      if (t.type !== TileType.ROAD) continue;
+      if (t.roadDirs.size > 1) continue;
+      if (isAdjacentToBuilding(t.col, t.row)) continue;
+      const nextKey = [...t.roadDirs][0];
+      t.type = TileType.GRASS;
+      t.roadDirs.clear();
+      roadTiles.delete(hexKey(t.col, t.row));
+      if (nextKey) tiles.get(nextKey)?.roadDirs.delete(hexKey(t.col, t.row));
+      changed = true;
+    }
+
+    // Revert one-sided or unreached bridges back to river.
+    for (const c of crossings) {
+      const t = tiles.get(hexKey(c.col, c.row));
+      if (!t || t.type !== TileType.BRIDGE) continue;
+      let leftSide = false, rightSide = false;
+      for (const nk of t.roadDirs) {
+        const [nc, nr] = nk.split(',').map(Number);
+        if (riverSide(nc, nr, riverMap, riverEW) === 'left') leftSide = true;
+        else rightSide = true;
+      }
+      if (leftSide && rightSide) continue;
+      const stubStarts = [...t.roadDirs];
+      t.type = TileType.RIVER;
+      t.roadDirs.clear();
+      roadTiles.delete(hexKey(c.col, c.row));
+      for (const nk of stubStarts) tiles.get(nk)?.roadDirs.delete(hexKey(c.col, c.row));
+      changed = true;
     }
   }
 
