@@ -13,7 +13,7 @@ import {
   Entity, EntityType, SurvivorAbility,
   createHero, createWitch, createMinion, createZombie, createSurvivor, resetRoster,
 } from '../src/entities.js';
-import { TileType, BuildingType, ResourceType, WeaponType } from '../src/tiles.js';
+import { TileType, BuildingType, ResourceType, WeaponType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus } from '../src/tiles.js';
 import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import { applyPostRoundEffects } from '../src/post-round-effects.js';
 
@@ -975,7 +975,7 @@ describe('executeBattle — splash damage', () => {
 });
 
 // ── executeFortify ────────────────────────────────────────────────────────────
-// Design: Metal → +2 DEF; Wood → +1 DEF (or +2 with FORTIFY_DOUBLE); cap at 4
+// Design: Metal → +2 levels; Wood → +1 level (or +2 with FORTIFY_DOUBLE); cap at 6
 
 describe('executeFortify', () => {
   test('metal gives +2 fortify level', () => {
@@ -1045,16 +1045,16 @@ describe('executeFortify', () => {
     assert.equal(r.success, false);
   });
 
-  test('fortify level caps at 4', () => {
+  test('fortify level caps at 6', () => {
     const state = freshState();
     const hero = state.hero;
     state.inventory.hero[ResourceType.METAL] = 5;
     const t = state.tiles.get(hexKey(hero.col, hero.row));
-    t.fortifyLevel = 3; // one more metal (+2) would reach 5, should cap at 4
+    t.fortifyLevel = 5; // one more metal (+2) would reach 7, should cap at 6
 
     const r = executeFortify(state, hero);
-    assert.equal(t.fortifyLevel, 4, 'Fortify level should cap at 4');
-    assert.equal(r.defGain, 1, 'defGain should reflect capped gain (4 - 3 = 1)');
+    assert.equal(t.fortifyLevel, 6, 'Fortify level should cap at 6');
+    assert.equal(r.defGain, 1, 'defGain should reflect capped gain (6 - 5 = 1)');
   });
 
   test('defGain returns actual gain for metal and wood', () => {
@@ -1072,15 +1072,15 @@ describe('executeFortify', () => {
     assert.equal(r2.defGain, 1, 'Wood should give defGain of 1');
   });
 
-  test('fails when tile is already at max fortify (level 4)', () => {
+  test('fails when tile is already at max fortify (level 6)', () => {
     const state = freshState();
     state.inventory.hero[ResourceType.METAL] = 1;
     const t = state.tiles.get(hexKey(state.hero.col, state.hero.row));
-    t.fortifyLevel = 4;
+    t.fortifyLevel = 6;
 
     const r = executeFortify(state, state.hero);
     assert.equal(r.success, false);
-    assert.equal(t.fortifyLevel, 4, 'Level should not change');
+    assert.equal(t.fortifyLevel, 6, 'Level should not change');
   });
 
   test('costs 1 action', () => {
@@ -1088,6 +1088,134 @@ describe('executeFortify', () => {
     state.inventory.hero[ResourceType.WOOD] = 1;
     const r = executeFortify(state, state.hero);
     assert.equal(r.cost, 1);
+  });
+});
+
+// ── Fortification combat bonuses ──────────────────────────────────────────────
+// Design:
+//   L1: +0 ATT / +1 DEF
+//   L2: +0 ATT / +2 DEF
+//   L3: +1 ATT / +2 DEF
+//   L4: +2 ATT / +3 DEF
+//   L5: +3 ATT / +4 DEF
+//   L6: +4 ATT / +5 DEF
+//   Witch units never benefit.
+
+describe('getFortifyCombatBonus', () => {
+  test('level 0 is no bonus', () => {
+    assert.deepEqual(getFortifyCombatBonus(0), { attack: 0, defense: 0 });
+  });
+
+  test('levels 1-2 grant defense only', () => {
+    assert.deepEqual(getFortifyCombatBonus(1), { attack: 0, defense: 1 });
+    assert.deepEqual(getFortifyCombatBonus(2), { attack: 0, defense: 2 });
+  });
+
+  test('levels 3-4 grant attack and defense', () => {
+    assert.deepEqual(getFortifyCombatBonus(3), { attack: 1, defense: 2 });
+    assert.deepEqual(getFortifyCombatBonus(4), { attack: 2, defense: 3 });
+  });
+
+  test('levels 5-6 keep stacking +1/+1 per level', () => {
+    assert.deepEqual(getFortifyCombatBonus(5), { attack: 3, defense: 4 });
+    assert.deepEqual(getFortifyCombatBonus(6), { attack: 4, defense: 5 });
+  });
+
+  test('caps at MAX_FORTIFY_LEVEL (6)', () => {
+    assert.equal(MAX_FORTIFY_LEVEL, 6);
+    assert.deepEqual(getFortifyCombatBonus(7), getFortifyCombatBonus(6));
+    assert.deepEqual(getFortifyCombatBonus(99), getFortifyCombatBonus(6));
+  });
+});
+
+describe('fortification combat bonuses in battle', () => {
+  test('hero defending on fortified tile gets DEF bonus from table (level 3 → +2 DEF)', () => {
+    const state = freshState();
+    const minion = createMinion(state.hero.col, state.hero.row);
+    state.entities.push(minion);
+    const heroTile = state.tiles.get(hexKey(state.hero.col, state.hero.row));
+    heroTile.fortifyLevel = 3;
+
+    const r = executeBattle(state, minion, state.hero);
+    assert.equal(r.breakdown.fortBonus, 2, 'Hero defender should get +2 DEF from lvl 3 fort');
+  });
+
+  test('hero attacking from fortified tile gets ATT bonus from table (level 4 → +2 ATT)', () => {
+    const state = freshState();
+    const minion = createMinion(state.hero.col, state.hero.row);
+    state.entities.push(minion);
+    const heroTile = state.tiles.get(hexKey(state.hero.col, state.hero.row));
+    heroTile.fortifyLevel = 4;
+
+    const r = executeBattle(state, state.hero, minion);
+    assert.equal(r.breakdown.atkFortAtkBonus, 2, 'Hero attacker should get +2 ATT from lvl 4 fort');
+  });
+
+  test('level 1-2 fort grants no ATT bonus to hero attacker', () => {
+    const state = freshState();
+    const minion = createMinion(state.hero.col, state.hero.row);
+    state.entities.push(minion);
+    const heroTile = state.tiles.get(hexKey(state.hero.col, state.hero.row));
+    heroTile.fortifyLevel = 2;
+
+    const r = executeBattle(state, state.hero, minion);
+    assert.equal(r.breakdown.atkFortAtkBonus, 0, 'Lvl 2 fort should grant no ATT bonus');
+  });
+
+  test('level 6 grants +4 ATT / +5 DEF to hero', () => {
+    const state = freshState();
+    const minion = createMinion(state.hero.col, state.hero.row);
+    state.entities.push(minion);
+    // Fort hero's tile
+    const heroTile = state.tiles.get(hexKey(state.hero.col, state.hero.row));
+    heroTile.fortifyLevel = 6;
+
+    const r1 = executeBattle(state, state.hero, minion);
+    assert.equal(r1.breakdown.atkFortAtkBonus, 4, 'Lvl 6 fort should give attacker +4 ATT');
+
+    // Reset for defender test
+    const state2 = freshState();
+    const minion2 = createMinion(state2.hero.col, state2.hero.row);
+    state2.entities.push(minion2);
+    const heroTile2 = state2.tiles.get(hexKey(state2.hero.col, state2.hero.row));
+    heroTile2.fortifyLevel = 6;
+    const r2 = executeBattle(state2, minion2, state2.hero);
+    assert.equal(r2.breakdown.fortBonus, 5, 'Lvl 6 fort should give defender +5 DEF');
+  });
+
+  test('witch defender on fortified tile gets NO DEF bonus', () => {
+    const state = freshState();
+    const minion = createMinion(state.hero.col, state.hero.row);
+    state.entities.push(minion);
+    // Place a fortification on the minion's tile (e.g. hero-fort tile that witch captured)
+    const minionTile = state.tiles.get(hexKey(minion.col, minion.row));
+    minionTile.fortifyLevel = 4;
+
+    const r = executeBattle(state, state.hero, minion);
+    assert.equal(r.breakdown.fortBonus, 0, 'Witch defender should never benefit from fort');
+  });
+
+  test('witch attacker from fortified tile gets NO ATT bonus', () => {
+    const state = freshState();
+    // Fortify the witch's tile
+    const witchTile = state.tiles.get(hexKey(state.witch.col, state.witch.row));
+    witchTile.fortifyLevel = 5;
+    // Put a hero-aligned survivor on the same tile as the target
+    const survivor = new Entity(EntityType.SURVIVOR, 'hero', state.witch.col, state.witch.row);
+    state.entities.push(survivor);
+
+    const r = executeBattle(state, state.witch, survivor);
+    assert.equal(r.breakdown.atkFortAtkBonus, 0, 'Witch attacker should never benefit from fort');
+  });
+
+  test('hero vs witch on non-fortified tile — no bonuses reported', () => {
+    const state = freshState();
+    const minion = createMinion(state.hero.col, state.hero.row);
+    state.entities.push(minion);
+
+    const r = executeBattle(state, state.hero, minion);
+    assert.equal(r.breakdown.fortBonus, 0);
+    assert.equal(r.breakdown.atkFortAtkBonus, 0);
   });
 });
 
