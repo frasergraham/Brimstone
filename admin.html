@@ -473,8 +473,14 @@
           </div>
         </div>
         <div id="map-test-status" style="font-size:0.78rem;color:var(--text-dim);margin-bottom:0.5rem"></div>
-        <div style="background:var(--bg);border:1px solid var(--border);padding:0.5rem;text-align:center;overflow:auto">
-          <img id="map-test-image" alt="map preview" style="max-width:100%;display:none">
+        <div style="display:flex;gap:0.4rem;align-items:center;margin-bottom:0.4rem">
+          <label style="font-size:0.75rem;color:var(--text-dim)">
+            <input type="checkbox" id="map-test-fit" style="vertical-align:middle"> Fit to width (scaled)
+          </label>
+          <span style="font-size:0.7rem;color:var(--text-dim)">Native resolution keeps building labels readable on large maps.</span>
+        </div>
+        <div style="background:var(--bg);border:1px solid var(--border);padding:0.5rem;text-align:center;overflow:auto;max-height:80vh">
+          <img id="map-test-image" alt="map preview" style="display:none">
           <div id="map-test-empty" style="color:var(--text-dim);padding:2rem">Click Refresh to generate a map.</div>
         </div>
       </div>
@@ -1565,6 +1571,12 @@
       img.src = url;
     }
 
+    function _applyMapTestFit() {
+      const img = document.getElementById('map-test-image');
+      const fit = document.getElementById('map-test-fit').checked;
+      img.style.maxWidth = fit ? '100%' : 'none';
+    }
+
     function initMapTest() {
       document.getElementById('map-test-refresh').addEventListener('click', () => {
         _renderMapTest(Math.floor(Math.random() * 2_000_000_000));
@@ -1577,6 +1589,8 @@
       document.getElementById('map-test-size').addEventListener('change', () => {
         if (_mapTestSeed != null) _renderMapTest(_mapTestSeed);
       });
+      document.getElementById('map-test-fit').addEventListener('change', _applyMapTestFit);
+      _applyMapTestFit();
       // Render an initial map on first open
       _renderMapTest(Math.floor(Math.random() * 2_000_000_000));
     }
