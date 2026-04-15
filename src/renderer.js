@@ -122,10 +122,13 @@ export class Renderer {
 
     /**
      * Per-unit plan-ghost animation state.
-     * Map<entityId, { path:[{col,row}], startTime:number, stepDurationMs:number }>.
-     * Ghost icon cycles through `path` during planning mode.
+     * Map<entityId, { path:[{col,row}], pathKey:string, stepDurationMs,
+     *                 originHoldSteps, cycleSteps }>.
+     * All units share `_planGhostSharedStart` so their cycles stay in lockstep.
      */
     this._planGhostAnim = new Map();
+    this._planGhostSharedStart = null;
+    this._planGhostAnimAllKey = '';
 
     /** Tutorial spotlight: pulsing ring drawn over this hex. null = inactive. */
     this.tutorialSpotlightHex = null;
@@ -617,27 +620,29 @@ export class Renderer {
    * Each entity with ≥1 MOVE gets a looping path:
    *   [origin, dest1, dest2, ..., destN]
    *
-   * Cycle (in units of stepDurationMs):
+   * All units share ONE clock (_planGhostSharedStart) and ONE cycle length
+   * equal to the longest unit's natural cycle. Shorter paths pad their
+   * destN hold to match, so every ghost teleports back to origin at the
+   * same instant, animates forward together, and lands on its destination
+   * together. This "heartbeat" lets the player scan all ghosts at once.
+   *
+   * Cycle (in units of stepDurationMs), shared across all units:
    *   [0, originHold)                   → hold at origin
    *   [originHold, originHold+segs)     → animate forward segment i
    *   [originHold+segs, cycleSteps)     → hold at destN
-   *   then wrap → teleport back to origin (no smooth return).
+   *   wrap → teleport back to origin (no smooth return segment)
    *
-   * The origin hold makes the post-teleport restart visually obvious —
-   * without it, the ghost snaps to origin and immediately starts moving,
-   * which can read as continuous motion.
-   *
-   * When the plan changes (new move added, undo, reroute), the phase is
-   * seeded to the start of the destN hold — so the ghost appears AT the
-   * newest destination instantly, pauses there, teleports back to origin,
-   * pauses briefly, then replays the whole path.
+   * When the plan changes (new move added, undo, reroute), the shared
+   * clock is seeded so the CHANGED unit lands on the start of its destN
+   * hold — i.e. the new ghost appears at the new destination instantly.
+   * Other units, whose paths finish earlier, naturally also sit at their
+   * destN holds at the same moment, giving a clean "all destinations
+   * visible" beat after every plan edit.
    */
   _updatePlanGhostAnim(steps) {
-    const prev = this._planGhostAnim;
-    const next = new Map();
     const stepDurationMs = 550;
     const originHoldSteps = 0.6;
-    const destHoldSteps   = 1.1;
+    const baseDestHoldSteps = 1.1;
     const now = Date.now();
 
     // Group MOVE arrows by entityId: path = [origin, dest1, dest2, ...].
@@ -655,27 +660,60 @@ export class Renderer {
       }
     }
 
+    if (paths.size === 0) {
+      this._planGhostAnim = new Map();
+      this._planGhostSharedStart = null;
+      this._planGhostAnimAllKey = '';
+      return;
+    }
+
+    // Per-unit path keys + a combined key for change detection.
+    const perKey = new Map();
     for (const [id, path] of paths) {
-      const key = path.map(p => `${p.col},${p.row}`).join('|');
-      const old = prev.get(id);
-      const segments = path.length - 1;
-      let startTime;
-      if (old && old.pathKey === key) {
-        // Unchanged plan — preserve phase so the ghost doesn't stutter.
-        startTime = old.startTime;
-      } else {
-        // New / changed plan — seed phase to the start of the destN hold
-        // so the ghost appears AT the newest destination immediately.
-        const seed = originHoldSteps + segments;
-        startTime = now - seed * stepDurationMs;
+      perKey.set(id, path.map(p => `${p.col},${p.row}`).join('|'));
+    }
+    const allKey = [...perKey.entries()]
+      .map(([id, k]) => `${id}:${k}`)
+      .sort()
+      .join(';');
+
+    // Shared cycle length = longest natural cycle across all units.
+    let maxSegs = 0;
+    for (const [, path] of paths) maxSegs = Math.max(maxSegs, path.length - 1);
+    const cycleSteps = originHoldSteps + maxSegs + baseDestHoldSteps;
+
+    // Decide the shared start time.
+    let sharedStart;
+    if (allKey === this._planGhostAnimAllKey && this._planGhostSharedStart != null) {
+      // Unchanged plan — preserve phase across refreshes.
+      sharedStart = this._planGhostSharedStart;
+    } else {
+      // Changed plan — find the unit whose path differs from last frame and
+      // seed the shared clock so that unit is at the start of its destN hold.
+      const prevAnim = this._planGhostAnim ?? new Map();
+      let targetSegs = maxSegs;
+      for (const [id, path] of paths) {
+        const prevEntry = prevAnim.get(id);
+        if (!prevEntry || prevEntry.pathKey !== perKey.get(id)) {
+          targetSegs = path.length - 1;
+          break;
+        }
       }
+      const seed = originHoldSteps + targetSegs;
+      sharedStart = now - seed * stepDurationMs;
+    }
+
+    const next = new Map();
+    for (const [id, path] of paths) {
       next.set(id, {
-        path, pathKey: key, startTime,
-        stepDurationMs, originHoldSteps, destHoldSteps,
+        path, pathKey: perKey.get(id),
+        stepDurationMs, originHoldSteps, cycleSteps,
       });
     }
 
     this._planGhostAnim = next;
+    this._planGhostSharedStart = sharedStart;
+    this._planGhostAnimAllKey = allKey;
   }
 
   /** Keep calling draw() until all animations have expired. */
@@ -2351,6 +2389,7 @@ export class Renderer {
     const moveSteps = ghostSteps.filter(s => s.arrow !== null);
     const now = Date.now();
     const r = hs * 0.32;
+    const sharedStart = this._planGhostSharedStart ?? now;
     for (const [entityId, anim] of this._planGhostAnim) {
       const path = anim.path;
       if (!path || path.length < 2) continue; // need origin + ≥1 destination
@@ -2361,16 +2400,17 @@ export class Renderer {
       const entityOwner = entity.owner;
       const color = entity.color ?? ENTITY_COLOR[entityType] ?? getFactionTheme(entityOwner).primary;
 
-      // Cycle (in units of stepDurationMs):
+      // Cycle (in units of stepDurationMs), SHARED across all units:
       //   [0, originHold)                 → hold at origin
       //   [originHold, originHold+segs)   → animate segment i
-      //   [originHold+segs, cycleSteps)   → hold at destN
+      //   [originHold+segs, cycleSteps)   → hold at destN (this unit)
       //   wrap → teleport back to origin (no smooth return segment)
+      // Shorter paths finish their forward animation earlier and simply
+      // hold at destN for the remainder of the shared cycle.
       const segments = path.length - 1;
       const originHold = anim.originHoldSteps;
-      const destHold   = anim.destHoldSteps;
-      const cycleSteps = originHold + segments + destHold;
-      const elapsed = Math.max(0, now - anim.startTime);
+      const cycleSteps = anim.cycleSteps;
+      const elapsed = Math.max(0, now - sharedStart);
       const phase   = (elapsed / anim.stepDurationMs) % cycleSteps;
 
       let p;
