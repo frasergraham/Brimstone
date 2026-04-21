@@ -118,7 +118,17 @@ export class Renderer {
     this.hoveredHex     = null;
 
     /** Ghost overlay steps from computeGhostState(). null = no overlay. */
-    this.planGhostSteps = null;
+    this._planGhostSteps = null;
+
+    /**
+     * Per-unit plan-ghost animation state.
+     * Map<entityId, { path:[{col,row}], pathKey:string, stepDurationMs,
+     *                 originHoldSteps, cycleSteps }>.
+     * All units share `_planGhostSharedStart` so their cycles stay in lockstep.
+     */
+    this._planGhostAnim = new Map();
+    this._planGhostSharedStart = null;
+    this._planGhostAnimAllKey = '';
 
     /** Tutorial spotlight: pulsing ring drawn over this hex. null = inactive. */
     this.tutorialSpotlightHex = null;
@@ -378,13 +388,15 @@ export class Renderer {
       const lvl = tile.fortifyLevel;
       const fortPalette = [
         null,
-        [160, 100, 55],
+        [160, 100,  55],
         [120, 135, 148],
         [180, 196, 210],
-        [205, 165, 35],
+        [205, 165,  35],
+        [230, 190,  55],
+        [255, 220,  90],
       ];
-      const [fr, fg, fb] = fortPalette[Math.min(lvl, 4)];
-      const alpha = Math.min(0.95, 0.5 + lvl * 0.12);
+      const [fr, fg, fb] = fortPalette[Math.min(lvl, 6)];
+      const alpha = Math.min(0.95, 0.5 + lvl * 0.08);
       _traceHexPath(ctx, hs, hs, hs - 1);
       ctx.strokeStyle = `rgba(${fr},${fg},${fb},${alpha})`;
       ctx.lineWidth = Math.max(1.5, lvl * 1.2);
@@ -597,6 +609,115 @@ export class Renderer {
     }
   }
 
+  /** Ghost overlay steps from computeGhostState(). Setter also refreshes per-unit ghost animation state. */
+  get planGhostSteps() { return this._planGhostSteps; }
+  set planGhostSteps(steps) {
+    this._planGhostSteps = steps;
+    this._updatePlanGhostAnim(steps);
+    if (this._planGhostAnim.size > 0) this._startAnimLoop();
+  }
+
+  /**
+   * Rebuild per-unit plan-ghost animation state from ghost steps.
+   * Each entity with ≥1 MOVE gets a looping path:
+   *   [origin, dest1, dest2, ..., destN]
+   *
+   * All units share ONE clock (_planGhostSharedStart) and ONE cycle length
+   * equal to the longest unit's natural cycle. Shorter paths pad their
+   * destN hold to match, so every ghost teleports back to origin at the
+   * same instant, animates forward together, and lands on its destination
+   * together. This "heartbeat" lets the player scan all ghosts at once.
+   *
+   * Cycle (in units of stepDurationMs), shared across all units:
+   *   [0, originHold)                   → hold at origin
+   *   [originHold, originHold+segs)     → animate forward segment i
+   *   [originHold+segs, cycleSteps)     → hold at destN
+   *   wrap → teleport back to origin (no smooth return segment)
+   *
+   * When the plan changes (new move added, undo, reroute), the shared
+   * clock is seeded so the CHANGED unit lands on the start of its destN
+   * hold — i.e. the new ghost appears at the new destination instantly.
+   * Other units, whose paths finish earlier, naturally also sit at their
+   * destN holds at the same moment, giving a clean "all destinations
+   * visible" beat after every plan edit.
+   */
+  _updatePlanGhostAnim(steps) {
+    const stepDurationMs = 550;
+    const originHoldSteps = 0.6;
+    const baseDestHoldSteps = 1.1;
+    const now = Date.now();
+
+    // Group MOVE arrows by entityId: path = [origin, dest1, dest2, ...].
+    const paths = new Map(); // entityId -> [{col,row}...]
+    if (Array.isArray(steps)) {
+      for (const s of steps) {
+        if (!s.arrow) continue;
+        const id = s.arrow.entityId;
+        let arr = paths.get(id);
+        if (!arr) {
+          arr = [{ col: s.arrow.fromCol, row: s.arrow.fromRow }];
+          paths.set(id, arr);
+        }
+        arr.push({ col: s.arrow.toCol, row: s.arrow.toRow });
+      }
+    }
+
+    if (paths.size === 0) {
+      this._planGhostAnim = new Map();
+      this._planGhostSharedStart = null;
+      this._planGhostAnimAllKey = '';
+      return;
+    }
+
+    // Per-unit path keys + a combined key for change detection.
+    const perKey = new Map();
+    for (const [id, path] of paths) {
+      perKey.set(id, path.map(p => `${p.col},${p.row}`).join('|'));
+    }
+    const allKey = [...perKey.entries()]
+      .map(([id, k]) => `${id}:${k}`)
+      .sort()
+      .join(';');
+
+    // Shared cycle length = longest natural cycle across all units.
+    let maxSegs = 0;
+    for (const [, path] of paths) maxSegs = Math.max(maxSegs, path.length - 1);
+    const cycleSteps = originHoldSteps + maxSegs + baseDestHoldSteps;
+
+    // Decide the shared start time.
+    let sharedStart;
+    if (allKey === this._planGhostAnimAllKey && this._planGhostSharedStart != null) {
+      // Unchanged plan — preserve phase across refreshes.
+      sharedStart = this._planGhostSharedStart;
+    } else {
+      // Changed plan — find the unit whose path differs from last frame and
+      // seed the shared clock so that unit is at the start of its destN hold.
+      const prevAnim = this._planGhostAnim ?? new Map();
+      let targetSegs = maxSegs;
+      for (const [id, path] of paths) {
+        const prevEntry = prevAnim.get(id);
+        if (!prevEntry || prevEntry.pathKey !== perKey.get(id)) {
+          targetSegs = path.length - 1;
+          break;
+        }
+      }
+      const seed = originHoldSteps + targetSegs;
+      sharedStart = now - seed * stepDurationMs;
+    }
+
+    const next = new Map();
+    for (const [id, path] of paths) {
+      next.set(id, {
+        path, pathKey: perKey.get(id),
+        stepDurationMs, originHoldSteps, cycleSteps,
+      });
+    }
+
+    this._planGhostAnim = next;
+    this._planGhostSharedStart = sharedStart;
+    this._planGhostAnimAllKey = allKey;
+  }
+
   /** Keep calling draw() until all animations have expired. */
   _startAnimLoop() {
     if (this._animFramePending) return;
@@ -609,7 +730,8 @@ export class Renderer {
                  || [...this._fadeOutAnims.values()].some(a => now < a.startTime + a.duration)
                  || this._lungeAnims.some(a => !a.settled || a.returning)
                  || this._nodeRevealAnims.some(a => now < a.startTime + a.duration)
-                 || !!this._zoomAnim;
+                 || !!this._zoomAnim
+                 || this._planGhostAnim.size > 0;
       this.draw();
       if (alive) {
         requestAnimationFrame(loop);
@@ -1423,10 +1545,12 @@ export class Renderer {
         [120, 135, 148],   // 2 — rough stone
         [180, 196, 210],   // 3 — dressed silver steel
         [205, 165,  35],   // 4 — iron-gilt ramparts
+        [230, 190,  55],   // 5 — gilded bulwark
+        [255, 220,  90],   // 6 — radiant bastion
       ];
-      const [fr, fg, fb] = fortPalette[Math.min(lvl, 4)];
-      const alpha = Math.min(0.95, 0.5 + lvl * 0.12);
-      const lw    = lvl * 2;
+      const [fr, fg, fb] = fortPalette[Math.min(lvl, 6)];
+      const alpha = Math.min(0.95, 0.5 + lvl * 0.08);
+      const lw    = Math.min(lvl * 2, 12);
 
       _traceHexPath(ctx, x, y, fillSize);
 
@@ -1462,11 +1586,24 @@ export class Renderer {
         this._shadowText(BUILDING_ICON[tile.building] || '?', x, y - hs * 0.10);
       }
 
-      ctx.fillStyle    = 'rgba(255,248,230,0.92)';
-      ctx.font         = `bold ${Math.max(7, Math.floor(hs * 0.25))}px "Georgia", serif`;
-      ctx.textAlign    = 'center';
-      ctx.textBaseline = 'middle';
-      this._shadowText(BUILDING_LABEL[tile.building] || tile.building, x, y + hs * 0.58);
+      // Building names crowd neighbouring hexes at low zoom. Fade them in
+      // smoothly based on the effective on-screen hex size so they only
+      // appear once there's room to read them.
+      const effectiveHex = hs * this.zoomLevel;
+      const LABEL_FADE_START = 40;
+      const LABEL_FADE_END   = 60;
+      const labelAlpha = Math.max(0, Math.min(1,
+        (effectiveHex - LABEL_FADE_START) / (LABEL_FADE_END - LABEL_FADE_START)));
+      if (labelAlpha > 0) {
+        const prevAlpha = ctx.globalAlpha;
+        ctx.globalAlpha = prevAlpha * labelAlpha;
+        ctx.fillStyle    = 'rgba(255,248,230,0.92)';
+        ctx.font         = `bold ${Math.max(7, Math.floor(hs * 0.25))}px "Georgia", serif`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        this._shadowText(BUILDING_LABEL[tile.building] || tile.building, x, y + hs * 0.58);
+        ctx.globalAlpha = prevAlpha;
+      }
     }
   }
 
@@ -2250,42 +2387,106 @@ export class Renderer {
     ctx.lineCap  = 'round';
     ctx.lineJoin = 'round';
 
-    // ── Layer 1: Ghost entity circles at move destinations ───────────────────
+    // ── Layer 1: Animated per-unit ghost icons cycling through planned moves ─
+    // One grayscale ghost glyph per unit with planned MOVEs, looping through
+    // its destinations. Helps players confirm "which unit am I planning for?".
     const moveSteps = ghostSteps.filter(s => s.arrow !== null);
-    for (const step of moveSteps) {
-      const arrow = step.arrow;
-      const to    = this._toCanvas(arrow.toCol, arrow.toRow);
-      const r     = hs * 0.32;
+    const now = Date.now();
+    const r = hs * 0.32;
+    const sharedStart = this._planGhostSharedStart ?? now;
+    for (const [entityId, anim] of this._planGhostAnim) {
+      const path = anim.path;
+      if (!path || path.length < 2) continue; // need origin + ≥1 destination
 
-      // Find entity type/owner for color
-      const entityId = arrow.entityId;
-      // Look up entity from last step positions where it was moved
-      let entityType  = null;
-      let entityOwner = null;
-      for (const e of (this.state?.entities ?? [])) {
-        if (e.id === entityId) { entityType = e.type; entityOwner = e.owner; break; }
+      const entity = this.state?.entities.find(e => e.id === entityId);
+      if (!entity) continue;
+      const entityType  = entity.type;
+      const entityOwner = entity.owner;
+      const color = entity.color ?? ENTITY_COLOR[entityType] ?? getFactionTheme(entityOwner).primary;
+
+      // Cycle (in units of stepDurationMs), SHARED across all units:
+      //   [0, originHold)                 → hold at origin
+      //   [originHold, originHold+segs)   → animate segment i
+      //   [originHold+segs, cycleSteps)   → hold at destN (this unit)
+      //   wrap → teleport back to origin (no smooth return segment)
+      // Shorter paths finish their forward animation earlier and simply
+      // hold at destN for the remainder of the shared cycle.
+      const segments = path.length - 1;
+      const originHold = anim.originHoldSteps;
+      const cycleSteps = anim.cycleSteps;
+      const elapsed = Math.max(0, now - sharedStart);
+      const phase   = (elapsed / anim.stepDurationMs) % cycleSteps;
+
+      let p;
+      if (phase < originHold) {
+        // Hold at origin (post-teleport pause, makes the jump obvious).
+        const first = path[0];
+        p = this._toCanvas(first.col, first.row);
+      } else if (phase < originHold + segments) {
+        // Animate forward. Interpolate in PIXEL space — (col, row) lerp
+        // drifts off hex centers on the odd-r offset grid.
+        const segPhase = phase - originHold;
+        const i    = Math.floor(segPhase);
+        const t    = segPhase - i;
+        const from = path[i];
+        const to   = path[i + 1];
+        const a    = this._toCanvas(from.col, from.row);
+        const b    = this._toCanvas(to.col,   to.row);
+        p = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+      } else {
+        // Hold at destN before teleporting back.
+        const last = path[path.length - 1];
+        p = this._toCanvas(last.col, last.row);
       }
-      const entityObj = this.state?.entities.find(e => e.id === entityId);
-      const color = entityObj?.color ?? ENTITY_COLOR[entityType] ?? getFactionTheme(entityOwner).primary;
 
-      ctx.globalAlpha = 0.4;
+      // Look up sprite portrait (same path _drawEntityStack uses).
+      const portraitKey = entityType === EntityType.SURVIVOR
+        ? Renderer.survivorAssetId(entity.title)
+        : entityType;
+      const pRect = portraitKey ? this._spriteRects?.get(portraitKey) : null;
+      const havePortrait = !!(pRect && this._tilemapImg);
+
+      ctx.save();
+      ctx.globalAlpha = 0.8;
+
+      // Dark disc backing for contrast (thin, mostly hidden by portrait).
       ctx.beginPath();
-      ctx.arc(to.x, to.y, r, 0, Math.PI * 2);
-      ctx.fillStyle = color;
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(20,20,20,0.55)';
       ctx.fill();
-      ctx.strokeStyle = 'rgba(255,255,255,0.6)';
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
 
-      if (entityType) {
-        ctx.globalAlpha = 0.55;
-        ctx.fillStyle   = '#fff';
-        ctx.font        = `${Math.floor(r * 1.1)}px sans-serif`;
+      if (havePortrait) {
+        // Grayscale portrait image clipped to the ghost disc.
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.filter = 'grayscale(100%)';
+        ctx.drawImage(
+          this._tilemapImg,
+          pRect.x, pRect.y, pRect.size, pRect.size,
+          p.x - r, p.y - r, r * 2, r * 2,
+        );
+        ctx.restore();
+      } else if (entityType) {
+        // Fallback: grayscale glyph if no sprite.
+        ctx.filter       = 'grayscale(100%)';
+        ctx.fillStyle    = '#e8e8e8';
+        ctx.font         = `${Math.floor(r * 1.1)}px sans-serif`;
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(entityGlyph(entityType), to.x, to.y + 1);
+        ctx.fillText(entityGlyph(entityType), p.x, p.y + 1);
       }
-      ctx.globalAlpha = 1;
+
+      // Colored ring in the unit's player color (draw on top of portrait).
+      ctx.filter      = 'none';
+      ctx.strokeStyle = color;
+      ctx.lineWidth   = 2;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.restore();
     }
 
     // ── Layer 2: Translucent summon icons at summon hexes ────────────────────

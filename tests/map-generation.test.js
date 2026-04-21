@@ -187,6 +187,73 @@ describe('Bridge pre-placement', () => {
     }
   });
 
+  test('every bridge has a passable land neighbour on each river side', () => {
+    // A bridge that doesn't actually span the river is useless.  Verify each
+    // BRIDGE has at least one non-river neighbour on each side, classified
+    // by riverSide().
+    const sizes = ['skirmish', 'standard', 'regional', 'campaign'];
+    for (const size of sizes) {
+      for (let seed = 0; seed < 15; seed++) {
+        const { tiles } = generateMap(seed, size);
+        const rp = [];
+        for (const t of tiles.values()) {
+          if (t.type === TileType.RIVER || t.type === TileType.BRIDGE) rp.push({ col: t.col, row: t.row });
+        }
+        const cols = new Set(rp.map(r => r.col));
+        const rows = new Set(rp.map(r => r.row));
+        const ew = cols.size > rows.size;
+        const rm = buildRiverMap(rp, ew);
+        const bridges = allTilesOfType(tiles, TileType.BRIDGE);
+        for (const b of bridges) {
+          let leftOk = false, rightOk = false;
+          for (const n of getNeighbors(b.col, b.row)) {
+            const nt = tiles.get(hexKey(n.col, n.row));
+            if (!nt || nt.type === TileType.RIVER) continue;
+            if (riverSide(n.col, n.row, rm, ew) === 'left') leftOk = true;
+            else rightOk = true;
+          }
+          assert.ok(leftOk && rightOk,
+            `Seed ${seed}, ${size}: bridge at (${b.col},${b.row}) doesn't span the river ` +
+            `(left=${leftOk}, right=${rightOk})`);
+        }
+      }
+    }
+  });
+
+  test('every bridge connects to a road/building on both banks', () => {
+    // The bridge's roadDirs must reach at least two non-adjacent neighbours,
+    // proving roads emerge from both sides of the river rather than dead-ending
+    // on one bank.  Two roadDirs that are themselves hex-adjacent indicate the
+    // bridge only touched the road graph on one side.
+    const sizes = ['skirmish', 'standard', 'regional'];
+    for (const size of sizes) {
+      for (let seed = 0; seed < 15; seed++) {
+        const { tiles } = generateMap(seed, size);
+        const bridges = allTilesOfType(tiles, TileType.BRIDGE);
+        for (const b of bridges) {
+          const dirs = [...b.roadDirs].map(k => {
+            const [c, r] = k.split(',').map(Number);
+            return { col: c, row: r };
+          });
+          assert.ok(dirs.length >= 2,
+            `Seed ${seed}, ${size}: bridge at (${b.col},${b.row}) has only ` +
+            `${dirs.length} road connection(s)`);
+          let foundOpposite = false;
+          for (let i = 0; i < dirs.length && !foundOpposite; i++) {
+            for (let j = i + 1; j < dirs.length; j++) {
+              if (hexDistance(dirs[i].col, dirs[i].row, dirs[j].col, dirs[j].row) >= 2) {
+                foundOpposite = true; break;
+              }
+            }
+          }
+          assert.ok(foundOpposite,
+            `Seed ${seed}, ${size}: bridge at (${b.col},${b.row}) road connections ` +
+            `are all on one bank (${[...b.roadDirs].join(' ')})`);
+        }
+      }
+    }
+  });
+
   test('no road tile is adjacent to river without a bridge', () => {
     // This checks for dead-end roads at the river: a ROAD tile should never
     // be hex-adjacent to a RIVER tile unless there's a BRIDGE between them.

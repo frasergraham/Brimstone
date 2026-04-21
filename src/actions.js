@@ -1,6 +1,9 @@
 // Action system: definitions, validation, and execution
 import { getNeighbors, hexKey, hexDistance } from './hex.js';
-import { TileType, ResourceType, WEAPON_LABEL, BUILDING_LOOT, TERRAIN_LOOT, rollLoot } from './tiles.js';
+import {
+  TileType, ResourceType, WEAPON_LABEL, BUILDING_LOOT, TERRAIN_LOOT, rollLoot,
+  MAX_FORTIFY_LEVEL, getFortifyCombatBonus,
+} from './tiles.js';
 import {
   EntityType, SurvivorAbility, Entity,
   createZombie, createMinion, createSurvivor,
@@ -302,9 +305,9 @@ export function getValidActions(state, actor) {
     actions.push({ type: ActionType.BATTLE_HEX, targets: battleHexTargets });
   }
 
-  // Fortify — faction-gated; cap at 4, uses shared inventory.
+  // Fortify — faction-gated; cap at MAX_FORTIFY_LEVEL, uses shared inventory.
   // Always included when contextually valid; affordable=false when no resources.
-  if (t && t.type !== TileType.RIVER && t.fortifyLevel < 4 && faction.canFortify()) {
+  if (t && t.type !== TileType.RIVER && t.fortifyLevel < MAX_FORTIFY_LEVEL && faction.canFortify()) {
     const inv        = faction.getInventory(state);
     const woodCount  = (inv[ResourceType.WOOD]  || 0);
     const metalCount = (inv[ResourceType.METAL] || 0);
@@ -701,8 +704,13 @@ export function executeBattle(state, actor, target) {
   );
   const attackerAllies = atkAllies.length;
   const defenderAllies = defAllies.length;
+  const atkTile        = tile(state, actor.col, actor.row);
   const defTile        = tile(state, target.col, target.row);
-  const fortBonus      = defTile?.fortifyLevel || 0;
+  // Witch units gain nothing from fortifications — only hero-side units do.
+  const atkFortRaw     = getFortifyCombatBonus(atkTile?.fortifyLevel || 0);
+  const defFortRaw     = getFortifyCombatBonus(defTile?.fortifyLevel || 0);
+  const atkFortAtkBonus = actor.owner === 'witch'  ? 0 : atkFortRaw.attack;
+  const fortBonus       = target.owner === 'witch' ? 0 : defFortRaw.defense;
 
   // Each ally adds an extra d3 — more allies = bigger swings (capped at 3 dice)
   const extraAtkDice = Math.min(attackerAllies, 3);
@@ -714,8 +722,8 @@ export function executeBattle(state, actor, target) {
 
   const { attackRoll, defenseRoll, hit, margin,
           atkBaseDie, defBaseDie, atkExtraDice, defExtraDice, atkStaffBonus } =
-    Entity.resolveCombat(actor, target, phaseBonus, 0, fortBonus, extraAtkDice, extraDefDice,
-                         fatiguePenalty);
+    Entity.resolveCombat(actor, target, phaseBonus, atkFortAtkBonus, fortBonus,
+                         extraAtkDice, extraDefDice, fatiguePenalty);
 
   // Increment the defender's defend count for fatigue tracking
   if (target.defendCount === undefined) target.defendCount = 0;
@@ -814,7 +822,7 @@ export function executeBattle(state, actor, target) {
       atkBaseDie, defBaseDie,
       atkExtraDice, defExtraDice,
       atkStaffBonus,
-      phaseBonus, fortBonus, fatiguePenalty,
+      phaseBonus, fortBonus, atkFortAtkBonus, fatiguePenalty,
       atkAllyNames: atkAllies.map(e => e.displayName),
       defAllyNames: defAllies.map(e => e.displayName),
     },
@@ -824,7 +832,7 @@ export function executeBattle(state, actor, target) {
 export function executeFortify(state, actor) {
   const t = tile(state, actor.col, actor.row);
   if (!t || t.type === TileType.RIVER) return { success: false, log: ['Cannot fortify here.'] };
-  if (t.fortifyLevel >= 4) return { success: false, log: ['Cannot fortify further.'] };
+  if (t.fortifyLevel >= MAX_FORTIFY_LEVEL) return { success: false, log: ['Cannot fortify further.'] };
   const shared     = state.inventory.hero;
   const metalCount = (shared[ResourceType.METAL] || 0);
   const woodCount  = (shared[ResourceType.WOOD]  || 0);
@@ -836,17 +844,17 @@ export function executeFortify(state, actor) {
   if (metalCount > 0) {
     shared[ResourceType.METAL]--;
     const prev = t.fortifyLevel;
-    t.fortifyLevel = Math.min(4, prev + 2);
+    t.fortifyLevel = Math.min(MAX_FORTIFY_LEVEL, prev + 2);
     const defGain = t.fortifyLevel - prev;
-    return { success: true, log: [`${actor.displayName} reinforces with metal! (now +${t.fortifyLevel} DEF)`], cost: 1, defGain };
+    return { success: true, log: [`${actor.displayName} reinforces with metal! (fort level ${t.fortifyLevel})`], cost: 1, defGain };
   } else if (woodCount > 0) {
     shared[ResourceType.WOOD]--;
     const gain = hasDoubler ? 2 : 1;
     const prev = t.fortifyLevel;
-    t.fortifyLevel = Math.min(4, prev + gain);
+    t.fortifyLevel = Math.min(MAX_FORTIFY_LEVEL, prev + gain);
     const defGain = t.fortifyLevel - prev;
     const star = hasDoubler ? ' ★' : '';
-    return { success: true, log: [`${actor.displayName} fortifies with wood!${star} (now +${t.fortifyLevel} DEF)`], cost: 1, defGain };
+    return { success: true, log: [`${actor.displayName} fortifies with wood!${star} (fort level ${t.fortifyLevel})`], cost: 1, defGain };
   }
 
   return { success: false, log: ['No wood or metal in shared supplies.'] };
@@ -1110,14 +1118,18 @@ export function executeGuardStrike(state, guardian, target) {
   const savedAtkBonus = guardian.attackBonus;
   guardian.attackBonus = 0;
 
-  // Fortification still applies to the target's defense
+  // Fortification bonuses — witch units never benefit.
+  const atkTile = tile(state, guardian.col, guardian.row);
   const defTile = tile(state, target.col, target.row);
-  const fortBonus = defTile?.fortifyLevel || 0;
+  const atkFortRaw = getFortifyCombatBonus(atkTile?.fortifyLevel || 0);
+  const defFortRaw = getFortifyCombatBonus(defTile?.fortifyLevel || 0);
+  const atkFortAtkBonus = guardian.owner === 'witch' ? 0 : atkFortRaw.attack;
+  const fortBonus       = target.owner === 'witch'   ? 0 : defFortRaw.defense;
 
-  // No ally dice, no extra attack bonus, no fatigue penalty
+  // No ally dice, no fatigue penalty; attacker fort ATT bonus still applies.
   const { attackRoll, defenseRoll, hit, margin,
           atkBaseDie, defBaseDie, atkStaffBonus } =
-    Entity.resolveCombat(guardian, target, phaseBonus, 0, fortBonus, 0, 0, 0);
+    Entity.resolveCombat(guardian, target, phaseBonus, atkFortAtkBonus, fortBonus, 0, 0, 0);
 
   // Restore attackBonus
   guardian.attackBonus = savedAtkBonus;
@@ -1181,7 +1193,7 @@ export function executeGuardStrike(state, guardian, target) {
       atkBaseDie, defBaseDie,
       atkExtraDice: [], defExtraDice: [],
       atkAllyNames: [], defAllyNames: [],
-      atkStaffBonus, phaseBonus, fortBonus,
+      atkStaffBonus, phaseBonus, fortBonus, atkFortAtkBonus,
       fatiguePenalty: 0,
     },
   };

@@ -143,6 +143,16 @@ async function _wireUniversalLinks() {
         window.location.hash = `#invite=${parsed.searchParams.get('code')}`;
         return;
       }
+
+      // Join link: /join?code=XXX&slot=Y
+      if (parsed.pathname === '/join' && parsed.searchParams.has('code')) {
+        const code = parsed.searchParams.get('code');
+        const slot = parsed.searchParams.get('slot');
+        let hash = `#join=${code}`;
+        if (slot != null) hash += `&slot=${slot}`;
+        window.location.hash = hash;
+        return;
+      }
     } catch (e) {
       console.warn('[platform] Universal link error:', e);
     }

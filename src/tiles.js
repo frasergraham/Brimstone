@@ -170,7 +170,35 @@ export class Tile {
     this.building = null;   // BuildingType or null
     this.explored = false;
     this.resource = null;   // ResourceType or null (on open tiles)
-    this.fortifyLevel = 0;  // 0=none, 1=wood (+1 def), 2=metal (+2 def)
+    this.fortifyLevel = 0;  // 0=none, 1..6=fortified (see getFortifyCombatBonus)
     this.roadDirs = new Set(); // hexKeys of road-connected neighbours (set at map gen time)
   }
+}
+
+// Hard cap on fortification level.
+export const MAX_FORTIFY_LEVEL = 6;
+
+// Combat bonuses granted by a fortified hex. Hero units fighting from a
+// fortified hex receive these bonuses (attacker rolls +attack, defender rolls
+// +defense). Witch units never benefit from fortifications.
+//
+//   Level 1: +0 ATT, +1 DEF
+//   Level 2: +0 ATT, +2 DEF
+//   Level 3: +1 ATT, +2 DEF
+//   Level 4: +2 ATT, +3 DEF
+//   Level 5: +3 ATT, +4 DEF
+//   Level 6: +4 ATT, +5 DEF
+const FORTIFY_BONUS_TABLE = [
+  { attack: 0, defense: 0 },
+  { attack: 0, defense: 1 },
+  { attack: 0, defense: 2 },
+  { attack: 1, defense: 2 },
+  { attack: 2, defense: 3 },
+  { attack: 3, defense: 4 },
+  { attack: 4, defense: 5 },
+];
+
+export function getFortifyCombatBonus(fortifyLevel) {
+  const lvl = Math.max(0, Math.min(MAX_FORTIFY_LEVEL, fortifyLevel | 0));
+  return FORTIFY_BONUS_TABLE[lvl];
 }

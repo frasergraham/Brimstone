@@ -1,6 +1,6 @@
 // UI controller: handles canvas clicks, sidepanel updates, action buttons
 import { hexKey, hexToPixel, MAP_COLS, MAP_ROWS } from './hex.js';
-import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType } from './tiles.js';
+import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus } from './tiles.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
 import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
@@ -62,6 +62,9 @@ export class UIController {
     this._arcItems        = null;    // current arc item descriptors (for line drawing)
     this._arcEntityCol    = null;    // hex col of arc menu origin
     this._arcEntityRow    = null;    // hex row of arc menu origin
+
+    this._undoBtnRaf      = null;    // rAF id for undo-button pan/zoom tracking
+    this._pendingUndoPick = null;    // { entityIds[] } — disambig in flight
 
     this._touchStart  = null;
     this._pinchDist   = null;
@@ -623,8 +626,17 @@ export class UIController {
 
   /** Exit planning mode (called after resolution completes). */
   exitPlanningMode() {
+    this._stopUndoBtnTracking();
     this._planMode      = false;
-    this._planSubmitted = false;
+    // NOTE: _planSubmitted is intentionally NOT reset here. It guards against
+    // a double-fire of the submit button (touchend + click on mobile, or a
+    // fast double-click) — the offline/campaign plan-submit handler calls
+    // exitPlanningMode synchronously before state.submitPlan returns, so
+    // resetting here would let the stray second tap fire _doSubmitPlan again
+    // with a cleared _unitPlans, producing a "0 steps" submit and sometimes
+    // a "Not in planning phase" throw. enterPlanningMode() resets
+    // _planSubmitted at the start of the next round, which is the correct
+    // lifecycle for the flag.
     this._unitPlans     = new Map();
     this._planFaction   = null;
 
@@ -922,6 +934,8 @@ export class UIController {
     this.onPlanActionAdded?.(action);
     this._refreshPlanOverlay();
     this._renderPlanPanel();
+    this._refreshUndoButtons();
+    this._startUndoBtnTracking();
   }
 
   /** Recompute ghost overlay from the current plan and push to renderer. */
@@ -940,6 +954,173 @@ export class UIController {
     this.renderer.planGhostSteps = steps;
   }
 
+  /**
+   * Group every planned unit by the hex where their LAST action resolves.
+   * Used to place floating [UNDO] buttons above each unit's projected end hex.
+   * @returns {Array<{col:number,row:number,entityIds:any[]}>} buckets keyed by end hex.
+   */
+  _computeLastActionHexes() {
+    if (!this._planMode || this._planSubmitted) return [];
+
+    const out = new Map(); // "col,row" -> { col, row, entityIds: [] }
+    const steps = this.renderer?.planGhostSteps;
+    const finalPositions = steps?.length ? steps[steps.length - 1].positions : null;
+
+    for (const [entityId, queue] of this._unitPlans) {
+      if (!queue || queue.length < 1) continue;
+
+      let pos = finalPositions?.get(entityId) ?? null;
+      if (!pos) {
+        const ent = this.state?.entities?.find(e => e.id === entityId);
+        if (ent) pos = { col: ent.col, row: ent.row };
+      }
+      if (!pos) continue;
+
+      const key = `${pos.col},${pos.row}`;
+      let bucket = out.get(key);
+      if (!bucket) {
+        bucket = { col: pos.col, row: pos.row, entityIds: [] };
+        out.set(key, bucket);
+      }
+      bucket.entityIds.push(entityId);
+    }
+    return [...out.values()];
+  }
+
+  /** Render (or clear) floating UNDO buttons for the current plan state. */
+  _refreshUndoButtons() {
+    const layer = this._el('undo-button-layer');
+    if (!layer) return;
+
+    if (!this._planMode || this._planSubmitted || !this.renderer || !this.canvas) {
+      if ((layer.childNodes?.length ?? 0)) layer.innerHTML = '';
+      return;
+    }
+
+    const buckets = this._computeLastActionHexes();
+    if (buckets.length === 0) {
+      if ((layer.childNodes?.length ?? 0)) layer.innerHTML = '';
+      return;
+    }
+
+    const canvasRect = this.canvas.getBoundingClientRect();
+    const scale = canvasRect.width / this.canvas.width;
+    const hexScreenPx = this.renderer.hexSize * scale * this.renderer.zoomLevel;
+
+    // Suppress buttons that would draw behind the plan panel (visible only).
+    const planPanel = this._el('plan-panel');
+    let panelLeft = Infinity;
+    if (planPanel && typeof planPanel.getBoundingClientRect === 'function') {
+      const pr = planPanel.getBoundingClientRect();
+      if (pr && pr.width > 0 && pr.height > 0) panelLeft = pr.left;
+    }
+
+    // Rebuild — bucket count is tiny (≤ faction unit count).
+    layer.innerHTML = '';
+    for (const b of buckets) {
+      const { x, y } = this.renderer.hexToCanvasPos(b.col, b.row);
+      const sx = canvasRect.left + x * scale;
+      const sy = canvasRect.top  + y * scale - hexScreenPx * 0.85;
+
+      // Skip buttons that would visually overlap the expanded plan panel.
+      if (sx >= panelLeft) continue;
+
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'undo-float-btn';
+      btn.textContent = 'UNDO';
+      btn.style.left = `${sx}px`;
+      btn.style.top  = `${sy}px`;
+      const bucketRef = b; // capture
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._onUndoButtonClicked(bucketRef);
+      });
+      btn.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        this._onUndoButtonClicked(bucketRef);
+      }, { passive: false });
+      layer.appendChild(btn);
+    }
+  }
+
+  /** Dispatch an undo click — single unit → undo; multiple → disambig popup. */
+  _onUndoButtonClicked(bucket) {
+    if (!bucket || !bucket.entityIds || bucket.entityIds.length === 0) return;
+    if (bucket.entityIds.length === 1) {
+      this._undoLastActionFor(bucket.entityIds[0]);
+    } else {
+      this._showUndoDisambig(bucket);
+    }
+  }
+
+  /** Pop the last planned action for the given entity and refresh UI. */
+  _undoLastActionFor(entityId) {
+    const queue = this._unitPlans.get(entityId);
+    if (!queue || queue.length === 0) return;
+    queue.pop();
+    if (queue.length === 0) this._unitPlans.delete(entityId);
+
+    // Spec: clicking undo also deselects the unit.
+    this._clearSelection();
+    this._refreshPlanOverlay();
+    this._renderPlanPanel();
+    this._refreshUndoButtons();
+    this.onRedraw();
+  }
+
+  /** Show the arc disambig popup for choosing which unit to undo on a shared hex. */
+  _showUndoDisambig(bucket) {
+    const units = bucket.entityIds
+      .map(id => this.state?.entities?.find(e => e.id === id))
+      .filter(u => u);
+    if (units.length === 0) return;
+    this._pendingUndoPick = { entityIds: bucket.entityIds.slice() };
+    this._showArcDisambig(units, 'undo_pick', { col: bucket.col, row: bucket.row }, [
+      { label: 'Undo', action: 'undo_cancel', color: '#d23c3c' },
+    ]);
+  }
+
+  /**
+   * RAF loop: keep undo buttons pinned to their hexes during pan/zoom.
+   * Self-terminates when the plan becomes empty or planning mode exits —
+   * re-started on demand by `_refreshUndoButtons()` whenever buttons are drawn.
+   */
+  _startUndoBtnTracking() {
+    if (this._undoBtnRaf) return;
+    const tick = () => {
+      this._undoBtnRaf = null;
+      if (!this._planMode || this._planSubmitted) {
+        const layer = this._el('undo-button-layer');
+        if (layer && (layer.childNodes?.length ?? 0)) layer.innerHTML = '';
+        return;
+      }
+      // If there are no buttons to show, stop the loop — _refreshUndoButtons()
+      // will restart it the next time a plan action is added.
+      if (this._unitPlans.size === 0) {
+        const layer = this._el('undo-button-layer');
+        if (layer && (layer.childNodes?.length ?? 0)) layer.innerHTML = '';
+        return;
+      }
+      this._refreshUndoButtons();
+      // Only keep ticking while there are buttons on screen.
+      const layer = this._el('undo-button-layer');
+      if (layer && (layer.childNodes?.length ?? 0) > 0) {
+        this._undoBtnRaf = requestAnimationFrame(tick);
+      }
+    };
+    this._undoBtnRaf = requestAnimationFrame(tick);
+  }
+
+  _stopUndoBtnTracking() {
+    if (this._undoBtnRaf) {
+      cancelAnimationFrame(this._undoBtnRaf);
+      this._undoBtnRaf = null;
+    }
+    const layer = this._el('undo-button-layer');
+    if (layer && (layer.childNodes?.length ?? 0)) layer.innerHTML = '';
+  }
+
   /** Submit the current plan (flattened to interleaved PlanAction[]). */
   _doSubmitPlan() {
     if (this._planSubmitted) return;
@@ -954,6 +1135,7 @@ export class UIController {
   markPlanSubmitted() {
     if (this._planSubmitted) return;
     this._planSubmitted = true;
+    this._stopUndoBtnTracking();
     this._clearSelection();
 
     const panel = this._el('plan-panel');
@@ -1023,6 +1205,7 @@ export class UIController {
         }
         this._refreshPlanOverlay();
         this._renderPlanPanel();
+        this._refreshUndoButtons();
         // Refresh highlights for the selected entity after plan changes
         if (this._selectedEntity) this._selectEntity(this._selectedEntity);
         this.onRedraw();
@@ -1630,16 +1813,16 @@ export class UIController {
           const hasDoubler = entity.type === EntityType.SURVIVOR && entity.ability === SurvivorAbility.FORTIFY_DOUBLE;
           const tileData   = state.tiles.get(hexKey(entity.col, entity.row));
           const cur        = tileData ? tileData.fortifyLevel : 0;
-          const metalGain   = Math.min(4, cur + 2) - cur;
-          const doublerGain = Math.min(4, cur + 2) - cur;
-          const woodGain    = Math.min(4, cur + 1) - cur;
+          const metalGain   = Math.min(MAX_FORTIFY_LEVEL, cur + 2) - cur;
+          const doublerGain = Math.min(MAX_FORTIFY_LEVEL, cur + 2) - cur;
+          const woodGain    = Math.min(MAX_FORTIFY_LEVEL, cur + 1) - cur;
           const shortLbl = hasMetal ? 'Reinforce Hex' : 'Fortify Hex';
           const fortRes = hasMetal ? '1⚙' : '1🪵';
           const fullLbl = hasMetal
-            ? `Reinforce +${metalGain} DEF (1 metal)`
+            ? `Reinforce +${metalGain} lvl (1 metal)`
             : hasDoubler
-              ? `Fortify +${doublerGain} DEF (1 wood)`
-              : `Fortify +${woodGain} DEF (1 wood)`;
+              ? `Fortify +${doublerGain} lvl (1 wood)`
+              : `Fortify +${woodGain} lvl (1 wood)`;
           arcItems.push({ group: 'defense', label: shortLbl, fullLabel: fullLbl,
             color: '#e0a832', dis: cantAfford || dis, cost: 1, resCost: fortRes, attrs: 'data-action="fortify"' });
           break;
@@ -2417,6 +2600,24 @@ export class UIController {
       if (unit) this._selectEntity(unit);
       this._updateSidebar();
       this.onRedraw();
+      return;
+    }
+
+    if (action === 'undo_pick') {
+      const pick = this._pendingUndoPick;
+      this._pendingUndoPick = null;
+      hideActionPopup(this);
+      if (!pick) return;
+      const rawId = button.dataset.unitId;
+      // Entity IDs in _unitPlans may be numbers or strings; dataset values are strings.
+      const entityId = pick.entityIds.find(id => String(id) === String(rawId)) ?? rawId;
+      this._undoLastActionFor(entityId);
+      return;
+    }
+
+    if (action === 'undo_cancel') {
+      this._pendingUndoPick = null;
+      hideActionPopup(this);
       return;
     }
 
@@ -3328,9 +3529,12 @@ export class UIController {
       linesHtml += `<div class="tile-zoom-info-line node">⚔ Power Node (${obj.label}) — ${ctrlStr}</div>`;
     }
     if (tile.explored && tile.fortifyLevel) {
-      const fl = tile.fortifyLevel >= 3 ? `⚙⚙ Heavily Reinforced (+${tile.fortifyLevel} DEF)`
-               : tile.fortifyLevel >= 2 ? `⚙ Metal Reinforced (+${tile.fortifyLevel} DEF)`
-               : `🪵 Fortified (+${tile.fortifyLevel} DEF)`;
+      const { attack: fAtk, defense: fDef } = getFortifyCombatBonus(tile.fortifyLevel);
+      const bonusStr = fAtk > 0 ? `+${fAtk} ATT, +${fDef} DEF` : `+${fDef} DEF`;
+      const fl = tile.fortifyLevel >= 5 ? `⚙⚙⚙ Bastion (lvl ${tile.fortifyLevel}: ${bonusStr})`
+               : tile.fortifyLevel >= 3 ? `⚙⚙ Heavily Reinforced (lvl ${tile.fortifyLevel}: ${bonusStr})`
+               : tile.fortifyLevel >= 2 ? `⚙ Metal Reinforced (lvl ${tile.fortifyLevel}: ${bonusStr})`
+               : `🪵 Fortified (lvl ${tile.fortifyLevel}: ${bonusStr})`;
       linesHtml += `<div class="tile-zoom-info-line fortified">${fl}</div>`;
     }
     if (!tile.explored) linesHtml += `<div class="tile-zoom-info-line">— unexplored —</div>`;
@@ -4132,7 +4336,7 @@ function _buildTerrainBadge(tile) {
     parts.push('<span class="usb-terrain-explored">Explored</span>');
   }
   if (tile.fortifyLevel) {
-    parts.push(`<span class="usb-terrain-fort">⚙ Fort +${tile.fortifyLevel}</span>`);
+    parts.push(`<span class="usb-terrain-fort">⚙ Fort lvl ${tile.fortifyLevel}</span>`);
   }
   if (tile.powerNode) {
     parts.push(`<span class="usb-terrain-node">⬡ Power Node</span>`);
@@ -4262,6 +4466,7 @@ function _buildBreakdownHTML(snap, bd, side, total) {
     if (snap.attackBonus) parts.push(row('🪙 Silver', snap.attackBonus));
     if (bd.phaseBonus)    parts.push(row('🌙 Night', bd.phaseBonus));
     if (bd.atkStaffBonus) parts.push(row('⚕ Staff (undead)', bd.atkStaffBonus));
+    if (bd.atkFortAtkBonus) parts.push(row('🏰 Fort ATT', bd.atkFortAtkBonus));
     bd.atkExtraDice.forEach((r, i) => {
       parts.push(row(`${bd.atkAllyNames[i] ?? 'Ally'} (D3)`, r, true));
     });
@@ -4269,7 +4474,7 @@ function _buildBreakdownHTML(snap, bd, side, total) {
     parts.push(row('Base d6', bd.defBaseDie, true));
     parts.push(row(`${snap.name} DEF`, snap.defense));
     if (snap.defenseBonus) parts.push(row('🛡 Bonus DEF', snap.defenseBonus));
-    if (bd.fortBonus) parts.push(row(`🏰 Fort ×${bd.fortBonus}`, bd.fortBonus));
+    if (bd.fortBonus) parts.push(row('🏰 Fort DEF', bd.fortBonus));
     if (bd.fatiguePenalty) parts.push(row('😓 Fatigue', -bd.fatiguePenalty));
     bd.defExtraDice.forEach((r, i) => {
       parts.push(row(`${bd.defAllyNames[i] ?? 'Ally'} (D3)`, r, true));

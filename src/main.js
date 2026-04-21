@@ -717,13 +717,10 @@ async function _runLocalResolution(skipSummary = false) {
   state.updateNodeDiscovery();
   state.checkAndLogNodeControlChanges();
   state.updateExploredHexes();
+  // endRound() internally invokes state._waveProcessor (set during mission
+  // load) before checkVictory, so triggered wave spawns can pre-empt an
+  // otherwise-firing eliminate_all win.
   state.endRound();
-
-  // Campaign wave spawning: inject new enemies after each round
-  if (_activeMissionDef?.waves) {
-    const waveLogs = processWaves(state, _activeMissionDef.waves, _createEnemyEntity);
-    for (const msg of waveLogs) state.addLog(msg);
-  }
 
   // Show encounter dialogs for survivors spawned at power nodes during endRound
   if (ui && !_autoplay && state.nodeSpawnedSurvivors?.length) {
@@ -2148,6 +2145,10 @@ function _resumeCampaignMission(missionId) {
 
   // Reconstruct campaign-specific state
   existingState.victoryDelegate = buildVictoryDelegate(missionDef.objectives);
+  if (missionDef.waves) {
+    existingState._waveProcessor = () =>
+      processWaves(existingState, missionDef.waves, _createEnemyEntity);
+  }
   existingState.fogOfWar = existingState.fogOfWar || 'full';
   if (missionDef.lootOverrides) existingState.lootOverrides = missionDef.lootOverrides;
   if (missionDef.aiBudgetBonus) existingState.campaignAIBudgetBonus = missionDef.aiBudgetBonus;
@@ -2498,6 +2499,13 @@ function _initCampaignMission(missionDef) {
   // Set custom victory delegate
   state.victoryDelegate = buildVictoryDelegate(missionDef.objectives);
 
+  // Install the mission's wave processor (runs inside endRound before
+  // checkVictory so triggered spawns can pre-empt a premature win).
+  if (missionDef.waves) {
+    state._waveProcessor = () =>
+      processWaves(state, missionDef.waves, _createEnemyEntity);
+  }
+
   // Inject carried-over hero stats
   if (_activeCampaign && _activeCampaign.heroStats) {
     const hs = _activeCampaign.heroStats;
@@ -2522,13 +2530,18 @@ function _initCampaignMission(missionDef) {
   // Deploy carried-over survivors from roster (uses active/reserve selection)
   if (_activeCampaign && missionDef.maxSurvivorsFromRoster > 0) {
     const toDeploy = _activeRosterIndices.slice(0, missionDef.maxSurvivorsFromRoster);
-    // Place survivors near hero start
+    // Place survivors at explicit start positions if the mission specifies
+    // them; otherwise fall back to neighbors of the hero's start tile.
     const heroStart = mapData.heroStart;
+    const explicitSpots = missionDef.survivorStartPositions
+      ? [...missionDef.survivorStartPositions]
+      : null;
     const neighbors = getNeighbors(heroStart.col, heroStart.row);
-    for (let i = 0; i < toDeploy.length && i < neighbors.length; i++) {
+    const spots = explicitSpots ?? neighbors;
+    for (let i = 0; i < toDeploy.length && i < spots.length; i++) {
       const rosterEntry = _activeCampaign.roster[toDeploy[i]];
       if (!rosterEntry) continue;
-      const n = neighbors[i];
+      const n = spots[i];
       const s = createSurvivor(n.col, n.row, 'hero');
       // Restore stats from roster
       s.name = rosterEntry.name;
@@ -2573,8 +2586,14 @@ function _initCampaignMission(missionDef) {
     ).length;
     if (currentCount < min) {
       const heroStart = mapData.heroStart;
-      const spots = getNeighbors(heroStart.col, heroStart.row)
-        .filter(n => !state.entities.some(e => e.col === n.col && e.row === n.row));
+      // Prefer unoccupied explicit start positions; otherwise fall back to
+      // neighbors of the hero's start tile.
+      const candidates = missionDef.survivorStartPositions
+        ? [...missionDef.survivorStartPositions]
+        : getNeighbors(heroStart.col, heroStart.row);
+      const spots = candidates.filter(
+        n => !state.entities.some(e => e.col === n.col && e.row === n.row)
+      );
       for (let i = currentCount; i < min && spots.length > 0; i++) {
         const spot = spots.shift();
         const s = createSurvivor(spot.col, spot.row, 'hero');
@@ -5269,7 +5288,7 @@ function _checkGameDeepLink() {
 
 // Handle deep links from push notification taps (sets hash then fires hashchange)
 window.addEventListener('hashchange', () => {
-  _checkAsyncDeepLink();
+  _checkGameDeepLink() || _checkAsyncDeepLink();
 });
 // Unified main-menu refresh — fetches games + battle status in parallel
 // and updates the main menu list + multiplayer/battle badges as side effects.
@@ -5388,7 +5407,7 @@ function _renderLobby(lobby) {
 
   // Invite link — use code for private games, room ID for public
   const joinKey = (lobby.isPrivate && lobby.code) ? lobby.code : lobby.id;
-  const inviteUrl = `${_linkOrigin()}#join=${encodeURIComponent(joinKey)}`;
+  const inviteUrl = new URL(`/join?code=${encodeURIComponent(joinKey)}`, _linkOrigin()).href;
   const copyBtn = document.getElementById('btn-lobby-copy-link');
   const copiedEl = document.getElementById('lobby-link-copied');
   copiedEl.style.display = 'none';
@@ -5593,7 +5612,7 @@ function _showSlotInvitePopup(lobby, slotIndex, faction, anchorEl) {
   document.querySelector('.slot-invite-popup')?.remove();
 
   const joinKey = (lobby.isPrivate && lobby.code) ? lobby.code : lobby.id;
-  const deepLink = `${_linkOrigin()}#join=${encodeURIComponent(joinKey)}&slot=${slotIndex}`;
+  const deepLink = new URL(`/join?code=${encodeURIComponent(joinKey)}&slot=${slotIndex}`, _linkOrigin()).href;
 
   const popup = document.createElement('div');
   popup.className = 'slot-invite-popup';

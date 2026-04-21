@@ -1,6 +1,8 @@
 // Campaign state management — persistence, roster, resources, progression.
 // Stored in localStorage; optionally synced to server for verified users.
 
+import { countHeldNodes } from '../game.js';
+
 const SAVE_VERSION = 1;
 
 /**
@@ -55,81 +57,203 @@ export function reconcileRosterAfterMission(preMissionRoster, entities) {
 /**
  * Build victory/defeat delegate function from mission objectives.
  * Returns a function (state) => { winner, winReason, log } | null.
+ *
+ * `objectives.win` and `objectives.lose` may each be either a single condition
+ * object or an array of conditions. When an array is given, the first matching
+ * condition wins — lose conditions are checked before win conditions.
  */
 export function buildVictoryDelegate(objectives) {
   return (state) => {
-    // Check lose condition first (may be null for tutorial/conductor missions)
+    // Check lose condition(s) first (may be null for tutorial/conductor missions)
     if (objectives.lose) {
-      switch (objectives.lose.type) {
-        case 'hero_killed':
-          if (state.factionEliminated('hero')) {
-            return {
-              winner: 'witch',
-              winReason: objectives.lose.reason || 'The hero has fallen.',
-              log: '💀 The hero has been slain…',
-            };
-          }
-          break;
-        case 'rounds_exceeded':
-          if (state.round > objectives.lose.rounds) {
-            return {
-              winner: 'witch',
-              winReason: objectives.lose.reason || `Failed to complete the mission in ${objectives.lose.rounds} rounds.`,
-              log: `⏳ Time ran out — the mission is lost.`,
-            };
-          }
-          break;
+      const loseConds = Array.isArray(objectives.lose) ? objectives.lose : [objectives.lose];
+      for (const cond of loseConds) {
+        const result = _checkLoseCondition(cond, state);
+        if (result) return result;
       }
     }
-    // Check win condition
+    // Check win condition(s)
     if (objectives.win) {
-      switch (objectives.win.type) {
-        case 'eliminate_all':
-          if (state.entities.filter(e => e.owner === 'witch' && e.alive).length === 0) {
-            return {
-              winner: 'hero',
-              winReason: objectives.win.reason || 'All enemies have been eliminated.',
-              log: '☀ Every last enemy has been vanquished!',
-            };
-          }
-          break;
-        case 'survive_rounds':
-          if (state.round > objectives.win.rounds) {
-            return {
-              winner: 'hero',
-              winReason: objectives.win.reason || `Survived ${objectives.win.rounds} rounds.`,
-              log: `☀ You held the line! The darkness recedes… for now.`,
-            };
-          }
-          break;
-        case 'reach_hex':
-          if (state.hero?.col === objectives.win.col && state.hero?.row === objectives.win.row) {
-            return {
-              winner: 'hero',
-              winReason: objectives.win.reason || 'Reached the objective.',
-              log: '☀ The hero has reached the objective!',
-            };
-          }
-          break;
-        case 'slay_witch':
-          if (state.factionEliminated('witch')) {
-            return {
-              winner: 'hero',
-              winReason: objectives.win.reason || 'The witch has been slain!',
-              log: '☀ The witch has been defeated! Caleb\'s Hollow is saved!',
-            };
-          }
-          break;
-        case 'control_nodes':
-          // Standard node scoring — delegate to existing logic (return null to let it run)
-          return null;
-        case 'conductor_complete':
-          // MissionConductor handles completion directly — never auto-trigger victory
-          return null;
+      const winConds = Array.isArray(objectives.win) ? objectives.win : [objectives.win];
+      for (const cond of winConds) {
+        const result = _checkWinCondition(cond, state);
+        if (result === null) continue;     // condition not met — try next
+        if (result === DEFERRED) return null; // let external systems resolve
+        return result;
       }
     }
     return null; // no victory yet
   };
+}
+
+// Sentinel returned by a win condition that should defer to external systems
+// (e.g. standard node scoring, conductor missions) instead of resolving now.
+const DEFERRED = Symbol('victory-deferred');
+
+function _heroSurvivorCount(state) {
+  return state.entities.filter(e => e.type === 'survivor' && e.owner === 'hero' && e.alive).length;
+}
+
+function _checkLoseCondition(cond, state) {
+  switch (cond.type) {
+    case 'hero_killed':
+      if (state.factionEliminated('hero')) {
+        return {
+          winner: 'witch',
+          winReason: cond.reason || 'The hero has fallen.',
+          log: '💀 The hero has been slain…',
+        };
+      }
+      return null;
+    case 'rounds_exceeded':
+      if (state.round > cond.rounds) {
+        return {
+          winner: 'witch',
+          winReason: cond.reason || `Failed to complete the mission in ${cond.rounds} rounds.`,
+          log: `⏳ Time ran out — the mission is lost.`,
+        };
+      }
+      return null;
+    case 'phase_without_survivors':
+      if (state.phase === cond.phase && _heroSurvivorCount(state) < cond.survivors) {
+        return {
+          winner: 'witch',
+          winReason: cond.reason || `Night fell before you gathered enough survivors.`,
+          log: `🌒 The light fades and you stand alone — the mission is lost.`,
+        };
+      }
+      return null;
+    case 'survivors_below':
+      // Fails at any time the hero faction has fewer than `count` survivors alive.
+      if (_heroSurvivorCount(state) < cond.count) {
+        return {
+          winner: 'witch',
+          winReason: cond.reason || 'A companion has fallen — the party is broken.',
+          log: '💔 The party is broken.',
+        };
+      }
+      return null;
+    case 'witch_holds_node': {
+      // Fails when the witch still controls ≥1 power node at the target phase.
+      // Pair with `witch_denied_nodes` win.
+      if (cond.phase && state.phase !== cond.phase) return null;
+      if (!state.witchObjectives || state.witchObjectives.length === 0) return null;
+      if (countHeldNodes('witch', state.witchObjectives, state.entities) === 0) return null;
+      return {
+        winner: 'witch',
+        winReason: cond.reason || 'The witch holds a node at dawn.',
+        log: '🌑 Dawn breaks and her power still pulses through the grove.',
+      };
+    }
+  }
+  return null;
+}
+
+function _checkWinCondition(cond, state) {
+  switch (cond.type) {
+    case 'eliminate_all':
+      if (state.entities.filter(e => e.owner === 'witch' && e.alive).length === 0) {
+        return {
+          winner: 'hero',
+          winReason: cond.reason || 'All enemies have been eliminated.',
+          log: '☀ Every last enemy has been vanquished!',
+        };
+      }
+      return null;
+    case 'survive_rounds':
+      if (state.round > cond.rounds) {
+        return {
+          winner: 'hero',
+          winReason: cond.reason || `Survived ${cond.rounds} rounds.`,
+          log: `☀ You held the line! The darkness recedes… for now.`,
+        };
+      }
+      return null;
+    case 'reach_hex':
+      if (state.hero?.col === cond.col && state.hero?.row === cond.row) {
+        return {
+          winner: 'hero',
+          winReason: cond.reason || 'Reached the objective.',
+          log: '☀ The hero has reached the objective!',
+        };
+      }
+      return null;
+    case 'slay_witch':
+      if (state.factionEliminated('witch')) {
+        return {
+          winner: 'hero',
+          winReason: cond.reason || 'The witch has been slain!',
+          log: '☀ The witch has been defeated! Caleb\'s Hollow is saved!',
+        };
+      }
+      return null;
+    case 'gather_and_survive': {
+      // Win when enough survivors are gathered AND either the kill quota is met
+      // or the fallback phase has been reached.
+      const survivors = _heroSurvivorCount(state);
+      if (survivors < cond.survivors) return null;
+      const killsOk = cond.kills == null || (state.heroKills ?? 0) >= cond.kills;
+      const phaseOk = cond.phaseFallback && state.phase === cond.phaseFallback;
+      if (killsOk || phaseOk) {
+        return {
+          winner: 'hero',
+          winReason: cond.reason || 'Survivors gathered — the mission is a success.',
+          log: '☀ The survivors are safe!',
+        };
+      }
+      return null;
+    }
+    case 'survive_with_party': {
+      // Win when the target phase is reached with the hero alive and enough
+      // survivors still standing. Pair with `phase_without_survivors` lose.
+      if (state.phase !== cond.phase) return null;
+      if (_heroSurvivorCount(state) < cond.survivors) return null;
+      return {
+        winner: 'hero',
+        winReason: cond.reason || 'You and your companions survived until dawn.',
+        log: '☀ Dawn breaks — you have survived the night.',
+      };
+    }
+    case 'all_party_at_hexes': {
+      // Win when every living hero-faction party member (hero + survivors) stands
+      // on one of the listed target hexes.
+      const party = state.entities.filter(e =>
+        e.alive && e.owner === 'hero' &&
+        (e.type === 'hero' || e.type === 'survivor')
+      );
+      if (party.length === 0) return null;
+      const hexes = cond.hexes;
+      if (!hexes || hexes.length === 0) return null;
+      const allThere = party.every(p =>
+        hexes.some(h => h.col === p.col && h.row === p.row)
+      );
+      if (!allThere) return null;
+      return {
+        winner: 'hero',
+        winReason: cond.reason || 'The party has reached the target.',
+        log: '☀ The whole party has made it through.',
+      };
+    }
+    case 'witch_denied_nodes': {
+      // Win when the witch controls zero power nodes at the target phase.
+      // Pair with `witch_holds_node` lose.
+      if (cond.phase && state.phase !== cond.phase) return null;
+      if (!state.witchObjectives || state.witchObjectives.length === 0) return null;
+      if (countHeldNodes('witch', state.witchObjectives, state.entities) !== 0) return null;
+      return {
+        winner: 'hero',
+        winReason: cond.reason || 'The witch has been denied at every node.',
+        log: '☀ Dawn breaks over silent nodes — the ritual is broken!',
+      };
+    }
+    case 'control_nodes':
+      // Standard node scoring — delegate to existing logic (return null to let it run)
+      return DEFERRED;
+    case 'conductor_complete':
+      // MissionConductor handles completion directly — never auto-trigger victory
+      return DEFERRED;
+  }
+  return null;
 }
 
 /**
@@ -141,7 +265,29 @@ export function processWaves(state, waves, createEnemyFn) {
   if (!waves) return [];
   const logs = [];
   for (const wave of waves) {
-    if (wave.round !== state.round) continue;
+    // Round-based trigger (legacy)
+    if (wave.round !== undefined && wave.round !== state.round) continue;
+
+    // Kill-count trigger — fires once when state.heroKills crosses threshold
+    if (wave.trigger === 'hero_kills') {
+      if ((state.heroKills ?? 0) < wave.count) continue;
+      if (!state._firedWaves) state._firedWaves = new Set();
+      const key = wave.id ?? `kills:${wave.count}`;
+      if (state._firedWaves.has(key)) continue;
+      state._firedWaves.add(key);
+    }
+
+    // Area trigger — fires once when hero stands on any listed hex
+    if (wave.trigger === 'area') {
+      const hero = state.hero;
+      if (!hero) continue;
+      if (!wave.hexes?.some(h => h.col === hero.col && h.row === hero.row)) continue;
+      if (!state._firedWaves) state._firedWaves = new Set();
+      const key = wave.id ?? `area:${wave.hexes[0].col},${wave.hexes[0].row}`;
+      if (state._firedWaves.has(key)) continue;
+      state._firedWaves.add(key);
+    }
+
     for (const unit of wave.units) {
       const pos = resolveSpawnPosition(state, unit.spawnAt);
       if (!pos) continue;
@@ -149,7 +295,7 @@ export function processWaves(state, waves, createEnemyFn) {
       if (entity) {
         if (unit.overrides) Object.assign(entity, unit.overrides);
         state.entities.push(entity);
-        logs.push(`🌑 ${entity.displayName} emerges from the shadows!`);
+        logs.push(unit.spawnLog ?? `🌑 ${entity.displayName} emerges from the shadows!`);
       }
     }
   }
@@ -173,15 +319,24 @@ function resolveSpawnPosition(state, spawnAt) {
     return { col: t.col, row: t.row };
   }
   if (spawnAt === 'map_edge') {
-    // Pick a random walkable border hex
+    // Pick a random passable tile along any of the four outer edges.
+    let maxCol = 0, maxRow = 0;
+    for (const [, tile] of state.tiles) {
+      if (tile.col > maxCol) maxCol = tile.col;
+      if (tile.row > maxRow) maxRow = tile.row;
+    }
     const edges = [];
     for (const [, tile] of state.tiles) {
-      if (tile.col === 0 || tile.row === 0 || tile.type === 'river') continue;
-      // Rough edge check
-      if (tile.col <= 1 || tile.row <= 1) edges.push(tile);
+      const isEdge = tile.col === 0 || tile.col === maxCol
+                  || tile.row === 0 || tile.row === maxRow;
+      if (!isEdge) continue;
+      if (tile.type === 'river') continue;
+      if (tile.type === 'building') continue;
+      edges.push(tile);
     }
     if (edges.length === 0) return null;
-    return edges[Math.floor(Math.random() * edges.length)];
+    const t = edges[Math.floor(Math.random() * edges.length)];
+    return { col: t.col, row: t.row };
   }
   return null;
 }

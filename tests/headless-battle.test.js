@@ -7,6 +7,8 @@ import { WitchAIEngine } from '../src/ai-engine.js';
 import { resolvePlansMP, ResEventType } from '../server/resolver.js';
 import { generateBattleStarts, MAP_SIZES } from '../src/map.js';
 import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS } from '../src/entities.js';
+import { hexKey } from '../src/hex.js';
+import { BuildingType } from '../src/tiles.js';
 import { serializeState } from '../server/state-sync.js';
 import { randomUUID } from 'crypto';
 
@@ -89,19 +91,24 @@ describe('Battle mode state construction', () => {
     assert.equal(state.battleConfig.maxPlayersPerSide, 4);
   });
 
-  test('hero and witch leaders are on opposite sides of the map', () => {
+  test('hero and witch leaders are at their faction buildings', () => {
     const state = buildBattleState(5);
     const heroLeaders  = state.players.filter(p => p.faction === 'hero')
       .map(p => state.entities.find(e => e.id === p.leaderId));
     const witchLeaders = state.players.filter(p => p.faction === 'witch')
       .map(p => state.entities.find(e => e.id === p.leaderId));
 
-    // Hero starts should be in left columns (0-2), witch in right columns (39-41)
+    // Heroes should be at INN buildings
     for (const h of heroLeaders) {
-      assert.ok(h.col <= 2, `Hero leader at col ${h.col} should be <= 2`);
+      const t = state.tiles.get(hexKey(h.col, h.row));
+      assert.ok(t, `tile at hero pos ${h.col},${h.row} should exist`);
+      assert.equal(t.building, BuildingType.INN, `Hero leader at ${h.col},${h.row} should be at an INN`);
     }
+    // Witches should be at GRAVEYARD buildings
     for (const w of witchLeaders) {
-      assert.ok(w.col >= 39, `Witch leader at col ${w.col} should be >= 39`);
+      const t = state.tiles.get(hexKey(w.col, w.row));
+      assert.ok(t, `tile at witch pos ${w.col},${w.row} should exist`);
+      assert.equal(t.building, BuildingType.GRAVEYARD, `Witch leader at ${w.col},${w.row} should be at a GRAVEYARD`);
     }
   });
 });
