@@ -590,7 +590,7 @@ const MISSIONS = [
         count: 3,
         units: [{
           type: 'wood_golem',
-          spawnAt: 'map_edge',
+          spawnAt: 'near_hero',
           overrides: { maxHp: 2, hp: 2, attack: 1, defense: 1 },
           spawnLog: '🗿 A crude wood-and-bone golem lurches out of the alley!',
         }],

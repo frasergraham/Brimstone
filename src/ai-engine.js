@@ -108,8 +108,12 @@ export function assessBoard(sim) {
   const armyStrength = minions.reduce((sum, e) => sum + e.hp, 0);
 
   // Visible heroes — filtered by fog-of-war awareness.
+  // In no-witch campaign missions (PvE hunt scenarios), the witch leader's
+  // sense-the-hero role is absent, so ignore the minion sight limit entirely
+  // — every enemy always knows where the hero is and pursues relentlessly,
+  // instead of standing idle across the map.
   const WITCH_LEADER_SIGHT = 4;
-  const WITCH_MINION_SIGHT = 2;
+  const WITCH_MINION_SIGHT = witch ? 2 : Infinity;
   const allHeroes = sim.entities.filter(e => e.alive && e.owner === 'hero');
   const witchSideUnits = sim.entities.filter(e => e.alive && e.owner === 'witch');
   const visibleHeroes = allHeroes.filter(hero =>
@@ -618,8 +622,11 @@ export function genHuntHeroes(sim, board, budget) {
         }
       }
 
-      // If close (within reach this turn) — move toward target then attack
-      if (dist <= 4) {
+      // If close (within reach this turn) — move toward target then attack.
+      // No-witch campaign missions expand the pursuit radius so minions/golems
+      // keep chasing the hero across the map instead of giving up at dist 5+.
+      const pursuitRange = sim.witch ? 4 : 8;
+      if (dist <= pursuitRange) {
         sim.unitCommitments.set(simUnit.id, Goal.HUNT_HEROES);
         assignedUnits.add(simUnit.id);
         attackersAssigned++;

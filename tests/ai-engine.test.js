@@ -264,6 +264,32 @@ describe('assessBoard', () => {
     assert.equal(board.nodes[0].witchPresent, true);
     assert.equal(board.nodes[0].heroPresent, false);
   });
+
+  test('no-witch missions boost minion sight so lone minions can see the hero', () => {
+    // With a witch leader the minion-only sight is 2 hexes; the hero at (4,4)
+    // is 4 hexes from a minion at (0,0), so without a boost the hero would
+    // not be visible to the minion.
+    const minion = makeEntity({
+      id: 'golem', type: EntityType.WOOD_GOLEM, owner: 'witch',
+      col: 0, row: 0, hp: 2, maxHp: 2,
+    });
+    const hero = makeEntity({
+      id: 'hero1', type: EntityType.HERO, owner: 'hero',
+      col: 4, row: 4, hp: 8, maxHp: 8,
+    });
+
+    // With a witch leader present → minion sight stays at 2, hero invisible.
+    const simWithWitch = makeSim({ entities: [makeEntity({ id: 'witch1' }), minion, hero] });
+    const boardWithWitch = assessBoard(simWithWitch);
+    assert.equal(boardWithWitch.visibleHeroes.length, 0,
+      'hero should be outside minion sight when a witch leader is present');
+
+    // Without a witch leader → minion sight is boosted so hero is visible.
+    const simNoWitch = makeSim({ entities: [minion, hero] });
+    const boardNoWitch = assessBoard(simNoWitch);
+    assert.equal(boardNoWitch.visibleHeroes.length, 1,
+      'hero should be visible to lone minion in no-witch missions');
+  });
 });
 
 // ── scoreGoals ───────────────────────────────────────────────────────────────
