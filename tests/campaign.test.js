@@ -724,6 +724,66 @@ describe('Campaign class', () => {
     assert.ok(Campaign.isCampaignCompleted(hollowDef));
     localStorage.clear();
   });
+
+  test('getStatus returns "new" for a fresh campaign', () => {
+    const c = new Campaign(hollowDef);
+    assert.equal(c.getStatus(), 'new');
+    assert.equal(c.getCompletedCount(), 0);
+    assert.equal(c.getMissionCount(), hollowDef.missions.length);
+  });
+
+  test('getStatus returns "in-progress" with some missions completed', () => {
+    const c = new Campaign(hollowDef);
+    c.completedMissions.add(hollowDef.missions[0].id);
+    assert.equal(c.getStatus(), 'in-progress');
+    assert.equal(c.getCompletedCount(), 1);
+  });
+
+  test('getStatus returns "completed" when all missions are completed', () => {
+    const c = new Campaign(hollowDef);
+    for (const m of hollowDef.missions) c.completedMissions.add(m.id);
+    assert.equal(c.getStatus(), 'completed');
+    assert.equal(c.getCompletedCount(), hollowDef.missions.length);
+  });
+
+  test('static getCampaignProgress returns "new" with no save', () => {
+    localStorage.clear();
+    const p = Campaign.getCampaignProgress(hollowDef);
+    assert.equal(p.status, 'new');
+    assert.equal(p.completed, 0);
+    assert.equal(p.total, hollowDef.missions.length);
+  });
+
+  test('static getCampaignProgress reports in-progress from saved state', () => {
+    localStorage.clear();
+    const c = new Campaign(hollowDef);
+    c.completedMissions.add(hollowDef.missions[0].id);
+    c.save();
+    const p = Campaign.getCampaignProgress(hollowDef);
+    assert.equal(p.status, 'in-progress');
+    assert.equal(p.completed, 1);
+    assert.equal(p.total, hollowDef.missions.length);
+    localStorage.clear();
+  });
+
+  test('static getCampaignProgress reports completed from saved state', () => {
+    localStorage.clear();
+    const c = new Campaign(hollowDef);
+    for (const m of hollowDef.missions) c.completedMissions.add(m.id);
+    c.save();
+    const p = Campaign.getCampaignProgress(hollowDef);
+    assert.equal(p.status, 'completed');
+    assert.equal(p.completed, hollowDef.missions.length);
+    assert.equal(p.total, hollowDef.missions.length);
+    localStorage.clear();
+  });
+
+  test('getStatus for an empty-mission campaign stays "new"', () => {
+    const emptyDef = { id: 'empty', title: 'Empty', description: '', missions: [], mapBuilders: {}, firstMission: null };
+    const c = new Campaign(emptyDef);
+    assert.equal(c.getStatus(), 'new');
+    assert.equal(c.getMissionCount(), 0);
+  });
 });
 
 // ── snapshotSurvivor ────────────────────────────────────────────────────────

@@ -440,6 +440,39 @@ export class Campaign {
     return c.isComplete();
   }
 
+  /** Count of missions completed so far in this campaign. */
+  getCompletedCount() {
+    return this.campaignDef.missions.filter(m => this.completedMissions.has(m.id)).length;
+  }
+
+  /** Total number of missions in this campaign. */
+  getMissionCount() {
+    return this.campaignDef.missions.length;
+  }
+
+  /**
+   * Get a summary of this campaign's progress status.
+   * Returns one of: 'completed', 'in-progress', 'new'.
+   */
+  getStatus() {
+    if (this.getMissionCount() > 0 && this.isComplete()) return 'completed';
+    if (this.getCompletedCount() > 0) return 'in-progress';
+    return 'new';
+  }
+
+  /**
+   * Inspect the saved progress for a campaign without keeping an instance around.
+   * Returns { status, completed, total } where status is 'completed' | 'in-progress' | 'new'.
+   * If no save exists, returns status 'new' with completed=0.
+   */
+  static getCampaignProgress(campaignDef) {
+    const c = new Campaign(campaignDef);
+    const loaded = c.load();
+    const total = c.getMissionCount();
+    if (!loaded) return { status: 'new', completed: 0, total };
+    return { status: c.getStatus(), completed: c.getCompletedCount(), total };
+  }
+
   /** Get list of missions with their status for the mission select screen. */
   getMissionList() {
     return this.campaignDef.missions.map(m => {

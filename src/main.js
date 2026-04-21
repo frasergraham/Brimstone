@@ -2183,18 +2183,36 @@ function _showCampaignSelectScreen() {
   const listEl = document.getElementById('campaign-select-list');
   listEl.innerHTML = CAMPAIGNS.map(c => {
     const disabled = c.disabled === true;
-    const hasSave = !disabled && Campaign.exists(`campaign-${c.id}`);
+    const progress = disabled ? { status: 'new', completed: 0, total: 0 }
+                              : Campaign.getCampaignProgress(c);
     const locked = disabled || (c.prerequisiteCampaign
       ? !Campaign.isCampaignCompleted(getCampaignById(c.prerequisiteCampaign))
       : false);
-    const cls = `campaign-select-item${disabled ? ' disabled' : locked ? ' locked' : ''}`;
+    // Status class is applied when the campaign is playable and has progress.
+    const statusClass = (!disabled && !locked && progress.status !== 'new')
+      ? ` status-${progress.status}`
+      : '';
+    const cls = `campaign-select-item${disabled ? ' disabled' : locked ? ' locked' : ''}${statusClass}`;
     const titlePrefix = disabled ? '' : locked ? '🔒 ' : '';
+    let statusBadge = '';
+    if (disabled) {
+      statusBadge = '<div class="campaign-select-badge coming-soon">Coming Soon</div>';
+    } else if (locked) {
+      statusBadge = '<div class="campaign-select-badge locked-badge">Complete the previous chapter to unlock</div>';
+    } else if (progress.status === 'completed') {
+      statusBadge = '<div class="campaign-select-badge completed">✓ Completed</div>';
+    } else if (progress.status === 'in-progress') {
+      const progressText = progress.total > 0
+        ? `In Progress — ${progress.completed}/${progress.total} missions`
+        : 'In Progress';
+      statusBadge = `<div class="campaign-select-badge in-progress">${progressText}</div>`;
+    } else {
+      statusBadge = '<div class="campaign-select-badge new">New</div>';
+    }
     return `<div class="${cls}" data-campaign="${c.id}">
       <div class="campaign-select-title">${titlePrefix}${c.title}</div>
       <div class="campaign-select-desc">${c.description}</div>
-      ${hasSave ? '<div class="campaign-select-badge">Save found</div>' : ''}
-      ${disabled ? '<div class="campaign-select-badge coming-soon">Coming Soon</div>' : ''}
-      ${!disabled && locked ? '<div class="campaign-select-badge">Complete the previous chapter to unlock</div>' : ''}
+      ${statusBadge}
     </div>`;
   }).join('');
 
