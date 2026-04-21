@@ -1015,6 +1015,21 @@ export class UIController {
       if (pr && pr.width > 0 && pr.height > 0) panelLeft = pr.left;
     }
 
+    // Suppress buttons that would overlap the visible unit-stats-bar. The bar
+    // sits below the undo layer in z-order (20 vs 55), so without this the
+    // floating button covers the bar's deselect (✕) button and swallows taps —
+    // very noticeable on mobile, where the bar stretches across most of the top.
+    const statsBar = this._el('unit-stats-bar');
+    let barRect = null;
+    if (statsBar && statsBar.style?.display !== 'none' &&
+        typeof statsBar.getBoundingClientRect === 'function') {
+      const br = statsBar.getBoundingClientRect();
+      if (br && br.width > 0 && br.height > 0) barRect = br;
+    }
+    // Approximate undo-button dimensions (see .undo-float-btn in styles.css).
+    const UNDO_BTN_HALF_W = 26;
+    const UNDO_BTN_H      = 22;
+
     // Rebuild — bucket count is tiny (≤ faction unit count).
     layer.innerHTML = '';
     for (const b of buckets) {
@@ -1024,6 +1039,16 @@ export class UIController {
 
       // Skip buttons that would visually overlap the expanded plan panel.
       if (sx >= panelLeft) continue;
+
+      // Skip buttons that would overlap the unit-stats-bar. The button renders
+      // with transform: translate(-50%, -100%), so its visible rect is
+      //   x ∈ [sx - W/2, sx + W/2], y ∈ [sy - H, sy].
+      if (barRect) {
+        const bx1 = sx - UNDO_BTN_HALF_W, bx2 = sx + UNDO_BTN_HALF_W;
+        const by1 = sy - UNDO_BTN_H,      by2 = sy;
+        if (bx2 > barRect.left && bx1 < barRect.right &&
+            by2 > barRect.top  && by1 < barRect.bottom) continue;
+      }
 
       const btn = document.createElement('button');
       btn.type = 'button';

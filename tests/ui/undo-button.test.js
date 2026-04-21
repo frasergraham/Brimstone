@@ -253,3 +253,100 @@ describe('_handleActionButton: undo_pick', () => {
     assert.equal(ui._pendingUndoPick, null, 'pending pick should be cleared');
   });
 });
+
+// ── overlap suppression ──────────────────────────────────────────────────────
+//
+// The undo-button-layer sits at z-index 55, well above the unit-stats-bar
+// (z-index 20). When a unit's planned final hex is near the top-center of the
+// screen, the floating UNDO button can cover the bar's deselect (✕) button and
+// swallow taps. The renderer skips any undo button whose computed anchor
+// overlaps the visible bar — this keeps the deselect button reachable.
+
+/** Install a minimal fake layer that records appended buttons. */
+function spyOnLayer(els) {
+  const appended = [];
+  const layer = els['undo-button-layer'];
+  layer.appendChild = (btn) => { appended.push(btn); };
+  // innerHTML clear should not blow away our spy; resetting it is a no-op here.
+  return appended;
+}
+
+/** Stub a rect on a fake element. */
+function setRect(el, rect) {
+  el.getBoundingClientRect = () => rect;
+}
+
+describe('_refreshUndoButtons overlap suppression', () => {
+  test('skips buttons whose anchor would overlap the visible unit-stats-bar', () => {
+    const { ui, renderer, els } = makeUI();
+    const appended = spyOnLayer(els);
+
+    // Canvas fills the viewport.
+    setRect(fakeCanvas, { left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 });
+
+    // Unit-stats-bar visible at the top-center of the viewport.
+    const bar = els['unit-stats-bar'];
+    bar.style.display = 'flex';
+    setRect(bar, { left: 200, top: 8, right: 600, bottom: 68, width: 400, height: 60 });
+
+    // Plan panel hidden (no overlap from that side).
+    setRect(els['plan-panel'], { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 });
+
+    // Projected final hex sits directly beneath the bar → undo anchor lands inside it.
+    // sx = 0 + 400*1 = 400 (centered), sy = 0 + 60 - 30*0.85 ≈ 34.5 → within bar rect (8..68).
+    renderer.hexToCanvasPos = () => ({ x: 400, y: 60 });
+    ui._unitPlans.set('h1', [{ type: PlanActionType.MOVE, entityId: 'h1' }]);
+    setGhostPositions(renderer, { h1: { col: 5, row: 1 } });
+
+    ui._refreshUndoButtons();
+
+    assert.equal(appended.length, 0,
+      'button overlapping the deselect bar must be suppressed');
+  });
+
+  test('still draws buttons whose anchor falls outside the bar', () => {
+    const { ui, renderer, els } = makeUI();
+    const appended = spyOnLayer(els);
+
+    setRect(fakeCanvas, { left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 });
+
+    const bar = els['unit-stats-bar'];
+    bar.style.display = 'flex';
+    setRect(bar, { left: 200, top: 8, right: 600, bottom: 68, width: 400, height: 60 });
+
+    setRect(els['plan-panel'], { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 });
+
+    // Hex in the middle of the canvas — well below the bar.
+    renderer.hexToCanvasPos = () => ({ x: 400, y: 300 });
+    ui._unitPlans.set('h1', [{ type: PlanActionType.MOVE, entityId: 'h1' }]);
+    setGhostPositions(renderer, { h1: { col: 5, row: 5 } });
+
+    ui._refreshUndoButtons();
+
+    assert.equal(appended.length, 1,
+      'button below the bar should still render');
+  });
+
+  test('ignores the bar when it is hidden (display:none)', () => {
+    const { ui, renderer, els } = makeUI();
+    const appended = spyOnLayer(els);
+
+    setRect(fakeCanvas, { left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 });
+
+    // Bar is hidden — its rect should not suppress buttons even if it overlaps.
+    const bar = els['unit-stats-bar'];
+    bar.style.display = 'none';
+    setRect(bar, { left: 200, top: 8, right: 600, bottom: 68, width: 400, height: 60 });
+
+    setRect(els['plan-panel'], { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 });
+
+    renderer.hexToCanvasPos = () => ({ x: 400, y: 60 });
+    ui._unitPlans.set('h1', [{ type: PlanActionType.MOVE, entityId: 'h1' }]);
+    setGhostPositions(renderer, { h1: { col: 5, row: 1 } });
+
+    ui._refreshUndoButtons();
+
+    assert.equal(appended.length, 1,
+      'button should render when the bar is not visible');
+  });
+});
