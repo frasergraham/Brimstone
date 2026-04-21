@@ -1199,6 +1199,42 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         redrawFn();
         if (!_autoplay && hopDelay > 0) await playbackDelay(hopDelay);
       }
+
+      // Bounce-back for partial moves: if the unit stopped short due to an
+      // enemy or fort wall, play a short lunge toward the blocking hex and
+      // slide back so the player sees why the move ended early.
+      if (!_autoplay) {
+        const _spd2 = ui?.speedMode ?? 'cinematic';
+        const bumped = moveAnims.filter(({ ev }) =>
+          (ev.result?.blockedBy || ev.result?.blockedByFort)
+        );
+        if (bumped.length) {
+          for (const { ev, preSnap, path } of bumped) {
+            const bumpFrom = path.length > 0 ? path[path.length - 1] : preSnap;
+            const bumpTo = ev.result.blockedByFort
+              ? { col: ev.result.blockedByFort.col, row: ev.result.blockedByFort.row }
+              : ev.result.blockedBy
+                ? { col: ev.result.blockedBy.col, row: ev.result.blockedBy.row }
+                : null;
+            if (!bumpTo) continue;
+            renderer.addLungeAnim(
+              ev.action.entityId,
+              bumpFrom.col, bumpFrom.row,
+              bumpTo.col, bumpTo.row,
+              preSnap.type, preSnap.owner, preSnap.title ?? null,
+            );
+            if (ev.result.blockedByFort) {
+              renderer.addFlash(bumpTo.col, bumpTo.row, '🏰',
+                'rgba(170,170,175,0.15)', 900, 0.75, 'rgba(200,200,210,1)');
+            }
+          }
+          redrawFn();
+          await playbackDelay(_spd2 === 'vfast' ? 140 : 240);
+          renderer.returnAllLungeAnims();
+          await renderer.waitForAnimations();
+          redrawFn();
+        }
+      }
     } else {
       // No visible moves — still need to patch display entities to final positions
       for (const ev of events) {
@@ -1338,6 +1374,50 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         const actorSnap = step.entitySnapshot?.find(e => e.id === action.entityId);
         if (actorSnap) renderer.addSpawnAnim(actorSnap.col, actorSnap.row, '#b39ddb');
         hadBattle = true;
+      }
+    }
+
+    // ── Phase 2a': fully-blocked moves (ACTION_FAIL with blockedBy/blockedByFort) ───
+    // Unit never moved at all — play a bounce-back from the actor's pre-step hex
+    // toward the blocker so the player sees why the move failed.
+    const failedMoves = allStepEvents.filter(ev =>
+      ev.type === ResEventType.ACTION_FAIL &&
+      ev.action?.type === PlanActionType.MOVE &&
+      (ev.blockedBy || ev.blockedByFort)
+    );
+    if (!_autoplay && failedMoves.length > 0) {
+      const _spd4 = ui?.speedMode ?? 'cinematic';
+      for (const ev of failedMoves) {
+        const preSnap = step.entitySnapshot?.find(e => e.id === ev.action.entityId);
+        if (!preSnap) continue;
+        // Visibility gate — mirrors the move-anim rules
+        const isOpponent = humanFaction && ev.faction !== humanFaction;
+        const visible = !isOpponent
+          || _isFogVisible(preSnap.col, preSnap.row, humanFaction, step.entitySnapshot, state.phase)
+          || _isFogVisible(ev.action.toCol, ev.action.toRow, humanFaction, step.entitySnapshot, state.phase);
+        if (!visible) continue;
+
+        const bumpTo = ev.blockedByFort
+          ? { col: ev.blockedByFort.col, row: ev.blockedByFort.row }
+          : { col: ev.blockedBy.col, row: ev.blockedBy.row };
+        renderer.addLungeAnim(
+          ev.action.entityId,
+          preSnap.col, preSnap.row,
+          bumpTo.col, bumpTo.row,
+          preSnap.type, preSnap.owner, preSnap.title ?? null,
+        );
+        if (ev.blockedByFort) {
+          renderer.addFlash(bumpTo.col, bumpTo.row, '🏰',
+            'rgba(170,170,175,0.15)', 900, 0.75, 'rgba(200,200,210,1)');
+        }
+        hadMove = true;
+      }
+      if (failedMoves.length > 0) {
+        redrawFn();
+        await playbackDelay(_spd4 === 'vfast' ? 140 : 240);
+        renderer.returnAllLungeAnims();
+        await renderer.waitForAnimations();
+        redrawFn();
       }
     }
 

@@ -178,6 +178,18 @@ export class Tile {
 // Hard cap on fortification level.
 export const MAX_FORTIFY_LEVEL = 6;
 
+// Level at (and above) which a fortification becomes an impassable wall for
+// witch-side units. Level 1 is passable; level 2+ is a wall that must be
+// battered down to level 1 before witch units can enter.
+export const FORT_IMPASSABLE_THRESHOLD = 2;
+
+// True if `tile` is fortified strongly enough to block movement for the given faction.
+// Only witch-side units are blocked — hero units move freely across their own walls.
+export function isFortBlocking(tile, faction) {
+  if (faction !== 'witch') return false;
+  return (tile?.fortifyLevel || 0) >= FORT_IMPASSABLE_THRESHOLD;
+}
+
 // Combat bonuses granted by a fortified hex. Hero units fighting from a
 // fortified hex receive these bonuses (attacker rolls +attack, defender rolls
 // +defense). Witch units never benefit from fortifications.

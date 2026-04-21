@@ -8,7 +8,7 @@
 //   CONTROL_NODES   — find and hold power nodes
 //   DEFEND_WITCH    — flee when health low or outnumbered
 
-import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, bestWitchObjective, nearestBuilding, roundsUntilScoring, scoreNodeFeasibility, WITCH_PERSONALITIES } from './ai.js';
+import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, bestWitchObjective, nearestBuilding, roundsUntilScoring, scoreNodeFeasibility, WITCH_PERSONALITIES, adjacentBlockingFortToward } from './ai.js';
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
 import { EntityType } from './entities.js';
@@ -651,6 +651,25 @@ export function genHuntHeroes(sim, board, budget) {
           }
 
           const step = roadStepToward(sim, simUnit, target.entity);
+          // Prefer sieging a wall if it stands between us and the target
+          // (i.e. it's strictly closer to the target than any walkable step).
+          const wall = adjacentBlockingFortToward(sim, simUnit, target.entity);
+          if (wall) {
+            const stepDist = step
+              ? hexDistance(step.col, step.row, target.entity.col, target.entity.row)
+              : Infinity;
+            const wallDist = hexDistance(wall.col, wall.row, target.entity.col, target.entity.row);
+            if (wallDist < stepDist || !step) {
+              actions.push({
+                type: PlanActionType.BATTLE_HEX, entityId: simUnit.id,
+                targetCol: wall.col, targetRow: wall.row,
+                _priority: 2, _goal: Goal.HUNT_HEROES,
+              });
+              sim.applySiege(wall.col, wall.row);
+              remaining--;
+              break;
+            }
+          }
           if (!step) break;
 
           actions.push({
@@ -1010,6 +1029,26 @@ export function genControlNodes(sim, board, budget) {
         if (simUnit.col === targetHex.col && simUnit.row === targetHex.row) break;
 
         const step = roadStepToward(sim, simUnit, targetHex);
+        // Prefer sieging a wall if it's strictly closer to the node than the
+        // best walkable step — punches through hero defensive lines instead
+        // of taking long detours.
+        const wall = adjacentBlockingFortToward(sim, simUnit, targetHex);
+        if (wall) {
+          const stepDist = step
+            ? hexDistance(step.col, step.row, targetHex.col, targetHex.row)
+            : Infinity;
+          const wallDist = hexDistance(wall.col, wall.row, targetHex.col, targetHex.row);
+          if (wallDist < stepDist || !step) {
+            actions.push({
+              type: PlanActionType.BATTLE_HEX, entityId: simUnit.id,
+              targetCol: wall.col, targetRow: wall.row,
+              _priority: 3, _goal: Goal.CONTROL_NODES,
+            });
+            sim.applySiege(wall.col, wall.row);
+            remaining--;
+            break;
+          }
+        }
         if (!step) break;
 
         actions.push({

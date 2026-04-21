@@ -12,10 +12,11 @@ let _forcedDice = [];
  * directly without constructing a GameState.
  */
 export function setForcedDice(...values) { _forcedDice = [...values]; }
-function _nextDie(sides) {
+export function nextDie(sides) {
   if (_forcedDice.length > 0) return _forcedDice.shift();
   return Math.ceil(Math.random() * sides);
 }
+const _nextDie = nextDie;
 
 export const EntityType = Object.freeze({
   HERO:       'hero',

@@ -2,7 +2,7 @@
 // Hero AI: hero-ai-engine.js (HeroAIEngine)
 // Witch AI: ai-engine.js (WitchAIEngine)
 import { getNeighbors, hexDistance, hexKey } from './hex.js';
-import { TileType } from './tiles.js';
+import { TileType, isFortBlocking } from './tiles.js';
 import { EntityType } from './entities.js';
 import { Phase, computeActions, computeActionsForPlayer, nodeController, countHeldNodes } from './game.js';
 import { getReachableHexes } from './actions.js';
@@ -28,6 +28,25 @@ export function stepToward(state, actor, target) {
     }
   }
   return null;
+}
+
+// Returns an adjacent hex that has an impassable fortification (blocking `actor`)
+// and is also the adjacent hex closest to `target`.  Used by the witch AI to
+// decide whether to siege a wall instead of continuing to path-find around it.
+// Returns { col, row, fortLevel } or null.
+export function adjacentBlockingFortToward(state, actor, target) {
+  if (!target) return null;
+  let best = null, bestDist = Infinity;
+  for (const n of getNeighbors(actor.col, actor.row)) {
+    const t = state.tiles.get(hexKey(n.col, n.row));
+    if (!isFortBlocking(t, actor.owner)) continue;
+    const d = hexDistance(n.col, n.row, target.col, target.row);
+    if (d < bestDist) {
+      best = { col: n.col, row: n.row, fortLevel: t.fortifyLevel };
+      bestDist = d;
+    }
+  }
+  return best;
 }
 
 // Road-aware movement: picks the reachable hex (within 1 move action) closest
@@ -249,6 +268,14 @@ export class PlanSimState {
   applyGuard(entityId) {
     const e = this.entities.find(en => en.id === entityId);
     if (e) e.guarding = (e.guarding || 0) + 1;
+    this.actionsLeft--;
+  }
+
+  // Book a wall-siege action. The sim holds `tiles` as a read-only reference to
+  // real game state, so we do NOT mutate fortifyLevel here. Callers should
+  // break out of their per-unit loop after queueing a siege so we don't keep
+  // targeting the same wall in the same turn-plan.
+  applySiege(_col, _row) {
     this.actionsLeft--;
   }
 
