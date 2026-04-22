@@ -2,7 +2,7 @@
 // serializeState  → plain JSON-safe snapshot (network transmission, save storage)
 // deserializeState ← reconstruct a live GameState from a saved snapshot (resume)
 import { VERSION }           from '../src/version.js';
-import { Entity, bumpEntityId } from '../src/entities.js';
+import { Entity } from '../src/entities.js';
 import { GameState }         from '../src/game.js';
 import { setMapDimensions }  from '../src/hex.js';
 
@@ -122,6 +122,8 @@ export function serializeState(state) {
     // duplicate survivor names when a mid-game save is resumed and new
     // survivors spawn from unexplored buildings. nextEntityId is informational;
     // on resume we derive the floor from the max restored entity id anyway.
+    // `forcedDice` is intentionally NOT persisted — it's a per-round tutorial
+    // scratch queue re-populated by the mission conductor each planning phase.
     nextEntityId:         state.nextEntityId ?? 1,
     usedRosterIndices:    [...(state.usedRosterIndices ?? [])],
     // Per-player planning state (multiplayer) — serialized so hibernated saves
@@ -160,15 +162,14 @@ export function deserializeState(snap) {
     return e;
   });
 
-  // Advance both the per-state counter (used for new spawns from this point
-  // forward) and the legacy module-level counter (in case any code path still
-  // relies on it) past every restored ID.
+  // Advance the per-state counter past every restored ID; GameState.bumpEntityId
+  // also advances the module-level counter so any standalone createFoo() paths
+  // (editor previews, legacy tests) never collide with restored entities.
   const maxId = snap.entities.reduce((max, e) => {
     const n = parseInt(e.id?.slice(1) ?? '0', 10);
     return isNaN(n) ? max : Math.max(max, n);
   }, 0);
   state.bumpEntityId(maxId);
-  bumpEntityId(maxId);
 
   // Restore per-state roster tracker if the snapshot carries it; older saves
   // that predate this field will keep the fresh empty set from the

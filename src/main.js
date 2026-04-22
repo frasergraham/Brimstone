@@ -2607,7 +2607,7 @@ function _initCampaignMission(missionDef) {
   // Pre-place enemy units from mission definition
   if (missionDef.enemyUnits) {
     for (const enemy of missionDef.enemyUnits) {
-      const e = _createEnemyEntity(enemy.type, enemy.col, enemy.row);
+      const e = _createEnemyEntity(enemy.type, enemy.col, enemy.row, state);
       if (e) {
         if (enemy.overrides) Object.assign(e, enemy.overrides);
         state.entities.push(e);

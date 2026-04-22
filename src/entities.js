@@ -6,6 +6,11 @@ let _nextId = 1;
 // Forced-dice queue — for tutorial canned outcomes.  Push values via setForcedDice();
 // each call to _nextDie() pops from the front, or falls back to a real random roll.
 let _forcedDice = [];
+/**
+ * @deprecated Use `state.setForcedDice(...)` instead. This module-level
+ * variant exists only for raw tests that invoke `Entity.resolveCombat`
+ * directly without constructing a GameState.
+ */
 export function setForcedDice(...values) { _forcedDice = [...values]; }
 function _nextDie(sides) {
   if (_forcedDice.length > 0) return _forcedDice.shift();
@@ -449,6 +454,11 @@ export function createSurvivor(col, row, ownerId = null, state = null) {
   return e;
 }
 
+/**
+ * @deprecated Use `state.resetRoster()` instead. This module-level reset
+ * remains only for editor previews and legacy tests that run without a
+ * GameState. All in-game paths go through the per-state tracker.
+ */
 export function resetRoster() {
   _usedRosterIndices.clear();
 }
@@ -465,6 +475,10 @@ export function survivorRosterIndexByName(name) {
  * Mark survivor roster entries as used by name so they won't be generated
  * again by createSurvivor(). Used by campaign mode to exclude carried-over
  * survivors from the discoverable pool.
+ *
+ * @deprecated Use `state.markRosterUsedByName(name)` instead. This
+ * module-level variant exists only for editor previews and legacy tests
+ * that run without a GameState.
  */
 export function markRosterUsedByName(name) {
   const idx = SURVIVOR_ROSTER.findIndex(c => c.name === name);
@@ -501,9 +515,13 @@ export function createIronGolem(col, row, ownerId = null, state = null) {
 }
 
 /**
- * Advance the entity ID counter past `minNumericId` to prevent collisions
- * when deserializing a saved game that already contains entities with IDs
- * up to that value.  Call this after reconstructing saved entities.
+ * Advance the module-level entity ID counter past `minNumericId`.
+ *
+ * Primarily called indirectly by `GameState.bumpEntityId()` to keep the
+ * module counter at or above each state's counter, so standalone factory
+ * calls (editor previews, legacy tests) never collide with state entities.
+ *
+ * Direct callers should prefer `state.bumpEntityId()`.
  */
 export function bumpEntityId(minNumericId) {
   if (minNumericId >= _nextId) _nextId = minNumericId + 1;
