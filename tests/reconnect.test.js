@@ -200,7 +200,7 @@ describe('reconnect stuck-state prevention — main.js', () => {
   test('onError checks reconnect overlay visibility for in-game errors', () => {
     const idx = mainSource.search(/onError\(msg(?:,\s*raw)?\)\s*\{/);
     assert.ok(idx !== -1, 'onError handler must exist');
-    const body = mainSource.slice(idx, idx + 1200);
+    const body = mainSource.slice(idx, idx + 1500);
     assert.ok(
       body.includes('reconnect-overlay'),
       'onError must check reconnect overlay visibility to detect reconnection failures',
@@ -210,10 +210,58 @@ describe('reconnect stuck-state prevention — main.js', () => {
   test('onError calls _showOnlineScreen when reconnection fails in-game', () => {
     const idx = mainSource.search(/onError\(msg(?:,\s*raw)?\)\s*\{/);
     assert.ok(idx !== -1);
-    const body = mainSource.slice(idx, idx + 1200);
+    const body = mainSource.slice(idx, idx + 1500);
     assert.ok(
       body.includes('_showOnlineScreen'),
       'onError must call _showOnlineScreen to wipe state and return to menu on reconnection failure',
+    );
+  });
+});
+
+// ── Fix 7: silent reconnect must not navigate away from unrelated menus ─────
+
+describe('menu-state preservation on silent reconnect — main.js', () => {
+  test('_isOnOnlineFlow helper exists', () => {
+    assert.ok(
+      mainSource.includes('function _isOnOnlineFlow'),
+      'main.js must define _isOnOnlineFlow to gate online-flow navigation',
+    );
+  });
+
+  test('_isOnAsyncFlow helper exists', () => {
+    assert.ok(
+      mainSource.includes('function _isOnAsyncFlow'),
+      'main.js must define _isOnAsyncFlow to gate async-flow navigation',
+    );
+  });
+
+  test('onError gates _showOnlineScreen behind _isOnOnlineFlow', () => {
+    const idx = mainSource.search(/onError\(msg(?:,\s*raw)?\)\s*\{/);
+    assert.ok(idx !== -1, 'onError handler must exist');
+    const body = mainSource.slice(idx, idx + 1500);
+    assert.ok(
+      body.includes('_isOnOnlineFlow'),
+      'onError must call _isOnOnlineFlow before navigating to the online screen — otherwise a stray error during silent reconnect would yank the user out of unrelated menus',
+    );
+  });
+
+  test('authError patched _route gates navigation behind _isOnOnlineFlow / _isOnAsyncFlow', () => {
+    const idx = mainSource.indexOf("if (msg.type === 'authError')");
+    assert.ok(idx !== -1, 'authError handler must exist in patched _route');
+    const body = mainSource.slice(idx, idx + 800);
+    assert.ok(
+      body.includes('_isOnOnlineFlow') && body.includes('_isOnAsyncFlow'),
+      'authError handler must check _isOnOnlineFlow / _isOnAsyncFlow before navigating, so a silent reconnect that fails auth does not eject the user from non-network menus',
+    );
+  });
+
+  test('authError patched _route still updates the session bar when not navigating', () => {
+    const idx = mainSource.indexOf("if (msg.type === 'authError')");
+    assert.ok(idx !== -1);
+    const body = mainSource.slice(idx, idx + 800);
+    assert.ok(
+      body.includes('_updateSessionBar'),
+      'authError handler must call _updateSessionBar so the user can see the signed-out state on whichever menu they are on',
     );
   });
 });
