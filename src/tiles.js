@@ -178,15 +178,17 @@ export class Tile {
 // Hard cap on fortification level.
 export const MAX_FORTIFY_LEVEL = 6;
 
-// Level at (and above) which a fortification becomes an impassable wall for
-// witch-side units. Level 1 is passable; level 2+ is a wall that must be
-// battered down to level 1 before witch units can enter.
+// Level at (and above) which a fortification becomes an impassable wall.
+// Level 1 is passable; level 2+ is a wall for factions that are blocked by walls
+// (see `Faction.isBlockedByWalls()`). Walls below the threshold are just
+// combat-bonus terrain and anyone may enter.
 export const FORT_IMPASSABLE_THRESHOLD = 2;
 
-// True if `tile` is fortified strongly enough to block movement for the given faction.
-// Only witch-side units are blocked — hero units move freely across their own walls.
-export function isFortBlocking(tile, faction) {
-  if (faction !== 'witch') return false;
+// Terrain-only check: is this tile a wall strong enough to block movement?
+// Faction-specific gating ("does this faction get blocked by walls?") lives
+// on the Faction class — callers typically combine both:
+//   isFortWall(tile) && getFaction(actor.owner).isBlockedByWalls()
+export function isFortWall(tile) {
   return (tile?.fortifyLevel || 0) >= FORT_IMPASSABLE_THRESHOLD;
 }
 

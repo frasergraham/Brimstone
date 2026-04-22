@@ -7,7 +7,7 @@ import { GameState, Phase, Player } from '../src/game.js';
 import {
   executeMove, executeExplore, executeBattle, executeFortify,
   executeSummon, executeHeal, executeUseItem, executeUseAbility,
-  executeFortAssault,
+  executeFortAssault, isFortBlocking,
   getReachableHexes, sightRange, survivorFindMultiplier,
 } from '../src/actions.js';
 import {
@@ -15,7 +15,7 @@ import {
   createHero, createWitch, createMinion, createZombie, createSurvivor,
   createIronGolem, resetRoster, setForcedDice,
 } from '../src/entities.js';
-import { TileType, BuildingType, ResourceType, WeaponType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus, isFortBlocking, FORT_IMPASSABLE_THRESHOLD } from '../src/tiles.js';
+import { TileType, BuildingType, ResourceType, WeaponType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus, FORT_IMPASSABLE_THRESHOLD } from '../src/tiles.js';
 import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import { applyPostRoundEffects } from '../src/post-round-effects.js';
 

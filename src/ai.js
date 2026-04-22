@@ -2,10 +2,10 @@
 // Hero AI: hero-ai-engine.js (HeroAIEngine)
 // Witch AI: ai-engine.js (WitchAIEngine)
 import { getNeighbors, hexDistance, hexKey } from './hex.js';
-import { TileType, isFortBlocking } from './tiles.js';
+import { TileType } from './tiles.js';
 import { EntityType } from './entities.js';
 import { Phase, computeActions, computeActionsForPlayer, nodeController, countHeldNodes } from './game.js';
-import { getReachableHexes } from './actions.js';
+import { getReachableHexes, isFortBlocking } from './actions.js';
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 

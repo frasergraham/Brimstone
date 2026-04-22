@@ -159,7 +159,7 @@ function runAction(state, action, faction, playerId = null) {
         // Witch siege: if no enemy is on the hex but a wall (fort >= threshold)
         // stands there, battering it reduces its level. Otherwise whiff.
         const targetTile = state.tiles.get(hexKey(action.targetCol, action.targetRow));
-        if (entity.owner === 'witch' && targetTile &&
+        if (getFaction(entity.owner).canAssaultFortifications() && targetTile &&
             (targetTile.fortifyLevel || 0) >= FORT_IMPASSABLE_THRESHOLD) {
           const r = executeFortAssault(state, entity, action.targetCol, action.targetRow);
           if (!r.success) return { kind: 'fail', reason: r.log[0] };

@@ -2,7 +2,7 @@
 import { getNeighbors, hexKey, hexDistance } from './hex.js';
 import {
   TileType, ResourceType, WEAPON_LABEL, BUILDING_LOOT, TERRAIN_LOOT, rollLoot,
-  MAX_FORTIFY_LEVEL, getFortifyCombatBonus, isFortBlocking,
+  MAX_FORTIFY_LEVEL, getFortifyCombatBonus, isFortWall,
   FORT_IMPASSABLE_THRESHOLD,
 } from './tiles.js';
 import {
@@ -43,6 +43,12 @@ function hasVisibleEnemy(state, actor, col, row, visibleEnemyHexes) {
   if (!hasEnemy(state, actor, col, row)) return false;
   if (!visibleEnemyHexes) return true;
   return visibleEnemyHexes.has(hexKey(col, row));
+}
+
+// True if this tile is a wall strong enough to block `actor`'s movement.
+// Combines terrain-level check with the actor's faction predicate.
+export function isFortBlocking(tile, actorOwner) {
+  return isFortWall(tile) && getFaction(actorOwner).isBlockedByWalls();
 }
 
 // Cost-based movement: road/bridge/building tiles cost 1, all other passable
@@ -860,7 +866,7 @@ export function executeBattle(state, actor, target) {
 // roll. Hit drops the fort by 1 level; crush (attack ≥ 2× defense) drops it by 2.
 // No counter-attack. The fort is only attackable at level ≥ FORT_IMPASSABLE_THRESHOLD.
 export function executeFortAssault(state, actor, targetCol, targetRow) {
-  if (actor.owner !== 'witch') {
+  if (!getFaction(actor.owner).canAssaultFortifications()) {
     return { success: false, log: ['Only witch-side units can assault fortifications.'] };
   }
   const t = tile(state, targetCol, targetRow);
