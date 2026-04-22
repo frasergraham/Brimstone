@@ -1101,7 +1101,9 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   top: 8px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 20;
+  /* Must sit above #undo-button-layer (z-index 55) so the deselect (✕) button
+     isn't covered by floating UNDO buttons anchored near the top of the map. */
+  z-index: 56;
   display: flex;
   align-items: center;
   gap: 0.5rem;
