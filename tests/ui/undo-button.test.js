@@ -287,3 +287,151 @@ describe('_handleActionButton: undo_pick', () => {
     assert.equal(ui._pendingUndoPick, null, 'pending pick should be cleared');
   });
 });
+
+// ── z-order + hit-test guarantees ────────────────────────────────────────────
+//
+// The unit-stats-bar sits above the undo-button-layer so the deselect (✕)
+// button isn't covered by a floating UNDO anchored near the top of the map.
+// But the bar's chrome must itself be pointer-events:none, with its buttons
+// re-enabling pointer-events — otherwise the bar would swallow taps meant for
+// an UNDO button it happens to cover on mobile (where the bar spans ~92vw).
+
+describe('unit-stats-bar layering vs #undo-button-layer', () => {
+  async function readStyles() {
+    const { readFileSync } = await import('node:fs');
+    const { resolve, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    return readFileSync(resolve(__dirname, '..', '..', 'styles.css'), 'utf8');
+  }
+
+  function blockFor(css, selector) {
+    const re = new RegExp(`${selector.replace(/[.#]/g, '\\$&')}\\s*\\{[^}]*\\}`);
+    const m = css.match(re);
+    assert.ok(m, `expected a ${selector} block in styles.css`);
+    return m[0];
+  }
+
+  test('#unit-stats-bar z-index is above #undo-button-layer', async () => {
+    const css  = await readStyles();
+    const barZ  = Number((blockFor(css, '#unit-stats-bar'    ).match(/z-index:\s*(\d+)/) || [])[1]);
+    const undoZ = Number((blockFor(css, '#undo-button-layer' ).match(/z-index:\s*(\d+)/) || [])[1]);
+    assert.ok(Number.isFinite(barZ) && Number.isFinite(undoZ),
+      'both blocks must set z-index');
+    assert.ok(barZ > undoZ,
+      `#unit-stats-bar z-index (${barZ}) must be above #undo-button-layer (${undoZ})`);
+  });
+
+  test('#unit-stats-bar is pointer-events:none so UNDO stays clickable underneath', async () => {
+    const css = await readStyles();
+    const bar = blockFor(css, '#unit-stats-bar');
+    assert.match(bar, /pointer-events:\s*none/,
+      'bar chrome must not capture taps — otherwise it swallows UNDO clicks it visually covers');
+  });
+
+  test('.usb-deselect-btn and .usb-cycle-btn re-enable pointer-events', async () => {
+    const css = await readStyles();
+    assert.match(blockFor(css, '.usb-deselect-btn'), /pointer-events:\s*auto/,
+      'deselect button must opt back in to hit testing');
+    assert.match(blockFor(css, '.usb-cycle-btn'), /pointer-events:\s*auto/,
+      'cycle buttons must opt back in to hit testing');
+  });
+});
+
+// ── stable DOM across RAF ticks ──────────────────────────────────────────────
+//
+// _refreshUndoButtons runs every frame via requestAnimationFrame. Originally
+// it did `layer.innerHTML = ''` and rebuilt each button — destroying the touch
+// target mid-gesture on mobile, so the tap never produced a click. Keep the
+// same DOM nodes across calls; only update their positions.
+
+/** Spy that records appendChild / remove and lets the UI mutate a live child list. */
+function makeLayerSpy(els) {
+  const layer = els['undo-button-layer'];
+  const kids  = [];
+  layer.children = kids;
+  layer.appendChild = (child) => {
+    kids.push(child);
+    child.remove = () => {
+      const i = kids.indexOf(child);
+      if (i >= 0) kids.splice(i, 1);
+    };
+  };
+  // Stub out the plan-panel rect so the existing panel-suppression check
+  // (sx >= panelLeft) doesn't filter every button out in tests.
+  els['plan-panel'].getBoundingClientRect = () => ({
+    left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0,
+  });
+  return kids;
+}
+
+/** Minimal fake renderer.hexToCanvasPos that puts each hex at a unique spot. */
+function installPositioning(renderer) {
+  renderer.hexToCanvasPos = (col, row) => ({ x: 100 + col * 50, y: 100 + row * 50 });
+}
+
+describe('_refreshUndoButtons DOM stability', () => {
+  test('reuses the same button element across repeated refreshes', () => {
+    const { ui, renderer, els } = makeUI();
+    const kids = makeLayerSpy(els);
+    installPositioning(renderer);
+
+    ui._unitPlans.set('h1', [{ type: PlanActionType.MOVE, entityId: 'h1' }]);
+    setGhostPositions(renderer, { h1: { col: 3, row: 4 } });
+
+    ui._refreshUndoButtons();
+    assert.equal(kids.length, 1, 'first refresh creates the button');
+    const btn = kids[0];
+    assert.equal(btn.dataset.key, '3,4', 'button is keyed by hex');
+
+    // Two more RAF-style refreshes — nothing changed.
+    ui._refreshUndoButtons();
+    ui._refreshUndoButtons();
+
+    assert.equal(kids.length, 1, 'still exactly one button');
+    assert.strictEqual(kids[0], btn,
+      'same DOM node is reused — otherwise taps that span multiple frames are dropped on mobile');
+  });
+
+  test('updates position of an existing button when its hex moves (pan/zoom)', () => {
+    const { ui, renderer, els } = makeUI();
+    const kids = makeLayerSpy(els);
+    let origin = { x: 100, y: 100 };
+    renderer.hexToCanvasPos = () => ({ x: origin.x, y: origin.y });
+
+    ui._unitPlans.set('h1', [{ type: PlanActionType.MOVE, entityId: 'h1' }]);
+    setGhostPositions(renderer, { h1: { col: 3, row: 4 } });
+
+    ui._refreshUndoButtons();
+    const btn = kids[0];
+    const before = { left: btn.style.left, top: btn.style.top };
+
+    // Simulate a pan — canvas-space position changes.
+    origin = { x: 180, y: 220 };
+    ui._refreshUndoButtons();
+
+    assert.strictEqual(kids[0], btn, 'same node');
+    assert.notEqual(btn.style.left, before.left, 'left updated');
+    assert.notEqual(btn.style.top,  before.top,  'top updated');
+  });
+
+  test('removes orphaned buttons when the planned hex changes', () => {
+    const { ui, renderer, els } = makeUI();
+    const kids = makeLayerSpy(els);
+    installPositioning(renderer);
+
+    ui._unitPlans.set('h1', [{ type: PlanActionType.MOVE, entityId: 'h1' }]);
+    setGhostPositions(renderer, { h1: { col: 3, row: 4 } });
+    ui._refreshUndoButtons();
+    assert.equal(kids.length, 1);
+    const first = kids[0];
+
+    // Plan re-routes to a new hex → old bucket gone, new one appears.
+    setGhostPositions(renderer, { h1: { col: 7, row: 2 } });
+    ui._refreshUndoButtons();
+
+    assert.equal(kids.length, 1, 'exactly one button at any time');
+    assert.notStrictEqual(kids[0], first, 'orphan was removed, new node appended');
+    assert.equal(kids[0].dataset.key, '7,2');
+  });
+});

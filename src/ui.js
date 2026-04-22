@@ -983,10 +983,36 @@ export class UIController {
     return [{ col: pos.col, row: pos.row, entityIds: [selectedId] }];
   }
 
+  /**
+   * Attach layer-level click/touchend delegation once. Buttons carry a
+   * `data-key` ("col,row"); the handler looks up the live bucket at event
+   * time so we don't need to rebind handlers each frame.
+   */
+  _initUndoLayerEvents() {
+    if (this._undoLayerInited) return;
+    const layer = this._el('undo-button-layer');
+    if (!layer || typeof layer.addEventListener !== 'function') return;
+    this._undoLayerInited = true;
+    const handle = (e) => {
+      const btn = e.target?.closest?.('.undo-float-btn');
+      if (!btn) return;
+      if (e.type === 'touchend' && typeof e.preventDefault === 'function') e.preventDefault();
+      if (typeof e.stopPropagation === 'function') e.stopPropagation();
+      const key = btn.dataset?.key;
+      if (!key) return;
+      const bucket = this._computeLastActionHexes()
+        .find(b => `${b.col},${b.row}` === key);
+      if (bucket) this._onUndoButtonClicked(bucket);
+    };
+    layer.addEventListener('click', handle);
+    layer.addEventListener('touchend', handle, { passive: false });
+  }
+
   /** Render (or clear) floating UNDO buttons for the current plan state. */
   _refreshUndoButtons() {
     const layer = this._el('undo-button-layer');
     if (!layer) return;
+    this._initUndoLayerEvents();
 
     if (!this._planMode || this._planSubmitted || !this.renderer || !this.canvas) {
       if ((layer.childNodes?.length ?? 0)) layer.innerHTML = '';
@@ -1011,31 +1037,41 @@ export class UIController {
       if (pr && pr.width > 0 && pr.height > 0) panelLeft = pr.left;
     }
 
-    // Rebuild — bucket count is tiny (≤ faction unit count).
-    layer.innerHTML = '';
+    // Build desired state keyed by hex.
+    const desired = new Map();
     for (const b of buckets) {
       const { x, y } = this.renderer.hexToCanvasPos(b.col, b.row);
       const sx = canvasRect.left + x * scale;
       const sy = canvasRect.top  + y * scale - hexScreenPx * 0.85;
-
-      // Skip buttons that would visually overlap the expanded plan panel.
       if (sx >= panelLeft) continue;
+      desired.set(`${b.col},${b.row}`, { sx, sy });
+    }
 
-      const btn = document.createElement('button');
+    // Reconcile existing children with desired state. Mutating in place
+    // (instead of rebuilding innerHTML at 60fps) keeps each button as a
+    // stable touch target across frames — otherwise a tap is destroyed
+    // mid-gesture and the UNDO press never registers on mobile.
+    const existing = new Map();
+    const children = Array.from(layer.children || []);
+    for (const child of children) {
+      const k = child.dataset?.key;
+      if (k && desired.has(k)) existing.set(k, child);
+      else if (typeof child.remove === 'function') child.remove();
+    }
+    for (const [key, { sx, sy }] of desired) {
+      let btn = existing.get(key);
+      if (btn) {
+        btn.style.left = `${sx}px`;
+        btn.style.top  = `${sy}px`;
+        continue;
+      }
+      btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'undo-float-btn';
       btn.textContent = 'UNDO';
+      btn.dataset.key = key;
       btn.style.left = `${sx}px`;
       btn.style.top  = `${sy}px`;
-      const bucketRef = b; // capture
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this._onUndoButtonClicked(bucketRef);
-      });
-      btn.addEventListener('touchend', (e) => {
-        e.preventDefault();
-        this._onUndoButtonClicked(bucketRef);
-      }, { passive: false });
       layer.appendChild(btn);
     }
   }
