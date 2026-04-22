@@ -1102,8 +1102,12 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   left: 50%;
   transform: translateX(-50%);
   /* Must sit above #undo-button-layer (z-index 55) so the deselect (✕) button
-     isn't covered by floating UNDO buttons anchored near the top of the map. */
+     isn't covered by floating UNDO buttons anchored near the top of the map.
+     Pointer events are disabled on the chrome and re-enabled on the interactive
+     children only — this way the bar can visually cover an UNDO button without
+     swallowing taps meant for it. */
   z-index: 56;
+  pointer-events: none;
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -1113,7 +1117,6 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   border-radius: 6px;
   box-shadow: 0 2px 10px rgba(0,0,0,0.6);
   font-size: 0.82rem;
-  pointer-events: auto;
   max-width: min(460px, 92vw);
 }
 
@@ -1209,6 +1212,9 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 
 .usb-deselect-btn {
+  /* Bar itself is pointer-events: none so UNDO buttons stay clickable — only
+     the interactive children re-enable hit-testing. */
+  pointer-events: auto;
   margin-left: 0.2rem;
   flex-shrink: 0;
   background: #c0392b;
@@ -1230,6 +1236,7 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 
 .usb-cycle-btn {
+  pointer-events: auto;
   flex-shrink: 0;
   background: rgba(212,167,44,0.12);
   border: 1px solid rgba(212,167,44,0.4);

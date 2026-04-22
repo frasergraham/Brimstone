@@ -254,33 +254,52 @@ describe('_handleActionButton: undo_pick', () => {
   });
 });
 
-// ── z-order guarantee ────────────────────────────────────────────────────────
+// ── z-order + hit-test guarantees ────────────────────────────────────────────
 //
-// The unit-stats-bar must sit above the undo-button-layer so the deselect (✕)
-// button isn't covered by a floating UNDO anchored near the top of the map —
-// especially on mobile where the bar spans ~92vw.
+// The unit-stats-bar sits above the undo-button-layer so the deselect (✕)
+// button isn't covered by a floating UNDO anchored near the top of the map.
+// But the bar's chrome must itself be pointer-events:none, with its buttons
+// re-enabling pointer-events — otherwise the bar would swallow taps meant for
+// an UNDO button it happens to cover on mobile (where the bar spans ~92vw).
 
-describe('unit-stats-bar z-index', () => {
-  test('is above #undo-button-layer (z-index 55) in styles.css', async () => {
+describe('unit-stats-bar layering vs #undo-button-layer', () => {
+  async function readStyles() {
     const { readFileSync } = await import('node:fs');
     const { resolve, dirname } = await import('node:path');
     const { fileURLToPath } = await import('node:url');
     const __dirname = dirname(fileURLToPath(import.meta.url));
-    const css = readFileSync(resolve(__dirname, '..', '..', 'styles.css'), 'utf8');
+    return readFileSync(resolve(__dirname, '..', '..', 'styles.css'), 'utf8');
+  }
 
-    // Block for #unit-stats-bar
-    const barMatch = css.match(/#unit-stats-bar\s*\{[^}]*\}/);
-    assert.ok(barMatch, 'expected a #unit-stats-bar block in styles.css');
-    const barZ = Number((barMatch[0].match(/z-index:\s*(\d+)/) || [])[1]);
-    assert.ok(Number.isFinite(barZ), 'expected a z-index on #unit-stats-bar');
+  function blockFor(css, selector) {
+    const re = new RegExp(`${selector.replace(/[.#]/g, '\\$&')}\\s*\\{[^}]*\\}`);
+    const m = css.match(re);
+    assert.ok(m, `expected a ${selector} block in styles.css`);
+    return m[0];
+  }
 
-    // Block for #undo-button-layer
-    const undoMatch = css.match(/#undo-button-layer\s*\{[^}]*\}/);
-    assert.ok(undoMatch, 'expected a #undo-button-layer block in styles.css');
-    const undoZ = Number((undoMatch[0].match(/z-index:\s*(\d+)/) || [])[1]);
-    assert.ok(Number.isFinite(undoZ), 'expected a z-index on #undo-button-layer');
-
+  test('#unit-stats-bar z-index is above #undo-button-layer', async () => {
+    const css  = await readStyles();
+    const barZ  = Number((blockFor(css, '#unit-stats-bar'    ).match(/z-index:\s*(\d+)/) || [])[1]);
+    const undoZ = Number((blockFor(css, '#undo-button-layer' ).match(/z-index:\s*(\d+)/) || [])[1]);
+    assert.ok(Number.isFinite(barZ) && Number.isFinite(undoZ),
+      'both blocks must set z-index');
     assert.ok(barZ > undoZ,
-      `#unit-stats-bar z-index (${barZ}) must be above #undo-button-layer (${undoZ}) so the deselect button can't be covered by floating UNDO buttons`);
+      `#unit-stats-bar z-index (${barZ}) must be above #undo-button-layer (${undoZ})`);
+  });
+
+  test('#unit-stats-bar is pointer-events:none so UNDO stays clickable underneath', async () => {
+    const css = await readStyles();
+    const bar = blockFor(css, '#unit-stats-bar');
+    assert.match(bar, /pointer-events:\s*none/,
+      'bar chrome must not capture taps — otherwise it swallows UNDO clicks it visually covers');
+  });
+
+  test('.usb-deselect-btn and .usb-cycle-btn re-enable pointer-events', async () => {
+    const css = await readStyles();
+    assert.match(blockFor(css, '.usb-deselect-btn'), /pointer-events:\s*auto/,
+      'deselect button must opt back in to hit testing');
+    assert.match(blockFor(css, '.usb-cycle-btn'), /pointer-events:\s*auto/,
+      'cycle buttons must opt back in to hit testing');
   });
 });
