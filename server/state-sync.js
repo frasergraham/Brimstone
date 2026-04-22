@@ -86,6 +86,7 @@ export function serializeState(state) {
     heroRevealedByHorn:   state.heroRevealedByHorn ?? false,
     nodeScore:            { ...state.nodeScore },
     disableScoring:       !!state.disableScoring,
+    noWitchMission:       !!state.noWitchMission,
     gameMode:             state.gameMode ?? 'standard',
     battleConfig:         state.battleConfig ? { ...state.battleConfig } : null,
     cycleConfig:          state.cycleConfig
@@ -207,6 +208,7 @@ export function deserializeState(snap) {
   state.attritionChanged     = snap.attritionChanged     ?? false;
   state.nodeScore            = { ...snap.nodeScore };
   state.disableScoring       = !!snap.disableScoring;
+  state.noWitchMission       = !!snap.noWitchMission;
   state.maxDiscoverableSurvivors = snap.maxDiscoverableSurvivors ?? null;
   state.discoveredSurvivorCount  = snap.discoveredSurvivorCount  ?? 0;
   state.log                  = [...snap.log];

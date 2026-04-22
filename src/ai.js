@@ -188,6 +188,7 @@ export class PlanSimState {
     }
     this._faction = faction;
     this.campaignAIBudgetBonus = realState.campaignAIBudgetBonus ?? 0;
+    this.noWitchMission = !!realState.noWitchMission;
 
     // Track hexes already planned for exploration this turn so we don't
     // plan duplicate explores (sim.tiles.explored is a live reference and

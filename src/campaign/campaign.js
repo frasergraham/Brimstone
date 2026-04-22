@@ -3,6 +3,7 @@
 
 import { countHeldNodes } from '../game.js';
 import { getFaction } from '../factions.js';
+import { hexDistance } from '../hex.js';
 
 const SAVE_VERSION = 1;
 
@@ -345,6 +346,32 @@ function resolveSpawnPosition(state, spawnAt) {
     }
     if (edges.length === 0) return null;
     const t = edges[Math.floor(Math.random() * edges.length)];
+    return { col: t.col, row: t.row };
+  }
+  if (spawnAt === 'near_hero') {
+    // Spawn on a passable tile close enough for the hero to see on spawn, but
+    // not adjacent. Hero day-phase sight is 3; target an annulus of 2–3 hexes.
+    const hero = state.hero;
+    if (!hero) return null;
+    const isPassable = (tile) =>
+      tile.type !== 'river' && tile.type !== 'building';
+    const isOccupied = (col, row) =>
+      state.entities.some(e => e.alive && e.col === col && e.row === row);
+    const pickFrom = (minDist, maxDist) => {
+      const candidates = [];
+      for (const [, tile] of state.tiles) {
+        if (!isPassable(tile)) continue;
+        if (isOccupied(tile.col, tile.row)) continue;
+        const d = hexDistance(tile.col, tile.row, hero.col, hero.row);
+        if (d >= minDist && d <= maxDist) candidates.push(tile);
+      }
+      return candidates;
+    };
+    // Prefer 2–3 hexes (visible but not adjacent). Widen if we must.
+    let candidates = pickFrom(2, 3);
+    if (candidates.length === 0) candidates = pickFrom(1, 4);
+    if (candidates.length === 0) return null;
+    const t = candidates[Math.floor(Math.random() * candidates.length)];
     return { col: t.col, row: t.row };
   }
   return null;

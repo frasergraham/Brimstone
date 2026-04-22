@@ -73,6 +73,7 @@ function makeFakeState(overrides = {}) {
       hero: {},
     },
     entities,
+    noWitchMission: overrides.noWitchMission ?? false,
   };
 }
 
@@ -263,6 +264,31 @@ describe('assessBoard', () => {
     assert.equal(board.nodes.length, 1);
     assert.equal(board.nodes[0].witchPresent, true);
     assert.equal(board.nodes[0].heroPresent, false);
+  });
+
+  test('noWitchMission flag boosts minion sight so lone minions can see the hero', () => {
+    // Standard minion sight is 2 hexes; the hero at (4,4) is 6 hexes away
+    // from a minion at (0,0), so without the boost the hero is invisible.
+    const minion = makeEntity({
+      id: 'golem', type: EntityType.WOOD_GOLEM, owner: 'witch',
+      col: 0, row: 0, hp: 2, maxHp: 2,
+    });
+    const hero = makeEntity({
+      id: 'hero1', type: EntityType.HERO, owner: 'hero',
+      col: 4, row: 4, hp: 8, maxHp: 8,
+    });
+
+    // Default (standard game) → minion sight stays at 2, hero invisible.
+    const simStandard = makeSim({ entities: [minion, hero] });
+    const boardStandard = assessBoard(simStandard);
+    assert.equal(boardStandard.visibleHeroes.length, 0,
+      'hero should be outside minion sight in standard missions');
+
+    // noWitchMission flag set → minion sight is boosted so hero is visible.
+    const simNoWitch = makeSim({ entities: [minion, hero], noWitchMission: true });
+    const boardNoWitch = assessBoard(simNoWitch);
+    assert.equal(boardNoWitch.visibleHeroes.length, 1,
+      'hero should be visible to lone minion in no-witch missions');
   });
 });
 

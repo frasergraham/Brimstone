@@ -4,7 +4,7 @@ import { describe, test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { GameState, Phase, phaseForRound, getCycleLength, DEFAULT_CYCLE_PHASES } from '../src/game.js';
 import { EntityType, createMinion, createZombie, createWoodGolem, createSurvivor, markRosterUsedByName, resetRoster, SURVIVOR_ROSTER } from '../src/entities.js';
-import { hexKey, getNeighbors } from '../src/hex.js';
+import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import {
   Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves,
   reconcileRosterAfterMission,
@@ -2404,5 +2404,67 @@ describe('processWaves map_edge spawn covers all four edges', () => {
     assert.ok(edgeHits.right > 0, 'never spawned on east edge');
     assert.ok(edgeHits.top > 0, 'never spawned on north edge');
     assert.ok(edgeHits.bottom > 0, 'never spawned on south edge');
+  });
+});
+
+// ── resolveSpawnPosition near_hero ─────────────────────────────────────────
+
+describe('processWaves near_hero spawn appears in view', () => {
+  test('spawns within hero sight (2-3 hexes) and never on top of the hero', () => {
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+
+    const createFn = (_type, col, row) => createWoodGolem(col, row, 'witch');
+
+    let sawInRing = false;
+    for (let i = 0; i < 200; i++) {
+      const before = state.entities.length;
+      processWaves(
+        state,
+        [{ round: 1, units: [{ type: 'wood_golem', spawnAt: 'near_hero' }] }],
+        createFn,
+      );
+      const spawned = state.entities[before];
+      if (!spawned) continue;
+      const d = hexDistance(spawned.col, spawned.row, state.hero.col, state.hero.row);
+      // Must be close enough for the hero to see on spawn (day sight = 3)
+      // and must not overlap the hero.
+      assert.ok(d >= 1 && d <= 4, `spawn distance ${d} outside expected range`);
+      if (d >= 2 && d <= 3) sawInRing = true;
+      // Remove the spawned entity so each iteration is independent
+      state.entities.pop();
+    }
+    assert.ok(sawInRing, 'expected at least one spawn in the preferred 2-3 hex ring');
+  });
+
+  test('falls back to the 1-4 ring when the 2-3 ring is fully blocked', () => {
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+
+    // Saturate every passable 2-3 hex ring tile so the preferred ring cannot
+    // produce a candidate — forces the fallback branch to pick from 1 or 4.
+    for (const [, tile] of state.tiles) {
+      const d = hexDistance(tile.col, tile.row, state.hero.col, state.hero.row);
+      if (d >= 2 && d <= 3 && tile.type !== 'river' && tile.type !== 'building') {
+        state.entities.push(createZombie(tile.col, tile.row, 'witch'));
+      }
+    }
+
+    const createFn = (_type, col, row) => createWoodGolem(col, row, 'witch');
+    const before = state.entities.length;
+    processWaves(
+      state,
+      [{ round: 1, units: [{ type: 'wood_golem', spawnAt: 'near_hero' }] }],
+      createFn,
+    );
+    const spawned = state.entities[before];
+    assert.ok(spawned, 'expected a fallback spawn');
+    const d = hexDistance(spawned.col, spawned.row, state.hero.col, state.hero.row);
+    // Strict: only distance 1 or 4 proves the fallback widened the ring.
+    // If the fallback silently re-picked from 2-3, this would fail.
+    assert.ok(d === 1 || d === 4,
+      `fallback spawn distance ${d} should be 1 or 4 (2-3 ring is saturated)`);
   });
 });
