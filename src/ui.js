@@ -1038,11 +1038,6 @@ export class UIController {
       }, { passive: false });
       layer.appendChild(btn);
     }
-
-    // If we just added the first button(s) after a period of none, the RAF
-    // tracking loop may have stopped — kick it back on so the button stays
-    // pinned under pan/zoom.
-    if (layer.childNodes.length > 0) this._startUndoBtnTracking();
   }
 
   /** Dispatch an undo click — single unit → undo; multiple → disambig popup. */
@@ -1510,6 +1505,7 @@ export class UIController {
     if (this._planMode) {
       this._renderPlanPanel();
       this._refreshUndoButtons();
+      this._startUndoBtnTracking();
     }
     // Popup is NOT shown here — user taps the unit a second time to open it
   }
@@ -1530,6 +1526,7 @@ export class UIController {
 
     this.onEntitySelected?.(entity);
     if (this._planMode) this._refreshUndoButtons();
+    // No _startUndoBtnTracking: enemy selection hides the button.
   }
 
   /** Return the latest projected position for an entity from the ghost overlay, or null. */
