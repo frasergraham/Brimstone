@@ -2438,14 +2438,13 @@ describe('processWaves near_hero spawn appears in view', () => {
     assert.ok(sawInRing, 'expected at least one spawn in the preferred 2-3 hex ring');
   });
 
-  test('falls back gracefully when no passable tile is nearby', () => {
-    // Build a tiny map where the hero is boxed in by river so only far tiles qualify
+  test('falls back to the 1-4 ring when the 2-3 ring is fully blocked', () => {
     const mapData = buildMap('prologue');
     mapData.noWitch = true;
     const state = new GameState(true, false, 'skirmish', null, mapData);
 
-    // Hero gets isolated — nothing at 2-3 hexes is passable; force fallback
-    // by occupying all 2-3 hex ring tiles with dummy entities.
+    // Saturate every passable 2-3 hex ring tile so the preferred ring cannot
+    // produce a candidate — forces the fallback branch to pick from 1 or 4.
     for (const [, tile] of state.tiles) {
       const d = hexDistance(tile.col, tile.row, state.hero.col, state.hero.row);
       if (d >= 2 && d <= 3 && tile.type !== 'river' && tile.type !== 'building') {
@@ -2463,6 +2462,9 @@ describe('processWaves near_hero spawn appears in view', () => {
     const spawned = state.entities[before];
     assert.ok(spawned, 'expected a fallback spawn');
     const d = hexDistance(spawned.col, spawned.row, state.hero.col, state.hero.row);
-    assert.ok(d >= 1 && d <= 4, `fallback spawn distance ${d} out of range`);
+    // Strict: only distance 1 or 4 proves the fallback widened the ring.
+    // If the fallback silently re-picked from 2-3, this would fail.
+    assert.ok(d === 1 || d === 4,
+      `fallback spawn distance ${d} should be 1 or 4 (2-3 ring is saturated)`);
   });
 });

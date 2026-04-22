@@ -220,6 +220,10 @@ export class GameState {
       this.entities.push(this.witch);
       this.players.push({ id: 'witch', name: witchName, faction: 'witch', isAI: witchIsAI, leaderId: this.witch.id });
     }
+    // Persistent mission-mode flag. Consumers (AI sight, pursuit radius) must
+    // check this rather than probing live entity state, so a witch dying
+    // mid-mission in some future scenario doesn't silently flip behaviour.
+    this.noWitchMission = !!mapDataOverride?.noWitch;
 
     this.inventory = {
       hero:  { ...getFaction('hero').getStartingResources() },

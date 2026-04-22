@@ -111,9 +111,10 @@ export function assessBoard(sim) {
   // In no-witch campaign missions (PvE hunt scenarios), the witch leader's
   // sense-the-hero role is absent, so ignore the minion sight limit entirely
   // — every enemy always knows where the hero is and pursues relentlessly,
-  // instead of standing idle across the map.
+  // instead of standing idle across the map. Gated on the persistent mission
+  // flag so a witch dying mid-game never silently flips behaviour.
   const WITCH_LEADER_SIGHT = 4;
-  const WITCH_MINION_SIGHT = witch ? 2 : Infinity;
+  const WITCH_MINION_SIGHT = sim.noWitchMission ? Infinity : 2;
   const allHeroes = sim.entities.filter(e => e.alive && e.owner === 'hero');
   const witchSideUnits = sim.entities.filter(e => e.alive && e.owner === 'witch');
   const visibleHeroes = allHeroes.filter(hero =>
@@ -625,7 +626,7 @@ export function genHuntHeroes(sim, board, budget) {
       // If close (within reach this turn) — move toward target then attack.
       // No-witch campaign missions expand the pursuit radius so minions/golems
       // keep chasing the hero across the map instead of giving up at dist 5+.
-      const pursuitRange = sim.witch ? 4 : 8;
+      const pursuitRange = sim.noWitchMission ? 8 : 4;
       if (dist <= pursuitRange) {
         sim.unitCommitments.set(simUnit.id, Goal.HUNT_HEROES);
         assignedUnits.add(simUnit.id);
