@@ -51,16 +51,21 @@ function setGhostPositions(renderer, positionsMap) {
 }
 
 // ── _computeLastActionHexes ──────────────────────────────────────────────────
+//
+// The UNDO button is only shown for the active selected unit. These tests
+// assume a unit is selected via ui._selectedEntity before computing buckets.
 
 describe('_computeLastActionHexes', () => {
   test('returns empty when no plans are queued', () => {
     const { ui } = makeUI();
+    ui._selectedEntity = { id: 'h1' };
     assert.deepEqual(ui._computeLastActionHexes(), []);
   });
 
   test('returns empty when not in planning mode', () => {
     const { ui } = makeUI();
     ui._unitPlans.set('h1', [{ type: PlanActionType.MOVE, entityId: 'h1' }]);
+    ui._selectedEntity = { id: 'h1' };
     ui._planMode = false;
     assert.deepEqual(ui._computeLastActionHexes(), []);
   });
@@ -69,14 +74,41 @@ describe('_computeLastActionHexes', () => {
     const { ui, renderer } = makeUI();
     ui._unitPlans.set('h1', [{ type: PlanActionType.MOVE, entityId: 'h1' }]);
     setGhostPositions(renderer, { h1: { col: 1, row: 2 } });
+    ui._selectedEntity = { id: 'h1' };
     ui._planSubmitted = true;
     assert.deepEqual(ui._computeLastActionHexes(), []);
   });
 
-  test('one unit with one action → one bucket at projected hex', () => {
+  test('returns empty when no unit is selected', () => {
     const { ui, renderer } = makeUI();
     ui._unitPlans.set('h1', [{ type: PlanActionType.MOVE, entityId: 'h1' }]);
     setGhostPositions(renderer, { h1: { col: 3, row: 4 } });
+    ui._selectedEntity = null;
+    assert.deepEqual(ui._computeLastActionHexes(), []);
+  });
+
+  test('returns empty when the selected unit is an enemy', () => {
+    const { ui, renderer } = makeUI();
+    ui._unitPlans.set('h1', [{ type: PlanActionType.MOVE, entityId: 'h1' }]);
+    setGhostPositions(renderer, { h1: { col: 3, row: 4 } });
+    ui._selectedEntity = { id: 'h1' };
+    ui._isEnemySelection = true;
+    assert.deepEqual(ui._computeLastActionHexes(), []);
+  });
+
+  test('returns empty when the selected unit has no queued plan', () => {
+    const { ui, renderer } = makeUI();
+    ui._unitPlans.set('h2', [{ type: PlanActionType.MOVE, entityId: 'h2' }]);
+    setGhostPositions(renderer, { h2: { col: 1, row: 1 } });
+    ui._selectedEntity = { id: 'h1' };
+    assert.deepEqual(ui._computeLastActionHexes(), []);
+  });
+
+  test('selected unit with one action → one bucket at projected hex', () => {
+    const { ui, renderer } = makeUI();
+    ui._unitPlans.set('h1', [{ type: PlanActionType.MOVE, entityId: 'h1' }]);
+    setGhostPositions(renderer, { h1: { col: 3, row: 4 } });
+    ui._selectedEntity = { id: 'h1' };
 
     const buckets = ui._computeLastActionHexes();
     assert.equal(buckets.length, 1);
@@ -85,13 +117,14 @@ describe('_computeLastActionHexes', () => {
     assert.deepEqual(buckets[0].entityIds, ['h1']);
   });
 
-  test('one unit with two actions → one bucket at final projected hex', () => {
+  test('selected unit with two actions → one bucket at final projected hex', () => {
     const { ui, renderer } = makeUI();
     ui._unitPlans.set('h1', [
       { type: PlanActionType.MOVE, entityId: 'h1', toCol: 3, toRow: 4 },
       { type: PlanActionType.MOVE, entityId: 'h1', toCol: 5, toRow: 6 },
     ]);
     setGhostPositions(renderer, { h1: { col: 5, row: 6 } });
+    ui._selectedEntity = { id: 'h1' };
 
     const buckets = ui._computeLastActionHexes();
     assert.equal(buckets.length, 1);
@@ -99,7 +132,7 @@ describe('_computeLastActionHexes', () => {
     assert.equal(buckets[0].row, 6);
   });
 
-  test('two units with distinct end hexes → two separate buckets', () => {
+  test('only the selected unit is returned even when other units have plans', () => {
     const { ui, renderer } = makeUI();
     ui._unitPlans.set('h1', [{ type: PlanActionType.MOVE, entityId: 'h1' }]);
     ui._unitPlans.set('h2', [{ type: PlanActionType.MOVE, entityId: 'h2' }]);
@@ -107,15 +140,16 @@ describe('_computeLastActionHexes', () => {
       h1: { col: 1, row: 1 },
       h2: { col: 2, row: 2 },
     });
+    ui._selectedEntity = { id: 'h2' };
 
     const buckets = ui._computeLastActionHexes();
-    assert.equal(buckets.length, 2);
-    const byKey = new Map(buckets.map(b => [`${b.col},${b.row}`, b]));
-    assert.deepEqual(byKey.get('1,1').entityIds, ['h1']);
-    assert.deepEqual(byKey.get('2,2').entityIds, ['h2']);
+    assert.equal(buckets.length, 1);
+    assert.equal(buckets[0].col, 2);
+    assert.equal(buckets[0].row, 2);
+    assert.deepEqual(buckets[0].entityIds, ['h2']);
   });
 
-  test('two units converging on same hex → one bucket with both IDs', () => {
+  test('units converging on the same hex → bucket only for selected unit', () => {
     const { ui, renderer } = makeUI();
     ui._unitPlans.set('h1', [{ type: PlanActionType.MOVE, entityId: 'h1' }]);
     ui._unitPlans.set('h2', [{ type: PlanActionType.MOVE, entityId: 'h2' }]);
@@ -123,12 +157,11 @@ describe('_computeLastActionHexes', () => {
       h1: { col: 4, row: 4 },
       h2: { col: 4, row: 4 },
     });
+    ui._selectedEntity = { id: 'h1' };
 
     const buckets = ui._computeLastActionHexes();
     assert.equal(buckets.length, 1);
-    assert.equal(buckets[0].col, 4);
-    assert.equal(buckets[0].row, 4);
-    assert.deepEqual(buckets[0].entityIds.sort(), ['h1', 'h2']);
+    assert.deepEqual(buckets[0].entityIds, ['h1']);
   });
 
   test('falls back to entity current position when ghost state is empty', () => {
@@ -136,6 +169,7 @@ describe('_computeLastActionHexes', () => {
     state.entities = [{ id: 'h1', col: 7, row: 8, alive: true }];
     ui._unitPlans.set('h1', [{ type: PlanActionType.FORTIFY, entityId: 'h1' }]);
     renderer.planGhostSteps = null;
+    ui._selectedEntity = { id: 'h1' };
 
     const buckets = ui._computeLastActionHexes();
     assert.equal(buckets.length, 1);

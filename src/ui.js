@@ -955,36 +955,32 @@ export class UIController {
   }
 
   /**
-   * Group every planned unit by the hex where their LAST action resolves.
-   * Used to place floating [UNDO] buttons above each unit's projected end hex.
-   * @returns {Array<{col:number,row:number,entityIds:any[]}>} buckets keyed by end hex.
+   * Return the hex (if any) where the currently selected unit's last planned
+   * action resolves, so a single floating [UNDO] button can be placed above it.
+   * The UNDO button is only shown for the active selected unit — other units'
+   * queued actions are undone by selecting those units first.
+   * @returns {Array<{col:number,row:number,entityIds:any[]}>} zero or one bucket.
    */
   _computeLastActionHexes() {
     if (!this._planMode || this._planSubmitted) return [];
 
-    const out = new Map(); // "col,row" -> { col, row, entityIds: [] }
+    const selectedId = this._selectedEntity?.id;
+    if (selectedId == null || this._isEnemySelection) return [];
+
+    const queue = this._unitPlans.get(selectedId);
+    if (!queue || queue.length < 1) return [];
+
     const steps = this.renderer?.planGhostSteps;
     const finalPositions = steps?.length ? steps[steps.length - 1].positions : null;
 
-    for (const [entityId, queue] of this._unitPlans) {
-      if (!queue || queue.length < 1) continue;
-
-      let pos = finalPositions?.get(entityId) ?? null;
-      if (!pos) {
-        const ent = this.state?.entities?.find(e => e.id === entityId);
-        if (ent) pos = { col: ent.col, row: ent.row };
-      }
-      if (!pos) continue;
-
-      const key = `${pos.col},${pos.row}`;
-      let bucket = out.get(key);
-      if (!bucket) {
-        bucket = { col: pos.col, row: pos.row, entityIds: [] };
-        out.set(key, bucket);
-      }
-      bucket.entityIds.push(entityId);
+    let pos = finalPositions?.get(selectedId) ?? null;
+    if (!pos) {
+      const ent = this.state?.entities?.find(e => e.id === selectedId);
+      if (ent) pos = { col: ent.col, row: ent.row };
     }
-    return [...out.values()];
+    if (!pos) return [];
+
+    return [{ col: pos.col, row: pos.row, entityIds: [selectedId] }];
   }
 
   /** Render (or clear) floating UNDO buttons for the current plan state. */
@@ -1506,7 +1502,11 @@ export class UIController {
     this._updateHighlights();
     // Refresh the plan panel so its selection highlight tracks the selected
     // unit. Only during planning mode (when the panel is visible).
-    if (this._planMode) this._renderPlanPanel();
+    if (this._planMode) {
+      this._renderPlanPanel();
+      this._refreshUndoButtons();
+      this._startUndoBtnTracking();
+    }
     // Popup is NOT shown here — user taps the unit a second time to open it
   }
 
@@ -1525,6 +1525,8 @@ export class UIController {
     this.renderer.highlightHexes   = [];
 
     this.onEntitySelected?.(entity);
+    if (this._planMode) this._refreshUndoButtons();
+    // No _startUndoBtnTracking: enemy selection hides the button.
   }
 
   /** Return the latest projected position for an entity from the ghost overlay, or null. */
@@ -1602,7 +1604,10 @@ export class UIController {
     hideActionPopup(this);
     this._hideTileDetail();
     // Refresh plan panel so selection highlight clears from the unit rows.
-    if (this._planMode) this._renderPlanPanel();
+    if (this._planMode) {
+      this._renderPlanPanel();
+      this._refreshUndoButtons();
+    }
   }
 
   _updateHighlights() {
