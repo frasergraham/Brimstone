@@ -3823,6 +3823,14 @@ export class UIController {
             const blockerName = ev.result.blockedBy.displayName ?? 'enemy';
             blockedMoves.push({ actorName, blockerName });
           }
+          // Movement blocked by fortifications — partial move (ACTION_OK with blockedByFort)
+          if (ev.type === ResEventType.ACTION_OK &&
+              ev.action?.type === PlanActionType.MOVE &&
+              ev.result?.blockedByFort) {
+            const actor = this.state.entities.find(e => e.id === ev.action.entityId);
+            const actorName = actor?.displayName ?? 'Unit';
+            blockedMoves.push({ actorName, blockerName: 'fortifications' });
+          }
           // Movement blocked by enemy — full block (ACTION_FAIL with blockedBy)
           if (ev.type === ResEventType.ACTION_FAIL &&
               ev.action?.type === PlanActionType.MOVE &&
@@ -3831,6 +3839,14 @@ export class UIController {
             const actorName = actor?.displayName ?? 'Unit';
             const blockerName = ev.blockedBy.displayName ?? 'enemy';
             blockedMoves.push({ actorName, blockerName });
+          }
+          // Movement blocked by fortifications — full block (ACTION_FAIL with blockedByFort)
+          if (ev.type === ResEventType.ACTION_FAIL &&
+              ev.action?.type === PlanActionType.MOVE &&
+              ev.blockedByFort) {
+            const actor = this.state.entities.find(e => e.id === ev.action.entityId);
+            const actorName = actor?.displayName ?? 'Unit';
+            blockedMoves.push({ actorName, blockerName: 'fortifications' });
           }
 
           // ── Resource tracking (player's faction only) ─────────────────

@@ -2,12 +2,14 @@
 import { getNeighbors, hexKey, hexDistance } from './hex.js';
 import {
   TileType, ResourceType, WEAPON_LABEL, BUILDING_LOOT, TERRAIN_LOOT, rollLoot,
-  MAX_FORTIFY_LEVEL, getFortifyCombatBonus,
+  MAX_FORTIFY_LEVEL, getFortifyCombatBonus, isFortWall,
+  FORT_IMPASSABLE_THRESHOLD,
 } from './tiles.js';
 import {
   EntityType, SurvivorAbility, Entity,
   createZombie, createMinion, createSurvivor,
   createWoodGolem, createIronGolem,
+  nextDie,
 } from './entities.js';
 import { Phase } from './game.js';
 import { getFaction } from './factions.js';
@@ -43,6 +45,12 @@ function hasVisibleEnemy(state, actor, col, row, visibleEnemyHexes) {
   return visibleEnemyHexes.has(hexKey(col, row));
 }
 
+// True if this tile is a wall strong enough to block `actor`'s movement.
+// Combines terrain-level check with the actor's faction predicate.
+export function isFortBlocking(tile, actorOwner) {
+  return isFortWall(tile) && getFaction(actorOwner).isBlockedByWalls();
+}
+
 // Cost-based movement: road/bridge/building tiles cost 1, all other passable
 // tiles cost 2.  Budget = range * 2, so:
 //   range 1 (no horse) → 1 off-road tile  OR  2 road tiles per action
@@ -67,6 +75,7 @@ export function getReachableHexes(state, actor, range, posOverride = null, visib
       const nt = tile(state, n.col, n.row);
       if (!nt || nt.type === TileType.RIVER) continue;
       if (hasVisibleEnemy(state, actor, n.col, n.row, visibleEnemyHexes)) continue;
+      if (isFortBlocking(nt, actor.owner)) continue;
       const isRoadLike = nt.type === TileType.ROAD || nt.type === TileType.BRIDGE ||
                          nt.type === TileType.BUILDING;
       const nc = c + (isRoadLike ? 1 : 2);
@@ -113,6 +122,7 @@ function findShortestPath(state, actor, toCol, toRow, posOverride = null) {
       const nt = tile(state, n.col, n.row);
       if (!nt || nt.type === TileType.RIVER) continue;
       if (hasEnemy(state, actor, n.col, n.row) && nk !== goalK) continue;
+      if (isFortBlocking(nt, actor.owner) && nk !== goalK) continue;
       const isRoadLike = nt.type === TileType.ROAD || nt.type === TileType.BRIDGE ||
                          nt.type === TileType.BUILDING;
       const nc = c + (isRoadLike ? 1 : 2);
@@ -178,6 +188,7 @@ export function getFogReachableHexes(state, actor, posOverride = null) {
       const nt = tile(state, n.col, n.row);
       if (!nt || nt.type === TileType.RIVER) continue;
       // No enemy blocking — this is theoretical reachability for fog visibility
+      if (isFortBlocking(nt, actor.owner)) continue;
       const isRoadLike = nt.type === TileType.ROAD || nt.type === TileType.BRIDGE ||
                          nt.type === TileType.BUILDING;
       const nc = c + (isRoadLike ? 1 : 2);
@@ -482,10 +493,15 @@ export function executeMove(state, actor, targetCol, targetRow) {
   if (!reachable.some(h => h.col === targetCol && h.row === targetRow)) {
     // When an enemy occupies the target (e.g. hidden by fog during planning),
     // allow the move to proceed if the target is within step range so the unit
-    // walks as far as it can and stops before the enemy.
+    // walks as far as it can and stops before the enemy.  The same applies
+    // when the target itself is a fort-blocked hex for the actor's faction —
+    // the unit should walk up to it and then surface blockedByFort rather
+    // than silently returning "Cannot reach".
     const enemyOnTarget = hasEnemy(state, actor, targetCol, targetRow);
+    const targetTile = tile(state, targetCol, targetRow);
+    const fortOnTarget = isFortBlocking(targetTile, actor.owner);
     const dist = hexDistance(actor.col, actor.row, targetCol, targetRow);
-    if (!enemyOnTarget || dist > maxSteps) {
+    if ((!enemyOnTarget && !fortOnTarget) || dist > maxSteps) {
       return { success: false, log: [`Cannot reach (${targetCol},${targetRow}) from current position.`] };
     }
   }
@@ -493,7 +509,7 @@ export function executeMove(state, actor, targetCol, targetRow) {
   // Find the road-preferring path from current position to destination.
   const fullPath = findShortestPath(state, actor, targetCol, targetRow) ?? [{ col: targetCol, row: targetRow }];
 
-  // Walk the path step by step; stop if an enemy blocks a mid-path hex.
+  // Walk the path step by step; stop if an enemy or fort-wall blocks a mid-path hex.
   // Cap the number of hex steps to prevent long road-chain traversals when a
   // prior move in the plan failed and the entity is further away than expected.
   const walkedPath = [];
@@ -506,6 +522,7 @@ export function executeMove(state, actor, targetCol, targetRow) {
     if (hasEnemy(state, actor, step.col, step.row)) break;
     const st = tile(state, step.col, step.row);
     if (!st || st.type === TileType.RIVER) break;
+    if (isFortBlocking(st, actor.owner)) break;
 
     actor.col = step.col;
     actor.row = step.row;
@@ -519,7 +536,16 @@ export function executeMove(state, actor, targetCol, targetRow) {
   }
 
   if (walkedPath.length === 0) {
-    const blocker = (fullPath.length > 0)
+    const firstStep = fullPath[0];
+    const firstTile = firstStep ? tile(state, firstStep.col, firstStep.row) : null;
+    if (firstTile && isFortBlocking(firstTile, actor.owner)) {
+      return {
+        success: false,
+        log: [`${actor.displayName}'s path is blocked by fortifications at (${firstStep.col},${firstStep.row}).`],
+        blockedByFort: { col: firstStep.col, row: firstStep.row, fortLevel: firstTile.fortifyLevel },
+      };
+    }
+    const blocker = fullPath.length > 0
       ? state.entities.find(e =>
           e.alive && e.owner !== actor.owner && e.col === fullPath[0].col && e.row === fullPath[0].row
         ) ?? null
@@ -530,24 +556,29 @@ export function executeMove(state, actor, targetCol, targetRow) {
     return { success: false, log: ['The way is blocked.'] };
   }
 
-  // Detect partial move blocked by enemy
+  // Detect partial move blocked by enemy or fortification
   let blockedBy = null;
+  let blockedByFort = null;
   if (walkedPath.length < fullPath.length) {
     const nextStep = fullPath[walkedPath.length];
+    const nextTile = tile(state, nextStep.col, nextStep.row);
     if (hasEnemy(state, actor, nextStep.col, nextStep.row)) {
       blockedBy = state.entities.find(e =>
         e.alive && e.owner !== actor.owner && e.col === nextStep.col && e.row === nextStep.row
       ) ?? null;
+    } else if (nextTile && isFortBlocking(nextTile, actor.owner)) {
+      blockedByFort = { col: nextStep.col, row: nextStep.row, fortLevel: nextTile.fortifyLevel };
     }
   }
 
-  const finalStep = walkedPath[walkedPath.length - 1];
   if (blockedBy) {
     log.push(`${actor.displayName} movement blocked by ${blockedBy.displayName}.`);
+  } else if (blockedByFort) {
+    log.push(`${actor.displayName}'s path is blocked by fortifications at (${blockedByFort.col},${blockedByFort.row}).`);
   }
   if (encounterLog.length) log.push(...encounterLog);
 
-  return { success: true, log, cost: 1, path: walkedPath, blockedBy, encounterLog, encounterSurvivor };
+  return { success: true, log, cost: 1, path: walkedPath, blockedBy, blockedByFort, encounterLog, encounterSurvivor };
 }
 
 export function executeExplore(state, actor) {
@@ -825,6 +856,92 @@ export function executeBattle(state, actor, target) {
       phaseBonus, fortBonus, atkFortAtkBonus, fatiguePenalty,
       atkAllyNames: atkAllies.map(e => e.displayName),
       defAllyNames: defAllies.map(e => e.displayName),
+    },
+  };
+}
+
+// Siege an impassable fortification from an adjacent hex.
+// Witch-side only. The fort defends itself with a fixed defense of fortLevel+1
+// (no phase / fatigue / ally modifiers) against the attacker's normal attack
+// roll. Hit drops the fort by 1 level; crush (attack ≥ 2× defense) drops it by 2.
+// No counter-attack. The fort is only attackable at level ≥ FORT_IMPASSABLE_THRESHOLD.
+export function executeFortAssault(state, actor, targetCol, targetRow) {
+  if (!getFaction(actor.owner).canAssaultFortifications()) {
+    return { success: false, log: ['Only witch-side units can assault fortifications.'] };
+  }
+  const t = tile(state, targetCol, targetRow);
+  if (!t) return { success: false, log: ['Invalid target.'] };
+  if ((t.fortifyLevel || 0) < FORT_IMPASSABLE_THRESHOLD) {
+    return { success: false, log: ['No wall to assault here.'] };
+  }
+  if (hexDistance(actor.col, actor.row, targetCol, targetRow) > 1) {
+    return { success: false, log: ['Target wall is out of range.'] };
+  }
+
+  actor.guarding = 0;  // assaulting breaks guard
+  const log = [];
+
+  const attackerFaction = getFaction(actor.owner);
+  const phaseBonus = attackerFaction.getPhaseCombatBonus(state.phase);
+
+  // Attacker gang-up: witch allies adjacent to the target hex boost attack dice.
+  const targetHexes = new Set([hexKey(targetCol, targetRow)]);
+  for (const n of getNeighbors(targetCol, targetRow)) targetHexes.add(hexKey(n.col, n.row));
+  const atkAllies = state.entities.filter(e =>
+    e.alive && e.owner === actor.owner && e.id !== actor.id && targetHexes.has(hexKey(e.col, e.row))
+  );
+  const extraAtkDice = Math.min(atkAllies.length, 3);
+
+  // Base attack roll: d6 + attack + attackBonus + phaseBonus + gang-up dice.
+  // Witch units never gain fortification attack bonus from their own hex.
+  const atkBaseDie = nextDie(6);
+  const atkExtraDice = [];
+  for (let i = 0; i < extraAtkDice; i++) atkExtraDice.push(nextDie(3));
+  const attackRoll = atkBaseDie + actor.attack + (actor.attackBonus || 0) + phaseBonus
+                     + atkExtraDice.reduce((s, r) => s + r, 0);
+
+  // Fortification "defense": flat value of fortLevel + 1. No modifiers.
+  const defenseRoll = t.fortifyLevel + 1;
+
+  const fortLevelBefore = t.fortifyLevel;
+  const hit   = attackRoll > defenseRoll;
+  const crush = hit && attackRoll >= 2 * defenseRoll;
+
+  const phaseNote = phaseBonus > 0 ? ' (🌙 night bonus)' : '';
+  const gangNote  = atkAllies.length >= 1 ? ' [gang-up +d3]' : '';
+  log.push(
+    `${actor.displayName} assaults the fortifications at (${targetCol},${targetRow})! ` +
+    `[${attackRoll}${gangNote} vs ${defenseRoll}]${phaseNote}`
+  );
+
+  let damage = 0;
+  if (hit) {
+    damage = crush ? 2 : 1;
+    t.fortifyLevel = Math.max(0, t.fortifyLevel - damage);
+    if (crush) {
+      log.push(`💥 The wall buckles under a crushing blow! (fort level ${fortLevelBefore} → ${t.fortifyLevel})`);
+    } else {
+      log.push(`🏰 The fortifications crack under the assault. (fort level ${fortLevelBefore} → ${t.fortifyLevel})`);
+    }
+    if (t.fortifyLevel === 0) {
+      log.push(`The fortifications crumble away.`);
+    } else if (t.fortifyLevel < FORT_IMPASSABLE_THRESHOLD) {
+      log.push(`The wall is breached — the path is open.`);
+    }
+  } else {
+    log.push(`The stone holds fast.`);
+  }
+
+  return {
+    success: true, log, cost: 1,
+    fortAssault: true,
+    targetCol, targetRow,
+    attackRoll, defenseRoll,
+    hit, crush, damage,
+    fortLevelBefore, fortLevelAfter: t.fortifyLevel,
+    breakdown: {
+      atkBaseDie, atkExtraDice, phaseBonus,
+      atkAllyNames: atkAllies.map(e => e.displayName),
     },
   };
 }

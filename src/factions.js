@@ -53,6 +53,10 @@ export class Faction {
   canSummon()   { return false; }
   /** Can this faction use hero-side shared items (food, silver, scripture)? */
   canUseItems() { return false; }
+  /** Can this faction batter down enemy fortifications (BATTLE_HEX on an empty wall)? */
+  canAssaultFortifications() { return false; }
+  /** Is this faction blocked from moving onto impassable fortification walls? */
+  isBlockedByWalls() { return false; }
 
   /**
    * Summon options with affordability info.
@@ -369,6 +373,8 @@ export class WitchFaction extends Faction {
 
   // Available Actions
   canSummon() { return true; }
+  canAssaultFortifications() { return true; }
+  isBlockedByWalls() { return true; }
 
   getSummonOptions(inventory) {
     const metal = inventory[ResourceType.METAL] || 0;

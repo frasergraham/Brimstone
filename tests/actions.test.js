@@ -7,13 +7,15 @@ import { GameState, Phase, Player } from '../src/game.js';
 import {
   executeMove, executeExplore, executeBattle, executeFortify,
   executeSummon, executeHeal, executeUseItem, executeUseAbility,
+  executeFortAssault, isFortBlocking,
   getReachableHexes, sightRange, survivorFindMultiplier,
 } from '../src/actions.js';
 import {
   Entity, EntityType, SurvivorAbility,
-  createHero, createWitch, createMinion, createZombie, createSurvivor, resetRoster,
+  createHero, createWitch, createMinion, createZombie, createSurvivor,
+  createIronGolem, resetRoster, setForcedDice,
 } from '../src/entities.js';
-import { TileType, BuildingType, ResourceType, WeaponType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus } from '../src/tiles.js';
+import { TileType, BuildingType, ResourceType, WeaponType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus, FORT_IMPASSABLE_THRESHOLD } from '../src/tiles.js';
 import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import { applyPostRoundEffects } from '../src/post-round-effects.js';
 
@@ -2050,5 +2052,228 @@ describe('executeExplore — survivor find penalty', () => {
     assert.equal(r.encounterSurvivor, null, 'should not find survivor with 10 active');
     // The hiddenSurvivor flag should still be there since the encounter was skipped
     assert.ok(t.hiddenSurvivor, 'hiddenSurvivor flag should remain');
+  });
+});
+
+// ── Fortifications as walls (impassable to witch) ─────────────────────────────
+// Level >= FORT_IMPASSABLE_THRESHOLD blocks witch-side movement. Hero moves freely.
+
+describe('fortifications as impassable walls', () => {
+  test('isFortBlocking: only witch is blocked by fort >= threshold', () => {
+    const t = { fortifyLevel: 2 };
+    assert.equal(isFortBlocking(t, 'witch'), true);
+    assert.equal(isFortBlocking(t, 'hero'),  false);
+    assert.equal(isFortBlocking({ fortifyLevel: 1 }, 'witch'), false);
+    assert.equal(isFortBlocking({ fortifyLevel: 0 }, 'witch'), false);
+    assert.equal(isFortBlocking(null, 'witch'),  false);
+  });
+
+  test('witch unit: getReachableHexes excludes fort-2 neighbour', () => {
+    const state = freshState();
+    state.entities = state.entities.filter(e => e.id === state.hero.id || e.id === state.witch.id);
+    const witch = state.witch;
+    // Make all immediate neighbors plain grass first
+    for (const n of getNeighbors(witch.col, witch.row)) {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      if (t) { t.type = TileType.GRASS; t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; }
+    }
+    const nbrs = getNeighbors(witch.col, witch.row);
+    const wallNbr = nbrs[0];
+    const wallTile = state.tiles.get(hexKey(wallNbr.col, wallNbr.row));
+    wallTile.fortifyLevel = 2;
+
+    const reachable = getReachableHexes(state, witch, 1);
+    const reachKeys = new Set(reachable.map(h => hexKey(h.col, h.row)));
+    assert.ok(!reachKeys.has(hexKey(wallNbr.col, wallNbr.row)),
+      'fort-2 neighbour should NOT be reachable for witch unit');
+
+    // Drop the fort to 1 — now it should be reachable.
+    wallTile.fortifyLevel = 1;
+    const reachable2 = getReachableHexes(state, witch, 1);
+    const reachKeys2 = new Set(reachable2.map(h => hexKey(h.col, h.row)));
+    assert.ok(reachKeys2.has(hexKey(wallNbr.col, wallNbr.row)),
+      'fort-1 neighbour should be reachable for witch unit');
+  });
+
+  test('hero unit: fort-3 neighbour is reachable', () => {
+    const state = freshState();
+    const hero = state.hero;
+    for (const n of getNeighbors(hero.col, hero.row)) {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      if (t) { t.type = TileType.GRASS; t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; }
+    }
+    // Clear enemies from adjacent hexes so they don't block pathing
+    state.entities = state.entities.filter(e => e.id === hero.id || e.id === state.witch.id);
+    const wallNbr = getNeighbors(hero.col, hero.row)[0];
+    const wallTile = state.tiles.get(hexKey(wallNbr.col, wallNbr.row));
+    wallTile.fortifyLevel = 3;
+
+    const reachable = getReachableHexes(state, hero, 1);
+    const reachKeys = new Set(reachable.map(h => hexKey(h.col, h.row)));
+    assert.ok(reachKeys.has(hexKey(wallNbr.col, wallNbr.row)),
+      'hero should reach fort-3 neighbour freely');
+  });
+
+  test('executeMove: witch blocked by fort returns blockedByFort', () => {
+    const state = freshState();
+    state.entities = state.entities.filter(e => e.id === state.hero.id || e.id === state.witch.id);
+    const witch = state.witch;
+    const origCol = witch.col, origRow = witch.row;
+    // Normalize neighbours
+    for (const n of getNeighbors(witch.col, witch.row)) {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      if (t) { t.type = TileType.GRASS; t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; }
+    }
+    const wallNbr = getNeighbors(witch.col, witch.row)[0];
+    const wallTile = state.tiles.get(hexKey(wallNbr.col, wallNbr.row));
+    wallTile.fortifyLevel = 2;
+
+    const r = executeMove(state, witch, wallNbr.col, wallNbr.row);
+    assert.equal(r.success, false, 'Move directly into fort-2 should fail');
+    assert.ok(r.blockedByFort, 'blockedByFort should be set');
+    assert.equal(r.blockedByFort.col, wallNbr.col);
+    assert.equal(r.blockedByFort.row, wallNbr.row);
+    assert.equal(r.blockedByFort.fortLevel, 2);
+    assert.ok(r.log.some(l => l.includes('blocked by fortifications')),
+      'Log should mention blocked by fortifications');
+    assert.equal(witch.col, origCol, 'Witch must not have moved');
+    assert.equal(witch.row, origRow);
+  });
+
+  test('executeMove: witch can walk through fort-1', () => {
+    const state = freshState();
+    state.entities = state.entities.filter(e => e.id === state.hero.id || e.id === state.witch.id);
+    const witch = state.witch;
+    for (const n of getNeighbors(witch.col, witch.row)) {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      if (t) { t.type = TileType.GRASS; t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; }
+    }
+    const nbr = getNeighbors(witch.col, witch.row)[0];
+    const nbrTile = state.tiles.get(hexKey(nbr.col, nbr.row));
+    nbrTile.fortifyLevel = 1;
+
+    const r = executeMove(state, witch, nbr.col, nbr.row);
+    assert.equal(r.success, true);
+    assert.equal(witch.col, nbr.col);
+    assert.equal(witch.row, nbr.row);
+    assert.equal(r.blockedByFort, null, 'no fort block for fort-1');
+  });
+});
+
+// ── executeFortAssault ───────────────────────────────────────────────────────
+
+describe('executeFortAssault', () => {
+  function setupAssaultScene({ fortLevel = 3, attacker = 'minion', attackerAttack = null } = {}) {
+    const state = freshState();
+    state.entities = state.entities.filter(e => e.id === state.hero.id);
+    // Place attacker beside the hero's tile — but move it to a fresh location we control.
+    // Pick two deterministic hexes: attacker at (5,5), fort at (6,5).
+    const atkPos = { col: 5, row: 5 };
+    const fortPos = { col: 6, row: 5 };
+    const atkTile = state.tiles.get(hexKey(atkPos.col, atkPos.row));
+    const fortTile = state.tiles.get(hexKey(fortPos.col, fortPos.row));
+    if (atkTile) { atkTile.type = TileType.GRASS; atkTile.building = null; atkTile.hiddenSurvivor = false; atkTile.fortifyLevel = 0; }
+    if (fortTile) { fortTile.type = TileType.GRASS; fortTile.building = null; fortTile.hiddenSurvivor = false; fortTile.fortifyLevel = fortLevel; }
+
+    let unit;
+    if (attacker === 'iron_golem') unit = createIronGolem(atkPos.col, atkPos.row);
+    else unit = createMinion(atkPos.col, atkPos.row);
+    if (attackerAttack != null) unit.attack = attackerAttack;
+    state.entities.push(unit);
+
+    return { state, unit, fortTile, fortPos };
+  }
+
+  test('witch minion hits a fort-3 wall and knocks it down to 2', () => {
+    const { state, unit, fortTile, fortPos } = setupAssaultScene({ fortLevel: 3, attacker: 'minion' });
+    // Minion attack=1, fort defense = 3+1 = 4. Force d6=4 → roll = 4+1 = 5 > 4 → hit, not crush (5 < 8).
+    setForcedDice(4);
+    const r = executeFortAssault(state, unit, fortPos.col, fortPos.row);
+    assert.equal(r.success, true);
+    assert.equal(r.hit, true);
+    assert.equal(r.crush, false);
+    assert.equal(r.damage, 1);
+    assert.equal(r.fortLevelBefore, 3);
+    assert.equal(r.fortLevelAfter, 2);
+    assert.equal(fortTile.fortifyLevel, 2);
+  });
+
+  test('crush on a fort-3 wall knocks it down by 2 levels', () => {
+    const { state, unit, fortTile, fortPos } = setupAssaultScene({
+      fortLevel: 3, attacker: 'iron_golem',
+    });
+    // Iron golem attack=3, fort defense = 4. Force d6=6 → roll = 6+3 = 9 vs 4 → crush (9 >= 8).
+    setForcedDice(6);
+    const r = executeFortAssault(state, unit, fortPos.col, fortPos.row);
+    assert.equal(r.hit, true);
+    assert.equal(r.crush, true);
+    assert.equal(r.damage, 2);
+    assert.equal(r.fortLevelAfter, 1);
+    assert.equal(fortTile.fortifyLevel, 1);
+  });
+
+  test('missed assault leaves fort unchanged', () => {
+    const { state, unit, fortTile, fortPos } = setupAssaultScene({ fortLevel: 4, attacker: 'minion' });
+    // Minion attack=1, fort defense = 4+1 = 5. Force d6=1 → roll = 2 vs 5 → miss.
+    setForcedDice(1);
+    const r = executeFortAssault(state, unit, fortPos.col, fortPos.row);
+    assert.equal(r.hit, false);
+    assert.equal(r.damage, 0);
+    assert.equal(fortTile.fortifyLevel, 4);
+  });
+
+  test('rejects hero attempting to assault a fort', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const fortPos = getNeighbors(hero.col, hero.row).find(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && t.type !== TileType.RIVER;
+    });
+    if (!fortPos) return;
+    const t = state.tiles.get(hexKey(fortPos.col, fortPos.row));
+    t.fortifyLevel = 3;
+
+    const r = executeFortAssault(state, hero, fortPos.col, fortPos.row);
+    assert.equal(r.success, false);
+    assert.ok(r.log.some(l => l.toLowerCase().includes('witch')),
+      'rejection message should mention witch-only');
+  });
+
+  test('rejects assault on fort below impassable threshold', () => {
+    const { state, unit, fortPos } = setupAssaultScene({ fortLevel: 1, attacker: 'minion' });
+    const r = executeFortAssault(state, unit, fortPos.col, fortPos.row);
+    assert.equal(r.success, false);
+  });
+
+  test('rejects assault on non-adjacent target', () => {
+    const { state, unit, fortPos } = setupAssaultScene({ fortLevel: 3, attacker: 'minion' });
+    // Move unit far away.
+    unit.col = 0; unit.row = 0;
+    const r = executeFortAssault(state, unit, fortPos.col, fortPos.row);
+    assert.equal(r.success, false);
+    assert.ok(r.log.some(l => l.toLowerCase().includes('range')));
+  });
+
+  test('after wall is demolished to 1, a witch unit can walk through it', () => {
+    const { state, unit, fortTile, fortPos } = setupAssaultScene({
+      fortLevel: 3, attacker: 'iron_golem',
+    });
+    setForcedDice(6);
+    const r1 = executeFortAssault(state, unit, fortPos.col, fortPos.row);
+    assert.equal(r1.fortLevelAfter, 1);
+
+    // Ensure no enemies on the target hex
+    state.entities = state.entities.filter(e => !(e.col === fortPos.col && e.row === fortPos.row));
+    state.entities.push(unit);
+    unit.col = 5; unit.row = 5;  // ensure adjacent
+
+    // Clear out other stuff that might live there
+    fortTile.building = null;
+    fortTile.type = TileType.GRASS;
+
+    const r2 = executeMove(state, unit, fortPos.col, fortPos.row);
+    assert.equal(r2.success, true, 'Witch should now walk onto the breached wall hex');
+    assert.equal(unit.col, fortPos.col);
+    assert.equal(unit.row, fortPos.row);
   });
 });

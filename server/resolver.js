@@ -7,8 +7,9 @@
 import {
   executeMove, executeExplore, executeBattle,
   executeFortify, executeSummon, executeHeal, executeUseItem, executeUseAbility,
-  executeGuard, executeGuardStrike, executeSoundHorn,
+  executeGuard, executeGuardStrike, executeSoundHorn, executeFortAssault,
 } from '../src/actions.js';
+import { FORT_IMPASSABLE_THRESHOLD } from '../src/tiles.js';
 import { EntityType } from '../src/entities.js';
 import { hexDistance, getNeighbors, hexKey } from '../src/hex.js';
 import { PlanActionType, snapEntity, groupPlanByEntity } from '../src/planner.js';
@@ -95,7 +96,11 @@ function runAction(state, action, faction, playerId = null) {
 
     case PlanActionType.MOVE: {
       const r = executeMove(state, entity, action.toCol, action.toRow);
-      if (!r.success) return { kind: 'fail', reason: r.log[0], blockedBy: r.blockedBy ?? null };
+      if (!r.success) return {
+        kind: 'fail', reason: r.log[0],
+        blockedBy: r.blockedBy ?? null,
+        blockedByFort: r.blockedByFort ?? null,
+      };
       return { kind: 'ok', result: r };
     }
 
@@ -151,6 +156,15 @@ function runAction(state, action, faction, playerId = null) {
       );
       if (enemies.length === 0) {
         const actorSnap = snapEntity(entity);
+        // Witch siege: if no enemy is on the hex but a wall (fort >= threshold)
+        // stands there, battering it reduces its level. Otherwise whiff.
+        const targetTile = state.tiles.get(hexKey(action.targetCol, action.targetRow));
+        if (getFaction(entity.owner).canAssaultFortifications() && targetTile &&
+            (targetTile.fortifyLevel || 0) >= FORT_IMPASSABLE_THRESHOLD) {
+          const r = executeFortAssault(state, entity, action.targetCol, action.targetRow);
+          if (!r.success) return { kind: 'fail', reason: r.log[0] };
+          return { kind: 'ok', result: r, battleSnaps: { actorSnap } };
+        }
         return {
           kind: 'skip',
           reason: 'No enemy on target hex.',
@@ -305,11 +319,12 @@ function drainOneStep(state, queue, budget) {
       // Hard failure — skip this action but let remaining plan continue
       queue.shift();
       subEvents.push({
-        type:      ResEventType.ACTION_FAIL,
-        faction:   budget.faction,
+        type:          ResEventType.ACTION_FAIL,
+        faction:       budget.faction,
         action,
-        reason:    out.reason,
-        blockedBy: out.blockedBy ?? null,
+        reason:        out.reason,
+        blockedBy:     out.blockedBy ?? null,
+        blockedByFort: out.blockedByFort ?? null,
       });
       // Loop: try the next action in the same step
     }
