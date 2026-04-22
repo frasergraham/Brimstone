@@ -2,6 +2,7 @@
 // Stored in localStorage; optionally synced to server for verified users.
 
 import { countHeldNodes } from '../game.js';
+import { getFaction } from '../factions.js';
 
 const SAVE_VERSION = 1;
 
@@ -46,7 +47,9 @@ export function reconcileRosterAfterMission(preMissionRoster, entities) {
   const deployedNames = new Set();
   const deployedSurvivors = [];
   for (const e of entities) {
-    if (e.owner !== 'hero' || e.type !== 'survivor') continue;
+    if (e.type !== 'survivor') continue;
+    const f = e.owner ? getFaction(e.owner) : null;
+    if (!f?.canDiscoverNPCs()) continue;
     deployedNames.add(e.name);
     if (e.alive) deployedSurvivors.push(snapshotSurvivor(e));
   }
@@ -91,7 +94,10 @@ export function buildVictoryDelegate(objectives) {
 const DEFERRED = Symbol('victory-deferred');
 
 function _heroSurvivorCount(state) {
-  return state.entities.filter(e => e.type === 'survivor' && e.owner === 'hero' && e.alive).length;
+  return state.entities.filter(e => {
+    if (!e.alive || e.type !== 'survivor' || !e.owner) return false;
+    return getFaction(e.owner).canDiscoverNPCs();
+  }).length;
 }
 
 function _checkLoseCondition(cond, state) {
@@ -151,8 +157,9 @@ function _checkLoseCondition(cond, state) {
 
 function _checkWinCondition(cond, state) {
   switch (cond.type) {
-    case 'eliminate_all':
-      if (state.entities.filter(e => e.owner === 'witch' && e.alive).length === 0) {
+    case 'eliminate_all': {
+      const target = cond.targetFaction || 'witch';
+      if (state.entities.filter(e => e.owner === target && e.alive).length === 0) {
         return {
           winner: 'hero',
           winReason: cond.reason || 'All enemies have been eliminated.',
@@ -160,6 +167,7 @@ function _checkWinCondition(cond, state) {
         };
       }
       return null;
+    }
     case 'survive_rounds':
       if (state.round > cond.rounds) {
         return {
@@ -217,8 +225,9 @@ function _checkWinCondition(cond, state) {
     case 'all_party_at_hexes': {
       // Win when every living hero-faction party member (hero + survivors) stands
       // on one of the listed target hexes.
+      const partyFaction = cond.faction || 'hero';
       const party = state.entities.filter(e =>
-        e.alive && e.owner === 'hero' &&
+        e.alive && e.owner === partyFaction &&
         (e.type === 'hero' || e.type === 'survivor')
       );
       if (party.length === 0) return null;
@@ -291,7 +300,7 @@ export function processWaves(state, waves, createEnemyFn) {
     for (const unit of wave.units) {
       const pos = resolveSpawnPosition(state, unit.spawnAt);
       if (!pos) continue;
-      const entity = createEnemyFn(unit.type, pos.col, pos.row);
+      const entity = createEnemyFn(unit.type, pos.col, pos.row, state);
       if (entity) {
         if (unit.overrides) Object.assign(entity, unit.overrides);
         state.entities.push(entity);

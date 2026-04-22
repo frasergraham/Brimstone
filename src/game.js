@@ -1,6 +1,6 @@
 // Central game state and turn management
 import { generateMap } from './map.js';
-import { createHero, createWitch, createMinion, createSurvivor, resetRoster, EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
+import { createHero, createWitch, createMinion, createSurvivor, resetRoster, survivorRosterIndexByName, bumpEntityId as _bumpModuleEntityId, EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
 import { BuildingType, ResourceType, TileType } from './tiles.js';
 import { hexKey, hexDistance, getNeighbors, setMapDimensions, MAP_COLS, MAP_ROWS } from './hex.js';
 import { applyPostRoundEffects, attritionForCycle } from './post-round-effects.js';
@@ -158,7 +158,17 @@ export class GameState {
    *   heroStart, witchStart, mapSize, survivorCounts, cols?, rows? }.
    */
   constructor(witchIsAI = true, heroIsAI = false, mapSize = 'standard', nodeCount = null, mapDataOverride = null) {
+    // Per-instance entity/roster/dice state. Previously module-level globals
+    // in entities.js which caused cross-game collisions on the server.
+    this.nextEntityId       = 1;
+    this.forcedDice         = [];
+    this.usedRosterIndices  = new Set();
+
+    // Legacy: also reset the module-level roster used by editor previews and
+    // tests that call createSurvivor() without a state. Can be removed once
+    // those callsites are migrated.
     resetRoster();
+
     let mapData;
     if (mapDataOverride) {
       if (mapDataOverride.cols && mapDataOverride.rows) {
@@ -195,7 +205,7 @@ export class GameState {
     // Offline / legacy path: create one hero and one witch with synthetic player IDs.
     const heroName = mapDataOverride?.heroName ?? 'Hero';
     const witchName = mapDataOverride?.witchName ?? 'Witch';
-    this.hero  = createHero(mapData.heroStart.col,  mapData.heroStart.row, 'hero');
+    this.hero  = createHero(mapData.heroStart.col,  mapData.heroStart.row, 'hero', this);
     this.hero.name = heroName;
     this.entities.push(this.hero);
     this.players.push({ id: 'hero',  name: heroName,  faction: 'hero',  isAI: heroIsAI,  leaderId: this.hero.id });
@@ -205,7 +215,7 @@ export class GameState {
       this.witch = null;
       this.players.push({ id: 'witch', name: witchName, faction: 'witch', isAI: true, leaderId: null });
     } else {
-      this.witch = createWitch(mapData.witchStart.col, mapData.witchStart.row, 'witch');
+      this.witch = createWitch(mapData.witchStart.col, mapData.witchStart.row, 'witch', this);
       this.witch.name = witchName;
       this.entities.push(this.witch);
       this.players.push({ id: 'witch', name: witchName, faction: 'witch', isAI: witchIsAI, leaderId: this.witch.id });
@@ -322,6 +332,46 @@ export class GameState {
     this.actionsLeft = Math.max(0, this.actionsLeft - cost);
   }
 
+  // ── Entity ID / dice / roster (per-instance, concurrent-game-safe) ─────
+
+  /** Next entity ID number. Entity constructor prefixes with "e". */
+  allocateEntityId() {
+    const id = this.nextEntityId++;
+    // Keep the module-level legacy counter at or above this state's counter
+    // so standalone createFoo() calls (no state) never collide with state
+    // entities. Tests and editor previews rely on this invariant.
+    _bumpModuleEntityId(id);
+    return id;
+  }
+
+  /** Ensure the next allocated id is greater than the given numeric id. */
+  bumpEntityId(minNumericId) {
+    if (minNumericId >= this.nextEntityId) this.nextEntityId = minNumericId + 1;
+    _bumpModuleEntityId(minNumericId);
+  }
+
+  /** Queue forced dice values for scripted (tutorial) combat outcomes. */
+  setForcedDice(...values) {
+    this.forcedDice = [...values];
+  }
+
+  /** Pop the next forced die, or roll a random 1..sides. */
+  nextDie(sides) {
+    if (this.forcedDice.length > 0) return this.forcedDice.shift();
+    return Math.ceil(Math.random() * sides);
+  }
+
+  /** Clear the used-roster tracker (call at game start / between missions). */
+  resetRoster() {
+    this.usedRosterIndices.clear();
+  }
+
+  /** Mark a survivor roster index as used (by the name shown in the roster). */
+  markRosterUsedByName(name) {
+    const idx = survivorRosterIndexByName(name);
+    if (idx >= 0) this.usedRosterIndices.add(idx);
+  }
+
   // ── Player registry (multiplayer) ──────────────────────────────────────
 
   /**
@@ -338,8 +388,8 @@ export class GameState {
    */
   addPlayer(playerId, name, faction, col, row, isAI = false) {
     const leader = faction === 'hero'
-      ? createHero(col, row, playerId)
-      : createWitch(col, row, playerId);
+      ? createHero(col, row, playerId, this)
+      : createWitch(col, row, playerId, this);
     leader.name = name;
     this.entities.push(leader);
     this.players.push({ id: playerId, name, faction, isAI, leaderId: leader.id });
@@ -456,8 +506,8 @@ export class GameState {
         const spawnPos = this._pickBattleSpawn(p.faction);
         if (spawnPos) {
           const leader = p.faction === 'hero'
-            ? createHero(spawnPos.col, spawnPos.row, p.id)
-            : createWitch(spawnPos.col, spawnPos.row, p.id);
+            ? createHero(spawnPos.col, spawnPos.row, p.id, this)
+            : createWitch(spawnPos.col, spawnPos.row, p.id, this);
           leader.name = p.name;
           this.entities.push(leader);
           p.leaderId = leader.id;

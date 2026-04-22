@@ -114,7 +114,7 @@ export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entit
   };
 
   // Projected inventory — updated as we walk through steps
-  const projShared      = { ...(initialInv?.shared      ?? {}) };
+  const projShared      = { ...(initialInv?.hero        ?? {}) };
   const projWitch       = { ...(initialInv?.witch       ?? {}) };
   const projEntityItems = {};
   if (initialInv?.entityItems) {
@@ -179,7 +179,8 @@ export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entit
         break;
       case PlanActionType.HEAL: {
         const healEnt = entities.find(e => e.id === a.entityId);
-        const healPool = healEnt?.owner === 'witch' ? projWitch : projShared;
+        const healPools = { hero: projShared, witch: projWitch };
+        const healPool = healPools[healEnt?.owner] || projShared;
         if ((healPool[ResourceType.HERBS] || 0) > 0) healPool[ResourceType.HERBS]--;
         break;
       }
@@ -238,7 +239,7 @@ export function buildUnitPlanBlocksHtml(
   const budgetState = new Map();   // key → 'ok' | 'food' | 'over'
   const costLabels  = new Map();   // key → string
 
-  const projShared      = { ...(initialInv?.shared      ?? {}) };
+  const projShared      = { ...(initialInv?.hero        ?? {}) };
   const projWitch       = { ...(initialInv?.witch       ?? {}) };
   const projEntityItems = {};
   if (initialInv?.entityItems) {
@@ -372,7 +373,8 @@ function _advanceProjectedInventory(a, projShared, projWitch, projEntityItems, e
       break;
     case PlanActionType.HEAL: {
       const healEnt = entities?.find(e => e.id === a.entityId);
-      const healPool = healEnt?.owner === 'witch' ? projWitch : projShared;
+      const healPools = { hero: projShared, witch: projWitch };
+      const healPool = healPools[healEnt?.owner] || projShared;
       if ((healPool[ResourceType.HERBS] || 0) > 0) healPool[ResourceType.HERBS]--;
       break;
     }

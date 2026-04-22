@@ -6,6 +6,7 @@ import { Phase } from './game.js';
 import { EntityType, SurvivorAbility, createHero, createWitch, createSurvivor, createZombie, createMinion, createWoodGolem, createIronGolem } from './entities.js';
 import { ResourceType, TileType, BuildingType } from './tiles.js';
 import { hexKey, getNeighbors } from './hex.js';
+import { AI_HERO_NAMES, AI_WITCH_NAMES } from './ai-names.js';
 
 // ── Base Class ──────────────────────────────────────────────────────────────
 
@@ -91,7 +92,7 @@ export class Faction {
    * Create the entity discovered when this faction explores a hidden survivor tile.
    * @returns {object} entity
    */
-  createDiscoveryEntity(_col, _row, _ownerId) {
+  createDiscoveryEntity(_col, _row, _ownerId, _state) {
     throw new Error('Subclass must implement createDiscoveryEntity');
   }
 
@@ -159,7 +160,7 @@ export class Faction {
   getUnitTypes() { return []; }
 
   /** Create the faction leader entity */
-  createLeader(col, row, ownerId) {
+  createLeader(_col, _row, _ownerId, _state) {
     throw new Error('Subclass must implement createLeader');
   }
 
@@ -167,6 +168,9 @@ export class Faction {
 
   /** Return the personality registry for this faction's AI */
   getPersonalities() { return {}; }
+
+  /** Pool of AI display names used when filling AI seats. */
+  getAINamePool() { return []; }
 }
 
 // ── Hero Faction ────────────────────────────────────────────────────────────
@@ -269,7 +273,7 @@ export class HeroFaction extends Faction {
           if (Math.random() < 0.33) {
             const hex = freeHex();
             if (hex) {
-              const s = createSurvivor(hex.col, hex.row, hero.ownerId);
+              const s = createSurvivor(hex.col, hex.row, hero.ownerId, state);
               s.owner = 'hero';
               if (Math.random() < 0.5) s.items['horse'] = 1;
               state.entities.push(s);
@@ -294,8 +298,8 @@ export class HeroFaction extends Faction {
   }
 
   // Discovery & Loot
-  createDiscoveryEntity(col, row, ownerId) {
-    const s = createSurvivor(col, row, ownerId);
+  createDiscoveryEntity(col, row, ownerId, state = null) {
+    const s = createSurvivor(col, row, ownerId, state);
     s.owner = 'hero';
     return s;
   }
@@ -342,7 +346,10 @@ export class HeroFaction extends Faction {
 
   // Entity Registry
   getUnitTypes() { return [EntityType.SURVIVOR]; }
-  createLeader(col, row, ownerId) { return createHero(col, row, ownerId); }
+  createLeader(col, row, ownerId, state = null) { return createHero(col, row, ownerId, state); }
+
+  // AI Names
+  getAINamePool() { return AI_HERO_NAMES; }
 }
 
 // ── Witch Faction ───────────────────────────────────────────────────────────
@@ -390,8 +397,8 @@ export class WitchFaction extends Faction {
   getNodeSeenKey() { return 'seenByWitch'; }
 
   // Discovery & Loot
-  createDiscoveryEntity(col, row, ownerId) {
-    return createZombie(col, row, ownerId);
+  createDiscoveryEntity(col, row, ownerId, state = null) {
+    return createZombie(col, row, ownerId, state);
   }
 
   buildDiscoveryResult(entity) {
@@ -424,7 +431,10 @@ export class WitchFaction extends Faction {
   getUnitTypes() {
     return [EntityType.ZOMBIE, EntityType.MINION, EntityType.WOOD_GOLEM, EntityType.IRON_GOLEM];
   }
-  createLeader(col, row, ownerId) { return createWitch(col, row, ownerId); }
+  createLeader(col, row, ownerId, state = null) { return createWitch(col, row, ownerId, state); }
+
+  // AI Names
+  getAINamePool() { return AI_WITCH_NAMES; }
 }
 
 // ── Faction Registry ────────────────────────────────────────────────────────

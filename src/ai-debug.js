@@ -8,6 +8,18 @@
 import { hexKey, hexDistance } from './hex.js';
 import { describePlanAction } from './ui-render.js';
 
+// Board-shape differs per faction (witch board: visibleHeroes; hero board: witch + witchMinions),
+// so extracting the visible enemy list is keyed by faction. Kept in this file to avoid
+// leaking debug-display concerns into the Faction class.
+const _ENEMY_EXTRACTORS = {
+  witch: (board) => board.visibleHeroes || [],
+  hero:  (board) => [board.witch, ...(board.witchMinions || board.minions || [])].filter(e => e?.alive),
+};
+function _extractEnemiesFromBoard(faction, board) {
+  const fn = _ENEMY_EXTRACTORS[faction];
+  return fn ? fn(board) : [];
+}
+
 // ── Goal color map ──────────────────────────────────────────────────────────
 // Shared across witch and hero goals. Goals with the same semantic role share
 // a color (e.g. KILL_HERO / SLAY_WITCH are both red).
@@ -115,9 +127,7 @@ export function buildIntentMarkers(actions, board, unitCommitments, faction) {
   const markers = [];
   const seen = new Set();
 
-  const enemies = faction === 'witch'
-    ? (board.visibleHeroes || [])
-    : [board.witch, ...(board.witchMinions || board.minions || [])].filter(e => e?.alive);
+  const enemies = _extractEnemiesFromBoard(faction, board);
   const nodes = board.nodes || [];
   const unexplored = board.unexploredBuildings || [];
 

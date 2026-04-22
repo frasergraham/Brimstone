@@ -127,28 +127,43 @@ async function _callLLM(room, playerId, llmConfig) {
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
+// Personality registries by faction id. Keyed lookup keeps this file free of
+// per-faction string checks; registries live in ai.js.
+const PERSONALITY_REGISTRIES = {
+  hero:  HERO_PERSONALITIES,
+  witch: WITCH_PERSONALITIES,
+};
+
 /**
  * Get available AI personalities for a faction.
  */
 export function getPersonalities(faction) {
-  const registry = faction === 'witch' ? WITCH_PERSONALITIES : HERO_PERSONALITIES;
-  return Object.keys(registry);
+  return Object.keys(PERSONALITY_REGISTRIES[faction] || {});
+}
+
+function _countByFaction(players) {
+  const counts = {};
+  for (const s of players) counts[s.faction] = (counts[s.faction] || 0) + 1;
+  return counts;
 }
 
 /**
  * List active battle rooms that can accept remote AI players.
  */
 export function listBattleRooms() {
-  return getActiveBattleRooms().map(room => ({
-    roomId:         room.id,
-    round:          room.state.round,
-    phase:          room.phase,
-    gameOver:       room.state.gameOver || false,
-    heroCount:      room.players.filter(s => s.faction === 'hero').length,
-    witchCount:     room.players.filter(s => s.faction === 'witch').length,
-    maxPerSide:     room.state.battleConfig?.maxPlayersPerSide ?? 10,
-    remoteAIs:      room.players.filter(s => s.adminControlled).length,
-  }));
+  return getActiveBattleRooms().map(room => {
+    const counts = _countByFaction(room.players);
+    return {
+      roomId:         room.id,
+      round:          room.state.round,
+      phase:          room.phase,
+      gameOver:       room.state.gameOver || false,
+      heroCount:      counts.hero || 0,
+      witchCount:     counts.witch || 0,
+      maxPerSide:     room.state.battleConfig?.maxPlayersPerSide ?? 10,
+      remoteAIs:      room.players.filter(s => s.adminControlled).length,
+    };
+  });
 }
 
 /**
@@ -300,8 +315,8 @@ export function getRoomRemoteStatus(roomId) {
     winner:     room.state.winner || null,
     winReason:  room.state.winReason || null,
     nodeScore:  room.state.nodeScore || null,
-    heroCount:  room.players.filter(s => s.faction === 'hero').length,
-    witchCount: room.players.filter(s => s.faction === 'witch').length,
+    heroCount:  _countByFaction(room.players).hero || 0,
+    witchCount: _countByFaction(room.players).witch || 0,
     maxPerSide: room.state.battleConfig?.maxPlayersPerSide ?? 10,
     allPlayers: room.players.map(s => ({
       playerId:        s.playerId,

@@ -3,6 +3,8 @@
  * 17th-century New England themed names for heroes and witches.
  */
 
+import { getFaction } from './factions.js';
+
 export const AI_HERO_NAMES = Object.freeze([
   'Ezekiel Thorne',
   'Josiah Blackwood',
@@ -33,7 +35,8 @@ export const AI_WITCH_NAMES = Object.freeze([
  * @returns {string}
  */
 export function pickAIName(faction, usedNames) {
-  const pool = faction === 'witch' ? AI_WITCH_NAMES : AI_HERO_NAMES;
+  const def = getFaction(faction);
+  const pool = def.getAINamePool();
   const available = pool.filter(n => !usedNames.has(n));
 
   if (available.length > 0) {
@@ -43,7 +46,7 @@ export function pickAIName(faction, usedNames) {
   }
 
   // Fallback: generate a numbered name
-  const label = faction === 'witch' ? 'AI Witch' : 'AI Hero';
+  const label = `AI ${def.name}`;
   let i = 1;
   while (usedNames.has(`${label} #${i}`)) i++;
   const fallback = `${label} #${i}`;

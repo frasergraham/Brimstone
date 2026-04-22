@@ -2,7 +2,7 @@
 // serializeState  → plain JSON-safe snapshot (network transmission, save storage)
 // deserializeState ← reconstruct a live GameState from a saved snapshot (resume)
 import { VERSION }           from '../src/version.js';
-import { Entity, bumpEntityId } from '../src/entities.js';
+import { Entity } from '../src/entities.js';
 import { GameState }         from '../src/game.js';
 import { setMapDimensions }  from '../src/hex.js';
 
@@ -118,6 +118,14 @@ export function serializeState(state) {
     mapRows,
     mapSize:              state.mapSize ?? 'standard',
     campaignAIBudgetBonus: state.campaignAIBudgetBonus ?? 0,
+    // Per-state entity/roster counters. Persisting `usedRosterIndices` prevents
+    // duplicate survivor names when a mid-game save is resumed and new
+    // survivors spawn from unexplored buildings. nextEntityId is informational;
+    // on resume we derive the floor from the max restored entity id anyway.
+    // `forcedDice` is intentionally NOT persisted — it's a per-round tutorial
+    // scratch queue re-populated by the mission conductor each planning phase.
+    nextEntityId:         state.nextEntityId ?? 1,
+    usedRosterIndices:    [...(state.usedRosterIndices ?? [])],
     // Per-player planning state (multiplayer) — serialized so hibernated saves
     // don't lose submitted plans.  Maps are converted to plain objects for JSON.
     planning: (state.playerPlans?.size > 0 || state.playerReady?.size > 0) ? {
@@ -154,12 +162,21 @@ export function deserializeState(snap) {
     return e;
   });
 
-  // Advance the global ID counter past every restored ID to prevent collisions.
+  // Advance the per-state counter past every restored ID; GameState.bumpEntityId
+  // also advances the module-level counter so any standalone createFoo() paths
+  // (editor previews, legacy tests) never collide with restored entities.
   const maxId = snap.entities.reduce((max, e) => {
     const n = parseInt(e.id?.slice(1) ?? '0', 10);
     return isNaN(n) ? max : Math.max(max, n);
   }, 0);
-  bumpEntityId(maxId);
+  state.bumpEntityId(maxId);
+
+  // Restore per-state roster tracker if the snapshot carries it; older saves
+  // that predate this field will keep the fresh empty set from the
+  // constructor. nextEntityId is re-derived by the bump above.
+  if (Array.isArray(snap.usedRosterIndices)) {
+    state.usedRosterIndices = new Set(snap.usedRosterIndices);
+  }
 
   // Restore global hex math dimensions so neighbor/distance calculations use the
   // correct grid size. The constructor above generated a default-size map which

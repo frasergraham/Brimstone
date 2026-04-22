@@ -31,7 +31,7 @@ import { ReplayCache } from './replay-cache.js';
 import { MAP_SIZES } from './map.js';
 import { nodeController } from './game.js';
 import { MissionConductor } from './mission-conductor.js';
-import { createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, setForcedDice, EntityType, markRosterUsedByName, ENTITY_COLOR } from './entities.js';
+import { createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
@@ -585,7 +585,7 @@ async function _onConductorPlanSubmit(heroPlan) {
   // Apply forced dice if configured for this round
   const forcedDice = _missionConductor?.getForcedDice();
   if (forcedDice) {
-    setForcedDice(...forcedDice);
+    state.setForcedDice(...forcedDice);
   }
 
   state.submitPlan('hero', heroPlan);
@@ -2437,13 +2437,13 @@ function _showMissionInfoModal() {
   ui.showStoryModal(def.title, text);
 }
 
-function _createEnemyEntity(type, col, row) {
+function _createEnemyEntity(type, col, row, state = null) {
   switch (type) {
-    case 'zombie':     return createZombie(col, row, 'witch');
-    case 'minion':     return createMinion(col, row, 'witch');
-    case 'wood_golem': return createWoodGolem(col, row, 'witch');
-    case 'iron_golem': return createIronGolem(col, row, 'witch');
-    default:           return createMinion(col, row, 'witch');
+    case 'zombie':     return createZombie(col, row, 'witch', state);
+    case 'minion':     return createMinion(col, row, 'witch', state);
+    case 'wood_golem': return createWoodGolem(col, row, 'witch', state);
+    case 'iron_golem': return createIronGolem(col, row, 'witch', state);
+    default:           return createMinion(col, row, 'witch', state);
   }
 }
 
@@ -2542,7 +2542,7 @@ function _initCampaignMission(missionDef) {
       const rosterEntry = _activeCampaign.roster[toDeploy[i]];
       if (!rosterEntry) continue;
       const n = spots[i];
-      const s = createSurvivor(n.col, n.row, 'hero');
+      const s = createSurvivor(n.col, n.row, 'hero', state);
       // Restore stats from roster
       s.name = rosterEntry.name;
       s.title = rosterEntry.title;
@@ -2559,7 +2559,7 @@ function _initCampaignMission(missionDef) {
       s.owner = 'hero';
       state.entities.push(s);
       // Exclude this character from the hidden-survivor discovery pool
-      markRosterUsedByName(rosterEntry.name);
+      state.markRosterUsedByName(rosterEntry.name);
     }
   }
 
@@ -2596,7 +2596,7 @@ function _initCampaignMission(missionDef) {
       );
       for (let i = currentCount; i < min && spots.length > 0; i++) {
         const spot = spots.shift();
-        const s = createSurvivor(spot.col, spot.row, 'hero');
+        const s = createSurvivor(spot.col, spot.row, 'hero', state);
         s.owner = 'hero';
         state.entities.push(s);
         state.addLog(_arrivalMessage(s.name));
@@ -2607,7 +2607,7 @@ function _initCampaignMission(missionDef) {
   // Pre-place enemy units from mission definition
   if (missionDef.enemyUnits) {
     for (const enemy of missionDef.enemyUnits) {
-      const e = _createEnemyEntity(enemy.type, enemy.col, enemy.row);
+      const e = _createEnemyEntity(enemy.type, enemy.col, enemy.row, state);
       if (e) {
         if (enemy.overrides) Object.assign(e, enemy.overrides);
         state.entities.push(e);

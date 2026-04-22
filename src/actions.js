@@ -459,7 +459,7 @@ function _triggerSurvivorEncounter(state, actor, col, row) {
   let encounterSurvivor = null;
 
   const faction = getFaction(actor.owner);
-  const entity = faction.createDiscoveryEntity(col, row, actor.ownerId);
+  const entity = faction.createDiscoveryEntity(col, row, actor.ownerId, state);
   state.entities.push(entity);
   if (getFaction(actor.owner).canDiscoverNPCs()) {
     state.discoveredSurvivorCount = (state.discoveredSurvivorCount || 0) + 1;
@@ -723,7 +723,7 @@ export function executeBattle(state, actor, target) {
   const { attackRoll, defenseRoll, hit, margin,
           atkBaseDie, defBaseDie, atkExtraDice, defExtraDice, atkStaffBonus } =
     Entity.resolveCombat(actor, target, phaseBonus, atkFortAtkBonus, fortBonus,
-                         extraAtkDice, extraDefDice, fatiguePenalty);
+                         extraAtkDice, extraDefDice, fatiguePenalty, state);
 
   // Increment the defender's defend count for fatigue tracking
   if (target.defendCount === undefined) target.defendCount = 0;
@@ -889,11 +889,11 @@ export function executeSummon(state, actor, requestedType = null) {
 
   if (resolvedType === EntityType.IRON_GOLEM) {
     res = ResourceType.METAL; inv[res] -= 2;
-    summonedUnit = createIronGolem(actor.col, actor.row, ownerId);
+    summonedUnit = createIronGolem(actor.col, actor.row, ownerId, state);
     unitName = 'Iron Golem';
   } else if (resolvedType === EntityType.WOOD_GOLEM) {
     res = ResourceType.WOOD; inv[res] -= 2;
-    summonedUnit = createWoodGolem(actor.col, actor.row, ownerId);
+    summonedUnit = createWoodGolem(actor.col, actor.row, ownerId, state);
     unitName = 'Wood Golem';
   } else {
     // Minion: spend 2 from any resources, largest stacks first; track what was spent
@@ -905,7 +905,7 @@ export function executeSummon(state, actor, requestedType = null) {
       spentMap[k] = (spentMap[k] || 0) + spend;
       if (remaining === 0) break;
     }
-    summonedUnit = createMinion(actor.col, actor.row, ownerId);
+    summonedUnit = createMinion(actor.col, actor.row, ownerId, state);
     unitName = 'Minion';
     state.entities.push(summonedUnit);
     faction.trackSummon(state);
@@ -1129,7 +1129,7 @@ export function executeGuardStrike(state, guardian, target) {
   // No ally dice, no fatigue penalty; attacker fort ATT bonus still applies.
   const { attackRoll, defenseRoll, hit, margin,
           atkBaseDie, defBaseDie, atkStaffBonus } =
-    Entity.resolveCombat(guardian, target, phaseBonus, atkFortAtkBonus, fortBonus, 0, 0, 0);
+    Entity.resolveCombat(guardian, target, phaseBonus, atkFortAtkBonus, fortBonus, 0, 0, 0, state);
 
   // Restore attackBonus
   guardian.attackBonus = savedAtkBonus;
