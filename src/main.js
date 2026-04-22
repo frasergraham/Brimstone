@@ -21,7 +21,8 @@ import { VERSION, BUILD_VERSION } from './version.js';
 import { buildPlayerStatusHtml } from './ui-render.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType, groupPlanByEntity } from './planner.js';
-import { hexDistance, getNeighbors } from './hex.js';
+import { hexDistance, getNeighbors, hexKey } from './hex.js';
+import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD } from './tiles.js';
 import { sightRange } from './actions.js';
 import { getFaction, allFactions } from './factions.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
@@ -867,8 +868,15 @@ function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
   renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
   if (result?.damage)      renderer.addHpChangeFlash(targetSnap.col, targetSnap.row, -(result.damage));
   if (result?.counterDmg)  renderer.addHpChangeFlash(actorSnap.col,  actorSnap.row,  -(result.counterDmg));
-  if (result?.fortDamaged) renderer.addFlash(targetSnap.col, targetSnap.row, '🏰-1',
-    'rgba(120,120,140,0.15)', 1600, 0.65, 'rgba(180,180,200,1)');
+  if (result?.fortDamaged) {
+    renderer.addFlash(targetSnap.col, targetSnap.row, '🏰-1',
+      'rgba(120,120,140,0.15)', 1600, 0.65, 'rgba(180,180,200,1)');
+    // Apply the fort-level delta now so the hex ring visibly thins out in
+    // sync with the floater (fortifyLevel was rewound at the start of
+    // _animateResolutionSteps so this step's damage hasn't landed yet).
+    const dTile = state.tiles.get(hexKey(targetSnap.col, targetSnap.row));
+    if (dTile && dTile.fortifyLevel > 0) dTile.fortifyLevel -= 1;
+  }
   if (result?.killed) {
     const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
     renderer.addDeathAnim(targetSnap.col, targetSnap.row, deadColor);
@@ -1005,6 +1013,53 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     ui.showInlineReplayHUD?.(() => { playback.jumpToEnd = true; });
   }
   setMode(AppMode.RESOLVING);
+
+  // ── Fortification rewind ─────────────────────────────────────────────
+  // state.tiles already carries the post-resolution fortifyLevel by the
+  // time we animate.  Snapshot those values so we can restore them at the
+  // end, then walk every event to compute the deltas each tile received
+  // and subtract them so the ring animation starts at the pre-resolution
+  // thickness.  Each fort-mutating event will re-apply its delta live as
+  // we animate that step below.
+  const postFortMap = new Map();
+  const fortDeltasByTile = new Map(); // hexKey → total delta applied during resolution
+  for (const [k, t] of state.tiles) postFortMap.set(k, t.fortifyLevel || 0);
+  const _bumpDelta = (col, row, delta) => {
+    if (!delta) return;
+    const k = hexKey(col, row);
+    fortDeltasByTile.set(k, (fortDeltasByTile.get(k) || 0) + delta);
+  };
+  for (const step of steps) {
+    const evs = [
+      ...(step.heroEvents  ?? []),
+      ...(step.witchEvents ?? []),
+      ...(step.playerEvents ?? []).flatMap(pe => pe.events ?? []),
+    ];
+    for (const ev of evs) {
+      const r = ev.result;
+      if (!r) continue;
+      // FORTIFY: +defGain on actor's tile
+      if (ev.action?.type === PlanActionType.FORTIFY && r.success) {
+        const actorSnap = step.entitySnapshot?.find(e => e.id === ev.action.entityId);
+        if (actorSnap) _bumpDelta(actorSnap.col, actorSnap.row, +(r.defGain ?? 1));
+      }
+      // Battle / guard strike degrading defender's fort: -1
+      if (r.fortDamaged && !r.fortAssault) {
+        const tSnap = ev.battleSnaps?.targetSnap;
+        if (tSnap) _bumpDelta(tSnap.col, tSnap.row, -1);
+      }
+      // Fort assault: fortLevelAfter - fortLevelBefore (negative delta)
+      if (r.fortAssault && r.success) {
+        _bumpDelta(r.targetCol, r.targetRow, (r.fortLevelAfter ?? 0) - (r.fortLevelBefore ?? 0));
+      }
+    }
+  }
+  // Rewind tiles to pre-resolution fort levels.
+  for (const [k, delta] of fortDeltasByTile) {
+    const t = state.tiles.get(k);
+    if (t) t.fortifyLevel = Math.max(0, (postFortMap.get(k) ?? 0) - delta);
+  }
+
   for (let i = 0; i < steps.length; i++) {
     // During replay: if BACK or STOP was pressed, abort remaining steps immediately
     if (playback.goBack || playback.aborted || playback.jumpToEnd) break;
@@ -1268,6 +1323,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     for (const ev of events) {
       const { action, result, battleSnaps } = ev;
       if (action.type === PlanActionType.BATTLE_UNIT || action.type === PlanActionType.BATTLE_HEX) {
+        // Fort assault: BATTLE_HEX that hit a wall instead of a unit.  Handled
+        // in its own pass below (no targetSnap → skip the normal battle path).
+        if (result?.fortAssault) continue;
         // Show animation/dialog if one of my own units is involved (team MP), or falling
         // back to faction-level logic (offline / fog-off / standard 1v1).
         const myUnit = myPlayerId && battleSnaps && (
@@ -1465,6 +1523,60 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       hadBattle = true;
     }
 
+    // ── Phase 2a'': witch fort assaults (siege an empty fortified hex) ──────
+    // Lunge toward the wall, show a hit/crush/miss floater, then apply the
+    // fort-level drop in sync with the visual so the ring thins out now.
+    const fortAssaultEvents = allStepEvents.filter(ev =>
+      ev.type === ResEventType.ACTION_OK &&
+      ev.result?.fortAssault &&
+      ev.battleSnaps?.actorSnap
+    );
+    for (const ev of fortAssaultEvents) {
+      const { actorSnap } = ev.battleSnaps;
+      const r = ev.result;
+      const tCol = r.targetCol, tRow = r.targetRow;
+
+      const myUnit = myPlayerId && actorSnap.ownerId === myPlayerId;
+      const showForPlayer = myPlayerId
+        ? myUnit
+        : (!humanFaction || state.fogOfWar === 'none' || ev.faction === humanFaction);
+
+      if (showForPlayer && !_autoplay) {
+        const speed = ui?.speedMode ?? 'cinematic';
+        const actorDisplay = state.entities.find(e => e.id === actorSnap.id);
+        const lungeFromCol = actorDisplay?.col ?? actorSnap.col;
+        const lungeFromRow = actorDisplay?.row ?? actorSnap.row;
+        renderer.addLungeAnim(
+          actorSnap.id,
+          lungeFromCol, lungeFromRow,
+          tCol, tRow,
+          actorSnap.type, actorSnap.owner, actorSnap.title ?? null,
+        );
+        redrawFn();
+        await playbackDelay(speed === 'vfast' ? 140 : 280);
+
+        if (r.hit) {
+          const label = r.crush ? '💥 🏰-2' : '🏰-1';
+          renderer.addFlash(tCol, tRow, label,
+            'rgba(180,100,100,0.18)', 1600, 0.75, 'rgba(230,180,180,1)');
+        } else {
+          renderer.addFlash(tCol, tRow, 'holds',
+            'rgba(170,170,175,0.15)', 1000, 0.65, 'rgba(200,200,210,1)');
+        }
+        redrawFn();
+        await playbackDelay(speed === 'vfast' ? 200 : 400);
+        renderer.returnAllLungeAnims();
+        if (speed === 'cinematic') await renderer.waitForAnimations();
+      }
+
+      // Apply the fort-level delta now (visible even to non-viewer so the
+      // authoritative state stays in sync across all observers).
+      const tile = state.tiles.get(hexKey(tCol, tRow));
+      if (tile) tile.fortifyLevel = r.fortLevelAfter ?? tile.fortifyLevel;
+      redrawFn();
+      hadBattle = true;
+    }
+
     // ── Phase 2b: guard strike reactions ─────────────────────────────────────
     // Guard strikes are reactive attacks emitted as GUARD_STRIKE events.
     // Animate them the same way as normal battles: lunge, highlights, dialog/toast.
@@ -1645,14 +1757,19 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     for (const ev of events) {
       const { action, result } = ev;
       if (action.type !== PlanActionType.FORTIFY || !result?.success) continue;
-      if (humanFaction && ev.faction !== humanFaction) continue;
       const actor = step.entitySnapshot?.find(e => e.id === action.entityId);
-      if (myPlayerId && actor?.ownerId !== myPlayerId) continue;
-      if (actor) {
-        const gain = result.defGain ?? 1;
-        renderer.addFlash(actor.col, actor.row, `🛡+${gain}`,
-          'rgba(100,180,255,0.1)', 1800, 0.72, 'rgba(130,200,255,1)');
-      }
+      if (!actor) continue;
+      // Apply the fort delta live so the ring thickens exactly now — even
+      // for opponents / other players (state is authoritative for everyone).
+      const actorTile = state.tiles.get(hexKey(actor.col, actor.row));
+      if (actorTile) actorTile.fortifyLevel = Math.min(MAX_FORTIFY_LEVEL,
+        (actorTile.fortifyLevel || 0) + (result.defGain ?? 1));
+      // Only surface the +N floater to the owner faction/player.
+      if (humanFaction && ev.faction !== humanFaction) continue;
+      if (myPlayerId && actor.ownerId !== myPlayerId) continue;
+      const gain = result.defGain ?? 1;
+      renderer.addFlash(actor.col, actor.row, `🛡+${gain}`,
+        'rgba(100,180,255,0.1)', 1800, 0.72, 'rgba(130,200,255,1)');
     }
 
     // ── Phase 5: heal animation — green glow + HP floater ─────────────
@@ -1723,6 +1840,13 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
   // Restore the authoritative final state.
   state.entities = finalEntities;
+  // Restore post-resolution fortifyLevel values on every tile that was
+  // rewound at the start of the animation (covers skipped/aborted playbacks
+  // where some step deltas may not have been re-applied live).
+  for (const [k, v] of postFortMap) {
+    const t = state.tiles.get(k);
+    if (t && t.fortifyLevel !== v) t.fortifyLevel = v;
+  }
   // Skip the final redraw during replay navigation (caller will render the target preState).
   if (!playback.goBack && !playback.aborted && !playback.jumpToEnd) {
     redrawFn();

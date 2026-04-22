@@ -1113,10 +1113,6 @@ export class Renderer {
     // River first (water), then roads on top (bridge deck above the water)
     this._drawRiverLayer(fogKnownHexes);
     this._drawRoadLayer(fogKnownHexes);
-    // Walls — connecting grey lines between fortified non-building hexes.
-    // Rendered under buildings so a wall drawn into a building's edge reads
-    // as meeting the building wall rather than overlaying its icon.
-    this._drawWallLayer(fogKnownHexes);
 
     // Pass 2: building tiles drawn over roads/rivers so no bleed-through
     for (let row = vr.minRow; row <= vr.maxRow; row++) {
@@ -1970,60 +1966,6 @@ export class Renderer {
     }
 
     ctx.lineCap = 'butt';
-  }
-
-  // Draw fortification wall lines on non-building hexes — connects to fortified
-  // neighbours so players can raise continuous defensive ramparts.  Building
-  // tiles keep their existing hex-ring fort overlay (drawn in _drawTile).
-  _drawWallLayer(fogKnownHexes) {
-    const ctx     = this.ctx;
-    const tiles   = this.state.tiles;
-    const hs      = this.hexSize;
-    const apothem = hs * SQRT3 / 2;
-
-    const isWallish = t => t && (t.fortifyLevel || 0) > 0 && t.type !== TileType.BUILDING;
-
-    ctx.strokeStyle = 'rgba(170,170,175,0.85)';
-    ctx.lineCap  = 'round';
-    ctx.lineJoin = 'round';
-
-    for (let row = 0; row < MAP_ROWS; row++) {
-      for (let col = 0; col < MAP_COLS; col++) {
-        if (fogKnownHexes && !fogKnownHexes.has(hexKey(col, row))) continue;
-        const tile = tiles.get(hexKey(col, row));
-        if (!isWallish(tile)) continue;
-
-        const { x, y } = this._toCanvas(col, row);
-        const wallNbrs = getNeighbors(col, row)
-          .filter(n => isWallish(tiles.get(hexKey(n.col, n.row))));
-
-        // Line width scales with fortification level for visual weight.
-        ctx.lineWidth = Math.max(2, tile.fortifyLevel * 1.2);
-
-        if (wallNbrs.length === 0) {
-          // Isolated wall segment — draw a small ring so it's visible.
-          ctx.beginPath();
-          ctx.arc(x, y, hs * 0.25, 0, Math.PI * 2);
-          ctx.stroke();
-          continue;
-        }
-
-        for (const n of wallNbrs) {
-          const { x: nx, y: ny } = this._toCanvas(n.col, n.row);
-          const dx = nx - x, dy = ny - y;
-          const d  = Math.sqrt(dx * dx + dy * dy) || 1;
-          const ex = x + (dx / d) * apothem;
-          const ey = y + (dy / d) * apothem;
-          ctx.beginPath();
-          ctx.moveTo(x, y);
-          ctx.lineTo(ex, ey);
-          ctx.stroke();
-        }
-      }
-    }
-
-    ctx.lineCap  = 'butt';
-    ctx.lineJoin = 'miter';
   }
 
   // Decorative border frame drawn in canvas coordinates (outside the zoom transform).
