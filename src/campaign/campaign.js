@@ -434,8 +434,13 @@ export class Campaign {
     return null; // all missions completed
   }
 
-  /** Check if all missions in this campaign are completed. */
+  /**
+   * Check if all missions in this campaign are completed.
+   * Returns false for a campaign with no missions defined — an empty missions
+   * array isn't "complete", it's unpopulated (e.g. a Coming Soon chapter).
+   */
   isComplete() {
+    if (this.campaignDef.missions.length === 0) return false;
     return this.campaignDef.missions.every(m => this.completedMissions.has(m.id));
   }
 
@@ -444,9 +449,40 @@ export class Campaign {
    * Returns true only if a save exists and every mission is completed.
    */
   static isCampaignCompleted(campaignDef) {
+    return Campaign.getCampaignProgress(campaignDef).status === 'completed';
+  }
+
+  /** Count of missions completed so far in this campaign. */
+  getCompletedCount() {
+    return this.campaignDef.missions.filter(m => this.completedMissions.has(m.id)).length;
+  }
+
+  /** Total number of missions in this campaign. */
+  getMissionCount() {
+    return this.campaignDef.missions.length;
+  }
+
+  /**
+   * Get a summary of this campaign's progress status.
+   * Returns one of: 'completed', 'in-progress', 'new'.
+   */
+  getStatus() {
+    if (this.isComplete()) return 'completed';
+    if (this.getCompletedCount() > 0) return 'in-progress';
+    return 'new';
+  }
+
+  /**
+   * Inspect the saved progress for a campaign without keeping an instance around.
+   * Returns { status, completed, total } where status is 'completed' | 'in-progress' | 'new'.
+   * If no save exists, returns status 'new' with completed=0.
+   */
+  static getCampaignProgress(campaignDef) {
     const c = new Campaign(campaignDef);
-    if (!c.load()) return false;
-    return c.isComplete();
+    const loaded = c.load();
+    const total = c.getMissionCount();
+    if (!loaded) return { status: 'new', completed: 0, total };
+    return { status: c.getStatus(), completed: c.getCompletedCount(), total };
   }
 
   /** Get list of missions with their status for the mission select screen. */
