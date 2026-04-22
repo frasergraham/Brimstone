@@ -784,6 +784,15 @@ describe('Campaign class', () => {
     assert.equal(c.getStatus(), 'new');
     assert.equal(c.getMissionCount(), 0);
   });
+
+  test('isComplete returns false for a campaign with no missions', () => {
+    // Guard against Array.prototype.every() returning true for empty arrays —
+    // an empty-missions definition is unpopulated, not complete.
+    const emptyDef = { id: 'empty', title: 'Empty', description: '', missions: [], mapBuilders: {}, firstMission: null };
+    const c = new Campaign(emptyDef);
+    assert.equal(c.isComplete(), false);
+    assert.equal(c.getStatus(), 'new');
+  });
 });
 
 // ── snapshotSurvivor ────────────────────────────────────────────────────────

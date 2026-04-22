@@ -425,8 +425,13 @@ export class Campaign {
     return null; // all missions completed
   }
 
-  /** Check if all missions in this campaign are completed. */
+  /**
+   * Check if all missions in this campaign are completed.
+   * Returns false for a campaign with no missions defined — an empty missions
+   * array isn't "complete", it's unpopulated (e.g. a Coming Soon chapter).
+   */
   isComplete() {
+    if (this.campaignDef.missions.length === 0) return false;
     return this.campaignDef.missions.every(m => this.completedMissions.has(m.id));
   }
 
@@ -435,9 +440,7 @@ export class Campaign {
    * Returns true only if a save exists and every mission is completed.
    */
   static isCampaignCompleted(campaignDef) {
-    const c = new Campaign(campaignDef);
-    if (!c.load()) return false;
-    return c.isComplete();
+    return Campaign.getCampaignProgress(campaignDef).status === 'completed';
   }
 
   /** Count of missions completed so far in this campaign. */
@@ -455,7 +458,7 @@ export class Campaign {
    * Returns one of: 'completed', 'in-progress', 'new'.
    */
   getStatus() {
-    if (this.getMissionCount() > 0 && this.isComplete()) return 'completed';
+    if (this.isComplete()) return 'completed';
     if (this.getCompletedCount() > 0) return 'in-progress';
     return 'new';
   }
