@@ -271,8 +271,12 @@ const WITCH_UNIT_COLORS = {
 };
 
 export class Entity {
-  constructor(type, owner, col, row, ownerId = null) {
-    this.id      = `e${_nextId++}`;
+  constructor(type, owner, col, row, ownerId = null, state = null) {
+    // Server hosts multiple concurrent games. When a GameState is provided,
+    // use its per-instance id counter so games never collide. Fallback to the
+    // module-level counter is reserved for editor previews and standalone
+    // tests that don't construct a GameState.
+    this.id      = state ? `e${state.allocateEntityId()}` : `e${_nextId++}`;
     this.type    = type;
     this.owner   = owner;   // faction: 'hero' | 'witch' | null
     this.ownerId = ownerId; // player UUID (null for neutral/pre-multiplayer entities)
@@ -361,7 +365,7 @@ export class Entity {
   // (ally gang-up / defender ally support — gives variance instead of flat +1)
   // Returns full breakdown for UI rendering alongside the totals.
   static resolveCombat(attacker, defender, phaseBonus = 0, extraAtkBonus = 0, extraDefBonus = 0,
-                       extraAtkDice = 0, extraDefDice = 0, fatiguePenalty = 0) {
+                       extraAtkDice = 0, extraDefDice = 0, fatiguePenalty = 0, state = null) {
     let extraAtk = phaseBonus + extraAtkBonus;
     let atkStaffBonus = 0;
     if (attacker.weapon === 'staff' &&
@@ -373,12 +377,18 @@ export class Entity {
       extraAtk += 2;
     }
 
-    const atkBaseDie  = _nextDie(6);
-    const defBaseDie  = _nextDie(6);
+    // Prefer per-game forced-dice queue when a GameState is supplied so
+    // concurrent server games never share the tutorial dice queue. Fallback
+    // to the module-level queue for raw tests that call resolveCombat without
+    // constructing a GameState.
+    const roll = state ? (s) => state.nextDie(s) : _nextDie;
+
+    const atkBaseDie  = roll(6);
+    const defBaseDie  = roll(6);
     const atkExtraDice = [];
     const defExtraDice = [];
-    for (let i = 0; i < extraAtkDice; i++) atkExtraDice.push(_nextDie(3));
-    for (let i = 0; i < extraDefDice; i++) defExtraDice.push(_nextDie(3));
+    for (let i = 0; i < extraAtkDice; i++) atkExtraDice.push(roll(3));
+    for (let i = 0; i < extraDefDice; i++) defExtraDice.push(roll(3));
 
     const attackRoll  = atkBaseDie + attacker.attack  + attacker.attackBonus + extraAtk
                         + atkExtraDice.reduce((s, r) => s + r, 0);
@@ -393,27 +403,31 @@ export class Entity {
   }
 }
 
-export function createHero(col, row, ownerId = null) {
-  return new Entity(EntityType.HERO, 'hero', col, row, ownerId);
+export function createHero(col, row, ownerId = null, state = null) {
+  return new Entity(EntityType.HERO, 'hero', col, row, ownerId, state);
 }
 
-export function createWitch(col, row, ownerId = null) {
-  return new Entity(EntityType.WITCH, 'witch', col, row, ownerId);
+export function createWitch(col, row, ownerId = null, state = null) {
+  return new Entity(EntityType.WITCH, 'witch', col, row, ownerId, state);
 }
 
-export function createSurvivor(col, row, ownerId = null) {
-  const e = new Entity(EntityType.SURVIVOR, null, col, row, ownerId);
+export function createSurvivor(col, row, ownerId = null, state = null) {
+  const e = new Entity(EntityType.SURVIVOR, null, col, row, ownerId, state);
+
+  // Roster de-dup tracker lives on the GameState when one is provided;
+  // otherwise fall back to the module-level set (editor previews / raw tests).
+  const usedIndices = state ? state.usedRosterIndices : _usedRosterIndices;
 
   // Pick a random unused character from the roster
   const available = SURVIVOR_ROSTER
     .map((c, i) => ({ c, i }))
-    .filter(({ i }) => !_usedRosterIndices.has(i));
+    .filter(({ i }) => !usedIndices.has(i));
 
   const pick = available.length > 0
     ? available[Math.floor(Math.random() * available.length)]
     : { c: SURVIVOR_ROSTER[Math.floor(Math.random() * SURVIVOR_ROSTER.length)], i: -1 };
 
-  if (pick.i >= 0) _usedRosterIndices.add(pick.i);
+  if (pick.i >= 0) usedIndices.add(pick.i);
 
   const char = pick.c;
   e.name         = char.name;
@@ -440,6 +454,14 @@ export function resetRoster() {
 }
 
 /**
+ * Look up a survivor roster index by character name. Returns -1 if no match.
+ * Used by GameState.markRosterUsedByName() to avoid exposing the roster array.
+ */
+export function survivorRosterIndexByName(name) {
+  return SURVIVOR_ROSTER.findIndex(c => c.name === name);
+}
+
+/**
  * Mark survivor roster entries as used by name so they won't be generated
  * again by createSurvivor(). Used by campaign mode to exclude carried-over
  * survivors from the discoverable pool.
@@ -454,26 +476,26 @@ function _witchColor(type, entity) {
   return palette[parseInt(entity.id.slice(1)) % palette.length];
 }
 
-export function createZombie(col, row, ownerId = null) {
-  const e = new Entity(EntityType.ZOMBIE, 'witch', col, row, ownerId);
+export function createZombie(col, row, ownerId = null, state = null) {
+  const e = new Entity(EntityType.ZOMBIE, 'witch', col, row, ownerId, state);
   e.color = _witchColor(EntityType.ZOMBIE, e);
   return e;
 }
 
-export function createMinion(col, row, ownerId = null) {
-  const e = new Entity(EntityType.MINION, 'witch', col, row, ownerId);
+export function createMinion(col, row, ownerId = null, state = null) {
+  const e = new Entity(EntityType.MINION, 'witch', col, row, ownerId, state);
   e.color = _witchColor(EntityType.MINION, e);
   return e;
 }
 
-export function createWoodGolem(col, row, ownerId = null) {
-  const e = new Entity(EntityType.WOOD_GOLEM, 'witch', col, row, ownerId);
+export function createWoodGolem(col, row, ownerId = null, state = null) {
+  const e = new Entity(EntityType.WOOD_GOLEM, 'witch', col, row, ownerId, state);
   e.color = _witchColor(EntityType.WOOD_GOLEM, e);
   return e;
 }
 
-export function createIronGolem(col, row, ownerId = null) {
-  const e = new Entity(EntityType.IRON_GOLEM, 'witch', col, row, ownerId);
+export function createIronGolem(col, row, ownerId = null, state = null) {
+  const e = new Entity(EntityType.IRON_GOLEM, 'witch', col, row, ownerId, state);
   e.color = _witchColor(EntityType.IRON_GOLEM, e);
   return e;
 }
