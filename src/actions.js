@@ -9,7 +9,7 @@ import {
   EntityType, SurvivorAbility, Entity,
   createZombie, createMinion, createSurvivor,
   createWoodGolem, createIronGolem,
-  nextDie,
+  nextDie, ADVANTAGE_CAP,
 } from './entities.js';
 import { Phase } from './game.js';
 import { getFaction } from './factions.js';
@@ -743,26 +743,46 @@ export function executeBattle(state, actor, target) {
   const atkFortAtkBonus = actor.owner === 'witch'  ? 0 : atkFortRaw.attack;
   const fortBonus       = target.owner === 'witch' ? 0 : defFortRaw.defense;
 
-  // Each ally adds an extra d3 — more allies = bigger swings (capped at 3 dice)
-  const extraAtkDice = Math.min(attackerAllies, 3);
-  const extraDefDice = Math.min(defenderAllies, 3);
+  // Each ally grants +1 advantage die; we also add a small flat +1 per ally
+  // (capped at 3) to avoid over-nerfing high-ally-count swings — best-of-K
+  // saturates around 5.5, which fell short of the old +d3×N gang-up total.
+  const atkAdvantageDice = Math.min(attackerAllies, ADVANTAGE_CAP);
+  const defAdvantageDice = Math.min(defenderAllies, ADVANTAGE_CAP);
+  // Each ally adds +1 advantage die (cap handled inside resolveCombat) plus
+  // +1 flat on the roll; both components cap at ADVANTAGE_CAP. The flat
+  // component keeps swarms competitive with the old +N·d3 gang-up math —
+  // best-of-K alone saturates around 5.5, which proved too weak for witch
+  // minion ganks in the balance sweep.
+  const atkGangupFlat = Math.min(attackerAllies, ADVANTAGE_CAP);
+  const defGangupFlat = Math.min(defenderAllies, ADVANTAGE_CAP);
 
   // Fatigue: faction-specific defense penalty based on defend count this round
   const defenderFaction = getFaction(target.owner);
   const fatiguePenalty = defenderFaction.getDefenseFatigue(target.defendCount || 0);
 
   const { attackRoll, defenseRoll, hit, margin,
-          atkBaseDie, defBaseDie, atkExtraDice, defExtraDice, atkStaffBonus } =
-    Entity.resolveCombat(actor, target, phaseBonus, atkFortAtkBonus, fortBonus,
-                         extraAtkDice, extraDefDice, fatiguePenalty, state);
+          atkBaseDie, defBaseDie, atkExtraDice, defExtraDice,
+          atkPool, defPool, atkStaffBonus } =
+    Entity.resolveCombat(actor, target, {
+      // Phase stays flat here — converting to advantage turned out too steep a
+      // nerf to witch's night window; see CLAUDE.md §Tuning for the sweep.
+      extraAtkBonus: atkFortAtkBonus + phaseBonus + atkGangupFlat,
+      atkAdvantageDice,
+      defAdvantageDice,
+      extraDefBonus: fortBonus + defGangupFlat,
+      fatiguePenalty,
+      state,
+    });
 
   // Increment the defender's defend count for fatigue tracking
   if (target.defendCount === undefined) target.defendCount = 0;
   target.defendCount += 1;
 
   const phaseNote  = phaseBonus > 0 ? ' (🌙 night bonus)' : '';
-  const gangNote    = attackerAllies >= 1 ? ' [gang-up +d3]' : '';
-  const allyDefNote = defenderAllies >= 1 ? ' [allies +d3]'  : '';
+  const gangNote    = attackerAllies >= 1
+    ? ` [advantage ${atkAdvantageDice}, flat +${atkGangupFlat}]` : '';
+  const allyDefNote = defenderAllies >= 1
+    ? ` [advantage ${defAdvantageDice}, flat +${defGangupFlat}]` : '';
 
   log.push(
     `${actor.displayName} attacks ${target.displayName}! ` +
@@ -852,8 +872,11 @@ export function executeBattle(state, actor, target) {
     breakdown: {
       atkBaseDie, defBaseDie,
       atkExtraDice, defExtraDice,
+      atkPool, defPool,
       atkStaffBonus,
       phaseBonus, fortBonus, atkFortAtkBonus, fatiguePenalty,
+      atkGangupFlat, defGangupFlat,
+      atkAdvantageDice, defAdvantageDice,
       atkAllyNames: atkAllies.map(e => e.displayName),
       defAllyNames: defAllies.map(e => e.displayName),
     },
@@ -884,21 +907,22 @@ export function executeFortAssault(state, actor, targetCol, targetRow) {
   const attackerFaction = getFaction(actor.owner);
   const phaseBonus = attackerFaction.getPhaseCombatBonus(state.phase);
 
-  // Attacker gang-up: witch allies adjacent to the target hex boost attack dice.
+  // Attacker gang-up: witch allies adjacent to the target hex add advantage dice.
   const targetHexes = new Set([hexKey(targetCol, targetRow)]);
   for (const n of getNeighbors(targetCol, targetRow)) targetHexes.add(hexKey(n.col, n.row));
   const atkAllies = state.entities.filter(e =>
     e.alive && e.owner === actor.owner && e.id !== actor.id && targetHexes.has(hexKey(e.col, e.row))
   );
-  const extraAtkDice = Math.min(atkAllies.length, 3);
+  const atkAdvantage = Math.min(atkAllies.length, ADVANTAGE_CAP);
 
-  // Base attack roll: d6 + attack + attackBonus + phaseBonus + gang-up dice.
+  // Base attack roll: take best of 1 + atkAdvantage d6, then add flat stats.
   // Witch units never gain fortification attack bonus from their own hex.
-  const atkBaseDie = nextDie(6);
-  const atkExtraDice = [];
-  for (let i = 0; i < extraAtkDice; i++) atkExtraDice.push(nextDie(3));
-  const attackRoll = atkBaseDie + actor.attack + (actor.attackBonus || 0) + phaseBonus
-                     + atkExtraDice.reduce((s, r) => s + r, 0);
+  const atkPool = new Array(1 + atkAdvantage);
+  for (let i = 0; i < atkPool.length; i++) atkPool[i] = nextDie(6);
+  let atkBaseDie = atkPool[0];
+  for (let i = 1; i < atkPool.length; i++) if (atkPool[i] > atkBaseDie) atkBaseDie = atkPool[i];
+  const atkExtraDice = atkPool.slice(1);
+  const attackRoll = atkBaseDie + actor.attack + (actor.attackBonus || 0) + phaseBonus;
 
   // Fortification "defense": flat value of fortLevel + 1. No modifiers.
   const defenseRoll = t.fortifyLevel + 1;
@@ -908,7 +932,7 @@ export function executeFortAssault(state, actor, targetCol, targetRow) {
   const crush = hit && attackRoll >= 2 * defenseRoll;
 
   const phaseNote = phaseBonus > 0 ? ' (🌙 night bonus)' : '';
-  const gangNote  = atkAllies.length >= 1 ? ' [gang-up +d3]' : '';
+  const gangNote  = atkAllies.length >= 1 ? ` [advantage ${atkAdvantage}]` : '';
   log.push(
     `${actor.displayName} assaults the fortifications at (${targetCol},${targetRow})! ` +
     `[${attackRoll}${gangNote} vs ${defenseRoll}]${phaseNote}`
@@ -940,7 +964,8 @@ export function executeFortAssault(state, actor, targetCol, targetRow) {
     hit, crush, damage,
     fortLevelBefore, fortLevelAfter: t.fortifyLevel,
     breakdown: {
-      atkBaseDie, atkExtraDice, phaseBonus,
+      atkBaseDie, atkExtraDice, atkPool, phaseBonus,
+      atkAdvantageDice: atkAdvantage,
       atkAllyNames: atkAllies.map(e => e.displayName),
     },
   };
@@ -1246,7 +1271,11 @@ export function executeGuardStrike(state, guardian, target) {
   // No ally dice, no fatigue penalty; attacker fort ATT bonus still applies.
   const { attackRoll, defenseRoll, hit, margin,
           atkBaseDie, defBaseDie, atkStaffBonus } =
-    Entity.resolveCombat(guardian, target, phaseBonus, atkFortAtkBonus, fortBonus, 0, 0, 0, state);
+    Entity.resolveCombat(guardian, target, {
+      extraAtkBonus: atkFortAtkBonus + phaseBonus,
+      extraDefBonus: fortBonus,
+      state,
+    });
 
   // Restore attackBonus
   guardian.attackBonus = savedAtkBonus;
@@ -1309,7 +1338,10 @@ export function executeGuardStrike(state, guardian, target) {
     breakdown: {
       atkBaseDie, defBaseDie,
       atkExtraDice: [], defExtraDice: [],
+      atkPool: [atkBaseDie], defPool: [defBaseDie],
       atkAllyNames: [], defAllyNames: [],
+      atkGangupFlat: 0, defGangupFlat: 0,
+      atkAdvantageDice: 0, defAdvantageDice: 0,
       atkStaffBonus, phaseBonus, fortBonus, atkFortAtkBonus,
       fatiguePenalty: 0,
     },

@@ -364,49 +364,131 @@ export class Entity {
     this.hp = Math.min(this.maxHp, this.hp + amount);
   }
 
-  // phaseBonus:    extra attack from day/night advantage
-  // extraAtkBonus: caller-supplied bonus (gang-up etc.) — NOT stored on the entity
-  // extraDefBonus: caller-supplied bonus (fortify, gang-up etc.) — NOT stored on the entity
-  // extraAtkDice / extraDefDice: number of additional d3s rolled for that side
-  // (ally gang-up / defender ally support — gives variance instead of flat +1)
-  // Returns full breakdown for UI rendering alongside the totals.
-  static resolveCombat(attacker, defender, phaseBonus = 0, extraAtkBonus = 0, extraDefBonus = 0,
-                       extraAtkDice = 0, extraDefDice = 0, fatiguePenalty = 0, state = null) {
-    let extraAtk = phaseBonus + extraAtkBonus;
-    let atkStaffBonus = 0;
+  // Advantage/disadvantage dice-pool combat.
+  // Each side rolls (1 + |net advantage|) d6 and takes best (advantage) or
+  // worst (disadvantage). Net advantage per side = (advantage sources) −
+  // (disadvantage sources), capped at ±ADVANTAGE_CAP.
+  //
+  // Options:
+  //   phaseAdvantage       — 1 when day/night favors the attacker, else 0
+  //   atkAdvantageDice     — gang-up allies adjacent to the target
+  //   atkDisadvantageDice  — attacker disadvantage sources (currently unused)
+  //   defAdvantageDice     — defender allies adjacent to the target
+  //   defDisadvantageDice  — defender disadvantage sources (currently unused)
+  //   extraAtkBonus        — flat attack bonus (attacker-side fortification)
+  //   extraDefBonus        — flat defense bonus (defender-side fortification)
+  //   fatiguePenalty       — flat defender penalty from repeated defending
+  //   state                — GameState for per-game forced-dice queue
+  static resolveCombat(attacker, defender, options = {}) {
+    const {
+      phaseAdvantage = 0,
+      atkAdvantageDice = 0,
+      atkDisadvantageDice = 0,
+      defAdvantageDice = 0,
+      defDisadvantageDice = 0,
+      extraAtkBonus = 0,
+      extraDefBonus = 0,
+      fatiguePenalty = 0,
+      state = null,
+    } = options;
+
+    const roll = state ? (s) => state.nextDie(s) : _nextDie;
+
+    // Staff vs undead/minions/golems → +1 attacker advantage die.
+    let atkStaffAdvantage = 0;
     if (attacker.weapon === 'staff' &&
         (defender.type === EntityType.ZOMBIE ||
          defender.type === EntityType.MINION ||
          defender.type === EntityType.WOOD_GOLEM ||
          defender.type === EntityType.IRON_GOLEM)) {
-      atkStaffBonus = 2;
-      extraAtk += 2;
+      atkStaffAdvantage = 1;
     }
 
-    // Prefer per-game forced-dice queue when a GameState is supplied so
-    // concurrent server games never share the tutorial dice queue. Fallback
-    // to the module-level queue for raw tests that call resolveCombat without
-    // constructing a GameState.
-    const roll = state ? (s) => state.nextDie(s) : _nextDie;
+    const atkNet = clampAdvantage(
+      (phaseAdvantage + atkAdvantageDice + atkStaffAdvantage) - atkDisadvantageDice
+    );
+    const defNet = clampAdvantage(defAdvantageDice - defDisadvantageDice);
 
-    const atkBaseDie  = roll(6);
-    const defBaseDie  = roll(6);
-    const atkExtraDice = [];
-    const defExtraDice = [];
-    for (let i = 0; i < extraAtkDice; i++) atkExtraDice.push(roll(3));
-    for (let i = 0; i < extraDefDice; i++) defExtraDice.push(roll(3));
+    const atkPool = _rollPool(roll, atkNet);
+    const defPool = _rollPool(roll, defNet);
+    const atkBaseDie = _pickFromPool(atkPool, atkNet);
+    const defBaseDie = _pickFromPool(defPool, defNet);
 
-    const attackRoll  = atkBaseDie + attacker.attack  + attacker.attackBonus + extraAtk
-                        + atkExtraDice.reduce((s, r) => s + r, 0);
-    const defenseRoll = defBaseDie + defender.defense + defender.defenseBonus + extraDefBonus
-                        - fatiguePenalty
-                        + defExtraDice.reduce((s, r) => s + r, 0);
+    const attackRoll  = atkBaseDie + attacker.attack  + (attacker.attackBonus  || 0) + extraAtkBonus;
+    const defenseRoll = defBaseDie + defender.defense + (defender.defenseBonus || 0) + extraDefBonus - fatiguePenalty;
     const margin = attackRoll - defenseRoll;
+
+    const atkExtraDice = atkPool.slice(1);
+    const defExtraDice = defPool.slice(1);
+
     return {
       attackRoll, defenseRoll, hit: margin > 0, margin,
-      atkBaseDie, defBaseDie, atkExtraDice, defExtraDice, atkStaffBonus, fatiguePenalty,
+      atkBaseDie, defBaseDie,
+      atkPool, defPool,
+      atkExtraDice, defExtraDice,
+      atkAdvantage: atkNet,
+      defAdvantage: defNet,
+      atkStaffBonus: atkStaffAdvantage,
+      fatiguePenalty,
     };
   }
+}
+
+// ── Advantage-dice math ─────────────────────────────────────────────────────
+
+// Cap total advantage/disadvantage dice each side can accumulate.
+export const ADVANTAGE_CAP = 4;
+
+// E[best-of-(1+K)] and E[worst-of-(1+K)] for K advantage/disadvantage dice.
+// Index by the advantage level K ∈ {0, 1, 2, 3, 4}. K=0 is a plain d6 (E=3.5).
+// Covers the full range up to ADVANTAGE_CAP.
+export const BEST_OF_K_EV = [
+  3.5,        // K=0: plain d6
+  4.47222,    // K=1: best of 2
+  4.95833,    // K=2: best of 3
+  5.24459,    // K=3: best of 4
+  5.43069,    // K=4: best of 5
+];
+export const WORST_OF_K_EV = [
+  3.5,
+  2.52778,
+  2.04167,
+  1.75540,
+  1.56931,
+];
+
+function clampAdvantage(n) {
+  if (n > ADVANTAGE_CAP) return ADVANTAGE_CAP;
+  if (n < -ADVANTAGE_CAP) return -ADVANTAGE_CAP;
+  return n;
+}
+
+function _rollPool(roll, net) {
+  const k = 1 + Math.abs(net);
+  const pool = new Array(k);
+  for (let i = 0; i < k; i++) pool[i] = roll(6);
+  return pool;
+}
+
+function _pickFromPool(pool, net) {
+  if (net > 0) {
+    let m = pool[0];
+    for (let i = 1; i < pool.length; i++) if (pool[i] > m) m = pool[i];
+    return m;
+  }
+  if (net < 0) {
+    let m = pool[0];
+    for (let i = 1; i < pool.length; i++) if (pool[i] < m) m = pool[i];
+    return m;
+  }
+  return pool[0];
+}
+
+// Expected value of the chosen die for a given net advantage (−CAP..+CAP).
+export function expectedDieValue(net) {
+  const n = clampAdvantage(net);
+  if (n >= 0) return BEST_OF_K_EV[n];
+  return WORST_OF_K_EV[-n];
 }
 
 export function createHero(col, row, ownerId = null, state = null) {

@@ -3268,6 +3268,7 @@ export class UIController {
     // Cancel any in-flight dice animation or auto-dismiss from a previous battle dialog
     if (this._battleInterval)  { clearInterval(this._battleInterval);  this._battleInterval  = null; }
     if (this._autoDismissTimer) { clearTimeout(this._autoDismissTimer); this._autoDismissTimer = null; }
+    if (this._battleAnim)       { this._battleAnim.clear(); this._battleAnim = null; }
 
     const dialog = this._el('battle-dialog');
     const footer = this._el('battle-footer');
@@ -3298,8 +3299,6 @@ export class UIController {
     this._el('battle-attacker').innerHTML = _combatantHTML(actorSnap, 'atk', atkPortrait);
     this._el('battle-defender').innerHTML = _combatantHTML(targetSnap, 'def', defPortrait);
 
-    const atkDie  = this._el('battle-atk-die');
-    const defDie  = this._el('battle-def-die');
     const outcome = this._el('battle-outcome');
     outcome.textContent = '';
     outcome.className   = 'battle-outcome';
@@ -3311,11 +3310,15 @@ export class UIController {
       : '<div class="result-dismiss">— click to skip —</div>' +
         '<button class="battle-enable-fast" type="button">⏩ Click to enable fast mode and skip battle dialogs</button>';
 
-    // Reset breakdown columns (hidden until dice settle)
+    // Reset breakdown columns (rendered muted upfront; glow as anim progresses)
     const atkBkd = this._el('battle-atk-breakdown');
     const defBkd = this._el('battle-def-breakdown');
-    if (atkBkd) { atkBkd.innerHTML = ''; atkBkd.classList.remove('visible'); }
-    if (defBkd) { defBkd.innerHTML = ''; defBkd.classList.remove('visible'); }
+    for (const col of [atkBkd, defBkd]) {
+      if (!col) continue;
+      col.innerHTML = '';
+      col.classList.add('visible');
+      col.classList.remove('bkd-col-winner', 'bkd-col-loser', 'bkd-col-tie');
+    }
 
     dialog.style.display = 'flex';
     const card = dialog.querySelector('.battle-card');
@@ -3323,11 +3326,22 @@ export class UIController {
     // Guards a stale dismiss closure from mutating a later dialog's state if
     // leaked listeners fire after this dialog is gone.
     let _dismissed = false;
+    // Pause state only freezes the auto-dismiss timer; the animation sequence
+    // always runs to completion.
+    let _dismissPaused = false;
+    let _dismissTimerId = null;
+    let _dismissStartedAt = 0;
+    let _dismissRemaining = 0;
+    const _clearDismissTimer = () => {
+      if (_dismissTimerId !== null) { clearTimeout(_dismissTimerId); _dismissTimerId = null; }
+    };
     const dismiss = () => {
       if (_dismissed) return;
       _dismissed = true;
+      _clearDismissTimer();
       if (this._autoDismissTimer) { clearTimeout(this._autoDismissTimer); this._autoDismissTimer = null; }
       if (this._battleInterval)   { clearInterval(this._battleInterval);  this._battleInterval   = null; }
+      if (this._battleAnim)       { this._battleAnim.clear(); this._battleAnim = null; }
       dialog.style.display = 'none';
       dialog.removeEventListener('click', dismiss);
       card?.removeEventListener('click', dismiss);
@@ -3338,41 +3352,40 @@ export class UIController {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') dismiss();
     };
 
-    // "Click to enable fast mode" button in the footer — flips speedMode to
-    // 'fast' so future battles use the toast/floater path, and dismisses the
-    // current dialog. stopPropagation prevents the outer dialog click-to-skip
-    // handler (which is attached later once dice settle) from double-firing.
-    const enableFastBtn = footer.querySelector('.battle-enable-fast');
-    if (enableFastBtn) {
-      enableFastBtn.addEventListener('click', e => {
-        e.stopPropagation();
-        this._setSpeed('fast');
-        dismiss();
-      });
-    }
+    // Apply speed factor via CSS custom property so all keyframe durations
+    // scale together. cinematic=1, fast=0.5, vfast=0.25.
+    const factor = _speedFactor(this.speedMode);
+    card?.style.setProperty('--bkd-speed', String(factor));
 
-    // Shared: populate result into the dialog once dice are "settled"
-    const revealResult = () => {
-      atkDie.textContent = result.attackRoll;
-      defDie.textContent = result.defenseRoll;
-      atkDie.className = 'die-display' + (result.hit ? ' atk-win' : '');
-      defDie.className = 'die-display' + (!result.hit ? ' def-win' : '');
+    // Per-dialog timer bag with pause/resume support.
+    const anim = _makeAnimBag();
+    this._battleAnim = anim;
 
-      // Populate and fade-in breakdown columns
+    // Instant render of both breakdown columns (no animation). Used for
+    // autoplay/skip.
+    const renderInstant = () => {
       const bd = result.breakdown;
       if (bd) {
+        const atkD = _breakdownData(actorSnap,  bd, 'atk', result.attackRoll);
+        const defD = _breakdownData(targetSnap, bd, 'def', result.defenseRoll);
+        const padTo = Math.max(atkD.rows.length, defD.rows.length);
         this._el('battle-atk-breakdown').innerHTML =
-          _buildBreakdownHTML(actorSnap, bd, 'atk', result.attackRoll);
+          _buildBreakdownHTML(actorSnap, bd, 'atk', result.attackRoll, padTo);
         this._el('battle-def-breakdown').innerHTML =
-          _buildBreakdownHTML(targetSnap, bd, 'def', result.defenseRoll);
-        // Double-rAF ensures a paint happens before adding visible,
-        // so the opacity 0→1 transition fires reliably.
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-          this._el('battle-atk-breakdown').classList.add('visible');
-          this._el('battle-def-breakdown').classList.add('visible');
-        }));
+          _buildBreakdownHTML(targetSnap, bd, 'def', result.defenseRoll, padTo);
+        this._el('battle-atk-breakdown').classList.add('visible');
+        this._el('battle-def-breakdown').classList.add('visible');
+        _applyWinnerClass(
+          this._el('battle-atk-breakdown'),
+          this._el('battle-def-breakdown'),
+          result.attackRoll,
+          result.defenseRoll,
+        );
       }
+    };
 
+    // Render the final outcome line + HP bars + splash + rematch.
+    const revealOutcome = () => {
       if (result.killed) {
         const dmgNote = result.damage > 0 ? ` (${result.damage} damage)` : '';
         outcome.textContent = `💀 ${targetSnap.name} is slain!${dmgNote}`;
@@ -3393,6 +3406,7 @@ export class UIController {
         outcome.textContent = `🛡 ${targetSnap.name} defends!`;
         outcome.className   = 'battle-outcome miss';
       }
+      outcome.classList.add('battle-outcome-pulse');
 
       // Splash damage line(s) below main outcome
       if (result.splashHits?.length) {
@@ -3445,53 +3459,164 @@ export class UIController {
       }
     };
 
+    // Hide pause/redo during autoplay — there's nothing to pause or replay.
+    const pauseBtnInit = this._el('battle-pause-btn');
+    const redoBtnInit  = this._el('battle-redo-btn');
+    if (pauseBtnInit) pauseBtnInit.style.display = this.autoplay ? 'none' : '';
+    if (redoBtnInit)  redoBtnInit.style.display  = this.autoplay ? 'none' : '';
+
     if (this.autoplay) {
-      // Skip animation — show result immediately, auto-dismiss
-      atkDie.textContent = result.attackRoll;
-      defDie.textContent = result.defenseRoll;
-      atkDie.className = 'die-display' + (result.hit ? ' atk-win' : '');
-      defDie.className = 'die-display' + (!result.hit ? ' def-win' : '');
-      revealResult();
+      // Skip animation entirely.
+      renderInstant();
+      revealOutcome();
       setTimeout(dismiss, 500);
-    } else if (this.speedMode === 'fast') {
-      // Skip dice animation — show result immediately, auto-dismiss after 800ms
-      atkDie.textContent = result.attackRoll;
-      defDie.textContent = result.defenseRoll;
-      atkDie.className = 'die-display' + (result.hit ? ' atk-win' : '');
-      defDie.className = 'die-display' + (!result.hit ? ' def-win' : '');
-      revealResult();
-      setTimeout(dismiss, 800);
-    } else {
-      // Cinematic: animated dice roll, click to skip or auto-dismiss after a few seconds
-      atkDie.textContent = '?';
-      defDie.textContent = '?';
-      atkDie.className   = 'die-display rolling';
-      defDie.className   = 'die-display rolling';
-      let ticks = 0;
-      const maxTicks = 14;
-      this._battleInterval = setInterval(() => {
-        ticks++;
-        atkDie.textContent = Math.ceil(Math.random() * 20);
-        defDie.textContent = Math.ceil(Math.random() * 20);
-        if (ticks >= maxTicks) {
-          clearInterval(this._battleInterval);
-          this._battleInterval = null;
-          revealResult();
-        }
-      }, 55);
-      // Wire click/key dismiss and schedule auto-dismiss once dice settle.
-      // Give more time when a rematch button is present AND enabled so the
-      // user can decide whether to press "Battle Again".
-      setTimeout(() => {
-        if (_dismissed) return;  // dialog already closed (e.g. via enable-fast-mode button)
-        dialog.addEventListener('click', dismiss);
-        card?.addEventListener('click', dismiss);
-        document.addEventListener('keydown', keyDismiss);
-        const hasEnabledRematch = onRematch && this.state.actionsAvailable > 0;
-        const autoMs = hasEnabledRematch ? 5000 : 3000;
-        this._autoDismissTimer = setTimeout(dismiss, autoMs);
-      }, maxTicks * 55 + 200);
+      return;
     }
+
+    const atkBkdEl = this._el('battle-atk-breakdown');
+    const defBkdEl = this._el('battle-def-breakdown');
+    atkBkdEl.classList.add('visible');
+    defBkdEl.classList.add('visible');
+
+    let _clickDismissWired = false;
+    const unwireClickDismiss = () => {
+      if (!_clickDismissWired) return;
+      _clickDismissWired = false;
+      dialog.removeEventListener('click', dismiss);
+      card?.removeEventListener('click', dismiss);
+      document.removeEventListener('keydown', keyDismiss);
+    };
+
+    // Capture initial footer HTML so Redo can restore it (revealOutcome
+    // mutates footer with rematch button + action pips).
+    const initialFooterHtml = footer.innerHTML;
+    const rewireFooter = () => {
+      footer.innerHTML = initialFooterHtml;
+      const fastBtn = footer.querySelector('.battle-enable-fast');
+      if (fastBtn) {
+        fastBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          this._setSpeed('fast');
+          dismiss();
+        });
+      }
+    };
+
+    const scheduleDismiss = (ms) => {
+      _clearDismissTimer();
+      if (_dismissed) return;
+      _dismissRemaining = ms;
+      _dismissStartedAt = Date.now();
+      if (!_dismissPaused) {
+        _dismissTimerId = setTimeout(() => { _dismissTimerId = null; dismiss(); }, ms);
+      }
+    };
+    const pauseDismiss = () => {
+      if (_dismissPaused) return;
+      _dismissPaused = true;
+      if (_dismissTimerId !== null) {
+        clearTimeout(_dismissTimerId);
+        _dismissTimerId = null;
+        _dismissRemaining = Math.max(0, _dismissRemaining - (Date.now() - _dismissStartedAt));
+      }
+    };
+    const resumeDismiss = () => {
+      if (!_dismissPaused) return;
+      _dismissPaused = false;
+      if (_dismissRemaining > 0 && !_dismissed) {
+        _dismissStartedAt = Date.now();
+        _dismissTimerId = setTimeout(() => { _dismissTimerId = null; dismiss(); }, _dismissRemaining);
+      }
+    };
+
+    // playAnimation runs the staged reveal. Called at start and on Redo.
+    const playAnimation = () => {
+      anim.reset();
+      unwireClickDismiss();
+      _clearDismissTimer();
+      if (this._autoDismissTimer) { clearTimeout(this._autoDismissTimer); this._autoDismissTimer = null; }
+      atkBkdEl.innerHTML = '';
+      defBkdEl.innerHTML = '';
+      outcome.textContent = '';
+      outcome.className   = 'battle-outcome';
+      rewireFooter();
+      const stale = dialog.querySelector('.battle-splash');
+      if (stale) stale.remove();
+      // Restore HP fills in case redo fires after HP mutation.
+      dialog.querySelectorAll('.combatant-hp-fill').forEach(fill => {
+        const panel = fill.closest('.combatant-panel');
+        const isAtk = panel?.id === 'battle-attacker';
+        const snap = isAtk ? actorSnap : targetSnap;
+        const pct = Math.max(0, (snap.hp / snap.maxHp) * 100);
+        fill.style.width = `${pct}%`;
+      });
+
+      const bd = result.breakdown;
+      let padTo = 0;
+      if (bd) {
+        const atkD = _breakdownData(actorSnap,  bd, 'atk', result.attackRoll);
+        const defD = _breakdownData(targetSnap, bd, 'def', result.defenseRoll);
+        padTo = Math.max(atkD.rows.length, defD.rows.length);
+      }
+      const sidePromises = bd
+        ? [
+            _animateBreakdownSide(atkBkdEl, actorSnap,  bd, 'atk', result.attackRoll,  factor, anim, padTo),
+            _animateBreakdownSide(defBkdEl, targetSnap, bd, 'def', result.defenseRoll, factor, anim, padTo),
+          ]
+        : [Promise.resolve(), Promise.resolve()];
+
+      Promise.all(sidePromises).then(() => {
+        if (_dismissed || anim.cancelled) return;
+        if (bd) {
+          _applyWinnerClass(atkBkdEl, defBkdEl, result.attackRoll, result.defenseRoll);
+        }
+        const delay = Math.max(80, _BKD_TIMINGS.outcomeDelay * factor);
+        anim.timeout(delay, () => {
+          if (_dismissed) return;
+          revealOutcome();
+          // Wire click/key dismiss and schedule auto-dismiss (pausable).
+          dialog.addEventListener('click', dismiss);
+          card?.addEventListener('click', dismiss);
+          document.addEventListener('keydown', keyDismiss);
+          _clickDismissWired = true;
+          const hasEnabledRematch = onRematch && this.state.actionsAvailable > 0;
+          const baseMs = hasEnabledRematch ? 5000 : 3000;
+          const autoMs = this.speedMode === 'vfast' ? 1200
+                       : this.speedMode === 'fast'  ? 2000
+                       : baseMs;
+          scheduleDismiss(autoMs);
+        });
+      });
+    };
+
+    // Wire pause/redo buttons.
+    const pauseBtn = this._el('battle-pause-btn');
+    const redoBtn  = this._el('battle-redo-btn');
+    const setPauseLabel = () => {
+      if (!pauseBtn) return;
+      pauseBtn.textContent = _dismissPaused ? '▶' : '⏸';
+      pauseBtn.title = _dismissPaused ? 'Resume' : 'Pause';
+      pauseBtn.setAttribute('aria-label', _dismissPaused ? 'Resume' : 'Pause');
+    };
+    setPauseLabel();
+    const onPauseClick = e => {
+      e.stopPropagation();
+      if (_dismissPaused) resumeDismiss(); else pauseDismiss();
+      setPauseLabel();
+    };
+    const onRedoClick = e => {
+      e.stopPropagation();
+      if (_dismissPaused) { resumeDismiss(); setPauseLabel(); }
+      playAnimation();
+    };
+    pauseBtn?.addEventListener('click', onPauseClick);
+    redoBtn?.addEventListener('click', onRedoClick);
+    anim.onClear = () => {
+      pauseBtn?.removeEventListener('click', onPauseClick);
+      redoBtn?.removeEventListener('click', onRedoClick);
+    };
+
+    playAnimation();
   }
 
   _showTileDetail(hex) {
@@ -4502,40 +4627,348 @@ function _combatantHTML(snap, role, portraitSrc = null) {
   `;
 }
 
-// Build the per-side roll breakdown HTML for the battle dialog.
-// side: 'atk' | 'def'   total: the final roll total shown in the die box
-function _buildBreakdownHTML(snap, bd, side, total) {
-  const row = (label, val, isDie = false) => {
-    const valHtml = isDie
-      ? `<span class="bkd-val bkd-die">${val}</span>`
-      : `<span class="bkd-val">${val >= 0 ? '+' + val : val}</span>`;
-    return `<div class="bkd-row"><span class="bkd-label">${label}</span>${valHtml}</div>`;
-  };
+// Compute the per-side breakdown data for the battle dialog.
+// Used by both the animated renderer and the instant (autoplay) fallback.
+// Each row carries an explicit sign flag: 'base' (neutral), 'pos', or 'neg'.
+function _breakdownData(snap, bd, side, total) {
+  const pool = side === 'atk'
+    ? (bd.atkPool ?? [bd.atkBaseDie])
+    : (bd.defPool ?? [bd.defBaseDie]);
+  const picked = side === 'atk' ? bd.atkBaseDie : bd.defBaseDie;
+  const advantage = side === 'atk'
+    ? (bd.atkAdvantageDice ?? 0)
+    : (bd.defAdvantageDice ?? 0);
 
-  const parts = [];
+  const rows = [];
+  const add = (label, val, sign) => rows.push({ label, val, sign });
   if (side === 'atk') {
-    parts.push(row('Base d6', bd.atkBaseDie, true));
-    parts.push(row(`${snap.name} ATK`, snap.attack));
-    if (snap.attackBonus) parts.push(row('🪙 Silver', snap.attackBonus));
-    if (bd.phaseBonus)    parts.push(row('🌙 Night', bd.phaseBonus));
-    if (bd.atkStaffBonus) parts.push(row('⚕ Staff (undead)', bd.atkStaffBonus));
-    if (bd.atkFortAtkBonus) parts.push(row('🏰 Fort ATT', bd.atkFortAtkBonus));
-    bd.atkExtraDice.forEach((r, i) => {
-      parts.push(row(`${bd.atkAllyNames[i] ?? 'Ally'} (D3)`, r, true));
-    });
+    add(`${snap.name} ATK`, snap.attack, 'base');
+    if (snap.attackBonus)    add('🪙 Silver',          snap.attackBonus,    'pos');
+    if (bd.phaseBonus)       add('🌙 Night',           bd.phaseBonus,       'pos');
+    if (bd.atkStaffBonus)    add('⚕ Staff (undead)',   bd.atkStaffBonus,    'pos');
+    if (bd.atkFortAtkBonus)  add('🏰 Fort ATT',        bd.atkFortAtkBonus,  'pos');
+    const atkAllyNames = bd.atkAllyNames ?? [];
+    const atkAllyContrib = Math.min(atkAllyNames.length, bd.atkGangupFlat || 0);
+    if (atkAllyContrib > 0) {
+      for (let i = 0; i < atkAllyContrib; i++) add(`👥 ${atkAllyNames[i]}`, 1, 'pos');
+    } else if (bd.atkGangupFlat) {
+      add('👥 Gang-up flat', bd.atkGangupFlat, 'pos');
+    }
   } else {
-    parts.push(row('Base d6', bd.defBaseDie, true));
-    parts.push(row(`${snap.name} DEF`, snap.defense));
-    if (snap.defenseBonus) parts.push(row('🛡 Bonus DEF', snap.defenseBonus));
-    if (bd.fortBonus) parts.push(row('🏰 Fort DEF', bd.fortBonus));
-    if (bd.fatiguePenalty) parts.push(row('😓 Fatigue', -bd.fatiguePenalty));
-    bd.defExtraDice.forEach((r, i) => {
-      parts.push(row(`${bd.defAllyNames[i] ?? 'Ally'} (D3)`, r, true));
+    add(`${snap.name} DEF`, snap.defense, 'base');
+    if (snap.defenseBonus)  add('🛡 Bonus DEF',   snap.defenseBonus,  'pos');
+    if (bd.fortBonus)       add('🏰 Fort DEF',    bd.fortBonus,       'pos');
+    if (bd.fatiguePenalty)  add('😓 Fatigue',     -bd.fatiguePenalty, 'neg');
+    const defAllyNames = bd.defAllyNames ?? [];
+    const defAllyContrib = Math.min(defAllyNames.length, bd.defGangupFlat || 0);
+    if (defAllyContrib > 0) {
+      for (let i = 0; i < defAllyContrib; i++) add(`👥 ${defAllyNames[i]}`, 1, 'pos');
+    } else if (bd.defGangupFlat) {
+      add('👥 Allies flat', bd.defGangupFlat, 'pos');
+    }
+  }
+  return { pool, picked, advantage, rows, total };
+}
+
+function _poolSign(advantage) {
+  if (advantage > 0) return 'pos';
+  if (advantage < 0) return 'neg';
+  return 'base';
+}
+
+function _poolLabel(advantage) {
+  if (advantage > 0) return `Advantage ${advantage}`;
+  if (advantage < 0) return `Disadvantage ${-advantage}`;
+  return 'Roll';
+}
+
+// Signed sign -> data-sign attribute ('pos'|'neg'|'base' → 'positive'|'negative'|'').
+function _signAttr(sign) {
+  if (sign === 'pos') return ' data-sign="positive"';
+  if (sign === 'neg') return ' data-sign="negative"';
+  return '';
+}
+
+// Instant (no animation) render — used for autoplay/skip.
+function _buildBreakdownHTML(snap, bd, side, total, padTo = 0) {
+  const d = _breakdownData(snap, bd, side, total);
+  const n = d.pool?.length ?? 0;
+  const parts = [];
+  if (n > 0) {
+    // Pool row: discards together, picked die in the value column.
+    let usedPick = false;
+    const discards = [];
+    let pickedHTML = '';
+    for (const v of d.pool) {
+      const isPick = !usedPick && v === d.picked;
+      if (isPick) {
+        usedPick = true;
+        pickedHTML = `<span class="bkd-die bkd-die-picked">${v}</span>`;
+      } else {
+        discards.push(`<span class="bkd-die bkd-die-discard">${v}</span>`);
+      }
+    }
+    const poolSign = _poolSign(d.advantage);
+    parts.push(
+      `<div class="bkd-row bkd-pool-row"${_signAttr(poolSign)}>` +
+        `<span class="bkd-label">${_poolLabel(d.advantage)}</span>` +
+        `<span class="bkd-pool-discards">${discards.join('')}</span>` +
+        `<span class="bkd-pool-picked-slot">${pickedHTML}</span>` +
+      `</div>`
+    );
+  }
+  for (const r of d.rows) {
+    const v = r.val >= 0 ? '+' + r.val : r.val;
+    parts.push(
+      `<div class="bkd-row"${_signAttr(r.sign)}><span class="bkd-label">${r.label}</span><span class="bkd-val">${v}</span></div>`
+    );
+  }
+  const spacerCount = Math.max(0, padTo - d.rows.length);
+  for (let i = 0; i < spacerCount; i++) {
+    parts.push(`<div class="bkd-row bkd-row-spacer" aria-hidden="true"><span class="bkd-label">&nbsp;</span><span class="bkd-val">&nbsp;</span></div>`);
+  }
+  parts.push(`<hr class="bkd-divider">`);
+  parts.push(`<div class="bkd-row bkd-total-row"><span class="bkd-label">Total</span><span class="bkd-val">${total}</span></div>`);
+  return parts.join('');
+}
+
+// Tint the whole breakdown column once both totals have landed: winner →
+// subtle green wash, loser → subtle red wash, tie → neutral. The Total row
+// keeps its bold/large size; the side tint carries the winner signal.
+function _applyWinnerClass(atkCol, defCol, atkTotal, defTotal) {
+  if (!atkCol || !defCol) return;
+  for (const col of [atkCol, defCol]) {
+    col.classList.remove('bkd-col-winner', 'bkd-col-loser', 'bkd-col-tie');
+  }
+  if (atkTotal > defTotal) {
+    atkCol.classList.add('bkd-col-winner');
+    defCol.classList.add('bkd-col-loser');
+  } else if (defTotal > atkTotal) {
+    defCol.classList.add('bkd-col-winner');
+    atkCol.classList.add('bkd-col-loser');
+  } else {
+    atkCol.classList.add('bkd-col-tie');
+    defCol.classList.add('bkd-col-tie');
+  }
+}
+
+// Base cinematic timings (ms). Multiplied by speedMode factor.
+const _BKD_TIMINGS = {
+  tumble:       450,
+  select:       300,
+  selectHold:   150,
+  rowStagger:   180,
+  flash:        300,
+  divider:      200,
+  totalSnap:    250,
+  outcomeDelay: 200,
+};
+function _speedFactor(mode) {
+  if (mode === 'vfast') return 0.25;
+  if (mode === 'fast')  return 0.5;
+  return 1;
+}
+
+// Animate a side's breakdown column.
+// Renders all rows upfront in a muted/desaturated state, then "glows" each
+// row into its active state in sequence as the reveal progresses.
+//
+// Sequence:
+//   1. Tumble the dice pool (faces jitter) with a muted pool row visible.
+//   2. Pool row becomes active: discarded dice fade, picked die pops into
+//      the value-column slot.
+//   3. Modifier rows un-mute one at a time with a green/red/neutral flash.
+//   4. Divider draws; total row pops.
+function _animateBreakdownSide(colEl, snap, bd, side, total, factor, anim, padTo = 0) {
+  const d = _breakdownData(snap, bd, side, total);
+  colEl.innerHTML = '';
+  colEl.classList.add('visible');
+
+  const poolSign = _poolSign(d.advantage);
+  const n = d.pool?.length ?? 0;
+
+  // Build pool row. Not muted — the tumble animation must be clearly visible
+  // before the picked die is selected. The glow-in at settle still fires.
+  const poolRow = document.createElement('div');
+  poolRow.className = 'bkd-row bkd-pool-row';
+  if (poolSign !== 'base') poolRow.setAttribute('data-sign', poolSign === 'pos' ? 'positive' : 'negative');
+  poolRow.innerHTML =
+    `<span class="bkd-label">${_poolLabel(d.advantage)}</span>` +
+    `<span class="bkd-pool-discards"></span>` +
+    `<span class="bkd-pool-picked-slot"></span>`;
+  const discardsEl = poolRow.querySelector('.bkd-pool-discards');
+  const pickedSlot = poolRow.querySelector('.bkd-pool-picked-slot');
+
+  // During tumble, all dice live in the discards area; on settle, the picked
+  // die moves into the picked slot.
+  const dieEls = [];
+  for (let i = 0; i < n; i++) {
+    const de = document.createElement('span');
+    de.className = 'bkd-die bkd-die-tumbling';
+    de.textContent = Math.ceil(Math.random() * 6);
+    discardsEl.appendChild(de);
+    dieEls.push(de);
+  }
+  if (n > 0) colEl.appendChild(poolRow);
+
+  // Pre-render muted modifier rows.
+  const rowEls = d.rows.map(r => {
+    const row = document.createElement('div');
+    row.className = 'bkd-row bkd-row-muted';
+    if (r.sign !== 'base') row.setAttribute('data-sign', r.sign === 'pos' ? 'positive' : 'negative');
+    const v = r.val >= 0 ? '+' + r.val : r.val;
+    row.innerHTML =
+      `<span class="bkd-label">${r.label}</span>` +
+      `<span class="bkd-val">${v}</span>`;
+    colEl.appendChild(row);
+    return row;
+  });
+
+  // Spacer rows to equalize column height between atk and def sides so the
+  // Total row lines up on the same baseline regardless of modifier count.
+  const spacerCount = Math.max(0, padTo - d.rows.length);
+  for (let i = 0; i < spacerCount; i++) {
+    const spacer = document.createElement('div');
+    spacer.className = 'bkd-row bkd-row-spacer';
+    spacer.setAttribute('aria-hidden', 'true');
+    spacer.innerHTML = `<span class="bkd-label">&nbsp;</span><span class="bkd-val">&nbsp;</span>`;
+    colEl.appendChild(spacer);
+  }
+
+  // Divider (muted).
+  const hr = document.createElement('hr');
+  hr.className = 'bkd-divider bkd-row-muted';
+  colEl.appendChild(hr);
+
+  // Total row (muted until the end).
+  const totalRow = document.createElement('div');
+  totalRow.className = 'bkd-row bkd-total-row bkd-row-muted';
+  totalRow.innerHTML =
+    `<span class="bkd-label">Total</span>` +
+    `<span class="bkd-val">${total}</span>`;
+  colEl.appendChild(totalRow);
+
+  // Tumble the pool dice.
+  const tumbleMs = Math.max(90, _BKD_TIMINGS.tumble * factor);
+  let tumbleInterval = null;
+  if (n > 0) {
+    tumbleInterval = anim.interval(Math.max(40, 55 * factor), () => {
+      for (const de of dieEls) de.textContent = Math.ceil(Math.random() * 6);
     });
   }
 
-  parts.push(`<hr class="bkd-divider">`);
-  parts.push(`<div class="bkd-total-row"><span class="bkd-label">Total</span><span class="bkd-val">${total}</span></div>`);
-  return parts.join('');
+  return new Promise(resolve => {
+    // Step 1 → 2: dice settle, pool row un-mutes, picked die moves to value slot.
+    anim.timeout(tumbleMs, () => {
+      // Stop the tumble interval so dice stay on their final face values.
+      tumbleInterval?.cancel();
+      // Settle dice faces.
+      let pickedIdx = -1;
+      for (let i = 0; i < dieEls.length; i++) {
+        const v = d.pool[i];
+        dieEls[i].textContent = v;
+        dieEls[i].classList.remove('bkd-die-tumbling');
+        if (pickedIdx < 0 && v === d.picked) pickedIdx = i;
+      }
+      // Mark discards, move picked into the picked slot.
+      dieEls.forEach((de, i) => {
+        if (i === pickedIdx) {
+          de.classList.add('bkd-die-picked');
+          pickedSlot.appendChild(de);
+        } else {
+          de.classList.add('bkd-die-discard');
+        }
+      });
+      // Un-mute the pool row with a glow.
+      poolRow.classList.remove('bkd-row-muted');
+      poolRow.classList.add(
+        poolSign === 'pos' ? 'bkd-row-glow-pos'
+        : poolSign === 'neg' ? 'bkd-row-glow-neg'
+        : 'bkd-row-glow-neutral'
+      );
+
+      // Step 3: un-mute modifier rows one at a time.
+      const selectHoldMs = _BKD_TIMINGS.selectHold * factor + _BKD_TIMINGS.select * factor;
+      const rowStagger = Math.max(40, _BKD_TIMINGS.rowStagger * factor);
+      rowEls.forEach((row, idx) => {
+        const sign = d.rows[idx].sign;
+        anim.timeout(selectHoldMs + idx * rowStagger, () => {
+          row.classList.remove('bkd-row-muted');
+          row.classList.add(
+            sign === 'pos' ? 'bkd-row-glow-pos'
+            : sign === 'neg' ? 'bkd-row-glow-neg'
+            : 'bkd-row-glow-neutral'
+          );
+        });
+      });
+
+      // Step 4: divider + total reveal after rows.
+      const afterRows = selectHoldMs + rowEls.length * rowStagger + Math.max(60, 100 * factor);
+      anim.timeout(afterRows, () => {
+        hr.classList.remove('bkd-row-muted');
+        hr.classList.add('bkd-divider-draw');
+      });
+      const dividerMs = Math.max(80, _BKD_TIMINGS.divider * factor);
+      anim.timeout(afterRows + dividerMs, () => {
+        totalRow.classList.remove('bkd-row-muted');
+        totalRow.classList.add('bkd-total-pop');
+      });
+      anim.timeout(afterRows + dividerMs + Math.max(100, _BKD_TIMINGS.totalSnap * factor), () => resolve(totalRow));
+    });
+  });
+}
+
+// ── Cancellable timer bag for the battle dialog animation ─────────────────
+//
+// Tracks every setTimeout/setInterval set by the staged animation so they
+// can be cancelled together on reset/dismiss. The animation sequence runs
+// to completion uninterrupted — pause only affects the auto-dismiss timer,
+// which lives outside this bag.
+function _makeAnimBag() {
+  const entries = [];
+  const bag = {
+    cancelled: false,
+    onClear: null,
+    timeout(delayMs, fn) {
+      const e = { type: 'timeout', fn, id: null, cancelled: false };
+      const run = () => { if (!e.cancelled && !bag.cancelled) fn(); };
+      e.id = setTimeout(run, delayMs);
+      entries.push(e);
+      return e;
+    },
+    interval(delayMs, fn) {
+      const e = { type: 'interval', delayMs, fn, id: null, cancelled: false };
+      e.id = setInterval(fn, delayMs);
+      e.cancel = () => {
+        if (e.cancelled) return;
+        e.cancelled = true;
+        if (e.id !== null) { clearInterval(e.id); e.id = null; }
+      };
+      entries.push(e);
+      return e;
+    },
+    // Cancel all timers without tearing down. Leaves the bag reusable.
+    reset() {
+      for (const e of entries) {
+        e.cancelled = true;
+        if (e.id !== null) {
+          if (e.type === 'timeout') clearTimeout(e.id);
+          else clearInterval(e.id);
+          e.id = null;
+        }
+      }
+      entries.length = 0;
+      bag.cancelled = false;
+    },
+    // Tear down permanently. After clear(), no further timeouts will fire
+    // even if scheduled, and onClear (if set) runs for listener cleanup.
+    clear() {
+      bag.reset();
+      bag.cancelled = true;
+      if (bag.onClear) { try { bag.onClear(); } catch (_) {} }
+      bag.onClear = null;
+    },
+  };
+  return bag;
 }
 
