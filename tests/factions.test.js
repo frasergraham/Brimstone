@@ -1,7 +1,8 @@
 // Tests for the Faction class hierarchy and registry
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Faction, HeroFaction, WitchFaction, getFaction, allFactions } from '../src/factions.js';
+import { Faction, HeroFaction, WitchFaction, getFaction, allFactions, getFactionsForSide } from '../src/factions.js';
+import { Side } from '../src/sides.js';
 import { Phase } from '../src/game.js';
 import { EntityType } from '../src/entities.js';
 import { ResourceType } from '../src/tiles.js';
@@ -51,6 +52,37 @@ describe('Faction identity', () => {
     const w = getFaction('witch');
     assert.equal(w.name, 'Witch');
     assert.equal(w.leaderType, EntityType.WITCH);
+  });
+});
+
+// ── Side membership ────────────────────────────────────────────────────────
+
+describe('Faction side membership', () => {
+  test('HeroFaction belongs to the day side', () => {
+    assert.equal(getFaction('hero').side, Side.DAY);
+  });
+
+  test('WitchFaction belongs to the night side', () => {
+    assert.equal(getFaction('witch').side, Side.NIGHT);
+  });
+
+  test('getOpposingSide returns the other side', () => {
+    assert.equal(getFaction('hero').getOpposingSide(),  Side.NIGHT);
+    assert.equal(getFaction('witch').getOpposingSide(), Side.DAY);
+  });
+
+  test('getFactionsForSide groups factions by side', () => {
+    const day   = getFactionsForSide('day');
+    const night = getFactionsForSide('night');
+    assert.ok(day.some(f => f.id === 'hero'),   'day side includes hero');
+    assert.ok(night.some(f => f.id === 'witch'),'night side includes witch');
+    // No cross-contamination.
+    assert.equal(day.some(f => f.id === 'witch'),  false);
+    assert.equal(night.some(f => f.id === 'hero'), false);
+  });
+
+  test('getFactionsForSide returns [] for unknown side', () => {
+    assert.deepEqual(getFactionsForSide('twilight'), []);
   });
 });
 

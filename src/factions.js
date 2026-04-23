@@ -1,12 +1,17 @@
 // Faction class hierarchy — encapsulates all faction-specific behavior.
 // Factions are stateless singletons: they define behavior/config, not game state.
 // Use getFaction(id) to look up a faction by its string id ('hero' | 'witch').
+//
+// Each Faction belongs to a Side ('day' | 'night'). Sides own the phase
+// cycle, scoring, and team allocation; factions vary the stats, abilities,
+// AI personalities, and unit roster within a side. See `src/sides.js`.
 
 import { Phase } from './game.js';
 import { EntityType, SurvivorAbility, createHero, createWitch, createSurvivor, createZombie, createMinion, createWoodGolem, createIronGolem } from './entities.js';
 import { ResourceType, TileType, BuildingType } from './tiles.js';
 import { hexKey, getNeighbors } from './hex.js';
 import { AI_HERO_NAMES, AI_WITCH_NAMES } from './ai-names.js';
+import { Side, getOpposingSide as _opposingSide } from './sides.js';
 
 // ── Base Class ──────────────────────────────────────────────────────────────
 
@@ -17,6 +22,15 @@ export class Faction {
   get name()       { throw new Error('Subclass must implement name'); }
   /** @returns {string} EntityType of the faction leader */
   get leaderType() { throw new Error('Subclass must implement leaderType'); }
+  /** @returns {string} Side id this faction belongs to ('day' | 'night'). */
+  get side()       { throw new Error('Subclass must implement side'); }
+
+  /**
+   * Return the opposing Side id. Forward-looking N-faction API: use this
+   * instead of `getOpponentId()` when the caller wants "who is on the
+   * other team?" rather than "which single faction faces me?".
+   */
+  getOpposingSide() { return _opposingSide(this.side); }
 
   // ── Action Budget ──
 
@@ -183,6 +197,7 @@ export class HeroFaction extends Faction {
   get id()         { return 'hero'; }
   get name()       { return 'Hero'; }
   get leaderType() { return EntityType.HERO; }
+  get side()       { return Side.DAY; }
 
   // Action Budget
   get actionCap()    { return 8; }
@@ -362,6 +377,7 @@ export class WitchFaction extends Faction {
   get id()         { return 'witch'; }
   get name()       { return 'Witch'; }
   get leaderType() { return EntityType.WITCH; }
+  get side()       { return Side.NIGHT; }
 
   // Action Budget
   get actionCap()    { return 8; }
@@ -467,4 +483,19 @@ export function getFaction(id) {
 /** Return all registered factions. */
 export function allFactions() {
   return Object.values(FACTIONS);
+}
+
+/**
+ * Return every registered Faction belonging to the given Side, in
+ * registration order. Empty array if the side id is unknown.
+ *
+ * Today: day → [hero], night → [witch]. As stub factions register in
+ * later PRs the lists grow; lobby and UI code should iterate this rather
+ * than hardcoding faction ids per side.
+ *
+ * @param {string} sideId — 'day' or 'night'
+ * @returns {Faction[]}
+ */
+export function getFactionsForSide(sideId) {
+  return allFactions().filter(f => f.side === sideId);
 }
