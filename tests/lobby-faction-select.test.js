@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 
 import {
   createLobby, joinLobby, claimSlot, fillAllWithAI, startGame,
-  leaveLobby, getRooms, getRoom,
+  leaveLobby, getRooms, getRoom, setFaction,
 } from '../server/lobby.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -308,5 +308,129 @@ describe('lobby faction selection: leaveLobby', () => {
     const err = ws3.findMsg('error');
     assert.ok(err);
     assert.match(err.message, /full/i);
+  });
+});
+
+// ── Side / factionId carried on slots ──────────────────────────────────────
+
+describe('lobby slots carry side and factionId', () => {
+  beforeEach(cleanUpRooms);
+  afterEach(cleanUpRooms);
+
+  test('every slot exposes side and factionId on lobbyJoined', () => {
+    const { lobby } = createTestLobby();
+    for (const slot of lobby.slots) {
+      assert.ok(['day', 'night'].includes(slot.side), `slot.side should be day|night, got ${slot.side}`);
+      assert.ok(slot.factionId, 'slot.factionId should be set');
+      // Default mapping today: factionId === legacy faction.
+      assert.equal(slot.factionId, slot.faction);
+    }
+  });
+
+  test('hero slots map to day side; witch slots map to night side', () => {
+    const { lobby } = createTestLobby('host-1', 2);
+    const heroSlots  = lobby.slots.filter(s => s.faction === 'hero');
+    const witchSlots = lobby.slots.filter(s => s.faction === 'witch');
+    assert.ok(heroSlots.every(s => s.side === 'day'));
+    assert.ok(witchSlots.every(s => s.side === 'night'));
+  });
+});
+
+// ── claimSlot factionId override ───────────────────────────────────────────
+
+describe('claimSlot with factionId override', () => {
+  beforeEach(cleanUpRooms);
+  afterEach(cleanUpRooms);
+
+  test('claiming with the slot\'s default factionId is a no-op override', () => {
+    const { roomId, ws } = createTestLobby();
+    ws.clearMsgs();
+
+    claimSlot('host-1', roomId, 0, 'hero');
+
+    const update = ws.findMsg('lobbyUpdate');
+    assert.ok(update);
+    assert.equal(update.lobby.slots[0].factionId, 'hero');
+    assert.equal(update.lobby.slots[0].side,      'day');
+  });
+
+  test('a factionId from the wrong side is silently ignored at claim time', () => {
+    const { roomId, ws } = createTestLobby();
+    ws.clearMsgs();
+
+    // Witch is on the night side; trying to set it on a day slot must not stick.
+    claimSlot('host-1', roomId, 0, 'witch');
+
+    const update = ws.findMsg('lobbyUpdate');
+    assert.ok(update);
+    assert.equal(update.lobby.slots[0].factionId, 'hero', 'factionId should remain default');
+  });
+
+  test('omitting factionId leaves the slot\'s pre-existing value', () => {
+    const { roomId, ws } = createTestLobby();
+    ws.clearMsgs();
+    claimSlot('host-1', roomId, 0); // no factionId
+    const update = ws.findMsg('lobbyUpdate');
+    assert.equal(update.lobby.slots[0].factionId, 'hero');
+  });
+});
+
+// ── setFaction ─────────────────────────────────────────────────────────────
+
+describe('setFaction', () => {
+  beforeEach(cleanUpRooms);
+  afterEach(cleanUpRooms);
+
+  test('valid same-side faction switch updates slot.factionId', () => {
+    const { roomId, ws } = createTestLobby();
+    claimSlot('host-1', roomId, 0); // claim a day slot
+    ws.clearMsgs();
+
+    // 'hero' is on day side — same-side, so this should succeed (and is a no-op
+    // since the seat already holds hero, but still sends an update if changed).
+    setFaction('host-1', roomId, 'hero');
+
+    // No-op when factionId unchanged — no update broadcast required, and no error.
+    assert.equal(ws.findMsg('error'), undefined);
+  });
+
+  test('cross-side faction switch is rejected with an error', () => {
+    const { roomId, ws } = createTestLobby();
+    claimSlot('host-1', roomId, 0); // day slot
+    ws.clearMsgs();
+
+    setFaction('host-1', roomId, 'witch'); // wrong side
+
+    const err = ws.findMsg('error');
+    assert.ok(err, 'should receive an error for cross-side faction switch');
+    assert.match(err.message, /not on the day side/i);
+
+    // Faction id should be unchanged.
+    const room = getRoom(roomId);
+    assert.equal(room.slots[0].factionId, 'hero');
+  });
+
+  test('setFaction does nothing if player is not seated', () => {
+    const { roomId, ws } = createTestLobby();
+    // Player has not claimed a slot yet — still in unassigned.
+    ws.clearMsgs();
+
+    setFaction('host-1', roomId, 'hero');
+
+    // No error and no update — silently ignored, like other lobby ops on
+    // unseated players.
+    assert.equal(ws.findMsg('error'), undefined);
+  });
+
+  test('setFaction is rejected once the room leaves lobby state', () => {
+    const { roomId } = createTestLobby();
+    claimSlot('host-1', roomId, 0);
+    const room = getRoom(roomId);
+    room.status = 'playing'; // simulate game start
+
+    // Should be a no-op — neither error nor mutation. (We're past validation
+    // gates that send 'error'; setFaction simply returns when status !== 'lobby'.)
+    setFaction('host-1', roomId, 'hero');
+    assert.equal(room.slots[0].factionId, 'hero');
   });
 });

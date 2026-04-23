@@ -203,8 +203,15 @@ export class MultiplayerClient {
   }
 
   /** Claim (or switch to) an empty slot in the lobby. */
-  claimSlot(roomId, slotIndex) {
-    this._send({ type: 'claimSlot', roomId, slotIndex });
+  claimSlot(roomId, slotIndex, factionId = null) {
+    const msg = { type: 'claimSlot', roomId, slotIndex };
+    if (factionId) msg.factionId = factionId;
+    this._send(msg);
+  }
+
+  /** Switch the faction occupying the player's current seat (same Side only). */
+  setFaction(roomId, factionId) {
+    this._send({ type: 'setFaction', roomId, factionId });
   }
 
   /** Join an active game during round 1 (late join). Uses room ID or code. */

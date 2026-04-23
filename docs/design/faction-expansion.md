@@ -171,6 +171,17 @@ The actual storage rename (`inventory.hero` → `inventory.day` etc.) is deferre
 
 This still unblocks PR 5 (stub factions): new factions on the same side share that side's storage by routing through the accessors, which is the correct behaviour for stubs that inherit parent-side resource pools.
 
+### PR 3 (landed)
+Additive only — no `=== 'hero'` / `=== 'witch'` checks were swept. Each lobby slot and seated player now carries three faction-related fields:
+
+- `faction`   (legacy, primary key for the bulk of lobby/state code today)
+- `side`      ('day' | 'night', derived via `sideOf(faction)`)
+- `factionId` (defaults to legacy `faction`; mutated by `setFaction()` once stub factions land in PR 5)
+
+New `setFaction(playerId, roomId, factionId)` server function and matching protocol message. Cross-side switches are rejected with an error; switches once the room leaves `'lobby'` status are silent no-ops. `claimSlot` gains an optional 4th `factionId` argument with the same cross-side validation.
+
+`SIDE_THEME` added to `theme.js` with day/night palettes (today mirrors hero/witch). Callers haven't migrated yet — that's PR 6 work alongside the picker UI.
+
 ---
 
 ## Out of scope

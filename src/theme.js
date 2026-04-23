@@ -36,6 +36,33 @@ export const FACTION_THEME = Object.freeze({
   },
 });
 
+/**
+ * Per-side display properties. Used by the lobby and HUD when grouping
+ * by team rather than by individual faction. Today the day-side palette
+ * mirrors the hero faction palette and night-side mirrors witch — when
+ * stub factions land in PR 5, individual faction accents stay separate
+ * but the side-level palette is shared across all factions on a side.
+ */
+export const SIDE_THEME = Object.freeze({
+  day: {
+    primary:   '#d4a72c',
+    highlight: '#4488ff',
+    nodeFill:  'rgba(50,120,220,0.18)',
+    playerColors: FACTION_THEME.hero.playerColors,
+  },
+  night: {
+    primary:   '#9b59b6',
+    highlight: '#cc3333',
+    nodeFill:  'rgba(180,0,80,0.18)',
+    playerColors: FACTION_THEME.witch.playerColors,
+  },
+});
+
+/** Look up a side's theme. Returns the side entry or a neutral fallback. */
+export function getSideTheme(sideId) {
+  return SIDE_THEME[sideId] ?? { primary: '#888', highlight: '#888', nodeFill: 'rgba(100,100,100,0.1)', playerColors: ['#888'] };
+}
+
 /** Default node fill for neutral (uncontrolled) nodes. */
 export const NEUTRAL_NODE_FILL = 'rgba(100,100,100,0.1)';
 

@@ -39,6 +39,7 @@ import { VERSION, SAVE_VERSION }            from '../src/version.js';
 import { generateMultipleStarts, generateBattleStarts } from '../src/map.js';
 import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS } from '../src/entities.js';
 import { pickAIName }                              from '../src/ai-names.js';
+import { sideOf, getFactionsForSide }              from '../src/factions.js';
 
 // ── Room phase enum ─────────────────────────────────────────────────────────
 // Single source of truth for where a room is in its lifecycle.
@@ -513,16 +514,33 @@ function createRoom(config = {}) {
   return room;
 }
 
-/** Build an ordered slot array for the given players-per-side count. */
+/** Build an ordered slot array for the given players-per-side count.
+ *
+ * Each slot carries three faction-related fields:
+ *   - `faction`   — legacy field, today always 'hero' or 'witch'. Read by the
+ *                   bulk of lobby/state code; do not rename in-place yet.
+ *   - `side`      — Side id ('day' | 'night'). Forward-looking; computed via
+ *                   sideOf(faction). Read this when grouping by team.
+ *   - `factionId` — the specific faction occupying the seat. Defaults to the
+ *                   side's first registered faction (= legacy `faction`
+ *                   today). Mutated by `setFaction()` once stub factions
+ *                   land in PR 5.
+ */
 function _buildSlots(playersPerSide, isBattle = false) {
   const pps   = Math.max(1, Math.min(isBattle ? 10 : 4, playersPerSide | 0));
   const slots = [];
-  for (let i = 0; i < pps; i++) {
-    slots.push({ faction: 'hero', seatIndex: i, status: 'empty', playerId: null, name: null, personality: null });
-  }
-  for (let i = 0; i < pps; i++) {
-    slots.push({ faction: 'witch', seatIndex: i, status: 'empty', playerId: null, name: null, personality: null });
-  }
+  const mkSlot = (faction, i) => ({
+    faction,
+    side:      sideOf(faction),
+    factionId: faction,
+    seatIndex: i,
+    status:    'empty',
+    playerId:  null,
+    name:      null,
+    personality: null,
+  });
+  for (let i = 0; i < pps; i++) slots.push(mkSlot('hero',  i));
+  for (let i = 0; i < pps; i++) slots.push(mkSlot('witch', i));
   return slots;
 }
 
@@ -564,13 +582,17 @@ function broadcastLobbyUpdate(room) {
  * player records (id='hero', id='witch') and their leader entities.  We patch those
  * records to use the real player IDs so ownerId resolution works throughout the engine.
  */
-function _addSeat(room, playerId, ws, name, faction, isAI, ai = null) {
+function _addSeat(room, playerId, ws, name, faction, isAI, ai = null, factionId = null) {
   // Determine this player's color slot before pushing (0-based index in faction)
   const factionIndex = room.players.filter(s => s.faction === faction).length;
   const colors       = faction === 'hero' ? HERO_PLAYER_COLORS : WITCH_PLAYER_COLORS;
   const playerColor  = colors[factionIndex % colors.length];
 
-  const seat = { playerId, ws, name, faction, isAI, ai };
+  const seat = {
+    playerId, ws, name, faction, isAI, ai,
+    side:      sideOf(faction),
+    factionId: factionId ?? faction,
+  };
   room.players.push(seat);
 
   // Patch the matching synthetic player record in state.players and the leader entity.
@@ -1716,7 +1738,7 @@ export function fillAllWithAI(playerId, roomId, personality) {
  * If they're unassigned, moves them into the slot.
  * If they're in another slot, frees the old slot and claims the new one.
  */
-export function claimSlot(playerId, roomId, slotIndex) {
+export function claimSlot(playerId, roomId, slotIndex, factionId = null) {
   const room = rooms.get(roomId);
   if (!room || room.status !== 'lobby') { return; }
 
@@ -1757,6 +1779,43 @@ export function claimSlot(playerId, roomId, slotIndex) {
   slot.name     = playerName;
   slot._ws      = playerWs;
 
+  // Optional faction override at claim time. Silently ignored if it doesn't
+  // belong to the slot's side; setFaction() reports the same condition with
+  // an explicit error message.
+  if (factionId) {
+    if (getFactionsForSide(slot.side).some(f => f.id === factionId)) {
+      slot.factionId = factionId;
+    }
+  }
+
+  broadcastLobbyUpdate(room);
+}
+
+/**
+ * Switch the faction occupying the player's current seat without moving slots.
+ * Only valid pre-game (room.status === 'lobby'). The new faction must belong
+ * to the same Side as the seat (you can't jump from day to night this way —
+ * use claimSlot with the desired index).
+ */
+export function setFaction(playerId, roomId, factionId) {
+  const room = rooms.get(roomId);
+  if (!room || room.status !== 'lobby') { return; }
+
+  const slot = room.slots.find(s => s.playerId === playerId && s.status === 'human');
+  if (!slot) { return; }
+
+  const allowed = getFactionsForSide(slot.side).map(f => f.id);
+  if (!allowed.includes(factionId)) {
+    if (slot._ws) send(slot._ws, {
+      type: 'error',
+      message: `Faction "${factionId}" is not on the ${slot.side} side.`,
+    });
+    return;
+  }
+
+  if (slot.factionId === factionId) return; // no-op
+
+  slot.factionId = factionId;
   broadcastLobbyUpdate(room);
 }
 
