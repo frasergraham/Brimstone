@@ -1532,11 +1532,11 @@ export class Renderer {
       }
     }
 
-    // Bridge tiles: only the water background is drawn here.
-    // The water bezier and road strip are layered on top in _drawRiverLayer / _drawRoadLayer.
-    if (tile.type === TileType.BRIDGE) return;
-
     // ── Fortification outline — tiered colour, outer glow, inner highlight ──
+    // Drawn before the bridge early-return so bridge tiles with fortifications
+    // still show a ring around the hex perimeter. The water bezier and road
+    // strip in _drawRiverLayer/_drawRoadLayer overlay the hex centre, not the
+    // outline, so the ring remains visible.
     if (tile.fortifyLevel > 0) {
       const lvl = tile.fortifyLevel;
       const fortPalette = [
@@ -1572,6 +1572,10 @@ export class Renderer {
         ctx.stroke();
       }
     }
+
+    // Bridge tiles: only the water background is drawn here.
+    // The water bezier and road strip are layered on top in _drawRiverLayer / _drawRoadLayer.
+    if (tile.type === TileType.BRIDGE) return;
 
 
     // ── Building: icon + name ─────────────────────────────────────────────
