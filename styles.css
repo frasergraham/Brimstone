@@ -2508,12 +2508,80 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   color: #1a1a1a;
   border-color: var(--gold, #c8a84b);
   font-weight: 700;
-  box-shadow: 0 0 4px rgba(200, 168, 75, 0.6);
+  box-shadow: 0 0 8px rgba(200, 168, 75, 0.85);
+  animation: bkd-pick-pop calc(300ms * var(--bkd-speed, 1)) ease-out;
+  transform: scale(1.15);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .bkd-die-discard {
-  opacity: 0.45;
+  opacity: 0.4;
   text-decoration: line-through;
+  transform: scale(0.88);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.bkd-die-tumbling {
+  animation: bkd-die-tumble calc(180ms * var(--bkd-speed, 1)) linear infinite;
+  will-change: transform;
+}
+
+@keyframes bkd-die-tumble {
+  0%   { transform: rotate(0deg)   scale(1.08); }
+  25%  { transform: rotate(90deg)  scale(0.92); }
+  50%  { transform: rotate(180deg) scale(1.08); }
+  75%  { transform: rotate(270deg) scale(0.92); }
+  100% { transform: rotate(360deg) scale(1.08); }
+}
+
+@keyframes bkd-pick-pop {
+  0%   { transform: scale(1);    box-shadow: 0 0 4px rgba(200, 168, 75, 0.2); }
+  55%  { transform: scale(1.4);  box-shadow: 0 0 14px rgba(200, 168, 75, 1); }
+  100% { transform: scale(1.15); box-shadow: 0 0 8px rgba(200, 168, 75, 0.85); }
+}
+
+.bkd-row-in {
+  animation: bkd-row-in calc(180ms * var(--bkd-speed, 1)) ease-out both;
+}
+@keyframes bkd-row-in {
+  0%   { opacity: 0; transform: translateY(6px); }
+  60%  { opacity: 1; transform: translateY(-2px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+.bkd-row-flash {
+  animation: bkd-row-flash calc(300ms * var(--bkd-speed, 1)) ease-out;
+}
+@keyframes bkd-row-flash {
+  0%   { background: rgba(245, 200, 66, 0.22); }
+  100% { background: transparent; }
+}
+
+.bkd-divider-draw {
+  animation: bkd-div-draw calc(200ms * var(--bkd-speed, 1)) ease-out both;
+  transform-origin: left center;
+}
+@keyframes bkd-div-draw {
+  0%   { transform: scaleX(0); opacity: 0.4; }
+  100% { transform: scaleX(1); opacity: 1; }
+}
+
+.bkd-total-pop {
+  animation: bkd-total-pop calc(250ms * var(--bkd-speed, 1)) ease-out both;
+}
+@keyframes bkd-total-pop {
+  0%   { opacity: 0; transform: scale(0.7); }
+  55%  { opacity: 1; transform: scale(1.22); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+.battle-outcome-pulse {
+  animation: battle-outcome-pop calc(350ms * var(--bkd-speed, 1)) ease-out;
+}
+@keyframes battle-outcome-pop {
+  0%   { opacity: 0; transform: scale(0.82); }
+  55%  { opacity: 1; transform: scale(1.15); }
+  100% { opacity: 1; transform: scale(1); }
 }
 
 .bkd-divider {

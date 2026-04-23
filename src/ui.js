@@ -3328,6 +3328,7 @@ export class UIController {
       _dismissed = true;
       if (this._autoDismissTimer) { clearTimeout(this._autoDismissTimer); this._autoDismissTimer = null; }
       if (this._battleInterval)   { clearInterval(this._battleInterval);  this._battleInterval   = null; }
+      if (this._battleTimers)     { this._battleTimers.forEach(t => t.clear()); this._battleTimers = []; }
       dialog.style.display = 'none';
       dialog.removeEventListener('click', dismiss);
       card?.removeEventListener('click', dismiss);
@@ -3351,28 +3352,34 @@ export class UIController {
       });
     }
 
-    // Shared: populate result into the dialog once dice are "settled"
-    const revealResult = () => {
+    // Apply speed factor via CSS custom property so all keyframe durations
+    // scale together. cinematic=1, fast=0.5, vfast=0.25.
+    const factor = _speedFactor(this.speedMode);
+    card?.style.setProperty('--bkd-speed', String(factor));
+
+    // Per-dialog timer bag; cleared on dismiss.
+    this._battleTimers = [];
+
+    // Instant render of both breakdown columns (no animation). Used for
+    // autoplay/skip. Also populates the big side totals.
+    const renderInstant = () => {
       atkDie.textContent = result.attackRoll;
       defDie.textContent = result.defenseRoll;
       atkDie.className = 'die-display' + (result.hit ? ' atk-win' : '');
       defDie.className = 'die-display' + (!result.hit ? ' def-win' : '');
-
-      // Populate and fade-in breakdown columns
       const bd = result.breakdown;
       if (bd) {
         this._el('battle-atk-breakdown').innerHTML =
           _buildBreakdownHTML(actorSnap, bd, 'atk', result.attackRoll);
         this._el('battle-def-breakdown').innerHTML =
           _buildBreakdownHTML(targetSnap, bd, 'def', result.defenseRoll);
-        // Double-rAF ensures a paint happens before adding visible,
-        // so the opacity 0→1 transition fires reliably.
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-          this._el('battle-atk-breakdown').classList.add('visible');
-          this._el('battle-def-breakdown').classList.add('visible');
-        }));
+        this._el('battle-atk-breakdown').classList.add('visible');
+        this._el('battle-def-breakdown').classList.add('visible');
       }
+    };
 
+    // Render the final outcome line + HP bars + splash + rematch.
+    const revealOutcome = () => {
       if (result.killed) {
         const dmgNote = result.damage > 0 ? ` (${result.damage} damage)` : '';
         outcome.textContent = `💀 ${targetSnap.name} is slain!${dmgNote}`;
@@ -3393,6 +3400,7 @@ export class UIController {
         outcome.textContent = `🛡 ${targetSnap.name} defends!`;
         outcome.className   = 'battle-outcome miss';
       }
+      outcome.classList.add('battle-outcome-pulse');
 
       // Splash damage line(s) below main outcome
       if (result.splashHits?.length) {
@@ -3446,52 +3454,58 @@ export class UIController {
     };
 
     if (this.autoplay) {
-      // Skip animation — show result immediately, auto-dismiss
-      atkDie.textContent = result.attackRoll;
-      defDie.textContent = result.defenseRoll;
-      atkDie.className = 'die-display' + (result.hit ? ' atk-win' : '');
-      defDie.className = 'die-display' + (!result.hit ? ' def-win' : '');
-      revealResult();
+      // Skip animation entirely.
+      renderInstant();
+      revealOutcome();
       setTimeout(dismiss, 500);
-    } else if (this.speedMode === 'fast') {
-      // Skip dice animation — show result immediately, auto-dismiss after 800ms
+      return;
+    }
+
+    // Start the staged per-side animation. Big totals stay empty until the
+    // divider has drawn on both sides; then they snap in alongside the
+    // per-column total.
+    atkDie.textContent = '';
+    defDie.textContent = '';
+    atkDie.className = 'die-display';
+    defDie.className = 'die-display';
+    const bd = result.breakdown;
+    const atkBkdEl = this._el('battle-atk-breakdown');
+    const defBkdEl = this._el('battle-def-breakdown');
+    atkBkdEl.classList.add('visible');
+    defBkdEl.classList.add('visible');
+
+    const sidePromises = bd
+      ? [
+          _animateBreakdownSide(atkBkdEl, actorSnap,  bd, 'atk', result.attackRoll,  factor, this._battleTimers),
+          _animateBreakdownSide(defBkdEl, targetSnap, bd, 'def', result.defenseRoll, factor, this._battleTimers),
+        ]
+      : [Promise.resolve(), Promise.resolve()];
+
+    Promise.all(sidePromises).then(() => {
+      if (_dismissed) return;
+      // Emphasized big totals
       atkDie.textContent = result.attackRoll;
       defDie.textContent = result.defenseRoll;
-      atkDie.className = 'die-display' + (result.hit ? ' atk-win' : '');
-      defDie.className = 'die-display' + (!result.hit ? ' def-win' : '');
-      revealResult();
-      setTimeout(dismiss, 800);
-    } else {
-      // Cinematic: animated dice roll, click to skip or auto-dismiss after a few seconds
-      atkDie.textContent = '?';
-      defDie.textContent = '?';
-      atkDie.className   = 'die-display rolling';
-      defDie.className   = 'die-display rolling';
-      let ticks = 0;
-      const maxTicks = 14;
-      this._battleInterval = setInterval(() => {
-        ticks++;
-        atkDie.textContent = Math.ceil(Math.random() * 20);
-        defDie.textContent = Math.ceil(Math.random() * 20);
-        if (ticks >= maxTicks) {
-          clearInterval(this._battleInterval);
-          this._battleInterval = null;
-          revealResult();
-        }
-      }, 55);
-      // Wire click/key dismiss and schedule auto-dismiss once dice settle.
-      // Give more time when a rematch button is present AND enabled so the
-      // user can decide whether to press "Battle Again".
-      setTimeout(() => {
-        if (_dismissed) return;  // dialog already closed (e.g. via enable-fast-mode button)
+      atkDie.className = 'die-display bkd-total-pop' + (result.hit ? ' atk-win' : '');
+      defDie.className = 'die-display bkd-total-pop' + (!result.hit ? ' def-win' : '');
+
+      const delay = Math.max(80, _BKD_TIMINGS.outcomeDelay * factor);
+      const outcomeTimer = setTimeout(() => {
+        if (_dismissed) return;
+        revealOutcome();
+        // Wire click/key dismiss and schedule auto-dismiss
         dialog.addEventListener('click', dismiss);
         card?.addEventListener('click', dismiss);
         document.addEventListener('keydown', keyDismiss);
         const hasEnabledRematch = onRematch && this.state.actionsAvailable > 0;
-        const autoMs = hasEnabledRematch ? 5000 : 3000;
+        const baseMs = hasEnabledRematch ? 5000 : 3000;
+        const autoMs = this.speedMode === 'vfast' ? 1200
+                     : this.speedMode === 'fast'  ? 2000
+                     : baseMs;
         this._autoDismissTimer = setTimeout(dismiss, autoMs);
-      }, maxTicks * 55 + 200);
-    }
+      }, delay);
+      this._battleTimers.push({ clear: () => clearTimeout(outcomeTimer) });
+    });
   }
 
   _showTileDetail(hex) {
@@ -4502,53 +4516,185 @@ function _combatantHTML(snap, role, portraitSrc = null) {
   `;
 }
 
-// Build the per-side roll breakdown HTML for the battle dialog.
-// side: 'atk' | 'def'   total: the final roll total shown in the die box
-function _buildBreakdownHTML(snap, bd, side, total) {
-  const row = (label, val) => {
-    const valHtml = `<span class="bkd-val">${val >= 0 ? '+' + val : val}</span>`;
-    return `<div class="bkd-row"><span class="bkd-label">${label}</span>${valHtml}</div>`;
-  };
+// Compute the per-side breakdown data for the battle dialog.
+// Used by both the animated renderer and the instant (autoplay) fallback.
+function _breakdownData(snap, bd, side, total) {
+  const pool = side === 'atk'
+    ? (bd.atkPool ?? [bd.atkBaseDie])
+    : (bd.defPool ?? [bd.defBaseDie]);
+  const picked = side === 'atk' ? bd.atkBaseDie : bd.defBaseDie;
+  const advantage = side === 'atk'
+    ? (bd.atkAdvantageDice ?? 0)
+    : (bd.defAdvantageDice ?? 0);
 
-  // Advantage dice pool: show every rolled die, with the picked (best/worst)
-  // one visually highlighted. Matches the advantage-pool mechanic: roll many,
-  // take one — not sum them.
-  const poolRow = (label, pool, picked, advantage) => {
-    const n = pool?.length ?? 0;
-    if (n === 0) return '';
-    let usedPick = false;
-    const dice = pool.map(v => {
-      const isPick = !usedPick && v === picked;
-      if (isPick) usedPick = true;
-      const cls = 'bkd-die' + (isPick ? ' bkd-die-picked' : ' bkd-die-discard');
-      return `<span class="${cls}">${v}</span>`;
-    }).join('');
-    const adv = advantage > 0 ? ` (advantage +${advantage})`
-              : advantage < 0 ? ` (disadvantage ${advantage})`
-              : '';
-    return `<div class="bkd-row bkd-pool-row"><span class="bkd-label">${label}${adv}</span><span class="bkd-pool">${dice}</span></div>`;
-  };
-
-  const parts = [];
+  const rows = [];
   if (side === 'atk') {
-    parts.push(poolRow('Rolls', bd.atkPool ?? [bd.atkBaseDie], bd.atkBaseDie, bd.atkAdvantageDice ?? 0));
-    parts.push(row(`${snap.name} ATK`, snap.attack));
-    if (snap.attackBonus) parts.push(row('🪙 Silver', snap.attackBonus));
-    if (bd.phaseBonus)    parts.push(row('🌙 Night', bd.phaseBonus));
-    if (bd.atkStaffBonus) parts.push(row('⚕ Staff (undead)', bd.atkStaffBonus));
-    if (bd.atkFortAtkBonus) parts.push(row('🏰 Fort ATT', bd.atkFortAtkBonus));
-    if (bd.atkGangupFlat)   parts.push(row('👥 Gang-up flat', bd.atkGangupFlat));
+    rows.push({ label: `${snap.name} ATK`, val: snap.attack });
+    if (snap.attackBonus)    rows.push({ label: '🪙 Silver',       val: snap.attackBonus });
+    if (bd.phaseBonus)       rows.push({ label: '🌙 Night',        val: bd.phaseBonus });
+    if (bd.atkStaffBonus)    rows.push({ label: '⚕ Staff (undead)', val: bd.atkStaffBonus });
+    if (bd.atkFortAtkBonus)  rows.push({ label: '🏰 Fort ATT',     val: bd.atkFortAtkBonus });
+    if (bd.atkGangupFlat)    rows.push({ label: '👥 Gang-up flat', val: bd.atkGangupFlat });
   } else {
-    parts.push(poolRow('Rolls', bd.defPool ?? [bd.defBaseDie], bd.defBaseDie, bd.defAdvantageDice ?? 0));
-    parts.push(row(`${snap.name} DEF`, snap.defense));
-    if (snap.defenseBonus) parts.push(row('🛡 Bonus DEF', snap.defenseBonus));
-    if (bd.fortBonus) parts.push(row('🏰 Fort DEF', bd.fortBonus));
-    if (bd.fatiguePenalty) parts.push(row('😓 Fatigue', -bd.fatiguePenalty));
-    if (bd.defGangupFlat)  parts.push(row('👥 Allies flat', bd.defGangupFlat));
+    rows.push({ label: `${snap.name} DEF`, val: snap.defense });
+    if (snap.defenseBonus)  rows.push({ label: '🛡 Bonus DEF', val: snap.defenseBonus });
+    if (bd.fortBonus)       rows.push({ label: '🏰 Fort DEF',  val: bd.fortBonus });
+    if (bd.fatiguePenalty)  rows.push({ label: '😓 Fatigue',    val: -bd.fatiguePenalty });
+    if (bd.defGangupFlat)   rows.push({ label: '👥 Allies flat', val: bd.defGangupFlat });
   }
+  return { pool, picked, advantage, rows, total };
+}
 
+function _poolLabel(advantage) {
+  if (advantage > 0) return `Advantage ${advantage}`;
+  if (advantage < 0) return `Disadvantage ${-advantage}`;
+  return 'Roll';
+}
+
+// Instant (no animation) render — used for autoplay/skip.
+function _buildBreakdownHTML(snap, bd, side, total) {
+  const d = _breakdownData(snap, bd, side, total);
+  const n = d.pool?.length ?? 0;
+  let usedPick = false;
+  const diceHTML = (d.pool || []).map(v => {
+    const isPick = !usedPick && v === d.picked;
+    if (isPick) usedPick = true;
+    const cls = 'bkd-die' + (isPick ? ' bkd-die-picked' : ' bkd-die-discard');
+    return `<span class="${cls}">${v}</span>`;
+  }).join('');
+  const parts = [];
+  if (n > 0) {
+    parts.push(
+      `<div class="bkd-row bkd-pool-row">` +
+        `<span class="bkd-label">${_poolLabel(d.advantage)}</span>` +
+        `<span class="bkd-pool">${diceHTML}</span>` +
+      `</div>`
+    );
+  }
+  for (const r of d.rows) {
+    const v = r.val >= 0 ? '+' + r.val : r.val;
+    parts.push(
+      `<div class="bkd-row"><span class="bkd-label">${r.label}</span><span class="bkd-val">${v}</span></div>`
+    );
+  }
   parts.push(`<hr class="bkd-divider">`);
   parts.push(`<div class="bkd-total-row"><span class="bkd-label">Total</span><span class="bkd-val">${total}</span></div>`);
   return parts.join('');
+}
+
+// Base cinematic timings (ms). Multiplied by speedMode factor.
+const _BKD_TIMINGS = {
+  tumble:       450,
+  select:       300,
+  selectHold:   150,
+  rowStagger:   180,
+  flash:        300,
+  divider:      200,
+  totalSnap:    250,
+  outcomeDelay: 200,
+};
+function _speedFactor(mode) {
+  if (mode === 'vfast') return 0.25;
+  if (mode === 'fast')  return 0.5;
+  return 1;
+}
+
+// Animate a side's breakdown column. Returns { promise, cancel }.
+// timers[] is shared so the caller can clear everything on dismiss.
+function _animateBreakdownSide(colEl, snap, bd, side, total, factor, timers) {
+  const d = _breakdownData(snap, bd, side, total);
+  colEl.innerHTML = '';
+  colEl.classList.add('visible');
+
+  // Pool row
+  const poolRow = document.createElement('div');
+  poolRow.className = 'bkd-row bkd-pool-row';
+  poolRow.innerHTML =
+    `<span class="bkd-label">${_poolLabel(d.advantage)}</span>` +
+    `<span class="bkd-pool"></span>`;
+  const poolEl = poolRow.querySelector('.bkd-pool');
+  const dieEls = [];
+  const n = d.pool?.length ?? 0;
+  for (let i = 0; i < n; i++) {
+    const de = document.createElement('span');
+    de.className = 'bkd-die bkd-die-tumbling';
+    de.textContent = Math.ceil(Math.random() * 6);
+    poolEl.appendChild(de);
+    dieEls.push(de);
+  }
+  if (n > 0) colEl.appendChild(poolRow);
+
+  // Tumble: jitter face values while spinning.
+  const tumbleMs = Math.max(90, _BKD_TIMINGS.tumble * factor);
+  let tumbleTick = null;
+  if (n > 0) {
+    tumbleTick = setInterval(() => {
+      for (const de of dieEls) de.textContent = Math.ceil(Math.random() * 6);
+    }, Math.max(40, 55 * factor));
+    timers.push({ clear: () => clearInterval(tumbleTick) });
+  }
+
+  return new Promise(resolve => {
+    const schedule = (ms, fn) => {
+      const id = setTimeout(fn, ms);
+      timers.push({ clear: () => clearTimeout(id) });
+    };
+
+    // Step 1 → 2: dice settle, picked die pops, others fade.
+    schedule(tumbleMs, () => {
+      if (tumbleTick) clearInterval(tumbleTick);
+      let usedPick = false;
+      dieEls.forEach((de, i) => {
+        const v = d.pool[i];
+        de.textContent = v;
+        de.classList.remove('bkd-die-tumbling');
+        const isPick = !usedPick && v === d.picked;
+        if (isPick) {
+          usedPick = true;
+          de.classList.add('bkd-die-picked');
+        } else {
+          de.classList.add('bkd-die-discard');
+        }
+      });
+
+      // Step 3: stagger modifier rows.
+      const selectHoldMs = _BKD_TIMINGS.selectHold * factor + _BKD_TIMINGS.select * factor;
+      schedule(selectHoldMs, () => {
+        const rowStagger = Math.max(40, _BKD_TIMINGS.rowStagger * factor);
+        const flashMs = Math.max(80, _BKD_TIMINGS.flash * factor);
+        d.rows.forEach((r, idx) => {
+          schedule(idx * rowStagger, () => {
+            const row = document.createElement('div');
+            row.className = 'bkd-row bkd-row-in';
+            const v = r.val >= 0 ? '+' + r.val : r.val;
+            row.innerHTML =
+              `<span class="bkd-label">${r.label}</span>` +
+              `<span class="bkd-val">${v}</span>`;
+            colEl.appendChild(row);
+            row.classList.add('bkd-row-flash');
+            schedule(flashMs, () => row.classList.remove('bkd-row-flash'));
+          });
+        });
+
+        // Step 4: divider + total.
+        const afterRows = d.rows.length * rowStagger + Math.max(60, 100 * factor);
+        schedule(afterRows, () => {
+          const hr = document.createElement('hr');
+          hr.className = 'bkd-divider bkd-divider-draw';
+          colEl.appendChild(hr);
+          const dividerMs = Math.max(80, _BKD_TIMINGS.divider * factor);
+          schedule(dividerMs, () => {
+            const totalRow = document.createElement('div');
+            totalRow.className = 'bkd-row bkd-total-row bkd-total-pop';
+            totalRow.innerHTML =
+              `<span class="bkd-label">Total</span>` +
+              `<span class="bkd-val">${total}</span>`;
+            colEl.appendChild(totalRow);
+            schedule(Math.max(100, _BKD_TIMINGS.totalSnap * factor), () => resolve());
+          });
+        });
+      });
+    });
+  });
 }
 

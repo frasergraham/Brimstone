@@ -780,9 +780,9 @@ export function executeBattle(state, actor, target) {
 
   const phaseNote  = phaseBonus > 0 ? ' (🌙 night bonus)' : '';
   const gangNote    = attackerAllies >= 1
-    ? ` [advantage +${atkAdvantageDice}, flat +${atkGangupFlat}]` : '';
+    ? ` [advantage ${atkAdvantageDice}, flat +${atkGangupFlat}]` : '';
   const allyDefNote = defenderAllies >= 1
-    ? ` [advantage +${defAdvantageDice}, flat +${defGangupFlat}]` : '';
+    ? ` [advantage ${defAdvantageDice}, flat +${defGangupFlat}]` : '';
 
   log.push(
     `${actor.displayName} attacks ${target.displayName}! ` +
@@ -932,7 +932,7 @@ export function executeFortAssault(state, actor, targetCol, targetRow) {
   const crush = hit && attackRoll >= 2 * defenseRoll;
 
   const phaseNote = phaseBonus > 0 ? ' (🌙 night bonus)' : '';
-  const gangNote  = atkAllies.length >= 1 ? ` [advantage +${atkAdvantage}]` : '';
+  const gangNote  = atkAllies.length >= 1 ? ` [advantage ${atkAdvantage}]` : '';
   log.push(
     `${actor.displayName} assaults the fortifications at (${targetCol},${targetRow})! ` +
     `[${attackRoll}${gangNote} vs ${defenseRoll}]${phaseNote}`
