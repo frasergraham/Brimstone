@@ -2401,7 +2401,36 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   width: min(480px, 92vw);
   text-align: center;
   box-shadow: 0 0 50px rgba(0,0,0,0.8);
+  position: relative;
 }
+
+.battle-controls {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.5rem;
+  display: flex;
+  gap: 0.25rem;
+  z-index: 1;
+}
+.battle-ctrl-btn {
+  background: rgba(30, 28, 24, 0.72);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 4px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: all;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.battle-ctrl-btn:hover { color: var(--text); border-color: var(--gold, #c8a84b); }
+.battle-ctrl-btn:active { transform: translateY(1px); }
 
 .battle-combatants {
   display: flex;
@@ -2438,20 +2467,13 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 
 /* ── Battle roll breakdown ─────────────────────────────── */
-.battle-dice-row {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  margin-bottom: 0.6rem;
-}
 
 /* Two-column grid: atk details left, def details right */
 .battle-breakdown {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.5rem;
-  margin-bottom: 0.75rem;
+  margin: 0.4rem 0 0.75rem;
 }
 
 .breakdown-col {
@@ -2480,8 +2502,70 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .bkd-val {
   font-weight: 600;
   color: var(--text);
-  min-width: 2em;
+  min-width: 2.4em;
   text-align: center;
+}
+
+/* Greyed/muted state for rows before their turn in the animation. */
+.bkd-row-muted {
+  opacity: 0.28;
+  filter: saturate(0.25);
+}
+.bkd-row-muted .bkd-val,
+.bkd-row-muted .bkd-label { color: var(--text-dim); }
+.bkd-row-muted .bkd-die-picked {
+  background: var(--bg-section);
+  color: var(--text-dim);
+  border-color: var(--border);
+  box-shadow: none;
+  transform: scale(1);
+}
+
+/* Delta coloring (applied only when the row is no longer muted). */
+.bkd-row[data-sign="positive"]:not(.bkd-row-muted) .bkd-val { color: #6edc7a; }
+.bkd-row[data-sign="negative"]:not(.bkd-row-muted) .bkd-val { color: #ff6b6b; }
+.bkd-pool-row[data-sign="positive"]:not(.bkd-row-muted) .bkd-label { color: #6edc7a; }
+.bkd-pool-row[data-sign="negative"]:not(.bkd-row-muted) .bkd-label { color: #ff6b6b; }
+
+/* Glow-in animation when a row leaves its muted state. */
+.bkd-row-glow-pos {
+  animation: bkd-row-glow-pos calc(420ms * var(--bkd-speed, 1)) ease-out;
+}
+.bkd-row-glow-neg {
+  animation: bkd-row-glow-neg calc(420ms * var(--bkd-speed, 1)) ease-out;
+}
+.bkd-row-glow-neutral {
+  animation: bkd-row-glow-neutral calc(300ms * var(--bkd-speed, 1)) ease-out;
+}
+@keyframes bkd-row-glow-pos {
+  0%   { background: rgba(110, 220, 122, 0); }
+  40%  { background: rgba(110, 220, 122, 0.30); }
+  100% { background: rgba(110, 220, 122, 0); }
+}
+@keyframes bkd-row-glow-neg {
+  0%   { background: rgba(255, 107, 107, 0); }
+  40%  { background: rgba(255, 107, 107, 0.30); }
+  100% { background: rgba(255, 107, 107, 0); }
+}
+@keyframes bkd-row-glow-neutral {
+  0%   { background: rgba(245, 200, 66, 0); }
+  40%  { background: rgba(245, 200, 66, 0.18); }
+  100% { background: rgba(245, 200, 66, 0); }
+}
+
+/* Pool row: picked die aligns with value column; discards sit next to it. */
+.bkd-pool-row { min-height: 28px; }
+.bkd-pool-discards {
+  display: inline-flex;
+  gap: 3px;
+  flex: 0 0 auto;
+  align-items: center;
+}
+.bkd-pool-picked-slot {
+  min-width: 2.4em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .bkd-die {
@@ -2502,6 +2586,11 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   flex-wrap: wrap;
 }
 .def-col .bkd-pool { justify-content: flex-end; }
+
+.bkd-total-row .bkd-val {
+  color: var(--text);
+  font-size: 0.92rem;
+}
 
 .bkd-die-picked {
   background: var(--gold, #c8a84b);

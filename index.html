@@ -1139,6 +1139,10 @@
   <!-- ── Battle dialog ─────────────────────────────────────────────── -->
   <div id="battle-dialog">
     <div class="battle-card">
+      <div class="battle-controls">
+        <button id="battle-pause-btn" class="battle-ctrl-btn" type="button" title="Pause" aria-label="Pause">⏸</button>
+        <button id="battle-redo-btn"  class="battle-ctrl-btn" type="button" title="Replay" aria-label="Replay">↻</button>
+      </div>
       <div class="battle-critical-badge">⚔ Critical Battle</div>
       <div id="battle-summary" class="battle-summary"></div>
       <div class="battle-combatants">
@@ -1146,13 +1150,7 @@
         <div class="battle-versus">⚔</div>
         <div id="battle-defender" class="combatant-panel"></div>
       </div>
-      <!-- Dice row (unchanged look during animation) -->
-      <div class="battle-dice-row">
-        <div id="battle-atk-die" class="die-display">?</div>
-        <span class="dice-vs">vs</span>
-        <div id="battle-def-die" class="die-display">?</div>
-      </div>
-      <!-- Roll breakdown revealed after dice settle -->
+      <!-- Roll breakdown: pool + modifier rows + total per side -->
       <div class="battle-breakdown">
         <div id="battle-atk-breakdown" class="breakdown-col atk-col"></div>
         <div id="battle-def-breakdown" class="breakdown-col def-col"></div>

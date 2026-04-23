@@ -220,7 +220,7 @@ export function createElementsBag(overrides = {}) {
     'result-dialog','result-messages','result-dismiss-hint','result-buttons','result-portrait',
     'battle-dialog','battle-footer','battle-summary',
     'battle-attacker','battle-defender',
-    'battle-atk-die','battle-def-die','battle-outcome',
+    'battle-outcome','battle-pause-btn','battle-redo-btn',
     'battle-atk-breakdown','battle-def-breakdown','battle-toast-container',
     'phase-modal','phase-modal-continue',
     'round-summary','round-summary-events','round-summary-speed-row',
