@@ -1306,7 +1306,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     // Update node discovery after moves so nodes become visible mid-animation
     _updateNodeDiscoveryDuringStep(state, humanFaction, renderer);
 
-    const _suppressDialogs = getMode() === AppMode.PLAYBACK || ui?.speedMode === 'fast' || ui?.speedMode === 'vfast';
+    const _suppressDialogs = getMode() === AppMode.PLAYBACK || ui?.speedMode === 'vfast';
     if (!_suppressDialogs) {
       for (const entry of pendingDialogs) {
         redrawFn();

@@ -3198,15 +3198,12 @@ export class UIController {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') dismiss();
     };
 
+    dialog.addEventListener('click', dismiss);
+    document.addEventListener('keydown', keyDismiss);
     if (this.autoplay) {
       setTimeout(dismiss, 700);
-    } else if (this.speedMode === 'fast' || this.speedMode === 'vfast') {
-      setTimeout(dismiss, 600);
-      dialog.addEventListener('click', dismiss);
-      document.addEventListener('keydown', keyDismiss);
-    } else {
-      dialog.addEventListener('click', dismiss);
-      document.addEventListener('keydown', keyDismiss);
+    } else if (this.speedMode === 'fast') {
+      setTimeout(dismiss, 4000);
     }
   }
 
@@ -3252,13 +3249,12 @@ export class UIController {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') dismiss();
     };
 
+    dialog.addEventListener('click', dismiss);
+    document.addEventListener('keydown', keyDismiss);
     if (this.autoplay) {
       setTimeout(dismiss, 500);
-    } else if (this.speedMode === 'fast' || this.speedMode === 'vfast') {
-      setTimeout(dismiss, 800);
-    } else {
-      dialog.addEventListener('click', dismiss);
-      document.addEventListener('keydown', keyDismiss);
+    } else if (this.speedMode === 'fast') {
+      setTimeout(dismiss, 4000);
     }
   }
 
