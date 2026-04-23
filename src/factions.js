@@ -89,11 +89,23 @@ export class Faction {
 
   // ── Kill / Summon Tracking ──
 
-  /** Increment the appropriate kill counter on state for this faction */
-  trackKill(_state) { /* default: nothing */ }
+  /**
+   * Increment the kill counter for this faction's side. Today the storage
+   * is still keyed `hero`/`witch`; the side accessor on GameState bridges.
+   */
+  trackKill(state) {
+    if (this.side === 'day')   state.heroKills++;
+    if (this.side === 'night') state.witchKills++;
+  }
 
-  /** Increment the appropriate summon counter on state for this faction */
-  trackSummon(_state) { /* default: nothing */ }
+  /**
+   * Increment the summon counter for this faction's side. Day side has
+   * no summon mechanic today (counter stays at 0); night side increments
+   * the legacy `witchSummonCount` field.
+   */
+  trackSummon(state) {
+    if (this.side === 'night') state.witchSummonCount++;
+  }
 
   // ── End-of-Round Effects ──
 
@@ -141,19 +153,26 @@ export class Faction {
   /** Return the opposing faction's id */
   getOpponentId() { throw new Error('Subclass must implement getOpponentId'); }
 
-  /** Return this faction's current action budget from game state */
-  getActionsLeft(_state) { throw new Error('Subclass must implement getActionsLeft'); }
+  /**
+   * Return this faction's current action budget from game state. Pulls
+   * from the side-keyed accessor on GameState; subclasses don't need to
+   * override unless they layer on faction-specific bonuses.
+   */
+  getActionsLeft(state) { return state.actionsLeftForSide(this.side); }
 
   /** Return the node discovery key used on objective objects (e.g. 'seenByHero') */
   getNodeSeenKey() { throw new Error('Subclass must implement getNodeSeenKey'); }
 
   /**
-   * Get the inventory object where this faction stores resources.
+   * Get the inventory object where this faction stores resources. Routes
+   * through the side-keyed accessor on GameState — all factions on the
+   * same side share one resource pool.
+   *
    * @param {object} state - GameState
    * @returns {object} inventory map
    */
-  getInventory(_state) {
-    throw new Error('Subclass must implement getInventory');
+  getInventory(state) {
+    return state.inventoryForSide(this.side);
   }
 
   /** Starting resources for this faction's inventory at game start */
@@ -216,10 +235,7 @@ export class HeroFaction extends Faction {
     return Math.floor((defendCount || 0) / 2);
   }
 
-  trackKill(state) { state.heroKills++; }
-
   getOpponentId() { return 'witch'; }
-  getActionsLeft(state) { return state.heroActionsLeft; }
   getNodeSeenKey() { return 'seenByHero'; }
 
   // End-of-Round Effects
@@ -344,8 +360,6 @@ export class HeroFaction extends Faction {
   canEquipWeapon() { return true; }
   canDiscoverNPCs() { return true; }
 
-  getInventory(state) { return state.inventory.hero; }
-
   getStartingResources() { return { [ResourceType.FOOD]: 2 }; }
 
   getResourceFoundLog(actor, _lootType) {
@@ -409,13 +423,9 @@ export class WitchFaction extends Faction {
     return phase === Phase.NIGHT ? 2 : 0;
   }
 
-  trackKill(state) { state.witchKills++; }
-  trackSummon(state) { state.witchSummonCount++; }
-
   canExplore(entity) { return entity.type === EntityType.WITCH; }
 
   getOpponentId() { return 'hero'; }
-  getActionsLeft(state) { return state.witchActionsLeft; }
   getNodeSeenKey() { return 'seenByWitch'; }
 
   // Discovery & Loot
@@ -437,8 +447,6 @@ export class WitchFaction extends Faction {
       },
     };
   }
-
-  getInventory(state) { return state.inventory.witch; }
 
   getStartingResources() { return { [ResourceType.WOOD]: 2, [ResourceType.METAL]: 2 }; }
 
@@ -498,4 +506,17 @@ export function allFactions() {
  */
 export function getFactionsForSide(sideId) {
   return allFactions().filter(f => f.side === sideId);
+}
+
+/**
+ * Look up the Side id for a faction id. Returns null if the faction is
+ * unknown — callers in legacy/synthetic code paths sometimes pass null
+ * or a stub id during state restore.
+ *
+ * @param {string} factionId
+ * @returns {string|null} 'day' | 'night' | null
+ */
+export function sideOf(factionId) {
+  const f = FACTIONS[factionId];
+  return f ? f.side : null;
 }

@@ -161,7 +161,15 @@ Save schema version bumps. `players_json` becomes the canonical player list (ref
 
 This section is updated as PRs land. Use it for surprises, scope changes, or items that needed to defer.
 
-_(no entries yet — PR 1 in progress)_
+### PR 1 (landed)
+Foundational scaffolding. `src/sides.js` deliberately inlines `Phase` string literals to avoid a `game.js → factions.js → sides.js → game.js` circular import; `tests/sides.test.js` imports the real `Phase` enum to lock the mapping.
+
+### PR 2 (landed)
+Scope split: this PR adds **side-aware accessors** (`state.inventoryForSide`, `actionsLeftForSide`, `killsForSide`, `summonsForSide`, `nodeScoreForSide`) and `sideOf(factionId)` in `factions.js`. **Storage shape is unchanged** — the accessors route through the existing `hero`/`witch` storage keys.
+
+The actual storage rename (`inventory.hero` → `inventory.day` etc.) is deferred and folded into PR 4, which already needs a save-schema bump for the `EntityType.HERO → PALADIN` rename. Doing the two together avoids a second forced save invalidation.
+
+This still unblocks PR 5 (stub factions): new factions on the same side share that side's storage by routing through the accessors, which is the correct behaviour for stubs that inherit parent-side resource pools.
 
 ---
 

@@ -409,6 +409,36 @@ export class GameState {
     return leader?.displayName ?? (faction === 'hero' ? 'The Hero' : 'The Witch');
   }
 
+  // ── Side-keyed accessors ───────────────────────────────────────────────
+  // Side ('day' | 'night') is the level at which inventory, actions, kills,
+  // and node scoring are pooled. New factions on the same side share this
+  // pool. These accessors today route to the legacy `hero` / `witch` storage
+  // keys via `_storageKeyForSide()`; the storage rename is queued behind
+  // the save-schema bump in PR 4. See docs/design/faction-expansion.md.
+
+  _storageKeyForSide(sideId) {
+    if (sideId === 'day')   return 'hero';
+    if (sideId === 'night') return 'witch';
+    throw new Error(`Unknown side: ${sideId}`);
+  }
+
+  /** Resource inventory shared by all factions on the given side. */
+  inventoryForSide(sideId)   { return this.inventory[this._storageKeyForSide(sideId)]; }
+
+  /** Actions remaining for the given side this planning phase (legacy 2-player budget). */
+  actionsLeftForSide(sideId) {
+    return sideId === 'day' ? this.heroActionsLeft : this.witchActionsLeft;
+  }
+
+  /** Cumulative kills credited to the given side. */
+  killsForSide(sideId)       { return sideId === 'day' ? this.heroKills : this.witchKills; }
+
+  /** Cumulative summons performed by the given side. (Day side: 0 today.) */
+  summonsForSide(sideId)     { return sideId === 'night' ? this.witchSummonCount : 0; }
+
+  /** Cumulative node-scoring points held by the given side. */
+  nodeScoreForSide(sideId)   { return this.nodeScore[this._storageKeyForSide(sideId)]; }
+
   /** Return the leader entity for a given playerId (or null if dead/missing). */
   getLeader(playerId) {
     const p = this.players.find(pl => pl.id === playerId);

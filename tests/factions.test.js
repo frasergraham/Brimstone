@@ -1,7 +1,7 @@
 // Tests for the Faction class hierarchy and registry
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Faction, HeroFaction, WitchFaction, getFaction, allFactions, getFactionsForSide } from '../src/factions.js';
+import { Faction, HeroFaction, WitchFaction, getFaction, allFactions, getFactionsForSide, sideOf } from '../src/factions.js';
 import { Side } from '../src/sides.js';
 import { Phase } from '../src/game.js';
 import { EntityType } from '../src/entities.js';
@@ -83,6 +83,34 @@ describe('Faction side membership', () => {
 
   test('getFactionsForSide returns [] for unknown side', () => {
     assert.deepEqual(getFactionsForSide('twilight'), []);
+  });
+
+  test('sideOf maps faction id to side id', () => {
+    assert.equal(sideOf('hero'),  Side.DAY);
+    assert.equal(sideOf('witch'), Side.NIGHT);
+  });
+
+  test('sideOf returns null for unknown faction', () => {
+    assert.equal(sideOf('goblin'), null);
+    assert.equal(sideOf(null), null);
+  });
+});
+
+// ── Faction inventory routes through side accessor ─────────────────────────
+
+describe('Faction.getInventory routes through state.inventoryForSide', () => {
+  test('reads inventory for the faction\'s side', () => {
+    const dayInv   = { food: 2 };
+    const nightInv = { wood: 2, metal: 2 };
+    const state = {
+      inventoryForSide(sideId) {
+        if (sideId === 'day')   return dayInv;
+        if (sideId === 'night') return nightInv;
+        return null;
+      },
+    };
+    assert.equal(getFaction('hero').getInventory(state),  dayInv);
+    assert.equal(getFaction('witch').getInventory(state), nightInv);
   });
 });
 
@@ -371,9 +399,13 @@ describe('Faction helpers', () => {
     assert.equal(getFaction('witch').getOpponentId(), 'hero');
   });
 
-  test('getActionsLeft reads correct field', () => {
-    const state = { heroActionsLeft: 5, witchActionsLeft: 3 };
-    assert.equal(getFaction('hero').getActionsLeft(state), 5);
+  test('getActionsLeft reads from the side-keyed accessor', () => {
+    // Faction.getActionsLeft now delegates to state.actionsLeftForSide().
+    // Provide a minimal stub to verify the routing.
+    const state = {
+      actionsLeftForSide(sideId) { return sideId === 'day' ? 5 : 3; },
+    };
+    assert.equal(getFaction('hero').getActionsLeft(state),  5);
     assert.equal(getFaction('witch').getActionsLeft(state), 3);
   });
 

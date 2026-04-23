@@ -879,3 +879,51 @@ describe('Power node free spawn (endRound)', () => {
       'Hero on a node should be able to spawn a free survivor (33% chance, tested 20 trials)');
   });
 });
+
+// ── Side-keyed accessors ─────────────────────────────────────────────────────
+
+describe('GameState side accessors', () => {
+  test('inventoryForSide returns the side\'s shared inventory', () => {
+    const state = new GameState(true, true);
+    // Day side's inventory is what the Hero faction reads via getInventory().
+    assert.equal(state.inventoryForSide('day'),   state.inventory.hero);
+    assert.equal(state.inventoryForSide('night'), state.inventory.witch);
+  });
+
+  test('actionsLeftForSide reflects the legacy 2-player budgets', () => {
+    const state = new GameState(true, true);
+    state.heroActionsLeft  = 7;
+    state.witchActionsLeft = 4;
+    assert.equal(state.actionsLeftForSide('day'),   7);
+    assert.equal(state.actionsLeftForSide('night'), 4);
+  });
+
+  test('killsForSide reflects the per-side kill counters', () => {
+    const state = new GameState(true, true);
+    state.heroKills  = 3;
+    state.witchKills = 5;
+    assert.equal(state.killsForSide('day'),   3);
+    assert.equal(state.killsForSide('night'), 5);
+  });
+
+  test('summonsForSide is 0 for day, witchSummonCount for night', () => {
+    const state = new GameState(true, true);
+    state.witchSummonCount = 8;
+    assert.equal(state.summonsForSide('day'),   0);
+    assert.equal(state.summonsForSide('night'), 8);
+  });
+
+  test('nodeScoreForSide reflects the per-side score counters', () => {
+    const state = new GameState(true, true);
+    state.nodeScore.hero  = 2;
+    state.nodeScore.witch = 1;
+    assert.equal(state.nodeScoreForSide('day'),   2);
+    assert.equal(state.nodeScoreForSide('night'), 1);
+  });
+
+  test('throws on unknown side id', () => {
+    const state = new GameState(true, true);
+    assert.throws(() => state.inventoryForSide('twilight'), /Unknown side/);
+    assert.throws(() => state.nodeScoreForSide('twilight'), /Unknown side/);
+  });
+});
