@@ -3322,9 +3322,19 @@ export class UIController {
     // Guards a stale dismiss closure from mutating a later dialog's state if
     // leaked listeners fire after this dialog is gone.
     let _dismissed = false;
+    // Pause state only freezes the auto-dismiss timer; the animation sequence
+    // always runs to completion.
+    let _dismissPaused = false;
+    let _dismissTimerId = null;
+    let _dismissStartedAt = 0;
+    let _dismissRemaining = 0;
+    const _clearDismissTimer = () => {
+      if (_dismissTimerId !== null) { clearTimeout(_dismissTimerId); _dismissTimerId = null; }
+    };
     const dismiss = () => {
       if (_dismissed) return;
       _dismissed = true;
+      _clearDismissTimer();
       if (this._autoDismissTimer) { clearTimeout(this._autoDismissTimer); this._autoDismissTimer = null; }
       if (this._battleInterval)   { clearInterval(this._battleInterval);  this._battleInterval   = null; }
       if (this._battleAnim)       { this._battleAnim.clear(); this._battleAnim = null; }
@@ -3479,10 +3489,38 @@ export class UIController {
       }
     };
 
+    const scheduleDismiss = (ms) => {
+      _clearDismissTimer();
+      if (_dismissed) return;
+      _dismissRemaining = ms;
+      _dismissStartedAt = Date.now();
+      if (!_dismissPaused) {
+        _dismissTimerId = setTimeout(() => { _dismissTimerId = null; dismiss(); }, ms);
+      }
+    };
+    const pauseDismiss = () => {
+      if (_dismissPaused) return;
+      _dismissPaused = true;
+      if (_dismissTimerId !== null) {
+        clearTimeout(_dismissTimerId);
+        _dismissTimerId = null;
+        _dismissRemaining = Math.max(0, _dismissRemaining - (Date.now() - _dismissStartedAt));
+      }
+    };
+    const resumeDismiss = () => {
+      if (!_dismissPaused) return;
+      _dismissPaused = false;
+      if (_dismissRemaining > 0 && !_dismissed) {
+        _dismissStartedAt = Date.now();
+        _dismissTimerId = setTimeout(() => { _dismissTimerId = null; dismiss(); }, _dismissRemaining);
+      }
+    };
+
     // playAnimation runs the staged reveal. Called at start and on Redo.
     const playAnimation = () => {
       anim.reset();
       unwireClickDismiss();
+      _clearDismissTimer();
       if (this._autoDismissTimer) { clearTimeout(this._autoDismissTimer); this._autoDismissTimer = null; }
       atkBkdEl.innerHTML = '';
       defBkdEl.innerHTML = '';
@@ -3524,7 +3562,7 @@ export class UIController {
           const autoMs = this.speedMode === 'vfast' ? 1200
                        : this.speedMode === 'fast'  ? 2000
                        : baseMs;
-          anim.timeout(autoMs, dismiss);
+          scheduleDismiss(autoMs);
         });
       });
     };
@@ -3534,19 +3572,19 @@ export class UIController {
     const redoBtn  = this._el('battle-redo-btn');
     const setPauseLabel = () => {
       if (!pauseBtn) return;
-      pauseBtn.textContent = anim.paused ? '▶' : '⏸';
-      pauseBtn.title = anim.paused ? 'Resume' : 'Pause';
-      pauseBtn.setAttribute('aria-label', anim.paused ? 'Resume' : 'Pause');
+      pauseBtn.textContent = _dismissPaused ? '▶' : '⏸';
+      pauseBtn.title = _dismissPaused ? 'Resume' : 'Pause';
+      pauseBtn.setAttribute('aria-label', _dismissPaused ? 'Resume' : 'Pause');
     };
     setPauseLabel();
     const onPauseClick = e => {
       e.stopPropagation();
-      if (anim.paused) anim.resume(); else anim.pause();
+      if (_dismissPaused) resumeDismiss(); else pauseDismiss();
       setPauseLabel();
     };
     const onRedoClick = e => {
       e.stopPropagation();
-      if (anim.paused) { anim.resume(); setPauseLabel(); }
+      if (_dismissPaused) { resumeDismiss(); setPauseLabel(); }
       playAnimation();
     };
     pauseBtn?.addEventListener('click', onPauseClick);
@@ -4743,8 +4781,9 @@ function _animateBreakdownSide(colEl, snap, bd, side, total, factor, anim) {
 
   // Tumble the pool dice.
   const tumbleMs = Math.max(90, _BKD_TIMINGS.tumble * factor);
+  let tumbleInterval = null;
   if (n > 0) {
-    anim.interval(Math.max(40, 55 * factor), () => {
+    tumbleInterval = anim.interval(Math.max(40, 55 * factor), () => {
       for (const de of dieEls) de.textContent = Math.ceil(Math.random() * 6);
     });
   }
@@ -4752,6 +4791,8 @@ function _animateBreakdownSide(colEl, snap, bd, side, total, factor, anim) {
   return new Promise(resolve => {
     // Step 1 → 2: dice settle, pool row un-mutes, picked die moves to value slot.
     anim.timeout(tumbleMs, () => {
+      // Stop the tumble interval so dice stay on their final face values.
+      tumbleInterval?.cancel();
       // Settle dice faces.
       let pickedIdx = -1;
       for (let i = 0; i < dieEls.length; i++) {
@@ -4808,61 +4849,34 @@ function _animateBreakdownSide(colEl, snap, bd, side, total, factor, anim) {
   });
 }
 
-// ── Pause/resume-capable timer bag for the battle dialog animation ─────────
+// ── Cancellable timer bag for the battle dialog animation ─────────────────
 //
-// Tracks every setTimeout and setInterval set by the staged animation.
-// On pause(), remaining time for each live timeout is captured and the
-// underlying timer is cleared; on resume(), each pending timeout is
-// re-scheduled for its remaining duration.
+// Tracks every setTimeout/setInterval set by the staged animation so they
+// can be cancelled together on reset/dismiss. The animation sequence runs
+// to completion uninterrupted — pause only affects the auto-dismiss timer,
+// which lives outside this bag.
 function _makeAnimBag() {
   const entries = [];
   const bag = {
-    paused: false,
     cancelled: false,
     onClear: null,
     timeout(delayMs, fn) {
-      const e = { type: 'timeout', delayMs, remaining: delayMs, startedAt: Date.now(),
-                  fn, id: null, done: false, cancelled: false };
-      const run = () => { e.done = true; if (!e.cancelled && !bag.cancelled) fn(); };
-      if (!bag.paused) e.id = setTimeout(run, e.remaining);
-      e._run = run;
+      const e = { type: 'timeout', fn, id: null, cancelled: false };
+      const run = () => { if (!e.cancelled && !bag.cancelled) fn(); };
+      e.id = setTimeout(run, delayMs);
       entries.push(e);
       return e;
     },
     interval(delayMs, fn) {
       const e = { type: 'interval', delayMs, fn, id: null, cancelled: false };
-      if (!bag.paused) e.id = setInterval(fn, delayMs);
+      e.id = setInterval(fn, delayMs);
+      e.cancel = () => {
+        if (e.cancelled) return;
+        e.cancelled = true;
+        if (e.id !== null) { clearInterval(e.id); e.id = null; }
+      };
       entries.push(e);
       return e;
-    },
-    pause() {
-      if (bag.paused || bag.cancelled) return;
-      bag.paused = true;
-      const now = Date.now();
-      for (const e of entries) {
-        if (e.cancelled) continue;
-        if (e.type === 'timeout' && !e.done && e.id !== null) {
-          clearTimeout(e.id);
-          e.remaining = Math.max(0, e.remaining - (now - e.startedAt));
-          e.id = null;
-        } else if (e.type === 'interval' && e.id !== null) {
-          clearInterval(e.id);
-          e.id = null;
-        }
-      }
-    },
-    resume() {
-      if (!bag.paused || bag.cancelled) return;
-      bag.paused = false;
-      for (const e of entries) {
-        if (e.cancelled) continue;
-        if (e.type === 'timeout' && !e.done && e.id === null) {
-          e.startedAt = Date.now();
-          e.id = setTimeout(e._run, e.remaining);
-        } else if (e.type === 'interval' && e.id === null) {
-          e.id = setInterval(e.fn, e.delayMs);
-        }
-      }
     },
     // Cancel all timers without tearing down. Leaves the bag reusable.
     reset() {
@@ -4875,7 +4889,6 @@ function _makeAnimBag() {
         }
       }
       entries.length = 0;
-      bag.paused = false;
       bag.cancelled = false;
     },
     // Tear down permanently. After clear(), no further timeouts will fire
