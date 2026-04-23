@@ -2520,6 +2520,12 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   transform: scale(1);
 }
 
+/* Post-settle contrast: labels bright off-white, values keep bold white/
+   saturated delta colors. Applies to modifier rows, pool row, per-ally rows,
+   and total row — anything not currently muted. */
+.bkd-row:not(.bkd-row-muted) .bkd-label { color: #f1ead8; }
+.bkd-row:not(.bkd-row-muted) .bkd-val   { color: #f1ead8; }
+
 /* Delta coloring (applied only when the row is no longer muted). */
 .bkd-row[data-sign="positive"]:not(.bkd-row-muted) .bkd-val { color: #6edc7a; }
 .bkd-row[data-sign="negative"]:not(.bkd-row-muted) .bkd-val { color: #ff6b6b; }
@@ -2553,18 +2559,20 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 
 /* Pool row: picked die aligns with value column; discards sit next to it. */
-.bkd-pool-row { min-height: 38px; }
+.bkd-pool-row { min-height: 44px; }
 .bkd-pool-discards {
   display: inline-flex;
-  gap: 3px;
+  gap: 0.6rem;
   flex: 0 0 auto;
   align-items: center;
 }
 .bkd-pool-picked-slot {
-  min-width: 2.4em;
+  min-width: 2.8em;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  position: relative;
+  z-index: 2;
 }
 
 .bkd-die {
@@ -2585,7 +2593,7 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 
 .bkd-pool {
   display: inline-flex;
-  gap: 3px;
+  gap: 0.6rem;
   flex-wrap: wrap;
 }
 .def-col .bkd-pool { justify-content: flex-end; }
@@ -2600,15 +2608,17 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   color: #1a1a1a;
   border-color: var(--gold, #c8a84b);
   font-weight: 700;
-  box-shadow: 0 0 12px rgba(200, 168, 75, 0.95);
+  box-shadow: 0 0 4px rgba(200, 168, 75, 0.85);
   animation: bkd-pick-pop calc(300ms * var(--bkd-speed, 1)) ease-out;
   transform: scale(1.5);
   transition: transform 0.2s ease, box-shadow 0.2s ease;
+  position: relative;
+  z-index: 3;
 }
 
 .bkd-die-discard {
-  opacity: 0.35;
-  filter: grayscale(0.85) saturate(0.3);
+  opacity: 0.65;
+  filter: saturate(0.25);
   transition: opacity 0.25s ease, filter 0.25s ease;
 }
 
@@ -2626,9 +2636,9 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 
 @keyframes bkd-pick-pop {
-  0%   { transform: scale(1);    box-shadow: 0 0 4px rgba(200, 168, 75, 0.2); }
-  55%  { transform: scale(1.75); box-shadow: 0 0 18px rgba(200, 168, 75, 1); }
-  100% { transform: scale(1.5);  box-shadow: 0 0 12px rgba(200, 168, 75, 0.95); }
+  0%   { transform: scale(1);    box-shadow: 0 0 2px rgba(200, 168, 75, 0.2); }
+  55%  { transform: scale(1.75); box-shadow: 0 0 6px rgba(200, 168, 75, 0.95); }
+  100% { transform: scale(1.5);  box-shadow: 0 0 4px rgba(200, 168, 75, 0.85); }
 }
 
 .bkd-row-in {
@@ -2694,21 +2704,17 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .bkd-total-row .bkd-label { font-size: 0.95rem; }
 .def-col .bkd-total-row { flex-direction: row-reverse; }
 
-/* Winner highlight — applied to the higher-total side after both settle. */
-.bkd-total-row.bkd-total-winner {
-  color: var(--gold, #c8a84b);
-  text-shadow: 0 0 10px rgba(200, 168, 75, 0.55);
-  animation: bkd-total-winner-pop 420ms ease-out;
+/* Winner/loser/tie tint — applied to the whole breakdown column once both
+   totals have landed. Soft background wash carries the signal so the Total
+   row keeps its bold/large sizing without a colored glow. */
+.breakdown-col {
+  transition: background 250ms ease;
+  border-radius: 4px;
+  padding: 0.15rem 0.3rem;
 }
-.bkd-total-row.bkd-total-winner .bkd-val {
-  color: var(--gold, #c8a84b);
-  text-shadow: 0 0 12px rgba(200, 168, 75, 0.9);
-}
-@keyframes bkd-total-winner-pop {
-  0%   { transform: scale(1);    filter: brightness(1); }
-  55%  { transform: scale(1.18); filter: brightness(1.5); }
-  100% { transform: scale(1.05); filter: brightness(1.15); }
-}
+.breakdown-col.bkd-col-winner { background: rgba(76, 175, 80, 0.10); }
+.breakdown-col.bkd-col-loser  { background: rgba(244, 67, 54, 0.10); }
+.breakdown-col.bkd-col-tie    { background: transparent; }
 
 /* Empty row used to pad the shorter side so totals align on both columns. */
 .bkd-row-spacer {

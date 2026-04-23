@@ -3313,8 +3313,12 @@ export class UIController {
     // Reset breakdown columns (rendered muted upfront; glow as anim progresses)
     const atkBkd = this._el('battle-atk-breakdown');
     const defBkd = this._el('battle-def-breakdown');
-    if (atkBkd) { atkBkd.innerHTML = ''; atkBkd.classList.add('visible'); }
-    if (defBkd) { defBkd.innerHTML = ''; defBkd.classList.add('visible'); }
+    for (const col of [atkBkd, defBkd]) {
+      if (!col) continue;
+      col.innerHTML = '';
+      col.classList.add('visible');
+      col.classList.remove('bkd-col-winner', 'bkd-col-loser', 'bkd-col-tie');
+    }
 
     dialog.style.display = 'flex';
     const card = dialog.querySelector('.battle-card');
@@ -4728,16 +4732,24 @@ function _buildBreakdownHTML(snap, bd, side, total, padTo = 0) {
   return parts.join('');
 }
 
-// Apply winner highlight to whichever side's total is higher. Ties highlight
-// neither. Losing side total remains visible, unhighlighted.
+// Tint the whole breakdown column once both totals have landed: winner →
+// subtle green wash, loser → subtle red wash, tie → neutral. The Total row
+// keeps its bold/large size; the side tint carries the winner signal.
 function _applyWinnerClass(atkCol, defCol, atkTotal, defTotal) {
   if (!atkCol || !defCol) return;
-  const atkTotalRow = atkCol.querySelector('.bkd-total-row');
-  const defTotalRow = defCol.querySelector('.bkd-total-row');
-  atkTotalRow?.classList.remove('bkd-total-winner');
-  defTotalRow?.classList.remove('bkd-total-winner');
-  if (atkTotal > defTotal) atkTotalRow?.classList.add('bkd-total-winner');
-  else if (defTotal > atkTotal) defTotalRow?.classList.add('bkd-total-winner');
+  for (const col of [atkCol, defCol]) {
+    col.classList.remove('bkd-col-winner', 'bkd-col-loser', 'bkd-col-tie');
+  }
+  if (atkTotal > defTotal) {
+    atkCol.classList.add('bkd-col-winner');
+    defCol.classList.add('bkd-col-loser');
+  } else if (defTotal > atkTotal) {
+    defCol.classList.add('bkd-col-winner');
+    atkCol.classList.add('bkd-col-loser');
+  } else {
+    atkCol.classList.add('bkd-col-tie');
+    defCol.classList.add('bkd-col-tie');
+  }
 }
 
 // Base cinematic timings (ms). Multiplied by speedMode factor.
