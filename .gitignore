@@ -23,4 +23,5 @@ android/capacitor-cordova-android-plugins/
 !.claude/skills/
 .claude/settings.local.json
 .claude/worktrees/
+specs/.supervisor-state.json
 .auto-turn

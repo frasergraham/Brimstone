@@ -48,11 +48,14 @@ Before intake, pull new work from the Brimstone note.
 
 ### 2. Dispatch (plan phase)
 - For each non-conflicting task not already in flight (check `gh pr list --state open --json headRefName` to see what's already out there):
-  - Run as a background bash command:
+  - Determine the GitHub repo slug for this working directory once per run: `gh repo view --json nameWithOwner -q .nameWithOwner`. Cache it — all dispatches share it.
+  - Determine the base branch from CLAUDE.md / `git symbolic-ref refs/remotes/origin/HEAD` — for this repo it's `dev`, not `main`.
+  - Run as a **backgrounded bash command** (so the supervisor can poll in parallel):
     ```
-    claude --remote "Read specs/tasks/<id>.md. Enter plan mode. Produce an implementation plan: files you will change (within the allowlist), the approach, test strategy, and any risks. Do NOT write code. Commit the plan as specs/tasks/<id>.plan.md on branch <branch-name> and open a DRAFT PR to main titled 'PLAN: <id> <title>'. Stop after the draft PR is open."
+    claude --remote <owner/repo> "Read specs/tasks/<id>.md from branch <base>. Enter plan mode. Produce an implementation plan: files you will change (within the allowlist), the approach, test strategy, and any risks. Do NOT write code. Commit the plan as specs/tasks/<id>.plan.md on branch <branch-name> (based on <base>) and open a DRAFT PR to <base> titled 'PLAN: <id> <title>'. Stop after the draft PR is open."
     ```
-  - Log the dispatch in `specs/.supervisor-state.json` with timestamp, task id, expected branch, and `status: "planning"`.
+    Note the syntax: `--remote` takes the GitHub repo as its argument (e.g. `frasergraham/Brimstone`), followed by the prompt. The call runs synchronously and prints the agent's final message; always background it with Bash `run_in_background: true` so multiple dispatches progress in parallel and the poll loop isn't blocked.
+  - Log the dispatch in `specs/.supervisor-state.json` with timestamp, task id, expected branch, background shell id, and `status: "planning"`.
 - Do not dispatch more than 4 at once. If there are more tasks, queue them.
 
 ### 3. Poll
@@ -84,9 +87,9 @@ Before intake, pull new work from the Brimstone note.
 - **When in doubt, ask.** The auto-approve criteria are a ceiling, not a floor — if something feels off (weird file path, unclear scope, vague acceptance criteria), escalate even if the mechanical checks pass.
 
 ### 2b. Dispatch (implementation phase)
-- Run as a background bash command against the existing branch:
+- Run as a backgrounded bash command against the existing branch (use the same owner/repo slug as step 2):
   ```
-  claude --remote --branch <branch-name> "Implement the approved plan in specs/tasks/<id>.plan.md on the current branch. Follow CLAUDE.md. Do not modify files outside the allowlist in specs/tasks/<id>.md. When done, push and mark the PR ready for review (gh pr ready)."
+  claude --remote <owner/repo> "Check out branch <branch-name>. Implement the approved plan in specs/tasks/<id>.plan.md. Follow CLAUDE.md. Do not modify files outside the allowlist in specs/tasks/<id>.md. When done, push and mark the PR ready for review (gh pr ready <pr-number>)."
   ```
 - The PR number stays the same; it transitions from draft to ready when the agent finishes.
 
