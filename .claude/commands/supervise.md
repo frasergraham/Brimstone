@@ -55,9 +55,9 @@ Before intake, pull new work from the Brimstone note.
 - For each non-conflicting task not already in flight (check `gh pr list --state open --json headRefName`):
   - Determine the base branch from CLAUDE.md / `git symbolic-ref refs/remotes/origin/HEAD` — for this repo it's `dev`, not `main`.
   - Compose the prompt. Keep it short enough to paste comfortably.
-  - Write the full command to a tempfile AND copy it to the clipboard. The prompt must tell the worker to **report and wait**, not exit:
+  - Write the full command to a tempfile AND copy it to the clipboard. The prompt instructs the worker to **park after each unit of work and self-terminate when the PR merges**:
     ```bash
-    printf '%s\n' 'claude --remote "Read specs/tasks/<id>.md from branch <base>. Enter plan mode. Produce an implementation plan: files you will change (within the allowlist), the approach, test strategy, and any risks. Do NOT write code. Commit the plan as specs/tasks/<id>.plan.md on branch <branch-name> (based on <base>) and open a DRAFT PR to <base> titled '\''PLAN: <id> <title>'\''. After the draft PR is open, report the PR URL and WAIT for further instructions — do not exit. The supervisor may send follow-up messages to revise the plan or move to implementation on this same session."' | tee /tmp/dispatch-<id>.sh | pbcopy
+    printf '%s\n' 'claude --remote "Read specs/tasks/<id>.md from branch <base>. Enter plan mode. Produce an implementation plan: files you will change (within the allowlist), the approach, test strategy, and any risks. Do NOT write code. Commit the plan as specs/tasks/<id>.plan.md on branch <branch-name> (based on <base>) and open a DRAFT PR to <base> titled '\''PLAN: <id> <title>'\''. After the draft PR is open, report the PR URL and wait for further instructions. Between user messages, poll your own PR with gh every 60s — when it reports state=MERGED, exit cleanly. When it reports state=CLOSED without merge, exit cleanly. Otherwise keep waiting for new instructions — plan revisions, implementation, or post-review fixes all arrive as follow-up messages on this session."' | tee /tmp/dispatch-<id>.sh | pbcopy
     chmod +x /tmp/dispatch-<id>.sh
     ```
   - Tell the user: "Dispatch prompt copied to clipboard (and saved at `/tmp/dispatch-<id>.sh`). Paste into your terminal to fire the cloud worker, then tell me when the draft PR appears on GitHub."
@@ -107,7 +107,7 @@ Before intake, pull new work from the Brimstone note.
 
 When the reviewer returns `request_changes` (step 4), the fixes also go to the same session as the next message. Never spawn a new `claude --remote` call for revisions. Stage the revision spec on the clipboard and hand off the same way.
 
-When the worker is no longer needed (task merged or task rejected), tell the user: "Task <id> complete — you can close the claude.ai session for task <id>." The supervisor doesn't control session lifecycle; the user does.
+The worker self-terminates when its PR reaches state=MERGED or state=CLOSED (it polls `gh pr view <n> --json state` between user messages). The supervisor doesn't need to tell the user to close the session — the worker exits on its own once the PR resolves.
 
 ### 4. Review
 - Invoke the `pr-reviewer` subagent via the Task tool with the PR number
