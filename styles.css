@@ -2480,10 +2480,7 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   font-size: 0.72rem;
   font-family: var(--font-mono);
   color: var(--text-dim);
-  opacity: 0;
-  transition: opacity 0.35s;
 }
-.breakdown-col.visible { opacity: 1; }
 
 .bkd-row {
   display: flex;
@@ -2506,16 +2503,18 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   text-align: center;
 }
 
-/* Greyed/muted state for rows before their turn in the animation. */
+/* Greyed/muted state for rows before their turn in the animation.
+   Lean on desaturation (no active color-glow) rather than deep opacity; text
+   stays legible so users can read upcoming modifiers. */
 .bkd-row-muted {
-  opacity: 0.28;
-  filter: saturate(0.25);
+  opacity: 0.55;
+  filter: saturate(0.2);
 }
 .bkd-row-muted .bkd-val,
-.bkd-row-muted .bkd-label { color: var(--text-dim); }
+.bkd-row-muted .bkd-label { color: #9a9088; }
 .bkd-row-muted .bkd-die-picked {
   background: var(--bg-section);
-  color: var(--text-dim);
+  color: #9a9088;
   border-color: var(--border);
   box-shadow: none;
   transform: scale(1);
@@ -2572,12 +2571,16 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg-section);
+  background: #0b0f18;
   border: 1px solid var(--border);
   border-radius: 3px;
-  padding: 0 4px;
-  min-width: 22px;
-  color: var(--day);
+  padding: 1px 5px;
+  min-width: 24px;
+  color: #fff4c8;
+  font-weight: 800;
+  font-size: 0.95rem;
+  line-height: 1.1;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.9), 0 0 3px rgba(0,0,0,0.7);
 }
 
 .bkd-pool {
@@ -2615,11 +2618,11 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 
 @keyframes bkd-die-tumble {
-  0%   { transform: rotate(0deg)   scale(1.08); }
-  25%  { transform: rotate(90deg)  scale(0.92); }
-  50%  { transform: rotate(180deg) scale(1.08); }
-  75%  { transform: rotate(270deg) scale(0.92); }
-  100% { transform: rotate(360deg) scale(1.08); }
+  0%   { transform: rotate(-14deg) scale(1.08); }
+  25%  { transform: rotate(10deg)  scale(0.94); }
+  50%  { transform: rotate(-8deg)  scale(1.1);  }
+  75%  { transform: rotate(12deg)  scale(0.94); }
+  100% { transform: rotate(-14deg) scale(1.08); }
 }
 
 @keyframes bkd-pick-pop {
