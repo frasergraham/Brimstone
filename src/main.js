@@ -2047,6 +2047,25 @@ function showStep(step) {
   if (_stepEl && sessionBar) _stepEl.appendChild(sessionBar);
 }
 
+// Whether the user is currently on a sub-screen of the live online or async
+// flow. Server errors that arrive on these screens should reset the user back
+// to the top-level online/async menu; on any other menu (mode, options, account,
+// how-to-play, etc.) we leave the user where they are so a silent reconnect
+// doesn't kick them out of the menu they were browsing.
+function _isOnOnlineFlow() {
+  return stepOnline.style.display !== 'none' ||
+         stepLobby.style.display !== 'none' ||
+         stepCreateGame.style.display !== 'none' ||
+         stepJoinGame.style.display !== 'none' ||
+         stepWaiting.style.display !== 'none';
+}
+function _isOnAsyncFlow() {
+  return stepAsync.style.display !== 'none' ||
+         stepAsyncCreate.style.display !== 'none' ||
+         stepAsyncCreated.style.display !== 'none' ||
+         stepAsyncJoin.style.display !== 'none';
+}
+
 // Current lobby state (pre-game)
 let _currentLobby = null;
 
@@ -7135,12 +7154,18 @@ function _createMpClient() {
       // Only show errors on setup screens (pre-game).
       // In-game connection errors are handled by the reconnect overlay.
       if (!state || document.getElementById('setup-screen').style.display !== 'none') {
-        if (_asyncRoomId || stepAsync.style.display !== 'none') {
+        // Only navigate when the user is actually on an online/async sub-screen.
+        // A silent reconnect that produces a stray error must not yank a user out
+        // of an unrelated menu (options, how-to-play, account, mode card, …).
+        if (_asyncRoomId || _isOnAsyncFlow()) {
           _showAsyncScreen();
-        } else {
+          _onlineError(msg, raw);
+        } else if (_isOnOnlineFlow()) {
           _showOnlineScreen();
+          _onlineError(msg, raw);
         }
-        _onlineError(msg, raw);
+        // Otherwise: swallow the error silently — the user is browsing a
+        // non-network menu and shouldn't be teleported away from it.
       }
     },
 
@@ -7169,10 +7194,16 @@ MultiplayerClient.prototype._route = function(msg) {
     // show the signed-out state so the user can sign in again.
     clearSession();
     if (mp) mp._player = null;
-    if (_asyncRoomId || stepAsync.style.display !== 'none') {
+    // Only navigate when the user is on a screen that actually depends on
+    // being signed in. On unrelated menus (options, how-to-play, mode card,
+    // …) a silent reconnect should not yank them away — just refresh the
+    // session bar so they can see they're signed out.
+    if (_asyncRoomId || _isOnAsyncFlow()) {
       _showAsyncScreen();
-    } else {
+    } else if (_isOnOnlineFlow()) {
       _showOnlineScreen();
+    } else {
+      _updateSessionBar();
     }
   }
 };
