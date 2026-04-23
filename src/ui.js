@@ -4505,33 +4505,46 @@ function _combatantHTML(snap, role, portraitSrc = null) {
 // Build the per-side roll breakdown HTML for the battle dialog.
 // side: 'atk' | 'def'   total: the final roll total shown in the die box
 function _buildBreakdownHTML(snap, bd, side, total) {
-  const row = (label, val, isDie = false) => {
-    const valHtml = isDie
-      ? `<span class="bkd-val bkd-die">${val}</span>`
-      : `<span class="bkd-val">${val >= 0 ? '+' + val : val}</span>`;
+  const row = (label, val) => {
+    const valHtml = `<span class="bkd-val">${val >= 0 ? '+' + val : val}</span>`;
     return `<div class="bkd-row"><span class="bkd-label">${label}</span>${valHtml}</div>`;
+  };
+
+  // Advantage dice pool: show every rolled die, with the picked (best/worst)
+  // one visually highlighted. Matches the advantage-pool mechanic: roll many,
+  // take one — not sum them.
+  const poolRow = (label, pool, picked, advantage) => {
+    const n = pool?.length ?? 0;
+    if (n === 0) return '';
+    let usedPick = false;
+    const dice = pool.map(v => {
+      const isPick = !usedPick && v === picked;
+      if (isPick) usedPick = true;
+      const cls = 'bkd-die' + (isPick ? ' bkd-die-picked' : ' bkd-die-discard');
+      return `<span class="${cls}">${v}</span>`;
+    }).join('');
+    const adv = advantage > 0 ? ` (advantage +${advantage})`
+              : advantage < 0 ? ` (disadvantage ${advantage})`
+              : '';
+    return `<div class="bkd-row bkd-pool-row"><span class="bkd-label">${label}${adv}</span><span class="bkd-pool">${dice}</span></div>`;
   };
 
   const parts = [];
   if (side === 'atk') {
-    parts.push(row('Base d6', bd.atkBaseDie, true));
+    parts.push(poolRow('Rolls', bd.atkPool ?? [bd.atkBaseDie], bd.atkBaseDie, bd.atkAdvantageDice ?? 0));
     parts.push(row(`${snap.name} ATK`, snap.attack));
     if (snap.attackBonus) parts.push(row('🪙 Silver', snap.attackBonus));
     if (bd.phaseBonus)    parts.push(row('🌙 Night', bd.phaseBonus));
     if (bd.atkStaffBonus) parts.push(row('⚕ Staff (undead)', bd.atkStaffBonus));
     if (bd.atkFortAtkBonus) parts.push(row('🏰 Fort ATT', bd.atkFortAtkBonus));
-    bd.atkExtraDice.forEach((r, i) => {
-      parts.push(row(`${bd.atkAllyNames[i] ?? 'Ally'} (D3)`, r, true));
-    });
+    if (bd.atkGangupFlat)   parts.push(row('👥 Gang-up flat', bd.atkGangupFlat));
   } else {
-    parts.push(row('Base d6', bd.defBaseDie, true));
+    parts.push(poolRow('Rolls', bd.defPool ?? [bd.defBaseDie], bd.defBaseDie, bd.defAdvantageDice ?? 0));
     parts.push(row(`${snap.name} DEF`, snap.defense));
     if (snap.defenseBonus) parts.push(row('🛡 Bonus DEF', snap.defenseBonus));
     if (bd.fortBonus) parts.push(row('🏰 Fort DEF', bd.fortBonus));
     if (bd.fatiguePenalty) parts.push(row('😓 Fatigue', -bd.fatiguePenalty));
-    bd.defExtraDice.forEach((r, i) => {
-      parts.push(row(`${bd.defAllyNames[i] ?? 'Ally'} (D3)`, r, true));
-    });
+    if (bd.defGangupFlat)  parts.push(row('👥 Allies flat', bd.defGangupFlat));
   }
 
   parts.push(`<hr class="bkd-divider">`);

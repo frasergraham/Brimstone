@@ -761,7 +761,8 @@ export function executeBattle(state, actor, target) {
   const fatiguePenalty = defenderFaction.getDefenseFatigue(target.defendCount || 0);
 
   const { attackRoll, defenseRoll, hit, margin,
-          atkBaseDie, defBaseDie, atkExtraDice, defExtraDice, atkStaffBonus } =
+          atkBaseDie, defBaseDie, atkExtraDice, defExtraDice,
+          atkPool, defPool, atkStaffBonus } =
     Entity.resolveCombat(actor, target, {
       // Phase stays flat here — converting to advantage turned out too steep a
       // nerf to witch's night window; see CLAUDE.md §Tuning for the sweep.
@@ -778,8 +779,10 @@ export function executeBattle(state, actor, target) {
   target.defendCount += 1;
 
   const phaseNote  = phaseBonus > 0 ? ' (🌙 night bonus)' : '';
-  const gangNote    = attackerAllies >= 1 ? ' [gang-up +d3]' : '';
-  const allyDefNote = defenderAllies >= 1 ? ' [allies +d3]'  : '';
+  const gangNote    = attackerAllies >= 1
+    ? ` [advantage +${atkAdvantageDice}, flat +${atkGangupFlat}]` : '';
+  const allyDefNote = defenderAllies >= 1
+    ? ` [advantage +${defAdvantageDice}, flat +${defGangupFlat}]` : '';
 
   log.push(
     `${actor.displayName} attacks ${target.displayName}! ` +
@@ -869,8 +872,11 @@ export function executeBattle(state, actor, target) {
     breakdown: {
       atkBaseDie, defBaseDie,
       atkExtraDice, defExtraDice,
+      atkPool, defPool,
       atkStaffBonus,
       phaseBonus, fortBonus, atkFortAtkBonus, fatiguePenalty,
+      atkGangupFlat, defGangupFlat,
+      atkAdvantageDice, defAdvantageDice,
       atkAllyNames: atkAllies.map(e => e.displayName),
       defAllyNames: defAllies.map(e => e.displayName),
     },
@@ -926,7 +932,7 @@ export function executeFortAssault(state, actor, targetCol, targetRow) {
   const crush = hit && attackRoll >= 2 * defenseRoll;
 
   const phaseNote = phaseBonus > 0 ? ' (🌙 night bonus)' : '';
-  const gangNote  = atkAllies.length >= 1 ? ' [gang-up +d3]' : '';
+  const gangNote  = atkAllies.length >= 1 ? ` [advantage +${atkAdvantage}]` : '';
   log.push(
     `${actor.displayName} assaults the fortifications at (${targetCol},${targetRow})! ` +
     `[${attackRoll}${gangNote} vs ${defenseRoll}]${phaseNote}`
@@ -958,7 +964,8 @@ export function executeFortAssault(state, actor, targetCol, targetRow) {
     hit, crush, damage,
     fortLevelBefore, fortLevelAfter: t.fortifyLevel,
     breakdown: {
-      atkBaseDie, atkExtraDice, phaseBonus,
+      atkBaseDie, atkExtraDice, atkPool, phaseBonus,
+      atkAdvantageDice: atkAdvantage,
       atkAllyNames: atkAllies.map(e => e.displayName),
     },
   };
@@ -1331,7 +1338,10 @@ export function executeGuardStrike(state, guardian, target) {
     breakdown: {
       atkBaseDie, defBaseDie,
       atkExtraDice: [], defExtraDice: [],
+      atkPool: [atkBaseDie], defPool: [defBaseDie],
       atkAllyNames: [], defAllyNames: [],
+      atkGangupFlat: 0, defGangupFlat: 0,
+      atkAdvantageDice: 0, defAdvantageDice: 0,
       atkStaffBonus, phaseBonus, fortBonus, atkFortAtkBonus,
       fatiguePenalty: 0,
     },

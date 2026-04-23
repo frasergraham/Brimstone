@@ -2496,6 +2496,26 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   color: var(--day);
 }
 
+.bkd-pool {
+  display: inline-flex;
+  gap: 3px;
+  flex-wrap: wrap;
+}
+.def-col .bkd-pool { justify-content: flex-end; }
+
+.bkd-die-picked {
+  background: var(--gold, #c8a84b);
+  color: #1a1a1a;
+  border-color: var(--gold, #c8a84b);
+  font-weight: 700;
+  box-shadow: 0 0 4px rgba(200, 168, 75, 0.6);
+}
+
+.bkd-die-discard {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
 .bkd-divider {
   border: none;
   border-top: 1px solid var(--border);

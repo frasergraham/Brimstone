@@ -11,6 +11,9 @@ import {
   Entity, createHero, createWitch, createMinion,
   ADVANTAGE_CAP, BEST_OF_K_EV, WORST_OF_K_EV, expectedDieValue,
 } from '../src/entities.js';
+import { executeBattle } from '../src/actions.js';
+import { GameState } from '../src/game.js';
+import { hexKey } from '../src/hex.js';
 
 function withRNG(sequence, fn) {
   let idx = 0;
@@ -117,6 +120,69 @@ describe('expected value lookup', () => {
     assert.equal(expectedDieValue(-4), WORST_OF_K_EV[4]);
   });
 
+});
+
+// Gang-up adds two components per adjacent attacker ally: +1 advantage die AND
+// a +1 flat bonus on the attack roll (each component caps at ADVANTAGE_CAP).
+// The flat piece keeps swarms competitive after the move off +N·d3 gang-up; it
+// was flagged as an untested invariant in PR #287 review.
+describe('gang-up flat bonus (+1 per ally, cap ADVANTAGE_CAP)', () => {
+  test('one attacker ally adjacent to target adds +1 flat to attack roll', () => {
+    const state = new GameState(true, true);
+    const hero = state.hero;
+    const minion = createMinion(hero.col, hero.row);
+    state.entities.push(minion);
+    // Put a hero-side ally (extra hero-owned minion) adjacent to the target.
+    // executeBattle counts allies on target's hex or any neighbor.
+    const ally = createMinion(hero.col, hero.row);
+    ally.owner = hero.owner;
+    state.entities.push(ally);
+
+    // Force atk and def base dice to known values. resolveCombat with
+    // atkAdvantageDice=1 pulls 2 atk dice, then 1 def die.
+    state.setForcedDice(3, 3, 3);
+
+    const r = executeBattle(state, hero, minion);
+    assert.equal(r.breakdown.atkAdvantageDice, 1, 'one ally → +1 advantage die');
+    assert.equal(r.breakdown.atkGangupFlat, 1, 'one ally → +1 flat');
+    // attack = picked-die + ATK + attackBonus + phaseBonus + fortAtk + flat
+    const expected = r.breakdown.atkBaseDie + hero.attack + (hero.attackBonus || 0)
+      + (r.breakdown.phaseBonus || 0) + (r.breakdown.atkFortAtkBonus || 0)
+      + r.breakdown.atkGangupFlat;
+    assert.equal(r.attackRoll, expected);
+  });
+
+  test('gang-up flat is capped at ADVANTAGE_CAP', () => {
+    const state = new GameState(true, true);
+    const hero = state.hero;
+    const minion = createMinion(hero.col, hero.row);
+    state.entities.push(minion);
+    // Pack more allies than the cap onto the target's hex.
+    for (let i = 0; i < ADVANTAGE_CAP + 3; i++) {
+      const ally = createMinion(hero.col, hero.row);
+      ally.owner = hero.owner;
+      state.entities.push(ally);
+    }
+    state.setForcedDice(...Array(1 + ADVANTAGE_CAP + 1).fill(3));
+
+    const r = executeBattle(state, hero, minion);
+    assert.equal(r.breakdown.atkGangupFlat, ADVANTAGE_CAP,
+      'flat component must clamp at ADVANTAGE_CAP');
+    assert.equal(r.breakdown.atkAdvantageDice, ADVANTAGE_CAP,
+      'advantage dice count must also clamp');
+  });
+
+  test('no adjacent allies → no flat bonus', () => {
+    const state = new GameState(true, true);
+    const minion = createMinion(state.hero.col, state.hero.row);
+    state.entities.push(minion);
+    const r = executeBattle(state, state.hero, minion);
+    assert.equal(r.breakdown.atkGangupFlat, 0);
+    assert.equal(r.breakdown.atkAdvantageDice, 0);
+  });
+});
+
+describe('expected value lookup (cont.)', () => {
   test('expectedDieValue clamps beyond the cap', () => {
     assert.equal(expectedDieValue(10), BEST_OF_K_EV[ADVANTAGE_CAP]);
     assert.equal(expectedDieValue(-10), WORST_OF_K_EV[ADVANTAGE_CAP]);
