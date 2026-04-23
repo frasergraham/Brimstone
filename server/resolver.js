@@ -20,6 +20,24 @@ import { getFaction } from '../src/factions.js';
 // groupByEntity removed — now uses groupPlanByEntity from planner.js
 const groupByEntity = groupPlanByEntity;
 
+// Parse numeric id from "eN" so e2 < e10 (numeric, not lexicographic).
+function _entityIdNum(id) {
+  const n = parseInt(String(id ?? '').slice(1), 10);
+  return Number.isNaN(n) ? 0 : n;
+}
+
+// Build & sort drain candidates for one step, highest agility first,
+// ties broken by ascending numeric entity id. Dead/missing actors sort last.
+function _sortCandidates(state, candidates) {
+  for (const c of candidates) {
+    const actor = state.entities.find(e => e.id === c.entityId && e.alive);
+    c.agility = actor ? (actor.agility ?? 1) : -Infinity;
+    c.idNum = _entityIdNum(c.entityId);
+  }
+  candidates.sort((a, b) => (b.agility - a.agility) || (a.idNum - b.idNum));
+  return candidates;
+}
+
 // ── Event types ──────────────────────────────────────────────────────────────
 
 export const ResEventType = Object.freeze({
@@ -414,6 +432,7 @@ function snapshotEntities(entities) {
     ability:       e.ability,
     attack:        e.attack,
     defense:       e.defense,
+    agility:       e.agility,
     fortification: e.fortification,
     guarding:      e.guarding ?? 0,
     displayName:   e.displayName,
@@ -462,23 +481,42 @@ export function resolvePlansMP(state, playerEntries) {
 
   while (true) {
     const entitySnapshot = snapshotEntities(state.entities);
-    const stepEvents = [];
+
+    // Flatten all players' per-entity queues into a single candidate list
+    // and sort by actor Agility (desc), tie-break numeric entity id (asc).
+    const candidates = [];
+    for (const player of players) {
+      for (const [entityId, queue] of player.unitQueues) {
+        if (queue.length === 0) continue;
+        candidates.push({ player, entityId, queue });
+      }
+    }
+    _sortCandidates(state, candidates);
+
+    const eventsByPlayer = new Map();
     let anyAction = false;
 
-    for (const player of players) {
-      const playerEvents = [];
-      for (const [, queue] of player.unitQueues) {
-        if (queue.length === 0) continue;
-        const events = drainOneStep(state, queue, player.budget);
-        playerEvents.push(...events);
+    for (const c of candidates) {
+      const events = drainOneStep(state, c.queue, c.player.budget);
+      if (events.length === 0) continue;
+      anyAction = true;
+      let bucket = eventsByPlayer.get(c.player.playerId);
+      if (!bucket) {
+        bucket = { playerId: c.player.playerId, faction: c.player.faction, events: [] };
+        eventsByPlayer.set(c.player.playerId, bucket);
       }
-      if (playerEvents.length > 0) {
-        stepEvents.push({ playerId: player.playerId, faction: player.faction, events: playerEvents });
-        anyAction = true;
-      }
+      bucket.events.push(...events);
     }
 
     if (!anyAction) break;
+
+    // Preserve original player ordering in the output step record.
+    const stepEvents = [];
+    for (const player of players) {
+      const bucket = eventsByPlayer.get(player.playerId);
+      if (bucket) stepEvents.push(bucket);
+    }
+
     steps.push({ stepIndex, playerEvents: stepEvents, entitySnapshot });
     stepIndex++;
   }
@@ -510,20 +548,24 @@ export function resolvePlans(state, heroPlan, witchPlan) {
 
     const entitySnapshot = snapshotEntities(state.entities);
 
-    // Drain one action from each hero unit that has actions queued.
+    // Flatten both factions' per-entity queues into one list, sort by Agility,
+    // drain each, then split events back into per-faction buckets.
     const heroEvents = [];
-    for (const [, queue] of heroUnitQueues) {
-      if (queue.length === 0) continue;
-      const events = drainOneStep(state, queue, heroBudget);
-      heroEvents.push(...events);
-    }
-
-    // Drain one action from each witch unit.
     const witchEvents = [];
-    for (const [, queue] of witchUnitQueues) {
+    const candidates = [];
+    for (const [entityId, queue] of heroUnitQueues) {
       if (queue.length === 0) continue;
-      const events = drainOneStep(state, queue, witchBudget);
-      witchEvents.push(...events);
+      candidates.push({ budget: heroBudget, sink: heroEvents, entityId, queue });
+    }
+    for (const [entityId, queue] of witchUnitQueues) {
+      if (queue.length === 0) continue;
+      candidates.push({ budget: witchBudget, sink: witchEvents, entityId, queue });
+    }
+    _sortCandidates(state, candidates);
+
+    for (const c of candidates) {
+      const events = drainOneStep(state, c.queue, c.budget);
+      if (events.length > 0) c.sink.push(...events);
     }
 
     if (heroEvents.length === 0 && witchEvents.length === 0) break;

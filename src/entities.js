@@ -242,6 +242,17 @@ const BASE_STATS = {
   [EntityType.IRON_GOLEM]: { maxHp: 5, attack: 3, defense: 2 },
 };
 
+// Per-type Agility defaults (1–10 scale). Higher acts first within a resolver step.
+export const BASE_AGILITY = {
+  [EntityType.HERO]:       6,
+  [EntityType.WITCH]:      5,
+  [EntityType.SURVIVOR]:   4,
+  [EntityType.ZOMBIE]:     2,
+  [EntityType.MINION]:     5,
+  [EntityType.WOOD_GOLEM]: 3,
+  [EntityType.IRON_GOLEM]: 2,
+};
+
 // Visual colours used by the renderer
 export const ENTITY_COLOR = {
   [EntityType.HERO]:       '#d4a72c',
@@ -295,6 +306,7 @@ export class Entity {
     this.hp      = stats.maxHp;
     this.attack  = stats.attack;
     this.defense = stats.defense;
+    this.agility = BASE_AGILITY[type] ?? 1;
 
     // Temporary combat modifiers (reset each turn)
     this.attackBonus  = 0;
@@ -530,6 +542,7 @@ export function createSurvivor(col, row, ownerId = null, state = null) {
   e.hp     = char.maxHp;
   e.attack  = char.attack;
   e.defense = char.defense;
+  if (typeof char.agility === 'number') e.agility = char.agility;
 
   // Passive stat bonuses already baked into the roster stats,
   // but BRAWLER/STURDY are called out explicitly — stats are already correct.

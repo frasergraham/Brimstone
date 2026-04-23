@@ -2,7 +2,7 @@
 // serializeState  → plain JSON-safe snapshot (network transmission, save storage)
 // deserializeState ← reconstruct a live GameState from a saved snapshot (resume)
 import { VERSION }           from '../src/version.js';
-import { Entity } from '../src/entities.js';
+import { Entity, BASE_AGILITY } from '../src/entities.js';
 import { GameState }         from '../src/game.js';
 import { setMapDimensions }  from '../src/hex.js';
 
@@ -40,6 +40,7 @@ export function serializeState(state) {
     maxHp:         e.maxHp,
     attack:        e.attack,
     defense:       e.defense,
+    agility:       e.agility ?? BASE_AGILITY[e.type] ?? 1,
     attackBonus:   e.attackBonus,
     defenseBonus:  e.defenseBonus,
     weapon:        e.weapon        ?? null,
@@ -160,6 +161,8 @@ export function deserializeState(snap) {
     Object.assign(e, data, { items: { ...(data.items || {}) } });
     // Ensure ownerId is present even on saves from before the multiplayer update
     if (e.ownerId === undefined) e.ownerId = null;
+    // Back-compat hydrate Agility for pre-002 saves.
+    if (e.agility === undefined) e.agility = BASE_AGILITY[e.type] ?? 1;
     return e;
   });
 
