@@ -313,7 +313,7 @@ Each round uses **simultaneous planning** instead of sequential turns:
 Move, Explore, Battle, Fortify (hero), Summon (witch), Use Item, Equip Weapon, Use Ability. Costs and rules are defined in `src/actions.js` — refer to the code for current values as they are frequently tuned.
 
 ### Combat
-Dice-based with attack/defense rolls, phase bonuses, gang-up bonuses, and fortification. See `Entity.resolveCombat()` in `src/entities.js` for the current formula. Key outcomes: hit (1 damage), crush (2 damage), counter (1 damage to attacker).
+Dice-based with attack/defense rolls. Each side rolls a pool of 1+K d6 (K = net advantage, capped at `ADVANTAGE_CAP=4`) and takes best (advantage) or worst (disadvantage). Gang-up allies grant +1 advantage die *and* +1 flat per ally (capped at `ADVANTAGE_CAP`). Phase bonus (witch at night), silver weapon, and fortification stay flat. Staff vs undead/minions/golems grants attacker advantage. See `Entity.resolveCombat()` in `src/entities.js` for the formula. Key outcomes: hit (1 damage), crush (2 damage), counter (1 damage to attacker).
 
 ### Entity Types
 Hero, Witch, Survivor (recruited by hero), Zombie (encountered), Minion/Wood Golem/Iron Golem (summoned by witch). Stats are defined in `src/entities.js` factory functions — check the code for current values.
@@ -440,36 +440,36 @@ Use these names consistently when modifying UI components.
 
 ## AI Balance Baseline & Tuning Methodology
 
-**Last updated:** 2026-04-05 (after sound horn, scoring awareness, node feasibility, ally coordination improvements)
+**Last updated:** 2026-04-23 (advantage/disadvantage combat resolution — task 001)
 
 ### Baseline Metrics (500 1v1 games, Standard 13×13)
 
 | Metric | Value | Target |
 |--------|-------|--------|
-| Hero win rate | 48.8% | 38–62% (±12%) |
-| Witch win rate | 51.0% | 38–62% (±12%) |
-| Draws | 0.2% | — |
-| Kill wins | 37.2% | ≥20% |
-| Node wins | 61.2% | — |
-| Tiebreaks | 1.6% | <10% |
-| Mean rounds | 27.3 | 15–35 |
-| Median rounds | 25 | — |
-| Round cap hits | 1.6% | <5% |
+| Hero win rate | 55.2% | 38–62% (±12%) |
+| Witch win rate | 44.6% | 38–62% (±12%) |
+| Draws | 0.4% | — |
+| Kill wins | 32.6% | ≥20% |
+| Node wins | 65.4% | — |
+| Tiebreaks | 0.4% | <10% |
+| Mean rounds | 21.9 | 15–35 |
+| Median rounds | 21 | — |
+| Round cap hits | 1.2% | <5% |
 
 ### Combat & Economy Baseline
 
 | Metric | Value |
 |--------|-------|
-| Hero battles/game | 6.4 |
-| Hero kills/game | 2.1 |
-| Witch battles/game | 6.7 |
-| Witch kills/game | 0.2 |
-| Hero HP at end | 12.0 |
-| Witch HP at end | 3.4 |
-| Peak hero survivors | 2.6 |
-| Peak witch minions | 4.1 |
-| Witch summons/game | 5.9 |
-| Hero fortifies/game | 1.8 |
+| Hero battles/game | 20.5 |
+| Hero kills/game | 3.9 |
+| Witch battles/game | 16.2 |
+| Witch kills/game | 1.6 |
+| Hero HP at end | 10.1 |
+| Witch HP at end | 7.1 |
+| Peak hero survivors | 3.8 |
+| Peak witch minions | 6.0 |
+| Witch summons/game | 8.1 |
+| Hero fortifies/game | 2.3 |
 
 ### Action Mix Baseline
 
@@ -499,11 +499,17 @@ Use these names consistently when modifying UI components.
 
 | Metric | Value |
 |--------|-------|
-| Hero win rate | 47.0% |
-| Witch win rate | 53.0% |
-| Kill wins | 29.0% |
-| Node wins | 71.0% |
-| Mean rounds | 27.4 |
+| Hero win rate | 65.0% |
+| Witch win rate | 35.0% |
+| Kill wins | 21.0% |
+| Node wins | 79.0% |
+| Mean rounds | 22.2 |
+
+**Note:** 2v2 witch win rate (35%) sits just below the 38% target band — a
+known regression of the advantage-dice refactor. 1v1, AI-matrix aggregate,
+and combat-sim are all in-band; the 2v2 shift is driven by hero-side ally
+stacking and couldn't be smoothed out through gang-up dial tuning alone
+without touching the witch AI swarm scoring logic (out of this PR's scope).
 
 ### AI Architecture
 

@@ -11,7 +11,7 @@
 import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, bestWitchObjective, nearestBuilding, roundsUntilScoring, scoreNodeFeasibility, WITCH_PERSONALITIES, adjacentBlockingFortToward } from './ai.js';
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
-import { EntityType } from './entities.js';
+import { EntityType, ADVANTAGE_CAP, expectedDieValue } from './entities.js';
 import { TileType, ResourceType } from './tiles.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
 
@@ -417,20 +417,22 @@ export function estimateCombat(attacker, defender, board) {
   const gangUpCount = board.minions.filter(m =>
     m.id !== attacker.id && hexDistance(m.col, m.row, defender.col, defender.row) <= 1
   ).length;
-  const gangUpDice = Math.min(gangUpCount, 3);
+  const gangUpDice = Math.min(gangUpCount, ADVANTAGE_CAP);
 
   const defAllyCount = (board.visibleHeroes || []).filter(h =>
     h.id !== defender.id && hexDistance(h.col, h.row, defender.col, defender.row) <= 1
   ).length;
-  const defAllyDice = Math.min(defAllyCount, 3);
+  const defAllyDice = Math.min(defAllyCount, ADVANTAGE_CAP);
 
   // Include fortification and stat bonuses for accurate estimation
   const fortBonus = defender.fortification || 0;
   const atkBonus = attacker.attackBonus || 0;
   const defBonus = defender.defenseBonus || 0;
 
-  const expectedAtk = (attacker.attack || 0) + atkBonus + 3.5 + nightBonus + gangUpDice * 2;
-  const expectedDef = (defender.defense || 0) + defBonus + fortBonus + 3.5 + defAllyDice * 2;
+  const atkGangupFlat = Math.min(gangUpCount, ADVANTAGE_CAP);
+  const defGangupFlat = Math.min(defAllyCount, ADVANTAGE_CAP);
+  const expectedAtk = (attacker.attack || 0) + atkBonus + nightBonus + atkGangupFlat + expectedDieValue(gangUpDice);
+  const expectedDef = (defender.defense || 0) + defBonus + fortBonus + defGangupFlat + expectedDieValue(defAllyDice);
 
   const favorability = expectedAtk - expectedDef;
 

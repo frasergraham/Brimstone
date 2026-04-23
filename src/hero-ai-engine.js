@@ -13,7 +13,7 @@ import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, nearestBuilding
 import { EnginePlanSimState, BaseAIEngine, allocateBudget, assemblePlan, clamp01, updateAllyClaimedNodes, personalityName } from './ai-engine.js';
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
-import { EntityType } from './entities.js';
+import { EntityType, ADVANTAGE_CAP, expectedDieValue } from './entities.js';
 import { TileType, ResourceType } from './tiles.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
 
@@ -325,25 +325,28 @@ export function scoreHeroGoals(board, goalWeights = null) {
 // ── Combat estimation (hero-perspective) ─────────────────────────────────────
 
 export function estimateHeroCombat(attacker, defender, board) {
-  // Witch gets +2 ATK at night — account for it when estimating defense
+  // Witch gets +2 ATK at night — account for it when estimating the defender's
+  // effective strength (the AI should avoid attacking witch units at night).
   const defNightBonus = board.isNight && defender.owner === 'witch' ? 2 : 0;
 
   const allies = [board.hero, ...board.survivors].filter(e =>
     e && e.id !== attacker.id && hexDistance(e.col, e.row, defender.col, defender.row) <= 1
   );
-  const gangUpDice = Math.min(allies.length, 3);
+  const gangUpDice = Math.min(allies.length, ADVANTAGE_CAP);
 
   const defAllies = [board.witch, ...board.witchMinions].filter(e =>
     e && e.id !== defender.id && hexDistance(e.col, e.row, defender.col, defender.row) <= 1
   );
-  const defAllyDice = Math.min(defAllies.length, 3);
+  const defAllyDice = Math.min(defAllies.length, ADVANTAGE_CAP);
 
   const fortBonus = defender.fortification || 0;
   const atkBonus = attacker.attackBonus || 0;
   const defBonus = defender.defenseBonus || 0;
 
-  const expectedAtk = (attacker.attack || 0) + atkBonus + 3.5 + gangUpDice * 2;
-  const expectedDef = (defender.defense || 0) + defBonus + fortBonus + 3.5 + defAllyDice * 2 + defNightBonus;
+  const atkGangupFlat = Math.min(allies.length, ADVANTAGE_CAP);
+  const defGangupFlat = Math.min(defAllies.length, ADVANTAGE_CAP);
+  const expectedAtk = (attacker.attack || 0) + atkBonus + atkGangupFlat + expectedDieValue(gangUpDice);
+  const expectedDef = (defender.defense || 0) + defBonus + fortBonus + defNightBonus + defGangupFlat + expectedDieValue(defAllyDice);
 
   const favorability = expectedAtk - expectedDef;
   const expectedDamage = favorability > 0 ? (favorability > 3 ? 2 : 1) : 0;

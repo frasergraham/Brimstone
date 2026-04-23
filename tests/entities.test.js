@@ -287,12 +287,15 @@ describe('resetTurn', () => {
 });
 
 // ── resolveCombat ─────────────────────────────────────────────────────────────
-// Formula (from design doc):
-//   attackRoll  = d6 + attack + attackBonus + phaseBonus + staffBonus + Σ(atkDice d3)
-//   defenseRoll = d6 + defense + defenseBonus + fortBonus + Σ(defDice d3)
+// Formula (advantage/disadvantage dice-pool combat):
+//   atkBaseDie  = best/worst of (1 + atkNet) d6 — advantage if atkNet > 0,
+//                 disadvantage if atkNet < 0, plain d6 otherwise
+//   defBaseDie  = best/worst of (1 + defNet) d6 — same convention
+//   attackRoll  = atkBaseDie + attack + attackBonus + extraAtkBonus
+//   defenseRoll = defBaseDie + defense + defenseBonus + extraDefBonus - fatigue
 //   hit         = attackRoll > defenseRoll
 //   crush       = attackRoll >= 2 * defenseRoll
-//   counter     = defenseRoll >= 2 * attackRoll (counter hits attacker)
+//   counter     = defenseRoll >= 2 * attackRoll
 
 // Helper: override Math.random for a single call
 function withRNG(sequence, fn) {
@@ -346,62 +349,71 @@ describe('Entity.resolveCombat', () => {
     assert.equal(r.margin, r.attackRoll - r.defenseRoll);
   });
 
-  test('phaseBonus is added to attackRoll (not defenseRoll)', () => {
+  test('phaseAdvantage adds an advantage die to the attacker', () => {
     const hero = createHero(0, 0);
     const witch = createWitch(0, 0);
-    const r0 = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, witch, 0));
-    const r1 = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, witch, 1));
-    assert.equal(r1.attackRoll, r0.attackRoll + 1, 'phaseBonus should add 1 to attackRoll');
-    assert.equal(r1.defenseRoll, r0.defenseRoll, 'phaseBonus should not affect defenseRoll');
+    // Sequence used twice: neutral run consumes 2 dice, advantage run consumes 3
+    // (1 atk pool of 2 + 1 def). Advantage picks the max.
+    const r0 = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, witch));
+    // Low-then-high for atk pool → advantage picks high (6); def die = 3.
+    const r1 = withRNG([0.001, 0.999, 0.5],
+      () => Entity.resolveCombat(hero, witch, { phaseAdvantage: 1 }));
+    assert.equal(r0.atkPool.length, 1);
+    assert.equal(r1.atkPool.length, 2);
+    assert.equal(r1.atkBaseDie, 6, 'advantage picks the highest of two dice');
+    assert.equal(r1.defenseRoll, r0.defenseRoll);
   });
 
-  test('staff gives +2 attackRoll vs undead (zombie, minion, golems)', () => {
+  test('staff grants attacker advantage vs undead (zombie, minion, golems)', () => {
     const hero = createHero(0, 0);
-    hero.equipWeapon(WeaponType.STAFF); // +1 ATK, plus +2 undead bonus at combat time
+    hero.equipWeapon(WeaponType.STAFF); // +1 ATK, plus +1 advantage die vs undead
     const zombie = createZombie(0, 0);
     const minion = createMinion(0, 0);
     const woodGolem = createWoodGolem(0, 0);
     const ironGolem = createIronGolem(0, 0);
 
     for (const undead of [zombie, minion, woodGolem, ironGolem]) {
-      const r = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, undead));
-      assert.equal(r.atkStaffBonus, 2, `Staff vs ${undead.type} should show atkStaffBonus=2`);
+      const r = withRNG([0.5, 0.5, 0.5], () => Entity.resolveCombat(hero, undead));
+      assert.equal(r.atkStaffBonus, 1, `Staff vs ${undead.type} should grant 1 advantage die`);
+      assert.equal(r.atkAdvantage, 1);
+      assert.equal(r.atkPool.length, 2);
     }
   });
 
-  test('staff does NOT give undead bonus vs hero or witch', () => {
+  test('staff does NOT grant advantage vs hero or witch', () => {
     const attacker = createHero(0, 0);
     attacker.equipWeapon(WeaponType.STAFF);
     const witch = createWitch(0, 0);
     const r = withRNG([0.5, 0.5], () => Entity.resolveCombat(attacker, witch));
     assert.equal(r.atkStaffBonus, 0, 'No staff bonus vs non-undead');
+    assert.equal(r.atkAdvantage, 0);
   });
 
   test('extraAtkBonus is added to attackRoll', () => {
     const hero = createHero(0, 0);
     const witch = createWitch(0, 0);
-    const r0 = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, witch, 0, 0));
-    const r2 = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, witch, 0, 2));
+    const r0 = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, witch));
+    const r2 = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, witch, { extraAtkBonus: 2 }));
     assert.equal(r2.attackRoll, r0.attackRoll + 2);
   });
 
   test('extraDefBonus is added to defenseRoll', () => {
     const hero = createHero(0, 0);
     const witch = createWitch(0, 0);
-    const r0 = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, witch, 0, 0, 0));
-    const r3 = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, witch, 0, 0, 3));
+    const r0 = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, witch));
+    const r3 = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, witch, { extraDefBonus: 3 }));
     assert.equal(r3.defenseRoll, r0.defenseRoll + 3);
   });
 
-  test('extra dice for attacker are rolled as d3s', () => {
-    // With 1 atkDie=3 (ceil(0.999*3)=3), result should include that d3 roll
+  test('atkAdvantageDice adds advantage dice to the attacker pool', () => {
     const hero = createHero(0, 0);
     const witch = createWitch(0, 0);
-    // Sequence: atkBaseDie, defBaseDie, then 1 atkExtraDie (d3)
-    // ceil(0.5*6)=3 for base dice, ceil(0.999*3)=3 for d3
-    const r = withRNG([0.5, 0.5, 0.999], () => Entity.resolveCombat(hero, witch, 0, 0, 0, 1, 0));
-    assert.equal(r.atkExtraDice.length, 1);
-    assert.equal(r.atkExtraDice[0], 3, 'Extra d3 max roll should be 3');
+    // Pool of 3 d6 → picks the max. Low, high, low → picks 6.
+    const r = withRNG([0.001, 0.999, 0.001, 0.5],
+      () => Entity.resolveCombat(hero, witch, { atkAdvantageDice: 2 }));
+    assert.equal(r.atkPool.length, 3);
+    assert.equal(r.atkBaseDie, 6);
+    assert.equal(r.atkExtraDice.length, 2);
   });
 
   test('attackBonus from entity is included in attackRoll', () => {
