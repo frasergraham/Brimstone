@@ -46,17 +46,22 @@ Before intake, pull new work from the Brimstone note.
 - Read each one's frontmatter/header to get: task id, branch name, files touched
 - Flag any pair of tasks whose "files touched" overlap — those cannot run in parallel. Report the conflict to me and ask whether to serialize them or drop one. Do not proceed until resolved.
 
-### 2. Dispatch (plan phase)
-- For each non-conflicting task not already in flight (check `gh pr list --state open --json headRefName` to see what's already out there):
-  - Determine the GitHub repo slug for this working directory once per run: `gh repo view --json nameWithOwner -q .nameWithOwner`. Cache it — all dispatches share it.
+### 2. Dispatch (plan phase) — **manual via user's terminal**
+
+**Important: `claude --remote` is TTY-interactive and does not cloud-dispatch when invoked from inside a Claude Code session (it silently routes to local Remote Control instead). So the supervisor cannot fire remote workers on its own. Dispatch is a two-step manual handoff.**
+
+- For each non-conflicting task not already in flight (check `gh pr list --state open --json headRefName`):
   - Determine the base branch from CLAUDE.md / `git symbolic-ref refs/remotes/origin/HEAD` — for this repo it's `dev`, not `main`.
-  - Run as a **backgrounded bash command** (so the supervisor can poll in parallel):
+  - Compose the prompt. Keep it short enough to paste comfortably.
+  - Write the full command to a tempfile AND copy it to the clipboard:
+    ```bash
+    printf '%s\n' 'claude --remote "Read specs/tasks/<id>.md from branch <base>. Enter plan mode. Produce an implementation plan: files you will change (within the allowlist), the approach, test strategy, and any risks. Do NOT write code. Commit the plan as specs/tasks/<id>.plan.md on branch <branch-name> (based on <base>) and open a DRAFT PR to <base> titled '\''PLAN: <id> <title>'\''. Stop after the draft PR is open."' | tee /tmp/dispatch-<id>.sh | pbcopy
+    chmod +x /tmp/dispatch-<id>.sh
     ```
-    claude --remote <owner/repo> "Read specs/tasks/<id>.md from branch <base>. Enter plan mode. Produce an implementation plan: files you will change (within the allowlist), the approach, test strategy, and any risks. Do NOT write code. Commit the plan as specs/tasks/<id>.plan.md on branch <branch-name> (based on <base>) and open a DRAFT PR to <base> titled 'PLAN: <id> <title>'. Stop after the draft PR is open."
-    ```
-    Note the syntax: `--remote` takes the GitHub repo as its argument (e.g. `frasergraham/Brimstone`), followed by the prompt. The call runs synchronously and prints the agent's final message; always background it with Bash `run_in_background: true` so multiple dispatches progress in parallel and the poll loop isn't blocked.
-  - Log the dispatch in `specs/.supervisor-state.json` with timestamp, task id, expected branch, background shell id, and `status: "planning"`.
-- Do not dispatch more than 4 at once. If there are more tasks, queue them.
+  - Tell the user: "Dispatch prompt copied to clipboard (and saved at `/tmp/dispatch-<id>.sh`). Paste into your terminal to fire the cloud worker, then tell me when the draft PR appears on GitHub."
+  - Log the dispatch in `specs/.supervisor-state.json` with timestamp, task id, expected branch, and `status: "planning"`.
+  - Do NOT claim the worker is running until the user confirms they've pasted and hit enter. Do NOT attempt to run `claude --remote` via Bash yourself — it will silently run locally and mislead the whole session.
+- Multiple tasks can be dispatched in parallel because the user controls the pacing — put each in its own `/tmp/dispatch-<id>.sh` and offer them one at a time or as a batch, user's choice. Queue anything beyond the user's preferred batch size.
 
 ### 3. Poll
 - Every 90 seconds (use `sleep 90` between checks):
@@ -86,12 +91,14 @@ Before intake, pull new work from the Brimstone note.
   - On `no`: close the draft PR (`gh pr close <n> --delete-branch`), mark the task `needs_attention` with reason "plan rejected", and move on. Do NOT delete the task file — I may re-dispatch it.
 - **When in doubt, ask.** The auto-approve criteria are a ceiling, not a floor — if something feels off (weird file path, unclear scope, vague acceptance criteria), escalate even if the mechanical checks pass.
 
-### 2b. Dispatch (implementation phase)
-- Run as a backgrounded bash command against the existing branch (use the same owner/repo slug as step 2):
+### 2b. Dispatch (implementation phase) — **manual via user's terminal**
+
+- Same handoff pattern as step 2: build the `claude --remote "..."` command, write it to `/tmp/dispatch-<id>-impl.sh`, copy to clipboard with `pbcopy`, and tell the user to paste it. Example prompt body:
   ```
-  claude --remote <owner/repo> "Check out branch <branch-name>. Implement the approved plan in specs/tasks/<id>.plan.md. Follow CLAUDE.md. Do not modify files outside the allowlist in specs/tasks/<id>.md. When done, push and mark the PR ready for review (gh pr ready <pr-number>)."
+  claude --remote "Check out branch <branch-name>. Implement the approved plan in specs/tasks/<id>.plan.md. Follow CLAUDE.md. Do not modify files outside the allowlist in specs/tasks/<id>.md. When done, push and mark the PR ready for review (gh pr ready <pr-number>)."
   ```
-- The PR number stays the same; it transitions from draft to ready when the agent finishes.
+- Do NOT invoke `claude --remote` yourself. Wait for the user to confirm the command has been pasted.
+- The PR number stays the same; it transitions from draft to ready when the agent finishes. Poll PR state via `gh pr view <n>` as usual.
 
 ### 4. Review
 - Invoke the `pr-reviewer` subagent via the Task tool with the PR number
