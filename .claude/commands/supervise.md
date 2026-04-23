@@ -50,12 +50,14 @@ Before intake, pull new work from the Brimstone note.
 
 **Important: `claude --remote` is TTY-interactive and does not cloud-dispatch when invoked from inside a Claude Code session (it silently routes to local Remote Control instead). So the supervisor cannot fire remote workers on its own. Dispatch is a two-step manual handoff.**
 
+**Equally important: keep the worker session alive.** The initial dispatch prompt should instruct the worker to **report completion and wait for further instructions**, not exit. Subsequent revisions are delivered as new messages to the same cloud session (via claude.ai UI or a follow-up terminal message), NOT by running `claude --remote` again. This preserves env + context + cache, and makes review-round-trips fast. Only spawn a new worker when starting a new task.
+
 - For each non-conflicting task not already in flight (check `gh pr list --state open --json headRefName`):
   - Determine the base branch from CLAUDE.md / `git symbolic-ref refs/remotes/origin/HEAD` — for this repo it's `dev`, not `main`.
   - Compose the prompt. Keep it short enough to paste comfortably.
-  - Write the full command to a tempfile AND copy it to the clipboard:
+  - Write the full command to a tempfile AND copy it to the clipboard. The prompt must tell the worker to **report and wait**, not exit:
     ```bash
-    printf '%s\n' 'claude --remote "Read specs/tasks/<id>.md from branch <base>. Enter plan mode. Produce an implementation plan: files you will change (within the allowlist), the approach, test strategy, and any risks. Do NOT write code. Commit the plan as specs/tasks/<id>.plan.md on branch <branch-name> (based on <base>) and open a DRAFT PR to <base> titled '\''PLAN: <id> <title>'\''. Stop after the draft PR is open."' | tee /tmp/dispatch-<id>.sh | pbcopy
+    printf '%s\n' 'claude --remote "Read specs/tasks/<id>.md from branch <base>. Enter plan mode. Produce an implementation plan: files you will change (within the allowlist), the approach, test strategy, and any risks. Do NOT write code. Commit the plan as specs/tasks/<id>.plan.md on branch <branch-name> (based on <base>) and open a DRAFT PR to <base> titled '\''PLAN: <id> <title>'\''. After the draft PR is open, report the PR URL and WAIT for further instructions — do not exit. The supervisor may send follow-up messages to revise the plan or move to implementation on this same session."' | tee /tmp/dispatch-<id>.sh | pbcopy
     chmod +x /tmp/dispatch-<id>.sh
     ```
   - Tell the user: "Dispatch prompt copied to clipboard (and saved at `/tmp/dispatch-<id>.sh`). Paste into your terminal to fire the cloud worker, then tell me when the draft PR appears on GitHub."
@@ -91,14 +93,21 @@ Before intake, pull new work from the Brimstone note.
   - On `no`: close the draft PR (`gh pr close <n> --delete-branch`), mark the task `needs_attention` with reason "plan rejected", and move on. Do NOT delete the task file — I may re-dispatch it.
 - **When in doubt, ask.** The auto-approve criteria are a ceiling, not a floor — if something feels off (weird file path, unclear scope, vague acceptance criteria), escalate even if the mechanical checks pass.
 
-### 2b. Dispatch (implementation phase) — **manual via user's terminal**
+### 2b. Dispatch (implementation phase) — **reuse the parked plan-phase session**
 
-- Same handoff pattern as step 2: build the `claude --remote "..."` command, write it to `/tmp/dispatch-<id>-impl.sh`, copy to clipboard with `pbcopy`, and tell the user to paste it. Example prompt body:
+- Do NOT spawn a new `claude --remote` worker here. The plan-phase worker is still alive in the user's cloud session waiting for follow-up. Send the implementation instructions as the next message in that same session.
+- Compose the implementation message and stage it the same way (write to `/tmp/dispatch-<id>-impl.txt`, `pbcopy`). Tell the user: "Implementation message for task <id> staged on clipboard — paste it as the next message in the task <id> worker's claude.ai session."
+- Example message body:
   ```
-  claude --remote "Check out branch <branch-name>. Implement the approved plan in specs/tasks/<id>.plan.md. Follow CLAUDE.md. Do not modify files outside the allowlist in specs/tasks/<id>.md. When done, push and mark the PR ready for review (gh pr ready <pr-number>)."
+  Plan approved (with overrides: <list>). Implement the approved plan in specs/tasks/<id>.plan.md on the current branch. Follow CLAUDE.md. Do not modify files outside the allowlist in specs/tasks/<id>.md. When done, push and mark the PR ready for review (gh pr ready <pr-number>), then report and wait for further instructions — do not exit. The supervisor may send revision requests.
   ```
-- Do NOT invoke `claude --remote` yourself. Wait for the user to confirm the command has been pasted.
-- The PR number stays the same; it transitions from draft to ready when the agent finishes. Poll PR state via `gh pr view <n>` as usual.
+- PR number stays the same; it transitions from draft to ready when the worker finishes. Poll via `gh pr view <n>` as usual.
+
+### 2c. Revision round-trip — **reuse the parked worker**
+
+When the reviewer returns `request_changes` (step 4), the fixes also go to the same session as the next message. Never spawn a new `claude --remote` call for revisions. Stage the revision spec on the clipboard and hand off the same way.
+
+When the worker is no longer needed (task merged or task rejected), tell the user: "Task <id> complete — you can close the claude.ai session for task <id>." The supervisor doesn't control session lifecycle; the user does.
 
 ### 4. Review
 - Invoke the `pr-reviewer` subagent via the Task tool with the PR number
