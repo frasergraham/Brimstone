@@ -209,6 +209,17 @@ export class PlanSimState {
     this.campaignAIBudgetBonus = realState.campaignAIBudgetBonus ?? 0;
     this.noWitchMission = !!realState.noWitchMission;
 
+    // Count active players per faction — used by NvN-aware tunings such as
+    // the witch minion cap, which scales with witch team size so a 3-witch
+    // side isn't rationed to the same 7-minion ceiling as a solo witch.
+    // Use a keyed map to avoid hard-coded faction string equality checks
+    // (see docs/design/refactor.md / faction-string-checks guard).
+    const playerCounts = {};
+    for (const p of (realState.players || [])) {
+      if (p && p.faction) playerCounts[p.faction] = (playerCounts[p.faction] || 0) + 1;
+    }
+    this.playerCounts = playerCounts;
+
     // Track hexes already planned for exploration this turn so we don't
     // plan duplicate explores (sim.tiles.explored is a live reference and
     // won't reflect in-plan explores).

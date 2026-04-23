@@ -235,6 +235,8 @@ export function assessBoard(sim) {
     totalResources, metalCount, woodCount, canAffordSummon, bestSummonType,
     unexploredBuildings,
     totalBudget: sim.actionsLeft + (sim.campaignAIBudgetBonus ?? 0),
+    witchPlayerCount: (sim.playerCounts && sim.playerCounts.witch) || 1,
+    heroPlayerCount:  (sim.playerCounts && sim.playerCounts.hero)  || 1,
   };
 }
 
@@ -852,7 +854,11 @@ export function genBuildArmy(sim, board, budget) {
 function _trySummons(actions, sim, board, remaining) {
   if (!board.witch || remaining <= 0) return actions;
 
-  const armyCap = (board.isNight || board.phase === Phase.DUSK) ? 10 : 7;
+  // Minion cap scales with witch team size so NvN witches aren't rationed to
+  // a solo-witch ceiling. 1v1 baseline unchanged; each extra witch adds +2.
+  const witchBonus = 2 * ((board.witchPlayerCount ?? 1) - 1);
+  const baseCap = (board.isNight || board.phase === Phase.DUSK) ? 10 : 7;
+  const armyCap = baseCap + witchBonus;
   let currentArmy = board.minionCount;
 
   while (remaining > 0 && currentArmy < armyCap) {
