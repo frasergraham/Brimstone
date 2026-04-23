@@ -3362,12 +3362,21 @@ export class UIController {
     const renderInstant = () => {
       const bd = result.breakdown;
       if (bd) {
+        const atkD = _breakdownData(actorSnap,  bd, 'atk', result.attackRoll);
+        const defD = _breakdownData(targetSnap, bd, 'def', result.defenseRoll);
+        const padTo = Math.max(atkD.rows.length, defD.rows.length);
         this._el('battle-atk-breakdown').innerHTML =
-          _buildBreakdownHTML(actorSnap, bd, 'atk', result.attackRoll);
+          _buildBreakdownHTML(actorSnap, bd, 'atk', result.attackRoll, padTo);
         this._el('battle-def-breakdown').innerHTML =
-          _buildBreakdownHTML(targetSnap, bd, 'def', result.defenseRoll);
+          _buildBreakdownHTML(targetSnap, bd, 'def', result.defenseRoll, padTo);
         this._el('battle-atk-breakdown').classList.add('visible');
         this._el('battle-def-breakdown').classList.add('visible');
+        _applyWinnerClass(
+          this._el('battle-atk-breakdown'),
+          this._el('battle-def-breakdown'),
+          result.attackRoll,
+          result.defenseRoll,
+        );
       }
     };
 
@@ -3539,15 +3548,24 @@ export class UIController {
       });
 
       const bd = result.breakdown;
+      let padTo = 0;
+      if (bd) {
+        const atkD = _breakdownData(actorSnap,  bd, 'atk', result.attackRoll);
+        const defD = _breakdownData(targetSnap, bd, 'def', result.defenseRoll);
+        padTo = Math.max(atkD.rows.length, defD.rows.length);
+      }
       const sidePromises = bd
         ? [
-            _animateBreakdownSide(atkBkdEl, actorSnap,  bd, 'atk', result.attackRoll,  factor, anim),
-            _animateBreakdownSide(defBkdEl, targetSnap, bd, 'def', result.defenseRoll, factor, anim),
+            _animateBreakdownSide(atkBkdEl, actorSnap,  bd, 'atk', result.attackRoll,  factor, anim, padTo),
+            _animateBreakdownSide(defBkdEl, targetSnap, bd, 'def', result.defenseRoll, factor, anim, padTo),
           ]
         : [Promise.resolve(), Promise.resolve()];
 
       Promise.all(sidePromises).then(() => {
         if (_dismissed || anim.cancelled) return;
+        if (bd) {
+          _applyWinnerClass(atkBkdEl, defBkdEl, result.attackRoll, result.defenseRoll);
+        }
         const delay = Math.max(80, _BKD_TIMINGS.outcomeDelay * factor);
         anim.timeout(delay, () => {
           if (_dismissed) return;
@@ -4625,13 +4643,25 @@ function _breakdownData(snap, bd, side, total) {
     if (bd.phaseBonus)       add('🌙 Night',           bd.phaseBonus,       'pos');
     if (bd.atkStaffBonus)    add('⚕ Staff (undead)',   bd.atkStaffBonus,    'pos');
     if (bd.atkFortAtkBonus)  add('🏰 Fort ATT',        bd.atkFortAtkBonus,  'pos');
-    if (bd.atkGangupFlat)    add('👥 Gang-up flat',    bd.atkGangupFlat,    'pos');
+    const atkAllyNames = bd.atkAllyNames ?? [];
+    const atkAllyContrib = Math.min(atkAllyNames.length, bd.atkGangupFlat || 0);
+    if (atkAllyContrib > 0) {
+      for (let i = 0; i < atkAllyContrib; i++) add(`👥 ${atkAllyNames[i]}`, 1, 'pos');
+    } else if (bd.atkGangupFlat) {
+      add('👥 Gang-up flat', bd.atkGangupFlat, 'pos');
+    }
   } else {
     add(`${snap.name} DEF`, snap.defense, 'base');
     if (snap.defenseBonus)  add('🛡 Bonus DEF',   snap.defenseBonus,  'pos');
     if (bd.fortBonus)       add('🏰 Fort DEF',    bd.fortBonus,       'pos');
     if (bd.fatiguePenalty)  add('😓 Fatigue',     -bd.fatiguePenalty, 'neg');
-    if (bd.defGangupFlat)   add('👥 Allies flat', bd.defGangupFlat,   'pos');
+    const defAllyNames = bd.defAllyNames ?? [];
+    const defAllyContrib = Math.min(defAllyNames.length, bd.defGangupFlat || 0);
+    if (defAllyContrib > 0) {
+      for (let i = 0; i < defAllyContrib; i++) add(`👥 ${defAllyNames[i]}`, 1, 'pos');
+    } else if (bd.defGangupFlat) {
+      add('👥 Allies flat', bd.defGangupFlat, 'pos');
+    }
   }
   return { pool, picked, advantage, rows, total };
 }
@@ -4656,7 +4686,7 @@ function _signAttr(sign) {
 }
 
 // Instant (no animation) render — used for autoplay/skip.
-function _buildBreakdownHTML(snap, bd, side, total) {
+function _buildBreakdownHTML(snap, bd, side, total, padTo = 0) {
   const d = _breakdownData(snap, bd, side, total);
   const n = d.pool?.length ?? 0;
   const parts = [];
@@ -4689,9 +4719,25 @@ function _buildBreakdownHTML(snap, bd, side, total) {
       `<div class="bkd-row"${_signAttr(r.sign)}><span class="bkd-label">${r.label}</span><span class="bkd-val">${v}</span></div>`
     );
   }
+  const spacerCount = Math.max(0, padTo - d.rows.length);
+  for (let i = 0; i < spacerCount; i++) {
+    parts.push(`<div class="bkd-row bkd-row-spacer" aria-hidden="true"><span class="bkd-label">&nbsp;</span><span class="bkd-val">&nbsp;</span></div>`);
+  }
   parts.push(`<hr class="bkd-divider">`);
   parts.push(`<div class="bkd-row bkd-total-row"><span class="bkd-label">Total</span><span class="bkd-val">${total}</span></div>`);
   return parts.join('');
+}
+
+// Apply winner highlight to whichever side's total is higher. Ties highlight
+// neither. Losing side total remains visible, unhighlighted.
+function _applyWinnerClass(atkCol, defCol, atkTotal, defTotal) {
+  if (!atkCol || !defCol) return;
+  const atkTotalRow = atkCol.querySelector('.bkd-total-row');
+  const defTotalRow = defCol.querySelector('.bkd-total-row');
+  atkTotalRow?.classList.remove('bkd-total-winner');
+  defTotalRow?.classList.remove('bkd-total-winner');
+  if (atkTotal > defTotal) atkTotalRow?.classList.add('bkd-total-winner');
+  else if (defTotal > atkTotal) defTotalRow?.classList.add('bkd-total-winner');
 }
 
 // Base cinematic timings (ms). Multiplied by speedMode factor.
@@ -4721,7 +4767,7 @@ function _speedFactor(mode) {
 //      the value-column slot.
 //   3. Modifier rows un-mute one at a time with a green/red/neutral flash.
 //   4. Divider draws; total row pops.
-function _animateBreakdownSide(colEl, snap, bd, side, total, factor, anim) {
+function _animateBreakdownSide(colEl, snap, bd, side, total, factor, anim, padTo = 0) {
   const d = _breakdownData(snap, bd, side, total);
   colEl.innerHTML = '';
   colEl.classList.add('visible');
@@ -4729,10 +4775,10 @@ function _animateBreakdownSide(colEl, snap, bd, side, total, factor, anim) {
   const poolSign = _poolSign(d.advantage);
   const n = d.pool?.length ?? 0;
 
-  // Build pool row (muted). Discards stack together; picked slot holds the
-  // final picked die in the value-column position.
+  // Build pool row. Not muted — the tumble animation must be clearly visible
+  // before the picked die is selected. The glow-in at settle still fires.
   const poolRow = document.createElement('div');
-  poolRow.className = 'bkd-row bkd-pool-row bkd-row-muted';
+  poolRow.className = 'bkd-row bkd-pool-row';
   if (poolSign !== 'base') poolRow.setAttribute('data-sign', poolSign === 'pos' ? 'positive' : 'negative');
   poolRow.innerHTML =
     `<span class="bkd-label">${_poolLabel(d.advantage)}</span>` +
@@ -4765,6 +4811,17 @@ function _animateBreakdownSide(colEl, snap, bd, side, total, factor, anim) {
     colEl.appendChild(row);
     return row;
   });
+
+  // Spacer rows to equalize column height between atk and def sides so the
+  // Total row lines up on the same baseline regardless of modifier count.
+  const spacerCount = Math.max(0, padTo - d.rows.length);
+  for (let i = 0; i < spacerCount; i++) {
+    const spacer = document.createElement('div');
+    spacer.className = 'bkd-row bkd-row-spacer';
+    spacer.setAttribute('aria-hidden', 'true');
+    spacer.innerHTML = `<span class="bkd-label">&nbsp;</span><span class="bkd-val">&nbsp;</span>`;
+    colEl.appendChild(spacer);
+  }
 
   // Divider (muted).
   const hr = document.createElement('hr');
@@ -4844,7 +4901,7 @@ function _animateBreakdownSide(colEl, snap, bd, side, total, factor, anim) {
         totalRow.classList.remove('bkd-row-muted');
         totalRow.classList.add('bkd-total-pop');
       });
-      anim.timeout(afterRows + dividerMs + Math.max(100, _BKD_TIMINGS.totalSnap * factor), () => resolve());
+      anim.timeout(afterRows + dividerMs + Math.max(100, _BKD_TIMINGS.totalSnap * factor), () => resolve(totalRow));
     });
   });
 }
