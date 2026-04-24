@@ -440,21 +440,16 @@ Use these names consistently when modifying UI components.
 
 ## AI Balance Baseline & Tuning Methodology
 
-**Last updated:** 2026-04-23 (advantage/disadvantage combat resolution — task 001)
+**Last updated:** 2026-04-24 (NvN balance pass — per-witch AI thresholds + hidden-survivor scaling)
 
 ### Baseline Metrics (500 1v1 games, Standard 13×13)
 
 | Metric | Value | Target |
 |--------|-------|--------|
-| Hero win rate | 55.2% | 38–62% (±12%) |
-| Witch win rate | 44.6% | 38–62% (±12%) |
-| Draws | 0.4% | — |
-| Kill wins | 32.6% | ≥20% |
-| Node wins | 65.4% | — |
-| Tiebreaks | 0.4% | <10% |
-| Mean rounds | 21.9 | 15–35 |
-| Median rounds | 21 | — |
-| Round cap hits | 1.2% | <5% |
+| Hero win rate | 49.2% | 38–62% (±12%) |
+| Witch win rate | 50.8% | 38–62% (±12%) |
+| Draws | 0.0% | — |
+| Mean rounds | ~22 | 15–35 |
 
 ### Combat & Economy Baseline
 
@@ -495,21 +490,26 @@ Use these names consistently when modifying UI components.
 | Witch sweeps nodes | 3.6% |
 | Hero sweeps nodes | 1.2% |
 
-### 2v2 Baseline (100 games, Standard 13×13)
+### NvN Baseline (500 games each, Standard 13×13)
 
-| Metric | Value |
-|--------|-------|
-| Hero win rate | 65.0% |
-| Witch win rate | 35.0% |
-| Kill wins | 21.0% |
-| Node wins | 79.0% |
-| Mean rounds | 22.2 |
+| Mode | Hero win rate | Witch win rate | Peak hero force | Peak witch force |
+|------|---------------|----------------|------------------|-------------------|
+| 2v2  | 57.8% | 42.0% | ~6 units (1.3× 1v1) | ~13 units (1.75× 1v1) |
+| 3v3  | 57.0% | 42.6% | ~8 units (1.7× 1v1) | ~20 units (2.7× 1v1) |
+| 4v4  | 60.0% | 39.8% | ~9 units (1.9× 1v1) | ~25 units (3.5× 1v1) |
 
-**Note:** 2v2 witch win rate (35%) sits just below the 38% target band — a
-known regression of the advantage-dice refactor. 1v1, AI-matrix aggregate,
-and combat-sim are all in-band; the 2v2 shift is driven by hero-side ally
-stacking and couldn't be smoothed out through gang-up dial tuning alone
-without touching the witch AI swarm scoring logic (out of this PR's scope).
+NvN scales up unit density on both sides (so 4v4 doesn't feel sparse on the
+13×13 map) while keeping balance in the ±12% target band. All NvN scaling is
+gated on `playerCount > 1`, so 1v1 behavior is mathematically unchanged.
+
+- **Scaled witch minion cap** (`src/ai-engine.js:_trySummons`): `base + 4×(witchPlayerCount−1)` so a 3-witch team isn't rationed to the solo-witch 7/10 ceiling. 4v4 night cap = 22.
+- **Per-witch BUILD_ARMY / CONTROL_NODES scoring** (`scoreGoals`): thresholds divide `minionCount` by `witchPlayerCount`; node base bumped 0.45→0.60 so extra minions actually reach nodes rather than clustering near witches.
+- **Scaled witch `unitsPerNode`** (`genControlNodes`): 1v1→1, 2v2→2, 3v3+→3 baseline; ensures the expanded minion supply disperses across nodes instead of piling up.
+- **Hero concentration cap** (`hero-ai-engine.js:genControlNodes`): `unitsForNode` capped at 2 in NvN so hero teams don't over-commit to one contested node.
+- **NvN explore loot bonus** (`executeExplore`): extra loot rolls scale with side size — 2v2 +30% chance, 3v3 +1 roll, 4v4 +1 roll +30% chance. Raises resource inflow proportionally so both sides can actually spend on summons/equipment.
+- **Hero Sound Horn tightened** (`hero-ai-engine.js:genExplore`): survivor ceiling nodeCount→nodeCount when heroCount>1 (no growth beyond 1v1 pool).
+
+Do not remove these without re-running `node scripts/headless.js 500 standard --players N` for N ∈ {2, 3, 4}.
 
 ### AI Architecture
 

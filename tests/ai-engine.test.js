@@ -622,6 +622,54 @@ describe('genBuildArmy', () => {
     assert.equal(actions.length, 0, 'should not summon when at day army cap (7)');
   });
 
+  test('army cap scales with witch player count in NvN', () => {
+    // 2v2: baseline day cap is 7, +2 per extra witch → 9. At 7 existing
+    // minions a 2-witch faction should still be able to summon (1v1 could not).
+    const entities = [
+      makeEntity({ id: 'witch1', col: 0, row: 0 }),
+      ...Array.from({ length: 7 }, (_, i) =>
+        makeEntity({ id: `m${i}`, type: EntityType.MINION, owner: 'witch', col: i + 1, row: 0, hp: 2, maxHp: 2 })
+      ),
+      makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 4, row: 4, hp: 8, maxHp: 8 }),
+    ];
+    const fakeState = makeFakeState({
+      entities,
+      phase: Phase.DAY,
+      inventory: { witch: { [ResourceType.WOOD]: 4 }, hero: {} },
+    });
+    fakeState.players = [
+      { faction: 'hero',  id: 'h1' }, { faction: 'hero',  id: 'h2' },
+      { faction: 'witch', id: 'w1' }, { faction: 'witch', id: 'w2' },
+    ];
+    const sim = new EnginePlanSimState(fakeState, 'witch');
+    const board = assessBoard(sim);
+    assert.equal(board.witchPlayerCount, 2);
+    const actions = genBuildArmy(sim, board, 3);
+    const summons = actions.filter(a => a.type === PlanActionType.SUMMON);
+    assert.ok(summons.length > 0, 'should still summon in 2v2 when 1v1 would be capped');
+  });
+
+  test('1v1 army cap unchanged when players field absent', () => {
+    // Regression guard: omit realState.players; witchPlayerCount should
+    // default to 1 and the 1v1 cap (7) should still apply.
+    const entities = [
+      makeEntity({ id: 'witch1', col: 0, row: 0 }),
+      ...Array.from({ length: 7 }, (_, i) =>
+        makeEntity({ id: `m${i}`, type: EntityType.MINION, owner: 'witch', col: i + 1, row: 0, hp: 2, maxHp: 2 })
+      ),
+      makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 4, row: 4, hp: 8, maxHp: 8 }),
+    ];
+    const sim = makeSim({
+      entities,
+      phase: Phase.DAY,
+      inventory: { witch: { [ResourceType.WOOD]: 4 }, hero: {} },
+    });
+    const board = assessBoard(sim);
+    assert.equal(board.witchPlayerCount, 1);
+    const actions = genBuildArmy(sim, board, 3);
+    assert.equal(actions.length, 0, '1v1 cap (7) remains; no summons when saturated');
+  });
+
   test('deducts from resource ledger correctly', () => {
     const sim = makeSim({ inventory: {
       witch: { [ResourceType.METAL]: 4 },

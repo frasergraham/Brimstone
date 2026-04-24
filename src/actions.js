@@ -601,13 +601,28 @@ export function executeExplore(state, actor) {
   const isHerbalist = actor.type === EntityType.SURVIVOR &&
     actor.ability === SurvivorAbility.HERBALIST;
 
-  if (t.type === TileType.BUILDING && t.building && BUILDING_LOOT[t.building]) {
-    const table = _effectiveLoot(state, 'buildings', t.building, BUILDING_LOOT[t.building]);
-    _applyLoot(state, actor, rollLoot(table), log, lootItems);
-  } else {
-    const baseTable = TERRAIN_LOOT[t.type] || TERRAIN_LOOT['grass'];
-    const table = _effectiveLoot(state, 'terrain', t.type, baseTable);
-    _applyLoot(state, actor, rollLoot(table), log, lootItems);
+  const runLoot = () => {
+    if (t.type === TileType.BUILDING && t.building && BUILDING_LOOT[t.building]) {
+      const table = _effectiveLoot(state, 'buildings', t.building, BUILDING_LOOT[t.building]);
+      _applyLoot(state, actor, rollLoot(table), log, lootItems);
+    } else {
+      const baseTable = TERRAIN_LOOT[t.type] || TERRAIN_LOOT['grass'];
+      const table = _effectiveLoot(state, 'terrain', t.type, baseTable);
+      _applyLoot(state, actor, rollLoot(table), log, lootItems);
+    }
+  };
+  runLoot();
+
+  // NvN bonus rolls: larger teams field more units and need more resources.
+  // 1v1 → 1 roll; 2v2+ → one extra roll per additional player per side, with a
+  // half-step 30% bonus roll between integer steps. Skipped entirely in 1v1 so
+  // tests that mock Math.random() with fixed sequences aren't perturbed.
+  const sidePlayers = Math.max(1, Math.floor((state.players?.length || 2) / 2));
+  if (sidePlayers > 1) {
+    const extraRolls = Math.floor((sidePlayers - 1) / 2);
+    for (let i = 0; i < extraRolls; i++) runLoot();
+    const bonusProb = 0.3 * ((sidePlayers - 1) % 2);
+    if (bonusProb > 0 && Math.random() < bonusProb) runLoot();
   }
 
   if (isHerbalist && getFaction(actor.owner).canDiscoverNPCs()) {

@@ -235,6 +235,8 @@ export function assessBoard(sim) {
     totalResources, metalCount, woodCount, canAffordSummon, bestSummonType,
     unexploredBuildings,
     totalBudget: sim.actionsLeft + (sim.campaignAIBudgetBonus ?? 0),
+    witchPlayerCount: (sim.playerCounts && sim.playerCounts.witch) || 1,
+    heroPlayerCount:  (sim.playerCounts && sim.playerCounts.hero)  || 1,
   };
 }
 
@@ -259,13 +261,18 @@ export function scoreGoals(board, goalWeights = null) {
   defend = clamp01(defend);
 
   // BUILD_ARMY — always want more units; more bodies = more gang-up = more kills
+  // NvN: thresholds are per-witch, so a 3-witch team doesn't stop summoning
+  // at the same faction-wide minion count a solo witch would (which left
+  // each NvN witch at ~2 minions vs a solo witch's 5–6).
   let army = 0;
   const nodeCount = board.nodes.length || 3;
-  if (board.minionCount < nodeCount) {
-    army = 0.9; // urgent: fewer bodies than nodes
-  } else if (board.minionCount < nodeCount + 2) {
+  const witchCount = board.witchPlayerCount || 1;
+  const perWitchMinions = board.minionCount / witchCount;
+  if (perWitchMinions < nodeCount) {
+    army = 0.9; // urgent: fewer bodies than nodes per witch
+  } else if (perWitchMinions < nodeCount + 2) {
     army = 0.6; // still want reserves for hunting + node control
-  } else if (board.minionCount < nodeCount + 3) {
+  } else if (perWitchMinions < nodeCount + 3) {
     army = 0.35; // building toward overwhelming force
   } else {
     army = 0.15; // large army — shift to using it
@@ -275,11 +282,13 @@ export function scoreGoals(board, goalWeights = null) {
   // If no resources and nothing to explore, army building is less useful
   if (!board.canAffordSummon && board.unexploredBuildings.length === 0) army *= 0.3;
   // Early game: high priority to build up before hero gets survivors
-  if (board.round <= 4 && board.minionCount < 3) army = Math.max(army, 0.9);
+  if (board.round <= 4 && perWitchMinions < 3) army = Math.max(army, 0.9);
   army = clamp01(army);
 
-  // CONTROL_NODES — the primary witch win condition; always high priority
-  let control = 0.45; // base — bonuses push it higher based on game state
+  // CONTROL_NODES — the primary witch win condition; always high priority.
+  // NvN: bump the base so node budget competes with the (also-scaled) BUILD_ARMY
+  // goal; otherwise extra minions cluster near witches instead of reaching nodes.
+  let control = witchCount > 1 ? 0.60 : 0.45;
   const uncovered = board.nodes.filter(n => n.controller !== 'witch' || !n.witchPresent).length;
   const allCovered = uncovered === 0;
   control += uncovered * 0.1;
@@ -342,8 +351,9 @@ export function scoreGoals(board, goalWeights = null) {
   }
 
   // Early-game focus: no enemies visible + unexplored buildings + few minions → build army
+  // Per-witch threshold so a 3-witch team doesn't falsely register as "full" at 4 minions.
   if (board.visibleHeroes.length === 0 && board.unexploredBuildings.length > 0 &&
-      board.minionCount < nodeCount + 1) {
+      perWitchMinions < nodeCount + 1) {
     scores[Goal.BUILD_ARMY] = clamp01(scores[Goal.BUILD_ARMY] + 0.4);
     scores[Goal.DEFEND_WITCH] = Math.min(scores[Goal.DEFEND_WITCH], 0.1);
     scores[Goal.HUNT_HEROES] = 0; // no targets visible
@@ -852,7 +862,13 @@ export function genBuildArmy(sim, board, budget) {
 function _trySummons(actions, sim, board, remaining) {
   if (!board.witch || remaining <= 0) return actions;
 
-  const armyCap = (board.isNight || board.phase === Phase.DUSK) ? 10 : 7;
+  // Minion cap scales with witch team size so NvN witches aren't rationed to
+  // a solo-witch ceiling. 1v1 baseline unchanged; each extra witch adds +4
+  // (tuned alongside the scaled hidden-survivor pool so both sides field a
+  // denser force in 2v2+ without breaking the per-side ratio).
+  const witchBonus = 4 * ((board.witchPlayerCount ?? 1) - 1);
+  const baseCap = (board.isNight || board.phase === Phase.DUSK) ? 10 : 7;
+  const armyCap = baseCap + witchBonus;
   let currentArmy = board.minionCount;
 
   while (remaining > 0 && currentArmy < armyCap) {
@@ -912,7 +928,11 @@ export function genControlNodes(sim, board, budget) {
     hexDistance(h.col, h.row, n.obj.col, n.obj.row) <= 2
   );
 
-  // Score and sort nodes
+  // Score and sort nodes. In NvN, match the hero's more aggressive feasibility
+  // floor (0.05) — with more witches/minions available, contesting long-shot
+  // nodes becomes worthwhile rather than conceding them.
+  const isNvN = (board.witchPlayerCount || 1) > 1;
+  const feasibilityFloor = isNvN ? 0.05 : 0.1;
   const targetNodes = board.nodes
     .filter(n => n.controller !== 'witch' || !n.witchPresent || n.heroPresent || heroThreatenedNode(n))
     .map(n => ({
@@ -920,7 +940,7 @@ export function genControlNodes(sim, board, budget) {
       feasibility: scoreNodeFeasibility(n, 'witch', sim.entities),
       allyClaimed: allyClaimed ? n.obj.hexes?.some(h => allyClaimed.has(hexKey(h.col, h.row))) : false,
     }))
-    .filter(n => n.feasibility >= 0.1 && !n.allyClaimed)
+    .filter(n => n.feasibility >= feasibilityFloor && !n.allyClaimed)
     .sort((a, b) => {
       const aPrio = a.controller === 'hero' ? 0 : (a.controller === 'witch' && a.witchPresent ? 2 : 1);
       const bPrio = b.controller === 'hero' ? 0 : (b.controller === 'witch' && b.witchPresent ? 2 : 1);
@@ -928,11 +948,16 @@ export function genControlNodes(sim, board, budget) {
       return a.distToNearest - b.distToNearest;
     });
 
-  // Determine how many units to send per node — overwhelming force wins
+  // Determine how many units to send per node — overwhelming force wins.
+  // NvN bumps the baseline so the extra minions actually reach nodes instead
+  // of clustering near the witch. At 3v3+ the minion supply is large enough
+  // to justify 3 units per node.
   const scoringImminent = board.roundsToScoring <= 2;
+  const witchTeamSize = board.witchPlayerCount || 1;
+  const nvnBaseline = witchTeamSize >= 3 ? 3 : (isNvN ? 2 : 1);
   const unitsPerNode = board.canSweepNodes ? 4 :
-                       (scoringImminent ? 3 :
-                       (board.roundsToScoring <= 4 ? 2 : 1));
+                       (scoringImminent ? Math.max(3, nvnBaseline) :
+                       (board.roundsToScoring <= 4 ? Math.max(2, nvnBaseline) : nvnBaseline));
   const maxStepsPerUnit = scoringImminent ? 4 : 3;
 
   for (const node of targetNodes) {
