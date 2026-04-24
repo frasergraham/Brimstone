@@ -1,8 +1,9 @@
 # Faction Expansion: Day vs Night, N Factions per Side
 
-**Status:** in progress
+**Status:** PRs 1, 2, 3, 4a, 5, 6, 8, 9 landed. PR 4b and PR 7 deferred (see Working notes).
 **Branch:** `claude/faction-system-expansion-epEZv`
 **Started:** 2026-04-23
+**Wrapped:** 2026-04-24
 
 This is a living plan. Update it as PRs land or new blockers surface.
 
@@ -193,6 +194,17 @@ The picks are validated against the registered factions for each side; unknown i
 These first-pass numbers are intentionally provisional — the user's spec said the new factions get "different stats and strengths/weaknesses". Tuning each into the 38–62% band against the side default is follow-up work tracked outside this branch. The flag exists so we can iterate quickly when each stub graduates from "registered" to "implemented".
 
 `ai-matrix.js` and `combat-sim.js` did not need changes — they already iterate the existing personality registries. As stubs gain own personalities later, those scripts will pick them up automatically via `Faction.getPersonalities()`.
+
+### PR 9 (landed)
+Synced four core technical docs to the new model:
+
+- `docs/01-architecture-overview.md` — opening sentence rephrased to "Day vs Night with multiple factions per side"; the state-shape table now flags that `inventory.hero/.witch` storage keys persist behind `state.inventoryForSide('day'|'night')` accessors.
+- `docs/04-network-protocol.md` — added the `setFaction` message, documented `claimSlot`'s optional `factionId`, and added a "Lobby slot fields" table covering the three coexisting fields (`faction`, `side`, `factionId`) on every slot.
+- `docs/05-game-systems.md` — replaced the entity-type table and ASCII diagram with a side-grouped layout listing all 6 leader types and a stub-status column. Entity-ownership section grew to cover the new `factionId` field alongside `owner` / `ownerId`.
+- `docs/06-ai-architecture.md` — single-paragraph note that stub factions inherit their parent side's personality registry until they get their own implementation.
+- `docs/07-data-persistence.md` — documented the SAVE_VERSION=2 deserialise-time `'hero' → 'paladin'` entity-type migration.
+
+The docs that did not need updating (no architecture change in their scope): `02-module-dependencies.md`, `03-state-machines.md`. The `setFaction` lobby action is a single new message rather than a new state-machine transition, so the AppMode / RoomPhase diagrams stay accurate.
 
 ### PR 6 (landed)
 Offline single-player faction picker is now a 6-tile grid grouped by side: Day (Paladin / Rogue / Captain) and Night (Witch / Necromancer / Brute). Stub factions render a small `stub` badge. Side rows have day-gold and night-purple accent borders pulled from the `--day` / `--night` CSS custom properties.

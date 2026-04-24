@@ -1,6 +1,6 @@
 # Architecture Overview
 
-Brimstone is a browser-based, turn-based hex-grid strategy game. Two asymmetric factions — **Hero** and **Witch** — fight across a procedurally-generated map set in cursed colonial New England.
+Brimstone is a browser-based, turn-based hex-grid strategy game. Two opposing **Sides** — **Day** and **Night** — fight across a procedurally-generated map set in cursed colonial New England. Each side has multiple selectable **Factions**: Day = Paladin / Rogue / Captain; Night = Witch / Necromancer / Brute. (See `docs/05-game-systems.md` for the per-faction stat tables and stub status.)
 
 ## High-Level Architecture
 
@@ -107,8 +107,8 @@ The game runs in two distinct modes that share core logic but have separate orch
 |-----------|------|-------------|
 | `state.tiles` | `Map<"col,row", Tile>` | O(1) hex lookup by string key |
 | `state.entities` | `Entity[]` | All units (alive and dead) |
-| `state.inventory` | `{ hero: {...}, witch: {...} }` | Faction resource pools |
-| `state.nodeScore` | `{ hero: number, witch: number }` | Dawn/dusk scoring points |
+| `state.inventory` | `{ hero: {...}, witch: {...} }` | Side resource pools (storage keys remain `hero`/`witch`; access via `state.inventoryForSide('day'\|'night')`) |
+| `state.nodeScore` | `{ hero: number, witch: number }` | Dawn/dusk scoring points (same side-keyed access via `state.nodeScoreForSide`) |
 | `state.players` | `Map<playerId, PlayerRecord>` | N-player registry (online) |
 | `PlanAction[]` | Array | Ordered queue of planned actions per player |
 | `StepRecord[]` | Array | Resolution output: per-step events + entity snapshots |
