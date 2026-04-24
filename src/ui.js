@@ -227,7 +227,7 @@ export class UIController {
       if (this._selectedEntity && this._selectedEntity.alive) {
         // Zoom to selected unit
         const pos = this._planMode ? (this._getProjectedPos(this._selectedEntity.id) ?? this._selectedEntity) : this._selectedEntity;
-        this.renderer.frameHexes([pos], { maxZoom: 2.0, paddingHexes: 3, duration: 400 });
+        this.renderer.frameHexes([pos], { maxZoom: 3.5, paddingHexes: 1.5, duration: 400 });
       } else {
         // No selection — frame all player's units
         const faction = this._planFaction ?? (!this.state.heroIsAI ? 'hero' : 'witch');
