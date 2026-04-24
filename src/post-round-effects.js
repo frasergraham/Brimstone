@@ -8,14 +8,17 @@ import { Phase } from './game.js';
 import { EntityType } from './entities.js';
 import { TileType } from './tiles.js';
 import { hexKey } from './hex.js';
+import { tickEffects, EFFECTS } from './effects.js';
 
 // ── Event types ─────────────────────────────────────────────────────────────
 
 export const PostRoundEventType = Object.freeze({
-  DAMAGE:  'damage',
-  KILL:    'kill',
-  SHELTER: 'shelter',
-  SAFE:    'safe',
+  DAMAGE:        'damage',
+  KILL:          'kill',
+  SHELTER:       'shelter',
+  SAFE:          'safe',
+  EFFECT_TICK:   'effect_tick',
+  EFFECT_EXPIRE: 'effect_expire',
 });
 
 // ── Attrition schedule ──────────────────────────────────────────────────────
@@ -163,3 +166,54 @@ function nightAttritionEffect(state) {
 }
 
 registerPostRoundEffect('night-attrition', nightAttritionEffect);
+
+// ── Status effects tick ────────────────────────────────────────────────────
+// Runs every round (regardless of phase): poisoned/bleeding deal DOT, then
+// numeric durations decrement. Mission/permanent effects don't decrement.
+//
+// Registered AFTER night-attrition so a survivor doesn't simultaneously take
+// night damage and bleed damage on the same round (rare in practice; this
+// ordering preserves the existing attrition log/UX as the headline event).
+
+function statusEffectsTick(state) {
+  const { dotEvents, expiredEvents } = tickEffects(state);
+  const events = [];
+  for (const ev of dotEvents) {
+    const def = EFFECTS[ev.effectId];
+    events.push({
+      type:       ev.killed ? PostRoundEventType.KILL : PostRoundEventType.EFFECT_TICK,
+      entityId:   ev.entityId,
+      ownerId:    ev.ownerId,
+      entityName: ev.entityName,
+      col:        ev.col,
+      row:        ev.row,
+      amount:     ev.amount,
+      killed:     ev.killed,
+      text:       ev.text,
+      flash: ev.killed ? null : {
+        color:     'rgba(160,40,80,0.5)',
+        textColor: 'rgba(255,180,200,1)',
+        label:     `-${ev.amount} ${def?.icon ?? ''}`.trim(),
+        duration:  1800,
+        fontScale: 1.2,
+      },
+    });
+  }
+  for (const ev of expiredEvents) {
+    events.push({
+      type:       PostRoundEventType.EFFECT_EXPIRE,
+      entityId:   ev.entityId,
+      ownerId:    ev.ownerId,
+      entityName: ev.entityName,
+      col:        ev.col,
+      row:        ev.row,
+      amount:     0,
+      killed:     false,
+      text:       ev.text,
+      flash:      null,
+    });
+  }
+  return events;
+}
+
+registerPostRoundEffect('status-effects', statusEffectsTick);

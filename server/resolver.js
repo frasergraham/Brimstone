@@ -16,6 +16,7 @@ import { PlanActionType, snapEntity, groupPlanByEntity } from '../src/planner.js
 import { Phase, countHeldNodes } from '../src/game.js';
 import { ResourceType } from '../src/tiles.js';
 import { getFaction } from '../src/factions.js';
+import { effectsBlockActions } from '../src/effects.js';
 
 // groupByEntity removed — now uses groupPlanByEntity from planner.js
 const groupByEntity = groupPlanByEntity;
@@ -106,6 +107,14 @@ function runAction(state, action, faction, playerId = null) {
     if (entity.ownerId !== playerId) return { kind: 'fail', reason: 'Entity belongs to another player.' };
   } else {
     if (entity.owner !== faction) return { kind: 'fail', reason: 'Wrong faction.' };
+  }
+
+  // Stunned (and any future blocking effect): silently skip the action so
+  // later steps in the same plan still run. The effect itself decrements at
+  // round-end via post-round-effects, so a 1-round stun blocks exactly the
+  // round it was applied in.
+  if (effectsBlockActions(entity)) {
+    return { kind: 'skip', reason: `${entity.displayName} is stunned and cannot act.` };
   }
 
   switch (action.type) {

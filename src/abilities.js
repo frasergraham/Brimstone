@@ -129,6 +129,28 @@ export const ABILITIES = Object.freeze({
     label: 'Scout',
     description: 'Reveals night-side units within 3 hexes',
   },
+  berserker: {
+    id: 'berserker',
+    kind: 'passive',
+    label: 'Berserker',
+    description: 'Enters frenzy after the second kill in a round',
+    // After a kill is registered (killsThisRound incremented), if the unit has
+    // killed >= 2 times this round, they gain Frenzied (+1 ATK / -1 DEF) for
+    // 1 round. Effect is dispatched by src/effects.js → dispatchTrigger('kill').
+    triggers: [
+      { on: 'kill', condition: 'killsThisRound>=2', apply: 'frenzied' },
+    ],
+  },
+  eagle_eye: {
+    id: 'eagle_eye',
+    kind: 'passive',
+    label: 'Eagle Eye',
+    description: '+1 attack range',
+    // Range bonus is composed via Entity.getRange(). Implemented as a
+    // statMods-style hook so adding range mods via abilities is uniform
+    // with weapons/effects.
+    statMods: { range: 1 },
+  },
 
   // ── Faction-innate leader abilities (Phase 5) ────────────────────────
   // Pushed onto leaders by `Faction.createLeader()` via

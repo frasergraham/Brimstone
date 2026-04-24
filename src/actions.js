@@ -20,6 +20,7 @@ import {
 } from './entities.js';
 import { Phase } from './game.js';
 import { getFaction } from './factions.js';
+import { dispatchTrigger } from './effects.js';
 
 export const ActionType = Object.freeze({
   MOVE:         'move',
@@ -728,8 +729,9 @@ function _applySplashDamage(state, col, row, excludeIds, log) {
   const splashKills = [];
   const splashHits  = [];
   for (const b of bystanders) {
-    const wasKilled = b.takeDamage(1);
-    log.push(`💢 ${b.displayName} caught in the blast — takes 1 splash damage! (${b.hp}/${b.maxHp} HP)`);
+    const dmg = b.applyIncomingDamage(1);
+    const wasKilled = b.takeDamage(dmg);
+    log.push(`💢 ${b.displayName} caught in the blast — takes ${dmg} splash damage! (${b.hp}/${b.maxHp} HP)`);
     splashHits.push({ id: b.id, name: b.displayName, owner: b.owner, type: b.type,
                       ownerId: b.ownerId, killed: !!wasKilled, col: b.col, row: b.row });
     if (wasKilled) {
@@ -851,10 +853,13 @@ export function executeBattle(state, actor, target) {
     // Crushing blow: attacker's roll is at least double the defender's roll
     const totalDmg = isCrush ? 2 : 1;
 
-    // All damage goes directly to the defender
+    // All damage goes directly to the defender. Effects on the defender
+    // (e.g. wounded → +1 damage taken) amplify each hit.
     for (let d = 0; d < totalDmg; d++) {
-      damage += 1;
-      const wasKilled = target.takeDamage(1);
+      const inc = target.applyIncomingDamage(1);
+      damage += inc;
+      const wasKilled = target.takeDamage(inc);
+      dispatchTrigger('damaged', target, { state, amount: inc, source: actor });
       if (wasKilled) { killed = true; break; }
     }
 
@@ -868,6 +873,9 @@ export function executeBattle(state, actor, target) {
     if (killed) {
       log.push(`${target.displayName} is slain!`);
       getFaction(actor.owner).trackKill(state);
+      actor.killsThisRound = (actor.killsThisRound ?? 0) + 1;
+      dispatchTrigger('damaged-fatal', target, { state, source: actor });
+      dispatchTrigger('kill', actor, { state, target });
       state.entities = state.entities.filter(e => e.id !== target.id);
     } else if (damage > 0) {
       const label = damage >= 2 ? `${damage} damage (crushing blow!)` : `${damage} damage`;
@@ -885,6 +893,8 @@ export function executeBattle(state, actor, target) {
       for (const sk of splashKills) {
         if (sk.owner !== actor.owner) {
           getFaction(actor.owner).trackKill(state);
+          actor.killsThisRound = (actor.killsThisRound ?? 0) + 1;
+          dispatchTrigger('kill', actor, { state, target: sk });
         }
       }
     }
@@ -893,12 +903,16 @@ export function executeBattle(state, actor, target) {
 
     // Counter-attack: defender's roll is at least double the attacker's roll
     if (defenseRoll >= 2 * attackRoll && actor.alive) {
-      const counterKilled = actor.takeDamage(1);
-      counterDmg = 1;
-      log.push(`⚔ ${target.displayName} counter-attacks! ${actor.displayName} takes 1 damage.`);
+      counterDmg = actor.applyIncomingDamage(1);
+      const counterKilled = actor.takeDamage(counterDmg);
+      log.push(`⚔ ${target.displayName} counter-attacks! ${actor.displayName} takes ${counterDmg} damage.`);
+      dispatchTrigger('damaged', actor, { state, amount: counterDmg, source: target });
       if (counterKilled) {
         log.push(`${actor.displayName} is slain by the counter!`);
         getFaction(target.owner).trackKill(state);
+        target.killsThisRound = (target.killsThisRound ?? 0) + 1;
+        dispatchTrigger('damaged-fatal', actor, { state, source: target });
+        dispatchTrigger('kill', target, { state, target: actor });
         state.entities = state.entities.filter(e => e.id !== actor.id);
 
         // Counter-kill splashes other units on the attacker's tile (exclude target)
@@ -908,6 +922,8 @@ export function executeBattle(state, actor, target) {
         for (const sk of counterSplash.splashKills) {
           if (sk.owner !== target.owner) {
             getFaction(target.owner).trackKill(state);
+            target.killsThisRound = (target.killsThisRound ?? 0) + 1;
+            dispatchTrigger('kill', target, { state, target: sk });
           }
         }
       } else {
@@ -1309,8 +1325,10 @@ export function executeGuardStrike(state, guardian, target) {
     const totalDmg = isCrush ? 2 : 1;
 
     for (let d = 0; d < totalDmg; d++) {
-      damage += 1;
-      const wasKilled = target.takeDamage(1);
+      const inc = target.applyIncomingDamage(1);
+      damage += inc;
+      const wasKilled = target.takeDamage(inc);
+      dispatchTrigger('damaged', target, { state, amount: inc, source: guardian });
       if (wasKilled) { killed = true; break; }
     }
 
@@ -1323,6 +1341,9 @@ export function executeGuardStrike(state, guardian, target) {
     if (killed) {
       log.push(`${target.displayName} is slain by the guard strike!`);
       getFaction(guardian.owner).trackKill(state);
+      guardian.killsThisRound = (guardian.killsThisRound ?? 0) + 1;
+      dispatchTrigger('damaged-fatal', target, { state, source: guardian });
+      dispatchTrigger('kill', guardian, { state, target });
       state.entities = state.entities.filter(e => e.id !== target.id);
     } else {
       const label = damage >= 2 ? `${damage} damage (crushing blow!)` : `${damage} damage`;
@@ -1338,6 +1359,8 @@ export function executeGuardStrike(state, guardian, target) {
       for (const sk of splashKills) {
         if (sk.owner !== guardian.owner) {
           getFaction(guardian.owner).trackKill(state);
+          guardian.killsThisRound = (guardian.killsThisRound ?? 0) + 1;
+          dispatchTrigger('kill', guardian, { state, target: sk });
         }
       }
     }

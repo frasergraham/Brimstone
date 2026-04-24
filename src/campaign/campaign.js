@@ -19,8 +19,16 @@ const SAVE_VERSION = 2;
 /**
  * Serialize a survivor entity into a plain object for campaign roster storage.
  * Captures all fields needed to reconstruct the entity between missions.
+ *
+ * Permanent effects (duration === 'permanent') carry over between missions —
+ * these are typically traits earned mid-campaign. Mission- and round-scoped
+ * effects are deliberately dropped: they belong to a single deployment and
+ * shouldn't shape the next mission's starting roster.
  */
 export function snapshotSurvivor(entity) {
+  const permanentEffects = Array.isArray(entity.effects)
+    ? entity.effects.filter(e => e.duration === 'permanent').map(e => ({ ...e }))
+    : [];
   return {
     name:         entity.name,
     title:        entity.title,
@@ -34,6 +42,7 @@ export function snapshotSurvivor(entity) {
     defense:      entity.defense,
     weapon:       entity.weapon,
     items:        { ...entity.items },
+    effects:      permanentEffects,
   };
 }
 

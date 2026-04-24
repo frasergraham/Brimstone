@@ -53,6 +53,10 @@ export function serializeState(state) {
     actedThisTurn: e.actedThisTurn ?? false,
     defendCount:   e.defendCount   ?? 0,
     guarding:      e.guarding      ?? 0,
+    killsThisRound: e.killsThisRound ?? 0,
+    effects:       Array.isArray(e.effects)
+      ? e.effects.map(rec => ({ ...rec }))
+      : [],
     items:         { ...e.items },
     // alive is omitted — Entity derives it from hp via getter
   }));
@@ -159,9 +163,15 @@ export function deserializeState(snap) {
   // ── Entities — restore as real Entity instances so game-logic methods work ─
   state.entities = snap.entities.map(data => {
     const e = Object.create(Entity.prototype);
-    Object.assign(e, data, { items: { ...(data.items || {}) } });
+    Object.assign(e, data, {
+      items:   { ...(data.items   || {}) },
+      effects: Array.isArray(data.effects) ? data.effects.map(r => ({ ...r })) : [],
+    });
     // Ensure ownerId is present even on saves from before the multiplayer update
     if (e.ownerId === undefined) e.ownerId = null;
+    // Back-compat for pre-effects saves
+    if (!Array.isArray(e.effects)) e.effects = [];
+    if (e.killsThisRound === undefined) e.killsThisRound = 0;
     // Hero → Paladin entity-type rename. Pre-PR4 saves carry type='hero';
     // re-key them to 'paladin' so the new BASE_STATS/BASE_AGILITY tables
     // and `e.type === EntityType.PALADIN` checks all line up.

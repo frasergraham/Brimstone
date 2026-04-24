@@ -1253,6 +1253,41 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   white-space: nowrap;
 }
 
+/* Status-effect pip strip — one icon per active effect (wounded, frenzied,
+   poisoned, stunned, …). Tap/long-press shows the effect's tooltip via
+   the title attribute. */
+.usb-effects {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+  margin-left: 0.1rem;
+}
+.usb-effect-pip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.1rem;
+  height: 1.1rem;
+  padding: 0 0.25rem;
+  font-size: 0.85rem;
+  line-height: 1;
+  border-radius: 0.55rem;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.22);
+  color: var(--text-bright);
+  cursor: help;
+  user-select: none;
+}
+.usb-effect-pip[data-kind="bad"]  { background: rgba(192,57,43,0.22); border-color: rgba(231,76,60,0.55); }
+.usb-effect-pip[data-kind="good"] { background: rgba(76,175,125,0.22); border-color: rgba(76,175,125,0.55); }
+.usb-effect-pip-dur {
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  margin-left: 0.15rem;
+}
+
 /* (i) toggle: reveals ATK/DEF and ability text in an expanded block */
 .usb-info-btn {
   pointer-events: auto;
