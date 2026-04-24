@@ -1403,7 +1403,17 @@ export class UIController {
     const clickedEntities = state.entities.filter(e => {
       if (!e.alive || e.owner !== ownerFilter) return false;
       // In online MP, only allow selecting entities owned by the local player.
-      if (this.myPlayerId && e.ownerId && e.ownerId !== this.myPlayerId) return false;
+      if (this.myPlayerId && e.ownerId && e.ownerId !== this.myPlayerId) {
+        // Diagnostic: when a friendly entity is rejected by ownerId, log
+        // the mismatch exactly once per entity so we can tell whether the
+        // client's myPlayerId drifted from the entity's ownerId.
+        if (e.col === hex.col && e.row === hex.row && !this._loggedOwnerMismatch?.has(e.id)) {
+          this._loggedOwnerMismatch = this._loggedOwnerMismatch ?? new Set();
+          this._loggedOwnerMismatch.add(e.id);
+          console.warn(`[ui] selection rejected as ally: entity ${e.id} (${e.type}, owner=${e.owner}) ownerId=${e.ownerId} ≠ myPlayerId=${this.myPlayerId}`);
+        }
+        return false;
+      }
       const ghostPos = lastGhostPos?.get(e.id);
       // In planning mode, if the entity has been moved in the plan, use ONLY the
       // ghost position — it should no longer appear on its real tile.

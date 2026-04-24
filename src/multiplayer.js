@@ -17,13 +17,18 @@ const RECONNECT_HARD_TIMEOUT  = 30_000; // absolute wall-clock limit for all rec
 // ── MirrorEntity ─────────────────────────────────────────────────────────────
 
 const _DISPLAY_NAMES = {
-  hero:       'The Hero',
-  witch:      'The Witch',
-  survivor:   'Survivor',
-  zombie:     'Zombie',
-  minion:     'Minion',
-  wood_golem: 'Wood Golem',
-  iron_golem: 'Iron Golem',
+  paladin:     'Ishmael Charger',
+  hero:        'Ishmael Charger',  // legacy alias of paladin
+  rogue:       'Mercy Sloane',
+  captain:     'Captain Eli Ward',
+  witch:       'The Witch',
+  necromancer: 'The Necromancer',
+  brute:       'The Brute',
+  survivor:    'Survivor',
+  zombie:      'Zombie',
+  minion:      'Minion',
+  wood_golem:  'Wood Golem',
+  iron_golem:  'Iron Golem',
 };
 
 class MirrorEntity {
