@@ -24,6 +24,7 @@ import { PlanActionType, groupPlanByEntity } from './planner.js';
 import { hexDistance, getNeighbors, hexKey } from './hex.js';
 import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD } from './tiles.js';
 import { sightRange } from './actions.js';
+import { UNIT_TYPES } from './unit-types.js';
 import { getFaction, findFaction, allFactions, getFactionsForSide } from './factions.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
@@ -871,6 +872,29 @@ async function _runLocalResolution(skipSummary = false) {
  * Uses result.damage / result.counterDmg directly so that simultaneous battles in
  * the same step each show only their own damage, not accumulated step damage.
  */
+// Dispatch the attacker-side battle animation. Ranged attacks (actor
+// range > 1, or the resolver flagged the battleSnap as ranged) fire a
+// projectile from attacker → target; everything else keeps the melee
+// lunge. Close-range ranged attacks (dist == 1) still use the projectile
+// so the visual language stays consistent.
+function _playAttackIntroAnim(actorSnap, targetSnap, fromCol, fromRow, toCol, toRow, ranged) {
+  const isRanged = !!ranged || (actorSnap?.range ?? 1) > 1;
+  if (isRanged) {
+    const projectileType =
+      UNIT_TYPES[actorSnap.type]?.projectileType ?? 'sparkle';
+    renderer.addProjectileAnim(projectileType, fromCol, fromRow, toCol, toRow, {
+      owner: actorSnap.owner,
+    });
+  } else {
+    renderer.addLungeAnim(
+      actorSnap.id,
+      fromCol, fromRow,
+      toCol, toRow,
+      actorSnap.type, actorSnap.owner, actorSnap.title ?? null,
+    );
+  }
+}
+
 function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
   renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
   if (result?.damage)      renderer.addHpChangeFlash(targetSnap.col, targetSnap.row, -(result.damage));
@@ -1386,14 +1410,21 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             const lungeFromRow = actorDisplay?.row  ?? actorSnap.row;
             const lungeToCol   = targetDisplay?.col ?? targetSnap.col;
             const lungeToRow   = targetDisplay?.row ?? targetSnap.row;
-            renderer.addLungeAnim(
-              actorSnap.id,
+            _playAttackIntroAnim(
+              actorSnap, targetSnap,
               lungeFromCol, lungeFromRow,
               lungeToCol, lungeToRow,
-              actorSnap.type, actorSnap.owner, actorSnap.title ?? null,
+              battleSnaps.ranged,
             );
             redrawFn();
-            await playbackDelay(speed === 'vfast' ? 140 : 280);
+            // Ranged attacks travel on their own 320ms timer — give them
+            // enough room to visibly land before the impact flash fires in
+            // fast/vfast modes (cinematic awaits dialog dismissal anyway).
+            const isRangedIntro = !!battleSnaps.ranged || (actorSnap?.range ?? 1) > 1;
+            const introDelay = isRangedIntro
+              ? (speed === 'vfast' ? 260 : 340)
+              : (speed === 'vfast' ? 140 : 280);
+            await playbackDelay(introDelay);
 
             // ── Step 2: Battle hex highlights ────────────────────────────────
             {
@@ -1526,15 +1557,16 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (!_autoplay) {
         const speed = ui?.speedMode ?? 'cinematic';
 
-        // Lunge toward empty hex
+        // Lunge or projectile toward the empty hex — ranged units still
+        // fire a shot that whiffs, melee leans in and swings at nothing.
         const actorDisplay = state.entities.find(e => e.id === actorSnap.id);
         const lungeFromCol = actorDisplay?.col ?? actorSnap.col;
         const lungeFromRow = actorDisplay?.row ?? actorSnap.row;
-        renderer.addLungeAnim(
-          actorSnap.id,
+        _playAttackIntroAnim(
+          actorSnap, null,
           lungeFromCol, lungeFromRow,
           tCol, tRow,
-          actorSnap.type, actorSnap.owner, actorSnap.title ?? null,
+          ev.battleSnaps?.ranged,
         );
         redrawFn();
         await playbackDelay(speed === 'vfast' ? 140 : 280);
@@ -1544,7 +1576,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         redrawFn();
         await playbackDelay(speed === 'vfast' ? 200 : 400);
 
-        // Return lunge
+        // Return lunge (projectiles self-clear on impact; this is a no-op for them)
         renderer.returnAllLungeAnims();
         if (speed === 'cinematic') await renderer.waitForAnimations();
         redrawFn();
@@ -1625,18 +1657,18 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (!_autoplay) {
         const speed = ui?.speedMode ?? 'cinematic';
 
-        // Lunge: guardian slides toward the target
+        // Guardian snaps toward the target — projectile if ranged, otherwise melee lunge.
         const guardDisplay  = state.entities.find(e => e.id === actorSnap.id);
         const targetDisplay = state.entities.find(e => e.id === targetSnap.id);
         const lungeFromCol = guardDisplay?.col  ?? actorSnap.col;
         const lungeFromRow = guardDisplay?.row  ?? actorSnap.row;
         const lungeToCol   = targetDisplay?.col ?? targetSnap.col;
         const lungeToRow   = targetDisplay?.row ?? targetSnap.row;
-        renderer.addLungeAnim(
-          actorSnap.id,
+        _playAttackIntroAnim(
+          actorSnap, targetSnap,
           lungeFromCol, lungeFromRow,
           lungeToCol, lungeToRow,
-          actorSnap.type, actorSnap.owner, actorSnap.title ?? null,
+          battleSnaps.ranged,
         );
         redrawFn();
         await playbackDelay(speed === 'vfast' ? 140 : 280);

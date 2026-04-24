@@ -1,5 +1,5 @@
 // Action system: definitions, validation, and execution
-import { getNeighbors, hexKey, hexDistance } from './hex.js';
+import { getNeighbors, hexKey, hexDistance, hexRange } from './hex.js';
 import {
   TileType, ResourceType, WEAPON_LABEL, BUILDING_LOOT, TERRAIN_LOOT, rollLoot,
   MAX_FORTIFY_LEVEL, getFortifyCombatBonus, isFortWall,
@@ -300,24 +300,44 @@ export function getValidActions(state, actor) {
   // fogged hexes via the explicit BATTLE_HEX action below.
   // visibleHexes is already computed above (reused from move-reachability) and
   // is non-null iff fog is active.
-  let battleTargets = [
-    ...sameHexEnemies(state, actor),
-    ...adjacentEnemies(state, actor),
-  ];
+  // Ranged units (range > 1) extend target enumeration to any enemy within
+  // their attack range rather than just the adjacent hexes.
+  const actorRange = typeof actor.getRange === 'function' ? actor.getRange() : (actor.range ?? 1);
+  let battleTargets;
+  if (actorRange > 1) {
+    battleTargets = state.entities.filter(e =>
+      e.alive && e.owner !== actor.owner && e.owner !== null && e.id !== actor.id &&
+      hexDistance(actor.col, actor.row, e.col, e.row) <= actorRange
+    );
+  } else {
+    battleTargets = [
+      ...sameHexEnemies(state, actor),
+      ...adjacentEnemies(state, actor),
+    ];
+  }
   if (visibleHexes) {
     battleTargets = battleTargets.filter(e => visibleHexes.has(hexKey(e.col, e.row)));
   }
   if (battleTargets.length) actions.push({ type: ActionType.BATTLE, targets: battleTargets });
 
-  // Battle Hex — blind attack on any adjacent non-river hex (for attacking through fog).
-  // Distinct from BATTLE: no enemy must be known to be present.
-  // At resolution: attacks a random enemy on the hex; skips if hex is empty.
-  const battleHexTargets = [
-    { col: actor.col, row: actor.row }, // same hex (co-located)
-    ...getNeighbors(actor.col, actor.row),
-  ].filter(n => {
+  // Battle Hex — blind attack on any non-river hex within range (for
+  // attacking through fog). Distinct from BATTLE: no enemy must be known to
+  // be present. At resolution: attacks a random enemy on the hex; skips if
+  // the hex is empty. Ranged units (range > 1) target any hex within their
+  // range; ranged attacks don't worry about line-of-sight.
+  const battleHexCandidates = actorRange > 1
+    ? hexRange(actor.col, actor.row, actorRange)
+    : [
+        { col: actor.col, row: actor.row }, // same hex (co-located)
+        ...getNeighbors(actor.col, actor.row),
+      ];
+  const battleHexTargets = battleHexCandidates.filter(n => {
     const nt = tile(state, n.col, n.row);
-    return nt && nt.type !== TileType.RIVER;
+    if (!nt) return false;
+    // Melee: exclude rivers (can't wade/attack into one). Ranged: rivers are
+    // fine as targets (you can shoot over water).
+    if (actorRange <= 1 && nt.type === TileType.RIVER) return false;
+    return true;
   });
   if (battleHexTargets.length) {
     actions.push({ type: ActionType.BATTLE_HEX, targets: battleHexTargets });
@@ -725,6 +745,20 @@ export function executeBattle(state, actor, target) {
   actor.guarding = 0;  // Attacking breaks guard stance
   const log = [];
 
+  // Ranged attacks have a different rule set than melee:
+  //   - No gang-up advantage on either side (the attacker is firing from
+  //     afar, and allies don't flank a shot).
+  //   - No crushing blows; damage is always 1 per hit.
+  //   - No splash on kill (clean single-target).
+  //   - Defender in forest gets +1 DEF (cover).
+  //   - Attacker at close range (dist == 1) fires at disadvantage (1 die).
+  // Phase bonus, fortification, weapon triggers, and counter-attack all
+  // still apply — see plan file for rationale.
+  const atkRange = (typeof actor.getRange === 'function' ? actor.getRange() : (actor.range ?? 1));
+  const distToTarget = hexDistance(actor.col, actor.row, target.col, target.row);
+  const isRanged = atkRange > 1;
+  const isCloseRanged = isRanged && distToTarget <= 1;
+
   // Phase bonus — faction-specific (e.g. witch gets +2 ATK at night)
   const attackerFaction = getFaction(actor.owner);
   const phaseBonus = attackerFaction.getPhaseCombatBonus(state.phase);
@@ -751,18 +785,20 @@ export function executeBattle(state, actor, target) {
   const atkFortAtkBonus = actor.owner === 'witch'  ? 0 : atkFortRaw.attack;
   const fortBonus       = target.owner === 'witch' ? 0 : defFortRaw.defense;
 
-  // Each ally grants +1 advantage die; we also add a small flat +1 per ally
-  // (capped at 3) to avoid over-nerfing high-ally-count swings — best-of-K
-  // saturates around 5.5, which fell short of the old +d3×N gang-up total.
-  const atkAdvantageDice = Math.min(attackerAllies, ADVANTAGE_CAP);
-  const defAdvantageDice = Math.min(defenderAllies, ADVANTAGE_CAP);
-  // Each ally adds +1 advantage die (cap handled inside resolveCombat) plus
-  // +1 flat on the roll; both components cap at ADVANTAGE_CAP. The flat
-  // component keeps swarms competitive with the old +N·d3 gang-up math —
-  // best-of-K alone saturates around 5.5, which proved too weak for witch
-  // minion ganks in the balance sweep.
-  const atkGangupFlat = Math.min(attackerAllies, ADVANTAGE_CAP);
-  const defGangupFlat = Math.min(defenderAllies, ADVANTAGE_CAP);
+  // Forest-cover bonus — ranged-only. The defender blends into the trees
+  // and gains +1 DEF against incoming projectiles. Melee attackers are
+  // already in the same thicket, so cover does not apply.
+  const forestCoverBonus = (isRanged && defTile?.type === TileType.FOREST) ? 1 : 0;
+
+  // Gang-up: melee only. Ranged attacks explicitly ignore ally adjacency
+  // for both attacker and defender.
+  const atkAdvantageDice = isRanged ? 0 : Math.min(attackerAllies, ADVANTAGE_CAP);
+  const defAdvantageDice = isRanged ? 0 : Math.min(defenderAllies, ADVANTAGE_CAP);
+  const atkGangupFlat    = isRanged ? 0 : Math.min(attackerAllies, ADVANTAGE_CAP);
+  const defGangupFlat    = isRanged ? 0 : Math.min(defenderAllies, ADVANTAGE_CAP);
+  // Close-range disadvantage — ranged unit shooting at an adjacent target
+  // rolls its attack pool with 1 disadvantage die (best-of-K math handles it).
+  const atkDisadvantageDice = isCloseRanged ? 1 : 0;
 
   // Fatigue: faction-specific defense penalty based on defend count this round
   const defenderFaction = getFaction(target.owner);
@@ -776,8 +812,9 @@ export function executeBattle(state, actor, target) {
       // nerf to witch's night window; see CLAUDE.md §Tuning for the sweep.
       extraAtkBonus: atkFortAtkBonus + phaseBonus + atkGangupFlat,
       atkAdvantageDice,
+      atkDisadvantageDice,
       defAdvantageDice,
-      extraDefBonus: fortBonus + defGangupFlat,
+      extraDefBonus: fortBonus + defGangupFlat + forestCoverBonus,
       fatiguePenalty,
       state,
     });
@@ -787,14 +824,18 @@ export function executeBattle(state, actor, target) {
   target.defendCount += 1;
 
   const phaseNote  = phaseBonus > 0 ? ' (🌙 night bonus)' : '';
-  const gangNote    = attackerAllies >= 1
+  const rangedNote   = isRanged
+    ? (isCloseRanged ? ' 🎯 (point-blank, disadvantage)' : ' 🏹 (ranged)')
+    : '';
+  const coverNote    = forestCoverBonus > 0 ? ' 🌲 (forest cover +1 DEF)' : '';
+  const gangNote    = !isRanged && attackerAllies >= 1
     ? ` [advantage ${atkAdvantageDice}, flat +${atkGangupFlat}]` : '';
-  const allyDefNote = defenderAllies >= 1
+  const allyDefNote = !isRanged && defenderAllies >= 1
     ? ` [advantage ${defAdvantageDice}, flat +${defGangupFlat}]` : '';
 
   log.push(
-    `${actor.displayName} attacks ${target.displayName}! ` +
-    `[${attackRoll}${gangNote} vs ${defenseRoll}${allyDefNote}]${phaseNote}`
+    `${actor.displayName} attacks ${target.displayName}!${rangedNote} ` +
+    `[${attackRoll}${gangNote} vs ${defenseRoll}${allyDefNote}${coverNote}]${phaseNote}`
   );
 
   let killed     = false;
@@ -803,7 +844,8 @@ export function executeBattle(state, actor, target) {
   let fortDamaged = 0;         // fort levels lost this combat (1 if defender took any damage)
   let splashKills = [];         // entities killed by splash damage
   let splashHits  = [];         // all entities that took splash damage (killed or not)
-  const isCrush  = hit && attackRoll >= 2 * defenseRoll;
+  // Ranged attacks cannot crush — the rule set explicitly forbids it.
+  const isCrush  = !isRanged && hit && attackRoll >= 2 * defenseRoll;
 
   if (hit) {
     // Crushing blow: attacker's roll is at least double the defender's roll
@@ -833,8 +875,10 @@ export function executeBattle(state, actor, target) {
     }
     if (isCrush) log.push(`💥 Crushing blow! (${attackRoll} vs ${defenseRoll})`);
 
-    // Splash damage: crush or kill splashes all other units on the target's tile
-    if (isCrush || killed) {
+    // Splash damage: crush or kill splashes all other units on the target's
+    // tile — melee only. Ranged attacks are clean single-target hits (no
+    // crush either, see above), so no splash event fires.
+    if (!isRanged && (isCrush || killed)) {
       const splash = _applySplashDamage(state, target.col, target.row, [actor.id, target.id], log);
       splashKills = splash.splashKills;
       splashHits  = splash.splashHits;
@@ -877,6 +921,7 @@ export function executeBattle(state, actor, target) {
     attackRoll, defenseRoll, hit, killed,
     margin, damage, counterDmg, fortDamaged,
     attackerAllies, defenderAllies, splashKills, splashHits,
+    ranged: isRanged, closeRanged: isCloseRanged,
     breakdown: {
       atkBaseDie, defBaseDie,
       atkExtraDice, defExtraDice,
@@ -884,9 +929,11 @@ export function executeBattle(state, actor, target) {
       atkStaffBonus,
       phaseBonus, fortBonus, atkFortAtkBonus, fatiguePenalty,
       atkGangupFlat, defGangupFlat,
-      atkAdvantageDice, defAdvantageDice,
-      atkAllyNames: atkAllies.map(e => e.displayName),
-      defAllyNames: defAllies.map(e => e.displayName),
+      atkAdvantageDice, defAdvantageDice, atkDisadvantageDice,
+      forestCoverBonus,
+      ranged: isRanged, closeRanged: isCloseRanged,
+      atkAllyNames: isRanged ? [] : atkAllies.map(e => e.displayName),
+      defAllyNames: isRanged ? [] : defAllies.map(e => e.displayName),
     },
   };
 }

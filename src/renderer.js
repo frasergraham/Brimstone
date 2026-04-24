@@ -170,6 +170,20 @@ export class Renderer {
     // Lunge animations: attacker slides to hex border during combat, stays there until cleared
     this._lungeAnims = [];
 
+    // Projectile animations for ranged attacks. Each entry tweens a small
+    // glyph + particle trail from attacker hex → target hex. Per-unit art
+    // is keyed by `projectileType` from UNIT_TYPES (e.g. 'sparkle' for the
+    // witch). See _drawProjectileAnims.
+    this._projectileAnims = [];
+
+    // Temporary fog-of-war reveals tied to ranged-attack animations. Each
+    // entry `{ key, expiresAt }` marks a hex as visible to the observer
+    // even if no unit currently grants sight there — so when a ranged
+    // attack originates from outside the observer's sight, the attacker's
+    // tile briefly lights up for the duration of the projectile. Consumed
+    // (and pruned) by _buildFogVisibleHexes.
+    this._attackerReveals = [];
+
     // Battle hex highlights: set during combat animation, cleared after
     this._battleCombatantHexes = []; // [{col, row}] — bright red
     this._battleAllyHexes      = []; // [{col, row}] — faint red
@@ -547,6 +561,53 @@ export class Renderer {
     this._lungeAnims = [];
   }
 
+  /**
+   * Fire a ranged-attack projectile from attacker hex → target hex. The
+   * projectile is a short-lived visual only; damage is applied by the
+   * playback code on arrival (via the optional onArrive callback).
+   *
+   * `projectileType` selects the visual style (currently 'sparkle' for the
+   * witch); unknown types fall back to a generic glowing dot. Adding a new
+   * projectile style for a future ranged unit is a one-switch change in
+   * _drawProjectileAnims.
+   *
+   * A short-lived fog reveal is pushed for the attacker's hex so observers
+   * who can't normally see the attacker get a brief glimpse of who shot them.
+   */
+  addProjectileAnim(projectileType, fromCol, fromRow, toCol, toRow, {
+    owner = null,
+    duration = 320,
+    onArrive = null,
+  } = {}) {
+    const from = this._toCanvas(fromCol, fromRow);
+    const to   = this._toCanvas(toCol,   toRow);
+    const now  = Date.now();
+    this._projectileAnims.push({
+      projectileType: projectileType || 'sparkle',
+      owner,
+      fromCol, fromRow, toCol, toRow,
+      fromX: from.x, fromY: from.y,
+      toX:   to.x,   toY:   to.y,
+      startTime: now,
+      duration,
+      onArrive,
+      arrived: false,
+    });
+    // Reveal the attacker's tile for the duration of the shot plus a small
+    // tail so the observer has time to register who fired.
+    this._attackerReveals.push({
+      key: hexKey(fromCol, fromRow),
+      expiresAt: now + duration + 450,
+    });
+    this._startAnimLoop();
+  }
+
+  /** Clear any in-flight projectile animations. */
+  clearAllProjectileAnims() {
+    this._projectileAnims = [];
+    this._attackerReveals = [];
+  }
+
   /** Clear only hex flash overlays (loot floaters, HP text, etc.). */
   clearFlashes() { this._flashes = []; }
 
@@ -557,6 +618,8 @@ export class Renderer {
     this._deathAnims             = [];
     this._fadeOutAnims           = new Map();
     this._lungeAnims             = [];
+    this._projectileAnims        = [];
+    this._attackerReveals        = [];
     this._battleCombatantHexes   = [];
     this._battleAllyHexes        = [];
     this._nodeRevealAnims        = [];
@@ -729,6 +792,8 @@ export class Renderer {
                  || this._deathAnims.some(a => now < a.startTime + a.duration)
                  || [...this._fadeOutAnims.values()].some(a => now < a.startTime + a.duration)
                  || this._lungeAnims.some(a => !a.settled || a.returning)
+                 || this._projectileAnims.length > 0
+                 || this._attackerReveals.some(r => r.expiresAt > now)
                  || this._nodeRevealAnims.some(a => now < a.startTime + a.duration)
                  || !!this._zoomAnim
                  || this._planGhostAnim.size > 0;
@@ -756,6 +821,8 @@ export class Renderer {
                    || this._deathAnims.some(a => now < a.startTime + a.duration)
                    || [...this._fadeOutAnims.values()].some(a => now < a.startTime + a.duration)
                    || this._lungeAnims.some(a => !a.settled || a.returning)
+                   || this._projectileAnims.length > 0
+                   || this._attackerReveals.some(r => r.expiresAt > now)
                    || this._nodeRevealAnims.some(a => now < a.startTime + a.duration)
                    || !!this._zoomAnim;
         if (alive) requestAnimationFrame(check);
@@ -1296,6 +1363,11 @@ export class Renderer {
     // Lunge animations — attacker held at hex border during combat
     this._drawLungeAnims(fogVisibleHexes, hiddenOwner);
 
+    // Ranged-attack projectiles — drawn above lunges and units so the
+    // glow layer doesn't get clipped by hex fills. Fog-culled the same
+    // way lunges are (either endpoint visible → render).
+    this._drawProjectileAnims(fogVisibleHexes, hiddenOwner);
+
     // Plan ghost overlay — numbered arrows for move steps
     if (this.planGhostSteps?.length) {
       this._drawPlanOverlay(this.planGhostSteps);
@@ -1633,6 +1705,14 @@ export class Renderer {
           }
         }
       }
+    }
+    // Fold in any short-lived reveals from in-flight ranged attacks. This
+    // is a render-only hint — game state (state.seenHexes, fog mode) is
+    // not touched. Prune expired entries eagerly so the list stays small.
+    if (this._attackerReveals.length > 0) {
+      const now = Date.now();
+      this._attackerReveals = this._attackerReveals.filter(r => r.expiresAt > now);
+      for (const r of this._attackerReveals) visibleSet.add(r.key);
     }
     return visibleSet;
   }
@@ -2956,6 +3036,128 @@ export class Renderer {
       ctx.lineWidth   = 2;
       ctx.stroke();
     }
+  }
+
+  // Render in-flight ranged-attack projectiles. `projectileType` selects
+  // the visual style — 'sparkle' (witch) draws a glowing purple orb with
+  // a short fading particle trail and an impact puff. Unknown types fall
+  // back to a generic orb so new ranged units render something until their
+  // bespoke art lands.
+  _drawProjectileAnims(fogVisibleHexes = null, hiddenOwner = null) {
+    const ctx = this.ctx;
+    const now = Date.now();
+    const hs  = this.hexSize;
+
+    // Fire onArrive callbacks and drop arrived projectiles (with a small
+    // tail for the impact flash).
+    const stillAlive = [];
+    for (const p of this._projectileAnims) {
+      const t = (now - p.startTime) / p.duration;
+      if (!p.arrived && t >= 1) {
+        p.arrived = true;
+        p.arrivedAt = now;
+        if (typeof p.onArrive === 'function') {
+          try { p.onArrive(); } catch (_) { /* swallow — animation hook */ }
+        }
+      }
+      // Keep the entry around briefly after arrival to draw the impact puff.
+      if (!p.arrived || now < p.arrivedAt + 180) stillAlive.push(p);
+    }
+    this._projectileAnims = stillAlive;
+
+    if (!this._projectileAnims.length) return;
+
+    for (const p of this._projectileAnims) {
+      // Fog culling — mirror the lunge rule: draw if either endpoint is in
+      // the observer's sight. The target endpoint is always visible for an
+      // attack the observer is involved in (their own unit), so projectiles
+      // fired from fog still render.
+      if (fogVisibleHexes !== null && hiddenOwner !== null && p.owner === hiddenOwner) {
+        const fromVisible = fogVisibleHexes.has(hexKey(p.fromCol, p.fromRow));
+        const toVisible   = fogVisibleHexes.has(hexKey(p.toCol,   p.toRow));
+        if (!fromVisible && !toVisible) continue;
+      }
+
+      const t    = Math.min(1, (now - p.startTime) / p.duration);
+      const ease = t;    // linear — feels right for a travelling projectile
+      const x    = p.fromX + (p.toX - p.fromX) * ease;
+      const y    = p.fromY + (p.toY - p.fromY) * ease;
+
+      if (p.projectileType === 'sparkle') {
+        this._drawSparkleProjectile(ctx, x, y, hs, t, p);
+      } else {
+        this._drawGenericProjectile(ctx, x, y, hs, t);
+      }
+
+      // Impact puff — draws for a short window after arrival.
+      if (p.arrived) {
+        const impactT = Math.min(1, (now - p.arrivedAt) / 180);
+        this._drawImpactPuff(ctx, p.toX, p.toY, hs, impactT, p.projectileType);
+      }
+    }
+  }
+
+  _drawSparkleProjectile(ctx, x, y, hs, t, p) {
+    const r = hs * 0.22;
+    // Additive-ish glow: draw a wide soft halo, then a bright core.
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const grad = ctx.createRadialGradient(x, y, 0, x, y, r * 2.2);
+    grad.addColorStop(0, 'rgba(220,170,255,0.95)');
+    grad.addColorStop(0.5, 'rgba(155,89,182,0.55)');
+    grad.addColorStop(1, 'rgba(155,89,182,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(x, y, r * 2.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Bright core
+    ctx.fillStyle = '#f4e4ff';
+    ctx.beginPath();
+    ctx.arc(x, y, r * 0.55, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Short trailing sparkles — 5 dots fading back along travel path.
+    const trailCount = 5;
+    for (let i = 1; i <= trailCount; i++) {
+      const back = i * 0.085;
+      const tt   = Math.max(0, t - back);
+      const tx   = p.fromX + (p.toX - p.fromX) * tt;
+      const ty   = p.fromY + (p.toY - p.fromY) * tt;
+      const alpha = Math.max(0, 0.55 - i * 0.11);
+      const rad   = r * (0.55 - i * 0.08);
+      if (rad <= 0) break;
+      ctx.fillStyle = `rgba(210,160,255,${alpha})`;
+      ctx.beginPath();
+      ctx.arc(tx, ty, rad, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  _drawGenericProjectile(ctx, x, y, hs, _t) {
+    const r = hs * 0.18;
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,230,160,0.9)';
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  _drawImpactPuff(ctx, x, y, hs, impactT, projectileType) {
+    const r = hs * 0.6 * (0.3 + impactT * 0.9);
+    const alpha = (1 - impactT) * 0.7;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const color = projectileType === 'sparkle'
+      ? `rgba(210,160,255,${alpha})`
+      : `rgba(255,230,160,${alpha})`;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
   }
 
   _drawMoveAnims(fogVisibleHexes = null, hiddenOwner = null) {

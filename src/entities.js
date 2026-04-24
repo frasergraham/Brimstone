@@ -91,6 +91,13 @@ export const BASE_AGILITY = Object.freeze(
   Object.fromEntries(Object.entries(UNIT_TYPES).map(([k, v]) => [k, v.agility]))
 );
 
+// Attack range per entity type. 1 = melee only; >1 = ranged. Mirrors the
+// pattern of BASE_AGILITY / ENTITY_COLOR — derived from the UNIT_TYPES
+// registry so adding a ranged unit is a one-file change.
+export const BASE_RANGE = Object.freeze(
+  Object.fromEntries(Object.entries(UNIT_TYPES).map(([k, v]) => [k, v.range ?? 1]))
+);
+
 export const ENTITY_COLOR = Object.freeze(
   Object.fromEntries(Object.entries(UNIT_TYPES).map(([k, v]) => [k, v.color]))
 );
@@ -138,6 +145,7 @@ export class Entity {
     this.attack  = stats.attack;
     this.defense = stats.defense;
     this.agility = BASE_AGILITY[type] ?? 1;
+    this.range   = BASE_RANGE[type]   ?? 1;
 
     // Tag metadata from UNIT_TYPES (e.g. 'undead', 'construct', 'minion',
     // 'living', 'leader', 'day-leader'). Used by item combat triggers —
@@ -204,6 +212,9 @@ export class Entity {
       + _abilityStatMod(this.abilities, 'defense');
   }
   getAgility() { return this.agility ?? 1; }
+  // Attack range in hexes. 1 = melee only; >1 = ranged. Leaves room for
+  // future weapon/ability modifiers (e.g. a "longbow" item that adds +1).
+  getRange()   { return this.range ?? 1; }
 
   // Movement range in tiles. 1 base, +1 with horse equipped.
   getMoveRange() {
@@ -353,6 +364,13 @@ export function defenseOf(e) {
   const weaponMod   = e?.weapon ? (ITEMS[e.weapon]?.statMods?.defense ?? 0) : 0;
   const abilityMod  = _abilityStatMod(e?.abilities, 'defense');
   return base + weaponMod + abilityMod;
+}
+// Attack range in hexes — tolerates plain-object fixtures. Falls back to
+// UNIT_TYPES[type].range so tests that skip the Entity constructor still
+// see the correct range for a given entity type.
+export function rangeOf(e) {
+  if (typeof e?.getRange === 'function') return e.getRange();
+  return e?.range ?? UNIT_TYPES[e?.type]?.range ?? 1;
 }
 
 // ── Advantage-dice math ─────────────────────────────────────────────────────

@@ -43,6 +43,7 @@ export function actionCosts(type) {
 // Moved here from server/lobby.js so both the resolver and client code share it.
 
 export function snapEntity(entity) {
+  const range = typeof entity.getRange === 'function' ? entity.getRange() : (entity.range ?? 1);
   return {
     id:          entity.id,
     type:        entity.type,
@@ -61,6 +62,9 @@ export function snapEntity(entity) {
     weapon:      entity.weapon,
     attackBonus: entity.attackBonus || 0,
     defenseBonus: entity.defenseBonus || 0,
+    // Attack range in hexes — used by playback to decide whether to render
+    // a melee lunge or a ranged projectile animation.
+    range,
     name:        entity.displayName,
     title:       entity.title,
     displayName: entity.displayName,

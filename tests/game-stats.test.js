@@ -59,7 +59,10 @@ describe('kill counters', () => {
     minion.owner = 'hero';
     minion.hp = 1;
 
-    state.setForcedDice(6, 1);
+    // Witch has range 2, so attacking a same-hex target counts as a
+    // close-range ranged attack with 1 disadvantage die (2 atk dice, worst
+    // pick). Pad with extra 6s so the worst-of-2 still lands the hit.
+    state.setForcedDice(6, 6, 1);
     executeBattle(state, witch, minion);
 
     assert.ok(state.witchKills >= 1, `witchKills should be >= 1, got ${state.witchKills}`);
