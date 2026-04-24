@@ -231,6 +231,8 @@ export function assessHeroBoard(sim) {
     heroOnNode, heroInBuilding, heroTileExplored, heroTileFortLevel,
     nearestEnemyDist,
     totalBudget: sim.actionsLeft,
+    heroPlayerCount:  (sim.playerCounts && sim.playerCounts.hero)  || 1,
+    witchPlayerCount: (sim.playerCounts && sim.playerCounts.witch) || 1,
   };
 }
 
@@ -559,10 +561,14 @@ export function genExplore(sim, board, budget, config = null) {
     }
   }
 
-  // Sound Horn: spend 1 food + 1 AP to recruit hidden survivors — do it aggressively
+  // Sound Horn: spend 1 food + 1 AP to recruit hidden survivors — do it aggressively.
+  // NvN: tighten the ceiling so survivor growth doesn't scale faster with team
+  // size than minion growth (hidden survivors + horning compound otherwise).
   const nodeCount = board.nodes.length || 3;
+  const heroCount = board.heroPlayerCount || 1;
+  const survivorCeiling = heroCount > 1 ? nodeCount : nodeCount + 1;
   if (remaining > 0 && board.foodCount >= 1 && board.unexploredBuildings.length >= 1 &&
-      board.survivorCount < nodeCount + 1) {
+      board.survivorCount < survivorCeiling) {
     actions.push({
       type: PlanActionType.SOUND_HORN, entityId: board.hero.id,
       _priority: 3, _goal: HeroGoal.EXPLORE,
@@ -694,11 +700,15 @@ export function genControlNodes(sim, board, budget, config = null) {
   for (const node of targetNodes) {
     if (remaining <= 0) break;
 
-    // Send multiple units to nodes — overwhelm witch minions
+    // Send multiple units to nodes — overwhelm witch minions.
+    // NvN: cap at 2 so hero teams don't over-concentrate 3 units on a single
+    // node and leave the rest uncovered. 1v1 retains the 3-unit overwhelm.
     const enemyOnNode = node.witchPresent;
     const scoringImminent = board.roundsToScoring <= 2;
     const contested = enemyOnNode || (scoringImminent && node.feasibility >= 0.3);
-    const unitsForNode = enemyOnNode ? 3 : (contested ? 2 : (scoringImminent ? 2 : 1));
+    const isNvN = (board.heroPlayerCount || 1) > 1;
+    const overwhelmCap = isNvN ? 2 : 3;
+    const unitsForNode = enemyOnNode ? overwhelmCap : (contested ? 2 : (scoringImminent ? 2 : 1));
 
     for (let u = 0; u < unitsForNode; u++) {
       if (remaining <= 0) break;
