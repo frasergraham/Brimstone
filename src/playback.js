@@ -8,6 +8,7 @@
 
 import { AppMode, getMode, setMode } from './app-mode.js';
 import { deserializeState } from '../server/state-sync.js';
+import { Entity } from './entities.js';
 
 // ── Playback state ──────────────────────────────────────────────────────────
 // Only meaningful when getMode() === AppMode.PLAYBACK.
@@ -30,10 +31,23 @@ export function resetPlayback() {
   playback.jumpToEnd = false;
 }
 
-/** Ensure plain-object entities have `alive` (omitted by serializeState, needed by renderer). */
+/**
+ * Hydrate a plain-object entity list for use by the live renderer / UI.
+ *
+ * serializeState omits `alive` (Entity.alive is a prototype getter), so we
+ * add it as an own property when missing. Then re-parent each entity to
+ * Entity.prototype so renderer/UI code that calls `getAttack()`,
+ * `hasAbility()`, `hasTag()`, etc. resolves to the Entity methods during
+ * playback and resolution animation, when state.entities points at a
+ * snapshot rather than a live deserializeState result.
+ *
+ * Skipped when an entity is already Entity-prototyped (idempotent).
+ */
 export function patchAlive(entities) {
   for (const e of entities) {
+    if (typeof e.getAttack === 'function') continue; // already Entity-prototyped
     if (e.alive === undefined) e.alive = e.hp > 0;
+    Object.setPrototypeOf(e, Entity.prototype);
   }
   return entities;
 }
