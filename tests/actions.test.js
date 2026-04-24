@@ -9,6 +9,7 @@ import {
   executeSummon, executeHeal, executeUseItem, executeUseAbility,
   executeFortAssault, isFortBlocking,
   getReachableHexes, sightRange, survivorFindMultiplier,
+  getValidActions, ActionType,
 } from '../src/actions.js';
 import {
   Entity, EntityType, SurvivorAbility,
@@ -2275,5 +2276,56 @@ describe('executeFortAssault', () => {
     assert.equal(r2.success, true, 'Witch should now walk onto the breached wall hex');
     assert.equal(unit.col, fortPos.col);
     assert.equal(unit.row, fortPos.row);
+  });
+});
+
+// ── getValidActions — effective-entity prototype preservation ─────────────
+// Regression: when the UI selects a unit that has a planned MOVE queued,
+// _selectEntity builds an "effectiveEntity" from a spread + position
+// override so getValidActions sees the projected position. The spread
+// must preserve the Entity prototype, otherwise method calls like
+// `actor.hasAbility('summon')` / `actor.hasAbility('sound_horn')` throw
+// and selection silently fails (see PR #294 ghost-unit selection bug).
+
+describe('getValidActions on a ghost-position effective entity', () => {
+  test('plain spread (no prototype) throws — locks the failure mode', () => {
+    const state = new GameState(true, true);
+    const plainSpread = { ...state.hero, col: state.hero.col + 1, row: state.hero.row };
+    // No Object.setPrototypeOf — this is the UI's pre-fix shape.
+    assert.throws(() => getValidActions(state, plainSpread), TypeError);
+  });
+
+  test('reparented spread preserves methods; summon / sound_horn gates work', () => {
+    const state = new GameState(true, true);
+    const hero  = state.hero;
+    const ghost = Object.setPrototypeOf(
+      { ...hero, col: hero.col + 1, row: hero.row },
+      Object.getPrototypeOf(hero)
+    );
+    const actions = getValidActions(state, ghost);
+    // Day-side leader → sound_horn should be surfaced.
+    assert.ok(
+      actions.some(a => a.type === ActionType.SOUND_HORN),
+      'sound_horn must be in actions for a ghost-position day-side leader'
+    );
+    // Guard should also appear (universal action).
+    assert.ok(
+      actions.some(a => a.type === ActionType.GUARD),
+      'guard must be in actions'
+    );
+  });
+
+  test('reparented witch spread surfaces summon', () => {
+    const state = new GameState(true, true);
+    const witch = state.entities.find(e => e.type === EntityType.WITCH);
+    const ghost = Object.setPrototypeOf(
+      { ...witch, col: witch.col + 1, row: witch.row },
+      Object.getPrototypeOf(witch)
+    );
+    const actions = getValidActions(state, ghost);
+    assert.ok(
+      actions.some(a => a.type === ActionType.SUMMON),
+      'summon must be in actions for a ghost-position night-side leader'
+    );
   });
 });

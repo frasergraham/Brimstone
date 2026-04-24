@@ -1535,7 +1535,12 @@ export class UIController {
     if (this._planMode) {
       const proj = this._getProjectedPos(entity.id);
       if (proj && (proj.col !== entity.col || proj.row !== entity.row)) {
-        effectiveEntity = { ...entity, col: proj.col, row: proj.row };
+        // Re-parent the spread to Entity.prototype so methods like
+        // hasAbility / getAttack still resolve; plain spread loses them.
+        effectiveEntity = Object.setPrototypeOf(
+          { ...entity, col: proj.col, row: proj.row },
+          Object.getPrototypeOf(entity)
+        );
       }
     }
 
@@ -1828,7 +1833,12 @@ export class UIController {
     if (this._planMode) {
       const proj = this._getProjectedPos(entity.id);
       if (proj && (proj.col !== entity.col || proj.row !== entity.row)) {
-        effectiveEntity = { ...entity, col: proj.col, row: proj.row };
+        // Re-parent the spread to Entity.prototype so methods like
+        // hasAbility / getAttack still resolve; plain spread loses them.
+        effectiveEntity = Object.setPrototypeOf(
+          { ...entity, col: proj.col, row: proj.row },
+          Object.getPrototypeOf(entity)
+        );
       }
     }
     const actions = getValidActions(state, effectiveEntity);
