@@ -110,8 +110,13 @@ if (!_nightIds.includes(NIGHT_FACTION)) {
   console.error(`Unknown --night faction "${NIGHT_FACTION}". Valid: ${_nightIds.join(', ')}`);
   process.exit(1);
 }
-const _STUB_DAY   = getFaction(DAY_FACTION).isStub();
-const _STUB_NIGHT = getFaction(NIGHT_FACTION).isStub();
+// Apply the swap whenever the picked faction differs from the side's
+// primary. (Used to gate on isStub(), but factions like rogue can have
+// real distinct behaviour while still needing the leader-stat swap.)
+const _SIDE_DAY_PRIMARY   = getFactionsForSide('day')[0].id;
+const _SIDE_NIGHT_PRIMARY = getFactionsForSide('night')[0].id;
+const _SWAP_DAY   = DAY_FACTION   !== _SIDE_DAY_PRIMARY;
+const _SWAP_NIGHT = NIGHT_FACTION !== _SIDE_NIGHT_PRIMARY;
 
 const IS_BATTLE = MAP_SIZE === 'battle';
 
@@ -196,12 +201,12 @@ function buildGameState() {
     if (leader) leader.color = colors[idx % colors.length];
   }
 
-  // Stub factions: re-stat every leader on a side that picked a non-default
-  // faction. swapLeaderToFaction handles state.hero / state.witch (the side
+  // Re-stat every leader on a side that picked a non-default faction.
+  // swapLeaderToFaction handles state.hero / state.witch (the side
   // singletons); for extra players we apply the same in-place mutation
   // pattern manually so all leaders on a side share the picked stats.
-  if (_STUB_DAY)   _applyStubToSide(state, 'day',   DAY_FACTION);
-  if (_STUB_NIGHT) _applyStubToSide(state, 'night', NIGHT_FACTION);
+  if (_SWAP_DAY)   _applyStubToSide(state, 'day',   DAY_FACTION);
+  if (_SWAP_NIGHT) _applyStubToSide(state, 'night', NIGHT_FACTION);
 
   return state;
 }
@@ -570,7 +575,9 @@ const errors  = [];
 const startMs = Date.now();
 
 if (DAY_FACTION !== 'hero' || NIGHT_FACTION !== 'witch') {
-  console.log(`  Factions: day=${DAY_FACTION}${_STUB_DAY ? ' (stub)' : ''}  night=${NIGHT_FACTION}${_STUB_NIGHT ? ' (stub)' : ''}`);
+  const dayBadge   = getFaction(DAY_FACTION).isStub()   ? ' (stub)' : '';
+  const nightBadge = getFaction(NIGHT_FACTION).isStub() ? ' (stub)' : '';
+  console.log(`  Factions: day=${DAY_FACTION}${dayBadge}  night=${NIGHT_FACTION}${nightBadge}`);
 }
 process.stdout.write('  Running ');
 for (let i = 0; i < N; i++) {
