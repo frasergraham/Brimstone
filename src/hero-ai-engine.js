@@ -908,7 +908,7 @@ export function genHuntWitch(sim, board, budget) {
     if (dist <= 1) {
       const est = estimateHeroCombat(simUnit, target.entity, board);
       // Skip suicidal attacks on minions; always attack witch with hero
-      if (est.classification === 'suicidal' && !isWitch) continue;
+      if (est.classification === 'suicidal' && !isEnemyLeader) continue;
       actions.push({
         type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
         targetId: target.entity.id, targetCol: target.entity.col, targetRow: target.entity.row,
@@ -921,16 +921,16 @@ export function genHuntWitch(sim, board, budget) {
     }
 
     // Within pursuit range — move toward and attack
-    const pursuitRange = isWitch ? 6 : 2;
+    const pursuitRange = isEnemyLeader ? 6 : 2;
     if (dist <= pursuitRange) {
       sim.unitCommitments.set(simUnit.id, HeroGoal.HUNT_WITCH);
-      let stepsLeft = Math.min(remaining, isWitch ? 4 : 2);
+      let stepsLeft = Math.min(remaining, isEnemyLeader ? 4 : 2);
 
       while (stepsLeft > 0) {
         const curDist = hexDistance(simUnit.col, simUnit.row, target.entity.col, target.entity.row);
         if (curDist <= 1) {
           const est = estimateHeroCombat(simUnit, target.entity, board);
-          if (est.classification !== 'suicidal' || isWitch) {
+          if (est.classification !== 'suicidal' || isEnemyLeader) {
             actions.push({
               type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
               targetId: target.entity.id, targetCol: target.entity.col, targetRow: target.entity.row,
