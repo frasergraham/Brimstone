@@ -4,16 +4,26 @@
 
 Today's implementation of unit stats, equipment, and abilities is scattered across many files. A quick audit found:
 
-- **`Entity`** is a single class but per-type behavior is gated by `entity.type === X` checks in 15+ sites across `src/actions.js`, `src/factions.js`, `src/planner.js`, `src/ui.js`, `src/renderer.js`, `src/hero-ai-engine.js`, and the combat resolver itself.
-- **Survivor stats** (`SURVIVOR_ROSTER`, `src/entities.js:69–230`) *replace* the base stats row, and passive abilities like BRAWLER (+1 ATK) and STURDY (+1 DEF) are **baked into the roster numbers** rather than applied at runtime. `BASE_STATS[SURVIVOR]` is dead data.
-- **Weapons** have consistent basic bonuses via `WEAPON_STATS` (`src/tiles.js:39–64`), but the one conditional weapon effect (staff vs undead/minions/golems) is hardcoded inside `Entity.resolveCombat()` at `src/entities.js:409–417`.
+- **`Entity`** is a single class but per-type behavior is gated by type / leader checks in 15+ sites across `src/actions.js`, `src/factions.js`, `src/planner.js`, `src/ui.js`, `src/renderer.js`, `src/hero-ai-engine.js`, and the combat resolver itself.
+- **Survivor stats** (`SURVIVOR_ROSTER`, `src/entities.js:85–249`) *replace* the base stats row, and passive abilities like BRAWLER (+1 ATK) and STURDY (+1 DEF) are **baked into the roster numbers** rather than applied at runtime. `BASE_STATS[SURVIVOR]` is dead data.
+- **Weapons** have consistent basic bonuses via `WEAPON_STATS` (`src/tiles.js:48–64`), but the one conditional weapon effect (staff vs undead/minions/golems) is hardcoded inside `Entity.resolveCombat()` at `src/entities.js:432`.
 - **Abilities** are a single string (`entity.ability`) per survivor. Each of the 8 abilities is referenced in 3–8 scattered sites. There is no unified ability abstraction — each ability is a one-off check at whatever phase consumes it.
-- **Type-level action gates** (`SOUND_HORN` hero-only, `SUMMON` witch-only) are enforced via `actor.type === EntityType.X` checks in `src/actions.js:330` and `:341` rather than via the already-existing `Faction` abstraction.
+- **Leader action gates** (`SOUND_HORN` day-side, `SUMMON` night-side) at `src/actions.js:334` and `:345` are double-layered: `isLeaderType(actor.type) && actor.owner === 'hero'|'witch'`. The `owner` string is the legacy pre-faction-expansion discriminator and is now redundant with faction data already on the entity (`factionId`) and actor-side.
 - **Items** use mixed inventory keys (`'weapon:sword'`, `'silver'`, `'food'`, `'horse'`) and their effects are implemented in different files: silver in `executeUseItem`, food as `budgetBonus` return, horse in `planner.js`.
 
 Adding a new survivor, weapon, or ability today requires edits in 4–10 files.
 
 **Goal:** make unit types, equipment, and abilities data-driven so adding new content is a one-file change. Achieve the spirit of "everything is a unit; specials layer on top" through data composition rather than class inheritance.
+
+## Relationship to faction expansion
+
+The Day vs Night / N-factions-per-side refactor (`docs/design/faction-expansion.md`) landed the scaffolding for six factions (Paladin, Rogue, Captain, Witch, Necromancer, Brute) — but lists **"faction-unique abilities for Rogue/Captain/Necromancer/Brute"** as explicit follow-up, one per faction. Today the four stub factions inherit their parent side's behaviour wholesale because there's no per-faction extensibility point for "this leader can do X that that leader can't".
+
+This refactor provides that extensibility point. Once `ABILITIES` is a registry and leaders carry `abilities: string[]`, a stub graduates by adding one entry to its `Faction.innateLeaderAbilities` getter plus (optionally) a new registry entry. No combat-resolver, action-dispatcher, or AI-engine edits required.
+
+Calibration anchors (line numbers valid against `origin/dev` @ 7e23c9b):
+- `EntityType.HERO` is a legacy alias for `PALADIN` — the plan uses `PALADIN` throughout. Save-format value is `'paladin'`; `SAVE_VERSION=2` migrates v1 `'hero'` → `'paladin'`. Phase 4 bumps to `SAVE_VERSION=3`.
+- `state.swapLeaderToFaction(side, factionId)` (`src/game.js`) is the in-place leader-stats swap for stub factions. Post-refactor it becomes "re-read the `UNIT_TYPES` descriptor + refresh `abilities`" — data-driven, no per-faction if/else.
 
 ## Design
 
@@ -59,7 +69,7 @@ One registry for every ability (survivor, faction, or item-granted):
 - HERBALIST → passive with `onExplore: (s,a) => ({ items: { herbs: +1 } })`.
 - FORTIFY_DOUBLE → passive with `onFortify: (s,a) => ({ levelMultiplier: 2 })`.
 - HEAL / INSPIRE / RALLY → active entries; generic dispatcher in `executeUseAbility` iterates `actor.abilities` and delegates.
-- **Faction-innate abilities:** add `Faction.innateLeaderAbilities` returning `['sound_horn']` (hero) / `['summon']` (witch). Leader constructors push these into `abilities`. The `actor.type === EntityType.HERO|WITCH` gates in `src/actions.js:330,341` **disappear** — action availability is purely "does actor have this ability id?".
+- **Faction-innate abilities:** add `Faction.innateLeaderAbilities` as an abstract getter. Default impls on `DaySideFaction` / `NightSideFaction` return `['sound_horn']` and `['summon']` respectively. Concrete per-faction classes (Rogue, Captain, Necromancer, Brute) override when they grow unique abilities; stubs inherit parent defaults. Leader constructors (`createLeader`) push the faction's innate abilities into `entity.abilities`. The `isLeaderType(actor.type) && actor.owner === 'hero'|'witch'` gates at `src/actions.js:334,345` **disappear** — action availability becomes `actor.hasAbility('sound_horn' | 'summon')`.
 
 ### Stat layer
 Add getters on `Entity`:
@@ -87,13 +97,13 @@ Each phase leaves tests green; each is an independent PR.
 
 **Phase 4 — Abilities become multi + runtime passives.** Swap `ability: string` → `abilities: string[]`. Un-bake BRAWLER/STURDY from roster numbers (adjust base stats down by the passive amount). `_buildAbilityAction` becomes a loop over `actor.abilities`; `executeUseAbility` becomes a dispatcher to `ABILITIES[id].execute`. Audit every survivor's effective stats vs. today (`tests/entities.test.js`) — parity is required.
 
-**Phase 5 — Faction-inherent abilities; collapse type gates.** Hero leader pushes `'sound_horn'` into `abilities`; witch leader pushes `'summon'`. Remove `actor.type === EntityType.HERO` at `src/actions.js:341` and `actor.type === EntityType.WITCH` at `src/actions.js:330`. SOUND_HORN / SUMMON executors become ability registry entries. The `FORTIFY`, `HEAL` plan action types stay (needed for wire compat) but their `execute*` becomes a one-line delegate to `ABILITIES[id].execute`.
+**Phase 5 — Faction-inherent abilities; collapse leader-type gates.** `DaySideFaction.innateLeaderAbilities → ['sound_horn']`; `NightSideFaction.innateLeaderAbilities → ['summon']`. Leader `createLeader()` pushes these into `entity.abilities`. Replace the two `isLeaderType(actor.type) && actor.owner === 'hero'|'witch'` checks at `src/actions.js:334,345` with `actor.hasAbility('summon' | 'sound_horn')`. SOUND_HORN / SUMMON executors become registry entries. The `FORTIFY`, `HEAL` plan action types stay (needed for wire compat) but their `execute*` becomes a one-line delegate to `ABILITIES[id].execute`.
 
 **Phase 6 — Content expansion proof.** Split `SURVIVOR_ROSTER` into `src/content/survivors.js`. Add one new survivor and one new weapon end-to-end without editing `actions.js`, `entities.js`, or `resolver.js`. If the refactor worked, this is a one-file change per item. Update `CLAUDE.md` with a "how to add content" section.
 
 ## Save compatibility
 
-Existing hibernated multiplayer saves store `attack: 3` for BRAWLER survivors (baked). Rather than writing a migration shim, **extend the incompatible-save pruner** in `server/saves.js` (`pruneStaleAndIncompatibleSaves`) to drop all saves produced before the refactor version bump. Bump `src/version.js` with the Phase 4 PR (the one that un-bakes the stats). Active multiplayer players lose in-progress games; acceptable per user decision.
+Existing hibernated multiplayer saves store `attack: 3` for BRAWLER survivors (baked). Rather than writing a migration shim, **extend the incompatible-save pruner** in `server/saves.js` (`pruneStaleAndIncompatibleSaves`) to drop all saves produced before the refactor version bump. `SAVE_VERSION` bumps `2 → 3` with the Phase 4 PR (the one that un-bakes the stats); also bump `src/version.js`. Active multiplayer players lose in-progress games; acceptable per user decision.
 
 ## Files
 
@@ -112,7 +122,7 @@ Existing hibernated multiplayer saves store `attack: 3` for BRAWLER survivors (b
 - `src/tiles.js` — remove `WEAPON_STATS`, `WEAPON_LABEL` (re-export from `items.js` for one release then delete)
 - `src/actions.js` — drop type gates on SUMMON/SOUND_HORN; `_buildAbilityAction` loops `actor.abilities`; `executeUseAbility` dispatches via registry; `executeUseItem` dispatches via `ITEMS[id].onUse`
 - `src/planner.js` — `snapEntity` emits effective stats; horse check via `getMoveRange()`; drop `EntityType` import if possible
-- `src/factions.js` — add `innateLeaderAbilities` getter
+- `src/factions.js` — add `innateLeaderAbilities` getter on `Faction` (abstract), default impls on `DaySideFaction` / `NightSideFaction`, overridable on concrete stubs (Rogue, Captain, Necromancer, Brute) when they grow unique abilities
 - `server/state-sync.js` — flat inventory keys; `abilities[]` round-trip (no migration shim — old saves pruned)
 - `server/saves.js` — extend pruner to drop pre-refactor saves
 - `src/version.js` — bump in Phase 4 PR
