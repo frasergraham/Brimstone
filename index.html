@@ -877,18 +877,13 @@
   <div id="game-screen">
 
     <header id="game-header">
-      <span class="header-title">CALEB'S HOLLOW</span>
-      <div id="header-cycle-group">
-        <div id="cycle-bar"></div>
-        <span id="round-label"></span>
-      </div>
+      <button id="menu-btn" class="header-icon-btn" title="Menu">☰</button>
       <div id="turn-info"></div>
       <div class="header-buttons">
         <button id="mission-info-btn" class="header-icon-btn" title="Mission Info" style="display:none">📜</button>
         <button id="replay-turn-btn" class="header-icon-btn" title="Replay last turn" style="display:none">▶</button>
         <button id="end-turn-btn" class="header-icon-btn end-turn-header" title="Submit Plan">↩</button>
         <button id="plan-return-btn" class="header-icon-btn end-turn-header" title="Return to menu" style="display:none">← Menu</button>
-        <button id="menu-btn" class="header-icon-btn" title="Menu">☰</button>
       </div>
     </header>
     <!-- In-game menu modal -->
@@ -904,11 +899,14 @@
     </div>
 
     <main id="game-main">
-      <!-- Chronicle sidebar: left panel shown in 'full' chronicle mode -->
-      <div id="chronicle-sidebar" style="display:none">
-        <div class="chronicle-sidebar-header">
-          <button id="chronicle-sidebar-toggle" class="zoom-btn" title="Toggle chronicle">…</button>
-          <span class="chronicle-title">Chronicle</span>
+      <!-- Chronicle sidebar — collapsible left-edge panel with pull-out tab -->
+      <div id="chronicle-sidebar" class="chronicle-panel collapsed">
+        <!-- Pull-out tab — always visible so the panel can be reopened -->
+        <button id="chronicle-tab" class="chronicle-tab" title="Toggle chronicle">
+          <span class="chronicle-tab-label">Chronicle</span><span id="chronicle-tab-toggle" class="chronicle-tab-toggle">+</span>
+        </button>
+        <div class="chronicle-panel-header">
+          <span class="chronicle-title">📜 Chronicle</span>
         </div>
         <div id="chronicle-sidebar-log"></div>
       </div>
@@ -962,10 +960,6 @@
             </button>
           </div>
         </div>
-        <!-- Chronicle toggle button — top-left of map -->
-        <button id="chronicle-toggle" class="zoom-btn chronicle-toggle-btn" title="Toggle chronicle">…</button>
-        <!-- Mini chronicle: last 5 log messages, top-left overlay -->
-        <div id="chronicle-mini"></div>
       </div>
 
       <!-- Spectator ready panel (shown during planning phase) -->
@@ -1028,6 +1022,11 @@
 
     <!-- Score bar — always-visible objectives strip at the bottom -->
     <div id="score-bar">
+      <!-- Cycle bump — compact pill protruding above the score bar showing the current phase -->
+      <div id="cycle-bump" title="">
+        <img id="cycle-bump-icon" alt="">
+        <span id="cycle-bump-label"></span>
+      </div>
       <span class="score-bar-faction hero-faction">⚔ Hero</span>
       <div id="score-bar-content"></div>
       <span class="score-bar-faction witch-faction">Witch ✦</span>

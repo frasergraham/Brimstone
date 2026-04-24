@@ -77,8 +77,10 @@ export class UIController {
     this._battleInterval   = null; // dice animation interval — cleared on new dialog
     this._autoDismissTimer = null; // battle dialog auto-dismiss timer — cleared on new dialog
     this.speedMode         = this._loadDefaultSpeed(); // 'cinematic' | 'fast' | 'vfast'
-    // Start with chronicle hidden by default
-    this._chronicleMode    = 'none'; // 'none' | 'mini' | 'full'
+    // Start with chronicle hidden by default; open = full sidebar, closed = pull-out tab only
+    this._chronicleOpen    = false;
+    // Unit stats bar: collapsed by default; clicking the (i) glyph expands to reveal ATK/DEF + abilities
+    this._unitStatsExpanded = false;
     // When true, disable all planning/action UI — used for spectator mode
     this.spectator         = false;
     // When true, suppress phase modals and auto-select — used for tutorial mode
@@ -250,8 +252,10 @@ export class UIController {
       this._closeMapOptionsPopup();
     }, sig);
 
-    // Chronicle toggle in map controls area
-    this._el('chronicle-toggle')?.addEventListener('click', () => this._cycleChronicle(), sig);
+    // Chronicle pull-out tab — binary open/close toggle (mirrors plan-tab on the right)
+    this._el('chronicle-tab')?.addEventListener('click', () => {
+      this._setChronicleOpen(!this._chronicleOpen);
+    }, sig);
 
     // Map options toggle
     this._el('map-options-toggle')?.addEventListener('click', (e) => {
@@ -385,6 +389,10 @@ export class UIController {
       if (panel && this._edgeSwipe.collapsed && dx < -threshold) {
         // Swiped left from right edge — open panel
         panel.classList.remove('collapsed');
+        // On mobile, close chronicle so the two panels don't overlap.
+        if (this._chronicleOpen && this._isMobileViewport()) {
+          this._setChronicleOpen(false);
+        }
         this._syncPlanInset();
         this._renderPlanPanel();
         this._renderEndTurnBtn();
@@ -398,16 +406,14 @@ export class UIController {
       this._edgeSwipe = null;
     }, { passive: true, ...sig });
 
-    // Chronicle: three-state button lives inside #chronicle-mini (wired on each render).
-    // chronicle-close / chronicle-sidebar-close close back to 'none'.
+    // Chronicle overlay (full-screen modal, separate from the sidebar tab) close handlers
     this._el('chronicle-close')?.addEventListener('click', () => {
-      this._setChronicleMode('none');
+      this._el('chronicle-overlay')?.classList.remove('visible');
     }, sig);
     this._el('chronicle-overlay')?.addEventListener('click', e => {
-      if (e.target === this._el('chronicle-overlay')) this._setChronicleMode('none');
-    }, sig);
-    this._el('chronicle-sidebar-toggle')?.addEventListener('click', () => {
-      this._cycleChronicle();
+      if (e.target === this._el('chronicle-overlay')) {
+        this._el('chronicle-overlay').classList.remove('visible');
+      }
     }, sig);
 
 
@@ -1295,6 +1301,13 @@ export class UIController {
     this._renderInventory();
   }
 
+  /** True when the viewport matches the mobile breakpoint used elsewhere in styles.css. */
+  _isMobileViewport() {
+    return typeof window !== 'undefined'
+      && typeof window.matchMedia === 'function'
+      && window.matchMedia('(max-width: 700px)').matches;
+  }
+
   /** Toggle the plan panel between expanded and collapsed. */
   _togglePlanPanel() {
     const panel = this._el('plan-panel');
@@ -1305,6 +1318,10 @@ export class UIController {
     if (toggleBtn) toggleBtn.textContent = isCollapsed ? '▶' : '◀';
     const tabToggle = this._el('plan-tab-toggle');
     if (tabToggle) tabToggle.textContent = isCollapsed ? '+' : '\u2212';
+    // On mobile, plan and chronicle are mutually exclusive \u2014 close chronicle when opening plan.
+    if (!isCollapsed && this._chronicleOpen && this._isMobileViewport()) {
+      this._setChronicleOpen(false);
+    }
     this._syncPlanInset();
     this._renderEndTurnBtn();
   }
@@ -1634,6 +1651,7 @@ export class UIController {
     this._pendingDefenderPick  = null;
     this._pendingEnemyPick     = null;
     this._popupVisible         = false;
+    this._unitStatsExpanded    = false;
     this.renderer.selectedHex      = null;
     this.renderer.selectedEntityId = null;
     this.renderer.highlightHexes   = [];
@@ -2277,13 +2295,16 @@ export class UIController {
         ? `<img class="usb-terrain-hex" src="${tileSrc}" alt="">`
         : `<span class="usb-icon" style="background:#3a4a3a;font-size:1.1rem">${icon}</span>`;
       bar.style.display = 'flex';
+      bar.classList.remove('usb-expanded');
       bar.innerHTML = `
-        ${tileImgHtml}
-        <span class="usb-tile-info">
-          <span class="usb-tile-name">${label}</span>
-          <span class="usb-tile-details">${terrainBadge}</span>
-        </span>
-        <button class="usb-deselect-btn" title="Deselect">✕</button>
+        <div class="usb-main">
+          ${tileImgHtml}
+          <span class="usb-tile-info">
+            <span class="usb-tile-name">${label}</span>
+            <span class="usb-tile-details">${terrainBadge}</span>
+          </span>
+          <button class="usb-deselect-btn" title="Deselect">✕</button>
+        </div>
       `;
       bar.querySelector('.usb-deselect-btn').addEventListener('click', () => {
         this._clearSelection();
@@ -2336,39 +2357,55 @@ export class UIController {
       ? `<button class="usb-cycle-btn usb-cycle-next" title="Next unit">\u203A</button>`
       : '';
 
-    // Terrain row for the entity's current hex
+    // Terrain box for the entity's current hex — stacked full-width below the unit row
     const entCol = this._planMode ? (this._getProjectedPos(entity.id)?.col ?? entity.col) : entity.col;
     const entRow = this._planMode ? (this._getProjectedPos(entity.id)?.row ?? entity.row) : entity.row;
     const tile = this.state.tiles.get(hexKey(entCol, entRow));
-    let terrainRowHtml = '';
+    let terrainBoxHtml = '';
     if (tile) {
       const tileSrc = this.renderer.getTileDataURL(tile, entCol, entRow, 56);
       const tileImgHtml = tileSrc ? `<img class="usb-terrain-hex" src="${tileSrc}" alt="">` : '';
-      terrainRowHtml = `<span class="usb-terrain-row">${tileImgHtml}${_buildTerrainBadge(tile)}</span>`;
+      terrainBoxHtml = `<div class="usb-terrain-box">${tileImgHtml}${_buildTerrainBadge(tile)}</div>`;
     }
 
+    // Expanded block: ATK, DEF, and any ability description — toggled by the (i) glyph
+    const expanded = !!this._unitStatsExpanded;
+    const abilityHtml = entity.abilityLabel
+      ? `<span class="usb-ability">✦ ${entity.abilityLabel}</span>`
+      : '';
+    const expandedBlockHtml = expanded
+      ? `<span class="usb-extra">
+           <span class="usb-stat">ATK <span class="usb-stat-val">${entity.getAttack()}</span></span>
+           <span class="usb-stat">DEF <span class="usb-stat-val">${entity.getDefense()}</span></span>
+           ${abilityHtml}
+         </span>`
+      : '';
+
     bar.style.display = 'flex';
+    bar.classList.toggle('usb-expanded', expanded);
     bar.innerHTML = `
-      ${cyclePrevHtml}
-      ${portraitHtml}
-      ${cycleNextHtml}
-      <span class="usb-info">
-        <span class="usb-name" style="color:${color}">${entity.displayName}</span>
-        <span class="usb-details">
-          <span class="usb-hp-wrap">
-            <span class="usb-stat">HP</span>
-            <span class="usb-hp-track">
-              <span class="usb-hp-fill" style="width:${hpPct}%;background:linear-gradient(to bottom,rgba(255,255,255,0.28) 0%,rgba(255,255,255,0) 55%),${hpColor}"></span>
+      <div class="usb-main">
+        ${cyclePrevHtml}
+        ${portraitHtml}
+        ${cycleNextHtml}
+        <span class="usb-info">
+          <span class="usb-name" style="color:${color}">${entity.displayName}</span>
+          <span class="usb-details">
+            <span class="usb-hp-wrap">
+              <span class="usb-stat">HP</span>
+              <span class="usb-hp-track">
+                <span class="usb-hp-fill" style="width:${hpPct}%;background:linear-gradient(to bottom,rgba(255,255,255,0.28) 0%,rgba(255,255,255,0) 55%),${hpColor}"></span>
+              </span>
+              <span class="usb-stat-val">${entity.hp}/${entity.maxHp}</span>
             </span>
-            <span class="usb-stat-val">${entity.hp}/${entity.maxHp}</span>
+            ${weaponLabel ? `<span class="usb-weapon">⚔ ${weaponLabel}</span>` : ''}
+            <button class="usb-info-btn ${expanded ? 'usb-info-btn-active' : ''}" title="${expanded ? 'Hide stats' : 'Show stats & abilities'}">i</button>
           </span>
-          <span class="usb-stat">ATK <span class="usb-stat-val">${entity.getAttack()}</span></span>
-          <span class="usb-stat">DEF <span class="usb-stat-val">${entity.getDefense()}</span></span>
-          ${weaponLabel ? `<span class="usb-weapon">⚔ ${weaponLabel}</span>` : ''}
+          ${expandedBlockHtml}
         </span>
-        ${terrainRowHtml}
-      </span>
-      <button class="usb-deselect-btn" title="Deselect unit">✕</button>
+        <button class="usb-deselect-btn" title="Deselect unit">✕</button>
+      </div>
+      ${terrainBoxHtml}
     `;
     bar.querySelector('.usb-deselect-btn').addEventListener('click', () => {
       this._clearSelection();
@@ -2377,6 +2414,10 @@ export class UIController {
     });
     bar.querySelector('.usb-cycle-prev')?.addEventListener('click', () => this._cycleSelection(-1));
     bar.querySelector('.usb-cycle-next')?.addEventListener('click', () => this._cycleSelection(+1));
+    bar.querySelector('.usb-info-btn')?.addEventListener('click', () => {
+      this._unitStatsExpanded = !this._unitStatsExpanded;
+      this._renderUnitStatsBar();
+    });
   }
 
   _renderTurnInfo() {
@@ -2401,23 +2442,23 @@ export class UIController {
       ? `Round ${state.round} of ${cyclePhases.length}`
       : `Day ${cycle} · Round ${roundInCycle + 1}`;
 
-    // Render always-visible cycle bar (compact icon row)
-    const cycleBar = this._el('cycle-bar');
-    if (cycleBar) {
-      cycleBar.innerHTML = CYCLE_STEPS.map((step, i) => {
-        const active = i === roundInCycle;
-        const imgSrc = this.renderer.getPortraitDataURL(step.sprite, 64);
-        const iconHtml = imgSrc
-          ? `<img class="cycle-icon" src="${imgSrc}" alt="${step.label}">`
-          : step.label.charAt(0);
-        return `<div class="cycle-step phase-${step.phase} ${active ? 'cycle-active' : 'cycle-dim'}"
-                     title="${step.desc}">${iconHtml}${active ? `<span class="cycle-name">${step.label}</span>` : ''}</div>`;
-      }).join('');
+    // Pill bump above the score bar: "[phase icon] Night — Day 1 · Round 2"
+    const activeStep = CYCLE_STEPS[roundInCycle];
+    const bumpEl   = this._el('cycle-bump');
+    const iconEl   = this._el('cycle-bump-icon');
+    const labelEl  = this._el('cycle-bump-label');
+    if (bumpEl && activeStep) {
+      bumpEl.className = `phase-${activeStep.phase}`;
+      bumpEl.title = activeStep.desc;
     }
-
-    // Round label sits below the cycle bar
-    const roundLabelEl = this._el('round-label');
-    if (roundLabelEl) roundLabelEl.textContent = roundLabel;
+    if (iconEl && activeStep) {
+      const imgSrc = this.renderer?.getPortraitDataURL?.(activeStep.sprite, 64);
+      if (imgSrc) iconEl.src = imgSrc;
+      iconEl.alt = activeStep.label;
+    }
+    if (labelEl && activeStep) {
+      labelEl.textContent = `${activeStep.label} — ${roundLabel}`;
+    }
 
     // During planning phase, show planning info
     if (this._planMode) {
@@ -3751,25 +3792,29 @@ export class UIController {
     this._el('tile-zoom-overlay')?.classList.remove('visible');
   }
 
-  /** Cycle chronicle through: none → mini → full → none */
-  _cycleChronicle() {
-    const modes = ['none', 'mini', 'full'];
-    const next  = modes[(modes.indexOf(this._chronicleMode) + 1) % modes.length];
-    this._setChronicleMode(next);
-  }
-
-  _setChronicleMode(mode) {
-    this._chronicleMode = mode;
-    const sidebar = this._el('chronicle-sidebar');
-    if (sidebar) sidebar.style.display = mode === 'full' ? 'flex' : 'none';
-    // Hide standalone button when full sidebar is open (button lives in sidebar header instead)
-    const standaloneBtn = this._el('chronicle-toggle');
-    if (standaloneBtn) standaloneBtn.style.display = mode === 'full' ? 'none' : '';
-    this._renderMiniChronicle();
-    if (mode === 'full') this._renderSidebarLog();
-    // Update renderer inset so framing avoids the sidebar area
-    if (this.renderer) this.renderer.insetLeft = mode === 'full' ? 240 : 0;
-    // Resize canvas to account for sidebar width change, then redraw
+  /** Open or close the left-edge chronicle sidebar. */
+  _setChronicleOpen(open) {
+    this._chronicleOpen = !!open;
+    const panel = this._el('chronicle-sidebar');
+    if (panel) panel.classList.toggle('collapsed', !this._chronicleOpen);
+    const toggle = this._el('chronicle-tab-toggle');
+    if (toggle) toggle.textContent = this._chronicleOpen ? '−' : '+';
+    if (this._chronicleOpen) this._renderSidebarLog();
+    // On mobile, plan and chronicle are mutually exclusive — close the plan panel when opening chronicle.
+    if (this._chronicleOpen && this._isMobileViewport()) {
+      const planPanel = this._el('plan-panel');
+      if (planPanel && !planPanel.classList.contains('collapsed')) {
+        planPanel.classList.add('collapsed');
+        const planTabToggle = this._el('plan-tab-toggle');
+        if (planTabToggle) planTabToggle.textContent = '+';
+        const planToggleBtn = this._el('plan-toggle-btn');
+        if (planToggleBtn) planToggleBtn.textContent = '▶';
+        this._syncPlanInset();
+        this._renderEndTurnBtn();
+      }
+    }
+    // Update renderer inset so framing avoids the sidebar area when open
+    if (this.renderer) this.renderer.insetLeft = this._chronicleOpen ? 240 : 0;
     this.renderer?.resize();
     this.onRedraw?.();
   }
@@ -3851,28 +3896,7 @@ export class UIController {
     ).join('');
     el.scrollTop = el.scrollHeight;
 
-    this._renderMiniChronicle();
-    if (this._chronicleMode === 'full') this._renderSidebarLog();
-  }
-
-  _renderMiniChronicle() {
-    const el = this._el('chronicle-mini');
-    if (!el) return;
-    const mode = this._chronicleMode ?? 'mini';
-
-    if (mode === 'mini') {
-      const visible = this._visibleLog();
-      const last5   = visible.slice(-5);
-      el.innerHTML  = last5.map(m => `<div class="mini-log-entry ${this._logEntryModifier(m)}"${this._logEntryStyle(m)}>${this._logText(m)}</div>`).join('');
-    } else {
-      el.innerHTML = '';
-    }
-
-    // Update active state on the chronicle toggle in map controls
-    const toggleBtn = this._el('chronicle-toggle');
-    if (toggleBtn) {
-      toggleBtn.classList.toggle('chronicle-btn-active', mode !== 'none');
-    }
+    if (this._chronicleOpen) this._renderSidebarLog();
   }
 
   /**

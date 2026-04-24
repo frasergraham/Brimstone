@@ -275,7 +275,7 @@ describe('TUTORIAL_STEPS', () => {
     const dn = TUTORIAL_STEPS.findIndex(s => s.id === 'day_night');
     assert.ok(dn > w2, 'day_night after watch_r2');
     assert.equal(TUTORIAL_STEPS[dn].trigger, 'click');
-    assert.ok(TUTORIAL_STEPS[dn].spotlight?.selector?.includes('cycle-bar'), 'spotlights cycle-bar');
+    assert.ok(TUTORIAL_STEPS[dn].spotlight?.selector?.includes('cycle-bump'), 'spotlights cycle-bump');
   });
 
   test('survivor and smithy steps exist in correct order', () => {
