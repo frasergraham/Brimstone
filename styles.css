@@ -766,12 +766,13 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   display: none;
   flex-direction: column;
   height: 100vh;
+  position: relative; /* anchor for absolutely-positioned #cycle-bump */
 }
 
 #game-header {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 0.5rem 0.75rem;
   padding: 0.4rem 0.75rem;
   padding-top: max(0.4rem, env(safe-area-inset-top));
@@ -782,27 +783,13 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   flex-shrink: 0;
 }
 
-.header-title {
-  font-size: 1.1rem;
-  letter-spacing: 0.2em;
-  color: var(--day);
-  opacity: 0.8;
-  flex-shrink: 0;
-}
-
-#header-cycle-group {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  flex-shrink: 0;
-}
-
 #turn-info {
   display: flex;
   align-items: center;
   gap: 0.6rem;
   flex: 1;
   min-width: 0;
+  justify-content: center;
 }
 
 .header-buttons {
@@ -1061,77 +1048,45 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   margin-bottom: 0.25rem;
 }
 
-/* 8-step day/night cycle icons — inline within header */
-#cycle-bar {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  flex-shrink: 0;
-}
-
-/* Day N · Round M label — inline within header */
-#round-label {
-  font-size: 0.65rem;
-  color: #b8ac98;
-  letter-spacing: 0.06em;
-  white-space: nowrap;
-  flex-shrink: 0;
-  opacity: 0.85;
-}
-
-.cycle-step {
+/* ── Cycle bump: semi-circular badge above the score bar showing the current phase ── */
+#cycle-bump {
+  position: absolute;
+  left: 50%;
+  bottom: 0;                             /* anchored to the top edge of the score bar */
+  transform: translate(-50%, -40%);      /* protrudes upward into the map area */
+  width: 96px;
+  height: 96px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 50% 50% 0 0;
   display: flex;
   flex-direction: column;
   align-items: center;
-  cursor: default;
-  padding: 0.1rem 0.2rem;
-  border-radius: 3px;
-  border: 1px solid transparent;
-  font-size: 0.95rem;
-  line-height: 1.2;
-  transition: opacity 0.2s;
-  user-select: none;
+  justify-content: center;
+  gap: 0.15rem;
+  padding: 0.35rem 0 0;
+  pointer-events: none;
+  z-index: 4;
 }
-
-.cycle-dim  { opacity: 0.55; }
-.cycle-active { opacity: 1; padding: 0.1rem 0.3rem; }
-
-.cycle-active.phase-dawn  { background: rgba(255,140,0,0.15);  color: #ffaa44;      border-color: #ff8c00; }
-.cycle-active.phase-day   { background: rgba(245,200,66,0.15); color: var(--day);   border-color: var(--day); }
-.cycle-active.phase-dusk  { background: rgba(180,60,0,0.20);   color: #ff7744;      border-color: #c04020; }
-.cycle-active.phase-night { background: rgba(123,79,187,0.20); color: var(--night); border-color: var(--night); }
-
-.cycle-icon {
-  width: 20px;
-  height: 20px;
+#cycle-bump-icon {
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
   object-fit: cover;
-  pointer-events: none;
 }
-.cycle-active .cycle-icon {
-  width: 22px;
-  height: 22px;
-}
-
-.cycle-name {
-  font-size: 0.6rem;
-  font-weight: bold;
+#cycle-bump-label {
+  font-size: 0.65rem;
+  color: #b8ac98;
   letter-spacing: 0.06em;
-  text-transform: uppercase;
-  margin-top: 0.05rem;
+  line-height: 1.15;
+  text-align: center;
   white-space: nowrap;
 }
-
-/* Day N · Round M label — kept for any remaining inline uses */
-.cycle-round-label {
-  font-size: 0.7rem;
-  color: var(--text-dim);
-  white-space: nowrap;
-  letter-spacing: 0.04em;
-  opacity: 0.75;
-  margin: 0 0.4rem;
-  align-self: center;
-}
+#cycle-bump.phase-dawn  #cycle-bump-icon { box-shadow: 0 0 8px rgba(255,140,0,0.55);  }
+#cycle-bump.phase-day   #cycle-bump-icon { box-shadow: 0 0 8px rgba(245,200,66,0.55); }
+#cycle-bump.phase-dusk  #cycle-bump-icon { box-shadow: 0 0 8px rgba(180,60,0,0.65);   }
+#cycle-bump.phase-night #cycle-bump-icon { box-shadow: 0 0 10px rgba(123,79,187,0.70); }
 
 .turn-line { font-size: 0.85rem; color: #b8ac98; }
 
@@ -1476,89 +1431,94 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 
 /* ── Chronicle toggle (top-left, independent of zoom controls) ─────────── */
 
-.chronicle-toggle-btn {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  z-index: 11;
-  transition: left 0.2s ease;
-}
-
 /* Shift map controls right when AI debug panel is open */
-.ai-debug-open .zoom-controls     { left: 272px; }
-.ai-debug-open .chronicle-toggle-btn { left: 268px; }
-.ai-debug-open #chronicle-mini    { left: 268px; }
+.ai-debug-open .zoom-controls { left: 272px; }
 
-/* ── Mini chronicle (top-left HUD) ──────────────────────────────────────── */
+/* ── Chronicle sidebar (left-edge collapsible panel mirroring the plan panel) ── */
 
-#chronicle-mini {
+.chronicle-panel {
   position: absolute;
-  top: 50px;
-  left: 8px;
-  max-width: 340px;
-  pointer-events: none;
-  z-index: 8;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: calc(240px + env(safe-area-inset-left));
+  background: rgba(13, 17, 23, 0.95);
+  border-right: 1px solid rgba(255,255,255,0.1);
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  transition: left 0.2s ease;
+  z-index: 30;
+  font-size: 0.8rem;
+  transition: width 0.2s ease;
 }
-.chronicle-mini-btn {
-  pointer-events: auto;
-  align-self: flex-start;
-  background: rgba(13, 17, 23, 0.72);
-  border: 1px solid var(--border);
-  color: var(--text-dim);
-  font-size: 0.85rem;
-  padding: 2px 8px;
-  border-radius: 3px;
+
+/* Collapsed: only the tab is visible */
+.chronicle-panel.collapsed {
+  width: 0;
+  border-right: none;
+  overflow: visible;
+}
+.chronicle-panel.collapsed .chronicle-panel-header,
+.chronicle-panel.collapsed #chronicle-sidebar-log {
+  display: none;
+}
+
+/* Tab — the protruding button that's always clickable */
+.chronicle-tab {
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(13,17,23,0.95);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-left: none;
+  border-radius: 0 6px 6px 0;
+  color: #ccc;
+  font-size: 0.7rem;
+  padding: 0.4rem 0.3rem;
   cursor: pointer;
-  margin-bottom: 2px;
-  transition: border-color 0.15s, color 0.15s;
-}
-.chronicle-mini-btn:hover { border-color: var(--text); color: var(--text-bright); }
-#chronicle-mini .mini-log-entry {
-  font-size: 11px;
-  line-height: 1.3;
-  color: rgba(210, 200, 180, 0.85);
-  background: rgba(13, 17, 23, 0.55);
-  padding: 2px 6px;
-  border-radius: 3px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-/* Fade older entries (button is child 1, entries are children 2–6) */
-#chronicle-mini .mini-log-entry:nth-child(2) { opacity: 0.45; }
-#chronicle-mini .mini-log-entry:nth-child(3) { opacity: 0.55; }
-#chronicle-mini .mini-log-entry:nth-child(4) { opacity: 0.65; }
-#chronicle-mini .mini-log-entry:nth-child(5) { opacity: 0.8; }
-#chronicle-mini .mini-log-entry:nth-child(6) { opacity: 1; }
-
-@media (max-width: 600px) {
-  #chronicle-mini { max-width: 220px; }
-  #chronicle-mini .mini-log-entry { font-size: 10px; }
-}
-
-/* ── Chronicle sidebar (left panel, 'full' state) ──────────────────────── */
-
-#chronicle-sidebar {
-  width: 240px;
-  flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg-panel);
-  border-right: 1px solid var(--border);
-  overflow: hidden;
-  z-index: 5;
+  align-items: center;
+  gap: 0.45rem;
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+@media (hover: hover) {
+  .chronicle-tab { transition: background 0.15s, border-color 0.15s; }
+  .chronicle-tab:hover { background: rgba(40,50,60,0.97); color: #fff; }
+}
+.chronicle-tab-label {
+  white-space: nowrap;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+}
+.chronicle-tab-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--day, #d4a72c);
+  background: rgba(13,17,23,0.85);
+  border: 1px solid rgba(212,167,44,0.55);
+  border-radius: 4px;
+}
+@media (hover: hover) {
+  .chronicle-tab:hover .chronicle-tab-toggle {
+    border-color: var(--day, #d4a72c);
+    background: rgba(40,50,60,0.97);
+  }
 }
 
-.chronicle-sidebar-header {
+.chronicle-panel-header {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.4rem 0.75rem;
-  border-bottom: 1px solid var(--border);
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
   flex-shrink: 0;
 }
 
@@ -1574,17 +1534,6 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 #chronicle-sidebar-log .log-entry {
   padding: 3px 0;
   border-bottom: 1px solid rgba(255,255,255,0.04);
-}
-
-/* Active state for the mini button when sidebar is open */
-.chronicle-mini-btn-active {
-  border-color: var(--gold) !important;
-  color: var(--gold) !important;
-}
-/* Active state for chronicle toggle in map controls */
-.chronicle-btn-active {
-  border-color: rgba(200, 168, 75, 0.75) !important;
-  background: rgba(200, 168, 75, 0.18) !important;
 }
 
 /* ── Chronicle overlay ─────────────────────────────────────────────────── */
@@ -1954,12 +1903,6 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   font-weight: 600;
   color: var(--text);
   letter-spacing: 0.03em;
-}
-
-#chronicle-mini .log-round-separator {
-  margin-top: 0.25rem;
-  padding-top: 0.2rem;
-  border-top: 1px solid rgba(58, 45, 88, 0.6);
 }
 
 /* Scrollbar */
@@ -3116,12 +3059,15 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   /* Whole game fits in one viewport — no page-level scroll */
   #game-screen { height: 100dvh; }
 
-  /* Header: tighter, cycle group wraps to own row */
+  /* Header: tighter single-row layout on mobile */
   #game-header { padding: max(0.35rem, env(safe-area-inset-top)) max(0.75rem, env(safe-area-inset-right)) 0.35rem max(0.75rem, env(safe-area-inset-left)); gap: 0.3rem 0.5rem; flex-shrink: 0; }
-  .header-title { display: none; }
-  #header-cycle-group { order: -1; width: 100%; justify-content: center; }
-  #turn-info { flex-wrap: wrap; gap: 0.3rem 0.6rem; }
+  #turn-info { gap: 0.3rem 0.6rem; }
   .phase-hint { display: none; }
+
+  /* Shrink the cycle bump to conserve vertical space */
+  #cycle-bump { width: 72px; height: 72px; padding-top: 0.3rem; }
+  #cycle-bump-icon { width: 32px; height: 32px; }
+  #cycle-bump-label { font-size: 0.6rem; }
 
   /* game-main fills all remaining height; canvas is the only child */
   #game-main { overflow: hidden; min-height: 0; }

@@ -28,7 +28,9 @@ export function collectUIElements(doc = document) {
     'game-screen':             g('game-screen'),
     'end-turn-btn':            g('end-turn-btn'),
     'turn-info':               g('turn-info'),
-    'cycle-bar':               g('cycle-bar'),
+    'cycle-bump':              g('cycle-bump'),
+    'cycle-bump-icon':         g('cycle-bump-icon'),
+    'cycle-bump-label':        g('cycle-bump-label'),
     'node-status':             g('node-status'),
     'node-status-bar':         g('node-status-bar'),
     'online-status':           g('online-status'),
@@ -58,10 +60,10 @@ export function collectUIElements(doc = document) {
     // ── Chronicle ─────────────────────────────────────────────────────────
     'chronicle-close':         g('chronicle-close'),
     'chronicle-overlay':       g('chronicle-overlay'),
-    'chronicle-sidebar-close': g('chronicle-sidebar-close'),
     'chronicle-sidebar':       g('chronicle-sidebar'),
     'chronicle-sidebar-log':   g('chronicle-sidebar-log'),
-    'chronicle-mini':          g('chronicle-mini'),
+    'chronicle-tab':           g('chronicle-tab'),
+    'chronicle-tab-toggle':    g('chronicle-tab-toggle'),
     'event-log':               g('event-log'),
 
     // ── Tile zoom ─────────────────────────────────────────────────────────

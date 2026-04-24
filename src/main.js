@@ -2413,7 +2413,7 @@ function _resumeCampaignMission(missionId) {
   _setupLocalUI(canvas, witchAI, null, false);
 
   // Hide chronicle by default for story mode
-  ui._setChronicleMode('none');
+  ui._setChronicleOpen(false);
 
   // Wire mission info button
   ui.showMissionInfoBtn(true);
@@ -2893,7 +2893,7 @@ function _initCampaignMission(missionDef) {
   _roundHistory = [];
 
   // Hide chronicle by default for story mode — less clutter during narrative
-  ui._setChronicleMode('none');
+  ui._setChronicleOpen(false);
 
   // ── MissionConductor setup for guided missions ────────────────────────────
   if (missionDef.conductorSteps) {

@@ -313,9 +313,9 @@ export const TUTORIAL_STEPS = [
   {
     id: 'day_night',
     title: 'Day / Night Cycle',
-    body: 'The bar at the top tracks the 8-round cycle: 🌅 Dawn → ☀ Day → 🌇 Dusk → 🌙 Night.\n\nAt night, enemies grow stronger. Dawn and Dusk are scoring checkpoints for Power Nodes.',
+    body: 'The badge above the score bar shows the current phase of the 8-round cycle: 🌅 Dawn → ☀ Day → 🌇 Dusk → 🌙 Night.\n\nAt night, enemies grow stronger. Dawn and Dusk are scoring checkpoints for Power Nodes.',
     trigger: 'click',
-    spotlight: { type: 'element', selector: '#cycle-bar', arrow: 'up' },
+    spotlight: { type: 'element', selector: '#cycle-bump', arrow: 'down' },
     tooltipPos: 'bottom-left',
     witchPlan: null,
   },
