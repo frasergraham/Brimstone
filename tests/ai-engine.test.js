@@ -945,7 +945,7 @@ describe('assemblePlan', () => {
     const sim = makeSim();
     const board = assessBoard(sim);
     const actions = [
-      { type: PlanActionType.EQUIP_WEAPON, entityId: 'witch1', weapon: 'weapon:sword', _priority: 0, _goal: Goal.DEFEND_WITCH },
+      { type: PlanActionType.EQUIP_WEAPON, entityId: 'witch1', weapon: 'sword', _priority: 0, _goal: Goal.DEFEND_WITCH },
       { type: PlanActionType.SUMMON, entityId: 'witch1', _priority: 2, _goal: Goal.BUILD_ARMY },
     ];
     const plan = assemblePlan(actions, sim, board, new Map());

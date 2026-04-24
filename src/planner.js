@@ -3,6 +3,7 @@ import { hexKey, getNeighbors } from './hex.js';
 import { getReachableHexes, getVisiblePositions } from './actions.js';
 import { TileType, ResourceType } from './tiles.js';
 import { EntityType } from './entities.js';
+import { ITEMS } from './items.js';
 
 // ── Plan action types ────────────────────────────────────────────────────────
 //
@@ -51,8 +52,12 @@ export function snapEntity(entity) {
     row:         entity.row,
     hp:          entity.hp,
     maxHp:       entity.maxHp,
-    attack:      entity.attack,
-    defense:     entity.defense,
+    // Effective character-sheet stats (base + equipped weapon). The
+    // battle-dialog breakdown labels this row "base" but includes the
+    // weapon bonus; transient combat modifiers (attackBonus /
+    // defenseBonus) are added on top by the dialog.
+    attack:      entity.getAttack(),
+    defense:     entity.getDefense(),
     weapon:      entity.weapon,
     attackBonus: entity.attackBonus || 0,
     defenseBonus: entity.defenseBonus || 0,
@@ -203,7 +208,7 @@ export function computeProjectedInventory(state, plan) {
       }
       case PlanActionType.USE_ITEM: {
         const item = action.item;
-        if (!item || item.startsWith('weapon:')) break;
+        if (!item || ITEMS[item]?.kind === 'weapon') break;
         if ((hero[item] || 0) > 0) hero[item]--;
         break;
       }

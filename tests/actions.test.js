@@ -1439,21 +1439,21 @@ describe('executeUseItem — weapon equip', () => {
   test('equipping a weapon applies its stats and costs 0', () => {
     const state = freshState();
     const hero = state.hero;
-    hero.items['weapon:sword'] = 1;
-    const atkBefore = hero.attack;
+    hero.items['sword'] = 1;
+    const atkBefore = hero.getAttack();
 
-    const r = executeUseItem(state, hero, 'weapon:sword');
+    const r = executeUseItem(state, hero, 'sword');
     assert.equal(r.success, true);
     assert.equal(r.cost, 0, 'Equipping a weapon should be free');
-    assert.equal(hero.attack, atkBefore + 2, 'Sword gives +2 ATK');
+    assert.equal(hero.getAttack(), atkBefore + 2, 'Sword gives +2 effective ATK');
     assert.equal(hero.weapon, WeaponType.SWORD);
-    assert.equal(hero.items['weapon:sword'], 0, 'Weapon consumed from inventory');
+    assert.equal(hero.items['sword'], 0, 'Weapon consumed from inventory');
   });
 
   test('equipping weapon fails if not in inventory', () => {
     const state = freshState();
-    state.hero.items['weapon:sword'] = 0;
-    const r = executeUseItem(state, state.hero, 'weapon:sword');
+    state.hero.items['sword'] = 0;
+    const r = executeUseItem(state, state.hero, 'sword');
     assert.equal(r.success, false);
   });
 });
@@ -1493,7 +1493,7 @@ describe('auto-equip weapon on loot find', () => {
       Math.random = origRandom;
     }
     assert.equal(hero.weapon, WeaponType.SWORD, 'sword should be auto-equipped');
-    assert.equal((hero.items['weapon:sword'] || 0), 0, 'should NOT be in items when auto-equipped');
+    assert.equal((hero.items['sword'] || 0), 0, 'should NOT be in items when auto-equipped');
   });
 
   test('weapon goes to items when hero already has a weapon', () => {
@@ -1507,7 +1507,7 @@ describe('auto-equip weapon on loot find', () => {
       Math.random = origRandom;
     }
     assert.equal(hero.weapon, WeaponType.AXE, 'existing weapon should remain equipped');
-    assert.ok((hero.items['weapon:sword'] || 0) >= 1, 'new weapon should be in items');
+    assert.ok((hero.items['sword'] || 0) >= 1, 'new weapon should be in items');
   });
 
   test('auto-equip log message says equipped immediately', () => {

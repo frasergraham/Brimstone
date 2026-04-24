@@ -11,7 +11,7 @@
 import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, bestWitchObjective, nearestBuilding, roundsUntilScoring, scoreNodeFeasibility, WITCH_PERSONALITIES, adjacentBlockingFortToward } from './ai.js';
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
-import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType } from './entities.js';
+import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf } from './entities.js';
 import { TileType, ResourceType } from './tiles.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
 
@@ -443,8 +443,8 @@ export function estimateCombat(attacker, defender, board) {
 
   const atkGangupFlat = Math.min(gangUpCount, ADVANTAGE_CAP);
   const defGangupFlat = Math.min(defAllyCount, ADVANTAGE_CAP);
-  const expectedAtk = (attacker.attack || 0) + atkBonus + nightBonus + atkGangupFlat + expectedDieValue(gangUpDice);
-  const expectedDef = (defender.defense || 0) + defBonus + fortBonus + defGangupFlat + expectedDieValue(defAllyDice);
+  const expectedAtk = attackOf(attacker) + atkBonus + nightBonus + atkGangupFlat + expectedDieValue(gangUpDice);
+  const expectedDef = defenseOf(defender) + defBonus + fortBonus + defGangupFlat + expectedDieValue(defAllyDice);
 
   const favorability = expectedAtk - expectedDef;
 

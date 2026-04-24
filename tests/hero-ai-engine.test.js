@@ -187,14 +187,14 @@ describe('assessHeroBoard', () => {
       entities: [
         makeEntity({
           id: 'hero1', col: 3, row: 3,
-          items: { [ResourceType.HERBS]: 1, 'weapon:sword': 1 },
+          items: { [ResourceType.HERBS]: 1, 'sword': 1 },
         }),
         makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
       ],
     });
     const board = assessHeroBoard(sim);
     assert.equal(board.heroWeapons.length, 1);
-    assert.equal(board.heroWeapons[0], 'weapon:sword');
+    assert.equal(board.heroWeapons[0], 'sword');
   });
 
   test('node state includes distance and controller', () => {
@@ -501,7 +501,7 @@ describe('genProtectHero', () => {
     const sim = makeHeroEngineSim({
       entities: [
         makeEntity({ id: 'hero1', col: 3, row: 3, hp: 5, maxHp: 10,
-          items: { 'weapon:sword': 1 } }),
+          items: { 'sword': 1 } }),
         makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
       ],
     });

@@ -41,8 +41,12 @@ export const ITEMS = Object.freeze({
     slot: 'weapon',
     statMods: { attack: 1, defense: 0 },
     label: '🪄 Staff (+1 ATK, +2 vs undead)',
-    // Phase 3 will populate combatTriggers to replace the hardcoded
-    // staff-vs-undead branch in Entity.resolveCombat.
+    // Grants +1 attack advantage die vs undead, summoned minions, and
+    // constructs (wood/iron golems). Entity.resolveCombat iterates
+    // combatTriggers instead of hardcoding the defender-type list.
+    combatTriggers: [
+      { when: 'attack', ifDefenderHasAnyTag: ['undead', 'minion', 'construct'], advantage: 1 },
+    ],
   },
   dagger: {
     id: 'dagger',

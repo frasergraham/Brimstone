@@ -947,7 +947,7 @@ function _isFogVisible(col, row, humanFaction, entities, phase) {
   const faction = getFaction(humanFaction);
   for (const e of entities) {
     if (!e.alive || e.owner !== humanFaction) continue;
-    const range = faction.getSightRange(phase, e.ability === 'scout');
+    const range = faction.getSightRange(phase, e.hasAbility('scout'));
     if (hexDistance(e.col, e.row, col, row) <= range) return true;
   }
   return false;
@@ -967,7 +967,7 @@ function _updateNodeDiscoveryDuringStep(gs, humanFaction, rend) {
       if (obj[seenKey]) continue; // already discovered
       const nowSeen = gs.entities.some(e => {
         if (!e.alive || e.owner !== fac.id) return false;
-        const range = fac.getSightRange(gs.phase, e.ability === 'scout');
+        const range = fac.getSightRange(gs.phase, e.hasAbility('scout'));
         return obj.hexes.some(h => hexDistance(e.col, e.row, h.col, h.row) <= range);
       });
       if (!nowSeen) continue;
@@ -988,7 +988,7 @@ function _updateNodeDiscoveryDuringStep(gs, humanFaction, rend) {
     if (heroFac) {
       const nowSeen = gs.entities.some(e => {
         if (!e.alive || e.owner !== 'hero') return false;
-        const range = heroFac.getSightRange(gs.phase, e.ability === 'scout');
+        const range = heroFac.getSightRange(gs.phase, e.hasAbility('scout'));
         return hexDistance(e.col, e.row, mt.col, mt.row) <= range;
       });
       if (nowSeen) {

@@ -3,6 +3,7 @@
 // Imported by UIController to keep rendering logic separate from DOM wiring.
 
 import { PlanActionType } from './planner.js';
+import { ITEMS } from './items.js';
 import { EntityType, ENTITY_COLOR } from './entities.js';
 import { ResourceType } from './tiles.js';
 import { nodeController } from './game.js';
@@ -80,7 +81,7 @@ function _stepCostLabel(action, projShared, projWitch, projEntityItems) {
       return `−1${RES_ICON[ResourceType.HERBS]}`;
     case PlanActionType.USE_ITEM: {
       const item = action.item;
-      if (!item || item.startsWith('weapon:')) return '';
+      if (!item || ITEMS[item]?.kind === 'weapon') return '';
       return `−1${RES_ICON[item] || item}`;
     }
     case PlanActionType.SOUND_HORN:
@@ -186,7 +187,7 @@ export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entit
       }
       case PlanActionType.USE_ITEM: {
         const item = a.item;
-        if (!item || item.startsWith('weapon:')) break;
+        if (!item || ITEMS[item]?.kind === 'weapon') break;
         if ((projShared[item] || 0) > 0) { projShared[item]--; }
         break;
       }
@@ -380,7 +381,7 @@ function _advanceProjectedInventory(a, projShared, projWitch, projEntityItems, e
     }
     case PlanActionType.USE_ITEM: {
       const item = a.item;
-      if (!item || item.startsWith('weapon:')) break;
+      if (!item || ITEMS[item]?.kind === 'weapon') break;
       if ((projShared[item] || 0) > 0) { projShared[item]--; }
       break;
     }

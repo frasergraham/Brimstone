@@ -1620,7 +1620,7 @@ export class Renderer {
     const visibleSet = new Set();
     for (const e of state.entities) {
       if (!e.alive || e.owner !== observerOwner) continue;
-      const range = getFaction(e.owner).getSightRange(state.phase, e.ability === SurvivorAbility.SCOUT);
+      const range = getFaction(e.owner).getSightRange(state.phase, e.hasAbility(SurvivorAbility.SCOUT));
       // Only iterate hexes within sight range of this entity (not entire map)
       const rMin = Math.max(0, e.row - range);
       const rMax = Math.min(MAP_ROWS - 1, e.row + range);

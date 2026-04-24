@@ -1085,7 +1085,7 @@ export class GameState {
         if (obj[key]) continue; // already discovered
         obj[key] = this.entities.some(e => {
           if (!e.alive || e.owner !== fac.id) return false;
-          const range = fac.getSightRange(this.phase, e.ability === SurvivorAbility.SCOUT);
+          const range = fac.getSightRange(this.phase, e.hasAbility(SurvivorAbility.SCOUT));
           return obj.hexes.some(h => hexDistance(e.col, e.row, h.col, h.row) <= range);
         });
       }
@@ -1111,7 +1111,7 @@ export class GameState {
       const visible = new Set();
       for (const e of this.entities) {
         if (!e.alive || e.owner !== factionId) continue;
-        const range = factionObj.getSightRange(this.phase, e.ability === SurvivorAbility.SCOUT);
+        const range = factionObj.getSightRange(this.phase, e.hasAbility(SurvivorAbility.SCOUT));
         const rMin = Math.max(0, e.row - range);
         const rMax = Math.min(MAP_ROWS - 1, e.row + range);
         const cMin = Math.max(0, e.col - range);

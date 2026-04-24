@@ -13,8 +13,9 @@ import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, nearestBuilding
 import { EnginePlanSimState, BaseAIEngine, allocateBudget, assemblePlan, clamp01, updateAllyClaimedNodes, personalityName } from './ai-engine.js';
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
-import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType } from './entities.js';
+import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf } from './entities.js';
 import { TileType, ResourceType } from './tiles.js';
+import { ITEMS } from './items.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
 
 // ── Goal names ───────────────────────────────────────────────────────────────
@@ -110,7 +111,7 @@ export function assessHeroBoard(sim) {
   const heroSideUnits = sim.entities.filter(e => e.alive && e.owner === 'hero');
   function _heroCanSee(target) {
     return heroSideUnits.some(viewer => {
-      const range = viewer.type === EntityType.SURVIVOR && viewer.ability === 'scout'
+      const range = viewer.type === EntityType.SURVIVOR && viewer.hasAbility('scout')
         ? _heroSightBase(phase) + 1
         : _heroSightBase(phase);
       return hexDistance(viewer.col, viewer.row, target.col, target.row) <= range;
@@ -133,10 +134,10 @@ export function assessHeroBoard(sim) {
     e.alive && e.owner === 'witch' && !isLeaderType(e.type) && _heroCanSee(e)
   );
   const witchMinionCount = witchMinions.length;
-  const heroArmyStrength = (hero ? hero.attack + hero.hp : 0) +
-    survivors.reduce((s, e) => s + e.attack + e.hp, 0);
-  const witchArmyStrength = (witch ? witch.attack + witch.hp : 0) +
-    witchMinions.reduce((s, e) => s + e.attack + e.hp, 0);
+  const heroArmyStrength = (hero ? attackOf(hero) + hero.hp : 0) +
+    survivors.reduce((s, e) => s + attackOf(e) + e.hp, 0);
+  const witchArmyStrength = (witch ? attackOf(witch) + witch.hp : 0) +
+    witchMinions.reduce((s, e) => s + attackOf(e) + e.hp, 0);
 
   // Node state
   const objectives = sim.witchObjectives || [];
@@ -173,7 +174,7 @@ export function assessHeroBoard(sim) {
   const foodCount = sim.inventory?.hero?.[ResourceType.FOOD] || 0;
 
   const heroWeapons = hero?.items
-    ? Object.keys(hero.items).filter(k => k.startsWith('weapon:') && hero.items[k] > 0)
+    ? Object.keys(hero.items).filter(k => ITEMS[k]?.kind === 'weapon' && hero.items[k] > 0)
     : [];
 
   const shared = sim.inventory?.hero || {};
@@ -349,8 +350,8 @@ export function estimateHeroCombat(attacker, defender, board) {
 
   const atkGangupFlat = Math.min(allies.length, ADVANTAGE_CAP);
   const defGangupFlat = Math.min(defAllies.length, ADVANTAGE_CAP);
-  const expectedAtk = (attacker.attack || 0) + atkBonus + atkGangupFlat + expectedDieValue(gangUpDice);
-  const expectedDef = (defender.defense || 0) + defBonus + fortBonus + defNightBonus + defGangupFlat + expectedDieValue(defAllyDice);
+  const expectedAtk = attackOf(attacker) + atkBonus + atkGangupFlat + expectedDieValue(gangUpDice);
+  const expectedDef = defenseOf(defender) + defBonus + fortBonus + defNightBonus + defGangupFlat + expectedDieValue(defAllyDice);
 
   const favorability = expectedAtk - expectedDef;
   const expectedDamage = favorability > 0 ? (favorability > 3 ? 2 : 1) : 0;

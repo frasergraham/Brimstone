@@ -323,7 +323,7 @@ export class HeroFaction extends Faction {
                 name: s.name,
                 title: s.title,
                 hp: s.hp, maxHp: s.maxHp,
-                attack: s.attack, defense: s.defense,
+                attack: s.getAttack(), defense: s.getDefense(),
                 abilityLabel: s.abilityLabel,
                 color: s.color,
               });
@@ -347,13 +347,13 @@ export class HeroFaction extends Faction {
     const abilityNote = entity.abilityLabel ? ` · ${entity.abilityLabel}` : '';
     return {
       encounterLog: [
-        `☺ ${entity.name} the ${entity.title} steps out of hiding and joins the party! (HP ${entity.hp}/${entity.maxHp} · ATK ${entity.attack} · DEF ${entity.defense}${abilityNote})`
+        `☺ ${entity.name} the ${entity.title} steps out of hiding and joins the party! (HP ${entity.hp}/${entity.maxHp} · ATK ${entity.getAttack()} · DEF ${entity.getDefense()}${abilityNote})`
       ],
       encounterSurvivor: {
         type: 'survivor',
         name: entity.name, title: entity.title,
         hp: entity.hp, maxHp: entity.maxHp,
-        attack: entity.attack, defense: entity.defense,
+        attack: entity.getAttack(), defense: entity.getDefense(),
         abilityLabel: entity.abilityLabel,
         color: entity.color,
       },
@@ -441,13 +441,13 @@ export class WitchFaction extends Faction {
   buildDiscoveryResult(entity) {
     return {
       encounterLog: [
-        `† A cowering survivor is found… raised as a zombie! (HP ${entity.hp}/${entity.maxHp} · ATK ${entity.attack} · DEF ${entity.defense})`
+        `† A cowering survivor is found… raised as a zombie! (HP ${entity.hp}/${entity.maxHp} · ATK ${entity.getAttack()} · DEF ${entity.getDefense()})`
       ],
       encounterSurvivor: {
         type: 'zombie',
         name: 'Zombie',
         hp: entity.hp, maxHp: entity.maxHp,
-        attack: entity.attack, defense: entity.defense,
+        attack: entity.getAttack(), defense: entity.getDefense(),
         color: entity.color,
       },
     };

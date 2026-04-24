@@ -206,59 +206,75 @@ describe('heal', () => {
 //   dagger: +1 ATK, +0 DEF
 
 describe('equipWeapon', () => {
+  // Phase 3 decoupled weapon bonuses from base stats. getAttack() /
+  // getDefense() compose the ITEMS[weapon].statMods contribution at
+  // call time; hero.attack / hero.defense stay at the base value.
+  // These tests assert the effective (character-sheet) value via the
+  // getters and leave the base stat untouched.
   test('sword gives +2 ATK, no DEF change', () => {
     const hero = createHero(0, 0);
     hero.equipWeapon(WeaponType.SWORD);
-    assert.equal(hero.attack, 5);   // 3+2
-    assert.equal(hero.defense, 2);  // unchanged
+    assert.equal(hero.getAttack(), 5);   // base 3 + sword +2
+    assert.equal(hero.getDefense(), 2);  // unchanged
     assert.equal(hero.weapon, WeaponType.SWORD);
   });
 
   test('shield gives +2 DEF, no ATK change', () => {
     const hero = createHero(0, 0);
     hero.equipWeapon(WeaponType.SHIELD);
-    assert.equal(hero.attack, 3);   // unchanged
-    assert.equal(hero.defense, 4);  // 2+2
+    assert.equal(hero.getAttack(), 3);   // unchanged
+    assert.equal(hero.getDefense(), 4);  // base 2 + shield +2
   });
 
   test('axe gives +1 ATK and +1 DEF', () => {
     const hero = createHero(0, 0);
     hero.equipWeapon(WeaponType.AXE);
-    assert.equal(hero.attack, 4);
-    assert.equal(hero.defense, 3);
+    assert.equal(hero.getAttack(), 4);
+    assert.equal(hero.getDefense(), 3);
   });
 
   test('staff gives +1 ATK', () => {
     const hero = createHero(0, 0);
     hero.equipWeapon(WeaponType.STAFF);
-    assert.equal(hero.attack, 4);
-    assert.equal(hero.defense, 2);
+    assert.equal(hero.getAttack(), 4);
+    assert.equal(hero.getDefense(), 2);
   });
 
-  test('switching weapons: old bonus is removed before new one is applied', () => {
+  test('switching weapons: old bonus is no longer contributing', () => {
     const hero = createHero(0, 0);
-    hero.equipWeapon(WeaponType.SWORD); // +2 ATK → attack=5
-    hero.equipWeapon(WeaponType.SHIELD); // sword removed, shield added → attack=3, defense=4
-    assert.equal(hero.attack, 3, 'sword bonus should be removed');
-    assert.equal(hero.defense, 4, 'shield bonus should be applied');
+    hero.equipWeapon(WeaponType.SWORD);
+    hero.equipWeapon(WeaponType.SHIELD);
+    assert.equal(hero.getAttack(), 3, 'sword bonus should not persist');
+    assert.equal(hero.getDefense(), 4, 'shield bonus should apply');
   });
 
   test('equipping null (unequip) removes weapon bonus', () => {
     const hero = createHero(0, 0);
     hero.equipWeapon(WeaponType.SWORD);
-    assert.equal(hero.attack, 5);
+    assert.equal(hero.getAttack(), 5);
     hero.equipWeapon(null);
-    assert.equal(hero.attack, 3, 'weapon bonus should be removed when unequipped');
+    assert.equal(hero.getAttack(), 3, 'effective attack returns to base after unequip');
     assert.equal(hero.weapon, null);
   });
 
   test('equipping same weapon twice does not double-apply bonus', () => {
-    // Design expectation: switching to same weapon should still remove old first
     const hero = createHero(0, 0);
     hero.equipWeapon(WeaponType.SWORD);
     hero.equipWeapon(WeaponType.SWORD);
-    // If old is removed then re-applied: attack should still be 3+2=5
-    assert.equal(hero.attack, 5, 'should not double-stack same weapon');
+    assert.equal(hero.getAttack(), 5, 'should not double-stack same weapon');
+  });
+
+  test('base stats stay stable across weapon swaps', () => {
+    // Weapon bonus is now composed at call time, not baked into the
+    // base stat via mutation — this is the Phase 3 invariant.
+    const hero = createHero(0, 0);
+    const baseAttack = hero.attack;
+    const baseDefense = hero.defense;
+    hero.equipWeapon(WeaponType.SWORD);
+    hero.equipWeapon(WeaponType.SHIELD);
+    hero.equipWeapon(null);
+    assert.equal(hero.attack, baseAttack, 'base attack never mutated');
+    assert.equal(hero.defense, baseDefense, 'base defense never mutated');
   });
 });
 
@@ -282,7 +298,7 @@ describe('resetTurn', () => {
     hero.equipWeapon(WeaponType.SWORD);
     hero.resetTurn();
     assert.equal(hero.hp, 11, 'HP should not reset');
-    assert.equal(hero.attack, 5, 'weapon bonus should not reset');
+    assert.equal(hero.getAttack(), 5, 'weapon bonus should not reset');
   });
 });
 

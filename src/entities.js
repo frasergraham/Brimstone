@@ -1,6 +1,7 @@
 // Entity definitions: Hero, Witch, named Survivors, Zombie, Minion, Golems
 import { WEAPON_STATS } from './tiles.js';
 import { UNIT_TYPES } from './unit-types.js';
+import { ITEMS } from './items.js';
 import { SurvivorAbility } from './abilities.js';
 
 let _nextId = 1;
@@ -305,6 +306,13 @@ export class Entity {
     this.defense = stats.defense;
     this.agility = BASE_AGILITY[type] ?? 1;
 
+    // Tag metadata from UNIT_TYPES (e.g. 'undead', 'construct', 'minion',
+    // 'living', 'leader', 'day-leader'). Used by item combat triggers —
+    // e.g. staff's anti-undead bonus iterates ITEMS.staff.combatTriggers
+    // and matches against defender.tags. Empty array for any entity type
+    // missing from UNIT_TYPES (shouldn't happen in production).
+    this.tags = UNIT_TYPES[type]?.tags ?? [];
+
     // Temporary combat modifiers (reset each turn)
     this.attackBonus  = 0;
     this.defenseBonus = 0;
@@ -323,7 +331,10 @@ export class Entity {
     this.defendCount   = 0;
     this.guarding      = 0;
 
-    // Personal backpack: herbs, weapons (key = 'weapon:sword' etc), horse
+    // Personal backpack — a flat key→count map. Weapons use their ITEMS
+    // id directly (e.g. 'sword'); consumables and mounts use their
+    // resource/item id (e.g. 'horse', 'herbs'). ITEMS[key].kind
+    // distinguishes weapon from consumable.
     this.items = {};
   }
 
@@ -333,18 +344,58 @@ export class Entity {
     return this.name ?? defaultDisplayName(this.type);
   }
 
+  // ── Stat accessors (Phase 2 of the units/items/abilities refactor) ──
+  //
+  // Callers that want the "character sheet" attack / defense value should
+  // prefer these methods to direct field reads. They return the base stat
+  // plus any equipped-weapon bonus; transient combat modifiers
+  // (attackBonus / defenseBonus) are added by callers where relevant
+  // (resolveCombat, AI expected-value estimators, battle-dialog breakdown).
+  //
+  // During Phase 2 the weapon bonus is still baked into `this.attack` by
+  // equipWeapon(); Phase 3 decouples the two, at which point these
+  // accessors compose the bonus from ITEMS[this.weapon].statMods instead.
+  // Call sites stay correct across that transition.
+
+  getAttack()  {
+    return this.attack + (ITEMS[this.weapon]?.statMods?.attack ?? 0);
+  }
+  getDefense() {
+    return this.defense + (ITEMS[this.weapon]?.statMods?.defense ?? 0);
+  }
+  getAgility() { return this.agility ?? 1; }
+
+  // Movement range in tiles. 1 base, +1 with horse equipped.
+  getMoveRange() {
+    return 1 + ((this.items?.['horse'] || 0) > 0 ? 1 : 0);
+  }
+
+  // Survivor abilities are today a single string on `this.ability`. Phase 4
+  // promotes this to `abilities: string[]`; `hasAbility` and the `abilities`
+  // getter are the forward-compatible API.
+  get abilities() {
+    return this.ability ? [this.ability] : [];
+  }
+
+  hasAbility(id) {
+    return this.ability === id;
+  }
+
+  // Unit-type tags (`undead`, `construct`, `minion`, `living`, `leader`,
+  // `day-leader`, `night-leader`, `summoned`). Populated in the
+  // constructor from UNIT_TYPES. Used by item combat triggers and
+  // faction-level predicates.
+  hasTag(tag) {
+    return Array.isArray(this.tags) && this.tags.includes(tag);
+  }
+
   equipWeapon(weaponType) {
-    if (this.weapon) {
-      const old = WEAPON_STATS[this.weapon];
-      this.attack  -= old.attackBonus;
-      this.defense -= old.defenseBonus;
-    }
-    this.weapon = weaponType;
-    if (weaponType) {
-      const stats = WEAPON_STATS[weaponType];
-      this.attack  += stats.attackBonus;
-      this.defense += stats.defenseBonus;
-    }
+    // Phase 3: weapon stats are no longer baked into this.attack /
+    // this.defense. getAttack() / getDefense() compose the bonus from
+    // ITEMS[this.weapon].statMods at call time. This keeps the base
+    // stat stable across weapon swaps and makes equipped weapons a
+    // true runtime-composed modifier.
+    this.weapon = weaponType || null;
   }
 
   resetTurn() {
@@ -394,14 +445,23 @@ export class Entity {
 
     const roll = state ? (s) => state.nextDie(s) : _nextDie;
 
-    // Staff vs undead/minions/golems → +1 attacker advantage die.
+    // Item combat triggers (e.g. staff vs undead/minions/golems →
+    // +1 attacker advantage die). Data-driven via ITEMS[weapon].combatTriggers
+    // so adding a new conditional weapon effect is a one-file change. The
+    // defender's tag set is sourced from `defender.tags` (set in the Entity
+    // constructor) and falls back to UNIT_TYPES for plain-object test fixtures.
     let atkStaffAdvantage = 0;
-    if (attacker.weapon === 'staff' &&
-        (defender.type === EntityType.ZOMBIE ||
-         defender.type === EntityType.MINION ||
-         defender.type === EntityType.WOOD_GOLEM ||
-         defender.type === EntityType.IRON_GOLEM)) {
-      atkStaffAdvantage = 1;
+    const triggers = ITEMS[attacker.weapon]?.combatTriggers ?? [];
+    if (triggers.length > 0) {
+      const defTags = defender.tags && defender.tags.length > 0
+        ? defender.tags
+        : (UNIT_TYPES[defender.type]?.tags ?? []);
+      for (const t of triggers) {
+        if (t.when && t.when !== 'attack') continue;
+        if (t.ifDefenderHasAnyTag && t.ifDefenderHasAnyTag.some(tag => defTags.includes(tag))) {
+          atkStaffAdvantage += t.advantage ?? 0;
+        }
+      }
     }
 
     const atkNet = clampAdvantage(
@@ -414,8 +474,8 @@ export class Entity {
     const atkBaseDie = _pickFromPool(atkPool, atkNet);
     const defBaseDie = _pickFromPool(defPool, defNet);
 
-    const attackRoll  = atkBaseDie + attacker.attack  + (attacker.attackBonus  || 0) + extraAtkBonus;
-    const defenseRoll = defBaseDie + defender.defense + (defender.defenseBonus || 0) + extraDefBonus - fatiguePenalty;
+    const attackRoll  = atkBaseDie + attackOf(attacker)  + (attacker.attackBonus  || 0) + extraAtkBonus;
+    const defenseRoll = defBaseDie + defenseOf(defender) + (defender.defenseBonus || 0) + extraDefBonus - fatiguePenalty;
     const margin = attackRoll - defenseRoll;
 
     const atkExtraDice = atkPool.slice(1);
@@ -432,6 +492,29 @@ export class Entity {
       fatiguePenalty,
     };
   }
+}
+
+// Stat accessors that tolerate plain-object entity fixtures (used by unit
+// tests that skip the Entity constructor) as well as real Entity instances.
+// Production callers prefer `entity.getAttack()` / `entity.getDefense()`
+// directly; these wrappers exist so Entity.resolveCombat and AI
+// estimateCombat helpers don't break on lightweight test fixtures.
+//
+// For plain objects (post-Phase-3), the fallback composes the weapon
+// bonus from ITEMS[weapon].statMods so fixtures that set
+// { attack: 3, weapon: 'sword' } resolve to an effective value of 5,
+// matching Entity.getAttack() semantics.
+export function attackOf(e) {
+  if (typeof e?.getAttack === 'function') return e.getAttack();
+  const base = e?.attack ?? 0;
+  const mod  = e?.weapon ? (ITEMS[e.weapon]?.statMods?.attack ?? 0) : 0;
+  return base + mod;
+}
+export function defenseOf(e) {
+  if (typeof e?.getDefense === 'function') return e.getDefense();
+  const base = e?.defense ?? 0;
+  const mod  = e?.weapon ? (ITEMS[e.weapon]?.statMods?.defense ?? 0) : 0;
+  return base + mod;
 }
 
 // ── Advantage-dice math ─────────────────────────────────────────────────────

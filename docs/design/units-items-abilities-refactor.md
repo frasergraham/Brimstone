@@ -1,5 +1,11 @@
 # Brimstone Units / Items / Abilities Refactor
 
+**Status:** Phases 1, 2, 3 landed on PR #291 (branch `claude/document-unit-stats-yiQQd`). Phases 4–6 remain. See **Working notes** at the bottom for per-phase landing summaries.
+
+This is a living plan. Update it as PRs land or new blockers surface.
+
+---
+
 ## Context
 
 Today's implementation of unit stats, equipment, and abilities is scattered across many files. A quick audit found:
@@ -148,3 +154,39 @@ After Phase 5:
 
 After Phase 6:
 - The new survivor and new weapon appear in-game without any edits to `src/entities.js`, `src/actions.js`, or `server/resolver.js` in the diff. That is the acceptance criterion for the refactor.
+
+---
+
+## Working notes / landing summaries
+
+### Phase 1 (landed — commit `fb29858`)
+Registry scaffolding, no behaviour change. `src/unit-types.js`, `src/items.js`, `src/abilities.js` introduced as single sources of truth. `BASE_STATS`, `BASE_AGILITY`, `ENTITY_COLOR` in `src/entities.js` derive from `UNIT_TYPES`; `WEAPON_STATS` and `WEAPON_LABEL` in `src/tiles.js` derive from `ITEMS`; `SurvivorAbility` re-exported from `src/abilities.js`. `tests/registries.test.js` locks the derivation. 1992 tests pass; 100-game headless 56/44 (in the 38–62 band).
+
+### Phase 2 (landed)
+Stat getters + reader migration. Added `getAttack()` / `getDefense()` / `getAgility()` / `getMoveRange()` / `hasAbility(id)` / `hasTag(tag)` / `abilities` on `Entity`. Migrated effective-stat readers subsystem by subsystem: AI expected-value estimators in `src/hero-ai-engine.js` and `src/ai-engine.js`, UI displays in `src/ui.js`, encounter snapshots in `src/factions.js`, battle-dialog snapshot in `src/planner.js`, remote-battle wire snapshot in `server/remote-battle.js`, and the `resolveCombat` formula itself in `src/entities.js`. Migrated every `entity.ability === X` check to `entity.hasAbility(X)` across `src/renderer.js`, `src/actions.js`, `src/ui.js`, `src/game.js`, `src/main.js`, `src/hero-ai-engine.js`.
+
+Serialization contracts in `server/state-sync.js` and `server/resolver.js` snapshotEntities were intentionally **not** migrated — they emit the raw field so deserialization + `Object.assign` round-trips without touching `equipWeapon`.
+
+Side fix: `PlanSimState.constructor` in `src/ai.js` now re-parents its entity clones to `Entity.prototype` (via `Object.setPrototypeOf({ ...e }, Entity.prototype)`) so sim clones get `getAttack()` / `hasAbility()` / etc. without running `Object.assign` through read-only prototype getters (`alive`, `displayName`).
+
+For plain-object test fixtures that skip the Entity constructor, added `attackOf(e)` / `defenseOf(e)` helpers in `src/entities.js`. They call the getter when present, fall back to direct field reads otherwise. Used in `resolveCombat` and the two AI `estimateCombat` helpers.
+
+### Phase 3 (landed)
+Equipment as runtime composition. `equipWeapon` no longer mutates `this.attack` / `this.defense` — it only sets `this.weapon`. `getAttack()` / `getDefense()` compose the bonus from `ITEMS[this.weapon].statMods` at call time. Base stats stay stable across weapon swaps.
+
+Staff-vs-undead is now data-driven via `ITEMS.staff.combatTriggers = [{ when:'attack', ifDefenderHasAnyTag:['undead','minion','construct'], advantage:1 }]`. `Entity.resolveCombat` iterates the attacker's triggers rather than hardcoding the defender-type list. `entity.tags` is populated in the Entity constructor from `UNIT_TYPES[type].tags`; `entity.hasTag(tag)` tests membership. `resolveCombat` falls back to `UNIT_TYPES[defender.type].tags` when the defender is a plain-object fixture.
+
+Inventory keys flattened: `'weapon:sword'` → `'sword'`. Weapon-vs-resource classification now comes from `ITEMS[id].kind` rather than a `'weapon:'` prefix. All `startsWith('weapon:')` call sites migrated in `src/actions.js`, `src/hero-ai-engine.js`, `src/ui.js`, `src/ui-render.js`, `src/planner.js`. `src/loot.config.js` loot-table entries renamed to bare ids. Test fixtures updated in `tests/actions.test.js` and `tests/hero-ai-engine.test.js`.
+
+`SAVE_VERSION` bumped from 2 to 3. Pre-v3 saves would double-count the weapon bonus on reload (stored `entity.attack` included the weapon mod pre-refactor; post-refactor, `getAttack()` adds it again) and carry invalid inventory keys. `pruneStaleAndIncompatibleSaves` handles the drop on server boot — active games lose persistence at deploy time, per the save-compatibility decision in the plan.
+
+Test deltas: `tests/entities.test.js` equipWeapon/resetTurn tests migrated to assert `hero.getAttack()` instead of `hero.attack`, plus a new test "base stats stay stable across weapon swaps" that locks the Phase 3 invariant. `tests/actions.test.js` weapon-equip tests use `'sword'` key. 1993 tests pass; 100-game headless 50/50.
+
+### Phase 4 (pending)
+`ability: string` → `abilities: string[]`; un-bake BRAWLER / STURDY from roster numbers (adjust base stats down by the passive amount). `_buildAbilityAction` becomes a loop; `executeUseAbility` dispatches via `ABILITIES[id].execute`. Another `SAVE_VERSION` bump (3→4) since BRAWLER survivors would render with wrong stats under the new un-baked roster.
+
+### Phase 5 (pending)
+Faction-innate abilities via `DaySideFaction.innateLeaderAbilities` / `NightSideFaction.innateLeaderAbilities`. Replace the `isLeaderType(actor.type) && actor.owner === 'hero'|'witch'` gates at `src/actions.js:334,345` with `actor.hasAbility('summon' | 'sound_horn')`. `SOUND_HORN` / `SUMMON` executors become `ABILITIES` entries.
+
+### Phase 6 (pending)
+Proof PR: split `SURVIVOR_ROSTER` into `src/content/survivors.js`, add one new survivor and one new weapon end-to-end without editing `actions.js`, `entities.js`, or `resolver.js`. Update `CLAUDE.md` with a "how to add content" section.

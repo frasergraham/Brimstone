@@ -1,6 +1,7 @@
 // UI controller: handles canvas clicks, sidepanel updates, action buttons
 import { hexKey, hexToPixel, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus } from './tiles.js';
+import { ITEMS } from './items.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType } from './entities.js';
 import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
@@ -1850,7 +1851,7 @@ export class UIController {
           const hasMetal   = (fortInv.metal || 0) > 0;
           const hasWood    = (fortInv.wood  || 0) > 0;
           const cantAfford = projInv ? (!hasMetal && !hasWood) : !action.affordable;
-          const hasDoubler = entity.type === EntityType.SURVIVOR && entity.ability === SurvivorAbility.FORTIFY_DOUBLE;
+          const hasDoubler = entity.type === EntityType.SURVIVOR && entity.hasAbility(SurvivorAbility.FORTIFY_DOUBLE);
           const tileData   = state.tiles.get(hexKey(entity.col, entity.row));
           const cur        = tileData ? tileData.fortifyLevel : 0;
           const metalGain   = Math.min(MAX_FORTIFY_LEVEL, cur + 2) - cur;
@@ -1892,7 +1893,7 @@ export class UIController {
             if (this._planMode && item.item === ResourceType.FOOD) continue;
             let itemDis = dis;
             if (projInv) {
-              if (!item.item.startsWith('weapon:')) {
+              if (ITEMS[item.item]?.kind !== 'weapon') {
                 if ((projInv.hero[item.item] || 0) < 1) itemDis = true;
               }
             }
@@ -2361,8 +2362,8 @@ export class UIController {
             </span>
             <span class="usb-stat-val">${entity.hp}/${entity.maxHp}</span>
           </span>
-          <span class="usb-stat">ATK <span class="usb-stat-val">${entity.attack}</span></span>
-          <span class="usb-stat">DEF <span class="usb-stat-val">${entity.defense}</span></span>
+          <span class="usb-stat">ATK <span class="usb-stat-val">${entity.getAttack()}</span></span>
+          <span class="usb-stat">DEF <span class="usb-stat-val">${entity.getDefense()}</span></span>
           ${weaponLabel ? `<span class="usb-weapon">⚔ ${weaponLabel}</span>` : ''}
         </span>
         ${terrainRowHtml}
@@ -4605,7 +4606,7 @@ function _unitCardHTML(entity, { renderer = null, selectable = false, showStats 
 }
 
 function _snapEntity(e) {
-  return { id: e.id, name: e.displayName, hp: e.hp, maxHp: e.maxHp, attack: e.attack, defense: e.defense, type: e.type, title: e.title ?? null };
+  return { id: e.id, name: e.displayName, hp: e.hp, maxHp: e.maxHp, attack: e.getAttack(), defense: e.getDefense(), type: e.type, title: e.title ?? null };
 }
 
 function _combatantHTML(snap, role, portraitSrc = null) {

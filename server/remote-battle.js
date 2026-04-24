@@ -85,7 +85,7 @@ async function _callLLM(room, playerId, llmConfig) {
       id: e.id, type: e.type, name: e.name,
       col: e.col, row: e.row,
       hp: e.hp, maxHp: e.maxHp,
-      attack: e.attack, defense: e.defense,
+      attack: e.getAttack(), defense: e.getDefense(),
     }));
 
   const seat = room.players.find(s => s.playerId === playerId);
