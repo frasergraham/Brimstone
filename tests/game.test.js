@@ -927,3 +927,58 @@ describe('GameState side accessors', () => {
     assert.throws(() => state.nodeScoreForSide('twilight'), /Unknown side/);
   });
 });
+
+// ── swapLeaderToFaction (stub-faction support) ───────────────────────────────
+
+describe('swapLeaderToFaction', () => {
+  test('swapping the day-side leader to rogue applies rogue stats in place', () => {
+    const state = new GameState(true, true);
+    const heroId      = state.hero.id;
+    const heroOwnerId = state.hero.ownerId;
+    const heroCol     = state.hero.col;
+    const heroRow     = state.hero.row;
+
+    state.swapLeaderToFaction('day', 'rogue');
+
+    // Same entity, mutated in place — id/owner/position preserved.
+    assert.equal(state.hero.id,      heroId);
+    assert.equal(state.hero.ownerId, heroOwnerId);
+    assert.equal(state.hero.col,     heroCol);
+    assert.equal(state.hero.row,     heroRow);
+    // Stub stats applied.
+    assert.equal(state.hero.type,      'rogue');
+    assert.equal(state.hero.maxHp,     10);
+    assert.equal(state.hero.attack,    3);
+    assert.equal(state.hero.defense,   1);
+    assert.equal(state.hero.agility,   8);
+    assert.equal(state.hero.factionId, 'rogue');
+    // Full-heal on swap (game just started).
+    assert.equal(state.hero.hp,        state.hero.maxHp);
+  });
+
+  test('swapping to side default is a no-op', () => {
+    const state = new GameState(true, true);
+    const beforeType  = state.hero.type;
+    const beforeMaxHp = state.hero.maxHp;
+    state.swapLeaderToFaction('day', 'hero');
+    assert.equal(state.hero.type,  beforeType);
+    assert.equal(state.hero.maxHp, beforeMaxHp);
+  });
+
+  test('swapping to a faction not on the side is a no-op', () => {
+    const state = new GameState(true, true);
+    const before = state.hero.maxHp;
+    state.swapLeaderToFaction('day', 'witch'); // wrong side
+    assert.equal(state.hero.maxHp, before);
+  });
+
+  test('swapping the night-side leader to brute applies brute stats', () => {
+    const state = new GameState(true, true);
+    state.swapLeaderToFaction('night', 'brute');
+    assert.equal(state.witch.type,    'brute');
+    assert.equal(state.witch.maxHp,   14);
+    assert.equal(state.witch.attack,  3);
+    assert.equal(state.witch.defense, 1);
+    assert.equal(state.witch.agility, 3);
+  });
+});

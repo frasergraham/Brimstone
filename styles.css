@@ -402,6 +402,59 @@ canvas { touch-action: pan-x pan-y; }
   color: var(--text);
 }
 
+/* ── Quick Play 6-tile faction picker (Side ↔ Faction) ──────────────────── */
+.qp-faction-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0 auto 1rem;
+  max-width: 480px;
+}
+.qp-side-row {
+  display: grid;
+  grid-template-columns: 60px repeat(3, 1fr);
+  align-items: stretch;
+  gap: 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.3rem;
+  background: var(--bg-section);
+}
+.qp-side-row[data-side="day"]   { border-left: 3px solid var(--day);   }
+.qp-side-row[data-side="night"] { border-left: 3px solid var(--night); }
+.qp-side-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-serif);
+  font-size: 0.85rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.qp-side-row[data-side="day"]   .qp-side-label { color: var(--day);   }
+.qp-side-row[data-side="night"] .qp-side-label { color: var(--night); }
+.qp-side-row .qp-faction-btn {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.45rem 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  position: relative;
+}
+.qp-stub-badge {
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 0.05rem 0.35rem;
+  border-radius: 2px;
+}
+
 /* ── Quick Play advanced options ────────────────────────────────────────── */
 .qp-advanced {
   max-width: 340px;

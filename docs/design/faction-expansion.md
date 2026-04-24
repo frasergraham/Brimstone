@@ -171,6 +171,17 @@ The actual storage rename (`inventory.hero` → `inventory.day` etc.) is deferre
 
 This still unblocks PR 5 (stub factions): new factions on the same side share that side's storage by routing through the accessors, which is the correct behaviour for stubs that inherit parent-side resource pools.
 
+### PR 6 (landed)
+Offline single-player faction picker is now a 6-tile grid grouped by side: Day (Paladin / Rogue / Captain) and Night (Witch / Necromancer / Brute). Stub factions render a small `stub` badge. Side rows have day-gold and night-purple accent borders pulled from the `--day` / `--night` CSS custom properties.
+
+The shared mechanic for "apply a stub faction's stats to a constructor-pre-populated default leader" was extracted from `server/lobby.js` into `state.swapLeaderToFaction(side, factionId)`. The lobby's `_swapStubLeader` is now a thin wrapper. `init()` in `src/main.js` calls the same method when the offline picker chose a stub.
+
+**UI smoke testing not yet performed in-browser.** Per CLAUDE.md UI rules, the feature should be exercised in `npm run dev` to confirm the picker selects, the active state moves correctly, and `Start Game` launches with the stub's stats. Listing this as a follow-up — the test suite verifies the underlying `swapLeaderToFaction` logic but not click-handler wiring.
+
+**Online lobby UI deferred:** the lobby's `setFaction` protocol message landed in PR 3 and the wire-format fields landed alongside, but no UI surfaces a faction switcher inside an online lobby yet. Tracked as a follow-up; not blocking the rest of the PR sequence since AI/headless paths aren't affected.
+
+Strings in `index.html` Help/How-to-Play sections still say "Hero" / "Witch" — those describe the side defaults and remain accurate; full Day/Night text rewrite folds into PR 9 (doc sync).
+
 ### PR 5 (landed)
 Four stub factions registered: **Rogue** (*Mercy Sloane*) and **Captain** (*Captain Eli Ward*) on the day side; **Necromancer** and **Brute** on the night side.
 

@@ -233,7 +233,7 @@ function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
   if (localHeroAI)  localHeroAI.onBattleResult  = battleCallback;
 }
 
-function init(witchIsAI, heroIsAI, autoplay = false) {
+function init(witchIsAI, heroIsAI, autoplay = false, humanFactionId = null) {
   _autoplay = autoplay;
   _gameStartTime = Date.now();
   _missionConductor = null; // ensure conductor state is cleared for normal games
@@ -248,6 +248,13 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
   const mapSize   = document.getElementById('select-map-size')?.value ?? 'standard';
   const nodeCount = parseInt(document.getElementById('select-node-count')?.value ?? '3', 10);
   state    = new GameState(witchIsAI, heroIsAI, mapSize, nodeCount);
+
+  // Stub factions: rebrand the human-side default leader if the player
+  // picked a stub. AI side stays on its side default for now.
+  if (humanFactionId) {
+    const def = getFaction(humanFactionId);
+    if (def.isStub()) state.swapLeaderToFaction(def.side, humanFactionId);
+  }
   // Allow global fog-of-war override from the setup screen select.
   const fogSel = document.getElementById('select-fog-of-war');
   if (fogSel) state.fogOfWar = fogSel.value;
@@ -3075,23 +3082,26 @@ document.addEventListener('click', e => {
   });
 });
 
-// Quick Play faction toggle
-let _qpFaction = 'hero';
-document.getElementById('btn-faction-hero').addEventListener('click', () => {
-  _qpFaction = 'hero';
-  document.getElementById('btn-faction-hero').classList.add('active');
-  document.getElementById('btn-faction-witch').classList.remove('active');
-});
-document.getElementById('btn-faction-witch').addEventListener('click', () => {
-  _qpFaction = 'witch';
-  document.getElementById('btn-faction-witch').classList.add('active');
-  document.getElementById('btn-faction-hero').classList.remove('active');
-});
+// Quick Play faction picker — 6 tiles, grouped by side.
+// _qpFactionId is the specific faction the player picked. It maps onto a
+// side (day/night) which decides which side-AI to spawn for the opponent.
+let _qpFactionId = 'hero';
+const _qpFactionTiles = document.querySelectorAll('.qp-faction-picker .qp-faction-btn');
+for (const btn of _qpFactionTiles) {
+  btn.addEventListener('click', () => {
+    _qpFactionId = btn.dataset.faction;
+    for (const other of _qpFactionTiles) other.classList.toggle('active', other === btn);
+  });
+}
 
-// Quick Play start button (always 1v1 vs AI)
+// Quick Play start button (always 1v1 vs AI). The faction picker chooses
+// the human-controlled faction; the AI plays the side default on the
+// opposing side. Stubs are passed through to GameState.swapLeaderToFaction
+// so the human's leader gets stub stats.
 document.getElementById('btn-start-qp').addEventListener('click', () => {
-  if (_qpFaction === 'hero') init(true, false);
-  else init(false, true);
+  const def     = getFaction(_qpFactionId);
+  const isDay   = def.side === 'day';
+  init(/*witchIsAI*/ isDay, /*heroIsAI*/ !isDay, /*autoplay*/ false, /*humanFactionId*/ _qpFactionId);
 });
 
 function _doRestart() {

@@ -1388,36 +1388,15 @@ function attachAI(room, faction, forPlayerId = null, personality = null) {
  * near the faction's existing leader (no synthetic-patching needed).
  */
 /**
- * The GameState constructor pre-populates the first hero/witch leader with
- * default stats (PALADIN/WITCH entity type). When the corresponding lobby
- * slot picked a stub faction (rogue/captain/necromancer/brute), we mutate
- * the leader entity in place to match the stub's stats — preserving its id,
- * position, ownerId and color so downstream references (state.hero, plan
- * actions targeting `e.id`, etc.) continue to resolve.
- *
- * No-op when factionId equals the side default ('hero' or 'witch').
+ * Wrapper around `state.swapLeaderToFaction` for lobby seats. The
+ * GameState constructor pre-populates the first hero/witch leader with
+ * default stats; when the corresponding seat picked a stub faction the
+ * leader is mutated in place to match the stub's stats. Side is derived
+ * from `seat.faction` ('hero' → day, 'witch' → night).
  */
 function _swapStubLeader(room, faction, factionId) {
   if (!factionId || factionId === faction) return;
-  const def = getFactionsForSide(sideOf(faction)).find(f => f.id === factionId);
-  if (!def || !def.isStub()) return;
-
-  const leader = faction === 'hero' ? room.state.hero : room.state.witch;
-  if (!leader) return;
-
-  // Pull the stub's stat block by constructing a throwaway entity at the
-  // same position, then copy the relevant fields onto the live leader.
-  const fresh = def.createLeader(leader.col, leader.row, leader.ownerId, room.state);
-  leader.type      = fresh.type;
-  leader.maxHp     = fresh.maxHp;
-  leader.hp        = fresh.maxHp;       // full-heal on swap (game just started)
-  leader.attack    = fresh.attack;
-  leader.defense   = fresh.defense;
-  leader.agility   = fresh.agility;
-  leader.factionId = fresh.factionId;
-  // Drop the throwaway from state.entities — createLeader pushed nothing,
-  // but the Entity constructor consumed an id from state's counter; that's
-  // a small id leak we tolerate at game-start.
+  room.state.swapLeaderToFaction(sideOf(faction), factionId);
 }
 
 function _addExtraAISeat(room, faction, personality = null, factionId = null) {

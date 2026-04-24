@@ -438,6 +438,37 @@ export class GameState {
     throw new Error(`Unknown side: ${sideId}`);
   }
 
+  /**
+   * Swap the constructor-pre-populated default leader on the given side
+   * (`'day'` → `state.hero`, `'night'` → `state.witch`) for one matching
+   * the supplied stub-faction id. No-op when factionId equals the side's
+   * default ('hero' or 'witch'), or when the supplied faction is not a
+   * registered stub.
+   *
+   * Mutates the live leader entity in place — id, position, ownerId, color
+   * are preserved so downstream references (state.hero, plan-action target
+   * lookups, save/replay round entity ids) continue to resolve.
+   *
+   * Used by the offline init() flow and the online lobby's startGame.
+   */
+  swapLeaderToFaction(sideId, factionId) {
+    if (!factionId) return;
+    const def = getFactionsForSide(sideId).find(f => f.id === factionId);
+    if (!def || !def.isStub()) return;
+
+    const leader = sideId === 'day' ? this.hero : this.witch;
+    if (!leader) return;
+
+    const fresh = def.createLeader(leader.col, leader.row, leader.ownerId, this);
+    leader.type      = fresh.type;
+    leader.maxHp     = fresh.maxHp;
+    leader.hp        = fresh.maxHp;       // full-heal on swap (game just started)
+    leader.attack    = fresh.attack;
+    leader.defense   = fresh.defense;
+    leader.agility   = fresh.agility;
+    leader.factionId = fresh.factionId;
+  }
+
   /** Resource inventory shared by all factions on the given side. */
   inventoryForSide(sideId)   { return this.inventory[this._storageKeyForSide(sideId)]; }
 
