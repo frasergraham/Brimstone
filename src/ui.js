@@ -2320,11 +2320,11 @@ export class UIController {
     }
 
     const GLYPHS = {
-      hero: '⚔', witch: '✦', survivor: '☺',
+      hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟',
       zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙',
     };
     const COLORS = {
-      hero: '#d4a72c', witch: '#9b59b6', survivor: '#4caf7d',
+      hero: '#d4a72c', witch: '#9b59b6', survivor: '#4caf7d', soldier: '#3f78c4',
       zombie: '#7c9a57', minion: '#c0392b', wood_golem: '#8B5E3C', iron_golem: '#607D8B',
     };
 
@@ -3174,7 +3174,7 @@ export class UIController {
     const dialog = this._el('encounter-dialog');
     const card   = this._el('encounter-card');
 
-    const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
+    const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
     const glyph  = GLYPHS[encounterUnit.type] ?? '?';
     const color  = encounterUnit.color || '#d4c9b0';
 
@@ -4602,7 +4602,7 @@ function _entityPortraitId(snap) {
  * @param {number}  [opts.portraitSize] Portrait diameter in px (default 36).
  */
 function _unitCardHTML(entity, { renderer = null, selectable = false, showStats = true, portraitSize = 36 } = {}) {
-  const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
+  const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
   const color  = ENTITY_COLOR[entity.type] || '#888';
   const glyph  = GLYPHS[entity.type] ?? '?';
   const label  = (entity.type === 'survivor' && entity.name) ? entity.name

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {
   Entity, EntityType, SurvivorAbility, SURVIVOR_ROSTER,
   createHero, createWitch, createZombie, createMinion,
-  createWoodGolem, createIronGolem, createSurvivor, resetRoster,
+  createWoodGolem, createIronGolem, createSurvivor, createSoldier, resetRoster,
 } from '../src/entities.js';
 import { WeaponType, WEAPON_STATS } from '../src/tiles.js';
 
@@ -90,6 +90,28 @@ describe('Base stats — Iron Golem', () => {
     assert.equal(g.defense, 2);
     assert.equal(g.owner, 'witch');
     assert.equal(g.type, EntityType.IRON_GOLEM);
+  });
+});
+
+describe('Base stats — Soldier (day-side grunt)', () => {
+  test('HP=2, ATK=1, DEF=1, owner=hero, tagged living/soldier/summoned', () => {
+    const s = createSoldier(0, 0);
+    assert.equal(s.maxHp, 2);
+    assert.equal(s.attack, 1);
+    assert.equal(s.defense, 1);
+    assert.equal(s.owner, 'hero');
+    assert.equal(s.type, EntityType.SOLDIER);
+    assert.equal(s.hasTag('living'),    true);
+    assert.equal(s.hasTag('soldier'),   true);
+    assert.equal(s.hasTag('summoned'),  true);
+    assert.equal(s.hasTag('leader'),    false);
+  });
+
+  test('Soldier is not a leader and carries no innate abilities', () => {
+    const s = createSoldier(0, 0);
+    assert.deepEqual(s.abilities, []);
+    assert.equal(s.hasAbility('summon'),     false);
+    assert.equal(s.hasAbility('sound_horn'), false);
   });
 });
 

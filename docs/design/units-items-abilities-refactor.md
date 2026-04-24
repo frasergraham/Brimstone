@@ -1,6 +1,6 @@
 # Brimstone Units / Items / Abilities Refactor
 
-**Status:** Phases 1–5 landed. Phase 6 remains. See **Working notes** at the bottom for per-phase landing summaries.
+**Status:** Phases 1–6 landed. Refactor complete. See **Working notes** at the bottom for per-phase landing summaries.
 
 This is a living plan. Update it as PRs land or new blockers surface.
 
@@ -212,8 +212,21 @@ ABILITIES registry gained `sound_horn` and `summon` entries (metadata + `kind: '
 
 Tests: 2022 pass (was 2017 after Phase 4). New "Phase 5 — faction-innate leader abilities" suite in `tests/ability-registry.test.js` asserts `createHero` / `createWitch` stamp the right abilities, non-leaders don't carry them, and the `Faction.innateLeaderAbilities` declaration matches. Balance: 500-game 1v1 55.4/44.6, 100-game 2v2 55/45 — both healthy.
 
+### Phase 6 (landed — shipped with Phase 4 + 5 in PR #294)
+Content split + proof of extensibility.
+
+- `SURVIVOR_ROSTER` and `SURVIVOR_COLORS` moved out of `src/entities.js` into `src/content/survivors.js`. `src/entities.js` re-exports the roster so existing imports keep working. Adding a new survivor is now a one-file change (append to `SURVIVOR_ROSTER`), with an optional `src/items.js` touch if the survivor carries a new weapon, and an optional `src/abilities.js` touch if they carry a new ability.
+- New unit type proof: **Soldier** — a day-side grunt (HP 2, ATK 1, DEF 1, agility 5) registered in `src/unit-types.js` with tags `['living', 'soldier', 'summoned']`. Factory wrapper `createSoldier` in `src/entities.js`; glyph `♟` added to the three `GLYPHS` maps in `src/renderer.js` and `src/ui.js`. No summon path wired up yet — the Captain faction gets a bespoke summon-soldier ability in a follow-up PR. The unit type itself works end-to-end today: combat, rendering, pathfinding, and serialization all flow through the generic machinery.
+- `tests/entities.test.js` gains base-stats and ability-purity tests for the Soldier; 2024 tests pass.
+- `CLAUDE.md` adds a "How to add content" section covering abilities, weapons, survivors, and unit types with concrete one-file examples.
+
+Diff surface to add content post-refactor:
+- New survivor: 1 file (`src/content/survivors.js`).
+- New weapon: 1 file (`src/items.js`).
+- New ability: 1 file (`src/abilities.js`), plus optionally a touch of the roster entry that carries it.
+- New unit type: 1 file (`src/unit-types.js`), plus a factory wrapper in `src/entities.js` and a glyph entry in the three `GLYPHS` maps. Glyph maps remain hardcoded per-call-site — a generic `glyphFor(type)` lookup could consolidate them in a follow-up, but it's cosmetic.
+
+Zero touches to `src/actions.js`, `server/resolver.js`, or `server/state-sync.js` for any of the above. That meets the refactor's acceptance criterion.
+
 ### Phase 5 follow-up (pending)
 Full registry-delegated dispatch for SOUND_HORN / SUMMON / FORTIFY / HEAL. Requires either (a) moving executor bodies into a new `src/ability-executors.js` module that can freely import `factions.js` / `entities.js` helpers, or (b) a register-at-load-time API on `src/abilities.js` so `src/actions.js` can inject the functions. Either way, the plan-action type dispatch in `server/resolver.js` becomes `ABILITIES[action.ability ?? planTypeToId(action.type)].execute(state, entity)`, and `executeFortify` / `executeHeal` / `executeSoundHorn` / `executeSummon` shrink to one-line delegates.
-
-### Phase 6 (pending)
-Proof PR: split `SURVIVOR_ROSTER` into `src/content/survivors.js`, add one new survivor and one new weapon end-to-end without editing `actions.js`, `entities.js`, or `resolver.js`. Update `CLAUDE.md` with a "how to add content" section. Good candidate for bundling with the Phase 5 follow-up (full registry-delegated dispatch) since that cleans up the final "touch actions.js to add content" coupling.

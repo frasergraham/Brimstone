@@ -54,6 +54,16 @@ export const UNIT_TYPES = Object.freeze({
     color: '#4caf7d',
     tags: ['living'],
   },
+  // Soldier — day-side grunt, mirror of the witch's minion. Summoned by
+  // the Captain faction (bespoke ability lands in a follow-up PR); the
+  // unit type itself is registered here so combat, rendering, pathfinding
+  // and serialization work generically the moment a summoner exists.
+  soldier: {
+    baseStats: { maxHp: 2, attack: 1, defense: 1 },
+    agility: 5,
+    color: '#3f78c4',
+    tags: ['living', 'soldier', 'summoned'],
+  },
   zombie: {
     baseStats: { maxHp: 2, attack: 2, defense: 0 },
     agility: 2,
