@@ -7,7 +7,7 @@
 // AI personalities, and unit roster within a side. See `src/sides.js`.
 
 import { Phase } from './game.js';
-import { EntityType, SurvivorAbility, createHero, createWitch, createSurvivor, createZombie, createMinion, createWoodGolem, createIronGolem } from './entities.js';
+import { EntityType, SurvivorAbility, createHero, createWitch, createSurvivor, createZombie, createMinion, createWoodGolem, createIronGolem, createRogue, createCaptain, createNecromancer, createBrute } from './entities.js';
 import { ResourceType, TileType, BuildingType } from './tiles.js';
 import { hexKey, getNeighbors } from './hex.js';
 import { AI_HERO_NAMES, AI_WITCH_NAMES } from './ai-names.js';
@@ -31,6 +31,14 @@ export class Faction {
    * other team?" rather than "which single faction faces me?".
    */
   getOpposingSide() { return _opposingSide(this.side); }
+
+  /**
+   * True if this faction is shipped as a stub — registered and selectable
+   * but inheriting parent-side behaviour rather than its own implementation.
+   * Used by the lobby UI to render a "stub" badge so players know what to
+   * expect before picking.
+   */
+  isStub() { return false; }
 
   // ── Action Budget ──
 
@@ -467,19 +475,81 @@ export class WitchFaction extends Faction {
   getAINamePool() { return AI_WITCH_NAMES; }
 }
 
+// ── Stub Factions (PR 5) ────────────────────────────────────────────────────
+// Each stub extends its side's primary faction. It overrides identity (id,
+// name, leaderType, AI name pool) and reports `isStub() === true` so the
+// lobby UI can render a stub badge. All other behaviour — combat, summon,
+// fortify, end-of-round effects, discovery, sight — inherits from the
+// parent, so the stub is mechanically the parent faction with different
+// stats baked into the leader entity (via the new EntityType + BASE_STATS
+// entries in entities.js).
+
+export class RogueFaction extends HeroFaction {
+  get id()         { return 'rogue'; }
+  get name()       { return 'Rogue'; }
+  get leaderType() { return EntityType.ROGUE; }
+  isStub()         { return true; }
+  createLeader(col, row, ownerId, state = null) {
+    return createRogue(col, row, ownerId, state);
+  }
+}
+
+export class CaptainFaction extends HeroFaction {
+  get id()         { return 'captain'; }
+  get name()       { return 'Captain'; }
+  get leaderType() { return EntityType.CAPTAIN; }
+  isStub()         { return true; }
+  createLeader(col, row, ownerId, state = null) {
+    return createCaptain(col, row, ownerId, state);
+  }
+}
+
+export class NecromancerFaction extends WitchFaction {
+  get id()         { return 'necromancer'; }
+  get name()       { return 'Necromancer'; }
+  get leaderType() { return EntityType.NECROMANCER; }
+  isStub()         { return true; }
+  createLeader(col, row, ownerId, state = null) {
+    return createNecromancer(col, row, ownerId, state);
+  }
+}
+
+export class BruteFaction extends WitchFaction {
+  get id()         { return 'brute'; }
+  get name()       { return 'Brute'; }
+  get leaderType() { return EntityType.BRUTE; }
+  isStub()         { return true; }
+  createLeader(col, row, ownerId, state = null) {
+    return createBrute(col, row, ownerId, state);
+  }
+}
+
 // ── Faction Registry ────────────────────────────────────────────────────────
 
-const _hero  = new HeroFaction();
-const _witch = new WitchFaction();
+const _hero        = new HeroFaction();
+const _rogue       = new RogueFaction();
+const _captain     = new CaptainFaction();
+const _witch       = new WitchFaction();
+const _necromancer = new NecromancerFaction();
+const _brute       = new BruteFaction();
 
+// Day side first (paladin → rogue → captain), then night side
+// (witch → necromancer → brute). Iteration order in the lobby picker
+// follows this order.
 const FACTIONS = Object.freeze({
-  hero:  _hero,
-  witch: _witch,
+  hero:        _hero,
+  rogue:       _rogue,
+  captain:     _captain,
+  witch:       _witch,
+  necromancer: _necromancer,
+  brute:       _brute,
 });
 
 /**
- * Look up a Faction by its string id.
- * @param {string} id - 'hero' or 'witch'
+ * Look up a Faction by its string id. Recognised ids:
+ *   day side   — 'hero', 'rogue', 'captain'
+ *   night side — 'witch', 'necromancer', 'brute'
+ * @param {string} id
  * @returns {Faction}
  */
 export function getFaction(id) {

@@ -5,7 +5,8 @@ import { BuildingType, ResourceType, TileType } from './tiles.js';
 import { hexKey, hexDistance, getNeighbors, setMapDimensions, MAP_COLS, MAP_ROWS } from './hex.js';
 import { applyPostRoundEffects, attritionForCycle } from './post-round-effects.js';
 import { sightRange } from './actions.js';
-import { getFaction, allFactions } from './factions.js';
+import { getFaction, allFactions, getFactionsForSide } from './factions.js';
+import { allSides } from './sides.js';
 
 /**
  * Determine which faction controls a power node cluster based on majority hex occupation.
@@ -390,14 +391,29 @@ export class GameState {
    * @param {number} row
    * @param {boolean} isAI
    */
-  addPlayer(playerId, name, faction, col, row, isAI = false) {
-    const leader = faction === 'hero'
-      ? createHero(col, row, playerId, this)
-      : createWitch(col, row, playerId, this);
+  /**
+   * Add a player and create their leader entity.
+   *
+   * @param {string} playerId
+   * @param {string} name
+   * @param {string} faction    side-default faction id ('hero' or 'witch') — wire-compat
+   * @param {number} col
+   * @param {number} row
+   * @param {boolean} [isAI=false]
+   * @param {string} [factionId=null]  specific faction id (e.g. 'rogue'). Defaults
+   *                                   to `faction`. When set to a stub faction
+   *                                   id, the leader gets the stub's entity type
+   *                                   and stats via Faction.createLeader.
+   */
+  addPlayer(playerId, name, faction, col, row, isAI = false, factionId = null) {
+    const def = getFaction(factionId ?? faction);
+    const leader = def.createLeader(col, row, playerId, this);
     leader.name = name;
     this.entities.push(leader);
-    this.players.push({ id: playerId, name, faction, isAI, leaderId: leader.id });
-    // Keep legacy singleton refs pointing at the first hero/witch for offline compat
+    this.players.push({ id: playerId, name, faction, isAI, leaderId: leader.id, factionId: def.id });
+    // Keep legacy singleton refs pointing at the first hero/witch leader for
+    // offline compat. Stub-faction leaders also satisfy these — `state.hero`
+    // continues to mean "the day-side leader" regardless of specific faction.
     if (faction === 'hero'  && !this.hero)  this.hero  = leader;
     if (faction === 'witch' && !this.witch) this.witch = leader;
     return leader;
@@ -673,9 +689,14 @@ export class GameState {
   endRound() {
     this.resolving = false;
 
-    // Faction-specific end-of-round effects (healing, spawning, etc.)
-    for (const faction of allFactions()) {
-      faction.applyEndOfRoundEffects(this);
+    // Side-level end-of-round effects (healing, spawning, etc.). With stub
+    // factions inheriting their parent side's behaviour, iterating
+    // `allFactions()` here would fire each side's effects once per faction
+    // on that side — see PR 5 of docs/design/faction-expansion.md. We
+    // iterate sides instead and dispatch on each side's primary faction.
+    for (const sideId of allSides()) {
+      const primary = getFactionsForSide(sideId)[0];
+      if (primary) primary.applyEndOfRoundEffects(this);
     }
 
     // Advance round and phase.

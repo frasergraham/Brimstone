@@ -38,7 +38,11 @@ const PATTERN = /[!=]==\s*['"](hero|witch)['"]/g;
 // documenting why.
 const ALLOWLIST = Object.freeze({
   // Pre-existing god classes — refactored separately (see Track B).
-  'server/lobby.js':             73,
+  // server/lobby.js bumped from 73 → 74 in PR 5 of the faction-expansion
+  // work: stub-faction wiring needs a `faction === 'hero'` branch in
+  // `_swapStubLeader` to look up the side-default leader on state.
+  // See docs/design/faction-expansion.md.
+  'server/lobby.js':             74,
   'src/main.js':                 44,
   'src/ui.js':                   24,
 

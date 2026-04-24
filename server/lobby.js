@@ -599,9 +599,10 @@ function _addSeat(room, playerId, ws, name, faction, isAI, ai = null, factionId 
   const syntheticId = faction; // constructor uses 'hero' or 'witch' as synthetic ID
   const statePlayer = room.state.players.find(p => p.id === syntheticId);
   if (statePlayer) {
-    statePlayer.id   = playerId;
-    statePlayer.name = name;
-    statePlayer.isAI = isAI;
+    statePlayer.id        = playerId;
+    statePlayer.name      = name;
+    statePlayer.isAI      = isAI;
+    statePlayer.factionId = factionId ?? faction;
     // Update the leader entity's ownerId and color to match the real player
     const leader = room.state.entities.find(e => e.id === statePlayer.leaderId);
     if (leader) {
@@ -1386,20 +1387,56 @@ function attachAI(room, faction, forPlayerId = null, personality = null) {
  * Calls state.addPlayer() to create a new leader entity at a spawn point
  * near the faction's existing leader (no synthetic-patching needed).
  */
-function _addExtraAISeat(room, faction, personality = null) {
+/**
+ * The GameState constructor pre-populates the first hero/witch leader with
+ * default stats (PALADIN/WITCH entity type). When the corresponding lobby
+ * slot picked a stub faction (rogue/captain/necromancer/brute), we mutate
+ * the leader entity in place to match the stub's stats — preserving its id,
+ * position, ownerId and color so downstream references (state.hero, plan
+ * actions targeting `e.id`, etc.) continue to resolve.
+ *
+ * No-op when factionId equals the side default ('hero' or 'witch').
+ */
+function _swapStubLeader(room, faction, factionId) {
+  if (!factionId || factionId === faction) return;
+  const def = getFactionsForSide(sideOf(faction)).find(f => f.id === factionId);
+  if (!def || !def.isStub()) return;
+
+  const leader = faction === 'hero' ? room.state.hero : room.state.witch;
+  if (!leader) return;
+
+  // Pull the stub's stat block by constructing a throwaway entity at the
+  // same position, then copy the relevant fields onto the live leader.
+  const fresh = def.createLeader(leader.col, leader.row, leader.ownerId, room.state);
+  leader.type      = fresh.type;
+  leader.maxHp     = fresh.maxHp;
+  leader.hp        = fresh.maxHp;       // full-heal on swap (game just started)
+  leader.attack    = fresh.attack;
+  leader.defense   = fresh.defense;
+  leader.agility   = fresh.agility;
+  leader.factionId = fresh.factionId;
+  // Drop the throwaway from state.entities — createLeader pushed nothing,
+  // but the Entity constructor consumed an id from state's counter; that's
+  // a small id leak we tolerate at game-start.
+}
+
+function _addExtraAISeat(room, faction, personality = null, factionId = null) {
   const pid  = `ai-${faction}-${randomUUID().slice(0, 8)}`;
   const name = pickAIName(faction, room.usedAINames);
   const ai   = _makeAI(room, faction, pid, personality); // pass pid so AI scopes plan to its own entities
 
-  // Spawn near the faction's existing leaders, with enough separation
+  // Spawn near the side's existing leaders, with enough separation. Iterate
+  // every faction on this side so we count Rogue/Captain/Necromancer/Brute
+  // leaders alongside the side defaults.
+  const _leaderTypes = new Set(getFactionsForSide(sideOf(faction)).map(f => f.leaderType));
   const existing = room.state.entities.filter(
-    e => e.alive && e.owner === faction && (e.type === EntityType.PALADIN || e.type === EntityType.WITCH)
+    e => e.alive && e.owner === faction && _leaderTypes.has(e.type)
   );
   const start = existing[0] ?? { col: 0, row: 0 };
   const positions = generateMultipleStarts(room.state.tiles, start, existing.length + 1, 2, 6);
   const pos = positions[existing.length] ?? start;
 
-  room.state.addPlayer(pid, name, faction, pos.col, pos.row, true);
+  room.state.addPlayer(pid, name, faction, pos.col, pos.row, true, factionId);
 
   // Assign per-player color to this AI's leader entity
   const factionIndex = room.players.filter(s => s.faction === faction).length;
@@ -1407,7 +1444,11 @@ function _addExtraAISeat(room, faction, personality = null) {
   const leader       = room.state.entities.find(e => e.ownerId === pid);
   if (leader) leader.color = colors[factionIndex % colors.length];
 
-  const seat = { playerId: pid, ws: null, name, faction, isAI: true, ai, personality: personality ?? 'balanced' };
+  const seat = {
+    playerId: pid, ws: null, name, faction, isAI: true, ai, personality: personality ?? 'balanced',
+    side:      sideOf(faction),
+    factionId: factionId ?? faction,
+  };
   room.players.push(seat);
   if (faction === 'witch') room.state.witchIsAI = true;
   else                     room.state.heroIsAI  = true;
@@ -1418,7 +1459,7 @@ function _addExtraAISeat(room, faction, personality = null) {
  * Add an extra human seat on a faction side beyond the first player.
  * Mirrors _addExtraAISeat but creates a human-controlled player instead.
  */
-function _addExtraHumanSeat(room, playerId, ws, name, faction) {
+function _addExtraHumanSeat(room, playerId, ws, name, faction, factionId = null) {
   const existing = room.state.entities.filter(
     e => e.alive && e.owner === faction && (e.type === EntityType.PALADIN || e.type === EntityType.WITCH)
   );
@@ -1426,14 +1467,18 @@ function _addExtraHumanSeat(room, playerId, ws, name, faction) {
   const positions = generateMultipleStarts(room.state.tiles, start, existing.length + 1, 2, 6);
   const pos = positions[existing.length] ?? start;
 
-  room.state.addPlayer(playerId, name, faction, pos.col, pos.row, false);
+  room.state.addPlayer(playerId, name, faction, pos.col, pos.row, false, factionId);
 
   const factionIndex = room.players.filter(s => s.faction === faction).length;
   const colors       = faction === 'hero' ? HERO_PLAYER_COLORS : WITCH_PLAYER_COLORS;
   const leader       = room.state.entities.find(e => e.ownerId === playerId);
   if (leader) leader.color = colors[factionIndex % colors.length];
 
-  const seat = { playerId, ws, name, faction, isAI: false, ai: null };
+  const seat = {
+    playerId, ws, name, faction, isAI: false, ai: null,
+    side:      sideOf(faction),
+    factionId: factionId ?? faction,
+  };
   room.players.push(seat);
   return seat;
 }
@@ -1894,17 +1939,19 @@ export function startGame(playerId, roomId) {
     if (slot.status === 'human') {
       if ((slot.faction === 'hero' && heroCount === 0) ||
           (slot.faction === 'witch' && witchCount === 0)) {
-        _addSeat(room, slot.playerId, slot._ws, slot.name, slot.faction, false);
+        _addSeat(room, slot.playerId, slot._ws, slot.name, slot.faction, false, null, slot.factionId);
+        _swapStubLeader(room, slot.faction, slot.factionId);
       } else {
-        _addExtraHumanSeat(room, slot.playerId, slot._ws, slot.name, slot.faction);
+        _addExtraHumanSeat(room, slot.playerId, slot._ws, slot.name, slot.faction, slot.factionId);
       }
     } else {
       // AI slot
       if ((slot.faction === 'hero' && heroCount === 0) ||
           (slot.faction === 'witch' && witchCount === 0)) {
         attachAI(room, slot.faction, null, slot.personality);
+        _swapStubLeader(room, slot.faction, slot.factionId);
       } else {
-        _addExtraAISeat(room, slot.faction, slot.personality);
+        _addExtraAISeat(room, slot.faction, slot.personality, slot.factionId);
       }
     }
     if (slot.faction === 'hero')  heroCount++;

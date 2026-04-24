@@ -171,6 +171,22 @@ The actual storage rename (`inventory.hero` → `inventory.day` etc.) is deferre
 
 This still unblocks PR 5 (stub factions): new factions on the same side share that side's storage by routing through the accessors, which is the correct behaviour for stubs that inherit parent-side resource pools.
 
+### PR 5 (landed)
+Four stub factions registered: **Rogue** (*Mercy Sloane*) and **Captain** (*Captain Eli Ward*) on the day side; **Necromancer** and **Brute** on the night side.
+
+Each stub:
+- Has its own `EntityType` value (`rogue`, `captain`, `necromancer`, `brute`) with its own row in `BASE_STATS` / `BASE_AGILITY` / `ENTITY_COLOR`.
+- Subclasses its side's primary faction (`HeroFaction` or `WitchFaction`); inherits all combat / summon / fortify / discovery / sight behaviour. Overrides only `id`, `name`, `leaderType`, `createLeader`, and `isStub() === true`.
+- Owner string on the leader entity stays `'hero'` (day) or `'witch'` (night) so the codebase's many `e.owner === 'hero'` checks keep working unchanged. The specific faction is communicated via the new `entity.factionId` field plus its `type`.
+
+`GameState.addPlayer()` gained an optional `factionId` 7th arg; lobby `_addExtraAISeat` / `_addExtraHumanSeat` thread `slot.factionId` through. For the constructor-pre-populated first hero/witch seat, a new `_swapStubLeader()` in `lobby.js` mutates the leader entity in place to apply stub stats — preserving id/position/ownerId so downstream references resolve.
+
+**Bug found and fixed:** `endRound()` iterated `allFactions()` to dispatch end-of-round effects. With six factions registered, the day-side `_applyBuildingHealing` fired three times (once per day-side faction subclass via inheritance), tripling rest healing. Fixed by iterating `allSides()` and dispatching only the side's primary faction. End-of-round effects are conceptually side-level, not per-faction; this matches the design.
+
+`tests/faction-string-checks.test.js` allowlist for `server/lobby.js` bumped from 73 → 74 to permit the new `faction === 'hero'` branch in `_swapStubLeader` that looks up the side-default leader on state. Documented inline.
+
+100-game headless balance: Witch 58% / Hero 42% — within the 38–62% band. Stubs aren't reachable from the headless runner (which still uses default Paladin/Witch), so the variance vs PR 4a's run is sampling noise.
+
 ### PR 4a (landed)
 Entity-type rename Hero → Paladin. Approach chosen:
 

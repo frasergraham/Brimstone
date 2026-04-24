@@ -249,35 +249,49 @@ export const SURVIVOR_ROSTER = [
 const _usedRosterIndices = new Set();
 
 const BASE_STATS = {
-  [EntityType.PALADIN]:    { maxHp: 14, attack: 3, defense: 2 },
-  [EntityType.WITCH]:      { maxHp: 10, attack: 2, defense: 2 },
-  [EntityType.SURVIVOR]:   { maxHp: 4, attack: 1, defense: 1 },
-  [EntityType.ZOMBIE]:     { maxHp: 2, attack: 2, defense: 0 },
-  [EntityType.MINION]:     { maxHp: 2, attack: 1, defense: 0 },
-  [EntityType.WOOD_GOLEM]: { maxHp: 3, attack: 2, defense: 3 },
-  [EntityType.IRON_GOLEM]: { maxHp: 5, attack: 3, defense: 2 },
+  [EntityType.PALADIN]:     { maxHp: 14, attack: 3, defense: 2 },
+  [EntityType.ROGUE]:       { maxHp: 10, attack: 3, defense: 1 }, // stub: glass cannon
+  [EntityType.CAPTAIN]:     { maxHp: 12, attack: 2, defense: 3 }, // stub: balanced leader
+  [EntityType.WITCH]:       { maxHp: 10, attack: 2, defense: 2 },
+  [EntityType.NECROMANCER]: { maxHp: 10, attack: 1, defense: 2 }, // stub: support caster
+  [EntityType.BRUTE]:       { maxHp: 14, attack: 3, defense: 1 }, // stub: melee monster
+  [EntityType.SURVIVOR]:    { maxHp: 4, attack: 1, defense: 1 },
+  [EntityType.ZOMBIE]:      { maxHp: 2, attack: 2, defense: 0 },
+  [EntityType.MINION]:      { maxHp: 2, attack: 1, defense: 0 },
+  [EntityType.WOOD_GOLEM]:  { maxHp: 3, attack: 2, defense: 3 },
+  [EntityType.IRON_GOLEM]:  { maxHp: 5, attack: 3, defense: 2 },
 };
 
 // Per-type Agility defaults (1–10 scale). Higher acts first within a resolver step.
 export const BASE_AGILITY = {
-  [EntityType.PALADIN]:    6,
-  [EntityType.WITCH]:      5,
-  [EntityType.SURVIVOR]:   4,
-  [EntityType.ZOMBIE]:     2,
-  [EntityType.MINION]:     5,
-  [EntityType.WOOD_GOLEM]: 3,
-  [EntityType.IRON_GOLEM]: 2,
+  [EntityType.PALADIN]:     6,
+  [EntityType.ROGUE]:       8,  // stub: fast strikers
+  [EntityType.CAPTAIN]:     5,  // stub: steady leader
+  [EntityType.WITCH]:       5,
+  [EntityType.NECROMANCER]: 4,  // stub: slow caster
+  [EntityType.BRUTE]:       3,  // stub: lumbering melee
+  [EntityType.SURVIVOR]:    4,
+  [EntityType.ZOMBIE]:      2,
+  [EntityType.MINION]:      5,
+  [EntityType.WOOD_GOLEM]:  3,
+  [EntityType.IRON_GOLEM]:  2,
 };
 
-// Visual colours used by the renderer
+// Visual colours used by the renderer. Stub-faction leaders share the
+// side-level palette today (gold for day, purple for night); each stub
+// gets a distinct accent later when the per-faction theme lands.
 export const ENTITY_COLOR = {
-  [EntityType.PALADIN]:    '#d4a72c',
-  [EntityType.WITCH]:      '#9b59b6',
-  [EntityType.SURVIVOR]:   '#4caf7d',
-  [EntityType.ZOMBIE]:     '#7c9a57',
-  [EntityType.MINION]:     '#c0392b',
-  [EntityType.WOOD_GOLEM]: '#8B5E3C',
-  [EntityType.IRON_GOLEM]: '#607D8B',
+  [EntityType.PALADIN]:     '#d4a72c',
+  [EntityType.ROGUE]:       '#b88a1c', // dimmer gold
+  [EntityType.CAPTAIN]:     '#e8c660', // brighter gold
+  [EntityType.WITCH]:       '#9b59b6',
+  [EntityType.NECROMANCER]: '#7d4393',
+  [EntityType.BRUTE]:       '#b075c8',
+  [EntityType.SURVIVOR]:    '#4caf7d',
+  [EntityType.ZOMBIE]:      '#7c9a57',
+  [EntityType.MINION]:      '#c0392b',
+  [EntityType.WOOD_GOLEM]:  '#8B5E3C',
+  [EntityType.IRON_GOLEM]:  '#607D8B',
 };
 
 // Per-player color palettes — canonical source is src/theme.js (FACTION_THEME).
@@ -351,13 +365,17 @@ export class Entity {
   get displayName() {
     if (this.name) return this.name;
     switch (this.type) {
-      case EntityType.PALADIN:    return 'Ishmael Charger';
-      case EntityType.WITCH:      return 'The Witch';
-      case EntityType.SURVIVOR:   return 'Survivor';
-      case EntityType.ZOMBIE:     return 'Zombie';
-      case EntityType.MINION:     return 'Minion';
-      case EntityType.WOOD_GOLEM: return 'Wood Golem';
-      case EntityType.IRON_GOLEM: return 'Iron Golem';
+      case EntityType.PALADIN:     return 'Ishmael Charger';
+      case EntityType.ROGUE:       return 'Mercy Sloane';
+      case EntityType.CAPTAIN:     return 'Captain Eli Ward';
+      case EntityType.WITCH:       return 'The Witch';
+      case EntityType.NECROMANCER: return 'The Necromancer';
+      case EntityType.BRUTE:       return 'The Brute';
+      case EntityType.SURVIVOR:    return 'Survivor';
+      case EntityType.ZOMBIE:      return 'Zombie';
+      case EntityType.MINION:      return 'Minion';
+      case EntityType.WOOD_GOLEM:  return 'Wood Golem';
+      case EntityType.IRON_GOLEM:  return 'Iron Golem';
     }
   }
 
@@ -525,6 +543,36 @@ export function createHero(col, row, ownerId = null, state = null) {
 
 export function createWitch(col, row, ownerId = null, state = null) {
   return new Entity(EntityType.WITCH, 'witch', col, row, ownerId, state);
+}
+
+// ── Stub-faction leader factories ───────────────────────────────────────────
+// These leaders share their parent side's owner string (the day-side leaders
+// keep owner=hero; the night-side leaders keep owner=witch) so existing
+// owner checks across the codebase keep working unchanged. The specific
+// faction is communicated via the entity's `factionId` field plus its `type`.
+
+export function createRogue(col, row, ownerId = null, state = null) {
+  const e = new Entity(EntityType.ROGUE, 'hero', col, row, ownerId, state);
+  e.factionId = 'rogue';
+  return e;
+}
+
+export function createCaptain(col, row, ownerId = null, state = null) {
+  const e = new Entity(EntityType.CAPTAIN, 'hero', col, row, ownerId, state);
+  e.factionId = 'captain';
+  return e;
+}
+
+export function createNecromancer(col, row, ownerId = null, state = null) {
+  const e = new Entity(EntityType.NECROMANCER, 'witch', col, row, ownerId, state);
+  e.factionId = 'necromancer';
+  return e;
+}
+
+export function createBrute(col, row, ownerId = null, state = null) {
+  const e = new Entity(EntityType.BRUTE, 'witch', col, row, ownerId, state);
+  e.factionId = 'brute';
+  return e;
 }
 
 export function createSurvivor(col, row, ownerId = null, state = null) {

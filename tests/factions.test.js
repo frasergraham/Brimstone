@@ -1,7 +1,7 @@
 // Tests for the Faction class hierarchy and registry
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Faction, HeroFaction, WitchFaction, getFaction, allFactions, getFactionsForSide, sideOf } from '../src/factions.js';
+import { Faction, HeroFaction, WitchFaction, RogueFaction, CaptainFaction, NecromancerFaction, BruteFaction, getFaction, allFactions, getFactionsForSide, sideOf } from '../src/factions.js';
 import { Side } from '../src/sides.js';
 import { Phase } from '../src/game.js';
 import { EntityType } from '../src/entities.js';
@@ -26,11 +26,12 @@ describe('Faction registry', () => {
     assert.throws(() => getFaction('goblin'), /Unknown faction/);
   });
 
-  test('allFactions returns both factions', () => {
+  test('allFactions returns the six registered factions (hero/rogue/captain + witch/necromancer/brute)', () => {
     const all = allFactions();
-    assert.equal(all.length, 2);
-    assert.ok(all.some(f => f.id === 'hero'));
-    assert.ok(all.some(f => f.id === 'witch'));
+    assert.equal(all.length, 6);
+    for (const id of ['hero', 'rogue', 'captain', 'witch', 'necromancer', 'brute']) {
+      assert.ok(all.some(f => f.id === id), `allFactions should include ${id}`);
+    }
   });
 
   test('getFaction returns singletons', () => {
@@ -93,6 +94,56 @@ describe('Faction side membership', () => {
   test('sideOf returns null for unknown faction', () => {
     assert.equal(sideOf('goblin'), null);
     assert.equal(sideOf(null), null);
+  });
+});
+
+// ── Stub factions ──────────────────────────────────────────────────────────
+
+describe('Stub factions (PR 5)', () => {
+  test('all four stub factions are registered with their side', () => {
+    assert.equal(getFaction('rogue').side,       Side.DAY);
+    assert.equal(getFaction('captain').side,     Side.DAY);
+    assert.equal(getFaction('necromancer').side, Side.NIGHT);
+    assert.equal(getFaction('brute').side,       Side.NIGHT);
+  });
+
+  test('stub factions report isStub() === true; side defaults do not', () => {
+    assert.equal(getFaction('rogue').isStub(),       true);
+    assert.equal(getFaction('captain').isStub(),     true);
+    assert.equal(getFaction('necromancer').isStub(), true);
+    assert.equal(getFaction('brute').isStub(),       true);
+    assert.equal(getFaction('hero').isStub(),        false);
+    assert.equal(getFaction('witch').isStub(),       false);
+  });
+
+  test('stub factions are subclasses of their side primary', () => {
+    assert.ok(getFaction('rogue')       instanceof HeroFaction);
+    assert.ok(getFaction('captain')     instanceof HeroFaction);
+    assert.ok(getFaction('necromancer') instanceof WitchFaction);
+    assert.ok(getFaction('brute')       instanceof WitchFaction);
+  });
+
+  test('stub createLeader returns an entity with the stub-specific type and stats', () => {
+    const r = getFaction('rogue').createLeader(0, 0, 'p1');
+    assert.equal(r.type,    'rogue');
+    assert.equal(r.maxHp,   10);
+    assert.equal(r.attack,  3);
+    assert.equal(r.defense, 1);
+    assert.equal(r.agility, 8);
+    // Day-side membership: owner string stays 'hero' for compat with
+    // existing `e.owner === 'hero'` checks across the codebase.
+    assert.equal(r.owner,     'hero');
+    assert.equal(r.factionId, 'rogue');
+  });
+
+  test('stub day factions belong to the day side ordering', () => {
+    const day = getFactionsForSide('day').map(f => f.id);
+    assert.deepEqual(day, ['hero', 'rogue', 'captain']);
+  });
+
+  test('stub night factions belong to the night side ordering', () => {
+    const night = getFactionsForSide('night').map(f => f.id);
+    assert.deepEqual(night, ['witch', 'necromancer', 'brute']);
   });
 });
 
