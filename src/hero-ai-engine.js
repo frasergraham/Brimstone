@@ -13,7 +13,7 @@ import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, nearestBuilding
 import { EnginePlanSimState, BaseAIEngine, allocateBudget, assemblePlan, clamp01, updateAllyClaimedNodes, personalityName } from './ai-engine.js';
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
-import { EntityType, ADVANTAGE_CAP, expectedDieValue } from './entities.js';
+import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType } from './entities.js';
 import { TileType, ResourceType } from './tiles.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
 
@@ -117,7 +117,9 @@ export function assessHeroBoard(sim) {
     });
   }
 
-  const witchEntity = sim.entities.find(e => e.alive && e.type === EntityType.WITCH);
+  // Any night-side leader (Witch / Necromancer / Brute) is the "witch" for
+  // the hero AI's threat evaluation.
+  const witchEntity = sim.entities.find(e => e.alive && e.owner === 'witch' && isLeaderType(e.type));
   const witch = witchEntity && _heroCanSee(witchEntity) ? witchEntity : null;
   const witchVisible = !!witch;
   let witchDistance = Infinity;
@@ -128,7 +130,7 @@ export function assessHeroBoard(sim) {
   }
 
   const witchMinions = sim.entities.filter(e =>
-    e.alive && e.owner === 'witch' && e.type !== EntityType.WITCH && _heroCanSee(e)
+    e.alive && e.owner === 'witch' && !isLeaderType(e.type) && _heroCanSee(e)
   );
   const witchMinionCount = witchMinions.length;
   const heroArmyStrength = (hero ? hero.attack + hero.hp : 0) +
@@ -889,9 +891,10 @@ export function genHuntWitch(sim, board, budget) {
   for (const target of targets) {
     if (remaining <= 0) break;
 
-    // Hero hunts witch; any uncommitted unit clears adjacent minions
-    const isWitch = target.entity.type === EntityType.WITCH;
-    const unit = isWitch
+    // Day-side leader hunts any night-side leader; any uncommitted unit
+    // clears adjacent minions.
+    const isEnemyLeader = target.entity.owner === 'witch' && isLeaderType(target.entity.type);
+    const unit = isEnemyLeader
       ? (sim.unitCommitments.has(heroEntity.id) ? null : heroEntity)
       : _closestUncommittedHero(sim, board, target.entity, true);
     if (!unit) continue;
@@ -905,7 +908,7 @@ export function genHuntWitch(sim, board, budget) {
     if (dist <= 1) {
       const est = estimateHeroCombat(simUnit, target.entity, board);
       // Skip suicidal attacks on minions; always attack witch with hero
-      if (est.classification === 'suicidal' && !isWitch) continue;
+      if (est.classification === 'suicidal' && !isEnemyLeader) continue;
       actions.push({
         type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
         targetId: target.entity.id, targetCol: target.entity.col, targetRow: target.entity.row,
@@ -918,16 +921,16 @@ export function genHuntWitch(sim, board, budget) {
     }
 
     // Within pursuit range — move toward and attack
-    const pursuitRange = isWitch ? 6 : 2;
+    const pursuitRange = isEnemyLeader ? 6 : 2;
     if (dist <= pursuitRange) {
       sim.unitCommitments.set(simUnit.id, HeroGoal.HUNT_WITCH);
-      let stepsLeft = Math.min(remaining, isWitch ? 4 : 2);
+      let stepsLeft = Math.min(remaining, isEnemyLeader ? 4 : 2);
 
       while (stepsLeft > 0) {
         const curDist = hexDistance(simUnit.col, simUnit.row, target.entity.col, target.entity.row);
         if (curDist <= 1) {
           const est = estimateHeroCombat(simUnit, target.entity, board);
-          if (est.classification !== 'suicidal' || isWitch) {
+          if (est.classification !== 'suicidal' || isEnemyLeader) {
             actions.push({
               type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
               targetId: target.entity.id, targetCol: target.entity.col, targetRow: target.entity.row,

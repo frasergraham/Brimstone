@@ -24,7 +24,7 @@ import { PlanActionType, groupPlanByEntity } from './planner.js';
 import { hexDistance, getNeighbors, hexKey } from './hex.js';
 import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD } from './tiles.js';
 import { sightRange } from './actions.js';
-import { getFaction, allFactions } from './factions.js';
+import { getFaction, findFaction, allFactions, getFactionsForSide } from './factions.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { playback, resetPlayback, replayFullGame, playbackDelay, swapState, patchAlive } from './playback.js';
@@ -233,7 +233,7 @@ function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
   if (localHeroAI)  localHeroAI.onBattleResult  = battleCallback;
 }
 
-function init(witchIsAI, heroIsAI, autoplay = false) {
+function init(witchIsAI, heroIsAI, autoplay = false, humanFactionId = null) {
   _autoplay = autoplay;
   _gameStartTime = Date.now();
   _missionConductor = null; // ensure conductor state is cleared for normal games
@@ -248,6 +248,13 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
   const mapSize   = document.getElementById('select-map-size')?.value ?? 'standard';
   const nodeCount = parseInt(document.getElementById('select-node-count')?.value ?? '3', 10);
   state    = new GameState(witchIsAI, heroIsAI, mapSize, nodeCount);
+
+  // Stub factions: rebrand the human-side default leader if the player
+  // picked a stub. AI side stays on its side default for now.
+  if (humanFactionId) {
+    const def = getFaction(humanFactionId);
+    if (def.isStub()) state.swapLeaderToFaction(def.side, humanFactionId);
+  }
   // Allow global fog-of-war override from the setup screen select.
   const fogSel = document.getElementById('select-fog-of-war');
   if (fogSel) state.fogOfWar = fogSel.value;
@@ -2485,10 +2492,11 @@ function _renderDeployRoster(heroStats, roster, maxActive) {
 
   let html = '<div class="campaign-roster-label">Your Party</div>';
 
-  // Hero card (always active)
+  // Paladin (Ishmael Charger) card — always active. Campaign is fixed to
+  // the day-side primary faction; no stub picker in campaign mode.
   html += '<div class="campaign-party">';
   const weaponLabel = heroStats.weapon ? ` (${heroStats.weapon.name || heroStats.weapon})` : '';
-  html += _campaignCardHTML('Hero' + weaponLabel, null, 'hero', ENTITY_COLOR.hero, heroStats.hp, heroStats.maxHp, heroStats.attack, heroStats.defense, null, true);
+  html += _campaignCardHTML('Ishmael Charger' + weaponLabel, null, 'hero', ENTITY_COLOR[EntityType.PALADIN], heroStats.hp, heroStats.maxHp, heroStats.attack, heroStats.defense, null, true);
   html += '</div>';
 
   if (roster.length === 0) {
@@ -2918,7 +2926,7 @@ function _initCampaignMission(missionDef) {
     redraw();
     requestAnimationFrame(() => {
       renderer.resize();
-      const heroEntity = state.entities.find(e => e.type === 'hero');
+      const heroEntity = state.entities.find(e => e.type === EntityType.PALADIN);
       if (heroEntity) {
         renderer.frameHexes([heroEntity], { maxZoom: 2.2, paddingHexes: 3, duration: 500 });
       }
@@ -3075,23 +3083,26 @@ document.addEventListener('click', e => {
   });
 });
 
-// Quick Play faction toggle
-let _qpFaction = 'hero';
-document.getElementById('btn-faction-hero').addEventListener('click', () => {
-  _qpFaction = 'hero';
-  document.getElementById('btn-faction-hero').classList.add('active');
-  document.getElementById('btn-faction-witch').classList.remove('active');
-});
-document.getElementById('btn-faction-witch').addEventListener('click', () => {
-  _qpFaction = 'witch';
-  document.getElementById('btn-faction-witch').classList.add('active');
-  document.getElementById('btn-faction-hero').classList.remove('active');
-});
+// Quick Play faction picker — 6 tiles, grouped by side.
+// _qpFactionId is the specific faction the player picked. It maps onto a
+// side (day/night) which decides which side-AI to spawn for the opponent.
+let _qpFactionId = 'hero';
+const _qpFactionTiles = document.querySelectorAll('.qp-faction-picker .qp-faction-btn');
+for (const btn of _qpFactionTiles) {
+  btn.addEventListener('click', () => {
+    _qpFactionId = btn.dataset.faction;
+    for (const other of _qpFactionTiles) other.classList.toggle('active', other === btn);
+  });
+}
 
-// Quick Play start button (always 1v1 vs AI)
+// Quick Play start button (always 1v1 vs AI). The faction picker chooses
+// the human-controlled faction; the AI plays the side default on the
+// opposing side. Stubs are passed through to GameState.swapLeaderToFaction
+// so the human's leader gets stub stats.
 document.getElementById('btn-start-qp').addEventListener('click', () => {
-  if (_qpFaction === 'hero') init(true, false);
-  else init(false, true);
+  const def     = getFaction(_qpFactionId);
+  const isDay   = def.side === 'day';
+  init(/*witchIsAI*/ isDay, /*heroIsAI*/ !isDay, /*autoplay*/ false, /*humanFactionId*/ _qpFactionId);
 });
 
 function _doRestart() {
@@ -5720,14 +5731,16 @@ function _renderLobby(lobby) {
     grid.appendChild(unassignedSection);
   }
 
-  // Faction columns
-  const heroSlots  = lobby.slots.filter(s => s.faction === 'hero');
-  const witchSlots = lobby.slots.filter(s => s.faction === 'witch');
+  // Side columns. Today each side has one primary faction (Paladin / Witch)
+  // — iterate slots by their `side` field, which defaults to 'day' / 'night'
+  // via sideOf(faction) when the server builds the slot list.
+  const daySlots   = lobby.slots.filter(s => s.side === 'day'   || s.faction === 'hero');
+  const nightSlots = lobby.slots.filter(s => s.side === 'night' || s.faction === 'witch');
 
   const container = document.createElement('div');
   container.className = 'lobby-factions';
 
-  for (const [label, icon, slots] of [['Hero Side', '⚔', heroSlots], ['Witch Side', '✦', witchSlots]]) {
+  for (const [label, icon, slots] of [['Day Side', '☀', daySlots], ['Night Side', '🌙', nightSlots]]) {
     const col = document.createElement('div');
     col.className = 'lobby-faction-col';
     col.innerHTML = `<div class="lobby-faction-label">${icon} ${label}</div>`;
@@ -5738,9 +5751,12 @@ function _renderLobby(lobby) {
 
       if (slot.status === 'human') {
         const isMe = slot.playerId === myId;
-        row.innerHTML = `<span class="lobby-slot-name">${_esc(slot.name)}${isMe ? ' <em>(you)</em>' : ''}</span>`;
+        row.innerHTML = `<span class="lobby-slot-name">${_esc(slot.name)}${isMe ? ' <em>(you)</em>' : ''}</span>` +
+                        _lobbyFactionTag(slot, isMe);
+        if (isMe) row.appendChild(_buildLobbyFactionPicker(lobby, slot));
       } else if (slot.status === 'ai') {
-        row.innerHTML = `<span class="lobby-slot-name ai-slot">🤖 ${_esc(slot.name ?? 'AI')}</span>`;
+        row.innerHTML = `<span class="lobby-slot-name ai-slot">🤖 ${_esc(slot.name ?? 'AI')}</span>` +
+                        _lobbyFactionTag(slot, false);
         if (isHost) {
           const removeBtn = document.createElement('button');
           removeBtn.className = 'setup-btn secondary lobby-slot-btn';
@@ -5846,6 +5862,42 @@ function _renderLobby(lobby) {
   } else {
     hintEl.style.display = 'none';
   }
+}
+
+/**
+ * Render a compact faction tag next to a seated player's name — shows the
+ * picked faction and a "stub" marker when applicable. Rendered read-only
+ * for other players' rows; the current player's row also gets a picker
+ * dropdown via _buildLobbyFactionPicker().
+ */
+function _lobbyFactionTag(slot, isMe) {
+  // The current player's row renders the <select> picker instead of a tag —
+  // skip the registry lookup entirely for the common re-render case.
+  if (isMe) return '';
+  const def = findFaction(slot.factionId ?? slot.faction);
+  if (!def) return '';
+  const stub = def.isStub() ? ' <span class="lobby-slot-stub">stub</span>' : '';
+  return ` <span class="lobby-slot-faction">${_esc(def.name)}${stub}</span>`;
+}
+
+/**
+ * Build a <select> element that lets the current player change their
+ * faction (same side only) via the setFaction protocol message.
+ */
+function _buildLobbyFactionPicker(lobby, slot) {
+  const factions = getFactionsForSide(slot.side ?? (slot.faction === 'hero' ? 'day' : 'night'));
+  const select   = document.createElement('select');
+  select.className = 'setup-select lobby-faction-select';
+  select.innerHTML = factions.map(f => {
+    const selected = f.id === (slot.factionId ?? slot.faction) ? ' selected' : '';
+    const stub     = f.isStub() ? ' (stub)' : '';
+    return `<option value="${f.id}"${selected}>${_esc(f.name)}${stub}</option>`;
+  }).join('');
+  select.addEventListener('change', () => {
+    if (!select.value) return;
+    mp.setFaction(lobby.id, select.value);
+  });
+  return select;
 }
 
 function _showSlotInvitePopup(lobby, slotIndex, faction, anchorEl) {

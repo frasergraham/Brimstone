@@ -249,7 +249,7 @@ state.players (Map)         →       players: [{ id, faction, ... }]
 
 ### Deserialize (`deserializeState`)
 
-Reconstructs a full `GameState` with proper prototypes:
+Reconstructs a full `GameState` with proper prototypes. Includes back-compat migrations for older save formats — currently the only active migration rewrites pre-`SAVE_VERSION=2` entity types of `'hero'` to `'paladin'` (the entity-type rename in the faction-expansion work; see `docs/design/faction-expansion.md`).
 
 ```
 1. Create throwaway GameState (for prototype chain)

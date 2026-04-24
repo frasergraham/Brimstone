@@ -173,6 +173,29 @@ describe('Victory — kill conditions', () => {
     assert.equal(state.winReason, WIN_REASON.HERO_SLAIN);
   });
 
+  test('leader elimination is side-based: killing a Rogue leader ends the day side', () => {
+    // Regression guard for the stub-faction work: win condition should
+    // trigger on "zero leaders alive on the opposing side" regardless of
+    // which specific faction the leader belonged to. Swapping the default
+    // Paladin to a Rogue and then killing it must still hand victory to
+    // the night side.
+    const state = new GameState(true, true);
+    state.swapLeaderToFaction('day', 'rogue');
+    state.hero.hp = 0;
+    state.checkVictory();
+    assert.equal(state.winner,    'witch');
+    assert.equal(state.winReason, WIN_REASON.HERO_SLAIN);
+  });
+
+  test('leader elimination is side-based: killing a Brute leader ends the night side', () => {
+    const state = new GameState(true, true);
+    state.swapLeaderToFaction('night', 'brute');
+    state.witch.hp = 0;
+    state.checkVictory();
+    assert.equal(state.winner,    'hero');
+    assert.equal(state.winReason, WIN_REASON.WITCH_SLAIN);
+  });
+
   test('both alive → no winner', () => {
     const state = new GameState(true, true);
     state.checkVictory();
@@ -877,5 +900,108 @@ describe('Power node free spawn (endRound)', () => {
 
     assert.ok(spawned,
       'Hero on a node should be able to spawn a free survivor (33% chance, tested 20 trials)');
+  });
+});
+
+// ── Side-keyed accessors ─────────────────────────────────────────────────────
+
+describe('GameState side accessors', () => {
+  test('inventoryForSide returns the side\'s shared inventory', () => {
+    const state = new GameState(true, true);
+    // Day side's inventory is what the Hero faction reads via getInventory().
+    assert.equal(state.inventoryForSide('day'),   state.inventory.hero);
+    assert.equal(state.inventoryForSide('night'), state.inventory.witch);
+  });
+
+  test('actionsLeftForSide reflects the legacy 2-player budgets', () => {
+    const state = new GameState(true, true);
+    state.heroActionsLeft  = 7;
+    state.witchActionsLeft = 4;
+    assert.equal(state.actionsLeftForSide('day'),   7);
+    assert.equal(state.actionsLeftForSide('night'), 4);
+  });
+
+  test('killsForSide reflects the per-side kill counters', () => {
+    const state = new GameState(true, true);
+    state.heroKills  = 3;
+    state.witchKills = 5;
+    assert.equal(state.killsForSide('day'),   3);
+    assert.equal(state.killsForSide('night'), 5);
+  });
+
+  test('summonsForSide is 0 for day, witchSummonCount for night', () => {
+    const state = new GameState(true, true);
+    state.witchSummonCount = 8;
+    assert.equal(state.summonsForSide('day'),   0);
+    assert.equal(state.summonsForSide('night'), 8);
+  });
+
+  test('nodeScoreForSide reflects the per-side score counters', () => {
+    const state = new GameState(true, true);
+    state.nodeScore.hero  = 2;
+    state.nodeScore.witch = 1;
+    assert.equal(state.nodeScoreForSide('day'),   2);
+    assert.equal(state.nodeScoreForSide('night'), 1);
+  });
+
+  test('throws on unknown side id', () => {
+    const state = new GameState(true, true);
+    assert.throws(() => state.inventoryForSide('twilight'), /Unknown side/);
+    assert.throws(() => state.nodeScoreForSide('twilight'), /Unknown side/);
+  });
+});
+
+// ── swapLeaderToFaction (stub-faction support) ───────────────────────────────
+
+describe('swapLeaderToFaction', () => {
+  test('swapping the day-side leader to rogue applies rogue stats in place', () => {
+    const state = new GameState(true, true);
+    const heroId      = state.hero.id;
+    const heroOwnerId = state.hero.ownerId;
+    const heroCol     = state.hero.col;
+    const heroRow     = state.hero.row;
+
+    state.swapLeaderToFaction('day', 'rogue');
+
+    // Same entity, mutated in place — id/owner/position preserved.
+    assert.equal(state.hero.id,      heroId);
+    assert.equal(state.hero.ownerId, heroOwnerId);
+    assert.equal(state.hero.col,     heroCol);
+    assert.equal(state.hero.row,     heroRow);
+    // Stub stats applied.
+    assert.equal(state.hero.type,      'rogue');
+    assert.equal(state.hero.maxHp,     10);
+    assert.equal(state.hero.attack,    3);
+    assert.equal(state.hero.defense,   1);
+    assert.equal(state.hero.agility,   8);
+    assert.equal(state.hero.factionId, 'rogue');
+    // Full-heal on swap (game just started).
+    assert.equal(state.hero.hp,        state.hero.maxHp);
+  });
+
+  test('swapping to side default is a no-op', () => {
+    const state = new GameState(true, true);
+    const beforeType  = state.hero.type;
+    const beforeMaxHp = state.hero.maxHp;
+    state.swapLeaderToFaction('day', 'hero');
+    assert.equal(state.hero.type,  beforeType);
+    assert.equal(state.hero.maxHp, beforeMaxHp);
+  });
+
+  test('swapping to a faction not on the side is a no-op', () => {
+    const state = new GameState(true, true);
+    const before = state.hero.maxHp;
+    state.swapLeaderToFaction('day', 'witch'); // wrong side
+    assert.equal(state.hero.maxHp, before);
+  });
+
+  test('swapping the night-side leader to brute applies brute stats', () => {
+    const state = new GameState(true, true);
+    state.swapLeaderToFaction('night', 'brute');
+    assert.equal(state.witch.type,    'brute');
+    assert.equal(state.witch.maxHp,   14);
+    assert.equal(state.witch.attack,  3);
+    assert.equal(state.witch.defense, 1);
+    assert.equal(state.witch.agility, 3);
   });
 });

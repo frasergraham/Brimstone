@@ -38,20 +38,39 @@ const PATTERN = /[!=]==\s*['"](hero|witch)['"]/g;
 // documenting why.
 const ALLOWLIST = Object.freeze({
   // Pre-existing god classes — refactored separately (see Track B).
-  'server/lobby.js':             73,
+  // server/lobby.js bumped from 73 → 74 in PR 5 of the faction-expansion
+  // work: stub-faction wiring needs a `faction === 'hero'` branch in
+  // `_swapStubLeader` to look up the side-default leader on state.
+  // See docs/design/faction-expansion.md.
+  'server/lobby.js':             74,
   'src/main.js':                 44,
-  'src/ui.js':                   24,
+  'src/ui.js':                   25,
 
   // Pre-existing core modules — generalized in Finding 1, residual checks
   // are legacy and can be cleaned up opportunistically.
+  //
+  // Bumps during faction-expansion stub-parity sweep (documented inline):
+  //   src/actions.js   7 → 10: added `actor.owner === 'hero'/'witch'`
+  //     guards around Summon / Sound Horn / Sound-Horn-execute so stub
+  //     leaders (Rogue/Captain/Necromancer/Brute) inherit the action.
+  //   src/ai.js        6 →  7: PlanSimState enemyOwner ternary — looks
+  //     up the opposing side's owner string to find enemy leaders
+  //     regardless of stub-faction leader type.
+  //   src/factions.js  0 →  4: HeroFaction end-of-round healing loops
+  //     and WitchFaction.canExplore now match all leaders on the side
+  //     via `owner === '…' && isLeaderType(type)` rather than a fixed
+  //     entity type.
+  //   src/ui.js       24 → 25: summon-picker rendering widened to any
+  //     night-side leader.
   'src/game.js':                 25,
   'src/ai-engine.js':            18,
-  'src/hero-ai-engine.js':       15,
-  'src/actions.js':               7,
+  'src/hero-ai-engine.js':       17,
+  'src/actions.js':              10,
   'src/renderer.js':              8,
   'server/async-game-rooms.js':   8,
-  'src/ai.js':                    6,
+  'src/ai.js':                    7,
   'server/async-game.js':         6,
+  'src/factions.js':              4,
 
   // Display-layer dispatch (CSS classes, glyphs, node-control branches).
   'src/ui-render.js':             4,

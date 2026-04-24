@@ -1,12 +1,17 @@
 // Faction class hierarchy — encapsulates all faction-specific behavior.
 // Factions are stateless singletons: they define behavior/config, not game state.
 // Use getFaction(id) to look up a faction by its string id ('hero' | 'witch').
+//
+// Each Faction belongs to a Side ('day' | 'night'). Sides own the phase
+// cycle, scoring, and team allocation; factions vary the stats, abilities,
+// AI personalities, and unit roster within a side. See `src/sides.js`.
 
 import { Phase } from './game.js';
-import { EntityType, SurvivorAbility, createHero, createWitch, createSurvivor, createZombie, createMinion, createWoodGolem, createIronGolem } from './entities.js';
+import { EntityType, SurvivorAbility, createHero, createWitch, createSurvivor, createZombie, createMinion, createWoodGolem, createIronGolem, createRogue, createCaptain, createNecromancer, createBrute, isLeaderType } from './entities.js';
 import { ResourceType, TileType, BuildingType } from './tiles.js';
 import { hexKey, getNeighbors } from './hex.js';
 import { AI_HERO_NAMES, AI_WITCH_NAMES } from './ai-names.js';
+import { Side, getOpposingSide as _opposingSide } from './sides.js';
 
 // ── Base Class ──────────────────────────────────────────────────────────────
 
@@ -17,6 +22,23 @@ export class Faction {
   get name()       { throw new Error('Subclass must implement name'); }
   /** @returns {string} EntityType of the faction leader */
   get leaderType() { throw new Error('Subclass must implement leaderType'); }
+  /** @returns {string} Side id this faction belongs to ('day' | 'night'). */
+  get side()       { throw new Error('Subclass must implement side'); }
+
+  /**
+   * Return the opposing Side id. Forward-looking N-faction API: use this
+   * instead of `getOpponentId()` when the caller wants "who is on the
+   * other team?" rather than "which single faction faces me?".
+   */
+  getOpposingSide() { return _opposingSide(this.side); }
+
+  /**
+   * True if this faction is shipped as a stub — registered and selectable
+   * but inheriting parent-side behaviour rather than its own implementation.
+   * Used by the lobby UI to render a "stub" badge so players know what to
+   * expect before picking.
+   */
+  isStub() { return false; }
 
   // ── Action Budget ──
 
@@ -75,11 +97,19 @@ export class Faction {
 
   // ── Kill / Summon Tracking ──
 
-  /** Increment the appropriate kill counter on state for this faction */
-  trackKill(_state) { /* default: nothing */ }
+  /**
+   * Increment the kill counter for this faction's side. Delegates to the
+   * side-keyed mutator on GameState so storage-field renames (PR 4b) can
+   * land without touching the Faction hierarchy.
+   */
+  trackKill(state) { state.recordKillForSide(this.side); }
 
-  /** Increment the appropriate summon counter on state for this faction */
-  trackSummon(_state) { /* default: nothing */ }
+  /**
+   * Increment the summon counter for this faction's side. Day-side calls
+   * today are a no-op (no day-side summon mechanic), but routing through
+   * the GameState mutator keeps the door open for future day factions.
+   */
+  trackSummon(state) { state.recordSummonForSide(this.side); }
 
   // ── End-of-Round Effects ──
 
@@ -127,19 +157,26 @@ export class Faction {
   /** Return the opposing faction's id */
   getOpponentId() { throw new Error('Subclass must implement getOpponentId'); }
 
-  /** Return this faction's current action budget from game state */
-  getActionsLeft(_state) { throw new Error('Subclass must implement getActionsLeft'); }
+  /**
+   * Return this faction's current action budget from game state. Pulls
+   * from the side-keyed accessor on GameState; subclasses don't need to
+   * override unless they layer on faction-specific bonuses.
+   */
+  getActionsLeft(state) { return state.actionsLeftForSide(this.side); }
 
   /** Return the node discovery key used on objective objects (e.g. 'seenByHero') */
   getNodeSeenKey() { throw new Error('Subclass must implement getNodeSeenKey'); }
 
   /**
-   * Get the inventory object where this faction stores resources.
+   * Get the inventory object where this faction stores resources. Routes
+   * through the side-keyed accessor on GameState — all factions on the
+   * same side share one resource pool.
+   *
    * @param {object} state - GameState
    * @returns {object} inventory map
    */
-  getInventory(_state) {
-    throw new Error('Subclass must implement getInventory');
+  getInventory(state) {
+    return state.inventoryForSide(this.side);
   }
 
   /** Starting resources for this faction's inventory at game start */
@@ -183,6 +220,7 @@ export class HeroFaction extends Faction {
   get id()         { return 'hero'; }
   get name()       { return 'Hero'; }
   get leaderType() { return EntityType.HERO; }
+  get side()       { return Side.DAY; }
 
   // Action Budget
   get actionCap()    { return 8; }
@@ -201,10 +239,7 @@ export class HeroFaction extends Faction {
     return Math.floor((defendCount || 0) / 2);
   }
 
-  trackKill(state) { state.heroKills++; }
-
   getOpponentId() { return 'witch'; }
-  getActionsLeft(state) { return state.heroActionsLeft; }
   getNodeSeenKey() { return 'seenByHero'; }
 
   // End-of-Round Effects
@@ -216,7 +251,7 @@ export class HeroFaction extends Faction {
 
   _applyBuildingHealing(state) {
     const heroLeaders = state.entities.filter(
-      e => e.alive && e.type === EntityType.HERO
+      e => e.alive && e.owner === 'hero' && isLeaderType(e.type)
     );
     for (const hero of heroLeaders) {
       const heroTile = state.tiles.get(hexKey(hero.col, hero.row));
@@ -238,7 +273,7 @@ export class HeroFaction extends Faction {
 
   _applyNodeHealing(state) {
     const heroLeaders = state.entities.filter(
-      e => e.alive && e.type === EntityType.HERO
+      e => e.alive && e.owner === 'hero' && isLeaderType(e.type)
     );
     for (const hero of heroLeaders) {
       if (hero.hp < hero.maxHp) {
@@ -258,7 +293,7 @@ export class HeroFaction extends Faction {
     if (state.phase !== Phase.NIGHT) return;
 
     const heroLeaders = state.entities.filter(
-      e => e.alive && e.type === EntityType.HERO
+      e => e.alive && e.owner === 'hero' && isLeaderType(e.type)
     );
     for (const obj of state.witchObjectives) {
       const freeHex = () => {
@@ -329,8 +364,6 @@ export class HeroFaction extends Faction {
   canEquipWeapon() { return true; }
   canDiscoverNPCs() { return true; }
 
-  getInventory(state) { return state.inventory.hero; }
-
   getStartingResources() { return { [ResourceType.FOOD]: 2 }; }
 
   getResourceFoundLog(actor, _lootType) {
@@ -362,6 +395,7 @@ export class WitchFaction extends Faction {
   get id()         { return 'witch'; }
   get name()       { return 'Witch'; }
   get leaderType() { return EntityType.WITCH; }
+  get side()       { return Side.NIGHT; }
 
   // Action Budget
   get actionCap()    { return 8; }
@@ -393,13 +427,10 @@ export class WitchFaction extends Faction {
     return phase === Phase.NIGHT ? 2 : 0;
   }
 
-  trackKill(state) { state.witchKills++; }
-  trackSummon(state) { state.witchSummonCount++; }
-
-  canExplore(entity) { return entity.type === EntityType.WITCH; }
+  // Only a night-side leader can explore (summoned units can't).
+  canExplore(entity) { return isLeaderType(entity.type) && entity.owner === 'witch'; }
 
   getOpponentId() { return 'hero'; }
-  getActionsLeft(state) { return state.witchActionsLeft; }
   getNodeSeenKey() { return 'seenByWitch'; }
 
   // Discovery & Loot
@@ -422,8 +453,6 @@ export class WitchFaction extends Faction {
     };
   }
 
-  getInventory(state) { return state.inventory.witch; }
-
   getStartingResources() { return { [ResourceType.WOOD]: 2, [ResourceType.METAL]: 2 }; }
 
   getResourceFoundLog(actor, lootType) {
@@ -443,19 +472,81 @@ export class WitchFaction extends Faction {
   getAINamePool() { return AI_WITCH_NAMES; }
 }
 
+// ── Stub Factions (PR 5) ────────────────────────────────────────────────────
+// Each stub extends its side's primary faction. It overrides identity (id,
+// name, leaderType, AI name pool) and reports `isStub() === true` so the
+// lobby UI can render a stub badge. All other behaviour — combat, summon,
+// fortify, end-of-round effects, discovery, sight — inherits from the
+// parent, so the stub is mechanically the parent faction with different
+// stats baked into the leader entity (via the new EntityType + BASE_STATS
+// entries in entities.js).
+
+export class RogueFaction extends HeroFaction {
+  get id()         { return 'rogue'; }
+  get name()       { return 'Rogue'; }
+  get leaderType() { return EntityType.ROGUE; }
+  isStub()         { return true; }
+  createLeader(col, row, ownerId, state = null) {
+    return createRogue(col, row, ownerId, state);
+  }
+}
+
+export class CaptainFaction extends HeroFaction {
+  get id()         { return 'captain'; }
+  get name()       { return 'Captain'; }
+  get leaderType() { return EntityType.CAPTAIN; }
+  isStub()         { return true; }
+  createLeader(col, row, ownerId, state = null) {
+    return createCaptain(col, row, ownerId, state);
+  }
+}
+
+export class NecromancerFaction extends WitchFaction {
+  get id()         { return 'necromancer'; }
+  get name()       { return 'Necromancer'; }
+  get leaderType() { return EntityType.NECROMANCER; }
+  isStub()         { return true; }
+  createLeader(col, row, ownerId, state = null) {
+    return createNecromancer(col, row, ownerId, state);
+  }
+}
+
+export class BruteFaction extends WitchFaction {
+  get id()         { return 'brute'; }
+  get name()       { return 'Brute'; }
+  get leaderType() { return EntityType.BRUTE; }
+  isStub()         { return true; }
+  createLeader(col, row, ownerId, state = null) {
+    return createBrute(col, row, ownerId, state);
+  }
+}
+
 // ── Faction Registry ────────────────────────────────────────────────────────
 
-const _hero  = new HeroFaction();
-const _witch = new WitchFaction();
+const _hero        = new HeroFaction();
+const _rogue       = new RogueFaction();
+const _captain     = new CaptainFaction();
+const _witch       = new WitchFaction();
+const _necromancer = new NecromancerFaction();
+const _brute       = new BruteFaction();
 
+// Day side first (paladin → rogue → captain), then night side
+// (witch → necromancer → brute). Iteration order in the lobby picker
+// follows this order.
 const FACTIONS = Object.freeze({
-  hero:  _hero,
-  witch: _witch,
+  hero:        _hero,
+  rogue:       _rogue,
+  captain:     _captain,
+  witch:       _witch,
+  necromancer: _necromancer,
+  brute:       _brute,
 });
 
 /**
- * Look up a Faction by its string id.
- * @param {string} id - 'hero' or 'witch'
+ * Look up a Faction by its string id. Recognised ids:
+ *   day side   — 'hero', 'rogue', 'captain'
+ *   night side — 'witch', 'necromancer', 'brute'
+ * @param {string} id
  * @returns {Faction}
  */
 export function getFaction(id) {
@@ -464,7 +555,45 @@ export function getFaction(id) {
   return f;
 }
 
+/**
+ * Non-throwing variant of `getFaction`. Returns `null` when the id is
+ * unknown (or falsy). Callers that want to gracefully handle bad data
+ * from the wire should prefer this over wrapping `getFaction` in a
+ * try/catch.
+ */
+export function findFaction(id) {
+  return FACTIONS[id] ?? null;
+}
+
 /** Return all registered factions. */
 export function allFactions() {
   return Object.values(FACTIONS);
+}
+
+/**
+ * Return every registered Faction belonging to the given Side, in
+ * registration order. Empty array if the side id is unknown.
+ *
+ * Today: day → [hero], night → [witch]. As stub factions register in
+ * later PRs the lists grow; lobby and UI code should iterate this rather
+ * than hardcoding faction ids per side.
+ *
+ * @param {string} sideId — 'day' or 'night'
+ * @returns {Faction[]}
+ */
+export function getFactionsForSide(sideId) {
+  return allFactions().filter(f => f.side === sideId);
+}
+
+/**
+ * Look up the Side id for a faction id. Returns null if the faction is
+ * unknown — callers in legacy/synthetic code paths sometimes pass null
+ * or a stub id during state restore.
+ *
+ * @param {string} factionId
+ * @returns {string|null} 'day' | 'night' | null
+ */
+export function sideOf(factionId) {
+  const f = FACTIONS[factionId];
+  return f ? f.side : null;
 }

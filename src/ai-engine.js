@@ -11,7 +11,7 @@
 import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, bestWitchObjective, nearestBuilding, roundsUntilScoring, scoreNodeFeasibility, WITCH_PERSONALITIES, adjacentBlockingFortToward } from './ai.js';
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
-import { EntityType, ADVANTAGE_CAP, expectedDieValue } from './entities.js';
+import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType } from './entities.js';
 import { TileType, ResourceType } from './tiles.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
 
@@ -99,9 +99,9 @@ export function assessBoard(sim) {
   const isDay = phase === Phase.DAY;
   const isDawnOrDusk = phase === Phase.DAWN || phase === Phase.DUSK;
 
-  // Unit census
+  // Unit census — any night-side non-leader (zombies, minions, golems).
   const witchUnits = sim.entities.filter(e =>
-    e.alive && e.owner === 'witch' && e.type !== EntityType.WITCH
+    e.alive && e.owner === 'witch' && !isLeaderType(e.type)
   );
   const minions = witchUnits;
   const minionCount = minions.length;
@@ -119,7 +119,9 @@ export function assessBoard(sim) {
   const witchSideUnits = sim.entities.filter(e => e.alive && e.owner === 'witch');
   const visibleHeroes = allHeroes.filter(hero =>
     witchSideUnits.some(w => {
-      const sight = w.type === EntityType.WITCH ? WITCH_LEADER_SIGHT : WITCH_MINION_SIGHT;
+      // Any night-side leader (Witch, Necromancer, Brute) gets leader sight;
+      // summoned units get minion sight.
+      const sight = isLeaderType(w.type) ? WITCH_LEADER_SIGHT : WITCH_MINION_SIGHT;
       return hexDistance(w.col, w.row, hero.col, hero.row) <= sight;
     })
   );
@@ -197,10 +199,10 @@ export function assessBoard(sim) {
     hexDistance(witch.col, witch.row, h.col, h.row) <= 3
   ).length : 0;
 
-  // Hero survivors vs hero leader — for HUNT_HEROES targeting
-  const heroLeader = allHeroes.find(h => h.type === EntityType.HERO);
-  const heroSurvivors = allHeroes.filter(h => h.type !== EntityType.HERO);
-  const visibleSurvivors = visibleHeroes.filter(h => h.type !== EntityType.HERO);
+  // Day-side leader (Paladin / Rogue / Captain) — for HUNT_HEROES targeting.
+  const heroLeader = allHeroes.find(h => isLeaderType(h.type));
+  const heroSurvivors    = allHeroes.filter(h => !isLeaderType(h.type));
+  const visibleSurvivors = visibleHeroes.filter(h => !isLeaderType(h.type));
 
   // Wounded visible enemies (below 50% HP) — prime targets for focus-fire
   const woundedEnemies = visibleHeroes.filter(h =>
@@ -575,7 +577,7 @@ export function genHuntHeroes(sim, board, budget) {
   // Score each visible enemy as a target
   const targets = board.visibleHeroes.map(h => {
     const hpRatio = h.hp / (h.maxHp || h.hp || 1);
-    const isSurvivor = h.type !== EntityType.HERO;
+    const isSurvivor = !isLeaderType(h.type);
     // Priority: wounded > survivors > hero leader
     let priority = 0;
     if (h.hp <= 2) priority += 5; // can likely kill in one hit

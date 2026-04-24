@@ -4,6 +4,7 @@
 import { countHeldNodes } from '../game.js';
 import { getFaction } from '../factions.js';
 import { hexDistance } from '../hex.js';
+import { EntityType } from '../entities.js';
 
 const SAVE_VERSION = 1;
 
@@ -229,7 +230,7 @@ function _checkWinCondition(cond, state) {
       const partyFaction = cond.faction || 'hero';
       const party = state.entities.filter(e =>
         e.alive && e.owner === partyFaction &&
-        (e.type === 'hero' || e.type === 'survivor')
+        (e.type === EntityType.PALADIN || e.type === EntityType.SURVIVOR)
       );
       if (party.length === 0) return null;
       const hexes = cond.hexes;

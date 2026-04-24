@@ -9,7 +9,7 @@ import {
   EntityType, SurvivorAbility, Entity,
   createZombie, createMinion, createSurvivor,
   createWoodGolem, createIronGolem,
-  nextDie, ADVANTAGE_CAP,
+  nextDie, ADVANTAGE_CAP, isLeaderType,
 } from './entities.js';
 import { Phase } from './game.js';
 import { getFaction } from './factions.js';
@@ -326,8 +326,9 @@ export function getValidActions(state, actor) {
     actions.push({ type: ActionType.FORTIFY, targets: [{ col: actor.col, row: actor.row }], affordable });
   }
 
-  // Summon — only the witch leader herself can summon.
-  if (faction.canSummon() && actor.type === EntityType.WITCH) {
+  // Summon — any night-side leader (Witch / Necromancer / Brute) can summon
+  // when the side faction supports it.
+  if (faction.canSummon() && isLeaderType(actor.type) && actor.owner === 'witch') {
     const summonOpts = faction.getSummonOptions(faction.getInventory(state));
     for (const opt of summonOpts) {
       actions.push({ type: ActionType.SUMMON, summonType: opt.summonType, affordable: opt.affordable });
@@ -337,8 +338,9 @@ export function getValidActions(state, actor) {
   // Guard — any unit can take a guard stance (stacks: each use adds 1 charge)
   actions.push({ type: ActionType.GUARD, currentCharges: actor.guarding || 0 });
 
-  // Sound Horn — hero leader only; costs 2 food, ranged survivor discovery
-  if (actor.type === EntityType.HERO) {
+  // Sound Horn — any day-side leader (Paladin / Rogue / Captain); 2 food,
+  // ranged survivor discovery.
+  if (isLeaderType(actor.type) && actor.owner === 'hero') {
     const food = (faction.getInventory(state)['food'] || 0);
     actions.push({ type: ActionType.SOUND_HORN, affordable: food >= 1 });
   }
@@ -1196,8 +1198,8 @@ export function executeGuard(state, actor) {
 
 export function executeSoundHorn(state, actor) {
   const log = [];
-  if (actor.type !== EntityType.HERO) {
-    return { success: false, log: ['Only the Hero can sound the horn.'] };
+  if (!(isLeaderType(actor.type) && actor.owner === 'hero')) {
+    return { success: false, log: ['Only a day-side leader can sound the horn.'] };
   }
 
   const inv = getFaction('hero').getInventory(state);

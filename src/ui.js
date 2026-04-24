@@ -1,7 +1,7 @@
 // UI controller: handles canvas clicks, sidepanel updates, action buttons
 import { hexKey, hexToPixel, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus } from './tiles.js';
-import { EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
+import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType } from './entities.js';
 import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
 import {
@@ -582,8 +582,7 @@ export class UIController {
     // Tutorial mode skips this — the "select your hero" step teaches clicking.
     if (!this.tutorialMode && (this.state?.round ?? 1) <= 1) {
       const myLeader = this.state?.entities.find(e =>
-        e.alive && e.owner === faction &&
-        (e.type === 'hero' || e.type === 'witch') &&
+        e.alive && e.owner === faction && isLeaderType(e.type) &&
         (!this.myPlayerId || e.ownerId === this.myPlayerId)
       );
       if (myLeader) this._selectEntity(myLeader);
@@ -1929,8 +1928,9 @@ export class UIController {
       }
     }
 
-    // Always show all 3 summon types for the witch, greyed out if unaffordable
-    if (entity.type === EntityType.WITCH && actions.some(a => a.type === ActionType.SUMMON || a.type === ActionType.GUARD)) {
+    // Always show all 3 summon types for any night-side leader (Witch /
+    // Necromancer / Brute), greyed out if unaffordable.
+    if (isLeaderType(entity.type) && entity.owner === 'witch' && actions.some(a => a.type === ActionType.SUMMON || a.type === ActionType.GUARD)) {
       const projWitch = projInv ? projInv.witch : state.inventory.witch;
       const projMetal = projWitch?.[ResourceType.METAL] || 0;
       const projWood  = projWitch?.[ResourceType.WOOD]  || 0;

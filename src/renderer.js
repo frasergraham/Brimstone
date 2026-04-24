@@ -7,7 +7,7 @@ import {
 import {
   TileType, TILE_COLOR, BUILDING_COLOR, BUILDING_LABEL, BUILDING_ICON,
 } from './tiles.js';
-import { ENTITY_COLOR, EntityType, SurvivorAbility } from './entities.js';
+import { ENTITY_COLOR, EntityType, SurvivorAbility, isLeaderType } from './entities.js';
 import { getVisiblePositions, sightRange, buildFogMovementHexes } from './actions.js';
 import { getFaction } from './factions.js';
 import { getFactionTheme, NEUTRAL_NODE_FILL } from './theme.js';
@@ -1013,10 +1013,11 @@ export class Renderer {
     const state = this.state;
 
     // Build ownerId → playerColor from leader entities so hex outlines show
-    // the owning player's colour regardless of entity type.
+    // the owning player's colour regardless of entity type. All six leader
+    // types count as leaders — isLeaderType() is the single source of truth.
     this._playerColorMap = new Map();
     for (const e of state.entities) {
-      if (e.color && e.ownerId && (e.type === EntityType.HERO || e.type === EntityType.WITCH)) {
+      if (e.color && e.ownerId && isLeaderType(e.type)) {
         this._playerColorMap.set(e.ownerId, e.color);
       }
     }
@@ -2254,7 +2255,7 @@ export class Renderer {
         this._shadowText(entityGlyph(entity.type), ex, ey + 1);
       }
 
-      if (entity.type === EntityType.HERO || entity.type === EntityType.WITCH ||
+      if (isLeaderType(entity.type) ||
           entity.type === EntityType.SURVIVOR || entity.type === EntityType.WOOD_GOLEM ||
           entity.type === EntityType.IRON_GOLEM) {
         const barW = r * 2;
@@ -3017,13 +3018,17 @@ export class Renderer {
 
 function entityGlyph(type) {
   switch (type) {
-    case EntityType.HERO:       return '⚔';
-    case EntityType.WITCH:      return '✦';
-    case EntityType.SURVIVOR:   return '☺';
-    case EntityType.ZOMBIE:     return '†';
-    case EntityType.MINION:     return '☠';
-    case EntityType.WOOD_GOLEM: return '🪵';
-    case EntityType.IRON_GOLEM: return '⚙';
+    case EntityType.HERO:        return '⚔';   // Paladin (alias of PALADIN)
+    case EntityType.ROGUE:       return '🗡';   // stub — placeholder glyph
+    case EntityType.CAPTAIN:     return '⛨';   // stub — placeholder glyph
+    case EntityType.WITCH:       return '✦';
+    case EntityType.NECROMANCER: return '☥';   // stub — placeholder glyph
+    case EntityType.BRUTE:       return '▲';   // stub — placeholder glyph
+    case EntityType.SURVIVOR:    return '☺';
+    case EntityType.ZOMBIE:      return '†';
+    case EntityType.MINION:      return '☠';
+    case EntityType.WOOD_GOLEM:  return '🪵';
+    case EntityType.IRON_GOLEM:  return '⚙';
     default: return '?';
   }
 }

@@ -1,11 +1,12 @@
 // Central game state and turn management
 import { generateMap } from './map.js';
-import { createHero, createWitch, createMinion, createSurvivor, resetRoster, survivorRosterIndexByName, bumpEntityId as _bumpModuleEntityId, EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
+import { createHero, createWitch, createMinion, createSurvivor, resetRoster, survivorRosterIndexByName, bumpEntityId as _bumpModuleEntityId, EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType } from './entities.js';
 import { BuildingType, ResourceType, TileType } from './tiles.js';
 import { hexKey, hexDistance, getNeighbors, setMapDimensions, MAP_COLS, MAP_ROWS } from './hex.js';
 import { applyPostRoundEffects, attritionForCycle } from './post-round-effects.js';
 import { sightRange } from './actions.js';
-import { getFaction, allFactions } from './factions.js';
+import { getFaction, allFactions, getFactionsForSide } from './factions.js';
+import { allSides } from './sides.js';
 
 /**
  * Determine which faction controls a power node cluster based on majority hex occupation.
@@ -203,7 +204,7 @@ export class GameState {
     this.players = [];
 
     // Offline / legacy path: create one hero and one witch with synthetic player IDs.
-    const heroName = mapDataOverride?.heroName ?? 'Hero';
+    const heroName = mapDataOverride?.heroName ?? 'Ishmael Charger';
     const witchName = mapDataOverride?.witchName ?? 'Witch';
     this.hero  = createHero(mapData.heroStart.col,  mapData.heroStart.row, 'hero', this);
     this.hero.name = heroName;
@@ -390,14 +391,29 @@ export class GameState {
    * @param {number} row
    * @param {boolean} isAI
    */
-  addPlayer(playerId, name, faction, col, row, isAI = false) {
-    const leader = faction === 'hero'
-      ? createHero(col, row, playerId, this)
-      : createWitch(col, row, playerId, this);
+  /**
+   * Add a player and create their leader entity.
+   *
+   * @param {string} playerId
+   * @param {string} name
+   * @param {string} faction    side-default faction id ('hero' or 'witch') — wire-compat
+   * @param {number} col
+   * @param {number} row
+   * @param {boolean} [isAI=false]
+   * @param {string} [factionId=null]  specific faction id (e.g. 'rogue'). Defaults
+   *                                   to `faction`. When set to a stub faction
+   *                                   id, the leader gets the stub's entity type
+   *                                   and stats via Faction.createLeader.
+   */
+  addPlayer(playerId, name, faction, col, row, isAI = false, factionId = null) {
+    const def = getFaction(factionId ?? faction);
+    const leader = def.createLeader(col, row, playerId, this);
     leader.name = name;
     this.entities.push(leader);
-    this.players.push({ id: playerId, name, faction, isAI, leaderId: leader.id });
-    // Keep legacy singleton refs pointing at the first hero/witch for offline compat
+    this.players.push({ id: playerId, name, faction, isAI, leaderId: leader.id, factionId: def.id });
+    // Keep legacy singleton refs pointing at the first hero/witch leader for
+    // offline compat. Stub-faction leaders also satisfy these — `state.hero`
+    // continues to mean "the day-side leader" regardless of specific faction.
     if (faction === 'hero'  && !this.hero)  this.hero  = leader;
     if (faction === 'witch' && !this.witch) this.witch = leader;
     return leader;
@@ -406,8 +422,87 @@ export class GameState {
   /** Return the display name of the primary leader for a faction. */
   factionName(faction) {
     const leader = faction === 'hero' ? this.hero : this.witch;
-    return leader?.displayName ?? (faction === 'hero' ? 'The Hero' : 'The Witch');
+    return leader?.displayName ?? (faction === 'hero' ? 'Ishmael Charger' : 'The Witch');
   }
+
+  // ── Side-keyed accessors ───────────────────────────────────────────────
+  // Side ('day' | 'night') is the level at which inventory, actions, kills,
+  // and node scoring are pooled. New factions on the same side share this
+  // pool. These accessors today route to the legacy `hero` / `witch` storage
+  // keys via `_storageKeyForSide()`; the storage rename is queued behind
+  // the save-schema bump in PR 4. See docs/design/faction-expansion.md.
+
+  _storageKeyForSide(sideId) {
+    if (sideId === 'day')   return 'hero';
+    if (sideId === 'night') return 'witch';
+    throw new Error(`Unknown side: ${sideId}`);
+  }
+
+  /**
+   * Swap a leader entity in place to match the supplied stub-faction id.
+   * By default targets the constructor-pre-populated side singleton
+   * (`'day'` → `state.hero`, `'night'` → `state.witch`); callers may pass
+   * `targetEntity` to re-stat an extra-seat leader on the same side (the
+   * headless runner uses this).
+   *
+   * No-op when `factionId` equals the side's default ('hero' or 'witch'),
+   * when it is not a registered stub for the side, or when no target
+   * leader is available.
+   *
+   * Mutates the live leader in place — id, position, ownerId, color are
+   * preserved so downstream references (state.hero, plan-action target
+   * lookups, save/replay round entity ids) continue to resolve.
+   */
+  swapLeaderToFaction(sideId, factionId, targetEntity = null) {
+    if (!factionId) return;
+    const def = getFactionsForSide(sideId).find(f => f.id === factionId);
+    if (!def || !def.isStub()) return;
+
+    const leader = targetEntity ?? (sideId === 'day' ? this.hero : this.witch);
+    if (!leader) return;
+
+    const fresh = def.createLeader(leader.col, leader.row, leader.ownerId, this);
+    leader.type      = fresh.type;
+    leader.maxHp     = fresh.maxHp;
+    leader.hp        = fresh.maxHp;       // full-heal on swap (game just started)
+    leader.attack    = fresh.attack;
+    leader.defense   = fresh.defense;
+    leader.agility   = fresh.agility;
+    leader.factionId = fresh.factionId;
+    // Clear the constructor-assigned name ('Ishmael Charger' for the day
+    // side default, 'Witch' for night) so Entity.displayName falls through
+    // to the new type's default (e.g. 'Mercy Sloane' for ROGUE).
+    leader.name = null;
+  }
+
+  /** Resource inventory shared by all factions on the given side. */
+  inventoryForSide(sideId)   { return this.inventory[this._storageKeyForSide(sideId)]; }
+
+  /** Actions remaining for the given side this planning phase (legacy 2-player budget). */
+  actionsLeftForSide(sideId) {
+    return sideId === 'day' ? this.heroActionsLeft : this.witchActionsLeft;
+  }
+
+  /** Cumulative kills credited to the given side. */
+  killsForSide(sideId)       { return sideId === 'day' ? this.heroKills : this.witchKills; }
+
+  /** Increment the kill counter for the given side by `n` (default 1). */
+  recordKillForSide(sideId, n = 1) {
+    if (sideId === 'day')   this.heroKills  += n;
+    if (sideId === 'night') this.witchKills += n;
+  }
+
+  /** Cumulative summons performed by the given side. (Day side: 0 today.) */
+  summonsForSide(sideId)     { return sideId === 'night' ? this.witchSummonCount : 0; }
+
+  /** Increment the summon counter for the given side by `n` (default 1). */
+  recordSummonForSide(sideId, n = 1) {
+    if (sideId === 'night') this.witchSummonCount += n;
+    // Day side has no summon mechanic today — counter is not tracked.
+  }
+
+  /** Cumulative node-scoring points held by the given side. */
+  nodeScoreForSide(sideId)   { return this.nodeScore[this._storageKeyForSide(sideId)]; }
 
   /** Return the leader entity for a given playerId (or null if dead/missing). */
   getLeader(playerId) {
@@ -643,9 +738,14 @@ export class GameState {
   endRound() {
     this.resolving = false;
 
-    // Faction-specific end-of-round effects (healing, spawning, etc.)
-    for (const faction of allFactions()) {
-      faction.applyEndOfRoundEffects(this);
+    // Side-level end-of-round effects (healing, spawning, etc.). With stub
+    // factions inheriting their parent side's behaviour, iterating
+    // `allFactions()` here would fire each side's effects once per faction
+    // on that side — see PR 5 of docs/design/faction-expansion.md. We
+    // iterate sides instead and dispatch on each side's primary faction.
+    for (const sideId of allSides()) {
+      const primary = getFactionsForSide(sideId)[0];
+      if (primary) primary.applyEndOfRoundEffects(this);
     }
 
     // Advance round and phase.
@@ -812,7 +912,7 @@ export class GameState {
   scatterPlayerUnits(ownerId) {
     const isBattle = this.gameMode === GameMode.BATTLE;
     const toScatter = this.entities.filter(
-      e => e.ownerId === ownerId && e.type !== EntityType.HERO && e.type !== EntityType.WITCH
+      e => e.ownerId === ownerId && !isLeaderType(e.type)
     );
     for (const unit of toScatter) {
       if (isBattle) {
@@ -840,7 +940,10 @@ export class GameState {
     }
     const player = this.players.find(p => p.id === ownerId);
     if (player) {
-      const label = player.name || (player.faction === 'hero' ? 'The Hero' : 'The Witch');
+      // Prefer the live leader's displayName (picks up stub names like
+      // "Mercy Sloane" automatically), fall back to the side default.
+      const leader = this.entities.find(e => e.id === player.leaderId);
+      const label = player.name ?? leader?.displayName ?? this.factionName(player.faction);
       if (toScatter.length > 0) {
         this.addLog(`💨 ${label}'s companions scatter into the wilderness…`);
       }
@@ -1035,12 +1138,11 @@ export class GameState {
     if (!entity) return null;
     if (entity.ownerId) {
       const leader = this.entities.find(e =>
-        e.ownerId === entity.ownerId &&
-        (e.type === EntityType.HERO || e.type === EntityType.WITCH)
+        e.ownerId === entity.ownerId && isLeaderType(e.type)
       );
       if (leader?.color) return leader.color;
     }
-    if (entity.owner === 'hero')  return ENTITY_COLOR[EntityType.HERO];
+    if (entity.owner === 'hero')  return ENTITY_COLOR[EntityType.PALADIN];
     if (entity.owner === 'witch') return ENTITY_COLOR[EntityType.WITCH];
     return null;
   }

@@ -96,7 +96,7 @@ describe('food floater position — acting entity lookup', () => {
     // Simulates the corrected food-floater lookup logic to verify it picks
     // the acting entity (which may be a survivor) rather than the hero.
     const entitySnapshot = [
-      { id: 'hero-1', type: 'hero', col: 0, row: 0 },
+      { id: 'hero-1', type: 'paladin', col: 0, row: 0 },
       { id: 'surv-1', type: 'survivor', col: 5, row: 3 },
     ];
     const allStepEvents = [
@@ -105,7 +105,7 @@ describe('food floater position — acting entity lookup', () => {
     ];
 
     // Old (buggy) logic: always uses hero
-    const heroSnap = entitySnapshot.find(e => e.type === 'hero');
+    const heroSnap = entitySnapshot.find(e => e.type === 'paladin');
 
     // New (fixed) logic: uses the acting entity
     const actionEv = allStepEvents.find(

@@ -37,8 +37,9 @@ import { sendPush }                              from './push.js';
 import db                                  from './db.js';
 import { VERSION, SAVE_VERSION }            from '../src/version.js';
 import { generateMultipleStarts, generateBattleStarts } from '../src/map.js';
-import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS } from '../src/entities.js';
+import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS, EntityType, isLeaderType } from '../src/entities.js';
 import { pickAIName }                              from '../src/ai-names.js';
+import { sideOf, getFactionsForSide }              from '../src/factions.js';
 
 // ── Room phase enum ─────────────────────────────────────────────────────────
 // Single source of truth for where a room is in its lifecycle.
@@ -513,16 +514,33 @@ function createRoom(config = {}) {
   return room;
 }
 
-/** Build an ordered slot array for the given players-per-side count. */
+/** Build an ordered slot array for the given players-per-side count.
+ *
+ * Each slot carries three faction-related fields:
+ *   - `faction`   — legacy field, today always 'hero' or 'witch'. Read by the
+ *                   bulk of lobby/state code; do not rename in-place yet.
+ *   - `side`      — Side id ('day' | 'night'). Forward-looking; computed via
+ *                   sideOf(faction). Read this when grouping by team.
+ *   - `factionId` — the specific faction occupying the seat. Defaults to the
+ *                   side's first registered faction (= legacy `faction`
+ *                   today). Mutated by `setFaction()` once stub factions
+ *                   land in PR 5.
+ */
 function _buildSlots(playersPerSide, isBattle = false) {
   const pps   = Math.max(1, Math.min(isBattle ? 10 : 4, playersPerSide | 0));
   const slots = [];
-  for (let i = 0; i < pps; i++) {
-    slots.push({ faction: 'hero', seatIndex: i, status: 'empty', playerId: null, name: null, personality: null });
-  }
-  for (let i = 0; i < pps; i++) {
-    slots.push({ faction: 'witch', seatIndex: i, status: 'empty', playerId: null, name: null, personality: null });
-  }
+  const mkSlot = (faction, i) => ({
+    faction,
+    side:      sideOf(faction),
+    factionId: faction,
+    seatIndex: i,
+    status:    'empty',
+    playerId:  null,
+    name:      null,
+    personality: null,
+  });
+  for (let i = 0; i < pps; i++) slots.push(mkSlot('hero',  i));
+  for (let i = 0; i < pps; i++) slots.push(mkSlot('witch', i));
   return slots;
 }
 
@@ -564,22 +582,27 @@ function broadcastLobbyUpdate(room) {
  * player records (id='hero', id='witch') and their leader entities.  We patch those
  * records to use the real player IDs so ownerId resolution works throughout the engine.
  */
-function _addSeat(room, playerId, ws, name, faction, isAI, ai = null) {
+function _addSeat(room, playerId, ws, name, faction, isAI, ai = null, factionId = null) {
   // Determine this player's color slot before pushing (0-based index in faction)
   const factionIndex = room.players.filter(s => s.faction === faction).length;
   const colors       = faction === 'hero' ? HERO_PLAYER_COLORS : WITCH_PLAYER_COLORS;
   const playerColor  = colors[factionIndex % colors.length];
 
-  const seat = { playerId, ws, name, faction, isAI, ai };
+  const seat = {
+    playerId, ws, name, faction, isAI, ai,
+    side:      sideOf(faction),
+    factionId: factionId ?? faction,
+  };
   room.players.push(seat);
 
   // Patch the matching synthetic player record in state.players and the leader entity.
   const syntheticId = faction; // constructor uses 'hero' or 'witch' as synthetic ID
   const statePlayer = room.state.players.find(p => p.id === syntheticId);
   if (statePlayer) {
-    statePlayer.id   = playerId;
-    statePlayer.name = name;
-    statePlayer.isAI = isAI;
+    statePlayer.id        = playerId;
+    statePlayer.name      = name;
+    statePlayer.isAI      = isAI;
+    statePlayer.factionId = factionId ?? faction;
     // Update the leader entity's ownerId and color to match the real player
     const leader = room.state.entities.find(e => e.id === statePlayer.leaderId);
     if (leader) {
@@ -896,7 +919,7 @@ function _runAIPlanSubmission(room) {
       }
       // Update ally context so subsequent AI players (higher offsets) see this plan's choices.
       const leader = room.state.entities.find(e => e.alive && e.ownerId === playerId &&
-        (e.type === 'hero' || e.type === 'witch'));
+        isLeaderType(e.type));
       if (leader) ctx.allyPositions.push({ col: leader.col, row: leader.row });
       _submitPlayerPlan(room, playerId, plan);
     }, delay);
@@ -1364,20 +1387,23 @@ function attachAI(room, faction, forPlayerId = null, personality = null) {
  * Calls state.addPlayer() to create a new leader entity at a spawn point
  * near the faction's existing leader (no synthetic-patching needed).
  */
-function _addExtraAISeat(room, faction, personality = null) {
+function _addExtraAISeat(room, faction, personality = null, factionId = null) {
   const pid  = `ai-${faction}-${randomUUID().slice(0, 8)}`;
   const name = pickAIName(faction, room.usedAINames);
   const ai   = _makeAI(room, faction, pid, personality); // pass pid so AI scopes plan to its own entities
 
-  // Spawn near the faction's existing leaders, with enough separation
+  // Spawn near the side's existing leaders, with enough separation. Iterate
+  // every faction on this side so we count Rogue/Captain/Necromancer/Brute
+  // leaders alongside the side defaults.
+  const _leaderTypes = new Set(getFactionsForSide(sideOf(faction)).map(f => f.leaderType));
   const existing = room.state.entities.filter(
-    e => e.alive && e.owner === faction && (e.type === 'hero' || e.type === 'witch')
+    e => e.alive && e.owner === faction && _leaderTypes.has(e.type)
   );
   const start = existing[0] ?? { col: 0, row: 0 };
   const positions = generateMultipleStarts(room.state.tiles, start, existing.length + 1, 2, 6);
   const pos = positions[existing.length] ?? start;
 
-  room.state.addPlayer(pid, name, faction, pos.col, pos.row, true);
+  room.state.addPlayer(pid, name, faction, pos.col, pos.row, true, factionId);
 
   // Assign per-player color to this AI's leader entity
   const factionIndex = room.players.filter(s => s.faction === faction).length;
@@ -1385,7 +1411,11 @@ function _addExtraAISeat(room, faction, personality = null) {
   const leader       = room.state.entities.find(e => e.ownerId === pid);
   if (leader) leader.color = colors[factionIndex % colors.length];
 
-  const seat = { playerId: pid, ws: null, name, faction, isAI: true, ai, personality: personality ?? 'balanced' };
+  const seat = {
+    playerId: pid, ws: null, name, faction, isAI: true, ai, personality: personality ?? 'balanced',
+    side:      sideOf(faction),
+    factionId: factionId ?? faction,
+  };
   room.players.push(seat);
   if (faction === 'witch') room.state.witchIsAI = true;
   else                     room.state.heroIsAI  = true;
@@ -1396,22 +1426,26 @@ function _addExtraAISeat(room, faction, personality = null) {
  * Add an extra human seat on a faction side beyond the first player.
  * Mirrors _addExtraAISeat but creates a human-controlled player instead.
  */
-function _addExtraHumanSeat(room, playerId, ws, name, faction) {
+function _addExtraHumanSeat(room, playerId, ws, name, faction, factionId = null) {
   const existing = room.state.entities.filter(
-    e => e.alive && e.owner === faction && (e.type === 'hero' || e.type === 'witch')
+    e => e.alive && e.owner === faction && isLeaderType(e.type)
   );
   const start = existing[0] ?? { col: 0, row: 0 };
   const positions = generateMultipleStarts(room.state.tiles, start, existing.length + 1, 2, 6);
   const pos = positions[existing.length] ?? start;
 
-  room.state.addPlayer(playerId, name, faction, pos.col, pos.row, false);
+  room.state.addPlayer(playerId, name, faction, pos.col, pos.row, false, factionId);
 
   const factionIndex = room.players.filter(s => s.faction === faction).length;
   const colors       = faction === 'hero' ? HERO_PLAYER_COLORS : WITCH_PLAYER_COLORS;
   const leader       = room.state.entities.find(e => e.ownerId === playerId);
   if (leader) leader.color = colors[factionIndex % colors.length];
 
-  const seat = { playerId, ws, name, faction, isAI: false, ai: null };
+  const seat = {
+    playerId, ws, name, faction, isAI: false, ai: null,
+    side:      sideOf(faction),
+    factionId: factionId ?? faction,
+  };
   room.players.push(seat);
   return seat;
 }
@@ -1716,7 +1750,7 @@ export function fillAllWithAI(playerId, roomId, personality) {
  * If they're unassigned, moves them into the slot.
  * If they're in another slot, frees the old slot and claims the new one.
  */
-export function claimSlot(playerId, roomId, slotIndex) {
+export function claimSlot(playerId, roomId, slotIndex, factionId = null) {
   const room = rooms.get(roomId);
   if (!room || room.status !== 'lobby') { return; }
 
@@ -1757,6 +1791,43 @@ export function claimSlot(playerId, roomId, slotIndex) {
   slot.name     = playerName;
   slot._ws      = playerWs;
 
+  // Optional faction override at claim time. Silently ignored if it doesn't
+  // belong to the slot's side; setFaction() reports the same condition with
+  // an explicit error message.
+  if (factionId) {
+    if (getFactionsForSide(slot.side).some(f => f.id === factionId)) {
+      slot.factionId = factionId;
+    }
+  }
+
+  broadcastLobbyUpdate(room);
+}
+
+/**
+ * Switch the faction occupying the player's current seat without moving slots.
+ * Only valid pre-game (room.status === 'lobby'). The new faction must belong
+ * to the same Side as the seat (you can't jump from day to night this way —
+ * use claimSlot with the desired index).
+ */
+export function setFaction(playerId, roomId, factionId) {
+  const room = rooms.get(roomId);
+  if (!room || room.status !== 'lobby') { return; }
+
+  const slot = room.slots.find(s => s.playerId === playerId && s.status === 'human');
+  if (!slot) { return; }
+
+  const allowed = getFactionsForSide(slot.side).map(f => f.id);
+  if (!allowed.includes(factionId)) {
+    if (slot._ws) send(slot._ws, {
+      type: 'error',
+      message: `Faction "${factionId}" is not on the ${slot.side} side.`,
+    });
+    return;
+  }
+
+  if (slot.factionId === factionId) return; // no-op
+
+  slot.factionId = factionId;
   broadcastLobbyUpdate(room);
 }
 
@@ -1835,17 +1906,21 @@ export function startGame(playerId, roomId) {
     if (slot.status === 'human') {
       if ((slot.faction === 'hero' && heroCount === 0) ||
           (slot.faction === 'witch' && witchCount === 0)) {
-        _addSeat(room, slot.playerId, slot._ws, slot.name, slot.faction, false);
+        _addSeat(room, slot.playerId, slot._ws, slot.name, slot.faction, false, null, slot.factionId);
+        // Re-stat the constructor-pre-populated default leader if this seat
+        // picked a stub faction. No-op when factionId matches side default.
+        room.state.swapLeaderToFaction(sideOf(slot.faction), slot.factionId);
       } else {
-        _addExtraHumanSeat(room, slot.playerId, slot._ws, slot.name, slot.faction);
+        _addExtraHumanSeat(room, slot.playerId, slot._ws, slot.name, slot.faction, slot.factionId);
       }
     } else {
       // AI slot
       if ((slot.faction === 'hero' && heroCount === 0) ||
           (slot.faction === 'witch' && witchCount === 0)) {
         attachAI(room, slot.faction, null, slot.personality);
+        room.state.swapLeaderToFaction(sideOf(slot.faction), slot.factionId);
       } else {
-        _addExtraAISeat(room, slot.faction, slot.personality);
+        _addExtraAISeat(room, slot.faction, slot.personality, slot.factionId);
       }
     }
     if (slot.faction === 'hero')  heroCount++;
@@ -3879,7 +3954,7 @@ export function generateRemoteAIPlan(roomId, playerId) {
     if (s.faction !== seat.faction || s.playerId === playerId) continue;
     if (room.state.playerReady?.get(s.playerId)) {
       const leader = room.state.entities.find(
-        e => e.alive && e.ownerId === s.playerId && (e.type === 'hero' || e.type === 'witch')
+        e => e.alive && e.ownerId === s.playerId && isLeaderType(e.type)
       );
       if (leader) allyContext.allyPositions.push({ col: leader.col, row: leader.row });
     }

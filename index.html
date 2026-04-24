@@ -288,10 +288,20 @@
         <div id="sp-saves-list"></div>
       </div>
 
-      <!-- Faction toggle -->
-      <div class="qp-faction-toggle">
-        <button id="btn-faction-hero" class="qp-faction-btn active" data-faction="hero">⚔ Hero</button>
-        <button id="btn-faction-witch" class="qp-faction-btn" data-faction="witch">✦ Witch</button>
+      <!-- Faction picker — six tiles grouped by side -->
+      <div class="qp-faction-picker">
+        <div class="qp-side-row" data-side="day">
+          <span class="qp-side-label">Day</span>
+          <button class="qp-faction-btn active" data-faction="hero">⚔ Paladin</button>
+          <button class="qp-faction-btn" data-faction="rogue">🗡 Rogue<span class="qp-stub-badge">stub</span></button>
+          <button class="qp-faction-btn" data-faction="captain">⛨ Captain<span class="qp-stub-badge">stub</span></button>
+        </div>
+        <div class="qp-side-row" data-side="night">
+          <span class="qp-side-label">Night</span>
+          <button class="qp-faction-btn" data-faction="witch">✦ Witch</button>
+          <button class="qp-faction-btn" data-faction="necromancer">☥ Necromancer<span class="qp-stub-badge">stub</span></button>
+          <button class="qp-faction-btn" data-faction="brute">▲ Brute<span class="qp-stub-badge">stub</span></button>
+        </div>
       </div>
 
       <!-- Start Game button -->
@@ -756,10 +766,10 @@
 
     <div class="cg-options">
       <div class="cg-option-row">
-        <span class="cg-option-label">Your Faction</span>
+        <span class="cg-option-label">Your Side</span>
         <div class="pps-pills">
-          <label class="pps-pill"><input type="radio" name="async-faction" value="hero" checked><span>Hero</span></label>
-          <label class="pps-pill"><input type="radio" name="async-faction" value="witch"><span>Witch</span></label>
+          <label class="pps-pill"><input type="radio" name="async-faction" value="hero" checked><span>☀ Day</span></label>
+          <label class="pps-pill"><input type="radio" name="async-faction" value="witch"><span>🌙 Night</span></label>
         </div>
       </div>
       <div class="cg-option-row">

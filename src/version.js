@@ -5,7 +5,12 @@ export const VERSION = '1.3.35';
 // Save format version — only bump when state-sync schema changes break
 // compatibility with existing saves.  Unrelated patches/features keep the
 // same SAVE_VERSION so in-progress games survive server restarts.
-export const SAVE_VERSION = 1;
+//
+// v2 (2026-04): EntityType.HERO renamed to PALADIN (value 'hero' → 'paladin').
+//               state-sync deserialize re-keys old entities, so v1 saves
+//               will hydrate cleanly, but a fresh SAVE_VERSION ensures any
+//               consumer that bypasses the migration sees an explicit bump.
+export const SAVE_VERSION = 2;
 
 // Unique build identifier — appends Railway's commit SHA when deployed.
 // Falls back to plain VERSION in local dev and in-browser (where process is

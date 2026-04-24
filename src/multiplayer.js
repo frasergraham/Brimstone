@@ -7,6 +7,7 @@
  */
 import { setMapDimensions } from './hex.js';
 import { registerPushNotifications, unregisterPushToken } from './platform.js';
+import { defaultDisplayName } from './entities.js';
 
 // ── Reconnect constants ──────────────────────────────────────────────────────
 
@@ -16,16 +17,6 @@ const RECONNECT_HARD_TIMEOUT  = 30_000; // absolute wall-clock limit for all rec
 
 // ── MirrorEntity ─────────────────────────────────────────────────────────────
 
-const _DISPLAY_NAMES = {
-  hero:       'The Hero',
-  witch:      'The Witch',
-  survivor:   'Survivor',
-  zombie:     'Zombie',
-  minion:     'Minion',
-  wood_golem: 'Wood Golem',
-  iron_golem: 'Iron Golem',
-};
-
 class MirrorEntity {
   static from(data) {
     const e = Object.assign(new MirrorEntity(), data);
@@ -33,7 +24,9 @@ class MirrorEntity {
   }
 
   get alive()       { return this.hp > 0; }
-  get displayName() { return this.name || _DISPLAY_NAMES[this.type] || this.type; }
+  // Mirror the server-side Entity.displayName semantics so client labels
+  // never drift from what the server/renderer show.
+  get displayName() { return this.name ?? defaultDisplayName(this.type); }
 
   // Stub mutators — server owns all mutations
   takeDamage(amount) { this.hp = Math.max(0, this.hp - amount); return !this.alive; }
@@ -102,6 +95,21 @@ export class MirrorState {
   get actionsAvailable() { return this.actionsLeft; }
   get gameOver()         { return this._winner !== null; }
   get winner()           { return this._winner; }
+
+  // Side-keyed accessors — mirror the GameState methods so `Faction.getInventory`,
+  // `Faction.getActionsLeft`, etc. work when called against a MirrorState on the
+  // client. Without these, client-side action evaluation crashes with
+  // "state.inventoryForSide is not a function" and entities appear unselectable.
+  _storageKeyForSide(sideId) {
+    if (sideId === 'day')   return 'hero';
+    if (sideId === 'night') return 'witch';
+    throw new Error(`Unknown side: ${sideId}`);
+  }
+  inventoryForSide(sideId)   { return this.inventory?.[this._storageKeyForSide(sideId)] ?? {}; }
+  actionsLeftForSide(sideId) { return sideId === 'day' ? this.heroActionsLeft : this.witchActionsLeft; }
+  killsForSide(sideId)       { return sideId === 'day' ? (this.heroKills ?? 0)  : (this.witchKills ?? 0); }
+  summonsForSide(sideId)     { return sideId === 'night' ? (this.witchSummonCount ?? 0) : 0; }
+  nodeScoreForSide(sideId)   { return this.nodeScore?.[this._storageKeyForSide(sideId)] ?? 0; }
 
   // Stub methods — server owns the state
   addLog()       { /* no-op */ }
@@ -203,8 +211,15 @@ export class MultiplayerClient {
   }
 
   /** Claim (or switch to) an empty slot in the lobby. */
-  claimSlot(roomId, slotIndex) {
-    this._send({ type: 'claimSlot', roomId, slotIndex });
+  claimSlot(roomId, slotIndex, factionId = null) {
+    const msg = { type: 'claimSlot', roomId, slotIndex };
+    if (factionId) msg.factionId = factionId;
+    this._send(msg);
+  }
+
+  /** Switch the faction occupying the player's current seat (same Side only). */
+  setFaction(roomId, factionId) {
+    this._send({ type: 'setFaction', roomId, factionId });
   }
 
   /** Join an active game during round 1 (late join). Uses room ID or code. */
