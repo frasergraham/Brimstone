@@ -1,5 +1,7 @@
 // Entity definitions: Hero, Witch, named Survivors, Zombie, Minion, Golems
 import { WEAPON_STATS } from './tiles.js';
+import { UNIT_TYPES } from './unit-types.js';
+import { SurvivorAbility } from './abilities.js';
 
 let _nextId = 1;
 
@@ -44,17 +46,10 @@ export const EntityType = Object.freeze({
   IRON_GOLEM:  'iron_golem',
 });
 
-// Survivor special abilities
-export const SurvivorAbility = Object.freeze({
-  FORTIFY_DOUBLE: 'fortify_double', // wood fortifies to full strength (level 2)
-  HEAL:           'heal',           // action (1): heals hero on same hex 1 HP
-  BRAWLER:        'brawler',        // passive: +1 ATK baked in
-  STURDY:         'sturdy',         // passive: +1 DEF baked in
-  HERBALIST:      'herbalist',      // passive: each explore also yields 1 Herbs
-  INSPIRE:        'inspire',        // action (free): hero gets +1 ATK this battle
-  RALLY:          'rally',          // action (free): hero gets +1 bonus action
-  SCOUT:          'scout',          // passive: reveals witch units within 3 hexes
-});
+// Survivor special abilities. The canonical registry lives in
+// src/abilities.js; this re-export keeps the legacy `SurvivorAbility.X`
+// call sites working during the phased migration.
+export { SurvivorAbility };
 
 // One distinct colour per roster slot — used for unit circles and plan arrows.
 // Friendly palette: greens, blues and yellows so survivors read as civilian/ally.
@@ -248,51 +243,23 @@ export const SURVIVOR_ROSTER = [
 // Track which roster entries have been used this game so no duplicates spawn
 const _usedRosterIndices = new Set();
 
-const BASE_STATS = {
-  [EntityType.PALADIN]:     { maxHp: 14, attack: 3, defense: 2 },
-  [EntityType.ROGUE]:       { maxHp: 10, attack: 3, defense: 1 }, // stub: glass cannon
-  [EntityType.CAPTAIN]:     { maxHp: 12, attack: 2, defense: 3 }, // stub: balanced leader
-  [EntityType.WITCH]:       { maxHp: 10, attack: 2, defense: 2 },
-  [EntityType.NECROMANCER]: { maxHp: 10, attack: 1, defense: 2 }, // stub: support caster
-  [EntityType.BRUTE]:       { maxHp: 14, attack: 3, defense: 1 }, // stub: melee monster
-  [EntityType.SURVIVOR]:    { maxHp: 4, attack: 1, defense: 1 },
-  [EntityType.ZOMBIE]:      { maxHp: 2, attack: 2, defense: 0 },
-  [EntityType.MINION]:      { maxHp: 2, attack: 1, defense: 0 },
-  [EntityType.WOOD_GOLEM]:  { maxHp: 3, attack: 2, defense: 3 },
-  [EntityType.IRON_GOLEM]:  { maxHp: 5, attack: 3, defense: 2 },
-};
+// BASE_STATS, BASE_AGILITY, and ENTITY_COLOR derive from UNIT_TYPES
+// (src/unit-types.js), which is the single source of truth for per-type
+// stats / agility / colour. New code should read UNIT_TYPES directly;
+// these exports remain for existing call sites.
+const BASE_STATS = Object.freeze(
+  Object.fromEntries(
+    Object.entries(UNIT_TYPES).map(([k, v]) => [k, { ...v.baseStats }])
+  )
+);
 
-// Per-type Agility defaults (1–10 scale). Higher acts first within a resolver step.
-export const BASE_AGILITY = {
-  [EntityType.PALADIN]:     6,
-  [EntityType.ROGUE]:       8,  // stub: fast strikers
-  [EntityType.CAPTAIN]:     5,  // stub: steady leader
-  [EntityType.WITCH]:       5,
-  [EntityType.NECROMANCER]: 4,  // stub: slow caster
-  [EntityType.BRUTE]:       3,  // stub: lumbering melee
-  [EntityType.SURVIVOR]:    4,
-  [EntityType.ZOMBIE]:      2,
-  [EntityType.MINION]:      5,
-  [EntityType.WOOD_GOLEM]:  3,
-  [EntityType.IRON_GOLEM]:  2,
-};
+export const BASE_AGILITY = Object.freeze(
+  Object.fromEntries(Object.entries(UNIT_TYPES).map(([k, v]) => [k, v.agility]))
+);
 
-// Visual colours used by the renderer. Stub-faction leaders share the
-// side-level palette today (gold for day, purple for night); each stub
-// gets a distinct accent later when the per-faction theme lands.
-export const ENTITY_COLOR = {
-  [EntityType.PALADIN]:     '#d4a72c',
-  [EntityType.ROGUE]:       '#b88a1c', // dimmer gold
-  [EntityType.CAPTAIN]:     '#e8c660', // brighter gold
-  [EntityType.WITCH]:       '#9b59b6',
-  [EntityType.NECROMANCER]: '#7d4393',
-  [EntityType.BRUTE]:       '#b075c8',
-  [EntityType.SURVIVOR]:    '#4caf7d',
-  [EntityType.ZOMBIE]:      '#7c9a57',
-  [EntityType.MINION]:      '#c0392b',
-  [EntityType.WOOD_GOLEM]:  '#8B5E3C',
-  [EntityType.IRON_GOLEM]:  '#607D8B',
-};
+export const ENTITY_COLOR = Object.freeze(
+  Object.fromEntries(Object.entries(UNIT_TYPES).map(([k, v]) => [k, v.color]))
+);
 
 // Per-player color palettes — canonical source is src/theme.js (FACTION_THEME).
 // Re-exported here for backward compatibility with existing imports.
