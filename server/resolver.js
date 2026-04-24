@@ -127,17 +127,21 @@ function runAction(state, action, faction, playerId = null) {
     }
 
     case PlanActionType.BATTLE_UNIT: {
+      // Ranged units (range > 1) can strike any enemy within their attack
+      // range; melee units remain adjacency-only. Fort assault is melee-only
+      // and still capped at range 1 below (ranged units can't batter walls).
+      const attackerRange = typeof entity.getRange === 'function' ? entity.getRange() : (entity.range ?? 1);
       let target = state.entities.find(e => e.id === action.targetId && e.alive);
 
       if (target) {
         const dist = hexDistance(entity.col, entity.row, target.col, target.row);
-        if (dist > 1) target = null; // target moved out of range
+        if (dist > attackerRange) target = null; // target moved out of range
       }
 
       // Fallback: original target gone/moved — attack another enemy on the planned hex
       if (!target && action.targetCol != null && action.targetRow != null) {
         const dist = hexDistance(entity.col, entity.row, action.targetCol, action.targetRow);
-        if (dist <= 1) {
+        if (dist <= attackerRange) {
           const enemies = state.entities.filter(
             e => e.alive && e.owner !== faction &&
                  e.col === action.targetCol && e.row === action.targetRow
@@ -159,12 +163,17 @@ function runAction(state, action, faction, playerId = null) {
       if (r.counterDmg > 0 && !state.entities.some(e => e.id === entity.id))
         _handleLeaderDeath(state, entity);
       for (const sk of r.splashKills ?? []) _handleLeaderDeath(state, sk);
-      return { kind: 'ok', result: r, battleSnaps: { actorSnap, targetSnap } };
+      return {
+        kind: 'ok',
+        result: r,
+        battleSnaps: { actorSnap, targetSnap, ranged: !!r.ranged },
+      };
     }
 
     case PlanActionType.BATTLE_HEX: {
+      const attackerRange = typeof entity.getRange === 'function' ? entity.getRange() : (entity.range ?? 1);
       const dist = hexDistance(entity.col, entity.row, action.targetCol, action.targetRow);
-      if (dist > 1) return { kind: 'skip', reason: 'Target hex out of range.' };
+      if (dist > attackerRange) return { kind: 'skip', reason: 'Target hex out of range.' };
 
       const enemies = state.entities.filter(
         e => e.alive && e.owner !== faction &&
@@ -173,9 +182,11 @@ function runAction(state, action, faction, playerId = null) {
       if (enemies.length === 0) {
         const actorSnap = snapEntity(entity);
         // Witch siege: if no enemy is on the hex but a wall (fort >= threshold)
-        // stands there, battering it reduces its level. Otherwise whiff.
+        // stands there, battering it reduces its level. Otherwise whiff. Fort
+        // assault is melee-only — ranged attackers cannot batter walls at a
+        // distance. The dist <= 1 gate below keeps this constraint.
         const targetTile = state.tiles.get(hexKey(action.targetCol, action.targetRow));
-        if (getFaction(entity.owner).canAssaultFortifications() && targetTile &&
+        if (dist <= 1 && getFaction(entity.owner).canAssaultFortifications() && targetTile &&
             (targetTile.fortifyLevel || 0) >= FORT_IMPASSABLE_THRESHOLD) {
           const r = executeFortAssault(state, entity, action.targetCol, action.targetRow);
           if (!r.success) return { kind: 'fail', reason: r.log[0] };
@@ -184,7 +195,7 @@ function runAction(state, action, faction, playerId = null) {
         return {
           kind: 'skip',
           reason: 'No enemy on target hex.',
-          battleSnaps: { actorSnap },
+          battleSnaps: { actorSnap, ranged: attackerRange > 1 },
           whiffTarget: { col: action.targetCol, row: action.targetRow },
         };
       }
@@ -199,7 +210,11 @@ function runAction(state, action, faction, playerId = null) {
       if (r.counterDmg > 0 && !state.entities.some(e => e.id === entity.id))
         _handleLeaderDeath(state, entity);
       for (const sk of r.splashKills ?? []) _handleLeaderDeath(state, sk);
-      return { kind: 'ok', result: r, battleSnaps: { actorSnap, targetSnap } };
+      return {
+        kind: 'ok',
+        result: r,
+        battleSnaps: { actorSnap, targetSnap, ranged: !!r.ranged },
+      };
     }
 
     case PlanActionType.FORTIFY: {
