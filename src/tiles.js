@@ -41,7 +41,7 @@ export const WeaponType = Object.freeze({
   AXE:    'axe',     // +1 attack, +1 defense
   BOW:    'bow',     // +1 attack
   SHIELD: 'shield',  // +2 defense
-  STAFF:  'staff',   // +1 attack, +2 vs undead
+  STAFF:  'staff',   // +1 attack, +1 advantage die vs undead
   DAGGER: 'dagger',  // +1 attack
 });
 

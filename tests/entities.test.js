@@ -402,19 +402,28 @@ describe('Entity.resolveCombat', () => {
     assert.equal(r1.defenseRoll, r0.defenseRoll);
   });
 
-  test('staff grants attacker advantage vs undead (zombie, minion, golems)', () => {
+  test('staff grants attacker advantage vs undead defenders only (zombies)', () => {
     const hero = createHero(0, 0);
     hero.equipWeapon(WeaponType.STAFF); // +1 ATK, plus +1 advantage die vs undead
     const zombie = createZombie(0, 0);
-    const minion = createMinion(0, 0);
+
+    const r = withRNG([0.5, 0.5, 0.5], () => Entity.resolveCombat(hero, zombie));
+    assert.equal(r.atkStaffBonus, 1, 'Staff vs zombie should grant 1 advantage die');
+    assert.equal(r.atkAdvantage, 1);
+    assert.equal(r.atkPool.length, 2);
+  });
+
+  test('staff does NOT grant advantage vs minions or golems (narrowed in PR #294)', () => {
+    const hero = createHero(0, 0);
+    hero.equipWeapon(WeaponType.STAFF);
+    const minion    = createMinion(0, 0);
     const woodGolem = createWoodGolem(0, 0);
     const ironGolem = createIronGolem(0, 0);
 
-    for (const undead of [zombie, minion, woodGolem, ironGolem]) {
-      const r = withRNG([0.5, 0.5, 0.5], () => Entity.resolveCombat(hero, undead));
-      assert.equal(r.atkStaffBonus, 1, `Staff vs ${undead.type} should grant 1 advantage die`);
-      assert.equal(r.atkAdvantage, 1);
-      assert.equal(r.atkPool.length, 2);
+    for (const defender of [minion, woodGolem, ironGolem]) {
+      const r = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, defender));
+      assert.equal(r.atkStaffBonus, 0, `Staff vs ${defender.type} should NOT grant advantage`);
+      assert.equal(r.atkAdvantage, 0);
     }
   });
 

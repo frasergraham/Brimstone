@@ -281,7 +281,7 @@ export class Entity {
 
     const roll = state ? (s) => state.nextDie(s) : _nextDie;
 
-    // Item combat triggers (e.g. staff vs undead/minions/golems →
+    // Item combat triggers (e.g. staff vs undead defenders →
     // +1 attacker advantage die). Data-driven via ITEMS[weapon].combatTriggers
     // so adding a new conditional weapon effect is a one-file change. The
     // defender's tag set is sourced from `defender.tags` (set in the Entity

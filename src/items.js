@@ -40,12 +40,14 @@ export const ITEMS = Object.freeze({
     kind: 'weapon',
     slot: 'weapon',
     statMods: { attack: 1, defense: 0 },
-    label: '🪄 Staff (+1 ATK, +2 vs undead)',
-    // Grants +1 attack advantage die vs undead, summoned minions, and
-    // constructs (wood/iron golems). Entity.resolveCombat iterates
-    // combatTriggers instead of hardcoding the defender-type list.
+    label: '🪄 Staff (+1 ATK, advantage vs undead)',
+    // Grants +1 attack advantage die vs undead defenders only (zombies).
+    // Pre-refactor this also fired against minions and golems, but that
+    // effectively made the staff a flat +adv vs every witch unit — not
+    // the "specialist anti-undead weapon" its label suggests. Narrowed
+    // to match the label.
     combatTriggers: [
-      { when: 'attack', ifDefenderHasAnyTag: ['undead', 'minion', 'construct'], advantage: 1 },
+      { when: 'attack', ifDefenderHasAnyTag: ['undead'], advantage: 1 },
     ],
   },
   dagger: {
