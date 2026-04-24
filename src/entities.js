@@ -475,25 +475,23 @@ export function expectedDieValue(net) {
   return WORST_OF_K_EV[-n];
 }
 
-// Phase 5: leader factories stamp each new leader with its side's innate
-// abilities. Day-side leaders carry 'sound_horn'; night-side leaders
-// carry 'summon'. The `actor.hasAbility(id)` gates in src/actions.js
-// pick up these abilities directly, replacing the legacy
-// `isLeaderType + owner` gate pair. Hard-coded here (rather than looked
-// up via getFaction) to keep entities.js free of a factions.js cycle.
-const _DAY_LEADER_ABILITIES   = ['sound_horn'];
-const _NIGHT_LEADER_ABILITIES = ['summon'];
+// Innate leader abilities are stamped onto each leader by
+// `Faction.createLeader()` (see src/factions.js) — it iterates the
+// faction's `innateLeaderAbilities` list after `_buildLeader` runs. The
+// factory functions below intentionally do NOT push abilities directly;
+// the faction is the sole source of truth so subclasses (e.g. RogueFaction
+// returning `[]`) can actually strip an inherited ability.
+//
+// Direct callers of these factories (e.g. tests, `state.deserializeState`,
+// or any code that bypasses Faction.createLeader) get a leader without
+// innate abilities — that's the expected behaviour for raw construction.
 
 export function createHero(col, row, ownerId = null, state = null) {
-  const e = new Entity(EntityType.PALADIN, 'hero', col, row, ownerId, state);
-  e.abilities.push(..._DAY_LEADER_ABILITIES);
-  return e;
+  return new Entity(EntityType.PALADIN, 'hero', col, row, ownerId, state);
 }
 
 export function createWitch(col, row, ownerId = null, state = null) {
-  const e = new Entity(EntityType.WITCH, 'witch', col, row, ownerId, state);
-  e.abilities.push(..._NIGHT_LEADER_ABILITIES);
-  return e;
+  return new Entity(EntityType.WITCH, 'witch', col, row, ownerId, state);
 }
 
 // ── Stub-faction leader factories ───────────────────────────────────────────
@@ -505,28 +503,24 @@ export function createWitch(col, row, ownerId = null, state = null) {
 export function createRogue(col, row, ownerId = null, state = null) {
   const e = new Entity(EntityType.ROGUE, 'hero', col, row, ownerId, state);
   e.factionId = 'rogue';
-  e.abilities.push(..._DAY_LEADER_ABILITIES);
   return e;
 }
 
 export function createCaptain(col, row, ownerId = null, state = null) {
   const e = new Entity(EntityType.CAPTAIN, 'hero', col, row, ownerId, state);
   e.factionId = 'captain';
-  e.abilities.push(..._DAY_LEADER_ABILITIES);
   return e;
 }
 
 export function createNecromancer(col, row, ownerId = null, state = null) {
   const e = new Entity(EntityType.NECROMANCER, 'witch', col, row, ownerId, state);
   e.factionId = 'necromancer';
-  e.abilities.push(..._NIGHT_LEADER_ABILITIES);
   return e;
 }
 
 export function createBrute(col, row, ownerId = null, state = null) {
   const e = new Entity(EntityType.BRUTE, 'witch', col, row, ownerId, state);
   e.factionId = 'brute';
-  e.abilities.push(..._NIGHT_LEADER_ABILITIES);
   return e;
 }
 

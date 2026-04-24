@@ -3096,6 +3096,8 @@ export class Renderer {
 
       if (p.projectileType === 'sparkle') {
         this._drawSparkleProjectile(ctx, x, y, hs, t, p);
+      } else if (p.projectileType === 'bolt') {
+        this._drawBoltProjectile(ctx, x, y, hs, t, p);
       } else {
         this._drawGenericProjectile(ctx, x, y, hs, t);
       }
@@ -3156,14 +3158,54 @@ export class Renderer {
     ctx.restore();
   }
 
+  // Crossbow bolt — short metallic streak oriented along the travel path.
+  // Visually distinct from the witch's purple sparkle orb so the rogue's
+  // ranged attack reads instantly.
+  _drawBoltProjectile(ctx, x, y, hs, _t, p) {
+    const dx = p.toX - p.fromX;
+    const dy = p.toY - p.fromY;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len;
+    const uy = dy / len;
+    // Bolt is a 0.9-hex-long streak centred on (x, y).
+    const half = hs * 0.45;
+    const tipX = x + ux * half;
+    const tipY = y + uy * half;
+    const tailX = x - ux * half;
+    const tailY = y - uy * half;
+    ctx.save();
+    // Dark steel core.
+    ctx.strokeStyle = '#2a2a2a';
+    ctx.lineCap = 'round';
+    ctx.lineWidth = Math.max(2, hs * 0.06);
+    ctx.beginPath();
+    ctx.moveTo(tailX, tailY);
+    ctx.lineTo(tipX, tipY);
+    ctx.stroke();
+    // Bright highlight to catch the eye.
+    ctx.strokeStyle = 'rgba(220,220,230,0.85)';
+    ctx.lineWidth = Math.max(1, hs * 0.025);
+    ctx.beginPath();
+    ctx.moveTo(tailX, tailY);
+    ctx.lineTo(tipX, tipY);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   _drawImpactPuff(ctx, x, y, hs, impactT, projectileType) {
     const r = hs * 0.6 * (0.3 + impactT * 0.9);
     const alpha = (1 - impactT) * 0.7;
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    const color = projectileType === 'sparkle'
-      ? `rgba(210,160,255,${alpha})`
-      : `rgba(255,230,160,${alpha})`;
+    let color;
+    if (projectileType === 'sparkle') {
+      color = `rgba(210,160,255,${alpha})`;
+    } else if (projectileType === 'bolt') {
+      // Steel/white spark for the crossbow impact.
+      color = `rgba(220,220,230,${alpha})`;
+    } else {
+      color = `rgba(255,230,160,${alpha})`;
+    }
     ctx.fillStyle = color;
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);

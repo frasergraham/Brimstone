@@ -27,7 +27,8 @@ export const UNIT_TYPES = Object.freeze({
   rogue: {
     baseStats: { maxHp: 10, attack: 3, defense: 1 },
     agility: 8,
-    range: 1,
+    range: 3,
+    projectileType: 'bolt',
     color: '#b88a1c',
     tags: ['living', 'leader', 'day-leader'],
   },

@@ -8,10 +8,12 @@
 
 import { Phase } from './game.js';
 import { EntityType, SurvivorAbility, createHero, createWitch, createSurvivor, createZombie, createMinion, createWoodGolem, createIronGolem, createRogue, createCaptain, createNecromancer, createBrute, isLeaderType } from './entities.js';
-import { ResourceType, TileType, BuildingType } from './tiles.js';
+import { ResourceType, TileType, BuildingType, rollLoot } from './tiles.js';
 import { hexKey, getNeighbors } from './hex.js';
 import { AI_HERO_NAMES, AI_WITCH_NAMES } from './ai-names.js';
 import { Side, getOpposingSide as _opposingSide } from './sides.js';
+import { ITEMS } from './items.js';
+import { triggerSurvivorEncounter } from './survivor-discovery.js';
 
 // ── Base Class ──────────────────────────────────────────────────────────────
 
@@ -143,6 +145,14 @@ export class Faction {
   /** Can units of this faction carry/equip weapons? */
   canEquipWeapon() { return false; }
 
+  /**
+   * Per-item equip gate. Defaults to the blanket canEquipWeapon() check;
+   * subclasses can refine by item category (e.g. rogue: ranged-only).
+   * Pass an unknown id and you get false.
+   * @param {string} itemId — ITEMS registry id
+   */
+  canEquipWeaponItem(_itemId) { return this.canEquipWeapon(); }
+
   /** Does this entity currently have a horse equipped? */
   hasHorse(entity) {
     return this.canEquipHorse() && (entity.items?.['horse'] || 0) > 0;
@@ -184,6 +194,71 @@ export class Faction {
 
   /** Log message when this faction finds a resource */
   getResourceFoundLog(_actor, _lootType) { return ''; }
+
+  // ── Explore & Move Hooks ──
+
+  /**
+   * Hook to modify a single loot roll before it's applied. Receives the
+   * raw rolled type and the loot table (so subclasses can re-roll, filter
+   * 'nothing', etc.) and returns the (possibly substituted) type to grant.
+   * Default: pass through.
+   *
+   * Called once per roll — re-rolls are the implementer's responsibility.
+   * @param {object} state
+   * @param {object} actor
+   * @param {Array<{type:string,weight:number}>} table
+   * @param {string} lootType
+   * @returns {string}
+   */
+  modifyLootRoll(_state, _actor, _table, lootType) { return lootType; }
+
+  /**
+   * Hook to grant bonus loot after a primary roll has been applied. The
+   * faction calls `grantExtra()` to request another roll-and-apply pass.
+   * Default: agility-driven double-resource chance — any high-agility
+   * actor gets an occasional extra roll on resource drops. Subclasses
+   * can override to implement other bonus mechanics.
+   *
+   * Skips horses, 'nothing', and weapons (the intent is "double resources",
+   * not "two horses" or "two swords"). The weapon gate is delegated to
+   * the caller — pass `isWeapon: true` for weapon drops.
+   *
+   * @param {object} state
+   * @param {object} actor
+   * @param {string} lootType
+   * @param {() => void} grantExtra — invoke to trigger another roll
+   * @param {{isWeapon: boolean}} opts
+   */
+  applyExploreLootBonus(_state, actor, lootType, grantExtra, opts = {}) {
+    if (lootType === 'nothing' || lootType === 'horse') return;
+    if (opts.isWeapon) return;
+    const agi = (typeof actor.getAgility === 'function')
+      ? actor.getAgility()
+      : (actor.agility ?? 0);
+    // (agi - 6) * 0.15, clamped [0, 0.5]: rogue (8) → 30%, paladin (6) → 0%,
+    // captain/witch (5) → 0%, slower units → 0%. The bonus is intentionally
+    // gated above the standard leader agility so the 1v1 baseline doesn't
+    // shift — only the rogue (and any future agility-8+ unit) gets it.
+    const chance = Math.max(0, Math.min(0.5, (agi - 6) * 0.15));
+    if (Math.random() < chance) grantExtra();
+  }
+
+  /**
+   * Called after the actor finishes each move-step. Returns
+   * `{ encounterLog, encounterSurvivor } | null` — the executeMove loop
+   * merges any encounter into its outgoing log/state. Default: no-op.
+   *
+   * The phase-random survivor reveal in executeMove stays inline (it's
+   * shared-side behaviour, not faction-specific). This hook is for
+   * faction-specific triggers, e.g. the rogue's auto-detect-on-move.
+   *
+   * @param {object} state
+   * @param {object} actor
+   * @param {number} col
+   * @param {number} row
+   * @returns {{encounterLog: string[], encounterSurvivor: object} | null}
+   */
+  onAfterMoveStep(_state, _actor, _col, _row) { return null; }
 
   // ── Visibility ──
 
@@ -519,9 +594,71 @@ export class RogueFaction extends HeroFaction {
   get id()         { return 'rogue'; }
   get name()       { return 'Rogue'; }
   get leaderType() { return EntityType.ROGUE; }
-  isStub()         { return true; }
+  // No isStub() override — the rogue has real distinct behaviour now
+  // (ranged attack, melee-weapon ban, sight bonus, agility-loot bonus,
+  //  building-survivor auto-detect, no Sound Horn).
+
   _buildLeader(col, row, ownerId, state = null) {
     return createRogue(col, row, ownerId, state);
+  }
+
+  // Drop sound_horn from the day-side innate set. Faction.createLeader
+  // is the sole source of innate abilities (see entities.js cleanup),
+  // so returning [] actually strips the inherited ability.
+  get innateLeaderAbilities() { return []; }
+
+  // Sight: +1 hex over paladin in every phase, with the same scout bonus.
+  // Calls super so future tweaks to HeroFaction's day/dawn/night base
+  // values flow through automatically.
+  getSightRange(phase, hasScout = false) {
+    return super.getSightRange(phase, hasScout) + 1;
+  }
+
+  // Cannot wield melee weapons. Bow / crossbow are fine.
+  canEquipWeaponItem(itemId) {
+    if (!this.canEquipWeapon()) return false;
+    return ITEMS[itemId]?.category === 'ranged';
+  }
+
+  // Exploration never turns up empty. On a 'nothing' roll, re-roll once;
+  // if that's also 'nothing', filter the table and pick from the rest.
+  // The agility-driven double-resource bonus is inherited from the
+  // Faction base class — rogue agility 8 → 30% chance per resource.
+  modifyLootRoll(state, actor, table, lootType) {
+    if (lootType !== 'nothing') return lootType;
+    const reroll = rollLoot(table);
+    if (reroll !== 'nothing') return reroll;
+    const filtered = table.filter(e => e.type !== 'nothing');
+    return filtered.length ? rollLoot(filtered) : lootType;
+  }
+
+  // After each move-step, scan the just-entered building tile + neighbouring
+  // building tiles for hidden survivors and auto-trigger the encounter.
+  // The rogue's keen eye spots people the paladin would walk past.
+  onAfterMoveStep(state, actor, col, row) {
+    const hits = [];
+    const here = state.tiles.get(hexKey(col, row));
+    if (here?.type === TileType.BUILDING && here.hiddenSurvivor) {
+      hits.push({ col, row });
+    }
+    for (const n of getNeighbors(col, row)) {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      if (t?.type === TileType.BUILDING && t.hiddenSurvivor) {
+        hits.push({ col: n.col, row: n.row });
+      }
+    }
+    if (!hits.length) return null;
+    const encounterLog = [];
+    let encounterSurvivor = null;
+    for (const h of hits) {
+      const enc = triggerSurvivorEncounter(state, actor, h.col, h.row);
+      if (enc) {
+        encounterLog.push(`👁 ${actor.displayName} senses someone hiding nearby!`);
+        encounterLog.push(...enc.encounterLog);
+        encounterSurvivor = enc.encounterSurvivor;
+      }
+    }
+    return { encounterLog, encounterSurvivor };
   }
 }
 

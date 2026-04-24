@@ -9,6 +9,7 @@ import { ABILITIES, SurvivorAbility } from '../src/abilities.js';
 import { GameState } from '../src/game.js';
 import { Entity, EntityType, createHero, createWitch, createSurvivor } from '../src/entities.js';
 import { executeUseAbility } from '../src/actions.js';
+import { getFaction } from '../src/factions.js';
 
 // Small helper — fresh empty state with a single hero on (5,5).
 function _freshState() {
@@ -147,20 +148,28 @@ describe('Phase 5 — faction-innate leader abilities', () => {
     assert.equal(ABILITIES.summon.kind,     'active');
   });
 
-  test('createHero stamps sound_horn on the hero', () => {
-    const hero = createHero(0, 0);
+  test('Faction.createLeader stamps sound_horn on the hero', () => {
+    const hero = getFaction('hero').createLeader(0, 0, 'hero');
     assert.ok(hero.hasAbility('sound_horn'),
       'Hero should carry sound_horn innately');
     assert.ok(!hero.hasAbility('summon'),
       'Hero should NOT carry summon');
   });
 
-  test('createWitch stamps summon on the witch', () => {
-    const witch = createWitch(0, 0);
+  test('Faction.createLeader stamps summon on the witch', () => {
+    const witch = getFaction('witch').createLeader(0, 0, 'witch');
     assert.ok(witch.hasAbility('summon'),
       'Witch should carry summon innately');
     assert.ok(!witch.hasAbility('sound_horn'),
       'Witch should NOT carry sound_horn');
+  });
+
+  test('raw createHero/createWitch do NOT stamp innate abilities', () => {
+    // Innate abilities now flow exclusively through Faction.createLeader
+    // so subclasses (e.g. RogueFaction) can override innateLeaderAbilities
+    // and actually strip the inherited ability.
+    assert.ok(!createHero(0, 0).hasAbility('sound_horn'));
+    assert.ok(!createWitch(0, 0).hasAbility('summon'));
   });
 
   test('non-leaders never carry sound_horn or summon', () => {

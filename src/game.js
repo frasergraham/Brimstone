@@ -206,7 +206,7 @@ export class GameState {
     // Offline / legacy path: create one hero and one witch with synthetic player IDs.
     const heroName = mapDataOverride?.heroName ?? 'Ishmael Charger';
     const witchName = mapDataOverride?.witchName ?? 'Witch';
-    this.hero  = createHero(mapData.heroStart.col,  mapData.heroStart.row, 'hero', this);
+    this.hero  = getFaction('hero').createLeader(mapData.heroStart.col,  mapData.heroStart.row, 'hero', this);
     this.hero.name = heroName;
     this.entities.push(this.hero);
     this.players.push({ id: 'hero',  name: heroName,  faction: 'hero',  isAI: heroIsAI,  leaderId: this.hero.id });
@@ -216,7 +216,7 @@ export class GameState {
       this.witch = null;
       this.players.push({ id: 'witch', name: witchName, faction: 'witch', isAI: true, leaderId: null });
     } else {
-      this.witch = createWitch(mapData.witchStart.col, mapData.witchStart.row, 'witch', this);
+      this.witch = getFaction('witch').createLeader(mapData.witchStart.col, mapData.witchStart.row, 'witch', this);
       this.witch.name = witchName;
       this.entities.push(this.witch);
       this.players.push({ id: 'witch', name: witchName, faction: 'witch', isAI: witchIsAI, leaderId: this.witch.id });
@@ -473,10 +473,14 @@ export class GameState {
   swapLeaderToFaction(sideId, factionId, targetEntity = null) {
     if (!factionId) return;
     const def = getFactionsForSide(sideId).find(f => f.id === factionId);
-    if (!def || !def.isStub()) return;
+    if (!def) return;
 
     const leader = targetEntity ?? (sideId === 'day' ? this.hero : this.witch);
     if (!leader) return;
+
+    // No-op when swapping to the leader's current faction — preserves
+    // assigned name and avoids redundant ability re-stamping.
+    if (leader.factionId === def.id || leader.type === def.leaderType) return;
 
     const fresh = def.createLeader(leader.col, leader.row, leader.ownerId, this);
     leader.type      = fresh.type;
@@ -485,15 +489,15 @@ export class GameState {
     leader.attack    = fresh.attack;
     leader.defense   = fresh.defense;
     leader.agility   = fresh.agility;
+    leader.range     = fresh.range;
     leader.factionId = fresh.factionId;
-    // Phase 5: re-stamp the faction-innate abilities (`sound_horn` on
-    // day leaders, `summon` on night leaders) from the target faction.
-    // Preserves any non-innate abilities already on the leader.
-    const innate = def.innateLeaderAbilities;
-    if (!Array.isArray(leader.abilities)) leader.abilities = [];
-    for (const id of innate) {
-      if (!leader.abilities.includes(id)) leader.abilities.push(id);
-    }
+    // Faction.createLeader already stamped innate abilities on `fresh`.
+    // Replace the leader's ability list to drop any abilities that the
+    // new faction has stripped (e.g. RogueFaction returning [] strips
+    // sound_horn from a paladin → rogue swap), then re-add survivor-style
+    // abilities the leader had picked up at runtime (none today, but
+    // this is the natural extension point).
+    leader.abilities = [...(fresh.abilities || [])];
     // Clear the constructor-assigned name ('Ishmael Charger' for the day
     // side default, 'Witch' for night) so Entity.displayName falls through
     // to the new type's default (e.g. 'Mercy Sloane' for ROGUE).
@@ -634,9 +638,7 @@ export class GameState {
         // Pick a spawn position in the faction's starting columns
         const spawnPos = this._pickBattleSpawn(p.faction);
         if (spawnPos) {
-          const leader = p.faction === 'hero'
-            ? createHero(spawnPos.col, spawnPos.row, p.id, this)
-            : createWitch(spawnPos.col, spawnPos.row, p.id, this);
+          const leader = getFaction(p.faction).createLeader(spawnPos.col, spawnPos.row, p.id, this);
           leader.name = p.name;
           this.entities.push(leader);
           p.leaderId = leader.id;
@@ -1128,7 +1130,11 @@ export class GameState {
         if (obj[key]) continue; // already discovered
         obj[key] = this.entities.some(e => {
           if (!e.alive || e.owner !== fac.id) return false;
-          const range = fac.getSightRange(this.phase, e.hasAbility(SurvivorAbility.SCOUT));
+          // Use the entity's CONCRETE faction for sight range so stub
+          // factions with bonuses (e.g. rogue +1 sight) apply on the
+          // unit that has them.
+          const sightFac = e.factionId ? getFaction(e.factionId) : fac;
+          const range = sightFac.getSightRange(this.phase, e.hasAbility(SurvivorAbility.SCOUT));
           return obj.hexes.some(h => hexDistance(e.col, e.row, h.col, h.row) <= range);
         });
       }
@@ -1154,7 +1160,9 @@ export class GameState {
       const visible = new Set();
       for (const e of this.entities) {
         if (!e.alive || e.owner !== factionId) continue;
-        const range = factionObj.getSightRange(this.phase, e.hasAbility(SurvivorAbility.SCOUT));
+        // Per-entity sight uses the concrete faction so stub bonuses apply.
+        const sightFac = e.factionId ? getFaction(e.factionId) : factionObj;
+        const range = sightFac.getSightRange(this.phase, e.hasAbility(SurvivorAbility.SCOUT));
         const rMin = Math.max(0, e.row - range);
         const rMax = Math.min(MAP_ROWS - 1, e.row + range);
         const cMin = Math.max(0, e.col - range);

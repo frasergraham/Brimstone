@@ -250,11 +250,13 @@ function init(witchIsAI, heroIsAI, autoplay = false, humanFactionId = null) {
   const nodeCount = parseInt(document.getElementById('select-node-count')?.value ?? '3', 10);
   state    = new GameState(witchIsAI, heroIsAI, mapSize, nodeCount);
 
-  // Stub factions: rebrand the human-side default leader if the player
-  // picked a stub. AI side stays on its side default for now.
+  // Apply the player's faction pick by swapping the side's default
+  // leader entity to the picked faction. swapLeaderToFaction is a no-op
+  // when the picked faction is already the leader's faction (e.g. day
+  // side with paladin) — it only mutates when the type changes.
   if (humanFactionId) {
     const def = getFaction(humanFactionId);
-    if (def.isStub()) state.swapLeaderToFaction(def.side, humanFactionId);
+    state.swapLeaderToFaction(def.side, humanFactionId);
   }
   // Allow global fog-of-war override from the setup screen select.
   const fogSel = document.getElementById('select-fog-of-war');
