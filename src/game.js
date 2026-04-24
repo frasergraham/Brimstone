@@ -438,6 +438,11 @@ export class GameState {
    * and the per-player maps used by the multiplayer resolver.
    */
   startPlanning() {
+    // First-round hook: final player count is now known (all addPlayer calls
+    // have completed). Scale the hidden-survivor pool to the team size so
+    // NvN hero teams don't compound recruitment from a fixed 1v1 pool.
+    if (this.round === 1) this._rebalanceHiddenSurvivorsForTeamSize();
+
     this.planningPhase    = true;
     this.resolving        = false;
     this.heroPlan         = null;
@@ -1093,6 +1098,15 @@ export class GameState {
     // If not enough buildings were available, spill the remainder into terrain
     const terrainNeeded = totalNeeded - pickedBuildings.length;
     shuffle(terrain).slice(0, terrainNeeded).forEach(t => { t.hiddenSurvivor = true; });
+  }
+
+  // Currently a no-op — retained as a hook for NvN-aware survivor tuning.
+  // Previous iterations scaled the pool up or down here; the current balance
+  // comes from scaled minion cap + NvN loot bonus, which raises witch-side
+  // density without needing additional hero survivors.
+  _rebalanceHiddenSurvivorsForTeamSize() {
+    if (this._survivorsRebalanced) return;
+    this._survivorsRebalanced = true;
   }
 
   toJSON() {

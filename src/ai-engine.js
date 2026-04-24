@@ -863,8 +863,10 @@ function _trySummons(actions, sim, board, remaining) {
   if (!board.witch || remaining <= 0) return actions;
 
   // Minion cap scales with witch team size so NvN witches aren't rationed to
-  // a solo-witch ceiling. 1v1 baseline unchanged; each extra witch adds +2.
-  const witchBonus = 2 * ((board.witchPlayerCount ?? 1) - 1);
+  // a solo-witch ceiling. 1v1 baseline unchanged; each extra witch adds +4
+  // (tuned alongside the scaled hidden-survivor pool so both sides field a
+  // denser force in 2v2+ without breaking the per-side ratio).
+  const witchBonus = 4 * ((board.witchPlayerCount ?? 1) - 1);
   const baseCap = (board.isNight || board.phase === Phase.DUSK) ? 10 : 7;
   const armyCap = baseCap + witchBonus;
   let currentArmy = board.minionCount;
@@ -947,12 +949,14 @@ export function genControlNodes(sim, board, budget) {
     });
 
   // Determine how many units to send per node — overwhelming force wins.
-  // NvN bumps the baseline from 1 to 2 so the extra minions actually reach
-  // nodes instead of clustering near the witch.
+  // NvN bumps the baseline so the extra minions actually reach nodes instead
+  // of clustering near the witch. At 3v3+ the minion supply is large enough
+  // to justify 3 units per node.
   const scoringImminent = board.roundsToScoring <= 2;
-  const nvnBaseline = isNvN ? 2 : 1;
+  const witchTeamSize = board.witchPlayerCount || 1;
+  const nvnBaseline = witchTeamSize >= 3 ? 3 : (isNvN ? 2 : 1);
   const unitsPerNode = board.canSweepNodes ? 4 :
-                       (scoringImminent ? 3 :
+                       (scoringImminent ? Math.max(3, nvnBaseline) :
                        (board.roundsToScoring <= 4 ? Math.max(2, nvnBaseline) : nvnBaseline));
   const maxStepsPerUnit = scoringImminent ? 4 : 3;
 

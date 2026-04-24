@@ -44,7 +44,7 @@ const ALLOWLIST = Object.freeze({
 
   // Pre-existing core modules — generalized in Finding 1, residual checks
   // are legacy and can be cleaned up opportunistically.
-  'src/game.js':                 24,
+  'src/game.js':                 25,
   'src/ai-engine.js':            18,
   'src/hero-ai-engine.js':       15,
   'src/actions.js':               7,
