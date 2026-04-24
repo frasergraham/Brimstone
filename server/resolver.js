@@ -10,7 +10,7 @@ import {
   executeGuard, executeGuardStrike, executeSoundHorn, executeFortAssault,
 } from '../src/actions.js';
 import { FORT_IMPASSABLE_THRESHOLD } from '../src/tiles.js';
-import { EntityType } from '../src/entities.js';
+import { EntityType, isLeaderType } from '../src/entities.js';
 import { hexDistance, getNeighbors, hexKey } from '../src/hex.js';
 import { PlanActionType, snapEntity, groupPlanByEntity } from '../src/planner.js';
 import { Phase, countHeldNodes } from '../src/game.js';
@@ -79,9 +79,7 @@ function budgetForPlayer(state, playerId, faction) {
 // Delegates to state.scatterPlayerUnits() which is defined in game.js.
 
 function _handleLeaderDeath(state, killedEntity) {
-  const isLeader = killedEntity.type === EntityType.HERO ||
-                   killedEntity.type === EntityType.WITCH;
-  if (!isLeader || !killedEntity.ownerId) return;
+  if (!isLeaderType(killedEntity.type) || !killedEntity.ownerId) return;
   if (typeof state.scatterPlayerUnits === 'function') {
     state.scatterPlayerUnits(killedEntity.ownerId);
   }

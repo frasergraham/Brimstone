@@ -7,7 +7,7 @@
 // AI personalities, and unit roster within a side. See `src/sides.js`.
 
 import { Phase } from './game.js';
-import { EntityType, SurvivorAbility, createHero, createWitch, createSurvivor, createZombie, createMinion, createWoodGolem, createIronGolem, createRogue, createCaptain, createNecromancer, createBrute } from './entities.js';
+import { EntityType, SurvivorAbility, createHero, createWitch, createSurvivor, createZombie, createMinion, createWoodGolem, createIronGolem, createRogue, createCaptain, createNecromancer, createBrute, isLeaderType } from './entities.js';
 import { ResourceType, TileType, BuildingType } from './tiles.js';
 import { hexKey, getNeighbors } from './hex.js';
 import { AI_HERO_NAMES, AI_WITCH_NAMES } from './ai-names.js';
@@ -255,7 +255,7 @@ export class HeroFaction extends Faction {
 
   _applyBuildingHealing(state) {
     const heroLeaders = state.entities.filter(
-      e => e.alive && e.type === EntityType.HERO
+      e => e.alive && e.owner === 'hero' && isLeaderType(e.type)
     );
     for (const hero of heroLeaders) {
       const heroTile = state.tiles.get(hexKey(hero.col, hero.row));
@@ -277,7 +277,7 @@ export class HeroFaction extends Faction {
 
   _applyNodeHealing(state) {
     const heroLeaders = state.entities.filter(
-      e => e.alive && e.type === EntityType.HERO
+      e => e.alive && e.owner === 'hero' && isLeaderType(e.type)
     );
     for (const hero of heroLeaders) {
       if (hero.hp < hero.maxHp) {
@@ -297,7 +297,7 @@ export class HeroFaction extends Faction {
     if (state.phase !== Phase.NIGHT) return;
 
     const heroLeaders = state.entities.filter(
-      e => e.alive && e.type === EntityType.HERO
+      e => e.alive && e.owner === 'hero' && isLeaderType(e.type)
     );
     for (const obj of state.witchObjectives) {
       const freeHex = () => {
@@ -431,7 +431,8 @@ export class WitchFaction extends Faction {
     return phase === Phase.NIGHT ? 2 : 0;
   }
 
-  canExplore(entity) { return entity.type === EntityType.WITCH; }
+  // Only a night-side leader can explore (summoned units can't).
+  canExplore(entity) { return isLeaderType(entity.type) && entity.owner === 'witch'; }
 
   getOpponentId() { return 'hero'; }
   getNodeSeenKey() { return 'seenByWitch'; }

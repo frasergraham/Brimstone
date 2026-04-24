@@ -3,7 +3,7 @@
 // Witch AI: ai-engine.js (WitchAIEngine)
 import { getNeighbors, hexDistance, hexKey } from './hex.js';
 import { TileType } from './tiles.js';
-import { EntityType } from './entities.js';
+import { EntityType, isLeaderType } from './entities.js';
 import { Phase, computeActions, computeActionsForPlayer, nodeController, countHeldNodes } from './game.js';
 import { getReachableHexes, isFortBlocking } from './actions.js';
 
@@ -178,25 +178,33 @@ export class PlanSimState {
       //   • The faction that matches the player → their own leader (the actor)
       //   • The opposite faction → the nearest enemy leader (for flee/hunt distance checks)
       // Without an enemy leader reference, flee and hunt logic silently no-ops.
-      const leaderType = faction === 'hero' ? EntityType.HERO  : EntityType.WITCH;
-      const enemyType  = faction === 'hero' ? EntityType.WITCH : EntityType.HERO;
-      const leader = this.entities.find(e => e.type === leaderType && e.ownerId === playerId) ?? null;
+      //
+      // Leaders are matched by ownership, not by fixed entity type, so stub
+      // factions (Rogue/Captain/Necromancer/Brute) work here too. The side
+      // membership stays encoded in `owner` ('hero' for day, 'witch' for
+      // night).
+      const enemyOwner = faction === 'hero' ? 'witch' : 'hero';
+      const leader = this.entities.find(e =>
+        e.ownerId === playerId && isLeaderType(e.type)
+      ) ?? null;
       // Nearest enemy leader (fallback: any enemy leader)
+      const enemies = this.entities.filter(e =>
+        e.alive && e.owner === enemyOwner && isLeaderType(e.type)
+      );
       const enemyLeader = leader
-        ? (this.entities
-            .filter(e => e.type === enemyType && e.alive)
-            .sort((a, b) =>
-              hexDistance(a.col, a.row, leader.col, leader.row) -
-              hexDistance(b.col, b.row, leader.col, leader.row))[0] ?? null)
-        : (this.entities.find(e => e.type === enemyType) ?? null);
+        ? (enemies.sort((a, b) =>
+            hexDistance(a.col, a.row, leader.col, leader.row) -
+            hexDistance(b.col, b.row, leader.col, leader.row))[0] ?? null)
+        : (enemies[0] ?? null);
       this.hero  = faction === 'hero'  ? leader : enemyLeader;
       this.witch = faction === 'witch' ? leader : enemyLeader;
       const nb = countHeldNodes(faction, realState.witchObjectives ?? [], this.entities);
       this.actionsLeft = computeActionsForPlayer(playerId, faction, realState.phase, this.entities, nb);
     } else {
-      // Offline / legacy: use first entity of each type, faction-level budget
-      this.hero  = this.entities.find(e => e.type === EntityType.HERO)  ?? null;
-      this.witch = this.entities.find(e => e.type === EntityType.WITCH) ?? null;
+      // Offline / legacy: pick the first leader on each side (handles stub
+      // factions as well as the Paladin/Witch defaults).
+      this.hero  = this.entities.find(e => e.owner === 'hero'  && isLeaderType(e.type)) ?? null;
+      this.witch = this.entities.find(e => e.owner === 'witch' && isLeaderType(e.type)) ?? null;
       const nb = countHeldNodes(faction, realState.witchObjectives ?? [], this.entities);
       this.actionsLeft = computeActions(
         faction,

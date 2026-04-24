@@ -228,6 +228,7 @@ function _applyStubToSide(state, sideId, factionId) {
     e.defense   = fresh.defense;
     e.agility   = fresh.agility;
     e.factionId = fresh.factionId;
+    e.name      = null; // let displayName fall through to the new type default
   }
 }
 

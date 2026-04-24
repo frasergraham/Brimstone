@@ -11,7 +11,7 @@
 import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, bestWitchObjective, nearestBuilding, roundsUntilScoring, scoreNodeFeasibility, WITCH_PERSONALITIES, adjacentBlockingFortToward } from './ai.js';
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
-import { EntityType, ADVANTAGE_CAP, expectedDieValue } from './entities.js';
+import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType } from './entities.js';
 import { TileType, ResourceType } from './tiles.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
 
@@ -119,7 +119,9 @@ export function assessBoard(sim) {
   const witchSideUnits = sim.entities.filter(e => e.alive && e.owner === 'witch');
   const visibleHeroes = allHeroes.filter(hero =>
     witchSideUnits.some(w => {
-      const sight = w.type === EntityType.WITCH ? WITCH_LEADER_SIGHT : WITCH_MINION_SIGHT;
+      // Any night-side leader (Witch, Necromancer, Brute) gets leader sight;
+      // summoned units get minion sight.
+      const sight = isLeaderType(w.type) ? WITCH_LEADER_SIGHT : WITCH_MINION_SIGHT;
       return hexDistance(w.col, w.row, hero.col, hero.row) <= sight;
     })
   );
@@ -197,8 +199,8 @@ export function assessBoard(sim) {
     hexDistance(witch.col, witch.row, h.col, h.row) <= 3
   ).length : 0;
 
-  // Hero survivors vs hero leader — for HUNT_HEROES targeting
-  const heroLeader = allHeroes.find(h => h.type === EntityType.HERO);
+  // Day-side leader (Paladin / Rogue / Captain) — for HUNT_HEROES targeting.
+  const heroLeader = allHeroes.find(h => isLeaderType(h.type));
   const heroSurvivors = allHeroes.filter(h => h.type !== EntityType.HERO);
   const visibleSurvivors = visibleHeroes.filter(h => h.type !== EntityType.HERO);
 

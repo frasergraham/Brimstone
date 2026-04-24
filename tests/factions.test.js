@@ -492,10 +492,14 @@ describe('canExplore', () => {
     assert.equal(getFaction('hero').canExplore({ type: EntityType.SURVIVOR }), true);
   });
 
-  test('Witch faction: only witch leader can explore', () => {
-    assert.equal(getFaction('witch').canExplore({ type: EntityType.WITCH }), true);
-    assert.equal(getFaction('witch').canExplore({ type: EntityType.MINION }), false);
-    assert.equal(getFaction('witch').canExplore({ type: EntityType.ZOMBIE }), false);
-    assert.equal(getFaction('witch').canExplore({ type: EntityType.IRON_GOLEM }), false);
+  test('Witch faction: only a night-side leader can explore', () => {
+    // All leader types on the night side are eligible explorers.
+    assert.equal(getFaction('witch').canExplore({ type: EntityType.WITCH,       owner: 'witch' }), true);
+    assert.equal(getFaction('witch').canExplore({ type: EntityType.NECROMANCER, owner: 'witch' }), true);
+    assert.equal(getFaction('witch').canExplore({ type: EntityType.BRUTE,       owner: 'witch' }), true);
+    // Summoned units and zombies do not explore.
+    assert.equal(getFaction('witch').canExplore({ type: EntityType.MINION,      owner: 'witch' }), false);
+    assert.equal(getFaction('witch').canExplore({ type: EntityType.ZOMBIE,      owner: 'witch' }), false);
+    assert.equal(getFaction('witch').canExplore({ type: EntityType.IRON_GOLEM,  owner: 'witch' }), false);
   });
 });

@@ -13,7 +13,7 @@ import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, nearestBuilding
 import { EnginePlanSimState, BaseAIEngine, allocateBudget, assemblePlan, clamp01, updateAllyClaimedNodes, personalityName } from './ai-engine.js';
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
-import { EntityType, ADVANTAGE_CAP, expectedDieValue } from './entities.js';
+import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType } from './entities.js';
 import { TileType, ResourceType } from './tiles.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
 
@@ -117,7 +117,9 @@ export function assessHeroBoard(sim) {
     });
   }
 
-  const witchEntity = sim.entities.find(e => e.alive && e.type === EntityType.WITCH);
+  // Any night-side leader (Witch / Necromancer / Brute) is the "witch" for
+  // the hero AI's threat evaluation.
+  const witchEntity = sim.entities.find(e => e.alive && e.owner === 'witch' && isLeaderType(e.type));
   const witch = witchEntity && _heroCanSee(witchEntity) ? witchEntity : null;
   const witchVisible = !!witch;
   let witchDistance = Infinity;
@@ -889,9 +891,10 @@ export function genHuntWitch(sim, board, budget) {
   for (const target of targets) {
     if (remaining <= 0) break;
 
-    // Hero hunts witch; any uncommitted unit clears adjacent minions
-    const isWitch = target.entity.type === EntityType.WITCH;
-    const unit = isWitch
+    // Day-side leader hunts any night-side leader; any uncommitted unit
+    // clears adjacent minions.
+    const isEnemyLeader = target.entity.owner === 'witch' && isLeaderType(target.entity.type);
+    const unit = isEnemyLeader
       ? (sim.unitCommitments.has(heroEntity.id) ? null : heroEntity)
       : _closestUncommittedHero(sim, board, target.entity, true);
     if (!unit) continue;

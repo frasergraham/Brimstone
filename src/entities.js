@@ -575,6 +575,24 @@ export function createBrute(col, row, ownerId = null, state = null) {
   return e;
 }
 
+// ── Leader-type set (used by renderer outlines, UI auto-select, resolver
+//    leader-death checks, AI sim singleton lookups). Includes the six
+//    registered faction leader types; any new faction's leaderType should
+//    be added here AND in the Faction registry.
+const _LEADER_TYPES = new Set([
+  EntityType.PALADIN,
+  EntityType.ROGUE,
+  EntityType.CAPTAIN,
+  EntityType.WITCH,
+  EntityType.NECROMANCER,
+  EntityType.BRUTE,
+]);
+
+/** True if `type` is one of the registered faction leader entity types. */
+export function isLeaderType(type) {
+  return _LEADER_TYPES.has(type);
+}
+
 export function createSurvivor(col, row, ownerId = null, state = null) {
   const e = new Entity(EntityType.SURVIVOR, null, col, row, ownerId, state);
 

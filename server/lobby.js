@@ -37,7 +37,7 @@ import { sendPush }                              from './push.js';
 import db                                  from './db.js';
 import { VERSION, SAVE_VERSION }            from '../src/version.js';
 import { generateMultipleStarts, generateBattleStarts } from '../src/map.js';
-import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS, EntityType } from '../src/entities.js';
+import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS, EntityType, isLeaderType } from '../src/entities.js';
 import { pickAIName }                              from '../src/ai-names.js';
 import { sideOf, getFactionsForSide }              from '../src/factions.js';
 
@@ -919,7 +919,7 @@ function _runAIPlanSubmission(room) {
       }
       // Update ally context so subsequent AI players (higher offsets) see this plan's choices.
       const leader = room.state.entities.find(e => e.alive && e.ownerId === playerId &&
-        (e.type === EntityType.PALADIN || e.type === EntityType.WITCH));
+        isLeaderType(e.type));
       if (leader) ctx.allyPositions.push({ col: leader.col, row: leader.row });
       _submitPlayerPlan(room, playerId, plan);
     }, delay);
@@ -1440,7 +1440,7 @@ function _addExtraAISeat(room, faction, personality = null, factionId = null) {
  */
 function _addExtraHumanSeat(room, playerId, ws, name, faction, factionId = null) {
   const existing = room.state.entities.filter(
-    e => e.alive && e.owner === faction && (e.type === EntityType.PALADIN || e.type === EntityType.WITCH)
+    e => e.alive && e.owner === faction && isLeaderType(e.type)
   );
   const start = existing[0] ?? { col: 0, row: 0 };
   const positions = generateMultipleStarts(room.state.tiles, start, existing.length + 1, 2, 6);
@@ -3964,7 +3964,7 @@ export function generateRemoteAIPlan(roomId, playerId) {
     if (s.faction !== seat.faction || s.playerId === playerId) continue;
     if (room.state.playerReady?.get(s.playerId)) {
       const leader = room.state.entities.find(
-        e => e.alive && e.ownerId === s.playerId && (e.type === EntityType.PALADIN || e.type === EntityType.WITCH)
+        e => e.alive && e.ownerId === s.playerId && isLeaderType(e.type)
       );
       if (leader) allyContext.allyPositions.push({ col: leader.col, row: leader.row });
     }

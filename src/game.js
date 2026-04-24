@@ -1,6 +1,6 @@
 // Central game state and turn management
 import { generateMap } from './map.js';
-import { createHero, createWitch, createMinion, createSurvivor, resetRoster, survivorRosterIndexByName, bumpEntityId as _bumpModuleEntityId, EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
+import { createHero, createWitch, createMinion, createSurvivor, resetRoster, survivorRosterIndexByName, bumpEntityId as _bumpModuleEntityId, EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType } from './entities.js';
 import { BuildingType, ResourceType, TileType } from './tiles.js';
 import { hexKey, hexDistance, getNeighbors, setMapDimensions, MAP_COLS, MAP_ROWS } from './hex.js';
 import { applyPostRoundEffects, attritionForCycle } from './post-round-effects.js';
@@ -467,6 +467,11 @@ export class GameState {
     leader.defense   = fresh.defense;
     leader.agility   = fresh.agility;
     leader.factionId = fresh.factionId;
+    // Clear the constructor-assigned name ('Ishmael Charger' for the day
+    // side default, 'Witch' for night) so Entity.displayName falls through
+    // to the new type's default (e.g. 'Mercy Sloane' for ROGUE). Without
+    // this the player picks Rogue but sees "Ishmael Charger".
+    leader.name = null;
   }
 
   /** Resource inventory shared by all factions on the given side. */
@@ -1117,12 +1122,11 @@ export class GameState {
     if (!entity) return null;
     if (entity.ownerId) {
       const leader = this.entities.find(e =>
-        e.ownerId === entity.ownerId &&
-        (e.type === EntityType.HERO || e.type === EntityType.WITCH)
+        e.ownerId === entity.ownerId && isLeaderType(e.type)
       );
       if (leader?.color) return leader.color;
     }
-    if (entity.owner === 'hero')  return ENTITY_COLOR[EntityType.HERO];
+    if (entity.owner === 'hero')  return ENTITY_COLOR[EntityType.PALADIN];
     if (entity.owner === 'witch') return ENTITY_COLOR[EntityType.WITCH];
     return null;
   }

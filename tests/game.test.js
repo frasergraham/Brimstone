@@ -173,6 +173,29 @@ describe('Victory — kill conditions', () => {
     assert.equal(state.winReason, WIN_REASON.HERO_SLAIN);
   });
 
+  test('leader elimination is side-based: killing a Rogue leader ends the day side', () => {
+    // Regression guard for the stub-faction work: win condition should
+    // trigger on "zero leaders alive on the opposing side" regardless of
+    // which specific faction the leader belonged to. Swapping the default
+    // Paladin to a Rogue and then killing it must still hand victory to
+    // the night side.
+    const state = new GameState(true, true);
+    state.swapLeaderToFaction('day', 'rogue');
+    state.hero.hp = 0;
+    state.checkVictory();
+    assert.equal(state.winner,    'witch');
+    assert.equal(state.winReason, WIN_REASON.HERO_SLAIN);
+  });
+
+  test('leader elimination is side-based: killing a Brute leader ends the night side', () => {
+    const state = new GameState(true, true);
+    state.swapLeaderToFaction('night', 'brute');
+    state.witch.hp = 0;
+    state.checkVictory();
+    assert.equal(state.winner,    'hero');
+    assert.equal(state.winReason, WIN_REASON.WITCH_SLAIN);
+  });
+
   test('both alive → no winner', () => {
     const state = new GameState(true, true);
     state.checkVictory();
