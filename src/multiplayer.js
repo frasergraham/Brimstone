@@ -108,6 +108,21 @@ export class MirrorState {
   get gameOver()         { return this._winner !== null; }
   get winner()           { return this._winner; }
 
+  // Side-keyed accessors — mirror the GameState methods so `Faction.getInventory`,
+  // `Faction.getActionsLeft`, etc. work when called against a MirrorState on the
+  // client. Without these, client-side action evaluation crashes with
+  // "state.inventoryForSide is not a function" and entities appear unselectable.
+  _storageKeyForSide(sideId) {
+    if (sideId === 'day')   return 'hero';
+    if (sideId === 'night') return 'witch';
+    throw new Error(`Unknown side: ${sideId}`);
+  }
+  inventoryForSide(sideId)   { return this.inventory?.[this._storageKeyForSide(sideId)] ?? {}; }
+  actionsLeftForSide(sideId) { return sideId === 'day' ? this.heroActionsLeft : this.witchActionsLeft; }
+  killsForSide(sideId)       { return sideId === 'day' ? (this.heroKills ?? 0)  : (this.witchKills ?? 0); }
+  summonsForSide(sideId)     { return sideId === 'night' ? (this.witchSummonCount ?? 0) : 0; }
+  nodeScoreForSide(sideId)   { return this.nodeScore?.[this._storageKeyForSide(sideId)] ?? 0; }
+
   // Stub methods — server owns the state
   addLog()       { /* no-op */ }
   spendAction()  { /* no-op */ }
