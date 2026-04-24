@@ -2492,10 +2492,11 @@ function _renderDeployRoster(heroStats, roster, maxActive) {
 
   let html = '<div class="campaign-roster-label">Your Party</div>';
 
-  // Hero card (always active)
+  // Paladin (Ishmael Charger) card — always active. Campaign is fixed to
+  // the day-side primary faction; no stub picker in campaign mode.
   html += '<div class="campaign-party">';
   const weaponLabel = heroStats.weapon ? ` (${heroStats.weapon.name || heroStats.weapon})` : '';
-  html += _campaignCardHTML('Hero' + weaponLabel, null, 'hero', ENTITY_COLOR.hero, heroStats.hp, heroStats.maxHp, heroStats.attack, heroStats.defense, null, true);
+  html += _campaignCardHTML('Ishmael Charger' + weaponLabel, null, 'hero', ENTITY_COLOR[EntityType.PALADIN], heroStats.hp, heroStats.maxHp, heroStats.attack, heroStats.defense, null, true);
   html += '</div>';
 
   if (roster.length === 0) {

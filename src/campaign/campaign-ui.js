@@ -2,7 +2,7 @@
 // Extracted from main.js to reduce its size and colocate campaign logic.
 
 import { Renderer } from '../renderer.js';
-import { ENTITY_COLOR } from '../entities.js';
+import { ENTITY_COLOR, EntityType } from '../entities.js';
 
 // ── Campaign mid-mission save/resume ────────────────────────────────────────
 
@@ -108,7 +108,10 @@ export function survivorCardHTML(s, idx, actionBtn) {
 export function campaignPartyHTML(heroStats, roster) {
   let html = '<div class="campaign-party">';
   const weaponLabel = heroStats.weapon ? ` (${heroStats.weapon.name || heroStats.weapon})` : '';
-  html += campaignCardHTML('Hero' + weaponLabel, null, 'hero', ENTITY_COLOR.hero, heroStats.hp, heroStats.maxHp, heroStats.attack, heroStats.defense, null, true);
+  // The campaign is always played as the Paladin (Ishmael Charger). No
+  // faction choice here — the campaign narrative and mission scripting
+  // assume a single fixed day-side leader.
+  html += campaignCardHTML('Ishmael Charger' + weaponLabel, null, 'hero', ENTITY_COLOR[EntityType.PALADIN], heroStats.hp, heroStats.maxHp, heroStats.attack, heroStats.defense, null, true);
   for (const s of roster) {
     html += survivorCardHTML(s);
   }
