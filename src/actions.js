@@ -1116,14 +1116,13 @@ export function executeUseItem(state, actor, item) {
   return { success: true, log, cost: 0 };
 }
 
-// Thin dispatcher — the heavy lifting for each ability lives in
-// ABILITIES[id].execute(state, actor). The resolver passes the planned
-// ability id through via the PlanAction (so multi-ability survivors
-// disambiguate correctly); singleplayer UI paths that don't set one
-// fall back to the first registered active on the actor.
-export function executeUseAbility(state, actor, abilityId = null) {
-  const id = abilityId || actor.abilities?.find(a => ABILITIES[a]?.kind === 'active');
-  const ab = id ? ABILITIES[id] : null;
+// Thin dispatcher — heavy lifting for each ability lives in
+// ABILITIES[id].execute(state, actor). The PlanAction carries `ability: id`
+// (stamped by `_buildAbilityActions`), and the resolver threads it through
+// so multi-ability survivors disambiguate correctly. Callers without a
+// specific id get an explicit error rather than silent fallback behaviour.
+export function executeUseAbility(state, actor, abilityId) {
+  const ab = abilityId ? ABILITIES[abilityId] : null;
   if (!ab || typeof ab.execute !== 'function') {
     return { success: false, log: ['No active ability.'] };
   }

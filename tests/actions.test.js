@@ -1538,7 +1538,7 @@ describe('executeUseAbility — HEAL', () => {
     hero.takeDamage(5);
     const hpBefore = hero.hp;
 
-    const r = executeUseAbility(state, healer);
+    const r = executeUseAbility(state, healer, SurvivorAbility.HEAL);
     assert.equal(r.success, true);
     assert.equal(r.cost, 1, 'HEAL ability costs 1 action');
     assert.equal(hero.hp, hpBefore + 1);
@@ -1552,7 +1552,7 @@ describe('executeUseAbility — HEAL', () => {
     state.entities.push(healer);
     state.hero.takeDamage(5);
 
-    const r = executeUseAbility(state, healer);
+    const r = executeUseAbility(state, healer, SurvivorAbility.HEAL);
     assert.equal(r.success, false);
   });
 
@@ -1565,7 +1565,7 @@ describe('executeUseAbility — HEAL', () => {
     healer.items = {};
     state.entities.push(healer);
 
-    const r = executeUseAbility(state, healer);
+    const r = executeUseAbility(state, healer, SurvivorAbility.HEAL);
     assert.equal(r.success, false, 'HEAL should fail when hero is full HP');
   });
 });
@@ -1580,7 +1580,7 @@ describe('executeUseAbility — INSPIRE', () => {
     state.entities.push(inspirer);
     const bonusBefore = state.hero.attackBonus;
 
-    const r = executeUseAbility(state, inspirer);
+    const r = executeUseAbility(state, inspirer, SurvivorAbility.INSPIRE);
     assert.equal(r.success, true);
     assert.equal(r.cost, 0, 'INSPIRE should be free');
     assert.equal(state.hero.attackBonus, bonusBefore + 1);
@@ -1595,7 +1595,7 @@ describe('executeUseAbility — RALLY', () => {
     rallier.items = {};
     state.entities.push(rallier);
 
-    const r = executeUseAbility(state, rallier);
+    const r = executeUseAbility(state, rallier, SurvivorAbility.RALLY);
     assert.equal(r.success, true);
     assert.equal(r.cost, 0, 'RALLY should be free');
     // RALLY returns budgetBonus for the resolver to apply (both offline and online

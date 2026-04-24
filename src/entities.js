@@ -522,15 +522,17 @@ export class Entity {
 // matching Entity.getAttack() semantics.
 export function attackOf(e) {
   if (typeof e?.getAttack === 'function') return e.getAttack();
-  const base = e?.attack ?? 0;
-  const mod  = e?.weapon ? (ITEMS[e.weapon]?.statMods?.attack ?? 0) : 0;
-  return base + mod;
+  const base        = e?.attack ?? 0;
+  const weaponMod   = e?.weapon ? (ITEMS[e.weapon]?.statMods?.attack ?? 0) : 0;
+  const abilityMod  = _abilityStatMod(e?.abilities, 'attack');
+  return base + weaponMod + abilityMod;
 }
 export function defenseOf(e) {
   if (typeof e?.getDefense === 'function') return e.getDefense();
-  const base = e?.defense ?? 0;
-  const mod  = e?.weapon ? (ITEMS[e.weapon]?.statMods?.defense ?? 0) : 0;
-  return base + mod;
+  const base        = e?.defense ?? 0;
+  const weaponMod   = e?.weapon ? (ITEMS[e.weapon]?.statMods?.defense ?? 0) : 0;
+  const abilityMod  = _abilityStatMod(e?.abilities, 'defense');
+  return base + weaponMod + abilityMod;
 }
 
 // ── Advantage-dice math ─────────────────────────────────────────────────────

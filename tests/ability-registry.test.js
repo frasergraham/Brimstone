@@ -119,17 +119,15 @@ describe('executeUseAbility dispatcher', () => {
     assert.equal(r.success, false);
   });
 
-  test('falls back to first registered active when abilityId is null', () => {
+  test('missing abilityId returns failure (caller must thread it through)', () => {
     const { gs, hero } = _freshState();
-    hero.attackBonus = 0;
     const e = new Entity(EntityType.SURVIVOR, 'hero', hero.col, hero.row);
-    // Passive first in the list — dispatcher must skip it.
-    e.abilities = [SurvivorAbility.BRAWLER, SurvivorAbility.RALLY];
+    e.abilities = [SurvivorAbility.RALLY];
     gs.entities.push(e);
-
+    // No third arg — dispatcher must not guess; it errors so callers that
+    // fail to plumb the plan-action's `ability` field get a loud signal.
     const r = executeUseAbility(gs, e);
-    assert.equal(r.success, true);
-    assert.equal(r.budgetBonus, 1, 'fallback picked rally (active)');
+    assert.equal(r.success, false);
   });
 });
 

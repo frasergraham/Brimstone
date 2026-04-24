@@ -26,15 +26,8 @@
 // that predate per-player ownership).
 function _coLocatedLeader(state, actor) {
   return state.entities.find(e =>
-    e.alive && typeof e.hasTag === 'function' && e.hasTag('leader') &&
+    e.alive && e.hasTag('leader') &&
     e.col === actor.col && e.row === actor.row &&
-    (e.ownerId === actor.ownerId || e.owner === actor.owner)
-  );
-}
-
-function _sameSideLeader(state, actor) {
-  return state.entities.find(e =>
-    e.alive && typeof e.hasTag === 'function' && e.hasTag('leader') &&
     (e.ownerId === actor.ownerId || e.owner === actor.owner)
   );
 }
@@ -118,7 +111,10 @@ export const ABILITIES = Object.freeze({
     execute(state, actor) {
       // Return budgetBonus so both offline and multiplayer resolvers can
       // apply it per-player without touching shared state.actionsLeft.
-      const rallyLeader = _sameSideLeader(state, actor);
+      const rallyLeader = state.entities.find(e =>
+        e.alive && e.hasTag('leader') &&
+        (e.ownerId === actor.ownerId || e.owner === actor.owner)
+      );
       return {
         success: true,
         log: [`${actor.displayName}'s words fortify ${rallyLeader?.displayName ?? 'the leader'}'s spirit! (+1 action)`],
