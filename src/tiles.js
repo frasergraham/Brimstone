@@ -45,23 +45,30 @@ export const WeaponType = Object.freeze({
   DAGGER: 'dagger',  // +1 attack
 });
 
-export const WEAPON_STATS = {
-  [WeaponType.SWORD]:  { attackBonus: 2, defenseBonus: 0 },
-  [WeaponType.AXE]:    { attackBonus: 1, defenseBonus: 1 },
-  [WeaponType.BOW]:    { attackBonus: 1, defenseBonus: 0 },
-  [WeaponType.SHIELD]: { attackBonus: 0, defenseBonus: 2 },
-  [WeaponType.STAFF]:  { attackBonus: 1, defenseBonus: 0 },
-  [WeaponType.DAGGER]: { attackBonus: 1, defenseBonus: 0 },
-};
+// WEAPON_STATS and WEAPON_LABEL derive from the ITEMS registry
+// (src/items.js), which is the single source of truth for all items.
+// New code should read ITEMS[id] directly; these exports remain for
+// existing call sites during the phased units/items/abilities refactor.
+import { ITEMS as _ITEMS } from './items.js';
 
-export const WEAPON_LABEL = {
-  [WeaponType.SWORD]:  '⚔ Sword (+2 ATK)',
-  [WeaponType.AXE]:    '🪓 Axe (+1 ATK, +1 DEF)',
-  [WeaponType.BOW]:    '🏹 Bow (+1 ATK)',
-  [WeaponType.SHIELD]: '🛡 Shield (+2 DEF)',
-  [WeaponType.STAFF]:  '🪄 Staff (+1 ATK, +2 vs undead)',
-  [WeaponType.DAGGER]: '🗡 Dagger (+1 ATK)',
-};
+export const WEAPON_STATS = Object.freeze(
+  Object.fromEntries(
+    Object.values(_ITEMS)
+      .filter(i => i.kind === 'weapon')
+      .map(i => [i.id, {
+        attackBonus:  i.statMods?.attack  ?? 0,
+        defenseBonus: i.statMods?.defense ?? 0,
+      }])
+  )
+);
+
+export const WEAPON_LABEL = Object.freeze(
+  Object.fromEntries(
+    Object.values(_ITEMS)
+      .filter(i => i.kind === 'weapon')
+      .map(i => [i.id, i.label])
+  )
+);
 
 // Passability: can entities move through this tile type?
 export const TILE_PASSABLE = {

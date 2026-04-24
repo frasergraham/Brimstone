@@ -32,7 +32,7 @@ import { ReplayCache } from './replay-cache.js';
 import { MAP_SIZES } from './map.js';
 import { nodeController } from './game.js';
 import { MissionConductor } from './mission-conductor.js';
-import { createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR } from './entities.js';
+import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
@@ -688,7 +688,7 @@ async function _runLocalResolution(skipSummary = false) {
   }
 
   const humanFaction = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : null;
-  const preReplayEntities = steps[0]?.entitySnapshot ?? finalEntities;
+  const preReplayEntities = patchAlive(steps[0]?.entitySnapshot ?? finalEntities);
 
   // Snapshot node control BEFORE resolution so we can detect changes from unit movement
   const preResEntities = steps[0]?.entitySnapshot ?? state.entities;
@@ -947,7 +947,7 @@ function _isFogVisible(col, row, humanFaction, entities, phase) {
   const faction = getFaction(humanFaction);
   for (const e of entities) {
     if (!e.alive || e.owner !== humanFaction) continue;
-    const range = faction.getSightRange(phase, e.ability === 'scout');
+    const range = faction.getSightRange(phase, e.hasAbility('scout'));
     if (hexDistance(e.col, e.row, col, row) <= range) return true;
   }
   return false;
@@ -967,7 +967,7 @@ function _updateNodeDiscoveryDuringStep(gs, humanFaction, rend) {
       if (obj[seenKey]) continue; // already discovered
       const nowSeen = gs.entities.some(e => {
         if (!e.alive || e.owner !== fac.id) return false;
-        const range = fac.getSightRange(gs.phase, e.ability === 'scout');
+        const range = fac.getSightRange(gs.phase, e.hasAbility('scout'));
         return obj.hexes.some(h => hexDistance(e.col, e.row, h.col, h.row) <= range);
       });
       if (!nowSeen) continue;
@@ -988,7 +988,7 @@ function _updateNodeDiscoveryDuringStep(gs, humanFaction, rend) {
     if (heroFac) {
       const nowSeen = gs.entities.some(e => {
         if (!e.alive || e.owner !== 'hero') return false;
-        const range = heroFac.getSightRange(gs.phase, e.ability === 'scout');
+        const range = heroFac.getSightRange(gs.phase, e.hasAbility('scout'));
         return hexDistance(e.col, e.row, mt.col, mt.row) <= range;
       });
       if (nowSeen) {
@@ -1072,7 +1072,15 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     if (playback.goBack || playback.aborted || playback.jumpToEnd) break;
     const step = steps[i];
     // Post-step entities: what the world looks like AFTER this step resolves.
-    const postEntities = i + 1 < steps.length ? steps[i + 1].entitySnapshot : finalEntities;
+    // Re-parent the post-step snapshot entities to Entity.prototype the first
+    // time through. resolver.snapshotEntities emits plain JSON objects; the
+    // renderer calls entity methods (hasAbility / getAttack / hasTag / …)
+    // when rendering fog of war and unit stats from state.entities during
+    // animation. patchAlive is idempotent — subsequent steps that reuse
+    // the same snapshot array skip over already-prototyped entities.
+    const postEntities = patchAlive(
+      i + 1 < steps.length ? steps[i + 1].entitySnapshot : finalEntities,
+    );
 
     // Support both legacy {heroEvents, witchEvents} (offline) and
     // new {playerEvents: [{playerId, faction, events}]} (online MP) step formats.
@@ -1085,7 +1093,14 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
     // Restore pre-step entity state before the camera pan so the canvas never
     // shows the final resolved state during the framing delay.
-    const displayEntities = step.entitySnapshot.map(e => ({ ...e }));
+    //
+    // step.entitySnapshot is a plain JSON snapshot from resolver.snapshotEntities.
+    // Re-parent each display clone to Entity.prototype so the renderer's
+    // hasAbility() / getAttack() / getDefense() / hasTag() calls resolve to
+    // Entity methods while the state-level swap holds during animation.
+    // (Own properties from the spread — including `alive` and `displayName` —
+    // shadow the Entity prototype's read-only getters.)
+    const displayEntities = step.entitySnapshot.map(e => Object.setPrototypeOf({ ...e }, Entity.prototype));
     // Apply GUARD actions from this step so guard zone highlights render immediately.
     for (const ev of allStepEvents) {
       if (ev.type === ResEventType.ACTION_OK && ev.action?.type === PlanActionType.GUARD) {
@@ -6588,7 +6603,7 @@ async function _playReconnectReplay(replay) {
   // Temporarily load the pre-resolution state so the animation starts from the right position
   const preState = JSON.parse(replay.preStateJson);
   const currentEntities = state.entities;
-  const preEntities = steps[0]?.entitySnapshot ?? deserializeState(preState).entities ?? currentEntities;
+  const preEntities = patchAlive(steps[0]?.entitySnapshot ?? deserializeState(preState).entities ?? currentEntities);
 
   // Snapshot pre-resolution node state for summary
   const prevNodes = (state.witchObjectives ?? []).map(obj => ({

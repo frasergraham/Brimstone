@@ -4,8 +4,9 @@
 //  Weights are relative integers (don't need to sum to 100).
 //  Valid type strings:
 //    Resources : 'wood' | 'metal' | 'herbs' | 'food' | 'silver' | 'scripture'
-//    Weapons   : 'weapon:sword' | 'weapon:axe' | 'weapon:shield' |
-//                'weapon:bow'   | 'weapon:staff' | 'weapon:dagger'
+//    Weapons   : 'sword' | 'axe' | 'shield' | 'bow' | 'staff' | 'dagger'
+//                (weapon-vs-resource is determined via ITEMS[id].kind,
+//                 not a 'weapon:' prefix — see src/items.js)
 //    Special   : 'horse'     — found in the Stable (most likely), Inn, and some Houses
 //                'nothing'   — empty result
 //
@@ -27,9 +28,9 @@ export const LOOT_CONFIG = {
   buildings: {
 
     blacksmith: [
-      { type: 'weapon:sword',  weight: 22 },
-      { type: 'weapon:axe',    weight: 22 },
-      { type: 'weapon:shield', weight: 18 },
+      { type: 'sword',  weight: 22 },
+      { type: 'axe',    weight: 22 },
+      { type: 'shield', weight: 18 },
       { type: 'metal',         weight: 28 },
       { type: 'wood',          weight: 10 },
     ],
@@ -45,7 +46,7 @@ export const LOOT_CONFIG = {
     church: [
       { type: 'scripture',     weight: 35 },
       { type: 'silver',        weight: 30 },
-      { type: 'weapon:staff',  weight: 30 },
+      { type: 'staff',  weight: 30 },
       { type: 'nothing',       weight:  5 },
     ],
 
@@ -71,7 +72,7 @@ export const LOOT_CONFIG = {
     ],
 
     watchtower: [
-      { type: 'weapon:bow',    weight: 45 },
+      { type: 'bow',    weight: 45 },
       { type: 'silver',        weight: 40 },
       { type: 'nothing',       weight: 15 },
     ],
@@ -100,7 +101,7 @@ export const LOOT_CONFIG = {
     house: [
       { type: 'food',          weight: 27 },
       { type: 'wood',          weight: 24 },
-      { type: 'weapon:dagger', weight: 17 },
+      { type: 'dagger', weight: 17 },
       { type: 'metal',         weight: 13 },
       { type: 'herbs',         weight:  8 },
       { type: 'horse',         weight: 11 },

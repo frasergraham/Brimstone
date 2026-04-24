@@ -5,6 +5,12 @@ import {
   MAX_FORTIFY_LEVEL, getFortifyCombatBonus, isFortWall,
   FORT_IMPASSABLE_THRESHOLD,
 } from './tiles.js';
+import { ITEMS } from './items.js';
+
+// Phase 3: items in an actor's bag are keyed by their ITEMS id (e.g.
+// 'sword') instead of the legacy 'weapon:sword' prefix. Weapon-vs-
+// resource classification now comes from the ITEMS registry.
+const isWeaponId = (id) => ITEMS[id]?.kind === 'weapon';
 import {
   EntityType, SurvivorAbility, Entity,
   createZombie, createMinion, createSurvivor,
@@ -256,7 +262,7 @@ export function getVisiblePositions(state, viewerFactionId) {
 
   for (const viewer of state.entities) {
     if (!viewer.alive || viewer.owner !== viewerFactionId) continue;
-    const range = viewerFaction.getSightRange(state.phase, viewer.ability === SurvivorAbility.SCOUT);
+    const range = viewerFaction.getSightRange(state.phase, viewer.hasAbility(SurvivorAbility.SCOUT));
     for (const target of state.entities) {
       if (!target.alive || target.owner !== opponentId) continue;
       if (hexDistance(viewer.col, viewer.row, target.col, target.row) <= range) {
@@ -372,13 +378,13 @@ export function getValidActions(state, actor) {
 
     // Equip weapon from actor's personal items
     const weapons = Object.keys(myItems)
-      .filter(k => k.startsWith('weapon:') && (myItems[k] || 0) > 0);
+      .filter(k => isWeaponId(k) && (myItems[k] || 0) > 0);
     if (weapons.length) {
       actions.push({
         type: ActionType.EQUIP_WEAPON,
         weapons: weapons.map(k => ({
           key: k,
-          label: WEAPON_LABEL[k.replace('weapon:', '')] || k,
+          label: WEAPON_LABEL[k] || k,
         })),
       });
     }
@@ -601,7 +607,7 @@ export function executeExplore(state, actor) {
 
   // HERBALIST ability: also yield 1 herbs on any explore (goes to actor's items)
   const isHerbalist = actor.type === EntityType.SURVIVOR &&
-    actor.ability === SurvivorAbility.HERBALIST;
+    actor.hasAbility(SurvivorAbility.HERBALIST);
 
   const runLoot = () => {
     if (t.type === TileType.BUILDING && t.building && BUILDING_LOOT[t.building]) {
@@ -666,12 +672,11 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
     return;
   }
 
-  if (lootType.startsWith('weapon:')) {
+  if (isWeaponId(lootType)) {
     if (faction.canEquipWeapon()) {
-      const weaponKey = lootType.replace('weapon:', '');
-      const label = WEAPON_LABEL[weaponKey] || weaponKey;
+      const label = WEAPON_LABEL[lootType] || lootType;
       if (!actor.weapon) {
-        actor.equipWeapon(weaponKey);
+        actor.equipWeapon(lootType);
         log.push(`Found a ${label}! ${actor.displayName} equips it immediately.`);
         lootItems?.push('+⚔');
       } else {
@@ -998,7 +1003,7 @@ export function executeFortify(state, actor) {
 
   // FORTIFY_DOUBLE: this survivor's ability makes wood give +2
   const hasDoubler = actor.type === EntityType.SURVIVOR &&
-    actor.ability === SurvivorAbility.FORTIFY_DOUBLE;
+    actor.hasAbility(SurvivorAbility.FORTIFY_DOUBLE);
 
   if (metalCount > 0) {
     shared[ResourceType.METAL]--;
@@ -1094,13 +1099,12 @@ export function executeHeal(state, actor) {
 
 export function executeUseItem(state, actor, item) {
   // Weapon equip — from actor's personal items
-  if (item.startsWith('weapon:')) {
+  if (isWeaponId(item)) {
     const myItems = actor.items || {};
     if ((myItems[item] || 0) < 1) return { success: false, log: ['Item not available.'] };
     myItems[item]--;
-    const weaponType = item.replace('weapon:', '');
-    actor.equipWeapon(weaponType);
-    const label = WEAPON_LABEL[weaponType] || weaponType;
+    actor.equipWeapon(item);
+    const label = WEAPON_LABEL[item] || item;
     return { success: true, log: [`${actor.displayName} equips ${label}!`], cost: 0 };
   }
 

@@ -3,7 +3,7 @@
 // Witch AI: ai-engine.js (WitchAIEngine)
 import { getNeighbors, hexDistance, hexKey } from './hex.js';
 import { TileType } from './tiles.js';
-import { EntityType, isLeaderType } from './entities.js';
+import { Entity, EntityType, isLeaderType } from './entities.js';
 import { Phase, computeActions, computeActionsForPlayer, nodeController, countHeldNodes } from './game.js';
 import { getReachableHexes, isFortBlocking } from './actions.js';
 
@@ -166,11 +166,13 @@ export class PlanSimState {
     this.inventory        = JSON.parse(JSON.stringify(realState.inventory));
 
     // Shallow-copy live entities so position tracking works without mutating the real state.
-    // NOTE: Entity.alive is a getter (hp > 0) and is NOT included in spread. We must add it
-    // explicitly so that e.alive checks in _decidePlanAction work on the copied objects.
+    // Clones are re-parented to Entity.prototype *after* the spread so Object.assign-style
+    // assignment never fires any of Entity's getter-only properties (alive / displayName /
+    // abilities). Any own property set via spread shadows the corresponding prototype
+    // getter on access, matching the pre-refactor sim-clone semantics.
     this.entities = realState.entities
       .filter(e => e.alive)
-      .map(e => ({ ...e, alive: true }));
+      .map(e => Object.setPrototypeOf({ ...e }, Entity.prototype));
 
     if (playerId) {
       // Multiplayer: scope leader ref and budget to this specific player.
