@@ -24,6 +24,7 @@ import { resolvePlansMP, ResEventType } from '../server/resolver.js';
 import { PlanActionType }         from '../src/planner.js';
 import { generateMultipleStarts, generateBattleStarts, MAP_SIZES } from '../src/map.js';
 import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS, EntityType } from '../src/entities.js';
+import { getFaction, getFactionsForSide } from '../src/factions.js';
 import { serializeState }         from '../server/state-sync.js';
 import { VERSION }                from '../src/version.js';
 import { serializeGameStateForLLM, serializePlanForLLM } from './training-data.js';
@@ -56,11 +57,25 @@ if (playersIdx !== -1 && process.argv[playersIdx + 1]) {
   PER_SIDE_EXPLICIT = true;
 }
 
+// Per-side faction selection: --day=<factionId> / --night=<factionId>.
+// Defaults: 'hero' (Paladin) for day, 'witch' for night. Stub factions
+// (rogue/captain/necromancer/brute) are accepted; they swap the leader's
+// stats via state.swapLeaderToFaction after each game's state is built.
+let DAY_FACTION   = 'hero';
+let NIGHT_FACTION = 'witch';
+const _kvFlag = (prefix) => {
+  const arg = process.argv.find(a => a.startsWith(prefix));
+  return arg ? arg.slice(prefix.length) : null;
+};
+DAY_FACTION   = _kvFlag('--day=')   ?? DAY_FACTION;
+NIGHT_FACTION = _kvFlag('--night=') ?? NIGHT_FACTION;
+
 // Positional args (everything that isn't a flag or flag value)
 const flagSet = new Set(['--render', '--players', '--training-data']);
 const positionalArgs = [];
 for (let i = 2; i < process.argv.length; i++) {
   if (flagSet.has(process.argv[i])) { if (process.argv[i] === '--players') i++; continue; }
+  if (process.argv[i].startsWith('--day=') || process.argv[i].startsWith('--night=')) continue;
   positionalArgs.push(process.argv[i]);
 }
 
@@ -83,6 +98,20 @@ if (!MAP_SIZES[MAP_SIZE]) {
   console.error(`Unknown map size "${MAP_SIZE}". Valid: ${Object.keys(MAP_SIZES).join(', ')}`);
   process.exit(1);
 }
+
+// Validate --day / --night picks against the registered factions for each side.
+const _dayIds   = getFactionsForSide('day').map(f => f.id);
+const _nightIds = getFactionsForSide('night').map(f => f.id);
+if (!_dayIds.includes(DAY_FACTION)) {
+  console.error(`Unknown --day faction "${DAY_FACTION}". Valid: ${_dayIds.join(', ')}`);
+  process.exit(1);
+}
+if (!_nightIds.includes(NIGHT_FACTION)) {
+  console.error(`Unknown --night faction "${NIGHT_FACTION}". Valid: ${_nightIds.join(', ')}`);
+  process.exit(1);
+}
+const _STUB_DAY   = getFaction(DAY_FACTION).isStub();
+const _STUB_NIGHT = getFaction(NIGHT_FACTION).isStub();
 
 const IS_BATTLE = MAP_SIZE === 'battle';
 
@@ -167,7 +196,39 @@ function buildGameState() {
     if (leader) leader.color = colors[idx % colors.length];
   }
 
+  // Stub factions: re-stat every leader on a side that picked a non-default
+  // faction. swapLeaderToFaction handles state.hero / state.witch (the side
+  // singletons); for extra players we apply the same in-place mutation
+  // pattern manually so all leaders on a side share the picked stats.
+  if (_STUB_DAY)   _applyStubToSide(state, 'day',   DAY_FACTION);
+  if (_STUB_NIGHT) _applyStubToSide(state, 'night', NIGHT_FACTION);
+
   return state;
+}
+
+/** Apply a stub faction's stats to every leader on a side. */
+function _applyStubToSide(state, sideId, factionId) {
+  const def = getFaction(factionId);
+  // The side singleton hero/witch first — same path the lobby and offline
+  // init() use.
+  state.swapLeaderToFaction(sideId, factionId);
+
+  // Then mutate any extra-seat leaders on the same side.
+  const sideOwner = sideId === 'day' ? 'hero' : 'witch';
+  const sidePrimaryType = getFactionsForSide(sideId)[0].leaderType;
+  for (const e of state.entities) {
+    if (!e.alive || e.owner !== sideOwner) continue;
+    if (e.type !== sidePrimaryType) continue; // already swapped or not a leader
+    if (e === state.hero || e === state.witch) continue; // singleton already handled
+    const fresh = def.createLeader(e.col, e.row, e.ownerId, state);
+    e.type      = fresh.type;
+    e.maxHp     = fresh.maxHp;
+    e.hp        = fresh.maxHp;
+    e.attack    = fresh.attack;
+    e.defense   = fresh.defense;
+    e.agility   = fresh.agility;
+    e.factionId = fresh.factionId;
+  }
 }
 
 // ── Ally context helpers (MP planning) ────────────────────────────────────────
@@ -541,6 +602,9 @@ const results = [];
 const errors  = [];
 const startMs = Date.now();
 
+if (DAY_FACTION !== 'hero' || NIGHT_FACTION !== 'witch') {
+  console.log(`  Factions: day=${DAY_FACTION}${_STUB_DAY ? ' (stub)' : ''}  night=${NIGHT_FACTION}${_STUB_NIGHT ? ' (stub)' : ''}`);
+}
 process.stdout.write('  Running ');
 for (let i = 0; i < N; i++) {
   try {

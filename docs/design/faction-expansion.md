@@ -171,6 +171,29 @@ The actual storage rename (`inventory.hero` → `inventory.day` etc.) is deferre
 
 This still unblocks PR 5 (stub factions): new factions on the same side share that side's storage by routing through the accessors, which is the correct behaviour for stubs that inherit parent-side resource pools.
 
+### PR 7 (deferred)
+The original plan called for a schema migration that adds side-keyed and per-faction columns to `game-stats`, `completed-games`, `async`, `campaign-stats` (sqlite + postgres in lockstep per CLAUDE.md). On reflection this is premature: today's stubs inherit parent-side mechanics, so play-as-Rogue produces identical stats to play-as-Paladin under the hood. The existing `hero_*` / `witch_*` columns still record the side correctly. New per-faction columns become useful only once a stub gains unique mechanics that change the recorded counts (e.g. a Rogue-only ability tracker, or different summon costs for Necromancer). At that point the migration should land alongside the mechanic, not before.
+
+### PR 8 (landed)
+`scripts/headless.js` now accepts `--day=<factionId>` and `--night=<factionId>` flags. Defaults are `hero` (Paladin) and `witch`, so existing invocations are unchanged. Stub picks (rogue/captain/necromancer/brute) flow through `state.swapLeaderToFaction` — the same code path as the offline init() picker and the lobby seat helper — so single-leader and N-player runs behave identically.
+
+The picks are validated against the registered factions for each side; unknown ids exit with a clear error. The summary banner prefixes the run with the picked factions and a `(stub)` marker when applicable, so balance comparisons across runs are self-documenting.
+
+**Default-flag baseline (200 games, Standard 13×13):** Hero 51.5% / Witch 48.5%, mean 21–23 rounds. Within the 38–62% target band — confirms PR 4a's entity rename and PR 5's stub registration didn't perturb the tuned numbers.
+
+**Stub-vs-default samples (50 games each, Standard 13×13):** confirm the picker works end-to-end and yield first-pass tuning data:
+
+| Match-up                  | Hero %  | Witch % | Note |
+|---------------------------|---------|---------|------|
+| Rogue vs Witch            |   0.0   | 100.0   | Glass-cannon HP=10/DEF=1 dies to Witch night ATK |
+| Captain vs Witch          | 100.0   |   0.0   | DEF=3 leader is too tanky |
+| Paladin vs Brute          |   0.0   | 100.0   | Brute's 14/3/1 melee dominates day side |
+| Rogue vs Brute            |   0.0   |  84.0   | Pure-melee mirror, brute still wins |
+
+These first-pass numbers are intentionally provisional — the user's spec said the new factions get "different stats and strengths/weaknesses". Tuning each into the 38–62% band against the side default is follow-up work tracked outside this branch. The flag exists so we can iterate quickly when each stub graduates from "registered" to "implemented".
+
+`ai-matrix.js` and `combat-sim.js` did not need changes — they already iterate the existing personality registries. As stubs gain own personalities later, those scripts will pick them up automatically via `Faction.getPersonalities()`.
+
 ### PR 6 (landed)
 Offline single-player faction picker is now a 6-tile grid grouped by side: Day (Paladin / Rogue / Captain) and Night (Witch / Necromancer / Brute). Stub factions render a small `stub` badge. Side rows have day-gold and night-purple accent borders pulled from the `--day` / `--night` CSS custom properties.
 
