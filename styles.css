@@ -602,6 +602,30 @@ canvas { touch-action: pan-x pan-y; }
 .lobby-slot-name.empty-slot { color: var(--text-dim); font-style: italic; }
 .lobby-slot-name.ai-slot    { color: #b09050; }
 .lobby-slot-name em         { color: var(--text-dim); font-size: 0.78rem; }
+.lobby-slot-faction {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-left: 0.4rem;
+  font-style: italic;
+}
+.lobby-slot-stub {
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 0.02rem 0.3rem;
+  border-radius: 2px;
+  margin-left: 0.25rem;
+  font-style: normal;
+}
+.lobby-faction-select {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.3rem;
+  max-width: 140px;
+  margin-left: 0.4rem;
+}
 .lobby-slot-btn {
   font-size: 0.75rem;
   padding: 0.15rem 0.4rem;

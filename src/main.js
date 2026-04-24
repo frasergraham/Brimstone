@@ -24,7 +24,7 @@ import { PlanActionType, groupPlanByEntity } from './planner.js';
 import { hexDistance, getNeighbors, hexKey } from './hex.js';
 import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD } from './tiles.js';
 import { sightRange } from './actions.js';
-import { getFaction, allFactions } from './factions.js';
+import { getFaction, allFactions, getFactionsForSide } from './factions.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { playback, resetPlayback, replayFullGame, playbackDelay, swapState, patchAlive } from './playback.js';
@@ -5730,14 +5730,16 @@ function _renderLobby(lobby) {
     grid.appendChild(unassignedSection);
   }
 
-  // Faction columns
-  const heroSlots  = lobby.slots.filter(s => s.faction === 'hero');
-  const witchSlots = lobby.slots.filter(s => s.faction === 'witch');
+  // Side columns. Today each side has one primary faction (Paladin / Witch)
+  // — iterate slots by their `side` field, which defaults to 'day' / 'night'
+  // via sideOf(faction) when the server builds the slot list.
+  const daySlots   = lobby.slots.filter(s => s.side === 'day'   || s.faction === 'hero');
+  const nightSlots = lobby.slots.filter(s => s.side === 'night' || s.faction === 'witch');
 
   const container = document.createElement('div');
   container.className = 'lobby-factions';
 
-  for (const [label, icon, slots] of [['Hero Side', '⚔', heroSlots], ['Witch Side', '✦', witchSlots]]) {
+  for (const [label, icon, slots] of [['Day Side', '☀', daySlots], ['Night Side', '🌙', nightSlots]]) {
     const col = document.createElement('div');
     col.className = 'lobby-faction-col';
     col.innerHTML = `<div class="lobby-faction-label">${icon} ${label}</div>`;
@@ -5748,9 +5750,12 @@ function _renderLobby(lobby) {
 
       if (slot.status === 'human') {
         const isMe = slot.playerId === myId;
-        row.innerHTML = `<span class="lobby-slot-name">${_esc(slot.name)}${isMe ? ' <em>(you)</em>' : ''}</span>`;
+        row.innerHTML = `<span class="lobby-slot-name">${_esc(slot.name)}${isMe ? ' <em>(you)</em>' : ''}</span>` +
+                        _lobbyFactionTag(slot, isMe);
+        if (isMe) row.appendChild(_buildLobbyFactionPicker(lobby, slot));
       } else if (slot.status === 'ai') {
-        row.innerHTML = `<span class="lobby-slot-name ai-slot">🤖 ${_esc(slot.name ?? 'AI')}</span>`;
+        row.innerHTML = `<span class="lobby-slot-name ai-slot">🤖 ${_esc(slot.name ?? 'AI')}</span>` +
+                        _lobbyFactionTag(slot, false);
         if (isHost) {
           const removeBtn = document.createElement('button');
           removeBtn.className = 'setup-btn secondary lobby-slot-btn';
@@ -5856,6 +5861,44 @@ function _renderLobby(lobby) {
   } else {
     hintEl.style.display = 'none';
   }
+}
+
+/**
+ * Render a compact faction tag next to a seated player's name — shows the
+ * picked faction and a "stub" marker when applicable. Rendered read-only
+ * for other players' rows; the current player's row also gets a picker
+ * dropdown via _buildLobbyFactionPicker().
+ */
+function _lobbyFactionTag(slot, isMe) {
+  const factionId = slot.factionId ?? slot.faction;
+  const def = (() => { try { return getFaction(factionId); } catch { return null; } })();
+  if (!def) return '';
+  // For the current player we render the <select> instead; the tag is only
+  // shown on other players' rows so the viewer can see their teammates'
+  // picks.
+  if (isMe) return '';
+  const stub = def.isStub() ? ' <span class="lobby-slot-stub">stub</span>' : '';
+  return ` <span class="lobby-slot-faction">${_esc(def.name)}${stub}</span>`;
+}
+
+/**
+ * Build a <select> element that lets the current player change their
+ * faction (same side only) via the setFaction protocol message.
+ */
+function _buildLobbyFactionPicker(lobby, slot) {
+  const factions = getFactionsForSide(slot.side ?? (slot.faction === 'hero' ? 'day' : 'night'));
+  const select   = document.createElement('select');
+  select.className = 'setup-select lobby-faction-select';
+  select.innerHTML = factions.map(f => {
+    const selected = f.id === (slot.factionId ?? slot.faction) ? ' selected' : '';
+    const stub     = f.isStub() ? ' (stub)' : '';
+    return `<option value="${f.id}"${selected}>${_esc(f.name)}${stub}</option>`;
+  }).join('');
+  select.addEventListener('change', () => {
+    if (!select.value) return;
+    mp.setFaction(lobby.id, select.value);
+  });
+  return select;
 }
 
 function _showSlotInvitePopup(lobby, slotIndex, faction, anchorEl) {

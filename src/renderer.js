@@ -3017,13 +3017,17 @@ export class Renderer {
 
 function entityGlyph(type) {
   switch (type) {
-    case EntityType.HERO:       return '⚔';
-    case EntityType.WITCH:      return '✦';
-    case EntityType.SURVIVOR:   return '☺';
-    case EntityType.ZOMBIE:     return '†';
-    case EntityType.MINION:     return '☠';
-    case EntityType.WOOD_GOLEM: return '🪵';
-    case EntityType.IRON_GOLEM: return '⚙';
+    case EntityType.HERO:        return '⚔';   // Paladin (alias of PALADIN)
+    case EntityType.ROGUE:       return '🗡';   // stub — placeholder glyph
+    case EntityType.CAPTAIN:     return '⛨';   // stub — placeholder glyph
+    case EntityType.WITCH:       return '✦';
+    case EntityType.NECROMANCER: return '☥';   // stub — placeholder glyph
+    case EntityType.BRUTE:       return '▲';   // stub — placeholder glyph
+    case EntityType.SURVIVOR:    return '☺';
+    case EntityType.ZOMBIE:      return '†';
+    case EntityType.MINION:      return '☠';
+    case EntityType.WOOD_GOLEM:  return '🪵';
+    case EntityType.IRON_GOLEM:  return '⚙';
     default: return '?';
   }
 }
