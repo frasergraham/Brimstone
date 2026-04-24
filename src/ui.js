@@ -79,6 +79,8 @@ export class UIController {
     this.speedMode         = this._loadDefaultSpeed(); // 'cinematic' | 'fast' | 'vfast'
     // Start with chronicle hidden by default; open = full sidebar, closed = pull-out tab only
     this._chronicleOpen    = false;
+    // Unit stats bar: collapsed by default; clicking the (i) glyph expands to reveal ATK/DEF + abilities
+    this._unitStatsExpanded = false;
     // When true, disable all planning/action UI — used for spectator mode
     this.spectator         = false;
     // When true, suppress phase modals and auto-select — used for tutorial mode
@@ -1649,6 +1651,7 @@ export class UIController {
     this._pendingDefenderPick  = null;
     this._pendingEnemyPick     = null;
     this._popupVisible         = false;
+    this._unitStatsExpanded    = false;
     this.renderer.selectedHex      = null;
     this.renderer.selectedEntityId = null;
     this.renderer.highlightHexes   = [];
@@ -2362,7 +2365,21 @@ export class UIController {
       terrainRowHtml = `<span class="usb-terrain-row">${tileImgHtml}${_buildTerrainBadge(tile)}</span>`;
     }
 
+    // Expanded block: ATK, DEF, and any ability description — toggled by the (i) glyph
+    const expanded = !!this._unitStatsExpanded;
+    const abilityHtml = entity.abilityLabel
+      ? `<span class="usb-ability">✦ ${entity.abilityLabel}</span>`
+      : '';
+    const expandedBlockHtml = expanded
+      ? `<span class="usb-extra">
+           <span class="usb-stat">ATK <span class="usb-stat-val">${entity.getAttack()}</span></span>
+           <span class="usb-stat">DEF <span class="usb-stat-val">${entity.getDefense()}</span></span>
+           ${abilityHtml}
+         </span>`
+      : '';
+
     bar.style.display = 'flex';
+    bar.classList.toggle('usb-expanded', expanded);
     bar.innerHTML = `
       ${cyclePrevHtml}
       ${portraitHtml}
@@ -2377,10 +2394,10 @@ export class UIController {
             </span>
             <span class="usb-stat-val">${entity.hp}/${entity.maxHp}</span>
           </span>
-          <span class="usb-stat">ATK <span class="usb-stat-val">${entity.getAttack()}</span></span>
-          <span class="usb-stat">DEF <span class="usb-stat-val">${entity.getDefense()}</span></span>
           ${weaponLabel ? `<span class="usb-weapon">⚔ ${weaponLabel}</span>` : ''}
+          <button class="usb-info-btn ${expanded ? 'usb-info-btn-active' : ''}" title="${expanded ? 'Hide stats' : 'Show stats & abilities'}">i</button>
         </span>
+        ${expandedBlockHtml}
         ${terrainRowHtml}
       </span>
       <button class="usb-deselect-btn" title="Deselect unit">✕</button>
@@ -2392,6 +2409,10 @@ export class UIController {
     });
     bar.querySelector('.usb-cycle-prev')?.addEventListener('click', () => this._cycleSelection(-1));
     bar.querySelector('.usb-cycle-next')?.addEventListener('click', () => this._cycleSelection(+1));
+    bar.querySelector('.usb-info-btn')?.addEventListener('click', () => {
+      this._unitStatsExpanded = !this._unitStatsExpanded;
+      this._renderUnitStatsBar();
+    });
   }
 
   _renderTurnInfo() {

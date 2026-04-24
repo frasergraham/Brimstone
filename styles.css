@@ -1243,6 +1243,55 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   white-space: nowrap;
 }
 
+/* (i) toggle: reveals ATK/DEF and ability text in an expanded block */
+.usb-info-btn {
+  pointer-events: auto;
+  flex-shrink: 0;
+  width: 1.25rem;
+  height: 1.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 50%;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  font-style: italic;
+  font-family: serif;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.usb-info-btn:hover {
+  color: var(--text-bright);
+  border-color: rgba(255,255,255,0.6);
+  background: rgba(255,255,255,0.12);
+}
+.usb-info-btn-active {
+  color: var(--day);
+  border-color: rgba(212,167,44,0.8);
+  background: rgba(212,167,44,0.15);
+}
+
+/* Expanded-only block: ATK, DEF, and any ability description */
+.usb-extra {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+.usb-ability {
+  color: #c8a030;
+  font-style: italic;
+  white-space: normal;
+  line-height: 1.25;
+  flex-basis: 100%;
+}
+
 .usb-deselect-btn {
   /* Bar itself is pointer-events: none so UNDO buttons stay clickable — only
      the interactive children re-enable hit-testing. */
