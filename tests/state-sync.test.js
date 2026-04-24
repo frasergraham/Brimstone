@@ -4,7 +4,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { GameState } from '../src/game.js';
-import { BASE_AGILITY, EntityType, createMinion } from '../src/entities.js';
+import { BASE_AGILITY, EntityType, createMinion, createSurvivor, SurvivorAbility } from '../src/entities.js';
 
 function freshState() { return new GameState(true, true); }
 
@@ -51,6 +51,32 @@ describe('state-sync — Agility round-trip', () => {
       assert.notEqual(e.agility, undefined, `Entity ${e.id} should have a hydrated agility`);
       assert.equal(e.agility, BASE_AGILITY[e.type] ?? 1,
         `Missing agility should hydrate to BASE_AGILITY[${e.type}]`);
+    }
+  });
+});
+
+describe('state-sync — abilities array round-trip (Phase 4)', () => {
+  test('survivor abilities[] survives serialize → deserialize', () => {
+    const state = freshState();
+    const survivor = createSurvivor(5, 5, 'hero-player-1', state);
+    survivor.abilities = [SurvivorAbility.HEAL, SurvivorAbility.SCOUT];
+    state.entities.push(survivor);
+
+    const snap = serializeState(state);
+    const restored = deserializeState(snap);
+
+    const copy = restored.entities.find(e => e.id === survivor.id);
+    assert.ok(copy, 'restored survivor present');
+    assert.deepEqual(copy.abilities, [SurvivorAbility.HEAL, SurvivorAbility.SCOUT]);
+    assert.equal(copy.hasAbility(SurvivorAbility.HEAL),  true);
+    assert.equal(copy.hasAbility(SurvivorAbility.SCOUT), true);
+  });
+
+  test('entities without abilities serialize to empty array', () => {
+    const state = freshState();
+    const snap = serializeState(state);
+    for (const e of snap.entities) {
+      assert.ok(Array.isArray(e.abilities), `Entity ${e.id} abilities must be an array`);
     }
   });
 });

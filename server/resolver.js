@@ -247,7 +247,7 @@ function runAction(state, action, faction, playerId = null) {
     }
 
     case PlanActionType.USE_ABILITY: {
-      const r = executeUseAbility(state, entity);
+      const r = executeUseAbility(state, entity, action.ability);
       if (!r.success) return { kind: 'fail', reason: r.log[0] };
       // budgetBonus returned directly by executeUseAbility (e.g. Rally → +1)
       return { kind: 'ok', result: r, budgetBonus: r.budgetBonus ?? 0 };
@@ -427,7 +427,7 @@ function snapshotEntities(entities) {
     ownerId:       e.ownerId ?? null,
     type:          e.type,
     weapon:        e.weapon,
-    ability:       e.ability,
+    abilities:     Array.isArray(e.abilities) ? [...e.abilities] : [],
     attack:        e.attack,
     defense:       e.defense,
     agility:       e.agility,

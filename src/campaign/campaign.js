@@ -6,7 +6,15 @@ import { getFaction } from '../factions.js';
 import { hexDistance } from '../hex.js';
 import { EntityType } from '../entities.js';
 
-const SAVE_VERSION = 1;
+// v1: initial campaign save format.
+// v2 (Phase 4 of units/items/abilities refactor): BRAWLER / STURDY
+// passives were un-baked from SURVIVOR_ROSTER base stats. Pre-v2
+// campaign saves carry the pre-refactor baked `attack`/`defense` numbers
+// plus a singular `ability` string; loading one onto a new Entity would
+// double-count the passive via getAttack()/getDefense() composition.
+// Campaign.load() drops saves at lower versions; a brand-new campaign
+// starts in their place.
+const SAVE_VERSION = 2;
 
 /**
  * Serialize a survivor entity into a plain object for campaign roster storage.
@@ -17,7 +25,7 @@ export function snapshotSurvivor(entity) {
     name:         entity.name,
     title:        entity.title,
     bio:          entity.bio,
-    ability:      entity.ability,
+    abilities:    Array.isArray(entity.abilities) ? [...entity.abilities] : [],
     abilityLabel: entity.abilityLabel,
     color:        entity.color,
     hp:           entity.hp,
@@ -416,12 +424,19 @@ export class Campaign {
     localStorage.setItem(`brimstone-${this.saveSlot}`, JSON.stringify(data));
   }
 
-  /** Load from localStorage. Returns true if a save was found. */
+  /** Load from localStorage. Returns true if a save was found and is compatible. */
   load() {
     const raw = localStorage.getItem(`brimstone-${this.saveSlot}`);
     if (!raw) return false;
     const data = JSON.parse(raw);
-    this.version           = data.version ?? SAVE_VERSION;
+    // Incompatible saves (pre-Phase-4 baked stats) are dropped; the caller
+    // proceeds with a fresh Campaign.
+    const savedVersion = data.version ?? 1;
+    if (savedVersion < SAVE_VERSION) {
+      localStorage.removeItem(`brimstone-${this.saveSlot}`);
+      return false;
+    }
+    this.version           = savedVersion;
     this.currentMission    = data.currentMission ?? this.campaignDef.firstMission;
     this.completedMissions = new Set(data.completedMissions ?? []);
     this.roster            = data.roster ?? [];
@@ -636,9 +651,12 @@ export class Campaign {
     }
   }
 
-  /** Restore campaign state from a server-fetched data object. */
+  /** Restore campaign state from a server-fetched data object.
+   *  Returns false if the server save is pre-Phase-4 and must be discarded. */
   restoreFromServerData(data) {
-    this.version           = data.version ?? SAVE_VERSION;
+    const savedVersion = data.version ?? 1;
+    if (savedVersion < SAVE_VERSION) return false;
+    this.version           = savedVersion;
     this.currentMission    = data.currentMission ?? this.campaignDef.firstMission;
     this.completedMissions = new Set(data.completedMissions ?? []);
     this.roster            = data.roster ?? [];
@@ -647,5 +665,6 @@ export class Campaign {
     this.storyFlags        = data.storyFlags ?? {};
     this.updatedAt         = data.updatedAt ?? Date.now();
     this.save(); // persist to localStorage
+    return true;
   }
 }

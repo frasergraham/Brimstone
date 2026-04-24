@@ -182,8 +182,8 @@ const SCENARIOS = [
   // ── Weapons ──────────────────────────────────────────────────────────────
   { label: 'Hero+Sword vs Witch     (neutral)',      att: HERO_SWORD, def: WITCH,      ctx: {} },
   { label: 'Hero+Sword vs Iron Golem(neutral)',      att: HERO_SWORD, def: IRON_GOLEM, ctx: {} },
-  { label: 'Hero+Staff vs Zombie    (undead +2)',    att: HERO_STAFF, def: ZOMBIE,     ctx: {} },
-  { label: 'Hero+Staff vs Iron Golem(undead +2)',    att: HERO_STAFF, def: IRON_GOLEM, ctx: {} },
+  { label: 'Hero+Staff vs Zombie    (undead adv)',   att: HERO_STAFF, def: ZOMBIE,     ctx: {} },
+  { label: 'Hero+Staff vs Iron Golem(neutral)',      att: HERO_STAFF, def: IRON_GOLEM, ctx: {} },
   { label: 'Hero+Shield vs Witch    (night adv)',   att: HERO_SHIELD,def: WITCH,      ctx: { phaseAdvantage: 1 } }, // witch attacks at night
 
   // ── Witch offensive scenarios ─────────────────────────────────────────────

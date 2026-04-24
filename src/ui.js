@@ -2,7 +2,7 @@
 import { hexKey, hexToPixel, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus } from './tiles.js';
 import { ITEMS } from './items.js';
-import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType } from './entities.js';
+import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf } from './entities.js';
 import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
 import {
@@ -1535,7 +1535,12 @@ export class UIController {
     if (this._planMode) {
       const proj = this._getProjectedPos(entity.id);
       if (proj && (proj.col !== entity.col || proj.row !== entity.row)) {
-        effectiveEntity = { ...entity, col: proj.col, row: proj.row };
+        // Re-parent the spread to Entity.prototype so methods like
+        // hasAbility / getAttack still resolve; plain spread loses them.
+        effectiveEntity = Object.setPrototypeOf(
+          { ...entity, col: proj.col, row: proj.row },
+          Object.getPrototypeOf(entity)
+        );
       }
     }
 
@@ -1828,7 +1833,12 @@ export class UIController {
     if (this._planMode) {
       const proj = this._getProjectedPos(entity.id);
       if (proj && (proj.col !== entity.col || proj.row !== entity.row)) {
-        effectiveEntity = { ...entity, col: proj.col, row: proj.row };
+        // Re-parent the spread to Entity.prototype so methods like
+        // hasAbility / getAttack still resolve; plain spread loses them.
+        effectiveEntity = Object.setPrototypeOf(
+          { ...entity, col: proj.col, row: proj.row },
+          Object.getPrototypeOf(entity)
+        );
       }
     }
     const actions = getValidActions(state, effectiveEntity);
@@ -1941,7 +1951,7 @@ export class UIController {
             label: abilityLabels[action.ability] || 'Ability',
             fullLabel: fullLabels[action.ability] || 'Use Ability',
             color: '#88eeff', dis: !isFree && dis, free: isFree, cost: isFree ? 0 : 1,
-            attrs: 'data-action="use_ability"' });
+            attrs: `data-action="use_ability" data-ability="${action.ability}"` });
           break;
         }
       }
@@ -2320,11 +2330,11 @@ export class UIController {
     }
 
     const GLYPHS = {
-      hero: '⚔', witch: '✦', survivor: '☺',
+      hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟',
       zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙',
     };
     const COLORS = {
-      hero: '#d4a72c', witch: '#9b59b6', survivor: '#4caf7d',
+      hero: '#d4a72c', witch: '#9b59b6', survivor: '#4caf7d', soldier: '#3f78c4',
       zombie: '#7c9a57', minion: '#c0392b', wood_golem: '#8B5E3C', iron_golem: '#607D8B',
     };
 
@@ -2840,7 +2850,8 @@ export class UIController {
       }
 
       case 'use_ability': {
-        this._addToPlan({ type: PlanActionType.USE_ABILITY, entityId: entity.id });
+        const abilityId = button.dataset.ability || null;
+        this._addToPlan({ type: PlanActionType.USE_ABILITY, entityId: entity.id, ability: abilityId });
         delayedHide();
         if (entity.alive) this._selectEntity(entity);
         else this._clearSelection();
@@ -3173,7 +3184,7 @@ export class UIController {
     const dialog = this._el('encounter-dialog');
     const card   = this._el('encounter-card');
 
-    const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
+    const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
     const glyph  = GLYPHS[encounterUnit.type] ?? '?';
     const color  = encounterUnit.color || '#d4c9b0';
 
@@ -3217,7 +3228,7 @@ export class UIController {
         <div style="flex:1;min-width:0;">
           <div style="font-size:1rem;font-weight:bold;color:${color};margin-bottom:0.12rem;">${glyph} ${encounterUnit.name}</div>
           ${titleHtml}
-          <div style="font-size:0.72rem;color:#c8b89a;">HP ${encounterUnit.hp}/${encounterUnit.maxHp} · ATK ${encounterUnit.attack} · DEF ${encounterUnit.defense}</div>
+          <div style="font-size:0.72rem;color:#c8b89a;">HP ${encounterUnit.hp}/${encounterUnit.maxHp} · ATK ${attackOf(encounterUnit)} · DEF ${defenseOf(encounterUnit)}</div>
           <div style="background:#1e1e2a;border-radius:3px;height:5px;margin-top:0.3rem;overflow:hidden;">
             <div style="width:${hpPct}%;height:100%;background:${hpColor};border-radius:3px;"></div>
           </div>
@@ -4601,7 +4612,7 @@ function _entityPortraitId(snap) {
  * @param {number}  [opts.portraitSize] Portrait diameter in px (default 36).
  */
 function _unitCardHTML(entity, { renderer = null, selectable = false, showStats = true, portraitSize = 36 } = {}) {
-  const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
+  const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
   const color  = ENTITY_COLOR[entity.type] || '#888';
   const glyph  = GLYPHS[entity.type] ?? '?';
   const label  = (entity.type === 'survivor' && entity.name) ? entity.name
@@ -4618,8 +4629,10 @@ function _unitCardHTML(entity, { renderer = null, selectable = false, showStats 
   const hearts = '♥'.repeat(entity.hp ?? 0) + '♡'.repeat(Math.max(0, (entity.maxHp ?? entity.hp ?? 0) - (entity.hp ?? 0)));
   let statsHtml = hearts;
   if (showStats && entity.attack !== undefined) {
-    const atkStr = `${entity.attack}${entity.attackBonus ? `+${entity.attackBonus}` : ''}`;
-    const defStr = `${entity.defense}${entity.defenseBonus ? `+${entity.defenseBonus}` : ''}`;
+    const atk = attackOf(entity);
+    const def = defenseOf(entity);
+    const atkStr = `${atk}${entity.attackBonus ? `+${entity.attackBonus}` : ''}`;
+    const defStr = `${def}${entity.defenseBonus ? `+${entity.defenseBonus}` : ''}`;
     statsHtml = `${hearts} · ATK ${atkStr} · DEF ${defStr}`;
   }
 

@@ -2,9 +2,22 @@
 import { WEAPON_STATS } from './tiles.js';
 import { UNIT_TYPES } from './unit-types.js';
 import { ITEMS } from './items.js';
-import { SurvivorAbility } from './abilities.js';
+import { SurvivorAbility, ABILITIES } from './abilities.js';
 
 let _nextId = 1;
+
+// Sum the statMod contribution of all passive abilities on a unit.
+// Phase 4 handles brawler (+1 attack) and sturdy (+1 defense); future
+// entries only need to add a statMods field to the ABILITIES registry.
+function _abilityStatMod(abilities, field) {
+  if (!Array.isArray(abilities) || abilities.length === 0) return 0;
+  let sum = 0;
+  for (const id of abilities) {
+    const mod = ABILITIES[id]?.statMods?.[field];
+    if (typeof mod === 'number') sum += mod;
+  }
+  return sum;
+}
 
 // Forced-dice queue — for tutorial canned outcomes.  Push values via setForcedDice();
 // each call to _nextDie() pops from the front, or falls back to a real random roll.
@@ -41,6 +54,7 @@ export const EntityType = Object.freeze({
   NECROMANCER: 'necromancer',
   BRUTE:       'brute',
   SURVIVOR:    'survivor',
+  SOLDIER:     'soldier',
   ZOMBIE:      'zombie',
   MINION:      'minion',
   WOOD_GOLEM:  'wood_golem',
@@ -52,194 +66,13 @@ export const EntityType = Object.freeze({
 // call sites working during the phased migration.
 export { SurvivorAbility };
 
-// One distinct colour per roster slot — used for unit circles and plan arrows.
-// Friendly palette: greens, blues and yellows so survivors read as civilian/ally.
-const SURVIVOR_COLORS = [
-  '#5dbd72',  // forest green
-  '#4ab5d4',  // sky blue
-  '#d4c44a',  // wheat yellow
-  '#3ec98c',  // jade green
-  '#5fa8e8',  // cornflower blue
-  '#e8d454',  // sunflower yellow
-  '#7dd65e',  // lime green
-  '#3eb8c8',  // teal
-  '#c8d440',  // yellow-green
-  '#68c4e0',  // light blue
-  '#4cba5a',  // vivid green
-  '#f0e060',  // bright yellow
-  '#a8d86c',  // pastel lime
-  '#48a0c0',  // steel blue
-  '#d0b840',  // dark gold
-  '#60d4a0',  // mint
-  '#88b8f0',  // periwinkle
-  '#c8e048',  // chartreuse
-  '#50c8a0',  // seafoam
-  '#e0c868',  // muted amber
-];
+// Phase 6: SURVIVOR_ROSTER and SURVIVOR_COLORS moved to
+// src/content/survivors.js. Re-exported here so existing imports from
+// `./entities.js` keep working; new callers should import from
+// `./content/survivors.js` directly.
+import { SURVIVOR_ROSTER, SURVIVOR_COLORS } from './content/survivors.js';
+export { SURVIVOR_ROSTER };
 
-// Named character pool — one is drawn at random when a survivor is discovered
-export const SURVIVOR_ROSTER = [
-  {
-    name: "John O'Connor",
-    title: 'Innkeeper',
-    bio: "Ran the inn for thirty years. Built half the town's doors himself.",
-    maxHp: 5, attack: 2, defense: 2,
-    ability: SurvivorAbility.FORTIFY_DOUBLE,
-    abilityLabel: 'Strong Back — fortifies a building to full strength with just Wood',
-  },
-  {
-    name: 'Mary Quinn',
-    title: 'Nurse',
-    bio: "Kept half of Caleb's Hollow alive through the fever of '88.",
-    maxHp: 5, attack: 1, defense: 3,
-    ability: SurvivorAbility.HEAL,
-    abilityLabel: 'Tend Wounds — heals the hero 1 HP (costs 1 action)',
-  },
-  {
-    name: 'Thomas Putnam',
-    title: 'Blacksmith',
-    bio: "Arms like anvils. He's been hitting things with hammers his entire life.",
-    maxHp: 5, attack: 3, defense: 2,
-    ability: SurvivorAbility.BRAWLER,
-    abilityLabel: 'Iron Fists — +1 ATK (permanent, already applied)',
-  },
-  {
-    name: 'Abigail Foster',
-    title: 'Herbalist',
-    bio: "She can find medicine in a snowdrift. Every expedition turns up something useful.",
-    maxHp: 4, attack: 1, defense: 2,
-    ability: SurvivorAbility.HERBALIST,
-    abilityLabel: 'Wild Harvest — each exploration also yields 1 Herbs',
-  },
-  {
-    name: 'Samuel Cooper',
-    title: 'Militia Sergeant',
-    bio: "Drilled the town militia for a decade. His voice alone steadies the line.",
-    maxHp: 4, attack: 2, defense: 2,
-    ability: SurvivorAbility.INSPIRE,
-    abilityLabel: 'Battle Cry — grants hero +1 ATK for the next battle (free)',
-  },
-  {
-    name: 'Father Crane',
-    title: 'Parish Priest',
-    bio: "His sermons are long but his faith is genuine. And occasionally useful.",
-    maxHp: 5, attack: 1, defense: 3,
-    ability: SurvivorAbility.RALLY,
-    abilityLabel: 'Holy Sermon — grants the hero 1 bonus action (free)',
-  },
-  {
-    name: 'Hannah Marsh',
-    title: 'Baker',
-    bio: "Survived three hard winters by sheer stubbornness.",
-    maxHp: 7, attack: 1, defense: 3,
-    ability: SurvivorAbility.STURDY,
-    abilityLabel: 'Iron Stomach — +1 DEF (permanent, already applied)',
-  },
-  {
-    name: 'Ezra Boone',
-    title: 'Trapper',
-    bio: "Spent thirty years in the deep woods. He sees the shadows before they see him.",
-    maxHp: 4, attack: 2, defense: 2,
-    ability: SurvivorAbility.SCOUT,
-    abilityLabel: "Woodsman — reveals the witch's forces within 3 hexes",
-  },
-  {
-    name: 'Constance Bell',
-    title: 'Schoolteacher',
-    bio: "Sharp-minded and resourceful. She reads the witch's markings like a primer.",
-    maxHp: 4, attack: 1, defense: 2,
-    ability: SurvivorAbility.HERBALIST,
-    abilityLabel: 'Resourceful — each exploration also yields 1 Herbs',
-  },
-  {
-    name: 'Isaac Graves',
-    title: 'Gravedigger',
-    bio: "Has faced death every working day. Nothing frightens him anymore.",
-    maxHp: 7, attack: 1, defense: 3,
-    ability: SurvivorAbility.STURDY,
-    abilityLabel: 'Six Feet Under — +1 DEF (permanent, already applied)',
-  },
-  {
-    name: 'Patience Cole',
-    title: 'Midwife',
-    bio: "Has guided life into the world through hardship and darkness alike.",
-    maxHp: 7, attack: 1, defense: 3,
-    ability: SurvivorAbility.HEAL,
-    abilityLabel: 'Tender Care — heals the hero 1 HP (costs 1 action)',
-  },
-  {
-    name: 'Silas Holt',
-    title: 'Farmhand',
-    bio: "Young, strong, and fueled by righteous anger.",
-    maxHp: 4, attack: 2, defense: 2,
-    ability: SurvivorAbility.BRAWLER,
-    abilityLabel: 'Farm Strong — +1 ATK (permanent, already applied)',
-  },
-  {
-    name: 'Mercy Hale',
-    title: 'Tanner',
-    bio: "Cures leather like her grandmother before her. Hands tough as the hides she works.",
-    maxHp: 5, attack: 2, defense: 3,
-    ability: SurvivorAbility.STURDY,
-    abilityLabel: 'Thick Skin — +1 DEF (permanent, already applied)',
-  },
-  {
-    name: 'Elijah Pratt',
-    title: 'Chandler',
-    bio: "Makes candles and soap. Knows every cellar and storeroom in town.",
-    maxHp: 4, attack: 2, defense: 2,
-    ability: SurvivorAbility.SCOUT,
-    abilityLabel: "Candle Light — reveals the witch's forces within 3 hexes",
-  },
-  {
-    name: 'Ruth Wardwell',
-    title: 'Goodwife',
-    bio: "Raised seven children through famine and fever. Nothing breaks her resolve.",
-    maxHp: 7, attack: 1, defense: 2,
-    ability: SurvivorAbility.RALLY,
-    abilityLabel: 'Stalwart Spirit — grants the hero 1 bonus action (free)',
-  },
-  {
-    name: 'Nathaniel Corwin',
-    title: 'Constable',
-    bio: "Enforced the law before the law stopped mattering.",
-    maxHp: 5, attack: 3, defense: 2,
-    ability: SurvivorAbility.BRAWLER,
-    abilityLabel: 'Heavy Hand — +1 ATK (permanent, already applied)',
-  },
-  {
-    name: 'Agnes Whittaker',
-    title: 'Weaver',
-    bio: "Her loom sits idle but her hands are still quick with needle and knot.",
-    maxHp: 4, attack: 1, defense: 2,
-    ability: SurvivorAbility.FORTIFY_DOUBLE,
-    abilityLabel: 'Nimble Fingers — fortifies a building to full strength with just Wood',
-  },
-  {
-    name: 'Josiah Dane',
-    title: 'Carpenter',
-    bio: "Built half the roofs in Caleb's Hollow. Knows timber like a brother.",
-    maxHp: 5, attack: 2, defense: 2,
-    ability: SurvivorAbility.FORTIFY_DOUBLE,
-    abilityLabel: 'Master Builder — fortifies a building to full strength with just Wood',
-  },
-  {
-    name: 'Prudence Faulkner',
-    title: "Apothecary's Daughter",
-    bio: "Learned her mother's remedies before the trials took everything.",
-    maxHp: 4, attack: 1, defense: 3,
-    ability: SurvivorAbility.HEAL,
-    abilityLabel: 'Salve and Poultice — heals the hero 1 HP (costs 1 action)',
-  },
-  {
-    name: 'Caleb Osgood',
-    title: 'Fisherman',
-    bio: "Hauled nets in storms that would drown lesser men.",
-    maxHp: 5, attack: 2, defense: 2,
-    ability: SurvivorAbility.INSPIRE,
-    abilityLabel: 'Sea-Hardened — grants hero +1 ATK for the next battle (free)',
-  },
-];
 
 // Track which roster entries have been used this game so no duplicates spawn
 const _usedRosterIndices = new Set();
@@ -324,7 +157,10 @@ export class Entity {
     this.name     = null;
     this.title    = null;
     this.bio      = null;
-    this.ability  = null;
+    // Phase 4: promoted from singular `ability: string` to an array.
+    // BRAWLER / STURDY passives are no longer baked into base stats;
+    // getAttack() / getDefense() compose their statMods at call time.
+    this.abilities    = [];
     this.abilityLabel = null;
 
     this.actedThisTurn = false;
@@ -358,10 +194,14 @@ export class Entity {
   // Call sites stay correct across that transition.
 
   getAttack()  {
-    return this.attack + (ITEMS[this.weapon]?.statMods?.attack ?? 0);
+    return this.attack
+      + (ITEMS[this.weapon]?.statMods?.attack ?? 0)
+      + _abilityStatMod(this.abilities, 'attack');
   }
   getDefense() {
-    return this.defense + (ITEMS[this.weapon]?.statMods?.defense ?? 0);
+    return this.defense
+      + (ITEMS[this.weapon]?.statMods?.defense ?? 0)
+      + _abilityStatMod(this.abilities, 'defense');
   }
   getAgility() { return this.agility ?? 1; }
 
@@ -370,15 +210,11 @@ export class Entity {
     return 1 + ((this.items?.['horse'] || 0) > 0 ? 1 : 0);
   }
 
-  // Survivor abilities are today a single string on `this.ability`. Phase 4
-  // promotes this to `abilities: string[]`; `hasAbility` and the `abilities`
-  // getter are the forward-compatible API.
-  get abilities() {
-    return this.ability ? [this.ability] : [];
-  }
-
+  // `abilities` is a plain data property (set in the constructor); the
+  // Phase-2 forward-compatible API was a getter that derived from the
+  // legacy singular `ability` field, and is no longer needed.
   hasAbility(id) {
-    return this.ability === id;
+    return Array.isArray(this.abilities) && this.abilities.includes(id);
   }
 
   // Unit-type tags (`undead`, `construct`, `minion`, `living`, `leader`,
@@ -445,7 +281,7 @@ export class Entity {
 
     const roll = state ? (s) => state.nextDie(s) : _nextDie;
 
-    // Item combat triggers (e.g. staff vs undead/minions/golems →
+    // Item combat triggers (e.g. staff vs undead defenders →
     // +1 attacker advantage die). Data-driven via ITEMS[weapon].combatTriggers
     // so adding a new conditional weapon effect is a one-file change. The
     // defender's tag set is sourced from `defender.tags` (set in the Entity
@@ -506,15 +342,17 @@ export class Entity {
 // matching Entity.getAttack() semantics.
 export function attackOf(e) {
   if (typeof e?.getAttack === 'function') return e.getAttack();
-  const base = e?.attack ?? 0;
-  const mod  = e?.weapon ? (ITEMS[e.weapon]?.statMods?.attack ?? 0) : 0;
-  return base + mod;
+  const base        = e?.attack ?? 0;
+  const weaponMod   = e?.weapon ? (ITEMS[e.weapon]?.statMods?.attack ?? 0) : 0;
+  const abilityMod  = _abilityStatMod(e?.abilities, 'attack');
+  return base + weaponMod + abilityMod;
 }
 export function defenseOf(e) {
   if (typeof e?.getDefense === 'function') return e.getDefense();
-  const base = e?.defense ?? 0;
-  const mod  = e?.weapon ? (ITEMS[e.weapon]?.statMods?.defense ?? 0) : 0;
-  return base + mod;
+  const base        = e?.defense ?? 0;
+  const weaponMod   = e?.weapon ? (ITEMS[e.weapon]?.statMods?.defense ?? 0) : 0;
+  const abilityMod  = _abilityStatMod(e?.abilities, 'defense');
+  return base + weaponMod + abilityMod;
 }
 
 // ── Advantage-dice math ─────────────────────────────────────────────────────
@@ -574,12 +412,25 @@ export function expectedDieValue(net) {
   return WORST_OF_K_EV[-n];
 }
 
+// Phase 5: leader factories stamp each new leader with its side's innate
+// abilities. Day-side leaders carry 'sound_horn'; night-side leaders
+// carry 'summon'. The `actor.hasAbility(id)` gates in src/actions.js
+// pick up these abilities directly, replacing the legacy
+// `isLeaderType + owner` gate pair. Hard-coded here (rather than looked
+// up via getFaction) to keep entities.js free of a factions.js cycle.
+const _DAY_LEADER_ABILITIES   = ['sound_horn'];
+const _NIGHT_LEADER_ABILITIES = ['summon'];
+
 export function createHero(col, row, ownerId = null, state = null) {
-  return new Entity(EntityType.PALADIN, 'hero', col, row, ownerId, state);
+  const e = new Entity(EntityType.PALADIN, 'hero', col, row, ownerId, state);
+  e.abilities.push(..._DAY_LEADER_ABILITIES);
+  return e;
 }
 
 export function createWitch(col, row, ownerId = null, state = null) {
-  return new Entity(EntityType.WITCH, 'witch', col, row, ownerId, state);
+  const e = new Entity(EntityType.WITCH, 'witch', col, row, ownerId, state);
+  e.abilities.push(..._NIGHT_LEADER_ABILITIES);
+  return e;
 }
 
 // ── Stub-faction leader factories ───────────────────────────────────────────
@@ -591,24 +442,28 @@ export function createWitch(col, row, ownerId = null, state = null) {
 export function createRogue(col, row, ownerId = null, state = null) {
   const e = new Entity(EntityType.ROGUE, 'hero', col, row, ownerId, state);
   e.factionId = 'rogue';
+  e.abilities.push(..._DAY_LEADER_ABILITIES);
   return e;
 }
 
 export function createCaptain(col, row, ownerId = null, state = null) {
   const e = new Entity(EntityType.CAPTAIN, 'hero', col, row, ownerId, state);
   e.factionId = 'captain';
+  e.abilities.push(..._DAY_LEADER_ABILITIES);
   return e;
 }
 
 export function createNecromancer(col, row, ownerId = null, state = null) {
   const e = new Entity(EntityType.NECROMANCER, 'witch', col, row, ownerId, state);
   e.factionId = 'necromancer';
+  e.abilities.push(..._NIGHT_LEADER_ABILITIES);
   return e;
 }
 
 export function createBrute(col, row, ownerId = null, state = null) {
   const e = new Entity(EntityType.BRUTE, 'witch', col, row, ownerId, state);
   e.factionId = 'brute';
+  e.abilities.push(..._NIGHT_LEADER_ABILITIES);
   return e;
 }
 
@@ -675,19 +530,18 @@ export function createSurvivor(col, row, ownerId = null, state = null) {
   e.name         = char.name;
   e.title        = char.title;
   e.bio          = char.bio;
-  e.ability      = char.ability;
+  e.abilities    = char.ability ? [char.ability] : [];
   e.abilityLabel = char.abilityLabel;
   e.color        = pick.i >= 0 ? SURVIVOR_COLORS[pick.i % SURVIVOR_COLORS.length] : SURVIVOR_COLORS[0];
 
-  // Apply base stats from the character definition
+  // Apply base stats from the character definition. BRAWLER / STURDY
+  // passives are NOT baked into these numbers any more — getAttack() /
+  // getDefense() compose the +1 from ABILITIES[id].statMods at call time.
   e.maxHp  = char.maxHp;
   e.hp     = char.maxHp;
   e.attack  = char.attack;
   e.defense = char.defense;
   if (typeof char.agility === 'number') e.agility = char.agility;
-
-  // Passive stat bonuses already baked into the roster stats,
-  // but BRAWLER/STURDY are called out explicitly — stats are already correct.
 
   return e;
 }
@@ -750,6 +604,14 @@ export function createIronGolem(col, row, ownerId = null, state = null) {
   const e = new Entity(EntityType.IRON_GOLEM, 'witch', col, row, ownerId, state);
   e.color = _witchColor(EntityType.IRON_GOLEM, e);
   return e;
+}
+
+// Soldier — day-side grunt. Summoner (Captain faction ability) lands in
+// a follow-up PR; the factory is defined here so any caller that wants
+// to place a Soldier (scenario setup, tests, future summon action) works
+// off the same construction path as other non-leader units.
+export function createSoldier(col, row, ownerId = null, state = null) {
+  return new Entity(EntityType.SOLDIER, 'hero', col, row, ownerId, state);
 }
 
 /**

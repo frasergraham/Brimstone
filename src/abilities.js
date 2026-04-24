@@ -1,14 +1,36 @@
 // ABILITIES registry — single source of truth for the 8 survivor
 // abilities.
 //
-// Phase 1 captures id / kind / label / description metadata so the
-// SurvivorAbility enum can derive from this registry. Phase 4 will add
-// statMods (for passives like BRAWLER / STURDY) and execute / hooks
-// (for actives like HEAL / INSPIRE / RALLY). Faction-innate abilities
-// (sound_horn, summon) are registered here in Phase 5 when leader
-// action gates move off the isLeaderType+owner check.
+// Registry entries carry:
+//   - metadata: id / kind / label / description
+//   - passive effects: statMods (composed at call time by Entity getters)
+//   - active effects: validate(state, actor) / execute(state, actor)
+//
+// HERBALIST, FORTIFY_DOUBLE, SCOUT remain passive-but-hook-less for now:
+// their effects live at the call sites (executeExplore, executeFortify,
+// sightRange) and are gated by entity.hasAbility(id). A generic
+// passive-hook dispatcher is deferred until a fourth hook makes the
+// abstraction pay for itself.
+//
+// Faction-innate abilities (sound_horn, summon) land in Phase 5.
 //
 // See docs/design/units-items-abilities-refactor.md.
+//
+// Note: this module has no imports beyond stdlib. The validate/execute
+// helpers rely on `entity.hasTag('leader')` to identify the actor's
+// leader rather than importing factions.js, which would create a cycle
+// (factions.js → entities.js → abilities.js).
+
+// Shared helper — find an alive leader on the actor's hex that belongs
+// to the same player (or the same faction, for legacy singleplayer plans
+// that predate per-player ownership).
+function _coLocatedLeader(state, actor) {
+  return state.entities.find(e =>
+    e.alive && e.hasTag('leader') &&
+    e.col === actor.col && e.row === actor.row &&
+    (e.ownerId === actor.ownerId || e.owner === actor.owner)
+  );
+}
 
 export const ABILITIES = Object.freeze({
   fortify_double: {
@@ -22,18 +44,37 @@ export const ABILITIES = Object.freeze({
     kind: 'active',
     label: 'Heal',
     description: 'Action (1): heals hero on same hex 1 HP',
+    validate(state, actor) {
+      const leader = _coLocatedLeader(state, actor);
+      return !!leader && leader.hp < leader.maxHp;
+    },
+    execute(state, actor) {
+      const leader = _coLocatedLeader(state, actor);
+      if (!leader)
+        return { success: false, log: ['A leader must be on the same hex.'] };
+      if (leader.hp >= leader.maxHp)
+        return { success: false, log: ['Leader is already at full health.'] };
+      leader.heal(1);
+      return {
+        success: true,
+        log: [`${actor.displayName} tends ${leader.displayName}'s wounds. (+1 HP, now ${leader.hp}/${leader.maxHp})`],
+        cost: 1,
+      };
+    },
   },
   brawler: {
     id: 'brawler',
     kind: 'passive',
     label: 'Brawler',
-    description: '+1 ATK (Phase 4 un-bakes this into statMods)',
+    description: '+1 ATK',
+    statMods: { attack: 1 },
   },
   sturdy: {
     id: 'sturdy',
     kind: 'passive',
     label: 'Sturdy',
-    description: '+1 DEF (Phase 4 un-bakes this into statMods)',
+    description: '+1 DEF',
+    statMods: { defense: 1 },
   },
   herbalist: {
     id: 'herbalist',
@@ -46,18 +87,70 @@ export const ABILITIES = Object.freeze({
     kind: 'active',
     label: 'Inspire',
     description: 'Action (free): hero gets +1 ATK next battle',
+    validate(state, actor) {
+      return !!_coLocatedLeader(state, actor);
+    },
+    execute(state, actor) {
+      const leader = _coLocatedLeader(state, actor);
+      if (!leader)
+        return { success: false, log: ['A leader must be on the same hex.'] };
+      leader.attackBonus += 1;
+      return {
+        success: true,
+        log: [`${actor.displayName} rallies ${leader.displayName}! (+1 ATK this battle)`],
+        cost: 0,
+      };
+    },
   },
   rally: {
     id: 'rally',
     kind: 'active',
     label: 'Rally',
     description: 'Action (free): hero gets 1 bonus action',
+    validate() { return true; },
+    execute(state, actor) {
+      // Return budgetBonus so both offline and multiplayer resolvers can
+      // apply it per-player without touching shared state.actionsLeft.
+      const rallyLeader = state.entities.find(e =>
+        e.alive && e.hasTag('leader') &&
+        (e.ownerId === actor.ownerId || e.owner === actor.owner)
+      );
+      return {
+        success: true,
+        log: [`${actor.displayName}'s words fortify ${rallyLeader?.displayName ?? 'the leader'}'s spirit! (+1 action)`],
+        cost: 0,
+        budgetBonus: 1,
+      };
+    },
   },
   scout: {
     id: 'scout',
     kind: 'passive',
     label: 'Scout',
     description: 'Reveals night-side units within 3 hexes',
+  },
+
+  // ── Faction-innate leader abilities (Phase 5) ────────────────────────
+  // Pushed onto leaders by `Faction.createLeader()` via
+  // `innateLeaderAbilities`; the action-availability gates in
+  // src/actions.js check `actor.hasAbility(id)` instead of the legacy
+  // `isLeaderType + owner` pair. Execute bodies still live in
+  // src/actions.js (`executeSoundHorn`, `executeSummon`) — a full
+  // registry-delegated dispatch is deferred to a follow-up PR because
+  // the executor bodies depend on getFaction / createMinion / the
+  // _triggerSurvivorEncounter helper, which would create cross-module
+  // cycles if inlined here.
+  sound_horn: {
+    id: 'sound_horn',
+    kind: 'active',
+    label: 'Sound Horn',
+    description: 'Action (1 food): reveal your leader and discover survivors within 4 hexes',
+  },
+  summon: {
+    id: 'summon',
+    kind: 'active',
+    label: 'Summon',
+    description: 'Action: spend 2 resources to summon a Minion, Wood Golem, or Iron Golem',
   },
 });
 

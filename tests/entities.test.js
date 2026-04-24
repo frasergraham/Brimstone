@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {
   Entity, EntityType, SurvivorAbility, SURVIVOR_ROSTER,
   createHero, createWitch, createZombie, createMinion,
-  createWoodGolem, createIronGolem, createSurvivor, resetRoster,
+  createWoodGolem, createIronGolem, createSurvivor, createSoldier, resetRoster,
 } from '../src/entities.js';
 import { WeaponType, WEAPON_STATS } from '../src/tiles.js';
 
@@ -90,6 +90,28 @@ describe('Base stats — Iron Golem', () => {
     assert.equal(g.defense, 2);
     assert.equal(g.owner, 'witch');
     assert.equal(g.type, EntityType.IRON_GOLEM);
+  });
+});
+
+describe('Base stats — Soldier (day-side grunt)', () => {
+  test('HP=2, ATK=1, DEF=1, owner=hero, tagged living/soldier/summoned', () => {
+    const s = createSoldier(0, 0);
+    assert.equal(s.maxHp, 2);
+    assert.equal(s.attack, 1);
+    assert.equal(s.defense, 1);
+    assert.equal(s.owner, 'hero');
+    assert.equal(s.type, EntityType.SOLDIER);
+    assert.equal(s.hasTag('living'),    true);
+    assert.equal(s.hasTag('soldier'),   true);
+    assert.equal(s.hasTag('summoned'),  true);
+    assert.equal(s.hasTag('leader'),    false);
+  });
+
+  test('Soldier is not a leader and carries no innate abilities', () => {
+    const s = createSoldier(0, 0);
+    assert.deepEqual(s.abilities, []);
+    assert.equal(s.hasAbility('summon'),     false);
+    assert.equal(s.hasAbility('sound_horn'), false);
   });
 });
 
@@ -380,19 +402,28 @@ describe('Entity.resolveCombat', () => {
     assert.equal(r1.defenseRoll, r0.defenseRoll);
   });
 
-  test('staff grants attacker advantage vs undead (zombie, minion, golems)', () => {
+  test('staff grants attacker advantage vs undead defenders only (zombies)', () => {
     const hero = createHero(0, 0);
     hero.equipWeapon(WeaponType.STAFF); // +1 ATK, plus +1 advantage die vs undead
     const zombie = createZombie(0, 0);
-    const minion = createMinion(0, 0);
+
+    const r = withRNG([0.5, 0.5, 0.5], () => Entity.resolveCombat(hero, zombie));
+    assert.equal(r.atkStaffBonus, 1, 'Staff vs zombie should grant 1 advantage die');
+    assert.equal(r.atkAdvantage, 1);
+    assert.equal(r.atkPool.length, 2);
+  });
+
+  test('staff does NOT grant advantage vs minions or golems (narrowed in PR #294)', () => {
+    const hero = createHero(0, 0);
+    hero.equipWeapon(WeaponType.STAFF);
+    const minion    = createMinion(0, 0);
     const woodGolem = createWoodGolem(0, 0);
     const ironGolem = createIronGolem(0, 0);
 
-    for (const undead of [zombie, minion, woodGolem, ironGolem]) {
-      const r = withRNG([0.5, 0.5, 0.5], () => Entity.resolveCombat(hero, undead));
-      assert.equal(r.atkStaffBonus, 1, `Staff vs ${undead.type} should grant 1 advantage die`);
-      assert.equal(r.atkAdvantage, 1);
-      assert.equal(r.atkPool.length, 2);
+    for (const defender of [minion, woodGolem, ironGolem]) {
+      const r = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, defender));
+      assert.equal(r.atkStaffBonus, 0, `Staff vs ${defender.type} should NOT grant advantage`);
+      assert.equal(r.atkAdvantage, 0);
     }
   });
 
@@ -487,7 +518,7 @@ describe('Survivor roster', () => {
     assert.equal(s.maxHp, rosterEntry.maxHp);
     assert.equal(s.attack, rosterEntry.attack);
     assert.equal(s.defense, rosterEntry.defense);
-    assert.equal(s.ability, rosterEntry.ability);
+    assert.deepEqual(s.abilities, rosterEntry.ability ? [rosterEntry.ability] : []);
   });
 
   test('survivor starts at full HP', () => {
@@ -496,3 +527,82 @@ describe('Survivor roster', () => {
     assert.equal(s.hp, s.maxHp);
   });
 });
+
+describe('Phase 4 — BRAWLER / STURDY passives un-baked from roster', () => {
+  test('BRAWLER roster entries have base attack 1 less than effective attack', () => {
+    const brawlers = SURVIVOR_ROSTER.filter(r => r.ability === SurvivorAbility.BRAWLER);
+    assert.ok(brawlers.length >= 3, 'roster should contain ≥3 brawlers');
+    for (const entry of brawlers) {
+      resetRoster();
+      // Force the draw by scanning until we hit this entry.
+      let s;
+      for (let i = 0; i < 40; i++) {
+        s = createSurvivor(0, 0);
+        if (s.name === entry.name) break;
+      }
+      assert.equal(s.name, entry.name, `expected to draw ${entry.name}`);
+      assert.equal(s.attack,      entry.attack,     'base attack matches roster');
+      assert.equal(s.getAttack(), entry.attack + 1, 'getAttack() adds +1 via brawler statMods');
+    }
+  });
+
+  test('STURDY roster entries have base defense 1 less than effective defense', () => {
+    const sturdyOnes = SURVIVOR_ROSTER.filter(r => r.ability === SurvivorAbility.STURDY);
+    assert.ok(sturdyOnes.length >= 3, 'roster should contain ≥3 sturdy survivors');
+    for (const entry of sturdyOnes) {
+      resetRoster();
+      let s;
+      for (let i = 0; i < 40; i++) {
+        s = createSurvivor(0, 0);
+        if (s.name === entry.name) break;
+      }
+      assert.equal(s.name, entry.name, `expected to draw ${entry.name}`);
+      assert.equal(s.defense,      entry.defense,     'base defense matches roster');
+      assert.equal(s.getDefense(), entry.defense + 1, 'getDefense() adds +1 via sturdy statMods');
+    }
+  });
+
+  test('un-baked base stats match pre-refactor effective values', () => {
+    // Lock the parity promise: effective stats under Phase 4 must equal
+    // the pre-refactor baked numbers (attack=3/2/2 for brawler trio,
+    // defense=3/3/3 for sturdy trio).
+    const expected = {
+      'Thomas Putnam':    { attack: 3, defense: 2 },
+      'Silas Holt':       { attack: 2, defense: 2 },
+      'Nathaniel Corwin': { attack: 3, defense: 2 },
+      'Hannah Marsh':     { attack: 1, defense: 3 },
+      'Isaac Graves':     { attack: 1, defense: 3 },
+      'Mercy Hale':       { attack: 2, defense: 3 },
+    };
+    for (const [name, exp] of Object.entries(expected)) {
+      resetRoster();
+      let s;
+      for (let i = 0; i < 40; i++) {
+        s = createSurvivor(0, 0);
+        if (s.name === name) break;
+      }
+      assert.equal(s.name, name, `failed to draw ${name}`);
+      assert.equal(s.getAttack(),  exp.attack,  `${name} effective attack parity`);
+      assert.equal(s.getDefense(), exp.defense, `${name} effective defense parity`);
+    }
+  });
+
+  test('hasAbility works with abilities array and supports multi-ability', () => {
+    const e = new Entity(EntityType.SURVIVOR, 'hero', 0, 0);
+    e.abilities = [SurvivorAbility.HEAL, SurvivorAbility.SCOUT];
+    assert.equal(e.hasAbility(SurvivorAbility.HEAL),  true);
+    assert.equal(e.hasAbility(SurvivorAbility.SCOUT), true);
+    assert.equal(e.hasAbility(SurvivorAbility.BRAWLER), false);
+  });
+
+  test('getAttack/getDefense compose passive + weapon', () => {
+    const e = new Entity(EntityType.SURVIVOR, 'hero', 0, 0);
+    e.attack = 2; e.defense = 2;
+    e.abilities = [SurvivorAbility.BRAWLER, SurvivorAbility.STURDY];
+    assert.equal(e.getAttack(),  3, 'base 2 + brawler 1');
+    assert.equal(e.getDefense(), 3, 'base 2 + sturdy 1');
+    e.equipWeapon('sword'); // +2 attack
+    assert.equal(e.getAttack(), 5, 'base 2 + brawler 1 + sword 2');
+  });
+});
+

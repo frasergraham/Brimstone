@@ -1071,6 +1071,13 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     // During replay: if BACK or STOP was pressed, abort remaining steps immediately
     if (playback.goBack || playback.aborted || playback.jumpToEnd) break;
     const step = steps[i];
+    // Patch the CURRENT step's snapshot so any lookups against it resolve
+    // to Entity methods (hasAbility / getAttack / hasTag). _isFogVisible
+    // is the hot caller — it receives step.entitySnapshot directly and
+    // calls `e.hasAbility('scout')` on each entry, which blew up on the
+    // plain-JSON server snapshot before this patch ran (PR #294 online
+    // resolution crash).
+    patchAlive(step.entitySnapshot);
     // Post-step entities: what the world looks like AFTER this step resolves.
     // Re-parent the post-step snapshot entities to Entity.prototype the first
     // time through. resolver.snapshotEntities emits plain JSON objects; the
@@ -2811,7 +2818,9 @@ function _initCampaignMission(missionDef) {
       s.name = rosterEntry.name;
       s.title = rosterEntry.title;
       s.bio = rosterEntry.bio;
-      s.ability = rosterEntry.ability;
+      s.abilities = Array.isArray(rosterEntry.abilities)
+        ? [...rosterEntry.abilities]
+        : (rosterEntry.ability ? [rosterEntry.ability] : []);
       s.abilityLabel = rosterEntry.abilityLabel;
       s.color = rosterEntry.color;
       s.hp = rosterEntry.hp;

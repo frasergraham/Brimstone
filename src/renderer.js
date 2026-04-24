@@ -3025,6 +3025,7 @@ function entityGlyph(type) {
     case EntityType.NECROMANCER: return '☥';   // stub — placeholder glyph
     case EntityType.BRUTE:       return '▲';   // stub — placeholder glyph
     case EntityType.SURVIVOR:    return '☺';
+    case EntityType.SOLDIER:     return '♟';
     case EntityType.ZOMBIE:      return '†';
     case EntityType.MINION:      return '☠';
     case EntityType.WOOD_GOLEM:  return '🪵';

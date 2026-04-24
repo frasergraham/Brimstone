@@ -19,7 +19,7 @@ function _lsGet(key) {
 }
 
 /** True when running inside a Capacitor native shell. */
-export const isNativeMobile = !!window.Capacitor;
+export const isNativeMobile = typeof window !== 'undefined' && !!window.Capacitor;
 
 // ── Server URL injection ────────────────────────────────────────────────────
 // On native mobile, the server URL comes from (in priority order):
