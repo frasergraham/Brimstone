@@ -1510,7 +1510,9 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   border-right: 1px solid rgba(255,255,255,0.1);
   display: flex;
   flex-direction: column;
-  z-index: 30;
+  /* Sit above #unit-stats-bar (z-index 56) so the selection bar doesn't draw
+     over the panel when it extends across the map area. */
+  z-index: 60;
   font-size: 0.8rem;
   transition: width 0.2s ease;
 }
@@ -3999,7 +4001,9 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   border-left: 1px solid rgba(255,255,255,0.1);
   display: flex;
   flex-direction: column;
-  z-index: 30;
+  /* Sit above #unit-stats-bar (z-index 56) so the selection bar doesn't draw
+     over the panel when it extends across the map area. */
+  z-index: 60;
   font-size: 0.8rem;
   transition: width 0.2s ease;
 }
