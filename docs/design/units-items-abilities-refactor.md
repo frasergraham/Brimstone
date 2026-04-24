@@ -1,6 +1,6 @@
 # Brimstone Units / Items / Abilities Refactor
 
-**Status:** Phases 1–4 landed. Phases 5–6 remain. See **Working notes** at the bottom for per-phase landing summaries.
+**Status:** Phases 1–5 landed. Phase 6 remains. See **Working notes** at the bottom for per-phase landing summaries.
 
 This is a living plan. Update it as PRs land or new blockers surface.
 
@@ -197,8 +197,23 @@ Tests: new parity suite in `tests/entities.test.js` locks effective stats for th
 
 Out of scope and deferred to Phase 6: the generic `applyPassiveHooks` dispatcher. HERBALIST / FORTIFY_DOUBLE / SCOUT remain as `hasAbility()` checks at their three call sites (`executeExplore`, `executeFortify`, `sightRange`).
 
-### Phase 5 (pending)
-Faction-innate abilities via `DaySideFaction.innateLeaderAbilities` / `NightSideFaction.innateLeaderAbilities`. Replace the `isLeaderType(actor.type) && actor.owner === 'hero'|'witch'` gates at `src/actions.js:334,345` with `actor.hasAbility('summon' | 'sound_horn')`. `SOUND_HORN` / `SUMMON` executors become `ABILITIES` entries.
+### Phase 5 (landed — shipped with Phase 4 in PR #294)
+Faction-innate leader abilities. `Faction` gained an `innateLeaderAbilities` getter (base returns `[]`); `HeroFaction` overrides to `['sound_horn']` and `WitchFaction` overrides to `['summon']`. Stubs (`RogueFaction`, `CaptainFaction`, `NecromancerFaction`, `BruteFaction`) inherit their parent's list. `Faction.createLeader()` became a thin template-method wrapper that calls a subclass `_buildLeader()` and then pushes the faction's innate abilities onto the entity; stubs renamed their `createLeader` overrides to `_buildLeader`.
+
+The leader factory functions in `src/entities.js` (`createHero` / `createWitch` / `createRogue` / `createCaptain` / `createNecromancer` / `createBrute`) also stamp the side's innate abilities directly. This keeps construction paths that bypass `Faction.createLeader()` — notably `src/game.js:209,219,621` for initial leader spawn — correct without re-routing through the faction API. The two paths are idempotent (Faction.createLeader's push dedupes via `includes`), so games get the abilities regardless of which factory entry point ran.
+
+The action-availability gates at `src/actions.js:338,350` collapsed from `faction.canSummon() && isLeaderType(actor.type) && actor.owner === 'witch'` (and the `isLeaderType + owner === 'hero'` twin for SOUND_HORN) to `actor.hasAbility('summon')` / `actor.hasAbility('sound_horn')`. The faction-level `canSummon()` / `canFortify()` capabilities remain for the FORTIFY gate (which is faction-wide, not leader-innate) and as declarative faction metadata. `executeSoundHorn`'s internal guard also migrated to the ability check.
+
+`state.swapLeaderToFaction()` in `src/game.js` now re-stamps the target faction's innate abilities onto the leader being swapped, so picking a stub faction at game start gets the right abilities even though the leader was originally built via the default side-faction path.
+
+ABILITIES registry gained `sound_horn` and `summon` entries (metadata + `kind: 'active'`). They exist so `hasAbility()` lookups and UI label consumers resolve correctly, but their `execute` functions are still the `executeSoundHorn` / `executeSummon` bodies in `src/actions.js` — a full registry-delegated dispatch (the design's "execute* becomes a one-line delegate" point) is deferred to a follow-up because the executor bodies depend on `getFaction` / `createMinion` / `_triggerSurvivorEncounter`, which would create cross-module cycles if inlined into `src/abilities.js`. Carrying the existing executor functions is a pragmatic compromise that ships the critical wins (gate collapse, innate abilities on leaders, per-faction extensibility hook) now.
+
+`SAVE_VERSION` stays at 4 — Phase 5 ships in the same PR as Phase 4, and there are no pre-Phase-5 v4 saves in the wild. The Phase 4 version bump already forces all pre-refactor saves to prune.
+
+Tests: 2022 pass (was 2017 after Phase 4). New "Phase 5 — faction-innate leader abilities" suite in `tests/ability-registry.test.js` asserts `createHero` / `createWitch` stamp the right abilities, non-leaders don't carry them, and the `Faction.innateLeaderAbilities` declaration matches. Balance: 500-game 1v1 55.4/44.6, 100-game 2v2 55/45 — both healthy.
+
+### Phase 5 follow-up (pending)
+Full registry-delegated dispatch for SOUND_HORN / SUMMON / FORTIFY / HEAL. Requires either (a) moving executor bodies into a new `src/ability-executors.js` module that can freely import `factions.js` / `entities.js` helpers, or (b) a register-at-load-time API on `src/abilities.js` so `src/actions.js` can inject the functions. Either way, the plan-action type dispatch in `server/resolver.js` becomes `ABILITIES[action.ability ?? planTypeToId(action.type)].execute(state, entity)`, and `executeFortify` / `executeHeal` / `executeSoundHorn` / `executeSummon` shrink to one-line delegates.
 
 ### Phase 6 (pending)
-Proof PR: split `SURVIVOR_ROSTER` into `src/content/survivors.js`, add one new survivor and one new weapon end-to-end without editing `actions.js`, `entities.js`, or `resolver.js`. Update `CLAUDE.md` with a "how to add content" section.
+Proof PR: split `SURVIVOR_ROSTER` into `src/content/survivors.js`, add one new survivor and one new weapon end-to-end without editing `actions.js`, `entities.js`, or `resolver.js`. Update `CLAUDE.md` with a "how to add content" section. Good candidate for bundling with the Phase 5 follow-up (full registry-delegated dispatch) since that cleans up the final "touch actions.js to add content" coupling.

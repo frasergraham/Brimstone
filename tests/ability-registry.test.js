@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 
 import { ABILITIES, SurvivorAbility } from '../src/abilities.js';
 import { GameState } from '../src/game.js';
-import { Entity, EntityType, createHero, createSurvivor } from '../src/entities.js';
+import { Entity, EntityType, createHero, createWitch, createSurvivor } from '../src/entities.js';
 import { executeUseAbility } from '../src/actions.js';
 
 // Small helper — fresh empty state with a single hero on (5,5).
@@ -138,5 +138,40 @@ describe('multi-ability support', () => {
     e.abilities = [SurvivorAbility.BRAWLER, SurvivorAbility.STURDY];
     assert.equal(e.getAttack(),  2);
     assert.equal(e.getDefense(), 2);
+  });
+});
+
+describe('Phase 5 — faction-innate leader abilities', () => {
+  test('ABILITIES registry includes sound_horn and summon as active entries', () => {
+    assert.equal(ABILITIES.sound_horn.kind, 'active');
+    assert.equal(ABILITIES.summon.kind,     'active');
+  });
+
+  test('createHero stamps sound_horn on the hero', () => {
+    const hero = createHero(0, 0);
+    assert.ok(hero.hasAbility('sound_horn'),
+      'Hero should carry sound_horn innately');
+    assert.ok(!hero.hasAbility('summon'),
+      'Hero should NOT carry summon');
+  });
+
+  test('createWitch stamps summon on the witch', () => {
+    const witch = createWitch(0, 0);
+    assert.ok(witch.hasAbility('summon'),
+      'Witch should carry summon innately');
+    assert.ok(!witch.hasAbility('sound_horn'),
+      'Witch should NOT carry sound_horn');
+  });
+
+  test('non-leaders never carry sound_horn or summon', () => {
+    const survivor = new Entity(EntityType.SURVIVOR, 'hero', 0, 0);
+    assert.equal(survivor.hasAbility('sound_horn'), false);
+    assert.equal(survivor.hasAbility('summon'),     false);
+  });
+
+  test('Faction.innateLeaderAbilities exposes the declarative list', async () => {
+    const { getFaction } = await import('../src/factions.js');
+    assert.deepEqual(getFaction('hero').innateLeaderAbilities,  ['sound_horn']);
+    assert.deepEqual(getFaction('witch').innateLeaderAbilities, ['summon']);
   });
 });

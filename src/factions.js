@@ -200,9 +200,33 @@ export class Faction {
   /** Entity types that can serve as non-leader units for this faction */
   getUnitTypes() { return []; }
 
-  /** Create the faction leader entity */
-  createLeader(_col, _row, _ownerId, _state) {
-    throw new Error('Subclass must implement createLeader');
+  /**
+   * Ability ids every leader of this faction is born with. Pushed onto
+   * `entity.abilities` by `createLeader()`. Phase 5 of the units/items/
+   * abilities refactor — day-side leaders get `'sound_horn'`, night-side
+   * leaders get `'summon'`. Stub factions inherit their parent's list;
+   * a concrete stub that grows a unique ability overrides this getter
+   * and returns the parent list plus its own additions.
+   */
+  get innateLeaderAbilities() { return []; }
+
+  /**
+   * Create the faction leader entity. Subclasses override `_buildLeader`
+   * to pick the correct EntityType factory; the base class handles the
+   * faction-innate ability push so every leader gets the right abilities
+   * regardless of which concrete factory runs.
+   */
+  createLeader(col, row, ownerId, state) {
+    const e = this._buildLeader(col, row, ownerId, state);
+    for (const id of this.innateLeaderAbilities) {
+      if (!e.abilities.includes(id)) e.abilities.push(id);
+    }
+    return e;
+  }
+
+  /** Subclass hook — return a freshly constructed leader Entity. */
+  _buildLeader(_col, _row, _ownerId, _state) {
+    throw new Error('Subclass must implement _buildLeader');
   }
 
   // ── AI Hints ──
@@ -383,7 +407,12 @@ export class HeroFaction extends Faction {
 
   // Entity Registry
   getUnitTypes() { return [EntityType.SURVIVOR]; }
-  createLeader(col, row, ownerId, state = null) { return createHero(col, row, ownerId, state); }
+  _buildLeader(col, row, ownerId, state = null) { return createHero(col, row, ownerId, state); }
+
+  // Phase 5: day-side leaders carry sound_horn innately. The action-type
+  // gate at src/actions.js no longer checks isLeaderType + owner — it
+  // reads actor.hasAbility('sound_horn').
+  get innateLeaderAbilities() { return ['sound_horn']; }
 
   // AI Names
   getAINamePool() { return AI_HERO_NAMES; }
@@ -466,7 +495,12 @@ export class WitchFaction extends Faction {
   getUnitTypes() {
     return [EntityType.ZOMBIE, EntityType.MINION, EntityType.WOOD_GOLEM, EntityType.IRON_GOLEM];
   }
-  createLeader(col, row, ownerId, state = null) { return createWitch(col, row, ownerId, state); }
+  _buildLeader(col, row, ownerId, state = null) { return createWitch(col, row, ownerId, state); }
+
+  // Phase 5: night-side leaders carry summon innately. The action-type
+  // gate at src/actions.js no longer checks isLeaderType + owner — it
+  // reads actor.hasAbility('summon').
+  get innateLeaderAbilities() { return ['summon']; }
 
   // AI Names
   getAINamePool() { return AI_WITCH_NAMES; }
@@ -486,7 +520,7 @@ export class RogueFaction extends HeroFaction {
   get name()       { return 'Rogue'; }
   get leaderType() { return EntityType.ROGUE; }
   isStub()         { return true; }
-  createLeader(col, row, ownerId, state = null) {
+  _buildLeader(col, row, ownerId, state = null) {
     return createRogue(col, row, ownerId, state);
   }
 }
@@ -496,7 +530,7 @@ export class CaptainFaction extends HeroFaction {
   get name()       { return 'Captain'; }
   get leaderType() { return EntityType.CAPTAIN; }
   isStub()         { return true; }
-  createLeader(col, row, ownerId, state = null) {
+  _buildLeader(col, row, ownerId, state = null) {
     return createCaptain(col, row, ownerId, state);
   }
 }
@@ -506,7 +540,7 @@ export class NecromancerFaction extends WitchFaction {
   get name()       { return 'Necromancer'; }
   get leaderType() { return EntityType.NECROMANCER; }
   isStub()         { return true; }
-  createLeader(col, row, ownerId, state = null) {
+  _buildLeader(col, row, ownerId, state = null) {
     return createNecromancer(col, row, ownerId, state);
   }
 }
@@ -516,7 +550,7 @@ export class BruteFaction extends WitchFaction {
   get name()       { return 'Brute'; }
   get leaderType() { return EntityType.BRUTE; }
   isStub()         { return true; }
-  createLeader(col, row, ownerId, state = null) {
+  _buildLeader(col, row, ownerId, state = null) {
     return createBrute(col, row, ownerId, state);
   }
 }

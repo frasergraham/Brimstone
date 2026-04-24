@@ -469,6 +469,14 @@ export class GameState {
     leader.defense   = fresh.defense;
     leader.agility   = fresh.agility;
     leader.factionId = fresh.factionId;
+    // Phase 5: re-stamp the faction-innate abilities (`sound_horn` on
+    // day leaders, `summon` on night leaders) from the target faction.
+    // Preserves any non-innate abilities already on the leader.
+    const innate = def.innateLeaderAbilities;
+    if (!Array.isArray(leader.abilities)) leader.abilities = [];
+    for (const id of innate) {
+      if (!leader.abilities.includes(id)) leader.abilities.push(id);
+    }
     // Clear the constructor-assigned name ('Ishmael Charger' for the day
     // side default, 'Witch' for night) so Entity.displayName falls through
     // to the new type's default (e.g. 'Mercy Sloane' for ROGUE).

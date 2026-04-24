@@ -129,6 +129,29 @@ export const ABILITIES = Object.freeze({
     label: 'Scout',
     description: 'Reveals night-side units within 3 hexes',
   },
+
+  // ── Faction-innate leader abilities (Phase 5) ────────────────────────
+  // Pushed onto leaders by `Faction.createLeader()` via
+  // `innateLeaderAbilities`; the action-availability gates in
+  // src/actions.js check `actor.hasAbility(id)` instead of the legacy
+  // `isLeaderType + owner` pair. Execute bodies still live in
+  // src/actions.js (`executeSoundHorn`, `executeSummon`) — a full
+  // registry-delegated dispatch is deferred to a follow-up PR because
+  // the executor bodies depend on getFaction / createMinion / the
+  // _triggerSurvivorEncounter helper, which would create cross-module
+  // cycles if inlined here.
+  sound_horn: {
+    id: 'sound_horn',
+    kind: 'active',
+    label: 'Sound Horn',
+    description: 'Action (1 food): reveal your leader and discover survivors within 4 hexes',
+  },
+  summon: {
+    id: 'summon',
+    kind: 'active',
+    label: 'Summon',
+    description: 'Action: spend 2 resources to summon a Minion, Wood Golem, or Iron Golem',
+  },
 });
 
 // Derived enum for backwards compatibility with the `SurvivorAbility`
