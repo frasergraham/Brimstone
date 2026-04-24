@@ -387,6 +387,10 @@ export class UIController {
       if (panel && this._edgeSwipe.collapsed && dx < -threshold) {
         // Swiped left from right edge — open panel
         panel.classList.remove('collapsed');
+        // On mobile, close chronicle so the two panels don't overlap.
+        if (this._chronicleOpen && this._isMobileViewport()) {
+          this._setChronicleOpen(false);
+        }
         this._syncPlanInset();
         this._renderPlanPanel();
         this._renderEndTurnBtn();
@@ -1295,6 +1299,13 @@ export class UIController {
     this._renderInventory();
   }
 
+  /** True when the viewport matches the mobile breakpoint used elsewhere in styles.css. */
+  _isMobileViewport() {
+    return typeof window !== 'undefined'
+      && typeof window.matchMedia === 'function'
+      && window.matchMedia('(max-width: 700px)').matches;
+  }
+
   /** Toggle the plan panel between expanded and collapsed. */
   _togglePlanPanel() {
     const panel = this._el('plan-panel');
@@ -1305,6 +1316,10 @@ export class UIController {
     if (toggleBtn) toggleBtn.textContent = isCollapsed ? '▶' : '◀';
     const tabToggle = this._el('plan-tab-toggle');
     if (tabToggle) tabToggle.textContent = isCollapsed ? '+' : '\u2212';
+    // On mobile, plan and chronicle are mutually exclusive \u2014 close chronicle when opening plan.
+    if (!isCollapsed && this._chronicleOpen && this._isMobileViewport()) {
+      this._setChronicleOpen(false);
+    }
     this._syncPlanInset();
     this._renderEndTurnBtn();
   }
@@ -2401,7 +2416,7 @@ export class UIController {
       ? `Round ${state.round} of ${cyclePhases.length}`
       : `Day ${cycle} · Round ${roundInCycle + 1}`;
 
-    // Semi-circle bump above the score bar: shows only the current phase image + "Day N · Round M"
+    // Pill bump above the score bar: "[phase icon] Night — Day 1 · Round 2"
     const activeStep = CYCLE_STEPS[roundInCycle];
     const bumpEl   = this._el('cycle-bump');
     const iconEl   = this._el('cycle-bump-icon');
@@ -2411,11 +2426,13 @@ export class UIController {
       bumpEl.title = activeStep.desc;
     }
     if (iconEl && activeStep) {
-      const imgSrc = this.renderer?.getPortraitDataURL?.(activeStep.sprite, 128);
+      const imgSrc = this.renderer?.getPortraitDataURL?.(activeStep.sprite, 64);
       if (imgSrc) iconEl.src = imgSrc;
       iconEl.alt = activeStep.label;
     }
-    if (labelEl) labelEl.textContent = roundLabel;
+    if (labelEl && activeStep) {
+      labelEl.textContent = `${activeStep.label} — ${roundLabel}`;
+    }
 
     // During planning phase, show planning info
     if (this._planMode) {
@@ -3757,6 +3774,19 @@ export class UIController {
     const toggle = this._el('chronicle-tab-toggle');
     if (toggle) toggle.textContent = this._chronicleOpen ? '−' : '+';
     if (this._chronicleOpen) this._renderSidebarLog();
+    // On mobile, plan and chronicle are mutually exclusive — close the plan panel when opening chronicle.
+    if (this._chronicleOpen && this._isMobileViewport()) {
+      const planPanel = this._el('plan-panel');
+      if (planPanel && !planPanel.classList.contains('collapsed')) {
+        planPanel.classList.add('collapsed');
+        const planTabToggle = this._el('plan-tab-toggle');
+        if (planTabToggle) planTabToggle.textContent = '+';
+        const planToggleBtn = this._el('plan-toggle-btn');
+        if (planToggleBtn) planToggleBtn.textContent = '▶';
+        this._syncPlanInset();
+        this._renderEndTurnBtn();
+      }
+    }
     // Update renderer inset so framing avoids the sidebar area when open
     if (this.renderer) this.renderer.insetLeft = this._chronicleOpen ? 240 : 0;
     this.renderer?.resize();
