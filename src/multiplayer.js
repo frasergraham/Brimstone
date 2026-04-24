@@ -7,6 +7,7 @@
  */
 import { setMapDimensions } from './hex.js';
 import { registerPushNotifications, unregisterPushToken } from './platform.js';
+import { defaultDisplayName } from './entities.js';
 
 // ── Reconnect constants ──────────────────────────────────────────────────────
 
@@ -16,21 +17,6 @@ const RECONNECT_HARD_TIMEOUT  = 30_000; // absolute wall-clock limit for all rec
 
 // ── MirrorEntity ─────────────────────────────────────────────────────────────
 
-const _DISPLAY_NAMES = {
-  paladin:     'Ishmael Charger',
-  hero:        'Ishmael Charger',  // legacy alias of paladin
-  rogue:       'Mercy Sloane',
-  captain:     'Captain Eli Ward',
-  witch:       'The Witch',
-  necromancer: 'The Necromancer',
-  brute:       'The Brute',
-  survivor:    'Survivor',
-  zombie:      'Zombie',
-  minion:      'Minion',
-  wood_golem:  'Wood Golem',
-  iron_golem:  'Iron Golem',
-};
-
 class MirrorEntity {
   static from(data) {
     const e = Object.assign(new MirrorEntity(), data);
@@ -38,7 +24,9 @@ class MirrorEntity {
   }
 
   get alive()       { return this.hp > 0; }
-  get displayName() { return this.name || _DISPLAY_NAMES[this.type] || this.type; }
+  // Mirror the server-side Entity.displayName semantics so client labels
+  // never drift from what the server/renderer show.
+  get displayName() { return this.name ?? defaultDisplayName(this.type); }
 
   // Stub mutators — server owns all mutations
   takeDamage(amount) { this.hp = Math.max(0, this.hp - amount); return !this.alive; }

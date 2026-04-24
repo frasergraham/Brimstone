@@ -130,7 +130,7 @@ export function assessHeroBoard(sim) {
   }
 
   const witchMinions = sim.entities.filter(e =>
-    e.alive && e.owner === 'witch' && e.type !== EntityType.WITCH && _heroCanSee(e)
+    e.alive && e.owner === 'witch' && !isLeaderType(e.type) && _heroCanSee(e)
   );
   const witchMinionCount = witchMinions.length;
   const heroArmyStrength = (hero ? hero.attack + hero.hp : 0) +

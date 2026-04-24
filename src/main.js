@@ -24,7 +24,7 @@ import { PlanActionType, groupPlanByEntity } from './planner.js';
 import { hexDistance, getNeighbors, hexKey } from './hex.js';
 import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD } from './tiles.js';
 import { sightRange } from './actions.js';
-import { getFaction, allFactions, getFactionsForSide } from './factions.js';
+import { getFaction, findFaction, allFactions, getFactionsForSide } from './factions.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { playback, resetPlayback, replayFullGame, playbackDelay, swapState, patchAlive } from './playback.js';
@@ -5871,13 +5871,11 @@ function _renderLobby(lobby) {
  * dropdown via _buildLobbyFactionPicker().
  */
 function _lobbyFactionTag(slot, isMe) {
-  const factionId = slot.factionId ?? slot.faction;
-  const def = (() => { try { return getFaction(factionId); } catch { return null; } })();
-  if (!def) return '';
-  // For the current player we render the <select> instead; the tag is only
-  // shown on other players' rows so the viewer can see their teammates'
-  // picks.
+  // The current player's row renders the <select> picker instead of a tag —
+  // skip the registry lookup entirely for the common re-render case.
   if (isMe) return '';
+  const def = findFaction(slot.factionId ?? slot.faction);
+  if (!def) return '';
   const stub = def.isStub() ? ' <span class="lobby-slot-stub">stub</span>' : '';
   return ` <span class="lobby-slot-faction">${_esc(def.name)}${stub}</span>`;
 }

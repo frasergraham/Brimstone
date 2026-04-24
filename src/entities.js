@@ -363,20 +363,7 @@ export class Entity {
   get alive() { return this.hp > 0; }
 
   get displayName() {
-    if (this.name) return this.name;
-    switch (this.type) {
-      case EntityType.PALADIN:     return 'Ishmael Charger';
-      case EntityType.ROGUE:       return 'Mercy Sloane';
-      case EntityType.CAPTAIN:     return 'Captain Eli Ward';
-      case EntityType.WITCH:       return 'The Witch';
-      case EntityType.NECROMANCER: return 'The Necromancer';
-      case EntityType.BRUTE:       return 'The Brute';
-      case EntityType.SURVIVOR:    return 'Survivor';
-      case EntityType.ZOMBIE:      return 'Zombie';
-      case EntityType.MINION:      return 'Minion';
-      case EntityType.WOOD_GOLEM:  return 'Wood Golem';
-      case EntityType.IRON_GOLEM:  return 'Iron Golem';
-    }
+    return this.name ?? defaultDisplayName(this.type);
   }
 
   equipWeapon(weaponType) {
@@ -591,6 +578,29 @@ const _LEADER_TYPES = new Set([
 /** True if `type` is one of the registered faction leader entity types. */
 export function isLeaderType(type) {
   return _LEADER_TYPES.has(type);
+}
+
+// Default display name per entity type. Used by Entity.displayName on the
+// server and re-used by MirrorEntity.displayName on the client so the two
+// never drift. Survivors override `.name` at creation time, so the lookup
+// is only hit for unnamed leaders / summoned units / neutrals.
+const _DEFAULT_DISPLAY_NAMES = {
+  [EntityType.PALADIN]:     'Ishmael Charger',
+  [EntityType.ROGUE]:       'Mercy Sloane',
+  [EntityType.CAPTAIN]:     'Captain Eli Ward',
+  [EntityType.WITCH]:       'The Witch',
+  [EntityType.NECROMANCER]: 'The Necromancer',
+  [EntityType.BRUTE]:       'The Brute',
+  [EntityType.SURVIVOR]:    'Survivor',
+  [EntityType.ZOMBIE]:      'Zombie',
+  [EntityType.MINION]:      'Minion',
+  [EntityType.WOOD_GOLEM]:  'Wood Golem',
+  [EntityType.IRON_GOLEM]:  'Iron Golem',
+};
+
+/** Default display name for an entity type (falls back to the raw type id). */
+export function defaultDisplayName(type) {
+  return _DEFAULT_DISPLAY_NAMES[type] ?? type;
 }
 
 export function createSurvivor(col, row, ownerId = null, state = null) {

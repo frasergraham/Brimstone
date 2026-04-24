@@ -1387,18 +1387,6 @@ function attachAI(room, faction, forPlayerId = null, personality = null) {
  * Calls state.addPlayer() to create a new leader entity at a spawn point
  * near the faction's existing leader (no synthetic-patching needed).
  */
-/**
- * Wrapper around `state.swapLeaderToFaction` for lobby seats. The
- * GameState constructor pre-populates the first hero/witch leader with
- * default stats; when the corresponding seat picked a stub faction the
- * leader is mutated in place to match the stub's stats. Side is derived
- * from `seat.faction` ('hero' → day, 'witch' → night).
- */
-function _swapStubLeader(room, faction, factionId) {
-  if (!factionId || factionId === faction) return;
-  room.state.swapLeaderToFaction(sideOf(faction), factionId);
-}
-
 function _addExtraAISeat(room, faction, personality = null, factionId = null) {
   const pid  = `ai-${faction}-${randomUUID().slice(0, 8)}`;
   const name = pickAIName(faction, room.usedAINames);
@@ -1919,7 +1907,9 @@ export function startGame(playerId, roomId) {
       if ((slot.faction === 'hero' && heroCount === 0) ||
           (slot.faction === 'witch' && witchCount === 0)) {
         _addSeat(room, slot.playerId, slot._ws, slot.name, slot.faction, false, null, slot.factionId);
-        _swapStubLeader(room, slot.faction, slot.factionId);
+        // Re-stat the constructor-pre-populated default leader if this seat
+        // picked a stub faction. No-op when factionId matches side default.
+        room.state.swapLeaderToFaction(sideOf(slot.faction), slot.factionId);
       } else {
         _addExtraHumanSeat(room, slot.playerId, slot._ws, slot.name, slot.faction, slot.factionId);
       }
@@ -1928,7 +1918,7 @@ export function startGame(playerId, roomId) {
       if ((slot.faction === 'hero' && heroCount === 0) ||
           (slot.faction === 'witch' && witchCount === 0)) {
         attachAI(room, slot.faction, null, slot.personality);
-        _swapStubLeader(room, slot.faction, slot.factionId);
+        room.state.swapLeaderToFaction(sideOf(slot.faction), slot.factionId);
       } else {
         _addExtraAISeat(room, slot.faction, slot.personality, slot.factionId);
       }

@@ -23,7 +23,7 @@ import { WitchAIEngine }        from '../src/ai-engine.js';
 import { resolvePlansMP, ResEventType } from '../server/resolver.js';
 import { PlanActionType }         from '../src/planner.js';
 import { generateMultipleStarts, generateBattleStarts, MAP_SIZES } from '../src/map.js';
-import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS, EntityType } from '../src/entities.js';
+import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS, EntityType, isLeaderType } from '../src/entities.js';
 import { getFaction, getFactionsForSide } from '../src/factions.js';
 import { serializeState }         from '../server/state-sync.js';
 import { VERSION }                from '../src/version.js';
@@ -208,27 +208,19 @@ function buildGameState() {
 
 /** Apply a stub faction's stats to every leader on a side. */
 function _applyStubToSide(state, sideId, factionId) {
-  const def = getFaction(factionId);
-  // The side singleton hero/witch first — same path the lobby and offline
-  // init() use.
+  // Side singleton hero/witch first (targetEntity omitted ⇒ defaults to it).
   state.swapLeaderToFaction(sideId, factionId);
 
-  // Then mutate any extra-seat leaders on the same side.
+  // Then every extra-seat leader on the same side. swapLeaderToFaction
+  // guards against non-stub/unknown factions and no-ops when the target
+  // is already the stub type, so we can pass all same-side leaders.
   const sideOwner = sideId === 'day' ? 'hero' : 'witch';
   const sidePrimaryType = getFactionsForSide(sideId)[0].leaderType;
   for (const e of state.entities) {
     if (!e.alive || e.owner !== sideOwner) continue;
-    if (e.type !== sidePrimaryType) continue; // already swapped or not a leader
+    if (e.type !== sidePrimaryType) continue; // already swapped / not a default leader
     if (e === state.hero || e === state.witch) continue; // singleton already handled
-    const fresh = def.createLeader(e.col, e.row, e.ownerId, state);
-    e.type      = fresh.type;
-    e.maxHp     = fresh.maxHp;
-    e.hp        = fresh.maxHp;
-    e.attack    = fresh.attack;
-    e.defense   = fresh.defense;
-    e.agility   = fresh.agility;
-    e.factionId = fresh.factionId;
-    e.name      = null; // let displayName fall through to the new type default
+    state.swapLeaderToFaction(sideId, factionId, e);
   }
 }
 
@@ -266,8 +258,9 @@ function playRound(state, playerAIs, trainingExamples = null) {
 
     const ai  = playerAIs.get(p.id);
     const ctx = p.faction === 'hero' ? heroCtx : witchCtx;
-    const leader = state.entities.find(e => e.alive && e.ownerId === p.id &&
-      (e.type === EntityType.PALADIN || e.type === EntityType.WITCH));
+    const leader = state.entities.find(e =>
+      e.alive && e.ownerId === p.id && isLeaderType(e.type)
+    );
     const plan = ai.generatePlan(IS_MP ? ctx : undefined);
     updateAllyContext(ctx, plan, leader);
     state.submitPlayerPlan(p.id, plan);

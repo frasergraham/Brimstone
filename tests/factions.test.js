@@ -415,30 +415,42 @@ describe('Entity registry', () => {
 // ── Kill / Summon Tracking ─────────────────────────────────────────────────
 
 describe('Kill and summon tracking', () => {
-  test('Hero trackKill increments heroKills', () => {
-    const state = { heroKills: 0, witchKills: 0 };
+  // Faction.trackKill / trackSummon now delegate to state-level mutators;
+  // provide minimal spies so the routing can be verified without pulling
+  // in a full GameState.
+  function spyState() {
+    const calls = { killSides: [], summonSides: [] };
+    return {
+      calls,
+      recordKillForSide(side)   { calls.killSides.push(side); },
+      recordSummonForSide(side) { calls.summonSides.push(side); },
+    };
+  }
+
+  test('Hero (day) trackKill routes to recordKillForSide("day")', () => {
+    const state = spyState();
     getFaction('hero').trackKill(state);
-    assert.equal(state.heroKills, 1);
-    assert.equal(state.witchKills, 0);
+    assert.deepEqual(state.calls.killSides, ['day']);
   });
 
-  test('Witch trackKill increments witchKills', () => {
-    const state = { heroKills: 0, witchKills: 0 };
+  test('Witch (night) trackKill routes to recordKillForSide("night")', () => {
+    const state = spyState();
     getFaction('witch').trackKill(state);
-    assert.equal(state.heroKills, 0);
-    assert.equal(state.witchKills, 1);
+    assert.deepEqual(state.calls.killSides, ['night']);
   });
 
-  test('Hero trackSummon is a no-op', () => {
-    const state = { witchSummonCount: 0 };
+  test('Hero (day) trackSummon still calls recordSummonForSide("day")', () => {
+    // Day has no summon mechanic today, but the routing must still fire
+    // so a future day-side summoner doesn't need to edit Faction again.
+    const state = spyState();
     getFaction('hero').trackSummon(state);
-    assert.equal(state.witchSummonCount, 0);
+    assert.deepEqual(state.calls.summonSides, ['day']);
   });
 
-  test('Witch trackSummon increments witchSummonCount', () => {
-    const state = { witchSummonCount: 0 };
+  test('Witch (night) trackSummon routes to recordSummonForSide("night")', () => {
+    const state = spyState();
     getFaction('witch').trackSummon(state);
-    assert.equal(state.witchSummonCount, 1);
+    assert.deepEqual(state.calls.summonSides, ['night']);
   });
 });
 

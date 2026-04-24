@@ -98,22 +98,18 @@ export class Faction {
   // ── Kill / Summon Tracking ──
 
   /**
-   * Increment the kill counter for this faction's side. Today the storage
-   * is still keyed `hero`/`witch`; the side accessor on GameState bridges.
+   * Increment the kill counter for this faction's side. Delegates to the
+   * side-keyed mutator on GameState so storage-field renames (PR 4b) can
+   * land without touching the Faction hierarchy.
    */
-  trackKill(state) {
-    if (this.side === 'day')   state.heroKills++;
-    if (this.side === 'night') state.witchKills++;
-  }
+  trackKill(state) { state.recordKillForSide(this.side); }
 
   /**
-   * Increment the summon counter for this faction's side. Day side has
-   * no summon mechanic today (counter stays at 0); night side increments
-   * the legacy `witchSummonCount` field.
+   * Increment the summon counter for this faction's side. Day-side calls
+   * today are a no-op (no day-side summon mechanic), but routing through
+   * the GameState mutator keeps the door open for future day factions.
    */
-  trackSummon(state) {
-    if (this.side === 'night') state.witchSummonCount++;
-  }
+  trackSummon(state) { state.recordSummonForSide(this.side); }
 
   // ── End-of-Round Effects ──
 
@@ -557,6 +553,16 @@ export function getFaction(id) {
   const f = FACTIONS[id];
   if (!f) throw new Error(`Unknown faction: ${id}`);
   return f;
+}
+
+/**
+ * Non-throwing variant of `getFaction`. Returns `null` when the id is
+ * unknown (or falsy). Callers that want to gracefully handle bad data
+ * from the wire should prefer this over wrapping `getFaction` in a
+ * try/catch.
+ */
+export function findFaction(id) {
+  return FACTIONS[id] ?? null;
 }
 
 /** Return all registered factions. */

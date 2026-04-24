@@ -439,24 +439,26 @@ export class GameState {
   }
 
   /**
-   * Swap the constructor-pre-populated default leader on the given side
-   * (`'day'` → `state.hero`, `'night'` → `state.witch`) for one matching
-   * the supplied stub-faction id. No-op when factionId equals the side's
-   * default ('hero' or 'witch'), or when the supplied faction is not a
-   * registered stub.
+   * Swap a leader entity in place to match the supplied stub-faction id.
+   * By default targets the constructor-pre-populated side singleton
+   * (`'day'` → `state.hero`, `'night'` → `state.witch`); callers may pass
+   * `targetEntity` to re-stat an extra-seat leader on the same side (the
+   * headless runner uses this).
    *
-   * Mutates the live leader entity in place — id, position, ownerId, color
-   * are preserved so downstream references (state.hero, plan-action target
+   * No-op when `factionId` equals the side's default ('hero' or 'witch'),
+   * when it is not a registered stub for the side, or when no target
+   * leader is available.
+   *
+   * Mutates the live leader in place — id, position, ownerId, color are
+   * preserved so downstream references (state.hero, plan-action target
    * lookups, save/replay round entity ids) continue to resolve.
-   *
-   * Used by the offline init() flow and the online lobby's startGame.
    */
-  swapLeaderToFaction(sideId, factionId) {
+  swapLeaderToFaction(sideId, factionId, targetEntity = null) {
     if (!factionId) return;
     const def = getFactionsForSide(sideId).find(f => f.id === factionId);
     if (!def || !def.isStub()) return;
 
-    const leader = sideId === 'day' ? this.hero : this.witch;
+    const leader = targetEntity ?? (sideId === 'day' ? this.hero : this.witch);
     if (!leader) return;
 
     const fresh = def.createLeader(leader.col, leader.row, leader.ownerId, this);
@@ -469,8 +471,7 @@ export class GameState {
     leader.factionId = fresh.factionId;
     // Clear the constructor-assigned name ('Ishmael Charger' for the day
     // side default, 'Witch' for night) so Entity.displayName falls through
-    // to the new type's default (e.g. 'Mercy Sloane' for ROGUE). Without
-    // this the player picks Rogue but sees "Ishmael Charger".
+    // to the new type's default (e.g. 'Mercy Sloane' for ROGUE).
     leader.name = null;
   }
 
@@ -485,8 +486,20 @@ export class GameState {
   /** Cumulative kills credited to the given side. */
   killsForSide(sideId)       { return sideId === 'day' ? this.heroKills : this.witchKills; }
 
+  /** Increment the kill counter for the given side by `n` (default 1). */
+  recordKillForSide(sideId, n = 1) {
+    if (sideId === 'day')   this.heroKills  += n;
+    if (sideId === 'night') this.witchKills += n;
+  }
+
   /** Cumulative summons performed by the given side. (Day side: 0 today.) */
   summonsForSide(sideId)     { return sideId === 'night' ? this.witchSummonCount : 0; }
+
+  /** Increment the summon counter for the given side by `n` (default 1). */
+  recordSummonForSide(sideId, n = 1) {
+    if (sideId === 'night') this.witchSummonCount += n;
+    // Day side has no summon mechanic today — counter is not tracked.
+  }
 
   /** Cumulative node-scoring points held by the given side. */
   nodeScoreForSide(sideId)   { return this.nodeScore[this._storageKeyForSide(sideId)]; }
@@ -899,7 +912,7 @@ export class GameState {
   scatterPlayerUnits(ownerId) {
     const isBattle = this.gameMode === GameMode.BATTLE;
     const toScatter = this.entities.filter(
-      e => e.ownerId === ownerId && e.type !== EntityType.HERO && e.type !== EntityType.WITCH
+      e => e.ownerId === ownerId && !isLeaderType(e.type)
     );
     for (const unit of toScatter) {
       if (isBattle) {
@@ -927,7 +940,10 @@ export class GameState {
     }
     const player = this.players.find(p => p.id === ownerId);
     if (player) {
-      const label = player.name || (player.faction === 'hero' ? 'The Hero' : 'The Witch');
+      // Prefer the live leader's displayName (picks up stub names like
+      // "Mercy Sloane" automatically), fall back to the side default.
+      const leader = this.entities.find(e => e.id === player.leaderId);
+      const label = player.name ?? leader?.displayName ?? this.factionName(player.faction);
       if (toScatter.length > 0) {
         this.addLog(`💨 ${label}'s companions scatter into the wilderness…`);
       }
