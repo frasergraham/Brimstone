@@ -2295,13 +2295,16 @@ export class UIController {
         ? `<img class="usb-terrain-hex" src="${tileSrc}" alt="">`
         : `<span class="usb-icon" style="background:#3a4a3a;font-size:1.1rem">${icon}</span>`;
       bar.style.display = 'flex';
+      bar.classList.remove('usb-expanded');
       bar.innerHTML = `
-        ${tileImgHtml}
-        <span class="usb-tile-info">
-          <span class="usb-tile-name">${label}</span>
-          <span class="usb-tile-details">${terrainBadge}</span>
-        </span>
-        <button class="usb-deselect-btn" title="Deselect">✕</button>
+        <div class="usb-main">
+          ${tileImgHtml}
+          <span class="usb-tile-info">
+            <span class="usb-tile-name">${label}</span>
+            <span class="usb-tile-details">${terrainBadge}</span>
+          </span>
+          <button class="usb-deselect-btn" title="Deselect">✕</button>
+        </div>
       `;
       bar.querySelector('.usb-deselect-btn').addEventListener('click', () => {
         this._clearSelection();
@@ -2354,15 +2357,15 @@ export class UIController {
       ? `<button class="usb-cycle-btn usb-cycle-next" title="Next unit">\u203A</button>`
       : '';
 
-    // Terrain row for the entity's current hex
+    // Terrain box for the entity's current hex — stacked full-width below the unit row
     const entCol = this._planMode ? (this._getProjectedPos(entity.id)?.col ?? entity.col) : entity.col;
     const entRow = this._planMode ? (this._getProjectedPos(entity.id)?.row ?? entity.row) : entity.row;
     const tile = this.state.tiles.get(hexKey(entCol, entRow));
-    let terrainRowHtml = '';
+    let terrainBoxHtml = '';
     if (tile) {
       const tileSrc = this.renderer.getTileDataURL(tile, entCol, entRow, 56);
       const tileImgHtml = tileSrc ? `<img class="usb-terrain-hex" src="${tileSrc}" alt="">` : '';
-      terrainRowHtml = `<span class="usb-terrain-row">${tileImgHtml}${_buildTerrainBadge(tile)}</span>`;
+      terrainBoxHtml = `<div class="usb-terrain-box">${tileImgHtml}${_buildTerrainBadge(tile)}</div>`;
     }
 
     // Expanded block: ATK, DEF, and any ability description — toggled by the (i) glyph
@@ -2381,26 +2384,28 @@ export class UIController {
     bar.style.display = 'flex';
     bar.classList.toggle('usb-expanded', expanded);
     bar.innerHTML = `
-      ${cyclePrevHtml}
-      ${portraitHtml}
-      ${cycleNextHtml}
-      <span class="usb-info">
-        <span class="usb-name" style="color:${color}">${entity.displayName}</span>
-        <span class="usb-details">
-          <span class="usb-hp-wrap">
-            <span class="usb-stat">HP</span>
-            <span class="usb-hp-track">
-              <span class="usb-hp-fill" style="width:${hpPct}%;background:linear-gradient(to bottom,rgba(255,255,255,0.28) 0%,rgba(255,255,255,0) 55%),${hpColor}"></span>
+      <div class="usb-main">
+        ${cyclePrevHtml}
+        ${portraitHtml}
+        ${cycleNextHtml}
+        <span class="usb-info">
+          <span class="usb-name" style="color:${color}">${entity.displayName}</span>
+          <span class="usb-details">
+            <span class="usb-hp-wrap">
+              <span class="usb-stat">HP</span>
+              <span class="usb-hp-track">
+                <span class="usb-hp-fill" style="width:${hpPct}%;background:linear-gradient(to bottom,rgba(255,255,255,0.28) 0%,rgba(255,255,255,0) 55%),${hpColor}"></span>
+              </span>
+              <span class="usb-stat-val">${entity.hp}/${entity.maxHp}</span>
             </span>
-            <span class="usb-stat-val">${entity.hp}/${entity.maxHp}</span>
+            ${weaponLabel ? `<span class="usb-weapon">⚔ ${weaponLabel}</span>` : ''}
+            <button class="usb-info-btn ${expanded ? 'usb-info-btn-active' : ''}" title="${expanded ? 'Hide stats' : 'Show stats & abilities'}">i</button>
           </span>
-          ${weaponLabel ? `<span class="usb-weapon">⚔ ${weaponLabel}</span>` : ''}
-          <button class="usb-info-btn ${expanded ? 'usb-info-btn-active' : ''}" title="${expanded ? 'Hide stats' : 'Show stats & abilities'}">i</button>
+          ${expandedBlockHtml}
         </span>
-        ${expandedBlockHtml}
-        ${terrainRowHtml}
-      </span>
-      <button class="usb-deselect-btn" title="Deselect unit">✕</button>
+        <button class="usb-deselect-btn" title="Deselect unit">✕</button>
+      </div>
+      ${terrainBoxHtml}
     `;
     bar.querySelector('.usb-deselect-btn').addEventListener('click', () => {
       this._clearSelection();
