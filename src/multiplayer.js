@@ -7,7 +7,7 @@
  */
 import { setMapDimensions } from './hex.js';
 import { registerPushNotifications, unregisterPushToken } from './platform.js';
-import { defaultDisplayName } from './entities.js';
+import { Entity } from './entities.js';
 
 // ── Reconnect constants ──────────────────────────────────────────────────────
 
@@ -16,23 +16,24 @@ const RECONNECT_MAX_TRIES     = 3;
 const RECONNECT_HARD_TIMEOUT  = 30_000; // absolute wall-clock limit for all reconnect attempts
 
 // ── MirrorEntity ─────────────────────────────────────────────────────────────
+//
+// Plain-object snapshots received over the wire are re-parented to
+// Entity.prototype so the renderer/UI can call getAttack(), getDefense(),
+// hasAbility(), hasTag(), abilities, getMoveRange(), etc. on every frame.
+// Without this, fog-of-war rendering (renderer._buildFogVisibleHexes) and the
+// unit-stats bar (ui._renderUnitStatsBar) throw on the first draw and the
+// canvas stays blank — "online games won't load into the map".
+//
+// This mirrors the `patchAlive` contract used by playback/resolution animation
+// (src/playback.js). The server owns all mutations; client-side code that
+// happens to call Entity mutators (e.g. animation helpers during resolution
+// playback) still only touches the local snapshot — the next server state
+// update overwrites any drift.
 
-class MirrorEntity {
-  static from(data) {
-    const e = Object.assign(new MirrorEntity(), data);
-    return e;
-  }
-
-  get alive()       { return this.hp > 0; }
-  // Mirror the server-side Entity.displayName semantics so client labels
-  // never drift from what the server/renderer show.
-  get displayName() { return this.name ?? defaultDisplayName(this.type); }
-
-  // Stub mutators — server owns all mutations
-  takeDamage(amount) { this.hp = Math.max(0, this.hp - amount); return !this.alive; }
-  heal(amount)       { this.hp = Math.min(this.maxHp, this.hp + amount); }
-  resetTurn()        { this.actedThisTurn = false; this.attackBonus = 0; this.defenseBonus = 0; }
-  equipWeapon()      { /* server handles */ }
+function hydrateMirrorEntity(data) {
+  if (data.alive === undefined) data.alive = (data.hp ?? 0) > 0;
+  Object.setPrototypeOf(data, Entity.prototype);
+  return data;
 }
 
 // ── MirrorState ───────────────────────────────────────────────────────────────
@@ -84,8 +85,9 @@ export class MirrorState {
       s.tiles.set(t.key, t);
     }
 
-    // Reconstruct entities with MirrorEntity methods
-    s.entities = snap.entities.map(e => MirrorEntity.from(e));
+    // Reconstruct entities — re-parent snapshot objects to Entity.prototype
+    // so renderer/UI methods (getAttack, hasAbility, hasTag, …) resolve.
+    s.entities = snap.entities.map(e => hydrateMirrorEntity(e));
     s.hero  = s.entities.find(e => e.id === snap.heroId)  || null;
     s.witch = s.entities.find(e => e.id === snap.witchId) || null;
 
