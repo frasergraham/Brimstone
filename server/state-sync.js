@@ -47,7 +47,7 @@ export function serializeState(state) {
     name:          e.name          ?? null,
     title:         e.title         ?? null,
     bio:           e.bio           ?? null,
-    ability:       e.ability       ?? null,
+    abilities:     Array.isArray(e.abilities) ? [...e.abilities] : [],
     abilityLabel:  e.abilityLabel  ?? null,
     actedThisTurn: e.actedThisTurn ?? false,
     defendCount:   e.defendCount   ?? 0,

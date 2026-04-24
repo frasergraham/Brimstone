@@ -17,7 +17,7 @@ export function snapshotSurvivor(entity) {
     name:         entity.name,
     title:        entity.title,
     bio:          entity.bio,
-    ability:      entity.ability,
+    abilities:    Array.isArray(entity.abilities) ? [...entity.abilities] : [],
     abilityLabel: entity.abilityLabel,
     color:        entity.color,
     hp:           entity.hp,

@@ -77,7 +77,7 @@ test('hasAbility works on re-parented snapshots', () => {
   const snap = [{
     id: 'scout', type: EntityType.SURVIVOR, owner: 'hero',
     col: 0, row: 0, hp: 4, maxHp: 4, attack: 2, defense: 2,
-    ability: SurvivorAbility.SCOUT, items: {},
+    abilities: [SurvivorAbility.SCOUT], items: {},
   }];
   patchAlive(snap);
   assert.equal(snap[0].hasAbility(SurvivorAbility.SCOUT), true);

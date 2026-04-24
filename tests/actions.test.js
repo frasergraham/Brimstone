@@ -387,7 +387,7 @@ describe('executeExplore', () => {
     const state = freshState();
     // Create a proper herbalist entity
     const herbalist = new Entity(EntityType.SURVIVOR, 'hero', state.hero.col, state.hero.row);
-    herbalist.ability = SurvivorAbility.HERBALIST;
+    herbalist.abilities = [SurvivorAbility.HERBALIST];
     herbalist.items = {};
 
     const t = state.tiles.get(hexKey(herbalist.col, herbalist.row));
@@ -403,7 +403,7 @@ describe('executeExplore', () => {
   test('non-HERBALIST survivor does NOT receive a bonus herb', () => {
     const state = freshState();
     const survivor = new Entity(EntityType.SURVIVOR, 'hero', state.hero.col, state.hero.row);
-    survivor.ability = SurvivorAbility.BRAWLER; // not a herbalist
+    survivor.abilities = [SurvivorAbility.BRAWLER]; // not a herbalist
     survivor.items = {};
 
     const t = state.tiles.get(hexKey(survivor.col, survivor.row));
@@ -1011,7 +1011,7 @@ describe('executeFortify', () => {
     const state = freshState();
     // Create an innkeeper (FORTIFY_DOUBLE) entity
     const innkeeper = new Entity(EntityType.SURVIVOR, 'hero', state.hero.col, state.hero.row);
-    innkeeper.ability = SurvivorAbility.FORTIFY_DOUBLE;
+    innkeeper.abilities = [SurvivorAbility.FORTIFY_DOUBLE];
     innkeeper.items = {};
     state.entities.push(innkeeper);
 
@@ -1532,7 +1532,7 @@ describe('executeUseAbility — HEAL', () => {
     const state = freshState();
     const hero = state.hero;
     const healer = new Entity(EntityType.SURVIVOR, 'hero', hero.col, hero.row);
-    healer.ability = SurvivorAbility.HEAL;
+    healer.abilities = [SurvivorAbility.HEAL];
     healer.items = {};
     state.entities.push(healer);
     hero.takeDamage(5);
@@ -1547,7 +1547,7 @@ describe('executeUseAbility — HEAL', () => {
   test('HEAL fails if hero not on same hex', () => {
     const state = freshState();
     const healer = new Entity(EntityType.SURVIVOR, 'hero', state.hero.col + 2, state.hero.row);
-    healer.ability = SurvivorAbility.HEAL;
+    healer.abilities = [SurvivorAbility.HEAL];
     healer.items = {};
     state.entities.push(healer);
     state.hero.takeDamage(5);
@@ -1561,7 +1561,7 @@ describe('executeUseAbility — HEAL', () => {
     const hero = state.hero;
     assert.equal(hero.hp, hero.maxHp);
     const healer = new Entity(EntityType.SURVIVOR, 'hero', hero.col, hero.row);
-    healer.ability = SurvivorAbility.HEAL;
+    healer.abilities = [SurvivorAbility.HEAL];
     healer.items = {};
     state.entities.push(healer);
 
@@ -1575,7 +1575,7 @@ describe('executeUseAbility — INSPIRE', () => {
     const state = freshState();
     // Inspirer must be co-located with the hero (same as HEAL requirement)
     const inspirer = new Entity(EntityType.SURVIVOR, 'hero', state.hero.col, state.hero.row);
-    inspirer.ability = SurvivorAbility.INSPIRE;
+    inspirer.abilities = [SurvivorAbility.INSPIRE];
     inspirer.items = {};
     state.entities.push(inspirer);
     const bonusBefore = state.hero.attackBonus;
@@ -1591,7 +1591,7 @@ describe('executeUseAbility — RALLY', () => {
   test('gives +1 actionsLeft, costs 0', () => {
     const state = freshState();
     const rallier = new Entity(EntityType.SURVIVOR, 'hero', state.hero.col, state.hero.row);
-    rallier.ability = SurvivorAbility.RALLY;
+    rallier.abilities = [SurvivorAbility.RALLY];
     rallier.items = {};
     state.entities.push(rallier);
 

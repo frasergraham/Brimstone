@@ -1,6 +1,6 @@
 // Single source of truth for the build version.
 // Bump this with every commit.
-export const VERSION = '1.3.35';
+export const VERSION = '1.3.36';
 
 // Save format version — only bump when state-sync schema changes break
 // compatibility with existing saves.  Unrelated patches/features keep the
@@ -17,7 +17,15 @@ export const VERSION = '1.3.35';
 //               'sword'. Pre-v3 saves would double-count the weapon bonus on
 //               reload and carry invalid inventory keys; they're pruned by
 //               server.saves.pruneStaleAndIncompatibleSaves on boot.
-export const SAVE_VERSION = 3;
+// v4 (2026-04): Phase 4 of the units/items/abilities refactor.
+//               Entity.ability (singular string) was promoted to
+//               Entity.abilities (string[]) and the BRAWLER / STURDY
+//               passives were un-baked from SURVIVOR_ROSTER base stats
+//               (getAttack() / getDefense() compose the +1 from
+//               ABILITIES[id].statMods at call time). Pre-v4 saves would
+//               double-count the passive on reload and lack the new
+//               abilities array; pruned on boot.
+export const SAVE_VERSION = 4;
 
 // Unique build identifier — appends Railway's commit SHA when deployed.
 // Falls back to plain VERSION in local dev and in-browser (where process is

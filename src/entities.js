@@ -2,9 +2,22 @@
 import { WEAPON_STATS } from './tiles.js';
 import { UNIT_TYPES } from './unit-types.js';
 import { ITEMS } from './items.js';
-import { SurvivorAbility } from './abilities.js';
+import { SurvivorAbility, ABILITIES } from './abilities.js';
 
 let _nextId = 1;
+
+// Sum the statMod contribution of all passive abilities on a unit.
+// Phase 4 handles brawler (+1 attack) and sturdy (+1 defense); future
+// entries only need to add a statMods field to the ABILITIES registry.
+function _abilityStatMod(abilities, field) {
+  if (!Array.isArray(abilities) || abilities.length === 0) return 0;
+  let sum = 0;
+  for (const id of abilities) {
+    const mod = ABILITIES[id]?.statMods?.[field];
+    if (typeof mod === 'number') sum += mod;
+  }
+  return sum;
+}
 
 // Forced-dice queue — for tutorial canned outcomes.  Push values via setForcedDice();
 // each call to _nextDie() pops from the front, or falls back to a real random roll.
@@ -99,9 +112,9 @@ export const SURVIVOR_ROSTER = [
     name: 'Thomas Putnam',
     title: 'Blacksmith',
     bio: "Arms like anvils. He's been hitting things with hammers his entire life.",
-    maxHp: 5, attack: 3, defense: 2,
+    maxHp: 5, attack: 2, defense: 2,
     ability: SurvivorAbility.BRAWLER,
-    abilityLabel: 'Iron Fists — +1 ATK (permanent, already applied)',
+    abilityLabel: 'Iron Fists — +1 ATK',
   },
   {
     name: 'Abigail Foster',
@@ -131,9 +144,9 @@ export const SURVIVOR_ROSTER = [
     name: 'Hannah Marsh',
     title: 'Baker',
     bio: "Survived three hard winters by sheer stubbornness.",
-    maxHp: 7, attack: 1, defense: 3,
+    maxHp: 7, attack: 1, defense: 2,
     ability: SurvivorAbility.STURDY,
-    abilityLabel: 'Iron Stomach — +1 DEF (permanent, already applied)',
+    abilityLabel: 'Iron Stomach — +1 DEF',
   },
   {
     name: 'Ezra Boone',
@@ -155,9 +168,9 @@ export const SURVIVOR_ROSTER = [
     name: 'Isaac Graves',
     title: 'Gravedigger',
     bio: "Has faced death every working day. Nothing frightens him anymore.",
-    maxHp: 7, attack: 1, defense: 3,
+    maxHp: 7, attack: 1, defense: 2,
     ability: SurvivorAbility.STURDY,
-    abilityLabel: 'Six Feet Under — +1 DEF (permanent, already applied)',
+    abilityLabel: 'Six Feet Under — +1 DEF',
   },
   {
     name: 'Patience Cole',
@@ -171,17 +184,17 @@ export const SURVIVOR_ROSTER = [
     name: 'Silas Holt',
     title: 'Farmhand',
     bio: "Young, strong, and fueled by righteous anger.",
-    maxHp: 4, attack: 2, defense: 2,
+    maxHp: 4, attack: 1, defense: 2,
     ability: SurvivorAbility.BRAWLER,
-    abilityLabel: 'Farm Strong — +1 ATK (permanent, already applied)',
+    abilityLabel: 'Farm Strong — +1 ATK',
   },
   {
     name: 'Mercy Hale',
     title: 'Tanner',
     bio: "Cures leather like her grandmother before her. Hands tough as the hides she works.",
-    maxHp: 5, attack: 2, defense: 3,
+    maxHp: 5, attack: 2, defense: 2,
     ability: SurvivorAbility.STURDY,
-    abilityLabel: 'Thick Skin — +1 DEF (permanent, already applied)',
+    abilityLabel: 'Thick Skin — +1 DEF',
   },
   {
     name: 'Elijah Pratt',
@@ -203,9 +216,9 @@ export const SURVIVOR_ROSTER = [
     name: 'Nathaniel Corwin',
     title: 'Constable',
     bio: "Enforced the law before the law stopped mattering.",
-    maxHp: 5, attack: 3, defense: 2,
+    maxHp: 5, attack: 2, defense: 2,
     ability: SurvivorAbility.BRAWLER,
-    abilityLabel: 'Heavy Hand — +1 ATK (permanent, already applied)',
+    abilityLabel: 'Heavy Hand — +1 ATK',
   },
   {
     name: 'Agnes Whittaker',
@@ -324,7 +337,10 @@ export class Entity {
     this.name     = null;
     this.title    = null;
     this.bio      = null;
-    this.ability  = null;
+    // Phase 4: promoted from singular `ability: string` to an array.
+    // BRAWLER / STURDY passives are no longer baked into base stats;
+    // getAttack() / getDefense() compose their statMods at call time.
+    this.abilities    = [];
     this.abilityLabel = null;
 
     this.actedThisTurn = false;
@@ -358,10 +374,14 @@ export class Entity {
   // Call sites stay correct across that transition.
 
   getAttack()  {
-    return this.attack + (ITEMS[this.weapon]?.statMods?.attack ?? 0);
+    return this.attack
+      + (ITEMS[this.weapon]?.statMods?.attack ?? 0)
+      + _abilityStatMod(this.abilities, 'attack');
   }
   getDefense() {
-    return this.defense + (ITEMS[this.weapon]?.statMods?.defense ?? 0);
+    return this.defense
+      + (ITEMS[this.weapon]?.statMods?.defense ?? 0)
+      + _abilityStatMod(this.abilities, 'defense');
   }
   getAgility() { return this.agility ?? 1; }
 
@@ -370,15 +390,11 @@ export class Entity {
     return 1 + ((this.items?.['horse'] || 0) > 0 ? 1 : 0);
   }
 
-  // Survivor abilities are today a single string on `this.ability`. Phase 4
-  // promotes this to `abilities: string[]`; `hasAbility` and the `abilities`
-  // getter are the forward-compatible API.
-  get abilities() {
-    return this.ability ? [this.ability] : [];
-  }
-
+  // `abilities` is a plain data property (set in the constructor); the
+  // Phase-2 forward-compatible API was a getter that derived from the
+  // legacy singular `ability` field, and is no longer needed.
   hasAbility(id) {
-    return this.ability === id;
+    return Array.isArray(this.abilities) && this.abilities.includes(id);
   }
 
   // Unit-type tags (`undead`, `construct`, `minion`, `living`, `leader`,
@@ -675,19 +691,18 @@ export function createSurvivor(col, row, ownerId = null, state = null) {
   e.name         = char.name;
   e.title        = char.title;
   e.bio          = char.bio;
-  e.ability      = char.ability;
+  e.abilities    = char.ability ? [char.ability] : [];
   e.abilityLabel = char.abilityLabel;
   e.color        = pick.i >= 0 ? SURVIVOR_COLORS[pick.i % SURVIVOR_COLORS.length] : SURVIVOR_COLORS[0];
 
-  // Apply base stats from the character definition
+  // Apply base stats from the character definition. BRAWLER / STURDY
+  // passives are NOT baked into these numbers any more — getAttack() /
+  // getDefense() compose the +1 from ABILITIES[id].statMods at call time.
   e.maxHp  = char.maxHp;
   e.hp     = char.maxHp;
   e.attack  = char.attack;
   e.defense = char.defense;
   if (typeof char.agility === 'number') e.agility = char.agility;
-
-  // Passive stat bonuses already baked into the roster stats,
-  // but BRAWLER/STURDY are called out explicitly — stats are already correct.
 
   return e;
 }

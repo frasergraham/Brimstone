@@ -487,7 +487,7 @@ describe('Survivor roster', () => {
     assert.equal(s.maxHp, rosterEntry.maxHp);
     assert.equal(s.attack, rosterEntry.attack);
     assert.equal(s.defense, rosterEntry.defense);
-    assert.equal(s.ability, rosterEntry.ability);
+    assert.deepEqual(s.abilities, rosterEntry.ability ? [rosterEntry.ability] : []);
   });
 
   test('survivor starts at full HP', () => {
@@ -496,3 +496,82 @@ describe('Survivor roster', () => {
     assert.equal(s.hp, s.maxHp);
   });
 });
+
+describe('Phase 4 — BRAWLER / STURDY passives un-baked from roster', () => {
+  test('BRAWLER roster entries have base attack 1 less than effective attack', () => {
+    const brawlers = SURVIVOR_ROSTER.filter(r => r.ability === SurvivorAbility.BRAWLER);
+    assert.ok(brawlers.length >= 3, 'roster should contain ≥3 brawlers');
+    for (const entry of brawlers) {
+      resetRoster();
+      // Force the draw by scanning until we hit this entry.
+      let s;
+      for (let i = 0; i < 40; i++) {
+        s = createSurvivor(0, 0);
+        if (s.name === entry.name) break;
+      }
+      assert.equal(s.name, entry.name, `expected to draw ${entry.name}`);
+      assert.equal(s.attack,      entry.attack,     'base attack matches roster');
+      assert.equal(s.getAttack(), entry.attack + 1, 'getAttack() adds +1 via brawler statMods');
+    }
+  });
+
+  test('STURDY roster entries have base defense 1 less than effective defense', () => {
+    const sturdyOnes = SURVIVOR_ROSTER.filter(r => r.ability === SurvivorAbility.STURDY);
+    assert.ok(sturdyOnes.length >= 3, 'roster should contain ≥3 sturdy survivors');
+    for (const entry of sturdyOnes) {
+      resetRoster();
+      let s;
+      for (let i = 0; i < 40; i++) {
+        s = createSurvivor(0, 0);
+        if (s.name === entry.name) break;
+      }
+      assert.equal(s.name, entry.name, `expected to draw ${entry.name}`);
+      assert.equal(s.defense,      entry.defense,     'base defense matches roster');
+      assert.equal(s.getDefense(), entry.defense + 1, 'getDefense() adds +1 via sturdy statMods');
+    }
+  });
+
+  test('un-baked base stats match pre-refactor effective values', () => {
+    // Lock the parity promise: effective stats under Phase 4 must equal
+    // the pre-refactor baked numbers (attack=3/2/2 for brawler trio,
+    // defense=3/3/3 for sturdy trio).
+    const expected = {
+      'Thomas Putnam':    { attack: 3, defense: 2 },
+      'Silas Holt':       { attack: 2, defense: 2 },
+      'Nathaniel Corwin': { attack: 3, defense: 2 },
+      'Hannah Marsh':     { attack: 1, defense: 3 },
+      'Isaac Graves':     { attack: 1, defense: 3 },
+      'Mercy Hale':       { attack: 2, defense: 3 },
+    };
+    for (const [name, exp] of Object.entries(expected)) {
+      resetRoster();
+      let s;
+      for (let i = 0; i < 40; i++) {
+        s = createSurvivor(0, 0);
+        if (s.name === name) break;
+      }
+      assert.equal(s.name, name, `failed to draw ${name}`);
+      assert.equal(s.getAttack(),  exp.attack,  `${name} effective attack parity`);
+      assert.equal(s.getDefense(), exp.defense, `${name} effective defense parity`);
+    }
+  });
+
+  test('hasAbility works with abilities array and supports multi-ability', () => {
+    const e = new Entity(EntityType.SURVIVOR, 'hero', 0, 0);
+    e.abilities = [SurvivorAbility.HEAL, SurvivorAbility.SCOUT];
+    assert.equal(e.hasAbility(SurvivorAbility.HEAL),  true);
+    assert.equal(e.hasAbility(SurvivorAbility.SCOUT), true);
+    assert.equal(e.hasAbility(SurvivorAbility.BRAWLER), false);
+  });
+
+  test('getAttack/getDefense compose passive + weapon', () => {
+    const e = new Entity(EntityType.SURVIVOR, 'hero', 0, 0);
+    e.attack = 2; e.defense = 2;
+    e.abilities = [SurvivorAbility.BRAWLER, SurvivorAbility.STURDY];
+    assert.equal(e.getAttack(),  3, 'base 2 + brawler 1');
+    assert.equal(e.getDefense(), 3, 'base 2 + sturdy 1');
+    e.equipWeapon('sword'); // +2 attack
+    assert.equal(e.getAttack(), 5, 'base 2 + brawler 1 + sword 2');
+  });
+});
+

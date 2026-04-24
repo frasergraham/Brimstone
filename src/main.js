@@ -2811,7 +2811,9 @@ function _initCampaignMission(missionDef) {
       s.name = rosterEntry.name;
       s.title = rosterEntry.title;
       s.bio = rosterEntry.bio;
-      s.ability = rosterEntry.ability;
+      s.abilities = Array.isArray(rosterEntry.abilities)
+        ? [...rosterEntry.abilities]
+        : (rosterEntry.ability ? [rosterEntry.ability] : []);
       s.abilityLabel = rosterEntry.abilityLabel;
       s.color = rosterEntry.color;
       s.hp = rosterEntry.hp;

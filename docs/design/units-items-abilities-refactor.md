@@ -1,6 +1,6 @@
 # Brimstone Units / Items / Abilities Refactor
 
-**Status:** Phases 1, 2, 3 landed on PR #291 (branch `claude/document-unit-stats-yiQQd`). Phases 4–6 remain. See **Working notes** at the bottom for per-phase landing summaries.
+**Status:** Phases 1–4 landed. Phases 5–6 remain. See **Working notes** at the bottom for per-phase landing summaries.
 
 This is a living plan. Update it as PRs land or new blockers surface.
 
@@ -182,8 +182,20 @@ Inventory keys flattened: `'weapon:sword'` → `'sword'`. Weapon-vs-resource cla
 
 Test deltas: `tests/entities.test.js` equipWeapon/resetTurn tests migrated to assert `hero.getAttack()` instead of `hero.attack`, plus a new test "base stats stay stable across weapon swaps" that locks the Phase 3 invariant. `tests/actions.test.js` weapon-equip tests use `'sword'` key. 1993 tests pass; 100-game headless 50/50.
 
-### Phase 4 (pending)
-`ability: string` → `abilities: string[]`; un-bake BRAWLER / STURDY from roster numbers (adjust base stats down by the passive amount). `_buildAbilityAction` becomes a loop; `executeUseAbility` dispatches via `ABILITIES[id].execute`. Another `SAVE_VERSION` bump (3→4) since BRAWLER survivors would render with wrong stats under the new un-baked roster.
+### Phase 4 (landed)
+Abilities became multi + runtime passives. `Entity.ability: string` was promoted to `Entity.abilities: string[]` — the constructor now initialises `this.abilities = []`, `hasAbility(id)` checks `this.abilities.includes(id)`, and the Phase-2 `get abilities()` derivation getter is gone (plain data property). `createSurvivor` writes `e.abilities = char.ability ? [char.ability] : []`.
+
+BRAWLER / STURDY un-baked. `ABILITIES.brawler.statMods = { attack: 1 }` and `ABILITIES.sturdy.statMods = { defense: 1 }`. Six survivors lost their baked +1: Thomas Putnam / Silas Holt / Nathaniel Corwin (attack −1), Hannah Marsh / Isaac Graves / Mercy Hale (defense −1). `getAttack()` / `getDefense()` now compose `sum(ABILITIES[id].statMods[field])` on top of the base + weapon bonus, so effective stats are identical across the refactor.
+
+`_buildAbilityAction` became `_buildAbilityActions` — a loop over `actor.abilities` that looks up `ABILITIES[id]`, calls `ability.validate(state, actor)`, and emits one plan action per valid active. `executeUseAbility(state, actor, abilityId)` gained a third argument (the resolver now passes `action.ability` through) and became a thin dispatcher to `ABILITIES[id].execute`. HEAL / INSPIRE / RALLY bodies moved verbatim into their registry entries; their validators use a shared `_coLocatedLeader` helper that keys off `entity.hasTag('leader')` — deliberately avoiding a `getFaction` import so `src/abilities.js` stays cycle-free vs `factions.js` → `entities.js` → `abilities.js`.
+
+Serialization: `server/state-sync.js` and `server/resolver.js` `snapshotEntities` emit `abilities: [...]` instead of the singular `ability` field. `src/campaign/campaign.js` `snapshotSurvivor` matches; `src/main.js` campaign-restore reads `rosterEntry.abilities` with a fallback to the old singular field.
+
+`SAVE_VERSION` bumped 3 → 4 and `VERSION` bumped to 1.3.36. Pre-v4 saves carry baked BRAWLER / STURDY stats (would double-count via the new getter composition) and lack the `abilities` array; `pruneStaleAndIncompatibleSaves` drops them on boot.
+
+Tests: new parity suite in `tests/entities.test.js` locks effective stats for the six un-baked survivors and exercises multi-ability composition. New `tests/ability-registry.test.js` covers the passive `statMods` schema, the three active `execute`/`validate` dispatchers, the `executeUseAbility` fallback path, and multi-ability stacking. `tests/state-sync.test.js` adds an `abilities[]` round-trip case. 2017 tests pass; combat-sim parity within ±1%; 500-game 1v1 headless 52.8/47.0 and 100-game 2v2 61/39 — both inside the ±12% band.
+
+Out of scope and deferred to Phase 6: the generic `applyPassiveHooks` dispatcher. HERBALIST / FORTIFY_DOUBLE / SCOUT remain as `hasAbility()` checks at their three call sites (`executeExplore`, `executeFortify`, `sightRange`).
 
 ### Phase 5 (pending)
 Faction-innate abilities via `DaySideFaction.innateLeaderAbilities` / `NightSideFaction.innateLeaderAbilities`. Replace the `isLeaderType(actor.type) && actor.owner === 'hero'|'witch'` gates at `src/actions.js:334,345` with `actor.hasAbility('summon' | 'sound_horn')`. `SOUND_HORN` / `SUMMON` executors become `ABILITIES` entries.

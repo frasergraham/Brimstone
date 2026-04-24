@@ -6,6 +6,7 @@ import {
   FORT_IMPASSABLE_THRESHOLD,
 } from './tiles.js';
 import { ITEMS } from './items.js';
+import { ABILITIES } from './abilities.js';
 
 // Phase 3: items in an actor's bag are keyed by their ITEMS id (e.g.
 // 'sword') instead of the legacy 'weapon:sword' prefix. Weapon-vs-
@@ -390,45 +391,28 @@ export function getValidActions(state, actor) {
     }
 
     // Survivor special abilities
-    if (actor.type === EntityType.SURVIVOR && actor.ability) {
-      const abilityAction = _buildAbilityAction(state, actor);
-      if (abilityAction) actions.push(abilityAction);
+    if (actor.type === EntityType.SURVIVOR && actor.abilities?.length > 0) {
+      for (const abilityAction of _buildAbilityActions(state, actor)) {
+        actions.push(abilityAction);
+      }
     }
   }
 
   return actions;
 }
 
-function _buildAbilityAction(state, actor) {
-  switch (actor.ability) {
-    case SurvivorAbility.HEAL: {
-      // Check for a co-located faction leader (owned by same player or same faction)
-      const actorFaction = getFaction(actor.owner);
-      const leaderHere = state.entities.find(e =>
-        e.alive && e.type === actorFaction.leaderType &&
-        e.col === actor.col && e.row === actor.row &&
-        (e.ownerId === actor.ownerId || e.owner === actor.owner) &&
-        e.hp < e.maxHp
-      );
-      if (!leaderHere) return null;
-      return { type: ActionType.USE_ABILITY, ability: SurvivorAbility.HEAL };
-    }
-    case SurvivorAbility.INSPIRE: {
-      // Only available when faction leader is on the same hex
-      const actorFaction = getFaction(actor.owner);
-      const leaderHere = state.entities.some(e =>
-        e.alive && e.type === actorFaction.leaderType &&
-        e.col === actor.col && e.row === actor.row &&
-        (e.ownerId === actor.ownerId || e.owner === actor.owner)
-      );
-      if (!leaderHere) return null;
-      return { type: ActionType.USE_ABILITY, ability: SurvivorAbility.INSPIRE };
-    }
-    case SurvivorAbility.RALLY:
-      return { type: ActionType.USE_ABILITY, ability: SurvivorAbility.RALLY };
-    default:
-      return null;  // passive abilities have no button
+// Iterate the actor's abilities and emit a plan-action entry for each
+// active ability whose registry validate() passes. Passive abilities
+// return no action (nothing to click).
+function _buildAbilityActions(state, actor) {
+  const out = [];
+  for (const id of actor.abilities) {
+    const ab = ABILITIES[id];
+    if (!ab || ab.kind !== 'active') continue;
+    if (typeof ab.validate === 'function' && !ab.validate(state, actor)) continue;
+    out.push({ type: ActionType.USE_ABILITY, ability: id });
   }
+  return out;
 }
 
 function pickSummonType(inv) {
@@ -1132,57 +1116,18 @@ export function executeUseItem(state, actor, item) {
   return { success: true, log, cost: 0 };
 }
 
-export function executeUseAbility(state, actor) {
-  const log = [];
-
-  switch (actor.ability) {
-    case SurvivorAbility.HEAL: {
-      // Heal the faction leader on the same hex (owned by same player or same faction).
-      const leaderType = getFaction(actor.owner).leaderType;
-      const leader = state.entities.find(e =>
-        e.alive && e.type === leaderType &&
-        e.col === actor.col && e.row === actor.row &&
-        (e.ownerId === actor.ownerId || e.owner === actor.owner)
-      );
-      if (!leader)
-        return { success: false, log: ['A leader must be on the same hex.'] };
-      if (leader.hp >= leader.maxHp)
-        return { success: false, log: ['Leader is already at full health.'] };
-      leader.heal(1);
-      log.push(`${actor.displayName} tends ${leader.displayName}'s wounds. (+1 HP, now ${leader.hp}/${leader.maxHp})`);
-      return { success: true, log, cost: 1 };
-    }
-
-    case SurvivorAbility.INSPIRE: {
-      // Inspire the faction leader on the same hex.
-      const leaderType = getFaction(actor.owner).leaderType;
-      const leader = state.entities.find(e =>
-        e.alive && e.type === leaderType &&
-        e.col === actor.col && e.row === actor.row &&
-        (e.ownerId === actor.ownerId || e.owner === actor.owner)
-      );
-      if (!leader)
-        return { success: false, log: ['A leader must be on the same hex.'] };
-      leader.attackBonus += 1;
-      log.push(`${actor.displayName} rallies ${leader.displayName}! (+1 ATK this battle)`);
-      return { success: true, log, cost: 0 };
-    }
-
-    case SurvivorAbility.RALLY: {
-      // Return budgetBonus so both offline and multiplayer resolvers can apply it
-      // per-player without touching the shared state.actionsLeft.
-      const leaderType = getFaction(actor.owner).leaderType;
-      const rallyLeader = state.entities.find(e =>
-        e.alive && e.type === leaderType &&
-        (e.ownerId === actor.ownerId || e.owner === actor.owner)
-      );
-      log.push(`${actor.displayName}'s words fortify ${rallyLeader?.displayName ?? 'the leader'}'s spirit! (+1 action)`);
-      return { success: true, log, cost: 0, budgetBonus: 1 };
-    }
-
-    default:
-      return { success: false, log: ['No active ability.'] };
+// Thin dispatcher — the heavy lifting for each ability lives in
+// ABILITIES[id].execute(state, actor). The resolver passes the planned
+// ability id through via the PlanAction (so multi-ability survivors
+// disambiguate correctly); singleplayer UI paths that don't set one
+// fall back to the first registered active on the actor.
+export function executeUseAbility(state, actor, abilityId = null) {
+  const id = abilityId || actor.abilities?.find(a => ABILITIES[a]?.kind === 'active');
+  const ab = id ? ABILITIES[id] : null;
+  if (!ab || typeof ab.execute !== 'function') {
+    return { success: false, log: ['No active ability.'] };
   }
+  return ab.execute(state, actor);
 }
 
 export function executeGuard(state, actor) {

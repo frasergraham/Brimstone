@@ -13,7 +13,7 @@ import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, nearestBuilding
 import { EnginePlanSimState, BaseAIEngine, allocateBudget, assemblePlan, clamp01, updateAllyClaimedNodes, personalityName } from './ai-engine.js';
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
-import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf } from './entities.js';
+import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf, SurvivorAbility } from './entities.js';
 import { TileType, ResourceType } from './tiles.js';
 import { ITEMS } from './items.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
@@ -111,7 +111,7 @@ export function assessHeroBoard(sim) {
   const heroSideUnits = sim.entities.filter(e => e.alive && e.owner === 'hero');
   function _heroCanSee(target) {
     return heroSideUnits.some(viewer => {
-      const range = viewer.type === EntityType.SURVIVOR && viewer.hasAbility('scout')
+      const range = viewer.type === EntityType.SURVIVOR && viewer.hasAbility(SurvivorAbility.SCOUT)
         ? _heroSightBase(phase) + 1
         : _heroSightBase(phase);
       return hexDistance(viewer.col, viewer.row, target.col, target.row) <= range;
