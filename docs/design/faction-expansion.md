@@ -171,6 +171,16 @@ The actual storage rename (`inventory.hero` → `inventory.day` etc.) is deferre
 
 This still unblocks PR 5 (stub factions): new factions on the same side share that side's storage by routing through the accessors, which is the correct behaviour for stubs that inherit parent-side resource pools.
 
+### PR 4a (landed)
+Entity-type rename Hero → Paladin. Approach chosen:
+
+- `EntityType.PALADIN = 'paladin'` is the new constant. `EntityType.HERO` is kept as an alias resolving to the same value, so the ~50 `EntityType.HERO` references in the codebase keep working without a churn sweep.
+- New entity-type constants reserved for stub factions in PR 5: `ROGUE`, `CAPTAIN`, `NECROMANCER`, `BRUTE` (no factories yet).
+- Default leader name for the day-side leader: **Ishmael Charger**. Applies in `Entity.displayName` and as the `mapDataOverride.heroName` fallback in `GameState`.
+- 8 literal `e.type === 'hero'` / `'witch'` checks across `src/`, `server/`, `scripts/` and tests were swept to use the constants. Tests with hand-rolled fixtures using the literal `'hero'` value were updated.
+- `state-sync.js` deserialize migrates `type === 'hero'` → `'paladin'` on load, so v1 saves still hydrate cleanly. `SAVE_VERSION` bumped to **2** as a belt-and-braces signal for any consumer that bypasses the migration.
+- 100-game headless balance: Hero 58% / Witch 42% — within the 38–62% target band (CLAUDE.md baseline was 55.2% hero).
+
 ### PR 3 (landed)
 Additive only — no `=== 'hero'` / `=== 'witch'` checks were swept. Each lobby slot and seated player now carries three faction-related fields:
 

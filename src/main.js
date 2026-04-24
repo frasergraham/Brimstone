@@ -2918,7 +2918,7 @@ function _initCampaignMission(missionDef) {
     redraw();
     requestAnimationFrame(() => {
       renderer.resize();
-      const heroEntity = state.entities.find(e => e.type === 'hero');
+      const heroEntity = state.entities.find(e => e.type === EntityType.PALADIN);
       if (heroEntity) {
         renderer.frameHexes([heroEntity], { maxZoom: 2.2, paddingHexes: 3, duration: 500 });
       }

@@ -583,7 +583,7 @@ export class UIController {
     if (!this.tutorialMode && (this.state?.round ?? 1) <= 1) {
       const myLeader = this.state?.entities.find(e =>
         e.alive && e.owner === faction &&
-        (e.type === 'hero' || e.type === 'witch') &&
+        (e.type === EntityType.PALADIN || e.type === EntityType.WITCH) &&
         (!this.myPlayerId || e.ownerId === this.myPlayerId)
       );
       if (myLeader) this._selectEntity(myLeader);

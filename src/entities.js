@@ -18,14 +18,30 @@ export function nextDie(sides) {
 }
 const _nextDie = nextDie;
 
+// Entity type ids. Values are the wire/save format — be cautious renaming.
+//
+// PALADIN replaces HERO as the day-side leader entity (named "Ishmael
+// Charger" by default). EntityType.HERO is kept as an alias so the ~50
+// `EntityType.HERO` references across the codebase keep working without
+// a churn sweep; both constants resolve to the value 'paladin'.
+//
+// ROGUE / CAPTAIN / NECROMANCER / BRUTE are leader types for the stub
+// factions registered in PR 5. They have no factory functions yet — the
+// constants are reserved here so save-format and entity-type comparisons
+// are stable as the stubs land.
 export const EntityType = Object.freeze({
-  HERO:       'hero',
-  WITCH:      'witch',
-  SURVIVOR:   'survivor',
-  ZOMBIE:     'zombie',
-  MINION:     'minion',
-  WOOD_GOLEM: 'wood_golem',
-  IRON_GOLEM: 'iron_golem',
+  PALADIN:     'paladin',
+  HERO:        'paladin', // legacy alias — same value as PALADIN
+  ROGUE:       'rogue',
+  CAPTAIN:     'captain',
+  WITCH:       'witch',
+  NECROMANCER: 'necromancer',
+  BRUTE:       'brute',
+  SURVIVOR:    'survivor',
+  ZOMBIE:      'zombie',
+  MINION:      'minion',
+  WOOD_GOLEM:  'wood_golem',
+  IRON_GOLEM:  'iron_golem',
 });
 
 // Survivor special abilities
@@ -233,7 +249,7 @@ export const SURVIVOR_ROSTER = [
 const _usedRosterIndices = new Set();
 
 const BASE_STATS = {
-  [EntityType.HERO]:       { maxHp: 14, attack: 3, defense: 2 },
+  [EntityType.PALADIN]:    { maxHp: 14, attack: 3, defense: 2 },
   [EntityType.WITCH]:      { maxHp: 10, attack: 2, defense: 2 },
   [EntityType.SURVIVOR]:   { maxHp: 4, attack: 1, defense: 1 },
   [EntityType.ZOMBIE]:     { maxHp: 2, attack: 2, defense: 0 },
@@ -244,7 +260,7 @@ const BASE_STATS = {
 
 // Per-type Agility defaults (1–10 scale). Higher acts first within a resolver step.
 export const BASE_AGILITY = {
-  [EntityType.HERO]:       6,
+  [EntityType.PALADIN]:    6,
   [EntityType.WITCH]:      5,
   [EntityType.SURVIVOR]:   4,
   [EntityType.ZOMBIE]:     2,
@@ -255,7 +271,7 @@ export const BASE_AGILITY = {
 
 // Visual colours used by the renderer
 export const ENTITY_COLOR = {
-  [EntityType.HERO]:       '#d4a72c',
+  [EntityType.PALADIN]:    '#d4a72c',
   [EntityType.WITCH]:      '#9b59b6',
   [EntityType.SURVIVOR]:   '#4caf7d',
   [EntityType.ZOMBIE]:     '#7c9a57',
@@ -335,7 +351,7 @@ export class Entity {
   get displayName() {
     if (this.name) return this.name;
     switch (this.type) {
-      case EntityType.HERO:       return 'The Hero';
+      case EntityType.PALADIN:    return 'Ishmael Charger';
       case EntityType.WITCH:      return 'The Witch';
       case EntityType.SURVIVOR:   return 'Survivor';
       case EntityType.ZOMBIE:     return 'Zombie';
@@ -504,7 +520,7 @@ export function expectedDieValue(net) {
 }
 
 export function createHero(col, row, ownerId = null, state = null) {
-  return new Entity(EntityType.HERO, 'hero', col, row, ownerId, state);
+  return new Entity(EntityType.PALADIN, 'hero', col, row, ownerId, state);
 }
 
 export function createWitch(col, row, ownerId = null, state = null) {

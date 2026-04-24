@@ -161,6 +161,10 @@ export function deserializeState(snap) {
     Object.assign(e, data, { items: { ...(data.items || {}) } });
     // Ensure ownerId is present even on saves from before the multiplayer update
     if (e.ownerId === undefined) e.ownerId = null;
+    // Hero → Paladin entity-type rename. Pre-PR4 saves carry type='hero';
+    // re-key them to 'paladin' so the new BASE_STATS/BASE_AGILITY tables
+    // and `e.type === EntityType.PALADIN` checks all line up.
+    if (e.type === 'hero') e.type = 'paladin';
     // Back-compat hydrate Agility for pre-002 saves.
     if (e.agility === undefined) e.agility = BASE_AGILITY[e.type] ?? 1;
     return e;

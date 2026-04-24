@@ -23,7 +23,7 @@ import { WitchAIEngine }        from '../src/ai-engine.js';
 import { resolvePlansMP, ResEventType } from '../server/resolver.js';
 import { PlanActionType }         from '../src/planner.js';
 import { generateMultipleStarts, generateBattleStarts, MAP_SIZES } from '../src/map.js';
-import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS } from '../src/entities.js';
+import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS, EntityType } from '../src/entities.js';
 import { serializeState }         from '../server/state-sync.js';
 import { VERSION }                from '../src/version.js';
 import { serializeGameStateForLLM, serializePlanForLLM } from './training-data.js';
@@ -205,7 +205,7 @@ function playRound(state, playerAIs, trainingExamples = null) {
     const ai  = playerAIs.get(p.id);
     const ctx = p.faction === 'hero' ? heroCtx : witchCtx;
     const leader = state.entities.find(e => e.alive && e.ownerId === p.id &&
-      (e.type === 'hero' || e.type === 'witch'));
+      (e.type === EntityType.PALADIN || e.type === EntityType.WITCH));
     const plan = ai.generatePlan(IS_MP ? ctx : undefined);
     updateAllyContext(ctx, plan, leader);
     state.submitPlayerPlan(p.id, plan);

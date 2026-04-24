@@ -203,7 +203,7 @@ export class GameState {
     this.players = [];
 
     // Offline / legacy path: create one hero and one witch with synthetic player IDs.
-    const heroName = mapDataOverride?.heroName ?? 'Hero';
+    const heroName = mapDataOverride?.heroName ?? 'Ishmael Charger';
     const witchName = mapDataOverride?.witchName ?? 'Witch';
     this.hero  = createHero(mapData.heroStart.col,  mapData.heroStart.row, 'hero', this);
     this.hero.name = heroName;
@@ -406,7 +406,7 @@ export class GameState {
   /** Return the display name of the primary leader for a faction. */
   factionName(faction) {
     const leader = faction === 'hero' ? this.hero : this.witch;
-    return leader?.displayName ?? (faction === 'hero' ? 'The Hero' : 'The Witch');
+    return leader?.displayName ?? (faction === 'hero' ? 'Ishmael Charger' : 'The Witch');
   }
 
   // ── Side-keyed accessors ───────────────────────────────────────────────

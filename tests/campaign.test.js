@@ -472,7 +472,7 @@ describe('Victory delegate', () => {
       const state = new GameState(true, false, 'standard', null, mapData);
       state.disableScoring = true;
       // Clean slate so we can control node occupancy precisely.
-      state.entities = state.entities.filter(e => e.type === 'hero');
+      state.entities = state.entities.filter(e => e.type === 'paladin');
       return state;
     }
 
