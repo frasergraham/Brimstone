@@ -133,6 +133,18 @@ describe('Weapon categories', () => {
     assert.equal(ITEMS.crossbow.kind,     'weapon');
   });
 
+  test('crossbow appears in at least one building loot table', async () => {
+    const { LOOT_CONFIG } = await import('../src/loot.config.js');
+    let foundIn = [];
+    for (const [building, table] of Object.entries(LOOT_CONFIG.buildings)) {
+      if (table.some(e => e.type === 'crossbow' && e.weight > 0)) {
+        foundIn.push(building);
+      }
+    }
+    assert.ok(foundIn.length > 0,
+      'crossbow must appear in some loot table; otherwise it is dead config');
+  });
+
   test('bow is ranged; sword/axe/shield/staff/dagger are melee', () => {
     assert.equal(ITEMS.bow.category,    'ranged');
     assert.equal(ITEMS.sword.category,  'melee');
@@ -318,15 +330,21 @@ describe('RogueFaction — onAfterMoveStep auto-detects survivors in buildings',
     adj.type = TileType.GRASS;
     adj.building = null;
     adj.hiddenSurvivor = true;
-    // Clear the destination tile's hiddenSurvivor flag so the existing
-    // phase-random reveal doesn't accidentally fire and confuse the test.
-    const dest = state.tiles.get(hexKey(4, 3));
-    dest.hiddenSurvivor = false;
+    // Clear hidden-survivor flags from every tile on the rogue's path
+    // so the existing phase-random reveal can't accidentally fire on a
+    // different tile and confuse the assertion.
+    for (const t of state.tiles.values()) {
+      if (t.col === 5 && t.row === 3) continue;  // keep our adjacent grass
+      t.hiddenSurvivor = false;
+    }
 
     const result = executeMove(state, rogue, 4, 3);
     // Survivor stays hidden — auto-detect is buildings-only.
     assert.equal(adj.hiddenSurvivor, true);
-    assert.equal(result.encounterSurvivor, null);
+    // Use a falsy check — encounterSurvivor may be null or undefined
+    // depending on whether the move loop ran the existing reveal path.
+    assert.ok(!result.encounterSurvivor,
+      `expected no encounter, got: ${JSON.stringify(result.encounterSurvivor)}`);
   });
 
   test('paladin (default day faction) does NOT get the auto-detect', () => {

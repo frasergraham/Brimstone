@@ -768,3 +768,49 @@ export function sideOf(factionId) {
   const f = FACTIONS[factionId];
   return f ? f.side : null;
 }
+
+// ── Faction lookup for entities ─────────────────────────────────────────────
+// Two helpers, picked deliberately at each callsite. Stub-faction leaders
+// (rogue, captain, necromancer, brute) keep the parent side's `owner`
+// string — the concrete faction lives on `factionId`. The choice between
+// these two helpers determines whether a hook honours stub-faction
+// overrides or just uses the side default.
+
+/**
+ * Side faction — the parent faction for the entity's side. Use for
+ * shared-side concerns: inventory, kill tracking, phase combat bonus,
+ * end-of-round effects, the things ALL day-side / ALL night-side units
+ * share. A rogue leader's `sideFactionOf()` returns HeroFaction even
+ * though the rogue carries `factionId === 'rogue'`.
+ */
+export function sideFactionOf(entity) {
+  return getFaction(entity.owner);
+}
+
+/**
+ * Concrete faction — the entity's specific faction class. Use for
+ * faction-specific hooks (modifyLootRoll, applyExploreLootBonus,
+ * onAfterMoveStep, canEquipWeaponItem, getSightRange) where stub-faction
+ * overrides MUST take precedence over the side default. A rogue leader's
+ * `concreteFactionOf()` returns RogueFaction.
+ */
+export function concreteFactionOf(entity) {
+  return getFaction(entity.factionId ?? entity.owner);
+}
+
+/**
+ * Sight range for a single entity. Wraps the most error-prone spot of
+ * the side-vs-concrete distinction — sight bonuses (rogue +1 in every
+ * phase) live on the concrete faction. Pass an Entity, the current
+ * phase, and the helper returns the right number.
+ *
+ * @param {object} entity
+ * @param {string} phase
+ * @returns {number}
+ */
+export function sightRangeForEntity(entity, phase) {
+  return concreteFactionOf(entity).getSightRange(
+    phase,
+    typeof entity.hasAbility === 'function' && entity.hasAbility('scout'),
+  );
+}

@@ -19,20 +19,9 @@ import {
   nextDie, ADVANTAGE_CAP, isLeaderType,
 } from './entities.js';
 import { Phase } from './game.js';
-import { getFaction } from './factions.js';
+import { getFaction, concreteFactionOf, sightRangeForEntity } from './factions.js';
 import { dispatchTrigger } from './effects.js';
 import { triggerSurvivorEncounter } from './survivor-discovery.js';
-
-// Faction lookup for stub leaders. Stub-faction leaders (rogue, captain,
-// necromancer, brute) keep the parent side's `owner` string so existing
-// owner checks across the codebase keep working — the concrete faction
-// is communicated via `factionId`. Side-shared concerns (inventory, kill
-// tracking, phase combat bonus) still go through `getFaction(actor.owner)`;
-// faction-specific hooks (modifyLootRoll, applyExploreLootBonus,
-// onAfterMoveStep, canEquipWeaponItem) go through `factionOf(actor)`.
-function factionOf(actor) {
-  return getFaction(actor.factionId ?? actor.owner);
-}
 
 export const ActionType = Object.freeze({
   MOVE:         'move',
@@ -276,11 +265,8 @@ export function getVisiblePositions(state, viewerFactionId) {
 
   for (const viewer of state.entities) {
     if (!viewer.alive || viewer.owner !== viewerFactionId) continue;
-    // Use the viewer's CONCRETE faction (e.g. 'rogue') so faction-specific
-    // sight bonuses apply to the leader who has them — the side's primary
-    // faction is only the fallback for entities without a factionId.
-    const sightFaction = viewer.factionId ? getFaction(viewer.factionId) : viewerFaction;
-    const range = sightFaction.getSightRange(state.phase, viewer.hasAbility(SurvivorAbility.SCOUT));
+    // Per-entity sight so stub-faction bonuses (e.g. rogue +1) apply.
+    const range = sightRangeForEntity(viewer, state.phase);
     for (const target of state.entities) {
       if (!target.alive || target.owner !== opponentId) continue;
       if (hexDistance(viewer.col, viewer.row, target.col, target.row) <= range) {
@@ -419,7 +405,7 @@ export function getValidActions(state, actor) {
     // Equip weapon from actor's personal items. Filter by per-item gate
     // so factions with category restrictions (e.g. rogue: ranged-only)
     // don't surface a forbidden weapon in the equip menu.
-    const concrete = factionOf(actor);
+    const concrete = concreteFactionOf(actor);
     const weapons = Object.keys(myItems)
       .filter(k => isWeaponId(k) && (myItems[k] || 0) > 0 && concrete.canEquipWeaponItem(k));
     if (weapons.length) {
@@ -543,7 +529,7 @@ export function executeMove(state, actor, targetCol, targetRow) {
 
     // Faction-specific post-move trigger (e.g. rogue auto-detects survivors
     // in adjacent buildings). Default no-op for other factions.
-    const hookResult = factionOf(actor).onAfterMoveStep(state, actor, step.col, step.row);
+    const hookResult = concreteFactionOf(actor).onAfterMoveStep(state, actor, step.col, step.row);
     if (hookResult) {
       if (hookResult.encounterLog?.length) encounterLog.push(...hookResult.encounterLog);
       if (hookResult.encounterSurvivor) encounterSurvivor = hookResult.encounterSurvivor;
@@ -616,7 +602,7 @@ export function executeExplore(state, actor) {
   const isHerbalist = actor.type === EntityType.SURVIVOR &&
     actor.hasAbility(SurvivorAbility.HERBALIST);
 
-  const concreteFaction = factionOf(actor);
+  const concreteFaction = concreteFactionOf(actor);
 
   const runLoot = () => {
     let table;
@@ -696,7 +682,7 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
   }
 
   if (isWeaponId(lootType)) {
-    const concrete = factionOf(actor);
+    const concrete = concreteFactionOf(actor);
     if (concrete.canEquipWeaponItem(lootType)) {
       const label = WEAPON_LABEL[lootType] || lootType;
       if (!actor.weapon) {
@@ -1171,7 +1157,7 @@ export function executeHeal(state, actor) {
 export function executeUseItem(state, actor, item) {
   // Weapon equip — from actor's personal items
   if (isWeaponId(item)) {
-    if (!factionOf(actor).canEquipWeaponItem(item)) {
+    if (!concreteFactionOf(actor).canEquipWeaponItem(item)) {
       const label = WEAPON_LABEL[item] || item;
       return { success: false, log: [`${actor.displayName} cannot wield ${label}.`] };
     }

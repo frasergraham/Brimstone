@@ -9,7 +9,7 @@ import {
 } from './tiles.js';
 import { ENTITY_COLOR, EntityType, SurvivorAbility, isLeaderType } from './entities.js';
 import { getVisiblePositions, sightRange, buildFogMovementHexes } from './actions.js';
-import { getFaction } from './factions.js';
+import { getFaction, sightRangeForEntity } from './factions.js';
 import { getFactionTheme, NEUTRAL_NODE_FILL } from './theme.js';
 import { nodeController, Phase } from './game.js';
 
@@ -1702,7 +1702,8 @@ export class Renderer {
     const visibleSet = new Set();
     for (const e of state.entities) {
       if (!e.alive || e.owner !== observerOwner) continue;
-      const range = getFaction(e.owner).getSightRange(state.phase, e.hasAbility(SurvivorAbility.SCOUT));
+      // Per-entity sight so stub-faction bonuses (rogue +1) apply.
+      const range = sightRangeForEntity(e, state.phase);
       // Only iterate hexes within sight range of this entity (not entire map)
       const rMin = Math.max(0, e.row - range);
       const rMax = Math.min(MAP_ROWS - 1, e.row + range);

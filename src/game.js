@@ -5,7 +5,7 @@ import { BuildingType, ResourceType, TileType } from './tiles.js';
 import { hexKey, hexDistance, getNeighbors, setMapDimensions, MAP_COLS, MAP_ROWS } from './hex.js';
 import { applyPostRoundEffects, attritionForCycle } from './post-round-effects.js';
 import { sightRange } from './actions.js';
-import { getFaction, allFactions, getFactionsForSide } from './factions.js';
+import { getFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
 import { allSides } from './sides.js';
 
 /**
@@ -456,19 +456,33 @@ export class GameState {
   }
 
   /**
-   * Swap a leader entity in place to match the supplied stub-faction id.
+   * Swap a leader entity in place to match the supplied faction id.
+   *
    * By default targets the constructor-pre-populated side singleton
    * (`'day'` → `state.hero`, `'night'` → `state.witch`); callers may pass
    * `targetEntity` to re-stat an extra-seat leader on the same side (the
    * headless runner uses this).
    *
-   * No-op when `factionId` equals the side's default ('hero' or 'witch'),
-   * when it is not a registered stub for the side, or when no target
-   * leader is available.
+   * No-op when:
+   *  - `factionId` is falsy
+   *  - the faction id isn't registered on the given side
+   *  - the target leader is already on this faction
    *
    * Mutates the live leader in place — id, position, ownerId, color are
    * preserved so downstream references (state.hero, plan-action target
-   * lookups, save/replay round entity ids) continue to resolve.
+   * lookups, save/replay round entity ids) continue to resolve. Copies
+   * the new faction's `type`, base stats (HP/ATK/DEF), `range`,
+   * `agility`, `factionId`, and the `Faction.createLeader`-stamped
+   * abilities. Clears `name` so `Entity.displayName` falls through to
+   * the new type's default.
+   *
+   * Does NOT copy `attackBonus`, `defenseBonus`, `weapon`, `items`, or
+   * any per-turn flags — latent if anyone ever calls swap mid-game;
+   * currently safe because seats are constructed fresh.
+   *
+   * @param {string} sideId — 'day' | 'night'
+   * @param {string} factionId — any faction id registered on the side
+   * @param {object|null} targetEntity — leader to mutate (defaults to side singleton)
    */
   swapLeaderToFaction(sideId, factionId, targetEntity = null) {
     if (!factionId) return;
@@ -1130,11 +1144,7 @@ export class GameState {
         if (obj[key]) continue; // already discovered
         obj[key] = this.entities.some(e => {
           if (!e.alive || e.owner !== fac.id) return false;
-          // Use the entity's CONCRETE faction for sight range so stub
-          // factions with bonuses (e.g. rogue +1 sight) apply on the
-          // unit that has them.
-          const sightFac = e.factionId ? getFaction(e.factionId) : fac;
-          const range = sightFac.getSightRange(this.phase, e.hasAbility(SurvivorAbility.SCOUT));
+          const range = sightRangeForEntity(e, this.phase);
           return obj.hexes.some(h => hexDistance(e.col, e.row, h.col, h.row) <= range);
         });
       }
@@ -1160,9 +1170,7 @@ export class GameState {
       const visible = new Set();
       for (const e of this.entities) {
         if (!e.alive || e.owner !== factionId) continue;
-        // Per-entity sight uses the concrete faction so stub bonuses apply.
-        const sightFac = e.factionId ? getFaction(e.factionId) : factionObj;
-        const range = sightFac.getSightRange(this.phase, e.hasAbility(SurvivorAbility.SCOUT));
+        const range = sightRangeForEntity(e, this.phase);
         const rMin = Math.max(0, e.row - range);
         const rMax = Math.min(MAP_ROWS - 1, e.row + range);
         const cMin = Math.max(0, e.col - range);
