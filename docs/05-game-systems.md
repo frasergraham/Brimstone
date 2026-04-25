@@ -15,7 +15,7 @@ Brimstone has two opposing **Sides** — Day and Night — and multiple **Factio
 | day   | captain      | `CAPTAIN`          | Captain Eli Ward    | stub (inherits Paladin behaviour) |
 | night | witch        | `WITCH`            | The Witch           | primary |
 | night | necromancer  | `NECROMANCER`      | The Necromancer     | stub (inherits Witch behaviour) |
-| night | brute        | `BRUTE`            | The Brute           | distinct (heavy tank, minions-only, blast-splash crush) |
+| night | brute        | `BRUTE`            | The Brute           | distinct (heavy tank, cheap minions, splash blast every hit, knockback, friendly-fire off) |
 
 Stub factions are registered with their own `EntityType`, base stats, and default leader name. They are subclasses of their side's primary faction (`HeroFaction` or `WitchFaction`) and inherit all combat / summon / fortify / discovery / sight behaviour.
 
@@ -29,11 +29,16 @@ The Rogue is no longer a stub — `RogueFaction` overrides:
 Plus `UNIT_TYPES.rogue.range = 3` and `projectileType: 'bolt'` give her the 3-hex crossbow attack via the existing ranged combat path.
 
 The Brute is also no longer a stub — `BruteFaction` overrides:
-- `getSummonOptions` — minions only (no golems); the per-call cost matches the witch's minion (2 of any resource)
+- `getSummonOptions` / `getMinionCost` — minions only (no golems), and at a 1-resource discount (witch pays 2)
 - `onAfterMoveStep` — same building-tile scan as the rogue, but `WitchFaction.createDiscoveryEntity` raises a zombie instead of recruiting a survivor
-- `crushSplashRadius` — `1`; a crushing blow (or kill) extends the splash blast outward to the 6 hexes around the target. The renderer mirrors the Sound Horn's expanding-ring effect in red on the affected hexes (target + neighbours).
+- `crushSplashRadius` — `1`; the splash blast extends outward to the 6 hexes around the target
+- `splashesOnEveryHit` — `true`; the blast fires on any melee hit, not just crushes
+- `splashSparesAllies` — `true`; witch-side units on splash hexes take no damage (and no knockback)
+- `splashKnockback` — `true`; surviving splashed bystanders are pushed one hex outward from the target when the destination is open
 
-`Faction` exposes the hooks (`canEquipWeaponItem`, `modifyLootRoll`, `applyExploreLootBonus`, `onAfterMoveStep`, `getSightRange`, `crushSplashRadius`) on the base class; future factions plug in by overriding only what they need.
+Splash damage scales with the attacker's roll margin: `clamp(floor(margin / 3), 1, 3)`. Crushing blows additionally apply the **wounded** effect to surviving targets — that's a universal rule (any attacker), not a brute-only one.
+
+`Faction` exposes the hooks (`canEquipWeaponItem`, `modifyLootRoll`, `applyExploreLootBonus`, `onAfterMoveStep`, `getSightRange`, `crushSplashRadius`, `splashesOnEveryHit`, `splashSparesAllies`, `splashKnockback`, `getMinionCost`) on the base class; future factions plug in by overriding only what they need.
 
 ### Weapon categories
 

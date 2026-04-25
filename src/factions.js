@@ -84,11 +84,35 @@ export class Faction {
 
   /**
    * Bonus splash radius around the target hex when this faction's unit
-   * lands a crushing blow (or kill via crush). 0 = vanilla splash (only
-   * same-hex bystanders). 1 = also damage units on the 6 neighbouring
-   * hexes — the brute's signature blast.
+   * lands a hit that triggers splash. 0 = vanilla splash (only same-hex
+   * bystanders). 1 = also damage units on the 6 neighbouring hexes —
+   * the brute's signature blast.
    */
   crushSplashRadius() { return 0; }
+
+  /**
+   * If true, splash fires on every melee hit (not just crush / kill).
+   * Default vanilla rule: splash is a crush-only mechanic.
+   */
+  splashesOnEveryHit() { return false; }
+
+  /**
+   * If true, splash skips units owned by this faction's side. Default
+   * is friendly fire on — splash is indiscriminate.
+   */
+  splashSparesAllies() { return false; }
+
+  /**
+   * If true, splashed bystanders are knocked back one hex outward from
+   * the target (when the push destination is open terrain).
+   */
+  splashKnockback() { return false; }
+
+  /**
+   * Resource cost for summoning a Minion. Defaults to 2 (witch's value)
+   * — overridden by faction stubs that want cheaper chaff (brute = 1).
+   */
+  getMinionCost() { return 2; }
 
   /**
    * Summon options with affordability info.
@@ -694,23 +718,40 @@ export class BruteFaction extends WitchFaction {
   get id()         { return 'brute'; }
   get name()       { return 'Brute'; }
   get leaderType() { return EntityType.BRUTE; }
-  // No isStub() override — the brute has its own behaviour: minions-only
-  // summons, building survivor auto-zombify, and crush-splash that
-  // extends to the target's adjacent hexes.
+  // No isStub() override — the brute has its own behaviour: cheap
+  // minion-only summons, building survivor auto-zombify, and a meaty
+  // splash blast that fires on every melee hit (knocks enemies back,
+  // skips friendlies).
 
   _buildLeader(col, row, ownerId, state = null) {
     return createBrute(col, row, ownerId, state);
   }
 
-  // Splash radius for a crushing blow. 0 = same-hex only (default); 1 =
-  // also damage the 6 neighbouring hexes around the target.
+  // Splash radius around the target hex. 1 = also damage the 6
+  // neighbouring hexes around the target.
   crushSplashRadius() { return 1; }
 
-  // Brute summons only minions — no golems. Cost stays the same as the
-  // witch's minion (2 of any resource).
+  // Splash fires on every melee hit, not just crushing blows. The
+  // damage scales with the attacker's roll margin (see splashDamage).
+  splashesOnEveryHit() { return true; }
+
+  // Splash skips units owned by the attacker's faction. The brute can
+  // wade into a swarm without nuking her own minions.
+  splashSparesAllies() { return true; }
+
+  // Splashed bystanders are knocked one hex outward from the target
+  // (when the destination is open). Repositioning is the headline
+  // tactical effect — the damage tax is secondary.
+  splashKnockback() { return true; }
+
+  // Brute summons only minions, and at a discount — 1 of any resource
+  // instead of the witch's 2. Cheap chaff so she has bodies to soak
+  // gang-up advantage while she swings her cleaver.
+  getMinionCost() { return 1; }
+
   getSummonOptions(inventory) {
     const total = Object.values(inventory).reduce((s, v) => s + (v || 0), 0);
-    if (total < 2) return [];
+    if (total < this.getMinionCost()) return [];
     return [{ summonType: EntityType.MINION, affordable: true }];
   }
 

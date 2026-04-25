@@ -13,7 +13,7 @@ import {
   EntityType, createMinion, createZombie,
 } from '../src/entities.js';
 import { TileType, ResourceType, BuildingType } from '../src/tiles.js';
-import { hexKey, getNeighbors } from '../src/hex.js';
+import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import { getFaction, BruteFaction, WitchFaction } from '../src/factions.js';
 
 function freshState() {
@@ -77,10 +77,29 @@ describe('BruteFaction — minions-only summons', () => {
     assert.equal(opts[0].affordable, true);
   });
 
-  test('getSummonOptions returns empty when total resources < 2', () => {
+  test('getSummonOptions returns empty when total resources < minion cost (1)', () => {
     const f = getFaction('brute');
-    assert.deepEqual(f.getSummonOptions({ wood: 1 }), []);
     assert.deepEqual(f.getSummonOptions({}), []);
+    // Brute minion costs 1, so wood:1 IS enough — should return the option.
+    const opts = f.getSummonOptions({ wood: 1 });
+    assert.equal(opts.length, 1);
+    assert.equal(opts[0].summonType, EntityType.MINION);
+  });
+
+  test('brute minion costs 1 resource (vs the witch\'s 2)', () => {
+    assert.equal(getFaction('brute').getMinionCost(), 1);
+    assert.equal(getFaction('witch').getMinionCost(), 2);
+  });
+
+  test('executeSummon spends only 1 resource on a brute minion', () => {
+    const { state, brute } = bruteState();
+    state.inventory.witch[ResourceType.METAL] = 1;
+    state.inventory.witch[ResourceType.WOOD]  = 0;
+    const r = executeSummon(state, brute, EntityType.MINION);
+    assert.equal(r.success, true);
+    assert.equal(state.inventory.witch[ResourceType.METAL], 0,
+      'brute should pay only 1 metal for a minion');
+    assert.deepEqual(r.spent, [{ type: ResourceType.METAL, amount: 1 }]);
   });
 
   test('SUMMON action surfaces only the minion option for the brute', () => {
@@ -209,64 +228,47 @@ describe('BruteFaction — onAfterMoveStep auto-zombifies survivors in buildings
   });
 });
 
-// ── Crush splash on neighbours ──────────────────────────────────────────────
+// ── Splash blast — every-hit, scales with margin, knocks back, spares allies ─
 
-describe('BruteFaction — crushing blow blast splash', () => {
-  test('crushSplashRadius() returns 1 for brute, 0 for everyone else', () => {
-    assert.equal(getFaction('brute').crushSplashRadius(),       1);
-    assert.equal(getFaction('witch').crushSplashRadius(),       0);
-    assert.equal(getFaction('hero').crushSplashRadius(),        0);
-    assert.equal(getFaction('rogue').crushSplashRadius(),       0);
-    assert.equal(getFaction('captain').crushSplashRadius(),     0);
-    assert.equal(getFaction('necromancer').crushSplashRadius(), 0);
-  });
-
-  test('a crushing blow by the brute splashes 1 damage to adjacent hexes', () => {
-    const { state, brute } = bruteState(5, 5);
-    // Make sure no random hidden-survivor reveals or mid-walk encounters
-    // disturb our placement: only the entities we add matter.
-    const targetPos = getNeighbors(brute.col, brute.row)[0];
-    const target = createMinion(targetPos.col, targetPos.row);
-    target.owner = 'hero'; // make enemy
-    state.entities.push(target);
-
-    // Bystanders on hexes adjacent to the target — they should each take 1
-    // splash damage when the brute crushes the target. Set them as witch
-    // allies so they don't grant the defender gang-up advantage (which
-    // would flood the dice pool and ruin the deterministic forced rolls).
-    // Splash damage is indiscriminate — friendly fire is part of the design.
-    const targetNeighbours = getNeighbors(targetPos.col, targetPos.row);
-    const bystanders = [];
-    for (const n of targetNeighbours) {
-      if (n.col === brute.col && n.row === brute.row) continue;
-      const t = state.tiles.get(hexKey(n.col, n.row));
-      if (!t || t.type === TileType.RIVER) continue;
-      const m = createMinion(n.col, n.row);
-      m.owner = 'witch'; // attacker-allied bystanders
-      m.maxHp = 5; m.hp = 5;
-      state.entities.push(m);
-      bystanders.push(m);
+describe('BruteFaction — splash blast configuration', () => {
+  test('config flags: brute is the only faction with splash extras', () => {
+    const b = getFaction('brute');
+    assert.equal(b.crushSplashRadius(),    1);
+    assert.equal(b.splashesOnEveryHit(),   true);
+    assert.equal(b.splashSparesAllies(),   true);
+    assert.equal(b.splashKnockback(),      true);
+    for (const id of ['hero', 'rogue', 'captain', 'witch', 'necromancer']) {
+      const f = getFaction(id);
+      assert.equal(f.crushSplashRadius(),  0, `${id} should not splash`);
+      assert.equal(f.splashesOnEveryHit(), false);
+      assert.equal(f.splashSparesAllies(), false);
+      assert.equal(f.splashKnockback(),    false);
     }
-    assert.ok(bystanders.length >= 2, 'need at least 2 bystander hexes for this test');
-
-    // Force a crushing blow. Pad the dice queue so we don't go random for
-    // the attacker's gang-up advantage pool (atk_allies = bystanders here).
-    state.setForcedDice(6, 6, 6, 6, 6, 1, 1, 1, 1, 1);
-
-    const r = executeBattle(state, brute, target);
-    assert.equal(r.success, true);
-    assert.equal(r.hit, true);
-    assert.equal(r.splashRadius, 1, 'brute attack should record splash radius 1');
-    // Each bystander on a neighbouring hex should have taken exactly 1 splash damage.
-    for (const b of bystanders) {
-      assert.equal(b.hp, 4, `bystander at (${b.col},${b.row}) should take 1 splash damage`);
-    }
-    // splashHexes covers target + 6 neighbours.
-    assert.equal(r.splashHexes.length, 7,
-      'splashHexes should be target hex plus 6 neighbours');
   });
+});
 
-  test('a non-crushing hit from the brute does NOT splash to neighbours', () => {
+// Place a neutral bystander (owner=null) on a neighbour of `targetPos`
+// that's not co-located with the actor and not on a river. Neutral
+// owner keeps the bystander out of both gang-up calculations and the
+// brute's friendly-fire spare list, so we can read clean splash damage
+// numbers.
+function placeNeutralBystander(state, targetPos, actor, hp = 99) {
+  const candidate = getNeighbors(targetPos.col, targetPos.row).find(n => {
+    if (n.col === actor.col && n.row === actor.row) return false;
+    const t = state.tiles.get(hexKey(n.col, n.row));
+    if (!t || t.type === TileType.RIVER) return false;
+    return state.entities.every(e => !e.alive || e.col !== n.col || e.row !== n.row);
+  });
+  if (!candidate) return null;
+  const m = createMinion(candidate.col, candidate.row);
+  m.owner = null; // neutral — no gang-up bonus, not spared by friendly-fire-off
+  m.maxHp = hp; m.hp = hp;
+  state.entities.push(m);
+  return m;
+}
+
+describe('BruteFaction — splash splashes on every hit, not just crushes', () => {
+  test('a regular (non-crush) hit by the brute still splashes adjacent enemy hexes', () => {
     const { state, brute } = bruteState(5, 5);
     const targetPos = getNeighbors(brute.col, brute.row)[0];
     const target = createMinion(targetPos.col, targetPos.row);
@@ -274,26 +276,18 @@ describe('BruteFaction — crushing blow blast splash', () => {
     target.maxHp = 5; target.hp = 5;
     state.entities.push(target);
 
-    const bystanderPos = getNeighbors(targetPos.col, targetPos.row).find(n => {
-      if (n.col === brute.col && n.row === brute.row) return false;
-      const t = state.tiles.get(hexKey(n.col, n.row));
-      return t && t.type !== TileType.RIVER;
-    });
-    const bystander = createMinion(bystanderPos.col, bystanderPos.row);
-    bystander.owner = 'witch';
-    bystander.maxHp = 5; bystander.hp = 5;
-    state.entities.push(bystander);
+    const bystander = placeNeutralBystander(state, targetPos, brute, 5);
+    assert.ok(bystander, 'need an open neighbour hex of the target for the bystander');
 
-    // Brute ATK=4 vs Minion DEF=0. atk_die=2 → atk total 6; def_die=5 → def
-    // total 5. 6 > 5 (hit) but 6 < 2 × 5 = 10 (no crush). Pad for the gang-up
-    // advantage pool from the brute's bystander ally.
-    state.setForcedDice(2, 2, 5);
+    // Force a regular (non-crush) hit: atk=2 → 6 vs def=5 → 5. Hit, not crush.
+    state.setForcedDice(2, 5);
 
     const r = executeBattle(state, brute, target);
     assert.equal(r.success, true);
     assert.equal(r.hit, true);
     assert.ok(r.attackRoll < 2 * r.defenseRoll, 'should be a regular hit, not a crush');
-    assert.equal(bystander.hp, 5, 'bystander should NOT take splash damage on a non-crush hit');
+    assert.ok(bystander.hp < 5,
+      `bystander should take splash damage on a non-crush hit, hp=${bystander.hp}`);
   });
 
   test('a crush by a normal witch does NOT splash to neighbours (radius stays 0)', () => {
@@ -324,5 +318,186 @@ describe('BruteFaction — crushing blow blast splash', () => {
       'witch crushing blow should keep splash radius 0 (same-hex only)');
     assert.equal(bystander.hp, 5,
       'bystander on a neighbouring hex should NOT take splash from a witch crush');
+  });
+});
+
+describe('BruteFaction — splash damage scales with margin', () => {
+  test('splash dmg = clamp(floor(margin/3), 1, 3)', () => {
+    const place = (atkDie, defDie) => {
+      const { state, brute } = bruteState(5, 5);
+      const targetPos = getNeighbors(brute.col, brute.row)[0];
+      const target = createMinion(targetPos.col, targetPos.row);
+      target.owner = 'hero';
+      target.maxHp = 99; target.hp = 99;
+      state.entities.push(target);
+
+      const bystander = placeNeutralBystander(state, targetPos, brute, 99);
+      state.setForcedDice(atkDie, defDie);
+      const r = executeBattle(state, brute, target);
+      return { r, bystander };
+    };
+
+    // Brute ATK=4, target DEF=0. Margin = atk + 4 - def.
+    // atk=2,def=5 → margin 1 → splash 1
+    {
+      const { r, bystander } = place(2, 5);
+      assert.equal(r.hit, true);
+      assert.equal(r.margin, 1);
+      assert.equal(99 - bystander.hp, 1, `margin ${r.margin}: expected 1 splash dmg`);
+    }
+    // atk=4,def=1 → margin 7 → floor(7/3)=2
+    {
+      const { r, bystander } = place(4, 1);
+      assert.equal(r.hit, true);
+      assert.equal(r.margin, 7);
+      assert.equal(99 - bystander.hp, 2, `margin ${r.margin}: expected 2 splash dmg`);
+    }
+    // atk=6,def=1 → margin 9 → cap at 3
+    {
+      const { r, bystander } = place(6, 1);
+      assert.equal(r.hit, true);
+      assert.equal(r.margin, 9);
+      assert.equal(99 - bystander.hp, 3, `margin ${r.margin}: expected 3 splash dmg (cap)`);
+    }
+  });
+});
+
+describe('BruteFaction — splash spares allies (friendly-fire off)', () => {
+  test('witch-side bystanders on splash hexes take NO damage from the brute\'s blast', () => {
+    const { state, brute } = bruteState(5, 5);
+    const targetPos = getNeighbors(brute.col, brute.row)[0];
+    const target = createMinion(targetPos.col, targetPos.row);
+    target.owner = 'hero';
+    state.entities.push(target);
+
+    // Friendly bystander on a hex adjacent to target. Owner=witch
+    // means it grants the brute attacker gang-up advantage, but that's
+    // fine — the test only cares that the ally takes no damage.
+    const allyPos = getNeighbors(targetPos.col, targetPos.row).find(n => {
+      if (n.col === brute.col && n.row === brute.row) return false;
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && t.type !== TileType.RIVER;
+    });
+    const ally = createMinion(allyPos.col, allyPos.row);
+    ally.owner = 'witch'; // attacker's side
+    ally.maxHp = 5; ally.hp = 5;
+    state.entities.push(ally);
+
+    // Force a crushing blow. Pad dice for the gang-up advantage pool.
+    state.setForcedDice(6, 6, 6, 6, 6, 1, 1, 1, 1, 1);
+
+    const r = executeBattle(state, brute, target);
+    assert.equal(r.success, true);
+    assert.equal(ally.hp, 5, 'witch-side ally should be spared by the brute\'s splash');
+    assert.ok(!r.splashHits.some(h => h.id === ally.id),
+      'splashHits should not include witch-side allies');
+  });
+});
+
+describe('BruteFaction — splash knocks bystanders outward', () => {
+  test('a splashed enemy is pushed 1 hex away from the target', () => {
+    const { state, brute } = bruteState(6, 6);
+    // Scrub a 4-hex radius to plain GRASS so knockback always has an
+    // open destination tile.
+    state.entities = state.entities.filter(e => e === brute);
+    for (const [, t] of state.tiles) {
+      if (hexDistance(t.col, t.row, brute.col, brute.row) <= 4) {
+        t.type = TileType.GRASS;
+        t.building = null;
+        t.fortifyLevel = 0;
+      }
+    }
+
+    const targetPos = getNeighbors(brute.col, brute.row)[0];
+    const target = createMinion(targetPos.col, targetPos.row);
+    target.owner = 'hero';
+    target.maxHp = 99; target.hp = 99;
+    state.entities.push(target);
+
+    // Neutral bystander — keeps gang-up math out of it.
+    const bystander = placeNeutralBystander(state, targetPos, brute, 5);
+    assert.ok(bystander, 'need an open neighbour hex of the target');
+    const startCol = bystander.col, startRow = bystander.row;
+
+    // Regular hit. Margin 1 → splash dmg 1, bystander survives → knocked back.
+    state.setForcedDice(2, 5);
+
+    const r = executeBattle(state, brute, target);
+    assert.equal(r.success, true);
+    assert.equal(r.hit, true);
+    assert.ok(bystander.col !== startCol || bystander.row !== startRow,
+      `bystander should be knocked back from (${startCol},${startRow}); now at (${bystander.col},${bystander.row})`);
+    const hit = r.splashHits.find(h => h.id === bystander.id);
+    assert.ok(hit, 'splashHits should include the knocked-back bystander');
+    assert.equal(hit.knockedBack, true);
+    assert.equal(hit.fromCol, startCol);
+    assert.equal(hit.fromRow, startRow);
+    assert.equal(hit.col, bystander.col);
+    assert.equal(hit.row, bystander.row);
+    // Direction sanity: distance from target to bystander after knockback
+    // should be 2 (one hex further than before).
+    assert.equal(hexDistance(bystander.col, bystander.row, target.col, target.row), 2,
+      'knockback should push exactly 1 hex outward from target');
+  });
+});
+
+describe('Crushing blows wound the target — universal', () => {
+  // Use the paladin (range 1, melee) for these tests — the witch is
+  // ranged at range 2 and ranged attacks cannot crush by design.
+  test('a crushing blow that does NOT kill applies the wounded effect', () => {
+    const state = freshState();
+    state.hero.col = 5; state.hero.row = 5;
+    const paladin = state.hero;
+
+    const targetPos = getNeighbors(paladin.col, paladin.row)[0];
+    const target = createMinion(targetPos.col, targetPos.row);
+    target.owner = 'witch';
+    target.maxHp = 99; target.hp = 99;
+    state.entities.push(target);
+
+    state.setForcedDice(6, 1);
+    const r = executeBattle(state, paladin, target);
+    assert.equal(r.success, true);
+    assert.ok(r.attackRoll >= 2 * r.defenseRoll, 'should be a crush');
+    assert.equal(target.alive, true, 'target should survive the crush');
+    assert.ok(target.effects.some(e => e.id === 'wounded'),
+      `target should be wounded after a crush, effects=${JSON.stringify(target.effects)}`);
+  });
+
+  test('a regular (non-crush) hit does NOT apply wounded', () => {
+    const state = freshState();
+    state.hero.col = 5; state.hero.row = 5;
+    const paladin = state.hero;
+
+    const targetPos = getNeighbors(paladin.col, paladin.row)[0];
+    const target = createMinion(targetPos.col, targetPos.row);
+    target.owner = 'witch';
+    target.maxHp = 99; target.hp = 99;
+    state.entities.push(target);
+
+    // Paladin ATK=3, target DEF=0. atk=2 → 5 vs def=4 → 4: hit, but
+    // 5 < 2 × 4 = 8 (no crush).
+    state.setForcedDice(2, 4);
+    const r = executeBattle(state, paladin, target);
+    assert.equal(r.hit, true);
+    assert.ok(r.attackRoll < 2 * r.defenseRoll, 'should not be a crush');
+    assert.ok(!target.effects.some(e => e.id === 'wounded'));
+  });
+
+  test('a crush that KILLS the target does not bother applying wounded', () => {
+    const state = freshState();
+    state.hero.col = 5; state.hero.row = 5;
+    const paladin = state.hero;
+
+    const targetPos = getNeighbors(paladin.col, paladin.row)[0];
+    const target = createMinion(targetPos.col, targetPos.row);
+    target.owner = 'witch';
+    // hp=2 default — crush dishes 2 dmg → kill.
+    state.entities.push(target);
+
+    state.setForcedDice(6, 1);
+    const r = executeBattle(state, paladin, target);
+    assert.equal(r.killed, true);
+    assert.equal(target.alive, false);
   });
 });
