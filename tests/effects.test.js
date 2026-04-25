@@ -346,20 +346,20 @@ describe('combat integration', () => {
   test('berserker hero gains frenzy on second kill in same combat sequence', () => {
     const gs = new GameState(false, false);
     gs.entities = [];
-    const hero = createHero(0, 0);
+    const hero = createHero(1, 0);
     hero.abilities.push('berserker');
-    // Place targets on separate hexes so splash never bridges the two kills.
+    // Place targets far enough apart that neither shows up as a gang-up
+    // ally for the other (>1 hex from the other's neighbour ring) — this
+    // keeps each battle's dice pool to exactly 1 atk + 1 def die.
     const m1 = createMinion(1, 0); m1.hp = 1;
-    const m2 = createMinion(2, 0); m2.hp = 1;
+    const m2 = createMinion(8, 8); m2.hp = 1;
     gs.entities.push(hero, m1, m2);
     gs.hero = hero;
 
-    // First fight at (1,0): move hero adjacent first, then attack.
-    hero.col = 1; hero.row = 0;
     gs.setForcedDice(6, 1, 6, 1);
     executeBattle(gs, hero, m1);
     assert.equal(hasEffect(hero, 'frenzied'), false, 'no frenzy after first kill');
-    hero.col = 2; hero.row = 0;
+    hero.col = 8; hero.row = 8;
     executeBattle(gs, hero, m2);
     assert.equal(hasEffect(hero, 'frenzied'), true, 'frenzy after second kill');
   });
