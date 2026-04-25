@@ -139,6 +139,19 @@ describe('BruteFaction — minions-only summons', () => {
     assert.equal(summons[0].summonType, EntityType.MINION);
   });
 
+  test('with a rich inventory, getSummonOptions still returns ONLY minion for the brute', () => {
+    // The UI uses a probe inventory to discover the full allowed-summon set
+    // for greyed-out display. The brute must never expose IRON_GOLEM or
+    // WOOD_GOLEM at this stage, even when the probe is flooded with
+    // resources.
+    const opts = getFaction('brute').getSummonOptions({
+      [ResourceType.METAL]: 99,
+      [ResourceType.WOOD]: 99,
+    });
+    const types = opts.map(o => o.summonType);
+    assert.deepEqual(types, [EntityType.MINION]);
+  });
+
   test('executeSummon with no requested type spawns a minion (not a golem)', () => {
     const { state, brute } = bruteState();
     state.inventory.witch[ResourceType.METAL] = 4;

@@ -6,6 +6,7 @@ import { EFFECTS } from './effects.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf } from './entities.js';
 import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
+import { concreteFactionOf } from './factions.js';
 import {
   ActionType, getValidActions, getVisiblePositions,
   buildFogMovementHexes,
@@ -1958,19 +1959,31 @@ export class UIController {
       }
     }
 
-    // Always show all 3 summon types for any night-side leader (Witch /
-    // Necromancer / Brute), greyed out if unaffordable.
+    // Show every summon type that the entity's CONCRETE faction allows
+    // (Witch / Necromancer: all three; Brute: minion only). Greyed out
+    // when unaffordable. Stays gated on a SUMMON or GUARD valid action so
+    // the panel doesn't surface summons during off-turn views.
     if (isLeaderType(entity.type) && entity.owner === 'witch' && actions.some(a => a.type === ActionType.SUMMON || a.type === ActionType.GUARD)) {
       const projWitch = projInv ? projInv.witch : state.inventory.witch;
       const projMetal = projWitch?.[ResourceType.METAL] || 0;
       const projWood  = projWitch?.[ResourceType.WOOD]  || 0;
       const projTotal = projWitch ? Object.values(projWitch).reduce((s, v) => s + (v || 0), 0) : 0;
+      // Probe with a "rich enough" inventory so we get the full allowed-
+      // summon set for this faction even when the actual inventory is empty
+      // (we still want to show greyed-out unaffordable options, so the
+      // player understands what's possible to summon eventually).
+      const allowedSummons = new Set(
+        concreteFactionOf(entity)
+          .getSummonOptions({ [ResourceType.METAL]: 99, [ResourceType.WOOD]: 99 })
+          .map(o => o.summonType)
+      );
       const ALL_SUMMONS = [
         { st: EntityType.IRON_GOLEM, label: 'Summon Iron Golem',  full: 'Summon Iron Golem (2 metal)',  afford: projMetal >= 2, res: '2⚙' },
         { st: EntityType.WOOD_GOLEM, label: 'Summon Wood Golem', full: 'Summon Wood Golem (2 wood)',   afford: projWood >= 2, res: '2🪵' },
         { st: EntityType.MINION,     label: 'Summon Minion',      full: 'Summon Minion (2 any resource)', afford: projTotal >= 2, res: '2 res' },
       ];
       for (const s of ALL_SUMMONS) {
+        if (!allowedSummons.has(s.st)) continue;
         arcItems.push({ group: 'summon', label: s.label, fullLabel: s.full,
           color: '#9b59b6', dis: !s.afford || !hasAct, cost: 1, resCost: s.res,
           attrs: `data-action="summon" data-summon-type="${s.st}"` });
