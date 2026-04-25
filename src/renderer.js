@@ -3161,19 +3161,22 @@ export class Renderer {
 
   // Crossbow bolt — short metallic streak oriented along the travel path.
   // Visually distinct from the witch's purple sparkle orb so the rogue's
-  // ranged attack reads instantly.
+  // ranged attack reads instantly. (x, y) is the bolt's TIP, not its
+  // centre — at t=1 the tip lands exactly on the target hex centre and
+  // the tail trails back along the path. Centring the bolt on (x, y)
+  // would let the tip overshoot the target by half its length.
   _drawBoltProjectile(ctx, x, y, hs, _t, p) {
     const dx = p.toX - p.fromX;
     const dy = p.toY - p.fromY;
     const len = Math.hypot(dx, dy) || 1;
     const ux = dx / len;
     const uy = dy / len;
-    // Bolt is a 0.9-hex-long streak centred on (x, y).
-    const half = hs * 0.45;
-    const tipX = x + ux * half;
-    const tipY = y + uy * half;
-    const tailX = x - ux * half;
-    const tailY = y - uy * half;
+    // Bolt is ~0.9 hex long, drawn entirely behind the tip.
+    const boltLen = hs * 0.9;
+    const tipX = x;
+    const tipY = y;
+    const tailX = x - ux * boltLen;
+    const tailY = y - uy * boltLen;
     ctx.save();
     // Dark steel core.
     ctx.strokeStyle = '#2a2a2a';
