@@ -16,6 +16,7 @@ import { PlanActionType, snapEntity, groupPlanByEntity } from '../src/planner.js
 import { Phase, countHeldNodes } from '../src/game.js';
 import { ResourceType } from '../src/tiles.js';
 import { getFaction } from '../src/factions.js';
+import { effectsBlockActions } from '../src/effects.js';
 
 // groupByEntity removed — now uses groupPlanByEntity from planner.js
 const groupByEntity = groupPlanByEntity;
@@ -31,7 +32,11 @@ function _entityIdNum(id) {
 function _sortCandidates(state, candidates) {
   for (const c of candidates) {
     const actor = state.entities.find(e => e.id === c.entityId && e.alive);
-    c.agility = actor ? (actor.agility ?? 1) : -Infinity;
+    // Use getAgility() so effects (slowed → -1) actually shift lockstep order.
+    // Falls back to raw agility for plain-object fixtures missing the method.
+    c.agility = actor
+      ? (typeof actor.getAgility === 'function' ? actor.getAgility() : (actor.agility ?? 1))
+      : -Infinity;
     c.idNum = _entityIdNum(c.entityId);
   }
   candidates.sort((a, b) => (b.agility - a.agility) || (a.idNum - b.idNum));
@@ -106,6 +111,14 @@ function runAction(state, action, faction, playerId = null) {
     if (entity.ownerId !== playerId) return { kind: 'fail', reason: 'Entity belongs to another player.' };
   } else {
     if (entity.owner !== faction) return { kind: 'fail', reason: 'Wrong faction.' };
+  }
+
+  // Stunned (and any future blocking effect): silently skip the action so
+  // later steps in the same plan still run. The effect itself decrements at
+  // round-end via post-round-effects, so a 1-round stun blocks exactly the
+  // round it was applied in.
+  if (effectsBlockActions(entity)) {
+    return { kind: 'skip', reason: `${entity.displayName} is stunned and cannot act.` };
   }
 
   switch (action.type) {
@@ -451,6 +464,11 @@ function snapshotEntities(entities) {
     displayName:   e.displayName,
     title:         e.title,
     color:         e.color ?? null,
+    // Mid-resolution status data — without these, the renderer's status
+    // pips and any client-side berserker math lag a full state delivery
+    // behind reality during the turn animation.
+    effects:       Array.isArray(e.effects) ? e.effects.map(r => ({ ...r })) : [],
+    killsThisRound: e.killsThisRound ?? 0,
   }));
 }
 

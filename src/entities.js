@@ -3,6 +3,10 @@ import { WEAPON_STATS } from './tiles.js';
 import { UNIT_TYPES } from './unit-types.js';
 import { ITEMS } from './items.js';
 import { SurvivorAbility, ABILITIES } from './abilities.js';
+import {
+  effectStatMod, effectRangeMod, effectIncomingAtkAdvantage,
+  effectDamageTakenFlat, effectsBlockHeal,
+} from './effects.js';
 
 let _nextId = 1;
 
@@ -175,6 +179,15 @@ export class Entity {
     this.defendCount   = 0;
     this.guarding      = 0;
 
+    // Per-round counters consulted by ability/effect triggers (e.g. berserker
+    // fires frenzy when killsThisRound >= 2). Reset in resetTurn().
+    this.killsThisRound = 0;
+
+    // Time-bound runtime augments — see src/effects.js. Records:
+    //   { id, duration, stacks, source? }
+    // Stat composition runs in getAttack/getDefense/getRange/getAgility.
+    this.effects = [];
+
     // Personal backpack — a flat key→count map. Weapons use their ITEMS
     // id directly (e.g. 'sword'); consumables and mounts use their
     // resource/item id (e.g. 'horse', 'herbs'). ITEMS[key].kind
@@ -204,17 +217,28 @@ export class Entity {
   getAttack()  {
     return this.attack
       + (ITEMS[this.weapon]?.statMods?.attack ?? 0)
-      + _abilityStatMod(this.abilities, 'attack');
+      + _abilityStatMod(this.abilities, 'attack')
+      + effectStatMod(this, 'attack');
   }
   getDefense() {
     return this.defense
       + (ITEMS[this.weapon]?.statMods?.defense ?? 0)
-      + _abilityStatMod(this.abilities, 'defense');
+      + _abilityStatMod(this.abilities, 'defense')
+      + effectStatMod(this, 'defense');
   }
-  getAgility() { return this.agility ?? 1; }
-  // Attack range in hexes. 1 = melee only; >1 = ranged. Leaves room for
-  // future weapon/ability modifiers (e.g. a "longbow" item that adds +1).
-  getRange()   { return this.range ?? 1; }
+  getAgility() {
+    return (this.agility ?? 1)
+      + _abilityStatMod(this.abilities, 'agility')
+      + effectStatMod(this, 'agility');
+  }
+  // Attack range in hexes. 1 = melee only; >1 = ranged. Effects like
+  // eagle_eyed extend range via rangeMod; permanent abilities (eagle_eye)
+  // compose via ABILITIES[id].statMods.range, mirroring attack/defense.
+  getRange() {
+    return (this.range ?? 1)
+      + _abilityStatMod(this.abilities, 'range')
+      + effectRangeMod(this);
+  }
 
   // Movement range in tiles. 1 base, +1 with horse equipped.
   getMoveRange() {
@@ -251,6 +275,7 @@ export class Entity {
     this.defenseBonus  = 0;
     this.defendCount   = 0;
     this.guarding      = 0;
+    this.killsThisRound = 0;
   }
 
   takeDamage(amount) {
@@ -258,7 +283,19 @@ export class Entity {
     return !this.alive;
   }
 
+  /**
+   * Compute the effective incoming damage for a base hit, after applying
+   * effect mods (e.g. wounded → +1). Currently only flat additions; the
+   * shape leaves room for resistances later. Damage never goes below 1
+   * once a hit lands — effects can amplify pain, not cancel it outright.
+   */
+  applyIncomingDamage(baseAmount) {
+    const flat = effectDamageTakenFlat(this);
+    return Math.max(1, baseAmount + flat);
+  }
+
   heal(amount) {
+    if (effectsBlockHeal(this)) return;
     this.hp = Math.min(this.maxHp, this.hp + amount);
   }
 
@@ -311,8 +348,11 @@ export class Entity {
       }
     }
 
+    // Defender-side effects can grant advantage to attackers (e.g. marked).
+    const defMarkedAdvantage = effectIncomingAtkAdvantage(defender);
+
     const atkNet = clampAdvantage(
-      (phaseAdvantage + atkAdvantageDice + atkStaffAdvantage) - atkDisadvantageDice
+      (phaseAdvantage + atkAdvantageDice + atkStaffAdvantage + defMarkedAdvantage) - atkDisadvantageDice
     );
     const defNet = clampAdvantage(defAdvantageDice - defDisadvantageDice);
 
@@ -356,21 +396,26 @@ export function attackOf(e) {
   const base        = e?.attack ?? 0;
   const weaponMod   = e?.weapon ? (ITEMS[e.weapon]?.statMods?.attack ?? 0) : 0;
   const abilityMod  = _abilityStatMod(e?.abilities, 'attack');
-  return base + weaponMod + abilityMod;
+  const effectMod   = effectStatMod(e, 'attack');
+  return base + weaponMod + abilityMod + effectMod;
 }
 export function defenseOf(e) {
   if (typeof e?.getDefense === 'function') return e.getDefense();
   const base        = e?.defense ?? 0;
   const weaponMod   = e?.weapon ? (ITEMS[e.weapon]?.statMods?.defense ?? 0) : 0;
   const abilityMod  = _abilityStatMod(e?.abilities, 'defense');
-  return base + weaponMod + abilityMod;
+  const effectMod   = effectStatMod(e, 'defense');
+  return base + weaponMod + abilityMod + effectMod;
 }
 // Attack range in hexes — tolerates plain-object fixtures. Falls back to
 // UNIT_TYPES[type].range so tests that skip the Entity constructor still
 // see the correct range for a given entity type.
 export function rangeOf(e) {
   if (typeof e?.getRange === 'function') return e.getRange();
-  return e?.range ?? UNIT_TYPES[e?.type]?.range ?? 1;
+  const base       = e?.range ?? UNIT_TYPES[e?.type]?.range ?? 1;
+  const abilityMod = _abilityStatMod(e?.abilities, 'range');
+  const effectMod  = effectRangeMod(e);
+  return base + abilityMod + effectMod;
 }
 
 // ── Advantage-dice math ─────────────────────────────────────────────────────

@@ -2,6 +2,7 @@
 import { hexKey, hexToPixel, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus } from './tiles.js';
 import { ITEMS } from './items.js';
+import { EFFECTS } from './effects.js';
 import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf } from './entities.js';
 import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
@@ -2345,6 +2346,7 @@ export class UIController {
     const weaponLabel = entity.weapon
       ? entity.weapon.charAt(0).toUpperCase() + entity.weapon.slice(1)
       : null;
+    const effectsHtml = _buildEffectsHtml(entity);
 
     // Portrait image with glyph fallback
     const assetId = _entityPortraitId(entity);
@@ -2409,6 +2411,7 @@ export class UIController {
               <span class="usb-stat-val">${entity.hp}/${entity.maxHp}</span>
             </span>
             ${weaponLabel ? `<span class="usb-weapon">⚔ ${weaponLabel}</span>` : ''}
+            ${effectsHtml}
             <button class="usb-info-btn ${expanded ? 'usb-info-btn-active' : ''}" title="${expanded ? 'Hide stats' : 'Show stats & abilities'}">i</button>
           </span>
           ${expandedBlockHtml}
@@ -4590,6 +4593,44 @@ function _visibleUnitsAt(state, col, row) {
     if (revealed && e.owner !== myFaction) return revealed.has(hexKey(col, row));
     return true;
   });
+}
+
+// Effects whose mods make a unit weaker (red pip), vs. those that strengthen
+// it (green pip). Anything not listed renders neutral.
+const _BAD_EFFECTS  = new Set(['wounded', 'poisoned', 'bleeding', 'stunned', 'slowed', 'marked', 'cursed']);
+const _GOOD_EFFECTS = new Set(['frenzied', 'inspired', 'fortified', 'eagle_eyed']);
+
+/**
+ * Render the active effects pip strip for an entity. Each pip shows the
+ * effect's icon and (for finite durations) a small remaining-rounds badge.
+ * The full label/description is exposed via the title attribute for
+ * desktop hover and mobile long-press.
+ */
+function _buildEffectsHtml(entity) {
+  if (!entity || !Array.isArray(entity.effects) || entity.effects.length === 0) {
+    return '';
+  }
+  const pips = entity.effects.map(rec => {
+    const def = EFFECTS[rec.id];
+    if (!def) return '';
+    const kind = _BAD_EFFECTS.has(rec.id) ? 'bad'
+               : _GOOD_EFFECTS.has(rec.id) ? 'good'
+               : '';
+    const durLabel = typeof rec.duration === 'number'
+      ? `${rec.duration}`
+      : (rec.duration === 'mission' ? '∞' : '');
+    const stacksLabel = (rec.stacks ?? 1) > 1 ? `×${rec.stacks}` : '';
+    const tooltipBits = [def.label, def.description];
+    if (typeof rec.duration === 'number') tooltipBits.push(`${rec.duration} round${rec.duration === 1 ? '' : 's'} remaining`);
+    else if (rec.duration === 'mission') tooltipBits.push('Lasts the mission');
+    else if (rec.duration === 'permanent') tooltipBits.push('Permanent');
+    const tooltip = tooltipBits.join(' — ').replace(/"/g, '&quot;');
+    return `<span class="usb-effect-pip" data-kind="${kind}" title="${tooltip}">`
+         + `${def.icon ?? '●'}${stacksLabel}`
+         + (durLabel ? `<span class="usb-effect-pip-dur">${durLabel}</span>` : '')
+         + `</span>`;
+  }).join('');
+  return `<span class="usb-effects">${pips}</span>`;
 }
 
 // ── Tilemap sprite helpers ────────────────────────────────────────────────────

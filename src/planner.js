@@ -4,6 +4,7 @@ import { getReachableHexes, getVisiblePositions } from './actions.js';
 import { TileType, ResourceType } from './tiles.js';
 import { EntityType } from './entities.js';
 import { ITEMS } from './items.js';
+import { effectsBlockActions } from './effects.js';
 
 // ── Plan action types ────────────────────────────────────────────────────────
 //
@@ -274,6 +275,13 @@ export function interleavePlan(unitPlans) {
 export function validatePlanAction(state, action, projectedPositions = null) {
   const entity = state.entities.find(e => e.id === action.entityId && e.alive);
   if (!entity) return { valid: false, reason: 'Entity not found.' };
+
+  // Stunned (and any future action-blocking effect): reject at planning time
+  // so the player isn't silently spending a planning slot on a unit that
+  // will skip every step at resolution.
+  if (effectsBlockActions(entity)) {
+    return { valid: false, reason: `${entity.displayName ?? 'Unit'} is stunned and cannot act this round.` };
+  }
 
   const pos = projectedPositions?.get(action.entityId)
     ?? { col: entity.col, row: entity.row };
