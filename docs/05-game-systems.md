@@ -15,7 +15,7 @@ Brimstone has two opposing **Sides** — Day and Night — and multiple **Factio
 | day   | captain      | `CAPTAIN`          | Captain Eli Ward    | stub (inherits Paladin behaviour) |
 | night | witch        | `WITCH`            | The Witch           | primary |
 | night | necromancer  | `NECROMANCER`      | The Necromancer     | stub (inherits Witch behaviour) |
-| night | brute        | `BRUTE`            | The Brute           | stub (inherits Witch behaviour) |
+| night | brute        | `BRUTE`            | The Brute           | distinct (heavy tank, cheap minions, splash blast every hit, knockback, friendly-fire off) |
 
 Stub factions are registered with their own `EntityType`, base stats, and default leader name. They are subclasses of their side's primary faction (`HeroFaction` or `WitchFaction`) and inherit all combat / summon / fortify / discovery / sight behaviour.
 
@@ -28,7 +28,17 @@ The Rogue is no longer a stub — `RogueFaction` overrides:
 
 Plus `UNIT_TYPES.rogue.range = 3` and `projectileType: 'bolt'` give her the 3-hex crossbow attack via the existing ranged combat path.
 
-`Faction` exposes the hooks (`canEquipWeaponItem`, `modifyLootRoll`, `applyExploreLootBonus`, `onAfterMoveStep`, `getSightRange`) on the base class; future factions plug in by overriding only what they need.
+The Brute is also no longer a stub — `BruteFaction` overrides:
+- `getSummonOptions` / `getMinionCost` — minions only (no golems), and at a 1-resource discount (witch pays 2)
+- `onAfterMoveStep` — same building-tile scan as the rogue, but `WitchFaction.createDiscoveryEntity` raises a zombie instead of recruiting a survivor
+- `crushSplashRadius` — `1`; the splash blast extends outward to the 6 hexes around the target
+- `splashesOnEveryHit` — `true`; the blast fires on any melee hit, not just crushes
+- `splashSparesAllies` — `true`; witch-side units on splash hexes take no damage (and no knockback)
+- `splashKnockback` — `true`; surviving splashed bystanders are pushed one hex outward from the target when the destination is open
+
+Splash damage scales with the attacker's roll margin: `clamp(floor(margin / 3), 1, 3)`. Crushing blows additionally apply the **wounded** effect to surviving targets — that's a universal rule (any attacker), not a brute-only one.
+
+`Faction` exposes the hooks (`canEquipWeaponItem`, `modifyLootRoll`, `applyExploreLootBonus`, `onAfterMoveStep`, `getSightRange`, `crushSplashRadius`, `splashesOnEveryHit`, `splashSparesAllies`, `splashKnockback`, `getMinionCost`) on the base class; future factions plug in by overriding only what they need.
 
 ### Weapon categories
 
@@ -56,7 +66,7 @@ See `src/sides.js` for the Side enum and `src/factions.js` for the Faction regis
    │ Rogue    │         │  Necromancer │         │ WGolem  │
    │ 10/3/1   │         │  10/1/2      │         │ 3/2/3   │
    │ Captain  │         │  Brute       │         │ IGolem  │
-   │ 12/2/3   │         │  14/3/1      │         │ 5/3/2   │
+   │ 12/2/3   │         │  18/4/3      │         │ 5/3/2   │
    └──────────┘         └──────────────┘         └─────────┘
 ```
 
@@ -67,7 +77,7 @@ See `src/sides.js` for the Side enum and `src/factions.js` for the Faction regis
 | Captain (stub) | 12 | 2 | 3 | day | Game start (when picked) |
 | Witch (default night leader) | 10 | 2 | 2 | night | Game start |
 | Necromancer (stub) | 10 | 1 | 2 | night | Game start (when picked) |
-| Brute (stub) | 14 | 3 | 1 | night | Game start (when picked) |
+| Brute        | 18 | 4 | 3 | night | Game start (when picked) |
 | Survivor | 4 | 1 | 1 | day (after recruit) | Exploration / Sound Horn |
 | Zombie | 2 | 2 | 0 | night (after raise) | Exploration (graveyard) |
 | Minion | 2 | 1 | 0 | night | Summon (no resource cost) |

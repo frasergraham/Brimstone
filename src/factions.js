@@ -83,6 +83,38 @@ export class Faction {
   isBlockedByWalls() { return false; }
 
   /**
+   * Bonus splash radius around the target hex when this faction's unit
+   * lands a hit that triggers splash. 0 = vanilla splash (only same-hex
+   * bystanders). 1 = also damage units on the 6 neighbouring hexes —
+   * the brute's signature blast.
+   */
+  crushSplashRadius() { return 0; }
+
+  /**
+   * If true, splash fires on every melee hit (not just crush / kill).
+   * Default vanilla rule: splash is a crush-only mechanic.
+   */
+  splashesOnEveryHit() { return false; }
+
+  /**
+   * If true, splash skips units owned by this faction's side. Default
+   * is friendly fire on — splash is indiscriminate.
+   */
+  splashSparesAllies() { return false; }
+
+  /**
+   * If true, splashed bystanders are knocked back one hex outward from
+   * the target (when the push destination is open terrain).
+   */
+  splashKnockback() { return false; }
+
+  /**
+   * Resource cost for summoning a Minion. Defaults to 2 (witch's value)
+   * — overridden by faction stubs that want cheaper chaff (brute = 1).
+   */
+  getMinionCost() { return 2; }
+
+  /**
    * Summon options with affordability info.
    * @param {object} inventory - the faction's resource inventory
    * @returns {Array<{summonType: string, affordable: boolean}>}
@@ -686,9 +718,70 @@ export class BruteFaction extends WitchFaction {
   get id()         { return 'brute'; }
   get name()       { return 'Brute'; }
   get leaderType() { return EntityType.BRUTE; }
-  isStub()         { return true; }
+  // No isStub() override — the brute has its own behaviour: cheap
+  // minion-only summons, building survivor auto-zombify, and a meaty
+  // splash blast that fires on every melee hit (knocks enemies back,
+  // skips friendlies).
+
   _buildLeader(col, row, ownerId, state = null) {
     return createBrute(col, row, ownerId, state);
+  }
+
+  // Splash radius around the target hex. 1 = also damage the 6
+  // neighbouring hexes around the target.
+  crushSplashRadius() { return 1; }
+
+  // Splash fires on every melee hit, not just crushing blows. The
+  // damage scales with the attacker's roll margin (see splashDamage).
+  splashesOnEveryHit() { return true; }
+
+  // Splash skips units owned by the attacker's faction. The brute can
+  // wade into a swarm without nuking her own minions.
+  splashSparesAllies() { return true; }
+
+  // Splashed bystanders are knocked one hex outward from the target
+  // (when the destination is open). Repositioning is the headline
+  // tactical effect — the damage tax is secondary.
+  splashKnockback() { return true; }
+
+  // Brute summons only minions, and at a discount — 1 of any resource
+  // instead of the witch's 2. Cheap chaff so she has bodies to soak
+  // gang-up advantage while she swings her cleaver.
+  getMinionCost() { return 1; }
+
+  getSummonOptions(inventory) {
+    const total = Object.values(inventory).reduce((s, v) => s + (v || 0), 0);
+    if (total < this.getMinionCost()) return [];
+    return [{ summonType: EntityType.MINION, affordable: true }];
+  }
+
+  // Auto-zombify on building proximity — same scan as the rogue's keen-eye
+  // detection, but the WitchFaction.createDiscoveryEntity hook turns the
+  // hidden survivor into a zombie instead of recruiting them.
+  onAfterMoveStep(state, actor, col, row) {
+    const hits = [];
+    const here = state.tiles.get(hexKey(col, row));
+    if (here?.type === TileType.BUILDING && here.hiddenSurvivor) {
+      hits.push({ col, row });
+    }
+    for (const n of getNeighbors(col, row)) {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      if (t?.type === TileType.BUILDING && t.hiddenSurvivor) {
+        hits.push({ col: n.col, row: n.row });
+      }
+    }
+    if (!hits.length) return null;
+    const encounterLog = [];
+    let encounterSurvivor = null;
+    for (const h of hits) {
+      const enc = triggerSurvivorEncounter(state, actor, h.col, h.row);
+      if (enc) {
+        encounterLog.push(`👹 ${actor.displayName} drags a cowering survivor from hiding!`);
+        encounterLog.push(...enc.encounterLog);
+        encounterSurvivor = enc.encounterSurvivor;
+      }
+    }
+    return { encounterLog, encounterSurvivor };
   }
 }
 
