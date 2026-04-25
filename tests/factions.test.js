@@ -1,7 +1,8 @@
 // Tests for the Faction class hierarchy and registry
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Faction, HeroFaction, WitchFaction, getFaction, allFactions } from '../src/factions.js';
+import { Faction, HeroFaction, WitchFaction, RogueFaction, CaptainFaction, NecromancerFaction, BruteFaction, getFaction, allFactions, getFactionsForSide, sideOf } from '../src/factions.js';
+import { Side } from '../src/sides.js';
 import { Phase } from '../src/game.js';
 import { EntityType } from '../src/entities.js';
 import { ResourceType } from '../src/tiles.js';
@@ -25,11 +26,12 @@ describe('Faction registry', () => {
     assert.throws(() => getFaction('goblin'), /Unknown faction/);
   });
 
-  test('allFactions returns both factions', () => {
+  test('allFactions returns the six registered factions (hero/rogue/captain + witch/necromancer/brute)', () => {
     const all = allFactions();
-    assert.equal(all.length, 2);
-    assert.ok(all.some(f => f.id === 'hero'));
-    assert.ok(all.some(f => f.id === 'witch'));
+    assert.equal(all.length, 6);
+    for (const id of ['hero', 'rogue', 'captain', 'witch', 'necromancer', 'brute']) {
+      assert.ok(all.some(f => f.id === id), `allFactions should include ${id}`);
+    }
   });
 
   test('getFaction returns singletons', () => {
@@ -51,6 +53,121 @@ describe('Faction identity', () => {
     const w = getFaction('witch');
     assert.equal(w.name, 'Witch');
     assert.equal(w.leaderType, EntityType.WITCH);
+  });
+});
+
+// ── Side membership ────────────────────────────────────────────────────────
+
+describe('Faction side membership', () => {
+  test('HeroFaction belongs to the day side', () => {
+    assert.equal(getFaction('hero').side, Side.DAY);
+  });
+
+  test('WitchFaction belongs to the night side', () => {
+    assert.equal(getFaction('witch').side, Side.NIGHT);
+  });
+
+  test('getOpposingSide returns the other side', () => {
+    assert.equal(getFaction('hero').getOpposingSide(),  Side.NIGHT);
+    assert.equal(getFaction('witch').getOpposingSide(), Side.DAY);
+  });
+
+  test('getFactionsForSide groups factions by side', () => {
+    const day   = getFactionsForSide('day');
+    const night = getFactionsForSide('night');
+    assert.ok(day.some(f => f.id === 'hero'),   'day side includes hero');
+    assert.ok(night.some(f => f.id === 'witch'),'night side includes witch');
+    // No cross-contamination.
+    assert.equal(day.some(f => f.id === 'witch'),  false);
+    assert.equal(night.some(f => f.id === 'hero'), false);
+  });
+
+  test('getFactionsForSide returns [] for unknown side', () => {
+    assert.deepEqual(getFactionsForSide('twilight'), []);
+  });
+
+  test('sideOf maps faction id to side id', () => {
+    assert.equal(sideOf('hero'),  Side.DAY);
+    assert.equal(sideOf('witch'), Side.NIGHT);
+  });
+
+  test('sideOf returns null for unknown faction', () => {
+    assert.equal(sideOf('goblin'), null);
+    assert.equal(sideOf(null), null);
+  });
+});
+
+// ── Stub factions ──────────────────────────────────────────────────────────
+
+describe('Stub factions (PR 5)', () => {
+  test('all four stub factions are registered with their side', () => {
+    assert.equal(getFaction('rogue').side,       Side.DAY);
+    assert.equal(getFaction('captain').side,     Side.DAY);
+    assert.equal(getFaction('necromancer').side, Side.NIGHT);
+    assert.equal(getFaction('brute').side,       Side.NIGHT);
+  });
+
+  test('stub factions report isStub() === true; side defaults do not', () => {
+    // Rogue and Brute have grown real distinct behaviour (rogue: ranged
+    // attack, melee-weapon ban, sight bonus, agility-loot bonus,
+    // building-survivor auto-detect, no Sound Horn; brute: lumbering
+    // movement, minions-only summons, building-survivor auto-zombify,
+    // crushing-blow blast splash) — no longer stubs. The remaining
+    // day/night stubs still inherit their parent's behaviour wholesale.
+    assert.equal(getFaction('rogue').isStub(),       false);
+    assert.equal(getFaction('captain').isStub(),     true);
+    assert.equal(getFaction('necromancer').isStub(), true);
+    assert.equal(getFaction('brute').isStub(),       false);
+    assert.equal(getFaction('hero').isStub(),        false);
+    assert.equal(getFaction('witch').isStub(),       false);
+  });
+
+  test('stub factions are subclasses of their side primary', () => {
+    assert.ok(getFaction('rogue')       instanceof HeroFaction);
+    assert.ok(getFaction('captain')     instanceof HeroFaction);
+    assert.ok(getFaction('necromancer') instanceof WitchFaction);
+    assert.ok(getFaction('brute')       instanceof WitchFaction);
+  });
+
+  test('stub createLeader returns an entity with the stub-specific type and stats', () => {
+    const r = getFaction('rogue').createLeader(0, 0, 'p1');
+    assert.equal(r.type,    'rogue');
+    assert.equal(r.maxHp,   10);
+    assert.equal(r.attack,  3);
+    assert.equal(r.defense, 1);
+    assert.equal(r.agility, 8);
+    // Day-side membership: owner string stays 'hero' for compat with
+    // existing `e.owner === 'hero'` checks across the codebase.
+    assert.equal(r.owner,     'hero');
+    assert.equal(r.factionId, 'rogue');
+  });
+
+  test('stub day factions belong to the day side ordering', () => {
+    const day = getFactionsForSide('day').map(f => f.id);
+    assert.deepEqual(day, ['hero', 'rogue', 'captain']);
+  });
+
+  test('stub night factions belong to the night side ordering', () => {
+    const night = getFactionsForSide('night').map(f => f.id);
+    assert.deepEqual(night, ['witch', 'necromancer', 'brute']);
+  });
+});
+
+// ── Faction inventory routes through side accessor ─────────────────────────
+
+describe('Faction.getInventory routes through state.inventoryForSide', () => {
+  test('reads inventory for the faction\'s side', () => {
+    const dayInv   = { food: 2 };
+    const nightInv = { wood: 2, metal: 2 };
+    const state = {
+      inventoryForSide(sideId) {
+        if (sideId === 'day')   return dayInv;
+        if (sideId === 'night') return nightInv;
+        return null;
+      },
+    };
+    assert.equal(getFaction('hero').getInventory(state),  dayInv);
+    assert.equal(getFaction('witch').getInventory(state), nightInv);
   });
 });
 
@@ -304,30 +421,42 @@ describe('Entity registry', () => {
 // ── Kill / Summon Tracking ─────────────────────────────────────────────────
 
 describe('Kill and summon tracking', () => {
-  test('Hero trackKill increments heroKills', () => {
-    const state = { heroKills: 0, witchKills: 0 };
+  // Faction.trackKill / trackSummon now delegate to state-level mutators;
+  // provide minimal spies so the routing can be verified without pulling
+  // in a full GameState.
+  function spyState() {
+    const calls = { killSides: [], summonSides: [] };
+    return {
+      calls,
+      recordKillForSide(side)   { calls.killSides.push(side); },
+      recordSummonForSide(side) { calls.summonSides.push(side); },
+    };
+  }
+
+  test('Hero (day) trackKill routes to recordKillForSide("day")', () => {
+    const state = spyState();
     getFaction('hero').trackKill(state);
-    assert.equal(state.heroKills, 1);
-    assert.equal(state.witchKills, 0);
+    assert.deepEqual(state.calls.killSides, ['day']);
   });
 
-  test('Witch trackKill increments witchKills', () => {
-    const state = { heroKills: 0, witchKills: 0 };
+  test('Witch (night) trackKill routes to recordKillForSide("night")', () => {
+    const state = spyState();
     getFaction('witch').trackKill(state);
-    assert.equal(state.heroKills, 0);
-    assert.equal(state.witchKills, 1);
+    assert.deepEqual(state.calls.killSides, ['night']);
   });
 
-  test('Hero trackSummon is a no-op', () => {
-    const state = { witchSummonCount: 0 };
+  test('Hero (day) trackSummon still calls recordSummonForSide("day")', () => {
+    // Day has no summon mechanic today, but the routing must still fire
+    // so a future day-side summoner doesn't need to edit Faction again.
+    const state = spyState();
     getFaction('hero').trackSummon(state);
-    assert.equal(state.witchSummonCount, 0);
+    assert.deepEqual(state.calls.summonSides, ['day']);
   });
 
-  test('Witch trackSummon increments witchSummonCount', () => {
-    const state = { witchSummonCount: 0 };
+  test('Witch (night) trackSummon routes to recordSummonForSide("night")', () => {
+    const state = spyState();
     getFaction('witch').trackSummon(state);
-    assert.equal(state.witchSummonCount, 1);
+    assert.deepEqual(state.calls.summonSides, ['night']);
   });
 });
 
@@ -339,9 +468,13 @@ describe('Faction helpers', () => {
     assert.equal(getFaction('witch').getOpponentId(), 'hero');
   });
 
-  test('getActionsLeft reads correct field', () => {
-    const state = { heroActionsLeft: 5, witchActionsLeft: 3 };
-    assert.equal(getFaction('hero').getActionsLeft(state), 5);
+  test('getActionsLeft reads from the side-keyed accessor', () => {
+    // Faction.getActionsLeft now delegates to state.actionsLeftForSide().
+    // Provide a minimal stub to verify the routing.
+    const state = {
+      actionsLeftForSide(sideId) { return sideId === 'day' ? 5 : 3; },
+    };
+    assert.equal(getFaction('hero').getActionsLeft(state),  5);
     assert.equal(getFaction('witch').getActionsLeft(state), 3);
   });
 
@@ -377,10 +510,14 @@ describe('canExplore', () => {
     assert.equal(getFaction('hero').canExplore({ type: EntityType.SURVIVOR }), true);
   });
 
-  test('Witch faction: only witch leader can explore', () => {
-    assert.equal(getFaction('witch').canExplore({ type: EntityType.WITCH }), true);
-    assert.equal(getFaction('witch').canExplore({ type: EntityType.MINION }), false);
-    assert.equal(getFaction('witch').canExplore({ type: EntityType.ZOMBIE }), false);
-    assert.equal(getFaction('witch').canExplore({ type: EntityType.IRON_GOLEM }), false);
+  test('Witch faction: only a night-side leader can explore', () => {
+    // All leader types on the night side are eligible explorers.
+    assert.equal(getFaction('witch').canExplore({ type: EntityType.WITCH,       owner: 'witch' }), true);
+    assert.equal(getFaction('witch').canExplore({ type: EntityType.NECROMANCER, owner: 'witch' }), true);
+    assert.equal(getFaction('witch').canExplore({ type: EntityType.BRUTE,       owner: 'witch' }), true);
+    // Summoned units and zombies do not explore.
+    assert.equal(getFaction('witch').canExplore({ type: EntityType.MINION,      owner: 'witch' }), false);
+    assert.equal(getFaction('witch').canExplore({ type: EntityType.ZOMBIE,      owner: 'witch' }), false);
+    assert.equal(getFaction('witch').canExplore({ type: EntityType.IRON_GOLEM,  owner: 'witch' }), false);
   });
 });

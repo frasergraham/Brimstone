@@ -39,7 +39,7 @@ function makeAllyUI() {
   ui.myPlayerId = 'me';
 
   // Mark the hero as "mine".
-  const hero = state.entities.find(e => e.alive && e.type === 'hero');
+  const hero = state.entities.find(e => e.alive && e.type === 'paladin');
   hero.ownerId = 'me';
 
   // Spawn a real ally survivor entity (with proper Entity prototype, so the

@@ -168,7 +168,7 @@ CONTROL_NODES score:
 
 ## Personality System
 
-Each faction has 3 personality variants that adjust goal weights and engagement thresholds.
+Each side primary (Hero / Witch) has 3 personality variants that adjust goal weights and engagement thresholds. Stub factions (Rogue / Captain on day; Necromancer / Brute on night) inherit their parent side's personality registry for now — `Faction.getPersonalities()` returns the parent registry until a stub gets its own implementation. See `docs/design/faction-expansion.md`.
 
 ### Witch Personalities
 

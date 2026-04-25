@@ -27,6 +27,9 @@ function makeTinyState(fogOfWar = 'partial') {
     heroRevealedByHorn: false,
     inventory: { hero: {}, witch: {} },
     actionBudget: { hero: 3, witch: 3 },
+    inventoryForSide(sideId) {
+      return sideId === 'day' ? this.inventory.hero : this.inventory.witch;
+    },
   };
   for (let row = 0; row < 7; row++) {
     for (let col = 0; col < 7; col++) {

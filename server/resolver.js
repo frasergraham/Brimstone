@@ -7,17 +7,41 @@
 import {
   executeMove, executeExplore, executeBattle,
   executeFortify, executeSummon, executeHeal, executeUseItem, executeUseAbility,
-  executeGuard, executeGuardStrike, executeSoundHorn,
+  executeGuard, executeGuardStrike, executeSoundHorn, executeFortAssault,
 } from '../src/actions.js';
-import { EntityType } from '../src/entities.js';
+import { FORT_IMPASSABLE_THRESHOLD } from '../src/tiles.js';
+import { EntityType, isLeaderType } from '../src/entities.js';
 import { hexDistance, getNeighbors, hexKey } from '../src/hex.js';
 import { PlanActionType, snapEntity, groupPlanByEntity } from '../src/planner.js';
 import { Phase, countHeldNodes } from '../src/game.js';
 import { ResourceType } from '../src/tiles.js';
 import { getFaction } from '../src/factions.js';
+import { effectsBlockActions } from '../src/effects.js';
 
 // groupByEntity removed — now uses groupPlanByEntity from planner.js
 const groupByEntity = groupPlanByEntity;
+
+// Parse numeric id from "eN" so e2 < e10 (numeric, not lexicographic).
+function _entityIdNum(id) {
+  const n = parseInt(String(id ?? '').slice(1), 10);
+  return Number.isNaN(n) ? 0 : n;
+}
+
+// Build & sort drain candidates for one step, highest agility first,
+// ties broken by ascending numeric entity id. Dead/missing actors sort last.
+function _sortCandidates(state, candidates) {
+  for (const c of candidates) {
+    const actor = state.entities.find(e => e.id === c.entityId && e.alive);
+    // Use getAgility() so effects (slowed → -1) actually shift lockstep order.
+    // Falls back to raw agility for plain-object fixtures missing the method.
+    c.agility = actor
+      ? (typeof actor.getAgility === 'function' ? actor.getAgility() : (actor.agility ?? 1))
+      : -Infinity;
+    c.idNum = _entityIdNum(c.entityId);
+  }
+  candidates.sort((a, b) => (b.agility - a.agility) || (a.idNum - b.idNum));
+  return candidates;
+}
 
 // ── Event types ──────────────────────────────────────────────────────────────
 
@@ -60,9 +84,7 @@ function budgetForPlayer(state, playerId, faction) {
 // Delegates to state.scatterPlayerUnits() which is defined in game.js.
 
 function _handleLeaderDeath(state, killedEntity) {
-  const isLeader = killedEntity.type === EntityType.HERO ||
-                   killedEntity.type === EntityType.WITCH;
-  if (!isLeader || !killedEntity.ownerId) return;
+  if (!isLeaderType(killedEntity.type) || !killedEntity.ownerId) return;
   if (typeof state.scatterPlayerUnits === 'function') {
     state.scatterPlayerUnits(killedEntity.ownerId);
   }
@@ -91,11 +113,23 @@ function runAction(state, action, faction, playerId = null) {
     if (entity.owner !== faction) return { kind: 'fail', reason: 'Wrong faction.' };
   }
 
+  // Stunned (and any future blocking effect): silently skip the action so
+  // later steps in the same plan still run. The effect itself decrements at
+  // round-end via post-round-effects, so a 1-round stun blocks exactly the
+  // round it was applied in.
+  if (effectsBlockActions(entity)) {
+    return { kind: 'skip', reason: `${entity.displayName} is stunned and cannot act.` };
+  }
+
   switch (action.type) {
 
     case PlanActionType.MOVE: {
       const r = executeMove(state, entity, action.toCol, action.toRow);
-      if (!r.success) return { kind: 'fail', reason: r.log[0], blockedBy: r.blockedBy ?? null };
+      if (!r.success) return {
+        kind: 'fail', reason: r.log[0],
+        blockedBy: r.blockedBy ?? null,
+        blockedByFort: r.blockedByFort ?? null,
+      };
       return { kind: 'ok', result: r };
     }
 
@@ -106,17 +140,21 @@ function runAction(state, action, faction, playerId = null) {
     }
 
     case PlanActionType.BATTLE_UNIT: {
+      // Ranged units (range > 1) can strike any enemy within their attack
+      // range; melee units remain adjacency-only. Fort assault is melee-only
+      // and still capped at range 1 below (ranged units can't batter walls).
+      const attackerRange = typeof entity.getRange === 'function' ? entity.getRange() : (entity.range ?? 1);
       let target = state.entities.find(e => e.id === action.targetId && e.alive);
 
       if (target) {
         const dist = hexDistance(entity.col, entity.row, target.col, target.row);
-        if (dist > 1) target = null; // target moved out of range
+        if (dist > attackerRange) target = null; // target moved out of range
       }
 
       // Fallback: original target gone/moved — attack another enemy on the planned hex
       if (!target && action.targetCol != null && action.targetRow != null) {
         const dist = hexDistance(entity.col, entity.row, action.targetCol, action.targetRow);
-        if (dist <= 1) {
+        if (dist <= attackerRange) {
           const enemies = state.entities.filter(
             e => e.alive && e.owner !== faction &&
                  e.col === action.targetCol && e.row === action.targetRow
@@ -138,12 +176,17 @@ function runAction(state, action, faction, playerId = null) {
       if (r.counterDmg > 0 && !state.entities.some(e => e.id === entity.id))
         _handleLeaderDeath(state, entity);
       for (const sk of r.splashKills ?? []) _handleLeaderDeath(state, sk);
-      return { kind: 'ok', result: r, battleSnaps: { actorSnap, targetSnap } };
+      return {
+        kind: 'ok',
+        result: r,
+        battleSnaps: { actorSnap, targetSnap, ranged: !!r.ranged },
+      };
     }
 
     case PlanActionType.BATTLE_HEX: {
+      const attackerRange = typeof entity.getRange === 'function' ? entity.getRange() : (entity.range ?? 1);
       const dist = hexDistance(entity.col, entity.row, action.targetCol, action.targetRow);
-      if (dist > 1) return { kind: 'skip', reason: 'Target hex out of range.' };
+      if (dist > attackerRange) return { kind: 'skip', reason: 'Target hex out of range.' };
 
       const enemies = state.entities.filter(
         e => e.alive && e.owner !== faction &&
@@ -151,10 +194,21 @@ function runAction(state, action, faction, playerId = null) {
       );
       if (enemies.length === 0) {
         const actorSnap = snapEntity(entity);
+        // Witch siege: if no enemy is on the hex but a wall (fort >= threshold)
+        // stands there, battering it reduces its level. Otherwise whiff. Fort
+        // assault is melee-only — ranged attackers cannot batter walls at a
+        // distance. The dist <= 1 gate below keeps this constraint.
+        const targetTile = state.tiles.get(hexKey(action.targetCol, action.targetRow));
+        if (dist <= 1 && getFaction(entity.owner).canAssaultFortifications() && targetTile &&
+            (targetTile.fortifyLevel || 0) >= FORT_IMPASSABLE_THRESHOLD) {
+          const r = executeFortAssault(state, entity, action.targetCol, action.targetRow);
+          if (!r.success) return { kind: 'fail', reason: r.log[0] };
+          return { kind: 'ok', result: r, battleSnaps: { actorSnap } };
+        }
         return {
           kind: 'skip',
           reason: 'No enemy on target hex.',
-          battleSnaps: { actorSnap },
+          battleSnaps: { actorSnap, ranged: attackerRange > 1 },
           whiffTarget: { col: action.targetCol, row: action.targetRow },
         };
       }
@@ -169,7 +223,11 @@ function runAction(state, action, faction, playerId = null) {
       if (r.counterDmg > 0 && !state.entities.some(e => e.id === entity.id))
         _handleLeaderDeath(state, entity);
       for (const sk of r.splashKills ?? []) _handleLeaderDeath(state, sk);
-      return { kind: 'ok', result: r, battleSnaps: { actorSnap, targetSnap } };
+      return {
+        kind: 'ok',
+        result: r,
+        battleSnaps: { actorSnap, targetSnap, ranged: !!r.ranged },
+      };
     }
 
     case PlanActionType.FORTIFY: {
@@ -217,7 +275,7 @@ function runAction(state, action, faction, playerId = null) {
     }
 
     case PlanActionType.USE_ABILITY: {
-      const r = executeUseAbility(state, entity);
+      const r = executeUseAbility(state, entity, action.ability);
       if (!r.success) return { kind: 'fail', reason: r.log[0] };
       // budgetBonus returned directly by executeUseAbility (e.g. Rally → +1)
       return { kind: 'ok', result: r, budgetBonus: r.budgetBonus ?? 0 };
@@ -305,11 +363,12 @@ function drainOneStep(state, queue, budget) {
       // Hard failure — skip this action but let remaining plan continue
       queue.shift();
       subEvents.push({
-        type:      ResEventType.ACTION_FAIL,
-        faction:   budget.faction,
+        type:          ResEventType.ACTION_FAIL,
+        faction:       budget.faction,
         action,
-        reason:    out.reason,
-        blockedBy: out.blockedBy ?? null,
+        reason:        out.reason,
+        blockedBy:     out.blockedBy ?? null,
+        blockedByFort: out.blockedByFort ?? null,
       });
       // Loop: try the next action in the same step
     }
@@ -396,14 +455,20 @@ function snapshotEntities(entities) {
     ownerId:       e.ownerId ?? null,
     type:          e.type,
     weapon:        e.weapon,
-    ability:       e.ability,
+    abilities:     Array.isArray(e.abilities) ? [...e.abilities] : [],
     attack:        e.attack,
     defense:       e.defense,
+    agility:       e.agility,
     fortification: e.fortification,
     guarding:      e.guarding ?? 0,
     displayName:   e.displayName,
     title:         e.title,
     color:         e.color ?? null,
+    // Mid-resolution status data — without these, the renderer's status
+    // pips and any client-side berserker math lag a full state delivery
+    // behind reality during the turn animation.
+    effects:       Array.isArray(e.effects) ? e.effects.map(r => ({ ...r })) : [],
+    killsThisRound: e.killsThisRound ?? 0,
   }));
 }
 
@@ -447,23 +512,42 @@ export function resolvePlansMP(state, playerEntries) {
 
   while (true) {
     const entitySnapshot = snapshotEntities(state.entities);
-    const stepEvents = [];
+
+    // Flatten all players' per-entity queues into a single candidate list
+    // and sort by actor Agility (desc), tie-break numeric entity id (asc).
+    const candidates = [];
+    for (const player of players) {
+      for (const [entityId, queue] of player.unitQueues) {
+        if (queue.length === 0) continue;
+        candidates.push({ player, entityId, queue });
+      }
+    }
+    _sortCandidates(state, candidates);
+
+    const eventsByPlayer = new Map();
     let anyAction = false;
 
-    for (const player of players) {
-      const playerEvents = [];
-      for (const [, queue] of player.unitQueues) {
-        if (queue.length === 0) continue;
-        const events = drainOneStep(state, queue, player.budget);
-        playerEvents.push(...events);
+    for (const c of candidates) {
+      const events = drainOneStep(state, c.queue, c.player.budget);
+      if (events.length === 0) continue;
+      anyAction = true;
+      let bucket = eventsByPlayer.get(c.player.playerId);
+      if (!bucket) {
+        bucket = { playerId: c.player.playerId, faction: c.player.faction, events: [] };
+        eventsByPlayer.set(c.player.playerId, bucket);
       }
-      if (playerEvents.length > 0) {
-        stepEvents.push({ playerId: player.playerId, faction: player.faction, events: playerEvents });
-        anyAction = true;
-      }
+      bucket.events.push(...events);
     }
 
     if (!anyAction) break;
+
+    // Preserve original player ordering in the output step record.
+    const stepEvents = [];
+    for (const player of players) {
+      const bucket = eventsByPlayer.get(player.playerId);
+      if (bucket) stepEvents.push(bucket);
+    }
+
     steps.push({ stepIndex, playerEvents: stepEvents, entitySnapshot });
     stepIndex++;
   }
@@ -495,20 +579,24 @@ export function resolvePlans(state, heroPlan, witchPlan) {
 
     const entitySnapshot = snapshotEntities(state.entities);
 
-    // Drain one action from each hero unit that has actions queued.
+    // Flatten both factions' per-entity queues into one list, sort by Agility,
+    // drain each, then split events back into per-faction buckets.
     const heroEvents = [];
-    for (const [, queue] of heroUnitQueues) {
-      if (queue.length === 0) continue;
-      const events = drainOneStep(state, queue, heroBudget);
-      heroEvents.push(...events);
-    }
-
-    // Drain one action from each witch unit.
     const witchEvents = [];
-    for (const [, queue] of witchUnitQueues) {
+    const candidates = [];
+    for (const [entityId, queue] of heroUnitQueues) {
       if (queue.length === 0) continue;
-      const events = drainOneStep(state, queue, witchBudget);
-      witchEvents.push(...events);
+      candidates.push({ budget: heroBudget, sink: heroEvents, entityId, queue });
+    }
+    for (const [entityId, queue] of witchUnitQueues) {
+      if (queue.length === 0) continue;
+      candidates.push({ budget: witchBudget, sink: witchEvents, entityId, queue });
+    }
+    _sortCandidates(state, candidates);
+
+    for (const c of candidates) {
+      const events = drainOneStep(state, c.queue, c.budget);
+      if (events.length > 0) c.sink.push(...events);
     }
 
     if (heroEvents.length === 0 && witchEvents.length === 0) break;

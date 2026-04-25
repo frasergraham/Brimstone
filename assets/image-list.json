@@ -274,238 +274,424 @@
       }
     },
     {
-      "id": "hero",
-      "name": "The Hero",
+      "id": "paladin",
+      "name": "The Paladin",
       "category": "unit",
       "parameters": {
-        "prompt": "A colonial New England hero warrior, rugged and weathered, layered leather and wool, battered sword at hip, resolute expression beneath wide-brimmed Puritan hat. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. A grave-faced older man of European descent with fair weathered skin, shoulder-length dark brown hair tucked behind his ears, a short neatly-trimmed dark brown beard, hawkish nose, deep-set steely grey-blue eyes, heavy brow. Rugged and weathered, layered leather and wool, battered sword at hip, resolute expression beneath a wide-brimmed Puritan hat. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "witch",
       "name": "The Witch",
       "category": "unit",
       "parameters": {
-        "prompt": "A Salem witch, dark flowing robes, silver and bone jewellery, eyes glowing faintly with unnatural light, wisps of shadow and violet smoke. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. A Salem witch, a middle-aged woman with sickly pale grey-tinged skin and high sharp cheekbones, long tangled raven-black hair shot through with streaks of white, sunken eyes glowing faintly with unnatural violet light, thin cracked lips, slight hook to her nose, long narrow face. Dark flowing robes, silver and bone jewellery, wisps of shadow and violet smoke curling around her shoulders. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "zombie",
       "name": "Zombie",
       "category": "unit",
       "parameters": {
-        "prompt": "A colonial-era zombie, tattered Puritan burial clothes, pale grey-green decomposing flesh, hollow milky eyes, earth clinging to its form, reaching clawed hands. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. A colonial-era zombie, a NON-HUMAN undead corpse (not a living human face): decomposing grey-green mottled flesh peeling from skeletal cheekbones, hollow milky white unseeing eyes, slackened jaw hanging partially detached with exposed yellowed teeth, patches of matted colourless hair, no intact nose. Tattered Puritan burial clothes, earth clinging to its form, reaching with clawed broken-fingered hands. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "minion",
       "name": "Minion",
       "category": "unit",
       "parameters": {
-        "prompt": "A witch's bound minion, hunched shadowy figure in tattered rags, face obscured beneath a hood, clutches crude iron blade, bound by dark sigil-marked ropes. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. A witch's bound minion, a hunched shadowy figure in tattered rags with its face almost entirely obscured beneath a deep hood — only the lower face visible: sickly grey-green flesh, a jagged mouth of sharp needle-like teeth bared in a snarl, no human features visible, glowing blood-red eyes burning from inside the hood's shadow. Clutches a crude iron blade, bound by dark sigil-marked ropes. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "wood_golem",
       "name": "Wood Golem",
       "category": "unit",
       "parameters": {
-        "prompt": "A massive wood golem, constructed from twisted oak, bark-covered limbs, glowing amber runes carved into chest, branches forming crude fingers, moss and vines through joints. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. A massive NON-HUMAN wood golem (not a human — no face, no human features of any kind): a head carved from a knotted oak burl with a roughly humanoid skull-shape, two glowing amber hollows for eyes set deep in the bark, no nose, a jagged splintered wooden slit for a mouth, bark-covered limbs with twisted branching joints, crude wooden fingers, moss and vines growing through cracks, glowing amber runes carved into the chest. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "iron_golem",
       "name": "Iron Golem",
       "category": "unit",
       "parameters": {
-        "prompt": "A towering iron golem, forged from salvaged colonial metalwork, dark corroded plates riveted together, sigils branded into iron, glowing violet cracks at joints. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. A towering NON-HUMAN iron golem (not a human — the face is an expressionless riveted iron helmet plate with no mouth, no nose, no human features whatsoever, only two narrow slits for eyes glowing hot violet). Body forged from salvaged colonial metalwork, dark corroded riveted iron plates, arcane sigils branded into the metal, glowing violet magical cracks at the joints. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
+    },
+    {
+      "id": "rogue",
+      "name": "The Rogue",
+      "category": "unit",
+      "parameters": {
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. A sharp-featured young woman of European descent with fair ivory skin and high defined cheekbones, long jet-black straight hair spilling from beneath her hood, pale ice-blue eyes, thin arched brows. Slim athletic build, dark leather jerkin over a long linen tunic and heavy wool breeches tucked into knee-high leather boots, hooded travel cloak draped over the shoulders, a scarf drawn across the lower half of her face, holding a heavy wooden crossbow levelled in her gloved hands, a quiver of crossbow bolts strapped to her hip, small pouches at her belt. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+      },
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
+    },
+    {
+      "id": "captain",
+      "name": "The Captain",
+      "category": "unit",
+      "parameters": {
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. A stocky barrel-chested older man of low stature, ruddy weathered complexion, closely cropped blond hair, a full well-kept blond beard streaked with grey, bright blue eyes, broad thickset build rather than tall. Dark blue officer's coat with tarnished gold trim and brass buttons, tricorn hat with a single feather, leather gorget at the throat, a cavalry sabre at the hip and a flintlock pistol held upright in one hand, commanding veteran's bearing. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+      },
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
+    },
+    {
+      "id": "brute",
+      "name": "The Brute",
+      "category": "unit",
+      "parameters": {
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. A hulking NON-HUMAN monstrosity (not a human, distinctly inhuman anatomy and face — no human facial features at all): deep violet-purple leathery skin, enormous barrel-chested top-heavy frame with massive shoulders and arms that dwarf the waist, hunched forward posture so the head sits low between the shoulders. Broad jutting stone-like brow, heavy undershot jaw with small visible tusks, bald knobbly scalp with protruding bony ridges, wide flat nose, a pair of intelligent calculating golden eyes that betray a sharp cunning mind beneath the savage exterior. Rusted iron shackles dangling from thick wrists, a crude spiked cudgel resting on one shoulder, torn dark rags stretched across the chest, thick leathery skin scarred and ridged. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+      },
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
+    },
+    {
+      "id": "necromancer",
+      "name": "The Necromancer",
+      "category": "unit",
+      "parameters": {
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. A Salem necromancer, a gaunt hollow-cheeked middle-aged man with ashen grey pallor, long sharp chin, thin bloodless lips, long straight white hair falling past his shoulders from beneath his hood, sunken eyes glowing faintly yellow, sharp aquiline nose. Wearing a thick heavy opaque black wool robe and deep dark hood, solid heavy fabric with visible folds and weight, a clearly defined solid silhouette with no transparency and no ghostly wisps on the body, holding a skull-topped staff wreathed in pale green witchfire, fingers stained with grave-dirt, small spectral wisps only near the staff top. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+      },
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "survivor_innkeeper",
       "name": "John O'Connor — Innkeeper",
       "category": "unit",
       "parameters": {
-        "prompt": "A stocky colonial innkeeper, heavy apron over coarse linen, sleeves rolled up, carries a wood-splitting axe, tired but defiant expression. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. John O'Connor the innkeeper, a stocky Irish-descent man in his late forties, ruddy freckled fair skin, wavy copper-red hair going grey at the temples, thick auburn-grey beard, broad round face, green eyes, heavy apron over coarse linen with sleeves rolled up over thick forearms, carrying a wood-splitting axe, tired but defiant expression. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "survivor_nurse",
       "name": "Mary Quinn — Nurse",
       "category": "unit",
       "parameters": {
-        "prompt": "A colonial nurse, plain grey dress and white apron stained with salve, carries a medicine satchel, calm determined eyes, healing herbs tucked into belt. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. Mary Quinn the nurse, a petite fair-skinned woman in her mid thirties of English descent, soft rounded face, light honey-brown hair parted and tied back in a neat bun, warm hazel eyes, delicate features. Plain grey dress and white apron stained with salve, carrying a leather medicine satchel, healing herbs tucked into her belt, calm determined expression. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "survivor_blacksmith",
       "name": "Thomas Putnam — Blacksmith",
       "category": "unit",
       "parameters": {
-        "prompt": "A massive colonial blacksmith, soot-darkened leather apron, enormous arms, carries a war hammer, scars from forge sparks, grim and resolute. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. Thomas Putnam the blacksmith, a massive fifty-year-old man of European descent, sun-darkened tanned skin, completely shaved bald head, thick bushy coal-black beard, broad square jaw, deep-set near-black eyes, heavy brow ridge. Soot-darkened leather apron, enormous scarred arms, carrying a heavy war hammer, grim and resolute. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "survivor_herbalist",
       "name": "Abigail Foster — Herbalist",
       "category": "unit",
       "parameters": {
-        "prompt": "A young colonial herbalist, hooded cloak with dried herbs and wildflowers, wicker basket of plants, sharp intelligent eyes. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. Abigail Foster the herbalist, a slim young woman in her early twenties with olive-toned skin of mixed Portuguese descent, long wavy chestnut-brown hair, sharp intelligent hazel-green eyes, narrow face with a scatter of freckles across her nose. Hooded grey cloak with dried herbs and wildflowers stitched into the seams, wicker basket of plants on her arm. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "survivor_militia",
       "name": "Samuel Cooper — Militia Sergeant",
       "category": "unit",
       "parameters": {
-        "prompt": "A weathered colonial militia sergeant, worn buff coat and leather crossbelt, carries musket and short sword, commanding posture, battle-hardened face beneath tricorn hat. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. Samuel Cooper the militia sergeant, a weathered older Black man of African descent in his fifties, deep dark brown skin, tightly cropped salt-and-pepper hair, a neatly trimmed short greying beard, hard dark brown eyes, a thin scar across his left cheek. Worn buff coat and leather crossbelt, carrying a musket and short sword, commanding posture beneath a tricorn hat. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "survivor_priest",
       "name": "Father Crane — Parish Priest",
       "category": "unit",
       "parameters": {
-        "prompt": "An aged Puritan parish priest, long black cassock, silver cross at chest, carries leather-bound Bible, iron resolve in tired eyes. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. Father Crane the parish priest, an aged European man in his late sixties, pale papery wrinkled skin, fully silver-white hair combed back, clean-shaven, angular jaw, tired wise pale blue eyes behind thin spectacles. Long black Puritan cassock, silver cross at his chest, holding a leather-bound Bible, iron resolve in his tired expression. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "survivor_baker",
       "name": "Hannah Marsh — Baker",
       "category": "unit",
       "parameters": {
-        "prompt": "A stout colonial baker, flour-dusted apron and rolled sleeves, carries a rolling pin repurposed as a club, cheerful but fierce expression. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. Hannah Marsh the baker, a plump middle-aged woman of English descent in her forties, rosy fair freckled skin, dark blonde hair pinned up under a white cap, round cheerful cheeks with laugh lines, bright warm blue eyes. Flour-dusted apron and rolled sleeves, carrying a heavy wooden rolling pin like a club, fierce but kindly expression. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "survivor_trapper",
       "name": "Ezra Boone — Trapper",
       "category": "unit",
       "parameters": {
-        "prompt": "A lean colonial trapper, fur-trimmed frontier coat, carries flintlock rifle, animal pelts at belt, sharp woodsman's eyes. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. Ezra Boone the trapper, a lean weathered outdoorsman in his thirties of partial Indigenous (Wampanoag) heritage, bronze tanned skin, long straight jet-black hair tied back with a leather cord, sparse dark moustache, watchful dark brown eyes, sharp high cheekbones. Fur-trimmed frontier coat, carrying a flintlock rifle, animal pelts at belt. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "survivor_schoolteacher",
       "name": "Constance Bell — Schoolteacher",
       "category": "unit",
       "parameters": {
-        "prompt": "A composed colonial schoolteacher, modest dark dress with white collar, carries journal, perceptive eyes behind small spectacles, ink-stained fingers. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. Constance Bell the schoolteacher, a prim thin woman in her thirties of English descent, pale skin, dark chestnut hair parted severely down the middle and coiled at the nape, round wire spectacles perched on a narrow nose, sharp intelligent grey eyes, narrow angular face. Modest dark dress with a stiff white collar, carrying a leather-bound journal, ink-stained fingers. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "survivor_gravedigger",
       "name": "Isaac Graves — Gravedigger",
       "category": "unit",
       "parameters": {
-        "prompt": "A gaunt colonial gravedigger, mud-caked boots and worn overcoat, carries long-handled shovel, hollow eyes, unafraid and stoic. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. Isaac Graves the gravedigger, a gaunt hollow-cheeked man in his forties of European descent, sallow pallid skin, greasy dark brown hair hanging in lank strands, sunken shadowed eyes of a muddy grey-green, dark stubbled jaw, a haunted hollow look. Mud-caked boots and worn overcoat, carrying a long-handled shovel, unafraid and stoic. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "survivor_midwife",
       "name": "Patience Cole — Midwife",
       "category": "unit",
       "parameters": {
-        "prompt": "A capable colonial midwife, simple linen dress and cloak, carries satchel of medical supplies, warm steady hands, calm authority. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. Patience Cole the midwife, a warm middle-aged Black woman of African descent in her fifties, rich dark brown skin, hair wrapped in a neat linen scarf, strong broad square face, kind deep brown eyes, soft smile lines. Simple linen dress and cloak, carrying a worn leather satchel of medical supplies, calm steady authority. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "survivor_farmhand",
       "name": "Silas Holt — Farmhand",
       "category": "unit",
       "parameters": {
-        "prompt": "A young colonial farmhand, rough spun shirt and suspenders, carries pitchfork, youthful face set with determination, broad shoulders. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. Silas Holt the farmhand, a young strapping man of nineteen of German-colonial descent, sun-tanned ruddy skin, unruly straw-blonde hair falling into his eyes, clean-shaven with faint blond stubble, broad honest open face, bright sky-blue eyes. Rough spun shirt and leather suspenders, carrying a pitchfork, broad shoulders set with determination. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "survivor_tanner",
       "name": "Mercy Hale — Tanner",
       "category": "unit",
       "parameters": {
-        "prompt": "A sturdy colonial tanner woman, leather-stained apron over wool dress, calloused hands, carries a curved scraping knife, weathered but unbowed expression. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. Mercy Hale the tanner, a sturdy woman in her forties of English descent, weathered tan skin, chestnut-brown hair braided in a single thick plait down her back, strong squared jaw, narrow slate-grey eyes, light freckles. Leather-stained apron over a coarse wool dress, calloused hands carrying a curved scraping knife, weathered but unbowed expression. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "survivor_chandler",
       "name": "Elijah Pratt — Chandler",
       "category": "unit",
       "parameters": {
-        "prompt": "A thin colonial chandler, wax-spattered waistcoat, carries a bundle of tallow candles, sharp observant eyes, lantern hanging from belt. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. Elijah Pratt the chandler, a thin wiry man in his thirties of European descent, pale almost sickly skin, thinning mousy brown hair combed over a high forehead, wire-rimmed spectacles, narrow pinched face, cautious grey eyes. Wax-spattered waistcoat, carrying a bundle of tallow candles, tin lantern hanging from his belt. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "survivor_goodwife",
       "name": "Ruth Wardwell — Goodwife",
       "category": "unit",
       "parameters": {
-        "prompt": "A resolute colonial goodwife, simple homespun dress and bonnet, strong weathered hands, carries an iron ladle like a weapon, fierce maternal determination. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. Ruth Wardwell the goodwife, an imposing older woman in her early sixties of English descent, weathered fair skin, iron-grey hair tucked firmly beneath a white bonnet, round broad determined face, steely ice-blue eyes, strong weathered hands. Simple homespun dress and apron, carrying a heavy iron ladle like a weapon, fierce maternal determination. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "survivor_constable",
       "name": "Nathaniel Corwin — Constable",
       "category": "unit",
       "parameters": {
-        "prompt": "A stern colonial constable, dark coat with brass buttons, leather baldric, carries a heavy wooden truncheon, square jaw and cold authoritative eyes. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. Nathaniel Corwin the constable, a tall broad-shouldered man in his forties of Southern-European descent, olive-toned skin, short black hair combed back, a dense dark moustache and short pointed black beard, stern square face, piercing dark brown eyes. Dark coat with polished brass buttons, leather baldric across the chest, carrying a heavy wooden truncheon, cold authoritative bearing. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "survivor_weaver",
       "name": "Agnes Whittaker — Weaver",
       "category": "unit",
       "parameters": {
-        "prompt": "A nimble colonial weaver woman, grey shawl over faded blue dress, deft hands holding shuttle and thread, quick intelligent eyes behind wisps of hair. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. Agnes Whittaker the weaver, a slight older woman in her sixties of English descent, pale parchment skin, fine white hair escaping from beneath her grey cap in wisps around her face, narrow heart-shaped face, gentle hazel eyes, delicate long fingers. Grey shawl over a faded blue dress, holding a wooden shuttle and thread. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "survivor_carpenter",
       "name": "Josiah Dane — Carpenter",
       "category": "unit",
       "parameters": {
-        "prompt": "A broad-shouldered colonial carpenter, sawdust in his beard, rolled sleeves revealing scarred forearms, carries a heavy mallet and chisel, steady craftsman's gaze. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. Josiah Dane the carpenter, a broad barrel-chested man in his forties of English-colonial descent, fair skin weathered to a light tan, sandy-brown hair falling to the jaw in loose waves, a thick bushy brown beard with a few sawdust flakes caught in it, wide friendly face, warm grey-green eyes. Sawdust-covered leather apron, rolled sleeves revealing scarred forearms, carrying a heavy wooden mallet and chisel. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "survivor_apothecary",
       "name": "Prudence Faulkner — Apothecary's Daughter",
       "category": "unit",
       "parameters": {
-        "prompt": "A young colonial apothecary's daughter, dark hair under linen cap, carries a mortar and pestle, pouch of dried herbs at hip, thoughtful sorrowful eyes. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. Prudence Faulkner the apothecary's daughter, a young somber woman of twenty-two of Portuguese-colonial descent, olive-ivory skin, dark near-black hair in two long braids tucked beneath a linen cap, heart-shaped face, large melancholy dark brown eyes, long lashes. Holding a mortar and pestle, a pouch of dried herbs at her hip, thoughtful sorrowful expression. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "survivor_fisherman",
       "name": "Caleb Osgood — Fisherman",
       "category": "unit",
       "parameters": {
-        "prompt": "A salt-crusted colonial fisherman, oilskin coat and heavy boots, carries a gaff hook, rope-burned hands, wind-scoured face with deep-set determined eyes. Circular portrait format filling the whole image with 3 pixel black border, flat light grey background inside the circle and transparent outside, figure fills the circle from waist up. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
+        "prompt": "Output must contain exactly one figure, centered in the frame. No secondary figures, no duplicates, no character sheets, no pose variations, no side-by-side comparisons, no reference panel — a single standalone portrait of one character only. Caleb Osgood the fisherman, a weathered rugged man in his forties of Scottish-colonial descent, deeply tanned leathery skin, windblown chestnut-brown hair going grey at the temples, a thick reddish-brown beard with salt crust at the tips, sharp blue-grey eyes, a deep-lined face scoured by wind. Oilskin coat and heavy boots, carrying a rusted gaff hook, rope-burned hands. Half-body portrait, waist up, figure centered and filling the frame. Flat uniform light grey background, no texture, no gradient, no shadows, no border, no frame, no circle. Art style is very slightly cartoonish and whimsical, but still rugged. Full color, muted earthy tones"
       },
-      "referenceAssetId": "asset_2owqRMmuf4Kvj8SFw9KjCeBG"
+      "referenceAssetIds": [
+        "asset_kFJcPT4YWAuWpoTkDgxAP4Nf",
+        "asset_c45Mrkn4fKZHr1TWmcRFnKj8",
+        "asset_N7QEL1ruUXvW6uopFq5sY411",
+        "asset_RUgXzLjuDHoVQQ99BNrfCnsU"
+      ]
     },
     {
       "id": "cycle_dawn",

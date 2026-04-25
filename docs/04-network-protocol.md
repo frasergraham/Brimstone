@@ -77,8 +77,22 @@ browseLobby                                { rooms[] }
 joinGame                                   { roomId, faction, myPlayerId,
   { codeOrId }                               players[], aiOpponent, isAsync }
 
-setSlotAI                                opponentJoined
-  { roomId, slotIndex, personality }       { opponentName }
+claimSlot                                opponentJoined
+  { roomId, slotIndex,                     { opponentName }
+    factionId? }
+                                         (factionId optional; defaults to
+                                          the slot's side primary. Must
+                                          match the slot's side or it is
+                                          silently ignored.)
+setFaction
+  { roomId, factionId }
+                                         (Pre-game only. Must be a faction
+                                          on the same Side as the seat. A
+                                          cross-side switch returns an
+                                          'error' message.)
+
+setSlotAI
+  { roomId, slotIndex, personality }
 
 removeSlotAI
   { roomId, slotIndex }
@@ -95,6 +109,15 @@ leaveLobby
 sendSlotInvite
   { roomId, slotIndex, email }
 ```
+
+**Lobby slot fields.** Every `slot` in `lobbyJoined` / `lobbyUpdate` carries:
+
+| Field       | Type        | Notes |
+|-------------|-------------|-------|
+| `faction`   | `'hero'\|'witch'` | Legacy primary key; today the slot's side default. |
+| `side`      | `'day'\|'night'`  | Forward-looking — derived via `sideOf(faction)`. |
+| `factionId` | string      | The specific faction id occupying the seat (defaults to `faction`; mutated by `setFaction`). |
+| other       | seatIndex, status, playerId, name, personality, … (unchanged) |
 
 ### Game Flow
 

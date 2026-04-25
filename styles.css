@@ -402,6 +402,59 @@ canvas { touch-action: pan-x pan-y; }
   color: var(--text);
 }
 
+/* ── Quick Play 6-tile faction picker (Side ↔ Faction) ──────────────────── */
+.qp-faction-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0 auto 1rem;
+  max-width: 480px;
+}
+.qp-side-row {
+  display: grid;
+  grid-template-columns: 60px repeat(3, 1fr);
+  align-items: stretch;
+  gap: 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.3rem;
+  background: var(--bg-section);
+}
+.qp-side-row[data-side="day"]   { border-left: 3px solid var(--day);   }
+.qp-side-row[data-side="night"] { border-left: 3px solid var(--night); }
+.qp-side-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-serif);
+  font-size: 0.85rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.qp-side-row[data-side="day"]   .qp-side-label { color: var(--day);   }
+.qp-side-row[data-side="night"] .qp-side-label { color: var(--night); }
+.qp-side-row .qp-faction-btn {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.45rem 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  position: relative;
+}
+.qp-stub-badge {
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 0.05rem 0.35rem;
+  border-radius: 2px;
+}
+
 /* ── Quick Play advanced options ────────────────────────────────────────── */
 .qp-advanced {
   max-width: 340px;
@@ -549,6 +602,30 @@ canvas { touch-action: pan-x pan-y; }
 .lobby-slot-name.empty-slot { color: var(--text-dim); font-style: italic; }
 .lobby-slot-name.ai-slot    { color: #b09050; }
 .lobby-slot-name em         { color: var(--text-dim); font-size: 0.78rem; }
+.lobby-slot-faction {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-left: 0.4rem;
+  font-style: italic;
+}
+.lobby-slot-stub {
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 0.02rem 0.3rem;
+  border-radius: 2px;
+  margin-left: 0.25rem;
+  font-style: normal;
+}
+.lobby-faction-select {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.3rem;
+  max-width: 140px;
+  margin-left: 0.4rem;
+}
 .lobby-slot-btn {
   font-size: 0.75rem;
   padding: 0.15rem 0.4rem;
@@ -689,12 +766,13 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   display: none;
   flex-direction: column;
   height: 100vh;
+  position: relative; /* anchor for absolutely-positioned #cycle-bump */
 }
 
 #game-header {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 0.5rem 0.75rem;
   padding: 0.4rem 0.75rem;
   padding-top: max(0.4rem, env(safe-area-inset-top));
@@ -705,27 +783,13 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   flex-shrink: 0;
 }
 
-.header-title {
-  font-size: 1.1rem;
-  letter-spacing: 0.2em;
-  color: var(--day);
-  opacity: 0.8;
-  flex-shrink: 0;
-}
-
-#header-cycle-group {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  flex-shrink: 0;
-}
-
 #turn-info {
   display: flex;
   align-items: center;
   gap: 0.6rem;
   flex: 1;
   min-width: 0;
+  justify-content: center;
 }
 
 .header-buttons {
@@ -738,6 +802,7 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 /* ── Score bar — bottom strip showing Power Nodes + score track ──────── */
 
 #score-bar {
+  position: relative; /* anchor for the #cycle-bump pill that sits above it */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -746,6 +811,18 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   background: rgba(13,17,23,0.95);
   border-top: 1px solid rgba(255,255,255,0.07);
   flex-shrink: 0;
+}
+
+/* Cycle-only mode: scoring is disabled but the day/night tracker pill
+   above this bar still needs an anchor. Keep the bar minimal (slim,
+   transparent inner content) so the pill sits cleanly on the canvas. */
+#score-bar.cycle-only {
+  padding: 0.15rem 0.75rem;
+  min-height: 0;
+}
+#score-bar.cycle-only > .score-bar-faction,
+#score-bar.cycle-only > #score-bar-content {
+  display: none;
 }
 
 #score-bar-content {
@@ -984,77 +1061,44 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   margin-bottom: 0.25rem;
 }
 
-/* 8-step day/night cycle icons — inline within header */
-#cycle-bar {
+/* ── Cycle bump: compact pill protruding above the score bar showing the current phase ── */
+#cycle-bump {
+  position: absolute;
+  left: 50%;
+  bottom: 100%;                    /* anchored to the top edge of the score bar */
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 3px;
-  flex-shrink: 0;
-}
-
-/* Day N · Round M label — inline within header */
-#round-label {
-  font-size: 0.65rem;
+  gap: 0.4rem;
+  padding: 0.25rem 0.7rem;
+  background: rgba(13,17,23,0.95);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
   color: #b8ac98;
-  letter-spacing: 0.06em;
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  line-height: 1;
   white-space: nowrap;
-  flex-shrink: 0;
-  opacity: 0.85;
+  pointer-events: none;
+  z-index: 4;
 }
-
-.cycle-step {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  cursor: default;
-  padding: 0.1rem 0.2rem;
-  border-radius: 3px;
-  border: 1px solid transparent;
-  font-size: 0.95rem;
-  line-height: 1.2;
-  transition: opacity 0.2s;
-  user-select: none;
-}
-
-.cycle-dim  { opacity: 0.55; }
-.cycle-active { opacity: 1; padding: 0.1rem 0.3rem; }
-
-.cycle-active.phase-dawn  { background: rgba(255,140,0,0.15);  color: #ffaa44;      border-color: #ff8c00; }
-.cycle-active.phase-day   { background: rgba(245,200,66,0.15); color: var(--day);   border-color: var(--day); }
-.cycle-active.phase-dusk  { background: rgba(180,60,0,0.20);   color: #ff7744;      border-color: #c04020; }
-.cycle-active.phase-night { background: rgba(123,79,187,0.20); color: var(--night); border-color: var(--night); }
-
-.cycle-icon {
-  width: 20px;
-  height: 20px;
+#cycle-bump-icon {
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
   object-fit: cover;
-  pointer-events: none;
+  flex-shrink: 0;
 }
-.cycle-active .cycle-icon {
-  width: 22px;
-  height: 22px;
-}
-
-.cycle-name {
-  font-size: 0.6rem;
+#cycle-bump-label {
+  font-size: 0.72rem;
   font-weight: bold;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  margin-top: 0.05rem;
-  white-space: nowrap;
+  letter-spacing: 0.05em;
 }
-
-/* Day N · Round M label — kept for any remaining inline uses */
-.cycle-round-label {
-  font-size: 0.7rem;
-  color: var(--text-dim);
-  white-space: nowrap;
-  letter-spacing: 0.04em;
-  opacity: 0.75;
-  margin: 0 0.4rem;
-  align-self: center;
-}
+#cycle-bump.phase-dawn  #cycle-bump-icon { box-shadow: 0 0 6px rgba(255,140,0,0.55);  }
+#cycle-bump.phase-day   #cycle-bump-icon { box-shadow: 0 0 6px rgba(245,200,66,0.55); }
+#cycle-bump.phase-dusk  #cycle-bump-icon { box-shadow: 0 0 6px rgba(180,60,0,0.65);   }
+#cycle-bump.phase-night #cycle-bump-icon { box-shadow: 0 0 8px rgba(123,79,187,0.70); }
 
 .turn-line { font-size: 0.85rem; color: #b8ac98; }
 
@@ -1101,18 +1145,33 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   top: 8px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 20;
+  /* Must sit above #undo-button-layer (z-index 55) so the deselect (✕) button
+     isn't covered by floating UNDO buttons anchored near the top of the map.
+     Pointer events are disabled on the chrome and re-enabled on the interactive
+     children only — this way the bar can visually cover an UNDO button without
+     swallowing taps meant for it. */
+  z-index: 56;
+  pointer-events: none;
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.3rem;
   padding: 0.35rem 0.6rem;
   background: rgba(13,17,23,0.92);
   border: 1px solid rgba(255,255,255,0.12);
   border-radius: 6px;
   box-shadow: 0 2px 10px rgba(0,0,0,0.6);
   font-size: 0.82rem;
-  pointer-events: auto;
-  max-width: min(460px, 92vw);
+  width: min(460px, 92vw);
+  box-sizing: border-box;
+}
+
+/* Main row: portrait + cycle arrows + info + deselect — sits above the terrain box */
+.usb-main {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
 }
 
 .usb-portrait {
@@ -1206,7 +1265,94 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   white-space: nowrap;
 }
 
+/* Status-effect pip strip — one icon per active effect (wounded, frenzied,
+   poisoned, stunned, …). Tap/long-press shows the effect's tooltip via
+   the title attribute. */
+.usb-effects {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+  margin-left: 0.1rem;
+}
+.usb-effect-pip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.1rem;
+  height: 1.1rem;
+  padding: 0 0.25rem;
+  font-size: 0.85rem;
+  line-height: 1;
+  border-radius: 0.55rem;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.22);
+  color: var(--text-bright);
+  cursor: help;
+  user-select: none;
+}
+.usb-effect-pip[data-kind="bad"]  { background: rgba(192,57,43,0.22); border-color: rgba(231,76,60,0.55); }
+.usb-effect-pip[data-kind="good"] { background: rgba(76,175,125,0.22); border-color: rgba(76,175,125,0.55); }
+.usb-effect-pip-dur {
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  margin-left: 0.15rem;
+}
+
+/* (i) toggle: reveals ATK/DEF and ability text in an expanded block */
+.usb-info-btn {
+  pointer-events: auto;
+  flex-shrink: 0;
+  width: 1.25rem;
+  height: 1.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.25);
+  border-radius: 50%;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  font-style: italic;
+  font-family: serif;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.usb-info-btn:hover {
+  color: var(--text-bright);
+  border-color: rgba(255,255,255,0.6);
+  background: rgba(255,255,255,0.12);
+}
+.usb-info-btn-active {
+  color: var(--day);
+  border-color: rgba(212,167,44,0.8);
+  background: rgba(212,167,44,0.15);
+}
+
+/* Expanded-only block: ATK, DEF, and any ability description */
+.usb-extra {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+.usb-ability {
+  color: #c8a030;
+  font-style: italic;
+  white-space: normal;
+  line-height: 1.25;
+  flex-basis: 100%;
+}
+
 .usb-deselect-btn {
+  /* Bar itself is pointer-events: none so UNDO buttons stay clickable — only
+     the interactive children re-enable hit-testing. */
+  pointer-events: auto;
   margin-left: 0.2rem;
   flex-shrink: 0;
   background: #c0392b;
@@ -1228,6 +1374,7 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 
 .usb-cycle-btn {
+  pointer-events: auto;
   flex-shrink: 0;
   background: rgba(212,167,44,0.12);
   border: 1px solid rgba(212,167,44,0.4);
@@ -1246,17 +1393,22 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   box-shadow: 0 0 6px rgba(212,167,44,0.5);
 }
 
-/* Terrain row — sits below unit stats as its own line */
-.usb-terrain-row {
+/* Terrain box — stacked full-width below the unit row; separates ground info from the unit's own stats */
+.usb-terrain-box {
   display: flex;
   align-items: center;
-  gap: 0.3rem;
-  font-size: 0.68rem;
+  gap: 0.45rem;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.7rem;
   color: #c0b89a;
-  padding: 0.1rem 0.3rem;
-  background: rgba(255,255,255,0.06);
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.08);
   border-radius: 4px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .usb-terrain-hex {
   width: 24px;
@@ -1390,89 +1542,96 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 
 /* ── Chronicle toggle (top-left, independent of zoom controls) ─────────── */
 
-.chronicle-toggle-btn {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  z-index: 11;
-  transition: left 0.2s ease;
-}
-
 /* Shift map controls right when AI debug panel is open */
-.ai-debug-open .zoom-controls     { left: 272px; }
-.ai-debug-open .chronicle-toggle-btn { left: 268px; }
-.ai-debug-open #chronicle-mini    { left: 268px; }
+.ai-debug-open .zoom-controls { left: 272px; }
 
-/* ── Mini chronicle (top-left HUD) ──────────────────────────────────────── */
+/* ── Chronicle sidebar (left-edge collapsible panel mirroring the plan panel) ── */
 
-#chronicle-mini {
+.chronicle-panel {
   position: absolute;
-  top: 50px;
-  left: 8px;
-  max-width: 340px;
-  pointer-events: none;
-  z-index: 8;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: calc(240px + env(safe-area-inset-left));
+  background: rgba(13, 17, 23, 0.95);
+  border-right: 1px solid rgba(255,255,255,0.1);
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  transition: left 0.2s ease;
+  /* Sit above #unit-stats-bar (z-index 56) so the selection bar doesn't draw
+     over the panel when it extends across the map area. */
+  z-index: 60;
+  font-size: 0.8rem;
+  transition: width 0.2s ease;
 }
-.chronicle-mini-btn {
-  pointer-events: auto;
-  align-self: flex-start;
-  background: rgba(13, 17, 23, 0.72);
-  border: 1px solid var(--border);
-  color: var(--text-dim);
-  font-size: 0.85rem;
-  padding: 2px 8px;
-  border-radius: 3px;
+
+/* Collapsed: only the tab is visible */
+.chronicle-panel.collapsed {
+  width: 0;
+  border-right: none;
+  overflow: visible;
+}
+.chronicle-panel.collapsed .chronicle-panel-header,
+.chronicle-panel.collapsed #chronicle-sidebar-log {
+  display: none;
+}
+
+/* Tab — the protruding button that's always clickable */
+.chronicle-tab {
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(13,17,23,0.95);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-left: none;
+  border-radius: 0 6px 6px 0;
+  color: #ccc;
+  font-size: 0.7rem;
+  padding: 0.4rem 0.3rem;
   cursor: pointer;
-  margin-bottom: 2px;
-  transition: border-color 0.15s, color 0.15s;
-}
-.chronicle-mini-btn:hover { border-color: var(--text); color: var(--text-bright); }
-#chronicle-mini .mini-log-entry {
-  font-size: 11px;
-  line-height: 1.3;
-  color: rgba(210, 200, 180, 0.85);
-  background: rgba(13, 17, 23, 0.55);
-  padding: 2px 6px;
-  border-radius: 3px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-/* Fade older entries (button is child 1, entries are children 2–6) */
-#chronicle-mini .mini-log-entry:nth-child(2) { opacity: 0.45; }
-#chronicle-mini .mini-log-entry:nth-child(3) { opacity: 0.55; }
-#chronicle-mini .mini-log-entry:nth-child(4) { opacity: 0.65; }
-#chronicle-mini .mini-log-entry:nth-child(5) { opacity: 0.8; }
-#chronicle-mini .mini-log-entry:nth-child(6) { opacity: 1; }
-
-@media (max-width: 600px) {
-  #chronicle-mini { max-width: 220px; }
-  #chronicle-mini .mini-log-entry { font-size: 10px; }
-}
-
-/* ── Chronicle sidebar (left panel, 'full' state) ──────────────────────── */
-
-#chronicle-sidebar {
-  width: 240px;
-  flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg-panel);
-  border-right: 1px solid var(--border);
-  overflow: hidden;
-  z-index: 5;
+  align-items: center;
+  gap: 0.45rem;
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+@media (hover: hover) {
+  .chronicle-tab { transition: background 0.15s, border-color 0.15s; }
+  .chronicle-tab:hover { background: rgba(40,50,60,0.97); color: #fff; }
+}
+.chronicle-tab-label {
+  white-space: nowrap;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+}
+.chronicle-tab-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--day, #d4a72c);
+  background: rgba(13,17,23,0.85);
+  border: 1px solid rgba(212,167,44,0.55);
+  border-radius: 4px;
+}
+@media (hover: hover) {
+  .chronicle-tab:hover .chronicle-tab-toggle {
+    border-color: var(--day, #d4a72c);
+    background: rgba(40,50,60,0.97);
+  }
 }
 
-.chronicle-sidebar-header {
+.chronicle-panel-header {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.4rem 0.75rem;
-  border-bottom: 1px solid var(--border);
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
   flex-shrink: 0;
 }
 
@@ -1488,17 +1647,6 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 #chronicle-sidebar-log .log-entry {
   padding: 3px 0;
   border-bottom: 1px solid rgba(255,255,255,0.04);
-}
-
-/* Active state for the mini button when sidebar is open */
-.chronicle-mini-btn-active {
-  border-color: var(--gold) !important;
-  color: var(--gold) !important;
-}
-/* Active state for chronicle toggle in map controls */
-.chronicle-btn-active {
-  border-color: rgba(200, 168, 75, 0.75) !important;
-  background: rgba(200, 168, 75, 0.18) !important;
 }
 
 /* ── Chronicle overlay ─────────────────────────────────────────────────── */
@@ -1868,12 +2016,6 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   font-weight: 600;
   color: var(--text);
   letter-spacing: 0.03em;
-}
-
-#chronicle-mini .log-round-separator {
-  margin-top: 0.25rem;
-  padding-top: 0.2rem;
-  border-top: 1px solid rgba(58, 45, 88, 0.6);
 }
 
 /* Scrollbar */
@@ -2392,7 +2534,36 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   width: min(480px, 92vw);
   text-align: center;
   box-shadow: 0 0 50px rgba(0,0,0,0.8);
+  position: relative;
 }
+
+.battle-controls {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.5rem;
+  display: flex;
+  gap: 0.25rem;
+  z-index: 1;
+}
+.battle-ctrl-btn {
+  background: rgba(30, 28, 24, 0.72);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 4px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: all;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.battle-ctrl-btn:hover { color: var(--text); border-color: var(--gold, #c8a84b); }
+.battle-ctrl-btn:active { transform: translateY(1px); }
 
 .battle-combatants {
   display: flex;
@@ -2429,30 +2600,20 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 }
 
 /* ── Battle roll breakdown ─────────────────────────────── */
-.battle-dice-row {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  margin-bottom: 0.6rem;
-}
 
 /* Two-column grid: atk details left, def details right */
 .battle-breakdown {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.5rem;
-  margin-bottom: 0.75rem;
+  margin: 0.4rem 0 0.75rem;
 }
 
 .breakdown-col {
   font-size: 0.72rem;
   font-family: var(--font-mono);
   color: var(--text-dim);
-  opacity: 0;
-  transition: opacity 0.35s;
 }
-.breakdown-col.visible { opacity: 1; }
 
 .bkd-row {
   display: flex;
@@ -2471,20 +2632,190 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .bkd-val {
   font-weight: 600;
   color: var(--text);
-  min-width: 2em;
+  min-width: 2.4em;
   text-align: center;
+}
+
+/* Greyed/muted state for rows before their turn in the animation.
+   Lean on desaturation (no active color-glow) rather than deep opacity; text
+   stays legible so users can read upcoming modifiers. */
+.bkd-row-muted {
+  opacity: 0.55;
+  filter: saturate(0.2);
+}
+.bkd-row-muted .bkd-val,
+.bkd-row-muted .bkd-label { color: #9a9088; }
+.bkd-row-muted .bkd-die-picked {
+  background: var(--bg-section);
+  color: #9a9088;
+  border-color: var(--border);
+  box-shadow: none;
+  transform: scale(1);
+}
+
+/* Post-settle contrast: labels bright off-white, values keep bold white/
+   saturated delta colors. Applies to modifier rows, pool row, per-ally rows,
+   and total row — anything not currently muted. */
+.bkd-row:not(.bkd-row-muted) .bkd-label { color: #f1ead8; }
+.bkd-row:not(.bkd-row-muted) .bkd-val   { color: #f1ead8; }
+
+/* Delta coloring (applied only when the row is no longer muted). */
+.bkd-row[data-sign="positive"]:not(.bkd-row-muted) .bkd-val { color: #6edc7a; }
+.bkd-row[data-sign="negative"]:not(.bkd-row-muted) .bkd-val { color: #ff6b6b; }
+.bkd-pool-row[data-sign="positive"]:not(.bkd-row-muted) .bkd-label { color: #6edc7a; }
+.bkd-pool-row[data-sign="negative"]:not(.bkd-row-muted) .bkd-label { color: #ff6b6b; }
+
+/* Glow-in animation when a row leaves its muted state. */
+.bkd-row-glow-pos {
+  animation: bkd-row-glow-pos calc(420ms * var(--bkd-speed, 1)) ease-out;
+}
+.bkd-row-glow-neg {
+  animation: bkd-row-glow-neg calc(420ms * var(--bkd-speed, 1)) ease-out;
+}
+.bkd-row-glow-neutral {
+  animation: bkd-row-glow-neutral calc(300ms * var(--bkd-speed, 1)) ease-out;
+}
+@keyframes bkd-row-glow-pos {
+  0%   { background: rgba(110, 220, 122, 0); }
+  40%  { background: rgba(110, 220, 122, 0.30); }
+  100% { background: rgba(110, 220, 122, 0); }
+}
+@keyframes bkd-row-glow-neg {
+  0%   { background: rgba(255, 107, 107, 0); }
+  40%  { background: rgba(255, 107, 107, 0.30); }
+  100% { background: rgba(255, 107, 107, 0); }
+}
+@keyframes bkd-row-glow-neutral {
+  0%   { background: rgba(245, 200, 66, 0); }
+  40%  { background: rgba(245, 200, 66, 0.18); }
+  100% { background: rgba(245, 200, 66, 0); }
+}
+
+/* Pool row: picked die aligns with value column; discards sit next to it. */
+.bkd-pool-row { min-height: 44px; }
+.bkd-pool-discards {
+  display: inline-flex;
+  gap: 0.6rem;
+  flex: 0 0 auto;
+  align-items: center;
+}
+.bkd-pool-picked-slot {
+  min-width: 2.8em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  z-index: 2;
 }
 
 .bkd-die {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg-section);
+  background: #0b0f18;
   border: 1px solid var(--border);
   border-radius: 3px;
-  padding: 0 4px;
-  min-width: 22px;
-  color: var(--day);
+  padding: 1px 5px;
+  min-width: 24px;
+  color: #fff4c8;
+  font-weight: 800;
+  font-size: 0.95rem;
+  line-height: 1.1;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.9), 0 0 3px rgba(0,0,0,0.7);
+}
+
+.bkd-pool {
+  display: inline-flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.def-col .bkd-pool { justify-content: flex-end; }
+
+.bkd-total-row .bkd-val {
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
+.bkd-die-picked {
+  background: var(--gold, #c8a84b);
+  color: #1a1a1a;
+  border-color: var(--gold, #c8a84b);
+  font-weight: 700;
+  box-shadow: 0 0 4px rgba(200, 168, 75, 0.85);
+  animation: bkd-pick-pop calc(300ms * var(--bkd-speed, 1)) ease-out;
+  transform: scale(1.5);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  position: relative;
+  z-index: 3;
+}
+
+.bkd-die-discard {
+  opacity: 0.65;
+  filter: saturate(0.25);
+  transition: opacity 0.25s ease, filter 0.25s ease;
+}
+
+.bkd-die-tumbling {
+  animation: bkd-die-tumble calc(180ms * var(--bkd-speed, 1)) linear infinite;
+  will-change: transform;
+}
+
+@keyframes bkd-die-tumble {
+  0%   { transform: rotate(-14deg) scale(1.08); }
+  25%  { transform: rotate(10deg)  scale(0.94); }
+  50%  { transform: rotate(-8deg)  scale(1.1);  }
+  75%  { transform: rotate(12deg)  scale(0.94); }
+  100% { transform: rotate(-14deg) scale(1.08); }
+}
+
+@keyframes bkd-pick-pop {
+  0%   { transform: scale(1);    box-shadow: 0 0 2px rgba(200, 168, 75, 0.2); }
+  55%  { transform: scale(1.75); box-shadow: 0 0 6px rgba(200, 168, 75, 0.95); }
+  100% { transform: scale(1.5);  box-shadow: 0 0 4px rgba(200, 168, 75, 0.85); }
+}
+
+.bkd-row-in {
+  animation: bkd-row-in calc(180ms * var(--bkd-speed, 1)) ease-out both;
+}
+@keyframes bkd-row-in {
+  0%   { opacity: 0; transform: translateY(6px); }
+  60%  { opacity: 1; transform: translateY(-2px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+.bkd-row-flash {
+  animation: bkd-row-flash calc(300ms * var(--bkd-speed, 1)) ease-out;
+}
+@keyframes bkd-row-flash {
+  0%   { background: rgba(245, 200, 66, 0.22); }
+  100% { background: transparent; }
+}
+
+.bkd-divider-draw {
+  animation: bkd-div-draw calc(200ms * var(--bkd-speed, 1)) ease-out both;
+  transform-origin: left center;
+}
+@keyframes bkd-div-draw {
+  0%   { transform: scaleX(0); opacity: 0.4; }
+  100% { transform: scaleX(1); opacity: 1; }
+}
+
+.bkd-total-pop {
+  animation: bkd-total-pop calc(250ms * var(--bkd-speed, 1)) ease-out both;
+}
+@keyframes bkd-total-pop {
+  0%   { opacity: 0; transform: scale(0.7); }
+  55%  { opacity: 1; transform: scale(1.22); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+.battle-outcome-pulse {
+  animation: battle-outcome-pop calc(350ms * var(--bkd-speed, 1)) ease-out;
+}
+@keyframes battle-outcome-pop {
+  0%   { opacity: 0; transform: scale(0.82); }
+  55%  { opacity: 1; transform: scale(1.15); }
+  100% { opacity: 1; transform: scale(1); }
 }
 
 .bkd-divider {
@@ -2497,12 +2828,32 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   display: flex;
   align-items: center;
   gap: 0.35rem;
-  font-weight: bold;
+  font-weight: 800;
   color: var(--text);
-  font-size: 0.78rem;
-  padding-top: 0.05rem;
+  font-size: 1rem;
+  padding-top: 0.15rem;
+  letter-spacing: 0.03em;
 }
+.bkd-total-row .bkd-label { font-size: 0.95rem; }
 .def-col .bkd-total-row { flex-direction: row-reverse; }
+
+/* Winner/loser/tie tint — applied to the whole breakdown column once both
+   totals have landed. Soft background wash carries the signal so the Total
+   row keeps its bold/large sizing without a colored glow. */
+.breakdown-col {
+  transition: background 250ms ease;
+  border-radius: 4px;
+  padding: 0.15rem 0.3rem;
+}
+.breakdown-col.bkd-col-winner { background: rgba(76, 175, 80, 0.10); }
+.breakdown-col.bkd-col-loser  { background: rgba(244, 67, 54, 0.10); }
+.breakdown-col.bkd-col-tie    { background: transparent; }
+
+/* Empty row used to pad the shorter side so totals align on both columns. */
+.bkd-row-spacer {
+  visibility: hidden;
+  pointer-events: none;
+}
 
 .die-display {
   width: 56px;
@@ -2821,12 +3172,14 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   /* Whole game fits in one viewport — no page-level scroll */
   #game-screen { height: 100dvh; }
 
-  /* Header: tighter, cycle group wraps to own row */
+  /* Header: tighter single-row layout on mobile */
   #game-header { padding: max(0.35rem, env(safe-area-inset-top)) max(0.75rem, env(safe-area-inset-right)) 0.35rem max(0.75rem, env(safe-area-inset-left)); gap: 0.3rem 0.5rem; flex-shrink: 0; }
-  .header-title { display: none; }
-  #header-cycle-group { order: -1; width: 100%; justify-content: center; }
-  #turn-info { flex-wrap: wrap; gap: 0.3rem 0.6rem; }
+  #turn-info { gap: 0.3rem 0.6rem; }
   .phase-hint { display: none; }
+
+  /* Cycle bump stays compact; just tighten padding on narrow screens */
+  #cycle-bump { padding: 0.2rem 0.55rem; gap: 0.3rem; }
+  #cycle-bump-icon { width: 16px; height: 16px; }
 
   /* game-main fills all remaining height; canvas is the only child */
   #game-main { overflow: hidden; min-height: 0; }
@@ -3695,7 +4048,9 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   border-left: 1px solid rgba(255,255,255,0.1);
   display: flex;
   flex-direction: column;
-  z-index: 30;
+  /* Sit above #unit-stats-bar (z-index 56) so the selection bar doesn't draw
+     over the panel when it extends across the map area. */
+  z-index: 60;
   font-size: 0.8rem;
   transition: width 0.2s ease;
 }
@@ -4891,21 +5246,27 @@ body.spectator-mode #game-screen   { display: flex !important; }
 .campaign-select-list {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 1rem;
   margin: 0.75rem auto;
-  max-width: 420px;
+  max-width: 440px;
 }
 
 .campaign-select-item {
-  padding: 0.75rem 1rem;
+  position: relative;
+  padding: 0.9rem 1rem 0.9rem 1.1rem;
   border: 1px solid var(--clr-dim);
+  border-left: 4px solid var(--clr-dim);
   border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   cursor: pointer;
-  transition: border-color 0.2s, background 0.2s;
+  transition: border-color 0.2s, background 0.2s, transform 0.1s;
 }
 .campaign-select-item:hover {
   border-color: var(--clr-gold);
-  background: rgba(255,215,0,0.06);
+  border-left-color: var(--clr-gold);
+  background: rgba(255, 215, 0, 0.06);
+  transform: translateY(-1px);
 }
 
 .campaign-select-title {
@@ -4922,30 +5283,68 @@ body.spectator-mode #game-screen   { display: flex !important; }
 }
 
 .campaign-select-item.locked {
-  opacity: 0.35;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 .campaign-select-item.locked:hover {
   border-color: var(--clr-dim);
-  background: none;
+  border-left-color: var(--clr-dim);
+  background: rgba(255, 255, 255, 0.02);
+  transform: none;
 }
 .campaign-select-item.disabled {
-  opacity: 0.3;
+  opacity: 0.35;
   cursor: not-allowed;
 }
 .campaign-select-item.disabled:hover {
   border-color: var(--clr-dim);
-  background: none;
+  border-left-color: var(--clr-dim);
+  background: rgba(255, 255, 255, 0.02);
+  transform: none;
+}
+
+/* Status accents — colored left border + tinted background. */
+.campaign-select-item.status-completed {
+  border-left-color: #5cb85c;
+  background: rgba(92, 184, 92, 0.05);
+}
+.campaign-select-item.status-in-progress {
+  border-left-color: #e8a735;
+  background: rgba(232, 167, 53, 0.05);
 }
 
 .campaign-select-badge {
+  display: inline-block;
   font-size: 0.75rem;
   color: var(--clr-dim);
-  margin-top: 0.35rem;
-  font-style: italic;
+  margin-top: 0.5rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 10px;
+  border: 1px solid var(--clr-dim);
+  background: rgba(0, 0, 0, 0.25);
+  font-style: normal;
+  letter-spacing: 0.02em;
 }
 .campaign-select-badge.coming-soon {
   color: var(--clr-gold, #d4a853);
+  border-color: var(--clr-gold, #d4a853);
+}
+.campaign-select-badge.completed {
+  color: #7bd07b;
+  border-color: #5cb85c;
+  font-weight: bold;
+}
+.campaign-select-badge.in-progress {
+  color: #e8a735;
+  border-color: #e8a735;
+  font-weight: bold;
+}
+.campaign-select-badge.new {
+  color: var(--clr-text);
+  border-color: var(--clr-dim);
+}
+.campaign-select-badge.locked-badge {
+  font-style: italic;
 }
 
 .campaign-mission-list {

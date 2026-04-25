@@ -8,14 +8,18 @@ import { Phase } from './game.js';
 import { EntityType } from './entities.js';
 import { TileType } from './tiles.js';
 import { hexKey } from './hex.js';
+import { tickEffects, EFFECTS, dispatchTrigger } from './effects.js';
+import { getFaction } from './factions.js';
 
 // ── Event types ─────────────────────────────────────────────────────────────
 
 export const PostRoundEventType = Object.freeze({
-  DAMAGE:  'damage',
-  KILL:    'kill',
-  SHELTER: 'shelter',
-  SAFE:    'safe',
+  DAMAGE:        'damage',
+  KILL:          'kill',
+  SHELTER:       'shelter',
+  SAFE:          'safe',
+  EFFECT_TICK:   'effect_tick',
+  EFFECT_EXPIRE: 'effect_expire',
 });
 
 // ── Attrition schedule ──────────────────────────────────────────────────────
@@ -118,10 +122,13 @@ function nightAttritionEffect(state) {
         continue;
       }
 
-      const killed = e.takeDamage(dmg);
+      // Route through applyIncomingDamage so wounded etc. amplify attrition
+      // the same way they amplify combat / DOTs.
+      const incoming = e.applyIncomingDamage(dmg);
+      const killed = e.takeDamage(incoming);
       const text = killed
         ? `💀 ${e.displayName} is consumed by the night!`
-        : `🌙 ${e.displayName} suffers in the open! (-${dmg} HP, ${e.hp}/${e.maxHp} remaining)`;
+        : `🌙 ${e.displayName} suffers in the open! (-${incoming} HP, ${e.hp}/${e.maxHp} remaining)`;
 
       events.push({
         type:       killed ? PostRoundEventType.KILL : PostRoundEventType.DAMAGE,
@@ -129,13 +136,13 @@ function nightAttritionEffect(state) {
         ownerId:    e.ownerId ?? null,
         entityName: e.displayName,
         col: e.col, row: e.row,
-        amount: dmg,
+        amount: incoming,
         killed,
         text,
         flash: {
           color:     'rgba(80,0,160,0.6)',
           textColor: 'rgba(210,140,255,1)',
-          label:     `-${dmg}`,
+          label:     `-${incoming}`,
           duration:  2200,
           fontScale: 1.4,
         },
@@ -163,3 +170,83 @@ function nightAttritionEffect(state) {
 }
 
 registerPostRoundEffect('night-attrition', nightAttritionEffect);
+
+// ── Status effects tick ────────────────────────────────────────────────────
+// Runs every round (regardless of phase): poisoned/bleeding deal DOT, then
+// numeric durations decrement. Mission/permanent effects don't decrement.
+//
+// Registered AFTER night-attrition so a survivor doesn't simultaneously take
+// night damage and bleed damage on the same round (rare in practice; this
+// ordering preserves the existing attrition log/UX as the headline event).
+
+function statusEffectsTick(state) {
+  const { dotEvents, expiredEvents } = tickEffects(state);
+  const events = [];
+  for (const ev of dotEvents) {
+    const def = EFFECTS[ev.effectId];
+
+    // Kill bookkeeping for lethal DOTs — mirrors executeBattle's kill path.
+    // Without this, bleeding/poisoned/cursed deaths skip kill credit, leader
+    // scatter, and never fire the attacker's `kill` triggers (e.g. berserker).
+    if (ev.killed && ev.killedEntity) {
+      const killed = ev.killedEntity;
+      const source = ev.source;
+      // Source may be an Entity (most cases — applied during combat), a
+      // string faction id, or null (environmental DOT). Only credit a real
+      // kill when we can resolve a faction.
+      if (source && typeof source === 'object' && source.owner) {
+        const fac = getFaction(source.owner);
+        if (fac) fac.trackKill(state);
+        source.killsThisRound = (source.killsThisRound ?? 0) + 1;
+        dispatchTrigger('kill', source, { state, target: killed });
+      } else if (typeof source === 'string') {
+        const fac = getFaction(source);
+        if (fac) fac.trackKill(state);
+      }
+      // Leader-death scatter — same trigger as the resolver's
+      // `_handleLeaderDeath`. Use the `leader` tag instead of importing
+      // isLeaderType to avoid an effects/entities cycle.
+      if (typeof killed.hasTag === 'function' && killed.hasTag('leader') && killed.ownerId) {
+        if (typeof state.scatterPlayerUnits === 'function') {
+          state.scatterPlayerUnits(killed.ownerId);
+        }
+      }
+    }
+
+    events.push({
+      type:       ev.killed ? PostRoundEventType.KILL : PostRoundEventType.EFFECT_TICK,
+      entityId:   ev.entityId,
+      ownerId:    ev.ownerId,
+      entityName: ev.entityName,
+      col:        ev.col,
+      row:        ev.row,
+      amount:     ev.amount,
+      killed:     ev.killed,
+      text:       ev.text,
+      flash: ev.killed ? null : {
+        color:     'rgba(160,40,80,0.5)',
+        textColor: 'rgba(255,180,200,1)',
+        label:     `-${ev.amount} ${def?.icon ?? ''}`.trim(),
+        duration:  1800,
+        fontScale: 1.2,
+      },
+    });
+  }
+  for (const ev of expiredEvents) {
+    events.push({
+      type:       PostRoundEventType.EFFECT_EXPIRE,
+      entityId:   ev.entityId,
+      ownerId:    ev.ownerId,
+      entityName: ev.entityName,
+      col:        ev.col,
+      row:        ev.row,
+      amount:     0,
+      killed:     false,
+      text:       ev.text,
+      flash:      null,
+    });
+  }
+  return events;
+}
+
+registerPostRoundEffect('status-effects', statusEffectsTick);

@@ -14,8 +14,13 @@
 import { GameState }        from '../src/game.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { HERO_PERSONALITIES, WITCH_PERSONALITIES } from '../src/ai.js';
-import '../src/ai-engine.js';      // side-effect: registers witch personalities
-import '../src/hero-ai-engine.js'; // side-effect: registers hero personalities
+import { PERSONALITY_CONFIGS as WITCH_CONFIGS }      from '../src/ai-engine.js';
+import { HERO_PERSONALITY_CONFIGS as HERO_CONFIGS }  from '../src/hero-ai-engine.js';
+
+// Skip campaign-only personalities — they're scripted-mission-specific and
+// would distort the standard 1v1 balance grid (e.g. evasive's DEFEND_WITCH:2.5
+// against any hero is not a meaningful balance signal).
+function isStandard(name, configs) { return !configs[name]?.campaignOnly; }
 import { WIN_REASON }       from '../src/game.js';
 
 const N = parseInt(process.argv[2] ?? '200', 10);
@@ -67,8 +72,8 @@ function runGame(HeroClass, WitchClass) {
 
 // ── Matrix run ─────────────────────────────────────────────────────────────────
 
-const heroNames  = Object.keys(HERO_PERSONALITIES);
-const witchNames = Object.keys(WITCH_PERSONALITIES);
+const heroNames  = Object.keys(HERO_PERSONALITIES).filter(n => isStandard(n, HERO_CONFIGS));
+const witchNames = Object.keys(WITCH_PERSONALITIES).filter(n => isStandard(n, WITCH_CONFIGS));
 
 // results[heroName][witchName] = { heroWins, witchWins, draws, rounds[], killWins, nodeWins }
 const results = {};

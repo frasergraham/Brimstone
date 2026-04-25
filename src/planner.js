@@ -3,6 +3,8 @@ import { hexKey, getNeighbors } from './hex.js';
 import { getReachableHexes, getVisiblePositions } from './actions.js';
 import { TileType, ResourceType } from './tiles.js';
 import { EntityType } from './entities.js';
+import { ITEMS } from './items.js';
+import { effectsBlockActions } from './effects.js';
 
 // ── Plan action types ────────────────────────────────────────────────────────
 //
@@ -42,6 +44,7 @@ export function actionCosts(type) {
 // Moved here from server/lobby.js so both the resolver and client code share it.
 
 export function snapEntity(entity) {
+  const range = typeof entity.getRange === 'function' ? entity.getRange() : (entity.range ?? 1);
   return {
     id:          entity.id,
     type:        entity.type,
@@ -51,11 +54,18 @@ export function snapEntity(entity) {
     row:         entity.row,
     hp:          entity.hp,
     maxHp:       entity.maxHp,
-    attack:      entity.attack,
-    defense:     entity.defense,
+    // Effective character-sheet stats (base + equipped weapon). The
+    // battle-dialog breakdown labels this row "base" but includes the
+    // weapon bonus; transient combat modifiers (attackBonus /
+    // defenseBonus) are added on top by the dialog.
+    attack:      entity.getAttack(),
+    defense:     entity.getDefense(),
     weapon:      entity.weapon,
     attackBonus: entity.attackBonus || 0,
     defenseBonus: entity.defenseBonus || 0,
+    // Attack range in hexes — used by playback to decide whether to render
+    // a melee lunge or a ranged projectile animation.
+    range,
     name:        entity.displayName,
     title:       entity.title,
     displayName: entity.displayName,
@@ -203,7 +213,7 @@ export function computeProjectedInventory(state, plan) {
       }
       case PlanActionType.USE_ITEM: {
         const item = action.item;
-        if (!item || item.startsWith('weapon:')) break;
+        if (!item || ITEMS[item]?.kind === 'weapon') break;
         if ((hero[item] || 0) > 0) hero[item]--;
         break;
       }
@@ -265,6 +275,13 @@ export function interleavePlan(unitPlans) {
 export function validatePlanAction(state, action, projectedPositions = null) {
   const entity = state.entities.find(e => e.id === action.entityId && e.alive);
   if (!entity) return { valid: false, reason: 'Entity not found.' };
+
+  // Stunned (and any future action-blocking effect): reject at planning time
+  // so the player isn't silently spending a planning slot on a unit that
+  // will skip every step at resolution.
+  if (effectsBlockActions(entity)) {
+    return { valid: false, reason: `${entity.displayName ?? 'Unit'} is stunned and cannot act this round.` };
+  }
 
   const pos = projectedPositions?.get(action.entityId)
     ?? { col: entity.col, row: entity.row };

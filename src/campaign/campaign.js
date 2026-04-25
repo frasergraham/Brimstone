@@ -2,19 +2,43 @@
 // Stored in localStorage; optionally synced to server for verified users.
 
 import { countHeldNodes } from '../game.js';
+import { getFaction } from '../factions.js';
+import { hexDistance } from '../hex.js';
+import { EntityType } from '../entities.js';
 
-const SAVE_VERSION = 1;
+// v1: initial campaign save format.
+// v2 (Phase 4 of units/items/abilities refactor): BRAWLER / STURDY
+// passives were un-baked from SURVIVOR_ROSTER base stats. Pre-v2
+// campaign saves carry the pre-refactor baked `attack`/`defense` numbers
+// plus a singular `ability` string; loading one onto a new Entity would
+// double-count the passive via getAttack()/getDefense() composition.
+// Campaign.load() drops saves at lower versions; a brand-new campaign
+// starts in their place.
+// v3: insertion of `long_watch` between `dark_ritual` and `witchs_trail`.
+// `witchs_trail.requires` changes from ['dark_ritual'] → ['long_watch'], so a
+// v2 save mid-campaign at `witchs_trail` would brick (prereq never satisfied,
+// no in-progress mission to launch). Migration shim in `_migrate()` backfills
+// `long_watch` into completedMissions for those saves.
+const SAVE_VERSION = 3;
 
 /**
  * Serialize a survivor entity into a plain object for campaign roster storage.
  * Captures all fields needed to reconstruct the entity between missions.
+ *
+ * Permanent effects (duration === 'permanent') carry over between missions —
+ * these are typically traits earned mid-campaign. Mission- and round-scoped
+ * effects are deliberately dropped: they belong to a single deployment and
+ * shouldn't shape the next mission's starting roster.
  */
 export function snapshotSurvivor(entity) {
+  const permanentEffects = Array.isArray(entity.effects)
+    ? entity.effects.filter(e => e.duration === 'permanent').map(e => ({ ...e }))
+    : [];
   return {
     name:         entity.name,
     title:        entity.title,
     bio:          entity.bio,
-    ability:      entity.ability,
+    abilities:    Array.isArray(entity.abilities) ? [...entity.abilities] : [],
     abilityLabel: entity.abilityLabel,
     color:        entity.color,
     hp:           entity.hp,
@@ -23,6 +47,7 @@ export function snapshotSurvivor(entity) {
     defense:      entity.defense,
     weapon:       entity.weapon,
     items:        { ...entity.items },
+    effects:      permanentEffects,
   };
 }
 
@@ -46,7 +71,9 @@ export function reconcileRosterAfterMission(preMissionRoster, entities) {
   const deployedNames = new Set();
   const deployedSurvivors = [];
   for (const e of entities) {
-    if (e.owner !== 'hero' || e.type !== 'survivor') continue;
+    if (e.type !== 'survivor') continue;
+    const f = e.owner ? getFaction(e.owner) : null;
+    if (!f?.canDiscoverNPCs()) continue;
     deployedNames.add(e.name);
     if (e.alive) deployedSurvivors.push(snapshotSurvivor(e));
   }
@@ -91,7 +118,10 @@ export function buildVictoryDelegate(objectives) {
 const DEFERRED = Symbol('victory-deferred');
 
 function _heroSurvivorCount(state) {
-  return state.entities.filter(e => e.type === 'survivor' && e.owner === 'hero' && e.alive).length;
+  return state.entities.filter(e => {
+    if (!e.alive || e.type !== 'survivor' || !e.owner) return false;
+    return getFaction(e.owner).canDiscoverNPCs();
+  }).length;
 }
 
 function _checkLoseCondition(cond, state) {
@@ -145,14 +175,29 @@ function _checkLoseCondition(cond, state) {
         log: '🌑 Dawn breaks and her power still pulses through the grove.',
       };
     }
+    case 'witch_score_threshold': {
+      // Fails when the witch accumulates `points` node-score points (multiplayer-style).
+      if ((state.nodeScore?.witch ?? 0) < cond.points) return null;
+      return {
+        winner: 'witch',
+        winReason: cond.reason || 'The witch has held the nodes too long.',
+        log: '🌑 The ritual has reached its climax.',
+      };
+    }
+    default:
+      // Mission def referenced an unknown condition type — soft-fail with a
+      // warning so the mission becomes silently un-losable rather than crashing
+      // the game, but the typo still surfaces in dev consoles + tests.
+      console.warn(`[campaign] Unknown lose condition type: ${cond.type}`);
+      return null;
   }
-  return null;
 }
 
 function _checkWinCondition(cond, state) {
   switch (cond.type) {
-    case 'eliminate_all':
-      if (state.entities.filter(e => e.owner === 'witch' && e.alive).length === 0) {
+    case 'eliminate_all': {
+      const target = cond.targetFaction || 'witch';
+      if (state.entities.filter(e => e.owner === target && e.alive).length === 0) {
         return {
           winner: 'hero',
           winReason: cond.reason || 'All enemies have been eliminated.',
@@ -160,6 +205,7 @@ function _checkWinCondition(cond, state) {
         };
       }
       return null;
+    }
     case 'survive_rounds':
       if (state.round > cond.rounds) {
         return {
@@ -217,9 +263,10 @@ function _checkWinCondition(cond, state) {
     case 'all_party_at_hexes': {
       // Win when every living hero-faction party member (hero + survivors) stands
       // on one of the listed target hexes.
+      const partyFaction = cond.faction || 'hero';
       const party = state.entities.filter(e =>
-        e.alive && e.owner === 'hero' &&
-        (e.type === 'hero' || e.type === 'survivor')
+        e.alive && e.owner === partyFaction &&
+        (e.type === EntityType.PALADIN || e.type === EntityType.SURVIVOR)
       );
       if (party.length === 0) return null;
       const hexes = cond.hexes;
@@ -246,14 +293,31 @@ function _checkWinCondition(cond, state) {
         log: '☀ Dawn breaks over silent nodes — the ritual is broken!',
       };
     }
+    case 'hero_holds_all_nodes': {
+      // Win when every power node is hero-controlled at the target phase.
+      // Pair with `witch_holds_node` lose to flag any non-hero state as defeat.
+      if (cond.phase && state.phase !== cond.phase) return null;
+      if (!state.witchObjectives || state.witchObjectives.length === 0) return null;
+      if (countHeldNodes('hero', state.witchObjectives, state.entities)
+          !== state.witchObjectives.length) return null;
+      return {
+        winner: 'hero',
+        winReason: cond.reason || 'You hold every node at dawn.',
+        log: '☀ Every node bears your banner at first light.',
+      };
+    }
     case 'control_nodes':
       // Standard node scoring — delegate to existing logic (return null to let it run)
       return DEFERRED;
     case 'conductor_complete':
       // MissionConductor handles completion directly — never auto-trigger victory
       return DEFERRED;
+    default:
+      // Mission def referenced an unknown condition type — soft-fail with a
+      // warning. Avoids silently un-winnable missions on a typo.
+      console.warn(`[campaign] Unknown win condition type: ${cond.type}`);
+      return null;
   }
-  return null;
 }
 
 /**
@@ -291,7 +355,7 @@ export function processWaves(state, waves, createEnemyFn) {
     for (const unit of wave.units) {
       const pos = resolveSpawnPosition(state, unit.spawnAt);
       if (!pos) continue;
-      const entity = createEnemyFn(unit.type, pos.col, pos.row);
+      const entity = createEnemyFn(unit.type, pos.col, pos.row, state);
       if (entity) {
         if (unit.overrides) Object.assign(entity, unit.overrides);
         state.entities.push(entity);
@@ -338,6 +402,32 @@ function resolveSpawnPosition(state, spawnAt) {
     const t = edges[Math.floor(Math.random() * edges.length)];
     return { col: t.col, row: t.row };
   }
+  if (spawnAt === 'near_hero') {
+    // Spawn on a passable tile close enough for the hero to see on spawn, but
+    // not adjacent. Hero day-phase sight is 3; target an annulus of 2–3 hexes.
+    const hero = state.hero;
+    if (!hero) return null;
+    const isPassable = (tile) =>
+      tile.type !== 'river' && tile.type !== 'building';
+    const isOccupied = (col, row) =>
+      state.entities.some(e => e.alive && e.col === col && e.row === row);
+    const pickFrom = (minDist, maxDist) => {
+      const candidates = [];
+      for (const [, tile] of state.tiles) {
+        if (!isPassable(tile)) continue;
+        if (isOccupied(tile.col, tile.row)) continue;
+        const d = hexDistance(tile.col, tile.row, hero.col, hero.row);
+        if (d >= minDist && d <= maxDist) candidates.push(tile);
+      }
+      return candidates;
+    };
+    // Prefer 2–3 hexes (visible but not adjacent). Widen if we must.
+    let candidates = pickFrom(2, 3);
+    if (candidates.length === 0) candidates = pickFrom(1, 4);
+    if (candidates.length === 0) return null;
+    const t = candidates[Math.floor(Math.random() * candidates.length)];
+    return { col: t.col, row: t.row };
+  }
   return null;
 }
 
@@ -379,19 +469,29 @@ export class Campaign {
     localStorage.setItem(`brimstone-${this.saveSlot}`, JSON.stringify(data));
   }
 
-  /** Load from localStorage. Returns true if a save was found. */
+  /** Load from localStorage. Returns true if a save was found and is compatible. */
   load() {
     const raw = localStorage.getItem(`brimstone-${this.saveSlot}`);
     if (!raw) return false;
     const data = JSON.parse(raw);
-    this.version           = data.version ?? SAVE_VERSION;
-    this.currentMission    = data.currentMission ?? this.campaignDef.firstMission;
-    this.completedMissions = new Set(data.completedMissions ?? []);
-    this.roster            = data.roster ?? [];
-    this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...data.resources };
-    this.heroStats         = data.heroStats ?? { hp: 14, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };
-    this.storyFlags        = data.storyFlags ?? {};
-    this.updatedAt         = data.updatedAt ?? Date.now();
+    // Pre-v2 saves (Phase-4 baked-stats era) cannot be migrated and are dropped;
+    // anything v2+ goes through _migrate() to bring it forward.
+    const savedVersion = data.version ?? 1;
+    if (savedVersion < 2) {
+      localStorage.removeItem(`brimstone-${this.saveSlot}`);
+      return false;
+    }
+    const migrated = _migrate(data, savedVersion);
+    this.version           = migrated.version;
+    this.currentMission    = migrated.currentMission ?? this.campaignDef.firstMission;
+    this.completedMissions = new Set(migrated.completedMissions ?? []);
+    this.roster            = migrated.roster ?? [];
+    this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...migrated.resources };
+    this.heroStats         = migrated.heroStats ?? { hp: 14, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };
+    this.storyFlags        = migrated.storyFlags ?? {};
+    this.updatedAt         = migrated.updatedAt ?? Date.now();
+    // Persist the migrated form so we don't re-migrate every load.
+    if (migrated.version !== savedVersion) this.save();
     return true;
   }
 
@@ -425,8 +525,13 @@ export class Campaign {
     return null; // all missions completed
   }
 
-  /** Check if all missions in this campaign are completed. */
+  /**
+   * Check if all missions in this campaign are completed.
+   * Returns false for a campaign with no missions defined — an empty missions
+   * array isn't "complete", it's unpopulated (e.g. a Coming Soon chapter).
+   */
   isComplete() {
+    if (this.campaignDef.missions.length === 0) return false;
     return this.campaignDef.missions.every(m => this.completedMissions.has(m.id));
   }
 
@@ -435,9 +540,40 @@ export class Campaign {
    * Returns true only if a save exists and every mission is completed.
    */
   static isCampaignCompleted(campaignDef) {
+    return Campaign.getCampaignProgress(campaignDef).status === 'completed';
+  }
+
+  /** Count of missions completed so far in this campaign. */
+  getCompletedCount() {
+    return this.campaignDef.missions.filter(m => this.completedMissions.has(m.id)).length;
+  }
+
+  /** Total number of missions in this campaign. */
+  getMissionCount() {
+    return this.campaignDef.missions.length;
+  }
+
+  /**
+   * Get a summary of this campaign's progress status.
+   * Returns one of: 'completed', 'in-progress', 'new'.
+   */
+  getStatus() {
+    if (this.isComplete()) return 'completed';
+    if (this.getCompletedCount() > 0) return 'in-progress';
+    return 'new';
+  }
+
+  /**
+   * Inspect the saved progress for a campaign without keeping an instance around.
+   * Returns { status, completed, total } where status is 'completed' | 'in-progress' | 'new'.
+   * If no save exists, returns status 'new' with completed=0.
+   */
+  static getCampaignProgress(campaignDef) {
     const c = new Campaign(campaignDef);
-    if (!c.load()) return false;
-    return c.isComplete();
+    const loaded = c.load();
+    const total = c.getMissionCount();
+    if (!loaded) return { status: 'new', completed: 0, total };
+    return { status: c.getStatus(), completed: c.getCompletedCount(), total };
   }
 
   /** Get list of missions with their status for the mission select screen. */
@@ -563,16 +699,51 @@ export class Campaign {
     }
   }
 
-  /** Restore campaign state from a server-fetched data object. */
+  /** Restore campaign state from a server-fetched data object.
+   *  Returns false if the server save is pre-v2 and must be discarded. */
   restoreFromServerData(data) {
-    this.version           = data.version ?? SAVE_VERSION;
-    this.currentMission    = data.currentMission ?? this.campaignDef.firstMission;
-    this.completedMissions = new Set(data.completedMissions ?? []);
-    this.roster            = data.roster ?? [];
-    this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...data.resources };
-    this.heroStats         = data.heroStats ?? { hp: 14, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };
-    this.storyFlags        = data.storyFlags ?? {};
-    this.updatedAt         = data.updatedAt ?? Date.now();
+    const savedVersion = data.version ?? 1;
+    if (savedVersion < 2) return false;
+    const migrated = _migrate(data, savedVersion);
+    this.version           = migrated.version;
+    this.currentMission    = migrated.currentMission ?? this.campaignDef.firstMission;
+    this.completedMissions = new Set(migrated.completedMissions ?? []);
+    this.roster            = migrated.roster ?? [];
+    this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...migrated.resources };
+    this.heroStats         = migrated.heroStats ?? { hp: 14, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };
+    this.storyFlags        = migrated.storyFlags ?? {};
+    this.updatedAt         = migrated.updatedAt ?? Date.now();
     this.save(); // persist to localStorage
+    return true;
   }
+}
+
+// ── Save migration ──────────────────────────────────────────────────────────
+
+/**
+ * Bring a saved campaign blob forward to SAVE_VERSION.
+ * Returns the (possibly mutated) data object with `version` updated.
+ *
+ * Migrations are additive — each version step preserves player progress
+ * where possible rather than wiping the save.
+ */
+export function _migrate(data, fromVersion) {
+  let v = fromVersion;
+  let out = data;
+
+  // v2 → v3: a new mission `long_watch` is inserted between `dark_ritual` and
+  // `witchs_trail`. Players already on `witchs_trail` would otherwise fail the
+  // new prereq check (it now requires `long_watch`) and end up with no
+  // launchable mission. Backfill the prereq into completedMissions so the
+  // player keeps their progress.
+  if (v === 2) {
+    const completed = new Set(out.completedMissions ?? []);
+    if (out.currentMission === 'witchs_trail' && !completed.has('long_watch')) {
+      completed.add('long_watch');
+    }
+    out = { ...out, completedMissions: [...completed], version: 3 };
+    v = 3;
+  }
+
+  return out;
 }

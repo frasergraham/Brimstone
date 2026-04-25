@@ -36,12 +36,12 @@ describe('kill counters', () => {
     const minion = placeEntity(state, createMinion(hero.col, hero.row));
 
     // Force a guaranteed kill: high attack roll, low defense roll
-    setForcedDice(6, 1);
+    state.setForcedDice(6, 1);
     executeBattle(state, hero, minion);
 
     // Minion has 2 HP; one hit deals 1 damage. Force another kill hit.
     if (state.entities.includes(minion) && minion.hp > 0) {
-      setForcedDice(6, 1);
+      state.setForcedDice(6, 1);
       executeBattle(state, hero, minion);
     }
 
@@ -59,7 +59,10 @@ describe('kill counters', () => {
     minion.owner = 'hero';
     minion.hp = 1;
 
-    setForcedDice(6, 1);
+    // Witch has range 2, so attacking a same-hex target counts as a
+    // close-range ranged attack with 1 disadvantage die (2 atk dice, worst
+    // pick). Pad with extra 6s so the worst-of-2 still lands the hit.
+    state.setForcedDice(6, 6, 1);
     executeBattle(state, witch, minion);
 
     assert.ok(state.witchKills >= 1, `witchKills should be >= 1, got ${state.witchKills}`);
@@ -77,7 +80,7 @@ describe('kill counters', () => {
     // minion ATK=1, hero DEF=2: attackRoll = 1+1+0 = 2, defenseRoll = 6+2+0 = 8
     // 8 >= 2*2 → counter, deals 1 damage to minion (hp=2→1)
     // Actually minion attacks hero and hero counters; we need minion as attacker
-    setForcedDice(1, 6);
+    state.setForcedDice(1, 6);
     executeBattle(state, minion, hero);
 
     // The hero (defender) should get a counter-kill credit

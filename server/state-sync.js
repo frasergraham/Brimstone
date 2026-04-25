@@ -2,7 +2,7 @@
 // serializeState  → plain JSON-safe snapshot (network transmission, save storage)
 // deserializeState ← reconstruct a live GameState from a saved snapshot (resume)
 import { VERSION }           from '../src/version.js';
-import { Entity, bumpEntityId } from '../src/entities.js';
+import { Entity, BASE_AGILITY, BASE_RANGE } from '../src/entities.js';
 import { GameState }         from '../src/game.js';
 import { setMapDimensions }  from '../src/hex.js';
 
@@ -40,17 +40,29 @@ export function serializeState(state) {
     maxHp:         e.maxHp,
     attack:        e.attack,
     defense:       e.defense,
+    agility:       e.agility ?? BASE_AGILITY[e.type] ?? 1,
+    range:         e.range   ?? BASE_RANGE[e.type]   ?? 1,
     attackBonus:   e.attackBonus,
     defenseBonus:  e.defenseBonus,
     weapon:        e.weapon        ?? null,
     name:          e.name          ?? null,
     title:         e.title         ?? null,
     bio:           e.bio           ?? null,
-    ability:       e.ability       ?? null,
+    abilities:     Array.isArray(e.abilities) ? [...e.abilities] : [],
     abilityLabel:  e.abilityLabel  ?? null,
+    // factionId — concrete faction (e.g. 'rogue', 'captain') vs the side
+    // string in `owner`. Required so faction-specific overrides
+    // (canEquipWeaponItem, modifyLootRoll, onAfterMoveStep, sight bonuses)
+    // survive the wire/save roundtrip. Without this field the rogue
+    // silently reverts to paladin behaviour after each round of state-sync.
+    factionId:     e.factionId     ?? null,
     actedThisTurn: e.actedThisTurn ?? false,
     defendCount:   e.defendCount   ?? 0,
     guarding:      e.guarding      ?? 0,
+    killsThisRound: e.killsThisRound ?? 0,
+    effects:       Array.isArray(e.effects)
+      ? e.effects.map(rec => ({ ...rec }))
+      : [],
     items:         { ...e.items },
     // alive is omitted — Entity derives it from hp via getter
   }));
@@ -86,10 +98,24 @@ export function serializeState(state) {
     heroRevealedByHorn:   state.heroRevealedByHorn ?? false,
     nodeScore:            { ...state.nodeScore },
     disableScoring:       !!state.disableScoring,
+    disableCycleBar:      !!state.disableCycleBar,
+    disableNodeSweep:     !!state.disableNodeSweep,
+    disableScoreWin:      !!state.disableScoreWin,
+    nodeScoreThreshold:   state.nodeScoreThreshold ?? 4,
+    noWitchMission:       !!state.noWitchMission,
     gameMode:             state.gameMode ?? 'standard',
     battleConfig:         state.battleConfig ? { ...state.battleConfig } : null,
     cycleConfig:          state.cycleConfig
-      ? { phases: [...state.cycleConfig.phases], loop: state.cycleConfig.loop }
+      ? {
+          phases: [...state.cycleConfig.phases],
+          loop:   state.cycleConfig.loop,
+          ...(state.cycleConfig.extraScoringPhases
+              ? { extraScoringPhases: [...state.cycleConfig.extraScoringPhases] }
+              : {}),
+          ...(state.cycleConfig.extendOnWitchScore
+              ? { extendOnWitchScore: [...state.cycleConfig.extendOnWitchScore] }
+              : {}),
+        }
       : null,
     maxDiscoverableSurvivors: state.maxDiscoverableSurvivors ?? null,
     discoveredSurvivorCount:  state.discoveredSurvivorCount ?? 0,
@@ -118,6 +144,14 @@ export function serializeState(state) {
     mapRows,
     mapSize:              state.mapSize ?? 'standard',
     campaignAIBudgetBonus: state.campaignAIBudgetBonus ?? 0,
+    // Per-state entity/roster counters. Persisting `usedRosterIndices` prevents
+    // duplicate survivor names when a mid-game save is resumed and new
+    // survivors spawn from unexplored buildings. nextEntityId is informational;
+    // on resume we derive the floor from the max restored entity id anyway.
+    // `forcedDice` is intentionally NOT persisted — it's a per-round tutorial
+    // scratch queue re-populated by the mission conductor each planning phase.
+    nextEntityId:         state.nextEntityId ?? 1,
+    usedRosterIndices:    [...(state.usedRosterIndices ?? [])],
     // Per-player planning state (multiplayer) — serialized so hibernated saves
     // don't lose submitted plans.  Maps are converted to plain objects for JSON.
     planning: (state.playerPlans?.size > 0 || state.playerReady?.size > 0) ? {
@@ -148,18 +182,48 @@ export function deserializeState(snap) {
   // ── Entities — restore as real Entity instances so game-logic methods work ─
   state.entities = snap.entities.map(data => {
     const e = Object.create(Entity.prototype);
-    Object.assign(e, data, { items: { ...(data.items || {}) } });
+    Object.assign(e, data, {
+      items:   { ...(data.items   || {}) },
+      effects: Array.isArray(data.effects) ? data.effects.map(r => ({ ...r })) : [],
+    });
     // Ensure ownerId is present even on saves from before the multiplayer update
     if (e.ownerId === undefined) e.ownerId = null;
+    // Back-compat for pre-effects saves
+    if (!Array.isArray(e.effects)) e.effects = [];
+    if (e.killsThisRound === undefined) e.killsThisRound = 0;
+    // Hero → Paladin entity-type rename. Pre-PR4 saves carry type='hero';
+    // re-key them to 'paladin' so the new BASE_STATS/BASE_AGILITY tables
+    // and `e.type === EntityType.PALADIN` checks all line up.
+    if (e.type === 'hero') e.type = 'paladin';
+    // Back-compat hydrate Agility for pre-002 saves.
+    if (e.agility === undefined) e.agility = BASE_AGILITY[e.type] ?? 1;
+    // Back-compat hydrate Range for pre-ranged-attacks saves. New games
+    // set `range` in the Entity constructor; old snapshots default to the
+    // unit-type's registry value (1 for every existing unit except witch).
+    if (e.range === undefined) e.range = BASE_RANGE[e.type] ?? 1;
+    // Back-compat: pre-PR factionId. Saves from before the rogue PR
+    // don't carry factionId; fall back to null so factionOf(actor) →
+    // getFaction(owner) — i.e. the side default. Saves that DO carry
+    // factionId restore the concrete faction.
+    if (e.factionId === undefined) e.factionId = null;
     return e;
   });
 
-  // Advance the global ID counter past every restored ID to prevent collisions.
+  // Advance the per-state counter past every restored ID; GameState.bumpEntityId
+  // also advances the module-level counter so any standalone createFoo() paths
+  // (editor previews, legacy tests) never collide with restored entities.
   const maxId = snap.entities.reduce((max, e) => {
     const n = parseInt(e.id?.slice(1) ?? '0', 10);
     return isNaN(n) ? max : Math.max(max, n);
   }, 0);
-  bumpEntityId(maxId);
+  state.bumpEntityId(maxId);
+
+  // Restore per-state roster tracker if the snapshot carries it; older saves
+  // that predate this field will keep the fresh empty set from the
+  // constructor. nextEntityId is re-derived by the bump above.
+  if (Array.isArray(snap.usedRosterIndices)) {
+    state.usedRosterIndices = new Set(snap.usedRosterIndices);
+  }
 
   // Restore global hex math dimensions so neighbor/distance calculations use the
   // correct grid size. The constructor above generated a default-size map which
@@ -190,6 +254,11 @@ export function deserializeState(snap) {
   state.attritionChanged     = snap.attritionChanged     ?? false;
   state.nodeScore            = { ...snap.nodeScore };
   state.disableScoring       = !!snap.disableScoring;
+  state.disableCycleBar      = !!snap.disableCycleBar;
+  state.disableNodeSweep     = !!snap.disableNodeSweep;
+  state.disableScoreWin      = !!snap.disableScoreWin;
+  state.nodeScoreThreshold   = snap.nodeScoreThreshold ?? 4;
+  state.noWitchMission       = !!snap.noWitchMission;
   state.maxDiscoverableSurvivors = snap.maxDiscoverableSurvivors ?? null;
   state.discoveredSurvivorCount  = snap.discoveredSurvivorCount  ?? 0;
   state.log                  = [...snap.log];
@@ -238,7 +307,16 @@ export function deserializeState(snap) {
   state.gameMode             = snap.gameMode ?? 'standard';
   state.battleConfig         = snap.battleConfig ? { ...snap.battleConfig } : null;
   state.cycleConfig          = snap.cycleConfig
-    ? { phases: [...snap.cycleConfig.phases], loop: snap.cycleConfig.loop }
+    ? {
+        phases: [...snap.cycleConfig.phases],
+        loop:   snap.cycleConfig.loop,
+        ...(snap.cycleConfig.extraScoringPhases
+            ? { extraScoringPhases: [...snap.cycleConfig.extraScoringPhases] }
+            : {}),
+        ...(snap.cycleConfig.extendOnWitchScore
+            ? { extendOnWitchScore: [...snap.cycleConfig.extendOnWitchScore] }
+            : {}),
+      }
     : null;
 
   // ── Planning fields ──────────────────────────────────────────────────────

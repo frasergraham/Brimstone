@@ -1,11 +1,19 @@
 // Faction class hierarchy — encapsulates all faction-specific behavior.
 // Factions are stateless singletons: they define behavior/config, not game state.
 // Use getFaction(id) to look up a faction by its string id ('hero' | 'witch').
+//
+// Each Faction belongs to a Side ('day' | 'night'). Sides own the phase
+// cycle, scoring, and team allocation; factions vary the stats, abilities,
+// AI personalities, and unit roster within a side. See `src/sides.js`.
 
 import { Phase } from './game.js';
-import { EntityType, SurvivorAbility, createHero, createWitch, createSurvivor, createZombie, createMinion, createWoodGolem, createIronGolem } from './entities.js';
-import { ResourceType, TileType, BuildingType } from './tiles.js';
+import { EntityType, SurvivorAbility, createHero, createWitch, createSurvivor, createZombie, createMinion, createWoodGolem, createIronGolem, createRogue, createCaptain, createNecromancer, createBrute, isLeaderType } from './entities.js';
+import { ResourceType, TileType, BuildingType, rollLoot } from './tiles.js';
 import { hexKey, getNeighbors } from './hex.js';
+import { AI_HERO_NAMES, AI_WITCH_NAMES } from './ai-names.js';
+import { Side, getOpposingSide as _opposingSide } from './sides.js';
+import { ITEMS } from './items.js';
+import { triggerSurvivorEncounter } from './survivor-discovery.js';
 
 // ── Base Class ──────────────────────────────────────────────────────────────
 
@@ -16,6 +24,23 @@ export class Faction {
   get name()       { throw new Error('Subclass must implement name'); }
   /** @returns {string} EntityType of the faction leader */
   get leaderType() { throw new Error('Subclass must implement leaderType'); }
+  /** @returns {string} Side id this faction belongs to ('day' | 'night'). */
+  get side()       { throw new Error('Subclass must implement side'); }
+
+  /**
+   * Return the opposing Side id. Forward-looking N-faction API: use this
+   * instead of `getOpponentId()` when the caller wants "who is on the
+   * other team?" rather than "which single faction faces me?".
+   */
+  getOpposingSide() { return _opposingSide(this.side); }
+
+  /**
+   * True if this faction is shipped as a stub — registered and selectable
+   * but inheriting parent-side behaviour rather than its own implementation.
+   * Used by the lobby UI to render a "stub" badge so players know what to
+   * expect before picking.
+   */
+  isStub() { return false; }
 
   // ── Action Budget ──
 
@@ -52,6 +77,42 @@ export class Faction {
   canSummon()   { return false; }
   /** Can this faction use hero-side shared items (food, silver, scripture)? */
   canUseItems() { return false; }
+  /** Can this faction batter down enemy fortifications (BATTLE_HEX on an empty wall)? */
+  canAssaultFortifications() { return false; }
+  /** Is this faction blocked from moving onto impassable fortification walls? */
+  isBlockedByWalls() { return false; }
+
+  /**
+   * Bonus splash radius around the target hex when this faction's unit
+   * lands a hit that triggers splash. 0 = vanilla splash (only same-hex
+   * bystanders). 1 = also damage units on the 6 neighbouring hexes —
+   * the brute's signature blast.
+   */
+  crushSplashRadius() { return 0; }
+
+  /**
+   * If true, splash fires on every melee hit (not just crush / kill).
+   * Default vanilla rule: splash is a crush-only mechanic.
+   */
+  splashesOnEveryHit() { return false; }
+
+  /**
+   * If true, splash skips units owned by this faction's side. Default
+   * is friendly fire on — splash is indiscriminate.
+   */
+  splashSparesAllies() { return false; }
+
+  /**
+   * If true, splashed bystanders are knocked back one hex outward from
+   * the target (when the push destination is open terrain).
+   */
+  splashKnockback() { return false; }
+
+  /**
+   * Resource cost for summoning a Minion. Defaults to 2 (witch's value)
+   * — overridden by faction stubs that want cheaper chaff (brute = 1).
+   */
+  getMinionCost() { return 2; }
 
   /**
    * Summon options with affordability info.
@@ -70,11 +131,19 @@ export class Faction {
 
   // ── Kill / Summon Tracking ──
 
-  /** Increment the appropriate kill counter on state for this faction */
-  trackKill(_state) { /* default: nothing */ }
+  /**
+   * Increment the kill counter for this faction's side. Delegates to the
+   * side-keyed mutator on GameState so storage-field renames (PR 4b) can
+   * land without touching the Faction hierarchy.
+   */
+  trackKill(state) { state.recordKillForSide(this.side); }
 
-  /** Increment the appropriate summon counter on state for this faction */
-  trackSummon(_state) { /* default: nothing */ }
+  /**
+   * Increment the summon counter for this faction's side. Day-side calls
+   * today are a no-op (no day-side summon mechanic), but routing through
+   * the GameState mutator keeps the door open for future day factions.
+   */
+  trackSummon(state) { state.recordSummonForSide(this.side); }
 
   // ── End-of-Round Effects ──
 
@@ -91,7 +160,7 @@ export class Faction {
    * Create the entity discovered when this faction explores a hidden survivor tile.
    * @returns {object} entity
    */
-  createDiscoveryEntity(_col, _row, _ownerId) {
+  createDiscoveryEntity(_col, _row, _ownerId, _state) {
     throw new Error('Subclass must implement createDiscoveryEntity');
   }
 
@@ -108,6 +177,14 @@ export class Faction {
   /** Can units of this faction carry/equip weapons? */
   canEquipWeapon() { return false; }
 
+  /**
+   * Per-item equip gate. Defaults to the blanket canEquipWeapon() check;
+   * subclasses can refine by item category (e.g. rogue: ranged-only).
+   * Pass an unknown id and you get false.
+   * @param {string} itemId — ITEMS registry id
+   */
+  canEquipWeaponItem(_itemId) { return this.canEquipWeapon(); }
+
   /** Does this entity currently have a horse equipped? */
   hasHorse(entity) {
     return this.canEquipHorse() && (entity.items?.['horse'] || 0) > 0;
@@ -122,19 +199,26 @@ export class Faction {
   /** Return the opposing faction's id */
   getOpponentId() { throw new Error('Subclass must implement getOpponentId'); }
 
-  /** Return this faction's current action budget from game state */
-  getActionsLeft(_state) { throw new Error('Subclass must implement getActionsLeft'); }
+  /**
+   * Return this faction's current action budget from game state. Pulls
+   * from the side-keyed accessor on GameState; subclasses don't need to
+   * override unless they layer on faction-specific bonuses.
+   */
+  getActionsLeft(state) { return state.actionsLeftForSide(this.side); }
 
   /** Return the node discovery key used on objective objects (e.g. 'seenByHero') */
   getNodeSeenKey() { throw new Error('Subclass must implement getNodeSeenKey'); }
 
   /**
-   * Get the inventory object where this faction stores resources.
+   * Get the inventory object where this faction stores resources. Routes
+   * through the side-keyed accessor on GameState — all factions on the
+   * same side share one resource pool.
+   *
    * @param {object} state - GameState
    * @returns {object} inventory map
    */
-  getInventory(_state) {
-    throw new Error('Subclass must implement getInventory');
+  getInventory(state) {
+    return state.inventoryForSide(this.side);
   }
 
   /** Starting resources for this faction's inventory at game start */
@@ -142,6 +226,71 @@ export class Faction {
 
   /** Log message when this faction finds a resource */
   getResourceFoundLog(_actor, _lootType) { return ''; }
+
+  // ── Explore & Move Hooks ──
+
+  /**
+   * Hook to modify a single loot roll before it's applied. Receives the
+   * raw rolled type and the loot table (so subclasses can re-roll, filter
+   * 'nothing', etc.) and returns the (possibly substituted) type to grant.
+   * Default: pass through.
+   *
+   * Called once per roll — re-rolls are the implementer's responsibility.
+   * @param {object} state
+   * @param {object} actor
+   * @param {Array<{type:string,weight:number}>} table
+   * @param {string} lootType
+   * @returns {string}
+   */
+  modifyLootRoll(_state, _actor, _table, lootType) { return lootType; }
+
+  /**
+   * Hook to grant bonus loot after a primary roll has been applied. The
+   * faction calls `grantExtra()` to request another roll-and-apply pass.
+   * Default: agility-driven double-resource chance — any high-agility
+   * actor gets an occasional extra roll on resource drops. Subclasses
+   * can override to implement other bonus mechanics.
+   *
+   * Skips horses, 'nothing', and weapons (the intent is "double resources",
+   * not "two horses" or "two swords"). The weapon gate is delegated to
+   * the caller — pass `isWeapon: true` for weapon drops.
+   *
+   * @param {object} state
+   * @param {object} actor
+   * @param {string} lootType
+   * @param {() => void} grantExtra — invoke to trigger another roll
+   * @param {{isWeapon: boolean}} opts
+   */
+  applyExploreLootBonus(_state, actor, lootType, grantExtra, opts = {}) {
+    if (lootType === 'nothing' || lootType === 'horse') return;
+    if (opts.isWeapon) return;
+    const agi = (typeof actor.getAgility === 'function')
+      ? actor.getAgility()
+      : (actor.agility ?? 0);
+    // (agi - 6) * 0.15, clamped [0, 0.5]: rogue (8) → 30%, paladin (6) → 0%,
+    // captain/witch (5) → 0%, slower units → 0%. The bonus is intentionally
+    // gated above the standard leader agility so the 1v1 baseline doesn't
+    // shift — only the rogue (and any future agility-8+ unit) gets it.
+    const chance = Math.max(0, Math.min(0.5, (agi - 6) * 0.15));
+    if (Math.random() < chance) grantExtra();
+  }
+
+  /**
+   * Called after the actor finishes each move-step. Returns
+   * `{ encounterLog, encounterSurvivor } | null` — the executeMove loop
+   * merges any encounter into its outgoing log/state. Default: no-op.
+   *
+   * The phase-random survivor reveal in executeMove stays inline (it's
+   * shared-side behaviour, not faction-specific). This hook is for
+   * faction-specific triggers, e.g. the rogue's auto-detect-on-move.
+   *
+   * @param {object} state
+   * @param {object} actor
+   * @param {number} col
+   * @param {number} row
+   * @returns {{encounterLog: string[], encounterSurvivor: object} | null}
+   */
+  onAfterMoveStep(_state, _actor, _col, _row) { return null; }
 
   // ── Visibility ──
 
@@ -158,15 +307,42 @@ export class Faction {
   /** Entity types that can serve as non-leader units for this faction */
   getUnitTypes() { return []; }
 
-  /** Create the faction leader entity */
-  createLeader(col, row, ownerId) {
-    throw new Error('Subclass must implement createLeader');
+  /**
+   * Ability ids every leader of this faction is born with. Pushed onto
+   * `entity.abilities` by `createLeader()`. Phase 5 of the units/items/
+   * abilities refactor — day-side leaders get `'sound_horn'`, night-side
+   * leaders get `'summon'`. Stub factions inherit their parent's list;
+   * a concrete stub that grows a unique ability overrides this getter
+   * and returns the parent list plus its own additions.
+   */
+  get innateLeaderAbilities() { return []; }
+
+  /**
+   * Create the faction leader entity. Subclasses override `_buildLeader`
+   * to pick the correct EntityType factory; the base class handles the
+   * faction-innate ability push so every leader gets the right abilities
+   * regardless of which concrete factory runs.
+   */
+  createLeader(col, row, ownerId, state) {
+    const e = this._buildLeader(col, row, ownerId, state);
+    for (const id of this.innateLeaderAbilities) {
+      if (!e.abilities.includes(id)) e.abilities.push(id);
+    }
+    return e;
+  }
+
+  /** Subclass hook — return a freshly constructed leader Entity. */
+  _buildLeader(_col, _row, _ownerId, _state) {
+    throw new Error('Subclass must implement _buildLeader');
   }
 
   // ── AI Hints ──
 
   /** Return the personality registry for this faction's AI */
   getPersonalities() { return {}; }
+
+  /** Pool of AI display names used when filling AI seats. */
+  getAINamePool() { return []; }
 }
 
 // ── Hero Faction ────────────────────────────────────────────────────────────
@@ -175,6 +351,7 @@ export class HeroFaction extends Faction {
   get id()         { return 'hero'; }
   get name()       { return 'Hero'; }
   get leaderType() { return EntityType.HERO; }
+  get side()       { return Side.DAY; }
 
   // Action Budget
   get actionCap()    { return 8; }
@@ -193,10 +370,7 @@ export class HeroFaction extends Faction {
     return Math.floor((defendCount || 0) / 2);
   }
 
-  trackKill(state) { state.heroKills++; }
-
   getOpponentId() { return 'witch'; }
-  getActionsLeft(state) { return state.heroActionsLeft; }
   getNodeSeenKey() { return 'seenByHero'; }
 
   // End-of-Round Effects
@@ -208,7 +382,7 @@ export class HeroFaction extends Faction {
 
   _applyBuildingHealing(state) {
     const heroLeaders = state.entities.filter(
-      e => e.alive && e.type === EntityType.HERO
+      e => e.alive && e.owner === 'hero' && isLeaderType(e.type)
     );
     for (const hero of heroLeaders) {
       const heroTile = state.tiles.get(hexKey(hero.col, hero.row));
@@ -230,7 +404,7 @@ export class HeroFaction extends Faction {
 
   _applyNodeHealing(state) {
     const heroLeaders = state.entities.filter(
-      e => e.alive && e.type === EntityType.HERO
+      e => e.alive && e.owner === 'hero' && isLeaderType(e.type)
     );
     for (const hero of heroLeaders) {
       if (hero.hp < hero.maxHp) {
@@ -250,7 +424,7 @@ export class HeroFaction extends Faction {
     if (state.phase !== Phase.NIGHT) return;
 
     const heroLeaders = state.entities.filter(
-      e => e.alive && e.type === EntityType.HERO
+      e => e.alive && e.owner === 'hero' && isLeaderType(e.type)
     );
     for (const obj of state.witchObjectives) {
       const freeHex = () => {
@@ -269,7 +443,7 @@ export class HeroFaction extends Faction {
           if (Math.random() < 0.33) {
             const hex = freeHex();
             if (hex) {
-              const s = createSurvivor(hex.col, hex.row, hero.ownerId);
+              const s = createSurvivor(hex.col, hex.row, hero.ownerId, state);
               s.owner = 'hero';
               if (Math.random() < 0.5) s.items['horse'] = 1;
               state.entities.push(s);
@@ -280,7 +454,7 @@ export class HeroFaction extends Faction {
                 name: s.name,
                 title: s.title,
                 hp: s.hp, maxHp: s.maxHp,
-                attack: s.attack, defense: s.defense,
+                attack: s.getAttack(), defense: s.getDefense(),
                 abilityLabel: s.abilityLabel,
                 color: s.color,
               });
@@ -294,8 +468,8 @@ export class HeroFaction extends Faction {
   }
 
   // Discovery & Loot
-  createDiscoveryEntity(col, row, ownerId) {
-    const s = createSurvivor(col, row, ownerId);
+  createDiscoveryEntity(col, row, ownerId, state = null) {
+    const s = createSurvivor(col, row, ownerId, state);
     s.owner = 'hero';
     return s;
   }
@@ -304,13 +478,13 @@ export class HeroFaction extends Faction {
     const abilityNote = entity.abilityLabel ? ` · ${entity.abilityLabel}` : '';
     return {
       encounterLog: [
-        `☺ ${entity.name} the ${entity.title} steps out of hiding and joins the party! (HP ${entity.hp}/${entity.maxHp} · ATK ${entity.attack} · DEF ${entity.defense}${abilityNote})`
+        `☺ ${entity.name} the ${entity.title} steps out of hiding and joins the party! (HP ${entity.hp}/${entity.maxHp} · ATK ${entity.getAttack()} · DEF ${entity.getDefense()}${abilityNote})`
       ],
       encounterSurvivor: {
         type: 'survivor',
         name: entity.name, title: entity.title,
         hp: entity.hp, maxHp: entity.maxHp,
-        attack: entity.attack, defense: entity.defense,
+        attack: entity.getAttack(), defense: entity.getDefense(),
         abilityLabel: entity.abilityLabel,
         color: entity.color,
       },
@@ -320,8 +494,6 @@ export class HeroFaction extends Faction {
   canEquipHorse()  { return true; }
   canEquipWeapon() { return true; }
   canDiscoverNPCs() { return true; }
-
-  getInventory(state) { return state.inventory.hero; }
 
   getStartingResources() { return { [ResourceType.FOOD]: 2 }; }
 
@@ -342,7 +514,15 @@ export class HeroFaction extends Faction {
 
   // Entity Registry
   getUnitTypes() { return [EntityType.SURVIVOR]; }
-  createLeader(col, row, ownerId) { return createHero(col, row, ownerId); }
+  _buildLeader(col, row, ownerId, state = null) { return createHero(col, row, ownerId, state); }
+
+  // Phase 5: day-side leaders carry sound_horn innately. The action-type
+  // gate at src/actions.js no longer checks isLeaderType + owner — it
+  // reads actor.hasAbility('sound_horn').
+  get innateLeaderAbilities() { return ['sound_horn']; }
+
+  // AI Names
+  getAINamePool() { return AI_HERO_NAMES; }
 }
 
 // ── Witch Faction ───────────────────────────────────────────────────────────
@@ -351,6 +531,7 @@ export class WitchFaction extends Faction {
   get id()         { return 'witch'; }
   get name()       { return 'Witch'; }
   get leaderType() { return EntityType.WITCH; }
+  get side()       { return Side.NIGHT; }
 
   // Action Budget
   get actionCap()    { return 8; }
@@ -362,6 +543,8 @@ export class WitchFaction extends Faction {
 
   // Available Actions
   canSummon() { return true; }
+  canAssaultFortifications() { return true; }
+  isBlockedByWalls() { return true; }
 
   getSummonOptions(inventory) {
     const metal = inventory[ResourceType.METAL] || 0;
@@ -380,36 +563,31 @@ export class WitchFaction extends Faction {
     return phase === Phase.NIGHT ? 2 : 0;
   }
 
-  trackKill(state) { state.witchKills++; }
-  trackSummon(state) { state.witchSummonCount++; }
-
-  canExplore(entity) { return entity.type === EntityType.WITCH; }
+  // Only a night-side leader can explore (summoned units can't).
+  canExplore(entity) { return isLeaderType(entity.type) && entity.owner === 'witch'; }
 
   getOpponentId() { return 'hero'; }
-  getActionsLeft(state) { return state.witchActionsLeft; }
   getNodeSeenKey() { return 'seenByWitch'; }
 
   // Discovery & Loot
-  createDiscoveryEntity(col, row, ownerId) {
-    return createZombie(col, row, ownerId);
+  createDiscoveryEntity(col, row, ownerId, state = null) {
+    return createZombie(col, row, ownerId, state);
   }
 
   buildDiscoveryResult(entity) {
     return {
       encounterLog: [
-        `† A cowering survivor is found… raised as a zombie! (HP ${entity.hp}/${entity.maxHp} · ATK ${entity.attack} · DEF ${entity.defense})`
+        `† A cowering survivor is found… raised as a zombie! (HP ${entity.hp}/${entity.maxHp} · ATK ${entity.getAttack()} · DEF ${entity.getDefense()})`
       ],
       encounterSurvivor: {
         type: 'zombie',
         name: 'Zombie',
         hp: entity.hp, maxHp: entity.maxHp,
-        attack: entity.attack, defense: entity.defense,
+        attack: entity.getAttack(), defense: entity.getDefense(),
         color: entity.color,
       },
     };
   }
-
-  getInventory(state) { return state.inventory.witch; }
 
   getStartingResources() { return { [ResourceType.WOOD]: 2, [ResourceType.METAL]: 2 }; }
 
@@ -424,22 +602,215 @@ export class WitchFaction extends Faction {
   getUnitTypes() {
     return [EntityType.ZOMBIE, EntityType.MINION, EntityType.WOOD_GOLEM, EntityType.IRON_GOLEM];
   }
-  createLeader(col, row, ownerId) { return createWitch(col, row, ownerId); }
+  _buildLeader(col, row, ownerId, state = null) { return createWitch(col, row, ownerId, state); }
+
+  // Phase 5: night-side leaders carry summon innately. The action-type
+  // gate at src/actions.js no longer checks isLeaderType + owner — it
+  // reads actor.hasAbility('summon').
+  get innateLeaderAbilities() { return ['summon']; }
+
+  // AI Names
+  getAINamePool() { return AI_WITCH_NAMES; }
+}
+
+// ── Stub Factions (PR 5) ────────────────────────────────────────────────────
+// Each stub extends its side's primary faction. It overrides identity (id,
+// name, leaderType, AI name pool) and reports `isStub() === true` so the
+// lobby UI can render a stub badge. All other behaviour — combat, summon,
+// fortify, end-of-round effects, discovery, sight — inherits from the
+// parent, so the stub is mechanically the parent faction with different
+// stats baked into the leader entity (via the new EntityType + BASE_STATS
+// entries in entities.js).
+
+export class RogueFaction extends HeroFaction {
+  get id()         { return 'rogue'; }
+  get name()       { return 'Rogue'; }
+  get leaderType() { return EntityType.ROGUE; }
+  // No isStub() override — the rogue has real distinct behaviour now
+  // (ranged attack, melee-weapon ban, sight bonus, agility-loot bonus,
+  //  building-survivor auto-detect, no Sound Horn).
+
+  _buildLeader(col, row, ownerId, state = null) {
+    return createRogue(col, row, ownerId, state);
+  }
+
+  // Drop sound_horn from the day-side innate set. Faction.createLeader
+  // is the sole source of innate abilities (see entities.js cleanup),
+  // so returning [] actually strips the inherited ability.
+  get innateLeaderAbilities() { return []; }
+
+  // Sight: +1 hex over paladin in every phase, with the same scout bonus.
+  // Calls super so future tweaks to HeroFaction's day/dawn/night base
+  // values flow through automatically.
+  getSightRange(phase, hasScout = false) {
+    return super.getSightRange(phase, hasScout) + 1;
+  }
+
+  // Cannot wield melee weapons. Bow / crossbow are fine.
+  canEquipWeaponItem(itemId) {
+    if (!this.canEquipWeapon()) return false;
+    return ITEMS[itemId]?.category === 'ranged';
+  }
+
+  // Exploration never turns up empty. On a 'nothing' roll, re-roll once;
+  // if that's also 'nothing', filter the table and pick from the rest.
+  // The agility-driven double-resource bonus is inherited from the
+  // Faction base class — rogue agility 8 → 30% chance per resource.
+  modifyLootRoll(state, actor, table, lootType) {
+    if (lootType !== 'nothing') return lootType;
+    const reroll = rollLoot(table);
+    if (reroll !== 'nothing') return reroll;
+    const filtered = table.filter(e => e.type !== 'nothing');
+    return filtered.length ? rollLoot(filtered) : lootType;
+  }
+
+  // After each move-step, scan the just-entered building tile + neighbouring
+  // building tiles for hidden survivors and auto-trigger the encounter.
+  // The rogue's keen eye spots people the paladin would walk past.
+  onAfterMoveStep(state, actor, col, row) {
+    const hits = [];
+    const here = state.tiles.get(hexKey(col, row));
+    if (here?.type === TileType.BUILDING && here.hiddenSurvivor) {
+      hits.push({ col, row });
+    }
+    for (const n of getNeighbors(col, row)) {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      if (t?.type === TileType.BUILDING && t.hiddenSurvivor) {
+        hits.push({ col: n.col, row: n.row });
+      }
+    }
+    if (!hits.length) return null;
+    const encounterLog = [];
+    let encounterSurvivor = null;
+    for (const h of hits) {
+      const enc = triggerSurvivorEncounter(state, actor, h.col, h.row);
+      if (enc) {
+        encounterLog.push(`👁 ${actor.displayName} senses someone hiding nearby!`);
+        encounterLog.push(...enc.encounterLog);
+        encounterSurvivor = enc.encounterSurvivor;
+      }
+    }
+    return { encounterLog, encounterSurvivor };
+  }
+}
+
+export class CaptainFaction extends HeroFaction {
+  get id()         { return 'captain'; }
+  get name()       { return 'Captain'; }
+  get leaderType() { return EntityType.CAPTAIN; }
+  isStub()         { return true; }
+  _buildLeader(col, row, ownerId, state = null) {
+    return createCaptain(col, row, ownerId, state);
+  }
+}
+
+export class NecromancerFaction extends WitchFaction {
+  get id()         { return 'necromancer'; }
+  get name()       { return 'Necromancer'; }
+  get leaderType() { return EntityType.NECROMANCER; }
+  isStub()         { return true; }
+  _buildLeader(col, row, ownerId, state = null) {
+    return createNecromancer(col, row, ownerId, state);
+  }
+}
+
+export class BruteFaction extends WitchFaction {
+  get id()         { return 'brute'; }
+  get name()       { return 'Brute'; }
+  get leaderType() { return EntityType.BRUTE; }
+  // No isStub() override — the brute has its own behaviour: cheap
+  // minion-only summons, building survivor auto-zombify, and a meaty
+  // splash blast that fires on every melee hit (knocks enemies back,
+  // skips friendlies).
+
+  _buildLeader(col, row, ownerId, state = null) {
+    return createBrute(col, row, ownerId, state);
+  }
+
+  // Splash radius around the target hex. 1 = also damage the 6
+  // neighbouring hexes around the target.
+  crushSplashRadius() { return 1; }
+
+  // Splash fires on every melee hit, not just crushing blows. The
+  // damage scales with the attacker's roll margin (see splashDamage).
+  splashesOnEveryHit() { return true; }
+
+  // Splash skips units owned by the attacker's faction. The brute can
+  // wade into a swarm without nuking her own minions.
+  splashSparesAllies() { return true; }
+
+  // Splashed bystanders are knocked one hex outward from the target
+  // (when the destination is open). Repositioning is the headline
+  // tactical effect — the damage tax is secondary.
+  splashKnockback() { return true; }
+
+  // Brute summons only minions, and at a discount — 1 of any resource
+  // instead of the witch's 2. Cheap chaff so she has bodies to soak
+  // gang-up advantage while she swings her cleaver.
+  getMinionCost() { return 1; }
+
+  getSummonOptions(inventory) {
+    const total = Object.values(inventory).reduce((s, v) => s + (v || 0), 0);
+    if (total < this.getMinionCost()) return [];
+    return [{ summonType: EntityType.MINION, affordable: true }];
+  }
+
+  // Auto-zombify on building proximity — same scan as the rogue's keen-eye
+  // detection, but the WitchFaction.createDiscoveryEntity hook turns the
+  // hidden survivor into a zombie instead of recruiting them.
+  onAfterMoveStep(state, actor, col, row) {
+    const hits = [];
+    const here = state.tiles.get(hexKey(col, row));
+    if (here?.type === TileType.BUILDING && here.hiddenSurvivor) {
+      hits.push({ col, row });
+    }
+    for (const n of getNeighbors(col, row)) {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      if (t?.type === TileType.BUILDING && t.hiddenSurvivor) {
+        hits.push({ col: n.col, row: n.row });
+      }
+    }
+    if (!hits.length) return null;
+    const encounterLog = [];
+    let encounterSurvivor = null;
+    for (const h of hits) {
+      const enc = triggerSurvivorEncounter(state, actor, h.col, h.row);
+      if (enc) {
+        encounterLog.push(`👹 ${actor.displayName} drags a cowering survivor from hiding!`);
+        encounterLog.push(...enc.encounterLog);
+        encounterSurvivor = enc.encounterSurvivor;
+      }
+    }
+    return { encounterLog, encounterSurvivor };
+  }
 }
 
 // ── Faction Registry ────────────────────────────────────────────────────────
 
-const _hero  = new HeroFaction();
-const _witch = new WitchFaction();
+const _hero        = new HeroFaction();
+const _rogue       = new RogueFaction();
+const _captain     = new CaptainFaction();
+const _witch       = new WitchFaction();
+const _necromancer = new NecromancerFaction();
+const _brute       = new BruteFaction();
 
+// Day side first (paladin → rogue → captain), then night side
+// (witch → necromancer → brute). Iteration order in the lobby picker
+// follows this order.
 const FACTIONS = Object.freeze({
-  hero:  _hero,
-  witch: _witch,
+  hero:        _hero,
+  rogue:       _rogue,
+  captain:     _captain,
+  witch:       _witch,
+  necromancer: _necromancer,
+  brute:       _brute,
 });
 
 /**
- * Look up a Faction by its string id.
- * @param {string} id - 'hero' or 'witch'
+ * Look up a Faction by its string id. Recognised ids:
+ *   day side   — 'hero', 'rogue', 'captain'
+ *   night side — 'witch', 'necromancer', 'brute'
+ * @param {string} id
  * @returns {Faction}
  */
 export function getFaction(id) {
@@ -448,7 +819,91 @@ export function getFaction(id) {
   return f;
 }
 
+/**
+ * Non-throwing variant of `getFaction`. Returns `null` when the id is
+ * unknown (or falsy). Callers that want to gracefully handle bad data
+ * from the wire should prefer this over wrapping `getFaction` in a
+ * try/catch.
+ */
+export function findFaction(id) {
+  return FACTIONS[id] ?? null;
+}
+
 /** Return all registered factions. */
 export function allFactions() {
   return Object.values(FACTIONS);
+}
+
+/**
+ * Return every registered Faction belonging to the given Side, in
+ * registration order. Empty array if the side id is unknown.
+ *
+ * Today: day → [hero], night → [witch]. As stub factions register in
+ * later PRs the lists grow; lobby and UI code should iterate this rather
+ * than hardcoding faction ids per side.
+ *
+ * @param {string} sideId — 'day' or 'night'
+ * @returns {Faction[]}
+ */
+export function getFactionsForSide(sideId) {
+  return allFactions().filter(f => f.side === sideId);
+}
+
+/**
+ * Look up the Side id for a faction id. Returns null if the faction is
+ * unknown — callers in legacy/synthetic code paths sometimes pass null
+ * or a stub id during state restore.
+ *
+ * @param {string} factionId
+ * @returns {string|null} 'day' | 'night' | null
+ */
+export function sideOf(factionId) {
+  const f = FACTIONS[factionId];
+  return f ? f.side : null;
+}
+
+// ── Faction lookup for entities ─────────────────────────────────────────────
+// Two helpers, picked deliberately at each callsite. Stub-faction leaders
+// (rogue, captain, necromancer, brute) keep the parent side's `owner`
+// string — the concrete faction lives on `factionId`. The choice between
+// these two helpers determines whether a hook honours stub-faction
+// overrides or just uses the side default.
+
+/**
+ * Side faction — the parent faction for the entity's side. Use for
+ * shared-side concerns: inventory, kill tracking, phase combat bonus,
+ * end-of-round effects, the things ALL day-side / ALL night-side units
+ * share. A rogue leader's `sideFactionOf()` returns HeroFaction even
+ * though the rogue carries `factionId === 'rogue'`.
+ */
+export function sideFactionOf(entity) {
+  return getFaction(entity.owner);
+}
+
+/**
+ * Concrete faction — the entity's specific faction class. Use for
+ * faction-specific hooks (modifyLootRoll, applyExploreLootBonus,
+ * onAfterMoveStep, canEquipWeaponItem, getSightRange) where stub-faction
+ * overrides MUST take precedence over the side default. A rogue leader's
+ * `concreteFactionOf()` returns RogueFaction.
+ */
+export function concreteFactionOf(entity) {
+  return getFaction(entity.factionId ?? entity.owner);
+}
+
+/**
+ * Sight range for a single entity. Wraps the most error-prone spot of
+ * the side-vs-concrete distinction — sight bonuses (rogue +1 in every
+ * phase) live on the concrete faction. Pass an Entity, the current
+ * phase, and the helper returns the right number.
+ *
+ * @param {object} entity
+ * @param {string} phase
+ * @returns {number}
+ */
+export function sightRangeForEntity(entity, phase) {
+  return concreteFactionOf(entity).getSightRange(
+    phase,
+    typeof entity.hasAbility === 'function' && entity.hasAbility('scout'),
+  );
 }

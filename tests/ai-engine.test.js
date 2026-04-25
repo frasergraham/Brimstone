@@ -73,6 +73,7 @@ function makeFakeState(overrides = {}) {
       hero: {},
     },
     entities,
+    noWitchMission: overrides.noWitchMission ?? false,
   };
 }
 
@@ -263,6 +264,31 @@ describe('assessBoard', () => {
     assert.equal(board.nodes.length, 1);
     assert.equal(board.nodes[0].witchPresent, true);
     assert.equal(board.nodes[0].heroPresent, false);
+  });
+
+  test('noWitchMission flag boosts minion sight so lone minions can see the hero', () => {
+    // Standard minion sight is 2 hexes; the hero at (4,4) is 6 hexes away
+    // from a minion at (0,0), so without the boost the hero is invisible.
+    const minion = makeEntity({
+      id: 'golem', type: EntityType.WOOD_GOLEM, owner: 'witch',
+      col: 0, row: 0, hp: 2, maxHp: 2,
+    });
+    const hero = makeEntity({
+      id: 'hero1', type: EntityType.HERO, owner: 'hero',
+      col: 4, row: 4, hp: 8, maxHp: 8,
+    });
+
+    // Default (standard game) → minion sight stays at 2, hero invisible.
+    const simStandard = makeSim({ entities: [minion, hero] });
+    const boardStandard = assessBoard(simStandard);
+    assert.equal(boardStandard.visibleHeroes.length, 0,
+      'hero should be outside minion sight in standard missions');
+
+    // noWitchMission flag set → minion sight is boosted so hero is visible.
+    const simNoWitch = makeSim({ entities: [minion, hero], noWitchMission: true });
+    const boardNoWitch = assessBoard(simNoWitch);
+    assert.equal(boardNoWitch.visibleHeroes.length, 1,
+      'hero should be visible to lone minion in no-witch missions');
   });
 });
 
@@ -596,6 +622,54 @@ describe('genBuildArmy', () => {
     assert.equal(actions.length, 0, 'should not summon when at day army cap (7)');
   });
 
+  test('army cap scales with witch player count in NvN', () => {
+    // 2v2: baseline day cap is 7, +2 per extra witch → 9. At 7 existing
+    // minions a 2-witch faction should still be able to summon (1v1 could not).
+    const entities = [
+      makeEntity({ id: 'witch1', col: 0, row: 0 }),
+      ...Array.from({ length: 7 }, (_, i) =>
+        makeEntity({ id: `m${i}`, type: EntityType.MINION, owner: 'witch', col: i + 1, row: 0, hp: 2, maxHp: 2 })
+      ),
+      makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 4, row: 4, hp: 8, maxHp: 8 }),
+    ];
+    const fakeState = makeFakeState({
+      entities,
+      phase: Phase.DAY,
+      inventory: { witch: { [ResourceType.WOOD]: 4 }, hero: {} },
+    });
+    fakeState.players = [
+      { faction: 'hero',  id: 'h1' }, { faction: 'hero',  id: 'h2' },
+      { faction: 'witch', id: 'w1' }, { faction: 'witch', id: 'w2' },
+    ];
+    const sim = new EnginePlanSimState(fakeState, 'witch');
+    const board = assessBoard(sim);
+    assert.equal(board.witchPlayerCount, 2);
+    const actions = genBuildArmy(sim, board, 3);
+    const summons = actions.filter(a => a.type === PlanActionType.SUMMON);
+    assert.ok(summons.length > 0, 'should still summon in 2v2 when 1v1 would be capped');
+  });
+
+  test('1v1 army cap unchanged when players field absent', () => {
+    // Regression guard: omit realState.players; witchPlayerCount should
+    // default to 1 and the 1v1 cap (7) should still apply.
+    const entities = [
+      makeEntity({ id: 'witch1', col: 0, row: 0 }),
+      ...Array.from({ length: 7 }, (_, i) =>
+        makeEntity({ id: `m${i}`, type: EntityType.MINION, owner: 'witch', col: i + 1, row: 0, hp: 2, maxHp: 2 })
+      ),
+      makeEntity({ id: 'hero1', type: EntityType.HERO, owner: 'hero', col: 4, row: 4, hp: 8, maxHp: 8 }),
+    ];
+    const sim = makeSim({
+      entities,
+      phase: Phase.DAY,
+      inventory: { witch: { [ResourceType.WOOD]: 4 }, hero: {} },
+    });
+    const board = assessBoard(sim);
+    assert.equal(board.witchPlayerCount, 1);
+    const actions = genBuildArmy(sim, board, 3);
+    assert.equal(actions.length, 0, '1v1 cap (7) remains; no summons when saturated');
+  });
+
   test('deducts from resource ledger correctly', () => {
     const sim = makeSim({ inventory: {
       witch: { [ResourceType.METAL]: 4 },
@@ -871,7 +945,7 @@ describe('assemblePlan', () => {
     const sim = makeSim();
     const board = assessBoard(sim);
     const actions = [
-      { type: PlanActionType.EQUIP_WEAPON, entityId: 'witch1', weapon: 'weapon:sword', _priority: 0, _goal: Goal.DEFEND_WITCH },
+      { type: PlanActionType.EQUIP_WEAPON, entityId: 'witch1', weapon: 'sword', _priority: 0, _goal: Goal.DEFEND_WITCH },
       { type: PlanActionType.SUMMON, entityId: 'witch1', _priority: 2, _goal: Goal.BUILD_ARMY },
     ];
     const plan = assemblePlan(actions, sim, board, new Map());
@@ -1018,6 +1092,17 @@ describe('PERSONALITY_CONFIGS', () => {
         assert.equal(typeof cfg.goalWeights[g], 'number', `${name} has weight for ${g}`);
       }
     }
+  });
+
+  // Ratchet — the standard ai-matrix.js balance grid must keep enumerating
+  // exactly the three canonical witch personalities. New campaign-only
+  // personalities must set `campaignOnly: true` so they don't pollute it.
+  test('only the canonical three personalities are non-campaignOnly', () => {
+    const standard = Object.entries(PERSONALITY_CONFIGS)
+      .filter(([, cfg]) => !cfg.campaignOnly)
+      .map(([name]) => name)
+      .sort();
+    assert.deepEqual(standard, ['aggressive', 'balanced', 'swarm']);
   });
 
   test('goalWeights affect scoreGoals output', () => {

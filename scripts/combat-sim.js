@@ -33,14 +33,20 @@ function clone(e) {
 }
 
 // ── Single-swing analysis ──────────────────────────────────────────────────
-function analyseSwing(attDef, defDef, { phaseBonus = 0, extraAtk = 0, extraDef = 0, extraAtkDice = 0, extraDefDice = 0 } = {}, n = N) {
+function analyseSwing(attDef, defDef, {
+  phaseAdvantage = 0, atkAdvantageDice = 0, defAdvantageDice = 0,
+  extraAtkBonus = 0, extraDefBonus = 0,
+} = {}, n = N) {
   let hits = 0, crushes = 0, counters = 0;
   const margins = [];
 
   for (let i = 0; i < n; i++) {
     const att = clone(attDef);
     const def = clone(defDef);
-    const { attackRoll, defenseRoll, margin } = Entity.resolveCombat(att, def, phaseBonus, extraAtk, extraDef, extraAtkDice, extraDefDice);
+    const { attackRoll, defenseRoll, margin } = Entity.resolveCombat(att, def, {
+      phaseAdvantage, atkAdvantageDice, defAdvantageDice,
+      extraAtkBonus, extraDefBonus,
+    });
     margins.push(margin);
     if (margin > 0)  { hits++; if (attackRoll >= 2 * defenseRoll) crushes++; }
     if (defenseRoll >= 2 * attackRoll) counters++;
@@ -59,7 +65,8 @@ function analyseSwing(attDef, defDef, { phaseBonus = 0, extraAtk = 0, extraDef =
 // Models an extended fight: attacker and defender take turns attacking each other.
 // Fort on the defender side is consumed per hit.
 function simulateDuel(attDef, defDef, {
-  phaseBonus = 0, extraAtk = 0, extraDef = 0, defFort = 0, extraAtkDice = 0, extraDefDice = 0,
+  phaseAdvantage = 0, atkAdvantageDice = 0, defAdvantageDice = 0,
+  extraAtkBonus = 0, extraDefBonus = 0, defFort = 0,
 } = {}, n = N) {
   let attWins = 0;
   const totalSwings = [];
@@ -77,7 +84,10 @@ function simulateDuel(attDef, defDef, {
       swings++;
       const att = clone(attDef);
       const def = clone(defDef);
-      const { attackRoll: ar, defenseRoll: dr, margin: am } = Entity.resolveCombat(att, def, phaseBonus, extraAtk, extraDef + dFort, extraAtkDice, extraDefDice);
+      const { attackRoll: ar, defenseRoll: dr, margin: am } = Entity.resolveCombat(att, def, {
+        phaseAdvantage, atkAdvantageDice, defAdvantageDice,
+        extraAtkBonus, extraDefBonus: extraDefBonus + dFort,
+      });
 
       if (am > 0) {
         const dmg = ar >= 2 * dr ? 2 : 1;
@@ -94,7 +104,7 @@ function simulateDuel(attDef, defDef, {
 
       // ── Defender's swing (same stats but roles reversed, no phase/extra bonuses) ──
       swings++;
-      const { attackRoll: dr2, defenseRoll: ar2, margin: dm } = Entity.resolveCombat(clone(defDef), clone(attDef), 0, 0, 0);
+      const { attackRoll: dr2, defenseRoll: ar2, margin: dm } = Entity.resolveCombat(clone(defDef), clone(attDef), {});
       if (dm > 0) {
         const dmg = dr2 >= 2 * ar2 ? 2 : 1;
         aHp -= dmg;
@@ -141,26 +151,26 @@ const SCENARIOS = [
   { label: 'Hero vs Wood Golem      (neutral)',      att: HERO,       def: WOOD_GOLEM, ctx: {} },
   { label: 'Hero vs Iron Golem      (neutral)',      att: HERO,       def: IRON_GOLEM, ctx: {} },
 
-  // ── Phase bonuses (witch +2 ATK at night; hero has no day bonus) ──────
-  { label: 'Witch vs Hero           (night +2)',     att: WITCH,      def: HERO,       ctx: { phaseBonus: 2 } },
-  { label: 'Witch vs Survivor       (night +2)',     att: WITCH,      def: SURV_MID,   ctx: { phaseBonus: 2 } },
+  // ── Phase bonuses (witch gets advantage at night; hero has no day bonus) ──
+  { label: 'Witch vs Hero           (night adv)',    att: WITCH,      def: HERO,       ctx: { phaseAdvantage: 1 } },
+  { label: 'Witch vs Survivor       (night adv)',    att: WITCH,      def: SURV_MID,   ctx: { phaseAdvantage: 1 } },
   { label: 'Zombie vs Hero          (night)',        att: ZOMBIE,     def: HERO,       ctx: {} },
   { label: 'Minion vs Survivor      (night)',        att: MINION,     def: SURV_MID,   ctx: {} },
 
-  // ── Fortification ────────────────────────────────────────────────────────
-  { label: 'Hero vs Minion          (fort 1)',       att: HERO,       def: MINION,     ctx: { extraDef: 1 }, defFort: 1 },
-  { label: 'Hero vs Minion          (fort 2)',       att: HERO,       def: MINION,     ctx: { extraDef: 2 }, defFort: 2 },
-  { label: 'Hero vs Witch           (fort 2)',       att: HERO,       def: WITCH,      ctx: { extraDef: 2 }, defFort: 2 },
-  { label: 'Hero vs Iron Golem      (fort 2)',       att: HERO,       def: IRON_GOLEM, ctx: { extraDef: 2 }, defFort: 2 },
+  // ── Fortification (flat +DEF, as designed) ───────────────────────────────
+  { label: 'Hero vs Minion          (fort 1)',       att: HERO,       def: MINION,     ctx: { extraDefBonus: 1 }, defFort: 1 },
+  { label: 'Hero vs Minion          (fort 2)',       att: HERO,       def: MINION,     ctx: { extraDefBonus: 2 }, defFort: 2 },
+  { label: 'Hero vs Witch           (fort 2)',       att: HERO,       def: WITCH,      ctx: { extraDefBonus: 2 }, defFort: 2 },
+  { label: 'Hero vs Iron Golem      (fort 2)',       att: HERO,       def: IRON_GOLEM, ctx: { extraDefBonus: 2 }, defFort: 2 },
 
-  // ── Gang-up bonus: 2+ on attacker side → +d3 ────────────────────────────
-  { label: 'Hero vs Witch           (gang-up +d3)',  att: HERO,       def: WITCH,      ctx: { extraAtkDice: 1 } },
-  { label: 'Hero vs Witch           (gang-up +d3)',  att: HERO,       def: WITCH,      ctx: { extraAtkDice: 1 } },
-  { label: 'Witch vs Hero           (night+gang)',   att: WITCH,      def: HERO,       ctx: { phaseBonus: 2, extraAtkDice: 1 } },
+  // ── Gang-up advantage: ally → +1 advantage die ──────────────────────────
+  { label: 'Hero vs Witch           (gang-up +1)',   att: HERO,       def: WITCH,      ctx: { atkAdvantageDice: 1 } },
+  { label: 'Hero vs Witch           (gang-up +2)',   att: HERO,       def: WITCH,      ctx: { atkAdvantageDice: 2 } },
+  { label: 'Witch vs Hero           (night+gang)',   att: WITCH,      def: HERO,       ctx: { phaseAdvantage: 1, atkAdvantageDice: 1 } },
 
-  // ── Ally defence: 2+ on defender side → +d3 ─────────────────────────────
-  { label: 'Hero vs Witch           (defender ally)',att: HERO,       def: WITCH,      ctx: { extraDefDice: 1 } },
-  { label: 'Witch vs Hero           (hero has ally)',att: WITCH,      def: HERO,       ctx: { extraDefDice: 1 } },
+  // ── Ally defence: defender allies → +advantage dice ─────────────────────
+  { label: 'Hero vs Witch           (defender ally)',att: HERO,       def: WITCH,      ctx: { defAdvantageDice: 1 } },
+  { label: 'Witch vs Hero           (hero has ally)',att: WITCH,      def: HERO,       ctx: { defAdvantageDice: 1 } },
 
   // ── Survivor combat ──────────────────────────────────────────────────────
   { label: 'Mid Surv vs Zombie      (neutral)',      att: SURV_MID,   def: ZOMBIE,     ctx: {} },
@@ -172,9 +182,9 @@ const SCENARIOS = [
   // ── Weapons ──────────────────────────────────────────────────────────────
   { label: 'Hero+Sword vs Witch     (neutral)',      att: HERO_SWORD, def: WITCH,      ctx: {} },
   { label: 'Hero+Sword vs Iron Golem(neutral)',      att: HERO_SWORD, def: IRON_GOLEM, ctx: {} },
-  { label: 'Hero+Staff vs Zombie    (undead +2)',    att: HERO_STAFF, def: ZOMBIE,     ctx: {} },
-  { label: 'Hero+Staff vs Iron Golem(undead +2)',    att: HERO_STAFF, def: IRON_GOLEM, ctx: {} },
-  { label: 'Hero+Shield vs Witch    (night+2 atk)', att: HERO_SHIELD,def: WITCH,      ctx: { phaseBonus: 2 } }, // witch attacks at night
+  { label: 'Hero+Staff vs Zombie    (undead adv)',   att: HERO_STAFF, def: ZOMBIE,     ctx: {} },
+  { label: 'Hero+Staff vs Iron Golem(neutral)',      att: HERO_STAFF, def: IRON_GOLEM, ctx: {} },
+  { label: 'Hero+Shield vs Witch    (night adv)',   att: HERO_SHIELD,def: WITCH,      ctx: { phaseAdvantage: 1 } }, // witch attacks at night
 
   // ── Witch offensive scenarios ─────────────────────────────────────────────
   { label: 'Witch vs Mid Surv       (neutral)',      att: WITCH,      def: SURV_MID,   ctx: {} },
@@ -221,12 +231,12 @@ const DUELS = [
   { label: 'Brawler Surv vs Zombie  (neutral)',att: SURV_BRAWLER,def: ZOMBIE,    ctx: {} },
   { label: 'Mid Surv vs Zombie      (neutral)',att: SURV_MID,   def: ZOMBIE,     ctx: {} },
   { label: 'Zombie vs Mid Surv      (night)',  att: ZOMBIE,     def: SURV_MID,   ctx: {} },
-  { label: 'Witch vs Hero           (night)',  att: WITCH,      def: HERO,       ctx: { phaseBonus: 2 } },
-  { label: 'Witch vs Hero+Shield    (night)',  att: WITCH,      def: HERO_SHIELD,ctx: { phaseBonus: 2 } },
+  { label: 'Witch vs Hero           (night)',  att: WITCH,      def: HERO,       ctx: { phaseAdvantage: 1 } },
+  { label: 'Witch vs Hero+Shield    (night)',  att: WITCH,      def: HERO_SHIELD,ctx: { phaseAdvantage: 1 } },
   { label: 'Iron Golem vs Hero      (night)',  att: IRON_GOLEM, def: HERO,       ctx: {} },
-  { label: 'Hero vs Witch   (gang-up+d3)',     att:HERO,       def: WITCH,      ctx: { extraAtkDice:1 } },
+  { label: 'Hero vs Witch   (gang-up +1)',     att:HERO,        def: WITCH,      ctx: { atkAdvantageDice: 1 } },
   { label: 'Hero vs Witch   (fort 2)',         att: HERO,       def: WITCH,      ctx: {}, defFort: 2 },
-  { label: 'Witch vs Hero   (night+gang-up)',  att: WITCH,      def: HERO,       ctx: { phaseBonus:2, extraAtkDice:1 } },
+  { label: 'Witch vs Hero   (night+gang-up)',  att: WITCH,      def: HERO,       ctx: { phaseAdvantage: 1, atkAdvantageDice: 1 } },
 ];
 
 console.log(`\n${'DUEL SIMULATION'.padEnd(45)} ${'ATT WIN%'.padStart(9)} ${'AVG SWINGS'.padStart(11)} ${'ATT HP LEFT'.padStart(12)}`);

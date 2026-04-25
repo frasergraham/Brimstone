@@ -7,6 +7,7 @@
  */
 import { setMapDimensions } from './hex.js';
 import { registerPushNotifications, unregisterPushToken } from './platform.js';
+import { Entity } from './entities.js';
 
 // ── Reconnect constants ──────────────────────────────────────────────────────
 
@@ -15,31 +16,24 @@ const RECONNECT_MAX_TRIES     = 3;
 const RECONNECT_HARD_TIMEOUT  = 30_000; // absolute wall-clock limit for all reconnect attempts
 
 // ── MirrorEntity ─────────────────────────────────────────────────────────────
+//
+// Plain-object snapshots received over the wire are re-parented to
+// Entity.prototype so the renderer/UI can call getAttack(), getDefense(),
+// hasAbility(), hasTag(), abilities, getMoveRange(), etc. on every frame.
+// Without this, fog-of-war rendering (renderer._buildFogVisibleHexes) and the
+// unit-stats bar (ui._renderUnitStatsBar) throw on the first draw and the
+// canvas stays blank — "online games won't load into the map".
+//
+// This mirrors the `patchAlive` contract used by playback/resolution animation
+// (src/playback.js). The server owns all mutations; client-side code that
+// happens to call Entity mutators (e.g. animation helpers during resolution
+// playback) still only touches the local snapshot — the next server state
+// update overwrites any drift.
 
-const _DISPLAY_NAMES = {
-  hero:       'The Hero',
-  witch:      'The Witch',
-  survivor:   'Survivor',
-  zombie:     'Zombie',
-  minion:     'Minion',
-  wood_golem: 'Wood Golem',
-  iron_golem: 'Iron Golem',
-};
-
-class MirrorEntity {
-  static from(data) {
-    const e = Object.assign(new MirrorEntity(), data);
-    return e;
-  }
-
-  get alive()       { return this.hp > 0; }
-  get displayName() { return this.name || _DISPLAY_NAMES[this.type] || this.type; }
-
-  // Stub mutators — server owns all mutations
-  takeDamage(amount) { this.hp = Math.max(0, this.hp - amount); return !this.alive; }
-  heal(amount)       { this.hp = Math.min(this.maxHp, this.hp + amount); }
-  resetTurn()        { this.actedThisTurn = false; this.attackBonus = 0; this.defenseBonus = 0; }
-  equipWeapon()      { /* server handles */ }
+function hydrateMirrorEntity(data) {
+  if (data.alive === undefined) data.alive = (data.hp ?? 0) > 0;
+  Object.setPrototypeOf(data, Entity.prototype);
+  return data;
 }
 
 // ── MirrorState ───────────────────────────────────────────────────────────────
@@ -91,8 +85,9 @@ export class MirrorState {
       s.tiles.set(t.key, t);
     }
 
-    // Reconstruct entities with MirrorEntity methods
-    s.entities = snap.entities.map(e => MirrorEntity.from(e));
+    // Reconstruct entities — re-parent snapshot objects to Entity.prototype
+    // so renderer/UI methods (getAttack, hasAbility, hasTag, …) resolve.
+    s.entities = snap.entities.map(e => hydrateMirrorEntity(e));
     s.hero  = s.entities.find(e => e.id === snap.heroId)  || null;
     s.witch = s.entities.find(e => e.id === snap.witchId) || null;
 
@@ -102,6 +97,21 @@ export class MirrorState {
   get actionsAvailable() { return this.actionsLeft; }
   get gameOver()         { return this._winner !== null; }
   get winner()           { return this._winner; }
+
+  // Side-keyed accessors — mirror the GameState methods so `Faction.getInventory`,
+  // `Faction.getActionsLeft`, etc. work when called against a MirrorState on the
+  // client. Without these, client-side action evaluation crashes with
+  // "state.inventoryForSide is not a function" and entities appear unselectable.
+  _storageKeyForSide(sideId) {
+    if (sideId === 'day')   return 'hero';
+    if (sideId === 'night') return 'witch';
+    throw new Error(`Unknown side: ${sideId}`);
+  }
+  inventoryForSide(sideId)   { return this.inventory?.[this._storageKeyForSide(sideId)] ?? {}; }
+  actionsLeftForSide(sideId) { return sideId === 'day' ? this.heroActionsLeft : this.witchActionsLeft; }
+  killsForSide(sideId)       { return sideId === 'day' ? (this.heroKills ?? 0)  : (this.witchKills ?? 0); }
+  summonsForSide(sideId)     { return sideId === 'night' ? (this.witchSummonCount ?? 0) : 0; }
+  nodeScoreForSide(sideId)   { return this.nodeScore?.[this._storageKeyForSide(sideId)] ?? 0; }
 
   // Stub methods — server owns the state
   addLog()       { /* no-op */ }
@@ -203,8 +213,15 @@ export class MultiplayerClient {
   }
 
   /** Claim (or switch to) an empty slot in the lobby. */
-  claimSlot(roomId, slotIndex) {
-    this._send({ type: 'claimSlot', roomId, slotIndex });
+  claimSlot(roomId, slotIndex, factionId = null) {
+    const msg = { type: 'claimSlot', roomId, slotIndex };
+    if (factionId) msg.factionId = factionId;
+    this._send(msg);
+  }
+
+  /** Switch the faction occupying the player's current seat (same Side only). */
+  setFaction(roomId, factionId) {
+    this._send({ type: 'setFaction', roomId, factionId });
   }
 
   /** Join an active game during round 1 (late join). Uses room ID or code. */

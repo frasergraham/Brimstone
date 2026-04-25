@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {
   Entity, EntityType, SurvivorAbility, SURVIVOR_ROSTER,
   createHero, createWitch, createZombie, createMinion,
-  createWoodGolem, createIronGolem, createSurvivor, resetRoster,
+  createWoodGolem, createIronGolem, createSurvivor, createSoldier, resetRoster,
 } from '../src/entities.js';
 import { WeaponType, WEAPON_STATS } from '../src/tiles.js';
 
@@ -90,6 +90,28 @@ describe('Base stats — Iron Golem', () => {
     assert.equal(g.defense, 2);
     assert.equal(g.owner, 'witch');
     assert.equal(g.type, EntityType.IRON_GOLEM);
+  });
+});
+
+describe('Base stats — Soldier (day-side grunt)', () => {
+  test('HP=2, ATK=1, DEF=1, owner=hero, tagged living/soldier/summoned', () => {
+    const s = createSoldier(0, 0);
+    assert.equal(s.maxHp, 2);
+    assert.equal(s.attack, 1);
+    assert.equal(s.defense, 1);
+    assert.equal(s.owner, 'hero');
+    assert.equal(s.type, EntityType.SOLDIER);
+    assert.equal(s.hasTag('living'),    true);
+    assert.equal(s.hasTag('soldier'),   true);
+    assert.equal(s.hasTag('summoned'),  true);
+    assert.equal(s.hasTag('leader'),    false);
+  });
+
+  test('Soldier is not a leader and carries no innate abilities', () => {
+    const s = createSoldier(0, 0);
+    assert.deepEqual(s.abilities, []);
+    assert.equal(s.hasAbility('summon'),     false);
+    assert.equal(s.hasAbility('sound_horn'), false);
   });
 });
 
@@ -206,59 +228,75 @@ describe('heal', () => {
 //   dagger: +1 ATK, +0 DEF
 
 describe('equipWeapon', () => {
+  // Phase 3 decoupled weapon bonuses from base stats. getAttack() /
+  // getDefense() compose the ITEMS[weapon].statMods contribution at
+  // call time; hero.attack / hero.defense stay at the base value.
+  // These tests assert the effective (character-sheet) value via the
+  // getters and leave the base stat untouched.
   test('sword gives +2 ATK, no DEF change', () => {
     const hero = createHero(0, 0);
     hero.equipWeapon(WeaponType.SWORD);
-    assert.equal(hero.attack, 5);   // 3+2
-    assert.equal(hero.defense, 2);  // unchanged
+    assert.equal(hero.getAttack(), 5);   // base 3 + sword +2
+    assert.equal(hero.getDefense(), 2);  // unchanged
     assert.equal(hero.weapon, WeaponType.SWORD);
   });
 
   test('shield gives +2 DEF, no ATK change', () => {
     const hero = createHero(0, 0);
     hero.equipWeapon(WeaponType.SHIELD);
-    assert.equal(hero.attack, 3);   // unchanged
-    assert.equal(hero.defense, 4);  // 2+2
+    assert.equal(hero.getAttack(), 3);   // unchanged
+    assert.equal(hero.getDefense(), 4);  // base 2 + shield +2
   });
 
   test('axe gives +1 ATK and +1 DEF', () => {
     const hero = createHero(0, 0);
     hero.equipWeapon(WeaponType.AXE);
-    assert.equal(hero.attack, 4);
-    assert.equal(hero.defense, 3);
+    assert.equal(hero.getAttack(), 4);
+    assert.equal(hero.getDefense(), 3);
   });
 
   test('staff gives +1 ATK', () => {
     const hero = createHero(0, 0);
     hero.equipWeapon(WeaponType.STAFF);
-    assert.equal(hero.attack, 4);
-    assert.equal(hero.defense, 2);
+    assert.equal(hero.getAttack(), 4);
+    assert.equal(hero.getDefense(), 2);
   });
 
-  test('switching weapons: old bonus is removed before new one is applied', () => {
+  test('switching weapons: old bonus is no longer contributing', () => {
     const hero = createHero(0, 0);
-    hero.equipWeapon(WeaponType.SWORD); // +2 ATK → attack=5
-    hero.equipWeapon(WeaponType.SHIELD); // sword removed, shield added → attack=3, defense=4
-    assert.equal(hero.attack, 3, 'sword bonus should be removed');
-    assert.equal(hero.defense, 4, 'shield bonus should be applied');
+    hero.equipWeapon(WeaponType.SWORD);
+    hero.equipWeapon(WeaponType.SHIELD);
+    assert.equal(hero.getAttack(), 3, 'sword bonus should not persist');
+    assert.equal(hero.getDefense(), 4, 'shield bonus should apply');
   });
 
   test('equipping null (unequip) removes weapon bonus', () => {
     const hero = createHero(0, 0);
     hero.equipWeapon(WeaponType.SWORD);
-    assert.equal(hero.attack, 5);
+    assert.equal(hero.getAttack(), 5);
     hero.equipWeapon(null);
-    assert.equal(hero.attack, 3, 'weapon bonus should be removed when unequipped');
+    assert.equal(hero.getAttack(), 3, 'effective attack returns to base after unequip');
     assert.equal(hero.weapon, null);
   });
 
   test('equipping same weapon twice does not double-apply bonus', () => {
-    // Design expectation: switching to same weapon should still remove old first
     const hero = createHero(0, 0);
     hero.equipWeapon(WeaponType.SWORD);
     hero.equipWeapon(WeaponType.SWORD);
-    // If old is removed then re-applied: attack should still be 3+2=5
-    assert.equal(hero.attack, 5, 'should not double-stack same weapon');
+    assert.equal(hero.getAttack(), 5, 'should not double-stack same weapon');
+  });
+
+  test('base stats stay stable across weapon swaps', () => {
+    // Weapon bonus is now composed at call time, not baked into the
+    // base stat via mutation — this is the Phase 3 invariant.
+    const hero = createHero(0, 0);
+    const baseAttack = hero.attack;
+    const baseDefense = hero.defense;
+    hero.equipWeapon(WeaponType.SWORD);
+    hero.equipWeapon(WeaponType.SHIELD);
+    hero.equipWeapon(null);
+    assert.equal(hero.attack, baseAttack, 'base attack never mutated');
+    assert.equal(hero.defense, baseDefense, 'base defense never mutated');
   });
 });
 
@@ -282,17 +320,20 @@ describe('resetTurn', () => {
     hero.equipWeapon(WeaponType.SWORD);
     hero.resetTurn();
     assert.equal(hero.hp, 11, 'HP should not reset');
-    assert.equal(hero.attack, 5, 'weapon bonus should not reset');
+    assert.equal(hero.getAttack(), 5, 'weapon bonus should not reset');
   });
 });
 
 // ── resolveCombat ─────────────────────────────────────────────────────────────
-// Formula (from design doc):
-//   attackRoll  = d6 + attack + attackBonus + phaseBonus + staffBonus + Σ(atkDice d3)
-//   defenseRoll = d6 + defense + defenseBonus + fortBonus + Σ(defDice d3)
+// Formula (advantage/disadvantage dice-pool combat):
+//   atkBaseDie  = best/worst of (1 + atkNet) d6 — advantage if atkNet > 0,
+//                 disadvantage if atkNet < 0, plain d6 otherwise
+//   defBaseDie  = best/worst of (1 + defNet) d6 — same convention
+//   attackRoll  = atkBaseDie + attack + attackBonus + extraAtkBonus
+//   defenseRoll = defBaseDie + defense + defenseBonus + extraDefBonus - fatigue
 //   hit         = attackRoll > defenseRoll
 //   crush       = attackRoll >= 2 * defenseRoll
-//   counter     = defenseRoll >= 2 * attackRoll (counter hits attacker)
+//   counter     = defenseRoll >= 2 * attackRoll
 
 // Helper: override Math.random for a single call
 function withRNG(sequence, fn) {
@@ -346,62 +387,80 @@ describe('Entity.resolveCombat', () => {
     assert.equal(r.margin, r.attackRoll - r.defenseRoll);
   });
 
-  test('phaseBonus is added to attackRoll (not defenseRoll)', () => {
+  test('phaseAdvantage adds an advantage die to the attacker', () => {
     const hero = createHero(0, 0);
     const witch = createWitch(0, 0);
-    const r0 = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, witch, 0));
-    const r1 = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, witch, 1));
-    assert.equal(r1.attackRoll, r0.attackRoll + 1, 'phaseBonus should add 1 to attackRoll');
-    assert.equal(r1.defenseRoll, r0.defenseRoll, 'phaseBonus should not affect defenseRoll');
+    // Sequence used twice: neutral run consumes 2 dice, advantage run consumes 3
+    // (1 atk pool of 2 + 1 def). Advantage picks the max.
+    const r0 = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, witch));
+    // Low-then-high for atk pool → advantage picks high (6); def die = 3.
+    const r1 = withRNG([0.001, 0.999, 0.5],
+      () => Entity.resolveCombat(hero, witch, { phaseAdvantage: 1 }));
+    assert.equal(r0.atkPool.length, 1);
+    assert.equal(r1.atkPool.length, 2);
+    assert.equal(r1.atkBaseDie, 6, 'advantage picks the highest of two dice');
+    assert.equal(r1.defenseRoll, r0.defenseRoll);
   });
 
-  test('staff gives +2 attackRoll vs undead (zombie, minion, golems)', () => {
+  test('staff grants attacker advantage vs undead defenders only (zombies)', () => {
     const hero = createHero(0, 0);
-    hero.equipWeapon(WeaponType.STAFF); // +1 ATK, plus +2 undead bonus at combat time
+    hero.equipWeapon(WeaponType.STAFF); // +1 ATK, plus +1 advantage die vs undead
     const zombie = createZombie(0, 0);
-    const minion = createMinion(0, 0);
+
+    const r = withRNG([0.5, 0.5, 0.5], () => Entity.resolveCombat(hero, zombie));
+    assert.equal(r.atkStaffBonus, 1, 'Staff vs zombie should grant 1 advantage die');
+    assert.equal(r.atkAdvantage, 1);
+    assert.equal(r.atkPool.length, 2);
+  });
+
+  test('staff does NOT grant advantage vs minions or golems (narrowed in PR #294)', () => {
+    const hero = createHero(0, 0);
+    hero.equipWeapon(WeaponType.STAFF);
+    const minion    = createMinion(0, 0);
     const woodGolem = createWoodGolem(0, 0);
     const ironGolem = createIronGolem(0, 0);
 
-    for (const undead of [zombie, minion, woodGolem, ironGolem]) {
-      const r = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, undead));
-      assert.equal(r.atkStaffBonus, 2, `Staff vs ${undead.type} should show atkStaffBonus=2`);
+    for (const defender of [minion, woodGolem, ironGolem]) {
+      const r = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, defender));
+      assert.equal(r.atkStaffBonus, 0, `Staff vs ${defender.type} should NOT grant advantage`);
+      assert.equal(r.atkAdvantage, 0);
     }
   });
 
-  test('staff does NOT give undead bonus vs hero or witch', () => {
+  test('staff does NOT grant advantage vs hero or witch', () => {
     const attacker = createHero(0, 0);
     attacker.equipWeapon(WeaponType.STAFF);
     const witch = createWitch(0, 0);
     const r = withRNG([0.5, 0.5], () => Entity.resolveCombat(attacker, witch));
     assert.equal(r.atkStaffBonus, 0, 'No staff bonus vs non-undead');
+    assert.equal(r.atkAdvantage, 0);
   });
 
   test('extraAtkBonus is added to attackRoll', () => {
     const hero = createHero(0, 0);
     const witch = createWitch(0, 0);
-    const r0 = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, witch, 0, 0));
-    const r2 = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, witch, 0, 2));
+    const r0 = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, witch));
+    const r2 = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, witch, { extraAtkBonus: 2 }));
     assert.equal(r2.attackRoll, r0.attackRoll + 2);
   });
 
   test('extraDefBonus is added to defenseRoll', () => {
     const hero = createHero(0, 0);
     const witch = createWitch(0, 0);
-    const r0 = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, witch, 0, 0, 0));
-    const r3 = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, witch, 0, 0, 3));
+    const r0 = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, witch));
+    const r3 = withRNG([0.5, 0.5], () => Entity.resolveCombat(hero, witch, { extraDefBonus: 3 }));
     assert.equal(r3.defenseRoll, r0.defenseRoll + 3);
   });
 
-  test('extra dice for attacker are rolled as d3s', () => {
-    // With 1 atkDie=3 (ceil(0.999*3)=3), result should include that d3 roll
+  test('atkAdvantageDice adds advantage dice to the attacker pool', () => {
     const hero = createHero(0, 0);
     const witch = createWitch(0, 0);
-    // Sequence: atkBaseDie, defBaseDie, then 1 atkExtraDie (d3)
-    // ceil(0.5*6)=3 for base dice, ceil(0.999*3)=3 for d3
-    const r = withRNG([0.5, 0.5, 0.999], () => Entity.resolveCombat(hero, witch, 0, 0, 0, 1, 0));
-    assert.equal(r.atkExtraDice.length, 1);
-    assert.equal(r.atkExtraDice[0], 3, 'Extra d3 max roll should be 3');
+    // Pool of 3 d6 → picks the max. Low, high, low → picks 6.
+    const r = withRNG([0.001, 0.999, 0.001, 0.5],
+      () => Entity.resolveCombat(hero, witch, { atkAdvantageDice: 2 }));
+    assert.equal(r.atkPool.length, 3);
+    assert.equal(r.atkBaseDie, 6);
+    assert.equal(r.atkExtraDice.length, 2);
   });
 
   test('attackBonus from entity is included in attackRoll', () => {
@@ -459,7 +518,7 @@ describe('Survivor roster', () => {
     assert.equal(s.maxHp, rosterEntry.maxHp);
     assert.equal(s.attack, rosterEntry.attack);
     assert.equal(s.defense, rosterEntry.defense);
-    assert.equal(s.ability, rosterEntry.ability);
+    assert.deepEqual(s.abilities, rosterEntry.ability ? [rosterEntry.ability] : []);
   });
 
   test('survivor starts at full HP', () => {
@@ -468,3 +527,82 @@ describe('Survivor roster', () => {
     assert.equal(s.hp, s.maxHp);
   });
 });
+
+describe('Phase 4 — BRAWLER / STURDY passives un-baked from roster', () => {
+  test('BRAWLER roster entries have base attack 1 less than effective attack', () => {
+    const brawlers = SURVIVOR_ROSTER.filter(r => r.ability === SurvivorAbility.BRAWLER);
+    assert.ok(brawlers.length >= 3, 'roster should contain ≥3 brawlers');
+    for (const entry of brawlers) {
+      resetRoster();
+      // Force the draw by scanning until we hit this entry.
+      let s;
+      for (let i = 0; i < 40; i++) {
+        s = createSurvivor(0, 0);
+        if (s.name === entry.name) break;
+      }
+      assert.equal(s.name, entry.name, `expected to draw ${entry.name}`);
+      assert.equal(s.attack,      entry.attack,     'base attack matches roster');
+      assert.equal(s.getAttack(), entry.attack + 1, 'getAttack() adds +1 via brawler statMods');
+    }
+  });
+
+  test('STURDY roster entries have base defense 1 less than effective defense', () => {
+    const sturdyOnes = SURVIVOR_ROSTER.filter(r => r.ability === SurvivorAbility.STURDY);
+    assert.ok(sturdyOnes.length >= 3, 'roster should contain ≥3 sturdy survivors');
+    for (const entry of sturdyOnes) {
+      resetRoster();
+      let s;
+      for (let i = 0; i < 40; i++) {
+        s = createSurvivor(0, 0);
+        if (s.name === entry.name) break;
+      }
+      assert.equal(s.name, entry.name, `expected to draw ${entry.name}`);
+      assert.equal(s.defense,      entry.defense,     'base defense matches roster');
+      assert.equal(s.getDefense(), entry.defense + 1, 'getDefense() adds +1 via sturdy statMods');
+    }
+  });
+
+  test('un-baked base stats match pre-refactor effective values', () => {
+    // Lock the parity promise: effective stats under Phase 4 must equal
+    // the pre-refactor baked numbers (attack=3/2/2 for brawler trio,
+    // defense=3/3/3 for sturdy trio).
+    const expected = {
+      'Thomas Putnam':    { attack: 3, defense: 2 },
+      'Silas Holt':       { attack: 2, defense: 2 },
+      'Nathaniel Corwin': { attack: 3, defense: 2 },
+      'Hannah Marsh':     { attack: 1, defense: 3 },
+      'Isaac Graves':     { attack: 1, defense: 3 },
+      'Mercy Hale':       { attack: 2, defense: 3 },
+    };
+    for (const [name, exp] of Object.entries(expected)) {
+      resetRoster();
+      let s;
+      for (let i = 0; i < 40; i++) {
+        s = createSurvivor(0, 0);
+        if (s.name === name) break;
+      }
+      assert.equal(s.name, name, `failed to draw ${name}`);
+      assert.equal(s.getAttack(),  exp.attack,  `${name} effective attack parity`);
+      assert.equal(s.getDefense(), exp.defense, `${name} effective defense parity`);
+    }
+  });
+
+  test('hasAbility works with abilities array and supports multi-ability', () => {
+    const e = new Entity(EntityType.SURVIVOR, 'hero', 0, 0);
+    e.abilities = [SurvivorAbility.HEAL, SurvivorAbility.SCOUT];
+    assert.equal(e.hasAbility(SurvivorAbility.HEAL),  true);
+    assert.equal(e.hasAbility(SurvivorAbility.SCOUT), true);
+    assert.equal(e.hasAbility(SurvivorAbility.BRAWLER), false);
+  });
+
+  test('getAttack/getDefense compose passive + weapon', () => {
+    const e = new Entity(EntityType.SURVIVOR, 'hero', 0, 0);
+    e.attack = 2; e.defense = 2;
+    e.abilities = [SurvivorAbility.BRAWLER, SurvivorAbility.STURDY];
+    assert.equal(e.getAttack(),  3, 'base 2 + brawler 1');
+    assert.equal(e.getDefense(), 3, 'base 2 + sturdy 1');
+    e.equipWeapon('sword'); // +2 attack
+    assert.equal(e.getAttack(), 5, 'base 2 + brawler 1 + sword 2');
+  });
+});
+

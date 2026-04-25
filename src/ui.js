@@ -1,9 +1,12 @@
 // UI controller: handles canvas clicks, sidepanel updates, action buttons
 import { hexKey, hexToPixel, MAP_COLS, MAP_ROWS } from './hex.js';
 import { TileType, BUILDING_LABEL, BUILDING_ICON, RESOURCE_LABEL, WEAPON_LABEL, ResourceType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus } from './tiles.js';
-import { EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
+import { ITEMS } from './items.js';
+import { EFFECTS } from './effects.js';
+import { EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType, attackOf, defenseOf } from './entities.js';
 import { Phase, PHASE_ICON, phaseForRound, DEFAULT_CYCLE_PHASES, nodeController, countHeldNodes } from './game.js';
 import { PAD_X, PAD_Y, Renderer } from './renderer.js';
+import { concreteFactionOf } from './factions.js';
 import {
   ActionType, getValidActions, getVisiblePositions,
   buildFogMovementHexes,
@@ -76,8 +79,10 @@ export class UIController {
     this._battleInterval   = null; // dice animation interval — cleared on new dialog
     this._autoDismissTimer = null; // battle dialog auto-dismiss timer — cleared on new dialog
     this.speedMode         = this._loadDefaultSpeed(); // 'cinematic' | 'fast' | 'vfast'
-    // Start with chronicle hidden by default
-    this._chronicleMode    = 'none'; // 'none' | 'mini' | 'full'
+    // Start with chronicle hidden by default; open = full sidebar, closed = pull-out tab only
+    this._chronicleOpen    = false;
+    // Unit stats bar: collapsed by default; clicking the (i) glyph expands to reveal ATK/DEF + abilities
+    this._unitStatsExpanded = false;
     // When true, disable all planning/action UI — used for spectator mode
     this.spectator         = false;
     // When true, suppress phase modals and auto-select — used for tutorial mode
@@ -224,7 +229,7 @@ export class UIController {
       if (this._selectedEntity && this._selectedEntity.alive) {
         // Zoom to selected unit
         const pos = this._planMode ? (this._getProjectedPos(this._selectedEntity.id) ?? this._selectedEntity) : this._selectedEntity;
-        this.renderer.frameHexes([pos], { maxZoom: 2.0, paddingHexes: 3, duration: 400 });
+        this.renderer.frameHexes([pos], { maxZoom: 3.5, paddingHexes: 1.5, duration: 400 });
       } else {
         // No selection — frame all player's units
         const faction = this._planFaction ?? (!this.state.heroIsAI ? 'hero' : 'witch');
@@ -249,8 +254,10 @@ export class UIController {
       this._closeMapOptionsPopup();
     }, sig);
 
-    // Chronicle toggle in map controls area
-    this._el('chronicle-toggle')?.addEventListener('click', () => this._cycleChronicle(), sig);
+    // Chronicle pull-out tab — binary open/close toggle (mirrors plan-tab on the right)
+    this._el('chronicle-tab')?.addEventListener('click', () => {
+      this._setChronicleOpen(!this._chronicleOpen);
+    }, sig);
 
     // Map options toggle
     this._el('map-options-toggle')?.addEventListener('click', (e) => {
@@ -384,6 +391,10 @@ export class UIController {
       if (panel && this._edgeSwipe.collapsed && dx < -threshold) {
         // Swiped left from right edge — open panel
         panel.classList.remove('collapsed');
+        // On mobile, close chronicle so the two panels don't overlap.
+        if (this._chronicleOpen && this._isMobileViewport()) {
+          this._setChronicleOpen(false);
+        }
         this._syncPlanInset();
         this._renderPlanPanel();
         this._renderEndTurnBtn();
@@ -397,16 +408,14 @@ export class UIController {
       this._edgeSwipe = null;
     }, { passive: true, ...sig });
 
-    // Chronicle: three-state button lives inside #chronicle-mini (wired on each render).
-    // chronicle-close / chronicle-sidebar-close close back to 'none'.
+    // Chronicle overlay (full-screen modal, separate from the sidebar tab) close handlers
     this._el('chronicle-close')?.addEventListener('click', () => {
-      this._setChronicleMode('none');
+      this._el('chronicle-overlay')?.classList.remove('visible');
     }, sig);
     this._el('chronicle-overlay')?.addEventListener('click', e => {
-      if (e.target === this._el('chronicle-overlay')) this._setChronicleMode('none');
-    }, sig);
-    this._el('chronicle-sidebar-toggle')?.addEventListener('click', () => {
-      this._cycleChronicle();
+      if (e.target === this._el('chronicle-overlay')) {
+        this._el('chronicle-overlay').classList.remove('visible');
+      }
     }, sig);
 
 
@@ -582,8 +591,7 @@ export class UIController {
     // Tutorial mode skips this — the "select your hero" step teaches clicking.
     if (!this.tutorialMode && (this.state?.round ?? 1) <= 1) {
       const myLeader = this.state?.entities.find(e =>
-        e.alive && e.owner === faction &&
-        (e.type === 'hero' || e.type === 'witch') &&
+        e.alive && e.owner === faction && isLeaderType(e.type) &&
         (!this.myPlayerId || e.ownerId === this.myPlayerId)
       );
       if (myLeader) this._selectEntity(myLeader);
@@ -955,42 +963,64 @@ export class UIController {
   }
 
   /**
-   * Group every planned unit by the hex where their LAST action resolves.
-   * Used to place floating [UNDO] buttons above each unit's projected end hex.
-   * @returns {Array<{col:number,row:number,entityIds:any[]}>} buckets keyed by end hex.
+   * Return the hex (if any) where the currently selected unit's last planned
+   * action resolves, so a single floating [UNDO] button can be placed above it.
+   * The UNDO button is only shown for the active selected unit — other units'
+   * queued actions are undone by selecting those units first.
+   * @returns {Array<{col:number,row:number,entityIds:any[]}>} zero or one bucket.
    */
   _computeLastActionHexes() {
     if (!this._planMode || this._planSubmitted) return [];
 
-    const out = new Map(); // "col,row" -> { col, row, entityIds: [] }
+    const selectedId = this._selectedEntity?.id;
+    if (selectedId == null || this._isEnemySelection) return [];
+
+    const queue = this._unitPlans.get(selectedId);
+    if (!queue || queue.length < 1) return [];
+
     const steps = this.renderer?.planGhostSteps;
     const finalPositions = steps?.length ? steps[steps.length - 1].positions : null;
 
-    for (const [entityId, queue] of this._unitPlans) {
-      if (!queue || queue.length < 1) continue;
-
-      let pos = finalPositions?.get(entityId) ?? null;
-      if (!pos) {
-        const ent = this.state?.entities?.find(e => e.id === entityId);
-        if (ent) pos = { col: ent.col, row: ent.row };
-      }
-      if (!pos) continue;
-
-      const key = `${pos.col},${pos.row}`;
-      let bucket = out.get(key);
-      if (!bucket) {
-        bucket = { col: pos.col, row: pos.row, entityIds: [] };
-        out.set(key, bucket);
-      }
-      bucket.entityIds.push(entityId);
+    let pos = finalPositions?.get(selectedId) ?? null;
+    if (!pos) {
+      const ent = this.state?.entities?.find(e => e.id === selectedId);
+      if (ent) pos = { col: ent.col, row: ent.row };
     }
-    return [...out.values()];
+    if (!pos) return [];
+
+    return [{ col: pos.col, row: pos.row, entityIds: [selectedId] }];
+  }
+
+  /**
+   * Attach layer-level click/touchend delegation once. Buttons carry a
+   * `data-key` ("col,row"); the handler looks up the live bucket at event
+   * time so we don't need to rebind handlers each frame.
+   */
+  _initUndoLayerEvents() {
+    if (this._undoLayerInited) return;
+    const layer = this._el('undo-button-layer');
+    if (!layer || typeof layer.addEventListener !== 'function') return;
+    this._undoLayerInited = true;
+    const handle = (e) => {
+      const btn = e.target?.closest?.('.undo-float-btn');
+      if (!btn) return;
+      if (e.type === 'touchend' && typeof e.preventDefault === 'function') e.preventDefault();
+      if (typeof e.stopPropagation === 'function') e.stopPropagation();
+      const key = btn.dataset?.key;
+      if (!key) return;
+      const bucket = this._computeLastActionHexes()
+        .find(b => `${b.col},${b.row}` === key);
+      if (bucket) this._onUndoButtonClicked(bucket);
+    };
+    layer.addEventListener('click', handle);
+    layer.addEventListener('touchend', handle, { passive: false });
   }
 
   /** Render (or clear) floating UNDO buttons for the current plan state. */
   _refreshUndoButtons() {
     const layer = this._el('undo-button-layer');
     if (!layer) return;
+    this._initUndoLayerEvents();
 
     if (!this._planMode || this._planSubmitted || !this.renderer || !this.canvas) {
       if ((layer.childNodes?.length ?? 0)) layer.innerHTML = '';
@@ -1015,31 +1045,41 @@ export class UIController {
       if (pr && pr.width > 0 && pr.height > 0) panelLeft = pr.left;
     }
 
-    // Rebuild — bucket count is tiny (≤ faction unit count).
-    layer.innerHTML = '';
+    // Build desired state keyed by hex.
+    const desired = new Map();
     for (const b of buckets) {
       const { x, y } = this.renderer.hexToCanvasPos(b.col, b.row);
       const sx = canvasRect.left + x * scale;
       const sy = canvasRect.top  + y * scale - hexScreenPx * 0.85;
-
-      // Skip buttons that would visually overlap the expanded plan panel.
       if (sx >= panelLeft) continue;
+      desired.set(`${b.col},${b.row}`, { sx, sy });
+    }
 
-      const btn = document.createElement('button');
+    // Reconcile existing children with desired state. Mutating in place
+    // (instead of rebuilding innerHTML at 60fps) keeps each button as a
+    // stable touch target across frames — otherwise a tap is destroyed
+    // mid-gesture and the UNDO press never registers on mobile.
+    const existing = new Map();
+    const children = Array.from(layer.children || []);
+    for (const child of children) {
+      const k = child.dataset?.key;
+      if (k && desired.has(k)) existing.set(k, child);
+      else if (typeof child.remove === 'function') child.remove();
+    }
+    for (const [key, { sx, sy }] of desired) {
+      let btn = existing.get(key);
+      if (btn) {
+        btn.style.left = `${sx}px`;
+        btn.style.top  = `${sy}px`;
+        continue;
+      }
+      btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'undo-float-btn';
       btn.textContent = 'UNDO';
+      btn.dataset.key = key;
       btn.style.left = `${sx}px`;
       btn.style.top  = `${sy}px`;
-      const bucketRef = b; // capture
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this._onUndoButtonClicked(bucketRef);
-      });
-      btn.addEventListener('touchend', (e) => {
-        e.preventDefault();
-        this._onUndoButtonClicked(bucketRef);
-      }, { passive: false });
       layer.appendChild(btn);
     }
   }
@@ -1263,6 +1303,13 @@ export class UIController {
     this._renderInventory();
   }
 
+  /** True when the viewport matches the mobile breakpoint used elsewhere in styles.css. */
+  _isMobileViewport() {
+    return typeof window !== 'undefined'
+      && typeof window.matchMedia === 'function'
+      && window.matchMedia('(max-width: 700px)').matches;
+  }
+
   /** Toggle the plan panel between expanded and collapsed. */
   _togglePlanPanel() {
     const panel = this._el('plan-panel');
@@ -1273,6 +1320,10 @@ export class UIController {
     if (toggleBtn) toggleBtn.textContent = isCollapsed ? '▶' : '◀';
     const tabToggle = this._el('plan-tab-toggle');
     if (tabToggle) tabToggle.textContent = isCollapsed ? '+' : '\u2212';
+    // On mobile, plan and chronicle are mutually exclusive \u2014 close chronicle when opening plan.
+    if (!isCollapsed && this._chronicleOpen && this._isMobileViewport()) {
+      this._setChronicleOpen(false);
+    }
     this._syncPlanInset();
     this._renderEndTurnBtn();
   }
@@ -1486,7 +1537,12 @@ export class UIController {
     if (this._planMode) {
       const proj = this._getProjectedPos(entity.id);
       if (proj && (proj.col !== entity.col || proj.row !== entity.row)) {
-        effectiveEntity = { ...entity, col: proj.col, row: proj.row };
+        // Re-parent the spread to Entity.prototype so methods like
+        // hasAbility / getAttack still resolve; plain spread loses them.
+        effectiveEntity = Object.setPrototypeOf(
+          { ...entity, col: proj.col, row: proj.row },
+          Object.getPrototypeOf(entity)
+        );
       }
     }
 
@@ -1506,7 +1562,11 @@ export class UIController {
     this._updateHighlights();
     // Refresh the plan panel so its selection highlight tracks the selected
     // unit. Only during planning mode (when the panel is visible).
-    if (this._planMode) this._renderPlanPanel();
+    if (this._planMode) {
+      this._renderPlanPanel();
+      this._refreshUndoButtons();
+      this._startUndoBtnTracking();
+    }
     // Popup is NOT shown here — user taps the unit a second time to open it
   }
 
@@ -1525,6 +1585,8 @@ export class UIController {
     this.renderer.highlightHexes   = [];
 
     this.onEntitySelected?.(entity);
+    if (this._planMode) this._refreshUndoButtons();
+    // No _startUndoBtnTracking: enemy selection hides the button.
   }
 
   /** Return the latest projected position for an entity from the ghost overlay, or null. */
@@ -1596,13 +1658,17 @@ export class UIController {
     this._pendingDefenderPick  = null;
     this._pendingEnemyPick     = null;
     this._popupVisible         = false;
+    this._unitStatsExpanded    = false;
     this.renderer.selectedHex      = null;
     this.renderer.selectedEntityId = null;
     this.renderer.highlightHexes   = [];
     hideActionPopup(this);
     this._hideTileDetail();
     // Refresh plan panel so selection highlight clears from the unit rows.
-    if (this._planMode) this._renderPlanPanel();
+    if (this._planMode) {
+      this._renderPlanPanel();
+      this._refreshUndoButtons();
+    }
   }
 
   _updateHighlights() {
@@ -1769,7 +1835,12 @@ export class UIController {
     if (this._planMode) {
       const proj = this._getProjectedPos(entity.id);
       if (proj && (proj.col !== entity.col || proj.row !== entity.row)) {
-        effectiveEntity = { ...entity, col: proj.col, row: proj.row };
+        // Re-parent the spread to Entity.prototype so methods like
+        // hasAbility / getAttack still resolve; plain spread loses them.
+        effectiveEntity = Object.setPrototypeOf(
+          { ...entity, col: proj.col, row: proj.row },
+          Object.getPrototypeOf(entity)
+        );
       }
     }
     const actions = getValidActions(state, effectiveEntity);
@@ -1810,7 +1881,7 @@ export class UIController {
           const hasMetal   = (fortInv.metal || 0) > 0;
           const hasWood    = (fortInv.wood  || 0) > 0;
           const cantAfford = projInv ? (!hasMetal && !hasWood) : !action.affordable;
-          const hasDoubler = entity.type === EntityType.SURVIVOR && entity.ability === SurvivorAbility.FORTIFY_DOUBLE;
+          const hasDoubler = entity.type === EntityType.SURVIVOR && entity.hasAbility(SurvivorAbility.FORTIFY_DOUBLE);
           const tileData   = state.tiles.get(hexKey(entity.col, entity.row));
           const cur        = tileData ? tileData.fortifyLevel : 0;
           const metalGain   = Math.min(MAX_FORTIFY_LEVEL, cur + 2) - cur;
@@ -1852,7 +1923,7 @@ export class UIController {
             if (this._planMode && item.item === ResourceType.FOOD) continue;
             let itemDis = dis;
             if (projInv) {
-              if (!item.item.startsWith('weapon:')) {
+              if (ITEMS[item.item]?.kind !== 'weapon') {
                 if ((projInv.hero[item.item] || 0) < 1) itemDis = true;
               }
             }
@@ -1882,24 +1953,37 @@ export class UIController {
             label: abilityLabels[action.ability] || 'Ability',
             fullLabel: fullLabels[action.ability] || 'Use Ability',
             color: '#88eeff', dis: !isFree && dis, free: isFree, cost: isFree ? 0 : 1,
-            attrs: 'data-action="use_ability"' });
+            attrs: `data-action="use_ability" data-ability="${action.ability}"` });
           break;
         }
       }
     }
 
-    // Always show all 3 summon types for the witch, greyed out if unaffordable
-    if (entity.type === EntityType.WITCH && actions.some(a => a.type === ActionType.SUMMON || a.type === ActionType.GUARD)) {
+    // Show every summon type that the entity's CONCRETE faction allows
+    // (Witch / Necromancer: all three; Brute: minion only). Greyed out
+    // when unaffordable. Stays gated on a SUMMON or GUARD valid action so
+    // the panel doesn't surface summons during off-turn views.
+    if (isLeaderType(entity.type) && entity.owner === 'witch' && actions.some(a => a.type === ActionType.SUMMON || a.type === ActionType.GUARD)) {
       const projWitch = projInv ? projInv.witch : state.inventory.witch;
       const projMetal = projWitch?.[ResourceType.METAL] || 0;
       const projWood  = projWitch?.[ResourceType.WOOD]  || 0;
       const projTotal = projWitch ? Object.values(projWitch).reduce((s, v) => s + (v || 0), 0) : 0;
+      // Probe with a "rich enough" inventory so we get the full allowed-
+      // summon set for this faction even when the actual inventory is empty
+      // (we still want to show greyed-out unaffordable options, so the
+      // player understands what's possible to summon eventually).
+      const allowedSummons = new Set(
+        concreteFactionOf(entity)
+          .getSummonOptions({ [ResourceType.METAL]: 99, [ResourceType.WOOD]: 99 })
+          .map(o => o.summonType)
+      );
       const ALL_SUMMONS = [
         { st: EntityType.IRON_GOLEM, label: 'Summon Iron Golem',  full: 'Summon Iron Golem (2 metal)',  afford: projMetal >= 2, res: '2⚙' },
         { st: EntityType.WOOD_GOLEM, label: 'Summon Wood Golem', full: 'Summon Wood Golem (2 wood)',   afford: projWood >= 2, res: '2🪵' },
         { st: EntityType.MINION,     label: 'Summon Minion',      full: 'Summon Minion (2 any resource)', afford: projTotal >= 2, res: '2 res' },
       ];
       for (const s of ALL_SUMMONS) {
+        if (!allowedSummons.has(s.st)) continue;
         arcItems.push({ group: 'summon', label: s.label, fullLabel: s.full,
           color: '#9b59b6', dis: !s.afford || !hasAct, cost: 1, resCost: s.res,
           attrs: `data-action="summon" data-summon-type="${s.st}"` });
@@ -2235,13 +2319,16 @@ export class UIController {
         ? `<img class="usb-terrain-hex" src="${tileSrc}" alt="">`
         : `<span class="usb-icon" style="background:#3a4a3a;font-size:1.1rem">${icon}</span>`;
       bar.style.display = 'flex';
+      bar.classList.remove('usb-expanded');
       bar.innerHTML = `
-        ${tileImgHtml}
-        <span class="usb-tile-info">
-          <span class="usb-tile-name">${label}</span>
-          <span class="usb-tile-details">${terrainBadge}</span>
-        </span>
-        <button class="usb-deselect-btn" title="Deselect">✕</button>
+        <div class="usb-main">
+          ${tileImgHtml}
+          <span class="usb-tile-info">
+            <span class="usb-tile-name">${label}</span>
+            <span class="usb-tile-details">${terrainBadge}</span>
+          </span>
+          <button class="usb-deselect-btn" title="Deselect">✕</button>
+        </div>
       `;
       bar.querySelector('.usb-deselect-btn').addEventListener('click', () => {
         this._clearSelection();
@@ -2257,11 +2344,11 @@ export class UIController {
     }
 
     const GLYPHS = {
-      hero: '⚔', witch: '✦', survivor: '☺',
+      hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟',
       zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙',
     };
     const COLORS = {
-      hero: '#d4a72c', witch: '#9b59b6', survivor: '#4caf7d',
+      hero: '#d4a72c', witch: '#9b59b6', survivor: '#4caf7d', soldier: '#3f78c4',
       zombie: '#7c9a57', minion: '#c0392b', wood_golem: '#8B5E3C', iron_golem: '#607D8B',
     };
 
@@ -2272,6 +2359,7 @@ export class UIController {
     const weaponLabel = entity.weapon
       ? entity.weapon.charAt(0).toUpperCase() + entity.weapon.slice(1)
       : null;
+    const effectsHtml = _buildEffectsHtml(entity);
 
     // Portrait image with glyph fallback
     const assetId = _entityPortraitId(entity);
@@ -2294,39 +2382,56 @@ export class UIController {
       ? `<button class="usb-cycle-btn usb-cycle-next" title="Next unit">\u203A</button>`
       : '';
 
-    // Terrain row for the entity's current hex
+    // Terrain box for the entity's current hex — stacked full-width below the unit row
     const entCol = this._planMode ? (this._getProjectedPos(entity.id)?.col ?? entity.col) : entity.col;
     const entRow = this._planMode ? (this._getProjectedPos(entity.id)?.row ?? entity.row) : entity.row;
     const tile = this.state.tiles.get(hexKey(entCol, entRow));
-    let terrainRowHtml = '';
+    let terrainBoxHtml = '';
     if (tile) {
       const tileSrc = this.renderer.getTileDataURL(tile, entCol, entRow, 56);
       const tileImgHtml = tileSrc ? `<img class="usb-terrain-hex" src="${tileSrc}" alt="">` : '';
-      terrainRowHtml = `<span class="usb-terrain-row">${tileImgHtml}${_buildTerrainBadge(tile)}</span>`;
+      terrainBoxHtml = `<div class="usb-terrain-box">${tileImgHtml}${_buildTerrainBadge(tile)}</div>`;
     }
 
+    // Expanded block: ATK, DEF, and any ability description — toggled by the (i) glyph
+    const expanded = !!this._unitStatsExpanded;
+    const abilityHtml = entity.abilityLabel
+      ? `<span class="usb-ability">✦ ${entity.abilityLabel}</span>`
+      : '';
+    const expandedBlockHtml = expanded
+      ? `<span class="usb-extra">
+           <span class="usb-stat">ATK <span class="usb-stat-val">${entity.getAttack()}</span></span>
+           <span class="usb-stat">DEF <span class="usb-stat-val">${entity.getDefense()}</span></span>
+           ${abilityHtml}
+         </span>`
+      : '';
+
     bar.style.display = 'flex';
+    bar.classList.toggle('usb-expanded', expanded);
     bar.innerHTML = `
-      ${cyclePrevHtml}
-      ${portraitHtml}
-      ${cycleNextHtml}
-      <span class="usb-info">
-        <span class="usb-name" style="color:${color}">${entity.displayName}</span>
-        <span class="usb-details">
-          <span class="usb-hp-wrap">
-            <span class="usb-stat">HP</span>
-            <span class="usb-hp-track">
-              <span class="usb-hp-fill" style="width:${hpPct}%;background:linear-gradient(to bottom,rgba(255,255,255,0.28) 0%,rgba(255,255,255,0) 55%),${hpColor}"></span>
+      <div class="usb-main">
+        ${cyclePrevHtml}
+        ${portraitHtml}
+        ${cycleNextHtml}
+        <span class="usb-info">
+          <span class="usb-name" style="color:${color}">${entity.displayName}</span>
+          <span class="usb-details">
+            <span class="usb-hp-wrap">
+              <span class="usb-stat">HP</span>
+              <span class="usb-hp-track">
+                <span class="usb-hp-fill" style="width:${hpPct}%;background:linear-gradient(to bottom,rgba(255,255,255,0.28) 0%,rgba(255,255,255,0) 55%),${hpColor}"></span>
+              </span>
+              <span class="usb-stat-val">${entity.hp}/${entity.maxHp}</span>
             </span>
-            <span class="usb-stat-val">${entity.hp}/${entity.maxHp}</span>
+            ${weaponLabel ? `<span class="usb-weapon">⚔ ${weaponLabel}</span>` : ''}
+            ${effectsHtml}
+            <button class="usb-info-btn ${expanded ? 'usb-info-btn-active' : ''}" title="${expanded ? 'Hide stats' : 'Show stats & abilities'}">i</button>
           </span>
-          <span class="usb-stat">ATK <span class="usb-stat-val">${entity.attack}</span></span>
-          <span class="usb-stat">DEF <span class="usb-stat-val">${entity.defense}</span></span>
-          ${weaponLabel ? `<span class="usb-weapon">⚔ ${weaponLabel}</span>` : ''}
+          ${expandedBlockHtml}
         </span>
-        ${terrainRowHtml}
-      </span>
-      <button class="usb-deselect-btn" title="Deselect unit">✕</button>
+        <button class="usb-deselect-btn" title="Deselect unit">✕</button>
+      </div>
+      ${terrainBoxHtml}
     `;
     bar.querySelector('.usb-deselect-btn').addEventListener('click', () => {
       this._clearSelection();
@@ -2335,6 +2440,10 @@ export class UIController {
     });
     bar.querySelector('.usb-cycle-prev')?.addEventListener('click', () => this._cycleSelection(-1));
     bar.querySelector('.usb-cycle-next')?.addEventListener('click', () => this._cycleSelection(+1));
+    bar.querySelector('.usb-info-btn')?.addEventListener('click', () => {
+      this._unitStatsExpanded = !this._unitStatsExpanded;
+      this._renderUnitStatsBar();
+    });
   }
 
   _renderTurnInfo() {
@@ -2359,23 +2468,23 @@ export class UIController {
       ? `Round ${state.round} of ${cyclePhases.length}`
       : `Day ${cycle} · Round ${roundInCycle + 1}`;
 
-    // Render always-visible cycle bar (compact icon row)
-    const cycleBar = this._el('cycle-bar');
-    if (cycleBar) {
-      cycleBar.innerHTML = CYCLE_STEPS.map((step, i) => {
-        const active = i === roundInCycle;
-        const imgSrc = this.renderer.getPortraitDataURL(step.sprite, 64);
-        const iconHtml = imgSrc
-          ? `<img class="cycle-icon" src="${imgSrc}" alt="${step.label}">`
-          : step.label.charAt(0);
-        return `<div class="cycle-step phase-${step.phase} ${active ? 'cycle-active' : 'cycle-dim'}"
-                     title="${step.desc}">${iconHtml}${active ? `<span class="cycle-name">${step.label}</span>` : ''}</div>`;
-      }).join('');
+    // Pill bump above the score bar: "[phase icon] Night — Day 1 · Round 2"
+    const activeStep = CYCLE_STEPS[roundInCycle];
+    const bumpEl   = this._el('cycle-bump');
+    const iconEl   = this._el('cycle-bump-icon');
+    const labelEl  = this._el('cycle-bump-label');
+    if (bumpEl && activeStep) {
+      bumpEl.className = `phase-${activeStep.phase}`;
+      bumpEl.title = activeStep.desc;
     }
-
-    // Round label sits below the cycle bar
-    const roundLabelEl = this._el('round-label');
-    if (roundLabelEl) roundLabelEl.textContent = roundLabel;
+    if (iconEl && activeStep) {
+      const imgSrc = this.renderer?.getPortraitDataURL?.(activeStep.sprite, 64);
+      if (imgSrc) iconEl.src = imgSrc;
+      iconEl.alt = activeStep.label;
+    }
+    if (labelEl && activeStep) {
+      labelEl.textContent = `${activeStep.label} — ${roundLabel}`;
+    }
 
     // During planning phase, show planning info
     if (this._planMode) {
@@ -2457,21 +2566,41 @@ export class UIController {
   }
 
   _renderObjectives() {
-    const bar = this._el('score-bar');
-    if (bar && this.state.disableScoring) {
-      bar.style.display = 'none';
-      return;
-    }
-    const el = this._el('score-bar-content');
-    if (!el) return;
+    const bar  = this._el('score-bar');
+    const bump = this._el('cycle-bump');
     const state = this.state;
 
+    // Toggle cycle-bump independently of scoring — campaign missions
+    // typically suppress score points but still want the day/night
+    // tracker visible.
+    if (bump) {
+      bump.style.display = state.disableCycleBar ? 'none' : '';
+    }
+
+    // When scoring is disabled and the cycle bar is also disabled, the
+    // bottom bar has no content — hide it entirely. When only scoring is
+    // disabled, keep the bar (the cycle-bump anchors to its top edge) but
+    // strip its inner score content via the .cycle-only class.
+    if (bar) {
+      if (state.disableScoring && state.disableCycleBar) {
+        bar.style.display = 'none';
+        return;
+      }
+      bar.style.display = '';
+      bar.classList.toggle('cycle-only', !!state.disableScoring);
+      if (state.disableScoring) {
+        bar.title = '';
+        return;
+      }
+    }
+
+    const el = this._el('score-bar-content');
+    if (!el) return;
     const { html, title } = buildObjectivesHtml(
       state.witchObjectives, state.entities, state.nodeScore, state.gameMode,
     );
-
     el.innerHTML = html;
-    if (bar) { bar.style.display = ''; bar.title = title; }
+    if (bar) bar.title = title;
   }
 
   /**
@@ -2757,7 +2886,8 @@ export class UIController {
       }
 
       case 'use_ability': {
-        this._addToPlan({ type: PlanActionType.USE_ABILITY, entityId: entity.id });
+        const abilityId = button.dataset.ability || null;
+        this._addToPlan({ type: PlanActionType.USE_ABILITY, entityId: entity.id, ability: abilityId });
         delayedHide();
         if (entity.alive) this._selectEntity(entity);
         else this._clearSelection();
@@ -3090,7 +3220,7 @@ export class UIController {
     const dialog = this._el('encounter-dialog');
     const card   = this._el('encounter-card');
 
-    const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
+    const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
     const glyph  = GLYPHS[encounterUnit.type] ?? '?';
     const color  = encounterUnit.color || '#d4c9b0';
 
@@ -3134,7 +3264,7 @@ export class UIController {
         <div style="flex:1;min-width:0;">
           <div style="font-size:1rem;font-weight:bold;color:${color};margin-bottom:0.12rem;">${glyph} ${encounterUnit.name}</div>
           ${titleHtml}
-          <div style="font-size:0.72rem;color:#c8b89a;">HP ${encounterUnit.hp}/${encounterUnit.maxHp} · ATK ${encounterUnit.attack} · DEF ${encounterUnit.defense}</div>
+          <div style="font-size:0.72rem;color:#c8b89a;">HP ${encounterUnit.hp}/${encounterUnit.maxHp} · ATK ${attackOf(encounterUnit)} · DEF ${defenseOf(encounterUnit)}</div>
           <div style="background:#1e1e2a;border-radius:3px;height:5px;margin-top:0.3rem;overflow:hidden;">
             <div style="width:${hpPct}%;height:100%;background:${hpColor};border-radius:3px;"></div>
           </div>
@@ -3157,15 +3287,12 @@ export class UIController {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') dismiss();
     };
 
+    dialog.addEventListener('click', dismiss);
+    document.addEventListener('keydown', keyDismiss);
     if (this.autoplay) {
       setTimeout(dismiss, 700);
-    } else if (this.speedMode === 'fast' || this.speedMode === 'vfast') {
-      setTimeout(dismiss, 600);
-      dialog.addEventListener('click', dismiss);
-      document.addEventListener('keydown', keyDismiss);
-    } else {
-      dialog.addEventListener('click', dismiss);
-      document.addEventListener('keydown', keyDismiss);
+    } else if (this.speedMode === 'fast') {
+      setTimeout(dismiss, 4000);
     }
   }
 
@@ -3211,13 +3338,12 @@ export class UIController {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') dismiss();
     };
 
+    dialog.addEventListener('click', dismiss);
+    document.addEventListener('keydown', keyDismiss);
     if (this.autoplay) {
       setTimeout(dismiss, 500);
-    } else if (this.speedMode === 'fast' || this.speedMode === 'vfast') {
-      setTimeout(dismiss, 800);
-    } else {
-      dialog.addEventListener('click', dismiss);
-      document.addEventListener('keydown', keyDismiss);
+    } else if (this.speedMode === 'fast') {
+      setTimeout(dismiss, 4000);
     }
   }
 
@@ -3231,6 +3357,7 @@ export class UIController {
     // Cancel any in-flight dice animation or auto-dismiss from a previous battle dialog
     if (this._battleInterval)  { clearInterval(this._battleInterval);  this._battleInterval  = null; }
     if (this._autoDismissTimer) { clearTimeout(this._autoDismissTimer); this._autoDismissTimer = null; }
+    if (this._battleAnim)       { this._battleAnim.clear(); this._battleAnim = null; }
 
     const dialog = this._el('battle-dialog');
     const footer = this._el('battle-footer');
@@ -3261,8 +3388,6 @@ export class UIController {
     this._el('battle-attacker').innerHTML = _combatantHTML(actorSnap, 'atk', atkPortrait);
     this._el('battle-defender').innerHTML = _combatantHTML(targetSnap, 'def', defPortrait);
 
-    const atkDie  = this._el('battle-atk-die');
-    const defDie  = this._el('battle-def-die');
     const outcome = this._el('battle-outcome');
     outcome.textContent = '';
     outcome.className   = 'battle-outcome';
@@ -3274,11 +3399,15 @@ export class UIController {
       : '<div class="result-dismiss">— click to skip —</div>' +
         '<button class="battle-enable-fast" type="button">⏩ Click to enable fast mode and skip battle dialogs</button>';
 
-    // Reset breakdown columns (hidden until dice settle)
+    // Reset breakdown columns (rendered muted upfront; glow as anim progresses)
     const atkBkd = this._el('battle-atk-breakdown');
     const defBkd = this._el('battle-def-breakdown');
-    if (atkBkd) { atkBkd.innerHTML = ''; atkBkd.classList.remove('visible'); }
-    if (defBkd) { defBkd.innerHTML = ''; defBkd.classList.remove('visible'); }
+    for (const col of [atkBkd, defBkd]) {
+      if (!col) continue;
+      col.innerHTML = '';
+      col.classList.add('visible');
+      col.classList.remove('bkd-col-winner', 'bkd-col-loser', 'bkd-col-tie');
+    }
 
     dialog.style.display = 'flex';
     const card = dialog.querySelector('.battle-card');
@@ -3286,11 +3415,22 @@ export class UIController {
     // Guards a stale dismiss closure from mutating a later dialog's state if
     // leaked listeners fire after this dialog is gone.
     let _dismissed = false;
+    // Pause state only freezes the auto-dismiss timer; the animation sequence
+    // always runs to completion.
+    let _dismissPaused = false;
+    let _dismissTimerId = null;
+    let _dismissStartedAt = 0;
+    let _dismissRemaining = 0;
+    const _clearDismissTimer = () => {
+      if (_dismissTimerId !== null) { clearTimeout(_dismissTimerId); _dismissTimerId = null; }
+    };
     const dismiss = () => {
       if (_dismissed) return;
       _dismissed = true;
+      _clearDismissTimer();
       if (this._autoDismissTimer) { clearTimeout(this._autoDismissTimer); this._autoDismissTimer = null; }
       if (this._battleInterval)   { clearInterval(this._battleInterval);  this._battleInterval   = null; }
+      if (this._battleAnim)       { this._battleAnim.clear(); this._battleAnim = null; }
       dialog.style.display = 'none';
       dialog.removeEventListener('click', dismiss);
       card?.removeEventListener('click', dismiss);
@@ -3301,41 +3441,40 @@ export class UIController {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') dismiss();
     };
 
-    // "Click to enable fast mode" button in the footer — flips speedMode to
-    // 'fast' so future battles use the toast/floater path, and dismisses the
-    // current dialog. stopPropagation prevents the outer dialog click-to-skip
-    // handler (which is attached later once dice settle) from double-firing.
-    const enableFastBtn = footer.querySelector('.battle-enable-fast');
-    if (enableFastBtn) {
-      enableFastBtn.addEventListener('click', e => {
-        e.stopPropagation();
-        this._setSpeed('fast');
-        dismiss();
-      });
-    }
+    // Apply speed factor via CSS custom property so all keyframe durations
+    // scale together. cinematic=1, fast=0.5, vfast=0.25.
+    const factor = _speedFactor(this.speedMode);
+    card?.style.setProperty('--bkd-speed', String(factor));
 
-    // Shared: populate result into the dialog once dice are "settled"
-    const revealResult = () => {
-      atkDie.textContent = result.attackRoll;
-      defDie.textContent = result.defenseRoll;
-      atkDie.className = 'die-display' + (result.hit ? ' atk-win' : '');
-      defDie.className = 'die-display' + (!result.hit ? ' def-win' : '');
+    // Per-dialog timer bag with pause/resume support.
+    const anim = _makeAnimBag();
+    this._battleAnim = anim;
 
-      // Populate and fade-in breakdown columns
+    // Instant render of both breakdown columns (no animation). Used for
+    // autoplay/skip.
+    const renderInstant = () => {
       const bd = result.breakdown;
       if (bd) {
+        const atkD = _breakdownData(actorSnap,  bd, 'atk', result.attackRoll);
+        const defD = _breakdownData(targetSnap, bd, 'def', result.defenseRoll);
+        const padTo = Math.max(atkD.rows.length, defD.rows.length);
         this._el('battle-atk-breakdown').innerHTML =
-          _buildBreakdownHTML(actorSnap, bd, 'atk', result.attackRoll);
+          _buildBreakdownHTML(actorSnap, bd, 'atk', result.attackRoll, padTo);
         this._el('battle-def-breakdown').innerHTML =
-          _buildBreakdownHTML(targetSnap, bd, 'def', result.defenseRoll);
-        // Double-rAF ensures a paint happens before adding visible,
-        // so the opacity 0→1 transition fires reliably.
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-          this._el('battle-atk-breakdown').classList.add('visible');
-          this._el('battle-def-breakdown').classList.add('visible');
-        }));
+          _buildBreakdownHTML(targetSnap, bd, 'def', result.defenseRoll, padTo);
+        this._el('battle-atk-breakdown').classList.add('visible');
+        this._el('battle-def-breakdown').classList.add('visible');
+        _applyWinnerClass(
+          this._el('battle-atk-breakdown'),
+          this._el('battle-def-breakdown'),
+          result.attackRoll,
+          result.defenseRoll,
+        );
       }
+    };
 
+    // Render the final outcome line + HP bars + splash + rematch.
+    const revealOutcome = () => {
       if (result.killed) {
         const dmgNote = result.damage > 0 ? ` (${result.damage} damage)` : '';
         outcome.textContent = `💀 ${targetSnap.name} is slain!${dmgNote}`;
@@ -3356,6 +3495,7 @@ export class UIController {
         outcome.textContent = `🛡 ${targetSnap.name} defends!`;
         outcome.className   = 'battle-outcome miss';
       }
+      outcome.classList.add('battle-outcome-pulse');
 
       // Splash damage line(s) below main outcome
       if (result.splashHits?.length) {
@@ -3408,53 +3548,164 @@ export class UIController {
       }
     };
 
+    // Hide pause/redo during autoplay — there's nothing to pause or replay.
+    const pauseBtnInit = this._el('battle-pause-btn');
+    const redoBtnInit  = this._el('battle-redo-btn');
+    if (pauseBtnInit) pauseBtnInit.style.display = this.autoplay ? 'none' : '';
+    if (redoBtnInit)  redoBtnInit.style.display  = this.autoplay ? 'none' : '';
+
     if (this.autoplay) {
-      // Skip animation — show result immediately, auto-dismiss
-      atkDie.textContent = result.attackRoll;
-      defDie.textContent = result.defenseRoll;
-      atkDie.className = 'die-display' + (result.hit ? ' atk-win' : '');
-      defDie.className = 'die-display' + (!result.hit ? ' def-win' : '');
-      revealResult();
+      // Skip animation entirely.
+      renderInstant();
+      revealOutcome();
       setTimeout(dismiss, 500);
-    } else if (this.speedMode === 'fast') {
-      // Skip dice animation — show result immediately, auto-dismiss after 800ms
-      atkDie.textContent = result.attackRoll;
-      defDie.textContent = result.defenseRoll;
-      atkDie.className = 'die-display' + (result.hit ? ' atk-win' : '');
-      defDie.className = 'die-display' + (!result.hit ? ' def-win' : '');
-      revealResult();
-      setTimeout(dismiss, 800);
-    } else {
-      // Cinematic: animated dice roll, click to skip or auto-dismiss after a few seconds
-      atkDie.textContent = '?';
-      defDie.textContent = '?';
-      atkDie.className   = 'die-display rolling';
-      defDie.className   = 'die-display rolling';
-      let ticks = 0;
-      const maxTicks = 14;
-      this._battleInterval = setInterval(() => {
-        ticks++;
-        atkDie.textContent = Math.ceil(Math.random() * 20);
-        defDie.textContent = Math.ceil(Math.random() * 20);
-        if (ticks >= maxTicks) {
-          clearInterval(this._battleInterval);
-          this._battleInterval = null;
-          revealResult();
-        }
-      }, 55);
-      // Wire click/key dismiss and schedule auto-dismiss once dice settle.
-      // Give more time when a rematch button is present AND enabled so the
-      // user can decide whether to press "Battle Again".
-      setTimeout(() => {
-        if (_dismissed) return;  // dialog already closed (e.g. via enable-fast-mode button)
-        dialog.addEventListener('click', dismiss);
-        card?.addEventListener('click', dismiss);
-        document.addEventListener('keydown', keyDismiss);
-        const hasEnabledRematch = onRematch && this.state.actionsAvailable > 0;
-        const autoMs = hasEnabledRematch ? 5000 : 3000;
-        this._autoDismissTimer = setTimeout(dismiss, autoMs);
-      }, maxTicks * 55 + 200);
+      return;
     }
+
+    const atkBkdEl = this._el('battle-atk-breakdown');
+    const defBkdEl = this._el('battle-def-breakdown');
+    atkBkdEl.classList.add('visible');
+    defBkdEl.classList.add('visible');
+
+    let _clickDismissWired = false;
+    const unwireClickDismiss = () => {
+      if (!_clickDismissWired) return;
+      _clickDismissWired = false;
+      dialog.removeEventListener('click', dismiss);
+      card?.removeEventListener('click', dismiss);
+      document.removeEventListener('keydown', keyDismiss);
+    };
+
+    // Capture initial footer HTML so Redo can restore it (revealOutcome
+    // mutates footer with rematch button + action pips).
+    const initialFooterHtml = footer.innerHTML;
+    const rewireFooter = () => {
+      footer.innerHTML = initialFooterHtml;
+      const fastBtn = footer.querySelector('.battle-enable-fast');
+      if (fastBtn) {
+        fastBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          this._setSpeed('fast');
+          dismiss();
+        });
+      }
+    };
+
+    const scheduleDismiss = (ms) => {
+      _clearDismissTimer();
+      if (_dismissed) return;
+      _dismissRemaining = ms;
+      _dismissStartedAt = Date.now();
+      if (!_dismissPaused) {
+        _dismissTimerId = setTimeout(() => { _dismissTimerId = null; dismiss(); }, ms);
+      }
+    };
+    const pauseDismiss = () => {
+      if (_dismissPaused) return;
+      _dismissPaused = true;
+      if (_dismissTimerId !== null) {
+        clearTimeout(_dismissTimerId);
+        _dismissTimerId = null;
+        _dismissRemaining = Math.max(0, _dismissRemaining - (Date.now() - _dismissStartedAt));
+      }
+    };
+    const resumeDismiss = () => {
+      if (!_dismissPaused) return;
+      _dismissPaused = false;
+      if (_dismissRemaining > 0 && !_dismissed) {
+        _dismissStartedAt = Date.now();
+        _dismissTimerId = setTimeout(() => { _dismissTimerId = null; dismiss(); }, _dismissRemaining);
+      }
+    };
+
+    // playAnimation runs the staged reveal. Called at start and on Redo.
+    const playAnimation = () => {
+      anim.reset();
+      unwireClickDismiss();
+      _clearDismissTimer();
+      if (this._autoDismissTimer) { clearTimeout(this._autoDismissTimer); this._autoDismissTimer = null; }
+      atkBkdEl.innerHTML = '';
+      defBkdEl.innerHTML = '';
+      outcome.textContent = '';
+      outcome.className   = 'battle-outcome';
+      rewireFooter();
+      const stale = dialog.querySelector('.battle-splash');
+      if (stale) stale.remove();
+      // Restore HP fills in case redo fires after HP mutation.
+      dialog.querySelectorAll('.combatant-hp-fill').forEach(fill => {
+        const panel = fill.closest('.combatant-panel');
+        const isAtk = panel?.id === 'battle-attacker';
+        const snap = isAtk ? actorSnap : targetSnap;
+        const pct = Math.max(0, (snap.hp / snap.maxHp) * 100);
+        fill.style.width = `${pct}%`;
+      });
+
+      const bd = result.breakdown;
+      let padTo = 0;
+      if (bd) {
+        const atkD = _breakdownData(actorSnap,  bd, 'atk', result.attackRoll);
+        const defD = _breakdownData(targetSnap, bd, 'def', result.defenseRoll);
+        padTo = Math.max(atkD.rows.length, defD.rows.length);
+      }
+      const sidePromises = bd
+        ? [
+            _animateBreakdownSide(atkBkdEl, actorSnap,  bd, 'atk', result.attackRoll,  factor, anim, padTo),
+            _animateBreakdownSide(defBkdEl, targetSnap, bd, 'def', result.defenseRoll, factor, anim, padTo),
+          ]
+        : [Promise.resolve(), Promise.resolve()];
+
+      Promise.all(sidePromises).then(() => {
+        if (_dismissed || anim.cancelled) return;
+        if (bd) {
+          _applyWinnerClass(atkBkdEl, defBkdEl, result.attackRoll, result.defenseRoll);
+        }
+        const delay = Math.max(80, _BKD_TIMINGS.outcomeDelay * factor);
+        anim.timeout(delay, () => {
+          if (_dismissed) return;
+          revealOutcome();
+          // Wire click/key dismiss and schedule auto-dismiss (pausable).
+          dialog.addEventListener('click', dismiss);
+          card?.addEventListener('click', dismiss);
+          document.addEventListener('keydown', keyDismiss);
+          _clickDismissWired = true;
+          const hasEnabledRematch = onRematch && this.state.actionsAvailable > 0;
+          const baseMs = hasEnabledRematch ? 5000 : 3000;
+          const autoMs = this.speedMode === 'vfast' ? 1200
+                       : this.speedMode === 'fast'  ? 2000
+                       : baseMs;
+          scheduleDismiss(autoMs);
+        });
+      });
+    };
+
+    // Wire pause/redo buttons.
+    const pauseBtn = this._el('battle-pause-btn');
+    const redoBtn  = this._el('battle-redo-btn');
+    const setPauseLabel = () => {
+      if (!pauseBtn) return;
+      pauseBtn.textContent = _dismissPaused ? '▶' : '⏸';
+      pauseBtn.title = _dismissPaused ? 'Resume' : 'Pause';
+      pauseBtn.setAttribute('aria-label', _dismissPaused ? 'Resume' : 'Pause');
+    };
+    setPauseLabel();
+    const onPauseClick = e => {
+      e.stopPropagation();
+      if (_dismissPaused) resumeDismiss(); else pauseDismiss();
+      setPauseLabel();
+    };
+    const onRedoClick = e => {
+      e.stopPropagation();
+      if (_dismissPaused) { resumeDismiss(); setPauseLabel(); }
+      playAnimation();
+    };
+    pauseBtn?.addEventListener('click', onPauseClick);
+    redoBtn?.addEventListener('click', onRedoClick);
+    anim.onClear = () => {
+      pauseBtn?.removeEventListener('click', onPauseClick);
+      redoBtn?.removeEventListener('click', onRedoClick);
+    };
+
+    playAnimation();
   }
 
   _showTileDetail(hex) {
@@ -3588,25 +3839,29 @@ export class UIController {
     this._el('tile-zoom-overlay')?.classList.remove('visible');
   }
 
-  /** Cycle chronicle through: none → mini → full → none */
-  _cycleChronicle() {
-    const modes = ['none', 'mini', 'full'];
-    const next  = modes[(modes.indexOf(this._chronicleMode) + 1) % modes.length];
-    this._setChronicleMode(next);
-  }
-
-  _setChronicleMode(mode) {
-    this._chronicleMode = mode;
-    const sidebar = this._el('chronicle-sidebar');
-    if (sidebar) sidebar.style.display = mode === 'full' ? 'flex' : 'none';
-    // Hide standalone button when full sidebar is open (button lives in sidebar header instead)
-    const standaloneBtn = this._el('chronicle-toggle');
-    if (standaloneBtn) standaloneBtn.style.display = mode === 'full' ? 'none' : '';
-    this._renderMiniChronicle();
-    if (mode === 'full') this._renderSidebarLog();
-    // Update renderer inset so framing avoids the sidebar area
-    if (this.renderer) this.renderer.insetLeft = mode === 'full' ? 240 : 0;
-    // Resize canvas to account for sidebar width change, then redraw
+  /** Open or close the left-edge chronicle sidebar. */
+  _setChronicleOpen(open) {
+    this._chronicleOpen = !!open;
+    const panel = this._el('chronicle-sidebar');
+    if (panel) panel.classList.toggle('collapsed', !this._chronicleOpen);
+    const toggle = this._el('chronicle-tab-toggle');
+    if (toggle) toggle.textContent = this._chronicleOpen ? '−' : '+';
+    if (this._chronicleOpen) this._renderSidebarLog();
+    // On mobile, plan and chronicle are mutually exclusive — close the plan panel when opening chronicle.
+    if (this._chronicleOpen && this._isMobileViewport()) {
+      const planPanel = this._el('plan-panel');
+      if (planPanel && !planPanel.classList.contains('collapsed')) {
+        planPanel.classList.add('collapsed');
+        const planTabToggle = this._el('plan-tab-toggle');
+        if (planTabToggle) planTabToggle.textContent = '+';
+        const planToggleBtn = this._el('plan-toggle-btn');
+        if (planToggleBtn) planToggleBtn.textContent = '▶';
+        this._syncPlanInset();
+        this._renderEndTurnBtn();
+      }
+    }
+    // Update renderer inset so framing avoids the sidebar area when open
+    if (this.renderer) this.renderer.insetLeft = this._chronicleOpen ? 240 : 0;
     this.renderer?.resize();
     this.onRedraw?.();
   }
@@ -3688,28 +3943,7 @@ export class UIController {
     ).join('');
     el.scrollTop = el.scrollHeight;
 
-    this._renderMiniChronicle();
-    if (this._chronicleMode === 'full') this._renderSidebarLog();
-  }
-
-  _renderMiniChronicle() {
-    const el = this._el('chronicle-mini');
-    if (!el) return;
-    const mode = this._chronicleMode ?? 'mini';
-
-    if (mode === 'mini') {
-      const visible = this._visibleLog();
-      const last5   = visible.slice(-5);
-      el.innerHTML  = last5.map(m => `<div class="mini-log-entry ${this._logEntryModifier(m)}"${this._logEntryStyle(m)}>${this._logText(m)}</div>`).join('');
-    } else {
-      el.innerHTML = '';
-    }
-
-    // Update active state on the chronicle toggle in map controls
-    const toggleBtn = this._el('chronicle-toggle');
-    if (toggleBtn) {
-      toggleBtn.classList.toggle('chronicle-btn-active', mode !== 'none');
-    }
+    if (this._chronicleOpen) this._renderSidebarLog();
   }
 
   /**
@@ -3782,6 +4016,14 @@ export class UIController {
             const blockerName = ev.result.blockedBy.displayName ?? 'enemy';
             blockedMoves.push({ actorName, blockerName });
           }
+          // Movement blocked by fortifications — partial move (ACTION_OK with blockedByFort)
+          if (ev.type === ResEventType.ACTION_OK &&
+              ev.action?.type === PlanActionType.MOVE &&
+              ev.result?.blockedByFort) {
+            const actor = this.state.entities.find(e => e.id === ev.action.entityId);
+            const actorName = actor?.displayName ?? 'Unit';
+            blockedMoves.push({ actorName, blockerName: 'fortifications' });
+          }
           // Movement blocked by enemy — full block (ACTION_FAIL with blockedBy)
           if (ev.type === ResEventType.ACTION_FAIL &&
               ev.action?.type === PlanActionType.MOVE &&
@@ -3790,6 +4032,14 @@ export class UIController {
             const actorName = actor?.displayName ?? 'Unit';
             const blockerName = ev.blockedBy.displayName ?? 'enemy';
             blockedMoves.push({ actorName, blockerName });
+          }
+          // Movement blocked by fortifications — full block (ACTION_FAIL with blockedByFort)
+          if (ev.type === ResEventType.ACTION_FAIL &&
+              ev.action?.type === PlanActionType.MOVE &&
+              ev.blockedByFort) {
+            const actor = this.state.entities.find(e => e.id === ev.action.entityId);
+            const actorName = actor?.displayName ?? 'Unit';
+            blockedMoves.push({ actorName, blockerName: 'fortifications' });
           }
 
           // ── Resource tracking (player's faction only) ─────────────────
@@ -4378,6 +4628,44 @@ function _visibleUnitsAt(state, col, row) {
   });
 }
 
+// Effects whose mods make a unit weaker (red pip), vs. those that strengthen
+// it (green pip). Anything not listed renders neutral.
+const _BAD_EFFECTS  = new Set(['wounded', 'poisoned', 'bleeding', 'stunned', 'slowed', 'marked', 'cursed']);
+const _GOOD_EFFECTS = new Set(['frenzied', 'inspired', 'fortified', 'eagle_eyed']);
+
+/**
+ * Render the active effects pip strip for an entity. Each pip shows the
+ * effect's icon and (for finite durations) a small remaining-rounds badge.
+ * The full label/description is exposed via the title attribute for
+ * desktop hover and mobile long-press.
+ */
+function _buildEffectsHtml(entity) {
+  if (!entity || !Array.isArray(entity.effects) || entity.effects.length === 0) {
+    return '';
+  }
+  const pips = entity.effects.map(rec => {
+    const def = EFFECTS[rec.id];
+    if (!def) return '';
+    const kind = _BAD_EFFECTS.has(rec.id) ? 'bad'
+               : _GOOD_EFFECTS.has(rec.id) ? 'good'
+               : '';
+    const durLabel = typeof rec.duration === 'number'
+      ? `${rec.duration}`
+      : (rec.duration === 'mission' ? '∞' : '');
+    const stacksLabel = (rec.stacks ?? 1) > 1 ? `×${rec.stacks}` : '';
+    const tooltipBits = [def.label, def.description];
+    if (typeof rec.duration === 'number') tooltipBits.push(`${rec.duration} round${rec.duration === 1 ? '' : 's'} remaining`);
+    else if (rec.duration === 'mission') tooltipBits.push('Lasts the mission');
+    else if (rec.duration === 'permanent') tooltipBits.push('Permanent');
+    const tooltip = tooltipBits.join(' — ').replace(/"/g, '&quot;');
+    return `<span class="usb-effect-pip" data-kind="${kind}" title="${tooltip}">`
+         + `${def.icon ?? '●'}${stacksLabel}`
+         + (durLabel ? `<span class="usb-effect-pip-dur">${durLabel}</span>` : '')
+         + `</span>`;
+  }).join('');
+  return `<span class="usb-effects">${pips}</span>`;
+}
+
 // ── Tilemap sprite helpers ────────────────────────────────────────────────────
 
 /** Return the tilemap asset id for any entity snap (uses title for survivors). */
@@ -4398,7 +4686,7 @@ function _entityPortraitId(snap) {
  * @param {number}  [opts.portraitSize] Portrait diameter in px (default 36).
  */
 function _unitCardHTML(entity, { renderer = null, selectable = false, showStats = true, portraitSize = 36 } = {}) {
-  const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
+  const GLYPHS = { hero: '⚔', witch: '✦', survivor: '☺', soldier: '♟', zombie: '†', minion: '☠', wood_golem: '🪵', iron_golem: '⚙' };
   const color  = ENTITY_COLOR[entity.type] || '#888';
   const glyph  = GLYPHS[entity.type] ?? '?';
   const label  = (entity.type === 'survivor' && entity.name) ? entity.name
@@ -4415,8 +4703,10 @@ function _unitCardHTML(entity, { renderer = null, selectable = false, showStats 
   const hearts = '♥'.repeat(entity.hp ?? 0) + '♡'.repeat(Math.max(0, (entity.maxHp ?? entity.hp ?? 0) - (entity.hp ?? 0)));
   let statsHtml = hearts;
   if (showStats && entity.attack !== undefined) {
-    const atkStr = `${entity.attack}${entity.attackBonus ? `+${entity.attackBonus}` : ''}`;
-    const defStr = `${entity.defense}${entity.defenseBonus ? `+${entity.defenseBonus}` : ''}`;
+    const atk = attackOf(entity);
+    const def = defenseOf(entity);
+    const atkStr = `${atk}${entity.attackBonus ? `+${entity.attackBonus}` : ''}`;
+    const defStr = `${def}${entity.defenseBonus ? `+${entity.defenseBonus}` : ''}`;
     statsHtml = `${hearts} · ATK ${atkStr} · DEF ${defStr}`;
   }
 
@@ -4427,7 +4717,7 @@ function _unitCardHTML(entity, { renderer = null, selectable = false, showStats 
 }
 
 function _snapEntity(e) {
-  return { id: e.id, name: e.displayName, hp: e.hp, maxHp: e.maxHp, attack: e.attack, defense: e.defense, type: e.type, title: e.title ?? null };
+  return { id: e.id, name: e.displayName, hp: e.hp, maxHp: e.maxHp, attack: e.getAttack(), defense: e.getDefense(), type: e.type, title: e.title ?? null };
 }
 
 function _combatantHTML(snap, role, portraitSrc = null) {
@@ -4449,40 +4739,348 @@ function _combatantHTML(snap, role, portraitSrc = null) {
   `;
 }
 
-// Build the per-side roll breakdown HTML for the battle dialog.
-// side: 'atk' | 'def'   total: the final roll total shown in the die box
-function _buildBreakdownHTML(snap, bd, side, total) {
-  const row = (label, val, isDie = false) => {
-    const valHtml = isDie
-      ? `<span class="bkd-val bkd-die">${val}</span>`
-      : `<span class="bkd-val">${val >= 0 ? '+' + val : val}</span>`;
-    return `<div class="bkd-row"><span class="bkd-label">${label}</span>${valHtml}</div>`;
-  };
+// Compute the per-side breakdown data for the battle dialog.
+// Used by both the animated renderer and the instant (autoplay) fallback.
+// Each row carries an explicit sign flag: 'base' (neutral), 'pos', or 'neg'.
+function _breakdownData(snap, bd, side, total) {
+  const pool = side === 'atk'
+    ? (bd.atkPool ?? [bd.atkBaseDie])
+    : (bd.defPool ?? [bd.defBaseDie]);
+  const picked = side === 'atk' ? bd.atkBaseDie : bd.defBaseDie;
+  const advantage = side === 'atk'
+    ? (bd.atkAdvantageDice ?? 0)
+    : (bd.defAdvantageDice ?? 0);
 
-  const parts = [];
+  const rows = [];
+  const add = (label, val, sign) => rows.push({ label, val, sign });
   if (side === 'atk') {
-    parts.push(row('Base d6', bd.atkBaseDie, true));
-    parts.push(row(`${snap.name} ATK`, snap.attack));
-    if (snap.attackBonus) parts.push(row('🪙 Silver', snap.attackBonus));
-    if (bd.phaseBonus)    parts.push(row('🌙 Night', bd.phaseBonus));
-    if (bd.atkStaffBonus) parts.push(row('⚕ Staff (undead)', bd.atkStaffBonus));
-    if (bd.atkFortAtkBonus) parts.push(row('🏰 Fort ATT', bd.atkFortAtkBonus));
-    bd.atkExtraDice.forEach((r, i) => {
-      parts.push(row(`${bd.atkAllyNames[i] ?? 'Ally'} (D3)`, r, true));
-    });
+    add(`${snap.name} ATK`, snap.attack, 'base');
+    if (snap.attackBonus)    add('🪙 Silver',          snap.attackBonus,    'pos');
+    if (bd.phaseBonus)       add('🌙 Night',           bd.phaseBonus,       'pos');
+    if (bd.atkStaffBonus)    add('⚕ Staff (undead)',   bd.atkStaffBonus,    'pos');
+    if (bd.atkFortAtkBonus)  add('🏰 Fort ATT',        bd.atkFortAtkBonus,  'pos');
+    const atkAllyNames = bd.atkAllyNames ?? [];
+    const atkAllyContrib = Math.min(atkAllyNames.length, bd.atkGangupFlat || 0);
+    if (atkAllyContrib > 0) {
+      for (let i = 0; i < atkAllyContrib; i++) add(`👥 ${atkAllyNames[i]}`, 1, 'pos');
+    } else if (bd.atkGangupFlat) {
+      add('👥 Gang-up flat', bd.atkGangupFlat, 'pos');
+    }
   } else {
-    parts.push(row('Base d6', bd.defBaseDie, true));
-    parts.push(row(`${snap.name} DEF`, snap.defense));
-    if (snap.defenseBonus) parts.push(row('🛡 Bonus DEF', snap.defenseBonus));
-    if (bd.fortBonus) parts.push(row('🏰 Fort DEF', bd.fortBonus));
-    if (bd.fatiguePenalty) parts.push(row('😓 Fatigue', -bd.fatiguePenalty));
-    bd.defExtraDice.forEach((r, i) => {
-      parts.push(row(`${bd.defAllyNames[i] ?? 'Ally'} (D3)`, r, true));
+    add(`${snap.name} DEF`, snap.defense, 'base');
+    if (snap.defenseBonus)  add('🛡 Bonus DEF',   snap.defenseBonus,  'pos');
+    if (bd.fortBonus)       add('🏰 Fort DEF',    bd.fortBonus,       'pos');
+    if (bd.fatiguePenalty)  add('😓 Fatigue',     -bd.fatiguePenalty, 'neg');
+    const defAllyNames = bd.defAllyNames ?? [];
+    const defAllyContrib = Math.min(defAllyNames.length, bd.defGangupFlat || 0);
+    if (defAllyContrib > 0) {
+      for (let i = 0; i < defAllyContrib; i++) add(`👥 ${defAllyNames[i]}`, 1, 'pos');
+    } else if (bd.defGangupFlat) {
+      add('👥 Allies flat', bd.defGangupFlat, 'pos');
+    }
+  }
+  return { pool, picked, advantage, rows, total };
+}
+
+function _poolSign(advantage) {
+  if (advantage > 0) return 'pos';
+  if (advantage < 0) return 'neg';
+  return 'base';
+}
+
+function _poolLabel(advantage) {
+  if (advantage > 0) return `Advantage ${advantage}`;
+  if (advantage < 0) return `Disadvantage ${-advantage}`;
+  return 'Roll';
+}
+
+// Signed sign -> data-sign attribute ('pos'|'neg'|'base' → 'positive'|'negative'|'').
+function _signAttr(sign) {
+  if (sign === 'pos') return ' data-sign="positive"';
+  if (sign === 'neg') return ' data-sign="negative"';
+  return '';
+}
+
+// Instant (no animation) render — used for autoplay/skip.
+function _buildBreakdownHTML(snap, bd, side, total, padTo = 0) {
+  const d = _breakdownData(snap, bd, side, total);
+  const n = d.pool?.length ?? 0;
+  const parts = [];
+  if (n > 0) {
+    // Pool row: discards together, picked die in the value column.
+    let usedPick = false;
+    const discards = [];
+    let pickedHTML = '';
+    for (const v of d.pool) {
+      const isPick = !usedPick && v === d.picked;
+      if (isPick) {
+        usedPick = true;
+        pickedHTML = `<span class="bkd-die bkd-die-picked">${v}</span>`;
+      } else {
+        discards.push(`<span class="bkd-die bkd-die-discard">${v}</span>`);
+      }
+    }
+    const poolSign = _poolSign(d.advantage);
+    parts.push(
+      `<div class="bkd-row bkd-pool-row"${_signAttr(poolSign)}>` +
+        `<span class="bkd-label">${_poolLabel(d.advantage)}</span>` +
+        `<span class="bkd-pool-discards">${discards.join('')}</span>` +
+        `<span class="bkd-pool-picked-slot">${pickedHTML}</span>` +
+      `</div>`
+    );
+  }
+  for (const r of d.rows) {
+    const v = r.val >= 0 ? '+' + r.val : r.val;
+    parts.push(
+      `<div class="bkd-row"${_signAttr(r.sign)}><span class="bkd-label">${r.label}</span><span class="bkd-val">${v}</span></div>`
+    );
+  }
+  const spacerCount = Math.max(0, padTo - d.rows.length);
+  for (let i = 0; i < spacerCount; i++) {
+    parts.push(`<div class="bkd-row bkd-row-spacer" aria-hidden="true"><span class="bkd-label">&nbsp;</span><span class="bkd-val">&nbsp;</span></div>`);
+  }
+  parts.push(`<hr class="bkd-divider">`);
+  parts.push(`<div class="bkd-row bkd-total-row"><span class="bkd-label">Total</span><span class="bkd-val">${total}</span></div>`);
+  return parts.join('');
+}
+
+// Tint the whole breakdown column once both totals have landed: winner →
+// subtle green wash, loser → subtle red wash, tie → neutral. The Total row
+// keeps its bold/large size; the side tint carries the winner signal.
+function _applyWinnerClass(atkCol, defCol, atkTotal, defTotal) {
+  if (!atkCol || !defCol) return;
+  for (const col of [atkCol, defCol]) {
+    col.classList.remove('bkd-col-winner', 'bkd-col-loser', 'bkd-col-tie');
+  }
+  if (atkTotal > defTotal) {
+    atkCol.classList.add('bkd-col-winner');
+    defCol.classList.add('bkd-col-loser');
+  } else if (defTotal > atkTotal) {
+    defCol.classList.add('bkd-col-winner');
+    atkCol.classList.add('bkd-col-loser');
+  } else {
+    atkCol.classList.add('bkd-col-tie');
+    defCol.classList.add('bkd-col-tie');
+  }
+}
+
+// Base cinematic timings (ms). Multiplied by speedMode factor.
+const _BKD_TIMINGS = {
+  tumble:       450,
+  select:       300,
+  selectHold:   150,
+  rowStagger:   180,
+  flash:        300,
+  divider:      200,
+  totalSnap:    250,
+  outcomeDelay: 200,
+};
+function _speedFactor(mode) {
+  if (mode === 'vfast') return 0.25;
+  if (mode === 'fast')  return 0.5;
+  return 1;
+}
+
+// Animate a side's breakdown column.
+// Renders all rows upfront in a muted/desaturated state, then "glows" each
+// row into its active state in sequence as the reveal progresses.
+//
+// Sequence:
+//   1. Tumble the dice pool (faces jitter) with a muted pool row visible.
+//   2. Pool row becomes active: discarded dice fade, picked die pops into
+//      the value-column slot.
+//   3. Modifier rows un-mute one at a time with a green/red/neutral flash.
+//   4. Divider draws; total row pops.
+function _animateBreakdownSide(colEl, snap, bd, side, total, factor, anim, padTo = 0) {
+  const d = _breakdownData(snap, bd, side, total);
+  colEl.innerHTML = '';
+  colEl.classList.add('visible');
+
+  const poolSign = _poolSign(d.advantage);
+  const n = d.pool?.length ?? 0;
+
+  // Build pool row. Not muted — the tumble animation must be clearly visible
+  // before the picked die is selected. The glow-in at settle still fires.
+  const poolRow = document.createElement('div');
+  poolRow.className = 'bkd-row bkd-pool-row';
+  if (poolSign !== 'base') poolRow.setAttribute('data-sign', poolSign === 'pos' ? 'positive' : 'negative');
+  poolRow.innerHTML =
+    `<span class="bkd-label">${_poolLabel(d.advantage)}</span>` +
+    `<span class="bkd-pool-discards"></span>` +
+    `<span class="bkd-pool-picked-slot"></span>`;
+  const discardsEl = poolRow.querySelector('.bkd-pool-discards');
+  const pickedSlot = poolRow.querySelector('.bkd-pool-picked-slot');
+
+  // During tumble, all dice live in the discards area; on settle, the picked
+  // die moves into the picked slot.
+  const dieEls = [];
+  for (let i = 0; i < n; i++) {
+    const de = document.createElement('span');
+    de.className = 'bkd-die bkd-die-tumbling';
+    de.textContent = Math.ceil(Math.random() * 6);
+    discardsEl.appendChild(de);
+    dieEls.push(de);
+  }
+  if (n > 0) colEl.appendChild(poolRow);
+
+  // Pre-render muted modifier rows.
+  const rowEls = d.rows.map(r => {
+    const row = document.createElement('div');
+    row.className = 'bkd-row bkd-row-muted';
+    if (r.sign !== 'base') row.setAttribute('data-sign', r.sign === 'pos' ? 'positive' : 'negative');
+    const v = r.val >= 0 ? '+' + r.val : r.val;
+    row.innerHTML =
+      `<span class="bkd-label">${r.label}</span>` +
+      `<span class="bkd-val">${v}</span>`;
+    colEl.appendChild(row);
+    return row;
+  });
+
+  // Spacer rows to equalize column height between atk and def sides so the
+  // Total row lines up on the same baseline regardless of modifier count.
+  const spacerCount = Math.max(0, padTo - d.rows.length);
+  for (let i = 0; i < spacerCount; i++) {
+    const spacer = document.createElement('div');
+    spacer.className = 'bkd-row bkd-row-spacer';
+    spacer.setAttribute('aria-hidden', 'true');
+    spacer.innerHTML = `<span class="bkd-label">&nbsp;</span><span class="bkd-val">&nbsp;</span>`;
+    colEl.appendChild(spacer);
+  }
+
+  // Divider (muted).
+  const hr = document.createElement('hr');
+  hr.className = 'bkd-divider bkd-row-muted';
+  colEl.appendChild(hr);
+
+  // Total row (muted until the end).
+  const totalRow = document.createElement('div');
+  totalRow.className = 'bkd-row bkd-total-row bkd-row-muted';
+  totalRow.innerHTML =
+    `<span class="bkd-label">Total</span>` +
+    `<span class="bkd-val">${total}</span>`;
+  colEl.appendChild(totalRow);
+
+  // Tumble the pool dice.
+  const tumbleMs = Math.max(90, _BKD_TIMINGS.tumble * factor);
+  let tumbleInterval = null;
+  if (n > 0) {
+    tumbleInterval = anim.interval(Math.max(40, 55 * factor), () => {
+      for (const de of dieEls) de.textContent = Math.ceil(Math.random() * 6);
     });
   }
 
-  parts.push(`<hr class="bkd-divider">`);
-  parts.push(`<div class="bkd-total-row"><span class="bkd-label">Total</span><span class="bkd-val">${total}</span></div>`);
-  return parts.join('');
+  return new Promise(resolve => {
+    // Step 1 → 2: dice settle, pool row un-mutes, picked die moves to value slot.
+    anim.timeout(tumbleMs, () => {
+      // Stop the tumble interval so dice stay on their final face values.
+      tumbleInterval?.cancel();
+      // Settle dice faces.
+      let pickedIdx = -1;
+      for (let i = 0; i < dieEls.length; i++) {
+        const v = d.pool[i];
+        dieEls[i].textContent = v;
+        dieEls[i].classList.remove('bkd-die-tumbling');
+        if (pickedIdx < 0 && v === d.picked) pickedIdx = i;
+      }
+      // Mark discards, move picked into the picked slot.
+      dieEls.forEach((de, i) => {
+        if (i === pickedIdx) {
+          de.classList.add('bkd-die-picked');
+          pickedSlot.appendChild(de);
+        } else {
+          de.classList.add('bkd-die-discard');
+        }
+      });
+      // Un-mute the pool row with a glow.
+      poolRow.classList.remove('bkd-row-muted');
+      poolRow.classList.add(
+        poolSign === 'pos' ? 'bkd-row-glow-pos'
+        : poolSign === 'neg' ? 'bkd-row-glow-neg'
+        : 'bkd-row-glow-neutral'
+      );
+
+      // Step 3: un-mute modifier rows one at a time.
+      const selectHoldMs = _BKD_TIMINGS.selectHold * factor + _BKD_TIMINGS.select * factor;
+      const rowStagger = Math.max(40, _BKD_TIMINGS.rowStagger * factor);
+      rowEls.forEach((row, idx) => {
+        const sign = d.rows[idx].sign;
+        anim.timeout(selectHoldMs + idx * rowStagger, () => {
+          row.classList.remove('bkd-row-muted');
+          row.classList.add(
+            sign === 'pos' ? 'bkd-row-glow-pos'
+            : sign === 'neg' ? 'bkd-row-glow-neg'
+            : 'bkd-row-glow-neutral'
+          );
+        });
+      });
+
+      // Step 4: divider + total reveal after rows.
+      const afterRows = selectHoldMs + rowEls.length * rowStagger + Math.max(60, 100 * factor);
+      anim.timeout(afterRows, () => {
+        hr.classList.remove('bkd-row-muted');
+        hr.classList.add('bkd-divider-draw');
+      });
+      const dividerMs = Math.max(80, _BKD_TIMINGS.divider * factor);
+      anim.timeout(afterRows + dividerMs, () => {
+        totalRow.classList.remove('bkd-row-muted');
+        totalRow.classList.add('bkd-total-pop');
+      });
+      anim.timeout(afterRows + dividerMs + Math.max(100, _BKD_TIMINGS.totalSnap * factor), () => resolve(totalRow));
+    });
+  });
+}
+
+// ── Cancellable timer bag for the battle dialog animation ─────────────────
+//
+// Tracks every setTimeout/setInterval set by the staged animation so they
+// can be cancelled together on reset/dismiss. The animation sequence runs
+// to completion uninterrupted — pause only affects the auto-dismiss timer,
+// which lives outside this bag.
+function _makeAnimBag() {
+  const entries = [];
+  const bag = {
+    cancelled: false,
+    onClear: null,
+    timeout(delayMs, fn) {
+      const e = { type: 'timeout', fn, id: null, cancelled: false };
+      const run = () => { if (!e.cancelled && !bag.cancelled) fn(); };
+      e.id = setTimeout(run, delayMs);
+      entries.push(e);
+      return e;
+    },
+    interval(delayMs, fn) {
+      const e = { type: 'interval', delayMs, fn, id: null, cancelled: false };
+      e.id = setInterval(fn, delayMs);
+      e.cancel = () => {
+        if (e.cancelled) return;
+        e.cancelled = true;
+        if (e.id !== null) { clearInterval(e.id); e.id = null; }
+      };
+      entries.push(e);
+      return e;
+    },
+    // Cancel all timers without tearing down. Leaves the bag reusable.
+    reset() {
+      for (const e of entries) {
+        e.cancelled = true;
+        if (e.id !== null) {
+          if (e.type === 'timeout') clearTimeout(e.id);
+          else clearInterval(e.id);
+          e.id = null;
+        }
+      }
+      entries.length = 0;
+      bag.cancelled = false;
+    },
+    // Tear down permanently. After clear(), no further timeouts will fire
+    // even if scheduled, and onClear (if set) runs for listener cleanup.
+    clear() {
+      bag.reset();
+      bag.cancelled = true;
+      if (bag.onClear) { try { bag.onClear(); } catch (_) {} }
+      bag.onClear = null;
+    },
+  };
+  return bag;
 }
 

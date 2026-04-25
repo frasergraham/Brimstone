@@ -27,7 +27,7 @@ function freshState() {
 /** Compute the hero budget the same way the resolver's budgetFor does. */
 function heroBudget(state) {
   const extras = state.entities.filter(
-    e => e.alive && e.owner === 'hero' && e.type !== 'hero'
+    e => e.alive && e.owner === 'hero' && e.type !== 'paladin'
   ).length;
   const timeBonus = (state.phase === Phase.DAY || state.phase === Phase.DAWN) ? 1 : 0;
   return 3 + timeBonus + Math.min(extras, 5);

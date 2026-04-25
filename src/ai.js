@@ -3,9 +3,9 @@
 // Witch AI: ai-engine.js (WitchAIEngine)
 import { getNeighbors, hexDistance, hexKey } from './hex.js';
 import { TileType } from './tiles.js';
-import { EntityType } from './entities.js';
+import { Entity, EntityType, isLeaderType } from './entities.js';
 import { Phase, computeActions, computeActionsForPlayer, nodeController, countHeldNodes } from './game.js';
-import { getReachableHexes } from './actions.js';
+import { getReachableHexes, isFortBlocking } from './actions.js';
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
@@ -28,6 +28,25 @@ export function stepToward(state, actor, target) {
     }
   }
   return null;
+}
+
+// Returns an adjacent hex that has an impassable fortification (blocking `actor`)
+// and is also the adjacent hex closest to `target`.  Used by the witch AI to
+// decide whether to siege a wall instead of continuing to path-find around it.
+// Returns { col, row, fortLevel } or null.
+export function adjacentBlockingFortToward(state, actor, target) {
+  if (!target) return null;
+  let best = null, bestDist = Infinity;
+  for (const n of getNeighbors(actor.col, actor.row)) {
+    const t = state.tiles.get(hexKey(n.col, n.row));
+    if (!isFortBlocking(t, actor.owner)) continue;
+    const d = hexDistance(n.col, n.row, target.col, target.row);
+    if (d < bestDist) {
+      best = { col: n.col, row: n.row, fortLevel: t.fortifyLevel };
+      bestDist = d;
+    }
+  }
+  return best;
 }
 
 // Road-aware movement: picks the reachable hex (within 1 move action) closest
@@ -147,11 +166,13 @@ export class PlanSimState {
     this.inventory        = JSON.parse(JSON.stringify(realState.inventory));
 
     // Shallow-copy live entities so position tracking works without mutating the real state.
-    // NOTE: Entity.alive is a getter (hp > 0) and is NOT included in spread. We must add it
-    // explicitly so that e.alive checks in _decidePlanAction work on the copied objects.
+    // Clones are re-parented to Entity.prototype *after* the spread so Object.assign-style
+    // assignment never fires any of Entity's getter-only properties (alive / displayName /
+    // abilities). Any own property set via spread shadows the corresponding prototype
+    // getter on access, matching the pre-refactor sim-clone semantics.
     this.entities = realState.entities
       .filter(e => e.alive)
-      .map(e => ({ ...e, alive: true }));
+      .map(e => Object.setPrototypeOf({ ...e }, Entity.prototype));
 
     if (playerId) {
       // Multiplayer: scope leader ref and budget to this specific player.
@@ -159,25 +180,33 @@ export class PlanSimState {
       //   • The faction that matches the player → their own leader (the actor)
       //   • The opposite faction → the nearest enemy leader (for flee/hunt distance checks)
       // Without an enemy leader reference, flee and hunt logic silently no-ops.
-      const leaderType = faction === 'hero' ? EntityType.HERO  : EntityType.WITCH;
-      const enemyType  = faction === 'hero' ? EntityType.WITCH : EntityType.HERO;
-      const leader = this.entities.find(e => e.type === leaderType && e.ownerId === playerId) ?? null;
+      //
+      // Leaders are matched by ownership, not by fixed entity type, so stub
+      // factions (Rogue/Captain/Necromancer/Brute) work here too. The side
+      // membership stays encoded in `owner` ('hero' for day, 'witch' for
+      // night).
+      const enemyOwner = faction === 'hero' ? 'witch' : 'hero';
+      const leader = this.entities.find(e =>
+        e.ownerId === playerId && isLeaderType(e.type)
+      ) ?? null;
       // Nearest enemy leader (fallback: any enemy leader)
+      const enemies = this.entities.filter(e =>
+        e.alive && e.owner === enemyOwner && isLeaderType(e.type)
+      );
       const enemyLeader = leader
-        ? (this.entities
-            .filter(e => e.type === enemyType && e.alive)
-            .sort((a, b) =>
-              hexDistance(a.col, a.row, leader.col, leader.row) -
-              hexDistance(b.col, b.row, leader.col, leader.row))[0] ?? null)
-        : (this.entities.find(e => e.type === enemyType) ?? null);
+        ? (enemies.sort((a, b) =>
+            hexDistance(a.col, a.row, leader.col, leader.row) -
+            hexDistance(b.col, b.row, leader.col, leader.row))[0] ?? null)
+        : (enemies[0] ?? null);
       this.hero  = faction === 'hero'  ? leader : enemyLeader;
       this.witch = faction === 'witch' ? leader : enemyLeader;
       const nb = countHeldNodes(faction, realState.witchObjectives ?? [], this.entities);
       this.actionsLeft = computeActionsForPlayer(playerId, faction, realState.phase, this.entities, nb);
     } else {
-      // Offline / legacy: use first entity of each type, faction-level budget
-      this.hero  = this.entities.find(e => e.type === EntityType.HERO)  ?? null;
-      this.witch = this.entities.find(e => e.type === EntityType.WITCH) ?? null;
+      // Offline / legacy: pick the first leader on each side (handles stub
+      // factions as well as the Paladin/Witch defaults).
+      this.hero  = this.entities.find(e => e.owner === 'hero'  && isLeaderType(e.type)) ?? null;
+      this.witch = this.entities.find(e => e.owner === 'witch' && isLeaderType(e.type)) ?? null;
       const nb = countHeldNodes(faction, realState.witchObjectives ?? [], this.entities);
       this.actionsLeft = computeActions(
         faction,
@@ -188,6 +217,18 @@ export class PlanSimState {
     }
     this._faction = faction;
     this.campaignAIBudgetBonus = realState.campaignAIBudgetBonus ?? 0;
+    this.noWitchMission = !!realState.noWitchMission;
+
+    // Count active players per faction — used by NvN-aware tunings such as
+    // the witch minion cap, which scales with witch team size so a 3-witch
+    // side isn't rationed to the same 7-minion ceiling as a solo witch.
+    // Use a keyed map to avoid hard-coded faction string equality checks
+    // (see docs/design/refactor.md / faction-string-checks guard).
+    const playerCounts = {};
+    for (const p of (realState.players || [])) {
+      if (p && p.faction) playerCounts[p.faction] = (playerCounts[p.faction] || 0) + 1;
+    }
+    this.playerCounts = playerCounts;
 
     // Track hexes already planned for exploration this turn so we don't
     // plan duplicate explores (sim.tiles.explored is a live reference and
@@ -248,6 +289,14 @@ export class PlanSimState {
   applyGuard(entityId) {
     const e = this.entities.find(en => en.id === entityId);
     if (e) e.guarding = (e.guarding || 0) + 1;
+    this.actionsLeft--;
+  }
+
+  // Book a wall-siege action. The sim holds `tiles` as a read-only reference to
+  // real game state, so we do NOT mutate fortifyLevel here. Callers should
+  // break out of their per-unit loop after queueing a siege so we don't keep
+  // targeting the same wall in the same turn-plan.
+  applySiege(_col, _row) {
     this.actionsLeft--;
   }
 

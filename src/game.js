@@ -1,11 +1,12 @@
 // Central game state and turn management
 import { generateMap } from './map.js';
-import { createHero, createWitch, createMinion, createSurvivor, resetRoster, EntityType, SurvivorAbility, ENTITY_COLOR } from './entities.js';
+import { createHero, createWitch, createMinion, createSurvivor, resetRoster, survivorRosterIndexByName, bumpEntityId as _bumpModuleEntityId, EntityType, SurvivorAbility, ENTITY_COLOR, isLeaderType } from './entities.js';
 import { BuildingType, ResourceType, TileType } from './tiles.js';
 import { hexKey, hexDistance, getNeighbors, setMapDimensions, MAP_COLS, MAP_ROWS } from './hex.js';
 import { applyPostRoundEffects, attritionForCycle } from './post-round-effects.js';
 import { sightRange } from './actions.js';
-import { getFaction, allFactions } from './factions.js';
+import { getFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
+import { allSides } from './sides.js';
 
 /**
  * Determine which faction controls a power node cluster based on majority hex occupation.
@@ -158,7 +159,17 @@ export class GameState {
    *   heroStart, witchStart, mapSize, survivorCounts, cols?, rows? }.
    */
   constructor(witchIsAI = true, heroIsAI = false, mapSize = 'standard', nodeCount = null, mapDataOverride = null) {
+    // Per-instance entity/roster/dice state. Previously module-level globals
+    // in entities.js which caused cross-game collisions on the server.
+    this.nextEntityId       = 1;
+    this.forcedDice         = [];
+    this.usedRosterIndices  = new Set();
+
+    // Legacy: also reset the module-level roster used by editor previews and
+    // tests that call createSurvivor() without a state. Can be removed once
+    // those callsites are migrated.
     resetRoster();
+
     let mapData;
     if (mapDataOverride) {
       if (mapDataOverride.cols && mapDataOverride.rows) {
@@ -193,9 +204,9 @@ export class GameState {
     this.players = [];
 
     // Offline / legacy path: create one hero and one witch with synthetic player IDs.
-    const heroName = mapDataOverride?.heroName ?? 'Hero';
+    const heroName = mapDataOverride?.heroName ?? 'Ishmael Charger';
     const witchName = mapDataOverride?.witchName ?? 'Witch';
-    this.hero  = createHero(mapData.heroStart.col,  mapData.heroStart.row, 'hero');
+    this.hero  = getFaction('hero').createLeader(mapData.heroStart.col,  mapData.heroStart.row, 'hero', this);
     this.hero.name = heroName;
     this.entities.push(this.hero);
     this.players.push({ id: 'hero',  name: heroName,  faction: 'hero',  isAI: heroIsAI,  leaderId: this.hero.id });
@@ -205,11 +216,15 @@ export class GameState {
       this.witch = null;
       this.players.push({ id: 'witch', name: witchName, faction: 'witch', isAI: true, leaderId: null });
     } else {
-      this.witch = createWitch(mapData.witchStart.col, mapData.witchStart.row, 'witch');
+      this.witch = getFaction('witch').createLeader(mapData.witchStart.col, mapData.witchStart.row, 'witch', this);
       this.witch.name = witchName;
       this.entities.push(this.witch);
       this.players.push({ id: 'witch', name: witchName, faction: 'witch', isAI: witchIsAI, leaderId: this.witch.id });
     }
+    // Persistent mission-mode flag. Consumers (AI sight, pursuit radius) must
+    // check this rather than probing live entity state, so a witch dying
+    // mid-mission in some future scenario doesn't silently flip behaviour.
+    this.noWitchMission = !!mapDataOverride?.noWitch;
 
     this.inventory = {
       hero:  { ...getFaction('hero').getStartingResources() },
@@ -261,6 +276,23 @@ export class GameState {
     this.nodeScore = { hero: 0, witch: 0 };
     // When true, skip dawn/dusk node scoring and hide the score track UI.
     this.disableScoring = !!mapDataOverride?.disableScoring;
+    // When true, hide the day/night cycle indicator pill above the score bar.
+    // Independent of disableScoring so a mission can show the cycle without
+    // exposing point-based scoring (campaign missions with phase-based wins).
+    this.disableCycleBar = !!mapDataOverride?.disableCycleBar;
+    // When true, controlling all power nodes at dawn/dusk does NOT trigger
+    // an instant win — point-based scoring still runs. Used by campaign
+    // missions where the loss/win condition depends on accumulated score
+    // (e.g. Mission 7 — kill the witch before she scores 4 points).
+    this.disableNodeSweep = !!mapDataOverride?.disableNodeSweep;
+    // Score threshold for the standard "first to N points wins" rule.
+    // Defaults to 4 (multiplayer baseline); campaign missions can raise it.
+    this.nodeScoreThreshold = mapDataOverride?.nodeScoreThreshold ?? 4;
+    // When true, the engine's built-in "first to N points wins" rule is
+    // disabled — the mission's victory delegate drives win/lose entirely
+    // (e.g. M7 — kill the witch before she scores 5 points; her hitting 5
+    // is a *loss* condition, not a win).
+    this.disableScoreWin = !!mapDataOverride?.disableScoreWin;
 
     // Max survivors discoverable from hidden-survivor tiles (null = unlimited).
     this.maxDiscoverableSurvivors = mapDataOverride?.maxDiscoverableSurvivors ?? null;
@@ -322,6 +354,46 @@ export class GameState {
     this.actionsLeft = Math.max(0, this.actionsLeft - cost);
   }
 
+  // ── Entity ID / dice / roster (per-instance, concurrent-game-safe) ─────
+
+  /** Next entity ID number. Entity constructor prefixes with "e". */
+  allocateEntityId() {
+    const id = this.nextEntityId++;
+    // Keep the module-level legacy counter at or above this state's counter
+    // so standalone createFoo() calls (no state) never collide with state
+    // entities. Tests and editor previews rely on this invariant.
+    _bumpModuleEntityId(id);
+    return id;
+  }
+
+  /** Ensure the next allocated id is greater than the given numeric id. */
+  bumpEntityId(minNumericId) {
+    if (minNumericId >= this.nextEntityId) this.nextEntityId = minNumericId + 1;
+    _bumpModuleEntityId(minNumericId);
+  }
+
+  /** Queue forced dice values for scripted (tutorial) combat outcomes. */
+  setForcedDice(...values) {
+    this.forcedDice = [...values];
+  }
+
+  /** Pop the next forced die, or roll a random 1..sides. */
+  nextDie(sides) {
+    if (this.forcedDice.length > 0) return this.forcedDice.shift();
+    return Math.ceil(Math.random() * sides);
+  }
+
+  /** Clear the used-roster tracker (call at game start / between missions). */
+  resetRoster() {
+    this.usedRosterIndices.clear();
+  }
+
+  /** Mark a survivor roster index as used (by the name shown in the roster). */
+  markRosterUsedByName(name) {
+    const idx = survivorRosterIndexByName(name);
+    if (idx >= 0) this.usedRosterIndices.add(idx);
+  }
+
   // ── Player registry (multiplayer) ──────────────────────────────────────
 
   /**
@@ -336,14 +408,29 @@ export class GameState {
    * @param {number} row
    * @param {boolean} isAI
    */
-  addPlayer(playerId, name, faction, col, row, isAI = false) {
-    const leader = faction === 'hero'
-      ? createHero(col, row, playerId)
-      : createWitch(col, row, playerId);
+  /**
+   * Add a player and create their leader entity.
+   *
+   * @param {string} playerId
+   * @param {string} name
+   * @param {string} faction    side-default faction id ('hero' or 'witch') — wire-compat
+   * @param {number} col
+   * @param {number} row
+   * @param {boolean} [isAI=false]
+   * @param {string} [factionId=null]  specific faction id (e.g. 'rogue'). Defaults
+   *                                   to `faction`. When set to a stub faction
+   *                                   id, the leader gets the stub's entity type
+   *                                   and stats via Faction.createLeader.
+   */
+  addPlayer(playerId, name, faction, col, row, isAI = false, factionId = null) {
+    const def = getFaction(factionId ?? faction);
+    const leader = def.createLeader(col, row, playerId, this);
     leader.name = name;
     this.entities.push(leader);
-    this.players.push({ id: playerId, name, faction, isAI, leaderId: leader.id });
-    // Keep legacy singleton refs pointing at the first hero/witch for offline compat
+    this.players.push({ id: playerId, name, faction, isAI, leaderId: leader.id, factionId: def.id });
+    // Keep legacy singleton refs pointing at the first hero/witch leader for
+    // offline compat. Stub-faction leaders also satisfy these — `state.hero`
+    // continues to mean "the day-side leader" regardless of specific faction.
     if (faction === 'hero'  && !this.hero)  this.hero  = leader;
     if (faction === 'witch' && !this.witch) this.witch = leader;
     return leader;
@@ -352,8 +439,113 @@ export class GameState {
   /** Return the display name of the primary leader for a faction. */
   factionName(faction) {
     const leader = faction === 'hero' ? this.hero : this.witch;
-    return leader?.displayName ?? (faction === 'hero' ? 'The Hero' : 'The Witch');
+    return leader?.displayName ?? (faction === 'hero' ? 'Ishmael Charger' : 'The Witch');
   }
+
+  // ── Side-keyed accessors ───────────────────────────────────────────────
+  // Side ('day' | 'night') is the level at which inventory, actions, kills,
+  // and node scoring are pooled. New factions on the same side share this
+  // pool. These accessors today route to the legacy `hero` / `witch` storage
+  // keys via `_storageKeyForSide()`; the storage rename is queued behind
+  // the save-schema bump in PR 4. See docs/design/faction-expansion.md.
+
+  _storageKeyForSide(sideId) {
+    if (sideId === 'day')   return 'hero';
+    if (sideId === 'night') return 'witch';
+    throw new Error(`Unknown side: ${sideId}`);
+  }
+
+  /**
+   * Swap a leader entity in place to match the supplied faction id.
+   *
+   * By default targets the constructor-pre-populated side singleton
+   * (`'day'` → `state.hero`, `'night'` → `state.witch`); callers may pass
+   * `targetEntity` to re-stat an extra-seat leader on the same side (the
+   * headless runner uses this).
+   *
+   * No-op when:
+   *  - `factionId` is falsy
+   *  - the faction id isn't registered on the given side
+   *  - the target leader is already on this faction
+   *
+   * Mutates the live leader in place — id, position, ownerId, color are
+   * preserved so downstream references (state.hero, plan-action target
+   * lookups, save/replay round entity ids) continue to resolve. Copies
+   * the new faction's `type`, base stats (HP/ATK/DEF), `range`,
+   * `agility`, `factionId`, and the `Faction.createLeader`-stamped
+   * abilities. Clears `name` so `Entity.displayName` falls through to
+   * the new type's default.
+   *
+   * Does NOT copy `attackBonus`, `defenseBonus`, `weapon`, `items`, or
+   * any per-turn flags — latent if anyone ever calls swap mid-game;
+   * currently safe because seats are constructed fresh.
+   *
+   * @param {string} sideId — 'day' | 'night'
+   * @param {string} factionId — any faction id registered on the side
+   * @param {object|null} targetEntity — leader to mutate (defaults to side singleton)
+   */
+  swapLeaderToFaction(sideId, factionId, targetEntity = null) {
+    if (!factionId) return;
+    const def = getFactionsForSide(sideId).find(f => f.id === factionId);
+    if (!def) return;
+
+    const leader = targetEntity ?? (sideId === 'day' ? this.hero : this.witch);
+    if (!leader) return;
+
+    // No-op when swapping to the leader's current faction — preserves
+    // assigned name and avoids redundant ability re-stamping.
+    if (leader.factionId === def.id || leader.type === def.leaderType) return;
+
+    const fresh = def.createLeader(leader.col, leader.row, leader.ownerId, this);
+    leader.type      = fresh.type;
+    leader.maxHp     = fresh.maxHp;
+    leader.hp        = fresh.maxHp;       // full-heal on swap (game just started)
+    leader.attack    = fresh.attack;
+    leader.defense   = fresh.defense;
+    leader.agility   = fresh.agility;
+    leader.range     = fresh.range;
+    leader.factionId = fresh.factionId;
+    // Faction.createLeader already stamped innate abilities on `fresh`.
+    // Replace the leader's ability list to drop any abilities that the
+    // new faction has stripped (e.g. RogueFaction returning [] strips
+    // sound_horn from a paladin → rogue swap), then re-add survivor-style
+    // abilities the leader had picked up at runtime (none today, but
+    // this is the natural extension point).
+    leader.abilities = [...(fresh.abilities || [])];
+    // Clear the constructor-assigned name ('Ishmael Charger' for the day
+    // side default, 'Witch' for night) so Entity.displayName falls through
+    // to the new type's default (e.g. 'Mercy Sloane' for ROGUE).
+    leader.name = null;
+  }
+
+  /** Resource inventory shared by all factions on the given side. */
+  inventoryForSide(sideId)   { return this.inventory[this._storageKeyForSide(sideId)]; }
+
+  /** Actions remaining for the given side this planning phase (legacy 2-player budget). */
+  actionsLeftForSide(sideId) {
+    return sideId === 'day' ? this.heroActionsLeft : this.witchActionsLeft;
+  }
+
+  /** Cumulative kills credited to the given side. */
+  killsForSide(sideId)       { return sideId === 'day' ? this.heroKills : this.witchKills; }
+
+  /** Increment the kill counter for the given side by `n` (default 1). */
+  recordKillForSide(sideId, n = 1) {
+    if (sideId === 'day')   this.heroKills  += n;
+    if (sideId === 'night') this.witchKills += n;
+  }
+
+  /** Cumulative summons performed by the given side. (Day side: 0 today.) */
+  summonsForSide(sideId)     { return sideId === 'night' ? this.witchSummonCount : 0; }
+
+  /** Increment the summon counter for the given side by `n` (default 1). */
+  recordSummonForSide(sideId, n = 1) {
+    if (sideId === 'night') this.witchSummonCount += n;
+    // Day side has no summon mechanic today — counter is not tracked.
+  }
+
+  /** Cumulative node-scoring points held by the given side. */
+  nodeScoreForSide(sideId)   { return this.nodeScore[this._storageKeyForSide(sideId)]; }
 
   /** Return the leader entity for a given playerId (or null if dead/missing). */
   getLeader(playerId) {
@@ -384,6 +576,11 @@ export class GameState {
    * and the per-player maps used by the multiplayer resolver.
    */
   startPlanning() {
+    // First-round hook: final player count is now known (all addPlayer calls
+    // have completed). Scale the hidden-survivor pool to the team size so
+    // NvN hero teams don't compound recruitment from a fixed 1v1 pool.
+    if (this.round === 1) this._rebalanceHiddenSurvivorsForTeamSize();
+
     this.planningPhase    = true;
     this.resolving        = false;
     this.heroPlan         = null;
@@ -455,9 +652,7 @@ export class GameState {
         // Pick a spawn position in the faction's starting columns
         const spawnPos = this._pickBattleSpawn(p.faction);
         if (spawnPos) {
-          const leader = p.faction === 'hero'
-            ? createHero(spawnPos.col, spawnPos.row, p.id)
-            : createWitch(spawnPos.col, spawnPos.row, p.id);
+          const leader = getFaction(p.faction).createLeader(spawnPos.col, spawnPos.row, p.id, this);
           leader.name = p.name;
           this.entities.push(leader);
           p.leaderId = leader.id;
@@ -584,9 +779,14 @@ export class GameState {
   endRound() {
     this.resolving = false;
 
-    // Faction-specific end-of-round effects (healing, spawning, etc.)
-    for (const faction of allFactions()) {
-      faction.applyEndOfRoundEffects(this);
+    // Side-level end-of-round effects (healing, spawning, etc.). With stub
+    // factions inheriting their parent side's behaviour, iterating
+    // `allFactions()` here would fire each side's effects once per faction
+    // on that side — see PR 5 of docs/design/faction-expansion.md. We
+    // iterate sides instead and dispatch on each side's primary faction.
+    for (const sideId of allSides()) {
+      const primary = getFactionsForSide(sideId)[0];
+      if (primary) primary.applyEndOfRoundEffects(this);
     }
 
     // Advance round and phase.
@@ -622,6 +822,15 @@ export class GameState {
     }
     if (this.phase === Phase.DUSK) {
       if (!this.disableScoring) this._checkNodeObjectives(Phase.DUSK);
+    }
+
+    // Mission opt-in: score on additional phases (e.g. NIGHT for "prolonged
+    // night" missions). Inert when cycleConfig is absent or doesn't list extras.
+    const extraScoring = this.cycleConfig?.extraScoringPhases;
+    if (extraScoring && !this.disableScoring
+        && this.phase !== Phase.DAWN && this.phase !== Phase.DUSK
+        && extraScoring.includes(this.phase)) {
+      this._checkNodeObjectives(this.phase);
     }
 
     // Battle mode: score every round (not just dawn/dusk)
@@ -753,7 +962,7 @@ export class GameState {
   scatterPlayerUnits(ownerId) {
     const isBattle = this.gameMode === GameMode.BATTLE;
     const toScatter = this.entities.filter(
-      e => e.ownerId === ownerId && e.type !== EntityType.HERO && e.type !== EntityType.WITCH
+      e => e.ownerId === ownerId && !isLeaderType(e.type)
     );
     for (const unit of toScatter) {
       if (isBattle) {
@@ -781,7 +990,10 @@ export class GameState {
     }
     const player = this.players.find(p => p.id === ownerId);
     if (player) {
-      const label = player.name || (player.faction === 'hero' ? 'The Hero' : 'The Witch');
+      // Prefer the live leader's displayName (picks up stub names like
+      // "Mercy Sloane" automatically), fall back to the side default.
+      const leader = this.entities.find(e => e.id === player.leaderId);
+      const label = player.name ?? leader?.displayName ?? this.factionName(player.faction);
       if (toScatter.length > 0) {
         this.addLog(`💨 ${label}'s companions scatter into the wilderness…`);
       }
@@ -826,8 +1038,9 @@ export class GameState {
       if (ctrl === 'hero')  heroCount++;
     }
 
-    // Instant win: sweep all nodes (disabled in battle mode)
-    if (!isBattle && witchCount === nodeCount) {
+    // Instant win: sweep all nodes (disabled in battle mode, and opt-out
+    // for campaign missions that drive loss from accumulated points only).
+    if (!isBattle && !this.disableNodeSweep && witchCount === nodeCount) {
       this.winner    = 'witch';
       this.winReason = isDawn ? WIN_REASON.NODES_WITCH : WIN_REASON.NODES_WITCH_DUSK;
       this.addLog(isDawn
@@ -835,7 +1048,7 @@ export class GameState {
         : `🌙 As dusk falls, ${this.factionName('witch')} holds all Power Nodes! The ritual advances!`);
       return;
     }
-    if (!isBattle && heroCount === nodeCount) {
+    if (!isBattle && !this.disableNodeSweep && heroCount === nodeCount) {
       this.winner    = 'hero';
       this.winReason = isDawn ? WIN_REASON.NODES_HERO : WIN_REASON.NODES_HERO_DUSK;
       this.addLog(isDawn
@@ -848,19 +1061,27 @@ export class GameState {
     if (witchCount > heroCount) {
       this.nodeScore.witch++;
       this.addLog(`🌙 At ${phaseLabel}: ${this.factionName('witch')} leads ${witchCount}–${heroCount}. Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);
+      // Mission opt-in: prolong the night. Each witch score appends extra
+      // phases to the active cycle (e.g. another 'night' turn). Inert when
+      // cycleConfig is absent or extendOnWitchScore is unset.
+      const extend = this.cycleConfig?.extendOnWitchScore;
+      if (extend && extend.length) {
+        this.cycleConfig.phases.push(...extend);
+        this.addLog(`🌑 The night deepens — the dawn slips further away.`);
+      }
       // Score threshold win (disabled in battle mode — runs until time expires)
-      if (!isBattle && this.nodeScore.witch >= 4) {
+      if (!isBattle && !this.disableScoreWin && this.nodeScore.witch >= this.nodeScoreThreshold) {
         this.winner    = 'witch';
         this.winReason = WIN_REASON.SCORE_WITCH;
-        this.addLog(`🌙 ${this.factionName('witch')} has claimed three ritual moments — Caleb's Hollow falls to darkness!`);
+        this.addLog(`🌙 ${this.factionName('witch')} has claimed ${this.nodeScoreThreshold} ritual moments — Caleb's Hollow falls to darkness!`);
       }
     } else if (heroCount > witchCount) {
       this.nodeScore.hero++;
       this.addLog(`☀ At ${phaseLabel}: ${this.factionName('hero')} leads ${heroCount}–${witchCount}. Score — Hero ${this.nodeScore.hero} / Witch ${this.nodeScore.witch}`);
-      if (!isBattle && this.nodeScore.hero >= 4) {
+      if (!isBattle && !this.disableScoreWin && this.nodeScore.hero >= this.nodeScoreThreshold) {
         this.winner    = 'hero';
         this.winReason = WIN_REASON.SCORE_HERO;
-        this.addLog(`☀ ${this.factionName('hero')} has broken the ritual three times — Caleb's Hollow is saved!`);
+        this.addLog(`☀ ${this.factionName('hero')} has broken the ritual ${this.nodeScoreThreshold} times — Caleb's Hollow is saved!`);
       }
     } else {
       this.addLog(`⚖ At ${phaseLabel}: nodes tied (${witchCount}–${heroCount}). Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);
@@ -923,7 +1144,7 @@ export class GameState {
         if (obj[key]) continue; // already discovered
         obj[key] = this.entities.some(e => {
           if (!e.alive || e.owner !== fac.id) return false;
-          const range = fac.getSightRange(this.phase, e.ability === SurvivorAbility.SCOUT);
+          const range = sightRangeForEntity(e, this.phase);
           return obj.hexes.some(h => hexDistance(e.col, e.row, h.col, h.row) <= range);
         });
       }
@@ -949,7 +1170,7 @@ export class GameState {
       const visible = new Set();
       for (const e of this.entities) {
         if (!e.alive || e.owner !== factionId) continue;
-        const range = factionObj.getSightRange(this.phase, e.ability === SurvivorAbility.SCOUT);
+        const range = sightRangeForEntity(e, this.phase);
         const rMin = Math.max(0, e.row - range);
         const rMax = Math.min(MAP_ROWS - 1, e.row + range);
         const cMin = Math.max(0, e.col - range);
@@ -976,12 +1197,11 @@ export class GameState {
     if (!entity) return null;
     if (entity.ownerId) {
       const leader = this.entities.find(e =>
-        e.ownerId === entity.ownerId &&
-        (e.type === EntityType.HERO || e.type === EntityType.WITCH)
+        e.ownerId === entity.ownerId && isLeaderType(e.type)
       );
       if (leader?.color) return leader.color;
     }
-    if (entity.owner === 'hero')  return ENTITY_COLOR[EntityType.HERO];
+    if (entity.owner === 'hero')  return ENTITY_COLOR[EntityType.PALADIN];
     if (entity.owner === 'witch') return ENTITY_COLOR[EntityType.WITCH];
     return null;
   }
@@ -1039,6 +1259,15 @@ export class GameState {
     // If not enough buildings were available, spill the remainder into terrain
     const terrainNeeded = totalNeeded - pickedBuildings.length;
     shuffle(terrain).slice(0, terrainNeeded).forEach(t => { t.hiddenSurvivor = true; });
+  }
+
+  // Currently a no-op — retained as a hook for NvN-aware survivor tuning.
+  // Previous iterations scaled the pool up or down here; the current balance
+  // comes from scaled minion cap + NvN loot bonus, which raises witch-side
+  // density without needing additional hero survivors.
+  _rebalanceHiddenSurvivorsForTeamSize() {
+    if (this._survivorsRebalanced) return;
+    this._survivorsRebalanced = true;
   }
 
   toJSON() {

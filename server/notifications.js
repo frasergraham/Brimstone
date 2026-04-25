@@ -209,7 +209,7 @@ export async function notifyGameOver(playerId, gameInfo, opts) {
   if (!_shouldSend(gameInfo.roomId, playerId, 'game_over')) { console.log(`[Notify] dedup suppressed game_over`); return; }
   _record(gameInfo.roomId, playerId, 'game_over');
 
-  const winnerLabel = gameInfo.winner === 'hero' ? 'The Hero' : 'The Witch';
+  const winnerLabel = gameInfo.winner === 'hero' ? 'The Day side' : 'The Night side';
 
   if (hasDeviceTokens(playerId)) {
     console.log(`[Notify] sending push for game_over to player=${playerId}`);

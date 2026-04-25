@@ -23,7 +23,8 @@ import { WitchAIEngine }        from '../src/ai-engine.js';
 import { resolvePlansMP, ResEventType } from '../server/resolver.js';
 import { PlanActionType }         from '../src/planner.js';
 import { generateMultipleStarts, generateBattleStarts, MAP_SIZES } from '../src/map.js';
-import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS } from '../src/entities.js';
+import { HERO_PLAYER_COLORS, WITCH_PLAYER_COLORS, EntityType, isLeaderType } from '../src/entities.js';
+import { getFaction, getFactionsForSide } from '../src/factions.js';
 import { serializeState }         from '../server/state-sync.js';
 import { VERSION }                from '../src/version.js';
 import { serializeGameStateForLLM, serializePlanForLLM } from './training-data.js';
@@ -56,11 +57,25 @@ if (playersIdx !== -1 && process.argv[playersIdx + 1]) {
   PER_SIDE_EXPLICIT = true;
 }
 
+// Per-side faction selection: --day=<factionId> / --night=<factionId>.
+// Defaults: 'hero' (Paladin) for day, 'witch' for night. Stub factions
+// (rogue/captain/necromancer/brute) are accepted; they swap the leader's
+// stats via state.swapLeaderToFaction after each game's state is built.
+let DAY_FACTION   = 'hero';
+let NIGHT_FACTION = 'witch';
+const _kvFlag = (prefix) => {
+  const arg = process.argv.find(a => a.startsWith(prefix));
+  return arg ? arg.slice(prefix.length) : null;
+};
+DAY_FACTION   = _kvFlag('--day=')   ?? DAY_FACTION;
+NIGHT_FACTION = _kvFlag('--night=') ?? NIGHT_FACTION;
+
 // Positional args (everything that isn't a flag or flag value)
 const flagSet = new Set(['--render', '--players', '--training-data']);
 const positionalArgs = [];
 for (let i = 2; i < process.argv.length; i++) {
   if (flagSet.has(process.argv[i])) { if (process.argv[i] === '--players') i++; continue; }
+  if (process.argv[i].startsWith('--day=') || process.argv[i].startsWith('--night=')) continue;
   positionalArgs.push(process.argv[i]);
 }
 
@@ -83,6 +98,25 @@ if (!MAP_SIZES[MAP_SIZE]) {
   console.error(`Unknown map size "${MAP_SIZE}". Valid: ${Object.keys(MAP_SIZES).join(', ')}`);
   process.exit(1);
 }
+
+// Validate --day / --night picks against the registered factions for each side.
+const _dayIds   = getFactionsForSide('day').map(f => f.id);
+const _nightIds = getFactionsForSide('night').map(f => f.id);
+if (!_dayIds.includes(DAY_FACTION)) {
+  console.error(`Unknown --day faction "${DAY_FACTION}". Valid: ${_dayIds.join(', ')}`);
+  process.exit(1);
+}
+if (!_nightIds.includes(NIGHT_FACTION)) {
+  console.error(`Unknown --night faction "${NIGHT_FACTION}". Valid: ${_nightIds.join(', ')}`);
+  process.exit(1);
+}
+// Apply the swap whenever the picked faction differs from the side's
+// primary. (Used to gate on isStub(), but factions like rogue can have
+// real distinct behaviour while still needing the leader-stat swap.)
+const _SIDE_DAY_PRIMARY   = getFactionsForSide('day')[0].id;
+const _SIDE_NIGHT_PRIMARY = getFactionsForSide('night')[0].id;
+const _SWAP_DAY   = DAY_FACTION   !== _SIDE_DAY_PRIMARY;
+const _SWAP_NIGHT = NIGHT_FACTION !== _SIDE_NIGHT_PRIMARY;
 
 const IS_BATTLE = MAP_SIZE === 'battle';
 
@@ -167,7 +201,32 @@ function buildGameState() {
     if (leader) leader.color = colors[idx % colors.length];
   }
 
+  // Re-stat every leader on a side that picked a non-default faction.
+  // swapLeaderToFaction handles state.hero / state.witch (the side
+  // singletons); for extra players we apply the same in-place mutation
+  // pattern manually so all leaders on a side share the picked stats.
+  if (_SWAP_DAY)   _applyFactionSwapToSide(state, 'day',   DAY_FACTION);
+  if (_SWAP_NIGHT) _applyFactionSwapToSide(state, 'night', NIGHT_FACTION);
+
   return state;
+}
+
+/** Apply a non-default faction's stats to every leader on a side. */
+function _applyFactionSwapToSide(state, sideId, factionId) {
+  // Side singleton hero/witch first (targetEntity omitted ⇒ defaults to it).
+  state.swapLeaderToFaction(sideId, factionId);
+
+  // Then every extra-seat leader on the same side. swapLeaderToFaction
+  // no-ops when the target's faction already matches, so we can pass
+  // every same-side leader without per-entity gating.
+  const sideOwner = sideId === 'day' ? 'hero' : 'witch';
+  const sidePrimaryType = getFactionsForSide(sideId)[0].leaderType;
+  for (const e of state.entities) {
+    if (!e.alive || e.owner !== sideOwner) continue;
+    if (e.type !== sidePrimaryType) continue; // already swapped / not a default leader
+    if (e === state.hero || e === state.witch) continue; // singleton already handled
+    state.swapLeaderToFaction(sideId, factionId, e);
+  }
 }
 
 // ── Ally context helpers (MP planning) ────────────────────────────────────────
@@ -204,8 +263,9 @@ function playRound(state, playerAIs, trainingExamples = null) {
 
     const ai  = playerAIs.get(p.id);
     const ctx = p.faction === 'hero' ? heroCtx : witchCtx;
-    const leader = state.entities.find(e => e.alive && e.ownerId === p.id &&
-      (e.type === 'hero' || e.type === 'witch'));
+    const leader = state.entities.find(e =>
+      e.alive && e.ownerId === p.id && isLeaderType(e.type)
+    );
     const plan = ai.generatePlan(IS_MP ? ctx : undefined);
     updateAllyContext(ctx, plan, leader);
     state.submitPlayerPlan(p.id, plan);
@@ -456,10 +516,7 @@ function runGame() {
 // ── Render mode ───────────────────────────────────────────────────────────────
 
 if (RENDER_MODE) {
-  const { renderGameState, loadTilemap } = await import('./game-render.js');
-  const { createCanvas, loadImage } = await import('canvas');
-  const { default: GIFEncoder } = await import('gif-encoder-2');
-
+  const { renderGameState, loadTilemap, renderFramesToGif } = await import('./game-render.js');
   await loadTilemap(path.join(__dirname, '..', 'assets', 'tilemap.png'));
 
   console.log(`\nBrimstone render — ${label} — cap=${MAX_ROUNDS}r\n`);
@@ -483,35 +540,11 @@ if (RENDER_MODE) {
   }
 
   // Final frame — hold longer
-  const lastLog = state.log.slice(-15);
-  frames.push(renderGameState(state, { chronicle: lastLog }));
+  frames.push(renderGameState(state, { chronicle: state.log.slice(-15) }));
 
   console.log(`\n  ${frames.length} frames captured. Encoding GIF…`);
-
-  const firstImg = await loadImage(frames[0]);
-  const w = firstImg.width;
-  const h = firstImg.height;
-
-  const encoder = new GIFEncoder(w, h);
-  encoder.setDelay(800);
-  encoder.setRepeat(0);
-  encoder.setQuality(10);
-  encoder.start();
-
-  for (let i = 0; i < frames.length; i++) {
-    if (i === frames.length - 1) encoder.setDelay(3000);
-    const img    = await loadImage(frames[i]);
-    const canvas = createCanvas(w, h);
-    const ctx    = canvas.getContext('2d');
-    ctx.drawImage(img, 0, 0);
-    encoder.addFrame(ctx);
-  }
-
-  encoder.finish();
-
-  fs.mkdirSync(path.dirname(RENDER_OUT), { recursive: true });
-  fs.writeFileSync(RENDER_OUT, encoder.out.getData());
-  console.log(`  GIF saved → ${RENDER_OUT}  (${(fs.statSync(RENDER_OUT).size / 1024).toFixed(0)} KB)\n`);
+  const result = await renderFramesToGif(frames, RENDER_OUT);
+  console.log(`  GIF saved → ${RENDER_OUT}  (${(result.bytes / 1024).toFixed(0)} KB)\n`);
 
   process.exit(0);
 }
@@ -541,6 +574,11 @@ const results = [];
 const errors  = [];
 const startMs = Date.now();
 
+if (DAY_FACTION !== 'hero' || NIGHT_FACTION !== 'witch') {
+  const dayBadge   = getFaction(DAY_FACTION).isStub()   ? ' (stub)' : '';
+  const nightBadge = getFaction(NIGHT_FACTION).isStub() ? ' (stub)' : '';
+  console.log(`  Factions: day=${DAY_FACTION}${dayBadge}  night=${NIGHT_FACTION}${nightBadge}`);
+}
 process.stdout.write('  Running ');
 for (let i = 0; i < N; i++) {
   try {

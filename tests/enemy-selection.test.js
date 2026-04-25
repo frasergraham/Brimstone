@@ -129,7 +129,7 @@ describe('_handleSelection enemy fallback', () => {
 
   test('clicking hex with friendly unit does not select enemy even if present', () => {
     const { ui, state } = makeUI();
-    const hero = state.entities.find(e => e.owner === 'hero' && e.type === 'hero');
+    const hero = state.entities.find(e => e.owner === 'hero' && e.type === 'paladin');
     assert.ok(hero);
 
     // Place a witch minion on the hero's hex

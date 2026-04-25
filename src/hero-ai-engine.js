@@ -13,8 +13,10 @@ import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, nearestBuilding
 import { EnginePlanSimState, BaseAIEngine, allocateBudget, assemblePlan, clamp01, updateAllyClaimedNodes, personalityName } from './ai-engine.js';
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
-import { EntityType } from './entities.js';
+import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf, SurvivorAbility } from './entities.js';
 import { TileType, ResourceType } from './tiles.js';
+import { ITEMS } from './items.js';
+import { concreteFactionOf, sightRangeForEntity } from './factions.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
 
 // ── Goal names ───────────────────────────────────────────────────────────────
@@ -76,6 +78,35 @@ export const HERO_PERSONALITY_CONFIGS = Object.freeze({
     fortifyCapDay: 2,
     fortifyCapNight: 3,
   }),
+  // Node denial: clear and hold every Power Node. Used by campaign
+  // missions where the only victory check is "no witch on a node at dawn"
+  // or "hero on every node at dawn" — exploring/hunting the witch is a
+  // distraction. Heavy CONTROL_NODES, near-zero HUNT_WITCH/EXPLORE.
+  // `campaignOnly: true` keeps it out of the ai-matrix balance grid.
+  node_denier: Object.freeze({
+    goalWeights: Object.freeze({
+      [HeroGoal.EXPLORE]: 0.3, [HeroGoal.CONTROL_NODES]: 2.2, [HeroGoal.PROTECT_HERO]: 0.4, [HeroGoal.HUNT_WITCH]: 0.2,
+    }),
+    engageFloor: 'suicidal',
+    shelterThreshold: 0.15,
+    fortifyCapDay: 1,
+    fortifyCapNight: 2,
+    campaignOnly: true,
+  }),
+  // Witch hunter: kill the witch and nothing else. For missions where the
+  // sole victory is slay_witch and node-holding is meaningless (or even
+  // counterproductive — splitting from the hunting party).
+  // `campaignOnly: true` keeps it out of the ai-matrix balance grid.
+  witch_hunter: Object.freeze({
+    goalWeights: Object.freeze({
+      [HeroGoal.EXPLORE]: 0.3, [HeroGoal.CONTROL_NODES]: 0.4, [HeroGoal.PROTECT_HERO]: 0.3, [HeroGoal.HUNT_WITCH]: 2.5,
+    }),
+    engageFloor: 'suicidal',
+    shelterThreshold: 0.15,
+    fortifyCapDay: 1,
+    fortifyCapNight: 2,
+    campaignOnly: true,
+  }),
 });
 
 // ── HeroEnginePlanSimState ───────────────────────────────────────────────────
@@ -106,18 +137,19 @@ export function assessHeroBoard(sim) {
   );
   const survivorCount = survivors.length;
 
-  // Fog-of-war awareness
+  // Fog-of-war awareness — per-entity sight so stub-faction bonuses
+  // (rogue +1) apply.
   const heroSideUnits = sim.entities.filter(e => e.alive && e.owner === 'hero');
   function _heroCanSee(target) {
     return heroSideUnits.some(viewer => {
-      const range = viewer.type === EntityType.SURVIVOR && viewer.ability === 'scout'
-        ? _heroSightBase(phase) + 1
-        : _heroSightBase(phase);
+      const range = sightRangeForEntity(viewer, phase);
       return hexDistance(viewer.col, viewer.row, target.col, target.row) <= range;
     });
   }
 
-  const witchEntity = sim.entities.find(e => e.alive && e.type === EntityType.WITCH);
+  // Any night-side leader (Witch / Necromancer / Brute) is the "witch" for
+  // the hero AI's threat evaluation.
+  const witchEntity = sim.entities.find(e => e.alive && e.owner === 'witch' && isLeaderType(e.type));
   const witch = witchEntity && _heroCanSee(witchEntity) ? witchEntity : null;
   const witchVisible = !!witch;
   let witchDistance = Infinity;
@@ -128,13 +160,13 @@ export function assessHeroBoard(sim) {
   }
 
   const witchMinions = sim.entities.filter(e =>
-    e.alive && e.owner === 'witch' && e.type !== EntityType.WITCH && _heroCanSee(e)
+    e.alive && e.owner === 'witch' && !isLeaderType(e.type) && _heroCanSee(e)
   );
   const witchMinionCount = witchMinions.length;
-  const heroArmyStrength = (hero ? hero.attack + hero.hp : 0) +
-    survivors.reduce((s, e) => s + e.attack + e.hp, 0);
-  const witchArmyStrength = (witch ? witch.attack + witch.hp : 0) +
-    witchMinions.reduce((s, e) => s + e.attack + e.hp, 0);
+  const heroArmyStrength = (hero ? attackOf(hero) + hero.hp : 0) +
+    survivors.reduce((s, e) => s + attackOf(e) + e.hp, 0);
+  const witchArmyStrength = (witch ? attackOf(witch) + witch.hp : 0) +
+    witchMinions.reduce((s, e) => s + attackOf(e) + e.hp, 0);
 
   // Node state
   const objectives = sim.witchObjectives || [];
@@ -170,8 +202,16 @@ export function assessHeroBoard(sim) {
   const herbCount = sim.inventory?.hero?.[ResourceType.HERBS] || 0;
   const foodCount = sim.inventory?.hero?.[ResourceType.FOOD] || 0;
 
+  // Only list weapons the hero's concrete faction allows — RogueFaction
+  // refuses melee, so a stray sword in a rogue's pack must NOT queue an
+  // EQUIP_WEAPON that executeUseItem will reject (burns a planning slot
+  // and disagrees with the ghost preview).
+  const heroFaction = hero ? concreteFactionOf(hero) : null;
   const heroWeapons = hero?.items
-    ? Object.keys(hero.items).filter(k => k.startsWith('weapon:') && hero.items[k] > 0)
+    ? Object.keys(hero.items).filter(k =>
+        ITEMS[k]?.kind === 'weapon' &&
+        hero.items[k] > 0 &&
+        (!heroFaction || heroFaction.canEquipWeaponItem(k)))
     : [];
 
   const shared = sim.inventory?.hero || {};
@@ -231,6 +271,8 @@ export function assessHeroBoard(sim) {
     heroOnNode, heroInBuilding, heroTileExplored, heroTileFortLevel,
     nearestEnemyDist,
     totalBudget: sim.actionsLeft,
+    heroPlayerCount:  (sim.playerCounts && sim.playerCounts.hero)  || 1,
+    witchPlayerCount: (sim.playerCounts && sim.playerCounts.witch) || 1,
   };
 }
 
@@ -325,25 +367,35 @@ export function scoreHeroGoals(board, goalWeights = null) {
 // ── Combat estimation (hero-perspective) ─────────────────────────────────────
 
 export function estimateHeroCombat(attacker, defender, board) {
-  // Witch gets +2 ATK at night — account for it when estimating defense
+  // Witch gets +2 ATK at night — account for it when estimating the defender's
+  // effective strength (the AI should avoid attacking witch units at night).
   const defNightBonus = board.isNight && defender.owner === 'witch' ? 2 : 0;
 
-  const allies = [board.hero, ...board.survivors].filter(e =>
+  // Ranged attackers (range > 1) don't benefit from — or fear — adjacency:
+  // no attacker gang-up, no defender ally-defence. Mirrors the witch's
+  // estimateCombat (src/ai-engine.js) and matches executeBattle's actual
+  // dice math so the rogue's combat estimate isn't off-by-gang-up.
+  const attackerRange = attacker.range ?? 1;
+  const isRanged = attackerRange > 1;
+
+  const allies = isRanged ? [] : [board.hero, ...board.survivors].filter(e =>
     e && e.id !== attacker.id && hexDistance(e.col, e.row, defender.col, defender.row) <= 1
   );
-  const gangUpDice = Math.min(allies.length, 3);
+  const gangUpDice = Math.min(allies.length, ADVANTAGE_CAP);
 
-  const defAllies = [board.witch, ...board.witchMinions].filter(e =>
+  const defAllies = isRanged ? [] : [board.witch, ...board.witchMinions].filter(e =>
     e && e.id !== defender.id && hexDistance(e.col, e.row, defender.col, defender.row) <= 1
   );
-  const defAllyDice = Math.min(defAllies.length, 3);
+  const defAllyDice = Math.min(defAllies.length, ADVANTAGE_CAP);
 
   const fortBonus = defender.fortification || 0;
   const atkBonus = attacker.attackBonus || 0;
   const defBonus = defender.defenseBonus || 0;
 
-  const expectedAtk = (attacker.attack || 0) + atkBonus + 3.5 + gangUpDice * 2;
-  const expectedDef = (defender.defense || 0) + defBonus + fortBonus + 3.5 + defAllyDice * 2 + defNightBonus;
+  const atkGangupFlat = Math.min(allies.length, ADVANTAGE_CAP);
+  const defGangupFlat = Math.min(defAllies.length, ADVANTAGE_CAP);
+  const expectedAtk = attackOf(attacker) + atkBonus + atkGangupFlat + expectedDieValue(gangUpDice);
+  const expectedDef = defenseOf(defender) + defBonus + fortBonus + defNightBonus + defGangupFlat + expectedDieValue(defAllyDice);
 
   const favorability = expectedAtk - expectedDef;
   const expectedDamage = favorability > 0 ? (favorability > 3 ? 2 : 1) : 0;
@@ -556,10 +608,14 @@ export function genExplore(sim, board, budget, config = null) {
     }
   }
 
-  // Sound Horn: spend 1 food + 1 AP to recruit hidden survivors — do it aggressively
+  // Sound Horn: spend 1 food + 1 AP to recruit hidden survivors — do it aggressively.
+  // NvN: tighten the ceiling so survivor growth doesn't scale faster with team
+  // size than minion growth (hidden survivors + horning compound otherwise).
   const nodeCount = board.nodes.length || 3;
+  const heroCount = board.heroPlayerCount || 1;
+  const survivorCeiling = heroCount > 1 ? nodeCount : nodeCount + 1;
   if (remaining > 0 && board.foodCount >= 1 && board.unexploredBuildings.length >= 1 &&
-      board.survivorCount < nodeCount + 1) {
+      board.survivorCount < survivorCeiling) {
     actions.push({
       type: PlanActionType.SOUND_HORN, entityId: board.hero.id,
       _priority: 3, _goal: HeroGoal.EXPLORE,
@@ -691,11 +747,15 @@ export function genControlNodes(sim, board, budget, config = null) {
   for (const node of targetNodes) {
     if (remaining <= 0) break;
 
-    // Send multiple units to nodes — overwhelm witch minions
+    // Send multiple units to nodes — overwhelm witch minions.
+    // NvN: cap at 2 so hero teams don't over-concentrate 3 units on a single
+    // node and leave the rest uncovered. 1v1 retains the 3-unit overwhelm.
     const enemyOnNode = node.witchPresent;
     const scoringImminent = board.roundsToScoring <= 2;
     const contested = enemyOnNode || (scoringImminent && node.feasibility >= 0.3);
-    const unitsForNode = enemyOnNode ? 3 : (contested ? 2 : (scoringImminent ? 2 : 1));
+    const isNvN = (board.heroPlayerCount || 1) > 1;
+    const overwhelmCap = isNvN ? 2 : 3;
+    const unitsForNode = enemyOnNode ? overwhelmCap : (contested ? 2 : (scoringImminent ? 2 : 1));
 
     for (let u = 0; u < unitsForNode; u++) {
       if (remaining <= 0) break;
@@ -851,12 +911,16 @@ export function genHuntWitch(sim, board, budget) {
     hexDistance(m.col, m.row, board.witch.col, board.witch.row) <= 2
   ).length : 0;
 
-  // Priority targets: kill adjacent minions first (clear path), then witch
+  // Priority targets: kill in-range minions first (clear path), then witch.
+  // For ranged leaders (rogue, range 3) "in range" extends to the unit's
+  // actual attack range so we don't drop priority targets the rogue can
+  // already shoot.
+  const heroAttackRange = heroEntity.range ?? 1;
   const targets = [];
 
-  // Kill adjacent minions first — clear gang-up before engaging witch
+  // Kill in-range minions first — clear gang-up before engaging witch
   for (const m of board.witchMinions) {
-    const nearHero = hexDistance(heroEntity.col, heroEntity.row, m.col, m.row) <= 1;
+    const nearHero = hexDistance(heroEntity.col, heroEntity.row, m.col, m.row) <= heroAttackRange;
     if (nearHero) {
       targets.push({ entity: m, priority: 2 });
     }
@@ -876,9 +940,10 @@ export function genHuntWitch(sim, board, budget) {
   for (const target of targets) {
     if (remaining <= 0) break;
 
-    // Hero hunts witch; any uncommitted unit clears adjacent minions
-    const isWitch = target.entity.type === EntityType.WITCH;
-    const unit = isWitch
+    // Day-side leader hunts any night-side leader; any uncommitted unit
+    // clears adjacent minions.
+    const isEnemyLeader = target.entity.owner === 'witch' && isLeaderType(target.entity.type);
+    const unit = isEnemyLeader
       ? (sim.unitCommitments.has(heroEntity.id) ? null : heroEntity)
       : _closestUncommittedHero(sim, board, target.entity, true);
     if (!unit) continue;
@@ -887,12 +952,15 @@ export function genHuntWitch(sim, board, budget) {
     if (!simUnit) continue;
 
     const dist = hexDistance(simUnit.col, simUnit.row, target.entity.col, target.entity.row);
+    // Per-unit attack range — ranged hero leaders (rogue, range 3) can
+    // strike from further than 1 hex without closing.
+    const unitRange = simUnit.range ?? 1;
 
-    // Adjacent — attack immediately
-    if (dist <= 1) {
+    // In range — attack immediately
+    if (dist <= unitRange) {
       const est = estimateHeroCombat(simUnit, target.entity, board);
       // Skip suicidal attacks on minions; always attack witch with hero
-      if (est.classification === 'suicidal' && !isWitch) continue;
+      if (est.classification === 'suicidal' && !isEnemyLeader) continue;
       actions.push({
         type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
         targetId: target.entity.id, targetCol: target.entity.col, targetRow: target.entity.row,
@@ -904,17 +972,18 @@ export function genHuntWitch(sim, board, budget) {
       continue;
     }
 
-    // Within pursuit range — move toward and attack
-    const pursuitRange = isWitch ? 6 : 2;
+    // Within pursuit range — move toward and attack. Ranged units extend
+    // pursuit range so they don't give up on a target one step out of bow shot.
+    const pursuitRange = (isEnemyLeader ? 6 : 2) + (unitRange - 1);
     if (dist <= pursuitRange) {
       sim.unitCommitments.set(simUnit.id, HeroGoal.HUNT_WITCH);
-      let stepsLeft = Math.min(remaining, isWitch ? 4 : 2);
+      let stepsLeft = Math.min(remaining, isEnemyLeader ? 4 : 2);
 
       while (stepsLeft > 0) {
         const curDist = hexDistance(simUnit.col, simUnit.row, target.entity.col, target.entity.row);
-        if (curDist <= 1) {
+        if (curDist <= unitRange) {
           const est = estimateHeroCombat(simUnit, target.entity, board);
-          if (est.classification !== 'suicidal' || isWitch) {
+          if (est.classification !== 'suicidal' || isEnemyLeader) {
             actions.push({
               type: PlanActionType.BATTLE_UNIT, entityId: simUnit.id,
               targetId: target.entity.id, targetCol: target.entity.col, targetRow: target.entity.row,

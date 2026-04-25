@@ -313,7 +313,7 @@ Each round uses **simultaneous planning** instead of sequential turns:
 Move, Explore, Battle, Fortify (hero), Summon (witch), Use Item, Equip Weapon, Use Ability. Costs and rules are defined in `src/actions.js` — refer to the code for current values as they are frequently tuned.
 
 ### Combat
-Dice-based with attack/defense rolls, phase bonuses, gang-up bonuses, and fortification. See `Entity.resolveCombat()` in `src/entities.js` for the current formula. Key outcomes: hit (1 damage), crush (2 damage), counter (1 damage to attacker).
+Dice-based with attack/defense rolls. Each side rolls a pool of 1+K d6 (K = net advantage, capped at `ADVANTAGE_CAP=4`) and takes best (advantage) or worst (disadvantage). Gang-up allies grant +1 advantage die *and* +1 flat per ally (capped at `ADVANTAGE_CAP`). Phase bonus (witch at night), silver weapon, and fortification stay flat. Staff vs undead/minions/golems grants attacker advantage. See `Entity.resolveCombat()` in `src/entities.js` for the formula. Key outcomes: hit (1 damage), crush (2 damage), counter (1 damage to attacker).
 
 ### Entity Types
 Hero, Witch, Survivor (recruited by hero), Zombie (encountered), Minion/Wood Golem/Iron Golem (summoned by witch). Stats are defined in `src/entities.js` factory functions — check the code for current values.
@@ -418,6 +418,76 @@ Palette colors as CSS custom properties on `:root`. Dark gothic theme. Canvas co
 
 ---
 
+## How to Add Content
+
+The units/items/abilities refactor (Phases 1–6, landed in PR #294) made content additions data-driven. For common content additions, the following one-file (or near-one-file) edits are sufficient — `src/actions.js`, `server/resolver.js`, and `server/state-sync.js` should not need touches.
+
+### New survivor
+
+Append an entry to `SURVIVOR_ROSTER` in `src/content/survivors.js`:
+
+```js
+{
+  name: 'Eliza Stone',
+  title: 'Mason',
+  bio: 'Cut stone blocks by hand until the world ended.',
+  maxHp: 5, attack: 2, defense: 2,
+  ability: SurvivorAbility.FORTIFY_DOUBLE,
+  abilityLabel: 'Mason — fortifies a building to full strength with just Wood',
+},
+```
+
+Optionally add a colour slot to `SURVIVOR_COLORS` above. Base stats are **pre-passive** — if the survivor has `BRAWLER` (+1 ATK) or `STURDY` (+1 DEF), write the un-baked number; `getAttack()` / `getDefense()` compose the passive at call time via `ABILITIES[id].statMods`.
+
+### New weapon
+
+Append an entry to `ITEMS` in `src/items.js`:
+
+```js
+spear: {
+  id: 'spear',
+  kind: 'weapon',
+  slot: 'weapon',
+  statMods: { attack: 1, defense: 1 },
+  label: '🗡 Spear (+1 ATK, +1 DEF)',
+  // optional conditional bonus via combatTriggers:
+  combatTriggers: [
+    { when: 'attack', ifDefenderHasAnyTag: ['construct'], advantage: 1 },
+  ],
+},
+```
+
+Add the id to any loot tables in `src/loot.config.js` that should roll it.
+
+### New ability
+
+Append an entry to `ABILITIES` in `src/abilities.js`:
+
+- **Passive with stat bonus:** `{ id, kind: 'passive', label, description, statMods: { attack: 1 } }` — composed automatically by `Entity.getAttack()` / `getDefense()`.
+- **Active:** `{ id, kind: 'active', label, description, validate(state, actor), execute(state, actor) }` — `validate` is called by `_buildAbilityActions` to decide whether the button shows; `execute` runs when the plan step resolves and returns `{ success, log, cost, budgetBonus? }`.
+
+Then reference the id from a roster entry's `ability:` field (or push it onto a faction's `innateLeaderAbilities` for leader-only abilities).
+
+### New unit type
+
+1. Add the `EntityType` constant in `src/entities.js`.
+2. Add a `UNIT_TYPES[key]` entry in `src/unit-types.js` with `baseStats`, `agility`, `color`, `tags`. Tags drive combat triggers (e.g. staff-vs-undead) and AI filtering — pick from `['living', 'leader', 'day-leader', 'night-leader', 'undead', 'minion', 'construct', 'summoned', 'soldier', ...]` or add a new one.
+3. Add a factory wrapper in `src/entities.js`:
+   ```js
+   export function createSoldier(col, row, ownerId = null, state = null) {
+     return new Entity(EntityType.SOLDIER, 'hero', col, row, ownerId, state);
+   }
+   ```
+4. Add a glyph entry to the three `GLYPHS` maps in `src/ui.js` and the `entityGlyph` switch in `src/renderer.js`.
+
+Combat, pathfinding, serialization, and plan-action validation flow through the generic machinery — no action/resolver/state-sync edits needed.
+
+### New faction
+
+Subclass `HeroFaction` or `WitchFaction` in `src/factions.js`, override `id` / `name` / `leaderType` / `_buildLeader`, register in the `FACTIONS` map, and add a leader factory in `src/entities.js`. If the faction has unique leader abilities, override `innateLeaderAbilities` to return the parent list plus the new ids — `Faction.createLeader()` pushes them onto the entity automatically. See `RogueFaction` / `CaptainFaction` in `factions.js` for the minimal stub pattern.
+
+---
+
 ## UI Terminology
 
 Use these names consistently when modifying UI components.
@@ -440,36 +510,31 @@ Use these names consistently when modifying UI components.
 
 ## AI Balance Baseline & Tuning Methodology
 
-**Last updated:** 2026-04-05 (after sound horn, scoring awareness, node feasibility, ally coordination improvements)
+**Last updated:** 2026-04-24 (NvN balance pass — per-witch AI thresholds + hidden-survivor scaling)
 
 ### Baseline Metrics (500 1v1 games, Standard 13×13)
 
 | Metric | Value | Target |
 |--------|-------|--------|
-| Hero win rate | 48.8% | 38–62% (±12%) |
-| Witch win rate | 51.0% | 38–62% (±12%) |
-| Draws | 0.2% | — |
-| Kill wins | 37.2% | ≥20% |
-| Node wins | 61.2% | — |
-| Tiebreaks | 1.6% | <10% |
-| Mean rounds | 27.3 | 15–35 |
-| Median rounds | 25 | — |
-| Round cap hits | 1.6% | <5% |
+| Hero win rate | 49.2% | 38–62% (±12%) |
+| Witch win rate | 50.8% | 38–62% (±12%) |
+| Draws | 0.0% | — |
+| Mean rounds | ~22 | 15–35 |
 
 ### Combat & Economy Baseline
 
 | Metric | Value |
 |--------|-------|
-| Hero battles/game | 6.4 |
-| Hero kills/game | 2.1 |
-| Witch battles/game | 6.7 |
-| Witch kills/game | 0.2 |
-| Hero HP at end | 12.0 |
-| Witch HP at end | 3.4 |
-| Peak hero survivors | 2.6 |
-| Peak witch minions | 4.1 |
-| Witch summons/game | 5.9 |
-| Hero fortifies/game | 1.8 |
+| Hero battles/game | 20.5 |
+| Hero kills/game | 3.9 |
+| Witch battles/game | 16.2 |
+| Witch kills/game | 1.6 |
+| Hero HP at end | 10.1 |
+| Witch HP at end | 7.1 |
+| Peak hero survivors | 3.8 |
+| Peak witch minions | 6.0 |
+| Witch summons/game | 8.1 |
+| Hero fortifies/game | 2.3 |
 
 ### Action Mix Baseline
 
@@ -495,15 +560,26 @@ Use these names consistently when modifying UI components.
 | Witch sweeps nodes | 3.6% |
 | Hero sweeps nodes | 1.2% |
 
-### 2v2 Baseline (100 games, Standard 13×13)
+### NvN Baseline (500 games each, Standard 13×13)
 
-| Metric | Value |
-|--------|-------|
-| Hero win rate | 47.0% |
-| Witch win rate | 53.0% |
-| Kill wins | 29.0% |
-| Node wins | 71.0% |
-| Mean rounds | 27.4 |
+| Mode | Hero win rate | Witch win rate | Peak hero force | Peak witch force |
+|------|---------------|----------------|------------------|-------------------|
+| 2v2  | 57.8% | 42.0% | ~6 units (1.3× 1v1) | ~13 units (1.75× 1v1) |
+| 3v3  | 57.0% | 42.6% | ~8 units (1.7× 1v1) | ~20 units (2.7× 1v1) |
+| 4v4  | 60.0% | 39.8% | ~9 units (1.9× 1v1) | ~25 units (3.5× 1v1) |
+
+NvN scales up unit density on both sides (so 4v4 doesn't feel sparse on the
+13×13 map) while keeping balance in the ±12% target band. All NvN scaling is
+gated on `playerCount > 1`, so 1v1 behavior is mathematically unchanged.
+
+- **Scaled witch minion cap** (`src/ai-engine.js:_trySummons`): `base + 4×(witchPlayerCount−1)` so a 3-witch team isn't rationed to the solo-witch 7/10 ceiling. 4v4 night cap = 22.
+- **Per-witch BUILD_ARMY / CONTROL_NODES scoring** (`scoreGoals`): thresholds divide `minionCount` by `witchPlayerCount`; node base bumped 0.45→0.60 so extra minions actually reach nodes rather than clustering near witches.
+- **Scaled witch `unitsPerNode`** (`genControlNodes`): 1v1→1, 2v2→2, 3v3+→3 baseline; ensures the expanded minion supply disperses across nodes instead of piling up.
+- **Hero concentration cap** (`hero-ai-engine.js:genControlNodes`): `unitsForNode` capped at 2 in NvN so hero teams don't over-commit to one contested node.
+- **NvN explore loot bonus** (`executeExplore`): extra loot rolls scale with side size — 2v2 +30% chance, 3v3 +1 roll, 4v4 +1 roll +30% chance. Raises resource inflow proportionally so both sides can actually spend on summons/equipment.
+- **Hero Sound Horn tightened** (`hero-ai-engine.js:genExplore`): survivor ceiling nodeCount→nodeCount when heroCount>1 (no growth beyond 1v1 pool).
+
+Do not remove these without re-running `node scripts/headless.js 500 standard --players N` for N ∈ {2, 3, 4}.
 
 ### AI Architecture
 

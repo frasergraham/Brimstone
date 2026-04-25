@@ -187,14 +187,14 @@ describe('assessHeroBoard', () => {
       entities: [
         makeEntity({
           id: 'hero1', col: 3, row: 3,
-          items: { [ResourceType.HERBS]: 1, 'weapon:sword': 1 },
+          items: { [ResourceType.HERBS]: 1, 'sword': 1 },
         }),
         makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
       ],
     });
     const board = assessHeroBoard(sim);
     assert.equal(board.heroWeapons.length, 1);
-    assert.equal(board.heroWeapons[0], 'weapon:sword');
+    assert.equal(board.heroWeapons[0], 'sword');
   });
 
   test('node state includes distance and controller', () => {
@@ -384,9 +384,21 @@ describe('allocateBudget with hero goals', () => {
 // ── Personality configs ─────────────────────────────────────────────────────
 
 describe('HERO_PERSONALITY_CONFIGS', () => {
-  test('has 4 personalities', () => {
+  test('has 6 personalities', () => {
     const names = Object.keys(HERO_PERSONALITY_CONFIGS);
-    assert.deepEqual(names.sort(), ['aggressive', 'balanced', 'defensive', 'explorer']);
+    assert.deepEqual(names.sort(),
+      ['aggressive', 'balanced', 'defensive', 'explorer', 'node_denier', 'witch_hunter']);
+  });
+
+  // Ratchet — the standard ai-matrix.js balance grid must keep enumerating
+  // exactly the four canonical personalities. New campaign-only personalities
+  // must set `campaignOnly: true` so they don't pollute the matrix.
+  test('only the canonical four personalities are non-campaignOnly', () => {
+    const standard = Object.entries(HERO_PERSONALITY_CONFIGS)
+      .filter(([, cfg]) => !cfg.campaignOnly)
+      .map(([name]) => name)
+      .sort();
+    assert.deepEqual(standard, ['aggressive', 'balanced', 'defensive', 'explorer']);
   });
 
   test('each config has required fields', () => {
@@ -501,7 +513,7 @@ describe('genProtectHero', () => {
     const sim = makeHeroEngineSim({
       entities: [
         makeEntity({ id: 'hero1', col: 3, row: 3, hp: 5, maxHp: 10,
-          items: { 'weapon:sword': 1 } }),
+          items: { 'sword': 1 } }),
         makeEntity({ id: 'witch1', type: EntityType.WITCH, owner: 'witch', col: 6, row: 6 }),
       ],
     });

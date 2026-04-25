@@ -4,7 +4,7 @@ import { describe, test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { GameState, Phase, phaseForRound, getCycleLength, DEFAULT_CYCLE_PHASES } from '../src/game.js';
 import { EntityType, createMinion, createZombie, createWoodGolem, createSurvivor, markRosterUsedByName, resetRoster, SURVIVOR_ROSTER } from '../src/entities.js';
-import { hexKey, getNeighbors } from '../src/hex.js';
+import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import {
   Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves,
   reconcileRosterAfterMission,
@@ -89,8 +89,8 @@ describe('Mission definitions', () => {
     }
   });
 
-  test('prologue campaign has 6 missions total', () => {
-    assert.equal(hollowDef.missions.length, 6);
+  test('prologue campaign has 7 missions total', () => {
+    assert.equal(hollowDef.missions.length, 7);
   });
 
   test('mission prerequisites form a valid chain', () => {
@@ -472,7 +472,7 @@ describe('Victory delegate', () => {
       const state = new GameState(true, false, 'standard', null, mapData);
       state.disableScoring = true;
       // Clean slate so we can control node occupancy precisely.
-      state.entities = state.entities.filter(e => e.type === 'hero');
+      state.entities = state.entities.filter(e => e.type === 'paladin');
       return state;
     }
 
@@ -576,7 +576,7 @@ describe('Campaign class', () => {
   test('campaign stores campaignDef reference', () => {
     const c = new Campaign(hollowDef);
     assert.equal(c.campaignDef.id, 'calebs_hollow_prologue');
-    assert.equal(c.campaignDef.missions.length, 6);
+    assert.equal(c.campaignDef.missions.length, 7);
   });
 
   test('save slot defaults to campaign-{id}', () => {
@@ -621,13 +621,14 @@ describe('Campaign class', () => {
   test('getMissionList returns correct statuses', () => {
     const c = new Campaign(hollowDef);
     const list = c.getMissionList();
-    assert.equal(list.length, 6);
+    assert.equal(list.length, 7);
     assert.ok(list[0].available);      // prologue — no prereqs
     assert.ok(!list[1].available);     // gathering_survivors — needs prologue
     assert.ok(!list[2].available);     // first_night — needs gathering_survivors
     assert.ok(!list[3].available);     // river_crossing — needs first_night
     assert.ok(!list[4].available);     // dark_ritual — needs river_crossing
-    assert.ok(!list[5].available);     // witchs_trail — needs dark_ritual
+    assert.ok(!list[5].available);     // long_watch — needs dark_ritual
+    assert.ok(!list[6].available);     // witchs_trail — needs long_watch
   });
 
   test('getMissionDef looks up from campaignDef missions', () => {
@@ -723,6 +724,75 @@ describe('Campaign class', () => {
     c.save();
     assert.ok(Campaign.isCampaignCompleted(hollowDef));
     localStorage.clear();
+  });
+
+  test('getStatus returns "new" for a fresh campaign', () => {
+    const c = new Campaign(hollowDef);
+    assert.equal(c.getStatus(), 'new');
+    assert.equal(c.getCompletedCount(), 0);
+    assert.equal(c.getMissionCount(), hollowDef.missions.length);
+  });
+
+  test('getStatus returns "in-progress" with some missions completed', () => {
+    const c = new Campaign(hollowDef);
+    c.completedMissions.add(hollowDef.missions[0].id);
+    assert.equal(c.getStatus(), 'in-progress');
+    assert.equal(c.getCompletedCount(), 1);
+  });
+
+  test('getStatus returns "completed" when all missions are completed', () => {
+    const c = new Campaign(hollowDef);
+    for (const m of hollowDef.missions) c.completedMissions.add(m.id);
+    assert.equal(c.getStatus(), 'completed');
+    assert.equal(c.getCompletedCount(), hollowDef.missions.length);
+  });
+
+  test('static getCampaignProgress returns "new" with no save', () => {
+    localStorage.clear();
+    const p = Campaign.getCampaignProgress(hollowDef);
+    assert.equal(p.status, 'new');
+    assert.equal(p.completed, 0);
+    assert.equal(p.total, hollowDef.missions.length);
+  });
+
+  test('static getCampaignProgress reports in-progress from saved state', () => {
+    localStorage.clear();
+    const c = new Campaign(hollowDef);
+    c.completedMissions.add(hollowDef.missions[0].id);
+    c.save();
+    const p = Campaign.getCampaignProgress(hollowDef);
+    assert.equal(p.status, 'in-progress');
+    assert.equal(p.completed, 1);
+    assert.equal(p.total, hollowDef.missions.length);
+    localStorage.clear();
+  });
+
+  test('static getCampaignProgress reports completed from saved state', () => {
+    localStorage.clear();
+    const c = new Campaign(hollowDef);
+    for (const m of hollowDef.missions) c.completedMissions.add(m.id);
+    c.save();
+    const p = Campaign.getCampaignProgress(hollowDef);
+    assert.equal(p.status, 'completed');
+    assert.equal(p.completed, hollowDef.missions.length);
+    assert.equal(p.total, hollowDef.missions.length);
+    localStorage.clear();
+  });
+
+  test('getStatus for an empty-mission campaign stays "new"', () => {
+    const emptyDef = { id: 'empty', title: 'Empty', description: '', missions: [], mapBuilders: {}, firstMission: null };
+    const c = new Campaign(emptyDef);
+    assert.equal(c.getStatus(), 'new');
+    assert.equal(c.getMissionCount(), 0);
+  });
+
+  test('isComplete returns false for a campaign with no missions', () => {
+    // Guard against Array.prototype.every() returning true for empty arrays —
+    // an empty-missions definition is unpopulated, not complete.
+    const emptyDef = { id: 'empty', title: 'Empty', description: '', missions: [], mapBuilders: {}, firstMission: null };
+    const c = new Campaign(emptyDef);
+    assert.equal(c.isComplete(), false);
+    assert.equal(c.getStatus(), 'new');
   });
 });
 
@@ -1088,8 +1158,8 @@ describe('disableScoring', () => {
 describe('Roster balancing config', () => {
   test('witchs_trail mission has minSurvivors and maxSurvivors', () => {
     const m = hollowDef.missions.find(m => m.id === 'witchs_trail');
-    assert.equal(m.minSurvivors, 1);
-    assert.equal(m.maxSurvivors, 3);
+    assert.equal(m.minSurvivors, 2);
+    assert.equal(m.maxSurvivors, 5);
   });
 
   test('minSurvivors <= maxSurvivors when both set', () => {
@@ -1240,9 +1310,13 @@ describe('maxDiscoverableSurvivors config', () => {
 // ── disableScoring on missions ─────────────────────────────────────────────
 
 describe('disableScoring on missions', () => {
-  test('all prologue missions have disableScoring: true', () => {
+  test('prologue missions have disableScoring set (true except witchs_trail)', () => {
     for (const m of hollowDef.missions) {
-      assert.equal(m.disableScoring, true, `${m.id} should have disableScoring: true`);
+      // witchs_trail uses multiplayer-style scoring as its loss condition,
+      // so it's the lone exception that opts INTO scoring.
+      const expected = m.id === 'witchs_trail' ? false : true;
+      assert.equal(m.disableScoring, expected,
+        `${m.id} disableScoring should be ${expected}`);
     }
   });
 });
@@ -1369,11 +1443,11 @@ describe('mission story triggers and loot overrides', () => {
     assert.ok(loseConds.some(l => l.type === 'witch_holds_node'));
   });
 
-  test('mission 6-step progression chain is valid', () => {
+  test('mission 7-step progression chain is valid', () => {
     const ids = hollowDef.missions.map(m => m.id);
     assert.deepEqual(ids, [
       'prologue', 'gathering_survivors', 'first_night',
-      'river_crossing', 'dark_ritual', 'witchs_trail',
+      'river_crossing', 'dark_ritual', 'long_watch', 'witchs_trail',
     ]);
   });
 
@@ -2218,13 +2292,13 @@ describe('Mission 4 (The River Crossing) balance', () => {
 describe('Mission 5 (Dark Ritual) balance', () => {
   const mission5 = hollowDef.missions.find(m => m.id === 'dark_ritual');
 
-  test('phase cycle is 10 rounds, 3 day → 1 dusk → 5 night → 1 dawn, non-looping', () => {
+  test('phase cycle is 11 rounds, 3 day → 1 dusk → 6 night → 1 dawn, non-looping', () => {
     assert.ok(mission5.phaseCycle);
     assert.deepEqual(mission5.phaseCycle.phases, [
-      'day','day','day','dusk','night','night','night','night','night','dawn',
+      'day','day','day','dusk','night','night','night','night','night','night','dawn',
     ]);
     assert.equal(mission5.phaseCycle.loop, false);
-    assert.equal(mission5.phaseCycle.phases.length, 10);
+    assert.equal(mission5.phaseCycle.phases.length, 11);
   });
 
   test('uses witch_denied_nodes at dawn as the win condition', () => {
@@ -2335,5 +2409,67 @@ describe('processWaves map_edge spawn covers all four edges', () => {
     assert.ok(edgeHits.right > 0, 'never spawned on east edge');
     assert.ok(edgeHits.top > 0, 'never spawned on north edge');
     assert.ok(edgeHits.bottom > 0, 'never spawned on south edge');
+  });
+});
+
+// ── resolveSpawnPosition near_hero ─────────────────────────────────────────
+
+describe('processWaves near_hero spawn appears in view', () => {
+  test('spawns within hero sight (2-3 hexes) and never on top of the hero', () => {
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+
+    const createFn = (_type, col, row) => createWoodGolem(col, row, 'witch');
+
+    let sawInRing = false;
+    for (let i = 0; i < 200; i++) {
+      const before = state.entities.length;
+      processWaves(
+        state,
+        [{ round: 1, units: [{ type: 'wood_golem', spawnAt: 'near_hero' }] }],
+        createFn,
+      );
+      const spawned = state.entities[before];
+      if (!spawned) continue;
+      const d = hexDistance(spawned.col, spawned.row, state.hero.col, state.hero.row);
+      // Must be close enough for the hero to see on spawn (day sight = 3)
+      // and must not overlap the hero.
+      assert.ok(d >= 1 && d <= 4, `spawn distance ${d} outside expected range`);
+      if (d >= 2 && d <= 3) sawInRing = true;
+      // Remove the spawned entity so each iteration is independent
+      state.entities.pop();
+    }
+    assert.ok(sawInRing, 'expected at least one spawn in the preferred 2-3 hex ring');
+  });
+
+  test('falls back to the 1-4 ring when the 2-3 ring is fully blocked', () => {
+    const mapData = buildMap('prologue');
+    mapData.noWitch = true;
+    const state = new GameState(true, false, 'skirmish', null, mapData);
+
+    // Saturate every passable 2-3 hex ring tile so the preferred ring cannot
+    // produce a candidate — forces the fallback branch to pick from 1 or 4.
+    for (const [, tile] of state.tiles) {
+      const d = hexDistance(tile.col, tile.row, state.hero.col, state.hero.row);
+      if (d >= 2 && d <= 3 && tile.type !== 'river' && tile.type !== 'building') {
+        state.entities.push(createZombie(tile.col, tile.row, 'witch'));
+      }
+    }
+
+    const createFn = (_type, col, row) => createWoodGolem(col, row, 'witch');
+    const before = state.entities.length;
+    processWaves(
+      state,
+      [{ round: 1, units: [{ type: 'wood_golem', spawnAt: 'near_hero' }] }],
+      createFn,
+    );
+    const spawned = state.entities[before];
+    assert.ok(spawned, 'expected a fallback spawn');
+    const d = hexDistance(spawned.col, spawned.row, state.hero.col, state.hero.row);
+    // Strict: only distance 1 or 4 proves the fallback widened the ring.
+    // If the fallback silently re-picked from 2-3, this would fail.
+    assert.ok(d === 1 || d === 4,
+      `fallback spawn distance ${d} should be 1 or 4 (2-3 ring is saturated)`);
   });
 });

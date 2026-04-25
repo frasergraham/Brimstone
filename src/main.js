@@ -21,9 +21,11 @@ import { VERSION, BUILD_VERSION } from './version.js';
 import { buildPlayerStatusHtml } from './ui-render.js';
 import { resolvePlans, ResEventType } from '../server/resolver.js';
 import { PlanActionType, groupPlanByEntity } from './planner.js';
-import { hexDistance, getNeighbors } from './hex.js';
+import { hexDistance, getNeighbors, hexKey } from './hex.js';
+import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD } from './tiles.js';
 import { sightRange } from './actions.js';
-import { getFaction, allFactions } from './factions.js';
+import { UNIT_TYPES } from './unit-types.js';
+import { getFaction, findFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { playback, resetPlayback, replayFullGame, playbackDelay, swapState, patchAlive } from './playback.js';
@@ -31,7 +33,7 @@ import { ReplayCache } from './replay-cache.js';
 import { MAP_SIZES } from './map.js';
 import { nodeController } from './game.js';
 import { MissionConductor } from './mission-conductor.js';
-import { createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, setForcedDice, EntityType, markRosterUsedByName, ENTITY_COLOR } from './entities.js';
+import { Entity, createMinion, createZombie, createWoodGolem, createIronGolem, createSurvivor, EntityType, ENTITY_COLOR } from './entities.js';
 import { hexKey as _hexKey } from './hex.js';
 import { Campaign, buildVictoryDelegate, snapshotSurvivor, processWaves, reconcileRosterAfterMission } from './campaign/campaign.js';
 import { CAMPAIGNS, getCampaignById } from './campaign/campaign-registry.js';
@@ -232,7 +234,7 @@ function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
   if (localHeroAI)  localHeroAI.onBattleResult  = battleCallback;
 }
 
-function init(witchIsAI, heroIsAI, autoplay = false) {
+function init(witchIsAI, heroIsAI, autoplay = false, humanFactionId = null) {
   _autoplay = autoplay;
   _gameStartTime = Date.now();
   _missionConductor = null; // ensure conductor state is cleared for normal games
@@ -247,6 +249,15 @@ function init(witchIsAI, heroIsAI, autoplay = false) {
   const mapSize   = document.getElementById('select-map-size')?.value ?? 'standard';
   const nodeCount = parseInt(document.getElementById('select-node-count')?.value ?? '3', 10);
   state    = new GameState(witchIsAI, heroIsAI, mapSize, nodeCount);
+
+  // Apply the player's faction pick by swapping the side's default
+  // leader entity to the picked faction. swapLeaderToFaction is a no-op
+  // when the picked faction is already the leader's faction (e.g. day
+  // side with paladin) — it only mutates when the type changes.
+  if (humanFactionId) {
+    const def = getFaction(humanFactionId);
+    state.swapLeaderToFaction(def.side, humanFactionId);
+  }
   // Allow global fog-of-war override from the setup screen select.
   const fogSel = document.getElementById('select-fog-of-war');
   if (fogSel) state.fogOfWar = fogSel.value;
@@ -585,7 +596,7 @@ async function _onConductorPlanSubmit(heroPlan) {
   // Apply forced dice if configured for this round
   const forcedDice = _missionConductor?.getForcedDice();
   if (forcedDice) {
-    setForcedDice(...forcedDice);
+    state.setForcedDice(...forcedDice);
   }
 
   state.submitPlan('hero', heroPlan);
@@ -680,7 +691,7 @@ async function _runLocalResolution(skipSummary = false) {
   }
 
   const humanFaction = !state.heroIsAI ? 'hero' : !state.witchIsAI ? 'witch' : null;
-  const preReplayEntities = steps[0]?.entitySnapshot ?? finalEntities;
+  const preReplayEntities = patchAlive(steps[0]?.entitySnapshot ?? finalEntities);
 
   // Snapshot node control BEFORE resolution so we can detect changes from unit movement
   const preResEntities = steps[0]?.entitySnapshot ?? state.entities;
@@ -863,16 +874,55 @@ async function _runLocalResolution(skipSummary = false) {
  * Uses result.damage / result.counterDmg directly so that simultaneous battles in
  * the same step each show only their own damage, not accumulated step damage.
  */
+// Dispatch the attacker-side battle animation. Ranged attacks (actor
+// range > 1, or the resolver flagged the battleSnap as ranged) fire a
+// projectile from attacker → target; everything else keeps the melee
+// lunge. Close-range ranged attacks (dist == 1) still use the projectile
+// so the visual language stays consistent.
+function _playAttackIntroAnim(actorSnap, targetSnap, fromCol, fromRow, toCol, toRow, ranged) {
+  const isRanged = !!ranged || (actorSnap?.range ?? 1) > 1;
+  if (isRanged) {
+    const projectileType =
+      UNIT_TYPES[actorSnap.type]?.projectileType ?? 'sparkle';
+    renderer.addProjectileAnim(projectileType, fromCol, fromRow, toCol, toRow, {
+      owner: actorSnap.owner,
+    });
+  } else {
+    renderer.addLungeAnim(
+      actorSnap.id,
+      fromCol, fromRow,
+      toCol, toRow,
+      actorSnap.type, actorSnap.owner, actorSnap.title ?? null,
+    );
+  }
+}
+
 function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
   renderer.addAttackAnim(actorSnap.col, actorSnap.row, targetSnap.col, targetSnap.row);
   if (result?.damage)      renderer.addHpChangeFlash(targetSnap.col, targetSnap.row, -(result.damage));
   if (result?.counterDmg)  renderer.addHpChangeFlash(actorSnap.col,  actorSnap.row,  -(result.counterDmg));
-  if (result?.fortDamaged) renderer.addFlash(targetSnap.col, targetSnap.row, '🏰-1',
-    'rgba(120,120,140,0.15)', 1600, 0.65, 'rgba(180,180,200,1)');
+  if (result?.fortDamaged) {
+    renderer.addFlash(targetSnap.col, targetSnap.row, '🏰-1',
+      'rgba(120,120,140,0.15)', 1600, 0.65, 'rgba(180,180,200,1)');
+    // Apply the fort-level delta now so the hex ring visibly thins out in
+    // sync with the floater (fortifyLevel was rewound at the start of
+    // _animateResolutionSteps so this step's damage hasn't landed yet).
+    const dTile = state.tiles.get(hexKey(targetSnap.col, targetSnap.row));
+    if (dTile && dTile.fortifyLevel > 0) dTile.fortifyLevel -= 1;
+  }
   if (result?.killed) {
     const deadColor = targetSnap.owner === 'hero' ? '#d4a72c' : '#9b59b6';
     renderer.addDeathAnim(targetSnap.col, targetSnap.row, deadColor);
     renderer.addFadeOutAnim(targetSnap.id, 600);
+  }
+  // Brute blast — expanding red ring covering the target hex + 6 neighbours.
+  // Mirrors the horn's ring effect; fires before splash floaters so the
+  // ring frames the damage tags rather than colliding with them.
+  if ((result?.splashRadius ?? 0) > 0 && (result?.splashHexes?.length ?? 0) > 0) {
+    renderer.addNodeRevealAnim(
+      result.splashHexes, '#c0392b',
+      { radiusMultiplier: 3, duration: 900 },
+    );
   }
   // Splash damage floaters
   for (const sh of result?.splashHits ?? []) {
@@ -929,10 +979,10 @@ function _getBattleAllyEntities(actorSnap, targetSnap, entities) {
  */
 function _isFogVisible(col, row, humanFaction, entities, phase) {
   if (!humanFaction || state.fogOfWar === 'none') return true;
-  const faction = getFaction(humanFaction);
   for (const e of entities) {
     if (!e.alive || e.owner !== humanFaction) continue;
-    const range = faction.getSightRange(phase, e.ability === 'scout');
+    // Per-entity sight so stub-faction bonuses (rogue +1) apply.
+    const range = sightRangeForEntity(e, phase);
     if (hexDistance(e.col, e.row, col, row) <= range) return true;
   }
   return false;
@@ -952,7 +1002,7 @@ function _updateNodeDiscoveryDuringStep(gs, humanFaction, rend) {
       if (obj[seenKey]) continue; // already discovered
       const nowSeen = gs.entities.some(e => {
         if (!e.alive || e.owner !== fac.id) return false;
-        const range = fac.getSightRange(gs.phase, e.ability === 'scout');
+        const range = sightRangeForEntity(e, gs.phase);
         return obj.hexes.some(h => hexDistance(e.col, e.row, h.col, h.row) <= range);
       });
       if (!nowSeen) continue;
@@ -973,7 +1023,7 @@ function _updateNodeDiscoveryDuringStep(gs, humanFaction, rend) {
     if (heroFac) {
       const nowSeen = gs.entities.some(e => {
         if (!e.alive || e.owner !== 'hero') return false;
-        const range = heroFac.getSightRange(gs.phase, e.ability === 'scout');
+        const range = sightRangeForEntity(e, gs.phase);
         return hexDistance(e.col, e.row, mt.col, mt.row) <= range;
       });
       if (nowSeen) {
@@ -1005,12 +1055,74 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     ui.showInlineReplayHUD?.(() => { playback.jumpToEnd = true; });
   }
   setMode(AppMode.RESOLVING);
+
+  // ── Fortification rewind ─────────────────────────────────────────────
+  // state.tiles already carries the post-resolution fortifyLevel by the
+  // time we animate.  Snapshot those values so we can restore them at the
+  // end, then walk every event to compute the deltas each tile received
+  // and subtract them so the ring animation starts at the pre-resolution
+  // thickness.  Each fort-mutating event will re-apply its delta live as
+  // we animate that step below.
+  const postFortMap = new Map();
+  const fortDeltasByTile = new Map(); // hexKey → total delta applied during resolution
+  for (const [k, t] of state.tiles) postFortMap.set(k, t.fortifyLevel || 0);
+  const _bumpDelta = (col, row, delta) => {
+    if (!delta) return;
+    const k = hexKey(col, row);
+    fortDeltasByTile.set(k, (fortDeltasByTile.get(k) || 0) + delta);
+  };
+  for (const step of steps) {
+    const evs = [
+      ...(step.heroEvents  ?? []),
+      ...(step.witchEvents ?? []),
+      ...(step.playerEvents ?? []).flatMap(pe => pe.events ?? []),
+    ];
+    for (const ev of evs) {
+      const r = ev.result;
+      if (!r) continue;
+      // FORTIFY: +defGain on actor's tile
+      if (ev.action?.type === PlanActionType.FORTIFY && r.success) {
+        const actorSnap = step.entitySnapshot?.find(e => e.id === ev.action.entityId);
+        if (actorSnap) _bumpDelta(actorSnap.col, actorSnap.row, +(r.defGain ?? 1));
+      }
+      // Battle / guard strike degrading defender's fort: -1
+      if (r.fortDamaged && !r.fortAssault) {
+        const tSnap = ev.battleSnaps?.targetSnap;
+        if (tSnap) _bumpDelta(tSnap.col, tSnap.row, -1);
+      }
+      // Fort assault: fortLevelAfter - fortLevelBefore (negative delta)
+      if (r.fortAssault && r.success) {
+        _bumpDelta(r.targetCol, r.targetRow, (r.fortLevelAfter ?? 0) - (r.fortLevelBefore ?? 0));
+      }
+    }
+  }
+  // Rewind tiles to pre-resolution fort levels.
+  for (const [k, delta] of fortDeltasByTile) {
+    const t = state.tiles.get(k);
+    if (t) t.fortifyLevel = Math.max(0, (postFortMap.get(k) ?? 0) - delta);
+  }
+
   for (let i = 0; i < steps.length; i++) {
     // During replay: if BACK or STOP was pressed, abort remaining steps immediately
     if (playback.goBack || playback.aborted || playback.jumpToEnd) break;
     const step = steps[i];
+    // Patch the CURRENT step's snapshot so any lookups against it resolve
+    // to Entity methods (hasAbility / getAttack / hasTag). _isFogVisible
+    // is the hot caller — it receives step.entitySnapshot directly and
+    // calls `e.hasAbility('scout')` on each entry, which blew up on the
+    // plain-JSON server snapshot before this patch ran (PR #294 online
+    // resolution crash).
+    patchAlive(step.entitySnapshot);
     // Post-step entities: what the world looks like AFTER this step resolves.
-    const postEntities = i + 1 < steps.length ? steps[i + 1].entitySnapshot : finalEntities;
+    // Re-parent the post-step snapshot entities to Entity.prototype the first
+    // time through. resolver.snapshotEntities emits plain JSON objects; the
+    // renderer calls entity methods (hasAbility / getAttack / hasTag / …)
+    // when rendering fog of war and unit stats from state.entities during
+    // animation. patchAlive is idempotent — subsequent steps that reuse
+    // the same snapshot array skip over already-prototyped entities.
+    const postEntities = patchAlive(
+      i + 1 < steps.length ? steps[i + 1].entitySnapshot : finalEntities,
+    );
 
     // Support both legacy {heroEvents, witchEvents} (offline) and
     // new {playerEvents: [{playerId, faction, events}]} (online MP) step formats.
@@ -1023,7 +1135,14 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
     // Restore pre-step entity state before the camera pan so the canvas never
     // shows the final resolved state during the framing delay.
-    const displayEntities = step.entitySnapshot.map(e => ({ ...e }));
+    //
+    // step.entitySnapshot is a plain JSON snapshot from resolver.snapshotEntities.
+    // Re-parent each display clone to Entity.prototype so the renderer's
+    // hasAbility() / getAttack() / getDefense() / hasTag() calls resolve to
+    // Entity methods while the state-level swap holds during animation.
+    // (Own properties from the spread — including `alive` and `displayName` —
+    // shadow the Entity prototype's read-only getters.)
+    const displayEntities = step.entitySnapshot.map(e => Object.setPrototypeOf({ ...e }, Entity.prototype));
     // Apply GUARD actions from this step so guard zone highlights render immediately.
     for (const ev of allStepEvents) {
       if (ev.type === ResEventType.ACTION_OK && ev.action?.type === PlanActionType.GUARD) {
@@ -1199,6 +1318,42 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         redrawFn();
         if (!_autoplay && hopDelay > 0) await playbackDelay(hopDelay);
       }
+
+      // Bounce-back for partial moves: if the unit stopped short due to an
+      // enemy or fort wall, play a short lunge toward the blocking hex and
+      // slide back so the player sees why the move ended early.
+      if (!_autoplay) {
+        const _spd2 = ui?.speedMode ?? 'cinematic';
+        const bumped = moveAnims.filter(({ ev }) =>
+          (ev.result?.blockedBy || ev.result?.blockedByFort)
+        );
+        if (bumped.length) {
+          for (const { ev, preSnap, path } of bumped) {
+            const bumpFrom = path.length > 0 ? path[path.length - 1] : preSnap;
+            const bumpTo = ev.result.blockedByFort
+              ? { col: ev.result.blockedByFort.col, row: ev.result.blockedByFort.row }
+              : ev.result.blockedBy
+                ? { col: ev.result.blockedBy.col, row: ev.result.blockedBy.row }
+                : null;
+            if (!bumpTo) continue;
+            renderer.addLungeAnim(
+              ev.action.entityId,
+              bumpFrom.col, bumpFrom.row,
+              bumpTo.col, bumpTo.row,
+              preSnap.type, preSnap.owner, preSnap.title ?? null,
+            );
+            if (ev.result.blockedByFort) {
+              renderer.addFlash(bumpTo.col, bumpTo.row, '🏰',
+                'rgba(170,170,175,0.15)', 900, 0.75, 'rgba(200,200,210,1)');
+            }
+          }
+          redrawFn();
+          await playbackDelay(_spd2 === 'vfast' ? 140 : 240);
+          renderer.returnAllLungeAnims();
+          await renderer.waitForAnimations();
+          redrawFn();
+        }
+      }
     } else {
       // No visible moves — still need to patch display entities to final positions
       for (const ev of events) {
@@ -1215,7 +1370,7 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     // Update node discovery after moves so nodes become visible mid-animation
     _updateNodeDiscoveryDuringStep(state, humanFaction, renderer);
 
-    const _suppressDialogs = getMode() === AppMode.PLAYBACK || ui?.speedMode === 'fast' || ui?.speedMode === 'vfast';
+    const _suppressDialogs = getMode() === AppMode.PLAYBACK || ui?.speedMode === 'vfast';
     if (!_suppressDialogs) {
       for (const entry of pendingDialogs) {
         redrawFn();
@@ -1232,6 +1387,9 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     for (const ev of events) {
       const { action, result, battleSnaps } = ev;
       if (action.type === PlanActionType.BATTLE_UNIT || action.type === PlanActionType.BATTLE_HEX) {
+        // Fort assault: BATTLE_HEX that hit a wall instead of a unit.  Handled
+        // in its own pass below (no targetSnap → skip the normal battle path).
+        if (result?.fortAssault) continue;
         // Show animation/dialog if one of my own units is involved (team MP), or falling
         // back to faction-level logic (offline / fog-off / standard 1v1).
         const myUnit = myPlayerId && battleSnaps && (
@@ -1263,14 +1421,21 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
             const lungeFromRow = actorDisplay?.row  ?? actorSnap.row;
             const lungeToCol   = targetDisplay?.col ?? targetSnap.col;
             const lungeToRow   = targetDisplay?.row ?? targetSnap.row;
-            renderer.addLungeAnim(
-              actorSnap.id,
+            _playAttackIntroAnim(
+              actorSnap, targetSnap,
               lungeFromCol, lungeFromRow,
               lungeToCol, lungeToRow,
-              actorSnap.type, actorSnap.owner, actorSnap.title ?? null,
+              battleSnaps.ranged,
             );
             redrawFn();
-            await playbackDelay(speed === 'vfast' ? 140 : 280);
+            // Ranged attacks travel on their own 320ms timer — give them
+            // enough room to visibly land before the impact flash fires in
+            // fast/vfast modes (cinematic awaits dialog dismissal anyway).
+            const isRangedIntro = !!battleSnaps.ranged || (actorSnap?.range ?? 1) > 1;
+            const introDelay = isRangedIntro
+              ? (speed === 'vfast' ? 260 : 340)
+              : (speed === 'vfast' ? 140 : 280);
+            await playbackDelay(introDelay);
 
             // ── Step 2: Battle hex highlights ────────────────────────────────
             {
@@ -1341,6 +1506,50 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       }
     }
 
+    // ── Phase 2a': fully-blocked moves (ACTION_FAIL with blockedBy/blockedByFort) ───
+    // Unit never moved at all — play a bounce-back from the actor's pre-step hex
+    // toward the blocker so the player sees why the move failed.
+    const failedMoves = allStepEvents.filter(ev =>
+      ev.type === ResEventType.ACTION_FAIL &&
+      ev.action?.type === PlanActionType.MOVE &&
+      (ev.blockedBy || ev.blockedByFort)
+    );
+    if (!_autoplay && failedMoves.length > 0) {
+      const _spd4 = ui?.speedMode ?? 'cinematic';
+      for (const ev of failedMoves) {
+        const preSnap = step.entitySnapshot?.find(e => e.id === ev.action.entityId);
+        if (!preSnap) continue;
+        // Visibility gate — mirrors the move-anim rules
+        const isOpponent = humanFaction && ev.faction !== humanFaction;
+        const visible = !isOpponent
+          || _isFogVisible(preSnap.col, preSnap.row, humanFaction, step.entitySnapshot, state.phase)
+          || _isFogVisible(ev.action.toCol, ev.action.toRow, humanFaction, step.entitySnapshot, state.phase);
+        if (!visible) continue;
+
+        const bumpTo = ev.blockedByFort
+          ? { col: ev.blockedByFort.col, row: ev.blockedByFort.row }
+          : { col: ev.blockedBy.col, row: ev.blockedBy.row };
+        renderer.addLungeAnim(
+          ev.action.entityId,
+          preSnap.col, preSnap.row,
+          bumpTo.col, bumpTo.row,
+          preSnap.type, preSnap.owner, preSnap.title ?? null,
+        );
+        if (ev.blockedByFort) {
+          renderer.addFlash(bumpTo.col, bumpTo.row, '🏰',
+            'rgba(170,170,175,0.15)', 900, 0.75, 'rgba(200,200,210,1)');
+        }
+        hadMove = true;
+      }
+      if (failedMoves.length > 0) {
+        redrawFn();
+        await playbackDelay(_spd4 === 'vfast' ? 140 : 240);
+        renderer.returnAllLungeAnims();
+        await renderer.waitForAnimations();
+        redrawFn();
+      }
+    }
+
     // ── Phase 2a: empty-hex attack whiffs (lunge + "no enemy" floater) ───────
     const whiffEvents = allStepEvents.filter(
       ev => ev.type === ResEventType.ACTION_SKIP && ev.whiffTarget && ev.battleSnaps?.actorSnap
@@ -1359,7 +1568,53 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (!_autoplay) {
         const speed = ui?.speedMode ?? 'cinematic';
 
-        // Lunge toward empty hex
+        // Lunge or projectile toward the empty hex — ranged units still
+        // fire a shot that whiffs, melee leans in and swings at nothing.
+        const actorDisplay = state.entities.find(e => e.id === actorSnap.id);
+        const lungeFromCol = actorDisplay?.col ?? actorSnap.col;
+        const lungeFromRow = actorDisplay?.row ?? actorSnap.row;
+        _playAttackIntroAnim(
+          actorSnap, null,
+          lungeFromCol, lungeFromRow,
+          tCol, tRow,
+          ev.battleSnaps?.ranged,
+        );
+        redrawFn();
+        await playbackDelay(speed === 'vfast' ? 140 : 280);
+
+        // "no enemy" floater on target hex
+        renderer.addFlash(tCol, tRow, 'no enemy', 'rgba(100,100,100,0.1)', 1000, 0.65, '#888');
+        redrawFn();
+        await playbackDelay(speed === 'vfast' ? 200 : 400);
+
+        // Return lunge (projectiles self-clear on impact; this is a no-op for them)
+        renderer.returnAllLungeAnims();
+        if (speed === 'cinematic') await renderer.waitForAnimations();
+        redrawFn();
+      }
+      hadBattle = true;
+    }
+
+    // ── Phase 2a'': witch fort assaults (siege an empty fortified hex) ──────
+    // Lunge toward the wall, show a hit/crush/miss floater, then apply the
+    // fort-level drop in sync with the visual so the ring thins out now.
+    const fortAssaultEvents = allStepEvents.filter(ev =>
+      ev.type === ResEventType.ACTION_OK &&
+      ev.result?.fortAssault &&
+      ev.battleSnaps?.actorSnap
+    );
+    for (const ev of fortAssaultEvents) {
+      const { actorSnap } = ev.battleSnaps;
+      const r = ev.result;
+      const tCol = r.targetCol, tRow = r.targetRow;
+
+      const myUnit = myPlayerId && actorSnap.ownerId === myPlayerId;
+      const showForPlayer = myPlayerId
+        ? myUnit
+        : (!humanFaction || state.fogOfWar === 'none' || ev.faction === humanFaction);
+
+      if (showForPlayer && !_autoplay) {
+        const speed = ui?.speedMode ?? 'cinematic';
         const actorDisplay = state.entities.find(e => e.id === actorSnap.id);
         const lungeFromCol = actorDisplay?.col ?? actorSnap.col;
         const lungeFromRow = actorDisplay?.row ?? actorSnap.row;
@@ -1372,16 +1627,25 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
         redrawFn();
         await playbackDelay(speed === 'vfast' ? 140 : 280);
 
-        // "no enemy" floater on target hex
-        renderer.addFlash(tCol, tRow, 'no enemy', 'rgba(100,100,100,0.1)', 1000, 0.65, '#888');
+        if (r.hit) {
+          const label = r.crush ? '💥 🏰-2' : '🏰-1';
+          renderer.addFlash(tCol, tRow, label,
+            'rgba(180,100,100,0.18)', 1600, 0.75, 'rgba(230,180,180,1)');
+        } else {
+          renderer.addFlash(tCol, tRow, 'holds',
+            'rgba(170,170,175,0.15)', 1000, 0.65, 'rgba(200,200,210,1)');
+        }
         redrawFn();
         await playbackDelay(speed === 'vfast' ? 200 : 400);
-
-        // Return lunge
         renderer.returnAllLungeAnims();
         if (speed === 'cinematic') await renderer.waitForAnimations();
-        redrawFn();
       }
+
+      // Apply the fort-level delta now (visible even to non-viewer so the
+      // authoritative state stays in sync across all observers).
+      const tile = state.tiles.get(hexKey(tCol, tRow));
+      if (tile) tile.fortifyLevel = r.fortLevelAfter ?? tile.fortifyLevel;
+      redrawFn();
       hadBattle = true;
     }
 
@@ -1404,18 +1668,18 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
       if (!_autoplay) {
         const speed = ui?.speedMode ?? 'cinematic';
 
-        // Lunge: guardian slides toward the target
+        // Guardian snaps toward the target — projectile if ranged, otherwise melee lunge.
         const guardDisplay  = state.entities.find(e => e.id === actorSnap.id);
         const targetDisplay = state.entities.find(e => e.id === targetSnap.id);
         const lungeFromCol = guardDisplay?.col  ?? actorSnap.col;
         const lungeFromRow = guardDisplay?.row  ?? actorSnap.row;
         const lungeToCol   = targetDisplay?.col ?? targetSnap.col;
         const lungeToRow   = targetDisplay?.row ?? targetSnap.row;
-        renderer.addLungeAnim(
-          actorSnap.id,
+        _playAttackIntroAnim(
+          actorSnap, targetSnap,
           lungeFromCol, lungeFromRow,
           lungeToCol, lungeToRow,
-          actorSnap.type, actorSnap.owner, actorSnap.title ?? null,
+          battleSnaps.ranged,
         );
         redrawFn();
         await playbackDelay(speed === 'vfast' ? 140 : 280);
@@ -1565,14 +1829,19 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
     for (const ev of events) {
       const { action, result } = ev;
       if (action.type !== PlanActionType.FORTIFY || !result?.success) continue;
-      if (humanFaction && ev.faction !== humanFaction) continue;
       const actor = step.entitySnapshot?.find(e => e.id === action.entityId);
-      if (myPlayerId && actor?.ownerId !== myPlayerId) continue;
-      if (actor) {
-        const gain = result.defGain ?? 1;
-        renderer.addFlash(actor.col, actor.row, `🛡+${gain}`,
-          'rgba(100,180,255,0.1)', 1800, 0.72, 'rgba(130,200,255,1)');
-      }
+      if (!actor) continue;
+      // Apply the fort delta live so the ring thickens exactly now — even
+      // for opponents / other players (state is authoritative for everyone).
+      const actorTile = state.tiles.get(hexKey(actor.col, actor.row));
+      if (actorTile) actorTile.fortifyLevel = Math.min(MAX_FORTIFY_LEVEL,
+        (actorTile.fortifyLevel || 0) + (result.defGain ?? 1));
+      // Only surface the +N floater to the owner faction/player.
+      if (humanFaction && ev.faction !== humanFaction) continue;
+      if (myPlayerId && actor.ownerId !== myPlayerId) continue;
+      const gain = result.defGain ?? 1;
+      renderer.addFlash(actor.col, actor.row, `🛡+${gain}`,
+        'rgba(100,180,255,0.1)', 1800, 0.72, 'rgba(130,200,255,1)');
     }
 
     // ── Phase 5: heal animation — green glow + HP floater ─────────────
@@ -1643,6 +1912,13 @@ async function _animateResolutionSteps(steps, finalEntities, redrawFn, humanFact
 
   // Restore the authoritative final state.
   state.entities = finalEntities;
+  // Restore post-resolution fortifyLevel values on every tile that was
+  // rewound at the start of the animation (covers skipped/aborted playbacks
+  // where some step deltas may not have been re-applied live).
+  for (const [k, v] of postFortMap) {
+    const t = state.tiles.get(k);
+    if (t && t.fortifyLevel !== v) t.fortifyLevel = v;
+  }
   // Skip the final redraw during replay navigation (caller will render the target preState).
   if (!playback.goBack && !playback.aborted && !playback.jumpToEnd) {
     redrawFn();
@@ -1841,6 +2117,25 @@ function showStep(step) {
   }[step];
   const sessionBar = document.getElementById('setup-session-bar');
   if (_stepEl && sessionBar) _stepEl.appendChild(sessionBar);
+}
+
+// Whether the user is currently on a sub-screen of the live online or async
+// flow. Server errors that arrive on these screens should reset the user back
+// to the top-level online/async menu; on any other menu (mode, options, account,
+// how-to-play, etc.) we leave the user where they are so a silent reconnect
+// doesn't kick them out of the menu they were browsing.
+function _isOnOnlineFlow() {
+  return stepOnline.style.display !== 'none' ||
+         stepLobby.style.display !== 'none' ||
+         stepCreateGame.style.display !== 'none' ||
+         stepJoinGame.style.display !== 'none' ||
+         stepWaiting.style.display !== 'none';
+}
+function _isOnAsyncFlow() {
+  return stepAsync.style.display !== 'none' ||
+         stepAsyncCreate.style.display !== 'none' ||
+         stepAsyncCreated.style.display !== 'none' ||
+         stepAsyncJoin.style.display !== 'none';
 }
 
 // Current lobby state (pre-game)
@@ -2136,6 +2431,17 @@ function _resumeCampaignMission(missionId) {
   const missionDef = _activeCampaign.getMissionDef(missionId);
   if (!missionDef) return;
 
+  // Sanity guard — if the mission's hasWitch shape changed since the save was
+  // written (e.g. M5 flipped from no-witch to witch in the mission-5-7 rework)
+  // the saved state has no witch entity and resume would silently desync from
+  // the new mission def. Discard the save and force a fresh start.
+  const savedNoWitch = !!save.state?.noWitchMission;
+  const expectedNoWitch = !missionDef.hasWitch;
+  if (savedNoWitch !== expectedNoWitch) {
+    deleteCampaignMissionSave(_activeCampaign.campaignDef.id, missionId);
+    return;   // caller's flow will fall through to a fresh _initCampaignMission
+  }
+
   _activeMissionDef = missionDef;
   _gameStartTime = Date.now();
   _spSaveId = null;
@@ -2168,7 +2474,7 @@ function _resumeCampaignMission(missionId) {
   _setupLocalUI(canvas, witchAI, null, false);
 
   // Hide chronicle by default for story mode
-  ui._setChronicleMode('none');
+  ui._setChronicleOpen(false);
 
   // Wire mission info button
   ui.showMissionInfoBtn(true);
@@ -2183,18 +2489,36 @@ function _showCampaignSelectScreen() {
   const listEl = document.getElementById('campaign-select-list');
   listEl.innerHTML = CAMPAIGNS.map(c => {
     const disabled = c.disabled === true;
-    const hasSave = !disabled && Campaign.exists(`campaign-${c.id}`);
+    const progress = disabled ? { status: 'new', completed: 0, total: 0 }
+                              : Campaign.getCampaignProgress(c);
     const locked = disabled || (c.prerequisiteCampaign
       ? !Campaign.isCampaignCompleted(getCampaignById(c.prerequisiteCampaign))
       : false);
-    const cls = `campaign-select-item${disabled ? ' disabled' : locked ? ' locked' : ''}`;
+    // Status class is applied when the campaign is playable and has progress.
+    const statusClass = (!disabled && !locked && progress.status !== 'new')
+      ? ` status-${progress.status}`
+      : '';
+    const cls = `campaign-select-item${disabled ? ' disabled' : locked ? ' locked' : ''}${statusClass}`;
     const titlePrefix = disabled ? '' : locked ? '🔒 ' : '';
+    let statusBadge = '';
+    if (disabled) {
+      statusBadge = '<div class="campaign-select-badge coming-soon">Coming Soon</div>';
+    } else if (locked) {
+      statusBadge = '<div class="campaign-select-badge locked-badge">Complete the previous chapter to unlock</div>';
+    } else if (progress.status === 'completed') {
+      statusBadge = '<div class="campaign-select-badge completed">✓ Completed</div>';
+    } else if (progress.status === 'in-progress') {
+      const progressText = progress.total > 0
+        ? `In Progress — ${progress.completed}/${progress.total} missions`
+        : 'In Progress';
+      statusBadge = `<div class="campaign-select-badge in-progress">${progressText}</div>`;
+    } else {
+      statusBadge = '<div class="campaign-select-badge new">New</div>';
+    }
     return `<div class="${cls}" data-campaign="${c.id}">
       <div class="campaign-select-title">${titlePrefix}${c.title}</div>
       <div class="campaign-select-desc">${c.description}</div>
-      ${hasSave ? '<div class="campaign-select-badge">Save found</div>' : ''}
-      ${disabled ? '<div class="campaign-select-badge coming-soon">Coming Soon</div>' : ''}
-      ${!disabled && locked ? '<div class="campaign-select-badge">Complete the previous chapter to unlock</div>' : ''}
+      ${statusBadge}
     </div>`;
   }).join('');
 
@@ -2244,10 +2568,11 @@ function _renderDeployRoster(heroStats, roster, maxActive) {
 
   let html = '<div class="campaign-roster-label">Your Party</div>';
 
-  // Hero card (always active)
+  // Paladin (Ishmael Charger) card — always active. Campaign is fixed to
+  // the day-side primary faction; no stub picker in campaign mode.
   html += '<div class="campaign-party">';
   const weaponLabel = heroStats.weapon ? ` (${heroStats.weapon.name || heroStats.weapon})` : '';
-  html += _campaignCardHTML('Hero' + weaponLabel, null, 'hero', ENTITY_COLOR.hero, heroStats.hp, heroStats.maxHp, heroStats.attack, heroStats.defense, null, true);
+  html += _campaignCardHTML('Ishmael Charger' + weaponLabel, null, 'hero', ENTITY_COLOR[EntityType.PALADIN], heroStats.hp, heroStats.maxHp, heroStats.attack, heroStats.defense, null, true);
   html += '</div>';
 
   if (roster.length === 0) {
@@ -2437,13 +2762,13 @@ function _showMissionInfoModal() {
   ui.showStoryModal(def.title, text);
 }
 
-function _createEnemyEntity(type, col, row) {
+function _createEnemyEntity(type, col, row, state = null) {
   switch (type) {
-    case 'zombie':     return createZombie(col, row, 'witch');
-    case 'minion':     return createMinion(col, row, 'witch');
-    case 'wood_golem': return createWoodGolem(col, row, 'witch');
-    case 'iron_golem': return createIronGolem(col, row, 'witch');
-    default:           return createMinion(col, row, 'witch');
+    case 'zombie':     return createZombie(col, row, 'witch', state);
+    case 'minion':     return createMinion(col, row, 'witch', state);
+    case 'wood_golem': return createWoodGolem(col, row, 'witch', state);
+    case 'iron_golem': return createIronGolem(col, row, 'witch', state);
+    default:           return createMinion(col, row, 'witch', state);
   }
 }
 
@@ -2461,7 +2786,13 @@ function _initCampaignMission(missionDef) {
   if (!builder) { console.error('No map builder for', missionDef.mapBuilder); return; }
   const mapData = builder();
   mapData.noWitch = !missionDef.hasWitch;
-  mapData.disableScoring = !!missionDef.disableScoring;
+  mapData.disableScoring  = !!missionDef.disableScoring;
+  mapData.disableCycleBar = !!missionDef.disableCycleBar;
+  mapData.disableNodeSweep = !!missionDef.disableNodeSweep;
+  mapData.disableScoreWin  = !!missionDef.disableScoreWin;
+  if (missionDef.nodeScoreThreshold != null) {
+    mapData.nodeScoreThreshold = missionDef.nodeScoreThreshold;
+  }
   if (missionDef.maxDiscoverableSurvivors != null) {
     mapData.maxDiscoverableSurvivors = missionDef.maxDiscoverableSurvivors;
   }
@@ -2482,6 +2813,10 @@ function _initCampaignMission(missionDef) {
     state.cycleConfig = {
       phases: [...missionDef.phaseCycle.phases],
       loop: missionDef.phaseCycle.loop !== false,
+      extraScoringPhases: missionDef.phaseCycle.extraScoringPhases
+        ? [...missionDef.phaseCycle.extraScoringPhases] : undefined,
+      extendOnWitchScore: missionDef.phaseCycle.extendOnWitchScore
+        ? [...missionDef.phaseCycle.extendOnWitchScore] : undefined,
     };
     state.phase = phaseForRound(1, state.cycleConfig);
   }
@@ -2542,12 +2877,14 @@ function _initCampaignMission(missionDef) {
       const rosterEntry = _activeCampaign.roster[toDeploy[i]];
       if (!rosterEntry) continue;
       const n = spots[i];
-      const s = createSurvivor(n.col, n.row, 'hero');
+      const s = createSurvivor(n.col, n.row, 'hero', state);
       // Restore stats from roster
       s.name = rosterEntry.name;
       s.title = rosterEntry.title;
       s.bio = rosterEntry.bio;
-      s.ability = rosterEntry.ability;
+      s.abilities = Array.isArray(rosterEntry.abilities)
+        ? [...rosterEntry.abilities]
+        : (rosterEntry.ability ? [rosterEntry.ability] : []);
       s.abilityLabel = rosterEntry.abilityLabel;
       s.color = rosterEntry.color;
       s.hp = rosterEntry.hp;
@@ -2559,7 +2896,7 @@ function _initCampaignMission(missionDef) {
       s.owner = 'hero';
       state.entities.push(s);
       // Exclude this character from the hidden-survivor discovery pool
-      markRosterUsedByName(rosterEntry.name);
+      state.markRosterUsedByName(rosterEntry.name);
     }
   }
 
@@ -2596,7 +2933,7 @@ function _initCampaignMission(missionDef) {
       );
       for (let i = currentCount; i < min && spots.length > 0; i++) {
         const spot = spots.shift();
-        const s = createSurvivor(spot.col, spot.row, 'hero');
+        const s = createSurvivor(spot.col, spot.row, 'hero', state);
         s.owner = 'hero';
         state.entities.push(s);
         state.addLog(_arrivalMessage(s.name));
@@ -2607,7 +2944,7 @@ function _initCampaignMission(missionDef) {
   // Pre-place enemy units from mission definition
   if (missionDef.enemyUnits) {
     for (const enemy of missionDef.enemyUnits) {
-      const e = _createEnemyEntity(enemy.type, enemy.col, enemy.row);
+      const e = _createEnemyEntity(enemy.type, enemy.col, enemy.row, state);
       if (e) {
         if (enemy.overrides) Object.assign(e, enemy.overrides);
         state.entities.push(e);
@@ -2629,7 +2966,7 @@ function _initCampaignMission(missionDef) {
   _roundHistory = [];
 
   // Hide chronicle by default for story mode — less clutter during narrative
-  ui._setChronicleMode('none');
+  ui._setChronicleOpen(false);
 
   // ── MissionConductor setup for guided missions ────────────────────────────
   if (missionDef.conductorSteps) {
@@ -2677,7 +3014,7 @@ function _initCampaignMission(missionDef) {
     redraw();
     requestAnimationFrame(() => {
       renderer.resize();
-      const heroEntity = state.entities.find(e => e.type === 'hero');
+      const heroEntity = state.entities.find(e => e.type === EntityType.PALADIN);
       if (heroEntity) {
         renderer.frameHexes([heroEntity], { maxZoom: 2.2, paddingHexes: 3, duration: 500 });
       }
@@ -2834,23 +3171,26 @@ document.addEventListener('click', e => {
   });
 });
 
-// Quick Play faction toggle
-let _qpFaction = 'hero';
-document.getElementById('btn-faction-hero').addEventListener('click', () => {
-  _qpFaction = 'hero';
-  document.getElementById('btn-faction-hero').classList.add('active');
-  document.getElementById('btn-faction-witch').classList.remove('active');
-});
-document.getElementById('btn-faction-witch').addEventListener('click', () => {
-  _qpFaction = 'witch';
-  document.getElementById('btn-faction-witch').classList.add('active');
-  document.getElementById('btn-faction-hero').classList.remove('active');
-});
+// Quick Play faction picker — 6 tiles, grouped by side.
+// _qpFactionId is the specific faction the player picked. It maps onto a
+// side (day/night) which decides which side-AI to spawn for the opponent.
+let _qpFactionId = 'hero';
+const _qpFactionTiles = document.querySelectorAll('.qp-faction-picker .qp-faction-btn');
+for (const btn of _qpFactionTiles) {
+  btn.addEventListener('click', () => {
+    _qpFactionId = btn.dataset.faction;
+    for (const other of _qpFactionTiles) other.classList.toggle('active', other === btn);
+  });
+}
 
-// Quick Play start button (always 1v1 vs AI)
+// Quick Play start button (always 1v1 vs AI). The faction picker chooses
+// the human-controlled faction; the AI plays the side default on the
+// opposing side. Stubs are passed through to GameState.swapLeaderToFaction
+// so the human's leader gets stub stats.
 document.getElementById('btn-start-qp').addEventListener('click', () => {
-  if (_qpFaction === 'hero') init(true, false);
-  else init(false, true);
+  const def     = getFaction(_qpFactionId);
+  const isDay   = def.side === 'day';
+  init(/*witchIsAI*/ isDay, /*heroIsAI*/ !isDay, /*autoplay*/ false, /*humanFactionId*/ _qpFactionId);
 });
 
 function _doRestart() {
@@ -5479,14 +5819,16 @@ function _renderLobby(lobby) {
     grid.appendChild(unassignedSection);
   }
 
-  // Faction columns
-  const heroSlots  = lobby.slots.filter(s => s.faction === 'hero');
-  const witchSlots = lobby.slots.filter(s => s.faction === 'witch');
+  // Side columns. Today each side has one primary faction (Paladin / Witch)
+  // — iterate slots by their `side` field, which defaults to 'day' / 'night'
+  // via sideOf(faction) when the server builds the slot list.
+  const daySlots   = lobby.slots.filter(s => s.side === 'day'   || s.faction === 'hero');
+  const nightSlots = lobby.slots.filter(s => s.side === 'night' || s.faction === 'witch');
 
   const container = document.createElement('div');
   container.className = 'lobby-factions';
 
-  for (const [label, icon, slots] of [['Hero Side', '⚔', heroSlots], ['Witch Side', '✦', witchSlots]]) {
+  for (const [label, icon, slots] of [['Day Side', '☀', daySlots], ['Night Side', '🌙', nightSlots]]) {
     const col = document.createElement('div');
     col.className = 'lobby-faction-col';
     col.innerHTML = `<div class="lobby-faction-label">${icon} ${label}</div>`;
@@ -5497,9 +5839,12 @@ function _renderLobby(lobby) {
 
       if (slot.status === 'human') {
         const isMe = slot.playerId === myId;
-        row.innerHTML = `<span class="lobby-slot-name">${_esc(slot.name)}${isMe ? ' <em>(you)</em>' : ''}</span>`;
+        row.innerHTML = `<span class="lobby-slot-name">${_esc(slot.name)}${isMe ? ' <em>(you)</em>' : ''}</span>` +
+                        _lobbyFactionTag(slot, isMe);
+        if (isMe) row.appendChild(_buildLobbyFactionPicker(lobby, slot));
       } else if (slot.status === 'ai') {
-        row.innerHTML = `<span class="lobby-slot-name ai-slot">🤖 ${_esc(slot.name ?? 'AI')}</span>`;
+        row.innerHTML = `<span class="lobby-slot-name ai-slot">🤖 ${_esc(slot.name ?? 'AI')}</span>` +
+                        _lobbyFactionTag(slot, false);
         if (isHost) {
           const removeBtn = document.createElement('button');
           removeBtn.className = 'setup-btn secondary lobby-slot-btn';
@@ -5605,6 +5950,42 @@ function _renderLobby(lobby) {
   } else {
     hintEl.style.display = 'none';
   }
+}
+
+/**
+ * Render a compact faction tag next to a seated player's name — shows the
+ * picked faction and a "stub" marker when applicable. Rendered read-only
+ * for other players' rows; the current player's row also gets a picker
+ * dropdown via _buildLobbyFactionPicker().
+ */
+function _lobbyFactionTag(slot, isMe) {
+  // The current player's row renders the <select> picker instead of a tag —
+  // skip the registry lookup entirely for the common re-render case.
+  if (isMe) return '';
+  const def = findFaction(slot.factionId ?? slot.faction);
+  if (!def) return '';
+  const stub = def.isStub() ? ' <span class="lobby-slot-stub">stub</span>' : '';
+  return ` <span class="lobby-slot-faction">${_esc(def.name)}${stub}</span>`;
+}
+
+/**
+ * Build a <select> element that lets the current player change their
+ * faction (same side only) via the setFaction protocol message.
+ */
+function _buildLobbyFactionPicker(lobby, slot) {
+  const factions = getFactionsForSide(slot.side ?? (slot.faction === 'hero' ? 'day' : 'night'));
+  const select   = document.createElement('select');
+  select.className = 'setup-select lobby-faction-select';
+  select.innerHTML = factions.map(f => {
+    const selected = f.id === (slot.factionId ?? slot.faction) ? ' selected' : '';
+    const stub     = f.isStub() ? ' (stub)' : '';
+    return `<option value="${f.id}"${selected}>${_esc(f.name)}${stub}</option>`;
+  }).join('');
+  select.addEventListener('change', () => {
+    if (!select.value) return;
+    mp.setFaction(lobby.id, select.value);
+  });
+  return select;
 }
 
 function _showSlotInvitePopup(lobby, slotIndex, faction, anchorEl) {
@@ -6295,7 +6676,7 @@ async function _playReconnectReplay(replay) {
   // Temporarily load the pre-resolution state so the animation starts from the right position
   const preState = JSON.parse(replay.preStateJson);
   const currentEntities = state.entities;
-  const preEntities = steps[0]?.entitySnapshot ?? deserializeState(preState).entities ?? currentEntities;
+  const preEntities = patchAlive(steps[0]?.entitySnapshot ?? deserializeState(preState).entities ?? currentEntities);
 
   // Snapshot pre-resolution node state for summary
   const prevNodes = (state.witchObjectives ?? []).map(obj => ({
@@ -6913,12 +7294,18 @@ function _createMpClient() {
       // Only show errors on setup screens (pre-game).
       // In-game connection errors are handled by the reconnect overlay.
       if (!state || document.getElementById('setup-screen').style.display !== 'none') {
-        if (_asyncRoomId || stepAsync.style.display !== 'none') {
+        // Only navigate when the user is actually on an online/async sub-screen.
+        // A silent reconnect that produces a stray error must not yank a user out
+        // of an unrelated menu (options, how-to-play, account, mode card, …).
+        if (_asyncRoomId || _isOnAsyncFlow()) {
           _showAsyncScreen();
-        } else {
+          _onlineError(msg, raw);
+        } else if (_isOnOnlineFlow()) {
           _showOnlineScreen();
+          _onlineError(msg, raw);
         }
-        _onlineError(msg, raw);
+        // Otherwise: swallow the error silently — the user is browsing a
+        // non-network menu and shouldn't be teleported away from it.
       }
     },
 
@@ -6947,10 +7334,16 @@ MultiplayerClient.prototype._route = function(msg) {
     // show the signed-out state so the user can sign in again.
     clearSession();
     if (mp) mp._player = null;
-    if (_asyncRoomId || stepAsync.style.display !== 'none') {
+    // Only navigate when the user is on a screen that actually depends on
+    // being signed in. On unrelated menus (options, how-to-play, mode card,
+    // …) a silent reconnect should not yank them away — just refresh the
+    // session bar so they can see they're signed out.
+    if (_asyncRoomId || _isOnAsyncFlow()) {
       _showAsyncScreen();
-    } else {
+    } else if (_isOnOnlineFlow()) {
       _showOnlineScreen();
+    } else {
+      _updateSessionBar();
     }
   }
 };

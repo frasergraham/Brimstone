@@ -4,39 +4,85 @@
 
 Defined in `src/entities.js`. All units share a common `Entity` class with type-specific factory functions.
 
+### Sides & Factions
+
+Brimstone has two opposing **Sides** — Day and Night — and multiple **Factions** per side. Each side owns the day/night phase cycle, scoring, and team allocation; factions vary the leader stats, abilities, AI personalities, and unit roster within a side.
+
+| Side  | Faction      | Leader entity type | Leader display name | Status |
+|-------|--------------|--------------------|---------------------|--------|
+| day   | hero (Paladin) | `PALADIN`        | Ishmael Charger     | primary |
+| day   | rogue        | `ROGUE`            | Mercy Sloane        | distinct (ranged crossbow, +1 sight, no melee weapons, no Sound Horn) |
+| day   | captain      | `CAPTAIN`          | Captain Eli Ward    | stub (inherits Paladin behaviour) |
+| night | witch        | `WITCH`            | The Witch           | primary |
+| night | necromancer  | `NECROMANCER`      | The Necromancer     | stub (inherits Witch behaviour) |
+| night | brute        | `BRUTE`            | The Brute           | distinct (heavy tank, cheap minions, splash blast every hit, knockback, friendly-fire off) |
+
+Stub factions are registered with their own `EntityType`, base stats, and default leader name. They are subclasses of their side's primary faction (`HeroFaction` or `WitchFaction`) and inherit all combat / summon / fortify / discovery / sight behaviour.
+
+The Rogue is no longer a stub — `RogueFaction` overrides:
+- `getSightRange` — paladin formula + 1 in every phase
+- `canEquipWeaponItem` — only `category === 'ranged'` items (bow, crossbow)
+- `innateLeaderAbilities` — empty (no Sound Horn)
+- `modifyLootRoll` — re-rolls `'nothing'` so exploration always finds something
+- `onAfterMoveStep` — auto-detects survivors in adjacent building tiles
+
+Plus `UNIT_TYPES.rogue.range = 3` and `projectileType: 'bolt'` give her the 3-hex crossbow attack via the existing ranged combat path.
+
+The Brute is also no longer a stub — `BruteFaction` overrides:
+- `getSummonOptions` / `getMinionCost` — minions only (no golems), and at a 1-resource discount (witch pays 2)
+- `onAfterMoveStep` — same building-tile scan as the rogue, but `WitchFaction.createDiscoveryEntity` raises a zombie instead of recruiting a survivor
+- `crushSplashRadius` — `1`; the splash blast extends outward to the 6 hexes around the target
+- `splashesOnEveryHit` — `true`; the blast fires on any melee hit, not just crushes
+- `splashSparesAllies` — `true`; witch-side units on splash hexes take no damage (and no knockback)
+- `splashKnockback` — `true`; surviving splashed bystanders are pushed one hex outward from the target when the destination is open
+
+Splash damage scales with the attacker's roll margin: `clamp(floor(margin / 3), 1, 3)`. Crushing blows additionally apply the **wounded** effect to surviving targets — that's a universal rule (any attacker), not a brute-only one.
+
+`Faction` exposes the hooks (`canEquipWeaponItem`, `modifyLootRoll`, `applyExploreLootBonus`, `onAfterMoveStep`, `getSightRange`, `crushSplashRadius`, `splashesOnEveryHit`, `splashSparesAllies`, `splashKnockback`, `getMinionCost`) on the base class; future factions plug in by overriding only what they need.
+
+### Weapon categories
+
+`ITEMS.<weapon>.category = 'melee' | 'ranged'`. Used by `Faction.canEquipWeaponItem(itemId)` to gate per-faction equip rules. Sword / axe / shield / staff / dagger are melee; bow and crossbow are ranged. Crossbow drops in `blacksmith` (8/100 weight) and `watchtower` (12/100 weight).
+
+See `src/sides.js` for the Side enum and `src/factions.js` for the Faction registry.
+
 ### Entity Types & Base Stats
 
 ```
                     ┌──────────────────────┐
                     │   Entity (base class) │
                     │   id, type, owner,    │
-                    │   ownerId, col, row,  │
+                    │   ownerId, factionId, │
+                    │   col, row,           │
                     │   hp, maxHp, attack,  │
                     │   defense, weapon,    │
                     │   items, guarding     │
                     └──────────┬───────────┘
                                │
-        ┌──────────┬───────────┼───────────┬──────────┐
-        │          │           │           │          │
-   ┌────┴────┐ ┌───┴───┐ ┌────┴────┐ ┌────┴───┐ ┌───┴────────┐
-   │  HERO   │ │ WITCH │ │SURVIVOR │ │ ZOMBIE │ │  SUMMONED  │
-   │ 14/3/2  │ │ 10/2/2│ │  4/1/1  │ │ 2/2/0  │ │            │
-   └─────────┘ └───────┘ └─────────┘ └────────┘ │ Minion 2/1/0│
-                                                  │ WGolem 3/2/3│
-        Hero faction                Neutral       │ IGolem 5/3/2│
-                                                  └─────────────┘
-                                                   Witch faction
+   ┌──────────┬─────────┬──────┴───────┬─────────┬─────────┐
+   │ DAY-SIDE │   NPCs  │  NIGHT-SIDE  │ NEUTRAL │SUMMONED │
+   │ Paladin  │Survivor │  Witch       │ Zombie  │ Minion  │
+   │ 14/3/2   │  4/1/1  │  10/2/2      │  2/2/0  │ 2/1/0   │
+   │ Rogue    │         │  Necromancer │         │ WGolem  │
+   │ 10/3/1   │         │  10/1/2      │         │ 3/2/3   │
+   │ Captain  │         │  Brute       │         │ IGolem  │
+   │ 12/2/3   │         │  18/4/3      │         │ 5/3/2   │
+   └──────────┘         └──────────────┘         └─────────┘
 ```
 
-| Type | HP | ATK | DEF | Faction | Created by |
-|------|----|-----|-----|---------|------------|
-| Hero | 14 | 3 | 2 | Hero | Game start |
-| Witch | 10 | 2 | 2 | Witch | Game start |
-| Survivor | 4 | 1 | 1 | Hero | Exploration / Sound Horn |
-| Zombie | 2 | 2 | 0 | Neutral | Exploration (graveyard) |
-| Minion | 2 | 1 | 0 | Witch | Summon (no resource cost) |
-| Wood Golem | 3 | 2 | 3 | Witch | Summon (2 wood) |
-| Iron Golem | 5 | 3 | 2 | Witch | Summon (2 metal) |
+| Type | HP | ATK | DEF | Side | Created by |
+|------|----|-----|-----|------|------------|
+| Paladin (default day leader) | 14 | 3 | 2 | day | Game start |
+| Rogue (stub) | 10 | 3 | 1 | day | Game start (when picked) |
+| Captain (stub) | 12 | 2 | 3 | day | Game start (when picked) |
+| Witch (default night leader) | 10 | 2 | 2 | night | Game start |
+| Necromancer (stub) | 10 | 1 | 2 | night | Game start (when picked) |
+| Brute        | 18 | 4 | 3 | night | Game start (when picked) |
+| Survivor | 4 | 1 | 1 | day (after recruit) | Exploration / Sound Horn |
+| Zombie | 2 | 2 | 0 | night (after raise) | Exploration (graveyard) |
+| Minion | 2 | 1 | 0 | night | Summon (no resource cost) |
+| Wood Golem | 3 | 2 | 3 | night | Summon (2 wood) |
+| Iron Golem | 5 | 3 | 2 | night | Summon (2 metal) |
 
 ### Survivor Abilities
 
@@ -55,11 +101,12 @@ Each survivor has a unique ability from the `SurvivorAbility` enum:
 
 ### Entity Ownership
 
-Every entity has two ownership fields:
-- `owner` — faction string: `'hero'` or `'witch'` (or `null` for zombies)
-- `ownerId` — player UUID linking to a specific human/AI player in N-player games
+Every entity has three ownership-related fields:
+- `owner` — side-default faction string: `'hero'` (day) or `'witch'` (night), or `null` for neutral entities. Stub-faction leaders also carry `'hero'` / `'witch'` here so the codebase's existing owner checks keep working.
+- `ownerId` — player UUID linking to a specific human/AI player in N-player games.
+- `factionId` — the specific faction this entity represents (e.g. `'rogue'` for a stub-faction leader; equals `owner` for default leaders).
 
-This separation allows the system to check faction-level rules (combat eligibility) while also tracking per-player budget and planning.
+This separation lets the system check side-level rules (combat eligibility, scoring) via `owner`, per-player budget and planning via `ownerId`, and faction-specific behaviour via `factionId`.
 
 ---
 

@@ -8,10 +8,10 @@
 //   CONTROL_NODES   — find and hold power nodes
 //   DEFEND_WITCH    — flee when health low or outnumbered
 
-import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, bestWitchObjective, nearestBuilding, roundsUntilScoring, scoreNodeFeasibility, WITCH_PERSONALITIES } from './ai.js';
+import { PlanSimState, stepToward, stepAwayFrom, roadStepToward, bestWitchObjective, nearestBuilding, roundsUntilScoring, scoreNodeFeasibility, WITCH_PERSONALITIES, adjacentBlockingFortToward } from './ai.js';
 import { hexDistance, hexKey, getNeighbors } from './hex.js';
 import { Phase, nodeController } from './game.js';
-import { EntityType } from './entities.js';
+import { EntityType, ADVANTAGE_CAP, expectedDieValue, isLeaderType, attackOf, defenseOf } from './entities.js';
 import { TileType, ResourceType } from './tiles.js';
 import { PlanActionType, MAX_PLAN_LENGTH } from './planner.js';
 
@@ -52,6 +52,17 @@ export const PERSONALITY_CONFIGS = Object.freeze({
     }),
     fleeThreshold: 0.2,
     engageFloor: 'unfavorable',
+  }),
+  // Witch keeps her distance: avoids combat, ignores nodes, runs from the hero.
+  // Used by scripted campaign missions where the witch flees once spotted.
+  // `campaignOnly: true` keeps her out of the standard ai-matrix balance grid.
+  evasive: Object.freeze({
+    goalWeights: Object.freeze({
+      [Goal.BUILD_ARMY]: 0.6, [Goal.CONTROL_NODES]: 0.05, [Goal.DEFEND_WITCH]: 2.5, [Goal.HUNT_HEROES]: 0.1,
+    }),
+    fleeThreshold: 0.7,
+    engageFloor: 'favorable',
+    campaignOnly: true,
   }),
 });
 
@@ -99,22 +110,29 @@ export function assessBoard(sim) {
   const isDay = phase === Phase.DAY;
   const isDawnOrDusk = phase === Phase.DAWN || phase === Phase.DUSK;
 
-  // Unit census
+  // Unit census — any night-side non-leader (zombies, minions, golems).
   const witchUnits = sim.entities.filter(e =>
-    e.alive && e.owner === 'witch' && e.type !== EntityType.WITCH
+    e.alive && e.owner === 'witch' && !isLeaderType(e.type)
   );
   const minions = witchUnits;
   const minionCount = minions.length;
   const armyStrength = minions.reduce((sum, e) => sum + e.hp, 0);
 
   // Visible heroes — filtered by fog-of-war awareness.
+  // In no-witch campaign missions (PvE hunt scenarios), the witch leader's
+  // sense-the-hero role is absent, so ignore the minion sight limit entirely
+  // — every enemy always knows where the hero is and pursues relentlessly,
+  // instead of standing idle across the map. Gated on the persistent mission
+  // flag so a witch dying mid-game never silently flips behaviour.
   const WITCH_LEADER_SIGHT = 4;
-  const WITCH_MINION_SIGHT = 2;
+  const WITCH_MINION_SIGHT = sim.noWitchMission ? Infinity : 2;
   const allHeroes = sim.entities.filter(e => e.alive && e.owner === 'hero');
   const witchSideUnits = sim.entities.filter(e => e.alive && e.owner === 'witch');
   const visibleHeroes = allHeroes.filter(hero =>
     witchSideUnits.some(w => {
-      const sight = w.type === EntityType.WITCH ? WITCH_LEADER_SIGHT : WITCH_MINION_SIGHT;
+      // Any night-side leader (Witch, Necromancer, Brute) gets leader sight;
+      // summoned units get minion sight.
+      const sight = isLeaderType(w.type) ? WITCH_LEADER_SIGHT : WITCH_MINION_SIGHT;
       return hexDistance(w.col, w.row, hero.col, hero.row) <= sight;
     })
   );
@@ -192,10 +210,10 @@ export function assessBoard(sim) {
     hexDistance(witch.col, witch.row, h.col, h.row) <= 3
   ).length : 0;
 
-  // Hero survivors vs hero leader — for HUNT_HEROES targeting
-  const heroLeader = allHeroes.find(h => h.type === EntityType.HERO);
-  const heroSurvivors = allHeroes.filter(h => h.type !== EntityType.HERO);
-  const visibleSurvivors = visibleHeroes.filter(h => h.type !== EntityType.HERO);
+  // Day-side leader (Paladin / Rogue / Captain) — for HUNT_HEROES targeting.
+  const heroLeader = allHeroes.find(h => isLeaderType(h.type));
+  const heroSurvivors    = allHeroes.filter(h => !isLeaderType(h.type));
+  const visibleSurvivors = visibleHeroes.filter(h => !isLeaderType(h.type));
 
   // Wounded visible enemies (below 50% HP) — prime targets for focus-fire
   const woundedEnemies = visibleHeroes.filter(h =>
@@ -230,6 +248,8 @@ export function assessBoard(sim) {
     totalResources, metalCount, woodCount, canAffordSummon, bestSummonType,
     unexploredBuildings,
     totalBudget: sim.actionsLeft + (sim.campaignAIBudgetBonus ?? 0),
+    witchPlayerCount: (sim.playerCounts && sim.playerCounts.witch) || 1,
+    heroPlayerCount:  (sim.playerCounts && sim.playerCounts.hero)  || 1,
   };
 }
 
@@ -254,13 +274,18 @@ export function scoreGoals(board, goalWeights = null) {
   defend = clamp01(defend);
 
   // BUILD_ARMY — always want more units; more bodies = more gang-up = more kills
+  // NvN: thresholds are per-witch, so a 3-witch team doesn't stop summoning
+  // at the same faction-wide minion count a solo witch would (which left
+  // each NvN witch at ~2 minions vs a solo witch's 5–6).
   let army = 0;
   const nodeCount = board.nodes.length || 3;
-  if (board.minionCount < nodeCount) {
-    army = 0.9; // urgent: fewer bodies than nodes
-  } else if (board.minionCount < nodeCount + 2) {
+  const witchCount = board.witchPlayerCount || 1;
+  const perWitchMinions = board.minionCount / witchCount;
+  if (perWitchMinions < nodeCount) {
+    army = 0.9; // urgent: fewer bodies than nodes per witch
+  } else if (perWitchMinions < nodeCount + 2) {
     army = 0.6; // still want reserves for hunting + node control
-  } else if (board.minionCount < nodeCount + 3) {
+  } else if (perWitchMinions < nodeCount + 3) {
     army = 0.35; // building toward overwhelming force
   } else {
     army = 0.15; // large army — shift to using it
@@ -270,11 +295,13 @@ export function scoreGoals(board, goalWeights = null) {
   // If no resources and nothing to explore, army building is less useful
   if (!board.canAffordSummon && board.unexploredBuildings.length === 0) army *= 0.3;
   // Early game: high priority to build up before hero gets survivors
-  if (board.round <= 4 && board.minionCount < 3) army = Math.max(army, 0.9);
+  if (board.round <= 4 && perWitchMinions < 3) army = Math.max(army, 0.9);
   army = clamp01(army);
 
-  // CONTROL_NODES — the primary witch win condition; always high priority
-  let control = 0.45; // base — bonuses push it higher based on game state
+  // CONTROL_NODES — the primary witch win condition; always high priority.
+  // NvN: bump the base so node budget competes with the (also-scaled) BUILD_ARMY
+  // goal; otherwise extra minions cluster near witches instead of reaching nodes.
+  let control = witchCount > 1 ? 0.60 : 0.45;
   const uncovered = board.nodes.filter(n => n.controller !== 'witch' || !n.witchPresent).length;
   const allCovered = uncovered === 0;
   control += uncovered * 0.1;
@@ -337,8 +364,9 @@ export function scoreGoals(board, goalWeights = null) {
   }
 
   // Early-game focus: no enemies visible + unexplored buildings + few minions → build army
+  // Per-witch threshold so a 3-witch team doesn't falsely register as "full" at 4 minions.
   if (board.visibleHeroes.length === 0 && board.unexploredBuildings.length > 0 &&
-      board.minionCount < nodeCount + 1) {
+      perWitchMinions < nodeCount + 1) {
     scores[Goal.BUILD_ARMY] = clamp01(scores[Goal.BUILD_ARMY] + 0.4);
     scores[Goal.DEFEND_WITCH] = Math.min(scores[Goal.DEFEND_WITCH], 0.1);
     scores[Goal.HUNT_HEROES] = 0; // no targets visible
@@ -409,23 +437,31 @@ export function allocateBudget(scores, totalBudget) {
 export function estimateCombat(attacker, defender, board) {
   const nightBonus = board.isNight && attacker.owner === 'witch' ? 2 : 0;
 
-  const gangUpCount = board.minions.filter(m =>
+  // Ranged attackers (range > 1) don't benefit from — or fear — adjacency:
+  // no attacker gang-up, no defender ally-defence. Match the rules in
+  // executeBattle so the AI estimator lines up with actual dice math.
+  const attackerRange = attacker.range ?? 1;
+  const isRanged = attackerRange > 1;
+
+  const gangUpCount = isRanged ? 0 : board.minions.filter(m =>
     m.id !== attacker.id && hexDistance(m.col, m.row, defender.col, defender.row) <= 1
   ).length;
-  const gangUpDice = Math.min(gangUpCount, 3);
+  const gangUpDice = Math.min(gangUpCount, ADVANTAGE_CAP);
 
-  const defAllyCount = (board.visibleHeroes || []).filter(h =>
+  const defAllyCount = isRanged ? 0 : (board.visibleHeroes || []).filter(h =>
     h.id !== defender.id && hexDistance(h.col, h.row, defender.col, defender.row) <= 1
   ).length;
-  const defAllyDice = Math.min(defAllyCount, 3);
+  const defAllyDice = Math.min(defAllyCount, ADVANTAGE_CAP);
 
   // Include fortification and stat bonuses for accurate estimation
   const fortBonus = defender.fortification || 0;
   const atkBonus = attacker.attackBonus || 0;
   const defBonus = defender.defenseBonus || 0;
 
-  const expectedAtk = (attacker.attack || 0) + atkBonus + 3.5 + nightBonus + gangUpDice * 2;
-  const expectedDef = (defender.defense || 0) + defBonus + fortBonus + 3.5 + defAllyDice * 2;
+  const atkGangupFlat = Math.min(gangUpCount, ADVANTAGE_CAP);
+  const defGangupFlat = Math.min(defAllyCount, ADVANTAGE_CAP);
+  const expectedAtk = attackOf(attacker) + atkBonus + nightBonus + atkGangupFlat + expectedDieValue(gangUpDice);
+  const expectedDef = defenseOf(defender) + defBonus + fortBonus + defGangupFlat + expectedDieValue(defAllyDice);
 
   const favorability = expectedAtk - expectedDef;
 
@@ -558,7 +594,7 @@ export function genHuntHeroes(sim, board, budget) {
   // Score each visible enemy as a target
   const targets = board.visibleHeroes.map(h => {
     const hpRatio = h.hp / (h.maxHp || h.hp || 1);
-    const isSurvivor = h.type !== EntityType.HERO;
+    const isSurvivor = !isLeaderType(h.type);
     // Priority: wounded > survivors > hero leader
     let priority = 0;
     if (h.hp <= 2) priority += 5; // can likely kill in one hit
@@ -599,8 +635,10 @@ export function genHuntHeroes(sim, board, budget) {
       const simUnit = sim.entities.find(e => e.id === unit.id);
       if (!simUnit) continue;
 
-      // If adjacent — attack directly
-      if (dist <= 1) {
+      // If in attack range — shoot or swing directly. Ranged units (witch,
+      // range 2) skip the close-in step when they can already hit the target.
+      const unitRange = simUnit.range ?? 1;
+      if (dist <= unitRange) {
         const est = estimateCombat(simUnit, target.entity, board);
         // For hunting, accept unfavorable odds too — attrition wins
         if (est.classification !== 'suicidal') {
@@ -618,17 +656,21 @@ export function genHuntHeroes(sim, board, budget) {
         }
       }
 
-      // If close (within reach this turn) — move toward target then attack
-      if (dist <= 4) {
+      // If close (within reach this turn) — move toward target then attack.
+      // No-witch campaign missions expand the pursuit radius so minions/golems
+      // keep chasing the hero across the map instead of giving up at dist 5+.
+      const pursuitRange = sim.noWitchMission ? 8 : 4;
+      if (dist <= pursuitRange) {
         sim.unitCommitments.set(simUnit.id, Goal.HUNT_HEROES);
         assignedUnits.add(simUnit.id);
         attackersAssigned++;
 
         let stepsLeft = Math.min(remaining, 3);
+        const unitHuntRange = simUnit.range ?? 1;
         while (stepsLeft > 0) {
           const curDist = hexDistance(simUnit.col, simUnit.row, target.entity.col, target.entity.row);
-          if (curDist <= 1) {
-            // Adjacent — attack
+          if (curDist <= unitHuntRange) {
+            // In range — attack (melee adjacency or ranged shot)
             const est = estimateCombat(simUnit, target.entity, board);
             if (est.classification !== 'suicidal') {
               actions.push({
@@ -643,6 +685,25 @@ export function genHuntHeroes(sim, board, budget) {
           }
 
           const step = roadStepToward(sim, simUnit, target.entity);
+          // Prefer sieging a wall if it stands between us and the target
+          // (i.e. it's strictly closer to the target than any walkable step).
+          const wall = adjacentBlockingFortToward(sim, simUnit, target.entity);
+          if (wall) {
+            const stepDist = step
+              ? hexDistance(step.col, step.row, target.entity.col, target.entity.row)
+              : Infinity;
+            const wallDist = hexDistance(wall.col, wall.row, target.entity.col, target.entity.row);
+            if (wallDist < stepDist || !step) {
+              actions.push({
+                type: PlanActionType.BATTLE_HEX, entityId: simUnit.id,
+                targetCol: wall.col, targetRow: wall.row,
+                _priority: 2, _goal: Goal.HUNT_HEROES,
+              });
+              sim.applySiege(wall.col, wall.row);
+              remaining--;
+              break;
+            }
+          }
           if (!step) break;
 
           actions.push({
@@ -823,7 +884,13 @@ export function genBuildArmy(sim, board, budget) {
 function _trySummons(actions, sim, board, remaining) {
   if (!board.witch || remaining <= 0) return actions;
 
-  const armyCap = (board.isNight || board.phase === Phase.DUSK) ? 10 : 7;
+  // Minion cap scales with witch team size so NvN witches aren't rationed to
+  // a solo-witch ceiling. 1v1 baseline unchanged; each extra witch adds +4
+  // (tuned alongside the scaled hidden-survivor pool so both sides field a
+  // denser force in 2v2+ without breaking the per-side ratio).
+  const witchBonus = 4 * ((board.witchPlayerCount ?? 1) - 1);
+  const baseCap = (board.isNight || board.phase === Phase.DUSK) ? 10 : 7;
+  const armyCap = baseCap + witchBonus;
   let currentArmy = board.minionCount;
 
   while (remaining > 0 && currentArmy < armyCap) {
@@ -883,7 +950,11 @@ export function genControlNodes(sim, board, budget) {
     hexDistance(h.col, h.row, n.obj.col, n.obj.row) <= 2
   );
 
-  // Score and sort nodes
+  // Score and sort nodes. In NvN, match the hero's more aggressive feasibility
+  // floor (0.05) — with more witches/minions available, contesting long-shot
+  // nodes becomes worthwhile rather than conceding them.
+  const isNvN = (board.witchPlayerCount || 1) > 1;
+  const feasibilityFloor = isNvN ? 0.05 : 0.1;
   const targetNodes = board.nodes
     .filter(n => n.controller !== 'witch' || !n.witchPresent || n.heroPresent || heroThreatenedNode(n))
     .map(n => ({
@@ -891,7 +962,7 @@ export function genControlNodes(sim, board, budget) {
       feasibility: scoreNodeFeasibility(n, 'witch', sim.entities),
       allyClaimed: allyClaimed ? n.obj.hexes?.some(h => allyClaimed.has(hexKey(h.col, h.row))) : false,
     }))
-    .filter(n => n.feasibility >= 0.1 && !n.allyClaimed)
+    .filter(n => n.feasibility >= feasibilityFloor && !n.allyClaimed)
     .sort((a, b) => {
       const aPrio = a.controller === 'hero' ? 0 : (a.controller === 'witch' && a.witchPresent ? 2 : 1);
       const bPrio = b.controller === 'hero' ? 0 : (b.controller === 'witch' && b.witchPresent ? 2 : 1);
@@ -899,11 +970,16 @@ export function genControlNodes(sim, board, budget) {
       return a.distToNearest - b.distToNearest;
     });
 
-  // Determine how many units to send per node — overwhelming force wins
+  // Determine how many units to send per node — overwhelming force wins.
+  // NvN bumps the baseline so the extra minions actually reach nodes instead
+  // of clustering near the witch. At 3v3+ the minion supply is large enough
+  // to justify 3 units per node.
   const scoringImminent = board.roundsToScoring <= 2;
+  const witchTeamSize = board.witchPlayerCount || 1;
+  const nvnBaseline = witchTeamSize >= 3 ? 3 : (isNvN ? 2 : 1);
   const unitsPerNode = board.canSweepNodes ? 4 :
-                       (scoringImminent ? 3 :
-                       (board.roundsToScoring <= 4 ? 2 : 1));
+                       (scoringImminent ? Math.max(3, nvnBaseline) :
+                       (board.roundsToScoring <= 4 ? Math.max(2, nvnBaseline) : nvnBaseline));
   const maxStepsPerUnit = scoringImminent ? 4 : 3;
 
   for (const node of targetNodes) {
@@ -927,9 +1003,11 @@ export function genControlNodes(sim, board, budget) {
         : (simUnit.col === node.obj.col && simUnit.row === node.obj.row);
 
       if (onNode) {
-        // AGGRESSIVE: fight ALL enemies on or adjacent to the node — always
+        // AGGRESSIVE: fight ALL enemies within attack range of the unit
+        // (adjacency for melee minions, range 2 for the witch).
+        const onNodeUnitRange = simUnit.range ?? 1;
         const adjacentEnemies = board.visibleHeroes.filter(h =>
-          hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= 1
+          hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= onNodeUnitRange
         );
         for (const enemy of adjacentEnemies) {
           if (remaining <= 0) break;
@@ -966,10 +1044,11 @@ export function genControlNodes(sim, board, budget) {
       // Move toward node, attacking enemies encountered en route
       sim.unitCommitments.set(simUnit.id, Goal.CONTROL_NODES);
       let stepsForUnit = Math.min(remaining, maxStepsPerUnit);
+      const enRouteUnitRange = simUnit.range ?? 1;
       while (stepsForUnit > 0) {
-        // Opportunity attack: fight adjacent hero units while moving
+        // Opportunity attack: fight enemies within this unit's attack range
         const adjacentFoes = board.visibleHeroes.filter(h =>
-          hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= 1
+          hexDistance(h.col, h.row, simUnit.col, simUnit.row) <= enRouteUnitRange
         );
         for (const enemy of adjacentFoes) {
           if (remaining <= 0 || stepsForUnit <= 0) break;
@@ -1002,6 +1081,26 @@ export function genControlNodes(sim, board, budget) {
         if (simUnit.col === targetHex.col && simUnit.row === targetHex.row) break;
 
         const step = roadStepToward(sim, simUnit, targetHex);
+        // Prefer sieging a wall if it's strictly closer to the node than the
+        // best walkable step — punches through hero defensive lines instead
+        // of taking long detours.
+        const wall = adjacentBlockingFortToward(sim, simUnit, targetHex);
+        if (wall) {
+          const stepDist = step
+            ? hexDistance(step.col, step.row, targetHex.col, targetHex.row)
+            : Infinity;
+          const wallDist = hexDistance(wall.col, wall.row, targetHex.col, targetHex.row);
+          if (wallDist < stepDist || !step) {
+            actions.push({
+              type: PlanActionType.BATTLE_HEX, entityId: simUnit.id,
+              targetCol: wall.col, targetRow: wall.row,
+              _priority: 3, _goal: Goal.CONTROL_NODES,
+            });
+            sim.applySiege(wall.col, wall.row);
+            remaining--;
+            break;
+          }
+        }
         if (!step) break;
 
         actions.push({

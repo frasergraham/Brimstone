@@ -3,6 +3,7 @@
 // Imported by UIController to keep rendering logic separate from DOM wiring.
 
 import { PlanActionType } from './planner.js';
+import { ITEMS } from './items.js';
 import { EntityType, ENTITY_COLOR } from './entities.js';
 import { ResourceType } from './tiles.js';
 import { nodeController } from './game.js';
@@ -80,7 +81,7 @@ function _stepCostLabel(action, projShared, projWitch, projEntityItems) {
       return `−1${RES_ICON[ResourceType.HERBS]}`;
     case PlanActionType.USE_ITEM: {
       const item = action.item;
-      if (!item || item.startsWith('weapon:')) return '';
+      if (!item || ITEMS[item]?.kind === 'weapon') return '';
       return `−1${RES_ICON[item] || item}`;
     }
     case PlanActionType.SOUND_HORN:
@@ -114,7 +115,7 @@ export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entit
   };
 
   // Projected inventory — updated as we walk through steps
-  const projShared      = { ...(initialInv?.shared      ?? {}) };
+  const projShared      = { ...(initialInv?.hero        ?? {}) };
   const projWitch       = { ...(initialInv?.witch       ?? {}) };
   const projEntityItems = {};
   if (initialInv?.entityItems) {
@@ -179,13 +180,14 @@ export function buildPlanStepsHtml(plan, budget, foodAvailable, submitted, entit
         break;
       case PlanActionType.HEAL: {
         const healEnt = entities.find(e => e.id === a.entityId);
-        const healPool = healEnt?.owner === 'witch' ? projWitch : projShared;
+        const healPools = { hero: projShared, witch: projWitch };
+        const healPool = healPools[healEnt?.owner] || projShared;
         if ((healPool[ResourceType.HERBS] || 0) > 0) healPool[ResourceType.HERBS]--;
         break;
       }
       case PlanActionType.USE_ITEM: {
         const item = a.item;
-        if (!item || item.startsWith('weapon:')) break;
+        if (!item || ITEMS[item]?.kind === 'weapon') break;
         if ((projShared[item] || 0) > 0) { projShared[item]--; }
         break;
       }
@@ -238,7 +240,7 @@ export function buildUnitPlanBlocksHtml(
   const budgetState = new Map();   // key → 'ok' | 'food' | 'over'
   const costLabels  = new Map();   // key → string
 
-  const projShared      = { ...(initialInv?.shared      ?? {}) };
+  const projShared      = { ...(initialInv?.hero        ?? {}) };
   const projWitch       = { ...(initialInv?.witch       ?? {}) };
   const projEntityItems = {};
   if (initialInv?.entityItems) {
@@ -372,13 +374,14 @@ function _advanceProjectedInventory(a, projShared, projWitch, projEntityItems, e
       break;
     case PlanActionType.HEAL: {
       const healEnt = entities?.find(e => e.id === a.entityId);
-      const healPool = healEnt?.owner === 'witch' ? projWitch : projShared;
+      const healPools = { hero: projShared, witch: projWitch };
+      const healPool = healPools[healEnt?.owner] || projShared;
       if ((healPool[ResourceType.HERBS] || 0) > 0) healPool[ResourceType.HERBS]--;
       break;
     }
     case PlanActionType.USE_ITEM: {
       const item = a.item;
-      if (!item || item.startsWith('weapon:')) break;
+      if (!item || ITEMS[item]?.kind === 'weapon') break;
       if ((projShared[item] || 0) > 0) { projShared[item]--; }
       break;
     }

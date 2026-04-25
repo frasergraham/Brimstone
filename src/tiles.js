@@ -37,31 +37,39 @@ export const ResourceType = Object.freeze({
 });
 
 export const WeaponType = Object.freeze({
-  SWORD:  'sword',   // +2 attack
-  AXE:    'axe',     // +1 attack, +1 defense
-  BOW:    'bow',     // +1 attack
-  SHIELD: 'shield',  // +2 defense
-  STAFF:  'staff',   // +1 attack, +2 vs undead
-  DAGGER: 'dagger',  // +1 attack
+  SWORD:    'sword',     // +2 attack
+  AXE:      'axe',       // +1 attack, +1 defense
+  BOW:      'bow',       // +1 attack (ranged category)
+  CROSSBOW: 'crossbow',  // +1 attack (ranged category)
+  SHIELD:   'shield',    // +2 defense
+  STAFF:    'staff',     // +1 attack, +1 advantage die vs undead
+  DAGGER:   'dagger',    // +1 attack
 });
 
-export const WEAPON_STATS = {
-  [WeaponType.SWORD]:  { attackBonus: 2, defenseBonus: 0 },
-  [WeaponType.AXE]:    { attackBonus: 1, defenseBonus: 1 },
-  [WeaponType.BOW]:    { attackBonus: 1, defenseBonus: 0 },
-  [WeaponType.SHIELD]: { attackBonus: 0, defenseBonus: 2 },
-  [WeaponType.STAFF]:  { attackBonus: 1, defenseBonus: 0 },
-  [WeaponType.DAGGER]: { attackBonus: 1, defenseBonus: 0 },
-};
+// WEAPON_STATS and WEAPON_LABEL derive from the ITEMS registry
+// (src/items.js), which is the single source of truth for all items.
+// New code should read ITEMS[id] directly; these exports remain for
+// existing call sites during the phased units/items/abilities refactor.
+import { ITEMS as _ITEMS } from './items.js';
 
-export const WEAPON_LABEL = {
-  [WeaponType.SWORD]:  '⚔ Sword (+2 ATK)',
-  [WeaponType.AXE]:    '🪓 Axe (+1 ATK, +1 DEF)',
-  [WeaponType.BOW]:    '🏹 Bow (+1 ATK)',
-  [WeaponType.SHIELD]: '🛡 Shield (+2 DEF)',
-  [WeaponType.STAFF]:  '🪄 Staff (+1 ATK, +2 vs undead)',
-  [WeaponType.DAGGER]: '🗡 Dagger (+1 ATK)',
-};
+export const WEAPON_STATS = Object.freeze(
+  Object.fromEntries(
+    Object.values(_ITEMS)
+      .filter(i => i.kind === 'weapon')
+      .map(i => [i.id, {
+        attackBonus:  i.statMods?.attack  ?? 0,
+        defenseBonus: i.statMods?.defense ?? 0,
+      }])
+  )
+);
+
+export const WEAPON_LABEL = Object.freeze(
+  Object.fromEntries(
+    Object.values(_ITEMS)
+      .filter(i => i.kind === 'weapon')
+      .map(i => [i.id, i.label])
+  )
+);
 
 // Passability: can entities move through this tile type?
 export const TILE_PASSABLE = {
@@ -177,6 +185,20 @@ export class Tile {
 
 // Hard cap on fortification level.
 export const MAX_FORTIFY_LEVEL = 6;
+
+// Level at (and above) which a fortification becomes an impassable wall.
+// Level 1 is passable; level 2+ is a wall for factions that are blocked by walls
+// (see `Faction.isBlockedByWalls()`). Walls below the threshold are just
+// combat-bonus terrain and anyone may enter.
+export const FORT_IMPASSABLE_THRESHOLD = 2;
+
+// Terrain-only check: is this tile a wall strong enough to block movement?
+// Faction-specific gating ("does this faction get blocked by walls?") lives
+// on the Faction class — callers typically combine both:
+//   isFortWall(tile) && getFaction(actor.owner).isBlockedByWalls()
+export function isFortWall(tile) {
+  return (tile?.fortifyLevel || 0) >= FORT_IMPASSABLE_THRESHOLD;
+}
 
 // Combat bonuses granted by a fortified hex. Hero units fighting from a
 // fortified hex receive these bonuses (attacker rolls +attack, defender rolls

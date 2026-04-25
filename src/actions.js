@@ -1,16 +1,27 @@
 // Action system: definitions, validation, and execution
-import { getNeighbors, hexKey, hexDistance } from './hex.js';
+import { getNeighbors, hexKey, hexDistance, hexRange, offsetToAxial, axialToOffset } from './hex.js';
 import {
   TileType, ResourceType, WEAPON_LABEL, BUILDING_LOOT, TERRAIN_LOOT, rollLoot,
-  MAX_FORTIFY_LEVEL, getFortifyCombatBonus,
+  MAX_FORTIFY_LEVEL, getFortifyCombatBonus, isFortWall,
+  FORT_IMPASSABLE_THRESHOLD,
 } from './tiles.js';
+import { ITEMS } from './items.js';
+import { ABILITIES } from './abilities.js';
+
+// Phase 3: items in an actor's bag are keyed by their ITEMS id (e.g.
+// 'sword') instead of the legacy 'weapon:sword' prefix. Weapon-vs-
+// resource classification now comes from the ITEMS registry.
+const isWeaponId = (id) => ITEMS[id]?.kind === 'weapon';
 import {
   EntityType, SurvivorAbility, Entity,
   createZombie, createMinion, createSurvivor,
   createWoodGolem, createIronGolem,
+  nextDie, ADVANTAGE_CAP, isLeaderType,
 } from './entities.js';
 import { Phase } from './game.js';
-import { getFaction } from './factions.js';
+import { getFaction, concreteFactionOf, sightRangeForEntity } from './factions.js';
+import { dispatchTrigger, applyEffect } from './effects.js';
+import { triggerSurvivorEncounter } from './survivor-discovery.js';
 
 export const ActionType = Object.freeze({
   MOVE:         'move',
@@ -43,6 +54,12 @@ function hasVisibleEnemy(state, actor, col, row, visibleEnemyHexes) {
   return visibleEnemyHexes.has(hexKey(col, row));
 }
 
+// True if this tile is a wall strong enough to block `actor`'s movement.
+// Combines terrain-level check with the actor's faction predicate.
+export function isFortBlocking(tile, actorOwner) {
+  return isFortWall(tile) && getFaction(actorOwner).isBlockedByWalls();
+}
+
 // Cost-based movement: road/bridge/building tiles cost 1, all other passable
 // tiles cost 2.  Budget = range * 2, so:
 //   range 1 (no horse) → 1 off-road tile  OR  2 road tiles per action
@@ -67,6 +84,7 @@ export function getReachableHexes(state, actor, range, posOverride = null, visib
       const nt = tile(state, n.col, n.row);
       if (!nt || nt.type === TileType.RIVER) continue;
       if (hasVisibleEnemy(state, actor, n.col, n.row, visibleEnemyHexes)) continue;
+      if (isFortBlocking(nt, actor.owner)) continue;
       const isRoadLike = nt.type === TileType.ROAD || nt.type === TileType.BRIDGE ||
                          nt.type === TileType.BUILDING;
       const nc = c + (isRoadLike ? 1 : 2);
@@ -113,6 +131,7 @@ function findShortestPath(state, actor, toCol, toRow, posOverride = null) {
       const nt = tile(state, n.col, n.row);
       if (!nt || nt.type === TileType.RIVER) continue;
       if (hasEnemy(state, actor, n.col, n.row) && nk !== goalK) continue;
+      if (isFortBlocking(nt, actor.owner) && nk !== goalK) continue;
       const isRoadLike = nt.type === TileType.ROAD || nt.type === TileType.BRIDGE ||
                          nt.type === TileType.BUILDING;
       const nc = c + (isRoadLike ? 1 : 2);
@@ -178,6 +197,7 @@ export function getFogReachableHexes(state, actor, posOverride = null) {
       const nt = tile(state, n.col, n.row);
       if (!nt || nt.type === TileType.RIVER) continue;
       // No enemy blocking — this is theoretical reachability for fog visibility
+      if (isFortBlocking(nt, actor.owner)) continue;
       const isRoadLike = nt.type === TileType.ROAD || nt.type === TileType.BRIDGE ||
                          nt.type === TileType.BUILDING;
       const nc = c + (isRoadLike ? 1 : 2);
@@ -245,7 +265,8 @@ export function getVisiblePositions(state, viewerFactionId) {
 
   for (const viewer of state.entities) {
     if (!viewer.alive || viewer.owner !== viewerFactionId) continue;
-    const range = viewerFaction.getSightRange(state.phase, viewer.ability === SurvivorAbility.SCOUT);
+    // Per-entity sight so stub-faction bonuses (e.g. rogue +1) apply.
+    const range = sightRangeForEntity(viewer, state.phase);
     for (const target of state.entities) {
       if (!target.alive || target.owner !== opponentId) continue;
       if (hexDistance(viewer.col, viewer.row, target.col, target.row) <= range) {
@@ -282,24 +303,44 @@ export function getValidActions(state, actor) {
   // fogged hexes via the explicit BATTLE_HEX action below.
   // visibleHexes is already computed above (reused from move-reachability) and
   // is non-null iff fog is active.
-  let battleTargets = [
-    ...sameHexEnemies(state, actor),
-    ...adjacentEnemies(state, actor),
-  ];
+  // Ranged units (range > 1) extend target enumeration to any enemy within
+  // their attack range rather than just the adjacent hexes.
+  const actorRange = typeof actor.getRange === 'function' ? actor.getRange() : (actor.range ?? 1);
+  let battleTargets;
+  if (actorRange > 1) {
+    battleTargets = state.entities.filter(e =>
+      e.alive && e.owner !== actor.owner && e.owner !== null && e.id !== actor.id &&
+      hexDistance(actor.col, actor.row, e.col, e.row) <= actorRange
+    );
+  } else {
+    battleTargets = [
+      ...sameHexEnemies(state, actor),
+      ...adjacentEnemies(state, actor),
+    ];
+  }
   if (visibleHexes) {
     battleTargets = battleTargets.filter(e => visibleHexes.has(hexKey(e.col, e.row)));
   }
   if (battleTargets.length) actions.push({ type: ActionType.BATTLE, targets: battleTargets });
 
-  // Battle Hex — blind attack on any adjacent non-river hex (for attacking through fog).
-  // Distinct from BATTLE: no enemy must be known to be present.
-  // At resolution: attacks a random enemy on the hex; skips if hex is empty.
-  const battleHexTargets = [
-    { col: actor.col, row: actor.row }, // same hex (co-located)
-    ...getNeighbors(actor.col, actor.row),
-  ].filter(n => {
+  // Battle Hex — blind attack on any non-river hex within range (for
+  // attacking through fog). Distinct from BATTLE: no enemy must be known to
+  // be present. At resolution: attacks a random enemy on the hex; skips if
+  // the hex is empty. Ranged units (range > 1) target any hex within their
+  // range; ranged attacks don't worry about line-of-sight.
+  const battleHexCandidates = actorRange > 1
+    ? hexRange(actor.col, actor.row, actorRange)
+    : [
+        { col: actor.col, row: actor.row }, // same hex (co-located)
+        ...getNeighbors(actor.col, actor.row),
+      ];
+  const battleHexTargets = battleHexCandidates.filter(n => {
     const nt = tile(state, n.col, n.row);
-    return nt && nt.type !== TileType.RIVER;
+    if (!nt) return false;
+    // Melee: exclude rivers (can't wade/attack into one). Ranged: rivers are
+    // fine as targets (you can shoot over water).
+    if (actorRange <= 1 && nt.type === TileType.RIVER) return false;
+    return true;
   });
   if (battleHexTargets.length) {
     actions.push({ type: ActionType.BATTLE_HEX, targets: battleHexTargets });
@@ -315,9 +356,15 @@ export function getValidActions(state, actor) {
     actions.push({ type: ActionType.FORTIFY, targets: [{ col: actor.col, row: actor.row }], affordable });
   }
 
-  // Summon — only the witch leader herself can summon.
-  if (faction.canSummon() && actor.type === EntityType.WITCH) {
-    const summonOpts = faction.getSummonOptions(faction.getInventory(state));
+  // Summon — Phase 5 gate: any unit whose innate abilities include 'summon'.
+  // Pushed onto night-side leaders by Faction.createLeader(); minions, golems,
+  // and zombies never carry it, so this is equivalent to the old
+  // `canSummon() && isLeaderType + owner === 'witch'` combination.
+  if (actor.hasAbility('summon')) {
+    // Concrete faction governs which summon types this leader actually has —
+    // the brute's options are restricted to MINION while inheriting the
+    // shared night-side inventory from the side-level WitchFaction.
+    const summonOpts = concreteFactionOf(actor).getSummonOptions(faction.getInventory(state));
     for (const opt of summonOpts) {
       actions.push({ type: ActionType.SUMMON, summonType: opt.summonType, affordable: opt.affordable });
     }
@@ -326,8 +373,9 @@ export function getValidActions(state, actor) {
   // Guard — any unit can take a guard stance (stacks: each use adds 1 charge)
   actions.push({ type: ActionType.GUARD, currentCharges: actor.guarding || 0 });
 
-  // Sound Horn — hero leader only; costs 2 food, ranged survivor discovery
-  if (actor.type === EntityType.HERO) {
+  // Sound Horn — Phase 5 gate: any unit whose innate abilities include
+  // 'sound_horn'. Pushed onto day-side leaders by Faction.createLeader().
+  if (actor.hasAbility('sound_horn')) {
     const food = (faction.getInventory(state)['food'] || 0);
     actions.push({ type: ActionType.SOUND_HORN, affordable: food >= 1 });
   }
@@ -357,59 +405,45 @@ export function getValidActions(state, actor) {
 
     if (usable.length) actions.push({ type: ActionType.USE_ITEM, usable });
 
-    // Equip weapon from actor's personal items
+    // Equip weapon from actor's personal items. Filter by per-item gate
+    // so factions with category restrictions (e.g. rogue: ranged-only)
+    // don't surface a forbidden weapon in the equip menu.
+    const concrete = concreteFactionOf(actor);
     const weapons = Object.keys(myItems)
-      .filter(k => k.startsWith('weapon:') && (myItems[k] || 0) > 0);
+      .filter(k => isWeaponId(k) && (myItems[k] || 0) > 0 && concrete.canEquipWeaponItem(k));
     if (weapons.length) {
       actions.push({
         type: ActionType.EQUIP_WEAPON,
         weapons: weapons.map(k => ({
           key: k,
-          label: WEAPON_LABEL[k.replace('weapon:', '')] || k,
+          label: WEAPON_LABEL[k] || k,
         })),
       });
     }
 
     // Survivor special abilities
-    if (actor.type === EntityType.SURVIVOR && actor.ability) {
-      const abilityAction = _buildAbilityAction(state, actor);
-      if (abilityAction) actions.push(abilityAction);
+    if (actor.type === EntityType.SURVIVOR && actor.abilities?.length > 0) {
+      for (const abilityAction of _buildAbilityActions(state, actor)) {
+        actions.push(abilityAction);
+      }
     }
   }
 
   return actions;
 }
 
-function _buildAbilityAction(state, actor) {
-  switch (actor.ability) {
-    case SurvivorAbility.HEAL: {
-      // Check for a co-located faction leader (owned by same player or same faction)
-      const actorFaction = getFaction(actor.owner);
-      const leaderHere = state.entities.find(e =>
-        e.alive && e.type === actorFaction.leaderType &&
-        e.col === actor.col && e.row === actor.row &&
-        (e.ownerId === actor.ownerId || e.owner === actor.owner) &&
-        e.hp < e.maxHp
-      );
-      if (!leaderHere) return null;
-      return { type: ActionType.USE_ABILITY, ability: SurvivorAbility.HEAL };
-    }
-    case SurvivorAbility.INSPIRE: {
-      // Only available when faction leader is on the same hex
-      const actorFaction = getFaction(actor.owner);
-      const leaderHere = state.entities.some(e =>
-        e.alive && e.type === actorFaction.leaderType &&
-        e.col === actor.col && e.row === actor.row &&
-        (e.ownerId === actor.ownerId || e.owner === actor.owner)
-      );
-      if (!leaderHere) return null;
-      return { type: ActionType.USE_ABILITY, ability: SurvivorAbility.INSPIRE };
-    }
-    case SurvivorAbility.RALLY:
-      return { type: ActionType.USE_ABILITY, ability: SurvivorAbility.RALLY };
-    default:
-      return null;  // passive abilities have no button
+// Iterate the actor's abilities and emit a plan-action entry for each
+// active ability whose registry validate() passes. Passive abilities
+// return no action (nothing to click).
+function _buildAbilityActions(state, actor) {
+  const out = [];
+  for (const id of actor.abilities) {
+    const ab = ABILITIES[id];
+    if (!ab || ab.kind !== 'active') continue;
+    if (typeof ab.validate === 'function' && !ab.validate(state, actor)) continue;
+    out.push({ type: ActionType.USE_ABILITY, ability: id });
   }
+  return out;
 }
 
 function pickSummonType(inv) {
@@ -439,37 +473,10 @@ export function survivorFindMultiplier(state) {
   return Math.max(0, 1 - 0.10 * active);
 }
 
-// Reveal and materialise a hidden survivor (or zombie for the witch) on a tile.
-// Clears the hiddenSurvivor flag and returns { encounterLog, encounterSurvivor }.
-function _triggerSurvivorEncounter(state, actor, col, row) {
-  const st = tile(state, col, row);
-  if (!st?.hiddenSurvivor) return null;
-
-  // Campaign cap: skip encounter if faction already found max discoverable NPCs
-  if (getFaction(actor.owner).canDiscoverNPCs() &&
-      state.maxDiscoverableSurvivors != null &&
-      state.discoveredSurvivorCount >= state.maxDiscoverableSurvivors) {
-    st.hiddenSurvivor = false;
-    return null;
-  }
-
-  st.hiddenSurvivor = false;
-
-  const encounterLog = [];
-  let encounterSurvivor = null;
-
-  const faction = getFaction(actor.owner);
-  const entity = faction.createDiscoveryEntity(col, row, actor.ownerId);
-  state.entities.push(entity);
-  if (getFaction(actor.owner).canDiscoverNPCs()) {
-    state.discoveredSurvivorCount = (state.discoveredSurvivorCount || 0) + 1;
-  }
-  const result = faction.buildDiscoveryResult(entity);
-  encounterLog.push(...result.encounterLog);
-  encounterSurvivor = result.encounterSurvivor;
-
-  return { encounterLog, encounterSurvivor };
-}
+// Survivor encounter logic moved to src/survivor-discovery.js so faction
+// overrides (e.g. RogueFaction.onAfterMoveStep) can share the implementation
+// without a circular import. Local alias keeps existing call sites readable.
+const _triggerSurvivorEncounter = triggerSurvivorEncounter;
 
 export function executeMove(state, actor, targetCol, targetRow) {
   actor.guarding = 0;  // Moving breaks guard stance
@@ -482,10 +489,15 @@ export function executeMove(state, actor, targetCol, targetRow) {
   if (!reachable.some(h => h.col === targetCol && h.row === targetRow)) {
     // When an enemy occupies the target (e.g. hidden by fog during planning),
     // allow the move to proceed if the target is within step range so the unit
-    // walks as far as it can and stops before the enemy.
+    // walks as far as it can and stops before the enemy.  The same applies
+    // when the target itself is a fort-blocked hex for the actor's faction —
+    // the unit should walk up to it and then surface blockedByFort rather
+    // than silently returning "Cannot reach".
     const enemyOnTarget = hasEnemy(state, actor, targetCol, targetRow);
+    const targetTile = tile(state, targetCol, targetRow);
+    const fortOnTarget = isFortBlocking(targetTile, actor.owner);
     const dist = hexDistance(actor.col, actor.row, targetCol, targetRow);
-    if (!enemyOnTarget || dist > maxSteps) {
+    if ((!enemyOnTarget && !fortOnTarget) || dist > maxSteps) {
       return { success: false, log: [`Cannot reach (${targetCol},${targetRow}) from current position.`] };
     }
   }
@@ -493,7 +505,7 @@ export function executeMove(state, actor, targetCol, targetRow) {
   // Find the road-preferring path from current position to destination.
   const fullPath = findShortestPath(state, actor, targetCol, targetRow) ?? [{ col: targetCol, row: targetRow }];
 
-  // Walk the path step by step; stop if an enemy blocks a mid-path hex.
+  // Walk the path step by step; stop if an enemy or fort-wall blocks a mid-path hex.
   // Cap the number of hex steps to prevent long road-chain traversals when a
   // prior move in the plan failed and the entity is further away than expected.
   const walkedPath = [];
@@ -506,6 +518,7 @@ export function executeMove(state, actor, targetCol, targetRow) {
     if (hasEnemy(state, actor, step.col, step.row)) break;
     const st = tile(state, step.col, step.row);
     if (!st || st.type === TileType.RIVER) break;
+    if (isFortBlocking(st, actor.owner)) break;
 
     actor.col = step.col;
     actor.row = step.row;
@@ -516,10 +529,27 @@ export function executeMove(state, actor, targetCol, targetRow) {
       const enc = _triggerSurvivorEncounter(state, actor, step.col, step.row);
       if (enc) { encounterLog.push(...enc.encounterLog); encounterSurvivor = enc.encounterSurvivor; }
     }
+
+    // Faction-specific post-move trigger (e.g. rogue auto-detects survivors
+    // in adjacent buildings). Default no-op for other factions.
+    const hookResult = concreteFactionOf(actor).onAfterMoveStep(state, actor, step.col, step.row);
+    if (hookResult) {
+      if (hookResult.encounterLog?.length) encounterLog.push(...hookResult.encounterLog);
+      if (hookResult.encounterSurvivor) encounterSurvivor = hookResult.encounterSurvivor;
+    }
   }
 
   if (walkedPath.length === 0) {
-    const blocker = (fullPath.length > 0)
+    const firstStep = fullPath[0];
+    const firstTile = firstStep ? tile(state, firstStep.col, firstStep.row) : null;
+    if (firstTile && isFortBlocking(firstTile, actor.owner)) {
+      return {
+        success: false,
+        log: [`${actor.displayName}'s path is blocked by fortifications at (${firstStep.col},${firstStep.row}).`],
+        blockedByFort: { col: firstStep.col, row: firstStep.row, fortLevel: firstTile.fortifyLevel },
+      };
+    }
+    const blocker = fullPath.length > 0
       ? state.entities.find(e =>
           e.alive && e.owner !== actor.owner && e.col === fullPath[0].col && e.row === fullPath[0].row
         ) ?? null
@@ -530,24 +560,29 @@ export function executeMove(state, actor, targetCol, targetRow) {
     return { success: false, log: ['The way is blocked.'] };
   }
 
-  // Detect partial move blocked by enemy
+  // Detect partial move blocked by enemy or fortification
   let blockedBy = null;
+  let blockedByFort = null;
   if (walkedPath.length < fullPath.length) {
     const nextStep = fullPath[walkedPath.length];
+    const nextTile = tile(state, nextStep.col, nextStep.row);
     if (hasEnemy(state, actor, nextStep.col, nextStep.row)) {
       blockedBy = state.entities.find(e =>
         e.alive && e.owner !== actor.owner && e.col === nextStep.col && e.row === nextStep.row
       ) ?? null;
+    } else if (nextTile && isFortBlocking(nextTile, actor.owner)) {
+      blockedByFort = { col: nextStep.col, row: nextStep.row, fortLevel: nextTile.fortifyLevel };
     }
   }
 
-  const finalStep = walkedPath[walkedPath.length - 1];
   if (blockedBy) {
     log.push(`${actor.displayName} movement blocked by ${blockedBy.displayName}.`);
+  } else if (blockedByFort) {
+    log.push(`${actor.displayName}'s path is blocked by fortifications at (${blockedByFort.col},${blockedByFort.row}).`);
   }
   if (encounterLog.length) log.push(...encounterLog);
 
-  return { success: true, log, cost: 1, path: walkedPath, blockedBy, encounterLog, encounterSurvivor };
+  return { success: true, log, cost: 1, path: walkedPath, blockedBy, blockedByFort, encounterLog, encounterSurvivor };
 }
 
 export function executeExplore(state, actor) {
@@ -568,15 +603,46 @@ export function executeExplore(state, actor) {
 
   // HERBALIST ability: also yield 1 herbs on any explore (goes to actor's items)
   const isHerbalist = actor.type === EntityType.SURVIVOR &&
-    actor.ability === SurvivorAbility.HERBALIST;
+    actor.hasAbility(SurvivorAbility.HERBALIST);
 
-  if (t.type === TileType.BUILDING && t.building && BUILDING_LOOT[t.building]) {
-    const table = _effectiveLoot(state, 'buildings', t.building, BUILDING_LOOT[t.building]);
-    _applyLoot(state, actor, rollLoot(table), log, lootItems);
-  } else {
-    const baseTable = TERRAIN_LOOT[t.type] || TERRAIN_LOOT['grass'];
-    const table = _effectiveLoot(state, 'terrain', t.type, baseTable);
-    _applyLoot(state, actor, rollLoot(table), log, lootItems);
+  const concreteFaction = concreteFactionOf(actor);
+
+  const runLoot = () => {
+    let table;
+    if (t.type === TileType.BUILDING && t.building && BUILDING_LOOT[t.building]) {
+      table = _effectiveLoot(state, 'buildings', t.building, BUILDING_LOOT[t.building]);
+    } else {
+      const baseTable = TERRAIN_LOOT[t.type] || TERRAIN_LOOT['grass'];
+      table = _effectiveLoot(state, 'terrain', t.type, baseTable);
+    }
+    const raw = rollLoot(table);
+    const lootType = concreteFaction.modifyLootRoll(state, actor, table, raw);
+    _applyLoot(state, actor, lootType, log, lootItems);
+    concreteFaction.applyExploreLootBonus(
+      state, actor, lootType,
+      () => runBonusLoot(table),
+      { isWeapon: isWeaponId(lootType) },
+    );
+  };
+  // Bonus rolls don't recursively trigger further bonuses — keeps the
+  // multiplier bounded to ~2x per primary roll.
+  const runBonusLoot = (table) => {
+    const raw = rollLoot(table);
+    const lootType = concreteFaction.modifyLootRoll(state, actor, table, raw);
+    _applyLoot(state, actor, lootType, log, lootItems);
+  };
+  runLoot();
+
+  // NvN bonus rolls: larger teams field more units and need more resources.
+  // 1v1 → 1 roll; 2v2+ → one extra roll per additional player per side, with a
+  // half-step 30% bonus roll between integer steps. Skipped entirely in 1v1 so
+  // tests that mock Math.random() with fixed sequences aren't perturbed.
+  const sidePlayers = Math.max(1, Math.floor((state.players?.length || 2) / 2));
+  if (sidePlayers > 1) {
+    const extraRolls = Math.floor((sidePlayers - 1) / 2);
+    for (let i = 0; i < extraRolls; i++) runLoot();
+    const bonusProb = 0.3 * ((sidePlayers - 1) % 2);
+    if (bonusProb > 0 && Math.random() < bonusProb) runLoot();
   }
 
   if (isHerbalist && getFaction(actor.owner).canDiscoverNPCs()) {
@@ -618,12 +684,12 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
     return;
   }
 
-  if (lootType.startsWith('weapon:')) {
-    if (faction.canEquipWeapon()) {
-      const weaponKey = lootType.replace('weapon:', '');
-      const label = WEAPON_LABEL[weaponKey] || weaponKey;
+  if (isWeaponId(lootType)) {
+    const concrete = concreteFactionOf(actor);
+    if (concrete.canEquipWeaponItem(lootType)) {
+      const label = WEAPON_LABEL[lootType] || lootType;
       if (!actor.weapon) {
-        actor.equipWeapon(weaponKey);
+        actor.equipWeapon(lootType);
         log.push(`Found a ${label}! ${actor.displayName} equips it immediately.`);
         lootItems?.push('+⚔');
       } else {
@@ -631,6 +697,11 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
         log.push(`Found a ${label}! Added to ${actor.displayName}'s pack.`);
         lootItems?.push('+⚔');
       }
+    } else if (faction.canEquipWeapon()) {
+      // The side can use weapons in general, but this faction rejects this
+      // category (e.g. rogue refuses melee weapons).
+      const label = WEAPON_LABEL[lootType] || lootType;
+      log.push(`Found a ${label}! ${actor.displayName} cannot wield it.`);
     } else {
       log.push(`${actor.displayName} finds a weapon but has no use for it.`);
     }
@@ -656,35 +727,107 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
   lootItems?.push(`+${resIcon}`);
 }
 
-// Splash damage: when a unit is crushed or killed, all other units on the same
-// tile (except those in excludeIds) take 1 damage.  Does NOT chain — splash
-// kills do not trigger further splashes.
-// Returns { splashKills, splashHits } — splashHits includes every bystander
-// that took damage (with name, position, and whether they died).
-function _applySplashDamage(state, col, row, excludeIds, log) {
+// Splash damage: when an attack triggers splash, every other unit on the
+// affected hexes takes `damage` HP. Does NOT chain — splash kills do not
+// trigger further splashes.
+//
+// Options:
+//   extraRadius   — extends the blast outward by N hex steps (1 = the 6
+//                   neighbours around (col,row) are also splashed).
+//   damage        — base damage per splashed bystander (default 1).
+//   sparesOwner   — owner string ('hero' / 'witch'); units of that owner
+//                   are skipped (no damage, no knockback). Friendly-fire
+//                   toggle.
+//   knockback     — when true, surviving bystanders are pushed 1 hex
+//                   outward from (col,row) if the destination is open.
+//                   Killed bystanders stay where they fell.
+//
+// Returns { splashKills, splashHits, splashHexes }. splashHits records
+// the FINAL position of each hit (post-knockback) plus a `from` field
+// holding the pre-knockback hex for animation.
+function _applySplashDamage(state, col, row, excludeIds, log, opts = {}) {
+  const {
+    extraRadius = 0,
+    damage      = 1,
+    sparesOwner = null,
+    knockback   = false,
+  } = opts;
   const excludeSet = new Set(excludeIds);
+  const splashHexes = [{ col, row }];
+  if (extraRadius > 0) {
+    for (const n of getNeighbors(col, row)) splashHexes.push({ col: n.col, row: n.row });
+  }
+  const hexKeys = new Set(splashHexes.map(h => hexKey(h.col, h.row)));
   const bystanders = state.entities.filter(
-    e => e.alive && e.col === col && e.row === row && !excludeSet.has(e.id)
+    e => e.alive && hexKeys.has(hexKey(e.col, e.row)) && !excludeSet.has(e.id) &&
+         (sparesOwner == null || e.owner !== sparesOwner)
   );
   const splashKills = [];
   const splashHits  = [];
   for (const b of bystanders) {
-    const wasKilled = b.takeDamage(1);
-    log.push(`💢 ${b.displayName} caught in the blast — takes 1 splash damage! (${b.hp}/${b.maxHp} HP)`);
-    splashHits.push({ id: b.id, name: b.displayName, owner: b.owner, type: b.type,
-                      ownerId: b.ownerId, killed: !!wasKilled, col: b.col, row: b.row });
+    const fromCol = b.col, fromRow = b.row;
+    const dmg = b.applyIncomingDamage(damage);
+    const wasKilled = b.takeDamage(dmg);
+    log.push(`💢 ${b.displayName} caught in the blast — takes ${dmg} splash damage! (${b.hp}/${b.maxHp} HP)`);
+    let pushedTo = null;
+    if (knockback && !wasKilled && (fromCol !== col || fromRow !== row)) {
+      pushedTo = _knockbackDestination(state, b, col, row);
+      if (pushedTo) {
+        b.col = pushedTo.col;
+        b.row = pushedTo.row;
+        log.push(`💨 ${b.displayName} is hurled to (${pushedTo.col},${pushedTo.row}).`);
+      }
+    }
+    splashHits.push({
+      id: b.id, name: b.displayName, owner: b.owner, type: b.type,
+      ownerId: b.ownerId, killed: !!wasKilled,
+      col: b.col, row: b.row,
+      fromCol, fromRow,
+      knockedBack: !!pushedTo,
+    });
     if (wasKilled) {
       log.push(`${b.displayName} is slain by splash damage!`);
       splashKills.push({ id: b.id, owner: b.owner, type: b.type, ownerId: b.ownerId });
       state.entities = state.entities.filter(e => e.id !== b.id);
     }
   }
-  return { splashKills, splashHits };
+  return { splashKills, splashHits, splashHexes };
+}
+
+// Compute the hex one step outward from `centerCol/centerRow` in the
+// direction of `entity`, in axial space (handles odd-r stagger). Returns
+// null if the destination is off-map, a river, a fortified wall the
+// entity can't enter, or already occupied by another live unit.
+function _knockbackDestination(state, entity, centerCol, centerRow) {
+  const center = offsetToAxial(centerCol, centerRow);
+  const here   = offsetToAxial(entity.col, entity.row);
+  const dq = here.q - center.q;
+  const dr = here.r - center.r;
+  const push = axialToOffset(here.q + dq, here.r + dr);
+  const t = state.tiles.get(hexKey(push.col, push.row));
+  if (!t || t.type === TileType.RIVER) return null;
+  if (isFortBlocking(t, entity.owner)) return null;
+  if (state.entities.some(e => e.alive && e.id !== entity.id && e.col === push.col && e.row === push.row)) return null;
+  return push;
 }
 
 export function executeBattle(state, actor, target) {
   actor.guarding = 0;  // Attacking breaks guard stance
   const log = [];
+
+  // Ranged attacks have a different rule set than melee:
+  //   - No gang-up advantage on either side (the attacker is firing from
+  //     afar, and allies don't flank a shot).
+  //   - No crushing blows; damage is always 1 per hit.
+  //   - No splash on kill (clean single-target).
+  //   - Defender in forest gets +1 DEF (cover).
+  //   - Attacker at close range (dist == 1) fires at disadvantage (1 die).
+  // Phase bonus, fortification, weapon triggers, and counter-attack all
+  // still apply — see plan file for rationale.
+  const atkRange = (typeof actor.getRange === 'function' ? actor.getRange() : (actor.range ?? 1));
+  const distToTarget = hexDistance(actor.col, actor.row, target.col, target.row);
+  const isRanged = atkRange > 1;
+  const isCloseRanged = isRanged && distToTarget <= 1;
 
   // Phase bonus — faction-specific (e.g. witch gets +2 ATK at night)
   const attackerFaction = getFaction(actor.owner);
@@ -712,30 +855,57 @@ export function executeBattle(state, actor, target) {
   const atkFortAtkBonus = actor.owner === 'witch'  ? 0 : atkFortRaw.attack;
   const fortBonus       = target.owner === 'witch' ? 0 : defFortRaw.defense;
 
-  // Each ally adds an extra d3 — more allies = bigger swings (capped at 3 dice)
-  const extraAtkDice = Math.min(attackerAllies, 3);
-  const extraDefDice = Math.min(defenderAllies, 3);
+  // Forest-cover bonus — ranged-only. The defender blends into the trees
+  // and gains +1 DEF against incoming projectiles. Melee attackers are
+  // already in the same thicket, so cover does not apply.
+  const forestCoverBonus = (isRanged && defTile?.type === TileType.FOREST) ? 1 : 0;
+
+  // Gang-up: melee only. Ranged attacks explicitly ignore ally adjacency
+  // for both attacker and defender.
+  const atkAdvantageDice = isRanged ? 0 : Math.min(attackerAllies, ADVANTAGE_CAP);
+  const defAdvantageDice = isRanged ? 0 : Math.min(defenderAllies, ADVANTAGE_CAP);
+  const atkGangupFlat    = isRanged ? 0 : Math.min(attackerAllies, ADVANTAGE_CAP);
+  const defGangupFlat    = isRanged ? 0 : Math.min(defenderAllies, ADVANTAGE_CAP);
+  // Close-range disadvantage — ranged unit shooting at an adjacent target
+  // rolls its attack pool with 1 disadvantage die (best-of-K math handles it).
+  const atkDisadvantageDice = isCloseRanged ? 1 : 0;
 
   // Fatigue: faction-specific defense penalty based on defend count this round
   const defenderFaction = getFaction(target.owner);
   const fatiguePenalty = defenderFaction.getDefenseFatigue(target.defendCount || 0);
 
   const { attackRoll, defenseRoll, hit, margin,
-          atkBaseDie, defBaseDie, atkExtraDice, defExtraDice, atkStaffBonus } =
-    Entity.resolveCombat(actor, target, phaseBonus, atkFortAtkBonus, fortBonus,
-                         extraAtkDice, extraDefDice, fatiguePenalty);
+          atkBaseDie, defBaseDie, atkExtraDice, defExtraDice,
+          atkPool, defPool, atkStaffBonus } =
+    Entity.resolveCombat(actor, target, {
+      // Phase stays flat here — converting to advantage turned out too steep a
+      // nerf to witch's night window; see CLAUDE.md §Tuning for the sweep.
+      extraAtkBonus: atkFortAtkBonus + phaseBonus + atkGangupFlat,
+      atkAdvantageDice,
+      atkDisadvantageDice,
+      defAdvantageDice,
+      extraDefBonus: fortBonus + defGangupFlat + forestCoverBonus,
+      fatiguePenalty,
+      state,
+    });
 
   // Increment the defender's defend count for fatigue tracking
   if (target.defendCount === undefined) target.defendCount = 0;
   target.defendCount += 1;
 
   const phaseNote  = phaseBonus > 0 ? ' (🌙 night bonus)' : '';
-  const gangNote    = attackerAllies >= 1 ? ' [gang-up +d3]' : '';
-  const allyDefNote = defenderAllies >= 1 ? ' [allies +d3]'  : '';
+  const rangedNote   = isRanged
+    ? (isCloseRanged ? ' 🎯 (point-blank, disadvantage)' : ' 🏹 (ranged)')
+    : '';
+  const coverNote    = forestCoverBonus > 0 ? ' 🌲 (forest cover +1 DEF)' : '';
+  const gangNote    = !isRanged && attackerAllies >= 1
+    ? ` [advantage ${atkAdvantageDice}, flat +${atkGangupFlat}]` : '';
+  const allyDefNote = !isRanged && defenderAllies >= 1
+    ? ` [advantage ${defAdvantageDice}, flat +${defGangupFlat}]` : '';
 
   log.push(
-    `${actor.displayName} attacks ${target.displayName}! ` +
-    `[${attackRoll}${gangNote} vs ${defenseRoll}${allyDefNote}]${phaseNote}`
+    `${actor.displayName} attacks ${target.displayName}!${rangedNote} ` +
+    `[${attackRoll}${gangNote} vs ${defenseRoll}${allyDefNote}${coverNote}]${phaseNote}`
   );
 
   let killed     = false;
@@ -744,16 +914,29 @@ export function executeBattle(state, actor, target) {
   let fortDamaged = 0;         // fort levels lost this combat (1 if defender took any damage)
   let splashKills = [];         // entities killed by splash damage
   let splashHits  = [];         // all entities that took splash damage (killed or not)
-  const isCrush  = hit && attackRoll >= 2 * defenseRoll;
+  let splashHexes = [];         // hexes covered by the splash blast (for VFX)
+  // Concrete-faction splash config — brute's blast extends 1 hex outward,
+  // fires on every melee hit, scales with margin, knocks bystanders back,
+  // and skips friendly units.
+  const attackerConcrete = concreteFactionOf(actor);
+  const splashRadius     = attackerConcrete.crushSplashRadius();
+  const splashEveryHit   = attackerConcrete.splashesOnEveryHit();
+  const splashSpareSide  = attackerConcrete.splashSparesAllies() ? actor.owner : null;
+  const splashKnockback  = attackerConcrete.splashKnockback();
+  // Ranged attacks cannot crush — the rule set explicitly forbids it.
+  const isCrush  = !isRanged && hit && attackRoll >= 2 * defenseRoll;
 
   if (hit) {
     // Crushing blow: attacker's roll is at least double the defender's roll
     const totalDmg = isCrush ? 2 : 1;
 
-    // All damage goes directly to the defender
+    // All damage goes directly to the defender. Effects on the defender
+    // (e.g. wounded → +1 damage taken) amplify each hit.
     for (let d = 0; d < totalDmg; d++) {
-      damage += 1;
-      const wasKilled = target.takeDamage(1);
+      const inc = target.applyIncomingDamage(1);
+      damage += inc;
+      const wasKilled = target.takeDamage(inc);
+      dispatchTrigger('damaged', target, { state, amount: inc, source: actor });
       if (wasKilled) { killed = true; break; }
     }
 
@@ -767,6 +950,9 @@ export function executeBattle(state, actor, target) {
     if (killed) {
       log.push(`${target.displayName} is slain!`);
       getFaction(actor.owner).trackKill(state);
+      actor.killsThisRound = (actor.killsThisRound ?? 0) + 1;
+      dispatchTrigger('damaged-fatal', target, { state, source: actor });
+      dispatchTrigger('kill', actor, { state, target });
       state.entities = state.entities.filter(e => e.id !== target.id);
     } else if (damage > 0) {
       const label = damage >= 2 ? `${damage} damage (crushing blow!)` : `${damage} damage`;
@@ -774,14 +960,41 @@ export function executeBattle(state, actor, target) {
     }
     if (isCrush) log.push(`💥 Crushing blow! (${attackRoll} vs ${defenseRoll})`);
 
-    // Splash damage: crush or kill splashes all other units on the target's tile
-    if (isCrush || killed) {
-      const splash = _applySplashDamage(state, target.col, target.row, [actor.id, target.id], log);
+    // Crushing blows leave a wound on the target — +1 damage taken from
+    // any source for the next 3 rounds. Universal (applies to all
+    // attackers, not just the brute) so any big swing has a follow-up
+    // tax. Skipped on a kill (no point wounding a corpse).
+    if (isCrush && !killed) {
+      applyEffect(target, 'wounded');
+      log.push(`🩸 ${target.displayName} is wounded by the brutal blow.`);
+    }
+
+    // Splash damage: vanilla rule splashes only on crush / kill. The
+    // brute's `splashesOnEveryHit()` lets the blast fire on any hit.
+    // Splash damage scales with the attacker's roll margin —
+    // `max(1, floor(margin / 3))`, capped at 3 — so big swings turn
+    // into bigger blasts. Bystanders may be knocked one hex outward
+    // and friendly units may be spared, both per concrete faction.
+    // Ranged attacks never splash (no crush, no AOE).
+    if (!isRanged && (isCrush || killed || splashEveryHit)) {
+      const splashBaseDamage = Math.max(1, Math.min(3, Math.floor(margin / 3)));
+      const splash = _applySplashDamage(
+        state, target.col, target.row, [actor.id, target.id], log,
+        {
+          extraRadius: splashRadius,
+          damage:      splashBaseDamage,
+          sparesOwner: splashSpareSide,
+          knockback:   splashKnockback,
+        }
+      );
       splashKills = splash.splashKills;
       splashHits  = splash.splashHits;
+      splashHexes = splash.splashHexes;
       for (const sk of splashKills) {
         if (sk.owner !== actor.owner) {
           getFaction(actor.owner).trackKill(state);
+          actor.killsThisRound = (actor.killsThisRound ?? 0) + 1;
+          dispatchTrigger('kill', actor, { state, target: sk });
         }
       }
     }
@@ -790,21 +1003,42 @@ export function executeBattle(state, actor, target) {
 
     // Counter-attack: defender's roll is at least double the attacker's roll
     if (defenseRoll >= 2 * attackRoll && actor.alive) {
-      const counterKilled = actor.takeDamage(1);
-      counterDmg = 1;
-      log.push(`⚔ ${target.displayName} counter-attacks! ${actor.displayName} takes 1 damage.`);
+      counterDmg = actor.applyIncomingDamage(1);
+      const counterKilled = actor.takeDamage(counterDmg);
+      log.push(`⚔ ${target.displayName} counter-attacks! ${actor.displayName} takes ${counterDmg} damage.`);
+      dispatchTrigger('damaged', actor, { state, amount: counterDmg, source: target });
       if (counterKilled) {
         log.push(`${actor.displayName} is slain by the counter!`);
         getFaction(target.owner).trackKill(state);
+        target.killsThisRound = (target.killsThisRound ?? 0) + 1;
+        dispatchTrigger('damaged-fatal', actor, { state, source: target });
+        dispatchTrigger('kill', target, { state, target: actor });
         state.entities = state.entities.filter(e => e.id !== actor.id);
 
-        // Counter-kill splashes other units on the attacker's tile (exclude target)
-        const counterSplash = _applySplashDamage(state, actor.col, actor.row, [target.id, actor.id], log);
+        // Counter-kill splashes other units on the attacker's tile.
+        // The defender's concrete-faction config applies — a brute
+        // defender's counter-kill blasts neighbours, knocks them back,
+        // and spares its own minions just like an offensive splash.
+        const defenderConcrete = concreteFactionOf(target);
+        const counterSplash = _applySplashDamage(
+          state, actor.col, actor.row, [target.id, actor.id], log,
+          {
+            extraRadius: defenderConcrete.crushSplashRadius(),
+            damage:      1, // counter-splash always 1 (no margin to scale on)
+            sparesOwner: defenderConcrete.splashSparesAllies() ? target.owner : null,
+            knockback:   defenderConcrete.splashKnockback(),
+          }
+        );
         splashKills.push(...counterSplash.splashKills);
         splashHits.push(...counterSplash.splashHits);
+        if (counterSplash.splashHexes.length > splashHexes.length) {
+          splashHexes = counterSplash.splashHexes;
+        }
         for (const sk of counterSplash.splashKills) {
           if (sk.owner !== target.owner) {
             getFaction(target.owner).trackKill(state);
+            target.killsThisRound = (target.killsThisRound ?? 0) + 1;
+            dispatchTrigger('kill', target, { state, target: sk });
           }
         }
       } else {
@@ -818,13 +1052,108 @@ export function executeBattle(state, actor, target) {
     attackRoll, defenseRoll, hit, killed,
     margin, damage, counterDmg, fortDamaged,
     attackerAllies, defenderAllies, splashKills, splashHits,
+    splashHexes, splashRadius,
+    ranged: isRanged, closeRanged: isCloseRanged,
     breakdown: {
       atkBaseDie, defBaseDie,
       atkExtraDice, defExtraDice,
+      atkPool, defPool,
       atkStaffBonus,
       phaseBonus, fortBonus, atkFortAtkBonus, fatiguePenalty,
+      atkGangupFlat, defGangupFlat,
+      atkAdvantageDice, defAdvantageDice, atkDisadvantageDice,
+      forestCoverBonus,
+      ranged: isRanged, closeRanged: isCloseRanged,
+      atkAllyNames: isRanged ? [] : atkAllies.map(e => e.displayName),
+      defAllyNames: isRanged ? [] : defAllies.map(e => e.displayName),
+    },
+  };
+}
+
+// Siege an impassable fortification from an adjacent hex.
+// Witch-side only. The fort defends itself with a fixed defense of fortLevel+1
+// (no phase / fatigue / ally modifiers) against the attacker's normal attack
+// roll. Hit drops the fort by 1 level; crush (attack ≥ 2× defense) drops it by 2.
+// No counter-attack. The fort is only attackable at level ≥ FORT_IMPASSABLE_THRESHOLD.
+export function executeFortAssault(state, actor, targetCol, targetRow) {
+  if (!getFaction(actor.owner).canAssaultFortifications()) {
+    return { success: false, log: ['Only witch-side units can assault fortifications.'] };
+  }
+  const t = tile(state, targetCol, targetRow);
+  if (!t) return { success: false, log: ['Invalid target.'] };
+  if ((t.fortifyLevel || 0) < FORT_IMPASSABLE_THRESHOLD) {
+    return { success: false, log: ['No wall to assault here.'] };
+  }
+  if (hexDistance(actor.col, actor.row, targetCol, targetRow) > 1) {
+    return { success: false, log: ['Target wall is out of range.'] };
+  }
+
+  actor.guarding = 0;  // assaulting breaks guard
+  const log = [];
+
+  const attackerFaction = getFaction(actor.owner);
+  const phaseBonus = attackerFaction.getPhaseCombatBonus(state.phase);
+
+  // Attacker gang-up: witch allies adjacent to the target hex add advantage dice.
+  const targetHexes = new Set([hexKey(targetCol, targetRow)]);
+  for (const n of getNeighbors(targetCol, targetRow)) targetHexes.add(hexKey(n.col, n.row));
+  const atkAllies = state.entities.filter(e =>
+    e.alive && e.owner === actor.owner && e.id !== actor.id && targetHexes.has(hexKey(e.col, e.row))
+  );
+  const atkAdvantage = Math.min(atkAllies.length, ADVANTAGE_CAP);
+
+  // Base attack roll: take best of 1 + atkAdvantage d6, then add flat stats.
+  // Witch units never gain fortification attack bonus from their own hex.
+  const atkPool = new Array(1 + atkAdvantage);
+  for (let i = 0; i < atkPool.length; i++) atkPool[i] = nextDie(6);
+  let atkBaseDie = atkPool[0];
+  for (let i = 1; i < atkPool.length; i++) if (atkPool[i] > atkBaseDie) atkBaseDie = atkPool[i];
+  const atkExtraDice = atkPool.slice(1);
+  const attackRoll = atkBaseDie + actor.attack + (actor.attackBonus || 0) + phaseBonus;
+
+  // Fortification "defense": flat value of fortLevel + 1. No modifiers.
+  const defenseRoll = t.fortifyLevel + 1;
+
+  const fortLevelBefore = t.fortifyLevel;
+  const hit   = attackRoll > defenseRoll;
+  const crush = hit && attackRoll >= 2 * defenseRoll;
+
+  const phaseNote = phaseBonus > 0 ? ' (🌙 night bonus)' : '';
+  const gangNote  = atkAllies.length >= 1 ? ` [advantage ${atkAdvantage}]` : '';
+  log.push(
+    `${actor.displayName} assaults the fortifications at (${targetCol},${targetRow})! ` +
+    `[${attackRoll}${gangNote} vs ${defenseRoll}]${phaseNote}`
+  );
+
+  let damage = 0;
+  if (hit) {
+    damage = crush ? 2 : 1;
+    t.fortifyLevel = Math.max(0, t.fortifyLevel - damage);
+    if (crush) {
+      log.push(`💥 The wall buckles under a crushing blow! (fort level ${fortLevelBefore} → ${t.fortifyLevel})`);
+    } else {
+      log.push(`🏰 The fortifications crack under the assault. (fort level ${fortLevelBefore} → ${t.fortifyLevel})`);
+    }
+    if (t.fortifyLevel === 0) {
+      log.push(`The fortifications crumble away.`);
+    } else if (t.fortifyLevel < FORT_IMPASSABLE_THRESHOLD) {
+      log.push(`The wall is breached — the path is open.`);
+    }
+  } else {
+    log.push(`The stone holds fast.`);
+  }
+
+  return {
+    success: true, log, cost: 1,
+    fortAssault: true,
+    targetCol, targetRow,
+    attackRoll, defenseRoll,
+    hit, crush, damage,
+    fortLevelBefore, fortLevelAfter: t.fortifyLevel,
+    breakdown: {
+      atkBaseDie, atkExtraDice, atkPool, phaseBonus,
+      atkAdvantageDice: atkAdvantage,
       atkAllyNames: atkAllies.map(e => e.displayName),
-      defAllyNames: defAllies.map(e => e.displayName),
     },
   };
 }
@@ -839,7 +1168,7 @@ export function executeFortify(state, actor) {
 
   // FORTIFY_DOUBLE: this survivor's ability makes wood give +2
   const hasDoubler = actor.type === EntityType.SURVIVOR &&
-    actor.ability === SurvivorAbility.FORTIFY_DOUBLE;
+    actor.hasAbility(SurvivorAbility.FORTIFY_DOUBLE);
 
   if (metalCount > 0) {
     shared[ResourceType.METAL]--;
@@ -864,8 +1193,13 @@ export function executeFortify(state, actor) {
 // When provided the summon respects the player's explicit choice; falls back to
 // auto-pick if the requested type is no longer affordable (e.g. plan mis-ordering).
 // The summoned unit always spawns on the actor's own tile.
+//
+// Concrete faction restricts the summonable set — the brute, for instance,
+// only summons minions. A request for a forbidden type falls back to the
+// auto-pick path constrained to the allowed list.
 export function executeSummon(state, actor, requestedType = null) {
-  const faction = getFaction(actor.owner);
+  const faction         = getFaction(actor.owner);
+  const concreteFaction = concreteFactionOf(actor);
   const inv     = faction.getInventory(state);
   const ownerId = actor.ownerId;
   let summonedUnit, res, unitName;
@@ -874,38 +1208,50 @@ export function executeSummon(state, actor, requestedType = null) {
   const wood  = inv[ResourceType.WOOD]  || 0;
   const total = Object.values(inv).reduce((s, v) => s + (v || 0), 0);
 
-  // Resolve final type: honour request if affordable, else fall back to auto-pick
+  // Per-faction minion cost — witch pays 2 of any, brute pays 1.
+  const minionCost = concreteFaction.getMinionCost();
+
+  // Allowed-summon set comes from the concrete faction so brute-style
+  // restrictions take effect for the AI's auto-pick path too (the AI
+  // submits SUMMON with summonType=null and lets the resolver choose).
+  const allowedTypes = new Set(
+    concreteFaction.getSummonOptions(inv).map(o => o.summonType)
+  );
+
+  // Resolve final type: honour request if affordable AND allowed, else
+  // fall back to auto-pick.
   let resolvedType = requestedType;
-  if (resolvedType === EntityType.IRON_GOLEM && metal < 2) resolvedType = null;
-  if (resolvedType === EntityType.WOOD_GOLEM && wood  < 2) resolvedType = null;
-  if (resolvedType === EntityType.MINION      && total < 2) resolvedType = null;
+  if (resolvedType && !allowedTypes.has(resolvedType)) resolvedType = null;
+  if (resolvedType === EntityType.IRON_GOLEM && metal < 2)          resolvedType = null;
+  if (resolvedType === EntityType.WOOD_GOLEM && wood  < 2)          resolvedType = null;
+  if (resolvedType === EntityType.MINION      && total < minionCost) resolvedType = null;
   if (!resolvedType) {
-    // Auto-pick priority: iron > wood > minion
-    if      (metal >= 2) resolvedType = EntityType.IRON_GOLEM;
-    else if (wood  >= 2) resolvedType = EntityType.WOOD_GOLEM;
-    else if (total >= 2) resolvedType = EntityType.MINION;
-    else return { success: false, log: ['Need at least 2 resources to summon.'] };
+    // Auto-pick priority: iron > wood > minion, restricted to allowed types
+    if      (allowedTypes.has(EntityType.IRON_GOLEM) && metal >= 2)          resolvedType = EntityType.IRON_GOLEM;
+    else if (allowedTypes.has(EntityType.WOOD_GOLEM) && wood  >= 2)          resolvedType = EntityType.WOOD_GOLEM;
+    else if (allowedTypes.has(EntityType.MINION)     && total >= minionCost) resolvedType = EntityType.MINION;
+    else return { success: false, log: [`Need at least ${minionCost} resource${minionCost === 1 ? '' : 's'} to summon.`] };
   }
 
   if (resolvedType === EntityType.IRON_GOLEM) {
     res = ResourceType.METAL; inv[res] -= 2;
-    summonedUnit = createIronGolem(actor.col, actor.row, ownerId);
+    summonedUnit = createIronGolem(actor.col, actor.row, ownerId, state);
     unitName = 'Iron Golem';
   } else if (resolvedType === EntityType.WOOD_GOLEM) {
     res = ResourceType.WOOD; inv[res] -= 2;
-    summonedUnit = createWoodGolem(actor.col, actor.row, ownerId);
+    summonedUnit = createWoodGolem(actor.col, actor.row, ownerId, state);
     unitName = 'Wood Golem';
   } else {
-    // Minion: spend 2 from any resources, largest stacks first; track what was spent
+    // Minion: spend `minionCost` from any resources, largest stacks first
     const keys = Object.keys(inv).filter(k => inv[k] > 0).sort((a, b) => inv[b] - inv[a]);
-    let remaining = 2;
+    let remaining = minionCost;
     const spentMap = {};
     for (const k of keys) {
       const spend = Math.min(inv[k], remaining); inv[k] -= spend; remaining -= spend;
       spentMap[k] = (spentMap[k] || 0) + spend;
       if (remaining === 0) break;
     }
-    summonedUnit = createMinion(actor.col, actor.row, ownerId);
+    summonedUnit = createMinion(actor.col, actor.row, ownerId, state);
     unitName = 'Minion';
     state.entities.push(summonedUnit);
     faction.trackSummon(state);
@@ -935,13 +1281,16 @@ export function executeHeal(state, actor) {
 
 export function executeUseItem(state, actor, item) {
   // Weapon equip — from actor's personal items
-  if (item.startsWith('weapon:')) {
+  if (isWeaponId(item)) {
+    if (!concreteFactionOf(actor).canEquipWeaponItem(item)) {
+      const label = WEAPON_LABEL[item] || item;
+      return { success: false, log: [`${actor.displayName} cannot wield ${label}.`] };
+    }
     const myItems = actor.items || {};
     if ((myItems[item] || 0) < 1) return { success: false, log: ['Item not available.'] };
     myItems[item]--;
-    const weaponType = item.replace('weapon:', '');
-    actor.equipWeapon(weaponType);
-    const label = WEAPON_LABEL[weaponType] || weaponType;
+    actor.equipWeapon(item);
+    const label = WEAPON_LABEL[item] || item;
     return { success: true, log: [`${actor.displayName} equips ${label}!`], cost: 0 };
   }
 
@@ -969,57 +1318,17 @@ export function executeUseItem(state, actor, item) {
   return { success: true, log, cost: 0 };
 }
 
-export function executeUseAbility(state, actor) {
-  const log = [];
-
-  switch (actor.ability) {
-    case SurvivorAbility.HEAL: {
-      // Heal the faction leader on the same hex (owned by same player or same faction).
-      const leaderType = getFaction(actor.owner).leaderType;
-      const leader = state.entities.find(e =>
-        e.alive && e.type === leaderType &&
-        e.col === actor.col && e.row === actor.row &&
-        (e.ownerId === actor.ownerId || e.owner === actor.owner)
-      );
-      if (!leader)
-        return { success: false, log: ['A leader must be on the same hex.'] };
-      if (leader.hp >= leader.maxHp)
-        return { success: false, log: ['Leader is already at full health.'] };
-      leader.heal(1);
-      log.push(`${actor.displayName} tends ${leader.displayName}'s wounds. (+1 HP, now ${leader.hp}/${leader.maxHp})`);
-      return { success: true, log, cost: 1 };
-    }
-
-    case SurvivorAbility.INSPIRE: {
-      // Inspire the faction leader on the same hex.
-      const leaderType = getFaction(actor.owner).leaderType;
-      const leader = state.entities.find(e =>
-        e.alive && e.type === leaderType &&
-        e.col === actor.col && e.row === actor.row &&
-        (e.ownerId === actor.ownerId || e.owner === actor.owner)
-      );
-      if (!leader)
-        return { success: false, log: ['A leader must be on the same hex.'] };
-      leader.attackBonus += 1;
-      log.push(`${actor.displayName} rallies ${leader.displayName}! (+1 ATK this battle)`);
-      return { success: true, log, cost: 0 };
-    }
-
-    case SurvivorAbility.RALLY: {
-      // Return budgetBonus so both offline and multiplayer resolvers can apply it
-      // per-player without touching the shared state.actionsLeft.
-      const leaderType = getFaction(actor.owner).leaderType;
-      const rallyLeader = state.entities.find(e =>
-        e.alive && e.type === leaderType &&
-        (e.ownerId === actor.ownerId || e.owner === actor.owner)
-      );
-      log.push(`${actor.displayName}'s words fortify ${rallyLeader?.displayName ?? 'the leader'}'s spirit! (+1 action)`);
-      return { success: true, log, cost: 0, budgetBonus: 1 };
-    }
-
-    default:
-      return { success: false, log: ['No active ability.'] };
+// Thin dispatcher — heavy lifting for each ability lives in
+// ABILITIES[id].execute(state, actor). The PlanAction carries `ability: id`
+// (stamped by `_buildAbilityActions`), and the resolver threads it through
+// so multi-ability survivors disambiguate correctly. Callers without a
+// specific id get an explicit error rather than silent fallback behaviour.
+export function executeUseAbility(state, actor, abilityId) {
+  const ab = abilityId ? ABILITIES[abilityId] : null;
+  if (!ab || typeof ab.execute !== 'function') {
+    return { success: false, log: ['No active ability.'] };
   }
+  return ab.execute(state, actor);
 }
 
 export function executeGuard(state, actor) {
@@ -1039,8 +1348,8 @@ export function executeGuard(state, actor) {
 
 export function executeSoundHorn(state, actor) {
   const log = [];
-  if (actor.type !== EntityType.HERO) {
-    return { success: false, log: ['Only the Hero can sound the horn.'] };
+  if (!actor.hasAbility('sound_horn')) {
+    return { success: false, log: ['Only a day-side leader can sound the horn.'] };
   }
 
   const inv = getFaction('hero').getInventory(state);
@@ -1129,7 +1438,11 @@ export function executeGuardStrike(state, guardian, target) {
   // No ally dice, no fatigue penalty; attacker fort ATT bonus still applies.
   const { attackRoll, defenseRoll, hit, margin,
           atkBaseDie, defBaseDie, atkStaffBonus } =
-    Entity.resolveCombat(guardian, target, phaseBonus, atkFortAtkBonus, fortBonus, 0, 0, 0);
+    Entity.resolveCombat(guardian, target, {
+      extraAtkBonus: atkFortAtkBonus + phaseBonus,
+      extraDefBonus: fortBonus,
+      state,
+    });
 
   // Restore attackBonus
   guardian.attackBonus = savedAtkBonus;
@@ -1149,8 +1462,10 @@ export function executeGuardStrike(state, guardian, target) {
     const totalDmg = isCrush ? 2 : 1;
 
     for (let d = 0; d < totalDmg; d++) {
-      damage += 1;
-      const wasKilled = target.takeDamage(1);
+      const inc = target.applyIncomingDamage(1);
+      damage += inc;
+      const wasKilled = target.takeDamage(inc);
+      dispatchTrigger('damaged', target, { state, amount: inc, source: guardian });
       if (wasKilled) { killed = true; break; }
     }
 
@@ -1163,6 +1478,9 @@ export function executeGuardStrike(state, guardian, target) {
     if (killed) {
       log.push(`${target.displayName} is slain by the guard strike!`);
       getFaction(guardian.owner).trackKill(state);
+      guardian.killsThisRound = (guardian.killsThisRound ?? 0) + 1;
+      dispatchTrigger('damaged-fatal', target, { state, source: guardian });
+      dispatchTrigger('kill', guardian, { state, target });
       state.entities = state.entities.filter(e => e.id !== target.id);
     } else {
       const label = damage >= 2 ? `${damage} damage (crushing blow!)` : `${damage} damage`;
@@ -1178,6 +1496,8 @@ export function executeGuardStrike(state, guardian, target) {
       for (const sk of splashKills) {
         if (sk.owner !== guardian.owner) {
           getFaction(guardian.owner).trackKill(state);
+          guardian.killsThisRound = (guardian.killsThisRound ?? 0) + 1;
+          dispatchTrigger('kill', guardian, { state, target: sk });
         }
       }
     }
@@ -1192,7 +1512,10 @@ export function executeGuardStrike(state, guardian, target) {
     breakdown: {
       atkBaseDie, defBaseDie,
       atkExtraDice: [], defExtraDice: [],
+      atkPool: [atkBaseDie], defPool: [defBaseDie],
       atkAllyNames: [], defAllyNames: [],
+      atkGangupFlat: 0, defGangupFlat: 0,
+      atkAdvantageDice: 0, defAdvantageDice: 0,
       atkStaffBonus, phaseBonus, fortBonus, atkFortAtkBonus,
       fatiguePenalty: 0,
     },

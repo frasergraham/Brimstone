@@ -7,13 +7,16 @@ import { GameState, Phase, Player } from '../src/game.js';
 import {
   executeMove, executeExplore, executeBattle, executeFortify,
   executeSummon, executeHeal, executeUseItem, executeUseAbility,
+  executeFortAssault, isFortBlocking,
   getReachableHexes, sightRange, survivorFindMultiplier,
+  getValidActions, ActionType,
 } from '../src/actions.js';
 import {
   Entity, EntityType, SurvivorAbility,
-  createHero, createWitch, createMinion, createZombie, createSurvivor, resetRoster,
+  createHero, createWitch, createMinion, createZombie, createSurvivor,
+  createIronGolem, resetRoster, setForcedDice,
 } from '../src/entities.js';
-import { TileType, BuildingType, ResourceType, WeaponType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus } from '../src/tiles.js';
+import { TileType, BuildingType, ResourceType, WeaponType, MAX_FORTIFY_LEVEL, getFortifyCombatBonus, FORT_IMPASSABLE_THRESHOLD } from '../src/tiles.js';
 import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import { applyPostRoundEffects } from '../src/post-round-effects.js';
 
@@ -385,7 +388,7 @@ describe('executeExplore', () => {
     const state = freshState();
     // Create a proper herbalist entity
     const herbalist = new Entity(EntityType.SURVIVOR, 'hero', state.hero.col, state.hero.row);
-    herbalist.ability = SurvivorAbility.HERBALIST;
+    herbalist.abilities = [SurvivorAbility.HERBALIST];
     herbalist.items = {};
 
     const t = state.tiles.get(hexKey(herbalist.col, herbalist.row));
@@ -401,7 +404,7 @@ describe('executeExplore', () => {
   test('non-HERBALIST survivor does NOT receive a bonus herb', () => {
     const state = freshState();
     const survivor = new Entity(EntityType.SURVIVOR, 'hero', state.hero.col, state.hero.row);
-    survivor.ability = SurvivorAbility.BRAWLER; // not a herbalist
+    survivor.abilities = [SurvivorAbility.BRAWLER]; // not a herbalist
     survivor.items = {};
 
     const t = state.tiles.get(hexKey(survivor.col, survivor.row));
@@ -441,7 +444,9 @@ describe('executeExplore', () => {
 
   test('explore produces at most one loot entry (no duplicates)', () => {
     // Run many explores — when loot is found, there should be exactly 1 entry,
-    // not 2 from a duplicate _applyLoot call.
+    // not 2 from a duplicate _applyLoot call. The agility-driven loot bonus
+    // is gated above standard leader agility (paladin 6 → 0% chance), so
+    // no extra rolls fire for the paladin.
     for (let i = 0; i < 100; i++) {
       const state = freshState();
       const hero = state.hero;
@@ -1009,7 +1014,7 @@ describe('executeFortify', () => {
     const state = freshState();
     // Create an innkeeper (FORTIFY_DOUBLE) entity
     const innkeeper = new Entity(EntityType.SURVIVOR, 'hero', state.hero.col, state.hero.row);
-    innkeeper.ability = SurvivorAbility.FORTIFY_DOUBLE;
+    innkeeper.abilities = [SurvivorAbility.FORTIFY_DOUBLE];
     innkeeper.items = {};
     state.entities.push(innkeeper);
 
@@ -1437,21 +1442,21 @@ describe('executeUseItem — weapon equip', () => {
   test('equipping a weapon applies its stats and costs 0', () => {
     const state = freshState();
     const hero = state.hero;
-    hero.items['weapon:sword'] = 1;
-    const atkBefore = hero.attack;
+    hero.items['sword'] = 1;
+    const atkBefore = hero.getAttack();
 
-    const r = executeUseItem(state, hero, 'weapon:sword');
+    const r = executeUseItem(state, hero, 'sword');
     assert.equal(r.success, true);
     assert.equal(r.cost, 0, 'Equipping a weapon should be free');
-    assert.equal(hero.attack, atkBefore + 2, 'Sword gives +2 ATK');
+    assert.equal(hero.getAttack(), atkBefore + 2, 'Sword gives +2 effective ATK');
     assert.equal(hero.weapon, WeaponType.SWORD);
-    assert.equal(hero.items['weapon:sword'], 0, 'Weapon consumed from inventory');
+    assert.equal(hero.items['sword'], 0, 'Weapon consumed from inventory');
   });
 
   test('equipping weapon fails if not in inventory', () => {
     const state = freshState();
-    state.hero.items['weapon:sword'] = 0;
-    const r = executeUseItem(state, state.hero, 'weapon:sword');
+    state.hero.items['sword'] = 0;
+    const r = executeUseItem(state, state.hero, 'sword');
     assert.equal(r.success, false);
   });
 });
@@ -1491,7 +1496,7 @@ describe('auto-equip weapon on loot find', () => {
       Math.random = origRandom;
     }
     assert.equal(hero.weapon, WeaponType.SWORD, 'sword should be auto-equipped');
-    assert.equal((hero.items['weapon:sword'] || 0), 0, 'should NOT be in items when auto-equipped');
+    assert.equal((hero.items['sword'] || 0), 0, 'should NOT be in items when auto-equipped');
   });
 
   test('weapon goes to items when hero already has a weapon', () => {
@@ -1505,7 +1510,7 @@ describe('auto-equip weapon on loot find', () => {
       Math.random = origRandom;
     }
     assert.equal(hero.weapon, WeaponType.AXE, 'existing weapon should remain equipped');
-    assert.ok((hero.items['weapon:sword'] || 0) >= 1, 'new weapon should be in items');
+    assert.ok((hero.items['sword'] || 0) >= 1, 'new weapon should be in items');
   });
 
   test('auto-equip log message says equipped immediately', () => {
@@ -1530,13 +1535,13 @@ describe('executeUseAbility — HEAL', () => {
     const state = freshState();
     const hero = state.hero;
     const healer = new Entity(EntityType.SURVIVOR, 'hero', hero.col, hero.row);
-    healer.ability = SurvivorAbility.HEAL;
+    healer.abilities = [SurvivorAbility.HEAL];
     healer.items = {};
     state.entities.push(healer);
     hero.takeDamage(5);
     const hpBefore = hero.hp;
 
-    const r = executeUseAbility(state, healer);
+    const r = executeUseAbility(state, healer, SurvivorAbility.HEAL);
     assert.equal(r.success, true);
     assert.equal(r.cost, 1, 'HEAL ability costs 1 action');
     assert.equal(hero.hp, hpBefore + 1);
@@ -1545,12 +1550,12 @@ describe('executeUseAbility — HEAL', () => {
   test('HEAL fails if hero not on same hex', () => {
     const state = freshState();
     const healer = new Entity(EntityType.SURVIVOR, 'hero', state.hero.col + 2, state.hero.row);
-    healer.ability = SurvivorAbility.HEAL;
+    healer.abilities = [SurvivorAbility.HEAL];
     healer.items = {};
     state.entities.push(healer);
     state.hero.takeDamage(5);
 
-    const r = executeUseAbility(state, healer);
+    const r = executeUseAbility(state, healer, SurvivorAbility.HEAL);
     assert.equal(r.success, false);
   });
 
@@ -1559,11 +1564,11 @@ describe('executeUseAbility — HEAL', () => {
     const hero = state.hero;
     assert.equal(hero.hp, hero.maxHp);
     const healer = new Entity(EntityType.SURVIVOR, 'hero', hero.col, hero.row);
-    healer.ability = SurvivorAbility.HEAL;
+    healer.abilities = [SurvivorAbility.HEAL];
     healer.items = {};
     state.entities.push(healer);
 
-    const r = executeUseAbility(state, healer);
+    const r = executeUseAbility(state, healer, SurvivorAbility.HEAL);
     assert.equal(r.success, false, 'HEAL should fail when hero is full HP');
   });
 });
@@ -1573,12 +1578,12 @@ describe('executeUseAbility — INSPIRE', () => {
     const state = freshState();
     // Inspirer must be co-located with the hero (same as HEAL requirement)
     const inspirer = new Entity(EntityType.SURVIVOR, 'hero', state.hero.col, state.hero.row);
-    inspirer.ability = SurvivorAbility.INSPIRE;
+    inspirer.abilities = [SurvivorAbility.INSPIRE];
     inspirer.items = {};
     state.entities.push(inspirer);
     const bonusBefore = state.hero.attackBonus;
 
-    const r = executeUseAbility(state, inspirer);
+    const r = executeUseAbility(state, inspirer, SurvivorAbility.INSPIRE);
     assert.equal(r.success, true);
     assert.equal(r.cost, 0, 'INSPIRE should be free');
     assert.equal(state.hero.attackBonus, bonusBefore + 1);
@@ -1589,11 +1594,11 @@ describe('executeUseAbility — RALLY', () => {
   test('gives +1 actionsLeft, costs 0', () => {
     const state = freshState();
     const rallier = new Entity(EntityType.SURVIVOR, 'hero', state.hero.col, state.hero.row);
-    rallier.ability = SurvivorAbility.RALLY;
+    rallier.abilities = [SurvivorAbility.RALLY];
     rallier.items = {};
     state.entities.push(rallier);
 
-    const r = executeUseAbility(state, rallier);
+    const r = executeUseAbility(state, rallier, SurvivorAbility.RALLY);
     assert.equal(r.success, true);
     assert.equal(r.cost, 0, 'RALLY should be free');
     // RALLY returns budgetBonus for the resolver to apply (both offline and online
@@ -2050,5 +2055,279 @@ describe('executeExplore — survivor find penalty', () => {
     assert.equal(r.encounterSurvivor, null, 'should not find survivor with 10 active');
     // The hiddenSurvivor flag should still be there since the encounter was skipped
     assert.ok(t.hiddenSurvivor, 'hiddenSurvivor flag should remain');
+  });
+});
+
+// ── Fortifications as walls (impassable to witch) ─────────────────────────────
+// Level >= FORT_IMPASSABLE_THRESHOLD blocks witch-side movement. Hero moves freely.
+
+describe('fortifications as impassable walls', () => {
+  test('isFortBlocking: only witch is blocked by fort >= threshold', () => {
+    const t = { fortifyLevel: 2 };
+    assert.equal(isFortBlocking(t, 'witch'), true);
+    assert.equal(isFortBlocking(t, 'hero'),  false);
+    assert.equal(isFortBlocking({ fortifyLevel: 1 }, 'witch'), false);
+    assert.equal(isFortBlocking({ fortifyLevel: 0 }, 'witch'), false);
+    assert.equal(isFortBlocking(null, 'witch'),  false);
+  });
+
+  test('witch unit: getReachableHexes excludes fort-2 neighbour', () => {
+    const state = freshState();
+    state.entities = state.entities.filter(e => e.id === state.hero.id || e.id === state.witch.id);
+    const witch = state.witch;
+    // Make all immediate neighbors plain grass first
+    for (const n of getNeighbors(witch.col, witch.row)) {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      if (t) { t.type = TileType.GRASS; t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; }
+    }
+    const nbrs = getNeighbors(witch.col, witch.row);
+    const wallNbr = nbrs[0];
+    const wallTile = state.tiles.get(hexKey(wallNbr.col, wallNbr.row));
+    wallTile.fortifyLevel = 2;
+
+    const reachable = getReachableHexes(state, witch, 1);
+    const reachKeys = new Set(reachable.map(h => hexKey(h.col, h.row)));
+    assert.ok(!reachKeys.has(hexKey(wallNbr.col, wallNbr.row)),
+      'fort-2 neighbour should NOT be reachable for witch unit');
+
+    // Drop the fort to 1 — now it should be reachable.
+    wallTile.fortifyLevel = 1;
+    const reachable2 = getReachableHexes(state, witch, 1);
+    const reachKeys2 = new Set(reachable2.map(h => hexKey(h.col, h.row)));
+    assert.ok(reachKeys2.has(hexKey(wallNbr.col, wallNbr.row)),
+      'fort-1 neighbour should be reachable for witch unit');
+  });
+
+  test('hero unit: fort-3 neighbour is reachable', () => {
+    const state = freshState();
+    const hero = state.hero;
+    for (const n of getNeighbors(hero.col, hero.row)) {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      if (t) { t.type = TileType.GRASS; t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; }
+    }
+    // Clear enemies from adjacent hexes so they don't block pathing
+    state.entities = state.entities.filter(e => e.id === hero.id || e.id === state.witch.id);
+    const wallNbr = getNeighbors(hero.col, hero.row)[0];
+    const wallTile = state.tiles.get(hexKey(wallNbr.col, wallNbr.row));
+    wallTile.fortifyLevel = 3;
+
+    const reachable = getReachableHexes(state, hero, 1);
+    const reachKeys = new Set(reachable.map(h => hexKey(h.col, h.row)));
+    assert.ok(reachKeys.has(hexKey(wallNbr.col, wallNbr.row)),
+      'hero should reach fort-3 neighbour freely');
+  });
+
+  test('executeMove: witch blocked by fort returns blockedByFort', () => {
+    const state = freshState();
+    state.entities = state.entities.filter(e => e.id === state.hero.id || e.id === state.witch.id);
+    const witch = state.witch;
+    const origCol = witch.col, origRow = witch.row;
+    // Normalize neighbours
+    for (const n of getNeighbors(witch.col, witch.row)) {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      if (t) { t.type = TileType.GRASS; t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; }
+    }
+    const wallNbr = getNeighbors(witch.col, witch.row)[0];
+    const wallTile = state.tiles.get(hexKey(wallNbr.col, wallNbr.row));
+    wallTile.fortifyLevel = 2;
+
+    const r = executeMove(state, witch, wallNbr.col, wallNbr.row);
+    assert.equal(r.success, false, 'Move directly into fort-2 should fail');
+    assert.ok(r.blockedByFort, 'blockedByFort should be set');
+    assert.equal(r.blockedByFort.col, wallNbr.col);
+    assert.equal(r.blockedByFort.row, wallNbr.row);
+    assert.equal(r.blockedByFort.fortLevel, 2);
+    assert.ok(r.log.some(l => l.includes('blocked by fortifications')),
+      'Log should mention blocked by fortifications');
+    assert.equal(witch.col, origCol, 'Witch must not have moved');
+    assert.equal(witch.row, origRow);
+  });
+
+  test('executeMove: witch can walk through fort-1', () => {
+    const state = freshState();
+    state.entities = state.entities.filter(e => e.id === state.hero.id || e.id === state.witch.id);
+    const witch = state.witch;
+    for (const n of getNeighbors(witch.col, witch.row)) {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      if (t) { t.type = TileType.GRASS; t.building = null; t.hiddenSurvivor = false; t.fortifyLevel = 0; }
+    }
+    const nbr = getNeighbors(witch.col, witch.row)[0];
+    const nbrTile = state.tiles.get(hexKey(nbr.col, nbr.row));
+    nbrTile.fortifyLevel = 1;
+
+    const r = executeMove(state, witch, nbr.col, nbr.row);
+    assert.equal(r.success, true);
+    assert.equal(witch.col, nbr.col);
+    assert.equal(witch.row, nbr.row);
+    assert.equal(r.blockedByFort, null, 'no fort block for fort-1');
+  });
+});
+
+// ── executeFortAssault ───────────────────────────────────────────────────────
+
+describe('executeFortAssault', () => {
+  function setupAssaultScene({ fortLevel = 3, attacker = 'minion', attackerAttack = null } = {}) {
+    const state = freshState();
+    state.entities = state.entities.filter(e => e.id === state.hero.id);
+    // Place attacker beside the hero's tile — but move it to a fresh location we control.
+    // Pick two deterministic hexes: attacker at (5,5), fort at (6,5).
+    const atkPos = { col: 5, row: 5 };
+    const fortPos = { col: 6, row: 5 };
+    const atkTile = state.tiles.get(hexKey(atkPos.col, atkPos.row));
+    const fortTile = state.tiles.get(hexKey(fortPos.col, fortPos.row));
+    if (atkTile) { atkTile.type = TileType.GRASS; atkTile.building = null; atkTile.hiddenSurvivor = false; atkTile.fortifyLevel = 0; }
+    if (fortTile) { fortTile.type = TileType.GRASS; fortTile.building = null; fortTile.hiddenSurvivor = false; fortTile.fortifyLevel = fortLevel; }
+
+    let unit;
+    if (attacker === 'iron_golem') unit = createIronGolem(atkPos.col, atkPos.row);
+    else unit = createMinion(atkPos.col, atkPos.row);
+    if (attackerAttack != null) unit.attack = attackerAttack;
+    state.entities.push(unit);
+
+    return { state, unit, fortTile, fortPos };
+  }
+
+  test('witch minion hits a fort-3 wall and knocks it down to 2', () => {
+    const { state, unit, fortTile, fortPos } = setupAssaultScene({ fortLevel: 3, attacker: 'minion' });
+    // Minion attack=1, fort defense = 3+1 = 4. Force d6=4 → roll = 4+1 = 5 > 4 → hit, not crush (5 < 8).
+    setForcedDice(4);
+    const r = executeFortAssault(state, unit, fortPos.col, fortPos.row);
+    assert.equal(r.success, true);
+    assert.equal(r.hit, true);
+    assert.equal(r.crush, false);
+    assert.equal(r.damage, 1);
+    assert.equal(r.fortLevelBefore, 3);
+    assert.equal(r.fortLevelAfter, 2);
+    assert.equal(fortTile.fortifyLevel, 2);
+  });
+
+  test('crush on a fort-3 wall knocks it down by 2 levels', () => {
+    const { state, unit, fortTile, fortPos } = setupAssaultScene({
+      fortLevel: 3, attacker: 'iron_golem',
+    });
+    // Iron golem attack=3, fort defense = 4. Force d6=6 → roll = 6+3 = 9 vs 4 → crush (9 >= 8).
+    setForcedDice(6);
+    const r = executeFortAssault(state, unit, fortPos.col, fortPos.row);
+    assert.equal(r.hit, true);
+    assert.equal(r.crush, true);
+    assert.equal(r.damage, 2);
+    assert.equal(r.fortLevelAfter, 1);
+    assert.equal(fortTile.fortifyLevel, 1);
+  });
+
+  test('missed assault leaves fort unchanged', () => {
+    const { state, unit, fortTile, fortPos } = setupAssaultScene({ fortLevel: 4, attacker: 'minion' });
+    // Minion attack=1, fort defense = 4+1 = 5. Force d6=1 → roll = 2 vs 5 → miss.
+    setForcedDice(1);
+    const r = executeFortAssault(state, unit, fortPos.col, fortPos.row);
+    assert.equal(r.hit, false);
+    assert.equal(r.damage, 0);
+    assert.equal(fortTile.fortifyLevel, 4);
+  });
+
+  test('rejects hero attempting to assault a fort', () => {
+    const state = freshState();
+    const hero = state.hero;
+    const fortPos = getNeighbors(hero.col, hero.row).find(n => {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      return t && t.type !== TileType.RIVER;
+    });
+    if (!fortPos) return;
+    const t = state.tiles.get(hexKey(fortPos.col, fortPos.row));
+    t.fortifyLevel = 3;
+
+    const r = executeFortAssault(state, hero, fortPos.col, fortPos.row);
+    assert.equal(r.success, false);
+    assert.ok(r.log.some(l => l.toLowerCase().includes('witch')),
+      'rejection message should mention witch-only');
+  });
+
+  test('rejects assault on fort below impassable threshold', () => {
+    const { state, unit, fortPos } = setupAssaultScene({ fortLevel: 1, attacker: 'minion' });
+    const r = executeFortAssault(state, unit, fortPos.col, fortPos.row);
+    assert.equal(r.success, false);
+  });
+
+  test('rejects assault on non-adjacent target', () => {
+    const { state, unit, fortPos } = setupAssaultScene({ fortLevel: 3, attacker: 'minion' });
+    // Move unit far away.
+    unit.col = 0; unit.row = 0;
+    const r = executeFortAssault(state, unit, fortPos.col, fortPos.row);
+    assert.equal(r.success, false);
+    assert.ok(r.log.some(l => l.toLowerCase().includes('range')));
+  });
+
+  test('after wall is demolished to 1, a witch unit can walk through it', () => {
+    const { state, unit, fortTile, fortPos } = setupAssaultScene({
+      fortLevel: 3, attacker: 'iron_golem',
+    });
+    setForcedDice(6);
+    const r1 = executeFortAssault(state, unit, fortPos.col, fortPos.row);
+    assert.equal(r1.fortLevelAfter, 1);
+
+    // Ensure no enemies on the target hex
+    state.entities = state.entities.filter(e => !(e.col === fortPos.col && e.row === fortPos.row));
+    state.entities.push(unit);
+    unit.col = 5; unit.row = 5;  // ensure adjacent
+
+    // Clear out other stuff that might live there
+    fortTile.building = null;
+    fortTile.type = TileType.GRASS;
+
+    const r2 = executeMove(state, unit, fortPos.col, fortPos.row);
+    assert.equal(r2.success, true, 'Witch should now walk onto the breached wall hex');
+    assert.equal(unit.col, fortPos.col);
+    assert.equal(unit.row, fortPos.row);
+  });
+});
+
+// ── getValidActions — effective-entity prototype preservation ─────────────
+// Regression: when the UI selects a unit that has a planned MOVE queued,
+// _selectEntity builds an "effectiveEntity" from a spread + position
+// override so getValidActions sees the projected position. The spread
+// must preserve the Entity prototype, otherwise method calls like
+// `actor.hasAbility('summon')` / `actor.hasAbility('sound_horn')` throw
+// and selection silently fails (see PR #294 ghost-unit selection bug).
+
+describe('getValidActions on a ghost-position effective entity', () => {
+  test('plain spread (no prototype) throws — locks the failure mode', () => {
+    const state = new GameState(true, true);
+    const plainSpread = { ...state.hero, col: state.hero.col + 1, row: state.hero.row };
+    // No Object.setPrototypeOf — this is the UI's pre-fix shape.
+    assert.throws(() => getValidActions(state, plainSpread), TypeError);
+  });
+
+  test('reparented spread preserves methods; summon / sound_horn gates work', () => {
+    const state = new GameState(true, true);
+    const hero  = state.hero;
+    const ghost = Object.setPrototypeOf(
+      { ...hero, col: hero.col + 1, row: hero.row },
+      Object.getPrototypeOf(hero)
+    );
+    const actions = getValidActions(state, ghost);
+    // Day-side leader → sound_horn should be surfaced.
+    assert.ok(
+      actions.some(a => a.type === ActionType.SOUND_HORN),
+      'sound_horn must be in actions for a ghost-position day-side leader'
+    );
+    // Guard should also appear (universal action).
+    assert.ok(
+      actions.some(a => a.type === ActionType.GUARD),
+      'guard must be in actions'
+    );
+  });
+
+  test('reparented witch spread surfaces summon', () => {
+    const state = new GameState(true, true);
+    const witch = state.entities.find(e => e.type === EntityType.WITCH);
+    const ghost = Object.setPrototypeOf(
+      { ...witch, col: witch.col + 1, row: witch.row },
+      Object.getPrototypeOf(witch)
+    );
+    const actions = getValidActions(state, ghost);
+    assert.ok(
+      actions.some(a => a.type === ActionType.SUMMON),
+      'summon must be in actions for a ghost-position night-side leader'
+    );
   });
 });
