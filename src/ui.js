@@ -2596,10 +2596,14 @@ export class UIController {
 
     const el = this._el('score-bar-content');
     if (!el) return;
-    const { html, title } = buildObjectivesHtml(
-      state.witchObjectives, state.entities, state.nodeScore, state.gameMode,
+    const { html, title, heroLabelHtml, witchLabelHtml } = buildObjectivesHtml(
+      state.witchObjectives, state.entities, state.nodeScore, state.gameMode, state.players,
     );
     el.innerHTML = html;
+    const heroLabelEl  = this._el('score-bar-label-hero');
+    const witchLabelEl = this._el('score-bar-label-witch');
+    if (heroLabelEl)  heroLabelEl.innerHTML  = heroLabelHtml;
+    if (witchLabelEl) witchLabelEl.innerHTML = witchLabelHtml;
     if (bar) bar.title = title;
   }
 

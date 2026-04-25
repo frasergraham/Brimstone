@@ -841,6 +841,13 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
 .score-bar-faction.hero-faction  { color: var(--hero); }
 .score-bar-faction.witch-faction { color: var(--witch); }
 
+.score-bar-player-icon {
+  display: inline-block;
+  font-size: 0.85rem;
+  margin: 0 0.05rem;
+  opacity: 0.95;
+}
+
 .node-dot {
   width: 18px;
   height: 18px;

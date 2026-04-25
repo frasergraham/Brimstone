@@ -7,6 +7,7 @@ import { ITEMS } from './items.js';
 import { EntityType, ENTITY_COLOR } from './entities.js';
 import { ResourceType } from './tiles.js';
 import { nodeController } from './game.js';
+import { findFaction } from './factions.js';
 
 // ── Plan action description ───────────────────────────────────────────────────
 
@@ -449,14 +450,17 @@ export function buildPlayerStatusHtml(players, nudgeCtx) {
 // ── Objectives / node-status HTML ────────────────────────────────────────────
 
 /**
- * Build innerHTML for the #node-status element and return { html, title }.
+ * Build innerHTML for the #node-status element and the surrounding side
+ * labels.
  *
  * @param {{ col: number, row: number, label: string }[]} witchObjectives
  * @param {Array<{ alive: boolean, owner: string, col: number, row: number }>} entities
  * @param {{ hero: number, witch: number }} nodeScore
- * @returns {{ html: string, title: string }}
+ * @param {string} [gameMode='standard']
+ * @param {Array<{ name: string, faction: string, factionId?: string, color?: string }>} [players=[]]
+ * @returns {{ html: string, title: string, heroLabelHtml: string, witchLabelHtml: string }}
  */
-export function buildObjectivesHtml(witchObjectives, entities, nodeScore, gameMode = 'standard') {
+export function buildObjectivesHtml(witchObjectives, entities, nodeScore, gameMode = 'standard', players = []) {
   let nodeDots  = '';
   let witchCount = 0, heroCount = 0;
 
@@ -470,6 +474,9 @@ export function buildObjectivesHtml(witchObjectives, entities, nodeScore, gameMo
     const nodeColor = obj.color ?? '#888';
     nodeDots += `<span class="node-dot ${cls}" title="${obj.label ?? ''}" style="border-color:${nodeColor}"></span>`;
   }
+
+  const heroLabelHtml  = buildSideLabelHtml('hero',  players);
+  const witchLabelHtml = buildSideLabelHtml('witch', players);
 
   const score = nodeScore ?? { hero: 0, witch: 0 };
   let html;
@@ -501,5 +508,54 @@ export function buildObjectivesHtml(witchObjectives, entities, nodeScore, gameMo
               : heroCount  === witchObjectives.length ? '★ Hero controls all nodes!'
               : 'Power Nodes';
 
-  return { html, title };
+  return { html, title, heroLabelHtml, witchLabelHtml };
+}
+
+// Side-keyed display config for the score-bar labels. Centralized so new
+// label logic doesn't need its own faction string-check ladder.
+const SIDE_DISPLAY = Object.freeze({
+  hero:  { glyph: '⚔', defaultName: 'Hero',  format: (g, n) => `${g} ${n}` },
+  witch: { glyph: '✦', defaultName: 'Witch', format: (g, n) => `${n} ${g}` },
+});
+
+/**
+ * Build the score-bar side-label HTML for one faction.
+ *
+ *   • 0 or 1 player on this side → faction display name with glyph
+ *     (e.g. `⚔ Rogue`, `Necromancer ✦`). Falls back to `Hero` / `Witch`
+ *     when the player has no `factionId` or the lookup misses.
+ *   • 2+ players on this side    → one player-color glyph per player,
+ *     with the player's name as the hover tooltip.
+ *
+ * @param {'hero'|'witch'} side
+ * @param {Array<{ name?: string, faction?: string, factionId?: string, color?: string }>} players
+ * @returns {string}
+ */
+function buildSideLabelHtml(side, players) {
+  const display = SIDE_DISPLAY[side];
+  if (!display) return '';
+  const { glyph, defaultName, format } = display;
+  const sidePlayers = (players ?? []).filter(p => p && p.faction === side);
+
+  if (sidePlayers.length >= 2) {
+    return sidePlayers.map(p => {
+      const color = p.color ? ` style="color:${escapeHtml(p.color)}"` : '';
+      const name  = escapeHtml(p.name ?? '');
+      return `<span class="score-bar-player-icon"${color} title="${name}">${glyph}</span>`;
+    }).join('');
+  }
+
+  const factionId = sidePlayers[0]?.factionId;
+  const faction   = factionId ? findFaction(factionId) : null;
+  const name      = faction?.name ?? defaultName;
+  return format(glyph, escapeHtml(name));
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
