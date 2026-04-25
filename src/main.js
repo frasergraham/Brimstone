@@ -2420,6 +2420,17 @@ function _resumeCampaignMission(missionId) {
   const missionDef = _activeCampaign.getMissionDef(missionId);
   if (!missionDef) return;
 
+  // Sanity guard — if the mission's hasWitch shape changed since the save was
+  // written (e.g. M5 flipped from no-witch to witch in the mission-5-7 rework)
+  // the saved state has no witch entity and resume would silently desync from
+  // the new mission def. Discard the save and force a fresh start.
+  const savedNoWitch = !!save.state?.noWitchMission;
+  const expectedNoWitch = !missionDef.hasWitch;
+  if (savedNoWitch !== expectedNoWitch) {
+    deleteCampaignMissionSave(_activeCampaign.campaignDef.id, missionId);
+    return;   // caller's flow will fall through to a fresh _initCampaignMission
+  }
+
   _activeMissionDef = missionDef;
   _gameStartTime = Date.now();
   _spSaveId = null;
@@ -2767,6 +2778,7 @@ function _initCampaignMission(missionDef) {
   mapData.disableScoring  = !!missionDef.disableScoring;
   mapData.disableCycleBar = !!missionDef.disableCycleBar;
   mapData.disableNodeSweep = !!missionDef.disableNodeSweep;
+  mapData.disableScoreWin  = !!missionDef.disableScoreWin;
   if (missionDef.nodeScoreThreshold != null) {
     mapData.nodeScoreThreshold = missionDef.nodeScoreThreshold;
   }

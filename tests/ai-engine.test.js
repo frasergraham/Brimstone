@@ -1094,6 +1094,17 @@ describe('PERSONALITY_CONFIGS', () => {
     }
   });
 
+  // Ratchet — the standard ai-matrix.js balance grid must keep enumerating
+  // exactly the three canonical witch personalities. New campaign-only
+  // personalities must set `campaignOnly: true` so they don't pollute it.
+  test('only the canonical three personalities are non-campaignOnly', () => {
+    const standard = Object.entries(PERSONALITY_CONFIGS)
+      .filter(([, cfg]) => !cfg.campaignOnly)
+      .map(([name]) => name)
+      .sort();
+    assert.deepEqual(standard, ['aggressive', 'balanced', 'swarm']);
+  });
+
   test('goalWeights affect scoreGoals output', () => {
     const board = makeBoard({ heroDistance: 2, isNight: true, witchHpRatio: 0.8, enemiesNearWitch: 0 });
     const baseScores = scoreGoals(board);

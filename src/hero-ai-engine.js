@@ -81,6 +81,7 @@ export const HERO_PERSONALITY_CONFIGS = Object.freeze({
   // missions where the only victory check is "no witch on a node at dawn"
   // or "hero on every node at dawn" — exploring/hunting the witch is a
   // distraction. Heavy CONTROL_NODES, near-zero HUNT_WITCH/EXPLORE.
+  // `campaignOnly: true` keeps it out of the ai-matrix balance grid.
   node_denier: Object.freeze({
     goalWeights: Object.freeze({
       [HeroGoal.EXPLORE]: 0.3, [HeroGoal.CONTROL_NODES]: 2.2, [HeroGoal.PROTECT_HERO]: 0.4, [HeroGoal.HUNT_WITCH]: 0.2,
@@ -89,10 +90,12 @@ export const HERO_PERSONALITY_CONFIGS = Object.freeze({
     shelterThreshold: 0.15,
     fortifyCapDay: 1,
     fortifyCapNight: 2,
+    campaignOnly: true,
   }),
   // Witch hunter: kill the witch and nothing else. For missions where the
   // sole victory is slay_witch and node-holding is meaningless (or even
   // counterproductive — splitting from the hunting party).
+  // `campaignOnly: true` keeps it out of the ai-matrix balance grid.
   witch_hunter: Object.freeze({
     goalWeights: Object.freeze({
       [HeroGoal.EXPLORE]: 0.3, [HeroGoal.CONTROL_NODES]: 0.4, [HeroGoal.PROTECT_HERO]: 0.3, [HeroGoal.HUNT_WITCH]: 2.5,
@@ -101,6 +104,7 @@ export const HERO_PERSONALITY_CONFIGS = Object.freeze({
     shelterThreshold: 0.15,
     fortifyCapDay: 1,
     fortifyCapNight: 2,
+    campaignOnly: true,
   }),
 });
 

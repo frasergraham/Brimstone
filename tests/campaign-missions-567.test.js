@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { GameState, Phase, nodeController } from '../src/game.js';
 import { hexDistance } from '../src/hex.js';
 import { createMinion } from '../src/entities.js';
-import { buildVictoryDelegate } from '../src/campaign/campaign.js';
+import { buildVictoryDelegate, _migrate } from '../src/campaign/campaign.js';
 import { processStoryTriggers } from '../src/campaign/missions.js';
 import { WITCH_PERSONALITIES } from '../src/ai.js';
 import { PERSONALITY_CONFIGS } from '../src/ai-engine.js';
@@ -261,6 +261,47 @@ describe('state-sync — cycleConfig with new fields', () => {
     state.cycleConfig.phases.push('night');
     const restored2 = deserializeState(serializeState(state));
     assert.equal(restored2.cycleConfig.phases.length, 6);
+  });
+});
+
+// ── Save migration v2 → v3 ────────────────────────────────────────────────
+// PR-299 inserts long_watch between dark_ritual and witchs_trail and changes
+// witchs_trail.requires from ['dark_ritual'] to ['long_watch']. A v2 save with
+// currentMission='witchs_trail' would otherwise fail the new prereq and the
+// UI would show no launchable mission.
+describe('Save migration — v2 → v3 long_watch backfill', () => {
+  test('backfills long_watch when player was at witchs_trail', () => {
+    const v2 = {
+      version: 2,
+      currentMission: 'witchs_trail',
+      completedMissions: ['prologue', 'gathering_survivors', 'first_night', 'river_crossing', 'dark_ritual'],
+      roster: [], resources: {}, heroStats: { hp: 14 }, storyFlags: {},
+    };
+    const v3 = _migrate(v2, 2);
+    assert.equal(v3.version, 3);
+    assert.ok(v3.completedMissions.includes('long_watch'),
+      'long_watch should be backfilled so witchs_trail prereq is satisfied');
+    // Original progress preserved
+    assert.ok(v3.completedMissions.includes('dark_ritual'));
+  });
+
+  test('does NOT backfill long_watch for players not yet at witchs_trail', () => {
+    const v2 = {
+      version: 2,
+      currentMission: 'dark_ritual',
+      completedMissions: ['prologue', 'gathering_survivors', 'first_night', 'river_crossing'],
+      roster: [], resources: {}, heroStats: { hp: 14 }, storyFlags: {},
+    };
+    const v3 = _migrate(v2, 2);
+    assert.equal(v3.version, 3);
+    assert.ok(!v3.completedMissions.includes('long_watch'),
+      'long_watch should not be skipped for a player still on dark_ritual');
+  });
+
+  test('passes through v3+ saves unchanged version-wise', () => {
+    const v3 = { version: 3, currentMission: 'long_watch', completedMissions: [] };
+    const out = _migrate(v3, 3);
+    assert.equal(out.version, 3);
   });
 });
 

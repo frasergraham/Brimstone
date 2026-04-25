@@ -681,3 +681,39 @@ function _wrapText(ctx, text, maxWidth) {
   if (current) lines.push(current);
   return lines.length ? lines : [''];
 }
+
+/**
+ * Encode a sequence of frame buffers (PNG buffers from renderGameState) as a
+ * looping animated GIF on disk. The final frame is held longer.
+ *
+ * Defers the `gif-encoder-2` and `canvas` imports so callers that only want
+ * static-frame rendering don't pay the cost.
+ */
+export async function renderFramesToGif(frames, outPath, opts = {}) {
+  const fs = await import('fs');
+  const path = await import('path');
+  const { createCanvas, loadImage } = await import('canvas');
+  const { default: GIFEncoder } = await import('gif-encoder-2');
+
+  const delay = opts.delay ?? 800;
+  const finalDelay = opts.finalDelay ?? 3000;
+
+  const firstImg = await loadImage(frames[0]);
+  const w = firstImg.width, h = firstImg.height;
+  const encoder = new GIFEncoder(w, h);
+  encoder.setDelay(delay);
+  encoder.setRepeat(0);
+  encoder.setQuality(opts.quality ?? 10);
+  encoder.start();
+  for (let i = 0; i < frames.length; i++) {
+    if (i === frames.length - 1) encoder.setDelay(finalDelay);
+    const img = await loadImage(frames[i]);
+    const canvas = createCanvas(w, h);
+    canvas.getContext('2d').drawImage(img, 0, 0);
+    encoder.addFrame(canvas.getContext('2d'));
+  }
+  encoder.finish();
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  fs.writeFileSync(outPath, encoder.out.getData());
+  return { path: outPath, bytes: fs.statSync(outPath).size, frames: frames.length, width: w, height: h };
+}

@@ -90,6 +90,7 @@ export function serializeState(state) {
     disableScoring:       !!state.disableScoring,
     disableCycleBar:      !!state.disableCycleBar,
     disableNodeSweep:     !!state.disableNodeSweep,
+    disableScoreWin:      !!state.disableScoreWin,
     nodeScoreThreshold:   state.nodeScoreThreshold ?? 4,
     noWitchMission:       !!state.noWitchMission,
     gameMode:             state.gameMode ?? 'standard',
@@ -234,6 +235,7 @@ export function deserializeState(snap) {
   state.disableScoring       = !!snap.disableScoring;
   state.disableCycleBar      = !!snap.disableCycleBar;
   state.disableNodeSweep     = !!snap.disableNodeSweep;
+  state.disableScoreWin      = !!snap.disableScoreWin;
   state.nodeScoreThreshold   = snap.nodeScoreThreshold ?? 4;
   state.noWitchMission       = !!snap.noWitchMission;
   state.maxDiscoverableSurvivors = snap.maxDiscoverableSurvivors ?? null;

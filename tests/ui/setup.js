@@ -206,6 +206,7 @@ export function createElementsBag(overrides = {}) {
     'zoom-in','zoom-out','zoom-fit','zoom-me','speed-toggle','speed-popup','canvas-wrapper',
     'menu-btn','menu-quit-btn','menu-close-btn','game-menu-backdrop','game-screen',
     'end-turn-btn','turn-info','cycle-bump','cycle-bump-icon','cycle-bump-label',
+    'score-bar','score-bar-content',
     'node-status','node-status-bar','online-status',
     'plan-panel','plan-tab','plan-tab-count','plan-toggle-btn',
     'plan-steps','plan-budget-badge','plan-status','plan-players',

@@ -14,7 +14,12 @@ import { EntityType } from '../entities.js';
 // double-count the passive via getAttack()/getDefense() composition.
 // Campaign.load() drops saves at lower versions; a brand-new campaign
 // starts in their place.
-const SAVE_VERSION = 2;
+// v3: insertion of `long_watch` between `dark_ritual` and `witchs_trail`.
+// `witchs_trail.requires` changes from ['dark_ritual'] → ['long_watch'], so a
+// v2 save mid-campaign at `witchs_trail` would brick (prereq never satisfied,
+// no in-progress mission to launch). Migration shim in `_migrate()` backfills
+// `long_watch` into completedMissions for those saves.
+const SAVE_VERSION = 3;
 
 /**
  * Serialize a survivor entity into a plain object for campaign roster storage.
@@ -170,8 +175,13 @@ function _checkLoseCondition(cond, state) {
         log: '🌑 The ritual has reached its climax.',
       };
     }
+    default:
+      // Mission def referenced an unknown condition type — soft-fail with a
+      // warning so the mission becomes silently un-losable rather than crashing
+      // the game, but the typo still surfaces in dev consoles + tests.
+      console.warn(`[campaign] Unknown lose condition type: ${cond.type}`);
+      return null;
   }
-  return null;
 }
 
 function _checkWinCondition(cond, state) {
@@ -293,8 +303,12 @@ function _checkWinCondition(cond, state) {
     case 'conductor_complete':
       // MissionConductor handles completion directly — never auto-trigger victory
       return DEFERRED;
+    default:
+      // Mission def referenced an unknown condition type — soft-fail with a
+      // warning. Avoids silently un-winnable missions on a typo.
+      console.warn(`[campaign] Unknown win condition type: ${cond.type}`);
+      return null;
   }
-  return null;
 }
 
 /**
@@ -451,21 +465,24 @@ export class Campaign {
     const raw = localStorage.getItem(`brimstone-${this.saveSlot}`);
     if (!raw) return false;
     const data = JSON.parse(raw);
-    // Incompatible saves (pre-Phase-4 baked stats) are dropped; the caller
-    // proceeds with a fresh Campaign.
+    // Pre-v2 saves (Phase-4 baked-stats era) cannot be migrated and are dropped;
+    // anything v2+ goes through _migrate() to bring it forward.
     const savedVersion = data.version ?? 1;
-    if (savedVersion < SAVE_VERSION) {
+    if (savedVersion < 2) {
       localStorage.removeItem(`brimstone-${this.saveSlot}`);
       return false;
     }
-    this.version           = savedVersion;
-    this.currentMission    = data.currentMission ?? this.campaignDef.firstMission;
-    this.completedMissions = new Set(data.completedMissions ?? []);
-    this.roster            = data.roster ?? [];
-    this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...data.resources };
-    this.heroStats         = data.heroStats ?? { hp: 14, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };
-    this.storyFlags        = data.storyFlags ?? {};
-    this.updatedAt         = data.updatedAt ?? Date.now();
+    const migrated = _migrate(data, savedVersion);
+    this.version           = migrated.version;
+    this.currentMission    = migrated.currentMission ?? this.campaignDef.firstMission;
+    this.completedMissions = new Set(migrated.completedMissions ?? []);
+    this.roster            = migrated.roster ?? [];
+    this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...migrated.resources };
+    this.heroStats         = migrated.heroStats ?? { hp: 14, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };
+    this.storyFlags        = migrated.storyFlags ?? {};
+    this.updatedAt         = migrated.updatedAt ?? Date.now();
+    // Persist the migrated form so we don't re-migrate every load.
+    if (migrated.version !== savedVersion) this.save();
     return true;
   }
 
@@ -674,19 +691,50 @@ export class Campaign {
   }
 
   /** Restore campaign state from a server-fetched data object.
-   *  Returns false if the server save is pre-Phase-4 and must be discarded. */
+   *  Returns false if the server save is pre-v2 and must be discarded. */
   restoreFromServerData(data) {
     const savedVersion = data.version ?? 1;
-    if (savedVersion < SAVE_VERSION) return false;
-    this.version           = savedVersion;
-    this.currentMission    = data.currentMission ?? this.campaignDef.firstMission;
-    this.completedMissions = new Set(data.completedMissions ?? []);
-    this.roster            = data.roster ?? [];
-    this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...data.resources };
-    this.heroStats         = data.heroStats ?? { hp: 14, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };
-    this.storyFlags        = data.storyFlags ?? {};
-    this.updatedAt         = data.updatedAt ?? Date.now();
+    if (savedVersion < 2) return false;
+    const migrated = _migrate(data, savedVersion);
+    this.version           = migrated.version;
+    this.currentMission    = migrated.currentMission ?? this.campaignDef.firstMission;
+    this.completedMissions = new Set(migrated.completedMissions ?? []);
+    this.roster            = migrated.roster ?? [];
+    this.resources         = { wood: 0, metal: 0, herbs: 0, food: 0, silver: 0, scripture: 0, ...migrated.resources };
+    this.heroStats         = migrated.heroStats ?? { hp: 14, maxHp: 14, attack: 3, defense: 2, weapon: null, items: {} };
+    this.storyFlags        = migrated.storyFlags ?? {};
+    this.updatedAt         = migrated.updatedAt ?? Date.now();
     this.save(); // persist to localStorage
     return true;
   }
+}
+
+// ── Save migration ──────────────────────────────────────────────────────────
+
+/**
+ * Bring a saved campaign blob forward to SAVE_VERSION.
+ * Returns the (possibly mutated) data object with `version` updated.
+ *
+ * Migrations are additive — each version step preserves player progress
+ * where possible rather than wiping the save.
+ */
+export function _migrate(data, fromVersion) {
+  let v = fromVersion;
+  let out = data;
+
+  // v2 → v3: a new mission `long_watch` is inserted between `dark_ritual` and
+  // `witchs_trail`. Players already on `witchs_trail` would otherwise fail the
+  // new prereq check (it now requires `long_watch`) and end up with no
+  // launchable mission. Backfill the prereq into completedMissions so the
+  // player keeps their progress.
+  if (v === 2) {
+    const completed = new Set(out.completedMissions ?? []);
+    if (out.currentMission === 'witchs_trail' && !completed.has('long_watch')) {
+      completed.add('long_watch');
+    }
+    out = { ...out, completedMissions: [...completed], version: 3 };
+    v = 3;
+  }
+
+  return out;
 }

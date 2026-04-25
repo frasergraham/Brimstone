@@ -55,12 +55,14 @@ export const PERSONALITY_CONFIGS = Object.freeze({
   }),
   // Witch keeps her distance: avoids combat, ignores nodes, runs from the hero.
   // Used by scripted campaign missions where the witch flees once spotted.
+  // `campaignOnly: true` keeps her out of the standard ai-matrix balance grid.
   evasive: Object.freeze({
     goalWeights: Object.freeze({
-      [Goal.BUILD_ARMY]: 0.6, [Goal.CONTROL_NODES]: 0.3, [Goal.DEFEND_WITCH]: 2.5, [Goal.HUNT_HEROES]: 0.1,
+      [Goal.BUILD_ARMY]: 0.6, [Goal.CONTROL_NODES]: 0.05, [Goal.DEFEND_WITCH]: 2.5, [Goal.HUNT_HEROES]: 0.1,
     }),
     fleeThreshold: 0.7,
     engageFloor: 'favorable',
+    campaignOnly: true,
   }),
 });
 

@@ -286,11 +286,13 @@ export class GameState {
     // (e.g. Mission 7 — kill the witch before she scores 4 points).
     this.disableNodeSweep = !!mapDataOverride?.disableNodeSweep;
     // Score threshold for the standard "first to N points wins" rule.
-    // Defaults to 4 (multiplayer baseline); campaign missions that drive
-    // win/lose from a custom victory delegate may set this higher (or
-    // effectively disable it via a very large number) so the engine's
-    // built-in score win doesn't pre-empt their own threshold check.
+    // Defaults to 4 (multiplayer baseline); campaign missions can raise it.
     this.nodeScoreThreshold = mapDataOverride?.nodeScoreThreshold ?? 4;
+    // When true, the engine's built-in "first to N points wins" rule is
+    // disabled — the mission's victory delegate drives win/lose entirely
+    // (e.g. M7 — kill the witch before she scores 5 points; her hitting 5
+    // is a *loss* condition, not a win).
+    this.disableScoreWin = !!mapDataOverride?.disableScoreWin;
 
     // Max survivors discoverable from hidden-survivor tiles (null = unlimited).
     this.maxDiscoverableSurvivors = mapDataOverride?.maxDiscoverableSurvivors ?? null;
@@ -1052,18 +1054,18 @@ export class GameState {
         this.addLog(`🌑 The night deepens — the dawn slips further away.`);
       }
       // Score threshold win (disabled in battle mode — runs until time expires)
-      if (!isBattle && this.nodeScore.witch >= this.nodeScoreThreshold) {
+      if (!isBattle && !this.disableScoreWin && this.nodeScore.witch >= this.nodeScoreThreshold) {
         this.winner    = 'witch';
         this.winReason = WIN_REASON.SCORE_WITCH;
-        this.addLog(`🌙 ${this.factionName('witch')} has claimed three ritual moments — Caleb's Hollow falls to darkness!`);
+        this.addLog(`🌙 ${this.factionName('witch')} has claimed ${this.nodeScoreThreshold} ritual moments — Caleb's Hollow falls to darkness!`);
       }
     } else if (heroCount > witchCount) {
       this.nodeScore.hero++;
       this.addLog(`☀ At ${phaseLabel}: ${this.factionName('hero')} leads ${heroCount}–${witchCount}. Score — Hero ${this.nodeScore.hero} / Witch ${this.nodeScore.witch}`);
-      if (!isBattle && this.nodeScore.hero >= this.nodeScoreThreshold) {
+      if (!isBattle && !this.disableScoreWin && this.nodeScore.hero >= this.nodeScoreThreshold) {
         this.winner    = 'hero';
         this.winReason = WIN_REASON.SCORE_HERO;
-        this.addLog(`☀ ${this.factionName('hero')} has broken the ritual three times — Caleb's Hollow is saved!`);
+        this.addLog(`☀ ${this.factionName('hero')} has broken the ritual ${this.nodeScoreThreshold} times — Caleb's Hollow is saved!`);
       }
     } else {
       this.addLog(`⚖ At ${phaseLabel}: nodes tied (${witchCount}–${heroCount}). Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);

@@ -67,6 +67,7 @@ function buildMissionState(missionDef) {
   mapData.disableScoring  = !!missionDef.disableScoring;
   mapData.disableCycleBar = !!missionDef.disableCycleBar;
   mapData.disableNodeSweep = !!missionDef.disableNodeSweep;
+  mapData.disableScoreWin  = !!missionDef.disableScoreWin;
   if (missionDef.nodeScoreThreshold != null) {
     mapData.nodeScoreThreshold = missionDef.nodeScoreThreshold;
   }
@@ -274,9 +275,7 @@ function run(missionDef, count) {
 // ── Render mode (one GIF per mission) ─────────────────────────────────────────
 
 async function renderMissionToGif(missionDef, outPath) {
-  const { renderGameState, loadTilemap } = await import('./game-render.js');
-  const { createCanvas, loadImage } = await import('canvas');
-  const { default: GIFEncoder } = await import('gif-encoder-2');
+  const { renderGameState, loadTilemap, renderFramesToGif } = await import('./game-render.js');
   await loadTilemap(path.join(__dirname, '..', 'assets', 'tilemap.png'));
 
   console.log(`\n  Rendering ${missionDef.title}…`);
@@ -291,24 +290,8 @@ async function renderMissionToGif(missionDef, outPath) {
   frames.push(renderGameState(state, { chronicle: state.log.slice(-15) }));
 
   console.log(`\n    ${frames.length} frames captured. Encoding GIF…`);
-  const firstImg = await loadImage(frames[0]);
-  const w = firstImg.width, h = firstImg.height;
-  const encoder = new GIFEncoder(w, h);
-  encoder.setDelay(800);
-  encoder.setRepeat(0);
-  encoder.setQuality(10);
-  encoder.start();
-  for (let i = 0; i < frames.length; i++) {
-    if (i === frames.length - 1) encoder.setDelay(3000);
-    const img = await loadImage(frames[i]);
-    const canvas = createCanvas(w, h);
-    canvas.getContext('2d').drawImage(img, 0, 0);
-    encoder.addFrame(canvas.getContext('2d'));
-  }
-  encoder.finish();
-  fs.mkdirSync(path.dirname(outPath), { recursive: true });
-  fs.writeFileSync(outPath, encoder.out.getData());
-  const kb = (fs.statSync(outPath).size / 1024).toFixed(0);
+  const result = await renderFramesToGif(frames, outPath);
+  const kb = (result.bytes / 1024).toFixed(0);
   console.log(`    GIF saved → ${outPath}  (${kb} KB, winner=${state.winner ?? 'timeout'} in ${state.round}r)`);
 }
 

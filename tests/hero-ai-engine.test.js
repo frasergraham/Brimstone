@@ -390,6 +390,17 @@ describe('HERO_PERSONALITY_CONFIGS', () => {
       ['aggressive', 'balanced', 'defensive', 'explorer', 'node_denier', 'witch_hunter']);
   });
 
+  // Ratchet — the standard ai-matrix.js balance grid must keep enumerating
+  // exactly the four canonical personalities. New campaign-only personalities
+  // must set `campaignOnly: true` so they don't pollute the matrix.
+  test('only the canonical four personalities are non-campaignOnly', () => {
+    const standard = Object.entries(HERO_PERSONALITY_CONFIGS)
+      .filter(([, cfg]) => !cfg.campaignOnly)
+      .map(([name]) => name)
+      .sort();
+    assert.deepEqual(standard, ['aggressive', 'balanced', 'defensive', 'explorer']);
+  });
+
   test('each config has required fields', () => {
     for (const [name, cfg] of Object.entries(HERO_PERSONALITY_CONFIGS)) {
       assert.ok(cfg.goalWeights, `${name} missing goalWeights`);

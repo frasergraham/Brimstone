@@ -1114,8 +1114,9 @@ const MISSIONS = [
     // Evasive — she moves away from the hero rather than fighting; she'll
     // also summon sparingly so the witch_flees wave carries the threat.
     aiPersonality: 'evasive',
-    // Hero AI override (used in headless / future AI play): rush to clear
-    // every node before dawn — slaying the witch is irrelevant for victory.
+    // Hero AI override — consumed ONLY by scripts/headless-campaign.js for
+    // AI playtesting. The real campaign UI has a human at the controls, so
+    // src/main.js ignores this field. Headless rush-to-clear-every-node bias.
     heroPersonality: 'node_denier',
     aiBudgetBonus: 1,
 
@@ -1197,8 +1198,8 @@ const MISSIONS = [
       ] },
     ],
     aiPersonality: 'evasive',
-    // Hero AI override (used in headless / future AI play): hold every
-    // node at dawn — exploring/witch-hunting is a distraction.
+    // Hero AI override — headless-only (see scripts/headless-campaign.js).
+    // Real campaign play uses the human; src/main.js ignores this field.
     heroPersonality: 'node_denier',
     aiBudgetBonus: 0,
 
@@ -1252,10 +1253,10 @@ const MISSIONS = [
     mapBuilder:      'witchs_trail',
     mapSize:         'standard',
 
-    hasWitch:           true,
-    disableScoring:     false,  // multiplayer-style scoring drives the loss condition
-    disableNodeSweep:   true,   // points only — sweeping nodes does not instantly win/lose
-    nodeScoreThreshold: 99,     // disable engine's built-in score-win — our witch_score_threshold lose drives it
+    hasWitch:         true,
+    disableScoring:   false,  // multiplayer-style scoring drives the loss condition
+    disableNodeSweep: true,   // points only — sweeping nodes does not instantly win/lose
+    disableScoreWin:  true,   // engine's built-in "first to N points wins" off — our witch_score_threshold lose drives it
 
     // 1 day → 1 dusk → 3 night, then phase clamps to NIGHT.  Each witch
     // score also appends another 'night' (visible cycle growth).
@@ -1285,8 +1286,8 @@ const MISSIONS = [
       { round: 7, units: [{ type: 'minion', spawnAt: 'map_edge' }] },
     ],
     aiPersonality: 'aggressive',  // she's holding the nodes, not fleeing
-    // Hero AI override (used in headless / future AI play): only victory
-    // is slaying the witch — node-camping loses to her score clock.
+    // Hero AI override — headless-only (see scripts/headless-campaign.js).
+    // Real campaign play uses the human; src/main.js ignores this field.
     heroPersonality: 'witch_hunter',
     aiBudgetBonus: 1,
 
