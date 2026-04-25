@@ -14,7 +14,7 @@ import {
   EntityType, createMinion, createZombie,
 } from '../src/entities.js';
 import { TileType, ResourceType, BuildingType } from '../src/tiles.js';
-import { hexKey, getNeighbors } from '../src/hex.js';
+import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
 import { getFaction, BruteFaction, WitchFaction } from '../src/factions.js';
 
 function freshState() {
@@ -79,35 +79,44 @@ describe('BruteFaction — lumbering movement', () => {
   });
 
   test('brute walks 1 hex on a road (no discount); witch walks 2 on roads', () => {
-    // Same starting state — switch only the leader faction and compare
-    // reachable hex counts on a freshly-tiled corridor of roads.
-    const layout = (state, col, row) => {
-      // Build a horizontal corridor of road tiles.
-      for (let dc = -3; dc <= 3; dc++) {
-        const t = state.tiles.get(hexKey(col + dc, row));
-        if (t) { t.type = TileType.ROAD; t.building = null; }
+    // Build a deterministic scenario: drop the leader at a safe central
+    // hex, scrub every tile within 4 hexes to plain road (no river, no
+    // building), and remove every other entity so nothing blocks the
+    // pathfinder. The procedurally-generated map otherwise scatters
+    // rivers / forts that make raw `getReachableHexes` counts flaky.
+    const scrub = (state, col, row) => {
+      state.entities = state.entities.filter(e => e.col === col && e.row === row && e.type !== 'survivor');
+      for (const [, t] of state.tiles) {
+        if (hexDistance(t.col, t.row, col, row) <= 4) {
+          t.type = TileType.ROAD;
+          t.building = null;
+          t.fortifyLevel = 0;
+          t.hiddenSurvivor = false;
+        }
       }
     };
 
     const wState = freshState();
-    layout(wState, wState.witch.col, wState.witch.row);
+    wState.witch.col = 6; wState.witch.row = 6;
+    scrub(wState, wState.witch.col, wState.witch.row);
     const witchReach = getReachableHexes(wState, wState.witch, 1);
 
-    const { state, brute } = bruteState();
-    layout(state, brute.col, brute.row);
+    const { state, brute } = bruteState(6, 6);
+    scrub(state, brute.col, brute.row);
     const bruteReach = getReachableHexes(state, brute, 1);
 
-    // Witch on roads can reach roughly 2 tiles in either direction along
-    // the corridor (range 1 → budget 2; road cost 1). Brute lumbers, so
-    // every road tile costs 2 — only adjacent tiles are reachable.
+    // Witch on roads (range 1 → budget 2, road cost 1) reaches every hex
+    // within 2 steps. On an open hex with 6 neighbours each having 6
+    // neighbours, that's 6 + 12 unique = 18 reachable tiles.
+    // Brute lumbers (every tile costs 2) — only the 6 adjacent hexes.
+    assert.equal(bruteReach.length, 6,
+      `brute should reach exactly 6 adjacent hexes on roads, got ${bruteReach.length}`);
     assert.ok(witchReach.length > bruteReach.length,
       `witch should reach more hexes on roads than brute (witch: ${witchReach.length}, brute: ${bruteReach.length})`);
-    // Check that no brute-reachable hex is more than 1 step away.
+    // Sanity: every brute-reachable hex is exactly 1 step away.
     for (const h of bruteReach) {
-      const dc = Math.abs(h.col - brute.col);
-      const dr = Math.abs(h.row - brute.row);
-      assert.ok(dc + dr <= 2,
-        `brute reach should be capped at 1 step on roads, got (${h.col},${h.row}) from (${brute.col},${brute.row})`);
+      assert.equal(hexDistance(h.col, h.row, brute.col, brute.row), 1,
+        `brute reach should be exactly 1 step, got (${h.col},${h.row})`);
     }
   });
 });
