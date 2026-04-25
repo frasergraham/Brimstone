@@ -83,13 +83,6 @@ export class Faction {
   isBlockedByWalls() { return false; }
 
   /**
-   * If true, units of this concrete faction get no movement discount on
-   * road / bridge / building tiles — every passable tile costs the same.
-   * Default: false (roads halve movement cost, see getReachableHexes).
-   */
-  lumbers() { return false; }
-
-  /**
    * Bonus splash radius around the target hex when this faction's unit
    * lands a crushing blow (or kill via crush). 0 = vanilla splash (only
    * same-hex bystanders). 1 = also damage units on the 6 neighbouring
@@ -701,17 +694,13 @@ export class BruteFaction extends WitchFaction {
   get id()         { return 'brute'; }
   get name()       { return 'Brute'; }
   get leaderType() { return EntityType.BRUTE; }
-  // No isStub() override — the brute has its own behaviour (no road
-  // bonus, minions-only summons, building survivor auto-zombify, and
-  // crush-splash that extends to adjacent hexes).
+  // No isStub() override — the brute has its own behaviour: minions-only
+  // summons, building survivor auto-zombify, and crush-splash that
+  // extends to the target's adjacent hexes.
 
   _buildLeader(col, row, ownerId, state = null) {
     return createBrute(col, row, ownerId, state);
   }
-
-  // The brute lumbers — roads grant no movement discount. Pathfinding and
-  // reachability honour this via concreteFactionOf(actor).lumbers().
-  lumbers() { return true; }
 
   // Splash radius for a crushing blow. 0 = same-hex only (default); 1 =
   // also damage the 6 neighbouring hexes around the target.

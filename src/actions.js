@@ -66,12 +66,8 @@ export function isFortBlocking(tile, actorOwner) {
 //   range 2 (horse)    → 2 off-road tiles OR  4 road tiles per action
 // posOverride lets the planner query reachability from a projected position
 // rather than the entity's current position.
-//
-// Lumbering units (Brute) get no road discount — every passable tile costs
-// the flat off-road price, gated via `concreteFactionOf(actor).lumbers()`.
 export function getReachableHexes(state, actor, range, posOverride = null, visibleEnemyHexes = null) {
   const budget   = range * 2;
-  const lumbers  = concreteFactionOf(actor).lumbers();
   const startCol = posOverride?.col ?? actor.col;
   const startRow = posOverride?.row ?? actor.row;
   const startK   = hexKey(startCol, startRow);
@@ -89,9 +85,8 @@ export function getReachableHexes(state, actor, range, posOverride = null, visib
       if (!nt || nt.type === TileType.RIVER) continue;
       if (hasVisibleEnemy(state, actor, n.col, n.row, visibleEnemyHexes)) continue;
       if (isFortBlocking(nt, actor.owner)) continue;
-      const isRoadLike = !lumbers && (nt.type === TileType.ROAD ||
-                                      nt.type === TileType.BRIDGE ||
-                                      nt.type === TileType.BUILDING);
+      const isRoadLike = nt.type === TileType.ROAD || nt.type === TileType.BRIDGE ||
+                         nt.type === TileType.BUILDING;
       const nc = c + (isRoadLike ? 1 : 2);
       if (nc <= budget && nc < (dist.get(nk) ?? Infinity)) {
         dist.set(nk, nc);
@@ -114,7 +109,6 @@ export function getReachableHexes(state, actor, range, posOverride = null, visib
 // or null if no path exists within the movement budget.
 // posOverride allows querying from a projected position rather than actor's current pos.
 function findShortestPath(state, actor, toCol, toRow, posOverride = null) {
-  const lumbers  = concreteFactionOf(actor).lumbers();
   const startCol = posOverride?.col ?? actor.col;
   const startRow = posOverride?.row ?? actor.row;
   const startK   = hexKey(startCol, startRow);
@@ -138,9 +132,8 @@ function findShortestPath(state, actor, toCol, toRow, posOverride = null) {
       if (!nt || nt.type === TileType.RIVER) continue;
       if (hasEnemy(state, actor, n.col, n.row) && nk !== goalK) continue;
       if (isFortBlocking(nt, actor.owner) && nk !== goalK) continue;
-      const isRoadLike = !lumbers && (nt.type === TileType.ROAD ||
-                                      nt.type === TileType.BRIDGE ||
-                                      nt.type === TileType.BUILDING);
+      const isRoadLike = nt.type === TileType.ROAD || nt.type === TileType.BRIDGE ||
+                         nt.type === TileType.BUILDING;
       const nc = c + (isRoadLike ? 1 : 2);
       if (nc < (dist.get(nk) ?? Infinity)) {
         dist.set(nk, nc);
@@ -187,7 +180,6 @@ function sameHexEnemies(state, entity) {
 
 export function getFogReachableHexes(state, actor, posOverride = null) {
   const hasHorse = getFaction(actor.owner).hasHorse(actor);
-  const lumbers  = concreteFactionOf(actor).lumbers();
   const range    = hasHorse ? 2 : 1;
   const budget   = range * 2;
   const startCol = posOverride?.col ?? actor.col;
@@ -206,9 +198,8 @@ export function getFogReachableHexes(state, actor, posOverride = null) {
       if (!nt || nt.type === TileType.RIVER) continue;
       // No enemy blocking — this is theoretical reachability for fog visibility
       if (isFortBlocking(nt, actor.owner)) continue;
-      const isRoadLike = !lumbers && (nt.type === TileType.ROAD ||
-                                      nt.type === TileType.BRIDGE ||
-                                      nt.type === TileType.BUILDING);
+      const isRoadLike = nt.type === TileType.ROAD || nt.type === TileType.BRIDGE ||
+                         nt.type === TileType.BUILDING;
       const nc = c + (isRoadLike ? 1 : 2);
       if (nc <= budget && nc < (dist.get(nk) ?? Infinity)) {
         dist.set(nk, nc);

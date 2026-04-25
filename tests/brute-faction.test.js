@@ -8,13 +8,12 @@ import assert from 'node:assert/strict';
 import { GameState, Phase } from '../src/game.js';
 import {
   ActionType, getValidActions, executeMove, executeBattle, executeSummon,
-  getReachableHexes,
 } from '../src/actions.js';
 import {
   EntityType, createMinion, createZombie,
 } from '../src/entities.js';
 import { TileType, ResourceType, BuildingType } from '../src/tiles.js';
-import { hexKey, getNeighbors, hexDistance } from '../src/hex.js';
+import { hexKey, getNeighbors } from '../src/hex.js';
 import { getFaction, BruteFaction, WitchFaction } from '../src/factions.js';
 
 function freshState() {
@@ -63,61 +62,6 @@ describe('BruteFaction — leader stats', () => {
     const b = getFaction('brute').createLeader(0, 0, 'p1');
     assert.equal(b.hasAbility('summon'), true);
     assert.equal(b.hasAbility('sound_horn'), false);
-  });
-});
-
-// ── Lumbering — no road movement bonus ──────────────────────────────────────
-
-describe('BruteFaction — lumbering movement', () => {
-  test('lumbers() returns true for brute, false for hero/witch/rogue', () => {
-    assert.equal(getFaction('brute').lumbers(),       true);
-    assert.equal(getFaction('witch').lumbers(),       false);
-    assert.equal(getFaction('hero').lumbers(),        false);
-    assert.equal(getFaction('rogue').lumbers(),       false);
-    assert.equal(getFaction('necromancer').lumbers(), false);
-    assert.equal(getFaction('captain').lumbers(),     false);
-  });
-
-  test('brute walks 1 hex on a road (no discount); witch walks 2 on roads', () => {
-    // Build a deterministic scenario: drop the leader at a safe central
-    // hex, scrub every tile within 4 hexes to plain road (no river, no
-    // building), and remove every other entity so nothing blocks the
-    // pathfinder. The procedurally-generated map otherwise scatters
-    // rivers / forts that make raw `getReachableHexes` counts flaky.
-    const scrub = (state, col, row) => {
-      state.entities = state.entities.filter(e => e.col === col && e.row === row && e.type !== 'survivor');
-      for (const [, t] of state.tiles) {
-        if (hexDistance(t.col, t.row, col, row) <= 4) {
-          t.type = TileType.ROAD;
-          t.building = null;
-          t.fortifyLevel = 0;
-          t.hiddenSurvivor = false;
-        }
-      }
-    };
-
-    const wState = freshState();
-    wState.witch.col = 6; wState.witch.row = 6;
-    scrub(wState, wState.witch.col, wState.witch.row);
-    const witchReach = getReachableHexes(wState, wState.witch, 1);
-
-    const { state, brute } = bruteState(6, 6);
-    scrub(state, brute.col, brute.row);
-    const bruteReach = getReachableHexes(state, brute, 1);
-
-    // Witch on roads (range 1 → budget 2, road cost 1) reaches every hex
-    // within 2 steps. On an open hex with 6 neighbours each having 6
-    // neighbours, that's 6 + 12 unique = 18 reachable tiles.
-    // Brute lumbers (every tile costs 2) — only the 6 adjacent hexes.
-    assert.equal(bruteReach.length, 6,
-      `brute should reach exactly 6 adjacent hexes on roads, got ${bruteReach.length}`);
-    assert.ok(witchReach.length > bruteReach.length,
-      `witch should reach more hexes on roads than brute (witch: ${witchReach.length}, brute: ${bruteReach.length})`);
-    // Sanity: every brute-reachable hex is exactly 1 step away.
-    for (const h of bruteReach) {
-      assert.equal(hexDistance(h.col, h.row, brute.col, brute.row), 1,
-        `brute reach should be exactly 1 step, got (${h.col},${h.row})`);
-    }
   });
 });
 
