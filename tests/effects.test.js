@@ -8,16 +8,19 @@ import {
   EFFECTS, applyEffect, removeEffect, hasEffect,
   effectStatMod, effectRangeMod, effectIncomingAtkAdvantage,
   effectDamageTakenFlat, effectsBlockActions, effectsBlockHeal,
-  tickEffects, dispatchTrigger, clearMissionEffects, getEffect,
+  tickEffects, dispatchTrigger, getEffect,
 } from '../src/effects.js';
 import {
-  Entity, EntityType, createHero, createWitch, createMinion, createZombie,
+  Entity, EntityType, attackOf, defenseOf, rangeOf,
+  createHero, createWitch, createMinion, createZombie, createSurvivor,
 } from '../src/entities.js';
-import { GameState } from '../src/game.js';
+import { GameState, Phase } from '../src/game.js';
 import { applyPostRoundEffects } from '../src/post-round-effects.js';
 import { executeBattle } from '../src/actions.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { snapshotSurvivor } from '../src/campaign/campaign.js';
+import { validatePlanAction, PlanActionType } from '../src/planner.js';
+import { getFaction } from '../src/factions.js';
 
 // ── Registry shape ─────────────────────────────────────────────────────────
 
@@ -258,13 +261,6 @@ describe('Round lifecycle — tickEffects', () => {
     assert.equal(gs.entities.length, 0);
   });
 
-  test('clearMissionEffects strips mission scope but keeps permanent', () => {
-    const hero = createHero(0, 0);
-    applyEffect(hero, 'cursed', { duration: 'mission' });
-    applyEffect(hero, 'eagle_eyed', { duration: 'permanent' });
-    clearMissionEffects(hero);
-    assert.deepEqual(hero.effects.map(e => e.id), ['eagle_eyed']);
-  });
 });
 
 // ── post-round pipeline integration ────────────────────────────────────────
@@ -421,6 +417,187 @@ describe('Serialization round-trip', () => {
       assert.deepEqual(e.effects, []);
       assert.equal(e.killsThisRound, 0);
     }
+  });
+});
+
+// ── DOT amplification by wounded (Fix #2) ──────────────────────────────────
+
+describe('Wounded amplifies DOTs and attrition', () => {
+  test('wounded + bleeding deals 2 HP per round, not 1', () => {
+    const hero = createHero(0, 0);
+    const startHp = hero.hp;
+    applyEffect(hero, 'wounded');
+    applyEffect(hero, 'bleeding', { duration: 2 });
+    const gs = new GameState(false, false);
+    gs.entities = [hero];
+    gs.hero = hero;
+    tickEffects(gs);
+    assert.equal(hero.hp, startHp - 2, 'bleeding (1) + wounded (+1) = 2 HP loss');
+  });
+
+  test('wounded + poisoned still deals 2 HP per round', () => {
+    const z = createZombie(0, 0);
+    const startHp = z.hp;
+    applyEffect(z, 'wounded');
+    applyEffect(z, 'poisoned', { duration: 2 });
+    const gs = new GameState(false, false);
+    gs.entities = [z];
+    tickEffects(gs);
+    assert.equal(z.hp, startHp - 2);
+  });
+
+  test('night attrition routes through applyIncomingDamage', () => {
+    const gs = new GameState(false, false);
+    gs.entities = [];
+    // Place a survivor on a non-building hex (default tiles are grass).
+    const surv = createSurvivor(5, 5);
+    applyEffect(surv, 'wounded');
+    gs.entities.push(surv);
+    gs.phase = Phase.NIGHT;
+    gs.attritionLevel = 1;
+    const startHp = surv.hp;
+    applyPostRoundEffects(gs);
+    assert.equal(surv.hp, startHp - 2, 'attrition (1) + wounded (+1) = 2 HP loss');
+  });
+});
+
+// ── Lethal-DOT bookkeeping (Fix #1) ────────────────────────────────────────
+
+describe('Lethal DOT credits the source', () => {
+  function _setupLethalDot(targetHp = 1, attackerOwner = 'hero') {
+    const gs = new GameState(false, false);
+    gs.entities = [];
+    const attacker = attackerOwner === 'hero' ? createHero(0, 0) : createWitch(0, 0);
+    const target = attackerOwner === 'hero' ? createMinion(5, 5) : createSurvivor(5, 5);
+    target.hp = targetHp;
+    gs.entities.push(attacker, target);
+    if (attackerOwner === 'hero') gs.hero = attacker;
+    else gs.witch = attacker;
+    return { gs, attacker, target };
+  }
+
+  test('bleeding kill credits source faction\'s trackKill', () => {
+    const { gs, attacker, target } = _setupLethalDot(1, 'hero');
+    applyEffect(target, 'bleeding', { duration: 1, source: attacker });
+    const beforeKills = gs.heroKills ?? 0;
+    applyPostRoundEffects(gs);
+    assert.equal(target.alive, false, 'target died to DOT');
+    assert.ok((gs.heroKills ?? 0) > beforeKills, 'kill counter incremented');
+  });
+
+  test('lethal DOT increments source.killsThisRound', () => {
+    const { gs, attacker, target } = _setupLethalDot(1, 'hero');
+    applyEffect(target, 'bleeding', { duration: 1, source: attacker });
+    applyPostRoundEffects(gs);
+    assert.equal(attacker.killsThisRound, 1);
+  });
+
+  test('lethal DOT fires source\'s berserker trigger when threshold met', () => {
+    const { gs, attacker, target } = _setupLethalDot(1, 'hero');
+    attacker.abilities.push('berserker');
+    attacker.killsThisRound = 1; // one prior kill this round
+    applyEffect(target, 'bleeding', { duration: 1, source: attacker });
+    applyPostRoundEffects(gs);
+    assert.equal(attacker.killsThisRound, 2);
+    assert.equal(hasEffect(attacker, 'frenzied'), true, 'second kill triggered berserker');
+  });
+
+  test('lethal DOT to a leader scatters their owned units', () => {
+    const gs = new GameState(false, false);
+    gs.entities = [];
+    const witch = createWitch(0, 0);
+    witch.ownerId = 'p-witch';
+    witch.hp = 1;
+    gs.witch = witch;
+    gs.entities.push(witch);
+    gs.players = [{ id: 'p-witch', faction: 'witch', leaderId: witch.id, isAI: false }];
+    let scattered = null;
+    gs.scatterPlayerUnits = (ownerId) => { scattered = ownerId; };
+    const hero = createHero(5, 5);
+    applyEffect(witch, 'bleeding', { duration: 1, source: hero });
+    applyPostRoundEffects(gs);
+    assert.equal(scattered, 'p-witch', 'scatterPlayerUnits called with witch ownerId');
+  });
+
+  test('environmental DOT (no source) still kills cleanly without crash', () => {
+    const gs = new GameState(false, false);
+    gs.entities = [];
+    const z = createZombie(0, 0);
+    z.hp = 1;
+    gs.entities.push(z);
+    applyEffect(z, 'bleeding', { duration: 1 }); // no source
+    // Must not throw.
+    applyPostRoundEffects(gs);
+    assert.equal(z.alive, false);
+  });
+});
+
+// ── Slowed shifts lockstep order (Fix #4) ──────────────────────────────────
+
+describe('Slowed shifts lockstep agility order', () => {
+  test('getAgility composes the slowed -1', () => {
+    const hero = createHero(0, 0);
+    const baseAgility = hero.getAgility();
+    applyEffect(hero, 'slowed');
+    assert.equal(hero.getAgility(), baseAgility - 1);
+  });
+
+  test('plain-object rangeOf composes ability range mods', () => {
+    const fixture = { type: 'paladin', range: 1, abilities: ['eagle_eye'] };
+    assert.equal(rangeOf(fixture), 2, 'eagle_eye ability adds +1 range to fixture');
+  });
+});
+
+// ── attackOf / defenseOf plain-object fallback (Fix #9) ───────────────────
+
+describe('attackOf / defenseOf compose effect mods', () => {
+  test('plain-object fixture with frenzied effect gets +1 attack', () => {
+    const fixture = { type: 'paladin', attack: 3, defense: 2, abilities: [], effects: [{ id: 'frenzied', duration: 1, stacks: 1 }] };
+    assert.equal(attackOf(fixture), 4);
+    assert.equal(defenseOf(fixture), 1, 'frenzied also -1 DEF on plain object');
+  });
+
+  test('plain-object fixture with wounded effect leaves attack alone', () => {
+    const fixture = { type: 'paladin', attack: 3, defense: 2, abilities: [], effects: [{ id: 'wounded', duration: 3, stacks: 1 }] };
+    assert.equal(attackOf(fixture), 3);
+    assert.equal(defenseOf(fixture), 2, 'wounded does not affect DEF');
+  });
+});
+
+// ── Stunned planner gate (Fix #7) ──────────────────────────────────────────
+
+describe('Stunned units fail validatePlanAction', () => {
+  test('move action on a stunned actor is rejected', () => {
+    const gs = new GameState(false, false);
+    const hero = gs.hero;
+    applyEffect(hero, 'stunned');
+    const r = validatePlanAction(gs, {
+      type: PlanActionType.MOVE, entityId: hero.id, toCol: hero.col + 1, toRow: hero.row,
+    });
+    assert.equal(r.valid, false);
+    assert.match(r.reason ?? '', /stunned/i);
+  });
+
+  test('battle action on a stunned actor is rejected', () => {
+    const gs = new GameState(false, false);
+    const hero = gs.hero;
+    const witch = gs.witch;
+    applyEffect(hero, 'stunned');
+    const r = validatePlanAction(gs, {
+      type: PlanActionType.BATTLE_UNIT, entityId: hero.id, targetId: witch.id,
+    });
+    assert.equal(r.valid, false);
+    assert.match(r.reason ?? '', /stunned/i);
+  });
+
+  test('non-stunned actor passes the gate', () => {
+    const gs = new GameState(false, false);
+    const hero = gs.hero;
+    const r = validatePlanAction(gs, {
+      type: PlanActionType.MOVE, entityId: hero.id, toCol: hero.col + 1, toRow: hero.row,
+    });
+    // Validity depends on terrain — we only care that the stun gate didn't reject it.
+    if (!r.valid) assert.ok(!/stunned/i.test(r.reason ?? ''));
   });
 });
 

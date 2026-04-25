@@ -8,7 +8,8 @@ import { Phase } from './game.js';
 import { EntityType } from './entities.js';
 import { TileType } from './tiles.js';
 import { hexKey } from './hex.js';
-import { tickEffects, EFFECTS } from './effects.js';
+import { tickEffects, EFFECTS, dispatchTrigger } from './effects.js';
+import { getFaction } from './factions.js';
 
 // ── Event types ─────────────────────────────────────────────────────────────
 
@@ -121,10 +122,13 @@ function nightAttritionEffect(state) {
         continue;
       }
 
-      const killed = e.takeDamage(dmg);
+      // Route through applyIncomingDamage so wounded etc. amplify attrition
+      // the same way they amplify combat / DOTs.
+      const incoming = e.applyIncomingDamage(dmg);
+      const killed = e.takeDamage(incoming);
       const text = killed
         ? `💀 ${e.displayName} is consumed by the night!`
-        : `🌙 ${e.displayName} suffers in the open! (-${dmg} HP, ${e.hp}/${e.maxHp} remaining)`;
+        : `🌙 ${e.displayName} suffers in the open! (-${incoming} HP, ${e.hp}/${e.maxHp} remaining)`;
 
       events.push({
         type:       killed ? PostRoundEventType.KILL : PostRoundEventType.DAMAGE,
@@ -132,13 +136,13 @@ function nightAttritionEffect(state) {
         ownerId:    e.ownerId ?? null,
         entityName: e.displayName,
         col: e.col, row: e.row,
-        amount: dmg,
+        amount: incoming,
         killed,
         text,
         flash: {
           color:     'rgba(80,0,160,0.6)',
           textColor: 'rgba(210,140,255,1)',
-          label:     `-${dmg}`,
+          label:     `-${incoming}`,
           duration:  2200,
           fontScale: 1.4,
         },
@@ -180,6 +184,35 @@ function statusEffectsTick(state) {
   const events = [];
   for (const ev of dotEvents) {
     const def = EFFECTS[ev.effectId];
+
+    // Kill bookkeeping for lethal DOTs — mirrors executeBattle's kill path.
+    // Without this, bleeding/poisoned/cursed deaths skip kill credit, leader
+    // scatter, and never fire the attacker's `kill` triggers (e.g. berserker).
+    if (ev.killed && ev.killedEntity) {
+      const killed = ev.killedEntity;
+      const source = ev.source;
+      // Source may be an Entity (most cases — applied during combat), a
+      // string faction id, or null (environmental DOT). Only credit a real
+      // kill when we can resolve a faction.
+      if (source && typeof source === 'object' && source.owner) {
+        const fac = getFaction(source.owner);
+        if (fac) fac.trackKill(state);
+        source.killsThisRound = (source.killsThisRound ?? 0) + 1;
+        dispatchTrigger('kill', source, { state, target: killed });
+      } else if (typeof source === 'string') {
+        const fac = getFaction(source);
+        if (fac) fac.trackKill(state);
+      }
+      // Leader-death scatter — same trigger as the resolver's
+      // `_handleLeaderDeath`. Use the `leader` tag instead of importing
+      // isLeaderType to avoid an effects/entities cycle.
+      if (typeof killed.hasTag === 'function' && killed.hasTag('leader') && killed.ownerId) {
+        if (typeof state.scatterPlayerUnits === 'function') {
+          state.scatterPlayerUnits(killed.ownerId);
+        }
+      }
+    }
+
     events.push({
       type:       ev.killed ? PostRoundEventType.KILL : PostRoundEventType.EFFECT_TICK,
       entityId:   ev.entityId,

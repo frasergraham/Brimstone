@@ -396,21 +396,26 @@ export function attackOf(e) {
   const base        = e?.attack ?? 0;
   const weaponMod   = e?.weapon ? (ITEMS[e.weapon]?.statMods?.attack ?? 0) : 0;
   const abilityMod  = _abilityStatMod(e?.abilities, 'attack');
-  return base + weaponMod + abilityMod;
+  const effectMod   = effectStatMod(e, 'attack');
+  return base + weaponMod + abilityMod + effectMod;
 }
 export function defenseOf(e) {
   if (typeof e?.getDefense === 'function') return e.getDefense();
   const base        = e?.defense ?? 0;
   const weaponMod   = e?.weapon ? (ITEMS[e.weapon]?.statMods?.defense ?? 0) : 0;
   const abilityMod  = _abilityStatMod(e?.abilities, 'defense');
-  return base + weaponMod + abilityMod;
+  const effectMod   = effectStatMod(e, 'defense');
+  return base + weaponMod + abilityMod + effectMod;
 }
 // Attack range in hexes — tolerates plain-object fixtures. Falls back to
 // UNIT_TYPES[type].range so tests that skip the Entity constructor still
 // see the correct range for a given entity type.
 export function rangeOf(e) {
   if (typeof e?.getRange === 'function') return e.getRange();
-  return e?.range ?? UNIT_TYPES[e?.type]?.range ?? 1;
+  const base       = e?.range ?? UNIT_TYPES[e?.type]?.range ?? 1;
+  const abilityMod = _abilityStatMod(e?.abilities, 'range');
+  const effectMod  = effectRangeMod(e);
+  return base + abilityMod + effectMod;
 }
 
 // ── Advantage-dice math ─────────────────────────────────────────────────────

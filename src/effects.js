@@ -237,33 +237,57 @@ export function effectsBlockHeal(entity) {
  * Apply round-end effects (DOTs) and decrement durations.
  * Returns { dotEvents, expiredEvents } — both arrays of objects suitable for
  * pushing into the post-round-events stream.
+ *
+ * DOT damage routes through `e.applyIncomingDamage(stacks)` so other effects
+ * (wounded → +1) amplify it the same way they amplify combat damage.
+ *
+ * Lethal DOTs are NOT bookkept here — the caller (statusEffectsTick in
+ * post-round-effects.js) reads `killed`/`killedEntity`/`source` off each
+ * dot event and dispatches `trackKill`, the `kill` trigger on the source,
+ * and `scatterPlayerUnits` for leader deaths. Keeping that logic in
+ * post-round-effects avoids an `effects.js → factions.js → entities.js →
+ * effects.js` import cycle.
  */
 export function tickEffects(state) {
   const dotEvents = [];
   const expiredEvents = [];
-  for (const e of state.entities) {
-    if (!e.alive || !Array.isArray(e.effects) || e.effects.length === 0) continue;
+  // Snapshot the entities to tick at the top — DOT deaths mutate
+  // `state.entities` mid-loop, and any future change that pushes/removes
+  // entities during the tick (multi-DOT chains, reactive spawns) would
+  // otherwise produce silent skips or double-processing.
+  const toTick = state.entities.filter(
+    e => e.alive && Array.isArray(e.effects) && e.effects.length > 0
+  );
+  const dead = [];
+  for (const e of toTick) {
+    if (!e.alive) continue;
     // 1) Apply round-end effects (DOTs).
     for (const rec of e.effects.slice()) {
       const def = EFFECTS[rec.id];
       if (!def?.onRoundEnd) continue;
       if (def.onRoundEnd === 'damageOne') {
         const stacks = rec.stacks ?? 1;
-        const killed = e.takeDamage(stacks);
+        // Route through applyIncomingDamage so wounded etc. amplify DOTs.
+        const incoming = e.applyIncomingDamage(stacks);
+        const killed = e.takeDamage(incoming);
         dotEvents.push({
           effectId: rec.id,
           entityId: e.id,
           entityName: e.displayName,
           ownerId: e.ownerId ?? null,
           col: e.col, row: e.row,
-          amount: stacks,
+          amount: incoming,
           killed,
+          // Surfaced for caller bookkeeping (kill credit, leader scatter,
+          // kill triggers). May be null/undefined for environmental DOTs.
+          killedEntity: killed ? e : null,
+          source: rec.source ?? null,
           text: killed
             ? `${def.icon} ${e.displayName} succumbs to ${def.label.toLowerCase()}!`
-            : `${def.icon} ${e.displayName} suffers from ${def.label.toLowerCase()}. (-${stacks} HP, ${e.hp}/${e.maxHp})`,
+            : `${def.icon} ${e.displayName} suffers from ${def.label.toLowerCase()}. (-${incoming} HP, ${e.hp}/${e.maxHp})`,
         });
         if (killed) {
-          state.entities = state.entities.filter(x => x.id !== e.id);
+          dead.push(e.id);
           break; // entity is gone — no further effects apply this tick
         }
       }
@@ -293,13 +317,11 @@ export function tickEffects(state) {
     }
     e.effects = kept;
   }
+  if (dead.length > 0) {
+    const deadSet = new Set(dead);
+    state.entities = state.entities.filter(e => !deadSet.has(e.id));
+  }
   return { dotEvents, expiredEvents };
-}
-
-/** Strip mission-scoped effects (called at mission end). Permanent stays. */
-export function clearMissionEffects(entity) {
-  if (!entity || !Array.isArray(entity.effects)) return;
-  entity.effects = entity.effects.filter(rec => rec.duration === 'permanent');
 }
 
 // ── Trigger dispatch ───────────────────────────────────────────────────────
