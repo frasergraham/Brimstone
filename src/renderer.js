@@ -9,7 +9,7 @@ import {
 } from './tiles.js';
 import { ENTITY_COLOR, EntityType, SurvivorAbility, isLeaderType } from './entities.js';
 import { getVisiblePositions, sightRange, buildFogMovementHexes } from './actions.js';
-import { getFaction } from './factions.js';
+import { getFaction, sightRangeForEntity } from './factions.js';
 import { getFactionTheme, NEUTRAL_NODE_FILL } from './theme.js';
 import { nodeController, Phase } from './game.js';
 
@@ -1702,7 +1702,8 @@ export class Renderer {
     const visibleSet = new Set();
     for (const e of state.entities) {
       if (!e.alive || e.owner !== observerOwner) continue;
-      const range = getFaction(e.owner).getSightRange(state.phase, e.hasAbility(SurvivorAbility.SCOUT));
+      // Per-entity sight so stub-faction bonuses (rogue +1) apply.
+      const range = sightRangeForEntity(e, state.phase);
       // Only iterate hexes within sight range of this entity (not entire map)
       const rMin = Math.max(0, e.row - range);
       const rMax = Math.min(MAP_ROWS - 1, e.row + range);
@@ -3096,6 +3097,8 @@ export class Renderer {
 
       if (p.projectileType === 'sparkle') {
         this._drawSparkleProjectile(ctx, x, y, hs, t, p);
+      } else if (p.projectileType === 'bolt') {
+        this._drawBoltProjectile(ctx, x, y, hs, t, p);
       } else {
         this._drawGenericProjectile(ctx, x, y, hs, t);
       }
@@ -3156,14 +3159,57 @@ export class Renderer {
     ctx.restore();
   }
 
+  // Crossbow bolt — short metallic streak oriented along the travel path.
+  // Visually distinct from the witch's purple sparkle orb so the rogue's
+  // ranged attack reads instantly. (x, y) is the bolt's TIP, not its
+  // centre — at t=1 the tip lands exactly on the target hex centre and
+  // the tail trails back along the path. Centring the bolt on (x, y)
+  // would let the tip overshoot the target by half its length.
+  _drawBoltProjectile(ctx, x, y, hs, _t, p) {
+    const dx = p.toX - p.fromX;
+    const dy = p.toY - p.fromY;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len;
+    const uy = dy / len;
+    // Bolt is ~0.9 hex long, drawn entirely behind the tip.
+    const boltLen = hs * 0.9;
+    const tipX = x;
+    const tipY = y;
+    const tailX = x - ux * boltLen;
+    const tailY = y - uy * boltLen;
+    ctx.save();
+    // Dark steel core.
+    ctx.strokeStyle = '#2a2a2a';
+    ctx.lineCap = 'round';
+    ctx.lineWidth = Math.max(2, hs * 0.06);
+    ctx.beginPath();
+    ctx.moveTo(tailX, tailY);
+    ctx.lineTo(tipX, tipY);
+    ctx.stroke();
+    // Bright highlight to catch the eye.
+    ctx.strokeStyle = 'rgba(220,220,230,0.85)';
+    ctx.lineWidth = Math.max(1, hs * 0.025);
+    ctx.beginPath();
+    ctx.moveTo(tailX, tailY);
+    ctx.lineTo(tipX, tipY);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   _drawImpactPuff(ctx, x, y, hs, impactT, projectileType) {
     const r = hs * 0.6 * (0.3 + impactT * 0.9);
     const alpha = (1 - impactT) * 0.7;
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    const color = projectileType === 'sparkle'
-      ? `rgba(210,160,255,${alpha})`
-      : `rgba(255,230,160,${alpha})`;
+    let color;
+    if (projectileType === 'sparkle') {
+      color = `rgba(210,160,255,${alpha})`;
+    } else if (projectileType === 'bolt') {
+      // Steel/white spark for the crossbow impact.
+      color = `rgba(220,220,230,${alpha})`;
+    } else {
+      color = `rgba(255,230,160,${alpha})`;
+    }
     ctx.fillStyle = color;
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);

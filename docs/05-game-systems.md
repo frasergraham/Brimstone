@@ -11,13 +11,28 @@ Brimstone has two opposing **Sides** — Day and Night — and multiple **Factio
 | Side  | Faction      | Leader entity type | Leader display name | Status |
 |-------|--------------|--------------------|---------------------|--------|
 | day   | hero (Paladin) | `PALADIN`        | Ishmael Charger     | primary |
-| day   | rogue        | `ROGUE`            | Mercy Sloane        | stub (inherits Paladin behaviour) |
+| day   | rogue        | `ROGUE`            | Mercy Sloane        | distinct (ranged crossbow, +1 sight, no melee weapons, no Sound Horn) |
 | day   | captain      | `CAPTAIN`          | Captain Eli Ward    | stub (inherits Paladin behaviour) |
 | night | witch        | `WITCH`            | The Witch           | primary |
 | night | necromancer  | `NECROMANCER`      | The Necromancer     | stub (inherits Witch behaviour) |
 | night | brute        | `BRUTE`            | The Brute           | stub (inherits Witch behaviour) |
 
-Stub factions are registered with their own `EntityType`, base stats, and default leader name. They are subclasses of their side's primary faction (`HeroFaction` or `WitchFaction`) and inherit all combat / summon / fortify / discovery / sight behaviour. Faction-unique mechanics will land in follow-up work.
+Stub factions are registered with their own `EntityType`, base stats, and default leader name. They are subclasses of their side's primary faction (`HeroFaction` or `WitchFaction`) and inherit all combat / summon / fortify / discovery / sight behaviour.
+
+The Rogue is no longer a stub — `RogueFaction` overrides:
+- `getSightRange` — paladin formula + 1 in every phase
+- `canEquipWeaponItem` — only `category === 'ranged'` items (bow, crossbow)
+- `innateLeaderAbilities` — empty (no Sound Horn)
+- `modifyLootRoll` — re-rolls `'nothing'` so exploration always finds something
+- `onAfterMoveStep` — auto-detects survivors in adjacent building tiles
+
+Plus `UNIT_TYPES.rogue.range = 3` and `projectileType: 'bolt'` give her the 3-hex crossbow attack via the existing ranged combat path.
+
+`Faction` exposes the hooks (`canEquipWeaponItem`, `modifyLootRoll`, `applyExploreLootBonus`, `onAfterMoveStep`, `getSightRange`) on the base class; future factions plug in by overriding only what they need.
+
+### Weapon categories
+
+`ITEMS.<weapon>.category = 'melee' | 'ranged'`. Used by `Faction.canEquipWeaponItem(itemId)` to gate per-faction equip rules. Sword / axe / shield / staff / dagger are melee; bow and crossbow are ranged. Crossbow drops in `blacksmith` (8/100 weight) and `watchtower` (12/100 weight).
 
 See `src/sides.js` for the Side enum and `src/factions.js` for the Faction registry.
 

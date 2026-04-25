@@ -19,8 +19,9 @@ import {
   nextDie, ADVANTAGE_CAP, isLeaderType,
 } from './entities.js';
 import { Phase } from './game.js';
-import { getFaction } from './factions.js';
+import { getFaction, concreteFactionOf, sightRangeForEntity } from './factions.js';
 import { dispatchTrigger } from './effects.js';
+import { triggerSurvivorEncounter } from './survivor-discovery.js';
 
 export const ActionType = Object.freeze({
   MOVE:         'move',
@@ -264,7 +265,8 @@ export function getVisiblePositions(state, viewerFactionId) {
 
   for (const viewer of state.entities) {
     if (!viewer.alive || viewer.owner !== viewerFactionId) continue;
-    const range = viewerFaction.getSightRange(state.phase, viewer.hasAbility(SurvivorAbility.SCOUT));
+    // Per-entity sight so stub-faction bonuses (e.g. rogue +1) apply.
+    const range = sightRangeForEntity(viewer, state.phase);
     for (const target of state.entities) {
       if (!target.alive || target.owner !== opponentId) continue;
       if (hexDistance(viewer.col, viewer.row, target.col, target.row) <= range) {
@@ -400,9 +402,12 @@ export function getValidActions(state, actor) {
 
     if (usable.length) actions.push({ type: ActionType.USE_ITEM, usable });
 
-    // Equip weapon from actor's personal items
+    // Equip weapon from actor's personal items. Filter by per-item gate
+    // so factions with category restrictions (e.g. rogue: ranged-only)
+    // don't surface a forbidden weapon in the equip menu.
+    const concrete = concreteFactionOf(actor);
     const weapons = Object.keys(myItems)
-      .filter(k => isWeaponId(k) && (myItems[k] || 0) > 0);
+      .filter(k => isWeaponId(k) && (myItems[k] || 0) > 0 && concrete.canEquipWeaponItem(k));
     if (weapons.length) {
       actions.push({
         type: ActionType.EQUIP_WEAPON,
@@ -465,37 +470,10 @@ export function survivorFindMultiplier(state) {
   return Math.max(0, 1 - 0.10 * active);
 }
 
-// Reveal and materialise a hidden survivor (or zombie for the witch) on a tile.
-// Clears the hiddenSurvivor flag and returns { encounterLog, encounterSurvivor }.
-function _triggerSurvivorEncounter(state, actor, col, row) {
-  const st = tile(state, col, row);
-  if (!st?.hiddenSurvivor) return null;
-
-  // Campaign cap: skip encounter if faction already found max discoverable NPCs
-  if (getFaction(actor.owner).canDiscoverNPCs() &&
-      state.maxDiscoverableSurvivors != null &&
-      state.discoveredSurvivorCount >= state.maxDiscoverableSurvivors) {
-    st.hiddenSurvivor = false;
-    return null;
-  }
-
-  st.hiddenSurvivor = false;
-
-  const encounterLog = [];
-  let encounterSurvivor = null;
-
-  const faction = getFaction(actor.owner);
-  const entity = faction.createDiscoveryEntity(col, row, actor.ownerId, state);
-  state.entities.push(entity);
-  if (getFaction(actor.owner).canDiscoverNPCs()) {
-    state.discoveredSurvivorCount = (state.discoveredSurvivorCount || 0) + 1;
-  }
-  const result = faction.buildDiscoveryResult(entity);
-  encounterLog.push(...result.encounterLog);
-  encounterSurvivor = result.encounterSurvivor;
-
-  return { encounterLog, encounterSurvivor };
-}
+// Survivor encounter logic moved to src/survivor-discovery.js so faction
+// overrides (e.g. RogueFaction.onAfterMoveStep) can share the implementation
+// without a circular import. Local alias keeps existing call sites readable.
+const _triggerSurvivorEncounter = triggerSurvivorEncounter;
 
 export function executeMove(state, actor, targetCol, targetRow) {
   actor.guarding = 0;  // Moving breaks guard stance
@@ -547,6 +525,14 @@ export function executeMove(state, actor, targetCol, targetRow) {
     if (st.hiddenSurvivor && Math.random() < (SURVIVOR_FIND_CHANCE[state.phase] ?? 0.5) * survivorFindMultiplier(state)) {
       const enc = _triggerSurvivorEncounter(state, actor, step.col, step.row);
       if (enc) { encounterLog.push(...enc.encounterLog); encounterSurvivor = enc.encounterSurvivor; }
+    }
+
+    // Faction-specific post-move trigger (e.g. rogue auto-detects survivors
+    // in adjacent buildings). Default no-op for other factions.
+    const hookResult = concreteFactionOf(actor).onAfterMoveStep(state, actor, step.col, step.row);
+    if (hookResult) {
+      if (hookResult.encounterLog?.length) encounterLog.push(...hookResult.encounterLog);
+      if (hookResult.encounterSurvivor) encounterSurvivor = hookResult.encounterSurvivor;
     }
   }
 
@@ -616,15 +602,31 @@ export function executeExplore(state, actor) {
   const isHerbalist = actor.type === EntityType.SURVIVOR &&
     actor.hasAbility(SurvivorAbility.HERBALIST);
 
+  const concreteFaction = concreteFactionOf(actor);
+
   const runLoot = () => {
+    let table;
     if (t.type === TileType.BUILDING && t.building && BUILDING_LOOT[t.building]) {
-      const table = _effectiveLoot(state, 'buildings', t.building, BUILDING_LOOT[t.building]);
-      _applyLoot(state, actor, rollLoot(table), log, lootItems);
+      table = _effectiveLoot(state, 'buildings', t.building, BUILDING_LOOT[t.building]);
     } else {
       const baseTable = TERRAIN_LOOT[t.type] || TERRAIN_LOOT['grass'];
-      const table = _effectiveLoot(state, 'terrain', t.type, baseTable);
-      _applyLoot(state, actor, rollLoot(table), log, lootItems);
+      table = _effectiveLoot(state, 'terrain', t.type, baseTable);
     }
+    const raw = rollLoot(table);
+    const lootType = concreteFaction.modifyLootRoll(state, actor, table, raw);
+    _applyLoot(state, actor, lootType, log, lootItems);
+    concreteFaction.applyExploreLootBonus(
+      state, actor, lootType,
+      () => runBonusLoot(table),
+      { isWeapon: isWeaponId(lootType) },
+    );
+  };
+  // Bonus rolls don't recursively trigger further bonuses — keeps the
+  // multiplier bounded to ~2x per primary roll.
+  const runBonusLoot = (table) => {
+    const raw = rollLoot(table);
+    const lootType = concreteFaction.modifyLootRoll(state, actor, table, raw);
+    _applyLoot(state, actor, lootType, log, lootItems);
   };
   runLoot();
 
@@ -680,7 +682,8 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
   }
 
   if (isWeaponId(lootType)) {
-    if (faction.canEquipWeapon()) {
+    const concrete = concreteFactionOf(actor);
+    if (concrete.canEquipWeaponItem(lootType)) {
       const label = WEAPON_LABEL[lootType] || lootType;
       if (!actor.weapon) {
         actor.equipWeapon(lootType);
@@ -691,6 +694,11 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
         log.push(`Found a ${label}! Added to ${actor.displayName}'s pack.`);
         lootItems?.push('+⚔');
       }
+    } else if (faction.canEquipWeapon()) {
+      // The side can use weapons in general, but this faction rejects this
+      // category (e.g. rogue refuses melee weapons).
+      const label = WEAPON_LABEL[lootType] || lootType;
+      log.push(`Found a ${label}! ${actor.displayName} cannot wield it.`);
     } else {
       log.push(`${actor.displayName} finds a weapon but has no use for it.`);
     }
@@ -1149,6 +1157,10 @@ export function executeHeal(state, actor) {
 export function executeUseItem(state, actor, item) {
   // Weapon equip — from actor's personal items
   if (isWeaponId(item)) {
+    if (!concreteFactionOf(actor).canEquipWeaponItem(item)) {
+      const label = WEAPON_LABEL[item] || item;
+      return { success: false, log: [`${actor.displayName} cannot wield ${label}.`] };
+    }
     const myItems = actor.items || {};
     if ((myItems[item] || 0) < 1) return { success: false, log: ['Item not available.'] };
     myItems[item]--;

@@ -4,7 +4,8 @@
 //  Weights are relative integers (don't need to sum to 100).
 //  Valid type strings:
 //    Resources : 'wood' | 'metal' | 'herbs' | 'food' | 'silver' | 'scripture'
-//    Weapons   : 'sword' | 'axe' | 'shield' | 'bow' | 'staff' | 'dagger'
+//    Weapons   : 'sword' | 'axe' | 'shield' | 'bow' | 'crossbow'
+//                | 'staff' | 'dagger'
 //                (weapon-vs-resource is determined via ITEMS[id].kind,
 //                 not a 'weapon:' prefix — see src/items.js)
 //    Special   : 'horse'     — found in the Stable (most likely), Inn, and some Houses
@@ -28,11 +29,12 @@ export const LOOT_CONFIG = {
   buildings: {
 
     blacksmith: [
-      { type: 'sword',  weight: 22 },
-      { type: 'axe',    weight: 22 },
-      { type: 'shield', weight: 18 },
-      { type: 'metal',         weight: 28 },
-      { type: 'wood',          weight: 10 },
+      { type: 'sword',    weight: 20 },
+      { type: 'axe',      weight: 20 },
+      { type: 'shield',   weight: 16 },
+      { type: 'crossbow', weight:  8 },  // ranged-only — usable by Rogue
+      { type: 'metal',    weight: 26 },
+      { type: 'wood',     weight: 10 },
     ],
 
     inn: [
@@ -72,9 +74,10 @@ export const LOOT_CONFIG = {
     ],
 
     watchtower: [
-      { type: 'bow',    weight: 45 },
-      { type: 'silver',        weight: 40 },
-      { type: 'nothing',       weight: 15 },
+      { type: 'bow',      weight: 35 },
+      { type: 'crossbow', weight: 12 },
+      { type: 'silver',   weight: 38 },
+      { type: 'nothing',  weight: 15 },
     ],
 
     storehouse: [

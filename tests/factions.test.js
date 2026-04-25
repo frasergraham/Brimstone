@@ -108,7 +108,11 @@ describe('Stub factions (PR 5)', () => {
   });
 
   test('stub factions report isStub() === true; side defaults do not', () => {
-    assert.equal(getFaction('rogue').isStub(),       true);
+    // Rogue grew real distinct behaviour (ranged attack, melee-weapon
+    // ban, sight bonus, agility-loot bonus, building-survivor auto-detect,
+    // no Sound Horn) — no longer a stub. The remaining day/night stubs
+    // still inherit their parent's behaviour wholesale.
+    assert.equal(getFaction('rogue').isStub(),       false);
     assert.equal(getFaction('captain').isStub(),     true);
     assert.equal(getFaction('necromancer').isStub(), true);
     assert.equal(getFaction('brute').isStub(),       true);

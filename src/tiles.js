@@ -37,12 +37,13 @@ export const ResourceType = Object.freeze({
 });
 
 export const WeaponType = Object.freeze({
-  SWORD:  'sword',   // +2 attack
-  AXE:    'axe',     // +1 attack, +1 defense
-  BOW:    'bow',     // +1 attack
-  SHIELD: 'shield',  // +2 defense
-  STAFF:  'staff',   // +1 attack, +1 advantage die vs undead
-  DAGGER: 'dagger',  // +1 attack
+  SWORD:    'sword',     // +2 attack
+  AXE:      'axe',       // +1 attack, +1 defense
+  BOW:      'bow',       // +1 attack (ranged category)
+  CROSSBOW: 'crossbow',  // +1 attack (ranged category)
+  SHIELD:   'shield',    // +2 defense
+  STAFF:    'staff',     // +1 attack, +1 advantage die vs undead
+  DAGGER:   'dagger',    // +1 attack
 });
 
 // WEAPON_STATS and WEAPON_LABEL derive from the ITEMS registry

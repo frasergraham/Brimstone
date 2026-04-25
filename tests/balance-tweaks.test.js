@@ -102,7 +102,7 @@ describe('Witch minions cannot explore or summon', () => {
 
   test('Witch leader CAN still summon', () => {
     const state = freshState();
-    const witch = createWitch(3, 3);
+    const witch = getFaction('witch').createLeader(3, 3, 'witch');
     state.entities.push(witch);
     state.inventory.witch[ResourceType.WOOD] = 5;
 
@@ -168,7 +168,7 @@ describe('Iron Golem stats', () => {
 describe('Sound Horn action', () => {
   test('Sound Horn appears in valid actions for hero', () => {
     const state = freshState();
-    const hero = createHero(3, 3);
+    const hero = getFaction('hero').createLeader(3, 3, 'hero');
     state.entities.push(hero);
     state.inventory.hero.food = 5;
 
@@ -190,7 +190,7 @@ describe('Sound Horn action', () => {
 
   test('Sound Horn shows as unaffordable with 0 food', () => {
     const state = freshState();
-    const hero = createHero(3, 3);
+    const hero = getFaction('hero').createLeader(3, 3, 'hero');
     state.entities.push(hero);
     state.inventory.hero.food = 0;
 
@@ -204,7 +204,7 @@ describe('Sound Horn action', () => {
     const state = freshState();
     state.log = [];
     state.addLog = (msg, faction) => state.log.push({ msg, faction });
-    const hero = createHero(3, 3);
+    const hero = getFaction('hero').createLeader(3, 3, 'hero');
     hero.owner = 'hero';
     state.entities.push(hero);
     state.inventory.hero.food = 5;
@@ -218,7 +218,7 @@ describe('Sound Horn action', () => {
   test('executeSoundHorn fails with insufficient food', () => {
     const state = freshState();
     state.addLog = () => {};
-    const hero = createHero(3, 3);
+    const hero = getFaction('hero').createLeader(3, 3, 'hero');
     hero.owner = 'hero';
     state.entities.push(hero);
     state.inventory.hero.food = 0;
@@ -231,7 +231,7 @@ describe('Sound Horn action', () => {
     const state = freshState();
     state.log = [];
     state.addLog = (msg, faction) => state.log.push({ msg, faction });
-    const hero = createHero(3, 3);
+    const hero = getFaction('hero').createLeader(3, 3, 'hero');
     hero.owner = 'hero';
     state.entities.push(hero);
     state.inventory.hero.food = 5;
@@ -284,7 +284,7 @@ describe('Sound Horn action', () => {
     const state = freshState();
     const logs = [];
     state.addLog = (msg, faction) => logs.push({ msg, faction });
-    const hero = createHero(3, 3);
+    const hero = getFaction('hero').createLeader(3, 3, 'hero');
     hero.owner = 'hero';
     state.entities.push(hero);
     state.inventory.hero.food = 5;
@@ -300,7 +300,7 @@ describe('Sound Horn action', () => {
     const state = freshState();
     state.log = [];
     state.addLog = (msg, faction) => state.log.push({ msg, faction });
-    const hero = createHero(3, 3);
+    const hero = getFaction('hero').createLeader(3, 3, 'hero');
     hero.owner = 'hero';
     state.entities.push(hero);
     state.inventory.hero.food = 5;
@@ -324,7 +324,7 @@ describe('Sound Horn action', () => {
       const s = freshState();
       s.log = [];
       s.addLog = (msg, faction) => s.log.push({ msg, faction });
-      const h = createHero(3, 3);
+      const h = getFaction('hero').createLeader(3, 3, 'hero');
       h.owner = 'hero';
       s.entities.push(h);
       s.inventory.hero.food = 5;

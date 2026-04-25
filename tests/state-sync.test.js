@@ -80,3 +80,39 @@ describe('state-sync — abilities array round-trip (Phase 4)', () => {
     }
   });
 });
+
+describe('state-sync — factionId round-trip (rogue)', () => {
+  test('rogue leader\'s factionId survives serialize → deserialize', async () => {
+    const { concreteFactionOf } = await import('../src/factions.js');
+    const state = freshState();
+    state.swapLeaderToFaction('day', 'rogue');
+    const heroId = state.hero.id;
+    assert.equal(state.hero.factionId, 'rogue',
+      'precondition: rogue leader should carry factionId');
+
+    const snap = serializeState(state);
+    const restored = deserializeState(snap);
+
+    const restoredHero = restored.entities.find(e => e.id === heroId);
+    assert.ok(restoredHero, 'restored leader present');
+    assert.equal(restoredHero.factionId, 'rogue',
+      'factionId must round-trip — without it the rogue silently reverts to paladin');
+    // Concrete-faction lookup should resolve to RogueFaction post-restore.
+    const fac = concreteFactionOf(restoredHero);
+    assert.equal(fac.id, 'rogue');
+    assert.equal(fac.canEquipWeaponItem('sword'), false,
+      'restored rogue still refuses melee — proves the override is wired');
+  });
+
+  test('pre-PR saves (missing factionId) hydrate to null on restore', () => {
+    const state = freshState();
+    const snap = serializeState(state);
+    // Simulate a legacy snapshot where factionId is absent from every blob.
+    for (const e of snap.entities) delete e.factionId;
+    const restored = deserializeState(snap);
+    // Default leaders had no factionId before this PR; restore preserves
+    // that — concrete lookup falls back to owner (side default).
+    const hero = restored.entities.find(e => e.id === state.hero.id);
+    assert.equal(hero.factionId, null);
+  });
+});

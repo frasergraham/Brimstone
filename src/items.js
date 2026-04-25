@@ -5,12 +5,19 @@
 // combatTriggers (so staff-vs-undead moves out of Entity.resolveCombat)
 // and folds in consumables (silver, food, herbs, scripture) and the horse
 // mount. See docs/design/units-items-abilities-refactor.md.
+//
+// `category` — 'melee' | 'ranged'. Factions gate equipping per-category
+// via Faction.canEquipWeaponItem (e.g. the rogue refuses melee weapons).
+// Unrelated to a unit's attack range (which lives on UNIT_TYPES) — a
+// melee unit can still equip a bow for its stat bonus, and a ranged
+// unit's effective range comes from the unit type, not the weapon.
 
 export const ITEMS = Object.freeze({
   sword: {
     id: 'sword',
     kind: 'weapon',
     slot: 'weapon',
+    category: 'melee',
     statMods: { attack: 2, defense: 0 },
     label: '⚔ Sword (+2 ATK)',
   },
@@ -18,6 +25,7 @@ export const ITEMS = Object.freeze({
     id: 'axe',
     kind: 'weapon',
     slot: 'weapon',
+    category: 'melee',
     statMods: { attack: 1, defense: 1 },
     label: '🪓 Axe (+1 ATK, +1 DEF)',
   },
@@ -25,13 +33,23 @@ export const ITEMS = Object.freeze({
     id: 'bow',
     kind: 'weapon',
     slot: 'weapon',
+    category: 'ranged',
     statMods: { attack: 1, defense: 0 },
     label: '🏹 Bow (+1 ATK)',
+  },
+  crossbow: {
+    id: 'crossbow',
+    kind: 'weapon',
+    slot: 'weapon',
+    category: 'ranged',
+    statMods: { attack: 1, defense: 0 },
+    label: '🏹 Crossbow (+1 ATK)',
   },
   shield: {
     id: 'shield',
     kind: 'weapon',
     slot: 'weapon',
+    category: 'melee',
     statMods: { attack: 0, defense: 2 },
     label: '🛡 Shield (+2 DEF)',
   },
@@ -39,6 +57,7 @@ export const ITEMS = Object.freeze({
     id: 'staff',
     kind: 'weapon',
     slot: 'weapon',
+    category: 'melee',
     statMods: { attack: 1, defense: 0 },
     label: '🪄 Staff (+1 ATK, advantage vs undead)',
     // Grants +1 attack advantage die vs undead defenders only (zombies).
@@ -54,6 +73,7 @@ export const ITEMS = Object.freeze({
     id: 'dagger',
     kind: 'weapon',
     slot: 'weapon',
+    category: 'melee',
     statMods: { attack: 1, defense: 0 },
     label: '🗡 Dagger (+1 ATK)',
   },

@@ -50,6 +50,12 @@ export function serializeState(state) {
     bio:           e.bio           ?? null,
     abilities:     Array.isArray(e.abilities) ? [...e.abilities] : [],
     abilityLabel:  e.abilityLabel  ?? null,
+    // factionId — concrete faction (e.g. 'rogue', 'captain') vs the side
+    // string in `owner`. Required so faction-specific overrides
+    // (canEquipWeaponItem, modifyLootRoll, onAfterMoveStep, sight bonuses)
+    // survive the wire/save roundtrip. Without this field the rogue
+    // silently reverts to paladin behaviour after each round of state-sync.
+    factionId:     e.factionId     ?? null,
     actedThisTurn: e.actedThisTurn ?? false,
     defendCount:   e.defendCount   ?? 0,
     guarding:      e.guarding      ?? 0,
@@ -195,6 +201,11 @@ export function deserializeState(snap) {
     // set `range` in the Entity constructor; old snapshots default to the
     // unit-type's registry value (1 for every existing unit except witch).
     if (e.range === undefined) e.range = BASE_RANGE[e.type] ?? 1;
+    // Back-compat: pre-PR factionId. Saves from before the rogue PR
+    // don't carry factionId; fall back to null so factionOf(actor) →
+    // getFaction(owner) — i.e. the side default. Saves that DO carry
+    // factionId restore the concrete faction.
+    if (e.factionId === undefined) e.factionId = null;
     return e;
   });
 

@@ -444,7 +444,9 @@ describe('executeExplore', () => {
 
   test('explore produces at most one loot entry (no duplicates)', () => {
     // Run many explores — when loot is found, there should be exactly 1 entry,
-    // not 2 from a duplicate _applyLoot call.
+    // not 2 from a duplicate _applyLoot call. The agility-driven loot bonus
+    // is gated above standard leader agility (paladin 6 → 0% chance), so
+    // no extra rolls fire for the paladin.
     for (let i = 0; i < 100; i++) {
       const state = freshState();
       const hero = state.hero;

@@ -25,7 +25,7 @@ import { hexDistance, getNeighbors, hexKey } from './hex.js';
 import { MAX_FORTIFY_LEVEL, FORT_IMPASSABLE_THRESHOLD } from './tiles.js';
 import { sightRange } from './actions.js';
 import { UNIT_TYPES } from './unit-types.js';
-import { getFaction, findFaction, allFactions, getFactionsForSide } from './factions.js';
+import { getFaction, findFaction, allFactions, getFactionsForSide, sightRangeForEntity } from './factions.js';
 import { compileTurnBattleSummary } from './battle-utils.js';
 import { serializeState, deserializeState } from '../server/state-sync.js';
 import { playback, resetPlayback, replayFullGame, playbackDelay, swapState, patchAlive } from './playback.js';
@@ -250,11 +250,13 @@ function init(witchIsAI, heroIsAI, autoplay = false, humanFactionId = null) {
   const nodeCount = parseInt(document.getElementById('select-node-count')?.value ?? '3', 10);
   state    = new GameState(witchIsAI, heroIsAI, mapSize, nodeCount);
 
-  // Stub factions: rebrand the human-side default leader if the player
-  // picked a stub. AI side stays on its side default for now.
+  // Apply the player's faction pick by swapping the side's default
+  // leader entity to the picked faction. swapLeaderToFaction is a no-op
+  // when the picked faction is already the leader's faction (e.g. day
+  // side with paladin) — it only mutates when the type changes.
   if (humanFactionId) {
     const def = getFaction(humanFactionId);
-    if (def.isStub()) state.swapLeaderToFaction(def.side, humanFactionId);
+    state.swapLeaderToFaction(def.side, humanFactionId);
   }
   // Allow global fog-of-war override from the setup screen select.
   const fogSel = document.getElementById('select-fog-of-war');
@@ -968,10 +970,10 @@ function _getBattleAllyEntities(actorSnap, targetSnap, entities) {
  */
 function _isFogVisible(col, row, humanFaction, entities, phase) {
   if (!humanFaction || state.fogOfWar === 'none') return true;
-  const faction = getFaction(humanFaction);
   for (const e of entities) {
     if (!e.alive || e.owner !== humanFaction) continue;
-    const range = faction.getSightRange(phase, e.hasAbility('scout'));
+    // Per-entity sight so stub-faction bonuses (rogue +1) apply.
+    const range = sightRangeForEntity(e, phase);
     if (hexDistance(e.col, e.row, col, row) <= range) return true;
   }
   return false;
@@ -991,7 +993,7 @@ function _updateNodeDiscoveryDuringStep(gs, humanFaction, rend) {
       if (obj[seenKey]) continue; // already discovered
       const nowSeen = gs.entities.some(e => {
         if (!e.alive || e.owner !== fac.id) return false;
-        const range = fac.getSightRange(gs.phase, e.hasAbility('scout'));
+        const range = sightRangeForEntity(e, gs.phase);
         return obj.hexes.some(h => hexDistance(e.col, e.row, h.col, h.row) <= range);
       });
       if (!nowSeen) continue;
@@ -1012,7 +1014,7 @@ function _updateNodeDiscoveryDuringStep(gs, humanFaction, rend) {
     if (heroFac) {
       const nowSeen = gs.entities.some(e => {
         if (!e.alive || e.owner !== 'hero') return false;
-        const range = heroFac.getSightRange(gs.phase, e.hasAbility('scout'));
+        const range = sightRangeForEntity(e, gs.phase);
         return hexDistance(e.col, e.row, mt.col, mt.row) <= range;
       });
       if (nowSeen) {
