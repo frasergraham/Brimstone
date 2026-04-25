@@ -161,6 +161,15 @@ function _checkLoseCondition(cond, state) {
         log: '🌑 Dawn breaks and her power still pulses through the grove.',
       };
     }
+    case 'witch_score_threshold': {
+      // Fails when the witch accumulates `points` node-score points (multiplayer-style).
+      if ((state.nodeScore?.witch ?? 0) < cond.points) return null;
+      return {
+        winner: 'witch',
+        winReason: cond.reason || 'The witch has held the nodes too long.',
+        log: '🌑 The ritual has reached its climax.',
+      };
+    }
   }
   return null;
 }
@@ -263,6 +272,19 @@ function _checkWinCondition(cond, state) {
         winner: 'hero',
         winReason: cond.reason || 'The witch has been denied at every node.',
         log: '☀ Dawn breaks over silent nodes — the ritual is broken!',
+      };
+    }
+    case 'hero_holds_all_nodes': {
+      // Win when every power node is hero-controlled at the target phase.
+      // Pair with `witch_holds_node` lose to flag any non-hero state as defeat.
+      if (cond.phase && state.phase !== cond.phase) return null;
+      if (!state.witchObjectives || state.witchObjectives.length === 0) return null;
+      if (countHeldNodes('hero', state.witchObjectives, state.entities)
+          !== state.witchObjectives.length) return null;
+      return {
+        winner: 'hero',
+        winReason: cond.reason || 'You hold every node at dawn.',
+        log: '☀ Every node bears your banner at first light.',
       };
     }
     case 'control_nodes':

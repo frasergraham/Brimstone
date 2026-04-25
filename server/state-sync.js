@@ -88,11 +88,23 @@ export function serializeState(state) {
     heroRevealedByHorn:   state.heroRevealedByHorn ?? false,
     nodeScore:            { ...state.nodeScore },
     disableScoring:       !!state.disableScoring,
+    disableCycleBar:      !!state.disableCycleBar,
+    disableNodeSweep:     !!state.disableNodeSweep,
+    nodeScoreThreshold:   state.nodeScoreThreshold ?? 4,
     noWitchMission:       !!state.noWitchMission,
     gameMode:             state.gameMode ?? 'standard',
     battleConfig:         state.battleConfig ? { ...state.battleConfig } : null,
     cycleConfig:          state.cycleConfig
-      ? { phases: [...state.cycleConfig.phases], loop: state.cycleConfig.loop }
+      ? {
+          phases: [...state.cycleConfig.phases],
+          loop:   state.cycleConfig.loop,
+          ...(state.cycleConfig.extraScoringPhases
+              ? { extraScoringPhases: [...state.cycleConfig.extraScoringPhases] }
+              : {}),
+          ...(state.cycleConfig.extendOnWitchScore
+              ? { extendOnWitchScore: [...state.cycleConfig.extendOnWitchScore] }
+              : {}),
+        }
       : null,
     maxDiscoverableSurvivors: state.maxDiscoverableSurvivors ?? null,
     discoveredSurvivorCount:  state.discoveredSurvivorCount ?? 0,
@@ -220,6 +232,9 @@ export function deserializeState(snap) {
   state.attritionChanged     = snap.attritionChanged     ?? false;
   state.nodeScore            = { ...snap.nodeScore };
   state.disableScoring       = !!snap.disableScoring;
+  state.disableCycleBar      = !!snap.disableCycleBar;
+  state.disableNodeSweep     = !!snap.disableNodeSweep;
+  state.nodeScoreThreshold   = snap.nodeScoreThreshold ?? 4;
   state.noWitchMission       = !!snap.noWitchMission;
   state.maxDiscoverableSurvivors = snap.maxDiscoverableSurvivors ?? null;
   state.discoveredSurvivorCount  = snap.discoveredSurvivorCount  ?? 0;
@@ -269,7 +284,16 @@ export function deserializeState(snap) {
   state.gameMode             = snap.gameMode ?? 'standard';
   state.battleConfig         = snap.battleConfig ? { ...snap.battleConfig } : null;
   state.cycleConfig          = snap.cycleConfig
-    ? { phases: [...snap.cycleConfig.phases], loop: snap.cycleConfig.loop }
+    ? {
+        phases: [...snap.cycleConfig.phases],
+        loop:   snap.cycleConfig.loop,
+        ...(snap.cycleConfig.extraScoringPhases
+            ? { extraScoringPhases: [...snap.cycleConfig.extraScoringPhases] }
+            : {}),
+        ...(snap.cycleConfig.extendOnWitchScore
+            ? { extendOnWitchScore: [...snap.cycleConfig.extendOnWitchScore] }
+            : {}),
+      }
     : null;
 
   // ── Planning fields ──────────────────────────────────────────────────────

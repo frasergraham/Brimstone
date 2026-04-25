@@ -2550,21 +2550,41 @@ export class UIController {
   }
 
   _renderObjectives() {
-    const bar = this._el('score-bar');
-    if (bar && this.state.disableScoring) {
-      bar.style.display = 'none';
-      return;
-    }
-    const el = this._el('score-bar-content');
-    if (!el) return;
+    const bar  = this._el('score-bar');
+    const bump = this._el('cycle-bump');
     const state = this.state;
 
+    // Toggle cycle-bump independently of scoring — campaign missions
+    // typically suppress score points but still want the day/night
+    // tracker visible.
+    if (bump) {
+      bump.style.display = state.disableCycleBar ? 'none' : '';
+    }
+
+    // When scoring is disabled and the cycle bar is also disabled, the
+    // bottom bar has no content — hide it entirely. When only scoring is
+    // disabled, keep the bar (the cycle-bump anchors to its top edge) but
+    // strip its inner score content via the .cycle-only class.
+    if (bar) {
+      if (state.disableScoring && state.disableCycleBar) {
+        bar.style.display = 'none';
+        return;
+      }
+      bar.style.display = '';
+      bar.classList.toggle('cycle-only', !!state.disableScoring);
+      if (state.disableScoring) {
+        bar.title = '';
+        return;
+      }
+    }
+
+    const el = this._el('score-bar-content');
+    if (!el) return;
     const { html, title } = buildObjectivesHtml(
       state.witchObjectives, state.entities, state.nodeScore, state.gameMode,
     );
-
     el.innerHTML = html;
-    if (bar) { bar.style.display = ''; bar.title = title; }
+    if (bar) bar.title = title;
   }
 
   /**

@@ -2764,7 +2764,12 @@ function _initCampaignMission(missionDef) {
   if (!builder) { console.error('No map builder for', missionDef.mapBuilder); return; }
   const mapData = builder();
   mapData.noWitch = !missionDef.hasWitch;
-  mapData.disableScoring = !!missionDef.disableScoring;
+  mapData.disableScoring  = !!missionDef.disableScoring;
+  mapData.disableCycleBar = !!missionDef.disableCycleBar;
+  mapData.disableNodeSweep = !!missionDef.disableNodeSweep;
+  if (missionDef.nodeScoreThreshold != null) {
+    mapData.nodeScoreThreshold = missionDef.nodeScoreThreshold;
+  }
   if (missionDef.maxDiscoverableSurvivors != null) {
     mapData.maxDiscoverableSurvivors = missionDef.maxDiscoverableSurvivors;
   }
@@ -2785,6 +2790,10 @@ function _initCampaignMission(missionDef) {
     state.cycleConfig = {
       phases: [...missionDef.phaseCycle.phases],
       loop: missionDef.phaseCycle.loop !== false,
+      extraScoringPhases: missionDef.phaseCycle.extraScoringPhases
+        ? [...missionDef.phaseCycle.extraScoringPhases] : undefined,
+      extendOnWitchScore: missionDef.phaseCycle.extendOnWitchScore
+        ? [...missionDef.phaseCycle.extendOnWitchScore] : undefined,
     };
     state.phase = phaseForRound(1, state.cycleConfig);
   }
