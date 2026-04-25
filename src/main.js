@@ -915,6 +915,15 @@ function _playBattleResultAnims(actorSnap, targetSnap, result, redrawFn) {
     renderer.addDeathAnim(targetSnap.col, targetSnap.row, deadColor);
     renderer.addFadeOutAnim(targetSnap.id, 600);
   }
+  // Brute blast — expanding red ring covering the target hex + 6 neighbours.
+  // Mirrors the horn's ring effect; fires before splash floaters so the
+  // ring frames the damage tags rather than colliding with them.
+  if ((result?.splashRadius ?? 0) > 0 && (result?.splashHexes?.length ?? 0) > 0) {
+    renderer.addNodeRevealAnim(
+      result.splashHexes, '#c0392b',
+      { radiusMultiplier: 3, duration: 900 },
+    );
+  }
   // Splash damage floaters
   for (const sh of result?.splashHits ?? []) {
     renderer.addHpChangeFlash(sh.col, sh.row, -1);

@@ -66,8 +66,12 @@ export function isFortBlocking(tile, actorOwner) {
 //   range 2 (horse)    → 2 off-road tiles OR  4 road tiles per action
 // posOverride lets the planner query reachability from a projected position
 // rather than the entity's current position.
+//
+// Lumbering units (Brute) get no road discount — every passable tile costs
+// the flat off-road price, gated via `concreteFactionOf(actor).lumbers()`.
 export function getReachableHexes(state, actor, range, posOverride = null, visibleEnemyHexes = null) {
   const budget   = range * 2;
+  const lumbers  = concreteFactionOf(actor).lumbers();
   const startCol = posOverride?.col ?? actor.col;
   const startRow = posOverride?.row ?? actor.row;
   const startK   = hexKey(startCol, startRow);
@@ -85,8 +89,9 @@ export function getReachableHexes(state, actor, range, posOverride = null, visib
       if (!nt || nt.type === TileType.RIVER) continue;
       if (hasVisibleEnemy(state, actor, n.col, n.row, visibleEnemyHexes)) continue;
       if (isFortBlocking(nt, actor.owner)) continue;
-      const isRoadLike = nt.type === TileType.ROAD || nt.type === TileType.BRIDGE ||
-                         nt.type === TileType.BUILDING;
+      const isRoadLike = !lumbers && (nt.type === TileType.ROAD ||
+                                      nt.type === TileType.BRIDGE ||
+                                      nt.type === TileType.BUILDING);
       const nc = c + (isRoadLike ? 1 : 2);
       if (nc <= budget && nc < (dist.get(nk) ?? Infinity)) {
         dist.set(nk, nc);
@@ -109,6 +114,7 @@ export function getReachableHexes(state, actor, range, posOverride = null, visib
 // or null if no path exists within the movement budget.
 // posOverride allows querying from a projected position rather than actor's current pos.
 function findShortestPath(state, actor, toCol, toRow, posOverride = null) {
+  const lumbers  = concreteFactionOf(actor).lumbers();
   const startCol = posOverride?.col ?? actor.col;
   const startRow = posOverride?.row ?? actor.row;
   const startK   = hexKey(startCol, startRow);
@@ -132,8 +138,9 @@ function findShortestPath(state, actor, toCol, toRow, posOverride = null) {
       if (!nt || nt.type === TileType.RIVER) continue;
       if (hasEnemy(state, actor, n.col, n.row) && nk !== goalK) continue;
       if (isFortBlocking(nt, actor.owner) && nk !== goalK) continue;
-      const isRoadLike = nt.type === TileType.ROAD || nt.type === TileType.BRIDGE ||
-                         nt.type === TileType.BUILDING;
+      const isRoadLike = !lumbers && (nt.type === TileType.ROAD ||
+                                      nt.type === TileType.BRIDGE ||
+                                      nt.type === TileType.BUILDING);
       const nc = c + (isRoadLike ? 1 : 2);
       if (nc < (dist.get(nk) ?? Infinity)) {
         dist.set(nk, nc);
@@ -180,6 +187,7 @@ function sameHexEnemies(state, entity) {
 
 export function getFogReachableHexes(state, actor, posOverride = null) {
   const hasHorse = getFaction(actor.owner).hasHorse(actor);
+  const lumbers  = concreteFactionOf(actor).lumbers();
   const range    = hasHorse ? 2 : 1;
   const budget   = range * 2;
   const startCol = posOverride?.col ?? actor.col;
@@ -198,8 +206,9 @@ export function getFogReachableHexes(state, actor, posOverride = null) {
       if (!nt || nt.type === TileType.RIVER) continue;
       // No enemy blocking — this is theoretical reachability for fog visibility
       if (isFortBlocking(nt, actor.owner)) continue;
-      const isRoadLike = nt.type === TileType.ROAD || nt.type === TileType.BRIDGE ||
-                         nt.type === TileType.BUILDING;
+      const isRoadLike = !lumbers && (nt.type === TileType.ROAD ||
+                                      nt.type === TileType.BRIDGE ||
+                                      nt.type === TileType.BUILDING);
       const nc = c + (isRoadLike ? 1 : 2);
       if (nc <= budget && nc < (dist.get(nk) ?? Infinity)) {
         dist.set(nk, nc);
@@ -361,7 +370,10 @@ export function getValidActions(state, actor) {
   // and zombies never carry it, so this is equivalent to the old
   // `canSummon() && isLeaderType + owner === 'witch'` combination.
   if (actor.hasAbility('summon')) {
-    const summonOpts = faction.getSummonOptions(faction.getInventory(state));
+    // Concrete faction governs which summon types this leader actually has —
+    // the brute's options are restricted to MINION while inheriting the
+    // shared night-side inventory from the side-level WitchFaction.
+    const summonOpts = concreteFactionOf(actor).getSummonOptions(faction.getInventory(state));
     for (const opt of summonOpts) {
       actions.push({ type: ActionType.SUMMON, summonType: opt.summonType, affordable: opt.affordable });
     }
@@ -727,12 +739,24 @@ function _applyLoot(state, actor, lootType, log, lootItems) {
 // Splash damage: when a unit is crushed or killed, all other units on the same
 // tile (except those in excludeIds) take 1 damage.  Does NOT chain — splash
 // kills do not trigger further splashes.
-// Returns { splashKills, splashHits } — splashHits includes every bystander
-// that took damage (with name, position, and whether they died).
-function _applySplashDamage(state, col, row, excludeIds, log) {
+//
+// `extraRadius` extends the blast outward by `extraRadius` hex steps (1 =
+// the 6 neighbouring hexes around (col,row) are also splashed). Used by the
+// brute's crushing-blow blast.
+//
+// Returns { splashKills, splashHits, splashHexes } — splashHits includes
+// every bystander that took damage (with name, position, killed flag);
+// splashHexes is the full list of hexes the blast covered (target + extras),
+// for the renderer's expanding-ring effect.
+function _applySplashDamage(state, col, row, excludeIds, log, extraRadius = 0) {
   const excludeSet = new Set(excludeIds);
+  const splashHexes = [{ col, row }];
+  if (extraRadius > 0) {
+    for (const n of getNeighbors(col, row)) splashHexes.push({ col: n.col, row: n.row });
+  }
+  const hexKeys = new Set(splashHexes.map(h => hexKey(h.col, h.row)));
   const bystanders = state.entities.filter(
-    e => e.alive && e.col === col && e.row === row && !excludeSet.has(e.id)
+    e => e.alive && hexKeys.has(hexKey(e.col, e.row)) && !excludeSet.has(e.id)
   );
   const splashKills = [];
   const splashHits  = [];
@@ -748,7 +772,7 @@ function _applySplashDamage(state, col, row, excludeIds, log) {
       state.entities = state.entities.filter(e => e.id !== b.id);
     }
   }
-  return { splashKills, splashHits };
+  return { splashKills, splashHits, splashHexes };
 }
 
 export function executeBattle(state, actor, target) {
@@ -854,6 +878,10 @@ export function executeBattle(state, actor, target) {
   let fortDamaged = 0;         // fort levels lost this combat (1 if defender took any damage)
   let splashKills = [];         // entities killed by splash damage
   let splashHits  = [];         // all entities that took splash damage (killed or not)
+  let splashHexes = [];         // hexes covered by the splash blast (for VFX)
+  // Concrete-faction splash radius — brute's crushing blow extends the
+  // splash outward by 1 hex (covering all 6 neighbours of the target).
+  const splashRadius = concreteFactionOf(actor).crushSplashRadius();
   // Ranged attacks cannot crush — the rule set explicitly forbids it.
   const isCrush  = !isRanged && hit && attackRoll >= 2 * defenseRoll;
 
@@ -893,11 +921,16 @@ export function executeBattle(state, actor, target) {
 
     // Splash damage: crush or kill splashes all other units on the target's
     // tile — melee only. Ranged attacks are clean single-target hits (no
-    // crush either, see above), so no splash event fires.
+    // crush either, see above), so no splash event fires. The brute's
+    // crushing blow extends the splash outward to the 6 neighbour hexes
+    // via concreteFactionOf(actor).crushSplashRadius().
     if (!isRanged && (isCrush || killed)) {
-      const splash = _applySplashDamage(state, target.col, target.row, [actor.id, target.id], log);
+      const splash = _applySplashDamage(
+        state, target.col, target.row, [actor.id, target.id], log, splashRadius
+      );
       splashKills = splash.splashKills;
       splashHits  = splash.splashHits;
+      splashHexes = splash.splashHexes;
       for (const sk of splashKills) {
         if (sk.owner !== actor.owner) {
           getFaction(actor.owner).trackKill(state);
@@ -923,10 +956,18 @@ export function executeBattle(state, actor, target) {
         dispatchTrigger('kill', target, { state, target: actor });
         state.entities = state.entities.filter(e => e.id !== actor.id);
 
-        // Counter-kill splashes other units on the attacker's tile (exclude target)
-        const counterSplash = _applySplashDamage(state, actor.col, actor.row, [target.id, actor.id], log);
+        // Counter-kill splashes other units on the attacker's tile (exclude target).
+        // The defender's concrete-faction radius applies — a brute defender's
+        // counter-kill can blast neighbours too.
+        const counterRadius = concreteFactionOf(target).crushSplashRadius();
+        const counterSplash = _applySplashDamage(
+          state, actor.col, actor.row, [target.id, actor.id], log, counterRadius
+        );
         splashKills.push(...counterSplash.splashKills);
         splashHits.push(...counterSplash.splashHits);
+        if (counterSplash.splashHexes.length > splashHexes.length) {
+          splashHexes = counterSplash.splashHexes;
+        }
         for (const sk of counterSplash.splashKills) {
           if (sk.owner !== target.owner) {
             getFaction(target.owner).trackKill(state);
@@ -945,6 +986,7 @@ export function executeBattle(state, actor, target) {
     attackRoll, defenseRoll, hit, killed,
     margin, damage, counterDmg, fortDamaged,
     attackerAllies, defenderAllies, splashKills, splashHits,
+    splashHexes, splashRadius,
     ranged: isRanged, closeRanged: isCloseRanged,
     breakdown: {
       atkBaseDie, defBaseDie,
@@ -1085,8 +1127,13 @@ export function executeFortify(state, actor) {
 // When provided the summon respects the player's explicit choice; falls back to
 // auto-pick if the requested type is no longer affordable (e.g. plan mis-ordering).
 // The summoned unit always spawns on the actor's own tile.
+//
+// Concrete faction restricts the summonable set — the brute, for instance,
+// only summons minions. A request for a forbidden type falls back to the
+// auto-pick path constrained to the allowed list.
 export function executeSummon(state, actor, requestedType = null) {
-  const faction = getFaction(actor.owner);
+  const faction         = getFaction(actor.owner);
+  const concreteFaction = concreteFactionOf(actor);
   const inv     = faction.getInventory(state);
   const ownerId = actor.ownerId;
   let summonedUnit, res, unitName;
@@ -1095,16 +1142,25 @@ export function executeSummon(state, actor, requestedType = null) {
   const wood  = inv[ResourceType.WOOD]  || 0;
   const total = Object.values(inv).reduce((s, v) => s + (v || 0), 0);
 
-  // Resolve final type: honour request if affordable, else fall back to auto-pick
+  // Allowed-summon set comes from the concrete faction so brute-style
+  // restrictions take effect for the AI's auto-pick path too (the AI
+  // submits SUMMON with summonType=null and lets the resolver choose).
+  const allowedTypes = new Set(
+    concreteFaction.getSummonOptions(inv).map(o => o.summonType)
+  );
+
+  // Resolve final type: honour request if affordable AND allowed, else
+  // fall back to auto-pick.
   let resolvedType = requestedType;
+  if (resolvedType && !allowedTypes.has(resolvedType)) resolvedType = null;
   if (resolvedType === EntityType.IRON_GOLEM && metal < 2) resolvedType = null;
   if (resolvedType === EntityType.WOOD_GOLEM && wood  < 2) resolvedType = null;
   if (resolvedType === EntityType.MINION      && total < 2) resolvedType = null;
   if (!resolvedType) {
-    // Auto-pick priority: iron > wood > minion
-    if      (metal >= 2) resolvedType = EntityType.IRON_GOLEM;
-    else if (wood  >= 2) resolvedType = EntityType.WOOD_GOLEM;
-    else if (total >= 2) resolvedType = EntityType.MINION;
+    // Auto-pick priority: iron > wood > minion, restricted to allowed types
+    if      (allowedTypes.has(EntityType.IRON_GOLEM) && metal >= 2) resolvedType = EntityType.IRON_GOLEM;
+    else if (allowedTypes.has(EntityType.WOOD_GOLEM) && wood  >= 2) resolvedType = EntityType.WOOD_GOLEM;
+    else if (allowedTypes.has(EntityType.MINION)     && total >= 2) resolvedType = EntityType.MINION;
     else return { success: false, log: ['Need at least 2 resources to summon.'] };
   }
 

@@ -83,6 +83,21 @@ export class Faction {
   isBlockedByWalls() { return false; }
 
   /**
+   * If true, units of this concrete faction get no movement discount on
+   * road / bridge / building tiles — every passable tile costs the same.
+   * Default: false (roads halve movement cost, see getReachableHexes).
+   */
+  lumbers() { return false; }
+
+  /**
+   * Bonus splash radius around the target hex when this faction's unit
+   * lands a crushing blow (or kill via crush). 0 = vanilla splash (only
+   * same-hex bystanders). 1 = also damage units on the 6 neighbouring
+   * hexes — the brute's signature blast.
+   */
+  crushSplashRadius() { return 0; }
+
+  /**
    * Summon options with affordability info.
    * @param {object} inventory - the faction's resource inventory
    * @returns {Array<{summonType: string, affordable: boolean}>}
@@ -686,9 +701,57 @@ export class BruteFaction extends WitchFaction {
   get id()         { return 'brute'; }
   get name()       { return 'Brute'; }
   get leaderType() { return EntityType.BRUTE; }
-  isStub()         { return true; }
+  // No isStub() override — the brute has its own behaviour (no road
+  // bonus, minions-only summons, building survivor auto-zombify, and
+  // crush-splash that extends to adjacent hexes).
+
   _buildLeader(col, row, ownerId, state = null) {
     return createBrute(col, row, ownerId, state);
+  }
+
+  // The brute lumbers — roads grant no movement discount. Pathfinding and
+  // reachability honour this via concreteFactionOf(actor).lumbers().
+  lumbers() { return true; }
+
+  // Splash radius for a crushing blow. 0 = same-hex only (default); 1 =
+  // also damage the 6 neighbouring hexes around the target.
+  crushSplashRadius() { return 1; }
+
+  // Brute summons only minions — no golems. Cost stays the same as the
+  // witch's minion (2 of any resource).
+  getSummonOptions(inventory) {
+    const total = Object.values(inventory).reduce((s, v) => s + (v || 0), 0);
+    if (total < 2) return [];
+    return [{ summonType: EntityType.MINION, affordable: true }];
+  }
+
+  // Auto-zombify on building proximity — same scan as the rogue's keen-eye
+  // detection, but the WitchFaction.createDiscoveryEntity hook turns the
+  // hidden survivor into a zombie instead of recruiting them.
+  onAfterMoveStep(state, actor, col, row) {
+    const hits = [];
+    const here = state.tiles.get(hexKey(col, row));
+    if (here?.type === TileType.BUILDING && here.hiddenSurvivor) {
+      hits.push({ col, row });
+    }
+    for (const n of getNeighbors(col, row)) {
+      const t = state.tiles.get(hexKey(n.col, n.row));
+      if (t?.type === TileType.BUILDING && t.hiddenSurvivor) {
+        hits.push({ col: n.col, row: n.row });
+      }
+    }
+    if (!hits.length) return null;
+    const encounterLog = [];
+    let encounterSurvivor = null;
+    for (const h of hits) {
+      const enc = triggerSurvivorEncounter(state, actor, h.col, h.row);
+      if (enc) {
+        encounterLog.push(`👹 ${actor.displayName} drags a cowering survivor from hiding!`);
+        encounterLog.push(...enc.encounterLog);
+        encounterSurvivor = enc.encounterSurvivor;
+      }
+    }
+    return { encounterLog, encounterSurvivor };
   }
 }
 

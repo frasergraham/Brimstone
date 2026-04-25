@@ -15,7 +15,7 @@ Brimstone has two opposing **Sides** — Day and Night — and multiple **Factio
 | day   | captain      | `CAPTAIN`          | Captain Eli Ward    | stub (inherits Paladin behaviour) |
 | night | witch        | `WITCH`            | The Witch           | primary |
 | night | necromancer  | `NECROMANCER`      | The Necromancer     | stub (inherits Witch behaviour) |
-| night | brute        | `BRUTE`            | The Brute           | stub (inherits Witch behaviour) |
+| night | brute        | `BRUTE`            | The Brute           | distinct (heavy tank, lumbering, minions-only, blast-splash crush) |
 
 Stub factions are registered with their own `EntityType`, base stats, and default leader name. They are subclasses of their side's primary faction (`HeroFaction` or `WitchFaction`) and inherit all combat / summon / fortify / discovery / sight behaviour.
 
@@ -28,7 +28,13 @@ The Rogue is no longer a stub — `RogueFaction` overrides:
 
 Plus `UNIT_TYPES.rogue.range = 3` and `projectileType: 'bolt'` give her the 3-hex crossbow attack via the existing ranged combat path.
 
-`Faction` exposes the hooks (`canEquipWeaponItem`, `modifyLootRoll`, `applyExploreLootBonus`, `onAfterMoveStep`, `getSightRange`) on the base class; future factions plug in by overriding only what they need.
+The Brute is also no longer a stub — `BruteFaction` overrides:
+- `lumbers` — `true`; pathfinding and reachability give the brute no road / bridge / building movement discount
+- `getSummonOptions` — minions only (no golems); the per-call cost matches the witch's minion (2 of any resource)
+- `onAfterMoveStep` — same building-tile scan as the rogue, but `WitchFaction.createDiscoveryEntity` raises a zombie instead of recruiting a survivor
+- `crushSplashRadius` — `1`; a crushing blow (or kill) extends the splash blast outward to the 6 hexes around the target. The renderer mirrors the Sound Horn's expanding-ring effect in red on the affected hexes (target + neighbours).
+
+`Faction` exposes the hooks (`canEquipWeaponItem`, `modifyLootRoll`, `applyExploreLootBonus`, `onAfterMoveStep`, `getSightRange`, `lumbers`, `crushSplashRadius`) on the base class; future factions plug in by overriding only what they need.
 
 ### Weapon categories
 
@@ -56,7 +62,7 @@ See `src/sides.js` for the Side enum and `src/factions.js` for the Faction regis
    │ Rogue    │         │  Necromancer │         │ WGolem  │
    │ 10/3/1   │         │  10/1/2      │         │ 3/2/3   │
    │ Captain  │         │  Brute       │         │ IGolem  │
-   │ 12/2/3   │         │  14/3/1      │         │ 5/3/2   │
+   │ 12/2/3   │         │  18/4/3      │         │ 5/3/2   │
    └──────────┘         └──────────────┘         └─────────┘
 ```
 
@@ -67,7 +73,7 @@ See `src/sides.js` for the Side enum and `src/factions.js` for the Faction regis
 | Captain (stub) | 12 | 2 | 3 | day | Game start (when picked) |
 | Witch (default night leader) | 10 | 2 | 2 | night | Game start |
 | Necromancer (stub) | 10 | 1 | 2 | night | Game start (when picked) |
-| Brute (stub) | 14 | 3 | 1 | night | Game start (when picked) |
+| Brute        | 18 | 4 | 3 | night | Game start (when picked) |
 | Survivor | 4 | 1 | 1 | day (after recruit) | Exploration / Sound Horn |
 | Zombie | 2 | 2 | 0 | night (after raise) | Exploration (graveyard) |
 | Minion | 2 | 1 | 0 | night | Summon (no resource cost) |
