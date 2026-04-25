@@ -813,6 +813,18 @@ details.htp-section:not([open]) { padding-bottom: 0.5rem; }
   flex-shrink: 0;
 }
 
+/* Cycle-only mode: scoring is disabled but the day/night tracker pill
+   above this bar still needs an anchor. Keep the bar minimal (slim,
+   transparent inner content) so the pill sits cleanly on the canvas. */
+#score-bar.cycle-only {
+  padding: 0.15rem 0.75rem;
+  min-height: 0;
+}
+#score-bar.cycle-only > .score-bar-faction,
+#score-bar.cycle-only > #score-bar-content {
+  display: none;
+}
+
 #score-bar-content {
   display: flex;
   align-items: center;

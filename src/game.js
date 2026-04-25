@@ -276,6 +276,23 @@ export class GameState {
     this.nodeScore = { hero: 0, witch: 0 };
     // When true, skip dawn/dusk node scoring and hide the score track UI.
     this.disableScoring = !!mapDataOverride?.disableScoring;
+    // When true, hide the day/night cycle indicator pill above the score bar.
+    // Independent of disableScoring so a mission can show the cycle without
+    // exposing point-based scoring (campaign missions with phase-based wins).
+    this.disableCycleBar = !!mapDataOverride?.disableCycleBar;
+    // When true, controlling all power nodes at dawn/dusk does NOT trigger
+    // an instant win — point-based scoring still runs. Used by campaign
+    // missions where the loss/win condition depends on accumulated score
+    // (e.g. Mission 7 — kill the witch before she scores 4 points).
+    this.disableNodeSweep = !!mapDataOverride?.disableNodeSweep;
+    // Score threshold for the standard "first to N points wins" rule.
+    // Defaults to 4 (multiplayer baseline); campaign missions can raise it.
+    this.nodeScoreThreshold = mapDataOverride?.nodeScoreThreshold ?? 4;
+    // When true, the engine's built-in "first to N points wins" rule is
+    // disabled — the mission's victory delegate drives win/lose entirely
+    // (e.g. M7 — kill the witch before she scores 5 points; her hitting 5
+    // is a *loss* condition, not a win).
+    this.disableScoreWin = !!mapDataOverride?.disableScoreWin;
 
     // Max survivors discoverable from hidden-survivor tiles (null = unlimited).
     this.maxDiscoverableSurvivors = mapDataOverride?.maxDiscoverableSurvivors ?? null;
@@ -791,6 +808,15 @@ export class GameState {
       if (!this.disableScoring) this._checkNodeObjectives(Phase.DUSK);
     }
 
+    // Mission opt-in: score on additional phases (e.g. NIGHT for "prolonged
+    // night" missions). Inert when cycleConfig is absent or doesn't list extras.
+    const extraScoring = this.cycleConfig?.extraScoringPhases;
+    if (extraScoring && !this.disableScoring
+        && this.phase !== Phase.DAWN && this.phase !== Phase.DUSK
+        && extraScoring.includes(this.phase)) {
+      this._checkNodeObjectives(this.phase);
+    }
+
     // Battle mode: score every round (not just dawn/dusk)
     if (this.gameMode === GameMode.BATTLE && !this.disableScoring
         && this.phase !== Phase.DAWN && this.phase !== Phase.DUSK) {
@@ -996,8 +1022,9 @@ export class GameState {
       if (ctrl === 'hero')  heroCount++;
     }
 
-    // Instant win: sweep all nodes (disabled in battle mode)
-    if (!isBattle && witchCount === nodeCount) {
+    // Instant win: sweep all nodes (disabled in battle mode, and opt-out
+    // for campaign missions that drive loss from accumulated points only).
+    if (!isBattle && !this.disableNodeSweep && witchCount === nodeCount) {
       this.winner    = 'witch';
       this.winReason = isDawn ? WIN_REASON.NODES_WITCH : WIN_REASON.NODES_WITCH_DUSK;
       this.addLog(isDawn
@@ -1005,7 +1032,7 @@ export class GameState {
         : `🌙 As dusk falls, ${this.factionName('witch')} holds all Power Nodes! The ritual advances!`);
       return;
     }
-    if (!isBattle && heroCount === nodeCount) {
+    if (!isBattle && !this.disableNodeSweep && heroCount === nodeCount) {
       this.winner    = 'hero';
       this.winReason = isDawn ? WIN_REASON.NODES_HERO : WIN_REASON.NODES_HERO_DUSK;
       this.addLog(isDawn
@@ -1018,19 +1045,27 @@ export class GameState {
     if (witchCount > heroCount) {
       this.nodeScore.witch++;
       this.addLog(`🌙 At ${phaseLabel}: ${this.factionName('witch')} leads ${witchCount}–${heroCount}. Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);
+      // Mission opt-in: prolong the night. Each witch score appends extra
+      // phases to the active cycle (e.g. another 'night' turn). Inert when
+      // cycleConfig is absent or extendOnWitchScore is unset.
+      const extend = this.cycleConfig?.extendOnWitchScore;
+      if (extend && extend.length) {
+        this.cycleConfig.phases.push(...extend);
+        this.addLog(`🌑 The night deepens — the dawn slips further away.`);
+      }
       // Score threshold win (disabled in battle mode — runs until time expires)
-      if (!isBattle && this.nodeScore.witch >= 4) {
+      if (!isBattle && !this.disableScoreWin && this.nodeScore.witch >= this.nodeScoreThreshold) {
         this.winner    = 'witch';
         this.winReason = WIN_REASON.SCORE_WITCH;
-        this.addLog(`🌙 ${this.factionName('witch')} has claimed three ritual moments — Caleb's Hollow falls to darkness!`);
+        this.addLog(`🌙 ${this.factionName('witch')} has claimed ${this.nodeScoreThreshold} ritual moments — Caleb's Hollow falls to darkness!`);
       }
     } else if (heroCount > witchCount) {
       this.nodeScore.hero++;
       this.addLog(`☀ At ${phaseLabel}: ${this.factionName('hero')} leads ${heroCount}–${witchCount}. Score — Hero ${this.nodeScore.hero} / Witch ${this.nodeScore.witch}`);
-      if (!isBattle && this.nodeScore.hero >= 4) {
+      if (!isBattle && !this.disableScoreWin && this.nodeScore.hero >= this.nodeScoreThreshold) {
         this.winner    = 'hero';
         this.winReason = WIN_REASON.SCORE_HERO;
-        this.addLog(`☀ ${this.factionName('hero')} has broken the ritual three times — Caleb's Hollow is saved!`);
+        this.addLog(`☀ ${this.factionName('hero')} has broken the ritual ${this.nodeScoreThreshold} times — Caleb's Hollow is saved!`);
       }
     } else {
       this.addLog(`⚖ At ${phaseLabel}: nodes tied (${witchCount}–${heroCount}). Score — Witch ${this.nodeScore.witch} / Hero ${this.nodeScore.hero}`);

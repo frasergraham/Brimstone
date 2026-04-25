@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // Campaign: The Caleb's Hollow Prologue
-// A 6-mission introductory arc set in cursed colonial Caleb's Hollow.
+// A 7-mission introductory arc set in cursed colonial Caleb's Hollow.
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { Tile, TileType, BuildingType, ResourceType } from '../../tiles.js';
@@ -9,6 +9,14 @@ import {
   NODE_COLORS, rng, bfsPath, shuffle, generateRiverNS, generateRiverEW,
   buildRiverMap, riverSide,
 } from '../../map.js';
+import { countHeldNodes } from '../../game.js';
+
+// True when at least one Power Node is not currently hero-controlled.
+// Used by The Long Watch's reminder story triggers — they should fire only
+// while the hero hasn't yet completed the watch.
+const notHoldingAllNodes = (state) =>
+  countHeldNodes('hero', state.witchObjectives, state.entities)
+    !== state.witchObjectives.length;
 
 // ── Map helpers ────────────────────────────────────────────────────────────
 
@@ -415,13 +423,21 @@ function buildDarkRitualMap() {
   // Carve three clearings: hero start, Ritual Circle, Dark Altar.
   const clearings = [
     { col: 1, row: 10 }, { col: 2, row: 10 }, // hero start clearing
-    { col: 5, row: 4 }, { col: 4, row: 4 }, { col: 5, row: 3 }, { col: 6, row: 4 }, { col: 5, row: 5 }, // Ritual Circle
+    { col: 5, row: 4 }, { col: 4, row: 3 }, { col: 5, row: 3 }, { col: 4, row: 4 }, { col: 6, row: 4 }, { col: 5, row: 5 }, // Ritual Circle
     { col: 9, row: 6 }, { col: 10, row: 6 }, { col: 9, row: 5 }, { col: 8, row: 6 }, { col: 9, row: 7 }, // Dark Altar
   ];
   for (const { col, row } of clearings) {
     const t = tiles.get(hexKey(col, row));
     if (t && t.type === TileType.FOREST) t.type = TileType.GRASS;
   }
+
+  // Old game-trail roads connecting hero shelter to both clearings — gives
+  // the hero a viable approach through dense forest before dawn.
+  buildRoadNetwork(tiles, [
+    { col: 1, row: 10 },   // hero shelter
+    { col: 5, row: 4 },    // Ritual Circle
+    { col: 9, row: 6 },    // Dark Altar
+  ], rand, 0);
 
   // Dirt scatter for visual texture.
   scatterDirt(tiles, 3, rand, COLS);
@@ -437,7 +453,7 @@ function buildDarkRitualMap() {
     {
       col: 5, row: 4,
       label: 'Ritual Circle',
-      hexes: [{ col: 5, row: 4 }, { col: 4, row: 4 }, { col: 5, row: 3 }],
+      hexes: [{ col: 5, row: 4 }, { col: 4, row: 3 }, { col: 5, row: 3 }],
       color: NODE_COLORS[0],
       seenByHero: true,
       seenByWitch: true,
@@ -458,7 +474,96 @@ function buildDarkRitualMap() {
     tiles,
     witchObjectives,
     heroStart:      { col: 2, row: 10 },
-    witchStart:     { col: 10, row: 2 },
+    // Witch stands at the second clearing (Dark Altar) at game start —
+    // her flee from this spot is the mission's pivotal beat.
+    witchStart:     { col: 9, row: 6 },
+    mapSize:        'standard',
+    survivorCounts: { buildings: 0, terrain: 0 },
+    cols: COLS,
+    rows: ROWS,
+  };
+}
+
+function buildLongWatchMap() {
+  const COLS = 13, ROWS = 13;
+  setMapDimensions(COLS, ROWS);
+  const rand = rng(314);
+  const tiles = makeTiles(COLS, ROWS);
+
+  // River (E-W) splits the town into two halves so the hero must cross
+  // bridges to reach distant nodes.
+  const riverPath = generateRiverEW(rand);
+  carveRiver(tiles, riverPath);
+
+  // Town buildings spread across both river halves.
+  setBuilding(tiles, 1, 10, BuildingType.INN, 1);          // hero start
+  setBuilding(tiles, 3, 10, BuildingType.HOUSE, 0);
+  setBuilding(tiles, 2, 8,  BuildingType.STABLE, 0);
+  setBuilding(tiles, 5, 9,  BuildingType.CHURCH, 0);
+  setBuilding(tiles, 9, 10, BuildingType.HOUSE, 0);
+  setBuilding(tiles, 11, 8, BuildingType.WATCHTOWER, 0);
+  setBuilding(tiles, 8, 2,  BuildingType.GRAVEYARD, 1);    // witch fodder
+  setBuilding(tiles, 11, 3, BuildingType.HOUSE, 0);
+
+  // Roads + bridges through the town.
+  const bldgs = [
+    { col: 1,  row: 10 }, { col: 3, row: 10 }, { col: 2, row: 8 },
+    { col: 5,  row: 9  }, { col: 9, row: 10 }, { col: 11, row: 8 },
+    { col: 8,  row: 2  }, { col: 11, row: 3 },
+  ];
+  buildRoadNetwork(tiles, bldgs, rand, 2);
+
+  // Light forest around the edges so the witch has cover to flee into.
+  growForests(tiles, [
+    { col: 0, row: 1 }, { col: 12, row: 1 },
+    { col: 6, row: 4 }, { col: 4, row: 6 },
+    { col: 10, row: 6 }, { col: 0, row: 11 }, { col: 12, row: 11 },
+  ], rand, 0.6, 0.4);
+
+  scatterDirt(tiles, 4, rand, COLS);
+
+  // Resources distributed so each node area has loot worth holding.
+  setResource(tiles, 6, 11, ResourceType.WOOD);
+  setResource(tiles, 10, 4, ResourceType.METAL);
+  setResource(tiles, 4, 2,  ResourceType.HERBS);
+  setResource(tiles, 1, 5,  ResourceType.SILVER);
+
+  // Three Power Nodes — town square, north plaza, east terrace.
+  const witchObjectives = [
+    {
+      col: 6, row: 9,
+      label: 'Town Square',
+      hexes: [{ col: 6, row: 9 }, { col: 5, row: 9 }, { col: 6, row: 10 }],
+      color: NODE_COLORS[0],
+      seenByHero: true,
+      seenByWitch: true,
+      prevCtrl: 'neutral',
+    },
+    {
+      col: 7, row: 2,
+      label: 'North Plaza',
+      hexes: [{ col: 7, row: 2 }, { col: 8, row: 2 }, { col: 7, row: 3 }],
+      color: NODE_COLORS[1],
+      seenByHero: true,
+      seenByWitch: true,
+      prevCtrl: 'neutral',
+    },
+    {
+      col: 11, row: 6,
+      label: 'East Terrace',
+      hexes: [{ col: 11, row: 6 }, { col: 11, row: 5 }, { col: 10, row: 5 }],
+      color: NODE_COLORS[2],
+      seenByHero: true,
+      seenByWitch: true,
+      prevCtrl: 'neutral',
+    },
+  ];
+
+  return {
+    tiles,
+    witchObjectives,
+    heroStart:      { col: 1, row: 10 },
+    witchStart:     { col: 11, row: 1 }, // far corner — she keeps her distance
     mapSize:        'standard',
     survivorCounts: { buildings: 0, terrain: 0 },
     cols: COLS,
@@ -517,7 +622,7 @@ function buildWitchsTrailMap() {
     {
       col: 5, row: 5,
       label: 'Forest Shrine',
-      hexes: [{ col: 5, row: 5 }, { col: 6, row: 5 }, { col: 5, row: 4 }],
+      hexes: [{ col: 5, row: 5 }, { col: 5, row: 4 }, { col: 6, row: 4 }],
       color: NODE_COLORS[0],
       seenByHero: false,
       seenByWitch: true,
@@ -526,8 +631,19 @@ function buildWitchsTrailMap() {
     {
       col: 9, row: 6,
       label: 'Dark Hollow',
-      hexes: [{ col: 9, row: 6 }, { col: 8, row: 6 }, { col: 9, row: 5 }],
+      hexes: [{ col: 9, row: 6 }, { col: 8, row: 6 }, { col: 8, row: 5 }],
       color: NODE_COLORS[1],
+      seenByHero: false,
+      seenByWitch: true,
+      prevCtrl: 'neutral',
+    },
+    // Third node — needed so the witch must hold a "majority" (≥2 of 3)
+    // to score under the night-extension scoring rules.
+    {
+      col: 7, row: 9,
+      label: 'Black Cairn',
+      hexes: [{ col: 7, row: 9 }, { col: 6, row: 9 }, { col: 7, row: 10 }],
+      color: NODE_COLORS[2],
       seenByHero: false,
       seenByWitch: true,
       prevCtrl: 'neutral',
@@ -554,6 +670,7 @@ const MAP_BUILDERS = {
   first_night:          buildFirstNightMap,
   river_crossing:       buildRiverCrossingMap,
   dark_ritual:          buildDarkRitualMap,
+  long_watch:           buildLongWatchMap,
   witchs_trail:         buildWitchsTrailMap,
 };
 
@@ -949,30 +1066,25 @@ const MISSIONS = [
     mapBuilder:      'dark_ritual',
     mapSize:         'standard',
 
-    hasWitch:        false,    // witch is narrative-only on this mission
+    hasWitch:        true,     // witch holds the Dark Altar — flees on contact
     disableScoring:  true,     // we run our own win check, not dawn/dusk scoring
 
-    // 10 rounds: start in daytime, end on dawn.
-    // 3 day → 1 dusk → 5 night → 1 dawn.
+    // 11 rounds: start in daytime, end on dawn.
+    // 3 day → 1 dusk → 6 night → 1 dawn.
     phaseCycle: {
-      phases: ['day','day','day','dusk','night','night','night','night','night','dawn'],
+      phases: ['day','day','day','dusk','night','night','night','night','night','night','dawn'],
       loop:   false,
     },
 
     enemyUnits: [
-      // Heavy garrison on the first clearing (Ritual Circle at 5,4).
-      { type: 'minion',     col: 5, row: 4 },
-      { type: 'minion',     col: 4, row: 4 },
+      // Garrison on the first clearing (Ritual Circle at 5,4) — 2 minions + 1 golem.
+      { type: 'minion',     col: 4, row: 3 },
       { type: 'minion',     col: 5, row: 3 },
       { type: 'wood_golem', col: 5, row: 4 },
-      // Heavy garrison on the second clearing (Dark Altar at 9,6).
-      { type: 'minion',     col: 9, row: 6 },
+      // Garrison on the second clearing (Dark Altar at 9,6) — 2 minions + 1 golem.
       { type: 'minion',     col: 10, row: 6 },
       { type: 'minion',     col: 9, row: 5 },
       { type: 'wood_golem', col: 9, row: 6 },
-      // Loose patrols in the forest between.
-      { type: 'minion',     col: 7, row: 5 },
-      { type: 'minion',     col: 7, row: 7 },
     ],
     waves: [
       // Reinforcements — keep pressure on from the far edges.
@@ -999,8 +1111,14 @@ const MISSIONS = [
         ],
       },
     ],
-    aiPersonality: 'hoarder',
-    aiBudgetBonus: 3,
+    // Evasive — she moves away from the hero rather than fighting; she'll
+    // also summon sparingly so the witch_flees wave carries the threat.
+    aiPersonality: 'evasive',
+    // Hero AI override — consumed ONLY by scripts/headless-campaign.js for
+    // AI playtesting. The real campaign UI has a human at the controls, so
+    // src/main.js ignores this field. Headless rush-to-clear-every-node bias.
+    heroPersonality: 'node_denier',
+    aiBudgetBonus: 1,
 
     maxSurvivorsFromRoster:    3,
     missionSurvivors:          0,
@@ -1040,57 +1158,167 @@ const MISSIONS = [
     requires: ['river_crossing'],
   },
 
-  // ── Mission 6: The Witch's Trail ──────────────────────────────────────
+  // ── Mission 6: The Long Watch ─────────────────────────────────────────
+  {
+    id:       'long_watch',
+    title:    'The Long Watch',
+    chapter:  1,
+    briefing: `The nights are growing longer. Three Power Nodes pulse through Caleb's Hollow — seize them all and hold them until dawn. The witch herself walks the streets, but she keeps her distance; her thralls are the real threat.`,
+    victoryText: `Dawn breaks. Every node bears your mark. The town breathes again — for one more day.`,
+    defeatText:  `Dawn breaks on a town still in her grip. The watch is broken; her ritual feeds another night.`,
+
+    mapBuilder:      'long_watch',
+    mapSize:         'standard',
+
+    hasWitch:        true,
+    disableScoring:  true,    // win is the dawn snapshot, not point accumulation
+
+    // Long night: 1 day → 1 dusk → 7 night → 1 dawn = 10 rounds.
+    phaseCycle: {
+      phases: ['day','dusk','night','night','night','night','night','night','night','dawn'],
+      loop:   false,
+    },
+
+    enemyUnits: [
+      // Light minion presence on/near each node so the hero must clear before holding.
+      { type: 'minion', col: 6, row: 9 },        // Town Square
+      { type: 'minion', col: 7, row: 2 },        // North Plaza
+      { type: 'minion', col: 11, row: 6 },       // East Terrace
+      { type: 'minion', col: 8, row: 3 },        // patrol near North Plaza
+      { type: 'wood_golem', col: 10, row: 5 },   // anchors the East Terrace
+    ],
+    waves: [
+      { round: 4, units: [{ type: 'minion', spawnAt: 'graveyard' }] },
+      { round: 6, units: [
+        { type: 'minion', spawnAt: 'graveyard' },
+      ] },
+      { round: 8, units: [
+        { type: 'minion', spawnAt: 'map_edge' },
+        { type: 'minion', spawnAt: 'graveyard' },
+      ] },
+    ],
+    aiPersonality: 'evasive',
+    // Hero AI override — headless-only (see scripts/headless-campaign.js).
+    // Real campaign play uses the human; src/main.js ignores this field.
+    heroPersonality: 'node_denier',
+    aiBudgetBonus: 0,
+
+    maxSurvivorsFromRoster: 5,
+    missionSurvivors:       1,
+    minSurvivors:           2,
+    maxSurvivors:           5,
+
+    objectives: {
+      win:  { type: 'hero_holds_all_nodes', phase: 'dawn',
+              reason: 'You hold every node at dawn — the watch holds.' },
+      lose: [
+        { type: 'hero_killed' },
+        // Anything less than full hero control at dawn = lose.
+        { type: 'witch_holds_node', phase: 'dawn',
+          reason: 'Dawn — and the nodes are not yours.' },
+      ],
+    },
+
+    startingResources: { wood: 1, food: 2 },
+    rewards:           { silver: 1, scripture: 1, food: 2 },
+    healBonus:         5,
+
+    storyTriggers: [
+      { type: 'round', round: 1, title: 'The Long Watch',
+        text: 'Three Power Nodes. One night. Hold them all when the sun returns.',
+        flag: 'long_watch_start' },
+      // Reminders fire only if the hero has not yet seized every node.
+      { type: 'round', round: 4, condition: notHoldingAllNodes,
+        title: 'The Hour Wears On',
+        text: 'A node still pulses without your banner. Seize them all before dawn.',
+        flag: 'long_watch_remind_4' },
+      { type: 'round', round: 7, condition: notHoldingAllNodes,
+        title: 'Dawn Approaches',
+        text: 'Dawn nears, and the watch is incomplete. The nodes must be yours.',
+        flag: 'long_watch_remind_7' },
+    ],
+
+    requires: ['dark_ritual'],
+  },
+
+  // ── Mission 7: The Witch's Trail ──────────────────────────────────────
   {
     id:       'witchs_trail',
     title:    'The Witch\'s Trail',
     chapter:  1,
-    briefing: `The attacks aren't random — they're directed. A trail of dark magic leads deep into the forest to a clearing dominated by two Power Nodes. The witch must be stopped before her ritual is complete.`,
-    victoryText: `The witch screams and dissolves into shadow. The Power Nodes dim. But you know she'll return — this was only the beginning of her plan.`,
-    defeatText:  `The witch's ritual is complete. Darkness engulfs Caleb's Hollow.`,
+    briefing: `She is here, and her ritual feeds on the night itself. Three Power Nodes pulse in the heart of town — every time she holds the majority of them, the night grows longer. The dawn will not come on its own. Strike her down before the sun forgets to rise.`,
+    victoryText: `The witch screams and dissolves into shadow. The Power Nodes dim and dawn's first light slips through the trees. The night is over — for now.`,
+    defeatText:  `The night does not end. Her ritual is complete; the dawn forgets Caleb's Hollow.`,
 
     mapBuilder:      'witchs_trail',
     mapSize:         'standard',
 
-    hasWitch:        true,
-    disableScoring:  true,
-    enemyUnits: [
-      { type: 'minion', col: 10, row: 3 },
-      { type: 'minion', col: 11, row: 6 },
-    ],
-    waves: [
-      { round: 3,  units: [{ type: 'minion', spawnAt: 'graveyard' }] },
-      { round: 5,  units: [{ type: 'minion', spawnAt: 'graveyard' }, { type: 'minion', spawnAt: 'map_edge' }] },
-      { round: 7,  units: [{ type: 'wood_golem', spawnAt: 'graveyard' }] },
-      { round: 10, units: [{ type: 'minion', spawnAt: 'map_edge' }, { type: 'wood_golem', spawnAt: 'graveyard' }] },
-    ],
-    aiPersonality: 'swarm',
-    aiBudgetBonus: 2,
+    hasWitch:         true,
+    disableScoring:   false,  // multiplayer-style scoring drives the loss condition
+    disableNodeSweep: true,   // points only — sweeping nodes does not instantly win/lose
+    disableScoreWin:  true,   // engine's built-in "first to N points wins" off — our witch_score_threshold lose drives it
 
-    maxSurvivorsFromRoster: 3,
-    missionSurvivors:       1,
-    minSurvivors:           1,
-    maxSurvivors:           3,
-
-    objectives: {
-      win:  { type: 'slay_witch', reason: 'The witch is defeated — for now.' },
-      lose: { type: 'hero_killed' },
+    // 1 day → 1 dusk → 3 night, then phase clamps to NIGHT.  Each witch
+    // score also appends another 'night' (visible cycle growth).
+    phaseCycle: {
+      phases: ['day','dusk','night','night','night'],
+      loop:   false,
+      extraScoringPhases: ['night'],   // score every NIGHT turn she holds majority
+      extendOnWitchScore: ['night'],   // each witch point lengthens the night
     },
 
-    startingResources: {},
+    enemyUnits: [
+      // Garrison spread across the three nodes — one minion each, plus
+      // a single bodyguard golem near the witch.
+      { type: 'minion',     col: 5, row: 5 },     // Forest Shrine
+      { type: 'minion',     col: 9, row: 6 },     // Dark Hollow
+      { type: 'minion',     col: 7, row: 9 },     // Black Cairn
+      { type: 'minion',     col: 6, row: 9 },
+      { type: 'wood_golem', col: 10, row: 3 },    // witch's bodyguard
+      { type: 'wood_golem', col: 9, row: 5 },
+    ],
+    waves: [
+      { round: 3, units: [{ type: 'minion', spawnAt: 'graveyard' }] },
+      { round: 5, units: [
+        { type: 'minion',     spawnAt: 'graveyard' },
+        { type: 'wood_golem', spawnAt: 'graveyard' },
+      ] },
+      { round: 7, units: [{ type: 'minion', spawnAt: 'map_edge' }] },
+    ],
+    aiPersonality: 'aggressive',  // she's holding the nodes, not fleeing
+    // Hero AI override — headless-only (see scripts/headless-campaign.js).
+    // Real campaign play uses the human; src/main.js ignores this field.
+    heroPersonality: 'witch_hunter',
+    aiBudgetBonus: 1,
+
+    maxSurvivorsFromRoster: 5,
+    missionSurvivors:       1,
+    minSurvivors:           2,
+    maxSurvivors:           5,
+
+    objectives: {
+      win:  { type: 'slay_witch', reason: 'The witch dies before the ritual completes.' },
+      lose: [
+        { type: 'hero_killed' },
+        { type: 'witch_score_threshold', points: 5,
+          reason: 'The ritual is complete — the night will never end.' },
+      ],
+    },
+
+    startingResources: { silver: 1 },
     rewards:           { metal: 2, silver: 1, scripture: 1 },
     healBonus:         4,
 
     storyTriggers: [
-      { type: 'round', round: 1, title: 'Into the Dark',
-        text: 'The trail of corruption leads deep into the forest. The trees here are twisted and blackened, pulsing with malice. Somewhere ahead, a witch bends the land to her will.',
-        flag: 'witchs_trail_start' },
-      { type: 'round', round: 6, title: 'The Ritual Intensifies',
-        text: 'A shockwave of dark energy ripples through the forest. The witch grows stronger with each passing moment — you must press the attack.',
-        flag: 'ritual_intensifies' },
+      { type: 'round', round: 1, title: 'No Dawn Until It\'s Done',
+        text: 'She is here, and her ritual feeds on the night. Each time she holds the majority of nodes, the night grows longer. Strike her down before the sun forgets to rise.',
+        flag: 'witchs_trail_intro' },
+      { type: 'round', round: 4, title: 'The Night Deepens',
+        text: 'Shadows thicken. The dawn you were counting on is no longer coming on its own.',
+        flag: 'witchs_trail_remind' },
     ],
 
-    requires: ['dark_ritual'],
+    requires: ['long_watch'],
   },
 ];
 
@@ -1099,7 +1327,7 @@ const MISSIONS = [
 export default {
   id:          'calebs_hollow_prologue',
   title:       'Chapter 1 - Welcome to Caleb\'s Hollow',
-  description: 'A cursed village, the walking dead, and a witch pulling the strings. Six missions stand between Caleb\'s Hollow and oblivion.',
+  description: 'A cursed village, the walking dead, and a witch pulling the strings. Seven missions stand between Caleb\'s Hollow and oblivion.',
   missions:    MISSIONS,
   mapBuilders: MAP_BUILDERS,
   firstMission: 'prologue',

@@ -7,6 +7,7 @@ data/
 assets/generated/
 .DS_Store
 scripts/map-renders/
+scripts/renders/
 dist/
 build/
 

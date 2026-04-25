@@ -89,8 +89,8 @@ describe('Mission definitions', () => {
     }
   });
 
-  test('prologue campaign has 6 missions total', () => {
-    assert.equal(hollowDef.missions.length, 6);
+  test('prologue campaign has 7 missions total', () => {
+    assert.equal(hollowDef.missions.length, 7);
   });
 
   test('mission prerequisites form a valid chain', () => {
@@ -576,7 +576,7 @@ describe('Campaign class', () => {
   test('campaign stores campaignDef reference', () => {
     const c = new Campaign(hollowDef);
     assert.equal(c.campaignDef.id, 'calebs_hollow_prologue');
-    assert.equal(c.campaignDef.missions.length, 6);
+    assert.equal(c.campaignDef.missions.length, 7);
   });
 
   test('save slot defaults to campaign-{id}', () => {
@@ -621,13 +621,14 @@ describe('Campaign class', () => {
   test('getMissionList returns correct statuses', () => {
     const c = new Campaign(hollowDef);
     const list = c.getMissionList();
-    assert.equal(list.length, 6);
+    assert.equal(list.length, 7);
     assert.ok(list[0].available);      // prologue — no prereqs
     assert.ok(!list[1].available);     // gathering_survivors — needs prologue
     assert.ok(!list[2].available);     // first_night — needs gathering_survivors
     assert.ok(!list[3].available);     // river_crossing — needs first_night
     assert.ok(!list[4].available);     // dark_ritual — needs river_crossing
-    assert.ok(!list[5].available);     // witchs_trail — needs dark_ritual
+    assert.ok(!list[5].available);     // long_watch — needs dark_ritual
+    assert.ok(!list[6].available);     // witchs_trail — needs long_watch
   });
 
   test('getMissionDef looks up from campaignDef missions', () => {
@@ -1157,8 +1158,8 @@ describe('disableScoring', () => {
 describe('Roster balancing config', () => {
   test('witchs_trail mission has minSurvivors and maxSurvivors', () => {
     const m = hollowDef.missions.find(m => m.id === 'witchs_trail');
-    assert.equal(m.minSurvivors, 1);
-    assert.equal(m.maxSurvivors, 3);
+    assert.equal(m.minSurvivors, 2);
+    assert.equal(m.maxSurvivors, 5);
   });
 
   test('minSurvivors <= maxSurvivors when both set', () => {
@@ -1309,9 +1310,13 @@ describe('maxDiscoverableSurvivors config', () => {
 // ── disableScoring on missions ─────────────────────────────────────────────
 
 describe('disableScoring on missions', () => {
-  test('all prologue missions have disableScoring: true', () => {
+  test('prologue missions have disableScoring set (true except witchs_trail)', () => {
     for (const m of hollowDef.missions) {
-      assert.equal(m.disableScoring, true, `${m.id} should have disableScoring: true`);
+      // witchs_trail uses multiplayer-style scoring as its loss condition,
+      // so it's the lone exception that opts INTO scoring.
+      const expected = m.id === 'witchs_trail' ? false : true;
+      assert.equal(m.disableScoring, expected,
+        `${m.id} disableScoring should be ${expected}`);
     }
   });
 });
@@ -1438,11 +1443,11 @@ describe('mission story triggers and loot overrides', () => {
     assert.ok(loseConds.some(l => l.type === 'witch_holds_node'));
   });
 
-  test('mission 6-step progression chain is valid', () => {
+  test('mission 7-step progression chain is valid', () => {
     const ids = hollowDef.missions.map(m => m.id);
     assert.deepEqual(ids, [
       'prologue', 'gathering_survivors', 'first_night',
-      'river_crossing', 'dark_ritual', 'witchs_trail',
+      'river_crossing', 'dark_ritual', 'long_watch', 'witchs_trail',
     ]);
   });
 
@@ -2287,13 +2292,13 @@ describe('Mission 4 (The River Crossing) balance', () => {
 describe('Mission 5 (Dark Ritual) balance', () => {
   const mission5 = hollowDef.missions.find(m => m.id === 'dark_ritual');
 
-  test('phase cycle is 10 rounds, 3 day → 1 dusk → 5 night → 1 dawn, non-looping', () => {
+  test('phase cycle is 11 rounds, 3 day → 1 dusk → 6 night → 1 dawn, non-looping', () => {
     assert.ok(mission5.phaseCycle);
     assert.deepEqual(mission5.phaseCycle.phases, [
-      'day','day','day','dusk','night','night','night','night','night','dawn',
+      'day','day','day','dusk','night','night','night','night','night','night','dawn',
     ]);
     assert.equal(mission5.phaseCycle.loop, false);
-    assert.equal(mission5.phaseCycle.phases.length, 10);
+    assert.equal(mission5.phaseCycle.phases.length, 11);
   });
 
   test('uses witch_denied_nodes at dawn as the win condition', () => {

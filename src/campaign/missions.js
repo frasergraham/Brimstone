@@ -14,6 +14,12 @@ export function processStoryTriggers(state, triggers, storyFlags) {
   const fired = [];
   for (const trigger of triggers) {
     if (trigger.flag && storyFlags[trigger.flag]) continue;
+
+    // Optional `condition: (state) => bool` gates EVERY trigger type, not just
+    // round triggers. The flag is not consumed when the predicate fails so the
+    // same trigger can still fire on a later evaluation.
+    if (typeof trigger.condition === 'function' && !trigger.condition(state)) continue;
+
     let shouldFire = false;
     if (trigger.type === 'round' && state.round === trigger.round) {
       shouldFire = true;

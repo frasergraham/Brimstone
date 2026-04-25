@@ -511,10 +511,7 @@ function runGame() {
 // ── Render mode ───────────────────────────────────────────────────────────────
 
 if (RENDER_MODE) {
-  const { renderGameState, loadTilemap } = await import('./game-render.js');
-  const { createCanvas, loadImage } = await import('canvas');
-  const { default: GIFEncoder } = await import('gif-encoder-2');
-
+  const { renderGameState, loadTilemap, renderFramesToGif } = await import('./game-render.js');
   await loadTilemap(path.join(__dirname, '..', 'assets', 'tilemap.png'));
 
   console.log(`\nBrimstone render — ${label} — cap=${MAX_ROUNDS}r\n`);
@@ -538,35 +535,11 @@ if (RENDER_MODE) {
   }
 
   // Final frame — hold longer
-  const lastLog = state.log.slice(-15);
-  frames.push(renderGameState(state, { chronicle: lastLog }));
+  frames.push(renderGameState(state, { chronicle: state.log.slice(-15) }));
 
   console.log(`\n  ${frames.length} frames captured. Encoding GIF…`);
-
-  const firstImg = await loadImage(frames[0]);
-  const w = firstImg.width;
-  const h = firstImg.height;
-
-  const encoder = new GIFEncoder(w, h);
-  encoder.setDelay(800);
-  encoder.setRepeat(0);
-  encoder.setQuality(10);
-  encoder.start();
-
-  for (let i = 0; i < frames.length; i++) {
-    if (i === frames.length - 1) encoder.setDelay(3000);
-    const img    = await loadImage(frames[i]);
-    const canvas = createCanvas(w, h);
-    const ctx    = canvas.getContext('2d');
-    ctx.drawImage(img, 0, 0);
-    encoder.addFrame(ctx);
-  }
-
-  encoder.finish();
-
-  fs.mkdirSync(path.dirname(RENDER_OUT), { recursive: true });
-  fs.writeFileSync(RENDER_OUT, encoder.out.getData());
-  console.log(`  GIF saved → ${RENDER_OUT}  (${(fs.statSync(RENDER_OUT).size / 1024).toFixed(0)} KB)\n`);
+  const result = await renderFramesToGif(frames, RENDER_OUT);
+  console.log(`  GIF saved → ${RENDER_OUT}  (${(result.bytes / 1024).toFixed(0)} KB)\n`);
 
   process.exit(0);
 }

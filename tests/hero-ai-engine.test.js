@@ -384,9 +384,21 @@ describe('allocateBudget with hero goals', () => {
 // ── Personality configs ─────────────────────────────────────────────────────
 
 describe('HERO_PERSONALITY_CONFIGS', () => {
-  test('has 4 personalities', () => {
+  test('has 6 personalities', () => {
     const names = Object.keys(HERO_PERSONALITY_CONFIGS);
-    assert.deepEqual(names.sort(), ['aggressive', 'balanced', 'defensive', 'explorer']);
+    assert.deepEqual(names.sort(),
+      ['aggressive', 'balanced', 'defensive', 'explorer', 'node_denier', 'witch_hunter']);
+  });
+
+  // Ratchet — the standard ai-matrix.js balance grid must keep enumerating
+  // exactly the four canonical personalities. New campaign-only personalities
+  // must set `campaignOnly: true` so they don't pollute the matrix.
+  test('only the canonical four personalities are non-campaignOnly', () => {
+    const standard = Object.entries(HERO_PERSONALITY_CONFIGS)
+      .filter(([, cfg]) => !cfg.campaignOnly)
+      .map(([name]) => name)
+      .sort();
+    assert.deepEqual(standard, ['aggressive', 'balanced', 'defensive', 'explorer']);
   });
 
   test('each config has required fields', () => {
