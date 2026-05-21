@@ -202,6 +202,19 @@ export class Renderer3D {
     this._mapBuilt      = false;
     this._babylonInit   = null; // pending init promise (de-dupes draw() calls)
 
+    // Tile top-face textures (see "Tile top-face textures" banner below).
+    // Both keyed by sprite id ('grass_3', 'dirt_1', 'road', …) so every tile of
+    // one variant shares one Texture + one Material — ~10 unique materials for
+    // the textured-terrain set across an entire Campaign-size map.
+    this._terrainTextureCache  = new Map();
+    this._terrainMaterialCache = new Map();
+    // Top-disc meshes per hex, separate from the prop array so we can hide
+    // them on fogged tiles alongside the colour cylinder swap.
+    this._tileTopDiscByKey     = new Map();
+    // One-shot warning gate per failed sprite id, so a missing or broken
+    // sprite doesn't spam the console once per redraw.
+    this._textureWarnedFor     = new Set();
+
     // ── Phase 6: atmosphere + fog veil ──────────────────────────────────────
     // Per-hex lookup of the main tile mesh and its props (forest cones, road
     // decks, bridge planks, building boxes/roofs). Populated by _buildTileMesh.
@@ -325,6 +338,12 @@ export class Renderer3D {
       // Reuse the 2D renderer's sprite-rect layout — single source of truth.
       const { rects } = Renderer._buildSpriteRects();
       this._spriteRects = rects;
+      // If Babylon init beat the tilemap to the punch, the map will already
+      // exist with solid-colour tops. Retro-fit textured discs onto every
+      // tile that supports one. (When loadImages resolves first — the common
+      // case — _mapBuilt is still false here and _buildMap will pick textures
+      // up naturally.)
+      if (this._mapBuilt && this._mapRoot) this._upgradeTileTextures();
     }
     if (this.onImagesLoaded) this.onImagesLoaded();
   }
@@ -574,6 +593,13 @@ export class Renderer3D {
     const props = [];
     const trackProp = (m) => { props.push(m); };
 
+    // ── Textured top face (when a terrain sprite exists) ─────────────────
+    const topDisc = this._buildTileTopDisc(tile, parent);
+    if (topDisc) {
+      this._tileTopDiscByKey.set(tkey, topDisc);
+      trackProp(topDisc);
+    }
+
     // ── Forests: small dark cone on top to read at any zoom ───────────────
     if (tile.type === TileType.FOREST) {
       const cone = BABYLON.MeshBuilder.CreateCylinder(
@@ -667,6 +693,138 @@ export class Renderer3D {
     mat.specularColor = new BABYLON.Color3(0.04, 0.04, 0.04); // matte
     this._materialCache.set(hexColor, mat);
     return mat;
+  }
+
+  // ─── Tile top-face textures ──────────────────────────────────────────────
+  //
+  // Asset layout (mirrors src/renderer.js):
+  //   • single texture atlas at assets/tilemap.png (≈7 MB), pre-loaded by
+  //     loadImages() into `this._tilemapImg` + `this._spriteRects`.
+  //   • terrain sprites in the atlas: grass_1..5, forest_1..5, dirt_1..5,
+  //     plus single-variant road / river / bridge.
+  //   • per-tile variant is picked by terrainSpriteIdFor(tile, col, row),
+  //     a pure function that re-uses the 2D renderer's hash so the same
+  //     hex always picks the same sprite across sessions.
+  //
+  // Which terrains get a texture vs which fall back to solid colour:
+  //   GRASS, DIRT, FOREST, BUILDING (uses dirt base) → textured top face.
+  //   ROAD, RIVER, BRIDGE → solid colour. They already carry their own
+  //   prop meshes (road deck, bridge plank) and a coloured river surface;
+  //   layering a grass underlay would muddle that signal.
+  //
+  // Geometry choice: option (b) from the brief — a flat hexagonal disc on
+  // top of the unchanged colour cylinder. Default disc UVs map the sprite
+  // into the inscribed circle of the unit square, which covers a regular
+  // hex without distortion. Disc lives in the prop array so the fog veil
+  // hides it on out-of-sight tiles (the dim colour cylinder then reads as
+  // "fogged terrain") and the solid colour cylinder underneath supplies
+  // the side walls so the prism still looks thick.
+
+  /** Cached `BABYLON.Texture` for a single terrain sprite id, cropped out
+   *  of the shared tilemap into an offscreen canvas. Returns null when the
+   *  tilemap hasn't loaded, the sprite id isn't in the rect map, or we're
+   *  in a non-DOM environment (node-test). */
+  _terrainTextureFor(spriteId) {
+    if (!spriteId || !this._tilemapImg || !this._spriteRects) return null;
+    if (this._terrainTextureCache.has(spriteId)) return this._terrainTextureCache.get(spriteId);
+    const rect = this._spriteRects.get(spriteId);
+    if (!rect) {
+      if (!this._textureWarnedFor.has(spriteId)) {
+        this._textureWarnedFor.add(spriteId);
+        console.warn(`[Renderer3D] no atlas rect for terrain sprite '${spriteId}', falling back to solid colour`);
+      }
+      return null;
+    }
+    if (typeof document === 'undefined') return null;
+    try {
+      const c = document.createElement('canvas');
+      c.width = c.height = 256;
+      c.getContext('2d').drawImage(
+        this._tilemapImg,
+        rect.x, rect.y, rect.size, rect.size,
+        0, 0, c.width, c.height,
+      );
+      const BABYLON = this._babylon;
+      const tex = new BABYLON.Texture(
+        c.toDataURL(), this._scene, true, false,
+        BABYLON.Texture.TRILINEAR_SAMPLINGMODE,
+      );
+      this._terrainTextureCache.set(spriteId, tex);
+      return tex;
+    } catch (err) {
+      if (!this._textureWarnedFor.has(spriteId)) {
+        this._textureWarnedFor.add(spriteId);
+        console.warn(`[Renderer3D] failed to build terrain texture '${spriteId}':`, err);
+      }
+      return null;
+    }
+  }
+
+  /** Cached textured StandardMaterial for one terrain sprite id. Returns null
+   *  if the texture isn't available — callers fall back to the solid-colour
+   *  material returned by `_materialFor` for the tile's colour. */
+  _terrainMaterialFor(spriteId) {
+    if (!spriteId) return null;
+    if (this._terrainMaterialCache.has(spriteId)) return this._terrainMaterialCache.get(spriteId);
+    const tex = this._terrainTextureFor(spriteId);
+    if (!tex) return null;
+    const BABYLON = this._babylon;
+    const mat = new BABYLON.StandardMaterial(`terrain_${spriteId}`, this._scene);
+    mat.diffuseTexture = tex;
+    mat.specularColor  = new BABYLON.Color3(0.04, 0.04, 0.04); // matte, picks up phase light
+    this._terrainMaterialCache.set(spriteId, mat);
+    return mat;
+  }
+
+  /** Build (and return) a thin hex-shaped disc that sits flush with the top of
+   *  the tile cylinder, textured with the matching terrain sprite. Returns
+   *  null for tile types that have no sprite (road/river/bridge) or when the
+   *  tilemap isn't ready — the solid-colour cylinder then carries the look. */
+  _buildTileTopDisc(tile, parent) {
+    const spriteId = terrainSpriteIdFor(tile, tile.col, tile.row);
+    if (!spriteId) return null;
+    const mat = this._terrainMaterialFor(spriteId);
+    if (!mat) return null;
+
+    const BABYLON = this._babylon;
+    const { x, z } = hexToWorld(tile.col, tile.row);
+    const disc = BABYLON.MeshBuilder.CreateDisc(
+      `tiletop_${tile.col}_${tile.row}`,
+      { tessellation: 6, radius: HEX_RADIUS_WORLD * TERRAIN_DISC_RADIUS_MUL },
+      this._scene,
+    );
+    disc.parent     = parent;
+    disc.position.x = x;
+    disc.position.z = z;
+    // Cylinder top is at height/2 = 0.075; lift the disc by a tiny ε so the
+    // textured face wins the depth fight against the cylinder's coloured top.
+    disc.position.y = TERRAIN_DISC_Y_OFFSET;
+    // Lay the disc flat (face up along +Y) and align its pointy-top hex
+    // edges with the underlying cylinder.
+    disc.rotation.x = -Math.PI / 2;
+    disc.rotation.y =  Math.PI / 6;
+    disc.material   = mat;
+    disc.isPickable = false; // let the cylinder underneath receive clicks
+    return disc;
+  }
+
+  /** Retro-fit textured discs onto an already-built map. No-op when called
+   *  before the map exists; safe to call repeatedly (skips tiles that already
+   *  have a disc). Used by `loadImages` when the tilemap finishes loading
+   *  after `_initBabylon` has already laid down solid-colour tiles. */
+  _upgradeTileTextures() {
+    if (!this._mapBuilt || !this._mapRoot || !this._scene || !this._tilemapImg) return;
+    if (!this.state?.tiles) return;
+    for (const tile of this.state.tiles.values()) {
+      const tkey = hexKey(tile.col, tile.row);
+      if (this._tileTopDiscByKey.has(tkey)) continue;
+      const disc = this._buildTileTopDisc(tile, this._mapRoot);
+      if (!disc) continue;
+      this._tileTopDiscByKey.set(tkey, disc);
+      const props = this._tilePropsByKey.get(tkey);
+      if (props) props.push(disc);
+      else this._tilePropsByKey.set(tkey, [disc]);
+    }
   }
 
   _frameFullMap(opts = {}) {
@@ -1799,6 +1957,57 @@ export class Renderer3D {
     if (state.heroIsAI  && !state.witchIsAI) return 'witch';
     return null;
   }
+}
+
+// ─── Tile top-face texture constants & pure helpers (exported for tests) ──
+
+/** Disc radius multiplier relative to the cylinder radius. 1.0 lands exactly
+ *  on the cylinder's hex edge; the disc and cylinder share matched vertex
+ *  positions so the textured face covers the whole top without overhang. */
+export const TERRAIN_DISC_RADIUS_MUL = 1.0;
+
+/** Y offset for the textured disc above the cylinder top. Cylinder top sits
+ *  at +0.075 (height = 0.15, centred at y=0); a 0.001 lift is enough to win
+ *  the depth fight against the cylinder's coloured top face without reading
+ *  as a visible gap. */
+export const TERRAIN_DISC_Y_OFFSET = 0.076;
+
+/** Variant counts for each terrain type that has multiple sprite variants.
+ *  Mirrors the layout in `Renderer._buildSpriteRects()` — keep in step if the
+ *  atlas grows new variants. Single-variant types (road / river / bridge) are
+ *  intentionally absent here; `terrainSpriteIdFor` covers them separately. */
+export const TERRAIN_VARIANT_COUNTS = Object.freeze({
+  grass:  5,
+  forest: 5,
+  dirt:   5,
+});
+
+/**
+ * Pure function: which terrain sprite (atlas id) should be used for the top
+ * face of a given tile? Returns null when the tile type has no terrain sprite
+ * we want to use — the renderer then leaves the cylinder's solid colour on
+ * display.
+ *
+ * Mapping (mirrors the 2D `_drawTile` logic where it makes sense):
+ *   • GRASS, FOREST, DIRT → matching `<type>_<N>` variant via the same hash
+ *     used in the 2D renderer, so a given hex always picks the same variant.
+ *   • BUILDING → a dirt variant (the building box/roof props sit on top).
+ *   • ROAD, RIVER, BRIDGE → null (these tiles already carry their own prop
+ *     mesh and a colour cue; texturing would muddle the read).
+ *   • Anything else → null.
+ */
+export function terrainSpriteIdFor(tile, col, row) {
+  if (!tile) return null;
+  let baseType;
+  if (tile.type === TileType.BUILDING) baseType = TileType.DIRT;
+  else if (tile.type === TileType.GRASS || tile.type === TileType.FOREST || tile.type === TileType.DIRT) baseType = tile.type;
+  else return null; // road, river, bridge, anything unknown → no top texture
+  const count = TERRAIN_VARIANT_COUNTS[baseType] ?? 0;
+  if (count > 1) {
+    const v = (((col * 7 + row * 13 + col * row) % count) + count) % count + 1;
+    return `${baseType}_${v}`;
+  }
+  return baseType;
 }
 
 // ─── Phase 3 pure helpers (exported for tests) ─────────────────────────────
