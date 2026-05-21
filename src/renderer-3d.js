@@ -1,52 +1,114 @@
 // ============================================================================
-// Renderer3D — Babylon.js (WebGL) renderer, Phase 1 scaffolding
+// Renderer3D — Babylon.js (WebGL) renderer
 // ============================================================================
 //
-// This is Phase 1 of the 3D renderer initiative. Goal: stand up the toggle
-// plumbing and prove a hex prism can be drawn in a locked isometric scene.
-// Map, entities, animations, camera controls are intentionally not implemented
-// yet — those land in later phases.
+// Phase 2 (this file): renders the actual hex map — terrain, river, roads,
+// bridges, buildings — under a locked isometric camera that pans and zooms
+// but does not yaw or tilt. Entities, fog, plan overlay, animations remain
+// stubbed for later phases.
+//
+// World-unit scale (carried forward from Phase 1):
+//   * hex radius = 1 world unit
+//   * tile cylinder: diameter 2, height 0.15
+//   * 2D pixel→world ratio is therefore 1 unit ≈ 30 pixels (HEX_SIZE = 30)
 //
 // Babylon is loaded lazily on first draw() via a dynamic import() from a
-// pinned CDN URL. That keeps src/renderer-3d.js importable in node-test
-// (no DOM, no Babylon) so the interface-conformance test can run, and
-// keeps page load free of Babylon when the user is on the 2D path.
+// pinned CDN URL, keeping src/renderer-3d.js importable in node-test (no DOM,
+// no Babylon) so the interface-conformance test and pure-helper tests run
+// without a WebGL context. Pure math is exported from this module for tests.
 //
 // Babylon CDN pin: @babylonjs/core 7.42.0 (ESM build via jsdelivr +esm).
-//
-// Renderer interface surface this class must conform to (discovered by
-// inspecting src/renderer.js, src/main.js, src/ui.js):
-//   methods:
-//     constructor(canvas, state)
-//     draw()
-//     resize()
-//     loadImages()                     — resolves immediately (no images yet)
-//     frameHexes(positions, opts)      — no-op stub
-//     canvasToHex(x, y)                — returns { col: -1, row: -1 }
-//     hexToCanvasPos(col, row)         — returns { x: 0, y: 0 }
-//     setZoom(z, fx, fy)               — no-op stub
-//     resetView()                      — no-op stub
-//     addAttackAnim, addLungeAnim, addProjectileAnim, addMoveAnim,
-//     addFlash, addDeathAnim, addFadeOutAnim, addNodeRevealAnim,
-//     addSpawnAnim, addHpChangeFlash   — no-op stubs
-//     clearAllLungeAnims, clearAllProjectileAnims, clearAnimations,
-//     clearBattleHighlights, clearFlashes, returnAllLungeAnims,
-//     setBattleHighlights              — no-op stubs
-//     waitForAnimations()              — resolves immediately
-//     getFadeOutOpacity(id)            — returns 1
-//     getEntityScreenPositions, getEntityScreenPos,
-//     getPortraitDataURL, getTileDataURL — return null/empty for now
-//     _clampPan()                      — no-op (touched by ui.js)
-//   properties (assigned externally — slots only need to exist):
-//     onImagesLoaded, aiDebugOverlay, insetLeft, insetRight,
-//     hoveredHex, selectedHex, selectedEntityId, highlightHexes,
-//     planGhostSteps, viewLocked, zoomLevel, hexSize, useTileImages,
-//     _zoomAnim, _panX, _panY, disambigHiddenIds
-//
-// Subsequent phases will replace stubs with real 3D rendering of tiles,
-// entities, and animations.
+
+import {
+  TileType,
+  TILE_COLOR,
+  BUILDING_COLOR,
+} from './tiles.js';
 
 const BABYLON_CDN = 'https://cdn.jsdelivr.net/npm/@babylonjs/core@7.42.0/+esm';
+
+// ─── Pure helpers (exported for tests; no Babylon dependency) ────────────────
+
+/** World-unit radius for a single hex tile. */
+export const HEX_RADIUS_WORLD = 1;
+
+const SQRT3 = Math.sqrt(3);
+
+/**
+ * Offset (col,row) → world (x,z) for a pointy-top, odd-r hex grid.
+ * Matches the 2D renderer's hexToPixel layout, scaled so radius = 1 world unit.
+ * Y is left to the caller (we always render on the XZ plane).
+ */
+export function hexToWorld(col, row, radius = HEX_RADIUS_WORLD) {
+  return {
+    x: radius * SQRT3 * (col + 0.5 * (row & 1)),
+    z: radius * 1.5 * row,
+  };
+}
+
+/**
+ * Bounding box (in world units) for a set of hex positions.
+ * Pads by the hex's footprint so the box covers the whole rendered tiles,
+ * not just their centres. Returns null for an empty set.
+ */
+export function computeMapBounds(hexes, radius = HEX_RADIUS_WORLD) {
+  if (!hexes || hexes.length === 0) return null;
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const h of hexes) {
+    const { x, z } = hexToWorld(h.col, h.row, radius);
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (z < minZ) minZ = z;
+    if (z > maxZ) maxZ = z;
+  }
+  // Half-width / half-height of a single hex (pointy-top, unit radius).
+  const padX = radius * SQRT3 / 2;
+  const padZ = radius;
+  return {
+    minX: minX - padX, maxX: maxX + padX,
+    minZ: minZ - padZ, maxZ: maxZ + padZ,
+    centerX: (minX + maxX) / 2,
+    centerZ: (minZ + maxZ) / 2,
+    width:   (maxX - minX) + 2 * padX,
+    depth:   (maxZ - minZ) + 2 * padZ,
+  };
+}
+
+/** Parse `#rrggbb` → [r,g,b] in 0..1; returns magenta on parse failure (loud). */
+const _RGB_CACHE = new Map();
+export function cssHexToRgb01(hex) {
+  if (_RGB_CACHE.has(hex)) return _RGB_CACHE.get(hex);
+  const m = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return [1, 0, 1];
+  const n = parseInt(m[1], 16);
+  const rgb = [
+    ((n >> 16) & 0xff) / 255,
+    ((n >>  8) & 0xff) / 255,
+    ( n        & 0xff) / 255,
+  ];
+  _RGB_CACHE.set(hex, rgb);
+  return rgb;
+}
+
+/**
+ * Color a tile by its type. Phase 2 keeps it simple: every TileType maps
+ * to its TILE_COLOR directly (so rivers read as blue, roads as brown,
+ * bridges as blue under their plank deck) and buildings to BUILDING_COLOR.
+ *
+ * Note this diverges from the 2D renderer's _drawTile, which draws roads
+ * and rivers on a grass base and overlays strips on top. In 3D we already
+ * have separate meshes for road decks and bridge planks, so the underlying
+ * tile colour can be its honest type colour without losing visual signal.
+ */
+export function tileColorFor(tile) {
+  if (!tile) return TILE_COLOR[TileType.GRASS];
+  if (tile.type === TileType.BUILDING) {
+    return BUILDING_COLOR[tile.building] || '#8a7a5a';
+  }
+  return TILE_COLOR[tile.type] || TILE_COLOR[TileType.GRASS];
+}
+
+// ─── Renderer class ──────────────────────────────────────────────────────────
 
 export class Renderer3D {
   constructor(canvas, state) {
@@ -78,7 +140,16 @@ export class Renderer3D {
     this._scene         = null;
     this._camera        = null;
     this._light         = null;
+    this._mapRoot       = null; // TransformNode parent for all tile meshes
+    this._materialCache = new Map(); // hex string → BABYLON.StandardMaterial
+    this._tileMeshes    = [];   // for picking + future incremental rebuild
+    this._mapBuilt      = false;
     this._babylonInit   = null; // pending init promise (de-dupes draw() calls)
+
+    // Locked camera angles (Phase 2). Yaw rotation lands in Phase 4; tilt
+    // is permanently the locked-isometric view.
+    this._lockedAlpha = -Math.PI / 4;
+    this._lockedBeta  =  Math.PI / 3.5;
   }
 
   // ─── Required interface (real implementations) ───────────────────────────
@@ -105,23 +176,78 @@ export class Renderer3D {
     if (this._engine) this._engine.resize();
   }
 
-  /** No images needed in Phase 1 — resolve immediately and fire the
-   *  onImagesLoaded callback so callers depending on the signal proceed. */
+  /** No images needed in Phase 2 — solid-colour materials only. Resolve
+   *  immediately and fire onImagesLoaded so callers depending on the signal
+   *  proceed. Tile-texturing is deferred to Phase 3+. */
   async loadImages() {
     if (this.onImagesLoaded) this.onImagesLoaded();
   }
 
-  // ─── Stubs (to be implemented in later phases) ───────────────────────────
+  /** Center and zoom the camera so the given hexes (with a margin) fill the
+   *  view. `opts.paddingHexes` widens the bounds; we ignore `opts.duration`
+   *  and `opts.maxZoom` for now (Phase 2 = instant framing).
+   */
+  frameHexes(positions, opts = {}) {
+    if (!this._camera || !positions || positions.length === 0) return;
+    const padHexes = typeof opts.paddingHexes === 'number' ? opts.paddingHexes : 1.5;
+    const bounds = computeMapBounds(positions);
+    if (!bounds) return;
+    const padding = padHexes * HEX_RADIUS_WORLD * SQRT3;
+    const fitWidth  = bounds.width  + 2 * padding;
+    const fitDepth  = bounds.depth  + 2 * padding;
 
-  frameHexes(_positions, _opts)                       { /* phase 2+ */ }
-  canvasToHex(_x, _y)                                 { return { col: -1, row: -1 }; }
-  hexToCanvasPos(_col, _row)                          { return { x: 0, y: 0 }; }
-  setZoom(_newZoom, _focalX, _focalY)                 { /* phase 2+ */ }
-  resetView()                                         { /* phase 2+ */ }
-  _clampPan()                                         { /* phase 2+ */ }
+    const BABYLON = this._babylon;
+    this._camera.target = new BABYLON.Vector3(bounds.centerX, 0, bounds.centerZ);
+    this._camera.radius = this._radiusForFit(fitWidth, fitDepth);
+  }
+
+  /** Project a canvas pixel onto the map by raycasting against tile meshes
+   *  (each carries its {col,row} in mesh.metadata). */
+  canvasToHex(x, y) {
+    if (!this._scene) return { col: -1, row: -1 };
+    const pick = this._scene.pick(x, y, (mesh) =>
+      mesh.metadata && mesh.metadata.kind === 'tile');
+    if (pick?.hit && pick.pickedMesh?.metadata) {
+      const { col, row } = pick.pickedMesh.metadata;
+      return { col, row };
+    }
+    return { col: -1, row: -1 };
+  }
+
+  /** Project a hex centre to canvas pixel coordinates. */
+  hexToCanvasPos(col, row) {
+    if (!this._scene || !this._camera || !this._engine || !this._babylon) {
+      return { x: 0, y: 0 };
+    }
+    const BABYLON = this._babylon;
+    const { x, z } = hexToWorld(col, row);
+    const world = new BABYLON.Vector3(x, 0, z);
+    const projected = BABYLON.Vector3.Project(
+      world,
+      BABYLON.Matrix.Identity(),
+      this._scene.getTransformMatrix(),
+      this._camera.viewport.toGlobal(
+        this._engine.getRenderWidth(),
+        this._engine.getRenderHeight(),
+      ),
+    );
+    return { x: projected.x, y: projected.y };
+  }
+
+  setZoom(_newZoom, _focalX, _focalY)                 { /* phase 4+ — managed by camera wheel for now */ }
+  resetView() {
+    // Refit to the whole map.
+    if (!this.state?.tiles) return;
+    const all = [];
+    for (const tile of this.state.tiles.values()) all.push({ col: tile.col, row: tile.row });
+    this.frameHexes(all, { paddingHexes: 1 });
+  }
+  _clampPan()                                         { /* camera panning is bounded via panning limits in _initBabylon */ }
   // Empty set = "nothing fog-visible"; callers fall back to other checks.
   // Stubbed until 3D fog of war lands.
   _buildFogVisibleHexes(_observerOwner)               { return new Set(); }
+
+  // ─── Stubs (entity / animation work — land in Phase 3+) ──────────────────
 
   addAttackAnim(_aCol, _aRow, _tCol, _tRow)                                 { /* phase 3+ */ }
   addLungeAnim(_id, _fCol, _fRow, _tCol, _tRow, _type, _owner, _title)       { /* phase 3+ */ }
@@ -161,42 +287,215 @@ export class Renderer3D {
     const scene  = new BABYLON.Scene(engine);
     scene.clearColor = new BABYLON.Color4(0.05, 0.04, 0.07, 1.0); // dark gothic
 
-    // ArcRotateCamera positioned for a roughly isometric view.
-    // alpha = horizontal angle, beta = vertical angle (smaller = higher up).
+    // Isometric ArcRotateCamera. Pan + zoom are user-controlled; rotation
+    // and tilt are locked — yaw control lands in Phase 4.
     const camera = new BABYLON.ArcRotateCamera(
       'cam',
-      -Math.PI / 4,
-      Math.PI / 3.5,
-      8,
+      this._lockedAlpha,
+      this._lockedBeta,
+      20,
       BABYLON.Vector3.Zero(),
       scene,
     );
     camera.attachControl(this.canvas, true);
-    camera.lowerRadiusLimit = 3;
-    camera.upperRadiusLimit = 30;
+
+    // Lock orientation. Equal lower/upper alpha & beta limits = no rotation.
+    camera.lowerAlphaLimit = camera.upperAlphaLimit = this._lockedAlpha;
+    camera.lowerBetaLimit  = camera.upperBetaLimit  = this._lockedBeta;
+
+    // Zoom limits — close enough to see a single tile clearly, far enough to
+    // hold a Campaign-size map without flying outside the scene.
+    camera.lowerRadiusLimit = 4;
+    camera.upperRadiusLimit = 80;
+    camera.wheelDeltaPercentage = 0.02; // smoother wheel zoom
+    camera.pinchDeltaPercentage = 0.005;
+
+    // Pan controls. Babylon's ArcRotateCamera pans the target on the
+    // camera-plane; the lower the panningSensibility the *faster* the pan.
+    // 250 is brisk without feeling twitchy on a trackpad.
+    camera.panningSensibility = 250;
+    camera.panningInertia     = 0.85;
+    // RMB drag pans by default; allow LMB to also pan since the renderer
+    // doesn't yet wire selection picking.
+    camera.useBouncingBehavior = false;
 
     const light = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0.3), scene);
     light.intensity = 0.95;
-
-    // Single test hex prism — a 6-sided cylinder is a regular hex extrusion.
-    const hex = BABYLON.MeshBuilder.CreateCylinder(
-      'hex-test',
-      { tessellation: 6, height: 0.2, diameter: 2 },
-      scene,
-    );
-    const mat = new BABYLON.StandardMaterial('hex-mat', scene);
-    mat.diffuseColor  = new BABYLON.Color3(0.45, 0.40, 0.30);
-    mat.specularColor = new BABYLON.Color3(0.05, 0.05, 0.05);
-    hex.material = mat;
 
     this._engine = engine;
     this._scene  = scene;
     this._camera = camera;
     this._light  = light;
 
-    engine.runRenderLoop(() => scene.render());
+    // Build the map from current state and frame it.
+    this._buildMap();
+    this._frameFullMap();
 
-    // Ensure the engine sees the current canvas dimensions.
+    engine.runRenderLoop(() => scene.render());
     engine.resize();
+  }
+
+  // ─── Map construction ────────────────────────────────────────────────────
+
+  /** Build one cylinder per tile, plus road/bridge decks and building boxes.
+   *  Uses individual meshes (not thin instances) for Phase 2 — simpler to
+   *  pick and easier to debug. Materials are cached by colour so the GPU
+   *  state count stays low (~10 materials regardless of map size). */
+  _buildMap() {
+    if (this._mapBuilt) return;
+    if (!this.state?.tiles || this.state.tiles.size === 0) return;
+
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+
+    const mapRoot = new BABYLON.TransformNode('mapRoot', scene);
+    this._mapRoot = mapRoot;
+
+    // Reusable shared geometry — clone for each instance, all parented to mapRoot.
+    // (We do not yet use Babylon InstancedMesh; one mesh per tile keeps picking
+    // trivially correct and Phase 2 maps are well under 1000 tiles.)
+    for (const tile of this.state.tiles.values()) {
+      this._buildTileMesh(tile, mapRoot);
+    }
+    this._mapBuilt = true;
+  }
+
+  _buildTileMesh(tile, parent) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    const { x, z } = hexToWorld(tile.col, tile.row);
+
+    // ── Base hex prism ────────────────────────────────────────────────────
+    const baseColor = tileColorFor(tile);
+    const hex = BABYLON.MeshBuilder.CreateCylinder(
+      `tile_${tile.col}_${tile.row}`,
+      { tessellation: 6, height: 0.15, diameter: 2 * HEX_RADIUS_WORLD },
+      scene,
+    );
+    hex.parent     = parent;
+    hex.position.x = x;
+    hex.position.z = z;
+    hex.position.y = 0;
+    // Pointy-top alignment: default cylinder has a vertex on +X; rotate 30°
+    // so vertices land at ±Z (visually aligns with the odd-row offset).
+    hex.rotation.y = Math.PI / 6;
+    hex.material   = this._materialFor(baseColor);
+    hex.metadata   = { kind: 'tile', col: tile.col, row: tile.row };
+    this._tileMeshes.push(hex);
+
+    // ── Forests: small dark cone on top to read at any zoom ───────────────
+    if (tile.type === TileType.FOREST) {
+      const cone = BABYLON.MeshBuilder.CreateCylinder(
+        `forest_${tile.col}_${tile.row}`,
+        { diameterTop: 0, diameterBottom: 0.7, height: 0.9, tessellation: 8 },
+        scene,
+      );
+      cone.parent     = parent;
+      cone.position.x = x;
+      cone.position.z = z;
+      cone.position.y = 0.45;
+      cone.material   = this._materialFor('#234c1f'); // tree green
+      cone.isPickable = false; // pick the tile underneath, not the prop
+    }
+
+    // ── Road deck: brown disc raised slightly above the tile surface ──────
+    if (tile.type === TileType.ROAD) {
+      const deck = BABYLON.MeshBuilder.CreateCylinder(
+        `road_${tile.col}_${tile.row}`,
+        { tessellation: 6, height: 0.03, diameter: 1.4 },
+        scene,
+      );
+      deck.parent     = parent;
+      deck.position.x = x;
+      deck.position.z = z;
+      deck.position.y = 0.09;
+      deck.rotation.y = Math.PI / 6;
+      deck.material   = this._materialFor('#6b5a3e');
+      deck.isPickable = false;
+    }
+
+    // ── Bridge: wooden planks crossing the river hex ──────────────────────
+    if (tile.type === TileType.BRIDGE) {
+      const plank = BABYLON.MeshBuilder.CreateBox(
+        `bridge_${tile.col}_${tile.row}`,
+        { width: 1.7, height: 0.12, depth: 0.7 },
+        scene,
+      );
+      plank.parent     = parent;
+      plank.position.x = x;
+      plank.position.z = z;
+      plank.position.y = 0.18;
+      plank.material   = this._materialFor('#8a6030');
+      plank.isPickable = false;
+    }
+
+    // ── Building: simple low-poly box atop the tile, building-coloured ────
+    if (tile.type === TileType.BUILDING && tile.building) {
+      const box = BABYLON.MeshBuilder.CreateBox(
+        `bldg_${tile.col}_${tile.row}`,
+        { width: 1.0, height: 0.7, depth: 1.0 },
+        scene,
+      );
+      box.parent     = parent;
+      box.position.x = x;
+      box.position.z = z;
+      box.position.y = 0.43; // sit on top of the tile prism
+      box.material   = this._materialFor(BUILDING_COLOR[tile.building] || '#8a7a5a');
+      box.isPickable = false;
+
+      // Tiny roof block to add silhouette variety.
+      const roof = BABYLON.MeshBuilder.CreateBox(
+        `roof_${tile.col}_${tile.row}`,
+        { width: 1.1, height: 0.15, depth: 1.1 },
+        scene,
+      );
+      roof.parent     = parent;
+      roof.position.x = x;
+      roof.position.z = z;
+      roof.position.y = 0.85;
+      roof.material   = this._materialFor('#2c2520');
+      roof.isPickable = false;
+    }
+  }
+
+  /** Cache a StandardMaterial per CSS hex colour so we hand a few materials
+   *  to the GPU regardless of tile count. */
+  _materialFor(hexColor) {
+    if (this._materialCache.has(hexColor)) return this._materialCache.get(hexColor);
+    const BABYLON = this._babylon;
+    const [r, g, b] = cssHexToRgb01(hexColor);
+    const mat = new BABYLON.StandardMaterial(`mat_${hexColor}`, this._scene);
+    mat.diffuseColor  = new BABYLON.Color3(r, g, b);
+    mat.specularColor = new BABYLON.Color3(0.04, 0.04, 0.04); // matte
+    this._materialCache.set(hexColor, mat);
+    return mat;
+  }
+
+  _frameFullMap() {
+    if (!this.state?.tiles || this.state.tiles.size === 0) return;
+    const all = [];
+    for (const tile of this.state.tiles.values()) all.push({ col: tile.col, row: tile.row });
+    this.frameHexes(all, { paddingHexes: 1 });
+  }
+
+  /** Pick a camera radius so a fitWidth × fitDepth rectangle on the ground
+   *  fills the canvas. Approximation that works well for the locked beta:
+   *  use the larger of the two dimensions and a vertical FOV (Babylon
+   *  default ≈ 0.8 rad). */
+  _radiusForFit(fitWidth, fitDepth) {
+    const aspect = this._engine
+      ? this._engine.getRenderWidth() / Math.max(1, this._engine.getRenderHeight())
+      : 16 / 9;
+    const fov = this._camera.fov || 0.8;
+    // Radius needed to fit the depth (z) vertically.
+    const rForDepth = (fitDepth / 2) / Math.tan(fov / 2);
+    // Radius needed to fit the width (x) horizontally, accounting for aspect.
+    const rForWidth = (fitWidth / 2) / (Math.tan(fov / 2) * aspect);
+    const radius = Math.max(rForDepth, rForWidth) * 1.05; // 5% margin
+    // Respect camera limits.
+    return Math.max(
+      this._camera.lowerRadiusLimit ?? 1,
+      Math.min(this._camera.upperRadiusLimit ?? 200, radius),
+    );
   }
 }
