@@ -42,13 +42,19 @@ export const STANDEE_LEADER_HEIGHT_MUL = 1.3;
 // Y-offset for the plane so the bottom of the sprite rests on the base disc,
 // which itself sits just above the tile prism so picking prefers the standee.
 export const STANDEE_BASE_Y_OFFSET    = 0.18; // tile prism top is at 0.075; base sits clear of it
-export const FOCUS_ANIMATION_MS       = 250;
 
 
 // ─── Pure helpers (exported for tests; no Babylon dependency) ────────────────
 
 /** World-unit radius for a single hex tile. */
 export const HEX_RADIUS_WORLD = 1;
+
+/** Duration (in frames at 60fps) of focus-shift animations.
+ *  18 frames ≈ 300ms — long enough to read, short enough not to feel slow. */
+export const FOCUS_ANIM_FRAMES = 18;
+
+/** Epsilon below which a focus shift is treated as a no-op (skip animation). */
+export const FOCUS_EPSILON = 1e-3;
 
 const SQRT3 = Math.sqrt(3);
 
@@ -90,6 +96,35 @@ export function computeMapBounds(hexes, radius = HEX_RADIUS_WORLD) {
     width:   (maxX - minX) + 2 * padX,
     depth:   (maxZ - minZ) + 2 * padZ,
   };
+}
+
+/**
+ * Pick a camera radius so a `fitWidth × fitDepth` rectangle on the ground
+ * fills the canvas at the locked isometric tilt. Uses the larger of the two
+ * dimensions and the vertical FOV (Babylon default ≈ 0.8 rad).
+ *
+ * `aspect` is renderWidth / renderHeight. `margin` is multiplicative slack
+ * around the fit (1.05 = 5% headroom).
+ */
+export function radiusForFit(fitWidth, fitDepth, aspect, fov = 0.8, margin = 1.05) {
+  const safeAspect = Math.max(1e-6, aspect);
+  const rForDepth = (fitDepth / 2) / Math.tan(fov / 2);
+  const rForWidth = (fitWidth / 2) / (Math.tan(fov / 2) * safeAspect);
+  return Math.max(rForDepth, rForWidth) * margin;
+}
+
+/**
+ * Returns true when a focus shift is large enough to be worth animating.
+ * Skips no-op transitions where the camera is already (approximately) at the
+ * requested target+radius — animating a no-op wastes a frame and produces a
+ * visible micro-stall.
+ */
+export function shouldAnimateFocus(curTarget, curRadius, newTarget, newRadius, epsilon = FOCUS_EPSILON) {
+  if (Math.abs(curRadius - newRadius) > epsilon) return true;
+  const dx = (curTarget?.x ?? 0) - (newTarget?.x ?? 0);
+  const dy = (curTarget?.y ?? 0) - (newTarget?.y ?? 0);
+  const dz = (curTarget?.z ?? 0) - (newTarget?.z ?? 0);
+  return (dx * dx + dy * dy + dz * dz) > epsilon * epsilon;
 }
 
 /** Parse `#rrggbb` → [r,g,b] in 0..1; returns magenta on parse failure (loud). */
@@ -242,8 +277,12 @@ export class Renderer3D {
   }
 
   /** Center and zoom the camera so the given hexes (with a margin) fill the
-   *  view. `opts.paddingHexes` widens the bounds; we ignore `opts.duration`
-   *  and `opts.maxZoom` for now (Phase 2 = instant framing).
+   *  view. `opts.paddingHexes` widens the bounds; `opts.instant` skips the
+   *  focus-shift animation (used on first frame / map load).
+   *
+   *  `frameHexes([singleHex])` is supported: `computeMapBounds` falls back to
+   *  the single hex's footprint, and `radiusForFit` floors at the camera's
+   *  `lowerRadiusLimit` so we never end up with a zero or sub-tile radius.
    */
   frameHexes(positions, opts = {}) {
     if (!this._camera || !positions || positions.length === 0) return;
@@ -255,8 +294,9 @@ export class Renderer3D {
     const fitDepth  = bounds.depth  + 2 * padding;
 
     const BABYLON = this._babylon;
-    this._camera.target = new BABYLON.Vector3(bounds.centerX, 0, bounds.centerZ);
-    this._camera.radius = this._radiusForFit(fitWidth, fitDepth);
+    const newTarget = new BABYLON.Vector3(bounds.centerX, 0, bounds.centerZ);
+    const newRadius = this._radiusForFit(fitWidth, fitDepth);
+    this._focusCamera(newTarget, newRadius, { instant: opts.instant === true });
   }
 
   /** Project a canvas pixel onto the map by raycasting against tile and
@@ -279,7 +319,14 @@ export class Renderer3D {
     return { col: -1, row: -1 };
   }
 
-  /** Project a hex centre to canvas pixel coordinates. */
+  /** Project a hex centre to canvas pixel coordinates.
+   *
+   *  Phase 4 note: we rotate the *camera* (alpha) for yaw, not `mapRoot`, so
+   *  the world matrix passed to `Vector3.Project` stays `Matrix.Identity()`.
+   *  If a future phase ever yaws `mapRoot` instead, swap this for
+   *  `this._mapRoot.computeWorldMatrix(true)` — otherwise projection will
+   *  silently desync from picked mesh positions when the map rotates.
+   */
   hexToCanvasPos(col, row) {
     if (!this._scene || !this._camera || !this._engine || !this._babylon) {
       return { x: 0, y: 0 };
@@ -299,9 +346,10 @@ export class Renderer3D {
     return { x: projected.x, y: projected.y };
   }
 
-  setZoom(_newZoom, _focalX, _focalY)                 { /* phase 4+ — managed by camera wheel for now */ }
+  setZoom(_newZoom, _focalX, _focalY)                 { /* managed by camera wheel/pinch */ }
+  /** Refit the whole map. Animates target+radius via `frameHexes`; deliberately
+   *  does NOT reset the user's yaw (alpha) — rotation is user state. */
   resetView() {
-    // Refit to the whole map.
     if (!this.state?.tiles) return;
     const all = [];
     for (const tile of this.state.tiles.values()) all.push({ col: tile.col, row: tile.row });
@@ -352,8 +400,9 @@ export class Renderer3D {
     const scene  = new BABYLON.Scene(engine);
     scene.clearColor = new BABYLON.Color4(0.05, 0.04, 0.07, 1.0); // dark gothic
 
-    // Isometric ArcRotateCamera. Pan + zoom are user-controlled; rotation
-    // and tilt are locked — yaw control lands in Phase 4.
+    // Isometric ArcRotateCamera. Pan + zoom + yaw are user-controlled; tilt
+    // (beta) stays locked at the isometric angle so the board always reads
+    // top-downish, like a board-game camera.
     const camera = new BABYLON.ArcRotateCamera(
       'cam',
       this._lockedAlpha,
@@ -364,8 +413,12 @@ export class Renderer3D {
     );
     camera.attachControl(this.canvas, true);
 
-    // Lock orientation. Equal lower/upper alpha & beta limits = no rotation.
-    camera.lowerAlphaLimit = camera.upperAlphaLimit = this._lockedAlpha;
+    // Yaw (alpha) is unbounded — left-mouse drag rotates around the vertical
+    // axis. Tilt (beta) is hard-locked so the player can't flip the board.
+    // We rotate the *camera*, not `mapRoot`, so world-space stays stable for
+    // picking + `hexToCanvasPos` projection (see the note on hexToCanvasPos).
+    camera.lowerAlphaLimit = null;
+    camera.upperAlphaLimit = null;
     camera.lowerBetaLimit  = camera.upperBetaLimit  = this._lockedBeta;
 
     // Zoom limits — close enough to see a single tile clearly, far enough to
@@ -392,9 +445,11 @@ export class Renderer3D {
     this._camera = camera;
     this._light  = light;
 
-    // Build the map from current state and frame it.
+    // Build the map from current state and frame it (instant — no animation
+    // on the very first frame, otherwise the camera "slides in" from the
+    // arbitrary radius=20 starting point).
     this._buildMap();
-    this._frameFullMap();
+    this._frameFullMap({ instant: true });
     // Initial standee population so the first frame already has units.
     this._syncEntityStandees();
     this._applySelectionAndFocus();
@@ -539,28 +594,21 @@ export class Renderer3D {
     return mat;
   }
 
-  _frameFullMap() {
+  _frameFullMap(opts = {}) {
     if (!this.state?.tiles || this.state.tiles.size === 0) return;
     const all = [];
     for (const tile of this.state.tiles.values()) all.push({ col: tile.col, row: tile.row });
-    this.frameHexes(all, { paddingHexes: 1 });
+    this.frameHexes(all, { paddingHexes: 1, instant: opts.instant === true });
   }
 
-  /** Pick a camera radius so a fitWidth × fitDepth rectangle on the ground
-   *  fills the canvas. Approximation that works well for the locked beta:
-   *  use the larger of the two dimensions and a vertical FOV (Babylon
-   *  default ≈ 0.8 rad). */
+  /** Wraps the pure `radiusForFit` helper with this camera's FOV/aspect and
+   *  clamps to the camera's radius limits. */
   _radiusForFit(fitWidth, fitDepth) {
     const aspect = this._engine
       ? this._engine.getRenderWidth() / Math.max(1, this._engine.getRenderHeight())
       : 16 / 9;
     const fov = this._camera.fov || 0.8;
-    // Radius needed to fit the depth (z) vertically.
-    const rForDepth = (fitDepth / 2) / Math.tan(fov / 2);
-    // Radius needed to fit the width (x) horizontally, accounting for aspect.
-    const rForWidth = (fitWidth / 2) / (Math.tan(fov / 2) * aspect);
-    const radius = Math.max(rForDepth, rForWidth) * 1.05; // 5% margin
-    // Respect camera limits.
+    const radius = radiusForFit(fitWidth, fitDepth, aspect, fov);
     return Math.max(
       this._camera.lowerRadiusLimit ?? 1,
       Math.min(this._camera.upperRadiusLimit ?? 200, radius),
@@ -784,44 +832,61 @@ export class Renderer3D {
     if (newId && this._entityStandees.has(newId)) {
       const standee = this._entityStandees.get(newId);
       standee.base.material = this._getSelectedBaseMaterial();
-      this._focusCameraOnEntity(newId);
+      const BABYLON = this._babylon;
+      if (BABYLON && this._camera) {
+        const newTarget = new BABYLON.Vector3(
+          standee.base.position.x,
+          0,
+          standee.base.position.z,
+        );
+        this._focusCamera(newTarget, this._camera.radius);
+      }
     }
     this._lastSelectedEntityId = newId;
   }
 
-  /** Smoothly slide the camera target to the entity's tile centre over
-   *  FOCUS_ANIMATION_MS. Radius is intentionally left alone — only the focus
-   *  point moves, matching how the 2D path pans without zoom changes. */
-  _focusCameraOnEntity(entityId) {
-    const standee = this._entityStandees.get(entityId);
-    if (!standee || !this._camera || !this._babylon) return;
+  /** Animate the camera's target + radius to new values with a cubic
+   *  ease-in-out over FOCUS_ANIM_FRAMES (≈300ms at 60fps). Skips the
+   *  animation if the shift is below FOCUS_EPSILON, or if `opts.instant`
+   *  is set (used on first frame). */
+  _focusCamera(newTarget, newRadius, opts = {}) {
     const BABYLON = this._babylon;
-    const targetX = standee.base.position.x;
-    const targetZ = standee.base.position.z;
-    const newTarget = new BABYLON.Vector3(targetX, 0, targetZ);
+    const camera  = this._camera;
+    if (!BABYLON || !camera) return;
 
-    // Build a quick scalar animation on the camera's target vector. Babylon's
-    // `Animation` with `ANIMATIONTYPE_VECTOR3` interpolates the camera's
-    // target each frame — no manual rAF loop needed.
-    const fps   = 60;
-    const totalFrames = Math.max(1, Math.round((FOCUS_ANIMATION_MS / 1000) * fps));
-    const anim = new BABYLON.Animation(
-      'cam_focus_target',
-      'target',
-      fps,
+    if (opts.instant || !shouldAnimateFocus(camera.target, camera.radius, newTarget, newRadius)) {
+      camera.target = newTarget;
+      camera.radius = newRadius;
+      return;
+    }
+
+    const ease = new BABYLON.CubicEase();
+    ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEINOUT);
+
+    const targetAnim = new BABYLON.Animation(
+      'focusTarget', 'target', 60,
       BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
       BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT,
     );
-    // Ease-out so the camera decelerates as it arrives at the unit.
-    const ease = new BABYLON.QuadraticEase();
-    ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
-    anim.setEasingFunction(ease);
-    anim.setKeys([
-      { frame: 0,           value: this._camera.target.clone() },
-      { frame: totalFrames, value: newTarget },
+    targetAnim.setKeys([
+      { frame: 0,                 value: camera.target.clone() },
+      { frame: FOCUS_ANIM_FRAMES, value: newTarget },
     ]);
-    this._scene.stopAnimation(this._camera);
-    this._scene.beginDirectAnimation(this._camera, [anim], 0, totalFrames, false);
+    targetAnim.setEasingFunction(ease);
+
+    const radiusAnim = new BABYLON.Animation(
+      'focusRadius', 'radius', 60,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT,
+      BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT,
+    );
+    radiusAnim.setKeys([
+      { frame: 0,                 value: camera.radius },
+      { frame: FOCUS_ANIM_FRAMES, value: newRadius },
+    ]);
+    radiusAnim.setEasingFunction(ease);
+
+    this._scene.stopAnimation(camera);
+    this._scene.beginDirectAnimation(camera, [targetAnim, radiusAnim], 0, FOCUS_ANIM_FRAMES, false);
   }
 }
 
