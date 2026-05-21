@@ -211,7 +211,7 @@ export class Renderer3D {
     this._tilePropsByKey  = new Map();   // hexKey → Array<Mesh> (forest, road, bridge, bldg, roof)
     this._fogMaterialCache = new Map();  // base hex color → darker StandardMaterial
     this._fogActiveSet     = new Set();  // hexKeys currently rendered as fogged
-    // Power-node glow meshes: { obj, mesh, shaft, baseColor } per node hex.
+    // Power-node glow meshes: { obj, disc, col, row, glowColor } per node hex.
     this._nodeGlowMeshes   = [];
     this._nodeGlowBuilt    = false;
     // Phase-driven lighting state. Pumped by _onBeforeRender each frame; draw()
@@ -219,7 +219,7 @@ export class Renderer3D {
     this._lightState = null;            // populated on first draw after init
     this._lastPhase  = null;
     this._phaseTransition = null;       // { from, to, startMs, durMs } or null
-    // Babylon GlowLayer shared by the selection halo and the node-glow shafts.
+    // Babylon GlowLayer shared by the selection halo and the node-glow discs.
     this._glowLayer  = null;
     this._onBeforeRenderObs = null;     // observer handle so we can dispose it
 
@@ -493,7 +493,7 @@ export class Renderer3D {
     this._camera = camera;
     this._light  = light;
 
-    // Phase 6: GlowLayer powers the selection halo and the power-node shafts.
+    // Phase 6: GlowLayer powers the selection halo and the power-node discs.
     // Built once at init; meshes opt in by raising their emissive colour.
     this._glowLayer = new BABYLON.GlowLayer('glow', scene, { mainTextureFixedSize: 512 });
     this._glowLayer.intensity = GLOW_LAYER_INTENSITY;
@@ -574,20 +574,31 @@ export class Renderer3D {
     const props = [];
     const trackProp = (m) => { props.push(m); };
 
-    // ── Forests: small dark cone on top to read at any zoom ───────────────
+    // ── Forests: a small cluster of varied cones around the rim of the hex,
+    // leaving the centre clear so an entity standee placed on the tile is not
+    // hidden by tree props. Layout is deterministic per (col, row) so the same
+    // hex always shows the same cluster across runs. See forestTreesForHex.
     if (tile.type === TileType.FOREST) {
-      const cone = BABYLON.MeshBuilder.CreateCylinder(
-        `forest_${tile.col}_${tile.row}`,
-        { diameterTop: 0, diameterBottom: 0.7, height: 0.9, tessellation: 8 },
-        scene,
-      );
-      cone.parent     = parent;
-      cone.position.x = x;
-      cone.position.z = z;
-      cone.position.y = 0.45;
-      cone.material   = this._materialFor('#234c1f'); // tree green
-      cone.isPickable = false; // pick the tile underneath, not the prop
-      trackProp(cone);
+      const treeMat = this._materialFor('#234c1f'); // shared green material
+      const trees = forestTreesForHex(tile.col, tile.row);
+      for (let i = 0; i < trees.length; i++) {
+        const t = trees[i];
+        const cone = BABYLON.MeshBuilder.CreateCylinder(
+          `forest_${tile.col}_${tile.row}_${i}`,
+          { diameterTop: 0, diameterBottom: 0.7, height: 0.9, tessellation: 8 },
+          scene,
+        );
+        cone.parent     = parent;
+        cone.position.x = x + t.x;
+        cone.position.z = z + t.z;
+        cone.position.y = 0.45 * t.scale;
+        cone.scaling.x  = t.scale;
+        cone.scaling.y  = t.scale;
+        cone.scaling.z  = t.scale;
+        cone.material   = treeMat;
+        cone.isPickable = false; // pick the tile underneath, not the prop
+        trackProp(cone);
+      }
     }
 
     // ── Road deck: brown disc raised slightly above the tile surface ──────
@@ -1530,7 +1541,7 @@ export class Renderer3D {
   // ─── Phase 6: atmosphere — lighting, node glow, fog veil, selection halo ──
   //
   // Scene-global concerns that make 3D mode feel alive: time-of-day lighting
-  // that shifts across the four phases, soft emissive shafts on Power Nodes
+  // that shifts across the four phases, saturated emissive discs on Power Nodes
   // tinted by current controller, a fog-of-war veil that dims tiles and
   // hides standees outside the observer's sight, and an animated glow halo
   // for the selected unit. Per-entity overlays, plan arrows, HP bars, and
@@ -1632,20 +1643,15 @@ export class Renderer3D {
   }
 
   _setNodeGlowIntensity(ng, k) {
-    if (!ng?.shaft?.material?.emissiveColor) return;
+    if (!ng?.disc?.material?.emissiveColor) return;
     const c = ng.glowColor;
-    ng.shaft.material.emissiveColor.r = c.r * k;
-    ng.shaft.material.emissiveColor.g = c.g * k;
-    ng.shaft.material.emissiveColor.b = c.b * k;
-    if (ng.disc?.material?.emissiveColor) {
-      ng.disc.material.emissiveColor.r = c.r * k * NODE_DISC_EMISSIVE_MUL;
-      ng.disc.material.emissiveColor.g = c.g * k * NODE_DISC_EMISSIVE_MUL;
-      ng.disc.material.emissiveColor.b = c.b * k * NODE_DISC_EMISSIVE_MUL;
-    }
+    ng.disc.material.emissiveColor.r = c.r * k * NODE_DISC_EMISSIVE_MUL;
+    ng.disc.material.emissiveColor.g = c.g * k * NODE_DISC_EMISSIVE_MUL;
+    ng.disc.material.emissiveColor.b = c.b * k * NODE_DISC_EMISSIVE_MUL;
   }
 
-  /** Build one glow shaft + disc per Power Node hex on first call, then on
-   *  every draw update the per-shaft material colours to reflect the current
+  /** Build one emissive disc per Power Node hex on first call, then on every
+   *  draw update the per-disc material colour to reflect the current
    *  controller. Cheap because witchObjectives count rarely exceeds 3. */
   _syncNodeGlowMeshes() {
     if (!this._scene || !this.state?.witchObjectives) return;
@@ -1672,10 +1678,12 @@ export class Renderer3D {
       // multi-hex nodes still read as a unified controlled area.
       for (const h of obj.hexes) {
         const { x, z } = hexToWorld(h.col, h.row);
-        // Thin emissive disc resting just above the tile prism.
+        // Saturated emissive disc resting just above the tile prism. The
+        // upward shaft was dropped (playtest feedback) — controller clarity
+        // now comes from a larger, more saturated, opaque-feeling disc.
         const disc = BABYLON.MeshBuilder.CreateCylinder(
           `node_disc_${obj.label.replace(/\W+/g, '_')}_${h.col}_${h.row}`,
-          { tessellation: 24, height: 0.04, diameter: 1.7 },
+          { tessellation: 24, height: 0.04, diameter: NODE_DISC_DIAMETER },
           this._scene,
         );
         disc.parent = this._mapRoot;
@@ -1686,31 +1694,12 @@ export class Renderer3D {
         const discMat = new BABYLON.StandardMaterial(`nodeDiscMat_${h.col}_${h.row}`, this._scene);
         discMat.diffuseColor  = new BABYLON.Color3(0.05, 0.05, 0.05);
         discMat.specularColor = new BABYLON.Color3(0, 0, 0);
-        discMat.emissiveColor = new BABYLON.Color3(0.5, 0.5, 0.5);
-        discMat.alpha = 0.65;
+        discMat.emissiveColor = new BABYLON.Color3(0.8, 0.8, 0.8);
+        discMat.alpha = NODE_DISC_ALPHA;
         disc.material = discMat;
 
-        // Upward shaft — thin cylinder tapering up, signals "important hex"
-        // from across the map. Picks up the GlowLayer.
-        const shaft = BABYLON.MeshBuilder.CreateCylinder(
-          `node_shaft_${obj.label.replace(/\W+/g, '_')}_${h.col}_${h.row}`,
-          { diameterTop: 0.0, diameterBottom: 0.45, height: NODE_SHAFT_HEIGHT, tessellation: 12 },
-          this._scene,
-        );
-        shaft.parent = this._mapRoot;
-        shaft.position.x = x;
-        shaft.position.z = z;
-        shaft.position.y = NODE_SHAFT_HEIGHT / 2 + 0.10;
-        shaft.isPickable = false;
-        const shaftMat = new BABYLON.StandardMaterial(`nodeShaftMat_${h.col}_${h.row}`, this._scene);
-        shaftMat.diffuseColor  = new BABYLON.Color3(0.05, 0.05, 0.05);
-        shaftMat.specularColor = new BABYLON.Color3(0, 0, 0);
-        shaftMat.emissiveColor = new BABYLON.Color3(0.6, 0.6, 0.6);
-        shaftMat.alpha = 0.55;
-        shaft.material = shaftMat;
-
         this._nodeGlowMeshes.push({
-          obj, disc, shaft,
+          obj, disc,
           col: h.col, row: h.row,
           glowColor: { r: 1, g: 1, b: 1 },
         });
@@ -1822,6 +1811,53 @@ export function entityBaseColor(entity) {
   return '#888888';
 }
 
+// ─── Forest layout (deterministic per hex, exported for tests) ──────────────
+
+/** Bounds for the forest tree ring around a hex centre. Trees never enter the
+ *  inner FOREST_INNER_RADIUS so an entity standee placed on the tile is not
+ *  hidden by props. Outer bound stays clear of the hex edge so trees don't
+ *  bleed visually into neighbouring tiles at oblique camera angles. */
+export const FOREST_INNER_RADIUS = 0.5;
+export const FOREST_OUTER_RADIUS = 0.85;
+/** Per-tree scale range — picked from a hash so the same hex always looks the
+ *  same across runs but the cluster reads as visually varied. */
+export const FOREST_SCALE_MIN = 0.5;
+export const FOREST_SCALE_MAX = 1.2;
+/** Cluster size range (inclusive). */
+export const FOREST_TREES_MIN = 3;
+export const FOREST_TREES_MAX = 5;
+
+/** Deterministic [0, 1) hash from (col, row, salt). Tiny integer mixer — not
+ *  cryptographic, just stable across runs and well-distributed enough for
+ *  placement jitter. */
+function _forestHash(col, row, salt) {
+  let h = ((col | 0) * 73856093) ^ ((row | 0) * 19349663) ^ ((salt | 0) * 83492791);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h = (h ^ (h >>> 16)) >>> 0;
+  return h / 0x100000000;
+}
+
+/** Deterministic forest layout for a hex. Returns an array of
+ *  `{ x, z, scale }` offsets (relative to the hex centre) — N entries where
+ *  N ∈ [FOREST_TREES_MIN, FOREST_TREES_MAX]. All trees sit in the ring
+ *  [FOREST_INNER_RADIUS, FOREST_OUTER_RADIUS] so the centre is clear for a
+ *  standee. Pure function: same (col, row) → same trees, every run. */
+export function forestTreesForHex(col, row) {
+  const span = FOREST_TREES_MAX - FOREST_TREES_MIN + 1;
+  const n    = FOREST_TREES_MIN + Math.floor(_forestHash(col, row, 0) * span);
+  // _forestHash returns < 1, so floor(<span) ∈ [0, span-1]; n ∈ [MIN, MAX].
+  const trees = [];
+  const ringWidth = FOREST_OUTER_RADIUS - FOREST_INNER_RADIUS;
+  const scaleSpan = FOREST_SCALE_MAX - FOREST_SCALE_MIN;
+  for (let i = 0; i < n; i++) {
+    const angle = _forestHash(col, row, i * 3 + 1) * Math.PI * 2;
+    const dist  = FOREST_INNER_RADIUS + _forestHash(col, row, i * 3 + 2) * ringWidth;
+    const scale = FOREST_SCALE_MIN    + _forestHash(col, row, i * 3 + 3) * scaleSpan;
+    trees.push({ x: Math.cos(angle) * dist, z: Math.sin(angle) * dist, scale });
+  }
+  return trees;
+}
+
 // ─── Phase 6 constants (exported for tests) ─────────────────────────────────
 
 /** Hemispheric-light + clear-colour config per game phase.
@@ -1841,14 +1877,16 @@ export function getPhaseLightConfig(phase) {
   return PHASE_LIGHT_CONFIG[phase] ?? PHASE_LIGHT_CONFIG.day;
 }
 
-/** Power Node glow palette by controller. The task spec calls for
- *  hero=warm gold, witch=sickly green, neutral=pale white; contested is
- *  amber, matching the 2D path's contested overlay tint. */
+/** Power Node glow palette by controller. Playtest feedback: previous values
+ *  read as washed out in the lit 3D scene, so each is bumped toward full
+ *  saturation. Hero = vivid gold, witch = vivid sickly green, neutral = pale
+ *  white, contested = vivid orange (matches the 2D path's contested overlay
+ *  family but pushed harder so the disc reads from across the map). */
 export const NODE_GLOW_COLORS = Object.freeze({
-  hero:      '#ffc940',
-  witch:     '#7fd14a',
-  neutral:   '#f0f0f0',
-  contested: '#ffaa00',
+  hero:      '#ffb800',
+  witch:     '#3ee013',
+  neutral:   '#e8e8e8',
+  contested: '#ff6a00',
 });
 
 /** Choose a node's glow colour by current controller. */
@@ -1859,7 +1897,7 @@ export function getNodeGlowColor(controller) {
 /** Duration of phase-to-phase light cross-fade. */
 export const PHASE_TRANSITION_MS = 3000;
 
-/** GlowLayer intensity (applied to selection halo + node-glow shafts). */
+/** GlowLayer intensity (applied to selection halo + node-glow discs). */
 export const GLOW_LAYER_INTENSITY = 0.7;
 
 /** Selection halo pulse. Configurable so designers can tune the breathing. */
@@ -1874,10 +1912,15 @@ export const SELECTION_EMISSIVE_BASE = Object.freeze({ r: 0.25, g: 0.85, b: 0.95
 export const NODE_PULSE_PERIOD_MS = 3000;
 export const NODE_PULSE_MIN       = 0.45;
 export const NODE_PULSE_MAX       = 0.95;
-/** The flat emissive disc reads more subtly than the upward shaft. */
-export const NODE_DISC_EMISSIVE_MUL = 0.55;
-/** Height of the upward emissive shaft above the tile prism (world units). */
-export const NODE_SHAFT_HEIGHT = 0.9;
+/** The disc now carries the full node-glow read (the shaft was dropped), so
+ *  emissive intensity is pinned at 1.0 instead of attenuated. */
+export const NODE_DISC_EMISSIVE_MUL = 1.0;
+/** Disc footprint in world units. Slightly larger than the historical 1.7 so
+ *  the saturated colour fills more of the tile's visible top. */
+export const NODE_DISC_DIAMETER = 1.9;
+/** Disc material alpha — high enough to read as solid colour, low enough that
+ *  the underlying tile colour still bleeds through faintly. */
+export const NODE_DISC_ALPHA = 0.88;
 
 /** Multiplier applied to fogged-tile diffuse colour. ~0.32 keeps the tile
  *  legible (a player can still see "there's grass there") while clearly

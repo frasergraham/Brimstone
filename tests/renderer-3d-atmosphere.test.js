@@ -91,20 +91,20 @@ describe('Renderer3D — getPhaseLightConfig', () => {
 // ── Node glow colour by controller ──────────────────────────────────────────
 
 describe('Renderer3D — getNodeGlowColor', () => {
-  test('hero control = warm gold', () => {
-    assert.equal(getNodeGlowColor('hero'),    '#ffc940');
+  test('hero control = saturated gold', () => {
+    assert.equal(getNodeGlowColor('hero'),    '#ffb800');
   });
 
-  test('witch control = sickly green', () => {
-    assert.equal(getNodeGlowColor('witch'),   '#7fd14a');
+  test('witch control = saturated sickly green', () => {
+    assert.equal(getNodeGlowColor('witch'),   '#3ee013');
   });
 
   test('neutral = pale white', () => {
-    assert.equal(getNodeGlowColor('neutral'), '#f0f0f0');
+    assert.equal(getNodeGlowColor('neutral'), '#e8e8e8');
   });
 
-  test('contested = amber (matches 2D path contested overlay)', () => {
-    assert.equal(getNodeGlowColor('contested'), '#ffaa00');
+  test('contested = saturated orange (vivid 2D-style contested tint)', () => {
+    assert.equal(getNodeGlowColor('contested'), '#ff6a00');
   });
 
   test('unknown controller falls back to neutral pale white', () => {
