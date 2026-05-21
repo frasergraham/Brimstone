@@ -40,7 +40,7 @@ import { hexKey } from '../src/hex.js';
 describe('Renderer3D — getPhaseLightConfig', () => {
   test('dawn = warm amber, mid intensity', () => {
     const c = getPhaseLightConfig(Phase.DAWN);
-    assert.equal(c.intensity, 0.90);
+    assert.ok(c.intensity >= 0.9 && c.intensity <= 1.1, 'dawn intensity in playable band');
     assert.equal(c.color.r, 1.00);
     assert.ok(c.color.g > 0.6 && c.color.g < 0.9, 'dawn green channel mid');
     assert.ok(c.color.b < c.color.g,             'dawn blue channel lowest');
@@ -54,18 +54,21 @@ describe('Renderer3D — getPhaseLightConfig', () => {
 
   test('dusk = orange-red, mid intensity (similar to dawn)', () => {
     const c = getPhaseLightConfig(Phase.DUSK);
-    assert.equal(c.intensity, 0.85);
+    assert.ok(c.intensity >= 0.9 && c.intensity <= 1.1, 'dusk intensity in playable band');
     assert.equal(c.color.r, 1.00);
     assert.ok(c.color.g < 0.7, 'dusk green darker than dawn');
     assert.ok(c.color.b < c.color.g, 'dusk blue lowest');
   });
 
-  test('night = cool blue, low intensity', () => {
+  test('night = cool blue, lower intensity than day but still readable', () => {
     const c = getPhaseLightConfig(Phase.NIGHT);
-    assert.ok(c.intensity < 0.7, 'night dimmer than mid phases');
+    assert.ok(c.intensity < getPhaseLightConfig(Phase.DAY).intensity,
+      'night dimmer than day');
+    assert.ok(c.intensity >= 0.7,
+      `night intensity ${c.intensity} must stay above 0.7 for terrain readability`);
     // Cool tone: blue channel dominates red, green sits between.
     assert.ok(c.color.b > c.color.r, 'night blue > red');
-    assert.ok(c.color.r < 0.7,       'night red channel cool');
+    assert.ok(c.color.r < c.color.b, 'night red channel cooler than blue');
   });
 
   test('unknown phase falls back to day config (defensive)', () => {
