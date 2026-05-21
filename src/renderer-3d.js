@@ -220,6 +220,28 @@ export class Renderer3D {
     // is permanently the locked-isometric view.
     this._lockedAlpha = -Math.PI / 4;
     this._lockedBeta  =  Math.PI / 3.5;
+
+    // ── Phase 5: animations, plan arrows, HP bars ──────────────────────────
+    // In-flight Babylon animations expressed as Promises that resolve when
+    // their animation/timeout completes. waitForAnimations() awaits the set;
+    // each promise self-removes when it resolves.
+    this._animPromises    = new Set();
+    // Set of entity ids whose standee is currently being driven by a move or
+    // lunge animation; _syncEntityStandees skips _positionStandee for these
+    // so the animation isn't snapped back to the state position every frame.
+    this._activeMoveIds   = new Set();
+    this._activeLungeIds  = new Set();
+    // Map<entityId, { mesh, texture, lastHp, lastMax }> — billboarded HP bar
+    // parented to the standee base, redrawn only when ratio changes.
+    this._hpBars          = new Map();
+    // [{ mesh, owner, fromCol, fromRow, toCol, toRow }] — solid ghost-arrow tubes
+    // rebuilt every draw() from this.planGhostSteps so the overlay tracks any
+    // plan-step edit.
+    this._planArrowMeshes = [];
+    // Reusable plan-arrow materials, keyed by owner colour.
+    this._planArrowMatCache = new Map();
+    // Cached material used to highlight a hex on attack flash.
+    this._attackHexFlashMat = null;
   }
 
   // ─── Required interface (real implementations) ───────────────────────────
@@ -239,6 +261,7 @@ export class Renderer3D {
     if (!this._scene) return; // init in flight
     this._syncEntityStandees();
     this._applySelectionAndFocus();
+    this._syncPlanArrows();
   }
 
   resize() {
@@ -360,28 +383,21 @@ export class Renderer3D {
   // Stubbed until 3D fog of war lands.
   _buildFogVisibleHexes(_observerOwner)               { return new Set(); }
 
-  // ─── Stubs (entity / animation work — land in Phase 3+) ──────────────────
+  // ─── Stubs (deferred to later phases / out of Phase 5 scope) ─────────────
 
-  addAttackAnim(_aCol, _aRow, _tCol, _tRow)                                 { /* phase 3+ */ }
-  addLungeAnim(_id, _fCol, _fRow, _tCol, _tRow, _type, _owner, _title)       { /* phase 3+ */ }
-  addProjectileAnim(_kind, _fCol, _fRow, _tCol, _tRow, _opts)                { /* phase 3+ */ }
-  addMoveAnim(_id, _fCol, _fRow, _tCol, _tRow, _type, _owner, _title)        { /* phase 3+ */ }
-  addFlash(_col, _row, _text, _color, _dur, _fontScale, _textColor)          { /* phase 3+ */ }
-  addDeathAnim(_col, _row, _color)                                           { /* phase 3+ */ }
-  addFadeOutAnim(_entityId, _duration)                                       { /* phase 3+ */ }
-  addNodeRevealAnim(_hexes, _color, _opts)                                   { /* phase 3+ */ }
-  addSpawnAnim(_col, _row, _color)                                           { /* phase 3+ */ }
-  addHpChangeFlash(_col, _row, _delta)                                       { /* phase 3+ */ }
+  addDeathAnim(_col, _row, _color)                                           { /* later phase */ }
+  addFadeOutAnim(_entityId, _duration)                                       { /* later phase */ }
+  addNodeRevealAnim(_hexes, _color, _opts)                                   { /* Phase 6 — Hana */ }
+  addSpawnAnim(_col, _row, _color)                                           { /* later phase */ }
 
-  clearAllLungeAnims()                                { /* phase 3+ */ }
-  clearAllProjectileAnims()                           { /* phase 3+ */ }
-  clearAnimations()                                   { /* phase 3+ */ }
-  clearBattleHighlights()                             { /* phase 3+ */ }
-  clearFlashes()                                      { /* phase 3+ */ }
-  returnAllLungeAnims()                               { /* phase 3+ */ }
-  setBattleHighlights(_combatantHexes, _allyHexes)    { /* phase 3+ */ }
+  clearBattleHighlights()                             { /* later phase */ }
+  setBattleHighlights(_combatantHexes, _allyHexes)    { /* later phase */ }
 
-  async waitForAnimations()                           { /* phase 3+ */ }
+  // ─── Phase 5 anim methods (implementations below the class banner) ───────
+  // addMoveAnim, addLungeAnim, returnAllLungeAnims, clearAllLungeAnims,
+  // addProjectileAnim, clearAllProjectileAnims, addAttackAnim, addFlash,
+  // addHpChangeFlash, clearFlashes, clearAnimations, waitForAnimations
+  // are defined under the Phase 5 banner near the end of this class.
 
   getFadeOutOpacity(_entityId)                        { return 1; }
   getEntityScreenPositions(_col, _row, _entities, _rect)                     { return []; }
@@ -788,7 +804,10 @@ export class Renderer3D {
       if (!standee) {
         standee = this._buildStandeeMesh(e);
         this._entityStandees.set(e.id, standee);
-      } else {
+      } else if (!this._activeMoveIds.has(e.id) && !this._activeLungeIds.has(e.id)) {
+        // Skip snapping while a move/lunge animation is driving this standee —
+        // otherwise the per-frame redraw would yank the mesh back to the
+        // state's destination and cancel the animation visually.
         this._positionStandee(standee, e);
         // Owner colour can change (e.g. recruit changing sides — defensive).
         const expected = this._baseMaterialForOwner(this._ownerColorFor(e));
@@ -799,10 +818,14 @@ export class Renderer3D {
           standee.base.material = expected;
         }
       }
+      // Phase 5: keep the HP bar in step with the entity. Cheap when the ratio
+      // hasn't changed — the dynamic texture is only redrawn on delta.
+      this._syncHpBar(standee, e);
     }
     // Dispose standees for entities that no longer exist or just died.
     for (const [id, standee] of this._entityStandees) {
       if (!seen.has(id)) {
+        this._disposeHpBar(id);
         standee.plane.dispose();
         standee.base.dispose();
         this._entityStandees.delete(id);
@@ -888,6 +911,562 @@ export class Renderer3D {
     this._scene.stopAnimation(camera);
     this._scene.beginDirectAnimation(camera, [targetAnim, radiusAnim], 0, FOCUS_ANIM_FRAMES, false);
   }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ── Phase 5: animations, plan-ghost arrows, HP bars, floating text ────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  //
+  // Animation queue
+  // ───────────────
+  // Babylon's animation API is fire-and-forget per mesh; the resolution loop
+  // in src/main.js expects a Promise-based "wait until everything in flight
+  // has played out" contract. We track an `_animPromises` Set of pending
+  // promises and `waitForAnimations()` awaits the snapshot. Each addX()
+  // builds one Promise that resolves when its underlying Babylon animation
+  // (or setTimeout for material-only effects) fires its onEnd callback. The
+  // promise self-removes from the set on resolve so the set drains cleanly.
+  //
+  // HP bars (always-on)
+  // ───────────────────
+  // We render an HP bar above every standee, all the time — *not* only
+  // post-damage. Brimstone's signal-density is already low (one or two leaders
+  // and a handful of pawns per side); a bar that only shows on damage made it
+  // ambiguous whether full-HP units were missing a bar or just at full. The
+  // bar is a 1×1 plane scaled to 0.6×0.12, parented to the standee's base
+  // disc with billboardMode_ALL, so it follows move animations for free.
+  // Colour: red <33%, yellow <66%, green ≥66% — see hpBarColor().
+  //
+  // Plan arrow geometry
+  // ───────────────────
+  // We use Babylon's `MeshBuilder.CreateDashedLines` for arrows — Babylon
+  // already implements dash spacing in-shader, which avoids manually slicing
+  // tubes. Numbered badges are billboarded planes textured with a
+  // DynamicTexture rendering the step number. Arrows are rebuilt every draw()
+  // from `this.planGhostSteps`; the cost is small (only MOVE steps generate
+  // arrows) and avoids tracking dirty state across plan edits.
+  //
+  // Movement / lunge / projectile / flash
+  // ──────────────────────────────────────
+  // Move and lunge drive `position.x`/`position.z` of the entity's standee
+  // (+ base disc) via beginDirectAnimation. While the entity id is in
+  // `_activeMoveIds` / `_activeLungeIds`, `_syncEntityStandees` skips the
+  // `_positionStandee` snap that would otherwise yank the mesh back to its
+  // state position on the next redraw. Projectiles spawn a small sphere that
+  // animates between hex world positions then disposes. Attack flash briefly
+  // tints the attacker + target tiles' emissive colour red.
+
+  /** Tail-recursive helper: register a Promise as in-flight; self-remove on settle. */
+  _trackAnim(promise) {
+    this._animPromises.add(promise);
+    promise.finally(() => this._animPromises.delete(promise));
+    return promise;
+  }
+
+  /** Resolves once all in-flight Phase 5 animations have completed. Safe to
+   *  call when nothing is animating — resolves on the microtask queue. */
+  async waitForAnimations() {
+    if (!this._animPromises || this._animPromises.size === 0) return;
+    // Snapshot the set so any animations chained inside callbacks don't
+    // extend this particular wait indefinitely.
+    await Promise.all([...this._animPromises]);
+  }
+
+  /** Hard-clear every Phase 5 animation. Mirrors the 2D path's
+   *  clearAnimations(): used between rounds to ensure no half-finished move
+   *  or projectile bleeds into the next planning cycle. */
+  clearAnimations() {
+    this.clearAllLungeAnims(true);
+    this.clearAllProjectileAnims();
+    this.clearFlashes();
+    if (this._scene) {
+      for (const standee of this._entityStandees.values()) {
+        this._scene.stopAnimation(standee.plane);
+        this._scene.stopAnimation(standee.base);
+      }
+    }
+    this._activeMoveIds.clear();
+    this._activeLungeIds.clear();
+    // Don't manually reject — let Babylon's own onEnd callbacks fire as the
+    // stopped animations drain; the Set will empty as their promises resolve.
+  }
+
+  // ─── Move animation ──────────────────────────────────────────────────────
+
+  /** Slide an entity's standee from one hex to another over ~250ms (linear).
+   *  Skips silently if Babylon hasn't loaded yet or the entity has no live
+   *  standee — the next draw() will snap the entity to its destination
+   *  position anyway via `_positionStandee`, so resolution can't get stuck
+   *  on a missing animation. */
+  addMoveAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title) {
+    if (!this._scene || !this._babylon) return;
+    const standee = this._entityStandees.get(entityId);
+    if (!standee) return;
+    const BABYLON = this._babylon;
+    const { x: fromX, z: fromZ } = hexToWorld(fromCol, fromRow);
+    const { x: toX,   z: toZ   } = hexToWorld(toCol,   toRow);
+    const FRAMES_MOVE = 15; // ≈250ms at 60fps
+
+    // Cancel any in-flight move on this entity so plan-step "A→B→C" hops
+    // don't queue up and play simultaneously.
+    this._scene.stopAnimation(standee.plane);
+    this._scene.stopAnimation(standee.base);
+    this._activeMoveIds.add(entityId);
+
+    const animX = new BABYLON.Animation('mvX', 'position.x', 60,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    animX.setKeys([{ frame: 0, value: fromX }, { frame: FRAMES_MOVE, value: toX }]);
+    const animZ = new BABYLON.Animation('mvZ', 'position.z', 60,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    animZ.setKeys([{ frame: 0, value: fromZ }, { frame: FRAMES_MOVE, value: toZ }]);
+
+    // Set start positions immediately so the very first frame is at "from".
+    standee.plane.position.x = fromX; standee.plane.position.z = fromZ;
+    standee.base.position.x  = fromX; standee.base.position.z  = fromZ;
+
+    const promise = new Promise(resolve => {
+      this._scene.beginDirectAnimation(standee.base, [animX, animZ], 0, FRAMES_MOVE, false);
+      this._scene.beginDirectAnimation(standee.plane, [animX, animZ], 0, FRAMES_MOVE, false, 1, () => {
+        this._activeMoveIds.delete(entityId);
+        resolve();
+      });
+    });
+    this._trackAnim(promise);
+  }
+
+  // ─── Lunge animation ─────────────────────────────────────────────────────
+
+  /** Slide the attacker's standee to the midpoint between attacker and target
+   *  hexes and hold there until `returnAllLungeAnims()` is called. Mirrors
+   *  the 2D contract: an "attack-in-progress" pose, not a one-shot. */
+  addLungeAnim(entityId, fromCol, fromRow, toCol, toRow, _type, _owner, _title) {
+    if (!this._scene || !this._babylon) return;
+    const standee = this._entityStandees.get(entityId);
+    if (!standee) return;
+    const BABYLON = this._babylon;
+    const { x: fromX, z: fromZ } = hexToWorld(fromCol, fromRow);
+    const { x: toX,   z: toZ   } = hexToWorld(toCol,   toRow);
+    const midX = (fromX + toX) * 0.5;
+    const midZ = (fromZ + toZ) * 0.5;
+    const FRAMES_LUNGE = 12; // ≈200ms — quick, aggressive
+
+    this._scene.stopAnimation(standee.plane);
+    this._scene.stopAnimation(standee.base);
+    this._activeLungeIds.add(entityId);
+
+    standee.plane.position.x = fromX; standee.plane.position.z = fromZ;
+    standee.base.position.x  = fromX; standee.base.position.z  = fromZ;
+
+    const animX = new BABYLON.Animation('lgX', 'position.x', 60,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    animX.setKeys([{ frame: 0, value: fromX }, { frame: FRAMES_LUNGE, value: midX }]);
+    const animZ = new BABYLON.Animation('lgZ', 'position.z', 60,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    animZ.setKeys([{ frame: 0, value: fromZ }, { frame: FRAMES_LUNGE, value: midZ }]);
+
+    // Stash the "home" position on the standee so returnAllLungeAnims() knows
+    // where to slide back to without consulting the state (which may have
+    // changed by then — e.g. a follow-up move).
+    standee.lungeHome = { fromX, fromZ, midX, midZ };
+
+    const promise = new Promise(resolve => {
+      this._scene.beginDirectAnimation(standee.base,  [animX, animZ], 0, FRAMES_LUNGE, false);
+      this._scene.beginDirectAnimation(standee.plane, [animX, animZ], 0, FRAMES_LUNGE, false, 1, resolve);
+    });
+    this._trackAnim(promise);
+  }
+
+  /** Reverse every active lunge: slide each standee back to its home hex.
+   *  Releases the entity id from `_activeLungeIds` once the return completes
+   *  so `_syncEntityStandees` resumes snapping the standee to state. */
+  returnAllLungeAnims() {
+    if (!this._scene || !this._babylon) return;
+    const BABYLON = this._babylon;
+    const FRAMES_RET = 10; // ≈170ms
+    for (const [id, standee] of this._entityStandees) {
+      if (!standee.lungeHome) continue;
+      const { fromX, fromZ, midX, midZ } = standee.lungeHome;
+      this._scene.stopAnimation(standee.plane);
+      this._scene.stopAnimation(standee.base);
+      const animX = new BABYLON.Animation('lrX', 'position.x', 60,
+        BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+      animX.setKeys([{ frame: 0, value: midX }, { frame: FRAMES_RET, value: fromX }]);
+      const animZ = new BABYLON.Animation('lrZ', 'position.z', 60,
+        BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+      animZ.setKeys([{ frame: 0, value: midZ }, { frame: FRAMES_RET, value: fromZ }]);
+      const promise = new Promise(resolve => {
+        this._scene.beginDirectAnimation(standee.base,  [animX, animZ], 0, FRAMES_RET, false);
+        this._scene.beginDirectAnimation(standee.plane, [animX, animZ], 0, FRAMES_RET, false, 1, () => {
+          standee.lungeHome = null;
+          this._activeLungeIds.delete(id);
+          resolve();
+        });
+      });
+      this._trackAnim(promise);
+    }
+  }
+
+  /** Immediately snap all lunging entities back home and clear lunge state.
+   *  Used between rounds when we don't want the return animation to play. */
+  clearAllLungeAnims(skipResolve = false) {
+    if (!this._scene) {
+      this._activeLungeIds.clear();
+      return;
+    }
+    for (const [id, standee] of this._entityStandees) {
+      if (!standee.lungeHome) continue;
+      this._scene.stopAnimation(standee.plane);
+      this._scene.stopAnimation(standee.base);
+      const { fromX, fromZ } = standee.lungeHome;
+      standee.plane.position.x = fromX; standee.plane.position.z = fromZ;
+      standee.base.position.x  = fromX; standee.base.position.z  = fromZ;
+      standee.lungeHome = null;
+      this._activeLungeIds.delete(id);
+    }
+    // skipResolve = called from clearAnimations() — promises will drain on
+    // their own as the stopped Babylon animations fire their onEnd.
+    void skipResolve;
+  }
+
+  // ─── Projectile animation ────────────────────────────────────────────────
+
+  /** Spawn a small projectile mesh and animate it from source → target hex
+   *  along a low parabolic arc. Mesh disposes when the animation ends. */
+  addProjectileAnim(projectileType, fromCol, fromRow, toCol, toRow, opts = {}) {
+    if (!this._scene || !this._babylon) return;
+    const BABYLON = this._babylon;
+    const { x: fromX, z: fromZ } = hexToWorld(fromCol, fromRow);
+    const { x: toX,   z: toZ   } = hexToWorld(toCol,   toRow);
+    const duration = opts.duration ?? 320;
+    const FRAMES   = Math.max(6, Math.round(duration / 1000 * 60));
+
+    const ball = BABYLON.MeshBuilder.CreateSphere(
+      `proj_${projectileType ?? 'sparkle'}_${fromCol}_${fromRow}_${Date.now()}`,
+      { diameter: 0.25 }, this._scene,
+    );
+    ball.isPickable = false;
+    const mat = new BABYLON.StandardMaterial(`projmat_${ball.uniqueId}`, this._scene);
+    const [r, g, b] = projectileColor01(projectileType);
+    mat.diffuseColor  = new BABYLON.Color3(r, g, b);
+    mat.emissiveColor = new BABYLON.Color3(r, g, b);
+    mat.specularColor = new BABYLON.Color3(0, 0, 0);
+    ball.material = mat;
+
+    // Generate a 3-key arc: source, apex (midpoint + bump), target.
+    const apexY = 0.6 + Math.hypot(toX - fromX, toZ - fromZ) * 0.12;
+    const midX  = (fromX + toX) * 0.5;
+    const midZ  = (fromZ + toZ) * 0.5;
+    ball.position.set(fromX, 0.5, fromZ);
+
+    const animPos = new BABYLON.Animation('projPos', 'position', 60,
+      BABYLON.Animation.ANIMATIONTYPE_VECTOR3, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    animPos.setKeys([
+      { frame: 0,           value: new BABYLON.Vector3(fromX, 0.5, fromZ) },
+      { frame: FRAMES / 2,  value: new BABYLON.Vector3(midX,  apexY, midZ) },
+      { frame: FRAMES,      value: new BABYLON.Vector3(toX,   0.5, toZ) },
+    ]);
+
+    const promise = new Promise(resolve => {
+      this._scene.beginDirectAnimation(ball, [animPos], 0, FRAMES, false, 1, () => {
+        if (typeof opts.onArrive === 'function') {
+          try { opts.onArrive(); } catch (_) { /* swallow — playback continues */ }
+        }
+        ball.dispose();
+        mat.dispose();
+        resolve();
+      });
+    });
+    this._trackAnim(promise);
+  }
+
+  /** No-op for the 3D path — projectile meshes self-dispose when their
+   *  animation ends, so there is no detached "in-flight" list to clear. */
+  clearAllProjectileAnims() { /* projectiles self-dispose */ }
+
+  // ─── Attack hex flash ────────────────────────────────────────────────────
+
+  /** Briefly tint the attacker and target tiles' emissive colour red.
+   *  Restores the original material when the timeout fires so the tiles
+   *  return to their normal hue. */
+  addAttackAnim(actorCol, actorRow, targetCol, targetRow) {
+    if (!this._scene || !this._babylon) return;
+    this._flashTile(actorCol,  actorRow,  [0.45, 0.20, 0.05]); // amber actor
+    this._flashTile(targetCol, targetRow, [0.55, 0.10, 0.10]); // red target
+  }
+
+  _flashTile(col, row, emissive01) {
+    if (!this._scene || !this._babylon) return;
+    const tileMesh = this._tileMeshes.find(m => m.metadata?.col === col && m.metadata?.row === row);
+    if (!tileMesh) return;
+    const BABYLON = this._babylon;
+    // Clone the current material so per-flash state doesn't leak into the
+    // shared per-colour material cache (every grass tile shares one material).
+    const original = tileMesh.material;
+    const flashMat = new BABYLON.StandardMaterial(`flash_${col}_${row}_${Date.now()}`, this._scene);
+    flashMat.diffuseColor  = original.diffuseColor?.clone() ?? new BABYLON.Color3(0.4, 0.4, 0.4);
+    flashMat.specularColor = new BABYLON.Color3(0, 0, 0);
+    flashMat.emissiveColor = new BABYLON.Color3(emissive01[0], emissive01[1], emissive01[2]);
+    tileMesh.material = flashMat;
+
+    const duration = 220;
+    const promise = new Promise(resolve => {
+      setTimeout(() => {
+        // Defensive: tile may have been disposed (map rebuild) — only restore
+        // if the tile mesh is still in the scene.
+        if (!tileMesh.isDisposed?.()) {
+          tileMesh.material = original;
+        }
+        flashMat.dispose();
+        resolve();
+      }, duration);
+    });
+    this._trackAnim(promise);
+  }
+
+  // ─── HP-change flash + floating text ─────────────────────────────────────
+
+  /** Floating "-2" / "+1" text above a hex when an entity gains/loses HP. */
+  addHpChangeFlash(col, row, delta) {
+    if (!this._scene || !this._babylon || !delta) return;
+    const label = delta < 0 ? `${delta}` : `+${delta}`;
+    const colour = delta < 0 ? '#ff5050' : '#60ff70';
+    this._spawnFloatingText(col, row, label, colour, 900);
+  }
+
+  /** Generic hex flash — used for combat result text ("HIT 2", "CRUSH 3",
+   *  "MISS") and other one-shot floaters. The colour/duration knobs match the
+   *  2D `addFlash` signature so callers don't need to know which renderer is
+   *  active. Background colour is ignored — 3D floaters don't have a fill. */
+  addFlash(col, row, text, _color, durationMs = 900, fontScale = 0.85, textColor = null) {
+    if (!this._scene || !this._babylon) return;
+    if (!text) return; // 2D used empty-text flashes for hex tints; tint goes through addAttackAnim now
+    this._spawnFloatingText(col, row, String(text), textColor ?? '#ffe0a0', durationMs, fontScale);
+  }
+
+  clearFlashes() {
+    if (!this._scene) return;
+    // Floating-text meshes manage their own lifecycle through Babylon
+    // animations; if anyone wants to brute-force clear them mid-round, they
+    // can iterate the scene's transient floater group. For now, no-op — the
+    // floaters expire on their own ~700ms after spawn and they're cosmetic.
+  }
+
+  _spawnFloatingText(col, row, text, hexColor = '#ffe0a0', durationMs = 700, fontScale = 1) {
+    if (typeof document === 'undefined') return;
+    const BABYLON = this._babylon;
+    const { x, z } = hexToWorld(col, row);
+
+    // 256×96 dynamic texture, larger than necessary so the text reads sharp
+    // at any camera distance up to the upperRadiusLimit.
+    const tex = new BABYLON.DynamicTexture(`floatTex_${Date.now()}`, { width: 256, height: 96 }, this._scene, false);
+    tex.hasAlpha = true;
+    const ctx = tex.getContext();
+    ctx.clearRect(0, 0, 256, 96);
+    ctx.font = `bold ${Math.round(56 * fontScale)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillText(text, 130, 50);
+    ctx.fillStyle = hexColor;
+    ctx.fillText(text, 128, 48);
+    tex.update();
+
+    const plane = BABYLON.MeshBuilder.CreatePlane(`float_${col}_${row}_${Date.now()}`,
+      { width: 1.6, height: 0.6 }, this._scene);
+    plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    plane.isPickable    = false;
+    const mat = new BABYLON.StandardMaterial(`floatMat_${plane.uniqueId}`, this._scene);
+    mat.diffuseTexture = tex;
+    mat.opacityTexture = tex;
+    mat.useAlphaFromDiffuseTexture = true;
+    mat.specularColor  = new BABYLON.Color3(0, 0, 0);
+    mat.emissiveColor  = new BABYLON.Color3(1, 1, 1);
+    mat.backFaceCulling = false;
+    plane.material = mat;
+
+    const startY = STANDEE_BASE_HEIGHT * STANDEE_LEADER_HEIGHT_MUL + 0.4;
+    const endY   = startY + 1.2;
+    plane.position.set(x, startY, z);
+    plane.visibility = 1;
+
+    const FRAMES_FLOAT = Math.max(6, Math.round(durationMs / 1000 * 60));
+    const animPos = new BABYLON.Animation('floatY', 'position.y', 60,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    animPos.setKeys([{ frame: 0, value: startY }, { frame: FRAMES_FLOAT, value: endY }]);
+
+    const animFade = new BABYLON.Animation('floatA', 'visibility', 60,
+      BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+    // Hold full alpha for half the duration then fade — matches the 2D feel.
+    animFade.setKeys([
+      { frame: 0,                       value: 1 },
+      { frame: Math.floor(FRAMES_FLOAT / 2), value: 1 },
+      { frame: FRAMES_FLOAT,            value: 0 },
+    ]);
+
+    const promise = new Promise(resolve => {
+      this._scene.beginDirectAnimation(plane, [animPos, animFade], 0, FRAMES_FLOAT, false, 1, () => {
+        plane.dispose();
+        mat.dispose();
+        tex.dispose();
+        resolve();
+      });
+    });
+    this._trackAnim(promise);
+  }
+
+  // ─── HP bars ─────────────────────────────────────────────────────────────
+
+  /** Ensure the entity has an HP bar mesh parented to its base disc, and the
+   *  texture matches the current HP / maxHP ratio. */
+  _syncHpBar(standee, entity) {
+    if (!this._scene || !this._babylon || typeof document === 'undefined') return;
+    if (entity.hp == null || entity.maxHp == null) return;
+    let entry = this._hpBars.get(entity.id);
+    if (!entry) entry = this._createHpBar(standee, entity);
+    if (!entry) return;
+    if (entry.lastHp === entity.hp && entry.lastMax === entity.maxHp) return;
+    this._redrawHpBarTexture(entry, entity.hp, entity.maxHp);
+    entry.lastHp  = entity.hp;
+    entry.lastMax = entity.maxHp;
+  }
+
+  _createHpBar(standee, entity) {
+    const BABYLON = this._babylon;
+    if (typeof document === 'undefined') return null;
+    const tex = new BABYLON.DynamicTexture(`hpTex_${entity.id}`, { width: 128, height: 24 }, this._scene, false);
+    tex.hasAlpha = true;
+    const mat = new BABYLON.StandardMaterial(`hpMat_${entity.id}`, this._scene);
+    mat.diffuseTexture = tex;
+    mat.opacityTexture = tex;
+    mat.useAlphaFromDiffuseTexture = true;
+    mat.specularColor = new BABYLON.Color3(0, 0, 0);
+    mat.emissiveColor = new BABYLON.Color3(1, 1, 1);
+    mat.backFaceCulling = false;
+
+    const plane = BABYLON.MeshBuilder.CreatePlane(`hp_${entity.id}`,
+      { width: 0.6, height: 0.12 }, this._scene);
+    plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    plane.isPickable    = false;
+    plane.material      = mat;
+    plane.parent        = standee.base;
+    // Local position relative to the base disc (which sits at STANDEE_BASE_Y_OFFSET).
+    const hMul = standee.leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
+    plane.position.set(0, STANDEE_BASE_HEIGHT * hMul + 0.2, 0);
+
+    const entry = { plane, mat, tex, lastHp: -1, lastMax: -1 };
+    this._hpBars.set(entity.id, entry);
+    return entry;
+  }
+
+  _redrawHpBarTexture(entry, hp, maxHp) {
+    const tex = entry.tex;
+    const ctx = tex.getContext();
+    const W = 128, H = 24;
+    const ratio = Math.max(0, Math.min(1, hp / Math.max(1, maxHp)));
+    const colour = hpBarColor(hp, maxHp);
+    ctx.clearRect(0, 0, W, H);
+    // Frame
+    ctx.fillStyle = 'rgba(0,0,0,0.85)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(40,40,40,1)';
+    ctx.fillRect(2, 2, W - 4, H - 4);
+    // Fill
+    ctx.fillStyle = colour;
+    ctx.fillRect(2, 2, Math.round((W - 4) * ratio), H - 4);
+    // Outline
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth   = 1;
+    ctx.strokeRect(0.5, 0.5, W - 1, H - 1);
+    tex.update();
+  }
+
+  _disposeHpBar(entityId) {
+    const entry = this._hpBars.get(entityId);
+    if (!entry) return;
+    entry.plane.dispose();
+    entry.mat.dispose();
+    entry.tex.dispose();
+    this._hpBars.delete(entityId);
+  }
+
+  // ─── Plan ghost arrows ───────────────────────────────────────────────────
+
+  /** Rebuild the plan-ghost arrow overlay from `this.planGhostSteps`. We
+   *  rebuild from scratch every draw() — the per-call cost is a handful of
+   *  meshes (one per MOVE step) and avoids hand-tracking dirty plan state. */
+  _syncPlanArrows() {
+    // Dispose previous frame's arrow geometry first.
+    for (const arrow of this._planArrowMeshes) {
+      arrow.line?.dispose();
+      arrow.badge?.dispose();
+      arrow.badgeMat?.dispose();
+      arrow.badgeTex?.dispose();
+    }
+    this._planArrowMeshes = [];
+
+    const steps = this.planGhostSteps;
+    if (!steps || !this._babylon || !this._scene) return;
+
+    const BABYLON = this._babylon;
+    for (const step of steps) {
+      if (!step.arrow) continue;
+      const { fromCol, fromRow, toCol, toRow, entityId } = step.arrow;
+      // Owner colour: prefer the entity's per-player colour, fall back to
+      // faction theme, then neutral white.
+      const ent   = this.state?.entities?.find?.(e => e.id === entityId);
+      const ownerColor = this._ownerColorFor(ent ?? {});
+
+      const polyline = planArrowPolyline(fromCol, fromRow, toCol, toRow, 0.85);
+      const points = polyline.map(p => new BABYLON.Vector3(p.x, p.y, p.z));
+
+      const dashed = BABYLON.MeshBuilder.CreateDashedLines(
+        `planArrow_${entityId}_${step.stepNumber ?? 0}`,
+        { points, dashNb: 12, dashSize: 4, gapSize: 3 }, this._scene,
+      );
+      const [r, g, b] = cssHexToRgb01(ownerColor);
+      dashed.color = new BABYLON.Color3(r, g, b);
+      dashed.alpha = 0.85;
+      dashed.isPickable = false;
+
+      // Numbered badge at the arrow head — small billboarded plane.
+      let badge = null, badgeMat = null, badgeTex = null;
+      if (step.stepNumber != null && typeof document !== 'undefined') {
+        badgeTex = new BABYLON.DynamicTexture(`badgeTex_${entityId}_${step.stepNumber}`,
+          { width: 64, height: 64 }, this._scene, false);
+        badgeTex.hasAlpha = true;
+        const ctx = badgeTex.getContext();
+        ctx.clearRect(0, 0, 64, 64);
+        ctx.fillStyle = 'rgba(0,0,0,0.85)';
+        ctx.beginPath(); ctx.arc(32, 32, 26, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = ownerColor;
+        ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.arc(32, 32, 26, 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 36px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(step.stepNumber), 32, 34);
+        badgeTex.update();
+
+        badgeMat = new BABYLON.StandardMaterial(`badgeMat_${entityId}_${step.stepNumber}`, this._scene);
+        badgeMat.diffuseTexture = badgeTex;
+        badgeMat.opacityTexture = badgeTex;
+        badgeMat.useAlphaFromDiffuseTexture = true;
+        badgeMat.specularColor = new BABYLON.Color3(0, 0, 0);
+        badgeMat.emissiveColor = new BABYLON.Color3(1, 1, 1);
+        badgeMat.backFaceCulling = false;
+
+        badge = BABYLON.MeshBuilder.CreatePlane(`badge_${entityId}_${step.stepNumber}`,
+          { width: 0.45, height: 0.45 }, this._scene);
+        badge.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+        badge.isPickable    = false;
+        badge.material      = badgeMat;
+        const { x: tx, z: tz } = hexToWorld(toCol, toRow);
+        badge.position.set(tx, 1.0, tz);
+      }
+
+      this._planArrowMeshes.push({ line: dashed, badge, badgeMat, badgeTex });
+    }
+  }
 }
 
 // ─── Phase 3 pure helpers (exported for tests) ─────────────────────────────
@@ -933,4 +1512,122 @@ export function diffStandees(existingIds, entities) {
     if (!liveIds.has(id)) remove.add(id);
   }
   return { add, keep, remove };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase 5 pure helpers — exported for tests (no Babylon, no DOM)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Duration (ms) of a single-hex slide. ~250ms — fast enough to keep pace
+ *  with the resolution loop but slow enough to read direction. */
+export const MOVE_ANIM_MS = 250;
+
+/** Duration (ms) of an attack-lunge slide to the midpoint. ~200ms — sharper
+ *  than a move; sells the lunge as an aggressive, decisive action. */
+export const LUNGE_ANIM_MS = 200;
+
+/** Duration (ms) of a projectile arc. ~320ms — matches the 2D path's
+ *  default `addProjectileAnim` duration. */
+export const PROJECTILE_ANIM_MS = 320;
+
+/** Default lifetime (ms) of a floating combat text label. ~700ms — long
+ *  enough to read "CRUSH 3", short enough not to back up the queue. */
+export const FLOAT_TEXT_MS = 700;
+
+/** HP-bar height (world units) above the standee's base disc. */
+export const HP_BAR_Y_ABOVE_BASE = 0.2;
+
+/** HP-bar ratio thresholds — kept as constants so the test can assert them
+ *  without re-deriving from the rendering function. */
+export const HP_RED_BELOW    = 0.33;
+export const HP_YELLOW_BELOW = 0.66;
+
+/**
+ * Linear interpolation between two hex world positions. At t=0 returns the
+ * source, at t=1 the destination, and at t=0.5 the midpoint. Used by the
+ * standee move/lunge animations and unit-tested independently of Babylon.
+ */
+export function interpolatePosition(from, to, t) {
+  const clamped = Math.max(0, Math.min(1, t));
+  return {
+    x: from.x + (to.x - from.x) * clamped,
+    z: from.z + (to.z - from.z) * clamped,
+  };
+}
+
+/**
+ * Polyline points for a single ghost-arrow segment, raised slightly above
+ * the tile prism so the dashed line reads against the terrain. The arrow is
+ * a straight line for now (no curved/arced ghost arrows) — matches the 2D
+ * path's straight-line idiom. `height` is the world-Y the arrow floats at.
+ */
+export function planArrowPolyline(fromCol, fromRow, toCol, toRow, height = 0.85) {
+  const a = hexToWorld(fromCol, fromRow);
+  const b = hexToWorld(toCol,   toRow);
+  return [
+    { x: a.x, y: height, z: a.z },
+    { x: b.x, y: height, z: b.z },
+  ];
+}
+
+/**
+ * World-space position of the numbered badge for a plan step — sits at the
+ * arrow's terminating hex centre, slightly above the tile prism. Exposed
+ * separately from `planArrowPolyline` so callers can place the badge label
+ * without re-running the line-build math.
+ */
+export function planArrowBadgePosition(toCol, toRow, height = 1.0) {
+  const { x, z } = hexToWorld(toCol, toRow);
+  return { x, y: height, z };
+}
+
+/**
+ * Choose the HP bar fill colour given current/max HP. Thresholds:
+ *   • ratio <  HP_RED_BELOW       → red
+ *   • ratio <  HP_YELLOW_BELOW    → yellow
+ *   • ratio ≥  HP_YELLOW_BELOW    → green
+ *
+ * maxHp ≤ 0 is treated as 1 (avoid div-by-zero); negative hp clamps to 0.
+ */
+export function hpBarColor(hp, maxHp) {
+  const safeMax = Math.max(1, maxHp);
+  const ratio = Math.max(0, Math.min(1, hp / safeMax));
+  if (ratio < HP_RED_BELOW)    return '#d83333';
+  if (ratio < HP_YELLOW_BELOW) return '#d8c333';
+  return '#46c84a';
+}
+
+/**
+ * Lifecycle pose of a floating-text label at progress `t ∈ [0,1]`.
+ *
+ * Returns:
+ *   • y     — vertical offset above the spawn position (0 at t=0, 1.2 at t=1).
+ *   • alpha — opacity (1 for first half, lerps 1→0 over second half).
+ *
+ * Mirrors the keyframes set on the Babylon Animation in `_spawnFloatingText`
+ * so tests can verify the curve without a scene.
+ */
+export function floatingTextTransform(t, riseDistance = 1.2) {
+  const clamped = Math.max(0, Math.min(1, t));
+  const y = clamped * riseDistance;
+  // Alpha holds at 1 for the first half, then lerps 1→0 across the second.
+  const alpha = clamped < 0.5 ? 1 : Math.max(0, 1 - (clamped - 0.5) * 2);
+  return { y, alpha };
+}
+
+/**
+ * Projectile colour by type (linear-RGB, 0..1). Used by `addProjectileAnim`
+ * for the sphere's diffuse/emissive colour. Unknown types fall back to a
+ * neutral pale yellow.
+ */
+export function projectileColor01(projectileType) {
+  switch (projectileType) {
+    case 'sparkle':  // witch
+      return [0.4, 1.0, 0.5];
+    case 'arrow':    // hero
+    case 'crossbow':
+      return [0.85, 0.6, 0.25];
+    default:
+      return [1.0, 0.95, 0.7];
+  }
 }
