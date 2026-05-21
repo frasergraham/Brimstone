@@ -24,8 +24,26 @@ import {
   TILE_COLOR,
   BUILDING_COLOR,
 } from './tiles.js';
+import { EntityType, isLeaderType } from './entities.js';
+import { Renderer } from './renderer.js';
+import { getFactionTheme } from './theme.js';
 
 const BABYLON_CDN = 'https://cdn.jsdelivr.net/npm/@babylonjs/core@7.42.0/+esm';
+
+// ─── Standee constants (Phase 3) ────────────────────────────────────────────
+// Width / height of an ordinary unit's billboard plane and the disc beneath it.
+// Leader entities scale these up to read as "important" from far out.
+export const STANDEE_BASE_WIDTH       = 0.7;
+export const STANDEE_BASE_HEIGHT      = 1.0;
+export const STANDEE_BASE_DIAMETER    = 0.75;
+export const STANDEE_BASE_THICKNESS   = 0.06;
+export const STANDEE_LEADER_WIDTH_MUL  = 1.2;
+export const STANDEE_LEADER_HEIGHT_MUL = 1.3;
+// Y-offset for the plane so the bottom of the sprite rests on the base disc,
+// which itself sits just above the tile prism so picking prefers the standee.
+export const STANDEE_BASE_Y_OFFSET    = 0.18; // tile prism top is at 0.075; base sits clear of it
+export const FOCUS_ANIMATION_MS       = 250;
+
 
 // ─── Pure helpers (exported for tests; no Babylon dependency) ────────────────
 
@@ -146,6 +164,23 @@ export class Renderer3D {
     this._mapBuilt      = false;
     this._babylonInit   = null; // pending init promise (de-dupes draw() calls)
 
+    // ── Phase 3: standees + selection ───────────────────────────────────────
+    // Map<entityId, { plane, base, assetId, ownerKey, leader }> for incremental diff.
+    this._entityStandees   = new Map();
+    // Cache: assetId → BABYLON.Texture (built lazily from the loaded tilemap).
+    this._portraitTextures = new Map();
+    // Cache: BABYLON.StandardMaterial per asset id (sprite-textured plane material).
+    this._portraitMaterials = new Map();
+    // Cache: base material per "ownerKey" so all standees of one player share a material.
+    this._baseMaterialCache = new Map();
+    // Selection-highlight material (emissive cyan) shared across all selected bases.
+    this._selectedBaseMaterial = null;
+    // Last selectedEntityId we acted on, so we only retarget the camera on change.
+    this._lastSelectedEntityId = null;
+    // Backing image + sprite rects for the tilemap (loaded by loadImages()).
+    this._tilemapImg  = null;
+    this._spriteRects = null;
+
     // Locked camera angles (Phase 2). Yaw rotation lands in Phase 4; tilt
     // is permanently the locked-isometric view.
     this._lockedAlpha = -Math.PI / 4;
@@ -154,14 +189,21 @@ export class Renderer3D {
 
   // ─── Required interface (real implementations) ───────────────────────────
 
-  /** Lazy-init Babylon on first draw. Babylon owns its own render loop, so
-   *  subsequent draw() calls become a no-op. */
+  /** Lazy-init Babylon on first draw. Babylon owns its own render loop; on
+   *  later draw() calls we just diff entities and apply selection changes.
+   *  Most state writes (selectedEntityId, entity moves) flow through draw()
+   *  via main.js's onRedraw, so this is where the standee diff and camera
+   *  focus updates happen. */
   draw() {
-    if (this._engine) return;          // Babylon already running its own loop
-    if (this._babylonInit) return;     // init in flight
-    this._babylonInit = this._initBabylon().catch(err => {
-      console.error('[Renderer3D] Babylon init failed:', err);
-    });
+    if (!this._engine && !this._babylonInit) {
+      this._babylonInit = this._initBabylon().catch(err => {
+        console.error('[Renderer3D] Babylon init failed:', err);
+      });
+      return;
+    }
+    if (!this._scene) return; // init in flight
+    this._syncEntityStandees();
+    this._applySelectionAndFocus();
   }
 
   resize() {
@@ -176,10 +218,26 @@ export class Renderer3D {
     if (this._engine) this._engine.resize();
   }
 
-  /** No images needed in Phase 2 — solid-colour materials only. Resolve
-   *  immediately and fire onImagesLoaded so callers depending on the signal
-   *  proceed. Tile-texturing is deferred to Phase 3+. */
-  async loadImages() {
+  /** Load assets/tilemap.png so entity standees can crop portrait sprites out
+   *  of it. Falls back gracefully (faceless coloured planes) if the tilemap
+   *  is unreachable — the renderer must never block the game on a 404. */
+  async loadImages(basePath = 'assets') {
+    if (typeof Image === 'undefined') {
+      if (this.onImagesLoaded) this.onImagesLoaded();
+      return;
+    }
+    const img = new Image();
+    await new Promise(resolve => {
+      img.onload  = resolve;
+      img.onerror = resolve;
+      img.src = `${basePath}/tilemap.png`;
+    });
+    if (img.naturalWidth) {
+      this._tilemapImg  = img;
+      // Reuse the 2D renderer's sprite-rect layout — single source of truth.
+      const { rects } = Renderer._buildSpriteRects();
+      this._spriteRects = rects;
+    }
     if (this.onImagesLoaded) this.onImagesLoaded();
   }
 
@@ -201,15 +259,22 @@ export class Renderer3D {
     this._camera.radius = this._radiusForFit(fitWidth, fitDepth);
   }
 
-  /** Project a canvas pixel onto the map by raycasting against tile meshes
-   *  (each carries its {col,row} in mesh.metadata). */
+  /** Project a canvas pixel onto the map by raycasting against tile and
+   *  standee meshes — each carries `{col,row}` (plus `kind` and possibly
+   *  `entityId`) in `mesh.metadata`. Standees are raised above tiles so the
+   *  closest-hit picker prefers them, which means clicking a unit returns
+   *  the unit's hex even when its base partially overlaps a neighbour. */
   canvasToHex(x, y) {
     if (!this._scene) return { col: -1, row: -1 };
-    const pick = this._scene.pick(x, y, (mesh) =>
-      mesh.metadata && mesh.metadata.kind === 'tile');
+    const pick = this._scene.pick(x, y, (mesh) => {
+      const k = mesh.metadata?.kind;
+      return k === 'tile' || k === 'entity';
+    });
     if (pick?.hit && pick.pickedMesh?.metadata) {
-      const { col, row } = pick.pickedMesh.metadata;
-      return { col, row };
+      const md = pick.pickedMesh.metadata;
+      if (typeof md.col === 'number' && typeof md.row === 'number') {
+        return { col: md.col, row: md.row };
+      }
     }
     return { col: -1, row: -1 };
   }
@@ -330,6 +395,9 @@ export class Renderer3D {
     // Build the map from current state and frame it.
     this._buildMap();
     this._frameFullMap();
+    // Initial standee population so the first frame already has units.
+    this._syncEntityStandees();
+    this._applySelectionAndFocus();
 
     engine.runRenderLoop(() => scene.render());
     engine.resize();
@@ -498,4 +566,306 @@ export class Renderer3D {
       Math.min(this._camera.upperRadiusLimit ?? 200, radius),
     );
   }
+
+  // ─── Phase 3: entities & selection ─────────────────────────────────────────
+  //
+  // Standees are billboarded textured planes sitting on solid coloured discs,
+  // one pair per entity. Selection state lives in `this.selectedEntityId` —
+  // written from ui.js _selectEntity() via the renderer-agnostic interface
+  // (the 2D path reads the same property in its draw loop). draw() runs the
+  // diff every redraw; standees are added/removed/moved incrementally.
+
+  /** Compute a stable "owner key" we can use to colour a standee's base disc.
+   *  Prefer the entity's per-player colour (`e.color` is set by the game on
+   *  leaders and propagated to summons/recruits); fall back to the faction
+   *  primary colour and finally a neutral grey for stray neutrals. */
+  _ownerColorFor(entity) {
+    if (entity?.color) return entity.color;
+    if (entity?.owner) {
+      const theme = getFactionTheme(entity.owner);
+      if (theme?.primary) return theme.primary;
+    }
+    return '#888888';
+  }
+
+  /** Map an entity to the asset id used by the tilemap sprite atlas. */
+  _assetIdFor(entity) {
+    if (!entity) return null;
+    if (entity.type === EntityType.SURVIVOR) {
+      return Renderer.survivorAssetId(entity.title);
+    }
+    // Non-survivor types map 1:1 onto the asset ids ('paladin', 'witch', ...).
+    return entity.type;
+  }
+
+  /** Lazy-create (and cache) a Babylon Texture for a given sprite asset id by
+   *  cropping it out of the tilemap into an offscreen canvas. Returns null if
+   *  the tilemap hasn't loaded or the asset id is unknown — caller falls back
+   *  to a plain coloured plane. */
+  _portraitTextureFor(assetId) {
+    if (!assetId || !this._tilemapImg || !this._spriteRects) return null;
+    if (this._portraitTextures.has(assetId)) return this._portraitTextures.get(assetId);
+    const rect = this._spriteRects.get(assetId);
+    if (!rect) return null;
+    if (typeof document === 'undefined') return null;
+    const c = document.createElement('canvas');
+    c.width = c.height = 256;
+    c.getContext('2d').drawImage(
+      this._tilemapImg,
+      rect.x, rect.y, rect.size, rect.size,
+      0, 0, c.width, c.height,
+    );
+    const BABYLON = this._babylon;
+    const tex = new BABYLON.Texture(
+      c.toDataURL(), this._scene, true, false,
+      BABYLON.Texture.TRILINEAR_SAMPLINGMODE,
+    );
+    tex.hasAlpha = true;
+    this._portraitTextures.set(assetId, tex);
+    return tex;
+  }
+
+  /** Per-asset plane material, textured with the entity portrait (or a flat
+   *  diffuse fallback when the tilemap is unavailable). */
+  _planeMaterialFor(assetId) {
+    const key = assetId ?? '__blank__';
+    if (this._portraitMaterials.has(key)) return this._portraitMaterials.get(key);
+    const BABYLON = this._babylon;
+    const mat = new BABYLON.StandardMaterial(`standee_${key}`, this._scene);
+    const tex = this._portraitTextureFor(assetId);
+    if (tex) {
+      mat.diffuseTexture     = tex;
+      mat.opacityTexture     = tex;
+      mat.useAlphaFromDiffuseTexture = true;
+      mat.specularColor = new BABYLON.Color3(0, 0, 0);
+      // Emissive so portraits read at any phase / light angle.
+      mat.emissiveColor = new BABYLON.Color3(0.4, 0.4, 0.4);
+    } else {
+      // Tilemap unavailable — use neutral pale fill so the plane still reads.
+      mat.diffuseColor  = new BABYLON.Color3(0.85, 0.85, 0.85);
+      mat.specularColor = new BABYLON.Color3(0, 0, 0);
+    }
+    mat.backFaceCulling = false; // BillboardMode rotates plane — both sides visible
+    this._portraitMaterials.set(key, mat);
+    return mat;
+  }
+
+  /** Per-owner base material (filled with the player's colour). */
+  _baseMaterialForOwner(ownerKey) {
+    if (this._baseMaterialCache.has(ownerKey)) return this._baseMaterialCache.get(ownerKey);
+    const BABYLON = this._babylon;
+    const [r, g, b] = cssHexToRgb01(ownerKey);
+    const mat = new BABYLON.StandardMaterial(`base_${ownerKey}`, this._scene);
+    mat.diffuseColor  = new BABYLON.Color3(r, g, b);
+    mat.specularColor = new BABYLON.Color3(0.04, 0.04, 0.04);
+    this._baseMaterialCache.set(ownerKey, mat);
+    return mat;
+  }
+
+  /** Cyan glow material applied to the selected entity's base. */
+  _getSelectedBaseMaterial() {
+    if (this._selectedBaseMaterial) return this._selectedBaseMaterial;
+    const BABYLON = this._babylon;
+    const mat = new BABYLON.StandardMaterial('base_selected', this._scene);
+    mat.diffuseColor  = new BABYLON.Color3(0.20, 0.85, 0.95);
+    mat.emissiveColor = new BABYLON.Color3(0.25, 0.85, 0.95);
+    mat.specularColor = new BABYLON.Color3(0, 0, 0);
+    this._selectedBaseMaterial = mat;
+    return mat;
+  }
+
+  /** Build the {plane, base} mesh pair for a single entity. */
+  _buildStandeeMesh(entity) {
+    const BABYLON = this._babylon;
+    const scene   = this._scene;
+    const leader  = isLeaderType(entity.type);
+    const wMul    = leader ? STANDEE_LEADER_WIDTH_MUL  : 1;
+    const hMul    = leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
+
+    const plane = BABYLON.MeshBuilder.CreatePlane(
+      `unit_${entity.id}`,
+      { width: STANDEE_BASE_WIDTH * wMul, height: STANDEE_BASE_HEIGHT * hMul },
+      scene,
+    );
+    plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_Y;
+    plane.material      = this._planeMaterialFor(this._assetIdFor(entity));
+    plane.metadata      = { kind: 'entity', entityId: entity.id, col: entity.col, row: entity.row };
+
+    const base = BABYLON.MeshBuilder.CreateCylinder(
+      `unitbase_${entity.id}`,
+      {
+        tessellation: 24,
+        height:   STANDEE_BASE_THICKNESS,
+        diameter: STANDEE_BASE_DIAMETER * (leader ? 1.15 : 1),
+      },
+      scene,
+    );
+    base.material = this._baseMaterialForOwner(this._ownerColorFor(entity));
+    // Don't pick on the base — let the camera-facing plane be the click target
+    // for a more predictable hit area.
+    base.isPickable = false;
+
+    this._positionStandee({ plane, base, leader }, entity);
+    return { plane, base, leader };
+  }
+
+  /** Place an existing standee on its entity's tile. */
+  _positionStandee(standee, entity) {
+    const { x, z } = hexToWorld(entity.col, entity.row);
+    const hMul = standee.leader ? STANDEE_LEADER_HEIGHT_MUL : 1;
+    standee.plane.position.x = x;
+    standee.plane.position.z = z;
+    // Sprite vertical centre = base disc top + half plane height.
+    standee.plane.position.y = STANDEE_BASE_Y_OFFSET
+      + STANDEE_BASE_THICKNESS / 2
+      + (STANDEE_BASE_HEIGHT * hMul) / 2;
+    standee.base.position.x = x;
+    standee.base.position.z = z;
+    standee.base.position.y = STANDEE_BASE_Y_OFFSET;
+    // Keep the metadata's col/row in sync so picking returns the current tile.
+    standee.plane.metadata.col = entity.col;
+    standee.plane.metadata.row = entity.row;
+  }
+
+  /** Diff the state's live entities against the standee map: add new ones,
+   *  remove dead/missing ones, move kept ones to their current hex. */
+  _syncEntityStandees() {
+    if (!this._scene || !this.state?.entities) return;
+    const seen = new Set();
+    for (const e of this.state.entities) {
+      if (!e || !e.alive) continue;
+      if (typeof e.col !== 'number' || typeof e.row !== 'number') continue;
+      seen.add(e.id);
+      let standee = this._entityStandees.get(e.id);
+      if (!standee) {
+        standee = this._buildStandeeMesh(e);
+        this._entityStandees.set(e.id, standee);
+      } else {
+        this._positionStandee(standee, e);
+        // Owner colour can change (e.g. recruit changing sides — defensive).
+        const expected = this._baseMaterialForOwner(this._ownerColorFor(e));
+        // If the entity is currently selected, _applySelectionAndFocus owns the
+        // base material — don't fight it here.
+        if (standee.base.material !== this._getSelectedBaseMaterial()
+            && standee.base.material !== expected) {
+          standee.base.material = expected;
+        }
+      }
+    }
+    // Dispose standees for entities that no longer exist or just died.
+    for (const [id, standee] of this._entityStandees) {
+      if (!seen.has(id)) {
+        standee.plane.dispose();
+        standee.base.dispose();
+        this._entityStandees.delete(id);
+      }
+    }
+  }
+
+  /** Restore a standee's owner base material (clearing the selection glow). */
+  _restoreBaseColor(standee, entityId) {
+    const entity = this.state?.entities?.find?.(e => e.id === entityId);
+    if (!entity) return;
+    standee.base.material = this._baseMaterialForOwner(this._ownerColorFor(entity));
+  }
+
+  /** Apply the renderer's selectedEntityId: swap base materials to highlight
+   *  the chosen unit, restore previous selection, and slide the camera target
+   *  to the new selection. */
+  _applySelectionAndFocus() {
+    if (!this._scene) return;
+    const newId  = this.selectedEntityId ?? null;
+    const prevId = this._lastSelectedEntityId;
+    if (newId === prevId) return;
+
+    if (prevId && this._entityStandees.has(prevId)) {
+      this._restoreBaseColor(this._entityStandees.get(prevId), prevId);
+    }
+    if (newId && this._entityStandees.has(newId)) {
+      const standee = this._entityStandees.get(newId);
+      standee.base.material = this._getSelectedBaseMaterial();
+      this._focusCameraOnEntity(newId);
+    }
+    this._lastSelectedEntityId = newId;
+  }
+
+  /** Smoothly slide the camera target to the entity's tile centre over
+   *  FOCUS_ANIMATION_MS. Radius is intentionally left alone — only the focus
+   *  point moves, matching how the 2D path pans without zoom changes. */
+  _focusCameraOnEntity(entityId) {
+    const standee = this._entityStandees.get(entityId);
+    if (!standee || !this._camera || !this._babylon) return;
+    const BABYLON = this._babylon;
+    const targetX = standee.base.position.x;
+    const targetZ = standee.base.position.z;
+    const newTarget = new BABYLON.Vector3(targetX, 0, targetZ);
+
+    // Build a quick scalar animation on the camera's target vector. Babylon's
+    // `Animation` with `ANIMATIONTYPE_VECTOR3` interpolates the camera's
+    // target each frame — no manual rAF loop needed.
+    const fps   = 60;
+    const totalFrames = Math.max(1, Math.round((FOCUS_ANIMATION_MS / 1000) * fps));
+    const anim = new BABYLON.Animation(
+      'cam_focus_target',
+      'target',
+      fps,
+      BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
+      BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT,
+    );
+    // Ease-out so the camera decelerates as it arrives at the unit.
+    const ease = new BABYLON.QuadraticEase();
+    ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
+    anim.setEasingFunction(ease);
+    anim.setKeys([
+      { frame: 0,           value: this._camera.target.clone() },
+      { frame: totalFrames, value: newTarget },
+    ]);
+    this._scene.stopAnimation(this._camera);
+    this._scene.beginDirectAnimation(this._camera, [anim], 0, totalFrames, false);
+  }
+}
+
+// ─── Phase 3 pure helpers (exported for tests) ─────────────────────────────
+
+/** World-space position of an entity's standee base centre. Useful for
+ *  asserting expected camera targets and standee positions without touching
+ *  Babylon. Y is the height at which the base disc sits on the tile prism. */
+export function entityStandeeWorldPosition(col, row, radius = HEX_RADIUS_WORLD) {
+  const { x, z } = hexToWorld(col, row, radius);
+  return { x, y: STANDEE_BASE_Y_OFFSET, z };
+}
+
+/** Choose the base disc colour for an entity. Mirrors `_ownerColorFor` so it
+ *  can be unit-tested without instantiating the renderer. */
+export function entityBaseColor(entity) {
+  if (entity?.color) return entity.color;
+  if (entity?.owner) {
+    const theme = getFactionTheme(entity.owner);
+    if (theme?.primary) return theme.primary;
+  }
+  return '#888888';
+}
+
+/**
+ * Pure-functional diff of an existing standee map against a list of live
+ * entities. Returns the {add, keep, remove} bucket sets so callers can drive
+ * the actual mesh creation/disposal separately. Living + on-map = candidate;
+ * everything else is filtered out before bucketing.
+ */
+export function diffStandees(existingIds, entities) {
+  const existing = existingIds instanceof Set ? existingIds : new Set(existingIds);
+  const liveIds  = new Set();
+  for (const e of entities || []) {
+    if (!e || e.alive === false) continue;
+    if (typeof e.col !== 'number' || typeof e.row !== 'number') continue;
+    liveIds.add(e.id);
+  }
+  const add = new Set(), keep = new Set(), remove = new Set();
+  for (const id of liveIds) {
+    (existing.has(id) ? keep : add).add(id);
+  }
+  for (const id of existing) {
+    if (!liveIds.has(id)) remove.add(id);
+  }
+  return { add, keep, remove };
 }
