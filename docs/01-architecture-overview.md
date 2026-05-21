@@ -113,6 +113,10 @@ The game runs in two distinct modes that share core logic but have separate orch
 | `PlanAction[]` | Array | Ordered queue of planned actions per player |
 | `StepRecord[]` | Array | Resolution output: per-step events + entity snapshots |
 
+## Dual Renderer (2D / 3D)
+
+The client supports two renderer implementations behind a common interface: the production 2D Canvas renderer (`src/renderer.js`) and an experimental Babylon.js 3D renderer (`src/renderer-3d.js`). `main.js` picks one at boot based on the `brimstone:renderer` localStorage value (`'2d'` is the default; the toggle lives in the **Options** setup card). Both classes share the constructor signature `(canvas, state)` and expose the same public method surface — `tests/renderer-interface.test.js` pins that contract so a new method on `Renderer` cannot land without a matching stub on `Renderer3D`. Babylon is loaded lazily from a pinned CDN ESM bundle inside the 3D renderer's first `draw()` call, which keeps the module importable in node-test and keeps page load free of Babylon for the 2D path. The 3D renderer is currently scaffolding — a single hex prism on a locked isometric scene — and will gain real tile/entity/animation rendering in subsequent phases.
+
 ## Technology Stack
 
 - **Client:** Vanilla JS ES modules, HTML5 Canvas 2D, CSS custom properties

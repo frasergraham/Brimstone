@@ -4,6 +4,20 @@ import { AppMode, getMode, setMode, isInGame, isAnimating, shouldBufferMessages,
 import { initServerSelector } from './server-selector.js';
 import { GameState, phaseForRound } from './game.js';
 import { Renderer }          from './renderer.js';
+import { Renderer3D }        from './renderer-3d.js';
+
+/**
+ * Pick the renderer class based on the 'brimstone:renderer' localStorage
+ * value. Defaults to the 2D canvas renderer; 3D is opt-in and behind a
+ * setup-screen toggle. Returns the constructor (not an instance) so callers
+ * can `new` it with the right (canvas, state) pair.
+ */
+function _pickRenderer() {
+  try {
+    if (localStorage.getItem('brimstone:renderer') === '3d') return Renderer3D;
+  } catch { /* localStorage may be unavailable in some sandboxes */ }
+  return Renderer;
+}
 import { UIController, UIMode } from './ui.js';
 import { WITCH_PERSONALITIES }   from './ai.js';
 import { WitchAIEngine, estimateCombat } from './ai-engine.js';
@@ -210,7 +224,7 @@ function _setupLocalUI(canvas, localWitchAI, localHeroAI, autoplay) {
   // submit an empty plan from the old instance's _unitPlans.
   if (ui) ui.destroy();
 
-  renderer = new Renderer(canvas, state);
+  renderer = new (_pickRenderer())(canvas, state);
   renderer.resize();
   renderer.onImagesLoaded = () => { if (ui) ui._renderTurnInfo(); };
   renderer.loadImages();
@@ -1991,7 +2005,7 @@ function initOnline(mirrorState, myFaction, mpClient) {
 
   if (ui) ui.destroy();
 
-  renderer = new Renderer(canvas, state);
+  renderer = new (_pickRenderer())(canvas, state);
   renderer.resize();
   renderer.onImagesLoaded = () => { if (ui) ui._renderTurnInfo(); };
   renderer.loadImages();
@@ -2189,6 +2203,22 @@ document.getElementById('reconnect-back').addEventListener('click', () => locati
       b.classList.toggle('active', b.dataset.mode === btn.dataset.mode);
     });
   });
+}
+
+// ── Renderer toggle (2D / 3D experimental) ───────────────────────────────────
+{
+  const RENDERER_KEY = 'brimstone:renderer';
+  const select = document.getElementById('options-renderer-select');
+  const hint   = document.getElementById('options-renderer-hint');
+  if (select) {
+    const saved = localStorage.getItem(RENDERER_KEY) === '3d' ? '3d' : '2d';
+    select.value = saved;
+    select.addEventListener('change', () => {
+      const value = select.value === '3d' ? '3d' : '2d';
+      localStorage.setItem(RENDERER_KEY, value);
+      if (hint) hint.style.display = '';
+    });
+  }
 }
 
 // Initialize persistent session bar on page load
@@ -7481,7 +7511,7 @@ function initSpectator(roomId) {
   function _initSpectatorUI(mirrorState) {
     if (ui) ui.destroy();
     const canvas = document.getElementById('game-canvas');
-    renderer = new Renderer(canvas, mirrorState);
+    renderer = new (_pickRenderer())(canvas, mirrorState);
     renderer.resize();
     renderer.onImagesLoaded = () => { if (ui) ui._renderTurnInfo(); };
     renderer.loadImages();
