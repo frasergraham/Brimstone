@@ -33,8 +33,9 @@ import { fileURLToPath } from 'node:url';
 import { Renderer }   from '../src/renderer.js';
 import { Renderer3D } from '../src/renderer-3d.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SRC_DIR   = path.resolve(__dirname, '..', 'src');
+const __dirname  = path.dirname(fileURLToPath(import.meta.url));
+const SRC_DIR    = path.resolve(__dirname, '..', 'src');
+const SERVER_DIR = path.resolve(__dirname, '..', 'server');
 
 function _methodNames(cls) {
   return Object.getOwnPropertyNames(cls.prototype)
@@ -52,19 +53,23 @@ function _walkJsFiles(dir) {
   return out;
 }
 
-// Find every method name `*.renderer.<name>(` invoked from any file under src/.
-// We allow any identifier preceding `.renderer.` so `this.renderer.foo()`,
-// `ui.renderer.foo()`, and bare `renderer.foo()` all match.
-function _externalRendererMethodCallSites() {
+// Find every method name `*.renderer.<name>(` invoked from any file under src/
+// or server/. We allow any identifier preceding `.renderer.` so
+// `this.renderer.foo()`, `ui.renderer.foo()`, and bare `renderer.foo()` all
+// match. server/ is included so any future drift — backend code reaching into
+// a renderer-like object — is caught even though today there shouldn't be any.
+function _externalRendererMethodCallSites(dirs = [SRC_DIR, SERVER_DIR]) {
   const callRe = /(?:\.|\b)renderer\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
   const names = new Set();
-  for (const file of _walkJsFiles(SRC_DIR)) {
-    // Don't scan the renderers themselves — internal `this._foo()` calls aren't external.
-    const base = path.basename(file);
-    if (base === 'renderer.js' || base === 'renderer-3d.js') continue;
-    const src = readFileSync(file, 'utf8');
-    let m;
-    while ((m = callRe.exec(src)) !== null) names.add(m[1]);
+  for (const dir of dirs) {
+    for (const file of _walkJsFiles(dir)) {
+      // Don't scan the renderers themselves — internal `this._foo()` calls aren't external.
+      const base = path.basename(file);
+      if (base === 'renderer.js' || base === 'renderer-3d.js') continue;
+      const src = readFileSync(file, 'utf8');
+      let m;
+      while ((m = callRe.exec(src)) !== null) names.add(m[1]);
+    }
   }
   return names;
 }
@@ -83,7 +88,7 @@ describe('Renderer3D — interface conformance with 2D Renderer', () => {
     );
   });
 
-  test('every method invoked as *.renderer.X(...) in src/ is on Renderer3D', () => {
+  test('every method invoked as *.renderer.X(...) in src/ or server/ is on Renderer3D', () => {
     const called = _externalRendererMethodCallSites();
     const r3d    = new Set(_methodNames(Renderer3D));
 
@@ -91,9 +96,18 @@ describe('Renderer3D — interface conformance with 2D Renderer', () => {
     assert.deepEqual(
       missing,
       [],
-      `Renderer3D is missing ${missing.length} method(s) called from src/: ${missing.join(', ')}\n` +
+      `Renderer3D is missing ${missing.length} method(s) called from src/ or server/: ${missing.join(', ')}\n` +
       `Add stubs in src/renderer-3d.js so callers can swap renderers.`,
     );
+  });
+
+  test('no server/ file reaches into a renderer object today', () => {
+    // The backend has no DOM and no renderer instance — pin that there are
+    // currently no `.renderer.<method>(...)` call sites under server/, so any
+    // future leak is caught by this test.
+    const callsFromServer = _externalRendererMethodCallSites([SERVER_DIR]);
+    assert.deepEqual([...callsFromServer].sort(), [],
+      `server/ should not reach into a renderer object; found: ${[...callsFromServer].join(', ')}`);
   });
 
   test('Renderer3D imports without Babylon (lazy-load contract)', () => {
@@ -134,5 +148,63 @@ describe('Renderer3D — interface conformance with 2D Renderer', () => {
     assert.doesNotThrow(() => inst.frameHexes([{ col: 1, row: 1 }], {}));
     assert.equal(inst.getFadeOutOpacity(42), 1);
     assert.deepEqual(inst.canvasToHex(10, 10), { col: -1, row: -1 });
+  });
+
+  // Structural smoke test — exercises the surface listed in the renderer-3d.js
+  // header comment so a future phase that renames or removes one of these
+  // stubs is caught immediately.
+  test('every documented animation/utility hook is callable with its documented arg shape', () => {
+    const fakeCanvas = { parentElement: null, width: 800, height: 600 };
+    const inst = new Renderer3D(fakeCanvas, {});
+
+    // ── add* animation hooks ──────────────────────────────────────────────
+    assert.doesNotThrow(() => inst.addAttackAnim(0, 0, 1, 1));
+    assert.doesNotThrow(() => inst.addLungeAnim('eid', 0, 0, 1, 1, 'hero', 'hero', 'Hero'));
+    assert.doesNotThrow(() => inst.addProjectileAnim('bolt', 0, 0, 1, 1, {}));
+    assert.doesNotThrow(() => inst.addMoveAnim('eid', 0, 0, 1, 1, 'hero', 'hero', 'Hero'));
+    assert.doesNotThrow(() => inst.addFlash(0, 0, '-1', '#fff', 800, 0.85, '#000'));
+    assert.doesNotThrow(() => inst.addDeathAnim(0, 0, '#f00'));
+    assert.doesNotThrow(() => inst.addFadeOutAnim('eid', 500));
+    assert.doesNotThrow(() => inst.addNodeRevealAnim([{ col: 0, row: 0 }], '#fff', {}));
+    assert.doesNotThrow(() => inst.addSpawnAnim(1, 1, '#aaa'));
+    assert.doesNotThrow(() => inst.addHpChangeFlash(1, 1, -2));
+
+    // ── clear*/return* hooks ──────────────────────────────────────────────
+    assert.doesNotThrow(() => inst.clearAllLungeAnims());
+    assert.doesNotThrow(() => inst.clearAllProjectileAnims());
+    assert.doesNotThrow(() => inst.clearAnimations());
+    assert.doesNotThrow(() => inst.clearBattleHighlights());
+    assert.doesNotThrow(() => inst.clearFlashes());
+    assert.doesNotThrow(() => inst.returnAllLungeAnims());
+    assert.doesNotThrow(() => inst.setBattleHighlights([{ col: 0, row: 0 }], [{ col: 1, row: 1 }]));
+
+    // ── async hooks ───────────────────────────────────────────────────────
+    return Promise.all([
+      // loadImages must resolve immediately and invoke onImagesLoaded.
+      new Promise((resolve, reject) => {
+        let fired = false;
+        inst.onImagesLoaded = () => { fired = true; };
+        inst.loadImages()
+          .then(() => {
+            try {
+              assert.ok(fired, 'loadImages did not invoke onImagesLoaded callback');
+              resolve();
+            } catch (e) { reject(e); }
+          })
+          .catch(reject);
+      }),
+      // waitForAnimations must resolve without queued work.
+      inst.waitForAnimations(),
+    ]);
+  });
+
+  test('getEntity*/getPortrait*/getTile* return null/empty before Babylon loads', () => {
+    const fakeCanvas = { parentElement: null, width: 800, height: 600 };
+    const inst = new Renderer3D(fakeCanvas, {});
+    assert.deepEqual(inst.getEntityScreenPositions(0, 0, [], {}), []);
+    assert.equal(inst.getEntityScreenPos(0, 0, 'id', 0, 1, {}), null);
+    assert.equal(inst.getPortraitDataURL('asset', 64), null);
+    assert.equal(inst.getTileDataURL({}, 0, 0, 64), null);
+    assert.deepEqual(inst.hexToCanvasPos(0, 0), { x: 0, y: 0 });
   });
 });
