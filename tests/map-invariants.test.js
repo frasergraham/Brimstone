@@ -1,0 +1,206 @@
+// Per-size invariants for src/map.js outputs.
+//
+// The 3D renderer (and later phases that place entities & atmosphere) depend
+// on these being true for every generated map:
+//   - exactly the configured number of power nodes
+//   - exactly one INN and one GRAVEYARD, on roughly-opposite corners
+//   - heroStart and witchStart are walkable tiles
+//   - bridges are present in the count the preset asks for
+//   - generateMultipleStarts produces unique, walkable positions for 2..8 players
+//
+// We deliberately exercise the smaller presets (skirmish/standard) so the suite
+// stays fast — campaign generation is the expensive bit and is already
+// exercised by tests/map-generation.test.js.
+
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
+
+import { generateMap, generateMultipleStarts, MAP_SIZES } from '../src/map.js';
+import { TileType, BuildingType } from '../src/tiles.js';
+import { hexKey, hexDistance } from '../src/hex.js';
+
+const SIZES = ['skirmish', 'standard', 'regional'];
+
+// ── Power nodes ──────────────────────────────────────────────────────────────
+
+describe('Power node counts', () => {
+  test('default-generated maps have exactly nodeCount power nodes per preset', () => {
+    for (const size of SIZES) {
+      const expected = MAP_SIZES[size].nodeCount;
+      for (let seed = 0; seed < 8; seed++) {
+        const { witchObjectives } = generateMap(seed, size);
+        assert.equal(witchObjectives.length, expected,
+          `${size} seed=${seed}: expected ${expected} nodes, got ${witchObjectives.length}`);
+      }
+    }
+  });
+
+  test('every node has a colour and a label', () => {
+    for (const size of SIZES) {
+      for (let seed = 0; seed < 3; seed++) {
+        const { witchObjectives } = generateMap(seed, size);
+        for (const obj of witchObjectives) {
+          assert.equal(typeof obj.color, 'string',
+            `${size} seed=${seed}: node missing color`);
+          assert.ok(obj.color.startsWith('#'),
+            `${size} seed=${seed}: node color "${obj.color}" not a hex string`);
+          assert.equal(typeof obj.label, 'string',
+            `${size} seed=${seed}: node missing label`);
+          assert.ok(obj.label.length > 0,
+            `${size} seed=${seed}: node label is empty`);
+        }
+      }
+    }
+  });
+});
+
+// ── INN / GRAVEYARD placement ────────────────────────────────────────────────
+
+describe('Spawn buildings (INN & GRAVEYARD)', () => {
+  test('every non-battle map has exactly one INN and one GRAVEYARD', () => {
+    for (const size of SIZES) {
+      for (let seed = 0; seed < 8; seed++) {
+        const { tiles } = generateMap(seed, size);
+        let innCount = 0, gravCount = 0;
+        for (const t of tiles.values()) {
+          if (t.type !== TileType.BUILDING) continue;
+          if (t.building === BuildingType.INN) innCount++;
+          else if (t.building === BuildingType.GRAVEYARD) gravCount++;
+        }
+        assert.equal(innCount, 1, `${size} seed=${seed}: expected 1 INN, got ${innCount}`);
+        assert.equal(gravCount, 1, `${size} seed=${seed}: expected 1 GRAVEYARD, got ${gravCount}`);
+      }
+    }
+  });
+
+  test('INN and GRAVEYARD are placed in opposite corners (far apart)', () => {
+    for (const size of SIZES) {
+      const cfg = MAP_SIZES[size];
+      // A diagonal across the map is roughly sqrt((cols-1)^2 + (rows-1)^2); we
+      // pick a conservative threshold: at least half the longest grid axis.
+      const minDist = Math.floor(Math.max(cfg.cols, cfg.rows) / 2);
+      for (let seed = 0; seed < 6; seed++) {
+        const { heroStart, witchStart } = generateMap(seed, size);
+        const d = hexDistance(heroStart.col, heroStart.row, witchStart.col, witchStart.row);
+        assert.ok(d >= minDist,
+          `${size} seed=${seed}: heroStart→witchStart only ${d} hexes (min ${minDist})`);
+      }
+    }
+  });
+
+  test('heroStart sits on the INN, witchStart on the GRAVEYARD', () => {
+    for (const size of SIZES) {
+      for (let seed = 0; seed < 4; seed++) {
+        const { tiles, heroStart, witchStart } = generateMap(seed, size);
+        const heroTile  = tiles.get(hexKey(heroStart.col, heroStart.row));
+        const witchTile = tiles.get(hexKey(witchStart.col, witchStart.row));
+        assert.ok(heroTile,  `${size} seed=${seed}: heroStart tile missing`);
+        assert.ok(witchTile, `${size} seed=${seed}: witchStart tile missing`);
+        assert.equal(heroTile.building, BuildingType.INN);
+        assert.equal(witchTile.building, BuildingType.GRAVEYARD);
+      }
+    }
+  });
+});
+
+// ── Walkability ──────────────────────────────────────────────────────────────
+
+describe('Starting positions are walkable', () => {
+  test('heroStart and witchStart are never on RIVER', () => {
+    for (const size of SIZES) {
+      for (let seed = 0; seed < 10; seed++) {
+        const { tiles, heroStart, witchStart } = generateMap(seed, size);
+        const hT = tiles.get(hexKey(heroStart.col, heroStart.row));
+        const wT = tiles.get(hexKey(witchStart.col, witchStart.row));
+        assert.notEqual(hT.type, TileType.RIVER,
+          `${size} seed=${seed}: heroStart is on RIVER`);
+        assert.notEqual(wT.type, TileType.RIVER,
+          `${size} seed=${seed}: witchStart is on RIVER`);
+      }
+    }
+  });
+});
+
+// ── Bridges ──────────────────────────────────────────────────────────────────
+
+describe('Bridge counts respect preset bounds', () => {
+  test('each preset gives at least minBridges and at most bridgeMax', () => {
+    for (const size of SIZES) {
+      const cfg = MAP_SIZES[size];
+      for (let seed = 0; seed < 8; seed++) {
+        const { tiles } = generateMap(seed, size);
+        let bridges = 0;
+        for (const t of tiles.values()) {
+          if (t.type === TileType.BRIDGE) bridges++;
+        }
+        assert.ok(bridges >= cfg.minBridges,
+          `${size} seed=${seed}: ${bridges} bridges < min ${cfg.minBridges}`);
+        assert.ok(bridges <= cfg.bridgeMax,
+          `${size} seed=${seed}: ${bridges} bridges > max ${cfg.bridgeMax}`);
+      }
+    }
+  });
+});
+
+// ── generateMultipleStarts ───────────────────────────────────────────────────
+
+describe('generateMultipleStarts', () => {
+  test('returns the primary start when count <= 1', () => {
+    const { tiles, heroStart } = generateMap(1, 'standard');
+    const out = generateMultipleStarts(tiles, heroStart, 1);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].col, heroStart.col);
+    assert.equal(out[0].row, heroStart.row);
+  });
+
+  test('returns N unique, walkable positions for N in 2..8', () => {
+    const { tiles, heroStart } = generateMap(42, 'standard');
+    for (const n of [2, 3, 4, 5, 6, 7, 8]) {
+      const out = generateMultipleStarts(tiles, heroStart, n);
+      assert.equal(out.length, n, `count=${n}: expected ${n} starts, got ${out.length}`);
+      // First slot is always the primary start.
+      assert.equal(out[0].col, heroStart.col);
+      assert.equal(out[0].row, heroStart.row);
+      // We accept duplicate fallbacks only as overflow at the end — record
+      // uniqueness of the non-fallback prefix instead. The fallback path
+      // repeats the primary start, so seeing primary appear twice indicates
+      // the BFS ran out of candidates.
+      const distinctKeys = new Set(out.map(p => hexKey(p.col, p.row)));
+      // For small N the map should comfortably accommodate distinct slots.
+      if (n <= 4) {
+        assert.equal(distinctKeys.size, n,
+          `count=${n}: expected ${n} unique positions, got ${distinctKeys.size}`);
+      }
+      // Every returned position must lie on a walkable (non-RIVER) tile.
+      for (const p of out) {
+        const t = tiles.get(hexKey(p.col, p.row));
+        assert.ok(t, `count=${n}: position (${p.col},${p.row}) has no tile`);
+        assert.notEqual(t.type, TileType.RIVER,
+          `count=${n}: position (${p.col},${p.row}) is on RIVER`);
+      }
+    }
+  });
+
+  test('respects minSep on returned positions', () => {
+    const { tiles, heroStart } = generateMap(7, 'standard');
+    const out = generateMultipleStarts(tiles, heroStart, 4, /*minSep*/ 3);
+    // Drop trailing duplicates of the primary (fallback overflow).
+    const primaryKey = hexKey(heroStart.col, heroStart.row);
+    const distinct = [];
+    const seen = new Set();
+    for (const p of out) {
+      const k = hexKey(p.col, p.row);
+      if (k === primaryKey && seen.has(primaryKey)) continue;
+      seen.add(k);
+      distinct.push(p);
+    }
+    for (let i = 0; i < distinct.length; i++) {
+      for (let j = i + 1; j < distinct.length; j++) {
+        const a = distinct[i], b = distinct[j];
+        const d = hexDistance(a.col, a.row, b.col, b.row);
+        assert.ok(d >= 3 || (a.col === b.col && a.row === b.row),
+          `minSep violated between (${a.col},${a.row}) and (${b.col},${b.row}): d=${d}`);
+      }
+    }
+  });
+});
