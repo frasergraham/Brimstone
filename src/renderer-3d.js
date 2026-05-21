@@ -821,6 +821,9 @@ export class Renderer3D {
       const disc = this._buildTileTopDisc(tile, this._mapRoot);
       if (!disc) continue;
       this._tileTopDiscByKey.set(tkey, disc);
+      // Honor existing fog state: _applyFogVeil's diff loop skips already-fogged
+      // tiles, so a disc created after fog was applied would stay visible.
+      if (this._fogActiveSet.has(tkey)) disc.isVisible = false;
       const props = this._tilePropsByKey.get(tkey);
       if (props) props.push(disc);
       else this._tilePropsByKey.set(tkey, [disc]);
