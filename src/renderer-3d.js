@@ -27,6 +27,9 @@ import {
 import { EntityType, isLeaderType } from './entities.js';
 import { Renderer } from './renderer.js';
 import { getFactionTheme } from './theme.js';
+import { hexKey, hexDistance } from './hex.js';
+import { nodeController, Phase } from './game.js';
+import { sightRangeForEntity } from './factions.js';
 
 const BABYLON_CDN = 'https://cdn.jsdelivr.net/npm/@babylonjs/core@7.42.0/+esm';
 
@@ -199,6 +202,27 @@ export class Renderer3D {
     this._mapBuilt      = false;
     this._babylonInit   = null; // pending init promise (de-dupes draw() calls)
 
+    // ── Phase 6: atmosphere + fog veil ──────────────────────────────────────
+    // Per-hex lookup of the main tile mesh and its props (forest cones, road
+    // decks, bridge planks, building boxes/roofs). Populated by _buildTileMesh.
+    // Used by _applyFogVeil to swap tile materials and hide props on hexes the
+    // observer can't see.
+    this._tileMeshByKey   = new Map();   // hexKey → base hex cylinder
+    this._tilePropsByKey  = new Map();   // hexKey → Array<Mesh> (forest, road, bridge, bldg, roof)
+    this._fogMaterialCache = new Map();  // base hex color → darker StandardMaterial
+    this._fogActiveSet     = new Set();  // hexKeys currently rendered as fogged
+    // Power-node glow meshes: { obj, mesh, shaft, baseColor } per node hex.
+    this._nodeGlowMeshes   = [];
+    this._nodeGlowBuilt    = false;
+    // Phase-driven lighting state. Pumped by _onBeforeRender each frame; draw()
+    // notices state.phase changes and starts a new 3-second eased transition.
+    this._lightState = null;            // populated on first draw after init
+    this._lastPhase  = null;
+    this._phaseTransition = null;       // { from, to, startMs, durMs } or null
+    // Babylon GlowLayer shared by the selection halo and the node-glow shafts.
+    this._glowLayer  = null;
+    this._onBeforeRenderObs = null;     // observer handle so we can dispose it
+
     // ── Phase 3: standees + selection ───────────────────────────────────────
     // Map<entityId, { plane, base, assetId, ownerKey, leader }> for incremental diff.
     this._entityStandees   = new Map();
@@ -239,6 +263,12 @@ export class Renderer3D {
     if (!this._scene) return; // init in flight
     this._syncEntityStandees();
     this._applySelectionAndFocus();
+    // Phase 6: atmosphere updates — phase-driven lighting transitions, node
+    // glow recolour, and fog veil. Standees are hidden in fogged hexes after
+    // the standee sync above so newly-built standees are tagged correctly.
+    this._notePhaseChange();
+    this._syncNodeGlowMeshes();
+    this._applyFogVeil();
   }
 
   resize() {
@@ -356,9 +386,11 @@ export class Renderer3D {
     this.frameHexes(all, { paddingHexes: 1 });
   }
   _clampPan()                                         { /* camera panning is bounded via panning limits in _initBabylon */ }
-  // Empty set = "nothing fog-visible"; callers fall back to other checks.
-  // Stubbed until 3D fog of war lands.
-  _buildFogVisibleHexes(_observerOwner)               { return new Set(); }
+  // Phase 6: real fog visibility. Sums sight ranges across all alive entities
+  // owned by `observerOwner` (same logic as 2D `_buildFogVisibleHexes`).
+  // Delegates to the pure `buildFogVisibleSet` helper so the math is testable
+  // without a Babylon context.
+  _buildFogVisibleHexes(observerOwner)                { return buildFogVisibleSet(this.state, observerOwner); }
 
   // ─── Stubs (entity / animation work — land in Phase 3+) ──────────────────
 
@@ -445,6 +477,20 @@ export class Renderer3D {
     this._camera = camera;
     this._light  = light;
 
+    // Phase 6: GlowLayer powers the selection halo and the power-node shafts.
+    // Built once at init; meshes opt in by raising their emissive colour.
+    this._glowLayer = new BABYLON.GlowLayer('glow', scene, { mainTextureFixedSize: 512 });
+    this._glowLayer.intensity = GLOW_LAYER_INTENSITY;
+
+    // Apply the starting phase's lighting immediately (no transition) so the
+    // very first frame already reads dawn/day/dusk/night correctly.
+    this._lastPhase   = this.state?.phase ?? null;
+    this._lightState  = { intensity: 0, color: { r: 1, g: 1, b: 1 }, clear: { r: 0, g: 0, b: 0 } };
+    this._applyLightConfig(getPhaseLightConfig(this._lastPhase));
+
+    // Per-frame pump: drives phase-light interpolation and selection / node glow pulses.
+    this._onBeforeRenderObs = scene.onBeforeRenderObservable.add(() => this._onBeforeRender());
+
     // Build the map from current state and frame it (instant — no animation
     // on the very first frame, otherwise the camera "slides in" from the
     // arbitrary radius=20 starting point).
@@ -453,6 +499,8 @@ export class Renderer3D {
     // Initial standee population so the first frame already has units.
     this._syncEntityStandees();
     this._applySelectionAndFocus();
+    this._syncNodeGlowMeshes();
+    this._applyFogVeil();
 
     engine.runRenderLoop(() => scene.render());
     engine.resize();
@@ -503,8 +551,12 @@ export class Renderer3D {
     // so vertices land at ±Z (visually aligns with the odd-row offset).
     hex.rotation.y = Math.PI / 6;
     hex.material   = this._materialFor(baseColor);
-    hex.metadata   = { kind: 'tile', col: tile.col, row: tile.row };
+    hex.metadata   = { kind: 'tile', col: tile.col, row: tile.row, baseColor };
     this._tileMeshes.push(hex);
+    const tkey = hexKey(tile.col, tile.row);
+    this._tileMeshByKey.set(tkey, hex);
+    const props = [];
+    const trackProp = (m) => { props.push(m); };
 
     // ── Forests: small dark cone on top to read at any zoom ───────────────
     if (tile.type === TileType.FOREST) {
@@ -519,6 +571,7 @@ export class Renderer3D {
       cone.position.y = 0.45;
       cone.material   = this._materialFor('#234c1f'); // tree green
       cone.isPickable = false; // pick the tile underneath, not the prop
+      trackProp(cone);
     }
 
     // ── Road deck: brown disc raised slightly above the tile surface ──────
@@ -535,6 +588,7 @@ export class Renderer3D {
       deck.rotation.y = Math.PI / 6;
       deck.material   = this._materialFor('#6b5a3e');
       deck.isPickable = false;
+      trackProp(deck);
     }
 
     // ── Bridge: wooden planks crossing the river hex ──────────────────────
@@ -550,6 +604,7 @@ export class Renderer3D {
       plank.position.y = 0.18;
       plank.material   = this._materialFor('#8a6030');
       plank.isPickable = false;
+      trackProp(plank);
     }
 
     // ── Building: simple low-poly box atop the tile, building-coloured ────
@@ -565,6 +620,7 @@ export class Renderer3D {
       box.position.y = 0.43; // sit on top of the tile prism
       box.material   = this._materialFor(BUILDING_COLOR[tile.building] || '#8a7a5a');
       box.isPickable = false;
+      trackProp(box);
 
       // Tiny roof block to add silhouette variety.
       const roof = BABYLON.MeshBuilder.CreateBox(
@@ -578,7 +634,10 @@ export class Renderer3D {
       roof.position.y = 0.85;
       roof.material   = this._materialFor('#2c2520');
       roof.isPickable = false;
+      trackProp(roof);
     }
+
+    if (props.length > 0) this._tilePropsByKey.set(tkey, props);
   }
 
   /** Cache a StandardMaterial per CSS hex colour so we hand a few materials
@@ -888,6 +947,279 @@ export class Renderer3D {
     this._scene.stopAnimation(camera);
     this._scene.beginDirectAnimation(camera, [targetAnim, radiusAnim], 0, FOCUS_ANIM_FRAMES, false);
   }
+
+  // ─── Phase 6: atmosphere — lighting, node glow, fog veil, selection halo ──
+  //
+  // Scene-global concerns that make 3D mode feel alive: time-of-day lighting
+  // that shifts across the four phases, soft emissive shafts on Power Nodes
+  // tinted by current controller, a fog-of-war veil that dims tiles and
+  // hides standees outside the observer's sight, and an animated glow halo
+  // for the selected unit. Per-entity overlays, plan arrows, HP bars, and
+  // combat animations are explicitly Phase 5's domain — leave them alone.
+
+  /** Detect state.phase changes and kick off a 3-second eased transition of
+   *  the hemispheric light intensity + colour + scene clear colour. The actual
+   *  interpolation is pumped per-frame from `_onBeforeRender`. */
+  _notePhaseChange() {
+    if (!this._light) return;
+    const phase = this.state?.phase ?? null;
+    if (phase === this._lastPhase) return;
+    const from = this._snapshotLight();
+    const to   = getPhaseLightConfig(phase);
+    this._phaseTransition = {
+      from,
+      to,
+      startMs: this._nowMs(),
+      durMs:   PHASE_TRANSITION_MS,
+    };
+    this._lastPhase = phase;
+  }
+
+  _nowMs() {
+    return (typeof performance !== 'undefined' && performance.now)
+      ? performance.now()
+      : Date.now();
+  }
+
+  /** Snapshot the current light/clear values as a Phase-light-config-shaped
+   *  object. Used as the "from" anchor for the next transition so we always
+   *  ease from wherever we are *right now*, even mid-transition. */
+  _snapshotLight() {
+    const s = this._lightState;
+    return {
+      intensity: s.intensity,
+      color: { r: s.color.r, g: s.color.g, b: s.color.b },
+      clear: { r: s.clear.r, g: s.clear.g, b: s.clear.b },
+    };
+  }
+
+  /** Slam the light + clear colour to a target config with no animation. */
+  _applyLightConfig(cfg) {
+    const BABYLON = this._babylon;
+    if (!BABYLON || !this._light || !this._scene) return;
+    this._light.intensity = cfg.intensity;
+    this._light.diffuse   = new BABYLON.Color3(cfg.color.r, cfg.color.g, cfg.color.b);
+    this._light.specular  = new BABYLON.Color3(cfg.color.r * 0.3, cfg.color.g * 0.3, cfg.color.b * 0.3);
+    this._scene.clearColor = new BABYLON.Color4(cfg.clear.r, cfg.clear.g, cfg.clear.b, 1.0);
+    // Mirror into _lightState so transition snapshots see the new anchor.
+    this._lightState.intensity = cfg.intensity;
+    this._lightState.color = { r: cfg.color.r, g: cfg.color.g, b: cfg.color.b };
+    this._lightState.clear = { r: cfg.clear.r, g: cfg.clear.g, b: cfg.clear.b };
+  }
+
+  /** Per-frame pump: advance the phase-light transition (if any) and update
+   *  the selection halo + node-glow pulses. Cheap — runs every render frame
+   *  regardless of whether draw() was called, so the pulses keep cycling
+   *  even when game state is idle. */
+  _onBeforeRender() {
+    const now = this._nowMs();
+    // Phase-light interpolation.
+    const t = this._phaseTransition;
+    if (t) {
+      const elapsed = now - t.startMs;
+      const u = Math.min(1, Math.max(0, elapsed / t.durMs));
+      const eased = easeInOutCubic(u);
+      const cur = lerpLightConfig(t.from, t.to, eased);
+      this._applyLightConfig(cur);
+      if (u >= 1) this._phaseTransition = null;
+    }
+    // Selection halo pulse.
+    if (this.selectedEntityId != null) {
+      const standee = this._entityStandees.get(this.selectedEntityId);
+      if (standee) {
+        const k = pulseFactor(now, SELECTION_PULSE_PERIOD_MS, SELECTION_PULSE_MIN, SELECTION_PULSE_MAX);
+        this._setStandeeHaloIntensity(standee, k);
+      }
+    }
+    // Node glow pulse.
+    if (this._nodeGlowMeshes.length > 0) {
+      const k = pulseFactor(now, NODE_PULSE_PERIOD_MS, NODE_PULSE_MIN, NODE_PULSE_MAX);
+      for (const ng of this._nodeGlowMeshes) {
+        this._setNodeGlowIntensity(ng, k);
+      }
+    }
+  }
+
+  /** Modulate a selected standee's halo. We use the base disc's emissive
+   *  colour as the GlowLayer's input — base material was already swapped to
+   *  the cyan-emissive `_selectedBaseMaterial` by `_applySelectionAndFocus`. */
+  _setStandeeHaloIntensity(standee, k) {
+    const mat = standee?.base?.material;
+    if (!mat || !mat.emissiveColor) return;
+    // Selection emissive base colour is cyan-tinted; scale toward `k` of full.
+    mat.emissiveColor.r = SELECTION_EMISSIVE_BASE.r * k;
+    mat.emissiveColor.g = SELECTION_EMISSIVE_BASE.g * k;
+    mat.emissiveColor.b = SELECTION_EMISSIVE_BASE.b * k;
+  }
+
+  _setNodeGlowIntensity(ng, k) {
+    if (!ng?.shaft?.material?.emissiveColor) return;
+    const c = ng.glowColor;
+    ng.shaft.material.emissiveColor.r = c.r * k;
+    ng.shaft.material.emissiveColor.g = c.g * k;
+    ng.shaft.material.emissiveColor.b = c.b * k;
+    if (ng.disc?.material?.emissiveColor) {
+      ng.disc.material.emissiveColor.r = c.r * k * NODE_DISC_EMISSIVE_MUL;
+      ng.disc.material.emissiveColor.g = c.g * k * NODE_DISC_EMISSIVE_MUL;
+      ng.disc.material.emissiveColor.b = c.b * k * NODE_DISC_EMISSIVE_MUL;
+    }
+  }
+
+  /** Build one glow shaft + disc per Power Node hex on first call, then on
+   *  every draw update the per-shaft material colours to reflect the current
+   *  controller. Cheap because witchObjectives count rarely exceeds 3. */
+  _syncNodeGlowMeshes() {
+    if (!this._scene || !this.state?.witchObjectives) return;
+    if (!this._nodeGlowBuilt) {
+      this._buildNodeGlowMeshes();
+      this._nodeGlowBuilt = true;
+    }
+    // Recolour by controller each draw — controller can flip when entities move.
+    for (const ng of this._nodeGlowMeshes) {
+      const ctrl = nodeController(ng.obj, this.state.entities);
+      const css = getNodeGlowColor(ctrl);
+      const [r, g, b] = cssHexToRgb01(css);
+      // Pulse intensity is applied per-frame from _onBeforeRender; here we set
+      // the *target* colour so the next pulse step picks it up.
+      ng.glowColor = { r, g, b };
+    }
+  }
+
+  _buildNodeGlowMeshes() {
+    const BABYLON = this._babylon;
+    if (!BABYLON || !this._scene) return;
+    for (const obj of this.state.witchObjectives) {
+      // The glow visualises the whole cluster — anchor on each cluster hex so
+      // multi-hex nodes still read as a unified controlled area.
+      for (const h of obj.hexes) {
+        const { x, z } = hexToWorld(h.col, h.row);
+        // Thin emissive disc resting just above the tile prism.
+        const disc = BABYLON.MeshBuilder.CreateCylinder(
+          `node_disc_${obj.label.replace(/\W+/g, '_')}_${h.col}_${h.row}`,
+          { tessellation: 24, height: 0.04, diameter: 1.7 },
+          this._scene,
+        );
+        disc.parent = this._mapRoot;
+        disc.position.x = x;
+        disc.position.z = z;
+        disc.position.y = 0.10;
+        disc.isPickable = false;
+        const discMat = new BABYLON.StandardMaterial(`nodeDiscMat_${h.col}_${h.row}`, this._scene);
+        discMat.diffuseColor  = new BABYLON.Color3(0.05, 0.05, 0.05);
+        discMat.specularColor = new BABYLON.Color3(0, 0, 0);
+        discMat.emissiveColor = new BABYLON.Color3(0.5, 0.5, 0.5);
+        discMat.alpha = 0.65;
+        disc.material = discMat;
+
+        // Upward shaft — thin cylinder tapering up, signals "important hex"
+        // from across the map. Picks up the GlowLayer.
+        const shaft = BABYLON.MeshBuilder.CreateCylinder(
+          `node_shaft_${obj.label.replace(/\W+/g, '_')}_${h.col}_${h.row}`,
+          { diameterTop: 0.0, diameterBottom: 0.45, height: NODE_SHAFT_HEIGHT, tessellation: 12 },
+          this._scene,
+        );
+        shaft.parent = this._mapRoot;
+        shaft.position.x = x;
+        shaft.position.z = z;
+        shaft.position.y = NODE_SHAFT_HEIGHT / 2 + 0.10;
+        shaft.isPickable = false;
+        const shaftMat = new BABYLON.StandardMaterial(`nodeShaftMat_${h.col}_${h.row}`, this._scene);
+        shaftMat.diffuseColor  = new BABYLON.Color3(0.05, 0.05, 0.05);
+        shaftMat.specularColor = new BABYLON.Color3(0, 0, 0);
+        shaftMat.emissiveColor = new BABYLON.Color3(0.6, 0.6, 0.6);
+        shaftMat.alpha = 0.55;
+        shaft.material = shaftMat;
+
+        this._nodeGlowMeshes.push({
+          obj, disc, shaft,
+          col: h.col, row: h.row,
+          glowColor: { r: 1, g: 1, b: 1 },
+        });
+      }
+    }
+  }
+
+  /** Apply the fog-of-war veil: swap fogged-tile materials to a darker variant
+   *  and hide standees + props on fogged hexes. No-op when fog is inactive or
+   *  there's no human observer (AI-vs-AI / spectator). */
+  _applyFogVeil() {
+    if (!this._scene) return;
+    const state = this.state;
+    const fogActive = state?.fogOfWar && state.fogOfWar !== 'none';
+    const observerOwner = this._observerOwner();
+
+    let target;
+    if (!fogActive || !observerOwner) {
+      target = null; // nothing fogged — unfog everything
+    } else {
+      target = this._buildFogVisibleHexes(observerOwner);
+    }
+
+    // Diff against the currently-fogged set: clear any previously-fogged tile
+    // that is now visible, then fog any tile that should now be dark.
+    for (const [k, mesh] of this._tileMeshByKey) {
+      const shouldBeFogged = target ? !target.has(k) : false;
+      const isFogged = this._fogActiveSet.has(k);
+      if (shouldBeFogged && !isFogged) {
+        this._setTileFogged(k, mesh, true);
+      } else if (!shouldBeFogged && isFogged) {
+        this._setTileFogged(k, mesh, false);
+      }
+    }
+
+    // Hide standees on fogged hexes; reveal them when visible again.
+    if (target) {
+      for (const [, standee] of this._entityStandees) {
+        const k = hexKey(standee.plane.metadata.col, standee.plane.metadata.row);
+        const visible = target.has(k);
+        if (standee.plane.isVisible !== visible) standee.plane.isVisible = visible;
+        if (standee.base.isVisible  !== visible) standee.base.isVisible  = visible;
+      }
+    } else {
+      // No fog → make sure everything is visible (covers fog-toggling mid-game).
+      for (const [, standee] of this._entityStandees) {
+        if (!standee.plane.isVisible) standee.plane.isVisible = true;
+        if (!standee.base.isVisible)  standee.base.isVisible  = true;
+      }
+    }
+  }
+
+  _setTileFogged(hexK, tileMesh, fogged) {
+    const baseColor = tileMesh.metadata?.baseColor;
+    if (!baseColor) return;
+    tileMesh.material = fogged ? this._fogMaterialFor(baseColor) : this._materialFor(baseColor);
+    const props = this._tilePropsByKey.get(hexK);
+    if (props) for (const p of props) p.isVisible = !fogged;
+    if (fogged) this._fogActiveSet.add(hexK);
+    else this._fogActiveSet.delete(hexK);
+  }
+
+  _fogMaterialFor(baseHex) {
+    if (this._fogMaterialCache.has(baseHex)) return this._fogMaterialCache.get(baseHex);
+    const BABYLON = this._babylon;
+    const [r, g, b] = cssHexToRgb01(baseHex);
+    const mat = new BABYLON.StandardMaterial(`fog_${baseHex}`, this._scene);
+    mat.diffuseColor  = new BABYLON.Color3(r * FOG_TILE_DARKEN, g * FOG_TILE_DARKEN, b * FOG_TILE_DARKEN);
+    mat.specularColor = new BABYLON.Color3(0, 0, 0);
+    mat.emissiveColor = new BABYLON.Color3(0, 0, 0);
+    this._fogMaterialCache.set(baseHex, mat);
+    return mat;
+  }
+
+  /** Determine which faction's perspective drives fog of war. Mirrors the 2D
+   *  renderer's logic in src/renderer.js (`myFaction` if set, otherwise
+   *  inferred from `witchIsAI`/`heroIsAI`); returns null in AI-vs-AI runs
+   *  and spectator mode, which suppresses the veil entirely. */
+  _observerOwner() {
+    const state = this.state;
+    if (!state) return null;
+    // Prefer the explicit myFaction (set in online/PvP mode); fall back to
+    // the unique human side in local-AI games.
+    if (state.myFaction) return state.myFaction;
+    if (state.witchIsAI && !state.heroIsAI)  return 'hero';
+    if (state.heroIsAI  && !state.witchIsAI) return 'witch';
+    return null;
+  }
 }
 
 // ─── Phase 3 pure helpers (exported for tests) ─────────────────────────────
@@ -909,6 +1241,130 @@ export function entityBaseColor(entity) {
     if (theme?.primary) return theme.primary;
   }
   return '#888888';
+}
+
+// ─── Phase 6 constants (exported for tests) ─────────────────────────────────
+
+/** Hemispheric-light + clear-colour config per game phase.
+ *  intensity → light.intensity; color → light.diffuse (warm at dawn/dusk,
+ *  white at day, cool blue at night); clear → scene.clearColor (sky/horizon
+ *  tint that shows through gaps and behind transparent props). */
+export const PHASE_LIGHT_CONFIG = Object.freeze({
+  dawn:  { intensity: 0.90, color: { r: 1.00, g: 0.78, b: 0.55 }, clear: { r: 0.45, g: 0.30, b: 0.30 } },
+  day:   { intensity: 1.10, color: { r: 1.00, g: 1.00, b: 0.97 }, clear: { r: 0.55, g: 0.72, b: 0.85 } },
+  dusk:  { intensity: 0.85, color: { r: 1.00, g: 0.55, b: 0.40 }, clear: { r: 0.40, g: 0.25, b: 0.30 } },
+  night: { intensity: 0.55, color: { r: 0.55, g: 0.65, b: 0.95 }, clear: { r: 0.05, g: 0.08, b: 0.18 } },
+});
+
+/** Look up a phase's lighting config. Falls back to DAY if the phase is
+ *  unrecognised (defensive — keeps the renderer usable on weird save loads). */
+export function getPhaseLightConfig(phase) {
+  return PHASE_LIGHT_CONFIG[phase] ?? PHASE_LIGHT_CONFIG.day;
+}
+
+/** Power Node glow palette by controller. The task spec calls for
+ *  hero=warm gold, witch=sickly green, neutral=pale white; contested is
+ *  amber, matching the 2D path's contested overlay tint. */
+export const NODE_GLOW_COLORS = Object.freeze({
+  hero:      '#ffc940',
+  witch:     '#7fd14a',
+  neutral:   '#f0f0f0',
+  contested: '#ffaa00',
+});
+
+/** Choose a node's glow colour by current controller. */
+export function getNodeGlowColor(controller) {
+  return NODE_GLOW_COLORS[controller] ?? NODE_GLOW_COLORS.neutral;
+}
+
+/** Duration of phase-to-phase light cross-fade. */
+export const PHASE_TRANSITION_MS = 3000;
+
+/** GlowLayer intensity (applied to selection halo + node-glow shafts). */
+export const GLOW_LAYER_INTENSITY = 0.7;
+
+/** Selection halo pulse. Configurable so designers can tune the breathing. */
+export const SELECTION_PULSE_PERIOD_MS = 1500;
+export const SELECTION_PULSE_MIN       = 0.40;
+export const SELECTION_PULSE_MAX       = 0.95;
+/** Base cyan emissive that the selection pulse modulates each frame. */
+export const SELECTION_EMISSIVE_BASE = Object.freeze({ r: 0.25, g: 0.85, b: 0.95 });
+
+/** Power-node glow pulse — slower than the selection, so the two reads as
+ *  distinct visual languages. */
+export const NODE_PULSE_PERIOD_MS = 3000;
+export const NODE_PULSE_MIN       = 0.45;
+export const NODE_PULSE_MAX       = 0.95;
+/** The flat emissive disc reads more subtly than the upward shaft. */
+export const NODE_DISC_EMISSIVE_MUL = 0.55;
+/** Height of the upward emissive shaft above the tile prism (world units). */
+export const NODE_SHAFT_HEIGHT = 0.9;
+
+/** Multiplier applied to fogged-tile diffuse colour. ~0.32 keeps the tile
+ *  legible (a player can still see "there's grass there") while clearly
+ *  reading as out-of-sight. */
+export const FOG_TILE_DARKEN = 0.32;
+
+/** Cubic ease-in-out — interpolates 0→1 smoothly with no jolt at endpoints. */
+export function easeInOutCubic(u) {
+  if (u <= 0) return 0;
+  if (u >= 1) return 1;
+  return u < 0.5
+    ? 4 * u * u * u
+    : 1 - Math.pow(-2 * u + 2, 3) / 2;
+}
+
+/** Lerp two light-config snapshots: intensity (scalar) + diffuse + clear
+ *  (each {r,g,b}). Exported so phase-transition math can be unit-tested
+ *  without a Babylon scene. */
+export function lerpLightConfig(from, to, t) {
+  const tt = Math.min(1, Math.max(0, t));
+  const lerp = (a, b) => a + (b - a) * tt;
+  return {
+    intensity: lerp(from.intensity, to.intensity),
+    color: {
+      r: lerp(from.color.r, to.color.r),
+      g: lerp(from.color.g, to.color.g),
+      b: lerp(from.color.b, to.color.b),
+    },
+    clear: {
+      r: lerp(from.clear.r, to.clear.r),
+      g: lerp(from.clear.g, to.clear.g),
+      b: lerp(from.clear.b, to.clear.b),
+    },
+  };
+}
+
+/** Sine-driven pulse mapping `nowMs` into the [min, max] range over `periodMs`. */
+export function pulseFactor(nowMs, periodMs, min, max) {
+  const phase = (2 * Math.PI * (nowMs % periodMs)) / periodMs;
+  const sin01 = (Math.sin(phase) + 1) / 2; // 0..1
+  return min + (max - min) * sin01;
+}
+
+/**
+ * Pure-functional fog-of-war visibility set. Returns the union of all hex
+ * keys within sight range of every alive entity owned by `observerOwner`.
+ *
+ * Iterates `state.entities` and `state.tiles` (cheap — even a Campaign-size
+ * map is ~300 tiles); does NOT include attacker-reveal hints (those live in
+ * the animation layer and are layered on top by the 3D renderer separately).
+ * Always returns a Set, never null — caller decides whether to apply it via
+ * the fogOfWar state field gate.
+ */
+export function buildFogVisibleSet(state, observerOwner) {
+  const visible = new Set();
+  if (!state?.entities || !state?.tiles || !observerOwner) return visible;
+  for (const e of state.entities) {
+    if (!e || !e.alive || e.owner !== observerOwner) continue;
+    const range = sightRangeForEntity(e, state.phase);
+    for (const tile of state.tiles.values()) {
+      if (hexDistance(tile.col, tile.row, e.col, e.row) <= range) {
+        visible.add(hexKey(tile.col, tile.row));
+      }
+    }
+  }
+  return visible;
 }
 
 /**
